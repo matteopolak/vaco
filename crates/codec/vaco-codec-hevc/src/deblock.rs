@@ -55,17 +55,25 @@
 //!   Table 8-12's `bS = 2` case is "either side is intra", and every CU this
 //!   crate decodes is intra; the `bS = 1` (inter, non-zero luma CBF) and
 //!   `bS = 0` cases can never be reached.
-//! - **`qP_P == qP_Q` on every edge**, since there is no `cu_qp_delta` and
-//!   this crate's `slice_qp` is one constant for the whole picture — HM's
-//!   `qPav = (qP_P + qP_Q + 1) >> 1` collapses to that same constant, and
-//!   the chroma QP derivation (`transform::chroma_qp`, already shared with
-//!   dequantisation) needs only the one PPS-level `cb_qp_offset`/
-//!   `cr_qp_offset`, never a slice-level one — §8.7.2.5.5's own chroma QP
-//!   derivation names only the PPS offsets, confirmed directly against
-//!   `xEdgeFilterChroma`'s `chromaQPOffset = pcCU->getSlice()->getPPS()->getQpOffset(...)`.
+//! - **`qP_P`/`qP_Q` are looked up per edge from `CuGrid`'s own per-CU
+//!   `QpY`** (`ctu::coding_unit`'s own post-transform-tree
+//!   `CuGrid::fill_qp`), not one constant `slice_qp` — `cu_qp_delta` (see
+//!   `ctu.rs`'s own module-level derivation) means two coding units either
+//!   side of an edge can genuinely disagree, exactly HM's general
+//!   `xEdgeFilterLuma`/`xEdgeFilterChroma` case (`iQP_P = pcCUP->getQP(...)`,
+//!   `iQP_Q = pcCU->getQP(...)`, `iQP = (iQP_P + iQP_Q + 1) >> 1`) — this
+//!   crate no longer collapses that average to a picture-wide constant. The
+//!   chroma QP derivation (`transform::chroma_qp`) still needs only the one
+//!   PPS-level `cb_qp_offset`/`cr_qp_offset` (never a slice-level one), and
+//!   is still applied *after* averaging the two sides' plain luma `QpY` —
+//!   §8.7.2.5.5's own chroma QP derivation names only the PPS offsets,
+//!   confirmed directly against `xEdgeFilterChroma`'s own
+//!   `iQP = ((iQP_P + iQP_Q + 1) >> 1) + chromaQPOffset`: the two sides'
+//!   plain luma QPs are averaged *before* the chroma offset/scale, not
+//!   mapped to chroma QP independently and averaged after.
 //!
-//! Neither is a fresh approximation: both are consequences of scope this
-//! crate already refuses elsewhere.
+//! Boundary strength is still always 2 (a consequence of this crate's
+//! intra-only scope, unrelated to `cu_qp_delta`).
 //!
 //! # The filtering grid
 //!
@@ -281,6 +289,26 @@ fn filter_luma_group(plane: &mut Plane, dir: Dir, bx: i32, by0: i32, tc: i32, be
     }
 }
 
+/// `qPav`/HM's `iQP`: the averaged luma `QpY` for an edge whose Q side (the
+/// side named by the loop's own `(xq, yq)`) is looked up from
+/// [`crate::framebuf::CuGrid::qp_at`], and whose P side is one CU-grid step
+/// back along `dir`'s own perpendicular axis — `Dir::Vert` steps `x` (a
+/// vertical edge's P/Q samples differ in `x`), `Dir::Horiz` steps `y`,
+/// matching every other `dir`-generic helper in this module.
+/// `s.slice_qp` is the fallback exactly where `qp_at` itself falls back to
+/// unavailable: every in-bounds, fully-decoded position always has a real
+/// value by the time this whole-picture pass runs, so the fallback only
+/// matters, defensively, for a position outside the picture.
+fn qp_avg(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
+    let (xp, yp) = match dir {
+        Dir::Vert => (xq - 1, yq),
+        Dir::Horiz => (xq, yq - 1),
+    };
+    let qp_q = s.cu_grid.qp_at(xq, yq).map_or(s.slice_qp, i32::from);
+    let qp_p = s.cu_grid.qp_at(xp, yp).map_or(s.slice_qp, i32::from);
+    (qp_p + qp_q + 1) >> 1
+}
+
 /// Run the whole picture's deblocking pass: every vertical edge first (both
 /// planes), then every horizontal edge (both planes) — matching
 /// `TComLoopFilter::loopFilterPic`'s own two full, separate passes, since
@@ -292,13 +320,6 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
     let grid = 1i32 << s.log2_min_cb_size;
     let chroma_grid = grid.max(16);
 
-    let luma_tc = tc_for_qp(s.slice_qp, s.tc_offset_div2);
-    let luma_beta = beta_for_qp(s.slice_qp, s.beta_offset_div2);
-    let cb_qp = chroma_qp(s.slice_qp, s.cb_qp_offset);
-    let cr_qp = chroma_qp(s.slice_qp, s.cr_qp_offset);
-    let cb_tc = tc_for_qp(cb_qp, s.tc_offset_div2);
-    let cr_tc = tc_for_qp(cr_qp, s.tc_offset_div2);
-
     let (width, height) = s.pic.y.dims();
     let (width, height) = (i32::try_from(width).unwrap_or(0), i32::try_from(height).unwrap_or(0));
 
@@ -309,7 +330,10 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
         let mut y = 0;
         while y < height {
             if s.edges.vert_at(x, y) {
-                filter_luma_group(&mut s.pic.y, Dir::Vert, x, y, luma_tc, luma_beta, s.bit_depth_luma);
+                let qp = qp_avg(s, Dir::Vert, x, y);
+                let tc = tc_for_qp(qp, s.tc_offset_div2);
+                let beta = beta_for_qp(qp, s.beta_offset_div2);
+                filter_luma_group(&mut s.pic.y, Dir::Vert, x, y, tc, beta, s.bit_depth_luma);
             }
             y += 4;
         }
@@ -320,6 +344,9 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
         let mut y = 0;
         while y < height {
             if s.edges.vert_at(x, y) {
+                let qp = qp_avg(s, Dir::Vert, x, y);
+                let cb_tc = tc_for_qp(chroma_qp(qp, s.cb_qp_offset), s.tc_offset_div2);
+                let cr_tc = tc_for_qp(chroma_qp(qp, s.cr_qp_offset), s.tc_offset_div2);
                 let cx = x >> 1;
                 let cy0 = y >> 1;
                 let rows = (grid >> 1).max(1);
@@ -339,7 +366,10 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
         let mut x = 0;
         while x < width {
             if s.edges.horiz_at(x, y) {
-                filter_luma_group(&mut s.pic.y, Dir::Horiz, y, x, luma_tc, luma_beta, s.bit_depth_luma);
+                let qp = qp_avg(s, Dir::Horiz, x, y);
+                let tc = tc_for_qp(qp, s.tc_offset_div2);
+                let beta = beta_for_qp(qp, s.beta_offset_div2);
+                filter_luma_group(&mut s.pic.y, Dir::Horiz, y, x, tc, beta, s.bit_depth_luma);
             }
             x += 4;
         }
@@ -350,6 +380,9 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
         let mut x = 0;
         while x < width {
             if s.edges.horiz_at(x, y) {
+                let qp = qp_avg(s, Dir::Horiz, x, y);
+                let cb_tc = tc_for_qp(chroma_qp(qp, s.cb_qp_offset), s.tc_offset_div2);
+                let cr_tc = tc_for_qp(chroma_qp(qp, s.cr_qp_offset), s.tc_offset_div2);
                 let cy = y >> 1;
                 let cx0 = x >> 1;
                 let cols = (grid >> 1).max(1);

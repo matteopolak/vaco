@@ -6,9 +6,11 @@ intra prediction (planar/DC/33 angular modes, MPM derivation, reference
 sample smoothing and strong intra smoothing), the transform tree, residual
 coding, dequantisation, reconstruction, in-loop deblocking (§8.7.2, see
 "Deblocking (§8.7.2), landed" below), SAO (§7.3.8.3/§8.7.3, see "SAO
-(§7.3.8.3 / §8.7.3), landed" below) and wavefront parallel processing
-(§9.3.2.3, see "WPP (`entropy_coding_sync_enabled_flag`), landed" below).
-Inter prediction, B/P-slices, tiles, `cu_qp_delta`, I_PCM, transform-skip
+(§7.3.8.3 / §8.7.3), landed" below), wavefront parallel processing
+(§9.3.2.3, see "WPP (`entropy_coding_sync_enabled_flag`), landed" below) and
+per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see "Per-CU QP delta
+(`cu_qp_delta`), landed" below).
+Inter prediction, B/P-slices, tiles, I_PCM, transform-skip
 residual coding, custom scaling lists and every range-extension feature are
 explicitly out of scope — see "What was cut" below.
 
@@ -156,10 +158,10 @@ own decode of the same file byte-for-byte, per plane, end to end.
 `check_scope` in `decoder.rs` refuses (`Error::Unsupported`, by name, at
 the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
 `separate_colour_plane`, custom scaling lists, I_PCM, SPS/PPS range
-extensions, SCC extensions, tiles, `cu_qp_delta_enabled`,
-`transquant_bypass_enabled`. Neither deblocking, SAO, nor
-`entropy_coding_sync` (WPP) are on this list any more — see their own
-"landed" sections below. B/P-slices are not parsed at all; only NAL types
+extensions, SCC extensions, tiles, `transquant_bypass_enabled`. Neither
+deblocking, SAO, `entropy_coding_sync` (WPP), nor `cu_qp_delta_enabled` are
+on this list any more — see their own "landed" sections below. B/P-slices
+are not parsed at all; only NAL types
 this crate recognises as I-slice VCL data are decoded. Both Annex-B and
 length-prefixed (`hvcC`) framing are handled, via the embedded
 `vaco_parse_hevc::HevcParser` (`decoder.rs`'s own module doc).
@@ -180,16 +182,25 @@ length-prefixed (`hvcC`) framing are handled, via the embedded
   script). Clean-room rule: HM is Tier A (BSD-3-Clause) and may be read,
   built and instrumented directly; `ffmpeg`/`x265` stay Tier B — run only,
   never opened.
-- **Extending scope** (inter prediction, tiles — deblocking, SAO and WPP are
-  done, see their own sections above): the corresponding SPS/PPS fields
-  already correctly return `Error::Unsupported` by name in `check_scope`
-  when a real stream exercises them — implement behind that same call site
-  rather than adding a new refusal path. Deblocking was the one exception to
-  the "extend behind the existing refusal" pattern, since it has no
-  bitstream footprint to refuse in the first place (a silent pixel-only
-  deviation, not a parse error) — its own call site is
+- **Extending scope** (inter prediction, tiles — deblocking, SAO, WPP and
+  `cu_qp_delta` are done, see their own sections above): the corresponding
+  SPS/PPS fields already correctly return `Error::Unsupported` by name in
+  `check_scope` when a real stream exercises them — implement behind that
+  same call site rather than adding a new refusal path. Deblocking was the
+  one exception to the "extend behind the existing refusal" pattern, since
+  it has no bitstream footprint to refuse in the first place (a silent
+  pixel-only deviation, not a parse error) — its own call site is
   `decoder::decode_packet`'s post-CTU-loop `deblock::filter_picture` call,
   not `check_scope`.
+- **If a future scope extension touches per-CU state** (the way
+  `cu_qp_delta` did): check whether `deblock.rs` is still assuming that
+  state is constant across the picture before trusting its own module doc.
+  `cu_qp_delta` is the second time this crate's own "collapse this general
+  clause-8.7.2 term to a constant because nothing else in scope can make it
+  vary" reasoning stopped being true the moment a new feature landed — see
+  "Per-CU QP delta (`cu_qp_delta`), landed" below for what changed and how
+  it was caught (the crate's own module doc said so, in so many words,
+  before this pass started).
 - **New CABAC context table**: transcribe from HM's `ContextTables.h`
   (Tier A, BSD-3-Clause — see "Specification" below), not from memory or
   from the spec's clause text alone; add the table to `cabac_ctx.rs` and
@@ -479,6 +490,100 @@ non-WPP byte-exact paths (`tests/oracle.rs::dense_content_is_byte_exact`,
 and the same real-binary check with `wpp=0`) are unchanged.
 
 `check_scope` no longer refuses `entropy_coding_sync_enabled_flag`.
+
+## Per-CU QP delta (`cu_qp_delta`), landed
+
+The one restriction still standing after deblocking, SAO and WPP all
+landed at their own defaults: `libx265`'s own default rate control is CRF,
+which implies `cu_qp_delta_enabled_flag` (adaptive per-CU QP) — a genuinely
+stock invocation, `-c:v libx265 -x265-params log-level=none` with nothing
+else, hit exactly this refusal and nothing else. Closing it makes an
+ordinary, completely unmodified `libx265` file decode end to end (still
+subject to this crate's other pre-existing, unrelated scope limits — I-slice
+only, no tiles, and so on).
+
+**The mechanism**: `ctu.rs`'s `coding_quadtree()` resets the current
+quantisation group's own `CuQpDeltaVal`/`IsCuQpDeltaCoded` (mirrored as
+`cu_qp_delta_val`/`is_cu_qp_delta_coded`) and re-derives `qPY_PRED`
+(`qp_y_pred`, cached as `qg_qp_pred`) every time it is entered at or above
+`Log2MinCuQpDeltaSize = CtbLog2SizeY - diff_cu_qp_delta_depth` — which,
+since that threshold never exceeds the CTB size, fires at least once per
+CTU and is the *only* reset a CU larger than the nominal QG size ever gets
+(§7.3.8.4's own syntax table does this unconditionally, split or not).
+`cu_qp_delta_abs`/`cu_qp_delta_sign_flag` (§7.3.8.11) are read by
+`maybe_parse_cu_qp_delta`, called from `transform_unit()` — the first leaf
+in decoding order whose luma-or-chroma `cbf` is set, in the same quantisation
+group, reads it; every later leaf in that QG (with or without its own
+residual) reuses the same `cu_qp_delta_val`. `derive_qp_y` applies §8.6.1's
+final wraparound (`(qPY_PRED + CuQpDeltaVal) % 52`, `QpBdOffsetY == 0`
+throughout this crate's 8-bit-only scope). Every coding unit — even one with
+no residual anywhere in it — gets its own finalised `QpY` written to
+`CuGrid`'s new per-4x4 `qp`/`qp_written` grid once its whole transform tree
+has been walked (`coding_unit()`'s own tail, mirroring HM's
+`TDecCu::xFinishDecodeCU`), because a later quantisation group's own
+`qPY_A`/`qPY_B` neighbour derivation, and deblocking's own `qP_P`/`qP_Q`,
+both need it regardless of whether that particular CU coded any residual.
+
+`qPY_A`/`qPY_B` (`qp_y_pred`) fall back to `qPY_PREV` (`qp_y_prev`) whenever
+the corresponding neighbour would sit outside the *current quantisation
+group's own CTB* — confirmed directly against HM's `getQpMinCuLeft`/
+`getQpMinCuAbove` (`TComDataCU.cpp`), which return `NULL` exactly at that
+condition, always addressing `m_pcPic->getCtu(getCtuRsAddr())` and never
+crossing a CTB boundary regardless of whether the neighbour has already been
+decoded. This subsumes the picture-edge case for free (a QG at `x == 0`/
+`y == 0` is trivially CTB-aligned). `qPY_PREV` itself resets to `SliceQpY`
+at the very start of the slice and, since HM's own
+`CUIsFromSameSliceTileAndWavefrontRow` requires equal CTU-row `y` when WPP
+is active, at the start of every CTB row when `entropy_coding_sync_enabled_flag`
+is set — mirrored in `decoder::decode_wpp_rows` by resetting `walk.qp_y_prev`
+before each row's own CTU loop (the per-CTU QG reset above then re-derives
+everything else fresh from that seed).
+
+**`cu_qp_delta_abs`'s binarisation** is a context-coded truncated-unary
+prefix (cMax = 5; bin 0 uses one context, every further bin shares a second)
+followed, only on saturation, by a bypass-coded EGk(k = 0) suffix — HM's
+`CU_DQP_TU_CMAX = 5`/`CU_DQP_EG_k = 0`, `TDecSbac::parseDeltaQP`. The prefix
+is a direct, bin-for-bin port of HM's own `xReadUnaryMaxSymbol` (`ctu.rs`'s
+`read_unary_max`) rather than a generic truncated-unary reading, because its
+"always consume up to `max_symbol - 1` further bins, and only afterward
+decide whether the last one means +1" shape does not fall out of the more
+obvious early-return-on-cap reading. The suffix reuses
+`vaco_codec_cabac::CabacDecoder::decode_bypass_egk`, already shared
+CABAC-engine machinery, unmodified.
+
+**Deblocking's own constant-QP assumption had to go.** `deblock.rs`'s
+own module doc said outright that `qP_P == qP_Q` on every edge "since there
+is no `cu_qp_delta`" — true when written, false the moment this landed, and
+exactly the kind of stale-blocker doc `AGENT-CONSTRAINTS.md`'s "check a
+recorded blocker before you accept it" section warns about, except here the
+record was accurate *at the time* and simply needed updating alongside the
+feature that invalidated it, which this pass did rather than leaving it to
+rot. `qP_P`/`qP_Q` are now looked up per edge from `CuGrid::qp_at` (the same
+grid `qPY_A`/`qPY_B` read) and averaged (`deblock::qp_avg`) exactly where HM
+does — `iQP = (iQP_P + iQP_Q + 1) >> 1` — before, not after, the chroma QP
+mapping/offset (`xEdgeFilterChroma`'s own `iQP = ((iQP_P + iQP_Q + 1) >> 1) +
+chromaQPOffset`), confirmed against that same HM source. Boundary strength
+is still always 2 (an unrelated consequence of this crate's intra-only
+scope).
+
+Verified against a **fully stock** `libx265` invocation (`-c:v libx265
+-x265-params log-level=none`, keyed as all-intra only because inter
+prediction is separately, pre-existingly out of scope — orthogonal to this
+change): byte-exact on every sample of every plane of every frame at
+640x480 and 320x240 (both regular CTU grids) and 300x500 (a partial last
+CTU row *and* column), at the default CRF and at explicit `crf=15`/`crf=40`
+(low- and high-QP extremes, to vary how often a quantisation group actually
+codes a non-zero delta — `cu_qp_delta` is content-dependent the same way
+the WPP entry-point bug above was, so a fixture that never exercises a real
+delta would pass without proving anything), with WPP, SAO and deblocking
+all left at their own defaults throughout. The pre-existing fixed-QP
+regressions (`tests/oracle.rs::dense_content_is_byte_exact`, and the
+320x240/640x480 real-binary checks with explicit `qp=`) are unchanged,
+since a stream with `cu_qp_delta_enabled_flag` clear never resets
+`cu_qp_delta_val` away from its `Ctx::new` initial `0`, and `derive_qp_y`
+of a constant `qPY_PRED` with a `0` delta is that same constant.
+
+`check_scope` no longer refuses `cu_qp_delta_enabled`.
 
 ## Specification
 

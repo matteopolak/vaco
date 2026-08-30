@@ -38,12 +38,23 @@
 //!   on real `libx265` output with WPP left at its own (on) default,
 //!   alongside deblocking and SAO also at their own defaults, at multiple
 //!   resolutions including a partial last CTU row and column.
-//! - **`cu_qp_delta` / adaptive per-CU QP, chroma QP offset lists, `I_PCM`,
-//!   `transform_skip` actually taken, custom scaling lists, and every SPS
-//!   range-extension flag.** Each is refused the moment the bitstream
-//!   actually uses it, not merely when the syntax element exists — a PPS
-//!   that declares `transform_skip_enabled_flag` but never sets the
-//!   per-block flag decodes fine.
+//! - **`cu_qp_delta` (adaptive per-CU QP, §7.3.8.11/§8.6.1) is
+//!   implemented** — see `ctu.rs`'s own module-level derivation
+//!   (`qp_y_pred`/`derive_qp_y`/`maybe_parse_cu_qp_delta`) for
+//!   `cu_qp_delta_abs`/`sign`'s binarisation and the quantisation-group
+//!   `QpY` derivation, and [`deblock`]'s own module doc for why its
+//!   `qP_P == qP_Q` constant-QP shortcut had to go the moment two coding
+//!   units on either side of an edge could genuinely disagree. Verified
+//!   byte-exact against plain `ffmpeg` on a fully stock `libx265` output
+//!   (default CRF rate control, which implies this), at multiple
+//!   resolutions and CRFs, alongside deblocking/SAO/WPP all at their own
+//!   defaults too.
+//! - **Chroma QP offset lists, `I_PCM`, `transform_skip` actually taken,
+//!   custom scaling lists, and every SPS range-extension flag.** Each is
+//!   refused the moment the bitstream actually uses it, not merely when the
+//!   syntax element exists — a PPS that declares
+//!   `transform_skip_enabled_flag` but never sets the per-block flag
+//!   decodes fine.
 //! - **Bit depths other than 8, chroma formats other than 4:2:0,
 //!   monochrome.** Refused at the SPS.
 //!
@@ -99,10 +110,12 @@
 //! within this crate's stated scope above (`no-sao`, `wpp=0`, constant QP,
 //! all-intra) at the time this paragraph was written: see
 //! `docs/codec/vaco-codec-hevc.md`'s "Registration" section for the exact
-//! command originally verified. SAO and WPP are both implemented now (their
-//! own bullets above); a stream that turns on adaptive per-CU QP (implied by
-//! CRF/CQ rate control, the one restriction of the three still standing)
-//! still gets a clean, named refusal, not a crash or wrong pixels.
+//! command originally verified. SAO, WPP and `cu_qp_delta` are all
+//! implemented now (their own bullets above), which closes the last gap
+//! between this crate's own byte-exact fixtures and a fully stock `libx265`
+//! invocation (`-c:v libx265 -x265-params log-level=none`, nothing else):
+//! default CRF rate control implies both WPP and adaptive per-CU QP, and
+//! neither is refused any more.
 
 #![forbid(unsafe_code)]
 
