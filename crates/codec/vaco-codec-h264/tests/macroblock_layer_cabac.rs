@@ -275,12 +275,35 @@ fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
 /// == 0` uses the neighbour-derived increment, `binIdx == 1` is fixed at
 /// 4, `binIdx >= 2` is fixed at 5. Ruled out, not merely unchecked. Root
 /// cause not isolated further within this dispatch's own time-box.
+///
+/// **Re-measured after the B-slice round's `decode_sub_mb_pred_cabac`
+/// fix** (that function's own doc: `ref_idx`/`mvd` were read interleaved
+/// per 8x8 quadrant instead of clause 7.3.5.2's four whole-macroblock
+/// passes, a bug invisible for a single list but flagged at the time as
+/// the likely cause of exactly this desync). It was a real, measurable
+/// improvement, not a no-op — but not the fix: this corpus now stops
+/// short on 5 of 50 slices, not 7 (slice indices 17, 24, 25, 29, 33 today
+/// — a different, smaller set than the seven this doc's own text above
+/// names, meaning some previously-short slices, including the original
+/// "slice 4" repro this doc describes, now visit every macroblock
+/// cleanly). New smallest shortfall: slice 33, 33 of 36 macroblocks
+/// (`num_ref_idx_l0_active_minus1 == 3` on every remaining failure,
+/// unchanged from before). `decode_sub_mb_pred_cabac`'s own fix stands on
+/// its own merits (a real clause 7.3.5.2 ordering bug, confirmed against
+/// primary text, independent of whether it fully explained this desync)
+/// — but a second, still-unlocated defect clearly remains for
+/// `num_ref_idx_l0_active_minus1 >= 2` content. Not re-chased further
+/// this round; recorded honestly rather than left at the old, now
+/// inaccurate 7/50 figure.
 #[test]
-#[ignore = "real, reproducible desync on multi-reference P slices -- 7 of \
-50 slices in cabac_ip_multiref.264 stop short of their own picture's \
-macroblock count (slice 4: 35/36, the smallest shortfall and best next \
-repro target); every failing slice has num_ref_idx_l0_active_minus1 >= 2; \
-see this test's own doc for what was ruled out"]
+#[ignore = "real, reproducible desync on multi-reference P slices, improved \
+but not resolved by this round's decode_sub_mb_pred_cabac ordering fix -- \
+now 5 of 50 slices in cabac_ip_multiref.264 stop short of their own \
+picture's macroblock count (was 7 of 50 before that fix; slice indices \
+17/24/25/29/33 today, a different and smaller set; slice 33: 33/36, the \
+new smallest shortfall and best next repro target); every failing slice \
+still has num_ref_idx_l0_active_minus1 >= 2; see this test's own doc for \
+what was ruled out and what changed this round"]
 fn every_slice_in_a_real_multiref_cabac_stream_visits_every_macroblock() {
     let data: &[u8] = include_bytes!("fixtures/cabac_ip_multiref.264");
     let mut params = ParameterSets::new();
