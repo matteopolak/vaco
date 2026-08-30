@@ -17,10 +17,27 @@
 //! only (see `mb.rs`'s own module doc for why B was narrowed out of an
 //! earlier dispatch), so nothing here has ever needed to exercise them.
 
-/// One neighbour's contribution to a median MV prediction: `None` means
-/// clause 8.4.1.3's own "not available, or intra, or a different
-/// reference list" substitution (`mv = (0, 0)`, `ref_idx = -1`, and it
-/// still counts as a real input to the median, not skipped).
+/// One neighbour's contribution to a median MV prediction.
+///
+/// `available` is clause 6.4's **macroblock** availability (is there a
+/// decoded macroblock at that position, in this slice, before this one?),
+/// *not* "does that macroblock have motion data for this list". Those are
+/// two different questions and the specification asks both, separately:
+///
+/// - Clause 8.4.1.3.2 gives an available-but-`Intra` neighbour (or one
+///   whose `predFlagLX` is 0) `mvLXN = (0, 0)` and `refIdxLXN = -1`. It
+///   stays *available*.
+/// - Clause 8.4.1.3.1's "if `B` and `C` are both not available and `A` is
+///   available, use `mvLXA`" shortcut, and clause 8.4.1.1's `P_Skip`
+///   "`mbAddrA`/`mbAddrB` not available" zero-motion test, both read that
+///   availability -- so an intra neighbour must *not* trigger either.
+///
+/// Collapsing the two (treating an intra neighbour as unavailable) was a
+/// real bug: it made every `P_Skip` macroblock whose left or above
+/// neighbour happened to be intra predict `mv = (0, 0)` where the correct
+/// answer was the median predictor's, and the error then propagated
+/// through every later picture that predicted from it. `mb.rs`'s
+/// `MvInfo::mb_available` is the source of this field.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Neighbour {
     pub(crate) available: bool,
@@ -29,8 +46,23 @@ pub(crate) struct Neighbour {
 }
 
 impl Neighbour {
+    /// Clause 6.4's own "not available": no macroblock there at all
+    /// (outside the picture, or outside this slice). Distinct from an
+    /// available neighbour carrying `ref_idx == -1` -- see this type's
+    /// own doc.
+    #[cfg(test)]
     pub(crate) const UNAVAILABLE: Self = Self {
         available: false,
+        ref_idx: -1,
+        mv: (0, 0),
+    };
+
+    /// An available macroblock that carries no motion for this list
+    /// (`Intra`, `I_PCM`, or `predFlagLX == 0`): clause 8.4.1.3.2's own
+    /// `mvLXN = (0, 0)`, `refIdxLXN = -1` substitution.
+    #[cfg(test)]
+    pub(crate) const INTRA: Self = Self {
+        available: true,
         ref_idx: -1,
         mv: (0, 0),
     };
@@ -138,6 +170,12 @@ pub(crate) fn predict_mv(
 /// is unavailable, or if either is available with `ref_idx == 0` and
 /// `mv == (0, 0)` -- otherwise the plain median predictor with
 /// `ref_idx == 0`.
+///
+/// "Unavailable" here is clause 6.4's macroblock availability, exactly as
+/// [`Neighbour`]'s own doc describes. An `Intra` neighbour is available
+/// and carries `ref_idx == -1`, so it fails the `ref_idx == 0` test and
+/// this function falls through to the median predictor -- it does **not**
+/// short-circuit to `(0, 0)`.
 pub(crate) fn p_skip_mv(a: Neighbour, b: Neighbour, c: Neighbour) -> (i16, i16) {
     if !a.available
         || !b.available
@@ -215,6 +253,43 @@ mod tests {
         assert_eq!(
             p_skip_mv(avail(0, (0, 0)), avail(0, (7, 7)), Neighbour::UNAVAILABLE),
             (0, 0)
+        );
+    }
+
+    /// The bug this distinction exists for, pinned: an `Intra` left
+    /// neighbour is *available* with `ref_idx == -1`, so clause 8.4.1.1's
+    /// zero-motion test does not fire and `P_Skip` must use the median
+    /// predictor. Treating intra as unavailable returned `(0, 0)` here and
+    /// silently corrupted every picture predicted from the result.
+    #[test]
+    fn p_skip_does_not_zero_when_a_neighbour_is_intra_rather_than_absent() {
+        let a = Neighbour::INTRA;
+        let b = avail(0, (8, 0));
+        assert_eq!(p_skip_mv(a, b, Neighbour::UNAVAILABLE), (8, 0));
+        // ... and the genuinely-absent case still does zero, so this is a
+        // real distinction and not a blanket loosening.
+        assert_eq!(p_skip_mv(Neighbour::UNAVAILABLE, b, Neighbour::UNAVAILABLE), (0, 0));
+    }
+
+    /// Clause 8.4.1.3.1's "`B` and `C` both not available" shortcut is
+    /// also macroblock availability: an intra `B` keeps the median path
+    /// (median of `A`, `(0, 0)`, `(0, 0)`), it does not hand `A` through
+    /// untouched.
+    #[test]
+    fn intra_b_does_not_trigger_the_a_only_shortcut() {
+        // `A` deliberately carries a *different* `ref_idx` from the one
+        // being predicted, so the "exactly one neighbour matches" rule
+        // cannot fire and the two paths give visibly different answers.
+        let a = avail(1, (12, -8));
+        assert_eq!(
+            median_predictor(a, Neighbour::INTRA, Neighbour::UNAVAILABLE, 0),
+            (0, 0),
+            "an available intra B keeps the median path: median(12, 0, 0) == 0"
+        );
+        assert_eq!(
+            median_predictor(a, Neighbour::UNAVAILABLE, Neighbour::UNAVAILABLE, 0),
+            (12, -8),
+            "with B genuinely absent the A-only shortcut does apply"
         );
     }
 

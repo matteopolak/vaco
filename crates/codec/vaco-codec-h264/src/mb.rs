@@ -1626,6 +1626,18 @@ struct CabacMbInfo {
 /// three separate checks.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct MvInfo {
+    /// Clause 6.4's own *macroblock* availability for this 4x4 block's
+    /// position: `true` once the macroblock owning it has been decoded in
+    /// this slice, whatever its coding mode -- an `Intra`/`I_PCM`
+    /// macroblock is every bit as "available" as an inter one. This is
+    /// deliberately **not** `pred.is_some()`: clause 8.4.1.3.2 turns an
+    /// available-but-intra neighbour into `mvLXN = (0, 0)`,
+    /// `refIdxLXN = -1`, which is a different input to clause 8.4.1.1's
+    /// `P_Skip` zero-motion test and to clause 8.4.1.3.1's
+    /// "`B` and `C` both unavailable" shortcut than a genuinely
+    /// unavailable neighbour is. Conflating the two is a real bug this
+    /// field exists to make unrepresentable -- see [`Self::as_motion_neighbour`].
+    mb_available: bool,
     pred: Option<PartPred>,
     ref_idx: [i8; 2],
     mvd: [(i16, i16); 2],
@@ -1670,10 +1682,10 @@ impl MvInfo {
             (self.pred, list),
             (Some(PartPred::L0 | PartPred::Bi), 0) | (Some(PartPred::L1 | PartPred::Bi), 1)
         );
-        if reads {
-            crate::motion::Neighbour { available: true, ref_idx: self.ref_idx[list], mv: self.mv[list] }
-        } else {
-            crate::motion::Neighbour::UNAVAILABLE
+        crate::motion::Neighbour {
+            available: self.mb_available,
+            ref_idx: if reads { self.ref_idx[list] } else { -1 },
+            mv: if reads { self.mv[list] } else { (0, 0) },
         }
     }
 }
@@ -2562,6 +2574,7 @@ pub fn decode_slice_cabac(
                 c_neighbour.as_motion_neighbour(0),
             );
             let info = MvInfo {
+                mb_available: true,
                 pred: Some(PartPred::L0),
                 ref_idx: [0, -1],
                 mvd: [(0, 0), (0, 0)],
@@ -2657,6 +2670,25 @@ pub fn decode_slice_cabac(
             )?;
             stats.macroblock_count += 1;
             let info = grids.mb_info_at(mb_x, mb_y);
+            // An intra (or `I_PCM`) macroblock writes nothing to the
+            // motion grid while decoding -- it has no partitions -- but it
+            // is still clause 6.4-*available* to every later macroblock
+            // that looks at it as an `A`/`B`/`C` neighbour. Clause
+            // 8.4.1.3.2 gives such a neighbour `mvLXN = (0, 0)` and
+            // `refIdxLXN = -1`, which is materially different from being
+            // absent: clause 8.4.1.1's `P_Skip` test asks whether
+            // `refIdxL0A == 0`, and answers "no" for an intra neighbour
+            // while answering "treat as zero motion" for an unavailable
+            // one. Recording availability here is what lets
+            // `MvInfo::as_motion_neighbour` tell the two apart.
+            if info.is_some_and(|i| i.is_intra || i.is_ipcm) {
+                let intra_mv = MvInfo { mb_available: true, ref_idx: [-1, -1], ..MvInfo::default() };
+                for y in 0..4u32 {
+                    for x in 0..4u32 {
+                        grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, intra_mv);
+                    }
+                }
+            }
             // `residual`'s own `CabacResidual` vectors were charged to
             // `budget` inside `decode_residual_cabac`'s own
             // `residual_block_cabac` calls. `stats.macroblocks` takes
@@ -3104,7 +3136,7 @@ const fn partition_shape(x0: u32, y0: u32, x1: u32, y1: u32) -> crate::motion::P
 fn resolve_c(grids: &CabacGrids, left_x: u32, right_x: u32, top_y: u32) -> MvInfo {
     let Some(above_y) = top_y.checked_sub(1) else { return MvInfo::default() };
     let c = grids.mv_at(right_x + 1, above_y);
-    if c.pred.is_some() {
+    if c.mb_available {
         return c;
     }
     left_x.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, above_y))
@@ -3176,7 +3208,7 @@ fn decode_one_partition_cabac(
         mv[1] = (pmv.0.saturating_add(mvd[1].0), pmv.1.saturating_add(mvd[1].1));
     }
 
-    let info = MvInfo { pred: Some(pred), ref_idx, mvd, mv };
+    let info = MvInfo { mb_available: true, pred: Some(pred), ref_idx, mvd, mv };
     for y in y0..=y1 {
         for x in x0..=x1 {
             grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
@@ -3265,7 +3297,7 @@ fn decode_two_partitions_cabac(
                 // own neighbour lookup two lines above must see this one's
                 // values once decoded, matching clause 6.4.7.5's ordinary
                 // same-macroblock case.
-                let info = MvInfo { pred: Some(preds[p]), ref_idx: ref_idx[p], mvd: mvd[p], mv: mv[p] };
+                let info = MvInfo { mb_available: true, pred: Some(preds[p]), ref_idx: ref_idx[p], mvd: mvd[p], mv: mv[p] };
                 for yy in y0..=y1 {
                     for xx in x0..=x1 {
                         grids.set_mv(mb_x * 4 + xx, mb_y * 4 + yy, info);
@@ -3378,7 +3410,7 @@ fn decode_sub_mb_pred_cabac(
                 ref_idx[0],
             );
             let mv = [(pmv.0.saturating_add(mvd[0].0), pmv.1.saturating_add(mvd[0].1)), (0, 0)];
-            let info = MvInfo { pred: Some(pred), ref_idx, mvd, mv };
+            let info = MvInfo { mb_available: true, pred: Some(pred), ref_idx, mvd, mv };
             // Write this sub-partition's own corner immediately (not
             // just into `computed`) -- a *later* sub-partition within
             // this same quadrant needs to see it as a real left/above
