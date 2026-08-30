@@ -553,7 +553,77 @@ byte-exactness before any later frame was looked at:
    were filtered, which clause 8.7 does not do when there are no 4x4
    transform block boundaries there.
 
-**The one open residual, stated precisely** rather than rounded to "clean":
+### Round two: the fixture corpus was the bug, twice more
+
+The table above was measured on `testsrc2`, `smptehdbars` and `mandelbrot`.
+A wider corpus -- `life`, `zoneplate`, `cellauto`, `sierpinski` and friends
+at eight sizes -- found two more defects that those fixtures could not
+express, and both were **content-dependent, not size- or profile-dependent**:
+
+5. **`Intra_8x8`'s `Vertical_Right` and `Horizontal_Down` dropped a term.**
+   Clause 8.3.2.2.5/8.3.2.2.6's `zVR < -1` / `zHD < -1` branches step back
+   along the opposite edge by `y - 2*x` and `x - 2*y`; both arms used `y`
+   and `x` alone. At 4x4 that term barely matters; at 8x8 every position
+   past the diagonal reused the first one's value. **High profile,
+   640x360 `mandelbrot`: 7.66% of bytes differing from frame 0 (the IDR
+   alone was 21474 luma samples wrong, max delta 48) -> byte-exact.**
+   Found by dumping all nine modes' predictions from this decoder and from
+   JM and diffing: 1592 blocks, **0 mode mismatches, 332 prediction
+   mismatches** -- modes agreeing while predictions did not is what ruled
+   out the CABAC/most-probable-mode side in one step. Per-mode failure
+   rates were 124/168 (`Horizontal_Down`) and 33/60 (`Vertical_Right`)
+   against 10/362 for DC. Flat synthetic content selects two or three of
+   the nine modes; directional content selects all nine.
+
+6. **Weighted prediction (clause 8.4.2.3) was not implemented at all.**
+   `pred_weight_table()` was parsed by `vaco-parse-h264` and ignored by the
+   decoder. **`weighted_pred_flag` is x264's own default for P slices**, so
+   nearly every real file carries a weight table -- including every fixture
+   this crate already decoded byte-exact. On most content the encoder picks
+   the neutral weight and clause 8.4.2.3.2 collapses to a plain copy, which
+   is exactly why ignoring it looked correct. ffmpeg's `life` source
+   flickers globally, x264 then picks real weights
+   (`logWD = 4, w = 15, o = -3` on the clip used here), and **every inter
+   macroblock carrying luma residual was wrong from the first P picture**
+   (17 of 17 on frame 2; the 57 wrong intra macroblocks were all downstream
+   of an inter neighbour). 10.58% -> byte-exact.
+
+   The localisation is the reusable part: motion vectors matched JM's own
+   `mv_info` 4x4-by-4x4; per-4x4 coefficient presence matched JM's
+   `s_cbp[0].blk` bitmask (1 macroblock differed in 9750, and that one is
+   JM tracking `Intra_16x16` DC separately). With motion and coefficient
+   placement both excluded, prediction samples were recomputed
+   independently from clause 8.4.2.2.1 -- and disagreed with ffmpeg even
+   for `frac == (0, 0)` blocks, where the prediction is a plain copy and
+   *cannot* be wrong. A copy that disagrees is not a filter bug; it is a
+   missing transform of the copied samples.
+
+**Two JM instrumentation attempts produced misleading data and were thrown
+away rather than believed**: dumping `currSlice->mb_pred` and dumping
+`dec_picture->imgY` at the end of `mb_pred_p_inter8x8` both read buffers JM
+had not filled at that point, and the second "proved" a prediction mismatch
+that did not exist. What caught them was a control -- re-running the same
+comparison on a clip already known byte-exact -- and hand-checking one
+`mv = (0,0)` block against the reference frame. **An oracle needs its own
+control run before its output is evidence.**
+
+### Verification corpus
+
+Main and High profile, `-bf 0 -refs 1`, 25 frames each, per plane per frame
+byte for byte against ffmpeg 9.0.1 (itself confirmed byte-exact against a
+locally built JM 19.1 `ldecod` on every clip used):
+
+- Sources: `life`, `mandelbrot`, `zoneplate`, `cellauto`, `sierpinski`,
+  `testsrc`, `testsrc2`, `smptehdbars`, `rgbtestsrc`, `gradients`.
+- Sizes: 176x144, 352x288, 416x240, 640x360, 640x480, 720x576, 1280x720,
+  and 322x242 (not a multiple of 16, so frame cropping is exercised).
+
+**Every combination byte-exact.** When adding a fixture, prefer directional
+and high-detail content: it is the only kind that selects all nine
+`Intra_8x8`/`Intra_4x4` modes, and content with global brightness change is
+the only kind that makes an encoder emit non-neutral prediction weights.
+
+**The residual this section used to leave open is closed** by defect 6 below (it was weighted prediction all along, not `Intra_8x8` prediction as the paragraph below guessed). Kept as written, because the wrong guess is the useful part: it named the right macroblock and the right slice type and still misattributed the cause, because it reasoned from the coding mode of the macroblock rather than from what was actually different about its inputs. Original text: **the one open residual, stated precisely** rather than rounded to "clean":
 High profile leaves 24 bytes differing across frames 22-24 (2, 7, 15 luma
 samples; max delta 5; chroma byte-exact). It is **not** deblocking --
 decoding both sides with the loop filter disabled (`ffmpeg

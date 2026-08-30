@@ -424,3 +424,67 @@ frames and reports the first differing frame with per-frame per-plane
 magnitudes on failure. Its own detection was self-tested by injecting a
 single wrong byte per frame — §1's "the implementation had no production
 caller and the tests hid that" applies to correctness harnesses too.
+
+## 13. Round two — the fixture corpus was the bug, twice more
+
+§12 reported Main byte-exact and High at 0.0008%, measured over `testsrc2`,
+`smptehdbars` and `mandelbrot`. A wider corpus found **two more real
+defects**, both invisible to those fixtures, and both now fixed. High profile
+on a 640x360 `mandelbrot` clip was **7.66% wrong from frame 0** — nine times
+worse than §12's own worst High-profile number — and a 416x240 `life` clip
+was 10.58% wrong.
+
+| Defect | Signature | Result |
+|---|---|---|
+| `Intra_8x8` `Vertical_Right`/`Horizontal_Down` dropped the `- 2*x` / `- 2*y` term in their `zVR/zHD < -1` branch (clause 8.3.2.2.5/6) | luma-only, intra, High-profile-only, wrong from the IDR, max delta 48 | 7.66% → **byte-exact** (`ba622b5`) |
+| Weighted prediction (clause 8.4.2.3) not implemented — `pred_weight_table()` parsed and ignored | every inter macroblock with luma residual wrong from the first P picture; `weighted_pred_flag` is **x264's default** | 10.58% → **byte-exact** (`26ca4ad`) |
+
+Re-verified after both: Main **and** High, `-bf 0 -refs 1`, 25 frames each,
+per plane per frame byte for byte, over `life`, `mandelbrot`, `zoneplate`,
+`cellauto`, `sierpinski`, `testsrc`, `testsrc2`, `smptehdbars`, `rgbtestsrc`
+and `gradients`, at 176x144, 352x288, 416x240, 640x360, 640x480, 720x576,
+1280x720 and 322x242 (not a multiple of 16 — cropping exercised). **Every
+combination byte-exact.**
+
+### The lesson, which is about fixtures and not about H.264
+
+Both defects were **content-dependent**, and the corpus decided whether they
+were visible:
+
+- Flat, synthetic sources (`smptebars`, `testsrc2`) select two or three of
+  the nine `Intra_8x8` prediction modes. `mandelbrot`, `life` and
+  `zoneplate` select all nine. The two broken modes failed on 74% and 55%
+  of the blocks that used them — and were reached almost never on flat
+  content.
+- An encoder only emits **non-neutral prediction weights** when the content
+  has global brightness change. Every other fixture made x264 choose the
+  neutral weight, under which clause 8.4.2.3.2 collapses to a plain copy and
+  ignoring the whole feature is indistinguishable from implementing it.
+
+This is a second instance of the shape §7 and §12 already record, one level
+up: §7 was *a harness that measured the wrong thing*, §12 was *a table fitted
+to an aggregate percentage*, and this is **a corpus that cannot express the
+defect**. A byte-exact result is a statement about the fixtures, not about
+the decoder. When adding a decoder fixture, pick directional, high-detail
+content and content with global brightness change, and check frame 0
+separately — all three defects here were already wrong on the first frame or
+the first inter frame.
+
+### And a note on oracles
+
+Two JM instrumentation attempts during this work read buffers JM had not
+filled at the dump point, and one of them "proved" a prediction mismatch
+that did not exist. Both were caught by running the same comparison on a
+clip already known byte-exact, and by hand-checking a single `mv = (0,0)`
+block — a case whose answer is knowable without any oracle at all. **An
+instrumented oracle needs its own control run before its output counts as
+evidence.**
+
+### Coverage
+
+`fuzz/fuzz_targets/h264_decode.rs` (new, `677b569`) drives
+`H264Decoder::send_packet`/`receive_frame` directly. `h264_entropy` only ever
+reached the two residual-block functions — the macroblock layer,
+reconstruction, intra prediction, motion compensation, weighted prediction,
+the DPB and deblocking had no direct fuzz coverage at all. 1155018 runs
+clean.
