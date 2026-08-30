@@ -601,3 +601,47 @@ The fix that worked was to stop writing inline shell and use a Python script
 that checks each subprocess's exit status. **A timing harness that does not
 assert the command succeeded is measuring startup cost.** Sanity-check every
 benchmark number against physical plausibility before believing it.
+
+## 16. Fuzz sweep: 224 targets, 5 defects, ~2.3 billion executions
+
+The sweep ran every registered target for 75s at nice 10 while other work
+continued. **219 clean, 5 findings, 0 build failures, 0 run issues.** All five
+are fixed.
+
+| target | defect |
+|---|---|
+| `io_buffered_reader` | `MemorySource::seek` clamped past-EOF against its own comment; `IoContext::skip` discarded seek's landing position |
+| `registry_discovery` | JPEG SOF precision unvalidated, printing `bits_per_raw_sample=164` into probe output |
+| `mxf_demux` | `IndexDuration` of 144 quadrillion on a 9,934-byte file drove a 16.7M-iteration loop twice |
+| `parse_vpx` | **false harness invariant** — VP9 §7.2.3's `frame_width_minus_1 + 1` legally reaches 65536 |
+| `webp_decode` | VP8L encode inferred alpha from pixel *content*, dropping the plane on all-opaque `Rgba` |
+
+Four of five were genuine library defects; the single harness fix was accepted
+only against a cited specification clause, and was corroborated by the crate's
+own `MAX_DIMENSION` already treating the bound as inclusive.
+
+### What the sweep was actually worth
+
+Two of these are user-visible in ordinary use, not merely fuzz artifacts:
+
+- **JPEG precision** fabricated metadata in `vaco-probe` output from any
+  corrupted file. Verified by patching one byte of a real JPEG: `164` before,
+  `N/A` after — which is what `ffprobe` prints for the same file.
+- **MXF** `open()` on the artifact dropped from ~500ms to ~107us, about 4,900x.
+  That is a denial-of-service shape on a malformed file, and the `Limits`
+  machinery exists precisely to bound it — the fix reused the essence
+  container's already-computed real size rather than inventing a constant.
+
+### The generalisation that mattered more than any single fix
+
+`registry_discovery`'s assertion named a **class**. Auditing its sibling
+assertions found four more unvalidated syntax elements reaching output that
+the corpus had never reached: mp4's `nal_length_size` fabricated from a
+reserved encoding, ALAC's unchecked `bitDepth`, `vpcC`'s depth of 0, and MXF's
+`ComponentDepth` admitting 0 and 65..=255.
+
+`webp_decode`'s audit was the mirror image and equally useful: PNG, QOI, FFV1,
+GIF, TIFF, EXR, TGA, BMP, SGI, PCX, XWD, XBM and the PAM family were all
+checked for the same content-versus-declared-format inference and were **all
+clean** — every one dispatches on `match format`. A negative audit is a result;
+it stops the next agent redoing the work.
