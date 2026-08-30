@@ -421,6 +421,140 @@ chroma replication produces a one-tap bank on *both* axes for every Y'CbCr to
 R'G'B' conversion, so what looked like a degenerate case is the common one, and
 it was paying an `i64` multiply and a shift per chroma sample per axis.
 
+### The E2E-GAPS 2160p→1080p gap, isolated and profiled (2026-08-30)
+
+`planning/E2E-GAPS.md` §9 measured `vaco -i uhd.mp4 -vf scale=1920:1080` at 29x
+slower than `ffmpeg`, but that number is the whole CLI invocation — decode,
+scale and mux together — and never isolated which part is the scaler's own.
+Two rounds of that document's profiling had already worked the H.264 decode
+loop; this pass is the part that was left.
+
+**Isolating the scaler's cost.** Decode-only (`-c:v rawvideo -f null -`)
+against decode+scale (`-vf scale=1920:1080 -c:v rawvideo -f rawvideo`), same
+4K 75-frame clip, 8 interleaved launches each, wall clock (`date +%s.%N`; a
+niced fuzz sweep was running throughout, so best-of/paired-diff is what
+matters, not the absolute figures):
+
+| | decode-only | decode+scale | diff (scaler's share) |
+|---|---:|---:|---:|
+| best-of-8 | 7.96 s | 9.88 s | — |
+| per-round diff, min..max | — | — | **1.30 s .. 1.97 s** (mean 1.71 s) |
+
+So on this clip the scaler itself is on the order of 1.3–2.0 s of the 7.53 s
+end-to-end figure in §9 — real, but a minority of it; most of that figure is
+still decode, which is being worked separately. `cargo bench -p vaco-scale`'s
+`convert::yuv420p_2160p_to_1080p_bicubic` entry (added this round, exact same
+resolutions and pixel format as the e2e scenario) reproduces this in-process:
+75 frames at its fastest 22.6 ms/frame is 1.70 s, consistent with the CLI
+measurement.
+
+**What filter this is.** Default `scaler=auto` resolves to bicubic on both
+sides — `ffmpeg`'s `swscale` default and this crate's (§7, §5.2) — so this is
+a fair like-for-like comparison, not a quality-for-speed trade. Nothing below
+changes a single output byte (checked directly, see "Correctness" below);
+only which instructions compute the existing ones.
+
+**Profiling.** `samply record --unstable-presymbolicate` against the release
+bench binary (`cargo bench -p vaco-scale --bench scale --no-run`, then
+`samply record -- <binary> --bench yuv420p_2160p_to_1080p_bicubic --min-time
+12`, using divan's own `--bench` flag and `--min-time` for a long enough
+capture — running the binary directly without `--bench` silently no-ops it,
+which cost a first attempt). Presymbolication resolved function names but no
+line numbers on this binary (no separate dSYM), and — because `filter_h`'s
+callers are `#[inline]` — almost everything landed on one call site
+(`run_band`'s `build_mid(...)` line), which hid the real hot line entirely.
+`dsymutil` on the bench binary plus `llvm-symbolizer --obj=<dSYM> --inlines`
+recovers the full inline chain per address and fixes this: the innermost
+frame is the real leaf, not the outermost call site. Aggregating self-time by
+that innermost frame gives the top cost centres:
+
+| self time | location |
+|---:|---|
+| 17.3% | `core::slice::index` — bounds-checked `.get()` building `filter_h`'s tap window |
+| 14.2% | `filter_h`, unattributed line (inlined slice machinery) |
+| 11.4% | `Zip::next` — the tap accumulation loop's iterator advance |
+| 6.3% | `cmp::min` |
+| 5.8% + 2.8% + 2.5% | `filter_h`'s `acc += i64::from(c) * i64::from(s)` line, split across sub-instructions |
+| 9.9% | `filter_v`'s equivalent accumulation line |
+| 3.9% + 3.6% | more `Iterator`/`Enumerate` machinery in `filter_h` |
+| 1.4% | `checked_mul` computing `d * taps` afresh every output pixel |
+
+Roughly half of total self time was in `filter_h`'s tap loop, and almost none
+of it was the actual multiply-accumulate — it was `Option`-returning bounds
+checks, `Iterator::zip`/`Enumerate::next`, and a per-pixel `checked_mul`,
+around a loop whose trip count (`bank.taps`) is a runtime field the optimiser
+cannot see as constant. Probing the real plan (`3840x2160 yuv420p -> 1920x1080
+yuv420p`, default options) showed `up.h`/`up.v` both resolve to **8-tap**
+banks — this is the algorithmic/bookkeeping class of cost plan
+`AGENT-CONSTRAINTS.md` asks to check first, not a missing vector instruction:
+the arithmetic per pixel is trivial, the loop *scaffolding* around 8 iterations
+is not.
+
+**The fix.** `filter_h` now dispatches on `bank.taps` to a
+`filter_h_fixed::<N>` body for `N` in `{2, 4, 6, 8}` — bilinear, an unscaled
+cubic, an unscaled `a=3` lanczos, and this exact 2x-bicubic-downscale case —
+falling back to the untouched original loop (renamed `filter_h_generic`, and
+kept as the semantic reference) for any other tap count. The only change
+inside the fixed body is converting the `taps`-wide coefficient and window
+slices to `&[i32; N]` via `try_into()` (one bounds check) before the
+accumulation loop, so the loop's trip count is carried in the type rather
+than read from `bank.taps` at runtime — that is what lets it unroll. Same
+round, same order of `i64` additions, so the output is identical: integer
+addition without overflow (guaranteed by `abs_sum`, see §2.4) does not care
+about association order. `filter_v`'s smaller share (~10% of self time,
+concentrated in the width-loop rather than the tap loop) was left alone this
+round.
+
+**Measured, `cargo bench -p vaco-scale`, interleaved before/after binaries
+(the "before" build from a clean `git checkout` of `exec.rs`, the "after" from
+this change, both bench profiles, alternating within each of 10 independent
+process launches, `--min-time 1.5`, fastest-of-sample from divan's own
+output):**
+
+| round | before | after | after/before |
+|---:|---:|---:|---:|
+| 1..10 | 21.2–23.9 ms | 17.0–19.4 ms | 0.73–0.90 |
+
+**10/10 rounds favoured "after"**, mean ratio ≈0.80 (≈1.25x). The same binary
+pair's full `convert` group (single launch each, for context — not the
+interleaved claim above) shows the specialisation reaching every bench entry
+whose tap count happens to land on 2/4/6/8:
+
+| entry | before (fastest) | after (fastest) | ratio |
+|---|---:|---:|---:|
+| `yuv420p_2160p_to_1080p_bicubic` (the e2e scenario) | 21.17 ms | 16.67 ms | 0.79x |
+| `yuv420p_downscale_bicubic` (1080p→720p) | 7.88 ms | 4.54 ms | 0.58x |
+| `yuv420p_upscale_lanczos` (720p→1080p) | 12.06 ms | 7.44 ms | 0.62x |
+| `rgb24_to_yuv420p_1080p` | 8.33 ms | 7.62 ms | 0.91x |
+| `threads=1` (1080p→720p bicubic) | 7.68 ms | 4.56 ms | 0.59x |
+| `yuv420p_to_rgb24_1080p` (one-tap gather, no arithmetic bank) | 5.17 ms | 5.15 ms | 1.00x (expected — untouched path) |
+| `yuv420p_to_nv12_1080p` (plane copy) | 2.09 ms | 2.06 ms | 1.00x (expected — untouched path) |
+| `yuv420p10le_to_yuv420p` (depth only, no resampling) | 4.57 ms | 4.58 ms | 1.00x (expected — untouched path) |
+
+The three "expected 1.00x" rows are the important negative-space check: paths
+that never call `filter_h`'s arithmetic branch (the gather fast path, plane
+copy, and depth-only reduction) show no change, which is what "additive, not
+different" should look like.
+
+This revises §8's headline table's "1080p → 720p, bicubic" and "720p → 1080p,
+lanczos" rows downward (measured on this pass's machine, so not directly
+comparable to §8's medians from a different day — re-run both to compare on
+equal footing).
+
+**Correctness.** A standalone harness (`Scaler::scale_planes` called directly
+over a deterministic synthetic 4K `yuv420p` frame — no decoder involved, to
+keep the H.264 rework other agents had in flight out of the comparison)
+scaled to 1080p with default options, before and after, MD5-matches
+byte-for-byte: `203c30f5ab6350691a166884b4098d62` both times. `cargo test
+-p vaco-scale` — including `tests/reference.rs`'s `paths_graded_exact_stay_exact`
+Exact-path gate and the `a_constant_image_survives_every_kernel_and_every_ratio`
+property — all pass unchanged. A new differential test
+(`exec::filter_h_fixed_tests::fixed_and_generic_agree_at_every_tap_count_and_length`)
+checks `filter_h_fixed::<N>` against `filter_h_generic` for `N` in `1..=9` and
+several `src_len`/`dst_len` combinations including truncated and empty
+outputs, so a future change to either body that disagrees fails a test rather
+than shipping quietly.
+
 ---
 
 ## 9. Testing

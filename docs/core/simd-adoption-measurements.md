@@ -410,6 +410,42 @@ byte-exact against `ffmpeg` with the kernel wired in.
 
 ---
 
+### Group 9 — `vaco-scale`: a fixed-tap-count body, not a vector kernel
+
+Dated separately: **2026-08-30**. `planning/E2E-GAPS.md` §9-11's 2160p→1080p
+scaling gap, isolated to the scaler's own cost and profiled — full detail and
+the measured before/after numbers are in `docs/signal/vaco-scale.md` §8's "The
+E2E-GAPS 2160p→1080p gap" subsection; this entry records it here because it is
+a kernel-shaped change even though it never touches `vaco-simd`.
+
+Recorded here specifically for the negative-space this group's own rule
+predicts: **this is not a SIMD kernel.** `vaco_scale::exec::filter_h`'s tap
+loop runs a runtime-determined number of iterations (`bank.taps`), so the
+optimiser cannot unroll or vectorise it even though real tap counts are
+small (2-16) and mostly fixed per plan. Samply profiling (methodology in the
+vaco-scale doc, including the `dsymutil` + `llvm-symbolizer --inlines` step
+needed because `#[inline]` had collapsed the whole call chain onto one
+attributed line) found roughly half the loop's self time was `Iterator`/
+`Option` bounds-check scaffolding around the loop, not the multiply-accumulate
+itself. Fixed by converting the coefficient/window slices to `&[i32; N]` for
+`N` in `{2, 4, 6, 8}` before the accumulation loop, so the trip count reaches
+the optimiser through the type rather than a runtime field — no lanes, no
+`Caps`/`Tier` dispatch, no `vaco-simd` dependency at all. Measured 0.73-0.90x
+(mean ≈0.80x) on the exact `2160p -> 1080p` bicubic scenario, 10/10 interleaved
+rounds favouring the change, and up to 0.58x on other real conversions whose
+tap count lands on one of the four specialised widths.
+
+This is the same lesson Group 4's honest framing already drew about the 8-tap
+u8 FIR (structure matters more than the instruction set) pushed one step
+earlier: here the missing structure was a *compile-time-visible trip count*,
+and supplying it let ordinary scalar codegen do the rest — no hand-vectorised
+body was written or needed. Filed here rather than left unrecorded because a
+future reader searching this document for "why is the filter loop slow" should
+find the answer, even though the fix has no `Lanes`/`KernelSet` footprint to
+show up under `cargo bench -p vaco-simd`.
+
+---
+
 ## Revised upstream ask
 
 Plan 12 §11 lists six operations to request before v1.0. The measurements reorder that list sharply —

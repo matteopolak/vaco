@@ -488,3 +488,66 @@ reached the two residual-block functions — the macroblock layer,
 reconstruction, intra prediction, motion compensation, weighted prediction,
 the DPB and deblocking had no direct fuzz coverage at all. 1155018 runs
 clean.
+
+## 14. Profiling loop, scaling — the 2160p→1080p gap, isolated and partly closed
+
+§9's 29x figure for `2160p -> 1080p decode+scale+rawvideo` was never split
+into its two costs. Decode has had two profiling rounds (§10, §11); this one
+is the scaler's, and it had never been profiled at all.
+
+**Isolated first.** Decode-only (`-c:v rawvideo -f null -`) against
+decode+scale (`-vf scale=1920:1080 -c:v rawvideo -f rawvideo`), same 4K
+75-frame clip, 8 interleaved launches, wall clock: best-of-8 decode-only
+7.96s, decode+scale 9.88s, per-round diff (the scaler's own share) **1.30s to
+1.97s**, mean 1.71s. So on this clip the scaler is a minority of §9's 7.53s
+figure — most of it is still decode, which two other rounds are already
+working. `cargo bench -p vaco-scale`'s new `yuv420p_2160p_to_1080p_bicubic`
+entry (exact e2e resolutions/format) reproduces this in-process at 22.6
+ms/frame x 75 = 1.70s, consistent.
+
+**Filter used**: default `scaler=auto` resolves to bicubic on both `vaco` and
+`ffmpeg` (its `swscale` default too), so this is a like-for-like comparison —
+no quality-for-speed swap involved.
+
+**Profiling** used samply 0.13.1 (`--unstable-presymbolicate`) against the
+release bench binary. Two snags, both worth recording for the next agent:
+running the divan bench binary directly without its own `--bench` flag
+silently produces zero samples (cargo passes that flag; a bare invocation
+does not), and presymbolication on this binary resolved function names but no
+line numbers, which combined with `#[inline]` on the callee collapsed nearly
+every sample onto one call-site line in the caller and hid the real hot line.
+`dsymutil` on the same binary plus `llvm-symbolizer --obj=<dSYM> --inlines`
+recovers the true innermost frame per address and fixed this — full method in
+`docs/signal/vaco-scale.md` §8.
+
+**Finding, matching this document's own recurring pattern (§10, §11): the
+cost was bookkeeping, not arithmetic or a missing vector instruction.**
+`vaco_scale::exec::filter_h`'s horizontal tap loop runs `bank.taps` times per
+output pixel — 8 taps for this exact 2x bicubic downscale — but `taps` is a
+runtime field, so the loop's trip count is invisible to the optimiser.
+Profiling attributed roughly half of total self time to `Iterator`/`Option`
+bounds-check scaffolding around that loop (`.get()`-based window fetches,
+`Zip::next`, a per-pixel `checked_mul` recomputing `d * taps`), not to the
+multiply-accumulate itself.
+
+**Fix**: specialise `filter_h` for tap counts `{2, 4, 6, 8}` (bilinear, an
+unscaled cubic, an unscaled lanczos, and this downscale) by converting the
+coefficient/window slices to `&[i32; N]` before the loop, so the trip count
+reaches the optimiser through the type instead of a runtime read. This is not
+a SIMD kernel — no `vaco-simd` dependency, no lanes — it is the same class of
+fix §10 already named ("row copies replacing per-pixel writes... not
+vectorisation"), applied to a filter loop instead of a reconstruction loop.
+Full numbers, the differential test, and the byte-exactness check are in
+`docs/signal/vaco-scale.md` §8 and `docs/core/simd-adoption-measurements.md`
+Group 9. Headline: **10/10 interleaved rounds favoured the change on the
+exact e2e scenario, mean ratio ≈0.80 (≈1.25x)**, up to 0.58x on other real
+conversions whose tap count lands on a specialised width, and no output byte
+changed (MD5-verified on a decoder-free synthetic-frame harness, so the
+concurrent H.264 rework elsewhere in the tree could not contaminate the
+comparison).
+
+**Left for a future round**: `filter_v`'s equivalent loop (~10% of self time,
+smaller than `filter_h`'s ~50%+, and shaped differently — its cost is in the
+per-row width loop rather than the tap loop, so the same fix would not
+directly apply); and the decode-side majority of §9's figure, which remains
+the larger open cost.

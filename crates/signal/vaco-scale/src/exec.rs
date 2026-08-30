@@ -577,6 +577,17 @@ fn arithmetic(bank: Option<&FilterBank>) -> bool {
 }
 
 /// Horizontal filter: one input row to one output row.
+///
+/// Dispatches to a fixed-tap-count body for the common kernel widths
+/// (bilinear's 2, an unscaled cubic's 4, an unscaled `a=3` lanczos's 6, a 2x
+/// bicubic downscale's 8 — see `docs/signal/vaco-scale.md` §8's profiling
+/// note) and falls back to [`filter_h_generic`] — the scalar reference every
+/// one of these must agree with — for any other tap count. `bank.taps` is a
+/// runtime field, so the un-dispatched loop's trip count is invisible to the
+/// optimiser at compile time; converting the coefficient and window slices to
+/// `&[i32; N]` before the inner loop gives it back, which is what lets the
+/// tap loop unroll instead of paying `Iterator`/bounds-check overhead on every
+/// one of a handful of taps. Measured in `docs/signal/vaco-scale.md` §8.
 #[inline]
 pub(crate) fn filter_h(bank: &FilterBank, src: &[i32], dst: &mut [i32], shift: u8) {
     if bank.gather {
@@ -591,8 +602,21 @@ pub(crate) fn filter_h(bank: &FilterBank, src: &[i32], dst: &mut [i32], shift: u
         }
         return;
     }
-    let taps = bank.taps;
     let round = 1i64 << (shift - 1);
+    match bank.taps {
+        2 => filter_h_fixed::<2>(bank, src, dst, round, shift),
+        4 => filter_h_fixed::<4>(bank, src, dst, round, shift),
+        6 => filter_h_fixed::<6>(bank, src, dst, round, shift),
+        8 => filter_h_fixed::<8>(bank, src, dst, round, shift),
+        _ => filter_h_generic(bank, src, dst, round, shift),
+    }
+}
+
+/// The scalar reference: a plain loop over `bank.taps` elements, whatever
+/// that count is. [`filter_h_fixed`] must agree with this for every tap
+/// count, and `kernels_agree`-style tests in this module pin that.
+fn filter_h_generic(bank: &FilterBank, src: &[i32], dst: &mut [i32], round: i64, shift: u8) {
+    let taps = bank.taps;
     for (d, out) in dst.iter_mut().enumerate().take(bank.dst_len) {
         let (Some(&off), Some(base)) = (bank.offsets.get(d), d.checked_mul(taps)) else {
             break;
@@ -602,6 +626,47 @@ pub(crate) fn filter_h(bank: &FilterBank, src: &[i32], dst: &mut [i32], shift: u
             bank.coeffs.get(base..base.saturating_add(taps)),
             src.get(off..off.saturating_add(taps)),
         ) else {
+            break;
+        };
+        let mut acc = round;
+        for (c, s) in coeffs.iter().zip(window.iter()) {
+            acc += i64::from(*c) * i64::from(*s);
+        }
+        *out = (acc >> shift) as i32;
+    }
+}
+
+/// Same computation as [`filter_h_generic`], specialised to a compile-time
+/// tap count. Converting the two `bank.taps`-wide slices to `&[i32; N]` (one
+/// bounds check, via `try_into`) rather than indexing them for `N` more
+/// iterations is what carries the constant trip count into the accumulation
+/// loop below.
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    reason = "the constant N must reach codegen at every call site for the tap loop below to unroll; a normal #[inline] leaves that to the optimiser's discretion"
+)]
+fn filter_h_fixed<const N: usize>(
+    bank: &FilterBank,
+    src: &[i32],
+    dst: &mut [i32],
+    round: i64,
+    shift: u8,
+) {
+    for (d, out) in dst.iter_mut().enumerate().take(bank.dst_len) {
+        let (Some(&off), Some(base)) = (bank.offsets.get(d), d.checked_mul(N)) else {
+            break;
+        };
+        let off = off as usize;
+        let (Some(coeffs), Some(window)) = (
+            bank.coeffs.get(base..base.saturating_add(N)),
+            src.get(off..off.saturating_add(N)),
+        ) else {
+            break;
+        };
+        let (Ok(coeffs), Ok(window)): (Result<&[i32; N], _>, Result<&[i32; N], _>) =
+            (coeffs.try_into(), window.try_into())
+        else {
             break;
         };
         let mut acc = round;
@@ -656,5 +721,101 @@ pub(crate) fn filter_v(
     }
     for (o, a) in dst.iter_mut().zip(acc.iter()) {
         *o = (*a >> shift) as i32;
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::many_single_char_names,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    clippy::unreadable_literal,
+    reason = "a failing assertion in a test is a failing test"
+)]
+mod filter_h_fixed_tests {
+    use super::*;
+    use crate::filter::{FilterBank, FilterSpec, Kernel};
+
+    /// A deterministic, non-normalised bank: `filter_h_fixed`'s only job is
+    /// to compute the same sum as `filter_h_generic`, not to be a valid
+    /// resampling kernel, so its coefficients need not sum to `COEFF_ONE`.
+    fn synthetic_bank(taps: usize, dst_len: usize, src_len: usize, seed: u32) -> FilterBank {
+        let next = |i: u32| (i.wrapping_mul(2_654_435_761).wrapping_add(seed)) as i32;
+        let max_off = src_len.saturating_sub(taps);
+        let offsets: Vec<u32> = (0..dst_len)
+            .map(|d| {
+                let raw = if max_off == 0 {
+                    0
+                } else {
+                    (d * 3 + seed as usize) % (max_off + 1)
+                };
+                raw as u32
+            })
+            .collect();
+        let coeffs: Vec<i32> = (0..dst_len * taps)
+            .map(|i| (next(i as u32) % 4096) - 2048)
+            .collect();
+        FilterBank {
+            src_len,
+            dst_len,
+            taps,
+            offsets,
+            coeffs,
+            gather: false,
+            abs_sum: i64::from(i32::MAX),
+            spec: FilterSpec {
+                kernel: Kernel::Point,
+                src_len,
+                dst_len,
+                phase_src: 0.0,
+                phase_dst: 0.0,
+                max_taps: taps,
+            },
+        }
+    }
+
+    #[test]
+    fn fixed_and_generic_agree_at_every_tap_count_and_length() {
+        let shift = COEFF_SHIFT;
+        for &taps in &[1usize, 2, 3, 4, 5, 6, 7, 8, 9] {
+            for src_len in [taps, taps + 1, taps + 7, taps * 4] {
+                for dst_len in [0usize, 1, 2, 3, 7, 16, 17] {
+                    let bank = synthetic_bank(taps, dst_len, src_len, taps as u32 * 7 + 1);
+                    let src: Vec<i32> = (0..src_len).map(|i| (i as i32) * 3 - 5).collect();
+                    let round = 1i64 << (shift - 1);
+
+                    let mut generic_out = vec![0i32; dst_len];
+                    filter_h_generic(&bank, &src, &mut generic_out, round, shift);
+
+                    let mut dispatched_out = vec![0i32; dst_len];
+                    match taps {
+                        2 => filter_h_fixed::<2>(&bank, &src, &mut dispatched_out, round, shift),
+                        4 => filter_h_fixed::<4>(&bank, &src, &mut dispatched_out, round, shift),
+                        6 => filter_h_fixed::<6>(&bank, &src, &mut dispatched_out, round, shift),
+                        8 => filter_h_fixed::<8>(&bank, &src, &mut dispatched_out, round, shift),
+                        _ => filter_h_generic(&bank, &src, &mut dispatched_out, round, shift),
+                    }
+
+                    assert_eq!(
+                        generic_out, dispatched_out,
+                        "taps={taps} src_len={src_len} dst_len={dst_len}"
+                    );
+
+                    // The real dispatcher (`filter_h`) must reach the same
+                    // fixed body for the widths it claims to specialise.
+                    let mut via_filter_h = vec![0i32; dst_len];
+                    filter_h(&bank, &src, &mut via_filter_h, shift);
+                    assert_eq!(
+                        generic_out, via_filter_h,
+                        "filter_h taps={taps} src_len={src_len} dst_len={dst_len}"
+                    );
+                }
+            }
+        }
     }
 }

@@ -157,6 +157,23 @@ mod convert {
         );
     }
 
+    /// The 2160p -> 1080p e2e benchmark scenario (`planning/E2E-GAPS.md` §9-11):
+    /// same pixel format both sides, 2x down on both axes, default (bicubic)
+    /// scaler -- exactly what `-vf scale=1920:1080` on a 4K `yuv420p` source runs.
+    #[divan::bench]
+    fn yuv420p_2160p_to_1080p_bicubic(b: divan::Bencher<'_, '_>) {
+        bench_convert(
+            b,
+            PixFmt::Yuv420p,
+            3840,
+            2160,
+            PixFmt::Yuv420p,
+            1920,
+            1080,
+            "",
+        );
+    }
+
     /// Upscale with wide taps.
     #[divan::bench]
     fn yuv420p_upscale_lanczos(b: divan::Bencher<'_, '_>) {
