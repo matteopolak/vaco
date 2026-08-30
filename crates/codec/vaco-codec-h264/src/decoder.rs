@@ -1082,11 +1082,16 @@ impl Decoder for H264Decoder {
     /// Legal to call only before the first packet; the runner is rebuilt here,
     /// which would discard anything in flight.
     fn set_thread_count(&mut self, threads: usize) -> Threading {
-        self.runner.reset();
-        self.in_flight.clear();
-        self.threads = threads.max(1);
-        self.runner = FrameRunner::new(self.threads);
-        self.threads = self.runner.threads();
+        // Rebuilding the runner restarts its decode-index counter, which the
+        // DPB's own `PictureRef`s are numbered against. Refusing the change
+        // once anything has been decoded is what keeps those two numberings
+        // from ever disagreeing; callers set the count once, before the first
+        // packet, and that case is every caller there is.
+        if self.dpb.is_empty() && self.in_flight.is_empty() {
+            self.threads = threads.max(1);
+            self.runner = FrameRunner::new(self.threads);
+            self.threads = self.runner.threads();
+        }
         Threading::Frame {
             max_frames: self.max_in_flight(),
             // Extra *output* latency in frames is zero: `collect_one` still

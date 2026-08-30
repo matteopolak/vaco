@@ -123,13 +123,11 @@ fn planes_of<'a>(
 ) -> Result<RefPicturePlanes<'a>> {
     let mut out: [&'a [u8]; 3] = [&[], &[], &[]];
     for (plane, slot) in out.iter_mut().enumerate() {
-        let height = {
-            // `wait_rows` clamps to the plane height itself, so asking for the
-            // last row is the same as asking for all of them.
-            let view = ctx.wait_rows(reference, plane, u32::MAX)?;
-            view.height()
-        };
-        let view = ctx.wait_rows(reference, plane, height.saturating_sub(1))?;
+        // `wait_rows` clamps the row it waits for to the plane's own height, so
+        // `u32::MAX` is "every row" -- which is what picture-granularity
+        // publication means. Row granularity would ask for the highest row this
+        // picture's motion vectors can reach instead; see the module doc.
+        let view = ctx.wait_rows(reference, plane, u32::MAX)?;
         let block = view.contiguous_all().ok_or(Error::InvalidData(
             "vaco-codec-h264: a reference plane was not published as one band",
         ))?;
