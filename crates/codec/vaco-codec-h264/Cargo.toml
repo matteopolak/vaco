@@ -21,6 +21,7 @@ vaco-simd = { path = "../../core/vaco-simd" }
 vaco-codec-dsp-intrapred = { path = "../../signal/vaco-codec-dsp-intrapred" }
 vaco-frame = { path = "../../model/vaco-frame" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-pool = { path = "../../model/vaco-pool" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-parse-h264 = { path = "../vaco-parse-h264" }
 vaco-format-nalu = { path = "../../format/vaco-format-nalu" }

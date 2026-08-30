@@ -120,6 +120,8 @@ use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_parse_h264::slice::{RefPicListModification, RefPicMarking};
 use vaco_parse_h264::{H264NalHeader, H264Parser, NalUnitType, SliceHeader, SliceKind};
+use vaco_pixfmt::PixFmt;
+use vaco_pool::ALIGN;
 
 use crate::frame_task::{DeblockParams, FrameGeometry, H264FrameTask};
 use crate::mb::{ColocatedField, MvInfo};
@@ -177,6 +179,34 @@ fn coded_picture_bytes(mbs_wide: u32, mbs_high: u32) -> u64 {
     // Cb and Cr are each a quarter of luma for `ChromaArrayType == 1`, so the
     // three planes together are 3/2 of luma.
     luma.saturating_add(luma.saturating_div(2))
+}
+
+/// The exact byte total [`crate::frame_task::build_frame`] allocates for the
+/// cropped `yuv420p` output frame, at the SPS's own displayed `dimensions`.
+///
+/// This used to be approximated as a second whole coded (macroblock-aligned)
+/// picture -- a deliberate 2x over-estimate, tolerable while `-threads N` was
+/// opt-in and wrong once a default thread count multiplies it by
+/// `threads + 1`. The real allocation is [`PixFmt::plane_layout`] at the
+/// *display* size with each row rounded up to [`ALIGN`], which is the same
+/// call `Frame::alloc_video` makes -- reusing it here rather than
+/// re-deriving the stride arithmetic is what keeps this exact rather than
+/// merely closer.
+///
+/// `fallback` (the coded-picture estimate) covers the two cases this cannot
+/// compute precisely ahead of the task actually building the frame: no SPS
+/// crop means no displayed size at all (`build_frame` itself then refuses the
+/// picture with [`Error::InvalidData`], so charging a whole coded picture
+/// here costs nothing but a slightly early collect), and a `yuv420p`
+/// descriptor missing from the registry, which does not happen in a build
+/// that registers this decoder at all.
+fn output_frame_bytes(dimensions: Option<(u32, u32)>, fallback: u64) -> u64 {
+    let Some((width, height)) = dimensions else {
+        return fallback;
+    };
+    PixFmt::from_name("yuv420p")
+        .and_then(|fmt| fmt.plane_layout(width, height, ALIGN))
+        .map_or(fallback, |layout| layout.total as u64)
 }
 
 /// Rows per band of a row-published DPB entry.
@@ -748,10 +778,11 @@ impl H264Decoder {
         // one more coded picture for its DPB entry.
         let mb_bytes =
             (stats.macroblocks.len().saturating_mul(core::mem::size_of::<crate::mb::MbSummary>())) as u64;
-        let task_charge = coded_picture_bytes(mbs_wide, mbs_high)
-            .saturating_mul(2)
+        let coded_bytes = coded_picture_bytes(mbs_wide, mbs_high);
+        let task_charge = coded_bytes
+            .saturating_add(output_frame_bytes(dimensions, coded_bytes))
             .saturating_add(mb_bytes);
-        let headroom = task_charge.saturating_add(coded_picture_bytes(mbs_wide, mbs_high));
+        let headroom = task_charge.saturating_add(coded_bytes);
         // **Memory pressure is backpressure, not failure.** `-threads N` lets
         // `N + 1` pictures be in flight, and at 4K each one is ~84 MiB once the
         // macroblock array is counted honestly -- more than `Limits::permissive`'s
@@ -914,23 +945,27 @@ impl H264Decoder {
         // every in-flight picture is accounted here, in one place, because
         // that is the number `-threads N` actually multiplies.
         //
-        // Three components, and the *third* is the big one, which is not what
-        // it looks like from the type names. At 4K a coded picture is 12.4 MB
-        // and the cropped output frame is about the same, but
-        // `stats.macroblocks` is `MbSummary` x 32,400 macroblocks at 1,888
-        // bytes each -- **59 MiB**, five times the two sample buffers put
-        // together, because every macroblock carries its full residual and its
-        // sixteen 4x4 motion blocks. It has never been charged (a plain
-        // `Vec::push` inside `decode_slice_cabac`), which cost nothing while
-        // it lived for one `send_packet` call and costs `threads + 1` copies
-        // of it now. Measured directly: peak RSS on the 4K fixture goes 2854
-        // MiB at one thread to 3321 MiB at eight, and the ~470 MiB difference
-        // is almost entirely this.
+        // Three components, exact rather than estimated:
         //
-        // The frame is smaller than the coded picture (it is the same picture,
-        // cropped) but carries row-stride padding, so charging a second whole
-        // coded picture for it is a deliberate over-estimate rather than an
-        // exact figure.
+        // 1. `coded_bytes` -- the working picture `PictureReconstructor::new`
+        //    allocates, macroblock-aligned. Exact by construction: it is the
+        //    same `w * h * 3 / 2` arithmetic that call makes.
+        // 2. `output_frame_bytes` -- the cropped `yuv420p` `Frame`
+        //    `build_frame` allocates at the SPS's own displayed size, via the
+        //    same `PixFmt::plane_layout` call `Frame::alloc_video` makes. This
+        //    used to be a second whole `coded_bytes` -- a deliberate 2x
+        //    over-estimate, tolerable while threading was opt-in and wrong
+        //    once a default thread count multiplies it by `threads + 1`.
+        // 3. `mb_bytes` -- the big one, which is not what it looks like from
+        //    the type names. At 4K a coded picture is 12.4 MB and the cropped
+        //    output frame is about the same, but `stats.macroblocks` is
+        //    `MbSummary` x 32,400 macroblocks at 1,888 bytes each -- **59
+        //    MiB**, five times the two sample buffers put together, because
+        //    every macroblock carries its full residual and its sixteen 4x4
+        //    motion blocks. It has never been charged (a plain `Vec::push`
+        //    inside `decode_slice_cabac`), which cost nothing while it lived
+        //    for one `send_packet` call and costs `threads + 1` copies of it
+        //    now.
         self.budget.reserve(task_charge)?.commit();
 
         self.runner.dispatch(H264FrameTask {
