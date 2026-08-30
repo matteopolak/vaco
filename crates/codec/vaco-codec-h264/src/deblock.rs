@@ -57,11 +57,20 @@ use vaco_codec_dsp_deblock::{ChromaLine, EdgeThresholds, LumaLine, filter_chroma
 use crate::mb::MbSummary;
 
 /// Whether `mb`'s own coding mode makes it intra for clause 8.7.2.1's
-/// purposes: `Intra_4x4`, `Intra_16x16` and `I_PCM` all take the same `bS`
-/// equal 4 (macroblock edge) or 3 (internal edge) branch, since `I_PCM` has
-/// no motion or transform coefficients to compare either.
+/// purposes: `Intra_4x4`, `Intra_8x8`, `Intra_16x16` and `I_PCM` all take
+/// the same `bS` equal 4 (macroblock edge) or 3 (internal edge) branch,
+/// since `I_PCM` has no motion or transform coefficients to compare either.
+///
+/// `Intra_8x8` was missing from this list, which is not a cosmetic
+/// omission: clause 8.7.2.1's intra branch is the *first* test, so an
+/// `Intra_8x8` macroblock fell through to the coefficient and motion-vector
+/// tests written for inter content and came out `bS = 2` (it has residual)
+/// where the answer is `4` at a macroblock edge and `3` internally --
+/// a weaker filter, on every edge of every `Intra_8x8` macroblock, i.e. on
+/// most of every intra picture in High-profile content, which is x264's
+/// own default.
 const fn is_intra(mb: &MbSummary) -> bool {
-    mb.is_intra4x4 || mb.is_intra16x16 || mb.is_ipcm
+    mb.is_intra4x4 || mb.is_intra8x8 || mb.is_intra16x16 || mb.is_ipcm
 }
 
 /// Converts a raster-ordered 4x4 luma block index (`row * 4 + col`, 0..16)
@@ -94,11 +103,47 @@ const fn raster_to_luma4x4_blk_idx(raster: usize) -> usize {
 /// -- an `Intra_16x16` block's shared DC coefficient never enters this,
 /// since [`is_intra`] always wins first for any macroblock this could
 /// apply to.
+#[allow(
+    clippy::integer_division,
+    reason = "raster is 0..16 (a 4x4 grid position); /4 and /2 are that grid's own row and \
+              8x8-quadrant coordinates, exact by construction, never a bitstream-derived value"
+)]
 fn has_luma_coeffs(mb: &MbSummary, raster: usize) -> bool {
+    if mb.transform_8x8 {
+        // With `transform_size_8x8_flag` set there are no 4x4 luma
+        // transform blocks at all -- `MbResidual::luma_ac` is all-`None`
+        // and the coefficients live in `luma8x8[luma8x8BlkIdx]` instead.
+        // Clause 8.7.2.1's "the luma block containing sample p0" is then
+        // the 8x8 block, so every 4x4 position inside a coded quadrant
+        // answers `true`. Reading `luma_ac` here (as this function did)
+        // answered `false` for every position of every 8x8-transform
+        // macroblock, which silently turned every `bS = 2` edge in High
+        // profile content into `bS = 1` or `0`. JM records the same thing
+        // by setting all four of the 8x8 block's bits in its own
+        // `s_cbp[0].blk` 4x4 bitmask.
+        let quadrant = (raster / 4 / 2) * 2 + (raster % 4) / 2;
+        return mb
+            .residual
+            .luma8x8
+            .get(quadrant)
+            .is_some_and(|slot| slot.as_ref().is_some_and(|r| !r.levels.is_empty()));
+    }
     mb.residual
         .luma_ac
         .get(raster_to_luma4x4_blk_idx(raster))
         .is_some_and(|slot| slot.as_ref().is_some_and(|r| !r.levels.is_empty()))
+}
+
+/// Clause 8.7's `filterInternalEdgesFlag` companion for the 8x8 transform:
+/// when `transform_size_8x8_flag` is 1 the macroblock has no 4x4 transform
+/// block boundaries at luma offsets 4 and 12, so those two internal *luma*
+/// edges are not filtered at all (JM's own
+/// `filterNon8x8LumaEdgesFlag[1] = filterNon8x8LumaEdgesFlag[3] =
+/// !luma_transform_size_8x8_flag`, `loopfilter.c`'s `DeblockMb`). Chroma
+/// is unaffected: at 4:2:0 only luma offsets 0 and 8 have a corresponding
+/// chroma edge in the first place.
+const fn filters_luma_edge(mb: &MbSummary, local: u32) -> bool {
+    !(mb.transform_8x8 && (local == 4 || local == 12))
 }
 
 /// Clause 8.7.2.1's non-intra case, collapsed to a single reference list
@@ -230,6 +275,9 @@ pub(crate) fn deblock_picture_luma(
                 if local == 0 && mx == 0 {
                     continue;
                 }
+                if !filters_luma_edge(here, local) {
+                    continue;
+                }
                 let mb_edge = local == 0;
                 let (p_mb, qp_p) = if mb_edge {
                     #[allow(clippy::unwrap_used, reason = "mx > 0 here, checked above")]
@@ -266,6 +314,9 @@ pub(crate) fn deblock_picture_luma(
             // and horizontal edges filtered.
             for local in [0u32, 4, 8, 12] {
                 if local == 0 && my == 0 {
+                    continue;
+                }
+                if !filters_luma_edge(here, local) {
                     continue;
                 }
                 let mb_edge = local == 0;
