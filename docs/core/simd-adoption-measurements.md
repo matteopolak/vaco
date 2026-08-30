@@ -540,6 +540,61 @@ used, against `ffmpeg -threads 1`'s 0.62s best-of-3 (unchanged by this work; the
 
 ---
 
+## Group 11 — H.264 chroma inter prediction: a plausible redundancy that measured as a regression
+
+Dated **2026-08-30**, same 4K 75-frame Main fixture and toolchain as Group 10, private
+`--target-dir`, `cargo build --profile dist` with `patent-encumbered-h264-decode`, `dsymutil` +
+`llvm-symbolizer --obj=<dSYM> --inlines -f -C -p` against each leaf sample's address (module offset
+plus `__TEXT` vmaddr `0x100000000`). Re-running Group 10's own method after its fix landed gives the
+first post-fix whole-decoder profile:
+
+| self time | function |
+|---:|---|
+| 23.01% | `reconstruct::reconstruct_picture` |
+| 15.87% | `reconstruct::sample_luma_block` |
+| 12.70% | `deblock::deblock_picture_luma` |
+| 11.26% | `deblock::boundary_strength` |
+| 5.37% | `reconstruct_inter_mb::{closure#0}` |
+| 4.66% | `cabac_residual::residual_block_cabac` |
+| 4.48% | `mb::decode_slice_cabac` |
+| 4.27% | `vaco_codec_dsp_idct::h264::idct4x4` |
+| 3.92% | `deblock::deblock_picture_chroma` |
+| 3.41% | `vaco_codec_dsp_deblock::batch::filter_luma_edge` |
+
+`boundary_strength` fell from Group 10's 28.00% to **11.26%**, confirming that fix's effect directly
+rather than by inference. `reconstruct_picture`/`sample_luma_block` rose from 18.82%/11.72% to
+23.01%/15.87% — a share increase from a shrinking denominator, not a slowdown in either function.
+
+**Attempt**: `reconstruct_picture`'s per-macroblock chroma section calls `predict_chroma_inter` once
+per component (Cb, then Cr), and the innermost-frame breakdown put that function at 9.87% of total
+self time — the largest single named leaf inside `reconstruct_picture`'s 23.01%, on the strength of
+being called twice per macroblock and re-deriving, both times, the identical per-4x4-block
+bookkeeping (`blk_xy`, the `mv_blocks` lookup, `ref_idx_l0`/`ref_idx_l1`, `reads_l0`/`reads_l1`,
+`mv_l0`/`mv_l1`, `cx0`/`cy0`) and the identical eighth-pel position/fraction derivation one level
+down inside the per-pixel sampler — none of which depends on which component is being predicted.
+Implemented a merged `predict_chroma_inter_planes` producing both planes from one pass over the 16
+blocks (via a new `chroma_mc_sample_pair`/`sample_chroma_point_pair` that derive the shared
+position/weights once), verified byte-identical by a direct unit test and the full
+`decoder_output_matches_ffmpeg` integration test.
+
+**Measured**, interleaved, 10 launches: candidate lost **9 of 10** rounds (one wash at 0.997x);
+excluding one clear load-outlier round (1.502x), every remaining round was still 2-5% *slower*,
+median ratio **1.024** (a ~2.4% regression). **Reverted**, no commit. Full round-by-round numbers
+in `planning/E2E-GAPS.md` §19.
+
+**Why this is worth recording alongside Group 8's chroma finding, not despite it.** Group 8/§11
+found a chroma fast-path regression because chroma's own clamp arithmetic was too cheap for a guard
+branch to beat. This is a *different* mechanism failing the *same* plane a second time: merging two
+independent single-plane call sites into one dual-plane pass plausibly increased live state per loop
+iteration (two 8x8 output arrays, both planes' MV/ref-idx/pointer state at once) enough to change
+LLVM's register-allocation or inlining decisions for code the optimiser was already handling well as
+two separate, non-interfering call sites. Both Group 8 and this entry refute the same intuition —
+"fewer redundant operations must be faster" — for chroma specifically, by two unrelated routes. The
+lesson is unchanged from every other entry in this document: identifying a plausible redundancy
+names a candidate, not a result.
+
+---
+
 ## Revised upstream ask
 
 Plan 12 §11 lists six operations to request before v1.0. The measurements reorder that list sharply —

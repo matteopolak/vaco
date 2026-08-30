@@ -788,3 +788,132 @@ this round's `dsymutil`/`llvm-symbolizer` pass separated it from its callers. Th
 trip count hid it from the optimiser") has a sibling here: the cost was a *redundant call*, and a
 degraded profile hid it inside a caller's aggregate self time instead of attributing it to its own
 name. Get the symbols right before concluding a function is cheap.
+
+## 19. Profiling loop, round 4 — re-measured profile, one attempt, zero commits
+
+Re-measured the whole-decoder profile immediately after round 3 landed, same 4K 75-frame Main
+fixture, same method (`cargo build --profile dist` with the `patent-encumbered-h264-decode`
+feature, private `--target-dir`, `dsymutil` on the resulting binary, `llvm-symbolizer
+--obj=<dSYM> --inlines -f -C -p` fed each leaf sample's module-relative address plus the binary's
+own `__TEXT` vmaddr `0x100000000`, confirmed correct against `dwarfdump --lookup`, aggregated by
+each chain's outermost physically-emitted frame). Symbolication resolved every sample to a real
+function name with a full inline chain, not a bare hex address — 9,715 of 10,166 samples (95.6%)
+had their leaf frame inside the `vaco` binary itself, and every one of those addresses
+symbolicated successfully via the dSYM.
+
+| self time | function |
+|---:|---|
+| 23.01% | `reconstruct::reconstruct_picture` |
+| 15.87% | `reconstruct::sample_luma_block` |
+| 12.70% | `deblock::deblock_picture_luma` (gather/scatter, not the strength derivation) |
+| 11.26% | `deblock::boundary_strength` |
+| 5.37% | `reconstruct_inter_mb::{closure#0}` |
+| 4.66% | `cabac_residual::residual_block_cabac` |
+| 4.48% | `mb::decode_slice_cabac` |
+| 4.27% | `vaco_codec_dsp_idct::h264::idct4x4` |
+| 3.92% | `deblock::deblock_picture_chroma` |
+| 3.41% | `vaco_codec_dsp_deblock::batch::filter_luma_edge` (round-1's SIMD kernel) |
+| 3.38%/3.35% | `H264Decoder::build_frame` / `H264Decoder::send_packet` |
+
+This confirms round 3's fix took effect exactly as intended: `boundary_strength` fell from **28.00%**
+(§18's number, pre-fix) to **11.26%** here — still large, but no longer the single dominant cost.
+`reconstruct_picture` and `sample_luma_block` moved from 18.82%/11.72% (§18) to 23.01%/15.87% here;
+this is **not** those functions getting slower, it is the same arithmetic occupying a larger *share*
+of a smaller total once `boundary_strength`'s redundant calls were cut. Absolute per-frame cost of
+`reconstruct_picture`/`sample_luma_block` is unchanged by round 3; only the denominator shrank.
+
+### Attempt: merge Cb/Cr chroma inter prediction into one pass — regression, reverted
+
+`reconstruct_picture`'s innermost-frame breakdown (the deepest inline, before folding up to the
+outermost physically-emitted frame) put `predict_chroma_inter` at **9.87% of total self time** —
+larger than `boundary_strength`'s own remaining leaf share (2.39%) and the single largest named leaf
+inside `reconstruct_picture`'s 23.01%. `reconstruct_picture` calls it once per chroma component
+(`for comp in [0, 1]`), and each call independently re-derives, per 4x4 luma block: `blk_xy`, the
+`mv_blocks` lookup, `ref_idx_l0`/`ref_idx_l1`, `reads_l0`/`reads_l1`, `mv_l0`/`mv_l1`, `cx0`/`cy0`,
+and — one level down, inside the per-pixel sampler — the exact same eighth-pel position/fraction
+derivation (`int_x`/`frac_x`/`int_y`/`frac_y`, the four bilinear weights). None of that depends on
+which component is being predicted, only the plane data and weight table do, so this looked like
+round 3's own shape: the same answer computed twice for an identical input.
+
+**Implemented**: `crate::interp::chroma_mc_sample_pair` (shares position/weight derivation, applies
+it to two planes), `crate::reconstruct::sample_chroma_point_pair`, and
+`predict_chroma_inter_planes` (one pass over the 16 blocks producing `(cb, cr)` together instead of
+two single-plane calls), wired into `reconstruct_picture`'s per-macroblock chroma section. Verified
+byte-identical to the two-call original by both a direct unit test (`chroma_mc_sample_pair` against
+independently reimplemented per-plane arithmetic, every fractional position) and the full
+`cargo test -p vaco-codec-h264 --locked` suite, including the byte-exact-against-ffmpeg integration
+test.
+
+**Measured**, interleaved baseline/candidate (alternating start order), 10 independent process
+launches, wall clock, 4K 75-frame fixture, decode-only:
+
+| round | baseline (s) | candidate (s) | candidate/baseline |
+|---:|---:|---:|---:|
+| 1 | 7.465 | 7.645 | 1.024 |
+| 2 | 7.154 | 7.313 | 1.022 |
+| 3 | 7.309 | 10.977 | 1.502 (outlier — a concurrent process spiked load mid-round) |
+| 4 | 7.138 | 7.352 | 1.030 |
+| 5 | 7.136 | 7.477 | 1.048 |
+| 6 | 7.505 | 7.682 | 1.024 |
+| 7 | 7.121 | 7.297 | 1.025 |
+| 8 | 7.334 | 7.313 | 0.997 |
+| 9 | 7.294 | 7.316 | 1.003 |
+| 10 | 7.320 | 7.544 | 1.031 |
+
+**Candidate lost 9 of 10 rounds** (one wash at 0.997); excluding the one clear load-outlier round,
+every remaining round still shows the candidate 2-5% *slower*, median ratio **1.024** (a ~2.4%
+regression), mean 1.071 (pulled up by the outlier). **Reverted** (`git checkout` on the two touched
+files, `interp.rs` and `reconstruct.rs` — no commit was made).
+
+**Why the theory didn't pay off, most likely**: the merged function keeps two 8x8 output arrays and
+both planes' MV/ref-idx/plane-pointer state live across the same loop body instead of one, which
+plausibly increased register pressure or changed inlining/vectorisation decisions LLVM was already
+making well for the two separate single-plane calls (which the optimiser could already treat as
+independent, non-interfering pieces of straight-line code). This is the same lesson §11 drew from
+its own chroma attempt in the opposite direction ("chroma's `.clamp()` is two cheap ops... the guard
+branch cost more than it saved") and the same lesson this whole document keeps landing on: reasoning
+about redundant computation correctly identifies a *candidate*, not a result — only the interleaved
+measurement decides it, and here it decided no.
+
+**Ruled out by this round**: merging per-component chroma inter prediction into a single pass, at
+least in this exact shape (computing both planes' full 8x8 output arrays together in one loop over
+all 16 4x4 blocks). A narrower version — sharing only the position/fraction derivation without also
+merging the two output arrays and outer bookkeeping into one loop body — was not tried and remains
+open for a future round if register pressure is confirmed (e.g. via `-Ccodegen-units=1` disassembly
+or `llvm-mca`) as the actual cause rather than assumed.
+
+### Same-session ratio against `ffmpeg -threads 1`
+
+Interleaved, alternating start order, 10 independent launches, wall clock, current (post-round-3,
+unchanged by this round) binary against `ffmpeg -threads 1`, same 4K 75-frame fixture:
+
+| round | vaco (s) | ffmpeg -threads 1 (s) | ratio |
+|---:|---:|---:|---:|
+| 1 | 6.977 | 0.607 | 11.499x |
+| 2 | 7.006 | 0.576 | 12.157x |
+| 3 | 7.062 | 0.610 | 11.577x |
+| 4 | 7.047 | 0.575 | 12.255x |
+| 5 | 7.043 | 0.582 | 12.106x |
+| 6 | 6.967 | 0.576 | 12.093x |
+| 7 | 6.951 | 0.605 | 11.486x |
+| 8 | 7.031 | 0.579 | 12.152x |
+| 9 | 6.991 | 0.583 | 11.997x |
+| 10 | 6.947 | 0.575 | 12.091x |
+
+Median ratio **12.09x**, mean **11.94x** — this session's machine was quieter (load average ~3-4)
+than round 3's (~6-16), so this number is not comparable to round 3's own ~13.1x as an absolute
+regression or improvement; per this document's own repeated caution, only same-session,
+interleaved ratios are comparable, and this round made no code change, so the true gap is
+unchanged from round 3's landed state.
+
+### Byte-exactness, unchanged
+
+Re-verified on all four regression fixtures after the revert (current `HEAD` state, i.e. round 3's
+landed code, unchanged by this round's reverted attempt): the 4K 75-frame `uhd.mp4`, the 60-second
+1800-frame 1080p `big.mkv`, and two freshly-encoded stock-`libx264` clips (default encoder
+settings — B-frames, CABAC, 3 references) at 322x242 and 1024x576. All four: `sha256` of
+`vaco ... -c:v rawvideo -f rawvideo -` matches `ffmpeg ... -f rawvideo -pix_fmt yuv420p -` exactly.
+
+**No commit this round.** The re-measured profile above is the useful output; the attempt is
+recorded as a sixth negative result in this document's own series (after round 2's three
+interpolation attempts, the deblocking-kernel/chroma-fast-path pair in §10/§11, and now this one).
