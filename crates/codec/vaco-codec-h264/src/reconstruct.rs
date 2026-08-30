@@ -728,7 +728,7 @@ pub(crate) fn reconstruct_picture_with_inter(
         } else if mb.is_intra4x4 {
             reconstruct_intra4x4_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
         } else {
-            reconstruct_inter_mb(&mut buf, mb, ref_list0, ref_width, ref_height, None);
+            reconstruct_inter_mb(&mut buf, mb, ref_list0, &[], ref_width, ref_height, InterWeights::none());
         }
     }
     Ok(buf.luma)
@@ -742,48 +742,22 @@ pub(crate) fn reconstruct_picture_with_inter(
     clippy::many_single_char_names,
     reason = "blk/i/j are fixed 0..4 or 0..16 loop bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp; x/y/c/d/r mirror clause 8.5's own variable names"
 )]
-fn reconstruct_inter_mb(
-    buf: &mut PictureBuffer,
-    mb: &MbSummary,
-    ref_list0: &[&[u8]],
-    ref_width: u32,
-    ref_height: u32,
-    luma_weights: SliceWeights<'_>,
-) {
-    let empty: &[u8] = &[];
-    // Motion compensation is unaffected by `transform_size_8x8_flag` --
-    // clause 8.4's own prediction-sample derivation never reads it, only
-    // the residual (clause 7.3.5.3.3) does -- so every 4x4 block's own
-    // predicted samples are always computed the same way, one quadrant's
-    // worth (four 4x4 blocks) gathered into `pred8` before either residual
-    // path below reads from it.
-    let fetch_pred_4x4 = |x: u32, y: u32, blk: u32| -> [[u8; 4]; 4] {
-        let (bx, by) = blk_xy(blk);
-        let info = mb.mv_blocks[(by * 4 + bx) as usize];
-        let ref_idx = info.ref_idx_l0().max(0) as usize;
-        // Clause 8.4.2.3: the weighting is per *reference index*, so it is
-        // resolved here, alongside the reference plane it belongs to, and
-        // applied to this block's samples before any residual is added.
-        let weight = weight_for(luma_weights, ref_idx);
-        let plane = ref_list0.get(ref_idx).copied().unwrap_or(empty);
-        let (mvx, mvy) = info.mv_l0();
-        let (mvx, mvy) = (i32::from(mvx), i32::from(mvy));
+/// One list's own raw (unweighted) luma qpel prediction for a 4x4 block --
+/// clause 8.4.2.2.1's motion compensation, factored out of
+/// [`reconstruct_inter_mb`] so a `Bi` block can call it twice (once per
+/// list) before [`InterWeights::combine`] ever runs, instead of the
+/// single-list weighting this used to apply inline.
+fn sample_luma_block(plane: &[u8], ref_width: u32, ref_height: u32, x: u32, y: u32, mv: (i16, i16)) -> [[u8; 4]; 4] {
+    #[allow(
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "mirrors this function's own pre-existing arithmetic, unchanged by the L0/L1 factoring"
+    )]
+    {
+        let (mvx, mvy) = (i32::from(mv.0), i32::from(mv.1));
         let (int_dx, frac_x) = (mvx >> 2, (mvx & 3) as u32);
         let (int_dy, frac_y) = (mvy >> 2, (mvy & 3) as u32);
-        // `luma_qpel_sample`'s own six-tap reach touches at most 2 samples
-        // before and 3 after (plus this 4x4 block's own 4-wide/4-tall
-        // extent) around every output pixel it computes -- clause
-        // 8.4.2.2.1's own filter support, see `interp.rs`'s own doc. When
-        // that whole reach already sits inside the reference picture (true
-        // for every macroblock that is not within a few pixels of a
-        // picture edge -- the overwhelming majority), every sample this
-        // block will ever fetch needs no edge clamping at all, so
-        // `fetch_fast` skips the two `clamp` calls [`fetch_clamped`] would
-        // otherwise run on every single sample (up to 36 per output pixel,
-        // clause 8.4.2.2.1's own `j` position). Both closures read the same
-        // bytes in the same in-bounds case -- this is a dispatch on a
-        // precomputed, per-block condition, not a change to which sample
-        // ends up at which position.
         let x0 = x as i32 + int_dx;
         let y0 = y as i32 + int_dy;
         let safe = !plane.is_empty()
@@ -809,12 +783,69 @@ fn reconstruct_inter_mb(
             for (j, v) in row.iter_mut().enumerate() {
                 let full_x = x as i32 + j as i32 + int_dx;
                 let full_y = y as i32 + i as i32 + int_dy;
-                let sample = if safe {
+                *v = if safe {
                     crate::interp::luma_qpel_sample(fetch_fast, full_x, full_y, frac_x, frac_y)
                 } else {
                     crate::interp::luma_qpel_sample(fetch_clamped, full_x, full_y, frac_x, frac_y)
                 };
-                *v = weight.map_or(sample, |w| w.apply(sample));
+            }
+        }
+        pred
+    }
+}
+
+#[allow(
+    clippy::indexing_slicing,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::many_single_char_names,
+    reason = "blk/i/j are fixed 0..4 or 0..16 loop bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp; x/y/c/d/r mirror clause 8.5's own variable names"
+)]
+fn reconstruct_inter_mb(
+    buf: &mut PictureBuffer,
+    mb: &MbSummary,
+    ref_list0: &[&[u8]],
+    ref_list1: &[&[u8]],
+    ref_width: u32,
+    ref_height: u32,
+    weights: InterWeights<'_>,
+) {
+    let empty: &[u8] = &[];
+    // Motion compensation is unaffected by `transform_size_8x8_flag` --
+    // clause 8.4's own prediction-sample derivation never reads it, only
+    // the residual (clause 7.3.5.3.3) does -- so every 4x4 block's own
+    // predicted samples are always computed the same way, one quadrant's
+    // worth (four 4x4 blocks) gathered into `pred8` before either residual
+    // path below reads from it.
+    let fetch_pred_4x4 = |x: u32, y: u32, blk: u32| -> [[u8; 4]; 4] {
+        let (bx, by) = blk_xy(blk);
+        let info = mb.mv_blocks[(by * 4 + bx) as usize];
+        let ref_idx0 = info.ref_idx_l0().max(0) as usize;
+        let ref_idx1 = info.ref_idx_l1().max(0) as usize;
+        // Clause 8.4.2.3: both the single-list weighting and the
+        // bi-prediction combination are per *reference index*, so both are
+        // resolved once the two raw samples (or the one, for a
+        // single-list block) are known -- never before, since which
+        // weight entry applies depends on `ref_idx`, not on the list
+        // membership alone.
+        let p0 = info
+            .reads_l0()
+            .then(|| sample_luma_block(ref_list0.get(ref_idx0).copied().unwrap_or(empty), ref_width, ref_height, x, y, info.mv_l0()));
+        let p1 = info
+            .reads_l1()
+            .then(|| sample_luma_block(ref_list1.get(ref_idx1).copied().unwrap_or(empty), ref_width, ref_height, x, y, info.mv_l1()));
+        let mut pred = [[0u8; 4]; 4];
+        for i in 0..4usize {
+            for j in 0..4usize {
+                let a = p0.map(|b| b[i][j]);
+                let b = p1.map(|b| b[i][j]);
+                pred[i][j] = match (a, b) {
+                    (Some(a), Some(b)) => weights.combine(ref_idx0, ref_idx1, a, b),
+                    (Some(a), None) => weights.single(0, ref_idx0, a),
+                    (None, Some(b)) => weights.single(1, ref_idx1, b),
+                    (None, None) => 0,
+                };
             }
         }
         pred
@@ -938,11 +969,161 @@ impl PredWeight {
 /// [`reconstruct_picture`]'s inner loops index a plain slice rather than
 /// re-deriving anything per macroblock. Empty (`weighted == false`) for an
 /// I slice or a P slice whose PPS has `weighted_pred_flag == 0`.
+///
+/// `l1` is always empty for P/SP slices (`pred_weight_table()` has no list
+/// 1 at all there — `vaco_parse_h264::PredWeightTable::l1` is `Vec::new()`
+/// by construction) and real for a B slice with `weighted_bipred_idc == 1`
+/// (clause 8.4.2.3's *explicit* weighted bi-prediction, the sibling of the
+/// single-list case `l0` already handles).
 #[derive(Debug, Default)]
 pub(crate) struct SliceWeightTables {
     weighted: bool,
     luma: Vec<PredWeight>,
     chroma: [Vec<PredWeight>; 2],
+    luma1: Vec<PredWeight>,
+    chroma1: [Vec<PredWeight>; 2],
+}
+
+/// One `(l0, l1)` reference index pair's clause 8.4.2.3.2 implicit weights
+/// (`weighted_bipred_idc == 2`, `logWD` fixed at 5, offsets always 0) --
+/// x264's own default for B slices, so this is the common bi-prediction
+/// path in real content, not an exotic one.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct ImplicitWeight {
+    pub(crate) w0: i32,
+    pub(crate) w1: i32,
+}
+
+/// The whole slice's implicit-weight table, one entry per `(ref_idx_l0,
+/// ref_idx_l1)` pair -- built by `crate::decoder` (the only place that
+/// knows every reference picture's own POC, clause 8.4.2.3.2's own input)
+/// and handed in here as a plain lookup, the same "construction lives with
+/// the caller who has the data" split `RefPicturePlanes` already draws for
+/// reference *pixels*.
+#[derive(Debug, Default)]
+pub(crate) struct ImplicitWeights {
+    /// `table[ref_idx_l0][ref_idx_l1]`.
+    table: Vec<Vec<ImplicitWeight>>,
+}
+
+impl ImplicitWeights {
+    pub(crate) fn new(table: Vec<Vec<ImplicitWeight>>) -> Self {
+        Self { table }
+    }
+
+    /// `(32, 32)` (equal-weight average, clause 8.4.2.3.2's own fallback
+    /// for `td == 0`/long-term/out-of-range `DistScaleFactor`) for any pair
+    /// this slice's own table does not cover -- defensive only, since a
+    /// well-formed B slice's table always has one row per active list-0
+    /// reference and one column per active list-1 reference.
+    fn get(&self, ref_idx_l0: usize, ref_idx_l1: usize) -> ImplicitWeight {
+        self.table
+            .get(ref_idx_l0)
+            .and_then(|row| row.get(ref_idx_l1))
+            .copied()
+            .unwrap_or(ImplicitWeight { w0: 32, w1: 32 })
+    }
+}
+
+/// Clause 8.4.2.3's own three bi-prediction modes (`weighted_bipred_idc`),
+/// resolved once per slice rather than re-branched per block.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) enum BiPredMode {
+    /// `weighted_bipred_idc == 0`: clause 8.4.2.3.1's plain average,
+    /// `(predL0 + predL1 + 1) >> 1` -- no weight table involved at all.
+    #[default]
+    Default,
+    /// `weighted_bipred_idc == 1`: each list's own explicit
+    /// `pred_weight_table()` entry, combined per clause 8.4.2.3.2's
+    /// two-list formula.
+    Explicit,
+    /// `weighted_bipred_idc == 2`: [`ImplicitWeights`]'s own
+    /// POC-distance-derived per-reference-pair weights -- **x264's own
+    /// default for B slices**, so this is the common real-content path.
+    Implicit,
+}
+
+/// Everything [`reconstruct_inter_mb`]/`predict_chroma_inter` need to turn
+/// two already-fetched, unweighted prediction samples (or one, for an
+/// `L0`-/`L1`-only block) into the final predicted sample -- bundled so
+/// call sites do not thread five separate arguments through for what is,
+/// per block, a single decision.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct InterWeights<'a> {
+    pub(crate) l0: SliceWeights<'a>,
+    pub(crate) l1: SliceWeights<'a>,
+    pub(crate) mode: BiPredMode,
+    pub(crate) implicit: Option<&'a ImplicitWeights>,
+}
+
+impl InterWeights<'_> {
+    const fn none() -> Self {
+        Self { l0: None, l1: None, mode: BiPredMode::Default, implicit: None }
+    }
+
+    /// One list's own single-list prediction (`Pred_L0`/`Pred_L1`, clause
+    /// 8.4.2.3.2's single-list branch): the plain weight table lookup,
+    /// unweighted-identity when this slice carries no table at all.
+    fn single(self, list: usize, ref_idx: usize, sample: u8) -> u8 {
+        let table = if list == 0 { self.l0 } else { self.l1 };
+        weight_for(table, ref_idx).map_or(sample, |w| w.apply(sample))
+    }
+
+    /// Clause 8.4.2.3's own bi-prediction combination -- the three
+    /// `weighted_bipred_idc` cases, each transcribed from JM 19.1's
+    /// `mc_prediction.c::weighted_bi_prediction`/`fill_wp_params` (Tier A
+    /// per `provenance/sources.toml`) rather than re-derived from the
+    /// specification prose a second time: `Default` is a plain rounded
+    /// average; `Explicit` and `Implicit` both reduce to
+    /// `round_shift(w0*p0 + w1*p1, logWD + 1) + ((o0+o1+1)>>1)`, differing
+    /// only in where `(w0, w1, o0, o1, logWD)` come from.
+    fn combine(self, ref_idx0: usize, ref_idx1: usize, p0: u8, p1: u8) -> u8 {
+        let (p0, p1) = (i32::from(p0), i32::from(p1));
+        match self.mode {
+            BiPredMode::Default => {
+                #[allow(
+                    clippy::cast_sign_loss,
+                    clippy::cast_possible_truncation,
+                    reason = "(p0+p1+1)>>1 with p0/p1 in 0..=255 is always in 0..=255"
+                )]
+                {
+                    ((p0 + p1 + 1) >> 1) as u8
+                }
+            }
+            BiPredMode::Explicit => {
+                let w0 = weight_for(self.l0, ref_idx0).unwrap_or(PredWeight { log2_denom: 0, weight: 1, offset: 0 });
+                let w1 = weight_for(self.l1, ref_idx1).unwrap_or(PredWeight { log2_denom: 0, weight: 1, offset: 0 });
+                let log_wd = w0.log2_denom;
+                let round = 1i32 << log_wd;
+                let sum = p0.saturating_mul(w0.weight).saturating_add(p1.saturating_mul(w1.weight)).saturating_add(round);
+                let shifted = sum >> (log_wd + 1);
+                let offset = (w0.offset + w1.offset + 1) >> 1;
+                shifted.saturating_add(offset).clamp(0, 255).cast_unsigned_u8()
+            }
+            BiPredMode::Implicit => {
+                let w = self.implicit.map_or(ImplicitWeight { w0: 32, w1: 32 }, |t| t.get(ref_idx0, ref_idx1));
+                let sum = p0.saturating_mul(w.w0).saturating_add(p1.saturating_mul(w.w1)).saturating_add(32);
+                (sum >> 6).clamp(0, 255).cast_unsigned_u8()
+            }
+        }
+    }
+}
+
+/// `i32 -> u8`, clamped range already asserted by the caller -- named so
+/// [`InterWeights::combine`]'s own `#[allow]` burden stays at one spot
+/// instead of three.
+trait ClampedCast {
+    fn cast_unsigned_u8(self) -> u8;
+}
+impl ClampedCast for i32 {
+    #[allow(
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "the value is clamp(0, 255) immediately before this call"
+    )]
+    fn cast_unsigned_u8(self) -> u8 {
+        self as u8
+    }
 }
 
 impl SliceWeightTables {
@@ -955,20 +1136,25 @@ impl SliceWeightTables {
         let luma_denom = t.luma_log2_weight_denom;
         let chroma_denom = t.chroma_log2_weight_denom.unwrap_or(0);
         let neutral = |denom: u8| 1i32 << denom;
-        let mut luma = Vec::new();
-        let mut chroma = [Vec::new(), Vec::new()];
-        for entry in &t.l0 {
-            let (w, o) = entry.luma.unwrap_or((neutral(luma_denom), 0));
-            luma.push(PredWeight { log2_denom: luma_denom, weight: w, offset: o });
-            let c = entry.chroma.unwrap_or([(neutral(chroma_denom), 0); 2]);
-            for comp in 0..2usize {
-                let (w, o) = c.get(comp).copied().unwrap_or((neutral(chroma_denom), 0));
-                if let Some(v) = chroma.get_mut(comp) {
-                    v.push(PredWeight { log2_denom: chroma_denom, weight: w, offset: o });
+        let build = |entries: &[vaco_parse_h264::slice::RefWeight]| -> (Vec<PredWeight>, [Vec<PredWeight>; 2]) {
+            let mut luma = Vec::new();
+            let mut chroma = [Vec::new(), Vec::new()];
+            for entry in entries {
+                let (w, o) = entry.luma.unwrap_or((neutral(luma_denom), 0));
+                luma.push(PredWeight { log2_denom: luma_denom, weight: w, offset: o });
+                let c = entry.chroma.unwrap_or([(neutral(chroma_denom), 0); 2]);
+                for comp in 0..2usize {
+                    let (w, o) = c.get(comp).copied().unwrap_or((neutral(chroma_denom), 0));
+                    if let Some(v) = chroma.get_mut(comp) {
+                        v.push(PredWeight { log2_denom: chroma_denom, weight: w, offset: o });
+                    }
                 }
             }
-        }
-        Self { weighted: true, luma, chroma }
+            (luma, chroma)
+        };
+        let (luma, chroma) = build(&t.l0);
+        let (luma1, chroma1) = build(&t.l1);
+        Self { weighted: true, luma, chroma, luma1, chroma1 }
     }
 
     fn luma(&self) -> SliceWeights<'_> {
@@ -980,6 +1166,17 @@ impl SliceWeightTables {
             return None;
         }
         self.chroma.get(comp).map(Vec::as_slice)
+    }
+
+    fn luma1(&self) -> SliceWeights<'_> {
+        self.weighted.then_some(self.luma1.as_slice())
+    }
+
+    fn chroma1(&self, comp: usize) -> SliceWeights<'_> {
+        if !self.weighted {
+            return None;
+        }
+        self.chroma1.get(comp).map(Vec::as_slice)
     }
 }
 
@@ -1101,45 +1298,71 @@ fn add_chroma_residual(mut pred: [[u8; 8]; 8], comp: usize, mb: &MbSummary, qpc:
     clippy::cast_possible_truncation,
     reason = "blk/dx/dy are fixed 0..16/0..2 loop bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp -- mirrors reconstruct_inter_mb's own identical allow"
 )]
-fn predict_chroma_inter(
-    mb: &MbSummary,
-    comp: usize,
-    ref_list0: &[RefPicturePlanes<'_>],
-    chroma_width: u32,
-    chroma_height: u32,
-    chroma_weights: SliceWeights<'_>,
-) -> [[u8; 8]; 8] {
-    let empty: &[u8] = &[];
-    let mut out = [[0u8; 8]; 8];
-    for blk in 0..16u32 {
-        let (bx, by) = blk_xy(blk);
-        let info = mb.mv_blocks[(by * 4 + bx) as usize];
-        let ref_idx = info.ref_idx_l0().max(0) as usize;
-        let plane = ref_list0
-            .get(ref_idx)
-            .map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
-        let weight = weight_for(chroma_weights, ref_idx);
-        let (mvx, mvy) = info.mv_l0();
-        let (mvx, mvy) = (i32::from(mvx), i32::from(mvy));
-        let cx0 = (mb.mb_x * 8 + bx * 2) as i32;
-        let cy0 = (mb.mb_y * 8 + by * 2) as i32;
-
+/// One list's own raw chroma sample at one of a 4x4 luma block's own two
+/// chroma sub-positions -- [`sample_luma_block`]'s chroma counterpart,
+/// factored out for the same L0/L1-then-combine reason.
+fn sample_chroma_point(plane: &[u8], chroma_width: u32, chroma_height: u32, cx0: i32, cy0: i32, mv: (i16, i16)) -> u8 {
+    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "mirrors this function's own pre-existing arithmetic")]
+    {
+        let (mvx, mvy) = (i32::from(mv.0), i32::from(mv.1));
         let fetch = |ax: i32, ay: i32| -> u8 {
             if plane.is_empty() {
                 return 0;
             }
             let cx = ax.clamp(0, chroma_width as i32 - 1) as u32;
             let cy = ay.clamp(0, chroma_height as i32 - 1) as u32;
-            plane
-                .get((cy * chroma_width + cx) as usize)
-                .copied()
-                .unwrap_or(0)
+            plane.get((cy * chroma_width + cx) as usize).copied().unwrap_or(0)
         };
+        crate::interp::chroma_mc_sample(fetch, cx0, cy0, mvx, mvy)
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    clippy::indexing_slicing,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::many_single_char_names,
+    reason = "mirrors reconstruct_inter_mb's own allow: blk/i/j are fixed 0..4 or 0..16 loop \
+              bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp; x/y/c/d/r \
+              mirror clause 8.5's own variable names"
+)]
+fn predict_chroma_inter(
+    mb: &MbSummary,
+    comp: usize,
+    ref_list0: &[RefPicturePlanes<'_>],
+    ref_list1: &[RefPicturePlanes<'_>],
+    chroma_width: u32,
+    chroma_height: u32,
+    weights: InterWeights<'_>,
+) -> [[u8; 8]; 8] {
+    let empty: &[u8] = &[];
+    let mut out = [[0u8; 8]; 8];
+    for blk in 0..16u32 {
+        let (bx, by) = blk_xy(blk);
+        let info = mb.mv_blocks[(by * 4 + bx) as usize];
+        let ref_idx0 = info.ref_idx_l0().max(0) as usize;
+        let ref_idx1 = info.ref_idx_l1().max(0) as usize;
+        let plane0 = ref_list0.get(ref_idx0).map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
+        let plane1 = ref_list1.get(ref_idx1).map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
+        let cx0 = (mb.mb_x * 8 + bx * 2) as i32;
+        let cy0 = (mb.mb_y * 8 + by * 2) as i32;
 
         for dy in 0..2i32 {
             for dx in 0..2i32 {
-                let v = crate::interp::chroma_mc_sample(fetch, cx0 + dx, cy0 + dy, mvx, mvy);
-                let v = weight.map_or(v, |w| w.apply(v));
+                let a = info
+                    .reads_l0()
+                    .then(|| sample_chroma_point(plane0, chroma_width, chroma_height, cx0 + dx, cy0 + dy, info.mv_l0()));
+                let b = info
+                    .reads_l1()
+                    .then(|| sample_chroma_point(plane1, chroma_width, chroma_height, cx0 + dx, cy0 + dy, info.mv_l1()));
+                let v = match (a, b) {
+                    (Some(a), Some(b)) => weights.combine(ref_idx0, ref_idx1, a, b),
+                    (Some(a), None) => weights.single(0, ref_idx0, a),
+                    (None, Some(b)) => weights.single(1, ref_idx1, b),
+                    (None, None) => 0,
+                };
                 let oy = (by * 2) as usize + dy as usize;
                 let ox = (bx * 2) as usize + dx as usize;
                 if let Some(row) = out.get_mut(oy)
@@ -1181,6 +1404,7 @@ fn predict_chroma_inter(
 ///
 /// As [`reconstruct_picture_luma`]: [`vaco_core::Error::Unsupported`] for
 /// `I_PCM`.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn reconstruct_picture(
     macroblocks: &[MbSummary],
     mbs_wide: u32,
@@ -1188,7 +1412,10 @@ pub(crate) fn reconstruct_picture(
     chroma_qp_offset_cb: i32,
     chroma_qp_offset_cr: i32,
     ref_list0: &[RefPicturePlanes<'_>],
+    ref_list1: &[RefPicturePlanes<'_>],
     weights: &SliceWeightTables,
+    bipred_mode: BiPredMode,
+    implicit: Option<&ImplicitWeights>,
     budget: &mut Budget,
 ) -> vaco_core::Result<ReconstructedPicture> {
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
@@ -1197,6 +1424,7 @@ pub(crate) fn reconstruct_picture(
     let chroma_width = mbs_wide * 8;
     let chroma_height = mbs_high * 8;
     let ref_list0_luma: Vec<&[u8]> = ref_list0.iter().map(|r| r.luma).collect();
+    let ref_list1_luma: Vec<&[u8]> = ref_list1.iter().map(|r| r.luma).collect();
 
     for mb in macroblocks {
         if mb.is_ipcm {
@@ -1232,14 +1460,17 @@ pub(crate) fn reconstruct_picture(
         } else if mb.is_intra8x8 {
             reconstruct_intra8x8_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
         } else {
-            reconstruct_inter_mb(&mut buf, mb, &ref_list0_luma, ref_width, ref_height, weights.luma());
+            let luma_weights = InterWeights { l0: weights.luma(), l1: weights.luma1(), mode: bipred_mode, implicit };
+            reconstruct_inter_mb(&mut buf, mb, &ref_list0_luma, &ref_list1_luma, ref_width, ref_height, luma_weights);
         }
 
         let qpc_cb = chroma_qp(mb.qpy, chroma_qp_offset_cb);
         let qpc_cr = chroma_qp(mb.qpy, chroma_qp_offset_cr);
         for (comp, qpc) in [(0usize, qpc_cb), (1usize, qpc_cr)] {
             let pred = if is_inter {
-                predict_chroma_inter(mb, comp, ref_list0, chroma_width, chroma_height, weights.chroma(comp))
+                let chroma_weights =
+                    InterWeights { l0: weights.chroma(comp), l1: weights.chroma1(comp), mode: bipred_mode, implicit };
+                predict_chroma_inter(mb, comp, ref_list0, ref_list1, chroma_width, chroma_height, chroma_weights)
             } else {
                 let neighbours = chroma_neighbours(&buf, comp, mb.mb_x, mb.mb_y);
                 predict_intra_chroma(mb.intra_chroma_pred_mode, neighbours)
@@ -1469,6 +1700,7 @@ mod tests {
                         sps,
                         pps,
                         &slice_header,
+                        None,
                     )
                     .unwrap_or_else(|e| {
                         panic!("gradient fixture: decode_slice_cabac failed: {e:?}")
@@ -1623,6 +1855,7 @@ mod tests {
                         sps,
                         pps,
                         &slice_header,
+                        None,
                     )
                     .map_err(|e| format!("decode_slice_cabac failed: {e:?}"))
                     .and_then(|stats| {
@@ -1641,6 +1874,8 @@ mod tests {
                                 slice_header.disable_deblocking_filter_idc,
                                 slice_header.slice_alpha_c0_offset_div2,
                                 slice_header.slice_beta_offset_div2,
+                                &[],
+                                &[],
                             )
                             .map_err(|e| format!("deblock_picture_luma failed: {e:?}"))?;
                         }
@@ -1997,6 +2232,7 @@ mod tests {
                         sps,
                         pps,
                         &slice_header,
+                        None,
                     )
                     .map_err(|e| format!("decode_slice_cabac failed: {e:?}"))
                     .and_then(|stats| {
@@ -2165,6 +2401,7 @@ mod tests {
                         sps,
                         pps,
                         &slice_header,
+                        None,
                     )
                     .map_err(|e| format!("decode_slice_cabac failed: {e:?}"))
                     .and_then(|stats| {
@@ -2190,7 +2427,10 @@ mod tests {
                             pps.chroma_qp_index_offset,
                             pps.second_chroma_qp_index_offset,
                             &ref_list0,
+                            &[],
                             &SliceWeightTables::from_table(slice_header.pred_weight_table.as_ref()),
+                            BiPredMode::Default,
+                            None,
                             &mut budget,
                         )
                         .map_err(|e| format!("reconstruct_picture failed: {e:?}"))
@@ -2265,9 +2505,9 @@ mod tests {
                     let mbs_high = sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
                     let mut cabac = CabacDecoder::from_reader(reader);
                     let stats =
-                        crate::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header).unwrap();
+                        crate::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None).unwrap();
                     let mut pic =
-                        reconstruct_picture(&stats.macroblocks, mbs_wide, mbs_high, pps.chroma_qp_index_offset, pps.second_chroma_qp_index_offset, &[], &SliceWeightTables::default(), &mut budget)
+                        reconstruct_picture(&stats.macroblocks, mbs_wide, mbs_high, pps.chroma_qp_index_offset, pps.second_chroma_qp_index_offset, &[], &[], &SliceWeightTables::default(), BiPredMode::Default, None, &mut budget)
                             .unwrap();
                     crate::deblock::deblock_picture_luma(
                         &mut pic.luma,
@@ -2277,6 +2517,8 @@ mod tests {
                         slice_header.disable_deblocking_filter_idc,
                         slice_header.slice_alpha_c0_offset_div2,
                         slice_header.slice_beta_offset_div2,
+                        &[],
+                        &[],
                     )
                     .unwrap();
                     for (chroma, offset) in
@@ -2291,6 +2533,8 @@ mod tests {
                             slice_header.disable_deblocking_filter_idc,
                             slice_header.slice_alpha_c0_offset_div2,
                             slice_header.slice_beta_offset_div2,
+                            &[],
+                            &[],
                         );
                     }
                     assert_eq!(pic.luma, reference[..luma_len], "frame 0 luma");
@@ -2431,7 +2675,7 @@ mod tests {
                     let mbs_high = sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
                     let mut cabac = CabacDecoder::from_reader(reader);
                     let stats =
-                        crate::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header).unwrap();
+                        crate::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None).unwrap();
                     assert!(!cabac.malformed(), "frame {frame_idx}: CABAC engine reported malformed input");
                     let ref_list0: Vec<RefPicturePlanes<'_>> = if slice_header.kind == SliceKind::I {
                         Vec::new()
@@ -2448,7 +2692,10 @@ mod tests {
                         pps.chroma_qp_index_offset,
                         pps.second_chroma_qp_index_offset,
                         &ref_list0,
+                        &[],
                         &SliceWeightTables::from_table(slice_header.pred_weight_table.as_ref()),
+                        BiPredMode::Default,
+                        None,
                         &mut budget,
                     )
                     .unwrap();
@@ -2461,6 +2708,8 @@ mod tests {
                         slice_header.disable_deblocking_filter_idc,
                         slice_header.slice_alpha_c0_offset_div2,
                         slice_header.slice_beta_offset_div2,
+                        &[],
+                        &[],
                     )
                     .unwrap();
                     for (chroma, offset) in
@@ -2475,6 +2724,8 @@ mod tests {
                             slice_header.disable_deblocking_filter_idc,
                             slice_header.slice_alpha_c0_offset_div2,
                             slice_header.slice_beta_offset_div2,
+                            &[],
+                            &[],
                         );
                     }
                     dpb.push(pic.clone());

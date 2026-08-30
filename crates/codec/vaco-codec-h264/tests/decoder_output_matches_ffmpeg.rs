@@ -39,6 +39,7 @@
 use vaco_bitstream::annexb;
 use vaco_codec_core::Decoder;
 use vaco_codec_h264::H264Decoder;
+use vaco_core::Error;
 use vaco_frame::FrameData;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -95,15 +96,52 @@ fn every_frame_of_a_real_ip_stream_is_byte_exact_against_ffmpeg() {
     assert_eq!(slices.len(), FRAMES, "fixture should carry one slice per picture, 25 pictures");
     d.set_extradata(&extradata).unwrap();
 
+    // `H264Decoder` declares `Caps::DELAY` (B-slice output reordering
+    // needs it -- `crate::decoder`'s own module doc), so a frame is no
+    // longer guaranteed one-to-one and immediately after the packet that
+    // produced it: a picture can be held back until a later one proves
+    // it is safe to emit in display order. This fixture is P-only (no B
+    // slices at all), so decode order and display order coincide and
+    // every frame's own reordering delay is bounded by the SPS's own
+    // small reorder window -- but the *test* still has to drive the real
+    // send/receive protocol (`Error::OutputPending` on backpressure,
+    // `Error::NeedMoreInput` when nothing is ready yet, an explicit EOF
+    // to flush whatever is still held) rather than assume strict
+    // packet-for-frame lockstep, which no `Caps::DELAY` decoder can
+    // promise in general.
+    let mut frames: Vec<vaco_frame::Frame> = Vec::new();
+    for slice in &slices {
+        let pkt = Packet::from_slice(&mut budget, slice).unwrap();
+        loop {
+            match d.send_packet(Some(&pkt)) {
+                Ok(()) => break,
+                Err(Error::OutputPending) => frames.push(d.receive_frame().unwrap()),
+                Err(e) => panic!("send_packet failed: {e:?}"),
+            }
+        }
+        // Opportunistically drain whatever is already available --
+        // `Error::NeedMoreInput` here just means nothing is ready yet
+        // (the common case, given the reorder window), not a failure.
+        while let Ok(frame) = d.receive_frame() {
+            frames.push(frame);
+        }
+    }
+    d.send_packet(None).unwrap();
+    loop {
+        match d.receive_frame() {
+            Ok(frame) => frames.push(frame),
+            Err(Error::Eof) => break,
+            Err(e) => panic!("receive_frame failed while draining end of stream: {e:?}"),
+        }
+    }
+    assert_eq!(frames.len(), FRAMES, "expected {FRAMES} frames out, got {}", frames.len());
+
     // Per-frame, per-plane difference counts and maxima -- collected for
     // every frame first, so the failure message can report the *first*
     // differing frame and the shape of the whole sequence, not just abort
     // at the first mismatching byte.
     let mut report: Vec<(usize, [(usize, u8); 3])> = Vec::new();
-    for (idx, slice) in slices.iter().enumerate() {
-        let pkt = Packet::from_slice(&mut budget, slice).unwrap();
-        d.send_packet(Some(&pkt)).unwrap();
-        let frame = d.receive_frame().unwrap();
+    for (idx, frame) in frames.iter().enumerate() {
         let FrameData::Video { format, planes, .. } = &frame.data else {
             panic!("frame {idx}: expected video, got {:?}", frame.data);
         };

@@ -136,7 +136,7 @@ fn first_slice_cbp(data: &[u8]) -> Option<(u8, u8)> {
                     SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget).unwrap();
                 let mut cabac = CabacDecoder::from_reader(reader);
                 let stats =
-                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header)
+                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None)
                         .unwrap_or_else(|e| panic!("{e:?}"));
                 assert!(!cabac.malformed(), "CABAC engine reported malformed input");
                 if result.is_none() {

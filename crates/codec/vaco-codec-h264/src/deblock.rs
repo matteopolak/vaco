@@ -23,17 +23,44 @@
 //! `Intra`/`I_PCM` gives `bS = 4` at a macroblock edge and `3` at an
 //! internal one; otherwise `bS = 2` when either side's own 4x4 luma block
 //! has a nonzero transform coefficient; otherwise `bS = 1` when the two
-//! sides use a different `ref_idx` or their motion vectors differ by at
-//! least 4 quarter-luma-samples in either component; otherwise `bS = 0`.
-//! This is the JM reference decoder's own `get_strength_ver`/`_hor`
-//! (`loop_filter_normal.c`) collapsed to what a single-reference-list,
-//! frame-only (no MBAFF, no fields, no B slices) decoder ever needs:
-//! `compare_mvs`' `List 1` half is dead code here because
-//! [`crate::mb::MvInfo`] never populates it for a P slice.
+//! sides use a different set of reference pictures or a matching pair of
+//! motion vectors differs by at least 4 quarter-luma-samples in either
+//! component; otherwise `bS = 0`.
+//!
+//! # Two reference lists (B slices)
+//!
+//! A P slice's own `MvInfo` never populates list 1 (`ref_idx_l1() == -1`,
+//! `mv_l1() == (0, 0)` by construction -- see that type's own doc), so a
+//! single-list `ref_idx`/`mv` comparison was the whole rule until B-slice
+//! support existed. It is not the general rule: clause 8.7.2.1's own text
+//! compares reference *pictures*, not list-relative `ref_idx` values, and a
+//! bi-predicted block's two motion vectors can legitimately need matching
+//! against the *other* side's lists with list 0 and list 1 swapped, when
+//! the two sides reference the same two pictures through different lists
+//! -- x264 does this whenever `RefPicList1[0]` equals some `RefPicList0[k]`,
+//! which is common for a single-reference-each-way B slice.
+//!
+//! [`boundary_strength`]'s two-list branch is transcribed from JM 19.1's
+//! `get_strength_ver`/`get_strength_hor` (`loop_filter_normal.c`, Tier A per
+//! `provenance/sources.toml`) rather than re-derived from the specification
+//! prose a second time: reference-picture identity there is a `StorablePicture*`
+//! pointer, which this crate has no equivalent of at deblocking time (motion
+//! is stored per 4x4 block as a list-relative `ref_idx`, not a picture
+//! pointer) -- POC stands in for it instead ([`boundary_strength`]'s own
+//! `ref_list0_poc`/`ref_list1_poc` parameters, one entry per active
+//! `RefPicList0`/`RefPicList1` position, built by the caller from the same
+//! DPB lookup `crate::decoder` already does for reconstruction). Two
+//! distinct pictures never share a POC within the one coded video sequence
+//! this crate ever has open at once (no long-term references, no multiple
+//! sequences in flight -- both explicitly out of scope, `decoder.rs`'s own
+//! refusals), so POC equality is exactly picture-pointer equality for every
+//! input this crate accepts. JM's `compare_mvs(a, b, mvlimit)` itself is the
+//! same per-component `>= 4` test [`boundary_strength`]'s own single-list
+//! branch already used -- [`mv_differs`] is that primitive, shared by both.
 //!
 //! **Scope, explicitly, not merely unimplemented**: MBAFF/field pictures
 //! (this crate does not decode them at all -- see `decoder.rs`'s own
-//! refusal) and B slices (ditto, `mb.rs`'s own module doc).
+//! refusal).
 //!
 //! # Chroma (clause 8.7, `EdgeLoopChromaVer`/`Hor` in the same reference)
 //!
@@ -146,12 +173,46 @@ const fn filters_luma_edge(mb: &MbSummary, local: u32) -> bool {
     !(mb.transform_8x8 && (local == 4 || local == 12))
 }
 
-/// Clause 8.7.2.1's non-intra case, collapsed to a single reference list
-/// (see this module's own doc). `p`/`q` are the two 4x4 luma blocks on
-/// either side of the edge -- the same macroblock and a different block
-/// index for an internal edge, two different macroblocks for a macroblock
-/// edge.
-fn boundary_strength(mb_edge: bool, p_mb: &MbSummary, p_blk: usize, q_mb: &MbSummary, q_blk: usize) -> u8 {
+/// JM 19.1's `compare_mvs(a, b, mvlimit)` (`loop_filter_normal.c`) for the
+/// non-MBAFF `mvlimit == 4` case this crate's frame-only scope always uses:
+/// `true` when the two motion vectors differ by at least 4 quarter-luma-samples
+/// in either component. Shared by [`boundary_strength`]'s single- and
+/// two-list branches -- see this module's own doc.
+fn mv_differs(a: (i16, i16), b: (i16, i16)) -> bool {
+    a.0.abs_diff(b.0) >= 4 || a.1.abs_diff(b.1) >= 4
+}
+
+/// One list's reference-picture identity for one 4x4 block, as a POC --
+/// `None` when that list is not used at all (`ref_idx < 0`, [`crate::mb::MvInfo`]'s
+/// own "this list not read" convention), matching JM's `NULL` `ref_pic`
+/// pointer for the same case. `list_poc` is the current picture's own
+/// `RefPicList0`/`RefPicList1` (whichever `ref_idx` indexes into), one POC
+/// per active position -- see this module's own doc for why POC stands in
+/// for JM's picture pointer here.
+fn ref_poc(list_poc: &[i32], ref_idx: i8) -> Option<i32> {
+    let idx = usize::try_from(ref_idx).ok()?;
+    list_poc.get(idx).copied()
+}
+
+/// Clause 8.7.2.1's non-intra case (see this module's own doc for the
+/// two-list generalisation and its JM provenance). `p`/`q` are the two 4x4
+/// luma blocks on either side of the edge -- the same macroblock and a
+/// different block index for an internal edge, two different macroblocks
+/// for a macroblock edge. `ref_list0_poc`/`ref_list1_poc` are the *current*
+/// picture's own reference lists (both empty for an I slice, `ref_list1_poc`
+/// empty for a P slice -- every `MvInfo` in scope then has `ref_idx_l1() ==
+/// -1` regardless, so [`ref_poc`] returns `None` for list 1 on both sides
+/// and every comparison below degenerates to the single-list rule this
+/// function used before B slices existed).
+fn boundary_strength(
+    mb_edge: bool,
+    p_mb: &MbSummary,
+    p_blk: usize,
+    q_mb: &MbSummary,
+    q_blk: usize,
+    ref_list0_poc: &[i32],
+    ref_list1_poc: &[i32],
+) -> u8 {
     if is_intra(p_mb) || is_intra(q_mb) {
         return if mb_edge { 4 } else { 3 };
     }
@@ -160,15 +221,43 @@ fn boundary_strength(mb_edge: bool, p_mb: &MbSummary, p_blk: usize, q_mb: &MbSum
     }
     let p_mv = p_mb.mv_blocks.get(p_blk).copied().unwrap_or_default();
     let q_mv = q_mb.mv_blocks.get(q_blk).copied().unwrap_or_default();
-    if p_mv.ref_idx_l0() != q_mv.ref_idx_l0() {
+
+    let p0 = ref_poc(ref_list0_poc, p_mv.ref_idx_l0());
+    let p1 = ref_poc(ref_list1_poc, p_mv.ref_idx_l1());
+    let q0 = ref_poc(ref_list0_poc, q_mv.ref_idx_l0());
+    let q1 = ref_poc(ref_list1_poc, q_mv.ref_idx_l1());
+
+    // JM's own `(ref_p0==ref_q0 && ref_p1==ref_q1) || (ref_p0==ref_q1 &&
+    // ref_p1==ref_q0)`: the two sides use the same *set* of reference
+    // pictures, matched either directly by list or swapped across lists.
+    // `None == None` here plays the same role JM's `NULL == NULL` does for
+    // an unused list on both sides -- both `Option<i32>` comparisons below
+    // are total, no separate "list not used" case needed.
+    let same_set_direct = p0 == q0 && p1 == q1;
+    let same_set_swapped = p0 == q1 && p1 == q0;
+    if !(same_set_direct || same_set_swapped) {
         return 1;
     }
-    let (px, py) = p_mv.mv_l0();
-    let (qx, qy) = q_mv.mv_l0();
-    if px.abs_diff(qx) >= 4 || py.abs_diff(qy) >= 4 {
-        return 1;
-    }
-    0
+
+    let differs = if p0 == p1 {
+        // This block's own two lists reference the *same* picture twice
+        // (and, by `same_set_direct`/`same_set_swapped` above, so does the
+        // other side's) -- JM requires *both* the direct and the swapped
+        // pairing to each have a small-enough difference before calling it
+        // unchanged, not just the better of the two orderings.
+        (mv_differs(p_mv.mv_l0(), q_mv.mv_l0()) || mv_differs(p_mv.mv_l1(), q_mv.mv_l1()))
+            && (mv_differs(p_mv.mv_l0(), q_mv.mv_l1()) || mv_differs(p_mv.mv_l1(), q_mv.mv_l0()))
+    } else {
+        // The two lists reference two distinct pictures (the ordinary
+        // case): match each side's motion to whichever of the other side's
+        // lists points at the *same* picture, direct or swapped.
+        if p0 == q0 {
+            mv_differs(p_mv.mv_l0(), q_mv.mv_l0()) || mv_differs(p_mv.mv_l1(), q_mv.mv_l1())
+        } else {
+            mv_differs(p_mv.mv_l0(), q_mv.mv_l1()) || mv_differs(p_mv.mv_l1(), q_mv.mv_l0())
+        }
+    };
+    u8::from(differs)
 }
 
 /// A macroblock grid addressable by `(mb_x, mb_y)`, `None` outside the
@@ -219,7 +308,11 @@ impl<'a> MbGrid<'a> {
 /// crate decodes is one slice per whole picture, so there is no internal
 /// slice boundary within a picture to treat differently). `slice_alpha_c0_offset_div2`/
 /// `slice_beta_offset_div2` are the slice header fields verbatim; this
-/// function applies clause 8.7.2.2's own `* 2` itself.
+/// function applies clause 8.7.2.2's own `* 2` itself. `ref_list0_poc`/
+/// `ref_list1_poc` are this picture's own `RefPicList0`/`RefPicList1`, as
+/// POCs -- see [`boundary_strength`]'s own doc for why POC and not
+/// `ref_idx`; both empty for an I slice, `ref_list1_poc` empty for a P
+/// slice.
 ///
 /// # Errors
 ///
@@ -245,6 +338,8 @@ pub(crate) fn deblock_picture_luma(
     disable_deblocking_filter_idc: u32,
     slice_alpha_c0_offset_div2: i32,
     slice_beta_offset_div2: i32,
+    ref_list0_poc: &[i32],
+    ref_list1_poc: &[i32],
 ) -> vaco_core::Result<()> {
     if disable_deblocking_filter_idc == 1 {
         return Ok(());
@@ -314,7 +409,7 @@ pub(crate) fn deblock_picture_luma(
                     let p_blk = if mb_edge { blk_row * 4 + 3 } else { blk_row * 4 + (local / 4 - 1) as usize };
                     let ri = row as usize;
                     if let Some(slot) = bsa.get_mut(ri) {
-                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
+                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
                     }
                     if let Some(slot) = p0a.get_mut(ri) {
                         *slot = get(luma, x - 1, y);
@@ -396,7 +491,7 @@ pub(crate) fn deblock_picture_luma(
                     let p_blk = if mb_edge { 12 + blk_col } else { (local / 4 - 1) as usize * 4 + blk_col };
                     let ci = col as usize;
                     if let Some(slot) = bsa.get_mut(ci) {
-                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
+                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
                     }
                     if let Some(slot) = p0a.get_mut(ci) {
                         *slot = get(luma, x, y - 1);
@@ -465,6 +560,8 @@ pub(crate) fn deblock_picture_chroma(
     disable_deblocking_filter_idc: u32,
     slice_alpha_c0_offset_div2: i32,
     slice_beta_offset_div2: i32,
+    ref_list0_poc: &[i32],
+    ref_list1_poc: &[i32],
 ) {
     if disable_deblocking_filter_idc == 1 {
         return;
@@ -528,7 +625,7 @@ pub(crate) fn deblock_picture_chroma(
                         if mb_edge { blk_row * 4 + 3 } else { blk_row * 4 + (luma_local / 4 - 1) as usize };
                     let ri = row as usize;
                     if let Some(slot) = bsa.get_mut(ri) {
-                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
+                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
                     }
                     if let Some(slot) = p0a.get_mut(ri) {
                         *slot = get(chroma, x - 1, y);
@@ -579,7 +676,7 @@ pub(crate) fn deblock_picture_chroma(
                     let p_blk = if mb_edge { 12 + blk_col } else { (luma_local / 4 - 1) as usize * 4 + blk_col };
                     let ci = col as usize;
                     if let Some(slot) = bsa.get_mut(ci) {
-                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
+                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
                     }
                     if let Some(slot) = p0a.get_mut(ci) {
                         *slot = get(chroma, x, y - 1);

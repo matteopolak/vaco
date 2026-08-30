@@ -1134,6 +1134,7 @@ mod tests {
                         sps,
                         pps,
                         &slice_header,
+                        None,
                     )
                     .unwrap_or_else(|e| panic!("flat fixture: decode_slice_cabac failed: {e:?}"));
                     assert!(

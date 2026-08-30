@@ -75,7 +75,6 @@ pub(crate) const SUB_MB_TYPE_P: [[Init; 3]; 3] = [
 
 /// `mb_skip_flag`, B slices. ctxIdx 24..=26.
 #[rustfmt::skip]
-#[allow(dead_code, reason = "kept for a follow-up dispatch landing B-slice CABAC; see mb.rs's own module doc")]
 pub(crate) const SKIP_B: [[Init; 3]; 3] = [
     [(18, 64), (26, 34), (20, 40)],
     [(9, 43), (19, 22), (20, 10)],
@@ -87,7 +86,6 @@ pub(crate) const SKIP_B: [[Init; 3]; 3] = [
 /// here (ctxIdx 32) is the shared context between the prefix's last bin and
 /// the suffix's first.
 #[rustfmt::skip]
-#[allow(dead_code, reason = "kept for a follow-up dispatch landing B-slice CABAC; see mb.rs's own module doc")]
 pub(crate) const MB_TYPE_B: [[Init; 3]; 9] = [
     [(26, 67), (57, 2), (54, 0)],
     [(16, 90), (41, 36), (37, 42)],
@@ -102,7 +100,6 @@ pub(crate) const MB_TYPE_B: [[Init; 3]; 9] = [
 
 /// `sub_mb_type`, B slices. ctxIdx 36..=39.
 #[rustfmt::skip]
-#[allow(dead_code, reason = "kept for a follow-up dispatch landing B-slice CABAC; see mb.rs's own module doc")]
 pub(crate) const SUB_MB_TYPE_B: [[Init; 3]; 4] = [
     [(-6, 86), (6, 69), (-6, 93)],
     [(-17, 95), (-13, 90), (-14, 88)],

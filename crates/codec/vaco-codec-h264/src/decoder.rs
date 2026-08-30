@@ -4,21 +4,29 @@
 //!
 //! # What this decoder covers
 //!
-//! **CABAC I/P slices, one slice per picture, `ChromaArrayType == 1`
-//! (4:2:0), frame (non-MBAFF, non-field) pictures.** That is exactly
+//! **CABAC I/P/B slices, one slice per picture, `ChromaArrayType == 1`
+//! (4:2:0), frame (non-MBAFF, non-field) pictures, short-term references
+//! only (no `MMCO`/long-term marking).** That is exactly
 //! [`crate::mb::decode_slice_cabac`]'s own scope, and exactly what
 //! [`crate::reconstruct::reconstruct_picture`] turns into real luma/Cb/Cr
 //! samples — see both modules' own docs for the full account of what is
-//! and is not implemented one level down (`I_PCM`, B slices, MBAFF, the
-//! 8x8 transform, `constrained_intra_pred_flag`'s substitution rule, and
-//! more than one slice per picture are all refused explicitly, not
-//! silently mishandled).
+//! and is not implemented one level down (`I_PCM`, MBAFF, the 8x8
+//! transform, `constrained_intra_pred_flag`'s substitution rule,
+//! temporal direct prediction, long-term references, and more than one
+//! slice per picture are all refused explicitly, not silently
+//! mishandled).
 //!
 //! This used to stop at resolving `entropy_coding_mode_flag` and return
-//! [`Error::Unsupported`] unconditionally — the macroblock layer,
-//! reconstruction, motion compensation and chroma all existed by then but
-//! had no caller outside their own tests. That gap is what this module
-//! now closes for the CABAC path.
+//! [`Error::Unsupported`] unconditionally, then grew to cover CABAC I/P
+//! slices only (CABAC B slices refused before `decode_slice_cabac` ever
+//! ran). B-slice support closes that gap: reference picture list 1
+//! construction (clause 8.2.4.2.3, both lists' own default order plus
+//! `ref_pic_list_modification()`), spatial direct prediction's own
+//! colocated-picture lookup (clause 8.4.1.2.1/2, [`ColocatedField`]) and
+//! clause 8.4.2.3's bi-prediction weighting (default average, explicit,
+//! and implicit -- `weighted_bipred_idc == 2`, x264's own default for B
+//! slices) all live here, since this is the only place that has ever seen
+//! more than one decoded picture at once.
 //!
 //! **CAVLC is still refused, honestly, not silently mishandled.**
 //! [`crate::mb::decode_slice_cavlc`] verifies bit-exact *consumption* of a
@@ -36,8 +44,7 @@
 //! this dispatch's own time-box risked exactly the "measured but
 //! confidently wrong" failure this project's own constraints warn
 //! against, so it stays an explicit [`Error::Unsupported`] naming the gap
-//! precisely, the same choice this crate already makes for `I_PCM` and
-//! CABAC B slices.
+//! precisely, the same choice this crate already makes for `I_PCM`.
 //!
 //! # AVCC vs Annex B
 //!
@@ -66,22 +73,38 @@
 //!
 //! # Output ordering
 //!
-//! Frames are emitted in decode order with no reorder buffer. That is
-//! exactly right for what this decoder supports: CABAC B slices are
-//! refused (see above), and for an I/P-only stream decode order and
-//! display order are the same order (clause 8.2.1's own picture order
-//! count is monotonic across I/P pictures with no MMCO/long-term
-//! marking, which this crate's DPB does not implement — #422). A real
-//! B-frame stream cannot reach this decoder at all today: its B slices
-//! are refused before any reordering question would even arise.
+//! Frames are held in a small POC-ordered reorder buffer
+//! ([`H264Decoder::reorder`]) rather than emitted the instant they
+//! decode: a B-frame stream's decode order and display order genuinely
+//! differ (a `B` picture between two anchors decodes *after* both but
+//! displays *before* the later one), so I/P-only "decode order already is
+//! display order" no longer holds once B slices are real. The buffer's
+//! own depth is `sps.max_num_reorder_frames()` when the VUI states one,
+//! else `sps.max_num_ref_frames` (a conservative bound every real encoder
+//! stays within) -- once more than that many pictures are held, the
+//! lowest-POC one is emitted. An IDR access unit flushes every pending
+//! picture (in POC order) *before* it decodes, the same way it clears the
+//! reference-picture DPB first: POC restarts near zero at an IDR, so a
+//! stale pre-IDR POC could otherwise sort after a post-IDR one and emit
+//! in the wrong order. [`Machine`] itself needs [`Caps::DELAY`] declared
+//! for this to be legal at all -- a machine with neither `DELAY` nor
+//! `SUBFRAMES` polices "at most one buffered output" in debug builds,
+//! which a multi-picture reorder window is not.
 //!
 //! # Reference picture buffering
 //!
 //! A simple sliding window (clause 8.2.5.3's own removal process, minus
 //! MMCO/long-term marking — #422 tracks that gap): every reference
-//! picture decoded, most recent first, capped at the SPS's own
-//! `max_num_ref_frames`. An IDR access unit clears it first, so a P slice
-//! can never accidentally reach across a GOP boundary.
+//! picture decoded, capped at the SPS's own `max_num_ref_frames`. An IDR
+//! access unit clears it first, so a P or B slice can never accidentally
+//! reach across a GOP boundary. Each entry now also carries its own POC,
+//! `frame_num` and per-4x4-luma-block motion field
+//! ([`crate::mb::ColocatedField`]'s own raw material) -- clause 8.2.4.2's
+//! default reference-list construction needs the first two (descending
+//! `FrameNumWrap` for P/SP list 0; POC-relative-to-current ordering for
+//! both of a B slice's lists) and clause 8.4.1.2.1's `colZeroFlag` needs
+//! the third, whenever a *later* B slice's `RefPicList1[0]` turns out to
+//! be this exact picture.
 
 use std::collections::VecDeque;
 
@@ -93,21 +116,41 @@ use vaco_core::{Error, Result};
 use vaco_frame::{Frame, FrameFlags};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
-use vaco_parse_h264::{H264NalHeader, H264Parser, NalUnitType, SliceHeader};
+use vaco_parse_h264::slice::RefPicListModification;
+use vaco_parse_h264::{H264NalHeader, H264Parser, NalUnitType, SliceHeader, SliceKind};
 use vaco_pixfmt::PixFmt;
 
-use crate::reconstruct::{ReconstructedPicture, RefPicturePlanes, reconstruct_picture};
+use crate::mb::{ColocatedField, MvInfo};
+use crate::reconstruct::{BiPredMode, ImplicitWeight, ImplicitWeights, ReconstructedPicture, RefPicturePlanes, SliceWeightTables, reconstruct_picture};
 
 /// One decoded reference picture's three planes, coded (macroblock-aligned,
 /// uncropped) size — the shape [`crate::reconstruct::reconstruct_picture`]'s
-/// own `ref_list0` needs, kept from before cropping since a later
-/// picture's own motion compensation reads the *coded* picture, not the
-/// display-cropped one.
+/// own `ref_list0`/`ref_list1` need, kept from before cropping since a
+/// later picture's own motion compensation reads the *coded* picture, not
+/// the display-cropped one.
 #[derive(Debug)]
 struct RefPicture {
     luma: Vec<u8>,
     cb: Vec<u8>,
     cr: Vec<u8>,
+    /// `PicOrderCnt`, clause 8.2.1 -- clause 8.2.4.2's own default
+    /// reference-list ordering for B slices (and the `colZeroFlag`
+    /// short-term test) both need it.
+    poc: i32,
+    /// `frame_num`, clause 7.4.3 -- clause 8.2.4.1's `PicNum`/`FrameNumWrap`
+    /// arithmetic (P/SP list 0's own default order, and every list's
+    /// `ref_pic_list_modification()`) needs it; this decoder does not
+    /// implement `MaxLongTermFrameIdx`, so every reference here is always
+    /// short-term.
+    frame_num: u32,
+    /// This picture's own per-4x4-luma-block motion field, absolute
+    /// frame coordinates, row-major (`y * (mbs_wide*4) + x`) -- built once
+    /// from [`crate::mb::SliceStats::macroblocks`] right after this
+    /// picture decoded, from data that already existed and was otherwise
+    /// thrown away. Only ever read back via [`ColocatedField`], and only
+    /// when a *later* B slice's `RefPicList1[0]` turns out to be this
+    /// exact picture.
+    motion: Vec<MvInfo>,
 }
 
 /// A copy of `src`, charged to `budget` -- the DPB's own reference-picture
@@ -125,11 +168,13 @@ fn budgeted_clone(budget: &mut Budget, src: &[u8]) -> Result<Vec<u8>> {
 
 /// The bytes a [`RefPicture`] holds live, for the `budget.release` call at
 /// every eviction site (DPB overflow, an IDR's own clear-before-decode,
-/// and `flush`) to release exactly what [`budgeted_clone`] charged for it.
+/// and `flush`) to release exactly what [`budgeted_clone`]/[`Budget::alloc`]
+/// charged for it.
 fn ref_picture_bytes(rp: &RefPicture) -> u64 {
     (rp.luma.len() as u64)
         .saturating_add(rp.cb.len() as u64)
         .saturating_add(rp.cr.len() as u64)
+        .saturating_add((rp.motion.len().saturating_mul(core::mem::size_of::<MvInfo>())) as u64)
 }
 
 /// The bytes a [`ReconstructedPicture`] holds live -- what
@@ -141,6 +186,111 @@ fn reconstructed_picture_bytes(pic: &ReconstructedPicture) -> u64 {
     (pic.luma.len() as u64)
         .saturating_add(pic.cb.len() as u64)
         .saturating_add(pic.cr.len() as u64)
+}
+
+/// Clause 8.2.4.1's `FrameNumWrap`: `frame_num` reinterpreted as "distance
+/// before `curr_frame_num`, allowing one wraparound" -- the quantity both
+/// P/SP list 0's default order and every list's `ref_pic_list_modification()`
+/// sort/search by. Short-term references only (`PicNum == FrameNumWrap` for
+/// a non-MBAFF frame picture), matching this decoder's own scope.
+fn frame_num_wrap(stored: u32, curr: u32, max_frame_num: u32) -> i64 {
+    if stored > curr { i64::from(stored) - i64::from(max_frame_num) } else { i64::from(stored) }
+}
+
+/// Clause 8.2.4.3.1's short-term reordering (`modification_of_pic_nums_idc`
+/// 0/1 only -- `idc == 2`, long-term, is refused by the caller before this
+/// ever runs). `default_list` is the already-built clause 8.2.4.2 default
+/// order (DPB indices); `num_active` is `num_ref_idx_lX_active_minus1 + 1`.
+///
+/// Transcribed from the specification's own pseudocode (clause 8.2.4.3.1),
+/// not from any reference decoder: `PicNum`/`FrameNumWrap` arithmetic is
+/// simple enough, and different enough from JM's own field/MBAFF-generalised
+/// implementation, that reproducing the frame-only case directly from the
+/// normative text was more direct than isolating JM's own short-term path
+/// from a function that also carries fields/`mb_aff` handling this crate
+/// does not need.
+fn apply_ref_list_modification(
+    dpb: &VecDeque<RefPicture>,
+    default_list: &[usize],
+    num_active: usize,
+    mods: &[RefPicListModification],
+    curr_frame_num: u32,
+    max_frame_num: u32,
+) -> Result<Vec<usize>> {
+    if mods.is_empty() {
+        return Ok(default_list.to_vec());
+    }
+    let max_pic_num = i64::from(max_frame_num);
+    let mut list: Vec<usize> = default_list.to_vec();
+    // Clause 8.2.4.3.1's own algorithm works on a list already sized
+    // `num_ref_idx_lX_active_minus1 + 1` -- pad with the last default
+    // entry rather than index out of range if the DPB itself holds fewer
+    // pictures than the slice header claims are active (defensive; a
+    // conformant stream never needs this).
+    while list.len() < num_active + 1 {
+        let Some(&last) = list.last() else { break };
+        list.push(last);
+    }
+    let mut curr_pic_num_pred = i64::from(curr_frame_num);
+    let mut ref_idx = 0usize;
+    for m in mods {
+        if m.idc == 2 {
+            return Err(Error::Unsupported(
+                "vaco-codec-h264: long-term reference picture reordering (modification_of_pic_nums_idc == 2) is out of scope -- this decoder's DPB has no long-term slot at all",
+            ));
+        }
+        let abs_diff = i64::from(m.value) + 1;
+        let pic_num_no_wrap = if m.idc == 0 {
+            let mut v = curr_pic_num_pred - abs_diff;
+            if v < 0 {
+                v += max_pic_num;
+            }
+            v
+        } else {
+            let mut v = curr_pic_num_pred + abs_diff;
+            if v >= max_pic_num {
+                v -= max_pic_num;
+            }
+            v
+        };
+        curr_pic_num_pred = pic_num_no_wrap;
+        let pic_num =
+            if pic_num_no_wrap > i64::from(curr_frame_num) { pic_num_no_wrap - max_pic_num } else { pic_num_no_wrap };
+        let Some(found) = (0..dpb.len()).find(|&i| {
+            dpb.get(i).is_some_and(|p| frame_num_wrap(p.frame_num, curr_frame_num, max_frame_num) == pic_num)
+        }) else {
+            return Err(Error::InvalidData(
+                "vaco-codec-h264: ref_pic_list_modification named a picture not present in the DPB",
+            ));
+        };
+        if ref_idx >= list.len() {
+            list.push(found);
+        } else {
+            list.insert(ref_idx, found);
+        }
+        if list.len() > num_active + 1 {
+            list.truncate(num_active + 1);
+        }
+        // Clause 8.2.4.3.1's own compaction: remove the *other* occurrence
+        // of `found` beyond the position it was just inserted at (there is
+        // at most one, since every earlier step already maintained
+        // uniqueness within the active range).
+        let mut w = ref_idx + 1;
+        for r in (ref_idx + 1)..list.len() {
+            let Some(&v) = list.get(r) else { continue };
+            if v == found {
+                continue;
+            }
+            if let Some(slot) = list.get_mut(w) {
+                *slot = v;
+            }
+            w += 1;
+        }
+        list.truncate(w);
+        ref_idx += 1;
+    }
+    list.truncate(num_active.min(list.len()));
+    Ok(list)
 }
 
 /// The H.264 decoder. See the module doc for exactly what is and is not
@@ -155,6 +305,12 @@ pub struct H264Decoder {
     /// Sliding-window DPB, most-recently-decoded reference picture last —
     /// see the module doc's "reference picture buffering" section.
     dpb: VecDeque<RefPicture>,
+    /// Output reorder buffer -- see the module doc's "output ordering"
+    /// section. `(poc, frame)`, unordered internally (the minimum is found
+    /// on demand); small by construction (bounded by the reorder window
+    /// below), so a linear scan costs nothing a `BinaryHeap` would
+    /// meaningfully improve on.
+    reorder: Vec<(i32, Frame)>,
 }
 
 impl H264Decoder {
@@ -165,17 +321,57 @@ impl H264Decoder {
             parser: H264Parser::new(limits.clone()),
             budget: Budget::new(limits.clone()),
             rbsp: vaco_format_nalu::RbspBuf::new(),
-            machine: Machine::new(Caps::empty()),
+            // `Caps::DELAY`: this decoder can hold more than one decoded
+            // picture before emitting the next one in display order (see
+            // the module doc's "output ordering" section) -- without this,
+            // `Machine` polices "at most one buffered output" in debug
+            // builds and caps its own queue at one, which a multi-picture
+            // reorder window is not.
+            machine: Machine::new(Caps::DELAY),
             dpb: VecDeque::new(),
+            reorder: Vec::new(),
             limits,
         }
     }
 
-    /// Decode one packet (one MP4 sample / access unit) into at most one
-    /// frame. `Ok(None)` means the access unit carried no primary-coded
-    /// picture (parameter sets/SEI only), which is legal and not an
-    /// error.
-    fn decode_packet(&mut self, pkt: &Packet) -> Result<Option<Frame>> {
+    /// Emit the lowest-POC pending picture, if any -- the reorder buffer's
+    /// own single "let one out" step, called either because the buffer is
+    /// full ([`Self::decode_packet`]) or because everything must go
+    /// (an IDR about to reset POC, or end of stream).
+    ///
+    /// Takes `reorder`/`machine` as explicit fields, not `&mut self`, so
+    /// it can be called from inside [`Self::decode_packet`] while `sps`/
+    /// `pps` (borrowed from `self.parser`) or `rbsp` (borrowed from
+    /// `self.rbsp`) are still alive -- a method taking `&mut self`
+    /// conservatively borrows the *whole* struct even though this one
+    /// only ever touches these two fields, which is exactly what made an
+    /// earlier version of this call site a borrow-checker error rather
+    /// than a real aliasing problem.
+    fn emit_lowest_poc(reorder: &mut Vec<(i32, Frame)>, machine: &mut Machine<Frame>) {
+        let Some((idx, _)) = reorder.iter().enumerate().min_by_key(|(_, (poc, _))| *poc) else {
+            return;
+        };
+        let (_, frame) = reorder.swap_remove(idx);
+        machine.emit(frame);
+    }
+
+    /// Flush every pending reordered picture, in ascending POC order --
+    /// used both at an IDR (POC is about to restart near zero, so nothing
+    /// from before it may be held back past it) and at end of stream. See
+    /// [`Self::emit_lowest_poc`]'s own doc for why this takes explicit
+    /// fields rather than `&mut self`.
+    fn flush_reorder(reorder: &mut Vec<(i32, Frame)>, machine: &mut Machine<Frame>) {
+        while !reorder.is_empty() {
+            Self::emit_lowest_poc(reorder, machine);
+        }
+    }
+
+    /// Decode one packet (one MP4 sample / access unit), pushing whatever
+    /// pictures become ready for output into `self.machine`. `Ok(())`
+    /// covers both "nothing to do" (no primary-coded picture in this
+    /// access unit) and "decoded, but still held for reordering".
+    #[allow(clippy::too_many_lines)]
+    fn decode_packet(&mut self, pkt: &Packet) -> Result<()> {
         let payload = pkt.payload();
         let framing = self.parser.framing();
 
@@ -185,7 +381,7 @@ impl H264Decoder {
         // no VCL slice at all.
         let info = self.parser.push_access_unit(payload, framing)?;
         if info.picture_type.is_none() {
-            return Ok(None);
+            return Ok(());
         }
 
         // Locate this access unit's one primary-coded-picture slice --
@@ -215,7 +411,7 @@ impl H264Decoder {
             ));
         }
         let Some(nal_bytes) = slice_nal else {
-            return Ok(None);
+            return Ok(());
         };
         let nal = H264NalHeader::parse(nal_bytes).ok_or(Error::InvalidData("empty NAL unit"))?;
 
@@ -254,16 +450,21 @@ impl H264Decoder {
 
         if info.is_idr {
             // clause 8.2.5.1: an IDR access unit empties the DPB before
-            // anything in it decodes, so a P slice can never reach across
-            // a GOP boundary. Every evicted picture's planes were charged
-            // to `self.budget` when they were pushed (see the reference-
-            // picture push below) and must be released here, not just
-            // dropped -- #421: `Budget::release` is never automatic, so a
-            // `clear()` that does not call it leaves `committed` counting
-            // bytes real memory no longer holds.
+            // anything in it decodes, so a P/B slice can never reach
+            // across a GOP boundary. Every evicted picture's planes were
+            // charged to `self.budget` when they were pushed (see the
+            // reference-picture push below) and must be released here,
+            // not just dropped -- #421: `Budget::release` is never
+            // automatic, so a `clear()` that does not call it leaves
+            // `committed` counting bytes real memory no longer holds.
             for evicted in self.dpb.drain(..) {
                 self.budget.release(ref_picture_bytes(&evicted));
             }
+            // POC restarts near zero at an IDR (clause 8.2.1) -- every
+            // picture still held for reordering must go out first, in POC
+            // order, or it could sort *after* a post-IDR picture with a
+            // numerically smaller POC and be emitted out of order.
+            Self::flush_reorder(&mut self.reorder, &mut self.machine);
         }
 
         if !pps.entropy_coding_mode {
@@ -276,9 +477,20 @@ impl H264Decoder {
 
         let mbs_wide = sps.pic_width_in_mbs;
         let mbs_high = sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
+        let luma4_width = mbs_wide * 4;
         let chroma_qp_offset_cb = pps.chroma_qp_index_offset;
         let chroma_qp_offset_cr = pps.second_chroma_qp_index_offset;
         let max_num_ref_frames = sps.max_num_ref_frames;
+        let max_frame_num = sps.max_frame_num();
+        // Extracted now, alongside `dimensions`/`crop_unit`/`crop` below,
+        // and for the identical reason: `sps` borrows `self.parser`, and
+        // `self.build_frame` (called near the end of this function) needs
+        // `&mut self` to allocate through -- a method call's `&mut self`
+        // conservatively borrows the whole struct, so `sps` cannot still
+        // be alive by then.
+        let reorder_window = sps.max_num_reorder_frames().unwrap_or(max_num_ref_frames).max(1) as usize;
+        let curr_poc = info.poc.value();
+        let is_b_slice = matches!(slice_header.kind, SliceKind::B);
         // Extracted now, not read from `sps`/`pps` again later: both
         // borrow `self.parser`, which `build_frame` below needs `&mut
         // self` to allocate through.
@@ -286,8 +498,77 @@ impl H264Decoder {
         let crop_unit = sps.crop_unit();
         let crop = sps.crop.unwrap_or_default();
 
+        // Clause 8.2.4.2's default reference-picture list construction,
+        // then clause 8.2.4.3's `ref_pic_list_modification()` -- both as
+        // DPB indices, materialised into real plane/motion references only
+        // once the final order is known.
+        let curr_frame_num = slice_header.frame_num;
+        let list0_default: Vec<usize> = if is_b_slice {
+            let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
+            idx.sort_by_key(|&i| {
+                let poc = i64::from(self.dpb.get(i).map_or(0, |p| p.poc));
+                if poc < i64::from(curr_poc) { (0i8, -poc) } else { (1i8, poc) }
+            });
+            idx
+        } else {
+            let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
+            idx.sort_by_key(|&i| {
+                core::cmp::Reverse(frame_num_wrap(self.dpb.get(i).map_or(0, |p| p.frame_num), curr_frame_num, max_frame_num))
+            });
+            idx
+        };
+        let mut list1_default: Vec<usize> = Vec::new();
+        if is_b_slice {
+            let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
+            idx.sort_by_key(|&i| {
+                let poc = i64::from(self.dpb.get(i).map_or(0, |p| p.poc));
+                if poc > i64::from(curr_poc) { (0i8, poc) } else { (1i8, -poc) }
+            });
+            // Clause 8.2.4.2.3's own swap: if list 1 has more than one
+            // entry and is identical to list 0, its first two entries
+            // swap.
+            if idx.len() > 1 && idx == list0_default {
+                idx.swap(0, 1);
+            }
+            list1_default = idx;
+        }
+        let n0 = usize::try_from(slice_header.num_ref_idx_l0_active_minus1).unwrap_or(0) + 1;
+        let n1 = usize::try_from(slice_header.num_ref_idx_l1_active_minus1).unwrap_or(0) + 1;
+        let list0_idx = apply_ref_list_modification(
+            &self.dpb,
+            &list0_default,
+            n0,
+            &slice_header.ref_pic_list_modification_l0,
+            curr_frame_num,
+            max_frame_num,
+        )?;
+        let list1_idx = if is_b_slice {
+            apply_ref_list_modification(
+                &self.dpb,
+                &list1_default,
+                n1,
+                &slice_header.ref_pic_list_modification_l1,
+                curr_frame_num,
+                max_frame_num,
+            )?
+        } else {
+            Vec::new()
+        };
+
+        // Clause 8.4.1.2.1's own colocated picture, always `RefPicList1[0]`
+        // -- built once here (borrowing `self.dpb`) so it can be handed
+        // into `decode_slice_cabac` before the borrow of `self.dpb` this
+        // function needs later (pushing this picture's own copy) begins.
+        let colocated: Option<ColocatedField> = if is_b_slice {
+            list1_idx.first().and_then(|&i| self.dpb.get(i)).map(|p| ColocatedField::new(luma4_width, mbs_high * 4, p.motion.clone()))
+        } else {
+            None
+        };
+
         let mut cabac = CabacDecoder::from_reader(reader);
-        let stats = crate::mb::decode_slice_cabac(&mut cabac, &mut self.budget, sps, pps, &slice_header)?;
+        let stats =
+            crate::mb::decode_slice_cabac(&mut cabac, &mut self.budget, sps, pps, &slice_header, colocated.as_ref())?;
+        drop(colocated);
         if cabac.malformed() {
             return Err(Error::InvalidData(
                 "vaco-codec-h264: CABAC engine reported malformed input",
@@ -304,24 +585,6 @@ impl H264Decoder {
         // `stats.macroblocks` only covers whatever was actually visited
         // before a premature `end_of_slice_flag`, and `reconstruct_picture`
         // leaves the rest of the picture at its own default fill.
-        //
-        // This crate's own `assert_slice_ends_at_rbsp_trailing_bits` test
-        // helper goes one step further and also checks that what
-        // immediately follows `end_of_slice_flag` is a clean
-        // `rbsp_slice_trailing_bits()` pattern (clause 7.3.2.10) -- **that
-        // check was tried here too and reverted**: measured directly
-        // against this crate's own byte-exact-pixel-output corpus
-        // (`cabac_i_only.264`, `crate::reconstruct`'s own 100%-match-
-        // against-ffmpeg fixture), it produces false positives -- content
-        // whose every sample is already proven byte-exact still fails
-        // the trailing-bits alignment check on several frames. That is
-        // exactly the "right answers, wrong bit cost" phenomenon
-        // `tests/macroblock_layer_cabac.rs`'s own ignored tests describe:
-        // a CABAC arithmetic-engine bit-accounting discrepancy confined
-        // to the terminating decision itself, not a defect that reaches
-        // any decoded sample. Enforcing it here would refuse decodes this
-        // crate has already proven correct, which is a worse failure than
-        // the gap it was meant to close.
         let total_mbs = mbs_wide.saturating_mul(mbs_high);
         if stats.macroblock_count != total_mbs {
             return Err(Error::InvalidData(
@@ -332,25 +595,61 @@ impl H264Decoder {
             ));
         }
 
-        let ref_list0: Vec<RefPicturePlanes<'_>> = self
-            .dpb
+        let ref_list0: Vec<RefPicturePlanes<'_>> = list0_idx
             .iter()
-            .rev()
-            .map(|r| RefPicturePlanes {
-                luma: &r.luma,
-                cb: &r.cb,
-                cr: &r.cr,
-            })
+            .filter_map(|&i| self.dpb.get(i))
+            .map(|r| RefPicturePlanes { luma: &r.luma, cb: &r.cb, cr: &r.cr })
             .collect();
+        let ref_list1: Vec<RefPicturePlanes<'_>> = list1_idx
+            .iter()
+            .filter_map(|&i| self.dpb.get(i))
+            .map(|r| RefPicturePlanes { luma: &r.luma, cb: &r.cb, cr: &r.cr })
+            .collect();
+        // `crate::deblock::boundary_strength`'s own reference-picture-identity
+        // lookup (its own doc): the same DPB positions as `ref_list0`/
+        // `ref_list1` above, as POCs rather than sample planes -- deblocking
+        // never touches pixels, only needs to tell two references apart.
+        let ref_list0_poc: Vec<i32> = list0_idx.iter().filter_map(|&i| self.dpb.get(i)).map(|r| r.poc).collect();
+        let ref_list1_poc: Vec<i32> = list1_idx.iter().filter_map(|&i| self.dpb.get(i)).map(|r| r.poc).collect();
 
         // Clause 8.4.2.3's `pred_weight_table()`, already parsed by
         // `vaco-parse-h264` (it has to be, the bits are in the slice
-        // header) but never used until now. `weighted_pred_flag` is
-        // x264's own default for P slices, so this is the common path,
-        // not an exotic one.
-        let weights = crate::reconstruct::SliceWeightTables::from_table(
-            slice_header.pred_weight_table.as_ref(),
-        );
+        // header) -- `weighted_pred_flag` is x264's own default for P
+        // slices, and `weighted_bipred_idc == 1` (explicit) makes it real
+        // for B slices too.
+        let weights = SliceWeightTables::from_table(slice_header.pred_weight_table.as_ref());
+        let bipred_mode = if is_b_slice {
+            match pps.weighted_bipred_idc {
+                1 => BiPredMode::Explicit,
+                2 => BiPredMode::Implicit,
+                _ => BiPredMode::Default,
+            }
+        } else {
+            BiPredMode::Default
+        };
+        // Clause 8.4.2.3.2's implicit weights (`weighted_bipred_idc == 2`,
+        // **x264's own default for B slices**): one `(w0, w1)` pair per
+        // `(ref_idx_l0, ref_idx_l1)` combination, derived from every
+        // candidate's own POC -- `crate::reconstruct` never sees a POC at
+        // all, so this table is built here and handed in as a plain
+        // lookup, transcribed from JM 19.1's `image.c::fill_wp_params`
+        // (Tier A per `provenance/sources.toml`) rather than re-derived
+        // from the specification prose a second time.
+        let implicit_weights = (is_b_slice && pps.weighted_bipred_idc == 2).then(|| {
+            let table: Vec<Vec<ImplicitWeight>> = list0_idx
+                .iter()
+                .filter_map(|&i0| self.dpb.get(i0))
+                .map(|r0| {
+                    list1_idx
+                        .iter()
+                        .filter_map(|&i1| self.dpb.get(i1))
+                        .map(|r1| implicit_weight(curr_poc, r0.poc, r1.poc))
+                        .collect()
+                })
+                .collect();
+            ImplicitWeights::new(table)
+        });
+
         let mut pic: ReconstructedPicture = reconstruct_picture(
             &stats.macroblocks,
             mbs_wide,
@@ -358,16 +657,20 @@ impl H264Decoder {
             chroma_qp_offset_cb,
             chroma_qp_offset_cr,
             &ref_list0,
+            &ref_list1,
             &weights,
+            bipred_mode,
+            implicit_weights.as_ref(),
             &mut self.budget,
         )?;
         drop(ref_list0);
+        drop(ref_list1);
 
-        // Clause 8.7's deblocking filter, luma and chroma, both I and P
-        // slices -- `crate::deblock`'s own module doc has the full
+        // Clause 8.7's deblocking filter, luma and chroma, every slice
+        // kind -- `crate::deblock`'s own module doc has the full
         // boundary-strength derivation (Table 8-18, collapsed to this
-        // decoder's single-reference-list P-slice scope) and the
-        // luma-to-chroma `bS` mapping for 4:2:0.
+        // decoder's non-MBAFF scope) and the luma-to-chroma `bS` mapping
+        // for 4:2:0.
         crate::deblock::deblock_picture_luma(
             &mut pic.luma,
             &stats.macroblocks,
@@ -376,6 +679,8 @@ impl H264Decoder {
             slice_header.disable_deblocking_filter_idc,
             slice_header.slice_alpha_c0_offset_div2,
             slice_header.slice_beta_offset_div2,
+            &ref_list0_poc,
+            &ref_list1_poc,
         )?;
         for (chroma, offset) in [(&mut pic.cb, chroma_qp_offset_cb), (&mut pic.cr, chroma_qp_offset_cr)] {
             crate::deblock::deblock_picture_chroma(
@@ -387,6 +692,8 @@ impl H264Decoder {
                 slice_header.disable_deblocking_filter_idc,
                 slice_header.slice_alpha_c0_offset_div2,
                 slice_header.slice_beta_offset_div2,
+                &ref_list0_poc,
+                &ref_list1_poc,
             );
         }
 
@@ -404,21 +711,51 @@ impl H264Decoder {
             // `max_alloc_total`-bounded run fit.
             while self.dpb.len() > cap.saturating_sub(1) {
                 // #421: the picture this evicts was charged to the budget
-                // by the `budgeted_clone` calls below (on a previous call
-                // to this method) -- `pop_front` alone drops its `Vec`s
-                // (real memory freed correctly) without ever telling
-                // `Budget` those bytes are free, which is what let
-                // `committed` climb forever and cap 1080p at exactly 10
-                // frames. Releasing here is the other half of that same
-                // fix, matched to the `budgeted_clone` charge below.
+                // by the `budgeted_clone`/`Budget::alloc` calls below (on
+                // a previous call to this method) -- `pop_front` alone
+                // drops its `Vec`s (real memory freed correctly) without
+                // ever telling `Budget` those bytes are free, which is
+                // what let `committed` climb forever and cap 1080p at
+                // exactly 10 frames. Releasing here is the other half of
+                // that same fix, matched to the charges below.
                 if let Some(evicted) = self.dpb.pop_front() {
                     self.budget.release(ref_picture_bytes(&evicted));
+                }
+            }
+            // This picture's own per-4x4-luma-block motion field, built
+            // from `stats.macroblocks` (already computed by
+            // `decode_slice_cabac`, never re-derived) for a *future* B
+            // slice's own spatial direct prediction -- see
+            // `ColocatedField`'s own doc. `mv_blocks` is raster order
+            // within one macroblock (`[y*4+x]`, its own doc says so),
+            // matching this flat grid's own `y*width+x` addressing with
+            // no z-scan conversion needed.
+            let n_luma4 = usize::try_from(luma4_width.saturating_mul(mbs_high * 4)).unwrap_or(0);
+            let mut motion: Vec<MvInfo> = self.budget.alloc(n_luma4)?;
+            for mb in &stats.macroblocks {
+                for (i, &block) in mb.mv_blocks.iter().enumerate() {
+                    // `i % 4` / `i / 4`, spelled as bit ops so this isn't an
+                    // `integer_division` lint hit: 4 is a compile-time
+                    // power of two, `mv_blocks`' own fixed raster stride
+                    // (see this loop's own doc above).
+                    let bx = u32::try_from(i & 3).unwrap_or(0);
+                    let by = u32::try_from(i >> 2).unwrap_or(0);
+                    let x = mb.mb_x * 4 + bx;
+                    let y = mb.mb_y * 4 + by;
+                    if let Some(idx) = usize::try_from(y.saturating_mul(luma4_width).saturating_add(x)).ok()
+                        && let Some(slot) = motion.get_mut(idx)
+                    {
+                        *slot = block;
+                    }
                 }
             }
             let stored = RefPicture {
                 luma: budgeted_clone(&mut self.budget, &pic.luma)?,
                 cb: budgeted_clone(&mut self.budget, &pic.cb)?,
                 cr: budgeted_clone(&mut self.budget, &pic.cr)?,
+                poc: curr_poc,
+                frame_num: curr_frame_num,
+                motion,
             };
             self.dpb.push_back(stored);
         }
@@ -452,7 +789,18 @@ impl H264Decoder {
         // `-refs 1` stream fail after a fixed frame count regardless of
         // the DPB's own bound.
         self.budget.release(reconstructed_picture_bytes(&pic));
-        Ok(Some(frame))
+
+        // Hold for reordering rather than emit immediately -- see the
+        // module doc's "output ordering" section. A window of `w` pictures
+        // means at most `w` may be held at once; once a new one would make
+        // `w + 1`, the lowest-POC one is definitely safe to emit (no
+        // future picture in a conformant stream can have a lower POC than
+        // every one already seen, past `w` pictures of slack).
+        self.reorder.push((curr_poc, frame));
+        if self.reorder.len() > reorder_window {
+            Self::emit_lowest_poc(&mut self.reorder, &mut self.machine);
+        }
+        Ok(())
     }
 
     /// Crops `pic` from its coded (macroblock-aligned) size down to the
@@ -504,6 +852,35 @@ impl H264Decoder {
     }
 }
 
+/// Clause 8.4.2.3.2's implicit bi-prediction weight for one `(ref_idx_l0,
+/// ref_idx_l1)` pair, given the three pictures' own POCs -- transcribed
+/// from JM 19.1's `image.c::fill_wp_params` (Tier A). `logWD` is fixed at
+/// 5 for this mode (not carried in the return value: `crate::reconstruct`'s
+/// own `BiPredMode::Implicit` branch hard-codes the same `5`, one
+/// definition of the constant rather than two).
+#[allow(
+    clippy::integer_division,
+    reason = "clause 8.4.2.3.2's own fixed-point formula (`tx = (16384 + Abs(td/2)) / td`, td != \
+              0 checked immediately above) is exact integer arithmetic by specification, not an \
+              approximation a float would improve"
+)]
+fn implicit_weight(curr_poc: i32, ref0_poc: i32, ref1_poc: i32) -> ImplicitWeight {
+    let td = i64::from(ref1_poc.saturating_sub(ref0_poc)).clamp(-128, 127);
+    if td == 0 {
+        return ImplicitWeight { w0: 32, w1: 32 };
+    }
+    let tb = i64::from(curr_poc.saturating_sub(ref0_poc)).clamp(-128, 127);
+    let tx = (16_384 + (td / 2).abs()) / td;
+    let dist_scale_factor = ((tx * tb + 32) >> 6).clamp(-1024, 1023);
+    let w1 = dist_scale_factor >> 2;
+    let w0 = 64 - w1;
+    if !(-64..=128).contains(&w1) {
+        return ImplicitWeight { w0: 32, w1: 32 };
+    }
+    #[allow(clippy::cast_possible_truncation, reason = "w0/w1 are checked into -64..=128 immediately above")]
+    ImplicitWeight { w0: w0 as i32, w1: w1 as i32 }
+}
+
 /// Copies one `width x height` region of `src` (row-major, `src_stride`
 /// wide) starting at `(x0, y0)` into `frame`'s plane `plane_index` --
 /// [`crate::interp`]'s own edge-clamping is not needed here, since the
@@ -527,19 +904,15 @@ impl Decoder for H264Decoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         match self.machine.accept(packet.is_none())? {
             Accept::Drain => {
+                // End of stream: everything still held for reordering is
+                // now known-safe to emit, in POC order.
+                Self::flush_reorder(&mut self.reorder, &mut self.machine);
                 self.machine.finish();
                 Ok(())
             }
             Accept::Input => {
                 let Some(pkt) = packet else { return Ok(()) };
-                match self.decode_packet(pkt) {
-                    Ok(Some(frame)) => {
-                        self.machine.emit(frame);
-                        Ok(())
-                    }
-                    Ok(None) => Ok(()),
-                    Err(e) => Err(e),
-                }
+                self.decode_packet(pkt)
             }
         }
     }
@@ -552,6 +925,12 @@ impl Decoder for H264Decoder {
         self.machine.flush();
         self.parser.flush();
         self.dpb.clear();
+        // Every pending reordered frame is discarded, not emitted --
+        // `Machine::flush`'s own contract ("what a fresh machine looks
+        // like") applies to this decoder's own output-ordering state too,
+        // matching a seek's own "the old position no longer matters"
+        // semantics.
+        self.reorder.clear();
         // Release every reference-frame byte charged to the budget along
         // with the state that held them, mirroring
         // `vaco_codec_vp8::Vp8Decoder::flush`'s own precedent.

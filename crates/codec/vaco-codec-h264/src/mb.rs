@@ -1617,6 +1617,15 @@ struct CabacMbInfo {
     /// non-8x8-eligible inter shape, `I_PCM`, skipped), matching clause
     /// 9.3.3.1.1.10's own "not available" reducing to 0.
     transform_8x8: bool,
+    /// `true` only for a whole-macroblock `B_Direct_16x16` (`mb_type == 0`
+    /// in a B slice) — clause 9.3.3.1.1.3's own `ctxIdxInc(0)` for the
+    /// *next* macroblock's `mb_type` (B slices) needs "is this neighbour's
+    /// own `mb_type` equal to `B_Direct_16x16`" as a condition distinct
+    /// from mere availability or skip status. Deliberately **not** set for
+    /// a `B_8x8` macroblock that happens to carry a `B_Direct_8x8`
+    /// sub-partition — the condition is about the *macroblock's own*
+    /// `mb_type` value, not "does any part of it use direct prediction".
+    is_b_direct16x16: bool,
 }
 
 /// One 4x4 luma block's motion-prediction neighbour state — [`None`]
@@ -1668,6 +1677,26 @@ impl MvInfo {
 
     pub(crate) const fn mv_l0(&self) -> (i16, i16) {
         self.mv[0]
+    }
+
+    pub(crate) const fn ref_idx_l1(&self) -> i8 {
+        self.ref_idx[1]
+    }
+
+    pub(crate) const fn mv_l1(&self) -> (i16, i16) {
+        self.mv[1]
+    }
+
+    /// Whether this block's own prediction reads list 0 / list 1 --
+    /// `crate::reconstruct`'s own dispatch between an `L0`-only, `L1`-only
+    /// and `Bi` block, matching [`PartPred::reads_l0`]/`reads_l1`'s own
+    /// answer without exposing `pred` itself outside this module.
+    pub(crate) const fn reads_l0(&self) -> bool {
+        matches!(self.pred, Some(PartPred::L0 | PartPred::Bi))
+    }
+
+    pub(crate) const fn reads_l1(&self) -> bool {
+        matches!(self.pred, Some(PartPred::L1 | PartPred::Bi))
     }
 
     /// This neighbour's contribution to `crate::motion`'s median
@@ -1867,6 +1896,7 @@ impl CabacGrids {
             intra_chroma_pred_mode: 0,
             intra16x16_pred_mode: 0,
             transform_8x8: false,
+            is_b_direct16x16: false,
         }
     }
 
@@ -2163,6 +2193,17 @@ fn mb_type_i_cond_term(neighbour: Option<CabacMbInfo>) -> u32 {
     }
 }
 
+/// clause 9.3.3.1.1.3's `condTermFlagN` for B-slice `mb_type`
+/// (`ctxIdxOffset == 27`, `binIdx == 0`): 0 if unavailable, skipped
+/// (`B_Skip`), or the neighbour's own `mb_type` is `B_Direct_16x16`, else
+/// 1 -- distinct from [`mb_type_i_cond_term`]'s "is this an `I_NxN`"
+/// question, and from every other `ctxIdxInc` here in checking *three*
+/// conditions (availability, skip, and a specific `mb_type` value) rather
+/// than two.
+fn mb_type_b_cond_term(neighbour: Option<CabacMbInfo>) -> u32 {
+    neighbour.map_or(0, |info| u32::from(!info.skipped && !info.is_b_direct16x16))
+}
+
 /// clause 9.3.3.1.1.10's `condTermFlagN` for `transform_size_8x8_flag`: the
 /// neighbour's own decoded flag value, 0 if unavailable (no `I_PCM`/skipped
 /// special case here -- neither ever reads this flag, so `CabacMbInfo`'s
@@ -2292,6 +2333,140 @@ fn decode_sub_mb_type_p(cabac: &mut CabacDecoder<'_>, ctx: &mut [ContextModel; 3
     if decide(cabac, ctx, 2) == 0 { 3 } else { 2 }
 }
 
+/// Table 9-27's B-slice `mb_type`, `ctx` spanning ctxIdx 27..=32 (six
+/// contexts — [`cabac_mb_tables::MB_TYPE_B`]'s local indices 0..=5; its
+/// remaining three rows, 6..=8, are a deliberate duplicate of
+/// [`MB_TYPE_P`]'s own local 4..=6 and are never read through this array --
+/// see below). `suffix_ctx` is the *same physical* four-context state
+/// [`decode_mb_type_intra_suffix`] already threads through
+/// [`decode_mb_type_p`] (`ctx.mb_type_p`'s own local 3..=6, ctxIdx 17..=20):
+/// clause 9.3.3.1.2's own text gives `mb_type`'s "Intra" suffix in B slices
+/// the identical `ctxIdxOffset` range P/SP slices use, not a B-specific
+/// copy, which is exactly what `cabac_mb_tables::MB_TYPE_B`'s own doc
+/// already notes and JM 19.1's `cabac.c::readMB_typeInfo_CABAC_b_slice`
+/// independently confirms (its own intra-suffix branch reads through
+/// `ctx->mb_type_contexts[1]`, the **P** array, not `[2]`) -- since a slice
+/// is always single-kind, at most one of P's own suffix decode or this
+/// one ever runs against that shared state in a given slice, so no
+/// cross-slice-type interference is possible.
+///
+/// The decision tree itself (`act_sym`'s construction below) is transcribed
+/// from that same JM function rather than hand-derived from Table 9-27's
+/// bin strings directly -- the crate's own prior attempt at this
+/// binarisation was abandoned for exactly the reason this transcription
+/// avoids: no independent way to check a hand-derivation bit by bit. Every
+/// one of the 25 possible `act_sym` outputs (0..=24, where 24 is the
+/// sentinel meaning "read the Intra suffix") was traced by hand against
+/// JM's own bit-reads before being accepted here (see the exhaustive
+/// `mb_type_b_covers_every_code_from_0_to_24_exactly_once` test below).
+///
+/// `inc0` is clause 9.3.3.1.1.3's own ctxIdxInc(0) — [`mb_type_b_cond_term`]
+/// summed over the left/above neighbours, already clamped to 0..=2 by the
+/// only two neighbours that exist.
+enum MbTypeBPrefix {
+    Code(u32),
+    NeedsIntraSuffix,
+}
+
+/// The decision tree itself, decoupled from [`CabacDecoder`] so
+/// `tests::mb_type_b_prefix_covers_every_code_from_0_to_23_or_the_sentinel_exactly_once`
+/// can brute-force every reachable bit sequence without a real bitstream —
+/// [`decode_mb_type_b`] is a thin wrapper feeding `bit` from `decide`.
+/// `inc0` is only ever consulted for the very first decision.
+fn decode_mb_type_b_prefix(inc0: usize, mut bit: impl FnMut(usize) -> u32) -> MbTypeBPrefix {
+    if bit(inc0.min(2)) == 0 {
+        return MbTypeBPrefix::Code(0); // B_Direct_16x16
+    }
+    if bit(3) == 0 {
+        return MbTypeBPrefix::Code(if bit(5) == 1 { 2 } else { 1 });
+    }
+    if bit(4) == 0 {
+        let b1 = bit(5);
+        let b2 = bit(5);
+        let b3 = bit(5);
+        return MbTypeBPrefix::Code(3 + 4 * b1 + 2 * b2 + b3);
+    }
+    let b1 = bit(5);
+    let b2 = bit(5);
+    let b3 = bit(5);
+    let mut act_sym = 12 + 8 * b1 + 4 * b2 + 2 * b3;
+    if act_sym == 24 {
+        return MbTypeBPrefix::Code(11);
+    }
+    if act_sym == 26 {
+        return MbTypeBPrefix::Code(22);
+    }
+    if act_sym == 22 {
+        act_sym = 23;
+    }
+    act_sym += bit(5);
+    if act_sym == 24 {
+        return MbTypeBPrefix::NeedsIntraSuffix;
+    }
+    MbTypeBPrefix::Code(act_sym)
+}
+
+fn decode_mb_type_b(cabac: &mut CabacDecoder<'_>, ctx: &mut [ContextModel; 9], mb_type_p: &mut [ContextModel; 7], inc0: usize) -> u32 {
+    match decode_mb_type_b_prefix(inc0, |idx| decide(cabac, ctx, idx)) {
+        MbTypeBPrefix::Code(v) => v,
+        MbTypeBPrefix::NeedsIntraSuffix => {
+            let mut suffix_ctx = [mb_type_p[3], mb_type_p[4], mb_type_p[5], mb_type_p[6]];
+            let v = decode_mb_type_intra_suffix(cabac, &mut suffix_ctx);
+            mb_type_p[3] = suffix_ctx[0];
+            mb_type_p[4] = suffix_ctx[1];
+            mb_type_p[5] = suffix_ctx[2];
+            mb_type_p[6] = suffix_ctx[3];
+            23 + v
+        }
+    }
+}
+
+/// Table 9-28's B-slice `sub_mb_type`, `ctx` spanning ctxIdx 36..=39 --
+/// transcribed the same way, and for the same reason, as
+/// [`decode_mb_type_b`]'s own doc explains: from JM 19.1's
+/// `cabac.c::readB8_typeInfo_CABAC_b_slice`, bit-traced by hand against
+/// every one of the 13 possible `sub_mb_type` codes (see this file's own
+/// `sub_mb_type_b_covers_every_code_from_0_to_12_exactly_once` test).
+/// As [`decode_mb_type_b_prefix`]: the pure tree, decoupled from
+/// [`CabacDecoder`] for exhaustive testing.
+fn decode_sub_mb_type_b_tree(mut bit: impl FnMut(usize) -> u32) -> u32 {
+    if bit(0) == 0 {
+        return 0; // B_Direct_8x8
+    }
+    let base = if bit(1) == 0 {
+        u32::from(bit(3) == 1)
+    } else if bit(2) == 0 {
+        let mut v = 2;
+        if bit(3) == 1 {
+            v += 2;
+        }
+        if bit(3) == 1 {
+            v += 1;
+        }
+        v
+    } else if bit(3) == 0 {
+        let mut v = 6;
+        if bit(3) == 1 {
+            v += 2;
+        }
+        if bit(3) == 1 {
+            v += 1;
+        }
+        v
+    } else {
+        let mut v = 10;
+        if bit(3) == 1 {
+            v += 1;
+        }
+        v
+    };
+    base + 1
+}
+
+fn decode_sub_mb_type_b(cabac: &mut CabacDecoder<'_>, ctx: &mut [ContextModel; 4]) -> u32 {
+    decode_sub_mb_type_b_tree(|idx| decide(cabac, ctx, idx))
+}
+
 /// `ref_idx_lX`, clause 9.3.2.1's `U` binarisation with clause 9.3.3.1.1.6's
 /// `ctxIdxInc`. Unary has no formal cap; capped defensively (D6) well past
 /// any real reference-picture-list length.
@@ -2388,6 +2563,17 @@ struct CabacMbCtx {
     skip_p: [ContextModel; 3],
     mb_type_p: [ContextModel; 7],
     sub_mb_type_p: [ContextModel; 3],
+    /// `mb_skip_flag`, B slices -- ctxIdx 24..=26.
+    skip_b: [ContextModel; 3],
+    /// `mb_type`, B slices -- local 0..=5 real (ctxIdx 27..=32); local
+    /// 6..=8 initialised from [`cabac_mb_tables::MB_TYPE_B`]'s own
+    /// deliberate duplicate of `mb_type_p`'s suffix rows but never read
+    /// through this array (`decode_mb_type_b` reads the *shared* suffix
+    /// state through `mb_type_p` itself instead -- see that function's
+    /// own doc).
+    mb_type_b: [ContextModel; 9],
+    /// `sub_mb_type`, B slices -- ctxIdx 36..=39.
+    sub_mb_type_b: [ContextModel; 4],
     mvd_comp0: [ContextModel; 7],
     mvd_comp1: [ContextModel; 7],
     ref_idx: [ContextModel; 6],
@@ -2426,6 +2612,12 @@ impl CabacMbCtx {
         init_contexts(&mut mb_type_p, &inits_by_idc(&t::MB_TYPE_P, cabac_init_idc), slice_qp);
         let mut sub_mb_type_p = [ContextModel::UNINITIALISED; 3];
         init_contexts(&mut sub_mb_type_p, &inits_by_idc(&t::SUB_MB_TYPE_P, cabac_init_idc), slice_qp);
+        let mut skip_b = [ContextModel::UNINITIALISED; 3];
+        init_contexts(&mut skip_b, &inits_by_idc(&t::SKIP_B, cabac_init_idc), slice_qp);
+        let mut mb_type_b = [ContextModel::UNINITIALISED; 9];
+        init_contexts(&mut mb_type_b, &inits_by_idc(&t::MB_TYPE_B, cabac_init_idc), slice_qp);
+        let mut sub_mb_type_b = [ContextModel::UNINITIALISED; 4];
+        init_contexts(&mut sub_mb_type_b, &inits_by_idc(&t::SUB_MB_TYPE_B, cabac_init_idc), slice_qp);
         let mut mvd_comp0 = [ContextModel::UNINITIALISED; 7];
         init_contexts(&mut mvd_comp0, &inits_by_idc(&t::MVD_COMP0, cabac_init_idc), slice_qp);
         let mut mvd_comp1 = [ContextModel::UNINITIALISED; 7];
@@ -2463,6 +2655,9 @@ impl CabacMbCtx {
             skip_p,
             mb_type_p,
             sub_mb_type_p,
+            skip_b,
+            mb_type_b,
+            sub_mb_type_b,
             mvd_comp0,
             mvd_comp1,
             ref_idx,
@@ -2505,11 +2700,22 @@ pub fn decode_slice_cabac(
     sps: &Sps,
     pps: &Pps,
     header: &SliceHeader,
+    colocated: Option<&ColocatedField>,
 ) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
-    if matches!(header.kind, SliceKind::B) {
+    let is_b_slice = matches!(header.kind, SliceKind::B);
+    // Clause 8.4.1.2.1's temporal direct derivation is a materially
+    // different algorithm (scaled motion from the colocated picture's own
+    // vector, no spatial median predictor, no `colZeroFlag`) that this
+    // crate does not implement -- refused honestly rather than silently
+    // reusing spatial direct's answer, which would be wrong whenever a
+    // direct-coded macroblock's neighbours disagree with what temporal
+    // scaling would have produced. `direct_spatial_mv_pred_flag` is
+    // x264's own default (spatial), so this only refuses the uncommon
+    // case.
+    if is_b_slice && header.direct_spatial_mv_pred != Some(true) {
         return Err(Error::Unsupported(
-            "vaco-codec-h264: CABAC B-slice mb_type/sub_mb_type (Table 9-27/9-28's B column) is out of scope for this dispatch",
+            "vaco-codec-h264: temporal direct prediction (direct_spatial_mv_pred_flag == 0) is out of scope",
         ));
     }
     let is_i_slice = matches!(header.kind, SliceKind::I);
@@ -2547,7 +2753,11 @@ pub fn decode_slice_cabac(
             // "present").
             let cond = u32::from(grids.mb_left(mb_x, mb_y).is_some_and(|i| !i.skipped))
                 + u32::from(grids.mb_above(mb_x, mb_y).is_some_and(|i| !i.skipped));
-            decide(cabac, &mut ctx.skip_p, cond as usize) == 1
+            if is_b_slice {
+                decide(cabac, &mut ctx.skip_b, cond as usize) == 1
+            } else {
+                decide(cabac, &mut ctx.skip_p, cond as usize) == 1
+            }
         };
 
         let is_first_mb_in_slice = curr_mb_addr == header.first_mb_in_slice;
@@ -2568,21 +2778,31 @@ pub fn decode_slice_cabac(
             let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
             let above = ay.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(ax, ay2));
             let c_neighbour = resolve_c(&grids, ax, mb_x * 4 + 3, ay);
-            let skip_mv = crate::motion::p_skip_mv(
-                left.as_motion_neighbour(0),
-                above.as_motion_neighbour(0),
-                c_neighbour.as_motion_neighbour(0),
-            );
-            let info = MvInfo {
-                mb_available: true,
-                pred: Some(PartPred::L0),
-                ref_idx: [0, -1],
-                mvd: [(0, 0), (0, 0)],
-                mv: [skip_mv, (0, 0)],
-            };
-            for y in 0..4u32 {
-                for x in 0..4u32 {
-                    grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
+            if is_b_slice {
+                // `B_Skip` (clause 8.4.1.1): "derived in the same manner
+                // as for a macroblock with `mb_type` equal to
+                // `B_Direct_16x16`" -- literally the same spatial-direct
+                // derivation, at 16x16 granularity, reusing the A/B/C
+                // neighbours already looked up above.
+                let params = spatial_direct_params(left, above, c_neighbour);
+                apply_spatial_direct_16x16(&mut grids, mb_x, mb_y, sps.direct_8x8_inference, params, colocated);
+            } else {
+                let skip_mv = crate::motion::p_skip_mv(
+                    left.as_motion_neighbour(0),
+                    above.as_motion_neighbour(0),
+                    c_neighbour.as_motion_neighbour(0),
+                );
+                let info = MvInfo {
+                    mb_available: true,
+                    pred: Some(PartPred::L0),
+                    ref_idx: [0, -1],
+                    mvd: [(0, 0), (0, 0)],
+                    mv: [skip_mv, (0, 0)],
+                };
+                for y in 0..4u32 {
+                    for x in 0..4u32 {
+                        grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
+                    }
                 }
             }
             // clause 9.3.3.1.1.9's own "regarded as available, with
@@ -2659,6 +2879,7 @@ pub fn decode_slice_cabac(
             let residual = decode_macroblock_cabac(
                 cabac,
                 budget,
+                sps,
                 pps,
                 header,
                 &mut ctx,
@@ -2667,6 +2888,7 @@ pub fn decode_slice_cabac(
                 &mut qpy,
                 mb_x,
                 mb_y,
+                colocated,
             )?;
             stats.macroblock_count += 1;
             let info = grids.mb_info_at(mb_x, mb_y);
@@ -2760,6 +2982,7 @@ pub fn decode_slice_cabac(
 fn decode_macroblock_cabac(
     cabac: &mut CabacDecoder<'_>,
     budget: &mut Budget,
+    sps: &Sps,
     pps: &Pps,
     header: &SliceHeader,
     ctx: &mut CabacMbCtx,
@@ -2768,11 +2991,16 @@ fn decode_macroblock_cabac(
     qpy: &mut i32,
     mb_x: u32,
     mb_y: u32,
+    colocated: Option<&ColocatedField>,
 ) -> Result<MbResidual> {
     let is_i_slice = matches!(header.kind, SliceKind::I);
+    let is_b_slice = matches!(header.kind, SliceKind::B);
     let raw_code = if is_i_slice {
         let inc0 = mb_type_i_cond_term(grids.mb_left(mb_x, mb_y)) + mb_type_i_cond_term(grids.mb_above(mb_x, mb_y));
         decode_mb_type_i_table(cabac, &mut ctx.mb_type_i, inc0 as usize)
+    } else if is_b_slice {
+        let inc0 = mb_type_b_cond_term(grids.mb_left(mb_x, mb_y)) + mb_type_b_cond_term(grids.mb_above(mb_x, mb_y));
+        decode_mb_type_b(cabac, &mut ctx.mb_type_b, &mut ctx.mb_type_p, inc0 as usize)
     } else {
         decode_mb_type_p(cabac, &mut ctx.mb_type_p)
     };
@@ -2927,60 +3155,73 @@ fn decode_macroblock_cabac(
         }
         intra_chroma_pred_mode = u8::try_from(n).unwrap_or(3);
     } else {
-        // Non-intra: `raw_code` (0..=4, `classify_mb_type`'s own input,
-        // still in scope) carries the exact partition geometry
+        // Non-intra: `raw_code` (`classify_mb_type`'s own input, still in
+        // scope) carries the exact partition geometry
         // `classify_mb_type`'s `MbKind::Inter { parts }` deliberately
         // discards (CAVLC bit consumption never needed it) but CABAC's
         // `ref_idx`/`mvd` neighbour grid does — a 2-partition macroblock's
         // *split direction* decides which 4x4 positions each partition's
         // decoded values land on for the next macroblock to read back.
+        // [`two_partition_rects`] resolves it for both P's `raw_code`
+        // 1/2 and B's much wider 4..=21 range.
         //
+        // A B slice's own spatial direct parameters (clause 8.4.1.2.2) are
+        // derived once per macroblock, from this macroblock's own A/B/C
+        // neighbours -- shared by `B_Direct_16x16` and every
+        // `B_Direct_8x8` sub-partition a `B_8x8` macroblock might carry,
+        // matching JM 19.1's own `prepare_direct_params` call site (once
+        // per macroblock, not once per direct-coded region within it).
+        // Computed unconditionally for every B macroblock rather than only
+        // the kinds that end up using it -- three grid reads and a median
+        // calculation, cheaper than threading a second "does this kind
+        // need it" branch through every call site below.
+        let direct_params = is_b_slice.then(|| {
+            let ax = mb_x * 4;
+            let ay = mb_y * 4;
+            let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
+            let above = ay.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(ax, ay2));
+            let c = resolve_c(grids, ax, ax + 3, ay);
+            spatial_direct_params(left, above, c)
+        });
+
         // `NoSubMbPartSizeLessThan8x8Flag` (clause 7.3.5's own
         // macroblock_layer() pseudocode): initialised 1, and the only
         // place that can ever clear it is `sub_mb_pred()`'s own per-
-        // sub-macroblock loop (`raw_code` 3/4 below) -- every other shape
-        // here has `NumMbPart(mb_type) < 4`, so `sub_mb_pred()` is never
-        // even invoked for it and the flag stays 1. Feeds the *second*
-        // `transform_size_8x8_flag` occurrence below (the one that can
-        // apply to an inter macroblock, not just `I_NxN`).
-        no_sub_mb_part_size_less_than_8x8 = match raw_code {
-            0 => {
-                decode_one_partition_cabac(cabac, header, ctx, grids, mb_x, mb_y, PartPred::L0, (0, 0, 3, 3));
+        // sub-macroblock loop (`MbKind::P8x8`/`B8x8` below) -- every other
+        // shape here has `NumMbPart(mb_type) < 4`, so `sub_mb_pred()` is
+        // never even invoked for it and the flag stays 1. Feeds the
+        // *second* `transform_size_8x8_flag` occurrence below (the one
+        // that can apply to an inter macroblock, not just `I_NxN`).
+        no_sub_mb_part_size_less_than_8x8 = match &kind {
+            MbKind::BDirect16x16 => {
+                let Some(params) = direct_params else {
+                    return Err(Error::InvalidData("vaco-codec-h264: B_Direct_16x16 outside a B slice"));
+                };
+                apply_spatial_direct_16x16(grids, mb_x, mb_y, sps.direct_8x8_inference, params, colocated);
                 true
             }
-            1 => {
-                decode_two_partitions_cabac(
-                    cabac,
-                    header,
-                    ctx,
-                    grids,
-                    mb_x,
-                    mb_y,
-                    PartPred::L0,
-                    PartPred::L0,
-                    (0, 0, 3, 1),
-                    (0, 2, 3, 3),
-                );
-                true
+            MbKind::Inter { parts } => match parts.as_slice() {
+                [p0] => {
+                    decode_one_partition_cabac(cabac, header, ctx, grids, mb_x, mb_y, *p0, (0, 0, 3, 3));
+                    true
+                }
+                [p0, p1] => {
+                    let (rect0, rect1) = two_partition_rects(header.kind, raw_code);
+                    decode_two_partitions_cabac(cabac, header, ctx, grids, mb_x, mb_y, *p0, *p1, rect0, rect1);
+                    true
+                }
+                _ => return Err(Error::InvalidData("mb_type: Inter with an unexpected partition count")),
+            },
+            MbKind::P8x8 { ref0_inferred } => {
+                decode_sub_mb_pred_cabac(cabac, header, ctx, grids, mb_x, mb_y, *ref0_inferred, false, false, None, None)?
             }
-            2 => {
-                decode_two_partitions_cabac(
-                    cabac,
-                    header,
-                    ctx,
-                    grids,
-                    mb_x,
-                    mb_y,
-                    PartPred::L0,
-                    PartPred::L0,
-                    (0, 0, 1, 3),
-                    (2, 0, 3, 3),
-                );
-                true
+            MbKind::B8x8 => {
+                let Some(params) = direct_params else {
+                    return Err(Error::InvalidData("vaco-codec-h264: B_8x8 outside a B slice"));
+                };
+                decode_sub_mb_pred_cabac(cabac, header, ctx, grids, mb_x, mb_y, false, true, sps.direct_8x8_inference, Some(params), colocated)?
             }
-            3 => decode_sub_mb_pred_cabac(cabac, header, ctx, grids, mb_x, mb_y, false)?,
-            4 => decode_sub_mb_pred_cabac(cabac, header, ctx, grids, mb_x, mb_y, true)?,
-            _ => return Err(Error::InvalidData("mb_type: unexpected non-intra P mb_type code")),
+            _ => return Err(Error::InvalidData("mb_type: unexpected non-intra mb_type classification")),
         };
     }
 
@@ -3085,6 +3326,7 @@ fn decode_macroblock_cabac(
             intra_chroma_pred_mode,
             intra16x16_pred_mode,
             transform_8x8,
+            is_b_direct16x16: matches!(kind, MbKind::BDirect16x16),
         },
     );
     Ok(residual)
@@ -3133,6 +3375,20 @@ const fn partition_shape(x0: u32, y0: u32, x1: u32, y1: u32) -> crate::motion::P
     }
 }
 
+/// The two 4x4-rectangle partitions for a two-partition `Inter` macroblock,
+/// clause 7.4.5's own shape assignment: P slices' `mb_type` 1/2 name
+/// `16x8`/`8x16` directly; B slices' two-partition range (`mb_type` 4..=21,
+/// `classify_mb_type`'s own doc) alternates `16x8` then `8x16` for each of
+/// the nine `(pred0, pred1)` pairs -- verified against the same primary
+/// text `classify_mb_type` itself already cites, not re-derived here.
+const fn two_partition_rects(kind: SliceKind, raw_code: u32) -> ((u32, u32, u32, u32), (u32, u32, u32, u32)) {
+    let is_16x8 = match kind {
+        SliceKind::B => raw_code & 1 == 0,
+        _ => raw_code == 1,
+    };
+    if is_16x8 { ((0, 0, 3, 1), (0, 2, 3, 3)) } else { ((0, 0, 1, 3), (2, 0, 3, 3)) }
+}
+
 fn resolve_c(grids: &CabacGrids, left_x: u32, right_x: u32, top_y: u32) -> MvInfo {
     let Some(above_y) = top_y.checked_sub(1) else { return MvInfo::default() };
     let c = grids.mv_at(right_x + 1, above_y);
@@ -3140,6 +3396,263 @@ fn resolve_c(grids: &CabacGrids, left_x: u32, right_x: u32, top_y: u32) -> MvInf
         return c;
     }
     left_x.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, above_y))
+}
+
+/// One reference picture's already-decoded per-4x4-luma-block motion
+/// field, in absolute-frame 4x4-grid coordinates — clause 8.4.1.2.1's own
+/// "the co-located picture" (always `RefPicList1[0]` for both spatial and
+/// temporal direct) needs exactly this to derive `colZeroFlag`, and this
+/// crate already produces it as a side effect of decoding that picture in
+/// the first place: [`SliceStats::macroblocks`]' own `mv_blocks` field.
+/// `crate::decoder` builds one of these once per decoded reference
+/// picture and hands the current B slice's own `RefPicList1[0]` entry back
+/// in here — never re-derived from raw samples, since the motion field was
+/// already computed once and thrown away.
+#[derive(Debug)]
+pub struct ColocatedField {
+    width_4x4: u32,
+    height_4x4: u32,
+    blocks: Vec<MvInfo>,
+}
+
+impl ColocatedField {
+    pub(crate) fn new(width_4x4: u32, height_4x4: u32, blocks: Vec<MvInfo>) -> Self {
+        Self { width_4x4, height_4x4, blocks }
+    }
+
+    fn at(&self, x: u32, y: u32) -> MvInfo {
+        if x >= self.width_4x4 || y >= self.height_4x4 {
+            return MvInfo::default();
+        }
+        let Some(idx) = (y.saturating_mul(self.width_4x4).saturating_add(x)).try_into().ok() else {
+            return MvInfo::default();
+        };
+        let idx: usize = idx;
+        self.blocks.get(idx).copied().unwrap_or_default()
+    }
+
+    /// JM 19.1's own `get_colocated_info_4x4`/`_8x8` "moving" test (clause
+    /// 8.4.1.2.1's own colocated-derivation, the shared step both spatial
+    /// and temporal direct build `colZeroFlag` from): `true` unless the
+    /// colocated block's own valid list (list0 preferred, falling back to
+    /// list1 only when list0 carries no prediction at all) has `ref_idx ==
+    /// 0` and a motion vector whose absolute value is at most 1 in both
+    /// components (`iabs(mv) >> 1 == 0`, i.e. `{0, 1}`) -- `colZeroFlag`
+    /// itself is this negated. An intra colocated block (`pred: None`)
+    /// reports both lists as "not predicting", which correctly falls
+    /// through to `true` (never force a spatially-predicted motion vector
+    /// to zero next to an intra colocated block) the same way an
+    /// unavailable one does.
+    fn is_moving(&self, x: u32, y: u32) -> bool {
+        let info = self.at(x, y);
+        let reads = |p: Option<PartPred>, list: usize| -> bool {
+            info.mb_available
+                && p.is_some_and(|p| if list == 0 { p.reads_l0() } else { p.reads_l1() })
+        };
+        let (r0, mv0) = if reads(info.pred, 0) { (info.ref_idx[0], info.mv[0]) } else { (-1i8, (0i16, 0i16)) };
+        let (r1, mv1) = if reads(info.pred, 1) { (info.ref_idx[1], info.mv[1]) } else { (-1i8, (0i16, 0i16)) };
+        let small = |mv: (i16, i16)| mv.0.unsigned_abs() <= 1 && mv.1.unsigned_abs() <= 1;
+        let l0_small = r0 == 0 && small(mv0);
+        let l1_small = r0 == -1 && r1 == 0 && small(mv1);
+        !(l0_small || l1_small)
+    }
+}
+
+/// Clause 8.4.1.2.2's `refIdxL0`/`refIdxL1` and `mvL0`/`mvL1` for one whole
+/// macroblock's spatial direct prediction -- computed once per macroblock
+/// (clause 8.4.1.2.2 always derives these from the macroblock's own A/B/C
+/// neighbours regardless of whether the direct-coded region ends up being
+/// the whole macroblock (`B_Direct_16x16`/`B_Skip`) or one `B_Direct_8x8`
+/// sub-partition of a `B_8x8` one, matching JM 19.1's own
+/// `prepare_direct_params`, called once per macroblock in
+/// `mc_direct.c::update_direct_mv_info_spatial_8x8`/`_4x4`).
+#[derive(Debug, Clone, Copy)]
+struct DirectParams {
+    l0_ref: i8,
+    l1_ref: i8,
+    mv0: (i16, i16),
+    mv1: (i16, i16),
+}
+
+/// A spatial-direct neighbour's raw `ref_idx` for `list`, clause 8.4.1.2.2's
+/// own input to `MinPositive` -- `-1` for an unavailable macroblock, an
+/// intra one, or one that is available but does not predict from `list` at
+/// all (JM 19.1's `PicMotionParams::ref_idx[list]` convention, matching
+/// `set_direct_references` in `mc_prediction.c` exactly: unlike
+/// [`MvInfo::as_motion_neighbour`], which substitutes a *ref_idx-matching*
+/// zero motion for the median predictor's own convenience, direct mode
+/// needs to tell "no candidate at all" (`-1`) apart from "a real candidate
+/// happens to be `ref_idx` 0", so it cannot reuse that substitution).
+fn direct_ref_idx(info: MvInfo, list: usize) -> i8 {
+    if !info.mb_available {
+        return -1;
+    }
+    let Some(pred) = info.pred else { return -1 };
+    let reads = if list == 0 { pred.reads_l0() } else { pred.reads_l1() };
+    if reads { info.ref_idx.get(list).copied().unwrap_or(-1) } else { -1 }
+}
+
+/// Clause 8.4.1.2.2's `MinPositive(x, y)`: `Min(x, y)` when both are
+/// non-negative, otherwise whichever of the two is non-negative (or `-1` if
+/// neither is) -- reproduced via JM 19.1's own unsigned-reinterpretation
+/// trick (`mc_prediction.c::prepare_direct_params`'s `(unsigned char)`
+/// casts feeding a plain `imin`) rather than an explicit three-way branch,
+/// since that is what the independently-checkable source actually does:
+/// `-1i8` reinterpreted as `u8` is `255`, larger than any real `ref_idx`,
+/// so a plain unsigned minimum already ignores it unless both inputs were
+/// `-1`, and reinterpreting `255u8` back as `i8` recovers exactly `-1`.
+fn min_positive_ref_idx(a: i8, b: i8) -> i8 {
+    #[allow(clippy::cast_sign_loss, reason = "the point of the cast -- see this function's own doc")]
+    let (ua, ub) = (a as u8, b as u8);
+    #[allow(clippy::cast_possible_wrap, reason = "255u8 as i8 == -1, JM's own (char) cast, checked by this file's own unit test")]
+    let m = ua.min(ub) as i8;
+    m
+}
+
+/// Clause 8.4.1.2.2's own A/B/C neighbour derivation for one whole
+/// macroblock's spatial direct parameters -- `a`/`b`/`c` are the
+/// macroblock-level (not partition-level) left/above/above-right (or
+/// above-left substitute) neighbours, the same shape
+/// [`decode_one_partition_cabac`]'s own whole-16x16 case already looks up.
+fn spatial_direct_params(a: MvInfo, b: MvInfo, c: MvInfo) -> DirectParams {
+    let l0_ref = min_positive_ref_idx(min_positive_ref_idx(direct_ref_idx(a, 0), direct_ref_idx(b, 0)), direct_ref_idx(c, 0));
+    let l1_ref = min_positive_ref_idx(min_positive_ref_idx(direct_ref_idx(a, 1), direct_ref_idx(b, 1)), direct_ref_idx(c, 1));
+    let mv0 = if l0_ref >= 0 {
+        crate::motion::predict_mv(
+            crate::motion::PartitionShape::Whole,
+            a.as_motion_neighbour(0),
+            b.as_motion_neighbour(0),
+            c.as_motion_neighbour(0),
+            l0_ref,
+        )
+    } else {
+        (0, 0)
+    };
+    let mv1 = if l1_ref >= 0 {
+        crate::motion::predict_mv(
+            crate::motion::PartitionShape::Whole,
+            a.as_motion_neighbour(1),
+            b.as_motion_neighbour(1),
+            c.as_motion_neighbour(1),
+            l1_ref,
+        )
+    } else {
+        (0, 0)
+    };
+    DirectParams { l0_ref, l1_ref, mv0, mv1 }
+}
+
+/// Clause 8.4.1.2.2's per-4x4-or-8x8-block direct assignment, transcribed
+/// from JM 19.1's `mc_direct.c::update_direct_mv_info_spatial_4x4`/`_8x8`
+/// (both functions share this exact branch structure; only the loop
+/// granularity around the call site differs) -- every branch here was
+/// checked against a fully-expanded reading of that function rather than
+/// re-derived from the specification text's own three-case prose a second
+/// time. `moving` is [`ColocatedField::is_moving`]'s own answer;
+/// `colZeroFlag` is its negation, applied independently to whichever of
+/// `l0_ref`/`l1_ref` is exactly 0.
+fn direct_block(l0_ref: i8, l1_ref: i8, mv0: (i16, i16), mv1: (i16, i16), moving: bool) -> ([i8; 2], [(i16, i16); 2]) {
+    let is_not_moving = !moving;
+    if l0_ref == 0 || l1_ref == 0 {
+        if l1_ref == -1 {
+            // l0_ref == 0 is forced by the outer condition.
+            if is_not_moving { ([0, -1], [(0, 0), (0, 0)]) } else { ([0, -1], [mv0, (0, 0)]) }
+        } else if l0_ref == -1 {
+            // l1_ref == 0 is forced by the outer condition.
+            if is_not_moving { ([-1, 0], [(0, 0), (0, 0)]) } else { ([-1, 0], [(0, 0), mv1]) }
+        } else {
+            let (r0, m0) = if l0_ref == 0 && is_not_moving { (0, (0, 0)) } else { (l0_ref, mv0) };
+            let (r1, m1) = if l1_ref == 0 && is_not_moving { (0, (0, 0)) } else { (l1_ref, mv1) };
+            ([r0, r1], [m0, m1])
+        }
+    } else if l0_ref < 0 && l1_ref < 0 {
+        // `directZeroPredictionFlag`: neither list has any candidate at
+        // all, so both are forced to ref_idx 0 with zero motion.
+        ([0, 0], [(0, 0), (0, 0)])
+    } else if l1_ref == -1 {
+        ([l0_ref, -1], [mv0, (0, 0)])
+    } else if l0_ref == -1 {
+        ([-1, l1_ref], [(0, 0), mv1])
+    } else {
+        ([l0_ref, l1_ref], [mv0, mv1])
+    }
+}
+
+/// `PartPred` from a direct-derived `ref_idx` pair -- `None` only if
+/// [`direct_block`] ever returned both lists negative, which its own
+/// `directZeroPredictionFlag` branch guarantees never happens (both are
+/// forced to 0 together).
+fn pred_from_ref_idx(r: [i8; 2]) -> Option<PartPred> {
+    match (r[0] >= 0, r[1] >= 0) {
+        (true, true) => Some(PartPred::Bi),
+        (true, false) => Some(PartPred::L0),
+        (false, true) => Some(PartPred::L1),
+        (false, false) => None,
+    }
+}
+
+/// Applies spatial direct prediction to one 8x8 quadrant (`k` in `0..4`,
+/// raster order) of the macroblock at `(mb_x, mb_y)` -- shared by
+/// `B_Direct_16x16`/`B_Skip` (all four quadrants) and a `B_8x8`
+/// macroblock's own individual `B_Direct_8x8` sub-partitions (one quadrant
+/// at a time, interleaved with this macroblock's other, non-direct,
+/// sub-partitions). `direct_8x8_inference` (`sps.direct_8x8_inference`)
+/// selects clause 8.4.1.2.2's own two granularities: when set, the whole
+/// 8x8 quadrant is derived once from its own top-left 4x4 corner's
+/// colocated block (JM's `update_direct_mv_info_spatial_8x8`); when clear,
+/// each of the quadrant's own four 4x4 blocks gets its own independent
+/// colocated lookup (`update_direct_mv_info_spatial_4x4`).
+fn apply_direct_quadrant(
+    grids: &mut CabacGrids,
+    mb_x: u32,
+    mb_y: u32,
+    k: u32,
+    direct_8x8_inference: bool,
+    params: DirectParams,
+    colocated: Option<&ColocatedField>,
+) {
+    let (qi, qj) = (2 * (k & 1), 2 * (k >> 1));
+    let write_block = |grids: &mut CabacGrids, bx: u32, by: u32, moving: bool| {
+        let (ref_idx, mv) = direct_block(params.l0_ref, params.l1_ref, params.mv0, params.mv1, moving);
+        let info = MvInfo { mb_available: true, pred: pred_from_ref_idx(ref_idx), ref_idx, mvd: [(0, 0); 2], mv };
+        grids.set_mv(mb_x * 4 + bx, mb_y * 4 + by, info);
+    };
+    if direct_8x8_inference {
+        // No colocated data (should not happen for a real B slice, whose
+        // own RefPicList1 is never empty) defaults to "moving" -- never
+        // fabricate a forced-zero motion vector from data that is not
+        // there.
+        let moving = colocated.is_none_or(|c| c.is_moving(mb_x * 4 + qi, mb_y * 4 + qj));
+        for dy in 0..2u32 {
+            for dx in 0..2u32 {
+                write_block(grids, qi + dx, qj + dy, moving);
+            }
+        }
+    } else {
+        for dy in 0..2u32 {
+            for dx in 0..2u32 {
+                let (bx, by) = (qi + dx, qj + dy);
+                let moving = colocated.is_none_or(|c| c.is_moving(mb_x * 4 + bx, mb_y * 4 + by));
+                write_block(grids, bx, by, moving);
+            }
+        }
+    }
+}
+
+/// All four quadrants at once -- `B_Direct_16x16` and `B_Skip` (clause
+/// 8.4.1.1's own "derive as if `mb_type` were `B_Direct_16x16`" rule)
+/// both use this directly.
+fn apply_spatial_direct_16x16(
+    grids: &mut CabacGrids,
+    mb_x: u32,
+    mb_y: u32,
+    direct_8x8_inference: bool,
+    params: DirectParams,
+    colocated: Option<&ColocatedField>,
+) {
+    for k in 0..4u32 {
+        apply_direct_quadrant(grids, mb_x, mb_y, k, direct_8x8_inference, params, colocated);
+    }
 }
 
 fn decode_one_partition_cabac(
@@ -3308,18 +3821,46 @@ fn decode_two_partitions_cabac(
     }
 }
 
-/// `P_8x8`/`P_8x8ref0`'s four sub-macroblock partitions.
-#[allow(
-    clippy::indexing_slicing,
-    clippy::integer_division,
-    reason = "quad/sub-partition indices are bounded 0..4 loop variables into fixed-size arrays, and quad%2/quad/2 is the spec's own 2x2 quadrant split, not a precision-loss bug"
-)]
+/// `P_8x8`/`P_8x8ref0`'s and `B_8x8`'s four sub-macroblock partitions.
+///
+/// # A real ordering bug this generalisation also fixes
+///
+/// Clause 7.3.5.2's `sub_mb_pred()` reads, in this exact order: `sub_mb_type`
+/// for all four sub-macroblocks, **then** `ref_idx_l0` for all four (skipping
+/// any `Pred_L1` or `B_Direct_8x8` one), **then** `ref_idx_l1` for all four
+/// (B only), **then** `mvd_l0` for every sub-partition of every sub-macroblock
+/// (again in quadrant order), **then** `mvd_l1` for every sub-partition —
+/// four whole-macroblock passes, not "read this quadrant's `ref_idx` then its
+/// `mvd` before moving to the next quadrant". Confirmed against JM 19.1's own
+/// `macroblock.c::read_motion_info_from_NAL_b_slice`, which calls
+/// `readMBRefPictureIdx(LIST_0)` then `(LIST_1)` then
+/// `readMBMotionVectors(LIST_0)` then `(LIST_1)` as four separate
+/// whole-macroblock functions, each looping over every quadrant internally.
+///
+/// The version of this function that only ever decoded P slices (a single
+/// list) read `ref_idx` then `mvd` fully within each quadrant before moving
+/// to the next one -- bit-identical to the correct order **only** because
+/// list 1 never had anything to read, so there was nothing to interleave
+/// wrongly. Generalising this function to B (two lists) is what exposed it:
+/// with list 1 real, the old per-quadrant interleaving reads `ref_idx_l0`,
+/// then this quadrant's own `mvd_l0`, *before* `ref_idx_l1` for the next
+/// quadrant even exists to read — a different bit sequence than the encoder
+/// wrote, which desyncs the arithmetic engine immediately. This is also a
+/// plausible root cause for the still-open multi-reference CABAC desync
+/// `tests/macroblock_layer_cabac.rs` describes: more references make `P_8x8`
+/// (this exact function, on the P side) a real encoder choice far more
+/// often than a single-reference corpus ever exercises it.
+///
 /// Returns `NoSubMbPartSizeLessThan8x8Flag` (clause 7.3.5's own
-/// `macroblock_layer()` pseudocode) for this macroblock: `true` iff every one
-/// of the four sub-macroblocks decoded here has `NumSubMbPart == 1` (Table
-/// 7-14's own `P_L0_8x8` code, `classify_sub_mb_type`'s `num_sub == 1`) --
-/// the input `decode_macroblock_cabac`'s own second `transform_size_8x8_flag`
-/// occurrence needs.
+/// `macroblock_layer()` pseudocode): `true` iff every one of the four
+/// sub-macroblocks decoded here has `NumSubMbPart == 1` (Table 7-14's own
+/// `P_L0_8x8` code) -- except a B slice's own `B_Direct_8x8` sub-macroblock,
+/// whose `NumSubMbPart` is formally "na" and whose real disqualifying
+/// condition is `direct_8x8_inference_flag == 0` instead (a `B_Direct_8x8`
+/// derived at 8x8 granularity, `direct_8x8_inference_flag == 1`, is *not*
+/// "smaller than 8x8" even though `classify_sub_mb_type` reports `num_sub ==
+/// 4` for it as a bit-consumption convenience).
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn decode_sub_mb_pred_cabac(
     cabac: &mut CabacDecoder<'_>,
     header: &SliceHeader,
@@ -3328,103 +3869,185 @@ fn decode_sub_mb_pred_cabac(
     mb_x: u32,
     mb_y: u32,
     ref0_inferred: bool,
+    is_b: bool,
+    direct_8x8_inference: bool,
+    direct_params: Option<DirectParams>,
+    colocated: Option<&ColocatedField>,
 ) -> Result<bool> {
     let mut subs: Vec<(u8, u8, Option<PartPred>)> = budget_alloc_four();
     for _ in 0..4 {
-        let code = decode_sub_mb_type_p(cabac, &mut ctx.sub_mb_type_p);
-        let (num_sub, pred) = classify_sub_mb_type(false, code)?;
+        let code = if is_b {
+            decode_sub_mb_type_b(cabac, &mut ctx.sub_mb_type_b)
+        } else {
+            decode_sub_mb_type_p(cabac, &mut ctx.sub_mb_type_p)
+        };
+        let (num_sub, pred) = classify_sub_mb_type(is_b, code)?;
         subs.push((u8::try_from(code).unwrap_or(0), num_sub, pred));
     }
-    let no_sub_mb_part_size_less_than_8x8 = subs.iter().all(|&(_, num_sub, _)| num_sub == 1);
+    let no_sub_mb_part_size_less_than_8x8 = subs.iter().all(|&(_, num_sub, pred)| {
+        if is_b && pred.is_none() { direct_8x8_inference } else { num_sub == 1 }
+    });
+
+    // `B_Direct_8x8` reads no bits at all -- apply it up front, in
+    // quadrant order for determinism, before any of the phase-ordered
+    // real sub-partitions below (it takes no part in clause 7.3.5.2's own
+    // `ref_idx`/`mvd` loops, which explicitly skip it, so ordering it
+    // relative to them has no bit-consumption consequence either way).
+    for (i, &(_, _, pred)) in subs.iter().enumerate() {
+        if pred.is_some() {
+            continue;
+        }
+        let Some(params) = direct_params else {
+            return Err(Error::InvalidData("vaco-codec-h264: B_Direct_8x8 outside a B slice"));
+        };
+        #[allow(clippy::cast_possible_truncation, reason = "i is a 0..4 enumerate index")]
+        apply_direct_quadrant(grids, mb_x, mb_y, i as u32, direct_8x8_inference, params, colocated);
+    }
+
     let n0 = header.num_ref_idx_l0_active_minus1;
-    for (i, &(code, num_sub, pred)) in subs.iter().enumerate() {
-        let Some(pred) = pred else { continue };
-        let quad = u32::try_from(i).unwrap_or(0);
-        let (qx, qy) = (quad % 2, quad / 2);
-        let (x0, y0, x1, y1) = (qx * 2, qy * 2, qx * 2 + 1, qy * 2 + 1);
-        let ax = mb_x * 4 + x0;
-        let ay = mb_y * 4 + y0;
-        let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
-        let above = ay.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(ax, ay2));
-        let mut ref_idx = [0i8; 2];
-        if !ref0_inferred && n0 > 0 {
-            let inc = ref_idx_cond_term(left, 0) + 2 * ref_idx_cond_term(above, 0);
-            ref_idx[0] = i8::try_from(decode_ref_idx(cabac, &mut ctx.ref_idx, inc)).unwrap_or(i8::MAX);
-        }
-        // `num_sub` sub-partitions inside this 8x8 quadrant share one
-        // ref_idx but each read their own mvd. `sub_positions` is where
-        // each sub-partition's own context/prediction *neighbour lookup*
-        // happens (its own top-left 4x4 corner), `sub_right_x` is that
-        // same sub-partition's own top-*right* corner (clause 8.4.1.3.2's
-        // `C` neighbour needs the partition's real right edge, not always
-        // its left one), and `owner_of` (below) is the separate question
-        // of which of the quadrant's own 4 4x4 grid positions that
-        // sub-partition's *result* gets written to -- num_sub == 1
-        // (P_L0_8x8, the common real-corpus case) writes the same one
-        // computed mv/mvd to all 4, not just the corner position the
-        // neighbour lookup used. Table 7-14's two `num_sub == 2` codes
-        // are genuinely different shapes: code 1 (`P_L0_8x4`) splits the
-        // quadrant top/bottom (varies in `y`, each sub-partition 8
-        // wide), code 2 (`P_L0_4x8`) splits it left/right (varies in
-        // `x`, each sub-partition 8 tall) -- `classify_sub_mb_type`
-        // collapses both to `num_sub == 2` for the CAVLC bit-consumption
-        // path, which never needs the shape, so `code` is read back here
-        // instead of trusting `num_sub` alone. num_sub == 4 (P_L0_4x4)
-        // is exact either way.
-        let top_bottom = num_sub == 2 && code == 1;
-        let sub_positions: [(u32, u32); 4] = match num_sub {
-            1 => [(x0, y0), (x0, y0), (x0, y0), (x0, y0)],
-            2 if top_bottom => [(x0, y0), (x0, y1), (x0, y0), (x0, y1)],
-            2 => [(x0, y0), (x1, y0), (x0, y0), (x1, y0)],
-            _ => [(x0, y0), (x1, y0), (x0, y1), (x1, y1)],
-        };
-        let sub_right_x: [u32; 4] =
-            if num_sub == 1 || top_bottom { [x1, x1, x1, x1] } else { [x0, x1, x0, x1] };
-        let owner_of = |x: u32, y: u32| -> usize {
-            match num_sub {
-                1 => 0,
-                2 if top_bottom => usize::from(y == y1), // top half = sub 0, bottom half = sub 1
-                2 => usize::from(x == x1),                // left half = sub 0, right half = sub 1
-                _ => usize::from(x == x1) + 2 * usize::from(y == y1),
+    let n1 = header.num_ref_idx_l1_active_minus1;
+
+    // Pass 1/2: `ref_idx_l0` then `ref_idx_l1`, each across all four
+    // quadrants -- written immediately per quadrant (all four 4x4
+    // positions it covers, since `ref_idx` is one value per 8x8 quadrant
+    // regardless of how many `mvd` sub-partitions it is later split into)
+    // so a *later* quadrant's own neighbour lookup within this same pass
+    // sees it, matching every other immediate-write site in this file.
+    for list in 0..2usize {
+        for (i, &(_, _, pred)) in subs.iter().enumerate() {
+            let Some(pred) = pred else { continue };
+            let reads = if list == 0 { pred.reads_l0() } else { pred.reads_l1() };
+            if !reads {
+                continue;
             }
-        };
-        let mut computed = [MvInfo::default(); 4];
-        for s in 0..num_sub {
-            let (sx, sy) = sub_positions[usize::from(s).min(3)];
-            let srx = sub_right_x[usize::from(s).min(3)];
-            let sax = mb_x * 4 + sx;
-            let say = mb_y * 4 + sy;
-            let sleft = sax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, say));
-            let sabove = say.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(sax, ay2));
-            let sum_x = mvd_abs_term(sleft, 0, 0) + mvd_abs_term(sabove, 0, 0);
-            let x = decode_mvd_component(cabac, &mut ctx.mvd_comp0, sum_x);
-            let sum_y = mvd_abs_term(sleft, 0, 1) + mvd_abs_term(sabove, 0, 1);
-            let y = decode_mvd_component(cabac, &mut ctx.mvd_comp1, sum_y);
-            let mvd = [(i16::try_from(x).unwrap_or(i16::MAX), i16::try_from(y).unwrap_or(i16::MAX)), (0, 0)];
-            let c_neighbour = resolve_c(grids, sax, mb_x * 4 + srx, say);
-            let pmv = crate::motion::predict_mv(
-                crate::motion::PartitionShape::Whole,
-                sleft.as_motion_neighbour(0),
-                sabove.as_motion_neighbour(0),
-                c_neighbour.as_motion_neighbour(0),
-                ref_idx[0],
-            );
-            let mv = [(pmv.0.saturating_add(mvd[0].0), pmv.1.saturating_add(mvd[0].1)), (0, 0)];
-            let info = MvInfo { mb_available: true, pred: Some(pred), ref_idx, mvd, mv };
-            // Write this sub-partition's own corner immediately (not
-            // just into `computed`) -- a *later* sub-partition within
-            // this same quadrant needs to see it as a real left/above
-            // neighbour, the same immediate-write requirement
-            // `decode_two_partitions_cabac`'s own comment already names.
-            grids.set_mv(sax, say, info);
-            if let Some(slot) = computed.get_mut(usize::from(s)) {
-                *slot = info;
+            #[allow(clippy::cast_possible_truncation, reason = "i is a 0..4 enumerate index")]
+            let quad = i as u32;
+            let (qx, qy) = (quad & 1, quad >> 1);
+            let (x0, y0, x1, y1) = (qx * 2, qy * 2, qx * 2 + 1, qy * 2 + 1);
+            let ax = mb_x * 4 + x0;
+            let ay = mb_y * 4 + y0;
+            let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
+            let above = ay.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(ax, ay2));
+            let value = if list == 0 && ref0_inferred {
+                0
+            } else {
+                let n_active = if list == 0 { n0 } else { n1 };
+                if n_active > 0 {
+                    let inc = ref_idx_cond_term(left, list) + 2 * ref_idx_cond_term(above, list);
+                    i8::try_from(decode_ref_idx(cabac, &mut ctx.ref_idx, inc)).unwrap_or(i8::MAX)
+                } else {
+                    0
+                }
+            };
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let mut info = grids.mv_at(mb_x * 4 + x, mb_y * 4 + y);
+                    info.mb_available = true;
+                    info.pred = Some(pred);
+                    if let Some(slot) = info.ref_idx.get_mut(list) {
+                        *slot = value;
+                    }
+                    grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
+                }
             }
         }
-        for y in y0..=y1 {
-            for x in x0..=x1 {
-                let owner = computed[owner_of(x, y)];
-                grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, owner);
+    }
+
+    // Pass 3/4: `mvd_l0` then `mvd_l1`, each across every sub-partition of
+    // every quadrant. `ref_idx` for *both* lists is already fully written
+    // (passes 1/2 completed above), so `ref_idx_here` below always sees
+    // the real value regardless of which list's pass this is.
+    #[allow(clippy::indexing_slicing, reason = "owner_of's own range (0..4) is asserted by construction, matching num_sub's own 1/2/4 cases exhaustively")]
+    for list in 0..2usize {
+        for (i, &(code, num_sub, pred)) in subs.iter().enumerate() {
+            let Some(pred) = pred else { continue };
+            let reads = if list == 0 { pred.reads_l0() } else { pred.reads_l1() };
+            if !reads {
+                continue;
+            }
+            #[allow(clippy::cast_possible_truncation, reason = "i is a 0..4 enumerate index")]
+            let quad = i as u32;
+            let (qx, qy) = (quad & 1, quad >> 1);
+            let (x0, y0, x1, y1) = (qx * 2, qy * 2, qx * 2 + 1, qy * 2 + 1);
+            // `num_sub` sub-partitions inside this 8x8 quadrant share one
+            // `ref_idx` but each read their own `mvd`. `sub_positions` is
+            // where each sub-partition's own neighbour lookup happens (its
+            // own top-left 4x4 corner), `sub_right_x` is that same
+            // sub-partition's own top-*right* corner (clause 8.4.1.3.2's
+            // `C` neighbour needs the partition's real right edge), and
+            // `owner_of` is which of the quadrant's own 4 4x4 grid
+            // positions that sub-partition's result gets written to.
+            // Table 7-14/7-15's two `num_sub == 2` codes are genuinely
+            // different shapes (top/bottom vs left/right), which
+            // `classify_sub_mb_type` collapses for the CAVLC bit-
+            // consumption path -- `code` is read back here instead of
+            // trusting `num_sub` alone.
+            let top_bottom = num_sub == 2 && code == 1;
+            let sub_positions: [(u32, u32); 4] = match num_sub {
+                1 => [(x0, y0); 4],
+                2 if top_bottom => [(x0, y0), (x0, y1), (x0, y0), (x0, y1)],
+                2 => [(x0, y0), (x1, y0), (x0, y0), (x1, y0)],
+                _ => [(x0, y0), (x1, y0), (x0, y1), (x1, y1)],
+            };
+            let sub_right_x: [u32; 4] = if num_sub == 1 || top_bottom { [x1; 4] } else { [x0, x1, x0, x1] };
+            let owner_of = |x: u32, y: u32| -> usize {
+                match num_sub {
+                    1 => 0,
+                    2 if top_bottom => usize::from(y == y1),
+                    2 => usize::from(x == x1),
+                    _ => usize::from(x == x1) + 2 * usize::from(y == y1),
+                }
+            };
+            let ref_idx_here = grids.mv_at(mb_x * 4 + x0, mb_y * 4 + y0).ref_idx;
+            let mut computed = [MvInfo::default(); 4];
+            for s in 0..num_sub {
+                let (sx, sy) = sub_positions[usize::from(s).min(3)];
+                let srx = sub_right_x[usize::from(s).min(3)];
+                let sax = mb_x * 4 + sx;
+                let say = mb_y * 4 + sy;
+                let sleft = sax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, say));
+                let sabove = say.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(sax, ay2));
+                let sum_x = mvd_abs_term(sleft, list, 0) + mvd_abs_term(sabove, list, 0);
+                let x = decode_mvd_component(cabac, &mut ctx.mvd_comp0, sum_x);
+                let sum_y = mvd_abs_term(sleft, list, 1) + mvd_abs_term(sabove, list, 1);
+                let y = decode_mvd_component(cabac, &mut ctx.mvd_comp1, sum_y);
+                let mvd_val = (i16::try_from(x).unwrap_or(i16::MAX), i16::try_from(y).unwrap_or(i16::MAX));
+                let this_ref_idx = ref_idx_here.get(list).copied().unwrap_or(-1);
+                let c_neighbour = resolve_c(grids, sax, mb_x * 4 + srx, say);
+                let pmv = crate::motion::predict_mv(
+                    crate::motion::PartitionShape::Whole,
+                    sleft.as_motion_neighbour(list),
+                    sabove.as_motion_neighbour(list),
+                    c_neighbour.as_motion_neighbour(list),
+                    this_ref_idx,
+                );
+                let mv_val = (pmv.0.saturating_add(mvd_val.0), pmv.1.saturating_add(mvd_val.1));
+                // Merge into whatever this position already carries
+                // (`ref_idx` for both lists from passes 1/2, and the
+                // *other* list's own `mv`/`mvd` if its pass already ran)
+                // rather than overwriting it.
+                let mut info = grids.mv_at(sax, say);
+                info.mb_available = true;
+                info.pred = Some(pred);
+                if let Some(slot) = info.ref_idx.get_mut(list) {
+                    *slot = this_ref_idx;
+                }
+                if let Some(slot) = info.mvd.get_mut(list) {
+                    *slot = mvd_val;
+                }
+                if let Some(slot) = info.mv.get_mut(list) {
+                    *slot = mv_val;
+                }
+                grids.set_mv(sax, say, info);
+                if let Some(slot) = computed.get_mut(usize::from(s)) {
+                    *slot = info;
+                }
+            }
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let owner = computed[owner_of(x, y)];
+                    grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, owner);
+                }
             }
         }
     }
@@ -3770,5 +4393,132 @@ mod tests {
         grids.set_mb_info(0, 0, CabacGrids::current_macroblock_info());
         grids.begin_macroblock(1, 0);
         assert!(grids.mb_info_at(0, 0).is_some());
+    }
+
+    /// Feeds [`decode_mb_type_b_prefix`] a fixed queue of bin values,
+    /// oldest first, ignoring which local ctx index was asked -- exactly
+    /// what a brute-force enumeration over "every reachable bit sequence"
+    /// needs, since the *value* a real `decide()` returns never depends on
+    /// which context index requested it.
+    fn queued_bits(bits: &[u32]) -> impl FnMut(usize) -> u32 + '_ {
+        let mut i = 0usize;
+        move |_idx: usize| {
+            let v = bits.get(i).copied().unwrap_or(0);
+            i += 1;
+            v
+        }
+    }
+
+    /// This crate's own prior attempt at B-slice `mb_type`'s binarisation
+    /// was abandoned specifically because a hand-derivation from Table
+    /// 9-27's bin strings had no independent way to check itself bit by
+    /// bit. [`decode_mb_type_b_prefix`] is instead transcribed from JM
+    /// 19.1's own `cabac.c::readMB_typeInfo_CABAC_b_slice` (Tier A per
+    /// `provenance/sources.toml`), and this test is that independent
+    /// check: every one of Table 7-11's 24 non-intra/`B_8x8` `mb_type`
+    /// codes (0..=23) plus the sentinel that hands off to
+    /// [`decode_mb_type_intra_suffix`] must be reachable by *some* bit
+    /// sequence of at most 7 bits (the longest real path: one bin to enter
+    /// the tree, one more to pick a branch, three "extra" bits, and one
+    /// final disambiguating bit), and no shorter prefix may already commit
+    /// to a code before every deciding bit has been read (checked
+    /// implicitly: [`queued_bits`] pads with 0 past the end of `bits`, so
+    /// if a path read fewer real bits than the brute force assumed, the
+    /// padding zeros would have to coincidentally reproduce a *different*
+    /// valid path's own trailing bits for this test to still pass by
+    /// accident -- brute-forcing all 128 combinations rather than one
+    /// sequence per code is what makes that coincidence checkable at all).
+    #[test]
+    fn mb_type_b_prefix_covers_every_code_from_0_to_23_or_the_sentinel_exactly_once() {
+        use std::collections::HashMap;
+        let mut hits: HashMap<u32, Vec<[u32; 7]>> = HashMap::new();
+        let mut sentinel_hits: Vec<[u32; 7]> = Vec::new();
+        for mask in 0u32..128 {
+            let bits: [u32; 7] = core::array::from_fn(|i| (mask >> i) & 1);
+            match decode_mb_type_b_prefix(0, queued_bits(&bits)) {
+                MbTypeBPrefix::Code(v) => hits.entry(v).or_default().push(bits),
+                MbTypeBPrefix::NeedsIntraSuffix => sentinel_hits.push(bits),
+            }
+        }
+        for code in 0u32..=23 {
+            assert!(hits.contains_key(&code), "mb_type code {code} is unreachable");
+        }
+        assert!(!sentinel_hits.is_empty(), "the Intra-suffix sentinel is unreachable");
+        // No code outside Table 7-11's own 0..=23 non-intra/B_8x8 range
+        // (and the sentinel) should ever be produced.
+        for &code in hits.keys() {
+            assert!(code <= 23, "mb_type prefix produced an out-of-range code {code}");
+        }
+    }
+
+    /// Hand-picked bit sequences, one per branch named in
+    /// [`decode_mb_type_b_prefix`]'s own doc, checked against the exact
+    /// code the hand-trace of JM's `readMB_typeInfo_CABAC_b_slice` derived
+    /// -- the brute-force test above proves coverage and disjointness;
+    /// this one proves the *specific* mapping (e.g. that the two `act_sym`
+    /// collisions at 24 and 26 really do remap to 11 and 22, not to each
+    /// other).
+    #[test]
+    fn mb_type_b_prefix_hand_traced_cases() {
+        let code = |bits: &[u32]| match decode_mb_type_b_prefix(0, queued_bits(bits)) {
+            MbTypeBPrefix::Code(v) => v,
+            MbTypeBPrefix::NeedsIntraSuffix => u32::MAX,
+        };
+        assert_eq!(code(&[0]), 0, "B_Direct_16x16");
+        assert_eq!(code(&[1, 0, 0]), 1, "B_L0_16x16");
+        assert_eq!(code(&[1, 0, 1]), 2, "B_L1_16x16");
+        assert_eq!(code(&[1, 1, 0, 0, 0, 0]), 3, "B_Bi_16x16");
+        assert_eq!(code(&[1, 1, 0, 1, 1, 1]), 10, "last of the 3-extra-bit branch");
+        assert_eq!(code(&[1, 1, 1, 1, 1, 0]), 11, "the 24 -> 11 remap, no extra bit read");
+        assert_eq!(code(&[1, 1, 1, 0, 0, 0, 0]), 12, "first of the 12-base branch");
+        assert_eq!(code(&[1, 1, 1, 1, 0, 0, 0]), 20, "12-base branch, no remap, final bit 0");
+        assert_eq!(code(&[1, 1, 1, 1, 0, 0, 1]), 21, "the same 3 bits as 20, final bit flips it to 21");
+        assert_eq!(code(&[1, 1, 1, 1, 1, 1]), 22, "the 26 -> 22 remap, no extra bit read");
+        assert!(
+            matches!(
+                decode_mb_type_b_prefix(0, queued_bits(&[1, 1, 1, 1, 0, 1, 1])),
+                MbTypeBPrefix::NeedsIntraSuffix
+            ),
+            "the 22 -> 23 remap, then +1, reaches the sentinel 24 -- the only other way \
+             to reach it, since every 3-bit act_sym base is even"
+        );
+    }
+
+    /// The same brute-force shape as `mb_type_b_prefix_covers_every_code_*`,
+    /// applied to Table 7-15's `sub_mb_type` (B slices, 0..=12): every code
+    /// must be reachable, and only codes in that range may be produced.
+    #[test]
+    fn sub_mb_type_b_covers_every_code_from_0_to_12_exactly_once() {
+        use std::collections::HashSet;
+        let mut hits: HashSet<u32> = HashSet::new();
+        // 6 bits, not 5: the longest real path (the "act_sym=6" branch,
+        // final codes 7..=10) reads six bins -- one outer, one inner2, one
+        // inner3, one inner4-selector, then two "extra" bits. A 5-bit
+        // brute force was tried first and silently forced that path's
+        // sixth bit to 0 via `queued_bits`'s own out-of-range padding,
+        // which made codes 8 and 10 (the ones needing that bit set) look
+        // unreachable -- caught by this test failing, not by inspection.
+        for mask in 0u32..64 {
+            let bits: [u32; 6] = core::array::from_fn(|i| (mask >> i) & 1);
+            let v = decode_sub_mb_type_b_tree(queued_bits(&bits));
+            assert!(v <= 12, "sub_mb_type produced an out-of-range code {v}");
+            hits.insert(v);
+        }
+        for code in 0u32..=12 {
+            assert!(hits.contains(&code), "sub_mb_type code {code} is unreachable");
+        }
+    }
+
+    #[test]
+    fn sub_mb_type_b_hand_traced_cases() {
+        assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[0])), 0, "B_Direct_8x8");
+        assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 0, 0])), 1, "B_L0_8x8");
+        assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 0, 1])), 2, "B_L1_8x8");
+        assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 1, 0, 0, 0])), 3, "B_Bi_8x8");
+        assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 1, 0, 1, 1])), 6, "last of the act_sym=2 branch");
+        assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 1, 1, 0, 0, 0])), 7, "first of the act_sym=6 branch");
+        assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 1, 1, 0, 1, 1])), 10, "last of the act_sym=6 branch");
+        assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 1, 1, 1, 0])), 11, "first of the act_sym=10 branch");
+        assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 1, 1, 1, 1])), 12, "B_Bi_4x4x4 (last code)");
     }
 }

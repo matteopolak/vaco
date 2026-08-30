@@ -112,6 +112,14 @@ fn a_high_profile_8x8_transform_stream_now_decodes() {
     d.set_extradata(include_bytes!("fixtures/cabac_extradata.bin")).unwrap();
     let pkt = packet(include_bytes!("fixtures/cabac_idr_slice.264"));
     d.send_packet(Some(&pkt)).unwrap();
+    // `H264Decoder` now declares `Caps::DELAY` (B-slice output reordering
+    // needs it -- `crate::decoder`'s own module doc) and holds a decoded
+    // picture until a future one proves it is safe to emit, or until end
+    // of stream says nothing is coming that could reorder ahead of it.
+    // One packet alone is never enough to prove that on its own, so the
+    // real `Decoder` protocol's own EOF signal is what this test needs to
+    // send before a frame is guaranteed available.
+    d.send_packet(None).unwrap();
     let frame = d.receive_frame().unwrap();
     let FrameData::Video { format, width, height, planes } = &frame.data else {
         panic!("expected a video frame, got {:?}", frame.data);
@@ -133,6 +141,10 @@ fn decodes_a_real_frame_from_a_real_x264_cabac_stream() {
     d.set_extradata(&extradata).unwrap();
     let pkt = packet(&slice);
     d.send_packet(Some(&pkt)).unwrap();
+    // See the sibling High-profile test's own comment: `Caps::DELAY`
+    // means one packet is not enough on its own to guarantee a frame is
+    // ready, so this test signals end of stream first.
+    d.send_packet(None).unwrap();
     let frame = d.receive_frame().unwrap();
     let FrameData::Video { format, width, height, planes } = &frame.data else {
         panic!("expected a video frame, got {:?}", frame.data);
@@ -148,8 +160,10 @@ fn decodes_a_real_frame_from_a_real_x264_cabac_stream() {
         luma.as_slice().windows(2).any(|w| w[0] != w[1]),
         "luma plane is perfectly flat -- looks like it was never written"
     );
-    // No second frame from one packet.
-    assert!(matches!(d.receive_frame(), Err(Error::NeedMoreInput)));
+    // No second frame -- this stream only ever had one, and end of stream
+    // was already signalled above, so the machine is draining/drained
+    // rather than waiting for more input.
+    assert!(matches!(d.receive_frame(), Err(Error::Eof)));
 }
 
 #[test]
@@ -184,5 +198,9 @@ fn flush_does_not_panic_and_leaves_the_decoder_usable() {
     // of this decoder's own (now-cleared) DPB/output-queue state, so a
     // slice referencing an already-seen PPS still decodes after a flush.
     d.send_packet(Some(&pkt)).unwrap();
+    // `Caps::DELAY` (see the other tests' own comments): signal end of
+    // stream so the one decoded picture is guaranteed to have left the
+    // reorder buffer.
+    d.send_packet(None).unwrap();
     assert!(d.receive_frame().is_ok());
 }
