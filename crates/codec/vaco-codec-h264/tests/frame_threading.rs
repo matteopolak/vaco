@@ -175,6 +175,73 @@ fn assert_invariant(name: &str, stream: &[u8]) {
     }
 }
 
+/// A `Budget` charge that is never released is invisible until the total runs
+/// out, which is why `planning/E2E-GAPS.md` §8 caught the DPB's own leak only
+/// as "1080p stops after exactly 10 frames". Frame threading adds two charges
+/// per picture -- a DPB entry's samples, and an in-flight task's working set --
+/// and multiplies the second by the thread count, so a missed `release` on
+/// either is exactly the shape that was already found once here and four times
+/// in the sibling HEVC decoder.
+///
+/// This decodes the same 25-picture fixture under a ceiling far too small to
+/// hold 25 pictures' worth of anything, at every thread count. If either charge
+/// leaks, the decode fails with `LimitExceeded` partway through instead of
+/// producing all 25 frames.
+#[test]
+fn neither_per_picture_budget_charge_leaks_at_any_thread_count() {
+    let stream: &[u8] = include_bytes!("fixtures/cabac_ip_simple.264");
+    let (extradata, slices) = split(stream);
+    // 64x64 -> a coded picture is 6144 bytes, so a task's charge is 12 KiB and
+    // a DPB entry's about 8 KiB. At eight threads the legitimate live set is
+    // nine in-flight pictures plus the DPB -- around 140 KiB -- while 25
+    // pictures' worth of *either* charge left unreleased is over 300 KiB. The
+    // ceiling sits between the two on purpose.
+    //
+    // Both halves of that were checked by deleting each `Budget::release` in
+    // turn and confirming this test fails: dropping the DPB-eviction release
+    // fails at frame 21, dropping the in-flight task release fails at frame 16.
+    // An earlier draft used 4 MiB, which caught the first leak and *not* the
+    // second -- a ceiling loose enough to let 25 unreleased charges fit is a
+    // test that passes for the wrong reason, which is the failure mode
+    // `planning/AGENT-CONSTRAINTS.md` names as an oracle that shares your
+    // misreading.
+    let mut limits = Limits::permissive();
+    limits.max_alloc_total = 200 * 1024;
+
+    for threads in [1, 2, 4, 8] {
+        let mut d = H264Decoder::new(limits.clone());
+        d.set_thread_count(threads);
+        let mut budget = Budget::new(Limits::permissive());
+        d.set_extradata(&extradata).unwrap();
+        let mut frames = 0usize;
+        for slice in &slices {
+            let pkt = Packet::from_slice(&mut budget, slice).unwrap();
+            loop {
+                match d.send_packet(Some(&pkt)) {
+                    Ok(()) => break,
+                    Err(Error::OutputPending) => {
+                        d.receive_frame().unwrap();
+                        frames += 1;
+                    }
+                    Err(e) => panic!(
+                        "at {threads} threads, decode failed after {frames} frames \
+                         under the ceiling -- a per-picture Budget charge is not \
+                         being released: {e:?}"
+                    ),
+                }
+            }
+            while d.receive_frame().is_ok() {
+                frames += 1;
+            }
+        }
+        d.send_packet(None).unwrap();
+        while d.receive_frame().is_ok() {
+            frames += 1;
+        }
+        assert_eq!(frames, slices.len(), "at {threads} threads");
+    }
+}
+
 #[test]
 fn a_p_only_chain_decodes_identically_at_every_thread_count() {
     // Nothing here may overlap except the serial stage against the parallel
