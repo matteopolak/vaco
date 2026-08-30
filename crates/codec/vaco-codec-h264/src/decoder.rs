@@ -343,6 +343,14 @@ impl H264Decoder {
             })
             .collect();
 
+        // Clause 8.4.2.3's `pred_weight_table()`, already parsed by
+        // `vaco-parse-h264` (it has to be, the bits are in the slice
+        // header) but never used until now. `weighted_pred_flag` is
+        // x264's own default for P slices, so this is the common path,
+        // not an exotic one.
+        let weights = crate::reconstruct::SliceWeightTables::from_table(
+            slice_header.pred_weight_table.as_ref(),
+        );
         let mut pic: ReconstructedPicture = reconstruct_picture(
             &stats.macroblocks,
             mbs_wide,
@@ -350,6 +358,7 @@ impl H264Decoder {
             chroma_qp_offset_cb,
             chroma_qp_offset_cr,
             &ref_list0,
+            &weights,
             &mut self.budget,
         )?;
         drop(ref_list0);

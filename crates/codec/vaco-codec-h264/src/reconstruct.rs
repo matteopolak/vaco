@@ -728,7 +728,7 @@ pub(crate) fn reconstruct_picture_with_inter(
         } else if mb.is_intra4x4 {
             reconstruct_intra4x4_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
         } else {
-            reconstruct_inter_mb(&mut buf, mb, ref_list0, ref_width, ref_height);
+            reconstruct_inter_mb(&mut buf, mb, ref_list0, ref_width, ref_height, None);
         }
     }
     Ok(buf.luma)
@@ -748,6 +748,7 @@ fn reconstruct_inter_mb(
     ref_list0: &[&[u8]],
     ref_width: u32,
     ref_height: u32,
+    luma_weights: SliceWeights<'_>,
 ) {
     let empty: &[u8] = &[];
     // Motion compensation is unaffected by `transform_size_8x8_flag` --
@@ -760,6 +761,10 @@ fn reconstruct_inter_mb(
         let (bx, by) = blk_xy(blk);
         let info = mb.mv_blocks[(by * 4 + bx) as usize];
         let ref_idx = info.ref_idx_l0().max(0) as usize;
+        // Clause 8.4.2.3: the weighting is per *reference index*, so it is
+        // resolved here, alongside the reference plane it belongs to, and
+        // applied to this block's samples before any residual is added.
+        let weight = weight_for(luma_weights, ref_idx);
         let plane = ref_list0.get(ref_idx).copied().unwrap_or(empty);
         let (mvx, mvy) = info.mv_l0();
         let (mvx, mvy) = (i32::from(mvx), i32::from(mvy));
@@ -804,11 +809,12 @@ fn reconstruct_inter_mb(
             for (j, v) in row.iter_mut().enumerate() {
                 let full_x = x as i32 + j as i32 + int_dx;
                 let full_y = y as i32 + i as i32 + int_dy;
-                *v = if safe {
+                let sample = if safe {
                     crate::interp::luma_qpel_sample(fetch_fast, full_x, full_y, frac_x, frac_y)
                 } else {
                     crate::interp::luma_qpel_sample(fetch_clamped, full_x, full_y, frac_x, frac_y)
                 };
+                *v = weight.map_or(sample, |w| w.apply(sample));
             }
         }
         pred
@@ -872,6 +878,123 @@ fn reconstruct_inter_mb(
         }
         buf.write_block4(x, y, block);
     }
+}
+
+/// Clause 8.4.2.3's explicit weighted-prediction parameters for one slice,
+/// list 0 only (this decoder is single-list: B slices are refused before
+/// reconstruction ever runs).
+///
+/// `weighted_pred_flag` is **x264's own default** for P slices, so this is
+/// not an exotic path: nearly every real H.264 file carries a
+/// `pred_weight_table()`. On most content the encoder picks the neutral
+/// weight (`w == 1 << logWD`, `o == 0`) and the weighted formula collapses
+/// to a plain copy, which is exactly why ignoring it looked correct across
+/// several fixtures -- and why the first fixture with real global brightness
+/// change (`life`, a cellular automaton that flickers) had *every* inter
+/// macroblock wrong from its first P picture, at `w = 15, logWD = 4,
+/// o = -3`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PredWeight {
+    /// `luma_log2_weight_denom` / `chroma_log2_weight_denom` (`logWD`).
+    pub(crate) log2_denom: u8,
+    /// `luma_weight_l0[refIdxL0]` / `chroma_weight_l0[refIdxL0][iCbCr]`.
+    pub(crate) weight: i32,
+    /// `luma_offset_l0[refIdxL0]` / `chroma_offset_l0[refIdxL0][iCbCr]`.
+    pub(crate) offset: i32,
+}
+
+impl PredWeight {
+    /// Clause 8.4.2.3.2, eq. (8-270)/(8-271), the single-list (`predFlagL0
+    /// == 1`, `predFlagL1 == 0`) case:
+    ///
+    /// ```text
+    /// logWD >= 1: Clip1( ( ( pred * w0 + 2^(logWD-1) ) >> logWD ) + o0 )
+    /// logWD == 0: Clip1( pred * w0 + o0 )
+    /// ```
+    ///
+    /// The offset is `o0 << (BitDepth - 8)`, which is `o0` unchanged at the
+    /// 8-bit depth this decoder supports.
+    fn apply(self, pred: u8) -> u8 {
+        let p = i32::from(pred);
+        let v = if self.log2_denom >= 1 {
+            let round = 1i32 << (self.log2_denom - 1);
+            ((p.saturating_mul(self.weight).saturating_add(round)) >> self.log2_denom)
+                .saturating_add(self.offset)
+        } else {
+            p.saturating_mul(self.weight).saturating_add(self.offset)
+        };
+        #[allow(
+            clippy::cast_sign_loss,
+            clippy::cast_possible_truncation,
+            reason = "clamped to 0..=255 immediately above the cast"
+        )]
+        {
+            v.clamp(0, 255) as u8
+        }
+    }
+}
+
+/// One slice's whole `pred_weight_table()`, already split per plane so
+/// [`reconstruct_picture`]'s inner loops index a plain slice rather than
+/// re-deriving anything per macroblock. Empty (`weighted == false`) for an
+/// I slice or a P slice whose PPS has `weighted_pred_flag == 0`.
+#[derive(Debug, Default)]
+pub(crate) struct SliceWeightTables {
+    weighted: bool,
+    luma: Vec<PredWeight>,
+    chroma: [Vec<PredWeight>; 2],
+}
+
+impl SliceWeightTables {
+    /// Builds the tables from a parsed `pred_weight_table()`, filling in
+    /// clause 7.4.3.2's own inferred values for any reference whose
+    /// `luma_weight_l0_flag`/`chroma_weight_l0_flag` was 0: the neutral
+    /// weight `2^logWD` with offset 0, i.e. an identity.
+    pub(crate) fn from_table(table: Option<&vaco_parse_h264::PredWeightTable>) -> Self {
+        let Some(t) = table else { return Self::default() };
+        let luma_denom = t.luma_log2_weight_denom;
+        let chroma_denom = t.chroma_log2_weight_denom.unwrap_or(0);
+        let neutral = |denom: u8| 1i32 << denom;
+        let mut luma = Vec::new();
+        let mut chroma = [Vec::new(), Vec::new()];
+        for entry in &t.l0 {
+            let (w, o) = entry.luma.unwrap_or((neutral(luma_denom), 0));
+            luma.push(PredWeight { log2_denom: luma_denom, weight: w, offset: o });
+            let c = entry.chroma.unwrap_or([(neutral(chroma_denom), 0); 2]);
+            for comp in 0..2usize {
+                let (w, o) = c.get(comp).copied().unwrap_or((neutral(chroma_denom), 0));
+                if let Some(v) = chroma.get_mut(comp) {
+                    v.push(PredWeight { log2_denom: chroma_denom, weight: w, offset: o });
+                }
+            }
+        }
+        Self { weighted: true, luma, chroma }
+    }
+
+    fn luma(&self) -> SliceWeights<'_> {
+        self.weighted.then_some(self.luma.as_slice())
+    }
+
+    fn chroma(&self, comp: usize) -> SliceWeights<'_> {
+        if !self.weighted {
+            return None;
+        }
+        self.chroma.get(comp).map(Vec::as_slice)
+    }
+}
+
+/// Every reference index's weights for one slice and one plane, or `None`
+/// when `weighted_pred_flag` is 0 (no `pred_weight_table()` at all -- an
+/// unweighted plain copy, which is *not* the same as a table full of
+/// neutral weights only because it costs nothing to skip).
+pub(crate) type SliceWeights<'a> = Option<&'a [PredWeight]>;
+
+/// The weight for `ref_idx`, or the identity when this slice is unweighted
+/// or the table is shorter than the reference list (defensive: clause
+/// 7.4.3.2 requires one entry per active reference, but a malformed stream
+/// need not comply and this must not panic or silently mispredict).
+fn weight_for(weights: SliceWeights<'_>, ref_idx: usize) -> Option<PredWeight> {
+    weights.and_then(|w| w.get(ref_idx)).copied()
 }
 
 /// One reference picture's three planes -- what [`reconstruct_picture`]'s
@@ -984,6 +1107,7 @@ fn predict_chroma_inter(
     ref_list0: &[RefPicturePlanes<'_>],
     chroma_width: u32,
     chroma_height: u32,
+    chroma_weights: SliceWeights<'_>,
 ) -> [[u8; 8]; 8] {
     let empty: &[u8] = &[];
     let mut out = [[0u8; 8]; 8];
@@ -994,6 +1118,7 @@ fn predict_chroma_inter(
         let plane = ref_list0
             .get(ref_idx)
             .map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
+        let weight = weight_for(chroma_weights, ref_idx);
         let (mvx, mvy) = info.mv_l0();
         let (mvx, mvy) = (i32::from(mvx), i32::from(mvy));
         let cx0 = (mb.mb_x * 8 + bx * 2) as i32;
@@ -1014,6 +1139,7 @@ fn predict_chroma_inter(
         for dy in 0..2i32 {
             for dx in 0..2i32 {
                 let v = crate::interp::chroma_mc_sample(fetch, cx0 + dx, cy0 + dy, mvx, mvy);
+                let v = weight.map_or(v, |w| w.apply(v));
                 let oy = (by * 2) as usize + dy as usize;
                 let ox = (bx * 2) as usize + dx as usize;
                 if let Some(row) = out.get_mut(oy)
@@ -1062,6 +1188,7 @@ pub(crate) fn reconstruct_picture(
     chroma_qp_offset_cb: i32,
     chroma_qp_offset_cr: i32,
     ref_list0: &[RefPicturePlanes<'_>],
+    weights: &SliceWeightTables,
     budget: &mut Budget,
 ) -> vaco_core::Result<ReconstructedPicture> {
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
@@ -1105,14 +1232,14 @@ pub(crate) fn reconstruct_picture(
         } else if mb.is_intra8x8 {
             reconstruct_intra8x8_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
         } else {
-            reconstruct_inter_mb(&mut buf, mb, &ref_list0_luma, ref_width, ref_height);
+            reconstruct_inter_mb(&mut buf, mb, &ref_list0_luma, ref_width, ref_height, weights.luma());
         }
 
         let qpc_cb = chroma_qp(mb.qpy, chroma_qp_offset_cb);
         let qpc_cr = chroma_qp(mb.qpy, chroma_qp_offset_cr);
         for (comp, qpc) in [(0usize, qpc_cb), (1usize, qpc_cr)] {
             let pred = if is_inter {
-                predict_chroma_inter(mb, comp, ref_list0, chroma_width, chroma_height)
+                predict_chroma_inter(mb, comp, ref_list0, chroma_width, chroma_height, weights.chroma(comp))
             } else {
                 let neighbours = chroma_neighbours(&buf, comp, mb.mb_x, mb.mb_y);
                 predict_intra_chroma(mb.intra_chroma_pred_mode, neighbours)
@@ -1145,6 +1272,75 @@ pub(crate) fn reconstruct_picture(
 )]
 mod tests {
     use super::*;
+
+    /// Clause 8.4.2.3.2's explicit single-list weighting, pinned to the
+    /// exact parameters that exposed it: a 25-frame 416x240 High-profile
+    /// `libx264` encode of ffmpeg's `life` source picked
+    /// `luma_log2_weight_denom = 4`, `luma_weight_l0[0] = 15`,
+    /// `luma_offset_l0[0] = -3`, and *every* inter macroblock of its first
+    /// P picture reconstructed wrong while this was ignored. The expected
+    /// values here were derived independently -- by fitting `(logWD, w, o)`
+    /// to 1888 coefficient-free predicted samples of that picture taken
+    /// from `ffmpeg`'s own decode -- not by running this function.
+    #[test]
+    fn explicit_weighted_prediction_matches_the_measured_x264_parameters() {
+        let w = PredWeight { log2_denom: 4, weight: 15, offset: -3 };
+        // ((p * 15 + 8) >> 4) - 3, clipped.
+        assert_eq!(w.apply(4), 1);
+        assert_eq!(w.apply(0), 0, "clipped at the bottom, not wrapped");
+        assert_eq!(w.apply(255), 236);
+        assert_eq!(w.apply(128), 117);
+    }
+
+    /// `logWD == 0` takes clause 8.4.2.3.2's *other* branch: no rounding
+    /// term and no shift at all, which is a different expression, not the
+    /// same one with a zero shift.
+    #[test]
+    fn a_zero_log2_denominator_skips_the_rounding_term() {
+        let w = PredWeight { log2_denom: 0, weight: 1, offset: 7 };
+        assert_eq!(w.apply(10), 17);
+        let doubling = PredWeight { log2_denom: 0, weight: 2, offset: 0 };
+        assert_eq!(doubling.apply(100), 200);
+        assert_eq!(doubling.apply(200), 255, "Clip1 saturates rather than wrapping");
+    }
+
+    /// The neutral weight is an exact identity for every sample value --
+    /// this is why ignoring `pred_weight_table()` looked correct on every
+    /// fixture whose encoder happened to choose neutral weights.
+    #[test]
+    fn the_neutral_weight_is_an_exact_identity() {
+        for denom in 0..=7u8 {
+            let w = PredWeight { log2_denom: denom, weight: 1 << denom, offset: 0 };
+            for v in 0..=255u8 {
+                assert_eq!(w.apply(v), v, "denom={denom} v={v}");
+            }
+        }
+    }
+
+    /// A reference whose `luma_weight_l0_flag` was 0 must come back as
+    /// that identity (clause 7.4.3.2's inferred values), not as a missing
+    /// entry that would silently fall back to unweighted prediction for
+    /// that one reference while the others are weighted.
+    #[test]
+    fn an_absent_per_reference_flag_infers_the_neutral_weight() {
+        let table = vaco_parse_h264::slice::PredWeightTable {
+            luma_log2_weight_denom: 5,
+            chroma_log2_weight_denom: Some(6),
+            l0: vec![
+                vaco_parse_h264::slice::RefWeight { luma: Some((20, -4)), chroma: None },
+                vaco_parse_h264::slice::RefWeight { luma: None, chroma: None },
+            ],
+            l1: Vec::new(),
+        };
+        let w = SliceWeightTables::from_table(Some(&table));
+        let luma = w.luma().expect("weighted");
+        assert_eq!((luma[0].log2_denom, luma[0].weight, luma[0].offset), (5, 20, -4));
+        assert_eq!((luma[1].log2_denom, luma[1].weight, luma[1].offset), (5, 32, 0));
+        let cb = w.chroma(0).expect("weighted");
+        assert_eq!((cb[0].log2_denom, cb[0].weight, cb[0].offset), (6, 64, 0));
+        // No table at all is distinct from a table of neutral weights.
+        assert!(SliceWeightTables::from_table(None).luma().is_none());
+    }
     use crate::cabac_residual::CabacResidual;
 
     fn unavailable() -> Neighbours16 {
@@ -1994,6 +2190,7 @@ mod tests {
                             pps.chroma_qp_index_offset,
                             pps.second_chroma_qp_index_offset,
                             &ref_list0,
+                            &SliceWeightTables::from_table(slice_header.pred_weight_table.as_ref()),
                             &mut budget,
                         )
                         .map_err(|e| format!("reconstruct_picture failed: {e:?}"))
@@ -2070,7 +2267,7 @@ mod tests {
                     let stats =
                         crate::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header).unwrap();
                     let mut pic =
-                        reconstruct_picture(&stats.macroblocks, mbs_wide, mbs_high, pps.chroma_qp_index_offset, pps.second_chroma_qp_index_offset, &[], &mut budget)
+                        reconstruct_picture(&stats.macroblocks, mbs_wide, mbs_high, pps.chroma_qp_index_offset, pps.second_chroma_qp_index_offset, &[], &SliceWeightTables::default(), &mut budget)
                             .unwrap();
                     crate::deblock::deblock_picture_luma(
                         &mut pic.luma,
@@ -2251,6 +2448,7 @@ mod tests {
                         pps.chroma_qp_index_offset,
                         pps.second_chroma_qp_index_offset,
                         &ref_list0,
+                        &SliceWeightTables::from_table(slice_header.pred_weight_table.as_ref()),
                         &mut budget,
                     )
                     .unwrap();
