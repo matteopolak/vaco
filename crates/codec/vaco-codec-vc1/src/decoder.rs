@@ -457,7 +457,14 @@ impl Vc1Decoder {
         let ctx = FrameCtx { ph: &ph, seq: &seq, mquant, double_quant };
 
         let mut budget = Budget::new(self.limits.clone());
-        budget.check_frame(seq.width, seq.height, 3)?;
+        // VC-1 (this decoder) is always 4:2:0 8-bit — `PixFmt::Yuv420p`,
+        // whose real average is 12 bits (1.5 bytes) per pixel, not the 3
+        // bytes this used to charge (double the real footprint, which is
+        // enough to false-reject a legitimate large frame under a tight
+        // budget). Charge the format's own average, the same quantity
+        // `Frame::alloc_video` checks again right below.
+        let bpp = u32::from(PixFmt::Yuv420p.bits_per_pixel()).div_ceil(8).max(1);
+        budget.check_frame(seq.width, seq.height, bpp)?;
         let mut frame = Frame::alloc_video(&mut budget, PixFmt::Yuv420p, seq.width, seq.height)?;
         let FrameData::Video { planes, .. } = &mut frame.data else {
             return Err(Error::InvalidData("vc1: allocated frame has no planes"));
@@ -637,5 +644,26 @@ mod tests {
         // `VlcTable::decode`'s `None`-on-no-match behaviour precisely so
         // this holds even on data this crate never intended to accept.
         let _ = dec.send_packet(Some(&pkt));
+    }
+
+    /// A legitimately large frame must fit `Limits::strict`'s frame budget,
+    /// not just `Limits::permissive`'s.
+    ///
+    /// Regression: `decode_frame` used to charge a flat 3 bytes per pixel
+    /// for what is always a `PixFmt::Yuv420p` frame in this decoder — real
+    /// 4:2:0 8-bit averages 12 bits (1.5 bytes) per pixel, so the old flat 3
+    /// over-charged by 2x. At 2732x2048 that overshoot (16.79 MB) crosses
+    /// `Limits::strict`'s 16 MiB `max_frame_bytes` cap even though the real
+    /// 4:2:0 frame is only 10.67 MB.
+    #[test]
+    fn a_legitimately_large_frame_is_accepted_by_the_frame_budget() {
+        let bpp = u32::from(PixFmt::Yuv420p.bits_per_pixel()).div_ceil(8).max(1);
+        assert_eq!(bpp, 2, "yuv420p averages 12 bits/pixel, not 24");
+
+        let budget = Budget::new(Limits::strict());
+        assert!(
+            budget.check_frame(2732, 2048, bpp).is_ok(),
+            "a real 4:2:0 8-bit frame this size must fit `strict`'s frame budget"
+        );
     }
 }

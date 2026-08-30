@@ -361,6 +361,43 @@ fn parameters_are_validated_against_a_budget() {
     assert!(p.validate(&budget).is_err());
 }
 
+/// A legitimately large frame in a *known* pixel format must be charged its
+/// real bytes per pixel, not the flat 4-bytes-per-pixel fallback `validate`
+/// uses when the format is not yet known.
+///
+/// Regression: before this fix, `validate` charged every video stream 4
+/// bytes per pixel regardless of `VideoParameters::format`. At 2732x1536, a
+/// real `yuv420p` frame is ~8.4 MB (2 bytes/pixel) but the flat charge
+/// (16.8 MB) crosses `Limits::strict`'s 16 MiB `max_frame_bytes` cap —
+/// exactly the false-rejection shape this session's fix addresses.
+#[test]
+fn a_known_small_pixel_format_is_charged_its_real_bytes_per_pixel() {
+    let budget = Budget::new(Limits::strict());
+    let mut p = CodecParameters::video();
+    let Some(v) = p.video.as_mut() else {
+        panic!("CodecParameters::video() must carry video parameters");
+    };
+    v.width = 2732;
+    v.height = 1536;
+    v.coded_width = 2732;
+    v.coded_height = 1536;
+
+    // Unknown format: still conservative, and this resolution legitimately
+    // exceeds the flat-4 fallback charge.
+    assert!(p.validate(&budget).is_err());
+
+    // Known, real format: charged its own (smaller) average bytes per
+    // pixel, and now fits.
+    let Some(v) = p.video.as_mut() else {
+        panic!("CodecParameters::video() must carry video parameters");
+    };
+    v.format = Some(vaco_pixfmt::PixFmt::Yuv420p);
+    assert!(
+        p.validate(&budget).is_ok(),
+        "a real yuv420p frame this size must fit `strict`'s frame budget"
+    );
+}
+
 #[test]
 fn the_container_wins_and_the_parser_only_fills_gaps() {
     let mut container = CodecParameters::video().with_codec(CodecId::H264);

@@ -220,10 +220,20 @@ impl CodecParameters {
     pub fn validate(&self, budget: &Budget) -> vaco_core::Result<()> {
         self.check_consistent()?;
         if let Some(v) = &self.video {
-            // Four bytes per pixel is the widest packed 8-bit layout; planar
-            // high-bit-depth formats are checked again by the decoder once the
-            // pixel format is actually known.
-            budget.check_frame(v.coded_width.max(v.width), v.coded_height.max(v.height), 4)?;
+            // When the pixel format is already known (an uncompressed track,
+            // for instance), charge its real average bytes per pixel — the
+            // same quantity `Frame::alloc_video` uses — rather than a flat
+            // guess. Otherwise fall back to four, the widest packed 8-bit
+            // layout (`rgba`, `bgra`, …): a compressed stream's real format
+            // is not known until its own parameter set is decoded, and that
+            // parser checks the exact plane-by-plane byte total again once it
+            // is (see `vaco-parse-h264`/`vaco-parse-hevc`'s own SPS-level
+            // checks) — this call only has to avoid overshooting `usize` on
+            // container-declared dimensions before that point.
+            let bpp = v
+                .format
+                .map_or(4, |f| u32::from(f.bits_per_pixel()).div_ceil(8).max(1));
+            budget.check_frame(v.coded_width.max(v.width), v.coded_height.max(v.height), bpp)?;
         }
         if let Some(a) = &self.audio {
             budget.check_sample_rate(u64::from(a.sample_rate))?;
@@ -594,4 +604,60 @@ impl ProfileTable {
                 .entry(profile)
                 .is_some_and(|e| e.subsumes.contains(&other.value))
     }
+}
+
+/// The real byte size of one planar YUV/gray frame at `width`x`height`,
+/// summed plane by plane from the bitstream's own chroma subsampling and
+/// per-component bit depth — not a flat worst-case bytes-per-pixel guess.
+///
+/// This is the shared arithmetic behind H.264's and HEVC's SPS-level frame
+/// budget checks (`vaco-parse-h264/src/sps.rs`'s `frame_bytes` and
+/// `vaco-parse-hevc/src/sps.rs`'s `checked`): both bitstreams describe the
+/// same shape at this point in parsing — one full-resolution luma plane and,
+/// unless monochrome, two chroma planes decimated by `SubWidthC`/`SubHeightC`
+/// (Table 6-1 in both specifications) — so the plane-summing lives here once
+/// (D19) instead of being retyped per parser.
+///
+/// A [`vaco_pixfmt::PixFmt`]-based computation cannot serve this purpose: both
+/// H.264 and HEVC permit luma bit depths (11, 13) that have no corresponding
+/// named pixel format, so the caller supplies the raw subsampling factors and
+/// depths straight from its own SPS rather than a resolved `PixFmt`.
+///
+/// `sub_width_c`/`sub_height_c` are ignored when `monochrome` is set (there is
+/// no chroma plane to decimate), and are otherwise expected to be 1 or 2 per
+/// the specifications this models.
+///
+/// # Errors
+///
+/// Returns `None` on overflow, which callers treat as "too large" — the same
+/// outcome [`vaco_limits::Budget::check_frame`]'s own overflow case gives.
+#[must_use]
+pub fn planar_frame_bytes(
+    width: u32,
+    height: u32,
+    monochrome: bool,
+    sub_width_c: u32,
+    sub_height_c: u32,
+    bit_depth_luma: u8,
+    bit_depth_chroma: u8,
+) -> Option<u64> {
+    let w = u64::from(width);
+    let h = u64::from(height);
+    let luma_bpp: u64 = if bit_depth_luma > 8 { 2 } else { 1 };
+    let luma = w.checked_mul(h)?.checked_mul(luma_bpp)?;
+    let chroma = if monochrome {
+        0
+    } else {
+        let sub_w = u64::from(sub_width_c.max(1));
+        let sub_h = u64::from(sub_height_c.max(1));
+        let chroma_bpp: u64 = if bit_depth_chroma > 8 { 2 } else { 1 };
+        // ceil(w / sub_w), ceil(h / sub_h); `sub_w`/`sub_h` are at least 1, so
+        // `sub - 1` cannot underflow.
+        let cw = w.checked_add(sub_w.checked_sub(1)?)?.checked_div(sub_w)?;
+        let ch = h.checked_add(sub_h.checked_sub(1)?)?.checked_div(sub_h)?;
+        cw.checked_mul(ch)?
+            .checked_mul(2)?
+            .checked_mul(chroma_bpp)?
+    };
+    luma.checked_add(chroma)
 }

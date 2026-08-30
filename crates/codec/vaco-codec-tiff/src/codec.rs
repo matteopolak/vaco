@@ -28,6 +28,28 @@ fn pack_u16(samples: &[u16]) -> Vec<u8> {
     out
 }
 
+/// Bytes per pixel the destination [`PixFmt`] in [`page_from_result`] uses
+/// for a given `ColorType`, for budgeting before decode rather than after.
+///
+/// `color` is already known by the time [`decode`] reaches its budget check,
+/// so there is no need to charge every page the 8-byte-per-pixel worst case
+/// among the types this crate maps (`RGBA(16)`) — a flat 8 over-charges a
+/// `Gray(8)` page by 8x, enough to false-reject a legitimately large
+/// grayscale TIFF under a tight budget. A colour type this crate does not map
+/// to a `PixFmt` still gets the conservative 8: [`page_from_result`] rejects
+/// it as `Unsupported` before any frame is allocated, so 8 never causes a
+/// false rejection there — it is simply never load-bearing.
+const fn color_type_bpp(color: ColorType) -> u32 {
+    match color {
+        ColorType::Gray(8) => 1,
+        ColorType::Gray(16) | ColorType::GrayA(8) => 2,
+        ColorType::GrayA(16) | ColorType::RGBA(8) => 4,
+        ColorType::RGB(8) => 3,
+        ColorType::RGB(16) => 6,
+        _ => 8,
+    }
+}
+
 /// One decoded page's pixels, already laid out as bytes in the destination
 /// [`PixFmt`]'s own native representation.
 struct Page {
@@ -148,7 +170,7 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         let color = decoder
             .colortype()
             .map_err(|_| Error::Unsupported("tiff: colour type"))?;
-        budget.check_frame(width, height, 8)?;
+        budget.check_frame(width, height, color_type_bpp(color))?;
         let result = decoder
             .read_image()
             .map_err(|_| Error::Unsupported("tiff: compression or sample layout"))?;
@@ -315,4 +337,47 @@ fn plane_row_bytes(frame: &Frame, bytes_per_pixel: usize) -> Result<usize> {
         return Err(Error::Unsupported("tiff: audio frame"));
     };
     Ok(*width as usize * bytes_per_pixel)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vaco_limits::Limits;
+
+    #[test]
+    fn color_type_bpp_matches_every_mapped_page_from_result_arm() {
+        assert_eq!(color_type_bpp(ColorType::Gray(8)), 1);
+        assert_eq!(color_type_bpp(ColorType::Gray(16)), 2);
+        assert_eq!(color_type_bpp(ColorType::GrayA(8)), 2);
+        assert_eq!(color_type_bpp(ColorType::GrayA(16)), 4);
+        assert_eq!(color_type_bpp(ColorType::RGB(8)), 3);
+        assert_eq!(color_type_bpp(ColorType::RGB(16)), 6);
+        assert_eq!(color_type_bpp(ColorType::RGBA(8)), 4);
+        assert_eq!(color_type_bpp(ColorType::RGBA(16)), 8);
+        // An unmapped colour type still gets the conservative worst case;
+        // `page_from_result` rejects it as `Unsupported` before any frame is
+        // allocated, so this value is never load-bearing.
+        assert_eq!(color_type_bpp(ColorType::CMYK(8)), 8);
+    }
+
+    /// A legitimately large grayscale page must fit `Limits::strict`'s frame
+    /// budget, not just `Limits::permissive`'s.
+    ///
+    /// Regression: `decode`'s budget check used to charge every page 8 bytes
+    /// per pixel — the worst case among the colour types this crate maps
+    /// (`RGBA(16)`) — regardless of the page's own, already-known colour
+    /// type. A real `Gray(8)` page needs only 1 byte per pixel, an 8x
+    /// overshoot from the flat charge, easily enough to false-reject a large
+    /// grayscale TIFF under a tight budget.
+    #[test]
+    fn a_legitimately_large_grayscale_page_is_accepted_by_the_frame_budget() {
+        let bpp = color_type_bpp(ColorType::Gray(8));
+        assert_eq!(bpp, 1);
+
+        let budget = Budget::new(Limits::strict());
+        assert!(
+            budget.check_frame(3000, 1000, bpp).is_ok(),
+            "a real 8-bit grayscale page this size must fit `strict`'s frame budget"
+        );
+    }
 }

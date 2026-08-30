@@ -1038,9 +1038,32 @@ impl Sps {
         let (w, h) = self.dimensions().ok_or(Error::InvalidData(
             "the conformance window leaves no picture",
         ))?;
-        // Four bytes per pixel is the widest packed 8-bit layout; the real
-        // pixel format tightens this once it is known.
-        budget.check_frame(w.max(self.coded_width()), h.max(self.coded_height()), 4)?;
+        let cw = w.max(self.coded_width());
+        let ch = h.max(self.coded_height());
+        // Bound the dimensions themselves against `max_dimension`; the
+        // `bytes_per_pixel` of 1 here is a placeholder for that half of the
+        // check only — the real byte total, plane by plane, is computed by
+        // `vaco_codec_core::planar_frame_bytes` and checked against
+        // `max_frame_bytes` below. A flat "4 bytes per pixel" here (the
+        // RGBA-sized bound the H.264 parser used to copy, and other codecs
+        // still do) overshoots a real 4:2:0 8-bit frame by nearly 3x: 3840x2160
+        // is 12.4 MB of actual samples but was being budgeted at 33.2 MB,
+        // which pushed an ordinary 4K Main-profile stream over
+        // `Limits::strict`'s 16 MiB `max_frame_bytes` cap and failed the whole
+        // SPS parse. `chroma_format` and the bit depths are already known by
+        // this point, so there is no need to guess.
+        budget.check_frame(cw, ch, 1)?;
+        let bytes = vaco_codec_core::planar_frame_bytes(
+            cw,
+            ch,
+            self.chroma_format == ChromaFormat::Monochrome,
+            self.chroma_format.sub_width_c(),
+            self.chroma_format.sub_height_c(),
+            self.bit_depth_luma,
+            self.bit_depth_chroma,
+        )
+        .ok_or(Error::InvalidData("frame geometry overflows"))?;
+        budget.check_count("max_frame_bytes", bytes, budget.limits().max_frame_bytes)?;
         Ok(self)
     }
 }

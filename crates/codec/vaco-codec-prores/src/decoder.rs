@@ -338,8 +338,16 @@ impl ProresDecoder {
         };
 
         let mut budget = Budget::new(self.limits.clone());
-        budget.check_frame(u32::from(fh.horizontal_size), u32::from(fh.vertical_size), 4)?;
+        // ProRes is 4:2:2 (10-bit) or 4:4:4 (12-bit, optionally with alpha),
+        // never packed RGBA — a flat 4 bytes per pixel over-charges the
+        // common 4:2:2 case (real average is 2.5 bytes/pixel) and
+        // under-charges 4:4:4 with alpha (up to 6). `pix_fmt_for` already
+        // resolves the real format from the frame header, so charge its real
+        // average bytes per pixel, the same quantity `Frame::alloc_video`
+        // itself checks against right below.
         let pix_fmt = pix_fmt_for(&fh);
+        let bpp = u32::from(pix_fmt.bits_per_pixel()).div_ceil(8).max(1);
+        budget.check_frame(u32::from(fh.horizontal_size), u32::from(fh.vertical_size), bpp)?;
         let mut frame = Frame::alloc_video(
             &mut budget,
             pix_fmt,
@@ -483,5 +491,40 @@ mod tests {
         let mut budget = Budget::new(Limits::permissive());
         let pkt = Packet::from_slice(&mut budget, &[0u8; 3]).unwrap();
         assert!(dec.send_packet(Some(&pkt)).is_err());
+    }
+
+    /// A legitimately large 4:2:2 frame must fit `Limits::strict`'s frame
+    /// budget, not just `Limits::permissive`'s.
+    ///
+    /// Regression: `decode_frame_payload` used to charge a flat 4 bytes per
+    /// pixel — the widest *packed* 8-bit layout, wildly wrong for `ProRes`,
+    /// which is always planar 4:2:2/4:4:4 at 10/12 bits.
+    /// `yuv422p10le`'s real average is 20 bits (2.5 bytes) per pixel, so the
+    /// old flat 4 over-charged by 60%. At 2732x1536 that overshoot
+    /// (16.79 MB) crosses `Limits::strict`'s 16 MiB `max_frame_bytes` cap
+    /// even though the real 4:2:2 10-bit frame is only 12.6 MB — the exact
+    /// false-rejection shape this session's fix addresses.
+    #[test]
+    fn a_legitimately_large_4_2_2_frame_is_accepted_by_the_frame_budget() {
+        let fh = FrameHeader {
+            bitstream_version: 0,
+            horizontal_size: 2732,
+            vertical_size: 1536,
+            chroma_format: ChromaFormat::Yuv422,
+            interlace_mode: InterlaceMode::Progressive,
+            alpha_channel_type: 0,
+            luma_quant: header::DEFAULT_QUANT_MATRIX,
+            chroma_quant: header::DEFAULT_QUANT_MATRIX,
+        };
+        let pix_fmt = pix_fmt_for(&fh);
+        assert_eq!(pix_fmt, PixFmt::Yuv422p10le);
+        let bpp = u32::from(pix_fmt.bits_per_pixel()).div_ceil(8).max(1);
+        assert_eq!(bpp, 3, "yuv422p10le averages 20 bits/pixel, not 32");
+
+        let budget = Budget::new(Limits::strict());
+        assert!(
+            budget.check_frame(2732, 1536, bpp).is_ok(),
+            "a real 4:2:2 10-bit frame this size must fit `strict`'s frame budget"
+        );
     }
 }

@@ -207,11 +207,17 @@ impl Decoder for TheoraDecoder {
         // Bound the coded frame's implied memory before any per-block table
         // is built from it — `FrameGeom::build` below allocates several
         // vectors sized from `fmbw`/`fmbh`, both attacker-controlled 16-bit
-        // fields.
+        // fields. Theora is always 8-bit 4:2:0/4:2:2/4:4:4, never packed
+        // RGBA, so charge the real format's average bytes per pixel (12/16/24
+        // bits respectively) rather than a flat 4 — which over-charges every
+        // one of those cases and can false-reject a legitimately large frame.
+        let bpp = u32::from(pix_fmt_for(ident.pf).bits_per_pixel())
+            .div_ceil(8)
+            .max(1);
         budget.check_frame(
             ident.fmbw.saturating_mul(16),
             ident.fmbh.saturating_mul(16),
-            4,
+            bpp,
         )?;
         let geom = FrameGeom::build(ident.fmbw, ident.fmbh, ident.pf, &mut budget)?;
 
@@ -274,5 +280,30 @@ mod tests {
     fn video_packet_before_headers_is_a_clean_error() {
         let mut dec = TheoraDecoder::new(Limits::permissive());
         assert!(dec.decode_video_packet(&[0]).is_err());
+    }
+
+    /// A legitimately large 4:4:4 frame must fit `Limits::strict`'s frame
+    /// budget, not just `Limits::permissive`'s.
+    ///
+    /// Regression: `set_extradata`'s coded-size budget check used to charge
+    /// a flat 4 bytes per pixel. Theora is always 8-bit, so even its widest
+    /// format (4:4:4, `yuv444p`, 24 bits/pixel) needs only 3 bytes per pixel
+    /// — the old flat 4 over-charged every Theora frame, worst for 4:2:0
+    /// (12 bits, a 2.67x overshoot) but still wrong at 4:4:4. At 2732x1536
+    /// the flat-4 overshoot (16.79 MB) crosses `Limits::strict`'s 16 MiB
+    /// `max_frame_bytes` cap even though the real 4:4:4 frame is only
+    /// 12.6 MB.
+    #[test]
+    fn a_legitimately_large_4_4_4_frame_is_accepted_by_the_frame_budget() {
+        let pix_fmt = pix_fmt_for(PixelFormat::Yuv444);
+        assert_eq!(pix_fmt, PixFmt::Yuv444p);
+        let bpp = u32::from(pix_fmt.bits_per_pixel()).div_ceil(8).max(1);
+        assert_eq!(bpp, 3, "yuv444p averages 24 bits/pixel, not 32");
+
+        let budget = Budget::new(Limits::strict());
+        assert!(
+            budget.check_frame(2732, 1536, bpp).is_ok(),
+            "a real 4:4:4 8-bit frame this size must fit `strict`'s frame budget"
+        );
     }
 }

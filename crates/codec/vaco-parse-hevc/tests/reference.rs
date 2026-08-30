@@ -777,3 +777,42 @@ fn no_corruption_of_a_real_sps_panics() {
         }
     }
 }
+
+/// A real 4K SPS must parse under [`Limits::strict`], not just
+/// [`Limits::permissive`].
+///
+/// Regression for the bug this session fixed: `Sps::checked`'s own
+/// end-of-parse budget check assumed 4 bytes per pixel — the widest packed
+/// 8-bit layout, right for the RGBA-ish image codecs that pattern is copied
+/// from, wildly wrong for a YUV 4:2:0 video frame. At 3840x2160 that
+/// overshoot (33.2 MB) blew straight through `Limits::strict`'s 16 MiB
+/// `max_frame_bytes` cap even though the real frame this SPS describes is
+/// 12.4 MB, so an ordinary 4K Main-profile HEVC stream failed to parse its
+/// own SPS under the "conservative caps for untrusted input" default — the
+/// same shape of defect H.264's `frame_bytes` was fixed for earlier this
+/// session (`vaco-parse-h264/tests/reference.rs`'s
+/// `a_4k_sps_fits_the_strict_frame_byte_cap`), now shared through
+/// `vaco_codec_core::planar_frame_bytes` (D19) rather than a second,
+/// hand-rolled copy.
+///
+/// This SPS is the real bytes `libx265` wrote for `testsrc2=size=3840x2160`,
+/// Main profile, 8-bit 4:2:0 — lifted the same way every row in [`TABLE`] is.
+#[test]
+fn a_4k_sps_fits_the_strict_frame_byte_cap() {
+    let ebsp: &[u8] = &[
+        0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03, 0x00, 0x00,
+        0x03, 0x00, 0x96, 0xa0, 0x01, 0xe0, 0x20, 0x02, 0x1c, 0x59, 0x65, 0x66, 0x92, 0x4c, 0xaf,
+        0x01, 0x68, 0x08, 0x00, 0x00, 0x03, 0x00, 0x08, 0x00, 0x00, 0x03, 0x00, 0xc8, 0x40, 0x00,
+    ];
+    let mut scratch = Vec::new();
+    let rbsp = annexb::to_rbsp(ebsp, &mut scratch);
+
+    for limits in [Limits::strict(), Limits::permissive()] {
+        let mut budget = Budget::new(limits);
+        let sps = Sps::parse(rbsp, &mut budget).expect("a real 4K Main SPS must parse");
+        assert_eq!(sps.dimensions(), Some((3840, 2160)));
+        let params = codec_parameters(&sps);
+        let v = params.video.as_ref().expect("video parameters");
+        assert_eq!(v.format.map(vaco_pixfmt::PixFmt::name), Some("yuv420p"));
+    }
+}

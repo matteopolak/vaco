@@ -672,35 +672,25 @@ impl Sps {
     /// are already known by the time [`Sps::parse_data`] reaches its budget
     /// check, so there is no need to guess.
     ///
-    /// Chroma planes are `ceil(width / SubWidthC)` by `ceil(height /
-    /// SubHeightC)` samples each, two of them (Cb and Cr), per §6.2 and Table
-    /// 6-1; monochrome has none. A sample is one byte at 8-bit depth and two
-    /// otherwise, matching how every bit depth above 8 is actually stored.
+    /// Delegates the plane arithmetic to
+    /// [`vaco_codec_core::planar_frame_bytes`], which HEVC's own SPS-level
+    /// check shares (D19: one definition per concept) — this method just
+    /// supplies H.264's `SubWidthC`/`SubHeightC` and bit depths.
     ///
     /// Returns `None` on overflow, which the caller treats as "too large" —
     /// the same outcome [`vaco_limits::Budget::check_frame`]'s own overflow
     /// case gives.
     #[must_use]
     fn frame_bytes(&self, width: u32, height: u32) -> Option<u64> {
-        let w = u64::from(width);
-        let h = u64::from(height);
-        let luma_bpp: u64 = if self.bit_depth_luma > 8 { 2 } else { 1 };
-        let luma = w.checked_mul(h)?.checked_mul(luma_bpp)?;
-        let chroma = if self.chroma_format == ChromaFormat::Monochrome {
-            0
-        } else {
-            let sub_w = u64::from(self.chroma_format.sub_width_c());
-            let sub_h = u64::from(self.chroma_format.sub_height_c());
-            let chroma_bpp: u64 = if self.bit_depth_chroma > 8 { 2 } else { 1 };
-            // ceil(w / sub_w), ceil(h / sub_h); sub_w and sub_h are always 1
-            // or 2, so `sub - 1` cannot underflow.
-            let cw = w.checked_add(sub_w.checked_sub(1)?)?.checked_div(sub_w)?;
-            let ch = h.checked_add(sub_h.checked_sub(1)?)?.checked_div(sub_h)?;
-            cw.checked_mul(ch)?
-                .checked_mul(2)?
-                .checked_mul(chroma_bpp)?
-        };
-        luma.checked_add(chroma)
+        vaco_codec_core::planar_frame_bytes(
+            width,
+            height,
+            self.chroma_format == ChromaFormat::Monochrome,
+            self.chroma_format.sub_width_c(),
+            self.chroma_format.sub_height_c(),
+            self.bit_depth_luma,
+            self.bit_depth_chroma,
+        )
     }
 }
 

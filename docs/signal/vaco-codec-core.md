@@ -534,6 +534,25 @@ specification Annex A) and are reached here through `ProfileTable` and
   and costs memory; lowering it below any codec's reach makes that codec's reads
   take the copy path silently rather than incorrectly. `DEFAULT_BAND_HEIGHT`
   trades fast-path hit rate against how long a consumer waits for a producer.
+* **Charging a decoded frame's real byte size against a budget.** Use
+  `planar_frame_bytes(width, height, monochrome, sub_width_c, sub_height_c,
+  bit_depth_luma, bit_depth_chroma)` — it sums one full-resolution luma plane
+  and, unless monochrome, two chroma planes decimated by the bitstream's own
+  `SubWidthC`/`SubHeightC` (H.264 and HEVC's SPS-level frame-budget checks both
+  call it). Do not charge a flat bytes-per-pixel guess: `PixFmt::bits_per_pixel`
+  covers only the *named* formats, and both H.264 and HEVC permit luma bit
+  depths (11, 13) with no corresponding one, so a `PixFmt`-based computation
+  cannot serve this purpose — the caller must supply the raw subsampling
+  factors and depths from its own SPS. Where a `PixFmt` *is* already resolved
+  (any codec whose frame format is fixed or known before the check, e.g.
+  ProRes, VC-1, Theora, or a container-supplied uncompressed track), charge
+  `bits_per_pixel().div_ceil(8)` instead — the same quantity
+  `Frame::alloc_video` itself charges — rather than either helper's guess. A
+  flat "4 bytes per pixel" is only correct for a decoder that genuinely
+  produces packed 8-bit RGBA; for a subsampled YUV frame it overshoots badly
+  enough to reject a legitimately large, valid frame (measured: a stock 4K
+  4:2:0 HEVC stream, 12.4 MB of real samples, was charged 33.2 MB and blew
+  through `Limits::strict`'s 16 MiB `max_frame_bytes` cap).
 * **The gotcha.** `PictureWriter::finish()` consumes the writer and marks the
   picture complete. Dropping it any other way marks the picture *failed*, which
   is deliberate — it is the liveness guarantee — but it means an early `return`

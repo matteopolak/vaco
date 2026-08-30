@@ -46,7 +46,7 @@ pub use caps::{Caps, CodecProperties};
 pub use machine::{Accept, Machine, Stage};
 pub use params::{
     AudioParameters, CodecParameters, FieldOrder, Level, LevelConstraints, LevelEntry, LevelQuery,
-    LevelTable, Profile, ProfileEntry, ProfileTable, VideoParameters,
+    LevelTable, Profile, ProfileEntry, ProfileTable, VideoParameters, planar_frame_bytes,
 };
 pub use parser::{ParserDesc, ParserDriver};
 pub use picture::{
