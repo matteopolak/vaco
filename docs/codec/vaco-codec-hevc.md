@@ -5,12 +5,12 @@ Layer 4. Intra-only (I-slice) HEVC/H.265 video decode (ITU-T H.265
 intra prediction (planar/DC/33 angular modes, MPM derivation, reference
 sample smoothing and strong intra smoothing), the transform tree, residual
 coding, dequantisation, reconstruction, in-loop deblocking (§8.7.2, see
-"Deblocking (§8.7.2), landed" below) and SAO (§7.3.8.3/§8.7.3, see "SAO
-(§7.3.8.3 / §8.7.3), landed" below). Inter prediction, B/P-slices, tiles,
-WPP (attempted and reverted — see its own section below), `cu_qp_delta`,
-I_PCM, transform-skip residual coding, custom scaling lists and every
-range-extension feature are explicitly out of scope — see "What was cut"
-below.
+"Deblocking (§8.7.2), landed" below), SAO (§7.3.8.3/§8.7.3, see "SAO
+(§7.3.8.3 / §8.7.3), landed" below) and wavefront parallel processing
+(§9.3.2.3, see "WPP (`entropy_coding_sync_enabled_flag`), landed" below).
+Inter prediction, B/P-slices, tiles, `cu_qp_delta`, I_PCM, transform-skip
+residual coding, custom scaling lists and every range-extension feature are
+explicitly out of scope — see "What was cut" below.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
 this decoder with `encumbered = true` / `default = false` behind the
@@ -156,15 +156,13 @@ own decode of the same file byte-for-byte, per plane, end to end.
 `check_scope` in `decoder.rs` refuses (`Error::Unsupported`, by name, at
 the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
 `separate_colour_plane`, custom scaling lists, I_PCM, SPS/PPS range
-extensions, SCC extensions, tiles, `entropy_coding_sync` (WPP — see its own
-"attempted and reverted" section below for why this one is a *measured*
-refusal, not an unattempted one), `cu_qp_delta_enabled`,
-`transquant_bypass_enabled`. Neither deblocking nor SAO are on this list
-any more — see their own "landed" sections below. B/P-slices are not
-parsed at all; only NAL types this crate recognises as I-slice VCL data are
-decoded. Both Annex-B and length-prefixed (`hvcC`) framing are handled, via
-the embedded `vaco_parse_hevc::HevcParser` (`decoder.rs`'s own module
-doc).
+extensions, SCC extensions, tiles, `cu_qp_delta_enabled`,
+`transquant_bypass_enabled`. Neither deblocking, SAO, nor
+`entropy_coding_sync` (WPP) are on this list any more — see their own
+"landed" sections below. B/P-slices are not parsed at all; only NAL types
+this crate recognises as I-slice VCL data are decoded. Both Annex-B and
+length-prefixed (`hvcC`) framing are handled, via the embedded
+`vaco_parse_hevc::HevcParser` (`decoder.rs`'s own module doc).
 
 ## How to change it
 
@@ -182,19 +180,15 @@ doc).
   script). Clean-room rule: HM is Tier A (BSD-3-Clause) and may be read,
   built and instrumented directly; `ffmpeg`/`x265` stay Tier B — run only,
   never opened.
-- **Extending scope** (inter prediction, tiles, WPP — deblocking and SAO
-  are done, see their own sections above): the corresponding SPS/PPS fields
+- **Extending scope** (inter prediction, tiles — deblocking, SAO and WPP are
+  done, see their own sections above): the corresponding SPS/PPS fields
   already correctly return `Error::Unsupported` by name in `check_scope`
   when a real stream exercises them — implement behind that same call site
-  rather than adding a new refusal path. For WPP specifically, read the
-  "WPP — attempted and reverted" section first: a substantial, mostly-
-  working implementation already exists in this document's own record of
-  what was tried, and the next step is a bin-trace, not a fresh attempt
-  from scratch. Deblocking was the one exception to the "extend behind the
-  existing refusal" pattern, since it has no bitstream footprint to refuse
-  in the first place (a silent pixel-only deviation, not a parse error) —
-  its own call site is `decoder::decode_packet`'s post-CTU-loop
-  `deblock::filter_picture` call,
+  rather than adding a new refusal path. Deblocking was the one exception to
+  the "extend behind the existing refusal" pattern, since it has no
+  bitstream footprint to refuse in the first place (a silent pixel-only
+  deviation, not a parse error) — its own call site is
+  `decoder::decode_packet`'s post-CTU-loop `deblock::filter_picture` call,
   not `check_scope`.
 - **New CABAC context table**: transcribe from HM's `ContextTables.h`
   (Tier A, BSD-3-Clause — see "Specification" below), not from memory or
@@ -391,68 +385,100 @@ at its own (on) default (`wpp=0`, deblocking also at its default-on)
 decodes byte-exact on every sample of every plane of every frame against
 plain `ffmpeg`, at 320x240 and 640x480, at multiple QPs.
 
-## WPP (`entropy_coding_sync_enabled_flag`) — attempted and reverted
+## WPP (`entropy_coding_sync_enabled_flag`), landed
 
-Unlike SAO and deblocking, this one is **not** shipped. `check_scope` still
-refuses it, and this section records what was tried and measured so the
-next attempt does not repeat the same ground.
+A previous pass got most of the mechanism right and still reverted rather
+than ship it — this section used to be titled "attempted and reverted" and
+recorded exactly that measurement. It is kept below (renamed to "root
+cause, found and fixed") because the fix depended entirely on trusting that
+record and re-deriving from it, not from a fresh attempt.
 
-`decode_packet`'s CTU loop was restructured to split `slice_segment_data()`
-into one CABAC substream per CTU row (via `hdr.entry_point_offsets`, byte
-lengths per §7.3.8.1) and to perform §9.3.2.3's context save/restore at
-each row's second CTU (or a row's only CTU, if narrower than two) —
-mirroring `TDecSlice.cpp`'s own `m_entropyCodingSyncContextState` exactly:
-saved once, right after a CTU at that column finishes; restored into the
-*next* row's starting context, not carried forward from that row's own
-last CTU. `end_of_subset_one_bit` (read as one more `decode_terminate()`
-call at a non-final row's own last CTU) was included too.
+**The mechanism**: `decode_wpp_rows` (`decoder.rs`) splits
+`slice_segment_data()` into one CABAC substream per CTU row and performs
+§9.3.2.3's context save/restore at each row's second CTU (or leaves a
+narrower-than-two row's context untouched — no restore point exists there):
+mirroring `TDecSlice.cpp`'s own `m_entropyCodingSyncContextState` exactly,
+a whole `ContextBank` snapshot (it is `Copy`) is taken once, right after
+the CTU at column index 1 finishes, and used to initialise the *next* row's
+starting context — never carried forward from that row's own last CTU.
+Each row's arithmetic-decoding engine (`CabacDecoder`) always reinitialises
+fresh at that row's own substream's first byte, matching clause 9.3.1.2's
+own slice-start init; only the context state is conditionally inherited
+rather than reset.
 
-Measured against a real `libx265` WPP stream (25 real IDR frames, 320x240,
-4 CTU rows, `no-sao=1` to isolate WPP from the SAO work landing in the same
-pass):
+### Root cause, found and fixed
 
-- With the full mechanism active, **frame 0 decoded byte-exact** against
-  `ffmpeg`, full 4-row picture, multi-row and multi-column — proof the
-  substream-splitting and sync-restore *mechanism* is structurally sound,
-  not merely "looks right on paper".
-- Across all 25 frames, 7 failed with a genuine `CABAC decode ran past the
-  slice segment data` desync — always in the third or fourth CTU row,
-  **never** the first two.
-- Disabling *only* the context restore (keeping the per-row CABAC-engine
-  reinitialisation, so context merely continues naturally from wherever
-  the previous row's last CTU left it) raised the failure rate to 23 of 25
-  frames — strong evidence the restore mechanism is doing most of the
-  right thing, not that it is actively wrong in general.
-- HM 18.0 (Tier A) decodes the **identical** bitstream with zero errors,
-  confirming the encoder's output is a valid, conformant stream and the
-  defect is in this crate, not in what `libx265` produced.
+The previous pass's own measurement, kept verbatim because it is what the
+fix was found from:
 
-Root cause was not found within the effort available for this pass. The
-never-fails-in-the-first-two-rows / sometimes-fails-later pattern is
-consistent with either a genuine, narrow bug specific to the
-save/restore/re-init sequence, or a pre-existing, content-triggered
-residual-coding defect that WPP's different encoder rate-distortion
-decisions happen to expose (100 real frames of equivalent *non*-WPP content
-decoded byte-exact, so any such pre-existing defect is rare enough that
-ordinary content does not hit it) — the two hypotheses were not
-distinguished. **The next diagnostic step, per this crate's own established
-method** (see "The multi-coefficient-group residual defect, found and
-fixed" above): a bin-for-bin CABAC trace (context array + index,
-`pStateIdx`, `valMPS`, decoded value) of this crate against an
-identically-instrumented HM 18.0 decoding the same real, failing WPP
-fixture, diffed bin-for-bin from the third CTU row onward. That is exactly
-the method that found the DC-context and CTB-row-boundary bugs, and static
-code review alone did not find this one.
+> Measured against a real `libx265` WPP stream (25 real IDR frames, 320x240,
+> 4 CTU rows, `no-sao=1` to isolate WPP from the SAO work landing in the same
+> pass): with the full mechanism active, frame 0 decoded byte-exact against
+> `ffmpeg`, full 4-row picture, multi-row and multi-column — proof the
+> substream-splitting and sync-restore *mechanism* is structurally sound.
+> Across all 25 frames, 7 failed with a genuine `CABAC decode ran past the
+> slice segment data` desync — always in the third or fourth CTU row, never
+> the first two. Disabling *only* the context restore raised the failure
+> rate to 23 of 25 frames — strong evidence the restore mechanism is doing
+> most of the right thing. HM 18.0 (Tier A) decodes the identical bitstream
+> with zero errors, confirming the defect is in this crate, not the
+> encoder's output.
 
-Per `planning/AGENT-CONSTRAINTS.md`'s own standing guidance — "a clean
-refusal is far better than wrong pixels" — `check_scope` continues to
-refuse `entropy_coding_sync_enabled_flag` by name rather than shipping a
-decoder that is correct on roughly three of every four frames of ordinary
-content. The restructured CTU-loop code itself was **not** committed (it
-would be dead code behind the restored refusal, and leaving a known-buggy
-but unreachable path in the tree risks someone re-enabling it without
-rediscovering this section first); this section is the record of what was
-learned instead.
+**Method that found it**: the same bin-for-bin CABAC trace this crate's own
+history keeps reaching for (see "The multi-coefficient-group residual
+defect" above) — temporary instrumentation added to both this crate and a
+from-source HM 18.0 build (removed before committing), diffed bin-for-bin
+against the same real, failing WPP fixture. The first divergence was not a
+wrong bin *value* at all: two `split_cu_flag` decisions at the start of a
+failing frame's third CTU row decoded identically to HM (same context
+index, same `pStateIdx`/`valMPS`, same outcome), and the very next bin
+(`prev_intra_luma_pred`) started from the *same* context state in both
+decoders yet decoded a *different* value — possible only if the underlying
+CABAC engine's `range`/`offset`, not any context, had already diverged.
+That pointed away from the context save/restore mechanism (which a
+whole-`ContextBank` dump at the row's own save point confirmed was
+byte-for-byte identical to HM's) and toward the *byte range* each row's
+substream was being read from.
+
+**The actual bug**: §7.4.7.1 defines `entry_point_offset_minus1[i] + 1` as
+a byte count over the *coded* slice segment data — the specification's own
+words are explicit that "emulation prevention bytes ... are counted as
+part of the slice segment data for purposes of subset identification".
+`decode_wpp_rows` was instead slicing those offsets directly out of
+`cabac_data`, which `RbspBuf::fill` had already de-escaped (stripped every
+`00 00 03` emulation-prevention sequence out of). The two byte-position
+spaces only agree when no such escape occurs before the row boundary in
+question — which is genuinely content-dependent (whether a run of CABAC
+output happens to contain two zero bytes followed by a byte `<= 3`), rare
+enough that most short clips' frames never trigger it and common enough
+that a real fraction do, exactly matching the previous pass's "7 of 25
+frames, never the first two rows" measurement: row 0 has no accumulated
+byte-range error to be wrong yet, and a wrong `range`/`offset` does not
+necessarily flip a bin's *value* in the very row it first goes wrong,
+only compounds until it eventually does.
+
+**Fixed** by never slicing `cabac_data` for WPP: `ebsp_offset_for_rbsp_len`
+maps the RBSP-relative position where `slice_segment_data()` begins back to
+its position in the original, still-escaped NAL bytes; row byte ranges are
+computed there, directly from the entry-point offsets; and each row's own
+byte range is de-escaped independently (`vaco_bitstream::annexb::to_rbsp`)
+before that row's `CabacDecoder` reads it. This is exact, not an
+approximation: WPP row boundaries are always byte-aligned by construction
+(`end_of_subset_one_bit` + `byte_alignment()`, §7.3.8.1), so no escape
+sequence can straddle one, and de-escaping each row's own coded bytes in
+isolation reproduces exactly what de-escaping the whole substream and
+slicing the result would give.
+
+With the fix, the identical 320x240 WPP fixture decodes byte-exact on every
+sample of every plane of all 25 frames, and the same holds at 640x480
+(10x8 CTUs) and at 300x500 (5x8 CTUs — both a partial last CTU column and a
+partial last CTU row, deliberately a second, differently-sized clip rather
+than trusting the first), with WPP left at its own default-on setting
+alongside deblocking and SAO also at their own defaults. The pre-existing
+non-WPP byte-exact paths (`tests/oracle.rs::dense_content_is_byte_exact`,
+and the same real-binary check with `wpp=0`) are unchanged.
+
+`check_scope` no longer refuses `entropy_coding_sync_enabled_flag`.
 
 ## Specification
 

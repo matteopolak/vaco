@@ -29,12 +29,15 @@
 //!   own (on) default, at multiple resolutions and QPs.
 //! - **Tiles.** Refused; only a plain single-tile, independent-slice-segment
 //!   picture is decoded.
-//! - **Wavefront (`entropy_coding_sync_enabled_flag`).** Attempted and
-//!   reverted, not merely unattempted — see `check_scope`'s own comment at
-//!   this flag for the measured result (a real, partially-working
-//!   implementation that still desynced on 7 of 25 frames of ordinary
-//!   content) and what the next diagnostic step would be. Refused cleanly
-//!   rather than shipped wrong.
+//! - **Wavefront (`entropy_coding_sync_enabled_flag`) is implemented** — see
+//!   `decoder::decode_wpp_rows`'s own doc for the per-row CABAC-substream
+//!   split, the §9.3.2.3 context save/restore, and why entry-point offsets
+//!   must be applied to the *coded* (still-escaped) slice segment data
+//!   rather than the de-escaped RBSP a naive reading of `cabac_data`'s own
+//!   byte positions would use. Verified byte-exact against plain `ffmpeg`
+//!   on real `libx265` output with WPP left at its own (on) default,
+//!   alongside deblocking and SAO also at their own defaults, at multiple
+//!   resolutions including a partial last CTU row and column.
 //! - **`cu_qp_delta` / adaptive per-CU QP, chroma QP offset lists, `I_PCM`,
 //!   `transform_skip` actually taken, custom scaling lists, and every SPS
 //!   range-extension flag.** Each is refused the moment the bitstream
@@ -94,10 +97,12 @@
 //! (`tests/oracle.rs::dense_content_is_byte_exact`) and via the real
 //! `vaco` binary, full-length, multi-row, multi-column, all three planes —
 //! within this crate's stated scope above (`no-sao`, `wpp=0`, constant QP,
-//! all-intra): see `docs/codec/vaco-codec-hevc.md`'s "Registration"
-//! section for the exact verified command and what a stream that also
-//! turns SAO/WPP/adaptive-QP on gets instead (a clean, named refusal, not
-//! a crash or wrong pixels).
+//! all-intra) at the time this paragraph was written: see
+//! `docs/codec/vaco-codec-hevc.md`'s "Registration" section for the exact
+//! command originally verified. SAO and WPP are both implemented now (their
+//! own bullets above); a stream that turns on adaptive per-CU QP (implied by
+//! CRF/CQ rate control, the one restriction of the three still standing)
+//! still gets a clean, named refusal, not a crash or wrong pixels.
 
 #![forbid(unsafe_code)]
 
