@@ -1390,3 +1390,56 @@ confidence".
 `cargo xtask dup-check` fails on `CompressionAlgo` (vaco-codec-exr,
 vaco-codec-tiff) and `EncodeOptions` (vaco-codec-exr, vaco-codec-jpeg,
 vaco-codec-png, vaco-codec-tiff). None of those crates was touched here.
+
+## 22. Threading, final state — verified by the orchestrator
+
+Row-level frame threading is **on by default** at `min(available_parallelism, 4)`.
+Measured on this 10-core machine, 4K all-P `uhd.mp4`:
+
+| | time | vs serial | vs `ffmpeg -threads 1` |
+|---|---:|---:|---:|
+| vaco `-threads 1` | 6.62s | 1.00x | 11.86x |
+| **vaco, default** | **1.93s** | **3.43x** | **3.46x** |
+| `ffmpeg -threads 1` | 0.56s | | |
+| ffmpeg, default | 0.14s | | 13.70x behind |
+
+Byte-exact against ffmpeg on the default path with no `-threads` flag, and at
+1/2/4/8/16 on the 4K fixture — checked by me, not only reported.
+
+### Why the default is 4 and not `ncores`
+
+The curve is nearly flat past four (3.37x at 4 against 3.78x at 8 on 4K) for
+roughly double the memory, and `ncores` would make the memory ceiling
+machine-dependent. Four takes almost all of the win at a bounded, predictable
+cost. `-threads N` overrides in both directions; `-threads 1` still forces the
+exact serial call sequence. Library callers are unaffected — only the CLI's
+resolution changed.
+
+### What made this safe enough to enable
+
+Not the speedup. Three things, in order of how much they mattered:
+
+1. **A determinism fuzz target.** `h264_decode_threaded` derives its thread
+   count from the input, decodes the same bytes at 1 thread and at N, and
+   asserts the outputs are identical — a race detector, not a panic check. It
+   is the only thing exercising band publication, `wait_rows`,
+   `PlaneView::block`'s refusal path and `RefPlane::Banded`. 321s, 106,279
+   execs, no divergence. Enabling concurrency by default while that path was
+   unfuzzed would have been the wrong order, and it was the implementing
+   agent that said so.
+2. **A tight, two-sided bound.** A row is final only after the next row is
+   filtered; the tests assert both that nothing outside the watermark moves
+   *and* that the boundary row does — the second half is what stops a
+   watermark being vacuously safe. A read past what was waited for is
+   **refused**, so a too-small bound is an error, never wrong pixels.
+3. **50 runs of the 1800-frame fixture at the default specifically**, zero
+   mismatches, on top of 47 and 48 in the two prior passes.
+
+### The stage that was supposed to be the risk
+
+Moving `sample_luma_block` and `predict_chroma_inter` onto a block API was
+briefed as the first-class risk, with permission to stop if it cost
+single-threaded performance. It measured **2.9% faster**, 9 of 10 rounds:
+`RefPlane::Flat` reads with the same instructions as before, and the rewrite
+forced hoisting chroma's per-point fetch closure to the 2x2 group a 4x4 block
+needs. The refactor paid for itself and found an optimisation.
