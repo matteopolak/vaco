@@ -461,6 +461,8 @@ all three planes and cut the P-frame drift roughly two orders of magnitude
 (max sample error 5-15 and growing every frame, down to 1-2 for the first
 several frames).
 
+**Closed since; this paragraph is kept as the record of what the wrong diagnosis looked like.** The residual described below was *not* a borderline rounding or activity-condition difference in `filter_luma_line`. Its two real causes were a `TC0_TABLE` that was wrong in 23 of 52 rows and a motion-vector-prediction bug that made `P_Skip` mispredict next to intra neighbours -- see "Byte-exact against ffmpeg" below. Note what the hand-trace recorded: every input was checked *except* the table itself, because the table had already been "corrected once against the oracle" and so read as settled.
+
 **What remains open**: from frame 1 onward, a small residual (max absolute
 sample error up to 8 by frame 24 of 25, concentrated at specific
 macroblock-boundary edges) survives. Hand-traced one instance to a `bS = 2`
@@ -482,6 +484,101 @@ second wrong table entry was found the way the first one was.
 (new, `#[ignore]`d with the full account) and
 `cabac_ip_simple_frame_zero_full_deblocking_matches_ffmpeg` (new, passing —
 locks in the frame-0 fix) carry the exact numbers.
+
+## Byte-exact against ffmpeg: what closed the 13.70% drift
+
+*(Added after `planning/E2E-GAPS.md` section 7 measured the registered
+decoder's real output for the first time and found **13.70% of all bytes
+differing** from ffmpeg on the configuration a previous harness had reported
+as "FULL 25/25" -- that harness compared output **file sizes**.)*
+
+The corrected measurement, and the one every claim below is made against:
+per plane, per frame, **byte for byte**, whole sequence, naming the first
+differing frame and its magnitude. Two independent references agree on the
+expected bytes -- `ffmpeg 9.0.1` and a locally built, instrumented **JM
+19.1 `ldecod`**, which was byte-exact against ffmpeg on every clip used
+here. `tests/decoder_output_matches_ffmpeg.rs` is that check, embedded, run
+through the *registered* `H264Decoder`'s public
+`set_extradata`/`send_packet`/`receive_frame` surface rather than through
+`crate::reconstruct`'s `pub(crate)` internals.
+
+Result on 25 frames of 320x240 `libx264` `testsrc2`, per configuration:
+
+| Configuration | Before | After |
+|---|---|---|
+| Main, `-bf 0 -refs 1` | 17.62% of bytes differ, from frame 0 | **byte-exact, 25/25, all planes** |
+| High, `-bf 0 -refs 1` (x264's default profile) | 6.51%, from frame 0 | 0.0008% (24 of 2 880 000 bytes), from frame 22 |
+| Main, `-refs 3` | 2 frames then refused | 2 frames **byte-exact** then refused (multi-reference CABAC desync, still open) |
+| Main, B frames | 2 frames then refused | 2 frames **byte-exact** then refused (CABAC B slices, still out of scope) |
+| Baseline | refused | refused (CAVLC reconstruction, still unimplemented) |
+
+Four distinct defects, found in this order because frame 0 was taken to
+byte-exactness before any later frame was looked at:
+
+1. **`vaco_codec_dsp_deblock::tables::TC0_TABLE` was wrong in 23 of its 52
+   rows** -- off by one row for every `indexA >= 16`, plus further
+   divergence for `indexA >= 41`. That module's own doc said, honestly,
+   that its tables were transcribed from recollection; they now come from
+   JM 19.1's `loop_filter.h` `CLIP_TAB`, checked entry by entry,
+   mechanically. `ALPHA_TABLE`/`BETA_TABLE` were checked the same way and
+   were already correct. This was the whole of frame 0's error (60 luma
+   samples, max delta 3, all in the `bS = 3` tC0-clipped branch).
+   It also **retracts an earlier "oracle-guided" single-entry correction**
+   at `indexA == 30`: that row's correct value is `[1, 1, 2]` and the
+   pre-existing `[1, 2, 3]` was wrong in its *first two* columns, so
+   editing the third moved one fixture's whole-picture match percentage the
+   right way for the wrong reason. Fitting a table entry to an aggregate
+   difference percentage is not a check on that entry.
+2. **An intra neighbour was treated as an absent one** in clause 8.4.1's
+   motion vector prediction. `MvInfo::as_motion_neighbour` answered
+   `available: false` for any neighbour carrying no motion for the list
+   being predicted, collapsing clause 6.4's *macroblock* availability into
+   clause 8.4.1.3.2's `mvLXN = (0, 0)`, `refIdxLXN = -1` substitution.
+   Clause 8.4.1.1's `P_Skip` zero-motion test, clause 8.4.1.3.1's "`B` and
+   `C` both unavailable" shortcut and the `C -> D` substitution all read the
+   first and got the second. Every `P_Skip` macroblock with an intra left or
+   above neighbour predicted `(0, 0)` instead of the median, and then fed
+   that error forward as a reference picture. `MvInfo::mb_available` now
+   carries the two answers separately. **This alone took the whole Main
+   sequence from 17.29% to byte-exact**, and every derived motion vector
+   now matches JM's own, 4x4 block by 4x4 block, across all 25 pictures.
+3. **`Intra_8x8` was missing from `deblock::is_intra`** -- so clause
+   8.7.2.1's intra branch, which is tested first, never fired for it and
+   every `Intra_8x8` macroblock deblocked at `bS = 2` where the answer is
+   `4` (macroblock edge) or `3` (internal).
+4. **Two more 8x8-transform deblocking gaps**: `bS = 2` read
+   `MbResidual::luma_ac`, which is all-`None` when
+   `transform_size_8x8_flag` is set (the coefficients are in `luma8x8`), so
+   it could never fire; and the internal luma edges at offsets 4 and 12
+   were filtered, which clause 8.7 does not do when there are no 4x4
+   transform block boundaries there.
+
+**The one open residual, stated precisely** rather than rounded to "clean":
+High profile leaves 24 bytes differing across frames 22-24 (2, 7, 15 luma
+samples; max delta 5; chroma byte-exact). It is **not** deblocking --
+decoding both sides with the loop filter disabled (`ffmpeg
+-skip_loop_filter all`) still differs, first at the same frame 22 -- and it
+localises to one macroblock: frame 22, macroblock (15, 13), an `Intra_8x8`
+macroblock inside a **P** slice, differing only along its top row
+(`x = 12, 13`, `y = 0`), i.e. in prediction from above/above-right
+neighbours that are themselves inter.
+
+**What `check_scope` and the decoder still refuse, unchanged**: CAVLC
+reconstruction, CABAC B slices, MBAFF/field pictures,
+`constrained_intra_pred_flag`, 4:2:2/4:4:4, `SI` slices, and a
+multi-reference CABAC slice that desyncs (refused as `InvalidData` rather
+than emitting a partial picture). Nothing was moved from "refused" to
+"attempted" by this work.
+
+**Method note, because it is the transferable part.** Every one of these
+four fell to the same technique and none of them to reading specification
+prose: build the reference decoder locally, confirm it agrees with ffmpeg
+byte for byte on the exact clip, then dump the same intermediate state from
+both and diff it -- macroblock types and motion vectors from JM's
+`exit_picture`, boundary strength and per-edge `p`/`q` samples from this
+crate's own filter loop. Defect 2 was found by diffing 4x4 motion vectors
+against JM's; defect 3 by dumping `bS` on an IDR picture, where no value
+below 3 is reachable, and seeing a 2.
 
 ## How to change it
 
