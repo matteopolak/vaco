@@ -1404,6 +1404,14 @@ bench = false
 required-features = ["codec-h264"]
 
 [[bin]]
+name = "h264_decode_threaded"
+path = "fuzz_targets/h264_decode_threaded.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-h264"]
+
+[[bin]]
 name = "h264_entropy"
 path = "fuzz_targets/h264_entropy.rs"
 test = false
