@@ -641,8 +641,23 @@ pub fn residual_block_cabac(
     // Levels are coded in *reverse* scan order (highest position first),
     // clause 7.3.5.3.3's `for (i = numCoeff - 1; i >= 0; i--)`.
     for _ in 0..positions.len() {
-        let magnitude =
-            decode_coeff_abs_level_minus1(cabac, ctx, &mut num_eq1, &mut num_gt1).saturating_add(1);
+        // Clause 7.4.5.3.3 bounds a decoded coefficient level to
+        // `-2^(7 + BitDepth) .. 2^(7 + BitDepth) - 1`, i.e. a signed 16-bit
+        // range at this crate's only supported bit depth of 8. Clamping to
+        // it is a no-op for every conformant stream and is what keeps every
+        // later stage total: `decode_coeff_abs_level_minus1` deliberately
+        // saturates rather than erroring on an adversarial all-ones bypass
+        // run (see its own doc), so without this the magnitude arrives near
+        // `u32::MAX`, `cast_signed` turns it negative, and
+        // `dequant::dequant_4x4`'s `level * LevelScale` overflows -- a
+        // panic, found by the `h264_decode` fuzz target. Fixing it here
+        // rather than in `dequant` bounds the inverse transform's own
+        // intermediate sums too, not just the multiply that happened to
+        // panic first.
+        const MAX_LEVEL: u32 = 32_767;
+        let magnitude = decode_coeff_abs_level_minus1(cabac, ctx, &mut num_eq1, &mut num_gt1)
+            .saturating_add(1)
+            .min(MAX_LEVEL);
         let sign = cabac.decode_bypass();
         let magnitude_signed = magnitude.cast_signed();
         levels.push(if sign == 1 { -magnitude_signed } else { magnitude_signed });
