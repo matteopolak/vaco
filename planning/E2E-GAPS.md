@@ -645,3 +645,47 @@ GIF, TIFF, EXR, TGA, BMP, SGI, PCX, XWD, XBM and the PAM family were all
 checked for the same content-versus-declared-format inference and were **all
 clean** — every one dispatches on `match format`. A negative audit is a result;
 it stops the next agent redoing the work.
+
+## 17. Verified capability, measured by the orchestrator
+
+Every row below was measured by decoding with the **real `vaco` CLI** and
+byte-comparing against plain `ffmpeg`, per plane and per frame, on content and
+frame sizes the implementing agents did not use. Not agent-reported.
+
+| input | result |
+|---|---|
+| **fully stock `libx264`** (B-frames, b-pyramid, 3 refs, CABAC, weighted P), 322x242 / 640x360 / 1024x576 / 1280x720 | byte-exact, 50 frames each |
+| H.264 4K `uhd.mp4`, 75 frames | byte-exact (sha256 match) |
+| H.264 **60s 1080p `big.mkv`, 1800 frames** | byte-exact (sha256 match) |
+| **fully stock `libx265`** (no `-x265-params` at all), 416x240 / 352x288 / 322x242 | byte-exact, 50 frames each |
+| stock `libx265` 1920x1080 and **3840x2160** | byte-exact, 25 frames |
+| HEVC all-intra 300x500 (partial CTU row *and* column) | byte-exact, 25 frames |
+
+Both codecs decode ordinary encoder output byte-exactly, at real resolutions,
+through the shipping CLI.
+
+Still refused, honestly rather than decoded wrongly: H.264 CAVLC
+reconstruction, temporal direct, long-term references, MBAFF/field, >1 slice
+per picture, 4:2:2/4:4:4; HEVC long-term references, dependent/multi-segment
+slices, tiles, I_PCM, custom scaling lists, non-4:2:0, non-8-bit, range and
+screen-content extensions.
+
+### What the day's method actually was
+
+Nearly every defect found was an **instance of a class**, and the class always
+had more members than the corpus or fixture happened to reach:
+
+- One fuzz assertion caught JPEG printing `bits_per_raw_sample=164`; auditing
+  its sibling assertions found four more unvalidated fields reaching output.
+- One rejected 4K HEVC file exposed `check_frame(w, h, 4)` charging RGBA bytes
+  for 4:2:0; the same overcharge was then found in ProRes, VC-1, Theora, TIFF
+  and the generic container check — the *same defect already fixed in H.264*
+  earlier the same day.
+- One WebP round-trip failure prompted an audit of thirteen image encoders,
+  which came back **clean** — a negative result, and worth the same record.
+
+The second recurring shape: **a fixture that cannot express a bug proves
+nothing.** Neutral weights hid weighted prediction in both codecs. Flat content
+hid `Intra_8x8`. Frames at 320x240 and 640x480 hid a budget leak that needed
+either a larger frame or a longer clip to cross its ceiling. In each case the
+work was verified, reported passing, and wrong.
