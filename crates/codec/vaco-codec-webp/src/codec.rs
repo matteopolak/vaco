@@ -125,7 +125,19 @@ fn frame_from_packed(
 }
 
 /// Unpack a video [`Frame`] into a row-major `0xAARRGGBB` buffer plus
-/// whether any pixel's alpha differs from opaque.
+/// whether the frame's own pixel format carries an alpha channel at all
+/// (`Rgba`/`Ya8`), as opposed to whether any decoded alpha byte happens to
+/// differ from opaque.
+///
+/// The two are not the same thing, and only the format-based answer is
+/// correct here: a `VP8L` stream may legally set `alpha_is_used` and still
+/// code every pixel fully opaque (nothing requires an encoder to omit a
+/// redundant alpha plane), which decodes to `Rgba` with every alpha byte
+/// `255`. Deriving `has_alpha` from *content* rather than *format* would
+/// answer "false" for such a frame and make [`encode`] emit a plain `Rgb24`
+/// stream — changing the frame's pixel format on every decode -> encode ->
+/// decode round trip even though no pixel's value changed. Basing it on the
+/// format instead makes the round trip preserve both.
 ///
 /// # Errors
 ///
@@ -139,7 +151,7 @@ pub(crate) fn frame_to_argb(frame: &Frame) -> Result<(Vec<u32>, u32, u32, bool)>
     let (width, height) = (*width, *height);
     let plane = frame.plane(0).ok_or(Error::InvalidData("webp: no plane"))?;
     let mut pixels = vec![0u32; (width as usize).saturating_mul(height as usize)];
-    let mut any_alpha = false;
+    let has_alpha_channel = matches!(format, PixFmt::Rgba | PixFmt::Ya8);
     let w = width as usize;
     for (y, row) in plane.rows_iter().take(height as usize).enumerate() {
         for x in 0..w {
@@ -174,15 +186,12 @@ pub(crate) fn frame_to_argb(frame: &Frame) -> Result<(Vec<u32>, u32, u32, bool)>
                 }
                 _ => return Err(Error::Unsupported("webp: encode pixel format")),
             };
-            if a != 255 {
-                any_alpha = true;
-            }
             if let Some(slot) = pixels.get_mut(y * w + x) {
                 *slot = (u32::from(a) << 24) | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
             }
         }
     }
-    Ok((pixels, width, height, any_alpha))
+    Ok((pixels, width, height, has_alpha_channel))
 }
 
 #[allow(clippy::many_single_char_names, reason = "a/r/g/b are the ARGB channel names, clearer here than any longer alternative")]
@@ -345,6 +354,53 @@ mod tests {
             assert_eq!(decoded.len(), 1);
             assert_eq!(frame_bytes(&frame), frame_bytes(&decoded[0]), "{format:?}");
         }
+    }
+
+    /// Regression test for the fuzz finding recorded at
+    /// `fuzz/artifacts/webp_decode/crash-e121fd4b0a6180455021737f2feff13af210d606`
+    /// (an 89-byte hand-shaped `VP8L` stream whose header sets
+    /// `alpha_is_used = 1` while every coded pixel is fully opaque — legal
+    /// per the WebP Lossless Bitstream Specification, which does not require
+    /// an encoder to omit a redundant alpha plane).
+    ///
+    /// `encode` used to decide whether to emit an alpha channel by scanning
+    /// the unpacked pixels for any alpha byte `!= 255` (`frame_to_argb`'s old
+    /// `any_alpha` accumulator), instead of trusting the input [`Frame`]'s
+    /// own [`PixFmt`]. An all-opaque `Rgba` frame therefore silently
+    /// re-encoded as `Rgb24`, so a decode -> encode -> decode round trip
+    /// changed the frame's pixel format (and so its `plane(0)` byte layout)
+    /// even though no pixel's colour or alpha *value* changed. The fix
+    /// derives `has_alpha` from `format` (`Rgba`/`Ya8` carry alpha;
+    /// `Gray8`/`Rgb24` do not), so the format itself round-trips.
+    #[test]
+    fn rgba_round_trips_when_fully_opaque() {
+        let (w, h) = (9, 5);
+        let mut budget = Budget::new(vaco_limits::Limits::permissive());
+        let mut frame = Frame::alloc_video(&mut budget, PixFmt::Rgba, w, h).expect("alloc");
+        for mut plane in frame.planes_mut() {
+            for y in 0..plane.rows() {
+                if let Some(row) = plane.row_mut(y) {
+                    for x in 0..(row.len() / 4) {
+                        let base = x * 4;
+                        row[base] = ((x * 37 + y * 91) % 256) as u8;
+                        row[base + 1] = ((x * 53 + y * 17) % 256) as u8;
+                        row[base + 2] = ((x * 71 + y * 5) % 256) as u8;
+                        row[base + 3] = 255; // fully opaque everywhere
+                    }
+                }
+            }
+        }
+
+        let encoded = encode(&frame).expect("encode");
+        let mut decode_budget = Budget::new(vaco_limits::Limits::permissive());
+        let decoded = decode(&encoded, &mut decode_budget).expect("decode");
+        assert_eq!(decoded.len(), 1);
+
+        let FrameData::Video { format, .. } = &decoded[0].data else {
+            panic!("expected a video frame");
+        };
+        assert_eq!(*format, PixFmt::Rgba, "an all-opaque Rgba input must still decode back as Rgba");
+        assert_eq!(frame_bytes(&frame), frame_bytes(&decoded[0]));
     }
 
     #[test]
