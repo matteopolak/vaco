@@ -265,7 +265,16 @@ pub fn picture_parameters(descriptor: &MetadataSet) -> CodecParameters {
         video.field_order = frame_layout_to_field_order(layout);
     }
     if let Some(depth) = descriptor.get_u32(PropertyId::ComponentDepth) {
-        video.bits_per_raw_sample = u8::try_from(depth).ok();
+        // `ComponentDepth` is a raw, attacker-controlled `u32` property; a
+        // sample depth of 0 or anything past 64 bits is not a real pixel
+        // format and would reach probe output as fabricated metadata — the
+        // same class of bug `fuzz/fuzz_targets/registry_discovery.rs` found
+        // in JPEG's unchecked `precision`
+        // (crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0). `u8::try_from`
+        // alone only rejected values above 255, not the 65..=255 range or 0.
+        video.bits_per_raw_sample = u8::try_from(depth)
+            .ok()
+            .filter(|&b| (1..=64).contains(&b));
     }
     if let Some(coding) = descriptor.get_ul(PropertyId::PictureEssenceCoding) {
         params.codec_id = PICTURE_ESSENCE_CODING
@@ -366,5 +375,29 @@ mod tests {
         let d = descriptor_with(vec![(PropertyId::PictureEssenceCoding, vec![0xFF; 16])]);
         let params = picture_parameters(&d);
         assert_eq!(params.codec_id, None);
+    }
+
+    /// `ComponentDepth` is a raw, attacker-controlled `u32` property. Before
+    /// this, `u8::try_from(depth).ok()` only rejected values above 255 —
+    /// 65..=255 and 0 all passed straight through to `bits_per_raw_sample`.
+    /// Same class of bug `fuzz/fuzz_targets/registry_discovery.rs` found in
+    /// JPEG's `precision` (crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0),
+    /// audited here rather than found by the fuzzer directly.
+    #[test]
+    fn an_out_of_range_component_depth_is_not_reported() {
+        for depth in [0u32, 65, 255, 4096] {
+            let d = descriptor_with(vec![(PropertyId::ComponentDepth, depth.to_be_bytes().to_vec())]);
+            let params = picture_parameters(&d);
+            let v = params.video.unwrap();
+            assert_eq!(v.bits_per_raw_sample, None, "depth={depth}");
+        }
+    }
+
+    #[test]
+    fn a_plausible_component_depth_is_reported() {
+        let d = descriptor_with(vec![(PropertyId::ComponentDepth, 10u32.to_be_bytes().to_vec())]);
+        let params = picture_parameters(&d);
+        let v = params.video.unwrap();
+        assert_eq!(v.bits_per_raw_sample, Some(10));
     }
 }

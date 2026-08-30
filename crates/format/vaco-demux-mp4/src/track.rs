@@ -171,8 +171,22 @@ pub(crate) fn codec_parameters(
 /// past the last of six reserved-bit groups (`min_spatial_segmentation_idc`,
 /// `parallelismType`, `chromaFormat`, `bitDepthLumaMinus8`,
 /// `bitDepthChromaMinus8`, `avgFrameRate`) that all precede it.
+///
+/// The field is 2 bits wide but only three of its four values are defined:
+/// ISO/IEC 14496-15 §8.3.3.1 states `lengthSizeMinusOne` may be 0, 1 or 3
+/// (a 1-, 2- or 4-byte length field). 2 — a 3-byte length field — is
+/// reserved and no conformant writer emits it; treat it as "unknown" rather
+/// than reporting a length size the format does not define. Before this, a
+/// crafted `hvcC` with the reserved bit pattern reached `nal_length_size=3`
+/// straight through to probe output, unvalidated — the same class of bug
+/// `fuzz/fuzz_targets/registry_discovery.rs` found in `bits_per_raw_sample`
+/// (crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0, via JPEG's `precision`),
+/// just not yet through this specific field.
 fn hvcc_length_size(data: &[u8]) -> Option<u8> {
-    data.get(21).map(|b| (b & 0x03) + 1)
+    match data.get(21).map(|b| b & 0x03) {
+        Some(raw @ (0 | 1 | 3)) => Some(raw + 1),
+        _ => None,
+    }
 }
 
 /// `sample_aspect_ratio`, or `None` to leave it for the bitstream parser.
@@ -333,5 +347,25 @@ mod tests {
         assert_eq!(bit_rate(0, 12_800, 100, false), None);
         assert_eq!(bit_rate(100, 0, 100, false), None);
         assert_eq!(bit_rate(100, 12_800, 0, false), None);
+    }
+
+    /// `lengthSizeMinusOne`'s three defined values decode to the byte count
+    /// ISO/IEC 14496-15 §8.3.3.1 assigns them; the reserved fourth (2, a
+    /// 3-byte length) must not fabricate `nal_length_size=3` — found by
+    /// `fuzz/fuzz_targets/registry_discovery.rs`'s sibling audit around
+    /// crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0 (a different field,
+    /// same class: an unvalidated attacker byte reaching probe output).
+    #[test]
+    fn hvcc_length_size_rejects_the_reserved_encoding() {
+        let mut data = [0u8; 22];
+        for (raw, want) in [(0u8, Some(1u8)), (1, Some(2)), (2, None), (3, Some(4))] {
+            data[21] = raw;
+            assert_eq!(hvcc_length_size(&data), want, "raw lengthSizeMinusOne={raw}");
+        }
+    }
+
+    #[test]
+    fn hvcc_length_size_is_none_for_a_too_short_record() {
+        assert_eq!(hvcc_length_size(&[0u8; 21]), None);
     }
 }

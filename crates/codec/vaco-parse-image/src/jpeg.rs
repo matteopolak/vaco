@@ -170,7 +170,6 @@ impl ImageHeader for Jpeg {
             }
             let _len = r.be16();
             let precision = r.u8();
-            let _ = precision;
             let height = r.be16();
             let width = r.be16();
             let num_components = r.u8();
@@ -186,7 +185,22 @@ impl ImageHeader for Jpeg {
                 };
             }
             r.check().ok()?;
-            if width == 0 || height == 0 || num_components == 0 {
+            // ITU-T T.81 Table B.2 ("Frame header parameter sizes and
+            // values"): `P` (sample precision) is defined only for 8 (every
+            // DCT-based process), 12 (extended sequential/progressive) and
+            // 2..=16 (lossless). No `SOF` marker this crate recognises
+            // permits a value outside 2..=16 at all, so treat one the same
+            // way an impossible width/height/component-count is already
+            // treated here: the header is corrupt, not merely carrying an
+            // unusual precision. Before this, `precision` was read and
+            // discarded into `bits_per_raw_sample` unchecked, so an
+            // arbitrary byte (e.g. 164) reached probe output verbatim —
+            // found by `fuzz/fuzz_targets/registry_discovery.rs`.
+            if width == 0
+                || height == 0
+                || num_components == 0
+                || !(2..=16).contains(&precision)
+            {
                 return None;
             }
             let mut params = CodecParameters::video().with_codec(CodecId::Jpeg);
@@ -260,6 +274,25 @@ mod tests {
         0xff, 0xc0, 0x00, 0x11, 0x08, 0x00, 0x30, 0x00, 0x40, 0x03, 0x01, 0x22, 0x00, 0x02, 0x12,
         0x00, 0x03, 0x12, 0x00,
     ];
+
+    /// ITU-T T.81 Table B.2 defines `P` (sample precision) only for 8, 12
+    /// and 2..=16 — never an arbitrary byte. Before this crate validated
+    /// it, a corrupted `SOF0` with `precision=0xA4` (164) decoded "fine" and
+    /// put 164 straight into `bits_per_raw_sample`, which is printed
+    /// verbatim in probe output. Found by
+    /// `fuzz/fuzz_targets/registry_discovery.rs`
+    /// (crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0, kept as a seed under
+    /// `fuzz/seeds/registry_discovery/`).
+    #[test]
+    fn an_impossible_precision_is_rejected_not_reported() {
+        let mut data = vec![0xFFu8, 0xD8];
+        data.extend_from_slice(&REAL_SOF0_422);
+        // Within `REAL_SOF0_422`: marker(2) + length(2) + precision(1), so
+        // precision sits at index 4 of that slice, index 6 once prefixed
+        // with `SOI`.
+        data[6] = 0xA4; // precision, valid range is 8, 12, or 2..=16
+        assert!(Jpeg::parse(&data).is_none());
+    }
 
     #[test]
     fn a_real_baseline_420_header_decodes() {

@@ -116,7 +116,14 @@ pub fn codec_parameters(data: &[u8]) -> Option<CodecParameters> {
     params.level = Some(Level(i32::from(rec.level)));
     let (sx, sy) = subsampling(rec.chroma_subsampling);
     if let Some(v) = params.video.as_mut() {
-        v.bits_per_raw_sample = Some(rec.bit_depth);
+        // `bitDepth` is only the top 4 bits of a packed byte (0..=15), so it
+        // can never trip the "1..=64" sanity range a probe checks — but VP9
+        // itself only ever codes 8, 10 or 12 bits (`crate::vp9::color_config`),
+        // so an out-of-band nibble like 0 is still a fabricated value, just
+        // one narrow enough that fuzzing had not reached it through this
+        // record. Same class of bug as JPEG's unchecked `precision`
+        // (crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0).
+        v.bits_per_raw_sample = matches!(rec.bit_depth, 8 | 10 | 12).then_some(rec.bit_depth);
         v.format = crate::vp9::pixel_format(&crate::vp9::Vp9ColorConfig {
             bit_depth: rec.bit_depth,
             // `vpcC` has no VP9 `color_space` field of its own — it states
@@ -192,5 +199,23 @@ mod tests {
     fn a_truncated_record_is_rejected_not_panicked() {
         assert!(parse(&[]).is_none());
         assert!(parse(&MEASURED[..5]).is_none());
+    }
+
+    /// `bitDepth` is only the top nibble of a packed byte (0..=15), so it can
+    /// never trip a probe's outer "1..=64" sanity check — but VP9 only ever
+    /// codes 8/10/12-bit samples, so an out-of-band nibble like 0 is still a
+    /// fabricated value, the same class of bug
+    /// `fuzz/fuzz_targets/registry_discovery.rs` found in JPEG's `precision`
+    /// (crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0), just one the corpus
+    /// had not reached through this record.
+    #[test]
+    fn an_implausible_bit_depth_nibble_is_not_reported() {
+        let mut data = MEASURED;
+        data[6] = 0x02; // bitDepth nibble = 0, chromaSubsampling=1, fullRange=0
+        let rec = parse(&data).unwrap();
+        assert_eq!(rec.bit_depth, 0, "the raw nibble is preserved");
+        let params = codec_parameters(&data).unwrap();
+        let v = params.video.unwrap();
+        assert_eq!(v.bits_per_raw_sample, None);
     }
 }

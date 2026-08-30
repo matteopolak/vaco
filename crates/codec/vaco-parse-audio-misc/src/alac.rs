@@ -148,7 +148,16 @@ impl AlacSpecificConfig {
                     .unwrap_or_else(|| ChannelLayout::unspecified(u32::from(self.num_channels))),
             ),
             bits_per_coded_sample: None,
-            bits_per_raw_sample: Some(self.bit_depth),
+            // `bitDepth` is a raw, attacker-controllable byte (0..=255) in
+            // an `alac` sample-entry's magic cookie, but ALAC only ever
+            // codes 16, 20, 24 or 32-bit samples — measured against every
+            // `-sample_fmt` `ffmpeg -c:a alac` accepts. Reporting anything
+            // else verbatim would put a fabricated value straight into
+            // probe output, the same class of bug
+            // `fuzz/fuzz_targets/registry_discovery.rs` found in JPEG's
+            // `precision` field (crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0).
+            bits_per_raw_sample: matches!(self.bit_depth, 16 | 20 | 24 | 32)
+                .then_some(self.bit_depth),
             initial_padding: 0,
         });
         params
@@ -320,5 +329,43 @@ mod tests {
             *b = 0;
         }
         assert!(AlacSpecificConfig::parse(&data).is_err());
+    }
+
+    /// `bitDepth` is a raw byte an attacker fully controls; ALAC only codes
+    /// 16/20/24/32-bit samples, so any other value must not reach
+    /// `bits_per_raw_sample` — the same class of bug
+    /// `fuzz/fuzz_targets/registry_discovery.rs` found in JPEG's `precision`
+    /// (crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0), audited here rather
+    /// than found by the fuzzer directly.
+    #[test]
+    fn an_implausible_bit_depth_is_not_reported_but_still_parses() {
+        let mut data = wrapped_fixture();
+        let idx = data.len() - LEN + 5; // bitDepth byte
+        let Some(b) = data.get_mut(idx) else {
+            unreachable!("fixture is long enough");
+        };
+        *b = 164;
+        let cfg = AlacSpecificConfig::parse(&data).expect("still a structurally valid cookie");
+        assert_eq!(cfg.bit_depth, 164, "the raw field is preserved");
+        let params = cfg.to_codec_parameters();
+        let audio = params.audio.expect("audio parameters");
+        assert_eq!(
+            audio.bits_per_raw_sample, None,
+            "an implausible bit depth must not reach reported metadata"
+        );
+    }
+
+    #[test]
+    fn every_real_alac_bit_depth_is_reported() {
+        for depth in [16u8, 20, 24, 32] {
+            let mut data = wrapped_fixture();
+            let idx = data.len() - LEN + 5;
+            if let Some(b) = data.get_mut(idx) {
+                *b = depth;
+            }
+            let cfg = AlacSpecificConfig::parse(&data).expect("valid cookie");
+            let audio = cfg.to_codec_parameters().audio.expect("audio parameters");
+            assert_eq!(audio.bits_per_raw_sample, Some(depth));
+        }
     }
 }
