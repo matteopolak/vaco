@@ -2659,16 +2659,29 @@ pub fn decode_slice_cabac(
             let info = grids.mb_info_at(mb_x, mb_y);
             // `residual`'s own `CabacResidual` vectors were charged to
             // `budget` inside `decode_residual_cabac`'s own
-            // `residual_block_cabac` calls; both destinations below
-            // (`stats.macroblocks`, and `stats.first_slice_mb_residual`
-            // for the slice's first macroblock) take a plain `Clone` --
-            // real, but never budget-tracked, matching every other
-            // per-macroblock field `stats.macroblocks` already holds --
-            // so once both clones exist, `residual` itself is spent and
-            // its own charge must be released here, not left to leak on
+            // `residual_block_cabac` calls. `stats.macroblocks` takes
+            // ownership of `residual` below (a plain move, real memory but
+            // never budget-tracked, matching every other per-macroblock
+            // field `stats.macroblocks` already holds) rather than cloning
+            // it, since nothing else needs `residual` itself once that push
+            // happens -- only `stats.first_slice_mb_residual`, once per
+            // slice, still needs its own independent copy, taken *before*
+            // the move so the clone is the rare case and the common one
+            // (every other macroblock in the slice) pays for zero extra
+            // allocation instead of one. Either way `residual`'s own
+            // *original* charge must be released here, not left to leak on
             // every one of a picture's macroblocks. See
             // `mb_residual_charged_bytes`'s own doc for the full account.
             let residual_bytes = mb_residual_charged_bytes(&residual);
+            if is_first_mb_in_slice {
+                stats.first_slice_mb_cbp = info.map(|i| (i.cbp_luma, i.cbp_chroma));
+                stats.first_slice_mb_intra16x16_pred_mode =
+                    info.filter(|i| i.is_intra16x16).map(|i| i.intra16x16_pred_mode);
+                stats.first_slice_mb_intra_chroma_pred_mode =
+                    info.filter(|i| i.is_intra).map(|i| i.intra_chroma_pred_mode);
+                stats.first_slice_mb_qpy = Some(qpy);
+                stats.first_slice_mb_residual = Some(residual.clone());
+            }
             stats.macroblocks.push(MbSummary {
                 mb_x,
                 mb_y,
@@ -2681,18 +2694,9 @@ pub fn decode_slice_cabac(
                 transform_8x8: info.is_some_and(|i| i.transform_8x8),
                 intra_chroma_pred_mode: info.map_or(0, |i| i.intra_chroma_pred_mode),
                 qpy,
-                residual: residual.clone(),
+                residual,
                 mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
             });
-            if is_first_mb_in_slice {
-                stats.first_slice_mb_cbp = info.map(|i| (i.cbp_luma, i.cbp_chroma));
-                stats.first_slice_mb_intra16x16_pred_mode =
-                    info.filter(|i| i.is_intra16x16).map(|i| i.intra16x16_pred_mode);
-                stats.first_slice_mb_intra_chroma_pred_mode =
-                    info.filter(|i| i.is_intra).map(|i| i.intra_chroma_pred_mode);
-                stats.first_slice_mb_qpy = Some(qpy);
-                stats.first_slice_mb_residual = Some(residual.clone());
-            }
             budget.release(residual_bytes);
         }
 
