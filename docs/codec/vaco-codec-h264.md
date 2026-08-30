@@ -890,6 +890,16 @@ scaling are in **`docs/codec/frame-threading.md`**; the crate-side facts are:
   dispatch, which is what makes that true rather than lucky.
 - `-threads 1` (the default) spawns nothing and runs each picture inline at
   dispatch — the same call sequence as before frame threading existed.
+- **Publication is row-level above one thread.** `reconstruct` and `deblock` run
+  interleaved a macroblock row at a time, the filter one row behind, so
+  `frame_task` publishes a band of a reference picture as soon as every row it
+  holds is final — and the next picture starts predicting from it there rather
+  than waiting for the whole picture. That is what makes an all-P stream (both
+  large fixtures here) parallel at all: 3.07x at four threads, against 1.26x
+  when a reference was published whole. `reconstruct::row_reference_reach`
+  derives what each macroblock row has to wait for from that row's own motion
+  vectors. `docs/codec/frame-threading.md` has the boundary conditions and the
+  numbers.
 
 ## Configuration
 

@@ -1139,3 +1139,254 @@ codec-h264` invocation at all — ten compile errors, not a fuzzing failure. Fix
 locally to run the target; not committed, per this dispatch's own instruction
 that `fuzz/Cargo.toml` is not mine to commit. The next agent to touch that file
 should carry the two `dep:` entries.
+
+## 21. Row-level frame threading — 129% CPU to 615%, and 1.28x to 4.05x on all-P 4K
+
+§20 landed picture-level frame threading, measured 1.23–1.30x on the 4K all-P
+fixture, and diagnosed its own ceiling precisely: **both large fixtures are
+serial P chains** (`uhd.mp4` is 1 I + 74 P, `big.mkv` is 8 I + 1792 P), so at
+picture granularity there is nothing to overlap and CPU flatlines at 129% at
+every thread count above one. This is the row-level answer it named as the next
+step. Design: `docs/codec/frame-threading.md`.
+
+Three commits, each byte-exact and each measured on its own, because a
+regression in any one of them had to stay bisectable against the others.
+
+### Stage 1 — the filter runs a macroblock row at a time, one row behind
+
+Clause 8.7 ran as two whole-picture sweeps *after* reconstruction, so no row was
+final until the whole picture was. `DeblockCtx::luma_mb_row`/`chroma_mb_row` are
+the same code addressable a row at a time; `deblock_picture_luma`/`_chroma` stay
+as loops over them and as the order-independent oracle the new schedule is
+checked against.
+
+Two boundary conditions decide the schedule, and both are exact:
+
+* **The filter lags reconstruction by exactly one macroblock row.** Clause 8.3's
+  intra prediction is defined on *unfiltered* neighbours and reads exactly one
+  row above the current macroblock row — luma `my * 16 - 1`, chroma
+  `my * 8 - 1`. Filtering row `my - 1` rewrites those rows (its vertical edges
+  touch all sixteen of its own luma rows, the last of which *is* `my * 16 - 1`),
+  so it cannot run before row `my` is reconstructed; it needs nothing from row
+  `my`, so one row of lag is also sufficient, and no saved copy of the
+  unfiltered top border is needed. A lag-zero schedule would need one.
+* **A row is final only once the *next* row has been filtered.** Filtering row
+  `d` writes upwards: luma's top macroblock edge rewrites `p0`/`p1`/`p2`, rows
+  `d * 16 - 1`, `- 2`, `- 3`; chroma's rewrites `p0` alone, row `d * 8 - 1`. So
+  after row `d`, luma rows `..d * 16 + 13` and chroma rows `..d * 8 + 7` are
+  final.
+
+**Measured** (interleaved, alternating start order, 10 independent launches,
+`-threads 1`, 4K 75-frame fixture, decode only): wall ratios 1.008, 0.990,
+1.016, 0.990, 1.002, 1.001, 1.002, 0.990, 1.018, 0.979 — median **1.0013**, mean
+0.9996, 4 of 10 rounds to the candidate. Children's user+sys CPU seconds, which
+carry far less load noise than wall clock: median ratio 1.0015. **The
+restructure is free to within the measurement**, which is the thing that had to
+be established before threading could hide it.
+
+### Stage 2 — the two hottest functions read a plane, not a slice
+
+§20 flagged this as the work's first-class regression risk: a banded plane is
+not one allocation, so `sample_luma_block` (15.87% of self time, §19) and
+`predict_chroma_inter` (9.87%) cannot keep taking a flat `&[u8]`, and this
+document already records **five** reverted attempts at changing loops of exactly
+that shape.
+
+`RefPlane` has two arms and that is the whole design. `Flat` is one allocation
+and reads it with exactly the indexed fetch the decoder has always used, so
+`-threads 1` and every test oracle pay *nothing* — the same instructions, not
+"almost". `Banded` asks `PlaneView::block` for the region a block needs in one
+piece. Both feed the same clause 8.4.2.2 arithmetic in `crate::interp`; only the
+fetch closure differs, which is what the in-picture and edge-clamped fetches
+already did to each other. The regions are the filters' exact footprints: 9x9 at
+`(x0 - 2, y0 - 2)` for luma's six-tap over a 4x4 block, 3x3 for the bilinear
+over its four chroma sub-positions.
+
+That last one forced the only arithmetic-adjacent change: `sample_chroma_point`
+sampled one point at a time and rebuilt its fetch closure per point, and
+`sample_chroma_2x2` returns the 2x2 group instead, because a banded reference
+must be asked for their shared region once rather than four times.
+
+**Measured** (same harness, `-threads 1`): wall ratios 0.972, 0.989, 0.969,
+0.980, 1.010, 0.979, 0.954, 0.967, 0.960, 0.971 — median **0.9713**, mean
+0.9749, **9 of 10 rounds to the candidate**; CPU-seconds median 0.9719. So the
+identified first-class risk measured the other way: a **2.9% single-threaded
+speedup**, from the chroma closure hoist, before threading is involved at all.
+
+This is worth recording against this document's own six negative results.
+Rounds 2, 3 and 4 established that reasoning about redundant computation
+identifies a candidate and not a result; here a change made for a *structural*
+reason (the reader must accept a banded plane) happened to remove redundant
+work as a side effect, and the interleaved measurement is what turned that from
+a hope into a number. The method did not change; only the outcome did.
+
+### Stage 3 — publish rows as they become final, wait per macroblock row
+
+* **A DPB entry is banded above one thread**: 32-row bands, 8 guard rows. The
+  guard is exact, not a margin — clause 8.4.2.2.1's six-tap reads a **9-row**
+  region, and a read of `h` rows straddles a seam exactly when its first row is
+  in the `h - 1` rows above it, so 8 guard rows are what make every such read
+  land inside one allocation. Seven pushes those reads onto the copy path; nine
+  costs memory for nothing. Both halves are pinned by tests in
+  `vaco-codec-core`: a 9-row read at *every* row of a band-32/guard-8 plane is
+  borrowed, and the same read on a guard-7 plane is copied.
+* **`RowPublisher` publishes a band the moment every row it holds is final**,
+  using stage 1's two watermarks. `deblock.rs`'s new tests assert that extent
+  from both sides — nothing outside `d * 16 - 3 ..= d * 16 + 14` moves, *and*
+  row `d * 16 - 3` really does move, so the watermark is tight rather than
+  merely safe and the test is not vacuous.
+* **`row_reference_reach` derives the wait per macroblock row**, walking that
+  row's own motion vectors and reporting, per reference and per plane, the
+  deepest row clause 8.4.2.2 will read: `y + (mv_y >> 2) + 6` for luma,
+  `cy + (mv_y >> 3) + 2` for chroma. Those are the same numbers the two samplers
+  use to size the region they ask for, so the bound cannot drift from the read.
+  A reference the row does not predict from is not waited on at all. A read past
+  what was waited for is *refused* by `PlaneView::block` and raises an error at
+  the end of the row — so a bound that was ever too small is an error, never
+  wrong pixels.
+
+`ProgressPlane::band_of` runs on every block read and was a division by a
+runtime value; it is a shift now whenever the band height is a power of two,
+which `single_band` arranges for itself too.
+
+No new threading mechanism: same `FrameRunner`, same dispatch-order collection,
+same `ProgressPicture`, same deadlock argument (tasks leave one queue in
+dispatch order and wait only on pictures earlier in decode order, so the
+lowest-indexed in-flight task never blocks).
+
+### Measured — scaling and CPU utilisation
+
+Medians of 8 interleaved launches, rotating start order, wall clock, decode
+only. CPU utilisation from `/usr/bin/time -l` on separate single launches.
+
+**4K 75-frame all-P `uhd.mp4`** — the fixture §20 could not accelerate:
+
+| threads | wall | speedup | CPU | CPU-seconds |
+|---:|---:|---:|---:|---:|
+| 1 | 7.020s | 1.00x | 100% | 6.96 |
+| 2 | 3.569s | 1.97x | 236% | 8.31 |
+| 4 | 2.285s | 3.07x | 447% | 9.97 |
+| 8 | 1.907s | 3.68x | 625% | 11.72 |
+
+**360-frame stock-`libx264` B-pyramid 1080p** (`bframes=3`, `b_pyramid=normal`,
+`ref=3`; 189 B, 169 P, 2 I):
+
+| threads | wall | speedup | CPU |
+|---:|---:|---:|---:|
+| 1 | 9.726s | 1.00x | 100% |
+| 2 | 5.332s | 1.82x | 220% |
+| 4 | 3.241s | 3.00x | 439% |
+| 8 | 2.445s | 3.98x | 742% |
+
+Head to head against §20's binary, same session, 8 interleaved rounds, 4K all-P:
+
+| | picture granularity (§20) | row granularity |
+|---|---:|---:|
+| `-threads 1` | 6.858s | 6.687s |
+| `-threads 8` | 5.371s — 1.28x, **129% CPU** | **1.695s — 4.05x, 615% CPU** |
+
+**129% is §20's own diagnosis reproduced exactly**, on the same machine in the
+same session, which is what makes the 615% next to it a measurement of the
+change rather than of the day.
+
+Above four threads the curve flattens: eight buys another 15–25% for roughly 40%
+more CPU-seconds. The rising CPU-seconds column is the honest cost — 6.96 to
+11.72 at 4K — and is the banded read path, the guard-row copies, and blocking
+and waking on band publication.
+
+### Same-session ratio against ffmpeg
+
+Interleaved across five rotated commands, 6 independent launches, medians:
+
+| fixture | vaco `-threads 1` | vaco `-threads 4` | vaco `-threads 8` | `ffmpeg -threads 1` | ffmpeg default |
+|---|---:|---:|---:|---:|---:|
+| `uhd.mp4` (4K, all-P) | 6.955s | 2.271s | 1.899s | 0.589s | 0.148s |
+| B-pyramid 1080p | 9.213s | 2.870s | 2.210s | 0.830s | 0.167s |
+
+Against **`ffmpeg -threads 1`**: 11.81x on the 4K clip, closing to **3.86x at
+four threads and 3.22x at eight** — §20's best on this fixture was 9.49x. On the
+B clip 11.10x closing to 3.46x / 2.66x. Against **default-threaded ffmpeg**:
+47.0x → 12.8x on the 4K clip, 55.2x → 13.2x on the B clip.
+
+Worth reading alongside: ffmpeg's own default threading takes 0.148s from 0.805
+CPU-seconds against 0.589 at one thread — 3.98x wall for 1.37x the CPU. This
+decoder gets 3.66x wall for 1.69x the CPU on the same file. The *scaling* is
+comparable; the per-thread overhead is not, and that gap is the next thing to
+look at if this is revisited.
+
+### Byte-exactness
+
+`ffmpeg -v error -i F -map 0:v:0 -f rawvideo -pix_fmt yuv420p - | shasum -a 256`
+against `vaco -threads N -i F -map 0:v:0 -c:v rawvideo -f rawvideo -`, N in
+{1, 2, 4, 8}, on `uhd.mp4`, `big.mkv`, the B-pyramid 1080p clip, and fresh stock
+`libx264` encodes at 322x242 and 1024x576. Every hash matched ffmpeg's, at every
+stage. `-threads 0/3/5/16/64` also match; `-threads abc` is still rejected with
+the reference's own wording.
+
+Two fixtures were added for branches this change introduced and the existing
+corpus did not reach: a `no-deblock=1` encode, which takes the "a row is final
+the moment it is reconstructed" path because `disable_deblocking_filter_idc` is
+1 and there is no filter to lag behind, and a `deblock=-3,2` encode, which
+exercises non-zero `slice_alpha_c0_offset_div2`/`slice_beta_offset_div2` through
+the new per-row `DeblockCtx`. Both byte-exact at 1/2/4/8 threads.
+
+A `slices=4` encode was also tried and is refused outright — "more than one slice
+per picture is not supported" — identically on the pre-change binary and on
+every stage of this one. That is a pre-existing scope refusal, not a regression,
+and it is why `macroblocks_in_raster_order`'s whole-picture fallback has no
+reachable input today: it exists so the row schedule cannot be the thing that
+breaks when multi-slice support lands.
+
+`big.mkv` — 1800 frames, the best race detector in the corpus — was run **48
+times on the final binary: twelve each at 1, 2, 4 and 8 threads**, plus 14 more
+on the identical predecessor binary before a doc-comment rebuild. No run ever
+produced a different hash, and every one matched ffmpeg's. (§20's own tally on
+the same fixture was 47.)
+
+That is the check that matters most and it is worth saying why: a race here
+would be a *reader* seeing a band before its rows were final, which shows up as
+a handful of wrong pixels in one macroblock row of one frame out of 1800 — the
+kind of thing a five-frame fixture will never find and a single run of a long
+one might not either.
+
+Three tests were added so the boundary conditions do not depend on a shell
+script being re-run:
+
+* `deblock.rs`: filtering one luma macroblock row reaches exactly three rows
+  above it, and one chroma row above it — asserted from both sides, so a
+  loosened watermark and a broken one both fail.
+* `deblock.rs`: the row-by-row schedule and the whole-picture sweep agree.
+* `vaco-codec-core`'s `picture.rs`: a 9-row read never straddles a band with an
+  8-row guard, and *does* straddle one with a 7-row guard.
+
+`cargo test -p vaco-codec-h264 -p vaco-codec-core --locked` passes (143 and 75
+across all their test targets; stage 3's own commit message quotes 114 and 17,
+which are the `--lib` and `--test picture` subsets it happened to have open —
+the totals above are the ones to read),
+`cargo clippy --all-targets -- -D warnings` is clean on both, `cargo xtask
+unsafe-audit` reports every crate forbidding unsafe, and `h264_decode` fuzzed
+177,672 runs in 91 seconds with no findings.
+
+### The gap this opened, which should be closed before the default moves
+
+**`h264_decode` never calls `set_thread_count`, so the row-progress path has no
+fuzz coverage at all** — not the publisher, not the per-row waits, not
+`PlaneView::block`'s banded arm. It is covered by the repository's own
+invariance tests and by many oracle repetitions, which is not the same thing.
+`docs/codec/frame-threading.md`'s "Should it be on by default" now names that as
+a condition alongside §20's own two, and it is the cheapest of the three to fix.
+
+### Still not the default
+
+§20's recommendation stands, with its first condition now met. The measured case
+for flipping it is far stronger — 3.07x at four threads on the content shape
+that dominates this corpus, against 1.26x before — but the per-picture budget
+charge is still a deliberate 2x over-estimate, and the threaded path is not
+fuzzed. Both are small, specific pieces of work, and neither is "more
+confidence".
+
+### Pre-existing, not mine
+
+`cargo xtask dup-check` fails on `CompressionAlgo` (vaco-codec-exr,
+vaco-codec-tiff) and `EncodeOptions` (vaco-codec-exr, vaco-codec-jpeg,
+vaco-codec-png, vaco-codec-tiff). None of those crates was touched here.

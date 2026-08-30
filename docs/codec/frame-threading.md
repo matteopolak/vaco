@@ -82,51 +82,117 @@ error rather than leaving it parked; and a task that *panics* still produces
 exactly one reply, from a drop guard, so the collector never waits for a message
 nobody will send.
 
-### Granularity: picture, not row — and this is the limit
+### Granularity: rows
 
-A reference picture is published in **one band**, once, after clause 8.7's two
-whole-picture deblocking passes have swept it. Until then no row of it is final,
-and a later picture must not predict from undeblocked samples.
+A reference picture is published **band by band as its rows become final**, and
+the picture after it starts predicting from those rows rather than waiting for
+the whole picture. That is what makes an all-P stream — a serial chain of
+pictures, which is what both of this project's large fixtures are — parallel at
+all. At picture granularity it is not: picture `N + 1` cannot start until
+picture `N` is completely finished, CPU flatlines at 129% however many threads
+are offered, and the ceiling is `1 / (1 - serial_fraction)` ≈ 1.3x. At row
+granularity the same fixture reaches **4.05x at eight threads and 615% CPU**.
 
-That is the binding constraint on how much parallelism is available, and it is
-worth being precise about why. With picture granularity, picture `N + 1` cannot
-start until picture `N` is completely finished. On content whose pictures form a
-serial chain — every P frame referencing the one before it — that leaves nothing
-to overlap except the serial half's own work against the parallel half's, which
-is a two-stage pipeline and caps out near `1 / (1 - serial_fraction)`.
+Three boundary conditions decide it, and each is exact rather than
+conservative. Getting any of them merely "safe" costs speed; getting one wrong
+in the other direction publishes not-quite-final samples, and that corruption
+would be subtle and content-dependent. They are stated here, and each is pinned
+by a test.
 
-**Both of this project's large H.264 fixtures are exactly that content.**
-`uhd.mp4` is 1 I frame and 74 P frames; `big.mkv` is 8 I frames and 1792 P
-frames. Neither has a single B frame, so neither has any picture-level
-parallelism to find. ffmpeg's ~3.5x on the same files is therefore **entirely
-row-level** frame threading: its picture `N + 1` begins reconstructing as soon as
-picture `N` has produced enough rows to cover the motion-vector reach.
+#### 1. The filter lags reconstruction by exactly one macroblock row
 
-Moving to row granularity is the identified next step and the machinery is
-already here — `PictureSpec::with_band_height`/`with_guard`, `publish_through`
-per band, `PlaneView::block`'s guard-row fast path. What it needs first is two
-changes this pass deliberately did not make:
+Clause 8.7's filter is interleaved into the macroblock-row loop
+(`reconstruct::PictureReconstructor`), one row behind. It has to be *behind*,
+because clause 8.3's intra prediction is defined on **unfiltered** neighbours;
+and one row is enough, because the only rows it reads above the current
+macroblock row are the single luma row `my * 16 - 1` and chroma row
+`my * 8 - 1`, which filtering row `my - 1` is exactly what rewrites (its
+vertical edges touch all sixteen of its own luma rows, the last of which *is*
+`my * 16 - 1`). Filtering row `my - 1` needs nothing from row `my`, so the lag
+is one and no saved copy of the unfiltered top border is needed. A lag-zero
+schedule would need one.
 
-- **Deblocking must become incremental.** `deblock_picture_luma`/`_chroma` are
-  whole-picture passes today. Rows of macroblock row `r - 1` are only final once
-  macroblock row `r`'s top-edge filtering has run, so publication has to be
-  driven from an interleaved reconstruct-then-deblock loop, not from two sweeps
-  at the end.
-- **Reference reads must become block reads.** A banded plane is not one
-  allocation, so `sample_luma_block` and `predict_chroma_inter` cannot keep
-  taking a flat `&[u8]` per plane; they would fetch a `BlockRef` per partition
-  through `PlaneView::block` instead. That is a rewrite of the two hottest
-  functions in the decoder (`planning/E2E-GAPS.md` §19: 15.87% and 9.87% of self
-  time), and this document's own record of five reverted inner-loop attempts is
-  the reason it is not being folded into the same change as the threading
-  scaffolding.
+#### 2. A row is final only after the *next* row has been filtered
 
-Safe Rust is not the obstacle to row granularity — `ProgressPicture` already
-expresses it, and the `frame_runner` tests exercise it. The obstacle is that
-contiguity and progressive publication are genuinely incompatible (a writer
-cannot hold `&mut` to rows above `R` while a reader holds `&` to rows below `R`
-of the same allocation), so progressive publication forces the reader onto a
-block API, and that reader is the decoder's hot loop.
+Filtering macroblock row `d` writes **upwards** into the row above it. Luma's
+top macroblock edge at `y = d * 16` rewrites `p0`, `p1` and `p2` — rows
+`d * 16 - 1`, `- 2` and `- 3`. Chroma's rewrites `p0` alone, row `d * 8 - 1`.
+So once row `d` is filtered:
+
+| plane | rows final |
+|---|---|
+| luma | `reconstruct::luma_rows_final(d) = d * 16 + 13` |
+| chroma | `reconstruct::chroma_rows_final(d) = d * 8 + 7` |
+
+`deblock.rs`'s own tests assert that extent from both sides: nothing outside
+`d * 16 - 3 ..= d * 16 + 14` moves, **and** row `d * 16 - 3` really does move —
+an overhang that were only hypothetical would make the watermark needlessly
+conservative and the test vacuous.
+
+#### 3. The wait is derived from the motion vectors, per macroblock row
+
+Before reconstructing macroblock row `my`, `reconstruct::row_reference_reach`
+walks that row's own motion vectors and reports, per reference and per plane,
+the deepest row clause 8.4.2.2 will actually read:
+
+| | deepest row read | why |
+|---|---|---|
+| luma | `y + (mv_y >> 2) + 6` | clause 8.4.2.2.1's six-tap reads two rows above the 4x4 block and three below its last one |
+| chroma | `cy + (mv_y >> 3) + 2` | clause 8.4.2.2.2's bilinear reads one row below each of the two chroma sub-positions |
+
+Those are the same numbers `sample_luma_block` and `sample_chroma_2x2` use to
+size the region they ask a banded plane for, so the bound cannot drift away
+from the read. A reference the row does not predict from is not waited on at
+all. And a read past what was waited for is *refused* by `PlaneView::block`
+rather than served, raising `ReadScratch`'s failure flag, which
+`PictureReconstructor` turns into an error at the end of the row — so a bound
+that was ever too small is an error, never wrong pixels.
+
+### Reading a plane that is not one allocation
+
+Progressive publication and contiguity are genuinely incompatible under
+ordinary borrow rules — a writer cannot hold `&mut` to rows above `R` while a
+reader holds `&` to rows below `R` of the same allocation — which is what
+`ProgressPicture`'s bands exist to solve. The cost is that a banded plane
+cannot be handed to the reader as a `&[u8]`, and the reader is the decoder's
+hot loop (`planning/E2E-GAPS.md` §19: `sample_luma_block` 15.87% and
+`predict_chroma_inter` 9.87% of self time).
+
+`reconstruct::RefPlane` is where that lands, and it has two arms:
+
+| arm | when | what a read costs |
+|---|---|---|
+| `Flat(&[u8])` | one allocation: `-threads 1`, and every test oracle | exactly the indexed fetch this decoder has always done — the same instructions, not "almost" |
+| `Banded(PlaneView)` | published band by band | one `PlaneView::block` per 4x4 block, then the same arithmetic against the borrow it returns |
+
+Both arms feed the same clause 8.4.2.2 code in `crate::interp`; only the fetch
+closure differs, which is what the in-picture and edge-clamped fetches already
+did to each other. **`-threads 1` therefore pays nothing at all for row
+granularity** — not the guard rows' memory, not the copy that fills them, and
+not the block API. Measured: median ratio 1.009 against the picture-granularity
+binary over 10 interleaved single-threaded launches.
+
+The banded arm was the identified first-class regression risk of this work, and
+it measured the other way. Rewriting the two hottest functions to take a plane
+rather than a slice came with hoisting chroma's per-point fetch closure to the
+2x2 group a 4x4 block needs — a banded reference must be asked for their shared
+region once, not four times — and that alone was a **2.9% single-threaded
+speedup** (9 of 10 interleaved rounds).
+
+### Band height and guard depth
+
+| | value | why |
+|---|---:|---|
+| band height | 32 rows | publication latency against the guard's cost. The guard is a fixed 8 rows per band, so a 32-row band carries 25% overhead in memory and in the copy that fills it; the *coarsest* progress a reader sees is one chroma band, which at 4:2:0 is 64 luma rows — four macroblock rows |
+| guard | 8 rows | **exact.** Clause 8.4.2.2.1's six-tap reads a 9-row region for a 4x4 block. A read of `h` rows straddles a seam at `F` exactly when its first row is in `F - (h - 1) ..= F - 1`, so `h - 1 = 8` guard rows are what make every such read land inside the next band's own allocation. Seven pushes those reads onto the copy path; nine costs memory for nothing |
+
+Both halves of the guard argument are pinned in `vaco-codec-core`'s own tests:
+a 9-row read at *every* row of a band-32/guard-8 plane is borrowed rather than
+copied, and the same read on a guard-7 plane is copied.
+
+The band height is a power of two so that `ProgressPlane::band_of` — which runs
+on every block read — is a shift rather than a division by a runtime value.
+`single_band` rounds its own height up to a power of two for the same reason.
 
 ## Memory
 
@@ -148,12 +214,18 @@ suggest.** At 4K a coded picture is 12.4 MB and the cropped output frame is
 about the same, but `SliceStats::macroblocks` is `MbSummary` × 32,400
 macroblocks at 1,888 bytes each — **59 MiB**, five times the two sample buffers
 together, because every macroblock carries its full residual and its sixteen 4×4
-motion blocks. Measured with `/usr/bin/time -l` on the 4K fixture: peak RSS 2854
-MiB at one thread, 3321 MiB at eight, and 8 × 59 MiB accounts for essentially
-all of that ~470 MiB. It is charged. The two sample buffers are charged as two
-whole coded pictures rather than exactly — one for the reconstruction planes,
-one covering the cropped frame's row-stride padding — a deliberate over-estimate
-and the one figure here that is not a measurement.
+motion blocks. It is charged. The two sample buffers are charged as two whole
+coded pictures rather than exactly — one for the reconstruction planes, one
+covering the cropped frame's row-stride padding — a deliberate over-estimate and
+the one figure here that is not a measurement.
+
+**Guard rows are the only thing row granularity adds, and they are small.** A
+banded DPB entry carries 8 guard rows per 32-row band, so its sample planes cost
+25% more than the picture — 3.1 MB on top of 12.4 MB at 4K — against 59 MiB of
+macroblock array per in-flight picture. Measured with `/usr/bin/time -l` on the
+4K fixture, same session: peak RSS at eight threads is 4192 MiB at picture
+granularity and 4304 MiB at row granularity, a 2.7% difference, and one thread
+is 3614 MiB either way because at one thread there are no guard rows at all.
 
 **Memory pressure is backpressure, not a failed decode.** Nine in-flight 4K
 pictures are ~756 MiB against `Limits::permissive`'s 1 GiB — it fits by margin,
@@ -173,14 +245,21 @@ it honestly — waiting cannot change that.
 | threads | `-threads N` (CLI), `Decoder::set_thread_count` (API) | 1 |
 | pictures the serial half may run ahead by | `H264Decoder::max_in_flight` | `threads + 1`, or 1 at one thread |
 | the ceiling that actually binds under pressure | `Limits::max_alloc_total` (`-max_alloc`) | 1 GiB (`Limits::permissive`, the CLI default) |
-| band height / guard rows | `PictureSpec::with_band_height` / `with_guard` | one band, no guard (`single_band`) |
+| band height / guard rows | `decoder::ROW_BAND_HEIGHT` / `ROW_BAND_GUARD`, via `PictureSpec` | 32 / 8 above one thread; one band, no guard, at one thread |
 
-Measured scaling, for choosing a count (medians, interleaved, wall clock):
-1.23x / 1.26x / 1.30x at 2 / 4 / 8 threads on an all-P 4K clip, and 1.78x /
-2.00x / 1.99x on a stock-`libx264` B-pyramid 1080p clip. CPU utilisation
-flatlines at 129% on the first and 219% on the second, so **above four threads
-there is nothing left to gain at this granularity** — see
-`planning/E2E-GAPS.md` §20 for the full tables and why.
+Measured scaling, for choosing a count (medians of 8 interleaved launches, wall
+clock, decode only):
+
+| threads | 4K all-P `uhd.mp4` | CPU | B-pyramid 1080p | CPU |
+|---:|---:|---:|---:|---:|
+| 1 | 7.020s — 1.00x | 100% | 9.726s — 1.00x | 100% |
+| 2 | 3.569s — 1.97x | 236% | 5.332s — 1.82x | 220% |
+| 4 | 2.285s — 3.07x | 447% | 3.241s — 3.00x | 439% |
+| 8 | 1.907s — 3.68x | 625% | 2.445s — 3.98x | 742% |
+
+**Four threads is where the curve stops being nearly linear**; eight buys
+another 15–25% for roughly 40% more CPU. See `planning/E2E-GAPS.md` §21 for the
+full tables, the ffmpeg-relative ratios and the memory numbers.
 
 `-threads` is a **global** CLI option here, not the reference's per-stream
 `AVCodecContext` one: vaco has no per-codec option store yet, and stating it once
@@ -188,12 +267,42 @@ is the overwhelmingly common use. `-threads:v:0 4` is not accepted. Zero means
 one, not the reference's "auto" — nothing here auto-detects, and a default that
 depended on the machine would make a run's output provenance depend on it too.
 
+## Should it be on by default
+
+**Not yet, and the reason is no longer "it does not help".** It helps a great
+deal: 3.07x at four threads on the all-P 4K clip and 3.00x on the B-pyramid one,
+where the previous, picture-granularity answer was 1.26x and 2.00x. The first of
+the three conditions the picture-granularity pass named — "row granularity
+should land first" — is met, and the content shape that dominates this
+project's corpus is exactly the one that now benefits most.
+
+Three things should still be true first, and none of them is "more confidence":
+
+1. **The per-picture budget charge should be exact.** It is still a deliberate
+   2x over-estimate (two whole coded pictures, one of them standing in for the
+   cropped frame's row-stride padding). That is fine while the feature is
+   opt-in and wrong once it is not, because a default thread count multiplies it
+   by `threads + 1`. Unchanged from the previous pass's own condition.
+2. **The fuzz target should decode at more than one thread.** `h264_decode`
+   never calls `set_thread_count`, so the row-progress path — the publisher, the
+   per-row waits, `PlaneView::block`'s banded arm — has **no fuzz coverage at
+   all** today. It is covered by the repository's own invariance tests and by
+   many repetitions against the ffmpeg oracle, which is not the same thing.
+   Making a decode path implicit while nothing fuzzes it is the wrong order.
+3. **The count must be a fixed small bound, not `ncores`.** `min(ncores, 4)` is
+   where the measured curve stops being nearly linear, and eight buys another
+   15–25% for roughly 40% more CPU. Output is byte-identical at every thread
+   count, so this does not make a decode machine-dependent — but the *memory*
+   ceiling would be, and `min(ncores, 4)` bounds it at five in-flight pictures,
+   about 420 MB at 4K against `Limits::permissive`'s 1 GiB.
+
 ## How to change it
 
 | you want to | touch |
 |---|---|
 | Add frame threading to another codec | Implement the split: a `FrameTask` holding owned data plus `PictureRef`s, a serial half that allocates the `ProgressPicture` and dispatches, and `set_thread_count`. `vaco-codec-h264`'s `frame_task.rs` + `decoder.rs` is the worked example |
-| Move to row granularity | `crate::deblock` (incremental), `crate::reconstruct`'s reference reads (`PlaneView::block`), then one `PictureSpec` and a `publish_through` per macroblock-row group. Read the granularity section above first |
+| Change the band height or guard | `decoder::ROW_BAND_HEIGHT` / `ROW_BAND_GUARD`. Read "Band height and guard depth" first — the guard is derived from clause 8.4.2.2.1's filter reach, not chosen, and `vaco-codec-core`'s tests will say so |
+| Change what a task waits for | `reconstruct::row_reference_reach`, and the two region sizes in `sample_luma_block`/`sample_chroma_2x2` that it must agree with |
 | Change the look-ahead depth | `H264Decoder::max_in_flight`. It costs one coded picture plus one frame of budget per slot |
 | Add a *new* threading axis | Don't, without reading `vaco_codec_core::threading`'s three-axis note and `docs/app/vaco-sched.md`. `vaco_sched::Driver::with_threads` is pipeline-stage parallelism — whole stages of `demux → decode → filter → encode → mux` running concurrently — and buys nothing on a decode-bound single-stream job, because one decoder is one stage. Frame threading is *inside* that stage and invisible to the scheduler. They compose; they are not alternatives, and neither replaces the other |
 

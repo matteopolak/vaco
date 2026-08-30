@@ -1,5 +1,11 @@
-//! Whole-picture wiring for clause 8.7's deblocking filter, built on
+//! Picture wiring for clause 8.7's deblocking filter, built on
 //! [`vaco_codec_dsp_deblock`]'s pure per-edge primitives.
+//!
+//! Addressable a **macroblock row** at a time ([`DeblockCtx`]), which is what
+//! lets [`crate::reconstruct::PictureReconstructor`] interleave filtering into
+//! its own macroblock-row loop and so make a row final -- and publishable to a
+//! picture still predicting from it -- before the whole picture is. The
+//! whole-picture entry points below are loops over that and nothing else.
 //!
 //! This module owns exactly what that crate's own doc says stays in the
 //! caller: walking the picture in macroblock raster order, deriving
