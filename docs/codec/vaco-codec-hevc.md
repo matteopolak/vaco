@@ -963,6 +963,132 @@ though — as measured above — that particular invocation's own default
 weights turn out to be neutral on `testsrc2`, so the `life`/`fade` fixtures
 above are what actually exercise the new arithmetic.
 
+## B-slices (§7.3.8.6/§8.5.3.2.4/.9/§8.5.3.3.4.2-.3), landed
+
+The last blocker to a fully stock `libx265` invocation (no `-x265-params`
+restrictions at all) decoding end-to-end: `libx265`'s default GOP inserts a
+B-slice as the very first non-IDR picture after the anchor P-frame, and
+`decode_packet` refused every B-slice outright (see "A fully stock,
+completely unmodified `libx265` invocation" at the end of the weighted
+prediction section above for what that refusal used to hit).
+
+**What was added, on top of everything the P-slice/weighted-prediction
+passes already built**: `inter_pred_idc` parsing (§7.3.8.6,
+`ctu::parse_inter_pred_idc`, its own three-context CABAC binarization) and
+the rest of a B-slice's `prediction_unit()` — `ref_idx_l1`,
+`mvd_coding(x, y, 1)`, `mvp_l1_flag` — in `decode_inter_cu`'s AMVP branch;
+`RefPicList1` construction, already generic over list index in
+`dpb::build_ref_pic_lists` (an `is_b` parameter it already accepted, unused
+until now); combined bi-predictive merge candidates (§8.5.3.2.4,
+`motion::derive_merge_candidates`'s `is_b` branch, with the priority tables
+`PRIORITY0`/`PRIORITY1` HM's own `getInterMergeCandidates` uses) and a
+corrected zero-candidate fill (§8.5.3.2.5's `zeroIdx` clamps at `0` once it
+passes `numRefIdx`, it does not wrap modulo — a bug this pass found and
+fixed in the existing P-slice zero-fill code too, see
+`a_b_slice_zero_fill_clamps_at_zero_rather_than_wrapping` and its P-slice
+sibling test); `collocated_from_l0_flag`-aware temporal motion vector
+prediction (§8.5.3.2.9's `colList` selection —
+`is_low_delay ? targetList : (collocated_from_l0 ? L1 : L0)`, falling back
+to the other list when the primary one has no motion at that position,
+`ctu::col_mvp`); AMVP's own-list-then-other-list neighbour search (matched
+by POC, not list identity — `RefList::pick`/`other`); default
+(unweighted) and explicit-weighted bi-predictive motion compensation
+(§8.5.3.3.4.2/.3, `mc::default_biprediction`/`apply_weight_bi`, extending
+`mc.rs`/`weight.rs`'s existing uni-predictive implementation rather than
+duplicating it — `weight::resolve_list` replaces the old L0-only
+`resolve_l0`); B-slice CABAC context initialization (§9.3.2.2,
+`cabac_ctx::ContextBank::new_b_slice` — a P-slice's default `cabac_init_flag`
+row and a B-slice's are *opposite*: `new_p_slice` uses
+`usize::from(cabac_init_flag)`, `new_b_slice` uses
+`usize::from(!cabac_init_flag)`); and a full §8.7.2.4 Table 8-12
+boundary-strength derivation for deblocking across bi-predicted edges
+(`deblock::boundary_strength`, porting HM's `xGetBoundaryStrengthSingle`'s
+same-ref-set check and its "different L0/L1" vs "same L0/L1" comparison
+branches, rather than the uni-prediction-only formula the P-slice pass
+shipped).
+
+**Two real, independent defects surfaced only by genuine hierarchical-B
+content** (invisible under every existing P-slice/intra fixture), both
+found via an instrumented repro against a real `bframes=3` `libx265` file
+that came out of the decoder with non-monotonic presentation timestamps:
+
+1. `Dpb`'s latency bound (`SpsMaxLatencyPictures`, §C.5.2.1) omitted the
+   `sps_max_num_reorder_pics` term, computing it as bare
+   `max_latency_increase_plus1 - 1`. Fixed in `Dpb::new`.
+2. Bumping itself was a single unified reorder/latency/capacity check, but
+   Annex C specifies two distinct phases: C.5.2.2 pre-decode bumping
+   (reorder, latency, *and* capacity, evaluated on the DPB state *before*
+   storing the current picture) and C.5.2.3 post-decode "additional
+   bumping" (reorder and latency only, evaluated *after* storing, with
+   `PicLatencyCount` incremented only for pending pictures whose POC
+   follows the just-stored picture's in output order). `bump_before_storing`
+   is now `bump_pre_decode` (called before `store`) plus
+   `bump_post_decode(current_poc)` (called after), both delegating to a
+   shared `bump_while`.
+
+Combining L1 motion arrays into `CuGrid` for B-slices also exposed a
+pre-existing, crate-wide gap: `vaco_limits::Budget` charges allocations but
+this crate never released them anywhere, so a structurally larger B-slice
+DPB footprint (and, transiently, even doubling every P/I slice's `CuGrid`
+before a `has_l1` gate was added) pushed a 640x480 stock fixture over
+`max_alloc_total`. Fixed by threading `&mut Budget` through
+`Dpb::apply_reference_picture_set`/`clear_all`/`reap_unused`, releasing
+each dropped DPB entry's `Picture::budget_bytes()` on removal, and gating
+`CuGrid`'s L1 arrays behind `has_l1` so P/I slices keep their original
+footprint exactly.
+
+**Verified against real `libx265` output, whole-sequence, byte-for-byte,
+per plane, per frame**, reusing `verify_hevc_deblock.sh`:
+
+- A genuinely bare `ffmpeg -c:v libx265` encode (**zero** `-x265-params` of
+  any kind) at 320x240 and at 640x480, `testsrc2`, 25 frames: **byte-exact,
+  whole file** (`cmp` reports no difference) — the number this pass was
+  asked to report. `verify_hevc_deblock.sh`'s own harness requires a non-empty
+  `x265-params` argument for its `log-level=none` wrapper, so the resolution
+  sweep below passes `bframes=4` explicitly (`libx265`'s own default value,
+  confirmed via `x265 --help`) as a functional no-op standing in for "no
+  flag at all"; the two direct, wrapper-free `cmp` runs above remove any
+  doubt that this is equivalent to a truly unmodified invocation.
+- The same, effectively-stock sweep (`bframes=4`, i.e. every encoder
+  feature — SAO, deblocking, WPP, `cu_qp_delta`, weighted prediction — at
+  its own default) at 320x240, 416x240, 352x288, 640x480 and 300x500:
+  100% byte-exact at every resolution.
+- `mandelbrot` (continuous zoom, real non-block-aligned motion) and `life`
+  (cellular-automaton content) at 320x240, same stock settings: both 100%
+  byte-exact.
+- A deep hierarchical-B GOP forced explicitly
+  (`bframes=6:b-adapt=2:weightp=1:keyint=25` on `life`): 100% byte-exact.
+- **Weighted bi-prediction specifically** (`apply_weight_bi`, the
+  `(Some, Some)` branch with both `w0`/`w1` resolved): the `weightp=1`
+  fixture above never exercised it — `libx265` gates weighted bi-prediction
+  behind its own separate `--weightb` flag (default off; confirmed via
+  `x265 --help`, distinct from `--weightp`), so a fixture that only forces
+  `weightp=1` cannot express this path at all, the same "a fixture that
+  cannot express the bug proves nothing" trap this crate's own history
+  warns about. Re-run with `weightb=1` added
+  (`bframes=6:b-adapt=2:weightp=1:weightb=1:keyint=25` on `life`): every
+  bi-predicted PU in the stream took the weighted branch (confirmed by
+  temporary instrumentation counting `apply_weight_bi` vs
+  `default_biprediction` calls before trusting the result, then removed),
+  with genuinely non-neutral, distinct weight/offset pairs observed on both
+  lists (for example `w0 = Weight { log2_wd: 13, w: 113, o: 0 }`,
+  `w1 = Weight { log2_wd: 13, w: 123, o: 1 }`) — and the decode is still
+  100% byte-exact.
+- Regression check: every existing all-intra/P-slice/weighted-prediction
+  fixture at 320x240, 416x240, 352x288, 640x480 and 300x500 remains 100%
+  byte-exact, and all 61 crate unit tests, `tests/flat.rs` and
+  `tests/oracle.rs::dense_content_is_byte_exact` still pass.
+
+`decode_packet`'s "B-slices are not supported" refusal is **lifted**.
+`check_scope` itself never refused B-slices (it is an SPS/PPS-level check;
+slice type is not known that early) and is unchanged. What `check_scope`
+still refuses is unrelated to this pass: non-4:2:0 chroma, non-8-bit
+samples, `separate_colour_plane_flag`, custom scaling lists, I_PCM, SPS/PPS
+range extensions, screen-content-coding extensions, and tiles. Long-term
+reference pictures (refused by `derive_reference_pic_sets`, not
+`check_scope`) and dependent/multi-segment slices (refused inline in
+`decode_packet`, same as before) are also unaffected.
+
 ## Specification
 
 `itu-t-h265-202108` (ITU-T Rec. H.265 (08/2021)) and

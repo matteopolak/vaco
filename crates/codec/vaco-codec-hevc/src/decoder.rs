@@ -195,15 +195,12 @@ impl HevcDecoder {
         // (`motion::derive_merge_candidates`'s own `is_b` branch) and
         // bi-predictive motion compensation (`ctu::predict_component`'s own
         // `(Some, Some)` arm, `mc::default_biprediction`/`apply_weight_bi`)
-        // are all implemented. **This refusal stays in place regardless**
-        // until a real B-slice fixture measures byte-exact against plain
-        // `ffmpeg`, per this crate's own "registered-but-wrong is worse than
-        // absent" discipline (`AGENT-CONSTRAINTS.md`) — see
-        // `docs/codec/vaco-codec-hevc.md`'s B-slice section for what has and
-        // has not been measured.
-        if hdr.kind == SliceKind::B {
-            return Err(Error::Unsupported("vaco-codec-hevc: B-slices are not supported"));
-        }
+        // are implemented and measured byte-exact against plain `ffmpeg` on
+        // a fully-stock `libx265` encode (no `-x265-params` restrictions at
+        // all) at multiple resolutions, plus dedicated fixtures for deep
+        // hierarchical-B GOPs and explicit weighted bi-prediction
+        // (`weightb=1`) — see `docs/codec/vaco-codec-hevc.md`'s B-slice
+        // section for the full measured sweep. The refusal is lifted.
         if hdr.dependent {
             return Err(Error::Unsupported("vaco-codec-hevc: dependent slice segments are not supported"));
         }
