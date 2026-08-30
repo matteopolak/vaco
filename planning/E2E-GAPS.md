@@ -336,3 +336,80 @@ vector lanes profitably.
 **Honest conclusion for the interpolation path: round 1 took the available
 low-risk wins.** Further progress needs either a wider-batch kernel shape than
 4x4/8x8 offers, or the deblocking masked-select route.
+
+## 12. H.264 decode is byte-exact against ffmpeg — §7's 13.70% closed
+
+§7's number was real and its acceptance rule was right. Re-measured with
+exactly that rule — **per plane, per frame, byte for byte, whole sequence,
+naming the first differing frame** — the same 25-frame 320×240 Main
+`-bf 0 -refs 1` `libx264` clip now decodes **byte-exact, 25/25, all three
+planes, 0 of 2 880 000 bytes differing.**
+
+| Configuration (25 frames, 320×240, `testsrc2`) | Before | After |
+|---|---|---|
+| Main, `-bf 0 -refs 1` | 17.62%, from frame 0 | **0.0000%, byte-exact** |
+| High, `-bf 0 -refs 1` (**x264's default profile**) | 6.51%, from frame 0 | 0.0008% (24 bytes), from frame 22 |
+| Main, `-refs 3` | 2 frames, then refused | 2 frames **byte-exact**, then refused |
+| Main, B frames | 2 frames, then refused | 2 frames **byte-exact**, then refused |
+| Baseline | refused | refused |
+
+(The 17.62% differs from §7's 13.70% only because the clip was regenerated;
+same encoder settings, same shape of error, same first-frame signature —
+48–60 luma samples at max delta 3.)
+
+Four defects, in the order the sequencing rule found them — frame 0 taken to
+byte-exact before any later frame was examined:
+
+1. `vaco-codec-dsp-deblock`'s `TC0_TABLE`, **23 of 52 rows wrong** (off by
+   one row for every `indexA ≥ 16`). All of frame 0's error. `2fb318e`.
+2. Clause 8.4.1: an **intra neighbour was treated as an absent one**,
+   conflating clause 6.4 macroblock availability with clause 8.4.1.3.2's
+   `refIdxLXN = -1` substitution. Every `P_Skip` next to an intra neighbour
+   mispredicted `(0, 0)` and fed the error forward. Alone took the sequence
+   from 17.29% to byte-exact. `09d3078`.
+3. `Intra_8x8` missing from the deblocking filter's own intra test, plus two
+   more 8x8-transform gaps (`bS = 2` read the wrong residual field; the
+   internal edges at offsets 4 and 12 were filtered). High profile 6.51% →
+   0.0008%. `775f3d9`.
+
+**Still open, and unchanged**: CAVLC reconstruction, CABAC B slices, the
+multi-reference CABAC desync, MBAFF/field pictures. All are *refused*, not
+mis-decoded. Plus one new, precisely-located residual: High profile, frame
+22, macroblock (15, 13) — an `Intra_8x8` macroblock inside a **P** slice,
+top row only, 24 bytes across frames 22–24. Reproduces with the loop filter
+disabled on both sides, so it is reconstruction, not deblocking.
+
+### What this says about the harness rule, again
+
+§7's correction ("a decoder that emits the right number of bytes has
+demonstrated only that it emits the right number of bytes") is now joined by
+a second, sharper one. `vaco-codec-dsp-deblock`'s `TC0_TABLE` had **already
+been corrected once against the oracle** — one entry changed because it took
+a fixture's whole-picture match from 98.97% to 99.78%. That entry's correct
+value was wrong in its *other two* columns, and the "fix" made the table
+less correct while making the number go up. The hand-trace that followed
+checked every input to the filter *except* that table, precisely because it
+read as settled.
+
+**Fitting one value to an aggregate difference percentage is not a check on
+that value.** A near-miss percentage is evidence that the wrong entries are
+rarely reached, not that they are right. The table was settled in ten
+minutes by extracting JM's own and diffing all 52 rows mechanically.
+
+### Method
+
+Every one of the four fell to the same technique, and none to reading
+specification prose: clone and build **JM 19.1 `ldecod`**, confirm it is
+byte-exact against ffmpeg on the exact clip (it was, on every clip used),
+then dump the same intermediate state from both and diff it. Macroblock
+types and per-4×4 motion vectors out of JM's `exit_picture` found defect 2;
+dumping derived `bS` on an **IDR** picture — where no value below 3 is
+reachable, so a 2 is self-evidently wrong — found defect 3 in one look.
+
+`crates/codec/vaco-codec-h264/tests/decoder_output_matches_ffmpeg.rs` (new)
+is the standing check: it drives the **registered** `H264Decoder` through its
+public `set_extradata`/`send_packet`/`receive_frame` surface over all 25
+frames and reports the first differing frame with per-frame per-plane
+magnitudes on failure. Its own detection was self-tested by injecting a
+single wrong byte per frame — §1's "the implementation had no production
+caller and the tests hid that" applies to correctness harnesses too.
