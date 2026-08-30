@@ -1066,10 +1066,10 @@ stock-`libx264` encodes (322x242 and 1024x576) and the new B-pyramid 1080p clip.
 Every hash matched ffmpeg's. `-threads 0` and `-threads 64` also match;
 `-threads abc` is rejected with the reference's own wording.
 
-`big.mkv` — 1800 frames, the best race detector in the corpus — was run **45
-times: at least ten at each of 1, 2, 4 and 8 threads**, across three successive
-binaries as the change landed. No run ever produced a different hash, and every
-one matched ffmpeg's.
+`big.mkv` — 1800 frames, the best race detector in the corpus — was run **47
+times: twelve each at 1, 2 and 4 threads and eleven at 8**, across three
+successive binaries as the change landed. No run ever produced a different hash,
+and every one matched ffmpeg's.
 
 Three assertions were also added to the repository so this does not depend on a
 shell script being re-run (`crates/codec/vaco-codec-h264/tests/frame_threading.rs`):
