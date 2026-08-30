@@ -52,8 +52,8 @@ use vaco_pixfmt::PixFmt;
 
 use crate::mb::MbSummary;
 use crate::reconstruct::{
-    BiPredMode, ImplicitWeights, ReconstructedPicture, RefPicturePlanes, SliceWeightTables,
-    reconstruct_picture_rows,
+    BiPredMode, ImplicitWeights, ReconstructedPicture, RefPicturePlanes, RefPlane,
+    SliceWeightTables, reconstruct_picture_rows,
 };
 
 /// The slice-header knobs clause 8.7's filter reads, carried whole rather than
@@ -121,7 +121,7 @@ fn planes_of<'a>(
     ctx: &TaskCtx<'_>,
     reference: &'a PictureRef,
 ) -> Result<RefPicturePlanes<'a>> {
-    let mut out: [&'a [u8]; 3] = [&[], &[], &[]];
+    let mut out: [RefPlane<'a>; 3] = [RefPlane::Flat(&[]), RefPlane::Flat(&[]), RefPlane::Flat(&[])];
     for (plane, slot) in out.iter_mut().enumerate() {
         // `wait_rows` clamps the row it waits for to the plane's own height, so
         // `u32::MAX` is "every row" -- which is what picture-granularity
@@ -131,7 +131,7 @@ fn planes_of<'a>(
         let block = view.contiguous_all().ok_or(Error::InvalidData(
             "vaco-codec-h264: a reference plane was not published as one band",
         ))?;
-        *slot = block.data;
+        *slot = RefPlane::Flat(block.data);
     }
     let [luma, cb, cr] = out;
     Ok(RefPicturePlanes { luma, cb, cr })

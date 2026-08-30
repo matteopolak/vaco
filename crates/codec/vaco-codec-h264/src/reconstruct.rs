@@ -62,6 +62,7 @@
 )]
 
 use vaco_codec_dsp_idct::h264::{idct4x4, idct8x8};
+use vaco_codec_core::picture::{BlockScratch, PlaneView};
 use vaco_limits::Budget;
 
 use crate::dequant::{chroma_qp, dequant_4x4, dequant_8x8, dequant_chroma_dc_2x2, dequant_luma_dc_4x4};
@@ -614,6 +615,10 @@ pub(crate) fn reconstruct_picture_luma(
     mbs_high: u32,
     budget: &mut Budget,
 ) -> vaco_core::Result<Vec<u8>> {
+    // `reconstruct_picture_luma` has no inter path, so nothing here reads a
+    // reference; the scratch exists only to satisfy the shared signature.
+    let mut scratch = ReadScratch::new(budget)?;
+    let _ = &mut scratch;
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
     for mb in macroblocks {
         if mb.is_ipcm {
@@ -684,9 +689,10 @@ pub(crate) fn reconstruct_picture_with_inter(
     macroblocks: &[MbSummary],
     mbs_wide: u32,
     mbs_high: u32,
-    ref_list0: &[&[u8]],
+    ref_list0: &[RefPlane<'_>],
     budget: &mut Budget,
 ) -> vaco_core::Result<Vec<u8>> {
+    let mut scratch = ReadScratch::new(budget)?;
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
     let ref_width = mbs_wide * 16;
     let ref_height = mbs_high * 16;
@@ -728,7 +734,7 @@ pub(crate) fn reconstruct_picture_with_inter(
         } else if mb.is_intra4x4 {
             reconstruct_intra4x4_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
         } else {
-            reconstruct_inter_mb(&mut buf, mb, ref_list0, &[], ref_width, ref_height, InterWeights::none());
+            reconstruct_inter_mb(&mut buf, mb, ref_list0, &[], ref_width, ref_height, InterWeights::none(), &mut scratch);
         }
     }
     Ok(buf.luma)
@@ -747,7 +753,15 @@ pub(crate) fn reconstruct_picture_with_inter(
 /// [`reconstruct_inter_mb`] so a `Bi` block can call it twice (once per
 /// list) before [`InterWeights::combine`] ever runs, instead of the
 /// single-list weighting this used to apply inline.
-fn sample_luma_block(plane: &[u8], ref_width: u32, ref_height: u32, x: u32, y: u32, mv: (i16, i16)) -> [[u8; 4]; 4] {
+fn sample_luma_block(
+    plane: RefPlane<'_>,
+    ref_width: u32,
+    ref_height: u32,
+    x: u32,
+    y: u32,
+    mv: (i16, i16),
+    scratch: &mut ReadScratch,
+) -> [[u8; 4]; 4] {
     #[allow(
         clippy::cast_possible_wrap,
         clippy::cast_sign_loss,
@@ -760,6 +774,36 @@ fn sample_luma_block(plane: &[u8], ref_width: u32, ref_height: u32, x: u32, y: u
         let (int_dy, frac_y) = (mvy >> 2, (mvy & 3) as u32);
         let x0 = x as i32 + int_dx;
         let y0 = y as i32 + int_dy;
+        let mut pred = [[0u8; 4]; 4];
+        // Clause 8.4.2.2.1's six-tap filter reads two samples above and left of
+        // the block and three below and right of its last one: a 9x9 region at
+        // `(x0 - 2, y0 - 2)`. That is the whole of this function's footprint,
+        // and it is what a banded reference is asked for in one piece.
+        let (rx0, ry0) = (x0 - 2, y0 - 2);
+        let plane = match plane {
+            RefPlane::Flat(data) => data,
+            RefPlane::Banded(view) => {
+                let Ok(b) = view.block(rx0, ry0, 9, 9, &mut scratch.block) else {
+                    // Only reachable if a caller reconstructed a macroblock row
+                    // before waiting for the rows its motion vectors reach.
+                    scratch.failed = true;
+                    return pred;
+                };
+                let (data, stride) = (b.data, b.stride);
+                let fetch = |ax: i32, ay: i32| -> u8 {
+                    let (rx, ry) = ((ax - rx0).max(0) as usize, (ay - ry0).max(0) as usize);
+                    data.get(ry * stride + rx).copied().unwrap_or(0)
+                };
+                for (i, row) in pred.iter_mut().enumerate() {
+                    for (j, v) in row.iter_mut().enumerate() {
+                        let full_x = x as i32 + j as i32 + int_dx;
+                        let full_y = y as i32 + i as i32 + int_dy;
+                        *v = crate::interp::luma_qpel_sample(fetch, full_x, full_y, frac_x, frac_y);
+                    }
+                }
+                return pred;
+            }
+        };
         let safe = !plane.is_empty()
             && x0 - 2 >= 0
             && x0 + 6 < ref_width as i32
@@ -778,7 +822,6 @@ fn sample_luma_block(plane: &[u8], ref_width: u32, ref_height: u32, x: u32, y: u
             let cy = ay as u32;
             plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
         };
-        let mut pred = [[0u8; 4]; 4];
         for (i, row) in pred.iter_mut().enumerate() {
             for (j, v) in row.iter_mut().enumerate() {
                 let full_x = x as i32 + j as i32 + int_dx;
@@ -805,20 +848,21 @@ fn sample_luma_block(plane: &[u8], ref_width: u32, ref_height: u32, x: u32, y: u
 fn reconstruct_inter_mb(
     buf: &mut PictureBuffer,
     mb: &MbSummary,
-    ref_list0: &[&[u8]],
-    ref_list1: &[&[u8]],
+    ref_list0: &[RefPlane<'_>],
+    ref_list1: &[RefPlane<'_>],
     ref_width: u32,
     ref_height: u32,
     weights: InterWeights<'_>,
+    scratch: &mut ReadScratch,
 ) {
-    let empty: &[u8] = &[];
+    let empty = RefPlane::Flat(&[]);
     // Motion compensation is unaffected by `transform_size_8x8_flag` --
     // clause 8.4's own prediction-sample derivation never reads it, only
     // the residual (clause 7.3.5.3.3) does -- so every 4x4 block's own
     // predicted samples are always computed the same way, one quadrant's
     // worth (four 4x4 blocks) gathered into `pred8` before either residual
     // path below reads from it.
-    let fetch_pred_4x4 = |x: u32, y: u32, blk: u32| -> [[u8; 4]; 4] {
+    let fetch_pred_4x4 = |x: u32, y: u32, blk: u32, scratch: &mut ReadScratch| -> [[u8; 4]; 4] {
         let (bx, by) = blk_xy(blk);
         let info = mb.mv_blocks[(by * 4 + bx) as usize];
         let ref_idx0 = info.ref_idx_l0().max(0) as usize;
@@ -831,10 +875,10 @@ fn reconstruct_inter_mb(
         // membership alone.
         let p0 = info
             .reads_l0()
-            .then(|| sample_luma_block(ref_list0.get(ref_idx0).copied().unwrap_or(empty), ref_width, ref_height, x, y, info.mv_l0()));
+            .then(|| sample_luma_block(ref_list0.get(ref_idx0).copied().unwrap_or(empty), ref_width, ref_height, x, y, info.mv_l0(), scratch));
         let p1 = info
             .reads_l1()
-            .then(|| sample_luma_block(ref_list1.get(ref_idx1).copied().unwrap_or(empty), ref_width, ref_height, x, y, info.mv_l1()));
+            .then(|| sample_luma_block(ref_list1.get(ref_idx1).copied().unwrap_or(empty), ref_width, ref_height, x, y, info.mv_l1(), scratch));
         let mut pred = [[0u8; 4]; 4];
         for i in 0..4usize {
             for j in 0..4usize {
@@ -860,7 +904,7 @@ fn reconstruct_inter_mb(
             for i4x4 in 0..4u32 {
                 let (sbx, sby) = blk_xy(i4x4);
                 let blk = i8x8 * 4 + i4x4;
-                let sub = fetch_pred_4x4(x + sbx * 4, y + sby * 4, blk);
+                let sub = fetch_pred_4x4(x + sbx * 4, y + sby * 4, blk, scratch);
                 for (i, row) in sub.iter().enumerate() {
                     for (j, &v) in row.iter().enumerate() {
                         if let Some(dst) = pred8.get_mut(sby as usize * 4 + i).and_then(|r| r.get_mut(sbx as usize * 4 + j)) {
@@ -889,7 +933,7 @@ fn reconstruct_inter_mb(
         let (bx, by) = blk_xy(blk);
         let x = mb.mb_x * 16 + bx * 4;
         let y = mb.mb_y * 16 + by * 4;
-        let pred = fetch_pred_4x4(x, y, blk);
+        let pred = fetch_pred_4x4(x, y, blk, scratch);
 
         let ac = mb
             .residual
@@ -1201,9 +1245,74 @@ fn weight_for(weights: SliceWeights<'_>, ref_idx: usize) -> Option<PredWeight> {
 /// luma.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct RefPicturePlanes<'a> {
-    pub(crate) luma: &'a [u8],
-    pub(crate) cb: &'a [u8],
-    pub(crate) cr: &'a [u8],
+    pub(crate) luma: RefPlane<'a>,
+    pub(crate) cb: RefPlane<'a>,
+    pub(crate) cr: RefPlane<'a>,
+}
+
+/// How one reference plane is stored, which is the only thing motion
+/// compensation has to care about beyond the samples themselves.
+///
+/// A picture published in a single band (`-threads 1`, and every test oracle
+/// in this module) is one allocation, and every read is the plain indexed fetch
+/// this decoder has always done -- [`RefPlane::Flat`] is exactly that code, so
+/// the non-threaded path pays nothing at all for row granularity. A picture
+/// published band by band while it is still being produced cannot be one
+/// allocation (a writer cannot hold `&mut` above row `R` while a reader holds
+/// `&` below it), so [`RefPlane::Banded`] asks
+/// [`vaco_codec_core::picture::PlaneView::block`] for the region a block needs
+/// in one piece and reads that. Both arms feed the same clause 8.4.2.2
+/// arithmetic in [`crate::interp`]; only the fetch differs, exactly as the
+/// in-picture and edge-clamped fetches already did.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum RefPlane<'a> {
+    /// The whole plane, row-major at its own width. Empty means "no such
+    /// reference", which reads as zero.
+    Flat(&'a [u8]),
+    /// A plane published in bands, readable up to this view's own watermark.
+    Banded(PlaneView<'a>),
+}
+
+/// The per-task working state a reference read needs a `&mut` on.
+///
+/// `failed` exists because [`vaco_codec_core::picture::PlaneView::block`] can
+/// refuse a region whose rows are not published yet, and motion compensation
+/// has no `Result` to put that in without threading one through clause 8.4's
+/// whole prediction path. Fabricating samples instead would be silent and
+/// content-dependent, so the flag is raised and
+/// [`reconstruct_picture_rows`] turns it into an error at the end of the
+/// macroblock row -- one branch per row, not per sample.
+#[derive(Debug)]
+pub(crate) struct ReadScratch {
+    block: BlockScratch,
+    failed: bool,
+}
+
+impl ReadScratch {
+    /// Scratch for the largest region clause 8.4.2.2 reads: luma's 9x9
+    /// six-tap footprint, rounded up.
+    ///
+    /// # Errors
+    ///
+    /// [`vaco_core::Error::LimitExceeded`] when the budget refuses.
+    pub(crate) fn new(budget: &mut Budget) -> vaco_core::Result<Self> {
+        Ok(Self { block: BlockScratch::new(budget, 16, 16)?, failed: false })
+    }
+
+    /// Turn a raised failure flag into an error, and clear it.
+    ///
+    /// # Errors
+    ///
+    /// [`vaco_core::Error::InvalidData`] if any reference read since the last
+    /// check could not be served from the rows published so far.
+    fn check(&mut self) -> vaco_core::Result<()> {
+        if core::mem::take(&mut self.failed) {
+            return Err(vaco_core::Error::InvalidData(
+                "vaco-codec-h264: motion compensation read past a reference picture's published rows",
+            ));
+        }
+        Ok(())
+    }
 }
 
 /// A fully reconstructed picture: luma at `mbs_wide*16 x mbs_high*16`,
@@ -1298,13 +1407,47 @@ fn add_chroma_residual(mut pred: [[u8; 8]; 8], comp: usize, mb: &MbSummary, qpc:
     clippy::cast_possible_truncation,
     reason = "blk/dx/dy are fixed 0..16/0..2 loop bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp -- mirrors reconstruct_inter_mb's own identical allow"
 )]
-/// One list's own raw chroma sample at one of a 4x4 luma block's own two
-/// chroma sub-positions -- [`sample_luma_block`]'s chroma counterpart,
-/// factored out for the same L0/L1-then-combine reason.
-fn sample_chroma_point(plane: &[u8], chroma_width: u32, chroma_height: u32, cx0: i32, cy0: i32, mv: (i16, i16)) -> u8 {
+/// One list's own raw chroma samples at a 4x4 luma block's own four chroma
+/// sub-positions -- [`sample_luma_block`]'s chroma counterpart, returning the
+/// 2x2 group together for the same L0/L1-then-combine reason, and because a
+/// banded reference is asked for the region they share exactly once.
+fn sample_chroma_2x2(
+    plane: RefPlane<'_>,
+    chroma_width: u32,
+    chroma_height: u32,
+    cx0: i32,
+    cy0: i32,
+    mv: (i16, i16),
+    scratch: &mut ReadScratch,
+) -> [[u8; 2]; 2] {
     #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "mirrors this function's own pre-existing arithmetic")]
     {
         let (mvx, mvy) = (i32::from(mv.0), i32::from(mv.1));
+        let mut out = [[0u8; 2]; 2];
+        // Clause 8.4.2.2.2's bilinear reads `(xIntC, yIntC)` and its right/below
+        // neighbour, so the four sub-positions between them span a 3x3 region at
+        // `(cx0 + mv >> 3, cy0 + mv >> 3)`.
+        let (rx0, ry0) = (cx0 + (mvx >> 3), cy0 + (mvy >> 3));
+        let plane = match plane {
+            RefPlane::Flat(data) => data,
+            RefPlane::Banded(view) => {
+                let Ok(b) = view.block(rx0, ry0, 3, 3, &mut scratch.block) else {
+                    scratch.failed = true;
+                    return out;
+                };
+                let (data, stride) = (b.data, b.stride);
+                let fetch = |ax: i32, ay: i32| -> u8 {
+                    let (rx, ry) = ((ax - rx0).max(0) as usize, (ay - ry0).max(0) as usize);
+                    data.get(ry * stride + rx).copied().unwrap_or(0)
+                };
+                for (dy, row) in out.iter_mut().enumerate() {
+                    for (dx, v) in row.iter_mut().enumerate() {
+                        *v = crate::interp::chroma_mc_sample(fetch, cx0 + dx as i32, cy0 + dy as i32, mvx, mvy);
+                    }
+                }
+                return out;
+            }
+        };
         let fetch = |ax: i32, ay: i32| -> u8 {
             if plane.is_empty() {
                 return 0;
@@ -1313,7 +1456,12 @@ fn sample_chroma_point(plane: &[u8], chroma_width: u32, chroma_height: u32, cx0:
             let cy = ay.clamp(0, chroma_height as i32 - 1) as u32;
             plane.get((cy * chroma_width + cx) as usize).copied().unwrap_or(0)
         };
-        crate::interp::chroma_mc_sample(fetch, cx0, cy0, mvx, mvy)
+        for (dy, row) in out.iter_mut().enumerate() {
+            for (dx, v) in row.iter_mut().enumerate() {
+                *v = crate::interp::chroma_mc_sample(fetch, cx0 + dx as i32, cy0 + dy as i32, mvx, mvy);
+            }
+        }
+        out
     }
 }
 
@@ -1336,8 +1484,9 @@ fn predict_chroma_inter(
     chroma_width: u32,
     chroma_height: u32,
     weights: InterWeights<'_>,
+    scratch: &mut ReadScratch,
 ) -> [[u8; 8]; 8] {
-    let empty: &[u8] = &[];
+    let empty = RefPlane::Flat(&[]);
     let mut out = [[0u8; 8]; 8];
     for blk in 0..16u32 {
         let (bx, by) = blk_xy(blk);
@@ -1348,15 +1497,17 @@ fn predict_chroma_inter(
         let plane1 = ref_list1.get(ref_idx1).map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
         let cx0 = (mb.mb_x * 8 + bx * 2) as i32;
         let cy0 = (mb.mb_y * 8 + by * 2) as i32;
+        let p0 = info
+            .reads_l0()
+            .then(|| sample_chroma_2x2(plane0, chroma_width, chroma_height, cx0, cy0, info.mv_l0(), scratch));
+        let p1 = info
+            .reads_l1()
+            .then(|| sample_chroma_2x2(plane1, chroma_width, chroma_height, cx0, cy0, info.mv_l1(), scratch));
 
         for dy in 0..2i32 {
             for dx in 0..2i32 {
-                let a = info
-                    .reads_l0()
-                    .then(|| sample_chroma_point(plane0, chroma_width, chroma_height, cx0 + dx, cy0 + dy, info.mv_l0()));
-                let b = info
-                    .reads_l1()
-                    .then(|| sample_chroma_point(plane1, chroma_width, chroma_height, cx0 + dx, cy0 + dy, info.mv_l1()));
+                let a = p0.map(|m| m[dy as usize][dx as usize]);
+                let b = p1.map(|m| m[dy as usize][dx as usize]);
                 let v = match (a, b) {
                     (Some(a), Some(b)) => weights.combine(ref_idx0, ref_idx1, a, b),
                     (Some(a), None) => weights.single(0, ref_idx0, a),
@@ -1429,10 +1580,12 @@ pub(crate) fn reconstruct_picture(
         bipred_mode,
         implicit,
     );
+    let mut scratch = ReadScratch::new(budget)?;
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
     for mb in macroblocks {
-        reconstruct_mb(&mut buf, mb, &ctx)?;
+        reconstruct_mb(&mut buf, mb, &ctx, &mut scratch)?;
     }
+    scratch.check()?;
 
     Ok(ReconstructedPicture {
         luma: buf.luma,
@@ -1453,9 +1606,9 @@ pub(crate) struct PictureCtx<'a> {
     ref_list1: &'a [RefPicturePlanes<'a>],
     /// `ref_list0`'s luma planes alone, which is all
     /// [`reconstruct_inter_mb`] takes.
-    ref_list0_luma: Vec<&'a [u8]>,
+    ref_list0_luma: Vec<RefPlane<'a>>,
     /// [`PictureCtx::ref_list0_luma`]'s list-1 counterpart.
-    ref_list1_luma: Vec<&'a [u8]>,
+    ref_list1_luma: Vec<RefPlane<'a>>,
     weights: &'a SliceWeightTables,
     bipred_mode: BiPredMode,
     implicit: Option<&'a ImplicitWeights>,
@@ -1506,13 +1659,18 @@ impl<'a> PictureCtx<'a> {
 /// # Errors
 ///
 /// [`vaco_core::Error::Unsupported`] for `I_PCM`.
-fn reconstruct_mb(buf: &mut PictureBuffer, mb: &MbSummary, ctx: &PictureCtx<'_>) -> vaco_core::Result<()> {
+fn reconstruct_mb(
+    buf: &mut PictureBuffer,
+    mb: &MbSummary,
+    ctx: &PictureCtx<'_>,
+    scratch: &mut ReadScratch,
+) -> vaco_core::Result<()> {
     let (ref_width, ref_height) = (ctx.ref_width, ctx.ref_height);
     let (chroma_width, chroma_height) = (ctx.chroma_width, ctx.chroma_height);
     let (chroma_qp_offset_cb, chroma_qp_offset_cr) = (ctx.chroma_qp_offset_cb, ctx.chroma_qp_offset_cr);
     let (ref_list0, ref_list1) = (ctx.ref_list0, ctx.ref_list1);
-    let ref_list0_luma: &[&[u8]] = &ctx.ref_list0_luma;
-    let ref_list1_luma: &[&[u8]] = &ctx.ref_list1_luma;
+    let ref_list0_luma: &[RefPlane<'_>] = &ctx.ref_list0_luma;
+    let ref_list1_luma: &[RefPlane<'_>] = &ctx.ref_list1_luma;
     let weights = ctx.weights;
     let bipred_mode = ctx.bipred_mode;
     let implicit = ctx.implicit;
@@ -1551,7 +1709,7 @@ fn reconstruct_mb(buf: &mut PictureBuffer, mb: &MbSummary, ctx: &PictureCtx<'_>)
         reconstruct_intra8x8_mb(buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
     } else {
         let luma_weights = InterWeights { l0: weights.luma(), l1: weights.luma1(), mode: bipred_mode, implicit };
-        reconstruct_inter_mb(buf, mb, ref_list0_luma, ref_list1_luma, ref_width, ref_height, luma_weights);
+        reconstruct_inter_mb(buf, mb, ref_list0_luma, ref_list1_luma, ref_width, ref_height, luma_weights, scratch);
     }
 
     let qpc_cb = chroma_qp(mb.qpy, chroma_qp_offset_cb);
@@ -1560,7 +1718,7 @@ fn reconstruct_mb(buf: &mut PictureBuffer, mb: &MbSummary, ctx: &PictureCtx<'_>)
         let pred = if is_inter {
             let chroma_weights =
                 InterWeights { l0: weights.chroma(comp), l1: weights.chroma1(comp), mode: bipred_mode, implicit };
-            predict_chroma_inter(mb, comp, ref_list0, ref_list1, chroma_width, chroma_height, chroma_weights)
+            predict_chroma_inter(mb, comp, ref_list0, ref_list1, chroma_width, chroma_height, chroma_weights, scratch)
         } else {
             let neighbours = chroma_neighbours(buf, comp, mb.mb_x, mb.mb_y);
             predict_intra_chroma(mb.intra_chroma_pred_mode, neighbours)
@@ -1639,6 +1797,7 @@ pub(crate) fn reconstruct_picture_rows(
         bipred_mode,
         implicit,
     );
+    let mut scratch = ReadScratch::new(budget)?;
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
     let (luma_h, chroma_h) = (mbs_high.saturating_mul(16), mbs_high.saturating_mul(8));
 
@@ -1653,8 +1812,9 @@ pub(crate) fn reconstruct_picture_rows(
             .all(|(i, mb)| (mb.mb_y.saturating_mul(mbs_wide).saturating_add(mb.mb_x) as usize) == i);
     if !raster {
         for mb in macroblocks {
-            reconstruct_mb(&mut buf, mb, &ctx)?;
+            reconstruct_mb(&mut buf, mb, &ctx, &mut scratch)?;
         }
+        scratch.check()?;
         if let Some(d) = deblock {
             for my in 0..mbs_high {
                 d.luma_mb_row(&mut buf.luma, my);
@@ -1682,9 +1842,10 @@ pub(crate) fn reconstruct_picture_rows(
             if mb.mb_y != my {
                 break;
             }
-            reconstruct_mb(&mut buf, mb, &ctx)?;
+            reconstruct_mb(&mut buf, mb, &ctx, &mut scratch)?;
             cursor += 1;
         }
+        scratch.check()?;
         if let Some(d) = deblock {
             if my > 0 {
                 let done = my - 1;
@@ -2460,8 +2621,8 @@ mod tests {
                             reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high, &mut budget)
                                 .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))?
                         } else {
-                            let ref_list0: Vec<&[u8]> =
-                                dpb.iter().rev().map(Vec::as_slice).collect();
+                            let ref_list0: Vec<RefPlane<'_>> =
+                                dpb.iter().rev().map(|p| RefPlane::Flat(p.as_slice())).collect();
                             reconstruct_picture_with_inter(
                                 &stats.macroblocks,
                                 mbs_wide,
@@ -2631,9 +2792,9 @@ mod tests {
                             dpb.iter()
                                 .rev()
                                 .map(|p| RefPicturePlanes {
-                                    luma: &p.luma,
-                                    cb: &p.cb,
-                                    cr: &p.cr,
+                                    luma: RefPlane::Flat(&p.luma),
+                                    cb: RefPlane::Flat(&p.cb),
+                                    cr: RefPlane::Flat(&p.cr),
                                 })
                                 .collect()
                         };
@@ -2880,7 +3041,11 @@ mod tests {
                     } else {
                         dpb.iter()
                             .rev()
-                            .map(|p| RefPicturePlanes { luma: &p.luma, cb: &p.cb, cr: &p.cr })
+                            .map(|p| RefPicturePlanes {
+                                luma: RefPlane::Flat(&p.luma),
+                                cb: RefPlane::Flat(&p.cb),
+                                cr: RefPlane::Flat(&p.cr),
+                            })
                             .collect()
                     };
                     // Clause 8.7.2.1 compares reference *pictures*, so
