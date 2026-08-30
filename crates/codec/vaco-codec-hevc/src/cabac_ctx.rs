@@ -86,6 +86,73 @@ const INIT_SAO_TYPE_IDX: [u8; 1] = [200];
 // entries already follow).
 const INIT_CU_QP_DELTA: [u8; 3] = [154, 154, 154];
 
+// ---------------------------------------------------------------------
+// P-slice context-initialisation tables, ITU-T H.265 §9.3.2.2's `initType`
+// 1 (P, the common case) and `initType` 0 (B — selected instead of `initType`
+// 1 whenever `cabac_init_present_flag && cabac_init_flag`, §9.3.2.2's own
+// swap rule; confirmed directly against HM's `TDecSbac::resetEntropy`, which
+// swaps `sliceType` from `P_SLICE` to `B_SLICE` in exactly that condition,
+// `B_SLICE == 0`/`P_SLICE == 1`/`I_SLICE == 2` being the literal row order
+// HM's own `ContextTables.h` uses). This crate does not decode B slices, so
+// only these two rows of each three-row HM table are transcribed — the
+// I-slice row above already covers `initType` 2, which a P slice never
+// selects (`cabac_init_flag` only ever swaps *between* the B and P rows,
+// never to the I row: HM's own `switch` has no `I_SLICE` case).
+//
+// Every array below is `[normal, cabac_init_flag_set]` — index `0` is what
+// §9.3.2.2 calls `initType = 1` (P, the value almost every real stream
+// uses), index `1` is `initType = 0` (B, selected only when
+// `cabac_init_present_flag && cabac_init_flag`).
+
+const INIT_SPLIT_CU_FLAG_P: [[u8; 3]; 2] = [[107, 139, 126], [107, 139, 126]];
+const INIT_PART_SIZE_P: [[u8; 4]; 2] = [[154, 139, 154, 154], [154, 139, 154, 154]];
+const INIT_PREV_INTRA_LUMA_PRED_P: [[u8; 1]; 2] = [[154], [183]];
+const INIT_INTRA_CHROMA_PRED_MODE_P: [[u8; 2]; 2] = [[152, 139], [152, 139]];
+const INIT_TRANS_SUBDIV_FLAG_P: [[u8; 3]; 2] = [[124, 138, 94], [224, 167, 122]];
+const INIT_QT_CBF_P: [[u8; 10]; 2] = [
+    [153, 111, 154, 154, 154, 149, 107, 167, 154, 154],
+    [153, 111, 154, 154, 154, 149, 92, 167, 154, 154],
+];
+const INIT_TRANSFORM_SKIP_P: [[u8; 2]; 2] = [[139, 139], [139, 139]];
+#[rustfmt::skip]
+const INIT_SIG_COEFF_FLAG_P: [[u8; 44]; 2] = [
+    [
+        155, 154, 139, 153, 139, 123, 123, 63, 153, 166, 183, 140, 136, 153, 154, 166, 183, 140, 136, 153, 154, 166,
+        183, 140, 136, 153, 154, 140, 170, 153, 123, 123, 107, 121, 107, 121, 167, 151, 183, 140, 151, 183, 140, 140,
+    ],
+    [
+        170, 154, 139, 153, 139, 123, 123, 63, 124, 166, 183, 140, 136, 153, 154, 166, 183, 140, 136, 153, 154, 166,
+        183, 140, 136, 153, 154, 140, 170, 153, 138, 138, 122, 121, 122, 121, 167, 151, 183, 140, 151, 183, 140, 140,
+    ],
+];
+const INIT_SIG_COEFF_GROUP_P: [[u8; 4]; 2] = [[121, 140, 61, 154], [121, 140, 61, 154]];
+#[rustfmt::skip]
+const INIT_LAST_SIG_P: [[u8; 30]; 2] = [
+    [125, 110, 94, 110, 95, 79, 125, 111, 110, 78, 110, 111, 111, 95, 94, 108, 123, 108, 154, 154, 154, 154, 154, 154, 154, 154, 154, 154, 154, 154],
+    [125, 110, 124, 110, 95, 94, 125, 111, 111, 79, 125, 126, 111, 111, 79, 108, 123, 93, 154, 154, 154, 154, 154, 154, 154, 154, 154, 154, 154, 154],
+];
+#[rustfmt::skip]
+const INIT_GREATER1_P: [[u8; 24]; 2] = [
+    [154, 196, 196, 167, 154, 152, 167, 182, 182, 134, 149, 136, 153, 121, 136, 137, 169, 194, 166, 167, 154, 167, 137, 182],
+    [154, 196, 167, 167, 154, 152, 167, 182, 182, 134, 149, 136, 153, 121, 136, 122, 169, 208, 166, 167, 154, 152, 167, 182],
+];
+const INIT_GREATER2_P: [[u8; 6]; 2] = [[107, 167, 91, 122, 107, 167], [107, 167, 91, 107, 107, 167]];
+const INIT_SAO_TYPE_IDX_P: [[u8; 1]; 2] = [[185], [160]];
+const INIT_CU_QP_DELTA_P: [[u8; 3]; 2] = [[154, 154, 154], [154, 154, 154]];
+
+// Inter-only tables: never read by an I slice at all (its own HM row is the
+// dummy `CNU` filler), so only the P/B rows exist here — there is no I-row
+// counterpart to omit-by-symmetry the way the module doc explains for the
+// tables above.
+const INIT_SKIP_FLAG_P: [[u8; 3]; 2] = [[197, 185, 201], [197, 185, 201]];
+const INIT_MERGE_FLAG_P: [[u8; 1]; 2] = [[110], [154]];
+const INIT_MERGE_IDX_P: [[u8; 1]; 2] = [[122], [137]];
+const INIT_PRED_MODE_P: [[u8; 1]; 2] = [[149], [134]];
+const INIT_MVD_P: [[u8; 2]; 2] = [[140, 198], [169, 198]];
+const INIT_REF_PIC_P: [[u8; 2]; 2] = [[153, 153], [153, 153]];
+const INIT_QT_ROOT_CBF_P: [[u8; 1]; 2] = [[79], [79]];
+const INIT_MVP_IDX_P: [[u8; 1]; 2] = [[168], [168]];
+
 /// `ctxIndMap4x4`, HM `TComRom.cpp` — the fixed per-position context offset
 /// for a 4x4 transform block's `sig_coeff_flag`, §9.3.4.2.5.
 pub(crate) const CTX_IND_MAP_4X4: [u8; 16] = [0, 1, 4, 5, 2, 3, 4, 5, 6, 6, 8, 8, 7, 7, 8, 8];
@@ -128,6 +195,19 @@ pub(crate) struct ContextBank {
     pub sao_merge_flag: [ContextModel; 1],
     pub sao_type_idx: [ContextModel; 1],
     pub cu_qp_delta: [ContextModel; 3],
+    /// `cu_skip_flag` (§7.3.8.5) — `Default::default()`-valued (state 0,
+    /// `pStateIdx`/`valMPS` both zero) on an I-slice `ContextBank`, which is
+    /// harmless: `ctu::coding_unit` never reads it for an I slice (`slice
+    /// isIntra()` skips `skip_flag` entirely, mirroring HM's own
+    /// `parseSkipFlag`).
+    pub skip_flag: [ContextModel; 3],
+    pub merge_flag: [ContextModel; 1],
+    pub merge_idx: [ContextModel; 1],
+    pub pred_mode: [ContextModel; 1],
+    pub mvd: [ContextModel; 2],
+    pub ref_pic: [ContextModel; 2],
+    pub qt_root_cbf: [ContextModel; 1],
+    pub mvp_idx: [ContextModel; 1],
 }
 
 fn init<const N: usize>(table: &[u8; N], qp: i8) -> [ContextModel; N] {
@@ -159,6 +239,63 @@ impl ContextBank {
             sao_merge_flag: init(&INIT_SAO_MERGE_FLAG, slice_qp),
             sao_type_idx: init(&INIT_SAO_TYPE_IDX, slice_qp),
             cu_qp_delta: init(&INIT_CU_QP_DELTA, slice_qp),
+            // Never read on an I-slice decode path (see each field's own
+            // doc); `ContextModel::default()` is as good a value as any.
+            skip_flag: [ContextModel::default(); 3],
+            merge_flag: [ContextModel::default(); 1],
+            merge_idx: [ContextModel::default(); 1],
+            pred_mode: [ContextModel::default(); 1],
+            mvd: [ContextModel::default(); 2],
+            ref_pic: [ContextModel::default(); 2],
+            qt_root_cbf: [ContextModel::default(); 1],
+            mvp_idx: [ContextModel::default(); 1],
+        }
+    }
+
+    /// Build a fresh context bank for a P slice (§9.3.2.2's `initType = 1`,
+    /// or `initType = 0` when `cabac_init_flag` swaps it — see the module
+    /// doc's "P-slice context-initialisation tables" section for exactly
+    /// which HM row that is and why only two of the three rows are
+    /// transcribed at all).
+    #[must_use]
+    pub(crate) fn new_p_slice(slice_qp: i8, cabac_init_flag: bool) -> Self {
+        let row = usize::from(cabac_init_flag);
+        macro_rules! row_init {
+            ($table:expr, $n:expr) => {{
+                // Array-pattern destructuring rather than `$table[row]`:
+                // this crate denies `clippy::indexing_slicing` crate-wide
+                // with no per-site silencing, and a `[[u8; N]; 2]` table has
+                // exactly two rows to destructure regardless of `$n`.
+                let [row0, row1]: [[u8; $n]; 2] = $table;
+                let t: [u8; $n] = if row == 1 { row1 } else { row0 };
+                init(&t, slice_qp)
+            }};
+        }
+        Self {
+            split_cu_flag: row_init!(INIT_SPLIT_CU_FLAG_P, 3),
+            part_size: row_init!(INIT_PART_SIZE_P, 4),
+            prev_intra_luma_pred: row_init!(INIT_PREV_INTRA_LUMA_PRED_P, 1),
+            intra_chroma_pred_mode: row_init!(INIT_INTRA_CHROMA_PRED_MODE_P, 2),
+            trans_subdiv_flag: row_init!(INIT_TRANS_SUBDIV_FLAG_P, 3),
+            qt_cbf: row_init!(INIT_QT_CBF_P, 10),
+            transform_skip: row_init!(INIT_TRANSFORM_SKIP_P, 2),
+            sig_coeff_flag: row_init!(INIT_SIG_COEFF_FLAG_P, 44),
+            sig_coeff_group: row_init!(INIT_SIG_COEFF_GROUP_P, 4),
+            last_sig_x: row_init!(INIT_LAST_SIG_P, 30),
+            last_sig_y: row_init!(INIT_LAST_SIG_P, 30),
+            greater1: row_init!(INIT_GREATER1_P, 24),
+            greater2: row_init!(INIT_GREATER2_P, 6),
+            sao_merge_flag: init(&INIT_SAO_MERGE_FLAG, slice_qp),
+            sao_type_idx: row_init!(INIT_SAO_TYPE_IDX_P, 1),
+            cu_qp_delta: row_init!(INIT_CU_QP_DELTA_P, 3),
+            skip_flag: row_init!(INIT_SKIP_FLAG_P, 3),
+            merge_flag: row_init!(INIT_MERGE_FLAG_P, 1),
+            merge_idx: row_init!(INIT_MERGE_IDX_P, 1),
+            pred_mode: row_init!(INIT_PRED_MODE_P, 1),
+            mvd: row_init!(INIT_MVD_P, 2),
+            ref_pic: row_init!(INIT_REF_PIC_P, 2),
+            qt_root_cbf: row_init!(INIT_QT_ROOT_CBF_P, 1),
+            mvp_idx: row_init!(INIT_MVP_IDX_P, 1),
         }
     }
 }
@@ -171,6 +308,14 @@ mod tests {
     fn every_table_builds_without_panicking_across_the_qp_range() {
         for qp in -12i8..=51 {
             let _ = ContextBank::new(qp);
+        }
+    }
+
+    #[test]
+    fn every_p_slice_table_builds_without_panicking_across_the_qp_range() {
+        for qp in -12i8..=51 {
+            let _ = ContextBank::new_p_slice(qp, false);
+            let _ = ContextBank::new_p_slice(qp, true);
         }
     }
 }

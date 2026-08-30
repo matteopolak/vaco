@@ -35,18 +35,45 @@
 //! (again via [`vaco_format_nalu::units`], not a second parser) to reach
 //! the one primary-coded-picture slice's raw bits `push_access_unit`
 //! itself does not hand back.
+//!
+//! # Output reordering (`Caps::DELAY` / `Caps::SUBFRAMES`)
+//!
+//! An I-slice-only decoder could emit its one frame per packet
+//! synchronously (Stage 1's own `decode_packet -> Result<Option<Frame>>`
+//! shape). Once P-slices exist at all, decode order and output order can
+//! differ (Annex C.5.2's own bumping process), so a decoded picture's
+//! frame is not necessarily ready the moment its packet is decoded, and one
+//! packet's decode can flush zero, one, or several pending pictures at
+//! once. `self.machine` (the shared send/receive protocol every codec in
+//! this project uses) is declared with both flags for exactly that reason
+//! — `Caps::DELAY` because a `None` (drain) send is required to flush
+//! whatever the DPB is still holding, `Caps::SUBFRAMES` because one input
+//! packet may legitimately `emit` more than one frame (an IRAP that bumps
+//! several pending pictures before clearing) or none at all (a picture
+//! decoded but not yet due for output).
+//!
+//! P-slices are, as of this pass, still refused by [`check_scope`]'s
+//! caller below despite being implemented (see `ctu::coding_unit_p` and
+//! everything under it, plus [`crate::motion`]/[`crate::mc`]) — a real,
+//! reproduced defect remains in the TMVP-for-AMVP path once a slice has
+//! more than one active reference picture; see
+//! `docs/codec/vaco-codec-hevc.md`'s "Stage 2: P-slices" section for the
+//! exact repro. Nothing below this refusal is reachable from a real
+//! bitstream yet.
 
 use vaco_codec_cabac::CabacDecoder;
 use vaco_codec_core::Decoder;
+use vaco_codec_core::Caps;
 use vaco_core::{Error, Result};
 use vaco_format_nalu::{RbspBuf, units};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
-use vaco_parse_hevc::{ChromaFormat, HevcNalHeader, HevcParser, Pps, SliceHeader, SliceKind, Sps};
+use vaco_parse_hevc::{ChromaFormat, HevcNalHeader, HevcParser, PocState, Pps, SliceHeader, SliceKind, Sps};
 
 use crate::cabac_ctx::ContextBank;
-use crate::ctu::{self, Ctx};
+use crate::ctu::{self, Ctx, InterSliceParams, RefPic};
 use crate::deblock;
+use crate::dpb::{CollocatedMotionField, Dpb, PictureMeta};
 use crate::framebuf::{CuGrid, Picture};
 use crate::sao;
 
@@ -58,6 +85,16 @@ pub struct HevcDecoder {
     budget: Budget,
     rbsp: RbspBuf,
     machine: vaco_codec_core::machine::Machine<vaco_frame::Frame>,
+    /// `None` until the first slice of the stream is decoded — a P-slice
+    /// stream's own reorder/reference bounds (`Sps::max_dec_pic_buffering`
+    /// etc.) are not known before then, and [`Dpb::new`] needs them.
+    dpb: Option<Dpb>,
+    /// ITU-T H.265 §8.3.1's own carried state (`prevTid0Poc`), owned by
+    /// `vaco-parse-hevc` (see that crate's `poc` module doc for why POC
+    /// derivation is parse-side, not decode-side, despite living in clause
+    /// 8) — this decoder only calls it once per slice and resets it on
+    /// [`Decoder::flush`].
+    poc_state: PocState,
 }
 
 impl std::fmt::Debug for HevcDecoder {
@@ -73,16 +110,20 @@ impl HevcDecoder {
             parser: HevcParser::new(limits.clone()),
             budget: Budget::new(limits.clone()),
             rbsp: RbspBuf::new(),
-            machine: vaco_codec_core::machine::Machine::with_capacity(vaco_codec_core::Caps::empty(), 1),
+            machine: vaco_codec_core::machine::Machine::new(Caps::DELAY | Caps::SUBFRAMES),
+            dpb: None,
+            poc_state: PocState::new(),
             limits,
         }
     }
 
-    /// Decode one packet (one container sample / access unit) into at most
-    /// one frame. `Ok(None)` means the access unit carried no primary-coded
-    /// picture (parameter sets/SEI only), which is legal and not an error —
-    /// mirrors `H264Decoder::decode_packet`'s own contract exactly.
-    fn decode_packet(&mut self, pkt: &Packet) -> Result<Option<vaco_frame::Frame>> {
+    /// Decode one packet (one container sample / access unit), storing any
+    /// newly-decoded picture in the DPB and pushing whatever that bumps out
+    /// (zero, one, or several frames) into `self.machine`. Returning
+    /// nothing (rather than Stage 1's `Result<Option<Frame>>`) is exactly
+    /// what `Caps::SUBFRAMES` means: a caller reads output back out via
+    /// `receive_frame`, not this function's own return value.
+    fn decode_packet(&mut self, pkt: &Packet) -> Result<()> {
         let payload = pkt.payload();
         let framing = self.parser.framing();
 
@@ -92,9 +133,8 @@ impl HevcDecoder {
         // slice at all (or its parameter sets are not yet known, which is
         // legal for a stream joined mid-flight).
         let info = self.parser.push_access_unit(payload, framing)?;
-        let Some(kind) = info.picture_type else { return Ok(None) };
-        if kind != 'I' {
-            return Err(Error::Unsupported("vaco-codec-hevc: only I-slices are decoded"));
+        if info.picture_type.is_none() {
+            return Ok(());
         }
 
         // Locate this access unit's one primary-coded-picture slice —
@@ -120,7 +160,7 @@ impl HevcDecoder {
                 "vaco-codec-hevc: more than one slice segment per picture is not supported",
             ));
         }
-        let Some(ebsp) = slice_nal else { return Ok(None) };
+        let Some(ebsp) = slice_nal else { return Ok(()) };
         let header = HevcNalHeader::parse(ebsp).ok_or(Error::InvalidData("vaco-codec-hevc: empty NAL unit"))?;
 
         self.rbsp.fill(ebsp, &mut self.budget)?;
@@ -148,8 +188,35 @@ impl HevcDecoder {
         let hdr = SliceHeader::parse_data(&mut reader, header, &sps, &pps, &mut self.budget)?;
         reader.check()?;
 
-        if hdr.kind != SliceKind::I {
-            return Err(Error::Unsupported("vaco-codec-hevc: only I-slices are decoded"));
+        if hdr.kind == SliceKind::B {
+            return Err(Error::Unsupported("vaco-codec-hevc: B-slices are not supported"));
+        }
+        // Stage 2 (P-slices) is implemented below — merge/AMVP derivation,
+        // motion compensation, the inter CABAC contexts and syntax — but is
+        // *refused* here rather than enabled: a real, reproducible defect
+        // remains in the TMVP-for-AMVP path once a slice has more than one
+        // active reference picture (`NumRefIdxL0 > 1`), which produces
+        // silently wrong (not merely imprecise) motion vectors that
+        // compound frame over frame. See `docs/codec/vaco-codec-hevc.md`'s
+        // "Stage 2: P-slices" section for the exact repro and the two bugs
+        // already found and fixed on the way here (an inferred-vs-parsed
+        // `cbf_luma` condition, and an inverted `Log2ParallelMergeLevel`
+        // MER-exclusion check). Lift this refusal only once a stock
+        // multi-reference file decodes byte-exact end to end.
+        if hdr.kind == SliceKind::P {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: P-slices are not supported yet (TMVP-for-AMVP defect, see docs)",
+            ));
+        }
+        // Stage 4 (weighted prediction) is left as an honest refusal —
+        // `pred_weight_table()` is already parsed by `vaco-parse-hevc` (a
+        // stream description has to be able to describe it), but nothing
+        // here applies the weights it carries. `libx265` does not enable
+        // `weighted_pred_flag` by default, so this does not affect a stock
+        // encode. Unreachable while the P-slice refusal above stands, kept
+        // so lifting that refusal does not require re-deriving this gate.
+        if pps.weighted_pred && hdr.kind == SliceKind::P {
+            return Err(Error::Unsupported("vaco-codec-hevc: weighted prediction is not supported"));
         }
         if hdr.dependent {
             return Err(Error::Unsupported("vaco-codec-hevc: dependent slice segments are not supported"));
@@ -167,6 +234,73 @@ impl HevcDecoder {
         let height = usize::try_from(sps.pic_height_in_luma_samples).unwrap_or(0);
         let mut pic = Picture::new(&mut self.budget, width, height)?;
         let cu_grid = CuGrid::new(&mut self.budget, width, height)?;
+
+        // ITU-T H.265 §8.3.1: this picture's own picture order count, and
+        // (§8.1) whether it is the one IRAP in its sequence that clears
+        // RASL output rather than merely refreshing prediction.
+        let no_rasl_output =
+            header.nal_unit_type.is_idr() || header.nal_unit_type.is_bla() || (header.nal_unit_type.is_cra() && !self.poc_state.started());
+        let poc = self.poc_state.advance_with(&sps, &hdr, header.temporal_id, no_rasl_output);
+
+        let max_dec_pic_buffering = usize::try_from(sps.max_dec_pic_buffering()).unwrap_or(1).max(1);
+        let max_num_reorder_pics = usize::try_from(sps.max_num_reorder_pics()).unwrap_or(0);
+        let max_latency_increase = sps.max_latency_increase_plus1.last().copied().unwrap_or(0);
+        let dpb = self
+            .dpb
+            .get_or_insert_with(|| Dpb::new(max_dec_pic_buffering, max_num_reorder_pics, max_latency_increase));
+
+        let sets = crate::dpb::derive_reference_pic_sets(poc.value, hdr.short_term_rps.as_ref(), !hdr.long_term_refs.is_empty())?;
+
+        // §C.5.2.2: an IRAP with `NoRaslOutputFlag` bumps everything still
+        // pending (unless `no_output_of_prior_pics_flag` says to drop it
+        // silently) and then empties the DPB outright, before this
+        // picture's own reference-picture-set marking (which would be
+        // meaningless against an empty DPB anyway) runs.
+        if header.nal_unit_type.is_irap() && no_rasl_output {
+            let pocs = dpb.clear_for_irap(hdr.no_output_of_prior_pics);
+            Self::emit_pocs(self.dpb.as_ref(), &mut self.budget, &mut self.machine, &pocs)?;
+            if let Some(dpb) = self.dpb.as_mut() {
+                dpb.clear_all();
+            }
+        } else if let Some(dpb) = self.dpb.as_mut() {
+            dpb.apply_reference_picture_set(&sets);
+        }
+
+        let (list0, list1) = crate::dpb::build_ref_pic_lists(
+            &sets,
+            hdr.num_ref_idx_l0_active_minus1,
+            hdr.num_ref_idx_l1_active_minus1,
+            hdr.ref_pic_list_modification.as_ref(),
+            false,
+        );
+        let _ = list1; // always empty here: `is_b == false` above, this crate never builds RefPicList1.
+
+        let inter = if hdr.kind == SliceKind::I {
+            None
+        } else {
+            let dpb_ref = self.dpb.as_ref();
+            let ref_pics_l0: Vec<RefPic<'_>> = list0
+                .iter()
+                .filter_map(|&p| dpb_ref.and_then(|d| d.reference_picture(p)).map(|pic| RefPic { poc: p, pic }))
+                .collect();
+            let collocated = if hdr.temporal_mvp_enabled {
+                list0
+                    .get(usize::try_from(hdr.collocated_ref_idx).unwrap_or(0))
+                    .and_then(|&p| dpb_ref.and_then(|d| d.collocated_for(p)))
+            } else {
+                None
+            };
+            let max_num_merge_cand = usize::try_from(5u32.saturating_sub(hdr.five_minus_max_num_merge_cand)).unwrap_or(1).max(1);
+            Some(InterSliceParams {
+                max_num_merge_cand,
+                log2_parallel_merge_level: pps.log2_parallel_merge_level,
+                amp_enabled: sps.amp_enabled,
+                cur_poc: poc.value,
+                ref_pics_l0,
+                collocated,
+            })
+        };
+
         let mut walk = Ctx::new(
             &mut self.budget,
             &mut pic,
@@ -179,6 +313,7 @@ impl HevcDecoder {
             hdr.tc_offset_div2,
             hdr.sao_luma,
             hdr.sao_chroma,
+            inter,
         )?;
 
         let qp_i8 = i8::try_from(slice_qp.clamp(0, 51)).unwrap_or(0);
@@ -199,10 +334,22 @@ impl HevcDecoder {
             // positions directly under-counts every row boundary that a
             // `00 00 03` escape happens to precede.
             let header_rbsp_len = rbsp.len().saturating_sub(cabac_data.len());
-            decode_wpp_rows(&mut self.budget, ebsp, header_rbsp_len, &hdr.entry_point_offsets, &mut walk, ctbs_x, ctbs_y, ctb_size_i, qp_i8)?;
+            decode_wpp_rows(
+                &mut self.budget,
+                ebsp,
+                header_rbsp_len,
+                &hdr.entry_point_offsets,
+                &mut walk,
+                ctbs_x,
+                ctbs_y,
+                ctb_size_i,
+                qp_i8,
+                hdr.kind,
+                hdr.cabac_init,
+            )?;
         } else {
             let mut cabac = CabacDecoder::new(cabac_data);
-            let mut ctx = ContextBank::new(qp_i8);
+            let mut ctx = new_context_bank(hdr.kind, hdr.cabac_init, qp_i8);
             let total_ctbs = ctbs_x.saturating_mul(ctbs_y);
             for addr in 0..total_ctbs {
                 let col = addr.checked_rem(ctbs_x).unwrap_or(0);
@@ -223,12 +370,78 @@ impl HevcDecoder {
         deblock::filter_picture(&mut walk);
         sao::filter_picture(&mut self.budget, &mut walk)?;
 
-        let mut frame = pic_to_frame(&mut self.budget, &sps, &pic)?;
-        frame.pts = pkt.pts;
-        frame.duration = pkt.duration;
-        frame.flags |= vaco_frame::FrameFlags::KEY;
-        Ok(Some(frame))
+        // Built here, while `walk.cu_grid` is still alive, from the same
+        // per-4x4-block motion this slice itself just recorded — an I
+        // slice records none (`inter_at` gates on `is_inter`, never set),
+        // so its own collocated field is trivially `None` rather than an
+        // all-`None` allocation nobody will read.
+        let collocated_out = if hdr.kind == SliceKind::I {
+            None
+        } else {
+            Some(CollocatedMotionField::build(poc.value, width, height, |x, y| walk.cu_grid.inter_at(x, y)))
+        };
+
+        let out_dims = sps.dimensions().unwrap_or((sps.pic_width_in_luma_samples, sps.pic_height_in_luma_samples));
+        let meta = PictureMeta {
+            pts: pkt.pts,
+            duration: pkt.duration,
+            out_width: out_dims.0,
+            out_height: out_dims.1,
+            is_keyframe: header.nal_unit_type.is_irap(),
+        };
+        // `used_as_reference`: every NAL unit type except the
+        // "sub-layer-non-reference" ones (`*_N`, §7.4.2.2) can be
+        // referenced by a later picture.
+        let is_reference = !header.nal_unit_type.is_sub_layer_non_reference();
+
+        // Release `walk` (and, with it, `inter`/`ref_pics_l0`/`collocated`'s
+        // borrows of `self.dpb`) before taking `&mut self.dpb` below —
+        // `pic` and `cu_grid` are moved out of `walk` first since `store`
+        // and `CollocatedMotionField::build` above still needed them.
+        drop(walk);
+
+        let dpb = self.dpb.as_mut().ok_or(Error::InvalidData("vaco-codec-hevc: DPB missing after its own first use"))?;
+        dpb.store(pic, meta, poc.value, hdr.pic_output, is_reference, collocated_out);
+        let bumped = dpb.bump_before_storing();
+        Self::emit_pocs(self.dpb.as_ref(), &mut self.budget, &mut self.machine, &bumped)?;
+        if let Some(dpb) = self.dpb.as_mut() {
+            dpb.reap_unused();
+        }
+        Ok(())
     }
+
+    /// Read `pocs` (already POC-ordered by every [`Dpb`] method that
+    /// produces one) back out of `dpb` and push each as a frame into
+    /// `machine`. A free function rather than a `&mut self` method: the
+    /// caller still holds `self.rbsp.as_slice()`'s borrow live at some call
+    /// sites (the IRAP-clear one, before the CTU walk consumes
+    /// `cabac_data`), and a `&mut self` method call there would conflict
+    /// with it even though the two touch disjoint fields — the borrow
+    /// checker cannot see across a method boundary the way it can across
+    /// plain field accesses in one function body.
+    fn emit_pocs(dpb: Option<&Dpb>, budget: &mut Budget, machine: &mut vaco_codec_core::machine::Machine<vaco_frame::Frame>, pocs: &[i64]) -> Result<()> {
+        let Some(dpb) = dpb else { return Ok(()) };
+        for &poc in pocs {
+            let (Some(pic), Some(meta)) = (dpb.picture_for_output(poc), dpb.output_meta(poc)) else { continue };
+            let mut frame = pic_to_frame(budget, meta.out_width, meta.out_height, pic)?;
+            frame.pts = meta.pts;
+            frame.duration = meta.duration;
+            if meta.is_keyframe {
+                frame.flags |= vaco_frame::FrameFlags::KEY;
+            }
+            machine.emit(frame);
+        }
+        Ok(())
+    }
+}
+
+/// `new_p_slice`'s (or, for an I slice, `new`'s) own context-bank
+/// constructor, picked by slice type — the CABAC context tables an I slice
+/// initialises are a strict subset (`initType == 2`, always) of what a P
+/// slice needs (`initType` 0 or 1, per `cabac_init_flag`), so this is the
+/// one place `decode_packet` has to know which of the two exists at all.
+fn new_context_bank(kind: SliceKind, cabac_init: bool, qp: i8) -> ContextBank {
+    if kind == SliceKind::I { ContextBank::new(qp) } else { ContextBank::new_p_slice(qp, cabac_init) }
 }
 
 /// Split `cabac_data` into one byte range per CTU row, from
@@ -310,9 +523,9 @@ fn ebsp_offset_for_rbsp_len(ebsp: &[u8], rbsp_target_len: usize) -> usize {
 /// it: the arithmetic-decoding engine always reinitialises at a substream's
 /// first byte (clause 9.3.1.2's own init, same as slice start), but the
 /// *context* state does not — row 0 starts from the same
-/// `ContextBank::new(qp)` a non-WPP slice would, while every later row either
-/// inherits a saved snapshot or, if no snapshot is available, also starts
-/// fresh.
+/// `new_context_bank(kind, cabac_init, qp)` a non-WPP slice would, while
+/// every later row either inherits a saved snapshot or, if no snapshot is
+/// available, also starts fresh.
 ///
 /// The snapshot a row inherits is the context state as it stood **right
 /// after the row above finished decoding its own second CTU**, column index
@@ -333,6 +546,8 @@ fn decode_wpp_rows(
     ctbs_y: u32,
     ctb_size_i: i32,
     qp: i8,
+    kind: SliceKind,
+    cabac_init: bool,
 ) -> Result<()> {
     let data_start = ebsp_offset_for_rbsp_len(ebsp, header_rbsp_len);
     let ebsp_slice_data = ebsp.get(data_start..).unwrap_or(&[]);
@@ -359,9 +574,9 @@ fn decode_wpp_rows(
         // resetting here.
         walk.qp_y_prev = walk.slice_qp;
         let mut ctx = if row_idx > 0 && ctbs_x >= 2 {
-            saved_ctx.unwrap_or_else(|| ContextBank::new(qp))
+            saved_ctx.unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
         } else {
-            ContextBank::new(qp)
+            new_context_bank(kind, cabac_init, qp)
         };
 
         let row_u32 = u32::try_from(row_idx).unwrap_or(0);
@@ -442,10 +657,9 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
     Ok(())
 }
 
-fn pic_to_frame(budget: &mut Budget, sps: &Sps, pic: &Picture) -> Result<vaco_frame::Frame> {
+fn pic_to_frame(budget: &mut Budget, width: u32, height: u32, pic: &Picture) -> Result<vaco_frame::Frame> {
     let pix_fmt = vaco_pixfmt::PixFmt::from_name("yuv420p")
         .map_err(|_| Error::InvalidData("vaco-codec-hevc: yuv420p pixel format missing"))?;
-    let (width, height) = sps.dimensions().unwrap_or((sps.pic_width_in_luma_samples, sps.pic_height_in_luma_samples));
     let mut frame = vaco_frame::Frame::alloc_video(budget, pix_fmt, width, height)?;
     blit(&pic.y, &mut frame, 0, width as usize, height as usize);
     let (cw, ch) = (width.div_ceil(2) as usize, height.div_ceil(2) as usize);
@@ -471,19 +685,21 @@ impl Decoder for HevcDecoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         match self.machine.accept(packet.is_none())? {
             vaco_codec_core::machine::Accept::Drain => {
+                // Flush whatever the DPB is still holding, in POC order,
+                // before telling `self.machine` there is nothing left —
+                // otherwise a stream's last few pictures (still pending
+                // purely because reordering held them back) would be
+                // silently dropped rather than delayed.
+                if let Some(dpb) = self.dpb.as_ref() {
+                    let pending = dpb.flush();
+                    Self::emit_pocs(Some(dpb), &mut self.budget, &mut self.machine, &pending)?;
+                }
                 self.machine.finish();
                 Ok(())
             }
             vaco_codec_core::machine::Accept::Input => {
                 let Some(pkt) = packet else { return Ok(()) };
-                match self.decode_packet(pkt) {
-                    Ok(Some(frame)) => {
-                        self.machine.emit(frame);
-                        Ok(())
-                    }
-                    Ok(None) => Ok(()),
-                    Err(e) => Err(e),
-                }
+                self.decode_packet(pkt)
             }
         }
     }
@@ -495,6 +711,8 @@ impl Decoder for HevcDecoder {
     fn flush(&mut self) {
         self.machine.flush();
         self.parser.flush();
+        self.dpb = None;
+        self.poc_state.reset();
         // Release every byte charged to the budget along with the state
         // that held them, mirroring `H264Decoder::flush`'s own precedent.
         self.budget = Budget::new(self.limits.clone());

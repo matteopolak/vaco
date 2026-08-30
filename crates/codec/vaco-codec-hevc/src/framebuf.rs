@@ -149,6 +149,19 @@ pub(crate) struct CuGrid {
     written: Vec<bool>,
     qp: Vec<i8>,
     qp_written: Vec<bool>,
+    /// Per-4x4-block motion, for merge/AMVP spatial-neighbour derivation
+    /// (§8.5.3.2) — `None` (via `is_inter[i] == false`) for every intra
+    /// block or picture that has not reached this stage of the crate's scope
+    /// yet (see `crate::motion`'s own module doc: only ever populated once
+    /// the inter-prediction stage lands). `mv_x`/`mv_y` are quarter-pel, `i16`
+    /// like HM's own `TComMv`; `ref_poc` is `i64` to match
+    /// `crate::motion::MotionInfo`'s own field, not because a POC needs more
+    /// than 32 bits.
+    is_inter: Vec<bool>,
+    is_skip: Vec<bool>,
+    mv_x: Vec<i16>,
+    mv_y: Vec<i16>,
+    ref_poc: Vec<i64>,
 }
 
 impl CuGrid {
@@ -166,6 +179,11 @@ impl CuGrid {
             written: vec![false; len],
             qp: budget.alloc(len)?,
             qp_written: vec![false; len],
+            is_inter: vec![false; len],
+            is_skip: vec![false; len],
+            mv_x: budget.alloc(len)?,
+            mv_y: budget.alloc(len)?,
+            ref_poc: budget.alloc(len)?,
         })
     }
 
@@ -264,6 +282,77 @@ impl CuGrid {
             return None;
         }
         self.qp.get(i).copied()
+    }
+
+    /// Paint one PU's footprint (in 4-sample blocks) with its finalised
+    /// motion — called as soon as a PU's own `mvLX`/reference POC is known,
+    /// before the *next* PU of the same CU (or a later CU) can read it as a
+    /// spatial merge/AMVP neighbour (§8.5.3.2's own "already decoded in
+    /// z-scan order" availability, which for an inter PU includes an earlier
+    /// PU of its own CU).
+    pub(crate) fn fill_motion(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, mv: crate::motion::Mv, ref_poc: i64, is_skip: bool) {
+        let mv_x = i16::try_from(mv.x).unwrap_or(0);
+        let mv_y = i16::try_from(mv.y).unwrap_or(0);
+        for by in by0..by0.saturating_add(blocks_h) {
+            for bx in bx0..bx0.saturating_add(blocks_w) {
+                if let Some(i) = self.index(bx, by) {
+                    if let Some(slot) = self.is_inter.get_mut(i) {
+                        *slot = true;
+                    }
+                    if let Some(slot) = self.is_skip.get_mut(i) {
+                        *slot = is_skip;
+                    }
+                    if let Some(slot) = self.mv_x.get_mut(i) {
+                        *slot = mv_x;
+                    }
+                    if let Some(slot) = self.mv_y.get_mut(i) {
+                        *slot = mv_y;
+                    }
+                    if let Some(slot) = self.ref_poc.get_mut(i) {
+                        *slot = ref_poc;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The motion recorded at luma pixel `(px, py)`, or `None` if it is out
+    /// of picture bounds, not yet decoded, or intra-coded (§8.5.3.2's own
+    /// "predFlagL0/L1 equal to 0" unavailability, collapsed with the other
+    /// two "unavailable" cases the way every other neighbour query in this
+    /// crate already does — see `CuGrid::mode_at`'s own precedent).
+    #[must_use]
+    pub(crate) fn inter_at(&self, px: i32, py: i32) -> Option<crate::motion::MotionInfo> {
+        let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
+            return None;
+        };
+        let i = self.index(block_of(px), block_of(py))?;
+        if !self.written.get(i).copied().unwrap_or(false) || !self.is_inter.get(i).copied().unwrap_or(false) {
+            return None;
+        }
+        let mv = crate::motion::Mv {
+            x: i32::from(self.mv_x.get(i).copied().unwrap_or(0)),
+            y: i32::from(self.mv_y.get(i).copied().unwrap_or(0)),
+        };
+        let ref_poc = self.ref_poc.get(i).copied().unwrap_or(0);
+        Some(crate::motion::MotionInfo { mv, ref_poc })
+    }
+
+    /// Whether the 4x4 block at `(px, py)` is marked `cu_skip_flag` — used
+    /// only for `skip_flag`'s own `ctxInc` derivation (§9.3.4.2.2), which
+    /// treats "unavailable" the same as "not skipped" (both contribute `0`).
+    #[must_use]
+    pub(crate) fn is_skip_at(&self, px: i32, py: i32) -> bool {
+        let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
+            return false;
+        };
+        let Some(i) = self.index(block_of(px), block_of(py)) else {
+            return false;
+        };
+        if !self.written.get(i).copied().unwrap_or(false) {
+            return false;
+        }
+        self.is_skip.get(i).copied().unwrap_or(false)
     }
 }
 

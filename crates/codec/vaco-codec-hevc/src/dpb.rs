@@ -226,9 +226,32 @@ fn build_one_list(combined: &[i64], num_ref_idx_active_minus1: u32, modification
     }
 }
 
+/// The per-picture output metadata a decoded picture buffer has to carry
+/// alongside its samples, purely because output is no longer synchronous
+/// with decode the moment reordering exists: a bumped picture's own
+/// `pts`/`duration` came from *its own* originating packet, several
+/// [`Dpb::store`] calls before the one that finally outputs it, so they have
+/// to be remembered rather than read off "the current packet" at emission
+/// time the way this crate's I-slice-only history could get away with.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct PictureMeta {
+    pub pts: vaco_core::Timestamp,
+    pub duration: vaco_core::Duration,
+    /// The cropped output dimensions (`Sps::dimensions`, not the coded
+    /// size) *as they were when this picture was decoded* — read directly
+    /// rather than re-derived from whatever the current `Sps` says at
+    /// output time, which could in principle be a different activated SPS
+    /// by then.
+    pub out_width: u32,
+    pub out_height: u32,
+    /// Mirrors `vaco_frame::FrameFlags::KEY` — set for an IRAP picture.
+    pub is_keyframe: bool,
+}
+
 /// One picture held in the decoded picture buffer.
 pub(crate) struct DpbEntry {
     pub picture: Picture,
+    pub meta: PictureMeta,
     /// `PicOrderCntVal` at the time this picture was decoded.
     pub poc: i64,
     /// Whether this picture still needs to be output (§C.3.2's
@@ -238,6 +261,11 @@ pub(crate) struct DpbEntry {
     /// §C.3.2's `PicLatencyCount`: incremented once for every later picture
     /// stored while this one still needs output.
     pub latency_count: u32,
+    /// This picture's own compressed motion field, for a later picture's
+    /// TMVP derivation — `None` for an I picture (nothing to sample: every
+    /// position is intra) or when `sps_temporal_mvp_enabled_flag` was clear
+    /// while it was decoded.
+    pub collocated: Option<CollocatedMotionField>,
 }
 
 /// The decoded picture buffer: every picture still needed either as a
@@ -276,16 +304,30 @@ impl Dpb {
     /// that is itself the first picture of the bitstream — §7.4.7.1's own
     /// inference) skips outputting whatever was still pending; otherwise
     /// every picture still needing output is bumped first, in POC order.
-    pub(crate) fn clear_for_irap(&mut self, no_output_of_prior_pics: bool) -> Vec<i64> {
-        let out = if no_output_of_prior_pics {
+    ///
+    /// Returns the POCs to output but, like [`Dpb::bump_before_storing`],
+    /// does **not** itself remove anything — [`Dpb::clear_all`] is the
+    /// caller's own next step, once every returned POC has been read via
+    /// [`Dpb::picture_for_output`] (the same "read before you reap" contract
+    /// `bump_before_storing`'s own doc explains, here for the same reason:
+    /// an unconditional `self.entries.clear()` right here would have
+    /// dropped a pending output picture's own pixel data before its caller
+    /// ever saw it).
+    pub(crate) fn clear_for_irap(&self, no_output_of_prior_pics: bool) -> Vec<i64> {
+        if no_output_of_prior_pics {
             Vec::new()
         } else {
             let mut pending: Vec<i64> = self.entries.iter().filter(|e| e.needed_for_output).map(|e| e.poc).collect();
             pending.sort_unstable();
             pending
-        };
+        }
+    }
+
+    /// Empty the DPB entirely — the second half of an IRAP's own §C.5.2.2
+    /// handling, called once [`Dpb::clear_for_irap`]'s own returned POCs
+    /// have all been read out.
+    pub(crate) fn clear_all(&mut self) {
         self.entries.clear();
-        out
     }
 
     /// Annex C's informal "bumping" process, run immediately before storing
@@ -294,9 +336,26 @@ impl Dpb {
     /// until neither the reorder-count nor the DPB-fullness condition is
     /// exceeded. Returns the POCs output, in the order they were output
     /// (which is POC order, by construction).
+    ///
+    /// Deliberately does **not** physically remove any entry (the old
+    /// version of this function called `remove_unused` inline, which would
+    /// have dropped a bumped, non-reference picture's own pixel data before
+    /// its caller ever had a chance to read it out as an output frame — a
+    /// real bug, caught only once real pixel data existed to lose, since
+    /// this module's own tests before that used a `4x4` placeholder
+    /// picture and never needed to *read* what was bumped, only to observe
+    /// its POC). `reap_unused` is the caller's own job, once every POC this
+    /// call returns has actually been read via `picture_for_output`.
     pub(crate) fn bump_before_storing(&mut self) -> Vec<i64> {
         let mut outputs = Vec::new();
         loop {
+            // "Occupied" per §C.3.2 is "needed for output OR used for
+            // reference" — computed fresh each iteration rather than reread
+            // from `self.entries.len()`, since (per this function's own
+            // deferred-removal contract above) an entry already bumped out
+            // in an earlier iteration of *this* loop is still physically
+            // present but must not count a second time.
+            let occupied = self.entries.iter().filter(|e| e.needed_for_output || e.marking != Marking::Unused).count();
             let needed = self.entries.iter().filter(|e| e.needed_for_output).count();
             let over_reorder = needed > self.max_num_reorder_pics;
             let over_latency = self.max_latency_increase != 0
@@ -304,11 +363,7 @@ impl Dpb {
                     .entries
                     .iter()
                     .any(|e| e.needed_for_output && e.latency_count >= self.max_latency_increase.saturating_sub(1));
-            // Every remaining entry is, by `remove_unused`'s own invariant,
-            // either a reference or still needed for output — so `len()`
-            // alone is §C.3.2's "number of pictures marked as needed for
-            // output or as used for reference".
-            let over_capacity = self.entries.len() >= self.max_dec_pic_buffering;
+            let over_capacity = occupied >= self.max_dec_pic_buffering;
             if !(over_reorder || over_latency || over_capacity) {
                 break;
             }
@@ -326,15 +381,44 @@ impl Dpb {
                 outputs.push(e.poc);
                 e.needed_for_output = false;
             }
-            self.remove_unused();
         }
         outputs
+    }
+
+    /// A picture still physically present in the DPB, by POC, regardless of
+    /// its [`Marking`] — unlike [`Dpb::reference_picture`] (short-term refs
+    /// only), this is what a caller reads a *bumped* picture's own pixel
+    /// data from, since a bumped-for-output picture may already be
+    /// `Marking::Unused` (a disposable, non-reference picture) by the time
+    /// it is read.
+    #[must_use]
+    pub(crate) fn picture_for_output(&self, poc: i64) -> Option<&Picture> {
+        self.entries.iter().find(|e| e.poc == poc).map(|e| &e.picture)
+    }
+
+    /// The [`PictureMeta`] a picture named by `poc` was stored with —
+    /// always read alongside [`Dpb::picture_for_output`] to build the
+    /// actual output frame.
+    #[must_use]
+    pub(crate) fn output_meta(&self, poc: i64) -> Option<PictureMeta> {
+        self.entries.iter().find(|e| e.poc == poc).map(|e| e.meta)
+    }
+
+    /// Physically drop every entry that is neither needed for output nor
+    /// used for reference — the caller's own responsibility to call once it
+    /// has read every POC [`Dpb::bump_before_storing`]/
+    /// [`Dpb::clear_for_irap`] just returned via [`Dpb::picture_for_output`]
+    /// (see [`Dpb::bump_before_storing`]'s own doc for why removal is not
+    /// automatic).
+    pub(crate) fn reap_unused(&mut self) {
+        self.remove_unused();
     }
 
     /// Store a newly decoded picture. Every other picture still needing
     /// output has its `PicLatencyCount` incremented first — §C.3.2's own
     /// order (increment, then insert the new picture at zero).
-    pub(crate) fn store(&mut self, picture: Picture, poc: i64, needed_for_output: bool, is_reference: bool) {
+    #[allow(clippy::too_many_arguments, reason = "one call site (decoder.rs); every argument is a distinct DPB-entry field")]
+    pub(crate) fn store(&mut self, picture: Picture, meta: PictureMeta, poc: i64, needed_for_output: bool, is_reference: bool, collocated: Option<CollocatedMotionField>) {
         for e in &mut self.entries {
             if e.needed_for_output {
                 e.latency_count = e.latency_count.saturating_add(1);
@@ -342,19 +426,34 @@ impl Dpb {
         }
         self.entries.push(DpbEntry {
             picture,
+            meta,
             poc,
             needed_for_output,
             marking: if is_reference { Marking::ShortTerm } else { Marking::Unused },
             latency_count: 0,
+            collocated,
         });
     }
 
-    /// End of stream: output everything still pending, in POC order, then
-    /// empty the DPB.
-    pub(crate) fn flush(&mut self) -> Vec<i64> {
+    /// The compressed motion field a picture named by `poc` was stored
+    /// with, cloned out for the querying slice's own [`crate::ctu::Ctx`] to
+    /// own independently (see that type's own doc for why `collocated` is
+    /// owned rather than borrowed) — `None` both when no such entry exists
+    /// and when it exists but recorded no motion (an I picture).
+    #[must_use]
+    pub(crate) fn collocated_for(&self, poc: i64) -> Option<CollocatedMotionField> {
+        self.entries.iter().find(|e| e.poc == poc).and_then(|e| e.collocated.clone())
+    }
+
+    /// End of stream: the POCs of everything still pending, in POC order.
+    /// Does not remove anything — the same "read before you reap" contract
+    /// as [`Dpb::bump_before_storing`]/[`Dpb::clear_for_irap`]; call
+    /// [`Dpb::clear_all`] once every returned POC has been read via
+    /// [`Dpb::picture_for_output`].
+    #[must_use]
+    pub(crate) fn flush(&self) -> Vec<i64> {
         let mut pending: Vec<i64> = self.entries.iter().filter(|e| e.needed_for_output).map(|e| e.poc).collect();
         pending.sort_unstable();
-        self.entries.clear();
         pending
     }
 
@@ -363,7 +462,6 @@ impl Dpb {
     /// entry with that POC is currently marked short-term (already removed,
     /// or never a reference at all).
     #[must_use]
-    #[allow(dead_code, reason = "consumed once motion compensation exists; kept here so the lookup shape is settled")]
     pub(crate) fn reference_picture(&self, poc: i64) -> Option<&Picture> {
         self.entries.iter().find(|e| e.poc == poc && e.marking == Marking::ShortTerm).map(|e| &e.picture)
     }
@@ -378,6 +476,103 @@ impl Dpb {
     }
 }
 
+/// A picture's own motion field, compressed to a 16x16-luma-sample grid for
+/// use as a *collocated* picture by a later picture's TMVP derivation
+/// (§8.5.3.2.8/.9). Built once, when a picture finishes decoding, from its
+/// native (per-4x4) [`crate::framebuf::CuGrid`] motion — never mutated
+/// afterward, since the picture it describes is itself immutable from that
+/// point on.
+///
+/// # Why 16x16 and not the native 4x4 grid
+///
+/// §8.5.3.2.9 samples a collocated picture's motion at one representative
+/// position per 16x16 luma block (confirmed against HM's own
+/// `TComCUMvField::compress`, called once a picture finishes decoding and
+/// before it can be referenced as a collocated picture — `compressMV`'s own
+/// `AMVP_DECIMATION_FACTOR * 4 / m_unitSize` scale factor works out to 16
+/// with HM's own constants), not at the querying PU's own exact bottom-right
+/// or centre pixel. Reading a *native*-resolution grid at those exact pixel
+/// positions would give a different (finer-grained) answer than reading
+/// HM's compressed one whenever a collocated picture's motion happens to
+/// vary within one 16x16 block — which real content does. Building this
+/// once, at the 16-block granularity, and letting every later query read it
+/// directly (no further masking needed at query time) reproduces HM's own
+/// two-step "compress once, read many times" shape exactly, rather than
+/// reading a fine grid and hoping every caller remembers to mask its own
+/// query position down to the 16-grid first.
+#[derive(Debug, Clone)]
+pub(crate) struct CollocatedMotionField {
+    /// The picture this field describes — needed by every scaling
+    /// comparison alongside a sampled block's own `ref_poc`.
+    pub poc: i64,
+    cols: usize,
+    rows: usize,
+    has_motion: Vec<bool>,
+    mv_x: Vec<i16>,
+    mv_y: Vec<i16>,
+    ref_poc: Vec<i64>,
+}
+
+impl CollocatedMotionField {
+    /// Build a field for a `luma_width x luma_height` picture, sampling
+    /// `sample_at(x, y)` once per 16x16 block's own top-left corner.
+    /// `sample_at` is expected to be `CuGrid::inter_at` (or, for an I
+    /// picture, a closure that always returns `None` — see `decoder.rs`'s
+    /// own call site) — not `Budget`-tracked (the crate's own general rule):
+    /// every array here is at most `luma_width * luma_height / 256`
+    /// elements, strictly smaller than the picture's own already-budgeted
+    /// pixel planes it is derived from, so no allocation path opens here
+    /// that the picture's own construction did not already bound.
+    pub(crate) fn build(poc: i64, luma_width: usize, luma_height: usize, sample_at: impl Fn(i32, i32) -> Option<crate::motion::MotionInfo>) -> Self {
+        let cols = luma_width.div_ceil(16).max(1);
+        let rows = luma_height.div_ceil(16).max(1);
+        let len = cols.saturating_mul(rows);
+        let mut field = Self { poc, cols, rows, has_motion: vec![false; len], mv_x: vec![0; len], mv_y: vec![0; len], ref_poc: vec![0; len] };
+        for by in 0..rows {
+            for bx in 0..cols {
+                let x = i32::try_from(bx.saturating_mul(16)).unwrap_or(0);
+                let y = i32::try_from(by.saturating_mul(16)).unwrap_or(0);
+                let Some(info) = sample_at(x, y) else { continue };
+                let i = by * cols + bx;
+                if let Some(slot) = field.has_motion.get_mut(i) {
+                    *slot = true;
+                }
+                if let Some(slot) = field.mv_x.get_mut(i) {
+                    *slot = i16::try_from(info.mv.x).unwrap_or(0);
+                }
+                if let Some(slot) = field.mv_y.get_mut(i) {
+                    *slot = i16::try_from(info.mv.y).unwrap_or(0);
+                }
+                if let Some(slot) = field.ref_poc.get_mut(i) {
+                    *slot = info.ref_poc;
+                }
+            }
+        }
+        field
+    }
+
+    /// The motion recorded for the 16x16 block containing luma pixel
+    /// `(x, y)`, or `None` if that block was never inter-coded (an intra
+    /// block, or the whole picture was an I picture) or `(x, y)` is out of
+    /// range.
+    #[must_use]
+    pub(crate) fn get(&self, x: i32, y: i32) -> Option<crate::motion::MotionInfo> {
+        let (Ok(bx), Ok(by)) = (usize::try_from(x >> 4), usize::try_from(y >> 4)) else {
+            return None;
+        };
+        if bx >= self.cols || by >= self.rows {
+            return None;
+        }
+        let i = by * self.cols + bx;
+        if !self.has_motion.get(i).copied().unwrap_or(false) {
+            return None;
+        }
+        let mv = crate::motion::Mv { x: i32::from(self.mv_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv_y.get(i).copied().unwrap_or(0)) };
+        let ref_poc = self.ref_poc.get(i).copied().unwrap_or(0);
+        Some(crate::motion::MotionInfo { mv, ref_poc })
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing, reason = "test code over fixed scenarios")]
 mod tests {
@@ -389,6 +584,10 @@ mod tests {
 
     fn tiny_picture() -> Picture {
         Picture::new(&mut budget(), 4, 4).expect("small alloc")
+    }
+
+    fn tiny_meta() -> PictureMeta {
+        PictureMeta { pts: vaco_core::Timestamp::NONE, duration: vaco_core::Duration::ZERO, out_width: 4, out_height: 4, is_keyframe: false }
     }
 
     // ---- §8.3.2 short-term derivation ----
@@ -473,8 +672,8 @@ mod tests {
     #[test]
     fn a_picture_dropped_from_every_set_is_marked_unused_and_removed() {
         let mut dpb = Dpb::new(16, 16, 0);
-        dpb.store(tiny_picture(), 0, false, true);
-        dpb.store(tiny_picture(), 4, false, true);
+        dpb.store(tiny_picture(), tiny_meta(), 0, false, true, None);
+        dpb.store(tiny_picture(), tiny_meta(), 4, false, true, None);
         assert_eq!(dpb.pocs(), [0, 4]);
         // Only POC 4 is still referenced by the new set.
         let sets = ReferencePicSets { st_curr_before: vec![4], st_curr_after: vec![], st_foll: vec![] };
@@ -485,7 +684,7 @@ mod tests {
     #[test]
     fn a_picture_kept_only_in_st_foll_survives_marking() {
         let mut dpb = Dpb::new(16, 16, 0);
-        dpb.store(tiny_picture(), 4, false, true);
+        dpb.store(tiny_picture(), tiny_meta(), 4, false, true, None);
         let sets = ReferencePicSets { st_curr_before: vec![], st_curr_after: vec![], st_foll: vec![4] };
         dpb.apply_reference_picture_set(&sets);
         assert_eq!(dpb.pocs(), [4]);
@@ -498,12 +697,12 @@ mod tests {
         // order (POC 8 was stored before POC 4 — a hierarchical-B decode
         // order).
         let mut dpb = Dpb::new(16, 2, 0);
-        dpb.store(tiny_picture(), 0, true, false);
+        dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
         assert!(dpb.bump_before_storing().is_empty(), "only one pending picture: nothing to bump yet");
-        dpb.store(tiny_picture(), 8, true, false);
+        dpb.store(tiny_picture(), tiny_meta(), 8, true, false, None);
         let out = dpb.bump_before_storing();
         assert!(out.is_empty(), "two pending is not yet over the limit of two");
-        dpb.store(tiny_picture(), 4, true, false);
+        dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None);
         let out = dpb.bump_before_storing();
         assert_eq!(out, [0], "bumps the smallest POC, not decode order");
     }
@@ -513,8 +712,8 @@ mod tests {
         // max_num_reorder_pics = 0 but every picture is also a reference, so
         // fullness (max_dec_pic_buffering = 2) is what forces the bump.
         let mut dpb = Dpb::new(2, 0, 0);
-        dpb.store(tiny_picture(), 0, false, true);
-        dpb.store(tiny_picture(), 4, false, true);
+        dpb.store(tiny_picture(), tiny_meta(), 0, false, true, None);
+        dpb.store(tiny_picture(), tiny_meta(), 4, false, true, None);
         assert!(dpb.bump_before_storing().is_empty(), "nothing needs output, so nothing bumps");
         assert_eq!(dpb.pocs(), [0, 4], "both stay as references, not output");
     }
@@ -522,31 +721,40 @@ mod tests {
     #[test]
     fn an_irap_with_no_output_of_prior_pics_discards_pending_output_silently() {
         let mut dpb = Dpb::new(16, 16, 0);
-        dpb.store(tiny_picture(), 0, true, true);
-        dpb.store(tiny_picture(), 4, true, true);
+        dpb.store(tiny_picture(), tiny_meta(), 0, true, true, None);
+        dpb.store(tiny_picture(), tiny_meta(), 4, true, true, None);
         let out = dpb.clear_for_irap(true);
         assert!(out.is_empty());
+        dpb.clear_all();
         assert!(dpb.pocs().is_empty());
     }
 
     #[test]
     fn an_irap_without_no_output_flushes_pending_output_in_poc_order() {
         let mut dpb = Dpb::new(16, 16, 0);
-        dpb.store(tiny_picture(), 8, true, true);
-        dpb.store(tiny_picture(), 4, true, true);
+        dpb.store(tiny_picture(), tiny_meta(), 8, true, true, None);
+        dpb.store(tiny_picture(), tiny_meta(), 4, true, true, None);
         let out = dpb.clear_for_irap(false);
         assert_eq!(out, [4, 8]);
+        // Every returned POC is still readable until `clear_all` runs —
+        // the "read before you reap" contract `Dpb::clear_for_irap`'s own
+        // doc describes.
+        for poc in &out {
+            assert!(dpb.picture_for_output(*poc).is_some());
+        }
+        dpb.clear_all();
         assert!(dpb.pocs().is_empty());
     }
 
     #[test]
     fn flush_outputs_everything_pending_in_poc_order_and_empties_the_dpb() {
         let mut dpb = Dpb::new(16, 16, 0);
-        dpb.store(tiny_picture(), 12, true, false);
-        dpb.store(tiny_picture(), 0, true, false);
-        dpb.store(tiny_picture(), 6, false, true); // a reference never output
+        dpb.store(tiny_picture(), tiny_meta(), 12, true, false, None);
+        dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
+        dpb.store(tiny_picture(), tiny_meta(), 6, false, true, None); // a reference never output
         let out = dpb.flush();
         assert_eq!(out, [0, 12]);
+        dpb.clear_all();
         assert!(dpb.pocs().is_empty());
     }
 
@@ -556,17 +764,36 @@ mod tests {
         // picture is forced out once one later picture has been stored
         // while it was still pending.
         let mut dpb = Dpb::new(16, 16, 2);
-        dpb.store(tiny_picture(), 0, true, false);
+        dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
         assert!(dpb.bump_before_storing().is_empty());
-        dpb.store(tiny_picture(), 4, true, false); // POC 0's latency_count -> 1
+        dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None); // POC 0's latency_count -> 1
         let out = dpb.bump_before_storing();
         assert_eq!(out, [0]);
+    }
+
+    /// The bug `bump_before_storing`'s own doc records: a bumped,
+    /// non-reference picture's pixel data must still be readable via
+    /// `picture_for_output` until `reap_unused` is explicitly called —
+    /// the old version dropped it immediately (via an inline
+    /// `remove_unused()`), which no earlier test caught because none of
+    /// them ever tried to *read* a bumped entry's own picture.
+    #[test]
+    fn a_bumped_picture_stays_readable_until_reaped() {
+        let mut dpb = Dpb::new(16, 1, 0);
+        dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None); // not a reference: purely for output
+        dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None);
+        let out = dpb.bump_before_storing();
+        assert_eq!(out, [0]);
+        assert!(dpb.picture_for_output(0).is_some(), "bumped picture's own pixels must survive until reaped");
+        dpb.reap_unused();
+        assert!(dpb.picture_for_output(0).is_none(), "reaping removes it once the caller has read it");
+        assert!(dpb.picture_for_output(4).is_some(), "the still-pending picture is untouched");
     }
 
     #[test]
     fn reference_picture_finds_a_short_term_entry_by_poc() {
         let mut dpb = Dpb::new(16, 16, 0);
-        dpb.store(tiny_picture(), 4, false, true);
+        dpb.store(tiny_picture(), tiny_meta(), 4, false, true, None);
         assert!(dpb.reference_picture(4).is_some());
         assert!(dpb.reference_picture(5).is_none());
     }

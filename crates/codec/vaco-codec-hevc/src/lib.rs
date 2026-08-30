@@ -135,6 +135,8 @@ mod dpb;
 mod framebuf;
 mod intra_mode;
 mod intra_pred;
+mod mc;
+mod motion;
 mod residual;
 mod sao;
 mod scan;
