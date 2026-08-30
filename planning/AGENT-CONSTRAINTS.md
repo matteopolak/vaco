@@ -1935,3 +1935,29 @@ So:
 
 A microbenchmark ratio is a statement about a kernel. Only an end-to-end
 measurement is a statement about the program.
+
+## "I'll resume automatically when it finishes" — you will not
+
+Fourteen agents on this project have ended a turn waiting on work they
+themselves started. The most recent said it plainly:
+
+> Pausing here — the 50-run verification is at 25/50 with zero mismatches so
+> far. I'll resume automatically via the background-task notification.
+
+There is no such mechanism. Ending your turn does not schedule a wake-up. The
+background job keeps running; nothing brings you back to read its output. The
+turn simply ends, and the result sits unread until someone else prompts you.
+
+Two of the fourteen did it on their own benchmark runs, and one on a
+dependent-crate test sweep — in every case the thing they were waiting for was
+the entire point of the task, so the stall did not merely delay the work, it
+discarded it.
+
+**If you start something in the background, you poll it.** Check the process,
+read its output file, or re-run it in the foreground. If a full sweep is too
+slow to finish, run a smaller one and say how much you ran — a partial result
+with a named gap is useful; a silent one is not.
+
+The related error is treating an incomplete run as a reason to stay silent. A
+half-finished race hunt is not evidence of anything. Report the count you
+actually reached, or go and finish it.
