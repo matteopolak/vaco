@@ -1047,9 +1047,22 @@ fn transform_tree_inter(
         return Ok(());
     }
 
-    let luma_ctx_idx = usize::from(trafo_depth == 0);
-    let cm = ctx.qt_cbf.get_mut(luma_ctx_idx).ok_or(Error::InvalidData("cbf_luma ctx"))?;
-    let cbf_luma = cabac.decode_decision(cm) != 0;
+    // §7.3.8.8's own presence condition for an inter CU's leaf:
+    // `cbf_luma` is only actually parsed when `trafoDepth != 0` or either
+    // chroma cbf is set; a root-level (`trafoDepth == 0`), all-chroma-zero
+    // leaf infers it `1` instead (it must be, since `rqt_root_cbf` — the
+    // only reason this transform tree exists at all — said *some* residual
+    // is present, and this leaf is the only place left to carry it). An
+    // intra CU's own leaf (`transform_unit`/`transform_tree`, not this
+    // function) has no such condition: `CuPredMode == MODE_INTRA` alone
+    // already satisfies HM's OR, so it is unconditionally parsed there.
+    let cbf_luma = if trafo_depth != 0 || cbf_cb || cbf_cr {
+        let luma_ctx_idx = usize::from(trafo_depth == 0);
+        let cm = ctx.qt_cbf.get_mut(luma_ctx_idx).ok_or(Error::InvalidData("cbf_luma ctx"))?;
+        cabac.decode_decision(cm) != 0
+    } else {
+        true
+    };
 
     transform_unit_inter(cabac, ctx, s, x0, y0, log2_size, cbf_luma, cbf_cb, cbf_cr, pred)
 }
