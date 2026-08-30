@@ -299,3 +299,40 @@ Frame-level threading inside the decoder is a DPB-refactor-sized change and is
 deliberately deferred until the inter-prediction drift is fixed -- parallelising
 a decoder that is still producing wrong pixels would make the drift harder to
 bisect, not easier.
+
+## 11. Profiling loop, round 2 — three attempts, zero commits
+
+Round 2 targeted the interpolation and deblocking kernels (~65% of runtime).
+It landed nothing, which is the correct outcome: every change was measured and
+none cleared the noise floor.
+
+| attempt | result |
+|---|---|
+| Lazy two-axis "j" derivation in `interp::luma_qpel_sample` (6 raw six-tap sums computed eagerly on every call; only 5 of 16 fractional arms use them) | ratio 0.997, won 4/8 — wash, reverted |
+| Windowed gather in `fetch_pred_4x4`: fetch the 9x9 window once instead of re-reaching per output pixel (up to 36 overlapping re-fetches at clause 8.4.2.2.1's "j" position) | ratio 1.0025, won 6/10 — wash, reverted |
+| Chroma bilinear in-bounds fast path in `predict_chroma_inter`, mirroring luma's | ratio **1.034 — a 3.4% regression**, won 2/10, reverted |
+
+The chroma regression is instructive: chroma's `.clamp()` is two cheap ops per
+sample, so the guard branch cost more than the clamp it skipped. Luma's
+equivalent fast path won in round 1 because luma's dual-axis clamp is genuinely
+expensive. **The same transformation was a win on one plane and a loss on the
+other**, which is exactly why each is measured rather than reasoned about.
+
+All three were byte-identical in output, so this is purely a performance
+verdict, not a correctness one.
+
+**The real blocker, now named.** Vectorizing the deblocking arithmetic needs a
+**masked lane select** primitive that `vaco-simd` does not have — its filter
+decisions are per-sample (`bS`, `|p0-q0| < alpha`, `|p1-p0| < beta`, and the
+per-sample strength tests), so a vector kernel must compute candidates and
+select per lane from a mask. `vaco-codec-dsp-deblock`'s own docs already
+recorded this. A separate pass is adding the primitive.
+
+Also ruled out this round: `vaco-codec-dsp-mc`'s existing dispatched
+`fir_row`/`TapSet<6>` kernel cannot be reused here — its batching wins come
+from whole rows, and H.264's 4x4/8x8 block granularity is too narrow to fill
+vector lanes profitably.
+
+**Honest conclusion for the interpolation path: round 1 took the available
+low-risk wins.** Further progress needs either a wider-batch kernel shape than
+4x4/8x8 offers, or the deblocking masked-select route.

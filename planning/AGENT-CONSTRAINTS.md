@@ -1783,3 +1783,28 @@ Two habits would have caught it:
 The wider point: "I could not find X" and "X does not exist" are different
 claims, and only the first one is ever supported by having looked in one place.
 Report the first; earn the second.
+
+## Under background load, measure cycles and interleave; wall clock is noise
+
+Round 2 of the H.264 profiling loop ran while a niced fuzz sweep occupied the
+machine. Measured on the same changes, **wall-clock timing carried roughly 300%
+noise; cycles-elapsed carried about 2%.** A change that looks like a 40% win in
+wall clock under that load is telling you about the scheduler, not your code.
+
+Two habits follow, and both are now proven here:
+
+- **Measure in cycles, not wall clock**, whenever anything else is running.
+- **Interleave the A/B**: alternate baseline and candidate *within* each round
+  and report the win/loss split across rounds, rather than timing all of A then
+  all of B. Round 1 established a real 1.11x win this way (8 of 8 rounds) while
+  a sweep ran; round 2 correctly rejected three changes at ratios of 0.997,
+  1.0025 and 1.034.
+
+Report the ratio and the round count. A single number from a single sequential
+run is not a measurement, and on a busy machine it is not even evidence.
+
+A corollary worth keeping: **the same optimisation can win on one data path and
+lose on a neighbouring one.** An in-bounds fast path that skipped edge clamping
+won on H.264 luma and *regressed chroma by 3.4%*, because chroma's clamp is two
+cheap ops and the guard branch cost more than it saved. Symmetry between two
+code paths is not a reason to skip measuring the second one.
