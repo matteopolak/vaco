@@ -561,7 +561,16 @@ decoding both sides with the loop filter disabled (`ffmpeg
 localises to one macroblock: frame 22, macroblock (15, 13), an `Intra_8x8`
 macroblock inside a **P** slice, differing only along its top row
 (`x = 12, 13`, `y = 0`), i.e. in prediction from above/above-right
-neighbours that are themselves inter.
+neighbours that are themselves inter. **A second, independent repro has the
+same signature** (352x288 `testsrc`, High, 0.0049%, first differing frame 12,
+macroblock (4, 15), again `Intra_8x8` inside a P slice), so this is a
+systematic gap in `Intra_8x8` prediction with inter neighbours rather than a
+one-macroblock oddity.
+
+Main `-bf 0 -refs 1` is byte-exact on five clips spanning five resolutions
+and five content types: 64x64 `cabac_ip_simple` (the embedded fixture),
+176x144 `smptehdbars`, 320x240 `testsrc2`, 352x288 `testsrc`, 640x480
+`mandelbrot`.
 
 **What `check_scope` and the decoder still refuse, unchanged**: CAVLC
 reconstruction, CABAC B slices, MBAFF/field pictures,

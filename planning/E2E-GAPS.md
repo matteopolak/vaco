@@ -379,6 +379,17 @@ mis-decoded. Plus one new, precisely-located residual: High profile, frame
 top row only, 24 bytes across frames 22–24. Reproduces with the loop filter
 disabled on both sides, so it is reconstruction, not deblocking.
 
+**Confirmed systematic, not a one-off**, by widening the corpus after the
+fixes landed. Main `-bf 0 -refs 1` is byte-exact on four clips at four
+resolutions and four content types (64×64 `cabac_ip_simple`, 176×144
+`smptehdbars`, 320×240 `testsrc2`, 352×288 `testsrc`, 640×480
+`mandelbrot`). High profile is byte-exact on 176×144 `smptehdbars` and
+leaves 0.0049% on 352×288 `testsrc` (first differing frame 12) — and that
+second repro has the **same signature**: macroblock (4, 15), `Intra_8x8`
+inside a P slice. So the remaining defect is specifically `Intra_8x8`
+prediction when the macroblock's neighbours are inter, and it needs a
+corpus of exactly that shape to chase.
+
 ### What this says about the harness rule, again
 
 §7's correction ("a decoder that emits the right number of bytes has
