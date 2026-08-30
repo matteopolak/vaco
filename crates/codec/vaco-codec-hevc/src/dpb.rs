@@ -507,10 +507,23 @@ pub(crate) struct CollocatedMotionField {
     pub poc: i64,
     cols: usize,
     rows: usize,
-    has_motion: Vec<bool>,
-    mv_x: Vec<i16>,
-    mv_y: Vec<i16>,
-    ref_poc: Vec<i64>,
+    /// Both reference lists, independently — §8.5.3.2.9's own derivation
+    /// reads `predFlagL0Col`/`predFlagL1Col`/`mvL0Col`/`mvL1Col` of the
+    /// collocated PU (not a single collapsed value: a bi-predicted
+    /// collocated PU has to expose *both* of its own lists' motion, since
+    /// which one a later query actually reads depends on that later query's
+    /// own `collocated_from_l0_flag`/`NoBackwardPredFlag`, not on anything
+    /// this picture's own decode knew about) — confirmed directly against
+    /// HM's `xGetColMVP`, which indexes `getCUMvField(eColRefPicList)` by
+    /// list, never a single merged field.
+    pred_l0: Vec<bool>,
+    mv0_x: Vec<i16>,
+    mv0_y: Vec<i16>,
+    ref_poc0: Vec<i64>,
+    pred_l1: Vec<bool>,
+    mv1_x: Vec<i16>,
+    mv1_y: Vec<i16>,
+    ref_poc1: Vec<i64>,
 }
 
 impl CollocatedMotionField {
@@ -527,34 +540,64 @@ impl CollocatedMotionField {
         let cols = luma_width.div_ceil(16).max(1);
         let rows = luma_height.div_ceil(16).max(1);
         let len = cols.saturating_mul(rows);
-        let mut field = Self { poc, cols, rows, has_motion: vec![false; len], mv_x: vec![0; len], mv_y: vec![0; len], ref_poc: vec![0; len] };
+        let mut field = Self {
+            poc,
+            cols,
+            rows,
+            pred_l0: vec![false; len],
+            mv0_x: vec![0; len],
+            mv0_y: vec![0; len],
+            ref_poc0: vec![0; len],
+            pred_l1: vec![false; len],
+            mv1_x: vec![0; len],
+            mv1_y: vec![0; len],
+            ref_poc1: vec![0; len],
+        };
         for by in 0..rows {
             for bx in 0..cols {
                 let x = i32::try_from(bx.saturating_mul(16)).unwrap_or(0);
                 let y = i32::try_from(by.saturating_mul(16)).unwrap_or(0);
                 let Some(info) = sample_at(x, y) else { continue };
                 let i = by * cols + bx;
-                if let Some(slot) = field.has_motion.get_mut(i) {
-                    *slot = true;
+                if let Some(u) = info.l0 {
+                    if let Some(slot) = field.pred_l0.get_mut(i) {
+                        *slot = true;
+                    }
+                    if let Some(slot) = field.mv0_x.get_mut(i) {
+                        *slot = i16::try_from(u.mv.x).unwrap_or(0);
+                    }
+                    if let Some(slot) = field.mv0_y.get_mut(i) {
+                        *slot = i16::try_from(u.mv.y).unwrap_or(0);
+                    }
+                    if let Some(slot) = field.ref_poc0.get_mut(i) {
+                        *slot = u.ref_poc;
+                    }
                 }
-                if let Some(slot) = field.mv_x.get_mut(i) {
-                    *slot = i16::try_from(info.mv.x).unwrap_or(0);
-                }
-                if let Some(slot) = field.mv_y.get_mut(i) {
-                    *slot = i16::try_from(info.mv.y).unwrap_or(0);
-                }
-                if let Some(slot) = field.ref_poc.get_mut(i) {
-                    *slot = info.ref_poc;
+                if let Some(u) = info.l1 {
+                    if let Some(slot) = field.pred_l1.get_mut(i) {
+                        *slot = true;
+                    }
+                    if let Some(slot) = field.mv1_x.get_mut(i) {
+                        *slot = i16::try_from(u.mv.x).unwrap_or(0);
+                    }
+                    if let Some(slot) = field.mv1_y.get_mut(i) {
+                        *slot = i16::try_from(u.mv.y).unwrap_or(0);
+                    }
+                    if let Some(slot) = field.ref_poc1.get_mut(i) {
+                        *slot = u.ref_poc;
+                    }
                 }
             }
         }
         field
     }
 
-    /// The motion recorded for the 16x16 block containing luma pixel
-    /// `(x, y)`, or `None` if that block was never inter-coded (an intra
+    /// The full motion recorded for the 16x16 block containing luma pixel
+    /// `(x, y)` — both lists, exactly as the collocated PU itself recorded
+    /// them — or `None` if that block was never inter-coded (an intra
     /// block, or the whole picture was an I picture) or `(x, y)` is out of
-    /// range.
+    /// range. The caller (`ctu::col_mvp`) picks which list to read per
+    /// §8.5.3.2.9's own selection rule.
     #[must_use]
     pub(crate) fn get(&self, x: i32, y: i32) -> Option<crate::motion::MotionInfo> {
         let (Ok(bx), Ok(by)) = (usize::try_from(x >> 4), usize::try_from(y >> 4)) else {
@@ -564,12 +607,20 @@ impl CollocatedMotionField {
             return None;
         }
         let i = by * self.cols + bx;
-        if !self.has_motion.get(i).copied().unwrap_or(false) {
+        let pred_l0 = self.pred_l0.get(i).copied().unwrap_or(false);
+        let pred_l1 = self.pred_l1.get(i).copied().unwrap_or(false);
+        if !pred_l0 && !pred_l1 {
             return None;
         }
-        let mv = crate::motion::Mv { x: i32::from(self.mv_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv_y.get(i).copied().unwrap_or(0)) };
-        let ref_poc = self.ref_poc.get(i).copied().unwrap_or(0);
-        Some(crate::motion::MotionInfo { mv, ref_poc })
+        let l0 = pred_l0.then(|| crate::motion::UniMotion {
+            mv: crate::motion::Mv { x: i32::from(self.mv0_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv0_y.get(i).copied().unwrap_or(0)) },
+            ref_poc: self.ref_poc0.get(i).copied().unwrap_or(0),
+        });
+        let l1 = pred_l1.then(|| crate::motion::UniMotion {
+            mv: crate::motion::Mv { x: i32::from(self.mv1_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv1_y.get(i).copied().unwrap_or(0)) },
+            ref_poc: self.ref_poc1.get(i).copied().unwrap_or(0),
+        });
+        Some(crate::motion::MotionInfo { l0, l1 })
     }
 }
 

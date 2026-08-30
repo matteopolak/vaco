@@ -152,6 +152,13 @@ const INIT_MVD_P: [[u8; 2]; 2] = [[140, 198], [169, 198]];
 const INIT_REF_PIC_P: [[u8; 2]; 2] = [[153, 153], [153, 153]];
 const INIT_QT_ROOT_CBF_P: [[u8; 1]; 2] = [[79], [79]];
 const INIT_MVP_IDX_P: [[u8; 1]; 2] = [[168], [168]];
+// `inter_pred_idc` (§7.3.8.6/§9.3.4.2.1) — B-slice-only syntax (a P slice
+// infers `PRED_L0` and never parses it), included here rather than in a
+// separate table so `new_inter_slice`'s one `row_init!` macro covers it too.
+// HM's own `INIT_INTER_DIR` table has identical B and P rows (confirmed
+// directly against `ContextTables.h`), so index 0 (initType 1, "P") and
+// index 1 (initType 0, "B") are the same five values.
+const INIT_INTER_DIR_P: [[u8; 5]; 2] = [[95, 79, 63, 31, 31], [95, 79, 63, 31, 31]];
 
 /// `ctxIndMap4x4`, HM `TComRom.cpp` — the fixed per-position context offset
 /// for a 4x4 transform block's `sig_coeff_flag`, §9.3.4.2.5.
@@ -208,6 +215,9 @@ pub(crate) struct ContextBank {
     pub ref_pic: [ContextModel; 2],
     pub qt_root_cbf: [ContextModel; 1],
     pub mvp_idx: [ContextModel; 1],
+    /// `inter_pred_idc` (§7.3.8.6) — B-slice only, see [`INIT_INTER_DIR_P`]'s
+    /// own doc.
+    pub inter_dir: [ContextModel; 5],
 }
 
 fn init<const N: usize>(table: &[u8; N], qp: i8) -> [ContextModel; N] {
@@ -249,17 +259,42 @@ impl ContextBank {
             ref_pic: [ContextModel::default(); 2],
             qt_root_cbf: [ContextModel::default(); 1],
             mvp_idx: [ContextModel::default(); 1],
+            inter_dir: [ContextModel::default(); 5],
         }
     }
 
-    /// Build a fresh context bank for a P slice (§9.3.2.2's `initType = 1`,
-    /// or `initType = 0` when `cabac_init_flag` swaps it — see the module
-    /// doc's "P-slice context-initialisation tables" section for exactly
-    /// which HM row that is and why only two of the three rows are
-    /// transcribed at all).
+    /// Build a fresh context bank for a P slice — §9.3.2.2's `initType = 1`
+    /// by default, swapped to `initType = 0` when `cabac_init_flag` is set
+    /// (the *same* direction `initType = 1` selects for a B slice — see
+    /// [`ContextBank::new_b_slice`]'s own doc for why the two are mirror
+    /// images of each other, not the same function called with a flipped
+    /// argument).
     #[must_use]
     pub(crate) fn new_p_slice(slice_qp: i8, cabac_init_flag: bool) -> Self {
-        let row = usize::from(cabac_init_flag);
+        Self::build(slice_qp, usize::from(cabac_init_flag))
+    }
+
+    /// Build a fresh context bank for a B slice — §9.3.2.2's `initType = 0`
+    /// by default, swapped to `initType = 1` when `cabac_init_flag` is set.
+    /// This is the *opposite* row-selection direction from
+    /// [`ContextBank::new_p_slice`]: both this crate's `[[u8; N]; 2]` tables
+    /// are laid out as `[initType == 1 ("P"), initType == 0 ("B")]` (the
+    /// module doc's own convention, kept from before B slices existed), so a
+    /// clear `cabac_init_flag` means "use my own slice type's row" for
+    /// either kind, which is row index 1 for a default-initType-0 B slice
+    /// and row index 0 for a default-initType-1 P slice — not the same `row
+    /// = usize::from(cabac_init_flag)` formula both ways.
+    #[must_use]
+    pub(crate) fn new_b_slice(slice_qp: i8, cabac_init_flag: bool) -> Self {
+        Self::build(slice_qp, usize::from(!cabac_init_flag))
+    }
+
+    /// Shared row-indexed builder both [`ContextBank::new_p_slice`] and
+    /// [`ContextBank::new_b_slice`] delegate to, once each has resolved
+    /// §9.3.2.2's `initType` down to this table convention's own `row`
+    /// (`0` = the "P" column, `1` = the "B" column of every `[[u8; N]; 2]`
+    /// table above).
+    fn build(slice_qp: i8, row: usize) -> Self {
         macro_rules! row_init {
             ($table:expr, $n:expr) => {{
                 // Array-pattern destructuring rather than `$table[row]`:
@@ -296,6 +331,7 @@ impl ContextBank {
             ref_pic: row_init!(INIT_REF_PIC_P, 2),
             qt_root_cbf: row_init!(INIT_QT_ROOT_CBF_P, 1),
             mvp_idx: row_init!(INIT_MVP_IDX_P, 1),
+            inter_dir: row_init!(INIT_INTER_DIR_P, 5),
         }
     }
 }
@@ -317,5 +353,33 @@ mod tests {
             let _ = ContextBank::new_p_slice(qp, false);
             let _ = ContextBank::new_p_slice(qp, true);
         }
+    }
+
+    #[test]
+    fn every_b_slice_table_builds_without_panicking_across_the_qp_range() {
+        for qp in -12i8..=51 {
+            let _ = ContextBank::new_b_slice(qp, false);
+            let _ = ContextBank::new_b_slice(qp, true);
+        }
+    }
+
+    #[test]
+    fn a_b_slice_s_default_cabac_init_flag_selects_the_opposite_row_from_a_p_slice() {
+        // §9.3.2.2: a P slice defaults to initType=1, a B slice to
+        // initType=0 — `cabac_init_flag` swaps *away* from the slice's own
+        // default toward the other kind's row. Since `INIT_MERGE_FLAG_P`'s
+        // two rows differ (`[110]` vs `[154]`), the two constructors' default
+        // (`cabac_init_flag == false`) banks must select opposite rows of
+        // the same table rather than the same `row = usize::from(flag)`
+        // formula.
+        let p_default = ContextBank::new_p_slice(26, false);
+        let b_default = ContextBank::new_b_slice(26, false);
+        assert_ne!(p_default.merge_flag[0], b_default.merge_flag[0]);
+        // Swapping `cabac_init_flag` on either slice type lands on the same
+        // context state as the other type's own default.
+        let p_swapped = ContextBank::new_p_slice(26, true);
+        let b_swapped = ContextBank::new_b_slice(26, true);
+        assert_eq!(p_default.merge_flag[0], b_swapped.merge_flag[0]);
+        assert_eq!(b_default.merge_flag[0], p_swapped.merge_flag[0]);
     }
 }

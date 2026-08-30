@@ -149,19 +149,25 @@ pub(crate) struct CuGrid {
     written: Vec<bool>,
     qp: Vec<i8>,
     qp_written: Vec<bool>,
-    /// Per-4x4-block motion, for merge/AMVP spatial-neighbour derivation
-    /// (§8.5.3.2) — `None` (via `is_inter[i] == false`) for every intra
-    /// block or picture that has not reached this stage of the crate's scope
-    /// yet (see `crate::motion`'s own module doc: only ever populated once
-    /// the inter-prediction stage lands). `mv_x`/`mv_y` are quarter-pel, `i16`
-    /// like HM's own `TComMv`; `ref_poc` is `i64` to match
-    /// `crate::motion::MotionInfo`'s own field, not because a POC needs more
+    /// Per-4x4-block motion, one optional [`crate::motion::UniMotion`] per
+    /// reference list, for merge/AMVP spatial-neighbour derivation
+    /// (§8.5.3.2) — both lists empty for every intra block, or a picture
+    /// that has not reached this stage of the crate's scope yet (see
+    /// `crate::motion`'s own module doc). `pred_l0`/`pred_l1` mirror
+    /// `predFlagL0`/`predFlagL1`; a P-slice PU only ever sets `pred_l0`.
+    /// `mv0_x`/`mv0_y`/`mv1_x`/`mv1_y` are quarter-pel, `i16` like HM's own
+    /// `TComMv`; `ref_poc0`/`ref_poc1` are `i64` to match
+    /// `crate::motion::UniMotion`'s own field, not because a POC needs more
     /// than 32 bits.
-    is_inter: Vec<bool>,
+    pred_l0: Vec<bool>,
+    pred_l1: Vec<bool>,
     is_skip: Vec<bool>,
-    mv_x: Vec<i16>,
-    mv_y: Vec<i16>,
-    ref_poc: Vec<i64>,
+    mv0_x: Vec<i16>,
+    mv0_y: Vec<i16>,
+    ref_poc0: Vec<i64>,
+    mv1_x: Vec<i16>,
+    mv1_y: Vec<i16>,
+    ref_poc1: Vec<i64>,
     /// Per-4x4-block "this position's own luma transform block has one or
     /// more non-zero coefficient levels" — §8.7.2.4's `bS == 1` condition
     /// needs exactly this, restricted (by `crate::deblock`'s own caller) to
@@ -188,11 +194,15 @@ impl CuGrid {
             written: vec![false; len],
             qp: budget.alloc(len)?,
             qp_written: vec![false; len],
-            is_inter: vec![false; len],
+            pred_l0: vec![false; len],
+            pred_l1: vec![false; len],
             is_skip: vec![false; len],
-            mv_x: budget.alloc(len)?,
-            mv_y: budget.alloc(len)?,
-            ref_poc: budget.alloc(len)?,
+            mv0_x: budget.alloc(len)?,
+            mv0_y: budget.alloc(len)?,
+            ref_poc0: budget.alloc(len)?,
+            mv1_x: budget.alloc(len)?,
+            mv1_y: budget.alloc(len)?,
+            ref_poc1: budget.alloc(len)?,
             cbf_luma: vec![false; len],
         })
     }
@@ -299,27 +309,43 @@ impl CuGrid {
     /// before the *next* PU of the same CU (or a later CU) can read it as a
     /// spatial merge/AMVP neighbour (§8.5.3.2's own "already decoded in
     /// z-scan order" availability, which for an inter PU includes an earlier
-    /// PU of its own CU).
-    pub(crate) fn fill_motion(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, mv: crate::motion::Mv, ref_poc: i64, is_skip: bool) {
-        let mv_x = i16::try_from(mv.x).unwrap_or(0);
-        let mv_y = i16::try_from(mv.y).unwrap_or(0);
+    /// PU of its own CU). `info.l1` is `None` for a P-slice PU (or a
+    /// uni-predictive B-slice one) and simply leaves `pred_l1` clear.
+    pub(crate) fn fill_motion(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, info: crate::motion::MotionInfo, is_skip: bool) {
+        let l0 = info.l0.map(|u| (i16::try_from(u.mv.x).unwrap_or(0), i16::try_from(u.mv.y).unwrap_or(0), u.ref_poc));
+        let l1 = info.l1.map(|u| (i16::try_from(u.mv.x).unwrap_or(0), i16::try_from(u.mv.y).unwrap_or(0), u.ref_poc));
         for by in by0..by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
-                if let Some(i) = self.index(bx, by) {
-                    if let Some(slot) = self.is_inter.get_mut(i) {
-                        *slot = true;
+                let Some(i) = self.index(bx, by) else { continue };
+                if let Some(slot) = self.is_skip.get_mut(i) {
+                    *slot = is_skip;
+                }
+                if let Some(slot) = self.pred_l0.get_mut(i) {
+                    *slot = l0.is_some();
+                }
+                if let Some((x, y, poc)) = l0 {
+                    if let Some(slot) = self.mv0_x.get_mut(i) {
+                        *slot = x;
                     }
-                    if let Some(slot) = self.is_skip.get_mut(i) {
-                        *slot = is_skip;
+                    if let Some(slot) = self.mv0_y.get_mut(i) {
+                        *slot = y;
                     }
-                    if let Some(slot) = self.mv_x.get_mut(i) {
-                        *slot = mv_x;
+                    if let Some(slot) = self.ref_poc0.get_mut(i) {
+                        *slot = poc;
                     }
-                    if let Some(slot) = self.mv_y.get_mut(i) {
-                        *slot = mv_y;
+                }
+                if let Some(slot) = self.pred_l1.get_mut(i) {
+                    *slot = l1.is_some();
+                }
+                if let Some((x, y, poc)) = l1 {
+                    if let Some(slot) = self.mv1_x.get_mut(i) {
+                        *slot = x;
                     }
-                    if let Some(slot) = self.ref_poc.get_mut(i) {
-                        *slot = ref_poc;
+                    if let Some(slot) = self.mv1_y.get_mut(i) {
+                        *slot = y;
+                    }
+                    if let Some(slot) = self.ref_poc1.get_mut(i) {
+                        *slot = poc;
                     }
                 }
             }
@@ -337,15 +363,23 @@ impl CuGrid {
             return None;
         };
         let i = self.index(block_of(px), block_of(py))?;
-        if !self.written.get(i).copied().unwrap_or(false) || !self.is_inter.get(i).copied().unwrap_or(false) {
+        if !self.written.get(i).copied().unwrap_or(false) {
             return None;
         }
-        let mv = crate::motion::Mv {
-            x: i32::from(self.mv_x.get(i).copied().unwrap_or(0)),
-            y: i32::from(self.mv_y.get(i).copied().unwrap_or(0)),
-        };
-        let ref_poc = self.ref_poc.get(i).copied().unwrap_or(0);
-        Some(crate::motion::MotionInfo { mv, ref_poc })
+        let pred_l0 = self.pred_l0.get(i).copied().unwrap_or(false);
+        let pred_l1 = self.pred_l1.get(i).copied().unwrap_or(false);
+        if !pred_l0 && !pred_l1 {
+            return None;
+        }
+        let l0 = pred_l0.then(|| crate::motion::UniMotion {
+            mv: crate::motion::Mv { x: i32::from(self.mv0_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv0_y.get(i).copied().unwrap_or(0)) },
+            ref_poc: self.ref_poc0.get(i).copied().unwrap_or(0),
+        });
+        let l1 = pred_l1.then(|| crate::motion::UniMotion {
+            mv: crate::motion::Mv { x: i32::from(self.mv1_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv1_y.get(i).copied().unwrap_or(0)) },
+            ref_poc: self.ref_poc1.get(i).copied().unwrap_or(0),
+        });
+        Some(crate::motion::MotionInfo { l0, l1 })
     }
 
     /// Whether the 4x4 block at `(px, py)` is marked `cu_skip_flag` — used

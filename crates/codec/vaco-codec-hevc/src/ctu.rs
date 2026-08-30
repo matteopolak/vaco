@@ -23,13 +23,14 @@ use vaco_parse_hevc::{Pps, Sps};
 use vaco_limits::Budget;
 
 use crate::cabac_ctx::ContextBank;
-use crate::framebuf::{CuGrid, EdgeMarks, Picture};
+use crate::framebuf::{CuGrid, EdgeMarks, Picture, Plane};
 use crate::intra_mode::{self, DC_IDX, DM_CHROMA_IDX};
 use crate::intra_pred;
-use crate::motion::{self, Mv, MotionInfo, PartMode, PuRect};
+use crate::motion::{self, Mv, MotionInfo, PartMode, PuRect, RefList, UniMotion};
 use crate::residual::{self, Coeffs};
 use crate::sao::{self, CtuSao};
 use crate::transform;
+use crate::weight::RefWeights;
 
 /// Everything one slice segment's CTU walk needs, held together so the
 /// recursive functions below stay free functions taking `&mut Ctx` rather
@@ -101,9 +102,10 @@ pub(crate) struct Ctx<'p> {
     /// parsed, read back by a merge at a later address and by
     /// [`crate::sao::filter_picture`] once the whole picture is decoded.
     pub sao_params: Vec<CtuSao>,
-    /// Whether this slice is a P slice (`decoder.rs::check_scope` refuses B
-    /// slices, so this crate's own slice kinds are exactly `{I, P}`) — every
-    /// inter-only field below is `Some` exactly when this is `true`.
+    /// Whether this slice has any inter path at all (P or B) — every
+    /// inter-only field below is `Some` exactly when this is `true`. The
+    /// name predates B-slice support; [`InterSliceParams::is_b`] is what
+    /// actually distinguishes a P slice from a B slice once this is `true`.
     pub is_p_slice: bool,
     inter: Option<InterSliceParams<'p>>,
     /// `max_transform_hierarchy_depth_inter` — kept alongside its intra
@@ -126,9 +128,13 @@ pub(crate) struct RefPic<'p> {
     pub pic: &'p Picture,
 }
 
-/// Everything a P-slice CTU walk needs that an I-slice one does not —
+/// Everything a P- or B-slice CTU walk needs that an I-slice one does not —
 /// bundled so [`Ctx::new`] does not grow an eleventh, twelfth, ... plain
 /// argument for each one.
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent slice-header/PPS flag this walk needs, not a state machine in disguise — same rationale as Ctx's own allow"
+)]
 pub(crate) struct InterSliceParams<'p> {
     /// `MaxNumMergeCand = 5 - five_minus_max_num_merge_cand`.
     pub max_num_merge_cand: usize,
@@ -142,50 +148,101 @@ pub(crate) struct InterSliceParams<'p> {
     pub cur_poc: i64,
     /// `RefPicList0`, resolved to real pictures — see [`RefPic`].
     pub ref_pics_l0: Vec<RefPic<'p>>,
+    /// `RefPicList1`, resolved to real pictures — always empty for a P
+    /// slice (`is_b == false`).
+    pub ref_pics_l1: Vec<RefPic<'p>>,
+    /// Whether this is a B slice (`is_p_slice`'s own name predates B-slice
+    /// support and is kept for the intra/inter split alone — this field is
+    /// the one that actually distinguishes P from B once `inter` is
+    /// `Some`).
+    pub is_b: bool,
+    /// `collocated_from_l0_flag`; only meaningful when `is_b` — see
+    /// [`col_mvp`]'s own doc for how it, together with
+    /// [`InterSliceParams::is_low_delay`], picks which of the collocated
+    /// PU's own two lists a temporal candidate reads.
+    pub collocated_from_l0: bool,
+    /// `NoBackwardPredFlag` (§8.5.3.2.9): whether *every* picture in both
+    /// `RefPicList0` and `RefPicList1` has a POC no greater than the current
+    /// picture's — resolved once per slice in `decoder.rs` rather than
+    /// re-scanning both lists on every temporal-candidate query.
+    pub is_low_delay: bool,
+    /// `mvd_l1_zero_flag` — when set, a bi-predictive (`PRED_BI`) PU's own
+    /// `mvd_coding(x0, y0, 1)` is skipped entirely and `MvdL1` is inferred
+    /// `(0, 0)` (§7.3.8.6's own presence condition).
+    pub mvd_l1_zero: bool,
     /// The collocated picture's own compressed motion field for TMVP
     /// (§8.5.3.2.8/.9), or `None` when `slice_temporal_mvp_enabled_flag` is
     /// clear, the collocated picture has none recorded (an I picture), or
-    /// `RefPicList0[collocated_ref_idx]` does not resolve — see
-    /// `crate::dpb`'s own module doc for how this is built.
+    /// the named list/index does not resolve — see `crate::dpb`'s own
+    /// module doc for how this is built.
     pub collocated: Option<crate::dpb::CollocatedMotionField>,
     /// `RefPicList0`'s own resolved weight/offset table (§8.5.3.3.4.3),
     /// indexed the same way `ref_pics_l0` is — `Some` exactly when
-    /// `weighted_pred_flag && slice_type == P`, `None` (the default,
-    /// unweighted §8.5.3.3.4.2 path) otherwise. See [`crate::weight`]'s own
-    /// module doc.
-    pub weights: Option<Vec<crate::weight::RefWeights>>,
+    /// `weightedPredFlag` (`weighted_pred_flag && P`, or `weighted_bipred_flag
+    /// && B`, §8.5.3.3.4.1) is set, `None` (the default, unweighted
+    /// §8.5.3.3.4.2 path) otherwise. See [`crate::weight`]'s own module doc.
+    pub weights_l0: Option<Vec<crate::weight::RefWeights>>,
+    /// `RefPicList1`'s own resolved weight/offset table, indexed like
+    /// `ref_pics_l1` — `Some`/`None` together with `weights_l0` (one
+    /// slice-wide `weightedPredFlag` gates both), always `None` for a P
+    /// slice.
+    pub weights_l1: Option<Vec<crate::weight::RefWeights>>,
 }
 
 impl<'p> InterSliceParams<'p> {
     /// `RefPicList0`'s own POCs alone — [`crate::motion::derive_merge_candidates`]'s
     /// zero-candidate fill only needs the list, not the pictures.
-    fn ref_pocs(&self) -> Vec<i64> {
+    fn ref_pocs_l0(&self) -> Vec<i64> {
         self.ref_pics_l0.iter().map(|r| r.poc).collect()
     }
 
-    fn plane_for_poc(&self, poc: i64) -> Option<&'p Picture> {
-        self.ref_pics_l0.iter().find(|r| r.poc == poc).map(|r| r.pic)
+    /// [`InterSliceParams::ref_pocs_l0`]'s `RefPicList1` counterpart —
+    /// always empty for a P slice.
+    fn ref_pocs_l1(&self) -> Vec<i64> {
+        self.ref_pics_l1.iter().map(|r| r.poc).collect()
     }
 
-    /// The `RefPicList0` index a `poc` resolves to, for
-    /// [`InterSliceParams::weights`] to be indexed by — the position
-    /// `pred_weight_table()`'s own `LumaWeightL0[refIdxL0]`/
-    /// `ChromaWeightL0[refIdxL0]` are actually addressed by.
+    /// A reference picture's own reconstructed planes, by POC, searched in
+    /// `target_list` first and the other list second — the same POC can
+    /// legitimately appear in both lists (a B slice referencing the same
+    /// picture from either direction), and either occurrence names the same
+    /// pixels, so which list resolves it first has no effect on the answer.
+    fn plane_for_poc(&self, target_list: motion::RefList, poc: i64) -> Option<&'p Picture> {
+        let (own, other) = match target_list {
+            motion::RefList::L0 => (&self.ref_pics_l0, &self.ref_pics_l1),
+            motion::RefList::L1 => (&self.ref_pics_l1, &self.ref_pics_l0),
+        };
+        own.iter().chain(other.iter()).find(|r| r.poc == poc).map(|r| r.pic)
+    }
+
+    /// The `RefPicListX` index a `poc` resolves to on `list`, for
+    /// [`InterSliceParams::weights_l0`]/[`InterSliceParams::weights_l1`] to
+    /// be indexed by — the position `pred_weight_table()`'s own
+    /// `LumaWeightLX[refIdxLX]`/`ChromaWeightLX[refIdxLX]` are actually
+    /// addressed by.
     ///
     /// [`MotionInfo`] carries a resolved POC rather than a `ref_idx` (see
-    /// that type's own doc for why: within one slice `RefPicList0` is
+    /// that type's own doc for why: within one slice `RefPicListX` is
     /// shared and fixed, so the two normally carry the same information).
-    /// That equivalence has exactly one gap: §8.3.4's `RefPicListTemp0`
+    /// That equivalence has exactly one gap: §8.3.4's `RefPicListTempX`
     /// cycling can place the *same* POC at more than one list position when
     /// fewer distinct reference pictures exist than
-    /// `num_ref_idx_l0_active_minus1 + 1` requests. This resolves to the
-    /// *first* matching position, the same convention [`Self::plane_for_poc`]
-    /// already uses for picture lookup — exact whenever a POC appears once,
-    /// and a known, narrow approximation (picking one of several equally
-    /// valid list positions, all naming the same picture) in the cycling
-    /// case, which a real weighted-prediction fixture has never exercised.
-    fn ref_idx_for_poc(&self, poc: i64) -> Option<usize> {
-        self.ref_pics_l0.iter().position(|r| r.poc == poc)
+    /// `num_ref_idx_lX_active_minus1 + 1` requests. This resolves to the
+    /// *first* matching position on `list` alone (never crossing to the
+    /// other list, unlike [`InterSliceParams::plane_for_poc`] — a weight
+    /// table's own `l0`/`l1` halves are genuinely distinct, not
+    /// interchangeable the way two lists' picture pointers can be) — exact
+    /// whenever a POC appears once in that list, and a known, narrow
+    /// approximation (picking one of several equally valid list positions,
+    /// all naming the same picture) in the cycling case, which a real
+    /// weighted-prediction fixture has never exercised.
+    fn weights_for(&self, list: motion::RefList, poc: i64) -> Option<crate::weight::RefWeights> {
+        let (refs, weights) = match list {
+            motion::RefList::L0 => (&self.ref_pics_l0, &self.weights_l0),
+            motion::RefList::L1 => (&self.ref_pics_l1, &self.weights_l1),
+        };
+        let idx = refs.iter().position(|r| r.poc == poc)?;
+        weights.as_ref()?.get(idx).copied()
     }
 }
 
@@ -741,9 +798,75 @@ fn parse_part_mode_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, at
     Ok(mode)
 }
 
-/// §8.5.3.2.9's temporal candidate, scaled against `(curr_poc,
-/// target_ref_poc)` — `None` whenever no collocated field is recorded, or
-/// *neither* the bottom-right nor the centre position yields usable motion.
+/// `inter_pred_idc`'s three possible values (§7.4.9.6's own semantics table)
+/// — `PRED_BI` only ever reachable on a B slice.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InterPredIdc {
+    L0,
+    L1,
+    Bi,
+}
+
+/// §7.3.8.6's `inter_pred_idc`/§9.3.4.2.1: B-slice-only syntax — a P slice
+/// infers `PRED_L0` and never reaches this at all. Bi-prediction is only
+/// readable at all when the CU is not a split 8x8 (`PartMode::TwoNx2N` or
+/// `size != 8` — HM's own `getHeight(uiAbsPartIdx)` returns the *coding
+/// unit's* height regardless of partition, not the PU's, so this checks the
+/// CU's own `size`, confirmed directly against `TDecSbac::parseInterDir`);
+/// otherwise only the second (`L0`-vs-`L1`) bin is read. The first bin's
+/// `ctxInc` is the CU's own quadtree `depth` (HM's `getCtxInterDir`); the
+/// second bin always uses context index 4.
+fn parse_inter_pred_idc(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, part_mode: PartMode, size: i32, depth: u32) -> Result<InterPredIdc> {
+    if part_mode == PartMode::TwoNx2N || size != 8 {
+        let d = usize::try_from(depth).unwrap_or(0).min(3);
+        let cm = ctx.inter_dir.get_mut(d).ok_or(Error::InvalidData("inter_dir ctx"))?;
+        if cabac.decode_decision(cm) != 0 {
+            return Ok(InterPredIdc::Bi);
+        }
+    }
+    let cm = ctx.inter_dir.get_mut(4).ok_or(Error::InvalidData("inter_dir ctx"))?;
+    Ok(if cabac.decode_decision(cm) != 0 { InterPredIdc::L1 } else { InterPredIdc::L0 })
+}
+
+/// §8.5.3.2.9's own per-position collocated-motion-vector derivation, for
+/// one candidate position and one target list: `None` when the collocated PU
+/// is intra, or (per this crate's short-term-only scope) never for any other
+/// reason.
+///
+/// # B slices: which of the collocated PU's own two lists to read
+///
+/// §8.5.3.2.9's own text: if the collocated PU used only one list, that
+/// list's motion is used regardless of `target_list`. Otherwise (a
+/// bi-predicted collocated PU) the list read is `target_list` itself when
+/// [`InterSliceParams::is_low_delay`] (`NoBackwardPredFlag`) is set, or
+/// `L(collocated_from_l0_flag)` otherwise — confirmed directly against HM's
+/// own `xGetColMVP` (`RefPicList eColRefPicList = getCheckLDC() ? eRefPicList
+/// : RefPicList(getColFromL0Flag())`, with a fallback to `1 -
+/// eColRefPicList` whenever the chosen list's own `refIdx` is negative,
+/// i.e. whenever that list is actually unavailable at this specific
+/// position — which subsumes the "only one list used" case above without a
+/// separate branch: [`RefList::pick`] already returns `None` for an unused
+/// list, and `.or_else(pick(other))` is exactly HM's fallback).
+fn col_mvp(s: &Ctx<'_>, pos: (i32, i32), target_list: motion::RefList, curr_poc: i64, target_ref_poc: i64) -> Option<Mv> {
+    let inter = s.inter().ok()?;
+    let collocated = inter.collocated.as_ref()?;
+    let info = collocated.get(pos.0, pos.1)?;
+    let col_list = if inter.is_low_delay {
+        target_list
+    } else if inter.collocated_from_l0 {
+        motion::RefList::L1
+    } else {
+        motion::RefList::L0
+    };
+    let uni = col_list.pick(info).or_else(|| col_list.other().pick(info))?;
+    let scale = motion::dist_scale_factor(curr_poc, target_ref_poc, collocated.poc, uni.ref_poc);
+    Some(if scale == 4096 { uni.mv } else { motion::scale_mv(uni.mv, scale) })
+}
+
+/// §8.5.3.2.8's temporal candidate: try the bottom-right position, falling
+/// back to the centre position, and resolve/scale via [`col_mvp`] for
+/// `target_list` — `None` whenever no collocated field is recorded, or
+/// *neither* position yields usable motion on `target_list`.
 ///
 /// # The bottom-right-vs-centre fallback is gated on the wrong condition —
 /// found and fixed
@@ -775,17 +898,18 @@ fn parse_part_mode_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, at
 /// is refuted by this trace), and HM's own trace shows that position is
 /// genuinely intra in the collocated picture (`xGetColMVP_fail
 /// reason=notInter`) — exactly the case this fix now falls back for.
-fn temporal_candidate(s: &Ctx<'_>, pu_x: i32, pu_y: i32, pu_w: i32, pu_h: i32, curr_poc: i64, target_ref_poc: i64) -> Result<motion::TemporalCandidate> {
-    let inter = s.inter()?;
-    let Some(collocated) = &inter.collocated else { return Ok(None) };
+fn temporal_candidate(s: &Ctx<'_>, pu_x: i32, pu_y: i32, pu_w: i32, pu_h: i32, curr_poc: i64, target_ref_poc: i64, target_list: motion::RefList) -> Result<motion::TemporalCandidate> {
+    if s.inter()?.collocated.is_none() {
+        return Ok(None);
+    }
 
     let x_br = pu_x + pu_w;
     let y_br = pu_y + pu_h;
     let same_ctb_row = (pu_y >> s.log2_ctb_size) == (y_br >> s.log2_ctb_size);
     let br_in_bounds = x_br < s.pic_width && y_br < s.pic_height && same_ctb_row;
 
-    let br = br_in_bounds.then(|| collocated.get(x_br, y_br)).flatten();
-    let raw = br.or_else(|| {
+    let br = br_in_bounds.then(|| col_mvp(s, (x_br, y_br), target_list, curr_poc, target_ref_poc)).flatten();
+    let result = br.or_else(|| {
         // §8.5.3.2.9's centre fallback: `(nPbW/4/2)*4` in each axis, matching
         // HM's own z-scan-index arithmetic (see `crate::motion`'s own doc on
         // why positions here are pixel coordinates) rather than a plain
@@ -798,11 +922,9 @@ fn temporal_candidate(s: &Ctx<'_>, pu_x: i32, pu_y: i32, pu_w: i32, pu_h: i32, c
         // undifferentiated `else` branch (see this function's own doc).
         #[allow(clippy::integer_division, reason = "deliberate truncating division, matching HM's own integer z-scan-index arithmetic exactly")]
         let (cx, cy) = (pu_x + (pu_w / 4 / 2) * 4, pu_y + (pu_h / 4 / 2) * 4);
-        collocated.get(cx, cy)
+        col_mvp(s, (cx, cy), target_list, curr_poc, target_ref_poc)
     });
-    let Some(info) = raw else { return Ok(None) };
-    let scale = motion::dist_scale_factor(curr_poc, target_ref_poc, collocated.poc, info.ref_poc);
-    Ok(Some(if scale == 4096 { info.mv } else { motion::scale_mv(info.mv, scale) }))
+    Ok(result)
 }
 
 /// A P-slice coding unit: `cu_skip_flag`, then (if not skipped)
@@ -856,7 +978,7 @@ fn decode_skip_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut C
     let bx0 = usize::try_from(x0 >> 2).unwrap_or(0);
     let by0 = usize::try_from(y0 >> 2).unwrap_or(0);
     s.cu_grid.fill(bx0, by0, blocks, blocks, u8::try_from(depth).unwrap_or(u8::MAX), DC_IDX);
-    s.cu_grid.fill_motion(bx0, by0, blocks, blocks, chosen.mv, chosen.ref_poc, true);
+    s.cu_grid.fill_motion(bx0, by0, blocks, blocks, chosen, true);
     finalize_cu_qp(s, x0, y0, size);
     Ok(())
 }
@@ -882,14 +1004,34 @@ fn resolve_merge_candidate(s: &Ctx<'_>, cu_x0: i32, cu_y0: i32, cu_size: i32, pu
         (pu, pu_idx, part_mode)
     };
 
-    let temporal = if inter.collocated.is_some() {
-        let ref_poc0 = inter.ref_pics_l0.first().map_or(inter.cur_poc, |r| r.poc);
-        temporal_candidate(s, eff_pu.x, eff_pu.y, eff_pu.w, eff_pu.h, inter.cur_poc, ref_poc0)?
+    let (temporal_l0, temporal_l1) = if inter.collocated.is_some() {
+        let ref_poc0_l0 = inter.ref_pics_l0.first().map_or(inter.cur_poc, |r| r.poc);
+        let t0 = temporal_candidate(s, eff_pu.x, eff_pu.y, eff_pu.w, eff_pu.h, inter.cur_poc, ref_poc0_l0, RefList::L0)?;
+        let t1 = if inter.is_b {
+            let ref_poc0_l1 = inter.ref_pics_l1.first().map_or(inter.cur_poc, |r| r.poc);
+            temporal_candidate(s, eff_pu.x, eff_pu.y, eff_pu.w, eff_pu.h, inter.cur_poc, ref_poc0_l1, RefList::L1)?
+        } else {
+            None
+        };
+        (t0, t1)
     } else {
-        None
+        (None, None)
     };
-    let ref_pocs = inter.ref_pocs();
-    let cands = motion::derive_merge_candidates(&s.cu_grid, eff_pu, eff_idx, eff_mode, inter.log2_parallel_merge_level, max_num_merge_cand, &ref_pocs, temporal);
+    let ref_pocs_l0 = inter.ref_pocs_l0();
+    let ref_pocs_l1 = inter.ref_pocs_l1();
+    let cands = motion::derive_merge_candidates(
+        &s.cu_grid,
+        eff_pu,
+        eff_idx,
+        eff_mode,
+        inter.log2_parallel_merge_level,
+        max_num_merge_cand,
+        &ref_pocs_l0,
+        &ref_pocs_l1,
+        temporal_l0,
+        temporal_l1,
+        inter.is_b,
+    );
     cands.get(merge_idx).copied().ok_or(Error::InvalidData("vaco-codec-hevc: merge_idx out of range"))
 }
 
@@ -911,58 +1053,109 @@ fn build_cu_prediction(s: &Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect,
     let mut pred = CuPrediction { size, y: vec![0i32; (size * size) as usize], cb: vec![0i32; (csize * csize) as usize], cr: vec![0i32; (csize * csize) as usize] };
 
     for (pu, info) in pus {
-        let ref_pic = inter.plane_for_poc(info.ref_poc).ok_or(Error::InvalidData("vaco-codec-hevc: merge/AMVP candidate names an unknown reference POC"))?;
-        // `Some` only when this slice is weighted (§8.5.3.3.4.3) — see
-        // `InterSliceParams::ref_idx_for_poc`'s own doc for the one narrow
-        // case (`RefPicListTemp0` cycling) where the resolved index may not
-        // be the exact one the bitstream originally named.
-        let ref_weights = inter.weights.as_ref().and_then(|w| inter.ref_idx_for_poc(info.ref_poc).and_then(|idx| w.get(idx)));
-        let clipped = motion::clip_mv(info.mv, x0, y0, s.pic_width, s.pic_height, ctb_size);
+        // Clipped once per list (§8.5.3.2's own `clipMv`, `crate::motion`'s
+        // own doc), reused for luma (shift 2) and both chroma planes (shift
+        // 3) below — not re-derived per plane.
+        let clipped_l0 = info.l0.map(|u| motion::clip_mv(u.mv, x0, y0, s.pic_width, s.pic_height, ctb_size));
+        let clipped_l1 = info.l1.map(|u| motion::clip_mv(u.mv, x0, y0, s.pic_width, s.pic_height, ctb_size));
 
-        let int_x = pu.x + (clipped.x >> 2);
-        let int_y = pu.y + (clipped.y >> 2);
-        let frac_x = clipped.x & 3;
-        let frac_y = clipped.y & 3;
         let (w, h) = (usize::try_from(pu.w).unwrap_or(0), usize::try_from(pu.h).unwrap_or(0));
-        let mut buf = vec![0i32; w * h];
-        if let Some(rw) = ref_weights {
-            crate::mc::predict_block_intermediate(&ref_pic.y, int_x, int_y, frac_x, frac_y, w, h, true, &mut buf);
-            for v in &mut buf {
-                *v = crate::mc::apply_weight(*v, rw.luma, s.bit_depth_luma);
-            }
-        } else {
-            crate::mc::predict_block(&ref_pic.y, int_x, int_y, frac_x, frac_y, w, h, s.bit_depth_luma, true, &mut buf);
-        }
-        blit(&mut pred.y, usize::try_from(size).unwrap_or(1), usize::try_from(pu.x - x0).unwrap_or(0), usize::try_from(pu.y - y0).unwrap_or(0), w, h, &buf);
+        let y_buf = predict_component(inter, *info, clipped_l0, clipped_l1, pu.x, pu.y, 2, 3, w, h, s.bit_depth_luma, true, |pic| &pic.y, |rw| rw.luma)?;
+        blit(&mut pred.y, usize::try_from(size).unwrap_or(1), usize::try_from(pu.x - x0).unwrap_or(0), usize::try_from(pu.y - y0).unwrap_or(0), w, h, &y_buf);
 
         // Chroma (4:2:0): half-resolution PU rectangle, the same raw `mv`
         // interpreted at eighth-sample precision (shift 3, mask 7) — see
         // `mc.rs`'s own doc for why both components share one raw `mv`.
         let (cx0, cy0, cw, ch) = (pu.x >> 1, pu.y >> 1, (pu.w >> 1).max(1), (pu.h >> 1).max(1));
-        let cint_x = cx0 + (clipped.x >> 3);
-        let cint_y = cy0 + (clipped.y >> 3);
-        let cfrac_x = clipped.x & 7;
-        let cfrac_y = clipped.y & 7;
         let (cw_u, ch_u) = (usize::try_from(cw).unwrap_or(0), usize::try_from(ch).unwrap_or(0));
-        let mut cb_buf = vec![0i32; cw_u * ch_u];
-        let mut cr_buf = vec![0i32; cw_u * ch_u];
-        if let Some(rw) = ref_weights {
-            crate::mc::predict_block_intermediate(&ref_pic.cb, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, false, &mut cb_buf);
-            for v in &mut cb_buf {
-                *v = crate::mc::apply_weight(*v, rw.chroma[0], s.bit_depth_chroma);
-            }
-            crate::mc::predict_block_intermediate(&ref_pic.cr, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, false, &mut cr_buf);
-            for v in &mut cr_buf {
-                *v = crate::mc::apply_weight(*v, rw.chroma[1], s.bit_depth_chroma);
-            }
-        } else {
-            crate::mc::predict_block(&ref_pic.cb, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, s.bit_depth_chroma, false, &mut cb_buf);
-            crate::mc::predict_block(&ref_pic.cr, cint_x, cint_y, cfrac_x, cfrac_y, cw_u, ch_u, s.bit_depth_chroma, false, &mut cr_buf);
-        }
+        let cb_buf = predict_component(inter, *info, clipped_l0, clipped_l1, cx0, cy0, 3, 7, cw_u, ch_u, s.bit_depth_chroma, false, |pic| &pic.cb, |rw| rw.chroma[0])?;
+        let cr_buf = predict_component(inter, *info, clipped_l0, clipped_l1, cx0, cy0, 3, 7, cw_u, ch_u, s.bit_depth_chroma, false, |pic| &pic.cr, |rw| rw.chroma[1])?;
         blit(&mut pred.cb, usize::try_from(csize).unwrap_or(1), usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0), usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0), cw_u, ch_u, &cb_buf);
         blit(&mut pred.cr, usize::try_from(csize).unwrap_or(1), usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0), usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0), cw_u, ch_u, &cr_buf);
     }
     Ok(pred)
+}
+
+/// One plane's own motion-compensated samples for one PU, §8.5.3.3.1–.4:
+/// uni-predictive when only one of `info.l0`/`info.l1` is set (the existing,
+/// unchanged single-list path — `predict_block`'s folded final shift when
+/// unweighted, [`crate::mc::predict_block_intermediate`] +
+/// [`crate::mc::apply_weight`] when weighted), bi-predictive when both are
+/// (§8.5.3.3.4.2's [`crate::mc::default_biprediction`] or §8.5.3.3.4.3's
+/// [`crate::mc::apply_weight_bi`], combining two
+/// [`crate::mc::predict_block_intermediate`] outputs — one per list, each
+/// clipped/rounded only once, together, never separately).
+///
+/// `origin_x`/`origin_y` is the PU's own top-left in this plane's own sample
+/// grid (luma or chroma-halved); `shift`/`mask` split a clipped motion
+/// vector's quarter- (luma, `2`/`3`) or eighth- (chroma, `3`/`7`) sample
+/// fraction from its integer part. `plane_of`/`weight_of` pick this call's
+/// own component (luma, Cb or Cr) out of a [`Picture`]/[`RefWeights`]
+/// without three near-identical call sites duplicating the whole
+/// uni/bi-predictive branch above.
+#[allow(clippy::too_many_arguments, reason = "one call site per component (luma/Cb/Cr) inside build_cu_prediction; every argument is a distinct §8.5.3.3 input")]
+fn predict_component(
+    inter: &InterSliceParams<'_>,
+    info: MotionInfo,
+    clipped_l0: Option<Mv>,
+    clipped_l1: Option<Mv>,
+    origin_x: i32,
+    origin_y: i32,
+    shift: i32,
+    mask: i32,
+    w: usize,
+    h: usize,
+    bit_depth: u32,
+    is_luma: bool,
+    plane_of: impl Fn(&Picture) -> &Plane,
+    weight_of: impl Fn(&RefWeights) -> crate::mc::Weight,
+) -> Result<Vec<i32>> {
+    let sample = |mv: Mv| (origin_x + (mv.x >> shift), origin_y + (mv.y >> shift), mv.x & mask, mv.y & mask);
+    let unknown_ref = || Error::InvalidData("vaco-codec-hevc: merge/AMVP candidate names an unknown reference POC");
+
+    let uni = |list: RefList, u: UniMotion, clipped: Option<Mv>| -> Result<Vec<i32>> {
+        let ref_pic = inter.plane_for_poc(list, u.ref_poc).ok_or_else(unknown_ref)?;
+        let (ix, iy, fx, fy) = sample(clipped.unwrap_or(Mv::ZERO));
+        let weight = inter.weights_for(list, u.ref_poc).map(|rw| weight_of(&rw));
+        let mut buf = vec![0i32; w * h];
+        if let Some(wt) = weight {
+            crate::mc::predict_block_intermediate(plane_of(ref_pic), ix, iy, fx, fy, w, h, is_luma, &mut buf);
+            for v in &mut buf {
+                *v = crate::mc::apply_weight(*v, wt, bit_depth);
+            }
+        } else {
+            crate::mc::predict_block(plane_of(ref_pic), ix, iy, fx, fy, w, h, bit_depth, is_luma, &mut buf);
+        }
+        Ok(buf)
+    };
+
+    match (info.l0, info.l1) {
+        (Some(l0), Some(l1)) => {
+            let ref0 = inter.plane_for_poc(RefList::L0, l0.ref_poc).ok_or_else(unknown_ref)?;
+            let ref1 = inter.plane_for_poc(RefList::L1, l1.ref_poc).ok_or_else(unknown_ref)?;
+            let (ix0, iy0, fx0, fy0) = sample(clipped_l0.unwrap_or(Mv::ZERO));
+            let (ix1, iy1, fx1, fy1) = sample(clipped_l1.unwrap_or(Mv::ZERO));
+            let mut buf0 = vec![0i32; w * h];
+            let mut buf1 = vec![0i32; w * h];
+            crate::mc::predict_block_intermediate(plane_of(ref0), ix0, iy0, fx0, fy0, w, h, is_luma, &mut buf0);
+            crate::mc::predict_block_intermediate(plane_of(ref1), ix1, iy1, fx1, fy1, w, h, is_luma, &mut buf1);
+            let w0 = inter.weights_for(RefList::L0, l0.ref_poc).map(|rw| weight_of(&rw));
+            let w1 = inter.weights_for(RefList::L1, l1.ref_poc).map(|rw| weight_of(&rw));
+            let mut out = vec![0i32; w * h];
+            for (i, o) in out.iter_mut().enumerate() {
+                let p0 = buf0.get(i).copied().unwrap_or(0);
+                let p1 = buf1.get(i).copied().unwrap_or(0);
+                *o = match (w0, w1) {
+                    (Some(a), Some(b)) => crate::mc::apply_weight_bi(p0, a, p1, b, bit_depth),
+                    _ => crate::mc::default_biprediction(p0, p1, bit_depth),
+                };
+            }
+            Ok(out)
+        }
+        (Some(l0), None) => uni(RefList::L0, l0, clipped_l0),
+        (None, Some(l1)) => uni(RefList::L1, l1, clipped_l1),
+        (None, None) => Err(Error::InvalidData("vaco-codec-hevc: a coded PU predicts from neither reference list")),
+    }
 }
 
 fn blit(dst: &mut [i32], dst_stride: usize, x0: usize, y0: usize, w: usize, h: usize, src: &[i32]) {
@@ -1042,19 +1235,54 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
             resolve_merge_candidate(s, x0, y0, size, pu, pu_idx, part_mode, merge_idx, max_num_merge_cand)?
         } else {
             all_merged = false;
-            let num_ref_idx_l0 = s.inter()?.ref_pics_l0.len();
-            let ref_idx = parse_ref_idx(cabac, ctx, num_ref_idx_l0)?;
-            let mvd = parse_mvd(cabac, ctx)?;
-            let mvp_idx = parse_mvp_idx(cabac, ctx)?;
-            let (cur_poc, target_ref_poc, log2_pml, has_collocated) = {
-                let inter = s.inter()?;
-                let target_ref_poc = inter.ref_pics_l0.get(ref_idx).map(|r| r.poc).ok_or(Error::InvalidData("vaco-codec-hevc: ref_idx_l0 out of range"))?;
-                (inter.cur_poc, target_ref_poc, inter.log2_parallel_merge_level, inter.collocated.is_some())
+            let is_b = s.inter()?.is_b;
+            let inter_pred_idc = if is_b { parse_inter_pred_idc(cabac, ctx, part_mode, size, depth)? } else { InterPredIdc::L0 };
+
+            let l0 = if inter_pred_idc == InterPredIdc::L1 {
+                None
+            } else {
+                let num_ref_idx_l0 = s.inter()?.ref_pics_l0.len();
+                let ref_idx = parse_ref_idx(cabac, ctx, num_ref_idx_l0)?;
+                let mvd = parse_mvd(cabac, ctx)?;
+                let mvp_idx = parse_mvp_idx(cabac, ctx)?;
+                let (cur_poc, target_ref_poc, log2_pml, has_collocated) = {
+                    let inter = s.inter()?;
+                    let target_ref_poc = inter.ref_pics_l0.get(ref_idx).map(|r| r.poc).ok_or(Error::InvalidData("vaco-codec-hevc: ref_idx_l0 out of range"))?;
+                    (inter.cur_poc, target_ref_poc, inter.log2_parallel_merge_level, inter.collocated.is_some())
+                };
+                let temporal = if has_collocated { temporal_candidate(s, pu.x, pu.y, pu.w, pu.h, cur_poc, target_ref_poc, RefList::L0)? } else { None };
+                let cands = motion::derive_amvp_candidates(&s.cu_grid, pu, log2_pml, cur_poc, target_ref_poc, RefList::L0, temporal);
+                let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
+                Some(UniMotion { mv: Mv { x: predictor.x + mvd.x, y: predictor.y + mvd.y }, ref_poc: target_ref_poc })
             };
-            let temporal = if has_collocated { temporal_candidate(s, pu.x, pu.y, pu.w, pu.h, cur_poc, target_ref_poc)? } else { None };
-            let cands = motion::derive_amvp_candidates(&s.cu_grid, pu, log2_pml, cur_poc, target_ref_poc, temporal);
-            let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
-            MotionInfo { mv: Mv { x: predictor.x + mvd.x, y: predictor.y + mvd.y }, ref_poc: target_ref_poc }
+
+            let l1 = if inter_pred_idc == InterPredIdc::L0 {
+                None
+            } else {
+                let (num_ref_idx_l1, mvd_l1_zero) = {
+                    let inter = s.inter()?;
+                    (inter.ref_pics_l1.len(), inter.mvd_l1_zero)
+                };
+                let ref_idx = parse_ref_idx(cabac, ctx, num_ref_idx_l1)?;
+                // §7.3.8.6's own presence condition: `mvd_coding(x0, y0, 1)`
+                // is skipped (`MvdL1` inferred `(0, 0)`) exactly when
+                // `mvd_l1_zero_flag` is set *and* this PU is bi-predictive —
+                // an L1-only PU (`inter_pred_idc == PRED_L1`) always reads
+                // its own `mvd_coding`, regardless of `mvd_l1_zero_flag`.
+                let mvd = if mvd_l1_zero && inter_pred_idc == InterPredIdc::Bi { Mv::ZERO } else { parse_mvd(cabac, ctx)? };
+                let mvp_idx = parse_mvp_idx(cabac, ctx)?;
+                let (cur_poc, target_ref_poc, log2_pml, has_collocated) = {
+                    let inter = s.inter()?;
+                    let target_ref_poc = inter.ref_pics_l1.get(ref_idx).map(|r| r.poc).ok_or(Error::InvalidData("vaco-codec-hevc: ref_idx_l1 out of range"))?;
+                    (inter.cur_poc, target_ref_poc, inter.log2_parallel_merge_level, inter.collocated.is_some())
+                };
+                let temporal = if has_collocated { temporal_candidate(s, pu.x, pu.y, pu.w, pu.h, cur_poc, target_ref_poc, RefList::L1)? } else { None };
+                let cands = motion::derive_amvp_candidates(&s.cu_grid, pu, log2_pml, cur_poc, target_ref_poc, RefList::L1, temporal);
+                let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
+                Some(UniMotion { mv: Mv { x: predictor.x + mvd.x, y: predictor.y + mvd.y }, ref_poc: target_ref_poc })
+            };
+
+            MotionInfo { l0, l1 }
         };
 
         let blocks_w = usize::try_from((pu.w >> 2).max(1)).unwrap_or(1);
@@ -1068,7 +1296,7 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
         // gates on `written`, which only `fill` (not `fill_motion` alone)
         // sets.
         s.cu_grid.fill(bx0, by0, blocks_w, blocks_h, depth_u8, DC_IDX);
-        s.cu_grid.fill_motion(bx0, by0, blocks_w, blocks_h, info.mv, info.ref_poc, false);
+        s.cu_grid.fill_motion(bx0, by0, blocks_w, blocks_h, info, false);
         pu_motion.push((pu, info));
     }
 

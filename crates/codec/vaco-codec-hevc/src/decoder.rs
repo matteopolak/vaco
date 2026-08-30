@@ -188,30 +188,22 @@ impl HevcDecoder {
         let hdr = SliceHeader::parse_data(&mut reader, header, &sps, &pps, &mut self.budget)?;
         reader.check()?;
 
+        // B-slices: `inter_pred_idc`/`ref_idx_l1`/`mvd_coding(x, y, 1)`/
+        // `mvp_l1_flag` parsing (`ctu::decode_inter_cu`), `RefPicList1`
+        // construction and `collocated_from_l0_flag` (both above, in this
+        // function), the combined bi-predictive merge candidates
+        // (`motion::derive_merge_candidates`'s own `is_b` branch) and
+        // bi-predictive motion compensation (`ctu::predict_component`'s own
+        // `(Some, Some)` arm, `mc::default_biprediction`/`apply_weight_bi`)
+        // are all implemented. **This refusal stays in place regardless**
+        // until a real B-slice fixture measures byte-exact against plain
+        // `ffmpeg`, per this crate's own "registered-but-wrong is worse than
+        // absent" discipline (`AGENT-CONSTRAINTS.md`) — see
+        // `docs/codec/vaco-codec-hevc.md`'s B-slice section for what has and
+        // has not been measured.
         if hdr.kind == SliceKind::B {
             return Err(Error::Unsupported("vaco-codec-hevc: B-slices are not supported"));
         }
-        // Stage 2 (P-slices) is no longer refused here: the TMVP-for-AMVP
-        // defect this refusal used to document is fixed — see
-        // `docs/codec/vaco-codec-hevc.md`'s "Stage 2: P-slices, byte-exact"
-        // section for the root cause (the bottom-right-to-centre temporal
-        // fallback was gated on "geometrically available" instead of
-        // "yielded motion", dropping the candidate whenever the
-        // bottom-right position was in-bounds but intra) and for the
-        // deblocking gap found alongside it (a skip CU, and a merged
-        // `rqt_root_cbf == 0` CU, never marked their own left/top boundary
-        // as a filterable edge at all, since neither ever reaches the
-        // transform-tree code that used to be the only thing marking
-        // edges).
-        //
-        // Stage 4 (weighted prediction, `weighted_pred_flag`) is no longer
-        // refused: `pred_weight_table()` was already parsed by
-        // `vaco-parse-hevc` (a stream description has to be able to
-        // describe it), and `crate::weight::resolve_l0` plus
-        // `ctu::build_cu_prediction`'s weighted branch now apply it — see
-        // `docs/codec/vaco-codec-hevc.md`'s weighted-prediction section.
-        // `weighted_bipred_flag` (the B-slice half of §8.5.3.3.4.3) is moot:
-        // B-slices are refused just above, unconditionally.
         if hdr.dependent {
             return Err(Error::Unsupported("vaco-codec-hevc: dependent slice segments are not supported"));
         }
@@ -260,14 +252,14 @@ impl HevcDecoder {
             dpb.apply_reference_picture_set(&sets);
         }
 
+        let is_b = hdr.kind == SliceKind::B;
         let (list0, list1) = crate::dpb::build_ref_pic_lists(
             &sets,
             hdr.num_ref_idx_l0_active_minus1,
             hdr.num_ref_idx_l1_active_minus1,
             hdr.ref_pic_list_modification.as_ref(),
-            false,
+            is_b,
         );
-        let _ = list1; // always empty here: `is_b == false` above, this crate never builds RefPicList1.
 
         let inter = if hdr.kind == SliceKind::I {
             None
@@ -277,32 +269,58 @@ impl HevcDecoder {
                 .iter()
                 .filter_map(|&p| dpb_ref.and_then(|d| d.reference_picture(p)).map(|pic| RefPic { poc: p, pic }))
                 .collect();
+            let ref_pics_l1: Vec<RefPic<'_>> = list1
+                .iter()
+                .filter_map(|&p| dpb_ref.and_then(|d| d.reference_picture(p)).map(|pic| RefPic { poc: p, pic }))
+                .collect();
+            // §8.5.3.2.9: `ColPic` is named from `RefPicList0` or
+            // `RefPicList1` depending on `collocated_from_l0_flag` — a P
+            // slice's own parser default (`collocated_from_l0 == true`)
+            // makes this collapse to the pre-existing `list0`-only lookup.
             let collocated = if hdr.temporal_mvp_enabled {
-                list0
+                let col_list = if hdr.collocated_from_l0 { &list0 } else { &list1 };
+                col_list
                     .get(usize::try_from(hdr.collocated_ref_idx).unwrap_or(0))
                     .and_then(|&p| dpb_ref.and_then(|d| d.collocated_for(p)))
             } else {
                 None
             };
+            // §8.5.3.2.9's `NoBackwardPredFlag`: every picture in *both*
+            // lists has a POC no greater than the current picture's. Always
+            // `true` trivially for a P slice (list1 is empty).
+            let is_low_delay = list0.iter().chain(list1.iter()).all(|&p| p <= poc.value);
             let max_num_merge_cand = usize::try_from(5u32.saturating_sub(hdr.five_minus_max_num_merge_cand)).unwrap_or(1).max(1);
-            // §8.5.3.3.4.3, resolved once per slice rather than per PU —
-            // `Some` exactly when `weighted_pred_flag && slice_type == P`
-            // (`hdr.kind == B` already returned above, so this is the only
-            // slice kind `pred_weight_table` can be present for here; see
-            // `crate::weight`'s own module doc for the bi-predictive half
-            // this crate never reaches).
-            let weights = hdr
+            // §8.5.3.3.4.1's `weightedPredFlag`: `weighted_pred_flag` for a P
+            // slice, `weighted_bipred_flag` for a B slice — resolved once per
+            // slice rather than per PU. `pred_weight_table()`'s own presence
+            // condition in `vaco-parse-hevc` already gates on exactly this,
+            // so `hdr.pred_weight_table.is_some()` alone is enough; no
+            // separate flag check is needed here.
+            let weights_l0 = hdr
                 .pred_weight_table
                 .as_ref()
-                .map(|t| crate::weight::resolve_l0(t, ref_pics_l0.len(), u32::from(sps.bit_depth_luma), u32::from(sps.bit_depth_chroma)));
+                .map(|t| crate::weight::resolve_list(t, 0, ref_pics_l0.len(), u32::from(sps.bit_depth_luma), u32::from(sps.bit_depth_chroma)));
+            let weights_l1 = if is_b {
+                hdr.pred_weight_table
+                    .as_ref()
+                    .map(|t| crate::weight::resolve_list(t, 1, ref_pics_l1.len(), u32::from(sps.bit_depth_luma), u32::from(sps.bit_depth_chroma)))
+            } else {
+                None
+            };
             Some(InterSliceParams {
                 max_num_merge_cand,
                 log2_parallel_merge_level: pps.log2_parallel_merge_level,
                 amp_enabled: sps.amp_enabled,
                 cur_poc: poc.value,
                 ref_pics_l0,
+                ref_pics_l1,
+                is_b,
+                collocated_from_l0: hdr.collocated_from_l0,
+                is_low_delay,
+                mvd_l1_zero: hdr.mvd_l1_zero,
                 collocated,
-                weights,
+                weights_l0,
+                weights_l1,
             })
         };
 
@@ -440,13 +458,18 @@ impl HevcDecoder {
     }
 }
 
-/// `new_p_slice`'s (or, for an I slice, `new`'s) own context-bank
-/// constructor, picked by slice type — the CABAC context tables an I slice
-/// initialises are a strict subset (`initType == 2`, always) of what a P
-/// slice needs (`initType` 0 or 1, per `cabac_init_flag`), so this is the
-/// one place `decode_packet` has to know which of the two exists at all.
+/// `new`/`new_p_slice`/`new_b_slice`'s own dispatch, picked by slice type —
+/// the CABAC context tables an I slice initialises are a strict subset
+/// (`initType == 2`, always) of what a P or B slice needs (`initType` 0 or
+/// 1, per `cabac_init_flag`, in opposite default directions for P versus B
+/// — see [`ContextBank::new_b_slice`]'s own doc), so this is the one place
+/// `decode_packet` has to know which of the three exists at all.
 fn new_context_bank(kind: SliceKind, cabac_init: bool, qp: i8) -> ContextBank {
-    if kind == SliceKind::I { ContextBank::new(qp) } else { ContextBank::new_p_slice(qp, cabac_init) }
+    match kind {
+        SliceKind::I => ContextBank::new(qp),
+        SliceKind::P => ContextBank::new_p_slice(qp, cabac_init),
+        SliceKind::B => ContextBank::new_b_slice(qp, cabac_init),
+    }
 }
 
 /// Split `cabac_data` into one byte range per CTU row, from

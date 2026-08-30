@@ -57,9 +57,11 @@
 //!   ever produce. P-slices (see the crate's own "Stage 2" doc) made this
 //!   stop being true the moment two adjacent inter CUs could disagree on
 //!   motion or reference picture — [`boundary_strength`] now derives the
-//!   real Table 8-12 value (restricted to this crate's uni-prediction-only
-//!   scope), and every edge that derives to `bS == 0` is skipped entirely
-//!   rather than filtered.
+//!   real Table 8-12 value in full (both reference-picture-lists' own
+//!   `predFlagL0`/`predFlagL1`/motion-vector comparisons, not only a
+//!   single-list restriction — see that function's own doc for why one
+//!   formula covers P and B slices alike), and every edge that derives to
+//!   `bS == 0` is skipped entirely rather than filtered.
 //! - **`qP_P`/`qP_Q` are looked up per edge from `CuGrid`'s own per-CU
 //!   `QpY`** (`ctu::coding_unit`'s own post-transform-tree
 //!   `CuGrid::fill_qp`), not one constant `slice_qp` — `cu_qp_delta` (see
@@ -315,12 +317,7 @@ fn qp_avg(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
     (qp_p + qp_q + 1) >> 1
 }
 
-/// Table 8-12's boundary-filtering-strength (`bS`) derivation, restricted to
-/// what a P-slice-only, uni-prediction-only decoder can ever produce (this
-/// crate never builds a `RefPicList1`, so the general table's "different
-/// number of motion vectors used" and "one list vs the other" cases collapse
-/// to a single-MV-per-side comparison — HM's own `xGetBoundaryStrengthSingle`
-/// under the same restriction):
+/// Table 8-12's boundary-filtering-strength (`bS`) derivation:
 ///
 /// - `2` if either side (`P`, one step back from `(xq, yq)` against `dir`'s
 ///   own perpendicular axis, matching [`qp_avg`]'s own convention; `Q`, at
@@ -333,11 +330,29 @@ fn qp_avg(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
 ///   ([`CuGrid::cbf_luma_at`]) — a plain prediction-unit-only boundary never
 ///   satisfies this term, regardless of what either side's (necessarily
 ///   larger, unsplit) transform block coded.
-/// - `1` if the two sides predict from different reference pictures (by
-///   POC).
-/// - `1` if either motion-vector component differs by 4 or more
-///   quarter-luma-sample units.
-/// - `0` otherwise — no filtering at this edge at all.
+/// - Otherwise, the reference-picture/motion-vector comparison below, a
+///   direct port of HM's own `xGetBoundaryStrengthSingle` (its `isInterB`
+///   branch, run unconditionally — see this function's own doc for why that
+///   collapses to the simpler single-motion-vector comparison for free
+///   whenever both sides are uni-predictive, which subsumes the P-slice
+///   case without a separate branch).
+///
+/// # Why one formula covers both P and B slices without an `is_b` branch
+///
+/// HM only takes its simpler `isInterP` path when the *slice* is a P slice;
+/// this crate's single-slice-per-picture scope means `P` and `Q` are always
+/// in the same slice, so that distinction is exactly this function's own
+/// "does either side have an `l1`" question, not a separate flag to plumb
+/// through. Treating a `None` list as "reference picture `None`, motion
+/// vector zero" (this function's own `ref_of`/`mv_of`) makes the general
+/// `isInterB` formula collapse to `xGetBoundaryStrengthSingle`'s
+/// `isInterP` formula automatically whenever both sides are uni-predictive
+/// with only `l0` populated: `ref_p1 == ref_q1` is trivially `None == None`,
+/// `ref_p0 != ref_p1` is trivially `Some != None`, and the resulting
+/// "different L0/L1" branch's own `mv_q1`/`mv_p1` terms are both the zero
+/// vector, whose difference is always `< 4` — leaving only the original
+/// `ref_p0 == ref_q0` and `mv_q0` vs `mv_p0` comparison, unchanged from the
+/// P-slice-only version this replaced.
 fn boundary_strength(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
     let (xp, yp) = match dir {
         Dir::Vert => (xq - 1, yq),
@@ -353,13 +368,32 @@ fn boundary_strength(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
     if is_tu_edge && (s.cu_grid.cbf_luma_at(xq, yq) || s.cu_grid.cbf_luma_at(xp, yp)) {
         return 1;
     }
-    if p.ref_poc != q.ref_poc {
-        return 1;
+
+    let ref_of = |u: Option<crate::motion::UniMotion>| u.map(|u| u.ref_poc);
+    let mv_of = |u: Option<crate::motion::UniMotion>| u.map_or(crate::motion::Mv::ZERO, |u| u.mv);
+    let diff_ge4 = |a: crate::motion::Mv, b: crate::motion::Mv| (a.x - b.x).abs() >= 4 || (a.y - b.y).abs() >= 4;
+
+    let (ref_p0, ref_p1) = (ref_of(p.l0), ref_of(p.l1));
+    let (ref_q0, ref_q1) = (ref_of(q.l0), ref_of(q.l1));
+    let (mv_p0, mv_p1) = (mv_of(p.l0), mv_of(p.l1));
+    let (mv_q0, mv_q1) = (mv_of(q.l0), mv_of(q.l1));
+
+    if (ref_p0 == ref_q0 && ref_p1 == ref_q1) || (ref_p0 == ref_q1 && ref_p1 == ref_q0) {
+        if ref_p0 != ref_p1 {
+            // Different L0/L1 references on the P side (or, on a P-slice
+            // edge, P's own L1 trivially `None` against L0's real POC).
+            let matches_straight = ref_p0 == ref_q0;
+            let (a0, a1, b0, b1) = if matches_straight { (mv_q0, mv_p0, mv_q1, mv_p1) } else { (mv_q1, mv_p0, mv_q0, mv_p1) };
+            return i32::from(diff_ge4(a0, a1) || diff_ge4(b0, b1));
+        }
+        // Same reference picture on both of P's own lists: §8.7.2.4's own
+        // extra requirement that *both* the straight and swapped pairings
+        // exceed the threshold, not just one.
+        let straight = diff_ge4(mv_q0, mv_p0) || diff_ge4(mv_q1, mv_p1);
+        let swapped = diff_ge4(mv_q1, mv_p0) || diff_ge4(mv_q0, mv_p1);
+        return i32::from(straight && swapped);
     }
-    if (p.mv.x - q.mv.x).abs() >= 4 || (p.mv.y - q.mv.y).abs() >= 4 {
-        return 1;
-    }
-    0
+    1
 }
 
 /// Run the whole picture's deblocking pass: every vertical edge first (both

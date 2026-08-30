@@ -2,17 +2,20 @@
 //! a slice's own `pred_weight_table()` (`vaco_parse_hevc::slice::
 //! PredWeightTable`, already parsed by `vaco-parse-hevc` — see
 //! `decoder.rs`'s own module doc for why nothing here duplicates that parse)
-//! into a flat per-`ref_idx` table of `LumaWeightL0`/`ChromaWeightL0` and
-//! `luma_offset_l0`/`ChromaOffsetL0`, resolved once per slice rather than
-//! re-derived per pixel.
+//! into a flat per-`ref_idx` table of `LumaWeightLX`/`ChromaWeightLX` and
+//! `luma_offset_lX`/`ChromaOffsetLX`, resolved once per slice rather than
+//! re-derived per pixel. [`resolve_list`] takes a list index (`0` or `1`) so
+//! the same derivation resolves `RefPicList0` for a weighted P slice and
+//! either or both of `RefPicList0`/`RefPicList1` for a weighted-bipred B
+//! slice — §7.3.6.3's own `pred_weight_table()` syntax reads exactly the
+//! same fields for list 1 as for list 0, just with an `l1` suffix, so there
+//! is nothing list-specific in the derivation itself beyond which of
+//! `PredWeightTable`'s two-element arrays it reads.
 //!
 //! # Scope
 //!
-//! `RefPicList0` (uni-predictive, P-slice weighting) only. Bi-predictive
-//! weighting is §8.5.3.3.4.3's other half, unreachable from this crate's own
-//! B-slice refusal (`decoder.rs::decode_packet`). §7.4.7.3's
-//! `high_precision_offsets_enabled_flag` widening is unreachable too — it
-//! lives entirely in the PPS/SPS range extension, which
+//! §7.4.7.3's `high_precision_offsets_enabled_flag` widening is unreachable —
+//! it lives entirely in the PPS/SPS range extension, which
 //! `decoder::check_scope` already refuses outright — so `WpOffsetBdShiftY`/
 //! `WpOffsetBdShiftC` are always `0` and `WpOffsetHalfRangeC` is always `128`
 //! here (`BitDepth == 8` throughout this crate's scope, also
@@ -44,17 +47,22 @@ pub(crate) struct RefWeights {
     pub chroma: [Weight; 2],
 }
 
-/// Resolves every `RefPicList0` entry's own weight/offset from a slice's
+/// Resolves every `RefPicListX` entry's own weight/offset from a slice's
 /// `pred_weight_table()`, for [`crate::ctu::build_cu_prediction`] to index
-/// by `ref_idx` directly.
+/// by `ref_idx` directly. `list` is `0` for `RefPicList0`, `1` for
+/// `RefPicList1` — indexes `table.luma`/`table.chroma`'s own two-element
+/// arrays directly (§7.3.6.3's own `l0`/`l1` field pairs); any other value
+/// is treated as `1` (defensive only — every real caller passes a literal
+/// `0` or `1`).
 ///
-/// `num_refs` is `RefPicList0.len()`; an index the table has no entry for
+/// `num_refs` is `RefPicListX.len()`; an index the table has no entry for
 /// (fewer parsed entries than active references — only possible from a
 /// malformed header, since a conformant one names exactly
-/// `num_ref_idx_l0_active_minus1 + 1`) falls back to the neutral,
+/// `num_ref_idx_lX_active_minus1 + 1`) falls back to the neutral,
 /// unweighted values, the same values §7.3.6.3 itself assigns whenever
-/// `luma_weight_l0_flag[i]`/the chroma equivalent is `0`.
-pub(crate) fn resolve_l0(table: &PredWeightTable, num_refs: usize, bit_depth_luma: u32, bit_depth_chroma: u32) -> Vec<RefWeights> {
+/// `luma_weight_lX_flag[i]`/the chroma equivalent is `0`.
+pub(crate) fn resolve_list(table: &PredWeightTable, list: usize, num_refs: usize, bit_depth_luma: u32, bit_depth_chroma: u32) -> Vec<RefWeights> {
+    let list = usize::from(list != 0);
     let s1_luma = shift1(bit_depth_luma);
     let s1_chroma = shift1(bit_depth_chroma);
 
@@ -63,27 +71,31 @@ pub(crate) fn resolve_l0(table: &PredWeightTable, num_refs: usize, bit_depth_lum
     let luma_denom_pow = 1i32 << luma_log2_denom.clamp(0, 30);
 
     // §7.4.7.3: ChromaLog2WeightDenom = luma_log2_weight_denom +
-    // delta_chroma_log2_weight_denom. Clamped to a sane non-negative range
-    // before use as a shift amount: a conformant stream never drives this
-    // negative, but nothing upstream of this function refuses one that does,
-    // and a negative shift amount panics rather than misdecoding quietly —
-    // clamping here is a fuzz-safety floor, not a new approximation of
-    // conformant behaviour.
+    // delta_chroma_log2_weight_denom (one value, shared by both lists — the
+    // syntax element is coded once per slice, not per list). Clamped to a
+    // sane non-negative range before use as a shift amount: a conformant
+    // stream never drives this negative, but nothing upstream of this
+    // function refuses one that does, and a negative shift amount panics
+    // rather than misdecoding quietly — clamping here is a fuzz-safety
+    // floor, not a new approximation of conformant behaviour.
     let chroma_log2_denom = (luma_log2_denom + table.delta_chroma_log2_weight_denom).clamp(0, 30);
     let chroma_log2_wd = chroma_log2_denom + s1_chroma;
     let chroma_denom_pow = 1i32 << chroma_log2_denom;
     let half_range_c = 1i32 << bit_depth_chroma.saturating_sub(1).min(30);
 
+    let luma_list = table.luma.get(list);
+    let chroma_list = table.chroma.get(list);
+
     (0..num_refs)
         .map(|i| {
-            let (dw, o) = table.luma[0].get(i).copied().flatten().unwrap_or((0, 0));
+            let (dw, o) = luma_list.and_then(|l| l.get(i).copied()).flatten().unwrap_or((0, 0));
             let luma = Weight { log2_wd: luma_log2_wd, w: luma_denom_pow.saturating_add(dw), o };
 
-            let chroma_entry = table.chroma[0].get(i).copied().flatten();
+            let chroma_entry = chroma_list.and_then(|l| l.get(i).copied()).flatten();
             let chroma = [0usize, 1usize].map(|c| {
                 let (dwc, doc) = chroma_entry.and_then(|pair| pair.get(c).copied()).unwrap_or((0, 0));
                 let w = chroma_denom_pow.saturating_add(dwc);
-                // §8.5.3.3.4.3's `ChromaOffsetL0[i][j]`:
+                // §8.5.3.3.4.3's `ChromaOffsetLX[i][j]`:
                 //   Clip3(-halfRange, halfRange - 1,
                 //         (halfRange + delta) - ((halfRange * w) >> ChromaLog2WeightDenom))
                 let predicted = half_range_c.saturating_mul(w) >> chroma_log2_denom;
@@ -113,7 +125,7 @@ mod tests {
     fn an_absent_flag_resolves_to_the_neutral_weight() {
         // luma_weight_l0_flag[0] == 0: LumaWeightL0[0] == 1 << denom, offset == 0.
         let table = table_with(3, vec![None]);
-        let resolved = resolve_l0(&table, 1, 8, 8);
+        let resolved = resolve_list(&table, 0, 1, 8, 8);
         assert_eq!(resolved[0].luma.w, 1 << 3);
         assert_eq!(resolved[0].luma.o, 0);
         assert_eq!(resolved[0].luma.log2_wd, 3 + 6);
@@ -126,7 +138,7 @@ mod tests {
         // at every denom this crate can parse (0..=7).
         for denom in 0..=7u32 {
             let table = table_with(denom, vec![None]);
-            let resolved = resolve_l0(&table, 1, 8, 8);
+            let resolved = resolve_list(&table, 0, 1, 8, 8);
             for pred in [-500, -1, 0, 1, 4032, 4095, 30000] {
                 let got = crate::mc::apply_weight(pred, resolved[0].luma, 8);
                 let want = ((pred + 32) >> 6).clamp(0, 255);
@@ -142,7 +154,7 @@ mod tests {
         // AGENT-CONSTRAINTS.md's H.264 sibling-bug warning, carried over as
         // a concrete non-neutral fixture for this crate's own table.
         let table = table_with(4, vec![Some((-1, -3))]);
-        let resolved = resolve_l0(&table, 1, 8, 8);
+        let resolved = resolve_list(&table, 0, 1, 8, 8);
         let w = resolved[0].luma;
         assert_eq!(w.w, 15);
         assert_eq!(w.o, -3);
@@ -155,8 +167,29 @@ mod tests {
     fn out_of_range_indices_fall_back_to_neutral() {
         let table = table_with(2, vec![Some((5, 10))]);
         // num_refs = 2 but the table only names one entry.
-        let resolved = resolve_l0(&table, 2, 8, 8);
+        let resolved = resolve_list(&table, 0, 2, 8, 8);
         assert_eq!(resolved[1].luma.w, 1 << 2);
         assert_eq!(resolved[1].luma.o, 0);
+    }
+
+    #[test]
+    fn list_1_reads_its_own_entries_independently_of_list_0() {
+        // §7.3.6.3's `l1` fields are a second, independent set of flags/deltas
+        // — list 1 must not fall back to list 0's own table just because
+        // both share one slice-wide `luma_log2_weight_denom`.
+        let table = PredWeightTable {
+            luma_log2_weight_denom: 5,
+            delta_chroma_log2_weight_denom: 0,
+            luma: [vec![Some((-3, -7))], vec![Some((15, 2))]],
+            chroma: [Vec::new(), Vec::new()],
+        };
+        let l0 = resolve_list(&table, 0, 1, 8, 8);
+        let l1 = resolve_list(&table, 1, 1, 8, 8);
+        assert_eq!(l0[0].luma.w, (1 << 5) - 3);
+        assert_eq!(l0[0].luma.o, -7);
+        assert_eq!(l1[0].luma.w, (1 << 5) + 15);
+        assert_eq!(l1[0].luma.o, 2);
+        // Both lists share the same log2Wd (one slice-wide weight denom).
+        assert_eq!(l0[0].luma.log2_wd, l1[0].luma.log2_wd);
     }
 }

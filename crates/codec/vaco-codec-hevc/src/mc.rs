@@ -15,20 +15,22 @@
 //! allocation by a filter-width border for a crate whose own `Budget`
 //! already accounts for exact plane dimensions.
 //!
-//! # Scope: uni-prediction only
+//! # Scope: single-reference interpolation only
 //!
 //! [`predict_block`] produces a *final*, already-rounded-and-clipped
-//! prediction block — HM's own `isLast` is always `true` here, because this
-//! crate's P-slice-only scope (`decoder.rs::check_scope` refuses B slices)
-//! never calls this twice to average (`bi == false` throughout HM's own
-//! `xPredInterUni`/`xPredInterBlk`, since a P slice's `PredFlagL1` is always
-//! `0`). [`predict_block_intermediate`] is the one exception: it stops one
-//! clause earlier, at §8.5.3.3.3's own *unshifted, unclipped* `predSampleLX`,
-//! because that is what [`crate::weight::resolve_l0`]'s explicit weighted
-//! sample prediction (§8.5.3.3.4.3, applied via [`apply_weight`]) needs to
-//! combine with a reference's weight/offset — folding the final shift into
-//! the interpolation the way [`predict_block`] does is only valid when no
-//! weighting follows it.
+//! prediction block for a **uni-predictive** PU — HM's own `isLast` is
+//! always `true` here, since a single-reference PU never needs to average
+//! two interpolated sides (`bi == false` throughout HM's own
+//! `xPredInterUni`/`xPredInterBlk`). [`predict_block_intermediate`] is the
+//! one call this crate's bi-predictive path (a B slice with both
+//! `predFlagL0` and `predFlagL1` set) also uses: it stops one clause
+//! earlier, at §8.5.3.3.3's own *unshifted, unclipped* `predSampleLX`, which
+//! both [`crate::weight::resolve_list`]'s explicit weighted sample
+//! prediction (§8.5.3.3.4.3, applied via [`apply_weight`]/[`apply_weight_bi`])
+//! and the unweighted bi-predictive combine ([`default_biprediction`],
+//! §8.5.3.3.4.2) need to combine with a second side — folding the final
+//! shift into the interpolation the way [`predict_block`] does is only valid
+//! for a single, already-final side.
 //!
 //! # Specification
 //!
@@ -325,7 +327,7 @@ pub(crate) fn predict_block_intermediate(ref_plane: &Plane, int_x0: i32, int_y0:
 /// `log2_wd` already has `shift1 = Max(2, 14 - BitDepth)` folded in, the same
 /// way the specification's own `LumaLog2WeightDenom`/`ChromaLog2WeightDenom`
 /// combine with it at the point of use. Built by
-/// [`crate::weight::resolve_l0`].
+/// [`crate::weight::resolve_list`].
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Weight {
     pub log2_wd: i32,
@@ -353,6 +355,45 @@ pub(crate) fn apply_weight(pred: i32, weight: Weight, bit_depth: u32) -> i32 {
     } else {
         pred.saturating_mul(weight.w).saturating_add(weight.o)
     };
+    val.clamp(0, max_val)
+}
+
+/// §8.5.3.3.4.2's bi-predictive default weighted sample prediction (the
+/// `predFlagL0 == 1 && predFlagL1 == 1` case, eq. 8-264):
+///
+/// ```text
+/// Clip3(0, max, (predSamplesL0 + predSamplesL1 + offset2) >> shift2)
+/// ```
+///
+/// with `shift2 = Max(3, 15 - BitDepth)`, `offset2 = 1 << (shift2 - 1)`.
+/// `pred_l0`/`pred_l1` are each [`predict_block_intermediate`]'s own
+/// `predSampleLX` output for the respective list.
+#[must_use]
+pub(crate) fn default_biprediction(pred_l0: i32, pred_l1: i32, bit_depth: u32) -> i32 {
+    let max_val = (1i32 << bit_depth) - 1;
+    let shift2 = (15 - i32::try_from(bit_depth).unwrap_or(8)).max(3);
+    let offset2 = 1i32 << (shift2 - 1);
+    ((pred_l0.saturating_add(pred_l1).saturating_add(offset2)) >> shift2).clamp(0, max_val)
+}
+
+/// §8.5.3.3.4.3's bi-predictive explicit weighted sample prediction (the
+/// `predFlagL0 == 1 && predFlagL1 == 1` case, eq. 8-277):
+///
+/// ```text
+/// Clip3(0, max, (predSamplesL0*w0 + predSamplesL1*w1 + ((o0+o1+1) << log2Wd)) >> (log2Wd + 1))
+/// ```
+///
+/// `w0`/`w1` share the same `log2Wd`: §7.3.6.3's `luma_log2_weight_denom`/
+/// `delta_chroma_log2_weight_denom` are slice-wide, not per-reference-list,
+/// so [`crate::weight::resolve_list`] always produces the same `log2_wd` for
+/// list 0 and list 1 of the same component — `w0.log2_wd` is used for both
+/// sides.
+#[must_use]
+pub(crate) fn apply_weight_bi(pred_l0: i32, w0: Weight, pred_l1: i32, w1: Weight, bit_depth: u32) -> i32 {
+    let max_val = (1i32 << bit_depth) - 1;
+    let log2_wd = w0.log2_wd;
+    let rounding = (w0.o.saturating_add(w1.o).saturating_add(1)) << log2_wd;
+    let val = (pred_l0.saturating_mul(w0.w).saturating_add(pred_l1.saturating_mul(w1.w)).saturating_add(rounding)) >> (log2_wd + 1);
     val.clamp(0, max_val)
 }
 
@@ -413,5 +454,46 @@ mod tests {
         predict_block(&plane, 4, 4, 5, 3, 2, 2, 8, false, &mut out);
         assert!(out.iter().all(|&v| (0..=255).contains(&v)));
         assert!(out.iter().all(|&v| v == 200));
+    }
+
+    #[test]
+    fn default_biprediction_averages_two_equal_flat_intermediates() {
+        // A flat 120-valued plane's own predSampleLX (integer motion, no
+        // fraction) is `120 << 6` per `predict_block_intermediate`'s own
+        // Case 1 — averaging it with itself must recover exactly 120.
+        let pred = 120i32 << 6;
+        assert_eq!(default_biprediction(pred, pred, 8), 120);
+    }
+
+    #[test]
+    fn default_biprediction_matches_a_hand_derivation() {
+        // shift2 = Max(3, 15-8) = 7, offset2 = 64.
+        // (1000 + 2000 + 64) >> 7 = 3064 >> 7 = 23.
+        assert_eq!(default_biprediction(1000, 2000, 8), 23);
+    }
+
+    #[test]
+    fn apply_weight_bi_with_neutral_weights_matches_the_default_average() {
+        // w0 == w1 == 1 << denom, o0 == o1 == 0 is the neutral case: the
+        // weighted bi-pred formula must collapse to the same value
+        // `default_biprediction` gives, the bi-predictive analogue of
+        // `weight::tests::a_neutral_weight_collapses_to_the_default_shift_and_offset`.
+        for denom in 0..=7i32 {
+            let w = Weight { log2_wd: denom + 6, w: 1 << denom, o: 0 };
+            for (p0, p1) in [(-500, 300), (0, 0), (4032, 100), (30000, -1000)] {
+                let got = apply_weight_bi(p0, w, p1, w, 8);
+                let want = default_biprediction(p0, p1, 8);
+                assert_eq!(got, want, "denom={denom} p0={p0} p1={p1}");
+            }
+        }
+    }
+
+    #[test]
+    fn apply_weight_bi_matches_a_hand_derivation() {
+        // log2Wd = 10, w0=15,o0=-3, w1=17,o1=2.
+        // (200*15 + 100*17 + ((-3+2+1)<<10)) >> 11 = (3000+1700+0) >> 11 = 4700>>11 = 2.
+        let w0 = Weight { log2_wd: 10, w: 15, o: -3 };
+        let w1 = Weight { log2_wd: 10, w: 17, o: 2 };
+        assert_eq!(apply_weight_bi(200, w0, 100, w1, 8), 2);
     }
 }
