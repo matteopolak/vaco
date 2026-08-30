@@ -366,6 +366,41 @@ fn c_select_bitwise<S: Lanes>(simd: S, mask_u8: &[u8], a: &[u8], b: &[u8], out: 
     }
 }
 
+/// The `i16` sibling of [`c_select_native`] — `ops::simd::select_i16`'s own
+/// shape, closing `vaco-codec-dsp-deblock`'s recorded blocker at the width
+/// its per-sample decisions actually need. `mask_i16` must already be
+/// canonical, same requirement as `mask_i8` above.
+#[inline(always)]
+fn c_select_native_i16<S: Lanes>(simd: S, mask_i16: &[i16], a: &[i16], b: &[i16], out: &mut [i16]) {
+    for (((mc, ac), bc), oc) in mask_i16
+        .chunks_exact(8)
+        .zip(a.chunks_exact(8))
+        .zip(b.chunks_exact(8))
+        .zip(out.chunks_exact_mut(8))
+    {
+        let m = fearless_simd::mask16x8::<S>::from_slice(simd, mc);
+        let va = fearless_simd::i16x8::<S>::from_slice(simd, ac);
+        let vb = fearless_simd::i16x8::<S>::from_slice(simd, bc);
+        m.select(va, vb).store_slice(oc);
+    }
+}
+
+/// The `i32` sibling of [`c_select_native`].
+#[inline(always)]
+fn c_select_native_i32<S: Lanes>(simd: S, mask_i32: &[i32], a: &[i32], b: &[i32], out: &mut [i32]) {
+    for (((mc, ac), bc), oc) in mask_i32
+        .chunks_exact(4)
+        .zip(a.chunks_exact(4))
+        .zip(b.chunks_exact(4))
+        .zip(out.chunks_exact_mut(4))
+    {
+        let m = fearless_simd::mask32x4::<S>::from_slice(simd, mc);
+        let va = fearless_simd::i32x4::<S>::from_slice(simd, ac);
+        let vb = fearless_simd::i32x4::<S>::from_slice(simd, bc);
+        m.select(va, vb).store_slice(oc);
+    }
+}
+
 // ---------------------------------------------------------------------------
 // probes — the only implementations that are timed, and the only ones to
 // disassemble. `#[inline(never)]` so each keeps a symbol after fat LTO.
@@ -533,6 +568,30 @@ pub mod probes {
     #[inline(never)]
     pub fn composed_select_bitwise(caps: Caps, mask_u8: &[u8], a: &[u8], b: &[u8], out: &mut [u8]) {
         dispatch_kernel!(caps, s => c_select_bitwise(s, mask_u8, a, b, out));
+    }
+
+    #[inline(never)]
+    pub fn scalar_select_i16(mask: &[i16], a: &[i16], b: &[i16], out: &mut [i16]) {
+        for (((m, x), y), o) in mask.iter().zip(a).zip(b).zip(out.iter_mut()) {
+            *o = if *m != 0 { *x } else { *y };
+        }
+    }
+
+    #[inline(never)]
+    pub fn composed_select_native_i16(caps: Caps, mask: &[i16], a: &[i16], b: &[i16], out: &mut [i16]) {
+        dispatch_kernel!(caps, s => c_select_native_i16(s, mask, a, b, out));
+    }
+
+    #[inline(never)]
+    pub fn scalar_select_i32(mask: &[i32], a: &[i32], b: &[i32], out: &mut [i32]) {
+        for (((m, x), y), o) in mask.iter().zip(a).zip(b).zip(out.iter_mut()) {
+            *o = if *m != 0 { *x } else { *y };
+        }
+    }
+
+    #[inline(never)]
+    pub fn composed_select_native_i32(caps: Caps, mask: &[i32], a: &[i32], b: &[i32], out: &mut [i32]) {
+        dispatch_kernel!(caps, s => c_select_native_i32(s, mask, a, b, out));
     }
 
     #[inline(never)]
@@ -933,6 +992,68 @@ fn group_select(caps: Caps) {
         bitwise,
         "`(m&a)|(!m&b)`, 3 ops vs 1 — the fallback when a mask never existed as a first-class value",
     );
+
+    // `i16`/`i32`: the widths #619's deblocking blocker actually needs —
+    // widened sample differences and their alpha/beta/tC0 comparisons never
+    // fit in a `u8` lane once the subtraction can go negative.
+    let mask16: Vec<i16> = (0..N)
+        .map(|i| if (i * 2_654_435_761_u32 as usize) % 5 < 2 { -1 } else { 0 })
+        .collect();
+    let a16: Vec<i16> = (0..N).map(|i| (i as i32 * 37 - 5000) as i16).collect();
+    let b16: Vec<i16> = (0..N).map(|i| (i as i32 * 91 - 3000) as i16).collect();
+    let mut x16 = vec![0i16; N];
+    let mut y16 = vec![0i16; N];
+    probes::scalar_select_i16(&mask16, &a16, &b16, &mut x16);
+    probes::composed_select_native_i16(caps, &mask16, &a16, &b16, &mut y16);
+    assert_eq!(x16, y16, "select_i16: composition diverged");
+    let (n16, native16) = time_pair(
+        || probes::scalar_select_i16(black_box(&mask16), black_box(&a16), black_box(&b16), black_box(&mut x16)),
+        || {
+            probes::composed_select_native_i16(
+                caps,
+                black_box(&mask16),
+                black_box(&a16),
+                black_box(&b16),
+                black_box(&mut y16),
+            );
+        },
+    );
+    t.row(
+        "select_i16 (mask16x8::select, native)",
+        n16,
+        native16,
+        "same shape as select_u8, at the width deblocking's own decisions actually compare",
+    );
+
+    let mask32: Vec<i32> = (0..N)
+        .map(|i| if (i * 2_654_435_761_u32 as usize) % 5 < 2 { -1 } else { 0 })
+        .collect();
+    let a32: Vec<i32> = (0..N).map(|i| i as i32 * 37 - 5000).collect();
+    let b32: Vec<i32> = (0..N).map(|i| i as i32 * 91 - 3000).collect();
+    let mut x32 = vec![0i32; N];
+    let mut y32 = vec![0i32; N];
+    probes::scalar_select_i32(&mask32, &a32, &b32, &mut x32);
+    probes::composed_select_native_i32(caps, &mask32, &a32, &b32, &mut y32);
+    assert_eq!(x32, y32, "select_i32: composition diverged");
+    let (n32, native32) = time_pair(
+        || probes::scalar_select_i32(black_box(&mask32), black_box(&a32), black_box(&b32), black_box(&mut x32)),
+        || {
+            probes::composed_select_native_i32(
+                caps,
+                black_box(&mask32),
+                black_box(&a32),
+                black_box(&b32),
+                black_box(&mut y32),
+            );
+        },
+    );
+    t.row(
+        "select_i32 (mask32x4::select, native)",
+        n32,
+        native32,
+        "same shape, for a kernel that accumulates wider than 8-bit depth needs",
+    );
+
     t.print();
 }
 

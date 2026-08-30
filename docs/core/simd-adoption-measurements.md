@@ -167,6 +167,44 @@ A whole-kernel result, not a microbenchmark: `u8 → u16 → u32` widening chain
 matrix, clipping, a saturating pack and a 3-way `swizzle_dyn` interleaved store. This is the shape
 `vaco-scale` will be full of, and it comes out well.
 
+### Group 7 — masked-lane select
+
+Added later than the rest of this document (Group 7 is `#127`'s own spike, extended for `#619`'s
+deblocking-vectorisation blocker), so it is dated separately: **2026-08-29**, same machine and
+toolchain as above. 4096-element buffers, min-of-100 over 500-pass samples, 5 independent process
+runs — the win/loss split below is across those runs, not across `time_pair`'s own internal
+interleaving.
+
+| operation | scalar (ns) | composed (ns) | composed/scalar | round-1..5 ratio | win/loss |
+|---|---:|---:|---:|---|---:|
+| `select_u8` (`mask8x16::select`) | ~805–834 | ~80–84 | **≈0.10x** | 0.10, 0.10, 0.10, 0.10, 0.10 | 5/5 |
+| `select_u8` (bitwise blend, `(m&a)\|(!m&b)`) | ~805–834 | ~82–86 | **≈0.10–0.11x** | 0.11, 0.10, 0.10, 0.10, 0.11 | 5/5 |
+| `select_i16` (`mask16x8::select`) | ~876–881 | ~163–165 | **≈0.19x** | 0.19, 0.19, 0.19, 0.19, 0.19 | 5/5 |
+| `select_i32` (`mask32x4::select`) | ~700–729 | ~300–313 | **≈0.43x** | 0.43, 0.43, 0.43, 0.43, 0.43 | 5/5 |
+
+`select_u8` was `#127`'s own spike, and its verdict stands: `mask8x16::select` and a hand-composed
+bitwise blend measure identically, both ~10x the branchy scalar loop, so there is no reason to prefer
+the blend. **`select_i16` and `select_i32` are new for `#619`** — the widths `vaco-codec-dsp-deblock`'s
+own per-sample filter decisions actually need once `u8` samples are widened for signed arithmetic.
+Both beat the scalar branchy loop cleanly and with essentially zero round-to-round variance (the
+ratio does not move in the third significant figure across 5 independent process launches, despite a
+niced fuzz sweep occupying 2 of this machine's 10 cores throughout) — this is a genuine win on its own
+merits, not merely an unblocker adopted at parity.
+
+The falling speedup with width (10x → ~5.3x → ~2.3x) is the fixed 128-bit block shrinking the lane
+count that one instruction covers (16 → 8 → 4), while the scalar loop's per-lane branch cost stays
+roughly constant. On aarch64/NEON, "native width" and "128-bit block" are the same thing, so this
+table cannot say whether AVX2's 256-bit `S::i32s` recovers the wider ratio — the same x86
+verification gap Outstanding item 1 already names for the rest of this document.
+
+`ops::select_i16`/`ops::select_i32` and their `simd::` siblings are, like `select_u8`, **not
+compositions**: `fearless_simd` provides `Select` generically over `SimdBase::Mask` at every lane
+width already, so there was no gap to fill. The value added is the *named, tested, benchmarked*
+primitive at the widths a real kernel needs, plus `vaco_simd::testing::check_ternary_u8`, the ternary
+differential driver that did not exist before (`select_u8`'s own edge-corpus test hand-rolled the
+sweep inline until this pass gave it a shared driver, the same way `check_binary_u8` already served
+every binary op).
+
 ---
 
 ## Instruction selection — the evidence

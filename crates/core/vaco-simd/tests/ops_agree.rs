@@ -183,23 +183,10 @@ fn edge_corpus_abs_diff_u8() {
 }
 
 /// `select_u8` is ternary, so it does not fit [`testing::check_binary_u8`]'s
-/// shape; sweep [`testing::edge_patterns`] directly as the mask source
-/// against two distinguishable ramps.
+/// shape; [`testing::check_ternary_u8`] is that shape's own driver.
 #[test]
 fn edge_corpus_select_u8() {
-    for len in 0..=200usize {
-        let a: Vec<u8> = (0..len).map(|i| (i & 0xFF) as u8).collect();
-        let b: Vec<u8> = a.iter().rev().copied().collect();
-        for mask in testing::edge_patterns(len) {
-            let want: Vec<u8> = mask
-                .iter()
-                .zip(&a)
-                .zip(&b)
-                .map(|((&m, &x), &y)| ops::select_u8(m, x, y))
-                .collect();
-            assert_eq!(v_select(&mask, &a, &b), want, "select_u8 len={len}");
-        }
-    }
+    testing::check_ternary_u8("select_u8", v_select, ops::select_u8);
 }
 
 /// `transpose4x4_i32`, over one native invocation: build four `i32x4` rows
@@ -310,6 +297,85 @@ fn v_select(mask: &[u8], a: &[u8], b: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Drives [`ops::simd::select_i16`] over a whole slice: native-width chunks
+/// through the vector composition, the tail through [`ops::select_i16`] —
+/// the same split every `elementwise2!` row uses, written out by hand
+/// because select is ternary and does not fit that macro's binary shape.
+///
+/// Canonicalises the mask chunk before naming `S::mask16s` at all, the same
+/// bridge [`ops::dispatched_select_u8_row`]'s own `select_row` builds for
+/// `u8`: this driver's job is to prove the *composition* matches the scalar
+/// oracle across the oracle's looser (any-nonzero) mask contract, not to
+/// exercise `select_i16`'s own stricter (canonical-only) one.
+fn v_select_i16(mask: &[i16], a: &[i16], b: &[i16]) -> Vec<i16> {
+    #[inline(always)]
+    fn body<S: Lanes>(simd: S, mask: &[i16], a: &[i16], b: &[i16], out: &mut [i16]) {
+        let n = <S::i16s as SimdBase<S>>::N;
+        let mut mi = mask.chunks_exact(n);
+        let mut ai = a.chunks_exact(n);
+        let mut bi = b.chunks_exact(n);
+        let mut oi = out.chunks_exact_mut(n);
+        for (((mc, ac), bc), oc) in (&mut mi).zip(&mut ai).zip(&mut bi).zip(&mut oi) {
+            let mask_canon: Vec<i16> = mc.iter().map(|&m| if m != 0 { -1 } else { 0 }).collect();
+            let vm = <S::mask16s as SimdMask<S>>::from_slice(simd, &mask_canon);
+            let va = <S::i16s as SimdBase<S>>::from_slice(simd, ac);
+            let vb = <S::i16s as SimdBase<S>>::from_slice(simd, bc);
+            ops::simd::select_i16::<S>(vm, va, vb).store_slice(oc);
+        }
+        for (((m, x), y), o) in mi
+            .remainder()
+            .iter()
+            .zip(ai.remainder())
+            .zip(bi.remainder())
+            .zip(oi.into_remainder())
+        {
+            *o = ops::select_i16(*m, *x, *y);
+        }
+    }
+
+    assert_eq!(mask.len(), a.len());
+    assert_eq!(a.len(), b.len());
+    let mut out = vec![0i16; a.len()];
+    let caps = Caps::detect();
+    vaco_simd::dispatch_kernel!(caps, simd => body(simd, mask, a, b, &mut out));
+    out
+}
+
+/// The `i32` sibling of [`v_select_i16`].
+fn v_select_i32(mask: &[i32], a: &[i32], b: &[i32]) -> Vec<i32> {
+    #[inline(always)]
+    fn body<S: Lanes>(simd: S, mask: &[i32], a: &[i32], b: &[i32], out: &mut [i32]) {
+        let n = <S::i32s as SimdBase<S>>::N;
+        let mut mi = mask.chunks_exact(n);
+        let mut ai = a.chunks_exact(n);
+        let mut bi = b.chunks_exact(n);
+        let mut oi = out.chunks_exact_mut(n);
+        for (((mc, ac), bc), oc) in (&mut mi).zip(&mut ai).zip(&mut bi).zip(&mut oi) {
+            let mask_canon: Vec<i32> = mc.iter().map(|&m| if m != 0 { -1 } else { 0 }).collect();
+            let vm = <S::mask32s as SimdMask<S>>::from_slice(simd, &mask_canon);
+            let va = <S::i32s as SimdBase<S>>::from_slice(simd, ac);
+            let vb = <S::i32s as SimdBase<S>>::from_slice(simd, bc);
+            ops::simd::select_i32::<S>(vm, va, vb).store_slice(oc);
+        }
+        for (((m, x), y), o) in mi
+            .remainder()
+            .iter()
+            .zip(ai.remainder())
+            .zip(bi.remainder())
+            .zip(oi.into_remainder())
+        {
+            *o = ops::select_i32(*m, *x, *y);
+        }
+    }
+
+    assert_eq!(mask.len(), a.len());
+    assert_eq!(a.len(), b.len());
+    let mut out = vec![0i32; a.len()];
+    let caps = Caps::detect();
+    vaco_simd::dispatch_kernel!(caps, simd => body(simd, mask, a, b, &mut out));
+    out
+}
+
 // --- proptests ----------------------------------------------------------
 
 proptest! {
@@ -400,6 +466,44 @@ proptest! {
         prop_assert_eq!(v_select(&mask, &a, &b), want);
     }
 
+    /// [`ops::select_i16`]/[`ops::simd::select_i16`]: the "wide" half of the
+    /// select story per [`testing::check_ternary_u8`]'s own doc — proptested
+    /// rather than swept exhaustively, because enumerating anything close to
+    /// `i16`'s value space the way [`testing::edge_patterns`] does for `u8`
+    /// is not practical.
+    #[test]
+    fn select_i16_agrees(triples in prop::collection::vec(any::<(i16, i16, i16)>(), 0..200)) {
+        let mut mask = Vec::new();
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for (m, x, y) in triples {
+            mask.push(m);
+            a.push(x);
+            b.push(y);
+        }
+        let want: Vec<i16> = mask.iter().zip(&a).zip(&b)
+            .map(|((&m, &x), &y)| ops::select_i16(m, x, y))
+            .collect();
+        prop_assert_eq!(v_select_i16(&mask, &a, &b), want);
+    }
+
+    /// The `i32` sibling of [`select_i16_agrees`].
+    #[test]
+    fn select_i32_agrees(triples in prop::collection::vec(any::<(i32, i32, i32)>(), 0..200)) {
+        let mut mask = Vec::new();
+        let mut a = Vec::new();
+        let mut b = Vec::new();
+        for (m, x, y) in triples {
+            mask.push(m);
+            a.push(x);
+            b.push(y);
+        }
+        let want: Vec<i32> = mask.iter().zip(&a).zip(&b)
+            .map(|((&m, &x), &y)| ops::select_i32(m, x, y))
+            .collect();
+        prop_assert_eq!(v_select_i32(&mask, &a, &b), want);
+    }
+
     #[test]
     fn abs_i16_agrees(a in prop::collection::vec(any::<i16>(), 0..200)) {
         let want: Vec<i16> = a.iter().map(|&x| ops::abs_i16(x)).collect();
@@ -479,4 +583,49 @@ fn abs_of_min_passes_through() {
     assert_eq!(ops::abs_i32(i32::MIN), i32::MIN);
     assert_eq!(v_abs_i16(&[i16::MIN; 64]), vec![i16::MIN; 64]);
     assert_eq!(v_abs_i32(&[i32::MIN; 64]), vec![i32::MIN; 64]);
+}
+
+/// `select_i16`/`select_i32`'s oracle contract is "any nonzero mask lane
+/// means true" (`ops::select_i16`'s own doc) — deliberately looser than
+/// `!0`, the only value a real `simd_lt`/`simd_eq` ever produces. `i16::MIN`
+/// is the extreme case: every bit set except the sign-adjacent ones, still
+/// unambiguously nonzero. Length 64 forces the full-vector path (not just
+/// the scalar tail) on every tier this crate targets, since the widest
+/// native `i16`/`i32` lane count here is 32/16 (AVX-512).
+#[test]
+fn select_i16_mask_min_is_treated_as_true() {
+    let mask = vec![i16::MIN; 64];
+    let a = vec![7i16; 64];
+    let b = vec![9i16; 64];
+    assert_eq!(v_select_i16(&mask, &a, &b), vec![7i16; 64]);
+}
+
+/// The `i32` sibling of [`select_i16_mask_min_is_treated_as_true`].
+#[test]
+fn select_i32_mask_min_is_treated_as_true() {
+    let mask = vec![i32::MIN; 64];
+    let a = vec![7i32; 64];
+    let b = vec![9i32; 64];
+    assert_eq!(v_select_i32(&mask, &a, &b), vec![7i32; 64]);
+}
+
+/// The all-zero-mask and all-canonical-true-mask extremes, at full-vector
+/// width, for both new widths — the two cases every backend is most likely
+/// to special-case and therefore the two most worth pinning explicitly
+/// rather than trusting proptest to sample them.
+#[test]
+fn select_i16_extremes() {
+    let a = vec![1i16; 64];
+    let b = vec![2i16; 64];
+    assert_eq!(v_select_i16(&[0i16; 64], &a, &b), b, "all-false mask");
+    assert_eq!(v_select_i16(&[-1i16; 64], &a, &b), a, "all-true mask");
+}
+
+/// The `i32` sibling of [`select_i16_extremes`].
+#[test]
+fn select_i32_extremes() {
+    let a = vec![1i32; 64];
+    let b = vec![2i32; 64];
+    assert_eq!(v_select_i32(&[0i32; 64], &a, &b), b, "all-false mask");
+    assert_eq!(v_select_i32(&[-1i32; 64], &a, &b), a, "all-true mask");
 }

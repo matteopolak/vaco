@@ -153,3 +153,63 @@ where
         }
     }
 }
+
+/// The ternary form of [`check_binary_u8`]/[`check_unary_u8`]: a
+/// masked-lane-select shape — `(mask, a, b) -> out` — run over the full edge
+/// sweep and demanded bit-identical against its scalar reference.
+///
+/// This is the driver `vaco-codec-dsp-deblock`'s own module doc named as
+/// missing (a "ternary check driver in testing"): before this existed,
+/// `select_u8`'s own edge-corpus test hand-rolled this exact sweep inline
+/// rather than reaching for a shared driver the way every binary and unary
+/// op already could.
+///
+/// `mask`, `a` and `b` are all drawn from [`edge_patterns`] for the same
+/// `len`, crossed three ways rather than [`check_binary_u8`]'s two so a
+/// select kernel is exercised against a genuinely mixed mask (not only the
+/// all-zero/all-`FF` extremes) crossed with two independently-varying
+/// operands.
+///
+/// This driver is `u8`-shaped because [`edge_patterns`] is: it is the
+/// **narrow**-width half of a select primitive's own test story (the wide
+/// `i16`/`i32` widths are proptested instead — enumerating anything close to
+/// their value space is not practical the way it is for a byte). See
+/// `tests/ops_agree.rs`'s `select_u8`/`select_i16`/`select_i32` tests for
+/// both halves side by side.
+///
+/// # Panics
+///
+/// Panics with the failing length, pattern index and lane on any divergence.
+pub fn check_ternary_u8<V, F>(name: &str, vector: V, scalar: F)
+where
+    V: Fn(&[u8], &[u8], &[u8]) -> Vec<u8>,
+    F: Fn(u8, u8, u8) -> u8,
+{
+    for len in EDGE_LENGTHS {
+        let pats = edge_patterns(len);
+        let n = pats.len();
+        for i in 0..n {
+            for j in [i, n - 1 - i, (i + 1) % n] {
+                for k in [n - 1 - i, (i + 2) % n] {
+                    let (Some(mask), Some(a), Some(b)) =
+                        (pats.get(i), pats.get(j), pats.get(k))
+                    else {
+                        // `i`, `j` and `k` are all constructed from `0..n`
+                        // modulo/subtraction arithmetic above, so this is
+                        // unreachable; the `else` exists only so the lookup
+                        // never needs an `unwrap` or indexing.
+                        continue;
+                    };
+                    let got = vector(mask, a, b);
+                    let want: Vec<u8> = mask
+                        .iter()
+                        .zip(a)
+                        .zip(b)
+                        .map(|((&m, &x), &y)| scalar(m, x, y))
+                        .collect();
+                    assert_lanes_eq(&got, &want, &format!("{name} len={len} pat=({i},{j},{k})"));
+                }
+            }
+        }
+    }
+}

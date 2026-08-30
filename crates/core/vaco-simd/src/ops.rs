@@ -24,6 +24,28 @@
 //! when the substrate grows the operation natively. `kernel!` — the substrate's
 //! escape hatch to raw intrinsics — expands `unsafe` into the calling crate and
 //! is therefore closed to us (D12 addendum), so composition is the only route.
+//!
+//! # Masked-lane select, and what feeds it
+//!
+//! [`select_u8`]/[`simd::select_u8`] and their `i16`/`i32` siblings
+//! ([`select_i16`], [`select_i32`], [`simd::select_i16`], [`simd::select_i32`])
+//! close `vaco-codec-dsp-deblock`'s own recorded blocker: a per-sample filter
+//! decision computes every candidate result unconditionally, then picks one
+//! per lane from a comparison-derived mask, and that pick is what these
+//! functions are. None of the three widths is a composition — `fearless_simd`
+//! already provides `Select` generically over `SimdBase::Mask`, so this is a
+//! one-line pass rather than a bitwise blend — they are named here anyway so
+//! a kernel body reaches select under this crate's own vocabulary, matching
+//! every other entry in this module.
+//!
+//! The masks themselves also need no composition: `SimdBase::simd_lt`,
+//! `simd_le`, `simd_ge`, `simd_gt` and `simd_eq` are generic over lane width
+//! already (unlike the substrate's *comparison* methods reachable through the
+//! `Simd` level token directly, which are per concrete fixed-width type, e.g.
+//! `simd_lt_i16x8` — the same duplication [`simd::pack_u8_from_i16x8`]'s own
+//! doc explains). A kernel body compares `S::i16s` values with
+//! `a.simd_lt(b)` and feeds the resulting `S::mask16s` straight to
+//! [`simd::select_i16`]; there is nothing in that path left to add here.
 
 /// Unsigned saturating add: `min(a, !b) + b`. 3 operations.
 #[must_use]
@@ -170,8 +192,31 @@ pub const fn transpose4x4_i32(m: [[i32; 4]; 4]) -> [[i32; 4]; 4] {
 /// `mask` need not be canonical (`0`/`0xFF`) here — only [`simd::select_u8`]'s
 /// substrate-level input has that requirement, and this oracle exists
 /// precisely so a caller can hand it whatever the mask actually is.
+///
+/// See [`select_i16`]/[`select_i32`] for the same shape at the widths
+/// deblocking's own widened sample differences and threshold comparisons
+/// actually need — `select_u8` alone only covers the final `u8` output pack.
 #[must_use]
 pub const fn select_u8(mask: u8, a: u8, b: u8) -> u8 {
+    if mask != 0 { a } else { b }
+}
+
+/// Scalar reference for the masked-lane-select row op ([`simd::select_i16`]):
+/// pick `a` where `mask` is nonzero, else `b`. Same contract as
+/// [`select_u8`], on `i16` lanes — the width a per-sample deblocking decision
+/// (`|p1-p0| < beta`, `bs == 4`, and the like) actually compares at, once the
+/// `u8` samples are widened.
+#[must_use]
+pub const fn select_i16(mask: i16, a: i16, b: i16) -> i16 {
+    if mask != 0 { a } else { b }
+}
+
+/// Scalar reference for the masked-lane-select row op ([`simd::select_i32`]):
+/// pick `a` where `mask` is nonzero, else `b`. Same contract as
+/// [`select_u8`], on `i32` lanes — for a kernel that accumulates wider than
+/// deblocking's own 8-bit-depth arithmetic needs.
+#[must_use]
+pub const fn select_i32(mask: i32, a: i32, b: i32) -> i32 {
     if mask != 0 { a } else { b }
 }
 
@@ -423,6 +468,43 @@ pub mod simd {
     /// before crossing into this function, not after.
     #[inline(always)]
     pub fn select_u8<S: Lanes>(mask: S::mask8s, a: S::u8s, b: S::u8s) -> S::u8s {
+        mask.select(a, b)
+    }
+
+    /// Lanewise select at native width on `i16` lanes: pick `a` where `mask`
+    /// is true, else `b`.
+    ///
+    /// **Not a composition, same as [`select_u8`].** `S::mask16s`
+    /// implements `Select<S::i16s>` via the identical substrate guarantee
+    /// (`SimdBase::Mask: Select<Self>`) that made `select_u8` a one-line
+    /// pass-through rather than a bitwise blend — there is no gap here
+    /// either. It is named under this crate's own vocabulary for the same
+    /// reason `select_u8` is: so a kernel body reaches it without importing
+    /// `fearless_simd::Select` directly, and so the mask-producing
+    /// comparisons a deblocking-shaped decision needs (`simd_lt`/`simd_eq`
+    /// on `S::i16s`, already generic in the substrate — see the crate docs)
+    /// have a same-vocabulary sibling to feed.
+    ///
+    /// This is the width deblocking's own per-sample decisions actually
+    /// need: `p0..p3`/`q0..q3` widened from `u8` to `i16`, `α`/`β`/`tC0`
+    /// broadcast to `i16`, and the `|p1-p0| < β`-shaped comparisons that
+    /// gate which of two unconditionally-computed candidates survives per
+    /// lane.
+    ///
+    /// `mask` must be canonical (every lane exactly `0` or `!0`), the same
+    /// requirement [`select_u8`] documents — a real `simd_lt`/`simd_eq`
+    /// already produces that shape. [`crate::ops::select_i16`] is the scalar
+    /// oracle and does not share that requirement.
+    #[inline(always)]
+    pub fn select_i16<S: Lanes>(mask: S::mask16s, a: S::i16s, b: S::i16s) -> S::i16s {
+        mask.select(a, b)
+    }
+
+    /// Lanewise select at native width on `i32` lanes. Same shape and same
+    /// "no gap" reasoning as [`select_i16`], for a kernel that accumulates
+    /// wider than deblocking's own 8-bit-depth arithmetic needs.
+    #[inline(always)]
+    pub fn select_i32<S: Lanes>(mask: S::mask32s, a: S::i32s, b: S::i32s) -> S::i32s {
         mask.select(a, b)
     }
 

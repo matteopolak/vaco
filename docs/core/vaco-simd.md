@@ -94,13 +94,42 @@ and every bit position.
 Plan 11 §5.4 rule 5 applies: anything in the gap table is called through `ops`, never open-coded. One
 composition, one place to fix, one place to *delete* when the substrate grows the operation.
 
+### Masked-lane select
+
+`select_u8`/`select_i16`/`select_i32` (and their `simd::` siblings) are the one entry in `ops` that is
+not a composition: `fearless_simd` already provides `Select` generically over `SimdBase::Mask` at
+every lane width, so each is a one-line pass-through, named here so a kernel body reaches it under
+this crate's own vocabulary instead of importing `fearless_simd::Select` directly. `select_u8` was
+`#127`'s own spike; `select_i16`/`select_i32` closed `#619` — `vaco-codec-dsp-deblock`'s own recorded
+blocker, which needed the widths its per-sample filter decisions actually compare at (`i16`/`i32`
+sample differences against `α`/`β`/`tC0`), not just the `u8` output width `select_u8` alone covers.
+
+The masks themselves need no composition either: `SimdBase::simd_lt`/`simd_le`/`simd_ge`/`simd_gt`/
+`simd_eq` are already generic over native width (unlike the substrate's per-concrete-fixed-width
+comparison methods reachable through the `Simd` level token, e.g. `simd_lt_i16x8` — the same
+duplication `pack_u8_from_i16x8` hits). A kernel compares `S::i16s` values with `a.simd_lt(b)` and
+feeds the resulting `S::mask16s` straight to `ops::simd::select_i16`.
+
+Measured (`docs/core/simd-adoption-measurements.md`, Group 7): `select_u8` ≈0.10x scalar,
+`select_i16` ≈0.19x, `select_i32` ≈0.43x — all three beat the branchy scalar loop cleanly, 5/5
+independent runs, essentially zero variance. This is a real win on its own, not only an unblocker.
+
 ### Testing
 
 `testing` is a normal (not `cfg(test)`) module so every kernel crate gets the harness for free, and
 so `vaco-checkasm` and the per-crate proptests exercise the same corpus. `check_binary_u8` and
-`check_unary_u8` sweep the edge corpus; `assert_lanes_eq` reports the first differing lane.
-`assert_close` exists for float kernels only — **integer kernels must be bit-identical**, and any use
-of a tolerance must state and justify it.
+`check_unary_u8` sweep the edge corpus for binary/unary lane-wise ops; `check_ternary_u8` is the same
+shape for a masked-lane-select-shaped `(mask, a, b) -> out` op — `select_u8`'s own edge-corpus test
+used to hand-roll this sweep inline before `check_ternary_u8` existed. `assert_lanes_eq` reports the
+first differing lane. `assert_close` exists for float kernels only — **integer kernels must be
+bit-identical**, and any use of a tolerance must state and justify it.
+
+Only `u8` gets an exhaustive-style edge-corpus driver (`edge_patterns` is byte-oriented, so it is the
+practical width to enumerate). `select_i16`/`select_i32` are proptested instead
+(`tests/ops_agree.rs`) — enumerating anything close to `i16`'s or `i32`'s value space is not
+practical, and proptest's shrinking gives a minimal failing case if one ever turns up. Pinned unit
+tests cover the extremes (`0`, `!0`, and the non-canonical-but-nonzero `MIN`) at full native-vector
+width on top of the random sweep.
 
 ## How to change it
 
