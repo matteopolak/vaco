@@ -11,7 +11,16 @@
 //! * position tracks the model exactly, after every operation;
 //! * bytes read are the bytes at that position in the source;
 //! * `peek` returns the bytes at the current position and does not move it;
-//! * a forward-only source refuses backward seeks rather than lying about them.
+//! * a forward-only source refuses backward seeks rather than lying about them;
+//! * a seek past the end is legal (a file allows it too) and leaves the
+//!   position wherever it actually landed, which can be past `data.len()` —
+//!   the model's cursor is **not** bounded by the source's length, only by
+//!   what a later read is allowed to hand back;
+//! * once the position is at or past the end, a read or peek reports EOF
+//!   (zero bytes) rather than returning phantom data or panicking;
+//! * `skip(n)` is all-or-nothing: it either lands exactly `n` bytes ahead of
+//!   where it started, or fails leaving the model to resynchronise from
+//!   `io.pos()` — never a silent short skip.
 //! fuzz-crate: vaco-io
 #![no_main]
 
@@ -86,6 +95,11 @@ fuzz_target!(|script: Script| {
                     io.read_partial(&mut buf).ok()
                 };
                 match got {
+                    Some(0) => {
+                        // A zero-length read is always fine, including at a
+                        // position past `data.len()` reached by a past-EOF
+                        // seek/skip — there is nothing to compare against.
+                    }
                     Some(n) => {
                         assert!(pos + n <= data.len(), "read past the end of the source");
                         assert_eq!(&buf[..n], &data[pos..pos + n], "wrong bytes at {pos}");
@@ -102,31 +116,51 @@ fuzz_target!(|script: Script| {
                 let want = usize::from(*n).min(MAX_LEN);
                 let before = io.pos();
                 if let Ok(seen) = io.peek(want) {
-                    let end = (pos + want).min(data.len());
-                    assert_eq!(seen, &data[pos..end], "peek returned the wrong bytes");
+                    // `pos` can be past `data.len()` after a past-EOF
+                    // seek/skip; clamp both ends so the range stays valid and
+                    // degenerates to empty exactly where a real peek would.
+                    let start = pos.min(data.len());
+                    let end = (start + want).min(data.len());
+                    assert_eq!(seen, &data[start..end], "peek returned the wrong bytes");
                 }
                 assert_eq!(io.pos(), before, "peek moved the position");
             }
             Op::Seek(target) => {
-                let target = u64::from(*target).min(data.len() as u64);
+                // Deliberately *not* clamped to `data.len()`: a seek past the
+                // end must be legal (that is Defect 1 this target exists to
+                // catch), so exercising only in-bounds targets would leave
+                // that path permanently unfuzzed.
+                let target = u64::from(*target);
                 match io.seek(target) {
                     Ok(at) => pos = at as usize,
                     Err(_) => {
-                        // The only legitimate refusal is a backward seek on a
-                        // source that cannot seek.
-                        assert_eq!(
-                            seekability,
-                            Seekability::None,
-                            "a seekable source refused a seek to {target}"
+                        // Two ways a seek can legitimately fail:
+                        // - a backward seek on a forward-only source, or
+                        // - a forward hop under the short-seek threshold that
+                        //   the buffer serves as read-and-discard, which hits
+                        //   real EOF before covering the distance (possible
+                        //   for `Expensive`, whose threshold is generous, and
+                        //   for `None`, which always uses this path). `Cheap`
+                        //   never takes it: its threshold is zero, so any
+                        //   forward hop goes straight to a transport seek,
+                        //   which this source never fails.
+                        let past_real_eof = target > data.len() as u64;
+                        assert!(
+                            (seekability == Seekability::None && target < pos as u64)
+                                || past_real_eof
+                                || io.error().is_some(),
+                            "seek to {target} refused unexpectedly (pos={pos}, kind={seekability:?})"
                         );
-                        assert!(target < pos as u64 || io.error().is_some());
+                        pos = io.pos() as usize;
                     }
                 }
             }
             Op::Skip(n) => {
                 if io.skip(u64::from(*n)).is_ok() {
+                    // `skip`'s contract is exactly `n` or an error (Defect 2):
+                    // no clamping, so the model's cursor can legitimately end
+                    // up past `data.len()` here, same as after `Op::Seek`.
                     pos += usize::from(*n);
-                    assert!(pos <= data.len());
                 } else {
                     pos = io.pos() as usize;
                 }
@@ -161,6 +195,21 @@ fuzz_target!(|script: Script| {
             }
         }
         assert_eq!(io.pos(), pos as u64, "position diverged after {op:?}");
-        assert!(pos <= data.len(), "position ran past the source");
+        // The model's cursor is allowed past `data.len()` now — a past-EOF
+        // seek or skip is legal, exactly like `lseek` on a real file. What
+        // must hold is the thing that actually matters: a read from there
+        // reports EOF (zero bytes, no panic, no phantom data) rather than
+        // whatever `assert!(pos <= data.len())` used to stand in for.
+        if pos >= data.len() {
+            let mut probe = [0u8; 1];
+            if let Ok(n) = io.read_partial(&mut probe) {
+                assert_eq!(n, 0, "read past EOF returned data that does not exist");
+            }
+            assert_eq!(
+                io.pos(),
+                pos as u64,
+                "a zero-byte EOF read must not move the position"
+            );
+        }
     }
 });
