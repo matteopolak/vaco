@@ -917,3 +917,225 @@ settings — B-frames, CABAC, 3 references) at 322x242 and 1024x576. All four: `
 **No commit this round.** The re-measured profile above is the useful output; the attempt is
 recorded as a sixth negative result in this document's own series (after round 2's three
 interpolation attempts, the deblocking-kernel/chroma-fast-path pair in §10/§11, and now this one).
+
+## 20. Frame threading — landed, byte-exact, and the fixtures have no B frames
+
+The first threading pass on the H.264 decoder. `-threads N` is plumbed end to
+end and several pictures now decode concurrently; **output is bit-identical to
+the single-threaded decoder at every thread count**, and threading is **off by
+default**. Design, determinism argument and memory accounting:
+`docs/codec/frame-threading.md`.
+
+### The design, in one paragraph, and the DPB decision
+
+`H264Decoder` splits into a serial half (`split_packet`: parse, CABAC, the DPB,
+reference lists, clause 8.2.5 marking, POC, every output-ordering decision) and
+a parallel half (`H264FrameTask`: clause 8.4/8.5 reconstruction, clause 8.7
+deblocking, the crop into a `Frame`). **The DPB stays entirely on the
+coordinating thread** — the brief's own preferred option, and it costs nothing,
+because the DPB's *bookkeeping* (POC, `frame_num`, the per-4x4 motion field
+`ColocatedField` reads) is final the moment a slice is entropy-decoded, while
+only its *samples* need waiting for. Splitting a DPB entry along that line is
+what lets the serial half run arbitrarily far ahead of the pixels without
+sharing a single mutable byte. Determinism comes from two mechanisms and no
+`unsafe`: `FrameRunner::collect` returns results in **dispatch order**, so every
+ordering decision is applied in decode order; and `ProgressPicture` publishes a
+band by *moving* it into a `OnceLock`, so a task cannot read a sample that has
+not been written — `PictureWriter` is neither `Sync` nor `Clone`, `PictureRef`
+is read-only, and the compiler is what rules out the race.
+
+### Measured — interleaved, alternating start order, wall clock, median of 5–6 independent launches
+
+4K 75-frame `uhd.mp4`, decode to rawvideo:
+
+| threads | median | speedup |
+|---:|---:|---:|
+| 1 | 7.694s | 1.00x |
+| 2 | 6.278s | 1.23x |
+| 4 | 6.087s | 1.26x |
+| 8 | 5.908s | 1.30x |
+
+1080p 360-frame stock-`libx264` B-pyramid clip (`-c:v libx264` with every
+default: `bframes=3`, `b_pyramid=normal`, `ref=3`):
+
+| threads | median | speedup |
+|---:|---:|---:|
+| 1 | 10.977s | 1.00x |
+| 2 | 6.164s | 1.78x |
+| 4 | 5.490s | 2.00x |
+| 8 | 5.525s | 1.99x |
+
+Same-session, same-harness comparison against ffmpeg (6 interleaved rounds,
+four commands rotated per round):
+
+| fixture | vaco -threads 1 | vaco -threads 4 | ffmpeg -threads 1 | ffmpeg default |
+|---|---:|---:|---:|---:|
+| `uhd.mp4` (4K, all-P) | 8.133s | 6.687s | 0.705s | 0.189s |
+| B-pyramid 1080p | 10.316s | 5.019s | 0.839s | 0.220s |
+
+So against **`ffmpeg -threads 1`**: 11.54x on the 4K clip (9.49x with
+`-threads 4`), 12.29x on the B clip (5.98x with `-threads 4`). Against
+**default-threaded ffmpeg**: 43.0x → 35.4x on the 4K clip, 47.0x → 22.8x on the
+B clip. On B-frame content frame threading closes roughly half the gap to
+default ffmpeg; on the 4K clip it closes almost none.
+
+### CPU utilisation, which is the direct measure of what was achieved
+
+`/usr/bin/time -l`, same two fixtures, one launch each, on the binary as it
+stood *before* the macroblock array was charged — which is deliberate: the RSS
+column is the evidence for that finding, and charging the array does not change
+what is allocated, only what is counted.
+
+| threads | 4K all-P: wall / CPU / peak RSS | B-pyramid: wall / CPU / peak RSS |
+|---:|---|---|
+| 1 | 7.55s / 99% / 2854 MiB | 10.51s / 99% / 990 MiB |
+| 2 | 5.95s / 130% / 2858 MiB | 6.11s / 180% / 1021 MiB |
+| 4 | 6.02s / **129%** / 3237 MiB | 5.05s / 217% / 1067 MiB |
+| 8 | 6.12s / **129%** / 3321 MiB | 4.77s / **219%** / 1145 MiB |
+
+**On the all-P fixture CPU flatlines at 129% at every thread count above one.**
+That is 1.3 cores busy no matter how many threads are offered, which is the
+two-stage pipeline stated as a measurement rather than as an inference: there is
+one picture's reconstruction running and one picture's entropy decode running,
+and nothing else can run because nothing else is unblocked. The B-pyramid clip
+reaches 2.2 cores and saturates there, which is the parallelism a `bframes=3`
+`b_pyramid=normal` GOP actually contains at picture granularity.
+
+### Why those two rows differ, and it is not a bug
+
+**Neither of this project's two large H.264 fixtures contains a single B
+frame.** Measured with `ffprobe -show_entries frame=pict_type`:
+
+| fixture | I | P | B |
+|---|---:|---:|---:|
+| `uhd.mp4` (4K, 75 frames) | 1 | 74 | 0 |
+| `big.mkv` (1080p, 1800 frames) | 8 | 1792 | 0 |
+| fresh stock `libx264` 1024x576 | 1 | 21 | 28 |
+
+An all-P stream is a serial dependency chain: picture `N + 1` predicts from
+picture `N` and nothing else. At **picture** granularity — which is what this
+change implements — there is therefore *no* picture-level parallelism to find
+on either large fixture, and the only overlap available is the serial half's
+work against the parallel half's, a two-stage pipeline whose ceiling is
+`1 / (1 - serial_fraction)`. §19's profile puts the serial half (entropy
+decoding plus packet handling) at roughly 13%, predicting ~1.15x; measured
+1.23–1.30x. The implementation is at its design's ceiling on that content, and
+the design is the limit.
+
+**Which means ffmpeg's ~3.7x on the same file (0.705s → 0.189s, measured this
+session) is entirely *row*-level frame threading**, not picture-level: its
+picture `N + 1` starts reconstructing as soon as picture `N` has published
+enough rows to cover the motion-vector reach. That is a specific, measured
+correction to the brief's framing — "vaco decodes single-threaded, ffmpeg gains
+3.5x from frame threading" is true, but the 3.5x is unreachable by any amount of
+whole-picture concurrency on this fixture.
+
+### What row granularity needs, and why it was not folded into this change
+
+The band machinery already supports it (`PictureSpec::with_band_height`/
+`with_guard`, `publish_through` per band, `PlaneView::block`'s guard-row fast
+path). Two things have to happen first:
+
+1. **Deblocking must become incremental.** `deblock_picture_luma`/`_chroma` are
+   whole-picture passes; a row of macroblock row `r - 1` is only final once
+   macroblock row `r`'s top-edge filtering has run, so publication has to come
+   from an interleaved reconstruct-then-deblock loop.
+2. **Reference reads must become block reads.** A banded plane is not one
+   allocation, so `sample_luma_block` and `predict_chroma_inter` cannot keep
+   taking a flat `&[u8]` — they would fetch a `BlockRef` per partition. Those
+   are §19's 15.87% and 9.87% leaves, i.e. the two hottest functions in the
+   decoder, and this document already records **five** reverted attempts at
+   changing loops of exactly that shape. Landing that rewrite in the same
+   commit as the threading scaffolding would have made a regression in either
+   one unbisectable against the other.
+
+Safe Rust is *not* the obstacle. Contiguity and progressive publication are
+genuinely incompatible under ordinary borrow rules — a writer cannot hold `&mut`
+to rows above `R` while a reader holds `&` to rows below `R` of the same
+allocation — which is precisely what `ProgressPicture`'s bands exist to solve,
+and they solve it. The cost is that a banded plane forces the reader onto a
+block API, and that reader is the hot loop. No design here needed `unsafe`, and
+none was written; `cargo xtask unsafe-audit` reports clean.
+
+### Byte-exactness, at every thread count
+
+`ffmpeg -v error -i F -map 0:v:0 -f rawvideo -pix_fmt yuv420p - | shasum -a 256`
+against `vaco -threads N -i F -map 0:v:0 -c:v rawvideo -f rawvideo - | shasum
+-a 256`, N ∈ {1, 2, 4, 8}, on five fixtures: `uhd.mp4`, `big.mkv`, the two fresh
+stock-`libx264` encodes (322x242 and 1024x576) and the new B-pyramid 1080p clip.
+Every hash matched ffmpeg's. `-threads 0` and `-threads 64` also match;
+`-threads abc` is rejected with the reference's own wording.
+
+`big.mkv` — 1800 frames, the best race detector in the corpus — was run **45
+times: at least ten at each of 1, 2, 4 and 8 threads**, across three successive
+binaries as the change landed. No run ever produced a different hash, and every
+one matched ffmpeg's.
+
+Three assertions were also added to the repository so this does not depend on a
+shell script being re-run (`crates/codec/vaco-codec-h264/tests/frame_threading.rs`):
+output invariance at 1/2/3/4/8 threads over a P-only, a B-slice and a
+multi-reference fixture; no leaked per-picture budget charge at any thread
+count; and a budget too small for the thread count costing speed rather than the
+decode. Each was checked by making the corresponding bug on purpose and
+confirming the test fails — the leak ceiling in particular started at 4 MiB,
+which caught one of the two leaks and silently passed the other.
+
+### Recommendation on the default: leave it off, with three named conditions
+
+Not because it is wrong. It is byte-exact everywhere it was checked, it never
+lost a round at any thread count on any fixture, and on stock-`libx264` content
+it is a 2x win. Three specific things should be true before it becomes implicit,
+and none of them is "more confidence":
+
+1. **Row granularity should land first.** Both large fixtures are serial P
+   chains, where the current answer is ~1.25x. Flipping the default now banks
+   that number on the content shape that matters most here, and sets the
+   expectation, before the mechanism that actually addresses it exists.
+2. **The task's budget charge should be exact, not a 2x over-estimate.** A
+   default thread count multiplies the footprint by `threads + 1`, and a
+   deliberately conservative per-picture charge is fine while the feature is
+   opt-in and wrong once it is not — at 4K with 8 threads it is already ~223 MB
+   of charge against `Limits::permissive()`'s 1 GiB, and 8K would not fit.
+3. **The count itself must not be `ncores`.** A machine-dependent default makes
+   the memory ceiling machine-dependent too, and this decoder's whole claim is
+   that its output does not depend on the machine. A fixed small bound —
+   `min(ncores, 4)`, where the measured curve has already flattened on both
+   fixtures — keeps the claim and takes almost all of the win.
+
+### The memory finding, which was not where the type names said it would be
+
+The per-picture accounting first charged the two things that look expensive: the
+coded sample planes (12.4 MB at 4K) and the cropped output frame (about the
+same). The thing that actually dominates is `SliceStats::macroblocks` —
+`MbSummary` is **1,888 bytes**, and a 4K picture has 32,400 macroblocks, so the
+array is **59 MiB**, five times the two sample buffers put together. Every
+macroblock carries its full residual and its sixteen 4x4 motion blocks.
+
+It had never been charged to any budget (a plain `Vec::push` inside
+`decode_slice_cabac`), which cost nothing while it lived for one `send_packet`
+call and costs `threads + 1` copies of it once a task holds one. The RSS column
+above is the evidence: 2854 MiB at one thread to 3321 MiB at eight, and 8 x 59
+MiB is 472 MiB of that ~470 MiB difference. It is charged now.
+
+Charging it honestly then created a second problem worth recording, because the
+shape recurs: at 4K, `-threads 8`'s nine-picture window is ~756 MiB against
+`Limits::permissive`'s 1 GiB. It fits by margin, not by design, and 8K or a
+tighter `-max_alloc` would not. The failure that produces is the wrong shape — a
+thread count that silently also means "and do not decode large pictures". So
+`split_packet` now finishes pictures until the next one's charge fits, before
+allocating anything for it: **memory pressure is backpressure, not a failed
+decode**, and `-threads N` is an upper bound on concurrency rather than a
+demand. This is the same rule `vaco-sched`'s wires already encode ("a full wire
+does not block its producer; it makes the producer unrunnable", and the
+empty-wire clause underneath it): never let the mechanism that exists to bound
+memory be the thing that stops the pipeline.
+
+### Incidental fix
+
+`fuzz/Cargo.toml`'s `codec-h264` feature did not name `vaco-codec-core` or
+`vaco-packet`, both of which `fuzz_targets/h264_decode.rs` imports, so the
+target could not build under the mandated `--no-default-features --features
+codec-h264` invocation at all — ten compile errors, not a fuzzing failure. Fixed
+locally to run the target; not committed, per this dispatch's own instruction
+that `fuzz/Cargo.toml` is not mine to commit. The next agent to touch that file
+should carry the two `dep:` entries.
