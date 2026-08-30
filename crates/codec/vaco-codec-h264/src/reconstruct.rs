@@ -765,7 +765,28 @@ fn reconstruct_inter_mb(
         let (mvx, mvy) = (i32::from(mvx), i32::from(mvy));
         let (int_dx, frac_x) = (mvx >> 2, (mvx & 3) as u32);
         let (int_dy, frac_y) = (mvy >> 2, (mvy & 3) as u32);
-        let fetch = |ax: i32, ay: i32| -> u8 {
+        // `luma_qpel_sample`'s own six-tap reach touches at most 2 samples
+        // before and 3 after (plus this 4x4 block's own 4-wide/4-tall
+        // extent) around every output pixel it computes -- clause
+        // 8.4.2.2.1's own filter support, see `interp.rs`'s own doc. When
+        // that whole reach already sits inside the reference picture (true
+        // for every macroblock that is not within a few pixels of a
+        // picture edge -- the overwhelming majority), every sample this
+        // block will ever fetch needs no edge clamping at all, so
+        // `fetch_fast` skips the two `clamp` calls [`fetch_clamped`] would
+        // otherwise run on every single sample (up to 36 per output pixel,
+        // clause 8.4.2.2.1's own `j` position). Both closures read the same
+        // bytes in the same in-bounds case -- this is a dispatch on a
+        // precomputed, per-block condition, not a change to which sample
+        // ends up at which position.
+        let x0 = x as i32 + int_dx;
+        let y0 = y as i32 + int_dy;
+        let safe = !plane.is_empty()
+            && x0 - 2 >= 0
+            && x0 + 6 < ref_width as i32
+            && y0 - 2 >= 0
+            && y0 + 6 < ref_height as i32;
+        let fetch_clamped = |ax: i32, ay: i32| -> u8 {
             if plane.is_empty() {
                 return 0;
             }
@@ -773,12 +794,21 @@ fn reconstruct_inter_mb(
             let cy = ay.clamp(0, ref_height as i32 - 1) as u32;
             plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
         };
+        let fetch_fast = |ax: i32, ay: i32| -> u8 {
+            let cx = ax as u32;
+            let cy = ay as u32;
+            plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
+        };
         let mut pred = [[0u8; 4]; 4];
         for (i, row) in pred.iter_mut().enumerate() {
             for (j, v) in row.iter_mut().enumerate() {
                 let full_x = x as i32 + j as i32 + int_dx;
                 let full_y = y as i32 + i as i32 + int_dy;
-                *v = crate::interp::luma_qpel_sample(fetch, full_x, full_y, frac_x, frac_y);
+                *v = if safe {
+                    crate::interp::luma_qpel_sample(fetch_fast, full_x, full_y, frac_x, frac_y)
+                } else {
+                    crate::interp::luma_qpel_sample(fetch_clamped, full_x, full_y, frac_x, frac_y)
+                };
             }
         }
         pred
