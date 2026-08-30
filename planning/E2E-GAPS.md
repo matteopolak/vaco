@@ -244,3 +244,58 @@ The 5-second clip above is too short to time. Re-measured on a **60-second,
 duration where process startup dominates. The useful conclusion survives —
 the I/O, demux and mux layers are not where the time goes — but "faster than
 ffmpeg" was never a real result and should not have been reported as one.
+
+## 10. Profiling loop, round 1 (samply)
+
+Baseline established on a private `--target-dir`, because a concurrent agent's
+HEVC build kept overwriting `target/release/vaco` mid-measurement. Timings are
+best-of-8 from an **interleaved** A/B that alternates baseline and candidate
+within each round; a niced fuzz sweep was running throughout, and sequential
+timing could not be trusted against it.
+
+| | best-of-8 |
+|---|---|
+| ffmpeg, default threads | 0.24s |
+| ffmpeg, `-threads 1` | 0.61s |
+| vaco, before round 1 | 6.07s |
+| vaco, after round 1 | **5.49s** |
+
+~1.11x, narrowing the single-threaded gap from 10.7x to ~9.0x. Current beat
+baseline in 8 of 8 interleaved rounds.
+
+Landed:
+- `d494531` row-wise `copy_from_slice` in place of per-pixel `set_pixel` /
+  `set_chroma_pixel` in the reconstruction loops (~3.5%).
+- `48a03cf` move the decoded residual into `MbSummary` instead of deep-cloning
+  it per macroblock; only a slice's first macroblock needs a second copy (~3%).
+- `96b020a` skip six-tap edge clamping when a 4x4 block's whole reach is
+  provably in bounds (~3%, noisier).
+
+**Negative result, reverted:** batching deblocking's per-pixel reads and writes
+into contiguous slice operations was mechanically sound, measured as a
+wash-to-slight-loss (slower in 6 of 8 rounds), and showed no drop in
+`deblock_picture_luma` self time. This is the third recorded SIMD/memory
+negative result in this repo, after `add_pixels_clamped_vector` (0.9x/0.84x,
+gated to scalar) and 2 of 8 earlier kernels lost to autovectorization.
+
+**Correctness caveat that shapes this whole loop.** The H.264 decoder's output
+is *wrong* — 13.70% of bytes differ from ffmpeg. So no optimisation here can be
+regression-checked against ffmpeg. Each round instead captures the exact output
+bytes before its first change and must reproduce them byte-for-byte. That keeps
+the optimisation honest but explicitly does **not** move correctness; the drift
+is tracked separately and is the more important defect.
+
+Remaining profile after round 1: `reconstruct_inter_mb` 21.1%,
+`reconstruct_picture` 19.0%, `deblock_picture_luma` 16.1%,
+`deblock_picture_chroma` 8.7%, `residual_block_cabac` 6.6%. Ranks 1-4 are ~65%
+of runtime and are the six-tap luma filter, the chroma filter, and deblocking
+arithmetic -- all genuine SIMD shapes, which is round 2.
+
+**Threading is not in this loop and is the larger untouched factor.** ffmpeg
+gains 2.5x from its default frame threading (0.61s to 0.24s); vaco decodes
+single-threaded. `vaco-sched` already has `Driver::with_threads`, but that is
+pipeline-stage parallelism, which buys almost nothing on a decode-bound job.
+Frame-level threading inside the decoder is a DPB-refactor-sized change and is
+deliberately deferred until the inter-prediction drift is fixed -- parallelising
+a decoder that is still producing wrong pixels would make the drift harder to
+bisect, not easier.
