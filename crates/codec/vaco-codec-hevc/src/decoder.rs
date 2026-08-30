@@ -191,30 +191,23 @@ impl HevcDecoder {
         if hdr.kind == SliceKind::B {
             return Err(Error::Unsupported("vaco-codec-hevc: B-slices are not supported"));
         }
-        // Stage 2 (P-slices) is implemented below — merge/AMVP derivation,
-        // motion compensation, the inter CABAC contexts and syntax — but is
-        // *refused* here rather than enabled: a real, reproducible defect
-        // remains in the TMVP-for-AMVP path once a slice has more than one
-        // active reference picture (`NumRefIdxL0 > 1`), which produces
-        // silently wrong (not merely imprecise) motion vectors that
-        // compound frame over frame. See `docs/codec/vaco-codec-hevc.md`'s
-        // "Stage 2: P-slices" section for the exact repro and the two bugs
-        // already found and fixed on the way here (an inferred-vs-parsed
-        // `cbf_luma` condition, and an inverted `Log2ParallelMergeLevel`
-        // MER-exclusion check). Lift this refusal only once a stock
-        // multi-reference file decodes byte-exact end to end.
-        if hdr.kind == SliceKind::P {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: P-slices are not supported yet (TMVP-for-AMVP defect, see docs)",
-            ));
-        }
-        // Stage 4 (weighted prediction) is left as an honest refusal —
-        // `pred_weight_table()` is already parsed by `vaco-parse-hevc` (a
-        // stream description has to be able to describe it), but nothing
-        // here applies the weights it carries. `libx265` does not enable
-        // `weighted_pred_flag` by default, so this does not affect a stock
-        // encode. Unreachable while the P-slice refusal above stands, kept
-        // so lifting that refusal does not require re-deriving this gate.
+        // Stage 2 (P-slices) is no longer refused here: the TMVP-for-AMVP
+        // defect this refusal used to document is fixed — see
+        // `docs/codec/vaco-codec-hevc.md`'s "Stage 2: P-slices, byte-exact"
+        // section for the root cause (the bottom-right-to-centre temporal
+        // fallback was gated on "geometrically available" instead of
+        // "yielded motion", dropping the candidate whenever the
+        // bottom-right position was in-bounds but intra) and for the
+        // deblocking gap found alongside it (a skip CU, and a merged
+        // `rqt_root_cbf == 0` CU, never marked their own left/top boundary
+        // as a filterable edge at all, since neither ever reaches the
+        // transform-tree code that used to be the only thing marking
+        // edges).
+        //
+        // Stage 4 (weighted prediction) is still left as an honest refusal
+        // below — `pred_weight_table()` is already parsed by
+        // `vaco-parse-hevc` (a stream description has to be able to
+        // describe it), but nothing here applies the weights it carries.
         if pps.weighted_pred && hdr.kind == SliceKind::P {
             return Err(Error::Unsupported("vaco-codec-hevc: weighted prediction is not supported"));
         }
