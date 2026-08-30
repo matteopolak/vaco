@@ -1,0 +1,207 @@
+//! `-threads N` must change *when* work happens and nothing else.
+//!
+//! The claim frame threading makes is that its output is bit-identical to the
+//! single-threaded decoder's, at every legal thread count, on every stream.
+//! `planning/E2E-GAPS.md` §20 records the end-to-end verification of that claim
+//! against ffmpeg's own rawvideo on five real files; this file is the part of it
+//! that lives in the repository and runs on every `cargo test`, so a regression
+//! is caught by CI rather than by somebody re-running a shell script.
+//!
+//! It compares against **the one-thread decode**, not against a stored
+//! reference: `decoder_output_matches_ffmpeg.rs` is what pins the one-thread
+//! decode to reality, and duplicating that here would only be able to fail in
+//! the same way. What this asserts is the *invariance*, which is the property
+//! threading can break and the other file cannot see.
+//!
+//! Three fixtures, chosen for their dependency shapes, because that is the axis
+//! that matters: a P-only chain (nothing may overlap but the pipeline stages), a
+//! stream with B slices (pictures genuinely decode out of display order and the
+//! reorder buffer has to hold them), and a multi-reference stream (a task waits
+//! on more than one predecessor).
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code over fixed fixtures"
+)]
+
+use vaco_bitstream::annexb;
+use vaco_codec_core::Decoder;
+use vaco_codec_h264::H264Decoder;
+use vaco_core::Error;
+use vaco_frame::{Frame, FrameData};
+use vaco_limits::{Budget, Limits};
+use vaco_packet::Packet;
+
+/// One decoded frame reduced to what a caller can observe: its timestamp and
+/// its planes' meaningful bytes, stride padding dropped so an allocator's
+/// alignment choice cannot pass for a decode difference.
+type Observable = (Option<i64>, Vec<Vec<u8>>);
+
+fn observe(frame: &Frame) -> Observable {
+    let FrameData::Video {
+        width,
+        height,
+        planes,
+        ..
+    } = &frame.data
+    else {
+        panic!("expected a video frame");
+    };
+    let packed = planes
+        .iter()
+        .enumerate()
+        .map(|(i, plane)| {
+            let (w, h) = if i == 0 {
+                (*width as usize, *height as usize)
+            } else {
+                ((*width as usize).div_ceil(2), (*height as usize).div_ceil(2))
+            };
+            let data = plane.data.as_slice();
+            let mut out = Vec::new();
+            for r in 0..h {
+                let start = r * plane.stride;
+                out.extend_from_slice(&data[start..start + w]);
+            }
+            out
+        })
+        .collect();
+    (frame.pts.ticks(), packed)
+}
+
+/// Split an Annex B elementary stream into extradata and one packet per slice,
+/// the framing a real demuxer hands `send_packet`.
+fn split(stream: &[u8]) -> (Vec<u8>, Vec<Vec<u8>>) {
+    let mut extradata = Vec::new();
+    let mut slices = Vec::new();
+    for nal in annexb::nal_units(stream) {
+        match nal.first().map(|b| b & 0x1F) {
+            Some(7 | 8) => {
+                extradata.extend_from_slice(&[0, 0, 0, 1]);
+                extradata.extend_from_slice(nal);
+            }
+            Some(1 | 5) => {
+                let mut framed = vec![0u8, 0, 0, 1];
+                framed.extend_from_slice(nal);
+                slices.push(framed);
+            }
+            _ => {}
+        }
+    }
+    (extradata, slices)
+}
+
+fn decode(stream: &[u8], threads: usize) -> Vec<Observable> {
+    let (extradata, slices) = split(stream);
+    let mut d = H264Decoder::new(Limits::permissive());
+    // Assert the path was actually taken. `set_thread_count` narrows what it
+    // grants (a target without threads clamps to one), so a test that only
+    // *asked* for eight threads and silently got a serial decoder would pass
+    // this file while proving nothing at all.
+    let granted = d.set_thread_count(threads);
+    if threads > 1 {
+        assert!(
+            matches!(granted, vaco_codec_core::Threading::Frame { .. }),
+            "asked for {threads} threads and was granted {granted:?}"
+        );
+        assert!(
+            granted.max_frames() > 1,
+            "asked for {threads} threads and was granted a single picture in flight"
+        );
+    }
+    let mut budget = Budget::new(Limits::permissive());
+    d.set_extradata(&extradata).unwrap();
+
+    let mut out = Vec::new();
+    for slice in &slices {
+        let pkt = Packet::from_slice(&mut budget, slice).unwrap();
+        loop {
+            match d.send_packet(Some(&pkt)) {
+                Ok(()) => break,
+                Err(Error::OutputPending) => out.push(observe(&d.receive_frame().unwrap())),
+                Err(e) => panic!("send_packet failed at {threads} threads: {e:?}"),
+            }
+        }
+        while let Ok(frame) = d.receive_frame() {
+            out.push(observe(&frame));
+        }
+    }
+    d.send_packet(None).unwrap();
+    loop {
+        match d.receive_frame() {
+            Ok(frame) => out.push(observe(&frame)),
+            Err(Error::Eof) => break,
+            Err(e) => panic!("drain failed at {threads} threads: {e:?}"),
+        }
+    }
+    out
+}
+
+fn assert_invariant(name: &str, stream: &[u8]) {
+    let serial = decode(stream, 1);
+    assert!(!serial.is_empty(), "{name}: the serial decode produced no frames");
+    for threads in [2, 3, 4, 8] {
+        let got = decode(stream, threads);
+        assert_eq!(
+            got.len(),
+            serial.len(),
+            "{name}: {threads} threads emitted {} frames, one thread emitted {}",
+            got.len(),
+            serial.len()
+        );
+        for (i, (a, b)) in serial.iter().zip(got.iter()).enumerate() {
+            assert_eq!(
+                a.0, b.0,
+                "{name}: frame {i} came out with pts {:?} at {threads} threads, {:?} at one \
+                 -- the reorder buffer saw a different order",
+                b.0, a.0
+            );
+            assert_eq!(
+                a.1.len(),
+                b.1.len(),
+                "{name}: frame {i} has a different plane count at {threads} threads"
+            );
+            for (p, (pa, pb)) in a.1.iter().zip(b.1.iter()).enumerate() {
+                let differing = pa.iter().zip(pb.iter()).filter(|(x, y)| x != y).count();
+                assert_eq!(
+                    differing, 0,
+                    "{name}: frame {i} plane {p} differs in {differing} of {} bytes at \
+                     {threads} threads",
+                    pa.len()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn a_p_only_chain_decodes_identically_at_every_thread_count() {
+    // Nothing here may overlap except the serial stage against the parallel
+    // one -- every picture predicts from the one before it. The interesting
+    // case for correctness even so: it is the shape where a task spends most
+    // of its life blocked in `wait_rows`.
+    assert_invariant(
+        "cabac_ip_simple",
+        include_bytes!("fixtures/cabac_ip_simple.264"),
+    );
+}
+
+#[test]
+fn b_slices_decode_identically_at_every_thread_count() {
+    // Decode order and display order genuinely differ here, so this is what
+    // would catch the reorder buffer being driven in completion order rather
+    // than in decode order.
+    assert_invariant("cabac_ipbb", include_bytes!("fixtures/cabac_ipbb.264"));
+}
+
+#[test]
+fn a_multi_reference_stream_decodes_identically_at_every_thread_count() {
+    // A task that waits on more than one predecessor, and a sliding-window DPB
+    // deep enough for an eviction to race a reader if the samples were not
+    // reference-counted.
+    assert_invariant(
+        "cabac_ip_multiref",
+        include_bytes!("fixtures/cabac_ip_multiref.264"),
+    );
+}
