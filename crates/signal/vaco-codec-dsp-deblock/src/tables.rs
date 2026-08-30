@@ -1,34 +1,21 @@
 //! Table 8-16 (`α`/`β` thresholds) and Table 8-17 (`tC0`), clause 8.7.2.2.
 //!
-//! **Transcription tier, stated plainly rather than implied**: this session
-//! looked for a primary copy of the source this crate's own provenance row
-//! (`iso-iec-14496-10-2002-draft`, `provenance/sources.toml`) claims was
-//! acquired, and found none reachable -- the one local file matching that
-//! name, in this session's own scratchpad, is a 245-byte HTTP rejection
-//! page from a failed fetch, not a spec. So this is **not** a tier-3
-//! (checked line-by-line against primary text) transcription in the sense
-//! `planning/AGENT-CONSTRAINTS.md`'s three-tier rule uses that phrase for
-//! `vaco-codec-h264`'s CAVLC tables, and it would be dishonest to label it
-//! that way.
+//! **Transcription tier**: all three tables are now checked entry by entry
+//! against a locally cloned JM 19.1 reference decoder
+//! (`provenance/sources.toml`'s `jm-reference-software`, Tier A --
+//! `source/app/ldecod/loop_filter.h`'s own `ALPHA_TABLE`, `BETA_TABLE` and
+//! `CLIP_TAB`), extracted mechanically rather than read by eye. `ALPHA_TABLE`
+//! and `BETA_TABLE` matched the previous transcription exactly. `TC0_TABLE`
+//! did **not**: 23 of its 52 rows were wrong (see that table's own doc).
 //!
-//! What it is instead: transcribed from working, extensively-documented
-//! knowledge of these exact 52-entry tables, which are unusually
-//! well-attested for a spec table -- they appear byte-for-byte identical
-//! across numerous independent, mutually-uninvolved open-source H.264
-//! implementations (their own convergent citation of the same clause, not
-//! independent derivation, so this is corroborating evidence rather than a
-//! second primary source). Backed by the structural checks this module's
-//! own tests run (non-decreasing in `indexA`/`indexB`, `TC0` non-decreasing
-//! in both `indexA` and `bS`, in-range) and, more importantly, by the
-//! actual tier this crate's caller relies on for real confidence: an
-//! end-to-end, black-box, byte-exact comparison against real `ffmpeg`
-//! output on real content (see `vaco-codec-h264::deblock`'s own tests) --
-//! the same method that has caught every wrong-table bug this whole
-//! investigation has found, and the one method that does not depend on
-//! this module's own transcription being right by construction. A future
-//! agent who does obtain a working primary copy should re-check this file
-//! against it line by line and upgrade this comment, not just believe it
-//! because the pixel comparison currently passes.
+//! The previous version of this comment said these tables were transcribed
+//! from recollection, that this was "not a tier-3 transcription", and that
+//! the real confidence came from an end-to-end pixel comparison. That was
+//! an honest description of a genuinely weak basis, and it was right to
+//! distrust: the pixel comparison was passing at 99.78% with a table that
+//! was off by one row across half its range. A near-miss whole-picture
+//! percentage is not evidence a table is right; it is evidence the wrong
+//! entries are rarely reached.
 
 /// `α` (alpha), indexed by `indexA` (clause 8.7.2.2, eq. 8-458).
 pub const ALPHA_TABLE: [u8; 52] = [
@@ -47,22 +34,23 @@ pub const BETA_TABLE: [u8; 52] = [
 /// (the strong intra filter, clause 8.7.2.4) has no `tC0` at all, a
 /// different equation entirely, not a fourth column here.
 ///
-/// `indexA == 30`'s own `bS == 3` entry was corrected from `3` to `2`
-/// after the initial transcription's own end-to-end ffmpeg comparison
-/// (see this module's own doc) found a consistent, hand-traced
-/// off-by-one in exactly the tC0-clipped branch that entry feeds --
-/// tested directly against the oracle per the "try the plausible
-/// alternate readings against the fixture" method, not re-derived from
-/// principle: this one change took `cabac_i_only.264`'s own match from
-/// 98.97% to 99.78% (18 of 25 frames now fully byte-exact, up from 2). A
-/// second bounded guess (rows 26-29's own `bS == 3` column, `2 -> 1`)
-/// made the match worse (97.63%) and was reverted -- not every
-/// plausible-looking entry is wrong, and the oracle says so quickly
-/// either way. The remaining ~0.2% mismatch (7 of 25 frames) was not
-/// chased further under this round's own time-box; see
-/// `vaco-codec-h264`'s own ignore-reason on
-/// `cabac_i_only_reconstructs_without_error_and_mostly_matches_ffmpeg`
-/// for the current, honest number.
+/// **Corrected against JM 19.1's own `CLIP_TAB`** (`loop_filter.h`, columns
+/// `1..=3` of its `[52][5]` -- its column `0` is the unused `bS == 0` slot
+/// and column `4` mirrors column `3`; `ldecod`'s `edge_loop_luma_ver`
+/// indexes it as `ClipTab[Strength]`, so column `n` is `bS == n`). The
+/// previous transcription was **off by one row for every `indexA >= 16`**
+/// -- it held `CLIP_TAB[indexA + 1]`'s values at `indexA`, plus further
+/// divergence in the top rows (`indexA >= 41`, where the correct values are
+/// not a pure shift). 23 of 52 rows differed.
+///
+/// That shift is also why the previous "oracle-guided" hand-correction of
+/// `indexA == 30`'s `bS == 3` entry (`3 -> 2`) made this table *less*
+/// correct while making one fixture's byte-match number go up: `indexA ==
+/// 30`'s correct row is `[1, 1, 2]`, and the pre-existing `[1, 2, 3]` was
+/// wrong in its *first two* columns, not its third. Fitting a single table
+/// entry to a whole-picture difference percentage can move that percentage
+/// in the right direction for the wrong reason; only an entry-by-entry
+/// check against a reference decides a table.
 pub const TC0_TABLE: [[u8; 3]; 52] = [
     [0, 0, 0],
     [0, 0, 0],
@@ -80,6 +68,7 @@ pub const TC0_TABLE: [[u8; 3]; 52] = [
     [0, 0, 0],
     [0, 0, 0],
     [0, 0, 0],
+    [0, 0, 0],
     [0, 0, 1],
     [0, 0, 1],
     [0, 0, 1],
@@ -94,7 +83,7 @@ pub const TC0_TABLE: [[u8; 3]; 52] = [
     [1, 1, 2],
     [1, 1, 2],
     [1, 1, 2],
-    [1, 2, 2],
+    [1, 2, 3],
     [1, 2, 3],
     [2, 2, 3],
     [2, 2, 4],
@@ -105,17 +94,16 @@ pub const TC0_TABLE: [[u8; 3]; 52] = [
     [3, 4, 6],
     [4, 5, 7],
     [4, 5, 8],
-    [5, 6, 9],
-    [6, 7, 10],
+    [4, 6, 9],
+    [5, 7, 10],
     [6, 8, 11],
-    [7, 9, 12],
-    [8, 10, 13],
-    [9, 12, 15],
-    [10, 13, 17],
-    [11, 16, 20],
-    [13, 18, 23],
-    [14, 20, 25],
-    [16, 23, 27],
+    [6, 8, 13],
+    [7, 10, 14],
+    [8, 11, 16],
+    [9, 12, 18],
+    [10, 13, 20],
+    [11, 15, 23],
+    [13, 17, 25],
 ];
 
 #[cfg(test)]
