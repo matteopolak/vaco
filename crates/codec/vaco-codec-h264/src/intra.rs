@@ -828,12 +828,16 @@ pub(crate) fn predict_intra8x8(mode: u8, n: Neighbours8) -> [[u8; 8]; 8] {
             }
         }
         5 => {
-            // Vertical_Right: the "very negative" branch (`z_vr < -1`)
-            // reaches `p(-1, y-3)` for `y` up to 7, i.e. `p(-1, 4)` at
-            // most -- always in range, and `p8`'s own `x==-1&&y==-1`
-            // corner case already handles the shallower end (`y == 2`)
-            // without a separate boundary check, exactly like
-            // `predict_intra4x4`'s own unconditional `else` arm.
+            // Vertical_Right, clause 8.3.2.2.5. The `zVR < -1` branch walks
+            // *up the left column* by `y - 2*x`, not by `y`: at 8x8 a
+            // position can be several columns past the diagonal, and each
+            // extra column steps the left-column index two rows further
+            // up. Dropping that `- 2*x` (as this arm did) makes every
+            // position in a row below the diagonal reuse the value the
+            // leftmost such position computed, which is why this mode
+            // failed on 33 of the 60 blocks that used it in a
+            // directional-content fixture while passing on flat content
+            // that rarely selects it.
             for (y, row) in out.iter_mut().enumerate() {
                 for (x, v) in row.iter_mut().enumerate() {
                     let (x, y) = (block8_index_to_i32(x), block8_index_to_i32(y));
@@ -845,14 +849,18 @@ pub(crate) fn predict_intra8x8(mode: u8, n: Neighbours8) -> [[u8; 8]; 8] {
                     } else if z_vr == -1 {
                         (p(-1, 0) + 2 * p(-1, -1) + p(0, -1) + 2) >> 2
                     } else {
-                        (p(-1, y - 1) + 2 * p(-1, y - 2) + p(-1, y - 3) + 2) >> 2
+                        let base = y - 2 * x;
+                        (p(-1, base - 1) + 2 * p(-1, base - 2) + p(-1, base - 3) + 2) >> 2
                     } as u8;
                 }
             }
         }
         6 => {
-            // Horizontal_Down: transpose of Vertical_Right, same "always
-            // in range" argument for its own negative branch.
+            // Horizontal_Down, clause 8.3.2.2.6: the exact transpose of
+            // Vertical_Right above, including its `zHD < -1` branch, which
+            // walks *along the top row* by `x - 2*y` rather than by `x`.
+            // Same bug, same fix, same reason it survived a flat-content
+            // fixture -- see mode 5.
             for (y, row) in out.iter_mut().enumerate() {
                 for (x, v) in row.iter_mut().enumerate() {
                     let (x, y) = (block8_index_to_i32(x), block8_index_to_i32(y));
@@ -864,7 +872,8 @@ pub(crate) fn predict_intra8x8(mode: u8, n: Neighbours8) -> [[u8; 8]; 8] {
                     } else if z_hd == -1 {
                         (p(-1, 0) + 2 * p(-1, -1) + p(0, -1) + 2) >> 2
                     } else {
-                        (p(x - 1, -1) + 2 * p(x - 2, -1) + p(x - 3, -1) + 2) >> 2
+                        let base = x - 2 * y;
+                        (p(base - 1, -1) + 2 * p(base - 2, -1) + p(base - 3, -1) + 2) >> 2
                     } as u8;
                 }
             }
