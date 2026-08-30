@@ -588,13 +588,34 @@ impl IoContext {
         self.seek(size.saturating_sub(back))
     }
 
-    /// Skip `n` bytes forward.
+    /// Skip exactly `n` bytes forward.
+    ///
+    /// [`IoContext::seek`] returns the position it actually reached, which is
+    /// not always the one asked for: a forward hop can land short at real EOF,
+    /// or short of a bounded source's own end (a `subfile:` window, say). This
+    /// contract is "exactly `n` or an error" — never a silent partial move —
+    /// because every caller in this codebase does `io.skip(n)?` and then
+    /// assumes its position advanced by precisely `n`; a container parser that
+    /// skips a chunk's declared length and gets a different landing spot would
+    /// silently misparse everything after it. Callers that legitimately want
+    /// "as far as possible" should use [`IoContext::seek`] directly and read
+    /// the position it returns.
+    ///
+    /// On failure the position is left wherever the underlying seek actually
+    /// reached (as far as it could go), mirroring [`IoContext::read_exact`]'s
+    /// partial-then-fail behaviour rather than rolling back.
     ///
     /// # Errors
-    /// As [`IoContext::seek`].
+    /// [`Error::UnexpectedEof`] if fewer than `n` bytes were available to skip.
+    /// Otherwise as [`IoContext::seek`].
     pub fn skip(&mut self, n: u64) -> Result<()> {
         let target = self.pos().saturating_add(n);
-        self.seek(target).map(|_| ())
+        let actual = self.seek(target)?;
+        if actual == target {
+            Ok(())
+        } else {
+            Err(Error::UnexpectedEof)
+        }
     }
 
     // --------------------------------------------------------------- integrity

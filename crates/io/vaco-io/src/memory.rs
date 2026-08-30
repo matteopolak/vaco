@@ -79,10 +79,16 @@ impl MediaSource for MemorySource {
             return Err(Error::NotSeekable);
         }
         // Seeking past the end is legal and yields EOF on the next read, which
-        // is what a file does.
-        self.pos = usize::try_from(pos)
-            .unwrap_or(usize::MAX)
-            .min(self.data.len());
+        // is what a file does: `lseek` past EOF succeeds, `position()` reports
+        // where it actually landed, and only a subsequent read discovers there
+        // is nothing there. Clamping here would make this source disagree with
+        // `FileSource` (whose `seek` is a bare `File::seek(SeekFrom::Start)`,
+        // never clamped) about where a demuxer ended up after an identical
+        // seek — exactly the "passes on a memory source, fails on a real file"
+        // split a test double exists to prevent. `read` and `peek` already
+        // treat `pos > data.len()` as EOF via `data.get(pos..)`, so no other
+        // change is needed here.
+        self.pos = usize::try_from(pos).unwrap_or(usize::MAX);
         Ok(self.pos as u64)
     }
 

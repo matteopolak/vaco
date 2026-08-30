@@ -172,6 +172,122 @@ fn error_is_sticky() {
     assert!(io.error().is_none());
 }
 
+// ------------------------------------------------------------- past-EOF seek
+
+// Regression coverage for the `io_buffered_reader` fuzz crash
+// (`crash-3992b5c70cae36a7e8539dde389deab9d6946703`, replayed as a seed under
+// `fuzz/seeds/io_buffered_reader/`): `MemorySource::seek` used to clamp to
+// `data.len()`, contradicting its own comment and disagreeing with
+// `FileSource` (a bare `File::seek(SeekFrom::Start)`, which a real OS never
+// clamps); and `IoContext::skip` discarded the actual position `seek`
+// returned, so a caller could not tell a full skip from a short one. Every
+// `MediaSource` kind this crate ships — `Cheap`, `Expensive`, `None` — is
+// exercised here so they cannot disagree with each other again.
+
+/// `MemorySource::seek` past the end must report where it actually landed,
+/// not clamp — matching `lseek`/`File::seek(SeekFrom::Start)`, which never
+/// clamps either. This is `MediaSource`-level, below `IoContext`.
+#[test]
+fn memory_source_seek_past_end_is_not_clamped() {
+    let mut src = MemorySource::new(vec![1, 2, 3]);
+    assert_eq!(src.seek(1_000).unwrap(), 1_000);
+    assert_eq!(src.position(), 1_000);
+    // The far-past-end position reads as EOF, not an error or stale data.
+    assert_eq!(src.read(&mut [0u8; 4]).unwrap(), 0);
+
+    let mut expensive = MemorySource::expensive(vec![1, 2, 3]);
+    assert_eq!(expensive.seek(1_000).unwrap(), 1_000);
+    assert_eq!(expensive.read(&mut [0u8; 4]).unwrap(), 0);
+}
+
+/// Every seekable `IoContext` agrees: a seek past the end lands exactly where
+/// asked, and a read from there is EOF, not clamped bytes or a panic.
+///
+/// The target is chosen past `short_seek_max` (64 KiB default) for each
+/// source, so both land via a real transport seek rather than
+/// read-and-discard — the discard path's own past-EOF behaviour (fail, don't
+/// clamp) is covered separately by the `short_skip_*`/`skip_past_end_*` tests.
+#[test]
+fn io_context_seek_past_end_lands_exactly_and_reads_eof() {
+    let far = 200_000u64;
+    for src in [
+        MemorySource::new(vec![1, 2, 3, 4, 5]),
+        MemorySource::expensive(vec![1, 2, 3, 4, 5]),
+    ] {
+        let mut io = ctx_of(src, 64);
+        assert_eq!(io.seek(far).unwrap(), far);
+        assert_eq!(io.pos(), far);
+        assert_eq!(io.read_partial(&mut [0u8; 4]).unwrap(), 0);
+        assert_eq!(io.pos(), far, "a zero-byte EOF read must not move pos");
+    }
+}
+
+/// The exact scenario from the crash artifact: an empty `Cheap` source,
+/// `skip` past the end. `skip` must either land exactly `n` past where it
+/// started or fail — never silently report success while landing short.
+#[test]
+fn skip_past_end_on_cheap_source_is_exact_or_fails() {
+    let mut io = ctx_of(MemorySource::new(Vec::new()), 8192);
+    let before = io.pos();
+    io.skip(225).unwrap();
+    assert_eq!(io.pos(), before + 225, "skip must land exactly n forward");
+    assert_eq!(io.read_partial(&mut [0u8; 1]).unwrap(), 0);
+}
+
+/// On an `Expensive` source, a short forward skip is served by
+/// read-and-discard. Past real EOF there are not enough bytes to discard, so
+/// `skip` must fail rather than pretend it moved the full distance.
+#[test]
+fn short_skip_past_end_on_expensive_source_fails_and_resyncs() {
+    let data = vec![1u8, 2, 3, 4, 5];
+    let mut io = ctx_of(MemorySource::expensive(data.clone()), 8192);
+    // `n` well under `short_seek_max` (64 KiB default), so this is the
+    // read-and-discard path, not a transport seek.
+    let err = io.skip(1_000).unwrap_err();
+    assert!(matches!(err, Error::UnexpectedEof), "{err:?}");
+    // It consumed every real byte on the way to failing, same as read_exact.
+    assert_eq!(io.pos(), data.len() as u64);
+    assert_eq!(io.read_partial(&mut [0u8; 1]).unwrap(), 0);
+}
+
+/// A long forward skip on an `Expensive` source crosses the short-seek
+/// threshold into a real transport seek, which (like a file) does not clamp:
+/// `skip` must land exactly `n` forward, past the end.
+#[test]
+fn long_skip_past_end_on_expensive_source_lands_exactly() {
+    let data = vec![1u8, 2, 3, 4, 5];
+    let mut io = ctx_of(MemorySource::expensive(data), 8192);
+    let far = 200_000; // over the 64 KiB short-seek threshold
+    io.skip(far).unwrap();
+    assert_eq!(io.pos(), far);
+    assert_eq!(io.read_partial(&mut [0u8; 1]).unwrap(), 0);
+}
+
+/// A forward-only source always serves a forward hop as read-and-discard
+/// (its short-seek threshold is `u64::MAX`), so a skip past the real end must
+/// fail there too, landing at the true end rather than lying about `n`.
+#[test]
+fn skip_past_end_on_forward_only_source_fails_and_resyncs() {
+    let data = vec![1u8, 2, 3, 4, 5];
+    let mut io = ctx_of(MemorySource::forward_only(data.clone()), 8192);
+    let err = io.skip(1_000).unwrap_err();
+    assert!(matches!(err, Error::UnexpectedEof), "{err:?}");
+    assert_eq!(io.pos(), data.len() as u64);
+}
+
+/// A forward-only source has no transport seek to fall back on — every
+/// forward hop, however requested, is read-and-discard (`short_seek_max` is
+/// `u64::MAX` for `Seekability::None`). So unlike `Cheap`/`Expensive`, this
+/// kind cannot represent a position past its real end at all: `seek` past it
+/// fails exactly like `skip` does, through the same code path.
+#[test]
+fn seek_past_end_on_forward_only_source_fails() {
+    let data = vec![1u8, 2, 3];
+    let mut io = ctx_of(MemorySource::forward_only(data), 8192);
+    let err = io.seek(1_000).unwrap_err();
+    assert!(matches!(err, Error::UnexpectedEof), "{err:?}");
+}
+
 // ------------------------------------------------------------------ properties
 
 proptest! {
