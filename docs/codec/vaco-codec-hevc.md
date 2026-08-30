@@ -12,7 +12,14 @@ per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see "Per-CU QP delta
 (`cu_qp_delta`), landed" below).
 Inter prediction, B/P-slices, tiles, I_PCM, transform-skip
 residual coding, custom scaling lists and every range-extension feature are
-explicitly out of scope — see "What was cut" below.
+explicitly out of scope — see "What was cut" below. Reference picture
+management (POC-driven reference-picture-set derivation, reference picture
+list construction and DPB output reordering) is implemented as a
+self-contained, unit-tested module (`src/dpb.rs`) ahead of the P/B-slice
+decoding it exists to support — see "Reference picture management (§8.3.2 /
+§8.3.4), landed" below for what that covers and, just as importantly, why it
+has no caller in `decoder.rs` yet: `check_scope`/`decode_packet` still refuse
+every P- and B-slice by name, unchanged from before this pass.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
 this decoder with `encumbered = true` / `default = false` behind the
@@ -186,7 +193,11 @@ length-prefixed (`hvcC`) framing are handled, via the embedded
   `cu_qp_delta` are done, see their own sections above): the corresponding
   SPS/PPS fields already correctly return `Error::Unsupported` by name in
   `check_scope` when a real stream exercises them — implement behind that
-  same call site rather than adding a new refusal path. Deblocking was the
+  same call site rather than adding a new refusal path. Reference picture
+  management (`src/dpb.rs`) is already landed for inter prediction
+  specifically — see "Reference picture management (§8.3.2 / §8.3.4),
+  landed" below for what it covers and "What remains, and why this pass
+  stopped here" for exactly where to pick it up. Deblocking was the
   one exception to the "extend behind the existing refusal" pattern, since
   it has no bitstream footprint to refuse in the first place (a silent
   pixel-only deviation, not a parse error) — its own call site is
@@ -584,6 +595,104 @@ since a stream with `cu_qp_delta_enabled_flag` clear never resets
 of a constant `qPY_PRED` with a `0` delta is that same constant.
 
 `check_scope` no longer refuses `cu_qp_delta_enabled`.
+
+## Reference picture management (§8.3.2 / §8.3.4), landed
+
+Inter prediction needs the crate to know what a reference picture *is*
+before it can decode a single motion vector against one, and until this pass
+the crate had no such notion at all — no decoded picture buffer, no
+reference picture set, no reference picture list. `src/dpb.rs` now
+implements that layer on its own, ahead of `prediction_unit()`/merge/AMVP/
+motion compensation (the rest of the P-slice stage — see "What remains, and
+why this pass stopped here" below): §8.3.2's short-term reference-picture-set
+derivation (`StCurrBefore`/`StCurrAfter`/`StFoll`, from a slice header's
+already-parsed `ShortTermRps` — `vaco-parse-hevc` owns the syntax and the
+delta-POC arithmetic of §7.4.8 already; this module only applies §8.3.2's
+picture-order-count offsets), §8.3.4's reference picture list construction
+(`RefPicListTemp0`/`RefPicListTemp1` cycling, `ref_pic_lists_modification()`
+applied on top), and a real decoded picture buffer implementing Annex C's
+informal "bumping" output-reordering process (smallest-POC-first, gated on
+`sps_max_num_reorder_pics`, `sps_max_dec_pic_buffering` and, when indicated,
+`sps_max_latency_increase_plus1`), including the IRAP
+`no_output_of_prior_pics_flag` special case and end-of-stream flush.
+
+**Long-term reference pictures are refused by name**, not approximated:
+`derive_reference_pic_sets` returns `Error::Unsupported` the moment a slice
+header names any. §7.4.7.1's `DeltaPocMsbCycleLt[i]` cumulative sum resets
+not only at `i == 0` but also at `i == num_long_term_sps` — the boundary
+between an SPS-predefined long-term entry and one a slice codes inline — and
+`vaco_parse_hevc::SliceHeader::long_term_refs` merges both sources into one
+`Vec` without recording where that second boundary falls (a deliberate
+choice in that crate — see its own module doc). Guessing at the missing
+boundary would be exactly the class of bug this crate's own history warns
+about most directly: a formula that is right whenever a stream uses only one
+source of long-term entries (the boundary is never reached) and silently
+wrong the moment one mixes both — invisible until a fixture happens to
+exercise the mixed case, the same shape as the DC-context and CTB-row-MPM
+bugs above. Long-term references are also genuinely rarer in practice than
+short-term ones; every fixture this crate has ever measured against, stock
+`libx265` output included, uses short-term references exclusively.
+
+Verified by unit test directly against the specification's own derivation
+(`dpb.rs`'s own test module), the same standard this crate's `poc.rs`/`rps.rs`
+sibling modules in `vaco-parse-hevc` are held to: reference-picture-set
+splitting by used/not-used and before/after POC, list construction with and
+without `ref_pic_lists_modification()`, temp-list cycling when more entries
+are requested than exist, DPB marking (a picture dropped from every derived
+set is removed; one kept only in `StFoll` survives), bumping triggered by
+reorder count, by DPB fullness and by `max_latency_increase` independently,
+IRAP `no_output_of_prior_pics_flag` both ways, and end-of-stream flush. This
+is a different kind of verification than this crate's usual "byte-exact
+against a real `libx265` decode" bar, deliberately: none of the above touches
+a sample or a CABAC bin, so a real-fixture comparison would not exercise the
+code any harder than a hand-derived scenario does. It also has no real-file
+verification yet for the reason the next section states.
+
+### What remains, and why this pass stopped here
+
+P-slices (`prediction_unit()` syntax, merge/AMVP candidate derivation,
+motion compensation) and B-slices (bi-prediction, combined bi-predictive
+merge candidates) are **not implemented this pass**, and `check_scope`'s
+`only I-slices are decoded` refusal in `decoder.rs` is unchanged — a stock
+`libx265` file still decodes exactly its first (I) frame and errors on the
+first P- or B-slice, the same 1-of-25 result as before this pass. That is a
+real limit, not a false modesty: every prior hard bug in this crate's own
+history (the DC-context `sig_coeff_flag` bug, the CTB-row MPM rule, WPP's
+entry-point-offset byte space) was found only by a byte-for-byte CABAC bin
+trace against a from-source HM 18.0 build, and this pass had no working HM
+binary available to it — the only prebuilt HM this environment offered
+resolved to an x86-64 Linux ELF binary that cannot execute on this crate's
+own (arm64 Darwin) development machine, and building HM from source
+natively (cloning `vcgit.hhi.fraunhofer.de`, then compiling and guarding its
+`-msse4.1` flag to x86 targets, as a previous pass did for the residual-coding
+bug) is itself a substantial undertaking. Given that, and given
+`AGENT-CONSTRAINTS.md`'s own instruction that a construct not implemented
+should be refused rather than decoded wrong, shipping `prediction_unit`
+parsing, merge/AMVP derivation or sub-pel motion compensation without any
+way to verify a single CABAC bin or filter tap against a trusted second
+implementation would risk exactly the silent, content-dependent,
+drift-compounding class of bug this crate's own history is built out of —
+so this pass landed the one layer (reference picture management) that is
+pure integer/POC arithmetic, fully verifiable by direct construction against
+the specification's own equations with no reference decoder needed at all,
+and stopped there rather than push an unverifiable CABAC/motion-compensation
+layer on top of it. The owner's "byte-exactness is a check, not the bar"
+ruling (`AGENT-CONSTRAINTS.md`) would still permit landing an imperfect
+P-slice decoder with a small, unstructured, measured deviation — but that
+ruling does not relax needing *some* trusted way to tell a small unstructured
+deviation apart from a structured bug in the first place, which is exactly
+what was missing here.
+
+A future pass picking this up should: build HM 18.0 from source first (the
+network path to `vcgit.hhi.fraunhofer.de` is reachable from this environment;
+only the prebuilt binary is the wrong architecture), confirm it runs
+natively, and only then implement `prediction_unit()`/merge/AMVP/motion
+compensation against it — reusing `dpb.rs`'s `Dpb`/`ReferencePicSets`/
+`build_ref_pic_lists` as-is, wiring `decoder.rs::decode_packet` to call
+`Dpb::apply_reference_picture_set` and `Dpb::bump_before_storing`/`store`
+around each picture's decode, and threading the resulting `RefPicList0`/
+`RefPicList1` POC values through `Dpb::reference_picture` to reach actual
+sample data for motion compensation.
 
 ## Specification
 

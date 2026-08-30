@@ -16,6 +16,14 @@
 //! ([`vaco_core::Error::Unsupported`]) rather than attempted shallowly:
 //!
 //! - **Inter prediction, B/P slices.** I-slices only.
+//!   [`dpb`]'s reference-picture management (§8.3.2 reference-picture-set
+//!   derivation, §8.3.4 reference picture list construction, and a real
+//!   decoded picture buffer with Annex C's output-reordering "bumping"
+//!   process) is implemented and unit-tested on its own terms, ahead of the
+//!   `prediction_unit`/merge/AMVP/motion-compensation work it exists to
+//!   support — see that module's own doc for what it covers and why it has
+//!   no caller in [`decoder`] yet. `check_scope`'s "only I-slices are
+//!   decoded" refusal is unchanged.
 //! - **Deblocking (§8.7.2) is implemented** — see [`deblock`]'s own module
 //!   doc for the algorithm, what it reuses from HM 18.0 (Tier A), and why
 //!   it does not reuse `vaco-codec-dsp-deblock` (a genuinely different
@@ -123,6 +131,7 @@ mod cabac_ctx;
 mod ctu;
 mod deblock;
 mod decoder;
+mod dpb;
 mod framebuf;
 mod intra_mode;
 mod intra_pred;
