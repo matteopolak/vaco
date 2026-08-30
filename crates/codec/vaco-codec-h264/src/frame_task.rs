@@ -33,15 +33,15 @@
 //! the writer and into an `OnceLock`, so a reader cannot observe a partially
 //! written one — the compiler, not a convention, is what rules out the race.
 //!
-//! This decoder publishes at **picture** granularity ([`PictureSpec::single_band`]),
-//! not row granularity, for one concrete reason: [`crate::deblock`] runs as two
-//! whole-picture passes *after* reconstruction, so no row of this picture is
-//! final until the last macroblock row has been reconstructed and both passes
-//! have swept it. Publishing rows early would publish undeblocked samples,
-//! which is not what a later picture's motion compensation must read. Moving to
-//! row granularity means interleaving deblocking into the macroblock-row loop
-//! first; the band machinery here already supports it, and switching is a
-//! change to one `PictureSpec` plus a `publish_through` call per band.
+//! Reconstruction and clause 8.7's filter are interleaved a macroblock row at a
+//! time ([`crate::reconstruct::reconstruct_picture_rows`]), with the filter one
+//! row behind, so this task learns which rows are *final* as it produces them
+//! rather than only at the end. Publication is still at **picture** granularity
+//! ([`PictureSpec::single_band`]) — the row watermark is computed and reported
+//! but not yet acted on, because a banded plane also requires the reference
+//! reads to go through [`vaco_codec_core::picture::PlaneView::block`], which is
+//! a separate change to the decoder's hot loop. See
+//! `docs/codec/frame-threading.md`.
 
 use vaco_codec_core::picture::{PictureRef, PictureWriter};
 use vaco_codec_core::{FrameTask, TaskCtx};
@@ -53,7 +53,7 @@ use vaco_pixfmt::PixFmt;
 use crate::mb::MbSummary;
 use crate::reconstruct::{
     BiPredMode, ImplicitWeights, ReconstructedPicture, RefPicturePlanes, SliceWeightTables,
-    reconstruct_picture,
+    reconstruct_picture_rows,
 };
 
 /// The slice-header knobs clause 8.7's filter reads, carried whole rather than
@@ -186,7 +186,22 @@ impl FrameTask for H264FrameTask {
             .map(|r| planes_of(ctx, r))
             .collect::<Result<Vec<_>>>()?;
 
-        let mut pic: ReconstructedPicture = reconstruct_picture(
+        // Clause 8.7's filter is `None` exactly when the slice header switched
+        // it off; otherwise it is interleaved into the macroblock-row loop
+        // below, one row behind reconstruction, so rows become final -- and
+        // publishable -- as the picture is produced rather than only at the end.
+        let deblock_ctx = (deblock.disable_idc != 1).then(|| {
+            crate::deblock::DeblockCtx::new(
+                &macroblocks,
+                mbs_wide,
+                mbs_high,
+                deblock.alpha_c0_offset_div2,
+                deblock.beta_offset_div2,
+                &ref_list0_poc,
+                &ref_list1_poc,
+            )
+        });
+        let pic: ReconstructedPicture = reconstruct_picture_rows(
             &macroblocks,
             mbs_wide,
             mbs_high,
@@ -197,39 +212,13 @@ impl FrameTask for H264FrameTask {
             &weights,
             bipred_mode,
             implicit_weights.as_ref(),
+            deblock_ctx.as_ref(),
             &mut budget,
+            &mut |_luma, _cb, _cr, _luma_rows, _chroma_rows| Ok(()),
         )?;
+        drop(deblock_ctx);
         drop(planes0);
         drop(planes1);
-
-        crate::deblock::deblock_picture_luma(
-            &mut pic.luma,
-            &macroblocks,
-            mbs_wide,
-            mbs_high,
-            deblock.disable_idc,
-            deblock.alpha_c0_offset_div2,
-            deblock.beta_offset_div2,
-            &ref_list0_poc,
-            &ref_list1_poc,
-        )?;
-        for (chroma, offset) in [
-            (&mut pic.cb, chroma_qp_offset_cb),
-            (&mut pic.cr, chroma_qp_offset_cr),
-        ] {
-            crate::deblock::deblock_picture_chroma(
-                chroma,
-                &macroblocks,
-                mbs_wide,
-                mbs_high,
-                offset,
-                deblock.disable_idc,
-                deblock.alpha_c0_offset_div2,
-                deblock.beta_offset_div2,
-                &ref_list0_poc,
-                &ref_list1_poc,
-            );
-        }
 
         // Publish before building the output frame: every picture waiting on
         // this one is blocked until this line runs, and the crop below is not.

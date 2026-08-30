@@ -321,6 +321,15 @@ impl<'a> MbGrid<'a> {
 /// kept fallible for interface stability with its own tests and the CABAC
 /// engine's own `Result`-returning conventions elsewhere in this crate, but
 /// no path in this function currently returns `Err`.
+/// The whole-picture form: [`DeblockCtx::luma_mb_row`] over every macroblock
+/// row, in order. The shipping decoder drives the rows itself (see
+/// [`crate::reconstruct::reconstruct_picture_rows`]) so it can publish finished
+/// rows early; this stays as the order-independent form the module's own tests
+/// check that schedule against.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the row-driven schedule is what the decoder uses; this is its test oracle")
+)]
 #[allow(
     clippy::unnecessary_wraps,
     reason = "kept Result for interface/call-site stability -- see this function's own doc"
@@ -345,20 +354,145 @@ pub(crate) fn deblock_picture_luma(
         return Ok(());
     }
 
-    let caps = Caps::detect();
-    let grid = MbGrid::new(macroblocks, mbs_wide, mbs_high);
-    let filter_offset_a = slice_alpha_c0_offset_div2.saturating_mul(2);
-    let filter_offset_b = slice_beta_offset_div2.saturating_mul(2);
-    let width = mbs_wide.saturating_mul(16);
-
-    let get = |luma: &[u8], x: u32, y: u32| -> u8 { luma.get((y * width + x) as usize).copied().unwrap_or(0) };
-    let set = |luma: &mut [u8], x: u32, y: u32, v: u8| {
-        if let Some(slot) = luma.get_mut((y * width + x) as usize) {
-            *slot = v;
-        }
-    };
-
+    let ctx = DeblockCtx::new(
+        macroblocks,
+        mbs_wide,
+        mbs_high,
+        slice_alpha_c0_offset_div2,
+        slice_beta_offset_div2,
+        ref_list0_poc,
+        ref_list1_poc,
+    );
     for my in 0..mbs_high {
+        ctx.luma_mb_row(luma, my);
+    }
+
+    Ok(())
+}
+
+
+/// Runs clause 8.7's deblocking filter over one already-fully-reconstructed
+/// 4:2:0 chroma plane (`Cb` or `Cr`), in place -- the chroma sibling of
+/// [`deblock_picture_luma`], reusing luma-derived boundary strength at half
+/// resolution (see this module's own doc for the exact mapping).
+///
+/// `chroma_qp_offset` is `chroma_qp_index_offset`/`second_chroma_qp_index_offset`
+/// (PPS, verbatim) for whichever of `Cb`/`Cr` `chroma` is; `macroblocks` and
+/// the remaining parameters mirror [`deblock_picture_luma`] exactly.
+/// [`deblock_picture_luma`]'s chroma sibling, and kept for the same reason.
+#[cfg_attr(
+    not(test),
+    allow(dead_code, reason = "the row-driven schedule is what the decoder uses; this is its test oracle")
+)]
+#[allow(
+    clippy::integer_division,
+    reason = "every division below is by the constant 2 or 4 (chroma-to-luma 4x4 block granularity) \
+              over a loop variable bounded 0..8 -- exact by construction, never a bitstream-derived value"
+)]
+pub(crate) fn deblock_picture_chroma(
+    chroma: &mut [u8],
+    macroblocks: &[MbSummary],
+    mbs_wide: u32,
+    mbs_high: u32,
+    chroma_qp_offset: i32,
+    disable_deblocking_filter_idc: u32,
+    slice_alpha_c0_offset_div2: i32,
+    slice_beta_offset_div2: i32,
+    ref_list0_poc: &[i32],
+    ref_list1_poc: &[i32],
+) {
+    if disable_deblocking_filter_idc == 1 {
+        return;
+    }
+
+    let ctx = DeblockCtx::new(
+        macroblocks,
+        mbs_wide,
+        mbs_high,
+        slice_alpha_c0_offset_div2,
+        slice_beta_offset_div2,
+        ref_list0_poc,
+        ref_list1_poc,
+    );
+    for my in 0..mbs_high {
+        ctx.chroma_mb_row(chroma, chroma_qp_offset, my);
+    }
+}
+
+/// Everything clause 8.7's filter needs that is constant across a picture,
+/// held once so a single macroblock row can be filtered on its own.
+///
+/// The whole-picture entry points below are loops over
+/// [`DeblockCtx::luma_mb_row`]/[`DeblockCtx::chroma_mb_row`] and nothing else;
+/// the reason those rows are separately callable is that
+/// [`crate::frame_task`] interleaves them with reconstruction so a row becomes
+/// final -- and therefore publishable to a picture still being predicted from
+/// -- before the whole picture is. See `docs/codec/frame-threading.md`.
+pub(crate) struct DeblockCtx<'a> {
+    caps: Caps,
+    grid: MbGrid<'a>,
+    mbs_wide: u32,
+    filter_offset_a: i32,
+    filter_offset_b: i32,
+    ref_list0_poc: &'a [i32],
+    ref_list1_poc: &'a [i32],
+}
+
+impl<'a> DeblockCtx<'a> {
+    /// Build the per-picture state. `slice_alpha_c0_offset_div2`/
+    /// `slice_beta_offset_div2` are the slice header fields verbatim; clause
+    /// 8.7.2.2's own `* 2` is applied here, once, rather than per edge.
+    pub(crate) fn new(
+        macroblocks: &'a [MbSummary],
+        mbs_wide: u32,
+        mbs_high: u32,
+        slice_alpha_c0_offset_div2: i32,
+        slice_beta_offset_div2: i32,
+        ref_list0_poc: &'a [i32],
+        ref_list1_poc: &'a [i32],
+    ) -> Self {
+        Self {
+            caps: Caps::detect(),
+            grid: MbGrid::new(macroblocks, mbs_wide, mbs_high),
+            mbs_wide,
+            filter_offset_a: slice_alpha_c0_offset_div2.saturating_mul(2),
+            filter_offset_b: slice_beta_offset_div2.saturating_mul(2),
+            ref_list0_poc,
+            ref_list1_poc,
+        }
+    }
+
+    /// Filter macroblock row `my` of the luma plane, in the exact edge order
+    /// clause 8.7 specifies -- left-to-right by macroblock, vertical edges
+    /// before horizontal ones within each.
+    ///
+    /// Reads rows `my * 16 - 4 ..= my * 16 + 15` and writes
+    /// `my * 16 - 3 ..= my * 16 + 14`: the three rows above the macroblock row
+    /// belong to the row above and are its top macroblock edge's `p0`/`p1`/`p2`.
+    /// That overhang is why a row is only final once the *next* row has been
+    /// filtered.
+    #[allow(
+        clippy::integer_division,
+        reason = "every division below is by the constant 4 (4x4 luma block granularity) over a loop \
+                  variable bounded 0..16 -- exact by construction, never a bitstream-derived value"
+    )]
+    pub(crate) fn luma_mb_row(&self, luma: &mut [u8], my: u32) {
+        let caps = self.caps;
+        let grid = &self.grid;
+        let filter_offset_a = self.filter_offset_a;
+        let filter_offset_b = self.filter_offset_b;
+        let ref_list0_poc = self.ref_list0_poc;
+        let ref_list1_poc = self.ref_list1_poc;
+        let mbs_wide = self.mbs_wide;
+        let width = mbs_wide.saturating_mul(16);
+
+        let get = |luma: &[u8], x: u32, y: u32| -> u8 { luma.get((y * width + x) as usize).copied().unwrap_or(0) };
+        let set = |luma: &mut [u8], x: u32, y: u32, v: u8| {
+            if let Some(slot) = luma.get_mut((y * width + x) as usize) {
+                *slot = v;
+            }
+        };
+
         for mx in 0..mbs_wide {
             let Some(here) = grid.at(mx, my) else { continue };
             let qp_here = grid.qpy(mx, my);
@@ -551,56 +685,38 @@ pub(crate) fn deblock_picture_luma(
         }
     }
 
-    Ok(())
-}
+    /// Filter macroblock row `my` of one 4:2:0 chroma plane -- the chroma
+    /// sibling of [`DeblockCtx::luma_mb_row`].
+    ///
+    /// Reads rows `my * 8 - 2 ..= my * 8 + 7` and writes only `my * 8 - 1 ..=
+    /// my * 8 + 7`: chroma's filter modifies `p0`/`q0` and nothing else, so the
+    /// overhang into the row above is a single row rather than luma's three.
+    #[allow(
+        clippy::integer_division,
+        reason = "every division below is by the constant 2 or 4 (chroma-to-luma 4x4 block granularity) \
+                  over a loop variable bounded 0..8 -- exact by construction, never a bitstream-derived value"
+    )]
+    pub(crate) fn chroma_mb_row(&self, chroma: &mut [u8], chroma_qp_offset: i32, my: u32) {
+        let caps = self.caps;
+        let grid = &self.grid;
+        let filter_offset_a = self.filter_offset_a;
+        let filter_offset_b = self.filter_offset_b;
+        let ref_list0_poc = self.ref_list0_poc;
+        let ref_list1_poc = self.ref_list1_poc;
+        let mbs_wide = self.mbs_wide;
+        let width = mbs_wide.saturating_mul(8);
+        let qpc = |mx: u32, my: u32| -> u8 {
+            let v = crate::dequant::chroma_qp(i32::from(grid.qpy(mx, my)), chroma_qp_offset);
+            u8::try_from(v.clamp(0, 51)).unwrap_or(51)
+        };
 
-/// Runs clause 8.7's deblocking filter over one already-fully-reconstructed
-/// 4:2:0 chroma plane (`Cb` or `Cr`), in place -- the chroma sibling of
-/// [`deblock_picture_luma`], reusing luma-derived boundary strength at half
-/// resolution (see this module's own doc for the exact mapping).
-///
-/// `chroma_qp_offset` is `chroma_qp_index_offset`/`second_chroma_qp_index_offset`
-/// (PPS, verbatim) for whichever of `Cb`/`Cr` `chroma` is; `macroblocks` and
-/// the remaining parameters mirror [`deblock_picture_luma`] exactly.
-#[allow(
-    clippy::integer_division,
-    reason = "every division below is by the constant 2 or 4 (chroma-to-luma 4x4 block granularity) \
-              over a loop variable bounded 0..8 -- exact by construction, never a bitstream-derived value"
-)]
-pub(crate) fn deblock_picture_chroma(
-    chroma: &mut [u8],
-    macroblocks: &[MbSummary],
-    mbs_wide: u32,
-    mbs_high: u32,
-    chroma_qp_offset: i32,
-    disable_deblocking_filter_idc: u32,
-    slice_alpha_c0_offset_div2: i32,
-    slice_beta_offset_div2: i32,
-    ref_list0_poc: &[i32],
-    ref_list1_poc: &[i32],
-) {
-    if disable_deblocking_filter_idc == 1 {
-        return;
-    }
+        let get = |c: &[u8], x: u32, y: u32| -> u8 { c.get((y * width + x) as usize).copied().unwrap_or(0) };
+        let set = |c: &mut [u8], x: u32, y: u32, v: u8| {
+            if let Some(slot) = c.get_mut((y * width + x) as usize) {
+                *slot = v;
+            }
+        };
 
-    let caps = Caps::detect();
-    let grid = MbGrid::new(macroblocks, mbs_wide, mbs_high);
-    let filter_offset_a = slice_alpha_c0_offset_div2.saturating_mul(2);
-    let filter_offset_b = slice_beta_offset_div2.saturating_mul(2);
-    let width = mbs_wide.saturating_mul(8);
-    let qpc = |mx: u32, my: u32| -> u8 {
-        let v = crate::dequant::chroma_qp(i32::from(grid.qpy(mx, my)), chroma_qp_offset);
-        u8::try_from(v.clamp(0, 51)).unwrap_or(51)
-    };
-
-    let get = |c: &[u8], x: u32, y: u32| -> u8 { c.get((y * width + x) as usize).copied().unwrap_or(0) };
-    let set = |c: &mut [u8], x: u32, y: u32, v: u8| {
-        if let Some(slot) = c.get_mut((y * width + x) as usize) {
-            *slot = v;
-        }
-    };
-
-    for my in 0..mbs_high {
         for mx in 0..mbs_wide {
             let Some(here) = grid.at(mx, my) else { continue };
             let qp_here = qpc(mx, my);
@@ -730,3 +846,4 @@ pub(crate) fn deblock_picture_chroma(
         }
     }
 }
+

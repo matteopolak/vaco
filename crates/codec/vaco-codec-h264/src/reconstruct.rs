@@ -1418,71 +1418,20 @@ pub(crate) fn reconstruct_picture(
     implicit: Option<&ImplicitWeights>,
     budget: &mut Budget,
 ) -> vaco_core::Result<ReconstructedPicture> {
+    let ctx = PictureCtx::new(
+        mbs_wide,
+        mbs_high,
+        chroma_qp_offset_cb,
+        chroma_qp_offset_cr,
+        ref_list0,
+        ref_list1,
+        weights,
+        bipred_mode,
+        implicit,
+    );
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
-    let ref_width = mbs_wide * 16;
-    let ref_height = mbs_high * 16;
-    let chroma_width = mbs_wide * 8;
-    let chroma_height = mbs_high * 8;
-    let ref_list0_luma: Vec<&[u8]> = ref_list0.iter().map(|r| r.luma).collect();
-    let ref_list1_luma: Vec<&[u8]> = ref_list1.iter().map(|r| r.luma).collect();
-
     for mb in macroblocks {
-        if mb.is_ipcm {
-            return Err(vaco_core::Error::Unsupported(
-                "vaco-codec-h264: I_PCM picture reconstruction is not implemented",
-            ));
-        }
-        let is_inter = !mb.is_intra16x16 && !mb.is_intra4x4 && !mb.is_intra8x8;
-        if mb.is_intra16x16 {
-            let x = mb.mb_x * 16;
-            let y = mb.mb_y * 16;
-            let top_available = (0..16).all(|dx| buf.available(coord(x) + dx, coord(y) - 1));
-            let top = core::array::from_fn(|dx| buf.pixel(coord(x) + coord(dx), coord(y) - 1));
-            let left_available = (0..16).all(|dy| buf.available(coord(x) - 1, coord(y) + dy));
-            let left = core::array::from_fn(|dy| buf.pixel(coord(x) - 1, coord(y) + coord(dy)));
-            let neighbours = Neighbours16 {
-                top_available,
-                top,
-                left_available,
-                left,
-                corner: buf.pixel(coord(x) - 1, coord(y) - 1),
-            };
-            let block = reconstruct_intra16x16_luma(mb.intra16x16_pred_mode, neighbours, mb.qpy, &mb.residual);
-            for (i, row) in block.iter().enumerate() {
-                buf.write_row_luma(x, y + i as u32, row);
-            }
-            for blk in 0..16u32 {
-                let (bx, by) = blk_xy(blk);
-                buf.mark_block_decoded(x + bx * 4, y + by * 4);
-            }
-        } else if mb.is_intra4x4 {
-            reconstruct_intra4x4_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
-        } else if mb.is_intra8x8 {
-            reconstruct_intra8x8_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
-        } else {
-            let luma_weights = InterWeights { l0: weights.luma(), l1: weights.luma1(), mode: bipred_mode, implicit };
-            reconstruct_inter_mb(&mut buf, mb, &ref_list0_luma, &ref_list1_luma, ref_width, ref_height, luma_weights);
-        }
-
-        let qpc_cb = chroma_qp(mb.qpy, chroma_qp_offset_cb);
-        let qpc_cr = chroma_qp(mb.qpy, chroma_qp_offset_cr);
-        for (comp, qpc) in [(0usize, qpc_cb), (1usize, qpc_cr)] {
-            let pred = if is_inter {
-                let chroma_weights =
-                    InterWeights { l0: weights.chroma(comp), l1: weights.chroma1(comp), mode: bipred_mode, implicit };
-                predict_chroma_inter(mb, comp, ref_list0, ref_list1, chroma_width, chroma_height, chroma_weights)
-            } else {
-                let neighbours = chroma_neighbours(&buf, comp, mb.mb_x, mb.mb_y);
-                predict_intra_chroma(mb.intra_chroma_pred_mode, neighbours)
-            };
-            let out = add_chroma_residual(pred, comp, mb, qpc);
-            let x0 = mb.mb_x * 8;
-            let y0 = mb.mb_y * 8;
-            for (i, row) in out.iter().enumerate() {
-                buf.write_row_chroma(comp, x0, y0 + i as u32, row);
-            }
-        }
-        buf.mark_chroma_mb_decoded(mb.mb_x, mb.mb_y);
+        reconstruct_mb(&mut buf, mb, &ctx)?;
     }
 
     Ok(ReconstructedPicture {
@@ -1490,6 +1439,274 @@ pub(crate) fn reconstruct_picture(
         cb: buf.cb,
         cr: buf.cr,
     })
+}
+
+/// The half of [`reconstruct_mb`]'s inputs that is constant for a whole
+/// picture, derived once instead of per macroblock.
+///
+/// It exists because reconstruction is now driven a macroblock *row* at a time
+/// (see [`reconstruct_picture_rows`]), so the derivation that used to sit above
+/// the single `for mb in macroblocks` loop needs somewhere to live that outlives
+/// one row.
+pub(crate) struct PictureCtx<'a> {
+    ref_list0: &'a [RefPicturePlanes<'a>],
+    ref_list1: &'a [RefPicturePlanes<'a>],
+    /// `ref_list0`'s luma planes alone, which is all
+    /// [`reconstruct_inter_mb`] takes.
+    ref_list0_luma: Vec<&'a [u8]>,
+    /// [`PictureCtx::ref_list0_luma`]'s list-1 counterpart.
+    ref_list1_luma: Vec<&'a [u8]>,
+    weights: &'a SliceWeightTables,
+    bipred_mode: BiPredMode,
+    implicit: Option<&'a ImplicitWeights>,
+    chroma_qp_offset_cb: i32,
+    chroma_qp_offset_cr: i32,
+    ref_width: u32,
+    ref_height: u32,
+    chroma_width: u32,
+    chroma_height: u32,
+}
+
+impl<'a> PictureCtx<'a> {
+    /// Derive the picture-constant reconstruction state.
+    #[allow(clippy::too_many_arguments, reason = "one argument per picture-constant input, all of which reconstruction needs")]
+    pub(crate) fn new(
+        mbs_wide: u32,
+        mbs_high: u32,
+        chroma_qp_offset_cb: i32,
+        chroma_qp_offset_cr: i32,
+        ref_list0: &'a [RefPicturePlanes<'a>],
+        ref_list1: &'a [RefPicturePlanes<'a>],
+        weights: &'a SliceWeightTables,
+        bipred_mode: BiPredMode,
+        implicit: Option<&'a ImplicitWeights>,
+    ) -> Self {
+        Self {
+            ref_list0,
+            ref_list1,
+            ref_list0_luma: ref_list0.iter().map(|r| r.luma).collect(),
+            ref_list1_luma: ref_list1.iter().map(|r| r.luma).collect(),
+            weights,
+            bipred_mode,
+            implicit,
+            chroma_qp_offset_cb,
+            chroma_qp_offset_cr,
+            ref_width: mbs_wide * 16,
+            ref_height: mbs_high * 16,
+            chroma_width: mbs_wide * 8,
+            chroma_height: mbs_high * 8,
+        }
+    }
+}
+
+/// One macroblock's clause 8.4/8.5 reconstruction: the body of what used to be
+/// [`reconstruct_picture`]'s single loop, unchanged, hoisted so a caller can
+/// drive it a row at a time.
+///
+/// # Errors
+///
+/// [`vaco_core::Error::Unsupported`] for `I_PCM`.
+fn reconstruct_mb(buf: &mut PictureBuffer, mb: &MbSummary, ctx: &PictureCtx<'_>) -> vaco_core::Result<()> {
+    let (ref_width, ref_height) = (ctx.ref_width, ctx.ref_height);
+    let (chroma_width, chroma_height) = (ctx.chroma_width, ctx.chroma_height);
+    let (chroma_qp_offset_cb, chroma_qp_offset_cr) = (ctx.chroma_qp_offset_cb, ctx.chroma_qp_offset_cr);
+    let (ref_list0, ref_list1) = (ctx.ref_list0, ctx.ref_list1);
+    let ref_list0_luma: &[&[u8]] = &ctx.ref_list0_luma;
+    let ref_list1_luma: &[&[u8]] = &ctx.ref_list1_luma;
+    let weights = ctx.weights;
+    let bipred_mode = ctx.bipred_mode;
+    let implicit = ctx.implicit;
+
+    if mb.is_ipcm {
+        return Err(vaco_core::Error::Unsupported(
+            "vaco-codec-h264: I_PCM picture reconstruction is not implemented",
+        ));
+    }
+    let is_inter = !mb.is_intra16x16 && !mb.is_intra4x4 && !mb.is_intra8x8;
+    if mb.is_intra16x16 {
+        let x = mb.mb_x * 16;
+        let y = mb.mb_y * 16;
+        let top_available = (0..16).all(|dx| buf.available(coord(x) + dx, coord(y) - 1));
+        let top = core::array::from_fn(|dx| buf.pixel(coord(x) + coord(dx), coord(y) - 1));
+        let left_available = (0..16).all(|dy| buf.available(coord(x) - 1, coord(y) + dy));
+        let left = core::array::from_fn(|dy| buf.pixel(coord(x) - 1, coord(y) + coord(dy)));
+        let neighbours = Neighbours16 {
+            top_available,
+            top,
+            left_available,
+            left,
+            corner: buf.pixel(coord(x) - 1, coord(y) - 1),
+        };
+        let block = reconstruct_intra16x16_luma(mb.intra16x16_pred_mode, neighbours, mb.qpy, &mb.residual);
+        for (i, row) in block.iter().enumerate() {
+            buf.write_row_luma(x, y + i as u32, row);
+        }
+        for blk in 0..16u32 {
+            let (bx, by) = blk_xy(blk);
+            buf.mark_block_decoded(x + bx * 4, y + by * 4);
+        }
+    } else if mb.is_intra4x4 {
+        reconstruct_intra4x4_mb(buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
+    } else if mb.is_intra8x8 {
+        reconstruct_intra8x8_mb(buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
+    } else {
+        let luma_weights = InterWeights { l0: weights.luma(), l1: weights.luma1(), mode: bipred_mode, implicit };
+        reconstruct_inter_mb(buf, mb, ref_list0_luma, ref_list1_luma, ref_width, ref_height, luma_weights);
+    }
+
+    let qpc_cb = chroma_qp(mb.qpy, chroma_qp_offset_cb);
+    let qpc_cr = chroma_qp(mb.qpy, chroma_qp_offset_cr);
+    for (comp, qpc) in [(0usize, qpc_cb), (1usize, qpc_cr)] {
+        let pred = if is_inter {
+            let chroma_weights =
+                InterWeights { l0: weights.chroma(comp), l1: weights.chroma1(comp), mode: bipred_mode, implicit };
+            predict_chroma_inter(mb, comp, ref_list0, ref_list1, chroma_width, chroma_height, chroma_weights)
+        } else {
+            let neighbours = chroma_neighbours(buf, comp, mb.mb_x, mb.mb_y);
+            predict_intra_chroma(mb.intra_chroma_pred_mode, neighbours)
+        };
+        let out = add_chroma_residual(pred, comp, mb, qpc);
+        let x0 = mb.mb_x * 8;
+        let y0 = mb.mb_y * 8;
+        for (i, row) in out.iter().enumerate() {
+            buf.write_row_chroma(comp, x0, y0 + i as u32, row);
+        }
+    }
+    buf.mark_chroma_mb_decoded(mb.mb_x, mb.mb_y);
+    Ok(())
+}
+
+
+
+/// Clause 8.4/8.5 reconstruction and clause 8.7 deblocking, interleaved a
+/// macroblock row at a time, reporting after each row how much of each plane
+/// clause 8.7 can no longer touch.
+///
+/// # Why deblocking lags reconstruction by exactly one macroblock row
+///
+/// Clause 8.3's intra prediction is defined on **unfiltered** neighbours, and
+/// the only ones it reads above the current macroblock row are the single luma
+/// row `my * 16 - 1` and chroma row `my * 8 - 1`. Filtering macroblock row
+/// `my - 1` rewrites exactly those rows (its vertical edges touch every one of
+/// its own sixteen luma rows, the last of which *is* `my * 16 - 1`), so it must
+/// not run until row `my` has been reconstructed. Filtering row `my - 1` needs
+/// nothing from row `my`, so one row of lag is both necessary and sufficient
+/// -- and no copy of the unfiltered row is needed, which is the reason to pick
+/// this schedule over saving a top-border row the way a lag-zero schedule would
+/// have to.
+///
+/// # Why a row is final only after the *next* row is filtered
+///
+/// Filtering macroblock row `d` writes upwards into the row above it: luma's
+/// top macroblock edge at `y = d * 16` rewrites `p0`/`p1`/`p2`, i.e. rows
+/// `d * 16 - 1`, `- 2` and `- 3`; chroma's rewrites `p0` alone, row
+/// `d * 8 - 1`. So once row `d` is filtered, luma rows `..d * 16 + 13` and
+/// chroma rows `..d * 8 + 7` are final -- everything below that overhang is
+/// still row `d + 1`'s to modify. Those are the two numbers handed to
+/// `rows_final`, and they are what makes it safe for a *later* picture's motion
+/// compensation to read them.
+///
+/// `deblock` is `None` exactly when `disable_deblocking_filter_idc == 1`, in
+/// which case a row is final the moment it is reconstructed.
+///
+/// # Errors
+///
+/// As [`reconstruct_picture`], plus whatever `rows_final` returns.
+#[allow(clippy::too_many_arguments, reason = "mirrors reconstruct_picture's own argument list, plus the filter and the sink")]
+pub(crate) fn reconstruct_picture_rows(
+    macroblocks: &[MbSummary],
+    mbs_wide: u32,
+    mbs_high: u32,
+    chroma_qp_offset_cb: i32,
+    chroma_qp_offset_cr: i32,
+    ref_list0: &[RefPicturePlanes<'_>],
+    ref_list1: &[RefPicturePlanes<'_>],
+    weights: &SliceWeightTables,
+    bipred_mode: BiPredMode,
+    implicit: Option<&ImplicitWeights>,
+    deblock: Option<&crate::deblock::DeblockCtx<'_>>,
+    budget: &mut Budget,
+    rows_final: &mut dyn FnMut(&[u8], &[u8], &[u8], u32, u32) -> vaco_core::Result<()>,
+) -> vaco_core::Result<ReconstructedPicture> {
+    let ctx = PictureCtx::new(
+        mbs_wide,
+        mbs_high,
+        chroma_qp_offset_cb,
+        chroma_qp_offset_cr,
+        ref_list0,
+        ref_list1,
+        weights,
+        bipred_mode,
+        implicit,
+    );
+    let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
+    let (luma_h, chroma_h) = (mbs_high.saturating_mul(16), mbs_high.saturating_mul(8));
+
+    // The row schedule assumes `macroblocks` is complete and in raster order,
+    // which is what `crate::mb`'s own decode loop produces. Anything else falls
+    // back to the two whole-picture sweeps, which are order-independent and
+    // therefore always right -- rather than silently reconstructing a subset.
+    let raster = macroblocks.len() == (mbs_wide as usize).saturating_mul(mbs_high as usize)
+        && macroblocks
+            .iter()
+            .enumerate()
+            .all(|(i, mb)| (mb.mb_y.saturating_mul(mbs_wide).saturating_add(mb.mb_x) as usize) == i);
+    if !raster {
+        for mb in macroblocks {
+            reconstruct_mb(&mut buf, mb, &ctx)?;
+        }
+        if let Some(d) = deblock {
+            for my in 0..mbs_high {
+                d.luma_mb_row(&mut buf.luma, my);
+            }
+            for my in 0..mbs_high {
+                d.chroma_mb_row(&mut buf.cb, chroma_qp_offset_cb, my);
+            }
+            for my in 0..mbs_high {
+                d.chroma_mb_row(&mut buf.cr, chroma_qp_offset_cr, my);
+            }
+        }
+        rows_final(&buf.luma, &buf.cb, &buf.cr, luma_h, chroma_h)?;
+        return Ok(ReconstructedPicture { luma: buf.luma, cb: buf.cb, cr: buf.cr });
+    }
+
+    let filter_row = |buf: &mut PictureBuffer, d: &crate::deblock::DeblockCtx<'_>, my: u32| {
+        d.luma_mb_row(&mut buf.luma, my);
+        d.chroma_mb_row(&mut buf.cb, chroma_qp_offset_cb, my);
+        d.chroma_mb_row(&mut buf.cr, chroma_qp_offset_cr, my);
+    };
+
+    let mut cursor = 0usize;
+    for my in 0..mbs_high {
+        while let Some(mb) = macroblocks.get(cursor) {
+            if mb.mb_y != my {
+                break;
+            }
+            reconstruct_mb(&mut buf, mb, &ctx)?;
+            cursor += 1;
+        }
+        if let Some(d) = deblock {
+            if my > 0 {
+                let done = my - 1;
+                filter_row(&mut buf, d, done);
+                let ly = done.saturating_mul(16).saturating_add(13).min(luma_h);
+                let cy = done.saturating_mul(8).saturating_add(7).min(chroma_h);
+                rows_final(&buf.luma, &buf.cb, &buf.cr, ly, cy)?;
+            }
+        } else {
+            let ly = my.saturating_add(1).saturating_mul(16).min(luma_h);
+            let cy = my.saturating_add(1).saturating_mul(8).min(chroma_h);
+            rows_final(&buf.luma, &buf.cb, &buf.cr, ly, cy)?;
+        }
+    }
+    if let Some(d) = deblock
+        && mbs_high > 0
+    {
+        filter_row(&mut buf, d, mbs_high - 1);
+    }
+    rows_final(&buf.luma, &buf.cb, &buf.cr, luma_h, chroma_h)?;
+
+    Ok(ReconstructedPicture { luma: buf.luma, cb: buf.cb, cr: buf.cr })
 }
 
 #[cfg(test)]
