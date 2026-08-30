@@ -337,6 +337,79 @@ measured gap in the group, and it is the strongest single ask to take upstream.
 
 ---
 
+### Group 8 — `#619`: `vaco-codec-dsp-deblock`'s masked-select kernel, in isolation and end to end
+
+Dated separately: **2026-08-29**, same machine and toolchain as above, with a niced fuzz sweep
+occupying 2 of the machine's 10 cores throughout (as in Group 7) and, for the end-to-end row,
+several other agents' concurrent `cargo build`s on the same host (load average ~5.8-6 during
+measurement) -- noisier conditions than any earlier group in this document, noted because it is the
+likely explanation for the wider end-to-end spread below.
+
+**Microbenchmark** (`cargo bench -p vaco-codec-dsp-deblock`, `benches/batch.rs`): the batched
+kernel (`vaco_codec_dsp_deblock::batch::filter_luma_edge`/`filter_chroma_edge`, one call per edge)
+against the per-line scalar loop a caller would otherwise run (`filter_luma_line`/`filter_chroma_line`
+called once per line). Interleaved A/B, min-of-100 over 2000-pass samples, one edge's worth of
+non-flat, mixed-`bS` (`0..=4`) fixture data per call — 5 independent process launches:
+
+| edge | scalar (ns) | batched (ns) | batched/scalar | round-1..5 ratio | win/loss |
+|---|---:|---:|---:|---|---:|
+| luma, 16 lines | ~58.8-64.5 | ~18.0-19.7 | **≈0.31x** | 0.306, 0.306, 0.307, 0.306, 0.305 | 5/5 |
+| chroma, 8 lines | ~8.7-9.6 | ~3.6-4.0 | **≈0.41x** | 0.410, 0.409, 0.410, 0.408, 0.407 | 5/5 |
+
+Both widths beat the scalar per-line loop cleanly and with essentially zero round-to-round variance,
+matching Group 7's `select_i16` shape (the masked-select tree is the majority of each kernel's cost).
+Chroma's batch (8 lines) is *narrower* than NEON's native `u8` width (16), so the kernel padding a
+zero-filled native-width buffer to reach the vector path at all (`load_i16_group_padded`/
+`store_i16_group_padded` in `batch.rs`) is load-bearing, not incidental — the first version of this
+kernel chunked by native `u8` width only, which measured a **regression** on chroma specifically
+(≈1.1x, 5/5 losses): an 8-line batch never filled one full 16-lane `u8` chunk, so every chroma call
+fell straight through to the scalar tail path and paid the dispatch/truncation overhead for nothing.
+Adding the narrower padded-load stage turned that into the 0.41x win above.
+
+**End to end** (4K H.264 decode, 3840x2160, 75 frames, Main profile, `-bf 0 -refs 1`, byte-exact
+against `ffmpeg` both before and after): interleaved baseline/candidate, alternating which ran first
+each launch, **10 independent process launches** (wall clock via `date`, not a cycle counter — this
+crate's own D2 forbids the `unsafe` a cycle-counter read needs, the same constraint Group 7's own
+measurement recorded):
+
+| launch | baseline (s) | candidate (s) | candidate/baseline |
+|---:|---:|---:|---:|
+| 1 | 15.866 | 15.276 | 0.963 |
+| 2 | 15.928 | 15.376 | 0.965 |
+| 3 | 15.771 | 16.616 | 1.054 |
+| 4 | 17.909 | 17.230 | 0.962 |
+| 5 | 17.767 | 17.046 | 0.959 |
+| 6 | 15.987 | 15.272 | 0.955 |
+| 7 | 16.198 | 16.244 | 1.003 |
+| 8 | 16.635 | 15.950 | 0.959 |
+| 9 | 15.640 | 14.840 | 0.949 |
+| 10 | 34.638 | 20.984 | 0.606 |
+
+8 of 10 launches favoured the candidate; launch 3 was a real 5.4% loss and launch 7 a wash. Launch
+10's absolute times (34.6s/21.0s, against every other launch's 15-18s) are a load spike mid-run, not a
+real 40% effect — excluding it, the mean ratio across the other 9 launches is **≈0.974x, a ~2.6%
+end-to-end win**, keeping launch 10 in gives ≈0.94x, which overstates it.
+
+**The end-to-end win is real but far smaller than the isolated ratio, and that gap is the more
+important number.** Deblocking's luma/chroma filters were ~17%/~9% of self time (E2E-GAPS.md §10), so
+a 2.9x/2.4x win on the filter arithmetic alone, with the surrounding per-edge cost (boundary-strength
+derivation, `EdgeThresholds::derive`, and the per-sample gather/scatter through the picture buffer's
+`get`/`set` closures — all still scalar, untouched by this kernel) unchanged, arithmetically caps the
+possible end-to-end win at roughly `0.26 * (1 - 1/2.7) ≈ 16%` even before dispatch and gather overhead
+are counted, and the *measured* ~2.6% says most of the edge's real cost is that surrounding scalar
+work, not the filter equations this kernel replaced. This is not a new lesson so much as the same one
+this document's Group 4/Rule A material already drew about the FIR: a kernel that wins cleanly in
+isolation is not the same claim as a caller-visible win, and only measuring the caller settles it.
+
+**Kept, not reverted**, because the win — while modest — is positive and directionally consistent (8
+of 10 launches, mean ≈0.974x excluding the one load-contaminated outlier), unlike the genuine
+negatives this document and `E2E-GAPS.md` record elsewhere (`add_pixels_clamped_vector` at 0.9x/0.84x,
+round 2's three FIR/deblock-memory attempts at 0.997/1.0025/1.034). All three Main-profile regression
+fixtures (416x240 `smptebars`, 352x288 `testsrc2`, 640x360 `mandelbrot`) and the 4K clip above remained
+byte-exact against `ffmpeg` with the kernel wired in.
+
+---
+
 ## Revised upstream ask
 
 Plan 12 §11 lists six operations to request before v1.0. The measurements reorder that list sharply —

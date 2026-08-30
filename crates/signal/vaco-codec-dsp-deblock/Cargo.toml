@@ -10,9 +10,14 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+vaco-simd = { path = "../../core/vaco-simd" }
 
 [dev-dependencies]
 proptest.workspace = true
+
+[[bench]]
+name    = "batch"
+harness = false
 
 [lints]
 workspace = true

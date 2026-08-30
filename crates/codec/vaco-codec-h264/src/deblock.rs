@@ -51,8 +51,8 @@
 //! table lookup) rather than threading luma's own per-edge `bS` array
 //! through the call boundary, which would otherwise make the two functions'
 //! argument lists mirror each other for no reader-visible benefit.
-use core::num::NonZeroU8;
-use vaco_codec_dsp_deblock::{ChromaLine, EdgeThresholds, LumaLine, filter_chroma_line, filter_luma_line};
+use vaco_codec_dsp_deblock::{EdgeThresholds, batch};
+use vaco_simd::Caps;
 
 use crate::mb::MbSummary;
 
@@ -250,6 +250,7 @@ pub(crate) fn deblock_picture_luma(
         return Ok(());
     }
 
+    let caps = Caps::detect();
     let grid = MbGrid::new(macroblocks, mbs_wide, mbs_high);
     let filter_offset_a = slice_alpha_c0_offset_div2.saturating_mul(2);
     let filter_offset_b = slice_beta_offset_div2.saturating_mul(2);
@@ -287,24 +288,71 @@ pub(crate) fn deblock_picture_luma(
                 };
                 let edge = EdgeThresholds::derive(qp_p, qp_here, filter_offset_a, filter_offset_b);
                 let x = mx * 16 + local;
+
+                // Gather every line along this edge (16 rows, the batch
+                // `vaco_codec_dsp_deblock::batch::filter_luma_edge` needs to
+                // fill a vector register -- see that module's own doc for
+                // why one line at a time cannot) before filtering once and
+                // scattering back. `bs == 0` rows are included rather than
+                // skipped: the batched primitive treats that as "leave this
+                // line unmodified" itself, so writing every gathered value
+                // straight back is always correct, not merely correct when
+                // every row happens to have positive strength.
+                let mut p0a = [0u8; 16];
+                let mut p1a = [0u8; 16];
+                let mut p2a = [0u8; 16];
+                let mut p3a = [0u8; 16];
+                let mut q0a = [0u8; 16];
+                let mut q1a = [0u8; 16];
+                let mut q2a = [0u8; 16];
+                let mut q3a = [0u8; 16];
+                let mut bsa = [0u8; 16];
                 for row in 0..16u32 {
                     let y = my * 16 + row;
                     let blk_row = (row / 4) as usize;
                     let q_blk = blk_row * 4 + (local / 4) as usize;
                     let p_blk = if mb_edge { blk_row * 4 + 3 } else { blk_row * 4 + (local / 4 - 1) as usize };
-                    let bs = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
-                    let Some(bs) = NonZeroU8::new(bs) else { continue };
-                    let mut line = LumaLine {
-                        p: [get(luma, x - 1, y), get(luma, x - 2, y), get(luma, x - 3, y), get(luma, x - 4, y)],
-                        q: [get(luma, x, y), get(luma, x + 1, y), get(luma, x + 2, y), get(luma, x + 3, y)],
-                    };
-                    filter_luma_line(&mut line, bs, edge);
-                    set(luma, x - 1, y, line.p[0]);
-                    set(luma, x - 2, y, line.p[1]);
-                    set(luma, x - 3, y, line.p[2]);
-                    set(luma, x, y, line.q[0]);
-                    set(luma, x + 1, y, line.q[1]);
-                    set(luma, x + 2, y, line.q[2]);
+                    let ri = row as usize;
+                    if let Some(slot) = bsa.get_mut(ri) {
+                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
+                    }
+                    if let Some(slot) = p0a.get_mut(ri) {
+                        *slot = get(luma, x - 1, y);
+                    }
+                    if let Some(slot) = p1a.get_mut(ri) {
+                        *slot = get(luma, x - 2, y);
+                    }
+                    if let Some(slot) = p2a.get_mut(ri) {
+                        *slot = get(luma, x - 3, y);
+                    }
+                    if let Some(slot) = p3a.get_mut(ri) {
+                        *slot = get(luma, x - 4, y);
+                    }
+                    if let Some(slot) = q0a.get_mut(ri) {
+                        *slot = get(luma, x, y);
+                    }
+                    if let Some(slot) = q1a.get_mut(ri) {
+                        *slot = get(luma, x + 1, y);
+                    }
+                    if let Some(slot) = q2a.get_mut(ri) {
+                        *slot = get(luma, x + 2, y);
+                    }
+                    if let Some(slot) = q3a.get_mut(ri) {
+                        *slot = get(luma, x + 3, y);
+                    }
+                }
+                batch::filter_luma_edge(
+                    caps, &mut p0a, &mut p1a, &mut p2a, &p3a, &mut q0a, &mut q1a, &mut q2a, &q3a, &bsa, edge,
+                );
+                for row in 0..16u32 {
+                    let y = my * 16 + row;
+                    let ri = row as usize;
+                    set(luma, x - 1, y, p0a.get(ri).copied().unwrap_or(0));
+                    set(luma, x - 2, y, p1a.get(ri).copied().unwrap_or(0));
+                    set(luma, x - 3, y, p2a.get(ri).copied().unwrap_or(0));
+                    set(luma, x, y, q0a.get(ri).copied().unwrap_or(0));
+                    set(luma, x + 1, y, q1a.get(ri).copied().unwrap_or(0));
+                    set(luma, x + 2, y, q2a.get(ri).copied().unwrap_or(0));
                 }
             }
 
@@ -328,24 +376,65 @@ pub(crate) fn deblock_picture_luma(
                 };
                 let edge = EdgeThresholds::derive(qp_p, qp_here, filter_offset_a, filter_offset_b);
                 let y = my * 16 + local;
+
+                // Same batching as the vertical pass above, transposed:
+                // gather all 16 columns along this edge, filter once,
+                // scatter back.
+                let mut p0a = [0u8; 16];
+                let mut p1a = [0u8; 16];
+                let mut p2a = [0u8; 16];
+                let mut p3a = [0u8; 16];
+                let mut q0a = [0u8; 16];
+                let mut q1a = [0u8; 16];
+                let mut q2a = [0u8; 16];
+                let mut q3a = [0u8; 16];
+                let mut bsa = [0u8; 16];
                 for col in 0..16u32 {
                     let x = mx * 16 + col;
                     let blk_col = (col / 4) as usize;
                     let q_blk = (local / 4) as usize * 4 + blk_col;
                     let p_blk = if mb_edge { 12 + blk_col } else { (local / 4 - 1) as usize * 4 + blk_col };
-                    let bs = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
-                    let Some(bs) = NonZeroU8::new(bs) else { continue };
-                    let mut line = LumaLine {
-                        p: [get(luma, x, y - 1), get(luma, x, y - 2), get(luma, x, y - 3), get(luma, x, y - 4)],
-                        q: [get(luma, x, y), get(luma, x, y + 1), get(luma, x, y + 2), get(luma, x, y + 3)],
-                    };
-                    filter_luma_line(&mut line, bs, edge);
-                    set(luma, x, y - 1, line.p[0]);
-                    set(luma, x, y - 2, line.p[1]);
-                    set(luma, x, y - 3, line.p[2]);
-                    set(luma, x, y, line.q[0]);
-                    set(luma, x, y + 1, line.q[1]);
-                    set(luma, x, y + 2, line.q[2]);
+                    let ci = col as usize;
+                    if let Some(slot) = bsa.get_mut(ci) {
+                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
+                    }
+                    if let Some(slot) = p0a.get_mut(ci) {
+                        *slot = get(luma, x, y - 1);
+                    }
+                    if let Some(slot) = p1a.get_mut(ci) {
+                        *slot = get(luma, x, y - 2);
+                    }
+                    if let Some(slot) = p2a.get_mut(ci) {
+                        *slot = get(luma, x, y - 3);
+                    }
+                    if let Some(slot) = p3a.get_mut(ci) {
+                        *slot = get(luma, x, y - 4);
+                    }
+                    if let Some(slot) = q0a.get_mut(ci) {
+                        *slot = get(luma, x, y);
+                    }
+                    if let Some(slot) = q1a.get_mut(ci) {
+                        *slot = get(luma, x, y + 1);
+                    }
+                    if let Some(slot) = q2a.get_mut(ci) {
+                        *slot = get(luma, x, y + 2);
+                    }
+                    if let Some(slot) = q3a.get_mut(ci) {
+                        *slot = get(luma, x, y + 3);
+                    }
+                }
+                batch::filter_luma_edge(
+                    caps, &mut p0a, &mut p1a, &mut p2a, &p3a, &mut q0a, &mut q1a, &mut q2a, &q3a, &bsa, edge,
+                );
+                for col in 0..16u32 {
+                    let x = mx * 16 + col;
+                    let ci = col as usize;
+                    set(luma, x, y - 1, p0a.get(ci).copied().unwrap_or(0));
+                    set(luma, x, y - 2, p1a.get(ci).copied().unwrap_or(0));
+                    set(luma, x, y - 3, p2a.get(ci).copied().unwrap_or(0));
+                    set(luma, x, y, q0a.get(ci).copied().unwrap_or(0));
+                    set(luma, x, y + 1, q1a.get(ci).copied().unwrap_or(0));
+                    set(luma, x, y + 2, q2a.get(ci).copied().unwrap_or(0));
                 }
             }
         }
@@ -381,6 +470,7 @@ pub(crate) fn deblock_picture_chroma(
         return;
     }
 
+    let caps = Caps::detect();
     let grid = MbGrid::new(macroblocks, mbs_wide, mbs_high);
     let filter_offset_a = slice_alpha_c0_offset_div2.saturating_mul(2);
     let filter_offset_b = slice_beta_offset_div2.saturating_mul(2);
@@ -418,6 +508,15 @@ pub(crate) fn deblock_picture_chroma(
                 };
                 let edge = EdgeThresholds::derive(qp_p, qp_here, filter_offset_a, filter_offset_b);
                 let x = mx * 8 + c_local;
+
+                // Batch all 8 rows along this edge -- chroma's own line
+                // count, matching `vaco_codec_dsp_deblock::batch`'s
+                // narrower `p0`/`p1`/`q0`/`q1` window.
+                let mut p0a = [0u8; 8];
+                let mut p1a = [0u8; 8];
+                let mut q0a = [0u8; 8];
+                let mut q1a = [0u8; 8];
+                let mut bsa = [0u8; 8];
                 for row in 0..8u32 {
                     let y = my * 8 + row;
                     // Luma row group this chroma row's bS borrows: chroma
@@ -427,13 +526,29 @@ pub(crate) fn deblock_picture_chroma(
                     let q_blk = blk_row * 4 + (luma_local / 4) as usize;
                     let p_blk =
                         if mb_edge { blk_row * 4 + 3 } else { blk_row * 4 + (luma_local / 4 - 1) as usize };
-                    let bs = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
-                    let Some(bs) = NonZeroU8::new(bs) else { continue };
-                    let mut line =
-                        ChromaLine { p: [get(chroma, x - 1, y), get(chroma, x - 2, y)], q: [get(chroma, x, y), get(chroma, x + 1, y)] };
-                    filter_chroma_line(&mut line, bs, edge);
-                    set(chroma, x - 1, y, line.p[0]);
-                    set(chroma, x, y, line.q[0]);
+                    let ri = row as usize;
+                    if let Some(slot) = bsa.get_mut(ri) {
+                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
+                    }
+                    if let Some(slot) = p0a.get_mut(ri) {
+                        *slot = get(chroma, x - 1, y);
+                    }
+                    if let Some(slot) = p1a.get_mut(ri) {
+                        *slot = get(chroma, x - 2, y);
+                    }
+                    if let Some(slot) = q0a.get_mut(ri) {
+                        *slot = get(chroma, x, y);
+                    }
+                    if let Some(slot) = q1a.get_mut(ri) {
+                        *slot = get(chroma, x + 1, y);
+                    }
+                }
+                batch::filter_chroma_edge(caps, &mut p0a, &p1a, &mut q0a, &q1a, &bsa, edge);
+                for row in 0..8u32 {
+                    let y = my * 8 + row;
+                    let ri = row as usize;
+                    set(chroma, x - 1, y, p0a.get(ri).copied().unwrap_or(0));
+                    set(chroma, x, y, q0a.get(ri).copied().unwrap_or(0));
                 }
             }
 
@@ -451,18 +566,40 @@ pub(crate) fn deblock_picture_chroma(
                 };
                 let edge = EdgeThresholds::derive(qp_p, qp_here, filter_offset_a, filter_offset_b);
                 let y = my * 8 + c_local;
+
+                let mut p0a = [0u8; 8];
+                let mut p1a = [0u8; 8];
+                let mut q0a = [0u8; 8];
+                let mut q1a = [0u8; 8];
+                let mut bsa = [0u8; 8];
                 for col in 0..8u32 {
                     let x = mx * 8 + col;
                     let blk_col = (col / 2) as usize;
                     let q_blk = (luma_local / 4) as usize * 4 + blk_col;
                     let p_blk = if mb_edge { 12 + blk_col } else { (luma_local / 4 - 1) as usize * 4 + blk_col };
-                    let bs = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
-                    let Some(bs) = NonZeroU8::new(bs) else { continue };
-                    let mut line =
-                        ChromaLine { p: [get(chroma, x, y - 1), get(chroma, x, y - 2)], q: [get(chroma, x, y), get(chroma, x, y + 1)] };
-                    filter_chroma_line(&mut line, bs, edge);
-                    set(chroma, x, y - 1, line.p[0]);
-                    set(chroma, x, y, line.q[0]);
+                    let ci = col as usize;
+                    if let Some(slot) = bsa.get_mut(ci) {
+                        *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk);
+                    }
+                    if let Some(slot) = p0a.get_mut(ci) {
+                        *slot = get(chroma, x, y - 1);
+                    }
+                    if let Some(slot) = p1a.get_mut(ci) {
+                        *slot = get(chroma, x, y - 2);
+                    }
+                    if let Some(slot) = q0a.get_mut(ci) {
+                        *slot = get(chroma, x, y);
+                    }
+                    if let Some(slot) = q1a.get_mut(ci) {
+                        *slot = get(chroma, x, y + 1);
+                    }
+                }
+                batch::filter_chroma_edge(caps, &mut p0a, &p1a, &mut q0a, &q1a, &bsa, edge);
+                for col in 0..8u32 {
+                    let x = mx * 8 + col;
+                    let ci = col as usize;
+                    set(chroma, x, y - 1, p0a.get(ci).copied().unwrap_or(0));
+                    set(chroma, x, y, q0a.get(ci).copied().unwrap_or(0));
                 }
             }
         }

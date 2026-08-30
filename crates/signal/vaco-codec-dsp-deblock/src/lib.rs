@@ -4,19 +4,17 @@
 //!
 //! # Scope of this crate, and what stays in the caller
 //!
-//! This crate is scalar, correctness-first, and deliberately shaped around
-//! **edges and blocks rather than per-pixel callbacks** -- so a later
-//! masked-lane-select SIMD kernel (the technique #127 names) can be slotted
-//! in behind [`filter_luma_line`]/[`filter_chroma_line`]'s own call sites
-//! without changing the interface a caller programs against. That is the
-//! actual reason a spike has to wait: no proven-correct scalar reference to
-//! measure a vector kernel against exists yet, and `vaco-simd` itself has
-//! neither a masked-select primitive in `ops` nor a ternary check driver in
-//! `testing` to validate one against — building the spike now would mean
-//! silently absorbing #92's own unbuilt scope as an unplanned detour.
-//! `vaco-codec-dsp-idct` set the precedent this crate follows: it depends
-//! on `vaco-core` and `vaco-tx` only, no `vaco-simd`, and that has not
-//! blocked anything.
+//! This crate started scalar and correctness-first, deliberately shaped
+//! around **edges and blocks rather than per-pixel callbacks** precisely so
+//! a later masked-lane-select SIMD kernel (the technique #127 names) could
+//! slot in behind [`filter_luma_line`]/[`filter_chroma_line`]'s own call
+//! sites without changing the interface a caller programs against. That
+//! shape paid off: `#619` added the primitive it was waiting on
+//! (`vaco-simd::ops::select_i16`) and [`batch`] is that kernel, built
+//! against the scalar functions as its own proptest oracle rather than
+//! replacing them. `filter_luma_line`/`filter_chroma_line` stay exactly as
+//! they were -- both the correctness reference and the tail handler for a
+//! batch that is not a multiple of the native vector width.
 //!
 //! This crate computes **one edge's filtered samples given the samples and
 //! QPs on both sides**. It does not:
@@ -35,6 +33,20 @@
 //!   not store chroma samples yet, so its own deblocking pass is
 //!   luma-only for now, an explicit, narrower scope than this crate's).
 //!
+//! # Vectorised batch entry point
+//!
+//! `#619` closed the blocker this doc used to record: `vaco-simd` now has
+//! masked-lane select at `i16` width (`ops::select_i16`), and [`batch`]
+//! builds the vectorised kernel behind it -- [`batch::filter_luma_edge`]/
+//! [`batch::filter_chroma_edge`] batch every line along one edge (16 for
+//! luma, 8 for 4:2:0 chroma) rather than one line at a time, which is what
+//! it takes to fill a vector register. See that module's own doc for the
+//! technique (compute both `bS==4`/`bS<4` candidates, select per lane) and
+//! for why this crate now depends on `vaco-simd`. [`filter_luma_line`]/
+//! [`filter_chroma_line`] remain the scalar reference every batched result
+//! is checked against, and the tail of any batch not a multiple of the
+//! native vector width still falls back to them directly.
+//!
 //! # The two shapes: normal (`bS < 4`) and strong (`bS == 4`)
 //!
 //! Clause 8.7.2.1's own boundary-strength derivation feeds two entirely
@@ -46,7 +58,18 @@
 //! a caller could forget to check.
 
 #![forbid(unsafe_code)]
+// `#[inline(always)]` is not a tuning knob in `batch`'s kernel bodies: it is
+// how a dispatched level's target-feature context reaches them (see
+// `vaco-simd`'s own crate doc, "Authoring a kernel" step 2). A body that
+// fails to inline is compiled at the ambient baseline -- still correct,
+// silently slow, and invisible to every correctness test. Turned off once,
+// at the root, rather than annotated onto every kernel function.
+#![allow(
+    clippy::inline_always,
+    reason = "mandatory for target-feature propagation in batch's kernel bodies; see crate docs"
+)]
 
+pub mod batch;
 pub mod tables;
 
 use core::num::NonZeroU8;
