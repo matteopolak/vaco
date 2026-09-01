@@ -117,14 +117,17 @@ fn muxed_packets_demux_in_order_with_the_measured_clock() {
             Err(e) => panic!("unexpected error: {e:?}"),
         }
     }
+    // Video's pts stays unset on the way back out, same as on the way in
+    // (see `vaco-demux-avi`'s own test of this): AVI carries no explicit
+    // presentation order for video, so nothing round-trips one.
     assert_eq!(
         got,
         vec![
-            (0, Some(0), true, 10),
+            (0, None, true, 10),
             (1, Some(0), true, 4000),
-            (0, Some(1), false, 8),
+            (0, None, false, 8),
             (1, Some(2000), true, 2000),
-            (0, Some(2), false, 6),
+            (0, None, false, 6),
         ]
     );
 }
@@ -154,12 +157,17 @@ fn avcc(sps: &[u8], pps: &[u8]) -> Vec<u8> {
     r
 }
 
-/// An H.264 stream sourced from a length-prefixed container (MP4's `avcC`)
-/// keeps that framing in AVI too: measured against `ffmpeg 8.1 -c copy -f
-/// avi` on an `avc1`-tagged MP4 source, which writes `strf`'s `FourCC` as
-/// `avc1` and copies the source `avcC` in verbatim, length prefixes and all
-/// — it does not reframe to Annex B the way MPEG-TS/`h264_mp4toannexb`
-/// muxers do.
+/// An H.264 stream sourced from an `avc1`-tagged, length-prefixed container
+/// (MP4's `avcC`) keeps that framing in AVI too: measured against `ffmpeg
+/// 9.0.1 -c copy -f avi` on a real `libx264`-in-MP4 source, which writes
+/// `strf`'s `FourCC` as `avc1` and copies the source `avcC` in verbatim,
+/// length prefixes and all — it does not reframe to Annex B the way
+/// MPEG-TS/`h264_mp4toannexb` muxers do.
+///
+/// `params.codec_tag` is set to `avc1` because that, not `nal_length_size`
+/// alone, is what the reference's own `-c copy` keys off — see
+/// `a_length_prefixed_h264_with_no_source_tag_is_refused_not_silently_annexb_tagged`
+/// below for the sibling case this distinction exists to cover.
 #[test]
 fn a_length_prefixed_h264_sample_keeps_its_framing_and_gets_avc1_avcc() {
     let sink = MemorySink::new();
@@ -172,6 +180,7 @@ fn a_length_prefixed_h264_sample_keeps_its_framing_and_gets_avc1_avcc() {
     if let Some(v) = &mut params.video {
         v.nal_length_size = Some(4);
     }
+    params.codec_tag = Some(*b"avc1");
     let record = avcc(&sps, &pps);
     params.extradata = Some(record.clone());
     let v = mux.add_stream(&params).unwrap();
@@ -212,6 +221,43 @@ fn a_length_prefixed_h264_sample_keeps_its_framing_and_gets_avc1_avcc() {
     let mut demux = open(bytes);
     let p = demux.read_packet().unwrap();
     assert_eq!(p.len, sample.len());
+}
+
+/// A length-prefixed H.264 stream with no `avc1`/`hvc1` source tag is
+/// refused, not silently written with an Annex-B `FourCC` over a
+/// length-prefixed payload.
+///
+/// Measured against `ffmpeg 9.0.1`: an identical `libx264` elementary
+/// stream remuxed `-c copy -f avi` from MP4 (`codec_tag=avc1`) succeeds, but
+/// from Matroska or FLV (both report `codec_tag=0` for the same bitstream —
+/// neither format carries an AVI/QuickTime-style `FourCC`) it fails with
+/// "Error submitting a packet to the muxer: Invalid data found when
+/// processing input". This muxer used to key its `strf` `FourCC` choice off
+/// `nal_length_size` alone, which produced a real, silently wrong file: an
+/// `avc1` tag (promising a config record and length-prefixed samples that
+/// happen to be correct here) or worse, on some other source shape, an
+/// `H264` tag over payload that is not actually Annex-B — exactly the
+/// mismatch a real decoder cannot read. Refusing is not a fidelity gap
+/// (nothing here could correctly reframe to Annex B either, since that is
+/// `h264_mp4toannexb`'s job and nothing calls it for AVI output).
+#[test]
+fn a_length_prefixed_h264_with_no_source_tag_is_refused_not_silently_annexb_tagged() {
+    let mut params = video_params(64, 48, (25, 1));
+    if let Some(v) = &mut params.video {
+        v.nal_length_size = Some(4);
+    }
+    params.extradata = Some(avcc(&[0x67, 0x64, 0x00, 0x0a, 0xAA], &[0x68, 0xEB]));
+    // `codec_tag` deliberately left at its default (`None`) — the Matroska/
+    // FLV shape, not the MP4 shape the sibling test above covers.
+    assert_eq!(params.codec_tag, None);
+
+    let sink = MemorySink::new();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let err = mux.add_stream(&params).unwrap_err();
+    assert!(
+        matches!(err, vaco_core::Error::Unsupported(_)),
+        "expected an Unsupported refusal, got {err:?}"
+    );
 }
 
 /// The Annex-B counterpart: a source with no length-prefix framing at all
@@ -307,15 +353,18 @@ fn video_packets_land_on_the_grid_with_empty_slots_between() {
             Err(e) => panic!("unexpected error: {e:?}"),
         }
     }
+    // These are video packets, so pts stays unset on read-back (see the
+    // clock test above) — only `len` (real payload vs. an empty grid slot)
+    // is being checked here.
     assert_eq!(
         got,
         vec![
-            (Some(0), 1),
-            (Some(1), 0),
-            (Some(2), 0),
-            (Some(3), 0),
-            (Some(4), 0),
-            (Some(5), 1),
+            (None, 1),
+            (None, 0),
+            (None, 0),
+            (None, 0),
+            (None, 0),
+            (None, 1),
         ]
     );
     assert_eq!(demux.streams()[0].duration_ts, Some(6));
@@ -415,6 +464,7 @@ fn check_bitstream_never_requests_a_filter_through_mux_writer() {
     if let Some(v) = &mut params.video {
         v.nal_length_size = Some(4);
     }
+    params.codec_tag = Some(*b"avc1");
     let record = avcc(&sps, &pps);
     params.extradata = Some(record.clone());
 

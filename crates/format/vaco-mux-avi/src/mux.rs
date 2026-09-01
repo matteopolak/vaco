@@ -699,7 +699,35 @@ impl Muxer for AviMuxer {
             out.time_base = GRID_RATE;
             out.strh_time_base = GRID_RATE;
             out.has_b_frames = v.has_b_frames;
-            let length_prefixed = is_h264_or_hevc(codec_id) && v.nal_length_size.is_some_and(|n| n > 0);
+            let has_config_record_tag = matches!(
+                params.codec_tag.as_ref(),
+                Some(b"avc1" | b"AVC1" | b"hvc1" | b"hev1")
+            );
+            let payload_is_length_prefixed =
+                is_h264_or_hevc(codec_id) && v.nal_length_size.is_some_and(|n| n > 0);
+            if payload_is_length_prefixed && !has_config_record_tag {
+                // The reference's own AVI muxer picks its `strf` FourCC from
+                // the *source's* existing codec tag during `-c copy`, not
+                // from the payload's own framing: an `avc1`-tagged MP4/MOV
+                // source round-trips into AVI's `avc1` unchanged (measured,
+                // `ffmpeg 9.0.1 -c copy -f avi`), but a source with no such
+                // tag -- Matroska and FLV both report `codec_tag=0` for the
+                // identical bitstream, measured -- has nothing to map,
+                // defaults to Annex-B framing, and, since the payload is
+                // still length-prefixed, refuses outright rather than
+                // writing a `strf`/payload mismatch nothing could read. This
+                // muxer used to key off `nal_length_size` alone, which
+                // produced exactly that mismatch — an `avc1` tag over a
+                // length-prefixed payload copied from a source that never
+                // claimed to be `avc1` — silently, where the reference
+                // refuses. Reframing to Annex B (`h264_mp4toannexb`) is not
+                // done here either: measured, the reference's own AVI muxer
+                // never auto-inserts it the way its MPEG-TS muxer does.
+                return Err(Error::Unsupported(
+                    "avi: length-prefixed H.264/HEVC with no avc1/hvc1 source tag would need Annex-B reframing, which this muxer does not perform",
+                ));
+            }
+            let length_prefixed = payload_is_length_prefixed;
             if is_h264_or_hevc(codec_id) {
                 let extra = params.extradata.clone().filter(|e| !e.is_empty());
                 if length_prefixed && extra.is_none() {
