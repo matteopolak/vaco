@@ -160,7 +160,10 @@ pub(crate) struct Opts {
 
     #[opt(
         name = "dither_method",
-        help = "dither method: none, rectangular or triangular",
+        help = "dither method: none, rectangular, triangular, triangular_hp, \
+                or one of the seven noise-shaping curves (lipshitz, f_weighted, \
+                modified_e_weighted, improved_e_weighted, shibata, low_shibata, \
+                high_shibata) — see vaco-resample's docs for what these are",
         default = "none".to_owned(),
         flags(audio, filtering)
     )]
@@ -178,20 +181,19 @@ impl Opts {
     }
 
     fn dither(&self) -> DitherMethod {
-        match self.dither_method.as_str() {
-            "rectangular" => DitherMethod::Rectangular,
-            // The noise-shaping curves (`lipshitz`, `shibata`, ...) are aliased
-            // to triangular-highpass by `vaco-resample` itself; see its docs.
-            "triangular"
-            | "triangular_hp"
-            | "lipshitz"
-            | "shibata"
-            | "low_shibata"
-            | "high_shibata"
-            | "f_weighted"
-            | "modified_e_weighted"
-            | "improved_e_weighted" => DitherMethod::TriangularHighpass,
-            _ => DitherMethod::None,
+        // Delegate to `vaco-resample`'s own parser rather than re-listing its
+        // option names here. This used to hardcode its own copy of the
+        // mapping, aliasing every noise-shaping name to `triangular_hp` —
+        // correct when written, but it silently kept doing that after
+        // `vaco-resample` implemented all seven curves for real, because
+        // nothing here re-derives from the crate it wraps. Found while
+        // implementing #519: a delegating wrapper that copies a mapping
+        // instead of forwarding to it is exactly the shape
+        // `planning/AGENT-CONSTRAINTS.md` calls out as "a wrapper swallows
+        // what it does not forward".
+        match DitherMethod::from_name(self.dither_method.as_str()) {
+            Ok(m) => m,
+            Err(_) => DitherMethod::None,
         }
     }
 }
