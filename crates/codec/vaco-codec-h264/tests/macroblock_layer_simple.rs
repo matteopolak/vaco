@@ -55,7 +55,7 @@ fn simple_ip_single_ref_single_slice() {
                     slice_header.first_mb_in_slice
                 );
                 let stats =
-                    vaco_codec_h264::mb::decode_slice_cavlc(&mut reader, &mut budget, sps, pps, &slice_header)
+                    vaco_codec_h264::mb::decode_slice_cavlc(&mut reader, &mut budget, sps, pps, &slice_header, None)
                         .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
                 println!(
                     "  -> mbs={} skipped={}",

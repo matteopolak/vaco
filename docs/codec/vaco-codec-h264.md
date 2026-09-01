@@ -147,13 +147,17 @@ empty.
 
 ## What is not implemented
 
-Prediction, motion compensation, transform and reconstruction, deblocking,
-DPB/reference management, threading, conformance bring-up — #420 onward.
-`H264Decoder::send_packet` still resolves only a real slice's entropy mode
-(verified against real `ffmpeg 8.1 -coder cavlc`/`-coder cabac` output,
-`tests/decoder.rs`) and returns `Error::Unsupported` naming exactly that
-gap; [`mb::decode_slice_cavlc`] is not yet wired into it, since nothing it
-reads is kept beyond what bit consumption needs.
+Most of this section is historical — from #419/#420's original scope, before
+CABAC reconstruction, then CABAC B slices, then CAVLC reconstruction all
+landed (see the later "## Round" sections below for each). Kept for the
+refusals that are still real rather than rewritten, since a stale "not yet
+implemented" that quietly became false is exactly the failure
+`planning/AGENT-CONSTRAINTS.md`'s "never pin the absence of something the
+project is building" names.
+
+~~`H264Decoder::send_packet` still resolves only a real slice's entropy mode
+... `mb::decode_slice_cavlc` is not yet wired into it~~ — **CAVLC now
+reconstructs real pixels**, see "Round: CAVLC reconstruction" below.
 
 Within #419's own scope, explicitly out rather than merely unimplemented
 (see `mb.rs`'s own module doc for the full list and reasons):
@@ -866,6 +870,151 @@ neighbour substitution, 4:2:2/4:4:4, `SI` slices, more than one slice per
 picture, and a CABAC slice whose `end_of_slice_flag` fires early (refused
 as `InvalidData` rather than emitting a partial picture — no longer
 reproducible on any clip in the corpus above, but kept).
+
+## Round: CAVLC reconstruction — baseline profile, byte-exact
+
+**CAVLC now reconstructs real pixels.** `mb::decode_slice_cavlc` used to
+verify bit-exact *consumption* only, discarding every decoded coefficient
+and motion vector; `H264Decoder::send_packet` refused every
+`entropy_coding_mode_flag == 0` slice outright. Both are gone: CAVLC now
+drives the exact same downstream pipeline CABAC does. This was possible
+without touching `crate::reconstruct`, `crate::intra`, `crate::dequant`,
+`crate::motion` or `crate::deblock` at all — every one of those modules
+already took "prediction/reconstruction doesn't know which entropy coder
+produced its input" as a design constraint, so the whole of this round is
+new code inside `mb.rs` plus a two-way dispatch in `decoder.rs`, nothing
+else.
+
+### What changed, in one paragraph
+
+`decode_slice_cavlc`/`decode_macroblock_cavlc` were rewritten to populate
+`CabacGrids` — the same neighbour-state type `decode_slice_cabac` already
+used for motion-vector prediction, `Intra_4x4` mode inference and
+macroblock availability, despite the name: nothing about it is CABAC-
+specific, only CABAC was the only caller before this round. Three new
+functions (`decode_one_partition_cavlc`, `decode_two_partitions_cavlc`,
+`decode_sub_mb_pred_cavlc`) mirror their CABAC counterparts' exact
+neighbour-lookup/`predict_mv`/grid-publication logic, substituting plain
+`te(v)`/`se(v)` reads for CABAC's context-coded ones — clause 8.4.1's
+prediction maths has nothing to do with which entropy coder produced
+`ref_idx`/`mvd`. `cavlc_residual_to_forward` converts
+`cavlc::CavlcResidual`'s reverse-scan, run-length representation into the
+forward-scan `positions`/`levels` shape `CabacResidual` already uses
+(clause 7.3.5.3.2's own reconstruction algorithm, walking the decoded
+levels from lowest frequency to highest and accumulating each one's own
+zero run into a strictly increasing scan position), so `MbResidual` is
+identical in shape regardless of entropy mode and `crate::reconstruct`
+needs no changes at all. `decoder.rs`'s dispatch is a plain `if
+pps.entropy_coding_mode { CabacDecoder ... } else { decode_slice_cavlc on
+the same BitReader ... }` feeding the same `stats.macroblock_count !=
+total_mbs` sanity check and the same `H264FrameTask` construction either
+way.
+
+### The one real bug this found, and how it was isolated
+
+**`mb::more_rbsp_data` silently dropped a picture's own last macroblock**
+whenever the slice's last real syntax element ended off a byte boundary
+with only a few bits of real data left before `rbsp_trailing_bits()`. It
+read [`vaco_bitstream::BitReader::remaining_bytes`], whose own doc says
+plainly: "If the reader is not byte-aligned the partial byte is skipped."
+After a mid-byte read — nearly every syntax element here ends one — that
+silently discarded up to seven bits of real, unconsumed data sitting in
+the tail of the current byte. When a slice's final macroblock finished
+mid-byte with nothing left but one closing `mb_skip_run` and the true
+trailing pattern, "skip the partial byte" landed exactly on the buffer's
+own logical end: `remaining_bytes()` returned empty, `more_rbsp_data`
+reported "nothing left", and the picture's very last macroblock was never
+read at all — `stats.macroblock_count` came up one short of the real
+total on real `libx264 -profile:v baseline` content specifically. Fixed
+with a bit-precise replacement (`BitReader::bits_left`/`peek`, no byte
+rounding): more than 8 bits left is always real data (`rbsp_trailing_bits`
+is at most one stop bit plus seven padding bits); 8 or fewer, and the
+exact remaining bit pattern is checked against "a single stop bit at the
+top, all zero below" directly.
+
+This is the same shape of bug `planning/AGENT-CONSTRAINTS.md` already
+names twice over — a small, synthetic fixture (this crate's own
+`cavlc_ipb.264`/`cavlc_ip_simple.264`, 64x64 and single-slice respectively)
+never happened to land a real syntax element's own end exactly against the
+buffer's last byte, so the bit-exact-*consumption* tests already in this
+repository could never have found it; only a real, larger `libx264
+-profile:v baseline` picture (320x240, 300 macroblocks) did, and only
+because its own last macroblock happened to be immediately followed by a
+short closing skip run rather than landing on a full byte by chance.
+
+**How it was isolated, since this is exactly the kind of divergence a
+wrong oracle can misreport**: JM 19.1 (`jm-reference-software`,
+`provenance/sources.toml`) was cloned and built from source (its own
+`CMakeLists.txt` needed two portability fixes for this machine — dropping
+`-msse4.1` on arm64 and disabling `-Werror` for a handful of pre-existing
+`-Wunused-but-set-variable`/`-Wmisleading-indentation` warnings in
+unrelated files; no decode logic touched), then rebuilt a second time with
+its own `TRACE` macro enabled, which dumps every decoded syntax element
+and value to `trace_dec.txt` — an oracle this crate did not have to
+instrument by hand, unlike JM's own comment-based `TRACE_STRING` markers
+used for CABAC work elsewhere in this file's history. The trace's own
+per-picture buffering (a slice's macroblocks are decoded only after the
+*next* slice's own header has already been parsed and traced) means the
+`POC: N MB: 0` block immediately following a given slice's header actually
+belongs to the *previous* slice — confirmed against the file's own POC
+arithmetic (`PicOrderCnt == 2 * frame_num` for this `pic_order_cnt_type ==
+2` corpus) before trusting a single value from it, the same
+"control your oracle" discipline this project's own notes ask for. Once
+correctly aligned, this crate's own `mb_type`/`mb_skip_run` sequence
+matched JM's, value for value, for the picture's entire 300 macroblocks
+except the one JM alone still had left to read — isolating the defect to
+`more_rbsp_data` specifically, not to any classification, motion, or
+residual logic, before a single line changed. A from-scratch, independent
+Python Exp-Golomb decoder (not derived from this crate's own
+`vaco-codec-golomb`, JM's `vlc.c`, or any other implementation) additionally
+confirmed the very first macroblock's own `mb_type` value the hard way,
+by hand-decoding the slice header and first `ue(v)` reads directly from
+the raw NAL bytes — the "hand-check one case whose answer is knowable
+without any oracle" step this project's own notes ask for before trusting
+an instrumented trace.
+
+### Verification
+
+`ffmpeg -v error -i F -map 0:v:0 -f rawvideo -pix_fmt yuv420p - | shasum -a
+256` against `vaco -threads N -i F -map 0:v:0 -c:v rawvideo -f rawvideo -`,
+fresh `libx264` encodes, `lavfi` sources chosen for detail and motion
+(`mandelbrot`, `life`, `zoneplate`, `testsrc2`, `smptehdbars`) at 176x144,
+320x240, 322x242 (not a multiple of 16), 352x288, 416x240, 640x480,
+1280x720:
+
+- **`-profile:v baseline`** (always CAVLC, no B slices): every size above,
+  byte-exact, `N` in `{1, 2, default}`. One 10-second/300-frame, 640x480
+  clip included specifically to stress a longer decode, also byte-exact.
+- **`-profile:v main -coder 0`**, `-bf 0`/`-bf 2`/`-bf 3`, up to 3
+  references: byte-exact at every thread count.
+- **`-profile:v high -coder 0 -bf 2 -refs 3 -x264opts no-8x8dct`**:
+  byte-exact — CAVLC's own 8x8-transform refusal (`pps.transform_8x8_mode`,
+  unrelated to this round) is a real, still-active `check_scope` gate,
+  confirmed by the same profile *without* `no-8x8dct` failing with exactly
+  that `Error::Unsupported` and nothing else.
+- **The existing CABAC regression set is unchanged**: a fresh stock
+  `libx264` (CABAC, B-pyramid, weighted P, High profile, x264's own
+  defaults) at 1024x576 and 322x242, byte-exact at `-threads 1` and the
+  CLI's own default thread count, same as before this round.
+- `cargo +nightly fuzz run h264_decode`/`h264_decode_threaded`, 60s each:
+  clean, no findings, no new corpus behaviour change in either target
+  (this round added no new code either fuzz target's harness reaches
+  differently — the entropy dispatch lives in `decoder.rs`, which both
+  targets already drive).
+
+### What `check_scope` still refuses, on the CAVLC path specifically
+
+`transform_size_8x8_flag`/`Intra_8x8` (`pps.transform_8x8_mode` — CAVLC's
+own tables were never checked against the 8x8 transform, the same reason
+CABAC's own gate on this existed before its High-profile round), `I_PCM`
+(byte-alignment padding not derivable from this module alone the way
+CABAC's `decode_terminate` signals it unambiguously), MBAFF and field
+pictures, `constrained_intra_pred_flag`'s neighbour substitution, 4:2:2/
+4:4:4 chroma, `SI` slices, and temporal direct (`direct_spatial_mv_pred_flag
+== 0`, matching CABAC's own identical refusal). None of these is new —
+every one was already refused before this round; CAVLC reconstruction did
+not lift any of them, it only stopped refusing the *combination* of
+CAVLC with everything else already in scope.
 
 ## Frame threading (`-threads N`), on by default
 

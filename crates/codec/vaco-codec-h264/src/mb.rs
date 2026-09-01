@@ -1,31 +1,33 @@
 //! Macroblock-layer syntax, CAVLC and CABAC, clause 7.3.5 / 7.4.5 — started
 //! for a real bit-exact-consumption measurement (#419's original goal for
-//! this module), now extended just far enough for #420's reconstruction to
-//! draw on: `SliceStats::first_slice_mb_residual`/`first_slice_mb_qpy`
-//! expose the first decoded macroblock's own residual coefficients and
-//! running `QPY`, so `crate::reconstruct` can dequantise and inverse-
-//! transform them without duplicating this module's own CABAC decode. This
-//! module itself still computes no pixel — that composition lives in
-//! `crate::reconstruct`, not here. Every syntax element that would feed
-//! prediction or the transform is still fully *read* (so bit consumption
-//! is correct); most values are only kept when a later element's presence
-//! depends on them, but a few (`intra16x16_pred_mode`,
-//! `intra_chroma_pred_mode`, the residual coefficients themselves, `QPY`)
-//! are now kept all the way out to `SliceStats` for exactly the one
-//! macroblock a caller can address without a real multi-macroblock
-//! picture buffer.
+//! this module), then extended for #420's CABAC reconstruction, and now
+//! extended again so [`decode_slice_cavlc`] reconstructs too, not merely
+//! consumes: it returns the same [`SliceStats`]/[`MbSummary`] shape
+//! [`decode_slice_cabac`] does — real `mb_type` classification, clause
+//! 8.4.1 motion-vector prediction, and residual coefficients in forward
+//! scan order — built over the *same* [`CabacGrids`] neighbour-state type
+//! CABAC uses (despite the name: it is entropy-independent motion/intra-
+//! mode/macroblock-availability state, the same way `crate::motion`'s own
+//! functions are "a set of pure functions over already-decoded neighbour
+//! state" regardless of which entropy coder produced that state — see
+//! that module's own doc) plus [`NeighbourGrid`], CAVLC's own `nC` tracker
+//! (clause 9.2.1's `TotalCoeff` averaging, which CABAC has no equivalent
+//! of at all). This module itself still computes no pixel — that
+//! composition lives in `crate::reconstruct`, not here, and never learns
+//! which entropy coder produced the [`MbSummary`] it is walking.
 //!
 //! # What is in scope, and what is explicitly not
 //!
-//! **In scope**: I/P/B slices (B on the CABAC path only -- see the "B
-//! slices" bullet below), `mb_skip_run` (CAVLC) and `mb_skip_flag`
-//! (CABAC), all of Table 7-8/7-10/7-11's macroblock types and Table
-//! 7-14/7-15's sub-macroblock types, `ref_idx`/`mvd` presence and count per
-//! partition, `coded_block_pattern` (both entropy modes), `mb_qp_delta`,
-//! and the neighbour-derived `nC` (clause 9.2.1) CAVLC residual decode
-//! needs. Multiple slices per picture (each slice gets its own fresh
-//! neighbour grid — clause 6.4.8's "different slice" rule for
-//! unavailability falls out of that for free, not a separate check).
+//! **In scope**: I/P/B slices, on both entropy paths, real motion vectors
+//! and residual coefficients (not merely a bit-exact-consumption
+//! measurement) on both, `mb_skip_run` (CAVLC) and `mb_skip_flag` (CABAC),
+//! all of Table 7-8/7-10/7-11's macroblock types and Table 7-14/7-15's
+//! sub-macroblock types, `ref_idx`/`mvd` presence and count per partition,
+//! `coded_block_pattern` (both entropy modes), `mb_qp_delta`, and the
+//! neighbour-derived `nC` (clause 9.2.1) CAVLC residual decode needs.
+//! Multiple slices per picture (each slice gets its own fresh neighbour
+//! grid — clause 6.4.8's "different slice" rule for unavailability falls
+//! out of that for free, not a separate check).
 //!
 //! **Explicitly out of scope, not merely unimplemented**:
 //!
@@ -111,7 +113,7 @@ use vaco_parse_h264::{ChromaFormat, Pps, Sps, SliceHeader, SliceKind};
 
 use crate::cabac_mb_tables as t;
 use crate::cabac_residual::{CabacInit, CabacResidual, ContextCategory, ContextSet, residual_block_cabac};
-use crate::cavlc::residual_block_cavlc;
+use crate::cavlc::{CavlcResidual, residual_block_cavlc};
 
 /// One partition's prediction-list membership — all that bit consumption
 /// needs to know (which of `ref_idx_l0`/`l1` and `mvd_l0`/`l1` are present),
@@ -635,11 +637,30 @@ fn check_scope(sps: &Sps, pps: &Pps, header: &SliceHeader) -> Result<()> {
 }
 
 /// Drive one CAVLC slice's `slice_data()` (clause 7.3.4) from a reader
-/// already positioned at its first bit, consuming exactly the bits the
-/// macroblock loop declares — the bit-exact-consumption measurement #419
-/// exists for. Returns [`SliceStats`] on success, an error naming exactly
-/// what stopped it otherwise (including every explicit scope refusal in
-/// the module doc).
+/// already positioned at its first bit, all the way to real reconstruction
+/// data — not merely bit consumption. [`SliceStats::macroblocks`] comes out
+/// in exactly the shape [`decode_slice_cabac`]'s own callers already feed
+/// `crate::reconstruct`: real `mb_type` classification, clause 8.4.1's
+/// motion-vector prediction (median predictor, `P_Skip`/`B_Skip`, spatial
+/// direct), and the residual coefficients themselves, forward-scan and
+/// dequantisable, not the `TotalCoeff`-only bit-cost measurement this
+/// function used to stop at.
+///
+/// `colocated` is `RefPicList1[0]`'s own motion field, exactly what
+/// [`decode_slice_cabac`] takes it for: spatial direct's `colZeroFlag`
+/// (clause 8.4.1.2.1) needs it, `None` whenever this is not a B slice.
+///
+/// Two grids do the neighbour-derivation work, not one: [`NeighbourGrid`]
+/// is CAVLC's own `nC` tracker (clause 9.2.1, `TotalCoeff` averaging —
+/// CABAC has no equivalent, it derives `coded_block_flag` context from a
+/// different, boolean-per-block history instead), and [`CabacGrids`] is
+/// the entropy-independent motion/intra-mode/macroblock-availability state
+/// clause 8.4.1 and clause 8.3.1.1 both need regardless of which entropy
+/// coder produced the values flowing into them — the same type
+/// [`decode_slice_cabac`] uses for exactly that, despite the name (see its
+/// own doc: `crate::motion`'s median predictor is "a set of pure functions
+/// over already-decoded neighbour state", built with no entropy-coding
+/// assumption at all).
 ///
 /// # Errors
 ///
@@ -652,30 +673,46 @@ pub fn decode_slice_cavlc(
     sps: &Sps,
     pps: &Pps,
     header: &SliceHeader,
+    colocated: Option<&ColocatedField>,
 ) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
     if pps.transform_8x8_mode {
         // CAVLC-only refusal (moved out of `check_scope`, which CABAC's
-        // own `decode_slice_cabac` also calls and no longer needs this
-        // for -- see the module doc's own "explicitly not" list):
-        // CAVLC reconstruction is out of scope entirely
-        // (`crate::reconstruct`'s own module doc), so there is no point
-        // reading `transform_size_8x8_flag`/the 8x8 residual against
-        // `cavlc_tables.rs`'s tables, which were never checked against
-        // either.
+        // own `decode_slice_cabac` also calls and does support this for):
+        // the primary source this crate's CAVLC tables are checked against
+        // predates the 8x8 transform entirely (see the module doc), so
+        // there is no point reading `transform_size_8x8_flag`/the 8x8
+        // residual against tables never checked for it.
         return Err(Error::Unsupported(
-            "vaco-codec-h264: transform_size_8x8_flag/Intra_8x8 is out of scope for CAVLC \
-             — CAVLC reconstruction is unimplemented regardless",
+            "vaco-codec-h264: transform_size_8x8_flag/Intra_8x8 is out of scope for CAVLC",
         ));
     }
+    let is_b_slice = matches!(header.kind, SliceKind::B);
+    // Clause 8.4.1.2.1's temporal direct derivation is a materially
+    // different algorithm this crate does not implement -- refused
+    // honestly, mirroring `decode_slice_cabac`'s own identical refusal
+    // (`direct_spatial_mv_pred_flag` is x264's own default, so this only
+    // ever refuses the uncommon case).
+    if is_b_slice && header.direct_spatial_mv_pred != Some(true) {
+        return Err(Error::Unsupported(
+            "vaco-codec-h264: temporal direct prediction (direct_spatial_mv_pred_flag == 0) is out of scope",
+        ));
+    }
+    let is_i_or_si = matches!(header.kind, SliceKind::I | SliceKind::Si);
+
     let mbs_wide = sps.pic_width_in_mbs;
     let mbs_high = sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
-    let mut grid = NeighbourGrid::new(mbs_wide.max(1), mbs_high.max(1));
+    let total_mbs = mbs_wide.saturating_mul(mbs_high);
+    let mut nc_grid = NeighbourGrid::new(mbs_wide.max(1), mbs_high.max(1));
+    let mut grids = CabacGrids::new(mbs_wide, mbs_high, budget)?;
+    // Clause 7.4.5's own QPY,PREV initialisation: "For the first
+    // macroblock in the slice QPY,PREV is initially set equal to
+    // SliceQPY." -- CAVLC's own `mb_qp_delta` is a plain `se(v)`, with no
+    // `ctxIdxInc` to derive from a running `PrevMbQp` the way CABAC needs,
+    // so only the running `QPY` value itself is carried here.
+    let mut qpy = pps.slice_qp(header.slice_qp_delta).clamp(0, 51);
     let mut stats = SliceStats::default();
 
-    let is_b = matches!(header.kind, SliceKind::B);
-    let is_i_or_si = matches!(header.kind, SliceKind::I | SliceKind::Si);
-    let total_mbs = mbs_wide.saturating_mul(mbs_high);
     let mut curr_mb_addr = header.first_mb_in_slice;
 
     loop {
@@ -688,16 +725,74 @@ pub fn decode_slice_cavlc(
                 let mut g = BoundedGolomb::new(r, budget);
                 g.ue_v(total_mbs)?
             };
-            stats.skipped_count += skip_run;
-            stats.macroblock_count += skip_run;
             // Clause 9.2.1: a skipped macroblock's TotalCoeff is inferred to
             // be 0 for every block it owns, exactly like an explicit CBP of
             // 0 — the next real macroblock's nC derivation depends on this.
+            // Clause 8.4.1.1/8.4.1.2.2: `P_Skip`/`B_Skip`'s own motion is
+            // derived and published into `grids` too, the same "a later
+            // macroblock's own A/B/C lookup must see this one as real and
+            // available" requirement `decode_slice_cabac`'s own skip branch
+            // documents.
             for skipped in 0..skip_run {
                 let addr = curr_mb_addr + skipped;
                 let (sx, sy) = mb_addr_xy(addr, mbs_wide);
-                zero_out_mb_neighbours(&mut grid, sx, sy);
+                zero_out_mb_neighbours(&mut nc_grid, sx, sy);
+                grids.begin_macroblock(sx, sy);
+                let ax = sx * 4;
+                let ay = sy * 4;
+                let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
+                let above = ay.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(ax, ay2));
+                let c_neighbour = resolve_c(&grids, ax, sx * 4 + 3, ay);
+                if is_b_slice {
+                    let params = spatial_direct_params(left, above, c_neighbour);
+                    apply_spatial_direct_16x16(&mut grids, sx, sy, sps.direct_8x8_inference, params, colocated);
+                } else {
+                    let skip_mv = crate::motion::p_skip_mv(
+                        left.as_motion_neighbour(0),
+                        above.as_motion_neighbour(0),
+                        c_neighbour.as_motion_neighbour(0),
+                    );
+                    let info = MvInfo {
+                        mb_available: true,
+                        pred: Some(PartPred::L0),
+                        ref_idx: [0, -1],
+                        mvd: [(0, 0), (0, 0)],
+                        mv: [skip_mv, (0, 0)],
+                        direct_or_skip: true,
+                    };
+                    for y in 0..4u32 {
+                        for x in 0..4u32 {
+                            grids.set_mv(sx * 4 + x, sy * 4 + y, info);
+                        }
+                    }
+                }
+                grids.set_mb_info(sx, sy, CabacMbInfo { available: true, skipped: true, ..CabacMbInfo::default() });
+                // A skipped macroblock never reads mb_qp_delta (clause
+                // 7.4.5's own inference-to-0 rule) -- `qpy` (this slice's
+                // running QPY) is therefore left unchanged.
+                stats.macroblocks.push(MbSummary {
+                    mb_x: sx,
+                    mb_y: sy,
+                    skipped: true,
+                    is_ipcm: false,
+                    is_intra4x4: false,
+                    is_intra8x8: false,
+                    is_intra16x16: false,
+                    intra16x16_pred_mode: 0,
+                    transform_8x8: false,
+                    intra_chroma_pred_mode: 0,
+                    qpy,
+                    residual: MbResidual::default(),
+                    mv_blocks: collect_mv_blocks(&grids, sx, sy),
+                });
+                if addr == header.first_mb_in_slice {
+                    stats.first_slice_mb_cbp = Some((0, 0));
+                    stats.first_slice_mb_qpy = Some(qpy);
+                    stats.first_slice_mb_residual = Some(MbResidual::default());
+                }
             }
+            stats.skipped_count += skip_run;
+            stats.macroblock_count += skip_run;
             curr_mb_addr += skip_run;
             if curr_mb_addr >= total_mbs {
                 break;
@@ -722,104 +817,284 @@ pub fn decode_slice_cavlc(
             }
         }
         let (mb_x, mb_y) = mb_addr_xy(curr_mb_addr, mbs_wide);
+        let is_first_mb_in_slice = curr_mb_addr == header.first_mb_in_slice;
+        grids.begin_macroblock(mb_x, mb_y);
 
-        decode_macroblock_cavlc(r, budget, pps, header, &mut grid, mb_x, mb_y, is_b)?;
+        let residual = decode_macroblock_cavlc(
+            r, budget, sps, header, &mut nc_grid, &mut grids, &mut qpy, mb_x, mb_y, is_b_slice, colocated,
+        )?;
         stats.macroblock_count += 1;
+        let info = grids.mb_info_at(mb_x, mb_y);
+        // An intra macroblock has no partitions of its own, but it is still
+        // clause 6.4-*available* to every later macroblock that looks at it
+        // as an A/B/C neighbour, with `mvLXN = (0, 0)`/`refIdxLXN = -1` --
+        // the same publish step `decode_slice_cabac` performs after its own
+        // per-macroblock decode returns.
+        if info.is_some_and(|i| i.is_intra) {
+            let intra_mv = MvInfo { mb_available: true, ref_idx: [-1, -1], ..MvInfo::default() };
+            for y in 0..4u32 {
+                for x in 0..4u32 {
+                    grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, intra_mv);
+                }
+            }
+        }
+        let residual_bytes = mb_residual_charged_bytes(&residual);
+        if is_first_mb_in_slice {
+            stats.first_slice_mb_cbp = info.map(|i| (i.cbp_luma, i.cbp_chroma));
+            stats.first_slice_mb_intra16x16_pred_mode =
+                info.filter(|i| i.is_intra16x16).map(|i| i.intra16x16_pred_mode);
+            stats.first_slice_mb_intra_chroma_pred_mode =
+                info.filter(|i| i.is_intra).map(|i| i.intra_chroma_pred_mode);
+            stats.first_slice_mb_qpy = Some(qpy);
+            stats.first_slice_mb_residual = Some(residual.clone());
+        }
+        stats.macroblocks.push(MbSummary {
+            mb_x,
+            mb_y,
+            skipped: false,
+            is_ipcm: false,
+            is_intra4x4: info.is_some_and(|i| i.is_intra4x4),
+            is_intra8x8: false,
+            is_intra16x16: info.is_some_and(|i| i.is_intra16x16),
+            intra16x16_pred_mode: info.map_or(0, |i| i.intra16x16_pred_mode),
+            transform_8x8: false,
+            intra_chroma_pred_mode: info.map_or(0, |i| i.intra_chroma_pred_mode),
+            qpy,
+            residual,
+            mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
+        });
+        budget.release(residual_bytes);
         curr_mb_addr += 1;
 
         if !more_rbsp_data(r) {
             break;
         }
     }
+    grids.release(budget);
     Ok(stats)
 }
 
 /// `more_rbsp_data()`, clause 7.2 — whether anything other than
-/// `rbsp_trailing_bits()` remains. Approximated the same way a byte-level
-/// framer can: if what is left is entirely the trailing pattern (a single
-/// `1` bit then zero-or-more `0` bits, byte-aligned at the end), there is
-/// no more real data. `vaco-parse-h264` already trims RBSP emulation
-/// prevention bytes before this reader ever sees the buffer, so this does
-/// not need to.
-fn more_rbsp_data(r: &BitReader<'_>) -> bool {
-    let remaining = r.remaining_bytes();
-    // Find the last set bit across the remaining bytes; if it is not the
-    // very first bit remaining, there is more than just the trailing
-    // pattern left.
-    let Some(idx) = remaining.iter().rposition(|&b| b != 0) else {
+/// `rbsp_trailing_bits()` remains. `rbsp_trailing_bits()` is at most 8 bits
+/// (a single `1` stop bit then zero to seven `0` padding bits, up to the
+/// next byte boundary) and always ends exactly at the RBSP's own logical
+/// end, so bit-exact precision is only ever needed when 8 or fewer bits
+/// remain — with more than that, real data is guaranteed regardless of
+/// what it contains.
+///
+/// # A real, silently-lossy bug this replaces
+///
+/// The previous implementation read [`BitReader::remaining_bytes`], whose
+/// own doc says plainly: "If the reader is not byte-aligned the partial
+/// byte is skipped." After a mid-byte read — nearly every syntax element
+/// here ends one, `coded_block_pattern` and every VLC included — that
+/// silently discarded up to seven bits of real, unconsumed data sitting in
+/// the tail of the current byte. When a slice's very last macroblock
+/// finished mid-byte with nothing left but one final `mb_skip_run` and the
+/// true trailing pattern, "skip the partial byte" landed exactly on the
+/// buffer's own logical end, returning an empty slice and reporting "no
+/// more data" while a real, three-bit `mb_skip_run` (clause 7.3.4's own
+/// final entry, the one that closes out the picture) was still sitting
+/// unread in that same byte — the picture's last macroblock silently
+/// dropped, `stats.macroblock_count` one short of the real total, on real
+/// `libx264 -profile:v baseline` content specifically (a small, synthetic
+/// fixture apparently never happened to land a real syntax element's own
+/// end against the buffer's last byte this exactly). Found by tracing a
+/// real slice's own `mb_type`/`mb_skip_run` sequence bit-for-bit against
+/// JM 19.1's own instrumented trace (`TRACE` on, freshly built from
+/// source per `provenance/sources.toml`'s `jm-reference-software`) and
+/// finding the two decoders agree on every single value through the
+/// picture's second-to-last macroblock, with JM alone reading one more
+/// `mb_skip_run` this crate's own `more_rbsp_data()` never gave it the
+/// chance to.
+fn more_rbsp_data(r: &mut BitReader<'_>) -> bool {
+    let bits_left = r.bits_left();
+    if bits_left == 0 {
         return false;
-    };
-    let Some((last_nonzero, rest)) = remaining.get(idx).zip(remaining.get(..idx)) else {
-        return false;
-    };
-    let last_nonzero = *last_nonzero;
-    if !rest.is_empty() {
+    }
+    if bits_left > 8 {
         return true;
     }
-    // Exactly one nonzero byte remains (the rest, if any, are already all
-    // zero and thus part of the trailing pattern by construction): more
-    // data remains unless that byte's only set bit is its lowest one
-    // (`rbsp_stop_one_bit` written LSB-last in byte order is MSB-first in
-    // bit order — i.e. the byte is a power of two written as `1000...0`,
-    // which as a plain integer is not a single bit unless it is exactly
-    // the byte's own top bit chain reduced to one `1`).
-    last_nonzero.count_ones() > 1 || !is_trailing_pattern(last_nonzero)
+    #[allow(clippy::cast_possible_truncation, reason = "bits_left is <= 8 here, checked immediately above")]
+    let n = bits_left as u32;
+    let w = r.peek(n);
+    // Pure `rbsp_trailing_bits()`: exactly one set bit, the most
+    // significant of the `n` remaining positions (the stop bit, followed
+    // by all-zero padding). Anything else — a set bit anywhere else, or
+    // none at all — is real data still to come (or, for "none at all", a
+    // malformed stream missing its own stop bit; either way not "nothing
+    // left").
+    w != 1u32 << (n - 1)
 }
 
-const fn is_trailing_pattern(byte: u8) -> bool {
-    // `1` bit followed by zero or more `0` bits, MSB-first: 0b1000_0000,
-    // 0b0100_0000, ..., 0b0000_0001 are the only eight valid patterns for
-    // a byte that is *entirely* rbsp_trailing_bits().
-    byte.is_power_of_two()
-}
-
-#[allow(clippy::too_many_arguments)]
+/// One real (non-skipped) CAVLC macroblock: `mb_type`, prediction (intra
+/// pred-mode syntax elements resolved into real modes via
+/// [`infer_intra4x4_neighbour_modes`]/[`crate::intra::infer_intra4x4_pred_mode`]
+/// — the same clause 8.3.1.1 derivation [`decode_macroblock_cabac`] uses,
+/// since that derivation has nothing to do with which entropy coder
+/// produced `prev_intra4x4_pred_mode_flag`/`rem_intra4x4_pred_mode`
+/// themselves; or inter `ref_idx`/`mvd` resolved into real motion vectors
+/// via [`decode_one_partition_cavlc`]/[`decode_two_partitions_cavlc`]/
+/// [`decode_sub_mb_pred_cavlc`], all three built the same way against
+/// `crate::motion`'s pure functions and [`CabacGrids`] as their CABAC
+/// counterparts), `coded_block_pattern`, `mb_qp_delta`, and the residual —
+/// updating every grid the *next* macroblock's own neighbour derivations
+/// need. `qpy` is this slice's running `QPY` (clause 7.4.5, eq. (7-23)),
+/// mirroring [`decode_macroblock_cabac`]'s own contract exactly, minus the
+/// `PrevMbQp` CABAC alone needs (`mb_qp_delta` here is a plain `se(v)`,
+/// with no `ctxIdxInc` to derive).
+#[allow(clippy::too_many_arguments, clippy::too_many_lines)]
 fn decode_macroblock_cavlc(
     r: &mut BitReader<'_>,
     budget: &mut Budget,
-    _pps: &Pps,
+    sps: &Sps,
     header: &SliceHeader,
-    grid: &mut NeighbourGrid,
+    nc_grid: &mut NeighbourGrid,
+    grids: &mut CabacGrids,
+    qpy: &mut i32,
     mb_x: u32,
     mb_y: u32,
     is_b: bool,
-) -> Result<()> {
-    let kind = {
+    colocated: Option<&ColocatedField>,
+) -> Result<MbResidual> {
+    let code = {
         let mut g = BoundedGolomb::new(r, budget);
-        let code = g.ue_v(48)?;
-        classify_mb_type(header.kind, code)?
+        g.ue_v(48)?
     };
+    let kind = classify_mb_type(header.kind, code)?;
 
     if matches!(kind, MbKind::IPcm) {
-        return Err(Error::Unsupported("vaco-codec-h264: I_PCM is out of scope for #419"));
+        return Err(Error::Unsupported("vaco-codec-h264: I_PCM is out of scope for CAVLC"));
     }
 
-    if kind.is_intra() {
-        decode_mb_pred_intra(r, budget, &kind, grid, mb_x, mb_y)?;
+    let is_intra = kind.is_intra();
+    let mut intra_chroma_pred_mode = 0u8;
+    // Only meaningful (and only ever read back) when `kind` is
+    // `MbKind::Intra4x4`; `[2; 16]` (every block DC) otherwise, matching
+    // `decode_macroblock_cabac`'s own "unused when the flag it's gated on
+    // is false" convention.
+    let mut intra4x4_pred_mode = [2u8; 16];
+
+    if is_intra {
+        if matches!(kind, MbKind::Intra4x4) {
+            for blk in 0u32..16 {
+                // clause 7.3.5.1: `prev_intra4x4_pred_mode_flag` is a
+                // single `u(1)`, and `rem_intra4x4_pred_mode` (when
+                // present) a plain `u(3)` -- unlike CABAC's own FL
+                // binarisation for the same two elements, there is no
+                // least-significant-bit-first reordering here, just an
+                // ordinary big-endian fixed-length field.
+                let prev_flag = r.try_get(1)? == 1;
+                let rem = if prev_flag { 0 } else { u8::try_from(r.try_get(3)?).unwrap_or(0) };
+                let (mode_a, mode_b) = infer_intra4x4_neighbour_modes(grids, mb_x, mb_y, blk);
+                let mode = crate::intra::infer_intra4x4_pred_mode(mode_a, mode_b, prev_flag, rem);
+                if let Some(slot) = intra4x4_pred_mode.get_mut(blk as usize) {
+                    *slot = mode;
+                }
+                let (lbx, lby) = blk_xy(blk);
+                grids.set_intra4x4_pred_mode(mb_x * 4 + lbx, mb_y * 4 + lby, mode);
+            }
+        }
+        let mut g = BoundedGolomb::new(r, budget);
+        intra_chroma_pred_mode = u8::try_from(g.ue_v(3)?).unwrap_or(0);
     } else {
-        decode_mb_pred_inter(r, budget, header, &kind, is_b)?;
+        // Clause 8.4.1.2.2's own A/B/C neighbour derivation for this whole
+        // macroblock's spatial direct parameters -- computed unconditionally
+        // for every B macroblock, exactly like `decode_macroblock_cabac`'s
+        // own `direct_params`, since `B_Direct_16x16` and any `B_Direct_8x8`
+        // sub-partition a `B_8x8` macroblock carries both need it.
+        let direct_params = is_b.then(|| {
+            let ax = mb_x * 4;
+            let ay = mb_y * 4;
+            let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
+            let above = ay.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(ax, ay2));
+            let c = resolve_c(grids, ax, ax + 3, ay);
+            spatial_direct_params(left, above, c)
+        });
+
+        match &kind {
+            MbKind::BDirect16x16 => {
+                let Some(params) = direct_params else {
+                    return Err(Error::InvalidData("vaco-codec-h264: B_Direct_16x16 outside a B slice"));
+                };
+                apply_spatial_direct_16x16(grids, mb_x, mb_y, sps.direct_8x8_inference, params, colocated);
+            }
+            MbKind::Inter { parts } => match parts.as_slice() {
+                [p0] => decode_one_partition_cavlc(r, budget, header, grids, mb_x, mb_y, *p0, (0, 0, 3, 3))?,
+                [p0, p1] => {
+                    let (rect0, rect1) = two_partition_rects(header.kind, code);
+                    decode_two_partitions_cavlc(r, budget, header, grids, mb_x, mb_y, *p0, *p1, rect0, rect1)?;
+                }
+                _ => return Err(Error::InvalidData("mb_type: Inter with an unexpected partition count")),
+            },
+            MbKind::P8x8 { ref0_inferred } => {
+                decode_sub_mb_pred_cavlc(r, budget, header, grids, mb_x, mb_y, *ref0_inferred, false, false, None, None)?;
+            }
+            MbKind::B8x8 => {
+                let Some(params) = direct_params else {
+                    return Err(Error::InvalidData("vaco-codec-h264: B_8x8 outside a B slice"));
+                };
+                decode_sub_mb_pred_cavlc(
+                    r, budget, header, grids, mb_x, mb_y, false, true, sps.direct_8x8_inference, Some(params), colocated,
+                )?;
+            }
+            _ => return Err(Error::InvalidData("mb_type: unexpected non-intra mb_type classification")),
+        }
     }
 
     let (cbp_luma, cbp_chroma) = if let MbKind::Intra16x16 { cbp_luma, cbp_chroma, .. } = &kind {
         (*cbp_luma, *cbp_chroma)
     } else {
         let mut g = BoundedGolomb::new(r, budget);
-        let pred_mode = if kind.is_intra() { CbpPredMode::Intra } else { CbpPredMode::Inter };
+        let pred_mode = if is_intra { CbpPredMode::Intra } else { CbpPredMode::Inter };
         let cbp = g.me_v(ChromaArrayType::WithChroma, pred_mode)?;
         ((cbp & 0xF) as u8, (cbp >> 4) as u8)
     };
-    if cbp_luma > 0 || cbp_chroma > 0 || matches!(kind, MbKind::Intra16x16 { .. }) {
-        let mut g = BoundedGolomb::new(r, budget);
-        let _mb_qp_delta = g.se_v(-26, 25)?;
-        decode_residual(r, budget, &kind, cbp_luma, cbp_chroma, grid, mb_x, mb_y)?;
+    let intra16x16_pred_mode = if let MbKind::Intra16x16 { pred_mode, .. } = &kind { *pred_mode } else { 0 };
+
+    let mut residual = if cbp_luma > 0 || cbp_chroma > 0 || matches!(kind, MbKind::Intra16x16 { .. }) {
+        let mb_qp_delta = {
+            let mut g = BoundedGolomb::new(r, budget);
+            g.se_v(-26, 25)?
+        };
+        // Clause 7.4.5, eq. (7-23): this macroblock's own QPY, derived from
+        // the slice's running QPY,PREV and the delta just decoded above --
+        // used by this same macroblock's own dequantisation, not the next
+        // one's. Clause 7.4.5's own inference rule makes `mb_qp_delta` 0
+        // whenever it is not present (the `else` branch below), which
+        // `next_qpy(qpy, 0) == qpy` already reduces to unchanged.
+        *qpy = crate::dequant::next_qpy(*qpy, mb_qp_delta);
+        decode_residual_cavlc(r, budget, &kind, cbp_luma, cbp_chroma, nc_grid, mb_x, mb_y)?
     } else {
         // No residual at all: every block this macroblock owns reports
         // TotalCoeff 0 to its neighbours (clause 9.2.1's "not coded"
         // substitution), same as an explicit CBP of 0 would.
-        zero_out_mb_neighbours(grid, mb_x, mb_y);
-    }
+        zero_out_mb_neighbours(nc_grid, mb_x, mb_y);
+        MbResidual::default()
+    };
+    residual.intra4x4_pred_mode = intra4x4_pred_mode;
 
-    Ok(())
+    grids.set_mb_info(
+        mb_x,
+        mb_y,
+        CabacMbInfo {
+            available: true,
+            skipped: false,
+            is_intra4x4: matches!(kind, MbKind::Intra4x4),
+            is_intra8x8: false,
+            is_intra,
+            is_intra16x16: matches!(kind, MbKind::Intra16x16 { .. }),
+            is_ipcm: false,
+            cbp_luma,
+            cbp_chroma,
+            intra_chroma_pred_mode,
+            intra16x16_pred_mode,
+            transform_8x8: false,
+            is_b_direct16x16: matches!(kind, MbKind::BDirect16x16),
+        },
+    );
+
+    Ok(residual)
 }
 
 /// Record a macroblock's `TotalCoeff` as 0 for every 4x4 luma and chroma
@@ -844,162 +1119,415 @@ fn zero_out_mb_neighbours(grid: &mut NeighbourGrid, mb_x: u32, mb_y: u32) {
     }
 }
 
-fn decode_mb_pred_intra(
+/// `ref_idx_lX`/`mvd_lX` for one whole-macroblock partition, CAVLC's own
+/// plain `te(v)`/`se(v)` reads in place of [`decode_one_partition_cabac`]'s
+/// context-coded ones -- everything past the read itself (the A/B/C
+/// neighbour lookup, [`crate::motion::predict_mv`]'s median predictor, and
+/// publishing the result into `grids`) is exactly that function's own
+/// logic, since clause 8.4.1's prediction does not know or care which
+/// entropy coder produced `ref_idx`/`mvd`.
+fn decode_one_partition_cavlc(
     r: &mut BitReader<'_>,
     budget: &mut Budget,
-    kind: &MbKind,
-    grid: &NeighbourGrid,
+    header: &SliceHeader,
+    grids: &mut CabacGrids,
     mb_x: u32,
     mb_y: u32,
-) -> Result<()> {
-    let _ = (grid, mb_x, mb_y);
-    if matches!(kind, MbKind::Intra4x4) {
-        for _ in 0..16 {
-            let flag = r.try_get(1)?;
-            if flag == 0 {
-                let _rem = r.try_get(3)?;
-            }
-        }
-    }
-    let mut g = BoundedGolomb::new(r, budget);
-    let _intra_chroma_pred_mode = g.ue_v(3)?;
-    Ok(())
-}
-
-fn decode_mb_pred_inter(
-    r: &mut BitReader<'_>,
-    budget: &mut Budget,
-    header: &SliceHeader,
-    kind: &MbKind,
-    is_b: bool,
-) -> Result<()> {
-    match kind {
-        MbKind::BDirect16x16 => Ok(()),
-        MbKind::Inter { parts } => decode_parts(r, budget, header, parts, &[true; 4]),
-        MbKind::P8x8 { ref0_inferred } => decode_sub_mb_pred(r, budget, header, false, *ref0_inferred),
-        MbKind::B8x8 => decode_sub_mb_pred(r, budget, header, true, false),
-        _ => {
-            let _ = is_b;
-            Ok(())
-        }
-    }
-}
-
-/// `ref_idx`/`mvd` for a fixed list of whole-macroblock partitions (§7.3.5.1's
-/// `mb_pred()` inter branch). `mvd_present` lets the sub-macroblock caller
-/// suppress `mvd` reads for a `B_Direct_8x8` sub-partition while still
-/// reusing this same per-list loop shape for `ref_idx`.
-fn decode_parts(
-    r: &mut BitReader<'_>,
-    budget: &mut Budget,
-    header: &SliceHeader,
-    parts: &[PartPred],
-    mvd_present: &[bool],
+    pred: PartPred,
+    (x0, y0, x1, y1): (u32, u32, u32, u32),
 ) -> Result<()> {
     let n0 = header.num_ref_idx_l0_active_minus1;
     let n1 = header.num_ref_idx_l1_active_minus1;
-    for &p in parts {
-        if p.reads_l0() && n0 > 0 {
-            let mut g = BoundedGolomb::new(r, budget);
-            let _ = g.te_v(n0)?;
-        }
+    let mut ref_idx = [0i8; 2];
+    let mut mvd = [(0i16, 0i16); 2];
+
+    if pred.reads_l0() && n0 > 0 {
+        let mut g = BoundedGolomb::new(r, budget);
+        ref_idx[0] = i8::try_from(g.te_v(n0)?).unwrap_or(i8::MAX);
     }
-    for &p in parts {
-        if p.reads_l1() && n1 > 0 {
-            let mut g = BoundedGolomb::new(r, budget);
-            let _ = g.te_v(n1)?;
-        }
+    if pred.reads_l1() && n1 > 0 {
+        let mut g = BoundedGolomb::new(r, budget);
+        ref_idx[1] = i8::try_from(g.te_v(n1)?).unwrap_or(i8::MAX);
     }
-    for (i, &p) in parts.iter().enumerate() {
-        if p.reads_l0() && mvd_present.get(i).copied().unwrap_or(true) {
-            let mut g = BoundedGolomb::new(r, budget);
-            let _ = g.se_v(-8192, 8191)?;
-            let _ = g.se_v(-8192, 8191)?;
-        }
+    if pred.reads_l0() {
+        let mut g = BoundedGolomb::new(r, budget);
+        let mx = g.se_v(-8192, 8191)?;
+        let my = g.se_v(-8192, 8191)?;
+        mvd[0] = (i16::try_from(mx).unwrap_or(i16::MAX), i16::try_from(my).unwrap_or(i16::MAX));
     }
-    for (i, &p) in parts.iter().enumerate() {
-        if p.reads_l1() && mvd_present.get(i).copied().unwrap_or(true) {
-            let mut g = BoundedGolomb::new(r, budget);
-            let _ = g.se_v(-8192, 8191)?;
-            let _ = g.se_v(-8192, 8191)?;
+    if pred.reads_l1() {
+        let mut g = BoundedGolomb::new(r, budget);
+        let mx = g.se_v(-8192, 8191)?;
+        let my = g.se_v(-8192, 8191)?;
+        mvd[1] = (i16::try_from(mx).unwrap_or(i16::MAX), i16::try_from(my).unwrap_or(i16::MAX));
+    }
+
+    let ax = mb_x * 4 + x0;
+    let ay = mb_y * 4 + y0;
+    let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
+    let above = ay.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(ax, ay2));
+    let shape = partition_shape(x0, y0, x1, y1);
+    let c_neighbour = resolve_c(grids, mb_x * 4 + x0, mb_x * 4 + x1, ay);
+    let mut mv = [(0i16, 0i16); 2];
+    if pred.reads_l0() {
+        let pmv = crate::motion::predict_mv(
+            shape,
+            left.as_motion_neighbour(0),
+            above.as_motion_neighbour(0),
+            c_neighbour.as_motion_neighbour(0),
+            ref_idx[0],
+        );
+        mv[0] = (pmv.0.saturating_add(mvd[0].0), pmv.1.saturating_add(mvd[0].1));
+    }
+    if pred.reads_l1() {
+        let pmv = crate::motion::predict_mv(
+            shape,
+            left.as_motion_neighbour(1),
+            above.as_motion_neighbour(1),
+            c_neighbour.as_motion_neighbour(1),
+            ref_idx[1],
+        );
+        mv[1] = (pmv.0.saturating_add(mvd[1].0), pmv.1.saturating_add(mvd[1].1));
+    }
+
+    let info = MvInfo { mb_available: true, pred: Some(pred), ref_idx, mvd, mv, direct_or_skip: false };
+    for y in y0..=y1 {
+        for x in x0..=x1 {
+            grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
         }
     }
     Ok(())
 }
 
-fn decode_sub_mb_pred(
+/// Two whole-macroblock partitions (`16x8`/`8x16`), CAVLC's own read order
+/// mirroring [`decode_two_partitions_cabac`]'s: `ref_idx_l0` for both
+/// partitions, `ref_idx_l1` for both, `mvd_l0` for both, `mvd_l1` for both —
+/// clause 7.3.5.1's own read order, not "each partition fully read before
+/// the next". `ref_idx` is published into `grids` immediately per
+/// partition (before `mvd` is even read) for the same reason that
+/// function's own comment gives: partition 1's own A/B/C neighbour lookup
+/// can be partition 0 of this same macroblock.
+#[allow(
+    clippy::too_many_arguments,
+    clippy::indexing_slicing,
+    reason = "mirrors decode_two_partitions_cabac's own shape; p/list are 0..2 loop variables into fixed 2-element arrays, not attacker-sized"
+)]
+fn decode_two_partitions_cavlc(
     r: &mut BitReader<'_>,
     budget: &mut Budget,
     header: &SliceHeader,
-    is_b: bool,
-    ref0_inferred: bool,
+    grids: &mut CabacGrids,
+    mb_x: u32,
+    mb_y: u32,
+    pred0: PartPred,
+    pred1: PartPred,
+    rect0: (u32, u32, u32, u32),
+    rect1: (u32, u32, u32, u32),
 ) -> Result<()> {
-    let mut subs: Vec<(u8, Option<PartPred>)> = budget.alloc(4)?;
-    subs.clear();
+    let n0 = header.num_ref_idx_l0_active_minus1;
+    let n1 = header.num_ref_idx_l1_active_minus1;
+    let mut ref_idx = [[0i8; 2]; 2];
+    let mut mvd = [[(0i16, 0i16); 2]; 2];
+    let mut mv = [[(0i16, 0i16); 2]; 2];
+    let preds = [pred0, pred1];
+    let rects = [rect0, rect1];
+
+    for list in 0..2usize {
+        for p in 0..2usize {
+            let reads = if list == 0 { preds[p].reads_l0() } else { preds[p].reads_l1() };
+            let n_active = if list == 0 { n0 } else { n1 };
+            if reads && n_active > 0 {
+                let mut g = BoundedGolomb::new(r, budget);
+                ref_idx[p][list] = i8::try_from(g.te_v(n_active)?).unwrap_or(i8::MAX);
+            }
+            let info = MvInfo {
+                mb_available: true,
+                pred: Some(preds[p]),
+                ref_idx: ref_idx[p],
+                mvd: [(0, 0); 2],
+                mv: [(0, 0); 2],
+                direct_or_skip: false,
+            };
+            let (x0, y0, x1, y1) = rects[p];
+            for yy in y0..=y1 {
+                for xx in x0..=x1 {
+                    grids.set_mv(mb_x * 4 + xx, mb_y * 4 + yy, info);
+                }
+            }
+        }
+    }
+
+    for list in 0..2usize {
+        for p in 0..2usize {
+            let reads = if list == 0 { preds[p].reads_l0() } else { preds[p].reads_l1() };
+            if !reads {
+                continue;
+            }
+            let (mx, my) = {
+                let mut g = BoundedGolomb::new(r, budget);
+                (g.se_v(-8192, 8191)?, g.se_v(-8192, 8191)?)
+            };
+            mvd[p][list] = (i16::try_from(mx).unwrap_or(i16::MAX), i16::try_from(my).unwrap_or(i16::MAX));
+            let (x0, y0, x1, y1) = rects[p];
+            let ax = mb_x * 4 + x0;
+            let ay = mb_y * 4 + y0;
+            let left = ax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, ay));
+            let above = ay.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(ax, ay2));
+            let shape = partition_shape(x0, y0, x1, y1);
+            let c_neighbour = resolve_c(grids, mb_x * 4 + x0, mb_x * 4 + x1, ay);
+            let pmv = crate::motion::predict_mv(
+                shape,
+                left.as_motion_neighbour(list),
+                above.as_motion_neighbour(list),
+                c_neighbour.as_motion_neighbour(list),
+                ref_idx[p][list],
+            );
+            mv[p][list] = (pmv.0.saturating_add(mvd[p][list].0), pmv.1.saturating_add(mvd[p][list].1));
+            // Writing the grid immediately (rather than after every list is
+            // read) is required, not cosmetic -- see
+            // `decode_two_partitions_cabac`'s own identical comment.
+            let info = MvInfo { mb_available: true, pred: Some(preds[p]), ref_idx: ref_idx[p], mvd: mvd[p], mv: mv[p], direct_or_skip: false };
+            for yy in y0..=y1 {
+                for xx in x0..=x1 {
+                    grids.set_mv(mb_x * 4 + xx, mb_y * 4 + yy, info);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// `P_8x8`/`P_8x8ref0`'s and `B_8x8`'s four sub-macroblock partitions,
+/// CAVLC's own reads in place of [`decode_sub_mb_pred_cabac`]'s -- same
+/// four-pass whole-macroblock read order (`sub_mb_type` x4, `ref_idx_l0`
+/// x4, `ref_idx_l1` x4, `mvd_l0` per sub-partition of every quadrant,
+/// `mvd_l1` likewise) that function's own doc explains is clause 7.3.5.2's
+/// actual order, and the same per-quadrant/per-sub-partition neighbour
+/// bookkeeping (`sub_positions`/`sub_right_x`/`owner_of`) since a `16x8`
+/// vs `8x16` two-sub-partition quadrant needs its own A/B/C lookup per
+/// sub-partition regardless of which entropy coder read `sub_mb_type`.
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    clippy::indexing_slicing,
+    reason = "mirrors decode_sub_mb_pred_cabac's own shape; indices are 0..4 sub-macroblock/quadrant loop variables, not attacker-sized"
+)]
+fn decode_sub_mb_pred_cavlc(
+    r: &mut BitReader<'_>,
+    budget: &mut Budget,
+    header: &SliceHeader,
+    grids: &mut CabacGrids,
+    mb_x: u32,
+    mb_y: u32,
+    ref0_inferred: bool,
+    is_b: bool,
+    direct_8x8_inference: bool,
+    direct_params: Option<DirectParams>,
+    colocated: Option<&ColocatedField>,
+) -> Result<()> {
+    let mut subs: Vec<(u8, u8, Option<PartPred>)> = Vec::new();
     for _ in 0..4 {
         let code = {
             let mut g = BoundedGolomb::new(r, budget);
             g.ue_v(12)?
         };
-        subs.push(classify_sub_mb_type(is_b, code)?);
+        let (num_sub, pred) = classify_sub_mb_type(is_b, code)?;
+        subs.push((u8::try_from(code).unwrap_or(0), num_sub, pred));
+    }
+
+    // `B_Direct_8x8` reads no bits at all -- apply it up front, before any
+    // of the phase-ordered real sub-partitions below, mirroring
+    // `decode_sub_mb_pred_cabac`'s own identical ordering choice.
+    for (i, &(_, _, pred)) in subs.iter().enumerate() {
+        if pred.is_some() {
+            continue;
+        }
+        let Some(params) = direct_params else {
+            return Err(Error::InvalidData("vaco-codec-h264: B_Direct_8x8 outside a B slice"));
+        };
+        let quad = u32::try_from(i).unwrap_or(0);
+        apply_direct_quadrant(grids, mb_x, mb_y, quad, direct_8x8_inference, params, colocated);
     }
 
     let n0 = header.num_ref_idx_l0_active_minus1;
     let n1 = header.num_ref_idx_l1_active_minus1;
-    if !ref0_inferred {
-        for &(_, pred) in &subs {
-            if pred.is_some_and(PartPred::reads_l0) && n0 > 0 {
-                let mut g = BoundedGolomb::new(r, budget);
-                let _ = g.te_v(n0)?;
+
+    for list in 0..2usize {
+        for (i, &(_, _, pred)) in subs.iter().enumerate() {
+            let Some(pred) = pred else { continue };
+            let reads = if list == 0 { pred.reads_l0() } else { pred.reads_l1() };
+            if !reads {
+                continue;
+            }
+            let quad = u32::try_from(i).unwrap_or(0);
+            let (qx, qy) = (quad & 1, quad >> 1);
+            let (x0, y0, x1, y1) = (qx * 2, qy * 2, qx * 2 + 1, qy * 2 + 1);
+            let value = if list == 0 && ref0_inferred {
+                0
+            } else {
+                let n_active = if list == 0 { n0 } else { n1 };
+                if n_active > 0 {
+                    let mut g = BoundedGolomb::new(r, budget);
+                    i8::try_from(g.te_v(n_active)?).unwrap_or(i8::MAX)
+                } else {
+                    0
+                }
+            };
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let mut info = grids.mv_at(mb_x * 4 + x, mb_y * 4 + y);
+                    info.mb_available = true;
+                    info.pred = Some(pred);
+                    if let Some(slot) = info.ref_idx.get_mut(list) {
+                        *slot = value;
+                    }
+                    grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, info);
+                }
             }
         }
     }
-    for &(_, pred) in &subs {
-        if pred.is_some_and(PartPred::reads_l1) && n1 > 0 {
-            let mut g = BoundedGolomb::new(r, budget);
-            let _ = g.te_v(n1)?;
-        }
-    }
-    for &(num_sub, pred) in &subs {
-        let Some(p) = pred else { continue };
-        if p.reads_l0() {
-            for _ in 0..num_sub {
-                let mut g = BoundedGolomb::new(r, budget);
-                let _ = g.se_v(-8192, 8191)?;
-                let _ = g.se_v(-8192, 8191)?;
+
+    for list in 0..2usize {
+        for (i, &(code, num_sub, pred)) in subs.iter().enumerate() {
+            let Some(pred) = pred else { continue };
+            let reads = if list == 0 { pred.reads_l0() } else { pred.reads_l1() };
+            if !reads {
+                continue;
             }
-        }
-    }
-    for &(num_sub, pred) in &subs {
-        let Some(p) = pred else { continue };
-        if p.reads_l1() {
-            for _ in 0..num_sub {
-                let mut g = BoundedGolomb::new(r, budget);
-                let _ = g.se_v(-8192, 8191)?;
-                let _ = g.se_v(-8192, 8191)?;
+            let quad = u32::try_from(i).unwrap_or(0);
+            let (qx, qy) = (quad & 1, quad >> 1);
+            let (x0, y0, x1, y1) = (qx * 2, qy * 2, qx * 2 + 1, qy * 2 + 1);
+            // Table 7-14/7-15's two `num_sub == 2` codes are genuinely
+            // different shapes (top/bottom vs left/right) -- `code` is
+            // read back here instead of trusting `num_sub` alone, matching
+            // `decode_sub_mb_pred_cabac`'s own identical comment.
+            let top_bottom = num_sub == 2 && code == 1;
+            let sub_positions: [(u32, u32); 4] = match num_sub {
+                1 => [(x0, y0); 4],
+                2 if top_bottom => [(x0, y0), (x0, y1), (x0, y0), (x0, y1)],
+                2 => [(x0, y0), (x1, y0), (x0, y0), (x1, y0)],
+                _ => [(x0, y0), (x1, y0), (x0, y1), (x1, y1)],
+            };
+            let sub_right_x: [u32; 4] = if num_sub == 1 || top_bottom { [x1; 4] } else { [x0, x1, x0, x1] };
+            let owner_of = |x: u32, y: u32| -> usize {
+                match num_sub {
+                    1 => 0,
+                    2 if top_bottom => usize::from(y == y1),
+                    2 => usize::from(x == x1),
+                    _ => usize::from(x == x1) + 2 * usize::from(y == y1),
+                }
+            };
+            let ref_idx_here = grids.mv_at(mb_x * 4 + x0, mb_y * 4 + y0).ref_idx;
+            let mut computed = [MvInfo::default(); 4];
+            for s in 0..num_sub {
+                let (sx, sy) = sub_positions[usize::from(s).min(3)];
+                let srx = sub_right_x[usize::from(s).min(3)];
+                let sax = mb_x * 4 + sx;
+                let say = mb_y * 4 + sy;
+                let (mx, my) = {
+                    let mut g = BoundedGolomb::new(r, budget);
+                    (g.se_v(-8192, 8191)?, g.se_v(-8192, 8191)?)
+                };
+                let mvd_val = (i16::try_from(mx).unwrap_or(i16::MAX), i16::try_from(my).unwrap_or(i16::MAX));
+                let sleft = sax.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, say));
+                let sabove = say.checked_sub(1).map_or_else(MvInfo::default, |ay2| grids.mv_at(sax, ay2));
+                let this_ref_idx = ref_idx_here.get(list).copied().unwrap_or(-1);
+                let c_neighbour = resolve_c(grids, sax, mb_x * 4 + srx, say);
+                let pmv = crate::motion::predict_mv(
+                    crate::motion::PartitionShape::Whole,
+                    sleft.as_motion_neighbour(list),
+                    sabove.as_motion_neighbour(list),
+                    c_neighbour.as_motion_neighbour(list),
+                    this_ref_idx,
+                );
+                let mv_val = (pmv.0.saturating_add(mvd_val.0), pmv.1.saturating_add(mvd_val.1));
+                let mut info = grids.mv_at(sax, say);
+                info.mb_available = true;
+                info.pred = Some(pred);
+                if let Some(slot) = info.ref_idx.get_mut(list) {
+                    *slot = this_ref_idx;
+                }
+                if let Some(slot) = info.mvd.get_mut(list) {
+                    *slot = mvd_val;
+                }
+                if let Some(slot) = info.mv.get_mut(list) {
+                    *slot = mv_val;
+                }
+                grids.set_mv(sax, say, info);
+                if let Some(slot) = computed.get_mut(usize::from(s)) {
+                    *slot = info;
+                }
+            }
+            for y in y0..=y1 {
+                for x in x0..=x1 {
+                    let owner = computed[owner_of(x, y)];
+                    grids.set_mv(mb_x * 4 + x, mb_y * 4 + y, owner);
+                }
             }
         }
     }
     Ok(())
 }
 
+/// Converts one [`CavlcResidual`] (reverse scan order, run-length coded)
+/// into forward scan order `positions`/`levels`, the shape
+/// [`CabacResidual`] already uses and [`MbResidual`]/`crate::reconstruct`
+/// expect regardless of which entropy coder produced them. Clause
+/// 7.3.5.3.2's own reconstruction algorithm: `level[i]`/`run[i]` are
+/// indexed from the highest-frequency decoded coefficient (`i == 0`) to the
+/// lowest (`i == TotalCoeff - 1`) -- exactly [`CavlcResidual`]'s own
+/// indexing, its own doc says so -- and the spec's own loop walks that
+/// array *backwards* (`i` from `TotalCoeff - 1` down to `0`), accumulating
+/// each entry's own `run` of preceding zeros into a strictly increasing
+/// scan position. Charged to `budget` at exactly `TotalCoeff` entries per
+/// vector, the same convention [`residual_block_cavlc`]'s own `levels`/
+/// `runs` allocation already uses.
+fn cavlc_residual_to_forward(res: &CavlcResidual, budget: &mut Budget) -> Result<CabacResidual> {
+    let total_coeff = usize::from(res.total_coeff);
+    let mut positions: Vec<u8> = budget.alloc(total_coeff)?;
+    let mut levels: Vec<i32> = budget.alloc(total_coeff)?;
+    positions.clear();
+    levels.clear();
+    let mut coeff_num: i32 = -1;
+    for i in (0..total_coeff).rev() {
+        let run = i32::from(res.runs.get(i).copied().unwrap_or(0));
+        coeff_num = coeff_num.saturating_add(run).saturating_add(1);
+        positions.push(u8::try_from(coeff_num).unwrap_or(u8::MAX));
+        levels.push(res.levels.get(i).copied().unwrap_or(0));
+    }
+    Ok(CabacResidual { levels, positions })
+}
+
+/// Residual, clause 7.3.5.3.1-2: no separate `coded_block_flag` at all —
+/// CAVLC's `coded_block_pattern` bits (already read by the caller) fully
+/// determine which blocks are present, unlike CABAC's own per-block flag
+/// (clause 7.3.5.3.3). [`residual_block_cavlc`]'s return value is now kept
+/// (via [`cavlc_residual_to_forward`], in the returned [`MbResidual`]), not
+/// merely consumed for its bit cost, and every `TotalCoeff` still updates
+/// `nc_grid` exactly as before -- the neighbour-derivation half of this
+/// function's job is unchanged from the bit-consumption-only version it
+/// replaces.
 #[allow(clippy::too_many_arguments)]
-fn decode_residual(
+fn decode_residual_cavlc(
     r: &mut BitReader<'_>,
     budget: &mut Budget,
     kind: &MbKind,
     cbp_luma: u8,
     cbp_chroma: u8,
-    grid: &mut NeighbourGrid,
+    nc_grid: &mut NeighbourGrid,
     mb_x: u32,
     mb_y: u32,
-) -> Result<()> {
+) -> Result<MbResidual> {
+    let mut out = MbResidual::default();
     let is_16x16 = matches!(kind, MbKind::Intra16x16 { .. });
 
     if is_16x16 {
-        let nc = grid.nc_luma(mb_x * 4, mb_y * 4);
-        let out = residual_block_cavlc(r, nc, 16, budget)?;
-        grid.set_luma(mb_x * 4, mb_y * 4, out.total_coeff);
+        let nc = nc_grid.nc_luma(mb_x * 4, mb_y * 4);
+        let raw = residual_block_cavlc(r, nc, 16, budget)?;
+        nc_grid.set_luma(mb_x * 4, mb_y * 4, raw.total_coeff);
+        if raw.total_coeff > 0 {
+            out.luma_dc = Some(cavlc_residual_to_forward(&raw, budget)?);
+        }
     }
 
     for i8x8 in 0..4u32 {
@@ -1009,19 +1537,29 @@ fn decode_residual(
             let x = mb_x * 4 + bx;
             let y = mb_y * 4 + by;
             if cbp_luma & (1 << i8x8) != 0 {
-                let nc = grid.nc_luma(x, y);
+                let nc = nc_grid.nc_luma(x, y);
                 let max_num_coeff = if is_16x16 { 15 } else { 16 };
-                let out = residual_block_cavlc(r, nc, max_num_coeff, budget)?;
-                grid.set_luma(x, y, out.total_coeff);
+                let raw = residual_block_cavlc(r, nc, max_num_coeff, budget)?;
+                nc_grid.set_luma(x, y, raw.total_coeff);
+                if raw.total_coeff > 0
+                    && let Some(slot) = out.luma_ac.get_mut(blk as usize)
+                {
+                    *slot = Some(cavlc_residual_to_forward(&raw, budget)?);
+                }
             } else {
-                grid.set_luma(x, y, 0);
+                nc_grid.set_luma(x, y, 0);
             }
         }
     }
 
-    for _comp in 0..2usize {
+    for comp in 0..2usize {
         if cbp_chroma & 3 != 0 {
-            let _out = residual_block_cavlc(r, -1, 4, budget)?;
+            let raw = residual_block_cavlc(r, -1, 4, budget)?;
+            if raw.total_coeff > 0
+                && let Some(slot) = out.chroma_dc.get_mut(comp)
+            {
+                *slot = Some(cavlc_residual_to_forward(&raw, budget)?);
+            }
         }
     }
     for comp in 0..2usize {
@@ -1030,15 +1568,20 @@ fn decode_residual(
             let x = mb_x * 2 + bx % 2;
             let y = mb_y * 2 + by % 2;
             if cbp_chroma & 2 != 0 {
-                let nc = grid.nc_chroma(comp, x, y);
-                let out = residual_block_cavlc(r, nc, 15, budget)?;
-                grid.set_chroma(comp, x, y, out.total_coeff);
+                let nc = nc_grid.nc_chroma(comp, x, y);
+                let raw = residual_block_cavlc(r, nc, 15, budget)?;
+                nc_grid.set_chroma(comp, x, y, raw.total_coeff);
+                if raw.total_coeff > 0
+                    && let Some(slot) = out.chroma_ac.get_mut(comp).and_then(|arr| arr.get_mut(i4x4 as usize))
+                {
+                    *slot = Some(cavlc_residual_to_forward(&raw, budget)?);
+                }
             } else {
-                grid.set_chroma(comp, x, y, 0);
+                nc_grid.set_chroma(comp, x, y, 0);
             }
         }
     }
-    Ok(())
+    Ok(out)
 }
 
 // ============================================================================
@@ -4579,6 +5122,82 @@ mod tests {
         grids.set_mb_info(0, 0, CabacGrids::current_macroblock_info());
         grids.begin_macroblock(1, 0);
         assert!(grids.mb_info_at(0, 0).is_some());
+    }
+
+    /// [`more_rbsp_data`]'s own exact bug, pinned: a slice whose remaining
+    /// bits are real data (not `rbsp_trailing_bits()`) but fewer than a
+    /// full byte's worth, ending exactly at the buffer's own logical end.
+    /// The byte-rounding `BitReader::remaining_bytes` this function used to
+    /// read from silently skipped a mid-byte partial byte, which is exactly
+    /// this shape -- see this function's own doc for the real
+    /// `libx264 -profile:v baseline` picture this cost a whole macroblock
+    /// on. `0b0100_0000` is a real `mb_skip_run` (ue(v) for value 1 is
+    /// `010`) followed by the true trailing pattern (`1` then padding) --
+    /// three bits of real data still to come, one byte total, nothing
+    /// after it.
+    #[test]
+    fn more_rbsp_data_finds_a_short_real_read_ending_at_the_buffers_own_end() {
+        // `010` (mb_skip_run == 1) then `10000` (the true trailing pattern:
+        // one stop bit, four zero padding bits to fill the byte) -- eight
+        // bits total, one byte, nothing after it.
+        let data = [0b0101_0000u8];
+        let mut r = BitReader::new(&data);
+        assert!(
+            more_rbsp_data(&mut r),
+            "three real bits (010, mb_skip_run == 1) remain before the trailing pattern -- \
+             a byte-rounding implementation that skips the partial byte would wrongly see \
+             an empty remainder here and report false"
+        );
+        // Consuming exactly those three bits leaves only the true trailing
+        // pattern (`1` then zero padding) -- now genuinely nothing real is
+        // left, in the same single, otherwise-untouched byte.
+        let _ = r.get(3);
+        assert!(!more_rbsp_data(&mut r), "only rbsp_trailing_bits() remains after the real read");
+    }
+
+    /// The trailing pattern alone, at every stop-bit position a byte can
+    /// hold -- `more_rbsp_data` must say "nothing real left" for every one
+    /// of the eight valid `rbsp_trailing_bits()` shapes, not just the one
+    /// this crate's own fixtures happened to exercise. `shift` real
+    /// (zero-valued, already-consumed) bits precede the stop bit in the
+    /// underlying byte -- `get(shift)` advances the reader past them, the
+    /// same way a real syntax element ending mid-byte would, leaving
+    /// exactly `8 - shift` bits of pure trailing pattern for
+    /// `more_rbsp_data` itself to judge.
+    #[test]
+    fn more_rbsp_data_is_false_for_every_trailing_bits_shape() {
+        for shift in 0u32..8 {
+            let byte = 0b1000_0000u8 >> shift;
+            let data = [byte];
+            let mut r = BitReader::new(&data);
+            let _ = r.get(shift);
+            assert!(!more_rbsp_data(&mut r), "byte {byte:#010b}, {shift} bits already consumed (stop bit at the next position): pure rbsp_trailing_bits()");
+        }
+    }
+
+    /// A single real `0` bit ahead of the stop bit is still real data, even
+    /// though the whole remainder is one byte -- distinguishes "real data
+    /// that happens to be short" from "only the trailing pattern", the
+    /// exact two cases this function exists to tell apart.
+    #[test]
+    fn more_rbsp_data_is_true_when_a_real_bit_precedes_the_stop_bit() {
+        // A real `0` bit, then the stop bit, then padding: not a valid
+        // trailing-bits-only byte (the stop bit is not the first bit read).
+        let data = [0b0100_0000u8];
+        let mut r = BitReader::new(&data);
+        assert!(more_rbsp_data(&mut r));
+    }
+
+    /// More than a byte's worth of bits left is always real data,
+    /// regardless of content -- `rbsp_trailing_bits()` is at most 8 bits by
+    /// construction (one stop bit plus up to seven padding bits to the next
+    /// byte boundary), so this is the cheap, always-correct fast path
+    /// `more_rbsp_data` takes before ever inspecting a single bit.
+    #[test]
+    fn more_rbsp_data_is_true_with_plenty_of_bits_left() {
+        let data = [0u8, 0u8];
+        let mut r = BitReader::new(&data);
+        assert!(more_rbsp_data(&mut r));
     }
 
     /// Feeds [`decode_mb_type_b_prefix`] a fixed queue of bin values,

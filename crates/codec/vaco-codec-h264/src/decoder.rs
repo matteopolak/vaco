@@ -4,47 +4,45 @@
 //!
 //! # What this decoder covers
 //!
-//! **CABAC I/P/B slices, one slice per picture, `ChromaArrayType == 1`
-//! (4:2:0), frame (non-MBAFF, non-field) pictures, short-term references
-//! only (no `MMCO`/long-term marking).** That is exactly
-//! [`crate::mb::decode_slice_cabac`]'s own scope, and exactly what
-//! [`crate::reconstruct::reconstruct_picture`] turns into real luma/Cb/Cr
-//! samples — see both modules' own docs for the full account of what is
-//! and is not implemented one level down (`I_PCM`, MBAFF, the 8x8
-//! transform, `constrained_intra_pred_flag`'s substitution rule,
-//! temporal direct prediction, long-term references, and more than one
-//! slice per picture are all refused explicitly, not silently
-//! mishandled).
+//! **CABAC or CAVLC, I/P/B slices, one slice per picture,
+//! `ChromaArrayType == 1` (4:2:0), frame (non-MBAFF, non-field) pictures,
+//! short-term references only (no `MMCO`/long-term marking).** That is
+//! exactly [`crate::mb::decode_slice_cabac`]/[`crate::mb::decode_slice_cavlc`]'s
+//! own scope, and exactly what [`crate::reconstruct::reconstruct_picture`]
+//! turns into real luma/Cb/Cr samples — see both modules' own docs for the
+//! full account of what is and is not implemented one level down (`I_PCM`,
+//! MBAFF, the 8x8 transform, `constrained_intra_pred_flag`'s substitution
+//! rule, temporal direct prediction, long-term references, and more than
+//! one slice per picture are all refused explicitly, not silently
+//! mishandled; CAVLC additionally refuses `I_PCM` and the 8x8 transform on
+//! its own side, since CAVLC's tables were never checked against either).
 //!
 //! This used to stop at resolving `entropy_coding_mode_flag` and return
 //! [`Error::Unsupported`] unconditionally, then grew to cover CABAC I/P
-//! slices only (CABAC B slices refused before `decode_slice_cabac` ever
-//! ran). B-slice support closes that gap: reference picture list 1
-//! construction (clause 8.2.4.2.3, both lists' own default order plus
-//! `ref_pic_list_modification()`), spatial direct prediction's own
-//! colocated-picture lookup (clause 8.4.1.2.1/2, [`ColocatedField`]) and
-//! clause 8.4.2.3's bi-prediction weighting (default average, explicit,
-//! and implicit -- `weighted_bipred_idc == 2`, x264's own default for B
-//! slices) all live here, since this is the only place that has ever seen
-//! more than one decoded picture at once.
+//! slices, then CABAC B slices (reference picture list 1 construction —
+//! clause 8.2.4.2.3, both lists' own default order plus
+//! `ref_pic_list_modification()` — spatial direct prediction's own
+//! colocated-picture lookup, clause 8.4.1.2.1/2, [`ColocatedField`], and
+//! clause 8.4.2.3's bi-prediction weighting: default average, explicit,
+//! and implicit, `weighted_bipred_idc == 2`, x264's own default for B
+//! slices).
 //!
-//! **CAVLC is still refused, honestly, not silently mishandled.**
-//! [`crate::mb::decode_slice_cavlc`] verifies bit-exact *consumption* of a
-//! real CAVLC slice (`tests/macroblock_layer.rs`), but
-//! [`crate::mb::decode_residual`] discards every decoded coefficient
-//! (only `TotalCoeff` survives, for the next block's own `nC`) and
-//! `decode_mb_pred_inter`/`decode_parts`/`decode_sub_mb_pred` discard
-//! every `ref_idx`/`mvd` the same way — there is no motion-vector
-//! prediction grid for CAVLC at all, the CABAC side's `CabacGrids`
-//! equivalent. Wiring CAVLC to real pixels needs that whole apparatus
-//! rebuilt for CAVLC's own neighbour derivation, which is a
-//! multiple-real-bug-finding undertaking of its own scale (see this
-//! crate's `vaco-component.toml`/module docs for how many real bugs the
-//! CABAC side alone took to reach byte-exactness) — attempting it under
-//! this dispatch's own time-box risked exactly the "measured but
-//! confidently wrong" failure this project's own constraints warn
-//! against, so it stays an explicit [`Error::Unsupported`] naming the gap
-//! precisely, the same choice this crate already makes for `I_PCM`.
+//! **CAVLC now reconstructs real pixels too, not merely bit consumption.**
+//! [`crate::mb::decode_slice_cavlc`] produces the same [`crate::mb::SliceStats`]/
+//! `MbSummary` shape [`crate::mb::decode_slice_cabac`] does — real `mb_type`
+//! classification, clause 8.4.1's motion-vector prediction (built from
+//! `crate::motion`'s pure, entropy-independent functions and the same
+//! `CabacGrids` neighbour-state type CABAC uses, despite the name — see
+//! that module's own doc), and residual coefficients converted to forward
+//! scan order — so this dispatch below never has to know which entropy
+//! coder produced a picture's own `stats`. Verified byte-exact against
+//! real `ffmpeg`-encoded `libx264 -profile:v baseline` content (which is
+//! always CAVLC) and against `-coder 0` on Main/High profile with
+//! `-bf 0`/`-bf 2`/`-bf 3` and multiple references, at every thread count
+//! including the default — see `docs/codec/vaco-codec-h264.md`'s own
+//! account, including the one real bug this measurement found
+//! ([`crate::mb`]'s own `more_rbsp_data` — a silently-dropped final
+//! macroblock, not a pixel error).
 //!
 //! # AVCC vs Annex B
 //!
@@ -589,14 +587,6 @@ impl H264Decoder {
         // decoder would already have put in it.
         let flush_reorder_first = info.is_idr;
 
-        if !pps.entropy_coding_mode {
-            return Err(Error::Unsupported(
-                "vaco-codec-h264: CAVLC picture reconstruction is not implemented -- \
-                 decode_slice_cavlc verifies bit consumption only and discards every \
-                 decoded coefficient and motion vector; see this module's own doc",
-            ));
-        }
-
         let mbs_wide = sps.pic_width_in_mbs;
         let mbs_high = sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
         let luma4_width = mbs_wide * 4;
@@ -690,33 +680,57 @@ impl H264Decoder {
             None
         };
 
-        let mut cabac = CabacDecoder::from_reader(reader);
-        let stats =
-            crate::mb::decode_slice_cabac(&mut cabac, &mut self.budget, sps, pps, &slice_header, colocated.as_ref())?;
+        // The two entropy modes share every downstream stage from here on
+        // -- `crate::mb::SliceStats`/`MbSummary` is the entropy-independent
+        // shape both `decode_slice_cabac` and `decode_slice_cavlc` produce
+        // (real `mb_type`, motion vectors, and residual, not merely bit
+        // consumption), and `reconstruct_picture` never learns which coder
+        // was used at all.
+        let stats = if pps.entropy_coding_mode {
+            let mut cabac = CabacDecoder::from_reader(reader);
+            let stats = crate::mb::decode_slice_cabac(
+                &mut cabac,
+                &mut self.budget,
+                sps,
+                pps,
+                &slice_header,
+                colocated.as_ref(),
+            )?;
+            if cabac.malformed() {
+                return Err(Error::InvalidData(
+                    "vaco-codec-h264: CABAC engine reported malformed input",
+                ));
+            }
+            stats
+        } else {
+            crate::mb::decode_slice_cavlc(
+                &mut reader,
+                &mut self.budget,
+                sps,
+                pps,
+                &slice_header,
+                colocated.as_ref(),
+            )?
+        };
         drop(colocated);
-        if cabac.malformed() {
-            return Err(Error::InvalidData(
-                "vaco-codec-h264: CABAC engine reported malformed input",
-            ));
-        }
-        // `!cabac.malformed()` alone is not proof the slice actually
-        // decoded correctly -- `end_of_slice_flag` can fire at a
-        // macroblock-count-plausible point purely by coincidence even
+        // Neither entropy mode's own "did it actually finish" signal
+        // (CABAC's `end_of_slice_flag`, CAVLC's `more_rbsp_data()`) is
+        // proof the slice decoded *correctly* on its own -- both can fire
+        // at a macroblock-count-plausible point purely by coincidence even
         // when some decoded value upstream of it was wrong (this crate's
         // own `tests/macroblock_layer_cabac.rs` documents this failure
-        // mode). Measured directly against real `ffmpeg`-encoded
+        // mode for CABAC). Measured directly against real `ffmpeg`-encoded
         // multi-reference content: without this check, `H264Decoder`
         // silently emitted a partially-grey, visibly wrong frame --
         // `stats.macroblocks` only covers whatever was actually visited
-        // before a premature `end_of_slice_flag`, and `reconstruct_picture`
-        // leaves the rest of the picture at its own default fill.
+        // before a premature end, and `reconstruct_picture` leaves the
+        // rest of the picture at its own default fill.
         let total_mbs = mbs_wide.saturating_mul(mbs_high);
         if stats.macroblock_count != total_mbs {
             return Err(Error::InvalidData(
-                "vaco-codec-h264: CABAC slice's end_of_slice_flag fired before every \
-                 macroblock in the picture was decoded -- a real, still-open decode \
-                 desync (see tests/macroblock_layer_cabac.rs's own ignored tests), \
-                 refused rather than emitting a partially-reconstructed frame",
+                "vaco-codec-h264: a slice ended before every macroblock in the picture was \
+                 decoded -- a real decode desync, refused rather than emitting a \
+                 partially-reconstructed frame",
             ));
         }
 

@@ -83,7 +83,7 @@ fn every_slice_in_a_real_ipb_two_slice_cavlc_stream_consumes_exactly_its_own_bit
                 }
 
                 let stats =
-                    vaco_codec_h264::mb::decode_slice_cavlc(&mut reader, &mut budget, sps, pps, &slice_header)
+                    vaco_codec_h264::mb::decode_slice_cavlc(&mut reader, &mut budget, sps, pps, &slice_header, None)
                         .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
                 assert!(
                     !more_rbsp_data(&reader),
