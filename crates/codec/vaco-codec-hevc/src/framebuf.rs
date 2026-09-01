@@ -90,15 +90,6 @@ impl Plane {
         }
     }
 
-    /// [`Plane::set`] taking `i32` coordinates and an already-clamped `i32`
-    /// value — [`crate::sao`] computes in `i32` throughout (clause 8.7.3's
-    /// own arithmetic needs headroom past `u16` mid-formula) and only needs
-    /// the final clip-then-store this wraps.
-    pub(crate) fn set_i32(&mut self, x: i32, y: i32, v: i32) {
-        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return };
-        let v = u16::try_from(v.max(0)).unwrap_or(0);
-        self.set(x, y, v);
-    }
 }
 
 /// One decoded picture's reconstruction planes: luma plus two 4:2:0 chroma
@@ -679,5 +670,62 @@ impl Plane {
     #[must_use]
     fn byte_len(&self) -> u64 {
         u64::try_from(self.width.saturating_mul(self.height).saturating_mul(2)).unwrap_or(u64::MAX)
+    }
+
+    /// One full row of already-reconstructed samples, `None` past the last
+    /// row — the read side of the row-wise copy shape `PERF-PROGRAMME.md`'s
+    /// item B1 replaces per-sample [`Plane::get`] loops with: a single
+    /// length-checked slice instead of one bounds check (and one `Option`
+    /// unwrap) per sample.
+    #[must_use]
+    pub(crate) fn row(&self, y: usize) -> Option<&[u16]> {
+        let start = y.checked_mul(self.width)?;
+        self.data.get(start..start.saturating_add(self.width))
+    }
+
+    /// The mutable counterpart of [`Plane::row`] — callers writing a whole
+    /// row still owe [`Plane::mark_row_ready`] afterward, since this does
+    /// not touch the parallel `ready` bitmap itself (a caller writing only
+    /// part of a row, e.g. one CTU's own width inside a wider plane, marks
+    /// only that sub-range as ready, which a combined "write and mark"
+    /// method could not express as cleanly).
+    pub(crate) fn row_mut(&mut self, y: usize) -> Option<&mut [u16]> {
+        let start = y.checked_mul(self.width)?;
+        self.data.get_mut(start..start.saturating_add(self.width))
+    }
+
+    /// Mark `len` samples starting at `(x0, y)` as reconstructed — the
+    /// `ready`-bitmap half of a row-wise write, done once per row via
+    /// `[bool]::fill` rather than once per sample via [`Plane::set`]'s own
+    /// per-element `Option` chain. Silently clips to the plane's own bounds,
+    /// matching every other out-of-range write in this module.
+    pub(crate) fn mark_row_ready(&mut self, y: usize, x0: usize, len: usize) {
+        if y >= self.height {
+            return;
+        }
+        let row_start = y.saturating_mul(self.width);
+        let x0 = x0.min(self.width);
+        let end = x0.saturating_add(len).min(self.width);
+        if let Some(flags) = self.ready.get_mut(row_start.saturating_add(x0)..row_start.saturating_add(end)) {
+            flags.fill(true);
+        }
+    }
+
+    /// A `Budget`-charged copy of every sample in this plane, in the same
+    /// row-major layout — one [`slice::copy_from_slice`] rather than
+    /// [`crate::sao::Snapshot::capture`]'s old per-sample [`Plane::get`]
+    /// loop (item B1). The two-array shape (`data` allocated fresh, then
+    /// filled) mirrors [`Plane::new`]'s own `Budget::alloc`-then-fill
+    /// pattern, which every other `Budget`-tracked buffer in this crate
+    /// already uses.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`] if the allocation exceeds `budget`.
+    pub(crate) fn clone_samples(&self, budget: &mut Budget) -> Result<Vec<u16>> {
+        let mut data: Vec<u16> = budget.alloc(self.data.len())?;
+        if let Some(dst) = data.get_mut(..self.data.len()) {
+            dst.copy_from_slice(&self.data);
+        }
+        Ok(data)
     }
 }

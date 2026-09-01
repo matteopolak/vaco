@@ -243,35 +243,33 @@ fn read_type_idx(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank) -> Result<
 /// purpose).
 struct Snapshot {
     width: i32,
-    height: i32,
     data: Vec<u16>,
 }
 
 impl Snapshot {
+    /// `PERF-PROGRAMME.md` item B1: this used to be a per-sample
+    /// [`crate::framebuf::Plane::get`] loop (`Snapshot::capture`'s own 8.08%
+    /// share of decode). `Plane::clone_samples` copies the same row-major
+    /// data in one `Budget`-charged allocation plus one `copy_from_slice` —
+    /// a whole-plane `memcpy`, since a snapshot's layout is exactly the
+    /// source plane's own layout.
     fn capture(budget: &mut Budget, plane: &crate::framebuf::Plane) -> Result<Self> {
-        let (width, height) = plane.dims();
-        let mut data: Vec<u16> = budget.alloc(width.saturating_mul(height))?;
-        let mut i = 0usize;
-        for y in 0..height {
-            for x in 0..width {
-                if let Some(slot) = data.get_mut(i) {
-                    *slot = plane.get(x, y);
-                }
-                i = i.saturating_add(1);
-            }
-        }
-        Ok(Self { width: i32::try_from(width).unwrap_or(0), height: i32::try_from(height).unwrap_or(0), data })
+        let (width, _height) = plane.dims();
+        let data = plane.clone_samples(budget)?;
+        Ok(Self { width: i32::try_from(width).unwrap_or(0), data })
     }
 
-    /// `None` exactly when `(x, y)` is outside the picture — this crate's
-    /// only "neighbour unavailable" case, per the module doc.
-    fn get(&self, x: i32, y: i32) -> Option<i32> {
-        if x < 0 || y < 0 || x >= self.width || y >= self.height {
-            return None;
-        }
-        let (Ok(xu), Ok(yu)) = (usize::try_from(x), usize::try_from(y)) else { return None };
-        let idx = yu.saturating_mul(usize::try_from(self.width).unwrap_or(0)).saturating_add(xu);
-        self.data.get(idx).copied().map(i32::from)
+    /// One full row of captured samples, `None` past the last row (including
+    /// every row past `data.len() / width`, this struct's own implicit
+    /// height) — [`offset_block`]'s row-wise replacement for a per-sample
+    /// 2-D bounds check (`PERF-PROGRAMME.md` item B1): fetched once per row
+    /// instead of once per pixel (twice more for a diagonal edge-offset
+    /// class's two neighbour rows), it amortises the check that used to be
+    /// repeated at every pixel.
+    fn row(&self, y: i32) -> Option<&[u16]> {
+        let (Ok(yu), Ok(width)) = (usize::try_from(y), usize::try_from(self.width)) else { return None };
+        let start = yu.checked_mul(width)?;
+        self.data.get(start..start.saturating_add(width))
     }
 
     /// The exact byte count [`Budget::alloc`] charged for `self.data` — for
@@ -303,17 +301,33 @@ fn offset_block(
     bit_depth: u32,
 ) {
     let max_value = (1i32 << bit_depth) - 1;
+    let (Ok(x0u), Ok(width_u)) = (usize::try_from(x0), usize::try_from(width)) else { return };
     match mode {
         SaoMode::Off => {}
+        // `PERF-PROGRAMME.md` item B1: `offset_block`'s own 5.35% share was
+        // three per-sample `Plane::get`-shaped lookups (each a full 2-D bounds
+        // check) plus a per-sample [`crate::framebuf::Plane::set_i32`]
+        // write. Row-wise instead: [`Snapshot::row`]/
+        // [`crate::framebuf::Plane::row_mut`] amortise the y-bounds check
+        // across a whole row, and the write goes through one
+        // bounds-checked slice instead of `set_i32`'s own per-element
+        // `index()` call plus separate `ready`-bitmap write.
         SaoMode::Bo { offsets } => {
             let shift = bit_depth.saturating_sub(5);
             for y in y0..y0 + height {
-                for x in x0..x0 + width {
-                    let Some(v) = snapshot.get(x, y) else { continue };
-                    let band = usize::try_from(v >> shift).unwrap_or(0);
-                    let off = offsets.get(band).copied().unwrap_or(0);
-                    plane.set_i32(x, y, (v + off).clamp(0, max_value));
+                let Ok(yu) = usize::try_from(y) else { continue };
+                let Some(src_row) = snapshot.row(y).and_then(|r| r.get(x0u..x0u.saturating_add(width_u))) else {
+                    continue;
+                };
+                if let Some(dst_row) = plane.row_mut(yu).and_then(|r| r.get_mut(x0u..x0u.saturating_add(width_u))) {
+                    for (d, &sv) in dst_row.iter_mut().zip(src_row) {
+                        let v = i32::from(sv);
+                        let band = usize::try_from(v >> shift).unwrap_or(0);
+                        let off = offsets.get(band).copied().unwrap_or(0);
+                        *d = u16::try_from((v + off).clamp(0, max_value)).unwrap_or(0);
+                    }
                 }
+                plane.mark_row_ready(yu, x0u, width_u);
             }
         }
         SaoMode::Eo { class, offsets } => {
@@ -324,16 +338,34 @@ fn offset_block(
                 _ => (1, -1, -1, 1),
             };
             for y in y0..y0 + height {
+                // Fetched once per row rather than once per pixel (the old
+                // shape called that per-sample lookup three times, each
+                // re-deriving the same row's y-bounds check): a diagonal
+                // class's neighbour row is constant across the whole row,
+                // so `y + dy0`/`y + dy1` only need resolving here.
+                let (Some(cur_row), Some(row_a), Some(row_b)) = (snapshot.row(y), snapshot.row(y + dy0), snapshot.row(y + dy1)) else {
+                    continue;
+                };
+                let Ok(yu) = usize::try_from(y) else { continue };
+                let Some(dst_row) = plane.row_mut(yu) else { continue };
                 for x in x0..x0 + width {
-                    let Some(v) = snapshot.get(x, y) else { continue };
-                    let (Some(a), Some(b)) = (snapshot.get(x + dx0, y + dy0), snapshot.get(x + dx1, y + dy1)) else {
+                    let Ok(xu) = usize::try_from(x) else { continue };
+                    let Some(&sv) = cur_row.get(xu) else { continue };
+                    let (Some(&av), Some(&bv)) = (
+                        usize::try_from(x + dx0).ok().and_then(|i| row_a.get(i)),
+                        usize::try_from(x + dx1).ok().and_then(|i| row_b.get(i)),
+                    ) else {
                         continue;
                     };
-                    let edge_type = sgn(v - a) + sgn(v - b);
+                    let v = i32::from(sv);
+                    let edge_type = sgn(v - i32::from(av)) + sgn(v - i32::from(bv));
                     let idx = usize::try_from(edge_type + 2).unwrap_or(2);
                     let off = offsets.get(idx).copied().unwrap_or(0);
-                    plane.set_i32(x, y, (v + off).clamp(0, max_value));
+                    if let Some(slot) = dst_row.get_mut(xu) {
+                        *slot = u16::try_from((v + off).clamp(0, max_value)).unwrap_or(0);
+                    }
                 }
+                plane.mark_row_ready(yu, x0u, width_u);
             }
         }
     }

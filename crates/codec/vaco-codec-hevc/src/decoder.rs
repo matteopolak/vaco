@@ -784,15 +784,19 @@ fn pic_to_frame(budget: &mut Budget, width: u32, height: u32, pic: &Picture) -> 
     Ok(frame)
 }
 
+/// `PERF-PROGRAMME.md` item B1: this used to read every sample through
+/// [`crate::framebuf::Plane::get`] (`emit_pocs`'s own 5.11% share of
+/// decode, one bounds-checked 2-D index per sample). [`crate::framebuf::Plane::row`]
+/// gives the whole row as one bounds-checked slice instead, so the
+/// per-sample cost left is only the `u16 -> u8` narrowing conversion
+/// §8-bit-scope guarantees can't overflow, over a plain slice `zip`.
 fn blit(src: &crate::framebuf::Plane, frame: &mut vaco_frame::Frame, plane_index: usize, width: usize, height: usize) {
     let Some(mut dst) = frame.plane_mut(plane_index) else { return };
     for y in 0..height.min(dst.rows()) {
         let Some(row) = dst.row_mut(y) else { continue };
-        for x in 0..width.min(row.len()) {
-            let v = src.get(x, y);
-            if let Some(b) = row.get_mut(x) {
-                *b = u8::try_from(v).unwrap_or(0);
-            }
+        let Some(src_row) = src.row(y).and_then(|r| r.get(..width.min(row.len()))) else { continue };
+        for (b, &v) in row.iter_mut().zip(src_row) {
+            *b = u8::try_from(v).unwrap_or(0);
         }
     }
 }
