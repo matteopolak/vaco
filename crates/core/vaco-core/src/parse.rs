@@ -829,9 +829,9 @@ pub fn binary(s: &str) -> Option<Vec<u8>> {
     }
     let bytes = s.as_bytes();
     let mut out = Vec::new();
-    for pair in bytes.chunks_exact(2) {
-        let hi = char::from(*pair.first()?).to_digit(16)?;
-        let lo = char::from(*pair.get(1)?).to_digit(16)?;
+    for &[hi_b, lo_b] in bytes.as_chunks::<2>().0 {
+        let hi = char::from(hi_b).to_digit(16)?;
+        let lo = char::from(lo_b).to_digit(16)?;
         out.push(((hi << 4) | lo) as u8);
     }
     Some(out)
