@@ -185,6 +185,40 @@ fn a_codec_with_no_asf_mapping_is_rejected_not_silently_wrong() {
     assert!(mux.add_stream(&p).is_err());
 }
 
+/// ADTS-framed AAC (MPEG-TS's own convention: no out-of-band config, the
+/// config repeats in every frame header instead) is refused, not silently
+/// written into a stream properties object with no `AudioSpecificConfig`
+/// behind it. Measured against `ffmpeg 9.0.1`: `-c copy -f asf` on an
+/// ADTS-sourced AAC stream fails with "ADTS is only supported with codec tag
+/// 0x1610"; it does not run `aac_adtstoasc` automatically.
+#[test]
+fn adts_framed_aac_with_no_extradata_is_rejected() {
+    let sink = MemorySink::new();
+    let mut mux = AsfMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let mut p = CodecParameters::audio();
+    p.codec_id = Some(CodecId::Aac);
+    if let Some(a) = &mut p.audio {
+        a.sample_rate = 44_100;
+    }
+    // No extradata set at all — exactly what an ADTS-framed source gives.
+    assert!(mux.add_stream(&p).is_err());
+}
+
+/// The same codec with a raw `AudioSpecificConfig` in `extradata` (what an
+/// MP4/`esds` or Matroska source gives) is the case this crate does support.
+#[test]
+fn raw_aac_with_extradata_is_accepted() {
+    let sink = MemorySink::new();
+    let mut mux = AsfMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let mut p = CodecParameters::audio();
+    p.codec_id = Some(CodecId::Aac);
+    p.extradata = Some(vec![0x12, 0x10]); // a minimal AudioSpecificConfig
+    if let Some(a) = &mut p.audio {
+        a.sample_rate = 44_100;
+    }
+    assert!(mux.add_stream(&p).is_ok());
+}
+
 // Packetise-then-depacketise across random payload sizes and packet sizes —
 // the property test that actually exercises both the "small objects packed
 // behind one multiple-payload header" and "one large object split into

@@ -469,6 +469,21 @@ impl Muxer for AsfMuxer {
             if a.sample_rate == 0 {
                 return Err(Error::Unsupported("asf: audio stream has no sample rate"));
             }
+            if codec_id == CodecId::Aac && params.extradata.as_ref().is_none_or(Vec::is_empty) {
+                // ASF's AAC carries a raw `AudioSpecificConfig` in the
+                // stream properties object, the same convention MP4/`esds`
+                // uses — an ADTS-framed source (MPEG-TS's own convention)
+                // has no such record to copy, since ADTS repeats the
+                // equivalent fields in every frame header instead. Measured
+                // against `ffmpeg 9.0.1`: `-c copy -f asf` from an ADTS
+                // source fails outright ("ADTS is only supported with codec
+                // tag 0x1610"), it does not auto-run `aac_adtstoasc`.
+                // Mirrors `vaco-mux-avi`'s identical check for the identical
+                // reason.
+                return Err(Error::Unsupported(
+                    "asf: AAC needs a raw AudioSpecificConfig in extradata; ADTS-framed AAC is not accepted",
+                ));
+            }
             let tag = codec::audio_format_tag(codec_id)
                 .ok_or(Error::Unsupported("asf: codec has no ASF wFormatTag"))?;
             let channels = u16::try_from(a.layout.as_ref().map_or(1, |l| l.channels)).unwrap_or(1);
