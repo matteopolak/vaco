@@ -350,6 +350,35 @@ fuzz-all secs="120":
     fi
     exit $fail
 
+# Coverage-guided corpus minimisation (issue #571's "cmin wiring" half):
+# shrink `fuzz/corpus/<target>` in place to the smallest subset that still
+# reaches the same coverage, via libFuzzer's own `-merge`. Operates on
+# whatever corpus already exists (`just corpus-fetch`/an existing fuzz run
+# populate it); a target with no corpus yet has nothing to minimise.
+# Scoped to the target's own feature, same as `fuzz`/`fuzz-all` above, so an
+# unrelated crate's build failure cannot block it.
+corpus-minimise target:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    feature=$(just fuzz-feature {{target}})
+    mkdir -p fuzz/corpus/{{target}}
+    before=$(find fuzz/corpus/{{target}} -type f | wc -l | tr -d ' ')
+    cargo +nightly fuzz cmin {{target}} --no-default-features --features "$feature"
+    after=$(find fuzz/corpus/{{target}} -type f | wc -l | tr -d ' ')
+    echo "corpus-minimise {{target}}: $before -> $after files"
+
+# The "semantic minimiser" half of #571: shrink one crash-reproducing input
+# structurally — whole ISO base media boxes or EBML elements, with parent
+# size fields patched, not just contiguous byte ranges — before falling back
+# to byte-level delta-debugging for whatever structure can't explain. See
+# `fuzz/src/bin/semantic_min.rs`'s module doc for why `cmin`/`tmin` alone
+# leave this on the table. `file` must already reproduce a crash in `target`
+# (e.g. something under `fuzz/artifacts/<target>/` or `fuzz/seeds/<target>/`
+# before it was fixed); the result is written next to it as `<file>.min`.
+semantic-min target file *ARGS:
+    cargo run --manifest-path fuzz/Cargo.toml --bin semantic_min \
+        --no-default-features -- {{target}} {{file}} {{ARGS}}
+
 # The differential prober (XF-04): mutate a family's seed media and check
 # vaco-probe against ffprobe on every mutant. Needs `ffprobe` on PATH.
 # `family` names a directory under fuzz/seeds/diff/ (mp4, matroska, mpegts,
