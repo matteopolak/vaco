@@ -1343,3 +1343,67 @@ change in stages, each one committed and byte-exact; measure each stage on its
 own; and be as willing to report "restructured, measured, no faster, reverted"
 as to report a win. A negative result on a large change is worth more than a
 small one, because it closes a larger question.
+
+## D21 — The success path is the only path worth optimising (2026-09-01, owner)
+
+The owner's ruling, verbatim:
+
+> `#[inline]` doesnt inline, `#[inline(always)]` inlines. also note you can use
+> `#[cold]` to avoid inlining stuff like error paths. you can also use compiler
+> hints like `likely` and `unlikely` for better branches. we should prioritize
+> performance of the success path over the error path always - even if it makes
+> the error path a lot slower (which doesnt matter much, because the performance
+> is only important when it outputs something that is useful to the user)
+
+**The principle**: an error path's speed is irrelevant, because a run that
+errors produces nothing the user wanted. Trade error-path cost for success-path
+speed without hesitation, however lopsided the trade.
+
+**Every profile taken on this project supports it.** Scaffolding beats
+arithmetic everywhere measured:
+
+- FFV1 encode: `drop_glue::<vaco_core::error::Error>` **10.31%**, and
+  `median_predictor` **8.22%** — *not inlined into the hot loop despite
+  carrying `#[inline]`*, which is exactly the ruling's first point.
+- FFV1's three per-pixel `.ok_or(Error::X)` calls constructed an `Error`
+  unconditionally before the match, because `Error` is not trivially droppable
+  (a `String` variant elsewhere in the enum). `.ok_or_else` removed
+  `drop_glue` from the top 40 entirely.
+- HEVC motion compensation: tap arithmetic **0.28%** against `Plane::index` +
+  `clamp` at **16%**.
+- H.264 scaler: ~50% of `filter_h`'s self time was `Iterator`/`Option`
+  scaffolding, not filtering.
+
+### What is actually available here
+
+Checked against the pinned toolchain (`rust-toolchain.toml`, stable 1.97.1):
+
+- `#[inline(always)]`, `#[inline(never)]`, `#[cold]` — **stable, verified
+  compiling and running on 1.97.1.**
+- `std::hint::likely` / `unlikely` — **NOT available.** They are behind the
+  unstable `likely_unlikely` feature and do not build on stable. The pin is
+  deliberate (D12: a floating channel changes codegen under a performance
+  baseline), so reaching for these would mean going nightly, which D12 moved
+  the project *off*. **Do not use them; do not switch the toolchain to get
+  them.**
+
+The stable idiom that buys most of the same benefit: put the unlikely work in
+a `#[cold] #[inline(never)]` function and call it from the branch. LLVM treats
+a call to a cold function as the unlikely edge and lays the block out of line,
+which is the effect `unlikely` would have bought.
+
+### How to apply it
+
+- `#[inline]` is a *hint* the optimiser may ignore, and it demonstrably did on
+  `median_predictor`. Where a profile shows a hot small function that did not
+  get inlined, use `#[inline(always)]` — and re-measure, because forcing
+  inlining can also hurt (it cost a chroma merge 2.4% earlier this session).
+- Mark error constructors, panic paths, refusal branches and diagnostic
+  formatting `#[cold]`, and prefer `.ok_or_else`/`.unwrap_or_else` over their
+  eager cousins so the error value is not built on the success path.
+- **Measure every change.** D21 licenses the trade; it does not exempt anyone
+  from the measurement protocol. Seventeen optimisations are on record as
+  reverted because the measurement disagreed with the reasoning.
+
+D21 does not relax `#![forbid(unsafe_code)]` (D2), the clean room, or
+byte-exactness against ffmpeg.
