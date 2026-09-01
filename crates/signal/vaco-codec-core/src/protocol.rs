@@ -84,6 +84,13 @@ pub trait SendReceive {
         let _ = (width, height);
     }
 
+    /// Forwarded to [`Decoder::prime_audio`] by [`AsDecoder`]; meaningless for
+    /// an encoder or bitstream filter's `SendReceive`, so the empty default
+    /// costs those implementors nothing.
+    fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
+        let _ = (sample_rate, layout);
+    }
+
     /// Forwarded to [`Encoder::set_option`] by [`AsEncoder`]; meaningless for
     /// a decoder or bitstream filter's `SendReceive`, so the default costs
     /// those implementors nothing.
@@ -138,6 +145,10 @@ where
 
     fn prime_video(&mut self, width: u32, height: u32) {
         self.0.prime_video(width, height);
+    }
+
+    fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
+        self.0.prime_audio(sample_rate, layout);
     }
 }
 
@@ -241,6 +252,10 @@ impl<D: Decoder> SendReceive for DecoderProtocol<D> {
 
     fn prime_video(&mut self, width: u32, height: u32) {
         self.inner.prime_video(width, height);
+    }
+
+    fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
+        self.inner.prime_audio(sample_rate, layout);
     }
 }
 
@@ -453,6 +468,10 @@ impl<T: SendReceive> SendReceive for Validated<T> {
 
     fn prime_video(&mut self, width: u32, height: u32) {
         self.inner.prime_video(width, height);
+    }
+
+    fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
+        self.inner.prime_audio(sample_rate, layout);
     }
 
     fn set_option(&mut self, key: &str, value: &str) -> Result<()> {

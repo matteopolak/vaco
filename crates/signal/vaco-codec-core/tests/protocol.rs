@@ -618,6 +618,80 @@ fn the_box_blanket_impl_forwards_prime_video_through_a_generic_decoder_bound() {
     );
 }
 
+/// Mirrors [`PrimeVideoProbe`] for [`Decoder::prime_audio`] — the same
+/// forwarding hazard on the audio side: a wrapper that inherits the trait
+/// default instead of forwarding silently discards the container's
+/// declared sample rate and channel layout, which is exactly the gap
+/// `vaco-codec-pcm`'s decoder needed closed (raw PCM states neither in its
+/// own bitstream).
+#[derive(Debug, Default)]
+struct PrimeAudioProbe {
+    seen: std::sync::Arc<std::sync::Mutex<Option<(u32, vaco_chlayout::ChannelLayout)>>>,
+}
+
+impl SendReceive for PrimeAudioProbe {
+    type Input = vaco_packet::Packet;
+    type Output = vaco_frame::Frame;
+
+    fn caps(&self) -> Caps {
+        Caps::empty()
+    }
+
+    fn send(&mut self, _input: Option<&vaco_packet::Packet>) -> Result<(), Error> {
+        Err(Error::Eof)
+    }
+
+    fn receive(&mut self) -> Result<vaco_frame::Frame, Error> {
+        Err(Error::Eof)
+    }
+
+    fn flush(&mut self) {}
+
+    fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
+        *self.seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some((sample_rate, layout));
+    }
+}
+
+/// `prime_audio` has to survive the same `AsDecoder(Validated(inner)) ->
+/// Box<dyn Decoder>` shape [`prime_video_forwards_through_as_decoder_validated_and_the_box`]
+/// checks for `prime_video` — see [`PrimeAudioProbe`]'s docs for why.
+#[test]
+fn prime_audio_forwards_through_as_decoder_validated_and_the_box() {
+    let probe = PrimeAudioProbe::default();
+    let seen = probe.seen.clone();
+    let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(probe)));
+    boxed.prime_audio(44_100, vaco_chlayout::ChannelLayout::STEREO);
+    assert_eq!(
+        *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        Some((44_100, vaco_chlayout::ChannelLayout::STEREO))
+    );
+}
+
+/// Mirrors [`the_box_blanket_impl_forwards_prime_video_through_a_generic_decoder_bound`]:
+/// a generic `D: Decoder` bound instantiated with `Box<dyn Decoder>` resolves
+/// through `impl<D: Decoder + ?Sized> Decoder for Box<D>` rather than a
+/// direct vtable call on `&mut dyn Decoder`.
+fn prime_audio_through_generic_decoder<D: Decoder>(
+    d: &mut D,
+    sample_rate: u32,
+    layout: vaco_chlayout::ChannelLayout,
+) {
+    d.prime_audio(sample_rate, layout);
+}
+
+#[test]
+fn the_box_blanket_impl_forwards_prime_audio_through_a_generic_decoder_bound() {
+    let probe = PrimeAudioProbe::default();
+    let seen = probe.seen.clone();
+    let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(probe)));
+    prime_audio_through_generic_decoder(&mut boxed, 48_000, vaco_chlayout::ChannelLayout::MONO);
+    assert_eq!(
+        *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        Some((48_000, vaco_chlayout::ChannelLayout::MONO))
+    );
+}
+
 /// Mirrors [`ExtradataProbe`] on the encode side: an encoder-shaped
 /// `SendReceive` that overrides `set_option` so a test can tell whether a
 /// call reached it or was swallowed by a wrapper's inherited default.

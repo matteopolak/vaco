@@ -1716,6 +1716,30 @@ pub trait Decoder: Send {
         let _ = (width, height);
     }
 
+    /// Tell an audio decoder the sample rate and channel layout a container
+    /// reports for the track, before the first
+    /// [`send_packet`](Decoder::send_packet) — the decoder mirror of
+    /// [`Encoder::prime_audio`], for the same reason [`Decoder::prime_video`]
+    /// exists on the video side: most audio codecs state their own sample
+    /// rate and channel layout in-band (an MP3 frame header, FLAC's
+    /// `STREAMINFO`) and have no use for this, but raw PCM has nothing in its
+    /// bitstream at all — the container's `fmt ` chunk or equivalent is the
+    /// only place that information exists. Before this method existed, a
+    /// registry-built PCM decoder had no channel to learn it through and
+    /// decoded at a fixed default rate/layout regardless of what the
+    /// container actually declared, which stayed invisible for a plain
+    /// remux (the wrong metadata never touched the copied bytes) and only
+    /// produced audible/measurable wrong output once a resampler downstream
+    /// started trusting the decoded frame's declared rate.
+    ///
+    /// The default does nothing, correct for every decoder whose bitstream
+    /// states its own rate and layout. Calling it twice, or with `(0, _)`,
+    /// must be harmless — a decoder with nothing useful to do with a zero
+    /// rate should treat it as "not yet known" rather than fail.
+    fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
+        let _ = (sample_rate, layout);
+    }
+
     /// Ask for intra-decoder parallelism, and hear back what was granted.
     ///
     /// The channel `-threads N` reaches a decoder through. Frame and slice
@@ -1768,6 +1792,10 @@ impl<D: Decoder + ?Sized> Decoder for Box<D> {
 
     fn prime_video(&mut self, width: u32, height: u32) {
         (**self).prime_video(width, height);
+    }
+
+    fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
+        (**self).prime_audio(sample_rate, layout);
     }
 
     fn set_thread_count(&mut self, threads: usize) -> threading::Threading {
