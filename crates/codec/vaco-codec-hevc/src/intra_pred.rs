@@ -47,7 +47,23 @@ fn iz(x: usize) -> i32 {
 /// Built directly from [`Plane::is_ready`]/[`Plane::get`] rather than a
 /// z-scan availability derivation — see `framebuf`'s module doc for why
 /// those coincide exactly in this crate's one-slice, no-tile scope.
-pub(crate) fn build_reference_line(plane: &Plane, x0: i32, y0: i32, size: usize, bit_depth: u32) -> Vec<u16> {
+///
+/// `is_intra_neighbor(x, y)` is §8.4.4.2.2's `constrained_intra_pred_flag`
+/// gate: "when `constrained_intra_pred_flag` is equal to 1 ... the sample is
+/// marked as not available for intra prediction" if the neighbouring
+/// prediction block containing `(x, y)` is not coded in an intra prediction
+/// mode, on top of the ordinary picture/slice/tile-boundary check
+/// [`Plane::is_ready`] already performs. Callers pass `|_, _| true` when
+/// `constrained_intra_pred_flag` is 0 (the ordinary availability check is
+/// the whole story), and a real neighbour-mode lookup otherwise.
+pub(crate) fn build_reference_line(
+    plane: &Plane,
+    x0: i32,
+    y0: i32,
+    size: usize,
+    bit_depth: u32,
+    is_intra_neighbor: impl Fn(i32, i32) -> bool,
+) -> Vec<u16> {
     let n = iz(size);
     let len = 4 * size + 1;
     let mut avail = vec![false; len];
@@ -56,19 +72,19 @@ pub(crate) fn build_reference_line(plane: &Plane, x0: i32, y0: i32, size: usize,
     // Left column and below-left, bottom to top: k=0 is (x0-1, y0+2n-1).
     for k in 0..2 * size {
         let y = y0 + (2 * n - 1) - iz(k);
-        let (a, v) = sample(plane, x0 - 1, y);
+        let (a, v) = sample(plane, x0 - 1, y, &is_intra_neighbor);
         set_at(&mut avail, k, a);
         set_at(&mut line, k, v);
     }
     // Corner.
     {
-        let (a, v) = sample(plane, x0 - 1, y0 - 1);
+        let (a, v) = sample(plane, x0 - 1, y0 - 1, &is_intra_neighbor);
         set_at(&mut avail, 2 * size, a);
         set_at(&mut line, 2 * size, v);
     }
     // Top row and above-right, left to right.
     for i in 0..2 * size {
-        let (a, v) = sample(plane, x0 + iz(i), y0 - 1);
+        let (a, v) = sample(plane, x0 + iz(i), y0 - 1, &is_intra_neighbor);
         set_at(&mut avail, 2 * size + 1 + i, a);
         set_at(&mut line, 2 * size + 1 + i, v);
     }
@@ -83,8 +99,8 @@ fn set_at<T: Copy>(v: &mut [T], idx: usize, value: T) {
     }
 }
 
-fn sample(plane: &Plane, x: i32, y: i32) -> (bool, u16) {
-    if plane.is_ready(x, y) {
+fn sample(plane: &Plane, x: i32, y: i32, is_intra_neighbor: &impl Fn(i32, i32) -> bool) -> (bool, u16) {
+    if plane.is_ready(x, y) && is_intra_neighbor(x, y) {
         let (Ok(ux), Ok(uy)) = (usize::try_from(x), usize::try_from(y)) else {
             return (false, 0);
         };

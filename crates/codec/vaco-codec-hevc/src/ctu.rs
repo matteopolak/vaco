@@ -57,6 +57,14 @@ pub(crate) struct Ctx<'p> {
     pub bit_depth_chroma: u32,
     pub cb_qp_offset: i32,
     pub cr_qp_offset: i32,
+    /// `constrained_intra_pred_flag` — §8.4.4.2.2's reference-sample
+    /// availability gate: when set, a neighbouring sample belonging to an
+    /// inter-coded prediction block is treated as unavailable for intra
+    /// prediction even though it is otherwise in-picture/in-slice, so
+    /// [`reconstruct_luma`]/[`reconstruct_chroma`]/[`predict_chroma_only`]
+    /// consult [`CuGrid::inter_at`] before trusting a neighbour, on top of
+    /// [`crate::framebuf::Plane::is_ready`]'s ordinary check.
+    constrained_intra_pred: bool,
     /// `cu_qp_delta_enabled_flag`.
     cu_qp_delta_enabled: bool,
     /// `Log2MinCuQpDeltaSize = CtbLog2SizeY - diff_cu_qp_delta_depth`.
@@ -290,6 +298,7 @@ impl<'p> Ctx<'p> {
             bit_depth_chroma: u32::from(sps.bit_depth_chroma),
             cb_qp_offset: pps.cb_qp_offset,
             cr_qp_offset: pps.cr_qp_offset,
+            constrained_intra_pred: pps.constrained_intra_pred,
             cu_qp_delta_enabled: pps.cu_qp_delta_enabled,
             log2_min_cu_qp_delta_size: log2_ctb_size.saturating_sub(pps.diff_cu_qp_delta_depth),
             qp_y_prev: slice_qp,
@@ -1178,13 +1187,23 @@ fn predict_component(
     }
 }
 
+/// Copy one PU's `w x h` prediction into its own rectangle of the CU-sized
+/// `dst` buffer, one row at a time (`PERF-PROGRAMME.md` item B1: this used
+/// to be a per-sample `get`/`get_mut` pair, `build_cu_prediction`'s own
+/// 3.48% share of decode). Both buffers hold the same `i32` element type at
+/// the same per-row stride they are copied at, so each row is one
+/// `copy_from_slice` — a real `memcpy`, not sample-by-sample arithmetic —
+/// rather than one bounds-checked lookup per sample.
 fn blit(dst: &mut [i32], dst_stride: usize, x0: usize, y0: usize, w: usize, h: usize, src: &[i32]) {
     for row in 0..h {
-        for col in 0..w {
-            if let Some(slot) = dst.get_mut((y0 + row) * dst_stride + x0 + col) {
-                *slot = src.get(row * w + col).copied().unwrap_or(0);
-            }
-        }
+        let dst_start = y0.saturating_add(row).saturating_mul(dst_stride).saturating_add(x0);
+        let src_start = row.saturating_mul(w);
+        let (Some(dst_row), Some(src_row)) =
+            (dst.get_mut(dst_start..dst_start.saturating_add(w)), src.get(src_start..src_start.saturating_add(w)))
+        else {
+            continue;
+        };
+        dst_row.copy_from_slice(src_row);
     }
 }
 
@@ -1200,14 +1219,27 @@ fn write_inter_cu_no_residual(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32, pus:
     Ok(())
 }
 
+/// Write one CU's motion-compensated prediction straight to the picture
+/// (`PERF-PROGRAMME.md` item B1: `write_inter_cu_no_residual`'s own 9.32%
+/// share was this loop calling [`crate::framebuf::Plane::set`] once per
+/// sample — a bounds-checked 2-D index plus a separate `ready`-bitmap write,
+/// both recomputed every pixel). Row-wise instead: one bounds-checked slice
+/// per row from [`crate::framebuf::Plane::row_mut`], a tight per-sample
+/// clamp-and-convert loop over that slice (no per-sample `Option`), then one
+/// [`crate::framebuf::Plane::mark_row_ready`] call for the whole row.
 fn write_pred_block(plane: &mut crate::framebuf::Plane, x0: i32, y0: i32, w: i32, h: i32, src: &[i32]) {
     let (wu, hu) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
+    let Ok(x0u) = usize::try_from(x0) else { return };
     for row in 0..hu {
-        for col in 0..wu {
-            let v = src.get(row * wu + col).copied().unwrap_or(0).clamp(0, 255);
-            let (Ok(px), Ok(py)) = (usize::try_from(x0 + i32::try_from(col).unwrap_or(0)), usize::try_from(y0 + i32::try_from(row).unwrap_or(0))) else { continue };
-            plane.set(px, py, u16::try_from(v).unwrap_or(0));
+        let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else { continue };
+        let row_start = row.saturating_mul(wu);
+        let Some(src_row) = src.get(row_start..row_start.saturating_add(wu)) else { continue };
+        if let Some(dst_row) = plane.row_mut(py).and_then(|r| r.get_mut(x0u..x0u.saturating_add(wu))) {
+            for (d, &s) in dst_row.iter_mut().zip(src_row) {
+                *d = u16::try_from(s.clamp(0, 255)).unwrap_or(0);
+            }
         }
+        plane.mark_row_ready(py, x0u, wu);
     }
 }
 
@@ -1772,7 +1804,9 @@ fn reconstruct_luma(
     cbf: bool,
 ) -> Result<()> {
     let size = 1usize << log2_size;
-    let line = intra_pred::build_reference_line(&s.pic.y, x0, y0, size, s.bit_depth_luma);
+    let line = intra_pred::build_reference_line(&s.pic.y, x0, y0, size, s.bit_depth_luma, |nx, ny| {
+        !s.constrained_intra_pred || s.cu_grid.inter_at(nx, ny).is_none()
+    });
     let filtered;
     let ref_line = if intra_pred::should_filter(mode, size, true) {
         filtered = intra_pred::filter_reference_line(&line, size, s.bit_depth_luma, s.strong_intra_smoothing);
@@ -1816,7 +1850,12 @@ fn reconstruct_chroma(
 ) -> Result<()> {
     let size = 1usize << log2_size;
     let plane = if is_cb { &s.pic.cb } else { &s.pic.cr };
-    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.bit_depth_chroma);
+    // `<< 1`: chroma-to-luma coordinate scaling for the 4:2:0 collocated
+    // block CuGrid is indexed by (see `cu_origin_of`'s own callers' `cx0 <<
+    // 1` precedent above).
+    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.bit_depth_chroma, |nx, ny| {
+        !s.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none()
+    });
     let mut pred = vec![0u16; size * size];
     // Chroma never smooths its reference samples at 4:2:0 (see the crate
     // doc), so no `should_filter`/`filter_reference_line` call here.
@@ -1844,7 +1883,9 @@ fn reconstruct_chroma(
 fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode: u8, is_cb: bool) {
     let size = 1usize << log2_size;
     let plane = if is_cb { &s.pic.cb } else { &s.pic.cr };
-    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.bit_depth_chroma);
+    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.bit_depth_chroma, |nx, ny| {
+        !s.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none()
+    });
     let mut pred = vec![0u16; size * size];
     intra_pred::predict(mode, &line, size, s.bit_depth_chroma, false, &mut pred);
     let plane_mut = if is_cb { &mut s.pic.cb } else { &mut s.pic.cr };
