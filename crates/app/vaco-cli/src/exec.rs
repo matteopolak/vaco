@@ -96,6 +96,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use vaco_cli_core::{MatchCtx, MetadataSpecifier, StreamInfo};
 use vaco_core::{Disposition, Error, MediaType, Result};
 use vaco_expr::Bindings;
+use vaco_filter_core::LinkFormat;
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::{Muxer, Stream};
@@ -1120,6 +1121,45 @@ fn graph_options_of(
                     opts.pix_fmt = Some(value_str(o)?);
                 }
             }
+            if s.media == Some(MediaType::Audio) {
+                if let Ok(Some(o)) = g.stream_option("ar", &ctx, idx) {
+                    let raw = value_str(o)?;
+                    let hz = vaco_cli_core::value::parse_number(
+                        "ar",
+                        &raw,
+                        vaco_cli_core::value::NumberLimits::int32(),
+                    )
+                    .map_err(|e| {
+                        Diagnostic::new(
+                            AvError::EINVAL,
+                            vec![format!("Error parsing option 'ar' with value '{raw}': {e}")],
+                        )
+                    })?;
+                    if hz > 0.0 {
+                        opts.sample_rate = Some(hz as u32);
+                    }
+                }
+                if let Ok(Some(o)) = g.stream_option("ac", &ctx, idx) {
+                    let raw = value_str(o)?;
+                    let channels = vaco_cli_core::value::parse_number(
+                        "ac",
+                        &raw,
+                        vaco_cli_core::value::NumberLimits::int32(),
+                    )
+                    .map_err(|e| {
+                        Diagnostic::new(
+                            AvError::EINVAL,
+                            vec![format!("Error parsing option 'ac' with value '{raw}': {e}")],
+                        )
+                    })?;
+                    if channels > 0.0 {
+                        opts.channels = Some(channels as u32);
+                    }
+                }
+                if let Ok(Some(o)) = g.stream_option("sample_fmt", &ctx, idx) {
+                    opts.sample_fmt = Some(value_str(o)?);
+                }
+            }
         }
         if opts.filter_text.is_some() && matches!(s.codec, StreamCodec::Copy) {
             return Err(filter_streamcopy_conflict(
@@ -1423,6 +1463,21 @@ pub fn run_pipeline(
                                     decoder.prime_video(width, height);
                                 }
                             }
+                            if let Some(a) = p.audio.as_ref() {
+                                // `Decoder::prime_audio`'s own default is a
+                                // no-op, so this costs every decoder whose
+                                // bitstream states its own rate/layout
+                                // (nearly all of them) nothing. It is what
+                                // `vaco-codec-pcm` needs: raw PCM's bitstream
+                                // carries neither, and the container's own
+                                // declared parameters are the only source of
+                                // truth for them — the audio mirror of
+                                // `prime_video`'s FFV1 case just above.
+                                decoder.prime_audio(
+                                    a.sample_rate,
+                                    a.layout.clone().unwrap_or(vaco_chlayout::ChannelLayout::unspecified(0)),
+                                );
+                            }
                             if let Some(extradata) = p.extradata.as_deref() {
                                 // Offering, not requiring: `Decoder::set_extradata`'s
                                 // own contract says a caller offering a container's
@@ -1450,6 +1505,13 @@ pub fn run_pipeline(
                             // An encoder that does not care lists nothing, so this is
                             // a no-op for the common case.
                             let accepted = encoder.accepted_pix_fmts();
+                            // The audio twin, needed before the graph/non-graph
+                            // branch below rather than only inside the
+                            // non-graph half: the graph path feeds it to
+                            // `crate::filtergraph::build` as the audio sink's
+                            // own constraint, the same role `accepted` plays
+                            // for the video sink.
+                            let accepted_audio = encoder.accepted_sample_fmts();
                             // What the stream actually carries once this leg's
                             // conversions (if any) are wired in — filled in
                             // below whenever a converter changes the format
@@ -1468,13 +1530,16 @@ pub fn run_pipeline(
                             // fixed).
                             let mut out_video_format: Option<PixFmt> = None;
                             let mut out_audio_format: Option<vaco_sampfmt::SampleFmt> = None;
+                            let mut out_audio_rate: Option<u32> = None;
+                            let mut out_audio_layout: Option<vaco_chlayout::ChannelLayout> = None;
                             let frames = if s.graph_opts.wants_graph() {
                                 // CL-20: a real `-vf`/`-af`/`-filter`/`-s`/`-aspect`/
-                                // `-pix_fmt` graph replaces the ad-hoc
-                                // `converter_target`/`add_converter` path below —
-                                // `SimpleGraph::build`'s own `configure` already runs
-                                // the same auto-conversion policy for whatever the
-                                // user's chain leaves unresolved against `accepted`.
+                                // `-pix_fmt`/`-ar`/`-ac`/`-sample_fmt` graph replaces
+                                // the ad-hoc `converter_target`/`add_converter` path
+                                // below — `SimpleGraph::build`'s own `configure`
+                                // already runs the same auto-conversion policy for
+                                // whatever the user's chain leaves unresolved
+                                // against `accepted`/`accepted_audio`.
                                 let built = crate::filtergraph::build(
                                     &s.graph_opts,
                                     s.media.unwrap_or(MediaType::Data),
@@ -1482,10 +1547,47 @@ pub fn run_pipeline(
                                     p.audio.as_ref(),
                                     time_base,
                                     accepted,
+                                    accepted_audio,
                                 )
                                 .map_err(|e| {
                                     Diagnostic::new(AvError::EINVAL, vec![format!("Error: {e}")])
                                 })?;
+                                // What the sink actually resolved to, so
+                                // `out_params` below describes the graph's real
+                                // output rather than the pre-graph decode
+                                // parameters — the same gap E2E-GAPS 3 closed for
+                                // the non-graph path's sample *format*, but this
+                                // block had never been reached for a filtered
+                                // stream at all: `out_video_format`/
+                                // `out_audio_format` stayed `None` and the muxer
+                                // kept whatever `p.with_codec` copied over, wrong
+                                // for a `-s`/`-ar`/`-af aresample=...` stream in
+                                // exactly the way a `WAV` header claiming the
+                                // input's sample rate while the samples were
+                                // resampled to a different one would be wrong.
+                                match built.graph.sink_format(built.sink) {
+                                    Ok(LinkFormat::Video { format, .. }) => {
+                                        out_video_format = Some(*format);
+                                    }
+                                    Ok(LinkFormat::Audio {
+                                        format,
+                                        sample_rate,
+                                        layout,
+                                        ..
+                                    }) => {
+                                        out_audio_format = Some(*format);
+                                        out_audio_rate = Some(*sample_rate);
+                                        out_audio_layout = Some(layout.clone());
+                                        // Same reason as the non-graph branch's
+                                        // own call below: an encoder whose
+                                        // packets are not self-describing needs
+                                        // the real stream shape before the first
+                                        // frame, and this is the first point the
+                                        // graph's negotiated shape is known.
+                                        encoder.prime_audio(*sample_rate, layout.clone(), *format);
+                                    }
+                                    Err(_) => {}
+                                }
                                 spec.add_filter(
                                     built.graph,
                                     &[SourceBind::new(frames, built.source, time_base)],
@@ -1547,7 +1649,6 @@ pub fn run_pipeline(
                                 // (`vaco-sched`'s own test coverage), so this
                                 // costs nothing in the common case and fixes
                                 // the mismatched one.
-                                let accepted_audio = encoder.accepted_sample_fmts();
                                 match accepted_audio.first() {
                                     Some(&t) => {
                                         out_audio_format = Some(t);
@@ -1607,6 +1708,16 @@ pub fn run_pipeline(
                                 && let Some(a) = out_params.audio.as_mut()
                             {
                                 a.format = Some(fmt);
+                            }
+                            if let Some(rate) = out_audio_rate
+                                && let Some(a) = out_params.audio.as_mut()
+                            {
+                                a.sample_rate = rate;
+                            }
+                            if let Some(layout) = out_audio_layout
+                                && let Some(a) = out_params.audio.as_mut()
+                            {
+                                a.layout = Some(layout);
                             }
                             if let Some(edata) = encoder_extradata {
                                 out_params.extradata = Some(edata);

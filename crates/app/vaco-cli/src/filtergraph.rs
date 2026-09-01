@@ -48,7 +48,7 @@
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{AudioParameters, VideoParameters};
 use vaco_core::{MediaType, Rational};
-use vaco_filter_core::negotiate::{AutoConvert, FormatSet, NodeFormats};
+use vaco_filter_core::negotiate::{AutoConvert, Constraint, FormatSet, NodeFormats};
 use vaco_filter_core::{Graph, LinkFormat, NodeId};
 use vaco_pixfmt::PixFmt;
 use vaco_sampfmt::SampleFmt;
@@ -70,6 +70,21 @@ pub struct SimpleGraphOptions {
     pub pix_fmt: Option<String>,
     /// `-noauto_conversion_filters` was given (default: filters run).
     pub auto_conversion: bool,
+    /// `-ar`, already parsed. The audio mirror of [`SimpleGraphOptions::size`]:
+    /// where `-s` pins the video sink's dimensions, this pins the audio
+    /// sink's sample rate, and the same auto-conversion machinery that
+    /// inserts `scale` for the one inserts `aresample` for the other.
+    pub sample_rate: Option<u32>,
+    /// `-ac`, already parsed as a channel count. Resolved to a concrete
+    /// [`ChannelLayout`] in [`build`] via [`ChannelLayout::default_for`],
+    /// falling back to [`ChannelLayout::unspecified`] for a count no named
+    /// layout has — matching the reference's own bare `<n>c` layout spec
+    /// rather than rejecting an otherwise-valid channel count.
+    pub channels: Option<u32>,
+    /// `-sample_fmt`'s raw name, resolved against [`SampleFmt::from_name`] in
+    /// [`build`] rather than here, so an unrecognised name is a build-time
+    /// error with the stream in scope rather than a silently-dropped option.
+    pub sample_fmt: Option<String>,
 }
 
 impl SimpleGraphOptions {
@@ -82,6 +97,9 @@ impl SimpleGraphOptions {
             || self.size.is_some()
             || self.aspect.is_some()
             || self.pix_fmt.is_some()
+            || self.sample_rate.is_some()
+            || self.channels.is_some()
+            || self.sample_fmt.is_some()
     }
 }
 
@@ -171,8 +189,17 @@ pub(crate) fn audio_link(a: &AudioParameters, time_base: Rational) -> LinkFormat
 ///
 /// `accepted_pix_fmts` is the chosen encoder's own
 /// [`vaco_codec_core::Encoder::accepted_pix_fmts`] (empty means "no
-/// preference"); ignored for audio, which has no such negotiation surface yet
-/// (matching the non-graph path, which never auto-converts audio either).
+/// preference"), constraining the video sink exactly as before.
+/// `accepted_sample_fmts` is its audio mirror
+/// ([`vaco_codec_core::Encoder::accepted_sample_fmts`]) — the audio sink used
+/// to carry no constraint at all, which is what let `-ar`/`-ac`/`-sample_fmt`
+/// resolve to nothing: a link between an unconstrained `aresample` output and
+/// an unconstrained sink has no source of truth for what it carries, and
+/// [`vaco_filter_core::negotiate`] correctly refuses to invent one rather than
+/// guess. The sink now carries `-ar`/`-ac`/`-sample_fmt` (via `opts`) and
+/// falls back to `accepted_sample_fmts` for the sample format precisely where
+/// the non-graph path already did, so routing a stream through this function
+/// does not regress that behaviour.
 ///
 /// # Errors
 ///
@@ -185,6 +212,7 @@ pub fn build(
     audio: Option<&AudioParameters>,
     time_base: Rational,
     accepted_pix_fmts: &[PixFmt],
+    accepted_sample_fmts: &[SampleFmt],
 ) -> Result<SimpleGraph, String> {
     let text = describe(opts, media)
         .unwrap_or_else(|| if media == MediaType::Audio { "anull" } else { "null" }.to_owned());
@@ -228,9 +256,45 @@ pub fn build(
         .attach_source(0, src_formats, format)
         .map_err(|e| format!("attaching the source: {e}"))?;
 
-    let sink_formats = if media == MediaType::Video && !accepted_pix_fmts.is_empty() {
+    let sink_formats = if media == MediaType::Video {
+        if accepted_pix_fmts.is_empty() {
+            NodeFormats {
+                inputs: vec![FormatSet::default()],
+                label: "out".to_owned(),
+                ..NodeFormats::default()
+            }
+        } else {
+            NodeFormats {
+                inputs: vec![FormatSet::video_list(accepted_pix_fmts.iter().copied())],
+                label: "out".to_owned(),
+                ..NodeFormats::default()
+            }
+        }
+    } else if media == MediaType::Audio {
+        let mut set = FormatSet::default();
+        // `-sample_fmt` pins it exactly; absent that, fall back to the
+        // encoder's own accepted list — the same rule the non-graph path
+        // applies via `accepted_audio.first()`, so a stream that only asked
+        // for `-ar`/`-ac` still lands on a format the encoder actually takes
+        // rather than whatever the source happened to carry.
+        if let Some(name) = &opts.sample_fmt {
+            let fmt = SampleFmt::from_name(name)
+                .map_err(|_| format!("unrecognised -sample_fmt value `{name}`"))?;
+            set.sample_formats = Some(Constraint::Exact(fmt));
+        } else if !accepted_sample_fmts.is_empty() {
+            set.sample_formats =
+                Some(Constraint::OneOf(accepted_sample_fmts.to_vec()).normalised());
+        }
+        if let Some(rate) = opts.sample_rate {
+            set.sample_rates = Some(Constraint::Exact(rate));
+        }
+        if let Some(channels) = opts.channels {
+            let layout = ChannelLayout::default_for(channels)
+                .unwrap_or_else(|| ChannelLayout::unspecified(channels));
+            set.channel_layouts = Some(Constraint::Exact(layout));
+        }
         NodeFormats {
-            inputs: vec![FormatSet::video_list(accepted_pix_fmts.iter().copied())],
+            inputs: vec![set],
             label: "out".to_owned(),
             ..NodeFormats::default()
         }
@@ -323,6 +387,7 @@ mod tests {
             None,
             Rational::new(1, 25),
             &[],
+            &[],
         )
         .unwrap();
         let LinkFormat::Video {
@@ -356,6 +421,7 @@ mod tests {
             None,
             Rational::new(1, 25),
             &[],
+            &[],
         )
         .unwrap();
         let LinkFormat::Video { format, .. } = built.graph.sink_format(built.sink).unwrap() else {
@@ -379,6 +445,7 @@ mod tests {
                 None,
                 Rational::new(1, 25),
                 &[],
+                &[],
             )
             .is_ok()
         );
@@ -399,8 +466,106 @@ mod tests {
                 None,
                 Rational::new(1, 25),
                 &[],
+                &[],
             )
             .is_err()
         );
+    }
+
+    fn audio_params() -> AudioParameters {
+        AudioParameters {
+            sample_rate: 48_000,
+            format: Some(SampleFmt::S16),
+            layout: Some(ChannelLayout::MONO),
+            ..AudioParameters::default()
+        }
+    }
+
+    /// The regression this whole fix is for: `-ar` alone (no `-af`) must
+    /// still produce a graph whose sink resolves to the requested rate,
+    /// rather than the "format negotiation left a property unconstrained"
+    /// [`vaco_core::Error::Unsupported`] an unconstrained audio sink used to
+    /// leave nothing to resolve it with.
+    #[test]
+    fn a_sample_rate_request_alone_resolves_the_sink() {
+        let opts = SimpleGraphOptions {
+            sample_rate: Some(44_100),
+            auto_conversion: true,
+            ..SimpleGraphOptions::default()
+        };
+        let built = build(
+            &opts,
+            MediaType::Audio,
+            None,
+            Some(&audio_params()),
+            Rational::new(1, 48_000),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let LinkFormat::Audio { sample_rate, .. } = built.graph.sink_format(built.sink).unwrap()
+        else {
+            panic!("expected an audio link");
+        };
+        assert_eq!(*sample_rate, 44_100);
+    }
+
+    /// `-ac` resolves to a concrete channel layout on the sink, and `-sample_fmt`
+    /// alongside it resolves the format too — both from the sink alone, with
+    /// no `-af` in the description at all.
+    #[test]
+    fn channel_count_and_sample_format_requests_resolve_the_sink() {
+        let opts = SimpleGraphOptions {
+            channels: Some(2),
+            sample_fmt: Some("s32".to_owned()),
+            auto_conversion: true,
+            ..SimpleGraphOptions::default()
+        };
+        let built = build(
+            &opts,
+            MediaType::Audio,
+            None,
+            Some(&audio_params()),
+            Rational::new(1, 48_000),
+            &[],
+            &[],
+        )
+        .unwrap();
+        let LinkFormat::Audio {
+            layout,
+            format,
+            ..
+        } = built.graph.sink_format(built.sink).unwrap()
+        else {
+            panic!("expected an audio link");
+        };
+        assert_eq!(layout.channels, 2);
+        assert_eq!(*format, SampleFmt::S32);
+    }
+
+    /// With no `-sample_fmt`, the sink still falls back to the encoder's own
+    /// accepted list — the graph path must not regress the sample-format
+    /// safety the non-graph path already had (E2E-GAPS 3).
+    #[test]
+    fn sample_rate_request_still_falls_back_to_the_encoders_accepted_format() {
+        let opts = SimpleGraphOptions {
+            sample_rate: Some(44_100),
+            auto_conversion: true,
+            ..SimpleGraphOptions::default()
+        };
+        let built = build(
+            &opts,
+            MediaType::Audio,
+            None,
+            Some(&audio_params()),
+            Rational::new(1, 48_000),
+            &[],
+            &[SampleFmt::F32P],
+        )
+        .unwrap();
+        let LinkFormat::Audio { format, .. } = built.graph.sink_format(built.sink).unwrap() else {
+            panic!("expected an audio link");
+        };
+        assert_eq!(*format, SampleFmt::F32P);
     }
 }
