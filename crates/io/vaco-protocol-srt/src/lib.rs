@@ -66,18 +66,22 @@
 //!   [`arq::ReceiveWindow`] (loss detection, in-order delivery, TSBPD-ish
 //!   too-late drop). Sans-io via an explicit `on_tick(now_ms)`
 //!   (`planning/INTERFACE-GAPS.md` gap 28's addendum) rather than owning a
-//!   socket or a clock. **No congestion control / rate limiting is
-//!   implemented** — `draft` §5.1/§5.2 name LiveCC/FileCC but do not give
-//!   their algorithms in the fetched text, and `arq`'s own module docs
-//!   name every other constant this module needed a number for and could
-//!   not get from the draft (RTO, the too-late-drop threshold, NAK
+//!   socket or a clock. **No `LiveCC`/`FileCC` congestion control is
+//!   implemented** — `draft` §5.1/§5.2 name them but do not give either
+//!   algorithm in the fetched text, and `arq`'s own module docs name every
+//!   other constant this module needed a number for and could not get
+//!   from the draft (RTO, the too-late-drop threshold, NAK
 //!   re-announcement policy) as `IMPLEMENTATION-DEFINED`, with reasoning,
-//!   rather than presenting a guess as measured. **This is a real,
-//!   separately-tracked functional gap** (issue #656), not merely the
-//!   same specification gap stated twice: a real deployment over a real
-//!   network needs some throttling regardless of whether it matches
-//!   SRT's own named algorithms, which `arq`'s own tests (a simulated
-//!   lossy but otherwise-instant link) cannot exercise.
+//!   rather than presenting a guess as measured.
+//! - [`pacing`] (issue #656) — [`pacing::Pacer`], a plain token-bucket
+//!   byte-rate ceiling `arq::SendWindow::with_rate_limit` can attach.
+//!   **Not** `LiveCC`/`FileCC` and not claimed to be — the specification
+//!   gap above is unchanged — but a real, separately-tracked functional
+//!   gap closes with it: before this, nothing in this crate throttled how
+//!   fast a caller could inject data at all, a failure mode `arq`'s own
+//!   tests (a simulated lossy but otherwise-instant link) cannot exercise
+//!   because they do not model a shared, capacity-limited link a sender's
+//!   own rate can overwhelm.
 //! - [`message`] (PR-10c / #557) — [`message::TransmissionMode`] (this
 //!   crate's own reading of the `STREAM` `SRT Flags` bit — stated as an
 //!   inference, not re-labeled draft-derived, since the fetched text names
@@ -114,6 +118,7 @@ pub mod handshake;
 pub mod km;
 pub mod message;
 pub mod options;
+pub mod pacing;
 pub mod packet;
 pub mod session;
 

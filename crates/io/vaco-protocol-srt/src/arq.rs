@@ -31,14 +31,23 @@
 //! measured or guessed (`planning/TECH-DEBT.md`, the MPEG-1 escape-level
 //! sentinel search).
 //!
-//! **No congestion control / rate limiting is implemented at all.**
-//! `draft` §5.1/§5.2 name LiveCC/FileCC but do not give their algorithms
-//! in the fetched text, and a made-up AIMD-shaped rate controller would
-//! be exactly the kind of unverifiable-looking-verified constant this
-//! module's own docs just warned about — omitted and named, not
-//! attempted, the same call this dispatch made for WHIP's DTLS gap.
+//! **No `LiveCC`/`FileCC` congestion control is implemented, and still is
+//! not** — `draft` §5.1/§5.2 name them but do not give either algorithm in
+//! the fetched text, and a made-up AIMD-shaped rate controller would be
+//! exactly the kind of unverifiable-looking-verified constant this
+//! module's own docs just warned about.
+//!
+//! **[`SendWindow`] can, since issue #656, still be given a plain
+//! token-bucket byte-rate ceiling** ([`SendWindow::with_rate_limit`], built
+//! on [`crate::pacing::Pacer`]) — deliberately not presented as either
+//! named algorithm, just the bare "do not inject data faster than this
+//! many bytes/sec" property every real deployment over a real,
+//! capacity-limited link needs regardless. Opt-in: `SendWindow::new` alone
+//! is exactly as unthrottled as before.
 
 use std::collections::BTreeMap;
+
+use crate::pacing::Pacer;
 
 /// IMPLEMENTATION-DEFINED: no RTO formula is given in the fetched draft
 /// text (see module docs). 100ms is a fixed, conservative placeholder —
@@ -88,6 +97,9 @@ pub struct SendWindow {
     config: SendConfig,
     buffer: BTreeMap<u32, InFlight>,
     stats: SendStats,
+    /// `None` (the default, via `new`) is exactly the old unthrottled
+    /// behaviour. `Some` once `with_rate_limit` attaches a ceiling (#656).
+    pacer: Option<Pacer>,
 }
 
 impl SendWindow {
@@ -97,6 +109,47 @@ impl SendWindow {
             config,
             buffer: BTreeMap::new(),
             stats: SendStats::default(),
+            pacer: None,
+        }
+    }
+
+    /// Cap outgoing *new* data (see [`Self::send_permitted`]) to
+    /// `bytes_per_sec`, starting with a full one-second burst budget at
+    /// `now_ms`. Not `LiveCC`/`FileCC` (module docs) — a plain token
+    /// bucket, present so a caller driving a real, capacity-limited link
+    /// has *something* to stop it self-inducing loss by sending faster
+    /// than the link can carry (issue #656), which `SendWindow::new`
+    /// alone gives no way to express.
+    #[must_use]
+    pub fn with_rate_limit(mut self, bytes_per_sec: u64, now_ms: u64) -> Self {
+        self.pacer = Some(Pacer::new(bytes_per_sec, now_ms));
+        self
+    }
+
+    /// The attached rate limit, if any (`None` for a plain `SendWindow::new`).
+    #[must_use]
+    pub fn rate_limit_bytes_per_sec(&self) -> Option<u64> {
+        self.pacer.as_ref().map(Pacer::bytes_per_sec)
+    }
+
+    /// Whether a *new* data packet of `bytes` may be sent right now under
+    /// the attached rate limiter, consuming that budget immediately if so
+    /// — always `true` when no limiter is attached, so a caller that never
+    /// opts in sees no behaviour change from before #656.
+    ///
+    /// This gates *new* sends only, deliberately: [`Self::on_nak`] and
+    /// [`Self::on_tick`]'s RTO path are retransmissions of data already
+    /// paid for once, and folding them into the same budget would make a
+    /// lossy link's own recovery compete with fresh data for the ceiling
+    /// meant to keep the link from being overrun in the first place.
+    /// [`Self::on_send`] itself stays an unconditional recorder — call
+    /// this first and only call `on_send` if it returns `true`, the same
+    /// division of labour `on_tick`'s caller already has between "what
+    /// does the engine want to do" and "is now a legal time to do it".
+    pub fn send_permitted(&mut self, now_ms: u64, bytes: usize) -> bool {
+        match &mut self.pacer {
+            Some(p) => p.permit(now_ms, bytes),
+            None => true,
         }
     }
 
@@ -308,6 +361,46 @@ mod tests {
 
         w.on_ack(2); // everything before 2 is acknowledged
         assert_eq!(w.in_flight_count(), 2); // 2 and 3 remain
+    }
+
+    /// Issue #656: `SendWindow::new` alone must stay exactly as unthrottled
+    /// as it was before rate limiting existed.
+    #[test]
+    fn send_window_is_unthrottled_without_with_rate_limit() {
+        let mut w = SendWindow::new(SendConfig::default());
+        assert_eq!(w.rate_limit_bytes_per_sec(), None);
+        assert!(w.send_permitted(0, 1_000_000_000));
+        assert!(w.send_permitted(1_000_000, 1_000_000_000));
+    }
+
+    /// Issue #656: once a limit is attached, `send_permitted` gates new
+    /// sends to the configured ceiling — this is the property
+    /// `tests/lossy_link.rs` cannot exercise (its own doc names why: a
+    /// simulated lossy-but-instant link never models a shared,
+    /// capacity-limited one a sender's own rate could overwhelm).
+    #[test]
+    fn send_window_with_a_rate_limit_gates_new_sends_to_the_ceiling() {
+        let mut w = SendWindow::new(SendConfig::default()).with_rate_limit(1000, 0);
+        assert_eq!(w.rate_limit_bytes_per_sec(), Some(1000));
+
+        // The initial full burst budget covers exactly 1000 bytes...
+        assert!(w.send_permitted(0, 600));
+        w.on_send(1, 0, vec![0; 600], 0);
+        assert!(w.send_permitted(0, 400));
+        w.on_send(2, 0, vec![0; 400], 0);
+        // ...and no more, until time passes.
+        assert!(!w.send_permitted(0, 1));
+
+        // Half a second later, half the rate's worth of budget has
+        // accrued.
+        assert!(!w.send_permitted(500, 501));
+        assert!(w.send_permitted(500, 500));
+        w.on_send(3, 0, vec![0; 500], 500);
+
+        // A refusal must not have touched the retransmission buffer or
+        // recorded a send: on_send is a separate, unconditional call the
+        // caller makes only after send_permitted agrees.
+        assert_eq!(w.in_flight_count(), 3);
     }
 
     #[test]
