@@ -125,6 +125,7 @@ vaco-filter-convolve = { path = "../crates/filter/vaco-filter-convolve", optiona
 vaco-filter-core = { path = "../crates/filter/vaco-filter-core", optional = true }
 vaco-filter-deinterlace = { path = "../crates/filter/vaco-filter-deinterlace", optional = true }
 vaco-filter-denoise = { path = "../crates/filter/vaco-filter-denoise", optional = true }
+vaco-filter-draw-vf = { path = "../crates/filter/vaco-filter-draw-vf", optional = true }
 vaco-filter-framesync = { path = "../crates/filter/vaco-filter-framesync", optional = true }
 vaco-filter-geometry = { path = "../crates/filter/vaco-filter-geometry", optional = true }
 vaco-filter-graph = { path = "../crates/filter/vaco-filter-graph", optional = true }
@@ -132,9 +133,14 @@ vaco-filter-key = { path = "../crates/filter/vaco-filter-key", optional = true }
 vaco-filter-lut = { path = "../crates/filter/vaco-filter-lut", optional = true }
 vaco-filter-mm = { path = "../crates/filter/vaco-filter-mm", optional = true }
 vaco-filter-motion = { path = "../crates/filter/vaco-filter-motion", optional = true }
+vaco-filter-overlay = { path = "../crates/filter/vaco-filter-overlay", optional = true }
 vaco-filter-palette = { path = "../crates/filter/vaco-filter-palette", optional = true }
+vaco-filter-scope = { path = "../crates/filter/vaco-filter-scope", optional = true }
 vaco-filter-source = { path = "../crates/filter/vaco-filter-source", optional = true }
+vaco-filter-stack = { path = "../crates/filter/vaco-filter-stack", optional = true }
+vaco-filter-subtitle = { path = "../crates/filter/vaco-filter-subtitle", optional = true }
 vaco-filter-temporal = { path = "../crates/filter/vaco-filter-temporal", optional = true }
+vaco-filter-text = { path = "../crates/filter/vaco-filter-text", optional = true }
 vaco-filter-v360 = { path = "../crates/filter/vaco-filter-v360", optional = true }
 vaco-filter-video-composite = { path = "../crates/filter/vaco-filter-video-composite", optional = true }
 vaco-filter-video-format = { path = "../crates/filter/vaco-filter-video-format", optional = true }
@@ -309,6 +315,7 @@ default = [
     "filter-core",
     "filter-deinterlace",
     "filter-denoise",
+    "filter-draw-vf",
     "filter-framesync",
     "filter-geometry",
     "filter-graph",
@@ -316,9 +323,14 @@ default = [
     "filter-lut",
     "filter-mm",
     "filter-motion",
+    "filter-overlay",
     "filter-palette",
+    "filter-scope",
     "filter-source",
+    "filter-stack",
+    "filter-subtitle",
     "filter-temporal",
+    "filter-text",
     "filter-v360",
     "filter-video-composite",
     "filter-video-format",
@@ -475,7 +487,7 @@ filter-adynamics = ["dep:vaco-filter-adynamics", "dep:vaco-filter-graph"]
 filter-aeffects = ["dep:vaco-filter-aeffects", "dep:vaco-filter-graph"]
 filter-aeq = ["dep:vaco-filter-adsp", "dep:vaco-filter-aeq", "dep:vaco-filter-graph"]
 filter-analysis = ["dep:vaco-filter-analysis", "dep:vaco-filter-graph"]
-filter-artistic = ["dep:vaco-filter-artistic", "dep:vaco-limits"]
+filter-artistic = ["dep:vaco-expr", "dep:vaco-filter-artistic", "dep:vaco-filter-graph", "dep:vaco-limits"]
 filter-asource = ["dep:vaco-filter-asource", "dep:vaco-filter-graph", "dep:vaco-opts"]
 filter-audio = ["dep:vaco-expr", "dep:vaco-filter-audio", "dep:vaco-filter-graph", "dep:vaco-opts"]
 filter-blur = ["dep:vaco-filter-blur", "dep:vaco-filter-graph"]
@@ -484,6 +496,7 @@ filter-convolve = ["dep:vaco-filter-convolve", "dep:vaco-filter-graph"]
 filter-core = ["dep:vaco-core", "dep:vaco-filter-core", "dep:vaco-pixfmt"]
 filter-deinterlace = ["dep:vaco-filter-deinterlace", "dep:vaco-filter-graph"]
 filter-denoise = ["dep:vaco-filter-denoise", "dep:vaco-filter-graph"]
+filter-draw-vf = ["dep:vaco-expr", "dep:vaco-filter-draw-vf", "dep:vaco-filter-graph"]
 filter-framesync = ["dep:vaco-core", "dep:vaco-filter-framesync", "dep:vaco-frame"]
 filter-geometry = ["dep:vaco-core", "dep:vaco-filter-geometry", "dep:vaco-filter-graph"]
 filter-graph = ["dep:vaco-filter-graph"]
@@ -491,9 +504,14 @@ filter-key = ["dep:vaco-core", "dep:vaco-filter-graph", "dep:vaco-filter-key"]
 filter-lut = ["dep:vaco-filter-graph", "dep:vaco-filter-lut"]
 filter-mm = ["dep:vaco-filter-graph", "dep:vaco-filter-mm", "dep:vaco-limits"]
 filter-motion = ["dep:vaco-filter-graph", "dep:vaco-filter-motion"]
+filter-overlay = ["dep:vaco-expr", "dep:vaco-filter-graph", "dep:vaco-filter-overlay", "dep:vaco-limits"]
 filter-palette = ["dep:vaco-filter-graph", "dep:vaco-filter-palette"]
+filter-scope = ["dep:vaco-filter-graph", "dep:vaco-filter-scope", "dep:vaco-limits"]
 filter-source = ["dep:vaco-filter-graph", "dep:vaco-filter-source", "dep:vaco-opts"]
+filter-stack = ["dep:vaco-filter-graph", "dep:vaco-filter-stack", "dep:vaco-limits"]
+filter-subtitle = ["dep:vaco-filter-graph", "dep:vaco-filter-subtitle"]
 filter-temporal = ["dep:vaco-filter-graph", "dep:vaco-filter-temporal"]
+filter-text = ["dep:vaco-expr", "dep:vaco-filter-graph", "dep:vaco-filter-text"]
 filter-v360 = ["dep:vaco-filter-graph", "dep:vaco-filter-v360"]
 filter-video-composite = ["dep:vaco-expr", "dep:vaco-filter-graph", "dep:vaco-filter-video-composite"]
 filter-video-format = ["dep:vaco-color", "dep:vaco-core", "dep:vaco-filter-graph", "dep:vaco-filter-video-format", "dep:vaco-pixfmt"]
@@ -1108,6 +1126,14 @@ bench = false
 required-features = ["filter-analysis"]
 
 [[bin]]
+name = "filter_artistic_options"
+path = "fuzz_targets/filter_artistic_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-artistic"]
+
+[[bin]]
 name = "filter_asource_options"
 path = "fuzz_targets/filter_asource_options.rs"
 test = false
@@ -1164,6 +1190,14 @@ bench = false
 required-features = ["filter-denoise"]
 
 [[bin]]
+name = "filter_draw_vf_options"
+path = "fuzz_targets/filter_draw_vf_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-draw-vf"]
+
+[[bin]]
 name = "filter_geometry_options"
 path = "fuzz_targets/filter_geometry_options.rs"
 test = false
@@ -1212,12 +1246,28 @@ bench = false
 required-features = ["filter-motion"]
 
 [[bin]]
+name = "filter_overlay_options"
+path = "fuzz_targets/filter_overlay_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-overlay"]
+
+[[bin]]
 name = "filter_palette_options"
 path = "fuzz_targets/filter_palette_options.rs"
 test = false
 doc = false
 bench = false
 required-features = ["filter-palette"]
+
+[[bin]]
+name = "filter_scope_options"
+path = "fuzz_targets/filter_scope_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-scope"]
 
 [[bin]]
 name = "filter_source_options"
@@ -1228,12 +1278,36 @@ bench = false
 required-features = ["filter-source"]
 
 [[bin]]
+name = "filter_stack_options"
+path = "fuzz_targets/filter_stack_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-stack"]
+
+[[bin]]
+name = "filter_subtitle_options"
+path = "fuzz_targets/filter_subtitle_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-subtitle"]
+
+[[bin]]
 name = "filter_temporal_options"
 path = "fuzz_targets/filter_temporal_options.rs"
 test = false
 doc = false
 bench = false
 required-features = ["filter-temporal"]
+
+[[bin]]
+name = "filter_text_options"
+path = "fuzz_targets/filter_text_options.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-text"]
 
 [[bin]]
 name = "filter_timeline_expr"
