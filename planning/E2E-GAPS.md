@@ -1910,3 +1910,113 @@ agent's very recent commit was actively working in.
 `vaco-conformance` and the fuzz harnesses were not touched — outside this
 item's lane. `vaco-codec-core` (the DPB entry allocation named above) was
 read for diagnosis but not edited.
+
+## 27. D21/D22 applied to FFV1's hot loop — §25's two named findings closed, `Error` boxing measured and not landed
+
+Follow-up to §25 (which found `drop_glue::<Error>` at 10.31% and
+`median_predictor` at 8.22%, and fixed only the first) and D21 (owner
+ruling: optimise the success path, trade error-path speed for it without
+limit) plus the same-day D22 (pin moved to `nightly-2026-08-07`
+specifically so `std::hint::{likely, unlikely}` compile — they do not on
+the stable 1.97.1 this session started on). Same fixture and build recipe
+as §25: `h264_1080p.mp4`, 125 frames, `-threads 1`,
+`transcode_h264_to_ffv1_1080p`, private `--target-dir`, `dsymutil`'d,
+`samply` + `llvm-symbolizer --inlines` via
+`scripts/perf-baseline-symbolicate.py`.
+
+**Re-profiling the §25-fixed binary (baseline for this item) turned up a
+different leaf than §25's own "not folded into the hot loop" line named**:
+`<SliceBuf>::neighbours` (the six-lookup border-aware accessor
+`encode_plane_range`/`decode_plane_range` both call once per pixel,
+immediately before `median_predictor`) was **17.54%** of in-lib self
+time as its own out-of-line function — bigger than either of §25's two
+named costs. `median_predictor` itself did not appear as a separate leaf
+in this run's outermost-frame aggregation, unlike §25's decode-side
+8.22% — different call site (this fixture only exercises the encoder),
+not a contradiction of §25's finding.
+
+**Fix landed** (`a2e6706`, `vaco-codec-ffv1`): `SliceBuf::get`/`set`/
+`neighbours`/`border` and `quant::median_predictor` → `#[inline(always)]`
+(measured not-inlined despite `#[inline]`, matching §25's own framing of
+the same bug for `median_predictor`); the three per-pixel
+`states.get_mut(ctx).ok_or_else(..)` sites (already lazy since §25) now
+share one `#[cold] #[inline(never)] context_out_of_range() -> Error`
+helper instead of three inline closures, so LLVM lays the block out of
+the hot loop's own instruction stream rather than merely deferring its
+construction; `border`'s three edge-of-plane checks (true for under 1%
+of calls on a 1080p plane — only the first two rows/columns) wrapped in
+`std::hint::unlikely`, gated by `#![feature(likely_unlikely)]` added to
+the crate's `lib.rs`.
+
+**Measured**, CPU-seconds (`resource.getrusage(RUSAGE_CHILDREN)`
+children's `user+sys`, interleaved A/B per §2's protocol), three
+independent process launches, on nightly-2026-08-07 (a same-session
+toolchain switch mid-item required discarding an initial stable-built
+baseline and candidate and rebuilding both fresh — see D22, and
+`AGENT-CONSTRAINTS.md`'s "measure cycles and interleave" entry for why
+the numbers below are CPU-seconds first):
+
+| run | load avg (1 min) | rounds | candidate/baseline | wins |
+|---|---:|---:|---:|---:|
+| cleanest, 2-way (candidate vs baseline + ffmpeg) | ~30 | 12 | **1.13x** | 12/12 |
+| 3-way (+ inline-only variant + ffmpeg) | ~35-48 | 12 | 1.03x | 10/12 |
+| 3-way (+ inline-only variant + ffmpeg), 2nd launch | ~35-48 | 17 | 1.06x | 15/17 |
+
+`ffmpeg -threads 1` on the same job, cleanest run: vaco baseline 3.49x
+slower, candidate 3.09x slower — directionally toward D1's own "~3.5x on
+the row" ceiling estimate, though that estimate is about the whole
+transcode row becoming decode-bound, a much larger change than this
+item. Isolating `#[inline(always)]` alone (no cold helper, no
+`unlikely`) against baseline across the two noisier 3-way runs: 1.06-1.08x,
+25/29 wins combined — most of the win is the inlining; the cold helper +
+branch hints' own marginal contribution above that did not clear the
+noise floor at ~35-48 load average in either direction (never measured
+as a net loss in any batch). Byte-exact: encoded output (`sha256`) and
+this crate's own decode of it are identical, baseline vs candidate, and
+this crate's full test suite (29 unit + 8 roundtrip tests, covering all
+four per-sample hot loops) stayed green throughout.
+
+**`Error`'s representation — measured, not landed, own item** (`9a5e344`,
+`vaco-core`). D21/D20 raise it directly: §25's drop_glue fix removed the
+*eager*-construction cost, but `Error` stays a non-trivially-droppable
+48-byte enum because of `Option { name: String, detail: String }`, which
+sets `size_of::<Result<T, Error>>()` for every fallible call in the
+workspace, not just FFV1's. A same-shaped local stand-in (boxing that one
+variant to a single pointer) measures at 40 bytes — `LimitExceeded`'s 32
+plus discriminant/padding becoming the new largest variant, ~17%
+smaller — confirmed via a regression-locking test
+(`vaco-core::error::size_experiment`) rather than asserted from hand
+arithmetic (the first hand estimate, 56 bytes, was wrong; the test caught
+it before it reached a commit message). **Not landed**: `Error::Option`
+is a public struct-variant pattern-matched by name at 128 call sites
+across 45 files (`grep -rn 'Error::Option'`), almost all in crates this
+item's lane does not include (every codec/muxer with a `set_option`).
+Rewriting a public enum's shape at that many call sites from inside one
+crate's perf pass is exactly the sweep `AGENT-CONSTRAINTS.md`'s scope
+rule says to report rather than perform alone in a shared tree; flagged
+for the orchestrator to route to whoever holds the cross-crate mandate,
+with the exact before/after numbers already in hand.
+
+**Hot-path sites found outside this item's lane, not touched, for
+routing**: `grep -rn '\.ok_or(Error::' crates` turns up the same eager-
+construction shape §25 fixed in `vaco-codec-ffv1` at per-packet/per-frame
+(not per-pixel) call sites in `vaco-sched` (`node.rs`, `spec.rs`,
+`pipeline.rs`), `vaco-probe` (`packets.rs`) and elsewhere — lower
+frequency than a per-sample loop, so lower-confidence wins, but the same
+class of fix (`.ok_or` → `.ok_or_else`) applies mechanically if anyone
+profiles those call sites as hot. Not attempted here: every one of those
+crates is either explicitly out of this item's lane
+(`vaco-sched`) or not confirmed free of a live agent.
+
+**Reverted, nothing to report**: no change in this item measured as a
+net loss and was reverted. The two things that did not resolve cleanly
+(the cold-helper/`unlikely` marginal contribution, and the full `Error`
+migration) were not reverted because they were never landed as
+independent commits in the first place — see above.
+
+`vaco-codec-h264`, `vaco-codec-hevc`, `vaco-codec-aac`, `vaco-resample`,
+`vaco-cli`/`vaco-cli-core`, `vaco-sched`, the muxers and `xtask` were not
+touched, per this item's brief. `vaco-core`'s `parse.rs` picked up one
+unrelated one-line clippy fix (`ae4836d`) needed to keep the crate clean
+under the D22 toolchain switch's newly-enabled nightly lints; unrelated
+to Error or this item's performance work.
