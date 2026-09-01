@@ -20,19 +20,19 @@ if [ -f "$att" ]; then
   email=$(sed -n 's/^email *= *"\(.*\)"$/\1/p' "$att" | head -1)
 fi
 
-# Only implementation paths need the full block; a README fix needs a sign-off.
+# Only implementation paths need the clean-room block. Authorship trailers
+# (Signed-off-by, Vaco-AI-Assisted) are deliberately not written: they record
+# who wrote a change, which is what git already stores, and the owner asked for
+# them gone. The trailers below record *what sources informed* a change, which
+# git does not store and which the clean-room programme depends on.
 touches_code=$(git diff --cached --name-only |
   grep -c '^crates/\(codec\|format\|filter\|signal\)/' || true)
 
 block=""
-grep -q '^Signed-off-by:' "$msg_file" || block="Signed-off-by: $name <$email>"
-
 if [ "$touches_code" -gt 0 ]; then
-  block="$block
-Vaco-Provenance: spec
+  block="Vaco-Provenance: spec
 Vaco-Spec-Ref: TODO-source-id clause
-Vaco-Clean-Room: yes
-Vaco-AI-Assisted: yes"
+Vaco-Clean-Room: yes"
 fi
 
 [ -n "$block" ] || exit 0
