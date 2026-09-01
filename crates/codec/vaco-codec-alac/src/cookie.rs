@@ -66,6 +66,57 @@ impl AlacSpecificConfig {
             n => ChannelLayout::unspecified(u32::from(n)),
         }
     }
+
+    /// This crate's own encoder default: `pb`/`mb`/`kb` from
+    /// [`crate::rice::PB0`]/[`MB0`](crate::rice::MB0)/[`KB0`](crate::rice::KB0)
+    /// (`AlacEncoder::send_frame` never uses any other triple), `frame_length`
+    /// the ALAC-conventional 4096 (informational only for this encoder: every
+    /// packet's own element header states its real sample count explicitly
+    /// via `partialFrame`/`numSamples` — see `frame_codec::encode` — so
+    /// nothing here ever needs to fall back to it), and `max_frame_bytes`/
+    /// `avg_bit_rate` left `0` ("unknown"/VBR), matching the real
+    /// `ffmpeg -c:a alac` cookie [`AlacCookie`]'s own tests measured (that
+    /// file's non-zero values are per-encode statistics gathered only once
+    /// encoding finishes, which is not yet the case at `add_stream` time —
+    /// `0` is what a real encoder emits before it knows them, not a
+    /// placeholder unique to this crate).
+    #[must_use]
+    pub fn for_encode(sample_rate: u32, num_channels: u8, bit_depth: u8) -> Self {
+        Self {
+            frame_length: 4096,
+            compatible_version: 0,
+            bit_depth,
+            pb: crate::rice::PB0 as u8,
+            mb: crate::rice::MB0 as u8,
+            kb: crate::rice::KB0 as u8,
+            num_channels,
+            max_run: 0,
+            max_frame_bytes: 0,
+            avg_bit_rate: 0,
+            sample_rate,
+        }
+    }
+
+    /// Serialize the bare 24-byte `ALACSpecificConfig` (no compatibility
+    /// wrapper, no `ALACChannelLayoutInfo` — [`AlacSpecificConfig::default_layout`]
+    /// already recovers mono/stereo from `num_channels` alone, so this
+    /// crate's encoder never needs the optional channel-layout extension).
+    #[must_use]
+    pub fn write_bare(&self) -> [u8; CONFIG_LEN] {
+        let mut out = [0u8; CONFIG_LEN];
+        out[0..4].copy_from_slice(&self.frame_length.to_be_bytes());
+        out[4] = self.compatible_version;
+        out[5] = self.bit_depth;
+        out[6] = self.pb;
+        out[7] = self.mb;
+        out[8] = self.kb;
+        out[9] = self.num_channels;
+        out[10..12].copy_from_slice(&self.max_run.to_be_bytes());
+        out[12..16].copy_from_slice(&self.max_frame_bytes.to_be_bytes());
+        out[16..20].copy_from_slice(&self.avg_bit_rate.to_be_bytes());
+        out[20..24].copy_from_slice(&self.sample_rate.to_be_bytes());
+        out
+    }
 }
 
 /// The optional `ALACChannelLayoutInfo`, when a cookie carries one.
@@ -274,5 +325,33 @@ mod tests {
     #[test]
     fn too_short_is_invalid_data() {
         assert!(AlacCookie::parse(&[0u8; 4]).is_err());
+    }
+
+    /// `AlacSpecificConfig::for_encode`'s `pb`/`mb`/`kb` must be this crate's
+    /// own encoder defaults, not the spec's or `ffmpeg`'s — a mismatch here
+    /// would silently mistune the cookie a decoder trusts to configure the
+    /// entropy coder it uses to read `AlacEncoder`'s actual packets.
+    #[test]
+    fn for_encode_matches_the_encoders_own_rice_defaults() {
+        let cfg = AlacSpecificConfig::for_encode(44100, 1, 16);
+        assert_eq!(cfg.pb, crate::rice::PB0 as u8);
+        assert_eq!(cfg.mb, crate::rice::MB0 as u8);
+        assert_eq!(cfg.kb, crate::rice::KB0 as u8);
+        assert_eq!(cfg.bit_depth, 16);
+        assert_eq!(cfg.num_channels, 1);
+        assert_eq!(cfg.sample_rate, 44100);
+    }
+
+    /// `write_bare` then `parse_bare` must recover the exact same config —
+    /// the property the encoder side actually depends on: whatever this
+    /// crate declares in `CodecPrivate` must be exactly what its own
+    /// `set_extradata`/`AlacCookie::parse` would read back.
+    #[test]
+    fn for_encode_round_trips_through_write_and_parse() {
+        let cfg = AlacSpecificConfig::for_encode(48000, 2, 32);
+        let bytes = cfg.write_bare();
+        let cookie = AlacCookie::parse(&bytes).unwrap();
+        assert_eq!(cookie.config, cfg);
+        assert_eq!(cookie.layout(), ChannelLayout::STEREO);
     }
 }
