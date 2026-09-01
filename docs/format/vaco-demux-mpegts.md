@@ -495,6 +495,38 @@ once matched to its true reference counterpart. Reproduction: mux 25 fps
 H.264 + 44.1 kHz AAC to `-f mpegts`, compare `-show_packets` position-by-
 position; the swap recurs at every audio-PES boundary in the file.
 
+**Re-measured 2026-09-01 (issue #632, still open): the hold is not bounded
+to one PES.** The description above ("a bounded, repeating one-packet swap")
+undersells what a second fixture shows. At 25 fps with the video/audio
+ratio that produces one PES-worth of audio per video frame gap, the held
+video packet is released after exactly one intervening audio PES, which is
+what made "one-packet swap" look like the whole story. Widening the gap
+between video pictures (`testsrc=rate=2` against the same 44.1 kHz AAC,
+`-x264-params keyint=2`) shows the same demuxer release **one, two, and
+once four** complete audio PES groups late, varying frame to frame:
+
+```
+video PES(N) starts at byte pos P; its own completion trigger (the next
+video-PID PUSI) fires at byte pos Q > P, where Q is also where PES(N+1)
+begins. Every audio PES that byte-wise falls after Q — i.e. arrives on the
+wire *after* PES(N) is already known complete — is fully read and returned
+to the caller before PES(N) is. The count of such intervening audio PES
+groups is not fixed; it tracks how much audio time elapses in the video
+frame's own duration (more video-frame spacing -> more intervening audio
+PES groups held ahead of the delayed video packet).
+```
+
+So the release is not "held exactly one slot"; it is "held until the next
+video PUSI arrives, and then held further behind *every* audio PES that
+started after that trigger point, however many there are." That rules out
+a fixed reorder-buffer depth (e.g. "delay by 1") as the mechanism. It does
+not, on its own, distinguish "delay until the next video PES's own
+completion" from "delay by one full PID switch, however long that switch
+lasts" — both produce this data — and reaching further than that without
+reading the reference's source (D7) was not attempted here; recorded so
+the next attempt does not re-spend the budget on the one-slot theory this
+correction rules out.
+
 ---
 
 ## Signature gaps
