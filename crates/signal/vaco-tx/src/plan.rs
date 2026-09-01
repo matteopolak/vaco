@@ -517,25 +517,22 @@ impl<T: TxSample> Tx<T> {
 /// Deinterleave `[re, im, re, im, …]` into split-complex, negating the
 /// imaginary part when asked.
 fn deinterleave<T: Arith>(src: &[T], re: &mut [T], im: &mut [T], n: usize) {
-    for (i, pair) in src.chunks_exact(2).take(n).enumerate() {
-        if let (Some(a), Some(b), Some(dr), Some(di)) =
-            (pair.first(), pair.get(1), re.get_mut(i), im.get_mut(i))
-        {
-            *dr = *a;
-            *di = *b;
+    // `as_chunks` gives `&[T; 2]` per pair, so the two elements are reached by
+    // an irrefutable array destructure instead of `first()`/`get(1)` — no
+    // Option scaffolding or bounds check left on the success path (D21).
+    for (i, &[a, b]) in src.as_chunks::<2>().0.iter().take(n).enumerate() {
+        if let (Some(dr), Some(di)) = (re.get_mut(i), im.get_mut(i)) {
+            *dr = a;
+            *di = b;
         }
     }
 }
 
 fn interleave<T: Arith>(re: &[T], im: &[T], dst: &mut [T], n: usize) {
-    for (i, pair) in dst.chunks_exact_mut(2).take(n).enumerate() {
+    for (i, [s0, s1]) in dst.as_chunks_mut::<2>().0.iter_mut().take(n).enumerate() {
         if let (Some(a), Some(b)) = (re.get(i), im.get(i)) {
-            if let Some(s) = pair.first_mut() {
-                *s = *a;
-            }
-            if let Some(s) = pair.get_mut(1) {
-                *s = *b;
-            }
+            *s0 = *a;
+            *s1 = *b;
         }
     }
 }

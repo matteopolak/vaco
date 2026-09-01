@@ -334,10 +334,12 @@ fn c_select_native<S: Lanes>(
     out: &mut [u8],
 ) {
     for (((mc, ac), bc), oc) in mask_i8
-        .chunks_exact(16)
-        .zip(a.chunks_exact(16))
-        .zip(b.chunks_exact(16))
-        .zip(out.chunks_exact_mut(16))
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .zip(a.as_chunks::<16>().0.iter())
+        .zip(b.as_chunks::<16>().0.iter())
+        .zip(out.as_chunks_mut::<16>().0.iter_mut())
     {
         let m = fearless_simd::mask8x16::<S>::from_slice(simd, mc);
         let va = fearless_simd::u8x16::<S>::from_slice(simd, ac);
@@ -354,10 +356,12 @@ fn c_select_native<S: Lanes>(
 #[inline(always)]
 fn c_select_bitwise<S: Lanes>(simd: S, mask_u8: &[u8], a: &[u8], b: &[u8], out: &mut [u8]) {
     for (((mc, ac), bc), oc) in mask_u8
-        .chunks_exact(16)
-        .zip(a.chunks_exact(16))
-        .zip(b.chunks_exact(16))
-        .zip(out.chunks_exact_mut(16))
+        .as_chunks::<16>()
+        .0
+        .iter()
+        .zip(a.as_chunks::<16>().0.iter())
+        .zip(b.as_chunks::<16>().0.iter())
+        .zip(out.as_chunks_mut::<16>().0.iter_mut())
     {
         let vm = fearless_simd::u8x16::<S>::from_slice(simd, mc);
         let va = fearless_simd::u8x16::<S>::from_slice(simd, ac);
@@ -373,10 +377,12 @@ fn c_select_bitwise<S: Lanes>(simd: S, mask_u8: &[u8], a: &[u8], b: &[u8], out: 
 #[inline(always)]
 fn c_select_native_i16<S: Lanes>(simd: S, mask_i16: &[i16], a: &[i16], b: &[i16], out: &mut [i16]) {
     for (((mc, ac), bc), oc) in mask_i16
-        .chunks_exact(8)
-        .zip(a.chunks_exact(8))
-        .zip(b.chunks_exact(8))
-        .zip(out.chunks_exact_mut(8))
+        .as_chunks::<8>()
+        .0
+        .iter()
+        .zip(a.as_chunks::<8>().0.iter())
+        .zip(b.as_chunks::<8>().0.iter())
+        .zip(out.as_chunks_mut::<8>().0.iter_mut())
     {
         let m = fearless_simd::mask16x8::<S>::from_slice(simd, mc);
         let va = fearless_simd::i16x8::<S>::from_slice(simd, ac);
@@ -389,10 +395,12 @@ fn c_select_native_i16<S: Lanes>(simd: S, mask_i16: &[i16], a: &[i16], b: &[i16]
 #[inline(always)]
 fn c_select_native_i32<S: Lanes>(simd: S, mask_i32: &[i32], a: &[i32], b: &[i32], out: &mut [i32]) {
     for (((mc, ac), bc), oc) in mask_i32
-        .chunks_exact(4)
-        .zip(a.chunks_exact(4))
-        .zip(b.chunks_exact(4))
-        .zip(out.chunks_exact_mut(4))
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .zip(a.as_chunks::<4>().0.iter())
+        .zip(b.as_chunks::<4>().0.iter())
+        .zip(out.as_chunks_mut::<4>().0.iter_mut())
     {
         let m = fearless_simd::mask32x4::<S>::from_slice(simd, mc);
         let va = fearless_simd::i32x4::<S>::from_slice(simd, ac);
@@ -502,8 +510,14 @@ pub mod probes {
 
     #[inline(never)]
     pub fn scalar_madd(a: &[i16], b: &[i16], out: &mut [i32]) {
-        for ((x, y), o) in a.chunks_exact(2).zip(b.chunks_exact(2)).zip(out.iter_mut()) {
-            *o = ops::madd_i16_i32(x[0], y[0], x[1], y[1]);
+        for ((&[x0, x1], &[y0, y1]), o) in a
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .zip(b.as_chunks::<2>().0.iter())
+            .zip(out.iter_mut())
+        {
+            *o = ops::madd_i16_i32(x0, y0, x1, y1);
         }
     }
 

@@ -75,7 +75,11 @@ pub type Yuv420ToRgb24Row = fn(y: &[u8], u: &[u8], v: &[u8], rgb: &mut [u8]);
     reason = "y/u/v/r/g/b are the domain's own names; anything longer reads worse"
 )]
 pub fn yuv420p_to_rgb24_row_scalar(y: &[u8], u: &[u8], v: &[u8], rgb: &mut [u8]) {
-    for (x, (&py, out)) in y.iter().zip(rgb.chunks_exact_mut(3)).enumerate() {
+    for (x, (&py, out)) in y
+        .iter()
+        .zip(rgb.as_chunks_mut::<3>().0.iter_mut())
+        .enumerate()
+    {
         let c = x >> 1;
         let pu = u.get(c).copied().unwrap_or(128);
         let pv = v.get(c).copied().unwrap_or(128);
@@ -88,11 +92,13 @@ pub fn yuv420p_to_rgb24_row_scalar(y: &[u8], u: &[u8], v: &[u8], rgb: &mut [u8])
         let g = (yy - bt601::G_U * du - bt601::G_V * dv + bt601::ROUND) >> bt601::SHIFT;
         let b = (yy + bt601::B_U * du + bt601::ROUND) >> bt601::SHIFT;
 
-        if let [or, og, ob] = out {
-            *or = ops::clip_u8(r);
-            *og = ops::clip_u8(g);
-            *ob = ops::clip_u8(b);
-        }
+        // `out` is now `&mut [u8; 3]`: the destructure is irrefutable, so the
+        // old `if let` (a runtime check against a slice-length invariant
+        // `as_chunks_mut` already enforces at the type level) is gone.
+        let [or, og, ob] = out;
+        *or = ops::clip_u8(r);
+        *og = ops::clip_u8(g);
+        *ob = ops::clip_u8(b);
     }
 }
 
@@ -130,12 +136,16 @@ pub fn yuv420p_to_rgb24_row_simd<S: Lanes>(simd: S, y: &[u8], u: &[u8], v: &[u8]
     let (v_head, v_tail) = v.split_at(head_px >> 1);
 
     let chroma = u_head
-        .chunks_exact(CHROMA_BLOCK)
-        .zip(v_head.chunks_exact(CHROMA_BLOCK));
+        .as_chunks::<CHROMA_BLOCK>()
+        .0
+        .iter()
+        .zip(v_head.as_chunks::<CHROMA_BLOCK>().0.iter());
     for ((yc, (uc, vc)), oc) in y_head
-        .chunks_exact(BLOCK)
+        .as_chunks::<BLOCK>()
+        .0
+        .iter()
         .zip(chroma)
-        .zip(rgb_head.chunks_exact_mut(RGB_BLOCK))
+        .zip(rgb_head.as_chunks_mut::<RGB_BLOCK>().0.iter_mut())
     {
         block16(simd, yc, uc, vc, oc);
     }
@@ -182,7 +192,7 @@ fn block16<S: Lanes>(simd: S, yc: &[u8], uc: &[u8], vc: &[u8], oc: &mut [u8]) {
     // 48 output bytes as three 16-byte blocks. For each block, one
     // `swizzle_dyn_precise` per channel — out-of-range indices produce zero, so
     // the three results OR together cleanly.
-    for (dst, idx) in oc.chunks_exact_mut(16).zip(INTERLEAVE) {
+    for (dst, idx) in oc.as_chunks_mut::<16>().0.iter_mut().zip(INTERLEAVE) {
         let [ir, ig, ib] = idx;
         let out =
             rp.swizzle_dyn_precise(ir) | gp.swizzle_dyn_precise(ig) | bp.swizzle_dyn_precise(ib);

@@ -323,20 +323,12 @@ impl crate::adapt::AudioFilter for Gain {
         let shift = self.shift.min(15);
         for mut plane in input.planes_mut() {
             for row in plane.rows_mut() {
-                for pair in row.chunks_exact_mut(2) {
-                    let (Some(&lo), Some(&hi)) = (pair.first(), pair.get(1)) else {
-                        continue;
-                    };
-                    let value = i16::from_le_bytes([lo, hi]) >> shift;
-                    let bytes = value.to_le_bytes();
-                    if let (Some(a), Some(b)) = (bytes.first(), bytes.get(1)) {
-                        if let Some(slot) = pair.first_mut() {
-                            *slot = *a;
-                        }
-                        if let Some(slot) = pair.get_mut(1) {
-                            *slot = *b;
-                        }
-                    }
+                for pair in row.as_chunks_mut::<2>().0.iter_mut() {
+                    let [lo, hi] = pair;
+                    let value = i16::from_le_bytes([*lo, *hi]) >> shift;
+                    let [a, b] = value.to_le_bytes();
+                    *lo = a;
+                    *hi = b;
                 }
             }
         }
