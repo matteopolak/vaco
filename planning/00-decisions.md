@@ -1407,3 +1407,49 @@ which is the effect `unlikely` would have bought.
 
 D21 does not relax `#![forbid(unsafe_code)]` (D2), the clean room, or
 byte-exactness against ffmpeg.
+
+## D22 — Nightly Rust is permitted, pinned to an exact date (2026-09-01, owner)
+
+The owner's ruling, verbatim:
+
+> if its for performance reasons or some new stuff, you are allowed to bump the
+> toolchain to use nightly rust (which i encourage you do so, since it has a lot
+> of useful stuff)
+
+This amends **D12**, which had moved the project to stable because
+`fearless_simd` removed the only mandatory need for nightly (`std::simd`).
+
+**The pin is now `nightly-2026-08-07`.** Verified before switching: `cargo check
+--workspace --all-targets` passes on it, and `#![feature(likely_unlikely)]` with
+`std::hint::{likely, unlikely, cold_path}` compiles and runs.
+
+**Pinned to an exact date, never the floating `nightly` channel.** This is the
+one part of D12's reasoning that still binds and it is not negotiable: a
+floating channel means a `rustup update` can change codegen underneath a
+performance baseline, and measurement against a reference binary is this
+project's whole premise. The date chosen is the toolchain `cargo +nightly fuzz`
+already used, so the workspace and the fuzzers now share one compiler.
+
+**What this unlocks**, and what D21 was blocked on:
+
+- `std::hint::likely` / `unlikely` / `cold_path` for hot-path branch layout.
+  These do **not** compile on stable; D21 previously had to route around them
+  with `#[cold]` alone.
+- `std::simd` directly, if a kernel ever needs it. This does **not** displace
+  `fearless_simd` — D12's substance stands, and nothing should reintroduce
+  `#![feature(portable_simd)]` by default.
+
+**Costs, accepted deliberately:**
+
+- The library crates are nightly-only while this pin stands; MSRV no longer
+  applies. The shipped artefact is a binary, which does not care.
+- Every measurement taken before this switch was on stable 1.97.1 and is **not
+  comparable** to one taken after. Codegen differs. Any performance baseline
+  predating this commit must be re-measured before a candidate is judged
+  against it.
+- Bumping the pin later is a codegen change and must be treated as one:
+  re-baseline, do not compare across it.
+
+Nothing else is relaxed. `#![forbid(unsafe_code)]` (D2) still holds — nightly
+does not license `unsafe` intrinsics — as do the clean room, patent gating,
+MIT-only licensing, and byte-exactness against ffmpeg.
