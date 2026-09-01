@@ -159,8 +159,42 @@ impl CodecParameters {
     }
 
     /// Set the codec, and the media type implied by it if none is set yet.
+    ///
+    /// Clears `extradata` when this actually *changes* an already-set codec
+    /// to a different one — never when `codec_id` starts `None` (every
+    /// demuxer building a fresh `CodecParameters` calls this once to label
+    /// what it just parsed, often after already filling in `extradata` for
+    /// exactly that codec; clearing there would erase it) and never when the
+    /// codec is unchanged (re-tagging with the same id is a no-op).
+    ///
+    /// # Why this exists
+    ///
+    /// A transcode builds its output `CodecParameters` by cloning the
+    /// *input* stream's (dimensions, colour, language — most fields carry
+    /// over unchanged) and then calling `.with_codec(new_id)` to relabel it
+    /// for the encoder actually running. Before this guard, `extradata`
+    /// carried over right along with everything else — which is correct for
+    /// every field this type has *except* extradata, because a
+    /// Configuration Record is meaningless, or actively misleading, once the
+    /// bitstream it describes is a different codec's.
+    ///
+    /// Measured: `vaco -i h264.mp4 -c:v ffv1 out.mkv` wrote the *input's*
+    /// `avcC` verbatim as the output FFV1 track's `CodecPrivate`, because
+    /// `Ffv1Encoder::extradata()` cannot answer before the first
+    /// [`crate::Encoder::send_frame`] (its own Configuration Record depends
+    /// on the pixel format it is handed) and nothing had cleared the stale
+    /// value in the meantime — every FFV1 file this crate ever wrote came
+    /// out with a `CodecPrivate` `ffmpeg` reads as `Invalid version in
+    /// global header`. See `vaco-mux-matroska::mux::MatroskaMuxer`'s own fix
+    /// for the other half: even with this guard, a codec whose extradata
+    /// truly is not known yet at `add_stream` time needs [`PacketSideData::
+    /// NewExtradata`](vaco_packet::PacketSideData::NewExtradata) adopted
+    /// later, which is a muxer concern, not this type's.
     #[must_use]
     pub fn with_codec(mut self, id: CodecId) -> Self {
+        if self.codec_id.is_some_and(|old| old != id) {
+            self.extradata = None;
+        }
         self.codec_id = Some(id);
         self.media_type.get_or_insert(id.media_type());
         self

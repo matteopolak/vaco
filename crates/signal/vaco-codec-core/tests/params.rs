@@ -593,3 +593,33 @@ fn the_two_new_video_fields_fill_only_where_unset() {
     });
     assert_eq!(annexb.nal_length_size, Some(0));
 }
+
+/// `with_codec` clears `extradata` when it actually changes which codec is
+/// named — the fix for a real bug: a transcode builds its output
+/// `CodecParameters` by cloning the *input* stream's (dimensions, colour,
+/// language all legitimately carry over) and relabelling the codec with
+/// `with_codec`. Before this, `extradata` carried over right along with
+/// everything else, so `vaco -i h264.mp4 -c:v ffv1 out.mkv` wrote the
+/// *input's* `avcC` verbatim into the output's `CodecPrivate` — every FFV1
+/// file this crate ever produced had a `CodecPrivate` `ffmpeg` reads as
+/// "Invalid version in global header", because nothing had cleared the
+/// stale value from a completely different codec's configuration record.
+#[test]
+fn with_codec_drops_extradata_only_when_the_codec_actually_changes() {
+    // Fresh (`codec_id` still `None`): a demuxer filling in `extradata`
+    // before it gets around to naming the codec must not lose it.
+    let mut fresh = CodecParameters::video();
+    fresh.extradata = Some(vec![9, 9, 9]);
+    let fresh = fresh.with_codec(CodecId::H264);
+    assert_eq!(fresh.extradata, Some(vec![9, 9, 9]));
+
+    // Re-tagged with the *same* codec: a no-op, extradata survives.
+    let same = fresh.with_codec(CodecId::H264);
+    assert_eq!(same.extradata, Some(vec![9, 9, 9]));
+
+    // Relabelled to a genuinely different codec: the old record is
+    // meaningless for the new one and must not survive.
+    let retagged = same.with_codec(CodecId::Ffv1);
+    assert_eq!(retagged.extradata, None);
+    assert_eq!(retagged.codec_id, Some(CodecId::Ffv1));
+}
