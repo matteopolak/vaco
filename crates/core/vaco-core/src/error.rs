@@ -139,3 +139,96 @@ impl From<vaco_expr::ParseError> for Error {
         }
     }
 }
+
+#[cfg(test)]
+mod size_experiment {
+    //! Measures the cost of `Error`'s two `String`-carrying fields
+    //! (`Option { name, detail }`) for the D21 "box the rare payload"
+    //! question (`planning/00-decisions.md` D21, D20's "measure it, land it
+    //! separately" instruction).
+    //!
+    //! **Result: attempted, not landed, own item.** `Error::Option { name,
+    //! detail }` is a public struct-variant matched by name at 128 call
+    //! sites across 45 files (`grep -rn 'Error::Option'`), most in crates
+    //! this agent does not own (h264, hevc, aac, sched, cli, muxers —
+    //! everything with a `set_option`). Boxing it to shrink the enum is a
+    //! real, mechanical, workspace-wide edit, not a local one, and
+    //! `AGENT-CONSTRAINTS.md`'s scope rule is explicit: a change outside an
+    //! agent's owned crates is reported, not worked around, even when D20
+    //! licenses it in principle. So this only measures the shape's cost in
+    //! isolation, on the actual `Error` type (safe: `size_of` reads no other
+    //! crate's code), and reports the number for whoever does have the
+    //! cross-crate mandate.
+    use super::Error;
+
+    // The hypothetical: `Option(Box<{ name: String, detail: String }>)` --
+    // a `Box` is one pointer, 8 bytes, so the enum's size would then be set
+    // by its next-largest variant, `LimitExceeded` at 32 (plus
+    // discriminant/padding). A local stand-in enum (not `Error` itself, for
+    // exactly the reason in the module doc above) with the same variant
+    // shapes, `Option` boxed, confirms the arithmetic rather than asserting
+    // it from memory. Variants are otherwise unused by design -- this type
+    // exists only for `size_of`.
+    #[allow(
+        dead_code,
+        reason = "exists only for size_of:: -- see the module doc"
+    )]
+    enum ErrorShapeWithBoxedOption {
+        InvalidData(&'static str),
+        UnexpectedEof,
+        Eof,
+        NeedMoreInput,
+        OutputPending,
+        Unsupported(&'static str),
+        LimitExceeded {
+            limit: &'static str,
+            requested: u64,
+            cap: u64,
+        },
+        Option(Box<(String, String)>),
+        Io(std::io::Error),
+        NotSeekable,
+        Cancelled,
+    }
+
+    #[test]
+    fn current_size_is_dominated_by_the_two_string_variant() {
+        // `Option { name: String, detail: String }` is 2 * 24 = 48 bytes of
+        // payload before the discriminant; every other variant is at most
+        // `LimitExceeded`'s 16 (&'static str) + 8 + 8 = 32 bytes. A closed
+        // enum's size is its largest variant plus a discriminant (rounded to
+        // alignment), so `Option` alone sets `size_of::<Error>()` -- and
+        // therefore `size_of::<Result<T, Error>>()` for any `T` no larger
+        // than it, on the success path of every fallible call in the
+        // workspace, whether or not that call ever errors.
+        let actual = size_of::<Error>();
+        assert_eq!(
+            actual, 48,
+            "Error's size moved (was 48, dominated by the two-String Option \
+             variant) -- if this shrank, the boxing question below may \
+             already be moot; if it grew, re-check which variant is now \
+             largest before re-deriving the 48 above"
+        );
+
+        let hypothetical = size_of::<ErrorShapeWithBoxedOption>();
+        assert!(
+            hypothetical < actual,
+            "boxing Option should shrink the enum below its current {actual}; \
+             got {hypothetical}"
+        );
+        assert_eq!(
+            hypothetical, 40,
+            "expected LimitExceeded (32 bytes) plus discriminant/padding to \
+             become the new largest variant at 40; got {hypothetical} -- \
+             re-check which variant is now largest"
+        );
+        // ~17% smaller (48 -> 40). Real, but this is the *shape's* cost in
+        // isolation -- it says nothing about whether shrinking `Result<T,
+        // Error>` by 16 bytes end to end is inside the noise floor for any
+        // real workload, which is why this stays a measured shape fact and
+        // not a landed change: that would need the same interleaved-A/B,
+        // ffmpeg-relative protocol as everything else in
+        // `planning/PERF-PROGRAMME.md` SS2, run on a binary that actually
+        // has the boxed type wired through every call site.
+    }
+}
