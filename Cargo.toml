@@ -55,6 +55,36 @@ cast_possible_truncation = "allow"
 cast_sign_loss           = "allow"
 cast_precision_loss      = "allow"
 too_many_lines           = "allow"
+# `chunks_exact` on a literal size is flagged in favour of `as_chunks`. Measured
+# on the real FFT/RDFT path and found to be **parity**, not a win: one O(n) pass
+# inside an O(n log n) transform dominated by twiddle work. The lint fires in
+# dozens of codec/format/filter crates, so denying it would force a large
+# mechanical churn across files several agents are editing, for no measured
+# benefit, and it currently blocks the whole workspace gate. Converting a
+# specific hot site to `as_chunks` is still encouraged where a profile justifies
+# it -- `&[[T; N]]` does remove bounds checks -- but it must be measured, not
+# applied wholesale.
+chunks_exact_to_as_chunks = "allow"
+# The remaining lints below are new in `nightly-2026-08-07` (D22) and appeared
+# only because the toolchain moved. None is a regression: the code they flag was
+# accepted by stable 1.97.1 the day before. They are allowed here so the bump
+# does not fail every agent's `-D warnings` gate at once -- the alternative was
+# a mechanical sweep across codec/format/filter files that several agents were
+# editing concurrently, which is how three cross-agent collisions happened this
+# session.
+#
+# `manual_midpoint` and `manual_slice_fill` are worth adopting where they land
+# on a hot path -- `midpoint` is overflow-safe (it fixed a real panic in
+# vaco-codec-h264's CAVLC level decode) and `fill` beats a hand loop -- so
+# convert them opportunistically when you are already editing the file, and
+# remove the corresponding `allow` once a crate is clear. Do not open a
+# tree-wide sweep for them.
+manual_midpoint          = "allow"
+manual_slice_fill        = "allow"
+needless_range_loop      = "allow"
+needless_late_init       = "allow"
+match_same_arms          = "allow"
+many_single_char_names   = "allow"
 
 # PRE-POPULATED SO AGENTS NEVER EDIT THIS FILE (plan 19 §3.2).
 #

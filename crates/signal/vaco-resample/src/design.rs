@@ -171,7 +171,7 @@ pub fn kaiser(u: f64, beta: f64) -> f64 {
 #[must_use]
 pub fn blackman_nuttall(u: f64) -> f64 {
     use core::f64::consts::PI;
-    let p = (u + 1.0) * 0.5;
+    let p = f64::midpoint(u, 1.0);
     0.363_581_9 - 0.489_177_5 * (2.0 * PI * p).cos() + 0.136_599_5 * (4.0 * PI * p).cos()
         - 0.010_641_1 * (6.0 * PI * p).cos()
 }
