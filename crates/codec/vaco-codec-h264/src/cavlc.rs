@@ -243,10 +243,17 @@ fn decode_level(r: &mut BitReader<'_>, suffix_length: &mut u32, is_first: bool, 
             .ok_or(Error::InvalidData("level: level_code overflow"))?;
     }
 
+    // Clause 9.2.2.1's own `(levelCode + 2) >> 1` / `(-levelCode - 1) >> 1`,
+    // written through `u32::midpoint` rather than a literal `+ 2` because
+    // `level_code` is only bounded by the `checked_add` chain above, not by
+    // anything that keeps `level_code + 2` inside `u32` -- and the fuzz
+    // profile turns that addition's overflow into a panic. `midpoint(a, b)`
+    // is `(a + b) / 2` evaluated without the intermediate sum, so the value
+    // is unchanged for every input that did not overflow.
     let level = if level_code.is_multiple_of(2) {
-        ((level_code + 2) >> 1).cast_signed()
+        u32::midpoint(level_code, 2).cast_signed()
     } else {
-        -(((level_code + 1) >> 1).cast_signed())
+        -(u32::midpoint(level_code, 1).cast_signed())
     };
 
     if *suffix_length == 0 {
