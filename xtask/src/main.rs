@@ -21,6 +21,7 @@ mod layers;
 mod owner_gate;
 mod patent_gate;
 mod provenance;
+mod reachability_check;
 mod registry;
 mod similarity;
 mod time_gate;
@@ -49,6 +50,7 @@ fn main() {
         "fuzz-check" => fuzz_check::run(check),
         "check-message" => check_message(args.get(1).map(String::as_str)),
         "owner-gate" => owner_gate::run(check),
+        "reachability-check" => reachability_check::run(check),
         "gen-registry" => registry::run(check),
         "similarity-scan" => similarity::run(&args[1..]),
         "gen-docs-index" => docs::run(check),
@@ -66,6 +68,9 @@ fn main() {
             eprintln!("  patent-gate     no encumbered component is in the default build (D4)");
             eprintln!("  owner-gate      each third-party media crate has exactly one owner (D11)");
             eprintln!("  dup-check       one definition per concept (D19)");
+            eprintln!(
+                "  reachability-check  a component that exists and cannot be reached from the CLI"
+            );
             eprintln!("  comment-check   comments stay short and self-contained");
             eprintln!("  provenance-check  every large constant table names its source (D15)");
             eprintln!("  vlc-scan        hand-transcribed VLC tables are pairwise prefix-free (tier 1 of 3)");

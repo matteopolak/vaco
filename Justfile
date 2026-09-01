@@ -57,7 +57,7 @@ clippy:
 
 # Every gate CI runs, in the order CI runs them.
 ci: fmt-check clippy check-all test-all licence licence-report-check layer-check dep-gate unsafe-audit \
-    wasm-check time-gate patent-gate owner-gate dup-check provenance-check docs-check fuzz-check
+    wasm-check time-gate patent-gate owner-gate dup-check reachability-check provenance-check docs-check fuzz-check
 
 # ------------------------------------------------------- policy gates (D3/D10)
 
@@ -265,6 +265,12 @@ owner-gate:
 # One definition per concept (D19).
 dup-check:
     cargo xtask dup-check
+
+# A component that exists, compiles, passes its own tests, and cannot be
+# reached from the CLI — the H.264/vaco-codec-opus/FLAC-as-CDG shape of bug,
+# swept mechanically instead of found by accident.
+reachability-check:
+    cargo xtask reachability-check
 
 # Public API that only tests use. A REPORT, not a gate — read it at a wave
 # boundary. Expected to be large while the substrate is ahead of its consumers,

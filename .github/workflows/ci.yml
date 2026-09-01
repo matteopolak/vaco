@@ -44,6 +44,10 @@ jobs:
       - run: cargo xtask owner-gate
       # D19: one definition per concept.
       - run: cargo xtask dup-check
+      # A component that exists, compiles, passes its own tests, and cannot
+      # be reached from the CLI — the H.264/vaco-codec-opus/FLAC-as-CDG shape
+      # of bug, swept mechanically instead of found by accident.
+      - run: cargo xtask reachability-check
       # The crate graph stays acyclic and downward (D14.1).
       - run: cargo xtask layer-check
       # D15: every large constant table names the document or measurement it
