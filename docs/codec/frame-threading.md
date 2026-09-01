@@ -270,6 +270,30 @@ mechanism that exists to bound memory be the thing that stops the pipeline. If
 nothing is in flight and one picture still does not fit, the reservation reports
 it honestly — waiting cannot change that.
 
+**The charge above was always exact; the allocator behind it was not, until
+`planning/PERF-PROGRAMME.md` item A0.** Every number in this section up to
+here describes what the *budget* believes it is spending, which is real and
+was correct before and after A0. It never described whether the bytes came
+from a fresh `malloc` or a reused buffer, and until A0 it was always the
+former: every picture's macroblock array, working reconstruction buffer and
+output frame were allocated, used once, and freed, and the freed buffers sat
+in the allocator's own cache (`vmmap`'s `MALLOC_LARGE (empty)`) rather than
+being returned to the OS. `vaco-codec-h264::task_pool::TaskBufferPools` (one
+free list per shape, geometry-keyed, `Arc`-shared between the decoder and
+every dispatched task) now reuses all three instead. This is why the 3617
+MiB/4076 MiB peak-RSS figures two paragraphs up are now historical rather
+than current: measured the same way on the same fixture, after A0, one
+thread is ~0.25-0.26 GiB and four threads is ~0.63-0.72 GiB — see
+`planning/E2E-GAPS.md` §26 for the full before/after table, a note on why
+the comparison has to be interleaved to be trustworthy on this hardware, and
+two remaining per-picture allocations A0 named but did not pool (the DPB
+entry's own band storage in `vaco-codec-core`, and the colocated motion
+field's `Vec<MvInfo>`, both longer-lived than the three buffers this item
+reuses). The *charged* numbers in the table below this section, and the
+`Limits::permissive` margin discussion above, are unaffected: `-threads N`
+still multiplies the same per-task charge, A0 only changed how that charge's
+bytes are sourced.
+
 ## Configuration
 
 | knob | where | default |
