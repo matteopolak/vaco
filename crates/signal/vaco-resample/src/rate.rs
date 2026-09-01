@@ -143,6 +143,11 @@ pub struct RateConvert<T: Internal> {
     frac: u64,
     produced: u64,
     draining: bool,
+
+    /// Lifetime processing-cost fuel: see [`RateConvert::new`]'s doc on why
+    /// this exists alongside [`MAX_RATE_RATIO`]/[`MAX_TAPS`].
+    work_fuel_spent: u64,
+    work_fuel_cap: u64,
 }
 
 impl<T: Internal> RateConvert<T> {
@@ -208,6 +213,24 @@ impl<T: Internal> RateConvert<T> {
             frac: 0,
             produced: 0,
             draining: false,
+            work_fuel_spent: 0,
+            // MEASURED, by fuzzing: `MAX_RATE_RATIO`, `MAX_STRETCH` and
+            // `MAX_TAPS` each bound one factor of the per-output-sample cost
+            // (`taps` multiply-adds per channel) but none bounds their
+            // *product* against how many output samples get produced. A
+            // fuzz input with filter_size=23301, a ~625x upsample ratio and
+            // 25 channels — every one of those individually legal — cost
+            // 15-23 seconds of CPU from 51 input samples, because
+            // taps × channels × output_samples came to ~1.9e10
+            // multiply-adds. `process`/`flush` charge this budget's `fuel`
+            // per output sample actually produced (`emit`, below), which is
+            // the same mechanism `design::build_bank` already uses for the
+            // bank-construction cost — applied here to the cost of *using*
+            // the bank instead. It is a fresh counter rather than continuing
+            // to draw on `budget` itself, because `budget` is not retained
+            // past construction and a streaming `process`/`flush` call has
+            // no `&mut Budget` to charge against.
+            work_fuel_cap: budget.limits().fuel,
         })
     }
 
@@ -375,6 +398,19 @@ impl<T: Internal> RateConvert<T> {
 
     fn emit(&mut self, out: &mut [Vec<T>]) -> Result<(), Error> {
         let taps = self.bank.taps;
+        // One dot product per channel, `taps` multiply-adds each: see the
+        // doc on `work_fuel_cap` in `RateConvert::new` for why this is
+        // charged per sample actually produced rather than bounded any other
+        // way.
+        let cost = (taps as u64).saturating_mul(self.channels as u64);
+        self.work_fuel_spent = self.work_fuel_spent.saturating_add(cost);
+        if self.work_fuel_spent > self.work_fuel_cap {
+            return Err(Error::LimitExceeded {
+                limit: "resample processing fuel",
+                requested: self.work_fuel_spent,
+                cap: self.work_fuel_cap,
+            });
+        }
         let start = signed(self.idx) - signed_len(self.bank.centre);
         let (phase, residual) = self.phase_index();
         let phase = phase.min(self.bank.phases.saturating_sub(1));

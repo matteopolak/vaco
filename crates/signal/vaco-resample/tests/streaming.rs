@@ -393,3 +393,63 @@ fn an_absurd_rate_ratio_is_refused() {
         "8 kHz -> 2822.4 kHz is 352.8:1 and is a real conversion"
     );
 }
+
+/// A large filter combined with a legal (sub-`MAX_RATE_RATIO`) upsample and a
+/// modest channel count is refused before it can burn CPU, even though no
+/// individual factor — ratio, tap count, channel count — is unusual on its
+/// own.
+///
+/// Found fuzzing `resample_convert`: `50 Hz -> 31232 Hz` (ratio ~625, well
+/// under `MAX_RATE_RATIO`), `filter_size = 23301` (well under `MAX_TAPS`),
+/// 25 channels (well under `Limits::strict`'s `max_channels = 64`) took
+/// 15-23 seconds to process 51 input samples, because `MAX_RATE_RATIO`,
+/// `MAX_STRETCH` and `MAX_TAPS` each bound one factor of the per-sample cost
+/// (`taps` multiply-adds per channel, once per output sample) and nothing
+/// bounded their product against the number of output samples actually
+/// produced: ~1.9e10 multiply-adds from a 51-sample input. `RateConvert`'s
+/// `work_fuel_cap` (`rate.rs`) now charges that product against the budget's
+/// `fuel` allowance per output sample, so this must fail fast instead of
+/// hanging.
+#[test]
+fn a_large_filter_at_a_legal_ratio_is_refused_by_processing_fuel_not_by_construction() {
+    let mut opts = ResampleOptions::default();
+    opts.filter_size = 23301;
+    opts.exact_rational = true;
+    opts.phase_shift = 0;
+    opts.cutoff = 1.0;
+    let mut b = Budget::new(Limits::strict());
+    let mut rs = Resampler::new(
+        &spec(50, SampleFmt::F32, vaco_resample::default_layout(25)),
+        &spec(31232, SampleFmt::F32, vaco_resample::default_layout(25)),
+        &opts,
+        &mut b,
+    )
+    .expect("construction alone must not refuse a legal ratio and tap count");
+
+    let input = vec![0.0_f32; 51 * 25];
+    let src_bytes: Vec<u8> = input.iter().flat_map(|v| v.to_le_bytes()).collect();
+    let src = AudioRef::packed(SampleFmt::F32, 25, &src_bytes).unwrap();
+    let mut scratch = vec![0u8; 1024 * 25 * 4];
+
+    let start = std::time::Instant::now();
+    loop {
+        let mut dst = AudioMut::packed(SampleFmt::F32, 25, &mut scratch).unwrap();
+        match rs.convert(Some(src), &mut dst) {
+            Ok(_) => {}
+            Err(vaco_core::Error::LimitExceeded { limit, .. }) => {
+                assert_eq!(limit, "resample processing fuel");
+                break;
+            }
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(5),
+            "processing fuel did not stop the loop in time"
+        );
+    }
+    assert!(
+        start.elapsed() < std::time::Duration::from_secs(5),
+        "took {:?}, the original bug took 15-23s",
+        start.elapsed()
+    );
+}
