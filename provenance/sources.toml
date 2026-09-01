@@ -1323,3 +1323,17 @@ kind     = "blackbox"
 title    = "JCT-VC draft conformance bitstreams for H.265/HEVC (HEVC_v1, Main profile subset registered here), ITU wftp3 av-arch archive -- the JCT-VC counterpart to jvt-h264-conformance-archive above, same origin site, same anonymous-HTTPS access, same correction to the prior (wrong) 2026-08-28 record. Tier A per D6/AGENT-CONSTRAINTS for the same reason: fed to both `vaco` and the reference `ffmpeg` binary as differential-test input, never read as a document."
 acquired = "2026-09-01"
 where    = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/"
+
+[[source]]
+id       = "ffmpeg-avi-asf-copy-refusal-probe"
+kind     = "blackbox"
+title    = "Observed ffmpeg 9.0.1 -c copy behaviour on AVI and ASF: (1) ffprobe reports pts=N/A (dts only) for every AVI and ASF video packet, and pts equal to dts for every audio packet -- neither container's demuxer states a video presentation time distinct from decode order; (2) ffmpeg's AVI muxer picks the strf FourCC for H.264/HEVC from the source's own codec_tag during -c copy (an avc1-tagged MP4/MOV source round-trips into AVI's avc1 unchanged; a source with no such tag -- Matroska, FLV, both report codec_tag=0 for an identical bitstream -- has nothing to map and the muxer refuses a length-prefixed payload outright rather than reframing to Annex B, which it never auto-inserts the way its MPEG-TS muxer does); (3) ffmpeg's ASF muxer refuses ADTS-framed AAC (MPEG-TS's own convention) with \"ADTS is only supported with codec tag 0x1610\" rather than auto-running aac_adtstoasc; (4) ffmpeg's ASF demuxer reports start_time as the raw first Data Packet Send Time less the File Properties Preroll field, confirmed on a fresh one-second -c copy -f asf fixture whose own Preroll was read back and matched exactly against the offset between vaco's (pre-fix) and ffmpeg's reported start_time"
+acquired = "2026-09-01"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-matroska-mpegts-missing-pts-refusal-probe"
+kind     = "blackbox"
+title    = "Observed ffmpeg 9.0.1 -c copy -f matroska refusal on a source whose first video packet has no pts (an AVI or ASF source): \"Can't write packet with unknown timestamp\", exit 22 -- the Matroska counterpart to the already-recorded mpegts/flv \"first pts and dts value must be set\"/\"Packet is missing PTS\" refusals (CONFORMANCE-FINDINGS 19), extending the same first-packet-only rule to vaco-mux-matroska"
+acquired = "2026-09-01"
+where    = "the reference binary installed on the development machine"
