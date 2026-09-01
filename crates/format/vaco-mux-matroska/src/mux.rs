@@ -385,6 +385,13 @@ pub struct MatroskaMuxer {
     /// packet — the gate [`MatroskaMuxer::header_flushed`] waits on. Sized to
     /// `tracks.len()` the moment [`Muxer::write_header`] closes `add_stream`.
     first_packet_seen: Vec<bool>,
+    /// `true` at index `i` once track `i` has had a real block written by
+    /// [`MatroskaMuxer::write_block`] — distinct from `first_packet_seen`,
+    /// which only tracks arrival during the pre-header-flush buffering
+    /// window. Gates the "first pts must be set" check below, which needs
+    /// to fire exactly once per track regardless of when the header
+    /// happens to flush.
+    wrote_first_block: Vec<bool>,
     trailer_written: bool,
     /// Absolute byte offset of `Segment`'s eight-octet size field.
     segment_size_at: u64,
@@ -479,6 +486,7 @@ impl MatroskaMuxer {
             header_flushed: false,
             pending_packets: Vec::new(),
             first_packet_seen: Vec::new(),
+            wrote_first_block: Vec::new(),
             trailer_written: false,
             segment_size_at: 0,
             segment_data_start: 0,
@@ -1056,6 +1064,28 @@ impl MatroskaMuxer {
     /// (`header_flushed`). Split out of [`Muxer::write_packet`] so that
     /// method can buffer instead when it is not.
     fn write_block(&mut self, idx: usize, packet: &Packet) -> Result<()> {
+        // CONFORMANCE-FINDINGS 19: measured directly (`ffmpeg -i
+        // <asf-with-no-video-pts> -c copy -f matroska`) — the reference
+        // refuses with "Can't write packet with unknown timestamp" rather
+        // than silently reusing the previous clock or writing `pts=0`. A
+        // source whose demuxer genuinely leaves a video packet's pts unset
+        // (AVI, ASF — neither carries a native per-packet presentation
+        // time distinct from decode order) produces exactly this on its
+        // first packet per track. Mirrors the identical, already-fixed
+        // check in `vaco-mux-mpegts` (first packet per stream only,
+        // matching the reference's own behaviour on this muxer) rather
+        // than `vaco-mux-flv`'s (every packet — that muxer's own message
+        // carries no "first" qualifier).
+        let is_first_for_track = matches!(self.wrote_first_block.get(idx), Some(false));
+        if is_first_for_track && packet.pts.ticks().is_none() {
+            return Err(Error::InvalidData(
+                "matroska: first pts value must be set",
+            ));
+        }
+        if let Some(seen) = self.wrote_first_block.get_mut(idx) {
+            *seen = true;
+        }
+
         let ts = packet.pts.ticks().unwrap_or(0);
         // Matroska has no decode timestamp of its own (CONFORMANCE-FINDINGS
         // 37) — `dts` is read only to fall back to it when `pts` is absent.
@@ -1257,6 +1287,7 @@ impl Muxer for MatroskaMuxer {
         // here — see `pending_packets`' field docs. `first_packet_seen` is
         // what `write_packet` polls to know when it is safe to commit.
         self.first_packet_seen = vec![false; self.tracks.len()];
+        self.wrote_first_block = vec![false; self.tracks.len()];
         Ok(())
     }
 
@@ -1637,6 +1668,40 @@ mod tests {
                 .windows(cues_id.len())
                 .any(|w| w == cues_id.as_slice())
         );
+    }
+
+    /// CONFORMANCE-FINDINGS 19: a track's first packet with no pts at all is
+    /// refused, not silently written as `pts=0` — measured against `ffmpeg
+    /// 9.0.1`, which refuses an ASF/AVI-sourced video stream's first packet
+    /// (neither format's demuxer states a video pts) with "Can't write
+    /// packet with unknown timestamp" on `-c copy -f matroska`.
+    #[test]
+    fn a_first_packet_with_no_pts_is_refused_not_written_as_zero() {
+        let s = MemorySink::new();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+        mux.write_header().unwrap();
+
+        let mut p = pkt(idx, 0, true);
+        p.pts = Timestamp::NONE;
+        assert!(mux.write_packet(&p).is_err());
+    }
+
+    /// The second and later packets of a track are not held to the same
+    /// rule — only the reference's own "first" wording is matched. A
+    /// missing `pts` past the first packet falls back to `dts` (or `0`)
+    /// exactly as before this change.
+    #[test]
+    fn a_later_packet_with_no_pts_falls_back_rather_than_being_refused() {
+        let s = MemorySink::new();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+
+        let mut p = pkt(idx, 40, false);
+        p.pts = Timestamp::NONE;
+        assert!(mux.write_packet(&p).is_ok());
     }
 
     /// `Segment`'s direct children, as `(id, offset relative to Segment's
