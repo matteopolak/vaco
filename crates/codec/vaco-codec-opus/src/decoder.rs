@@ -189,6 +189,16 @@ pub struct OpusDecoder {
     head: Option<IdentificationHeader>,
     streams: Vec<StreamDecoder>,
     pending: VecDeque<Frame>,
+    /// `Error::Eof` once draining starts and `pending` is empty, rather than
+    /// `NeedMoreInput` forever — the same fix `vaco-codec-mpegaudio`'s and
+    /// (this session) `vaco-codec-flac`'s decoders carry. Before this field
+    /// existed, `send_packet(None)` returned `Err(Error::Eof)` directly,
+    /// which is the wrong half of the contract (`Decoder::send_packet`'s own
+    /// doc: only `receive_frame` answers `Eof`) and read to the scheduler as
+    /// a hard failure rather than "start draining" — measured end to end via
+    /// `vaco -i <opus-in-ogg> -f null -`, which reported "Error while
+    /// filtering: end of stream" instead of decoding, before this fix.
+    draining: bool,
 }
 
 impl OpusDecoder {
@@ -198,7 +208,13 @@ impl OpusDecoder {
     /// in-band configuration at all).
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { budget: Budget::new(limits), head: None, streams: Vec::new(), pending: VecDeque::new() }
+        Self {
+            budget: Budget::new(limits),
+            head: None,
+            streams: Vec::new(),
+            pending: VecDeque::new(),
+            draining: false,
+        }
     }
 
     fn ensure_streams(&mut self, head: &IdentificationHeader) {
@@ -252,8 +268,10 @@ impl OpusDecoder {
 impl Decoder for OpusDecoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         let Some(packet) = packet else {
-            return Err(Error::Eof);
+            self.draining = true;
+            return Ok(());
         };
+        let pts = packet.pts;
         let Some(head) = self.head.clone() else {
             return Err(Error::Unsupported(
                 "vaco-codec-opus: no OpusHead identification header supplied via set_extradata",
@@ -282,6 +300,7 @@ impl Decoder for OpusDecoder {
             .channel_layout()
             .unwrap_or_else(|| ChannelLayout::unspecified(u32::from(head.channel_count)));
         let mut frame = Frame::alloc_audio(&mut self.budget, SampleFmt::F32P, layout, samples as u32, OUTPUT_SAMPLE_RATE)?;
+        frame.pts = pts;
         for (ch, data) in mixed.iter().enumerate() {
             let Some(mut plane) = frame.plane_mut(ch) else { continue };
             let Some(row) = plane.row_mut(0) else { continue };
@@ -297,7 +316,11 @@ impl Decoder for OpusDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(Error::NeedMoreInput)
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
@@ -305,6 +328,7 @@ impl Decoder for OpusDecoder {
             s.flush();
         }
         self.pending.clear();
+        self.draining = false;
     }
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
