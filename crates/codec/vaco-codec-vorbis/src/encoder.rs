@@ -75,6 +75,19 @@ pub struct VorbisEncoder {
     /// [`crate::enc_setup::FLOOR_X`]'s doc.
     full_x: Vec<u32>,
     flushed_tail: bool,
+    /// The first real frame's own `pts`, in the stream's time base (samples
+    /// at `state.sample_rate`, the same convention every other audio
+    /// encoder's input in this tree uses — `vaco-codec-flac`'s own
+    /// `base_pts` is the model this mirrors). `None` until the first frame
+    /// arrives.
+    base_pts: Option<i64>,
+    /// How many `emit_window` calls have produced a packet so far. Each one
+    /// after the first advances the decoded output by exactly `HOP` samples
+    /// (the 50% overlap every window shares with its predecessor), so
+    /// packet `n`'s `pts` is `base_pts + n * HOP` — the same
+    /// `base + count * step` shape `vaco-codec-flac`'s `frame_number *
+    /// BLOCK_SIZE` uses, with this format's own step.
+    windows_emitted: u32,
 }
 
 impl VorbisEncoder {
@@ -94,6 +107,8 @@ impl VorbisEncoder {
             win: window(BLOCK_SIZE, BLOCK_SIZE, false, false, false),
             full_x,
             flushed_tail: false,
+            base_pts: None,
+            windows_emitted: 0,
         }
     }
 
@@ -149,6 +164,14 @@ impl VorbisEncoder {
                     ));
                 }
             }
+        }
+        // The very first real frame's own `pts` anchors every packet this
+        // encoder ever emits — see `base_pts`'s field docs. `Encoder::
+        // prime_audio` (if it ran) only seeded `state`/`buffered`, not a
+        // timestamp, since it runs before any frame (and so any `pts`)
+        // exists at all.
+        if self.base_pts.is_none() {
+            self.base_pts = frame.pts.ticks();
         }
 
         for ch in 0..channels as usize {
@@ -269,6 +292,13 @@ impl VorbisEncoder {
         let bytes = w.finish();
         let mut packet = Packet::from_slice(budget, &bytes)?;
         packet.flags = PacketFlags::KEY;
+        packet.pts = self
+            .base_pts
+            .map(|base| {
+                base.saturating_add(i64::from(self.windows_emitted) * i64::try_from(HOP).unwrap_or(i64::MAX))
+            })
+            .map_or(vaco_core::Timestamp::NONE, vaco_core::Timestamp::new);
+        self.windows_emitted = self.windows_emitted.wrapping_add(1);
         self.machine.emit(packet);
         Ok(())
     }
@@ -374,6 +404,69 @@ fn write_flat_symbol(w: &mut BitWriterLsb, symbol: u32, bits: u32) {
 }
 
 impl Encoder for VorbisEncoder {
+    /// This encoder's one accepted format — without this override, the
+    /// trait's own empty-slice default ("whatever arrives") told a caller
+    /// nothing, so `-c:a vorbis` fed straight from a demuxer's native
+    /// format (`s16`/`s16p`, never `f32p`) reached `Self::ingest` and hit
+    /// its "encoder accepts f32p input only" refusal on the very first
+    /// frame — after `add_stream` had already run, too late for a caller to
+    /// have inserted a converter first. Measured directly: `vaco -i in.wav
+    /// -c:a vorbis out.mkv`/`out.ogg` failed this way. Same fix E2E-GAPS #3
+    /// already gave `vaco-codec-flac`/`vaco-codec-alac`/`vaco-codec-pcm`,
+    /// simply never applied here.
+    fn accepted_sample_fmts(&self) -> &'static [SampleFmt] {
+        &[SampleFmt::F32P]
+    }
+
+    /// Seeds [`StreamState`] from the pipeline's own already-known shape, the
+    /// same reason [`Encoder::prime_audio`]'s own doc gives: the setup
+    /// header this encoder's [`Self::extradata`] builds needs channel count
+    /// and sample rate, and without this they were not known until the
+    /// first [`Self::send_frame`] — one call too late for a container's
+    /// `add_stream`, which is what an Ogg or Matroska output needs the
+    /// identification/setup header for at all (`vaco-mux-ogg` already
+    /// refuses a `CodecId::Vorbis` stream with no extradata; `vaco-mux-
+    /// matroska` does the same for `A_VORBIS`, having previously written
+    /// nothing and let the file through). `format` is unused because
+    /// `enc_setup::build_extradata` needs only channels and sample rate —
+    /// this encoder's format is fixed to `F32P` regardless of what the
+    /// pipeline negotiated it from.
+    fn prime_audio(
+        &mut self,
+        sample_rate: u32,
+        layout: vaco_chlayout::ChannelLayout,
+        _format: SampleFmt,
+    ) {
+        if self.state.is_some() {
+            return;
+        }
+        let channels = layout.channels;
+        if channels == 0 {
+            return;
+        }
+        self.state = Some(StreamState {
+            channels,
+            sample_rate,
+        });
+        // `Self::ingest`'s own `None` arm is what sizes `buffered` to one
+        // inner `Vec` per channel; priming `state` here bypasses that arm
+        // entirely (the first real frame now takes the "already known,
+        // just checked for a mismatch" branch), so this has to do the same
+        // sizing or every sample handed to `ingest` afterwards silently
+        // finds no per-channel buffer to land in (`buffered.get_mut(ch)`
+        // returning `None`, then a `continue`) and this encoder produces no
+        // packets at all instead of one clean error.
+        self.buffered = (0..channels).map(|_| Vec::new()).collect();
+    }
+
+    /// Delegates to the inherent [`Self::extradata`], answering `None`
+    /// instead of an empty blob when nothing is known yet (before
+    /// [`Encoder::prime_audio`] or a first frame) — the same shape
+    /// `vaco-codec-flac`'s own trait-level override uses.
+    fn extradata(&self) -> Option<Vec<u8>> {
+        (self.state.is_some()).then(|| self.extradata())
+    }
+
     fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
         match self.machine.accept(frame.is_none())? {
             Accept::Drain => {
@@ -434,5 +527,96 @@ mod tests {
             decoded = (decoded << 1) | r.read_tree_bit();
         }
         assert_eq!(decoded, 5);
+    }
+
+    fn mono_f32p_frame(budget: &mut Budget, samples: &[f32], pts: i64) -> Frame {
+        let mut frame = Frame::alloc_audio(
+            budget,
+            SampleFmt::F32P,
+            vaco_chlayout::ChannelLayout::MONO,
+            samples.len() as u32,
+            48_000,
+        )
+        .unwrap();
+        {
+            let mut plane = frame.plane_mut(0).unwrap();
+            let row = plane.row_mut(0).unwrap();
+            for (i, &s) in samples.iter().enumerate() {
+                if let Some(dst) = row.get_mut(i * 4..i * 4 + 4) {
+                    dst.copy_from_slice(&s.to_le_bytes());
+                }
+            }
+        }
+        frame.pts = vaco_core::Timestamp::new(pts);
+        frame
+    }
+
+    /// The regression this crate needed for a real transcode: without a
+    /// real `pts`, every packet reached the muxer with none, and a strict
+    /// container (Matroska among them) refuses that outright ("this
+    /// container needs timestamps and the packet has none") — reproduced
+    /// end to end via `vaco -c:a vorbis out.mkv`/`out.ogg`. Packet `n`'s
+    /// `pts` must be `first_frame.pts + n * HOP` (`HOP` samples of new
+    /// decoded output per window after the first), never `Timestamp::NONE`,
+    /// once a real `pts` reaches `send_frame` at all.
+    #[test]
+    fn packets_carry_real_monotonically_spaced_timestamps() {
+        let mut budget = Budget::new(Limits::permissive());
+        let mut enc = VorbisEncoder::new(Limits::permissive());
+        let samples = vec![0.1f32; BLOCK_SIZE * 3];
+        let frame = mono_f32p_frame(&mut budget, &samples, 1000);
+        enc.send_frame(Some(&frame)).unwrap();
+
+        let mut pts_values = Vec::new();
+        while let Ok(p) = enc.receive_packet() {
+            pts_values.push(p.pts);
+        }
+        assert!(
+            !pts_values.is_empty(),
+            "expected at least one packet from three full windows"
+        );
+        for &p in &pts_values {
+            assert_ne!(p, vaco_core::Timestamp::NONE, "packet pts must not be NONE");
+        }
+        for w in pts_values.windows(2) {
+            assert!(
+                w[1].ticks().unwrap_or(0) > w[0].ticks().unwrap_or(0),
+                "pts must strictly increase: {w:?}"
+            );
+        }
+        assert_eq!(pts_values[0].ticks(), Some(1000));
+        assert_eq!(
+            pts_values[1].ticks(),
+            Some(1000 + i64::try_from(HOP).unwrap())
+        );
+    }
+
+    /// `Encoder::prime_audio` seeding `state` early must not bypass
+    /// `Self::ingest`'s per-channel buffer sizing — the exact regression
+    /// found while wiring `prime_audio` in for the extradata fix: without
+    /// this, `send_frame` after `prime_audio` silently produced zero
+    /// packets instead of the real encoder output, because every sample
+    /// handed to `ingest` found no per-channel `Vec` to land in.
+    #[test]
+    fn prime_audio_then_send_frame_still_produces_packets() {
+        let mut budget = Budget::new(Limits::permissive());
+        let mut enc = VorbisEncoder::new(Limits::permissive());
+        Encoder::prime_audio(
+            &mut enc,
+            48_000,
+            vaco_chlayout::ChannelLayout::MONO,
+            SampleFmt::F32P,
+        );
+        assert!(
+            Encoder::extradata(&enc).is_some(),
+            "extradata must be ready after prime_audio"
+        );
+        let samples = vec![0.1f32; BLOCK_SIZE * 2];
+        let frame = mono_f32p_frame(&mut budget, &samples, 0);
+        enc.send_frame(Some(&frame)).unwrap();
+        assert!(
+            enc.receive_packet().is_ok(),
+            "priming must not stop send_frame from producing real output"
+        );
     }
 }
