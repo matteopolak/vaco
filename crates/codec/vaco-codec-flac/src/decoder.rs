@@ -30,6 +30,17 @@ pub struct FlacDecoder {
     /// [`FlacDecoder::set_extradata`], or synthesized from the first
     /// packet's own frame header if extradata never arrives.
     streaminfo: Option<[u8; 34]>,
+    /// `Error::Eof` once draining starts and `pending` is empty, rather than
+    /// `NeedMoreInput` forever — same fix `vaco-codec-mpegaudio`'s decoder
+    /// already carries, and the same bug `vaco-codec-alac`'s and
+    /// `vaco-codec-vorbis`'s decoders are recorded (`vaco-sched`'s own
+    /// `CodecWork::drain` doc) as having: `send_packet(None)` was a no-op, so
+    /// `receive_frame` kept answering `NeedMoreInput` after end of stream and
+    /// the scheduler's `ProgressGuard` eventually killed the run with
+    /// `NoProgress` instead of a clean `Eof` — measured end to end via
+    /// `vaco -i <flac> -f wav -`, which hung on `NoProgress` before this
+    /// field existed.
+    draining: bool,
 }
 
 impl FlacDecoder {
@@ -40,13 +51,18 @@ impl FlacDecoder {
             limits,
             pending: VecDeque::new(),
             streaminfo: None,
+            draining: false,
         }
     }
 }
 
 impl Decoder for FlacDecoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
-        let Some(packet) = packet else { return Ok(()) };
+        let Some(packet) = packet else {
+            self.draining = true;
+            return Ok(());
+        };
+        let pts = packet.pts;
         let payload = packet.payload();
         if payload.is_empty() {
             return Ok(());
@@ -89,6 +105,7 @@ impl Decoder for FlacDecoder {
             per_channel as u32,
             decoded.sample_rate,
         )?;
+        frame.pts = pts;
         write_channels(
             &mut frame,
             &decoded.interleaved,
@@ -100,11 +117,16 @@ impl Decoder for FlacDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(Error::NeedMoreInput)
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
         self.pending.clear();
+        self.draining = false;
     }
 
     /// Seed the decoder from the container's `STREAMINFO`.
