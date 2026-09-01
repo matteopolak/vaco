@@ -1800,3 +1800,113 @@ profile.
 filter crates, `vaco-conformance` and the fuzz harnesses were not
 touched — outside this item's lane. `vaco-codec-core` and `vaco-cli` were
 read for diagnosis but not edited, for the reason above.
+
+
+## 26. A0/M1 — H.264 per-picture buffer reuse, 13-14x lower peak RSS at 1 thread
+
+**Item.** `planning/PERF-PROGRAMME.md` A0/M1: reuse per-picture buffers
+(`MbSummary` array, working reconstruction buffer, output frame storage)
+instead of allocating and freeing them on every single picture. New
+`vaco-codec-h264::task_pool::TaskBufferPools` (three geometry-keyed free
+lists, `Arc`-shared between the decoder and every dispatched frame task);
+`decode_slice_cavlc`/`decode_slice_cabac` gained `_into` variants that
+append onto a caller-supplied `Vec<MbSummary>`; the output frame now goes
+through `vaco_frame::FramePool` (existing, previously used only by that
+crate's own tests) instead of `Frame::alloc_video` directly.
+
+**Measured (h264_4k.mp4, 3840x2160, 75 frames, dist profile, private
+target-dir, `/usr/bin/time -l`, interleaved before/after pairs; load
+average 9-17 during the session — see below on why interleaving mattered
+here more than usual):**
+
+| | -threads 1 | -threads 4 |
+|---|---|---|
+| peak RSS, before | 2.8-3.4 GiB | 3.3-4.3 GiB |
+| peak RSS, after | **0.25-0.26 GiB** | 0.63-0.72 GiB |
+| ratio | ~13x | ~5.5x |
+| CPU-seconds, before | 8.7-9.1s | 12.1-12.2s |
+| CPU-seconds, after | 8.3-9.8s (wash) | 11.4-11.5s (~6% less) |
+| sys time, before/after | 0.56-0.60s / 0.07-0.10s | 0.72s / 0.15s |
+
+The 1-thread target (plan: peak RSS < 0.5 GiB, from a baseline > 3.9 GiB)
+is met with margin. The 4-thread number is higher because
+`max_in_flight() + 1` reconstructors and macroblock arrays are
+legitimately outstanding at once — not because anything is uncharged; the
+decoder's own aggregate per-task `Budget` charge needed no change, since
+it already charges by byte length rather than by allocation mechanism.
+
+**A same-session measurement trap worth recording.** A first pass at this
+comparison, minutes apart rather than interleaved, produced a wildly
+misleading "before" figure of only 1.13-1.22 GiB peak RSS on the *same*
+unmodified binary that later measured 2.8-3.4 GiB when run immediately
+next to the "after" binary. Load average was higher in the second
+(correct) measurement, not lower, so the effect is not "more load means
+more memory" in any direct sense — the likely mechanism is the OS
+compressing or reclaiming a process's own cached-but-freed pages more
+readily under system-wide memory pressure, which lowers *measured* RSS
+without the allocator's logical cache shrinking at all. `/usr/bin/time
+-l`'s RSS number, not just wall-clock time, needs the interleaved
+protocol in `planning/PERF-PROGRAMME.md` §2 on this repository's
+hardware — a single before/after pair taken minutes apart is not
+trustworthy for this metric either.
+
+**Two remaining per-picture allocations, named but not addressed (out of
+this item's scope):**
+
+- The DPB entry's own band storage (`ProgressPicture::allocate` in
+  `vaco-codec-core`'s `picture.rs`, `budget.alloc(rows)` per band, no
+  pooling) — a shared, codec-agnostic crate this item does not own.
+- The per-reference-picture colocated motion field
+  (`Vec<MvInfo>` built in `vaco-codec-h264::decoder`'s `split_packet`,
+  ~20 MB at 4K) — in-lane, but `Arc`-shared with any B slice that names
+  the picture as `RefPicList1[0]` and freed only on DPB eviction, a
+  longer-lived lifecycle than the three short-lived per-task buffers this
+  item pools. Recycling it safely would need an `Arc::try_unwrap`-style
+  check at each of the decoder's several eviction sites, which this item
+  did not attempt.
+
+**Byte-exactness.** h264_4k.mp4, big.mkv (1500 frames), bpyramid_1080p.mp4,
+and two new fixtures built for this item (CAVLC baseline profile, and
+Main profile with `-coder 0`) — 20/20 (fixture x thread count in
+{1,2,4,8}) identical between a clean-worktree build of this commit's
+parent and a build with this commit, byte for byte. big.mkv repeated 15
+additional times across all four thread counts, all identical to its own
+`-threads 1` run (the shared-pool race detector this item's brief asked
+for). `h264_decode` fuzz target: 21,867 executions in 60s, no crash, no
+artifact. `h264_decode_threaded` fuzz target (asserts 1-thread and
+N-thread output identical): 4,700 executions in 90s+, no crash, no
+artifact.
+
+**A pre-existing regression found, not caused, while doing this
+verification.** Direct comparison against `ffmpeg`'s own decode is not
+currently meaningful on four of this item's five fixtures (h264_4k.mp4,
+big.mkv, bpyramid_1080p.mp4, the Main/`-coder 0` CAVLC fixture): a
+structured, accumulating divergence starting at frame 1 (73 of 75 frames
+differ on h264_4k.mp4, per-frame diff-byte count growing from ~5,900 to
+~147,000, max per-sample delta 174 — the "structured, not rounding" shape
+`planning/AGENT-CONSTRAINTS.md` names as a real defect, not the
+small-and-unstructured kind the owner's byte-exactness ruling accepts).
+Bisected via `git log a250fec..HEAD -- crates/codec/vaco-codec-h264/` to
+the *only* two commits in that range touching this crate
+(`f970c23`/`ab2e211`) and confirmed present identically in a clean
+before/after worktree comparison with no A0 changes at all — this item
+did not introduce it and reverting A0 would not fix it. Root-caused (not
+fixed, to stay in scope): `f970c23`'s own P_8x8 `mb_available` fix removed
+availability-marking from a loop that covers all four 4x4 grid positions
+of a quadrant, while the later `mvd` pass it left in place only marks the
+one representative position per sub-partition when `num_sub < 4` — the
+other three positions of a P_L0_8x8/8x4/4x8 quadrant are now permanently
+`mb_available: false` even though they hold a real, decoded motion
+vector, which corrupts any later macroblock's A/B/C neighbour lookup that
+lands on one of them. Only the baseline-profile CAVLC fixture (mostly
+skip macroblocks, few P_8x8 quadrants) escapes it and matches `ffmpeg`
+exactly at every thread count. Flagged as a background task
+(`task_8944d463`, "Fix P_8x8 mb_available regression from f970c23") with
+the full diagnosis rather than fixed here, since it is unrelated to A0's
+own buffer/allocation scope and touches the same functions another
+agent's very recent commit was actively working in.
+
+`vaco-codec-hevc`, the AAC/transform crates, the filter crates,
+`vaco-conformance` and the fuzz harnesses were not touched — outside this
+item's lane. `vaco-codec-core` (the DPB entry allocation named above) was
+read for diagnosis but not edited.
