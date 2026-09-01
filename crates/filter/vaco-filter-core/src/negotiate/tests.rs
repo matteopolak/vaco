@@ -491,3 +491,109 @@ fn property_names_are_the_references_own_spellings() {
     assert_eq!(Property::SampleRate.name(), "sample_rate");
     assert_eq!(Property::ChannelLayout.name(), "channel_layout");
 }
+
+// ------------------------------------------------------------ tied, non-conflicting properties
+
+/// A converter factory that records the `upstream`/`downstream` sets a
+/// repair actually handed it, instead of computing anything from them.
+struct Spy {
+    seen: std::cell::RefCell<Option<(FormatSet, FormatSet)>>,
+}
+
+impl Spy {
+    fn new() -> Self {
+        Self {
+            seen: std::cell::RefCell::new(None),
+        }
+    }
+}
+
+impl ConverterFactory for Spy {
+    fn converter(
+        &self,
+        _media: MediaType,
+        _properties: &[Property],
+        upstream: &FormatSet,
+        downstream: &FormatSet,
+    ) -> Option<ConverterSpec> {
+        *self.seen.borrow_mut() = Some((upstream.clone(), downstream.clone()));
+        // A converter that forces every property downstream leaves open —
+        // exactly `aresample`'s own shape when the user asked for a rate
+        // change and nothing else.
+        let mut out = downstream.clone();
+        if out.sample_formats.as_ref().is_none_or(|c| matches!(c, Constraint::Any)) {
+            out.sample_formats = upstream.sample_formats.clone();
+        }
+        if out.channel_layouts.as_ref().is_none_or(|c| matches!(c, Constraint::Any)) {
+            out.channel_layouts = upstream.channel_layouts.clone();
+        }
+        Some(ConverterSpec {
+            filter: "aresample",
+            args: String::new(),
+            formats: NodeFormats::converter(upstream.clone(), out, "auto"),
+        })
+    }
+}
+
+/// A fully-tied passthrough node — `anull`'s own shape, and
+/// `aresample`'s shape for whichever properties the user did not ask it to
+/// change (see the tie fix in `vaco_filter_audio::aresample::target_formats`).
+/// Both pads declare nothing on their own; every property is resolved only
+/// through the tie, from whatever the source side turns out to be.
+fn tied_passthrough_node(label: &str) -> NodeFormats {
+    NodeFormats::passthrough(1, 1, MediaType::Audio, label)
+}
+
+/// The regression for a real defect: a link whose sample rate conflicts
+/// (forcing a converter insertion) sat next to a channel layout that never
+/// conflicted at all — resolved cleanly via the middle node's own tie — and
+/// the repair loop handed the factory `None` for it anyway, because it only
+/// overlaid the *conflicting* property's resolved value onto `upstream`/
+/// `downstream`, not every property a tie had already settled. The
+/// mis-declared converter that produced then had no channel-layout
+/// constraint on its own output pad, and the *next* link (to an equally
+/// unconstrained sink) failed negotiation outright with "format negotiation
+/// left a property unconstrained" for a property nothing on either side ever
+/// disputed.
+#[test]
+fn a_converters_upstream_carries_a_tied_propertys_resolved_value_not_none() {
+    let mut plan = NegotiationPlan::new();
+    let source = plan.add_node(NodeFormats {
+        inputs: Vec::new(),
+        outputs: vec![FormatSet::audio_exact(S::S16, 48_000, ChannelLayout::MONO)],
+        ties: Vec::new(),
+        label: "source".to_owned(),
+    });
+    let middle = plan.add_node(tied_passthrough_node("anull"));
+    let sink = plan.add_node(NodeFormats {
+        inputs: vec![FormatSet {
+            sample_rates: Some(Constraint::Exact(44_100)),
+            ..FormatSet::default()
+        }],
+        outputs: Vec::new(),
+        ties: Vec::new(),
+        label: "sink".to_owned(),
+    });
+    plan.connect(PadRef::output(source, 0), PadRef::input(middle, 0), MediaType::Audio)
+        .expect("connect");
+    plan.connect(PadRef::output(middle, 0), PadRef::input(sink, 0), MediaType::Audio)
+        .expect("connect");
+
+    let spy = Spy::new();
+    let mut conflicts = Vec::new();
+    let assignment = negotiate(&mut plan, &spy, AutoConvert::All, &mut conflicts)
+        .expect("a tied, non-conflicting property must not block negotiation");
+    assert!(conflicts.is_empty());
+    assert_eq!(assignment.inserted.len(), 1);
+
+    let (upstream, _downstream) = spy.seen.into_inner().expect("the factory was called");
+    // The channel layout never conflicted — it is what this test is
+    // guarding — so the factory must have seen it resolved to `MONO`
+    // (propagated through the middle node's tie), not `None`/`Any`.
+    assert_eq!(
+        upstream.channel_layouts,
+        Some(Constraint::Exact(ChannelLayout::MONO)),
+        "a non-conflicting, tied property must reach the converter factory resolved"
+    );
+    assert_eq!(upstream.sample_formats, Some(Constraint::Exact(S::S16)));
+}

@@ -947,7 +947,7 @@ pub fn negotiate(
         let Outcome {
             conflicts: found,
             resolved_sides,
-            ..
+            link_formats,
         } = outcome;
         if mode == AutoConvert::None {
             conflicts.extend(found.into_iter().map(|mut c| {
@@ -1001,6 +1001,34 @@ pub fn negotiate(
                 {
                     install(&mut up, resolved_up, property);
                     install(&mut down, resolved_down, property);
+                }
+            }
+            // The same overlay, for every property *not* in conflict on this
+            // link. Those were never touched above — `properties` names only
+            // the ones that failed to join — but a raw declaration is exactly
+            // as unreliable for them as it was for the conflicting one: a tied
+            // pad that declares nothing still resolves to a real value when
+            // nothing conflicts, and `link_formats[link]` is that already-
+            // agreed value (this round's own `solve_once` resolved it with no
+            // conflict at all). Skipping this left a link whose *other*
+            // property genuinely disagreed — the common shape once a sample
+            // rate mismatch and an untouched, tie-derived channel layout share
+            // a link — handing the factory a spuriously unconstrained `up`/
+            // `down` for the property that was never in dispute, which is how
+            // `aresample`'s auto-inserted instance ended up declaring no
+            // channel layout at all and the *next* link (its output to the
+            // sink) failed with "format negotiation left a property
+            // unconstrained" for a property nothing here ever contested.
+            if let Some(resolved) = link_formats.get(link.0 as usize) {
+                for &property in Property::for_media(ends.media) {
+                    if properties.contains(&property) {
+                        continue;
+                    }
+                    if resolved.get(property).is_unconstrained() {
+                        continue;
+                    }
+                    install(&mut up, resolved, property);
+                    install(&mut down, resolved, property);
                 }
             }
             let Some(spec) = factory.converter(ends.media, &properties, &up, &down) else {
@@ -1059,6 +1087,14 @@ fn solve_once(plan: &NegotiationPlan) -> Result<Outcome> {
     let mut resolved: Vec<FormatSet> = vec![FormatSet::default(); plan.links.len()];
 
     for &property in &Property::ALL {
+        // `conflicts` accumulates across every property's pass in this loop
+        // (that is what lets `negotiate`'s repair step coalesce a link's
+        // pixel-format *and* colour-range conflict into one `scale`). So a
+        // conflict found while resolving an *earlier* property must not stop
+        // picking for a *later* one that has none of its own — this count is
+        // how the check below tells "a conflict already exists" from "this
+        // property's own pass just added one".
+        let conflicts_before_this_property = conflicts.len();
         let mut uf = UnionFind::new(index.total);
         // Per representative: the folded constraint and its provenance.
         let mut state: Vec<Option<(FormatSet, Provenance)>> = vec![None; index.total];
@@ -1142,7 +1178,7 @@ fn solve_once(plan: &NegotiationPlan) -> Result<Outcome> {
             }
         }
 
-        if !conflicts.is_empty() {
+        if conflicts.len() > conflicts_before_this_property {
             continue;
         }
 
