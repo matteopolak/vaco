@@ -114,7 +114,7 @@ fn warn_stale_binaries(under_test: &vaco_conformance::runner::UnderTest) {
         return;
     }
     eprintln!(
-        "\n*** WARNING: {} binary/binaries under test predate the newest source file under          crates/ ***",
+        "\n*** WARNING: {} binary/binaries under test predate the newest source file under crates/ ***",
         under_test.stale.join(", ")
     );
     eprintln!(
