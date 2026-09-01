@@ -361,16 +361,29 @@ fn stream_value(
         // from one number. `nal_length_size` is the container's length prefix
         // width and `is_avc` is "that width is non-zero"; measured, the same
         // content in MP4 reports `true`/`4` and in MPEG-TS reports `false`/`0`.
-        // `None` for every other codec, which is what keeps the pair out of an
-        // HEVC or AV1 stream's output.
+        //
+        // Gated on `codec_id == H264` explicitly (#654), not merely on
+        // `nal_length_size.is_some()`: HEVC's `hvcC` populates the same
+        // `VideoParameters.nal_length_size` field so `vaco-mux-raw`/
+        // `vaco-mux-mpegts` can decide whether a copied HEVC stream needs
+        // Annex-B conversion (#647) — but `is_avc`/`nal_length_size` are AVC-
+        // only options (`ffmpeg -h decoder=hevc` has neither), and measured
+        // directly (`ffprobe -bitexact -show_streams` on an `hvc1`/MP4 HEVC
+        // stream) the reference prints neither field for HEVC. AV1 and every
+        // other codec never populate the field at all, so this gate only
+        // changes HEVC's behaviour.
         "is_avc" => Val::opt_s(
             video
+                .filter(|_| p.codec_id == Some(CodecId::H264))
                 .and_then(|v| v.nal_length_size)
                 .map(|n| if n > 0 { "true" } else { "false" }.to_owned()),
         ),
-        "nal_length_size" => {
-            Val::opt_s(video.and_then(|v| v.nal_length_size).map(|n| n.to_string()))
-        }
+        "nal_length_size" => Val::opt_s(
+            video
+                .filter(|_| p.codec_id == Some(CodecId::H264))
+                .and_then(|v| v.nal_length_size)
+                .map(|n| n.to_string()),
+        ),
         // The HEVC decoder's two, and they are **empty strings**, not absent:
         // `view_ids_available=""` is printed for a plain single-layer stream.
         // They list MV-HEVC layer ids, and this build parses no layer set, so
@@ -1104,6 +1117,43 @@ mod tests {
         assert!(matches!(render(None, "nal_length_size"), Val::Absent));
         assert_eq!(field("is_avc").absent, crate::fields::Absent::Omit);
         assert_eq!(field("nal_length_size").absent, crate::fields::Absent::Omit);
+    }
+
+    /// Issue #654: fixing #647 (populating HEVC's `nal_length_size` from
+    /// `hvcC` so the raw/MPEG-TS muxers can Annex-B-convert a copied HEVC
+    /// stream) had the side effect of also making `vaco-probe` print
+    /// `is_avc`/`nal_length_size` for HEVC, which the reference never does —
+    /// measured directly (`ffprobe -bitexact -show_streams` on an `hvc1`/MP4
+    /// HEVC stream has neither field; `ffmpeg -h decoder=hevc` has no such
+    /// private options at all). The two fields must stay H.264-only even
+    /// when `VideoParameters.nal_length_size` is populated for another
+    /// codec.
+    #[test]
+    fn is_avc_and_nal_length_size_are_h264_only_even_when_populated_for_hevc() {
+        fn field(name: &str) -> Field {
+            crate::fields::STREAM
+                .iter()
+                .find(|f| f.name == name)
+                .copied()
+                .expect("in the table")
+        }
+        let stream = Stream::new(0, MediaType::Video, vaco_core::Rational::new(1, 1000));
+        let mut p = CodecParameters::video().with_codec(CodecId::Hevc);
+        if let Some(v) = p.video.as_mut() {
+            v.nal_length_size = Some(4);
+        }
+        let render = |name: &str| {
+            stream_value(
+                &field(name),
+                &stream,
+                &p,
+                Some(MediaType::Video),
+                Counts::NONE,
+                false,
+            )
+        };
+        assert!(matches!(render("is_avc"), Val::Absent));
+        assert!(matches!(render("nal_length_size"), Val::Absent));
     }
 
     /// Issue #635 and its correction: `ts_id`/`ts_packetsize` read back
