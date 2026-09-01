@@ -595,6 +595,64 @@ names a candidate, not a result.
 
 ---
 
+## Group 12 — FFV1 encoder: `#[inline]` is a hint, `#[cold]`/`unlikely` are the stable substitute for branch hints (D21/D22)
+
+Dated **2026-09-01**. Not a SIMD entry — no `vaco-simd` kernel is involved — but the same discipline
+(measure before and after, interleaved, on the real binary) applied to D21's ruling that the success
+path is the only path worth optimising, and D22's same-day toolchain move to a pinned nightly
+(`nightly-2026-08-07`) specifically to unlock `std::hint::{likely, unlikely}` for it. Recorded here
+because this document is where "the optimiser did not do what the attribute implies" findings live,
+and this is another one: `#[inline]` on four small per-sample `vaco-codec-ffv1` functions was
+measured, not assumed, to leave them out-of-line.
+
+**Method.** `cargo build --profile dist -p vaco-cli` with the three patent-encumbered decode
+features, private `--target-dir`, `samply record --rate 4000`, `llvm-symbolizer --inlines` via
+`scripts/perf-baseline-symbolicate.py` (outermost physically-emitted frame), on
+`transcode_h264_to_ffv1_1080p` (`h264_1080p.mp4` → `ffv1`/matroska, `-threads 1`, 125 frames).
+
+**Evidence.** `<SliceBuf>::neighbours` — six border-aware neighbour lookups per pixel, called from
+both `encode_plane_range` and `decode_plane_range` — was **17.54%** of in-lib self time as its own
+named, out-of-line function, despite carrying `#[inline]`. `quant::median_predictor`, called
+alongside it, did not appear as a separate leaf at all in this profile (evidence it was already
+folded into its caller here, unlike the FFV1 D1 item's earlier finding of 8.22% on the decode side —
+different call site, not a contradiction).
+
+**Change**, `vaco-codec-ffv1` (`a2e6706`): `SliceBuf::get`/`set`/`neighbours`/`border` and
+`quant::median_predictor` → `#[inline(always)]`; the three per-pixel
+`states.get_mut(ctx).ok_or_else(..)` sites in `slice.rs` now share one `#[cold] #[inline(never)]
+context_out_of_range() -> Error` helper instead of three closures (D19); `border`'s three
+edge-of-plane checks (true for under 1% of calls on a 1080p plane) wrapped in `std::hint::unlikely`,
+gated by `#![feature(likely_unlikely)]`.
+
+**Measured**, CPU-seconds (children's `user+sys` via `resource.getrusage(RUSAGE_CHILDREN)`,
+interleaved A/B, `planning/PERF-PROGRAMME.md` §2 protocol), three independent process launches:
+
+| run | load avg (1 min) | rounds | candidate vs baseline | wins |
+|---|---:|---:|---:|---:|
+| cleanest, 2-way | ~30 | 12 | **1.13x** | 12/12 |
+| 3-way + ffmpeg | ~35-48 | 12 | 1.03x | 10/12 |
+| 3-way + ffmpeg | ~35-48 | 17 | 1.06x | 15/17 |
+
+Same-session `ffmpeg -threads 1` on the identical job: vaco went from 3.49x slower to 3.09x slower
+(cleanest run). Isolating `#[inline(always)]` alone (no cold helper, no `unlikely`) against baseline
+across the two noisier runs: 1.06-1.08x, 25/29 wins — the bulk of the win is the inlining; the cold
+helper and branch hints never measured as a net loss in any batch but their own marginal contribution
+did not clear the noise floor at this load. Byte-exact: encoded output and this crate's own decode of
+it are identical, baseline vs candidate.
+
+**A same-shape question, deliberately not answered here.** `Error` (`vaco-core`) is not trivially
+droppable — a `String`-carrying variant (`Option { name, detail }`) forces a real destructor check on
+every `Result<T, Error>` drop, which is exactly what made the *eager* `.ok_or(Error::X)` pattern this
+session's predecessor commit (`3bf2732`) fixed cost 10.31% of FFV1 encoder self-time. Boxing that
+variant would shrink `size_of::<Error>()` from 48 to 40 bytes (measured via a same-shaped local
+stand-in, `vaco-core`'s `error::size_experiment` test, `9a5e344`) — a real, workspace-wide effect on
+every `Result<T, Error>`, not a one-crate one. Not landed: `Error::Option` is pattern-matched at 128
+call sites across 45 files, nearly all outside this agent's owned crates, and rewriting a public
+enum's shape at that many call sites from inside one crate's perf pass is exactly the kind of
+sweep `AGENT-CONSTRAINTS.md`'s scope rule says to report, not perform alone in a shared tree.
+
+---
+
 ## Revised upstream ask
 
 Plan 12 §11 lists six operations to request before v1.0. The measurements reorder that list sharply —
