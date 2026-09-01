@@ -32,6 +32,11 @@ vaco-demux-matroska = { path = "../vaco-demux-matroska" }
 
 [dev-dependencies]
 proptest = { workspace = true }
+# Test-only: building a synthetic `PacketSideData::NewExtradata` payload for
+# the deferred-header-flush regression tests needs `Buffer` directly: no
+# codec crate is a dependency here (D14.1-style layering), so there is no
+# encoder to produce one for us.
+vaco-pool = { path = "../../model/vaco-pool" }
 
 [lints]
 workspace = true

@@ -85,6 +85,56 @@ pub const fn codec_id_str(id: CodecId) -> Option<&'static str> {
     }
 }
 
+/// Whether the track whose Matroska `CodecID` is `codec_id_str` needs a
+/// non-empty out-of-band Configuration Record to be decodable at all — the
+/// bytes [`crate::mux::MatroskaMuxer`] writes into `CodecPrivate`.
+///
+/// This is deliberately keyed on the *Matroska* string rather than
+/// [`CodecId`]: `TrackOut` only ever holds the string (the `CodecID` this
+/// crate committed to at `add_stream`), and the question is about what that
+/// specific `CodecID` needs, which is a fact about Matroska/WebM (RFC 9559),
+/// not about the codec in the abstract — the same codec can have a
+/// `CodecID` that embeds enough in-band signalling to need nothing here in
+/// principle, but every string this table emits is the one measured against
+/// `ffmpeg 8.1` (module docs above), which always writes one for these.
+///
+/// # Why this exists
+///
+/// Nothing before it distinguished "no `CodecPrivate` because this codec
+/// does not need one" (`V_VP9`, `A_PCM/INT/LIT`, ...) from "no
+/// `CodecPrivate` because the encoder never got a chance to supply the real
+/// one" — so a stream that fell into the second case was written anyway,
+/// producing a file that mounts and reports a stream but that no decoder can
+/// actually open. [`crate::mux::MatroskaMuxer::flush_header_bytes`] calls
+/// this right before it commits `Tracks` for good, and refuses the write
+/// outright rather than let that distinction stay invisible.
+///
+/// `V_MPEG4/ISO/AVC`/`V_MPEGH/ISO/HEVC` need their `avcC`/`hvcC`; `V_FFV1`
+/// needs RFC 9043's Configuration Record (this crate's own encoder always
+/// emits version 3, which mandates one); `A_VORBIS`/`A_OPUS`/`A_FLAC`/
+/// `A_ALAC`/`A_AAC` each need their own header structure
+/// (identification+setup packets, `OpusHead`, `STREAMINFO`,
+/// `ALACSpecificConfig`, `AudioSpecificConfig`). Every other mapped `CodecID`
+/// is a self-contained bitstream (`V_VP8`/`V_VP9`/`V_AV1`/`V_THEORA`/
+/// `V_MPEG1`/`V_MPEG2`/`V_PRORES`/`V_MJPEG`, every `A_PCM/*`, `A_MPEG/L*`,
+/// `A_AC3`) and needs nothing here even though several of them (Theora,
+/// Vorbis' own sibling) traditionally travel *with* private headers in other
+/// containers — Matroska specifically does not require it for these.
+#[must_use]
+pub fn requires_extradata_str(codec_id_str: &str) -> bool {
+    matches!(
+        codec_id_str,
+        "V_MPEG4/ISO/AVC"
+            | "V_MPEGH/ISO/HEVC"
+            | "V_FFV1"
+            | "A_VORBIS"
+            | "A_OPUS"
+            | "A_FLAC"
+            | "A_ALAC"
+            | "A_AAC"
+    )
+}
+
 /// Whether `id` is one of the video codecs a `webm` `DocType` may carry.
 #[must_use]
 pub const fn webm_allows_video(id: CodecId) -> bool {

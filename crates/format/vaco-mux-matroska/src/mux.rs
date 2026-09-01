@@ -131,7 +131,7 @@ use vaco_format_ebml::{
     write_uint,
 };
 use vaco_io::{IoOptions, IoWriter, MediaSink};
-use vaco_packet::Packet;
+use vaco_packet::{Packet, PacketSideData};
 
 use crate::block;
 use crate::codec;
@@ -340,6 +340,51 @@ pub struct MatroskaMuxer {
     out: IoWriter,
     tracks: Vec<TrackOut>,
     header_written: bool,
+    /// Whether `Segment`/`Info`/`Tracks`/... bytes have actually reached
+    /// [`MatroskaMuxer::out`]. Separate from `header_written` (which only
+    /// says [`Muxer::write_header`] was *called*, closing `add_stream`) so
+    /// that the real byte-write can be delayed past it — see
+    /// `pending_packets`' docs for why that delay exists.
+    header_flushed: bool,
+    /// Packets buffered because [`MatroskaMuxer::header_flushed`] is still
+    /// false, in arrival order, replayed in one go the moment it flips.
+    ///
+    /// # Why this exists — the FFV1-into-Matroska bug
+    ///
+    /// `write_header` used to write `Tracks` (and so `CodecPrivate`)
+    /// immediately, from whatever `extradata` [`Muxer::add_stream`] was
+    /// handed — which for a video encoder that cannot know its own
+    /// configuration record before it has seen a pixel format (RFC 9043's
+    /// FFV1 is the measured case: `Ffv1Encoder` cannot answer before the
+    /// first [`vaco_codec_core::Encoder::send_frame`]) is whatever
+    /// `CodecParameters::extradata` happened to already hold — the *previous*
+    /// codec's configuration record, verbatim, for a transcode. `ffmpeg`
+    /// then reads that as an FFV1 Configuration Record and rejects it
+    /// (`Invalid version in global header`): every FFV1 file this crate ever
+    /// wrote was silently corrupt.
+    ///
+    /// [`MatroskaMuxer::adopt_new_extradata`] is the same fix
+    /// `vaco-mux-mp4`'s `adopt_new_extradata` already applies for `moov`,
+    /// which is naturally deferred to `write_trailer`; Matroska's `Tracks`
+    /// has no such natural deferral point, since nothing after `Tracks`
+    /// revisits it (`write_trailer` only rewrites `Info` and the
+    /// `SeekHead`/`Cues` reservation). So the flush itself is deferred
+    /// instead, buffering packets here until every declared track has
+    /// produced at least one — the point by which every encoder that is
+    /// ever going to attach [`vaco_packet::PacketSideData::NewExtradata`]
+    /// has done so — and *then* the real `Tracks` bytes are built and
+    /// written, with each track's adopted extradata rather than its
+    /// `add_stream`-time guess.
+    ///
+    /// Bounded by "one packet per track that has not yet produced one", not
+    /// by file length: a track that never produces a packet at all leaves
+    /// this buffering until [`MatroskaMuxer::write_trailer`]'s own
+    /// safety-net flush, which is the pathological case, not the common one.
+    pending_packets: Vec<Packet>,
+    /// `true` at index `i` once track `i` has been handed at least one
+    /// packet — the gate [`MatroskaMuxer::header_flushed`] waits on. Sized to
+    /// `tracks.len()` the moment [`Muxer::write_header`] closes `add_stream`.
+    first_packet_seen: Vec<bool>,
     trailer_written: bool,
     /// Absolute byte offset of `Segment`'s eight-octet size field.
     segment_size_at: u64,
@@ -431,6 +476,9 @@ impl MatroskaMuxer {
             out: IoWriter::new(sink, &IoOptions::default())?,
             tracks: Vec::new(),
             header_written: false,
+            header_flushed: false,
+            pending_packets: Vec::new(),
+            first_packet_seen: Vec::new(),
             trailer_written: false,
             segment_size_at: 0,
             segment_data_start: 0,
@@ -891,6 +939,216 @@ impl MatroskaMuxer {
         }
         write_element(el::CUES, &with_crc32(&body))
     }
+
+    /// The real, one-time `write_header` body: everything up to and
+    /// including the first `Cluster`'s worth of framing is fixed once this
+    /// returns. Called lazily — see `pending_packets`' field docs for why —
+    /// either by `write_packet` once every track has produced its first
+    /// packet, or by `write_trailer` as the pathological-case fallback.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] naming a track whose codec needs an
+    /// out-of-band Configuration Record (`codec::requires_extradata_str`)
+    /// and still has none at this point — the point after which Matroska has
+    /// no mechanism left to supply one (see that function's own docs).
+    /// Refusing here is what turns the FFV1 bug this module's docs describe
+    /// into a loud error instead of a silently corrupt file for any codec
+    /// that still cannot answer, rather than fixing FFV1 alone and leaving
+    /// the same silent failure for the next one.
+    fn flush_header_bytes(&mut self) -> Result<()> {
+        for t in &self.tracks {
+            if codec::requires_extradata_str(t.codec_id)
+                && t.extradata.as_ref().is_none_or(Vec::is_empty)
+            {
+                return Err(Error::Unsupported(
+                    "matroska: this codec needs an out-of-band configuration record and none \
+                     was produced (the encoder never attached one, and the container was not \
+                     told one directly)",
+                ));
+            }
+        }
+        self.header_flushed = true;
+
+        self.out.write(&self.ebml_header_bytes())?;
+
+        self.out.write(&id_bytes(el::SEGMENT))?;
+        self.segment_size_at = self.out.pos();
+        self.out.write(&vint_unknown(8))?;
+        self.segment_data_start = self.out.pos();
+
+        let seekable = self.out.is_seekable();
+        let info = self.info_bytes(seekable.then_some(0));
+        // `Info` starts right after the fixed `SeekHead` reservation — see
+        // `info_start`'s field docs for why `write_trailer` needs this to
+        // rewrite the whole element rather than patching one field.
+        self.info_start = seekable.then_some(self.segment_data_start + SEEKHEAD_RESERVED_BYTES);
+        let tracks = self.tracks_bytes();
+        let chapters = self.chapters_bytes();
+        let attachments = self.attachments_bytes();
+        let tags = self.tags_bytes();
+
+        // `Info`, `Tracks`, `Chapters` and `Attachments` (whichever exist)
+        // sit back-to-back right after the fixed `SeekHead` reservation, in
+        // this same order — so their positions are fully known before any of
+        // them is written. `Tags` is deliberately not indexed yet: see below.
+        let mut pos = SEEKHEAD_RESERVED_BYTES;
+        let mut targets = vec![(el::INFO, pos)];
+        pos += info.len() as u64;
+        targets.push((el::TRACKS, pos));
+        pos += tracks.len() as u64;
+        if let Some(c) = &chapters {
+            targets.push((el::CHAPTERS, pos));
+            pos += c.len() as u64;
+        }
+        if let Some(a) = &attachments {
+            targets.push((el::ATTACHMENTS, pos));
+            pos += a.len() as u64;
+        }
+        if tags.is_some() {
+            targets.push((el::TAGS, pos));
+        }
+        self.seek_targets = targets;
+
+        // `Cues`' position is not known until `write_trailer` (after every
+        // `Cluster`), so it has no entry yet. A seekable sink rewrites this
+        // same reservation there once it does; a non-seekable one commits to
+        // this `SeekHead` as final — see the module docs.
+        if let Some(region) = seekhead_and_void(&self.seek_targets) {
+            self.out.write(&region)?;
+            self.seekhead_reserved = true;
+        }
+
+        self.out.write(&info)?;
+        self.out.write(&tracks)?;
+        if let Some(chapters) = chapters {
+            self.out.write(&chapters)?;
+        }
+        if let Some(attachments) = attachments {
+            self.out.write(&attachments)?;
+        }
+        if let Some(tags) = tags {
+            self.out.write(&tags)?;
+        }
+        Ok(())
+    }
+
+    /// Copy a packet's [`PacketSideData::NewExtradata`], if it carries one,
+    /// into its track's own `extradata` — the same fix `vaco-mux-mp4`'s
+    /// `adopt_new_extradata` applies for `moov`. Harmless once
+    /// `header_flushed` is already true: Matroska has nothing left to patch
+    /// at that point, so this just updates state nothing reads again.
+    fn adopt_new_extradata(&mut self, idx: usize, packet: &Packet) {
+        let Some(new_extradata) = packet.side_data.iter().find_map(|sd| match sd {
+            PacketSideData::NewExtradata(buf) => Some(buf.as_slice().to_vec()),
+            _ => None,
+        }) else {
+            return;
+        };
+        let Some(track) = self.tracks.get_mut(idx) else {
+            return;
+        };
+        if track.extradata.as_deref() != Some(new_extradata.as_slice()) {
+            track.extradata = Some(new_extradata);
+        }
+    }
+
+    /// The actual `Cluster`/`Block` write, once the header is committed
+    /// (`header_flushed`). Split out of [`Muxer::write_packet`] so that
+    /// method can buffer instead when it is not.
+    fn write_block(&mut self, idx: usize, packet: &Packet) -> Result<()> {
+        let ts = packet.pts.ticks().unwrap_or(0);
+        // Matroska has no decode timestamp of its own (CONFORMANCE-FINDINGS
+        // 37) — `dts` is read only to fall back to it when `pts` is absent.
+        let _dts = packet.dts.ticks().unwrap_or(ts);
+        let is_key = packet.is_key();
+
+        // Decide whether the current cluster can still hold this block:
+        // reset when there is none yet, when a video keyframe should start a
+        // fresh one, when the elapsed time is past the cap, or when the
+        // relative timestamp would not fit the signed 16-bit field.
+        let track_is_video = self.tracks.get(idx).is_some_and(|t| t.is_video);
+        let needs_new_cluster = match &self.cluster {
+            None => true,
+            Some(c) => {
+                (track_is_video && is_key)
+                    || ts.saturating_sub(c.start_ticks) > self.max_cluster_ms
+                    || i16::try_from(ts.saturating_sub(c.start_ticks)).is_err()
+            }
+        };
+        if needs_new_cluster {
+            self.flush_cluster()?;
+            self.cluster_starts.push(self.out.pos());
+            self.cluster = Some(Cluster {
+                start_ticks: ts,
+                body: Vec::new(),
+                byte_pos: self.out.pos(),
+                keyframe_opened: track_is_video && is_key,
+            });
+        }
+
+        let Some(cluster) = self.cluster.as_mut() else {
+            return Err(Error::InvalidData("matroska: no open cluster"));
+        };
+        let rel_ts = ts.saturating_sub(cluster.start_ticks);
+
+        // `Packet::duration` is always microseconds (see `vaco_core::Duration`),
+        // independent of the stream's time base, so it is converted to
+        // `TimestampScale` ticks (1 tick == 1 ms, fixed in `info_bytes`)
+        // directly rather than through the packet-timestamp rescale chain.
+        // `ZERO` is also the field's default for "not stated", so it is
+        // treated as absent rather than as a real zero-length block.
+        let duration_ticks: Option<i64> = if packet.duration == vaco_core::Duration::ZERO {
+            None
+        } else {
+            packet.duration.to_ticks(Rational::new(1, 1000))
+        };
+        let track = self.tracks.get_mut(idx).ok_or(Error::InvalidData(
+            "matroska: packet names an unknown stream",
+        ))?;
+        #[allow(
+            clippy::integer_division,
+            reason = "converting a nanosecond count to whole TimestampScale ticks is an exact \
+                      unit change, not a ratio computation"
+        )]
+        let default_duration_ticks = track
+            .default_duration_ns
+            .map(|ns| i64::try_from(ns / 1_000_000).unwrap_or(i64::MAX));
+        let needs_duration = duration_ticks.is_some() && duration_ticks != default_duration_ticks;
+
+        // Reordering alone does **not** call for a `BlockGroup`. It reads like
+        // it should — `SimpleBlock` cannot carry a `ReferenceBlock`, and a
+        // B-frame plainly references other frames — but Matroska has no notion
+        // of a decode timestamp at all: a block's timestamp is its presentation
+        // time and decode order is file order, so there is nothing for a
+        // `ReferenceBlock` to state that the format does not already imply.
+        //
+        // Measured on `ffmpeg -c copy -f matroska`, remuxing reordered H.264
+        // (and again with AAC alongside it): **every** block is a
+        // `SimpleBlock` — 125 of them in the first cluster, zero
+        // `BlockGroup`s. We wrote 94 `BlockGroup`s and 31 `SimpleBlock`s for
+        // the same input, which cost 1697 bytes across two clusters and, worse,
+        // dropped the keyframe flag on every frame it wrapped, since a
+        // `BlockGroup` states keyframe-ness only by the *absence* of a
+        // `ReferenceBlock` (CONFORMANCE-FINDINGS 37).
+        let block_bytes = if needs_duration {
+            block::block_group(
+                track.number,
+                rel_ts,
+                packet.payload(),
+                duration_ticks.map(|d| u64::try_from(d).unwrap_or(0)),
+                None,
+            )?
+        } else {
+            block::simple_block(track.number, rel_ts, is_key, packet.payload())?
+        };
+        cluster.body.extend_from_slice(&block_bytes);
+
+        let end_ticks = ts.saturating_add(duration_ticks.unwrap_or(0)).max(0);
+        self.max_end_ticks = self
+            .max_end_ticks
+            .max(u64::try_from(end_ticks).unwrap_or(0));
+        Ok(())
+    }
 }
 
 impl Muxer for MatroskaMuxer {
@@ -995,67 +1253,10 @@ impl Muxer for MatroskaMuxer {
             return Err(Error::Unsupported("matroska: no streams to mux"));
         }
         self.header_written = true;
-
-        self.out.write(&self.ebml_header_bytes())?;
-
-        self.out.write(&id_bytes(el::SEGMENT))?;
-        self.segment_size_at = self.out.pos();
-        self.out.write(&vint_unknown(8))?;
-        self.segment_data_start = self.out.pos();
-
-        let seekable = self.out.is_seekable();
-        let info = self.info_bytes(seekable.then_some(0));
-        // `Info` starts right after the fixed `SeekHead` reservation — see
-        // `info_start`'s field docs for why `write_trailer` needs this to
-        // rewrite the whole element rather than patching one field.
-        self.info_start = seekable.then_some(self.segment_data_start + SEEKHEAD_RESERVED_BYTES);
-        let tracks = self.tracks_bytes();
-        let chapters = self.chapters_bytes();
-        let attachments = self.attachments_bytes();
-        let tags = self.tags_bytes();
-
-        // `Info`, `Tracks`, `Chapters` and `Attachments` (whichever exist)
-        // sit back-to-back right after the fixed `SeekHead` reservation, in
-        // this same order — so their positions are fully known before any of
-        // them is written. `Tags` is deliberately not indexed yet: see below.
-        let mut pos = SEEKHEAD_RESERVED_BYTES;
-        let mut targets = vec![(el::INFO, pos)];
-        pos += info.len() as u64;
-        targets.push((el::TRACKS, pos));
-        pos += tracks.len() as u64;
-        if let Some(c) = &chapters {
-            targets.push((el::CHAPTERS, pos));
-            pos += c.len() as u64;
-        }
-        if let Some(a) = &attachments {
-            targets.push((el::ATTACHMENTS, pos));
-            pos += a.len() as u64;
-        }
-        if tags.is_some() {
-            targets.push((el::TAGS, pos));
-        }
-        self.seek_targets = targets;
-
-        // `Cues`' position is not known until `write_trailer` (after every
-        // `Cluster`), so it has no entry yet. A seekable sink rewrites this
-        // same reservation there once it does; a non-seekable one commits to
-        // this `SeekHead` as final — see the module docs.
-        if let Some(region) = seekhead_and_void(&self.seek_targets) {
-            self.out.write(&region)?;
-            self.seekhead_reserved = true;
-        }
-
-        self.out.write(&info)?;
-        self.out.write(&tracks)?;
-        if let Some(chapters) = chapters {
-            self.out.write(&chapters)?;
-        }
-        if let Some(attachments) = attachments {
-            self.out.write(&attachments)?;
-        }
-        if let Some(tags) = tags {
-            self.out.write(&tags)?;
-        }
+        // The actual `Segment`/`Tracks` bytes are deliberately not written
+        // here — see `pending_packets`' field docs. `first_packet_seen` is
+        // what `write_packet` polls to know when it is safe to commit.
+        self.first_packet_seen = vec![false; self.tracks.len()];
         Ok(())
     }
 
@@ -1072,98 +1273,29 @@ impl Muxer for MatroskaMuxer {
                 "matroska: packet names an unknown stream",
             ))?;
 
-        let ts = packet.pts.ticks().unwrap_or(0);
-        // Matroska has no decode timestamp of its own (CONFORMANCE-FINDINGS
-        // 37) — `dts` is read only to fall back to it when `pts` is absent.
-        let _dts = packet.dts.ticks().unwrap_or(ts);
-        let is_key = packet.is_key();
-
-        // Decide whether the current cluster can still hold this block:
-        // reset when there is none yet, when a video keyframe should start a
-        // fresh one, when the elapsed time is past the cap, or when the
-        // relative timestamp would not fit the signed 16-bit field.
-        let track_is_video = self.tracks.get(idx).is_some_and(|t| t.is_video);
-        let needs_new_cluster = match &self.cluster {
-            None => true,
-            Some(c) => {
-                (track_is_video && is_key)
-                    || ts.saturating_sub(c.start_ticks) > self.max_cluster_ms
-                    || i16::try_from(ts.saturating_sub(c.start_ticks)).is_err()
+        if !self.header_flushed {
+            self.adopt_new_extradata(idx, packet);
+            if let Some(seen) = self.first_packet_seen.get_mut(idx) {
+                *seen = true;
             }
-        };
-        if needs_new_cluster {
-            self.flush_cluster()?;
-            self.cluster_starts.push(self.out.pos());
-            self.cluster = Some(Cluster {
-                start_ticks: ts,
-                body: Vec::new(),
-                byte_pos: self.out.pos(),
-                keyframe_opened: track_is_video && is_key,
-            });
+            self.pending_packets.push(packet.clone());
+            if self.first_packet_seen.iter().all(|&seen| seen) {
+                self.flush_header_bytes()?;
+                let pending = core::mem::take(&mut self.pending_packets);
+                for p in pending {
+                    let pidx = usize::try_from(p.stream_index)
+                        .ok()
+                        .filter(|&i| i < self.tracks.len())
+                        .ok_or(Error::InvalidData(
+                            "matroska: packet names an unknown stream",
+                        ))?;
+                    self.write_block(pidx, &p)?;
+                }
+            }
+            return Ok(());
         }
 
-        let Some(cluster) = self.cluster.as_mut() else {
-            return Err(Error::InvalidData("matroska: no open cluster"));
-        };
-        let rel_ts = ts.saturating_sub(cluster.start_ticks);
-
-        // `Packet::duration` is always microseconds (see `vaco_core::Duration`),
-        // independent of the stream's time base, so it is converted to
-        // `TimestampScale` ticks (1 tick == 1 ms, fixed in `info_bytes`)
-        // directly rather than through the packet-timestamp rescale chain.
-        // `ZERO` is also the field's default for "not stated", so it is
-        // treated as absent rather than as a real zero-length block.
-        let duration_ticks: Option<i64> = if packet.duration == vaco_core::Duration::ZERO {
-            None
-        } else {
-            packet.duration.to_ticks(Rational::new(1, 1000))
-        };
-        let track = self.tracks.get_mut(idx).ok_or(Error::InvalidData(
-            "matroska: packet names an unknown stream",
-        ))?;
-        #[allow(
-            clippy::integer_division,
-            reason = "converting a nanosecond count to whole TimestampScale ticks is an exact \
-                      unit change, not a ratio computation"
-        )]
-        let default_duration_ticks = track
-            .default_duration_ns
-            .map(|ns| i64::try_from(ns / 1_000_000).unwrap_or(i64::MAX));
-        let needs_duration = duration_ticks.is_some() && duration_ticks != default_duration_ticks;
-
-        // Reordering alone does **not** call for a `BlockGroup`. It reads like
-        // it should — `SimpleBlock` cannot carry a `ReferenceBlock`, and a
-        // B-frame plainly references other frames — but Matroska has no notion
-        // of a decode timestamp at all: a block's timestamp is its presentation
-        // time and decode order is file order, so there is nothing for a
-        // `ReferenceBlock` to state that the format does not already imply.
-        //
-        // Measured on `ffmpeg -c copy -f matroska`, remuxing reordered H.264
-        // (and again with AAC alongside it): **every** block is a
-        // `SimpleBlock` — 125 of them in the first cluster, zero
-        // `BlockGroup`s. We wrote 94 `BlockGroup`s and 31 `SimpleBlock`s for
-        // the same input, which cost 1697 bytes across two clusters and, worse,
-        // dropped the keyframe flag on every frame it wrapped, since a
-        // `BlockGroup` states keyframe-ness only by the *absence* of a
-        // `ReferenceBlock` (CONFORMANCE-FINDINGS 37).
-        let block_bytes = if needs_duration {
-            block::block_group(
-                track.number,
-                rel_ts,
-                packet.payload(),
-                duration_ticks.map(|d| u64::try_from(d).unwrap_or(0)),
-                None,
-            )?
-        } else {
-            block::simple_block(track.number, rel_ts, is_key, packet.payload())?
-        };
-        cluster.body.extend_from_slice(&block_bytes);
-
-        let end_ticks = ts.saturating_add(duration_ticks.unwrap_or(0)).max(0);
-        self.max_end_ticks = self
-            .max_end_ticks
-            .max(u64::try_from(end_ticks).unwrap_or(0));
-        Ok(())
+        self.write_block(idx, packet)
     }
 
     fn stream_time_base(&self, _stream_index: u32) -> Option<Rational> {
@@ -1183,6 +1315,27 @@ impl Muxer for MatroskaMuxer {
             return Err(Error::InvalidData("matroska: trailer written twice"));
         }
         self.trailer_written = true;
+
+        // Safety net for `pending_packets`' deferred flush: reached whenever
+        // some declared track never produced a single packet (an empty
+        // stream, or a file with zero packets at all) — `write_packet` alone
+        // would then wait forever for a first packet that is never coming.
+        // Whatever extradata every track has by now (its `add_stream`-time
+        // value, or an adopted `NewExtradata` from a track that *did*
+        // produce at least one packet) is final.
+        if !self.header_flushed {
+            self.flush_header_bytes()?;
+            let pending = core::mem::take(&mut self.pending_packets);
+            for p in pending {
+                let pidx = usize::try_from(p.stream_index)
+                    .ok()
+                    .filter(|&i| i < self.tracks.len())
+                    .ok_or(Error::InvalidData(
+                        "matroska: packet names an unknown stream",
+                    ))?;
+                self.write_block(pidx, &p)?;
+            }
+        }
 
         self.flush_cluster()?;
 
@@ -1279,12 +1432,25 @@ mod tests {
         p
     }
 
+    /// `OpusHead`, mono, `pre_skip` 312, input rate 48000 — the same 19
+    /// bytes `vaco-mux-ogg`'s own roundtrip test measured against `ffmpeg
+    /// -c:a libopus`, reused here rather than re-measured (D19).
+    const OPUS_HEAD: &[u8] = &[
+        b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', 0x01, 0x01, 0x38, 0x01, 0x80, 0xBB, 0x00,
+        0x00, 0x00, 0x00, 0x00,
+    ];
+
     fn opus_params() -> CodecParameters {
         let mut p = CodecParameters::audio().with_codec(CodecId::Opus);
         p.audio = Some(AudioParameters {
             sample_rate: 48000,
             ..AudioParameters::default()
         });
+        // `A_OPUS` is one of `codec::requires_extradata_str`'s entries: a
+        // real `OpusHead` here, not fixture noise — see
+        // `matroska_refuses_to_finalize_a_track_that_needs_extradata_and_has_none`
+        // for the case this constructor deliberately does not cover.
+        p.extradata = Some(OPUS_HEAD.to_vec());
         p
     }
 
@@ -1378,6 +1544,81 @@ mod tests {
         mux.write_trailer().unwrap();
         let bytes = buf.snapshot();
         assert!(bytes.windows(4).any(|w| w == [1, 2, 3, 4]));
+    }
+
+    /// The FFV1 bug, reproduced with no codec crate at all: `add_stream` is
+    /// handed a stale (wrong-codec) configuration record — exactly what
+    /// `CodecParameters::with_codec` used to leave behind before its own fix
+    /// — and the first packet on that stream attaches the *real* one as
+    /// [`PacketSideData::NewExtradata`], the way `Ffv1Encoder` (and every
+    /// other encoder whose configuration record depends on data only the
+    /// first frame reveals) does.
+    ///
+    /// `CodecPrivate` in the finished file must be the adopted bytes, not
+    /// the stale `add_stream`-time ones — the header commit has to have
+    /// waited for this packet before writing `Tracks` at all.
+    #[test]
+    fn a_stream_first_packet_can_still_correct_codec_private() {
+        let s = MemorySink::new();
+        let buf = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let mut p = h264_params();
+        p.extradata = Some(vec![0xDE, 0xAD, 0xBE, 0xEF]); // the "stale" record
+        let idx = mux.add_stream(&p).unwrap();
+        mux.write_header().unwrap();
+
+        let mut first = pkt(idx, 0, true);
+        let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::strict());
+        let real = vaco_pool::Buffer::from_slice(&mut budget, &[1, 2, 3, 4]).unwrap();
+        first.set_side_data(PacketSideData::NewExtradata(real));
+        mux.write_packet(&first).unwrap();
+        mux.write_packet(&pkt(idx, 1, false)).unwrap();
+        mux.write_trailer().unwrap();
+
+        let bytes = buf.snapshot();
+        assert!(
+            bytes.windows(4).any(|w| w == [1, 2, 3, 4]),
+            "the adopted NewExtradata must reach CodecPrivate"
+        );
+        assert!(
+            !bytes.windows(4).any(|w| w == [0xDE, 0xAD, 0xBE, 0xEF]),
+            "the stale add_stream-time extradata must not survive into the file"
+        );
+    }
+
+    /// The other half of the fix: a codec `codec::requires_extradata_str`
+    /// says needs an out-of-band record must not silently finish a file
+    /// with none — that is exactly how the FFV1 bug this module's docs
+    /// describe produced a file `ffprobe`/`ffmpeg` could not open while
+    /// `vaco` itself exited 0.
+    #[test]
+    fn matroska_refuses_to_finalize_a_track_that_needs_extradata_and_has_none() {
+        let s = MemorySink::new();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let mut p = h264_params();
+        p.extradata = None; // never supplied, and no packet will offer one either
+        let idx = mux.add_stream(&p).unwrap();
+        mux.write_header().unwrap();
+
+        // The lone stream's first packet is what would normally trigger the
+        // deferred header flush; here it must surface the missing-record
+        // error instead of writing a `Tracks` element with an empty
+        // `CodecPrivate`.
+        assert!(mux.write_packet(&pkt(idx, 0, true)).is_err());
+    }
+
+    /// The pathological path through the same rule: a track that never
+    /// produces a single packet is only caught at `write_trailer`'s own
+    /// safety-net flush, not left to silently finish the file.
+    #[test]
+    fn a_trailer_with_no_packets_still_refuses_a_missing_required_record() {
+        let s = MemorySink::new();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let mut p = h264_params();
+        p.extradata = None;
+        mux.add_stream(&p).unwrap();
+        mux.write_header().unwrap();
+        assert!(mux.write_trailer().is_err());
     }
 
     #[test]
