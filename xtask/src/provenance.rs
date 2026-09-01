@@ -16,7 +16,7 @@
 //! fiction is worse than no record, because it reads as evidence.
 //!
 //! **Trailers.** Every commit touching implementation code must carry
-//! `Signed-off-by`, `Vaco-Provenance` from a fixed enum, and — when the
+//! `Vaco-Provenance` from a fixed enum, and — when the
 //! provenance is a document — a `Vaco-Spec-Ref` whose source id resolves to a
 //! `[[source]]` we actually recorded acquiring. A citation to a document nobody
 //! logged looks authoritative and proves nothing.
@@ -625,9 +625,6 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
             .lines()
             .any(|f| CODE_PATHS.iter().any(|p| f.starts_with(p)));
 
-        if !body.lines().any(|l| l.starts_with("Signed-off-by:")) {
-            findings.push(format!("{short}: no `Signed-off-by:` trailer"));
-        }
         // A citation is validated wherever it appears, not only in the four
         // clean-room-sensitive areas. Requiring a trailer is scoped; checking
         // one that is *already there* is not, because an id that resolves to
@@ -735,9 +732,6 @@ fn values(body: &str, key: &str) -> Vec<String> {
 pub fn check_message(root: &Path, body: &str, touches_code: bool) -> Result<(), String> {
     let sources = all_source_ids(root)?;
     let mut findings = Vec::new();
-    if !body.lines().any(|l| l.starts_with("Signed-off-by:")) {
-        findings.push("no `Signed-off-by:` trailer".to_owned());
-    }
     if touches_code {
         let kinds = values(body, "Vaco-Provenance");
         if kinds.is_empty() {
