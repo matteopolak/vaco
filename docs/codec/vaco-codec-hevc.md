@@ -1242,6 +1242,33 @@ each cannot express this bug at all: both stay under the ceiling for the
 whole clip, which is exactly why the previous pass's real, correct fix for
 the *other* `Budget::release` gap read as complete once those two passed.
 
+## Row-wise data movement (`PERF-PROGRAMME.md` B1), landed
+
+The first profile ever taken of this decoder found 31.3% of decode spent
+moving samples one bounds-checked `u16` (or `i32`) at a time, in five
+functions with no arithmetic in them at all: `write_inter_cu_no_residual`'s
+`Plane::set` (9.32%), `sao::Snapshot::capture`'s `Plane::get` (8.08%),
+`sao::offset_block` (5.35%), `decoder::emit_pocs`'s `u16 -> u8` blit
+(5.11%), `ctu::build_cu_prediction`'s `i32` blit (3.48%). `framebuf::Plane`
+now exposes `row`/`row_mut`/`mark_row_ready`/`clone_samples`, and each of
+those five call sites moves a whole row (or, for `Snapshot::capture`, the
+whole plane in one `copy_from_slice`) instead of one sample per bounds
+check — see `planning/E2E-GAPS.md` §24 for the measured before/after
+profile share, the interleaved A/B numbers (~1.22–1.29x on
+`hevc_{sd,720p,1080p,4k}.mp4`, CPU-seconds primary under heavy shared
+load), and a live account of a concurrent-agent commit mistake that briefly
+reverted and then correctly restored this change.
+
+`sao::offset_block` is the one function in the five that did not collapse
+to memcpy-class after this change: its per-sample cost is genuine
+arithmetic (the band or edge-offset computation §8.7.3 specifies), and the
+row-wise rewrite only amortises the *bounds check* across a row rather than
+eliminating the per-sample work itself. `Plane::set_i32` and
+`sao::Snapshot::get` are now dead (every caller reads/writes whole rows
+instead) and have been removed; if a future SAO change needs single-sample
+random access again, re-add them rather than reaching back to `get`/`set`
+in a loop that could be row-wise instead.
+
 ## Specification
 
 `itu-t-h265-202108` (ITU-T Rec. H.265 (08/2021)) and

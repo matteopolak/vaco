@@ -1584,3 +1584,114 @@ verifying byte-for-byte, which it did, before trusting the number.
 
 `vaco-codec-h264`, `vaco-codec-hevc`, the filter crates, `vaco-conformance`
 and the fuzz harnesses were not touched — outside this item's lane.
+
+## 24. HEVC B1 — row-wise copies replace five per-sample loops, 1.22–1.29x
+
+PERF-PROGRAMME.md's B1: the baseline's innermost-frame profile put 31.3% of
+HEVC decode in five per-sample, bounds-checked copy loops that touch no
+arithmetic at all — `write_inter_cu_no_residual`'s `Plane::set` (9.32%),
+`Snapshot::capture`'s `Plane::get` (8.08%), `sao::offset_block` (5.35%),
+`emit_pocs`'s `u16 -> u8` blit (5.11%), `build_cu_prediction`'s `i32` blit
+(3.48%). None of the five change what gets computed, only how many times a
+bounds check and an `Option` unwrap run to move it.
+
+### The change
+
+`crate::framebuf::Plane` grows `row`/`row_mut`/`mark_row_ready`/
+`clone_samples` (all safe slice operations — no `unsafe`, no
+`indexing_slicing`, `#![forbid(unsafe_code)]` untouched):
+
+- `sao::Snapshot::capture` is one `Budget`-charged `Plane::clone_samples`
+  call (a single `copy_from_slice` over the whole plane) instead of a
+  per-sample `Plane::get` loop. `Snapshot::get` and `Plane::set_i32` are now
+  dead and removed.
+- `ctu::blit` (one PU's `i32` prediction into its CU-sized buffer) and
+  `ctu::write_pred_block` (a CU's finished prediction into the picture) copy
+  or clamp-and-convert one row at a time via slices, instead of one
+  bounds-checked 2-D index per sample.
+- `decoder::blit` (the `u16` reconstruction plane into the `u8` output
+  `Frame` at emission) reads a whole plane row via the new `Plane::row`
+  instead of `Plane::get` per sample.
+- `sao::offset_block` fetches `Snapshot`/`Plane` rows once per row instead of
+  re-deriving the 2-D bounds check on every sample (three times per sample
+  for an edge-offset class: the sample itself plus its two neighbours), and
+  writes through `Plane::row_mut`/`Plane::mark_row_ready` instead of the old
+  `Plane::set_i32`.
+
+### Measured — interleaved A/B/ffmpeg, CPU-seconds primary (load average 12–21)
+
+Two `--release` binaries in private `--target-dir`s (`vaco-registry/patent-
+encumbered-hevc-decode`), HEAD `e79aed7` as baseline against this change as
+candidate, 10 interleaved rounds per fixture, wall clock and `resource
+.getrusage(RUSAGE_CHILDREN)` CPU-seconds both recorded (the shared
+machine's load average was 12–21 throughout the run, well past the ~8
+threshold `AGENT-CONSTRAINTS.md`/the plan's own protocol names for
+preferring CPU-seconds):
+
+| fixture | baseline CPU | candidate CPU | speedup | wins (of 10) |
+|---|---:|---:|---:|---:|
+| 640x480 | 0.485s | 0.376s | 1.29x | 10/10 |
+| 1280x720 | 1.442s | 1.155s | 1.25x | 8/10 |
+| 1920x1080 | 3.435s | 2.708s | 1.27x | 9/10 |
+| 3840x2160 | 9.414s | 7.737s | 1.22x | 10/10 |
+
+37/40 rounds favoured the candidate, and every fixture's median did.
+`hevc_4k`'s ratio (0.82 CPU / 0.81 wall) clears the item's own stop
+condition (≤ 0.85 median, ≥ 1.18x) with margin. Against a same-session
+`ffmpeg -threads 1` on the same fixtures, HEVC 4K decode moves from ~8.1x
+behind (baseline) to ~6.6x behind (candidate) — still short of the plan's
+~3–3.5x realistic target for the full B1–B3 sequence, as expected: B1 alone
+was never meant to close that gap.
+
+### Re-profiled: the copy share actually collapsed
+
+`samply` + `dsymutil` (`dist` profile) on the candidate at 4K, outermost
+physically-emitted frame, same convention as the baseline's own §9.2: the
+five named functions fell from a combined 31.3% to `write_inter_cu_no_
+residual` 2.72%, `sao::offset_block` 3.86%, `emit_pocs` 0.86%, and
+`Snapshot::capture`/`build_cu_prediction`'s own blit no longer registering
+in the top 30 at all (< 0.33% each) — roughly a 5x cut in absolute
+copy-bound time once the ~1.22–1.29x total speedup is accounted for.
+`sao::offset_block` is the one that did not collapse to memcpy-class: its
+cost is genuine per-sample arithmetic (the band/edge-offset computation),
+and row-wise fetching only amortised the *bounds check*, not the work
+itself — which is most of why the realised ~1.22–1.29x lands under the
+item's 1.36x ceiling (and its own ~1.32x "realistic" estimate) rather than
+at it.
+
+### Byte-exactness
+
+`ffmpeg -c:v libx265` with no `-x265-params` at all (the task's own
+correctness bar — deblocking, SAO, `cu_qp_delta` and weighted prediction
+are all in this path), piped through `shasum -a 256` on both sides, no raw
+dumps to disk: 322x242, **300x500 (partial CTU row *and* column)**,
+416x240, 640x480, 854x480, 1920x1080 and 3840x2160 with `mandelbrot`/`life`
+content (real motion and detail), plus the existing `hevc_{sd,720p,1080p,
+4k}.mp4` corpus. Baseline and candidate hash identically to `ffmpeg` and to
+each other on all eleven. `tests/oracle.rs::dense_content_is_byte_exact`
+and `tests/flat.rs` stay green.
+
+### A live lesson for B2–B4: this crate is not exclusively this lane's right now
+
+`AGENT-CONSTRAINTS.md`'s "one agent at a time in this crate" (the plan's own
+B1→B2→B3→B4 sequencing) did not hold during this pass: a concurrent agent
+landed `constrained_intra_pred_flag` support (`7191816`) while this item's
+`ctu.rs`/`decoder.rs` edits were live in the same working tree, and that
+agent's own `git commit -- ctu.rs intra_pred.rs` re-staged the *working
+tree's* content for `ctu.rs` — including this item's uncommitted
+`blit`/`write_pred_block` rewrite — rather than what it had actually
+reviewed and meant to commit. A third commit (`e79aed7`) caught the E0599
+break this caused (this item's `write_pred_block` called `Plane::row_mut`/
+`Plane::mark_row_ready`, which did not exist yet in the committed
+`framebuf.rs`) and reverted just those two functions, correctly leaving the
+`constrained_intra_pred_flag` fix alone. This item's own final commit
+re-applied `blit`/`write_pred_block` against the post-revert tree and
+landed cleanly. Nothing here was this item's own mistake, but the next
+agent into this lane should not assume exclusive ownership of
+`vaco-codec-hevc` just because the plan says so — verify `git log`/`git
+status` immediately before every pathspec commit, not once at the start of
+the session.
+
+`vaco-codec-h264`, the AAC/transform crates, the filter crates,
+`vaco-conformance` and the fuzz harnesses were not touched — outside this
+item's lane.
