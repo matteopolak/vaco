@@ -38,7 +38,13 @@ mode = "raw-exact"
 note = "documented gap: no fetchable entries yet, see vaco-corpus's vaco-media.lock header"
 
 [[suite]]
+name = "jvt-h264"
+codec = "h264"
+mode = "raw-exact"
+note = "JVT/AVCv1+FRExt conformance bitstreams (ITU wftp3 av-arch); 19-entry curated subset, differential against ffmpeg's own H.264 decode per D6 -- see tests/conformance/transcode/h264-jvt-conformance.toml and vaco-media.lock's jvt-h264 section header for exactly what was left out"
+
+[[suite]]
 name = "jctvc"
 codec = "hevc"
 mode = "raw-exact"
-note = "documented gap: no fetchable entries yet, see vaco-corpus's vaco-media.lock header (H.264 conformance streams share the same gap and the same JVT/JCT-VC origin)"
+note = "JCT-VC HEVC_v1 conformance bitstreams (ITU wftp3 av-arch); 46-entry curated subset, differential against ffmpeg's own HEVC decode per D6 -- see tests/conformance/transcode/hevc-jctvc-conformance.toml and vaco-media.lock's jctvc section header for exactly what was left out"

@@ -49,6 +49,15 @@ pub struct LockEntry {
     pub source: String,
     /// Fuzz targets / conformance suites this asset feeds.
     pub targets: Vec<String>,
+    /// The path *inside* the fetched asset a case should actually be pointed
+    /// at, when the asset is an archive rather than a usable file on its own
+    /// (a JVT/JCT-VC conformance ZIP holding a bitstream alongside a decoder
+    /// trace log and/or reference YUV this project has no use for). `None`
+    /// for every entry that is already the file a case wants — every
+    /// pre-existing suite (`pngsuite`, `vp8`/`vp9-test-vectors`,
+    /// `flac-test-files`) predates archive members and stays `None`.
+    /// [`crate::zip::extract`] is what actually reads this back out.
+    pub member: Option<String>,
 }
 
 impl LockEntry {
@@ -85,6 +94,7 @@ impl LockEntry {
                     .collect()
             })
             .unwrap_or_default();
+        let member = table.get("member").and_then(TomlValue::as_str).map(str::to_owned);
         Some(Self {
             name,
             suite,
@@ -94,6 +104,7 @@ impl LockEntry {
             license,
             source,
             targets,
+            member,
         })
     }
 
@@ -113,6 +124,9 @@ impl LockEntry {
         let _ = writeln!(out, "license = {}", toml_min::quote(&self.license));
         let _ = writeln!(out, "source = {}", toml_min::quote(&self.source));
         let _ = writeln!(out, "targets = {}", toml_min::quote_array(&self.targets));
+        if let Some(member) = &self.member {
+            let _ = writeln!(out, "member = {}", toml_min::quote(member));
+        }
         out.push('\n');
     }
 
@@ -226,6 +240,7 @@ mod tests {
                     license: "public domain (PngSuite)".to_owned(),
                     source: "canonical upstream, probed 2026-08-28".to_owned(),
                     targets: vec!["png_decode".to_owned()],
+                    member: None,
                 },
                 LockEntry {
                     name: "jctvc-not-yet-sourced".to_owned(),
@@ -236,6 +251,7 @@ mod tests {
                     license: "unknown".to_owned(),
                     source: "documented gap; no stable public single-file mirror found".to_owned(),
                     targets: vec![],
+                    member: None,
                 },
             ],
         }

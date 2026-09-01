@@ -52,10 +52,12 @@ pub mod lock;
 pub mod mutate;
 pub mod store;
 pub mod toml_min;
+pub mod zip;
 
 pub use fetch::{FetchError, NetworkPolicy};
 pub use lock::{LockEntry, MediaLock};
 pub use store::{ObjectId, Store, StoreError};
+pub use zip::ZipError;
 
 /// The `vaco-media.lock` shipped alongside this crate's own source, embedded
 /// at compile time so a caller never has to guess a path relative to the
@@ -109,15 +111,39 @@ mod tests {
             gaps.iter().any(|e| e.suite == "argon"),
             "argon should be a documented gap"
         );
-        assert!(
-            gaps.iter().any(|e| e.suite == "jctvc"),
-            "jctvc should be a documented gap"
-        );
         for gap in gaps {
             assert!(
                 !gap.source.is_empty(),
                 "{}: a gap entry must explain itself in `source`",
                 gap.name
+            );
+        }
+    }
+
+    /// `jctvc` (HEVC) and the newer `jvt-h264` suite were a documented gap
+    /// (no stable anonymous mirror found) until 2026-09-01, when the ITU
+    /// wftp3 archive turned out to be reachable anonymously after all — see
+    /// `vaco-media.lock`'s header CORRECTION. This is the inverse of the
+    /// gap check above: assert the resolved state directly, rather than
+    /// leaving a passing test that would go on passing the day the *next*
+    /// suite's gap is closed and say nothing about *this* one specifically
+    /// (AGENT-CONSTRAINTS's "never pin the absence of something the project
+    /// is building" — this is that lesson applied in the other direction:
+    /// pin the *presence* of what was actually built, not a vague "some
+    /// suite has fetchable entries").
+    #[test]
+    fn jvt_h264_and_jctvc_are_no_longer_documented_gaps() {
+        let lock = embedded_catalogue();
+        for suite in ["jvt-h264", "jctvc"] {
+            let entries: Vec<_> = lock.suite(suite).collect();
+            assert!(!entries.is_empty(), "{suite}: expected real entries");
+            assert!(
+                entries.iter().all(|e| e.is_fetchable()),
+                "{suite}: every registered entry should be fetchable now"
+            );
+            assert!(
+                entries.iter().all(|e| e.member.is_some()),
+                "{suite}: every entry is a ZIP and should name a `member`"
             );
         }
     }

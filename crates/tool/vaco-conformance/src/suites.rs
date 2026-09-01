@@ -227,6 +227,28 @@ mod tests {
     }
 
     #[test]
+    fn jvt_h264_and_jctvc_resolve_to_real_fetchable_entries() {
+        // These were both `argon`-shaped documented gaps until 2026-09-01 --
+        // see vaco-corpus's own `jvt_h264_and_jctvc_are_no_longer_documented_gaps`
+        // for the corpus-side half of this; this is the suite-catalogue half.
+        let suites = embedded_suites();
+        let lock = embedded_catalogue();
+        let resolved = resolve(&suites, &lock);
+        for name in ["jvt-h264", "jctvc"] {
+            let suite = resolved
+                .iter()
+                .find(|r| r.suite.name == name)
+                .expect("suites.toml declares this suite");
+            assert!(!suite.is_empty(), "{name}: expected entries");
+            assert_eq!(
+                suite.fetchable_count(),
+                suite.entries.len(),
+                "{name}: every registered entry should be fetchable"
+            );
+        }
+    }
+
+    #[test]
     fn missing_field_is_a_named_error() {
         let err = parse("[[suite]]\ncodec = \"x\"\nmode = \"raw-exact\"\n").unwrap_err();
         assert!(matches!(err, SuitesError::MissingField { .. }));

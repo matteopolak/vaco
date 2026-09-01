@@ -12,24 +12,38 @@
 # depends on the network) — see `tests/fetch_local_server.rs` for the
 # network-touching logic, which is exercised only against a loopback server.
 #
-# Disk budget: this file names ~207 KiB across 10 files, deliberately a
-# representative subset rather than a full mirror of any suite (see the
-# batch brief's "Disk" note). `vaco_corpus::fetch::fetch` only downloads an
-# entry the first time something asks for it by name, and only when
+# Disk budget: the original ten entries name ~207 KiB across 10 files. The
+# `jvt-h264`/`jctvc` sections added 2026-09-01 add a further ~37 MiB across 65
+# files, deliberately a representative subset rather than a full mirror of
+# either suite — see that section's own header comment for exactly what was
+# left out and why. `vaco_corpus::fetch::fetch` only downloads an entry the
+# first time something asks for it by name, and only when
 # VACO_CORPUS_NETWORK=1 — nothing here is fetched eagerly, including by CI.
 #
-# Two suites named in the work packages (Argon AV1 streams, JVT/JCT-VC
-# H.264/HEVC conformance) have NO entries below. Both were searched for a
-# stable, individually-addressable, publicly reachable single-file source
-# during this session and neither has one:
+# CORRECTION (2026-09-01): the paragraph below, written 2026-08-28, claimed
+# JVT/JCT-VC conformance bitstreams have no stable anonymous URL. That was
+# wrong — checked, not merely re-asserted (AGENT-CONSTRAINTS's "check a
+# recorded blocker before you accept it"): `https://www.itu.int/wftp3/av-arch/
+# jvt-site/draft_conformance/` and its JCT-VC equivalent under
+# `jctvc-site/bitstream_exchange/` serve a plain Apache directory listing over
+# HTTPS with no authentication, no registration and no cookie, and every file
+# in it is individually fetchable by URL. The H.264 side is in fact the
+# published electronic attachment to ITU-T Rec. H.264.1 (2010) — this
+# session cross-checked every downloaded AVCv1/FRExt zip's whole-file CRC32
+# against that Recommendation's own published file listing
+# (`00readme_H.264.1(2010).html` in the same directory) and all matched
+# exactly. See the `jvt-h264`/`jctvc` sections below for the resolved entries.
+# Argon remains an open gap (see its own row) — the wftp3 mirror does not
+# cover AV1, and no equivalent anonymous source was found for it this session.
+#
+# One suite named in the work packages (Argon AV1 streams) still has NO
+# fetchable entries below:
 #   - Argon streams are distributed under an arrangement with Argon Design
 #     Ltd rather than as a plain public bucket/repo of individual files.
-#   - JVT/JCT-VC conformance bitstreams are traditionally hosted behind an
-#     ITU-T/HHI FTP that expects registration, not a stable anonymous URL.
 # This is a named, documented gap (see AGENT-CONSTRAINTS's "ship when
 # demonstrably not broken... say what the deviation is"), not a silent one.
-# `suites.toml` in `vaco-conformance` marks both suites `status = "gap"` with
-# the same note. Revisit if a stable public mirror surfaces.
+# `suites.toml` in `vaco-conformance` marks `argon` `status = "gap"` with the
+# same note. Revisit if a stable public mirror surfaces.
 
 schema = 1
 
@@ -140,9 +154,762 @@ license = "unknown"
 source = "documented gap: Argon Design's AV1 conformance streams have no stable public single-file mirror found as of 2026-08-28; see this file's header comment"
 targets = []
 
+# The `jctvc` suite's gap row (H.264/HEVC, "no stable anonymous mirror") was
+# removed 2026-09-01 — resolved, see the header comment's CORRECTION. Its
+# real entries, and `jvt-h264`'s, follow below.
+
+# jvt-h264 / jctvc — added 2026-09-01. A curated, deliberately partial subset
+# of each suite chosen to maximise construct coverage per byte downloaded
+# rather than to approach either suite's full size (JVT's AVCv1+FRExt
+# directories alone are >1.5 GiB; JCT-VC's HEVC_v1 is smaller but still far
+# larger than what is registered here). ~37 MiB total across 65 zips.
+#
+# jvt-h264 (19 entries, AVCv1 + 2 small FRExt streams): baseline CAVLC/CABAC,
+# per-slice QP variation, multiple reference frames, no-long-term-reference,
+# access unit delimiters, field/frame coding switch, I_PCM macroblocks,
+# flexible macroblock ordering (slice groups), and two High-profile/8x8-
+# transform (FRExt) streams. Left out for size: every High-profile stream
+# with a companion reference YUV over ~2 MiB, the professional-profiles,
+# MVC and SVC extension directories entirely (out of this project's current
+# H.264 decoder scope), and every field/MBAFF stream whose zip exceeds a few
+# MiB (`cavlc_mot_*_full*.zip`, `Sharp_MP_*`) — MBAFF coverage here is
+# therefore field/frame-switching only (`CVFI1_SVA_C`), not true MBAFF.
+#
+# jctvc (46 entries, HEVC_v1): I_PCM, constrained intra prediction, merge/
+# parallel-merge, AMVP, deblocking, parameter-set edge cases (PS/VPSID/
+# VPSSPSPPS/CONFWIN), SAO, temporal scalability, motion-vector edge/clipping,
+# slices, residual quad-tree (RQT), reference picture sets/lists (RPS/RPLM),
+# POC, picture size changes, random-access/no-output-prior pictures, HRD,
+# entropy-coding edge cases (ENTP/MAXBINS — not registered, see below),
+# intra prediction, filler data, NAL unit type edge cases, and structural
+# edge cases (STRUCT/SLIST). Left out for size: every stream over ~350 KiB
+# (weighted prediction `WP_*`, wavefront parallel processing `WPP_*`, CABAC
+# initialisation `CAINIT_*`, tiles `TILES_*`, transform skip `TSKIP_*`,
+# 10-bit `Main10`/`TSUNEQBD_*`, delta-QP `DELTAQP_*`, long-term RPS
+# `LTRPSPS_*`, bumping/DPB `BUMPING_*`, adaptive MV prediction `AMP_{B,D,E,F}`
+# beyond the one `AMP_A` registered) — so **tiles, WPP, explicit weighted
+# prediction, 10-bit, and CABAC-initialisation-table stress cases are not
+# covered by this subset** even though the HEVC decoder may implement some
+# of them. `RExt`/`SCC`/`SHVC`/`MV-HEVC`/`3D-HEVC` (range extensions,
+# screen content, scalable/multiview/3D) are separate JCT-VC directories not
+# touched at all — out of scope for a HEVC v1 (Main/Main10) conformance pass.
+
+
+# ------------------------------------------------- jvt-h264 (AVCv1/FRExt)
+
 [[entry]]
-name = "jctvc-h264-hevc-not-yet-sourced"
+name = "jvt-h264-aud-mw-e"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/AUD_MW_E.zip"
+sha256 = "ecaed4a05d02c8ffc0ec7dd02a640f87ba9d9f8c2dab3273ef1d6da3d7f8568e"
+size = 3151402
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "AUD_MW_E.264"
+
+[[entry]]
+name = "jvt-h264-ba1-sony-d"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/BA1_Sony_D.zip"
+sha256 = "399eae2eb03f82fc291bdc4fe9cedd110b40a96368ffe1e1bcf9ff6436fa9df7"
+size = 1766668
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "BA1_Sony_D.jsv"
+
+[[entry]]
+name = "jvt-h264-ba3-sva-c"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/BA3_SVA_C.zip"
+sha256 = "1c7003ff7b4507204f50e0b279149fd183c0890ee2a12c4c2d008db387299b82"
+size = 1003253
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "BA3_SVA_C.264"
+
+[[entry]]
+name = "jvt-h264-basqp1-sony-c"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/BASQP1_Sony_C.zip"
+sha256 = "f7cdbfaee43ff2e88b78d0b41ddcde83ac5148867e7b7df1759d97e0294f6c19"
+size = 455642
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "BASQP1_Sony_C.jsv"
+
+[[entry]]
+name = "jvt-h264-caba1-sva-b"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/CABA1_SVA_B.zip"
+sha256 = "d0cf94006df2319a6c98683a6013f85ea5a1c0d382c796523b751c263e8c8989"
+size = 960760
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "CABA1_SVA_B.264"
+
+[[entry]]
+name = "jvt-h264-caba2-sva-b"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/CABA2_SVA_B.zip"
+sha256 = "68c700914c0926b5dcb75ef3fe601a3434c1de3af6c4906a3573baf9998752db"
+size = 570686
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "CABA2_SVA_B.264"
+
+[[entry]]
+name = "jvt-h264-caba3-sva-b"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/CABA3_SVA_B.zip"
+sha256 = "375996d3de61bf6f7a58f48c46a477804636d118fe743501eef48c04fb3993cf"
+size = 1031801
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "CABA3_SVA_B.264"
+
+[[entry]]
+name = "jvt-h264-canl1-sva-b"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/CANL1_SVA_B.zip"
+sha256 = "2f364e4ff117f9fce0b55ae417f2f5ee992d6e4042e207eed0a212b71580ae27"
+size = 882999
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "CANL1_SVA_B.264"
+
+[[entry]]
+name = "jvt-h264-canl3-sva-b"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/CANL3_SVA_B.zip"
+sha256 = "2398eca7b8da95820ccb025b37c1103d8abd9f9a06eb45ccc3b9704ab1f2ff2e"
+size = 560673
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "CANL3_SVA_B.264"
+
+[[entry]]
+name = "jvt-h264-canl4-sva-b"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/CANL4_SVA_B.zip"
+sha256 = "a19e259438917a68f026de4045eff25d2dfe416c081d215bca40901214617cab"
+size = 1013612
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "CANL4_SVA_B.264"
+
+[[entry]]
+name = "jvt-h264-cvfi1-sva-c"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/CVFI1_SVA_C.zip"
+sha256 = "3f3da0c2ae0400e9549af1bea567ee0833db3141d39b2d10e7612f8c246029de"
+size = 4113132
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "CVFI1_SVA_C.264"
+
+[[entry]]
+name = "jvt-h264-cvpcmnl2-sva-c"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/CVPCMNL2_SVA_C.zip"
+sha256 = "90b0574aa7d02f8b250c4997b78fd4f112983fd3eb9eb7c12df6d5b7560ceb1d"
+size = 6069874
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "CVPCMNL2_SVA_C.264"
+
+[[entry]]
+name = "jvt-h264-fm2-sva-c"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/FM2_SVA_C.zip"
+sha256 = "7e27a8776c70e47e4b4441809a6ec23c8a62e1a06eea364a6407839fc8650d4f"
+size = 649199
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "FM2_SVA_C.264"
+
+[[entry]]
+name = "jvt-h264-hcafr1-hhi-c"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/FRExt/HCAFR1_HHI_C.zip"
+sha256 = "d0d83d03aef6065715c0f91d1b31a6c445c1d4ae58aac2505f856a1a54962f94"
+size = 837502
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "HCAFR1_HHI.264"
+
+[[entry]]
+name = "jvt-h264-mr1-bt-a"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/MR1_BT_A.zip"
+sha256 = "a76d4e199e6ffb27292d1a07c516e5adea251e63e3f756de490c153b23d4684d"
+size = 1714616
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "MR1_BT_A.h264"
+
+[[entry]]
+name = "jvt-h264-nl3-sva-e"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/NL3_SVA_E.zip"
+sha256 = "09d7a3fcf430e0635b55bc4308c56842863cdc1d52cc3e3ec6014487d13c1977"
+size = 1088627
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "NL3_SVA_E.264"
+
+[[entry]]
+name = "jvt-h264-sl1-sva-b"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/SL1_SVA_B.zip"
+sha256 = "60d61046c3aee6b9aa6b3dd4fad4081be9c959affec2bd641808632edffed1b2"
+size = 1014020
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "SL1_SVA_B.264"
+
+[[entry]]
+name = "jvt-h264-sva-cl1-e"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/AVCv1/SVA_CL1_E.zip"
+sha256 = "636098f10f2cdc80e31451b198c688bcc868fe536707c46ce2e0eaf54a33fa98"
+size = 1615501
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "SVA_CL1_E.264"
+
+[[entry]]
+name = "jvt-h264-frext1-panasonic-d"
+suite = "jvt-h264"
+url = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/FRExt/FRExt1_Panasonic_D.zip"
+sha256 = "832ea7fae6fe6296c3f0377585a24cb3bf73fbfb51a3adbd852cf571a95ae16d"
+size = 1324147
+license = "ITU-T Rec. H.264.1 (2010) electronic attachment (JVT draft_conformance archive); ITU-T conformance bitstream, free for conformance-testing use"
+source = "ITU wftp3 av-arch JVT site, fetched 2026-09-01; whole-zip CRC32 cross-checked against the published H.264.1 (2010) file listing"
+targets = ["h264_decode"]
+member = "FRExt1_Panasonic.avc"
+
+# ------------------------------------------------- jctvc (HEVC_v1)
+
+[[entry]]
+name = "jctvc-hevc-amp-a-samsung-7"
 suite = "jctvc"
-license = "unknown"
-source = "documented gap: JVT/JCT-VC conformance bitstreams are traditionally distributed via an ITU-T/HHI FTP requiring registration; no stable anonymous single-file mirror found as of 2026-08-28; see this file's header comment"
-targets = []
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/AMP_A_Samsung_7.zip"
+sha256 = "3b8c7e4f77759351893470d87cd5c8252146ae19523786510914a9e8d5c7e340"
+size = 266095
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "AMP_A_Samsung_7.bin"
+
+[[entry]]
+name = "jctvc-hevc-amvp-a-mtk-4"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/AMVP_A_MTK_4.zip"
+sha256 = "b89aa3d113bdff9aff61d4c190b9035155db44a9c9b08b5a40df89fde2e6a2c7"
+size = 18585
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "AMVP_A_MTK_4/AMVP_A_MTK_4.bit"
+
+[[entry]]
+name = "jctvc-hevc-amvp-b-mtk-4"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/AMVP_B_MTK_4.zip"
+sha256 = "7d062666643f319d419a6d133656eba7a774a667f1e1245dea764e030cdfe04a"
+size = 24723
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "AMVP_B_MTK_4/AMVP_B_MTK_4.bit"
+
+[[entry]]
+name = "jctvc-hevc-cip-a-panasonic-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/CIP_A_Panasonic_3.zip"
+sha256 = "5c55b3594e5c951c9f5312913961750283eb2dadd15844fe35f9beb94a9a548c"
+size = 17895
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "CIP_A_Panasonic_3/CIP_A_Panasonic_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-confwin-a-sony-1"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/CONFWIN_A_Sony_1.zip"
+sha256 = "c3c823ffb9e526f5d9506ba2f1239b1f0323572850789230d762f4e4678fc298"
+size = 284207
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "CONFWIN_A_Sony_1/CONFWIN_A_Sony_1.bit"
+
+[[entry]]
+name = "jctvc-hevc-dblk-d-vixs-2"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/DBLK_D_VIXS_2.zip"
+sha256 = "1b9c3dec3685760cac19fd8667510b34fdeaaccfb5b137803ea859233a2bdd7e"
+size = 17420
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "DBLK_D_VIXS_2/DBLK_D_VIXS_2.bit"
+
+[[entry]]
+name = "jctvc-hevc-dblk-e-vixs-2"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/DBLK_E_VIXS_2.zip"
+sha256 = "5415d67db3d190bf363825ef2f259bbbc635551f94ced6f8cf965ff8d72b285b"
+size = 27438
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "DBLK_E_VIXS_2/DBLK_E_VIXS_2.bit"
+
+[[entry]]
+name = "jctvc-hevc-dblk-f-vixs-2"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/DBLK_F_VIXS_2.zip"
+sha256 = "8f62f346aaf0716162c5ca4c85b3e213a0104d666680f620f81d92be676ca5aa"
+size = 27444
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "DBLK_F_VIXS_2/DBLK_F_VIXS_2.bit"
+
+[[entry]]
+name = "jctvc-hevc-dblk-g-vixs-2"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/DBLK_G_VIXS_2.zip"
+sha256 = "f87570664f9e0b88a843ea545dd8909584dd1bb31ce121e00aba9ee609a12675"
+size = 27437
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "DBLK_G_VIXS_2/DBLK_G_VIXS_2.bit"
+
+[[entry]]
+name = "jctvc-hevc-entp-c-qualcomm-1"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/ENTP_C_Qualcomm_1.zip"
+sha256 = "6cfdfe2f6ba8e1a860909550e5a486e7bf712fed00674869f45c1d82d05833f5"
+size = 219316
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "ENTP_C_Qualcomm_1.bit"
+
+[[entry]]
+name = "jctvc-hevc-filler-a-sony-1"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/FILLER_A_Sony_1.zip"
+sha256 = "abf6cd7525378d2e1c8f32b67af01c594553c342c21dcd36ab677c3c77b528db"
+size = 284359
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "FILLER_A_Sony_1/FILLER_A_Sony_1.bit"
+
+[[entry]]
+name = "jctvc-hevc-hrd-a-fujitsu-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/HRD_A_Fujitsu_3.zip"
+sha256 = "7241c304d8326ae182ae245b83eb4f95e299d0f4fe254e0e8844c56ee5d37aee"
+size = 147331
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "HRD_A_Fujitsu_3.bin"
+
+[[entry]]
+name = "jctvc-hevc-initqp-a-sony-1"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/INITQP_A_Sony_1.zip"
+sha256 = "38b1d9396bab068fa701b08db73c3a900e893ef4cd00c82fc7b4d2b150a2f749"
+size = 289519
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "INITQP_A_Sony_1/INITQP_A_Sony_1.bit"
+
+[[entry]]
+name = "jctvc-hevc-ipred-c-mitsubishi-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/IPRED_C_Mitsubishi_3.zip"
+sha256 = "0121352acf8ee0a90c1a61de2c621368b6199e1344d13c5a8cca7d219c8a44ac"
+size = 258524
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "IPRED_C_Mitsubishi_3/IPRED_C_Mitsubishi_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-merge-a-ti-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/MERGE_A_TI_3.zip"
+sha256 = "b38d58301c0a8bd41ce982e40552850eabe9f140d2ff6ceca3375f9f5abc8a65"
+size = 16967
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "MERGE_A_TI_3/MERGE_A_TI_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-merge-b-ti-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/MERGE_B_TI_3.zip"
+sha256 = "3caadff6efe206a4916fc77b00dee960a4abf7c0c318bc74567e978990ad6f4a"
+size = 16676
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "MERGE_B_TI_3/MERGE_B_TI_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-merge-c-ti-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/MERGE_C_TI_3.zip"
+sha256 = "8eb22636f0df729f172e86bd76c9dacb1baf5e1732ec82b70163479150c4eaf8"
+size = 16588
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "MERGE_C_TI_3/MERGE_C_TI_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-merge-d-ti-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/MERGE_D_TI_3.zip"
+sha256 = "210a72652b522927306daf64c536b503bce3e96136a9174f737edbb0796e461e"
+size = 16599
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "MERGE_D_TI_3/MERGE_D_TI_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-merge-e-ti-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/MERGE_E_TI_3.zip"
+sha256 = "e993282028a10dd1acb2acf2ef288cf722a45afdf6f38be2e14aa4ac4e2c9313"
+size = 16563
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "MERGE_E_TI_3/MERGE_E_TI_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-mvclip-a-qualcomm-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/MVCLIP_A_qualcomm_3.zip"
+sha256 = "59362bb9db5ead0245ec7ff1e40d2ddd80eb81d03bb5cceb6d4a971210888221"
+size = 100255
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "MVCLIP_A_qualcomm_3/MVCLIP_A_qualcomm_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-mvedge-a-qualcomm-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/MVEDGE_A_qualcomm_3.zip"
+sha256 = "077887906b30e89aec88d09ff99e549fa1c99067a4f66a264a0ef03fd5f57f5e"
+size = 52420
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "MVEDGE_A_qualcomm_3/MVEDGE_A_qualcomm_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-nut-a-ericsson-5"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/NUT_A_ericsson_5.zip"
+sha256 = "caabf3005c37b5ad7497b110f30f04ffb603fc154250058edc23da95b7c73d88"
+size = 302365
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "NUT_A_ericsson_5.bit"
+
+[[entry]]
+name = "jctvc-hevc-nooutprior-a-qualcomm-1"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/NoOutPrior_A_Qualcomm_1.zip"
+sha256 = "f1d17de98fc0d69bc28793f74d5b31c5c113ba2c72983bfad03413459b95a07f"
+size = 140200
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "NoOutPrior_A_Qualcomm_1.bit"
+
+[[entry]]
+name = "jctvc-hevc-picsize-d-bossen-1"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/PICSIZE_D_Bossen_1.zip"
+sha256 = "bb63815e8817b5a58aefaf235a7b144b3664e4cc3b4f7b7807a9371222356f67"
+size = 77220
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "PICSIZE_D_Bossen_1/PICSIZE_D_Bossen_1.bin"
+
+[[entry]]
+name = "jctvc-hevc-pmerge-a-ti-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/PMERGE_A_TI_3.zip"
+sha256 = "7d3c8f4c07c56b2f3ac943f8d93b4f68f6ef8f6f4b5ce9df6967f1162c596dfe"
+size = 16580
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "PMERGE_A_TI_3/PMERGE_A_TI_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-pmerge-b-ti-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/PMERGE_B_TI_3.zip"
+sha256 = "9e50bf7b5b04a143dfecb216010c5f7f5d1af62c787d0f93715ec69deff3f1c3"
+size = 16628
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "PMERGE_B_TI_3/PMERGE_B_TI_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-poc-a-bossen-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/POC_A_Bossen_3.zip"
+sha256 = "aec93a088b81d68d87eda99e4a0e64bed7012b571158c8a2242223d1f9db8ccd"
+size = 86243
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "POC_A_Bossen_3/POC_A_Bossen_3.bin"
+
+[[entry]]
+name = "jctvc-hevc-ps-b-vidyo-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/PS_B_VIDYO_3.zip"
+sha256 = "df6adc3d47b8c2b80404f5b892b2f24071731be97a1ea4604205f6a914cd9ba7"
+size = 18766
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "PS_B_VIDYO_3/PS_B_VIDYO_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-rplm-a-qualcomm-4"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/RPLM_A_qualcomm_4.zip"
+sha256 = "d085cf26bc0e2f903071cdf2c2aae04c1ea6dc19628004c402ed19a1a32beb58"
+size = 204287
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "RPLM_A_qualcomm_4/RPLM_A_qualcomm_4.bit"
+
+[[entry]]
+name = "jctvc-hevc-rps-a-docomo-5"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/RPS_A_docomo_5.zip"
+sha256 = "45427f66400a033e7a47cc6ca9b21d456e9e06450db6ca8d8fa92c438125324b"
+size = 66960
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "RPS_A_docomo_5.bit"
+
+[[entry]]
+name = "jctvc-hevc-rqt-a-hhi-4"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/RQT_A_HHI_4.zip"
+sha256 = "958d958baedbe4f2c864f5d9b3b87e69884170db403b4e190d1d33a0490ec3c6"
+size = 67173
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "RQT_A_HHI_4/RQT_A_HHI_4.bit"
+
+[[entry]]
+name = "jctvc-hevc-sao-a-mediatek-4"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/SAO_A_MediaTek_4.zip"
+sha256 = "e0b5c8f4ab4fb592971f06469db630d9e7ef72b4d37d729604e2fdaa9df706c9"
+size = 52930
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "SAO_A_MediaTek_4.bit"
+
+[[entry]]
+name = "jctvc-hevc-sao-g-canon-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/SAO_G_Canon_3.zip"
+sha256 = "7a7566dcf043a9adf6007b1d15182d82d998566e243c8f64bec76917653923e2"
+size = 24604
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "SAO_G_Canon_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-slices-a-rovi-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/SLICES_A_Rovi_3.zip"
+sha256 = "d0141e111c1c854930eb16430cc5d3e5b82ccfa1458805fce20dd410b08c61ad"
+size = 65113
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "SLICES_A_Rovi_3.bin"
+
+[[entry]]
+name = "jctvc-hevc-slist-c-sony-4"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/SLIST_C_Sony_4.zip"
+sha256 = "0af7bda8eae57ab56e96e6d9796c5dbe449036229fd177657147eb5ee6be1369"
+size = 333156
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "SLIST_C_Sony_4/SLIST_C_Sony_4.bin"
+
+[[entry]]
+name = "jctvc-hevc-slpplp-a-vidyo-2"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/SLPPLP_A_VIDYO_2.zip"
+sha256 = "05e36c3313678556e498cfeb3c4f3f73786f9608b8cd3c8b79ddf65c1ee42b4f"
+size = 23627
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "SLPPLP_A_VIDYO_2/SLPPLP_A_VIDYO_2.bit"
+
+[[entry]]
+name = "jctvc-hevc-struct-a-samsung-7"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/STRUCT_A_Samsung_7.zip"
+sha256 = "56a83b66b9e20dbfb20b196797c8136a9c19d3df39d4c1142e0b96e0159b617b"
+size = 319768
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "STRUCT_A_Samsung_7.bin"
+
+[[entry]]
+name = "jctvc-hevc-tscl-a-vidyo-5"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/TSCL_A_VIDYO_5.zip"
+sha256 = "987ff999aac9b3c9828763b9aeb67a393ef32dede683356f2702f2686c905313"
+size = 48346
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "TSCL_A_VIDYO_5/TSCL_A_VIDYO_5.bit"
+
+[[entry]]
+name = "jctvc-hevc-vpsid-a-vidyo-2"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/VPSID_A_VIDYO_2.zip"
+sha256 = "c7fe4e7c81b22146930b3840cf11eef02d8da4328ea2428d9107d8dd53dd75aa"
+size = 25106
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "VPSID_A_VIDYO_2/VPSID_A_VIDYO_2.bit"
+
+[[entry]]
+name = "jctvc-hevc-vpsspspps-a-mainconcept-1"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/VPSSPSPPS_A_MainConcept_1.zip"
+sha256 = "fcbe56da7f4fcf1d870736ddf4ce0a3d572f53f78d418e49b5adc376e1cb04df"
+size = 99927
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "VPSSPSPPS_A_MainConcept_1.bin"
+
+[[entry]]
+name = "jctvc-hevc-cip-b-nec-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/cip_B_NEC_3.zip"
+sha256 = "47dfb7ef2b81bb10a0bb5330138211770d179e1ad58af984294cef2518d85187"
+size = 14003
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "cip_B_NEC_3/cip_B_NEC_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-ipcm-a-nec-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/ipcm_A_NEC_3.zip"
+sha256 = "89a71f4b9b7e22c481378f83bacc5aac6c8f204999691d3fa21f2804337e84c9"
+size = 6037
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "ipcm_A_NEC_3/ipcm_A_NEC_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-ipcm-b-nec-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/ipcm_B_NEC_3.zip"
+sha256 = "36486e9b9cf21ccdd2f1c49cfd6e2806915b732b84e94940553ef501fd197ce6"
+size = 6557
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "ipcm_B_NEC_3/ipcm_B_NEC_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-ipcm-c-nec-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/ipcm_C_NEC_3.zip"
+sha256 = "12da972f8fcf2d75825535022b7a437d95b1c8272af0b738dc651f34e94c2175"
+size = 6795
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "ipcm_C_NEC_3/ipcm_C_NEC_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-ipcm-d-nec-3"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/ipcm_D_NEC_3.zip"
+sha256 = "4ef6cdc8fd330d339e1e9e9e04487ba84a21e40a02d111b2ee10c28549bddc94"
+size = 6767
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "ipcm_D_NEC_3/ipcm_D_NEC_3.bit"
+
+[[entry]]
+name = "jctvc-hevc-ipcm-e-nec-2"
+suite = "jctvc"
+url = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/ipcm_E_NEC_2.zip"
+sha256 = "1d6f8f5d1f08c9bc3f12179bcd6b28a56a7e18500f2c1dfd9799d8b407e78607"
+size = 6408
+license = "JCT-VC HEVC (H.265) conformance bitstream (draft_conformance/HEVC_v1); ITU-T/ISO-IEC standards-development conformance material, free for conformance-testing use"
+source = "ITU wftp3 av-arch JCT-VC site, fetched 2026-09-01"
+targets = ["hevc_decode"]
+member = "ipcm_E_NEC_2/ipcm_E_NEC_2.bit"

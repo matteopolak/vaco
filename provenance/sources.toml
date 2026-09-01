@@ -1290,3 +1290,29 @@ kind     = "spec"
 title    = "JM (H.264/AVC reference software), JM 19.1, source/app/ldecod/{biaridecod.c,loop_filter_normal.c,macroblock.c,cabac.c}: the CABAC arithmetic engine's own biari_decode_symbol/biari_decode_final and arideco_bits_read (used as an independent bin-by-bin and bit-position oracle for the CABAC end_of_slice_flag desync question), and source/app/ldecod/loop_filter.h's own ALPHA_TABLE/BETA_TABLE/CLIP_TAB (Table 8-16/8-17, clause 8.7.2.2) checked entry by entry against vaco-codec-dsp-deblock's own transcription -- alpha/beta matched, tC0 was wrong in 23 of 52 rows and is corrected from this source; get_strength_ver/get_strength_hor's own non-MBAFF boundary-strength derivation (clause 8.7.2.1's general Table 8-18 case, collapsed to this decoder's single-reference-list P-slice scope). Also read for #419/#420's follow-on Intra_8x8/8x8-transform work (High profile), whose primary source (this crate's own iso-iec-14496-10-2002-draft, provenance/vaco-codec-h264.toml) predates the 8x8 transform entirely: source/app/ldecod/{intra8x8_pred_normal.c} for the nine Intra_8x8 prediction modes and the clause-8.3.2.2.1 reference-sample low-pass filter; {quant.h,quant.c} for the LevelScale8x8 fixed matrix (dequant_coef8) and the qp_per/qp_rem dequantisation shift, algebraically reduced to the crate's own LEVEL_SCALE8X8_V/dequant_8x8; {macroblock.h}'s SNGL_SCAN8x8 for the 8x8 zig-zag scan (coordinate-swapped, cross-checked against the crate's own already-verified 4x4 table's common prefix); {cabac.c}'s pos2ctx_map8x8/pos2ctx_last8x8 (ctxBlockCat 5's significant_coeff_flag/last_significant_coeff_flag position-to-context remap) and lib/lcommon/ctx_tables.h's INIT_MAP/INIT_LAST/INIT_ONE/INIT_ABS/INIT_BCBP/INIT_TRANSFORM_SIZE (row index 2, LUMA_8x8) for that category's and transform_size_8x8_flag's own CABAC context-initialisation tables, cross-checked by confirming this same header's row 0/row 5 exactly reproduce this crate's own already-primary-text-verified LumaDc/Luma4x4 tables. ISO/IEC and ITU-T copyright, disclaimer.txt/COPYRIGHT_ISO_IEC.txt grant free use for reference purposes — Tier A per planning/AGENT-CONSTRAINTS.md's clean-room section (explicitly named there as the natural instrumented oracle for this exact question); read and locally instrumented for vaco-codec-h264's own CABAC-desync, P-slice-deblocking, and Intra_8x8/8x8-transform work, never FFmpeg's own H.264 decoder (Tier B, not opened)."
 acquired = "2026-08-29"
 where    = "https://vcgit.hhi.fraunhofer.de/jvet/JM"
+
+# ------------------------------------------------------ conformance corpora
+#
+# Not documents that inform code -- no `[[table]]` cites either of these, and
+# none should: they are standards-body test *data*, registered here per the
+# same "register what you download, with origin and licence" rule HM/JM get
+# above, for QA-04/QA-09 (#180/#181) and the JVT/JCT-VC conformance bring-up
+# (#427/#442). The actual per-file inventory (URL, sha256, size, licence,
+# archive member) lives in `crates/tool/vaco-corpus/vaco-media.lock`'s
+# `jvt-h264`/`jctvc` sections, addressed by content hash per D19 (one
+# definition per concept) -- these two rows are the citable acquisition
+# record for the *archive as a whole*, the same relationship HM/JM's own
+# rows above have to the per-clause citations that use them.
+[[source]]
+id       = "jvt-h264-conformance-archive"
+kind     = "blackbox"
+title    = "JVT draft conformance bitstreams for H.264/AVC (AVCv1 + FRExt), ITU wftp3 av-arch archive. The AVCv1 subset is the published electronic attachment to ITU-T Rec. H.264.1 (2010), \"Conformance specification for H.264 advanced video coding\" -- confirmed by cross-checking every downloaded zip's whole-file CRC32 against that Recommendation's own published file listing (00readme_H.264.1(2010).html, same directory), all of which matched exactly. Publicly served over HTTPS with no authentication or registration -- the prior record in vaco-corpus's vaco-media.lock claiming otherwise (2026-08-28) was checked and found wrong (2026-09-01), see that file's header CORRECTION. Tier A per D6/AGENT-CONSTRAINTS: standards-body conformance material, not FFmpeg/libav/x264 output -- these bitstreams are fed to both `vaco` and the reference `ffmpeg` binary as differential-test input, never read as a document, and no code or table is transcribed from them."
+acquired = "2026-09-01"
+where    = "https://www.itu.int/wftp3/av-arch/jvt-site/draft_conformance/"
+
+[[source]]
+id       = "jctvc-hevc-conformance-archive"
+kind     = "blackbox"
+title    = "JCT-VC draft conformance bitstreams for H.265/HEVC (HEVC_v1, Main profile subset registered here), ITU wftp3 av-arch archive -- the JCT-VC counterpart to jvt-h264-conformance-archive above, same origin site, same anonymous-HTTPS access, same correction to the prior (wrong) 2026-08-28 record. Tier A per D6/AGENT-CONSTRAINTS for the same reason: fed to both `vaco` and the reference `ffmpeg` binary as differential-test input, never read as a document."
+acquired = "2026-09-01"
+where    = "https://www.itu.int/wftp3/av-arch/jctvc-site/bitstream_exchange/draft_conformance/HEVC_v1/"

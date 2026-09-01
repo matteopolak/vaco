@@ -1,0 +1,266 @@
+# JCT-VC (H.265/HEVC) draft conformance bring-up (#442, T3-02n).
+#
+# Same methodology as `h264-jvt-conformance.toml` in this directory --
+# differential against the reference `ffmpeg`'s own HEVC decode (D6), every
+# case wraps its raw Annex-B elementary bitstream (`.bit`/`.bin`, as shipped
+# by the JCT-VC HEVC_v1 archives) in an MP4 via the reference's own `-c copy`
+# first, for the same measured reason: `vaco`'s raw-elementary-stream demux
+# path assigns no packet timestamps, which is a demux-layer gap outside this
+# crate, not a codec defect -- see the H.264 manifest's header for the full
+# explanation and the byte-identical hand-verification this rests on.
+#
+# Tier `full` (nightly) for the same reason: corpus fetch needs
+# `VACO_CORPUS_NETWORK=1` explicitly, which `smoke`/`core` do not set. Run
+# with:
+# `VACO_CORPUS_NETWORK=1 vaco-conformance run --suite jctvc-conformance --tier full`.
+#
+# What this subset leaves out: see vaco-corpus's `vaco-media.lock`, the
+# `jctvc` section header.
+
+schema = 1
+suite  = "jctvc-conformance"
+tool   = "transcode"
+tier   = "full"
+owner  = "@correctness-owner"
+
+
+[[media]]
+id       = "amp-a-samsung-7"
+source   = "generated://amp-a-samsung-7.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-amp-a-samsung-7}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "amvp-a-mtk-4"
+source   = "generated://amvp-a-mtk-4.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-amvp-a-mtk-4}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "amvp-b-mtk-4"
+source   = "generated://amvp-b-mtk-4.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-amvp-b-mtk-4}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "cip-a-panasonic-3"
+source   = "generated://cip-a-panasonic-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-cip-a-panasonic-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "confwin-a-sony-1"
+source   = "generated://confwin-a-sony-1.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-confwin-a-sony-1}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "dblk-d-vixs-2"
+source   = "generated://dblk-d-vixs-2.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-dblk-d-vixs-2}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "dblk-e-vixs-2"
+source   = "generated://dblk-e-vixs-2.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-dblk-e-vixs-2}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "dblk-f-vixs-2"
+source   = "generated://dblk-f-vixs-2.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-dblk-f-vixs-2}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "dblk-g-vixs-2"
+source   = "generated://dblk-g-vixs-2.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-dblk-g-vixs-2}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "entp-c-qualcomm-1"
+source   = "generated://entp-c-qualcomm-1.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-entp-c-qualcomm-1}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "filler-a-sony-1"
+source   = "generated://filler-a-sony-1.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-filler-a-sony-1}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "hrd-a-fujitsu-3"
+source   = "generated://hrd-a-fujitsu-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-hrd-a-fujitsu-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "initqp-a-sony-1"
+source   = "generated://initqp-a-sony-1.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-initqp-a-sony-1}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "ipred-c-mitsubishi-3"
+source   = "generated://ipred-c-mitsubishi-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-ipred-c-mitsubishi-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "merge-a-ti-3"
+source   = "generated://merge-a-ti-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-merge-a-ti-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "merge-b-ti-3"
+source   = "generated://merge-b-ti-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-merge-b-ti-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "merge-c-ti-3"
+source   = "generated://merge-c-ti-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-merge-c-ti-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "merge-d-ti-3"
+source   = "generated://merge-d-ti-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-merge-d-ti-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "merge-e-ti-3"
+source   = "generated://merge-e-ti-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-merge-e-ti-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "mvclip-a-qualcomm-3"
+source   = "generated://mvclip-a-qualcomm-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-mvclip-a-qualcomm-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "mvedge-a-qualcomm-3"
+source   = "generated://mvedge-a-qualcomm-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-mvedge-a-qualcomm-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "nut-a-ericsson-5"
+source   = "generated://nut-a-ericsson-5.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-nut-a-ericsson-5}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "nooutprior-a-qualcomm-1"
+source   = "generated://nooutprior-a-qualcomm-1.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-nooutprior-a-qualcomm-1}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "picsize-d-bossen-1"
+source   = "generated://picsize-d-bossen-1.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-picsize-d-bossen-1}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "pmerge-a-ti-3"
+source   = "generated://pmerge-a-ti-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-pmerge-a-ti-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "pmerge-b-ti-3"
+source   = "generated://pmerge-b-ti-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-pmerge-b-ti-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "poc-a-bossen-3"
+source   = "generated://poc-a-bossen-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-poc-a-bossen-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "ps-b-vidyo-3"
+source   = "generated://ps-b-vidyo-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-ps-b-vidyo-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "rplm-a-qualcomm-4"
+source   = "generated://rplm-a-qualcomm-4.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-rplm-a-qualcomm-4}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "rps-a-docomo-5"
+source   = "generated://rps-a-docomo-5.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-rps-a-docomo-5}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "rqt-a-hhi-4"
+source   = "generated://rqt-a-hhi-4.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-rqt-a-hhi-4}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "sao-a-mediatek-4"
+source   = "generated://sao-a-mediatek-4.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-sao-a-mediatek-4}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "sao-g-canon-3"
+source   = "generated://sao-g-canon-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-sao-g-canon-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "slices-a-rovi-3"
+source   = "generated://slices-a-rovi-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-slices-a-rovi-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "slist-c-sony-4"
+source   = "generated://slist-c-sony-4.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-slist-c-sony-4}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "slpplp-a-vidyo-2"
+source   = "generated://slpplp-a-vidyo-2.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-slpplp-a-vidyo-2}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "struct-a-samsung-7"
+source   = "generated://struct-a-samsung-7.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-struct-a-samsung-7}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "tscl-a-vidyo-5"
+source   = "generated://tscl-a-vidyo-5.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-tscl-a-vidyo-5}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "vpsid-a-vidyo-2"
+source   = "generated://vpsid-a-vidyo-2.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-vpsid-a-vidyo-2}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "vpsspspps-a-mainconcept-1"
+source   = "generated://vpsspspps-a-mainconcept-1.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-vpsspspps-a-mainconcept-1}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "cip-b-nec-3"
+source   = "generated://cip-b-nec-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-cip-b-nec-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "ipcm-a-nec-3"
+source   = "generated://ipcm-a-nec-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-ipcm-a-nec-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "ipcm-b-nec-3"
+source   = "generated://ipcm-b-nec-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-ipcm-b-nec-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "ipcm-c-nec-3"
+source   = "generated://ipcm-c-nec-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-ipcm-c-nec-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "ipcm-d-nec-3"
+source   = "generated://ipcm-d-nec-3.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-ipcm-d-nec-3}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "ipcm-e-nec-2"
+source   = "generated://ipcm-e-nec-2.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jctvc-hevc-ipcm-e-nec-2}", "-c", "copy", "-f", "mp4"]
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "yuv420p", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "60s"

@@ -1,0 +1,160 @@
+# JVT (H.264/AVC) draft conformance bring-up (#427, T3-01n).
+#
+# Differential against the reference `ffmpeg`'s own H.264 decode (D6), not
+# against JM's reference YUV -- this project's whole conformance/correctness
+# story already runs on "the reference binary is an oracle we query, never a
+# source we read" (see vaco-conformance's crate doc), and JM 19.1 stays
+# available as a Tier A cross-check for triaging a divergence, not as this
+# harness's plumbing.
+#
+# # Why every case remuxes into MP4 first
+#
+# Every entry here is a raw Annex-B H.264 elementary stream (that is what the
+# JVT AVCv1/FRExt archives actually contain -- `.264`/`.jsv`/`.h264`/`.avc`,
+# no container). Measured directly: `vaco`'s transcode pipeline currently
+# requires every packet reaching its filtering stage to carry a timestamp,
+# and its raw-elementary-stream demuxer assigns none (`ffprobe` reports the
+# same file's real frame rate; `vaco-probe`'s equivalent reports "0 fps, 0
+# tbr" for it), so a direct `-i foo.264` run of `vaco` fails with "this
+# container needs timestamps and the packet has none" before a single frame
+# reaches the codec under test -- not a decoder defect, a demux-layer gap
+# outside this crate's ownership (flagged separately). `generate` here wraps
+# each corpus bitstream in an MP4 via the reference's own `-c copy` (which
+# touches container framing only -- zero NAL bytes change) before either
+# side ever decodes it. Hand-verified on `jvt-h264-canl1-sva-b`: the direct
+# elementary-stream reference decode and the MP4-wrapped `vaco` decode are
+# byte-identical, so this sidesteps the gap without weakening what is under
+# test.
+#
+# # Why raw-exact, not frame-hash
+#
+# `frame-hash` (C3/framemd5) is a declared seam in `crate::compare` -- not
+# implemented yet. `raw-exact` against the reference's own decode of the
+# same MP4 is available today and is the same methodology this project
+# already uses for vp8/vp9-test-vectors (see suites.toml).
+#
+# # Tier
+#
+# `full` (nightly): fetching the corpus needs `VACO_CORPUS_NETWORK=1`, which
+# this project's `smoke`/`core` runs do not set (network is opt-in, see
+# vaco-corpus's own `NetworkPolicy`) -- `full` is the first tier where that
+# is expected to be true. Run explicitly with:
+# `VACO_CORPUS_NETWORK=1 vaco-conformance run --suite jvt-h264-conformance --tier full`.
+#
+# # What this subset leaves out
+#
+# See vaco-corpus's `vaco-media.lock`, the `jvt-h264` section header, for
+# exactly what was left out for disk/bandwidth reasons and why.
+
+schema = 1
+suite  = "jvt-h264-conformance"
+tool   = "transcode"
+tier   = "full"
+owner  = "@correctness-owner"
+
+
+[[media]]
+id       = "aud-mw-e"
+source   = "generated://aud-mw-e.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-aud-mw-e}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "ba1-sony-d"
+source   = "generated://ba1-sony-d.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-ba1-sony-d}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "ba3-sva-c"
+source   = "generated://ba3-sva-c.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-ba3-sva-c}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "basqp1-sony-c"
+source   = "generated://basqp1-sony-c.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-basqp1-sony-c}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "caba1-sva-b"
+source   = "generated://caba1-sva-b.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-caba1-sva-b}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "caba2-sva-b"
+source   = "generated://caba2-sva-b.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-caba2-sva-b}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "caba3-sva-b"
+source   = "generated://caba3-sva-b.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-caba3-sva-b}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "canl1-sva-b"
+source   = "generated://canl1-sva-b.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-canl1-sva-b}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "canl3-sva-b"
+source   = "generated://canl3-sva-b.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-canl3-sva-b}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "canl4-sva-b"
+source   = "generated://canl4-sva-b.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-canl4-sva-b}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "cvfi1-sva-c"
+source   = "generated://cvfi1-sva-c.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-cvfi1-sva-c}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "cvpcmnl2-sva-c"
+source   = "generated://cvpcmnl2-sva-c.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-cvpcmnl2-sva-c}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "fm2-sva-c"
+source   = "generated://fm2-sva-c.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-fm2-sva-c}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "hcafr1-hhi-c"
+source   = "generated://hcafr1-hhi-c.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-hcafr1-hhi-c}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "mr1-bt-a"
+source   = "generated://mr1-bt-a.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-mr1-bt-a}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "nl3-sva-e"
+source   = "generated://nl3-sva-e.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-nl3-sva-e}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "sl1-sva-b"
+source   = "generated://sl1-sva-b.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-sl1-sva-b}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "sva-cl1-e"
+source   = "generated://sva-cl1-e.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-sva-cl1-e}", "-c", "copy", "-f", "mp4"]
+
+[[media]]
+id       = "frext1-panasonic-d"
+source   = "generated://frext1-panasonic-d.mp4"
+generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-frext1-panasonic-d}", "-c", "copy", "-f", "mp4"]
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "yuv420p", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "60s"

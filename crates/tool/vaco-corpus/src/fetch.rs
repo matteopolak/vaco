@@ -88,6 +88,9 @@ pub enum FetchError {
     Protocol(vaco_protocol_core::ProtocolError),
     Io(vaco_core::Error),
     Store(StoreError),
+    /// `entry.member` named a file [`crate::zip::extract`] could not pull out
+    /// of the fetched archive.
+    Zip(crate::zip::ZipError),
 }
 
 impl std::fmt::Display for FetchError {
@@ -107,6 +110,7 @@ impl std::fmt::Display for FetchError {
             Self::Protocol(e) => write!(f, "protocol error: {e}"),
             Self::Io(e) => write!(f, "I/O error: {e}"),
             Self::Store(e) => write!(f, "{e}"),
+            Self::Zip(e) => write!(f, "{e}"),
         }
     }
 }
@@ -127,6 +131,28 @@ fn http_only_registry() -> ProtocolRegistry {
     let mut registry = ProtocolRegistry::new();
     vaco_protocol_http::register(&mut registry);
     registry
+}
+
+/// [`fetch`], then — when `entry.member` names one — extract that path out
+/// of the fetched bytes as a ZIP archive member ([`crate::zip::extract`]).
+///
+/// This is the entry point a conformance case actually wants: `entry` names
+/// the *archive* (a JVT/JCT-VC conformance ZIP), verified and cached whole
+/// by content hash exactly like every other corpus asset, while `member`
+/// says which file inside it is the bitstream a case should be pointed at.
+/// An entry with no `member` behaves exactly like [`fetch`] — every
+/// pre-existing suite (`pngsuite`, `vp8`/`vp9-test-vectors`,
+/// `flac-test-files`) is a bare file, not an archive, and takes this branch.
+///
+/// # Errors
+/// [`FetchError`] as [`fetch`], plus [`FetchError::Zip`] if `entry.member`
+/// is set and the fetched bytes are not a well-formed ZIP containing it.
+pub fn fetch_asset(entry: &LockEntry, store: &Store, policy: NetworkPolicy) -> Result<Vec<u8>, FetchError> {
+    let bytes = fetch(entry, store, policy)?;
+    match &entry.member {
+        Some(member) => crate::zip::extract(&bytes, member).map_err(FetchError::Zip),
+        None => Ok(bytes),
+    }
 }
 
 /// Fetch one entry, using `store` as both the cache and the destination.
@@ -223,6 +249,7 @@ mod tests {
             license: "test".to_owned(),
             source: "test".to_owned(),
             targets: vec![],
+            member: None,
         }
     }
 

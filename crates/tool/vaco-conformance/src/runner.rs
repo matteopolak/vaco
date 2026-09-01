@@ -62,12 +62,15 @@ impl MediaCache {
         media: &crate::case::MediaRef,
         reference: &std::path::Path,
     ) -> Result<PathBuf, String> {
+        if let Some(name) = media.source.strip_prefix("corpus://") {
+            return self.corpus_path(name);
+        }
         let Some(argv) = &media.generate else {
             return Err(format!(
                 "media `{}`: source `{}` is not a path this build can resolve, and \
-                 the entry declares no `generate`. Corpus fetching is QA-04/X-05 \
-                 and does not exist yet; until it does, a suite must synthesise \
-                 its media with the reference.",
+                 the entry declares no `generate`. A `corpus://<name>` source needs a \
+                 matching entry in vaco-corpus's vaco-media.lock; anything else needs a \
+                 `generate` command the reference can synthesise it with.",
                 media.id, media.source
             ));
         };
@@ -85,7 +88,9 @@ impl MediaCache {
         let out = sub.join(media.file_name());
 
         let mut full: Vec<String> = vec!["-nostdin".into(), "-y".into(), "-hide_banner".into()];
-        full.extend(argv.iter().cloned());
+        for arg in argv {
+            full.push(self.resolve_corpus_tokens(arg)?);
+        }
         full.push(out.to_string_lossy().into_owned());
         let inv = Invocation::new(reference, full).with_timeout(Duration::from_secs(60));
         let obs = run(&inv).map_err(|e| format!("media `{}`: {e}", media.id))?;
@@ -105,6 +110,97 @@ impl MediaCache {
                 media.id
             ));
         }
+        self.built.borrow_mut().insert(key, out.clone());
+        Ok(out)
+    }
+
+    /// Replace every `{corpus:<name>}` token in `arg` with the on-disk path
+    /// [`MediaCache::corpus_path`] resolves `name` to.
+    ///
+    /// This is what lets a `generate` command remux a corpus bitstream
+    /// through the reference (`ffmpeg -i {corpus:jvt-h264-canl1-sva-b} -c
+    /// copy -f mp4 …`) instead of only ever synthesising media from
+    /// scratch. It exists because JVT/JCT-VC conformance bitstreams are raw
+    /// Annex-B elementary streams with no container-level timestamps, and
+    /// this project's transcode pipeline currently requires every packet
+    /// that reaches its filtering stage to carry one (see the case
+    /// authored against `h264_decode`/`hevc_decode` for the measured error
+    /// and why the fix belongs in a demux crate, not here). Wrapping the
+    /// *same bytes* in an MP4 via the reference's own `-c copy` (which
+    /// changes no NAL unit, only adds container timing) sidesteps that gap
+    /// without weakening what is actually under test: byte-for-byte NAL
+    /// data, still decoded by the codec under test either way — confirmed
+    /// by hand on `jvt-h264-canl1-sva-b`, whose direct-elementary-stream
+    /// reference decode and MP4-wrapped `vaco` decode are byte-identical.
+    ///
+    /// # Errors
+    /// As [`MediaCache::corpus_path`], plus an unterminated `{corpus:` token.
+    fn resolve_corpus_tokens(&self, arg: &str) -> Result<String, String> {
+        let mut out = arg.to_owned();
+        while let Some(start) = out.find("{corpus:") {
+            let end = out
+                .get(start..)
+                .and_then(|rest| rest.find('}'))
+                .map(|i| start + i)
+                .ok_or_else(|| format!("unterminated `{{corpus:` in {out:?}"))?;
+            let name = out
+                .get(start + "{corpus:".len()..end)
+                .ok_or_else(|| format!("malformed `{{corpus:...}}` token in {out:?}"))?
+                .to_owned();
+            let path = self.corpus_path(&name)?;
+            out.replace_range(start..=end, &path.to_string_lossy());
+        }
+        Ok(out)
+    }
+
+    /// Materialise a `corpus://<name>` media reference: look `name` up in
+    /// `vaco-corpus`'s own `vaco-media.lock` (embedded at compile time, same
+    /// as [`crate::suites::resolve`] already joins against), fetch it
+    /// through the shared content-addressed [`vaco_corpus::Store`] — a cache
+    /// hit never touches the network; a miss does only when
+    /// `VACO_CORPUS_NETWORK=1` (`vaco_corpus::NetworkPolicy::from_env`) —
+    /// and, when the entry names an archive `member` (every JVT/JCT-VC
+    /// conformance ZIP does), extract just that file rather than handing a
+    /// case a whole ZIP to open.
+    ///
+    /// # Errors
+    /// A message naming the corpus entry and what went wrong: not found in
+    /// the lock, not fetchable offline, a hash mismatch, or (for an archive
+    /// entry) a ZIP/member problem.
+    fn corpus_path(&self, name: &str) -> Result<PathBuf, String> {
+        let key = format!("corpus\u{1}{name}");
+        if let Some(hit) = self.built.borrow().get(&key) {
+            return Ok(hit.clone());
+        }
+        let lock = vaco_corpus::embedded_catalogue();
+        let entry = lock
+            .find(name)
+            .ok_or_else(|| format!("corpus entry `{name}` is not in vaco-corpus's vaco-media.lock"))?;
+        let store = vaco_corpus::Store::open_default();
+        let policy = vaco_corpus::NetworkPolicy::from_env();
+        let bytes =
+            vaco_corpus::fetch::fetch_asset(entry, &store, policy).map_err(|e| format!("corpus `{name}`: {e}"))?;
+
+        let dir = self
+            .dir
+            .as_ref()
+            .ok_or("the media cache has no directory")?;
+        let sub = dir.path().join(format!("m{}", self.built.borrow().len()));
+        std::fs::create_dir_all(&sub).map_err(|e| format!("{}: {e}", sub.display()))?;
+        // Keep whatever extension the archive member (or, for a bare-file
+        // entry, the entry's own name) carries — format detection by
+        // extension is part of what a transcode case exercises, the same
+        // reasoning `MediaRef::file_name` already applies to `generate`d
+        // media.
+        let file_name = entry
+            .member
+            .as_deref()
+            .and_then(|m| m.rsplit('/').next())
+            .filter(|f| !f.is_empty())
+            .unwrap_or(name);
+        let out = sub.join(file_name);
+        std::fs::write(&out, &bytes).map_err(|e| format!("{}: {e}", out.display()))?;
+
         self.built.borrow_mut().insert(key, out.clone());
         Ok(out)
     }
@@ -285,9 +381,14 @@ impl<'a> Runner<'a> {
         if !argv.iter().any(|a| a.contains("{media")) {
             return Ok(());
         }
+        // A reference installation is required even for `corpus://` media,
+        // which needs no synthesis: `run_case` always calls this before
+        // running the reference side of the comparison, so by the time any
+        // case reaches here a reference is assumed to exist regardless of
+        // where its media comes from.
         let reference = self
             .reference
-            .ok_or("a case references media but there is no reference to synthesise it")?;
+            .ok_or("a case references media but there is no reference installation")?;
         for arg in argv.iter_mut() {
             while let Some(start) = arg.find("{media") {
                 let end = arg

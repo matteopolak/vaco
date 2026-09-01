@@ -69,6 +69,7 @@ fn entry(name: &str, url: String, sha: &ObjectId) -> LockEntry {
         license: "test".to_owned(),
         source: "loopback test server".to_owned(),
         targets: vec![],
+        member: None,
     }
 }
 

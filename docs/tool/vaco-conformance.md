@@ -607,6 +607,56 @@ comparison inside `behavioural()` still sees both exit codes and still
 diverges across the accept/reject boundary, just not on every mismatched
 integer within "both rejected".
 
+### Corpus-backed suites (JVT/JCT-VC, QA-04/QA-09, #427/#442)
+
+`tests/conformance/transcode/h264-jvt-conformance.toml` and
+`hevc-jctvc-conformance.toml` are the first suites whose media comes from
+`vaco-corpus` rather than from `generate`. Two new pieces make that work:
+
+- **`source = "corpus://<name>"`** on a `[[media]]` entry resolves `<name>`
+  against `vaco-corpus`'s embedded `vaco-media.lock` and fetches it through
+  the shared content-addressed `Store` (`MediaCache::corpus_path` in
+  `runner.rs`) — a cache hit never touches the network; a miss does only
+  under `VACO_CORPUS_NETWORK=1` (`vaco_corpus::NetworkPolicy::from_env`).
+  When the lock entry names an archive `member` (every JVT/JCT-VC
+  conformance ZIP does — the archives also ship a decoder trace log and/or a
+  reference YUV this project has no use for), only that one file is
+  extracted (`vaco_corpus::zip`, this crate's own from-scratch ZIP/DEFLATE
+  reader — see that module's doc for why it isn't a `miniz_oxide` dependency:
+  D11 already gives that crate one owner, `vaco-demux-matroska`).
+- **`{corpus:<name>}`** is a token usable *inside a `generate` command*,
+  resolved by `MediaCache::resolve_corpus_tokens` before the reference
+  synthesises the media. This exists because every JVT/JCT-VC bitstream is a
+  raw Annex-B elementary stream with no container-level timestamps, and
+  `vaco`'s transcode pipeline currently requires every packet reaching its
+  filtering stage to carry one — a direct `-i foo.264` run of `vaco` fails
+  with `"this container needs timestamps and the packet has none"` before a
+  single frame reaches the codec under test. That is a demux/pipeline gap
+  (`vaco-demux-raw`'s raw-elementary-stream demuxer is *correct* here — its
+  own module doc records that the reference's own `h264` demuxer produces
+  the identical `pts=N/A, dts=N/A` for every packet; the gap is that nothing
+  downstream synthesises a PTS from a packet's own duration when *neither*
+  timestamp is ever set, only from an existing DTS under `+genpts` — see
+  `vaco-format-core::time::TimestampFixer`'s R20), outside this crate and
+  not a codec defect, so both manifests route their `generate` through the
+  reference's own `-c copy` into an MP4 first:
+  ```toml
+  generate = ["-fflags", "+genpts", "-i", "{corpus:jvt-h264-canl1-sva-b}",
+              "-c", "copy", "-f", "mp4"]
+  ```
+  `-c copy` changes no NAL unit, only container framing, so this sidesteps
+  the gap without weakening what is under test — confirmed by hand:
+  `jvt-h264-canl1-sva-b`'s direct-elementary-stream reference decode and its
+  MP4-wrapped `vaco` decode are byte-identical.
+
+Both suites are `tier = "full"` (nightly), not `core`, because a corpus
+fetch needs `VACO_CORPUS_NETWORK=1` explicitly and `smoke`/`core` runs do
+not set it. Both are a **curated subset**, not a full mirror of either
+suite — see `vaco-media.lock`'s `jvt-h264`/`jctvc` section headers for
+exactly what was left out and why (disk/bandwidth, chosen to maximise
+construct coverage per byte rather than to approach either suite's full
+size).
+
 ### Adding a comparison mode
 
 A `Compare` variant in `case.rs`, its kebab-case name in

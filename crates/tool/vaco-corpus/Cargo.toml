@@ -20,6 +20,7 @@ path = "src/main.rs"
 vaco-core = { path = "../../core/vaco-core" }
 vaco-hash = { path = "../../core/vaco-hash" }
 vaco-io = { path = "../../io/vaco-io" }
+vaco-limits = { path = "../../core/vaco-limits" }
 vaco-opts = { path = "../../core/vaco-opts" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
 vaco-protocol-http = { path = "../../io/vaco-protocol-http" }
