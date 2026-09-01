@@ -1404,6 +1404,10 @@ fn decode_sub_mb_pred_cavlc(
             for y in y0..=y1 {
                 for x in x0..=x1 {
                     let mut info = grids.mv_at(mb_x * 4 + x, mb_y * 4 + y);
+                    // Clause 6.4 availability, list-independent -- see this
+                    // pass's own comment above, and `resolve_c`'s doc for
+                    // where clause 6.4.11.7's "not yet decoded" rule lives.
+                    info.mb_available = true;
                     info.pred = Some(pred);
                     if let Some(slot) = info.ref_idx.get_mut(list) {
                         *slot = value;
@@ -1429,17 +1433,12 @@ fn decode_sub_mb_pred_cavlc(
             // read back here instead of trusting `num_sub` alone, matching
             // `decode_sub_mb_pred_cabac`'s own identical comment.
             //
-            // Deliberately not setting `mb_available` in the ref_idx pass
-            // above -- see `decode_sub_mb_pred_cabac`'s own identical fix
-            // and its doc for why: doing so there marked a not-yet-decoded
-            // quadrant (clause 8.4.1.3.2's `C`-into-`mbPartIdx == 3` corner
-            // case) falsely available before this mvd pass had given it a
-            // real motion vector, corrupting the median predictor for
-            // `mbPartIdx == 2`'s own bottom-right `P_L0_4x4` sub-partition.
-            // This function shares that exact grid and pass structure, so
-            // it shares the exact bug -- fixed the same way here even
-            // though the CAVLC fixtures this crate currently measures
-            // against did not happen to exercise it.
+            // `mb_available` is set by the `ref_idx` pass above, not here:
+            // this function shares `decode_sub_mb_pred_cabac`'s exact grid
+            // and pass structure, so it shares its reasoning too -- see
+            // that function's own comment on the same pass, and
+            // `resolve_c`'s doc for clause 6.4.11.7's "not yet decoded"
+            // rule, which is positional and lives there.
             let top_bottom = num_sub == 2 && code == 1;
             let sub_positions: [(u32, u32); 4] = match num_sub {
                 1 => [(x0, y0); 4],
@@ -4126,10 +4125,98 @@ const fn two_partition_rects(kind: SliceKind, raw_code: u32) -> ((u32, u32, u32,
     if is_16x8 { ((0, 0, 3, 1), (0, 2, 3, 3)) } else { ((0, 0, 1, 3), (2, 0, 3, 3)) }
 }
 
+/// Clause 6.4.2.2 / 7.4.5's own decoding order for the sixteen 4x4 luma
+/// blocks of one macroblock, flattened to a single comparable index:
+/// `mbPartIdx * 4 + subMbPartIdx`. Both of those are the same 2x2 "Z"
+/// scan -- `mbPartIdx` over the four 8x8 quadrants, `subMbPartIdx` over
+/// the four 4x4 blocks inside one quadrant -- so the index of the 4x4 at
+/// macroblock-local `(x, y)` (each `0..=3`) is that pair of Z scans
+/// composed.
+///
+/// This exists to answer exactly one question, clause 6.4.11.7's "the
+/// macroblock partition `mbAddrN\mbPartIdxN` ... is not yet decoded", and
+/// nothing else: that is a question about *order*, so it wants an order.
+const fn partition_scan_index(x: u32, y: u32) -> u32 {
+    let quad = (y & 2) + ((x & 2) >> 1);
+    let sub = ((y & 1) << 1) + (x & 1);
+    quad * 4 + sub
+}
+
+/// Clause 6.4.11.7's *second* availability rule, the one that only ever
+/// applies to `C`: a neighbouring partition that lies inside the **current**
+/// macroblock is "not yet decoded", and therefore not available, whenever it
+/// comes later than the current partition in the decoding order
+/// [`partition_scan_index`] gives.
+///
+/// `left_x`/`top_y` are the current partition's own top-left 4x4 in absolute
+/// picture coordinates. Every partition lies wholly inside one macroblock, so
+/// that macroblock's own origin is exactly `(left_x & !3, top_y & !3)` -- an
+/// identity, not an approximation, which is why this needs no `mb_x`/`mb_y`
+/// argument threaded through nine call sites.
+///
+/// A position in any *other* macroblock returns `false` here: every other
+/// macroblock the grid can answer for is either strictly earlier in raster
+/// order (decoded, and clause 6.4.8/6.4.9-available) or not decoded at all,
+/// which [`MvInfo::mb_available`] already reports on its own.
+const fn c_is_not_yet_decoded(left_x: u32, top_y: u32, c_x: u32, c_y: u32) -> bool {
+    let (org_x, org_y) = (left_x & !3, top_y & !3);
+    // `wrapping_sub` rather than a `<` test so that a `C` above or to the
+    // left of this macroblock underflows to a large value and fails the
+    // same `>= 4` bound the right/below cases fail -- one comparison per
+    // axis, and no overflow for the fuzz profile's own checks to trip on.
+    let (dx, dy) = (c_x.wrapping_sub(org_x), c_y.wrapping_sub(org_y));
+    if dx >= 4 || dy >= 4 {
+        return false;
+    }
+    partition_scan_index(dx, dy)
+        > partition_scan_index(left_x.wrapping_sub(org_x), top_y.wrapping_sub(org_y))
+}
+
+/// Clause 8.4.1.3's `C` (above-right) motion-vector-prediction neighbour,
+/// with clause 8.4.1.3's own substitution "when `mbAddrC\mbPartIdxC\
+/// subMbPartIdxC` is not available ... `mbAddrC = mbAddrD`" applied here so
+/// no caller has to.
+///
+/// `left_x`/`top_y` are the current partition's own top-left 4x4 and
+/// `right_x` its own top-right one, both absolute, so `C` is at
+/// `(right_x + 1, top_y - 1)` and `D` at `(left_x - 1, top_y - 1)`.
+///
+/// **Two independent things make a neighbouring partition unavailable, and
+/// clause 6.4.11.7 states them separately** -- conflating them is the bug
+/// this function exists to keep unrepresentable:
+///
+/// 1. *There is no macroblock there.* Outside the picture, outside this
+///    slice, or later in raster order. That is clause 6.4.8/6.4.9
+///    macroblock availability and [`MvInfo::mb_available`] carries it.
+/// 2. *The macroblock is this one, and that partition is not yet decoded.*
+///    Clause 6.4.11.7: "the macroblock partition `mbAddrN\mbPartIdxN` and
+///    the sub-macroblock partition `mbAddrN\mbPartIdxN\subMbPartIdxN` are
+///    marked as not available" in that case.
+///
+/// Rule 2 cannot be answered by looking at the grid, and trying to made the
+/// grid answer it is what regressed every B-frame stream this decoder had
+/// (see `decode_sub_mb_pred_cabac`'s own `ref_idx` pass for that account).
+/// Clause 7.3.5.2's `sub_mb_pred()` decodes all four quadrants'
+/// `ref_idx_l0`, then all four `ref_idx_l1`, then all four `mvd_l0`, then
+/// all four `mvd_l1` -- four passes over the same four partitions -- so at
+/// any instant during those passes the grid legitimately holds real,
+/// already-decoded data for partitions whose motion vector does not exist
+/// yet, and equally holds nothing for partitions that *are* decoded but do
+/// not use the list the current pass is for. Availability is a property of
+/// *scan position*, so it is decided from the scan position, positionally.
+///
+/// **Only `C` needs rule 2.** `A`, `B` and `D` sit at `(x-1, y)`,
+/// `(x, y-1)` and `(x-1, y-1)` relative to the current partition, and every
+/// one of those has a strictly smaller [`partition_scan_index`] than the
+/// current partition for every partition shape clause 7.3.5.1/7.3.5.2 can
+/// produce. That is a claim about all sixteen positions crossed with every
+/// legal partition width, so `tests::only_c_can_reach_a_not_yet_decoded_partition`
+/// enumerates them and proves it instead of asserting it here.
 fn resolve_c(grids: &CabacGrids, left_x: u32, right_x: u32, top_y: u32) -> MvInfo {
     let Some(above_y) = top_y.checked_sub(1) else { return MvInfo::default() };
-    let c = grids.mv_at(right_x + 1, above_y);
-    if c.mb_available {
+    let c_x = right_x.saturating_add(1);
+    let c = grids.mv_at(c_x, above_y);
+    if c.mb_available && !c_is_not_yet_decoded(left_x, top_y, c_x, above_y) {
         return c;
     }
     left_x.checked_sub(1).map_or_else(MvInfo::default, |lx| grids.mv_at(lx, above_y))
@@ -4703,29 +4790,34 @@ fn decode_sub_mb_pred_cabac(
     // neighbour lookup sees `pred`/`ref_idx` already set, matching every
     // other immediate-write site in this file.
     //
-    // Deliberately **not** setting `mb_available` here (see this struct
-    // field's own doc): doing so used to mark all four quadrants
-    // clause-6.4 "available" the moment this ref_idx pass finished, before
-    // Pass 3/4 below has decoded any quadrant's actual motion vector. That
-    // is wrong for exactly one neighbour direction -- clause 8.4.1.3.2's
-    // `C` (above-right) -- which, for the bottom-left quadrant's own
-    // bottom-right 4x4 sub-partition (`mbPartIdx == 2`, `subMbPartIdx ==
-    // 3` under a `P_L0_4x4` split), resolves to the bottom-right
-    // quadrant's own top-left 4x4 (`mbPartIdx == 3`), not yet decoded at
-    // that point in scan order: clause 8.4.1.3.2's own "not yet decoded"
-    // case, which must fall back to `D` (`resolve_c`'s own job), not use
-    // `C` directly. With `mb_available` set here, `resolve_c` saw that
-    // quadrant as available (real `ref_idx`, but a motion vector that is
-    // still the grid's `(0, 0)` default) and used it raw, corrupting the
-    // median predictor for that one sub-partition -- confirmed against a
-    // real CANL3_SVA_B decode, where the corrupted pixels in both
-    // divergent macroblocks landed on exactly this local grid position
-    // with `mvd == (0, 0)` (the wrong predictor decoded unmodified) and
-    // `cbp == 0` (no residual to mask it). `A`/`B` never reach a
-    // not-yet-decoded position (they only ever point at strictly-earlier
-    // partitions in scan order), so leaving `mb_available` unset here and
-    // letting Pass 3/4 below set it only once a quadrant's real motion
-    // vector exists costs nothing for those two directions and fixes `C`.
+    // `mb_available` is set here, in the `ref_idx` passes, and **not** in
+    // the `mvd` passes below, because clause 6.4's availability is a
+    // property of the *macroblock*, not of any one list's motion data.
+    // The two `ref_idx` passes between them visit every quadrant that has
+    // a `pred` at all (a `B_Direct_8x8` one is already marked by
+    // `apply_direct_quadrant` above), so by the time Pass 3/4 starts,
+    // every partition of this macroblock reports the availability clause
+    // 6.4.11.7 gives it and `MvInfo::as_motion_neighbour` supplies clause
+    // 8.4.1.3.2's own `mvLXN = (0, 0)`, `refIdxLXN = -1` for whichever
+    // list a partition does not predict from.
+    //
+    // Moving this into the `mvd` passes -- which is what `f970c23` did to
+    // reach clause 6.4.11.7's "not yet decoded" case -- makes availability
+    // *per list*, because those passes run list 0 across all four
+    // quadrants before list 1. A `B_8x8` quadrant that predicts from list
+    // 1 only is then still unavailable while a later quadrant's own list-0
+    // prediction reads it as `A`, `B` or `D`, so clause 8.4.1.3.1's "if
+    // `B` and `C` are both not available and `A` is available, use
+    // `mvLXA`" shortcut fires (or fails to) against the wrong inputs. That
+    // is invisible in P slices, where every partition reads list 0 --
+    // which is exactly why it byte-exactly regressed every B-frame stream
+    // this decoder had while leaving `-bf 0` and baseline-profile output
+    // untouched.
+    //
+    // Clause 6.4.11.7's genuine "not yet decoded" rule is real, and it
+    // lives in `resolve_c` instead, decided positionally from the
+    // partition scan order -- see that function's own doc for why it can
+    // only be answered there and why it is only ever `C` that needs it.
     for list in 0..2usize {
         for (i, &(_, _, pred)) in subs.iter().enumerate() {
             let Some(pred) = pred else { continue };
@@ -4755,6 +4847,10 @@ fn decode_sub_mb_pred_cabac(
             for y in y0..=y1 {
                 for x in x0..=x1 {
                     let mut info = grids.mv_at(mb_x * 4 + x, mb_y * 4 + y);
+                    // Clause 6.4 availability, list-independent -- see this
+                    // pass's own comment above, and `resolve_c`'s doc for
+                    // where clause 6.4.11.7's "not yet decoded" rule lives.
+                    info.mb_available = true;
                     info.pred = Some(pred);
                     if let Some(slot) = info.ref_idx.get_mut(list) {
                         *slot = value;
@@ -5408,5 +5504,137 @@ mod tests {
         assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 1, 1, 0, 1, 1])), 10, "last of the act_sym=6 branch");
         assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 1, 1, 1, 0])), 11, "first of the act_sym=10 branch");
         assert_eq!(decode_sub_mb_type_b_tree(queued_bits(&[1, 1, 1, 1, 1])), 12, "B_Bi_4x4x4 (last code)");
+    }
+
+    /// Every partition and sub-partition rectangle clause 7.3.5.1's
+    /// `mb_pred()` and 7.3.5.2's `sub_mb_pred()` can put inside one
+    /// macroblock, as macroblock-local 4x4 `(x0, y0, width, height)` plus a
+    /// name: `16x16`; `16x8`/`8x16`'s two halves; and, per 8x8 quadrant,
+    /// the `8x8`/`8x4`/`4x8`/`4x4` splits Table 7-17/7-18 allow.
+    fn every_legal_partition() -> Vec<(u32, u32, u32, u32, String)> {
+        let mut parts = vec![
+            (0, 0, 4, 4, "16x16".to_owned()),
+            (0, 0, 4, 2, "16x8[0]".to_owned()),
+            (0, 2, 4, 2, "16x8[1]".to_owned()),
+            (0, 0, 2, 4, "8x16[0]".to_owned()),
+            (2, 0, 2, 4, "8x16[1]".to_owned()),
+        ];
+        for q in 0..4u32 {
+            let (qx, qy) = ((q & 1) * 2, (q >> 1) * 2);
+            parts.push((qx, qy, 2, 2, format!("8x8 q{q}")));
+            parts.push((qx, qy, 2, 1, format!("8x4 q{q}s0")));
+            parts.push((qx, qy + 1, 2, 1, format!("8x4 q{q}s1")));
+            parts.push((qx, qy, 1, 2, format!("4x8 q{q}s0")));
+            parts.push((qx + 1, qy, 1, 2, format!("4x8 q{q}s1")));
+            for s in 0..4u32 {
+                parts.push((qx + (s & 1), qy + (s >> 1), 1, 1, format!("4x4 q{q}s{s}")));
+            }
+        }
+        parts
+    }
+
+    /// The claim `resolve_c`'s own doc rests on, checked rather than
+    /// asserted: of clause 8.4.1.3's four neighbours, **only `C`** can ever
+    /// land on a partition of the *current* macroblock that clause 6.4.11.7
+    /// calls "not yet decoded".
+    ///
+    /// `A` (`x - 1, y`), `B` (`x, y - 1`) and `D` (`x - 1, y - 1`) are
+    /// checked over every rectangle the syntax can produce; a single
+    /// violation would mean `resolve_c` is not the only place the rule
+    /// belongs.
+    #[test]
+    fn only_c_can_reach_a_not_yet_decoded_partition() {
+        for (x, y, _w, _h, name) in every_legal_partition() {
+            let cur = partition_scan_index(x, y);
+            for (nx, ny, tag) in [
+                (x.checked_sub(1), Some(y), "A"),
+                (Some(x), y.checked_sub(1), "B"),
+                (x.checked_sub(1), y.checked_sub(1), "D"),
+            ] {
+                let (Some(nx), Some(ny)) = (nx, ny) else { continue };
+                assert!(
+                    partition_scan_index(nx, ny) < cur,
+                    "{name}: neighbour {tag} at ({nx}, {ny}) is later in partition scan order \
+                     than the partition at ({x}, {y}) -- clause 6.4.11.7's not-yet-decoded rule \
+                     would have to apply to {tag} too, and resolve_c is not where it would go"
+                );
+            }
+        }
+    }
+
+    /// The exact set of partitions whose `C` neighbour clause 6.4.11.7
+    /// marks not-yet-decoded, pinned as data so a wrong
+    /// [`partition_scan_index`] cannot pass quietly.
+    ///
+    /// All four are the *last* sub-partition of a left-column quadrant
+    /// (`mbPartIdx` 0 or 2) whose above-right 4x4 falls into the
+    /// right-column quadrant that follows it. `4x4 q2s3` is the one a real
+    /// `CANL3_SVA_B` decode diverged on (see
+    /// `tests/cabac_p_8x8_same_mb_c_neighbour.rs`); the other three are the
+    /// same corner reached by the other three shapes, and `8x4 q0s1` /
+    /// `8x4 q2s1` are reachable only through an `8x4` split, which no
+    /// fixture in this crate exercised when that divergence was found.
+    #[test]
+    fn c_is_not_yet_decoded_for_exactly_four_partitions() {
+        let mut excluded: Vec<String> = Vec::new();
+        for (x, y, w, _h, name) in every_legal_partition() {
+            // The absolute coordinates `resolve_c` is called with, for a
+            // macroblock at an arbitrary non-zero position: the rule must
+            // not depend on where in the picture the macroblock sits.
+            let (org_x, org_y) = (7 * 4, 5 * 4);
+            let Some(c_y) = (org_y + y).checked_sub(1) else { continue };
+            if c_is_not_yet_decoded(org_x + x, org_y + y, org_x + x + w, c_y) {
+                excluded.push(name);
+            }
+        }
+        assert_eq!(
+            excluded,
+            vec!["8x4 q0s1", "4x4 q0s3", "8x4 q2s1", "4x4 q2s3"],
+            "clause 6.4.11.7's not-yet-decoded C set changed"
+        );
+    }
+
+    /// The other half of the same rule: a `C` in a *different* macroblock
+    /// is never "not yet decoded" here, whatever its scan position, because
+    /// clause 6.4.8/6.4.9 macroblock availability already answers for it
+    /// (and `resolve_c` reads that from `MvInfo::mb_available`). Getting
+    /// this wrong would silently disable `C` for the whole above row.
+    #[test]
+    fn c_outside_the_current_macroblock_is_never_not_yet_decoded() {
+        let (org_x, org_y) = (7 * 4, 5 * 4);
+        for y in 0..4u32 {
+            for x in 0..4u32 {
+                // Above macroblock row, and the macroblock to the right.
+                for (cx, cy) in [(org_x + x, org_y - 1), (org_x + 4, org_y + y), (org_x - 1, org_y + y)] {
+                    assert!(
+                        !c_is_not_yet_decoded(org_x + x, org_y + y, cx, cy),
+                        "({cx}, {cy}) is outside the macroblock at ({org_x}, {org_y}) and must be \
+                         left to clause 6.4.8/6.4.9 availability"
+                    );
+                }
+            }
+        }
+    }
+
+    /// `partition_scan_index` is clause 6.4.2.2's two nested 2x2 "Z" scans,
+    /// checked against the full sixteen-entry table written out by hand
+    /// rather than recomputed by the same formula it is testing.
+    #[test]
+    fn partition_scan_index_matches_the_hand_written_table() {
+        #[rustfmt::skip]
+        let expected: [[u32; 4]; 4] = [
+            [ 0,  1,  4,  5],
+            [ 2,  3,  6,  7],
+            [ 8,  9, 12, 13],
+            [10, 11, 14, 15],
+        ];
+        for y in 0..4usize {
+            for x in 0..4usize {
+                let want = expected.get(y).and_then(|row| row.get(x)).copied().unwrap();
+                #[allow(clippy::cast_possible_truncation, reason = "x and y are 0..4 loop indices")]
+                let got = partition_scan_index(x as u32, y as u32);
+                assert_eq!(got, want, "4x4 block ({x}, {y})");
+            }
+        }
     }
 }

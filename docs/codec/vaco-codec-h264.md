@@ -1016,6 +1016,83 @@ every one was already refused before this round; CAVLC reconstruction did
 not lift any of them, it only stopped refusing the *combination* of
 CAVLC with everything else already in scope.
 
+## Neighbouring-partition availability (clauses 6.4.11.7 and 8.4.1.3)
+
+Motion-vector prediction asks two questions about each of its `A`/`B`/`C`/`D`
+neighbours, and clause 6.4.11.7 answers them **separately**. Collapsing them
+has now produced three distinct defects in this crate, in three different
+directions, so the shape is worth stating once:
+
+| question | clause | where the answer lives |
+|---|---|---|
+| Is there a decoded macroblock there at all? | 6.4.8/6.4.9 | `MvInfo::mb_available` |
+| Is it this macroblock, at a partition not yet decoded? | 6.4.11.7 | `mb.rs`'s `resolve_c`, positionally |
+| Does that partition predict from *this* list? | 8.4.1.3.2 | `MvInfo::as_motion_neighbour` |
+
+The third is *not* an availability question. Clause 8.4.1.3.2 gives an
+intra neighbour, or one whose `predFlagLX` is 0, `mvLXN = (0, 0)` and
+`refIdxLXN = -1` — and leaves it **available**, which is what clause
+8.4.1.3.1's "if `B` and `C` are both not available and `A` is available,
+`mvLXB = mvLXA`" shortcut and clause 8.4.1.1's `P_Skip` zero-motion test
+then read. Answering it with `available: false` was defect 2 of the Main
+round above.
+
+### Why "not yet decoded" cannot be answered from the grid
+
+Clause 7.3.5.2's `sub_mb_pred()` decodes **all four** quadrants'
+`ref_idx_l0`, then all four `ref_idx_l1`, then all four `mvd_l0`, then all
+four `mvd_l1`. Four passes over the same four partitions, so at every
+instant during them the live grid holds real, already-decoded data for
+partitions whose motion vector does not exist yet, *and* holds nothing for
+partitions that are fully decoded but do not use the list the current pass
+is for. Neither state is what clause 6.4.11.7 is asking about. Availability
+is a property of the partition's **scan position**, so `resolve_c` decides
+it from the scan position: `partition_scan_index` flattens clause 6.4.2.2's
+two nested 2x2 "Z" scans to `mbPartIdx * 4 + subMbPartIdx`, and a `C` inside
+the current macroblock with a larger index than the current partition's is
+not yet decoded.
+
+**Only `C` ever needs this.** `A`, `B` and `D` sit at `(x-1, y)`,
+`(x, y-1)` and `(x-1, y-1)`, all of which have a strictly smaller scan index
+for every partition rectangle the syntax can produce —
+`mb.rs`'s `only_c_can_reach_a_not_yet_decoded_partition` enumerates all of
+them and proves it rather than leaving it asserted. Exactly four partitions
+have a not-yet-decoded `C`, and they are the last sub-partition of a
+left-column quadrant whose above-right 4x4 falls into the right-column
+quadrant that follows it: the `8x4` bottom and the `4x4` `subMbPartIdx == 3`
+of `mbPartIdx` 0 and of `mbPartIdx` 2. `c_is_not_yet_decoded_for_exactly_four_partitions`
+pins that set.
+
+### The regression that made the distinction expensive
+
+`f970c23` reached the "not yet decoded" case by moving `mb_available` out of
+the `ref_idx` passes and into the `mvd` passes — set only once a partition's
+real motion vector existed. That fixed `CANL3_SVA_B` and `CABA2_SVA_B`, and
+**byte-exactly broke every stock `libx264` stream carrying B-frames**, from
+QCIF to 4K, for one round.
+
+The `mvd` passes run list 0 across all four quadrants before list 1, so
+availability became *per list*. A `B_L1_8x8` quadrant was still
+"unavailable" while a later quadrant's own list-0 prediction read it as
+`A`, `B` or `D` — clause 8.4.1.3.1's `B`/`C`-unavailable shortcut then
+firing, or not firing, against inputs the specification does not give it. A
+P slice cannot express this, because every partition there predicts from
+list 0 and the two passes coincide; so did every baseline-profile and
+`-bf 0` fixture, all of which stayed byte-exact and made the regression look
+like a CAVLC-versus-CABAC question when it was a B-slice question.
+
+The two rules are orthogonal and both are needed, which the crate's two
+regression tests are built to demonstrate rather than assert:
+
+| | `cabac_b_8x8_mixed_list_quadrants` | `cabac_p_8x8_same_mb_c_neighbour` |
+|---|---|---|
+| `f970c23` (availability in the `mvd` passes, no positional rule) | **fails** | passes |
+| `f970c23^` (availability in the `ref_idx` passes, no positional rule) | passes | **fails** |
+| both rules (current) | passes | passes |
+
+No single-rule variant passes both, so neither test can be satisfied by
+reverting the other's fix. Measured with each half ablated in turn.
+
 ## Frame threading (`-threads N`), on by default
 
 `H264Decoder` is split into a serial header/entropy stage and a parallel
