@@ -14,6 +14,22 @@ use crate::quant::{QuantTableSet, compute_context, median_predictor};
 use crate::rangecoder::{RangeDecoder, RangeEncoder, StateTransition, SymbolStates, fresh_states};
 use crate::rice::{RiceState, RunState};
 
+/// Shared by every per-sample `states.get_mut(ctx).ok_or_else(..)` in this
+/// module (D19: one definition, not three copies of the same message).
+///
+/// `#[cold]` is the stable substitute for the unstable `unlikely` hint (D21,
+/// `planning/00-decisions.md`): it tells LLVM this call's edge is the
+/// improbable one and to lay the block out of line, and `#[inline(never)]`
+/// keeps that call from being re-inlined back into the per-sample loop it was
+/// moved out of. `ctx` is always in range in practice -- `context_count`
+/// bounds it by construction -- so this only ever runs for a corrupt
+/// bitstream.
+#[cold]
+#[inline(never)]
+fn context_out_of_range() -> Error {
+    Error::InvalidData("ffv1: context out of range")
+}
+
 /// A rectangular sample buffer for one plane of one slice: `w*h` `i32`
 /// samples in raster order, wide enough for up to 16-bit content even though
 /// this crate's own encoder only reaches 8-bit today.
@@ -41,12 +57,28 @@ impl SliceBuf {
         })
     }
 
-    #[inline]
+    // `#[inline]` measured as not enough here (see D21, planning/00-decisions.md):
+    // a profile of `transcode_h264_to_ffv1_1080p` (samply, outermost
+    // physically-emitted frame) charged `SliceBuf::neighbours` 17.54% of
+    // in-lib self time on its own -- i.e. it was compiled as a real
+    // out-of-line function and called, not folded into `encode_plane_range`.
+    // `get`/`set`/`border` are `neighbours`' own callees and share its shape
+    // (a tiny, unconditionally-hot, per-sample accessor), so they get the
+    // same treatment together rather than iterating one at a time.
+    #[allow(
+        clippy::inline_always,
+        reason = "measured: profiled as a real out-of-line call in the per-sample hot loop despite `#[inline]` -- see the comment above `get`"
+    )]
+    #[inline(always)]
     pub(crate) fn get(&self, x: usize, y: usize) -> i32 {
         self.data.get(y * self.w + x).copied().unwrap_or(0)
     }
 
-    #[inline]
+    #[allow(
+        clippy::inline_always,
+        reason = "measured alongside `get`/`neighbours`/`border` -- see the comment above `get`"
+    )]
+    #[inline(always)]
     pub(crate) fn set(&mut self, x: usize, y: usize, v: i32) {
         if let Some(slot) = self.data.get_mut(y * self.w + x) {
             *slot = v;
@@ -55,7 +87,11 @@ impl SliceBuf {
 
     /// The six labelled border-aware neighbours (RFC 9043 §3.1-§3.2):
     /// `(l, t, tl, tr, ll, tt)`.
-    #[inline]
+    #[allow(
+        clippy::inline_always,
+        reason = "measured: 17.54% self time as a standalone out-of-line function on transcode_h264_to_ffv1_1080p before this change -- see the comment above `get`"
+    )]
+    #[inline(always)]
     fn neighbours(&self, x: usize, y: usize) -> (i32, i32, i32, i32, i32, i32) {
         let xi = x.cast_signed();
         let yi = y.cast_signed();
@@ -72,20 +108,31 @@ impl SliceBuf {
     /// RFC 9043 §3.1's assumed border, expressed as a lookup that also
     /// covers in-bounds positions (which are always already decoded, since
     /// every caller only asks for positions earlier in raster order).
-    #[inline]
+    #[allow(
+        clippy::inline_always,
+        reason = "measured alongside `neighbours`, its only caller -- see the comment above `get`"
+    )]
+    #[inline(always)]
     fn border(&self, x: isize, y: isize) -> i32 {
-        if y < 0 {
+        // D21/D22: each of these three is true only in the plane's first two
+        // rows or first two columns -- for a 1080p plane that is well under
+        // 1% of calls -- while every other call falls through to the
+        // in-bounds `get` below. `std::hint::unlikely` (stable substitute
+        // was `#[cold]` on a whole function, which does not compose with an
+        // early return inside one) tells LLVM to keep that fast path
+        // fall-through and move these checks off it.
+        if std::hint::unlikely(y < 0) {
             // "Two rows of samples above the coded slice are assumed to be
             // 0" — covers y == -1 and y == -2 uniformly, for every column
             // including the border columns themselves.
             return 0;
         }
         let y = y as usize;
-        if x <= -2 {
+        if std::hint::unlikely(x <= -2) {
             // "An additional column of samples to the left... assumed 0."
             return 0;
         }
-        if x == -1 {
+        if std::hint::unlikely(x == -1) {
             // "One column to the left is identical to the leftmost column
             // shifted down by one row; its topmost sample is 0."
             return if y == 0 { 0 } else { self.get(0, y - 1) };
@@ -379,9 +426,7 @@ pub(crate) fn decode_plane_range(
                 clippy::unnecessary_lazy_evaluations,
                 reason = "measured: eager .ok_or() here left a real (non-eliminated) drop_glue::<Error> call in the per-sample loop -- see the comment above"
             )]
-            let st = states
-                .get_mut(ctx)
-                .ok_or_else(|| Error::InvalidData("ffv1: context out of range"))?;
+            let st = states.get_mut(ctx).ok_or_else(context_out_of_range)?;
             let mut diff = dec.get_symbol(st, table, true);
             if flip {
                 diff = -diff;
@@ -427,9 +472,7 @@ pub(crate) fn encode_plane_range(
                 clippy::unnecessary_lazy_evaluations,
                 reason = "measured: eager .ok_or() here left a real (non-eliminated) drop_glue::<Error> call in the per-sample loop -- see decode_plane_range's comment"
             )]
-            let st = states
-                .get_mut(ctx)
-                .ok_or_else(|| Error::InvalidData("ffv1: context out of range"))?;
+            let st = states.get_mut(ctx).ok_or_else(context_out_of_range)?;
             enc.put_symbol(st, table, diff, true);
         }
     }
@@ -469,9 +512,7 @@ pub(crate) fn decode_plane_golomb(
                 clippy::unnecessary_lazy_evaluations,
                 reason = "measured: eager .ok_or() here left a real (non-eliminated) drop_glue::<Error> call in the per-sample loop -- see decode_plane_range's comment"
             )]
-            let rs = rice_states
-                .get_mut(ctx)
-                .ok_or_else(|| Error::InvalidData("ffv1: context out of range"))?;
+            let rs = rice_states.get_mut(ctx).ok_or_else(context_out_of_range)?;
             let mut diff = if ctx == 0 {
                 run.next_zero_context_diff(r, rs, bits_per_raw_sample, x, w)
             } else {

@@ -263,7 +263,16 @@ fn write_one_table(
 }
 
 /// The median predictor (RFC 9043 §3.3): `median(l, t, l + t - tl)`.
-#[inline]
+///
+/// `#[inline]` alone is a hint the optimiser is free to ignore (D21); this
+/// one is measured elsewhere in this session's own profiling (per-sample,
+/// called once per pixel in every decode/encode loop in `slice.rs`) to have
+/// stayed out-of-line despite carrying it.
+#[allow(
+    clippy::inline_always,
+    reason = "measured hot per-sample function -- see the doc comment above"
+)]
+#[inline(always)]
 #[must_use]
 pub(crate) const fn median_predictor(l: i32, t: i32, tl: i32) -> i32 {
     let grad = l + t - tl;

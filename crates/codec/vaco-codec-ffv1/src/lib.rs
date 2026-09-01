@@ -115,6 +115,13 @@
 //! crate — every byte format here is implemented directly from RFC 9043.
 
 #![forbid(unsafe_code)]
+// D22: nightly is pinned (`rust-toolchain.toml`) specifically so D21's
+// branch-hint idiom has `std::hint::{likely, unlikely, cold_path}` available,
+// not only `#[cold]`/`#[inline(always)]`. Used in `slice.rs`'s per-sample
+// border lookup, the hottest branchy function this crate has (RFC 9043 §3.1):
+// for all but the first two rows/columns of a plane, every one of its
+// bounds checks is false.
+#![feature(likely_unlikely)]
 
 mod codec;
 mod crc;
