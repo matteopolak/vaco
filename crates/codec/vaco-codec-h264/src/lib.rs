@@ -144,6 +144,7 @@ mod interp;
 mod intra;
 mod reconstruct;
 mod scan;
+mod task_pool;
 pub mod mb;
 pub mod decoder;
 

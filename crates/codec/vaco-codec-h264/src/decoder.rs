@@ -124,6 +124,7 @@ use vaco_pool::ALIGN;
 use crate::frame_task::{DeblockParams, FrameGeometry, H264FrameTask};
 use crate::mb::{ColocatedField, MvInfo};
 use crate::reconstruct::{BiPredMode, ImplicitWeight, ImplicitWeights, SliceWeightTables};
+use crate::task_pool::TaskBufferPools;
 
 /// One DPB entry: this picture's clause 8.2 bookkeeping, plus a handle to its
 /// samples at the coded (macroblock-aligned, uncropped) size — kept uncropped
@@ -386,6 +387,12 @@ pub struct H264Decoder {
     in_flight: VecDeque<InFlight>,
     /// `-threads N`, after clamping.
     threads: usize,
+    /// Free lists for the per-picture buffers every dispatched
+    /// [`H264FrameTask`] would otherwise allocate afresh — see
+    /// `crate::task_pool`'s own doc (`planning/PERF-PROGRAMME.md` item A0).
+    /// Rebuilt, like `runner`, whenever [`Self::set_thread_count`] changes
+    /// how many pictures may be in flight at once.
+    pools: TaskBufferPools,
 }
 
 /// What the serial half decided about one picture's *output*, held until that
@@ -431,6 +438,11 @@ impl H264Decoder {
             runner: FrameRunner::new(1),
             in_flight: VecDeque::new(),
             threads: 1,
+            // One in-flight picture at one thread (`max_in_flight` below),
+            // plus one so a resolution's free list survives the brief
+            // overlap between a task returning its buffers and the next one
+            // asking for them.
+            pools: TaskBufferPools::new(2),
             limits,
         }
     }
@@ -686,15 +698,24 @@ impl H264Decoder {
         // (real `mb_type`, motion vectors, and residual, not merely bit
         // consumption), and `reconstruct_picture` never learns which coder
         // was used at all.
+        // A recycled `Vec<MbSummary>` when this resolution has decoded one
+        // before, cleared but still holding its capacity -- see
+        // `crate::task_pool`'s own doc (item A0). `_into` appends onto it
+        // exactly as the plain `decode_slice_cabac`/`decode_slice_cavlc`
+        // append onto the empty one they build themselves.
+        let recycled_macroblocks = self.pools.acquire_macroblocks(
+            (mbs_wide as usize).saturating_mul(mbs_high as usize),
+        );
         let stats = if pps.entropy_coding_mode {
             let mut cabac = CabacDecoder::from_reader(reader);
-            let stats = crate::mb::decode_slice_cabac(
+            let stats = crate::mb::decode_slice_cabac_into(
                 &mut cabac,
                 &mut self.budget,
                 sps,
                 pps,
                 &slice_header,
                 colocated.as_ref(),
+                recycled_macroblocks,
             )?;
             if cabac.malformed() {
                 return Err(Error::InvalidData(
@@ -703,13 +724,14 @@ impl H264Decoder {
             }
             stats
         } else {
-            crate::mb::decode_slice_cavlc(
+            crate::mb::decode_slice_cavlc_into(
                 &mut reader,
                 &mut self.budget,
                 sps,
                 pps,
                 &slice_header,
                 colocated.as_ref(),
+                recycled_macroblocks,
             )?
         };
         drop(colocated);
@@ -1011,6 +1033,7 @@ impl H264Decoder {
                 is_idr: info.is_idr,
             },
             limits: self.limits.clone(),
+            pools: self.pools.clone(),
         });
         self.in_flight.push_back(InFlight {
             flush_reorder_first,
@@ -1203,6 +1226,9 @@ impl Decoder for H264Decoder {
             self.threads = threads.max(1);
             self.runner = FrameRunner::new(self.threads);
             self.threads = self.runner.threads();
+            // `max_in_flight()` pictures can be outstanding at once, plus
+            // one for the same overlap `Self::new`'s own cap comments on.
+            self.pools = TaskBufferPools::new(self.max_in_flight().saturating_add(1));
         }
         Threading::Frame {
             max_frames: self.max_in_flight(),

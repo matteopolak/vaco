@@ -149,6 +149,7 @@ pub(crate) fn reconstruct_intra16x16_luma(
 /// 11's both resolve, via ordinary `blk_xy` z-order, to a *later* block
 /// index in the same macroblock -- "not yet decoded", the general rule,
 /// not a special one.
+#[derive(Debug)]
 struct PictureBuffer {
     mbs_wide: u32,
     mbs_high: u32,
@@ -1313,6 +1314,18 @@ impl ReadScratch {
         }
         Ok(())
     }
+
+    /// Put a reused scratch back into the state [`ReadScratch::new`] leaves
+    /// it in, without reallocating [`Self::block`].
+    ///
+    /// `block` itself needs no clearing: every read through it
+    /// (`crate::interp`'s fetch closures) writes the whole footprint it is
+    /// about to filter over before reading any of it back, the same
+    /// invariant that already lets a *fresh* `BlockScratch` start from
+    /// whatever the allocator handed it rather than a zeroed buffer.
+    fn reset(&mut self) {
+        self.failed = false;
+    }
 }
 
 /// A fully reconstructed picture: luma at `mbs_wide*16 x mbs_high*16`,
@@ -1826,6 +1839,7 @@ fn reconstruct_mb(
 /// So once row `d` is filtered, [`luma_rows_final`] and [`chroma_rows_final`]
 /// rows of each plane are final -- everything below that overhang is still row
 /// `d + 1`'s to modify.
+#[derive(Debug)]
 pub(crate) struct PictureReconstructor {
     buf: PictureBuffer,
     scratch: ReadScratch,
@@ -1938,6 +1952,45 @@ impl PictureReconstructor {
     /// The finished picture.
     pub(crate) fn finish(self) -> ReconstructedPicture {
         ReconstructedPicture { luma: self.buf.luma, cb: self.buf.cb, cr: self.buf.cr }
+    }
+
+    /// `(mbs_wide, mbs_high)` this reconstructor's three sample planes and
+    /// bookkeeping bitmaps are sized for -- what `crate::task_pool` keys its
+    /// free list on, since a buffer sized for one resolution cannot serve
+    /// another.
+    pub(crate) const fn geometry(&self) -> (u32, u32) {
+        (self.buf.mbs_wide, self.buf.mbs_high)
+    }
+
+    /// Bytes charged for [`Self::buf`]'s three real sample planes -- what a
+    /// pooled reuse must hand `Budget::charge` instead of the
+    /// `Budget::alloc` calls [`PictureBuffer::new`] would otherwise make.
+    /// [`Self::buf`]'s two bookkeeping bitmaps are not included, matching
+    /// [`PictureBuffer::new`]'s own doc: they never leave this type, so
+    /// nothing outside it needs to account for them.
+    pub(crate) fn charged_bytes(&self) -> u64 {
+        (self.buf.luma.len())
+            .saturating_add(self.buf.cb.len())
+            .saturating_add(self.buf.cr.len()) as u64
+    }
+
+    /// Put a finished reconstructor back into the state
+    /// [`PictureReconstructor::new`] would produce for the *same* geometry,
+    /// without reallocating any of its three sample planes, its two
+    /// bookkeeping bitmaps, or its scratch block.
+    ///
+    /// Pooled reuse (`crate::task_pool::TaskBufferPools`) is only ever
+    /// offered a reconstructor whose geometry already matches the request
+    /// (the pool clears its free list on a geometry change), so there is
+    /// nothing here to resize.
+    pub(crate) fn reset(&mut self) {
+        self.buf.luma.fill(128);
+        self.buf.decoded_4x4.fill(false);
+        self.buf.cb.fill(128);
+        self.buf.cr.fill(128);
+        self.buf.chroma_decoded.fill(false);
+        self.scratch.reset();
+        self.cursor = 0;
     }
 }
 

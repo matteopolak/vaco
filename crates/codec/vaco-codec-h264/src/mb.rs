@@ -675,6 +675,34 @@ pub fn decode_slice_cavlc(
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
 ) -> Result<SliceStats> {
+    decode_slice_cavlc_into(r, budget, sps, pps, header, colocated, Vec::new())
+}
+
+/// [`decode_slice_cavlc`], but appending into an already-allocated
+/// `Vec<MbSummary>` (cleared, capacity kept) instead of starting from an
+/// empty one every call.
+///
+/// `crate::decoder::H264Decoder` is the only caller with a recycled
+/// `Vec<MbSummary>` to hand in (`planning/PERF-PROGRAMME.md` item A0):
+/// `MbSummary` is 1,888 bytes and a 4K picture has 32,400 of them, so
+/// building this array from empty via `push` on every single picture is a
+/// 59 MiB allocate-and-free the allocator ends up caching rather than
+/// freeing, which is most of what pushed a 4K decode's RSS past 3.8 GiB.
+/// Every other caller (every test in this crate) keeps calling
+/// [`decode_slice_cavlc`], unchanged.
+///
+/// # Errors
+///
+/// As [`decode_slice_cavlc`].
+pub(crate) fn decode_slice_cavlc_into(
+    r: &mut BitReader<'_>,
+    budget: &mut Budget,
+    sps: &Sps,
+    pps: &Pps,
+    header: &SliceHeader,
+    colocated: Option<&ColocatedField>,
+    macroblocks: Vec<MbSummary>,
+) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
     if pps.transform_8x8_mode {
         // CAVLC-only refusal (moved out of `check_scope`, which CABAC's
@@ -711,7 +739,7 @@ pub fn decode_slice_cavlc(
     // `ctxIdxInc` to derive from a running `PrevMbQp` the way CABAC needs,
     // so only the running `QPY` value itself is carried here.
     let mut qpy = pps.slice_qp(header.slice_qp_delta).clamp(0, 51);
-    let mut stats = SliceStats::default();
+    let mut stats = SliceStats { macroblocks, ..SliceStats::default() };
 
     let mut curr_mb_addr = header.first_mb_in_slice;
 
@@ -3367,6 +3395,26 @@ pub fn decode_slice_cabac(
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
 ) -> Result<SliceStats> {
+    decode_slice_cabac_into(cabac, budget, sps, pps, header, colocated, Vec::new())
+}
+
+/// [`decode_slice_cabac`], but appending into an already-allocated
+/// `Vec<MbSummary>` instead of starting from an empty one every call —
+/// see [`decode_slice_cavlc_into`]'s own doc for why this exists and who
+/// the one caller is.
+///
+/// # Errors
+///
+/// As [`decode_slice_cabac`].
+pub(crate) fn decode_slice_cabac_into(
+    cabac: &mut CabacDecoder<'_>,
+    budget: &mut Budget,
+    sps: &Sps,
+    pps: &Pps,
+    header: &SliceHeader,
+    colocated: Option<&ColocatedField>,
+    macroblocks: Vec<MbSummary>,
+) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
     let is_b_slice = matches!(header.kind, SliceKind::B);
     // The gate that used to stand here is gone: B slices decode
@@ -3420,7 +3468,7 @@ pub fn decode_slice_cabac(
     // macroblock in the slice QPY,PREV is initially set equal to
     // SliceQPY."
     let mut qpy = i32::from(slice_qp);
-    let mut stats = SliceStats::default();
+    let mut stats = SliceStats { macroblocks, ..SliceStats::default() };
 
     let mut curr_mb_addr = header.first_mb_in_slice;
     loop {

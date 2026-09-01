@@ -63,10 +63,11 @@ use vaco_pixfmt::PixFmt;
 
 use crate::mb::MbSummary;
 use crate::reconstruct::{
-    BiPredMode, ImplicitWeights, PictureCtx, PictureReconstructor, ReconstructedPicture,
-    RefPicturePlanes, RefPlane, RowReach, SliceWeightTables, chroma_rows_final, luma_rows_final,
-    macroblocks_in_raster_order, row_reference_reach,
+    BiPredMode, ImplicitWeights, PictureCtx, RefPicturePlanes, RefPlane, RowReach,
+    SliceWeightTables, chroma_rows_final, luma_rows_final, macroblocks_in_raster_order,
+    row_reference_reach,
 };
+use crate::task_pool::TaskBufferPools;
 
 /// The slice-header knobs clause 8.7's filter reads, carried whole rather than
 /// as four loose arguments.
@@ -134,6 +135,12 @@ pub(crate) struct H264FrameTask {
     /// one exists to apply `max_alloc_single`/`max_frame_bytes` to each
     /// individual allocation, not to bound the total a second time.
     pub(crate) limits: Limits,
+    /// The decoder's own free lists for this task's working reconstruction
+    /// buffer, its `macroblocks` array and its output frame's storage —
+    /// see `crate::task_pool`'s own doc (`planning/PERF-PROGRAMME.md` item
+    /// A0). Cloning is a cheap `Arc` bump; every dispatched task shares the
+    /// same pools as the decoder that made it.
+    pub(crate) pools: TaskBufferPools,
 }
 
 /// The whole of one reference picture, waited for in full.
@@ -283,6 +290,7 @@ impl FrameTask for H264FrameTask {
             mut store,
             geometry,
             limits,
+            pools,
         } = *self;
         let mut budget = Budget::new(limits);
 
@@ -302,7 +310,7 @@ impl FrameTask for H264FrameTask {
         let strides = ((mbs_wide as usize).saturating_mul(16), (mbs_wide as usize).saturating_mul(8));
         let heights = (mbs_high.saturating_mul(16), mbs_high.saturating_mul(8));
         let mut publisher = RowPublisher::new();
-        let mut recon = PictureReconstructor::new(mbs_wide, mbs_high, &mut budget)?;
+        let mut recon = pools.acquire_reconstructor(mbs_wide, mbs_high, &mut budget)?;
 
         let row_wise = row_progress && macroblocks_in_raster_order(&macroblocks, mbs_wide, mbs_high);
         if row_wise {
@@ -386,6 +394,12 @@ impl FrameTask for H264FrameTask {
             }
         }
         drop(deblock_ctx);
+        // Nothing borrows `macroblocks` past `deblock_ctx` (reconstruction
+        // above is the only other reader, and it is long done) -- hand it
+        // back to the decoder's free list rather than dropping it, so the
+        // next picture at this geometry can `push` into it without growing
+        // from empty. See `crate::task_pool`'s own doc (item A0).
+        pools.release_macroblocks(macroblocks);
 
         // Publish before building the output frame: every picture waiting on
         // this one is blocked until this line runs, and the crop below is not.
@@ -394,8 +408,12 @@ impl FrameTask for H264FrameTask {
             writer.finish()?;
         }
 
-        let pic = recon.finish();
-        build_frame(&mut budget, mbs_wide, &pic, &geometry)
+        let frame = build_frame(&mut budget, mbs_wide, recon.planes(), &geometry, &pools)?;
+        // `recon`'s three sample planes are already copied into `frame` by
+        // `build_frame`'s own blit -- safe to recycle the working buffer for
+        // the next picture at this geometry instead of dropping it.
+        pools.release_reconstructor(recon);
+        Ok(frame)
     }
 }
 
@@ -411,9 +429,11 @@ impl FrameTask for H264FrameTask {
 pub(crate) fn build_frame(
     budget: &mut Budget,
     mbs_wide: u32,
-    pic: &ReconstructedPicture,
+    pic: (&[u8], &[u8], &[u8]),
     geometry: &FrameGeometry,
+    pools: &TaskBufferPools,
 ) -> Result<Frame> {
+    let (luma, cb, cr) = pic;
     let (width, height) = geometry.dimensions.ok_or(Error::InvalidData(
         "vaco-codec-h264: SPS crop leaves no visible picture area",
     ))?;
@@ -431,7 +451,13 @@ pub(crate) fn build_frame(
     let fmt = PixFmt::from_name("yuv420p").map_err(|_| {
         Error::InvalidData("vaco-codec-h264: yuv420p pixel format is not registered")
     })?;
-    let mut frame = Frame::alloc_video(budget, fmt, width, height)?;
+    // The same dimension/size check `Frame::alloc_video` would have made --
+    // kept explicit because the allocation itself now goes through the
+    // decoder's own `FramePool` (`crate::task_pool`, item A0), which has no
+    // `Budget` of its own to check against.
+    let bpp = u32::from(fmt.bits_per_pixel()).div_ceil(8).max(1);
+    budget.check_frame(width, height, bpp)?;
+    let mut frame = pools.acquire_frame(fmt, width, height)?;
     if geometry.is_idr {
         frame.flags |= FrameFlags::KEY;
     }
@@ -440,9 +466,9 @@ pub(crate) fn build_frame(
     let chroma_stride = (mbs_wide * 8) as usize;
     let (w, h) = (width as usize, height as usize);
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
-    crate::decoder::blit_plane(&pic.luma, luma_stride, luma_x0, luma_y0, &mut frame, 0, w, h);
-    crate::decoder::blit_plane(&pic.cb, chroma_stride, chroma_x0, chroma_y0, &mut frame, 1, cw, ch);
-    crate::decoder::blit_plane(&pic.cr, chroma_stride, chroma_x0, chroma_y0, &mut frame, 2, cw, ch);
+    crate::decoder::blit_plane(luma, luma_stride, luma_x0, luma_y0, &mut frame, 0, w, h);
+    crate::decoder::blit_plane(cb, chroma_stride, chroma_x0, chroma_y0, &mut frame, 1, cw, ch);
+    crate::decoder::blit_plane(cr, chroma_stride, chroma_x0, chroma_y0, &mut frame, 2, cw, ch);
 
     frame.pts = geometry.pts;
     frame.duration = geometry.duration;
