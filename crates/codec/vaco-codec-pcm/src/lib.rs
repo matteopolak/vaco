@@ -198,6 +198,22 @@ impl SendReceive for PcmDecoder {
         Ok(())
     }
 
+    /// The channel this decoder actually needs: PCM's bitstream states
+    /// neither sample rate nor channel layout, so without this it silently
+    /// decoded every stream at [`DEFAULT_SAMPLE_RATE`]/mono regardless of
+    /// what the container declared (see [`Decoder::prime_audio`]'s doc for
+    /// why that stayed invisible until something downstream trusted the
+    /// decoded rate). `0`/an empty layout is "not yet known" and left alone,
+    /// matching [`PcmDecoder::with_audio_params`]'s own contract.
+    fn prime_audio(&mut self, sample_rate: u32, layout: ChannelLayout) {
+        if sample_rate > 0 {
+            self.sample_rate = sample_rate;
+        }
+        if layout.channels > 0 {
+            self.layout = layout;
+        }
+    }
+
     fn send(&mut self, input: Option<&Packet>) -> Result<()> {
         match self.machine.accept(input.is_none())? {
             Accept::Drain => {
@@ -734,6 +750,34 @@ mod tests {
         dec.set_extradata(&audio_extradata(8000, 2)).expect("ok");
         assert_eq!(dec.sample_rate, 8000);
         assert_eq!(dec.layout.channels, 2);
+    }
+
+    /// `Decoder::prime_audio` is the channel a registry-built decoder
+    /// actually receives the container's declared rate/layout through — a
+    /// real container hands the CLI's demuxer output, not a hand-built
+    /// `audio_extradata` record `set_extradata` expects, so a decoder that
+    /// only honoured `set_extradata` decoded every WAV at
+    /// `DEFAULT_SAMPLE_RATE`/mono regardless of what the file's `fmt ` chunk
+    /// said (invisible for a mono 44100 Hz asset, wrong for anything else,
+    /// and load-bearing once a resampler downstream trusts the decoded rate).
+    #[test]
+    fn prime_audio_overrides_defaults() {
+        let mut dec = PcmDecoder::new(Limits::permissive(), CodecId::PcmS16le);
+        dec.prime_audio(48_000, ChannelLayout::STEREO);
+        assert_eq!(dec.sample_rate, 48_000);
+        assert_eq!(dec.layout, ChannelLayout::STEREO);
+    }
+
+    /// Mirrors `with_audio_params`'s own contract: a zero rate or an
+    /// unspecified (zero-channel) layout means "not yet known" and must not
+    /// clobber whatever the decoder already had.
+    #[test]
+    fn prime_audio_treats_zero_as_not_yet_known() {
+        let mut dec = PcmDecoder::new(Limits::permissive(), CodecId::PcmS16le);
+        dec.prime_audio(48_000, ChannelLayout::STEREO);
+        dec.prime_audio(0, ChannelLayout::unspecified(0));
+        assert_eq!(dec.sample_rate, 48_000);
+        assert_eq!(dec.layout, ChannelLayout::STEREO);
     }
 
     #[test]
