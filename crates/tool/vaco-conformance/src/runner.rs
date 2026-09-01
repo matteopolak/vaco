@@ -207,6 +207,25 @@ impl MediaCache {
 }
 
 /// Where our own binaries live.
+///
+/// # A binary tested silently is a binary that was left lying around
+///
+/// Measured directly (2026-09-01): a differential run with no `VACO_BIN_*`
+/// set falls back to `<CARGO_MANIFEST_DIR>/../../../target/{debug,release}`
+/// — the workspace's *shared* target directory — regardless of any
+/// `--target-dir` a caller passed to `cargo build` for a private build. In a
+/// tree six agents commit to concurrently, that shared directory is stale
+/// far more often than not: a binary built hours or days ago, silently
+/// tested as if it reflected the current source, reporting "no divergence"
+/// for a bug that was fixed since it was built and "divergence" for a bug
+/// introduced since — indistinguishable, from the report alone, from a
+/// genuine finding. [`UnderTest::discover`] now also honours
+/// `CARGO_TARGET_DIR` (cargo's own variable for exactly this) ahead of the
+/// shared-directory guess, and [`UnderTest::stale`] names every resolved
+/// binary whose mtime is older than the newest `.rs` file under `crates/` —
+/// `main.rs`'s `cmd_run` prints that prominently, the same way it already
+/// prints an unpinned reference version, rather than testing the stale
+/// binary as if nothing were wrong.
 #[derive(Debug, Clone, Default)]
 pub struct UnderTest {
     /// Our ffprobe equivalent.
@@ -215,17 +234,35 @@ pub struct UnderTest {
     pub transcode: Option<PathBuf>,
     /// Our ffplay equivalent.
     pub play: Option<PathBuf>,
+    /// Labels (`"vaco-probe"`/`"vaco"`/`"vaco-play"`) of every binary above
+    /// whose mtime predates the newest `.rs` file under `crates/` — see this
+    /// struct's own doc. Empty when the source tree could not be found
+    /// (e.g. this crate built and shipped standalone) rather than treating
+    /// "could not check" as "definitely fresh".
+    pub stale: Vec<&'static str>,
 }
 
 impl UnderTest {
-    /// Locate our binaries: `VACO_BIN_*` first, then the target directory.
+    /// Locate our binaries: `VACO_BIN_*` first, then `CARGO_TARGET_DIR`,
+    /// then the workspace's shared `target/`.
     #[must_use]
     pub fn discover() -> Self {
-        Self {
-            probe: find("VACO_BIN_PROBE", "vaco-probe"),
-            transcode: find("VACO_BIN_VACO", "vaco"),
-            play: find("VACO_BIN_PLAY", "vaco-play"),
+        let probe = find("VACO_BIN_PROBE", "vaco-probe");
+        let transcode = find("VACO_BIN_VACO", "vaco");
+        let play = find("VACO_BIN_PLAY", "vaco-play");
+
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..");
+        let newest_source = newest_rust_source_mtime(&repo_root.join("crates"));
+        let mut stale = Vec::new();
+        if let Some(newest_source) = newest_source {
+            for (label, bin) in [("vaco-probe", &probe), ("vaco", &transcode), ("vaco-play", &play)] {
+                if bin.as_deref().is_some_and(|b| is_older_than(b, newest_source)) {
+                    stale.push(label);
+                }
+            }
         }
+
+        Self { probe, transcode, play, stale }
     }
 
     /// The binary for `tool`, if it is built.
@@ -250,14 +287,65 @@ fn find(env_key: &str, name: &str) -> Option<PathBuf> {
         let p = PathBuf::from(p);
         return p.is_file().then_some(p);
     }
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .join("..");
-    ["debug", "release"]
-        .iter()
-        .map(|profile| root.join("target").join(profile).join(name))
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let cargo_target_dir = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from);
+    candidate_target_roots(cargo_target_dir.as_deref(), &manifest_dir)
+        .into_iter()
+        .flat_map(|root| ["debug", "release"].map(|profile| root.join(profile).join(name)))
         .find(|c| c.is_file())
+}
+
+/// The pure decision behind [`find`]'s root selection, taking the
+/// `CARGO_TARGET_DIR` value directly so it is testable without mutating
+/// process environment (`vaco_corpus::NetworkPolicy::from_var` uses the same
+/// shape for the same reason — the 2024 edition makes that `unsafe`, which
+/// this crate forbids unconditionally).
+fn candidate_target_roots(cargo_target_dir: Option<&Path>, manifest_dir: &Path) -> Vec<PathBuf> {
+    if let Some(dir) = cargo_target_dir {
+        vec![dir.to_path_buf()]
+    } else {
+        vec![manifest_dir.join("..").join("..").join("..").join("target")]
+    }
+}
+
+/// The most recent modification time among every `.rs` file under `dir`,
+/// walked recursively. `None` when `dir` does not exist (a binary shipped
+/// without its source tree) — [`UnderTest::discover`] treats that as "cannot
+/// check", not "definitely fresh".
+fn newest_rust_source_mtime(dir: &Path) -> Option<std::time::SystemTime> {
+    let mut newest: Option<std::time::SystemTime> = None;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(file_type) = entry.file_type() else { continue };
+            if file_type.is_dir() {
+                // `target/` directories nested under a crate (none should
+                // exist under `crates/`, but a stray one would make this
+                // walk scan its own build output) are the one thing worth
+                // skipping explicitly; everything else under `crates/` is
+                // source.
+                if path.file_name().is_some_and(|n| n == "target") {
+                    continue;
+                }
+                stack.push(path);
+            } else if path.extension().is_some_and(|e| e == "rs")
+                && let Ok(meta) = entry.metadata()
+                && let Ok(modified) = meta.modified()
+                && newest.is_none_or(|n| modified > n)
+            {
+                newest = Some(modified);
+            }
+        }
+    }
+    newest
+}
+
+fn is_older_than(path: &Path, newest_source: std::time::SystemTime) -> bool {
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .is_ok_and(|modified| modified < newest_source)
 }
 
 /// One case's outcome, with everything needed to explain it.
@@ -868,11 +956,68 @@ pub const DEFAULT_CASE_TIMEOUT: Duration = crate::run::DEFAULT_TIMEOUT;
     reason = "a failing expectation in a test is a failing test"
 )]
 mod tests {
-    use super::{Runner, Tally, UnderTest};
+    use super::{Runner, Tally, UnderTest, candidate_target_roots, is_older_than, newest_rust_source_mtime};
     use crate::case::{Capture, Case, CaseId, Compare, Tier, Tool, Verdict};
     use crate::divergence::Allowlist;
     use crate::normalise::Chain;
+    use std::path::Path;
     use std::time::Duration;
+
+    #[test]
+    fn cargo_target_dir_wins_when_set() {
+        let manifest_dir = Path::new("/repo/crates/tool/vaco-conformance");
+        let target_dir = Path::new("/private/scratch/mybuild");
+        let roots = candidate_target_roots(Some(target_dir), manifest_dir);
+        assert_eq!(roots, vec![target_dir.to_path_buf()]);
+    }
+
+    #[test]
+    fn falls_back_to_the_shared_workspace_target_when_unset() {
+        let manifest_dir = Path::new("/repo/crates/tool/vaco-conformance");
+        let roots = candidate_target_roots(None, manifest_dir);
+        assert_eq!(roots, vec![manifest_dir.join("..").join("..").join("..").join("target")]);
+    }
+
+    #[test]
+    fn a_binary_older_than_the_newest_source_file_is_stale() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let old_src = dir.path().join("old.rs");
+        std::fs::write(&old_src, "// old").expect("write");
+        // Force a real, measurable age gap rather than relying on two
+        // back-to-back writes landing in different mtime ticks (some
+        // filesystems have coarse mtime resolution).
+        let ancient = std::time::SystemTime::now() - Duration::from_secs(3600);
+        let f = std::fs::File::open(&old_src).expect("open");
+        f.set_modified(ancient).expect("set_modified");
+
+        let bin = dir.path().join("vaco");
+        std::fs::write(&bin, "binary").expect("write bin");
+        let ancienter = ancient - Duration::from_secs(60);
+        let f2 = std::fs::File::open(&bin).expect("open bin");
+        f2.set_modified(ancienter).expect("set_modified bin");
+
+        let new_src = dir.path().join("new.rs");
+        std::fs::write(&new_src, "// new").expect("write new");
+
+        let newest = newest_rust_source_mtime(dir.path()).expect("some source found");
+        assert!(is_older_than(&bin, newest), "the binary predates new.rs and must be flagged stale");
+    }
+
+    #[test]
+    fn a_binary_newer_than_every_source_file_is_not_stale() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let src = dir.path().join("a.rs");
+        std::fs::write(&src, "// a").expect("write");
+        let old = std::time::SystemTime::now() - Duration::from_secs(3600);
+        let f = std::fs::File::open(&src).expect("open");
+        f.set_modified(old).expect("set_modified");
+
+        let bin = dir.path().join("vaco");
+        std::fs::write(&bin, "binary").expect("write bin"); // freshly written: newer than `src`
+
+        let newest = newest_rust_source_mtime(dir.path()).expect("some source found");
+        assert!(!is_older_than(&bin, newest), "a binary built after every source file must not be flagged stale");
+    }
 
     fn a_case() -> Case {
         Case {

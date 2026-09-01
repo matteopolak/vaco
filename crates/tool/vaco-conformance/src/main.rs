@@ -100,6 +100,28 @@ fn main() -> ExitCode {
     }
 }
 
+/// Print a loud, impossible-to-miss warning when a binary under test
+/// predates the source it is meant to reflect (`UnderTest::stale`) — the
+/// incident this exists for: a differential run silently testing whichever
+/// `target/debug/vaco` was last left lying around, reporting findings that
+/// are really just "this build predates a fix" or "this build predates a
+/// regression" (measured 2026-09-01, see `runner.rs`'s own doc on
+/// `UnderTest`). This does not block the run — an intentional A/B against
+/// an older binary is a real use case `VACO_BIN_VACO` already supports —
+/// but nobody should be able to miss it.
+fn warn_stale_binaries(under_test: &vaco_conformance::runner::UnderTest) {
+    if under_test.stale.is_empty() {
+        return;
+    }
+    eprintln!(
+        "\n*** WARNING: {} binary/binaries under test predate the newest source file under          crates/ ***",
+        under_test.stale.join(", ")
+    );
+    eprintln!(
+        "    Set VACO_BIN_VACO/VACO_BIN_PROBE/VACO_BIN_PLAY to a binary you just built, or          `cargo build`, before trusting this run's findings.\n"
+    );
+}
+
 fn cmd_tables(discovery: &Discovery, allow: &Allowlist, deep: bool, strict_flag: bool) -> ExitCode {
     let Some(reference) = discovery.reference() else {
         println!(
@@ -249,6 +271,7 @@ fn cmd_run(
             .skip_reason()
             .unwrap_or_default()
             .clone_into(&mut runner.absent_reason);
+        warn_stale_binaries(&runner.under_test);
         let outcome = runner.run_case(case);
         let mut tally = Tally::default();
         tally.record(&outcome.verdict);
@@ -281,6 +304,7 @@ fn cmd_run(
         .skip_reason()
         .unwrap_or_default()
         .clone_into(&mut runner.absent_reason);
+    warn_stale_binaries(&runner.under_test);
     let (outcomes, tally) = runner.run_all(&cases, tier);
     print!("{}", report::render_run(&outcomes, tally, allow));
 
