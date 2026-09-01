@@ -1443,3 +1443,144 @@ single-threaded performance. It measured **2.9% faster**, 9 of 10 rounds:
 `RefPlane::Flat` reads with the same instructions as before, and the rewrite
 forced hoisting chroma's per-point fetch closure to the 2x2 group a 4x4 block
 needs. The refactor paid for itself and found an optimisation.
+
+## 23. AAC IMDCT through `vaco-tx`'s `Plan` (C1) — 217x behind ffmpeg to 2–5x
+
+`vaco-codec-aac`'s production decode path (`reconstruct.rs:447`/`:460`) called
+`vaco_tx::reference::imp::imdct` — an `O(n²)` direct evaluation with a `cos`
+per `(j, k)` pair, documented in `vaco-tx` as **"verification only"** — while a
+fast `Plan`-based transform already existed unused in the same crate. The
+perf programme's baseline profile put 80.3% of sampled AAC decode time inside
+`libm` under that one function, plus its own 7.7%: ~88% of runtime, and the
+worst decode-side ratio against `ffmpeg` in the whole report (217x).
+
+### The change
+
+`reconstruct.rs` now holds an `ImdctPlans` struct (`long`/`short`, one
+`Tx<f64>` each) built once with `Plan::<f64>::new(TxKind::Mdct,
+Direction::Inverse, n, 1.0, TxFlags::FULL_IMDCT)` for AAC's two fixed block
+lengths (2048, 256). `AacDecoder` builds it lazily on first use (its `make`
+closure in `DECODER_AAC` is infallible, so the fallible `Plan::new` — which
+never actually fails at these fixed lengths — is deferred to `send_packet`,
+which already returns a `Result`) and threads `&mut ImdctPlans` through both
+`finalize_channel` call sites, reused across every channel and packet since
+reconstruction is strictly sequential within one packet. `f64` throughout,
+matching the `AGENT-CONSTRAINTS.md`/plan requirement that this be verifiable
+against the *current* production output rather than a widened tolerance:
+`vaco-tx/tests/oracle.rs`'s `mdct_and_imdct_match_the_reference` already
+asserted `Plan::<f64>`'s `FULL_IMDCT` inverse agrees with
+`reference::imp::imdct` to `rms_rel < 1e-12` up to `n = 960`, covering AAC's
+short length (256) but not its long one — extended to `n = 2048` as part of
+this change (still passes at `< 1e-12`). `reference::imdct` itself is
+untouched; it remains `vaco-tx`'s own oracle, just no longer reachable from
+any production call site (D19 — one definition per concept, one of them now
+inert on the runtime path rather than two live ones).
+
+Two small defensive additions at the call site, not present before: the
+coefficient buffer fed to `Tx::execute` is `resize`d to the plan's exact
+input length before the call. `Tx::execute`'s own contract is "a short
+buffer produces no output rather than a panic" in release, but that
+"no panic" only holds because of a `debug_assert!` that *does* panic in a
+debug/fuzz build on a length mismatch — the old `reference::imdct` never
+had that failure mode (a bounded loop over whatever length it was given).
+Since `spec.first()` can in principle be `None` (empty windows) whereas the
+old code tolerated it silently, padding first keeps the never-panics
+property intact end to end rather than depending on `Tx::execute`'s
+release-only leniency.
+
+### Verified byte-identical, not just numerically close
+
+Built two `dist` binaries into private `--target-dir`s from a `git worktree`
+at the pre-change commit and from the working tree with this change,
+features `vaco-registry/patent-encumbered-aac-decode` (H.264/HEVC excluded —
+out of this item's lane and, at the pre-change commit, `vaco-registry`
+hadn't gained those feature flags yet). Confirmed the "after" binary actually
+contains the new code and the "before" binary does not (a `strings` grep for
+one of the new error messages), so the comparison is against what it claims
+to be, not a stale or misresolved binary.
+
+5 fixtures (`ffmpeg -c:a aac`, generated with `lavfi` `sine` sources):
+22050 Hz mono, 44100 Hz mono, 44100 Hz stereo, 48000 Hz stereo, 48000 Hz 5.1
+(`channelConfiguration` 6, via `pan=5.1`). AAC-LC only — the only profile
+this decoder claims (§"Known gaps": SBR/HE-AAC, #446, is not landed).
+
+```
+vaco -i <fixture> -map 0:a:0 -c:a pcm_s16le -f s16le -  | shasum -a 256
+```
+
+at each file's native sample rate (no `-ar`/`-ac` override, so no resampler
+sits between the decoder and the hash) — all 5 hashes identical before and
+after. AAC is not byte-exact against `ffmpeg` (never claimed to be, see
+"Decode accuracy" in `docs/codec/vaco-codec-aac.md`) but this change's own
+bar is stricter and the one that actually matters here: identical to *itself*
+before and after, since `reference::imp::imdct` and the fast `Plan` are
+already known to agree to `1e-12` — a differing output sample would mean the
+wiring (scale, coefficient count, buffer order) was wrong, not that rounding
+differs. It wasn't; every fixture matched exactly.
+
+### Measured — interleaved A/B, alternating start order, median of 6–10 independent launches per fixture
+
+`scripts/perf-baseline-bench.py`, one job per fixture, `vaco_before` /
+`vaco_after` / `ffmpeg_t1` interleaved every round. Load average was high for
+this whole run (six other agents active; **1-min load 28–44** across the
+run, well past the ~8 the measurement protocol calls light) — reported here
+per protocol, and a 5-round supplementary check with `/usr/bin/time -l`
+CPU-seconds (`user+sys`) on the primary fixture agrees with the wall-clock
+numbers to within their own spread, so the load noise did not change the
+conclusion:
+
+| Fixture | before median | after median | ffmpeg `-threads 1` median | before/ffmpeg | after/ffmpeg | before/after |
+|---|---:|---:|---:|---:|---:|---:|
+| mono, 22050 Hz | 3.700s | 0.058s | 0.025s | 147x | 2.3x | 63x |
+| mono, 44100 Hz | 8.119s | 0.126s | 0.034s | 242x | 3.8x | 64x |
+| stereo, 44100 Hz | 7.569s | 0.124s | 0.038s | 202x | 3.3x | 61x |
+| stereo, 48000 Hz | 27.187s | 0.277s | 0.055s | 496x | 5.1x | 98x |
+| 5.1, 48000 Hz | 20.157s | 0.204s | 0.045s | 444x | 4.5x | 99x |
+
+Win/loss: **44/44 interleaved rounds** (10+10+6+10+8, one per fixture) had
+`vaco_after` faster than `vaco_before` — not a median artefact, every single
+round. Supplementary CPU-seconds check (mono 44100 Hz, 5 rounds,
+`/usr/bin/time -l`): before ≈ 7.6–8.3s `user+sys`, after ≈ 0.10–0.11s,
+`ffmpeg -threads 1` ≈ 0.05s — before/ffmpeg ≈ 156x, after/ffmpeg ≈ 2.1x,
+before/after ≈ 74x, consistent with the wall-clock table.
+
+The `audio_decode_aac` job's own fixture (`audio_aac.m4a` — the mono/44100
+row above, copied byte-for-byte from `PERF-BASELINE.md`'s corpus) reproduces
+that report's 217x-class ratio on the pre-change binary almost exactly
+(242x here, under heavier load), which is the sanity check that the "before"
+binary really is measuring what the baseline measured, not something else.
+
+### Ceiling: predicted ~8x, measured 61x–99x — exceeded, and why
+
+The baseline's Amdahl ceiling (88% of runtime in the IMDCT, sped up to the
+limit) predicted `1/(1-0.88) ≈ 8.3x`, i.e. 217x → ~27x against `ffmpeg`. The
+measured before/after speedup is **61x–99x**, roughly 8–12x past that
+ceiling. Solving the same formula backwards from the measured speedup puts
+the *effective* sequential-remaining share at ~98–99%, not 88%: a sampling
+profiler's stack-percentage and a wall-clock-share are related but not
+identical measures (inlining, off-CPU time, and sampling granularity at
+4000 Hz over a comparatively short per-frame call all bias a hot, tight,
+non-inlined leaf like `imp::imdct`'s `cos` loop toward under-attribution
+relative to its true wall-clock cost). Practically: at these block sizes
+(2048/256) the `O(n²)` reference so thoroughly dominates total runtime that
+removing it collapses decode almost to the non-IMDCT remainder (parsing,
+Huffman decode, windowing, overlap-add) rather than to the fraction the
+profile assigned it. This is a case where the ceiling estimate undershot the
+true win rather than the far more common direction in this programme's
+history (a confident prediction measuring backwards) — the fix still needed
+verifying byte-for-byte, which it did, before trusting the number.
+
+### Files touched (this item's lane only: AAC/transform crates)
+
+- `crates/codec/vaco-codec-aac/src/reconstruct.rs`: `ImdctPlans`, the two
+  `finalize_channel` IMDCT call sites rewired from `reference::imdct` to
+  `Tx<f64>::execute`.
+- `crates/codec/vaco-codec-aac/src/decoder.rs`: `AacDecoder.imdct: Option<ImdctPlans>`,
+  lazy construction, threaded into both `finalize_channel` sites.
+- `crates/signal/vaco-tx/tests/oracle.rs`: added `n = 2048` to
+  `mdct_and_imdct_match_the_reference`'s size list (256 was already covered),
+  closing the gap the plan's own stop condition named before trusting the
+  production wiring on it.
+
+`vaco-codec-h264`, `vaco-codec-hevc`, the filter crates, `vaco-conformance`
+and the fuzz harnesses were not touched — outside this item's lane.

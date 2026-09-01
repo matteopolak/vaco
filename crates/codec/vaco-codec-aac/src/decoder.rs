@@ -38,7 +38,7 @@ use vaco_sampfmt::SampleFmt;
 
 use crate::config::DecoderConfig;
 use crate::raw_data_block::{self, Element};
-use crate::reconstruct::{self, OverlapState};
+use crate::reconstruct::{self, ImdctPlans, OverlapState};
 use crate::swb_tables::{swb_offset_long, swb_offset_short};
 use crate::tns_apply::tns_max_bands;
 
@@ -60,6 +60,13 @@ pub struct AacDecoder {
     /// known until then for every path except an already-resolved
     /// `AudioSpecificConfig`.
     overlap: Vec<OverlapState>,
+    /// The long/short IMDCT plans (C1: `vaco-tx`'s `Plan`, not the O(n²)
+    /// `reference::imdct` production used to call). Built lazily on first
+    /// use — `AacDecoder::new` is infallible (its `make` signature in
+    /// `DecoderDesc` cannot report an error), while `Plan::new` returns a
+    /// `Result` in general, even though AAC's two fixed lengths (2048, 256)
+    /// never actually fail it.
+    imdct: Option<ImdctPlans>,
     /// A running counter feeding perceptual-noise-substitution's
     /// pseudo-random generator a different (but fully deterministic) seed
     /// per channel per frame — PNS is explicitly not required to be
@@ -82,6 +89,7 @@ impl AacDecoder {
             extradata_config: None,
             config: None,
             overlap: Vec::new(),
+            imdct: None,
             prng_counter: 0,
             pending: VecDeque::new(),
             draining: false,
@@ -205,6 +213,15 @@ impl Decoder for AacDecoder {
             self.overlap = (0..total_channels).map(|_| OverlapState::new()).collect();
         }
 
+        // Built once, reused for every channel and every packet: `Tx::execute`
+        // takes `&mut self` only for its scratch buffer, and channels within
+        // one packet are reconstructed strictly sequentially below, so one
+        // pair of plans is enough (see `ImdctPlans`'s own doc).
+        let mut imdct = match self.imdct.take() {
+            Some(p) => p,
+            None => ImdctPlans::new()?,
+        };
+
         let mut channels: Vec<Vec<f32>> = Vec::new();
         let mut overlap_iter = 0usize;
         for element in &elements {
@@ -216,7 +233,7 @@ impl Decoder for AacDecoder {
                         continue;
                     };
                     let out = reconstruct::finalize_channel(
-                        stream, spec, swb_long, swb_short, max_bands_long, max_bands_short, overlap,
+                        stream, spec, swb_long, swb_short, max_bands_long, max_bands_short, overlap, &mut imdct,
                     );
                     channels.push(out);
                     overlap_iter += 1;
@@ -236,13 +253,13 @@ impl Decoder for AacDecoder {
                     let out0 = {
                         let Some(overlap) = self.overlap.get_mut(overlap0_idx) else { continue };
                         reconstruct::finalize_channel(
-                            ch0, spec0, swb_long, swb_short, max_bands_long, max_bands_short, overlap,
+                            ch0, spec0, swb_long, swb_short, max_bands_long, max_bands_short, overlap, &mut imdct,
                         )
                     };
                     let out1 = {
                         let Some(overlap) = self.overlap.get_mut(overlap1_idx) else { continue };
                         reconstruct::finalize_channel(
-                            ch1, spec1, swb_long, swb_short, max_bands_long, max_bands_short, overlap,
+                            ch1, spec1, swb_long, swb_short, max_bands_long, max_bands_short, overlap, &mut imdct,
                         )
                     };
                     channels.push(out0);
@@ -252,6 +269,7 @@ impl Decoder for AacDecoder {
                 Element::ProgramConfig(_) => {}
             }
         }
+        self.imdct = Some(imdct);
 
         if channels.is_empty() {
             return Err(Error::Unsupported(

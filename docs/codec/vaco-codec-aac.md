@@ -260,10 +260,36 @@ rather than one that processes a channel pair one channel at a time):
    `tns_ar_filter`'s in-place all-pole IIR filter, per §4.6.9.3's
    pseudocode — the syntax was already parsed and kept in #444; this pass
    adds the second half, actually filtering the spectrum.
-5. **IMDCT** (`vaco_tx::reference::imdct`, SP-C6, reused as-is): confirmed
-   phase-compatible with §4.6.11.3.1's formula (`(n + 0.5 + N/4)(k+0.5)`)
-   without modification, needing only an explicit `2/N` scale factor the
-   caller applies (`vaco-tx`'s own `imdct` has no built-in normalisation).
+5. **IMDCT** (`vaco_tx::{Plan, Tx}`, `TxKind::Mdct`/`Direction::Inverse`/
+   `TxFlags::FULL_IMDCT`, C1, 2026-09-01): confirmed phase-compatible with
+   §4.6.11.3.1's formula (`(n + 0.5 + N/4)(k+0.5)`) without modification,
+   needing only an explicit `2/N` scale factor the caller applies (neither
+   `vaco-tx` convention has a built-in normalisation here). Originally
+   wired to `vaco_tx::reference::imdct` (SP-C6) — an `O(n²)` direct
+   evaluation kept in the crate only as an oracle for tests — which made
+   AAC decode measure 217x slower than `ffmpeg`, 88% of it in that one
+   function and the `libm::cos` it called per coefficient pair. `ImdctPlans`
+   (`reconstruct.rs`) now holds one `Tx<f64>` per block length (2048, 256)
+   built once with `Plan::<f64>::new(Mdct, Inverse, n, 1.0, FULL_IMDCT)` —
+   `f64` so the output is the reference's to `rms_rel < 1e-12`
+   (`vaco-tx/tests/oracle.rs`, extended to `n = 2048` by this change; 256
+   was already covered) rather than to a widened tolerance. Measured
+   end to end: interleaved A/B against the pre-change binary, 44/44 rounds
+   faster across 5 fixtures (mono/stereo/5.1, 22050/44100/48000 Hz),
+   median wall-clock speedup 61x–99x, decoded PCM byte-identical to the
+   pre-change output on every fixture (`shasum -a 256` over
+   `-f s16le`, native rate, no resample) — confirming the wiring, not just
+   the numerical agreement, since a differing sample there means the
+   plan's convention was mismatched, not that rounding differs. Ratio
+   against same-session `ffmpeg -threads 1`: was 147x–496x depending on
+   fixture (machine under load from concurrent agents; same order as the
+   217x baseline), now 2.3x–5.1x. The Amdahl ceiling from the 88%-in-IMDCT
+   profile share predicted ~8x (217x → ~27x); the measured ~61x–99x
+   speedup exceeds it substantially, because at these block sizes the
+   `O(n²)` reference so dominates wall time that removing it collapses
+   total runtime almost to the non-IMDCT remainder rather than to the
+   fraction the sampling profiler attributed to it — see
+   `planning/E2E-GAPS.md` §23 for the full measurement.
 6. **Windowing + overlap-add** (§4.6.11.3.2): sine and — see below — KBD
    window halves, assembled per `WindowSequence`
    (`OnlyLong`/`LongStart`/`LongStop`/`EightShort`), then added to the
@@ -696,7 +722,9 @@ is set in `vaco-component.toml` and consumed entirely by
 — reconstruction's channel-layout tagging), `vaco-chlayout`, `vaco-sampfmt`.
 Added by #445: `vaco-codec-dsp-sinewin` (`sine_window`, `kbd_window` — see
 that crate's own doc for the KBD addition this pass made to it) and
-`vaco-tx` (`reference::imdct`, reused from SP-C6 unmodified).
+`vaco-tx` (`Plan`, `Tx`, `TxKind::Mdct`, `TxFlags::FULL_IMDCT` — since C1,
+2026-09-01; `reference::imdct` is no longer on the production path, kept
+only as `vaco-tx`'s own oracle).
 
 ## Specification
 

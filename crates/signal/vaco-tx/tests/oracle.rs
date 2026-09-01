@@ -160,7 +160,7 @@ fn rdft_matches_the_reference_both_ways() {
 #[test]
 fn mdct_and_imdct_match_the_reference() {
     for &n in &[
-        4usize, 8, 12, 16, 20, 24, 32, 36, 40, 48, 60, 64, 120, 128, 240, 256, 480, 960,
+        4usize, 8, 12, 16, 20, 24, 32, 36, 40, 48, 60, 64, 120, 128, 240, 256, 480, 960, 2048,
     ] {
         let x = signal(n, n as u64 + 21);
         let plan = Plan::<f64>::mdct(n, false, 1.0).unwrap();

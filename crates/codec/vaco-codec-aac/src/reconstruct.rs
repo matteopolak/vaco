@@ -20,7 +20,8 @@
 )]
 
 use vaco_codec_dsp_sinewin::{kbd_window, sine_window};
-use vaco_tx::reference::imdct;
+use vaco_core::{Error, Result};
+use vaco_tx::{Direction, Plan, Tx, TxFlags, TxKind};
 
 /// KBD shape parameter for the 2048-sample long window (§4.6.11.3.2).
 const KBD_ALPHA_LONG: f64 = 4.0;
@@ -84,6 +85,39 @@ impl OverlapState {
             second_half: vec![0.0; LONG_LEN / 2],
             prev_window_shape: false,
         }
+    }
+}
+
+/// The two inverse-MDCT plans AAC LC ever needs: the long (2048) and short
+/// (256) block lengths are fixed by the format, so there is no reason for a
+/// length-keyed cache the way a codec with variable block sizes needs one
+/// (contrast `vaco-codec-vorbis`'s `Imdct`).
+///
+/// `f64` throughout, matching `vaco_tx::reference::imp::imdct` (the O(n²)
+/// direct evaluation this replaces) to `rms_rel < 1e-12`
+/// (`vaco-tx/tests/oracle.rs`) — the plan's own contract for
+/// `Plan::<f64>::new(Mdct, Inverse, n, 1.0, FULL_IMDCT)` up to `n = 960`,
+/// extended to AAC's 2048/256 by this crate's own tests (see
+/// `tests::full_imdct_2048_and_256_match_the_reference` below). This is what
+/// keeps the change verifiable against the *current* production output
+/// rather than against a widened tolerance — an `f32` plan is a later,
+/// separately measured step (C2).
+#[derive(Debug)]
+pub(crate) struct ImdctPlans {
+    long: Tx<f64>,
+    short: Tx<f64>,
+}
+
+impl ImdctPlans {
+    pub(crate) fn new() -> Result<Self> {
+        let long = Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, LONG_LEN, 1.0, TxFlags::FULL_IMDCT)
+            .map_err(|_| Error::InvalidData("vaco-codec-aac: failed to build the long IMDCT plan"))?;
+        let short = Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, SHORT_LEN, 1.0, TxFlags::FULL_IMDCT)
+            .map_err(|_| Error::InvalidData("vaco-codec-aac: failed to build the short IMDCT plan"))?;
+        Ok(Self {
+            long: Tx::new(long),
+            short: Tx::new(short),
+        })
     }
 }
 
@@ -420,6 +454,7 @@ pub(crate) fn finalize_channel(
     max_bands_long: u8,
     max_bands_short: u8,
     overlap: &mut OverlapState,
+    imdct: &mut ImdctPlans,
 ) -> Vec<f32> {
     let ics = &stream.ics;
     let is_short = ics.window_sequence.is_short();
@@ -443,8 +478,16 @@ pub(crate) fn finalize_channel(
             sine_window::<SHORT_LEN>()
         };
         for (idx, w) in spec.iter().enumerate() {
-            let coeffs: Vec<f64> = w.iter().map(|&v| f64::from(v)).collect();
-            let time = imdct(&coeffs);
+            let mut coeffs: Vec<f64> = w.iter().map(|&v| f64::from(v)).collect();
+            // The plan's input contract is exactly `SHORT_LEN / 2` samples;
+            // pad or truncate defensively so a malformed bitstream (an
+            // `IcsStream` whose window came out a different length) hits the
+            // "produces no output" branch of `Tx::execute` rather than its
+            // `debug_assert`, matching the never-panics behaviour the
+            // reference evaluation this replaces had unconditionally.
+            coeffs.resize(SHORT_LEN / 2, 0.0);
+            let mut time = vec![0.0f64; SHORT_LEN];
+            imdct.short.execute(&mut time, &coeffs);
             let scale = 2.0 / SHORT_LEN as f64;
             let mut out = vec![0.0f32; SHORT_LEN];
             for (i, slot) in out.iter_mut().enumerate() {
@@ -456,8 +499,10 @@ pub(crate) fn finalize_channel(
         }
     } else {
         let win = build_window(ics.window_sequence, ics.window_shape, overlap.prev_window_shape);
-        let coeffs: Vec<f64> = spec.first().map(|w| w.iter().map(|&v| f64::from(v)).collect()).unwrap_or_default();
-        let time = imdct(&coeffs);
+        let mut coeffs: Vec<f64> = spec.first().map(|w| w.iter().map(|&v| f64::from(v)).collect()).unwrap_or_default();
+        coeffs.resize(LONG_LEN / 2, 0.0);
+        let mut time = vec![0.0f64; LONG_LEN];
+        imdct.long.execute(&mut time, &coeffs);
         let scale = 2.0 / LONG_LEN as f64;
         let mut out = vec![0.0f32; LONG_LEN];
         for (i, slot) in out.iter_mut().enumerate() {
