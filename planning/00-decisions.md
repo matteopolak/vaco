@@ -1301,3 +1301,45 @@ in different crates — but `vaco-pool` depends on `vaco-bitstream` and carries 
 error means one of the two moved. That is the shape to copy when a constant
 genuinely must live in two places: not a comment saying they match, a compile
 error when they stop.
+
+## D20 — No design is load-bearing for its own sake (2026-08-30, owner)
+
+The owner's ruling, verbatim:
+
+> massive architectural changes are totally fine to improve perf. we arent
+> locked into anything at all with the design of any piece
+
+This is a standing licence, not a one-off for a single pass. It applies to
+every agent and every crate, and it is broader than performance: no existing
+structure is to be preserved merely because it is what is there.
+
+**What this permits.** Rewriting a crate's public API; replacing a data
+representation wholesale (a planar picture buffer, the packet or frame model,
+the DPB, the scheduler's stage model); collapsing or splitting crates; changing
+a trait every codec implements; abandoning an abstraction that has stopped
+paying for itself. If the measured evidence says the shape is the problem, the
+shape is what changes.
+
+**What it does not relax.** The rules that exist for correctness, licence and
+safety are untouched, and no architectural argument overrides them:
+
+- `#![forbid(unsafe_code)]` (D2), and the `vaco-hw-*` exception (D13).
+- Clean room (D7/D15): FFmpeg, libav, VLC, GStreamer, mpv, x264 and x265
+  sources stay unopened. The ffmpeg **binary** remains fair game as a black
+  box (D6).
+- Patent gating (D4/D4.1), the dependency gates (D10) as amended for the
+  media core, MIT-only licensing, and the provenance record.
+- **Byte-exactness against ffmpeg**, where it has been won. Both codecs decode
+  stock encoder output byte for byte; that is the hardest-won property in the
+  repo and no restructuring may spend it.
+- One definition per concept (D19) — a rewrite replaces a definition, it does
+  not add a second one beside it.
+
+**What it demands in exchange.** A large change is only better if it is
+*measured* to be. Six optimisations on record were reverted because the
+measurement disagreed with the reasoning, twice on changes that removed
+obviously redundant work and were slower for it. So: land an architectural
+change in stages, each one committed and byte-exact; measure each stage on its
+own; and be as willing to report "restructured, measured, no faster, reverted"
+as to report a win. A negative result on a large change is worth more than a
+small one, because it closes a larger question.
