@@ -1695,3 +1695,108 @@ the session.
 `vaco-codec-h264`, the AAC/transform crates, the filter crates,
 `vaco-conformance` and the fuzz harnesses were not touched — outside this
 item's lane.
+
+## 25. FFV1 encoder profiled (D1) — plane traversal and range coding split ~40/30, one profiled fix landed, one severe pre-existing gap found
+
+Item D1's profile stage, done first as the plan requires (§9.4 had
+isolated the encoder's serial cost at ~3.3s but never symbolicated it).
+Build: `cargo build --profile dist -p vaco-cli` with the three encumbered
+decode features, private `--target-dir`, `dsymutil`'d. Fixture:
+`h264_1080p.mp4`, 125 frames, `-threads 1`, decode-then-transcode-to-ffv1.
+Encoder and decoder are not separate libraries (one static binary), so
+encoder-only samples were isolated by the OUTERMOST (physically-emitted)
+frame's function name/file (`vaco_codec_ffv1`/`Ffv1Encoder` substring),
+with generic shared leaves (`core::ptr::drop_glue::<T>` and similar) that
+carry no crate identity of their own re-attributed to their immediate
+in-lib caller. Resolved 99.8% of leaf addresses (100% after the fix
+landed and the binary was re-profiled); load average 4-11 throughout, one
+report run at CPU-seconds primary per the ~10+ reading.
+
+**Split**: 49.92% of in-lib samples fall under FFV1's own outermost
+frames, 46.05% under H.264 decode, 4.03% other (matroska mux, generic
+glue) — i.e. at `-threads 1` the encoder is roughly as expensive as H.264
+decode on this fixture, matching §9.4's ~3.3s-encoder-vs-~3.6-4.7s-decode
+finding now at instruction-sample resolution rather than wall-clock
+subtraction.
+
+**Phase attribution** (innermost frame, ffv1-attributed subset, 13,834
+samples): plane-traversal (`SliceBuf::border`/`neighbours`/bounds-checked
+`get`, all `.get(..).copied().unwrap_or(0)` over a flat `Vec<i32>`)
+39.75%; range coding (`put_symbol`/`put_rac`/`renormalize`/per-context
+state array) 30.38%; `core::ptr::drop_glue::<vaco_core::error::Error>`
+10.31%; `median_predictor` 8.22% (not folded into the hot loop's
+monomorphization at every call site despite `#[inline]`); per-plane
+orchestration (`encode_plane_range`'s own body) 5.00%; context modelling
+(`compute_context`/`QuantTable::get`) ~1%; a ~5% residual of small
+(<1.2% each) items. **Scaffolding (plane traversal + error-plumbing +
+orchestration, ~55%) dominates the range coder's own arithmetic (~30%),
+so D1's own stop condition ("more than half the time in the range
+coder's own arithmetic") does not fire** — the per-sample item proceeds
+in Wave 2, per the plan.
+
+**Fix landed** (measured, kept): the three per-pixel `.ok_or(Error::X)`
+calls in `slice.rs` (`encode_plane_range`, `decode_plane_range`,
+`decode_plane_golomb`) construct an `Error` value unconditionally before
+the `Option` is even matched, on every one of ~2M samples/frame. Because
+`vaco_core::Error` has a `String`-carrying variant elsewhere in the enum,
+this is not a trivially-droppable type, and the eager construction left
+a real (non-eliminated) `drop_glue::<Error>` call in the loop rather than
+being optimised away. Changed to `.ok_or_else(|| Error::X)`
+(`#[allow(clippy::unnecessary_lazy_evaluations, reason = "measured: ...")]`
+at each site, since the default clippy heuristic assumes eager is
+cheaper — measurably false here). Verified: byte-identical encoded output
+before/after (confirmed by reverting just this file to `HEAD` and
+rebuilding against the same tree snapshot as the fixed version, isolating
+the change from concurrent unrelated edits elsewhere in the tree at the
+time); `cargo test -p vaco-codec-ffv1 --locked` and
+`cargo clippy -p vaco-codec-ffv1 --all-targets --locked -- -D warnings`
+both clean. Re-profiling the fixed binary: `drop_glue::<Error>` no longer
+appears in the top ~40 cost centres at all; whole-profile share of any
+frame mentioning `Error` anywhere in its inline chain fell from 5.19% to
+3.64% (in-lib samples). A 10-round interleaved wall/CPU-seconds A/B
+between the pre- and post-fix binaries (both built from the same tree
+snapshot) came back statistically flat (0.94-0.97x, i.e. within the
+round-to-round spread of 6.2-11s under this session's load average
+10-12) — reported as inconclusive at the whole-process level, not as a
+loss; the profile-level evidence is the reason this is kept rather than
+reverted.
+
+**Severe pre-existing gap found, not caused by this item** (same
+byte-identical-revert method above rules it out): a real transcode's
+output `CodecPrivate` is the *input* H.264 stream's
+`AVCDecoderConfigurationRecord` verbatim, not FFV1's own RFC 9043
+Configuration Record — confirmed by walking the muxed file's EBML
+directly. Neither `ffmpeg` (`Invalid version in global header`) nor this
+crate's own decoder (`ffv1: decoder has no configuration; call
+set_extradata first`) can open a single FFV1 file this build produces via
+`-c:v ffv1`. Root cause: `Encoder::extradata()` — the channel
+`Muxer::add_stream` actually reads, before any frame is sent, exactly the
+mechanism `vaco-codec-core`'s own doc comment describes fixing for FLAC
+(`prime_audio` + `extradata()`, closing this same file's #2) — has no
+video-side equivalent (`Encoder::prime_video` does not exist; only
+`Decoder::prime_video` does, added for FFV1's own decode-side geometry
+gap). `Ffv1Encoder` therefore cannot answer `extradata()` early and
+never overrides it, so `vaco-cli`'s output `CodecParameters` keeps
+whatever it was seeded with from the *input* stream instead. The
+`PacketSideData::NewExtradata` this crate attaches to the first packet is
+correctly RFC-9043-shaped but is a dead end: `vaco-mux-matroska` never
+reads it to patch a track's `CodecPrivate` after the Tracks element is
+already on disk. Full detail and the three-file fix sketch (add
+`Encoder::prime_video` to `vaco-codec-core`, call it from `vaco-cli`
+before `add_stream`, override it plus `extradata()` on `Ffv1Encoder`) are
+in `docs/codec/vaco-codec-ffv1.md`. Not fixed under D1: all three files
+(`vaco-codec-core/src/lib.rs`, `vaco-codec-core/src/protocol.rs`,
+`vaco-cli/src/exec.rs`) had concurrent, unrelated edits in flight at the
+time this was found, and the fix is cross-crate and architectural rather
+than a profiled-hot-loop change — spawned as a follow-up task instead of
+attempted here.
+
+**Also found, not created here**: `vaco-codec-ffv1` has no
+`fuzz/fuzz_targets/*ffv1*` entry — a gap against this project's own "no
+fuzz target, not done" rule (D6), out of scope for an encoder-performance
+profile.
+
+`vaco-codec-h264`, `vaco-codec-hevc`, the AAC/transform crates, the
+filter crates, `vaco-conformance` and the fuzz harnesses were not
+touched — outside this item's lane. `vaco-codec-core` and `vaco-cli` were
+read for diagnosis but not edited, for the reason above.

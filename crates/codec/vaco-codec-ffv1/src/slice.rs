@@ -365,9 +365,23 @@ pub(crate) fn decode_plane_range(
         for x in 0..w {
             let (l, t, tl, tr, ll, tt) = buf.neighbours(x, y);
             let (ctx, flip) = compute_context(qts, l, t, tl, tr, ll, tt);
+            // Lazy on purpose: profiled on a 1080p/125-frame transcode
+            // (planning/PERF-PROGRAMME.md D1) at ~10% of the *encoder's*
+            // self-time going to `core::ptr::drop_glue::<vaco_core::error::Error>`
+            // for the encode-side twin of this call. `Error` is not
+            // trivially-droppable (it has a `String`-carrying variant), so an
+            // eager `.ok_or(Error::InvalidData(..))` builds and immediately
+            // discards a real `Error` value on every one of ~2M samples/frame
+            // even on the all-`Some` fast path; `ok_or_else` only ever
+            // constructs it on the error path, which this per-pixel loop
+            // essentially never takes.
+            #[allow(
+                clippy::unnecessary_lazy_evaluations,
+                reason = "measured: eager .ok_or() here left a real (non-eliminated) drop_glue::<Error> call in the per-sample loop -- see the comment above"
+            )]
             let st = states
                 .get_mut(ctx)
-                .ok_or(Error::InvalidData("ffv1: context out of range"))?;
+                .ok_or_else(|| Error::InvalidData("ffv1: context out of range"))?;
             let mut diff = dec.get_symbol(st, table, true);
             if flip {
                 diff = -diff;
@@ -406,9 +420,16 @@ pub(crate) fn encode_plane_range(
             if flip {
                 diff = -diff;
             }
+            // Lazy on purpose -- see the matching comment in
+            // `decode_plane_range`: measured (planning/PERF-PROGRAMME.md D1)
+            // at ~10% of this encoder's self-time on a real 1080p transcode.
+            #[allow(
+                clippy::unnecessary_lazy_evaluations,
+                reason = "measured: eager .ok_or() here left a real (non-eliminated) drop_glue::<Error> call in the per-sample loop -- see decode_plane_range's comment"
+            )]
             let st = states
                 .get_mut(ctx)
-                .ok_or(Error::InvalidData("ffv1: context out of range"))?;
+                .ok_or_else(|| Error::InvalidData("ffv1: context out of range"))?;
             enc.put_symbol(st, table, diff, true);
         }
     }
@@ -442,9 +463,15 @@ pub(crate) fn decode_plane_golomb(
             let (l, t, tl, tr, ll, tt) = buf.neighbours(x, y);
             let (ctx, flip) = compute_context(qts, l, t, tl, tr, ll, tt);
             let pred = median_predictor(l, t, tl);
+            // Lazy on purpose -- see the matching comment in
+            // `decode_plane_range`.
+            #[allow(
+                clippy::unnecessary_lazy_evaluations,
+                reason = "measured: eager .ok_or() here left a real (non-eliminated) drop_glue::<Error> call in the per-sample loop -- see decode_plane_range's comment"
+            )]
             let rs = rice_states
                 .get_mut(ctx)
-                .ok_or(Error::InvalidData("ffv1: context out of range"))?;
+                .ok_or_else(|| Error::InvalidData("ffv1: context out of range"))?;
             let mut diff = if ctx == 0 {
                 run.next_zero_context_diff(r, rs, bits_per_raw_sample, x, w)
             } else {
