@@ -828,6 +828,13 @@ acquired = "2026-08-28"
 where    = "ffmpeg/ffprobe 8.1 binaries, black-box"
 
 [[source]]
+id       = "ffmpeg-flac-raw-demux-probe"
+kind     = "blackbox"
+title    = "ffmpeg/ffprobe 9.0.1 -c:a flac against raw .flac files (mono/stereo, 44.1/48/11.025 kHz, default and non-default frame sizes): measured the flac demuxer's probe score (100, via `-v debug`'s own \"Format flac probed with size=2048 and score=100\"), stream time_base (1/sample_rate), and per-packet duration/pts/keyframe-flag values from `-show_packets`, used to build and differentially verify vaco-format-audio-simple's own flac demuxer end to end (decoded PCM byte-identical to ffmpeg's own decode via `-f s16le`/`-f f32le`, including fixtures that force the frame header's extra block-size/sample-rate byte fields RFC 9639 defines)"
+acquired = "2026-09-01"
+where    = "ffmpeg/ffprobe 9.0.1 binaries (Homebrew, macOS), black-box"
+
+[[source]]
 id       = "etsi-en-300-743"
 kind     = "spec"
 title    = "ETSI EN 300 743 V1.5.1 (2014-01), Digital Video Broadcasting (DVB); Subtitling systems — used directly for clause 7.2 (segment/page/region/CLUT/object syntax), clause 7.2.5.2 (2-/4-/8-bit pixel-code run-length grammars) and clause 10 (default CLUT/map-table contents)"

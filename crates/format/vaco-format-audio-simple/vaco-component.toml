@@ -162,3 +162,15 @@ long_name  = "raw FLAC"
 feature    = "mux-flac"
 ctor       = "vaco_format_audio_simple::flac::MUXER"
 extensions = "flac"
+
+# Added by `cargo xtask reachability-check` rule D: this muxer had no demuxer
+# of the same name, so a standalone `.flac` file fell through to whichever
+# other format's probe scored highest on its bytes (measured: CD+Graphics).
+[[component]]
+kind       = "demuxer"
+name       = "flac"
+long_name  = "raw FLAC"
+feature    = "demux-flac"
+ctor       = "vaco_format_audio_simple::flac::DEMUXER"
+extensions = "flac"
+mime_types = "audio/x-flac"

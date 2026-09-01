@@ -543,6 +543,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["ffmeta"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-flac")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "flac",
+        long_name: Some("raw FLAC"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("demux-flac"),
+        media: None,
+        codec: None,
+        extensions: &["flac"],
+        mime_types: &["audio/x-flac"],
+    },
     #[cfg(feature = "demux-flic")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -2466,6 +2478,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "mux-flac")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "flac",
+        long_name: Some("raw FLAC"),
+        krate: "vaco-format-audio-simple",
+        feature: Some("mux-flac"),
+        media: None,
+        codec: None,
+        extensions: &["flac"],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-flv")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -3468,6 +3492,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["vtt"],
         mime_types: &["text/vtt"],
     },
+    #[cfg(feature = "mux-whip")]
+    crate::Component {
+        kind: crate::Kind::Muxer,
+        name: "whip",
+        long_name: Some("WHIP (WebRTC-HTTP Ingestion Protocol) output"),
+        krate: "vaco-mux-whip",
+        feature: Some("mux-whip"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "mux-raw")]
     crate::Component {
         kind: crate::Kind::Muxer,
@@ -3719,6 +3755,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("patent-encumbered-h264-decode"),
         media: Some("video"),
         codec: Some("h264"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "patent-encumbered-hevc-decode")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "hevc",
+        long_name: Some("H.265 / HEVC"),
+        krate: "vaco-codec-hevc",
+        feature: Some("patent-encumbered-hevc-decode"),
+        media: Some("video"),
+        codec: Some("hevc"),
         extensions: &[],
         mime_types: &[],
     },
@@ -4180,6 +4228,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-prores")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "prores",
+        long_name: Some("Apple ProRes (iCodec Pro)"),
+        krate: "vaco-codec-prores",
+        feature: Some("codec-prores"),
+        media: Some("video"),
+        codec: Some("prores"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-simple-audio")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -4309,6 +4369,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-rawvideo"),
         media: Some("video"),
         codec: Some("v210x"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "patent-encumbered-vc1-decode")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "vc1",
+        long_name: Some("SMPTE VC-1 (Simple/Main profile, progressive I-frame only)"),
+        krate: "vaco-codec-vc1",
+        feature: Some("patent-encumbered-vc1-decode"),
+        media: Some("video"),
+        codec: Some("vc1"),
         extensions: &[],
         mime_types: &[],
     },
@@ -4601,6 +4673,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-jpegls"),
         media: Some("video"),
         codec: Some("jpegls"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-exec")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "libx264",
+        long_name: Some("H.264 via a user-installed x264 binary (process boundary, C-46)"),
+        krate: "vaco-codec-exec",
+        feature: Some("codec-exec"),
+        media: Some("video"),
+        codec: Some("h264"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-exec")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "libx265",
+        long_name: Some("HEVC via a user-installed x265 binary (process boundary, C-46)"),
+        krate: "vaco-codec-exec",
+        feature: Some("codec-exec"),
+        media: Some("video"),
+        codec: Some("hevc"),
         extensions: &[],
         mime_types: &[],
     },
@@ -5069,6 +5165,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-null"),
         media: Some("video"),
         codec: Some("vnull"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-vorbis")]
+    crate::Component {
+        kind: crate::Kind::Encoder,
+        name: "vorbis",
+        long_name: Some("Vorbis (native encode, fixed low-complexity setup)"),
+        krate: "vaco-codec-vorbis",
+        feature: Some("codec-vorbis"),
+        media: Some("audio"),
+        codec: Some("vorbis"),
         extensions: &[],
         mime_types: &[],
     },
@@ -6135,6 +6243,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "ass",
+        long_name: Some("Render ASS/SSA subtitles onto the input video."),
+        krate: "vaco-filter-subtitle",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "astats",
         long_name: Some("Show time domain statistics about audio frames"),
         krate: "vaco-filter-adynamics",
@@ -6798,6 +6917,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "drawgrid",
         long_name: Some("Draw a colored grid on the input video."),
         krate: "vaco-filter-draw-vf",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "drawtext",
+        long_name: Some("Draw text on top of video frames."),
+        krate: "vaco-filter-text",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -8471,6 +8601,32 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::Filter,
+        name: "stabdetect",
+        long_name: Some(
+            "Analyze video stabilization/deshaking (pass 1 of 2; vaco's own transform-file format, not .trf-compatible).",
+        ),
+        krate: "vaco-filter-motion",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "stabtransform",
+        long_name: Some(
+            "Video stabilization/deshaking (pass 2 of 2; vaco's own transform-file format, not .trf-compatible).",
+        ),
+        krate: "vaco-filter-motion",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
         name: "stereotools",
         long_name: Some("Apply various stereo tools"),
         krate: "vaco-filter-aeffects",
@@ -8496,6 +8652,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "streamselect",
         long_name: Some("Select video streams"),
         krate: "vaco-filter-mm",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "subtitles",
+        long_name: Some("Render a subtitle file onto the input video."),
+        krate: "vaco-filter-subtitle",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -8738,6 +8905,19 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "untile",
         long_name: Some("Untile a frame into a sequence of frames"),
         krate: "vaco-filter-geometry",
+        feature: None,
+        media: Some("video"),
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Filter,
+        name: "v360",
+        long_name: Some(
+            "Convert 360 projection of video (equirectangular and flat/rectilinear only).",
+        ),
+        krate: "vaco-filter-v360",
         feature: None,
         media: Some("video"),
         codec: None,
@@ -9041,6 +9221,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "protocol-dtls")]
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "dtls",
+        long_name: Some("DTLS"),
+        krate: "vaco-protocol-dtls",
+        feature: Some("protocol-dtls"),
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
     crate::Component {
         kind: crate::Kind::Protocol,
         name: "file",
@@ -9174,6 +9366,17 @@ pub static COMPONENTS: &[crate::Component] = &[
         name: "pipe",
         long_name: Some("standard input/output"),
         krate: "vaco-protocol-file",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::Protocol,
+        name: "shared",
+        long_name: Some("Local multi-process fan-out ring"),
+        krate: "vaco-protocol-shared",
         feature: None,
         media: None,
         codec: None,
@@ -9577,6 +9780,10 @@ pub static ENCUMBERED_ENABLED: &[&str] = &[
     "aac",
     #[cfg(feature = "patent-encumbered-h264-decode")]
     "h264",
+    #[cfg(feature = "patent-encumbered-hevc-decode")]
+    "hevc",
+    #[cfg(feature = "patent-encumbered-vc1-decode")]
+    "vc1",
 ];
 
 /// Every patent-encumbered component this tree knows about, enabled or not.
@@ -9584,7 +9791,7 @@ pub static ENCUMBERED_ENABLED: &[&str] = &[
 /// The denominator to [`ENCUMBERED_ENABLED`]'s numerator: a gate that only saw
 /// the enabled list could not tell "nothing is encumbered" from "the table is
 /// broken and reports nothing".
-pub static ENCUMBERED_ALL: &[&str] = &["aac", "h264"];
+pub static ENCUMBERED_ALL: &[&str] = &["aac", "h264", "hevc", "vc1"];
 
 /// Descriptors of every enabled demuxer implementation.
 pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
@@ -9675,6 +9882,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::pcm::DEMUXER_F64LE,
     #[cfg(feature = "demux-ffmetadata")]
     &::vaco_format_misc::ffmetadata::DEMUXER,
+    #[cfg(feature = "demux-flac")]
+    &::vaco_format_audio_simple::flac::DEMUXER,
     #[cfg(feature = "demux-flic")]
     &::vaco_format_misc::flic::DEMUXER,
     #[cfg(feature = "demux-flv")]
@@ -9994,6 +10203,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_raw::raw::MUXER_F64LE,
     &::vaco_mux_stream::MUXER_FFMETADATA,
     &::vaco_mux_stream::MUXER_FIFO,
+    #[cfg(feature = "mux-flac")]
+    &::vaco_format_audio_simple::flac::MUXER,
     #[cfg(feature = "mux-flv")]
     &::vaco_mux_flv::MUXER,
     &::vaco_mux_hash::MUXER_FRAMECRC,
@@ -10151,6 +10362,8 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_matroska::MUXER_WEBM_CHUNK,
     #[cfg(feature = "subtitle-text")]
     &::vaco_subtitle_text::webvtt::MUXER,
+    #[cfg(feature = "mux-whip")]
+    &::vaco_mux_whip::MUXER,
     #[cfg(feature = "mux-raw")]
     &::vaco_mux_raw::y4m::MUXER_YUV4MPEGPIPE,
 ];
@@ -10197,6 +10410,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_h263::DECODER_H263,
     #[cfg(feature = "patent-encumbered-h264-decode")]
     &::vaco_codec_h264::DECODER_H264,
+    #[cfg(feature = "patent-encumbered-hevc-decode")]
+    &::vaco_codec_hevc::DECODER_HEVC,
     #[cfg(feature = "codec-jpeg")]
     &::vaco_codec_jpeg::JPEG_DECODER,
     #[cfg(feature = "codec-jpegls")]
@@ -10273,6 +10488,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_png::PNG_DECODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PPM_DECODER,
+    #[cfg(feature = "codec-prores")]
+    &::vaco_codec_prores::DECODER_PRORES,
     #[cfg(feature = "codec-simple-audio")]
     &::vaco_codec_simple_audio::QOA_DECODER,
     #[cfg(feature = "codec-qoi")]
@@ -10295,6 +10512,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_rawvideo::V210_DECODER,
     #[cfg(feature = "codec-rawvideo")]
     &::vaco_codec_rawvideo::V210X_DECODER,
+    #[cfg(feature = "patent-encumbered-vc1-decode")]
+    &::vaco_codec_vc1::DECODER_VC1,
     #[cfg(feature = "codec-vorbis")]
     &::vaco_codec_vorbis::DECODER_VORBIS,
     #[cfg(feature = "codec-vp8")]
@@ -10347,6 +10566,10 @@ pub static ENCODERS: &[&::vaco_codec_core::EncoderDesc] = &[
     &::vaco_codec_jpeg::JPEG_ENCODER,
     #[cfg(feature = "codec-jpegls")]
     &::vaco_codec_jpegls::JPEGLS_ENCODER,
+    #[cfg(feature = "codec-exec")]
+    &::vaco_codec_exec::LIBX264_ENCODER,
+    #[cfg(feature = "codec-exec")]
+    &::vaco_codec_exec::LIBX265_ENCODER,
     #[cfg(feature = "codec-pnm")]
     &::vaco_codec_pnm::PAM_ENCODER,
     #[cfg(feature = "codec-pnm")]
@@ -10425,6 +10648,8 @@ pub static ENCODERS: &[&::vaco_codec_core::EncoderDesc] = &[
     &::vaco_codec_rawvideo::V210X_ENCODER,
     #[cfg(feature = "codec-null")]
     &::vaco_codec_null::VNULL_ENCODER,
+    #[cfg(feature = "codec-vorbis")]
+    &::vaco_codec_vorbis::ENCODER_VORBIS,
     #[cfg(feature = "codec-vp8")]
     &::vaco_codec_vp8::VP8_ENCODER,
     #[cfg(feature = "codec-vp9")]
@@ -10556,6 +10781,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_adynamics::asoftclip::DESC,
     &::vaco_filter_aanalysis::aspectralstats::DESC,
     &::vaco_filter_mm::split::audio::DESC,
+    &::vaco_filter_subtitle::ass_filter::DESC,
     &::vaco_filter_adynamics::astats::DESC,
     &::vaco_filter_mm::streamselect::audio::DESC,
     &::vaco_filter_denoise::atadenoise::DESC,
@@ -10617,6 +10843,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_draw_vf::drawbox::DESC,
     &::vaco_filter_scope::drawgraph::DESC,
     &::vaco_filter_draw_vf::drawgrid::DESC,
+    &::vaco_filter_text::drawtext::DESC,
     &::vaco_filter_aanalysis::drmeter::DESC,
     &::vaco_filter_adynamics::dynaudnorm::DESC,
     &::vaco_filter_aeffects::earwax::DESC,
@@ -10768,9 +10995,12 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_adynamics::speechnorm::DESC,
     &::vaco_filter_mm::split::video::DESC,
     &::vaco_filter_analysis::ssim::DESC,
+    &::vaco_filter_motion::stabdetect::DESC,
+    &::vaco_filter_motion::stabtransform::DESC,
     &::vaco_filter_aeffects::stereotools::DESC,
     &::vaco_filter_aeffects::stereowiden::DESC,
     &::vaco_filter_mm::streamselect::video::DESC,
+    &::vaco_filter_subtitle::subtitles::DESC,
     &::vaco_filter_aeq::superequalizer::DESC,
     &::vaco_filter_geometry::swaprect::DESC,
     &::vaco_filter_geometry::swapuv::DESC,
@@ -10793,6 +11023,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_key::premultiply::unpremultiply::DESC,
     &::vaco_filter_blur::unsharp::DESC,
     &::vaco_filter_geometry::untile::DESC,
+    &::vaco_filter_v360::v360::DESC,
     &::vaco_filter_denoise::vaguedenoiser::DESC,
     &::vaco_filter_blur::varblur::DESC,
     &::vaco_filter_scope::vectorscope::DESC,
@@ -10824,6 +11055,8 @@ pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[
     &::vaco_protocol_wrap::CONCATF_PROTOCOL,
     &::vaco_protocol_crypto::CRYPTO_PROTOCOL,
     &::vaco_protocol_local::DATA_PROTOCOL,
+    #[cfg(feature = "protocol-dtls")]
+    &::vaco_protocol_dtls::DTLS_PROTOCOL,
     &::vaco_protocol_file::FILE_PROTOCOL,
     #[cfg(feature = "protocol-ftp")]
     &::vaco_protocol_ftp::FTP_PROTOCOL,
@@ -10843,6 +11076,7 @@ pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[
     &::vaco_protocol_ipfs::IPNS_PROTOCOL,
     &::vaco_protocol_local::MD5_PROTOCOL,
     &::vaco_protocol_file::PIPE_PROTOCOL,
+    &::vaco_protocol_shared::SHARED_PROTOCOL,
     &::vaco_protocol_wrap::SUBFILE_PROTOCOL,
     #[cfg(feature = "protocol-socket")]
     &::vaco_protocol_socket::TCP_PROTOCOL,
