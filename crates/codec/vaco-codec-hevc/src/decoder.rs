@@ -787,17 +787,17 @@ fn pic_to_frame(budget: &mut Budget, width: u32, height: u32, pic: &Picture) -> 
 /// `PERF-PROGRAMME.md` item B1: this used to read every sample through
 /// [`crate::framebuf::Plane::get`] (`emit_pocs`'s own 5.11% share of
 /// decode, one bounds-checked 2-D index per sample). [`crate::framebuf::Plane::row`]
-/// gives the whole row as one bounds-checked slice instead, so the
-/// per-sample cost left is only the `u16 -> u8` narrowing conversion
-/// §8-bit-scope guarantees can't overflow, over a plain slice `zip`.
+/// gives the whole row as one bounds-checked slice instead. Item B2 then
+/// made the plane's own storage `u8` (the same type `vaco_frame::Frame`'s
+/// own plane already used), so what used to be a per-sample narrowing
+/// conversion is now a real `copy_from_slice`.
 fn blit(src: &crate::framebuf::Plane, frame: &mut vaco_frame::Frame, plane_index: usize, width: usize, height: usize) {
     let Some(mut dst) = frame.plane_mut(plane_index) else { return };
     for y in 0..height.min(dst.rows()) {
         let Some(row) = dst.row_mut(y) else { continue };
-        let Some(src_row) = src.row(y).and_then(|r| r.get(..width.min(row.len()))) else { continue };
-        for (b, &v) in row.iter_mut().zip(src_row) {
-            *b = u8::try_from(v).unwrap_or(0);
-        }
+        let len = width.min(row.len());
+        let (Some(dst_row), Some(src_row)) = (row.get_mut(..len), src.row(y).and_then(|r| r.get(..len))) else { continue };
+        dst_row.copy_from_slice(src_row);
     }
 }
 

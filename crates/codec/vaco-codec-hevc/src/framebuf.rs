@@ -31,13 +31,34 @@ const fn block_of(x: usize) -> usize {
     x / 4
 }
 
-/// One reconstruction plane: samples plus a parallel "has this pixel been
-/// written yet" bit, both addressed by the same `(x, y)`.
+/// One reconstruction plane: `u8` samples (this crate's whole scope is
+/// 8-bit — see `check_scope`) plus a per-4x4-block "has this block been
+/// written yet" grid, addressed at HEVC's own minimum transform-block
+/// granularity rather than per pixel.
+///
+/// `PERF-PROGRAMME.md` item B2: storing `u16` here charged every sample
+/// twice the memory traffic an 8-bit-only crate ever needed, and the
+/// per-pixel `ready: Vec<bool>` was sixteen times larger than the
+/// granularity anything ever queried it at. Every write this crate makes —
+/// `write_block`/`write_pred_block`'s transform/prediction blocks, deblocking
+/// and SAO's touch-ups to an already-fully-written picture — is at least a
+/// 4x4 transform block and lands on that grid exactly (`transform_tree` never
+/// splits smaller, and `pic_width`/`pic_height_in_luma_samples` are
+/// themselves always CTB-grid- (hence 4x4-grid-) aligned per §7.4.3.2.1, so
+/// there is no partial block at the plane's own edge to round awkwardly);
+/// every *read* of availability ([`Plane::is_ready`]) is a per-pixel
+/// reference-sample query that only ever needs "has the 4x4 block
+/// containing this pixel been written", never finer. Collapsing `ready` to
+/// that grid is therefore not an approximation — within this crate's scope
+/// it answers the identical question the old per-pixel array did, at 1/16
+/// the memory and update cost.
 #[derive(Debug)]
 pub(crate) struct Plane {
     width: usize,
     height: usize,
-    data: Vec<u16>,
+    data: Vec<u8>,
+    ready_cols: usize,
+    ready_rows: usize,
     ready: Vec<bool>,
 }
 
@@ -47,8 +68,10 @@ impl Plane {
     pub(crate) fn new(budget: &mut Budget, width: usize, height: usize) -> Result<Self> {
         let len = width.saturating_mul(height);
         let data = budget.alloc(len)?;
-        let ready = vec![false; len];
-        Ok(Self { width, height, data, ready })
+        let ready_cols = width.div_ceil(4).max(1);
+        let ready_rows = height.div_ceil(4).max(1);
+        let ready = vec![false; ready_cols.saturating_mul(ready_rows)];
+        Ok(Self { width, height, data, ready_cols, ready_rows, ready })
     }
 
     fn index(&self, x: usize, y: usize) -> Option<usize> {
@@ -58,38 +81,70 @@ impl Plane {
         Some(y * self.width + x)
     }
 
-    /// Whether `(x, y)` is inside the plane and has already been
-    /// reconstructed. The single availability test every reference-sample
-    /// read in intra prediction uses.
+    fn ready_index(&self, bx: usize, by: usize) -> Option<usize> {
+        if bx >= self.ready_cols || by >= self.ready_rows {
+            return None;
+        }
+        Some(by * self.ready_cols + bx)
+    }
+
+    /// Whether `(x, y)` is inside the plane and its containing 4x4 block has
+    /// already been fully reconstructed. The single availability test every
+    /// reference-sample read in intra prediction uses.
     #[must_use]
     pub(crate) fn is_ready(&self, x: i32, y: i32) -> bool {
         let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
             return false;
         };
-        self.index(x, y).and_then(|i| self.ready.get(i)).copied().unwrap_or(false)
+        if x >= self.width || y >= self.height {
+            return false;
+        }
+        self.ready_index(block_of(x), block_of(y)).and_then(|i| self.ready.get(i)).copied().unwrap_or(false)
     }
 
     /// The sample at `(x, y)`, or `0` out of range or not yet written —
     /// callers that reach this must have checked [`Plane::is_ready`] first
     /// (or be reading their own just-written prediction buffer, which is
-    /// always in range by construction).
+    /// always in range by construction). Widened to `u16` so every caller
+    /// written against the crate's pre-B2 accessor keeps working unchanged;
+    /// the plane's own storage is `u8`.
     #[must_use]
     pub(crate) fn get(&self, x: usize, y: usize) -> u16 {
-        self.index(x, y).and_then(|i| self.data.get(i)).copied().unwrap_or(0)
+        self.index(x, y).and_then(|i| self.data.get(i)).copied().map_or(0, u16::from)
     }
 
-    /// Write a final reconstructed sample and mark it available.
+    /// Write a final reconstructed sample and mark its 4x4 block available.
     pub(crate) fn set(&mut self, x: usize, y: usize, v: u16) {
-        if let Some(i) = self.index(x, y) {
-            if let Some(slot) = self.data.get_mut(i) {
-                *slot = v;
-            }
-            if let Some(slot) = self.ready.get_mut(i) {
-                *slot = true;
+        let byte = u8::try_from(v).unwrap_or(0);
+        if let Some(i) = self.index(x, y)
+            && let Some(slot) = self.data.get_mut(i)
+        {
+            *slot = byte;
+        }
+        self.mark_block_ready(x, y, 1, 1);
+    }
+
+    /// Mark every 4x4 block the pixel rectangle `[x0, x0+w) x [y0, y0+h)`
+    /// touches as reconstructed — the single definition
+    /// [`Plane::set`]/[`Plane::mark_row_ready`] both build on (D19), so the
+    /// pixel-to-block-grid mapping exists in exactly one place.
+    pub(crate) fn mark_block_ready(&mut self, x0: usize, y0: usize, w: usize, h: usize) {
+        if w == 0 || h == 0 || x0 >= self.width || y0 >= self.height {
+            return;
+        }
+        let x1 = x0.saturating_add(w).saturating_sub(1).min(self.width.saturating_sub(1));
+        let y1 = y0.saturating_add(h).saturating_sub(1).min(self.height.saturating_sub(1));
+        let (bx0, by0, bx1, by1) = (block_of(x0), block_of(y0), block_of(x1), block_of(y1));
+        for by in by0..=by1 {
+            for bx in bx0..=bx1 {
+                if let Some(i) = self.ready_index(bx, by)
+                    && let Some(slot) = self.ready.get_mut(i)
+                {
+                    *slot = true;
+                }
             }
         }
     }
-
 }
 
 /// One decoded picture's reconstruction planes: luma plus two 4:2:0 chroma
@@ -665,50 +720,46 @@ impl Plane {
     }
 
     /// The exact byte count [`Budget::alloc`] charged for `self.data` —
-    /// `width * height` `u16` samples — for [`Picture::budget_bytes`] to sum
-    /// across all three planes.
+    /// `width * height` `u8` samples, one byte each since item B2 (was two)
+    /// — for [`Picture::budget_bytes`] to sum across all three planes.
     #[must_use]
     fn byte_len(&self) -> u64 {
-        u64::try_from(self.width.saturating_mul(self.height).saturating_mul(2)).unwrap_or(u64::MAX)
+        u64::try_from(self.width.saturating_mul(self.height)).unwrap_or(u64::MAX)
     }
 
     /// One full row of already-reconstructed samples, `None` past the last
     /// row — the read side of the row-wise copy shape `PERF-PROGRAMME.md`'s
     /// item B1 replaces per-sample [`Plane::get`] loops with: a single
     /// length-checked slice instead of one bounds check (and one `Option`
-    /// unwrap) per sample.
+    /// unwrap) per sample. Item B2 changed the element type to `u8`, the
+    /// plane's own storage type, so a caller copying into another `u8`
+    /// buffer (`decoder::blit`, emission into a `vaco_frame::Frame`) can now
+    /// use [`slice::copy_from_slice`] directly instead of a per-sample
+    /// narrowing conversion.
     #[must_use]
-    pub(crate) fn row(&self, y: usize) -> Option<&[u16]> {
+    pub(crate) fn row(&self, y: usize) -> Option<&[u8]> {
         let start = y.checked_mul(self.width)?;
         self.data.get(start..start.saturating_add(self.width))
     }
 
     /// The mutable counterpart of [`Plane::row`] — callers writing a whole
     /// row still owe [`Plane::mark_row_ready`] afterward, since this does
-    /// not touch the parallel `ready` bitmap itself (a caller writing only
-    /// part of a row, e.g. one CTU's own width inside a wider plane, marks
-    /// only that sub-range as ready, which a combined "write and mark"
-    /// method could not express as cleanly).
-    pub(crate) fn row_mut(&mut self, y: usize) -> Option<&mut [u16]> {
+    /// not touch the parallel `ready` grid (a caller writing only part of a
+    /// row, e.g. one CTU's own width inside a wider plane, marks only that
+    /// sub-range as ready, which a combined "write and mark" method could
+    /// not express as cleanly).
+    pub(crate) fn row_mut(&mut self, y: usize) -> Option<&mut [u8]> {
         let start = y.checked_mul(self.width)?;
         self.data.get_mut(start..start.saturating_add(self.width))
     }
 
     /// Mark `len` samples starting at `(x0, y)` as reconstructed — the
-    /// `ready`-bitmap half of a row-wise write, done once per row via
-    /// `[bool]::fill` rather than once per sample via [`Plane::set`]'s own
-    /// per-element `Option` chain. Silently clips to the plane's own bounds,
-    /// matching every other out-of-range write in this module.
+    /// row-wise-write counterpart of [`Plane::mark_block_ready`] (one
+    /// definition, D19: this just fixes `h` at `1`), for a caller that
+    /// writes its own rows one at a time and marks readiness once per row
+    /// rather than once for the whole block.
     pub(crate) fn mark_row_ready(&mut self, y: usize, x0: usize, len: usize) {
-        if y >= self.height {
-            return;
-        }
-        let row_start = y.saturating_mul(self.width);
-        let x0 = x0.min(self.width);
-        let end = x0.saturating_add(len).min(self.width);
-        if let Some(flags) = self.ready.get_mut(row_start.saturating_add(x0)..row_start.saturating_add(end)) {
-            flags.fill(true);
-        }
+        self.mark_block_ready(x0, y, len, 1);
     }
 
     /// A `Budget`-charged copy of every sample in this plane, in the same
@@ -721,8 +772,8 @@ impl Plane {
     ///
     /// # Errors
     /// [`vaco_core::Error`] if the allocation exceeds `budget`.
-    pub(crate) fn clone_samples(&self, budget: &mut Budget) -> Result<Vec<u16>> {
-        let mut data: Vec<u16> = budget.alloc(self.data.len())?;
+    pub(crate) fn clone_samples(&self, budget: &mut Budget) -> Result<Vec<u8>> {
+        let mut data: Vec<u8> = budget.alloc(self.data.len())?;
         if let Some(dst) = data.get_mut(..self.data.len()) {
             dst.copy_from_slice(&self.data);
         }

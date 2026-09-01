@@ -1236,7 +1236,7 @@ fn write_pred_block(plane: &mut crate::framebuf::Plane, x0: i32, y0: i32, w: i32
         let Some(src_row) = src.get(row_start..row_start.saturating_add(wu)) else { continue };
         if let Some(dst_row) = plane.row_mut(py).and_then(|r| r.get_mut(x0u..x0u.saturating_add(wu))) {
             for (d, &s) in dst_row.iter_mut().zip(src_row) {
-                *d = u16::try_from(s.clamp(0, 255)).unwrap_or(0);
+                *d = u8::try_from(s.clamp(0, 255)).unwrap_or(0);
             }
         }
         plane.mark_row_ready(py, x0u, wu);
@@ -1892,14 +1892,27 @@ fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode
     write_block(plane_mut, cx0, cy0, size, &pred);
 }
 
+/// Write one intra-reconstructed transform block into the picture, one row
+/// at a time (the same `PERF-PROGRAMME.md` B1 shape `write_pred_block`
+/// already uses for inter prediction — this per-sample loop was the
+/// remaining one B1's own profile pass did not name, since intra
+/// reconstruction's cost is dominated elsewhere; converted here anyway
+/// while B2 already touches every `Plane` write path). `block`'s own values
+/// are already clamped to `[0, (1 << bit_depth) - 1]` by
+/// `transform::add_residual_clip` (or are a raw prediction with cbf clear,
+/// itself a weighted average of already-in-range reference samples), so the
+/// `u8` narrowing below never actually clips.
 fn write_block(plane: &mut crate::framebuf::Plane, x0: i32, y0: i32, size: usize, block: &[u16]) {
-    for y in 0..size {
-        for x in 0..size {
-            let v = block.get(y * size + x).copied().unwrap_or(0);
-            let x_i = i32::try_from(x).unwrap_or(i32::MAX);
-            let y_i = i32::try_from(y).unwrap_or(i32::MAX);
-            let (Ok(px), Ok(py)) = (usize::try_from(x0 + x_i), usize::try_from(y0 + y_i)) else { continue };
-            plane.set(px, py, v);
+    let Ok(x0u) = usize::try_from(x0) else { return };
+    for row in 0..size {
+        let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else { continue };
+        let row_start = row.saturating_mul(size);
+        let Some(src_row) = block.get(row_start..row_start.saturating_add(size)) else { continue };
+        if let Some(dst_row) = plane.row_mut(py).and_then(|r| r.get_mut(x0u..x0u.saturating_add(size))) {
+            for (d, &s) in dst_row.iter_mut().zip(src_row) {
+                *d = u8::try_from(s).unwrap_or(0);
+            }
         }
+        plane.mark_row_ready(py, x0u, size);
     }
 }

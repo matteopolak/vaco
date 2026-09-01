@@ -243,7 +243,7 @@ fn read_type_idx(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank) -> Result<
 /// purpose).
 struct Snapshot {
     width: i32,
-    data: Vec<u16>,
+    data: Vec<u8>,
 }
 
 impl Snapshot {
@@ -266,7 +266,7 @@ impl Snapshot {
     /// instead of once per pixel (twice more for a diagonal edge-offset
     /// class's two neighbour rows), it amortises the check that used to be
     /// repeated at every pixel.
-    fn row(&self, y: i32) -> Option<&[u16]> {
+    fn row(&self, y: i32) -> Option<&[u8]> {
         let (Ok(yu), Ok(width)) = (usize::try_from(y), usize::try_from(self.width)) else { return None };
         let start = yu.checked_mul(width)?;
         self.data.get(start..start.saturating_add(width))
@@ -283,7 +283,7 @@ impl Snapshot {
     /// second, independent per-picture leak on top of `CuGrid`'s.
     #[must_use]
     fn byte_len(&self) -> u64 {
-        u64::try_from(self.data.len()).unwrap_or(u64::MAX).saturating_mul(2)
+        u64::try_from(self.data.len()).unwrap_or(u64::MAX)
     }
 }
 
@@ -324,7 +324,7 @@ fn offset_block(
                         let v = i32::from(sv);
                         let band = usize::try_from(v >> shift).unwrap_or(0);
                         let off = offsets.get(band).copied().unwrap_or(0);
-                        *d = u16::try_from((v + off).clamp(0, max_value)).unwrap_or(0);
+                        *d = u8::try_from((v + off).clamp(0, max_value)).unwrap_or(0);
                     }
                 }
                 plane.mark_row_ready(yu, x0u, width_u);
@@ -362,7 +362,7 @@ fn offset_block(
                     let idx = usize::try_from(edge_type + 2).unwrap_or(2);
                     let off = offsets.get(idx).copied().unwrap_or(0);
                     if let Some(slot) = dst_row.get_mut(xu) {
-                        *slot = u16::try_from((v + off).clamp(0, max_value)).unwrap_or(0);
+                        *slot = u8::try_from((v + off).clamp(0, max_value)).unwrap_or(0);
                     }
                 }
                 plane.mark_row_ready(yu, x0u, width_u);
