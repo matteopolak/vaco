@@ -288,7 +288,57 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
     }
 
     cli.line = line;
+    refuse_unimplemented_options(&cli.line)?;
     Ok(cli)
+}
+
+/// Options this build's table declares and `split`/`Oracle` therefore accept,
+/// but that nothing downstream of [`parse`] ever reads.
+///
+/// Before this existed they parsed successfully, exited 0, and had exactly
+/// zero effect — the same defect `-ar` had (`planning/AGENT-CONSTRAINTS.md`'s
+/// standing rule that silently wrong is worse than refusing applies just as
+/// much to an option that does nothing as to one that resamples nothing).
+/// Each of these is tracked as deferred work in `docs/app/vaco-cli.md`
+/// (`-hwaccel`: CL-34a; `-print_graphs`: CL-27; `-fps_mode`/`-enc_time_base`/
+/// `-frame_drop_threshold`: CL-21) — refusing does not close any of those
+/// issues, it only stops the gap between "accepted" and "implemented" from
+/// reading as "works".
+///
+/// Deliberately narrow: this names exactly the options measured to have no
+/// consuming code anywhere in `vaco-cli`/`vaco-cli-core`, not a general
+/// unused-option lint — a table entry gains an exemption here only when it is
+/// confirmed dead, the same bar `-ar` itself was held to before it was wired
+/// up instead of listed here.
+///
+/// # Errors
+/// [`Diagnostic`] naming the option, once any occurrence of one is found.
+fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
+    const GLOBAL: &[&str] = &["print_graphs", "frame_drop_threshold"];
+    const PER_FILE: &[&str] = &["hwaccel", "fps_mode", "enc_time_base"];
+
+    for &name in GLOBAL {
+        if line.last_global(name).is_some() {
+            return Err(unimplemented_option(name));
+        }
+    }
+    for g in &line.groups {
+        for &name in PER_FILE {
+            if g.last(name).is_some() {
+                return Err(unimplemented_option(name));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn unimplemented_option(name: &str) -> Diagnostic {
+    Diagnostic::new(
+        AvError::ENOSYS,
+        vec![format!(
+            "-{name} is accepted by this build's option table but not implemented yet; see docs/app/vaco-cli.md."
+        )],
+    )
 }
 
 fn url_of(g: &OptionGroup) -> Result<String, Diagnostic> {
