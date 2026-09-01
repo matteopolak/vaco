@@ -39,6 +39,64 @@ pub fn opus_tags() -> Vec<u8> {
     out
 }
 
+/// Recover the bare 34-byte `STREAMINFO` payload from a `CodecId::Flac`
+/// stream's [`vaco_codec_core::CodecParameters::extradata`], accepting
+/// either shape that field arrives in.
+///
+/// # Why two shapes
+///
+/// This module's own doc says `extradata` "is exactly the identification
+/// packet's bytes... the FLAC `STREAMINFO` payload" — true of a stream this
+/// crate's own demuxer produced (copy-through round trip), but not the only
+/// shape a `CodecId::Flac` encoder hands a muxer. `vaco-codec-flac`'s own
+/// [`Encoder::extradata`](vaco_codec_core::Encoder::extradata) — and every
+/// container whose own convention for "FLAC's extradata" is a synthetic
+/// single-block `.flac` file header, which is most of them (Matroska's
+/// `CodecPrivate`, the native `.flac` muxer, MP4's `dfLa` box) — answers
+/// with `"fLaC" + the STREAMINFO metadata block, header included` (42
+/// bytes: 4-byte magic, 1-byte last-block-flag/type, 3-byte length, 34-byte
+/// payload). Requiring a caller to pre-strip that down to the bare 34 was
+/// this crate's own inconsistency, not a difference in what the *codec*
+/// needs: measured directly, `vaco -i in.wav -c:a flac out.ogg` refused
+/// every such stream with "FLAC STREAMINFO extradata must be exactly 34
+/// bytes" even though the exact same encoder's output muxed into Matroska
+/// (or `.flac`) correctly. `CodecParameters::extradata` is one field (D19);
+/// this is the seam that already has to read both of its established
+/// shapes, and no other consumer in this workspace needs to change to keep
+/// producing the one most of them share.
+///
+/// # Errors
+/// [`Error::InvalidData`] if `extradata` is neither exactly the bare 34
+/// bytes nor a `"fLaC"`-prefixed metadata block whose first block is a
+/// 34-byte `STREAMINFO` (type 0).
+pub fn streaminfo_payload_from_extradata(extradata: &[u8]) -> Result<[u8; 34]> {
+    let bad = || Error::InvalidData("FLAC STREAMINFO extradata must be exactly 34 bytes");
+    let payload = if extradata.len() == 34 {
+        extradata
+    } else {
+        let body = extradata.strip_prefix(b"fLaC").ok_or_else(bad)?;
+        let header = body.get(..4).ok_or_else(bad)?;
+        let [b0, b1, b2, b3] = header else {
+            return Err(bad());
+        };
+        // Metadata block header: bit 7 is the last-block flag (either value
+        // is fine here — the comment block this module writes next may or
+        // may not already have been the last one in the source file), bits
+        // 0-6 are the block type; STREAMINFO is type 0.
+        if b0 & 0x7F != 0 {
+            return Err(Error::InvalidData(
+                "FLAC extradata's first metadata block is not STREAMINFO",
+            ));
+        }
+        let len = (u32::from(*b1) << 16) | (u32::from(*b2) << 8) | u32::from(*b3);
+        if len != 34 {
+            return Err(bad());
+        }
+        body.get(4..38).ok_or_else(bad)?
+    };
+    payload.try_into().map_err(|_| bad())
+}
+
 /// Build the special first FLAC-in-Ogg packet from a raw 34-byte
 /// `STREAMINFO` payload: the `\x7FFLAC` wrapper, one more header packet
 /// declared (the mandatory comment block this module also writes), the
@@ -128,5 +186,40 @@ mod tests {
         assert_eq!(block[0], 0x84);
         let len = u32::from_be_bytes([0, block[1], block[2], block[3]]) as usize;
         assert_eq!(block.len(), 4 + len);
+    }
+
+    /// The bare shape (this crate's own demuxer's convention) passes through
+    /// unchanged.
+    #[test]
+    fn streaminfo_payload_accepts_the_bare_34_bytes() {
+        let mut bare = [0u8; 34];
+        bare[4] = 0xAB;
+        let got = streaminfo_payload_from_extradata(&bare).unwrap();
+        assert_eq!(got, bare);
+    }
+
+    /// The shape `vaco-codec-flac::FlacEncoder::extradata` (and most
+    /// containers' own "FLAC extradata" convention) actually produces:
+    /// `"fLaC"` + a last-block-flagged STREAMINFO metadata block. This is
+    /// the exact regression this function exists to close — measured via a
+    /// real `vaco -c:a flac out.ogg` refusing this shape outright before
+    /// the fix.
+    #[test]
+    fn streaminfo_payload_unwraps_the_flac_encoders_own_shape() {
+        let mut payload = [0u8; 34];
+        payload[10] = 0xCD;
+        let mut extradata = Vec::new();
+        extradata.extend_from_slice(b"fLaC");
+        extradata.push(0x80); // last-block flag set, type 0 (STREAMINFO)
+        extradata.extend_from_slice(&[0x00, 0x00, 0x22]); // 24-bit length, 34
+        extradata.extend_from_slice(&payload);
+        let got = streaminfo_payload_from_extradata(&extradata).unwrap();
+        assert_eq!(got, payload);
+    }
+
+    #[test]
+    fn streaminfo_payload_rejects_garbage() {
+        assert!(streaminfo_payload_from_extradata(&[0u8; 10]).is_err());
+        assert!(streaminfo_payload_from_extradata(b"not fLaC at all, and not 34 bytes").is_err());
     }
 }

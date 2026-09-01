@@ -264,10 +264,11 @@ impl Muxer for OggMuxer {
                 (Rational::new(1, 48_000), headers)
             }
             Some(CodecId::Flac) => {
-                let streaminfo = params
+                let extradata = params
                     .extradata
-                    .clone()
+                    .as_deref()
                     .ok_or(Error::InvalidData("FLAC needs STREAMINFO extradata"))?;
+                let streaminfo = headers::streaminfo_payload_from_extradata(extradata)?;
                 let first = headers::flac_first_packet(&streaminfo)?;
                 (sample_rate_base, vec![first, headers::flac_comment_block()])
             }
