@@ -168,6 +168,16 @@ pub struct AsfDemuxer {
     metadata: Vec<(String, String)>,
     encryption: Option<Encryption>,
     duration: Option<Duration>,
+    /// File Properties' Preroll (ms): every Data Packet's Send Time is
+    /// measured from the start of buffering, not from the first presented
+    /// sample, so a packet's real presentation time is `send_time -
+    /// preroll` — measured against `ffmpeg 9.0.1`, whose `start_time` on a
+    /// real `libx264`-in-ASF fixture is exactly this file's preroll less
+    /// than the raw Send Time on the first packet. Stored here because it
+    /// was previously consulted only for the aggregate duration
+    /// calculation and dropped, leaving every packet timestamp too large by
+    /// the same fixed amount.
+    preroll_ms: u64,
     index: PacketIndex,
     pending: std::collections::BTreeMap<u8, PendingObject>,
     /// Fallback per-stream tick counter for a payload that carries no
@@ -366,6 +376,7 @@ impl AsfDemuxer {
             metadata: info.metadata,
             encryption: info.encryption,
             duration,
+            preroll_ms: file_properties.preroll_ms,
             index,
             pending: std::collections::BTreeMap::new(),
             fallback_ticks: std::collections::BTreeMap::new(),
@@ -402,15 +413,37 @@ impl AsfDemuxer {
             return Ok(None);
         };
         let time_base = stream.time_base;
+        let media_type = stream.media_type();
         let ts = if let Some(ms) = pts_ms {
-            Timestamp::new(i64::from(ms)).rescale(TIME_BASE_MS, time_base, Rounding::default())
+            // Send Time is measured from the start of buffering; subtract
+            // Preroll to land on presentation time, matching `ffmpeg`'s own
+            // ASF demuxer (measured: its `start_time` on a real fixture is
+            // exactly the raw first Send Time less this file's own
+            // Preroll). Saturating rather than wrapping negative -- a
+            // packet whose Send Time falls inside the preroll window has no
+            // real presentation time before zero.
+            let presentation_ms = u64::from(ms).saturating_sub(self.preroll_ms);
+            Timestamp::new(i64::try_from(presentation_ms).unwrap_or(i64::MAX)).rescale(
+                TIME_BASE_MS,
+                time_base,
+                Rounding::default(),
+            )
         } else {
             let tick = self.fallback_ticks.entry(stream_number).or_insert(0);
             let ts = Timestamp::new(*tick);
             *tick = tick.saturating_add(1);
             ts
         };
-        pkt.pts = ts;
+        // ASF's Data Packet header carries one timestamp per payload, and it
+        // is decode order for video, not display order: measured against
+        // `ffmpeg 9.0.1`, every ASF video packet reports `pts=N/A` (`dts`
+        // only) while every audio packet reports `pts` equal to `dts`. A
+        // video stream can legally reorder for display (B-frames) with
+        // nothing in this one timestamp to say by how much, so — same
+        // reasoning as `vaco-demux-avi::demux::read_one` — pts stays unset
+        // for video rather than fabricating a value the reference never
+        // claims to have.
+        pkt.pts = if media_type == Some(MediaType::Video) { Timestamp::NONE } else { ts };
         pkt.dts = ts;
         pkt.duration = Duration::ZERO;
         pkt.flags = if key {
@@ -767,14 +800,14 @@ mod tests {
         out
     }
 
-    fn file_properties(min_max_packet: u32) -> Vec<u8> {
+    fn file_properties_with_preroll(min_max_packet: u32, preroll_ms: u64) -> Vec<u8> {
         let mut p = vec![0u8; 16]; // file id
         p.extend_from_slice(&0u64.to_le_bytes()); // file size
         p.extend_from_slice(&0u64.to_le_bytes()); // creation date
         p.extend_from_slice(&2u64.to_le_bytes()); // data packets count
         p.extend_from_slice(&0u64.to_le_bytes()); // play duration
         p.extend_from_slice(&0u64.to_le_bytes()); // send duration
-        p.extend_from_slice(&0u64.to_le_bytes()); // preroll
+        p.extend_from_slice(&preroll_ms.to_le_bytes()); // preroll
         p.extend_from_slice(&0x02u32.to_le_bytes()); // flags: seekable
         p.extend_from_slice(&min_max_packet.to_le_bytes());
         p.extend_from_slice(&min_max_packet.to_le_bytes());
@@ -839,9 +872,17 @@ mod tests {
     }
 
     fn build_minimal_asf(packet_size: usize, packets: &[Vec<u8>]) -> Vec<u8> {
+        build_minimal_asf_with_preroll(packet_size, 0, packets)
+    }
+
+    fn build_minimal_asf_with_preroll(
+        packet_size: usize,
+        preroll_ms: u64,
+        packets: &[Vec<u8>],
+    ) -> Vec<u8> {
         let fp = object(
             well_known::FILE_PROPERTIES_OBJECT,
-            &file_properties(packet_size as u32),
+            &file_properties_with_preroll(packet_size as u32, preroll_ms),
         );
         let sp = object(
             well_known::STREAM_PROPERTIES_OBJECT,
@@ -914,6 +955,43 @@ mod tests {
         assert!(matches!(demux.read_packet(), Err(Error::Eof)));
         // Sticky.
         assert!(matches!(demux.read_packet(), Err(Error::Eof)));
+    }
+
+    /// A non-zero Preroll is subtracted from every packet's Send Time to
+    /// land on presentation time -- measured against `ffmpeg 9.0.1`: its
+    /// `start_time` on a real fixture is exactly the raw first Send Time
+    /// less that fixture's own File Properties Preroll. Before this fix,
+    /// `Preroll` was consulted only for the aggregate duration calculation
+    /// and every packet timestamp came out too large by the same fixed
+    /// amount -- a real, measured bug, not a hypothetical one: it made a
+    /// fresh one-second `-c copy -f asf` fixture report `start_time=3.157`
+    /// where the reference reports `0.057` (3100ms is this test's own
+    /// preroll value once discovered).
+    #[test]
+    fn a_nonzero_preroll_is_subtracted_from_every_packet_timestamp() {
+        let packet_size = 64usize;
+        let preroll_ms = 3100u64;
+        let packets = vec![
+            simple_packet(packet_size, 1, 0, 3100, b"AAAA"),
+            simple_packet(packet_size, 1, 1, 3600, b"BBBB"),
+        ];
+        let bytes = build_minimal_asf_with_preroll(packet_size, preroll_ms, &packets);
+        let src = Box::new(MemorySource::new(bytes));
+        let mut demux = AsfDemuxer::open(
+            src,
+            &vaco_format_core::discovery::NoParsers,
+            &FormatOptions::default(),
+        )
+        .unwrap();
+
+        // Raw Send Time 3100ms minus 3100ms preroll lands exactly on 0.
+        let p0 = demux.read_packet().unwrap();
+        assert_eq!(p0.pts.ticks(), Some(0));
+        // Raw Send Time 3600ms minus preroll is 500ms, i.e. 4000 ticks at
+        // this stream's 8000Hz time base -- same as the no-preroll test
+        // above, confirming the subtraction and not just a lucky zero.
+        let p1 = demux.read_packet().unwrap();
+        assert_eq!(p1.pts.ticks(), Some(4000));
     }
 
     #[test]
