@@ -23,55 +23,41 @@
 //!
 //! RFC 6386 §9.5's multiple DCT-coefficient token partitions (1, 2, 4 or 8,
 //! `log2_nbr_of_dct_partitions` in the header) exist precisely to let rows
-//! be decoded in parallel: `decode_frame` parses the partition-size table
-//! and reads macroblock row `r`'s tokens from partition `r % num_partitions`
-//! (`decode::split_token_partitions`), which is the part multi-partition
-//! streams actually need to decode *correctly* — previously every row read
-//! from partition 0 regardless of the header's count, corrupting anything
-//! past the first row of a multi-partition stream. Verified against
-//! `vpxenc --token-parts={0,1,2,3}` (1/2/4/8 partitions) at two resolutions,
-//! decoded output byte-identical to `ffmpeg -c:v libvpx` in every case, and
-//! again now against the real `vp80-04-partitions-*` conformance vectors
-//! (see `tests/conformance.rs`).
+//! be decoded in parallel: `decode::split_frame` parses the partition-size
+//! table and reads macroblock row `r`'s tokens from partition
+//! `r % num_partitions` (`decode::split_token_partitions`), which is the
+//! part multi-partition streams actually need to decode *correctly* —
+//! previously every row read from partition 0 regardless of the header's
+//! count, corrupting anything past the first row of a multi-partition
+//! stream. Verified against `vpxenc --token-parts={0,1,2,3}` (1/2/4/8
+//! partitions) at two resolutions, decoded output byte-identical to
+//! `ffmpeg -c:v libvpx` in every case, and again against the real
+//! `vp80-04-partitions-*` conformance vectors (see `tests/conformance.rs`).
+//! **This is not the axis `-threads N` uses** — see below.
 //!
-//! **Actually running those per-partition decodes on separate OS threads is
-//! not done, and here is the concrete reason rather than a vague one.**
-//! `decode_macroblock`'s *mode/motion-vector* record for every macroblock in
-//! the frame comes from one sequential bool-decoder walk over the *first*
-//! partition (RFC 6386 §9.5 only splits the *token* partitions; the mode
-//! stream is one bitstream for the whole frame, decoded strictly in raster
-//! order because each macroblock's MV prediction context reads its
-//! already-decoded above/left/above-left neighbours). Splitting only the
-//! *reconstruction* half (token decode + IDCT + pixel write) across threads
-//! is possible in principle — RFC 6386 §15.1 confirms the loop filter, and
-//! by extension intra prediction's "already-constructed" neighbour pixels,
-//! only ever depend on the macroblock *above* being fully reconstructed, not
-//! on anything to its right or in a later row — but implementing it safely
-//! (`#![forbid(unsafe_code)]`) needs every macroblock row to become a
-//! separately-owned, ownership-transferred unit (the same technique
-//! `vaco-codec-core::picture`'s `OnceLock`-per-band publish/wait model uses
-//! for *cross-frame* pipelining), because two threads writing disjoint rows
-//! of what is today one plain `Vec<u8>`-backed [`framebuf::Plane`] is
-//! exactly the aliasing situation that model exists to avoid.
-//! [`vaco_codec_core::threading::SliceThreadedDecoder`]'s actual shape does
-//! not fit this directly either: `PictureWriter::split_bands_mut` hands out
-//! *disjoint, non-communicating* band ranges to concurrent jobs (its own doc
-//! comment: "each job holds a disjoint band range"), with no mechanism for
-//! one job to read a row another job is still writing — appropriate for
-//! genuinely independent tiles/slices, not for VP8's row-above dependency.
-//! Wiring this up for real would mean either restructuring `Plane` into
-//! per-row-published, ownership-transferred storage (a substantial rewrite
-//! of every reconstruction call site in `decode.rs`, all of which currently
-//! read and write an already-allocated plane by absolute pixel coordinate)
-//! or extending `vaco-codec-core`'s threading primitives to support a
-//! same-picture multi-writer wavefront — the latter is out of this crate's
-//! ownership. Given the risk of a large rewrite to a decoder that is
-//! currently verified byte-exact against `ffmpeg` on 58 of 60 real VP8 test
-//! vectors (see `tests/conformance.rs`), that rewrite was not attempted this
-//! pass. A single-threaded decode is byte-identical to any future
-//! multi-threaded one by construction (there is only one implementation),
-//! which is a vacuous, not a demonstrated, form of the "same output at any
-//! thread count" property.
+//! `-threads N` overlaps *pictures*, not one picture's own macroblock rows.
+//! `decode::split_frame`'s per-macroblock parse (mode/motion-vector/token
+//! decode) stays a single sequential bool-decoder walk over the first
+//! partition, on the
+//! caller's own thread, in decode order — that half is cheap and is where
+//! the reference semantics (entropy persistence, RFC 6386 §9.7/§9.8's
+//! reference-slot bookkeeping) live, exactly the case
+//! `vaco_codec_core::threading`'s module doc argues should stay serial. Once
+//! a frame's tokens are fully parsed, its own reconstruction and loop filter
+//! (`frame_task::Vp8FrameTask`) run on a worker thread while the *next*
+//! frame's own token decode proceeds on the caller's — VP8 needs nothing
+//! more elaborate because, unlike a codec with B-frames, decode order is
+//! always display order, so there is no reorder buffer whose depth would
+//! otherwise force finer-grained overlap. See [`frame_task`]'s own module
+//! doc for why picture granularity was chosen over the row-banded design
+//! `vaco-codec-h264`/`vaco-codec-hevc` use, and for the measured cost of the
+//! one deliberate trade that design makes (materialising a whole reference
+//! picture before a task can read it, at every thread count).
+//!
+//! Verified byte-identical at `-threads` 1/2/4/8 against the same 58/60 VP8
+//! test-vector corpus `tests/conformance.rs` already checks byte-exactness
+//! with — see that module's doc for the two vectors excluded for an
+//! unrelated, disclosed reason (display-rescale, RFC 6386 §9.1).
 //!
 //! # Specification
 //!
@@ -99,6 +85,7 @@
 
 pub mod decode;
 pub mod encode;
+pub(crate) mod frame_task;
 pub mod framebuf;
 pub mod header;
 pub mod interpolate;

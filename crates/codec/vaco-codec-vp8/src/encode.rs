@@ -95,7 +95,7 @@ use vaco_packet::{Packet, PacketFlags};
 use vaco_pixfmt::PixFmt;
 
 use crate::decode::{self, ix, ux};
-use crate::framebuf::{Picture, Plane, RefFrames};
+use crate::framebuf::{EncRefFrames, Picture, Plane};
 use crate::mv::{self, Mv, NeighborMv};
 use crate::predict;
 use crate::tables;
@@ -798,7 +798,7 @@ struct FrameEncoder<'a> {
     lambda: u64,
     version: u8,
     src: &'a Picture,
-    refs: &'a RefFrames,
+    refs: &'a EncRefFrames,
     searcher: &'a Searcher,
 }
 
@@ -973,7 +973,7 @@ fn copy_from_frame(frame: &Frame, plane_index: usize, true_w: usize, true_h: usi
 #[allow(clippy::too_many_arguments)]
 fn decide_frame(
     src: &Picture,
-    refs: &RefFrames,
+    refs: &EncRefFrames,
     searcher: &Searcher,
     mb_cols: usize,
     mb_rows: usize,
@@ -1263,7 +1263,7 @@ struct EncState {
     mb_rows: usize,
     width: u32,
     height: u32,
-    refs: RefFrames,
+    refs: EncRefFrames,
     prev_complexity: f64,
     searcher: Searcher,
 }
@@ -1275,7 +1275,7 @@ impl Default for EncState {
             mb_rows: 0,
             width: 0,
             height: 0,
-            refs: RefFrames::default(),
+            refs: EncRefFrames::default(),
             prev_complexity: 1.0,
             searcher: Searcher::new(),
         }
@@ -1307,7 +1307,7 @@ fn encode_frame(state: &mut EncState, rc: &mut RateController, rc_cfg: &RateCont
         state.height = height;
         state.mb_cols = (width as usize).div_ceil(16);
         state.mb_rows = (height as usize).div_ceil(16);
-        state.refs = RefFrames::default();
+        state.refs = EncRefFrames::default();
     }
     let mb_cols = state.mb_cols;
     let mb_rows = state.mb_rows;
