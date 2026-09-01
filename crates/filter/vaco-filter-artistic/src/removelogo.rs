@@ -16,11 +16,12 @@
 //! and (b) a masked pixel is either fully replaced or left alone — there is
 //! no visible partial blend at intermediate mask values, at least not one
 //! this crate's probes could distinguish from a hard threshold. Bisecting
-//! the mask value between "untouched" and "replaced" found `v=10` leaves
-//! the pixel untouched and `v=32` replaces it; the exact cutoff was not
-//! narrowed further in the time available, so this module uses a
-//! conservative threshold (any mask byte `> 16`, the midpoint of the
-//! measured bracket) rather than guessing at a precise value. `ffmpeg -h
+//! the mask value byte by byte (an 8x8 `gray` source, `filter=removelogo`,
+//! checking whether the masked pixel comes back replaced or untouched at
+//! every value from `10` to `32`) pinned the cutoff **exactly**: `v=16`
+//! leaves the pixel untouched and `v=17` replaces it, so the threshold
+//! this module uses (`> 16`, `ACTIVE_THRESHOLD`) is not a conservative
+//! guess inside a bracket — it is the measured cutoff itself. `ffmpeg -h
 //! filter=removelogo` was checked directly rather than trusted from the
 //! project's own docs mirror, per this project's established rule that a
 //! shipped binary's option surface is the fact and its documentation is
@@ -35,7 +36,7 @@
 //! *inactive* pixel inside that bounding box to its original value — so a
 //! non-rectangular mask still only touches the pixels it marks, while the
 //! interpolation math is exactly `delogo`'s (including its own documented,
-//! unresolved fourth-column discrepancy — this module inherits that gap
+//! unresolved anomalous-column discrepancy — this module inherits that gap
 //! rather than duplicating a second guess at fixing it).
 //!
 //! # Not framecrc-verified
@@ -82,9 +83,10 @@ pub const DESC: FilterDesc = FilterDesc {
     flags: FilterFlags::empty(),
 };
 
-/// A mask byte above this is "active" (part of the logo to remove); see
-/// this module's doc for the measured bracket (`10` inactive, `32`
-/// active) this threshold sits inside without claiming to be exact.
+/// A mask byte above this is "active" (part of the logo to remove). See
+/// this module's doc for the byte-by-byte bisection against the reference
+/// that pinned this as the exact cutoff (`16` inactive, `17` active), not
+/// a guess inside a bracket.
 const ACTIVE_THRESHOLD: u8 = 16;
 
 /// A parsed PGM (P5) mask: row-major, one byte per pixel, already
@@ -352,6 +354,19 @@ mod tests {
         assert!(!mask.is_active(1, 0));
         assert!(mask.is_active(0, 1));
         assert!(mask.is_active(1, 1));
+    }
+
+    /// Pinned against the reference's own cutoff (this module's doc): a
+    /// byte-by-byte bisection against `ffmpeg -vf removelogo` found `16`
+    /// leaves a pixel untouched and `17` replaces it — not a bracket this
+    /// crate picked a conservative point inside of.
+    #[test]
+    fn the_active_threshold_matches_the_measured_cutoff_exactly() {
+        let bytes = pgm(2, 1, &[16, 17]);
+        let mut budget = Budget::new(Limits::strict());
+        let mask = parse_pgm(&bytes, &mut budget).unwrap();
+        assert!(!mask.is_active(0, 0), "16 must be inactive");
+        assert!(mask.is_active(1, 0), "17 must be active");
     }
 
     #[test]

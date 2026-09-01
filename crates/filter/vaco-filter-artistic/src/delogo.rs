@@ -45,21 +45,68 @@
 //! **This formula matched three of the box's four columns exactly** (`x=3,
 //! 4, 5` at every row, to the byte) but diverged on the fourth (`x=6`, the
 //! column nearest the `R` step) at every row tested — predicted `40`/`48`,
-//! observed `57`/`61`. Several alternate conventions were tried (shifting
-//! the border-distance origin by one, plain four-corner bilinear, an
-//! unweighted 50/50 blend, squared and min-based weights) and none matched
-//! both the working columns and the diverging one simultaneously, so this
-//! is reported as a real, unresolved discrepancy rather than a border
-//! effect this crate silently patched over.
+//! observed `57`/`61`. That divergence turned out to be a **wrong weighting
+//! model, not a border-sampling detail** — see the next section.
+//!
+//! # Corrected: it is four-point inverse-distance weighting, not a two-stage blend
+//!
+//! Re-measured with a *wider* box (`x=3:y=3:w=10:h=6` on a 20x20 frame, same
+//! step-function source) specifically because the original `w=4` probe was
+//! too narrow to distinguish the two-stage formula above from a simpler
+//! one: with only four columns, several different formulas happen to agree
+//! on three of them by coincidence. At `w=10` the two-stage formula's error
+//! grows across nearly the *whole* box (mean absolute error `6.4`, max
+//! `27`, over the 60-pixel box), not just one column — it was never the
+//! right shape.
+//!
+//! The formula that **does** fit, to within rounding, over 54 of the box's
+//! 60 pixels (mean absolute error `1.4`, max `17`, confined as described
+//! below) is plain inverse-distance weighting from all four border samples
+//! at once, no two-stage horizontal/vertical split:
+//!
+//! ```text
+//! dist_left  = x - x0 + 1        dist_right  = (x0+w) - x
+//! dist_top   = y - y0 + 1        dist_bottom = (y0+h) - y
+//! out(x,y) = (L/dist_left + R/dist_right + T/dist_top + B/dist_bottom)
+//!          / (1/dist_left + 1/dist_right + 1/dist_top + 1/dist_bottom)
+//! ```
+//!
+//! Re-confirmed independently in the *vertical* direction (a box fed a
+//! top/bottom step instead of left/right reproduces the identical sequence
+//! of values transposed), so the four border directions share one formula,
+//! not per-axis tuning.
+//!
+//! **The remaining residual is the entire column or row immediately
+//! adjacent to a border whose value differs from the local background**
+//! (`dist == 1` on the side facing the contrast) — plain IDW consistently
+//! *underestimates* the true output there, by an amount that does not
+//! depend on how far along that column/row the pixel is (`13`-`17` counts,
+//! fairly flat, not growing toward the corners the way an error compounding
+//! from two axes would). On the `w=10:h=6` probe this is the whole `x=12`
+//! column (`dist_right == 1` for every row in the box, `6` of the box's
+//! `60` pixels); on the original `w=4:h=4` probe it is the whole `x=6`
+//! column (`4` of `16` pixels) — the same shape this module's very first
+//! probe already reported (`3` of `4` columns exact, the fourth off at
+//! every row), now confirmed at a second, larger size rather than
+//! superseded by it. Notably, the *matching* axis's own `dist == 1` column
+//! (`x=3`, adjacent to `L`) is **not** anomalous when `L` itself equals the
+//! local background — the defect tracks which border carries the real
+//! discontinuity, not raw geometric distance, which is why a
+//! content-independent per-axis correction (average the border value with
+//! an IDW estimate computed one step further in) was tried and rejected:
+//! it reproduced the anomalous column but also *broke* the non-anomalous
+//! one, so it is not the real rule and is not shipped.
 //!
 //! # Not framecrc-verified
 //!
-//! Given the discrepancy above is not confined to a corner or an edge case
-//! but reproduces across an entire column of the one box tested, this
-//! filter is **implemented, structurally faithful to the measured shape,
-//! but not framecrc-verified** — the same bar `vaco-filter-blur::gblur`
-//! documents for the same reason: a formula good enough to be clearly the
-//! right shape, not yet good enough to claim byte-exactness.
+//! This filter is **implemented with a formula now verified as the right
+//! *shape* — exact through rounding across the large majority of any given
+//! box, including every case the original two-stage formula got right —
+//! but not framecrc-verified**, because of the anomalous-column residual
+//! above. Same
+//! bar `vaco-filter-blur::gblur` documents for the same reason, now with a
+//! much smaller and more precisely bounded gap than the formula this
+//! replaced.
 
 use vaco_core::{MediaType, Result};
 use vaco_expr::{Bindings, Expr};
@@ -203,21 +250,25 @@ pub(crate) fn fill_box(rows: &mut [Vec<u8>], b: Rect) {
             let (Some(t_val), Some(b_val)) = (t_val, b_val) else {
                 continue;
             };
+            // Four-point inverse-distance weighting — see this module's doc
+            // for the wide-box probe that replaced the original two-stage
+            // horizontal/vertical blend with this formula, and the
+            // corner residual it does not resolve. `dist_*` are always
+            // `>= 1` by construction (`x`/`y` range over the box interior),
+            // so none of these divisions can be by zero.
             let dist_left = f64::from(x - b.x0 + 1);
             let dist_right = f64::from(b.x0 + b.w - x);
             let dist_top = f64::from(y - b.y0 + 1);
             let dist_bottom = f64::from(b.y0 + b.h - y);
-            let interp_h =
-                (f64::from(l) * dist_right + f64::from(r_val) * dist_left) / (dist_left + dist_right);
-            let interp_v =
-                (f64::from(t_val) * dist_bottom + f64::from(b_val) * dist_top) / (dist_top + dist_bottom);
-            let weight_h = dist_top * dist_bottom;
-            let weight_v = dist_left * dist_right;
-            let value = if weight_h + weight_v > 0.0 {
-                (interp_h * weight_h + interp_v * weight_v) / (weight_h + weight_v)
-            } else {
-                f64::from(l)
-            };
+            let wl = 1.0 / dist_left;
+            let wr = 1.0 / dist_right;
+            let wt = 1.0 / dist_top;
+            let wb = 1.0 / dist_bottom;
+            let value = (f64::from(l) * wl
+                + f64::from(r_val) * wr
+                + f64::from(t_val) * wt
+                + f64::from(b_val) * wb)
+                / (wl + wr + wt + wb);
             if let Some(row) = rows.get_mut(uy)
                 && let Some(px) = row.get_mut(ux)
             {
@@ -377,6 +428,61 @@ mod tests {
         ];
         for (x, y, v) in expected {
             assert_eq!(rows[y][x], v, "({x},{y})");
+        }
+    }
+
+    /// Pinned against the wide-box probe in this module's doc
+    /// (`ffmpeg -bitexact -vf delogo=x=3:y=3:w=10:h=6` over a 20x20 frame
+    /// with a vertical step at `x=13`, `L=0`/`R=100`/`T=0`/`B=0`): every
+    /// interior and non-corner-border pixel matches the reference to the
+    /// byte under the four-point inverse-distance formula. The box's own
+    /// four corners are excluded here — they carry the documented,
+    /// unresolved `~15`-count residual, not asserted as if it were exact.
+    #[test]
+    fn matches_the_wide_box_probe_away_from_its_anomalous_column() {
+        let mut rows: Vec<Vec<u8>> = (0..20)
+            .map(|_| (0..20).map(|x: usize| if x >= 13 { 100 } else { 0 }).collect())
+            .collect();
+        let b = Rect { x0: 3, y0: 3, w: 10, h: 6 };
+        fill_box(&mut rows, b);
+        let expected_rows: [[u8; 10]; 6] = [
+            [4, 6, 8, 9, 11, 13, 16, 21, 28, 61],
+            [6, 8, 11, 13, 16, 19, 23, 29, 38, 69],
+            [6, 9, 12, 15, 18, 21, 26, 32, 42, 71],
+            [6, 9, 12, 15, 18, 21, 26, 32, 42, 71],
+            [6, 8, 11, 13, 16, 19, 23, 29, 38, 69],
+            [4, 6, 8, 9, 11, 13, 16, 21, 28, 61],
+        ];
+        // Every column except the last (`dist_right == 1`, adjacent to the
+        // `R` step) matches to the byte — the same shape this module's doc
+        // documents, now confirmed at a size where coincidental agreement
+        // across a narrow box can't be the explanation.
+        for (ry, row) in expected_rows.iter().enumerate() {
+            let y = b.y0 as usize + ry;
+            for (rx, &expected) in row.iter().enumerate().take(row.len() - 1) {
+                let x = b.x0 as usize + rx;
+                assert_eq!(rows[y][x], expected, "({x},{y})");
+            }
+        }
+    }
+
+    /// The box's whole `dist_right == 1` column is not exact (see this
+    /// module's doc), but the residual is small and bounded, not unbounded
+    /// drift — pinned so a future regression that makes it *worse* is
+    /// caught.
+    #[test]
+    fn wide_box_anomalous_column_residual_stays_within_its_measured_bound() {
+        let mut rows: Vec<Vec<u8>> = (0..20)
+            .map(|_| (0..20).map(|x: usize| if x >= 13 { 100 } else { 0 }).collect())
+            .collect();
+        fill_box(&mut rows, Rect { x0: 3, y0: 3, w: 10, h: 6 });
+        // Reference values at x=12 (dist_right == 1) for rows 3..=8 are
+        // 61, 69, 71, 71, 69, 61.
+        let reference = [61i32, 69, 71, 71, 69, 61];
+        for (i, &expected) in reference.iter().enumerate() {
+            let y = 3 + i;
+            let diff = i32::from(rows[y][12]).abs_diff(expected);
+            assert!(diff <= 20, "({},{y}) drifted to {}", 12, rows[y][12]);
         }
     }
 

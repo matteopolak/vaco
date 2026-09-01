@@ -125,16 +125,28 @@ actual generator would need its source (D7), the same conclusion
 
 Replaces a rectangular region with values interpolated from its border —
 confirmed content-independent (a `200`-valued box surrounded by flat `50`
-comes back entirely `50`). The measured formula (a bilinear blend of
-horizontal and vertical border interpolation, weighted by the product of
-orthogonal distances — see `src/delogo.rs`'s module doc for the exact
-derivation) matched three of a `4x4` test box's four columns exactly but
-diverged on the fourth at every row tried, and several alternate
-conventions (shifted distance origins, plain four-corner bilinear, an
-unweighted 50/50 blend, squared/min-based weights) did not fix the fourth
-column without breaking the other three. Shipped as **structural, not
-framecrc-verified** — the same bar `vaco-filter-blur::gblur` sets for the
-same reason.
+comes back entirely `50`). The originally-shipped formula (a two-stage
+horizontal/vertical blend weighted by the *product* of orthogonal
+distances) matched three of a `4x4` test box's four columns exactly but
+diverged on the fourth at every row tried.
+
+**Re-derived and replaced** with a wider probe (`w=10:h=6` on a 20x20
+frame) specifically because the narrow `4x4` box couldn't distinguish the
+old formula from a simpler one on only three data points. The real formula
+is plain four-point inverse-distance weighting from all four border
+samples at once (`out = Σ(border/dist) / Σ(1/dist)`, no horizontal/vertical
+split) — confirmed independently in both the horizontal and vertical
+directions, and a strict accuracy improvement over the formula it replaced
+(mean absolute error `1.4` vs `6.4`, max `17` vs `27`, over the 60-pixel
+probe box). One column/row — whichever sits at `dist == 1` from a border
+whose value genuinely differs from the local background — still
+under-shoots the reference by `13`-`17` counts; the non-anomalous
+`dist == 1` column (facing a border that matches the background) is
+already exact, which is why the gap tracks *contrast*, not raw distance,
+and a content-independent per-axis correction was tried and rejected (see
+`src/delogo.rs`'s module doc). Shipped as **structural, not
+framecrc-verified**, now with a much smaller and more precisely bounded
+residual than the formula it replaced.
 
 ### `removelogo`
 
@@ -144,16 +156,18 @@ fixed rectangle. `ffmpeg -h filter=removelogo` documents only `filename`/`f`
 
 - It is a plain PGM (`P5`): a hand-built mask was accepted with no error and
   drove the same border-replacement behaviour `delogo` documents.
-- A masked pixel is thresholded, not blended: bisecting the mask byte value
-  found `10` leaves a pixel untouched and `32` replaces it; the exact cutoff
-  was not narrowed further, so this module uses a conservative `> 16`
-  threshold sitting inside that measured bracket rather than a guessed
-  exact value.
+- A masked pixel is thresholded, not blended. **Re-measured with a
+  byte-by-byte bisection** (every mask value from `10` to `32` against
+  `ffmpeg -vf removelogo`, not just the two original endpoints): the exact
+  cutoff is `16` inactive, `17` active. The `> 16` threshold this module
+  already shipped turned out to be the measured cutoff itself, not a
+  conservative guess inside a bracket.
 - The pixel fill reuses `delogo::fill_box` over the mask's bounding
   rectangle, then restores any *inactive* pixel inside that rectangle to
   its original value — so a non-rectangular mask only touches what it
-  marks. This means it inherits `delogo`'s own unresolved fourth-column
-  discrepancy rather than duplicating a second guess at the same formula.
+  marks. This means it inherits `delogo`'s own (now much smaller)
+  anomalous-column discrepancy rather than duplicating a second guess at
+  the same formula.
 - The mask file is genuinely untrusted input (its own header declares its
   width/height), so the pixel buffer is sized through
   `vaco_limits::Budget::alloc` rather than a raw `Vec::with_capacity`, and
@@ -164,16 +178,18 @@ fixed rectangle. `ffmpeg -h filter=removelogo` documents only `filename`/`f`
   --features filter-artistic -- -max_total_time=30` — exit 0, 9,778,796
   executions, `fuzz/artifacts` empty.
 
-Structural, **not** framecrc-verified, for the same reason `delogo` is not.
+Structural, **not** framecrc-verified, for the same reason `delogo` is not
+— its own mask-format and threshold measurements are now exact, not just
+`delogo`'s interpolation core.
 
 ## Left as a follow-up
 
 | Filter | Why it stopped |
 |---|---|
 | `hqx` | **D7, not time.** hq2x/hq3x/hq4x classify each pixel into one of 256 neighbourhood patterns and look up a hand-tuned rule per pattern — an *authorial* table (designed by visual experimentation, not dictated by any format constraint), and the only source found for the exact table was the reference's own implementation. |
-| `xbr` | Independently published (Hyllian's own description), so D7 is not the blocker — but genuinely **larger than `epx`, not "a fraction of the cost"**: a shader-level reference implementation samples a 5x5 neighbourhood (`epx`'s is 3x3) with roughly 8-12 weighted-distance comparisons per corner via coefficient matrices, versus `epx`'s single boolean check. Deferred for time, with that corrected complexity estimate on record. |
-| `super2xsai` | Also independently published (predates and is separate from FFmpeg), so not a D7 case either. Three independent attempts sourced the `INTERPOLATE`/`Q_INTERPOLATE` arithmetic helpers but not a complete, precise statement of the diagonal pixel-selection logic that picks which computed value becomes which output sub-pixel. Left unattempted rather than reconstructed from partial information — guessing the selection structure risks exactly the "confidently wrong" failure mode this project's conventions warn against. |
-| `cover_rect`, `find_rect` | Template matching against a second bitmap input at multiple mipmap scales. `find_rect` reports a *position*, not a transformed frame (`ffmpeg -h filter=find_rect` has no pixel-modifying options at all) — decided the right verification shape is a `showinfo`-style metadata assertion, not a framecrc pixel diff, before attempting any implementation. `cover_rect` itself takes no coordinate options, which reads as depending on `find_rect`'s detection via frame metadata when the two are chained. Neither filter's underlying correlation search was implemented in the time available. |
+| `xbr` | Independently published (Hyllian's own algorithm), so D7 is not the blocker in principle — but **the public specification found is not the reference's own variant, and no combination tried reproduces its output.** Fetched the algorithm's own author's MIT-licensed reference shaders (`libretro/glsl-shaders`' `xbr-lv2.glsl`/`xbr-lv3.glsl`, `provenance/sources.toml`), transliterated the `lv2` formula (default params: `Y_WEIGHT=48` BT.601 luma, `EQ_THRESHOLD=15`, `CORNER_C`, `SMOOTH_TIPS`) to Rust, and grid-searched all 4 corner-detection variants (`A`/`B`/`C`/`D`) × horizontal/vertical/transpose flips × rotation direction (64 combinations) against `ffmpeg 9.0.1`'s actual `xbr=n=2` output on a 16x16 synthetic corpus. Best match: `484`/`3072` bytes still differ (`~16%`), and the differences are full-value swaps (`00ff00` vs `3fbf00`), not rounding — a **structured** deviation, which `AGENT-CONSTRAINTS.md`'s "structured deviation is a bug" rule blocks from shipping regardless of the byte-exactness ruling. `xbr-lv3` (a materially different formula: `smoothstep` blending, two extra 15°/75° diagonal rules, a different luma matrix, `corner_type` selecting from more variants) was inspected but not similarly swept — the combinatorics of `lv2` alone already ruled out the most-likely default. Net finding: the reference's chosen rule set is neither `lv2`'s default nor any simple reorientation of it, and further narrowing needs either a source neither `lv2` nor `lv3` supplies, or substantially more probing time than this pass had. Not shipped. |
+| `super2xsai` | Also independently published (predates and is separate from FFmpeg) — checked again this pass via fresh web search, since D7 is not the blocker. The original author's own homepage (`vdnoort.home.xs4all.nl/emulation/2xsai`, cited by three prior attempts) now 302-redirects to an unrelated domain — the source is no longer available there at all. No independent reimplementation found publishes the complete diagonal pixel-selection logic either (checked `janert/pixelscalers`, which explicitly does not implement 2xSaI). Four independent attempts across this crate's history have now failed to find a complete, precise statement of the algorithm outside the reference's own source. Left unattempted rather than reconstructed from partial information. |
+| `cover_rect`, `find_rect` | Template matching against a second bitmap input at multiple mipmap scales. `find_rect` reports a *position*, not a transformed frame (`ffmpeg -h filter=find_rect` has no pixel-modifying options at all) — confirmed this pass by actually running it (`ffmpeg -vf find_rect=object=...,metadata=print`): it writes `lavfi.rect.{x,y,w,h,score}` frame metadata, which this tree can now express (`Frame::set_metadata`, closed for `vaco-filter-deinterlace::idet`). The **scoring formula itself does not decompose simply**: an exact single-pixel-corner match scores `0.000000`, but a single full-scale (`0`→`255`) one-pixel perturbation inside an 8x8 object at `mipmaps=3` (default) scores `0.053213`, not the `1/64 ≈ 0.015625` a plain mean-absolute-difference (optionally averaged again over 2-3 box-filtered mip levels, which cancels out algebraically for a single-pixel delta) would give — so the mipmap/scoring construction is more involved than a simple pyramid mean. Untangling it, plus the object file itself potentially being *any* image format ffmpeg's `image2` demuxer accepts (not a fixed, filter-owned format like `delogo`'s mask), makes this a larger, more cross-cutting task than a single filter's worth of scope — not attempted further this pass. |
 
 ## Framecrc comparison table
 
@@ -201,9 +217,10 @@ for exactly this reason.
 | `noise` | *(no args, `strength=0`)* | `gray`, 8x8 | **exact** — verified identity |
 | `noise` | any `strength > 0` | any | **not verified** — PRNG not reproduced |
 | `delogo` | `x=3:y=3:w=4:h=4` | `gray`, 10x10 flat + `200` box | **exact** — content-independence confirmed |
-| `delogo` | `x=3:y=3:w=4:h=4` | `gray`, 10x10 step function | **partial** — 3 of 4 columns exact, 4th column diverges every row |
-| `removelogo` | mask covering `x=2:y=2:w=4:h=4` | `gray`, 8x8 flat + `200` box | **exact** — content-independence confirmed (mask format + threshold measured) |
-| `removelogo` | same mask | `gray`, 8x8 step function | **partial** — inherits `delogo`'s fourth-column discrepancy |
+| `delogo` | `x=3:y=3:w=4:h=4` | `gray`, 10x10 step function | **partial** — 3 of 4 columns exact, 4th diverges (mean abs err 1.4 over the box) |
+| `delogo` | `x=3:y=3:w=10:h=6` | `gray`, 20x20 step function | **partial** — 54 of 60 pixels exact/rounding, one anomalous column (mean abs err 1.4, max 17) |
+| `removelogo` | mask covering `x=2:y=2:w=4:h=4` | `gray`, 8x8 flat + `200` box | **exact** — content-independence confirmed (mask format + threshold now exact, not bracketed) |
+| `removelogo` | same mask | `gray`, 8x8 step function | **partial** — inherits `delogo`'s anomalous-column discrepancy |
 
 ## How to change it
 
@@ -221,12 +238,15 @@ for exactly this reason.
   `configure` hook rewrites the output `LinkFormat`'s width/height, following
   `vaco-filter-video-geometry::scale`'s pattern.
 - `removelogo` reuses `delogo`'s `Rect`/`fill_box` (both `pub(crate)`)
-  rather than a second interpolation engine — fixing `delogo`'s fourth-column
-  discrepancy fixes it for both filters in one place.
-- If you resolve `delogo`'s fourth-column discrepancy or `vignette`'s
+  rather than a second interpolation engine — fixing `delogo`'s
+  anomalous-column discrepancy fixes it for both filters in one place.
+- If you resolve `delogo`'s anomalous-column discrepancy or `vignette`'s
   `dither=1` generator, update both the relevant module's doc comment (each
   states exactly what was and was not verified) and the table above in the
-  same change.
+  same change. The discrepancy tracks *contrast at the border*, not
+  geometry — a per-axis "average with an interior estimate" correction
+  reproduces the anomalous case but breaks a non-anomalous one, so whatever
+  the real rule is, it isn't purely a function of `dist == 1`.
 - If a `rand`-family dependency is ever approved for the workspace, `noise`
   is the filter whose correctness bar changes from "algorithmically
   faithful" to "must match bit for bit" — though reproducing FFmpeg's
