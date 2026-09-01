@@ -423,7 +423,18 @@ impl AviDemuxer {
 
             let is_key = self.is_key_at(pos, media_type);
             pkt.stream_index = stream_idx;
-            pkt.pts = ts;
+            // AVI carries no explicit presentation timestamp for video: `ts`
+            // here is decode order (frame count), and a video stream can
+            // legally reorder for display (B-frames) with nothing in the
+            // container to say by how much. The reference leaves video's pts
+            // unset for exactly this reason (measured: `ffprobe` reports
+            // `pts=N/A` on every AVI video packet, `dts` only) and only
+            // back-fills pts=dts for streams that cannot reorder. Setting
+            // both unconditionally, as this used to do, fabricates a value
+            // the reference never claims to have -- and a muxer downstream
+            // that refuses to write a packet with no pts (mpegts, Matroska)
+            // then silently accepts what should be a hard error.
+            pkt.pts = if media_type == Some(MediaType::Video) { Timestamp::NONE } else { ts };
             pkt.dts = ts;
             pkt.pos = Some(pos);
             pkt.duration = Timestamp::new(dur_ticks)

@@ -190,16 +190,21 @@ fn packet_order_and_timestamps_follow_the_measured_clock_rules() {
             Err(e) => panic!("unexpected error: {e:?}"),
         }
     }
-    // video: dwSampleSize == 0, so pts is a running chunk count (0, 1, 2).
-    // audio: dwSampleSize == 2, so pts is bytes-so-far / 2 (0, 2000).
+    // video: dwSampleSize == 0, so dts is a running chunk count (0, 1, 2);
+    // AVI carries no explicit presentation order for video (it may legally
+    // reorder for display with nothing in the container to say by how much),
+    // so pts stays unset -- measured against `ffmpeg 8.1`'s own avidec,
+    // which reports `pts=N/A` on every AVI video packet.
+    // audio: dwSampleSize == 2, so dts is bytes-so-far / 2 (0, 2000); audio
+    // cannot reorder, so pts is back-filled equal to dts (also measured).
     assert_eq!(
         got,
         vec![
-            (0, Some(0), true, 10),
+            (0, None, true, 10),
             (1, Some(0), true, 4000),
-            (0, Some(1), false, 8),
+            (0, None, false, 8),
             (1, Some(2000), true, 4000),
-            (0, Some(2), false, 6),
+            (0, None, false, 6),
         ]
     );
 }
