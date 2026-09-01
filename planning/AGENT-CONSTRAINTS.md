@@ -1961,3 +1961,43 @@ with a named gap is useful; a silent one is not.
 The related error is treating an incomplete run as a reason to stay silent. A
 half-finished race hunt is not evidence of anything. Report the count you
 actually reached, or go and finish it.
+
+## A harness that resolves a binary by path tests whatever was last built there
+
+`vaco-conformance`'s runner locates the tools it compares against ffmpeg from a
+path relative to its own crate manifest:
+
+    crates/tool/vaco-conformance/src/runner.rs:253:
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+
+So every differential run exercises the **shared** `target/debug/{vaco,
+vaco-probe}` no matter what `--target-dir` the caller passed. When this was
+found, those binaries were:
+
+    target/debug/vaco        Aug 29 17:00
+    target/debug/vaco-probe  Aug 30 02:03
+    HEAD                     Sep 01 15:59
+
+The `vaco` binary was three days stale. It predated H.264 weighted prediction,
+the `Intra_8x8` `zVR`/`zHD` fix, B-slices and CAVLC, and on the HEVC side
+P-slices, weighted prediction, B-slices and `cu_qp_delta`. A conformance run
+against it reported "two real decoder bugs" — at least one of which is exactly
+the shape a pre-weighted-prediction binary produces.
+
+This is the same class of error as the "FULL 25/25" that compared file sizes
+against a partial write: the measurement was real, and it was measuring the
+wrong thing. It is also the *third* appearance of the shared-target-directory
+trap — two agents previously profiled a binary another agent had overwritten
+mid-session, once with an HEVC-only build.
+
+Three rules follow:
+
+- **A differential harness must pin the binary it tests**, by explicit path or
+  `CARGO_TARGET_DIR`, and should **fail loudly when that binary is older than
+  the workspace source** rather than testing it anyway. Silently testing a
+  stale artefact is worse than refusing to run.
+- **Private `--target-dir` does not protect you** if the thing you invoke
+  resolves its own paths. Check what the tool actually executes, not what you
+  built.
+- **Before believing any differential result, check the binary's mtime against
+  HEAD.** One `ls -l` would have saved this investigation.
