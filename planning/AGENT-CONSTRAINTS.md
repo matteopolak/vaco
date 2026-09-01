@@ -2001,3 +2001,43 @@ Three rules follow:
   built.
 - **Before believing any differential result, check the binary's mtime against
   HEAD.** One `ls -l` would have saved this investigation.
+
+## `git commit -- <pathspec>` commits the working tree, not your staged work
+
+This is the mechanism behind every cross-agent collision on this project, and
+the orchestrator's own standing instruction caused it.
+
+`git commit -F <msg> -- <paths>` does **not** commit what you staged. It
+re-stages the *current working-tree content* for the named paths and commits
+that. In a shared tree, "current working-tree content" includes every other
+agent's uncommitted edits to those same files.
+
+It happened at least three times in one session. An agent fixing a P_8x8
+availability bug committed `mb.rs` and `ctu.rs` by pathspec, having checked
+`git diff --cached` first — and swept in two other agents' in-flight
+buffer-reuse and row-wise-copy refactors. One of those broke the shared build
+(E0599, a method that did not exist yet). The repair commit then removed the
+swept-in half, which left the originating agent's *own* `decoder.rs` calling
+functions that no longer existed.
+
+**`git diff HEAD~1 HEAD --name-only` does not catch this.** That is the check
+this document has been recommending, and it is insufficient by construction: it
+reports the filenames you intended, while the extra hunks hide *inside* those
+same files. Every agent that swept in someone else's work had run it and seen
+exactly what it expected.
+
+What actually works, in order of preference:
+
+- **Lane discipline.** Only commit files no other agent is editing. The
+  performance programme assigns lanes by crate for this reason. This is the
+  only approach that prevents the problem rather than detecting it.
+- **Verify the content, not the file list.** `git show <sha> -- <file>` after
+  every commit, and read it. If a hunk is not yours, it belongs to someone
+  still working.
+- **Re-check `git status` and `git log` immediately before every commit**, not
+  once at session start. In a shared tree the ground moves between your first
+  and last edit.
+
+Note the index is shared too, so `git add` then a bare `git commit` is not a
+fix — it merely moves the race one step earlier. There is no command that makes
+concurrent edits to the same file safe. Only ownership does.
