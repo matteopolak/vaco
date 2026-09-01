@@ -93,11 +93,21 @@ fuzz_target!(|cfg: Config| {
         1 => vaco_resample::FilterType::BlackmanNuttall,
         _ => vaco_resample::FilterType::Cubic,
     };
-    opts.dither_method = match cfg.dither % 4 {
+    // All eleven now, not just the four non-noise-shaping ones: the seven
+    // curves' stateful error feedback (`NoiseShapeState`) is new code this
+    // target had no way to reach before it existed.
+    opts.dither_method = match cfg.dither % 11 {
         0 => vaco_resample::DitherMethod::None,
         1 => vaco_resample::DitherMethod::Rectangular,
         2 => vaco_resample::DitherMethod::Triangular,
-        _ => vaco_resample::DitherMethod::TriangularHighpass,
+        3 => vaco_resample::DitherMethod::TriangularHighpass,
+        4 => vaco_resample::DitherMethod::NsLipshitz,
+        5 => vaco_resample::DitherMethod::NsFWeighted,
+        6 => vaco_resample::DitherMethod::NsModifiedEWeighted,
+        7 => vaco_resample::DitherMethod::NsImprovedEWeighted,
+        8 => vaco_resample::DitherMethod::NsShibata,
+        9 => vaco_resample::DitherMethod::NsLowShibata,
+        _ => vaco_resample::DitherMethod::NsHighShibata,
     };
 
     let in_fmt = fmt_of(cfg.in_fmt);

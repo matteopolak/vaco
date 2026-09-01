@@ -30,7 +30,7 @@ use vaco_sampfmt::SampleFmt;
 
 use crate::buf::{AudioMut, AudioRef, AudioSpec};
 use crate::convert::{self, Elem, Internal};
-use crate::dither::Dither;
+use crate::dither::{Dither, NoiseShapeState};
 use crate::mix::{MixLevels, MixMatrix, Rematrix, build_matrix};
 use crate::opts::ResampleOptions;
 use crate::rate::{RateConvert, RateParams};
@@ -57,6 +57,10 @@ struct Pipeline<T: Internal> {
     rematrix: Option<Rematrix>,
     rate: Option<RateConvert<T>>,
     dither: Option<Dither>,
+    /// Per-channel error-feedback state, when `dither` is one of the seven
+    /// noise-shaping methods. See `dither`'s module docs for why this is not
+    /// folded into `Dither` itself.
+    ns_state: Option<NoiseShapeState>,
     /// Rematrix before rate conversion (true when it reduces the channel count).
     rematrix_first: bool,
     in_channels: usize,
@@ -386,10 +390,14 @@ impl<T: Internal> Pipeline<T> {
         } else {
             None
         };
+        let ns_state = dither
+            .filter(Dither::is_noise_shaping)
+            .map(|d| NoiseShapeState::new(out_channels, d.taps()));
         Ok(Self {
             rematrix,
             rate,
             dither,
+            ns_state,
             rematrix_first,
             in_channels,
             out_channels,
@@ -424,6 +432,9 @@ impl<T: Internal> Pipeline<T> {
         self.soft = None;
         self.dither_pos = 0;
         self.drained = 0;
+        if let Some(ns) = &mut self.ns_state {
+            ns.reset();
+        }
     }
 
     fn delay_in_samples(&self) -> u64 {
@@ -756,8 +767,16 @@ impl<T: Internal> Pipeline<T> {
             return;
         };
         let pos = self.dither_pos;
-        for (ch, plane) in self.pending.iter_mut().enumerate() {
-            d.apply(plane, from, count, ch as u32, pos);
+        if let Some(ns) = &mut self.ns_state {
+            for (ch, plane) in self.pending.iter_mut().enumerate() {
+                if let Some(history) = ns.channel_mut(ch) {
+                    d.apply_shaped(plane, from, count, ch as u32, pos, history);
+                }
+            }
+        } else {
+            for (ch, plane) in self.pending.iter_mut().enumerate() {
+                d.apply(plane, from, count, ch as u32, pos);
+            }
         }
         self.dither_pos = self.dither_pos.saturating_add(count as u64);
     }
