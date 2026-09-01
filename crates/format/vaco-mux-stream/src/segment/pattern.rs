@@ -13,6 +13,13 @@
 
 use core::fmt::Write as _;
 
+/// The largest zero-padding width honoured — see
+/// `vaco-mux-hls::filename::MAX_PAD_WIDTH`'s doc for why: `%0Nd` feeds `N`
+/// straight into a `format!`/`write!` width specifier, which allocates a
+/// string that many bytes long, so an uncapped width turns a few bytes of
+/// pattern into a multi-gigabyte allocation from one `%0<huge>d`.
+const MAX_PAD_WIDTH: usize = 64;
+
 /// Expand every `%d`/`%0Nd`/`%%` in `pattern` for segment index `n`.
 ///
 /// `%%` is a literal `%`. `%d` and `%0Nd` (`N` one or two digits) are `n`
@@ -48,7 +55,7 @@ pub fn expand_index(pattern: &str, n: u64) -> String {
                 }
                 if chars.peek() == Some(&'d') {
                     chars.next();
-                    let width: usize = width.parse().unwrap_or(0);
+                    let width: usize = width.parse().unwrap_or(0).min(MAX_PAD_WIDTH);
                     let _ = write!(out, "{n:0width$}");
                 } else {
                     // Not actually a numbered placeholder: keep it literal.
@@ -86,6 +93,17 @@ mod tests {
     #[test]
     fn no_placeholder_is_unchanged() {
         assert_eq!(expand_index("out.ts", 5), "out.ts");
+    }
+
+    /// A short pattern must never turn into a huge allocation: before the
+    /// `MAX_PAD_WIDTH` cap, `%09999999999d` asked for a ten-billion-byte
+    /// pad from thirteen bytes of input.
+    #[test]
+    fn an_absurd_pad_width_is_capped_not_honoured() {
+        let out = expand_index("out%09999999999d.ts", 3);
+        assert!(out.len() < 200, "got {} bytes", out.len());
+        assert!(out.starts_with("out"));
+        assert!(out.ends_with("3.ts"));
     }
 
     #[test]

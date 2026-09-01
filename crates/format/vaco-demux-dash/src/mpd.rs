@@ -321,10 +321,26 @@ pub fn interpret(root: &Node) -> Result<Mpd> {
     })
 }
 
+/// The largest `%0Nd` zero-padding width [`substitute`] honours.
+///
+/// This is the demux side of the same grammar `vaco-mux-hls::filename`,
+/// `vaco-mux-stream::segment::pattern` and `vaco-demux-image2::pattern`
+/// each reimplement (see their docs), and the most directly
+/// attacker-reachable of the four: `width` here comes straight out of a
+/// `SegmentTemplate` attribute in an **MPD manifest** — network or
+/// filesystem content, not an operator's own CLI argument — and was fed
+/// unbounded into `format_args!("{v:0>w$}")`, which allocates a string `w`
+/// bytes long. A `media="seg-$Number%09999999999d$.m4s"` attribute (34
+/// bytes) would otherwise ask for a ten-billion-byte allocation on the
+/// first segment request from a manifest that never opened a single byte
+/// of media. 64 digits is far past any segment number or timestamp this
+/// format could ever need to print.
+const MAX_PAD_WIDTH: usize = 64;
+
 /// Substitute `$Identifier[%0Nd]$` tokens in a `SegmentTemplate` pattern
 /// (ISO/IEC 23009-1 §5.3.9.4.4): `$$` is a literal `$`; `$RepresentationID$`,
 /// `$Bandwidth$`, `$Number$`, `$Time$`, each optionally followed by a
-/// `%0Nd` width specifier.
+/// `%0Nd` width specifier, capped at [`MAX_PAD_WIDTH`].
 #[must_use]
 pub fn substitute(
     pattern: &str,
@@ -364,7 +380,8 @@ pub fn substitute(
             (
                 i,
                 w.strip_suffix('d')
-                    .and_then(|w| w.trim_start_matches('0').parse::<usize>().ok()),
+                    .and_then(|w| w.trim_start_matches('0').parse::<usize>().ok())
+                    .map(|w: usize| w.min(MAX_PAD_WIDTH)),
             )
         });
         let value = match ident {
@@ -415,6 +432,24 @@ mod tests {
             ),
             "chunk-v0-00007.m4s"
         );
+    }
+
+    /// A short manifest attribute must never turn into a huge allocation.
+    /// Before the `MAX_PAD_WIDTH` cap, `$Number%09999999999d$` (24 bytes)
+    /// asked `format_args!` to pad to ten billion characters, driven
+    /// entirely by MPD content an attacker controls.
+    #[test]
+    fn an_absurd_pad_width_from_the_manifest_is_capped_not_honoured() {
+        let out = substitute(
+            "seg-$Number%09999999999d$.m4s",
+            "v0",
+            0,
+            Some(7),
+            None,
+        );
+        assert!(out.len() < 200, "got {} bytes", out.len());
+        assert!(out.starts_with("seg-"));
+        assert!(out.ends_with("7.m4s"));
     }
 
     #[test]

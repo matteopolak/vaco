@@ -18,6 +18,20 @@
 
 use vaco_core::{Error, Result};
 
+/// The largest zero-padding width this crate accepts in a `%0Nd`
+/// placeholder.
+///
+/// `format` feeds `width` straight into a `format!` width specifier, which
+/// allocates a string that many bytes long — an unbounded `width` turns a
+/// short, ordinary-looking pattern like `out%09999999999d.png` (21 bytes)
+/// into a request for a ten-billion-byte string. `vaco-mux-hls::filename`
+/// and `vaco-mux-stream::segment::pattern` reimplement the same `%0Nd`
+/// grammar independently (see this module's own doc on why this crate is
+/// not reused there) and had the identical unbounded width; all three cap
+/// it the same way. 64 digits is far past any index this crate could ever
+/// need to print.
+const MAX_PAD_WIDTH: usize = 64;
+
 /// A parsed `-pattern_type sequence` filename template.
 ///
 /// `format` and `matches` are inverses of each other for any non-negative
@@ -74,6 +88,11 @@ impl SequencePattern {
                     } else {
                         digits.parse().unwrap_or(0)
                     };
+                    if w > MAX_PAD_WIDTH {
+                        return Err(Error::InvalidData(
+                            "sequence pattern's %0Nd width is implausibly large",
+                        ));
+                    }
                     width = Some(w);
                 }
                 _ => {
@@ -214,6 +233,22 @@ mod tests {
     #[test]
     fn rejects_duplicate_placeholder() {
         assert!(SequencePattern::parse("a%d_%d.png").is_err());
+    }
+
+    /// A short, ordinary-looking pattern must never be accepted with a
+    /// width that would make `format` allocate gigabytes. Before the
+    /// `MAX_PAD_WIDTH` cap this parsed successfully and only blew up on the
+    /// first `format` call.
+    #[test]
+    fn rejects_an_implausibly_large_pad_width() {
+        assert!(SequencePattern::parse("out%09999999999d.png").is_err());
+    }
+
+    #[test]
+    fn accepts_a_pad_width_right_at_the_cap() {
+        let pattern = format!("out%0{MAX_PAD_WIDTH}d.png");
+        let p = SequencePattern::parse(&pattern).unwrap();
+        assert_eq!(p.format(7).len(), "out".len() + MAX_PAD_WIDTH + ".png".len());
     }
 
     #[test]

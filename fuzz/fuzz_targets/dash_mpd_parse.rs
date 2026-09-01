@@ -11,6 +11,16 @@
 //! the node count separately (`tree::MAX_NODES`) — this target asserts both
 //! bounds hold for genuinely arbitrary input, not just the hand-picked cases
 //! the unit tests cover.
+//!
+//! A second, narrower bound added alongside the count check above: each
+//! individual segment *URI* must also stay small. `segments::enumerate`
+//! builds every URI through `mpd::substitute`, which resolves a
+//! `SegmentTemplate`'s `$Number%0Nd$`/`$Time%0Nd$` width straight out of
+//! the manifest — before `mpd::MAX_PAD_WIDTH` capped it, a 24-byte
+//! `media="seg-$Number%09999999999d$.m4s"` attribute allocated a
+//! ten-billion-byte string once per segment, a bug this target's own
+//! total-*count* assertion could not have caught since one segment's URI
+//! size is orthogonal to how many segments there are.
 //! fuzz-crate: vaco-demux-dash
 
 #![no_main]
@@ -23,6 +33,11 @@ use vaco_limits::{Budget, Limits};
 /// representation — generous above any real manifest, and the assertion
 /// that would catch `tree::MAX_NODES`/`timeline::MAX_SEGMENTS` being lost.
 const MAX_TOTAL_SEGMENTS: usize = 1 << 21;
+
+/// Bytes any single substituted segment URI may occupy — generous past any
+/// real manifest's path length, and the assertion that would catch
+/// `mpd::MAX_PAD_WIDTH` being lost or raised without a caller noticing.
+const MAX_URI_LEN: usize = 1 << 16;
 
 fuzz_target!(|data: &[u8]| {
     let Ok(text) = core::str::from_utf8(data) else {
@@ -56,6 +71,11 @@ fuzz_target!(|data: &[u8]| {
                         "{total_segments} segments from one MPD — a timeline bound was lost"
                     );
                     for s in &segs {
+                        assert!(
+                            s.uri.len() <= MAX_URI_LEN,
+                            "a segment URI was {} bytes — a %0Nd pad-width bound was lost",
+                            s.uri.len()
+                        );
                         let _ = (&s.uri, s.duration, s.byte_range);
                     }
                 }
