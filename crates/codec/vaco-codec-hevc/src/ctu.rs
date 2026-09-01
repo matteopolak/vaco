@@ -1187,23 +1187,13 @@ fn predict_component(
     }
 }
 
-/// Copy one PU's `w x h` prediction into its own rectangle of the CU-sized
-/// `dst` buffer, one row at a time (`PERF-PROGRAMME.md` item B1: this used
-/// to be a per-sample `get`/`get_mut` pair, `build_cu_prediction`'s own
-/// 3.48% share of decode). Both buffers hold the same `i32` element type at
-/// the same per-row stride they are copied at, so each row is one
-/// `copy_from_slice` — a real `memcpy`, not sample-by-sample arithmetic —
-/// rather than one bounds-checked lookup per sample.
 fn blit(dst: &mut [i32], dst_stride: usize, x0: usize, y0: usize, w: usize, h: usize, src: &[i32]) {
     for row in 0..h {
-        let dst_start = y0.saturating_add(row).saturating_mul(dst_stride).saturating_add(x0);
-        let src_start = row.saturating_mul(w);
-        let (Some(dst_row), Some(src_row)) =
-            (dst.get_mut(dst_start..dst_start.saturating_add(w)), src.get(src_start..src_start.saturating_add(w)))
-        else {
-            continue;
-        };
-        dst_row.copy_from_slice(src_row);
+        for col in 0..w {
+            if let Some(slot) = dst.get_mut((y0 + row) * dst_stride + x0 + col) {
+                *slot = src.get(row * w + col).copied().unwrap_or(0);
+            }
+        }
     }
 }
 
@@ -1219,27 +1209,14 @@ fn write_inter_cu_no_residual(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32, pus:
     Ok(())
 }
 
-/// Write one CU's motion-compensated prediction straight to the picture
-/// (`PERF-PROGRAMME.md` item B1: `write_inter_cu_no_residual`'s own 9.32%
-/// share was this loop calling [`crate::framebuf::Plane::set`] once per
-/// sample — a bounds-checked 2-D index plus a separate `ready`-bitmap write,
-/// both recomputed every pixel). Row-wise instead: one bounds-checked slice
-/// per row from [`crate::framebuf::Plane::row_mut`], a tight per-sample
-/// clamp-and-convert loop over that slice (no per-sample `Option`), then one
-/// [`crate::framebuf::Plane::mark_row_ready`] call for the whole row.
 fn write_pred_block(plane: &mut crate::framebuf::Plane, x0: i32, y0: i32, w: i32, h: i32, src: &[i32]) {
     let (wu, hu) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
-    let Ok(x0u) = usize::try_from(x0) else { return };
     for row in 0..hu {
-        let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else { continue };
-        let row_start = row.saturating_mul(wu);
-        let Some(src_row) = src.get(row_start..row_start.saturating_add(wu)) else { continue };
-        if let Some(dst_row) = plane.row_mut(py).and_then(|r| r.get_mut(x0u..x0u.saturating_add(wu))) {
-            for (d, &s) in dst_row.iter_mut().zip(src_row) {
-                *d = u16::try_from(s.clamp(0, 255)).unwrap_or(0);
-            }
+        for col in 0..wu {
+            let v = src.get(row * wu + col).copied().unwrap_or(0).clamp(0, 255);
+            let (Ok(px), Ok(py)) = (usize::try_from(x0 + i32::try_from(col).unwrap_or(0)), usize::try_from(y0 + i32::try_from(row).unwrap_or(0))) else { continue };
+            plane.set(px, py, u16::try_from(v).unwrap_or(0));
         }
-        plane.mark_row_ready(py, x0u, wu);
     }
 }
 
