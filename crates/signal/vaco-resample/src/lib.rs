@@ -40,12 +40,19 @@
 //! `exact_rational` (the default) and a reduced denominator ≤
 //! [`rate::MAX_EXACT_PHASES`], there is no phase quantisation error at all.
 //!
+//! # Timestamp compensation
+//!
+//! Soft, hard, the `async` convenience, `first_pts` and the manual API
+//! ([`Resampler::advance_pts`] / [`Resampler::set_compensation`]) are
+//! implemented in [`timestamp`], driven by measurements against the
+//! reference through the `aresample` filter — see that module's docs and
+//! `docs/signal/vaco-resample.md` for the exact thresholds and commands.
+//!
 //! # What is not here
 //!
 //! Deliberately scoped out for this pass, each with a stated reason in
 //! `docs/signal/vaco-resample.md`: noise-shaping dither curves (the option names
-//! are accepted and aliased to triangular-highpass with a warning), and
-//! timestamp compensation beyond [`Resampler::delay`] / [`Resampler::next_pts`].
+//! are accepted and aliased to triangular-highpass with a warning).
 //! The Dolby Pro Logic IIx/IIz/EX/Headphone `matrix_encoding` values are
 //! implemented, in the sense that matters: the reference itself falls back to
 //! an unencoded downmix for all four, and [`mix::build_matrix`] reproduces
@@ -61,6 +68,7 @@ pub mod mix;
 pub mod opts;
 pub mod rate;
 mod resampler;
+pub mod timestamp;
 
 pub use buf::{AudioMut, AudioRef, AudioSpec};
 pub use dither::{Dither, DitherMethod};
@@ -68,6 +76,7 @@ pub use mix::{MatrixEncoding, MatrixShape, MixLevels, MixMatrix, Rematrix, build
 pub use opts::{Engine, FilterType, ResampleOptions};
 pub use rate::RateConvert;
 pub use resampler::{Resampler, default_layout};
+pub use timestamp::MAX_COMPENSATION_SAMPLES;
 
 /// The crate's error type is the shared taxonomy.
 pub use vaco_core::Error;

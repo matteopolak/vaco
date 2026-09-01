@@ -34,6 +34,7 @@ use crate::dither::Dither;
 use crate::mix::{MixLevels, MixMatrix, Rematrix, build_matrix};
 use crate::opts::ResampleOptions;
 use crate::rate::{RateConvert, RateParams};
+use crate::timestamp::{self, Decision, Policy, SoftWindow, Tracker, MAX_COMPENSATION_SAMPLES};
 
 /// A configured conversion from one [`AudioSpec`] to another.
 #[derive(Debug)]
@@ -67,6 +68,18 @@ struct Pipeline<T: Internal> {
     /// Absolute output position of `pending[..][0]`, for the dither sequence.
     dither_pos: u64,
     drained: usize,
+
+    // ── timestamp compensation (crate::timestamp) ───────────────────────────
+    in_rate: u32,
+    out_rate: u32,
+    comp_policy: Policy,
+    comp_tracker: Tracker,
+    /// Input-rate samples of silence (positive) or real input samples to
+    /// discard (negative) queued by the last hard-compensation decision,
+    /// applied before the next real input block reaches the mixer/resampler.
+    pending_hard: i64,
+    /// An in-progress soft correction, in output-rate samples.
+    soft: Option<SoftWindow>,
 }
 
 impl Resampler {
@@ -105,6 +118,12 @@ impl Resampler {
         )?;
         let needs_mix = !is_identity(&matrix);
         let needs_rate = input.sample_rate != output.sample_rate || opts.force_resample;
+        // Timestamp compensation inserts/drops/stretches sample data, so it
+        // needs the dsp pipeline even at matching rates with no mixing or
+        // dither. `compensation_requested` is the caller's explicit signal —
+        // untouched defaults never force the pipeline, so the direct path
+        // (§2.1's exactness guarantee) is unaffected for everyone else.
+        let needs_compensation = opts.compensation_requested();
         let dither = if opts.dither_method == crate::DitherMethod::None || !int_output {
             None
         } else {
@@ -121,7 +140,7 @@ impl Resampler {
             ))
         };
 
-        if !needs_mix && !needs_rate && dither.is_none() {
+        if !needs_mix && !needs_rate && dither.is_none() && !needs_compensation {
             return Ok(Self {
                 input: input.clone(),
                 output: output.clone(),
@@ -243,6 +262,67 @@ impl Resampler {
             Core::F64(p) => p.reset(),
         }
     }
+
+    /// Feed the pts (in input-rate samples) that the *next* input chunk
+    /// passed to [`Resampler::convert`] is expected to carry, and let the
+    /// configured soft/hard/`async` policy decide what compensation, if any,
+    /// to queue before that chunk is processed.
+    ///
+    /// This is the automatic side of timestamp compensation. Call it once
+    /// per input chunk, immediately before `convert`. See
+    /// `docs/signal/vaco-resample.md` for the measured thresholds behind the
+    /// decision, and [`crate::timestamp`] for the rule itself.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] if this resampler has no dsp stage to
+    /// compensate through: rates match, there is no mixing or dither, and no
+    /// compensation option (`async`, `first_pts`, or a `min_comp` below its
+    /// disabled default) was set at construction. Force the stage
+    /// unconditionally with `flags=+res` if you need compensation on an
+    /// otherwise-direct conversion.
+    /// [`Error::LimitExceeded`] if the computed correction exceeds
+    /// [`crate::timestamp::MAX_COMPENSATION_SAMPLES`].
+    pub fn advance_pts(&mut self, input_pts: i64) -> Result<(), Error> {
+        match &mut self.core {
+            Core::Direct => Err(Self::no_pipeline()),
+            Core::F32(p) => p.advance_pts(input_pts),
+            Core::F64(p) => p.advance_pts(input_pts),
+        }
+    }
+
+    /// The manual API: request that the next `compensation_distance` output
+    /// samples absorb `sample_delta` extra (positive) or fewer (negative)
+    /// samples, spread smoothly rather than as a single step. Equivalent in
+    /// purpose to the reference's `swr_set_compensation` — see
+    /// [`crate::timestamp`] for what "smoothly" means here: our own
+    /// linear-interpolation stretch, not a transcription of the reference's
+    /// internal mechanism, which its public contract does not expose.
+    ///
+    /// `compensation_distance == 0` applies the whole delta at the very next
+    /// output sample.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] — see [`Resampler::advance_pts`].
+    /// [`Error::LimitExceeded`] if `sample_delta` exceeds
+    /// [`crate::timestamp::MAX_COMPENSATION_SAMPLES`].
+    pub fn set_compensation(
+        &mut self,
+        sample_delta: i32,
+        compensation_distance: u32,
+    ) -> Result<(), Error> {
+        match &mut self.core {
+            Core::Direct => Err(Self::no_pipeline()),
+            Core::F32(p) => p.set_compensation(sample_delta, compensation_distance),
+            Core::F64(p) => p.set_compensation(sample_delta, compensation_distance),
+        }
+    }
+
+    fn no_pipeline() -> Error {
+        Error::Unsupported(
+            "timestamp compensation needs the dsp pipeline; set async, first_pts or min_comp, \
+             or force it with flags=+res",
+        )
+    }
 }
 
 fn is_identity(m: &MixMatrix) -> bool {
@@ -318,6 +398,12 @@ impl<T: Internal> Pipeline<T> {
             pending: vec![Vec::new(); out_channels],
             dither_pos: 0,
             drained: 0,
+            in_rate: input.sample_rate,
+            out_rate: output.sample_rate,
+            comp_policy: opts.effective_compensation(),
+            comp_tracker: Tracker::new(opts.first_pts()),
+            pending_hard: 0,
+            soft: None,
         })
     }
 
@@ -333,6 +419,9 @@ impl<T: Internal> Pipeline<T> {
         {
             v.clear();
         }
+        self.comp_tracker.reset();
+        self.pending_hard = 0;
+        self.soft = None;
         self.dither_pos = 0;
         self.drained = 0;
     }
@@ -352,7 +441,20 @@ impl<T: Internal> Pipeline<T> {
         let from_rate = self.rate.as_ref().map_or(in_samples, |r| {
             usize::try_from(r.out_samples(in_samples as u64)).unwrap_or(usize::MAX)
         });
-        from_rate.saturating_add(self.pending_len())
+        // Queued compensation can grow the next call's output beyond what the
+        // real input alone would: hard compensation may still insert silence,
+        // and an in-progress soft window may still be adding net samples. An
+        // insert (positive) is the only direction that raises the bound; a
+        // drop or a net-negative soft correction only lowers actual output,
+        // which a caller sizing a buffer from this bound does not need to know.
+        let hard_extra = usize::try_from(self.pending_hard.max(0)).unwrap_or(usize::MAX);
+        let soft_extra = self
+            .soft
+            .map_or(0, |s| usize::try_from(s.remaining_delta.max(0)).unwrap_or(usize::MAX));
+        from_rate
+            .saturating_add(self.pending_len())
+            .saturating_add(hard_extra)
+            .saturating_add(soft_extra)
     }
 
     fn convert(
@@ -363,22 +465,192 @@ impl<T: Internal> Pipeline<T> {
         let before = self.pending.first().map_or(0, Vec::len);
         match input {
             Some(src) => {
+                // Hard compensation queued by `advance_pts` is applied here,
+                // ahead of the real block it was measured against: silence
+                // goes in first, and any surplus real samples are dropped
+                // from the front of this one.
+                self.apply_pending_hard_insert()?;
                 let n = src.samples();
                 if n > 0 {
                     for v in &mut self.read {
                         v.clear();
                     }
                     convert::read_planes::<T>(src, &mut self.read, n)?;
-                    self.push(n)?;
+                    let n = self.apply_pending_hard_drop(n);
+                    if n > 0 {
+                        self.push(n)?;
+                        self.comp_tracker.account(n as u64);
+                    }
                 }
             }
             None => self.flush()?,
         }
+        // Soft compensation reshapes the tail this call just produced, before
+        // dither positions are assigned against the final sample count.
+        self.apply_soft(before);
         let after = self.pending.first().map_or(0, Vec::len);
         if after > before {
             self.dither_new(before, after - before);
         }
         self.drain(output)
+    }
+
+    /// Push `n` samples of silence through the mixer/resampler, as if they
+    /// were real input. `self.read` is used as scratch and restored
+    /// afterwards, since nothing outside one `convert` call depends on its
+    /// contents surviving a call.
+    fn push_silence(&mut self, n: usize) -> Result<(), Error> {
+        if n == 0 {
+            return Ok(());
+        }
+        let mut silence = vec![Vec::new(); self.in_channels];
+        for v in &mut silence {
+            for _ in 0..n {
+                v.push(T::ZERO);
+            }
+        }
+        core::mem::swap(&mut self.read, &mut silence);
+        let result = self.push(n);
+        core::mem::swap(&mut self.read, &mut silence);
+        result
+    }
+
+    /// Insert queued hard-compensation silence, if any, before the next real
+    /// block. Input samples to *drop* are handled once the real block has
+    /// been read, by [`Pipeline::apply_pending_hard_drop`].
+    fn apply_pending_hard_insert(&mut self) -> Result<(), Error> {
+        if self.pending_hard <= 0 {
+            return Ok(());
+        }
+        let n = usize::try_from(self.pending_hard).unwrap_or(usize::MAX);
+        self.pending_hard = 0;
+        self.push_silence(n)?;
+        self.comp_tracker.account(n as u64);
+        Ok(())
+    }
+
+    /// Discard up to the queued amount from the front of `self.read`, which
+    /// holds `n` freshly-read real samples. Returns the number remaining to
+    /// process this call.
+    fn apply_pending_hard_drop(&mut self, n: usize) -> usize {
+        if self.pending_hard >= 0 || n == 0 {
+            return n;
+        }
+        let want_drop = usize::try_from(-self.pending_hard).unwrap_or(usize::MAX);
+        let take = want_drop.min(n);
+        if take > 0 {
+            for v in &mut self.read {
+                let t = take.min(v.len());
+                v.drain(..t);
+            }
+            self.pending_hard += i64::try_from(take).unwrap_or(i64::MAX);
+            self.comp_tracker.account(take as u64);
+        }
+        n - take
+    }
+
+    /// Stretch or squeeze the output tail this call just produced —
+    /// `pending[..][before..]` — to absorb whatever share of an in-progress
+    /// soft correction it can carry.
+    fn apply_soft(&mut self, before: usize) {
+        let Some(soft) = self.soft.as_mut() else {
+            return;
+        };
+        let tail_len = self
+            .pending
+            .first()
+            .map_or(0, |p| p.len().saturating_sub(before));
+        if tail_len == 0 {
+            return;
+        }
+        let (share_distance, share_delta) = soft.share(tail_len);
+        let exhausted = soft.is_exhausted();
+        if share_distance == 0 {
+            if exhausted {
+                self.soft = None;
+            }
+            return;
+        }
+        let share_distance_i = i64::try_from(share_distance).unwrap_or(i64::MAX);
+        let target_len = usize::try_from(share_distance_i.saturating_add(share_delta)).unwrap_or(0);
+        for plane in &mut self.pending {
+            let at = before.min(plane.len());
+            let full_tail = plane.split_off(at);
+            let take = share_distance.min(full_tail.len());
+            let (chunk, rest) = full_tail.split_at(take);
+            let stretched = timestamp::linear_resample(chunk, target_len);
+            plane.extend(stretched);
+            plane.extend_from_slice(rest);
+        }
+        if exhausted {
+            self.soft = None;
+        }
+    }
+
+    /// The automatic side of timestamp compensation: see
+    /// [`Resampler::advance_pts`].
+    fn advance_pts(&mut self, input_pts: i64) -> Result<(), Error> {
+        match self
+            .comp_tracker
+            .observe(&self.comp_policy, self.in_rate, input_pts)
+        {
+            Decision::None => Ok(()),
+            Decision::Hard(delta) => {
+                if delta.unsigned_abs() > MAX_COMPENSATION_SAMPLES.unsigned_abs() {
+                    return Err(Error::LimitExceeded {
+                        limit: "resample timestamp compensation",
+                        requested: delta.unsigned_abs(),
+                        cap: MAX_COMPENSATION_SAMPLES.unsigned_abs(),
+                    });
+                }
+                self.pending_hard = self.pending_hard.saturating_add(delta);
+                Ok(())
+            }
+            Decision::Soft(delta_in, duration_s) => {
+                self.queue_soft_from_input_delta(delta_in, duration_s)
+            }
+        }
+    }
+
+    /// Restate an input-rate drift measurement as an output-rate soft
+    /// correction, bounded by `max_soft_comp`. See [`Resampler::advance_pts`].
+    fn queue_soft_from_input_delta(&mut self, delta_in: i64, duration_s: f64) -> Result<(), Error> {
+        let in_rate = f64::from(self.in_rate.max(1));
+        let out_rate = f64::from(self.out_rate.max(1));
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "delta is bounded by MAX_COMPENSATION_SAMPLES, far below f64's exact range"
+        )]
+        let delta_out = (delta_in as f64) * out_rate / in_rate;
+        let cap = (self.comp_policy.max_soft_comp.abs() * self.comp_policy.comp_duration_s).max(0.0);
+        let delta_out = delta_out.clamp(-cap, cap).round();
+        if delta_out == 0.0 || !delta_out.is_finite() {
+            return Ok(());
+        }
+        let distance = (duration_s * out_rate).round();
+        let distance = if distance.is_finite() && distance >= 1.0 {
+            distance as u64
+        } else {
+            1
+        };
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "clamped to +-cap, itself bounded by the option's own validated range"
+        )]
+        let delta_out_i = delta_out as i64;
+        self.soft = Some(SoftWindow::new(delta_out_i, distance)?);
+        Ok(())
+    }
+
+    /// The manual API: see [`Resampler::set_compensation`].
+    fn set_compensation(
+        &mut self,
+        sample_delta: i32,
+        compensation_distance: u32,
+    ) -> Result<(), Error> {
+        let distance = u64::from(compensation_distance).max(1);
+        self.soft = Some(SoftWindow::new(i64::from(sample_delta), distance)?);
+        Ok(())
     }
 
     /// One block of `n` input samples through the mixer and the resampler.

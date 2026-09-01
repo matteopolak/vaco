@@ -103,6 +103,30 @@ pub struct ResampleOptions {
     pub dither_scale: f64,
     pub output_sample_bits: i32,
 
+    // ── timestamp compensation ──────────────────────────────────────────────
+    /// Seconds of drift below which no compensation, soft or hard, is applied.
+    /// `f32::MAX` (the reference's `FLT_MAX` default) disables compensation
+    /// entirely, since no real drift ever exceeds it.
+    pub min_comp: f32,
+    /// Seconds of drift above which the whole discrepancy is corrected in one
+    /// step (padding or trimming), rather than spread out.
+    pub min_hard_comp: f32,
+    /// Seconds over which a soft correction is spread.
+    pub comp_duration: f32,
+    /// Cap, in samples per second, on how much a soft correction may stretch
+    /// or squeeze the output. `0.0` disables soft compensation.
+    pub max_soft_comp: f32,
+    /// The reference's one-parameter convenience: `0` disables compensation,
+    /// `1` enables hard-only (fill/trim) compensation, and `|async| > 1` also
+    /// enables soft compensation capped at that many samples/sec. See
+    /// [`ResampleOptions::effective_compensation`].
+    pub async_samples: f32,
+    /// Assume the first input sample is at this pts (in input-rate samples).
+    /// `i64::MIN` (the reference's `AV_NOPTS_VALUE`-shaped sentinel) means
+    /// "unset": the baseline is taken from whatever pts is first observed,
+    /// so a stream's real (nonzero) start does not itself read as drift.
+    pub first_pts: i64,
+
     // ── vaco extensions ─────────────────────────────────────────────────────
     pub dither_seed: u64,
 }
@@ -130,6 +154,12 @@ impl Default for ResampleOptions {
             dither_method: DitherMethod::None,
             dither_scale: 1.0,
             output_sample_bits: 0,
+            min_comp: f32::MAX,
+            min_hard_comp: 0.1,
+            comp_duration: 1.0,
+            max_soft_comp: 0.0,
+            async_samples: 0.0,
+            first_pts: i64::MIN,
             dither_seed: 0,
         }
     }
@@ -143,6 +173,48 @@ impl ResampleOptions {
             self.cutoff
         } else {
             crate::design::DEFAULT_CUTOFF
+        }
+    }
+
+    /// `first_pts`, or `None` for the reference's `AV_NOPTS_VALUE`-shaped
+    /// sentinel meaning "unset".
+    #[must_use]
+    pub const fn first_pts(&self) -> Option<i64> {
+        if self.first_pts == i64::MIN {
+            None
+        } else {
+            Some(self.first_pts)
+        }
+    }
+
+    /// Whether any timestamp-compensation option was touched away from its
+    /// all-disabled default. Used to decide whether a resampler needs the
+    /// dsp pipeline even when formats, rates and channel layouts otherwise
+    /// allow the direct path — see `Resampler::new`.
+    #[must_use]
+    pub fn compensation_requested(&self) -> bool {
+        self.async_samples != 0.0 || self.first_pts != i64::MIN || self.min_comp < f32::MAX
+    }
+
+    /// `async` folded into `min_comp` / `max_soft_comp`, per the measurements
+    /// in `crate::timestamp`.
+    #[must_use]
+    pub(crate) fn effective_compensation(&self) -> crate::timestamp::Policy {
+        let (min_comp, max_soft_comp) = if self.async_samples == 0.0 {
+            (self.min_comp, self.max_soft_comp)
+        } else {
+            let soft = if self.async_samples.abs() > 1.0 {
+                self.async_samples
+            } else {
+                0.0
+            };
+            (0.0, soft)
+        };
+        crate::timestamp::Policy {
+            min_comp_s: f64::from(min_comp),
+            min_hard_comp_s: f64::from(self.min_hard_comp),
+            comp_duration_s: f64::from(self.comp_duration).max(f64::from(f32::EPSILON)),
+            max_soft_comp: f64::from(max_soft_comp),
         }
     }
 
@@ -237,6 +309,16 @@ impl ResampleOptions {
             "dither_method" => self.dither_method = DitherMethod::from_name(value)?,
             "dither_scale" => self.dither_scale = f64v()?,
             "output_sample_bits" => self.output_sample_bits = i32v()?,
+            "min_comp" => self.min_comp = f32v()?,
+            "min_hard_comp" => self.min_hard_comp = f32v()?,
+            "comp_duration" => self.comp_duration = f32v()?,
+            "max_soft_comp" => self.max_soft_comp = f32v()?,
+            "async" => self.async_samples = f32v()?,
+            "first_pts" => {
+                self.first_pts = value
+                    .parse::<i64>()
+                    .map_err(|e| bad(format!("expected an integer: {e}")))?;
+            }
             "dither_seed" => {
                 self.dither_seed = value
                     .parse::<u64>()
@@ -286,6 +368,21 @@ impl ResampleOptions {
         }
         if !(0..=64).contains(&self.output_sample_bits) {
             return Err(Error::InvalidData("output_sample_bits must be in 0..=64"));
+        }
+        if !self.min_comp.is_finite() || self.min_comp < 0.0 {
+            return Err(Error::InvalidData("min_comp must be finite and >= 0"));
+        }
+        if !self.min_hard_comp.is_finite() || self.min_hard_comp < 0.0 {
+            return Err(Error::InvalidData("min_hard_comp must be finite and >= 0"));
+        }
+        if !self.comp_duration.is_finite() || self.comp_duration < 0.0 {
+            return Err(Error::InvalidData("comp_duration must be finite and >= 0"));
+        }
+        if !self.max_soft_comp.is_finite() {
+            return Err(Error::InvalidData("max_soft_comp must be finite"));
+        }
+        if !self.async_samples.is_finite() {
+            return Err(Error::InvalidData("async must be finite"));
         }
         for v in [
             self.center_mix_level,
