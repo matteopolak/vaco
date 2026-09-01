@@ -675,6 +675,34 @@ pub fn decode_slice_cavlc(
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
 ) -> Result<SliceStats> {
+    decode_slice_cavlc_into(r, budget, sps, pps, header, colocated, Vec::new())
+}
+
+/// [`decode_slice_cavlc`], but appending into an already-allocated
+/// `Vec<MbSummary>` (cleared, capacity kept) instead of starting from an
+/// empty one every call.
+///
+/// `crate::decoder::H264Decoder` is the only caller with a recycled
+/// `Vec<MbSummary>` to hand in (`planning/PERF-PROGRAMME.md` item A0):
+/// `MbSummary` is 1,888 bytes and a 4K picture has 32,400 of them, so
+/// building this array from empty via `push` on every single picture is a
+/// 59 MiB allocate-and-free the allocator ends up caching rather than
+/// freeing, which is most of what pushed a 4K decode's RSS past 3.8 GiB.
+/// Every other caller (every test in this crate) keeps calling
+/// [`decode_slice_cavlc`], unchanged.
+///
+/// # Errors
+///
+/// As [`decode_slice_cavlc`].
+pub(crate) fn decode_slice_cavlc_into(
+    r: &mut BitReader<'_>,
+    budget: &mut Budget,
+    sps: &Sps,
+    pps: &Pps,
+    header: &SliceHeader,
+    colocated: Option<&ColocatedField>,
+    macroblocks: Vec<MbSummary>,
+) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
     if pps.transform_8x8_mode {
         // CAVLC-only refusal (moved out of `check_scope`, which CABAC's
@@ -711,7 +739,7 @@ pub fn decode_slice_cavlc(
     // `ctxIdxInc` to derive from a running `PrevMbQp` the way CABAC needs,
     // so only the running `QPY` value itself is carried here.
     let mut qpy = pps.slice_qp(header.slice_qp_delta).clamp(0, 51);
-    let mut stats = SliceStats::default();
+    let mut stats = SliceStats { macroblocks, ..SliceStats::default() };
 
     let mut curr_mb_addr = header.first_mb_in_slice;
 
@@ -1376,7 +1404,6 @@ fn decode_sub_mb_pred_cavlc(
             for y in y0..=y1 {
                 for x in x0..=x1 {
                     let mut info = grids.mv_at(mb_x * 4 + x, mb_y * 4 + y);
-                    info.mb_available = true;
                     info.pred = Some(pred);
                     if let Some(slot) = info.ref_idx.get_mut(list) {
                         *slot = value;
@@ -1401,6 +1428,18 @@ fn decode_sub_mb_pred_cavlc(
             // different shapes (top/bottom vs left/right) -- `code` is
             // read back here instead of trusting `num_sub` alone, matching
             // `decode_sub_mb_pred_cabac`'s own identical comment.
+            //
+            // Deliberately not setting `mb_available` in the ref_idx pass
+            // above -- see `decode_sub_mb_pred_cabac`'s own identical fix
+            // and its doc for why: doing so there marked a not-yet-decoded
+            // quadrant (clause 8.4.1.3.2's `C`-into-`mbPartIdx == 3` corner
+            // case) falsely available before this mvd pass had given it a
+            // real motion vector, corrupting the median predictor for
+            // `mbPartIdx == 2`'s own bottom-right `P_L0_4x4` sub-partition.
+            // This function shares that exact grid and pass structure, so
+            // it shares the exact bug -- fixed the same way here even
+            // though the CAVLC fixtures this crate currently measures
+            // against did not happen to exercise it.
             let top_bottom = num_sub == 2 && code == 1;
             let sub_positions: [(u32, u32); 4] = match num_sub {
                 1 => [(x0, y0); 4],
@@ -3356,6 +3395,26 @@ pub fn decode_slice_cabac(
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
 ) -> Result<SliceStats> {
+    decode_slice_cabac_into(cabac, budget, sps, pps, header, colocated, Vec::new())
+}
+
+/// [`decode_slice_cabac`], but appending into an already-allocated
+/// `Vec<MbSummary>` instead of starting from an empty one every call —
+/// see [`decode_slice_cavlc_into`]'s own doc for why this exists and who
+/// the one caller is.
+///
+/// # Errors
+///
+/// As [`decode_slice_cabac`].
+pub(crate) fn decode_slice_cabac_into(
+    cabac: &mut CabacDecoder<'_>,
+    budget: &mut Budget,
+    sps: &Sps,
+    pps: &Pps,
+    header: &SliceHeader,
+    colocated: Option<&ColocatedField>,
+    macroblocks: Vec<MbSummary>,
+) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
     let is_b_slice = matches!(header.kind, SliceKind::B);
     // The gate that used to stand here is gone: B slices decode
@@ -3409,7 +3468,7 @@ pub fn decode_slice_cabac(
     // macroblock in the slice QPY,PREV is initially set equal to
     // SliceQPY."
     let mut qpy = i32::from(slice_qp);
-    let mut stats = SliceStats::default();
+    let mut stats = SliceStats { macroblocks, ..SliceStats::default() };
 
     let mut curr_mb_addr = header.first_mb_in_slice;
     loop {
@@ -4640,8 +4699,33 @@ fn decode_sub_mb_pred_cabac(
     // quadrants -- written immediately per quadrant (all four 4x4
     // positions it covers, since `ref_idx` is one value per 8x8 quadrant
     // regardless of how many `mvd` sub-partitions it is later split into)
-    // so a *later* quadrant's own neighbour lookup within this same pass
-    // sees it, matching every other immediate-write site in this file.
+    // so a *later* quadrant's own `ref_idx_cond_term`/`mvd_abs_term`
+    // neighbour lookup sees `pred`/`ref_idx` already set, matching every
+    // other immediate-write site in this file.
+    //
+    // Deliberately **not** setting `mb_available` here (see this struct
+    // field's own doc): doing so used to mark all four quadrants
+    // clause-6.4 "available" the moment this ref_idx pass finished, before
+    // Pass 3/4 below has decoded any quadrant's actual motion vector. That
+    // is wrong for exactly one neighbour direction -- clause 8.4.1.3.2's
+    // `C` (above-right) -- which, for the bottom-left quadrant's own
+    // bottom-right 4x4 sub-partition (`mbPartIdx == 2`, `subMbPartIdx ==
+    // 3` under a `P_L0_4x4` split), resolves to the bottom-right
+    // quadrant's own top-left 4x4 (`mbPartIdx == 3`), not yet decoded at
+    // that point in scan order: clause 8.4.1.3.2's own "not yet decoded"
+    // case, which must fall back to `D` (`resolve_c`'s own job), not use
+    // `C` directly. With `mb_available` set here, `resolve_c` saw that
+    // quadrant as available (real `ref_idx`, but a motion vector that is
+    // still the grid's `(0, 0)` default) and used it raw, corrupting the
+    // median predictor for that one sub-partition -- confirmed against a
+    // real CANL3_SVA_B decode, where the corrupted pixels in both
+    // divergent macroblocks landed on exactly this local grid position
+    // with `mvd == (0, 0)` (the wrong predictor decoded unmodified) and
+    // `cbp == 0` (no residual to mask it). `A`/`B` never reach a
+    // not-yet-decoded position (they only ever point at strictly-earlier
+    // partitions in scan order), so leaving `mb_available` unset here and
+    // letting Pass 3/4 below set it only once a quadrant's real motion
+    // vector exists costs nothing for those two directions and fixes `C`.
     for list in 0..2usize {
         for (i, &(_, _, pred)) in subs.iter().enumerate() {
             let Some(pred) = pred else { continue };
@@ -4671,7 +4755,6 @@ fn decode_sub_mb_pred_cabac(
             for y in y0..=y1 {
                 for x in x0..=x1 {
                     let mut info = grids.mv_at(mb_x * 4 + x, mb_y * 4 + y);
-                    info.mb_available = true;
                     info.pred = Some(pred);
                     if let Some(slot) = info.ref_idx.get_mut(list) {
                         *slot = value;
