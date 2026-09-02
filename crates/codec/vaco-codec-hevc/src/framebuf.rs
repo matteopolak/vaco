@@ -740,11 +740,17 @@ impl CuGrid {
 /// means this can stay a small, hand-rolled "current owned/mutable band,
 /// finished bands frozen into `published`" split rather than going through
 /// `vaco_codec_core::picture` itself — that primitive's per-tile publish
-/// machinery would be solving a problem this data does not have. Stage 2's
-/// real thread dispatch is what will need to make `published` shareable
-/// across threads (a `Vec<OnceLock<EdgeBand>>` or similar); Stage 1 stays
-/// single-threaded, so a plain `Vec<EdgeBand>` already proves the shape and
-/// its cost.
+/// machinery would be solving a problem this data does not have.
+///
+/// `published` is [`crate::wavefront::RowPublish`] (not a plain `Vec`):
+/// `docs/codec/hevc-wavefront-threading.md`'s "Stage 2b's concrete
+/// prerequisites" section found that a plain `Vec<EdgeBand>` is *not*
+/// `Sync`-safe the moment Stage 2 has more than one row worker in flight —
+/// `current` stays a private, single-writer field exactly as before (still
+/// correct: only ever one worker builds one row today), but the
+/// once-published side is now the same fixed-size, write-once-per-slot
+/// primitive `RowPublish` proves in isolation, so a future `Arc`-shared
+/// handle can hand it to other threads with no further change here.
 #[derive(Debug, Clone)]
 pub(crate) struct EdgeMarks {
     cols: usize,
@@ -759,11 +765,12 @@ pub(crate) struct EdgeMarks {
     /// into; every earlier band already lives in `published`.
     current_band: usize,
     current: EdgeBand,
-    /// Every row band strictly before `current_band`, frozen the moment
+    /// Every row band strictly before `current_band`, published the moment
     /// [`EdgeMarks::begin_row`]/[`EdgeMarks::finish`] moved past it — the
     /// read side ([`EdgeMarks::vert_at`] and friends) for any row not in
-    /// `current`.
-    published: Vec<EdgeBand>,
+    /// `current`. See this struct's own doc for why this is
+    /// [`crate::wavefront::RowPublish`] rather than a plain `Vec`.
+    published: crate::wavefront::RowPublish<EdgeBand>,
 }
 
 /// One CTU row band's own share of [`EdgeMarks`]'s four boolean grids —
@@ -812,14 +819,10 @@ impl EdgeMarks {
             n_bands,
             current_band: 0,
             current: EdgeBand::new(band_len),
-            // Not `Vec::with_capacity` (disallowed workspace-wide — every
-            // reservation goes through `Budget::alloc` instead): `published`
-            // grows by exactly one `EdgeBand` per `begin_row`/`finish` call,
-            // never resized in bulk, so amortised `push` growth is the
-            // right shape rather than a single upfront reservation this
-            // struct's boolean grids (like `Plane::ready`/`CuGrid::written`
-            // before it) are already exempt from tracking anyway.
-            published: Vec::new(),
+            // Fixed-size at construction, one slot per row band — see this
+            // struct's own doc for why this is `RowPublish` rather than a
+            // plain, amortised-growth `Vec`.
+            published: crate::wavefront::RowPublish::new(n_bands),
         }
     }
 
@@ -843,27 +846,31 @@ impl EdgeMarks {
         Some(local_by * self.cols + bx)
     }
 
-    /// Advance to CTU row `row_band`: freeze every row band strictly before
-    /// it into `published` and reset `current` for the new one — the
-    /// same-shaped counterpart of [`ReconPlane::begin_row`], called from the
-    /// same call sites right alongside it. Idempotent for a `row_band`
-    /// already current, including once, harmlessly, for row `0`.
+    /// Advance to CTU row `row_band`: publish every row band strictly
+    /// before it and reset `current` for the new one — the same-shaped
+    /// counterpart of [`ReconPlane::begin_row`], called from the same call
+    /// sites right alongside it. Idempotent for a `row_band` already
+    /// current, including once, harmlessly, for row `0`.
     ///
     /// # Errors
-    /// [`vaco_core::Error`] if `row_band` goes backward.
+    /// [`vaco_core::Error`] if `row_band` goes backward, or (unreachable in
+    /// practice: `current_band` only ever advances, one slot at a time,
+    /// strictly within `[0, n_bands)`) if [`crate::wavefront::RowPublish`]
+    /// itself refuses a publish.
     pub(crate) fn begin_row(&mut self, row_band: usize) -> Result<()> {
         if row_band < self.current_band {
             return Err(Error::InvalidData("vaco-codec-hevc: edge marks rows must advance in order"));
         }
         let band_len = self.cols.saturating_mul(self.band_rows);
-        while self.published.len() < row_band {
-            self.published.push(std::mem::replace(&mut self.current, EdgeBand::new(band_len)));
+        while self.current_band < row_band {
+            let finished = std::mem::replace(&mut self.current, EdgeBand::new(band_len));
+            self.published.publish(self.current_band, finished)?;
+            self.current_band = self.current_band.saturating_add(1);
         }
-        self.current_band = row_band;
         Ok(())
     }
 
-    /// Freeze the last row band once the whole CTU walk is done, and
+    /// Publish the last row band once the whole CTU walk is done, and
     /// advance `current_band` one past the last real band — mirroring
     /// [`ReconPlane::finish`] exactly, and for the same reason: every read
     /// after this point must route to `published` (the `Equal` branch in
@@ -872,12 +879,18 @@ impl EdgeMarks {
     /// behind, not the data [`EdgeMarks::finish`] just moved out of it).
     /// Called once, right alongside [`ReconPlane::finish`], before
     /// deblocking or SAO ever read an [`EdgeMarks`] query.
-    pub(crate) fn finish(&mut self) {
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`], unreachable in practice for the same reason
+    /// [`EdgeMarks::begin_row`]'s own `Errors` section gives.
+    pub(crate) fn finish(&mut self) -> Result<()> {
         let band_len = self.cols.saturating_mul(self.band_rows);
-        while self.published.len() < self.n_bands {
-            self.published.push(std::mem::replace(&mut self.current, EdgeBand::new(band_len)));
+        while self.current_band < self.n_bands {
+            let finished = std::mem::replace(&mut self.current, EdgeBand::new(band_len));
+            self.published.publish(self.current_band, finished)?;
+            self.current_band = self.current_band.saturating_add(1);
         }
-        self.current_band = self.n_bands;
+        Ok(())
     }
 
     /// Record a vertical edge (a left-side transform/CU boundary) at `x0`
@@ -1036,7 +1049,6 @@ impl EdgeMarks {
         }
     }
 }
-
 
 impl Plane {
     /// The plane's own dimensions — [`crate::deblock`]'s picture-wide pass

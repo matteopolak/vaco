@@ -488,7 +488,7 @@ impl HevcDecoder {
         // one-time copy rather than `recon` itself growing into `pic`.
         walk.recon.finish()?;
         walk.recon.materialize_into(walk.pic);
-        walk.edges.finish();
+        walk.edges.finish()?;
         walk.cu_grid.finish();
         walk.sao_params.finish();
 
