@@ -291,6 +291,16 @@ const ALLOW_ORPHAN_CRATE: &[(&str, &str)] = &[
          `AV1_DECODER` const is real and complete for the intra path; it \
          stays unregistered for correctness, not because it does not exist.",
     ),
+    (
+        "vaco-format-fixtures",
+        "real, measured codec configuration-record bytes shared by \
+         container test suites (planning/E2E-GAPS.md #35) -- every consumer \
+         (vaco-cli, vaco-mux-matroska, vaco-demux-ogg, vaco-mux-ogg) takes it \
+         as a dev-dependency only, by design: it exists to stop test \
+         fixtures drifting from each other, not to ship in a real build, so \
+         path_deps() (deliberately [dependencies]-only, see its own doc) \
+         never sees the edges that make this crate not an orphan.",
+    ),
 ];
 
 fn check_orphan_crates() -> Result<Vec<String>, String> {

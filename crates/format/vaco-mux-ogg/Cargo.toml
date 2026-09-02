@@ -22,6 +22,7 @@ vaco-demux-ogg = { path = "../vaco-demux-ogg" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-format-fixtures = { path = "../vaco-format-fixtures" }
 
 [lints]
 workspace = true

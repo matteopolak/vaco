@@ -1463,14 +1463,6 @@ mod tests {
         p
     }
 
-    /// `OpusHead`, mono, `pre_skip` 312, input rate 48000 — the same 19
-    /// bytes `vaco-mux-ogg`'s own roundtrip test measured against `ffmpeg
-    /// -c:a libopus`, reused here rather than re-measured (D19).
-    const OPUS_HEAD: &[u8] = &[
-        b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', 0x01, 0x01, 0x38, 0x01, 0x80, 0xBB, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-    ];
-
     fn opus_params() -> CodecParameters {
         let mut p = CodecParameters::audio().with_codec(CodecId::Opus);
         p.audio = Some(AudioParameters {
@@ -1481,7 +1473,11 @@ mod tests {
         // real `OpusHead` here, not fixture noise — see
         // `matroska_refuses_to_finalize_a_track_that_needs_extradata_and_has_none`
         // for the case this constructor deliberately does not cover.
-        p.extradata = Some(OPUS_HEAD.to_vec());
+        // `vaco_format_fixtures::opus::HEAD_MONO` is the shared copy every
+        // container test suite in this tree uses now (planning/E2E-GAPS.md
+        // #35 -- this crate's own local copy is what other crates' fixtures
+        // drifted from before this consolidation).
+        p.extradata = Some(vaco_format_fixtures::opus::HEAD_MONO.to_vec());
         p
     }
 

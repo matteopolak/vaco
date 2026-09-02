@@ -493,17 +493,13 @@ pub fn split_xiph_headers(data: &[u8]) -> Option<Vec<Vec<u8>>> {
 mod tests {
     use super::*;
 
-    /// The exact 19-byte `OpusHead` packet from `ffmpeg -c:a libopus`,
-    /// measured in `crc.rs`'s test — mono, `pre_skip` 312.
-    const OPUS_HEAD: &[u8] = &[
-        b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', 0x01, 0x01, 0x38, 0x01, 0x80, 0xBB, 0x00,
-        0x00, 0x00, 0x00, 0x00,
-    ];
-
     #[test]
     fn identifies_opus_from_a_measured_head_packet() {
-        assert_eq!(identify(OPUS_HEAD), OggCodec::Opus);
-        let ident = parse_opus_head(OPUS_HEAD).unwrap();
+        // `vaco_format_fixtures::opus::HEAD_MONO`: the shared, measured
+        // OpusHead every container test suite in this tree uses now.
+        let head = vaco_format_fixtures::opus::HEAD_MONO;
+        assert_eq!(identify(head), OggCodec::Opus);
+        let ident = parse_opus_head(head).unwrap();
         assert_eq!(ident.channel_count, 1);
         assert_eq!(ident.pre_skip, 312);
     }

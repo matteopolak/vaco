@@ -26,13 +26,6 @@ use vaco_limits::Budget;
 use vaco_mux_ogg::OggMuxer;
 use vaco_packet::{Packet, PacketFlags};
 
-/// The exact 19-byte `OpusHead` this crate's own `crc.rs` measured against
-/// `ffmpeg -c:a libopus`: mono, `pre_skip` 312, input rate 48000.
-const OPUS_HEAD: &[u8] = &[
-    b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', 0x01, 0x01, 0x38, 0x01, 0x80, 0xBB, 0x00, 0x00,
-    0x00, 0x00, 0x00,
-];
-
 fn opus_packet(budget: &mut Budget, stream: u32, pts: i64, dur: i64, payload: &[u8]) -> Packet {
     let mut pkt = Packet::from_slice(budget, payload).unwrap();
     pkt.stream_index = stream;
@@ -52,7 +45,7 @@ fn opus_round_trips_through_the_sibling_demuxer() {
     let mut mux = OggMuxer::new(sink).unwrap();
 
     let mut params = CodecParameters::new(vaco_core::MediaType::Audio).with_codec(CodecId::Opus);
-    params.extradata = Some(OPUS_HEAD.to_vec());
+    params.extradata = Some(vaco_format_fixtures::opus::HEAD_MONO.to_vec());
     params.audio = Some(AudioParameters {
         sample_rate: 48_000,
         initial_padding: 312,

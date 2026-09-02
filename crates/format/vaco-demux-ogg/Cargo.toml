@@ -21,6 +21,7 @@ vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-format-fixtures = { path = "../vaco-format-fixtures" }
 
 [lints]
 workspace = true

@@ -136,12 +136,11 @@ mod tests {
             0x00, 0x00, 0x00, 0x00, // checksum, zeroed for the computation
             0x01, 0x13, // one segment, 19 bytes
         ];
-        // The 19-byte OpusHead packet body: version 1, 1 channel, pre_skip
-        // 312, input_sample_rate 48000, output_gain 0, mapping_family 0.
-        page.extend_from_slice(&[
-            b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', 0x01, 0x01, 0x38, 0x01, 0x80, 0xBB,
-            0x00, 0x00, 0x00, 0x00, 0x00,
-        ]);
+        // vaco_format_fixtures::opus::HEAD_MONO: version 1, 1 channel,
+        // pre_skip 312, input_sample_rate 48000, output_gain 0, mapping
+        // family 0 -- the shared OpusHead every container test suite in
+        // this tree uses now.
+        page.extend_from_slice(vaco_format_fixtures::opus::HEAD_MONO);
         assert_eq!(crc32(&page), 0xC8D6_1678);
     }
 }
