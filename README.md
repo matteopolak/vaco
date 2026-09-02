@@ -115,23 +115,22 @@ Measured across both binaries:
 
 | | `vaco` | `vaco-probe` |
 |---|---:|---:|
-| Options in the table | 173 | 65 |
-| Implemented | 58 | 56 |
-| Refused by name | 97 | 8 |
-| Accepted as a deliberate no-op | 5 | 0 |
-| **Still silently ignored** | **13** | **1** |
+| Options in the table | 172 | 65 |
+| Implemented | 62 | 57 |
+| Refused by name | 107 | 8 |
+| Accepted as a deliberate no-op | 3 | 0 |
 
-An option that isn't implemented exits with an error naming it. Until recently most
-were accepted and silently ignored, which is worse: `-n` did not protect an existing
-file, and `-ss`/`-t`/`-to` processed the whole input. Those now refuse.
+Roughly two in five are implemented. An option that isn't exits with an error naming
+it, which is the point: until recently they were accepted and silently ignored, so
+`-n` did not protect an existing file, `-ss`/`-t`/`-to` processed the whole input,
+`-frames:v 2` gave byte-identical output to omitting it, and `-shortest` did not
+truncate. Those now refuse rather than lie.
 
-Thirteen have not been dealt with yet and are still accepted and ignored, including
-`-frames`, `-shortest`, `-autorotate` and `-vsync`. Two are verified no-ops: `-frames:v 2`
-produces byte-identical output to omitting it, and `-shortest` does not truncate.
-Treat that row as a bug list, not a feature list.
+The three no-ops are `-qphist`, `-top` and `-stdin`, which ffmpeg also ignores or
+which already describe what this build does.
 
-Counts are measured by `cargo run -p xtask -- option-consumption-check` and move as
-work lands; re-run it rather than trusting this table.
+Counts move as work lands. `cargo run -p xtask -- option-consumption-check` reports
+any option that parses and reaches nothing.
 
 ### Performance
 
