@@ -9,12 +9,14 @@
 //! (see `crate::pes` and `crate::tsw`'s tests) and are the parts most likely
 //! to be *silently* wrong, per the brief. The **scheduling policy** — exactly
 //! when a PCR is due, exactly when PAT/PMT/SDT repeat, how a large elementary
-//! stream is split across PES packets — is this crate's own reasonable
-//! reading of the specification's bounds (PCR at most every 100 ms; PAT/PMT
-//! and SDT at `-pat_period`/`-sdt_period`) rather than a reproduction of the
-//! reference's own internal scheduler, which is not observable byte-for-byte
-//! without reading its source (D7). See the crate docs for what was measured
-//! versus decided.
+//! stream is split across PES packets — is mostly this crate's own reasonable
+//! reading of the specification's bounds (PAT/PMT and SDT at
+//! `-pat_period`/`-sdt_period`) rather than a reproduction of the reference's
+//! own internal scheduler, which is not observable byte-for-byte without
+//! reading its source (D7). The PCR due-check is the one piece measured
+//! closely enough to reproduce the reference's cadence for constant-frame-rate
+//! content — see [`DEFAULT_PCR_PERIOD_MS`]'s doc. See the crate docs for what
+//! was measured versus decided.
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
@@ -47,12 +49,26 @@ pub const TIME_BASE: Rational = Rational {
     num: 1,
     den: 90_000,
 };
-/// Auto `-pcr_period`'s resolved value: the specification's own ceiling
-/// (ISO/IEC 13818-1 §2.7.2: at most 100 ms between PCRs on one PID). The
-/// reference's actual default schedule is frame-timing-aware and finer in
-/// practice (measured: 80 ms at 25 fps, 100 ms at 10 fps) — see the crate
-/// docs for the probe. This crate uses the flat, specification-legal bound
-/// instead of reconstructing that schedule.
+/// Auto `-pcr_period`'s target: the specification's own ceiling (ISO/IEC
+/// 13818-1 §2.7.2: at most 100 ms between PCRs on one PID).
+///
+/// The reference's actual default schedule is frame-timing-aware: measured
+/// directly (`ffmpeg -bitexact -c copy -f mpegts` on single-video-stream,
+/// constant-frame-rate fixtures at 15, 24, 25 and 30 fps, extracting every
+/// PCR's 33-bit base field), its PCR period locks to the *largest whole
+/// multiple of the video frame interval that does not exceed 100 ms*: 66.67
+/// ms at 15 fps, 83.33 ms at 24 fps, 80 ms at 25 fps, exactly 100 ms at 30
+/// fps (100 ms happens to be a whole multiple of a 30 fps frame). This
+/// crate's PCR PID due-check (in [`MpegTsMuxer::write_packet`]) reproduces
+/// that by looking one frame ahead — "would waiting for the next packet on
+/// this PID push us past the period?" — rather than the simpler "has the
+/// period already elapsed?", which under-fires by up to one frame and was
+/// verified (case 35's MP4→MPEG-TS `-c copy` remux) to insert PCR at a
+/// coarser ~120 ms cadence than the reference's 80 ms at 25 fps. This is
+/// still a measured, black-box-derived rule (D7: no source read), not a
+/// transcription of the reference's own scheduler; it degrades gracefully
+/// to the flat 100 ms ceiling when frame timing is irregular or a PCR PID's
+/// packets are sparse relative to the period.
 pub const DEFAULT_PCR_PERIOD_MS: u32 = 100;
 
 /// The reference's resolved `-max_delay`/`-muxdelay` default (0.7 s), applied
@@ -145,6 +161,13 @@ pub struct MpegTsMuxer {
     last_pat_clock: Option<i64>,
     last_sdt_clock: Option<i64>,
     last_pcr_clock: Option<i64>,
+    /// The PCR PID's own most recent packet clock (regardless of whether
+    /// that packet was due for a PCR) — distinct from `last_pcr_clock`,
+    /// which only moves when a PCR is actually written. Used as a one-frame
+    /// look-ahead so the "due" check can anticipate the *next* packet's
+    /// arrival instead of only reacting after the period has already been
+    /// exceeded; see the PCR due-check's doc in [`MpegTsMuxer::write_packet`].
+    last_pcr_track_clock: Option<i64>,
     header_written: bool,
     convert_budget: Budget,
 }
@@ -197,6 +220,7 @@ impl MpegTsMuxer {
             last_pat_clock: None,
             last_sdt_clock: None,
             last_pcr_clock: None,
+            last_pcr_track_clock: None,
             header_written: false,
             convert_budget: Budget::new(Limits::permissive()),
         }
@@ -559,10 +583,22 @@ impl Muxer for MpegTsMuxer {
 
         // --- PCR / random access / discontinuity -----------------------
         let pcr = if self.pcr_pid == Some(pid) {
+            let period_ms = i64::from(self.opts.pcr_period_ms.unwrap_or(DEFAULT_PCR_PERIOD_MS));
+            // One-frame look-ahead: `next_gap_ms` is this packet's own gap
+            // since the *previous* packet on the PCR PID, used as a stand-in
+            // for the gap to the *next* one. For constant-frame-rate content
+            // (every measured fixture) those are the same number, so this
+            // asks "would waiting for one more frame push us past the
+            // period?" instead of the plain elapsed-time check's "have we
+            // already gone past it?" — see [`DEFAULT_PCR_PERIOD_MS`]'s doc
+            // for the cross-frame-rate measurement this reproduces.
+            let next_gap_ms = self
+                .last_pcr_track_clock
+                .map_or(0, |last| ticks_to_ms(clock.saturating_sub(last)));
             let due = self.last_pcr_clock.is_none_or(|last| {
-                ticks_to_ms(clock.saturating_sub(last))
-                    >= i64::from(self.opts.pcr_period_ms.unwrap_or(DEFAULT_PCR_PERIOD_MS))
+                ticks_to_ms(clock.saturating_sub(last)).saturating_add(next_gap_ms) > period_ms
             });
+            self.last_pcr_track_clock = Some(clock);
             if due {
                 self.last_pcr_clock = Some(clock);
                 Some(Pcr {

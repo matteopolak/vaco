@@ -117,10 +117,12 @@ pub struct MpegTsMuxOptions {
     /// Omit `PES_packet_length` on video packets (write `0`, "unbounded").
     pub omit_video_pes_length: bool,
     /// Milliseconds between PCR insertions on the PCR PID, or `None` for
-    /// "auto" (`-pcr_period -1`). This crate's auto behaviour is a fixed
-    /// [`crate::tsw::DEFAULT_PCR_PERIOD_MS`], simpler than the reference's
-    /// frame-timing-aware schedule (see the crate docs) but within the
-    /// specification's own hundred-millisecond ceiling either way.
+    /// "auto" (`-pcr_period -1`), which targets
+    /// [`crate::mux::DEFAULT_PCR_PERIOD_MS`] via a one-frame-look-ahead due
+    /// check that reproduces the reference's frame-timing-aware cadence for
+    /// constant-frame-rate content — see that constant's doc for the
+    /// cross-frame-rate measurement, and always stays within the
+    /// specification's own hundred-millisecond ceiling.
     pub pcr_period_ms: Option<u32>,
     pub pat_period_ms: u32,
     pub sdt_period_ms: u32,
