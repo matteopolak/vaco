@@ -158,19 +158,28 @@ mod tests {
         frame
     }
 
+    /// Reads plane 0 at whichever width `frame`'s own `format` declares --
+    /// `frame_codec::decode` matches its output `SampleFmt` to the packet's
+    /// actual bit depth (`S16P` for a 16-bit stream, not always `S32P`), so
+    /// a caller must read at that width rather than assuming one.
     fn plane0_samples(frame: &Frame) -> Vec<i32> {
-        let FrameData::Audio { planes, .. } = &frame.data else {
+        let FrameData::Audio { planes, format, .. } = &frame.data else {
             panic!("audio frame")
         };
         let Some(plane) = planes.first() else {
             panic!("plane 0")
         };
-        plane
-            .data
-            .as_slice()
-            .chunks_exact(4)
-            .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
-            .collect()
+        let data = plane.data.as_slice();
+        match format {
+            SampleFmt::S16P => data
+                .chunks_exact(2)
+                .map(|c| i32::from(i16::from_le_bytes(c.try_into().unwrap())))
+                .collect(),
+            _ => data
+                .chunks_exact(4)
+                .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+                .collect(),
+        }
     }
 
     /// End-to-end through the registered descriptors: build a decoder/

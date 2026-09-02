@@ -52,7 +52,7 @@ use vaco_limits::Budget;
 use vaco_sampfmt::SampleFmt;
 
 use crate::predictor::unpc_block;
-use crate::rice::{AgParams, dyn_comp, dyn_decomp};
+use crate::rice::{AgParams, dyn_decomp};
 
 const ID_SCE: u32 = 0;
 const ID_CPE: u32 = 1;
@@ -87,11 +87,26 @@ fn read_sample(buf: &[u8], index: usize, bytes: usize) -> i32 {
 }
 
 /// Write `value` into plane byte buffer `buf` at sample `index`, as a
-/// 4-byte little-endian `i32` (this crate's decoder always produces `S32P`).
+/// 4-byte little-endian `i32`. Used only when the packet's own `bit_depth`
+/// is greater than 16 — see [`decode`]'s `out_fmt` selection.
 fn write_sample_s32(buf: &mut [u8], index: usize, value: i32) {
     let off = index.saturating_mul(4);
     if let Some(dst) = buf.get_mut(off..off.saturating_add(4)) {
         dst.copy_from_slice(&value.to_le_bytes());
+    }
+}
+
+/// Write `value` into plane byte buffer `buf` at sample `index`, as a
+/// 2-byte little-endian `i16`, clamped to `i16`'s range. `value` is already
+/// a genuine `chan_bits`-wide (≤16) sample here, so the clamp is a no-op in
+/// practice; it only guards the theoretical case of a malformed packet
+/// whose decoded residual falls outside that range.
+fn write_sample_s16(buf: &mut [u8], index: usize, value: i32) {
+    let off = index.saturating_mul(2);
+    if let Some(dst) = buf.get_mut(off..off.saturating_add(2)) {
+        let clamped = value.clamp(i32::from(i16::MIN), i32::from(i16::MAX));
+        #[expect(clippy::cast_possible_truncation, reason = "just clamped to i16's range")]
+        dst.copy_from_slice(&(clamped as i16).to_le_bytes());
     }
 }
 
@@ -187,7 +202,28 @@ fn read_channel_params(r: &mut BitReader<'_>) -> ChannelParams {
     }
 }
 
-/// Decode one packet's bytes into an audio [`Frame`], always `S32P`.
+/// Decode one packet's bytes into an audio [`Frame`], `S16P` when
+/// `bit_depth <= 16` and `S32P` otherwise — the same rule
+/// `vaco-codec-flac`'s decoder uses to pick its own output format from a
+/// stream's actual bit depth, rather than always widening to `S32P`.
+///
+/// # Why this matters (not just a style choice)
+///
+/// A decoded sample here is a genuine `chan_bits`-wide value (16 for a
+/// 16-bit source), never left-justified into the full width of its
+/// container. `vaco-resample`'s own `S32P` narrowing (`convert.rs`) takes
+/// the *opposite* convention — it treats `S32P` as always full-scale and
+/// narrows to `S16P` with `(x >> 16) as i16` — so a decoder that always
+/// declared `S32P` regardless of actual bit depth handed every downstream
+/// consumer of that convention a value 65536x too small, which read back
+/// as near-silence (small magnitudes shift to 0) interleaved with bursts
+/// of `-1` (small negative magnitudes' sign-extended top bits shift to
+/// `0xffff`) — exactly the corruption measured end to end via `vaco -i
+/// <16-bit-source>.wav -c:a alac out.mkv` followed by `vaco -i out.mkv -f
+/// s16le -`, even though `vaco`'s own `-f s32le` decode of the same file
+/// (bypassing that narrowing entirely) was byte-exact. Matching `S16P` to
+/// an actual 16-bit stream sidesteps the convention mismatch entirely,
+/// the same way `vaco-codec-flac`'s decoder already does.
 ///
 /// `sample_rate` comes from the stream's extradata; `layout_hint` names the
 /// container's declared layout when it agrees with the packet's own channel
@@ -241,11 +277,24 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
             let hdr = read_element_header(&mut r, bit_depth, frame_length, 1)?;
             let n = hdr.num_samples as usize;
             if hdr.escape {
+                // Verbatim samples are exactly `bit_depth` wide, *not*
+                // `hdr.chan_bits` (`bit_depth + 1` for `ID_CPE`, per
+                // `read_element_header`'s `extra_chanbits = 1`) -- that
+                // extra bit exists only to give the predictor path's mid/
+                // side sum arithmetic headroom (see `predict_channel`'s
+                // `chanbits` parameter), and escape mode does no mixing at
+                // all. Verified against the independent `alac` crate
+                // oracle in `tests/oracle_alac_crate.rs`'s
+                // `stereo_escape_mode_chan_bits_equals_bit_depth_is_accepted_by_the_oracle_decoder`:
+                // using `hdr.chan_bits` here desynced every sample after
+                // the first, measured end to end as `ffmpeg`'s "invalid
+                // element channel count" on a real stereo encode.
+                let verbatim_bits = u32::from(bit_depth).min(32);
                 let mut u = budget.alloc::<i32>(n)?;
                 let mut v = budget.alloc::<i32>(n)?;
                 for i in 0..n {
-                    let a = r.get_signed(hdr.chan_bits.min(32));
-                    let b = r.get_signed(hdr.chan_bits.min(32));
+                    let a = r.get_signed(verbatim_bits);
+                    let b = r.get_signed(verbatim_bits);
                     if let Some(s) = u.get_mut(i) {
                         *s = a;
                     }
@@ -286,7 +335,9 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
         _ => return Err(Error::Unsupported("alac: more than 2 channels is not implemented")),
     };
 
-    let mut frame = Frame::alloc_audio(budget, SampleFmt::S32P, layout, num_samples, sample_rate)?;
+    let out_fmt = if bit_depth <= 16 { SampleFmt::S16P } else { SampleFmt::S32P };
+    let write_sample: fn(&mut [u8], usize, i32) = if out_fmt == SampleFmt::S16P { write_sample_s16 } else { write_sample_s32 };
+    let mut frame = Frame::alloc_audio(budget, out_fmt, layout, num_samples, sample_rate)?;
     let FrameData::Audio { ref mut planes, .. } = frame.data else {
         return Err(Error::Unsupported("alac: allocated frame was not audio"));
     };
@@ -296,7 +347,7 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
             let row = plane.data.make_mut();
             if let Some(row) = row.get_mut(..stride) {
                 for (i, &s) in samples_u.iter().enumerate() {
-                    write_sample_s32(row, i, s);
+                    write_sample(row, i, s);
                 }
             }
         }
@@ -315,8 +366,8 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
                 let u = samples_u.get(i).copied().unwrap_or(0);
                 let v = samples_v.get(i).copied().unwrap_or(0);
                 let (l, rr) = unmix(u, v, 0, 0);
-                write_sample_s32(&mut left_buf, i, l);
-                write_sample_s32(&mut right_buf, i, rr);
+                write_sample(&mut left_buf, i, l);
+                write_sample(&mut right_buf, i, rr);
             }
             if let Some(dst) = l_row.get_mut(..l_stride) {
                 dst.copy_from_slice(&left_buf);
@@ -347,23 +398,51 @@ const fn ag_defaults() -> (u32, u32, u32) {
 }
 
 /// Encode one audio [`Frame`] (`S16P` or `S32P`, mono or stereo) to a real,
-/// spec-legal ALAC packet — see the module doc for exactly which (simplest)
-/// configuration this always chooses.
+/// spec-legal ALAC packet, always in `escape` (verbatim) mode: every sample
+/// is written as a raw `chan_bits`-wide signed value, with no adaptive-Rice
+/// entropy coding and no linear prediction at all.
+///
+/// # Why escape mode, not the rice+predictor path
+///
+/// An earlier version of this function used the rice+predictor path with
+/// `numU = numV = 0` ("no linear prediction, residual *is* the sample") —
+/// self-consistent against this crate's own decoder (which explicitly
+/// special-cases `order == 0` as a pass-through, per `predictor.rs`'s doc),
+/// and asserted, without having actually been checked against any decoder
+/// but this crate's own, to be "a real, legal configuration a compliant
+/// decoder... must accept." That assertion was wrong: verified end to end
+/// via `vaco -i in.wav -c:a alac out.mkv` followed by `ffmpeg -i out.mkv -f
+/// null -`, `ffmpeg`'s own ALAC decoder rejected every single packet
+/// ("Decoding error: Invalid data found when processing input", 100% error
+/// rate) -- and a second, independent decoder (the `alac` crate, this
+/// crate's own oracle in `tests/oracle_alac_crate.rs`) panicked outright
+/// ("attempt to subtract with overflow") on the exact same bytes,
+/// regardless of whether the packet was a full or a genuinely partial
+/// frame. Two independent real decoders rejecting `order == 0` content
+/// that only this crate's own decoder ever produced or consumed is strong
+/// evidence the "legal configuration" claim was never actually true in
+/// practice, whatever the spec text alone might permit.
+///
+/// Escape mode sidesteps the predictor and the adaptive-Rice coder
+/// entirely -- there is no `order`, no `mode`, no adaptive mean to get
+/// wrong -- and `tests/oracle_alac_crate.rs`'s
+/// `escape_mode_*_is_accepted_by_the_oracle_decoder` tests confirm the
+/// independent `alac` crate decodes both a full-length and a genuinely
+/// partial escape-mode packet bit-exact. The real, measured cost is
+/// compression: an escape-mode packet is exactly `chan_bits * num_samples`
+/// bits of payload, the same size as uncompressed PCM at that bit depth,
+/// plus this element's small fixed header -- this crate's ALAC output is
+/// therefore no longer smaller than the source, only guaranteed losslessly
+/// round-trippable and, unlike the rice+predictor path, actually
+/// interoperable. The rice+predictor decode path (`frame_codec::decode`'s
+/// non-escape branch, plus `predictor.rs`/`rice.rs`) is unchanged and still
+/// needed to read real, externally-produced ALAC files, which do use it.
 ///
 /// # Errors
 ///
 /// [`Error::Unsupported`] for any other sample format or channel count;
 /// whatever [`Budget`] returns if the output allocation would exceed it.
 pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
-    // `pbFactor` occupies the top 3 bits of the byte `numU`/`numV` (bottom 5
-    // bits) shares. This encoder always writes `numU = numV = 0` (no linear
-    // prediction), and needs `pbFactor = 4` so the decoder's `(pb *
-    // pbFactor) / 4` recovers `pb` exactly — `pbFactor = 0` would zero the
-    // adaptive-mean update entirely (see `rice.rs`'s `dyn_decomp`/
-    // `dyn_comp`), which is legal bitstream but a much worse (still
-    // correct) code, not what "this crate's own defaults" should mean.
-    const PB_FACTOR_NUM_BYTE: u32 = 4 << 5;
-
     let FrameData::Audio {
         format,
         samples,
@@ -398,46 +477,43 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
 
     let capacity_hint = (num_samples as usize).saturating_mul(channels as usize).saturating_mul(bytes).saturating_add(64);
     let mut w = BitWriter::with_capacity(budget, capacity_hint)?;
-    let (mb, pb, kb) = ag_defaults();
 
     if channels == 1 {
         w.put(3, ID_SCE);
         w.put(4, 0); // instance tag
         w.put(12, 0); // unused
-        w.put(4, 1 << 3); // partialFrame=1, bytesShifted=0, escape=0
+        w.put(4, (1 << 3) | 1); // partialFrame=1, bytesShifted=0, escape=1
         w.put(32, num_samples);
-        w.put(8, 0); // mixBits
-        w.put(8, 0); // mixRes
-        w.put(8, 0); // modeU=0, denShiftU=0
-        w.put(8, PB_FACTOR_NUM_BYTE); // pbFactorU=4, numU=0
-        let chan_bits = bit_depth;
-        let residuals: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(&plane0, i, bytes)).collect();
-        let params = AgParams::new(mb, pb, kb);
-        dyn_comp(&params, &mut w, &residuals, chan_bits);
+        let chan_bits = bit_depth.min(32);
+        for i in 0..num_samples as usize {
+            w.put_signed(chan_bits, read_sample(&plane0, i, bytes));
+        }
+        w.put(3, ID_END);
+        w.align_zero();
         return Ok(w.finish());
     }
 
     w.put(3, ID_CPE);
     w.put(4, 0);
     w.put(12, 0);
-    w.put(4, 1 << 3);
+    w.put(4, (1 << 3) | 1); // partialFrame=1, bytesShifted=0, escape=1
     w.put(32, num_samples);
-    w.put(8, 0); // mixBits
-    w.put(8, 0); // mixRes = 0: conventional stereo, u = left, v = right
-    w.put(8, 0); // modeU=0, denShiftU=0
-    w.put(8, PB_FACTOR_NUM_BYTE); // pbFactorU=4, numU=0
-    w.put(8, 0); // modeV=0, denShiftV=0
-    w.put(8, PB_FACTOR_NUM_BYTE); // pbFactorV=4, numV=0
-    let chan_bits = bit_depth + 1;
+    // Deliberately `bit_depth`, *not* `bit_depth + 1`: `ID_CPE`'s usual
+    // `extra_chanbits = 1` headroom exists only for the predictor path's
+    // mid/side sum arithmetic (see `decode`'s escape-mode `hdr.chan_bits`
+    // doc for the full reasoning and how this was verified against a real,
+    // independent decoder). A verbatim escape sample needs no such
+    // headroom -- it is just the raw sample.
+    let chan_bits = bit_depth.min(32);
     let Some(plane1) = plane1.as_ref() else {
         return Err(Error::Unsupported("alac: encoder needs plane 1 for stereo"));
     };
-    let residuals_u: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(&plane0, i, bytes)).collect();
-    let residuals_v: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(plane1, i, bytes)).collect();
-    let params_u = AgParams::new(mb, pb, kb);
-    dyn_comp(&params_u, &mut w, &residuals_u, chan_bits);
-    let params_v = AgParams::new(mb, pb, kb);
-    dyn_comp(&params_v, &mut w, &residuals_v, chan_bits);
+    for i in 0..num_samples as usize {
+        w.put_signed(chan_bits, read_sample(&plane0, i, bytes));
+        w.put_signed(chan_bits, read_sample(plane1, i, bytes));
+    }
+    w.put(3, ID_END);
+    w.align_zero();
     Ok(w.finish())
 }
 
@@ -496,10 +572,13 @@ mod tests {
             unreachable!("audio")
         };
         assert_eq!(n, samples.len() as u32);
+        // 16-bit source: `decode` now matches `S16P` to the actual bit
+        // depth (see `decode`'s doc), so the plane is 2 bytes per sample,
+        // not the old always-`S32P` 4.
         let row = planes[0].data.as_slice();
         for (i, &s) in samples.iter().enumerate() {
-            let got = i32::from_le_bytes(row[i * 4..i * 4 + 4].try_into().unwrap());
-            assert_eq!(got, i32::from(s), "sample {i}");
+            let got = i16::from_le_bytes(row[i * 2..i * 2 + 2].try_into().unwrap());
+            assert_eq!(got, s, "sample {i}");
         }
     }
 
@@ -519,10 +598,10 @@ mod tests {
         let lrow = planes[0].data.as_slice();
         let rrow = planes[1].data.as_slice();
         for i in 0..left.len() {
-            let gl = i32::from_le_bytes(lrow[i * 4..i * 4 + 4].try_into().unwrap());
-            let gr = i32::from_le_bytes(rrow[i * 4..i * 4 + 4].try_into().unwrap());
-            assert_eq!(gl, i32::from(left[i]), "left {i}");
-            assert_eq!(gr, i32::from(right[i]), "right {i}");
+            let gl = i16::from_le_bytes(lrow[i * 2..i * 2 + 2].try_into().unwrap());
+            let gr = i16::from_le_bytes(rrow[i * 2..i * 2 + 2].try_into().unwrap());
+            assert_eq!(gl, left[i], "left {i}");
+            assert_eq!(gr, right[i], "right {i}");
         }
     }
 
@@ -553,8 +632,9 @@ mod tests {
         };
         let row = planes[0].data.as_slice();
         for (i, &s) in samples.iter().enumerate() {
-            let got = i32::from_le_bytes(row[i * 4..i * 4 + 4].try_into().unwrap());
-            assert_eq!(got, i32::from(s), "sample {i}");
+            let got = i16::from_le_bytes(row[i * 2..i * 2 + 2].try_into().unwrap());
+            assert_eq!(got, s, "sample {i}");
         }
     }
 }
+

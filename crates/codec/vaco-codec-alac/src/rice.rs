@@ -37,7 +37,9 @@
 //! MAX_PREFIX_16/MAX_PREFIX_32/MAX_DATATYPE_BITS_16), Apple Inc., Apache
 //! License 2.0`
 
-use vaco_bitstream::{BitReader, BitWriter};
+use vaco_bitstream::BitReader;
+#[cfg(test)]
+use vaco_bitstream::BitWriter;
 
 /// `QBSHIFT`/`QB`: the fixed-point shift the running mean `mb` is tracked at.
 pub(crate) const QBSHIFT: u32 = 9;
@@ -184,6 +186,14 @@ fn dyn_get_16bit(r: &mut BitReader<'_>, m: u32, k: u32) -> u32 {
 /// on decode counts leading ones); `BitWriter::put_zeros` is the wrong
 /// polarity for this format, unlike e.g. FLAC's zero-run-terminated-by-one
 /// Rice code.
+///
+/// Test-only: `frame_codec::encode` no longer uses the rice+predictor
+/// write path at all (see that function's doc for why -- real decoders
+/// reject the `order == 0` content it used to produce), so this and the
+/// other `dyn_code_*`/`dyn_comp` write-side functions below now exist only
+/// to validate [`dyn_decomp`] against a known-correct round trip in this
+/// module's own tests.
+#[cfg(test)]
 fn put_ones(w: &mut BitWriter, mut n: u32) {
     while n > 32 {
         w.put(32, u32::MAX);
@@ -195,7 +205,9 @@ fn put_ones(w: &mut BitWriter, mut n: u32) {
 }
 
 /// `dyn_code_32bit`: the write-side mirror of [`dyn_get_32bit`]. `n` is the
-/// already zigzag-folded, non-negative value to encode.
+/// already zigzag-folded, non-negative value to encode. Test-only -- see
+/// [`put_ones`]'s doc.
+#[cfg(test)]
 fn dyn_code_32bit(w: &mut BitWriter, m: u32, k: u32, n: u32, maxbits: u32) {
     if m == 0 {
         // The reference guards div-by-zero implicitly (`k` is always >= 1 in
@@ -237,6 +249,8 @@ fn dyn_code_32bit(w: &mut BitWriter, m: u32, k: u32, n: u32, maxbits: u32) {
 }
 
 /// `dyn_code`: the 16-bit-escape write-side mirror of [`dyn_get_16bit`].
+/// Test-only -- see [`put_ones`]'s doc.
+#[cfg(test)]
 fn dyn_code_16bit(w: &mut BitWriter, m: u32, k: u32, n: u32) {
     if m == 0 {
         for _ in 0..MAX_PREFIX_16 {
@@ -319,9 +333,13 @@ pub(crate) fn dyn_decomp(params: &AgParams, r: &mut BitReader<'_>, num_samples: 
     out
 }
 
-/// `dyn_comp`: the write-side mirror of [`dyn_decomp`]. `residuals` are
-/// already the predictor's output (or the raw samples, for this crate's
-/// `numActive == 0` encoder — see `frame_codec.rs`).
+/// `dyn_comp`: the write-side mirror of [`dyn_decomp`]. Test-only -- see
+/// [`put_ones`]'s doc: `frame_codec::encode` writes escape-mode packets
+/// directly (raw samples, no rice coding at all) rather than calling this,
+/// so this function's only remaining caller is this module's own
+/// `dyn_comp_matches_dyn_decomp`-style round-trip test, validating
+/// [`dyn_decomp`] against a known-correct write side.
+#[cfg(test)]
 #[allow(
     clippy::many_single_char_names,
     reason = "names deliberately match the reference's own dyn_comp for auditability against the cited source"
