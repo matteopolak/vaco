@@ -37,6 +37,14 @@ looks right. It usually looks right.
 - **A refusal is a floor on what's missing, never a ceiling.** Fixing the error a
   stream hits first reveals the next one, not the end.
 
+**An oracle you wrote shares your misreading.** A test derived from the same
+assumption as the code will pass while both are wrong. Rotation shipped with two
+transpose directions swapped — composed from two conventions that turned out not
+to be negations of each other — and its unit test, written from that same
+assumption, passed cleanly. Only comparing full-pipeline output against ffmpeg
+caught it, on every rotated pixel. So for anything with a reference, check
+against the reference, not against your own understanding of it.
+
 **Registered-but-wrong is worse than absent.** Where something is out of scope,
 refuse by name via `check_scope`. Never emit wrong pixels or samples.
 
