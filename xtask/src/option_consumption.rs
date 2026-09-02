@@ -140,20 +140,34 @@ fn dispatch_key(e: &Entry) -> &str {
     }
 }
 
-/// Names inside `refuse_unimplemented_options`'s const arrays — an option
-/// listed there is not silently ignored, it fails loudly, which is exactly
-/// what "consumed" means for this check's purposes.
-fn refused_names(cli_rs: &str) -> Set<String> {
-    let Some(start) = cli_rs.find("fn refuse_unimplemented_options") else {
+/// Names inside a named refusal item (a `fn` or a `const`, each binary
+/// spells this differently) — an option named there is not silently
+/// ignored, it fails loudly, which is exactly what "consumed" means for
+/// this check's purposes.
+///
+/// `vaco-cli` and `vaco-probe` are two different binaries with two
+/// independent refusal mechanisms, not one shared list: `vaco-cli`'s
+/// `refuse_unimplemented_options` (a `fn` in `cli.rs`) and `vaco-probe`'s
+/// `UNIMPLEMENTED` (a `const` in `cli.rs`, matched against in `lib.rs`'s
+/// `unimplemented_option_message`). An earlier version of this check read
+/// only the first, which silently treated every ffprobe option as
+/// unrefused and produced a wrong count for that binary — this generic
+/// by-name scan replaces that with one path for both.
+fn refused_names(source: &str, item_start: &str) -> Set<String> {
+    let Some(start) = source.find(item_start) else {
         return Set::new();
     };
-    let Some(body) = cli_rs.get(start..) else {
+    let Some(body) = source.get(start..) else {
         return Set::new();
     };
-    // Stop at the next top-level `\n}\n` after the function starts; good
-    // enough for a name-collection sweep, and this function's own closing
-    // brace is always at column 0.
-    let end = body.find("\n}\n").map_or(body.len(), |e| e + 2);
+    // Stop at the next top-level `\n}\n` (a `fn`) or `\n];\n` (a `const`
+    // array) after the item starts; good enough for a name-collection
+    // sweep, and both close at column 0 in this codebase's own style.
+    let end = ["\n}\n", "\n];\n"]
+        .iter()
+        .filter_map(|marker| body.find(marker).map(|i| i + marker.len() - 1))
+        .min()
+        .unwrap_or(body.len());
     let Some(body) = body.get(..end) else {
         return Set::new();
     };
@@ -236,7 +250,12 @@ pub fn run(_check: bool) -> Task {
     let cli_rs_path = root.join("crates/app/vaco-cli/src/cli.rs");
     let cli_rs = std::fs::read_to_string(&cli_rs_path)
         .map_err(|e| format!("{}: {e}", cli_rs_path.display()))?;
-    let refused = refused_names(&cli_rs);
+    let ffmpeg_refused = refused_names(&cli_rs, "fn refuse_unimplemented_options");
+
+    let probe_cli_rs_path = root.join("crates/app/vaco-probe/src/cli.rs");
+    let probe_cli_rs = std::fs::read_to_string(&probe_cli_rs_path)
+        .map_err(|e| format!("{}: {e}", probe_cli_rs_path.display()))?;
+    let ffprobe_refused = refused_names(&probe_cli_rs, "const UNIMPLEMENTED: &[&str] = &[");
 
     let mut dispatch_files = Vec::new();
     read_dir_rs(&root.join("crates/app/vaco-cli/src"), &mut dispatch_files);
@@ -250,19 +269,19 @@ pub fn run(_check: bool) -> Task {
     let ffmpeg = unconsumed(
         &root.join("crates/app/vaco-cli-core/src/tables/ffmpeg.rs"),
         &dispatch_src,
-        &refused,
+        &ffmpeg_refused,
     );
     let ffprobe = unconsumed(
         &root.join("crates/app/vaco-cli-core/src/tables/ffprobe.rs"),
         &dispatch_src,
-        &refused,
+        &ffprobe_refused,
     );
 
     if ffmpeg.is_empty() && ffprobe.is_empty() {
         println!(
             "option-consumption-check: every CliOptionTable dispatch key is either \
-             matched somewhere in vaco-cli/vaco-probe or named in \
-             refuse_unimplemented_options"
+             matched somewhere in vaco-cli/vaco-probe or named in its binary's own \
+             refusal list (refuse_unimplemented_options / UNIMPLEMENTED)"
         );
         return Ok(());
     }
@@ -333,7 +352,7 @@ mod tests {
     }
 
     #[test]
-    fn refused_names_reads_the_const_array_only() {
+    fn refused_names_reads_the_fn_body_only() {
         let src = r#"
 fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
     const GLOBAL: &[&str] = &[
@@ -347,9 +366,29 @@ fn some_other_fn() {
     let unrelated = "not_refused";
 }
 "#;
-        let names = refused_names(src);
+        let names = refused_names(src, "fn refuse_unimplemented_options");
         assert!(names.contains("frame_drop_threshold"));
         assert!(names.contains("n"));
+        assert!(!names.contains("not_refused"));
+    }
+
+    #[test]
+    fn refused_names_reads_a_bare_const_array_too() {
+        // vaco-probe's own refusal list is a `const`, not a `fn` -- the
+        // shape that broke the first version of this check for ffprobe.
+        let src = r#"
+const UNIMPLEMENTED: &[&str] = &[
+    "analyze_frames",
+    "cpuflags",
+];
+
+const LISTINGS: &[(&str, &str)] = &[
+    ("l", "not_refused"),
+];
+"#;
+        let names = refused_names(src, "const UNIMPLEMENTED: &[&str] = &[");
+        assert!(names.contains("analyze_frames"));
+        assert!(names.contains("cpuflags"));
         assert!(!names.contains("not_refused"));
     }
 
