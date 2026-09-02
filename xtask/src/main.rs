@@ -18,6 +18,7 @@ mod fuzz_check;
 mod gen_fuzz;
 mod gen_pixfmt;
 mod layers;
+mod option_consumption;
 mod owner_gate;
 mod patent_gate;
 mod provenance;
@@ -51,6 +52,7 @@ fn main() {
         "check-message" => check_message(args.get(1).map(String::as_str)),
         "owner-gate" => owner_gate::run(check),
         "reachability-check" => reachability_check::run(check),
+        "option-consumption-check" => option_consumption::run(check),
         "gen-registry" => registry::run(check),
         "similarity-scan" => similarity::run(&args[1..]),
         "gen-docs-index" => docs::run(check),
@@ -79,6 +81,10 @@ fn main() {
                  without nightly+cargo-fuzz"
             );
             eprintln!("  dead-code       public API that only tests use (report, not a gate)");
+            eprintln!(
+                "  option-consumption-check  a CliOptionTable entry that parses and does \
+                 nothing (report, not a gate)"
+            );
             eprintln!("  gen-registry    assemble the registry from crate fragments");
             eprintln!("  gen-docs-index  generate docs/README.md");
             eprintln!(
