@@ -19,9 +19,10 @@
 //!   encoding-side.
 //! * `fdebug` has **one** constant, `ts`. There is no `id3v2`.
 //! * `recursion_limit` does not exist on the reference at all. We keep it
-//!   anyway — it is a security bound on nested demuxer opens (concat lists,
-//!   HLS variants), it is enforced here so no nested demuxer can forget it, and
-//!   being a strict superset breaks no script (D17's converse case).
+//!   anyway — meant as a security bound on nested demuxer opens (concat
+//!   lists, HLS variants) that no nested demuxer could forget, and being a
+//!   strict superset breaks no script (D17's converse case) — but nothing
+//!   reads it (see the field's own doc and [`FormatOptions::validate`]).
 //!
 //! # Which of these this crate actually consumes
 //!
@@ -33,11 +34,11 @@
 //! |---|---|
 //! | [`crate::probe`] | `formatprobesize`, `format_whitelist`, `skip_initial_bytes` |
 //! | [`crate::discovery`] | `probesize`, `analyzeduration`, `fpsprobesize`, `max_ts_probe`, `max_probe_packets`, `codec_whitelist`, `max_streams` |
-//! | [`crate::time`] | `fflags`, `correct_ts_overflow`, `duration_probesize`, `skip_estimate_duration_from_pts`, `use_wallclock_as_timestamps` |
+//! | [`crate::time`] | `fflags`, `correct_ts_overflow`, `duration_probesize`, `skip_estimate_duration_from_pts` |
 //! | [`crate::seek`] | `seek2any`, `indexmem`, `fflags` (`ignidx`, `fastseek`) |
 //! | [`crate::interleave`] | `max_interleave_delta`, `audio_preload`, `chunk_duration`, `chunk_size`, `avoid_negative_ts`, `output_ts_offset` |
-//! | carried, consumed elsewhere | `avioflags`, `packetsize`, `cryptokey`, `fdebug`, `start_time_realtime`, `flush_packets`, `metadata_header_padding`, `strict`, `dump_separator`, `protocol_whitelist`, `protocol_blacklist` |
-//! | parsed, refused if non-default (rule I; see [`FormatOptions::validate`]) | `rtbufsize`, `max_delay`, `err_detect` |
+//! | carried, consumed elsewhere | `start_time_realtime`, `flush_packets`, `metadata_header_padding`, `strict` |
+//! | parsed, refused if non-default (rule I; see [`FormatOptions::validate`]) | `avioflags`, `packetsize`, `cryptokey`, `fdebug`, `use_wallclock_as_timestamps`, `skip_initial_bytes`, `dump_separator`, `protocol_whitelist`, `protocol_blacklist`, `recursion_limit`, `rtbufsize`, `max_delay`, `err_detect` |
 
 use vaco_core::Duration;
 use vaco_opts::{Binary, ConstDesc, Options, opt_flags};
@@ -219,7 +220,10 @@ impl AvoidNegativeTs {
     help = "generic container-level options shared by every demuxer and muxer"
 )]
 pub struct FormatOptions {
-    /// I/O layer behaviour. Consumed by [`vaco_io::IoOptions`].
+    /// I/O layer behaviour. Despite this doc's earlier claim, nothing
+    /// currently converts this into a [`vaco_io::IoOptions`] value --
+    /// `FormatOptions::validate` refuses a non-default value rather than
+    /// silently dropping it (`cargo xtask reachability-check` rule I).
     #[opt(name = "avioflags", help = "", unit = "avioflags",
           default = AvioFlags::empty(), default_repr = "0", flags(param))]
     pub avioflags: AvioFlags,
@@ -385,8 +389,11 @@ pub struct FormatOptions {
           default = -1, default_repr = "auto", range = -1..=2, flags(encoding))]
     pub avoid_negative_ts: i32,
 
-    /// Consumed by the CLI's info dump; carried here because it lives on the
-    /// context.
+    /// Despite this doc's earlier claim, nothing in this tree's CLI info
+    /// dump reads this field yet -- `FormatOptions::validate` refuses a
+    /// non-default value rather than silently dropping it (`cargo xtask
+    /// reachability-check` rule I). Carried here because it lives on the
+    /// reference's own context.
     #[opt(name = "dump_separator", help = "set information dump field separator",
           default = String::new(), default_repr = ", ", flags(param))]
     pub dump_separator: String,
@@ -409,7 +416,14 @@ pub struct FormatOptions {
     )]
     pub format_whitelist: String,
 
-    /// Comma-separated. Enforced by the protocol layer.
+    /// Comma-separated. A real, working `-protocol_whitelist` exists in
+    /// this tree, but it is reached a different way entirely --
+    /// `vaco-cli`'s own option parsing feeds
+    /// `vaco_protocol_core::ProtocolEnv` directly. This field is never
+    /// itself read; `FormatOptions::validate` refuses a non-default value
+    /// rather than silently accepting a knob that does nothing when
+    /// reached through `FormatOptions` alone (`cargo xtask
+    /// reachability-check` rule I).
     #[opt(
         name = "protocol_whitelist",
         help = "List of protocols that are allowed to be used",
@@ -417,7 +431,9 @@ pub struct FormatOptions {
     )]
     pub protocol_whitelist: String,
 
-    /// Comma-separated. Wins over the whitelist.
+    /// Comma-separated. Same gap as `protocol_whitelist` immediately
+    /// above: a real `-protocol_blacklist` exists, reached through
+    /// `vaco_protocol_core::ProtocolEnv` directly rather than this field.
     #[opt(
         name = "protocol_blacklist",
         help = "List of protocols that are not allowed to be used",
@@ -455,7 +471,7 @@ pub struct FormatOptions {
     /// DASH periods, `tee`.
     ///
     /// **Ours, not the reference's.** Meant as a security bound enforced here
-    /// rather than per format so that no nested demuxer can forget it -- but
+    /// rather than per format so that no nested demuxer can forget it — but
     /// nothing in this tree actually reads this field today. The real depth
     /// cap for the one nested-open path that exists so far,
     /// `vaco-format-adaptive::RemoteAccess`/`WriteAccess`'s own
@@ -463,7 +479,8 @@ pub struct FormatOptions {
     /// `vaco_protocol_core::ProtocolEnv`), is a separate, hardcoded constant
     /// this field does not feed. [`FormatOptions::validate`] refuses a
     /// non-default value rather than continuing to claim the enforcement
-    /// this doc used to (found by `cargo xtask reachability-check`'s rule I).
+    /// this doc used to (found by `cargo xtask reachability-check`'s rule I;
+    /// fixed the same way as the nine generic fields above it).
     #[opt(name = "recursion_limit", help = "maximum depth of nested demuxer opens",
           default = 10, range = 0..=1000, flags(decoding))]
     pub recursion_limit: i32,
@@ -552,12 +569,88 @@ impl FormatOptions {
                 detail: "+noparse requires +nofillin".to_owned(),
             });
         }
+        // These nine generic AVFormatContext-shaped fields are parsed --
+        // several of their own doc comments above used to claim they were
+        // "consumed by" a specific downstream layer -- but nothing in this
+        // tree's demuxers, muxers or I/O layer actually reads any of them
+        // (measured: zero `.field` occurrences anywhere under `crates/`).
+        // `protocol_whitelist`/`protocol_blacklist` specifically already
+        // have a real, working implementation, reached a completely
+        // different way (`vaco-cli`'s own option parsing feeds
+        // `vaco_protocol_core::ProtocolEnv` directly, bypassing
+        // `FormatOptions` entirely) -- a caller that goes through
+        // `FormatOptions` alone, as this validation must assume the worst
+        // case for, still gets silent no-ops. Found by `cargo xtask
+        // reachability-check`'s rule I; refusing here rather than
+        // continuing to advertise nine knobs that do nothing.
+        if self.avioflags != AvioFlags::empty() {
+            return Err(vaco_core::Error::Option {
+                name: "avioflags".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.packetsize != 0 {
+            return Err(vaco_core::Error::Option {
+                name: "packetsize".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.cryptokey != vaco_opts::Binary::default() {
+            return Err(vaco_core::Error::Option {
+                name: "cryptokey".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.fdebug != FDebugFlags::empty() {
+            return Err(vaco_core::Error::Option {
+                name: "fdebug".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.use_wallclock_as_timestamps {
+            return Err(vaco_core::Error::Option {
+                name: "use_wallclock_as_timestamps".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.skip_initial_bytes != 0_i64 {
+            return Err(vaco_core::Error::Option {
+                name: "skip_initial_bytes".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.dump_separator != String::new() {
+            return Err(vaco_core::Error::Option {
+                name: "dump_separator".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.protocol_whitelist != String::new() {
+            return Err(vaco_core::Error::Option {
+                name: "protocol_whitelist".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.protocol_blacklist != String::new() {
+            return Err(vaco_core::Error::Option {
+                name: "protocol_blacklist".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
         // `rtbufsize`/`max_delay`/`err_detect`: this doc's own table used to
         // list these as "carried, consumed elsewhere" -- measured: zero
         // `.rtbufsize`/`.max_delay`/`.err_detect` reads anywhere under
-        // `crates/` outside this file. Found by `cargo xtask
-        // reachability-check`'s rule I; refusing a non-default value rather
-        // than continuing to advertise a knob that does nothing.
+        // `crates/` outside this file. Same shape as the ten fields above,
+        // found the same way (rule I).
         if self.rtbufsize != 3_041_280 {
             return Err(vaco_core::Error::Option {
                 name: "rtbufsize".to_owned(),
@@ -587,8 +680,8 @@ impl FormatOptions {
         // has its own hardcoded `recursion_limit` forwarded into
         // `vaco_protocol_core::ProtocolEnv`, a separate value this field does
         // not feed (measured: zero `.recursion_limit` reads on this type
-        // anywhere under `crates/`). Same reasoning as the three fields
-        // above.
+        // anywhere under `crates/`). Same shape as the nine fields above,
+        // found the same way.
         if self.recursion_limit != 10 {
             return Err(vaco_core::Error::Option {
                 name: "recursion_limit".to_owned(),
@@ -635,31 +728,68 @@ mod tests {
         assert!(!o.seek2any);
     }
 
-    /// `rtbufsize`/`max_delay`/`err_detect`/`recursion_limit` parse but
-    /// nothing in this tree's demuxers, muxers or I/O layer reads any of
-    /// them yet -- this doc's own table and the `recursion_limit` field doc
-    /// used to claim otherwise. `validate` refuses a non-default value
-    /// instead of silently dropping it. Regression for `cargo xtask
-    /// reachability-check`'s rule I.
+    /// `avioflags`/`packetsize`/`cryptokey`/`fdebug`/
+    /// `use_wallclock_as_timestamps`/`skip_initial_bytes`/`dump_separator`/
+    /// `protocol_whitelist`/`protocol_blacklist`/`recursion_limit` parse but
+    /// nothing in this tree's demuxers, muxers or I/O layer reads any of them
+    /// yet -- several of their own doc comments used to claim otherwise.
+    /// `validate` refuses a non-default value instead of silently dropping
+    /// it. Regression for `cargo xtask reachability-check`'s rule I.
     #[test]
-    fn validate_refuses_four_unconsumed_generic_options() {
+    fn validate_refuses_the_thirteen_unconsumed_generic_options() {
         let base = FormatOptions::default();
         assert!(base.validate().is_ok());
 
         let mut o = base.clone();
-        o.rtbufsize = 1;
+        o.avioflags = AvioFlags::DIRECT;
         assert!(o.validate().is_err());
 
         let mut o = base.clone();
-        o.max_delay = 0;
+        o.packetsize = 188;
         assert!(o.validate().is_err());
 
         let mut o = base.clone();
-        o.err_detect = ErrDetectFlags::empty();
+        o.cryptokey = vaco_opts::Binary(vec![1, 2, 3]);
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.fdebug = FDebugFlags::TS;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.use_wallclock_as_timestamps = true;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.skip_initial_bytes = 16;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.dump_separator = ", ".to_owned();
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.protocol_whitelist = "file".to_owned();
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.protocol_blacklist = "http".to_owned();
         assert!(o.validate().is_err());
 
         let mut o = base.clone();
         o.recursion_limit = 5;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.rtbufsize = 1024;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.max_delay = 500_000;
+        assert!(o.validate().is_err());
+
+        let mut o = base;
+        o.err_detect = ErrDetectFlags::EXPLODE;
         assert!(o.validate().is_err());
     }
 
