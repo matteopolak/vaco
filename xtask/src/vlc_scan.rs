@@ -45,6 +45,17 @@
 //! before this module's own targets list was finalised), any finding is
 //! reported and left for that crate's owner; nothing here ever edits
 //! another crate's table file.
+//!
+//! # The two blind spots checked for elsewhere do not apply here
+//!
+//! Audited against the same two shapes rule I found in itself: this scan
+//! extracts values from one named `const` in one named file per
+//! [`Target`] row, a fixed list, not a wildcard "is this identifier used
+//! anywhere" search — there is no unrelated symbol anywhere for a
+//! coincidental name to vouch for, and no "is it read" question at all
+//! (the values it compares are pulled from the table's own declaration,
+//! not from some other call site `#[cfg(test)]` could hide). Neither
+//! failure mode has anything to attach to here.
 
 use crate::{Task, repo_root};
 

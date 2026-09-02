@@ -21,6 +21,25 @@
 //!
 //! It cannot see two types that mean the same thing under different names. That
 //! needs a person.
+//!
+//! # A gap checked for and not (yet) found live
+//!
+//! Unlike `dead_code` (which strips `#[cfg(test)]` bodies out before
+//! scanning) this scan does not exclude them: a `pub struct`/`pub enum`
+//! declared inside a `#[cfg(test)] mod tests` block in two different
+//! crates, purely as an unrelated test fixture in each, would read as the
+//! same D19 violation a real cross-crate duplication is. Checked directly
+//! against this tree while auditing this file for the same two blind spots
+//! rule I found in itself (test code counted as real, and scope wide
+//! enough for an unrelated symbol to vouch for a different one): zero
+//! `pub struct`/`pub enum` declarations exist inside any `#[cfg(test)]`
+//! block anywhere in `crates/` today, so this is a latent risk, not a live
+//! false positive. Left unfixed on purpose rather than papered over: adding
+//! `#[cfg(test)]`-stripping for a risk with no current instance would be
+//! unverifiable by this file's own tests, and the two real, currently-live
+//! findings this same audit turned up elsewhere (`dead_code`'s
+//! substring-not-identifier match, `option_consumption`'s test-masking and
+//! cross-binary scope gaps) were the ones worth spending the pass on.
 
 use crate::{Map, Task, crates};
 

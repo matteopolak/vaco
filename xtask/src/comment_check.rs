@@ -26,6 +26,18 @@
 //! it is wrong — recounted after a rename, a moved directory, a change to
 //! what this file itself scans — never "there are more violations now and
 //! that is fine."
+//!
+//! # The two blind spots checked for elsewhere do not apply here
+//!
+//! Audited against the same two shapes rule I found in itself while auditing
+//! every other scanner in this file: this one has no "is X used/consumed
+//! elsewhere" cross-file lookup at all, so there is no name to collide and
+//! no scope to get wrong — every finding is local to the one file and line
+//! it names. `#[cfg(test)]` code is deliberately **not** exempt (unlike
+//! `dead_code`'s production/test split): a 40-line comment or a stale
+//! planning-doc citation is exactly as much a style problem inside a test
+//! module as outside one, so scanning it uniformly is the intended
+//! behaviour here, not an oversight to fix.
 
 use crate::{Task, repo_root};
 use std::path::Path;
@@ -45,7 +57,7 @@ const CROSS_REFS: &[&str] = &[
 /// The violation count as of the commit that added this ratchet, measured by
 /// this same scan. Fix a violation and lower this number in the same commit;
 /// never raise it to make a new one disappear — see the module doc above.
-const BASELINE: usize = 1232;
+const BASELINE: usize = 1212;
 
 pub fn run(_check: bool) -> Task {
     let root = repo_root();
