@@ -1133,6 +1133,44 @@ scaling are in **`docs/codec/frame-threading.md`**; the crate-side facts are:
   vectors. `docs/codec/frame-threading.md` has the boundary conditions and the
   numbers.
 
+## Motion compensation: partition-level prediction (A1)
+
+`planning/PERF-PROGRAMME.md` item A1, `planning/E2E-GAPS.md` §28.
+`crate::reconstruct::sample_luma_block`/`crate::interp::luma_qpel_sample`
+predicted clause 8.4.2.2.1's luma quarter-pel sample one 4x4 block (one
+output pixel, for the `interp` half) at a time, even when several
+adjacent 4x4 blocks shared identical motion — the common case: 89.2% of
+the partition rectangles counted directly on `h264_4k.mp4` were a whole
+16x16 macroblock. `crate::reconstruct::partition_rects` now decomposes a
+macroblock's own 4x4 motion grid (`MbSummary::mv_blocks`) into the
+maximal same-motion rectangles first (a real H.264 sub-partitioning is
+already such a tiling, so a greedy grow-right-then-grow-down scan
+recovers it exactly, and merging two partitions that coincidentally carry
+identical motion is still correct — clause 8.4's prediction value depends
+only on the resolved motion at a position, never on the bitstream's own
+partition boundary), and `sample_luma_partition`/`luma_qpel_partition`
+predict the whole merged region in one call: fetch the `(w+5)x(h+5)`
+reference window once, build only the half-pel planes (`H`/`V`/`J`) the
+partition's own fractional motion actually needs, combine per pixel.
+`sample_luma_block`/`luma_qpel_sample` are unchanged and kept, unused by
+this path, as the scalar oracle three differential test families check
+bit-for-bit (`crate::interp::tests::partition_matches_the_per_pixel_oracle_at_every_fractional_position_and_shape`,
+`crate::reconstruct::tests::sample_luma_partition_matches_sample_luma_block_for_every_shape_and_edge_case`,
+`crate::reconstruct::tests::partition_rects_recovers_known_shapes`).
+
+Measured: ~6% faster at `-threads 1`, ~8% at `-threads 4` (median
+CPU-seconds ratio, `h264_4k.mp4`, interleaved before/after) — a real,
+reproducible win, but well under this item's own realistic ceiling
+(1.40x) and its stop-condition bar (1.18x). Two real performance bugs
+(not correctness bugs) were found and fixed while getting there, both
+recorded in full in `planning/E2E-GAPS.md` §28 because neither was
+visible from reading the code: computing every half-pel plane
+unconditionally cost more than the fetch-count reduction it was meant to
+win, and a `Copy` `Option<[[u8; 16]; 16]>`'s own `.map()` copied the
+whole array per pixel. Chroma (`sample_chroma_2x2`) was left untouched:
+the item's own stop condition gates chroma work on the luma kernel
+clearing the ratio bar, which it did not.
+
 ## Configuration
 
 `vaco_limits::Limits`/`Budget` bound every allocation (`residual_block_cavlc`/
