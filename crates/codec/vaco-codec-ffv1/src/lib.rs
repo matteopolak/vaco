@@ -153,6 +153,7 @@ impl SendReceive for Ffv1Decoder {
                     &mut budget,
                 )?;
                 frame.pts = pkt.pts;
+                frame.duration = pkt.duration;
                 self.machine.emit(frame);
                 Ok(())
             }
@@ -441,6 +442,42 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::NeedMoreInput)));
         dec.send(None).expect("begin drain");
         assert!(matches!(dec.receive(), Err(Error::Eof)));
+    }
+
+    /// The decoder must carry `Packet::duration` onto the decoded
+    /// `Frame::duration`, the same way `vaco-codec-jpeg`'s decoder already
+    /// does right next to its own `pts` assignment.
+    ///
+    /// This is the video-decode side of the class of bug fixed across many
+    /// codecs elsewhere in this workspace: MP4's `stts` derives every
+    /// sample's duration except the *last* from the delta to the next
+    /// sample's DTS, so the last sample's duration comes only from
+    /// `Packet::duration` -- which in turn is only reachable if some
+    /// decoder along the way actually preserved it onto `Frame::duration`.
+    /// A decoder that drops it is invisible in Matroska/WebM (duration is
+    /// inferred from the next block's timecode there) and silently loses
+    /// the last frame's duration in MP4. FFV1's own bitstream carries no
+    /// frame-rate field to derive a duration from some other way (unlike
+    /// Theora's `frn`/`frd`), so `Packet::duration` is the only source of
+    /// truth available to the decoder.
+    #[test]
+    fn a_decoded_frame_carries_the_packets_duration() {
+        let frame = make_test_frame(PixFmt::Yuv420p, 8, 8);
+        let mut enc = Ffv1Encoder::new(Limits::permissive());
+        enc.send(Some(&frame)).expect("send frame");
+        let mut packet = enc.receive().expect("receive packet");
+        packet.duration = vaco_core::Duration(1234);
+
+        let record = match packet.side_data(PacketSideDataKind::NewExtradata) {
+            Some(PacketSideData::NewExtradata(buf)) => buf.as_slice().to_vec(),
+            _ => panic!("expected NewExtradata"),
+        };
+        let mut dec = Ffv1Decoder::new(Limits::permissive());
+        dec.set_extradata(&record).expect("set_extradata");
+        dec.prime_video(8, 8);
+        dec.send(Some(&packet)).expect("send packet");
+        let decoded = dec.receive().expect("receive frame");
+        assert_eq!(decoded.duration, vaco_core::Duration(1234));
     }
 
     #[test]
