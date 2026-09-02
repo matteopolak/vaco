@@ -312,12 +312,19 @@ fn be32(data: &[u8], off: usize) -> Result<u32> {
 pub struct ProresDecoder {
     limits: Limits,
     pending: VecDeque<Frame>,
+    /// Set by `send_packet(None)`; makes `receive_frame` answer `Eof`
+    /// once `pending` is empty instead of `NeedMoreInput` forever -- see
+    /// `vaco-codec-ac3`'s decoder's own `draining` field doc for the full
+    /// reasoning (measured against `vaco-sched`'s `ProgressGuard`
+    /// watchdog, same contract violation as `vaco-codec-alac`'s and
+    /// `vaco-codec-vorbis`'s decoders).
+    draining: bool,
 }
 
 impl ProresDecoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { limits, pending: VecDeque::new() }
+        Self { limits, pending: VecDeque::new(), draining: false }
     }
 
     fn decode_frame_payload(&mut self, payload: &[u8]) -> Result<Frame> {
@@ -418,6 +425,7 @@ impl ProresDecoder {
 impl Decoder for ProresDecoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         let Some(packet) = packet else {
+            self.draining = true;
             return Ok(());
         };
         let payload = packet.payload();
@@ -438,11 +446,12 @@ impl Decoder for ProresDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(Error::NeedMoreInput)
+        self.pending.pop_front().ok_or(if self.draining { Error::Eof } else { Error::NeedMoreInput })
     }
 
     fn flush(&mut self) {
         self.pending.clear();
+        self.draining = false;
     }
 }
 
@@ -526,5 +535,19 @@ mod tests {
             budget.check_frame(2732, 1536, bpp).is_ok(),
             "a real 4:2:2 10-bit frame this size must fit `strict`'s frame budget"
         );
+    }
+
+
+    /// `send_packet(None)` must make `receive_frame` answer `Eof` once
+    /// `pending` is drained, not `NeedMoreInput` forever -- see
+    /// `vaco-codec-ac3`'s decoder's own `draining` field doc for the full
+    /// reasoning (measured against `vaco-sched`'s `ProgressGuard` livelock
+    /// watchdog).
+    #[test]
+    fn draining_answers_eof_once_empty_not_need_more_input_forever() {
+        let mut dec = ProresDecoder::new(Limits::permissive());
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)), "empty and not draining yet");
+        dec.send_packet(None).unwrap();
+        assert!(matches!(dec.receive_frame(), Err(Error::Eof)), "must answer Eof once drained and empty, not NeedMoreInput forever");
     }
 }
