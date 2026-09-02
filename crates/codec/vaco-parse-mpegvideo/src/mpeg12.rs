@@ -52,7 +52,7 @@
 //! if that ever measures as a real cost.
 
 use vaco_bitstream::{BitReader, annexb};
-use vaco_codec_core::{CodecId, CodecParameters, Level, Profile};
+use vaco_codec_core::{CodecId, CodecParameters, FieldOrder, Level, Profile};
 use vaco_color::ChromaLocation;
 use vaco_core::{MediaType, Rational, Result};
 use vaco_limits::{Budget, Limits};
@@ -83,6 +83,7 @@ struct Sequence {
 #[derive(Debug, Clone, Copy, Default)]
 struct SequenceExtension {
     profile_and_level_indication: u8,
+    progressive_sequence: bool,
     chroma_format: u8,
     horizontal_size_extension: u8,
     vertical_size_extension: u8,
@@ -204,7 +205,7 @@ fn sequence_header(payload: &[u8]) -> Sequence {
 /// a byte-aligned buffer here would silently drop its top nibble.
 fn sequence_extension(r: &mut BitReader<'_>) -> SequenceExtension {
     let profile_and_level_indication = r.get(8) as u8;
-    let _progressive_sequence = r.get(1);
+    let progressive_sequence = r.get(1) != 0;
     let chroma_format = r.get(2) as u8;
     let horizontal_size_extension = r.get(2) as u8;
     let vertical_size_extension = r.get(2) as u8;
@@ -216,6 +217,7 @@ fn sequence_extension(r: &mut BitReader<'_>) -> SequenceExtension {
     let frame_rate_extension_d = r.get(5) as u8;
     SequenceExtension {
         profile_and_level_indication,
+        progressive_sequence,
         chroma_format,
         horizontal_size_extension,
         vertical_size_extension,
@@ -306,6 +308,32 @@ impl Sequence {
             // (105 of 447 diverging cases), and every mpeg1/mpeg2 case in
             // it was missing exactly this.
             v.color.chroma_location = ChromaLocation::Left;
+            // Measured directly against real ffmpeg 9.0.1: plain
+            // `-c:v mpeg1video` (which has no `sequence_extension()` at
+            // all, `self.ext == None`) reports `field_order=progressive`
+            // unconditionally; `-c:v mpeg2video` reports `progressive` when
+            // `progressive_sequence` is set and `tt` when it is not (a real,
+            // per-picture `-vf setfield=tff` encode). Only the
+            // `progressive_sequence` half is read here -- the other half
+            // needs `picture_coding_extension()`'s own `top_field_first`
+            // bit, which this crate does not parse, so a genuinely
+            // interlaced MPEG-2 stream reports `Unknown` (honestly unstated)
+            // rather than a guessed top/bottom order. This is the same
+            // partial-fidelity shape `vaco-parse-h264` already accepted for
+            // `frame_mbs_only` (`Progressive` or `Unknown`, refined later by
+            // SEI when one arrives) -- not a new pattern.
+            //
+            // Regression note: `VideoParameters::field_order`'s `#[default]`
+            // used to be `Progressive`, so leaving this field alone here
+            // silently "worked" for every progressive-sequence sample. It
+            // stopped working the moment finding 64 corrected that default
+            // to the honest `Unknown` sentinel -- caught by re-running the
+            // full conformance suite after that change, not assumed safe.
+            v.field_order = if self.ext.is_none_or(|e| e.progressive_sequence) {
+                FieldOrder::Progressive
+            } else {
+                FieldOrder::Unknown
+            };
         }
         params
     }
@@ -547,6 +575,10 @@ mod tests {
         assert_eq!(v.format, PixFmt::from_name("yuv420p").ok());
         assert_eq!(v.frame_rate, Rational::new(25, 1));
         assert_eq!(v.sample_aspect_ratio, Rational::new(1, 1));
+        // Measured (`ffmpeg -c:v mpeg2video`, real ffprobe, progressive
+        // content, matching this real fixture's own `progressive_sequence`
+        // bit): `field_order=progressive`.
+        assert_eq!(v.field_order, FieldOrder::Progressive);
     }
 
     #[test]
@@ -558,6 +590,42 @@ mod tests {
         assert_eq!(params.codec_id, Some(CodecId::Mpeg1video));
         assert_eq!(params.profile, None);
         assert_eq!(params.level, None);
+        // Measured (`ffmpeg -c:v mpeg1video`, real ffprobe):
+        // `field_order=progressive` unconditionally -- MPEG-1 has no
+        // `sequence_extension()` (`self.ext == None`) to read a
+        // `progressive_sequence` bit from at all.
+        let v = params.video.unwrap();
+        assert_eq!(v.field_order, FieldOrder::Progressive);
+    }
+
+    /// A `progressive_sequence=0` sequence extension: real ffmpeg reports a
+    /// genuinely interlaced MPEG-2 stream's `field_order` as `tt`/`bb`
+    /// (`-vf setfield=tff`/`bff`, measured), derived from
+    /// `picture_coding_extension()`'s own `top_field_first` bit, which this
+    /// crate does not parse (see `codec_parameters`'s own comment on the
+    /// gap). `Unknown` here is the honest partial answer, not a guess at
+    /// which one -- pinned so a future change does not silently start
+    /// guessing `Progressive` again the way the old shared default did.
+    #[test]
+    fn a_non_progressive_sequence_reports_unknown_not_a_guessed_order() {
+        // `REAL_SEQ_PREFIX[17]` (`0x8a`) carries `sequence_extension()`'s
+        // `progressive_sequence` bit at its own bit 3, found by flipping
+        // every bit in the extension's bytes one at a time and checking
+        // which one alone changed the parsed `field_order` -- not derived
+        // from a hand count of the bitstream layout, which is exactly the
+        // kind of off-by-a-nibble mistake worth not risking in a test that
+        // exists to catch a real regression.
+        let mut prefix = REAL_SEQ_PREFIX;
+        prefix[17] ^= 0x08;
+        let mut p = Mpeg12Parser::new(Limits::strict());
+        p.absorb_headers(&prefix);
+        let params = p.params.unwrap();
+        // Everything else `sequence_extension` reads is unaffected by this
+        // one bit -- profile/level still decode the same as the fixture's
+        // own already-pinned test above.
+        assert_eq!(params.profile.map(|pr| pr.value), Some(4));
+        let v = params.video.unwrap();
+        assert_eq!(v.field_order, FieldOrder::Unknown);
     }
 
     #[test]

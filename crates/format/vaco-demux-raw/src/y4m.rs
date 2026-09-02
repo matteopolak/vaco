@@ -35,7 +35,7 @@
 //! `Cgray` colorspace tags are mapped to a [`PixFmt`]; an unrecognised or
 //! absent `C` tag falls back to the spec's own default, 4:2:0.
 
-use vaco_codec_core::{CodecParameters, VideoParameters};
+use vaco_codec_core::{CodecParameters, FieldOrder, VideoParameters};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
 use vaco_format_core::time::duration_from_rate;
@@ -71,6 +71,27 @@ struct Header {
     height: u32,
     framerate: Rational,
     format: PixFmt,
+    field_order: FieldOrder,
+}
+
+/// The `I` tag's one-letter value, measured against real `ffprobe` (a
+/// `-vf setfield=prog|tff|bff` round-trip through `-f yuv4mpegpipe`, each
+/// re-probed): `Ip` -> `progressive`, `It` -> `tt` (top field first), `Ib`
+/// -> `bb` (bottom field first). Y4M carries whole deinterlaced frames, not
+/// separately-coded fields, so this crate's own `TopFirst`/`BottomFirst`
+/// map onto it directly -- `TopCodedFirst`/`BottomCodedFirst` are an H.264/
+/// HEVC-style coded-vs-displayed distinction Y4M has no room to state.
+/// `Im` (mixed) and an absent tag both become `Unknown`: mixed cannot be
+/// expressed as one `FieldOrder` value, and the spec states the tag is
+/// optional, though every sample this crate can produce (`ffmpeg` always
+/// writes one) leaves that branch unmeasured against a real reference file.
+fn interlacing(tag: &[u8]) -> FieldOrder {
+    match tag {
+        b"p" => FieldOrder::Progressive,
+        b"t" => FieldOrder::TopFirst,
+        b"b" => FieldOrder::BottomFirst,
+        _ => FieldOrder::Unknown,
+    }
 }
 
 fn colorspace(tag: &[u8]) -> PixFmt {
@@ -98,6 +119,7 @@ fn parse_header(line: &[u8]) -> Result<Header> {
     let mut height = None;
     let mut framerate = Rational::new(25, 1);
     let mut format = PixFmt::Yuv420p;
+    let mut field_order = FieldOrder::Unknown;
     for field in rest.split(|&b| b == b' ').filter(|f| !f.is_empty()) {
         let Some((&tag, value)) = field.split_first() else {
             continue;
@@ -119,8 +141,9 @@ fn parse_header(line: &[u8]) -> Result<Header> {
                 }
             }
             b'C' => format = colorspace(value),
-            // `I` (interlacing), `A` (aspect) and `X` (extension) tags are
-            // read past but not otherwise interpreted.
+            b'I' => field_order = interlacing(value),
+            // `A` (aspect) and `X` (extension) tags are read past but not
+            // otherwise interpreted.
             _ => {}
         }
     }
@@ -132,6 +155,7 @@ fn parse_header(line: &[u8]) -> Result<Header> {
         height,
         framerate,
         format,
+        field_order,
     })
 }
 
@@ -175,6 +199,7 @@ impl Yuv4MpegDemuxer {
             coded_height: header.height,
             frame_rate: header.framerate,
             format: Some(header.format),
+            field_order: header.field_order,
             ..VideoParameters::default()
         };
         let mut params = CodecParameters::new(MediaType::Video);
@@ -331,5 +356,30 @@ mod tests {
         let bytes = b"YUV4MPEG2 H4 F25:1\nFRAME\n".to_vec();
         let src = Box::new(MemorySource::new(bytes));
         assert!(Yuv4MpegDemuxer::open(src, &NoParsers).is_err());
+    }
+
+    /// Measured against real `ffprobe` (see `interlacing`'s own doc
+    /// comment): `Ip` -> `progressive`, `It` -> `tt`, `Ib` -> `bb`. An
+    /// absent `I` tag reports `unknown`, the dedicated "not stated"
+    /// sentinel -- distinct from a real `Ip` assertion, which is the
+    /// distinction finding 63/64 exist for.
+    #[test]
+    fn the_interlace_tag_maps_to_the_measured_field_order() {
+        let header = |line: &[u8]| parse_header(line).unwrap().field_order;
+        assert_eq!(
+            header(b"YUV4MPEG2 W4 H4 F25:1 Ip"),
+            FieldOrder::Progressive
+        );
+        assert_eq!(header(b"YUV4MPEG2 W4 H4 F25:1 It"), FieldOrder::TopFirst);
+        assert_eq!(
+            header(b"YUV4MPEG2 W4 H4 F25:1 Ib"),
+            FieldOrder::BottomFirst
+        );
+        // No `I` tag at all: unmeasured (every real encoder writes one),
+        // but the spec states it is optional, and this crate must not
+        // invent a `Progressive` where nothing was said.
+        assert_eq!(header(b"YUV4MPEG2 W4 H4 F25:1"), FieldOrder::Unknown);
+        // `Im` (mixed) cannot be expressed as one `FieldOrder` value.
+        assert_eq!(header(b"YUV4MPEG2 W4 H4 F25:1 Im"), FieldOrder::Unknown);
     }
 }

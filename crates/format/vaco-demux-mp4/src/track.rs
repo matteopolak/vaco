@@ -13,7 +13,7 @@
 //!   disagree with the sample entry's, and is otherwise left for the bitstream
 //!   parser to supply.
 
-use vaco_codec_core::{AudioParameters, CodecParameters, VideoParameters};
+use vaco_codec_core::{AudioParameters, CodecParameters, FieldOrder, VideoParameters};
 use vaco_color::{ColorPrimaries, MatrixCoefficients, TransferCharacteristic};
 use vaco_core::{MediaType, Rational, Timestamp};
 use vaco_format_core::{Disposition, Stream};
@@ -205,6 +205,7 @@ pub(crate) fn codec_parameters(
             ..VideoParameters::default()
         };
         video.sample_aspect_ratio = sample_aspect_ratio(entry, track, &v).unwrap_or(Rational::ZERO);
+        video.field_order = field_order(entry);
         if let Some(colour) = entry.colour() {
             video.color.primaries = colour
                 .primaries
@@ -287,6 +288,44 @@ fn dops_to_opus_head(data: &[u8]) -> Option<(Vec<u8>, u16)> {
     out.extend_from_slice(&gain.to_le_bytes());
     out.extend_from_slice(data.get(10..)?);
     Some((out, pre_skip))
+}
+
+/// The QuickTime/MP4 `fiel` atom: whether the sample entry states an
+/// interlace field order at all, and if so, which.
+///
+/// **Measured** directly against real `ffmpeg`/`ffprobe` 9.0.1
+/// (`-c:v prores`, `-vf setfield=prog|tff|bff`, each re-probed and the raw
+/// `fiel` payload bytes read back out of the file): a two-byte payload,
+/// `fieldCount` then `fieldDetail`. `fieldCount=1` (`fieldDetail=0x00`)
+/// measured as `field_order=progressive`; `fieldCount=2, fieldDetail=0x09`
+/// as `field_order=tb`; `fieldCount=2, fieldDetail=0x0e` as `field_order=
+/// bt`. `fieldDetail`'s other two QuickTime-documented non-swapped values
+/// (`0x01`, `0x06`) were not reachable from any encoder available while
+/// writing this -- every `-vf setfield=tff/bff` encode this crate could
+/// produce landed on the "swapped" pair above regardless of `-flags
+/// +ildct` -- so they map to `Unknown` rather than a guessed
+/// `TopFirst`/`BottomFirst`, the same as `fieldCount=2` with an unrecognised
+/// or zero `fieldDetail` (theoretically "interlaced, order unknown", also
+/// unmeasured).
+///
+/// A track with no `fiel` atom at all returns `Unknown` (nothing stated),
+/// distinct from `Progressive` (the atom is present and says so) -- the
+/// distinction `vaco-format-core`'s container/parser merge depends on to
+/// tell "this container asserted progressive" apart from "this container
+/// said nothing."
+fn field_order(entry: &SampleEntry<'_>) -> FieldOrder {
+    let Some(fiel) = entry.extension_boxes().find(vaco_format_isom::fourcc::boxes::FIEL) else {
+        return FieldOrder::Unknown;
+    };
+    let mut r = vaco_bitstream::ByteReader::new(fiel.payload);
+    let count = r.u8();
+    let detail = r.u8();
+    match (count, detail) {
+        (1, _) => FieldOrder::Progressive,
+        (2, 0x09) => FieldOrder::TopCodedFirst,
+        (2, 0x0e) => FieldOrder::BottomCodedFirst,
+        _ => FieldOrder::Unknown,
+    }
 }
 
 /// `sample_aspect_ratio`, or `None` to leave it for the bitstream parser.
@@ -468,6 +507,55 @@ mod tests {
     fn hvcc_length_size_is_none_for_a_too_short_record() {
         assert_eq!(hvcc_length_size(&[0u8; 21]), None);
     }
+
+    fn entry_with_extensions(extensions: &[u8]) -> SampleEntry<'_> {
+        SampleEntry {
+            format: vaco_format_isom::FourCc(*b"apch"),
+            data_reference_index: 1,
+            visual: None,
+            audio: None,
+            tmcd: None,
+            extensions,
+            extensions_offset: 0,
+        }
+    }
+
+    fn fiel_box(count: u8, detail: u8) -> [u8; 10] {
+        let mut b = [0u8; 10];
+        b[0..4].copy_from_slice(&10u32.to_be_bytes());
+        b[4..8].copy_from_slice(b"fiel");
+        b[8] = count;
+        b[9] = detail;
+        b
+    }
+
+    /// Measured directly against real `ffmpeg`/`ffprobe` 9.0.1 (`-c:v
+    /// prores`, `-vf setfield=prog|tff|bff`, each re-probed and the raw
+    /// `fiel` payload bytes read back out of the file) -- see `field_order`'s
+    /// own doc comment for the full measurement. A track with no `fiel` atom
+    /// at all is `Unknown` ("not stated"), not `Progressive` -- the
+    /// distinction finding 63/64 exist for.
+    #[test]
+    fn field_order_reads_the_measured_fiel_payloads() {
+        let progressive = fiel_box(1, 0x00);
+        assert_eq!(
+            field_order(&entry_with_extensions(&progressive)),
+            FieldOrder::Progressive
+        );
+        let tff_swapped = fiel_box(2, 0x09);
+        assert_eq!(
+            field_order(&entry_with_extensions(&tff_swapped)),
+            FieldOrder::TopCodedFirst
+        );
+        let bff_swapped = fiel_box(2, 0x0e);
+        assert_eq!(
+            field_order(&entry_with_extensions(&bff_swapped)),
+            FieldOrder::BottomCodedFirst
+        );
+        // No `fiel` atom at all: not stated, not guessed.
+        assert_eq!(field_order(&entry_with_extensions(&[])), FieldOrder::Unknown);
+    }
+
 
     /// A real `dOps` box payload, measured from `ffmpeg -f lavfi -i
     /// "sine=...:sample_rate=48000" -ac 2 -c:a libopus -f mp4`: version 0,

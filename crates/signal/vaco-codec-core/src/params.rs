@@ -115,12 +115,23 @@ pub struct AudioParameters {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum FieldOrder {
-    #[default]
     Progressive,
     TopFirst,
     BottomFirst,
     TopCodedFirst,
     BottomCodedFirst,
+    /// Nothing stated -- the dedicated "unset" sentinel, the same role
+    /// `vaco_color::ChromaLocation::Unspecified` plays for chroma siting.
+    /// This used to be `Progressive`'s job as well as its own, which meant
+    /// a container that genuinely asserted "not interlaced" was
+    /// indistinguishable from one that said nothing at all -- see
+    /// [`CodecParameters::fill_from`]'s own comment on why that was a real
+    /// bug, not a stylistic choice, and planning/CONFORMANCE-FINDINGS.md
+    /// finding 63 for the incident that found it and finding 64 for the
+    /// fix (both mpeg4-in-Matroska and mpeg4-in-AVI/ISOBMFF, and the two
+    /// combinations -- `prores`-in-MOV, Y4M -- that made the naive fix
+    /// unsafe to ship blind).
+    #[default]
     Unknown,
 }
 
@@ -375,7 +386,13 @@ impl VideoParameters {
         if self.frame_rate.num == 0 {
             self.frame_rate = other.frame_rate;
         }
-        if self.field_order == FieldOrder::Progressive {
+        // `Unknown` is the dedicated "not stated" sentinel (see the enum's
+        // own doc comment) -- `Progressive` used to double as both a real
+        // value and this sentinel, which silently discarded a container's
+        // genuine "not interlaced" assertion (e.g. Matroska's own
+        // `FlagInterlaced`) in favour of whatever the codec parser said,
+        // any time the parser's own answer differed. Finding 63/64.
+        if self.field_order == FieldOrder::Unknown {
             self.field_order = other.field_order;
         }
         if self.has_b_frames == 0 {
@@ -709,4 +726,67 @@ pub fn planar_frame_bytes(
             .checked_mul(chroma_bpp)?
     };
     luma.checked_add(chroma)
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code over fixed fixtures"
+)]
+mod tests {
+    use super::*;
+
+    /// The distinction finding 63/64 exist for: a container that genuinely
+    /// asserts `Progressive` (Matroska reading a real `FlagInterlaced`) must
+    /// win over a codec parser's differing answer, exactly the same as any
+    /// other field the container already stated. A container that states
+    /// nothing (`Unknown`, the dedicated sentinel) must still take the
+    /// parser's answer, same as before. Collapsing these two into one
+    /// enum value was the bug: this pins that they now behave differently.
+    #[test]
+    fn a_container_that_states_progressive_wins_over_a_differing_parser() {
+        let mut container = VideoParameters {
+            field_order: FieldOrder::Progressive,
+            ..VideoParameters::default()
+        };
+        let parser = VideoParameters {
+            field_order: FieldOrder::TopFirst,
+            ..VideoParameters::default()
+        };
+        container.fill_from(&parser);
+        assert_eq!(container.field_order, FieldOrder::Progressive);
+    }
+
+    #[test]
+    fn a_container_that_states_nothing_takes_the_parsers_answer() {
+        let mut container = VideoParameters {
+            field_order: FieldOrder::Unknown,
+            ..VideoParameters::default()
+        };
+        let parser = VideoParameters {
+            field_order: FieldOrder::TopFirst,
+            ..VideoParameters::default()
+        };
+        container.fill_from(&parser);
+        assert_eq!(container.field_order, FieldOrder::TopFirst);
+    }
+
+    /// `VideoParameters::default()` (what every producer gets before it sets
+    /// anything) is the "not stated" sentinel, not a real assertion --
+    /// `Unknown`, not `Progressive`.
+    #[test]
+    fn the_default_field_order_is_unknown_not_progressive() {
+        assert_eq!(VideoParameters::default().field_order, FieldOrder::Unknown);
+    }
+
+    /// If neither side ever states anything, the merged answer stays
+    /// `Unknown` -- there is no third party inventing `Progressive`.
+    #[test]
+    fn two_containers_that_both_state_nothing_merge_to_unknown() {
+        let mut a = VideoParameters::default();
+        let b = VideoParameters::default();
+        a.fill_from(&b);
+        assert_eq!(a.field_order, FieldOrder::Unknown);
+    }
 }
