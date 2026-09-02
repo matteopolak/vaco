@@ -119,6 +119,12 @@ version of this table came to overstate protocols by nearly twice.
 | Filters | 327 | 481 |
 | Protocols | 14 | 41 |
 
+Reading from a pipe does not work, despite `pipe` appearing in that protocol list.
+`-i -`, `-i pipe:` and `-i pipe:0` all fail where `ffprobe` reads the same bytes
+fine — `-` reports "No such file or directory" and the `pipe:` spellings report
+"Invalid data found", on both seeking and streaming formats. Writing to a pipe is
+fine and matches ffmpeg byte for byte.
+
 Two caveats on that table. The decoder and encoder counts include the
 patent-encumbered ones, which a default build leaves out. And a large share of the
 missing formats are simply unwritten rather than deliberately excluded —
