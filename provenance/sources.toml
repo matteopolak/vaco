@@ -1372,3 +1372,10 @@ kind     = "blackbox"
 title    = "ffmpeg/ffprobe 9.0.1, measured against hand-built BRSTM fixtures built field-for-field from wiibrew-brstm-format (no reference encoder exists for this format): confirmed the header parses correctly end to end (sample_rate, channels, codec_name=adpcm_thp, duration all correct against the reference for several parameter combinations). But per-packet byte size does not equal the header's own block_size field: a mono fixture with block_size swept across 32/64/96/256 bytes produced packets of exactly block_size+44 bytes every time (a clean additive constant, ruling out a scaling-formula misreading), while the same sweep at two channels produced block_size*2+80, and the file's own final (possibly padded-differently) block produced yet another, smaller constant (+28 at one data point) than a regular block's +44 -- three data points, not enough to fit a formula with confidence, and none of it is stated in the WiiBrew spec. Recorded as a genuine open question rather than shipped as a guess."
 acquired = "2026-09-02"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-mjpeg-name-probe"
+kind     = "blackbox"
+title    = "Observed output of `ffmpeg -decoders` and `ffmpeg -encoders`, ffmpeg 9.0.1: neither list contains a decoder or encoder literally named `jpeg` — only `mjpeg` (Motion JPEG), `jpegls`, `jpeg2000` and `ljpeg` (Lossless JPEG), all distinct names. Used to confirm `vaco-codec-jpeg`'s registered name (`jpeg`, matching neither this list nor `CodecId::Jpeg::name()`'s own `\"mjpeg\"`) was wrong, not a deliberate distinct concept."
+acquired = "2026-09-02"
+where    = "the reference binary installed on the development machine"
