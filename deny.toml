@@ -102,6 +102,22 @@ ignore = [
     # TLS/DTLS work package in a shared tree).
     { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro helper, transitive via vaco-codec-exr's exr/pulp dependency; no upstream replacement to move it to, and not this agent's crate to edit" },
 
+    # rustybuzz and ttf-parser, both `unmaintained` rather than vulnerable: no
+    # advisory of either one claims a defect, only that upstream has stopped.
+    # Paths checked with `cargo tree -i`, not assumed. All three arrive through
+    # exactly one crate, `cosmic-text` 0.12.1 in `vaco-filter-text`:
+    # rustybuzz 0.14.1 directly, ttf-parser 0.21.1 directly, and ttf-parser
+    # 0.20.0 via `fontdb` 0.16.2. There is no second source to remove and no
+    # newer cosmic-text that drops them.
+    #
+    # This is an accepted risk, not a fix. Clearing it properly means moving
+    # text shaping off cosmic-text, which is a real piece of work and a design
+    # decision rather than a dependency bump -- the alternative was leaving the
+    # advisories job red indefinitely on two crates with no reported defect.
+    # Revisit if either advisory is ever upgraded from `unmaintained` to a
+    # vulnerability, at which point this pair must come straight back out.
+    { id = "RUSTSEC-2026-0206", reason = "rustybuzz unmaintained (no reported defect); single path cosmic-text -> vaco-filter-text, no replacement short of changing the text-shaping stack" },
+    { id = "RUSTSEC-2026-0192", reason = "ttf-parser unmaintained (no reported defect); 0.21.1 via cosmic-text and 0.20.0 via fontdb, both under vaco-filter-text, same replacement problem" },
 ]
 
 [sources]
