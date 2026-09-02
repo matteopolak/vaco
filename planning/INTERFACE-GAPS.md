@@ -2145,3 +2145,190 @@ as pure and unit-testable as #555's handshake state machines, and the
 worker-thread seam this gap already designed is still exactly where
 `on_tick` gets called from, on a real interval, once a live socket exists —
 unchanged by #556 landing first.
+
+## 22. Three more "parsed, then dropped" gaps — the closed-caption shape, one layer in
+
+Reported by the same agent that closed gap 18's attachment half for
+MPEG-2 (`vaco-codec-mpeg12`) and verified the H.264 half of it end to
+end against a real ffmpeg-built file. Asked, afterward, to sweep every
+side-data/stream-metadata kind for the full parsed → attached →
+surfaced-or-applied path. Three more instances of exactly gap 18's
+shape turned up; two more checked out clean and are recorded below for
+contrast, since "the reference does the same thing" is itself a
+finding worth writing down rather than reverifying later.
+
+### 22a. H.264/HEVC VUI colour info reaches probe, never reaches a decoded `Frame`
+
+`vaco_parse_h264::sps::VuiParameters::color_info` and the HEVC
+equivalent are real and correct — `codec_parameters(sps)` sets
+`CodecParameters::color` from them, which is what `vaco-probe`'s
+`color_range`/`color_space`/`color_transfer`/`color_primaries` fields
+read (`crates/app/vaco-probe/src/show.rs`). But grepping
+`crates/codec/vaco-codec-h264/src` and `.../vaco-codec-hevc/src` for
+`.color`/`ColorInfo` finds nothing: neither decoder ever writes
+`Frame::color`, so a decoded H.264/HEVC frame carries the *default*
+`ColorInfo`, not the stream's real one. This is a genuine, demonstrable
+inconsistency, not a design choice: `vaco-codec-png`, `vaco-codec-vp9`
+and `vaco-codec-av1` all set `frame.color` from their own parsed colour
+config, and every filter that just propagates colour
+(`out.color = input.color`, two dozen call sites) or reads it
+meaningfully (`showinfo`, `vaco-filter-video-format`'s
+`setparams`/`setrange`) works correctly for those three codecs and
+silently sees the wrong (default) values for H.264/HEVC.
+
+`vaco -i bt709.mp4 -vf showinfo -f null -` prints the *default*
+`color_range`/`color_space` for every frame on an H.264 input right
+now, while `vaco-probe -i bt709.mp4 -show_streams` on the same file
+prints the real ones — a direct, checkable divergence between the two
+tools' report of the same file.
+
+**Blocks:** any colour-aware filter or `showinfo`-style measurement
+downstream of an H.264/HEVC decode. Not blocking probe, which reads
+`CodecParameters` directly and never decodes.
+
+### 22b. HDR metadata (mastering display / content light level) is parsed and then reaches nothing at all — not even probe
+
+Worse than 22a: this one has no producer at *any* layer, so it is
+invisible even to `vaco-probe`, which has nothing wrong to report
+because there is nothing to read.
+
+- `vaco_parse_h264::sei::SeiPayload::MasteringDisplay`/`ContentLightLevel`
+  and the HEVC equivalents parse SEI types 137/144 correctly (tested).
+- `vaco_parse_av1`'s `metadata.rs` parses `metadata_hdr_mdcv()`/
+  `metadata_hdr_cll()` (§5.8.3/5.8.4) into `HdrMdcv`/`HdrCll` (tested).
+- `vaco-codec-h264`, `vaco-codec-hevc` and `vaco-codec-av1` never read
+  any of this — none of the three decoders references `MasteringDisplay`,
+  `ContentLightLevel`, `HdrMdcv` or `HdrCll` outside their own parse
+  crate's tests, so `FrameSideData::MasteringDisplay`/`ContentLightLevel`
+  (which exist in `vaco-frame` and already have a working consumer —
+  `vaco-filter-mm`'s `sidedata` filter maps both, see `misc.rs`'s
+  `mapped_kind`) have zero real producers workspace-wide.
+- `vaco-probe` has no `mastering_display`/`content_light`-shaped output
+  at all (`crates/app/vaco-probe/src/show.rs` has nothing matching
+  either name) — this is not "attached but not surfaced", it never gets
+  far enough to be a probe gap yet.
+- One layer earlier still: MP4's `mdcv`/`clli`/`SmDm`/`CoLL` box
+  fourccs are declared in `vaco-format-isom/src/fourcc.rs` (so a box of
+  that type is at least *named* rather than falling into an unknown-box
+  path) but nothing reads their contents — grepping the whole crate for
+  `Mdcv`/`Clli` outside `fourcc.rs` finds nothing. This is the earliest
+  possible stage of the same shape: registered by name, contents never
+  parsed at all.
+
+**Blocks:** any HDR-aware tooling; `-color_trc smpte2084`-shaped
+round-trips that also carry mastering/CLL data lose it silently on
+every codec in this tree today, with no refusal and no probe evidence
+that anything was dropped.
+
+### 22c. MP4 rotation metadata is parsed, surfaced in probe, refused by name when asked for explicitly, and *silently never applied by default*
+
+The MP4 `tkhd` display matrix is parsed correctly
+(`vaco-demux-mp4`/`vaco-format-isom`), reaches `StreamSideData::DisplayMatrix`
+and is surfaced correctly in `vaco-probe -show_streams`
+(`crates/app/vaco-probe/src/show.rs`'s `side_data`/`display_rotation`).
+`-autorotate`/`-noautorotate`/`-display_rotation`/`-display_hflip`/
+`-display_vflip` are all in `vaco-cli`'s refuse-by-name list
+(`crates/app/vaco-cli/src/cli.rs`, `unimplemented_option`) — correct,
+per this project's own rule, for a user who types the flag.
+
+But the reference applies rotation **by default**, with no flag needed
+at all (`-noautorotate` is what a user passes to get the *raw*, un-rotated
+frames) — and nothing in this workspace's transcode path does that.
+`FrameSideData::DisplayMatrix` and `PacketSideData::DisplayMatrix` are
+each constructed **only in their own crate's unit tests** — grepping the
+whole tree finds no demuxer, decoder or CLI code that ever builds one for
+real. So `vaco -i portrait_iphone.mov -c:v libx264 out.mp4`, with *no*
+rotation flags at all, produces a sideways video with no error, no
+refusal, and no diagnostic — the one case the refuse-by-name list does
+not cover, because there is no flag to refuse.
+
+**Shape**: closing this needs `StreamSideData::DisplayMatrix` (already
+correct) propagated down through the demuxed `Packet`
+(`PacketSideData::DisplayMatrix`, declared, unused) to wherever
+`vaco-cli` builds the filtergraph, plus an auto-inserted rotate/flip
+step keyed off the matrix — mirroring `-autoscale`'s existing fixed
+position in the chain (`vaco-cli/src/filtergraph.rs`) rather than
+inventing a new insertion point. Multi-crate (`vaco-format-isom` or
+`vaco-demux-mp4` → `vaco-cli` → `vaco-filter-geometry`'s existing
+`rotate`/`transpose`/`hflip`/`vflip`), so recorded rather than attempted
+inside this pass.
+
+**Blocks:** correct default orientation for the single most common
+real-world case a display matrix exists for (a phone-shot vertical
+video) on every output path in this workspace.
+
+### Status, 2026-09-02 — CLOSED for the decode/transcode path
+
+`vaco_format_core::DisplayTransform` (`dihedral_transform_from_matrix`/
+`dihedral_transform_from_angle_and_flips`, `crates/format/vaco-format-core/
+src/sidedata.rs`) decomposes a display matrix — or a `-display_rotation`/
+`-display_hflip`/`-display_vflip` override — into one of the eight rigid
+transforms a real device or the CLI can express. `vaco-cli::exec::
+resolve_rotate` reads it per output stream from the stream's own *input*
+side data and per-stream options (needed its own `Cli::input_group`
+alongside the existing `output_group`, since these four options are
+`INPUT, PER_STREAM`) and `filtergraph::describe` inserts the matching
+`transpose`/`hflip`/`vflip` text first in the chain, before any user `-vf`.
+`-display_rotation`/`-display_hflip`/`-display_vflip`/`-autorotate` are out
+of `refuse_unimplemented_options`.
+
+Verified pixel-exact against real `ffmpeg 9.0.1`: a real H.264 file with a
+real, `ffprobe`-confirmed display matrix, decoded through `vaco`'s own
+`H264Decoder` and rotated, produces byte-identical Y/U/V planes to
+`ffmpeg`'s own decode of the same file, for all eight dihedral cases plus a
+non-square-SAR input. `-c copy` is unaffected (verified byte-identical,
+untouched — `StreamCodec::Copy` never reaches a decoder or filtergraph at
+all).
+
+This closed a real bug in the fix itself before it shipped: the first
+version of the matrix table had `TransposeClock`/`TransposeCclock` swapped,
+derived by composing `display_rotation`'s clockwise convention with the
+CLI's counter-clockwise one on the assumption they are simple negations of
+each other. A unit test written from the same assumption agreed with
+itself and caught nothing; only the full-pipeline byte comparison against
+real `ffmpeg` disagreed, on every rotated pixel. Fixed by reading the real
+matrix for the plain-rotation cases directly off `ffprobe` instead of
+deriving it algebraically.
+
+**Not closed**: writing the matrix into a *new* output container.
+`vaco-mux-mp4` always writes an identity `tkhd` matrix regardless of the
+source stream's own matrix or `-noautorotate` — pre-existing, not a
+regression from this pass, and not attempted here (a third crate, `vaco-
+mux-mp4`, plus CLI plumbing to carry a resolved matrix from input stream to
+output track). A `-c copy`'d or `-noautorotate`'d rotated file therefore
+still loses its orientation hint on the way through `vaco` today, even
+though it is no longer silently mis-rotated by an auto-applied filter it
+shouldn't have run. Also not verified: odd display dimensions surviving a
+90° turn — `libx264` itself rejects/rounds odd 4:2:0 dimensions before any
+of this workspace's own code runs, and constructing a fixture that gets
+past it was not worth this pass's time; `vaco-filter-video-geometry::
+transpose`, which this work reuses rather than reimplements, claims general
+`PixFmt::plane_layout` correctness for it without a dedicated pixel test
+backing that claim.
+
+### For contrast — two checked, not broken
+
+- **Colour range's per-codec default** (`color_range=pc` for
+  `color_type=2` PNG vs. other defaults elsewhere) is not a version of
+  this bug: it is a real reference behaviour, already measured and
+  recorded (`planning/CONFORMANCE-FINDINGS.md` around the PNG/image2
+  entries), and correctly implemented.
+- **Stereo3D/spherical metadata** is not a "parsed then dropped" case
+  either — it does not exist as a modelled type at *any* layer yet
+  (`vaco-format-core::sidedata`'s own module doc already says so:
+  "Only the display matrix has a producer today, so only the display
+  matrix is modelled"), and `vaco-filter-mm`'s `sidedata` filter's
+  `mapped_kind` table already limits itself to the four kinds that do
+  have a real type, for the same reason. Nothing to fix here; the gap
+  is `vaco-format-core`'s own honestly-scoped `StreamSideData` enum,
+  already tracked by its module doc, not a new finding.
+- **Per-stream dispositions** are a real, closed loop: `vaco-cli::select`'s
+  `DEFAULT_DISPOSITION_BONUS` (5,000,000, matching the measured constant
+  D17 already recorded elsewhere in this file) is a live constant read by
+  stream auto-selection, not a stub.
+- **MPEG-2 pulldown** (`FrameSideData::Pulldown`/`Frame::repeat_pict`) is
+  gap 14's own addendum, not new: parsed and attached
+  (`vaco-codec-mpeg12`, confirmed still the only producer), and
+  `vaco-filter-deinterlace::repeatfields` is still the documented,
+  self-aware no-op that entry already describes — re-confirmed today,
+  not re-discovered.
