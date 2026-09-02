@@ -2105,8 +2105,7 @@ mod tests {
     }
 
     /// `vaco-cli`'s scheduler drives a raw `dyn Muxer` and has no way to
-    /// guarantee `set_metadata` runs after `add_stream` (see
-    /// `planning/INTERFACE-GAPS.md` gap 2's sibling note on `MuxWork`) — so
+    /// guarantee `set_metadata` runs after `add_stream` — so
     /// this crate must not depend on that order. Same assertions as
     /// [`set_metadata_round_trips_through_the_demuxer`], with `set_metadata`
     /// moved before `add_stream`.

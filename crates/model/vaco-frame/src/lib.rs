@@ -88,8 +88,8 @@ pub enum FrameData {
         /// One entry for planar formats, exactly one for interleaved.
         planes: SmallVec<[Plane; 8]>,
     },
-    /// A subtitle event: zero or more positioned regions (interface gap 17,
-    /// `planning/INTERFACE-GAPS.md`). See [`subtitle`] for the shape and why
+    /// A subtitle event: zero or more positioned regions. See
+    /// [`subtitle`] for the shape and why
     /// the display-time window is not a field here (it is `Frame::pts`/
     /// `Frame::duration`, which every variant already carries) and why this
     /// enum stays closed rather than gaining `#[non_exhaustive]` alongside
@@ -156,8 +156,7 @@ pub enum FrameSideData {
     /// the variant's absence first.
     Metadata(FrameMetadata),
     /// Human-readable lines a filter wants printed at info log level, one
-    /// entry per line (interface gap 11's companion, gap 13,
-    /// `planning/INTERFACE-GAPS.md`).
+    /// entry per line.
     ///
     /// `showinfo`'s whole output is a console log line, not a metadata
     /// write — measured (`ffprobe -show_frames` through it, `ffmpeg 8.1`) to
@@ -168,9 +167,8 @@ pub enum FrameSideData {
     /// a separate, narrower channel: no keys, no structure, just the lines
     /// a filter would otherwise have written straight to the log.
     Log(Vec<String>),
-    /// Per-block motion vectors a decoder attached to this frame (interface
-    /// gap 14, `planning/INTERFACE-GAPS.md`), for `codecview`'s `mv`/
-    /// `mv_type` visualisation.
+    /// Per-block motion vectors a decoder attached to this frame, for
+    /// `codecview`'s `mv`/`mv_type` visualisation.
     ///
     /// No decoder in this workspace populates this yet (D5: motion vectors
     /// are decoder-internal state no codec crate currently surfaces), so
@@ -184,8 +182,7 @@ pub enum FrameSideData {
     /// `repeat_first_field`/`top_field_first` combination (H.262 §6.3.10),
     /// the `AVFrame::repeat_pict` concept `ffmpeg`'s own `repeatfields`
     /// filter reads (`vaco-filter-deinterlace`'s own `repeatfields.rs`
-    /// documents needing exactly this, independently of any decoder —
-    /// interface gap 29, `planning/INTERFACE-GAPS.md`).
+    /// documents needing exactly this, independently of any decoder).
     ///
     /// Always in units of one field period, always one of `0` (no repeat,
     /// the overwhelmingly common case — this variant is normally absent

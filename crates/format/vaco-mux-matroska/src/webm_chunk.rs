@@ -127,8 +127,8 @@ impl Muxer for WebmChunkMuxer {
     /// override this today (it inherits [`Muxer::add_stream_with`]'s own
     /// default), but a wrapper that skipped it would silently keep doing so
     /// forever even after `MatroskaMuxer` gained an opinion, which is
-    /// exactly gap 9's "tee... a segmenter" trap one layer down from where
-    /// it is usually found (`planning/INTERFACE-GAPS.md`).
+    /// exactly the "tee... a segmenter" trap one layer down from where
+    /// it is usually found.
     fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
         self.inner.add_stream_with(params, spec)
     }

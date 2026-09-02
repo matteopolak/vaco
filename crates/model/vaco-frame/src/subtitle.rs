@@ -1,5 +1,5 @@
 //! [`SubtitleRect`]/[`SubtitleContent`]: the shape `FrameData::Subtitle`
-//! carries (interface gap 17, `planning/INTERFACE-GAPS.md`).
+//! carries.
 //!
 //! # Why a rect list
 //!
