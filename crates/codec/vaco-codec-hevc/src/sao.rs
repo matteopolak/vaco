@@ -47,7 +47,7 @@
 //! needed on top.
 
 use vaco_codec_cabac::CabacDecoder;
-use vaco_core::Result;
+use vaco_core::{Error, Result};
 use vaco_limits::Budget;
 
 use crate::cabac_ctx::ContextBank;
@@ -84,6 +84,157 @@ pub(crate) struct CtuSao {
     pub y: SaoMode,
     pub cb: SaoMode,
     pub cr: SaoMode,
+}
+
+/// `sao_params`'s own row-banded storage — PERF-PROGRAMME.md item B4,
+/// Stage 1 step 3's third and last piece, after `EdgeMarks` and `CuGrid`
+/// (see `framebuf.rs`'s own "Stage 1" section doc for the shared reasoning:
+/// every read here targets either the same CTU row currently being decoded
+/// or an earlier, already-finished one, so a coarse once-per-row freeze is
+/// enough, same as those two).
+///
+/// Simpler than either: `sao_params` is naturally CTU-granularity, not
+/// 4x4-block granularity, so one row band *is* one CTU row outright —
+/// there is no block-within-a-band remainder to track, hence no
+/// `band_of`/`local_of` pair here the way `EdgeMarks`/`CuGrid` both need.
+/// `current`/`published` are `Option<Vec<CtuSao>>`/`Vec<Vec<CtuSao>>`
+/// rather than a bespoke band type, since one CTU row's own data already
+/// *is* a flat `Vec<CtuSao>` with no other fields to bundle alongside it.
+/// `current` is `Option`, not a plain value, for the same reason
+/// `CuGrid::current` is: `CtuSao` is `Budget`-tracked (`Ctx::new`'s own
+/// `budget.alloc` used to charge the whole grid up front; `begin_row` now
+/// charges one row at a time instead), so `finish` must not need to
+/// allocate a throwaway replacement it would have to charge against a
+/// `Budget` right as the whole grid is about to be released.
+#[derive(Debug, Clone)]
+pub(crate) struct SaoParamsGrid {
+    ctbs_x: usize,
+    /// Total row bands (CTU rows) in the picture.
+    n_bands: usize,
+    /// The CTU row [`SaoParamsGrid::set`] currently writes into; every
+    /// earlier row already lives in `published`.
+    current_band: usize,
+    current: Option<Vec<CtuSao>>,
+    /// Every CTU row strictly before `current_band`, frozen the moment
+    /// [`SaoParamsGrid::begin_row`]/[`SaoParamsGrid::finish`] moved past
+    /// it — the read side ([`SaoParamsGrid::get`]) for any row not in
+    /// `current`.
+    published: Vec<Vec<CtuSao>>,
+}
+
+impl SaoParamsGrid {
+    /// # Errors
+    /// [`vaco_core::Error`] if the first row's allocation exceeds `budget`.
+    pub(crate) fn new(budget: &mut Budget, ctbs_x: u32, ctbs_y: u32) -> Result<Self> {
+        let ctbs_x = usize::try_from(ctbs_x).unwrap_or(0).max(1);
+        let n_bands = usize::try_from(ctbs_y).unwrap_or(0).max(1);
+        let current: Vec<CtuSao> = budget.alloc(ctbs_x)?;
+        Ok(Self { ctbs_x, n_bands, current_band: 0, current: Some(current), published: Vec::new() })
+    }
+
+    /// Total addressable CTUs (`ctbs_x * ctbs_y`) — every raster address
+    /// [`SaoParamsGrid::get`]/[`SaoParamsGrid::set`] can name, matching
+    /// what [`Ctx::new`]'s own `total_ctbs` used to size the flat
+    /// `Vec<CtuSao>` this replaces.
+    #[must_use]
+    pub(crate) fn len(&self) -> usize {
+        self.ctbs_x.saturating_mul(self.n_bands)
+    }
+
+    /// Advance to CTU row `row`: freeze `current` into `published` and
+    /// allocate a fresh one, once, for the new row — the same-shaped
+    /// counterpart of [`crate::framebuf::EdgeMarks::begin_row`]/
+    /// [`crate::framebuf::CuGrid::begin_row`], called from the same call
+    /// sites right alongside them. Idempotent for a `row` already current,
+    /// including once, harmlessly, for row `0`.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`] if `row` goes backward, or the new row's
+    /// allocation exceeds `budget`.
+    pub(crate) fn begin_row(&mut self, budget: &mut Budget, row: usize) -> Result<()> {
+        if row < self.current_band {
+            return Err(Error::InvalidData("vaco-codec-hevc: sao params rows must advance in order"));
+        }
+        while self.published.len() < row {
+            if let Some(band) = self.current.take() {
+                self.published.push(band);
+            }
+            self.current = Some(budget.alloc(self.ctbs_x)?);
+        }
+        self.current_band = row;
+        Ok(())
+    }
+
+    /// Freeze the last CTU row once the whole CTU walk is done, and
+    /// advance `current_band` one past the last real row — see
+    /// `framebuf.rs`'s own "Stage 1" section doc for why every type built
+    /// this way needs exactly this move. Called once, right alongside
+    /// [`crate::framebuf::EdgeMarks::finish`]/
+    /// [`crate::framebuf::CuGrid::finish`], before [`filter_picture`] ever
+    /// reads this grid.
+    pub(crate) fn finish(&mut self) {
+        while self.published.len() < self.n_bands {
+            let Some(band) = self.current.take() else { break };
+            self.published.push(band);
+        }
+        self.current_band = self.n_bands;
+    }
+
+    /// The CTU at raster address `addr`'s already-resolved SAO parameters,
+    /// or [`CtuSao::default`] (every mode `Off`) if `addr` is out of range
+    /// or not yet decoded — the same fallback
+    /// [`prev.get(i).copied().unwrap_or_default()`](Self::get) calls used
+    /// to spell out at each of its two call sites before this existed.
+    #[must_use]
+    /// `addr`'s own (row, col) — the CTU row it lives in, and its column
+    /// within that row.
+    #[allow(clippy::integer_division, reason = "row/col = raster address / the fixed CTU row width, its own remainder")]
+    fn row_col(&self, addr: usize) -> (usize, usize) {
+        let ctbs_x = self.ctbs_x.max(1);
+        (addr / ctbs_x, addr % ctbs_x)
+    }
+
+    #[must_use]
+    pub(crate) fn get(&self, addr: u32) -> CtuSao {
+        let Ok(addr) = usize::try_from(addr) else { return CtuSao::default() };
+        let (row, col) = self.row_col(addr);
+        let band = match row.cmp(&self.current_band) {
+            std::cmp::Ordering::Equal => self.current.as_ref(),
+            std::cmp::Ordering::Less => self.published.get(row),
+            std::cmp::Ordering::Greater => None,
+        };
+        band.and_then(|b| b.get(col)).copied().unwrap_or_default()
+    }
+
+    /// Record CTU `addr`'s resolved SAO parameters — called once per CTU,
+    /// from [`decode_ctu`](crate::ctu::decode_ctu), right after
+    /// [`parse_ctu_sao`] resolves them. A write targeting any row but the
+    /// one currently open is a caller error this degrades from silently
+    /// (every real call targets the CTU just decoded, always in
+    /// `current`'s own row).
+    pub(crate) fn set(&mut self, addr: u32, value: &CtuSao) {
+        let Ok(addr) = usize::try_from(addr) else { return };
+        let (row, col) = self.row_col(addr);
+        if row != self.current_band {
+            return;
+        }
+        if let Some(slot) = self.current.as_mut().and_then(|b| b.get_mut(col)) {
+            *slot = *value;
+        }
+    }
+
+    /// The total bytes [`Budget::alloc`] charged across every CTU row's own
+    /// array — summed the same way [`crate::framebuf::CuGrid::budget_bytes`]
+    /// sums its own bands, for the same reason: self-consistent with
+    /// whatever [`SaoParamsGrid::new`]/[`SaoParamsGrid::begin_row`] have
+    /// actually charged so far, at any point in this grid's lifetime.
+    #[must_use]
+    pub(crate) fn budget_bytes(&self) -> u64 {
+        let size = u64::try_from(std::mem::size_of::<CtuSao>()).unwrap_or(u64::MAX);
+        let band_bytes = |b: &Vec<CtuSao>| u64::try_from(b.len()).unwrap_or(u64::MAX).saturating_mul(size);
+        let published: u64 = self.published.iter().map(band_bytes).fold(0u64, u64::saturating_add);
+        published.saturating_add(self.current.as_ref().map_or(0, band_bytes))
+    }
 }
 
 /// `sgn`, HM `TComRom.h` — used identically for every edge-offset sign
@@ -167,7 +318,7 @@ pub(crate) fn parse_ctu_sao(
     ctbs_x: u32,
     sao_luma: bool,
     sao_chroma: bool,
-    prev: &[CtuSao],
+    prev: &SaoParamsGrid,
 ) -> Result<CtuSao> {
     let ctu_x = addr.checked_rem(ctbs_x).unwrap_or(0);
     let ctu_y = addr.checked_div(ctbs_x).unwrap_or(0);
@@ -177,7 +328,7 @@ pub(crate) fn parse_ctu_sao(
 
     if left_merge || above_merge {
         let src_addr = if left_merge { addr.saturating_sub(1) } else { addr.saturating_sub(ctbs_x) };
-        let src = usize::try_from(src_addr).ok().and_then(|i| prev.get(i)).copied().unwrap_or_default();
+        let src = prev.get(src_addr);
         // A merge still forces a channel's mode to `Off` when this slice
         // has that channel's SAO disabled entirely (`sliceEnabled[compIdx]`
         // in HM) — a slice can turn SAO off for chroma while keeping it on
@@ -372,8 +523,9 @@ fn offset_block(
 }
 
 /// Run SAO over the whole (already deblocked) picture, one CTU at a time in
-/// raster order, using `s.sao_params[addr]` — the same array
-/// [`parse_ctu_sao`] filled in during entropy decode.
+/// raster order, using `s.sao_params.get(addr)` — the same [`SaoParamsGrid`]
+/// [`parse_ctu_sao`] filled in during entropy decode, by now fully
+/// published (`decoder.rs` calls [`SaoParamsGrid::finish`] before this).
 ///
 /// # Errors
 /// [`vaco_core::Error`] if the read-only snapshot copies exceed `budget`.
@@ -388,8 +540,9 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
     let snap_cb = Snapshot::capture(budget, &s.pic.cb)?;
     let snap_cr = Snapshot::capture(budget, &s.pic.cr)?;
 
-    for (addr, params) in s.sao_params.iter().enumerate() {
+    for addr in 0..s.sao_params.len() {
         let addr = u32::try_from(addr).unwrap_or(0);
+        let params = s.sao_params.get(addr);
         let col = addr.checked_rem(ctbs_x).unwrap_or(0);
         let row = addr.checked_div(ctbs_x).unwrap_or(0);
         let x0 = i32::try_from(col).unwrap_or(0) * ctb_size;

@@ -3019,3 +3019,102 @@ touched. `dpb.rs` and this crate's own `Cargo.toml` were not touched
 either, despite both showing as locally modified throughout this
 section's work -- a second agent's own in-flight, unrelated
 color-metadata change, left alone per the standing rule.
+
+## 38. HEVC B4 -- Stage 1 step 3 complete: `sao_params` row-banded, closing out the step
+
+§36 and §37 landed `EdgeMarks` and `CuGrid`. This section is the third
+and last piece of Stage 1 step 3: `sao_params`. With this, every
+structure the CTU walk writes during decode (`Plane`/`ReconPlane`,
+`EdgeMarks`, `CuGrid`, `sao_params`) has the row-banded current/
+published split Stage 2 will need.
+
+**Shape**: simpler than either prior piece. `sao_params` is naturally
+CTU-granularity, not 4x4-block granularity, so one row band *is* one
+CTU row outright -- no block-within-a-band remainder to track, hence
+no `band_of`/`local_of` pair the way `EdgeMarks`/`CuGrid` both need.
+`SaoParamsGrid` (new, in `sao.rs` alongside `CtuSao`/`SaoMode`, its
+only real consumers) is `{ ctbs_x, n_bands, current_band, current:
+Option<Vec<CtuSao>>, published: Vec<Vec<CtuSao>> }` -- `current`/each
+`published` entry is a flat `Vec<CtuSao>` with no other fields to
+bundle, so no bespoke band type either. `current` is `Option`, for the
+same reason `CuGrid::current` is: `CtuSao` is `Budget`-tracked
+(`Ctx::new`'s own `budget.alloc(total_ctbs)` used to charge the whole
+grid up front; `begin_row` now charges one row at a time), so `finish`
+must not need to allocate a throwaway replacement charged against a
+`Budget` right as the grid is about to be released. `begin_row`/
+`finish` mirror `CuGrid`'s own exactly, including advancing
+`current_band` one past the last real row on `finish` (the same
+subtlety §36 named as inherent to the whole pattern, not incidental to
+any one type).
+
+`parse_ctu_sao`'s signature changed from `prev: &[CtuSao]` to
+`prev: &SaoParamsGrid`, its internal `prev.get(i).copied().
+unwrap_or_default()` replaced by `prev.get(src_addr)` (the new type's
+own `get` already returns that same default-on-miss). Both of its
+merge lookups (`addr - 1` for a left merge, always the same row as
+the CTU being decoded; `addr - ctbs_x` for an above merge, always the
+immediately preceding, by-then-finished row) are exactly the
+same-row/earlier-row split `EdgeMarks`/`CuGrid` already established as
+sufficient here -- SAO merge never reaches further than one row back
+in either direction. `filter_picture`'s post-walk whole-picture read
+loop (`s.sao_params.iter().enumerate()`) became `for addr in
+0..s.sao_params.len() { let params = s.sao_params.get(addr); ... }`;
+`ctu.rs`'s write call site (`s.sao_params.get_mut(i)`) became
+`s.sao_params.set(addr, &params)`. `Ctx::working_budget_bytes` now
+calls `self.sao_params.budget_bytes()` (summed across every row band,
+the same self-consistency `CuGrid::budget_bytes` already has) instead
+of recomputing `len() * size_of::<CtuSao>()` against the old flat
+`Vec`'s own length.
+
+One clippy finding worth naming: `CtuSao` is large enough (`SaoMode`'s
+`Eo` variant carries `[i32; 5]`, times three components) that
+`clippy::large_types_passed_by_value` flagged `SaoParamsGrid::set`
+taking it by value -- changed to `&CtuSao`, with the one call site
+(`ctu.rs`) passing `&params` instead of `params`.
+
+**Byte-exact**: the same fixture set as §37 -- the 300x500 `libx265`
+I/P/B fixture (mandelbrot content, SAO genuinely enabled by default in
+that encode, unlike `tests/oracle.rs`'s own `qp32_64x64.hevc`, which
+was deliberately encoded with `no-sao=1` and so never exercises this
+code at all) plus `deblock_lag_256x320.hevc`, `qp32_64x64.hevc` and
+`flat_gray_64x64.hevc`. A private-worktree baseline (`origin/main`,
+before this commit) against the working tree, both release builds --
+all 69 decoded output planes byte-identical, before vs after
+(`diff -rq` reported no differences). This is the first byte-exact
+check of `sao_params`'s row-banding against a stream where SAO merge
+actually fires across a CTU row boundary (the above-merge case,
+`addr - ctbs_x`, is exactly the read this change moved from a flat
+slice index to a row-band dispatch), and it did not regress. This
+time decoder.rs had no interleaved concurrent edit from another agent
+(the color-metadata work §37 worked around landed as its own commit,
+`a87f089`, before this section started), so no reconstruction was
+needed -- the shared tree's own files were exactly this change,
+verified directly. `tests/oracle.rs`/`tests/flat.rs` and the full
+63-test unit suite all still pass.
+
+**Serial cost**: six interleaved before/after rounds (release,
+CPU-seconds) decoding the 300x500 fixture 100 times per round: ratios
+1.039, 0.983, 0.959, 1.045, 0.980, 0.938 -- mean 0.991x, median
+0.982x. No regression -- if anything, noise in the other direction --
+comfortably inside D20's <=1.03x gate.
+
+`cargo check`/`clippy -p vaco-codec-hevc --lib --tests -- -D warnings`
+clean.
+
+**Stage 1 step 3 is now complete**: `EdgeMarks` (§36), `CuGrid` (§37)
+and `sao_params` (this section) all carry the row-banded current/
+published split. Per the plan's own step 4, this clears the byte-exact
+and <=1.03x gate for step 3's scope specifically (the same fixture set
+each of the three pieces was checked against, not yet the full
+1/2/4/8/16-thread matrix Stage 2 needs). What is left before this
+item is done: the row-banded-to-column-tiled move Stage 2's real
+per-CTU-column wavefront overlap needs (row-banding was sufficient for
+every piece of Stage 1, including this one, precisely because nothing
+in Stage 1 runs more than one thread yet), Stage 2's actual thread
+dispatch, the new `hevc_decode_threaded` fuzz target, and the full
+byte-exact-at-every-thread-count verification matrix named in the
+item's own brief.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the
+filter crates, `vaco-conformance` and the fuzz harnesses were not
+touched.

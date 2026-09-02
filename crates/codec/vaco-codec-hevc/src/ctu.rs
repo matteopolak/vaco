@@ -28,7 +28,7 @@ use crate::intra_mode::{self, DC_IDX, DM_CHROMA_IDX};
 use crate::intra_pred;
 use crate::motion::{self, Mv, MotionInfo, PartMode, PuRect, RefList, UniMotion};
 use crate::residual::{self, Coeffs};
-use crate::sao::{self, CtuSao};
+use crate::sao;
 use crate::transform;
 use crate::weight::RefWeights;
 
@@ -114,7 +114,9 @@ pub(crate) struct Ctx<'p> {
     /// address — filled in by [`decode_ctu`] as each CTU's `sao()` is
     /// parsed, read back by a merge at a later address and by
     /// [`crate::sao::filter_picture`] once the whole picture is decoded.
-    pub sao_params: Vec<CtuSao>,
+    /// Row-banded (PERF-PROGRAMME.md item B4, Stage 1 step 3's third
+    /// piece) — see [`crate::sao::SaoParamsGrid`]'s own doc.
+    pub sao_params: crate::sao::SaoParamsGrid,
     /// Whether this slice has any inter path at all (P or B) — every
     /// inter-only field below is `Some` exactly when this is `true`. The
     /// name predates B-slice support; [`InterSliceParams::is_b`] is what
@@ -286,8 +288,7 @@ impl<'p> Ctx<'p> {
         let ctb_size = 1u32 << log2_ctb_size;
         let ctbs_x = u32::try_from(width).unwrap_or(0).div_ceil(ctb_size).max(1);
         let ctbs_y = u32::try_from(height).unwrap_or(0).div_ceil(ctb_size).max(1);
-        let total_ctbs = usize::try_from(ctbs_x.saturating_mul(ctbs_y)).unwrap_or(0);
-        let sao_params: Vec<CtuSao> = budget.alloc(total_ctbs)?;
+        let sao_params = crate::sao::SaoParamsGrid::new(budget, ctbs_x, ctbs_y)?;
         Ok(Self {
             pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
             pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
@@ -396,22 +397,22 @@ impl<'p> Ctx<'p> {
 
     /// The total bytes [`Budget::alloc`] charged for this `Ctx`'s own two
     /// `Budget`-tracked working buffers — [`CuGrid::budget_bytes`] plus
-    /// `sao_params` (`total_ctbs * size_of::<CtuSao>()`, exactly what
-    /// [`Ctx::new`]'s own `budget.alloc(total_ctbs)` charged for it). Neither
-    /// outlives one slice's own `decode_ctu_slice` call — `decoder.rs`'s own
-    /// call site releases this right before dropping the `Ctx` that owns
-    /// them, the other half of the leak [`CuGrid::budget_bytes`]'s own doc
-    /// describes: `sao_params` is smaller than `cu_grid` per slice, but is
-    /// charged on every slice that has any SAO syntax to parse at all
-    /// (`slice_sao_luma_flag || slice_sao_chroma_flag`), not only ones that
-    /// end up applying a non-`Off` mode anywhere, so it leaked on exactly the
-    /// same stock-`libx265` fixtures `cu_grid`'s own charge did.
+    /// [`crate::sao::SaoParamsGrid::budget_bytes`] (exactly what
+    /// [`Ctx::new`]'s own [`crate::sao::SaoParamsGrid::new`] plus every
+    /// [`crate::sao::SaoParamsGrid::begin_row`] call charged for it, summed
+    /// across every row band the same way [`CuGrid::budget_bytes`] sums
+    /// its own). Neither outlives one slice's own `decode_ctu_slice` call
+    /// — `decoder.rs`'s own call site releases this right before dropping
+    /// the `Ctx` that owns them, the other half of the leak
+    /// [`CuGrid::budget_bytes`]'s own doc describes: `sao_params` is
+    /// smaller than `cu_grid` per slice, but is charged on every slice
+    /// that has any SAO syntax to parse at all (`slice_sao_luma_flag ||
+    /// slice_sao_chroma_flag`), not only ones that end up applying a
+    /// non-`Off` mode anywhere, so it leaked on exactly the same
+    /// stock-`libx265` fixtures `cu_grid`'s own charge did.
     #[must_use]
     pub(crate) fn working_budget_bytes(&self) -> u64 {
-        let sao_params_bytes = u64::try_from(self.sao_params.len())
-            .unwrap_or(u64::MAX)
-            .saturating_mul(u64::try_from(std::mem::size_of::<CtuSao>()).unwrap_or(u64::MAX));
-        self.cu_grid.budget_bytes().saturating_add(sao_params_bytes)
+        self.cu_grid.budget_bytes().saturating_add(self.sao_params.budget_bytes())
     }
 }
 
@@ -525,9 +526,7 @@ fn maybe_parse_cu_qp_delta(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, 
 pub(crate) fn decode_ctu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, addr: u32) -> Result<()> {
     if s.sao_luma || s.sao_chroma {
         let params = sao::parse_ctu_sao(cabac, ctx, addr, s.ctbs_x, s.sao_luma, s.sao_chroma, &s.sao_params)?;
-        if let Some(slot) = usize::try_from(addr).ok().and_then(|i| s.sao_params.get_mut(i)) {
-            *slot = params;
-        }
+        s.sao_params.set(addr, &params);
     }
     coding_quadtree(cabac, ctx, s, x0, y0, s.log2_ctb_size, 0)
 }
