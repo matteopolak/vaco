@@ -76,6 +76,25 @@ pub struct InputSpec {
     /// it, to [`vaco_format_core::Demuxer::reconfigure`] via
     /// [`vaco_format_core::Discovery::run`].
     pub format_opts: FormatOptions,
+    /// `-ss` on this input: seek this far into the file before demuxing
+    /// anything. See [`crate::seek_trim`].
+    pub seek: Option<vaco_core::Duration>,
+    /// `-t`/`-to` on this input, already resolved to one bound: [`EndBound`]
+    /// tells [`crate::seek_trim`] whether it is relative to `seek` (`-t`) or
+    /// absolute from the file's own start (`-to`). The reference gives `-t`
+    /// priority when both are given on the same group.
+    pub end: Option<EndBound>,
+}
+
+/// What `-t`/`-to` resolved to for one input group.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EndBound {
+    /// `-t duration`: stop `duration` after `-ss` (or the file start, with
+    /// no `-ss`).
+    AfterSeek(vaco_core::Duration),
+    /// `-to position`: stop at `position`, measured from the file's own
+    /// start regardless of `-ss`.
+    Absolute(vaco_core::Duration),
 }
 
 /// One output group, bound.
@@ -290,13 +309,19 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
     };
 
     for g in line.of_kind(GroupKind::Input) {
+        let url = url_of(g)?;
+        let seek = duration_of(g, "ss")?;
+        let end = end_bound_of(g)?;
+        validate_bounds(g.index, seek, end, &url)?;
         cli.inputs.push(InputSpec {
             index: g.index,
-            url: url_of(g)?,
+            url,
             format: last_value(g, "f")?,
             whitelist: last_value(g, "protocol_whitelist")?.map(|v| split_list(&v)),
             blacklist: last_value(g, "protocol_blacklist")?.map(|v| split_list(&v)),
             format_opts: format_options_of(g)?,
+            seek,
+            end,
         });
     }
 
@@ -428,6 +453,22 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
         // Missed in the seventh batch: same diagnostics/compat-only
         // reasoning as the rest of group 2.
         "cpuflags",
+        // Eighth batch: a second independent measurement (an
+        // `xtask option-consumption-check`, hand-verified in a clean
+        // worktree) found these still silently accepted after the audit
+        // above -- the checker itself had a bug (reading vaco-cli's own
+        // refusal list for vaco-probe too, missing vaco-probe's separate
+        // `UNIMPLEMENTED`), but these are real, confirmed by byte-identical
+        // output with and without them. `-vsync` in particular is not
+        // ffmpeg's own documented no-op the way it looked at first: unlike
+        // `-top`/`-qphist`, it is a *separate* table entry from `-fps_mode`,
+        // not an alias, so `-vsync cfr` does nothing where `-fps_mode cfr`
+        // works -- our own gap wearing ffmpeg's "deprecated" costume, not
+        // the real thing.
+        "cpucount",
+        "max_error_rate",
+        "adrift_threshold",
+        "vsync",
     ];
     const PER_FILE: &[&str] = &[
         "hwaccel",
@@ -504,6 +545,20 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
         // Seventh batch: rest of triage group 2 (per-file half).
         "max_muxing_queue_size",
         "muxing_queue_data_threshold",
+        // Eighth batch (see the GLOBAL half's comment above for why).
+        // `-frames`/its aliases `-aframes`/`-dframes`/`-vframes` and
+        // `-shortest` are the two urgent ones: hand-verified byte-identical
+        // output with and without `-frames:v 2` (2794 bytes, frame=25
+        // either way) and with and without `-shortest` on two
+        // different-length WAV inputs (64568 bytes, time=00:00:03.00
+        // either way) -- both silently produce output of the wrong length,
+        // not a missing convenience.
+        "thread_queue_size",
+        "timestamp",
+        "shortest",
+        "shortest_buf_duration",
+        "frames",
+        "autorotate",
     ];
 
     for &name in GLOBAL {
@@ -544,6 +599,83 @@ fn url_of(g: &OptionGroup) -> Result<String, Diagnostic> {
             )],
         )
     })
+}
+
+/// `-ss`/`-t`/`-to` (CLI-option audit): parse one input group's occurrence of
+/// `name`, under the reference's own duration grammar
+/// ([`vaco_core::parse::duration`], the same parser `-force_key_frames`
+/// already uses).
+///
+/// # Errors
+/// OBSERVED (`ffmpeg -ss notatime -i in.wav -f null -`, exit 234):
+/// ```text
+/// Invalid duration for option ss: notatime
+/// Error parsing options for input file in.wav.
+/// Error opening input files: Invalid argument
+/// ```
+fn duration_of(g: &OptionGroup, name: &str) -> Result<Option<vaco_core::Duration>, Diagnostic> {
+    let Some(raw) = last_value(g, name)? else {
+        return Ok(None);
+    };
+    vaco_core::parse::duration(&raw)
+        .map(Some)
+        .ok_or_else(|| invalid_duration(name, &raw, &g.url.to_string_lossy()))
+}
+
+fn invalid_duration(name: &str, value: &str, url: &str) -> Diagnostic {
+    Diagnostic::new(
+        AvError::EINVAL,
+        vec![
+            format!("Invalid duration for option {name}: {value}"),
+            format!("Error parsing options for input file {url}."),
+            format!("Error opening input files: {}", AvError::EINVAL.text),
+        ],
+    )
+}
+
+/// `-t`/`-to` together: the reference gives `-t` priority when both are on
+/// the same input group. Measured against a 10 s fixture: `-ss 2 -t 3
+/// -to 100 -f null -` reports `time=00:00:03.00` regardless of `-to`'s own
+/// value, and `-ss 2 -to 5` alone reports `time=00:00:03.00` too (`5 - 2`,
+/// confirming `-to` is measured from the file's own start, not from `-ss`).
+fn end_bound_of(g: &OptionGroup) -> Result<Option<EndBound>, Diagnostic> {
+    if let Some(d) = duration_of(g, "t")? {
+        return Ok(Some(EndBound::AfterSeek(d)));
+    }
+    Ok(duration_of(g, "to")?.map(EndBound::Absolute))
+}
+
+/// `-to` is absolute from the file's own start (see [`end_bound_of`]), so a
+/// value at or before `-ss` (default 0 with no `-ss`) names an empty or
+/// backwards range. OBSERVED (`ffmpeg -ss 5 -to 5 -i in.wav -f null -`,
+/// exit 234 -- and the same at `-to` values below `-ss` too, including with
+/// no `-ss` at all and `-to 0`):
+/// ```text
+/// [in#0] -to value smaller than -ss; aborting.
+/// Error opening input file in.wav.
+/// Error opening input files: Invalid argument
+/// ```
+/// `-t` (`EndBound::AfterSeek`) cannot trigger this: it is a duration added
+/// to `-ss`, never a point that can fall before it.
+fn validate_bounds(
+    index: u32,
+    seek: Option<vaco_core::Duration>,
+    end: Option<EndBound>,
+    url: &str,
+) -> Result<(), Diagnostic> {
+    let Some(EndBound::Absolute(to)) = end else {
+        return Ok(());
+    };
+    let start = seek.unwrap_or(vaco_core::Duration(0));
+    if to <= start {
+        return Err(Diagnostic::opening(
+            AvError::EINVAL,
+            vec![format!("[in#{index}] -to value smaller than -ss; aborting.")],
+            "input",
+            url,
+        ));
+    }
+    Ok(())
 }
 
 fn last_value(g: &OptionGroup, name: &str) -> Result<Option<String>, Diagnostic> {
