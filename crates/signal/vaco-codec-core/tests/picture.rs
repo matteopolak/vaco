@@ -10,8 +10,8 @@
     clippy::cast_possible_truncation
 )]
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use vaco_codec_core::picture::{BlockScratch, PictureSpec, PlaneSpec, ProgressPicture};
 use vaco_limits::{Budget, Limits};
@@ -312,5 +312,268 @@ fn a_seven_row_guard_is_one_row_too_few_for_a_nine_row_read() {
     // Rows 24..=32: eight rows above the seam at 32 and one below it.
     let block = view.block(0, 24, 9, 9, &mut scratch).unwrap();
     assert_eq!(block.stride, 9, "with a 7-row guard this read must take the copy path");
+}
+
+// --- Column bands: the 2-D tile grid a wavefront needs -----------------
+
+fn tiled_spec(width: u32, height: u32, band_w: u32, band_h: u32) -> PictureSpec {
+    PictureSpec::new(vec![PlaneSpec::new(width, height).with_bands(band_w, band_h)])
+}
+
+/// Every byte of tile `(row_band, col_band)` is filled with a value derived
+/// from its own tile position, so any read can check it came from the right
+/// tile.
+fn fill_tile(writer: &mut vaco_codec_core::PictureWriter, row_band: usize, col_band: usize) -> u8 {
+    let value = ((row_band * 16 + col_band) & 0xFF) as u8;
+    let mut tile = writer.tile_mut(0, row_band, col_band).unwrap();
+    for r in 0..tile.rows() {
+        tile.row_mut(r).unwrap().fill(value);
+    }
+    value
+}
+
+#[test]
+fn column_bands_publish_independently_of_each_other() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, r) = ProgressPicture::allocate(&tiled_spec(48, 32, 16, 16), 0, &mut budget).unwrap();
+    assert_eq!(w.row_bands(0), 2);
+    assert_eq!(w.col_bands(0), 3);
+
+    assert_eq!(r.ready_cols(0, 0), 0);
+    assert!(r.try_tile(0, 0, 0).is_none());
+
+    let v00 = fill_tile(&mut w, 0, 0);
+    w.publish_tile(0, 0, 0).unwrap();
+    assert_eq!(r.ready_cols(0, 0), 1, "column 0 of row 0 is done");
+    assert_eq!(r.ready_cols(0, 1), 0, "row 1 is untouched");
+    let t00 = r.try_tile(0, 0, 0).unwrap();
+    assert_eq!(t00.data[0], v00);
+    assert!(
+        r.try_tile(0, 0, 1).is_none(),
+        "column 1 of row 0 has not published yet"
+    );
+    // Publishing one column must not move the row-level watermark: that
+    // still means "every column of these rows is done", and column 1 isn't.
+    assert_eq!(r.ready_rows(0), 0);
+
+    let v01 = fill_tile(&mut w, 0, 1);
+    w.publish_tile(0, 0, 1).unwrap();
+    let v02 = fill_tile(&mut w, 0, 2);
+    w.publish_tile(0, 0, 2).unwrap();
+    assert_eq!(r.ready_cols(0, 0), 3, "every column of row 0 is done");
+    assert_eq!(r.ready_rows(0), 16, "row 0 is now fully done across its whole width");
+    assert_eq!(r.try_tile(0, 0, 1).unwrap().data[0], v01);
+    assert_eq!(r.try_tile(0, 0, 2).unwrap().data[0], v02);
+
+    w.finish().unwrap();
+}
+
+#[test]
+fn publish_tile_out_of_order_in_a_row_is_refused() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, _r) = ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
+    fill_tile(&mut w, 0, 1);
+    assert!(
+        w.publish_tile(0, 0, 1).is_err(),
+        "column 1 must not publish before column 0"
+    );
+}
+
+#[test]
+fn a_tile_may_not_be_written_after_publication() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, _r) = ProgressPicture::allocate(&tiled_spec(32, 16, 16, 16), 0, &mut budget).unwrap();
+    fill_tile(&mut w, 0, 0);
+    w.publish_tile(0, 0, 0).unwrap();
+    assert!(w.tile_mut(0, 0, 0).is_err());
+}
+
+#[test]
+fn publish_through_refuses_a_column_banded_plane_and_vice_versa() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut tiled_w, _r) = ProgressPicture::allocate(&tiled_spec(32, 16, 16, 16), 0, &mut budget).unwrap();
+    assert!(tiled_w.publish_through(0, 0).is_err());
+
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut row_w, _r) = ProgressPicture::allocate(&spec(32, 32, 16, 4), 0, &mut budget).unwrap();
+    assert!(row_w.publish_tile(0, 0, 0).is_err());
+}
+
+#[test]
+fn wait_tile_refuses_a_row_banded_plane() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (_w, r) = ProgressPicture::allocate(&spec(32, 32, 16, 4), 0, &mut budget).unwrap();
+    assert!(r.wait_tile(0, 0, 0).is_err());
+}
+
+#[test]
+fn plane_view_block_refuses_a_column_banded_plane() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, r) = ProgressPicture::allocate(&tiled_spec(32, 16, 16, 16), 0, &mut budget).unwrap();
+    fill_tile(&mut w, 0, 0);
+    w.publish_tile(0, 0, 0).unwrap();
+    fill_tile(&mut w, 0, 1);
+    w.publish_tile(0, 0, 1).unwrap();
+    let view = r.finished(0).unwrap();
+    let mut scratch = BlockScratch::new(&mut budget, 16, 16).unwrap();
+    assert!(
+        view.block(0, 0, 8, 8, &mut scratch).is_err(),
+        "a row split across independent tile allocations has no single contiguous slice to hand back"
+    );
+}
+
+#[test]
+fn tile_of_maps_pixel_positions_to_the_tile_that_owns_them() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (w, r) = ProgressPicture::allocate(&tiled_spec(48, 32, 16, 16), 0, &mut budget).unwrap();
+    assert_eq!(w.tile_of(0, 0, 0), Some((0, 0)));
+    assert_eq!(w.tile_of(0, 15, 15), Some((0, 0)));
+    assert_eq!(w.tile_of(0, 16, 15), Some((0, 1)));
+    assert_eq!(w.tile_of(0, 47, 31), Some((1, 2)));
+    assert_eq!(r.tile_of(0, 32, 16), Some((1, 2)));
+}
+
+#[test]
+fn chroma_sized_tiles_use_their_own_geometry_independent_of_luma() {
+    let mut budget = Budget::new(Limits::permissive());
+    let spec = PictureSpec::new(vec![
+        PlaneSpec::new(64, 64).with_bands(32, 32),
+        PlaneSpec::new(32, 32).with_bands(16, 16),
+    ]);
+    let (mut w, r) = ProgressPicture::allocate(&spec, 0, &mut budget).unwrap();
+    assert_eq!((w.row_bands(0), w.col_bands(0)), (2, 2), "luma: 64/32 each way");
+    assert_eq!((w.row_bands(1), w.col_bands(1)), (2, 2), "chroma: 32/16 each way");
+
+    for rb in 0..2 {
+        for cb in 0..2 {
+            let mut t = w.tile_mut(0, rb, cb).unwrap();
+            for row in 0..t.rows() {
+                t.row_mut(row).unwrap().fill(1);
+            }
+            w.publish_tile(0, rb, cb).unwrap();
+
+            let mut t = w.tile_mut(1, rb, cb).unwrap();
+            for row in 0..t.rows() {
+                t.row_mut(row).unwrap().fill(2);
+            }
+            w.publish_tile(1, rb, cb).unwrap();
+        }
+    }
+    let luma = r.wait_tile(0, 1, 1).unwrap();
+    assert_eq!(luma.stride, 32, "luma's own tile width");
+    let chroma = r.wait_tile(1, 1, 1).unwrap();
+    assert_eq!(chroma.stride, 16, "chroma's own, independently-sized tile width");
+}
+
+#[test]
+fn a_reader_blocks_until_the_specific_tile_it_asked_for_publishes() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, r) = ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
+    let reached = Arc::new(AtomicBool::new(false));
+    let reader = {
+        let r = r.clone();
+        let reached = Arc::clone(&reached);
+        std::thread::spawn(move || {
+            let block = r.wait_tile(0, 0, 2).unwrap();
+            reached.store(true, Ordering::Release);
+            block.data[0]
+        })
+    };
+    fill_tile(&mut w, 0, 0);
+    w.publish_tile(0, 0, 0).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert!(
+        !reached.load(Ordering::Acquire),
+        "column 2 has not published yet; the waiter must still be blocked"
+    );
+    fill_tile(&mut w, 0, 1);
+    w.publish_tile(0, 0, 1).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    assert!(
+        !reached.load(Ordering::Acquire),
+        "column 1 publishing must not wake a waiter for column 2"
+    );
+    let v2 = fill_tile(&mut w, 0, 2);
+    w.publish_tile(0, 0, 2).unwrap();
+    assert_eq!(reader.join().unwrap(), v2);
+    assert!(reached.load(Ordering::Acquire));
+}
+
+#[test]
+fn a_dropped_writer_wakes_tile_waiters_with_an_error() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (w, r) = ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
+    let reader = {
+        let r = r.clone();
+        std::thread::spawn(move || r.wait_tile(0, 0, 2).map(|_| ()))
+    };
+    drop(w);
+    assert!(reader.join().unwrap().is_err());
+}
+
+/// The point of column bands, proven directly: row 1's worker publishes its
+/// own first tile *before* row 0 — the tile it actually depends on — has
+/// finished its whole width, the way a full-width row band would force. A
+/// row-banded plane cannot even express this schedule (row 1 would have
+/// nothing to wait on shorter than "all of row 0"); this test is the
+/// difference `PlaneSpec::with_bands` exists to make possible.
+#[test]
+fn a_later_row_starts_before_an_earlier_row_finishes_its_whole_width() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, r) = ProgressPicture::allocate(&tiled_spec(64, 32, 16, 16), 0, &mut budget).unwrap();
+    assert_eq!(w.col_bands(0), 4, "four CTU-shaped columns per row");
+
+    // Publish row 0's tiles one at a time from this thread, and hand row 1's
+    // worker a `PictureRef` to read from as it goes -- exactly the
+    // `wait_tile_for` shape a real wavefront worker uses on its neighbour.
+    let order = Arc::new(Mutex::new(Vec::<&'static str>::new()));
+    let row0_cols_published = Arc::new(AtomicU32::new(0));
+
+    let row1 = {
+        let r = r.clone();
+        let order = Arc::clone(&order);
+        let row0_cols_published = Arc::clone(&row0_cols_published);
+        std::thread::spawn(move || {
+            // Row 1's own tile 0 only needs row 0's tile 0 (directly above);
+            // its tile 1 needs row 0's tile 1 (above-right of tile 0) too --
+            // the two-tile lag this module's doc describes.
+            r.wait_tile_for(1, 0, 0, 0).unwrap();
+            order.lock().unwrap().push("row1 saw row0 col0");
+            assert!(
+                row0_cols_published.load(Ordering::Acquire) < 4,
+                "row 1 must be able to proceed while row 0 still has columns left"
+            );
+
+            let mut w1_tile = Vec::new();
+            for c in 0..4usize {
+                r.wait_tile_for(1, 0, 0, c).unwrap();
+                w1_tile.push(c);
+            }
+            order.lock().unwrap().push("row1 finished reading row0");
+            w1_tile
+        })
+    };
+
+    for c in 0..4usize {
+        fill_tile(&mut w, 0, c);
+        w.publish_tile(0, 0, c).unwrap();
+        row0_cols_published.fetch_add(1, Ordering::Release);
+        if c == 0 {
+            // Give row 1's worker a chance to observe column 0 and proceed
+            // before row 0 publishes anything else -- if it were blocked on
+            // the whole row, it could not have logged its first message yet.
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            assert!(
+                order.lock().unwrap().contains(&"row1 saw row0 col0"),
+                "row 1 should already be past its own first wait by now"
+            );
+        }
+    }
+
+    assert_eq!(row1.join().unwrap(), vec![0, 1, 2, 3]);
+    assert_eq!(
+        order.lock().unwrap().as_slice(),
+        &["row1 saw row0 col0", "row1 finished reading row0"]
+    );
 }
 
