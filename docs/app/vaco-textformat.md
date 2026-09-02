@@ -9,14 +9,30 @@ hard requirement, and every byte of it is decided here.
 
 `csv` is not an eighth writer. It is `compact` with four different defaults.
 
+Two more writers, `mermaid`/`mermaidhtml`, exist for `ffmpeg`'s own
+`-print_graphs_format` (CL-27, `vaco-cli`'s `print_graphs.rs`) rather than for
+`ffprobe`'s acceptance surface — see "The `GRAPH`/`FILTER` sections" and
+`writers::GRAPH_ONLY_NAMES` below for why they are named separately from
+`writers::NAMES`.
+
 ## How it works
 
 ### The section model
 
-`sections.rs` holds all 65 sections of `ffprobe -sections`, transcribed from the
-reference binary. Each row carries a local name (`stream`, `tags`,
-`side_data`), a globally unique name (`program_stream`, `stream_tags`,
-`packet_side_data`), the four `-sections` flags, and its children.
+`sections.rs` holds the 65 sections of `ffprobe -sections`, transcribed from the
+reference binary, plus 12 more (`GRAPHS`/`GRAPH`/`GRAPH_INPUTS`/`GRAPH_INPUT`/
+`GRAPH_OUTPUTS`/`GRAPH_OUTPUT`/`FILTERS`/`FILTER`/`FILTER_INPUTS`/
+`FILTER_INPUT`/`FILTER_OUTPUTS`/`FILTER_OUTPUT`) that are not: `ffprobe` has no
+`-print_graphs` at all, and `ffmpeg` (which does) has no `-sections` to dump.
+Those 12 are transcribed instead from `ffmpeg 9.0.1 -print_graphs
+-print_graphs_format default|json` on a real `-filter_complex` run, observed
+directly (D6) — see the doc comment directly above `GRAPHS` in `sections.rs`
+for the exact invocation and the one field-set reduction it documents (no
+per-link negotiated format fields, since `vaco-filter-graph::BuiltGraph`
+exposes no resolved link format at this layer). Each row carries a local name
+(`stream`, `tags`, `side_data`), a globally unique name (`program_stream`,
+`stream_tags`, `packet_side_data`), the four `-sections` flags, and its
+children.
 
 Everything **renders** by local name; only `-show_entries` uses the unique name.
 A program's stream is `[STREAM]`, `stream|…`, `streams.stream.0.…` and
@@ -176,6 +192,20 @@ Implement `TextWriter`, add it to `writers::make` and `writers::NAMES`, and add
 captures for it. The trait gets `Out` (a byte sink) and `Ctx` (the section
 stack, array indices, unique type, and the run options); everything else is the
 writer's own line state.
+
+**Unless it is an `ffprobe -of` name.** `mermaid`/`mermaidhtml`
+(`writers/mermaid.rs`) go in `writers::make` and a *separate* constant,
+`writers::GRAPH_ONLY_NAMES`, instead of `NAMES`: `NAMES`' own conformance test
+(`tests/torture.rs`'s `the_capture_set_covers_every_writer`) requires a real
+captured `ffprobe` byte reference for every entry, and there is no meaningful
+one for either — measured directly, `ffprobe -of mermaid -show_streams` exits
+0 with no error and no stream output at all, since both formats only do
+anything real behind `ffmpeg`'s `-print_graphs`. `make` still accepts both
+names unconditionally, matching the reference's own "never rejects the format
+name" behaviour; a caller that needs to validate a name against everything
+this crate implements checks `NAMES.contains(..) || GRAPH_ONLY_NAMES.contains(..)`
+(`vaco-cli`'s `print_graphs.rs` does not — see its own doc for why an unknown
+`-print_graphs_format` name is a warning, not a validation error).
 
 ## Configuration
 

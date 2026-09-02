@@ -35,6 +35,10 @@ vaco-time = { path = "../../core/vaco-time" }
 # grammar, which this workspace implements once here rather than per option.
 vaco-expr = { path = "../../core/vaco-expr" }
 vaco-cli-core = { path = "../../app/vaco-cli-core" }
+# CL-27/#230: `-print_graphs*` renders through the same seven writers (plus
+# `mermaid`/`mermaidhtml`) `vaco-probe` already drives via this crate's
+# `SectionId::GRAPH`/`FILTER` family -- see `print_graphs`'s module doc.
+vaco-textformat = { path = "../../app/vaco-textformat" }
 vaco-sched = { path = "../../app/vaco-sched" }
 vaco-registry = { path = "../../registry/vaco-registry" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }

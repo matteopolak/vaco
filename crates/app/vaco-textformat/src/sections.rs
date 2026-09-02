@@ -160,7 +160,7 @@ const N: SectionFlags = SectionFlags::empty();
 sections! {
     ROOT = 0, "root" / "root", W, None, Transparent, [
         CHAPTERS, FORMAT, FRAMES, PROGRAMS, STREAM_GROUPS, STREAMS, PACKETS,
-        ERROR, PROGRAM_VERSION, LIBRARY_VERSIONS, PIXEL_FORMATS,
+        ERROR, PROGRAM_VERSION, LIBRARY_VERSIONS, PIXEL_FORMATS, GRAPHS,
     ];
 
     CHAPTERS = 1, "chapters" / "chapters", A, None, Transparent, [CHAPTER];
@@ -278,6 +278,37 @@ sections! {
     PIXEL_FORMAT_COMPONENTS = 63, "components" / "pixel_format_components", A,
         None, Transparent, [PIXEL_FORMAT_COMPONENT];
     PIXEL_FORMAT_COMPONENT = 64, "component" / "component", N, None, Header, [];
+
+    // `-print_graphs*` (CL-27): not part of `ffprobe -sections` at all (this
+    // is an `ffmpeg`-only option, and `ffmpeg` has no `-sections` dump to
+    // transcribe) -- these rows are transcribed instead from `ffmpeg 9.0.1
+    // -print_graphs -print_graphs_format default|json` on a real
+    // `-filter_complex` run, observed directly. The field set is a subset of
+    // the reference's own: `FILTER_INPUT`/`FILTER_OUTPUT` omit the
+    // per-link negotiated format fields (`format`, `width`, `height`,
+    // `sar`, `sample_rate`, `channel_layout`, ...) the reference prints,
+    // because `vaco-filter-graph::BuiltGraph` does not expose a resolved
+    // link format at this layer -- naming a field here without a real value
+    // behind it would be worse than not having the field, per this crate's
+    // own module doc on `TextFormat::int`/`str`.
+    GRAPHS = 65, "graphs" / "graphs", A, None, Transparent, [GRAPH];
+    GRAPH = 66, "graph" / "graph", N, None, Header,
+        [GRAPH_INPUTS, GRAPH_OUTPUTS, FILTERS];
+    GRAPH_INPUTS = 67, "graph_inputs" / "graph_inputs", A, None, Transparent,
+        [GRAPH_INPUT];
+    GRAPH_INPUT = 68, "graph_input" / "graph_input", N, None, Header, [];
+    GRAPH_OUTPUTS = 69, "graph_outputs" / "graph_outputs", A, None, Transparent,
+        [GRAPH_OUTPUT];
+    GRAPH_OUTPUT = 70, "graph_output" / "graph_output", N, None, Header, [];
+    FILTERS = 71, "filters" / "filters", A, None, Transparent, [FILTER];
+    FILTER = 72, "filter" / "filter", N, None, Header,
+        [FILTER_INPUTS, FILTER_OUTPUTS];
+    FILTER_INPUTS = 73, "filter_inputs" / "filter_inputs", A, None, Transparent,
+        [FILTER_INPUT];
+    FILTER_INPUT = 74, "filter_input" / "filter_input", N, None, Header, [];
+    FILTER_OUTPUTS = 75, "filter_outputs" / "filter_outputs", A, None,
+        Transparent, [FILTER_OUTPUT];
+    FILTER_OUTPUT = 76, "filter_output" / "filter_output", N, None, Header, [];
 }
 
 /// Look a section up by id.

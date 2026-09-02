@@ -79,6 +79,7 @@ pub mod input;
 pub mod listing;
 pub mod nullmux;
 pub mod output;
+pub mod print_graphs;
 pub mod progress;
 pub mod report;
 pub mod select;
@@ -281,6 +282,38 @@ where
         }
         if any_output {
             let _ = writeln!(err, "Press [q] to stop, [?] for help");
+        }
+    }
+
+    // CL-27/#230: `-print_graphs` — the reference dumps its execution graph
+    // before it writes any packet, so this runs here, ahead of
+    // `exec::run_pipeline` below, using its own independent graph build (see
+    // `print_graphs`'s module doc for why the real, attached pipeline graph
+    // is not reused). A malformed `-print_graphs_format` name is diagnosed
+    // even when there is nothing to dump (no `-filter_complex` at all),
+    // matching every other option-value error, which does not wait on there
+    // being work to do.
+    if let Some(spec) = print_graphs::PrintGraphsSpec::resolve(&cli.line)? {
+        match print_graphs::render(&cli.complex_filters, &spec.format)? {
+            print_graphs::RenderOutcome::Graphs(bytes) => match &spec.file {
+                Some(path) => {
+                    std::fs::write(path, &bytes).map_err(|e| {
+                        Diagnostic::new(
+                            AvError::EINVAL,
+                            vec![format!("-print_graphs_file {path}: {e}")],
+                        )
+                    })?;
+                }
+                None => {
+                    let _ = err.write_all(&bytes);
+                }
+            },
+            // Measured: the reference treats this as a warning, not a fatal
+            // error, and never touches `-print_graphs_file`'s path in this
+            // case — see `print_graphs::PrintGraphsSpec::resolve`'s doc.
+            print_graphs::RenderOutcome::UnknownFormat(name) => {
+                let _ = writeln!(err, "Unknown filter graph output format with name '{name}'");
+            }
         }
     }
 

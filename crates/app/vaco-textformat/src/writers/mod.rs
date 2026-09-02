@@ -8,6 +8,7 @@ mod default;
 mod flat;
 mod ini;
 mod json;
+mod mermaid;
 mod xml;
 
 pub use compact::CompactWriter;
@@ -15,6 +16,7 @@ pub use default::DefaultWriter;
 pub use flat::FlatWriter;
 pub use ini::IniWriter;
 pub use json::JsonWriter;
+pub use mermaid::MermaidWriter;
 pub use xml::XmlWriter;
 
 use vaco_core::{Error, Result};
@@ -24,6 +26,16 @@ use crate::opts::WriterSpec;
 
 /// The `-of` names this crate implements, in ffprobe's listing order.
 pub const NAMES: [&str; 7] = ["default", "compact", "csv", "flat", "ini", "json", "xml"];
+
+/// `-print_graphs_format` names beyond [`NAMES`]: real, but not part of
+/// `ffprobe`'s own `-sections`-driven capture surface (`NAMES`' own conformance
+/// test wants a captured reference for every entry, and neither of these two
+/// produces meaningful `-show_streams`-style output on the reference binary --
+/// measured: `ffprobe -of mermaid -show_streams` exits 0 with no error but
+/// also no stream output at all, since `mermaid`/`mermaidhtml` only do
+/// anything real behind `-print_graphs`). `make` accepts both regardless,
+/// matching the reference's own "never rejects the name" behaviour.
+pub const GRAPH_ONLY_NAMES: [&str; 2] = ["mermaid", "mermaidhtml"];
 
 /// Build a writer from an `-of` argument such as `compact=s=,:nk=1`.
 ///
@@ -41,6 +53,8 @@ pub fn make(spec: &str) -> Result<Box<dyn TextWriter>> {
         "ini" => Ok(Box::new(IniWriter::from_options(opts)?)),
         "json" => Ok(Box::new(JsonWriter::from_options(opts)?)),
         "xml" => Ok(Box::new(XmlWriter::from_options(opts)?)),
+        "mermaid" => Ok(Box::new(MermaidWriter::from_options(opts, false)?)),
+        "mermaidhtml" => Ok(Box::new(MermaidWriter::from_options(opts, true)?)),
         other => Err(Error::Option {
             name: "output_format".to_owned(),
             detail: format!("unknown writer {other:?}"),

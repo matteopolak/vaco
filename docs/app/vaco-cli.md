@@ -505,6 +505,41 @@ intra-only, so forcing has no observable effect on any output this build can
 currently produce. See `force_key_frames.rs`'s own module doc for the full
 account.
 
+### CL-27: `-print_graphs`/`-print_graphs_file`/`-print_graphs_format`
+
+`print_graphs.rs` implements the option surface directly: `-print_graphs`
+gates it, `-print_graphs_format` picks the writer (default `"default"`, same
+fallback as the reference), `-print_graphs_file` redirects the output from
+stderr to a path. It runs in `execute` right before `exec::run_pipeline`,
+using its own independent `vaco_filter_graph::parse_and_build` of every
+`-filter_complex`/`-lavfi` text — not the pipeline's own attached graph — and
+drives `vaco-textformat`'s new `SectionId::GRAPHS`/`GRAPH`/`FILTER` section
+family (added for this) through the same seven writers plus the two new
+`mermaid`/`mermaidhtml` ones, so `-print_graphs_format json`/`xml`/`mermaid`/…
+all work from one code path.
+
+Measured against `ffmpeg 9.0.1` (D6; the pinned provenance gate is 8.1, noted
+here per that version gap): the reference's `[GRAPH]`/`[GRAPH_INPUT]`/
+`[GRAPH_OUTPUT]`/`[FILTER]`/`[FILTER_INPUT]`/`[FILTER_OUTPUT]` shape is
+reproduced field-for-field except the per-link *negotiated* format fields
+(`format`/`width`/`height`/`sar`/`sample_rate`/`color_range`/`color_space`),
+which need a configured graph with real attached sources — `print_graphs.rs`'s
+module doc explains why duplicating real attachment purely for this dump was
+not worth the added failure surface, and `vaco-textformat`'s own section table
+omits those fields rather than naming one with nothing behind it. `name`/`id`/
+`filter_id`/`nb_inputs`/`nb_outputs` are real, stable values but not
+byte-identical to the reference's own internal numbering (see that module's
+doc for exactly how each differs). `-vf`/`-af`'s implicit per-stream graphs
+are not dumped, only `-filter_complex`/`-lavfi` occurrences.
+
+One reference behaviour surprised black-box testing and is now matched:
+an unknown `-print_graphs_format` name is **not fatal** in the reference —
+the run completes normally, `-print_graphs_file`'s path is never created, and
+the only sign is `Unknown filter graph output format with name '<name>'` on
+stderr (observed twice per run, an artifact of the reference's own internal
+structure; this prints it once). `print_graphs.rs` matches the non-fatal
+part of that exactly.
+
 ## How to change it
 
 * **Adding an option** starts in `vaco-cli-core`'s table, not here. This crate
@@ -788,7 +823,7 @@ down is a decision and one that is not is a surprise.
 | The ~600-case timestamp differential matrix | CL-24 |
 | `-filter_complex` / `-lavfi` wired to a real run, `-map [label]` works end to end; rules 2/3 and `[dec:N]` still not implemented (see above) — CLOSED | CL-25 |
 | `[dec:N]` loopback decoders | CL-26 |
-| `-print_graphs*` | CL-27 |
+| `-print_graphs*` implemented for `-filter_complex`/`-lavfi` graphs, all nine writers; negotiated per-link format fields and `-vf`/`-af`'s implicit graphs not reproduced (see above) — CLOSED as far as this crate's own scope goes | CL-27 |
 | `-stream_group`, `-reinit_opts`, `-target` | CL-28 |
 | Presets, hardware device options, `-sdp_file` | CL-34a |
 | Timestamp stages I–III and VI (streamcopy) | CL-15 |
