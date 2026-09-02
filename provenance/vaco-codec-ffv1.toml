@@ -82,6 +82,13 @@ title    = "A gray FFV1 stream is colorspace_type 0 with chroma_planes 0 and bot
 acquired = "2026-09-02"
 where    = "Local measurement, not a document: `ffmpeg -f lavfi -i \"testsrc2=size=96x64:rate=25:duration=0.04\" -pix_fmt gray -c:v ffv1 out.mkv` (ffmpeg 9.0.1). Its Configuration Record carries colorspace_type = 0, chroma_planes = 0, log2_h_chroma_subsample = log2_v_chroma_subsample = 0. This crate's format mapping keyed only on (colorspace_type, log2_h, log2_v), so every gray file decoded as Yuv444p -- at exactly the right output size, with two planes of whatever the frame allocator left behind. Fixture: tests/fixtures/gray_*."
 
+[[source]]
+id       = "ffv1-blackbox-prefix-totals"
+kind     = "blackbox"
+title    = "Measured whole-file before/after byte differences for the RGB, gray and custom-table decode fixes, replacing the extrapolated figures in commit 9fcb8bc2's message"
+acquired = "2026-09-02"
+where    = "Local measurement, not a document, and recorded here because commit 9fcb8bc2's message gave whole-file totals that were extrapolated from a single frame rather than measured -- they are wrong and these supersede them. Method: the three pre-fix behaviours (plane-major Line order for colorspace_type 1, the format mapping ignoring chroma_planes, and the private state array plus custom table for state_transition_delta) were each put back behind a temporary FFV1_OLD environment check, `cargo build --release -p vaco-cli` was run, and every stream decoded both ways against ffmpeg 9.0.1's own raw decode of the same file. Sources: `ffmpeg -f lavfi -i \"testsrc2=size=160x120:rate=25:duration=1\" -pix_fmt <fmt> -c:v ffv1 [-coder ...]`, 25 frames. Results, differing bytes out of the reference's total: gbrp -coder rice 1,434,005 / 1,440,000 before and 0 after; gbrp -coder range_def 1,435,693 / 1,440,000 before and 0 after; gray 478,674 / 480,000 before and 0 after; -coder range_tab produced no output at all before (`invalid data: ffv1: decoder has no configuration; call set_extradata first`, 0 of 720,000 bytes written) and 0 differing bytes after. The single-frame figures quoted in ffv1-blackbox-rct-interleave (57,600 / 57,165 / 56,363) were measured directly and stand."
+
 # This crate's other tables (RiceState/RunState initial-value constants, the
 # quantized-gradient sign/scale bookkeeping in quant.rs) are either under the
 # 32-element provenance threshold or this crate's own original bookkeeping
