@@ -38,40 +38,43 @@
 //! tolerance `Vp9Parser::parse` extends to a frame its own header parse
 //! fails on).
 //!
-//! # A different, smaller demand on `Discovery`'s bound than FFV1's
+//! # A demand `Discovery`'s reassembly buffer could not meet — fixed at the
+//! seam, not worked around here
 //!
-//! `vaco-format-core::Discovery`'s `refine` hands a parser's [`Parser::parse`]
-//! call the packet's *whole* payload — not a bounded prefix — after pushing
+//! `vaco-format-core::Discovery`'s `refine` used to hand a parser's
+//! [`Parser::parse`] call the packet's *whole* payload only after pushing
 //! that whole payload through [`vaco_codec_core::ParserDriver`]'s reassembly
-//! buffer (`DEFAULT_MAX_PENDING`, 2 MiB). [`header::parse`] itself only reads
-//! the sample's leading ~18 bytes and ignores the rest, but the *push*
-//! happens before parsing gets a say, so a single `ProRes` sample larger than
-//! 2 MiB is refused by the reassembly buffer before this crate ever sees it.
-//! FFV1's parser made no such demand at all — its record arrives once, out of
-//! band, sized in the tens of bytes, never through this buffer.
+//! buffer (`DEFAULT_MAX_PENDING`, 2 MiB) — a buffer sized for a parser that
+//! may need several calls to see one access unit, not this crate's shape.
+//! [`header::parse`] only ever reads the sample's leading ~18 bytes, but the
+//! *push* happened before parsing got a say, so a single `ProRes` sample
+//! larger than 2 MiB was refused before this crate ever saw it.
 //!
-//! At Apple's published data rates a 2 MiB frame is not exotic for this
-//! codec: 1920×1080 4444 XQ (~500 Mbit/s) averages roughly 2.1 MB per frame
-//! at 24 fps, and every profile at 3840×2160 (4x the pixels) is comfortably
-//! over 2 MiB per frame. A stream whose first several samples all exceed the
-//! cap therefore falls back to exactly today's pre-fix behaviour —
-//! `pix_fmt=none`/`unknown`, not a crash and not a wrong guess — the same
-//! "malformed record told this parser nothing" fallback [`header::parse`]
-//! already returns for a genuinely broken sample. This is not new to `ProRes`:
-//! `vaco-parse-vpx`'s identical "whole input is one already-framed sample"
-//! `Vp9Parser` is exactly as exposed on a large VP9 key frame, undocumented
-//! there before this paragraph named it here.
+//! At Apple's published data rates that cap is not exotic for this codec:
+//! 1920×1080 4444 XQ (~500 Mbit/s) averages roughly 2.1 MB per frame at 24
+//! fps, and every profile at 3840×2160 (4x the pixels) is comfortably over 2
+//! MiB per frame — real 4K or high-profile `ProRes` media, not a crafted
+//! edge case. [`Ffv1Parser`](../vaco_parse_ffv1/struct.Ffv1Parser.html)'s
+//! record made no such demand — it arrives once, out of band, sized in the
+//! tens of bytes, before a single packet does — but `vaco-parse-vpx`'s
+//! `Vp9Parser` has the identical exposure on a large VP9 key frame.
 //!
-//! Raising `DEFAULT_MAX_PENDING` (or giving `Discovery::build_parser` a way
-//! to ask a parser for a bigger one) is a shared, workspace-wide change to
-//! `vaco-codec-core`/`vaco-format-core` that would move the bound for every
-//! parser using this contract at once, on the read path, over
-//! attacker-controlled input — out of scope for adding one parser, and not
-//! done quietly here. Named instead: **a `ProRes` stream needs its reassembly
-//! bound sized to its largest sample, not a fixed 2 MiB, if every profile at
-//! every resolution is to resolve its pixel format during discovery** — the
-//! concrete number for a given deployment is `bit_rate / (8 * frame_rate)`
-//! for the largest profile it expects to see, comfortably over 2 MiB at 4K.
+//! Rather than raise `DEFAULT_MAX_PENDING` — a shared, workspace-wide change
+//! moving the bound for every parser on that contract at once, over
+//! attacker-controlled input, for a limitation that is really this crate's
+//! (and `Vp9Parser`'s) alone — [`Parser::whole_sample_only`] lets a parser
+//! declare the actual shape of its own contract: "one already-framed sample
+//! per call, never assembled from more than one," which `ProRes` (and FFV1,
+//! and VP8/VP9) already is in every container this workspace demuxes it
+//! from. `Discovery` reads that declaration and hands this parser the real,
+//! untruncated sample directly, skipping the buffer that never applied to
+//! it — see [`vaco_codec_core::ParserDriver::push`]'s own doc for the
+//! mechanism and [`Parser::whole_sample_only`]'s for the contract. The bound
+//! that still applies is [`vaco_limits::Budget::check`]
+//! (`Limits::max_alloc_single`/`max_alloc_total`, 512 MiB/1 GiB under the CLI
+//! default) — comfortably past any real single `ProRes` frame, so this now
+//! resolves at every profile and resolution rather than degrading past 2
+//! MiB.
 //!
 //! # Specification
 //!
@@ -164,6 +167,21 @@ impl Parser for ProresParser {
 
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
+    }
+
+    /// `true`: this crate's own module doc already states the contract —
+    /// every container carrying `ProRes` in this workspace delimits one
+    /// coded frame as one packet, and [`header::parse`] only ever reads the
+    /// leading ~18 bytes regardless of the sample's real size. Declaring
+    /// this is what lets a caller (`vaco_format_core::discovery::Discovery`,
+    /// specifically) hand this parser a real, untruncated sample instead of
+    /// refusing it outright once it exceeds `ParserDriver`'s reassembly cap
+    /// — see this crate's module doc for the concrete resolutions and
+    /// profiles where that cap was reachable by ordinary media, and
+    /// `vaco_codec_core::Parser::whole_sample_only`'s own doc for the
+    /// mechanism this licenses.
+    fn whole_sample_only(&self) -> bool {
+        true
     }
 }
 
@@ -276,5 +294,37 @@ mod tests {
     fn parameters_are_none_before_any_sample_is_seen() {
         let p = ProresParser::new(Limits::permissive());
         assert!(p.parameters().is_none());
+    }
+
+    /// `ProresParser::parse` itself, on a sample well past `ParserDriver`'s
+    /// 2 MiB reassembly cap — the exact shape of a real 4K/high-profile
+    /// frame this crate's module doc measures, reproduced synthetically so
+    /// this suite does not need an ~8 MB fixture on disk. [`header::parse`]
+    /// only reads the leading 18 bytes regardless, so a real frame's coded
+    /// picture data is stood in for by zero-filled padding: this crate never
+    /// looks at it, only [`ParserDriver::push`] (see its own module-level
+    /// tests in `vaco-codec-core` for that half) ever refused it outright.
+    #[test]
+    fn an_oversized_sample_still_resolves_from_its_leading_bytes() {
+        let mut sample = vec![0u8; 4];
+        sample.extend_from_slice(b"icpf");
+        let mut header = vec![0u8; 20];
+        header[0..2].copy_from_slice(&20u16.to_be_bytes());
+        header[3] = 1;
+        header[12] = 0b1000_0000; // chroma_format = 2 (4:2:2)
+        sample.extend_from_slice(&header);
+        sample.resize(3 * 1024 * 1024, 0); // past `DEFAULT_MAX_PENDING` (2 MiB)
+
+        let mut p = ProresParser::new(Limits::permissive());
+        let (packet, used) = p.parse(&sample).expect("parse");
+        assert_eq!(used, sample.len());
+        assert!(packet.is_some());
+        let video = p
+            .parameters()
+            .expect("resolved despite the sample's real size")
+            .video
+            .as_ref()
+            .expect("video parameters");
+        assert_eq!(video.format, Some(PixFmt::Yuv422p10le));
     }
 }

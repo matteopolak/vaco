@@ -121,6 +121,13 @@ pub struct ParserDriver<P> {
     eos_delivered: bool,
     consumed: u64,
     units: u64,
+    /// Samples [`Parser::whole_sample_only`] answered `true` for that would
+    /// have overflowed `max_pending` had they gone through the reassembly
+    /// buffer — see [`ParserDriver::push`]'s doc for why they did not have
+    /// to. Not itself a problem: nonzero means this mechanism did its job,
+    /// same as [`ParserDriver::units`] being nonzero means parsing did.
+    /// [`ParserDriver::oversized_whole_samples`] is the accessor.
+    oversized_whole_samples: u64,
 }
 
 impl<P: Parser> ParserDriver<P> {
@@ -138,6 +145,7 @@ impl<P: Parser> ParserDriver<P> {
             eos_delivered: false,
             consumed: 0,
             units: 0,
+            oversized_whole_samples: 0,
         }
     }
 
@@ -148,16 +156,96 @@ impl<P: Parser> ParserDriver<P> {
         self
     }
 
-    /// Add bytes to the reassembly buffer.
+    /// Add bytes to the reassembly buffer — or, for a parser that answers
+    /// [`Parser::whole_sample_only`] with `true`, skip the buffer entirely
+    /// and hand `chunk` to [`Parser::parse`] directly.
+    ///
+    /// # Why a whole-sample parser bypasses the buffer instead of being
+    /// capped by it
+    ///
+    /// `max_pending` exists for a parser that may need several `parse` calls
+    /// to see one whole access unit: it bounds how much of a *hostile*
+    /// stream this driver will hold across calls while waiting for that unit
+    /// to complete. A parser answering `whole_sample_only() == true` never
+    /// waits — every container it is used from already delimits one coded
+    /// frame as one packet, so `chunk` here already *is* the complete sample,
+    /// and copying it into a buffer sized for the other kind of parser would
+    /// only cap how large a single already-complete sample this driver can
+    /// accept, not protect anything.
+    ///
+    /// That cap turned out to be reachable by real, legitimate media, not
+    /// just a hostile one: measured against Apple's own published `ProRes` data
+    /// rates, 1920×1080 4444 XQ averages roughly 2.1 MB/frame at 24 fps, and
+    /// every `ProRes` profile at 3840×2160 exceeds `DEFAULT_MAX_PENDING`
+    /// (2 MiB) — so a real 4K or high-profile `ProRes` stream, or an
+    /// equivalently large VP9 key frame, hit exactly the failure this method
+    /// avoids: `Parser::parameters()` never resolves anything for that
+    /// stream, and nothing says why. `vaco-parse-prores`'s module doc has the
+    /// numbers; this is the general mechanism that makes them not matter,
+    /// for it and for `vaco-parse-vpx` alike.
+    ///
+    /// The bound does not disappear, it moves: `chunk` is still checked
+    /// against this driver's own [`Budget`] before `parse` ever sees it
+    /// (`Budget::check`, `Limits::max_alloc_single`/`max_alloc_total`) —
+    /// [`vaco_limits`] is exactly the mechanism a bound over untrusted input
+    /// should be, whether or not a reassembly buffer is involved. A sample
+    /// large enough to fail *that* check (512 MiB under
+    /// [`Limits::permissive`](crate::Limits::permissive), the CLI default) is
+    /// well past any legitimate single video frame this workspace's own
+    /// numbers describe, and still reports a distinct
+    /// [`Error::LimitExceeded`] rather than nothing.
+    ///
+    /// [`ParserDriver::oversized_whole_samples`] counts how many samples took
+    /// this path specifically because they would not have fit under
+    /// `max_pending` — a nonzero count is this mechanism working, not a
+    /// problem, but it is the fact to check first if a stream's parameters
+    /// still come back empty despite it.
     ///
     /// # Errors
     ///
-    /// [`Error::Eof`] if [`ParserDriver::finish`] has already been called, or
-    /// [`Error::LimitExceeded`] if the buffer would grow past its cap — which
-    /// means the parser is not finding units in what it is being given.
+    /// [`Error::Eof`] if [`ParserDriver::finish`] has already been called;
+    /// [`Error::LimitExceeded`] from [`Budget::check`] if `chunk` itself is
+    /// larger than this driver's budget allows, whether or not
+    /// `whole_sample_only` applies; otherwise, for a parser that does need
+    /// reassembly, [`Error::LimitExceeded`] if the buffer would grow past its
+    /// cap — which means the parser is not finding units in what it is being
+    /// given.
     pub fn push(&mut self, chunk: &[u8]) -> Result<()> {
         if self.eos {
             return Err(Error::Eof);
+        }
+        if self.parser.whole_sample_only() {
+            if chunk.len() > self.max_pending {
+                self.oversized_whole_samples = self.oversized_whole_samples.saturating_add(1);
+            }
+            self.budget.check(chunk.len() as u64)?;
+            // The returned packet is not this call's business: a caller
+            // driving a whole-sample parser through `push`/`next_unit` (as
+            // opposed to calling `Parser::parse` on it directly) only wants
+            // `parameters()` afterwards — `vaco_format_core::discovery`'s
+            // `refine` is exactly that caller, and it discards every unit
+            // `next_unit` would otherwise have handed it too. A prefix this
+            // parser cannot make sense of is not a reason to fail the push;
+            // `Parser::set_extradata`'s doc states the identical rule for the
+            // identical reason.
+            if let Ok((unit, used)) = self.parser.parse(chunk)
+                && used <= chunk.len()
+            {
+                // The same over-consumption invariant `next_unit` enforces
+                // with a hard `Error::InvalidData` — not repeated here as an
+                // error, since nothing downstream of this path indexes by
+                // `used` the way `next_unit`'s cursor arithmetic does, but a
+                // parser that lies about it should not get to inflate this
+                // driver's own bookkeeping either.
+                self.consumed = self.consumed.saturating_add(used as u64);
+                if unit.is_some() {
+                    self.units = self.units.saturating_add(1);
+                }
+            }
+            if !chunk.is_empty() {
+                self.guard.reset();
+            }
+            return Ok(());
         }
         self.compact();
         let would_be = self.buf.len().saturating_sub(self.pos) + chunk.len();
@@ -277,6 +365,16 @@ impl<P: Parser> ParserDriver<P> {
     #[must_use]
     pub const fn units(&self) -> u64 {
         self.units
+    }
+
+    /// Samples handed straight to a whole-sample parser (see
+    /// [`Parser::whole_sample_only`]) because they would have overflowed
+    /// `max_pending` had they gone through the reassembly buffer instead.
+    /// See [`ParserDriver::push`]'s doc for the full reasoning — a nonzero
+    /// count here is that mechanism working, not a fault.
+    #[must_use]
+    pub const fn oversized_whole_samples(&self) -> u64 {
+        self.oversized_whole_samples
     }
 
     /// Bytes buffered but not yet consumed.

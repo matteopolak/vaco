@@ -232,3 +232,92 @@ fn packet_duration_forwards_through_the_box() {
     let d = boxed.packet_duration(&[1]).expect("forwards");
     assert_eq!((d.num, d.den), (960, 48000));
 }
+
+/// The default `Parser::whole_sample_only` is `false`, so an ordinary
+/// oversized chunk is refused exactly as it always was: `ParserDriver` was
+/// not told this parser's contract is "one whole sample, never reassembled",
+/// so it has no licence to bypass its own reassembly cap.
+#[test]
+fn an_oversized_chunk_is_refused_without_the_whole_sample_declaration() {
+    let mut d = ParserDriver::new(MockParser::new(4), Limits::permissive()).with_max_pending(8);
+    let chunk = vec![0u8; 9];
+    assert!(matches!(d.push(&chunk), Err(Error::LimitExceeded { .. })));
+    assert_eq!(d.oversized_whole_samples(), 0);
+}
+
+/// `Parser::whole_sample_only() == true` is exactly the license this
+/// regression exists to check: a chunk larger than `max_pending` is no
+/// longer refused, is handed to the parser directly (not truncated — the
+/// mock reports consuming its whole, real length), and the sample is
+/// counted as having taken this path.
+///
+/// This is the ProRes/VP9 bug in miniature, without needing a real ~8 MB
+/// media file to reproduce it: `vaco-parse-prores` and `vaco-parse-vpx`
+/// each hit precisely this branch on a real 4K/high-profile frame — see
+/// their own module docs for the measured numbers — and this proves the
+/// mechanism they both rely on.
+#[test]
+fn a_whole_sample_parser_bypasses_the_reassembly_cap_when_oversized() {
+    let mut d = ParserDriver::new(MockParser::new(4).whole_sample_only(), Limits::permissive())
+        .with_max_pending(8);
+    let chunk = vec![0u8; 9]; // one byte over `max_pending`.
+    d.push(&chunk)
+        .expect("a whole-sample parser is not capped by max_pending");
+    assert_eq!(d.oversized_whole_samples(), 1);
+    assert_eq!(
+        d.consumed(),
+        9,
+        "the mock reports consuming its real, full length"
+    );
+    // Nothing was buffered — there was nothing to buffer for this contract.
+    assert_eq!(d.pending(), 0);
+}
+
+/// The same declaration costs nothing when the sample was never going to be
+/// oversized in the first place: `oversized_whole_samples` only counts a
+/// chunk that would actually have overflowed `max_pending`, not every push
+/// through a whole-sample parser.
+#[test]
+fn a_whole_sample_parser_under_the_cap_is_not_counted_as_oversized() {
+    let mut d = ParserDriver::new(MockParser::new(4).whole_sample_only(), Limits::permissive())
+        .with_max_pending(64);
+    d.push(&[0u8; 4]).expect("well under max_pending");
+    assert_eq!(d.oversized_whole_samples(), 0);
+    assert_eq!(d.consumed(), 4);
+}
+
+/// The bound that replaces `max_pending` for this contract:
+/// [`vaco_limits::Budget::check`], via [`Limits::max_alloc_single`] — not
+/// removed, moved. A whole-sample parser does not get to see arbitrarily
+/// large input just because `max_pending` no longer applies to it.
+#[test]
+fn a_whole_sample_parser_is_still_bounded_by_the_budget() {
+    let mut d = ParserDriver::new(MockParser::new(4).whole_sample_only(), Limits::strict())
+        .with_max_pending(8);
+    // `Limits::strict()`'s `max_alloc_single` is far smaller than this.
+    let huge = vec![0u8; 64 * 1024 * 1024];
+    assert!(matches!(d.push(&huge), Err(Error::LimitExceeded { .. })));
+}
+
+/// Parameters resolved through the bypass path are exactly as reachable as
+/// through the ordinary reassembly path — the mechanism changes how
+/// `parse` gets called, not what a caller sees afterwards.
+#[test]
+fn parameters_resolve_through_the_bypass_path() {
+    let params = CodecParameters {
+        media_type: Some(MediaType::Video),
+        ..CodecParameters::default()
+    };
+    let mut d = ParserDriver::new(
+        MockParser::new(4)
+            .whole_sample_only()
+            .with_parameters(params),
+        Limits::permissive(),
+    )
+    .with_max_pending(8);
+    d.push(&[0u8; 9]).expect("oversized but whole-sample");
+    assert_eq!(
+        d.parameters().and_then(|p| p.media_type),
+        Some(MediaType::Video)
+    );
+}

@@ -2016,6 +2016,43 @@ pub trait Parser: Send {
         let _ = packet;
         None
     }
+
+    /// Whether this parser's [`Parser::parse`] contract is "one already-framed
+    /// sample per call, the whole input read or none of it, never assembled
+    /// from more than one call" — the contract `vaco-parse-ffv1`,
+    /// `vaco-parse-vpx`'s `Vp8Parser`/`Vp9Parser` and `vaco-parse-prores` each
+    /// already document on themselves, because every container that carries
+    /// FFV1, VP8/VP9 or `ProRes` in this workspace delimits one coded frame as
+    /// one packet before any of them see it — there is no byte-stream framing
+    /// to resynchronise, so nothing they do needs more than the one call.
+    ///
+    /// `false`, the default, is the opposite: a parser that may need several
+    /// `parse` calls to see one whole access unit (H.264/HEVC's NAL-by-NAL
+    /// framing, an ADTS byte stream cut at an arbitrary boundary) and
+    /// therefore does need [`ParserDriver`]'s reassembly buffer to hold what
+    /// earlier calls could not complete.
+    ///
+    /// # What this licenses
+    ///
+    /// [`ParserDriver::push`] reads this before deciding whether a chunk that
+    /// would overflow [`parser::DEFAULT_MAX_PENDING`] must be refused outright. A
+    /// parser answering `true` is trusted to read only as much of `parse`'s
+    /// `input` as it actually needs regardless of how large `input` is —
+    /// `vaco-parse-prores` reads 18 bytes past the frame identifier no matter
+    /// the sample's real size, `Vp9Parser` reads a small header plus, for a
+    /// superframe, a small trailing index located from the sample's *own*
+    /// last byte — so a caller already holding one whole sample in memory
+    /// (`vaco_format_core::discovery::Discovery`, specifically) can hand the
+    /// real, untruncated slice straight to `parse` instead of first copying
+    /// it into a buffer sized for a parser that might need several calls to
+    /// see one unit. This is not "no bound": the chunk is still checked
+    /// against the caller's [`vaco_limits::Budget`] first, which is the
+    /// bound this contract answers to instead ([`ParserDriver::push`]'s own
+    /// doc has the reasoning and the concrete numbers that made this
+    /// necessary for real 4K/4444 media).
+    fn whole_sample_only(&self) -> bool {
+        false
+    }
 }
 
 /// So a boxed parser is itself a [`Parser`], and can be handed to anything
@@ -2042,6 +2079,10 @@ impl<P: Parser + ?Sized> Parser for Box<P> {
 
     fn packet_duration(&self, packet: &[u8]) -> Option<Rational> {
         (**self).packet_duration(packet)
+    }
+
+    fn whole_sample_only(&self) -> bool {
+        (**self).whole_sample_only()
     }
 }
 

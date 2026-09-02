@@ -165,6 +165,15 @@ impl Parser for Vp8Parser {
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
     }
+
+    /// `true`: this crate's own module doc already states the contract —
+    /// no container carrying VP8 in this workspace ever splits one frame
+    /// across more than one packet, so [`Vp8Parser::parse`] never needs
+    /// `ParserDriver`'s reassembly buffer at all, whatever the frame's own
+    /// size. See `vaco_codec_core::Parser::whole_sample_only`'s own doc.
+    fn whole_sample_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

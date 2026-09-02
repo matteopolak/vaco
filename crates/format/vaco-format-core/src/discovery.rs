@@ -106,6 +106,26 @@ pub struct DiscoveryReport {
     /// Inputs for [`crate::time::estimate_duration`], as far as this pass can
     /// fill them in.
     pub duration_inputs: DurationInputs,
+    /// Samples, summed across every stream's parser, that a
+    /// [`vaco_codec_core::Parser::whole_sample_only`] parser (`vaco-parse-ffv1`,
+    /// `vaco-parse-vpx`, `vaco-parse-prores`, as of this field's introduction)
+    /// resolved directly rather than through
+    /// [`vaco_codec_core::ParserDriver`]'s reassembly buffer, specifically
+    /// because the sample would have overflowed
+    /// [`vaco_codec_core::parser::DEFAULT_MAX_PENDING`] (2 MiB) had it gone
+    /// through that buffer instead — real for, among others, 4K or
+    /// high-profile `ProRes` and a large VP9 key frame.
+    ///
+    /// Nonzero is this mechanism working, not a fault: it means a stream's
+    /// `pix_fmt` (or profile, or whatever else a parser reports) resolved
+    /// from a sample that the old, buffer-only path would have refused
+    /// outright and reported nothing for. If a stream's parameters are
+    /// *still* missing despite this being nonzero, the one bound this path
+    /// still enforces is [`vaco_limits::Budget::check`]
+    /// (`Limits::max_alloc_single`/`max_alloc_total`) — see
+    /// [`vaco_codec_core::ParserDriver::push`]'s own doc for why that, and
+    /// not a bigger reassembly buffer, is the bound that applies here.
+    pub oversized_whole_samples: u64,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -602,6 +622,17 @@ impl<D: Demuxer> Discovery<D> {
         // A tail-scanning caller may set it; this pass must not.
         self.report.duration_inputs.from_pts = None;
         self.adopt_container_timings();
+
+        // Summed once here rather than incrementally in `absorb`/`refine`:
+        // each stream's `ParserDriver` already keeps its own running count
+        // ([`vaco_codec_core::ParserDriver::oversized_whole_samples`]), so
+        // there is nothing to do mid-pass but read it back.
+        self.report.oversized_whole_samples = self
+            .parsers
+            .iter()
+            .flatten()
+            .map(ParserDriver::oversized_whole_samples)
+            .sum();
     }
 
     /// A stream the pass never saw a timestamp for takes the *container's*
@@ -1804,3 +1835,4 @@ mod tests {
         assert!(d.streams()[0].params.extradata.is_none());
     }
 }
+

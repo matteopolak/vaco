@@ -137,6 +137,23 @@ impl Parser for Ffv1Parser {
         });
         Ok(())
     }
+
+    /// `true`: this crate's own module doc already states the contract —
+    /// every container carrying FFV1 in this workspace delimits one coded
+    /// frame as one packet, so [`Ffv1Parser::parse`] never assembles one
+    /// from more than a single call. Declaring it costs this parser nothing
+    /// (its parameters resolve from [`Ffv1Parser::set_extradata`] alone,
+    /// before a single packet arrives, so an oversized frame was never the
+    /// gap here — see `vaco-parse-prores`'s module doc, which names the
+    /// concrete containers/resolutions where it was), but keeps a stream
+    /// whose frames are individually large — FFV1 is lossless and a big
+    /// frame at high resolution or high bit depth is real, not hypothetical
+    /// — from failing `ParserDriver::push`'s reassembly cap for no reason at
+    /// all: nothing needs that buffer here, so nothing should be bounded by
+    /// it either.
+    fn whole_sample_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]

@@ -383,10 +383,36 @@ impl Parser for Vp9Parser {
         }
         Ok(())
     }
+
+    /// `true`: this crate's own module doc already states the contract —
+    /// no container carrying VP9 in this workspace ever splits one sample
+    /// across more than one packet, so [`Vp9Parser::parse`] never needs
+    /// `ParserDriver`'s reassembly buffer, whatever the sample's own size.
+    ///
+    /// This matters more here than for [`crate::vp8::Vp8Parser`]: a large
+    /// sample is not only a plain oversized key frame but potentially a
+    /// *superframe* (see the module doc and [`crate::superframe`]), whose
+    /// index — and therefore the true start of the visible sub-frame
+    /// [`parse_display_header`] must read — lives at the sample's own last
+    /// byte, arbitrarily far from byte 0. A caller that could only offer a
+    /// bounded prefix from the front would have to guess at that offset or
+    /// give up; a caller bypassing reassembly and handing over the real,
+    /// untruncated sample (what `whole_sample_only() == true` licenses) does
+    /// not have to, because `last_subframe` reads the actual last byte and
+    /// finds the actual index either way. See
+    /// `vaco_codec_core::Parser::whole_sample_only`'s own doc for why the
+    /// reassembly buffer, not this parser, was the thing standing in the way.
+    fn whole_sample_only(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test code over fixed fixtures")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test code over fixed fixtures"
+)]
 mod tests {
     use super::*;
 
@@ -626,5 +652,58 @@ mod tests {
         let (pkt, used) = p.parse(&[]).unwrap();
         assert!(pkt.is_none());
         assert_eq!(used, 0);
+    }
+
+    /// A superframe whose whole sample is well past `ParserDriver`'s 2 MiB
+    /// reassembly cap — the exact shape a large VP9 key frame reaches in
+    /// practice (see [`Vp9Parser::whole_sample_only`]'s doc) — with the
+    /// hidden (first) sub-frame made deliberately huge and the visible
+    /// (last) one small, so a caller that only offered a bounded *prefix*
+    /// from byte 0 would read the hidden frame's own header instead of the
+    /// visible one's. [`crate::superframe::last_subframe`] reads the
+    /// sample's real last byte regardless of overall size, so the parser
+    /// still finds and reads the *correct* sub-frame's header.
+    #[test]
+    fn an_oversized_superframe_still_reads_the_last_subframes_header() {
+        // The hidden alt-ref sub-frame: 3 MiB of bytes that are not valid
+        // VP9 syntax at all — proving the parser never reads them as a
+        // header, only `last_subframe` ever looks at where they end.
+        let hidden = vec![0xAAu8; 3 * 1024 * 1024];
+        // The visible sub-frame: a real, well-formed uncompressed_header at
+        // profile 0, 176x144 — deliberately different dimensions from
+        // anything the hidden bytes could be mistaken for.
+        let visible = frame_bits(0, None, 1, false);
+
+        let mut sample = hidden.clone();
+        sample.extend_from_slice(&visible);
+        // Annex B superframe index: marker, two little-endian sizes (1 byte
+        // each fits since `bytes_per_size` is chosen for the larger of the
+        // two — 3 MiB needs 3 bytes), marker again.
+        let bytes_per_size = 3usize; // covers sizes up to 16 MiB.
+        let frame_count = 2usize;
+        let marker = 0xC0u8 | (((bytes_per_size - 1) as u8) << 3) | ((frame_count - 1) as u8);
+        sample.push(marker);
+        for &size in &[hidden.len(), visible.len()] {
+            let le = (size as u32).to_le_bytes();
+            sample.extend_from_slice(&le[..bytes_per_size]);
+        }
+        sample.push(marker);
+
+        assert!(
+            sample.len() > 2 * 1024 * 1024,
+            "the whole point is a sample past DEFAULT_MAX_PENDING"
+        );
+
+        let mut p = Vp9Parser::new(Limits::permissive());
+        let (pkt, used) = p.parse(&sample).unwrap();
+        assert!(pkt.is_some());
+        assert_eq!(used, sample.len());
+        let v = p.parameters().unwrap().video.as_ref().unwrap();
+        // 176x144 is the *visible* sub-frame's own size — proof this read
+        // the last sub-frame's header, not the hidden one's leading bytes
+        // (which are not valid VP9 syntax and would resolve nothing at all,
+        // catching a caller that only offered a truncated prefix from the
+        // front instead of the real, untruncated sample).
+        assert_eq!((v.width, v.height), (176, 144));
     }
 }

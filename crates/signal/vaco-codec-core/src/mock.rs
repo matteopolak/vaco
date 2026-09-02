@@ -374,6 +374,7 @@ pub struct MockParser {
     stall: bool,
     units: u64,
     params: Option<CodecParameters>,
+    declares_whole_sample_only: bool,
 }
 
 impl MockParser {
@@ -386,6 +387,7 @@ impl MockParser {
             stall: false,
             units: 0,
             params: None,
+            declares_whole_sample_only: false,
         }
     }
 
@@ -400,6 +402,16 @@ impl MockParser {
     #[must_use]
     pub const fn stalling(mut self) -> Self {
         self.stall = true;
+        self
+    }
+
+    /// Make [`Parser::whole_sample_only`] answer `true` — for exercising
+    /// [`ParserDriver::push`](crate::ParserDriver::push)'s bypass path
+    /// without a real `vaco-parse-ffv1`/`vaco-parse-vpx`/`vaco-parse-prores`
+    /// sample on hand.
+    #[must_use]
+    pub const fn whole_sample_only(mut self) -> Self {
+        self.declares_whole_sample_only = true;
         self
     }
 
@@ -427,10 +439,23 @@ impl Parser for MockParser {
             return Ok((None, 0));
         }
         self.units = self.units.saturating_add(1);
-        Ok((None, self.unit_len))
+        // A `whole_sample_only` mock consumes the *whole* input regardless of
+        // `unit_len` — the same "one call, one already-framed sample" shape
+        // `Ffv1Parser`/`Vp8Parser`/`Vp9Parser`/`ProresParser` all report,
+        // which is what `ParserDriver::push`'s bypass path is for.
+        let used = if self.declares_whole_sample_only {
+            input.len()
+        } else {
+            self.unit_len
+        };
+        Ok((None, used))
     }
 
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
+    }
+
+    fn whole_sample_only(&self) -> bool {
+        self.declares_whole_sample_only
     }
 }
