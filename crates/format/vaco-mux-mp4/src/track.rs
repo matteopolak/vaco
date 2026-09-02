@@ -58,6 +58,14 @@ pub struct TrackState {
     /// see `vaco-mux-avi::StreamOut::bsf_decided` for the identical fix and
     /// the `MuxWriter` doc this is answering.
     pub bsf_decided: bool,
+    /// H.264/HEVC only. Set together with the `avcC`/`hvcC` this track will
+    /// write, by the single [`vaco_format_nalu::length_prefixed_config`] call
+    /// that decides both — see [`crate::mux::MovMuxer::resolve_nal_config`].
+    /// `avc1`/`hev1` samples are length-prefixed (ISO/IEC 14496-15 §5.3.3),
+    /// so a stream whose packets arrived Annex-B (an encoder's own output, or
+    /// a copy from MPEG-TS/AVI/raw) needs every sample reframed on the way
+    /// out.
+    pub needs_nal_repack: bool,
     /// `tkhd.matrix` — identity unless [`Muxer::add_stream_with`]'s
     /// [`vaco_format_core::StreamSpec::display_matrix`] set one, which
     /// `MovMuxer::add_stream_with` copies in after [`TrackState::new`]
@@ -97,6 +105,7 @@ impl TrackState {
             chunks: Vec::new(),
             last_duration_hint: 0,
             bsf_decided: false,
+            needs_nal_repack: false,
             matrix: vaco_format_isom::fixed::IDENTITY_MATRIX.map(u32::cast_signed),
         }
     }

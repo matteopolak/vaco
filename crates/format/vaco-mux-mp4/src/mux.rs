@@ -166,15 +166,18 @@ impl Muxer for MovMuxer {
                 "mp4: streams must be added before the header is written",
             ));
         }
-        let mut built = entry::build(params)?;
+        let mut params = params.clone();
+        let repack = resolve_nal_config(&mut params);
+        let mut built = entry::build(&params)?;
         if let Some(enc) = self.opts.encryption() {
             built = entry::wrap_encrypted(built, enc.key_id);
         }
         let track_id = u32::try_from(self.tracks.len())
             .unwrap_or(u32::MAX)
             .saturating_add(1);
-        let timescale = Self::track_time_base(params);
-        let mut track = TrackState::new(track_id, timescale, built, params.clone());
+        let timescale = Self::track_time_base(&params);
+        let mut track = TrackState::new(track_id, timescale, built, params);
+        track.needs_nal_repack = repack;
         track.language = vaco_format_isom::lang::PACKED_UND;
         // Interface gap 22c's muxer half: `None` keeps `TrackState::new`'s
         // own identity default, which is what every caller that never heard
@@ -277,15 +280,34 @@ impl Muxer for MovMuxer {
         // outright — so encrypting unconditionally before the match is safe:
         // the fragmented path's own `.to_vec()` just copies whichever slice
         // this resolves to.
+        // Annex-B in, length-prefixed out: `avc1`/`hev1` samples are
+        // length-prefixed, and this is the other half of the decision
+        // `resolve_nal_config` made when it built this track's `avcC`/`hvcC`.
+        // Built fresh per packet, like `vaco-mux-matroska`'s own repack — a
+        // sample is only ever written once.
+        let mut reframed;
+        let source: &[u8] = if self.tracks.get(idx).is_some_and(|t| t.needs_nal_repack) {
+            reframed = Vec::new();
+            let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::permissive());
+            vaco_format_nalu::annexb_to_length_prefixed(
+                packet.payload(),
+                vaco_format_nalu::LengthSize::FOUR,
+                &mut reframed,
+                &mut budget,
+            )?;
+            &reframed
+        } else {
+            packet.payload()
+        };
         let mut encrypted;
         let payload = match self.opts.encryption() {
             Some(enc) => {
                 let sample_index = self.tracks.get(idx).map_or(0, |t| t.samples.len());
-                encrypted = packet.payload().to_vec();
+                encrypted = source.to_vec();
                 encrypt_cenc_sample(&enc.key, sample_index, &mut encrypted);
                 encrypted.as_slice()
             }
-            None => packet.payload(),
+            None => source,
         };
 
         match &mut self.mode {
@@ -564,6 +586,34 @@ fn parse_hex16(name: &str, value: &str) -> Result<[u8; 16]> {
     Ok(out)
 }
 
+/// Resolve an H.264/HEVC track's out-of-band record and its sample framing in
+/// one step: rewrite `params.extradata` into the `avcC`/`hvcC` the sample
+/// entry must carry, and return whether the packets still need reframing.
+///
+/// The record and the framing are one decision, and
+/// [`vaco_format_nalu::length_prefixed_config`] is where it is made. Before
+/// this existed, [`entry::build`] wrote `CodecParameters::extradata` into
+/// `avcC` verbatim, so a stream arriving from an encoder or copied from
+/// MPEG-TS/AVI/raw Annex B got a box full of start codes where a
+/// configuration record belongs — beside an `mdat` that was Annex-B too,
+/// with nothing tying the two together.
+///
+/// A codec with no NAL-level parameter sets, or extradata nothing can be
+/// derived from, is left exactly as it arrived: this only ever replaces a
+/// buffer with a record built from that same buffer's own parameter sets.
+fn resolve_nal_config(params: &mut CodecParameters) -> bool {
+    let Some(kind) = params.codec_id.and_then(vaco_format_nalu::header_kind_for) else {
+        return false;
+    };
+    let Some(config) =
+        vaco_format_nalu::length_prefixed_config(kind, params.extradata.as_deref().unwrap_or(&[]))
+    else {
+        return false;
+    };
+    params.extradata = Some(config.record);
+    config.repack
+}
+
 /// Apply the CENC 'cenc' scheme's full-sample AES-128-CTR in place:
 /// `counter_block = IV(8 bytes) ++ 0u64`, `IV = sample_index + 1` big-endian
 /// — the same numbering [`crate::progressive`]'s `senc` writer uses, so the
@@ -614,10 +664,14 @@ impl MovMuxer {
         let Some(track) = self.tracks.get_mut(idx) else {
             return Ok(());
         };
-        if track.params.extradata.as_deref() == Some(new_extradata.as_slice()) {
+        let mut candidate = track.params.clone();
+        candidate.extradata = Some(new_extradata);
+        let repack = resolve_nal_config(&mut candidate);
+        if track.params.extradata == candidate.extradata {
             return Ok(());
         }
-        track.params.extradata = Some(new_extradata);
+        track.params = candidate;
+        track.needs_nal_repack = repack;
         track.entry = entry::build(&track.params)?;
         Ok(())
     }
