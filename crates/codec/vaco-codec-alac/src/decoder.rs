@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::Decoder;
-use vaco_core::{Error, Result};
-use vaco_frame::Frame;
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
+use vaco_frame::{Frame, FrameData};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
@@ -69,6 +69,20 @@ impl Decoder for AlacDecoder {
             &mut budget,
         )?;
         frame.pts = packet.pts;
+        // The decode-side mirror of this session's audio-decoder duration
+        // audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/
+        // `-ac3`/`-aac`/`-mpegaudio`/`-opus`): the decoded sample count
+        // and `self.sample_rate` were already in scope, but
+        // `frame.duration` was never set. This crate's own encoder
+        // (`AlacEncoder::send_frame`) already computes a real duration
+        // this same way; the decoder was the one side of this codec that
+        // had not been checked yet.
+        if let FrameData::Audio { samples, .. } = &frame.data {
+            let time_base = Rational::new(1, i32::try_from(self.sample_rate).unwrap_or(1).max(1));
+            frame.duration = Timestamp::new(i64::from(*samples))
+                .to_duration(time_base)
+                .unwrap_or(Duration::ZERO);
+        }
         self.pending.push_back(frame);
         Ok(())
     }
@@ -144,6 +158,30 @@ mod tests {
 
         dec.flush();
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    /// The decode-side mirror of this session's audio-decoder duration
+    /// audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/`-ac3`/
+    /// `-aac`/`-mpegaudio`/`-opus`): the decoded sample count and
+    /// `self.sample_rate` were already in scope where `frame.pts` gets
+    /// set, but `frame.duration` was never set.
+    #[test]
+    fn send_packet_sets_a_real_nonzero_frame_duration() {
+        let samples: Vec<i32> = (0..256).map(|i| (i % 100) - 50).collect();
+        let bytes = encode_mono_packet(&samples, 44100);
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, &bytes).unwrap();
+
+        let mut dec = AlacDecoder::new(Limits::permissive());
+        dec.send_packet(Some(&packet)).unwrap();
+        let frame = dec.receive_frame().unwrap();
+
+        // 256 samples at 44100 Hz.
+        let expected = vaco_core::Timestamp::new(256)
+            .to_duration(vaco_core::Rational::new(1, 44_100))
+            .unwrap();
+        assert_ne!(expected, vaco_core::Duration::ZERO);
+        assert_eq!(frame.duration, expected);
     }
 
     /// `send_packet(None)` must switch `receive_frame` from `NeedMoreInput`

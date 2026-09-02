@@ -10,7 +10,7 @@ use std::collections::VecDeque;
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::Decoder;
-use vaco_core::{Error, Result};
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -106,6 +106,17 @@ impl Decoder for FlacDecoder {
             decoded.sample_rate,
         )?;
         frame.pts = pts;
+        // The decode-side mirror of this session's audio-decoder duration
+        // audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/
+        // `-ac3`/`-aac`/`-mpegaudio`/`-opus`/`-alac`): `per_channel`/
+        // `decoded.sample_rate` were already in scope, but
+        // `frame.duration` was never set. This crate's own encoder
+        // (`FlacEncoder::emit_block`) already computes a real duration
+        // this same way.
+        let time_base = Rational::new(1, i32::try_from(decoded.sample_rate).unwrap_or(1).max(1));
+        frame.duration = Timestamp::new(i64::try_from(per_channel).unwrap_or(0))
+            .to_duration(time_base)
+            .unwrap_or(Duration::ZERO);
         write_channels(
             &mut frame,
             &decoded.interleaved,
@@ -244,5 +255,50 @@ mod tests {
         };
         assert_eq!(samples, n);
         assert_eq!(out_layout.channels, 2);
+    }
+
+    /// The decode-side mirror of this session's audio-decoder duration
+    /// audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/`-ac3`/
+    /// `-aac`/`-mpegaudio`/`-opus`/`-alac`): `per_channel`/
+    /// `decoded.sample_rate` were already in scope, but `frame.duration`
+    /// was never set.
+    #[test]
+    fn decoded_frame_carries_a_real_nonzero_duration() {
+        let limits = Limits::permissive();
+        let mut budget = Budget::new(limits.clone());
+        let layout = ChannelLayout::STEREO;
+        let n = 200u32;
+        let mut frame = Frame::alloc_audio(&mut budget, SampleFmt::S16P, layout, n, 44_100)
+            .expect("alloc audio frame");
+        {
+            let mut planes = frame.planes_mut();
+            for (ch, plane) in planes.iter_mut().enumerate() {
+                let row = plane.row_mut(0).expect("row 0");
+                for i in 0..n as usize {
+                    let v = ((i as i32) * (ch as i32 + 1)) as i16;
+                    if let Some(dst) = row.get_mut(i * 2..i * 2 + 2) {
+                        dst.copy_from_slice(&v.to_ne_bytes());
+                    }
+                }
+            }
+        }
+
+        let mut enc = FlacEncoder::new(limits.clone());
+        enc.send_frame(Some(&frame)).expect("send");
+        enc.send_frame(None).expect("drain start");
+        let packet = enc.receive_packet().expect("packet");
+        let extradata = enc.extradata();
+
+        let mut dec = FlacDecoder::new(limits);
+        dec.set_extradata(&extradata).expect("set extradata");
+        dec.send_packet(Some(&packet)).expect("send packet");
+        let out = dec.receive_frame().expect("frame");
+
+        // 200 samples at 44100 Hz.
+        let expected = vaco_core::Timestamp::new(200)
+            .to_duration(vaco_core::Rational::new(1, 44_100))
+            .unwrap();
+        assert_ne!(expected, vaco_core::Duration::ZERO);
+        assert_eq!(out.duration, expected);
     }
 }
