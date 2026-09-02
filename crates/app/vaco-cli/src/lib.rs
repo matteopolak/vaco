@@ -80,9 +80,11 @@ pub mod input;
 pub mod listing;
 pub mod nullmux;
 pub mod output;
+pub mod overwrite;
 pub mod print_graphs;
 pub mod progress;
 pub mod report;
+pub mod seek_trim;
 pub mod select;
 pub mod stats;
 
@@ -185,7 +187,7 @@ where
             blacklist: black.as_deref(),
             format_opts: Some(&spec.format_opts),
         };
-        let opened = input::open(spec.index, &spec.url, &req).map_err(|e| {
+        let mut opened = input::open(spec.index, &spec.url, &req).map_err(|e| {
             let av = AvError::of(&e);
             Diagnostic::opening(
                 av,
@@ -214,6 +216,22 @@ where
                 let _ = writeln!(err, "{line}");
             }
         }
+        // `-ss`/`-t`/`-to`: applied after the dump above, which -- like the
+        // reference's own `Input #0` block -- reports the file as it stands
+        // before any seek. See `crate::seek_trim`.
+        opened.demuxer =
+            seek_trim::SeekTrim::wrap(opened.demuxer, spec.seek, spec.end).map_err(|e| {
+                let av = AvError::of(&e);
+                Diagnostic::opening(
+                    av,
+                    vec![format!(
+                        "[in#{}] Error opening input: {}",
+                        spec.index, av.text
+                    )],
+                    "input",
+                    &spec.url,
+                )
+            })?;
         inputs.push(opened);
     }
 
@@ -331,6 +349,7 @@ where
         auto_conversion_filters,
         cli.thread_count(),
         cli.filter_thread_count(),
+        overwrite::resolve_policy(&cli.line),
     )?;
 
     // `Stream mapping:` is the reference's own wording and layout, and it is

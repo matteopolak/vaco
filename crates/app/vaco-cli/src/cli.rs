@@ -376,29 +376,27 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
 /// # Errors
 /// [`Diagnostic`] naming the option, once any occurrence of one is found.
 fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
-    // Overwrite policy and seek/trim (CLI-option audit, first batch): `-n`
-    // silently not refusing to overwrite is a real data-loss gap. `-y` is
-    // deliberately NOT refused here even though nothing reads it either --
-    // this build always overwrites unconditionally (no prompt exists at
-    // all), which is exactly what `-y` itself asks for, so accepting and
-    // ignoring it produces no divergence from its own request. Refusing it
-    // would only break every script that passes `-y` defensively (the
-    // common convention, to avoid a prompt that cannot occur here) for no
-    // correctness gain -- unlike `-n`, whose whole point is silently not
-    // honoured.
-    // `-ss`/`-t`/`-to`/`-sseof`/`-itsoffset`/`-itsscale`/`-seek_timestamp`/
-    // `-accurate_seek` being silently ignored means every invocation
-    // processes the whole input regardless of what any of them say --
-    // including, potentially, past measurements: checked against
-    // `planning/PERF-BASELINE.md` and `scripts/`, neither uses any of these,
-    // so no recorded ratio is affected.
+    // Overwrite policy and seek/trim (CLI-option audit, first batch):
+    // `-y`/`-n` and `-ss`/`-t`/`-to` are no longer refused -- they are
+    // implemented, by `crate::overwrite` and `crate::seek_trim`
+    // respectively, and `crate::lib`'s per-input loop wires both in. `-y`
+    // was never refused even before that (see its own history): this
+    // build always overwrote unconditionally before `crate::overwrite`
+    // existed, which is exactly what `-y` itself asks for, so accepting
+    // and ignoring it produced no divergence from its own request.
+    // `-sseof`/`-itsoffset`/`-itsscale`/`-seek_timestamp`/`-accurate_seek`
+    // remain refused: none of them reaches `crate::seek_trim`, and
+    // silently ignoring any of them means every invocation processes the
+    // whole input regardless of what it says -- including, potentially,
+    // past measurements: checked against `planning/PERF-BASELINE.md` and
+    // `scripts/`, neither uses any of these, so no recorded ratio is
+    // affected.
     // CLI-option audit, second batch: everything below changes output bytes
     // or silently drops a requested behaviour if ignored (coordinator's own
     // triage, priority 1) -- as opposed to the third batch (below), which
     // only loses diagnostics.
     const GLOBAL: &[&str] = &[
         "frame_drop_threshold",
-        "n",
         "copyts",
         "start_at_zero",
         "copytb",
@@ -472,9 +470,6 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
     ];
     const PER_FILE: &[&str] = &[
         "hwaccel",
-        "ss",
-        "t",
-        "to",
         "sseof",
         "itsoffset",
         "itsscale",

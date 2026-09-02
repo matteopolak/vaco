@@ -1262,6 +1262,7 @@ pub fn run_pipeline(
     auto_conversion_filters: bool,
     threads: usize,
     filter_threads: usize,
+    overwrite: crate::overwrite::OverwritePolicy,
 ) -> Result<RunSpec, Diagnostic> {
     if outputs.iter().all(|o| o.dropped) {
         // Nothing to write anywhere, so there is nothing to read either. The
@@ -1359,7 +1360,7 @@ pub fn run_pipeline(
     // written — `open_output`'s docs say why the two are not the same thing.
     let mut sinks: Vec<(Sink, Option<Arc<AtomicU64>>)> = Vec::new();
     for out in outputs.iter().filter(|o| !o.dropped) {
-        let (inner, high_water) = open_output(out)?;
+        let (inner, high_water) = open_output(out, overwrite)?;
         let muxer: Box<dyn Muxer> = Box::new(TallyingMuxer::new(inner, out.sink.clone()));
 
         // `add_output_with`, not the plain `add_output`: the container's
@@ -1919,6 +1920,7 @@ pub fn run_pipeline(
 /// reflects the real `io::ErrorKind`, matching `input::open`'s side).
 fn open_output(
     out: &ResolvedOutput,
+    overwrite: crate::overwrite::OverwritePolicy,
 ) -> Result<(Box<dyn Muxer>, Option<Arc<AtomicU64>>), Diagnostic> {
     let desc = vaco_registry::muxer_by_name(out.format)
         .ok_or_else(|| internal("a resolved output format is no longer in the registry"))?;
@@ -1960,6 +1962,16 @@ fn open_output(
         return Ok((probe, None));
     }
     drop(probe);
+
+    // `-y`/`-n` (CLI-option audit): checked here, after the `NOFILE`/
+    // `NEEDNUMBER` branches above have already returned -- the reference
+    // never prompts for a destination it does not actually open as a byte
+    // sink either (`ffmpeg -f null -y out.bin` truncates nothing to ask
+    // about). Must run before `crate::output::create` below, which is the
+    // call that truncates a real file on disk. `overwrite::guard` already
+    // returns the reference's own exit-0 `Diagnostic` shape for a refusal,
+    // so this propagates it unchanged.
+    crate::overwrite::guard(&out.url, overwrite)?;
 
     let sink = crate::output::create(&out.url).map_err(|e| output_open_error(out, &e))?;
     let counting = crate::output::HighWaterSink::new(sink);
@@ -2264,7 +2276,8 @@ mod tests {
             map_metadata: None,
             format_opts: vaco_format_core::FormatOptions::default(),
         };
-        let (mut muxer, high_water) = open_output(&out).unwrap();
+        let (mut muxer, high_water) =
+            open_output(&out, crate::overwrite::OverwritePolicy::Always).unwrap();
         assert!(high_water.is_none());
         // Never created under the literal, unexpanded name.
         assert!(!dir.join("out%03d.png").exists());

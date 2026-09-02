@@ -1386,3 +1386,10 @@ kind     = "blackbox"
 title    = "Observed output of `ffmpeg -decoders`, `-encoders`, `-filters`, `-bsfs`, `-protocols`, `-h decoder=<name>`, `-h encoder=<name>` (which distinguishes a name FFmpeg's own codec table recognises but cannot build -- \"known to FFmpeg, but no decoders/encoders for it are available\" -- from one it does not know at all -- \"is not recognized by FFmpeg\") and direct encode probes (e.g. `-c:v vp8 -f null -`), ffmpeg 9.0.1 (--enable-gpl --enable-version3 --enable-libsvtav1 --enable-libopus --enable-libx264 --enable-libmp3lame --enable-libdav1d --enable-libvmaf --enable-libvpx --enable-libx265 --enable-openssl --enable-videotoolbox --enable-audiotoolbox). Backs xtask/data/reference-formats.txt's [decoders]/[encoders]/[filters]/[bitstream_filters]/[protocols] sections, `cargo xtask reachability-check`'s rule H (registered component name vs. the reference's own measured name) and its `ALLOW_NAME_MISMATCH` reasons, and the `vaco-codec-subtitle-teletext` rename this rule's first run found."
 acquired = "2026-09-02"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-cli-overwrite-seek-probe"
+kind     = "blackbox"
+title    = "Observed output, exit codes and file contents of `ffmpeg -y`/`-n`/neither against an existing output file (with stdin redirected from /dev/null and from a real pty), and of `ffmpeg -ss`/`-t`/`-to` against WAV and synthetic H.264 (libx264, forced keyframes) fixtures, including `-ss` past the end of input, `-t` longer than the remaining stream, `-to` before `-ss`, and `-ss` landing between two keyframes with and without `-copyts`, ffmpeg 9.0.1. Backs `vaco-cli`'s `overwrite` and `seek_trim` modules."
+acquired = "2026-09-02"
+where    = "the reference binary installed on the development machine"

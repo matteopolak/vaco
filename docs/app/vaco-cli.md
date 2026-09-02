@@ -612,6 +612,74 @@ comparison this work package's issue asks for) needs a source this build can
 both decode and produce more than one distinct timestamp from, which was not
 available in the time this pass had — named here rather than claimed.
 
+### CLI-option audit: `-y`/`-n` overwrite policy and `-ss`/`-t`/`-to` seek/trim
+
+A whole-`ffmpeg`-option-table audit found both accepted, parsed and
+validated, and never reaching anything: every run overwrote an existing
+output unconditionally regardless of `-y`/`-n`, and every run demuxed the
+whole input regardless of `-ss`/`-t`/`-to`. Both are real now, in
+`crate::overwrite` and `crate::seek_trim` respectively — read their own
+module docs for the full account; this is the summary, and both were
+removed from `refuse_unimplemented_options` in the same commit that wired
+them up (leaving them refused there would make a working feature
+unreachable; removing them earlier would have restored the silent no-op).
+
+**`-y`/`-n`** (`overwrite.rs`): `-y` overwrites unconditionally (already
+this build's only behaviour before this landed, so accepting and ignoring
+it was never a divergence — which is also why it was never in the refused
+list). `-n` refuses when the destination already exists, **exit 0**,
+matching the reference's own "successful, intentional outcome" framing
+(`File 'x' already exists. Exiting.` / `Error opening output file x.`).
+With neither, the reference always attempts a blocking read of stdin
+regardless of whether it is a terminal — measured to hang a
+non-interactive caller forever against a still-open non-tty stdin
+(exactly the failure mode this project's own benchmark harness hit
+repeatedly). `guard` deliberately does not reproduce that: it checks
+`IsTerminal` first and refuses immediately with no read at all on a
+non-terminal stdin, prompting for real only on an actual terminal.
+Verified against a real pty for the interactive path and `/dev/null` for
+the non-interactive one, both landing on exit 0 with no hang.
+
+**`-ss`/`-t`/`-to`** (`seek_trim.rs`): wraps the opened `Demuxer` — `-ss`
+issues one `SeekFlags::BACKWARD` seek at construction against a reference
+stream (first video, else first audio, else stream `0`); `-t`/`-to`
+become a single absolute end-of-file microsecond bound checked on every
+`read_packet`, past which it returns `Eof`. Every other `Demuxer` method
+is forwarded to the inner demuxer explicitly — their trait defaults are
+empty/`Unsupported`, and not forwarding them would silently drop real
+chapters, metadata, programs or duration. Deliberately **fast
+(keyframe-boundary) seeking only**, not frame-accurate
+`-accurate_seek`-equivalent trimming, and **input-side option placement
+only** (`cli.rs` has no parse path for an output-side occurrence of these
+names at all). `-to` before `-ss` is rejected earlier, at option-binding
+time (`cli.rs`'s new `validate_bounds`), matching the reference's own
+input-opening-time failure (`[in#0] -to value smaller than -ss;
+aborting.`, exit 234) rather than anything in `seek_trim` itself. `-ss`
+past the end of input and `-t` longer than the remaining stream need no
+special handling: `read_packet` reaches the inner demuxer's own real
+`Eof` first either way. Landing between two keyframes matches the
+reference's own default (`-noaccurate_seek`) BACKWARD-equivalent
+behaviour, confirmed with `-copyts` against a synthetic H.264 fixture
+with keyframes 5s apart — both land on the earlier keyframe, not the
+requested point. One measured, documented gap: the end bound checks
+`pts`, not `dts`; on a stream with no B-frames the two agree, but on a
+reordered stream this can admit a few extra or fewer trailing frames than
+the reference's own apparently `dts`-sensitive cutoff. Left as measured
+rather than chased further — every other duration in this crate is
+already keyed on `pts`, and the discrepancy is a handful of frames at a
+GOP boundary, not a wrong bound.
+
+**What was verified**: `cargo test -p vaco-cli`/`cargo clippy -p vaco-cli
+--all-targets -- -D warnings` clean (228 tests, including `seek_trim`'s
+and `overwrite`'s own `#[cfg(test)]` modules). A real `vaco` binary,
+built and run against a real WAV fixture and a synthetic H.264 fixture
+(`libx264`, forced keyframes 5s apart), reproduced every edge case above
+byte-for-byte against real `ffmpeg 9.0.1` output where the feature's own
+scope claims agreement (`-ss`/`-t` bounds, `-to`-before-`-ss` refusal and
+exit code, `-ss`-past-EOF, `-t`-longer-than-remaining, `-y`/`-n`/neither
+overwrite outcomes and exit codes) and named the one place it does not
+(the `pts`/`dts` trailing-frame gap above).
+
 ## How to change it
 
 * **Adding an option** starts in `vaco-cli-core`'s table, not here. This crate
