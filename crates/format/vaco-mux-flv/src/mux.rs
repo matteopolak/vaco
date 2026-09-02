@@ -18,9 +18,10 @@ use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_demux_flv::AmfValue;
 use vaco_format_core::metadata::MuxMetadata;
+use vaco_format_core::mux::BitstreamAction;
 use vaco_format_core::{FormatOptions, Muxer, MuxerDesc};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
-use vaco_packet::Packet;
+use vaco_packet::{Packet, PacketSideData};
 
 /// FLV's one time base: milliseconds. See `vaco-demux-flv`'s module docs for
 /// why there is no per-stream one to choose instead.
@@ -52,9 +53,34 @@ enum Framing {
 }
 
 #[derive(Debug, Clone, Copy)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "four independent per-stream facts, each already named; folding \
+              them into an enum would make every read site say less"
+)]
 struct StreamOut {
     is_video: bool,
     framing: Framing,
+    /// H.264/HEVC only. Both the legacy `AVCVIDEOPACKET` and Enhanced RTMP's
+    /// `CodedFrames` carry NAL units length-prefixed, described by the same
+    /// ISO/IEC 14496-15 record MP4 puts in `avcC`/`hvcC` — so a stream that
+    /// arrived Annex-B (an encoder's own output, or a copy from MPEG-TS or
+    /// raw Annex B) needs both its sequence header rebuilt and every frame
+    /// reframed. Set by the one `length_prefixed_config` call that also
+    /// produced the record, never independently.
+    needs_nal_repack: bool,
+    /// Whether this stream's sequence-header tag has been written yet — see
+    /// [`FlvMuxer::write_header`] for the stream that cannot have one there.
+    seq_header_written: bool,
+    /// Needed after `add_stream` to resolve a configuration record that only
+    /// arrives with the first packet; the original `CodecParameters` are not
+    /// kept.
+    codec_id: Option<CodecId>,
+    /// Set the first time `check_bitstream` answers for this stream, so the
+    /// re-ask in the same chain-building loop answers `Keep` rather than the
+    /// same filter name again — the guard every muxer here that asks for a
+    /// filter needs.
+    bsf_decided: bool,
     /// What `write_metadata_tag` needs from the stream's own
     /// `CodecParameters`, captured here since `add_stream` otherwise
     /// discards it once `extradata` is pulled out.
@@ -253,15 +279,68 @@ impl Muxer for FlvMuxer {
         } else {
             self.audio_index = Some(self.streams.len());
         }
+        // The sequence header and the frame framing are one decision: FLV
+        // used to write `CodecParameters::extradata` into the sequence
+        // header verbatim, so a stream copied from MPEG-TS produced an
+        // `AVCDecoderConfigurationRecord` that was actually Annex-B start
+        // codes (`00 00 01 67 ...`), beside frames that were Annex-B too.
+        let mut extradata = params.extradata.clone();
+        let mut needs_nal_repack = false;
+        if let Some(kind) = params.codec_id.and_then(vaco_format_nalu::header_kind_for)
+            && let Some(config) = vaco_format_nalu::length_prefixed_config(
+                kind,
+                extradata.as_deref().unwrap_or(&[]),
+            )
+        {
+            extradata = Some(config.record);
+            needs_nal_repack = config.repack;
+        }
         self.streams.push((
             StreamOut {
                 is_video,
                 framing,
+                needs_nal_repack,
+                seq_header_written: false,
+                codec_id: params.codec_id,
+                bsf_decided: false,
                 onmeta,
             },
-            params.extradata.clone(),
+            extradata,
         ));
         Ok(index)
+    }
+
+    /// H.264/HEVC with no record at all. This container has no
+    /// `GLOBALHEADER` flag for `global_header_action` to act on, so — like
+    /// `vaco-mux-matroska` — it has to ask outright, or an encoded stream
+    /// gets no sequence header: an encoder's parameter sets are in its
+    /// packets and nothing else pulls them out.
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        pkt: &Packet,
+    ) -> Result<BitstreamAction> {
+        let idx = usize::try_from(pkt.stream_index).ok();
+        if idx
+            .and_then(|i| self.streams.get(i))
+            .is_some_and(|(s, _)| s.bsf_decided)
+        {
+            return Ok(BitstreamAction::Keep);
+        }
+        if let Some((s, _)) = idx.and_then(|i| self.streams.get_mut(i)) {
+            s.bsf_decided = true;
+        }
+        if params.extradata.as_ref().is_none_or(Vec::is_empty)
+            && params
+                .codec_id
+                .and_then(vaco_format_nalu::header_kind_for)
+                .is_some()
+        {
+            return Ok(BitstreamAction::Insert {
+                name: "extract_extradata",
+            });
+        }
+        Ok(BitstreamAction::Keep)
     }
 
     fn write_header(&mut self) -> Result<()> {
@@ -286,13 +365,25 @@ impl Muxer for FlvMuxer {
         // Any codec that carries out-of-band configuration writes its
         // sequence-header tag immediately, at timestamp 0, before any real
         // frame — the order every FLV reader relies on.
-        let pending: Vec<(StreamOut, Vec<u8>)> = self
+        //
+        // A stream with none *yet* is the exception, and it is not
+        // hypothetical: an H.264/HEVC encoder's parameter sets live in its
+        // packets, so `check_bitstream` asks `extract_extradata` for them
+        // and the answer arrives on the first packet, after this point.
+        // `write_packet` writes that stream's sequence header then, still at
+        // timestamp 0 and still ahead of its own first frame. Before this,
+        // an encoded FLV had no sequence header at all.
+        let pending: Vec<(usize, StreamOut, Vec<u8>)> = self
             .streams
             .iter()
-            .filter_map(|(s, extra)| extra.clone().map(|e| (*s, e)))
+            .enumerate()
+            .filter_map(|(i, (s, extra))| extra.clone().map(|e| (i, *s, e)))
             .collect();
-        for (s, extra) in pending {
+        for (i, s, extra) in pending {
             self.write_sequence_header(s, &extra)?;
+            if let Some((state, _)) = self.streams.get_mut(i) {
+                state.seq_header_written = true;
+            }
         }
 
         self.header_written = true;
@@ -304,11 +395,9 @@ impl Muxer for FlvMuxer {
             return Err(Error::InvalidData("flv: packet written before the header"));
         }
         let idx = usize::try_from(packet.stream_index).unwrap_or(usize::MAX);
-        let state = self
-            .streams
-            .get(idx)
-            .map(|(s, _)| *s)
-            .ok_or(Error::InvalidData("flv: packet names an unknown stream"))?;
+        if self.streams.get(idx).is_none() {
+            return Err(Error::InvalidData("flv: packet names an unknown stream"));
+        }
         // A packet with no PTS at all is refused rather than silently
         // written with a fabricated `0` — the reference does the same.
         let pts_ms = packet
@@ -317,6 +406,12 @@ impl Muxer for FlvMuxer {
             .ok_or(Error::InvalidData("flv: packet is missing PTS"))?;
         let dts_ms = packet.dts.ticks().unwrap_or(pts_ms);
         self.max_timestamp_ms = self.max_timestamp_ms.max(pts_ms).max(dts_ms);
+        self.adopt_new_extradata(idx, packet)?;
+        let state = self
+            .streams
+            .get(idx)
+            .map(|(s, _)| *s)
+            .ok_or(Error::InvalidData("flv: packet names an unknown stream"))?;
 
         if state.is_video {
             self.last_video_dts_ms = Some(dts_ms);
@@ -341,7 +436,17 @@ impl Muxer for FlvMuxer {
                     return Err(Error::InvalidData("flv: video stream has audio framing"));
                 }
             }
-            body.extend_from_slice(packet.payload());
+            if state.needs_nal_repack {
+                let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::permissive());
+                vaco_format_nalu::annexb_to_length_prefixed(
+                    packet.payload(),
+                    vaco_format_nalu::LengthSize::FOUR,
+                    &mut body,
+                    &mut budget,
+                )?;
+            } else {
+                body.extend_from_slice(packet.payload());
+            }
             self.write_tag(9, dts_ms, &body)?;
         } else {
             let mut body = Vec::new();
@@ -525,6 +630,39 @@ impl FlvMuxer {
                 .map(|o| base + u64::try_from(o).unwrap_or(0));
         }
         Ok(())
+    }
+
+    /// Take a [`PacketSideData::NewExtradata`] — what `extract_extradata`
+    /// produces for a stream whose parameter sets are only in its packets —
+    /// resolve it into a configuration record, and write the sequence header
+    /// this stream could not have at [`Muxer::write_header`] time.
+    fn adopt_new_extradata(&mut self, idx: usize, packet: &Packet) -> Result<()> {
+        if self.streams.get(idx).is_some_and(|(s, _)| s.seq_header_written) {
+            return Ok(());
+        }
+        let Some(new_extradata) = packet.side_data.iter().find_map(|sd| match sd {
+            PacketSideData::NewExtradata(buf) => Some(buf.as_slice().to_vec()),
+            _ => None,
+        }) else {
+            return Ok(());
+        };
+        let Some((state, extra)) = self.streams.get_mut(idx) else {
+            return Ok(());
+        };
+        let Some(kind) = state
+            .codec_id
+            .and_then(vaco_format_nalu::header_kind_for)
+        else {
+            return Ok(());
+        };
+        let Some(config) = vaco_format_nalu::length_prefixed_config(kind, &new_extradata) else {
+            return Ok(());
+        };
+        state.needs_nal_repack = config.repack;
+        state.seq_header_written = true;
+        *extra = Some(config.record.clone());
+        let s = *state;
+        self.write_sequence_header(s, &config.record)
     }
 
     fn write_sequence_header(&mut self, s: StreamOut, extra: &[u8]) -> Result<()> {

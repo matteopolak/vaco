@@ -234,3 +234,67 @@ fn on_meta_data_carries_the_streams_own_video_and_audio_properties() {
     assert!(get("videodatarate").is_none());
     assert!(get("audiodatarate").is_none());
 }
+
+/// FLV's `AVCVIDEOPACKET` carries an `AVCDecoderConfigurationRecord` and
+/// length-prefixed NAL units (Adobe's "Video File Format Specification
+/// v10.1" §E.4.3.1, the same ISO/IEC 14496-15 record MP4 puts in `avcC`).
+/// A stream that arrived Annex-B — an encoder's own output, or a copy from
+/// MPEG-TS or raw Annex B — used to be written straight through, so the
+/// sequence header held `00 00 01 67 ...` where a record belongs and the
+/// tags held start codes. ffmpeg read it anyway, by falling back to Annex-B
+/// whenever a record does not start with `configurationVersion = 1`, which
+/// is why the byte layout is what this asserts and not the frame count.
+#[test]
+fn an_annexb_source_gets_a_real_record_and_length_prefixed_tags() {
+    const SPS: [u8; 25] = [
+        0x67, 0x64, 0x00, 0x0d, 0xac, 0xd9, 0x41, 0x41, 0xfb, 0x01, 0x10, 0x00, 0x00, 0x03, 0x00,
+        0x10, 0x00, 0x00, 0x03, 0x03, 0x20, 0xf1, 0x42, 0x99, 0x60,
+    ];
+    const PPS: [u8; 6] = [0x68, 0xeb, 0xe3, 0xcb, 0x22, 0xc0];
+    let annexb = |units: &[&[u8]]| {
+        let mut out = Vec::new();
+        for u in units {
+            out.extend_from_slice(&[0, 0, 0, 1]);
+            out.extend_from_slice(u);
+        }
+        out
+    };
+
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = FlvMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    let v = mux.add_stream(&video_params(&annexb(&[&SPS, &PPS]))).unwrap();
+    mux.write_header().unwrap();
+    let slice = [0x65u8, 0x11, 0x22, 0x33];
+    mux.write_packet(&packet(v, 0, 0, &annexb(&[&SPS, &PPS, &slice]), true))
+        .unwrap();
+    mux.write_trailer().unwrap();
+    let bytes = shared.snapshot();
+
+    // The sequence header tag: `17 00 00 00 00` then the record itself.
+    let at = bytes
+        .windows(5)
+        .position(|w| w == [0x17, 0x00, 0x00, 0x00, 0x00])
+        .expect("no AVC sequence header tag");
+    let record = &bytes[at + 5..];
+    assert_eq!(
+        record.first(),
+        Some(&1),
+        "the sequence header must be a configuration record, not a start code"
+    );
+    let expected = vaco_format_nalu::build_h264_avcc(&[&SPS], &[&PPS]).unwrap();
+    assert_eq!(&record[..expected.len()], expected.as_slice());
+
+    // And the NALU tag: `17 01 <cts:3>` then length-prefixed units.
+    let at = bytes
+        .windows(2)
+        .position(|w| w == [0x17, 0x01])
+        .expect("no AVC NALU tag");
+    let payload = &bytes[at + 5..];
+    let mut expected_payload = Vec::new();
+    for u in [SPS.as_slice(), PPS.as_slice(), slice.as_slice()] {
+        expected_payload.extend_from_slice(&(u.len() as u32).to_be_bytes());
+        expected_payload.extend_from_slice(u);
+    }
+    assert_eq!(&payload[..expected_payload.len()], expected_payload.as_slice());
+}
