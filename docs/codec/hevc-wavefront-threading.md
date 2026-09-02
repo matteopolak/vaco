@@ -723,12 +723,19 @@ itself is threaded) before the next begins:
    context-bank handoff as its own `RowPublish<ContextBank>` (`ContextBank`
    already `Copy`, so this reused the existing primitive, not a new one),
    replacing `saved_ctx`, still single-threaded.
-3. `Ctx`'s own split into shared (`Arc` or plain `&`, since the slice
-   lives at least as long as the row loop) and per-row-exclusive parts,
-   mechanically threading the new shape through `ctu.rs`/`deblock.rs`/
-   `sao.rs`'s existing call sites, still single-threaded — this is the
-   step most likely to need its own byte-exact re-verification pass, since
-   it touches the widest surface.
+3. **Analysis done** ("Step 3's concrete field categorization" section
+   below); code not yet started. `Ctx`'s own split into shared (`Arc` or
+   plain `&`, since the slice lives at least as long as the row loop) and
+   per-row-exclusive parts, mechanically threading the new shape through
+   `ctu.rs`/`deblock.rs`/`sao.rs`'s existing call sites, still
+   single-threaded. Confirmed, not merely still expected, to be the step
+   needing its own re-verification pass: `pic` turns out to need dropping
+   from `Ctx` entirely (unused by the walk), and `recon`/`cu_grid`/
+   `edges`/`sao_params` each need a *second* API change beyond step 1's
+   own `RowPublish` move, to pull `current` out of the shared struct —
+   see that section for exactly what and why, including
+   `retarget_pic_for_test` as a second call site needing the same update.
+   Likely more than one commit, per the coordinator's own sanction.
 4. Only then, real `std::thread::spawn` dispatch over the row loop, reusing
    `vaco_codec_core::threading`'s `Pool`/`Queue`/`Condvar`/`ReplyGuard`
    shape (row index in place of that module's frame index, `Result<()>`
@@ -824,3 +831,95 @@ stops it at compile time. This is recorded here as a hazard in its own
 right, independent of Stage 2b's own schedule: the fix (`RowPublish<T>`,
 landed) is available now, but the three structures are not moved onto it
 yet, so the latent race persists until each is.
+
+### Step 3's concrete field categorization, and a gap step 1 did not close
+
+Reading `Ctx`'s 36 fields (`ctu.rs`) and every module that touches them
+(`ctu.rs`/`decoder.rs`/`deblock.rs`/`sao.rs`), plus `retarget_pic_for_test`
+(the deblock-lag probe's own machinery, `planning/E2E-GAPS.md` §31 —
+`ctu.rs`'s only other place that enumerates every `Ctx` field by hand)
+before writing any split, per this item's own practice of reading before
+restructuring a byte-exact decoder's core state.
+
+**Categorization** (field names as declared):
+
+- **Not needed by the walk at all.** `pic: &'p mut Picture` has zero read
+  or write sites in `ctu.rs` (`grep -c '\.pic\.' ctu.rs` is `0`) —
+  everything the CTU walk touches goes through `recon` instead, since
+  §34's own `ReconPicture` conversion moved every reconstruction write off
+  `pic`. `pic` is read in exactly two places, both *after* the walk
+  finishes on the same `Ctx`: `decoder.rs`'s own `recon.materialize_into
+  (walk.pic)` call, and the deblock-lag probe's `walk.pic.clone()` (test
+  only). A row worker's own task therefore does not need `pic` at all —
+  it belongs entirely to the sequential stage, the same "owns all mutable
+  state, runs on the caller's thread" role `vaco_codec_core::threading`'s
+  own module doc describes for frame-threading's header stage, applied
+  one level down to WPP's own row loop.
+- **Genuinely shared, read-only for the whole slice.** The ~28 SPS/PPS/
+  slice-header-derived scalars and flags (`log2_ctb_size` through
+  `max_transform_hierarchy_depth_inter`, `is_p_slice`, `ctbs_x`, the
+  deblocking/SAO slice-level flags, `bit_depth_*`, `*_qp_offset`, etc.) —
+  none is ever reassigned after `Ctx::new`/`Ctx::retarget_pic_for_test`
+  constructs it, confirmed by reading every one of their doc comments and
+  finding no write site outside construction. `inter: Option<
+  InterSliceParams<'p>>` belongs here too: every one of its own fields
+  (`ref_pics_l0`/`ref_pics_l1`, the merge/AMVP/TMVP slice-level parameters)
+  is resolved once in `decoder.rs` before the CTU walk starts and never
+  written during it — `RefPic<'p>`'s own lifetime already ties it to
+  reference-picture data the walk only reads. All of this is `Arc`-able
+  (or a plain `&'p`, since every row worker's task lives no longer than
+  the slice) with no further work beyond moving it into a second struct.
+- **Genuinely per-row-exclusive.** `qp_y_prev` (already reset once per row
+  by `decoder::decode_wpp_rows`), `qg_qp_pred`/`is_cu_qp_delta_coded`/
+  `cu_qp_delta_val` (reset once per quantisation group, strictly within
+  one row's own CTU loop, never read across a row boundary). Small,
+  `Copy` scalars — the cheapest part of this split.
+- **The gap step 1 did not close.** `recon`/`cu_grid`/`edges`/`sao_params`
+  are not simply "shared" once `Ctx` splits — step 1 (`planning/
+  E2E-GAPS.md` §§41-43) moved each structure's `published` side onto
+  `RowPublish`, but left `current` exactly where it was: a single mutable
+  field on the *same* struct instance every row's own `Ctx` would still
+  share. Two workers each wanting to own "the row I am writing right now"
+  cannot both mutate one shared `current` field — the correction already
+  recorded above (before step 1 started coding) said this in the abstract;
+  reading `Ctx`'s own field list now makes it concrete: **the "shared"
+  half of `Ctx`'s split cannot hold these four structures as-is.** Each
+  needs a second, smaller redesign beyond step 1's: pull `current` out
+  into a value the per-row-exclusive half of `Ctx` owns privately (a
+  worker's own `EdgeBand`/`CuGridBand`/`Vec<CtuSao>`, or — for
+  `ReconPicture`, whose own tiles are finer than one row — whatever
+  per-row subset of tiles that row's worker is responsible for), leaving
+  the shared half holding only the `RowPublish` board and static geometry
+  (`cols`/`band_rows`/`n_bands`/`has_l1`). This is real API surface on all
+  four types, a second time, not a rename — `begin_row` stops mutating
+  `self.current` and instead returns an owned per-row writer; `finish`
+  becomes that writer's own method, publishing into the shared board by
+  reference. Every call site in `ctu.rs` that reads `walk.cu_grid`/
+  `walk.edges`/`walk.sao_params`/`walk.recon` needs to resolve "my own
+  still-open row" against the per-row writer and "an earlier row" against
+  the shared board's `RowPublish::get`, instead of one field deciding
+  which via `current_band` comparison the way all four do today.
+- **`retarget_pic_for_test` is a second call site that enumerates every
+  field by hand** (`ctu.rs`), separate from `Ctx::new`. Any split has to
+  update both constructors, and the probe's own `walk.pic.clone()` needs
+  `pic` supplied some other way once `Ctx` itself stops carrying it —
+  straightforward (the probe already runs after the walk, in the same
+  scope `decoder.rs`'s own `pic` local would live in), but another site
+  this step's own verification has to touch and re-check, not just the
+  production path.
+
+**Sizing note.** This categorization does not shrink step 3; if anything
+it sharpens why the plan named it "most likely to need its own
+re-verification pass": the per-row-exclusive/shared split for the ~32
+simple fields is genuinely mechanical and low-risk, but the four
+structure-carrying fields (`recon`/`cu_grid`/`edges`/`sao_params`) each
+need a second API change on top of step 1's, and that second change is
+where a mistake would be silent rather than a compile error — the same
+"a read past what was waited for must be refused, not served" property
+this document has stated from its own first version has to be designed
+into whatever the per-row writer's own "read my own earlier-in-this-row
+data" path looks like, not assumed safe by analogy to step 1. No code is
+attempted in this section on that basis: naming this precisely, before
+touching any of the four structures a second time, is judged worth its
+own separately-landed pass, the same call this document made before step
+1 began coding.
