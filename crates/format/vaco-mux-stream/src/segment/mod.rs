@@ -841,7 +841,13 @@ mod tests {
             factory,
         );
         let tb = vaco_core::Rational::new(1, 90_000);
-        seg.add_stream_with(&params(MediaType::Video), &StreamSpec { time_base: Some(tb) })
+        seg.add_stream_with(
+            &params(MediaType::Video),
+            &StreamSpec {
+                time_base: Some(tb),
+                ..StreamSpec::default()
+            },
+        )
             .unwrap();
         seg.write_header().unwrap();
         seg.write_packet(&packet(0, 0, true)).unwrap();

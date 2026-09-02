@@ -673,6 +673,7 @@ mod tests {
         .unwrap();
         let spec = StreamSpec {
             time_base: Some(Rational::new(1, 90_000)),
+            ..StreamSpec::default()
         };
         tee.add_stream_with(&params(MediaType::Video), &spec)
             .unwrap();

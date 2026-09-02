@@ -493,6 +493,7 @@ mod tests {
         // the reference instead keeps the input's own base, `1/12800` here.
         let spec = StreamSpec {
             time_base: Some(Rational::new(1, 12_800)),
+            ..StreamSpec::default()
         };
         let idx = m.add_stream_with(&video_params(), &spec).unwrap();
         assert_eq!(m.stream_time_base(idx), Some(Rational::new(1, 12_800)));
