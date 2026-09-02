@@ -2369,3 +2369,76 @@ binary's behavior or its byte-exactness bar.
 `vaco-codec-h264`, the AAC/transform crates, the filter crates,
 `vaco-conformance`, `vaco-codec-core` and the fuzz harnesses were not
 touched — outside this item's lane.
+
+
+## 32. HEVC B4 — the "reuse ProgressPicture per row" design was wrong; corrected
+
+§30/§31 left B4's design doc (`docs/codec/hevc-wavefront-threading.md`)
+believing Stage 1 was ready to write: the deblocking-lag question was
+answered (§31, one CTU row each side), and the doc's own central technical
+claim — that WPP could reuse `vaco_codec_core::picture::ProgressPicture`
+"one level down" (one instance per CTU row instead of one per picture),
+with zero new capability needed anywhere — had stood since §30 without
+being checked against that module's actual implementation. Before writing
+Stage 1 code against it, this pass read `crates/signal/vaco-codec-core/src/
+picture.rs` directly instead of trusting the doc-comment-level gloss the
+original design pass relied on. The claim does not hold.
+
+`ProgressPicture` publishes progress along exactly one axis: height, over a
+plane's *full* width, every time — `PlaneSpec` is `width_bytes`/`height`/
+`stride`, a band is `band_h` rows of that full width
+(`ProgressPicture::allocate`), and `PictureWriter::publish_through`'s only
+visible effect is `ready.store(rows, Release)`, a row *count*. There is no
+`band_h` at which a band can publish partial width — a band's own
+allocation is `stride` bytes wide by construction. That is exactly right
+for cross-picture pipelining (picture *N* is decoded in strict raster
+order, so "row `r` published" genuinely means "100% of row `r`'s width is
+done"). It is the wrong axis for WPP: row `r + 1`'s worker needs row `r`'s
+CTU `c`/`c + 1` done *while row `r`'s own worker is still two CTUs into
+that row* — almost none of row `r`'s width written yet. Chaining one
+`ProgressPicture` per CTU row, as the design doc proposed, cannot express
+"CTU column `c + 1` is done" — the only available signal is "this
+one-CTU-row-tall picture's own rows are done," which for a normal raster
+write only becomes true once the *entire* row has been written. Row `r + 1`
+would have to wait for row `r` to finish completely before starting at
+all — zero overlap between adjacent rows, not a smaller wavefront.
+
+A workaround exists (treat one flattened whole CTU as one "row" of a
+transposed, `band_h = 1` `ProgressPicture`, publishing per CTU instead of
+per picture-row) but it is not a small change: every reconstruction write
+and neighbour read in `ctu.rs` would need to address samples as (tile
+index, local offset) instead of the single contiguous, globally-addressed,
+full-width-row `Plane` every call site assumes today — a different memory
+layout for the crate's hottest data structure, not "the same mechanism one
+level down." A second, much smaller thing falls out of `ProgressPicture`
+*unmodified*: reconstruction (still one serial worker) can publish each
+finished CTU row as one full-width band the moment it completes — this is
+the primitive's correct, intended use — and a second worker running
+deblock+SAO can trail by one row via `wait_rows_for` (`DEFAULT_GUARD = 8`
+already covers deblocking's measured ≤3-sample reach). That is a genuine
+two-stage pipeline, but bounded near 2x regardless of thread count, so it
+does not meet the item's own 1/2/4/8/16-thread verification bar — a
+different, smaller feature than "WPP," not a scoped-down version of it.
+
+`docs/codec/hevc-wavefront-threading.md` is corrected in place (not
+rewritten from scratch): a new "Correction: chaining `ProgressPicture` per
+row does not give WPP its parallelism" section documents the above with
+`picture.rs` line citations, "What actually needs to become per-row",
+"Proposed staging" and "What is not yet known" are updated to stop
+asserting the disproven claim, and a new "Two honest paths forward" section
+lays out the two options going forward without picking one: (1) build true
+WPP, which now needs a genuinely new per-CTU-tile publish capability
+(possibly belonging in `vaco-codec-core` rather than hand-rolled here,
+since VP9/AV1's own tile/superblock structures could plausibly want the
+same shape) and costs more than the plan's XL/3-4-week sizing assumed, or
+(2) build the much smaller reconstruction/deblock+SAO two-stage pipeline
+instead, which is real and buildable now with zero new capability but is a
+different, smaller feature than the item as named. That choice is left to
+whoever owns the plan, the same way this pass would not have picked a
+lag bound for deblocking without measuring it first.
+
+No production code changed in this section — this is a design-document
+correction, reached by reading `vaco-codec-core` source, not new decoder
+behavior. `vaco-codec-h264`, the AAC/transform crates, the filter crates,
+`vaco-conformance`, `vaco-codec-core` itself and the fuzz harnesses were
+not touched.
