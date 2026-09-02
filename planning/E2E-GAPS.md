@@ -2533,3 +2533,75 @@ decoder's hottest data structure in the same pass.
 crates, `vaco-conformance` and the fuzz harnesses were not touched beyond
 verifying `vaco-codec-h264`/`vp8`/`vp9` still pass against the modified
 `vaco-codec-core`.
+
+## 34. D2 — `-filter_threads` finally reaches the scaler, for the implicit-converter path only
+
+**Item.** `planning/PERF-PROGRAMME.md` D2: `-filter_threads` was parsed
+(accepted, no error) but never consumed anywhere -- every `vaco_scale::Scaler`
+this tree constructs used `ScaleOptions::default()` (`threads: 0`, serial),
+regardless of what the flag said. Landed: `Cli::filter_threads`/
+`Cli::filter_thread_count()` (mirroring `-threads`' own default derivation,
+`min(available_parallelism, 4)`), threaded through
+`exec::run_pipeline(..., filter_threads: usize)` into
+`PipelineSpec::add_converter`'s new `threads: i32` parameter, which
+`ConverterSide` now passes as `ScaleOptions.threads` instead of hardcoding
+the library default. Landed on `main` inside `ca8bc1b` (swept in under an
+unrelated commit message by another agent's bare `git commit -m`; verified
+complete and compiling, not re-committed, per the coordinator's own
+no-history-rewrite decision) plus this session's own `1774c4d` for the
+docs backfill below it.
+
+**Scope, stated precisely because it is narrower than D2's own evidence
+section implies.** D2's cited baseline numbers (13.7% at `-threads 1`,
+~0.43s residual at default threads) came from an explicit
+`-vf scale=1920:1080` resize. That code path is `vaco-filter-video-geometry`'s
+`scale` filter, instantiated through `vaco-filter-graph`'s text-based
+`Instantiate` mechanism, which has no channel for a CLI-wide default at
+all -- confirmed by an actual attempt: adding a `default_threads` field to
+`Instantiate` compiles the graph builder fine but breaks well over 100
+`Instantiate { .. }` literals across nearly every filter crate in the tree
+(each one's own test module constructs it directly), which is not an "S"-
+sized change and was reverted rather than landed. What actually shipped
+here only reaches the CLI's own **implicit, no-`-vf`/`-s`/`-pix_fmt`**
+format-bridging converter (`exec::run_pipeline`'s ad-hoc `add_converter`
+path, used when a decoder's output format and an encoder's
+`accepted_pix_fmts` simply disagree and the user gave no video options at
+all). An explicit `-vf scale=...` or `-s WxH` resize -- including the
+literal scenario D2's own baseline evidence measured -- is **still
+unaffected by `-filter_threads`** after this change; reaching it needs a
+graph-wide default-plumbing mechanism this item did not build.
+
+**Measured** (private `--target-dir`, `dist` profile, same binary via
+`-filter_threads 1` vs unstated, decode `-threads 1` in both arms to
+isolate the converter's own thread count; 1080p/125-frame H.264 source,
+`-c:v png -f image2` to force a real yuv420p->rgb24 implicit conversion
+with no `-vf`; 10 interleaved rounds, alternating start order): median
+wall ratio (default/serial) **0.98x**, 5/10 rounds faster; median
+CPU-seconds ratio **1.03x** (slightly more total CPU, as expected for
+parallel work). Load average 29-46 throughout (many concurrent agents on
+this machine) -- per `planning/PERF-PROGRAMME.md` SS2, CPU-seconds is the
+primary number under this much contention, and it says this specific
+workload (one 1080p format conversion per frame, no resize) is a wash
+under heavy load, not a measured win. `vaco-scale`'s own bench
+(`docs/signal/vaco-scale.md` SS8: 3.02x at 8 threads on a *resize*, more
+per-pixel work than a pure format conversion) is what actually gives this
+plumbing its value once a real resize is reachable through it -- this
+item does not reach one, per the scope note above.
+
+**Why land it anyway (D2's own stop condition, unmet by design).** D2's
+plan text states `**Stop.** None needed; it is an option-plumbing change
+verified by the existing thread_count_never_changes_the_output property.`
+-- it was never conditioned on a measured wall-clock win, because before
+this change `-filter_threads` had **zero effect**, silently: a user
+setting it got no error and no threading. `vaco-scale`'s own property test
+(`tests/properties.rs::thread_count_never_changes_the_output`) still
+passes unmodified, confirming the plumbing does not change output.
+
+**Follow-up, not attempted here:** a graph-wide default-threads mechanism
+reaching `scale`/`-s`/`-vf` instances would need either a new field on
+`vaco_filter_core::Graph`'s own build path (not `Instantiate`, to avoid
+the 100+-callsite blast radius found above) or an explicit `threads=N`
+argument on `scale` itself with the CLI rewriting auto-generated
+`-s`-derived filter text only (leaving a user's own literal `-vf` text
+alone, matching how `-sws_flags` only reaches auto-inserted converters
+today, never a user's explicit filter instance).
