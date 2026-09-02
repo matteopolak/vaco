@@ -90,6 +90,7 @@ impl CliFilterRegistry {
         &vaco_filter_subtitle::SubtitleRegistry,
         &vaco_filter_temporal::TemporalRegistry,
         &vaco_filter_text::TextRegistry,
+        &vaco_filter_v360::V360Registry,
         &vaco_filter_video_composite::CompositeRegistry,
         &vaco_filter_video_format::FormatRegistry,
         &vaco_filter_video_geometry::GeometryRegistry,

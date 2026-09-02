@@ -93,6 +93,7 @@ vaco-filter-stack = { path = "../../filter/vaco-filter-stack" }
 vaco-filter-subtitle = { path = "../../filter/vaco-filter-subtitle" }
 vaco-filter-temporal = { path = "../../filter/vaco-filter-temporal" }
 vaco-filter-text = { path = "../../filter/vaco-filter-text" }
+vaco-filter-v360 = { path = "../../filter/vaco-filter-v360" }
 vaco-filter-video-composite = { path = "../../filter/vaco-filter-video-composite" }
 vaco-filter-video-format = { path = "../../filter/vaco-filter-video-format" }
 vaco-filter-video-geometry = { path = "../../filter/vaco-filter-video-geometry" }
