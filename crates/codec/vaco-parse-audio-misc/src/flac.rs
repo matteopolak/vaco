@@ -219,7 +219,21 @@ impl Parser for FlacParser {
         if extradata.is_empty() {
             return Ok(());
         }
-        let body = locate_streaminfo(extradata).unwrap_or(extradata);
+        // `extradata.len() == LEN` is the *only* unambiguous "already bare"
+        // case: there is no wrapper left to strip because there is no room
+        // for one. Anything longer that `locate_streaminfo` cannot place a
+        // real block header in is refused rather than truncated and
+        // guessed at -- silently accepting an unrecognised shape by taking
+        // its first 34 bytes is exactly the bug this module was fixed for.
+        let body = match locate_streaminfo(extradata) {
+            Some(body) => body,
+            None if extradata.len() == LEN => extradata,
+            None => {
+                return Err(Error::InvalidData(
+                    "FLAC extradata is not a recognised STREAMINFO shape",
+                ));
+            }
+        };
         let info = StreamInfo::parse(body)?;
         self.params = Some(info.to_codec_parameters());
         self.info = Some(info);
@@ -354,8 +368,39 @@ mod tests {
     #[test]
     fn locate_streaminfo_falls_back_to_none_for_a_bare_block() {
         // The bare shape has no header for this function to find; the
-        // caller's `unwrap_or(extradata)` fallback is what handles it.
+        // caller treats exactly-LEN input as already bare instead (see
+        // `set_extradata`), which is why the fixture is still accepted --
+        // covered next -- while it does not round-trip through this
+        // function on its own.
         assert_eq!(locate_streaminfo(&fixture()), None);
+    }
+
+    /// The regression this bug class asks for directly: a payload one
+    /// structural level off from correct -- `dfLa`'s own un-converted
+    /// full-box payload, the exact shape that used to reach this parser
+    /// before `vaco-demux-mp4` grew a `ConfigFlavour::Dfla` arm -- must be
+    /// **refused**, not silently truncated into a plausible-looking wrong
+    /// answer. Before the `extradata.len() == LEN` fallback was narrowed to
+    /// only fire when there is no wrapper left to strip, this returned
+    /// `Ok` with channels=1, `bits_per_raw_sample=1` for what is actually a
+    /// 2-channel, 16-bit stream.
+    #[test]
+    fn a_shifted_payload_is_refused_not_guessed_at() {
+        let mut unconverted_dfla = vec![0u8, 0, 0, 0]; // full-box version+flags
+        unconverted_dfla.push(0x80); // metadata-block header: last-block, type 0
+        unconverted_dfla.extend_from_slice(&[0x00, 0x00, 0x22]); // length 34
+        unconverted_dfla.extend_from_slice(&fixture());
+        assert_eq!(unconverted_dfla.len(), 4 + 4 + LEN);
+
+        let mut parser = FlacParser::new(Limits::strict());
+        let err = parser
+            .set_extradata(&unconverted_dfla)
+            .expect_err("8 extra leading bytes must not parse as a valid STREAMINFO");
+        assert!(matches!(err, Error::InvalidData(_)), "{err:?}");
+        assert!(
+            parser.parameters().is_none(),
+            "a refused set_extradata must not leave a stale or partial description behind"
+        );
     }
 
     #[test]
