@@ -180,6 +180,18 @@ impl DvDemuxer {
                 chroma_location: ChromaLocation::TopLeft,
                 ..ColorInfo::default()
             },
+            // Measured directly (`ffmpeg -f lavfi ... -c:v dvvideo`, real
+            // `ffprobe`, both NTSC and PAL): `field_order=unknown`. DV
+            // carries no interlace-flag bit this crate reads (or that SMPTE
+            // 314M states for the header blocks parsed here), and
+            // `VideoParameters::field_order`'s own `#[default]` is
+            // `Progressive`, which silently reported the wrong value here --
+            // the same trap `vaco-parse-mpegvideo`'s `mpeg4.rs` and
+            // `vaco-parse-image`'s `jpeg.rs` both independently hit and
+            // named. DV has no separate container-level merge step to
+            // interact with (unlike Matroska's own `FieldOrder`/
+            // `FlagInterlaced` EBML elements), so this is unconditional.
+            field_order: vaco_codec_core::FieldOrder::Unknown,
             ..VideoParameters::default()
         };
         let mut vparams = CodecParameters::new(MediaType::Video).with_codec(CodecId::Dvvideo);

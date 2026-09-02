@@ -54,6 +54,12 @@ fn a_real_ntsc_sample_reports_the_measured_dimensions_and_frame_rate() {
     // 720 columns regardless of the picture's true 4:3 shape, so this is
     // not derivable from width/height alone.
     assert_eq!(vp.sample_aspect_ratio, vaco_core::Rational { num: 8, den: 9 });
+    // Measured (`ffmpeg -c:v dvvideo`, real `ffprobe`): `field_order=
+    // unknown`. DV carries no interlace-flag bit this crate reads,
+    // and `VideoParameters::field_order`'s own `#[default]` is
+    // `Progressive`, which silently reported the wrong value here before
+    // this field was set explicitly.
+    assert_eq!(vp.field_order, vaco_codec_core::FieldOrder::Unknown);
 }
 
 #[test]

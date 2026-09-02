@@ -318,6 +318,27 @@ impl Mpeg4Parser {
             // bit-for-bit.
             v.quarter_sample = Some(false);
             v.divx_packed = Some(false);
+            // `field_order` is deliberately NOT set here. Measured
+            // (`ffmpeg -c:v mpeg4`, real `ffprobe`): AVI and MP4/ISOBMFF
+            // report `field_order=unknown` (this crate currently reports
+            // `progressive`, inherited from `VideoParameters::field_order`'s
+            // `#[default]`), but a real `-f matroska` mpeg4 fixture reports
+            // `progressive` and must keep reporting it. Tried asserting
+            // `Unknown` here directly and it broke the Matroska case: the
+            // generic container/parser merge in `vaco-format-core::
+            // discovery`'s `CodecParameters::fill_from` treats
+            // `field_order == FieldOrder::Progressive` as its "the container
+            // stated nothing" test, so Matroska's own real, explicit
+            // `FlagInterlaced`-derived `Progressive` gets read as blank and
+            // silently overwritten by whatever this parser asserts. Fixing
+            // that needs the merge's sentinel corrected (and, on inspection,
+            // at least two other codec/container combinations --
+            // `prores`-in-MOV and Y4M -- currently read `progressive`
+            // through the exact same accidental default collision this
+            // crate's mpeg4 stream relies on today, un-measured either way
+            // by anything in this suite, so simply flipping the sentinel
+            // elsewhere is not safe to do blind). Left unset and reported
+            // precisely rather than guessed at from either direction.
         }
         if let Some(existing) = &mut self.params {
             existing.fill_from(&params);
