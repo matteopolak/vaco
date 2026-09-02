@@ -727,3 +727,55 @@ document exists so the next pass starts on step 1 with the map already
 drawn, per this item's own repeated practice of a cited design pass ahead
 of a change this load-bearing, rather than discovering the shape of the
 problem inside an in-progress rewrite of a byte-exact decoder's core loop.
+
+### Correction: gap 3's fix is not "mechanical and small"
+
+Starting to actually write it exposed a wrong claim above. "The fix is
+mechanical and small ... `Vec<OnceLock<Band>>`, one slot per row" described
+only the *read* side correctly. It ignored `current` — the row a writer is
+actively building — and `current` cannot stay what it is today (a single
+field embedded in the same struct the published rows live on) once more
+than one row is genuinely in flight at a time, which is the entire point
+of threading the row loop.
+
+Today, `EdgeMarks::begin_row`/`mark_vert`/`mark_horiz` mutate one shared
+`current: EdgeBand` because exactly one worker is ever active. Real WPP
+overlaps rows (bounded by the 2-CTU CABAC lag, but genuinely bounded, not
+zero) — row *r* and row *r + 1* can both be mid-decode at once, each
+needing its own private, exclusively-owned, freely-mutable band to write
+into. A single shared `current` field cannot serve two writers; giving
+each row its own local band and publishing it into a shared, fixed-size
+`Vec<OnceLock<Band>>` on finish is the only way to keep every write
+data-race-free. That reshapes the type into two cooperating pieces, not
+one struct with a swapped-out field:
+
+- a `{cols, band_rows, n_bands, published: Vec<OnceLock<Band>>}` shared
+  handle (`Arc`'d across row workers), read-only after construction except
+  for each `OnceLock`'s own one-time `set`;
+- a per-row-worker-owned local `Band` (plain, unsynchronised, exactly
+  today's `EdgeBand`/`CuGridBand`/`Vec<CtuSao>`), which the worker mutates
+  freely while decoding its own row and publishes into the shared handle's
+  `OnceLock` slot on finish.
+
+`vert_at`/`horiz_at` and their `CuGrid`/`SaoParamsGrid` equivalents then
+need two call shapes instead of one: "read my own still-open row" (goes to
+the worker's local band — used today by, e.g., a merge/AMVP left-neighbour
+lookup at an earlier column in the same row, a same-thread dependency that
+must keep working exactly as it does now) and "read an earlier row" (goes
+through the shared handle's `OnceLock::get`, `None` meaning "not published
+yet" — which, per this document's own repeated rule for Stage 2, must be a
+hard error if a bound was respected, since it would mean the wait/dispatch
+logic let a reader run ahead of what it was supposed to have waited for).
+
+In short: `EdgeMarks`, `CuGrid` and `SaoParamsGrid` each need essentially
+the same split `ReconPlane` already has between its own in-progress state
+and `vaco_codec_core::picture`'s published tiles — not a smaller, cheaper
+version of it. `3ac859f`'s own diff (352 insertions across 3 files, for
+one structure) is the right order-of-magnitude estimate for what this
+step now costs, times three structures, not the one- or two-line field
+swap the paragraph above it originally suggested. This does not change
+the proposed landing order, only its size: step 1 is priced closer to
+"`ReconPlane`'s own tile move, three more times" than to "wrap an existing
+`Vec` in `OnceLock`." Named here rather than silently fixed, because
+under-pricing step 1 was exactly the kind of mistake a design pass exists
+to catch before it costs an implementation attempt instead of a paragraph.
