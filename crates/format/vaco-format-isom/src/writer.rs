@@ -355,10 +355,25 @@ pub fn av1c(record: &[u8]) -> Vec<u8> {
     bx(b"av1C", record)
 }
 
-/// `vpcC`, a **full** box, for VP8/VP9 (`WebM` Project's ISOBMFF binding).
+/// `vpcC`, for VP8/VP9 (`WebM` Project's ISOBMFF binding).
+///
+/// `vpcC` **is** a full box (`version = 1, flags = 0`), but `record` must
+/// already carry that 4-byte header itself — `vaco_parse_vpx::vpcc::parse`'s
+/// own doc explains why: `vaco-demux-mp4` hands `CodecParameters::extradata`
+/// the box's payload verbatim for this codec, unlike `alac`/`dfLa` below,
+/// whose demux sides strip their own full-box headers before storing
+/// `extradata` and whose muxers (correctly) re-add one via [`fullbx`]. Doing
+/// the same here — this function used to call
+/// `fullbx(b"vpcC", 1, 0, record)` — added a *second* version+flags in front
+/// of a `record` that already had one, corrupting `profile`/`level`/colour
+/// on every MP4-to-MP4 VP9 `-c:v copy`. Measured: a real `ffmpeg -c:v
+/// libvpx-vp9` fixture's own `vpcC` payload is `01 00 00 00 00 0a 82 02 02
+/// 02 00 00` (version 1, flags 0, profile 0, level 10, ...); re-muxing it
+/// through the old `fullbx` call produced `01 00 00 00 01 00 00 00 00 0a 82
+/// ...`, shifting every field after the first by 4 bytes.
 #[must_use]
 pub fn vpcc(record: &[u8]) -> Vec<u8> {
-    fullbx(b"vpcC", 1, 0, record)
+    bx(b"vpcC", record)
 }
 
 /// `dOps`: the Opus specific box. `record` must already be in the box's own
@@ -1034,6 +1049,22 @@ mod tests {
 
     fn only_box(data: &[u8]) -> IsoBox<'_> {
         BoxIter::new(data, 0).flatten().next().unwrap()
+    }
+
+    /// `vpcC`'s payload is what `vaco-demux-mp4` hands back as
+    /// `CodecParameters::extradata` for VP8/VP9 -- the box's own bytes
+    /// *including* its full-box version+flags, per
+    /// `vaco_parse_vpx::vpcc::parse`'s documented convention. `vpcc()` must
+    /// wrap that verbatim, not add a second header via `fullbx`: a real
+    /// `ffmpeg -c:v libvpx-vp9` fixture's own `vpcC` payload, captured by
+    /// hex-dumping the muxed file.
+    #[test]
+    fn vpcc_does_not_double_the_full_box_header() {
+        let real_payload: [u8; 12] = [0x01, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x82, 0x02, 0x02, 0x02, 0x00, 0x00];
+        let bytes = vpcc(&real_payload);
+        let b = only_box(&bytes);
+        assert_eq!(b.kind(), FourCc::new(b"vpcC"));
+        assert_eq!(b.payload, &real_payload, "must not gain a second version+flags header");
     }
 
     #[test]
