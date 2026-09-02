@@ -65,6 +65,14 @@ pub(crate) struct Ident {
     pub picx: u32,
     pub picy: u32,
     pub pf: PixelFormat,
+    /// Frame rate numerator/denominator (section 6.2 steps 11-12): the
+    /// stream's own declared picture rate is `frn / frd` per second. Used
+    /// to give a decoded frame a real `Frame::duration` — every real video
+    /// decoder in this tree sets it (see `vaco-codec-h264`/`-hevc`/`-vp8`/
+    /// `-vp9`/`-mpeg12`/`-h263`), and this one was the exception, silently
+    /// discarding both fields on parse until this fix.
+    pub frn: u32,
+    pub frd: u32,
 }
 
 impl Ident {
@@ -91,8 +99,8 @@ impl Ident {
         let pich = r.get(24);
         let picx = r.get(8);
         let picy = r.get(8);
-        let _frn = r.get(32);
-        let _frd = r.get(32);
+        let frn = r.get(32);
+        let frd = r.get(32);
         let _parn = r.get(24);
         let _pard = r.get(24);
         let _cs = r.get(8);
@@ -134,6 +142,8 @@ impl Ident {
             picx: u32::from(u8::try_from(picx).unwrap_or(0)),
             picy: u32::from(u8::try_from(picy).unwrap_or(0)),
             pf,
+            frn,
+            frd,
         })
     }
 }
@@ -195,6 +205,11 @@ mod tests {
         assert_eq!((ident.fmbw, ident.fmbh), (15, 3));
         assert_eq!((ident.picw, ident.pich), (240, 48));
         assert_eq!(ident.pf, PixelFormat::Yuv420);
+        // `frn`/`frd` used to be parsed and immediately discarded
+        // (bound to `_frn`/`_frd`), which is why no decoded frame ever
+        // carried a real `Frame::duration` -- see `decoder.rs`'s own doc
+        // on the fix. `sample_ident_body` encodes a 30/1 (30 fps) stream.
+        assert_eq!((ident.frn, ident.frd), (30, 1));
     }
 
     #[test]

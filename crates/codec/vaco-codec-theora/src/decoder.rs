@@ -2,7 +2,7 @@
 //! reconstructed picture per keyframe packet.
 
 use vaco_codec_core::Decoder;
-use vaco_core::{Error, MediaType, Result};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -89,7 +89,7 @@ impl TheoraDecoder {
         clippy::integer_division,
         reason = "chroma crop offset is a floor division by the (1 or 2) subsampling factor, not a rounding shortcut"
     )]
-    fn decode_video_packet(&mut self, payload: &[u8]) -> Result<()> {
+    fn decode_video_packet(&mut self, payload: &[u8], pts: vaco_core::Timestamp) -> Result<()> {
         let Some(ident) = self.ident else {
             return Err(Error::InvalidData("theora: video packet before headers"));
         };
@@ -155,6 +155,21 @@ impl TheoraDecoder {
                 }
             }
         }
+        out.pts = pts;
+        // This decoder discarded the identification header's own declared
+        // frame rate (`frn`/`frd`, section 6.2 steps 11-12) on parse
+        // (`Ident::parse` bound them to `_frn`/`_frd` and never stored
+        // them), so no decoded frame ever carried a `pts` *or* a
+        // `duration` -- the exact bug class this session's audit found
+        // and fixed across every audio decoder in the tree
+        // (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/`-ac3`/
+        // `-aac`/`-mpegaudio`/`-opus`), here on the one remaining video
+        // decoder that had it too. `frd == 0` is invalid per the spec
+        // (section 6.2 step 12) but guarded rather than trusted.
+        let time_base = Rational::new(i32::try_from(ident.frd.max(1)).unwrap_or(1), i32::try_from(ident.frn.max(1)).unwrap_or(1));
+        out.duration = Timestamp::new(1)
+            .to_duration(time_base)
+            .unwrap_or(Duration::ZERO);
         self.pending = Some(out);
         Ok(())
     }
@@ -166,7 +181,7 @@ impl Decoder for TheoraDecoder {
             self.draining = true;
             return Ok(());
         };
-        self.decode_video_packet(packet.payload())
+        self.decode_video_packet(packet.payload(), packet.pts)
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
@@ -289,7 +304,7 @@ mod tests {
     #[test]
     fn video_packet_before_headers_is_a_clean_error() {
         let mut dec = TheoraDecoder::new(Limits::permissive());
-        assert!(dec.decode_video_packet(&[0]).is_err());
+        assert!(dec.decode_video_packet(&[0], Timestamp::NONE).is_err());
     }
 
     /// A legitimately large 4:4:4 frame must fit `Limits::strict`'s frame

@@ -188,3 +188,67 @@ fn keyframes_match_ffmpegs_decode_byte_exact_per_plane() {
         assert_plane_exact("V", packet_index, &v, &rv);
     }
 }
+
+/// `TheoraDecoder::decode_video_packet` used to drop the triggering
+/// packet's own `pts` on the floor (it took only `payload: &[u8]`, never
+/// the `Packet` itself) and never computed a `duration` at all (the
+/// identification header's own declared frame rate, `frn`/`frd`, was
+/// parsed and immediately discarded) -- the same class of bug this
+/// session's audit found and fixed across every audio decoder in the
+/// tree, here on the one video decoder that had it too. Every keyframe
+/// this crate can decode from a real file must now carry the demuxer's
+/// own real `pts` and a real, non-zero, and — since `bear.ogv` is
+/// constant frame rate — *identical* `duration` across every one of them.
+#[test]
+fn keyframes_carry_the_demuxers_real_pts_and_a_real_constant_duration() {
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bear.ogv"))
+        .expect("reads fixture");
+    let mut d = vaco_demux_ogg::OggDemuxer::open(
+        Box::new(MemorySource::new(bytes)),
+        &NoParsers,
+        &FormatOptions::default(),
+    )
+    .expect("opens");
+
+    let video_idx = d
+        .streams()
+        .iter()
+        .find(|s| s.params.codec_id == Some(CodecId::Theora))
+        .map(|s| s.index)
+        .expect("has a theora stream");
+    let extradata = d
+        .streams()
+        .iter()
+        .find(|s| s.index == video_idx)
+        .and_then(|s| s.params.extradata.clone())
+        .expect("has extradata");
+
+    let mut dec = TheoraDecoder::new(Limits::permissive());
+    dec.set_extradata(&extradata).expect("valid setup header");
+
+    let mut checked = Vec::new();
+    while let Ok(packet) = d.read_packet() {
+        if packet.stream_index != video_idx {
+            continue;
+        }
+        let sent_pts = packet.pts;
+        if dec.send_packet(Some(&packet)).is_err() {
+            continue; // delta frame; out of scope for this crate
+        }
+        let Ok(frame) = dec.receive_frame() else {
+            continue;
+        };
+        assert_eq!(frame.pts, sent_pts, "decoded frame must carry the packet's own pts");
+        assert_ne!(
+            frame.duration,
+            vaco_core::Duration::ZERO,
+            "decoded frame must carry a real, non-zero duration"
+        );
+        checked.push(frame.duration);
+    }
+    assert_eq!(checked.len(), 3, "expected exactly the three known keyframes of bear.ogv");
+    assert!(
+        checked.windows(2).all(|w| w[0] == w[1]),
+        "bear.ogv is constant frame rate; every keyframe's duration must be identical: {checked:?}"
+    );
+}
