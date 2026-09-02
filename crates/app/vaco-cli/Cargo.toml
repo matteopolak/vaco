@@ -56,48 +56,16 @@ vaco-chlayout = { path = "../../model/vaco-chlayout" }
 vaco-io = { path = "../../io/vaco-io" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
 vaco-protocol-file = { path = "../../io/vaco-protocol-file" }
-# CL-20/CL-25: `-vf`/`-af`/`-filter_complex`/`-lavfi` need a `FilterRegistry`
-# that can instantiate *any* registered filter by name. No such aggregate
-# exists in `vaco-registry` (`FilterDesc` carries no `build` fn pointer the
-# way `DecoderDesc`/`EncoderDesc`/`MuxerDesc` do — see
-# `crate::filterreg`'s module doc). Every filter crate already exports a
-# per-family `FilterRegistry` impl for exactly this purpose (the same shape
-# `vaco-conformance::registries::REGISTRIES` already composes for its own
-# reference-gated option tests), so `crate::filterreg::CliFilterRegistry`
-# tries each one in turn. This list is that same reviewed set.
+# CL-20/CL-25: `-vf`/`-af`/`-filter_complex`/`-lavfi` resolve filter names
+# through `vaco_registry::Filters`, generated from every filter crate's own
+# `filter_dispatch` component (GitHub #497 fixed this: a hand-maintained
+# list of every filter crate here used to back it, and it silently drifted
+# from `vaco-registry`'s own `FILTERS` table). `vaco-filter-video-format` is
+# still named directly below because `fps_mode.rs` builds its `vfr`/`cfr`
+# nodes straight from that crate's types rather than through `-vf`'s text
+# grammar; no other single filter crate needs naming here any more.
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
-vaco-filter-aanalysis = { path = "../../filter/vaco-filter-aanalysis" }
-vaco-filter-adynamics = { path = "../../filter/vaco-filter-adynamics" }
-vaco-filter-aeffects = { path = "../../filter/vaco-filter-aeffects" }
-vaco-filter-aeq = { path = "../../filter/vaco-filter-aeq" }
-vaco-filter-analysis = { path = "../../filter/vaco-filter-analysis" }
-vaco-filter-artistic = { path = "../../filter/vaco-filter-artistic" }
-vaco-filter-asource = { path = "../../filter/vaco-filter-asource" }
-vaco-filter-audio = { path = "../../filter/vaco-filter-audio" }
-vaco-filter-blur = { path = "../../filter/vaco-filter-blur" }
-vaco-filter-color = { path = "../../filter/vaco-filter-color" }
-vaco-filter-convolve = { path = "../../filter/vaco-filter-convolve" }
-vaco-filter-deinterlace = { path = "../../filter/vaco-filter-deinterlace" }
-vaco-filter-denoise = { path = "../../filter/vaco-filter-denoise" }
-vaco-filter-draw-vf = { path = "../../filter/vaco-filter-draw-vf" }
-vaco-filter-geometry = { path = "../../filter/vaco-filter-geometry" }
-vaco-filter-key = { path = "../../filter/vaco-filter-key" }
-vaco-filter-lut = { path = "../../filter/vaco-filter-lut" }
-vaco-filter-mm = { path = "../../filter/vaco-filter-mm" }
-vaco-filter-motion = { path = "../../filter/vaco-filter-motion" }
-vaco-filter-overlay = { path = "../../filter/vaco-filter-overlay" }
-vaco-filter-palette = { path = "../../filter/vaco-filter-palette" }
-vaco-filter-scope = { path = "../../filter/vaco-filter-scope" }
-vaco-filter-source = { path = "../../filter/vaco-filter-source" }
-vaco-filter-stack = { path = "../../filter/vaco-filter-stack" }
-vaco-filter-subtitle = { path = "../../filter/vaco-filter-subtitle" }
-vaco-filter-temporal = { path = "../../filter/vaco-filter-temporal" }
-vaco-filter-text = { path = "../../filter/vaco-filter-text" }
-vaco-filter-v360 = { path = "../../filter/vaco-filter-v360" }
-vaco-filter-video-composite = { path = "../../filter/vaco-filter-video-composite" }
 vaco-filter-video-format = { path = "../../filter/vaco-filter-video-format" }
-vaco-filter-video-geometry = { path = "../../filter/vaco-filter-video-geometry" }
-vaco-filter-video-source = { path = "../../filter/vaco-filter-video-source" }
 
 [dev-dependencies]
 proptest.workspace = true

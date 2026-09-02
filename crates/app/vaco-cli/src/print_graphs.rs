@@ -59,7 +59,7 @@ use vaco_textformat::{FormatOpts, SectionId, TextFormat, writers};
 
 use crate::cli::value_str;
 use crate::exit::{AvError, Diagnostic};
-use crate::filterreg::CliFilterRegistry;
+use vaco_registry::Filters;
 
 /// A resolved `-print_graphs*` request.
 #[derive(Debug)]
@@ -138,7 +138,7 @@ pub fn render(complex_filters: &[String], format: &str) -> Result<RenderOutcome,
     tf.open(SectionId::ROOT).map_err(|e| text_err(&e))?;
     tf.open(SectionId::GRAPHS).map_err(|e| text_err(&e))?;
     for (index, text) in complex_filters.iter().enumerate() {
-        let built = vaco_filter_graph::parse_and_build(text, &CliFilterRegistry).map_err(|e| {
+        let built = vaco_filter_graph::parse_and_build(text, &Filters).map_err(|e| {
             Diagnostic::new(
                 AvError::EINVAL,
                 vec![format!("Error configuring filter graph: {}", e.render(text))],

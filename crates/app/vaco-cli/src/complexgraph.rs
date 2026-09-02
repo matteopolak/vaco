@@ -81,7 +81,7 @@ use vaco_filter_core::LinkFormat;
 use vaco_sched::spec::{PipelineSpec, SourceBind};
 use vaco_sched::{FrameTap, InputRef};
 
-use crate::filterreg::CliFilterRegistry;
+use vaco_registry::Filters;
 use crate::select::InputStreams;
 
 /// One `-filter_complex`/`-lavfi` **labelled** output pad, as `-map [label]`
@@ -113,7 +113,7 @@ pub struct ComplexPad {
 /// # Errors
 /// A message naming the graph text and what failed to parse.
 pub fn catalog(texts: &[String]) -> Result<Vec<ComplexPad>, String> {
-    let registry = CliFilterRegistry;
+    let registry = Filters;
     let mut pads = Vec::new();
     for text in texts {
         let built = vaco_filter_graph::parse_and_build(text, &registry)
@@ -314,7 +314,7 @@ pub fn build_and_attach(
     used: &mut HashSet<(u32, u32)>,
     auto_conversion: bool,
 ) -> Result<Vec<ComplexOutput>, String> {
-    let registry = CliFilterRegistry;
+    let registry = Filters;
     let mut built = vaco_filter_graph::parse_and_build(text, &registry)
         .map_err(|e| format!("filtergraph: {}", e.render(text)))?;
 

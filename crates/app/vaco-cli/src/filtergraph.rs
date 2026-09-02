@@ -9,8 +9,8 @@
 //! # What is implemented
 //!
 //! - `-vf`/`-af`/`-filter[:v|:a]` text, parsed and built through
-//!   [`crate::filterreg::CliFilterRegistry`] (every registered filter
-//!   reachable, per that module's doc).
+//!   [`vaco_registry::Filters`] (every registered filter
+//!   reachable, generated from vaco-component.toml).
 //! - `-s WxH` (or a named abbreviation, `vaco_core::parse::image_size`),
 //!   appended as `scale=w=W:h=H`.
 //! - `-aspect` (`W:H`, `W/H`, or a bare decimal), appended as `setdar=dar=…`
@@ -53,7 +53,7 @@ use vaco_filter_core::{Graph, LinkFormat, NodeId};
 use vaco_pixfmt::PixFmt;
 use vaco_sampfmt::SampleFmt;
 
-use crate::filterreg::CliFilterRegistry;
+use vaco_registry::Filters;
 
 /// Everything CL-20's options resolved to for one output stream.
 #[derive(Debug, Clone, Default)]
@@ -228,7 +228,7 @@ pub fn build(
     let text = describe(opts, media)
         .unwrap_or_else(|| if media == MediaType::Audio { "anull" } else { "null" }.to_owned());
 
-    let registry = CliFilterRegistry;
+    let registry = Filters;
     let mut built = vaco_filter_graph::parse_and_build(&text, &registry)
         .map_err(|e| format!("filtergraph: {}", e.render(&text)))?;
 
