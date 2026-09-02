@@ -361,8 +361,16 @@ pub fn vpcc(record: &[u8]) -> Vec<u8> {
     fullbx(b"vpcC", 1, 0, record)
 }
 
-/// `dOps`: the Opus specific box, `record` being `OpusHead` minus its magic
-/// and version byte, exactly as `vaco-demux-mp4` reads it back.
+/// `dOps`: the Opus specific box. `record` must already be in the box's own
+/// shape — `version(1) channels(1) pre_skip(16 BE) input_sample_rate(32 BE)
+/// output_gain(16 BE) channel_mapping_family(1)`, no magic — **not**
+/// `OpusHead`'s own magic-prefixed, little-endian shape. This function only
+/// wraps bytes it is given in a plain box; converting from `OpusHead` (what
+/// `CodecParameters::extradata` carries) is the caller's job — see
+/// `vaco-mux-mp4::entry::opus_head_to_dops` and its doc comment for the
+/// measured layout and the real bug an earlier, wrong version of this
+/// comment caused (a straight passthrough that shipped a `dOps` box with a
+/// phantom magic prefix and every multi-byte field byte-swapped).
 #[must_use]
 pub fn dops(record: &[u8]) -> Vec<u8> {
     bx(b"dOps", record)

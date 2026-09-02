@@ -100,6 +100,7 @@ pub(crate) fn codec_parameters(
         .or_else(|| params.codec_id.map(vaco_codec_core::CodecId::media_type));
 
     let mut hevc_length_size = None;
+    let mut opus_pre_skip = None;
     if let Some(config) = entry.config() {
         match config.flavour {
             ConfigFlavour::Esds => {
@@ -137,6 +138,29 @@ pub(crate) fn codec_parameters(
                 // silently dropped the other 21 to zero samples each,
                 // exiting 0 having produced about 2.5% of the audio.
                 params.extradata = config.data.get(4..).map(<[u8]>::to_vec);
+            }
+            ConfigFlavour::Dops => {
+                // `dOps` is not "`OpusHead` minus its magic and version
+                // byte" (a claim `vaco-format-isom::writer::dops`'s doc
+                // comment used to make, and this crate's write side used to
+                // trust): it keeps the version byte and drops only the
+                // 8-byte magic, and every multi-byte field is big-endian,
+                // not little. Measured against a real `ffmpeg -c:a libopus
+                // -f mp4` fixture's own box: `00 02 01 38 00 00 bb 80 00 00
+                // 00` — version 0, channels 2, pre_skip 0x0138 = 312
+                // (`ffprobe` reports `initial_padding=312` for the same
+                // file), rate 0x0000bb80 = 48000, gain 0, family 0. Every
+                // other container this project reads (Ogg, Matroska) hands
+                // `vaco-codec-opus` a real magic-prefixed, little-endian
+                // `OpusHead`, so this reconstructs one rather than passing
+                // `dOps`'s own bytes through unshaped — the same conversion
+                // `vaco-parse-opus::head::IdentificationHeader::to_opus_head`
+                // documents the reference itself performing, re-implemented
+                // here rather than taking a `vaco-parse-*` dependency (D14.1).
+                if let Some((head, pre_skip)) = dops_to_opus_head(config.data) {
+                    params.extradata = Some(head);
+                    opus_pre_skip = Some(pre_skip);
+                }
             }
             _ => params.extradata = Some(config.data.to_vec()),
         }
@@ -178,6 +202,7 @@ pub(crate) fn codec_parameters(
             // AAC track report 16 where the reference reports N/A.
             bits_per_coded_sample: (a.sample_size > 0 && a.sample_size <= 64)
                 .then_some(a.sample_size as u8),
+            initial_padding: opus_pre_skip.map_or(0, u32::from),
             ..AudioParameters::default()
         });
     }
@@ -209,6 +234,30 @@ fn hvcc_length_size(data: &[u8]) -> Option<u8> {
         Some(raw @ (0 | 1 | 3)) => Some(raw + 1),
         _ => None,
     }
+}
+
+/// Build a magic-prefixed, little-endian `OpusHead` blob from an MP4 `dOps`
+/// box's payload, plus the `pre_skip` field on its own (so the caller does
+/// not have to re-parse the head it just built to find it again).
+///
+/// Layout: `version(1) channels(1) pre_skip(16 BE) input_sample_rate(32 BE)
+/// output_gain(16 BE) channel_mapping_family(1)`, optionally followed by a
+/// mapping table (`stream_count(1) coupled_count(1) channel_mapping(N)`) when
+/// the family is non-zero — copied through verbatim since every field in it
+/// is single-byte and therefore endian-agnostic.
+fn dops_to_opus_head(data: &[u8]) -> Option<(Vec<u8>, u16)> {
+    let pre_skip = u16::from_be_bytes(data.get(2..4)?.try_into().ok()?);
+    let rate = u32::from_be_bytes(data.get(4..8)?.try_into().ok()?);
+    let gain = u16::from_be_bytes(data.get(8..10)?.try_into().ok()?);
+    let mut out = Vec::new();
+    out.extend_from_slice(b"OpusHead");
+    out.push(*data.first()?); // version
+    out.push(*data.get(1)?); // channel count
+    out.extend_from_slice(&pre_skip.to_le_bytes());
+    out.extend_from_slice(&rate.to_le_bytes());
+    out.extend_from_slice(&gain.to_le_bytes());
+    out.extend_from_slice(data.get(10..)?);
+    Some((out, pre_skip))
 }
 
 /// `sample_aspect_ratio`, or `None` to leave it for the bitstream parser.
@@ -389,5 +438,39 @@ mod tests {
     #[test]
     fn hvcc_length_size_is_none_for_a_too_short_record() {
         assert_eq!(hvcc_length_size(&[0u8; 21]), None);
+    }
+
+    /// A real `dOps` box payload, measured from `ffmpeg -f lavfi -i
+    /// "sine=...:sample_rate=48000" -ac 2 -c:a libopus -f mp4`: version 0,
+    /// channels 2, `pre_skip` 0x0138 = 312 (`ffprobe` reports
+    /// `initial_padding=312` for the same file), rate 0x0000bb80 = 48000,
+    /// gain 0, family 0.
+    const REAL_DOPS: [u8; 11] = [0x00, 0x02, 0x01, 0x38, 0x00, 0x00, 0xbb, 0x80, 0x00, 0x00, 0x00];
+
+    #[test]
+    fn dops_to_opus_head_reconstructs_a_real_measured_box() {
+        let (head, pre_skip) = dops_to_opus_head(&REAL_DOPS).unwrap();
+        assert_eq!(pre_skip, 312);
+        assert_eq!(head.get(..8), Some(b"OpusHead".as_slice()));
+        assert_eq!(head.get(8).copied(), Some(0), "version");
+        assert_eq!(head.get(9).copied(), Some(2), "channel count");
+        let pre_skip_le: Option<[u8; 2]> = head.get(10..12).and_then(|b| b.try_into().ok());
+        assert_eq!(
+            pre_skip_le.map(u16::from_le_bytes),
+            Some(312),
+            "pre_skip, little-endian now"
+        );
+        let rate_le: Option<[u8; 4]> = head.get(12..16).and_then(|b| b.try_into().ok());
+        assert_eq!(
+            rate_le.map(u32::from_le_bytes),
+            Some(48_000),
+            "input_sample_rate, little-endian now"
+        );
+        assert_eq!(head.len(), 8 + REAL_DOPS.len());
+    }
+
+    #[test]
+    fn dops_to_opus_head_is_none_for_a_too_short_record() {
+        assert_eq!(dops_to_opus_head(&REAL_DOPS[..8]), None);
     }
 }

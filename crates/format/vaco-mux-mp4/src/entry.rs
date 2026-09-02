@@ -188,7 +188,7 @@ fn build_video(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
 /// same shape a standalone `.flac` file's magic-plus-first-block needs),
 /// not a metadata block -- writing it into `dfLa` unstripped and unwrapped
 /// left `ffmpeg` unable to even open the file: "STREAMINFO must be first
-/// FLACMetadataBlock", because the bytes right after `dfLa`'s own
+/// `FLACMetadataBlock`", because the bytes right after `dfLa`'s own
 /// version+flags were `"fLaC"` where a real block header belongs. Measured
 /// end to end: `vaco -i mono.wav -c:a flac out.m4a` produced a file
 /// `ffmpeg -i out.m4a` refused outright. The same class of bug
@@ -234,6 +234,43 @@ fn flac_streaminfo_metadata_block(extradata: &[u8]) -> Result<[u8; 38]> {
     Ok(block)
 }
 
+/// Convert an `OpusHead` blob (RFC 7845 §5.1: magic-prefixed, little-endian
+/// fields — what `CodecParameters::extradata` carries for Opus everywhere in
+/// this project, since Ogg and Matroska both store it verbatim) into the
+/// body MP4's `dOps` box actually wants.
+///
+/// `dOps` is not "`OpusHead` minus its magic and version byte", a claim
+/// `vaco-format-isom::writer::dops`'s doc comment used to make (and this
+/// function's call site used to trust, passing `extradata` straight through
+/// unconverted): it keeps the version byte and drops only the 8-byte magic,
+/// and every multi-byte field is big-endian, not little. Measured against a
+/// real `ffmpeg -c:a libopus -f mp4` fixture's own box: `00 02 01 38 00 00
+/// bb 80 00 00 00` — version 0, channels 2, `pre_skip` 0x0138 = 312 (`ffprobe`
+/// reports `initial_padding=312` for the same file), rate 0x0000bb80 =
+/// 48000, gain 0, family 0. Without this conversion, every file this crate
+/// muxed with `-c:a opus` carried a `dOps` box with a phantom 8-byte prefix
+/// and every multi-byte field byte-swapped — silently wrong, not refused.
+///
+/// Deliberately re-implemented here rather than depending on
+/// `vaco-parse-opus` (D14.1): the same precedent as
+/// `flac_streaminfo_metadata_block` above, and the inverse of
+/// `vaco-demux-mp4::track`'s own `dops_to_opus_head`.
+fn opus_head_to_dops(extradata: &[u8]) -> Result<Vec<u8>> {
+    let bad = || Error::Unsupported("mp4: Opus extradata is not a recognised OpusHead shape");
+    let rest = extradata.strip_prefix(b"OpusHead").ok_or_else(bad)?;
+    let pre_skip: [u8; 2] = rest.get(2..4).ok_or_else(bad)?.try_into().map_err(|_| bad())?;
+    let rate: [u8; 4] = rest.get(4..8).ok_or_else(bad)?.try_into().map_err(|_| bad())?;
+    let gain: [u8; 2] = rest.get(8..10).ok_or_else(bad)?.try_into().map_err(|_| bad())?;
+    let mut out = Vec::new();
+    out.push(*rest.first().ok_or_else(bad)?); // version
+    out.push(*rest.get(1).ok_or_else(bad)?); // channel count
+    out.extend_from_slice(&u16::from_le_bytes(pre_skip).to_be_bytes());
+    out.extend_from_slice(&u32::from_le_bytes(rate).to_be_bytes());
+    out.extend_from_slice(&u16::from_le_bytes(gain).to_be_bytes());
+    out.extend_from_slice(rest.get(10..).ok_or_else(bad)?);
+    Ok(out)
+}
+
 fn build_audio(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Result<Vec<u8>> {
     let a = params.audio.as_ref().ok_or(Error::Unsupported(
         "mp4: audio stream has no AudioParameters",
@@ -261,7 +298,7 @@ fn build_audio(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
             FourCc::new(b"mp4a")
         }
         CodecId::Opus => {
-            extensions.extend_from_slice(&writer::dops(extradata));
+            extensions.extend_from_slice(&writer::dops(&opus_head_to_dops(extradata)?));
             FourCc::new(b"Opus")
         }
         CodecId::Flac => {
@@ -289,4 +326,37 @@ fn build_audio(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
         sample_rate_fp16,
         extensions: &extensions,
     }))
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::opus_head_to_dops;
+
+    /// The same real `ffmpeg -c:a libopus -f mp4` box `vaco-demux-mp4::track`
+    /// tests against from the other direction: version 0, channels 2,
+    /// `pre_skip` 0x0138 = 312, rate 0x0000bb80 = 48000, gain 0, family 0.
+    const REAL_DOPS: [u8; 11] = [0x00, 0x02, 0x01, 0x38, 0x00, 0x00, 0xbb, 0x80, 0x00, 0x00, 0x00];
+
+    fn opus_head(pre_skip: u16, rate: u32) -> Vec<u8> {
+        let mut h = b"OpusHead".to_vec();
+        h.push(0); // version
+        h.push(2); // channels
+        h.extend_from_slice(&pre_skip.to_le_bytes());
+        h.extend_from_slice(&rate.to_le_bytes());
+        h.extend_from_slice(&0u16.to_le_bytes()); // gain
+        h.push(0); // mapping family
+        h
+    }
+
+    #[test]
+    fn opus_head_to_dops_matches_a_real_measured_box() {
+        let dops = opus_head_to_dops(&opus_head(312, 48_000)).unwrap();
+        assert_eq!(dops, REAL_DOPS);
+    }
+
+    #[test]
+    fn opus_head_to_dops_rejects_anything_without_the_magic() {
+        assert!(opus_head_to_dops(&REAL_DOPS).is_err(), "REAL_DOPS has no OpusHead magic");
+    }
 }
