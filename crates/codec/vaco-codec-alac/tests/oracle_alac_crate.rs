@@ -341,7 +341,9 @@ fn escape_mode_manual_packet_is_accepted_by_the_oracle_decoder() {
 
 fn crate_cookie_bytes() -> Vec<u8> {
     use vaco_codec_alac::AlacSpecificConfig;
-    AlacSpecificConfig::for_encode(44100, 1, 16).write_bare().to_vec()
+    // 40/10/14: this crate's own `rice::{PB0,MB0,KB0}` -- `pub(crate)`, so
+    // restated literally here rather than named, from an external test.
+    AlacSpecificConfig::for_encode(44100, 1, 16, 40, 10, 14).write_bare().to_vec()
 }
 
 #[test]
@@ -434,7 +436,7 @@ fn stereo_escape_mode_chan_bits_equals_bit_depth_is_accepted_by_the_oracle_decod
     w.align_zero();
     let bytes = w.finish();
 
-    let cookie = AlacSpecificConfig::for_encode(44100, 2, 16).write_bare().to_vec();
+    let cookie = AlacSpecificConfig::for_encode(44100, 2, 16, 40, 10, 14).write_bare().to_vec();
     let info = alac::StreamInfo::from_cookie(&cookie).expect("cookie parse");
     let mut oracle_decoder = alac::Decoder::new(info.clone());
     let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];

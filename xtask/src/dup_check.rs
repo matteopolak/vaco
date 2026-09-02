@@ -499,20 +499,6 @@ const DISTINCT: &[(&str, &str)] = &[
 /// cannot be forgotten and cannot grow silently.
 const KNOWN_DUPLICATE: &[(&str, &str)] = &[
     (
-        "AlacSpecificConfig",
-        "vaco-codec-alac and vaco-parse-audio-misc both parse the same \
-         24-byte ALAC magic cookie into a struct with the same eleven \
-         fields, independently: the decoder crate for its own configuration, \
-         this work package's parser for `CodecParameters` reporting. \
-         Genuinely the same concept, not merged because the two crates were \
-         written concurrently by different agents and neither owns the \
-         other. The parse-only crate is the right place for the canonical \
-         definition — `vaco-codec-alac` depending on `vaco-parse-audio-misc` \
-         and dropping its own copy is the natural fix, the same direction \
-         `vaco-codec-h264` already takes on `vaco-parse-h264` — but making \
-         that edit belongs to whoever owns `vaco-codec-alac`.",
-    ),
-    (
         "CommentIter",
         "vaco-parse-opus (`OpusTags`, RFC 7845 §5.2) and \
          vaco-format-vorbiscomment (the Vorbis/FLAC vendor-plus-tag-list \

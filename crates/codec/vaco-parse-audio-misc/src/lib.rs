@@ -32,7 +32,7 @@ pub mod alac;
 pub mod flac;
 pub mod vorbis;
 
-pub use alac::{AlacParser, AlacSpecificConfig};
+pub use alac::{AlacChannelLayoutInfo, AlacCookie, AlacParser, AlacSpecificConfig};
 pub use flac::{FlacParser, StreamInfo};
 pub use vorbis::{IdentificationHeader, VorbisParser, unpack_headers};
 

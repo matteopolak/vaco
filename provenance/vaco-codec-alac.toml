@@ -57,3 +57,10 @@ where    = "Local measurement, not a document: `ffmpeg -f lavfi -i \"sine=freque
 # MAX_PREFIX) are transcribed from alac-agc-source's aglib.h, not this
 # crate's own invention -- see this file's history and each constant's own
 # doc comment for the corresponding reference name.
+
+[[source]]
+id       = "alac-ffmpeg-caf-kuki-blackbox"
+kind     = "blackbox"
+title    = "ALAC magic-cookie wrapper shape as ffmpeg 9.0.1's CAF muxer actually writes it (the `kuki` chunk), measured from real output files at mono, stereo and 5.1 channel counts"
+acquired = "2026-09-02"
+where    = "Local measurement, not a document: `ffmpeg -f lavfi -i \"sine=frequency=440:duration=1\" -c:a alac -f caf out.caf` (plus a `pan` filter for the 5.1 case), then a throwaway Python CAF chunk walk (no container-parsing crate) to locate and hex-dump the `kuki` chunk. All three fixtures produced the identical 48-byte `frma`/`alac` \"Compatibility\" wrapper (`ALACMagicCookieDescription.txt`'s second on-disk shape: `[Format Atom][ALAC Specific Info header][24-byte config]`) with no trailing `ALACChannelLayoutInfo`, even at 5.1 -- the reference's own CAF encoder never emits that optional extension at any channel count tried. Used to resolve a real disagreement found while consolidating `vaco-codec-alac`'s and `vaco-parse-audio-misc`'s previously-independent `AlacSpecificConfig` parsers: one took the *last* 24 bytes of its input (silently wrong if a real cookie ever carries a trailing `ALACChannelLayoutInfo` after this wrapper), the other always read from the *front* (silently wrong for the crate's own `[size]['alac'][version+flags][config]` shape, which has a fixed-size prefix, not a wrapper with its own magic). The reconciled parser in `vaco-parse-audio-misc::alac` detects each wrapper by its own magic bytes rather than guessing from length, verified against this fixture plus a constructed (not reference-producible) case with a trailing `ALACChannelLayoutInfo` appended by hand."

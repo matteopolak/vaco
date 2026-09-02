@@ -87,6 +87,9 @@ impl Encoder for AlacEncoder {
             sample_rate,
             num_channels,
             bit_depth,
+            crate::rice::PB0 as u8,
+            crate::rice::MB0 as u8,
+            crate::rice::KB0 as u8,
         ));
     }
 
