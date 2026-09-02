@@ -71,7 +71,13 @@ impl Default for Image2MuxOptions {
 #[derive(Debug)]
 pub struct Image2MuxWriter {
     dir: PathBuf,
-    pattern: String,
+    /// The pattern with any leading directory removed. `write_frame` joins
+    /// [`Image2MuxWriter::dir`] onto whatever `filename_for` returns, so the
+    /// three branches that do not go through [`SequencePattern::format`] have
+    /// to yield a bare name too — returning the whole pattern joined `enc` to
+    /// `enc/out.png` and failed with `No such file or directory` for every
+    /// output path that named a directory at all.
+    name: String,
     seq: Option<SequencePattern>,
     options: Image2MuxOptions,
     next_number: i64,
@@ -103,7 +109,7 @@ impl Image2MuxWriter {
         };
         Ok(Self {
             dir,
-            pattern: pattern.to_owned(),
+            name: name.to_owned(),
             seq,
             next_number: options.start_number,
             options,
@@ -116,10 +122,10 @@ impl Image2MuxWriter {
             // The pattern *is* the filename; no substitution at all
             // (measured: `-update 1 -f image2 upd.png` writes exactly
             // `upd.png`, never `upd1.png`).
-            return Ok(self.pattern.clone());
+            return Ok(self.name.clone());
         }
         if self.options.strftime {
-            return strftime::expand_now(&self.pattern);
+            return strftime::expand_now(&self.name);
         }
         let Some(seq) = &self.seq else {
             // No placeholder and neither `-update` nor `-strftime`: the
@@ -133,7 +139,7 @@ impl Image2MuxWriter {
                      use -update or a sequence pattern",
                 ));
             }
-            return Ok(self.pattern.clone());
+            return Ok(self.name.clone());
         };
         let index = if self.options.frame_pts {
             pts.unwrap_or(0)
@@ -188,6 +194,32 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// Every branch of `filename_for` is joined onto `dir` afterwards, so a
+    /// pattern that names a directory must not carry it into the name as
+    /// well — `enc/out.png` used to be written as `enc/enc/out.png`.
+    #[test]
+    fn an_output_path_with_a_directory_writes_one_file_in_that_directory() {
+        for (pattern_name, options) in [
+            ("out.png", Image2MuxOptions::default()),
+            (
+                "upd.png",
+                Image2MuxOptions {
+                    update: true,
+                    ..Image2MuxOptions::default()
+                },
+            ),
+        ] {
+            let dir = scratch_dir(&format!("subdir-{pattern_name}"));
+            let nested = dir.join("nested");
+            fs::create_dir_all(&nested).unwrap();
+            let pattern = nested.join(pattern_name);
+            let mut w =
+                Image2MuxWriter::create(pattern.to_str().unwrap(), options).unwrap();
+            w.write_frame(b"bytes", None).unwrap();
+            assert_eq!(fs::read(&pattern).unwrap(), b"bytes", "{pattern_name}");
+        }
     }
 
     #[test]
