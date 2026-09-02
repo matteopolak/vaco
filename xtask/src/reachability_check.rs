@@ -51,6 +51,17 @@
 //!   registered (so `-filters` lists it) with no dispatch path (so `-vf`
 //!   cannot build it) is the same bug as the reverse, a `FilterRegistry`
 //!   nothing points at.
+//! - **G** [`check_decoder_reachable`]/[`check_encoder_reachable`] — a
+//!   registered decoder/encoder whose `CodecId` no demuxer/muxer anywhere in
+//!   the tree ever constructs. A second, independent way to ship the QOA
+//!   incident's shape: `vaco-codec-simple-audio::QOA_DECODER` was registered
+//!   and listed by `-decoders` — the registry was perfectly consistent — but
+//!   no demuxer anywhere ever produced a `CodecId::Qoa` packet, because the
+//!   decoder's own module doc says file framing is "a container concern"
+//!   and, until this rule's fix landed, nothing provided one. Rule E already
+//!   catches "the registry doesn't know this descriptor exists"; this rule
+//!   catches "the registry knows about it, and it is still dead" — a
+//!   consistent registry is not the same claim as a reachable one.
 //!
 //! # Allowlists
 //!
@@ -60,7 +71,7 @@
 
 use std::process::Command;
 
-use crate::{Set, Task, crates, repo_root, rust_files};
+use crate::{Map, Set, Task, crates, repo_root, rust_files};
 
 // ------------------------------------------------------------- the fragments
 
@@ -68,7 +79,11 @@ use crate::{Set, Task, crates, repo_root, rust_files};
 /// smaller read of `vaco-component.toml` than `xtask/src/registry.rs`'s own
 /// `Component` — this gate does not assemble the registry, it only asks
 /// questions of what is already declared, so it does not need `long_name`,
-/// `mime_types`, `media`, `codec` or `encumbered`.
+/// `mime_types`, `media` or `encumbered`. `codec` is read (rule G only) for
+/// a decoder/encoder row's `CodecId`; a demuxer/muxer row never sets it
+/// (containers do not declare a fixed codec list in the fragment schema —
+/// rule G finds what a demuxer/muxer actually constructs by reading its
+/// source, not by a field here).
 struct Row {
     /// The crate that declared it, dash-cased (`vaco-codec-opus`).
     krate: String,
@@ -79,6 +94,9 @@ struct Row {
     ctor: String,
     feature: Option<String>,
     default_on: bool,
+    /// A decoder/encoder row's `codec = "..."` (the `CodecId::name()`
+    /// string, e.g. `"qoa"`). `None` for every other kind.
+    codec: Option<String>,
 }
 
 fn split_list(v: Option<&str>) -> Vec<String> {
@@ -114,6 +132,7 @@ fn all_rows() -> Result<Vec<Row>, String> {
                 ctor: t.get("ctor").unwrap_or_default().to_owned(),
                 feature: t.get("feature").map(str::to_owned),
                 default_on: t.get("default") != Some("false"),
+                codec: t.get("codec").map(str::to_owned),
             });
         }
     }
@@ -184,6 +203,34 @@ const ALLOW_ORPHAN_CRATE: &[(&str, &str)] = &[
          verifying no existing ad-hoc language handling in any of them would \
          regress is more than a registry-reachability pass should take on \
          without owning those crates. Left for a dedicated follow-up.",
+    ),
+    (
+        "vaco-codec-subtitle-cc",
+        "CEA-608/708 decode. Its own module doc names two closing conditions \
+         this crate is *not*: nothing upstream extracts `cc_data` from a \
+         compressed stream yet (an H.264/HEVC/MPEG-2 parser change, not this \
+         crate's), and wiring `vaco_codec_core::Decoder` is named explicit, \
+         disclosed follow-up work, not attempted here to avoid landing a \
+         `vaco-component.toml` fragment hastily in a shared tree (a bad \
+         fragment breaks `gen-registry` for every agent, per \
+         `planning/AGENT-CONSTRAINTS.md`).",
+    ),
+    (
+        "vaco-codec-subtitle-teletext",
+        "EBU/ETSI Teletext decode. Its own module doc section \
+         '# No registry-to-decoder path — by design, not oversight' explains \
+         that `vaco_frame::FrameData` had no `Subtitle` variant when this was \
+         written, and a fragment naming a `kind = \"decoder\"` ctor here \
+         would either lie about what it produces or fail the registry's own \
+         descriptor-resolution check.",
+    ),
+    (
+        "vaco-codec-subtitle-text",
+        "Text subtitle markup decode (SubRip/ASS/WebVTT/mov_text/TTML). Its \
+         own module doc section '# Not a `Decoder` implementation, \
+         deliberately' says wiring is 'a small, mechanical follow-up' not \
+         done here because `vaco_frame::FrameData::Subtitle` was uncommitted \
+         work in another agent's tree at the time it was written.",
     ),
     (
         "vaco-protocol-rtp",
@@ -880,12 +927,234 @@ fn check_filter_dispatch(rows: &[Row]) -> Vec<String> {
     violations
 }
 
+// ------------------------------------------------------------------ rule G
+
+/// `CodecId::Variant` → `CodecId::name()`'s lowercase string (`"Qoa"` →
+/// `"qoa"`), read directly from `vaco-codec-core`'s own `CODECS` table
+/// rather than reimplemented as a PascalCase-to-snake_case guess — several
+/// entries (`AacLatm` → `"aac_latm"`, `Eac3` → `"eac3"`) do not follow one
+/// mechanical rule, so the table itself is the only reliable source.
+fn codec_name_table() -> Result<Map<String, String>, String> {
+    let path = repo_root().join("crates/signal/vaco-codec-core/src/lib.rs");
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let start = text.find("const CODECS: &[CodecEntry] = &[").ok_or_else(|| {
+        format!(
+            "{}: could not find `const CODECS` — reachability rule G needs \
+             updating to match wherever it moved",
+            path.display()
+        )
+    })?;
+    let body = &text[start..];
+    let end = body.find("\n];").ok_or_else(|| {
+        format!(
+            "{}: `const CODECS` has no `\\n];` closing it within this file — \
+             reachability rule G needs updating",
+            path.display()
+        )
+    })?;
+    let body = &body[..end];
+
+    let mut out = Map::new();
+    let mut rest = body;
+    while let Some(i) = rest.find("CodecId::") {
+        rest = &rest[i + "CodecId::".len()..];
+        let variant_end = rest
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let variant = rest[..variant_end].to_owned();
+        rest = &rest[variant_end..];
+        let Some(q1) = rest.find('"') else { break };
+        let after_q1 = &rest[q1 + 1..];
+        let Some(q2) = after_q1.find('"') else { break };
+        let name = after_q1[..q2].to_owned();
+        rest = &after_q1[q2 + 1..];
+        out.insert(variant, name);
+    }
+    if out.is_empty() {
+        return Err(format!(
+            "{}: parsed zero `CodecId::Variant, \"name\"` pairs out of `const \
+             CODECS` — the table's shape changed and rule G's line scanner \
+             needs updating to match",
+            path.display()
+        ));
+    }
+    Ok(out)
+}
+
+/// `krate` plus every `vaco-*` crate it path-depends on, transitively.
+///
+/// Needed because a container's codec detection is not always inline in the
+/// crate that registers its `demuxer`/`muxer` component: `vaco-demux-mp4`
+/// registers the `mov,mp4,...` demuxer but the FourCC → `CodecId` mapping
+/// lives in `vaco-format-isom`, a plain path dependency. One hop is not
+/// enough in general (a shared table crate could itself delegate further),
+/// so this walks the full closure rather than assuming a fixed depth.
+fn transitive_crate_closure(krate: &str, all: &[(String, String, std::path::PathBuf)]) -> Set<String> {
+    let manifest_of: Map<&str, &std::path::Path> =
+        all.iter().map(|(_, n, p)| (n.as_str(), p.as_path())).collect();
+    let mut seen: Set<String> = Set::new();
+    let mut stack = vec![krate.to_owned()];
+    while let Some(n) = stack.pop() {
+        if !seen.insert(n.clone()) {
+            continue;
+        }
+        if let Some(&p) = manifest_of.get(n.as_str()) {
+            let manifest = std::fs::read_to_string(p.join("Cargo.toml")).unwrap_or_default();
+            for dep in path_deps(&manifest) {
+                if !seen.contains(&dep) {
+                    stack.push(dep);
+                }
+            }
+        }
+    }
+    seen
+}
+
+/// Every `CodecId::Variant` token found in the given crates' own source,
+/// mapped through `variant_to_name` to the lowercase names a decoder/encoder
+/// row's `codec` field uses — i.e. every codec some container in this set of
+/// crates actually constructs a packet for or accepts one from.
+///
+/// A `//`-prefixed line (including `///`/`//!` doc comments) is skipped
+/// before scanning it: this is a textual scan, not a parser, and the one
+/// false hit found writing this rule (`vaco-format-core`'s own module doc,
+/// `//! let idx = mux.add_stream(&CodecParameters::video().with_codec(
+/// CodecId::H264))?;`) was exactly a doc example, not code that runs. This
+/// does not attempt to also skip `#[cfg(test)]` bodies — a codec mentioned
+/// only inside a test helper is a false pass this rule can still miss, but
+/// every instance found writing it names a codec with real production
+/// support elsewhere too, so it costs nothing measured today; a person
+/// reading a specific report is still the backstop
+/// [`ALLOW_UNDEMUXABLE_DECODER`]/[`ALLOW_UNMUXABLE_ENCODER`] exist for.
+fn codecs_referenced_in(crate_names: &Set<String>, variant_to_name: &Map<String, String>) -> Set<String> {
+    let all = crates();
+    let paths: Vec<&std::path::Path> = all
+        .iter()
+        .filter(|(_, n, _)| crate_names.contains(n))
+        .map(|(_, _, p)| p.as_path())
+        .collect();
+
+    let mut out = Set::new();
+    for base in paths {
+        for file in rust_files(&base.join("src")) {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            for line in text.lines() {
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                let mut rest = line;
+                while let Some(i) = rest.find("CodecId::") {
+                    rest = &rest[i + "CodecId::".len()..];
+                    let end = rest
+                        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                        .unwrap_or(rest.len());
+                    let variant = &rest[..end];
+                    if let Some(name) = variant_to_name.get(variant) {
+                        out.insert(name.clone());
+                    }
+                    rest = &rest[end..];
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Registered decoders whose `CodecId` no demuxer anywhere in the tree ever
+/// constructs, and why each is legitimately fine as-is.
+///
+/// A codec with genuinely no standalone container of its own (only ever
+/// carried inside another, transport-layer, or system-level format this
+/// build does not implement) belongs here with that stated plainly — that
+/// is not the QOA shape of bug, it is simply out of scope. "No container
+/// carries it, anywhere" is the shape this rule exists to catch.
+const ALLOW_UNDEMUXABLE_DECODER: &[(&str, &str)] = &[];
+
+/// Registered encoders whose `CodecId` no muxer anywhere in the tree ever
+/// accepts, and why each is legitimately fine as-is. See
+/// [`ALLOW_UNDEMUXABLE_DECODER`]'s doc for the same reasoning, mirrored for
+/// the write side.
+const ALLOW_UNMUXABLE_ENCODER: &[(&str, &str)] = &[];
+
+fn check_codec_reachable(
+    rows: &[Row],
+    leaf_kind: &str,
+    container_kind: &str,
+    variant_to_name: &Map<String, String>,
+    allow: &[(&str, &str)],
+    allow_name: &str,
+) -> Vec<String> {
+    let all = crates();
+    let container_crates: Set<String> = rows
+        .iter()
+        .filter(|r| r.kind == container_kind)
+        .map(|r| r.krate.clone())
+        .collect();
+
+    let mut universe: Set<String> = Set::new();
+    for krate in &container_crates {
+        universe.extend(transitive_crate_closure(krate, &all));
+    }
+    let producible = codecs_referenced_in(&universe, variant_to_name);
+
+    let action = if leaf_kind == "decoder" { "decode" } else { "encode" };
+
+    let mut violations = Vec::new();
+    for row in rows.iter().filter(|r| r.kind == leaf_kind) {
+        let Some(codec) = row.codec.as_deref() else {
+            continue;
+        };
+        if producible.contains(codec) || allow.iter().any(|(n, _)| *n == codec) {
+            continue;
+        }
+        let names = row.names.join(",");
+        violations.push(format!(
+            "  {}::{names} ({leaf_kind}, codec `{codec}`) is registered, but no \
+             {container_kind} anywhere in the tree ever references `CodecId` \
+             for `{codec}` — nothing can produce the packets this {leaf_kind} \
+             would {action}. This is the QOA shape of bug: a registry that is \
+             perfectly consistent and still dead. Either add a {container_kind} \
+             that carries `{codec}`, or add `{codec}` to {allow_name} with a \
+             reason (e.g. it only ever appears inside another format this \
+             build does not carry standalone).",
+            row.krate,
+        ));
+    }
+    violations.sort();
+    violations
+}
+
+fn check_decoder_reachable(rows: &[Row], variant_to_name: &Map<String, String>) -> Vec<String> {
+    check_codec_reachable(
+        rows,
+        "decoder",
+        "demuxer",
+        variant_to_name,
+        ALLOW_UNDEMUXABLE_DECODER,
+        "ALLOW_UNDEMUXABLE_DECODER",
+    )
+}
+
+fn check_encoder_reachable(rows: &[Row], variant_to_name: &Map<String, String>) -> Vec<String> {
+    check_codec_reachable(
+        rows,
+        "encoder",
+        "muxer",
+        variant_to_name,
+        ALLOW_UNMUXABLE_ENCODER,
+        "ALLOW_UNMUXABLE_ENCODER",
+    )
+}
+
 // ------------------------------------------------------------------- driver
 
 pub fn run(_check: bool) -> Task {
     let rows = all_rows()?;
+    let variant_to_name = codec_name_table()?;
 
-    let sections: [(&str, Vec<String>); 6] = [
+    let sections: [(&str, Vec<String>); 8] = [
         (
             "A. crate with no fragment and no in-workspace caller",
             check_orphan_crates()?,
@@ -907,6 +1176,14 @@ pub fn run(_check: bool) -> Task {
             "F. filter and filter_dispatch components disagree",
             check_filter_dispatch(&rows),
         ),
+        (
+            "G1. decoder's codec produced by no demuxer",
+            check_decoder_reachable(&rows, &variant_to_name),
+        ),
+        (
+            "G2. encoder's codec accepted by no muxer",
+            check_encoder_reachable(&rows, &variant_to_name),
+        ),
     ];
 
     let total: usize = sections.iter().map(|(_, v)| v.len()).sum();
@@ -927,15 +1204,18 @@ pub fn run(_check: bool) -> Task {
     let allowlisted = ALLOW_ORPHAN_CRATE.len()
         + ALLOW_NONDEFAULT_FEATURE.len()
         + ALLOW_MUXER_ONLY.len()
-        + ALLOW_UNREGISTERED_DESCRIPTOR.len();
+        + ALLOW_UNREGISTERED_DESCRIPTOR.len()
+        + ALLOW_UNDEMUXABLE_DECODER.len()
+        + ALLOW_UNMUXABLE_ENCODER.len();
     println!(
         "reachability-check: clean — {} components across {} fragments checked \
-         by 6 rules, {allowlisted} deliberate gap(s) on record",
+         by {} rules, {allowlisted} deliberate gap(s) on record",
         rows.len(),
         crates()
             .iter()
             .filter(|(_, _, p)| p.join("vaco-component.toml").exists())
-            .count()
+            .count(),
+        sections.len()
     );
     Ok(())
 }
@@ -970,6 +1250,33 @@ mod tests {
         for (name, why) in ALLOW_UNREGISTERED_DESCRIPTOR {
             assert!(why.len() > 20, "{name} needs a real reason, got {why:?}");
         }
+    }
+
+    #[test]
+    fn every_undemuxable_decoder_allowlist_row_has_a_real_reason() {
+        for (name, why) in ALLOW_UNDEMUXABLE_DECODER {
+            assert!(why.len() > 20, "{name} needs a real reason, got {why:?}");
+        }
+    }
+
+    #[test]
+    fn every_unmuxable_encoder_allowlist_row_has_a_real_reason() {
+        for (name, why) in ALLOW_UNMUXABLE_ENCODER {
+            assert!(why.len() > 20, "{name} needs a real reason, got {why:?}");
+        }
+    }
+
+    /// The regression this rule exists to catch: `CodecId::Jpeg`'s real name
+    /// is `"mjpeg"`, not the mechanical PascalCase-to-snake_case guess
+    /// `"jpeg"` — this is exactly why [`codec_name_table`] reads the table
+    /// textually instead of reimplementing a naming rule.
+    #[test]
+    fn codec_name_table_has_known_non_mechanical_entries() {
+        let table = codec_name_table().expect("vaco-codec-core's CODECS table parses");
+        assert_eq!(table.get("H264").map(String::as_str), Some("h264"));
+        assert_eq!(table.get("Jpeg").map(String::as_str), Some("mjpeg"));
+        assert_eq!(table.get("AacLatm").map(String::as_str), Some("aac_latm"));
+        assert!(table.len() > 50, "expected dozens of codecs, got {}", table.len());
     }
 
     #[test]
