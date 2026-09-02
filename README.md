@@ -283,6 +283,16 @@ scopes, and test-pattern sources. `vaco -filters` lists what a given build has.
 Coverage inside a family is uneven — some crates implement a subset and say so in
 their documentation. `docs/filter/` has the per-crate breakdowns.
 
+Spot-checked against ffmpeg on a decoded VP9 source: `crop`, `hflip`, `vflip`,
+`transpose`, `pad` and `format` are byte-identical, and `pad`'s `color` is honoured.
+`scale` is byte-identical when the size does not change, and diverges on any real
+resize — partly because **its `flags` option is accepted and ignored**: `neighbor`,
+`bilinear`, `bicubic` and `lanczos` all produce the same bytes, as does `in_range`.
+`sws_flags` refuses by name, which is the behaviour the other two should have. For
+reference, ffmpeg's `flags=neighbor` at 2:1 samples the source at `(2x+1, 2y+1)`; our
+output matches none of the four pixel offsets, so it is a different algorithm rather
+than a shifted one.
+
 ## Patent-encumbered codecs
 
 H.264, H.265, AAC and VC-1 decode are behind Cargo features that default to off:
