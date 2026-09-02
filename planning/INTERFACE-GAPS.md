@@ -2359,21 +2359,86 @@ real `ffmpeg` disagreed, on every rotated pixel. Fixed by reading the real
 matrix for the plain-rotation cases directly off `ffprobe` instead of
 deriving it algebraically.
 
-**Not closed**: writing the matrix into a *new* output container.
-`vaco-mux-mp4` always writes an identity `tkhd` matrix regardless of the
-source stream's own matrix or `-noautorotate` — pre-existing, not a
-regression from this pass, and not attempted here (a third crate, `vaco-
-mux-mp4`, plus CLI plumbing to carry a resolved matrix from input stream to
-output track). A `-c copy`'d or `-noautorotate`'d rotated file therefore
-still loses its orientation hint on the way through `vaco` today, even
-though it is no longer silently mis-rotated by an auto-applied filter it
-shouldn't have run. Also not verified: odd display dimensions surviving a
-90° turn — `libx264` itself rejects/rounds odd 4:2:0 dimensions before any
-of this workspace's own code runs, and constructing a fixture that gets
-past it was not worth this pass's time; `vaco-filter-video-geometry::
-transpose`, which this work reuses rather than reimplements, claims general
-`PixFmt::plane_layout` correctness for it without a dedicated pixel test
-backing that claim.
+### Status, 2026-09-02 — CLOSED for the muxer half too
+
+`vaco-mux-mp4` previously always wrote an identity `tkhd` matrix regardless
+of the source stream's own matrix or `-noautorotate`. Now plumbed end to
+end: `StreamSpec::display_matrix` (`vaco-format-core`) is carried through
+`MuxBuilder::add_stream_with_matrix` and `Muxer::add_stream_with`, into
+`vaco-mux-mp4::TrackState::matrix`, and written as the real per-track
+`tkhd` matrix in both `progressive.rs` and `fragmented.rs` (the `mvhd`
+movie-level matrix is untouched, as it should be — a separate, movie-wide
+concept). `vaco-sched::PipelineSpec::map_with_matrix` carries it from
+scheduler to muxer; `vaco-cli::exec::output_display_matrix` computes it per
+output stream: `effective_matrix` (the same input-side resolution
+`resolve_rotate` already used) whenever this pass's own rotate filter was
+*not actually going to run* for that stream, `None` (the muxer's existing
+identity default) whenever it was — the "don't double-rotate" case the
+coordinator flagged as the trap.
+
+**A real bug the pixel round-trip caught, not just a units question.** The
+first version gated that "was it applied" decision on
+`graph_opts.rotate.is_some()` alone. For a `-c copy` stream, `resolve_rotate`
+still resolves a transform from the container's matrix (autorotate is
+default-on and does not know the stream is being copied) — but
+`StreamCodec::Copy`'s own arm in the pipeline (`(tap, p, "copy".to_owned())`)
+never reaches the `graph_opts.wants_graph()` block that would apply it. So
+`graph_opts.rotate.is_some()` was `true` for every rotated `-c copy` stream
+even though nothing was ever filtered, and the fix as first written told the
+muxer "rotation applied, write identity" for a stream whose pixels were
+never touched — silently dropping the matrix on exactly the case the
+coordinator asked to be preserved. Caught by the mandated pixel round-trip,
+not by any unit test: `ffprobe`-confirmed matrix on a real MP4 vanished
+after `vaco -i tagged.mp4 -c copy out.mp4`. Fixed by conditioning
+"applied" on `graph_opts.rotate.is_some() && !matches!(s.codec,
+StreamCodec::Copy)` (`crates/app/vaco-cli/src/exec.rs`, around the
+`s.output_matrix = output_display_matrix(...)` call site).
+
+**Verified pixel-exact against real `ffmpeg 9.0.1`**, using a real H.264
+source with a real `-display_rotation 90`-tagged, `ffprobe`-confirmed
+`tkhd` matrix (`[0,-65536,0,65536,0,0,0,0,1<<30]`), all three cases the
+coordinator named:
+
+- `-c copy`: output `tkhd` matrix byte-identical to the source's; `ffmpeg`
+  decoding the copy and `ffmpeg` decoding the original produce identical
+  RGB planes (`cmp` on raw output, zero difference).
+- `-noautorotate` transcode (to `vp9`, this build's lossless all-intra
+  encoder, to keep the comparison exact and sidestep an unrelated,
+  already-flagged encoder/extradata bug in the `libx264` process-boundary
+  path): output matrix preserved, dimensions left un-rotated
+  (128x64→128x64); the raw frames match `ffmpeg -noautorotate`'s own raw
+  decode of the source exactly, and decoding the output file with a
+  real player's *default* autorotate reproduces the fully-rotated
+  reference frame exactly (64x128, byte-identical) — so the matrix
+  travels correctly and a normal player still rotates it correctly later.
+- Default transcode (rotate applied, `vp9`): output `tkhd` matrix absent
+  (identity), dimensions swapped (128x64→64x128) confirming the rotate
+  filter actually ran; decoding the output *without* any further rotation
+  reproduces the same reference frame exactly — **the double-rotation trap
+  the coordinator called out does not fire**.
+- Regression check: an unrotated source transcoded or `-c copy`'d writes no
+  matrix at all in either case (no spurious matrix introduced).
+
+`cargo test`/`cargo clippy --all-targets -- -D warnings` clean on all four
+touched crates (`vaco-format-core`, `vaco-mux-mp4`, `vaco-sched`,
+`vaco-cli`), including two new `vaco-mux-mp4` tests
+(`add_stream_with_a_display_matrix_reaches_the_written_tkhd`,
+`a_stream_with_no_matrix_writes_the_identity_default`) and the pre-existing
+five `resolve_rotate`-family unit tests in `vaco-cli::exec`, none of which
+needed changes.
+
+**Not verified, unchanged from before this pass**: odd display dimensions
+surviving a 90° turn — `libx264` itself rejects/rounds odd 4:2:0 dimensions
+before any of this workspace's own code runs, and constructing a fixture
+that gets past it was not worth this pass's time; `vaco-filter-video-
+geometry::transpose`, which this work reuses rather than reimplements,
+claims general `PixFmt::plane_layout` correctness for it without a
+dedicated pixel test backing that claim. Also out of scope and left to the
+agent already on it: the `libx264`-via-process-boundary encoder producing
+MP4 output real `ffmpeg` cannot decode ("Invalid NAL unit size
+(268435456 > …)", consistent with an extradata/NAL-length-prefix bug, not
+anything this pass touched) — worked around above by using the `vp9`
+encoder for the transcode cases instead.
 
 ### For contrast — two checked, not broken
 

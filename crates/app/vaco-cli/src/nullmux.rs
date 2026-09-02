@@ -522,6 +522,7 @@ mod tests {
 
         let spec = StreamSpec {
             time_base: Some(vaco_core::Rational::new(1, 12_800)),
+            display_matrix: None,
         };
         m.add_stream_with(&params(MediaType::Video), &spec).unwrap();
         m.set_bitexact(true);

@@ -424,6 +424,29 @@ impl MuxBuilder {
         params: &CodecParameters,
         input_time_base: TimeBase,
     ) -> Result<u32> {
+        self.add_stream_with_matrix(params, input_time_base, None)
+    }
+
+    /// [`MuxBuilder::add_stream`], plus the display matrix the *output*
+    /// container should carry for this stream (interface gap 22c's muxer
+    /// half — see [`StreamSpec::display_matrix`]'s own doc for the
+    /// "baked into pixels vs not" rule a caller must get right).
+    ///
+    /// A separate method rather than a parameter on [`MuxBuilder::add_stream`]
+    /// itself: that one has dozens of existing callers across this crate's
+    /// own test suite and every other muxer crate's, none of which care
+    /// about a matrix, and `None` here is exactly what `add_stream` already
+    /// passes — so this is purely additive.
+    ///
+    /// # Errors
+    ///
+    /// Identical to [`MuxBuilder::add_stream`].
+    pub fn add_stream_with_matrix(
+        &mut self,
+        params: &CodecParameters,
+        input_time_base: TimeBase,
+        display_matrix: Option<[i32; 9]>,
+    ) -> Result<u32> {
         // M14 — the same cap the demux side enforces. A muxer driven from a
         // crafted file gets its stream count from that file.
         let cap = u64::try_from(self.opts.max_streams).unwrap_or(0);
@@ -455,9 +478,11 @@ impl MuxBuilder {
         // only a muxer that overrides `add_stream_with` (today:
         // `vaco-mux-hash`'s `framecrc`/`framemd5`/`framehash`, which print a
         // `#tb` line and cannot answer it correctly from `CodecParameters`
-        // alone) sees a different value.
+        // alone; `vaco-mux-mp4`, for `display_matrix`) sees a different
+        // value.
         let spec = StreamSpec {
             time_base: Some(input_time_base),
+            display_matrix,
         };
         let index = self.muxer.add_stream_with(params, &spec)?;
         // A muxer that renumbers is telling us something we cannot honour:

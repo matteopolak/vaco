@@ -58,6 +58,15 @@ pub struct TrackState {
     /// see `vaco-mux-avi::StreamOut::bsf_decided` for the identical fix and
     /// the `MuxWriter` doc this is answering.
     pub bsf_decided: bool,
+    /// `tkhd.matrix` — identity unless [`Muxer::add_stream_with`]'s
+    /// [`vaco_format_core::StreamSpec::display_matrix`] set one, which
+    /// `MovMuxer::add_stream_with` copies in after [`TrackState::new`]
+    /// builds the identity default. Threading a real matrix through closes
+    /// interface gap 22c's muxer half: without this, a `-c copy` remux (or a
+    /// `-noautorotate` transcode) of a rotated file silently loses its
+    /// orientation, because every track used to get this hardcoded to
+    /// identity regardless of what the source stream said.
+    pub matrix: [i32; 9],
 }
 
 impl TrackState {
@@ -88,6 +97,7 @@ impl TrackState {
             chunks: Vec::new(),
             last_duration_hint: 0,
             bsf_decided: false,
+            matrix: vaco_format_isom::fixed::IDENTITY_MATRIX.map(u32::cast_signed),
         }
     }
 

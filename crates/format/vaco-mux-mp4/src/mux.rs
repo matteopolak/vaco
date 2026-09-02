@@ -5,7 +5,7 @@ use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::mux::{BitstreamAction, CodecSupport, global_header_action};
-use vaco_format_core::{FormatFlags, Muxer};
+use vaco_format_core::{FormatFlags, Muxer, StreamSpec};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_packet::{Packet, PacketSideData};
 
@@ -157,6 +157,10 @@ impl Muxer for MovMuxer {
     }
 
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
+        self.add_stream_with(params, &StreamSpec::default())
+    }
+
+    fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
         if self.header_written {
             return Err(Error::InvalidData(
                 "mp4: streams must be added before the header is written",
@@ -172,6 +176,13 @@ impl Muxer for MovMuxer {
         let timescale = Self::track_time_base(params);
         let mut track = TrackState::new(track_id, timescale, built, params.clone());
         track.language = vaco_format_isom::lang::PACKED_UND;
+        // Interface gap 22c's muxer half: `None` keeps `TrackState::new`'s
+        // own identity default, which is what every caller that never heard
+        // of `display_matrix` (every `add_stream` call before this one
+        // existed) already got.
+        if let Some(matrix) = spec.display_matrix {
+            track.matrix = matrix;
+        }
         let index = u32::try_from(self.tracks.len())
             .map_err(|_| Error::Unsupported("mp4: too many tracks"))?;
         self.tracks.push(track);

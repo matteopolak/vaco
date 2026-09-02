@@ -618,6 +618,28 @@ impl PipelineSpec {
     /// tap does not carry packets. [`Error::Unsupported`] from the muxer when
     /// the container cannot carry the codec.
     pub fn map(&mut self, from: PacketTap, to: OutputRef, params: &CodecParameters) -> Result<u32> {
+        self.map_with_matrix(from, to, params, None)
+    }
+
+    /// [`PipelineSpec::map`], plus the display matrix the *output*
+    /// container should carry for this stream — see
+    /// [`vaco_format_core::StreamSpec::display_matrix`]'s own doc for the
+    /// "baked into pixels vs not" rule a caller must get right. A separate
+    /// method for the same reason [`vaco_format_core::mux::MuxBuilder::
+    /// add_stream_with_matrix`] is: `map` has callers throughout this
+    /// crate's own tests and benches that have no matrix to give, and `None`
+    /// here is exactly what `map` already passes.
+    ///
+    /// # Errors
+    ///
+    /// Identical to [`PipelineSpec::map`].
+    pub fn map_with_matrix(
+        &mut self,
+        from: PacketTap,
+        to: OutputRef,
+        params: &CodecParameters,
+        display_matrix: Option<[i32; 9]>,
+    ) -> Result<u32> {
         let (flow, from_tb) = self.out_of(from.into())?;
         if flow != Flow::Packets {
             return Err(Error::InvalidData("only packets can be muxed"));
@@ -640,7 +662,7 @@ impl PipelineSpec {
         // asked to do anything — gap 8's third face, closed by routing
         // through `MuxBuilder` instead of the raw `dyn Muxer` this used to
         // call directly.
-        let index = b.add_stream(params, from_tb)?;
+        let index = b.add_stream_with_matrix(params, from_tb, display_matrix)?;
         stream_of_port.push(index);
         node.inputs.push((from.into(), from_tb));
         Ok(index)

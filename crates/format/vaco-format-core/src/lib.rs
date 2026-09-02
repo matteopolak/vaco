@@ -504,9 +504,10 @@ impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
 /// What [`Muxer::add_stream_with`] knows about a stream beyond
 /// [`CodecParameters`].
 ///
-/// Deliberately minimal: only `time_base` is populated today, because only
-/// `time_base` has a caller and a measured need (`framecrc`'s `#tb`, see
-/// [`Muxer::add_stream_with`]'s docs). Disposition flags and program
+/// Deliberately minimal: `time_base` and `display_matrix` are populated
+/// today, because each has a caller and a measured need (`framecrc`'s `#tb`,
+/// see [`Muxer::add_stream_with`]'s docs; `display_matrix`, `vaco-mux-mp4`'s
+/// `tkhd`, interface gap 22c's muxer half). Disposition flags and program
 /// membership are the other two facts `-disposition`/`-program` parse but
 /// have nowhere to land — the same gap, not yet closed — and are named here
 /// rather than invented speculatively (D19): a field with no reader is a
@@ -517,6 +518,22 @@ pub struct StreamSpec {
     /// knows a better answer than [`CodecParameters`] alone implies —
     /// typically the input stream's own base, for a stream-copy output.
     pub time_base: Option<Rational>,
+    /// The display transformation matrix this stream's *container output*
+    /// should carry, row-major, in the same fixed-point encoding
+    /// [`StreamSideData::DisplayMatrix`] uses. `None` means "the muxer's own
+    /// default" (identity, for every muxer in this workspace today).
+    ///
+    /// This is deliberately about the *output* container, not a copy of
+    /// whatever the input said: a caller that already baked the rotation
+    /// into the pixels (decoded, rotated, re-encoded) must pass `None`
+    /// here, or a player applies the same rotation twice. A caller that did
+    /// *not* touch the pixels — a `-c copy` remux, or a transcode with
+    /// rotation deliberately suppressed — passes the source's own matrix
+    /// through unchanged, so the file still plays correctly. Getting this
+    /// backwards is silent both ways: a dropped matrix looks like a
+    /// forgotten rotation, and a doubled one looks like a correct file that
+    /// happens to be upside down.
+    pub display_matrix: Option<[i32; 9]>,
 }
 
 /// Write packets into a container.

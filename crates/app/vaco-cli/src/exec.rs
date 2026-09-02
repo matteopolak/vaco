@@ -141,6 +141,15 @@ pub struct OutStream {
     /// command line" gap. Empty for a stream that names neither option, and
     /// for one resolved to [`StreamCodec::Copy`] (nothing to configure).
     pub codec_options: Vec<(String, String)>,
+    /// The display matrix this stream's *output* container should carry —
+    /// [`output_display_matrix`] is where this is decided (it needs
+    /// [`OutStream::graph_opts`]'s `rotate`, already resolved by that
+    /// point, to know whether a rotation was baked into the pixels);
+    /// [`run_pipeline`] passes it to
+    /// [`vaco_sched::spec::PipelineSpec::map_with_matrix`] for every
+    /// stream, copied or encoded alike, since a copy never reaches the
+    /// per-stream [`Self::graph_opts`] path a transcode does.
+    pub output_matrix: Option<[i32; 9]>,
 }
 
 /// What `-c` resolved to for one output stream: pass packets
@@ -244,11 +253,40 @@ pub fn describe(input: &InputFile) -> InputStreams {
 ///
 /// The specifier grammar's error (a malformed `-display_rotation:v:9`), or
 /// an invalid `-display_rotation` value.
-fn resolve_rotate(
+fn stream_opt<'a>(
+    group: Option<&'a vaco_cli_core::OptionGroup>,
+    ctx: &MatchCtx<'_>,
+    stream: u32,
+    name: &str,
+) -> Result<Option<&'a vaco_cli_core::ParsedOption>, Diagnostic> {
+    match group {
+        Some(g) => g.stream_option(name, ctx, stream).map_err(|e| crate::cli::split_error(&e)),
+        None => Ok(None),
+    }
+}
+
+/// The raw display matrix that governs one demuxed output stream's
+/// rotation: an explicit `-display_rotation`/`-display_hflip`/
+/// `-display_vflip` override if any of the three is given (built through
+/// [`vaco_format_core::DisplayTransform::to_matrix`], so only the eight
+/// recognised dihedral cases are representable this way — see
+/// [`vaco_format_core::DisplayTransform`]'s own doc for why an arbitrary
+/// angle is not), else the input's own container matrix as-is (even one
+/// this build cannot decompose, so a caller that only wants to *preserve*
+/// it — [`output_display_matrix`] — does not need it to be one of the
+/// eight), else `None`.
+///
+/// `Ok(None)` for a `-filter_complex`/`-lavfi`-sourced stream (no input
+/// stream to read anything from) or an unresolvable specifier.
+///
+/// # Errors
+///
+/// The specifier grammar's error, or an invalid `-display_rotation` value.
+fn effective_matrix(
     cli: &Cli,
     files: &[select::InputStreams],
     source: StreamPick,
-) -> Result<Option<vaco_format_core::DisplayTransform>, Diagnostic> {
+) -> Result<Option<[i32; 9]>, Diagnostic> {
     let StreamPick::Demuxed { file, stream } = source else {
         return Ok(None);
     };
@@ -257,35 +295,85 @@ fn resolve_rotate(
     };
     let ctx = MatchCtx::streams(&input.streams);
     let group = cli.input_group(file);
-    let lookup = |name: &str| -> Result<Option<&vaco_cli_core::ParsedOption>, Diagnostic> {
-        match group {
-            Some(g) => g.stream_option(name, &ctx, stream).map_err(|e| crate::cli::split_error(&e)),
-            None => Ok(None),
-        }
-    };
 
-    let rotation_opt = lookup("display_rotation")?;
-    let hflip_opt = lookup("display_hflip")?;
-    let vflip_opt = lookup("display_vflip")?;
+    let rotation_opt = stream_opt(group, &ctx, stream, "display_rotation")?;
+    let hflip_opt = stream_opt(group, &ctx, stream, "display_hflip")?;
+    let vflip_opt = stream_opt(group, &ctx, stream, "display_vflip")?;
 
-    let transform = if rotation_opt.is_some() || hflip_opt.is_some() || vflip_opt.is_some() {
+    if rotation_opt.is_some() || hflip_opt.is_some() || vflip_opt.is_some() {
         let degrees = rotation_opt
             .map(|o| o.number().map_err(|e| crate::cli::split_error(&e)))
             .transpose()?
             .flatten()
             .unwrap_or(0.0);
-        dihedral_transform_from_angle_and_flips(degrees, hflip_opt.is_some(), vflip_opt.is_some())
-    } else {
-        input
-            .streams
-            .iter()
-            .position(|s| s.index == stream)
-            .and_then(|pos| input.display_matrix.get(pos).copied().flatten())
-            .and_then(|matrix| dihedral_transform_from_matrix(&matrix))
-    };
+        return Ok(
+            dihedral_transform_from_angle_and_flips(degrees, hflip_opt.is_some(), vflip_opt.is_some())
+                .map(vaco_format_core::DisplayTransform::to_matrix),
+        );
+    }
+    Ok(input
+        .streams
+        .iter()
+        .position(|s| s.index == stream)
+        .and_then(|pos| input.display_matrix.get(pos).copied().flatten()))
+}
 
-    let autorotate_on = !lookup("autorotate")?.is_some_and(|o| o.negated);
-    Ok(if autorotate_on { transform } else { None })
+/// The [`vaco_format_core::DisplayTransform`] `-autorotate` (default on;
+/// `-noautorotate` disables) says to actually bake into this output
+/// stream's decoded pixels, or `None` if there is nothing to rotate, the
+/// matrix does not decompose into one of the eight recognised cases (see
+/// [`vaco_format_core::DisplayTransform`]'s own doc), or `-noautorotate`
+/// was given.
+///
+/// # Errors
+///
+/// [`effective_matrix`]'s.
+fn resolve_rotate(
+    cli: &Cli,
+    files: &[select::InputStreams],
+    source: StreamPick,
+) -> Result<Option<vaco_format_core::DisplayTransform>, Diagnostic> {
+    let StreamPick::Demuxed { file, stream } = source else {
+        return Ok(None);
+    };
+    let ctx = files
+        .get(file as usize)
+        .map(|input| MatchCtx::streams(&input.streams));
+    let Some(ctx) = ctx else {
+        return Ok(None);
+    };
+    let group = cli.input_group(file);
+    let autorotate_on = !stream_opt(group, &ctx, stream, "autorotate")?.is_some_and(|o| o.negated);
+    if !autorotate_on {
+        return Ok(None);
+    }
+    let matrix = effective_matrix(cli, files, source)?;
+    Ok(matrix.and_then(|m| dihedral_transform_from_matrix(&m)))
+}
+
+/// The display matrix one output stream's *container* should carry —
+/// interface gap 22c's muxer half. `rotate_applied` is whatever
+/// [`resolve_rotate`] already decided for the *same* stream: when it baked
+/// a rotation into the decoded pixels, the output must be identity or the
+/// next player rotates the file twice; otherwise (a `-c copy` stream, which
+/// never has a [`resolve_rotate`] call at all, or a transcode with
+/// `-noautorotate` or a non-decomposable matrix) the source's own
+/// [`effective_matrix`] is passed straight through, so the file still
+/// carries the orientation hint it arrived with.
+///
+/// # Errors
+///
+/// [`effective_matrix`]'s.
+fn output_display_matrix(
+    cli: &Cli,
+    files: &[select::InputStreams],
+    source: StreamPick,
+    rotate_applied: bool,
+) -> Result<Option<[i32; 9]>, Diagnostic> {
+    if rotate_applied {
+        return Ok(None);
+    }
+    effective_matrix(cli, files, source)
 }
 
 fn channels_of(s: &Stream) -> u32 {
@@ -378,6 +466,11 @@ pub fn resolve_output(
             // Placeholder until `codec_options_of` below decides it, same
             // reason as `force_key_frames` above.
             codec_options: Vec::new(),
+            // Placeholder until the `graph_opts`/`output_matrix` loop below
+            // decides it -- needs `graph_opts.rotate`, resolved in that same
+            // loop, so it cannot be decided any earlier than `graph_opts`
+            // itself is.
+            output_matrix: None,
         })
         .collect();
 
@@ -442,6 +535,16 @@ pub fn resolve_output(
             ));
         }
         s.graph_opts = g;
+        // A resolved `rotate` never actually runs for a `StreamCodec::Copy`
+        // stream: the pipeline's own `StreamCodec::Copy => (tap, p, "copy")`
+        // arm (below) skips the whole `graph_opts.wants_graph()` block that
+        // would apply it. Treating `graph_opts.rotate.is_some()` alone as
+        // "already applied" made a `-c copy` of a rotated file write an
+        // identity matrix — silently dropping the rotation hint exactly the
+        // way the un-plumbed muxer used to, just one layer later. Only a
+        // stream that is actually going to be filtered counts as applied.
+        let rotate_applied = s.graph_opts.rotate.is_some() && !matches!(s.codec, StreamCodec::Copy);
+        s.output_matrix = output_display_matrix(cli, files, s.source, rotate_applied)?;
     }
 
     let forced = force_key_frames_of(cli, out, &streams)?;
@@ -1911,7 +2014,7 @@ pub fn run_pipeline(
                     )
                 }
             };
-            spec.map(packet_tap, oref, &out_params)
+            spec.map_with_matrix(packet_tap, oref, &out_params, s.output_matrix)
                 .map_err(|e| internal_from("the muxer refused a stream", &e))?;
             report.mapping.push(format!(
                 "  Stream #{mapping_source} -> #{}:{i} ({label})",
@@ -2382,6 +2485,7 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
+        output_matrix: None,
         }];
         let meta = metadata_of(&c, &o, &streams).unwrap();
         assert!(meta.disposition_for_stream(0).contains(Disposition::DEFAULT));
@@ -2559,6 +2663,7 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
+        output_matrix: None,
         };
         let audio = OutStream {
             media: Some(MediaType::Audio),
@@ -2590,6 +2695,7 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
+        output_matrix: None,
         };
         let e = check_codecs(&c, &o, "null", &[s]).unwrap_err();
         assert_eq!(
@@ -2612,6 +2718,7 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
+        output_matrix: None,
         };
         assert!(check_codecs(&c, &o, "null", std::slice::from_ref(&s)).is_ok());
 
@@ -2666,6 +2773,7 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
+        output_matrix: None,
         };
         let resolved = check_codecs(&c, &o, "null", &[s]).unwrap();
         assert_eq!(resolved, vec![StreamCodec::Encode("qoi")]);
@@ -2686,6 +2794,7 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
+        output_matrix: None,
         }];
         let opts = codec_options_of(&c, &o, &streams).unwrap();
         assert_eq!(
@@ -2708,6 +2817,7 @@ mod tests {
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
                 force_key_frames: None,
                 codec_options: Vec::new(),
+            output_matrix: None,
             },
             OutStream {
                 source: StreamPick::demuxed(0, 1),
@@ -2716,6 +2826,7 @@ mod tests {
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
                 force_key_frames: None,
                 codec_options: Vec::new(),
+            output_matrix: None,
             },
         ];
         assert!(check_codecs(&c, &o, "null", &streams).is_ok());

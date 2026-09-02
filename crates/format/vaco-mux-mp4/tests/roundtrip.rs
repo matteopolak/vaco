@@ -14,7 +14,7 @@
 use vaco_codec_core::{CodecId, CodecParameters, VideoParameters};
 use vaco_core::{Duration, MediaType, Rational, Timestamp};
 use vaco_format_core::discovery::NoParsers;
-use vaco_format_core::{Demuxer, FormatOptions, Muxer};
+use vaco_format_core::{Demuxer, FormatOptions, Muxer, StreamSpec};
 use vaco_io::SharedDynBuf;
 use vaco_io::{MediaSink, MediaSource, MemorySource};
 use vaco_limits::{Budget, Limits};
@@ -131,6 +131,53 @@ fn a_progressive_file_round_trips_every_sample() {
         }
     }
     assert_eq!(count, 20);
+}
+
+/// Interface gap 22c's muxer half: `add_stream_with`'s `StreamSpec::
+/// display_matrix` must reach the written `tkhd`, or a `-c copy` remux (or
+/// a `-noautorotate` transcode) of a rotated file silently loses its
+/// orientation on the way through this muxer -- every track used to get
+/// `IDENTITY_MATRIX` hardcoded regardless of what the source said. The
+/// matrix here is the real one `ffprobe` reports for `-display_rotation 90`
+/// (see `vaco_format_core::dihedral_transform_from_matrix`'s own doc for
+/// how it was measured), not an arbitrary value.
+#[test]
+fn add_stream_with_a_display_matrix_reaches_the_written_tkhd() {
+    const MEASURED_PLUS_90_MATRIX: [i32; 9] = [0, -65536, 0, 65536, 0, 0, 0, 0, 1 << 30];
+
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux = MovMuxer::new(Box::new(sink.clone()) as Box<dyn MediaSink>).unwrap();
+    let spec = StreamSpec {
+        display_matrix: Some(MEASURED_PLUS_90_MATRIX),
+        ..StreamSpec::default()
+    };
+    let idx = mux.add_stream_with(&h264_params(), &spec).unwrap();
+    mux.init().unwrap();
+    mux.write_header().unwrap();
+    mux.write_packet(&packet(idx, 0, true, &nal_payload(&[0x65, 0xAA])))
+        .unwrap();
+    mux.write_trailer().unwrap();
+
+    let demux = open_demux(sink.snapshot());
+    assert_eq!(
+        demux.streams()[0].display_matrix(),
+        Some(MEASURED_PLUS_90_MATRIX)
+    );
+}
+
+/// A stream that never supplies a matrix (every other test in this file,
+/// and every real caller before `display_matrix` existed) must still get
+/// the identity default -- `add_stream_with`'s own doc says `None` means
+/// exactly that, and this pins it against a real round trip rather than
+/// just the in-memory `TrackState` default.
+#[test]
+fn a_stream_with_no_matrix_writes_the_identity_default() {
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux = MovMuxer::new(Box::new(sink.clone()) as Box<dyn MediaSink>).unwrap();
+    write_video_file(&mut mux, 1);
+
+    let demux = open_demux(sink.snapshot());
+    assert_eq!(demux.streams()[0].display_matrix(), None);
 }
 
 /// Finding 20 (`planning/CONFORMANCE-FINDINGS.md`): `Packet::duration` is

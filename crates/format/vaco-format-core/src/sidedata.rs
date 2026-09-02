@@ -44,6 +44,32 @@ pub enum StreamSideData {
     DisplayMatrix([i32; 9]),
 }
 
+impl DisplayTransform {
+    /// The exact matrix `ffmpeg 9.0.1` itself computes for this transform —
+    /// the same eight values [`dihedral_transform_from_matrix`] decomposes,
+    /// run in reverse. Used to build a real `tkhd`-shaped matrix for a
+    /// `-display_rotation`/`-display_hflip`/`-display_vflip` override that
+    /// a caller wants to *preserve* into an output container rather than
+    /// apply to pixels (a `-c copy` remux, or `-noautorotate`) — see
+    /// `StreamSpec::display_matrix`'s own doc.
+    #[must_use]
+    pub const fn to_matrix(self) -> [i32; 9] {
+        const P: i32 = 1 << 16;
+        const N: i32 = -(1 << 16);
+        const W: i32 = 1 << 30;
+        let (a, b, c, d) = match self {
+            Self::Hflip => (N, 0, 0, P),
+            Self::Vflip => (P, 0, 0, N),
+            Self::Rotate180 => (N, 0, 0, N),
+            Self::TransposeClock => (0, P, N, 0),
+            Self::TransposeCclock => (0, N, P, 0),
+            Self::TransposeClockFlip => (0, N, N, 0),
+            Self::TransposeCclockFlip => (0, P, P, 0),
+        };
+        [a, b, 0, c, d, 0, 0, 0, W]
+    }
+}
+
 impl StreamSideData {
     /// The name the reference prints in `side_data_type`.
     ///
@@ -255,6 +281,9 @@ pub fn dihedral_transform_from_angle_and_flips(
 mod tests {
     use super::*;
 
+    const P: i32 = 1 << 16;
+    const N: i32 = -(1 << 16);
+
     /// Every row is one `ffprobe 8.1` observation; see [`display_rotation`].
     #[test]
     fn rotation_matches_every_measured_matrix() {
@@ -335,6 +364,34 @@ mod tests {
                 *want,
                 "matrix {matrix:?}"
             );
+        }
+    }
+
+    /// `to_matrix` is the reverse of `dihedral_transform_from_matrix`'s own
+    /// table -- checked against the *same* real, `ffprobe`-measured literal
+    /// matrices that test pins, not merely round-tripped through this
+    /// crate's own two functions. A round trip alone would not have caught
+    /// the `TransposeClock`/`TransposeCclock` swap this file's own history
+    /// records: swapping both functions' tables the same way cancels out
+    /// under a round trip and still agrees with itself.
+    #[test]
+    fn to_matrix_matches_the_same_measured_literals() {
+        use DisplayTransform::{
+            Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip, TransposeCclockFlip, Vflip,
+        };
+        let cases: &[(DisplayTransform, [i32; 9])] = &[
+            (Hflip, [N, 0, 0, 0, P, 0, 0, 0, 1 << 30]),
+            (Vflip, [P, 0, 0, 0, N, 0, 0, 0, 1 << 30]),
+            (Rotate180, [N, 0, 0, 0, N, 0, 0, 0, 1 << 30]),
+            (TransposeClock, [0, P, 0, N, 0, 0, 0, 0, 1 << 30]),
+            (TransposeCclock, [0, N, 0, P, 0, 0, 0, 0, 1 << 30]),
+            (TransposeClockFlip, [0, N, 0, N, 0, 0, 0, 0, 1 << 30]),
+            (TransposeCclockFlip, [0, P, 0, P, 0, 0, 0, 0, 1 << 30]),
+        ];
+        for (transform, want) in cases {
+            assert_eq!(transform.to_matrix(), *want, "{transform:?}");
+            // And the round trip, as a second, weaker check.
+            assert_eq!(dihedral_transform_from_matrix(want), Some(*transform));
         }
     }
 

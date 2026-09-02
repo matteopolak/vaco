@@ -232,7 +232,7 @@ fn build_empty_trak(track: &TrackState, creation_time: u64) -> Vec<u8> {
         layer: 0,
         alternate_group: 0,
         volume: track.volume,
-        matrix: vaco_format_isom::fixed::IDENTITY_MATRIX,
+        matrix: track.matrix.map(i32::cast_unsigned),
         width: track.width,
         height: track.height,
     });
