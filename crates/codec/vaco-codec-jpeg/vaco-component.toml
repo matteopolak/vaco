@@ -1,19 +1,28 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# `name`/`codec` are `mjpeg`, not `jpeg` — real ffmpeg has no decoder or
+# encoder literally named `jpeg` (measured: `ffmpeg -decoders`/`-encoders`),
+# and `CodecId::Jpeg`'s own `name()` in `vaco-codec-core` is `"mjpeg"` too.
+# `"jpeg"` (this fragment's name until this fix) matched neither, so
+# `-c:v mjpeg` could never select this decoder/encoder by name and
+# `codec = "jpeg"` never resolved to a real `CodecId` via `CodecId::from_name`
+# — a gap `cargo xtask reachability-check`'s rule G (decoder/encoder codec
+# produced/accepted by no demuxer/muxer) now catches mechanically.
 
 [[component]]
 kind      = "decoder"
-name      = "jpeg"
+name      = "mjpeg"
 long_name = "JPEG (ITU-T T.81 / ISO/IEC 10918-1), native baseline and progressive decode"
 feature   = "codec-jpeg"
 ctor      = "vaco_codec_jpeg::JPEG_DECODER"
 media     = "video"
-codec     = "jpeg"
+codec     = "mjpeg"
 
 [[component]]
 kind      = "encoder"
-name      = "jpeg"
+name      = "mjpeg"
 long_name = "JPEG (ITU-T T.81 / ISO/IEC 10918-1), native baseline encode"
 feature   = "codec-jpeg"
 ctor      = "vaco_codec_jpeg::JPEG_ENCODER"
 media     = "video"
-codec     = "jpeg"
+codec     = "mjpeg"

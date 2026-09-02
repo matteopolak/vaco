@@ -147,9 +147,14 @@ only — the entropy bitstream has its own reader), `vaco-frame`/`vaco-pixfmt`
   default`-encoded frames with their `DHT` segments stripped: both `djpeg`
   and this crate's decoder fall back to the same Annex K tables and agree
   pixel-for-pixel). Reading those atoms is a demuxer-side concern.
-- **`vaco-cli` has no path from `-c:v mjpeg`/`-c:v jpeg` to any leaf decoder
-  or encoder** (`check_codecs` accepts only `copy`) — a workspace-wide gap
-  affecting every codec crate, not specific to this one (tracked as #652).
+- **Was registered as `jpeg`, not `mjpeg`, until `cargo xtask
+  reachability-check`'s rule G caught it**: real `ffmpeg` has no decoder or
+  encoder literally named `jpeg` (only `mjpeg`), and `CodecId::Jpeg`'s own
+  `name()` is `"mjpeg"` too, so `codec = "jpeg"` in this crate's
+  `vaco-component.toml` never resolved to a real `CodecId` and `-c:v mjpeg`
+  (the name every real ffmpeg file/user actually uses) could not select this
+  decoder/encoder by name. Fixed: both descriptors and the fragment now say
+  `mjpeg` throughout.
 
 ## Testing
 

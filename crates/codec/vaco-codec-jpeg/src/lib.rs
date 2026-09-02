@@ -187,8 +187,19 @@ impl vaco_codec_core::Encoder for JpegEncoder {
 }
 
 /// This build's JPEG decoder descriptor.
+///
+/// `name` is `"mjpeg"`, not `"jpeg"` — measured: real `ffmpeg` has no
+/// decoder or encoder literally named `jpeg` (`ffmpeg -decoders`/
+/// `-encoders`), only `mjpeg` (Motion JPEG), and `CodecId::Jpeg`'s own
+/// `name()` in `vaco-codec-core` already agrees (`"mjpeg"`). Registering
+/// this under `"jpeg"` (its name until this fix) meant `-c:v mjpeg` — the
+/// name every real ffmpeg user and file actually uses — could never select
+/// it, and `vaco-component.toml`'s `codec = "jpeg"` did not resolve to any
+/// real `CodecId` via `CodecId::from_name` either, so this decoder/encoder
+/// pair was reachable by neither the CLI's real name nor the codec-default
+/// selection path that keys off a demuxed stream's `CodecId`.
 pub static JPEG_DECODER: DecoderDesc = DecoderDesc {
-    name: "jpeg",
+    name: "mjpeg",
     long_name: "JPEG (ITU-T T.81 / ISO/IEC 10918-1), native baseline and progressive decode",
     id: CodecId::Jpeg,
     media_type: MediaType::Video,
@@ -199,7 +210,7 @@ pub static JPEG_DECODER: DecoderDesc = DecoderDesc {
 
 /// This build's JPEG encoder descriptor (baseline only; see [`EncodeOptions`]).
 pub static JPEG_ENCODER: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
-    name: "jpeg",
+    name: "mjpeg",
     long_name: "JPEG (ITU-T T.81 / ISO/IEC 10918-1), native baseline encode",
     id: CodecId::Jpeg,
     media_type: MediaType::Video,
