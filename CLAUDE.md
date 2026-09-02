@@ -146,6 +146,32 @@ broken tree; gate the feature off if it isn't ready. "Not ready to enable" and
 Conventional messages with a bracketed scope: `fix(demux-mp4): ...`. Never a bare
 `git commit -m`. No attribution or `Signed-off-by` trailers.
 
+A commit touching `crates/{codec,format,filter,signal}/` must carry the clean-room
+trailers:
+
+```
+Vaco-Provenance: spec
+Vaco-Spec-Ref: <declared-source-id> <clause>
+Vaco-Clean-Room: yes
+```
+
+`Vaco-Provenance` is exactly one of `spec`, `rfc`, `paper`, `blackbox`,
+`original`, `cleanroom-doc:<path>`. Free text fails the gate — "measured via
+ffmpeg 9.0.1" is `blackbox`.
+
+`Vaco-Spec-Ref` must *start with* a source id declared in `provenance/*.toml`:
+`aom-av1-spec`, not "AV1 spec"; `atsc-a52-2018`, not "RFC 3686". A citation to a
+document we never recorded acquiring proves nothing. If your source isn't
+declared, declare it first.
+
+The `prepare-commit-msg` hook writes these for you — but **`commit-tree` bypasses
+hooks**, so with the private-index recipe you must put them in the message
+yourself. Check with `cargo run -p xtask -- provenance-check` before you move on.
+
+Constant tables of 32+ elements need a `[[table]]` entry in
+`provenance/<crate>.toml`. Renaming or moving a table breaks its entry; update it
+in the same commit.
+
 ## Fix it, don't file it
 
 If you find a bug, fix it. File an issue only when the fix is genuinely out of
