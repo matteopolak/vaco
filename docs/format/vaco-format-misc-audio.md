@@ -3,11 +3,11 @@
 Layer 4. Demux-only: `wv`, `tta`, `amr`/`amrnb`/`amrwb`, `adx`,
 `nistsphere`, `pvf`, `g723_1`, `sbc`, the headerless ITU-T/3GPP2
 speech-codec tail (`gsm`, `sln`, `dfpwm`, `g722`, `g726`, `g726le`, `g728`,
-`g729`, `aptx`, `aptx_hd`), and — added in a later pass at #620's
-chiptune-adjacent game-audio containers — `vag` and `xwma`. Twenty-two
-registered demuxers in one crate (FM-58). These are containers: the job is
-finding frame/block boundaries and reporting stream parameters, not
-decoding audio.
+`g729`, `aptx`, `aptx_hd`), and — added across two later passes at #620's
+chiptune-adjacent game-audio containers — `vag`, `xwma`, and `xa`.
+Twenty-three registered demuxers in one crate (FM-58). These are
+containers: the job is finding frame/block boundaries and reporting stream
+parameters, not decoding audio.
 
 ---
 
@@ -26,6 +26,7 @@ decoding audio.
 | `rawcodec` | `gsm`, `sln`, `dfpwm`, `g722`, `g726`, `g726le`, `g728`, `g729`, `aptx`, `aptx_hd` | headerless, constant bytes-per-block : frames-per-block ratio, fixed by the codec's own bitrate |
 | `vag` | `vag` | fixed 48-byte header (`VAGp` magic, big-endian `data_size`/`sample_rate`), then 16-byte PS-ADPCM blocks; a bespoke, non-`BlockDemuxer` loop — see below |
 | `xwma` | `xwma` | RIFF container (`fmt `/`dpds`/`data` chunks); packets are `nBlockAlign`-aligned reads of `data`, not the `dpds` table's declared split — see below |
+| `xa` | `xa` | fixed 24-byte header (2-byte `"XA"` magic, little-endian `WAVEFORMATEX` tail), then EA-ADPCM blocks (`15`/`30` bytes mono/stereo, `28` samples each); packet count is `ceil(dwOutSize / block_bytes)` clamped to the blocks on disk, but `duration`/`duration_ts` ignore `dwOutSize` and reflect the file's own full block count instead — a real, measured disagreement in the reference itself, reproduced rather than "corrected" — see `xa.rs`'s module doc |
 | `block` | shared | `BlockDemuxer` — the fixed-ratio block engine `adx`, `nistsphere`, `pvf` and every `rawcodec` entry reduce to |
 
 ### Deliberately not in this crate
@@ -57,9 +58,9 @@ left unresolved on purpose. See "The `BlockDemuxer` batching bug" below.
 S3M, MOD, and the rest of the family the reference reaches through
 `libopenmpt`) is recorded as a D10 exclusion — see
 `docs/why-some-formats-are-not-included.md`. Of the twelve chiptune-adjacent
-game-audio containers, `vag` and `xwma` landed in a later pass (below); the
-other ten were evaluated and not attempted, each for a specific,
-recorded reason rather than simply "ran out of time":
+game-audio containers, `vag` and `xwma` landed in an earlier pass, `xa`
+landed in this one (below); nine remain, each for a specific, recorded
+reason:
 
 - `binka` (raw Bink Audio) and `genh` (a generic fixed-struct header) — the
   only independent public documentation found was either explicitly hedged
@@ -76,12 +77,33 @@ recorded reason rather than simply "ran out of time":
   a subkey byte for AWB archives) but no independently-sourced byte-level
   chunk table (`fmt`/`comp`/`dec`/`vbr`/`ath`/`loop`/…) was found; not
   attempted.
-- `svag`, `xvag`, `msf`, `xa`, `bfstm`, `brstm`, `fsb` — same family, same
-  technique as `vag`/`xwma` would likely apply, but not researched: this
-  pass's remaining time went to the `BlockDemuxer` packet-batching fix
-  (below) and pinning down `xwma`'s `dpds`-duration formula instead of an
-  eleventh container, per the coordinator's own call that either was worth
-  more than an eleventh format.
+- `svag`, `xvag`, `msf`, `fsb` — same family, same technique as `vag`/
+  `xwma`/`xa` would likely apply, but not researched this pass either;
+  the same "no independently reachable byte-level spec found yet" bar
+  `binka`/`genh`/`hca` sit behind is the working assumption, not confirmed
+  per-format.
+- `bfstm`/`brstm` — **researched and explicitly not shipped, not simply
+  skipped.** Tier A independent specs exist and are precise
+  (`Vaco-Spec-Ref wiibrew-brstm-format` for `brstm`'s `RSTM`/`HEAD`/`ADPC`/
+  `DATA` chunk layout; the GBATEK/`3dbrew` `CSTM` family for `bfstm`/
+  `bcstm`), and a hand-built `brstm` fixture built field-for-field from that
+  spec opens correctly in the real reference (`sample_rate`/`channels`/
+  `codec_name=adpcm_thp` all correct). But sweeping the fixture's `block
+  size`/channel-count fields against `-show_packets` found the reference's
+  actual per-packet byte count is the container's own `block_size` field
+  **plus a channel-dependent constant** (`+44` bytes/channel-ish at one
+  data point, `+80` at two channels, and a *different* constant again for
+  the file's last block) that does not appear anywhere in the WiiBrew
+  header table and did not resolve to a clean formula across the
+  parameter sweep attempted (`Vaco-Spec-Ref
+  vaco-format-misc-audio-brstm-fixtures-probe`). Shipping a demuxer whose
+  packet byte boundaries are measurably wrong is worse than not shipping
+  one at all (a downstream reader would misalign against real packet
+  data) — see "registered-but-wrong is worse than absent" in this
+  project's own working rules. Left unregistered; whoever picks this back
+  up has a verified-correct header parse to start from and a precise
+  description of the one remaining unknown (the packet-size formula),
+  not an unexplored format.
 
 ---
 
@@ -116,12 +138,13 @@ pass the old, **unmeasured** `4096` (`block::DEFAULT_TARGET_PACKET_BYTES`)
 — see "Deliberately not in this crate" below for why that one was not
 chased to ground.
 
-### `vag` and `xwma` — hand-built fixtures, measured against `ffprobe`
+### `vag`, `xwma` and `xa` — hand-built fixtures, measured against `ffprobe`
 
-Neither format has an `ffmpeg` encoder, so both fixtures were hand-built
-directly from public documentation (`Vaco-Spec-Ref vag-format-doc` /
-`multimedia-wiki-xwma` / `microsoft-riff-xaudio2`) and then measured
-against `ffprobe`/`ffmpeg` 8.1 — the same technique `vaco-format-misc`'s
+None of the three formats has an `ffmpeg` encoder, so every fixture was
+hand-built directly from public documentation (`Vaco-Spec-Ref
+vag-format-doc` / `multimedia-wiki-xwma` / `microsoft-riff-xaudio2` /
+`maxis-xa-format-doc`) and then measured against `ffprobe`/`ffmpeg` 8.1 —
+the same technique `vaco-format-misc`'s
 `roq`/`flic`/`cdg`/`bink`/`smk` used, and, like `bink`/`smk`, it surfaced
 behaviour a reading of the format documentation alone would not have
 predicted:
@@ -156,11 +179,32 @@ predicted:
   channel count and bit depth. Confirmed across mono/stereo, 8/16-bit,
   and `wmav1`/`wmav2`. `xwma.rs` reproduces this exactly, falling back to
   the byte-rate formula only when no `dpds` chunk was seen.
+- **`xa`'s byte order is confirmed, not assumed.** The public write-up
+  (`maxis-xa-format-doc`) documents `dwOutSize`/`wChannels`/
+  `dwSampleRate`/… as a Win32 `WAVEFORMATEX` tail but never states
+  endianness explicitly; a big-endian reading of the same field values
+  produced an implausible multi-GHz "sample rate" through the real `xa`
+  demuxer, little-endian did not, at every field checked.
+- **`xa`'s `dwOutSize` gates packet count, not duration — and the two
+  genuinely disagree in the reference.** An initial reading (floor-divide
+  it as decompressed PCM bytes) was wrong; sweeping the field from `0` to
+  `559` against a 20-block stereo fixture found `ceil(dwOutSize /
+  block_bytes)` packets exactly, clamped to the blocks actually on disk,
+  with `dwOutSize = 0` giving **zero** packets outright rather than
+  "unbounded". But `duration`/`duration_ts` ignore `dwOutSize` completely
+  and instead reflect the file's own full block count — the same fixture
+  emits 4 packets (from `dwOutSize`) while reporting `duration_ts` for all
+  20 blocks. `xa.rs` reproduces both halves of this disagreement rather
+  than resolving it into a number the reference itself never produces
+  (`Vaco-Spec-Ref vaco-format-misc-audio-xa-fixtures-probe`).
 
 ### The measured comparison table
 
-Ten of the twenty formats have a real `ffmpeg 8.1`-produced fixture
-(`tests/fixtures/`); the rest are headerless codecs this build's `ffmpeg`
+Thirteen of the twenty-three registered demuxers have a fixture under
+`tests/fixtures/` exercised by `tests/differential.rs` (a real `ffmpeg
+8.1`-produced one for `wavpack`/`tta`/`g722`/`g726`/`g726le`, hand-built and
+measured against the reference's own demuxer for the rest, per the
+sections above); the remaining formats are headerless codecs this build's `ffmpeg`
 cannot encode, or (`g723_1`) can encode but the reference states no
 duration for. `tests/differential.rs` opens each fixture through its real
 `DemuxerDesc` and checks it against `ffprobe -show_entries
@@ -180,6 +224,7 @@ stream=sample_rate,channels -show_entries format=duration`:
 | `g723_1.g723_1` | 8000 | 1 | *(reference: N/A)* | not checked | self-delimited, no declared total |
 | `vag.vag` | 22050 | 1 | 0.012698 s | 10×16 bytes | one packet per 16-byte block, matching the reference exactly |
 | `xwma.xwma` | 8000 | 1 | 0.350 s | 100, 100, 100, 50 bytes | fixture deliberately has no `dpds` chunk, so this exercises the byte-rate duration formula, not the (also reproduced) `dpds`-present PCM-frame-size one — see above |
+| `xa.xa` | 22050 | 2 | 0.006349 s | 5×30 bytes | `dwOutSize` set to exactly 5 blocks' worth of PCM bytes, so packet count and duration agree here; the `dwOutSize`-vs-duration disagreement above is unit-tested in `xa.rs`, not in this fixture |
 
 `tests/differential.rs` asserts every "reference packet sizes" cell
 byte-for-byte, not just total bytes or duration — this is the check that
@@ -269,6 +314,23 @@ and the fixture is `128 * 37` bytes exactly.
   primary specification (`monkeysaudio.com`'s own SDK docs are one
   candidate not yet tried); `codec2`/`codec2raw` need a decision about
   which mode a headerless file is assumed to be.
+- **Finishing `brstm`/`bfstm`**: the header parse is done and verified —
+  see "Deliberately not in this crate" above. What is missing is the
+  per-packet byte-size formula for the `DATA` chunk's interleaved blocks,
+  which the WiiBrew/GBATEK specs do not state and which measured as
+  `block_size` plus a channel-dependent, not-yet-explained constant. Sweep
+  more parameters (loop flag on/off, three-plus channels via a
+  multi-track file, an `ADPC` chunk with a genuinely different
+  entry/byte-per-entry count) before trying another formula guess — the
+  four data points gathered so far are not enough to fit one with
+  confidence.
+- **The nine still-unresearched game-audio containers** (`binka`, `genh`,
+  `hca`, `svag`, `xvag`, `msf`, `fsb`, plus `brstm`/`bfstm` above): `fsb`
+  has the most promising independent documentation trail found so far
+  (`rewiki.miraheze.org`/Xentax's `FMOD Audio FSB` pages, plus two
+  open-source *readers* — not decoders — of the format whose licence and
+  independence from FFmpeg would need checking before treating them as a
+  spec source at all).
 - **`amr`'s multichannel interleaved variant** (`#!AMR_MC1.0\n` and
   friends): not implemented; only mono narrowband/wideband are.
 - **A `Limits` injection point for `open`**: as
@@ -293,9 +355,9 @@ module is built on), `vaco-limits` (`Budget`), `vaco-packet`,
 precedent set by the RTP/FLV/subtitle-text crates of adding to that
 hand-maintained enum directly when a new format needs an identity it does
 not yet have. `xwma` needed no new variant (`wFormatTag` maps onto the
-existing `Wmav1`/`Wmav2`/`Wmapro`); `vag`'s codec (`adpcm_psx`) still has
-none — see `planning/INTERFACE-GAPS.md` gap 21, extended with this
-crate's own tenth entry rather than a new gap, since gap 21 is the
-established place this family of finding gets tracked (`vaco-format-misc`
-found the first nine). `vag`'s stream carries `codec_id: None` until that
-lands.
+existing `Wmav1`/`Wmav2`/`Wmapro`); `vag`'s codec (`adpcm_psx`) and `xa`'s
+(`adpcm_ea_maxis_xa`) still have none — see `planning/INTERFACE-GAPS.md`
+gap 21, extended with this crate's tenth and eleventh entries rather than
+a new gap, since gap 21 is the established place this family of finding
+gets tracked (`vaco-format-misc` found the first nine). Both streams
+carry `codec_id: None` until their variants land.
