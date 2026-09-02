@@ -26,8 +26,9 @@
 //! decoder is not handed), `tts:textOutline`, and ruby. An unrecognised
 //! attribute contributes nothing rather than guessing a mapping.
 
-use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::escape::resolve_predefined_entity;
+use quick_xml::events::{BytesRef, Event};
+use quick_xml::{Reader, XmlVersion};
 
 use crate::ass;
 
@@ -73,7 +74,9 @@ pub fn to_ass(fragment: &str) -> String {
                     let mut span = Span::default();
                     for attr in e.attributes().flatten() {
                         let key = local_name(attr.key.as_ref());
-                        let value = attr.unescape_value().unwrap_or_default();
+                        let value = attr
+                            .normalized_value(XmlVersion::Implicit1_0)
+                            .unwrap_or_default();
                         push_style(&mut out, &mut span, &key, value.as_ref());
                     }
                     spans.push(span);
@@ -103,8 +106,14 @@ pub fn to_ass(fragment: &str) -> String {
             }
             Ok(Event::Text(e)) => {
                 if depth_in_p > 0 {
-                    let text = e.unescape().unwrap_or_default();
-                    ass::escape_plain(&mut out, text.as_ref());
+                    ass::escape_plain(&mut out, e.xml10_content().as_ref());
+                }
+            }
+            Ok(Event::GeneralRef(r)) => {
+                if depth_in_p > 0
+                    && let Some(text) = entity_text(&r)
+                {
+                    ass::escape_plain(&mut out, &text);
                 }
             }
             Ok(_) => {}
@@ -141,12 +150,21 @@ fn push_style(out: &mut String, span: &mut Span, key: &str, value: &str) {
 /// `tt:span`, `tts:fontStyle` and bare `span` all compare equal to their
 /// local part. TTML is namespace-heavy and a document is free to bind any
 /// prefix it likes.
-fn local_name(raw: &[u8]) -> String {
-    let s = String::from_utf8_lossy(raw);
-    match s.rsplit_once(':') {
+fn local_name(raw: &str) -> String {
+    match raw.rsplit_once(':') {
         Some((_, local)) => local.to_owned(),
-        None => s.into_owned(),
+        None => raw.to_owned(),
     }
+}
+
+/// The replacement text of one `&...;` reference. `quick-xml` reports general
+/// and character references as their own events instead of folding them into
+/// the surrounding `Text`, so a parser that matches only `Text` drops them.
+fn entity_text(r: &BytesRef<'_>) -> Option<String> {
+    if let Ok(Some(c)) = r.resolve_char_ref() {
+        return Some(c.to_string());
+    }
+    resolve_predefined_entity(r).map(str::to_owned)
 }
 
 #[cfg(test)]

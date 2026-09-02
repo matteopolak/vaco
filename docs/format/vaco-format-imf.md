@@ -169,6 +169,15 @@ byte-for-byte comparison against a measured reference:
   single `String` with an ordered list, and `package::Package` would need
   to concatenate chunks when resolving a track file — `fsio::FileRawSource`
   would need a multi-file variant.
+- **Touching `xml::parse`'s event loop** runs into the entity gotcha:
+
+`quick-xml` reports a `&...;` reference as its own `Event::GeneralRef`
+rather than folding it into the surrounding `Text`, so a `match` that
+handles only `Text` silently drops every entity *and* splits the text run
+around it. That is why the loop carries a `GeneralRef` arm and why the
+reader's own `trim_text` is off: trimming per event would eat the
+whitespace on either side of an entity, so each element's text is trimmed
+once, when the element closes.
 
 ## Configuration
 

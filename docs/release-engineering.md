@@ -63,6 +63,14 @@ blocked pending a cross-crate fix that is out of this issue's scope (two
 spawned follow-up tasks: a `publish = false` sweep across every crate
 manifest, and a `quick-xml` 0.41 bump blocked on three renamed call sites).
 
+**Resolved:** the `quick-xml` bump landed at **0.42.0** and its two
+temporary `ignore` entries (RUSTSEC-2026-0194, -0195) are gone. `cargo
+audit` now reports **zero** vulnerabilities; `cargo deny check advisories`
+still fails, on `ttf-parser` (RUSTSEC-2026-0192) and `rustybuzz`
+(RUSTSEC-2026-0206) — both `unmaintained`, both reached only through
+`cosmic-text`, and neither has an accepted `ignore` or an in-place upgrade.
+Closing those means moving text shaping off `cosmic-text`.
+
 The headline finding: `rustls-rustcrypto` (our only D10/D14.2-compliant TLS
 crypto provider — `ring`/`aws-lc-rs` are banned for compiling C/assembly)
 has had no release since 2024-04-24 and now carries five unpatched RUSTSEC

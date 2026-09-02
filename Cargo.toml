@@ -150,7 +150,7 @@ rustls       = { version = "0.23", default-features = false, features = ["std", 
 webpki-roots = "1"
 ureq              = { version = "3", default-features = false }
 socket2           = "0.5"
-quick-xml         = "0.37"
+quick-xml         = "0.42"
 
 # --- text shaping and fonts (general typography, not a media codec)
 cosmic-text = "0.12"

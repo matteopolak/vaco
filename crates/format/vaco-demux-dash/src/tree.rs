@@ -10,7 +10,9 @@
 //! an acceptable trade for a document this small.
 
 use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::escape::resolve_predefined_entity;
+use quick_xml::events::{BytesRef, Event};
+use quick_xml::{XmlVersion, events::BytesStart};
 use vaco_core::{Error, Result};
 use vaco_limits::Budget;
 
@@ -57,18 +59,35 @@ impl Node {
 }
 
 /// Strip a namespace prefix (`mpd:MPD` -> `MPD`).
-fn local_name(raw: &[u8]) -> String {
-    let s = String::from_utf8_lossy(raw);
-    s.rsplit_once(':')
-        .map_or_else(|| s.to_string(), |(_, n)| n.to_owned())
+fn local_name(raw: &str) -> String {
+    raw.rsplit_once(':')
+        .map_or_else(|| raw.to_owned(), |(_, n)| n.to_owned())
 }
 
-fn read_attrs(e: &quick_xml::events::BytesStart<'_>) -> Vec<(String, String)> {
+/// Trim `s` in place. The equivalent assignment from `trim()` reallocates,
+/// and this runs once per element.
+fn trim_in_place(s: &mut String) {
+    s.truncate(s.trim_end().len());
+    let start = s.len() - s.trim_start().len();
+    s.drain(..start);
+}
+
+/// The replacement text of one `&...;` reference. `quick-xml` reports general
+/// and character references as their own events instead of folding them into
+/// the surrounding `Text`, so a parser that matches only `Text` drops them.
+fn entity_text(r: &BytesRef<'_>) -> Option<String> {
+    if let Ok(Some(c)) = r.resolve_char_ref() {
+        return Some(c.to_string());
+    }
+    resolve_predefined_entity(r).map(str::to_owned)
+}
+
+fn read_attrs(e: &BytesStart<'_>) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for a in e.attributes().flatten() {
         let key = local_name(a.key.as_ref());
         let value = a
-            .unescape_value()
+            .normalized_value(XmlVersion::Implicit1_0)
             .map(std::borrow::Cow::into_owned)
             .unwrap_or_default();
         out.push((key, value));
@@ -85,7 +104,6 @@ fn read_attrs(e: &quick_xml::events::BytesStart<'_>) -> Vec<(String, String)> {
 /// fuel.
 pub fn parse(xml: &str, budget: &mut Budget) -> Result<Node> {
     let mut reader = Reader::from_str(xml);
-    reader.config_mut().trim_text(true);
     let mut stack: Vec<Node> = vec![Node::default()];
     let mut buf = Vec::new();
     let mut count = 0u64;
@@ -134,16 +152,23 @@ pub fn parse(xml: &str, budget: &mut Budget) -> Result<Node> {
             }
             Event::End(_) => {
                 if stack.len() > 1
-                    && let Some(node) = stack.pop()
+                    && let Some(mut node) = stack.pop()
                     && let Some(parent) = stack.last_mut()
                 {
+                    trim_in_place(&mut node.text);
                     parent.children.push(node);
                 }
             }
             Event::Text(t) => {
                 if let Some(top) = stack.last_mut() {
-                    let decoded = t.unescape().unwrap_or_default();
-                    top.text.push_str(&decoded);
+                    top.text.push_str(&t.xml10_content());
+                }
+            }
+            Event::GeneralRef(r) => {
+                if let Some(top) = stack.last_mut()
+                    && let Some(text) = entity_text(&r)
+                {
+                    top.text.push_str(&text);
                 }
             }
             _ => {}

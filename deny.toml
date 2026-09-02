@@ -102,25 +102,6 @@ ignore = [
     # TLS/DTLS work package in a shared tree).
     { id = "RUSTSEC-2024-0436", reason = "unmaintained proc-macro helper, transitive via vaco-codec-exr's exr/pulp dependency; no upstream replacement to move it to, and not this agent's crate to edit" },
 
-    # UNLIKE everything above, this pair is FIXABLE and the ignore is meant to
-    # be temporary, not accepted risk. quick-xml 0.37.5 (crates/format/
-    # vaco-demux-dash, vaco-format-imf, vaco-subtitle-text, vaco-codec-
-    # subtitle-text) has two real, attacker-reachable denial-of-service bugs
-    # in code paths this tree actually calls: RUSTSEC-2026-0194 (quadratic-
-    # time duplicate-attribute scan reachable via the plain
-    # `BytesStart::attributes()` all four crates use) and RUSTSEC-2026-0195
-    # (unbounded allocation in `NsReader`). `quick-xml = "0.41"` in the root
-    # workspace fixes both -- measured -- but is not a version bump alone:
-    # `BytesText`/`Attribute` renamed `unescape()`/`unescape_value()` to
-    # `decode()`/`normalized_value()` between 0.37 and 0.41, breaking four
-    # call sites in vaco-subtitle-text/src/ttml.rs,
-    # vaco-codec-subtitle-text/src/ttml.rs and vaco-demux-dash/src/tree.rs
-    # (vaco-format-imf/src/xml.rs compiles unchanged). None of those three
-    # are this issue's (#182) crates to edit in a shared tree -- tracked as a
-    # spawned follow-up task instead of silently shipping the bump broken.
-    # Remove this pair the moment that lands.
-    { id = "RUSTSEC-2026-0194", reason = "fixable by quick-xml 0.41, blocked on four call-site renames in crates this agent does not own -- see spawned follow-up task" },
-    { id = "RUSTSEC-2026-0195", reason = "fixable by quick-xml 0.41, same blocker as RUSTSEC-2026-0194" },
 ]
 
 [sources]

@@ -21,7 +21,8 @@
 )]
 
 use quick_xml::Reader;
-use quick_xml::events::Event;
+use quick_xml::escape::resolve_predefined_entity;
+use quick_xml::events::{BytesRef, Event};
 
 use vaco_codec_core::CodecId;
 use vaco_core::{Duration, Result};
@@ -83,6 +84,16 @@ fn format_ttml_time(d: Duration) -> String {
     )
 }
 
+/// The replacement text of one `&...;` reference. `quick-xml` reports general
+/// and character references as their own events instead of folding them into
+/// the surrounding `Text`, so a parser that matches only `Text` drops them.
+fn entity_text(r: &BytesRef<'_>) -> Option<String> {
+    if let Ok(Some(c)) = r.resolve_char_ref() {
+        return Some(c.to_string());
+    }
+    resolve_predefined_entity(r).map(str::to_owned)
+}
+
 fn parse(bytes: &[u8]) -> Vec<Cue> {
     let mut reader = Reader::from_reader(bytes);
     let mut buf = Vec::new();
@@ -94,23 +105,23 @@ fn parse(bytes: &[u8]) -> Vec<Cue> {
     let mut text: Vec<u8> = Vec::new();
     while let Ok(event) = reader.read_event_into(&mut buf) {
         match event {
-            Event::Start(e) if e.local_name().as_ref() == b"p" => {
+            Event::Start(e) if e.local_name().as_ref() == "p" => {
                 in_p = true;
                 begin = None;
                 end = None;
                 dur = None;
                 text.clear();
                 for attr in e.attributes().flatten() {
-                    let value = String::from_utf8_lossy(&attr.value).into_owned();
+                    let value = attr.value.as_ref();
                     match attr.key.local_name().as_ref() {
-                        b"begin" => begin = parse_ttml_time(&value),
-                        b"end" => end = parse_ttml_time(&value),
-                        b"dur" => dur = parse_ttml_time(&value),
+                        "begin" => begin = parse_ttml_time(value),
+                        "end" => end = parse_ttml_time(value),
+                        "dur" => dur = parse_ttml_time(value),
                         _ => {}
                     }
                 }
             }
-            Event::End(e) if in_p && e.local_name().as_ref() == b"p" => {
+            Event::End(e) if in_p && e.local_name().as_ref() == "p" => {
                 in_p = false;
                 if let Some(start) = begin {
                     let resolved_end = end.unwrap_or_else(|| {
@@ -124,11 +135,15 @@ fn parse(bytes: &[u8]) -> Vec<Cue> {
                 }
             }
             Event::Text(e) if in_p => {
-                if let Ok(unescaped) = e.unescape() {
-                    text.extend_from_slice(unescaped.as_bytes());
+                text.extend_from_slice(e.xml10_content().as_bytes());
+            }
+            // A reference arrives as its own event, not folded into `Text`.
+            Event::GeneralRef(r) if in_p => {
+                if let Some(resolved) = entity_text(&r) {
+                    text.extend_from_slice(resolved.as_bytes());
                 }
             }
-            Event::Empty(e) if in_p && e.local_name().as_ref() == b"br" => {
+            Event::Empty(e) if in_p && e.local_name().as_ref() == "br" => {
                 text.push(b'\n');
             }
             Event::Eof => break,

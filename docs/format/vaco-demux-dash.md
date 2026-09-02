@@ -65,6 +65,16 @@ does not rebase timestamps at all.
 through; the three `enumerate_*` helpers behind it are independent and can
 be extended without touching each other.
 
+If you touch `tree::parse`'s event loop, note the entity gotcha:
+
+`quick-xml` reports a `&...;` reference as its own `Event::GeneralRef`
+rather than folding it into the surrounding `Text`, so a `match` that
+handles only `Text` silently drops every entity *and* splits the text run
+around it. That is why the loop carries a `GeneralRef` arm and why the
+reader's own `trim_text` is off: trimming per event would eat the
+whitespace on either side of an entity, so each element's text is trimmed
+once, when the element closes.
+
 ## Configuration
 
 `DashOptions { max_bandwidth: Option<u64> }`.
