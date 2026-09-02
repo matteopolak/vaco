@@ -80,6 +80,36 @@ pub use sidedata::{
 };
 pub use time::{DurationEstimate, DurationSource, TimestampFixer, WrapState};
 
+/// Which of the two things an absent [`Stream::start_time`] means.
+///
+/// `Timestamp::NONE` in that field is overloaded. It reads as *"no demuxer has
+/// answered yet"*, which is what lets [`crate::Discovery`] derive a start time
+/// from the first packet, and it has to also express *"this container's answer
+/// is that the stream has none"* — and those want opposite behaviour from the
+/// same value.
+///
+/// Measured against ffmpeg 9.0.1 on a single still image, which is where the
+/// two come apart: `ffprobe` reports `start_pts=N/A` and `start_time=N/A` for
+/// the stream while the packet it hands out carries `pts=0`, `dts=0`,
+/// `duration=1`. Stream metadata and packet timestamps are independent there,
+/// so a demuxer cannot express the reference's answer by dropping the packet's
+/// timestamps — and before this existed, `vaco-demux-image2` did exactly that
+/// and no still image could be transcoded at all.
+///
+/// This qualifies only the *absence*: a `start_time` that holds a value is
+/// self-describing and this field says nothing about it, so the two cannot
+/// disagree.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StartTimeAbsence {
+    /// Nobody has answered. Discovery derives a start time from the first
+    /// packet, falling back to the container's own.
+    #[default]
+    Underived,
+    /// The container's own answer, and final: this stream has no start time,
+    /// however its packets are timestamped.
+    Stated,
+}
+
 /// One elementary stream in a container.
 #[derive(Debug, Clone)]
 pub struct Stream {
@@ -91,6 +121,11 @@ pub struct Stream {
     /// The unit every timestamp on this stream is counted in.
     pub time_base: Rational,
     pub start_time: Timestamp,
+    /// Which of the two things an absent [`Stream::start_time`] means — see
+    /// [`StartTimeAbsence`]. [`Stream::start_time_underived`] is the question
+    /// callers actually ask; [`Stream::state_no_start_time`] is how a demuxer
+    /// answers it.
+    pub start_time_absence: StartTimeAbsence,
     /// Duration **in `time_base` ticks**, exactly as the container states it.
     ///
     /// Deliberately not a [`Duration`]. A `Duration` counts microseconds and
@@ -136,6 +171,7 @@ impl Stream {
             params: CodecParameters::new(media_type),
             time_base,
             start_time: Timestamp::NONE,
+            start_time_absence: StartTimeAbsence::Underived,
             duration_ts: None,
             frame_count: None,
             r_frame_rate: Rational::UNDEFINED,
@@ -186,6 +222,27 @@ impl Stream {
     #[must_use]
     pub fn start_time_absolute(&self) -> Option<Duration> {
         self.start_time.to_duration(self.time_base)
+    }
+
+    /// Whether anything may still fill in this stream's `start_time`.
+    ///
+    /// The single test both of [`crate::Discovery`]'s derivation steps ask, so
+    /// that "absent because unanswered" and "absent because the container says
+    /// so" cannot drift apart between them.
+    #[must_use]
+    pub fn start_time_underived(&self) -> bool {
+        self.start_time.is_none() && self.start_time_absence == StartTimeAbsence::Underived
+    }
+
+    /// State that this stream genuinely has no start time, so nothing derives
+    /// one from its packets or from the container.
+    ///
+    /// For a container whose packets are timestamped but whose *stream* the
+    /// reference reports as having no start — a single still image, or any
+    /// `*_pipe` image splitter. See [`StartTimeAbsence`] for the measurement.
+    pub fn state_no_start_time(&mut self) {
+        self.start_time = Timestamp::NONE;
+        self.start_time_absence = StartTimeAbsence::Stated;
     }
 
     /// The first metadata value under `key`, matched case-insensitively.

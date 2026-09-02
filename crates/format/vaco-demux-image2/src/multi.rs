@@ -26,9 +26,9 @@
 use std::path::PathBuf;
 
 use vaco_codec_core::{FieldOrder, VideoParameters};
-use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
-use vaco_format_core::time::{TIME_BASE_Q, duration_from_rate};
+use vaco_format_core::time::TIME_BASE_Q;
 use vaco_format_core::{
     Demuxer, DemuxerDesc, FormatFlags, ParserProvider, SeekFlags, SeekTarget, Stream,
 };
@@ -218,6 +218,18 @@ impl Image2Demuxer {
         // undescribed as it was.
         stream.params.codec_id =
             fsutil::extension_of(name).and_then(vaco_codec_core::image_codec_for_extension);
+        // A literal filename (no pattern at all) is one still image, and the
+        // reference states no *stream* start time for it — while still
+        // timestamping its packet. Measured, ffmpeg 9.0.1 on a single PNG:
+        // `stream start_pts=N/A start_time=N/A duration_ts=N/A duration=N/A`
+        // beside `packet pts=0 dts=0 duration=1`. A `Sequence`/`Glob` plan is a
+        // real timeline the caller asked for (`start_time=0`, `duration_ts=3`
+        // for three images), and `-ts_from_file` states one from the file's
+        // mtime (`start_pts=1788374309`), so both of those are left to be
+        // derived from the packets as usual.
+        if matches!(plan, Plan::Disabled { .. }) && options.ts_from_file == TsFromFile::None {
+            stream.state_no_start_time();
+        }
 
         Ok(Self {
             dir,
@@ -276,10 +288,19 @@ impl Image2Demuxer {
 
     fn pts_ticks(&self, path: &std::path::Path) -> i64 {
         match self.options.ts_from_file {
-            TsFromFile::None => duration_from_rate(self.options.framerate)
-                .unwrap_or(Duration::ZERO)
-                .0
-                .saturating_mul(i64::try_from(self.frame_number).unwrap_or(i64::MAX)),
+            // The frame index, because `time_base` is `1/framerate` by
+            // construction — one frame is exactly one tick. Measured on
+            // `img_%03d.png`: `pts=0,1,2` with `duration=1` at `time_base=1/25`,
+            // and `pts=0,1,2` at `1/10` under `-framerate 10`, so the index is
+            // the answer at any rate.
+            //
+            // This used to be `duration_from_rate(..) * frame_number`, a
+            // *microsecond* count handed to a field counted in `1/framerate`
+            // ticks — 40 000× too large at the default rate, which made every
+            // timestamp-driven option silently inert: measured, `-t 0.04`,
+            // `-t 0.08` and `-t 0.12` on a three-image sequence all wrote
+            // 27 648 bytes where the reference wrote 9 216 / 18 432 / 27 648.
+            TsFromFile::None => i64::try_from(self.frame_number).unwrap_or(i64::MAX),
             TsFromFile::Sec => {
                 fsutil::file_mtime_unix(path).map_or(0, |(secs, _)| secs.saturating_mul(1_000_000))
             }
@@ -320,19 +341,8 @@ impl Demuxer for Image2Demuxer {
             None => return Err(Error::Eof),
         };
         let bytes = fsutil::read_file(&path)?;
-        // A literal filename (no pattern at all) states no timeline: measured,
-        // the reference reports `start_time`/`duration` as unset for a single
-        // still image, not `0`/`1/framerate`. A `Sequence`/`Glob` plan, or an
-        // explicit `-ts_from_file`, means the caller asked for a real
-        // timeline, so those still get one.
-        let no_timeline = matches!(self.plan, Plan::Disabled { .. })
-            && self.options.ts_from_file == TsFromFile::None;
         let mut packet = Packet::from_slice(&mut self.budget, &bytes)?;
-        packet.pts = if no_timeline {
-            Timestamp::NONE
-        } else {
-            Timestamp::new(self.pts_ticks(&path))
-        };
+        packet.pts = Timestamp::new(self.pts_ticks(&path));
         packet.dts = packet.pts;
         packet.flags = PacketFlags::KEY;
         self.advance();
@@ -372,11 +382,11 @@ impl Demuxer for SingleSourceDemuxer {
             return Err(Error::Eof);
         };
         let mut packet = Packet::from_slice(&mut self.budget, &bytes)?;
-        // No pattern was ever given here — see the module docs — so, like
-        // `Image2Demuxer`'s own `Plan::Disabled` case, this states no
-        // timeline at all rather than a synthetic `0`.
-        packet.pts = Timestamp::NONE;
-        packet.dts = Timestamp::NONE;
+        // One still image, exactly like `Image2Demuxer`'s `Plan::Disabled`
+        // case: the packet is timestamped and the *stream* states no start
+        // time (set in `open_boxed`). See [`Stream::state_no_start_time`].
+        packet.pts = Timestamp::ZERO;
+        packet.dts = Timestamp::ZERO;
         packet.flags = PacketFlags::KEY;
         Ok(packet)
     }
@@ -486,6 +496,7 @@ fn open_boxed(src: Box<dyn MediaSource>, parsers: &dyn ParserProvider) -> Result
     let mut stream = Stream::new(0, MediaType::Video, time_base_for(framerate));
     stream.params.media_type = Some(MediaType::Video);
     stream.params.video = Some(stream_video(framerate));
+    stream.state_no_start_time();
     let remaining = (!bytes.is_empty()).then_some(bytes);
     Ok(Box::new(RegistryDemuxer::Single(SingleSourceDemuxer {
         stream,
@@ -584,6 +595,72 @@ mod tests {
             assert_eq!(d.streams()[0].params.codec_id, want, "{name}");
         }
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// Packet timestamps and the stream's `start_time` are independent in the
+    /// reference, and this crate used to answer the second by dropping the
+    /// first — which left every single still image untranscodable
+    /// ("this container needs timestamps and the packet has none").
+    ///
+    /// Measured, ffmpeg 9.0.1 on one PNG: `packet pts=0 dts=0 duration=1`
+    /// beside `stream start_pts=N/A start_time=N/A`.
+    #[test]
+    fn a_still_is_timestamped_while_its_stream_states_no_start() {
+        let dir = scratch_dir("still_ts");
+        fs::write(dir.join("only.png"), b"one").unwrap();
+        let path = dir.join("only.png");
+        let mut d =
+            Image2Demuxer::open_pattern(path.to_str().unwrap(), Image2Options::default()).unwrap();
+
+        assert!(d.streams()[0].start_time.is_none());
+        assert!(
+            !d.streams()[0].start_time_underived(),
+            "the absence must be stated, or discovery derives 0 from the first packet"
+        );
+
+        let p = d.read_packet().unwrap();
+        assert_eq!(p.pts.ticks(), Some(0));
+        assert_eq!(p.dts.ticks(), Some(0));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// `time_base` is `1/framerate`, so one frame is one tick and the *n*th
+    /// packet's pts is *n*. Measured: `pts=0,1,2 duration=1` at `1/25`, and
+    /// the same `0,1,2` at `1/10` under `-framerate 10`.
+    ///
+    /// This used to be `duration_from_rate(framerate) * frame_number` — a
+    /// microsecond count in a field counted in `1/framerate` ticks, 40 000×
+    /// too large at the default rate.
+    #[test]
+    fn a_sequence_counts_ticks_not_microseconds() {
+        for (rate, tag) in [
+            (Rational::new(25, 1), "seq_tb25"),
+            (Rational::new(10, 1), "seq_tb10"),
+        ] {
+            let dir = scratch_dir(tag);
+            for n in 1..=3 {
+                fs::write(dir.join(format!("f{n:03}.png")), b"x").unwrap();
+            }
+            let pattern = dir.join("f%03d.png");
+            let mut d = Image2Demuxer::open_pattern(
+                pattern.to_str().unwrap(),
+                Image2Options {
+                    start_number: 1,
+                    framerate: rate,
+                    ..Image2Options::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(d.streams()[0].time_base, Rational::new(rate.den, rate.num));
+            assert!(
+                d.streams()[0].start_time_underived(),
+                "a real sequence has a timeline; the reference reports start_time=0"
+            );
+            for want in 0..3 {
+                assert_eq!(d.read_packet().unwrap().pts.ticks(), Some(want), "{rate:?}");
+            }
+            let _ = fs::remove_dir_all(&dir);
+        }
     }
 
     fn scratch_dir(tag: &str) -> PathBuf {

@@ -153,6 +153,15 @@ impl MockDemuxer {
         self
     }
 
+    /// Every stream states that it genuinely has no start time, as a still
+    /// image's does — timestamped packets, absent stream metadata.
+    pub(crate) fn with_stated_absent_start_time(mut self) -> Self {
+        for s in &mut self.streams {
+            s.state_no_start_time();
+        }
+        self
+    }
+
     /// Give every stream out-of-band configuration, as MP4's `avcC` and
     /// Matroska's `CodecPrivate` do.
     ///

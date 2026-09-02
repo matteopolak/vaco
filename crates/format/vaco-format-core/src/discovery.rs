@@ -490,7 +490,7 @@ impl<D: Demuxer> Discovery<D> {
     fn finish(&mut self) {
         let fps_probe = u64::try_from(self.opts.fpsprobesize).unwrap_or(0);
         for (stream, st) in self.streams.iter_mut().zip(self.state.iter()) {
-            if stream.start_time.is_none() {
+            if stream.start_time_underived() {
                 // `first_pts + initial_padding`, NOT the first pts. An encoder
                 // delay makes the first packet's timestamp negative by exactly
                 // the priming it declares, and the reference reports the sum —
@@ -655,8 +655,8 @@ impl<D: Demuxer> Discovery<D> {
     /// own, and the per-track `DURATION` *tag* is not the source either
     /// (`as2.mkv`'s says 1.0 s where the field says 2.008).
     ///
-    /// Both halves are guarded on `start_time.is_none()` together, not
-    /// separately: `sub.mkv` has an unknown container start and a known
+    /// Both halves are guarded on [`Stream::start_time_underived`] together,
+    /// not separately: `sub.mkv` has an unknown container start and a known
     /// container duration and reports `start_pts=N/A` with `duration_ts=2000`,
     /// so each half is applied only if the container states it, but the
     /// *decision* to apply either is one test on `start_time`.
@@ -671,7 +671,7 @@ impl<D: Demuxer> Discovery<D> {
             crate::time::estimate_duration(&self.report.duration_inputs, &self.opts).duration;
         let container_start = self.report.start_time;
         for stream in &mut self.streams {
-            if stream.start_time.is_some() {
+            if !stream.start_time_underived() {
                 continue;
             }
             let tb = stream.time_base;
@@ -1041,6 +1041,37 @@ mod tests {
 
     fn opts() -> FormatOptions {
         FormatOptions::default()
+    }
+
+    /// The default: nobody answered, so the first packet's pts becomes the
+    /// stream's `start_time`. The control for the test below — without it,
+    /// that test passes against a build that never derives anything.
+    #[test]
+    fn an_unanswered_start_time_is_derived_from_the_first_packet() {
+        let inner = MockDemuxer::new(1, MediaType::Video).with_packets(5);
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        assert_eq!(d.streams()[0].start_time.ticks(), Some(0));
+    }
+
+    /// A container that states its stream has no start time keeps that answer
+    /// however its packets are timestamped. Measured on a single still image:
+    /// `ffprobe` reports `start_time=N/A` beside a packet with `pts=0`, so
+    /// deriving from the first packet is wrong for it — and dropping the
+    /// packet's timestamps instead (the shape this replaced) made the image
+    /// untranscodable.
+    #[test]
+    fn a_stated_absent_start_time_survives_timestamped_packets() {
+        let inner = MockDemuxer::new(1, MediaType::Video)
+            .with_packets(5)
+            .with_stated_absent_start_time();
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        assert!(d.streams()[0].start_time.is_none());
+        // The second guard, in `adopt_container_timings`, must read the same
+        // answer: a stream that adopts the container's start also adopts its
+        // duration, and both are wrong here.
+        assert!(d.streams()[0].duration_ts.is_none());
     }
 
     // --------------------------------------------------- gap 4: reconfigure

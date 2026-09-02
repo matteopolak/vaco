@@ -175,13 +175,22 @@ impl PipeDemuxer {
         if spec.codec_id.is_none() {
             stream.metadata_set("raw_codec_name", spec.raw_codec_name);
         }
+        // A byte stream this crate merely *split* states no start time of its
+        // own — measured, `ffprobe -f png_pipe` reports `start_time=N/A` and
+        // `duration=N/A` for three concatenated PNGs exactly as it does for
+        // one, unlike `image2`'s file-pattern path (`crate::multi`), which is
+        // a real sequence a caller named on purpose. Said here rather than by
+        // dropping the packets' timestamps, which `read_packet` sets: the two
+        // are independent, and dropping them left every still image
+        // untranscodable.
+        stream.state_no_start_time();
 
         // Exactly one tick of `stream.time_base` (`1/framerate`, by
         // construction) — i.e. one frame period — rather than a
         // `duration_from_rate` value in a different, fixed base. Used only
-        // for `seek`'s timestamp-to-frame-index arithmetic below:
-        // `read_packet` states no real timeline (see its own docs), so this
-        // never reaches a displayed duration.
+        // for `seek`'s timestamp-to-frame-index arithmetic and `read_packet`'s
+        // packet timestamps; the stream states no start time either way, so
+        // this never reaches a displayed duration.
         let stride_ticks: i64 = 1;
 
         Ok(Self {
@@ -215,14 +224,26 @@ impl Demuxer for PipeDemuxer {
         let (start, end) = self.spans.get(index).copied().ok_or(Error::Eof)?;
         let slice = self.data.get(start..end).ok_or(Error::Eof)?;
         let mut packet = Packet::from_slice(&mut self.budget, slice)?;
-        // No timeline at all, single image or concatenated many — measured
-        // directly, `ffprobe -f png_pipe` on three concatenated PNGs reports
-        // `start_time`/`duration` as unset exactly as it does for one, unlike
-        // `image2`'s own file-pattern path (`crate::multi`), which is a real
-        // sequence a caller named on purpose. A byte stream this crate merely
-        // *split* states no playback rate of its own.
-        packet.pts = Timestamp::NONE;
-        packet.dts = Timestamp::NONE;
+        // Packets are numbered from zero in `stride_ticks` steps even though
+        // the *stream* states no start time (see `open_with_options`): those
+        // are independent in the reference. Measured on three concatenated
+        // PNGs read as `png_pipe`, ffmpeg 9.0.1 reports
+        // `pts=0,1,2 dts=0,1,2 duration=1` against `start_pts=N/A
+        // start_time=N/A duration_ts=N/A`, and the same `pts=0 duration=1` for
+        // a single image.
+        //
+        // `loops_done` keeps `-stream_loop` monotonic rather than replaying
+        // the same timestamps, which no muxer accepts.
+        let frame = (self.loops_done)
+            .saturating_mul(self.spans.len() as u64)
+            .saturating_add(index as u64);
+        let ts = Timestamp::new(
+            i64::try_from(frame)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(self.stride_ticks),
+        );
+        packet.pts = ts;
+        packet.dts = ts;
         packet.duration = Duration::ZERO;
         packet.pos = Some(start as u64);
         packet.flags = PacketFlags::KEY;
@@ -267,8 +288,8 @@ impl Demuxer for PipeDemuxer {
         }
     }
 
-    // No override: the default `None` is correct here, matching
-    // `read_packet`'s "no timeline" packets — see that method's docs. This
+    // No override: the default `None` is correct here, matching the stream's
+    // stated absence of a start time — see `open_with_options`. This
     // used to derive a duration from `stride_ticks * span_count`, which is
     // exactly the container-level input `estimate_duration` prefers, and fed
     // a `duration`/`bit_rate` the reference never states for a `_pipe`
@@ -888,6 +909,62 @@ mod tests {
             }
         }
         assert_eq!(count, 3);
+    }
+
+    /// The pair the reference keeps independent and this crate used to
+    /// conflate: packets numbered from zero, stream start time absent.
+    /// Measured on ffmpeg 9.0.1, three concatenated PNGs read as `png_pipe` —
+    /// `pts=0,1,2 duration=1` beside `start_pts=N/A start_time=N/A`. Dropping
+    /// the packet timestamps to reproduce the second made every still image
+    /// untranscodable.
+    #[test]
+    fn concatenated_images_are_timestamped_while_the_stream_states_no_start() {
+        let one = framing::tests_support_png();
+        let mut data = one.clone();
+        data.extend_from_slice(&one);
+        data.extend_from_slice(&one);
+        let src = Box::new(MemorySource::new(data));
+        let mut d = PipeDemuxer::open(&SPEC_PNG, src).unwrap();
+
+        {
+            let s = d.streams().first().unwrap();
+            assert!(s.start_time.is_none());
+            assert!(
+                !s.start_time_underived(),
+                "the absence must be stated, or discovery derives 0 from the first packet"
+            );
+        }
+
+        for want in 0..3 {
+            let p = d.read_packet().unwrap();
+            assert_eq!(p.pts.ticks(), Some(want));
+            assert_eq!(p.dts.ticks(), Some(want));
+        }
+    }
+
+    /// A muxer rejects a non-increasing dts, so replaying span 0 must not
+    /// replay timestamp 0.
+    #[test]
+    fn looped_spans_keep_climbing_past_the_last_one() {
+        let one = framing::tests_support_png();
+        let mut data = one.clone();
+        data.extend_from_slice(&one);
+        let src = Box::new(MemorySource::new(data));
+        let mut d = PipeDemuxer::open_with_options(
+            &SPEC_PNG,
+            src,
+            PipeOptions {
+                framerate: DEFAULT_FRAMERATE,
+                loop_input: true,
+            },
+        )
+        .unwrap();
+        let mut prev = None;
+        for _ in 0..6 {
+            let ticks = d.read_packet().unwrap().pts.ticks().unwrap();
+            assert!(prev.is_none_or(|p| ticks > p), "{prev:?} -> {ticks}");
+            prev = Some(ticks);
+        }
     }
 
     #[test]

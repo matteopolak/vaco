@@ -274,16 +274,34 @@ has no interlacing concept, and `FieldOrder::Progressive` is
 and inherits from whatever codec parser runs next unless this crate states
 otherwise first).
 
-**No timeline at all**, for a single literal file (`Plan::Disabled` with no
-`-ts_from_file`, and the registry's `SingleSourceDemuxer` — which is always
-effectively this case, since it never sees a pattern) and for every
-`pipe::PipeDemuxer`, single image or many concatenated — measured, the
-reference reports `start_time`/`duration` as unset in every one of those
-shapes, whether `png_pipe` sees one PNG or three concatenated. Packets carry
-`Timestamp::NONE`/`Duration::ZERO`, and `PipeDemuxer` has no `Demuxer::duration`
-override (the default `None` is correct). A real `-pattern_type sequence`/
-`glob` match through `Image2Demuxer::open_pattern`, by contrast, is a genuine
-video a caller named on purpose and keeps its per-frame stride.
+**No stream start time, but timestamped packets.** Those are independent in
+the reference and this crate used to conflate them. Measured, ffmpeg 9.0.1 on
+one PNG:
+
+```
+STREAM  start_pts=N/A  start_time=N/A  duration_ts=N/A  duration=N/A
+PACKET  pts=0  dts=0  duration=1
+```
+
+and `png_pipe` on three concatenated PNGs reports the same absent stream
+fields beside `pts=0,1,2`. So the absence is stated on the *stream*, via
+`Stream::state_no_start_time` — for a single literal file (`Plan::Disabled`
+with no `-ts_from_file`, and the registry's `SingleSourceDemuxer`, which never
+sees a pattern) and for every `pipe::PipeDemuxer`, single image or many
+concatenated. `PipeDemuxer` has no `Demuxer::duration` override either (the
+default `None` is correct).
+
+Packets are numbered from zero in one-tick steps regardless, `time_base` being
+`1/framerate`. Expressing the absent `start_time` by dropping them instead is
+what made a still image untranscodable — `vaco -i t.png -f rawvideo` failed
+with "this container needs timestamps and the packet has none" while `ffmpeg`
+wrote the frame — and it blocked every still-image decoder in the conformance
+decode tier before a pixel was compared.
+
+A real `-pattern_type sequence`/`glob` match through
+`Image2Demuxer::open_pattern` is a genuine video a caller named on purpose:
+the reference gives it `start_time=0`/`duration_ts=3` for three images, so it
+is left underived and discovery fills it in from the packets.
 
 **Left for the codec side.** `sample_aspect_ratio`/`display_aspect_ratio`
 (reference: `1:1` for a plain PNG) and `color_range`/`color_space` (reference:
@@ -291,6 +309,23 @@ video a caller named on purpose and keeps its per-frame stride.
 whatever parses the image codec's own header, which is a different crate.
 `probe_score` also differs by exactly one point for a single-file `png_pipe`
 match (`99` here vs `100` some other way) for a reason not yet run down.
+
+## Known divergences
+
+* **`-ts_from_file` timestamps are in the wrong unit, and so is the time
+  base.** `multi::pts_ticks` returns *microseconds* for `sec`/`ns` while
+  `Stream::time_base` stays `1/framerate`. Measured, ffmpeg 9.0.1 with
+  `-ts_from_file 1` on `img_%03d.png` reports `time_base=1/1` with
+  `pts=1788374309` (the file's mtime in whole seconds) and
+  `start_pts=1788374309` — so the reference switches the stream's time base
+  as well as the value. `-ts_from_file 2` (`ns`) cannot be measured on this
+  machine at all: the reference refuses it with "POSIX.1-2008 not supported,
+  nanosecond file timestamps unavailable". Unfixed; the `none` default, which
+  is what the whole still-image path uses, was corrected to the frame index.
+* **`-pattern_type` is not reachable from the CLI** (`Unrecognized option
+  'pattern_type'`), so the glob plan is exercised only by this crate's own
+  tests. `vaco-probe` likewise cannot open a `%03d` pattern at all
+  (`No such file or directory`) — only `vaco` can.
 
 ## Gotchas
 

@@ -766,6 +766,24 @@ change, verified each time with a full `cargo check --workspace
   once every stream's codec parameters are complete — see
   `docs/app/vaco-probe.md` for that divergence.
 
+- **`Stream::start_time_absence`**: `Timestamp::NONE` in `Stream::start_time`
+  answered two different questions with one value — *"nobody has looked yet"*
+  (derive one from the first packet) and *"this container's answer is that
+  there is none"* (leave it alone). `StartTimeAbsence` separates them; it
+  qualifies only the absence, so a `start_time` that holds a value is still
+  self-describing and the two fields cannot disagree.
+
+  Both of the derivation steps — `Discovery::finish` and
+  `adopt_container_timings` — ask the one predicate
+  `Stream::start_time_underived()` rather than testing the fields themselves,
+  and a demuxer answers with `Stream::state_no_start_time()`.
+
+  Measured on a single still image, which is where the two come apart:
+  `ffprobe` reports `start_pts=N/A start_time=N/A` for the stream while the
+  packet it hands out carries `pts=0 dts=0 duration=1`. Before this existed,
+  `vaco-demux-image2` expressed the first by dropping the second, and no still
+  image could be transcoded at all.
+
 ## Signature gaps
 
 Interfaces are frozen (plan 19 §6), so these are **reported, not changed**. In
