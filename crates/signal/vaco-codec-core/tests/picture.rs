@@ -614,3 +614,25 @@ fn tile_ref_reads_back_a_still_staged_tile() {
     assert!(w.tile_ref(0, 0, 1).is_none(), "published now, not staged");
 }
 
+
+/// A picture-wrapper-shaped caller: re-derive a fresh, single-use `BandMut`
+/// per row rather than holding one open across many calls, and return
+/// straight through -- the shape [`vaco_codec_core::picture::BandMut::into_row_mut`]
+/// exists for.
+fn row_mut(w: &mut vaco_codec_core::PictureWriter, y: u32) -> Option<&mut [u8]> {
+    w.band_mut(0, 0).ok()?.into_row_mut(y)
+}
+
+#[test]
+fn into_row_mut_outlives_the_band_that_produced_it() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, r) = ProgressPicture::allocate(&spec(32, 16, 16, 4), 0, &mut budget).unwrap();
+    row_mut(&mut w, 0).unwrap().fill(9);
+    row_mut(&mut w, 1).unwrap().fill(3);
+    assert_eq!(w.band_ref(0, 0).unwrap().data[0], 9, "row 0 kept its own write");
+    assert_eq!(w.band_ref(0, 0).unwrap().data[32], 3, "row 1 kept its own, independent write");
+    w.publish_through(0, 0).unwrap();
+    let view = r.finished(0).unwrap();
+    assert_eq!(view.row(0).unwrap()[0], 9);
+    assert_eq!(view.row(1).unwrap()[0], 3);
+}

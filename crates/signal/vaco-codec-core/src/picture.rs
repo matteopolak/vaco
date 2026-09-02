@@ -595,6 +595,30 @@ impl BandMut<'_> {
     }
 }
 
+impl<'a> BandMut<'a> {
+    /// Consumes the exclusive access, returning one specific row's own
+    /// mutable slice for the rest of the *band*'s lifetime rather than
+    /// [`BandMut::row_mut`]'s own call-scoped one.
+    ///
+    /// [`BandMut::row_mut`] takes `&mut self` so a caller can fetch several
+    /// rows of the *same* band one after another without re-acquiring it —
+    /// its returned slice's lifetime is tied to that borrow, not to `'a`,
+    /// which is correct for that shape but too short for a caller that
+    /// re-derives a fresh, single-use `BandMut` per row (a picture wrapper
+    /// whose own `row_mut(y)` maps `y` to a tile and returns straight
+    /// through, say) and needs the slice to outlive the local `BandMut`
+    /// that produced it.
+    #[must_use]
+    pub fn into_row_mut(self, index: u32) -> Option<&'a mut [u8]> {
+        if index >= self.rows {
+            return None;
+        }
+        let start = (index as usize).checked_mul(self.stride)?;
+        let end = start.checked_add(self.width_bytes as usize)?;
+        self.data.get_mut(start..end)
+    }
+}
+
 /// A disjoint run of row bands, handed to one slice or tile job.
 ///
 /// Row-banded (single-column) planes only — a column-banded plane's own
