@@ -1,21 +1,22 @@
 # `vaco-codec-hevc`
 
-Layer 4. HEVC/H.265 video decode (ITU-T H.265 (08/2021)) — I-slices and
-P-slices: NAL/VPS/SPS/PPS handling, the CTU quadtree, coding units, intra
+Layer 4. HEVC/H.265 video decode (ITU-T H.265 (08/2021)) — I-, P- and
+B-slices: NAL/VPS/SPS/PPS handling, the CTU quadtree, coding units, intra
 prediction (planar/DC/33 angular modes, MPM derivation, reference sample
 smoothing and strong intra smoothing), inter prediction (`prediction_unit()`
-syntax, merge/AMVP candidate derivation, §8.5.3.3 motion compensation, the
-inter CABAC context tables, `src/dpb.rs`'s reference picture management —
-see "Stage 2: P-slices, byte-exact — landed" below), the transform tree,
-residual coding, dequantisation, reconstruction, in-loop deblocking (§8.7.2,
-see "Deblocking (§8.7.2), landed" below), SAO (§7.3.8.3/§8.7.3, see "SAO
-(§7.3.8.3 / §8.7.3), landed" below), wavefront parallel processing
-(§9.3.2.3, see "WPP (`entropy_coding_sync_enabled_flag`), landed" below) and
-per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see "Per-CU QP delta
-(`cu_qp_delta`), landed" below) and uni-predictive weighted prediction
-(§8.5.3.3.4.3, see "Weighted prediction (§8.5.3.3.4.3), landed" below).
-B-slices (and so the bi-predictive half of weighted prediction), tiles,
-I_PCM, transform-skip residual coding, custom scaling lists and every
+syntax, merge/AMVP and combined bi-predictive merge candidate derivation,
+§8.5.3.3 uni- and bi-predictive motion compensation, the inter CABAC
+context tables, `src/dpb.rs`'s reference picture management — see "Stage 2:
+P-slices, byte-exact — landed" and "B-slices (...), landed" below), the
+transform tree, residual coding, dequantisation, reconstruction, in-loop
+deblocking (§8.7.2, see "Deblocking (§8.7.2), landed" below), SAO
+(§7.3.8.3/§8.7.3, see "SAO (§7.3.8.3 / §8.7.3), landed" below), wavefront
+parallel processing (§9.3.2.3, see "WPP (`entropy_coding_sync_enabled_flag`),
+landed" below), per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see
+"Per-CU QP delta (`cu_qp_delta`), landed" below) and uni- and bi-predictive
+weighted prediction (§8.5.3.3.4.3, see "Weighted prediction
+(§8.5.3.3.4.3), landed" and "B-slices (...), landed" below). Tiles, I_PCM,
+transform-skip residual coding, custom scaling lists and every
 range-extension feature are explicitly out of scope — see "What was cut"
 below.
 
@@ -169,14 +170,15 @@ the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
 `separate_colour_plane`, custom scaling lists, I_PCM, SPS/PPS range
 extensions, SCC extensions, tiles, `transquant_bypass_enabled`. Neither
 deblocking, SAO, `entropy_coding_sync` (WPP), `cu_qp_delta_enabled`,
-P-slices, nor weighted prediction are on this list any more — see their own
-"landed" sections below. B-slices (`SliceKind::B`) are refused by slice kind
-in `decode_packet` itself rather than at the SPS/PPS `check_scope` call,
-since that has no footprint visible before the slice header is parsed — the
-same used to be true of weighted prediction's own `weighted_pred_flag`
-check, now removed (see "Weighted prediction (§8.5.3.3.4.3), landed" below).
-Both Annex-B and length-prefixed (`hvcC`) framing are handled, via the
-embedded `vaco_parse_hevc::HevcParser` (`decoder.rs`'s own module doc).
+P-slices, B-slices, nor weighted (uni- or bi-predictive) prediction are on
+this list any more — see their own "landed" sections below.
+`decode_packet`'s own former `SliceKind::B` refusal (it had no footprint
+visible before the slice header is parsed, so it could not live in
+`check_scope` either way — the same was once true of weighted prediction's
+own `weighted_pred_flag` check, also removed) is lifted; see "B-slices
+(...), landed" below. Both Annex-B and length-prefixed (`hvcC`) framing are
+handled, via the embedded `vaco_parse_hevc::HevcParser` (`decoder.rs`'s own
+module doc).
 
 ## How to change it
 
@@ -194,12 +196,12 @@ embedded `vaco_parse_hevc::HevcParser` (`decoder.rs`'s own module doc).
   script). Clean-room rule: HM is Tier A (BSD-3-Clause) and may be read,
   built and instrumented directly; `ffmpeg`/`x265` stay Tier B — run only,
   never opened.
-- **Extending scope** (B-slices, tiles — inter prediction (P-slices),
-  deblocking, SAO, WPP, `cu_qp_delta` and weighted prediction are done, see
-  their own sections above): the corresponding SPS/PPS fields already
-  correctly return `Error::Unsupported` by name in `check_scope` when a
-  real stream exercises them — implement behind that same call site rather
-  than adding a new refusal path. Reference picture management
+- **Extending scope** (tiles — inter prediction (P- and B-slices),
+  deblocking, SAO, WPP, `cu_qp_delta` and weighted (uni- and bi-predictive)
+  prediction are done, see their own sections above): the corresponding
+  SPS/PPS fields already correctly return `Error::Unsupported` by name in
+  `check_scope` when a real stream exercises them — implement behind that
+  same call site rather than adding a new refusal path. Reference picture management
   (`src/dpb.rs`) is already landed for inter prediction — see "Reference
   picture management (§8.3.2 / §8.3.4), landed" below for what it covers,
   and "Stage 2: P-slices, byte-exact — landed" for how `prediction_unit()`/

@@ -1,19 +1,24 @@
-//! H.265/HEVC intra-only video decode — I-slices, 8-bit 4:2:0 only.
+//! H.265/HEVC video decode — I/P/B-slices, 8-bit 4:2:0 only.
 //!
 //! # Scope, stated once
 //!
-//! This crate decodes the mainstream shape a real encoder emits for an
-//! all-intra sequence: NAL/parameter-set resolution (reusing
+//! This crate decodes the mainstream shape a real encoder emits: I-, P- and
+//! B-slices all real, not just parsed. NAL/parameter-set resolution (reusing
 //! `vaco-parse-hevc`, which owns SPS/PPS/slice-header parsing already) into a
-//! CTU quadtree walk, intra prediction (planar/DC/33 angular modes),
+//! CTU quadtree walk, intra prediction (planar/DC/33 angular modes) and
+//! motion compensation (merge/AMVP, uni- and bi-predictive, weighted or not),
 //! transform-tree recursion, dequantisation and the inverse transform,
-//! composed into real reconstructed pixels. It is the HEVC analogue of
+//! deblocking and SAO, composed into real reconstructed pixels — verified
+//! byte-exact against a fully stock, completely unmodified `libx265`
+//! invocation, not just a restricted one. It is the HEVC analogue of
 //! `vaco-codec-h264`'s CABAC macroblock layer, following the same shape:
 //! entropy decode and reconstruction are real and tested against a real
 //! encoder's output, verified plane-by-plane.
 //!
-//! Deliberately **not** in scope, each refused by name
-//! ([`vaco_core::Error::Unsupported`]) rather than attempted shallowly:
+//! What each bullet below covers, in the order support for it landed —
+//! several were genuinely **not** in scope for a while and refused by name
+//! ([`vaco_core::Error::Unsupported`]) before their own pass added them; a
+//! few (tiles; anything but 8-bit 4:2:0) remain refused today:
 //!
 //! - **P-slices are implemented and no longer refused.**
 //!   `prediction_unit()` syntax (skip/merge/AMVP), merge/AMVP candidate
@@ -36,9 +41,30 @@
 //!   inspecting the parsed table, not assumed) — see
 //!   `docs/codec/vaco-codec-hevc.md`'s weighted-prediction section for the
 //!   fixtures and values.
-//! - **B-slices.** Refused by name; not implemented at all. This also means
-//!   the bi-predictive half of §8.5.3.3.4.3 (`weighted_bipred_flag`) is
-//!   unreachable — [`weight`] resolves `RefPicList0` only.
+//! - **B-slices are implemented and no longer refused.**
+//!   `inter_pred_idc` parsing (§7.3.8.6) and the rest of a B-slice's
+//!   `prediction_unit()` (`ref_idx_l1`/`mvd_coding(x, y, 1)`/`mvp_l1_flag`),
+//!   `RefPicList1` construction ([`dpb`]'s `build_ref_pic_lists`, generic
+//!   over list index from the P-slice pass onward), combined bi-predictive
+//!   merge candidates (§8.5.3.2.4), `collocated_from_l0_flag`-aware temporal
+//!   motion vector prediction (§8.5.3.2.9), default and explicit-weighted
+//!   bi-predictive motion compensation (§8.5.3.3.4.2/.3 — the
+//!   `weighted_bipred_flag` half of weighted prediction the bullet above
+//!   leaves implicit is this one, [`weight`]'s `resolve_list` rather than an
+//!   L0-only `resolve_l0`), B-slice CABAC context initialisation
+//!   (§9.3.2.2), and full Table 8-12 boundary-strength derivation for
+//!   deblocking across bi-predicted edges are all wired into [`decoder`].
+//!   See `docs/codec/vaco-codec-hevc.md`'s "B-slices... landed" section for
+//!   the two Annex C DPB-bumping defects a real hierarchical-B stream
+//!   surfaced (fixed there, unrelated to the inter-prediction work itself)
+//!   and the fixtures below. Verified byte-exact against a fully stock,
+//!   completely unmodified `libx265` invocation (zero `-x265-params`,
+//!   `libx265`'s own default GOP structure and B-frame count) at multiple
+//!   resolutions, a deep hierarchical-B GOP forced explicitly, and — with
+//!   `weightb=1` added specifically to exercise it, since stock `libx265`
+//!   does not turn it on by default — weighted bi-prediction itself, with
+//!   genuinely non-neutral, distinct weight/offset pairs confirmed on both
+//!   lists.
 //! - **Deblocking (§8.7.2) is implemented** — see [`deblock`]'s own module
 //!   doc for the algorithm, what it reuses from HM 18.0 (Tier A), and why
 //!   it does not reuse `vaco-codec-dsp-deblock` (a genuinely different

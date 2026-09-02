@@ -144,7 +144,7 @@ documents under `docs/codec/` carry the exact clause-level scope.
 | Codec | Decode | Encode | Notes |
 |---|---|---|---|
 | H.264 / AVC | yes | — | Patent-gated |
-| H.265 / HEVC | yes | — | I- and P-slices; **no B-slices**, tiles, or range extensions. Patent-gated |
+| H.265 / HEVC | yes | — | I-, P- and B-slices; no tiles or range extensions. Patent-gated |
 | MPEG-1 / MPEG-2 | yes | — | |
 | VP8 | yes | — | RFC 6386 |
 | VP9 | intra only | — | Key frames only |

@@ -1,6 +1,6 @@
 [package]
 name = "vaco-codec-hevc"
-description = "H.265/HEVC intra-only video decode (patent-encumbered-hevc-decode)."
+description = "H.265/HEVC video decode -- I/P/B-slices (patent-encumbered-hevc-decode)."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
