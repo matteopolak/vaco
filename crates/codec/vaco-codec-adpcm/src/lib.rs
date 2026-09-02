@@ -169,6 +169,16 @@ fn frame_from_samples(
     let src = bytes.get(..dst.len()).unwrap_or(&[]);
     dst.copy_from_slice(src);
     frame.pts = pts;
+    // The decode-side mirror of `frame_pcm_duration` above (used by every
+    // encoder in this crate): `count`/`sample_rate` are already in scope
+    // here, but this shared helper -- used by all four real decoders
+    // (IMA-WAV, IMA-QT, MS, SWF) -- never set `frame.duration`. Every real
+    // video decoder in this tree sets `frame.duration`; this crate's own
+    // decoders were the audio-side exception, same as `vaco-codec-pcm`'s.
+    let time_base = Rational::new(1, i32::try_from(sample_rate).unwrap_or(1).max(1));
+    frame.duration = Timestamp::new(i64::from(count))
+        .to_duration(time_base)
+        .unwrap_or(Duration::ZERO);
     frame.flags = FrameFlags::KEY;
     Ok(frame)
 }
@@ -1105,6 +1115,34 @@ mod tests {
             .unwrap();
         assert_ne!(expected, Duration::ZERO);
         assert_eq!(pkt.duration, expected);
+    }
+
+    /// The decode-side mirror of the test above: `frame_from_samples`
+    /// (shared by all four real decoders) never set `frame.duration`
+    /// either, even though `count`/`sample_rate` were already in scope.
+    #[test]
+    fn ima_wav_decode_sets_a_real_nonzero_frame_duration() {
+        let samples = tone(41);
+        let mut enc = AdpcmImaWavEncoder::new(Limits::permissive());
+        enc.send(Some(&frame_of(&samples, 1))).unwrap();
+        let pkt = enc.receive().unwrap();
+        // `frame_of` hardcodes 8000 Hz on the encode side; the decoder has
+        // no way to learn that from the bitstream itself (matching this
+        // crate's own note on `frame_pcm_duration` about nothing upstream
+        // of a raw-PCM/ADPCM source reliably carrying sample rate), so it
+        // must be configured to match, same as any real container's
+        // extradata would supply.
+        let mut dec = AdpcmImaWavDecoder::new(Limits::permissive())
+            .with_audio_params(8_000, ChannelLayout::MONO);
+        dec.send(Some(&pkt)).unwrap();
+        let frame = dec.receive().unwrap();
+
+        // 41 samples at 8000 Hz.
+        let expected = vaco_core::Timestamp::new(41)
+            .to_duration(vaco_core::Rational::new(1, 8_000))
+            .unwrap();
+        assert_ne!(expected, Duration::ZERO);
+        assert_eq!(frame.duration, expected);
     }
 
     #[test]

@@ -250,6 +250,21 @@ impl SendReceive for PcmDecoder {
                     .ok_or(Error::InvalidData("pcm: plane shorter than decoded data"))?;
                 dst.copy_from_slice(&samples);
                 frame.pts = pkt.pts;
+                // The decode-side mirror of the `PcmEncoder::send` fix
+                // above: every real video decoder in this tree sets
+                // `frame.duration` from the source's own per-frame timing,
+                // but this one never did, even though the ingredients
+                // (`count` decoded samples at `self.sample_rate`) are both
+                // already in scope. Left unset, any consumer downstream
+                // that trusts `frame.duration` rather than recomputing it
+                // itself (a filter doing duration-aware processing, or a
+                // future encoder following `vaco-codec-vp8`/`-vp9`'s
+                // propagate-don't-recompute pattern) would silently see a
+                // zero duration for every PCM-decoded frame.
+                let time_base = Rational::new(1, i32::try_from(self.sample_rate).unwrap_or(1).max(1));
+                frame.duration = Timestamp::new(i64::from(count))
+                    .to_duration(time_base)
+                    .unwrap_or(Duration::ZERO);
                 frame.flags = FrameFlags::KEY;
                 self.machine.emit(frame);
                 Ok(())
@@ -764,6 +779,31 @@ mod tests {
         let dec = PcmDecoder::new(Limits::permissive(), CodecId::PcmS16le);
         assert_eq!(dec.sample_rate, DEFAULT_SAMPLE_RATE);
         assert_eq!(dec.layout.channels, 1);
+    }
+
+    /// The decode-side mirror of `send_frame_sets_a_real_nonzero_packet_duration`
+    /// above: `PcmDecoder::send` set `frame.pts` but never `frame.duration`,
+    /// even though the ingredients (decoded sample count and the
+    /// configured sample rate) were already in scope. Every real video
+    /// decoder in this tree sets `frame.duration`; this was the one
+    /// exception on the audio side.
+    #[test]
+    fn send_sets_a_real_nonzero_frame_duration() {
+        let wire = make_wire_i16(&[0, 100, -100, 32767, -32768, 12345, -12345]);
+        let mut budget = Budget::new(Limits::permissive());
+        let pkt = Packet::from_slice(&mut budget, &wire).expect("packet");
+
+        let mut dec = PcmDecoder::new(Limits::permissive(), CodecId::PcmS16le)
+            .with_audio_params(8_000, ChannelLayout::MONO);
+        dec.send(Some(&pkt)).expect("send");
+        let frame = dec.receive().expect("frame");
+
+        // 7 samples at 8000 Hz.
+        let expected = vaco_core::Timestamp::new(7)
+            .to_duration(vaco_core::Rational::new(1, 8_000))
+            .expect("duration");
+        assert_ne!(expected, vaco_core::Duration::ZERO);
+        assert_eq!(frame.duration, expected);
     }
 
     #[test]

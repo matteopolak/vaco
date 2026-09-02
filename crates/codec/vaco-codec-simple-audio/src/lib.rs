@@ -91,6 +91,15 @@ fn frame_from_interleaved(
     let src = bytes.get(..dst.len()).unwrap_or(&[]);
     dst.copy_from_slice(src);
     frame.pts = pts;
+    // The decode-side mirror of the duration fixes already applied to
+    // this crate's own `QoaEncoder`/`ComfortNoiseEncoder` above, and to
+    // `vaco-codec-pcm`/`vaco-codec-adpcm`'s decoders: `count`/`sample_rate`
+    // are already in scope here, but this shared helper (used by both
+    // real decoders in this crate) never set `frame.duration`.
+    let time_base = Rational::new(1, i32::try_from(sample_rate).unwrap_or(1).max(1));
+    frame.duration = Timestamp::new(i64::from(count))
+        .to_duration(time_base)
+        .unwrap_or(Duration::ZERO);
     frame.flags = FrameFlags::KEY;
     Ok(frame)
 }
@@ -582,6 +591,28 @@ mod tests {
         let (decoded, channels) = interleaved_owned(&frame).unwrap();
         assert_eq!(channels, 2);
         assert_eq!(decoded.len(), samples.len());
+    }
+
+    /// The decode-side mirror of `every_qoa_packet_duration_sums_to_the_
+    /// input_including_a_short_last_one` above: `frame_from_interleaved`
+    /// (shared by `QoaDecoder` and `ComfortNoiseDecoder`) never set
+    /// `frame.duration`, even though `count`/`sample_rate` were already in
+    /// scope. QOA's own header carries sample rate, so this needs no
+    /// manual configuration the way ADPCM's decode-side test did.
+    #[test]
+    fn qoa_decode_sets_a_real_nonzero_frame_duration() {
+        let mut enc = QoaEncoder::new(Limits::permissive());
+        let mut dec = QoaDecoder::new(Limits::permissive());
+        let samples = tone(600 * 2);
+        enc.send(Some(&frame_of(&samples, 2, 44_100))).unwrap();
+        let pkt = enc.receive().unwrap();
+        dec.send(Some(&pkt)).unwrap();
+        let frame = dec.receive().unwrap();
+
+        // 600 samples per channel at 44100 Hz.
+        let expected = Timestamp::new(600).to_duration(Rational::new(1, 44_100)).unwrap();
+        assert_ne!(expected, Duration::ZERO);
+        assert_eq!(frame.duration, expected);
     }
 
     #[test]
