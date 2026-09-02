@@ -137,7 +137,19 @@ impl Muxer for MovMuxer {
     }
 
     fn query_codec(&self, codec: CodecId, _strict: i32) -> CodecSupport {
-        if SUPPORTED_VIDEO.contains(&codec) || SUPPORTED_AUDIO.contains(&codec) {
+        // Reuses `is_supported` rather than re-testing `SUPPORTED_VIDEO`/
+        // `SUPPORTED_AUDIO` inline a second time -- found duplicated during
+        // the dead-code triage after rule I's cross-scanner audit fixed
+        // dead_code's substring-matching bug: `is_supported` had zero
+        // references anywhere in this crate (its own doc's claim that
+        // `crate::brand`'s `default_video`/`default_audio` call it was
+        // false -- those are just `Option<CodecId>` data fields), because
+        // this method had silently grown its own copy of the same check
+        // instead. Media type isn't available here to pass through
+        // accurately, so both are tried -- exactly the OR this method
+        // already computed, now backed by one set of match arms instead of
+        // two copies that could drift.
+        if is_supported(MediaType::Video, codec) || is_supported(MediaType::Audio, codec) {
             CodecSupport::Supported
         } else {
             CodecSupport::Unsupported
@@ -634,9 +646,13 @@ impl MovMuxer {
     }
 }
 
-/// Whether `media`/`codec` is one this crate can mux at all — used by
-/// [`crate::brand`]'s `MuxerDesc::default_video`/`default_audio` consumers
-/// and available for a caller that wants to check before calling
+/// Whether `media`/`codec` is one this crate can mux at all. Used by
+/// [`MovMuxer`]'s own `Muxer::query_codec` impl (the previous doc here
+/// claimed `crate::brand`'s `default_video`/`default_audio` called this --
+/// they do not, those are plain `Option<CodecId>` data fields, and this
+/// function had zero real callers until `query_codec` was fixed to use it
+/// instead of a second, drift-prone copy of the same check) and available
+/// for a caller that wants to check before calling
 /// [`vaco_format_core::mux::MuxBuilder::add_stream`].
 #[must_use]
 pub fn is_supported(media: MediaType, codec: CodecId) -> bool {

@@ -24,6 +24,17 @@ use crate::tables;
 /// A newtype rather than an enum because the field is an open space (5 bits,
 /// escaping to `31 + <6 bits>`) that later amendments keep extending; a closed
 /// enum would reject a stream that is merely newer than we are.
+///
+/// Transcribed in full from ISO/IEC 14496-3 subpart 1 Table 1.17, not just
+/// the handful this module actually branches on: reading `object_type` and
+/// reporting *which* type a stream claims (`AAC_LTP`, `TWIN_VQ`, `LAYER1`/
+/// `LAYER2`/`LAYER3` for the MPEG-1/2-Layer-in-an-AAC-wrapper types, and the
+/// rest) is this module's whole job even where decoding that type is not
+/// implemented -- see the module's own "What this module does not do"
+/// above. `cargo xtask dead-code` reports several of these constants as
+/// having no reference outside their own declaration; that is this table
+/// being complete, the same as `vaco-demux-matroska::ebml::schema`'s own
+/// element-ID table, not evidence any of them are leftover.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default)]
 pub struct AudioObjectType(pub u8);
 

@@ -18,6 +18,27 @@
 //! an ID the schema does not define is skipped by its size and, per section 6.2,
 //! cannot terminate an unknown-size element, which is exactly the treatment a
 //! Matroska v4 reader owes them.
+//!
+//! # Most of these named constants have no caller, on purpose
+//!
+//! [`ELEMENTS`] below states every entry's `id` as a raw hex literal, not by
+//! name — the schema table has to be one flat array [`super::MatroskaStack`]
+//! can walk by numeric ID, and repeating each constant's own definition as
+//! its initializer would only add an indirection nothing reads back. A named
+//! constant here exists for two independent reasons that both stop at
+//! "declared," not "consumed elsewhere": documenting which RFC element a
+//! given ID is, and giving `demux.rs` a name to match on for the specific
+//! elements this crate actually parses today (`el::TAGEDITIONUID` and
+//! similar). An element this crate does not yet act on by name — block
+//! addition IDs, chapter-processing scripts, codec private state, track
+//! translation, stereo mode, and the rest of `cargo xtask dead-code`'s
+//! report for this crate — still needs its ID recognised by [`ELEMENTS`]
+//! for RFC 8794 section 6.2's unknown-size termination rule to hold, even
+//! though nothing downstream reads its *value* yet. That is a real,
+//! declared gap in what this demuxer parses, not a leftover: the schema is
+//! complete on purpose (see above), the parser is not, and conflating "the
+//! ID is known" with "the element is handled" would be the wrong fix for
+//! either.
 
 #![allow(
     clippy::unreadable_literal,
