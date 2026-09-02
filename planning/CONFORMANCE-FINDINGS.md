@@ -5979,3 +5979,87 @@ just triggered by a plain (non-private-index) commit this time: `git add
 Going forward: check `git status`/`git diff --cached --name-only`
 immediately before every commit in this tree, not just immediately
 before `git add`.
+
+## 66. `extradata_size` on mpeg2video-in-TS/PS: no NAL-unit synthesis mechanism exists for a non-NALU codec, so nothing was ever set
+
+Continuing the ranking: `extradata_size` was next, and triage separated a
+real, clustered signal from noise immediately -- `probe-mpegts/mpeg2-ps`/
+`mpeg2-ts`/`mpeg2-ts-with-audio` showed the identical value both times
+(ours absent, reference `22`) across all three case-groups; everything
+else at this field name (ASF/FLV h264+aac, AVI mpeg4) was the by-now-
+familiar compact/xml line-cascade artifact, or squarely the AVI/
+`vaco-demux-avi` territory left alone since findings 63/64.
+
+### Root cause
+
+MPEG-1/2 video has no out-of-band configuration record the way `avcC`/
+`hvcC` are, so a headerless container (MPEG-TS, MPEG-PS) leaves this
+crate reporting no `extradata` at all. `vaco-format-core::discovery`'s
+existing `synthesize_extradata` mechanism -- built for exactly this
+"headerless container, reconstruct the config record from in-band data"
+situation -- does not cover it: that mechanism is NAL-unit shaped
+(H.264/HEVC parameter sets, keyed on `vaco_format_nalu::header_kind_for`
+returning `Some`), and MPEG-1/2 has no NAL units to hand it at all. Not a
+bug in that function; a codec family it was never built to reach.
+
+### Measured
+
+`ffmpeg -c:v mpeg2video -f mpeg`/`-f mpegts`, real ffprobe:
+`extradata_size=22`. Dumped the actual bytes to confirm exactly why
+rather than guess a byte range: `sequence_header()` (12 bytes -- the
+`00 00 01 B3` start code plus its fixed fields) immediately followed by
+`sequence_extension()` (10 bytes -- `00 00 01 B5` plus its own fixed
+fields), stopping at the `group_start_code` that follows in the fixture
+measured. Also checked MPEG-1 (no `sequence_extension()` at all):
+`extradata_size=12`, the bare `sequence_header()` alone -- confirms the
+general shape ("the contiguous run of `SEQUENCE_HEADER`/`EXTENSION_START`
+codes, however long it happens to be") rather than a fixed "seq header
+plus exactly one extension" special case.
+
+### Fix
+
+`vaco-parse-mpegvideo::mpeg12`'s own `absorb_headers` already scans start
+codes in the access-unit prefix to read these fields; it now also tracks
+the byte span of that same contiguous header+extensions block and
+captures it verbatim as `extradata` the first time it is found.
+`CodecParameters::fill_from`'s existing "only fill extradata when unset"
+rule means a container that does supply its own record is never
+overwritten -- this only fires for the headerless containers that
+currently report nothing.
+
+Verified with a rebuilt vaco-probe against real ffprobe on three
+fixtures (320x240, 720x480, and a bare MPEG-1 stream) -- all three match
+exactly. `codec_name` on the MPEG-1 fixture still misreports as
+`mpeg2video` where the reference says `mpeg1video`, a separate,
+already-documented, accepted limitation of `vaco-demux-mpegps`'s
+stream-id-only codec guessing -- not touched here, named so it is not
+mistaken for a side effect of this fix.
+
+### Measured leverage
+
+Full `vaco-conformance --tier core` re-run: 288 agreed / 421 diverged,
+unchanged at the case level -- each affected case still carries other,
+unrelated divergences (`coded_width`/`coded_height` reported `0` by the
+reference, `has_b_frames`, `mime_codec_string` for the MP2 audio stream).
+Direct re-measurement confirms `extradata_size` now agrees on both sides
+for every `mpeg2-ps`/`mpeg2-ts`/`mpeg2-ts-with-audio` case; what remains
+in the raw log there is the cascade artifact, not a residual divergence.
+
+New regression assertions on both existing real-fixture tests, including
+the "no further start code at all" tail case (the loop runs off the end
+of the input with the header span still open) that the real 22-byte
+fixture never exercises on its own. `cargo test`/`cargo clippy
+--all-targets -D warnings` clean; `cargo build --workspace` clean.
+
+Commit `fab2d7a`.
+
+### Commit-hygiene note
+
+Before this commit, `git diff --cached --name-only` (checked
+immediately before committing, per the mechanism the coordinator added
+to `CLAUDE.md` after finding 65's incident) showed `README.md` staged
+alongside the intended file -- someone else's index entry, unrelated to
+this change. Cleared with `git reset -q HEAD -- README.md` (index-only,
+confirmed the working tree was untouched before and after) rather than
+committing it or guessing whether it was stale. The check caught exactly
+what it was added to catch.
