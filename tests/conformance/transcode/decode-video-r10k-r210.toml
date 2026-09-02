@@ -1,0 +1,44 @@
+# Decode conformance: r10k and r210, two packed 10-bit RGB pixel formats,
+# muxed in MOV rather than dumped as a bare rawvideo elementary stream --
+# the earlier attempt at a raw dump was blocked by the reference's own
+# rawvideo demuxer rejecting the file ("packet too small"; see the prior
+# `r10k`/`r210` NOT_YET_COVERED entries this replaces), and MOV is where
+# these two packed-RGB formats actually live in real files. `raw-exact`:
+# decode is a direct reinterpretation with no coefficient freedom.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a
+# full-feature `vaco` build: KNOWN DIVERGENCE, newly observed here --
+# `vaco` refuses both with "a stream being transcoded has no known input
+# codec": registered decoders, unreachable from the MOV demux path, the
+# same "implemented is not reachable" shape as the ADPCM/h263/h261
+# findings in the sibling manifests. Not chased here.
+
+schema = 1
+suite  = "decode-video-r10k-r210"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "r10k"
+source   = "generated://r10k.mov"
+tags     = ["decoder:r10k"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-c:v", "r10k", "-f", "mov"]
+
+[[media]]
+id       = "r210"
+source   = "generated://r210.mov"
+tags     = ["decoder:r210"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-c:v", "r210", "-f", "mov"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "gbrp10le", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

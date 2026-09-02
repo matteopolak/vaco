@@ -1,0 +1,35 @@
+# Decode conformance: v210, a packed 10-bit 4:2:2 pixel format real files
+# actually carry in MOV (unlike the earlier raw-dump attempt, blocked by
+# the reference's own rawvideo demuxer -- see decode-video-r10k-r210.toml's
+# header for the same story). `raw-exact`: decode is a direct
+# reinterpretation with no coefficient freedom.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a
+# full-feature `vaco` build: KNOWN DIVERGENCE, newly observed here --
+# `vaco` refuses with "a stream being transcoded has no known input
+# codec", the same reachability shape as decode-video-r10k-r210.toml. Not
+# chased here.
+
+schema = 1
+suite  = "decode-video-v210"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "v210"
+source   = "generated://v210.mov"
+tags     = ["decoder:v210"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-c:v", "v210", "-f", "mov"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "yuv422p10le", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

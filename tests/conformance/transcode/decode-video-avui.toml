@@ -1,0 +1,35 @@
+# Decode conformance: AVUI (Avid Meridien uncompressed). Own file: needs
+# 720x486 or 720x576 (the only sizes the reference's own avui encoder
+# accepts) and `-strict experimental`, both distinct from every sibling
+# manifest in this directory. `raw-exact`: decode is a direct
+# reinterpretation with no coefficient freedom.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a
+# full-feature `vaco` build: KNOWN DIVERGENCE, newly observed here --
+# `vaco` refuses with "a stream being transcoded has no known input
+# codec", the same reachability shape as decode-video-r10k-r210.toml. Not
+# chased here.
+
+schema = 1
+suite  = "decode-video-avui"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "avui"
+source   = "generated://avui.mov"
+tags     = ["decoder:avui"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=720x486:rate=5:duration=1", "-c:v", "avui", "-strict", "experimental", "-f", "mov"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "yuva422p", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"
