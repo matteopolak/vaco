@@ -19,7 +19,7 @@
 //! simpler than reconstructing z-scan addresses and cannot disagree with the
 //! process it is standing in for, because within that scope it is not an
 //! approximation of "already decoded", it *is* "already decoded".
-use vaco_core::Result;
+use vaco_core::{Error, Result};
 use vaco_limits::Budget;
 
 use crate::intra_mode::DC_IDX;
@@ -46,12 +46,14 @@ const fn block_of(x: usize) -> usize {
 /// splits smaller, and `pic_width`/`pic_height_in_luma_samples` are
 /// themselves always CTB-grid- (hence 4x4-grid-) aligned per §7.4.3.2.1, so
 /// there is no partial block at the plane's own edge to round awkwardly);
-/// every *read* of availability ([`Plane::is_ready`]) is a per-pixel
-/// reference-sample query that only ever needs "has the 4x4 block
-/// containing this pixel been written", never finer. Collapsing `ready` to
-/// that grid is therefore not an approximation — within this crate's scope
-/// it answers the identical question the old per-pixel array did, at 1/16
-/// the memory and update cost.
+/// every *read* of availability ([`ReconPlane::is_ready`] — the CTU walk's
+/// own in-progress reconstruction buffer, not this now-write-only `Plane`;
+/// see `ReconPlane`'s own module doc below) is a per-pixel reference-sample
+/// query that only ever needs "has the 4x4 block containing this pixel
+/// been written", never finer. Collapsing `ready` to that grid is
+/// therefore not an approximation — within this crate's scope it answers
+/// the identical question the old per-pixel array did, at 1/16 the memory
+/// and update cost.
 #[derive(Debug, Clone)]
 pub(crate) struct Plane {
     width: usize,
@@ -88,24 +90,13 @@ impl Plane {
         Some(by * self.ready_cols + bx)
     }
 
-    /// Whether `(x, y)` is inside the plane and its containing 4x4 block has
-    /// already been fully reconstructed. The single availability test every
-    /// reference-sample read in intra prediction uses.
-    #[must_use]
-    pub(crate) fn is_ready(&self, x: i32, y: i32) -> bool {
-        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
-            return false;
-        };
-        if x >= self.width || y >= self.height {
-            return false;
-        }
-        self.ready_index(block_of(x), block_of(y)).and_then(|i| self.ready.get(i)).copied().unwrap_or(false)
-    }
-
     /// The sample at `(x, y)`, or `0` out of range or not yet written —
-    /// callers that reach this must have checked [`Plane::is_ready`] first
-    /// (or be reading their own just-written prediction buffer, which is
-    /// always in range by construction). Widened to `u16` so every caller
+    /// callers reach this after the CTU walk's own
+    /// `ReconPicture::materialize_into` has already marked the whole
+    /// picture ready — deblocking, SAO and motion compensation all read
+    /// reference pictures this way, never a still-in-progress one, so
+    /// there is no readiness check left to make here. Widened to `u16` so
+    /// every caller
     /// written against the crate's pre-B2 accessor keeps working unchanged;
     /// the plane's own storage is `u8`.
     #[must_use]
@@ -778,5 +769,342 @@ impl Plane {
             dst.copy_from_slice(&self.data);
         }
         Ok(data)
+    }
+}
+
+// --- Stage 1: the CTU walk's own in-progress reconstruction buffer --------
+//
+// `Plane`/`Picture` above are unchanged: the shape every already-finished
+// reference picture in the `Dpb` is stored as, and the shape deblocking, SAO
+// and emission all already read and write. `ReconPlane`/`ReconPicture`
+// below are new, additive types for *this* picture's own CTU walk
+// specifically — see `docs/codec/hevc-wavefront-threading.md`'s "Concrete
+// Stage 1 plan" for why the reconstruction buffer needs its own type rather
+// than `Plane` itself growing a `vaco_codec_core::picture::PictureWriter`:
+// once one of that primitive's bands publishes it is immutable forever (the
+// whole point of the mechanism — see that module's own doc), but
+// deblocking and SAO both need to modify pixels the CTU walk already
+// finished. `ReconPicture::materialize_into` is the one-time hand-off
+// between the two: read every published row band back into a plain,
+// mutable `Picture` once the whole walk is done, which the existing
+// deblock/SAO/emission code then keeps using exactly as it always has.
+//
+// Row-banded (one band per CTU row, full picture width) via
+// `vaco_codec_core::picture`'s existing 1-D API (`band_mut`/
+// `publish_through`/`band_ref`), not the 2-D per-CTU tile grid
+// `PlaneSpec::with_bands` also supports: Stage 1 is still single-threaded,
+// so there is no wavefront dependency yet that needs column granularity for
+// (see the design doc's own "What is not yet known"). A row band's own
+// `row_mut` stays exactly as fast as `Plane::row_mut` always was — one
+// contiguous, full-width slice — because a full-width row never spans more
+// than one band either way; only Stage 2's real per-CTU-column publish
+// needs `with_bands`, at which point `row_mut`'s own single-row-at-a-time
+// shape stops being expressible and every caller moves to `wait_tile`-
+// mediated reads instead (see the design doc).
+
+use vaco_codec_core::picture::{PictureRef, PictureSpec, PictureWriter, PlaneSpec, ProgressPicture};
+
+/// The CTU walk's own in-progress reconstruction buffer for one component
+/// plane — see this module's own "Stage 1" section doc above.
+pub(crate) struct ReconPlane {
+    writer: PictureWriter,
+    reader: PictureRef,
+    width: usize,
+    height: usize,
+    band_h: usize,
+    n_row_bands: usize,
+    /// The row band writes currently target. `get`/`is_ready` for a row
+    /// strictly before it read the already-published `PictureRef` instead.
+    current: usize,
+    /// Per-4x4-block "has this block been written yet", scoped to `current`
+    /// only and reset whenever it advances — everything before `current` is
+    /// published, hence fully ready, by construction; only the band still
+    /// being filled can be partially ready. Same reasoning as `Plane::ready`
+    /// above, re-derived fresh per row band instead of covering the whole
+    /// picture at once.
+    ready_cols: usize,
+    ready_rows: usize,
+    ready: Vec<bool>,
+}
+
+impl ReconPlane {
+    /// # Errors
+    /// [`vaco_core::Error`] if the allocation exceeds `budget`.
+    pub(crate) fn new(budget: &mut Budget, width: usize, height: usize, ctb_size: usize) -> Result<Self> {
+        let band_h = ctb_size.max(1);
+        let spec = PictureSpec::new(vec![PlaneSpec::new(
+            u32::try_from(width).unwrap_or(0),
+            u32::try_from(height).unwrap_or(0),
+        )])
+        .with_band_height(u32::try_from(band_h).unwrap_or(1))
+        .with_guard(0);
+        let (writer, reader) = ProgressPicture::allocate(&spec, 0, budget)?;
+        let n_row_bands = height.div_ceil(band_h).max(1);
+        let ready_cols = width.div_ceil(4).max(1);
+        let ready_rows = band_h.div_ceil(4).max(1);
+        let ready = vec![false; ready_cols.saturating_mul(ready_rows)];
+        Ok(Self {
+            writer,
+            reader,
+            width,
+            height,
+            band_h,
+            n_row_bands,
+            current: 0,
+            ready_cols,
+            ready_rows,
+            ready,
+        })
+    }
+
+    fn ready_index(&self, bx: usize, by_in_band: usize) -> Option<usize> {
+        if bx >= self.ready_cols || by_in_band >= self.ready_rows {
+            return None;
+        }
+        Some(by_in_band * self.ready_cols + bx)
+    }
+
+    /// The row band containing picture row `y`.
+    #[allow(clippy::integer_division, reason = "row band index = picture row / the fixed CTB row-band height")]
+    const fn row_band_of(&self, y: usize) -> usize {
+        y / self.band_h
+    }
+
+    /// `y`'s own row within whichever band [`ReconPlane::row_band_of`] says
+    /// it belongs to.
+    #[allow(clippy::integer_division, reason = "same fixed CTB row-band height as row_band_of, its own remainder")]
+    const fn local_row_of(&self, y: usize) -> usize {
+        y % self.band_h
+    }
+
+    /// Advance to CTU row `row_band`: publish every row band strictly
+    /// before it (a no-op for ones already published — `publish_through`'s
+    /// own idempotence) and reset the per-block ready grid for the new one.
+    /// Called once per CTU row by the walk's own outer loop, including
+    /// once, harmlessly, for row `0`.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`] if `row_band` goes backward, or publishing
+    /// fails.
+    pub(crate) fn begin_row(&mut self, row_band: usize) -> Result<()> {
+        if row_band < self.current {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: recon plane rows must advance in order",
+            ));
+        }
+        if row_band > 0 {
+            self.writer.publish_through(0, row_band - 1)?;
+        }
+        self.current = row_band;
+        self.ready.fill(false);
+        Ok(())
+    }
+
+    /// Publish every remaining row band — the walk is done; deblocking and
+    /// SAO read the materialized flat [`Picture`] instead of this one from
+    /// here on.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`] if publishing fails.
+    pub(crate) fn finish(&mut self) -> Result<()> {
+        if self.n_row_bands > 0 {
+            self.writer.publish_through(0, self.n_row_bands - 1)?;
+        }
+        self.current = self.n_row_bands;
+        Ok(())
+    }
+
+    #[must_use]
+    pub(crate) fn dims(&self) -> (usize, usize) {
+        (self.width, self.height)
+    }
+
+    /// Whether `(x, y)`'s containing 4x4 block has already been fully
+    /// reconstructed — [`Plane::is_ready`]'s exact counterpart.
+    #[must_use]
+    pub(crate) fn is_ready(&self, x: i32, y: i32) -> bool {
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
+            return false;
+        };
+        if x >= self.width || y >= self.height {
+            return false;
+        }
+        let row_band = self.row_band_of(y);
+        if row_band < self.current {
+            return true;
+        }
+        if row_band > self.current {
+            return false;
+        }
+        let local_y = self.local_row_of(y);
+        self.ready_index(block_of(x), block_of(local_y))
+            .and_then(|i| self.ready.get(i))
+            .copied()
+            .unwrap_or(false)
+    }
+
+    /// The sample at `(x, y)`, or `0` out of range or not yet written —
+    /// [`Plane::get`]'s exact counterpart, reading through whichever of the
+    /// still-staged current band or an already-published one owns `y`.
+    #[must_use]
+    pub(crate) fn get(&self, x: usize, y: usize) -> u16 {
+        if x >= self.width || y >= self.height {
+            return 0;
+        }
+        let row_band = self.row_band_of(y);
+        match row_band.cmp(&self.current) {
+            std::cmp::Ordering::Equal => {
+                let Some(blk) = self.writer.band_ref(0, row_band) else {
+                    return 0;
+                };
+                let local_y = self.local_row_of(y);
+                let idx = local_y.checked_mul(blk.stride).and_then(|s| s.checked_add(x));
+                idx.and_then(|i| blk.data.get(i)).copied().map_or(0, u16::from)
+            }
+            std::cmp::Ordering::Less => {
+                let yu = u32::try_from(y).unwrap_or(0);
+                self.reader
+                    .try_rows(0, yu)
+                    .and_then(|view| view.row(yu))
+                    .and_then(|row| row.get(x))
+                    .copied()
+                    .map_or(0, u16::from)
+            }
+            std::cmp::Ordering::Greater => 0,
+        }
+    }
+
+    /// [`Plane::mark_block_ready`]'s exact counterpart, scoped to the
+    /// current row band — marking a position in an earlier, already-
+    /// published band is a silent no-op (nothing left to mark; it is
+    /// already fully ready by construction).
+    pub(crate) fn mark_block_ready(&mut self, x0: usize, y0: usize, w: usize, h: usize) {
+        if w == 0 || h == 0 || x0 >= self.width || y0 >= self.height {
+            return;
+        }
+        let row_band = self.row_band_of(y0);
+        if row_band != self.current {
+            return;
+        }
+        let local_y0 = self.local_row_of(y0);
+        let x1 = x0.saturating_add(w).saturating_sub(1).min(self.width.saturating_sub(1));
+        let local_y1 = local_y0
+            .saturating_add(h)
+            .saturating_sub(1)
+            .min(self.band_h.saturating_sub(1));
+        let (bx0, by0, bx1, by1) = (block_of(x0), block_of(local_y0), block_of(x1), block_of(local_y1));
+        for by in by0..=by1 {
+            for bx in bx0..=bx1 {
+                if let Some(i) = self.ready_index(bx, by)
+                    && let Some(slot) = self.ready.get_mut(i)
+                {
+                    *slot = true;
+                }
+            }
+        }
+    }
+
+    /// [`Plane::mark_row_ready`]'s exact counterpart.
+    pub(crate) fn mark_row_ready(&mut self, y: usize, x0: usize, len: usize) {
+        self.mark_block_ready(x0, y, len, 1);
+    }
+
+    /// [`Plane::row_mut`]'s exact counterpart: one full, contiguous row of
+    /// the band currently being written, `None` for any other row (the
+    /// walk never asks for one; deblocking/SAO/emission all read the
+    /// materialized flat [`Picture`] instead once the walk is done).
+    pub(crate) fn row_mut(&mut self, y: usize) -> Option<&mut [u8]> {
+        if y >= self.height {
+            return None;
+        }
+        let row_band = self.row_band_of(y);
+        if row_band != self.current {
+            return None;
+        }
+        let local_y = u32::try_from(self.local_row_of(y)).ok()?;
+        let band = self.writer.band_mut(0, row_band).ok()?;
+        band.into_row_mut(local_y)
+    }
+
+    /// Copy every published row into `dst`, and mark it ready there too —
+    /// the one-time hand-off `ReconPicture::materialize_into` uses. Must be
+    /// called after [`ReconPlane::finish`]; a row band that never published
+    /// (should not happen — `finish` publishes everything) is silently
+    /// skipped rather than panicking, matching this module's own "missing
+    /// reads as zero/unready, never as a crash" convention throughout.
+    fn materialize_into(&self, dst: &mut Plane) {
+        let (w, h) = self.dims();
+        for y in 0..h {
+            let yu = u32::try_from(y).unwrap_or(0);
+            let Some(row) = self.reader.try_rows(0, yu).and_then(|view| view.row(yu)) else {
+                continue;
+            };
+            if let Some(dst_row) = dst.row_mut(y) {
+                let n = dst_row.len().min(row.len()).min(w);
+                if let (Some(d), Some(s)) = (dst_row.get_mut(..n), row.get(..n)) {
+                    d.copy_from_slice(s);
+                }
+            }
+            dst.mark_row_ready(y, 0, w);
+        }
+    }
+}
+
+/// One decoding picture's three reconstruction planes, as the CTU walk sees
+/// them — see [`ReconPlane`]'s own doc for why this is a separate type from
+/// [`Picture`] rather than [`Picture`] itself.
+pub(crate) struct ReconPicture {
+    pub y: ReconPlane,
+    pub cb: ReconPlane,
+    pub cr: ReconPlane,
+}
+
+impl ReconPicture {
+    /// `ctb_size` is the *luma* CTB size; chroma's own band height is half
+    /// that (rounded up), matching this crate's 4:2:0-only scope exactly
+    /// the way [`Picture::new`]'s own `cw`/`ch` halving already does.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`] if any plane's allocation exceeds `budget`.
+    pub(crate) fn new(budget: &mut Budget, luma_width: usize, luma_height: usize, ctb_size: usize) -> Result<Self> {
+        let cw = luma_width.div_ceil(2);
+        let ch = luma_height.div_ceil(2);
+        let cctb = ctb_size.div_ceil(2).max(1);
+        Ok(Self {
+            y: ReconPlane::new(budget, luma_width, luma_height, ctb_size)?,
+            cb: ReconPlane::new(budget, cw, ch, cctb)?,
+            cr: ReconPlane::new(budget, cw, ch, cctb)?,
+        })
+    }
+
+    /// [`ReconPlane::begin_row`], across all three planes at once — the
+    /// call site the CTU walk's own outer loop makes once per CTU row.
+    ///
+    /// # Errors
+    /// As [`ReconPlane::begin_row`].
+    pub(crate) fn begin_ctu_row(&mut self, row: usize) -> Result<()> {
+        self.y.begin_row(row)?;
+        self.cb.begin_row(row)?;
+        self.cr.begin_row(row)?;
+        Ok(())
+    }
+
+    /// [`ReconPlane::finish`], across all three planes.
+    ///
+    /// # Errors
+    /// As [`ReconPlane::finish`].
+    pub(crate) fn finish(&mut self) -> Result<()> {
+        self.y.finish()?;
+        self.cb.finish()?;
+        self.cr.finish()?;
+        Ok(())
+    }
+
+    /// The one-time hand-off to a plain, mutable [`Picture`] — call once,
+    /// after [`ReconPicture::finish`], before deblocking runs.
+    pub(crate) fn materialize_into(&self, dst: &mut Picture) {
+        self.y.materialize_into(&mut dst.y);
+        self.cb.materialize_into(&mut dst.cb);
+        self.cr.materialize_into(&mut dst.cr);
     }
 }

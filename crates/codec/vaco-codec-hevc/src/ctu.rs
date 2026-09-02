@@ -23,7 +23,7 @@ use vaco_parse_hevc::{Pps, Sps};
 use vaco_limits::Budget;
 
 use crate::cabac_ctx::ContextBank;
-use crate::framebuf::{CuGrid, EdgeMarks, Picture, Plane};
+use crate::framebuf::{CuGrid, EdgeMarks, Picture, Plane, ReconPicture};
 use crate::intra_mode::{self, DC_IDX, DM_CHROMA_IDX};
 use crate::intra_pred;
 use crate::motion::{self, Mv, MotionInfo, PartMode, PuRect, RefList, UniMotion};
@@ -41,6 +41,11 @@ use crate::weight::RefWeights;
 )]
 pub(crate) struct Ctx<'p> {
     pub pic: &'p mut Picture,
+    /// The CTU walk's own in-progress reconstruction buffer — see
+    /// `crate::framebuf`'s "Stage 1" section doc for why this is a
+    /// separate type from `pic` (which stays the finished-picture shape
+    /// deblocking/SAO/emission already know).
+    pub recon: &'p mut ReconPicture,
     pub cu_grid: CuGrid,
     pub log2_ctb_size: u32,
     pub log2_min_cb_size: u32,
@@ -262,6 +267,7 @@ impl<'p> Ctx<'p> {
     pub(crate) fn new(
         budget: &mut Budget,
         pic: &'p mut Picture,
+        recon: &'p mut ReconPicture,
         cu_grid: CuGrid,
         sps: &Sps,
         pps: &Pps,
@@ -314,6 +320,7 @@ impl<'p> Ctx<'p> {
             ctbs_x,
             sao_params,
             pic,
+            recon,
             cu_grid,
             is_p_slice,
             inter,
@@ -333,9 +340,13 @@ impl<'p> Ctx<'p> {
     /// a test living outside this module could not do anyway: most of
     /// `Ctx`'s fields are private to `ctu`, by design).
     #[cfg(test)]
-    pub(crate) fn retarget_pic_for_test<'q>(&self, pic: &'q mut Picture) -> Ctx<'q> {
+    pub(crate) fn retarget_pic_for_test<'q>(&self, pic: &'q mut Picture, recon: &'q mut ReconPicture) -> Ctx<'q> {
         Ctx {
             pic,
+            // `deblock::filter_picture`, the only thing this retargeted
+            // copy ever runs, never reads `Ctx::recon` -- the caller passes
+            // a throwaway one purely to satisfy the field.
+            recon,
             cu_grid: self.cu_grid.clone(),
             log2_ctb_size: self.log2_ctb_size,
             log2_min_cb_size: self.log2_min_cb_size,
@@ -1264,10 +1275,10 @@ fn blit(dst: &mut [i32], dst_stride: usize, x0: usize, y0: usize, w: usize, h: u
 /// prediction straight to the picture, unmodified.
 fn write_inter_cu_no_residual(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect, MotionInfo)]) -> Result<()> {
     let pred = build_cu_prediction(s, x0, y0, size, pus)?;
-    write_pred_block(&mut s.pic.y, x0, y0, pred.size, pred.size, &pred.y);
+    write_pred_block(&mut s.recon.y, x0, y0, pred.size, pred.size, &pred.y);
     let csize = (size >> 1).max(1);
-    write_pred_block(&mut s.pic.cb, x0 >> 1, y0 >> 1, csize, csize, &pred.cb);
-    write_pred_block(&mut s.pic.cr, x0 >> 1, y0 >> 1, csize, csize, &pred.cr);
+    write_pred_block(&mut s.recon.cb, x0 >> 1, y0 >> 1, csize, csize, &pred.cb);
+    write_pred_block(&mut s.recon.cr, x0 >> 1, y0 >> 1, csize, csize, &pred.cr);
     Ok(())
 }
 
@@ -1279,7 +1290,7 @@ fn write_inter_cu_no_residual(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32, pus:
 /// per row from [`crate::framebuf::Plane::row_mut`], a tight per-sample
 /// clamp-and-convert loop over that slice (no per-sample `Option`), then one
 /// [`crate::framebuf::Plane::mark_row_ready`] call for the whole row.
-fn write_pred_block(plane: &mut crate::framebuf::Plane, x0: i32, y0: i32, w: i32, h: i32, src: &[i32]) {
+fn write_pred_block(plane: &mut crate::framebuf::ReconPlane, x0: i32, y0: i32, w: i32, h: i32, src: &[i32]) {
     let (wu, hu) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
     let Ok(x0u) = usize::try_from(x0) else { return };
     for row in 0..hu {
@@ -1616,7 +1627,7 @@ fn reconstruct_luma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s
         let residual = transform::inverse_transform(&dequantised, size, use_dst, s.bit_depth_luma);
         transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_luma);
     }
-    write_block(&mut s.pic.y, x0, y0, size, &pred);
+    write_block(&mut s.recon.y, x0, y0, size, &pred);
     // §8.7.2.4's `bS == 1` non-zero-coefficient condition reads this leaf's
     // own `cbf_luma` at deblocking time — see `CuGrid::cbf_luma_at`'s own
     // doc for why only the inter path ever needs to record it.
@@ -1648,7 +1659,7 @@ fn reconstruct_chroma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank,
     let residual = transform::inverse_transform(&dequantised, size, false, s.bit_depth_chroma);
     transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_chroma);
 
-    let plane = if is_cb { &mut s.pic.cb } else { &mut s.pic.cr };
+    let plane = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
     write_block(plane, cx0, cy0, size, &pred);
     Ok(())
 }
@@ -1660,7 +1671,7 @@ fn write_pred_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, i
     let src = if is_cb { &pred_cu.cb } else { &pred_cu.cr };
     let csize = (pred_cu.size >> 1).max(1);
     let pred = pred_slice(src, csize, cx0 - ccu_x0, cy0 - ccu_y0, size);
-    let plane = if is_cb { &mut s.pic.cb } else { &mut s.pic.cr };
+    let plane = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
     write_block(plane, cx0, cy0, size, &pred);
 }
 
@@ -1856,7 +1867,7 @@ fn reconstruct_luma(
     cbf: bool,
 ) -> Result<()> {
     let size = 1usize << log2_size;
-    let line = intra_pred::build_reference_line(&s.pic.y, x0, y0, size, s.bit_depth_luma, |nx, ny| {
+    let line = intra_pred::build_reference_line(&s.recon.y, x0, y0, size, s.bit_depth_luma, |nx, ny| {
         !s.constrained_intra_pred || s.cu_grid.inter_at(nx, ny).is_none()
     });
     let filtered;
@@ -1885,7 +1896,7 @@ fn reconstruct_luma(
         transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_luma);
     }
 
-    write_block(&mut s.pic.y, x0, y0, size, &pred);
+    write_block(&mut s.recon.y, x0, y0, size, &pred);
     Ok(())
 }
 
@@ -1901,7 +1912,7 @@ fn reconstruct_chroma(
     is_cb: bool,
 ) -> Result<()> {
     let size = 1usize << log2_size;
-    let plane = if is_cb { &s.pic.cb } else { &s.pic.cr };
+    let plane = if is_cb { &s.recon.cb } else { &s.recon.cr };
     // `<< 1`: chroma-to-luma coordinate scaling for the 4:2:0 collocated
     // block CuGrid is indexed by (see `cu_origin_of`'s own callers' `cx0 <<
     // 1` precedent above).
@@ -1927,20 +1938,20 @@ fn reconstruct_chroma(
     let residual = transform::inverse_transform(&dequantised, size, false, s.bit_depth_chroma);
     transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_chroma);
 
-    let plane_mut = if is_cb { &mut s.pic.cb } else { &mut s.pic.cr };
+    let plane_mut = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
     write_block(plane_mut, cx0, cy0, size, &pred);
     Ok(())
 }
 
 fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode: u8, is_cb: bool) {
     let size = 1usize << log2_size;
-    let plane = if is_cb { &s.pic.cb } else { &s.pic.cr };
+    let plane = if is_cb { &s.recon.cb } else { &s.recon.cr };
     let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.bit_depth_chroma, |nx, ny| {
         !s.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none()
     });
     let mut pred = vec![0u16; size * size];
     intra_pred::predict(mode, &line, size, s.bit_depth_chroma, false, &mut pred);
-    let plane_mut = if is_cb { &mut s.pic.cb } else { &mut s.pic.cr };
+    let plane_mut = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
     write_block(plane_mut, cx0, cy0, size, &pred);
 }
 
@@ -1954,7 +1965,7 @@ fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode
 /// `transform::add_residual_clip` (or are a raw prediction with cbf clear,
 /// itself a weighted average of already-in-range reference samples), so the
 /// `u8` narrowing below never actually clips.
-fn write_block(plane: &mut crate::framebuf::Plane, x0: i32, y0: i32, size: usize, block: &[u16]) {
+fn write_block(plane: &mut crate::framebuf::ReconPlane, x0: i32, y0: i32, size: usize, block: &[u16]) {
     let Ok(x0u) = usize::try_from(x0) else { return };
     for row in 0..size {
         let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else { continue };

@@ -23,7 +23,7 @@
 
 use vaco_codec_dsp_intrapred::{dc_predict, planar_predict};
 
-use crate::framebuf::Plane;
+use crate::framebuf::ReconPlane;
 use crate::intra_mode::{ANG_TABLE, DC_IDX, HOR_IDX, INV_ANG_TABLE, PLANAR_IDX, VER_IDX};
 
 /// Per-size-class reference-sample-filtering threshold, Table 8-4 (`m_aucIntraFilter`
@@ -44,7 +44,7 @@ fn iz(x: usize) -> i32 {
 /// bottom-left-most sample), and `line[2*size+1+i]` for `i` in `0..2*size-1`
 /// is `p[i][-1]` (the top row extending right past the block).
 ///
-/// Built directly from [`Plane::is_ready`]/[`Plane::get`] rather than a
+/// Built directly from [`ReconPlane::is_ready`]/[`ReconPlane::get`] rather than a
 /// z-scan availability derivation — see `framebuf`'s module doc for why
 /// those coincide exactly in this crate's one-slice, no-tile scope.
 ///
@@ -53,11 +53,11 @@ fn iz(x: usize) -> i32 {
 /// marked as not available for intra prediction" if the neighbouring
 /// prediction block containing `(x, y)` is not coded in an intra prediction
 /// mode, on top of the ordinary picture/slice/tile-boundary check
-/// [`Plane::is_ready`] already performs. Callers pass `|_, _| true` when
+/// [`ReconPlane::is_ready`] already performs. Callers pass `|_, _| true` when
 /// `constrained_intra_pred_flag` is 0 (the ordinary availability check is
 /// the whole story), and a real neighbour-mode lookup otherwise.
 pub(crate) fn build_reference_line(
-    plane: &Plane,
+    plane: &ReconPlane,
     x0: i32,
     y0: i32,
     size: usize,
@@ -99,7 +99,7 @@ fn set_at<T: Copy>(v: &mut [T], idx: usize, value: T) {
     }
 }
 
-fn sample(plane: &Plane, x: i32, y: i32, is_intra_neighbor: &impl Fn(i32, i32) -> bool) -> (bool, u16) {
+fn sample(plane: &ReconPlane, x: i32, y: i32, is_intra_neighbor: &impl Fn(i32, i32) -> bool) -> (bool, u16) {
     if plane.is_ready(x, y) && is_intra_neighbor(x, y) {
         let (Ok(ux), Ok(uy)) = (usize::try_from(x), usize::try_from(y)) else {
             return (false, 0);

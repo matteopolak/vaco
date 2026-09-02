@@ -68,7 +68,9 @@ use vaco_core::{Error, Result};
 use vaco_format_nalu::{RbspBuf, units};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
-use vaco_parse_hevc::{ChromaFormat, HevcNalHeader, HevcParser, PocState, Pps, SliceHeader, SliceKind, Sps};
+use vaco_parse_hevc::{
+    ChromaFormat, HevcNalHeader, HevcParser, PocState, Pps, SliceHeader, SliceKind, Sps, cc_data_from_sei, sei,
+};
 
 use crate::cabac_ctx::ContextBank;
 use crate::ctu::{self, Ctx, InterSliceParams, RefPic};
@@ -159,6 +161,11 @@ impl HevcDecoder {
         // parser.
         let mut slice_nal: Option<&[u8]> = None;
         let mut slice_count = 0u32;
+        // ATSC A/53 closed captions (interface gap 18's attachment half —
+        // extraction is `vaco_parse_hevc::a53`, already landed). See
+        // `vaco-codec-h264::decoder`'s identical comment for why this
+        // concatenates across every SEI NAL rather than assuming one.
+        let mut cc_data = Vec::new();
         for nal in units(payload, framing) {
             let Some(header) = HevcNalHeader::parse(nal.data) else { continue };
             if !header.is_base_layer() {
@@ -168,6 +175,15 @@ impl HevcDecoder {
                 slice_count += 1;
                 if slice_nal.is_none() {
                     slice_nal = Some(nal.data);
+                }
+            } else if header.nal_unit_type.is_sei() {
+                self.rbsp.fill(nal.data, &mut self.budget)?;
+                if let Ok(messages) = sei::parse(self.rbsp.as_slice(), None, &mut self.budget) {
+                    for msg in &messages {
+                        if let Some(triplets) = cc_data_from_sei(&msg.payload) {
+                            cc_data.extend_from_slice(triplets);
+                        }
+                    }
                 }
             }
         }
@@ -232,6 +248,17 @@ impl HevcDecoder {
         let width = usize::try_from(sps.pic_width_in_luma_samples).unwrap_or(0);
         let height = usize::try_from(sps.pic_height_in_luma_samples).unwrap_or(0);
         let mut pic = Picture::new(&mut self.budget, width, height)?;
+        // PERF-PROGRAMME.md item B4, Stage 1: the CTU walk itself
+        // reconstructs into `recon` (a per-CTU-row-banded buffer -- see
+        // `framebuf::ReconPlane`'s own module doc), not `pic` directly.
+        // `pic` is materialized from `recon` once the whole walk is done,
+        // immediately before deblocking, and is what deblocking/SAO/
+        // emission (and every future picture's own reference reads) keep
+        // using exactly as before.
+        let ctb_size = usize::try_from(1u32 << (u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size)))
+            .unwrap_or(1)
+            .max(1);
+        let mut recon = crate::framebuf::ReconPicture::new(&mut self.budget, width, height, ctb_size)?;
         let cu_grid = CuGrid::new(&mut self.budget, width, height, hdr.kind == SliceKind::B)?;
 
         // ITU-T H.265 §8.3.1: this picture's own picture order count, and
@@ -353,6 +380,7 @@ impl HevcDecoder {
         let mut walk = Ctx::new(
             &mut self.budget,
             &mut pic,
+            &mut recon,
             cu_grid,
             &sps,
             &pps,
@@ -403,6 +431,9 @@ impl HevcDecoder {
             for addr in 0..total_ctbs {
                 let col = addr.checked_rem(ctbs_x).unwrap_or(0);
                 let row = addr.checked_div(ctbs_x).unwrap_or(0);
+                if col == 0 {
+                    walk.recon.begin_ctu_row(usize::try_from(row).unwrap_or(0))?;
+                }
                 let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
                 let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
                 ctu::decode_ctu(&mut cabac, &mut ctx, &mut walk, cx, cy, addr)?;
@@ -416,9 +447,17 @@ impl HevcDecoder {
             }
         }
 
+        // The CTU walk is done; hand the finished, tiled reconstruction
+        // over to the plain `Picture` deblocking/SAO/emission (and every
+        // later picture's own reference reads) already know how to use —
+        // see `framebuf::ReconPlane`'s own module doc for why this is a
+        // one-time copy rather than `recon` itself growing into `pic`.
+        walk.recon.finish()?;
+        walk.recon.materialize_into(walk.pic);
+
         #[cfg(test)]
         if let Some(probe) = self.deblock_lag_probe.take() {
-            let results = run_deblock_lag_probe(&walk, &probe);
+            let results = run_deblock_lag_probe(&walk, &probe, &mut self.budget);
             self.deblock_lag_probe_result = Some(results);
         }
         deblock::filter_picture(&mut walk);
@@ -442,6 +481,7 @@ impl HevcDecoder {
             out_width: out_dims.0,
             out_height: out_dims.1,
             is_keyframe: header.nal_unit_type.is_irap(),
+            closed_captions: cc_data,
         };
         // `used_as_reference`: every NAL unit type except the
         // "sub-layer-non-reference" ones (`*_N`, §7.4.2.2) can be
@@ -504,6 +544,10 @@ impl HevcDecoder {
             frame.duration = meta.duration;
             if meta.is_keyframe {
                 frame.flags |= vaco_frame::FrameFlags::KEY;
+            }
+            if !meta.closed_captions.is_empty() {
+                let buffer = vaco_pool::Buffer::from_slice(budget, &meta.closed_captions)?;
+                frame.set_side_data(vaco_frame::FrameSideData::ClosedCaptions(buffer));
             }
             machine.emit(frame);
         }
@@ -688,6 +732,7 @@ fn decode_wpp_row_ranges(
         // that function's own QG-reset comment), so nothing else needs
         // resetting here.
         walk.qp_y_prev = walk.slice_qp;
+        walk.recon.begin_ctu_row(row_idx)?;
         let mut ctx = if row_idx > 0 && ctbs_x >= 2 {
             saved_ctx.unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
         } else {
@@ -920,14 +965,27 @@ pub(crate) struct DeblockLagResult {
 /// not an argument about the filter's own tap span, an empirical answer
 /// for this exact content's own boundary-strength/threshold decisions.
 #[cfg(test)]
-fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe) -> Vec<DeblockLagResult> {
+fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut Budget) -> Vec<DeblockLagResult> {
     let ctb = 1usize << walk.log2_ctb_size;
     let target_row_start = probe.target_ctu_row.saturating_mul(ctb);
     let target_row_end = target_row_start.saturating_add(ctb);
 
+    // `deblock::filter_picture` never reads `Ctx::recon` -- this exists
+    // purely to satisfy the field, reused (re-borrowed, never aliased: each
+    // retarget-then-filter-then-capture below finishes before the next one
+    // starts) across every retargeted `Ctx` this probe builds.
+    let (width, height) = (usize::try_from(walk.pic_width).unwrap_or(0), usize::try_from(walk.pic_height).unwrap_or(0));
+    let Ok(mut throwaway_recon) = crate::framebuf::ReconPicture::new(budget, width, height, ctb) else {
+        // Allocation failure here means the probe cannot run at all; an
+        // empty result reads as "missing lag N" in the test's own
+        // assertions, which is a loud, specific failure rather than a
+        // panic in probe machinery that is not itself under test.
+        return Vec::new();
+    };
+
     let mut pristine_pic = walk.pic.clone();
     {
-        let mut pristine_ctx = walk.retarget_pic_for_test(&mut pristine_pic);
+        let mut pristine_ctx = walk.retarget_pic_for_test(&mut pristine_pic, &mut throwaway_recon);
         deblock::filter_picture(&mut pristine_ctx);
     }
     let reference = capture_rows(&pristine_pic, target_row_start, target_row_end);
@@ -940,7 +998,7 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe) -> Vec<Deblock
             let mut below_pic = walk.pic.clone();
             invert_rows_from(&mut below_pic, below_first_corrupt_ctu_row.saturating_mul(ctb));
             let below_matches = {
-                let mut below_ctx = walk.retarget_pic_for_test(&mut below_pic);
+                let mut below_ctx = walk.retarget_pic_for_test(&mut below_pic, &mut throwaway_recon);
                 deblock::filter_picture(&mut below_ctx);
                 capture_rows(&below_pic, target_row_start, target_row_end) == reference
             };
@@ -956,7 +1014,7 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe) -> Vec<Deblock
             let mut above_pic = walk.pic.clone();
             invert_rows_before(&mut above_pic, above_first_pristine_ctu_row.saturating_mul(ctb));
             let above_matches = {
-                let mut above_ctx = walk.retarget_pic_for_test(&mut above_pic);
+                let mut above_ctx = walk.retarget_pic_for_test(&mut above_pic, &mut throwaway_recon);
                 deblock::filter_picture(&mut above_ctx);
                 capture_rows(&above_pic, target_row_start, target_row_end) == reference
             };
