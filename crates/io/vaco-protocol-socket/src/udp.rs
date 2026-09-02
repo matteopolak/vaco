@@ -343,13 +343,11 @@ impl Protocol for UdpProtocol {
 pub static UDP_PROTOCOL: ProtocolDesc = ProtocolDesc {
     name: "udp",
     long_name: "UDP",
-    flags: ProtocolFlags {
-        network: true,
-        nested_scheme: false,
-        server_capable: false,
-        readable: true,
-        writable: true,
-    },
+    // `vaco_protocol_core::ProtocolFlags::NETWORK` names exactly this
+    // shape (its own doc says "tcp, udp") -- found hand-typed here
+    // identically instead, during the dead-code triage that also found
+    // `vaco-mux-mp4::is_supported` unwired the same way.
+    flags: ProtocolFlags::NETWORK,
     // Measured (matching `tcp:`'s own): opens nothing nested.
     default_whitelist: &[],
     options: Some(udp_schema),
@@ -360,13 +358,7 @@ pub static UDP_PROTOCOL: ProtocolDesc = ProtocolDesc {
 pub static UDPLITE_PROTOCOL: ProtocolDesc = ProtocolDesc {
     name: "udplite",
     long_name: "UDP-Lite",
-    flags: ProtocolFlags {
-        network: true,
-        nested_scheme: false,
-        server_capable: false,
-        readable: true,
-        writable: true,
-    },
+    flags: ProtocolFlags::NETWORK,
     default_whitelist: &[],
     options: Some(udp_schema),
     proto: &UdpProtocol { lite: true },

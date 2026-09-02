@@ -185,16 +185,34 @@ impl RtspSession {
                 // wrong password. Report it instead.
                 return Ok(resp);
             }
-            let Some(value) = resp.headers.get("WWW-Authenticate") else {
+            // `auth::parse_challenge`'s own doc: "a server may send several
+            // (one Basic, one Digest); `crate::session` picks Digest when
+            // both are offered, since it does not send the password in the
+            // clear." `Headers::get` (a single value, first match in header
+            // order) cannot implement that: a server sending Basic before
+            // Digest would have picked Basic here, exactly the plaintext
+            // fallback this policy exists to avoid. `get_all` plus an
+            // explicit Digest-first search is what the documented policy
+            // actually needs -- found unwired during the dead-code triage
+            // that also found `vaco-mux-mp4::is_supported` unwired the same
+            // way (`Headers::get_all` had zero callers anywhere).
+            let raw: Vec<&str> = resp.headers.get_all("WWW-Authenticate").collect();
+            if raw.is_empty() {
                 return Err(Error::InvalidData(
                     "401 response named no WWW-Authenticate challenge",
                 ));
-            };
-            let Some(challenge) = auth::parse_challenge(value) else {
+            }
+            let mut parsed: Vec<auth::Challenge> =
+                raw.iter().filter_map(|v| auth::parse_challenge(v)).collect();
+            if parsed.is_empty() {
                 return Err(Error::Unsupported(
                     "WWW-Authenticate scheme is not Basic or Digest",
                 ));
-            };
+            }
+            let digest_pos = parsed
+                .iter()
+                .position(|c| matches!(c, auth::Challenge::Digest { .. }));
+            let challenge = parsed.swap_remove(digest_pos.unwrap_or(0));
             if self.credentials.is_none() {
                 return Err(Error::InvalidData(
                     "server requires authentication and none was configured",
@@ -482,6 +500,40 @@ mod tests {
             ).unwrap();
             let second = read_request_head(&mut server);
             assert!(second.contains("Authorization: Digest"));
+            server
+                .write_all(b"RTSP/1.0 200 OK\r\nCSeq: 2\r\n\r\n")
+                .unwrap();
+        });
+        let mut session =
+            RtspSession::from_connection(RtspConnection::from_stream(client), "rtsp://host/stream");
+        session.set_credentials("user", "pass");
+        let resp = session.options().unwrap();
+        assert_eq!(resp.status, 200);
+        handle.join().unwrap();
+    }
+
+    /// Regression: a server naming Basic *before* Digest in two separate
+    /// `WWW-Authenticate` lines must still get a Digest response, never a
+    /// cleartext Basic one. Before this fix, `Headers::get` returned only
+    /// the first matching header, so this exact ordering would have picked
+    /// Basic and sent the password in the clear -- the precise failure
+    /// `auth::parse_challenge`'s own doc says the Digest preference exists
+    /// to prevent.
+    #[test]
+    fn prefers_digest_over_basic_when_a_server_offers_basic_first() {
+        let (client, mut server) = pair();
+        let handle = thread::spawn(move || {
+            let _first = read_request_head(&mut server);
+            server.write_all(
+                b"RTSP/1.0 401 Unauthorized\r\nCSeq: 1\r\n\
+                  WWW-Authenticate: Basic realm=\"x\"\r\n\
+                  WWW-Authenticate: Digest realm=\"x\", nonce=\"n\"\r\n\r\n",
+            ).unwrap();
+            let second = read_request_head(&mut server);
+            assert!(
+                second.contains("Authorization: Digest"),
+                "expected a Digest response even though Basic was offered first, got: {second}"
+            );
             server
                 .write_all(b"RTSP/1.0 200 OK\r\nCSeq: 2\r\n\r\n")
                 .unwrap();

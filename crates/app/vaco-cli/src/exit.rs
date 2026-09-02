@@ -176,6 +176,19 @@ impl AvError {
                 std::io::ErrorKind::IsADirectory => Self::EISDIR,
                 _ => Self::EINVAL,
             },
+            // `crate::input::open_source`'s own synthetic signal for
+            // `ProtocolError::Unknown` -- a `name` no ordinary `-i` option
+            // failure uses, so this cannot misfire on an unrelated
+            // `Error::Option`. `AVERROR_PROTOCOL_NOT_FOUND`, measured:
+            // `ffmpeg -i nosuchproto://x -f null -` exits 8 (see this
+            // module's own reference table above). Was previously
+            // unreachable -- `PROTOCOL_NOT_FOUND` had no caller at all until
+            // this arm, so `-i nosuchproto://x` fell through to the generic
+            // `_ => EINVAL` case below and exited 234, verified against the
+            // real binary before this fix.
+            vaco_core::Error::Option { name, .. } if name == "protocol_not_found" => {
+                Self::PROTOCOL_NOT_FOUND
+            }
             vaco_core::Error::Unsupported(_) => Self::ENOSYS,
             vaco_core::Error::InvalidData(_)
             | vaco_core::Error::Eof
@@ -304,6 +317,32 @@ mod tests {
             assert_eq!(e.exit().code(), 8, "{e:?}");
             assert!(e.code < 0);
         }
+    }
+
+    /// Regression: `-i nosuchproto://x -f null -` exited 234 (`EINVAL`)
+    /// before `crate::input::open_source` started tagging
+    /// `ProtocolError::Unknown` with this specific `Error::Option` name --
+    /// `AvError::PROTOCOL_NOT_FOUND` had no caller anywhere until this `of`
+    /// arm existed. Verified against the real binary, not only here: see
+    /// this crate's own commit history for the exit code and message
+    /// measured from the built `vaco` binary.
+    #[test]
+    fn of_maps_the_tagged_protocol_option_error_to_protocol_not_found() {
+        let e = vaco_core::Error::Option {
+            name: "protocol_not_found".to_owned(),
+            detail: "nosuchproto".to_owned(),
+        };
+        assert_eq!(AvError::of(&e), AvError::PROTOCOL_NOT_FOUND);
+        assert_eq!(AvError::of(&e).exit().code(), 8);
+
+        // An ordinary `-i`-option `Error::Option` (any other `name`) must
+        // not be caught by this arm -- it still falls through to `EINVAL`,
+        // same as before this fix.
+        let ordinary = vaco_core::Error::Option {
+            name: "i".to_owned(),
+            detail: "some other failure".to_owned(),
+        };
+        assert_eq!(AvError::of(&ordinary), AvError::EINVAL);
     }
 
     #[test]

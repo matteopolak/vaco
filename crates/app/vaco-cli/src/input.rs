@@ -182,6 +182,20 @@ fn open_source(
             // Unwrapped rather than re-wrapped: the exit code is derived from
             // the `io::ErrorKind`, and `Error::Option` would lose it.
             ProtocolError::Io(inner) => inner,
+            // `AVERROR_PROTOCOL_NOT_FOUND` (exit 8): a distinct `name` a
+            // real, ordinary `-i`-driven `Error::Option` never uses, so
+            // `AvError::of` can pick it out safely without inspecting the
+            // `Display` text of every other protocol failure that also
+            // reaches this arm. `ffmpeg -i nosuchproto://x -f null -` exits
+            // 8, measured (see `crate::exit`'s own module doc); before this
+            // arm existed, `ProtocolError::Unknown` fell into the generic
+            // `other` case below and exited 234 (`EINVAL`) instead --
+            // verified against the real binary, not assumed from reading
+            // this file.
+            ProtocolError::Unknown { scheme } => Error::Option {
+                name: "protocol_not_found".to_owned(),
+                detail: scheme,
+            },
             other => Error::Option {
                 name: "i".to_owned(),
                 detail: other.to_string(),

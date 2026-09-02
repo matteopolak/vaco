@@ -172,10 +172,57 @@ fn crates() -> Vec<(String, String, PathBuf)> {
     out
 }
 
-/// All `.rs` files under a directory.
+/// Every path `git ls-files` names, repo-relative, resolved to absolute
+/// paths once and cached for the life of this process.
+///
+/// Every working-tree scan in this binary (`rust_files`'s callers,
+/// `dup_check`, `comment_check`, `dead_code`'s own file walk) needs this:
+/// a plain filesystem walk sees any agent's untracked, in-flight scratch
+/// crate in this shared tree exactly like a real one, and reds a shared
+/// gate (`provenance-check`, first found this way) over work that has no
+/// commit to point at and that its own author has not finished. `git
+/// ls-files` lists tracked files only — no untracked, no ignored — which
+/// is exactly "real content in a real path," including a tracked file
+/// that has since been *modified*: a scan must still see those, since
+/// that is exactly the content the gate exists to check. This is **not**
+/// a substitute for the `commit-msg`/`reference-transaction` provenance
+/// check on what actually lands in a commit -- an untracked file about to
+/// be committed still needs its own provenance entry before that commit
+/// succeeds; this cache only keeps a *pre-commit scan* from failing on
+/// content nobody has committed yet.
+fn tracked_files() -> &'static Option<Set<PathBuf>> {
+    static CACHE: std::sync::OnceLock<Option<Set<PathBuf>>> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| {
+        let root = repo_root();
+        let out = Command::new("git")
+            .current_dir(&root)
+            .args(["ls-files", "-z"])
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        Some(
+            String::from_utf8_lossy(&out.stdout)
+                .split('\0')
+                .filter(|s| !s.is_empty())
+                .map(|rel| root.join(rel))
+                .collect(),
+        )
+    })
+}
+
+/// All `.rs` files under a directory that `git` tracks. An untracked file
+/// under `dir` — an agent's brand-new, in-progress crate, most often, per
+/// [`tracked_files`]'s own doc — is invisible to this on purpose; a
+/// tracked file that has since been modified is not filtered at all. Falls
+/// back to every `.rs` file on disk when `git ls-files` could not run (no
+/// git, or not a repo) rather than filtering against an empty set, which
+/// would make every scan using this report nothing instead of everything.
 fn rust_files(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
+    let known = tracked_files();
     while let Some(d) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&d) else {
             continue;
@@ -184,7 +231,9 @@ fn rust_files(dir: &Path) -> Vec<PathBuf> {
             let p = e.path();
             if p.is_dir() {
                 stack.push(p);
-            } else if p.extension().is_some_and(|x| x == "rs") {
+            } else if p.extension().is_some_and(|x| x == "rs")
+                && known.as_ref().is_none_or(|k| k.contains(&p))
+            {
                 out.push(p);
             }
         }
