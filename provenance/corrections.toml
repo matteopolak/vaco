@@ -26,3 +26,9 @@ commit = "9a35fcc5207029619af606bb7ec0bf16b4fa3ca5"
 cited  = "qoa-specification-1.0, file header and frame layout"
 id     = "qoa-specification-1.0"
 reason = "The trailer put a comma directly after the id with no space (`qoa-specification-1.0, file header and frame layout`), and the checker takes everything up to the first whitespace as the id token — so the token it extracted was `qoa-specification-1.0,`, comma included, which does not match the registered id. The source itself (qoa-specification-1.0) is registered in provenance/sources.toml and was correct; only the trailer's punctuation was wrong. Caught by provenance-check after the commit was pushed."
+
+[[correction]]
+commit = "8f3afd3c"
+cited  = "VSF TR-06-1:2020"
+id     = "vsf-tr-06-1-2020"
+reason = "The author wrote the document's printed title instead of its registered id. `vsf-tr-06-1-2020` is declared in provenance/sources.toml and is the same document; only the citation's form was wrong, exactly as in the 3f927f9d row above. Recorded here rather than by rewriting history, which this shared tree cannot do."
