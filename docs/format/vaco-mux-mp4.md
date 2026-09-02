@@ -281,6 +281,56 @@ and needs a different argument.
 
 ### Gotchas
 
+* **A config-record box (`avcC`/`hvcC`/`av1C`/`vpcC`/...) is only as
+  trustworthy as knowing who owns its byte layout.** Finding this the hard
+  way once (VP8/VP9's `vpcC` box, fixed after a real `-c copy` remux from
+  Matroska produced a `vpcC` with a correct 8-byte header and zero payload
+  bytes that real `ffprobe` refused to open) gives a predictive rule rather
+  than a one-off patch, and it generalises to every codec this crate writes
+  a config record for, not just VP8/VP9:
+
+  This bug class can only occur in one of two shapes:
+  1. **The two containers disagree about the record's shape.** Not the case
+     here for any codec this crate currently handles — but it is the shape
+     to check first whenever a new codec's config record is added on both
+     the MP4 and Matroska sides.
+  2. **One container carries no record at all, so it must be derived from
+     the bitstream instead of copied.** This is what actually happened:
+     `WebM`/Matroska carries **no** `CodecPrivate` for VP8/VP9 (the
+     `webm-vp-codec-iso-media-file-format-binding` convention), so a stream
+     copied straight from there arrived at `entry::build_video` with empty
+     `extradata`, and `writer::vpcc` wrote whatever it was given, verbatim,
+     with no way to tell "nothing to copy" from "a real empty box".
+
+  **AV1 is the confirming negative case**, not an oversight: ISOBMFF's
+  `av1C` and Matroska's `CodecPrivate` for `V_AV1` are *the same byte
+  layout* — the AOM ISOBMFF binding, reused verbatim by Matroska — so there
+  is exactly one owner and one shape, and a plain verbatim copy in either
+  direction is simply correct (measured directly: a real `libsvtav1`
+  stream's `CodecPrivate` and the `av1C` payload `vaco` writes from it are
+  byte-identical, both directions, real `ffprobe`-readable, decode
+  byte-identical to the source). No fix was needed there, and building one
+  would have been guessing at a scenario no real encoder or demuxer this
+  tree has produces — see `crates/format/vaco-mux-mp4/src/entry.rs`'s `Av1`
+  arm for the one narrow, currently-unreachable residual noted there (empty
+  `extradata` still writes an empty `av1C`; nothing today can hand it one).
+
+  **When adding a new codec's config record to this crate**, ask which of
+  the two shapes above applies before writing the box:
+  - If the source container has no equivalent record (case 2), do not write
+    whatever `extradata` happens to hold — derive one from the bitstream
+    through a `BsfProvider`-supplied filter (`vaco-bsf-vpx::extract_vpcc` is
+    the template: a `PacketMap` that parses a real frame header and attaches
+    `PacketSideData::NewExtradata`), and refuse the file by name at
+    `write_trailer` if nothing was ever derived (see
+    `MovMuxer::write_trailer`'s VP9 check) — never write an empty box "just
+    in case" a later mechanism fills it in.
+  - If both containers already agree on the record's shape (case 1 does not
+    apply, or the codec has no such disagreement), a verbatim copy is
+    correct and no bitstream-level derivation is needed — check first,
+    the way the AV1 measurement above did, rather than assuming either
+    outcome.
+
 * **`Vec::with_capacity` is denied** (`clippy::disallowed_methods`) — this
   crate's per-track/per-fragment buffers grow with `push`/`extend_from_slice`
   instead. Not a performance concern at these sizes.

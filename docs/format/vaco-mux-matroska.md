@@ -114,7 +114,7 @@ exists because the deliverable asks for it and because a caller assembling
 frames some other way (or wanting a smaller file for many tiny frames) can
 still reach it directly.
 
-### `CodecPrivate` is `extradata`, verbatim, always
+### `CodecPrivate` is `extradata`, verbatim, always — except the two codecs that must never get one
 
 D14.1 forbids a `vaco-mux-*` crate depending on a `vaco-parse-*` one, so
 this crate cannot parse a raw bitstream's extradata into an
@@ -130,6 +130,22 @@ demuxer produced). A stream whose extradata came from a different
 container's packaging convention for the same codec is a bitstream-filter
 problem, not a muxer one, and is out of scope here as it would be in the
 reference too.
+
+**`V_VP8`/`V_VP9` are the measured exception, and `codec::never_carries_
+extradata_str` gates the write site on it.** VP8/VP9 are self-contained
+bitstreams that no real encoder or `WebM` muxer ever gives a `CodecPrivate`
+at all — but an MP4-sourced VP9 stream arrives here with a real, non-empty
+`extradata` (a `vpcC` record `vaco-demux-mp4` read off a real ISOBMFF file),
+and "verbatim, always" would have written those ISOBMFF-shaped bytes
+straight into `CodecPrivate`, which no real `WebM` reader expects (measured:
+real `ffmpeg 9.0.1`'s own MP4→Matroska remux of an identical stream writes
+no `CodecPrivate` child at all). See `docs/format/vaco-mux-mp4.md`'s
+Gotchas — "A config-record box is only as trustworthy as knowing who owns
+its byte layout" — for the general rule this is one half of: the two
+containers can disagree about whether a record exists at all (this case),
+disagree about its shape despite both having one, or agree exactly (AV1's
+`av1C`/`CodecPrivate`, the confirming case where "verbatim, always" needed
+no exception).
 
 ### `webm`'s codec allow-list, and its exact rejection message
 
