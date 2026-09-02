@@ -259,7 +259,7 @@ impl HevcDecoder {
             .unwrap_or(1)
             .max(1);
         let mut recon = crate::framebuf::ReconPicture::new(&mut self.budget, width, height, ctb_size)?;
-        let cu_grid = CuGrid::new(&mut self.budget, width, height, hdr.kind == SliceKind::B)?;
+        let cu_grid = CuGrid::new(&mut self.budget, width, height, hdr.kind == SliceKind::B, ctb_size)?;
 
         // ITU-T H.265 §8.3.1: this picture's own picture order count, and
         // (§8.1) whether it is the one IRAP in its sequence that clears
@@ -434,6 +434,7 @@ impl HevcDecoder {
                 if col == 0 {
                     walk.recon.begin_ctu_row(usize::try_from(row).unwrap_or(0))?;
                     walk.edges.begin_row(usize::try_from(row).unwrap_or(0))?;
+                    walk.cu_grid.begin_row(&mut self.budget, usize::try_from(row).unwrap_or(0))?;
                 }
                 let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
                 let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
@@ -456,6 +457,7 @@ impl HevcDecoder {
         walk.recon.finish()?;
         walk.recon.materialize_into(walk.pic);
         walk.edges.finish();
+        walk.cu_grid.finish();
 
         #[cfg(test)]
         if let Some(probe) = self.deblock_lag_probe.take() {
@@ -693,7 +695,7 @@ fn decode_wpp_rows(
     let row_ranges_bytes = u64::try_from(row_ranges.len())
         .unwrap_or(u64::MAX)
         .saturating_mul(u64::try_from(std::mem::size_of::<(usize, usize)>()).unwrap_or(u64::MAX));
-    let result = decode_wpp_row_ranges(&row_ranges, ebsp_slice_data, walk, ctbs_x, ctb_size_i, qp, kind, cabac_init);
+    let result = decode_wpp_row_ranges(budget, &row_ranges, ebsp_slice_data, walk, ctbs_x, ctb_size_i, qp, kind, cabac_init);
     budget.release(row_ranges_bytes);
     result
 }
@@ -704,6 +706,7 @@ fn decode_wpp_rows(
 /// loop below) — see that caller's own comment.
 #[allow(clippy::too_many_arguments, reason = "mirrors decode_wpp_rows's own signature, one call site")]
 fn decode_wpp_row_ranges(
+    budget: &mut Budget,
     row_ranges: &[(usize, usize)],
     ebsp_slice_data: &[u8],
     walk: &mut Ctx<'_>,
@@ -736,6 +739,7 @@ fn decode_wpp_row_ranges(
         walk.qp_y_prev = walk.slice_qp;
         walk.recon.begin_ctu_row(row_idx)?;
         walk.edges.begin_row(row_idx)?;
+        walk.cu_grid.begin_row(budget, row_idx)?;
         let mut ctx = if row_idx > 0 && ctbs_x >= 2 {
             saved_ctx.unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
         } else {

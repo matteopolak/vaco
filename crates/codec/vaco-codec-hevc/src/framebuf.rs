@@ -193,25 +193,57 @@ impl Picture {
 /// tree is walked, `QpY` depends on that coding unit's own `cu_qp_delta`
 /// (if any is coded at all — see `ctu::maybe_parse_cu_qp_delta`), which is
 /// only known once the whole transform tree has been read.
+///
+/// PERF-PROGRAMME.md item B4, Stage 1 step 3: row-banded the same way
+/// [`EdgeMarks`] is, for the same reason (see that struct's own module doc,
+/// and this module's own "Stage 1" section doc above, for why a coarse
+/// once-per-CTU-row freeze is enough here and `vaco_codec_core::picture`'s
+/// per-tile publish machinery is not needed). `CuGridBand` bundles this
+/// struct's nine per-block arrays the same way `EdgeBand` bundles
+/// `EdgeMarks`'s four; `current`/`published` and `begin_row`/`finish` follow
+/// the identical shape, including the same one-past-the-end advance on
+/// `finish` (see this module's own "Stage 1" section doc for why that is
+/// not incidental to `EdgeMarks` alone).
 #[derive(Debug, Clone)]
 pub(crate) struct CuGrid {
     cols: usize,
-    rows: usize,
+    /// 4x4-block rows per CTU row band — see [`EdgeMarks::band_rows`]'s own
+    /// doc for the identical quantity there.
+    band_rows: usize,
+    /// Total row bands in the picture — see [`EdgeMarks::n_bands`]'s own
+    /// doc.
+    n_bands: usize,
+    /// `InterSliceParams::is_b` (`false` for an I or P slice's own grid) —
+    /// carried here (rather than only at construction) so [`CuGrid::begin_row`]
+    /// can size each new band's `mv1_x`/`mv1_y`/`ref_poc1` the same way
+    /// [`CuGrid::new`] originally sized the whole grid's. See
+    /// [`CuGrid::new`]'s own doc for why this gating exists at all.
+    has_l1: bool,
+    /// The row band [`CuGrid::fill`] and friends currently write into;
+    /// every earlier band already lives in `published`.
+    current_band: usize,
+    /// `Some` at every point in this grid's lifetime except between
+    /// [`CuGrid::finish`] and drop, where it stays `None` — `finish` takes
+    /// it into `published` without needing a replacement value the way
+    /// [`CuGrid::begin_row`] does, since nothing writes to a `CuGrid` again
+    /// once the walk that owns it is done with it.
+    current: Option<CuGridBand>,
+    /// Every row band strictly before `current_band`, frozen the moment
+    /// [`CuGrid::begin_row`]/[`CuGrid::finish`] moved past it.
+    published: Vec<CuGridBand>,
+}
+
+/// One CTU row band's own share of [`CuGrid`]'s nine per-4x4-block arrays —
+/// broken out as its own type for the same reason [`EdgeBand`] is: one
+/// value to move into `published`, not nine parallel `Vec`s that would need
+/// to travel together by convention.
+#[derive(Debug, Clone)]
+struct CuGridBand {
     depth: Vec<u8>,
     mode: Vec<u8>,
     written: Vec<bool>,
     qp: Vec<i8>,
     qp_written: Vec<bool>,
-    /// Per-4x4-block motion, one optional [`crate::motion::UniMotion`] per
-    /// reference list, for merge/AMVP spatial-neighbour derivation
-    /// (§8.5.3.2) — both lists empty for every intra block, or a picture
-    /// that has not reached this stage of the crate's scope yet (see
-    /// `crate::motion`'s own module doc). `pred_l0`/`pred_l1` mirror
-    /// `predFlagL0`/`predFlagL1`; a P-slice PU only ever sets `pred_l0`.
-    /// `mv0_x`/`mv0_y`/`mv1_x`/`mv1_y` are quarter-pel, `i16` like HM's own
-    /// `TComMv`; `ref_poc0`/`ref_poc1` are `i64` to match
-    /// `crate::motion::UniMotion`'s own field, not because a POC needs more
-    /// than 32 bits.
     pred_l0: Vec<bool>,
     pred_l1: Vec<bool>,
     is_skip: Vec<bool>,
@@ -221,43 +253,16 @@ pub(crate) struct CuGrid {
     mv1_x: Vec<i16>,
     mv1_y: Vec<i16>,
     ref_poc1: Vec<i64>,
-    /// Per-4x4-block "this position's own luma transform block has one or
-    /// more non-zero coefficient levels" — §8.7.2.4's `bS == 1` condition
-    /// needs exactly this, restricted (by `crate::deblock`'s own caller) to
-    /// positions that are *also* a transform-block edge; a plain
-    /// prediction-unit-only boundary never consults it. Only ever written by
-    /// an inter CU's own transform-unit leaf (`ctu::reconstruct_luma_inter`)
-    /// — intra edges never read it, since either side being intra already
-    /// forces `bS == 2` before this grid would matter.
     cbf_luma: Vec<bool>,
 }
 
-impl CuGrid {
-    /// `has_l1` is `InterSliceParams::is_b` (`false` for an I or P slice's own
-    /// grid) — a P/I slice's own `l1` arrays are charged at length `0`
-    /// (`fill_motion`/`inter_at` degrade to "never populated" automatically:
-    /// an empty `Vec`'s `get`/`get_mut` always return `None`, which reads
-    /// back exactly as "this list unused", the correct answer for every
-    /// block a P/I slice ever writes). This is not an optimisation of
-    /// convenience: doubling every per-4x4-block motion array's footprint
-    /// for a slice kind that can never populate `l1` at all is exactly the
-    /// `Vec::with_capacity`-shaped budget hazard `AGENT-CONSTRAINTS.md` warns
-    /// about applied to a genuine, measured case — a real `libx265` 640x480
-    /// stock fixture (25 P-only frames, the exact "must not regress"
-    /// fixture) started failing `Budget`'s `max_alloc_total` cap the moment
-    /// `l1` support was added unconditionally, and stopped failing the
-    /// moment this gating did.
-    ///
+impl CuGridBand {
     /// # Errors
-    /// [`vaco_core::Error`] if any grid's allocation exceeds `budget`.
-    pub(crate) fn new(budget: &mut Budget, luma_width: usize, luma_height: usize, has_l1: bool) -> Result<Self> {
-        let cols = luma_width.div_ceil(4).max(1);
-        let rows = luma_height.div_ceil(4).max(1);
-        let len = cols.saturating_mul(rows);
+    /// [`vaco_core::Error`] if this band's own allocation exceeds `budget`.
+    fn new(budget: &mut Budget, cols: usize, band_rows: usize, has_l1: bool) -> Result<Self> {
+        let len = cols.saturating_mul(band_rows);
         let len_l1 = if has_l1 { len } else { 0 };
         Ok(Self {
-            cols,
-            rows,
             depth: budget.alloc(len)?,
             mode: budget.alloc(len)?,
             written: vec![false; len],
@@ -276,26 +281,168 @@ impl CuGrid {
         })
     }
 
-    fn index(&self, bx: usize, by: usize) -> Option<usize> {
-        if bx >= self.cols || by >= self.rows {
+    /// The total bytes [`Budget::alloc`] charged for this one band — see
+    /// [`CuGrid::budget_bytes`]'s own doc for why the whole grid's total is
+    /// just this summed across every band.
+    fn budget_bytes(&self) -> u64 {
+        let bytes = |len: usize, size: usize| u64::try_from(len.saturating_mul(size)).unwrap_or(u64::MAX);
+        bytes(self.depth.len(), 1)
+            .saturating_add(bytes(self.mode.len(), 1))
+            .saturating_add(bytes(self.qp.len(), 1))
+            .saturating_add(bytes(self.mv0_x.len(), 2))
+            .saturating_add(bytes(self.mv0_y.len(), 2))
+            .saturating_add(bytes(self.ref_poc0.len(), 8))
+            .saturating_add(bytes(self.mv1_x.len(), 2))
+            .saturating_add(bytes(self.mv1_y.len(), 2))
+            .saturating_add(bytes(self.ref_poc1.len(), 8))
+    }
+}
+
+/// `bx`/`local_by` (already band-relative) to a flat index into any of
+/// [`CuGridBand`]'s arrays, or `None` out of range — a free function, not a
+/// method, so callers already holding a `&mut CuGridBand` borrowed out of
+/// [`CuGrid::current`] can still compute it without a second, conflicting
+/// borrow of `self`.
+fn cu_index_in(cols: usize, band_rows: usize, bx: usize, local_by: usize) -> Option<usize> {
+    if bx >= cols || local_by >= band_rows {
+        return None;
+    }
+    Some(local_by * cols + bx)
+}
+
+impl CuGrid {
+    /// `has_l1` is `InterSliceParams::is_b` (`false` for an I or P slice's own
+    /// grid) — a P/I slice's own `l1` arrays are charged at length `0`
+    /// (`fill_motion`/`inter_at` degrade to "never populated" automatically:
+    /// an empty `Vec`'s `get`/`get_mut` always return `None`, which reads
+    /// back exactly as "this list unused", the correct answer for every
+    /// block a P/I slice ever writes). This is not an optimisation of
+    /// convenience: doubling every per-4x4-block motion array's footprint
+    /// for a slice kind that can never populate `l1` at all is exactly the
+    /// `Vec::with_capacity`-shaped budget hazard `AGENT-CONSTRAINTS.md` warns
+    /// about applied to a genuine, measured case — a real `libx265` 640x480
+    /// stock fixture (25 P-only frames, the exact "must not regress"
+    /// fixture) started failing `Budget`'s `max_alloc_total` cap the moment
+    /// `l1` support was added unconditionally, and stopped failing the
+    /// moment this gating did.
+    ///
+    /// `ctb_size` (in luma samples) sets the row-band height, the same
+    /// quantity [`ReconPlane::new`]/[`EdgeMarks::new`]'s own caller already
+    /// passes. Only the first band is allocated here; [`CuGrid::begin_row`]
+    /// allocates each later one as the walk reaches it, so a picture whose
+    /// full grid would exceed `budget` fails when the CTU walk actually
+    /// reaches the row that pushes it over, not necessarily at this call —
+    /// the same incremental-charge shape [`EdgeMarks`] already has for its
+    /// (untracked) bands, extended here to the arrays that are
+    /// `Budget`-tracked. The running total charged is unaffected: the sum
+    /// across every band ends up the same handful of bytes [`CuGrid::new`]
+    /// used to charge in one call (plus, at most, one row band's worth of
+    /// rounding from the last, possibly-short band — see
+    /// [`EdgeMarks::new`]'s own identical rounding).
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`] if the first band's allocation exceeds `budget`.
+    pub(crate) fn new(budget: &mut Budget, luma_width: usize, luma_height: usize, has_l1: bool, ctb_size: usize) -> Result<Self> {
+        let cols = luma_width.div_ceil(4).max(1);
+        let total_rows = luma_height.div_ceil(4).max(1);
+        let band_rows = ctb_size.max(1).div_ceil(4).max(1);
+        let n_bands = total_rows.div_ceil(band_rows).max(1);
+        let current = CuGridBand::new(budget, cols, band_rows, has_l1)?;
+        Ok(Self { cols, band_rows, n_bands, has_l1, current_band: 0, current: Some(current), published: Vec::new() })
+    }
+
+    /// The row band containing 4x4-block row `by`.
+    #[allow(clippy::integer_division, reason = "row band index = block row / the fixed CTB row-band height")]
+    const fn band_of(&self, by: usize) -> usize {
+        by / self.band_rows
+    }
+
+    /// `by`'s own row within whichever band [`CuGrid::band_of`] says it
+    /// belongs to.
+    #[allow(clippy::integer_division, reason = "same fixed CTB row-band height as band_of, its own remainder")]
+    const fn local_of(&self, by: usize) -> usize {
+        by % self.band_rows
+    }
+
+    /// The band that block row `by` currently lives in — `current` if it is
+    /// the row being written, a `published` entry if it is an earlier,
+    /// already-finished row, or `None` for a row not reached yet.
+    fn band_for(&self, by: usize) -> Option<&CuGridBand> {
+        match self.band_of(by).cmp(&self.current_band) {
+            std::cmp::Ordering::Equal => self.current.as_ref(),
+            std::cmp::Ordering::Less => self.published.get(self.band_of(by)),
+            std::cmp::Ordering::Greater => None,
+        }
+    }
+
+    /// `current`, only if block row `by` is the one it holds — the write
+    /// side's counterpart of [`CuGrid::band_for`]'s `Equal` arm; a write
+    /// targeting any other row is a caller error this degrades from
+    /// silently (a coding unit's footprint never crosses a CTU boundary, so
+    /// every real write already satisfies this).
+    fn current_band_mut(&mut self, by: usize) -> Option<&mut CuGridBand> {
+        if self.band_of(by) != self.current_band {
             return None;
         }
-        Some(by * self.cols + bx)
+        self.current.as_mut()
+    }
+
+    /// Advance to CTU row `row_band`: freeze `current` into `published` and
+    /// allocate a fresh one, once, for the new row — the same-shaped
+    /// counterpart of [`EdgeMarks::begin_row`]/[`ReconPlane::begin_row`],
+    /// called from the same call sites right alongside them. Idempotent for
+    /// a `row_band` already current, including once, harmlessly, for row
+    /// `0`.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`] if `row_band` goes backward, or the new band's
+    /// allocation exceeds `budget`.
+    pub(crate) fn begin_row(&mut self, budget: &mut Budget, row_band: usize) -> Result<()> {
+        if row_band < self.current_band {
+            return Err(Error::InvalidData("vaco-codec-hevc: cu grid rows must advance in order"));
+        }
+        while self.published.len() < row_band {
+            if let Some(band) = self.current.take() {
+                self.published.push(band);
+            }
+            self.current = Some(CuGridBand::new(budget, self.cols, self.band_rows, self.has_l1)?);
+        }
+        self.current_band = row_band;
+        Ok(())
+    }
+
+    /// Freeze the last row band once the whole CTU walk is done, and
+    /// advance `current_band` one past the last real band — see this
+    /// module's own "Stage 1" section doc for why every type built this way
+    /// needs exactly this move, not merely freezing the last band in place.
+    /// Called once, right alongside [`EdgeMarks::finish`]/
+    /// [`ReconPlane::finish`], before deblocking, SAO or
+    /// `CollocatedMotionField::build` ever query this grid.
+    pub(crate) fn finish(&mut self) {
+        while self.published.len() < self.n_bands {
+            let Some(band) = self.current.take() else { break };
+            self.published.push(band);
+        }
+        self.current_band = self.n_bands;
     }
 
     /// Paint one coding unit's whole footprint (in 4-sample blocks) with its
     /// final quadtree depth and, for intra, its luma mode.
     pub(crate) fn fill(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, depth: u8, mode: u8) {
-        for by in by0..by0.saturating_add(blocks_h) {
+        let cols = self.cols;
+        let band_rows = self.band_rows;
+        let local_by0 = self.local_of(by0);
+        let Some(band) = self.current_band_mut(by0) else { return };
+        for local_by in local_by0..local_by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
-                if let Some(i) = self.index(bx, by) {
-                    if let Some(slot) = self.depth.get_mut(i) {
+                if let Some(i) = cu_index_in(cols, band_rows, bx, local_by) {
+                    if let Some(slot) = band.depth.get_mut(i) {
                         *slot = depth;
                     }
-                    if let Some(slot) = self.mode.get_mut(i) {
+                    if let Some(slot) = band.mode.get_mut(i) {
                         *slot = mode;
                     }
-                    if let Some(slot) = self.written.get_mut(i) {
+                    if let Some(slot) = band.written.get_mut(i) {
                         *slot = true;
                     }
                 }
@@ -312,11 +459,13 @@ impl CuGrid {
         let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
             return None;
         };
-        let i = self.index(block_of(px), block_of(py))?;
-        if !self.written.get(i).copied().unwrap_or(false) {
+        let (bx, by) = (block_of(px), block_of(py));
+        let band = self.band_for(by)?;
+        let i = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by))?;
+        if !band.written.get(i).copied().unwrap_or(false) {
             return None;
         }
-        self.depth.get(i).copied()
+        band.depth.get(i).copied()
     }
 
     /// The luma intra mode of the 4x4 block at luma pixel `(px, py)`, or
@@ -327,13 +476,17 @@ impl CuGrid {
         let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
             return DC_IDX;
         };
-        let Some(i) = self.index(block_of(px), block_of(py)) else {
+        let (bx, by) = (block_of(px), block_of(py));
+        let Some(band) = self.band_for(by) else {
             return DC_IDX;
         };
-        if !self.written.get(i).copied().unwrap_or(false) {
+        let Some(i) = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by)) else {
+            return DC_IDX;
+        };
+        if !band.written.get(i).copied().unwrap_or(false) {
             return DC_IDX;
         }
-        self.mode.get(i).copied().unwrap_or(DC_IDX)
+        band.mode.get(i).copied().unwrap_or(DC_IDX)
     }
 
     /// Paint one coding unit's whole footprint (in 4-sample blocks) with its
@@ -341,13 +494,17 @@ impl CuGrid {
     /// transform tree has been walked (see this struct's own doc for why
     /// that timing differs from [`CuGrid::fill`]'s).
     pub(crate) fn fill_qp(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, qp: i8) {
-        for by in by0..by0.saturating_add(blocks_h) {
+        let cols = self.cols;
+        let band_rows = self.band_rows;
+        let local_by0 = self.local_of(by0);
+        let Some(band) = self.current_band_mut(by0) else { return };
+        for local_by in local_by0..local_by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
-                if let Some(i) = self.index(bx, by) {
-                    if let Some(slot) = self.qp.get_mut(i) {
+                if let Some(i) = cu_index_in(cols, band_rows, bx, local_by) {
+                    if let Some(slot) = band.qp.get_mut(i) {
                         *slot = qp;
                     }
-                    if let Some(slot) = self.qp_written.get_mut(i) {
+                    if let Some(slot) = band.qp_written.get_mut(i) {
                         *slot = true;
                     }
                 }
@@ -366,11 +523,13 @@ impl CuGrid {
         let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
             return None;
         };
-        let i = self.index(block_of(px), block_of(py))?;
-        if !self.qp_written.get(i).copied().unwrap_or(false) {
+        let (bx, by) = (block_of(px), block_of(py));
+        let band = self.band_for(by)?;
+        let i = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by))?;
+        if !band.qp_written.get(i).copied().unwrap_or(false) {
             return None;
         }
-        self.qp.get(i).copied()
+        band.qp.get(i).copied()
     }
 
     /// Paint one PU's footprint (in 4-sample blocks) with its finalised
@@ -383,37 +542,41 @@ impl CuGrid {
     pub(crate) fn fill_motion(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, info: crate::motion::MotionInfo, is_skip: bool) {
         let l0 = info.l0.map(|u| (i16::try_from(u.mv.x).unwrap_or(0), i16::try_from(u.mv.y).unwrap_or(0), u.ref_poc));
         let l1 = info.l1.map(|u| (i16::try_from(u.mv.x).unwrap_or(0), i16::try_from(u.mv.y).unwrap_or(0), u.ref_poc));
-        for by in by0..by0.saturating_add(blocks_h) {
+        let cols = self.cols;
+        let band_rows = self.band_rows;
+        let local_by0 = self.local_of(by0);
+        let Some(band) = self.current_band_mut(by0) else { return };
+        for local_by in local_by0..local_by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
-                let Some(i) = self.index(bx, by) else { continue };
-                if let Some(slot) = self.is_skip.get_mut(i) {
+                let Some(i) = cu_index_in(cols, band_rows, bx, local_by) else { continue };
+                if let Some(slot) = band.is_skip.get_mut(i) {
                     *slot = is_skip;
                 }
-                if let Some(slot) = self.pred_l0.get_mut(i) {
+                if let Some(slot) = band.pred_l0.get_mut(i) {
                     *slot = l0.is_some();
                 }
                 if let Some((x, y, poc)) = l0 {
-                    if let Some(slot) = self.mv0_x.get_mut(i) {
+                    if let Some(slot) = band.mv0_x.get_mut(i) {
                         *slot = x;
                     }
-                    if let Some(slot) = self.mv0_y.get_mut(i) {
+                    if let Some(slot) = band.mv0_y.get_mut(i) {
                         *slot = y;
                     }
-                    if let Some(slot) = self.ref_poc0.get_mut(i) {
+                    if let Some(slot) = band.ref_poc0.get_mut(i) {
                         *slot = poc;
                     }
                 }
-                if let Some(slot) = self.pred_l1.get_mut(i) {
+                if let Some(slot) = band.pred_l1.get_mut(i) {
                     *slot = l1.is_some();
                 }
                 if let Some((x, y, poc)) = l1 {
-                    if let Some(slot) = self.mv1_x.get_mut(i) {
+                    if let Some(slot) = band.mv1_x.get_mut(i) {
                         *slot = x;
                     }
-                    if let Some(slot) = self.mv1_y.get_mut(i) {
+                    if let Some(slot) = band.mv1_y.get_mut(i) {
                         *slot = y;
                     }
-                    if let Some(slot) = self.ref_poc1.get_mut(i) {
+                    if let Some(slot) = band.ref_poc1.get_mut(i) {
                         *slot = poc;
                     }
                 }
@@ -431,22 +594,24 @@ impl CuGrid {
         let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
             return None;
         };
-        let i = self.index(block_of(px), block_of(py))?;
-        if !self.written.get(i).copied().unwrap_or(false) {
+        let (bx, by) = (block_of(px), block_of(py));
+        let band = self.band_for(by)?;
+        let i = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by))?;
+        if !band.written.get(i).copied().unwrap_or(false) {
             return None;
         }
-        let pred_l0 = self.pred_l0.get(i).copied().unwrap_or(false);
-        let pred_l1 = self.pred_l1.get(i).copied().unwrap_or(false);
+        let pred_l0 = band.pred_l0.get(i).copied().unwrap_or(false);
+        let pred_l1 = band.pred_l1.get(i).copied().unwrap_or(false);
         if !pred_l0 && !pred_l1 {
             return None;
         }
         let l0 = pred_l0.then(|| crate::motion::UniMotion {
-            mv: crate::motion::Mv { x: i32::from(self.mv0_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv0_y.get(i).copied().unwrap_or(0)) },
-            ref_poc: self.ref_poc0.get(i).copied().unwrap_or(0),
+            mv: crate::motion::Mv { x: i32::from(band.mv0_x.get(i).copied().unwrap_or(0)), y: i32::from(band.mv0_y.get(i).copied().unwrap_or(0)) },
+            ref_poc: band.ref_poc0.get(i).copied().unwrap_or(0),
         });
         let l1 = pred_l1.then(|| crate::motion::UniMotion {
-            mv: crate::motion::Mv { x: i32::from(self.mv1_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv1_y.get(i).copied().unwrap_or(0)) },
-            ref_poc: self.ref_poc1.get(i).copied().unwrap_or(0),
+            mv: crate::motion::Mv { x: i32::from(band.mv1_x.get(i).copied().unwrap_or(0)), y: i32::from(band.mv1_y.get(i).copied().unwrap_or(0)) },
+            ref_poc: band.ref_poc1.get(i).copied().unwrap_or(0),
         });
         Some(crate::motion::MotionInfo { l0, l1 })
     }
@@ -459,13 +624,17 @@ impl CuGrid {
         let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
             return false;
         };
-        let Some(i) = self.index(block_of(px), block_of(py)) else {
+        let (bx, by) = (block_of(px), block_of(py));
+        let Some(band) = self.band_for(by) else {
             return false;
         };
-        if !self.written.get(i).copied().unwrap_or(false) {
+        let Some(i) = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by)) else {
+            return false;
+        };
+        if !band.written.get(i).copied().unwrap_or(false) {
             return false;
         }
-        self.is_skip.get(i).copied().unwrap_or(false)
+        band.is_skip.get(i).copied().unwrap_or(false)
     }
 
     /// Paint one inter luma transform-unit leaf's own footprint (in
@@ -473,10 +642,14 @@ impl CuGrid {
     /// called once per leaf from `ctu::reconstruct_luma_inter`, mirroring
     /// [`CuGrid::fill_motion`]'s own per-leaf timing.
     pub(crate) fn fill_cbf_luma(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, cbf: bool) {
-        for by in by0..by0.saturating_add(blocks_h) {
+        let cols = self.cols;
+        let band_rows = self.band_rows;
+        let local_by0 = self.local_of(by0);
+        let Some(band) = self.current_band_mut(by0) else { return };
+        for local_by in local_by0..local_by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
-                if let Some(i) = self.index(bx, by)
-                    && let Some(slot) = self.cbf_luma.get_mut(i)
+                if let Some(i) = cu_index_in(cols, band_rows, bx, local_by)
+                    && let Some(slot) = band.cbf_luma.get_mut(i)
                 {
                     *slot = cbf;
                 }
@@ -493,18 +666,27 @@ impl CuGrid {
         let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
             return false;
         };
-        let Some(i) = self.index(block_of(px), block_of(py)) else {
+        let (bx, by) = (block_of(px), block_of(py));
+        let Some(band) = self.band_for(by) else {
             return false;
         };
-        self.cbf_luma.get(i).copied().unwrap_or(false)
+        let Some(i) = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by)) else {
+            return false;
+        };
+        band.cbf_luma.get(i).copied().unwrap_or(false)
     }
 
-    /// The total bytes [`Budget::alloc`] charged across this grid's nine
-    /// tracked arrays (`depth`/`mode`/`qp`/`mv0_x`/`mv0_y`/`ref_poc0` always,
-    /// `mv1_x`/`mv1_y`/`ref_poc1` at their real length — `0` for a P/I
-    /// slice's grid, `len` for a B slice's, exactly as [`CuGrid::new`]
-    /// charged them) — what `decoder.rs` gives back via [`Budget::release`]
-    /// once a slice's own CTU walk is done with this grid.
+    /// The total bytes [`Budget::alloc`] charged across every row band's own
+    /// nine tracked arrays (`depth`/`mode`/`qp`/`mv0_x`/`mv0_y`/`ref_poc0`
+    /// always, `mv1_x`/`mv1_y`/`ref_poc1` at their real length — `0` for a
+    /// P/I slice's grid, non-zero for a B slice's, exactly as
+    /// [`CuGridBand::new`] charged them) — what `decoder.rs` gives back via
+    /// [`Budget::release`] once a slice's own CTU walk is done with this
+    /// grid. Sums `published` (every finished band) plus `current` (only
+    /// non-empty between construction and [`CuGrid::finish`]), so this
+    /// always matches whatever [`CuGrid::new`]/[`CuGrid::begin_row`] have
+    /// actually charged so far, at any point in the grid's lifetime, not
+    /// only after [`CuGrid::finish`].
     ///
     /// Unlike [`Picture::budget_bytes`], which a picture still held live in
     /// the `Dpb` needs released only at eviction, this grid is a pure
@@ -522,16 +704,8 @@ impl CuGrid {
     /// still fit under the ceiling by coincidence.
     #[must_use]
     pub(crate) fn budget_bytes(&self) -> u64 {
-        let bytes = |len: usize, size: usize| u64::try_from(len.saturating_mul(size)).unwrap_or(u64::MAX);
-        bytes(self.depth.len(), 1)
-            .saturating_add(bytes(self.mode.len(), 1))
-            .saturating_add(bytes(self.qp.len(), 1))
-            .saturating_add(bytes(self.mv0_x.len(), 2))
-            .saturating_add(bytes(self.mv0_y.len(), 2))
-            .saturating_add(bytes(self.ref_poc0.len(), 8))
-            .saturating_add(bytes(self.mv1_x.len(), 2))
-            .saturating_add(bytes(self.mv1_y.len(), 2))
-            .saturating_add(bytes(self.ref_poc1.len(), 8))
+        let published: u64 = self.published.iter().map(CuGridBand::budget_bytes).fold(0u64, u64::saturating_add);
+        published.saturating_add(self.current.as_ref().map_or(0, CuGridBand::budget_bytes))
     }
 }
 

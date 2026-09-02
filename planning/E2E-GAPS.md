@@ -2902,3 +2902,120 @@ to match.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 37. HEVC B4 -- Stage 1 step 3, second piece: `CuGrid` row-banded the same way
+
+§36 landed `EdgeMarks`'s row-banded treatment, the first piece of Stage
+1 step 3. This section is the second: `CuGrid`, the largest of the
+three remaining structures (nine heterogeneous per-4x4-block arrays
+against `EdgeMarks`'s four uniform bool grids).
+
+**Shape**: identical to `EdgeMarks` -- `CuGridBand` bundles the nine
+arrays the way `EdgeBand` bundles four; `CuGrid` becomes `{ cols,
+band_rows, n_bands, has_l1, current_band, current: Option<CuGridBand>,
+published: Vec<CuGridBand> }`. One real difference from `EdgeMarks`:
+`current` is `Option<CuGridBand>`, not a plain value, because
+`CuGridBand`'s numeric arrays (unlike `EdgeBand`'s bools) are
+`Budget`-tracked -- `finish()` needs to move the last band into
+`published` without allocating a throwaway replacement value (which
+would need a `Budget` to charge it against, at exactly the moment the
+whole grid is about to be released), so it `take()`s the `Option`
+instead of the `mem::replace`-with-a-fresh-value `EdgeMarks::finish`
+uses. `CuGrid::begin_row` also takes `budget: &mut Budget` now (each
+new row band's own arrays are charged as the walk reaches it, not the
+whole grid upfront the way `CuGrid::new` used to) -- `decode_wpp_row_
+ranges` gained the same parameter to thread it through from
+`decode_wpp_rows`. `finish()` advances `current_band` one past the
+last real band, exactly like `EdgeMarks` and `ReconPlane`, and for the
+reason §36 named generally (see `framebuf.rs`'s own "Stage 1" section
+doc).
+
+Every `fill_*`/`*_at` method kept its exact signature. The one
+structural wrinkle `EdgeMarks` didn't have: a write method needs both
+`self.band_of(by0)`/`self.local_of(by0)` (which borrow `&self`) and a
+mutable borrow of `self.current` at once -- solved by reading `cols`/
+`band_rows` into locals and computing indices via a free `cu_index_in`
+function rather than a `&self` method, so the mutable borrow of
+`current` never overlaps an immutable one of `self`.
+
+**A real fixture-generation problem, not a decoder bug**: the first
+attempt at a multi-row P/B fixture (300x500 mandelbrot content via
+`ffmpeg`/`libx265`) hit `Unsupported("more than one slice segment per
+picture is not supported")` even for a single all-intra frame at that
+resolution -- looked at first like a real regression. It wasn't: the
+verification harness (a throwaway `dump_multirow` example, not part of
+the crate) was handing the decoder the *entire* multi-frame Annex-B
+file as a single packet, which makes every frame after the first look
+like a second slice segment of the first picture to a decoder that
+(correctly) expects one packet per access unit. Fixed by teaching the
+harness to split the Annex-B stream into one packet per access unit
+(scanning start codes, grouping NAL units by `first_slice_segment_in_
+pic_flag`) and driving the real `send_packet`/`receive_frame`
+backpressure protocol (`Error::OutputPending` means drain before
+sending more) properly, matching how any real container-based caller
+already uses this decoder. Worth naming because it is exactly the kind
+of failure `AGENT-CONSTRAINTS.md` warns to slow down for: the first
+plausible read (decoder bug) was wrong, and would have wasted a debugging
+session; the actual cause was two hunches away, in the harness, not the
+code under test.
+
+**Byte-exact**: with that harness fixed, a private-worktree baseline
+(`origin/main`, this crate's own state immediately before this
+commit) against a *reconstructed* copy of the three changed files.
+Reconstructed, not the shared working tree's own copy, because another
+agent had an unrelated, in-flight color-metadata change interleaved in
+the very same `decoder.rs` at commit time (`PictureMeta::color`/
+`sps.color_info()` — a second concurrent edit to a file this section
+also needed to touch). Isolated this commit's own hunks by diffing
+against the shared tree's `decoder.rs`, confirmed the only difference
+was exactly those two unrelated lines, and built/tested the isolated
+reconstruction in its own private worktree before committing --
+committing the shared tree's file as-is would have folded someone
+else's uncommitted, unreviewed work into this commit under its
+provenance trailers, which the standing "never touch a file another
+agent has uncommitted WIP in" rule rules out even when "touch" means
+"commit alongside" rather than "edit."
+
+Fixture: a fresh 300x500 `libx265` encode (I/P/B slices, `mandelbrot`
+content, 20 frames, 8 CTU rows at the default 64-sample CTB including
+a short last row, `ffmpeg -f lavfi -i mandelbrot=size=300x500:rate=10
+-pix_fmt yuv420p -frames:v 20 -c:v libx265 -x265-params
+"keyint=20:bframes=3:b-adapt=2:ref=2:slices=1"`) plus the existing
+`deblock_lag_256x320.hevc`, `qp32_64x64.hevc` and `flat_gray_64x64.hevc`
+fixtures. All 69 decoded output planes (20 frames x 3 planes for the
+new fixture, plus 3 single-frame fixtures x 3 planes) byte-identical,
+before vs after (`diff -rq` reported no differences). This is the
+first byte-exact check of this item's row-banding against real inter
+prediction: P/B-slice merge and AMVP spatial-neighbour derivation
+reading across a CTU row-band boundary is exactly the path most likely
+to break from this kind of change, and it did not.
+`tests/oracle.rs`/`tests/flat.rs` both still pass. The full 63-test
+unit suite -- unblocked as of commit `946fe47` fixing the `dpb.rs`/
+`PictureMeta::closed_captions` issue §34/§36 both noted -- passes too,
+including `motion::tests::amvp_finds_a_match_in_the_other_list_by_poc`,
+the one existing unit test that actually writes then reads `CuGrid`
+motion fields directly.
+
+**Serial cost**: six interleaved before/after rounds (release builds,
+CPU-seconds via `/usr/bin/time -p`'s `user` field) decoding the 300x500
+fixture 100 times per round: ratios 1.012, 1.006, 1.013, 0.957, 1.049,
+1.013 -- mean 1.008x, median 1.012x. No measurable regression,
+comfortably inside D20's <=1.03x gate.
+
+`cargo check`/`clippy -p vaco-codec-hevc --lib --tests -- -D warnings`
+clean, checked both in the shared working tree and in the isolated
+reconstruction.
+
+**Not done in this section**: `sao_params`'s own analogous treatment
+(the last piece of step 3), the row-banded-to-column-tiled move Stage 2
+needs, Stage 2's actual thread dispatch, the new `hevc_decode_threaded`
+fuzz target, and the full byte-exact-at-every-thread-count verification
+matrix. Each remains its own pass, per this item's own staging
+discipline.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the
+filter crates, `vaco-conformance` and the fuzz harnesses were not
+touched. `dpb.rs` and this crate's own `Cargo.toml` were not touched
+either, despite both showing as locally modified throughout this
+section's work -- a second agent's own in-flight, unrelated
+color-metadata change, left alone per the standing rule.
