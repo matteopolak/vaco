@@ -2157,7 +2157,7 @@ shape turned up; two more checked out clean and are recorded below for
 contrast, since "the reference does the same thing" is itself a
 finding worth writing down rather than reverifying later.
 
-### 22a. H.264/HEVC VUI colour info reaches probe, never reaches a decoded `Frame`
+### 22a. H.264/HEVC VUI colour info reaches probe, never reaches a decoded `Frame` — CLOSED 2026-09-02
 
 `vaco_parse_h264::sps::VuiParameters::color_info` and the HEVC
 equivalent are real and correct — `codec_parameters(sps)` sets
@@ -2186,7 +2186,21 @@ tools' report of the same file.
 downstream of an H.264/HEVC decode. Not blocking probe, which reads
 `CodecParameters` directly and never decodes.
 
-### 22b. HDR metadata (mastering display / content light level) is parsed and then reaches nothing at all — not even probe
+**Closed.** Both decoders now stamp `Sps::color_info()` onto `Frame::color`
+at the same point `dimensions`/`crop_unit`/`crop` are already extracted
+eagerly (`sps` borrows the parser and cannot survive to the frame-building
+call), verified against real `ffmpeg 9.0.1`/`libx264`/`libx265`:
+`fixtures/vui_bt709.264`/`.hevc` (`colorprim=bt709:transfer=bt709:
+colormatrix=bt709:fullrange=off`) decode to exactly the four `ColorInfo`
+values real `ffprobe` reports on the same files, with a regression test on
+each crate's own no-VUI fixture confirming §E.2.1's inference rule (and its
+one HEVC-specific divergence — `ChromaLocation::Left` for 4:2:0 even with no
+`colour_description` at all) rather than a bare `ColorInfo::default()`.
+Falsified both ways (commented out the assignment, watched the new test
+fail) before restoring. `vaco-codec-h264` commit `62f7bfa`, `vaco-codec-hevc`
+commit `a87f089`.
+
+### 22b. HDR metadata (mastering display / content light level) is parsed and then reaches nothing at all — not even probe — PARTIALLY CLOSED 2026-09-02
 
 Worse than 22a: this one has no producer at *any* layer, so it is
 invisible even to `vaco-probe`, which has nothing wrong to report
@@ -2219,6 +2233,61 @@ because there is nothing to read.
 round-trips that also carry mastering/CLL data lose it silently on
 every codec in this tree today, with no refusal and no probe evidence
 that anything was dropped.
+
+### What landed
+
+**The decoder-attachment half, for all three codecs.** `vaco-codec-h264`,
+`vaco-codec-hevc` and `vaco-codec-av1` now read the already-parsed SEI/OBU
+metadata and attach `FrameSideData::MasteringDisplay`/`ContentLightLevel`,
+verified against real `ffmpeg 9.0.1` end to end: `libx264`/`libx265`
+(`--x264-params`/`--x265-params mastering-display=G(...)B(...)R(...)
+WP(...)L(...):cll=...`) and `libsvtav1` (`--mastering-display`/
+`--content-light`) fixtures decode to the exact `red_x`/`green_x`/.../
+`max_luminance`/`max_content`/`max_average` fractions real
+`ffprobe -show_frames` reports on the same files. Falsified on every codec
+(disabled the attachment, watched the new test fail, restored). Commits
+`f0260da` (H.264), `f271669` (HEVC), `edd83fb` (AV1); `010c7ae` documents
+`vaco_frame::MasteringDisplay`'s own red/green/blue index convention, which
+had no stated order before this landed.
+
+**A real bug the verification itself caught, not just a units question.**
+`vaco_parse_av1::metadata::HdrMdcv`'s own doc cites HEVC for
+`metadata_hdr_mdcv()`'s derivation, which reads as "same green/blue/red
+bitstream order as H.264/HEVC's SEI message" — but AV1's own
+`primary_chromaticity[0..3]` is red, green, blue *directly*, confirmed by
+round-tripping known chromaticity values through real `libsvtav1` and
+reading them back with real `ffprobe`. The first implementation attempt
+applied the HEVC permutation anyway and its own test caught the rotated
+primaries immediately. `vaco_parse_av1::metadata.rs`'s doc comment (commit
+`edd83fb`) now states the real order instead of the misleading citation.
+
+### What is still open
+
+**The container-box half — declared, not implemented.** MP4's `mdcv`/`clli`
+(ISOBMFF amendment) and `SmDm`/`CoLL` (older WebM-derived pair) fourccs are
+still unparsed (commit `6fe553d`): a real fixture to verify the byte layout
+against was attempted first, and could not be produced — real `ffmpeg
+9.0.1`'s own `mov` muxer wrote neither box for any combination tried (HEVC
+in-band-SEI `-c:v copy` remux, HEVC direct encode, AV1 direct encode),
+confirmed via `ffprobe -show_streams` (no `stream_side_data` at all) and a
+raw byte search of each output file — even though `-show_frames` confirmed
+the same files' *frame*-level metadata was present and correct throughout,
+so this is specifically a container-box gap in what this build of the
+reference itself writes, not an encoder-configuration mistake on this
+project's side. No `MP4Box`/`gpac`/`bento4` available as a second real tool
+to cross-check against either. Whoever picks this up next needs either a
+real muxer that actually writes these boxes, or a hand-authored fixture
+whose byte layout is independently confirmed some other black-box-legal
+way — not a parser written against recalled spec text with nothing real to
+check it against (D19's "wrong by a factor of 10000" risk, one layer
+earlier).
+
+Also still open, unrelated to this pass: `vaco-probe` has no `-show_frames`
+at all yet (`FRAMES_UNSUPPORTED`, D14.4/roadmap CL-34b, v0.2) — even a
+fully-attached, fully-parsed `FrameSideData::MasteringDisplay` has no path
+to probe's own output today, container box or not. Not attempted here:
+wiring a decoder into probe is a separate, much larger piece of work than
+this finding's own scope.
 
 ### 22c. MP4 rotation metadata is parsed, surfaced in probe, refused by name when asked for explicitly, and *silently never applied by default*
 
