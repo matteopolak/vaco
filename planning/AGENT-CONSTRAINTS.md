@@ -1175,6 +1175,70 @@ message is a paperwork problem; a HEAD that does not compile blocks everyone.
 If you cannot split the file safely, say so and hand it to the orchestrator
 rather than committing half a change.
 
+### Two agents editing the same function: diff your reconstruction against the live tree before you commit
+
+The private-index recipe above answers "how do I commit my half of a shared
+file safely." It does not answer "is my half actually safe to commit *right
+now*, while someone else's half is still sitting uncommitted in the same
+file." This happened on 2026-09-02: one agent was adding `filter_dispatch`
+reachability rule F to `xtask/src/reachability_check.rs`'s `run()` — a new
+entry in the `sections` array, the array's length bump, the count in a
+`println!`, a new doc bullet — while a second agent was independently adding
+rule G to the *same* array, the *same* length, the *same* `println!`, in the
+same file, at the same time. Neither had committed anything yet.
+
+The fix is one extra step before the private-index commit, not a different
+recipe:
+
+```sh
+BASE=$(git rev-parse HEAD)
+git show "$BASE:xtask/src/reachability_check.rs" > "$SCRATCH/base.rs"   # pure, uncontaminated
+# apply your own transformation to $SCRATCH/base.rs by exact string
+# replacement, anchored on text that is yours alone (your new function body,
+# your own doc bullet) -- never on the shared array/import lines by
+# themselves, since those are exactly where two edits collide syntactically
+diff "$SCRATCH/base.rs" xtask/src/reachability_check.rs
+```
+
+Read that diff looking for exactly one thing: is every difference either (a)
+a line the live working tree has and your reconstruction does not — the
+other agent's still-uncommitted work, left alone — or (b) a line *both* of
+you touched for an unavoidably shared reason (the array's length, an import
+list, a count in a format string) where the live tree's version is a further
+extension of yours rather than a contradiction of it (their array size is
+larger than yours because they added *more* entries, not because they
+removed yours)? If so, your reconstruction is a clean subset of the current
+state, and building a commit from it cannot lose or corrupt what they have
+not committed yet. If instead a line you added is missing, or a line reads
+differently in a way that is not just "further extended," stop — that is a
+real conflict, not a race, and needs a person to reconcile it.
+
+Given a clean subset, commit as usual — `git hash-object -w "$SCRATCH/base.rs"`,
+not the working-tree path — and verify immediately:
+
+```sh
+git update-ref refs/heads/main "$commit" "$BASE"
+git merge-base --is-ancestor "$commit" refs/heads/main && echo OK || echo LOST
+```
+
+**Do not write your reconstruction back to the working tree afterward.**
+That is the opposite of the append-only-document write-back rule above, and
+for the opposite reason: there, the working tree drifting behind `HEAD` is
+the danger, because nobody else's pending content depends on staying ahead
+of it. Here, the live working tree is *already* a superset of what you just
+committed — it carries your change (now also in `HEAD`) plus the other
+agent's still-uncommitted delta. Overwriting it with your scratch file would
+delete their work outright, not just leave it stale. Leave the file exactly
+as it is; only run the closing `git reset -q HEAD -- <path>` to resync the
+index (the same step every private-index commit needs regardless).
+
+This generalises past this one file: any time your own reconstruction is a
+byte-for-byte subset of the live working tree, a private-index commit from
+that reconstruction is safe no matter what else is uncommitted in the same
+file, because you never read the working tree to build the commit and you
+never write to it afterward. The diff is what turns "I hope this is fine"
+into a checked fact before the commit happens rather than a discovery after.
+
 ## Two inputs does not mean `framesync` — check the option surface
 
 Three agents in one day were told by a brief that their two-input filters
