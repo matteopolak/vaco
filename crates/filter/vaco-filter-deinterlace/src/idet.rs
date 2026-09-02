@@ -100,6 +100,33 @@ impl Opts {
         if let Some(text) = args {
             o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
         }
+        #[allow(
+            clippy::float_cmp,
+            reason = "exact comparison against this option's own literal parsed \
+                      default, not a numeric-error-margin question"
+        )]
+        if o.prog_thres != 1.5 {
+            return Err("idet: `prog_thres` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        #[allow(
+            clippy::float_cmp,
+            reason = "exact comparison against this option's own literal parsed \
+                      default, not a numeric-error-margin question"
+        )]
+        if o.rep_thres != 3.0 {
+            return Err("idet: `rep_thres` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        #[allow(
+            clippy::float_cmp,
+            reason = "exact comparison against this option's own literal parsed \
+                      default, not a numeric-error-margin question"
+        )]
+        if o.half_life != 0.0 {
+            return Err("idet: `half_life` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.analyze_interlaced_flag != 0 {
+            return Err("idet: `analyze_interlaced_flag` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }
@@ -276,5 +303,22 @@ mod tests {
         assert_eq!(class, Class::Progressive);
         assert_eq!(f.metadata_get("lavfi.idet.single.current_frame"), Some("progressive"));
         assert_eq!(f.metadata_get("lavfi.idet.repeated.current_frame"), Some("neither"));
+    }
+
+    /// `prog_thres`/`rep_thres`/`half_life`/`analyze_interlaced_flag` are
+    /// parsed but this crate's classifier never reads them (only
+    /// `intl_thres` feeds `Filter::new`) -- silently accepting a non-default
+    /// value would give the user output computed with a threshold they did
+    /// not ask for. Regression for `cargo xtask reachability-check`'s rule I.
+    #[test]
+    fn a_non_default_unimplemented_threshold_is_refused_not_silently_ignored() {
+        assert!(Opts::parse(Some("prog_thres=2.0")).is_err());
+        assert!(Opts::parse(Some("rep_thres=5.0")).is_err());
+        assert!(Opts::parse(Some("half_life=10.0")).is_err());
+        assert!(Opts::parse(Some("analyze_interlaced_flag=30")).is_err());
+        // The default value for each must still parse cleanly -- refusing
+        // on a default the caller never set would make the filter unusable.
+        assert!(Opts::parse(None).is_ok());
+        assert!(Opts::parse(Some("intl_thres=2.0")).is_ok());
     }
 }

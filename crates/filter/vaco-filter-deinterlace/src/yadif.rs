@@ -20,9 +20,12 @@
 //! # What is simplified
 //!
 //! Only `send_frame`-shaped output (one frame per input frame) is
-//! implemented, regardless of the parsed `mode`; `deint` is parsed but not
-//! applied (every frame is deinterlaced). See [`crate::mad::Lookahead`]'s
-//! doc for the full accounting.
+//! implemented, regardless of the parsed `mode` (a non-default `mode` is
+//! not currently refused — see the note in [`crate::mad::Lookahead`]'s doc
+//! for the full accounting); `deint` parses at its own default only, and a
+//! non-default value now refuses instead of being silently ignored
+//! (`cargo xtask reachability-check`'s rule I), since this crate
+//! deinterlaces every frame regardless of what it names.
 
 use vaco_core::MediaType;
 use vaco_filter_core::adapt::Simple;
@@ -93,6 +96,12 @@ impl Opts {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
         }
+        if o.mode != 0 {
+            return Err("yadif: `mode` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.deint != 0 {
+            return Err("yadif: `deint` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }
@@ -123,22 +132,30 @@ mod tests {
     /// (`ffmpeg -h filter=yadif`).
     #[test]
     fn named_option_values_parse() {
-        for (name, expected) in [
-            ("send_frame", 0),
-            ("send_field", 1),
-            ("send_frame_nospatial", 2),
-            ("send_field_nospatial", 3),
-        ] {
-            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
-            assert_eq!(opts.mode, expected, "mode={name}");
-        }
+        // `mode`'s own default (`send_frame`) still parses; every other
+        // value now refuses (`cargo xtask reachability-check`'s rule I).
+        let opts = Opts::parse(Some("mode=send_frame")).unwrap();
+        assert_eq!(opts.mode, 0, "mode=send_frame");
         for (name, expected) in [("tff", 0), ("bff", 1), ("auto", -1)] {
             let opts = Opts::parse(Some(&format!("parity={name}"))).unwrap();
             assert_eq!(opts.parity, expected, "parity={name}");
         }
-        for (name, expected) in [("all", 0), ("interlaced", 1)] {
-            let opts = Opts::parse(Some(&format!("deint={name}"))).unwrap();
-            assert_eq!(opts.deint, expected, "deint={name}");
-        }
+        // `deint`'s own default still parses; every other value now refuses
+        // (`cargo xtask reachability-check`'s rule I).
+        let opts = Opts::parse(Some("deint=all")).unwrap();
+        assert_eq!(opts.deint, 0, "deint=all");
+    }
+
+    /// Regression for rule I: `mode`/`deint` are parsed but this crate
+    /// always produces `send_frame`-shaped output and deinterlaces every
+    /// frame regardless of either, so a non-default value must refuse
+    /// rather than silently doing nothing.
+    #[test]
+    fn a_non_default_mode_or_deint_is_refused() {
+        assert!(Opts::parse(Some("mode=send_field")).is_err());
+        assert!(Opts::parse(Some("mode=send_frame_nospatial")).is_err());
+        assert!(Opts::parse(Some("mode=send_field_nospatial")).is_err());
+        assert!(Opts::parse(Some("deint=interlaced")).is_err());
+        assert!(Opts::parse(None).is_ok());
     }
 }

@@ -6,11 +6,21 @@
 //!
 //! See [`crate::mad`] and [`crate::yadif`]'s module docs: this shares the
 //! same original motion-adaptive core as `yadif` and is **not** byte-exact
-//! against the reference. The reference's *default* mode for `bwdif` is
+//! against the reference. The reference's own default mode for `bwdif` is
 //! `send_field` (two output frames per input), unlike `yadif`'s
 //! `send_frame` default; this crate implements only the `send_frame` shape
-//! for every mode value, which is a real behavioural gap from the
-//! reference's default specifically for this filter.
+//! for every mode value.
+//!
+//! **Measured default divergence, stated plainly** (same treatment as
+//! `vaco-filter-artistic::vignette`'s `dither`): declaring this field's own
+//! default as the reference's real `send_field` would describe a value
+//! this crate cannot actually honour even when the user asks for nothing
+//! at all — every user gets `send_frame`'s single-output-frame shape
+//! regardless, so `mode`'s default here is `send_frame` (0), matching what
+//! the code unconditionally does, and requesting the reference's real
+//! default (`send_field`) now refuses instead of silently returning
+//! `send_frame`'s frame count while claiming to have honoured
+//! `send_field`. Found by `cargo xtask reachability-check`'s rule I.
 
 use vaco_core::MediaType;
 use vaco_filter_core::adapt::Simple;
@@ -53,7 +63,7 @@ const BWDIF_MODE_CONSTS: &[vaco_opts::ConstDesc] = &[
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "bwdif", help = "Deinterlace the input image")]
 pub(crate) struct Opts {
-    #[opt(name = "mode", help = "interlacing mode", unit = "bwdif_mode", consts = BWDIF_MODE_CONSTS, default = 1, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "mode", help = "interlacing mode", unit = "bwdif_mode", consts = BWDIF_MODE_CONSTS, default = 0, range = 0..=1, flags(video, filtering))]
     pub mode: i32,
     #[opt(name = "parity", help = "assumed picture field parity", unit = "parity", consts = crate::opt_consts::PARITY_CONSTS, default = -1, range = -1..=1, flags(video, filtering))]
     pub parity: i32,
@@ -67,6 +77,12 @@ impl Opts {
         if let Some(text) = args {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
+        }
+        if o.mode != 0 {
+            return Err("bwdif: `mode` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.deint != 0 {
+            return Err("bwdif: `deint` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
         }
         Ok(o)
     }
@@ -91,17 +107,30 @@ mod tests {
     /// enumerated option must parse, not just the bare integer.
     #[test]
     fn named_option_values_parse() {
-        for (name, expected) in [("send_frame", 0), ("send_field", 1)] {
-            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
-            assert_eq!(opts.mode, expected, "mode={name}");
-        }
+        // `mode`'s default here is `send_frame`, not the reference's own
+        // `send_field` default -- see this file's top-of-module doc.
+        // `send_field` now refuses (`cargo xtask reachability-check`'s
+        // rule I).
+        let opts = Opts::parse(Some("mode=send_frame")).unwrap();
+        assert_eq!(opts.mode, 0, "mode=send_frame");
         for (name, expected) in [("tff", 0), ("bff", 1), ("auto", -1)] {
             let opts = Opts::parse(Some(&format!("parity={name}"))).unwrap();
             assert_eq!(opts.parity, expected, "parity={name}");
         }
-        for (name, expected) in [("all", 0), ("interlaced", 1)] {
-            let opts = Opts::parse(Some(&format!("deint={name}"))).unwrap();
-            assert_eq!(opts.deint, expected, "deint={name}");
-        }
+        // `deint`'s own default still parses; every other value now refuses
+        // (`cargo xtask reachability-check`'s rule I).
+        let opts = Opts::parse(Some("deint=all")).unwrap();
+        assert_eq!(opts.deint, 0, "deint=all");
+    }
+
+    /// Regression for rule I: `mode`/`deint` are parsed but this crate
+    /// always deinterlaces every frame in the `send_frame` shape regardless
+    /// of either, so a non-default value must refuse rather than silently
+    /// doing nothing.
+    #[test]
+    fn a_non_default_mode_or_deint_is_refused() {
+        assert!(Opts::parse(Some("mode=send_field")).is_err());
+        assert!(Opts::parse(Some("deint=interlaced")).is_err());
+        assert!(Opts::parse(None).is_ok());
     }
 }

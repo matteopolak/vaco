@@ -136,6 +136,21 @@ impl Opts {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
         }
+        if o.jl != 1 {
+            return Err("pullup: `jl` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.jr != 1 {
+            return Err("pullup: `jr` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.jt != 4 {
+            return Err("pullup: `jt` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.jb != 4 {
+            return Err("pullup: `jb` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.sb {
+            return Err("pullup: `sb` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }
@@ -288,4 +303,19 @@ mod tests {
             assert_eq!(opts.mp, expected, "mp={name}");
         }
     }
+
+    /// `jl`/`jr`/`jt`/`jb`/`sb` (junk-border and strict-break controls) are
+    /// parsed but this crate's original comb-score detector never reads
+    /// them, per this module's own doc. Regression for `cargo xtask
+    /// reachability-check`'s rule I.
+    #[test]
+    fn a_non_default_unimplemented_junk_border_is_refused() {
+        assert!(Opts::parse(Some("jl=8")).is_err());
+        assert!(Opts::parse(Some("jr=8")).is_err());
+        assert!(Opts::parse(Some("jt=8")).is_err());
+        assert!(Opts::parse(Some("jb=8")).is_err());
+        assert!(Opts::parse(Some("sb=1")).is_err());
+        assert!(Opts::parse(None).is_ok());
+    }
+
 }

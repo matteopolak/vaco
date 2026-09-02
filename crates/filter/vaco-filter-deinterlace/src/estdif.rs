@@ -8,9 +8,16 @@
 //!
 //! See [`crate::mad`]'s module doc: shares the same original
 //! motion-adaptive core rather than the reference's edge-slope-tracing
-//! search (`rslope`/`redge`/`ecost`/`mcost`/`dcost`/`interp` are parsed —
-//! for option-table completeness and so a filtergraph string using them
-//! does not fail to parse — but do not affect the interpolation).
+//! search, so `rslope`/`redge`/`ecost`/`mcost`/`dcost`/`interp`/`deint` do
+//! not affect the interpolation — each parses at its own reference default
+//! and a non-default value now refuses instead of being silently ignored
+//! (`cargo xtask reachability-check`'s rule I).
+//!
+//! `mode` is the one field of the group with a genuinely honest side, the
+//! same shape [`crate::bwdif`]'s module doc explains for its own `mode`:
+//! this crate always produces one output frame per input (`frame`, not the
+//! reference's own `field` default), so `mode` parses at `frame` (0) here,
+//! not `field`, and `field` now refuses.
 
 use vaco_core::MediaType;
 use vaco_filter_core::adapt::Simple;
@@ -76,7 +83,7 @@ const ESTDIF_INTERP_CONSTS: &[vaco_opts::ConstDesc] = &[
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "estdif", help = "Apply Edge Slope Tracing deinterlace")]
 pub(crate) struct Opts {
-    #[opt(name = "mode", help = "interlacing mode", unit = "estdif_mode", consts = ESTDIF_MODE_CONSTS, default = 1, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "mode", help = "interlacing mode", unit = "estdif_mode", consts = ESTDIF_MODE_CONSTS, default = 0, range = 0..=1, flags(video, filtering))]
     pub mode: i32,
     #[opt(name = "parity", help = "assumed picture field parity", unit = "parity", consts = crate::opt_consts::PARITY_CONSTS, default = -1, range = -1..=1, flags(video, filtering))]
     pub parity: i32,
@@ -103,6 +110,30 @@ impl Opts {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
         }
+        if o.rslope != 1 {
+            return Err("estdif: `rslope` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.redge != 2 {
+            return Err("estdif: `redge` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.ecost != 2 {
+            return Err("estdif: `ecost` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.mcost != 1 {
+            return Err("estdif: `mcost` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.dcost != 1 {
+            return Err("estdif: `dcost` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.interp != 1 {
+            return Err("estdif: `interp` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.mode != 0 {
+            return Err("estdif: `mode` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.deint != 0 {
+            return Err("estdif: `deint` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }
@@ -125,21 +156,38 @@ mod tests {
     /// (`ffmpeg -h filter=estdif`).
     #[test]
     fn named_option_values_parse() {
-        for (name, expected) in [("frame", 0), ("field", 1)] {
-            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
-            assert_eq!(opts.mode, expected, "mode={name}");
-        }
+        // `mode` parses at `frame`, not the reference's own `field` default
+        // -- see this file's top-of-module doc -- and `field` now refuses.
+        let opts = Opts::parse(Some("mode=frame")).unwrap();
+        assert_eq!(opts.mode, 0, "mode=frame");
         for (name, expected) in [("tff", 0), ("bff", 1), ("auto", -1)] {
             let opts = Opts::parse(Some(&format!("parity={name}"))).unwrap();
             assert_eq!(opts.parity, expected, "parity={name}");
         }
-        for (name, expected) in [("all", 0), ("interlaced", 1)] {
-            let opts = Opts::parse(Some(&format!("deint={name}"))).unwrap();
-            assert_eq!(opts.deint, expected, "deint={name}");
-        }
-        for (name, expected) in [("2p", 0), ("4p", 1), ("6p", 2)] {
-            let opts = Opts::parse(Some(&format!("interp={name}"))).unwrap();
-            assert_eq!(opts.interp, expected, "interp={name}");
-        }
+        // `deint`'s and `interp`'s own default values still parse -- see
+        // `a_non_default_unimplemented_cost_parameter_is_refused` for why
+        // every other named value now refuses instead.
+        let opts = Opts::parse(Some("deint=all")).unwrap();
+        assert_eq!(opts.deint, 0, "deint=all");
+        let opts = Opts::parse(Some("interp=4p")).unwrap();
+        assert_eq!(opts.interp, 1, "interp=4p");
+    }
+
+    /// `rslope`/`redge`/`ecost`/`mcost`/`dcost`/`interp`/`deint`/`mode` are
+    /// parsed but this crate's EEDI2-derived interpolation never reads them
+    /// -- refuse a non-default value rather than silently compute with the
+    /// defaults. Regression for `cargo xtask reachability-check`'s rule I.
+    #[test]
+    fn a_non_default_unimplemented_cost_parameter_is_refused() {
+        assert!(Opts::parse(Some("rslope=2")).is_err());
+        assert!(Opts::parse(Some("redge=6")).is_err());
+        assert!(Opts::parse(Some("ecost=3")).is_err());
+        assert!(Opts::parse(Some("mcost=2")).is_err());
+        assert!(Opts::parse(Some("dcost=2")).is_err());
+        assert!(Opts::parse(Some("interp=2p")).is_err());
+        assert!(Opts::parse(Some("interp=6p")).is_err());
+        assert!(Opts::parse(Some("deint=interlaced")).is_err());
+        assert!(Opts::parse(Some("mode=field")).is_err());
+        assert!(Opts::parse(None).is_ok());
     }
 }

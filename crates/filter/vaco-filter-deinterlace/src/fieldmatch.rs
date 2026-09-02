@@ -27,9 +27,11 @@
 //! frame's top field rewoven with the *previous* frame's bottom field, and
 //! the frame's bottom field rewoven with the previous frame's top field —
 //! score each with [`vaco_filter_vdsp::comb_score`], and output whichever
-//! scores lowest. `mode`/`combmatch`/`cthresh`/`chroma`/`blockx`/`blocky`/
-//! `combpel`/`scthresh`/`combdbg`/`y0`/`y1`/`mchroma` are parsed for
-//! option-table completeness and do not change behaviour.
+//! scores lowest. `mode`/`field`/`combmatch`/`cthresh`/`chroma`/`blockx`/
+//! `blocky`/`combpel`/`scthresh`/`combdbg`/`y0`/`y1`/`mchroma` are parsed
+//! for option-table completeness and do not change behaviour; each parses
+//! at its own default and a non-default value now refuses instead of
+//! being silently ignored (`cargo xtask reachability-check`'s rule I).
 //!
 //! # `ppsrc=true`: not implemented
 //!
@@ -196,6 +198,29 @@ impl Opts {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
         }
+        if !o.mchroma {
+            return Err("fieldmatch: `mchroma` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        #[allow(
+            clippy::float_cmp,
+            reason = "exact comparison against this option's own literal parsed \
+                      default, not a numeric-error-margin question"
+        )]
+        if o.scthresh != 12.0 {
+            return Err("fieldmatch: `scthresh` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.cthresh != 9 {
+            return Err("fieldmatch: `cthresh` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.chroma {
+            return Err("fieldmatch: `chroma` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.mode != 1 {
+            return Err("fieldmatch: `mode` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.field != -1 {
+            return Err("fieldmatch: `field` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }
@@ -308,20 +333,30 @@ mod tests {
             let opts = Opts::parse(Some(&format!("order={name}"))).unwrap();
             assert_eq!(opts.order, expected, "order={name}");
         }
-        for (name, expected) in [
-            ("pc", 0),
-            ("pc_n", 1),
-            ("pc_u", 2),
-            ("pc_n_ub", 3),
-            ("pcn", 4),
-            ("pcn_ub", 5),
-        ] {
-            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
-            assert_eq!(opts.mode, expected, "mode={name}");
+        // `mode`'s and `field`'s own defaults still parse; every other
+        // named value now refuses (`cargo xtask reachability-check`'s
+        // rule I).
+        let opts = Opts::parse(Some("mode=pc_n")).unwrap();
+        assert_eq!(opts.mode, 1, "mode=pc_n");
+        let opts = Opts::parse(Some("field=auto")).unwrap();
+        assert_eq!(opts.field, -1, "field=auto");
+    }
+
+    /// `mchroma`/`scthresh`/`cthresh`/`chroma`/`mode`/`field` are parsed but
+    /// this crate's matcher never reads them. Regression for `cargo xtask
+    /// reachability-check`'s rule I.
+    #[test]
+    fn a_non_default_unimplemented_matching_parameter_is_refused() {
+        assert!(Opts::parse(Some("mchroma=0")).is_err());
+        assert!(Opts::parse(Some("scthresh=15.0")).is_err());
+        assert!(Opts::parse(Some("cthresh=10")).is_err());
+        assert!(Opts::parse(Some("chroma=1")).is_err());
+        for name in ["pc", "pc_u", "pc_n_ub", "pcn", "pcn_ub"] {
+            assert!(Opts::parse(Some(&format!("mode={name}"))).is_err(), "mode={name}");
         }
-        for (name, expected) in [("auto", -1), ("bottom", 0), ("top", 1)] {
-            let opts = Opts::parse(Some(&format!("field={name}"))).unwrap();
-            assert_eq!(opts.field, expected, "field={name}");
+        for name in ["bottom", "top"] {
+            assert!(Opts::parse(Some(&format!("field={name}"))).is_err(), "field={name}");
         }
+        assert!(Opts::parse(None).is_ok());
     }
 }

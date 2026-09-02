@@ -11,11 +11,14 @@
 //! adjacent frames. This crate reuses [`crate::mad`]'s shared
 //! motion-adaptive core (the same one `yadif`/`bwdif`/`w3fdif`/`estdif`
 //! use) rather than writing a fifth, separate kernel, which means it *does*
-//! use temporal information the reference does not. `thresh`/`map`/`order`/
-//! `sharp`/`twoway` are parsed for option-table completeness and do not
-//! change behaviour. This is the largest documented simplification in the
-//! crate for a single filter — recorded here and in the crate docs rather
-//! than left implicit.
+//! use temporal information the reference does not. `thresh`/`map`/`sharp`/
+//! `twoway` are parsed for option-table completeness and do not change
+//! behaviour — a non-default value now refuses rather than being silently
+//! ignored (`cargo xtask reachability-check` rule I). `order` is the
+//! exception: it *is* read, to pick [`crate::mad::Lookahead`]'s field
+//! parity — a corrected claim, since an earlier pass here lumped it in
+//! with the other four as inert, which stopped being true once `order`
+//! started feeding `parity` below.
 
 use vaco_core::MediaType;
 use vaco_filter_core::adapt::Simple;
@@ -61,6 +64,18 @@ impl Opts {
         if let Some(text) = args {
             o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
         }
+        if o.map {
+            return Err("kerndeint: `map` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.thresh != 10 {
+            return Err("kerndeint: `thresh` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.sharp {
+            return Err("kerndeint: `sharp` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.twoway {
+            return Err("kerndeint: `twoway` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }
@@ -73,4 +88,24 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
         formats: NodeFormats::passthrough(1, 1, MediaType::Video, req.instance),
         filter: Box::new(Simple::new(Lookahead::new(parity))),
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "test code")]
+mod tests {
+    use super::*;
+
+    /// `thresh`/`map`/`sharp`/`twoway` are parsed but this crate's
+    /// motion-adaptive core never reads them (`order` is the one exception
+    /// -- see this module's own doc). Regression for `cargo xtask
+    /// reachability-check`'s rule I.
+    #[test]
+    fn a_non_default_unimplemented_option_is_refused() {
+        assert!(Opts::parse(Some("thresh=20")).is_err());
+        assert!(Opts::parse(Some("map=1")).is_err());
+        assert!(Opts::parse(Some("sharp=1")).is_err());
+        assert!(Opts::parse(Some("twoway=1")).is_err());
+        assert!(Opts::parse(None).is_ok());
+        assert!(Opts::parse(Some("order=1")).is_ok(), "order is genuinely read");
+    }
 }

@@ -8,7 +8,16 @@
 //! motion-adaptive core and is **not** byte-exact against the reference's
 //! three-field weighted-FIR kernel (`simple`/`complex` select between two
 //! different published tap sets in the reference; neither is reproduced
-//! here). `mode` and `filter` are parsed but do not change behaviour.
+//! here, so `filter` parses at the reference's own default (`complex`) and
+//! any other value now refuses instead of silently picking a kernel that
+//! is not actually there).
+//!
+//! `mode`'s own reference default (`field`, two output frames per input)
+//! has the identical shape of gap [`crate::bwdif`]'s module doc explains
+//! for the same option name: this crate implements only the `frame` shape
+//! (one output frame per input), always, so `mode` parses at `frame` (0),
+//! not the reference's `field`, and `field` now refuses. Both found by
+//! `cargo xtask reachability-check`'s rule I.
 
 use vaco_core::MediaType;
 use vaco_filter_core::adapt::Simple;
@@ -69,7 +78,7 @@ const W3FDIF_MODE_CONSTS: &[vaco_opts::ConstDesc] = &[
 pub(crate) struct Opts {
     #[opt(name = "filter", help = "filter to use", unit = "w3fdif_filter", consts = W3FDIF_FILTER_CONSTS, default = 1, range = 0..=1, flags(video, filtering))]
     pub filter: i32,
-    #[opt(name = "mode", help = "interlacing mode", unit = "w3fdif_mode", consts = W3FDIF_MODE_CONSTS, default = 1, range = 0..=1, flags(video, filtering))]
+    #[opt(name = "mode", help = "interlacing mode", unit = "w3fdif_mode", consts = W3FDIF_MODE_CONSTS, default = 0, range = 0..=1, flags(video, filtering))]
     pub mode: i32,
     #[opt(name = "parity", help = "assumed picture field parity", unit = "parity", consts = crate::opt_consts::PARITY_CONSTS, default = -1, range = -1..=1, flags(video, filtering))]
     pub parity: i32,
@@ -83,6 +92,15 @@ impl Opts {
         if let Some(text) = args {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
+        }
+        if o.filter != 1 {
+            return Err("w3fdif: `filter` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.mode != 0 {
+            return Err("w3fdif: `mode` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.deint != 0 {
+            return Err("w3fdif: `deint` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
         }
         Ok(o)
     }
@@ -106,21 +124,34 @@ mod tests {
     /// (`ffmpeg -h filter=w3fdif`).
     #[test]
     fn named_option_values_parse() {
-        for (name, expected) in [("simple", 0), ("complex", 1)] {
-            let opts = Opts::parse(Some(&format!("filter={name}"))).unwrap();
-            assert_eq!(opts.filter, expected, "filter={name}");
-        }
-        for (name, expected) in [("frame", 0), ("field", 1)] {
-            let opts = Opts::parse(Some(&format!("mode={name}"))).unwrap();
-            assert_eq!(opts.mode, expected, "mode={name}");
-        }
+        // `filter`'s own default (the reference's `complex`) still parses;
+        // any other value now refuses. `mode` parses at `frame`, not the
+        // reference's own `field` default -- see this file's top-of-module
+        // doc -- and `field` now refuses (`cargo xtask
+        // reachability-check`'s rule I).
+        let opts = Opts::parse(Some("filter=complex")).unwrap();
+        assert_eq!(opts.filter, 1, "filter=complex");
+        let opts = Opts::parse(Some("mode=frame")).unwrap();
+        assert_eq!(opts.mode, 0, "mode=frame");
         for (name, expected) in [("tff", 0), ("bff", 1), ("auto", -1)] {
             let opts = Opts::parse(Some(&format!("parity={name}"))).unwrap();
             assert_eq!(opts.parity, expected, "parity={name}");
         }
-        for (name, expected) in [("all", 0), ("interlaced", 1)] {
-            let opts = Opts::parse(Some(&format!("deint={name}"))).unwrap();
-            assert_eq!(opts.deint, expected, "deint={name}");
-        }
+        // `deint`'s own default still parses; every other value now refuses
+        // (`cargo xtask reachability-check`'s rule I).
+        let opts = Opts::parse(Some("deint=all")).unwrap();
+        assert_eq!(opts.deint, 0, "deint=all");
+    }
+
+    /// Regression for rule I: `filter`/`mode`/`deint` are parsed but this
+    /// crate deinterlaces every frame with one fixed kernel regardless of
+    /// any of them, so a non-default value must refuse rather than
+    /// silently doing nothing.
+    #[test]
+    fn a_non_default_filter_mode_or_deint_is_refused() {
+        assert!(Opts::parse(Some("filter=simple")).is_err());
+        assert!(Opts::parse(Some("mode=field")).is_err());
+        assert!(Opts::parse(Some("deint=interlaced")).is_err());
+        assert!(Opts::parse(None).is_ok());
     }
 }
