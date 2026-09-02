@@ -598,7 +598,7 @@ fn emit_source(components: &[Component]) -> String {
             .filter(|c| kind_of(&c.kind) == Some(kind))
             .collect();
         out.push_str(&format!(
-            "\n/// Descriptors of every enabled {} implementation.\n\
+            "\n/// Descriptors of every enabled `{}` implementation.\n\
              pub static {}: &[&{}] = &[",
             KINDS
                 .iter()
