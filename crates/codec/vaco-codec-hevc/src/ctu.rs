@@ -32,21 +32,25 @@ use crate::sao;
 use crate::transform;
 use crate::weight::RefWeights;
 
-/// Everything one slice segment's CTU walk needs, held together so the
-/// recursive functions below stay free functions taking `&mut Ctx` rather
-/// than a method on a growing `impl` block.
+/// Stage 2b step 3b (`docs/codec/hevc-wavefront-threading.md`): everything
+/// in `Ctx` that is constant for the whole slice and safe to share
+/// read-only across every row worker once real dispatch exists — every
+/// SPS/PPS/slice-header-derived scalar and flag, `inter` (reference lists
+/// and merge/AMVP/TMVP slice-level parameters, never written after
+/// construction), and `pic` (needed by the still-serial, whole-picture
+/// deblock/SAO pass that runs once every row joins, not by the per-row
+/// reconstruction task itself — see that document's own correction on
+/// this point). Grouping these here, still passed around inside one `Ctx`
+/// for now (step 4's real dispatch is what actually pulls this out behind
+/// an `Arc`), is what makes that eventual pull mechanical: every read
+/// already goes through `self.shared`/`walk.shared` explicitly rather than
+/// a flat field on `Ctx` itself.
 #[allow(
     clippy::struct_excessive_bools,
     reason = "each bool is an independent SPS/PPS/slice-header flag this walk needs, not a state machine in disguise"
 )]
-pub(crate) struct Ctx<'p> {
+pub(crate) struct CtxShared<'p> {
     pub pic: &'p mut Picture,
-    /// The CTU walk's own in-progress reconstruction buffer — see
-    /// `crate::framebuf`'s "Stage 1" section doc for why this is a
-    /// separate type from `pic` (which stays the finished-picture shape
-    /// deblocking/SAO/emission already know).
-    pub recon: &'p mut ReconPicture,
-    pub cu_grid: CuGrid,
     pub log2_ctb_size: u32,
     pub log2_min_cb_size: u32,
     pub log2_min_tb_size: u32,
@@ -74,6 +78,61 @@ pub(crate) struct Ctx<'p> {
     cu_qp_delta_enabled: bool,
     /// `Log2MinCuQpDeltaSize = CtbLog2SizeY - diff_cu_qp_delta_depth`.
     log2_min_cu_qp_delta_size: u32,
+    /// `slice_deblocking_filter_disabled_flag`, after the PPS/slice override
+    /// rules `vaco_parse_hevc::SliceHeader` already resolves.
+    pub deblocking_disabled: bool,
+    /// `slice_beta_offset_div2`.
+    pub beta_offset_div2: i32,
+    /// `slice_tc_offset_div2`.
+    pub tc_offset_div2: i32,
+    /// `slice_sao_luma_flag`.
+    pub sao_luma: bool,
+    /// `slice_sao_chroma_flag`.
+    pub sao_chroma: bool,
+    /// CTU columns per row, for [`sao::parse_ctu_sao`]'s left/above merge
+    /// addressing.
+    pub ctbs_x: u32,
+    /// Whether this slice has any inter path at all (P or B) — every
+    /// inter-only field below is `Some` exactly when this is `true`. The
+    /// name predates B-slice support; [`InterSliceParams::is_b`] is what
+    /// actually distinguishes a P slice from a B slice once this is `true`.
+    pub is_p_slice: bool,
+    inter: Option<InterSliceParams<'p>>,
+    /// `max_transform_hierarchy_depth_inter` — kept alongside its intra
+    /// counterpart above rather than folded into [`InterSliceParams`],
+    /// since [`quadtree_tu_log2_min_in_cu`]'s caller needs it regardless of
+    /// which `CuPredMode` a given CU turns out to have (an inter slice's
+    /// intra-refresh CU still calls `decode_intra_cu`, which reads the
+    /// *intra* field — this one is read only by the inter path).
+    pub max_transform_hierarchy_depth_inter: u32,
+}
+
+/// Everything one slice segment's CTU walk needs, held together so the
+/// recursive functions below stay free functions taking `&mut Ctx` rather
+/// than a method on a growing `impl` block.
+///
+/// `shared` ([`CtxShared`]) holds every field constant for the whole slice;
+/// what remains here directly is either genuinely per-row-exclusive
+/// (`qp_y_prev`/`qg_qp_pred`/`is_cu_qp_delta_coded`/`cu_qp_delta_val`, reset
+/// at row or quantisation-group granularity, never read across a row
+/// boundary) or one of the four structures Stage 2b step 3a
+/// (`recon`/`cu_grid`/`edges`/`sao_params`) already split internally into
+/// its own `current`/shared-board halves — see `framebuf.rs`'s own "Stage
+/// 1" section doc and each type's own doc for that split. Pulling *those*
+/// two halves apart at the `Ctx` level too (so `Ctx` itself cleanly
+/// separates into an `Arc`-able shared struct and a per-row-exclusive one)
+/// is step 4's own work, once real dispatch needs it — not attempted here,
+/// per this document's own repeated preference for deferring a design
+/// decision until the thing that needs it exists, rather than guessing its
+/// shape ahead of time.
+pub(crate) struct Ctx<'p> {
+    pub shared: CtxShared<'p>,
+    /// The CTU walk's own in-progress reconstruction buffer — see
+    /// `crate::framebuf`'s "Stage 1" section doc for why this is a
+    /// separate type from `pic` (which stays the finished-picture shape
+    /// deblocking/SAO/emission already know).
+    pub recon: &'p mut ReconPicture,
+    pub cu_grid: CuGrid,
     /// §8.6.1's `qPY_PREV`: the last coding unit's finalised `QpY` in
     /// decoding order, or `SliceQpY` at the very start of the slice and (via
     /// `decoder::decode_wpp_rows`'s own reset) at the start of each CTB row
@@ -96,20 +155,6 @@ pub(crate) struct Ctx<'p> {
     /// [`transform_unit`] reconstructs each luma leaf — the input
     /// [`crate::deblock`]'s post-picture filtering pass reads.
     pub edges: EdgeMarks,
-    /// `slice_deblocking_filter_disabled_flag`, after the PPS/slice override
-    /// rules `vaco_parse_hevc::SliceHeader` already resolves.
-    pub deblocking_disabled: bool,
-    /// `slice_beta_offset_div2`.
-    pub beta_offset_div2: i32,
-    /// `slice_tc_offset_div2`.
-    pub tc_offset_div2: i32,
-    /// `slice_sao_luma_flag`.
-    pub sao_luma: bool,
-    /// `slice_sao_chroma_flag`.
-    pub sao_chroma: bool,
-    /// CTU columns per row, for [`sao::parse_ctu_sao`]'s left/above merge
-    /// addressing.
-    pub ctbs_x: u32,
     /// Every CTU's resolved SAO parameters so far, indexed by raster
     /// address — filled in by [`decode_ctu`] as each CTU's `sao()` is
     /// parsed, read back by a merge at a later address and by
@@ -117,19 +162,6 @@ pub(crate) struct Ctx<'p> {
     /// Row-banded (PERF-PROGRAMME.md item B4, Stage 1 step 3's third
     /// piece) — see [`crate::sao::SaoParamsGrid`]'s own doc.
     pub sao_params: crate::sao::SaoParamsGrid,
-    /// Whether this slice has any inter path at all (P or B) — every
-    /// inter-only field below is `Some` exactly when this is `true`. The
-    /// name predates B-slice support; [`InterSliceParams::is_b`] is what
-    /// actually distinguishes a P slice from a B slice once this is `true`.
-    pub is_p_slice: bool,
-    inter: Option<InterSliceParams<'p>>,
-    /// `max_transform_hierarchy_depth_inter` — kept alongside its intra
-    /// counterpart above rather than folded into [`InterSliceParams`],
-    /// since [`quadtree_tu_log2_min_in_cu`]'s caller needs it regardless of
-    /// which `CuPredMode` a given CU turns out to have (an inter slice's
-    /// intra-refresh CU still calls `decode_intra_cu`, which reads the
-    /// *intra* field — this one is read only by the inter path).
-    pub max_transform_hierarchy_depth_inter: u32,
 }
 
 /// One entry of `RefPicList0`, as seen by the CTU walk: its own POC (for
@@ -290,42 +322,44 @@ impl<'p> Ctx<'p> {
         let ctbs_y = u32::try_from(height).unwrap_or(0).div_ceil(ctb_size).max(1);
         let sao_params = crate::sao::SaoParamsGrid::new(budget, ctbs_x, ctbs_y)?;
         Ok(Self {
-            pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
-            pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
-            log2_ctb_size,
-            log2_min_cb_size: u32::from(sps.log2_min_cb_size),
-            log2_min_tb_size: u32::from(sps.log2_min_tb_size),
-            log2_max_tb_size: u32::from(sps.log2_min_tb_size) + u32::from(sps.log2_diff_max_min_tb_size),
-            max_transform_hierarchy_depth_intra: sps.max_transform_hierarchy_depth_intra,
-            slice_qp,
-            sign_data_hiding: pps.sign_data_hiding_enabled,
-            strong_intra_smoothing: sps.strong_intra_smoothing_enabled,
-            transform_skip_enabled: pps.transform_skip_enabled,
-            bit_depth_luma: u32::from(sps.bit_depth_luma),
-            bit_depth_chroma: u32::from(sps.bit_depth_chroma),
-            cb_qp_offset: pps.cb_qp_offset,
-            cr_qp_offset: pps.cr_qp_offset,
-            constrained_intra_pred: pps.constrained_intra_pred,
-            cu_qp_delta_enabled: pps.cu_qp_delta_enabled,
-            log2_min_cu_qp_delta_size: log2_ctb_size.saturating_sub(pps.diff_cu_qp_delta_depth),
+            shared: CtxShared {
+                pic,
+                pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
+                pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
+                log2_ctb_size,
+                log2_min_cb_size: u32::from(sps.log2_min_cb_size),
+                log2_min_tb_size: u32::from(sps.log2_min_tb_size),
+                log2_max_tb_size: u32::from(sps.log2_min_tb_size) + u32::from(sps.log2_diff_max_min_tb_size),
+                max_transform_hierarchy_depth_intra: sps.max_transform_hierarchy_depth_intra,
+                slice_qp,
+                sign_data_hiding: pps.sign_data_hiding_enabled,
+                strong_intra_smoothing: sps.strong_intra_smoothing_enabled,
+                transform_skip_enabled: pps.transform_skip_enabled,
+                bit_depth_luma: u32::from(sps.bit_depth_luma),
+                bit_depth_chroma: u32::from(sps.bit_depth_chroma),
+                cb_qp_offset: pps.cb_qp_offset,
+                cr_qp_offset: pps.cr_qp_offset,
+                constrained_intra_pred: pps.constrained_intra_pred,
+                cu_qp_delta_enabled: pps.cu_qp_delta_enabled,
+                log2_min_cu_qp_delta_size: log2_ctb_size.saturating_sub(pps.diff_cu_qp_delta_depth),
+                deblocking_disabled,
+                beta_offset_div2,
+                tc_offset_div2,
+                sao_luma,
+                sao_chroma,
+                ctbs_x,
+                is_p_slice,
+                inter,
+                max_transform_hierarchy_depth_inter: sps.max_transform_hierarchy_depth_inter,
+            },
             qp_y_prev: slice_qp,
             qg_qp_pred: slice_qp,
             is_cu_qp_delta_coded: false,
             cu_qp_delta_val: 0,
             edges: EdgeMarks::new(width, height, usize::try_from(ctb_size).unwrap_or(1).max(1)),
-            deblocking_disabled,
-            beta_offset_div2,
-            tc_offset_div2,
-            sao_luma,
-            sao_chroma,
-            ctbs_x,
             sao_params,
-            pic,
             recon,
             cu_grid,
-            is_p_slice,
-            inter,
-            max_transform_hierarchy_depth_inter: sps.max_transform_hierarchy_depth_inter,
         })
     }
 
@@ -343,45 +377,47 @@ impl<'p> Ctx<'p> {
     #[cfg(test)]
     pub(crate) fn retarget_pic_for_test<'q>(&self, pic: &'q mut Picture, recon: &'q mut ReconPicture) -> Ctx<'q> {
         Ctx {
-            pic,
+            shared: CtxShared {
+                pic,
+                log2_ctb_size: self.shared.log2_ctb_size,
+                log2_min_cb_size: self.shared.log2_min_cb_size,
+                log2_min_tb_size: self.shared.log2_min_tb_size,
+                log2_max_tb_size: self.shared.log2_max_tb_size,
+                max_transform_hierarchy_depth_intra: self.shared.max_transform_hierarchy_depth_intra,
+                pic_width: self.shared.pic_width,
+                pic_height: self.shared.pic_height,
+                slice_qp: self.shared.slice_qp,
+                sign_data_hiding: self.shared.sign_data_hiding,
+                strong_intra_smoothing: self.shared.strong_intra_smoothing,
+                transform_skip_enabled: self.shared.transform_skip_enabled,
+                bit_depth_luma: self.shared.bit_depth_luma,
+                bit_depth_chroma: self.shared.bit_depth_chroma,
+                cb_qp_offset: self.shared.cb_qp_offset,
+                cr_qp_offset: self.shared.cr_qp_offset,
+                constrained_intra_pred: self.shared.constrained_intra_pred,
+                cu_qp_delta_enabled: self.shared.cu_qp_delta_enabled,
+                log2_min_cu_qp_delta_size: self.shared.log2_min_cu_qp_delta_size,
+                deblocking_disabled: self.shared.deblocking_disabled,
+                beta_offset_div2: self.shared.beta_offset_div2,
+                tc_offset_div2: self.shared.tc_offset_div2,
+                sao_luma: self.shared.sao_luma,
+                sao_chroma: self.shared.sao_chroma,
+                ctbs_x: self.shared.ctbs_x,
+                is_p_slice: self.shared.is_p_slice,
+                inter: None,
+                max_transform_hierarchy_depth_inter: self.shared.max_transform_hierarchy_depth_inter,
+            },
             // `deblock::filter_picture`, the only thing this retargeted
             // copy ever runs, never reads `Ctx::recon` -- the caller passes
             // a throwaway one purely to satisfy the field.
             recon,
             cu_grid: self.cu_grid.clone(),
-            log2_ctb_size: self.log2_ctb_size,
-            log2_min_cb_size: self.log2_min_cb_size,
-            log2_min_tb_size: self.log2_min_tb_size,
-            log2_max_tb_size: self.log2_max_tb_size,
-            max_transform_hierarchy_depth_intra: self.max_transform_hierarchy_depth_intra,
-            pic_width: self.pic_width,
-            pic_height: self.pic_height,
-            slice_qp: self.slice_qp,
-            sign_data_hiding: self.sign_data_hiding,
-            strong_intra_smoothing: self.strong_intra_smoothing,
-            transform_skip_enabled: self.transform_skip_enabled,
-            bit_depth_luma: self.bit_depth_luma,
-            bit_depth_chroma: self.bit_depth_chroma,
-            cb_qp_offset: self.cb_qp_offset,
-            cr_qp_offset: self.cr_qp_offset,
-            constrained_intra_pred: self.constrained_intra_pred,
-            cu_qp_delta_enabled: self.cu_qp_delta_enabled,
-            log2_min_cu_qp_delta_size: self.log2_min_cu_qp_delta_size,
             qp_y_prev: self.qp_y_prev,
             qg_qp_pred: self.qg_qp_pred,
             is_cu_qp_delta_coded: self.is_cu_qp_delta_coded,
             cu_qp_delta_val: self.cu_qp_delta_val,
             edges: self.edges.clone(),
-            deblocking_disabled: self.deblocking_disabled,
-            beta_offset_div2: self.beta_offset_div2,
-            tc_offset_div2: self.tc_offset_div2,
-            sao_luma: self.sao_luma,
-            sao_chroma: self.sao_chroma,
-            ctbs_x: self.ctbs_x,
             sao_params: self.sao_params.clone(),
-            is_p_slice: self.is_p_slice,
-            inter: None,
-            max_transform_hierarchy_depth_inter: self.max_transform_hierarchy_depth_inter,
         }
     }
 
@@ -392,7 +428,7 @@ impl<'p> Ctx<'p> {
     /// (`AGENT-CONSTRAINTS.md`'s code rules), not a case anyone expects to
     /// hit.
     fn inter(&self) -> Result<&InterSliceParams<'p>> {
-        self.inter.as_ref().ok_or(Error::InvalidData("vaco-codec-hevc: inter CU decode reached with no P-slice context"))
+        self.shared.inter.as_ref().ok_or(Error::InvalidData("vaco-codec-hevc: inter CU decode reached with no P-slice context"))
     }
 
     /// The total bytes [`Budget::alloc`] charged for this `Ctx`'s own two
@@ -427,7 +463,7 @@ impl<'p> Ctx<'p> {
 /// decoded. This subsumes the picture-edge case for free: a QG at `x == 0`
 /// or `y == 0` is trivially CTB-aligned too.
 fn qp_y_pred(s: &Ctx<'_>, xqg: i32, yqg: i32) -> i32 {
-    let ctb = 1i32 << s.log2_ctb_size;
+    let ctb = 1i32 << s.shared.log2_ctb_size;
     let qp_a = if xqg % ctb == 0 {
         s.qp_y_prev
     } else {
@@ -498,7 +534,7 @@ fn read_unary_max(cabac: &mut CabacDecoder<'_>, ctx0: &mut ContextModel, ctx1: &
 /// already implements the latter bit-for-bit (its own doc derives the same
 /// "run of 1s, terminating 0, then that many suffix bits" shape).
 fn maybe_parse_cu_qp_delta(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, has_residual: bool) -> Result<()> {
-    if !s.cu_qp_delta_enabled || s.is_cu_qp_delta_coded || !has_residual {
+    if !s.shared.cu_qp_delta_enabled || s.is_cu_qp_delta_coded || !has_residual {
         return Ok(());
     }
     s.is_cu_qp_delta_coded = true;
@@ -524,11 +560,11 @@ fn maybe_parse_cu_qp_delta(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, 
 /// `coding_tree_unit()`'s own syntax table puts it, when either
 /// `slice_sao_luma_flag` or `slice_sao_chroma_flag` is set.
 pub(crate) fn decode_ctu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, addr: u32) -> Result<()> {
-    if s.sao_luma || s.sao_chroma {
-        let params = sao::parse_ctu_sao(cabac, ctx, addr, s.ctbs_x, s.sao_luma, s.sao_chroma, &s.sao_params)?;
+    if s.shared.sao_luma || s.shared.sao_chroma {
+        let params = sao::parse_ctu_sao(cabac, ctx, addr, s.shared.ctbs_x, s.shared.sao_luma, s.shared.sao_chroma, &s.sao_params)?;
         s.sao_params.set(addr, &params);
     }
-    coding_quadtree(cabac, ctx, s, x0, y0, s.log2_ctb_size, 0)
+    coding_quadtree(cabac, ctx, s, x0, y0, s.shared.log2_ctb_size, 0)
 }
 
 fn coding_quadtree(
@@ -541,8 +577,8 @@ fn coding_quadtree(
     depth: u32,
 ) -> Result<()> {
     let size = 1i32 << log2_size;
-    let in_bounds = x0 + size <= s.pic_width && y0 + size <= s.pic_height;
-    let at_min = log2_size == s.log2_min_cb_size;
+    let in_bounds = x0 + size <= s.shared.pic_width && y0 + size <= s.shared.pic_height;
+    let at_min = log2_size == s.shared.log2_min_cb_size;
 
     let split = if !in_bounds {
         true
@@ -561,7 +597,7 @@ fn coding_quadtree(
     // `split` — since `Log2MinCuQpDeltaSize <= CtbLog2SizeY` always, this
     // fires at least once per CTU and, for a CU larger than the nominal QG
     // size, is the only reset its own (single, larger) QG ever gets.
-    if s.cu_qp_delta_enabled && log2_size >= s.log2_min_cu_qp_delta_size {
+    if s.shared.cu_qp_delta_enabled && log2_size >= s.shared.log2_min_cu_qp_delta_size {
         s.cu_qp_delta_val = 0;
         s.is_cu_qp_delta_coded = false;
         s.qg_qp_pred = qp_y_pred(s, x0, y0);
@@ -571,7 +607,7 @@ fn coding_quadtree(
         let half = size >> 1;
         for (dx, dy) in [(0, 0), (half, 0), (0, half), (half, half)] {
             let (cx, cy) = (x0 + dx, y0 + dy);
-            if cx < s.pic_width && cy < s.pic_height {
+            if cx < s.shared.pic_width && cy < s.shared.pic_height {
                 coding_quadtree(cabac, ctx, s, cx, cy, log2_size - 1, depth + 1)?;
             }
         }
@@ -595,7 +631,7 @@ struct Pu {
 /// I-slice-and-`pred_mode_flag==1` body either way, since an inter slice can
 /// still code an intra-refresh CU).
 fn coding_unit(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, depth: u32) -> Result<()> {
-    if s.is_p_slice {
+    if s.shared.is_p_slice {
         coding_unit_p(cabac, ctx, s, x0, y0, log2_size, depth)
     } else {
         decode_intra_cu(cabac, ctx, s, x0, y0, log2_size, depth)
@@ -628,7 +664,7 @@ fn decode_intra_cu(
     // §7.3.8.5: `part_mode` (a single ctx-coded bin for an intra CU: `1`
     // means `PART_2Nx2N`, `0` means `PART_NxN`) is present exactly when
     // this CU sits at the minimum coding block size.
-    let is_nxn = if log2_size == s.log2_min_cb_size {
+    let is_nxn = if log2_size == s.shared.log2_min_cb_size {
         let cm = ctx.part_size.first_mut().ok_or(Error::InvalidData("part_size ctx"))?;
         let bin = cabac.decode_decision(cm);
         bin == 0
@@ -668,7 +704,7 @@ fn decode_intra_cu(
     // makes exact elsewhere (see `crate::framebuf`'s module doc) — missing
     // it only desyncs CABAC once a second CTB row exists, which no CTU-0
     // fixture can exercise.
-    let ctb_size = 1i32 << s.log2_ctb_size;
+    let ctb_size = 1i32 << s.shared.log2_ctb_size;
     for (i, pu) in pus.iter().enumerate() {
         let left = s.cu_grid.mode_at(pu.x - 1, pu.y);
         let above = if pu.y % ctb_size == 0 { DC_IDX } else { s.cu_grid.mode_at(pu.x, pu.y - 1) };
@@ -706,7 +742,7 @@ fn decode_intra_cu(
     // §7.3.8.5: `rqt_root_cbf` does not exist for intra CUs (it is inferred
     // 1) — transform_tree() always runs.
     let intra_split_depth_extra = u32::from(is_nxn);
-    let quadtree_tu_log2_min = quadtree_tu_log2_min_in_cu(s, log2_size, s.max_transform_hierarchy_depth_intra, intra_split_depth_extra);
+    let quadtree_tu_log2_min = quadtree_tu_log2_min_in_cu(s, log2_size, s.shared.max_transform_hierarchy_depth_intra, intra_split_depth_extra);
 
     transform_tree(
         cabac,
@@ -996,8 +1032,8 @@ fn temporal_candidate(s: &Ctx<'_>, pu_x: i32, pu_y: i32, pu_w: i32, pu_h: i32, c
 
     let x_br = pu_x + pu_w;
     let y_br = pu_y + pu_h;
-    let same_ctb_row = (pu_y >> s.log2_ctb_size) == (y_br >> s.log2_ctb_size);
-    let br_in_bounds = x_br < s.pic_width && y_br < s.pic_height && same_ctb_row;
+    let same_ctb_row = (pu_y >> s.shared.log2_ctb_size) == (y_br >> s.shared.log2_ctb_size);
+    let br_in_bounds = x_br < s.shared.pic_width && y_br < s.shared.pic_height && same_ctb_row;
 
     let br = br_in_bounds.then(|| col_mvp(s, (x_br, y_br), target_list, curr_poc, target_ref_poc)).flatten();
     let result = br.or_else(|| {
@@ -1057,7 +1093,7 @@ fn decode_skip_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut C
     // `deblock::boundary_strength` still resolves correctly, since a skip
     // CU's own `cbf_luma_at` is never written and so already reads `false`
     // — the same "no residual" answer HM's own `getCbf` gives it.
-    let grid = 1i32 << s.log2_min_cb_size;
+    let grid = 1i32 << s.shared.log2_min_cb_size;
     s.edges.mark_tu_vert(x0, y0, size, grid);
     s.edges.mark_tu_horiz(x0, y0, size, grid);
     let max_num_merge_cand = s.inter()?.max_num_merge_cand;
@@ -1139,7 +1175,7 @@ struct CuPrediction {
 
 fn build_cu_prediction(s: &Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect, MotionInfo)]) -> Result<CuPrediction> {
     let inter = s.inter()?;
-    let ctb_size = 1i32 << s.log2_ctb_size;
+    let ctb_size = 1i32 << s.shared.log2_ctb_size;
     let csize = (size >> 1).max(1);
     let mut pred = CuPrediction { size, y: vec![0i32; (size * size) as usize], cb: vec![0i32; (csize * csize) as usize], cr: vec![0i32; (csize * csize) as usize] };
 
@@ -1147,11 +1183,11 @@ fn build_cu_prediction(s: &Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect,
         // Clipped once per list (§8.5.3.2's own `clipMv`, `crate::motion`'s
         // own doc), reused for luma (shift 2) and both chroma planes (shift
         // 3) below — not re-derived per plane.
-        let clipped_l0 = info.l0.map(|u| motion::clip_mv(u.mv, x0, y0, s.pic_width, s.pic_height, ctb_size));
-        let clipped_l1 = info.l1.map(|u| motion::clip_mv(u.mv, x0, y0, s.pic_width, s.pic_height, ctb_size));
+        let clipped_l0 = info.l0.map(|u| motion::clip_mv(u.mv, x0, y0, s.shared.pic_width, s.shared.pic_height, ctb_size));
+        let clipped_l1 = info.l1.map(|u| motion::clip_mv(u.mv, x0, y0, s.shared.pic_width, s.shared.pic_height, ctb_size));
 
         let (w, h) = (usize::try_from(pu.w).unwrap_or(0), usize::try_from(pu.h).unwrap_or(0));
-        let y_buf = predict_component(inter, *info, clipped_l0, clipped_l1, pu.x, pu.y, 2, 3, w, h, s.bit_depth_luma, true, |pic| &pic.y, |rw| rw.luma)?;
+        let y_buf = predict_component(inter, *info, clipped_l0, clipped_l1, pu.x, pu.y, 2, 3, w, h, s.shared.bit_depth_luma, true, |pic| &pic.y, |rw| rw.luma)?;
         blit(&mut pred.y, usize::try_from(size).unwrap_or(1), usize::try_from(pu.x - x0).unwrap_or(0), usize::try_from(pu.y - y0).unwrap_or(0), w, h, &y_buf);
 
         // Chroma (4:2:0): half-resolution PU rectangle, the same raw `mv`
@@ -1159,8 +1195,8 @@ fn build_cu_prediction(s: &Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect,
         // `mc.rs`'s own doc for why both components share one raw `mv`.
         let (cx0, cy0, cw, ch) = (pu.x >> 1, pu.y >> 1, (pu.w >> 1).max(1), (pu.h >> 1).max(1));
         let (cw_u, ch_u) = (usize::try_from(cw).unwrap_or(0), usize::try_from(ch).unwrap_or(0));
-        let cb_buf = predict_component(inter, *info, clipped_l0, clipped_l1, cx0, cy0, 3, 7, cw_u, ch_u, s.bit_depth_chroma, false, |pic| &pic.cb, |rw| rw.chroma[0])?;
-        let cr_buf = predict_component(inter, *info, clipped_l0, clipped_l1, cx0, cy0, 3, 7, cw_u, ch_u, s.bit_depth_chroma, false, |pic| &pic.cr, |rw| rw.chroma[1])?;
+        let cb_buf = predict_component(inter, *info, clipped_l0, clipped_l1, cx0, cy0, 3, 7, cw_u, ch_u, s.shared.bit_depth_chroma, false, |pic| &pic.cb, |rw| rw.chroma[0])?;
+        let cr_buf = predict_component(inter, *info, clipped_l0, clipped_l1, cx0, cy0, 3, 7, cw_u, ch_u, s.shared.bit_depth_chroma, false, |pic| &pic.cr, |rw| rw.chroma[1])?;
         blit(&mut pred.cb, usize::try_from(csize).unwrap_or(1), usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0), usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0), cw_u, ch_u, &cb_buf);
         blit(&mut pred.cr, usize::try_from(csize).unwrap_or(1), usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0), usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0), cw_u, ch_u, &cr_buf);
     }
@@ -1326,7 +1362,7 @@ fn write_pred_block(plane: &mut crate::framebuf::ReconPlane, x0: i32, y0: i32, w
 /// `rqt_root_cbf` and either a residual-free write or the transform tree.
 fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, depth: u32) -> Result<()> {
     let size = 1i32 << log2_size;
-    let at_min_cb = log2_size == s.log2_min_cb_size;
+    let at_min_cb = log2_size == s.shared.log2_min_cb_size;
     let amp_enabled = s.inter()?.amp_enabled;
     let part_mode = parse_part_mode_inter(cabac, ctx, at_min_cb, size, amp_enabled)?;
     let num_pus = part_mode.num_pus();
@@ -1351,7 +1387,7 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
     // a transform-block edge (§8.7.2.4's non-zero-coefficient `bS`
     // condition must not fire here unless a transform-unit leaf also marked
     // it).
-    let deblock_grid = 1i32 << s.log2_min_cb_size;
+    let deblock_grid = 1i32 << s.shared.log2_min_cb_size;
     for pu_idx in 0..num_pus {
         let pu = part_mode.pu_rect(x0, y0, size, pu_idx);
         s.edges.mark_vert(pu.x, pu.y, pu.h, deblock_grid);
@@ -1442,7 +1478,7 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
 
     if rqt_root_cbf {
         let pred = build_cu_prediction(s, x0, y0, size, &pu_motion)?;
-        let max_depth = s.max_transform_hierarchy_depth_inter;
+        let max_depth = s.shared.max_transform_hierarchy_depth_inter;
         let inter_split_flag = u32::from(max_depth == 1 && part_mode != PartMode::TwoNx2N);
         let quadtree_tu_log2_min = quadtree_tu_log2_min_in_cu(s, log2_size, max_depth, inter_split_flag);
         transform_tree_inter(cabac, ctx, s, x0, y0, log2_size, 0, inter_split_flag != 0, &pred, quadtree_tu_log2_min, true, true)?;
@@ -1452,7 +1488,7 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
         // left/top boundary as a (trivially residual-free) transform-block
         // edge — see that function's own comment for why HM marks it
         // unconditionally regardless of `rqt_root_cbf`.
-        let grid = 1i32 << s.log2_min_cb_size;
+        let grid = 1i32 << s.shared.log2_min_cb_size;
         s.edges.mark_tu_vert(x0, y0, size, grid);
         s.edges.mark_tu_horiz(x0, y0, size, grid);
         write_inter_cu_no_residual(s, x0, y0, size, &pu_motion)?;
@@ -1489,9 +1525,9 @@ fn transform_tree_inter(
     parent_cbf_cb: bool,
     parent_cbf_cr: bool,
 ) -> Result<()> {
-    let split = if (force_split_at_root && trafo_depth == 0) || log2_size > s.log2_max_tb_size {
+    let split = if (force_split_at_root && trafo_depth == 0) || log2_size > s.shared.log2_max_tb_size {
         true
-    } else if log2_size == s.log2_min_tb_size || log2_size == quadtree_tu_log2_min {
+    } else if log2_size == s.shared.log2_min_tb_size || log2_size == quadtree_tu_log2_min {
         false
     } else {
         let ctx_idx = usize::try_from(5u32.saturating_sub(log2_size)).unwrap_or(0);
@@ -1551,7 +1587,7 @@ fn transform_tree_inter(
 
 #[allow(clippy::too_many_arguments)]
 fn transform_unit_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, cbf_luma: bool, cbf_cb: bool, cbf_cr: bool, pred: &CuPrediction) -> Result<()> {
-    let grid = 1i32 << s.log2_min_cb_size;
+    let grid = 1i32 << s.shared.log2_min_cb_size;
     let size = 1i32 << log2_size;
     s.edges.mark_tu_vert(x0, y0, size, grid);
     s.edges.mark_tu_horiz(x0, y0, size, grid);
@@ -1625,7 +1661,7 @@ fn reconstruct_luma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s
     let mut pred = pred_slice(&pred_cu.y, pred_cu.size, x0 - cu_x0, y0 - cu_y0, size);
 
     if cbf {
-        if s.transform_skip_enabled && log2_size == 2 {
+        if s.shared.transform_skip_enabled && log2_size == 2 {
             let cm = ctx.transform_skip.first_mut().ok_or(Error::InvalidData("transform_skip ctx"))?;
             if cabac.decode_decision(cm) != 0 {
                 return Err(Error::Unsupported("vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)"));
@@ -1635,12 +1671,12 @@ fn reconstruct_luma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s
         // inter TU's `scanIdx` is always `0` (diagonal), HM's own
         // `getCoefScanIdx` returning `SCAN_DIAG` whenever `CuPredMode !=
         // MODE_INTRA`.
-        let coeffs = residual::residual_coding(cabac, ctx, log2_size, crate::scan::ScanOrder::Diag, false, s.sign_data_hiding);
+        let coeffs = residual::residual_coding(cabac, ctx, log2_size, crate::scan::ScanOrder::Diag, false, s.shared.sign_data_hiding);
         let use_dst = false; // §8.6.4.1: DST-VII only for 4x4 *intra* luma.
         let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-        let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.bit_depth_luma);
-        let residual = transform::inverse_transform(&dequantised, size, use_dst, s.bit_depth_luma);
-        transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_luma);
+        let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
+        let residual = transform::inverse_transform(&dequantised, size, use_dst, s.shared.bit_depth_luma);
+        transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
     }
     write_block(&mut s.recon.y, x0, y0, size, &pred);
     // §8.7.2.4's `bS == 1` non-zero-coefficient condition reads this leaf's
@@ -1661,18 +1697,18 @@ fn reconstruct_chroma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank,
     let csize = (pred_cu.size >> 1).max(1);
     let mut pred = pred_slice(src, csize, cx0 - ccu_x0, cy0 - ccu_y0, size);
 
-    if s.transform_skip_enabled && log2_size == 2 {
+    if s.shared.transform_skip_enabled && log2_size == 2 {
         let cm = ctx.transform_skip.get_mut(1).ok_or(Error::InvalidData("transform_skip ctx"))?;
         if cabac.decode_decision(cm) != 0 {
             return Err(Error::Unsupported("vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)"));
         }
     }
     let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-    let qp = transform::chroma_qp(qp_y, if is_cb { s.cb_qp_offset } else { s.cr_qp_offset });
-    let coeffs = residual::residual_coding(cabac, ctx, log2_size, crate::scan::ScanOrder::Diag, true, s.sign_data_hiding);
-    let dequantised = transform::dequant(&coeffs.values, size, qp, s.bit_depth_chroma);
-    let residual = transform::inverse_transform(&dequantised, size, false, s.bit_depth_chroma);
-    transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_chroma);
+    let qp = transform::chroma_qp(qp_y, if is_cb { s.shared.cb_qp_offset } else { s.shared.cr_qp_offset });
+    let coeffs = residual::residual_coding(cabac, ctx, log2_size, crate::scan::ScanOrder::Diag, true, s.shared.sign_data_hiding);
+    let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
+    let residual = transform::inverse_transform(&dequantised, size, false, s.shared.bit_depth_chroma);
+    transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_chroma);
 
     let plane = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
     write_block(plane, cx0, cy0, size, &pred);
@@ -1710,10 +1746,10 @@ fn cu_origin_of(x: i32, y: i32, cu_size: i32) -> (i32, i32) {
 /// function's caller must get right since the two differ by one).
 fn quadtree_tu_log2_min_in_cu(s: &Ctx<'_>, log2_cb_size: u32, max_depth: u32, extra_split_flag: u32) -> u32 {
     let denom = max_depth.saturating_sub(1) + extra_split_flag;
-    if log2_cb_size < s.log2_min_tb_size + denom {
-        s.log2_min_tb_size
+    if log2_cb_size < s.shared.log2_min_tb_size + denom {
+        s.shared.log2_min_tb_size
     } else {
-        (log2_cb_size.saturating_sub(denom)).min(s.log2_max_tb_size)
+        (log2_cb_size.saturating_sub(denom)).min(s.shared.log2_max_tb_size)
     }
 }
 
@@ -1736,9 +1772,9 @@ fn transform_tree(
     parent_cbf_cr: bool,
 ) -> Result<()> {
     let intra_split_and_root = is_nxn && trafo_depth == 0;
-    let split = if intra_split_and_root || log2_size > s.log2_max_tb_size {
+    let split = if intra_split_and_root || log2_size > s.shared.log2_max_tb_size {
         true
-    } else if log2_size == s.log2_min_tb_size || log2_size == quadtree_tu_log2_min {
+    } else if log2_size == s.shared.log2_min_tb_size || log2_size == quadtree_tu_log2_min {
         false
     } else {
         let ctx_idx = usize::try_from(5u32.saturating_sub(log2_size)).unwrap_or(0);
@@ -1821,7 +1857,7 @@ fn transform_unit(
     // leaf's own top-left corner here, before prediction/reconstruction, is
     // sufficient because `EdgeMarks::mark_vert`/`mark_horiz` themselves
     // reject anything off that grid.
-    let grid = 1i32 << s.log2_min_cb_size;
+    let grid = 1i32 << s.shared.log2_min_cb_size;
     let size = 1i32 << log2_size;
     s.edges.mark_vert(x0, y0, size, grid);
     s.edges.mark_horiz(x0, y0, size, grid);
@@ -1882,33 +1918,33 @@ fn reconstruct_luma(
     cbf: bool,
 ) -> Result<()> {
     let size = 1usize << log2_size;
-    let line = intra_pred::build_reference_line(&s.recon.y, x0, y0, size, s.bit_depth_luma, |nx, ny| {
-        !s.constrained_intra_pred || s.cu_grid.inter_at(nx, ny).is_none()
+    let line = intra_pred::build_reference_line(&s.recon.y, x0, y0, size, s.shared.bit_depth_luma, |nx, ny| {
+        !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx, ny).is_none()
     });
     let filtered;
     let ref_line = if intra_pred::should_filter(mode, size, true) {
-        filtered = intra_pred::filter_reference_line(&line, size, s.bit_depth_luma, s.strong_intra_smoothing);
+        filtered = intra_pred::filter_reference_line(&line, size, s.shared.bit_depth_luma, s.shared.strong_intra_smoothing);
         &filtered
     } else {
         &line
     };
     let mut pred = vec![0u16; size * size];
-    intra_pred::predict(mode, ref_line, size, s.bit_depth_luma, true, &mut pred);
+    intra_pred::predict(mode, ref_line, size, s.shared.bit_depth_luma, true, &mut pred);
 
     if cbf {
-        if s.transform_skip_enabled && log2_size == 2 {
+        if s.shared.transform_skip_enabled && log2_size == 2 {
             let cm = ctx.transform_skip.first_mut().ok_or(Error::InvalidData("transform_skip ctx"))?;
             if cabac.decode_decision(cm) != 0 {
                 return Err(Error::Unsupported("vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)"));
             }
         }
         let order = intra_mode::scan_order_for_mode(mode, log2_size, false);
-        let coeffs: Coeffs = residual::residual_coding(cabac, ctx, log2_size, order, false, s.sign_data_hiding);
+        let coeffs: Coeffs = residual::residual_coding(cabac, ctx, log2_size, order, false, s.shared.sign_data_hiding);
         let use_dst = log2_size == 2;
         let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-        let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.bit_depth_luma);
-        let residual = transform::inverse_transform(&dequantised, size, use_dst, s.bit_depth_luma);
-        transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_luma);
+        let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
+        let residual = transform::inverse_transform(&dequantised, size, use_dst, s.shared.bit_depth_luma);
+        transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
     }
 
     write_block(&mut s.recon.y, x0, y0, size, &pred);
@@ -1931,15 +1967,15 @@ fn reconstruct_chroma(
     // `<< 1`: chroma-to-luma coordinate scaling for the 4:2:0 collocated
     // block CuGrid is indexed by (see `cu_origin_of`'s own callers' `cx0 <<
     // 1` precedent above).
-    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.bit_depth_chroma, |nx, ny| {
-        !s.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none()
+    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.shared.bit_depth_chroma, |nx, ny| {
+        !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none()
     });
     let mut pred = vec![0u16; size * size];
     // Chroma never smooths its reference samples at 4:2:0 (see the crate
     // doc), so no `should_filter`/`filter_reference_line` call here.
-    intra_pred::predict(mode, &line, size, s.bit_depth_chroma, false, &mut pred);
+    intra_pred::predict(mode, &line, size, s.shared.bit_depth_chroma, false, &mut pred);
 
-    if s.transform_skip_enabled && log2_size == 2 {
+    if s.shared.transform_skip_enabled && log2_size == 2 {
         let cm = ctx.transform_skip.get_mut(1).ok_or(Error::InvalidData("transform_skip ctx"))?;
         if cabac.decode_decision(cm) != 0 {
             return Err(Error::Unsupported("vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)"));
@@ -1947,11 +1983,11 @@ fn reconstruct_chroma(
     }
     let order = intra_mode::scan_order_for_mode(mode, log2_size, true);
     let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-    let qp = transform::chroma_qp(qp_y, if is_cb { s.cb_qp_offset } else { s.cr_qp_offset });
-    let coeffs = residual::residual_coding(cabac, ctx, log2_size, order, true, s.sign_data_hiding);
-    let dequantised = transform::dequant(&coeffs.values, size, qp, s.bit_depth_chroma);
-    let residual = transform::inverse_transform(&dequantised, size, false, s.bit_depth_chroma);
-    transform::add_residual_clip(&mut pred, &residual, size, s.bit_depth_chroma);
+    let qp = transform::chroma_qp(qp_y, if is_cb { s.shared.cb_qp_offset } else { s.shared.cr_qp_offset });
+    let coeffs = residual::residual_coding(cabac, ctx, log2_size, order, true, s.shared.sign_data_hiding);
+    let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
+    let residual = transform::inverse_transform(&dequantised, size, false, s.shared.bit_depth_chroma);
+    transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_chroma);
 
     let plane_mut = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
     write_block(plane_mut, cx0, cy0, size, &pred);
@@ -1961,11 +1997,11 @@ fn reconstruct_chroma(
 fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode: u8, is_cb: bool) {
     let size = 1usize << log2_size;
     let plane = if is_cb { &s.recon.cb } else { &s.recon.cr };
-    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.bit_depth_chroma, |nx, ny| {
-        !s.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none()
+    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.shared.bit_depth_chroma, |nx, ny| {
+        !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none()
     });
     let mut pred = vec![0u16; size * size];
-    intra_pred::predict(mode, &line, size, s.bit_depth_chroma, false, &mut pred);
+    intra_pred::predict(mode, &line, size, s.shared.bit_depth_chroma, false, &mut pred);
     let plane_mut = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
     write_block(plane_mut, cx0, cy0, size, &pred);
 }

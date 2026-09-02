@@ -423,9 +423,9 @@ impl HevcDecoder {
 
         let qp_i8 = i8::try_from(slice_qp.clamp(0, 51)).unwrap_or(0);
 
-        let ctb_size = 1u32 << walk.log2_ctb_size;
-        let pic_width_u32 = u32::try_from(walk.pic_width).unwrap_or(0);
-        let pic_height_u32 = u32::try_from(walk.pic_height).unwrap_or(0);
+        let ctb_size = 1u32 << walk.shared.log2_ctb_size;
+        let pic_width_u32 = u32::try_from(walk.shared.pic_width).unwrap_or(0);
+        let pic_height_u32 = u32::try_from(walk.shared.pic_height).unwrap_or(0);
         let ctbs_x = pic_width_u32.div_ceil(ctb_size).max(1);
         let ctbs_y = pic_height_u32.div_ceil(ctb_size).max(1);
         let ctb_size_i = i32::try_from(ctb_size).unwrap_or(0);
@@ -487,7 +487,7 @@ impl HevcDecoder {
         // see `framebuf::ReconPlane`'s own module doc for why this is a
         // one-time copy rather than `recon` itself growing into `pic`.
         walk.recon.finish()?;
-        walk.recon.materialize_into(walk.pic);
+        walk.recon.materialize_into(walk.shared.pic);
         walk.edges.finish()?;
         walk.cu_grid.finish()?;
         walk.sao_params.finish()?;
@@ -790,7 +790,7 @@ fn decode_wpp_row_ranges(
         // call always re-derives `qg_qp_pred`/`cu_qp_delta_val` fresh (see
         // that function's own QG-reset comment), so nothing else needs
         // resetting here.
-        walk.qp_y_prev = walk.slice_qp;
+        walk.qp_y_prev = walk.shared.slice_qp;
         walk.edges.begin_row(row_idx)?;
         walk.cu_grid.begin_row(budget, row_idx)?;
         walk.sao_params.begin_row(budget, row_idx)?;
@@ -1062,7 +1062,7 @@ pub(crate) struct DeblockLagResult {
 /// for this exact content's own boundary-strength/threshold decisions.
 #[cfg(test)]
 fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut Budget) -> Vec<DeblockLagResult> {
-    let ctb = 1usize << walk.log2_ctb_size;
+    let ctb = 1usize << walk.shared.log2_ctb_size;
     let target_row_start = probe.target_ctu_row.saturating_mul(ctb);
     let target_row_end = target_row_start.saturating_add(ctb);
 
@@ -1070,7 +1070,7 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
     // purely to satisfy the field, reused (re-borrowed, never aliased: each
     // retarget-then-filter-then-capture below finishes before the next one
     // starts) across every retargeted `Ctx` this probe builds.
-    let (width, height) = (usize::try_from(walk.pic_width).unwrap_or(0), usize::try_from(walk.pic_height).unwrap_or(0));
+    let (width, height) = (usize::try_from(walk.shared.pic_width).unwrap_or(0), usize::try_from(walk.shared.pic_height).unwrap_or(0));
     let Ok(mut throwaway_recon) = crate::framebuf::ReconPicture::new(budget, width, height, ctb) else {
         // Allocation failure here means the probe cannot run at all; an
         // empty result reads as "missing lag N" in the test's own
@@ -1079,7 +1079,7 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
         return Vec::new();
     };
 
-    let mut pristine_pic = walk.pic.clone();
+    let mut pristine_pic = walk.shared.pic.clone();
     {
         let mut pristine_ctx = walk.retarget_pic_for_test(&mut pristine_pic, &mut throwaway_recon);
         deblock::filter_picture(&mut pristine_ctx);
@@ -1091,7 +1091,7 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
         .iter()
         .map(|&lag| {
             let below_first_corrupt_ctu_row = probe.target_ctu_row.saturating_add(1).saturating_add(lag);
-            let mut below_pic = walk.pic.clone();
+            let mut below_pic = walk.shared.pic.clone();
             invert_rows_from(&mut below_pic, below_first_corrupt_ctu_row.saturating_mul(ctb));
             let below_matches = {
                 let mut below_ctx = walk.retarget_pic_for_test(&mut below_pic, &mut throwaway_recon);
@@ -1107,7 +1107,7 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
             // picks a target row with enough rows to spare on both sides
             // precisely so every lag it asks for is meaningful.
             let above_first_pristine_ctu_row = probe.target_ctu_row.saturating_sub(lag);
-            let mut above_pic = walk.pic.clone();
+            let mut above_pic = walk.shared.pic.clone();
             invert_rows_before(&mut above_pic, above_first_pristine_ctu_row.saturating_mul(ctb));
             let above_matches = {
                 let mut above_ctx = walk.retarget_pic_for_test(&mut above_pic, &mut throwaway_recon);

@@ -303,7 +303,7 @@ fn filter_luma_group(plane: &mut Plane, dir: Dir, bx: i32, by0: i32, tc: i32, be
 /// back along `dir`'s own perpendicular axis — `Dir::Vert` steps `x` (a
 /// vertical edge's P/Q samples differ in `x`), `Dir::Horiz` steps `y`,
 /// matching every other `dir`-generic helper in this module.
-/// `s.slice_qp` is the fallback exactly where `qp_at` itself falls back to
+/// `s.shared.slice_qp` is the fallback exactly where `qp_at` itself falls back to
 /// unavailable: every in-bounds, fully-decoded position always has a real
 /// value by the time this whole-picture pass runs, so the fallback only
 /// matters, defensively, for a position outside the picture.
@@ -312,8 +312,8 @@ fn qp_avg(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
         Dir::Vert => (xq - 1, yq),
         Dir::Horiz => (xq, yq - 1),
     };
-    let qp_q = s.cu_grid.qp_at(xq, yq).map_or(s.slice_qp, i32::from);
-    let qp_p = s.cu_grid.qp_at(xp, yp).map_or(s.slice_qp, i32::from);
+    let qp_q = s.cu_grid.qp_at(xq, yq).map_or(s.shared.slice_qp, i32::from);
+    let qp_p = s.cu_grid.qp_at(xp, yp).map_or(s.shared.slice_qp, i32::from);
     (qp_p + qp_q + 1) >> 1
 }
 
@@ -401,13 +401,13 @@ fn boundary_strength(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
 /// `TComLoopFilter::loopFilterPic`'s own two full, separate passes, since
 /// horizontal filtering must see vertical filtering's own output.
 pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
-    if s.deblocking_disabled {
+    if s.shared.deblocking_disabled {
         return;
     }
-    let grid = 1i32 << s.log2_min_cb_size;
+    let grid = 1i32 << s.shared.log2_min_cb_size;
     let chroma_grid = grid.max(16);
 
-    let (width, height) = s.pic.y.dims();
+    let (width, height) = s.shared.pic.y.dims();
     let (width, height) = (i32::try_from(width).unwrap_or(0), i32::try_from(height).unwrap_or(0));
 
     // Vertical edges: luma at every `grid` column, chroma at every
@@ -420,9 +420,9 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                 let bs = boundary_strength(s, Dir::Vert, x, y);
                 if bs > 0 {
                     let qp = qp_avg(s, Dir::Vert, x, y);
-                    let tc = tc_for_qp(qp, bs, s.tc_offset_div2);
-                    let beta = beta_for_qp(qp, s.beta_offset_div2);
-                    filter_luma_group(&mut s.pic.y, Dir::Vert, x, y, tc, beta, s.bit_depth_luma);
+                    let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
+                    let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
+                    filter_luma_group(&mut s.shared.pic.y, Dir::Vert, x, y, tc, beta, s.shared.bit_depth_luma);
                 }
             }
             y += 4;
@@ -438,14 +438,14 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
             // of its own, so `bS` is the only gate it has).
             if s.edges.vert_at(x, y) && boundary_strength(s, Dir::Vert, x, y) == 2 {
                 let qp = qp_avg(s, Dir::Vert, x, y);
-                let cb_tc = tc_for_qp(chroma_qp(qp, s.cb_qp_offset), 2, s.tc_offset_div2);
-                let cr_tc = tc_for_qp(chroma_qp(qp, s.cr_qp_offset), 2, s.tc_offset_div2);
+                let cb_tc = tc_for_qp(chroma_qp(qp, s.shared.cb_qp_offset), 2, s.shared.tc_offset_div2);
+                let cr_tc = tc_for_qp(chroma_qp(qp, s.shared.cr_qp_offset), 2, s.shared.tc_offset_div2);
                 let cx = x >> 1;
                 let cy0 = y >> 1;
                 let rows = (grid >> 1).max(1);
                 for i in 0..rows {
-                    filter_chroma_line(&mut s.pic.cb, Dir::Vert, cx, cy0 + i, cb_tc, s.bit_depth_chroma);
-                    filter_chroma_line(&mut s.pic.cr, Dir::Vert, cx, cy0 + i, cr_tc, s.bit_depth_chroma);
+                    filter_chroma_line(&mut s.shared.pic.cb, Dir::Vert, cx, cy0 + i, cb_tc, s.shared.bit_depth_chroma);
+                    filter_chroma_line(&mut s.shared.pic.cr, Dir::Vert, cx, cy0 + i, cr_tc, s.shared.bit_depth_chroma);
                 }
             }
             y += grid;
@@ -462,9 +462,9 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                 let bs = boundary_strength(s, Dir::Horiz, x, y);
                 if bs > 0 {
                     let qp = qp_avg(s, Dir::Horiz, x, y);
-                    let tc = tc_for_qp(qp, bs, s.tc_offset_div2);
-                    let beta = beta_for_qp(qp, s.beta_offset_div2);
-                    filter_luma_group(&mut s.pic.y, Dir::Horiz, y, x, tc, beta, s.bit_depth_luma);
+                    let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
+                    let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
+                    filter_luma_group(&mut s.shared.pic.y, Dir::Horiz, y, x, tc, beta, s.shared.bit_depth_luma);
                 }
             }
             x += 4;
@@ -477,14 +477,14 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
         while x < width {
             if s.edges.horiz_at(x, y) && boundary_strength(s, Dir::Horiz, x, y) == 2 {
                 let qp = qp_avg(s, Dir::Horiz, x, y);
-                let cb_tc = tc_for_qp(chroma_qp(qp, s.cb_qp_offset), 2, s.tc_offset_div2);
-                let cr_tc = tc_for_qp(chroma_qp(qp, s.cr_qp_offset), 2, s.tc_offset_div2);
+                let cb_tc = tc_for_qp(chroma_qp(qp, s.shared.cb_qp_offset), 2, s.shared.tc_offset_div2);
+                let cr_tc = tc_for_qp(chroma_qp(qp, s.shared.cr_qp_offset), 2, s.shared.tc_offset_div2);
                 let cy = y >> 1;
                 let cx0 = x >> 1;
                 let cols = (grid >> 1).max(1);
                 for i in 0..cols {
-                    filter_chroma_line(&mut s.pic.cb, Dir::Horiz, cy, cx0 + i, cb_tc, s.bit_depth_chroma);
-                    filter_chroma_line(&mut s.pic.cr, Dir::Horiz, cy, cx0 + i, cr_tc, s.bit_depth_chroma);
+                    filter_chroma_line(&mut s.shared.pic.cb, Dir::Horiz, cy, cx0 + i, cb_tc, s.shared.bit_depth_chroma);
+                    filter_chroma_line(&mut s.shared.pic.cr, Dir::Horiz, cy, cx0 + i, cr_tc, s.shared.bit_depth_chroma);
                 }
             }
             x += grid;
