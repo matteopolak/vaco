@@ -4706,3 +4706,193 @@ vaco's specific chroma-upsampling filter could be changed to match
 to Exact. That is a real, bounded, separate task (touching only
 `vaco-scale`, nothing codec-side) — worth doing for its own sake, not
 because anything here calls it urgent.
+
+## 57. Sizing the regression sweep's conformance number: a 40-case random sample of the 455 diverged cases, classified
+
+Finding 56 (and the regression sweep it grew out of) reported `vaco-conformance run
+--tier core` at 254 agreed / 455 diverged against the only reference available on
+this machine, ffmpeg 9.0.1 — unpinned and advisory, well past the project's
+gating pin (8.1) and its tracked "next" (8.2). That number was flagged as
+unusable as stated: an unknown share of 455 is plausibly ordinary version drift
+against a reference two point-releases ahead of what this project calibrates
+against, not evidence of 455 vaco bugs. This finding replaces the guess with a
+measurement.
+
+### Methodology
+
+`tests/conformance/**/*.toml`'s `[[media]]` declarations under `tier = "core"`
+produced 709 run cases from the `vaco-conformance run --tier core` invocation
+already on record for finding 56 (`crates/tool/vaco-conformance`, real ffmpeg
+9.0.1 as the oracle, `-fflags +bitexact` positioned per the suite's own
+established method). Every `FAIL` block in that run's saved output was parsed
+into one record per case (455 parsed, matching the summary line exactly — the
+parse is a mechanical split on `^FAIL`/the trailing `N cases:` summary line, not
+a re-run). `random.seed(42); random.sample(range(455), 40)` selected a
+uniform 40-case sample from the full, ordered list (order is suite-declaration
+order, not random already, so seeding the sample itself is what makes this
+reproducible and extensible — the next person can draw a *different*,
+non-overlapping 40 with a different seed, or the same 40 again with `seed(42)`,
+against the same saved log or a fresh run).
+
+Each of the 40 was read in full (the reproduce command, both binaries' actual
+invocations, and the byte-level or field-level diff already captured by the
+harness) and classified by hand into one of three buckets, per the
+coordinator's own definitions:
+
+1. **Version drift** — a difference that would plausibly vanish against the
+   pinned 8.1, because the field is one ffmpeg's own heuristics are known to
+   have changed across versions (not verified against a real 8.1 binary, which
+   is not installed on this machine — this bucket is a judgment call about
+   plausibility, named as a limitation below, not a measurement against 8.1
+   itself).
+2. **Real divergence** — vaco computes, reports, or writes something a real
+   user would see as wrong on comparison with real ffmpeg, independent of
+   which ffmpeg version is asked: a garbage value, a missing field, a wrong
+   byte in a `-c copy` output, a nonzero exit where ffmpeg succeeds.
+3. **Suite artefact** — the harness comparing something the container format
+   does not actually define, the way `av-avi -> {matroska,mpegts,flv}` is
+   already excluded in `tests/conformance/transcode/remux-bitexact.toml` for
+   AVI's own lack of a native PTS. A case in this bucket is not "vaco is
+   wrong" — it is "the question does not have one right answer to converge on."
+
+### Result: 36 real divergence, 2 version drift, 2 suite artefact (of 40)
+
+| # | Case | Symptom | Bucket |
+|---|---|---|---|
+| 1 | `probe-asf/h264-video/section=format,writer=compact` | `start_time=0.000000` (ours) vs `N/A`; `bit_rate` differs | Real |
+| 2 | `probe-asf/h264-video/section=streams,writer=flat` | `time_base=1/10000000` (ours) vs `1/1000`; `start_pts` differs | Real |
+| 3 | `probe-asf/h264-video/section=streams,writer=ini` | same ASF cluster as #2 | Real |
+| 4 | `probe-asf/h264-video/section=both,writer=json` | same ASF cluster | Real |
+| 5 | `probe-asf/h264-video/section=both,writer=xml` | same ASF cluster | Real |
+| 6 | `probe-asf/h264-and-aac/section=both,writer=xml` | same ASF cluster; `start_pts=0` (ours) vs `57` | Real |
+| 7 | `probe-asf/h264-and-aac/section=both,writer=flat` | same ASF cluster | Real |
+| 8 | `probe-asf/h264-and-aac/section=packets,writer=compact` | `duration=400000` (ours, 100ns units) vs `40` (theirs, ms) — same value, different timebase | Real |
+| 9 | `probe-matroska/mpeg4-video/section=streams,writer=json` | `profile="unknown"` (ours) vs `"0"` | Real |
+| 10 | `probe-matroska/video-and-audio/section=both,writer=compact` | `profile=unknown`; `codec_tag_string` truncated (`[0][0]` vs `[0][0][0][0]`) | Real |
+| 11 | `probe-flv/h264-video/section=streams,writer=json` | `avg_frame_rate="2147483647/2000000000"` (ours, garbage) vs `"25/1"` | Real |
+| 12 | `probe-flv/h264-and-aac/section=streams,writer=default` | same garbage `avg_frame_rate` | Real |
+| 13 | `probe-flv/h264-and-aac/section=both,writer=compact` | same garbage `avg_frame_rate` | Real |
+| 14 | `probe-flv/h264-and-aac/section=both,writer=csv` | same garbage `avg_frame_rate` | Real |
+| 15 | `probe-flv/h264-and-aac/section=both,writer=ini` | same garbage `avg_frame_rate` | Real |
+| 16 | `probe-flv/h264-and-aac/section=packets,writer=csv` | packet `duration=931`/`0.931000` (ours) vs `40`/`0.040000` — over 20x off | Real |
+| 17 | `probe-audio-simple/pcm-wav/section=format,writer=compact` | `start_time=0.000000` (ours) vs `N/A` | Real |
+| 18 | `probe-audio-simple/pcm-wav/section=both,writer=csv` | `channel_layout=mono` (ours) vs `unknown` | **Version drift** |
+| 19 | `probe-audio-simple/pcm-wav/section=both,writer=ini` | same `channel_layout` difference as #18 | **Version drift** |
+| 20 | `probe-avi/mpeg4-and-pcm/section=packets,writer=json` | `"dts"` (ours) vs `"pts"` as the first timestamp field — AVI has no native PTS | **Suite artefact** |
+| 21 | `probe-avi/mpeg4-and-pcm/section=packets,writer=compact` | `pts=N/A` (ours) vs `pts=0` (theirs synthesizes it from frame index) | **Suite artefact** |
+| 22 | `probe-dv/dv-ntsc/section=streams,writer=xml` | `sample_aspect_ratio`/`display_aspect_ratio` present (theirs), absent (ours) | Real |
+| 23 | `probe-ogg/flac-audio/section=both,writer=compact` | `extradata_size=51` (ours) vs `34` | Real |
+| 24 | `probe-isobmff/mpeg4-video/section=streams,writer=compact` | `profile=unknown`; missing `mp4v.20`-style tag suffix | Real |
+| 25 | `probe-isobmff/mpeg4-video/section=both,writer=csv` | same mpeg4 profile/tag cluster | Real |
+| 26 | `probe-isobmff/mpeg4-and-pcm/section=both,writer=csv` | same cluster | Real |
+| 27 | `probe-isobmff/mpeg4-and-pcm/section=both,writer=flat` | same cluster | Real |
+| 28 | `probe-isobmff/mpeg4-and-pcm/section=packets,writer=csv` | PCM packets one sample each (`duration=1,size=2`, ours) vs 1024-sample chunks (theirs) — 3597498 vs 5967 output bytes | Real |
+| 29 | `probe-mpegts/mpeg2-ts/section=format,writer=compact` | `probe_score=50` (ours) vs `100` | Real |
+| 30 | `probe-mpegts/mpeg2-ts/section=both,writer=json` | `profile="72"` (ours, a raw bitstream byte) vs `"4"` (theirs, the mapped enum) | Real |
+| 31 | `probe-mpegts/mpeg2-ts-with-audio/section=packets,writer=default` | packet order differs: ours emits a video packet where theirs interleaves an audio one | Real |
+| 32 | `probe-mpegts/mpeg2-ps/section=streams,writer=compact` | same `profile=72` vs `4` cluster as #30 | Real |
+| 33 | `probe-mpegts/mpeg2-ps/section=both,writer=json` | same cluster | Real |
+| 34 | `transcode-remux-bitexact/v-mp4/output=mpegts` | 1 byte differs at offset 1348, identical total size (14664) | Real |
+| 35 | `transcode-remux-bitexact/v-mov/output=asf` | 1 byte differs at offset 16 (early ASF header field) | Real |
+| 36 | `transcode-remux-bitexact/v-mkv/output=mpegts` | same offset-1348, same-size pattern as #34 | Real |
+| 37 | `transcode-remux-bitexact/v-ts/output=matroska` | byte 51 differs, sizes differ (8175 vs 8096) — consistent with finding 56's own `FORMAT.duration: 1.08 vs 1.00` | Real |
+| 38 | `transcode-remux-bitexact/av-mov/output=matroska` | byte 51 differs, sizes close (17642 vs 17613) — same Matroska Duration-encoding family as #37 | Real |
+| 39 | `transcode-remux-bitexact/av-mov/output=mpegts` | byte 1348, sizes differ substantially (31772 vs 24628) — same family as #34/#36, larger effect | Real |
+| 40 | `transcode-remux-audio-bitexact/aac-m4a/output=avi` | byte 184 differs (a structural header field) | Real |
+
+**36/40 = 90% real divergence, 2/40 = 5% version drift, 2/40 = 5% suite
+artefact.** For a sample of 40 out of 455, the 90% point estimate carries a
+rough 95% confidence interval of about ±9 points (Wilson/normal
+approximation) — call it 81–99% real, i.e. **roughly 370–450 of the 455
+diverged cases are plausibly real**, not the reassuring "probably mostly
+version drift against 9.0.1" story finding 56 had to leave open. That is the
+answer to "did tonight help or hurt": **it did neither, on this evidence** —
+none of the sampled real divergences trace to a crate tonight's ~185 commits
+touched (ASF/FLV/DV/OGG/ISOBMFF/MPEG-TS/MPEG-PS probing, and MPEG-TS/ASF/
+Matroska remux byte-level output, none of which appear in tonight's commit
+list per finding 56's own attribution work) — **this is the suite's
+pre-existing, unmeasured backlog surfacing for the first time**, not new
+breakage.
+
+**The case-level percentage overstates the number of distinct bugs.** The
+suite multiplies one underlying defect across every `writer`×`section`
+combination a `[[media]]` entry is tested under, so "36 real-divergence
+cases" is not "36 bugs" — cases 2–8 are one ASF metadata-defaults defect seen
+through 7 different `ffprobe -of` writers; cases 11–16 are one FLV
+frame-rate/duration defect seen through 6; cases 9,10,24–27 are one mpeg4
+profile/tag-mapping defect seen through 5; cases 30,32,33 are one mpeg2video
+profile defect seen through 3. Counting distinct root causes rather than
+cases in this sample of 40 gives roughly **13–14 distinct, independently
+fixable defects**, not 36:
+
+1. ASF probe metadata: `start_time`/`bit_rate` default to `0`/a computed
+   value instead of `N/A`; `time_base` reported as the container's native
+   100 ns unit (`1/10000000`) rather than ffmpeg's normalised `1/1000`.
+   (cases 1–8)
+2. WAV probe `start_time` defaults to `0.0` instead of `N/A` — plausibly the
+   *same* general "format-level start_time defaults to 0 instead of N/A when
+   the demuxer has no real answer" defect as #1, not a second one. (case 17)
+3. mpeg4 video `profile` never resolved to a numeric/named value, and MP4's
+   `mp4v.NN` extended codec-tag suffix never appended. (cases 9, 10, 24–27)
+4. FLV `avg_frame_rate` computed as a garbage large-numerator fraction
+   instead of the real rate; the same computation likely also feeds the
+   wildly wrong per-packet `duration` in case 16. (cases 11–16)
+5. DV's known, spec-fixed sample/display aspect ratio (NTSC DV is always
+   non-square) never attached to the stream. (case 22)
+6. FLAC-in-Ogg `extradata_size` wrong (51 vs 34). (case 23)
+7. MOV/ISOBMFF PCM demuxing emits one packet per sample (duration 1, ~2
+   bytes) instead of ffmpeg's 1024-sample chunks — not obviously a
+   correctness bug for playback, but a real, large (600x) divergence in
+   probe output and packet count. (case 28)
+8. MPEG-TS format `probe_score` never reaches 100. (case 29)
+9. mpeg2video `profile` reports a raw bitstream byte (`72`) instead of the
+   mapped enum value (`4`, Main Profile). (cases 30, 32, 33)
+10. MPEG-TS demuxing does not interleave audio and video packets by
+    timestamp the way ffmpeg's packet order does. (case 31)
+11–13ish. Byte-level `-c copy` remux differences into MPEG-TS (a single
+    differing byte at a fixed offset, same total size, likely a stuffing/
+    continuity-counter byte — cases 34, 36, and the larger-effect case 39),
+    into Matroska (a `Duration`-element encoding difference downstream of
+    finding 56's already-noted TS-source duration gap — cases 37, 38), and
+    into ASF (case 35, and case 40's AVI→AVI-adjacent header byte, possibly
+    a 14th cluster on its own) — not fully disentangled in this sample; a
+    byte-level trace of each would be needed to confirm whether these three
+    are one shared muxer-side issue or three independent ones.
+
+**Confidence caveats, stated rather than glossed over.** (a) This is one
+40-case draw with `seed(42)`; a different draw could land anywhere in the
+~81–99% interval above, and the true root-cause count for the full 455 is
+extrapolated from a sample that already happened to cover a wide range of
+suites (asf/matroska/flv/wav/avi/dv/ogg/isobmff/mpegts/mpegps/six remux
+pairs) — it is a reasonable but not certain guide to the other 415 cases.
+(b) The version-drift/real-divergence split for cases 18–19 (`channel_layout`)
+is a plausibility judgment, not a measurement against a real ffmpeg 8.1
+binary — none is installed on this machine. A future pass with a pinned 8.1
+build could turn this sample into an actual measurement rather than an
+informed guess for that one cluster. (c) The suite-artefact classification
+for cases 20–21 follows the coordinator's own AVI-no-PTS example directly;
+it is not a claim that AVI-sourced timestamp comparisons are *never* worth
+fixing, only that the container genuinely has no on-disk PTS for either tool
+to be "right" about.
+
+### How to extend this sample
+
+The saved case list is a mechanical parse of a `vaco-conformance run --tier
+core` log (see this finding's methodology above) into one record per `FAIL`
+block, in the order the harness printed them (== suite-declaration order,
+stable across runs since `[[media]]` order in the `.toml` files does not
+change without a commit). To draw a different, non-overlapping slice: save a
+fresh run's output, parse it the same way, then `random.seed(<new
+seed>); random.sample(range(<current diverged count>), <n>)`. Using a new
+seed rather than reusing `42` on a re-run avoids re-classifying cases this
+finding already covers unless the goal is specifically to re-check them
+against a newer run.
+
+**Not attempted here**: fixing any of the 13–14 root causes above — each
+belongs to whichever crate owns the affected muxer/demuxer
+(`vaco-demux-asf`/`vaco-format-core`, `vaco-demux-flv`, `vaco-parse-mpeg12`-
+adjacent profile mapping, `vaco-demux-dv`, `vaco-demux-ogg`/`vaco-codec-flac`,
+`vaco-demux-mpegts`, `vaco-mux-mpegts`/`vaco-mux-matroska`/`vaco-mux-asf`),
+none of which this pass touched, and several of which may already be
+mid-edit by another agent tonight — check `git status`/`git log` for the
+specific file before starting any of them.
