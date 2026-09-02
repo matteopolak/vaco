@@ -181,6 +181,59 @@ fn build_video(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
     }))
 }
 
+/// `dfLa`'s payload must be a real FLAC metadata block (a 4-byte header --
+/// last-block flag, 7-bit type, 24-bit length -- then the payload), never
+/// the bare `STREAMINFO`. `CodecParameters::extradata` for a FLAC stream is
+/// `"fLaC" + STREAMINFO` (`FlacEncoder::extradata`'s own convention, the
+/// same shape a standalone `.flac` file's magic-plus-first-block needs),
+/// not a metadata block -- writing it into `dfLa` unstripped and unwrapped
+/// left `ffmpeg` unable to even open the file: "STREAMINFO must be first
+/// FLACMetadataBlock", because the bytes right after `dfLa`'s own
+/// version+flags were `"fLaC"` where a real block header belongs. Measured
+/// end to end: `vaco -i mono.wav -c:a flac out.m4a` produced a file
+/// `ffmpeg -i out.m4a` refused outright. The same class of bug
+/// `vaco-demux-mp4`'s `alac` extradata fix addressed, on the write side and
+/// a different codec: extradata means something different per container,
+/// and a muxer that writes it verbatim is trusting a shape nothing promised.
+///
+/// Deliberately re-implemented here rather than depending on
+/// `vaco-codec-flac` for it: `vaco-mux-ogg::headers::streaminfo_payload_from_extradata`
+/// already carries the identical "accept bare-34 or `fLaC`-wrapped" logic
+/// as its own small, local copy rather than a cross-crate dependency on the
+/// codec crate that happens to produce this shape, and this follows the
+/// same precedent.
+fn flac_streaminfo_metadata_block(extradata: &[u8]) -> Result<[u8; 38]> {
+    let bad = || Error::Unsupported("mp4: FLAC extradata is not a recognised STREAMINFO shape");
+    let payload: &[u8] = if extradata.len() == 34 {
+        extradata
+    } else {
+        let body = extradata.strip_prefix(b"fLaC").ok_or_else(bad)?;
+        let header = body.get(..4).ok_or_else(bad)?;
+        let [b0, b1, b2, b3] = header else {
+            return Err(bad());
+        };
+        if b0 & 0x7F != 0 {
+            return Err(Error::Unsupported(
+                "mp4: FLAC extradata's first metadata block is not STREAMINFO",
+            ));
+        }
+        let len = (u32::from(*b1) << 16) | (u32::from(*b2) << 8) | u32::from(*b3);
+        if len != 34 {
+            return Err(bad());
+        }
+        body.get(4..38).ok_or_else(bad)?
+    };
+    let mut block = [0u8; 38];
+    block[0] = 0x80; // last metadata block, type 0 (STREAMINFO)
+    block[1] = 0;
+    block[2] = 0;
+    block[3] = 34;
+    if let Some(dst) = block.get_mut(4..38) {
+        dst.copy_from_slice(payload.get(..34).ok_or_else(bad)?);
+    }
+    Ok(block)
+}
+
 fn build_audio(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Result<Vec<u8>> {
     let a = params.audio.as_ref().ok_or(Error::Unsupported(
         "mp4: audio stream has no AudioParameters",
@@ -212,7 +265,7 @@ fn build_audio(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
             FourCc::new(b"Opus")
         }
         CodecId::Flac => {
-            extensions.extend_from_slice(&writer::dfla(extradata));
+            extensions.extend_from_slice(&writer::dfla(&flac_streaminfo_metadata_block(extradata)?));
             FourCc::new(b"fLaC")
         }
         CodecId::Alac => {

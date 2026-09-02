@@ -29,7 +29,7 @@
 
 use vaco_bitstream::BitWriter;
 use vaco_codec_core::{Accept, Caps, Encoder, Machine};
-use vaco_core::{Error, Result, Timestamp};
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_frame::{Frame, FrameData};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
@@ -264,6 +264,22 @@ impl FlacEncoder {
         self.max_block_used = self.max_block_used.max(block_size as u32);
         let mut packet = Packet::from_slice(budget, &bytes)?;
         packet.pts = pts;
+        // Same bug class as `pts` above, one field over: this encoder never
+        // set `Packet::duration` either. Harmless in Matroska, which infers
+        // a block's duration from the gap to the next block's own timecode,
+        // but MP4's `stts` table needs every sample's real duration up
+        // front, and derives only the *last* run in a track from this field
+        // (every earlier one comes from the delta between consecutive
+        // `dts`s instead -- see `vaco-mux-mp4::track::TrackState`). Leaving
+        // it at the `Duration::default()` a fresh `Packet` carries silently
+        // undercounted a real `-c:a flac out.m4a` transcode's declared
+        // duration by exactly the final block's length, and `ffmpeg`'s own
+        // decode of it dropped that block outright -- measured end to end,
+        // not a theoretical gap.
+        let time_base = Rational::new(1, i32::try_from(state.sample_rate).unwrap_or(1).max(1));
+        packet.duration = Timestamp::new(i64::try_from(block_size).unwrap_or(0))
+            .to_duration(time_base)
+            .unwrap_or(Duration::ZERO);
         packet.flags = PacketFlags::KEY;
         self.machine.emit(packet);
         Ok(())
