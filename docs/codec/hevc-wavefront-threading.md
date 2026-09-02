@@ -723,19 +723,31 @@ itself is threaded) before the next begins:
    context-bank handoff as its own `RowPublish<ContextBank>` (`ContextBank`
    already `Copy`, so this reused the existing primitive, not a new one),
    replacing `saved_ctx`, still single-threaded.
-3. **Analysis done** ("Step 3's concrete field categorization" section
-   below); code not yet started. `Ctx`'s own split into shared (`Arc` or
-   plain `&`, since the slice lives at least as long as the row loop) and
-   per-row-exclusive parts, mechanically threading the new shape through
-   `ctu.rs`/`deblock.rs`/`sao.rs`'s existing call sites, still
-   single-threaded. Confirmed, not merely still expected, to be the step
-   needing its own re-verification pass: `pic` turns out to need dropping
-   from `Ctx` entirely (unused by the walk), and `recon`/`cu_grid`/
-   `edges`/`sao_params` each need a *second* API change beyond step 1's
-   own `RowPublish` move, to pull `current` out of the shared struct —
-   see that section for exactly what and why, including
-   `retarget_pic_for_test` as a second call site needing the same update.
-   Likely more than one commit, per the coordinator's own sanction.
+3. Two commits, per the coordinator's own sanction to split this step.
+   - **3a done** (commit `c1c6f71`, `planning/E2E-GAPS.md` §45): the four
+     `current` splits. `recon`/`cu_grid`/`edges`/`sao_params` each pull
+     `current` (or, for `ReconPlane`, `current_row`/`current_col`/
+     `current_published`/`ready`) into a clearly separate piece from a new
+     `*Shared` type holding geometry and the `RowPublish` board — the
+     *second* API change each needed beyond step 1's own `RowPublish` move
+     (see "Step 3's concrete field categorization" below for why step 1
+     alone was not enough). `ReconPlane`'s own split does not by itself
+     make `recon` dispatch-ready — see "`PictureWriter` is single-writer
+     today" below — but keeps it structurally consistent with the other
+     three. Measured: `current_row`/`current_col`/`current_published` are
+     written once per CTU, not once per row, so this got a real
+     interleaved measurement rather than a bookkeeping-only note — CPU-
+     seconds median 0.993x, mean 0.995x, clearing the gate with room to
+     spare.
+   - **3b not started**: `Ctx`'s own split proper — the ~28 shared
+     read-only fields plus `inter`, and the four per-row-exclusive scalars
+     around `qp_y_prev`, mechanically threading the already-separated
+     `shared`/`current` pieces from 3a through `ctu.rs`/`deblock.rs`/
+     `sao.rs`'s existing call sites. `pic` needs dropping from the per-row
+     task's own state (needed by the still-serial deblock/SAO pass, not by
+     per-row reconstruction — see the `pic` correction below), and
+     `retarget_pic_for_test` is a second call site needing the same
+     update.
 4. Only then, real `std::thread::spawn` dispatch over the row loop, reusing
    `vaco_codec_core::threading`'s `Pool`/`Queue`/`Condvar`/`ReplyGuard`
    shape (row index in place of that module's frame index, `Result<()>`
