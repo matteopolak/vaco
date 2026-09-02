@@ -10,20 +10,12 @@
     reason = "test code: a panic is the assertion mechanism"
 )]
 
-use vaco_bitstream::{BitReader, Padded};
+use vaco_bitstream::BitReader;
 use vaco_limits::{Budget, Limits};
 use vaco_pool::{ALIGN, BITSTREAM_PADDING, Buffer, BufferPool, PoolConfig};
 
 fn budget() -> Budget {
     Budget::new(Limits::permissive())
-}
-
-#[test]
-fn padding_constant_matches_bitstream() {
-    // The compile-time assertion in lib.rs is the real guard; this makes the
-    // contract visible in the test output too.
-    assert_eq!(BITSTREAM_PADDING, Padded::PAD);
-    assert_eq!(ALIGN, 64);
 }
 
 #[test]
