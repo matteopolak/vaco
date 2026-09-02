@@ -92,18 +92,19 @@ build you have can actually open.
 
 ## Compared to FFmpeg
 
-Component counts, against `ffmpeg` 9.0.1 on the same machine. FFmpeg's numbers come
-from `ffmpeg -decoders`, `-encoders`, `-filters` and so on; vaco's come from its
-generated registry tables.
+Component counts, against `ffmpeg` 9.0.1 on the same machine. Both columns are counted
+the same way — the entries each binary lists under `-demuxers`, `-decoders`,
+`-filters` and so on — because counting the two sides differently is how the earlier
+version of this table came to overstate protocols by nearly twice.
 
 | | vaco | FFmpeg 9.0.1 |
 |---|---:|---:|
-| Demuxers | 175 | 365 |
-| Muxers | 118 | 184 |
+| Demuxers | 172 | 361 |
+| Muxers | 117 | 184 |
 | Decoders | 89 | 527 |
 | Encoders | 65 | 190 |
 | Filters | 327 | 481 |
-| Protocols | 27 | 41 |
+| Protocols | 14 | 41 |
 
 Two caveats on that table. The decoder and encoder counts include the
 patent-encumbered ones, which a default build leaves out. And a large share of the
@@ -140,8 +141,8 @@ Measured across both binaries:
 | | `vaco` | `vaco-probe` |
 |---|---:|---:|
 | Options in the table | 172 | 65 |
-| Implemented | 66 | 57 |
-| Refused by name | 103 | 8 |
+| Implemented | 70 | 55 |
+| Refused by name | 99 | 10 |
 | Accepted as a deliberate no-op | 3 | 0 |
 
 Roughly two in five are implemented. An option that isn't exits with an error naming
@@ -153,7 +154,9 @@ that category too and are now implemented.
 The three no-ops are `-qphist`, `-top` and `-stdin`, which ffmpeg also ignores or
 which already describe what this build does.
 
-Counts move as work lands. `cargo run -p xtask -- option-consumption-check` reports
+Counts move as work lands, and not always upwards: `vaco-probe`'s implemented count
+last went *down*, because an audit found `-c` and `-cpucount` being accepted and
+ignored and made them refuse. `cargo run -p xtask -- option-consumption-check` reports
 any option that parses and reaches nothing.
 
 ### Performance
