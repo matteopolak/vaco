@@ -10241,6 +10241,17 @@ pub static COMPONENTS: &[crate::Component] = &[
     },
     crate::Component {
         kind: crate::Kind::BitstreamFilter,
+        name: "vp9_extract_vpcc",
+        long_name: Some("Derive a vpcC configuration record from VP9 frame headers"),
+        krate: "vaco-bsf-vpx",
+        feature: None,
+        media: None,
+        codec: None,
+        extensions: &[],
+        mime_types: &[],
+    },
+    crate::Component {
+        kind: crate::Kind::BitstreamFilter,
         name: "vp9_metadata",
         long_name: Some("Modify metadata embedded in a VP9 stream"),
         krate: "vaco-bsf-vpx",
@@ -11690,6 +11701,7 @@ const _: () = {
     let _ = &::vaco_bsf_generic::showinfo::DESC;
     let _ = &::vaco_bsf_subtitle::text2movsub::DESC;
     let _ = &::vaco_bsf_generic::trace_headers::DESC;
+    let _ = &::vaco_bsf_vpx::extract_vpcc::DESC;
     let _ = &::vaco_bsf_vpx::metadata::DESC;
     let _ = &::vaco_bsf_vpx::superframe::DESC;
     let _ = &::vaco_bsf_vpx::superframe_split::DESC;

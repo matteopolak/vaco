@@ -154,26 +154,54 @@ fn cell(owner: Option<&String>, wanted: bool) -> String {
     }
 }
 
+/// Which of `reference-formats.txt`'s bracketed sections a line falls under.
+/// `Other` and `None` both mean "collect nothing", but stay distinct so a
+/// stray name before the file's first heading is still an error rather than
+/// silently accepted the same way a name in `[decoders]`/`[filters]`/etc. is.
+#[derive(PartialEq, Eq)]
+enum Section {
+    None,
+    Demux,
+    Mux,
+    Other,
+}
+
 fn parse_reference(text: &str) -> Result<(BTreeSet<String>, BTreeSet<String>), String> {
     let mut demux = BTreeSet::new();
     let mut mux = BTreeSet::new();
-    let mut section = "";
+    let mut section = Section::None;
     for line in text.lines() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         match line {
-            "[demuxers]" => section = "d",
-            "[muxers]" => section = "m",
+            "[demuxers]" => section = Section::Demux,
+            "[muxers]" => section = Section::Mux,
+            // The real bug this arm closes: `xtask/data/reference-formats.txt`
+            // has five other bracketed sections after `[muxers]` —
+            // `[decoders]`, `[encoders]`, `[filters]`, `[bitstream_filters]`,
+            // `[protocols]` — and none of them used to reset `section` at
+            // all, so every name in every one of them (hundreds) fell
+            // through to the `name =>` arm below and was silently counted as
+            // a *muxer*, the last section this function actually tracked.
+            // Measured: `cargo xtask gen-coverage` reported "Reference: 1248"
+            // muxers against a real count of ~184 before this fix — decoders
+            // (527) + encoders (190) + filters (481) + bitstream_filters
+            // (51) + protocols (41), plus their own header lines, all
+            // dumped into the same `BTreeSet`.
+            "[decoders]" | "[encoders]" | "[filters]" | "[bitstream_filters]" | "[protocols]" => {
+                section = Section::Other;
+            }
             name => match section {
-                "d" => {
+                Section::Demux => {
                     demux.insert(name.to_string());
                 }
-                "m" => {
+                Section::Mux => {
                     mux.insert(name.to_string());
                 }
-                _ => {
+                Section::Other => {}
+                Section::None => {
                     return Err(format!(
                         "reference-formats.txt: `{name}` appears before any \
                          [demuxers] or [muxers] heading"
@@ -209,5 +237,32 @@ mod tests {
     fn a_column_the_reference_does_not_populate_reads_blank_not_as_a_gap() {
         assert_eq!(cell(None, false), "");
         assert_eq!(cell(None, true), "—");
+    }
+
+    /// The real bug, reproduced with the file's actual section order:
+    /// `[muxers]` is followed by `[decoders]`/`[encoders]`/`[filters]`/
+    /// `[bitstream_filters]`/`[protocols]` in the real
+    /// `xtask/data/reference-formats.txt`, and every name in every one of
+    /// those five used to be silently counted as a muxer because nothing
+    /// reset `section` when a heading it did not recognise went by.
+    #[test]
+    fn sections_after_muxers_do_not_leak_into_it() {
+        let (d, m) = parse_reference(
+            "[demuxers]\navi\n[muxers]\nmp4\n[decoders]\nh264\nvp9\n\
+             [encoders]\naac\n[filters]\nscale\n[bitstream_filters]\nnull\n\
+             [protocols]\nfile\n",
+        )
+        .expect("well-formed fixture parses");
+        assert_eq!(d, BTreeSet::from(["avi".to_string()]));
+        assert_eq!(m, BTreeSet::from(["mp4".to_string()]));
+    }
+
+    /// A name before the file's very first recognised heading is still an
+    /// error — the fix for the leak above must not also silence this.
+    #[test]
+    fn names_before_the_first_heading_still_error_even_with_later_sections() {
+        assert!(
+            parse_reference("avi\n[demuxers]\nmp4\n[muxers]\nmp4\n[decoders]\nh264\n").is_err()
+        );
     }
 }

@@ -48,6 +48,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod extract_vpcc;
 pub mod metadata;
 pub mod superframe;
 pub mod superframe_split;
@@ -55,7 +56,12 @@ pub mod superframe_split;
 /// Every filter this crate registers.
 #[must_use]
 pub fn filters() -> &'static [vaco_bsf_core::BsfDesc] {
-    &[metadata::DESC, superframe::DESC, superframe_split::DESC]
+    &[
+        metadata::DESC,
+        superframe::DESC,
+        superframe_split::DESC,
+        extract_vpcc::DESC,
+    ]
 }
 
 #[cfg(test)]

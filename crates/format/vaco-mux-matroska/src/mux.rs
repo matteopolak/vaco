@@ -716,7 +716,9 @@ impl MatroskaMuxer {
             }
             body.extend_from_slice(&write_element(el::AUDIO, &audio));
         }
-        if let Some(bytes) = t.extradata.as_ref().filter(|d| !d.is_empty()) {
+        if !codec::never_carries_extradata_str(t.codec_id)
+            && let Some(bytes) = t.extradata.as_ref().filter(|d| !d.is_empty())
+        {
             body.extend_from_slice(&vaco_format_ebml::binary(el::CODECPRIVATE, bytes));
         }
         // `TrackEntry`'s own size field is the full 8-octet VINT width, not
@@ -1571,6 +1573,42 @@ mod tests {
         mux.write_trailer().unwrap();
         let bytes = buf.snapshot();
         assert!(bytes.windows(4).any(|w| w == [1, 2, 3, 4]));
+    }
+
+    /// The mirror of the previous test, and the mirror bug: an MP4 source
+    /// hands a VP9 stream a real, non-empty `vpcC` as `extradata` (measured,
+    /// `vaco-demux-mp4` reads one back off a real ISOBMFF file), but
+    /// Matroska/WebM's `V_VP9` never carries `CodecPrivate` at all — real
+    /// `ffmpeg 9.0.1`'s own MP4→Matroska remux of the identical stream
+    /// writes no `CodecPrivate` child whatsoever. Those `vpcC` bytes must
+    /// never reach the file's `CodecPrivate`, even though they are real,
+    /// non-empty, and would have passed the old unconditional check.
+    #[test]
+    fn vp9_never_gets_codec_private_even_with_real_extradata_present() {
+        let s = MemorySink::new();
+        let buf = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let mut p = CodecParameters::video().with_codec(CodecId::Vp9);
+        p.video = Some(VideoParameters {
+            width: 64,
+            height: 48,
+            frame_rate: Rational::new(25, 1),
+            ..VideoParameters::default()
+        });
+        // A real 12-byte `vpcC` payload shape (version/flags/profile/level/
+        // packed byte/three colour bytes/zero init-data size) — distinctive
+        // marker bytes so a false negative here could not slip through by
+        // accident.
+        p.extradata = Some(vec![0x01, 0x00, 0x00, 0x00, 0xAA, 0xBB, 0x82, 0x02, 0x02, 0x02, 0x00, 0x00]);
+        let idx = mux.add_stream(&p).unwrap();
+        mux.write_header().unwrap();
+        mux.write_packet(&pkt(idx, 0, true)).unwrap();
+        mux.write_trailer().unwrap();
+        let bytes = buf.snapshot();
+        assert!(
+            !bytes.windows(4).any(|w| w == [0xAA, 0xBB, 0x82, 0x02]),
+            "the vpcC bytes must never reach CodecPrivate for V_VP9"
+        );
     }
 
     /// The FFV1 bug, reproduced with no codec crate at all: `add_stream` is

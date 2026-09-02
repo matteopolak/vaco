@@ -116,10 +116,45 @@ fn build_video(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
             FourCc::new(b"av01")
         }
         CodecId::Vp8 => {
+            // Unlike VP9, VP8's colour fields live inside the boolean-coded
+            // first partition (RFC 6386 §9.2) — genuinely unreachable
+            // without running the arithmetic decoder, and real `ffmpeg
+            // 9.0.1` does not mux VP8 into MP4 at all (measured: `-c copy`
+            // on a real `libvpx`-encoded WebM refuses outright, "codec not
+            // currently supported in container"). So there is no bitstream
+            // filter that could ever hand this a real record the way
+            // `vp9_extract_vpcc` does for VP9 — an empty `extradata` here
+            // can only mean "nobody could ever supply one", not "not yet",
+            // and a `vpcC` with a correct header and zero payload bytes is
+            // a file real `ffprobe` refuses outright. Refuse by name
+            // instead of writing it.
+            if extradata.is_empty() {
+                return Err(Error::Unsupported(
+                    "mp4: vp8 has no vpcC configuration record and this build cannot derive one \
+                     (its colour fields are only readable by decoding); refusing rather than \
+                     writing an empty vpcC box",
+                ));
+            }
             extensions.extend_from_slice(&writer::vpcc(extradata));
             FourCc::new(b"vp08")
         }
         CodecId::Vp9 => {
+            // Deliberately *not* refused here even when `extradata` is
+            // empty, unlike VP8 just above: `WebM`/Matroska carries no
+            // `CodecPrivate` for VP9 at all, so a stream copied straight
+            // from there always calls this function once with none, before
+            // `MovMuxer::check_bitstream`'s `vp9_extract_vpcc` request has
+            // had a single packet to derive one from — `add_stream` runs
+            // this immediately (`add_stream_with`), long before the first
+            // `write_packet`. `MovMuxer::write_trailer` is the real gate:
+            // it refuses the file if this track's extradata is *still*
+            // empty once every packet has passed through, the same
+            // "defer the check to the point nothing more can arrive"
+            // shape `vaco-mux-matroska::mux::flush_header_bytes` already
+            // uses for its own `requires_extradata_str` gate. Writing a
+            // possibly-empty `vpcC` here is safe precisely because nothing
+            // reads this box until `write_trailer` finishes rebuilding it
+            // via `MovMuxer::adopt_new_extradata`.
             extensions.extend_from_slice(&writer::vpcc(extradata));
             FourCc::new(b"vp09")
         }

@@ -135,6 +135,28 @@ pub fn requires_extradata_str(codec_id_str: &str) -> bool {
     )
 }
 
+/// Whether a track whose Matroska `CodecID` is `codec_id_str` must never
+/// carry `CodecPrivate`, even when [`crate::mux::TrackOut::extradata`]
+/// happens to be non-empty.
+///
+/// The mirror problem to [`requires_extradata_str`]: `V_VP8`/`V_VP9` are
+/// self-contained bitstreams that no real encoder or `WebM` muxer ever gives a
+/// `CodecPrivate` at all (`draft-ietf-cellar-codec`; measured directly —
+/// `ffmpeg 9.0.1`'s own MP4→Matroska remux of a `vp09` track carrying a real
+/// `vpcC` produces a `Tracks` element with no `CodecPrivate` child
+/// whatsoever, not an empty one). Left unchecked, a stream arriving here
+/// from MP4 (where `vaco-demux-mp4` reads a real `vpcC`/`VpCodecConfigurationRecord`
+/// into `extradata`) would have those ISOBMFF-shaped bytes written straight
+/// into `CodecPrivate` — a value no real `WebM` reader expects and this
+/// crate's own `codec_id_str` table never asks for, the same class of bug
+/// `requires_extradata_str`'s own doc names but in the opposite direction:
+/// "wrote something" masking "should have written nothing", rather than
+/// "wrote nothing" masking "should have written something".
+#[must_use]
+pub fn never_carries_extradata_str(codec_id_str: &str) -> bool {
+    matches!(codec_id_str, "V_VP8" | "V_VP9")
+}
+
 /// Whether `id` is one of the video codecs a `webm` `DocType` may carry.
 #[must_use]
 pub const fn webm_allows_video(id: CodecId) -> bool {

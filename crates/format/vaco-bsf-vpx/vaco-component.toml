@@ -15,3 +15,9 @@ kind      = "bitstream_filter"
 name      = "vp9_superframe_split"
 long_name = "Split VP9 superframes into single frames"
 ctor      = "vaco_bsf_vpx::superframe_split::DESC"
+
+[[component]]
+kind      = "bitstream_filter"
+name      = "vp9_extract_vpcc"
+long_name = "Derive a vpcC configuration record from VP9 frame headers"
+ctor      = "vaco_bsf_vpx::extract_vpcc::DESC"

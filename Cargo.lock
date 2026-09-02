@@ -160,6 +160,20 @@ name = "bytemuck"
 version = "1.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "95832e849adfb21180ccb6826a99da14e5d266ae5c2e668e1602cf234f153797"
+dependencies = [
+ "bytemuck_derive",
+]
+
+[[package]]
+name = "bytemuck_derive"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fc0e56a716f1e132ff6bf4bdac1c944a3fcdc1cae65f70a4a2a1ac3b401d2d1f"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.3",
+]
 
 [[package]]
 name = "byteorder-lite"
@@ -262,6 +276,29 @@ dependencies = [
  "encode_unicode",
  "libc",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "cosmic-text"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "59fd57d82eb4bfe7ffa9b1cec0c05e2fd378155b47f255a67983cb4afe0e80c2"
+dependencies = [
+ "bitflags",
+ "fontdb",
+ "log",
+ "rangemap",
+ "rayon",
+ "rustc-hash",
+ "rustybuzz",
+ "self_cell",
+ "swash",
+ "sys-locale",
+ "ttf-parser 0.21.1",
+ "unicode-bidi",
+ "unicode-linebreak",
+ "unicode-script",
+ "unicode-segmentation",
 ]
 
 [[package]]
@@ -516,6 +553,38 @@ name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3f9eec918d3f24069decb9af1554cad7c880e2da24a9afd88aca000531ab82c1"
+
+[[package]]
+name = "font-types"
+version = "0.7.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3971f9a5ca983419cdc386941ba3b9e1feba01a0ab888adf78739feb2798492"
+dependencies = [
+ "bytemuck",
+]
+
+[[package]]
+name = "fontconfig-parser"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbc773e24e02d4ddd8395fd30dc147524273a83e54e0f312d986ea30de5f5646"
+dependencies = [
+ "roxmltree",
+]
+
+[[package]]
+name = "fontdb"
+version = "0.16.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b0299020c3ef3f60f526a4f64ab4a3d4ce116b1acbf24cdd22da0068e5d81dc3"
+dependencies = [
+ "fontconfig-parser",
+ "log",
+ "memmap2",
+ "slotmap",
+ "tinyvec",
+ "ttf-parser 0.20.0",
+]
 
 [[package]]
 name = "foreign-types"
@@ -911,6 +980,15 @@ name = "memchr"
 version = "2.8.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
+
+[[package]]
+name = "memmap2"
+version = "0.9.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1219ed1b7f229ee7104d281dd01d6802fe28bb6e95d292942c4daacdeb798c0"
+dependencies = [
+ "libc",
+]
 
 [[package]]
 name = "miniz_oxide"
@@ -1376,6 +1454,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "rangemap"
+version = "1.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a611d15b50743feb4c76b7d03edcb0e64f399c26961e4efe6975bc398be6aa3d"
+
+[[package]]
 name = "raw-cpuid"
 version = "11.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1402,6 +1486,16 @@ checksum = "22e18b0f0062d30d4230b2e85ff77fdfe4326feb054b9783a3460d8435c8ab91"
 dependencies = [
  "crossbeam-deque",
  "crossbeam-utils",
+]
+
+[[package]]
+name = "read-fonts"
+version = "0.22.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "69aacb76b5c29acfb7f90155d39759a29496aebb49395830e928a9703d2eec2f"
+dependencies = [
+ "bytemuck",
+ "font-types",
 ]
 
 [[package]]
@@ -1444,6 +1538,18 @@ dependencies = [
  "untrusted",
  "windows-sys 0.52.0",
 ]
+
+[[package]]
+name = "roxmltree"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c20b6793b5c2fa6553b250154b78d6d0db37e72700ae35fad9387a46f487c97"
+
+[[package]]
+name = "rustc-hash"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "08d43f7aa6b08d49f382cde6a7982047c3426db949b1424bc4b7ec9ae12c6ce2"
 
 [[package]]
 name = "rustfft"
@@ -1520,10 +1626,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustybuzz"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfb9cf8877777222e4a3bc7eb247e398b56baba500c38c1c46842431adc8b55c"
+dependencies = [
+ "bitflags",
+ "bytemuck",
+ "libm",
+ "smallvec",
+ "ttf-parser 0.21.1",
+ "unicode-bidi-mirroring",
+ "unicode-ccc",
+ "unicode-properties",
+ "unicode-script",
+]
+
+[[package]]
 name = "scopeguard"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94143f37725109f92c262ed2cf5e59bce7498c01bcc1502d7b9afe439a4e9f49"
+
+[[package]]
+name = "self_cell"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2ab42ca02749e120097e328d91d415325bdf43b1c72c4c8badf37375fe40a813"
 
 [[package]]
 name = "sha1"
@@ -1566,6 +1695,25 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
+name = "skrifa"
+version = "0.22.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e1c44ad1f6c5bdd4eefed8326711b7dbda9ea45dfd36068c427d332aa382cbe"
+dependencies = [
+ "bytemuck",
+ "read-fonts",
+]
+
+[[package]]
+name = "slotmap"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bdd58c3c93c3d278ca835519292445cb4b0d4dc59ccfdf7ceadaab3f8aeb4038"
+dependencies = [
+ "version_check",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.15.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1594,6 +1742,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 
 [[package]]
+name = "swash"
+version = "0.1.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cbd59f3f359ddd2c95af4758c18270eddd9c730dde98598023cdabff472c2ca2"
+dependencies = [
+ "skrifa",
+ "yazi",
+ "zeno",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1613,6 +1772,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "sys-locale"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8eab9a99a024a169fe8a903cf9d4a3b3601109bcc13bd9e3c6fff259138626c4"
+dependencies = [
+ "libc",
 ]
 
 [[package]]
@@ -1673,6 +1841,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "tinyvec"
+version = "1.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bb4ebadaa0af04fab11ae01eb5f9fdb5f9c5b875506e210e71c07873528baa7f"
+dependencies = [
+ "tinyvec_macros",
+]
+
+[[package]]
+name = "tinyvec_macros"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
 name = "tracing"
 version = "0.1.44"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1714,6 +1897,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttf-parser"
+version = "0.20.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17f77d76d837a7830fe1d4f12b7b4ba4192c1888001c7164257e4bc6d21d96b4"
+
+[[package]]
+name = "ttf-parser"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c591d83f69777866b9126b24c6dd9a18351f177e49d625920d19f989fd31cf8"
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1726,10 +1921,52 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
+name = "unicode-bidi"
+version = "0.3.18"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
+
+[[package]]
+name = "unicode-bidi-mirroring"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "23cb788ffebc92c5948d0e997106233eeb1d8b9512f93f41651f52b6c5f5af86"
+
+[[package]]
+name = "unicode-ccc"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1df77b101bcc4ea3d78dafc5ad7e4f58ceffe0b2b16bf446aeb50b6cb4157656"
+
+[[package]]
 name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-linebreak"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3b09c83c3c29d37506a3e260c08c03743a6bb66a9cd432c6934ab501a190571f"
+
+[[package]]
+name = "unicode-properties"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7df058c713841ad818f1dc5d3fd88063241cc61f49f5fbea4b951e8cf5a8d71d"
+
+[[package]]
+name = "unicode-script"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "383ad40bb927465ec0ce7720e033cb4ca06912855fc35db31b5755d0de75b1ee"
+
+[[package]]
+name = "unicode-segmentation"
+version = "1.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
 
 [[package]]
 name = "untrusted"
@@ -1770,6 +2007,21 @@ name = "utf8-zero"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
+
+[[package]]
+name = "vaco-ass"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-color",
+ "vaco-core",
+ "vaco-filter-draw",
+ "vaco-filter-text",
+ "vaco-format-subtitle",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-pixfmt",
+]
 
 [[package]]
 name = "vaco-bitstream"
@@ -1880,6 +2132,8 @@ dependencies = [
  "vaco-core",
  "vaco-limits",
  "vaco-packet",
+ "vaco-parse-vpx",
+ "vaco-pool",
 ]
 
 [[package]]
@@ -1940,38 +2194,12 @@ dependencies = [
  "vaco-core",
  "vaco-demux-matroska",
  "vaco-expr",
- "vaco-filter-aanalysis",
- "vaco-filter-adynamics",
- "vaco-filter-aeffects",
- "vaco-filter-aeq",
- "vaco-filter-analysis",
- "vaco-filter-artistic",
- "vaco-filter-asource",
- "vaco-filter-audio",
- "vaco-filter-blur",
- "vaco-filter-color",
- "vaco-filter-convolve",
  "vaco-filter-core",
- "vaco-filter-deinterlace",
- "vaco-filter-denoise",
- "vaco-filter-draw-vf",
- "vaco-filter-geometry",
  "vaco-filter-graph",
- "vaco-filter-key",
- "vaco-filter-lut",
- "vaco-filter-mm",
- "vaco-filter-motion",
- "vaco-filter-overlay",
- "vaco-filter-palette",
- "vaco-filter-scope",
- "vaco-filter-source",
- "vaco-filter-stack",
- "vaco-filter-temporal",
- "vaco-filter-video-composite",
  "vaco-filter-video-format",
- "vaco-filter-video-geometry",
- "vaco-filter-video-source",
  "vaco-format-core",
+ "vaco-format-fixtures",
+ "vaco-frame",
  "vaco-io",
  "vaco-limits",
  "vaco-opts",
@@ -1982,6 +2210,7 @@ dependencies = [
  "vaco-registry",
  "vaco-sampfmt",
  "vaco-sched",
+ "vaco-textformat",
  "vaco-time",
 ]
 
@@ -2060,6 +2289,7 @@ dependencies = [
  "vaco-frame",
  "vaco-limits",
  "vaco-packet",
+ "vaco-parse-audio-misc",
  "vaco-sampfmt",
 ]
 
@@ -2123,6 +2353,7 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "vaco-core",
+ "vaco-simd",
 ]
 
 [[package]]
@@ -2215,6 +2446,19 @@ dependencies = [
 [[package]]
 name = "vaco-codec-dsp-sinewin"
 version = "0.1.0"
+
+[[package]]
+name = "vaco-codec-exec"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+ "vaco-pool",
+]
 
 [[package]]
 name = "vaco-codec-exr"
@@ -2315,12 +2559,16 @@ dependencies = [
  "vaco-codec-dsp-idct",
  "vaco-codec-dsp-intrapred",
  "vaco-codec-golomb",
+ "vaco-color",
  "vaco-core",
  "vaco-format-nalu",
  "vaco-frame",
  "vaco-limits",
  "vaco-packet",
  "vaco-parse-h264",
+ "vaco-pixfmt",
+ "vaco-pool",
+ "vaco-simd",
 ]
 
 [[package]]
@@ -2333,12 +2581,15 @@ dependencies = [
  "vaco-codec-core",
  "vaco-codec-dsp-idct",
  "vaco-codec-dsp-intrapred",
+ "vaco-color",
  "vaco-core",
+ "vaco-format-nalu",
  "vaco-frame",
  "vaco-limits",
  "vaco-packet",
  "vaco-parse-hevc",
  "vaco-pixfmt",
+ "vaco-pool",
 ]
 
 [[package]]
@@ -2613,12 +2864,24 @@ dependencies = [
 [[package]]
 name = "vaco-codec-subtitle-cc"
 version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+]
 
 [[package]]
 name = "vaco-codec-subtitle-teletext"
 version = "0.1.0"
 dependencies = [
  "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
 ]
 
 [[package]]
@@ -2627,6 +2890,11 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "quick-xml",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
 ]
 
 [[package]]
@@ -2661,9 +2929,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-codec-vc1"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-codec-vlc",
+ "vaco-core",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-codec-vlc"
 version = "0.1.0"
 dependencies = [
+ "divan",
  "vaco-bitstream",
 ]
 
@@ -2681,6 +2964,7 @@ dependencies = [
  "vaco-frame",
  "vaco-io",
  "vaco-limits",
+ "vaco-mux-ogg",
  "vaco-packet",
  "vaco-sampfmt",
  "vaco-tx",
@@ -2716,6 +3000,7 @@ dependencies = [
  "vaco-codec-core",
  "vaco-codec-dsp-idct",
  "vaco-codec-dsp-intrapred",
+ "vaco-codec-dsp-mecmp",
  "vaco-codec-msac",
  "vaco-core",
  "vaco-frame",
@@ -2812,6 +3097,7 @@ dependencies = [
  "vaco-core",
  "vaco-hash",
  "vaco-io",
+ "vaco-limits",
  "vaco-opts",
  "vaco-protocol-core",
  "vaco-protocol-http",
@@ -2944,6 +3230,7 @@ dependencies = [
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -2997,6 +3284,7 @@ dependencies = [
 name = "vaco-demux-mpegts"
 version = "0.1.0"
 dependencies = [
+ "divan",
  "proptest",
  "vaco-codec-core",
  "vaco-core",
@@ -3032,6 +3320,7 @@ dependencies = [
  "vaco-codec-core",
  "vaco-core",
  "vaco-format-core",
+ "vaco-format-fixtures",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
@@ -3231,6 +3520,7 @@ dependencies = [
 name = "vaco-filter-blur"
 version = "0.1.0"
 dependencies = [
+ "divan",
  "proptest",
  "vaco-color",
  "vaco-core",
@@ -3309,6 +3599,7 @@ dependencies = [
 name = "vaco-filter-denoise"
 version = "0.1.0"
 dependencies = [
+ "divan",
  "proptest",
  "rustfft",
  "vaco-core",
@@ -3530,6 +3821,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-filter-subtitle"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-ass",
+ "vaco-color",
+ "vaco-conformance",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-draw",
+ "vaco-filter-graph",
+ "vaco-filter-text",
+ "vaco-format-subtitle",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
 name = "vaco-filter-temporal"
 version = "0.1.0"
 dependencies = [
@@ -3542,6 +3853,39 @@ dependencies = [
  "vaco-filter-graph",
  "vaco-filter-vdsp",
  "vaco-frame",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-text"
+version = "0.1.0"
+dependencies = [
+ "cosmic-text",
+ "proptest",
+ "tracing",
+ "vaco-color",
+ "vaco-core",
+ "vaco-expr",
+ "vaco-filter-core",
+ "vaco-filter-draw",
+ "vaco-filter-graph",
+ "vaco-frame",
+ "vaco-limits",
+ "vaco-opts",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-filter-v360"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-filter-core",
+ "vaco-filter-graph",
+ "vaco-filter-vdsp",
+ "vaco-frame",
+ "vaco-opts",
  "vaco-pixfmt",
 ]
 
@@ -3704,6 +4048,7 @@ dependencies = [
  "vaco-limits",
  "vaco-opts",
  "vaco-packet",
+ "vaco-pool",
 ]
 
 [[package]]
@@ -3729,6 +4074,10 @@ dependencies = [
  "vaco-core",
  "vaco-io",
 ]
+
+[[package]]
+name = "vaco-format-fixtures"
+version = "0.1.0"
 
 [[package]]
 name = "vaco-format-gxf"
@@ -3819,8 +4168,10 @@ dependencies = [
  "proptest",
  "vaco-chlayout",
  "vaco-codec-core",
+ "vaco-codec-simple-audio",
  "vaco-core",
  "vaco-format-core",
+ "vaco-frame",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
@@ -3868,6 +4219,7 @@ dependencies = [
  "memchr",
  "proptest",
  "vaco-bitstream",
+ "vaco-codec-core",
  "vaco-core",
  "vaco-limits",
 ]
@@ -4214,10 +4566,12 @@ dependencies = [
  "vaco-demux-matroska",
  "vaco-format-core",
  "vaco-format-ebml",
+ "vaco-format-fixtures",
  "vaco-hash",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
+ "vaco-pool",
 ]
 
 [[package]]
@@ -4312,6 +4666,7 @@ dependencies = [
  "vaco-core",
  "vaco-demux-ogg",
  "vaco-format-core",
+ "vaco-format-fixtures",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
@@ -4394,6 +4749,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-mux-whip"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-format-core",
+ "vaco-format-rtp",
+ "vaco-hash",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-mux-rtp",
+ "vaco-packet",
+ "vaco-protocol-core",
+ "vaco-protocol-dtls",
+ "vaco-protocol-http",
+ "vaco-protocol-ice",
+ "vaco-protocol-socket",
+ "vaco-protocol-srtp",
+ "vaco-time",
+]
+
+[[package]]
 name = "vaco-opts"
 version = "0.1.0"
 dependencies = [
@@ -4467,6 +4845,17 @@ dependencies = [
  "vaco-codec-cbs",
  "vaco-codec-core",
  "vaco-color",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
+]
+
+[[package]]
+name = "vaco-parse-ffv1"
+version = "0.1.0"
+dependencies = [
+ "vaco-codec-core",
  "vaco-core",
  "vaco-limits",
  "vaco-packet",
@@ -4568,6 +4957,18 @@ dependencies = [
  "vaco-limits",
  "vaco-packet",
  "vaco-sampfmt",
+]
+
+[[package]]
+name = "vaco-parse-prores"
+version = "0.1.0"
+dependencies = [
+ "vaco-bitstream",
+ "vaco-codec-core",
+ "vaco-core",
+ "vaco-limits",
+ "vaco-packet",
+ "vaco-pixfmt",
 ]
 
 [[package]]
@@ -4748,6 +5149,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-protocol-ice"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-crypto",
+ "vaco-hash",
+ "vaco-time",
+]
+
+[[package]]
 name = "vaco-protocol-icecast"
 version = "0.1.0"
 dependencies = [
@@ -4791,8 +5203,11 @@ dependencies = [
  "proptest",
  "vaco-core",
  "vaco-crypto",
+ "vaco-io",
  "vaco-limits",
  "vaco-protocol-core",
+ "vaco-protocol-dtls",
+ "vaco-protocol-socket",
  "vaco-rtp",
  "vaco-time",
 ]
@@ -4828,6 +5243,18 @@ dependencies = [
  "vaco-hash",
  "vaco-limits",
  "vaco-protocol-core",
+]
+
+[[package]]
+name = "vaco-protocol-shared"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-io",
+ "vaco-opts",
+ "vaco-protocol-core",
+ "vaco-time",
 ]
 
 [[package]]
@@ -4913,12 +5340,14 @@ dependencies = [
  "vaco-codec-adpcm",
  "vaco-codec-alac",
  "vaco-codec-core",
+ "vaco-codec-exec",
  "vaco-codec-exr",
  "vaco-codec-ffv1",
  "vaco-codec-flac",
  "vaco-codec-gif",
  "vaco-codec-h263",
  "vaco-codec-h264",
+ "vaco-codec-hevc",
  "vaco-codec-image-simple",
  "vaco-codec-jpeg",
  "vaco-codec-jpegls",
@@ -4929,12 +5358,17 @@ dependencies = [
  "vaco-codec-pcm",
  "vaco-codec-png",
  "vaco-codec-pnm",
+ "vaco-codec-prores",
  "vaco-codec-qoi",
  "vaco-codec-rawvideo",
  "vaco-codec-simple-audio",
  "vaco-codec-subtitle-bitmap",
+ "vaco-codec-subtitle-cc",
+ "vaco-codec-subtitle-teletext",
+ "vaco-codec-subtitle-text",
  "vaco-codec-theora",
  "vaco-codec-tiff",
+ "vaco-codec-vc1",
  "vaco-codec-vorbis",
  "vaco-codec-vp8",
  "vaco-codec-vp9",
@@ -4971,6 +5405,7 @@ dependencies = [
  "vaco-filter-denoise",
  "vaco-filter-draw-vf",
  "vaco-filter-geometry",
+ "vaco-filter-graph",
  "vaco-filter-key",
  "vaco-filter-lut",
  "vaco-filter-mm",
@@ -4980,7 +5415,10 @@ dependencies = [
  "vaco-filter-scope",
  "vaco-filter-source",
  "vaco-filter-stack",
+ "vaco-filter-subtitle",
  "vaco-filter-temporal",
+ "vaco-filter-text",
+ "vaco-filter-v360",
  "vaco-filter-video-composite",
  "vaco-filter-video-format",
  "vaco-filter-video-geometry",
@@ -5017,15 +5455,18 @@ dependencies = [
  "vaco-mux-smoothstreaming",
  "vaco-mux-stream",
  "vaco-mux-utility",
+ "vaco-mux-whip",
  "vaco-parse-aac",
  "vaco-parse-audio-misc",
  "vaco-parse-av1",
+ "vaco-parse-ffv1",
  "vaco-parse-h264",
  "vaco-parse-hevc",
  "vaco-parse-image",
  "vaco-parse-mpegaudio",
  "vaco-parse-mpegvideo",
  "vaco-parse-opus",
+ "vaco-parse-prores",
  "vaco-parse-vpx",
  "vaco-protocol-core",
  "vaco-protocol-crypto",
@@ -5038,6 +5479,7 @@ dependencies = [
  "vaco-protocol-icecast",
  "vaco-protocol-ipfs",
  "vaco-protocol-local",
+ "vaco-protocol-shared",
  "vaco-protocol-socket",
  "vaco-protocol-tls",
  "vaco-protocol-wrap",
@@ -5098,6 +5540,7 @@ version = "0.1.0"
 dependencies = [
  "divan",
  "proptest",
+ "vaco-chlayout",
  "vaco-codec-core",
  "vaco-core",
  "vaco-filter-core",
@@ -5107,6 +5550,8 @@ dependencies = [
  "vaco-packet",
  "vaco-pixfmt",
  "vaco-pool",
+ "vaco-resample",
+ "vaco-sampfmt",
  "vaco-scale",
 ]
 
@@ -5322,6 +5767,18 @@ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
 [[package]]
 name = "xtask"
 version = "0.1.0"
+
+[[package]]
+name = "yazi"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c94451ac9513335b5e23d7a8a2b61a7102398b8cca5160829d313e84c9d98be1"
+
+[[package]]
+name = "zeno"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd15f8e0dbb966fd9245e7498c7e9e5055d9e5c8b676b95bd67091cd11a1e697"
 
 [[package]]
 name = "zerocopy"

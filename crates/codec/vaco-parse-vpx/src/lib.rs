@@ -72,7 +72,10 @@ pub use vp8::{FrameTag, Vp8Parser, parse_frame_tag};
 pub use vp9::{
     Vp9ColorConfig, Vp9Header, Vp9Parser, parse_display_header, parse_uncompressed_header,
 };
-pub use vpcc::{VpCodecConfigurationRecord, parse as parse_vpcc};
+pub use vpcc::{
+    VpCodecConfigurationRecord, build as build_vpcc, from_vp9_header as vpcc_from_vp9_header,
+    parse as parse_vpcc,
+};
 
 // Re-exported so a caller can describe a stream without also depending on
 // `vaco-codec-core` directly.

@@ -331,6 +331,29 @@ impl Muxer for MovMuxer {
         if self.trailer_written {
             return Err(Error::InvalidData("mp4: trailer written twice"));
         }
+        // The late half of the VP9 `vpcC` fix: `add_stream` wrote this
+        // track's sample entry from whatever `extradata` existed before the
+        // first packet was ever inspected (empty, for a stream copied
+        // straight from `WebM`/Matroska), trusting
+        // `MovMuxer::adopt_new_extradata` to replace it once
+        // `vp9_extract_vpcc` (`check_bitstream`) derives a real record from
+        // an actual frame header. If every packet has now gone by and this
+        // track's extradata is *still* empty — no key frame ever arrived,
+        // or no `BsfProvider` supplied the filter — writing the file anyway
+        // means a `vpcC` box with a correct header and zero payload bytes,
+        // which real `ffprobe` refuses outright (`Empty VP Codec
+        // Configuration box`, measured directly). Refuse by name instead,
+        // the same "check at the point nothing more can arrive" shape
+        // `vaco-mux-matroska::mux::flush_header_bytes` already uses for its
+        // own out-of-band-record gate.
+        for t in &self.tracks {
+            if t.params.codec_id == Some(CodecId::Vp9) && t.params.extradata.as_ref().is_none_or(Vec::is_empty) {
+                return Err(Error::Unsupported(
+                    "mp4: vp9 has no vpcC configuration record and none could be derived from \
+                     the bitstream; refusing rather than writing an empty vpcC box",
+                ));
+            }
+        }
         self.trailer_written = true;
         match &mut self.mode {
             Mode::Progressive(state) => progressive::finish(
@@ -379,6 +402,25 @@ impl Muxer for MovMuxer {
         }
         if let Some(t) = idx.and_then(|i| self.tracks.get_mut(i)) {
             t.bsf_decided = true;
+        }
+        // VP9 has no `header_kind_for` (it has no NAL-level parameter sets
+        // for `extract_extradata` to pull from at all — see that function's
+        // own doc), so `global_header_action` never asks anything for it,
+        // GLOBALHEADER or not. But unlike H.264/HEVC (which can be muxed
+        // length-prefixed, header-less, in a streaming context) a `vp09`
+        // sample entry's `vpcC` is not optional — every MP4 file needs one
+        // — so this is asked unconditionally, not gated on
+        // `wants_global_header()`. `WebM`/Matroska carries no `CodecPrivate`
+        // for VP9 at all, so a stream copied straight from there always
+        // starts with empty extradata; deriving one from the bitstream
+        // itself (`vaco-bsf-vpx`'s `vp9_extract_vpcc`) is what makes that
+        // copy produce a file real `ffprobe` can open rather than a `vpcC`
+        // box with a correct header and zero payload bytes (the bug this
+        // request closes — see that filter's own module doc).
+        if params.codec_id == Some(CodecId::Vp9) && needs_derived_extradata(params, pkt) {
+            return Ok(BitstreamAction::Insert {
+                name: "vp9_extract_vpcc",
+            });
         }
         Ok(global_header_action(self.flags(), params, pkt))
     }
@@ -454,6 +496,21 @@ impl Muxer for MovMuxer {
 /// crate implements. An unimplemented or unknown flag name is refused rather
 /// than silently dropped, so `+faststart+rtphint` fails loudly instead of
 /// quietly writing a file without hint tracks nobody asked to omit.
+/// Whether `params`/`pkt` still need a configuration record derived for
+/// them — the same "is there really nothing yet" check
+/// [`global_header_action`] makes internally, exposed here because this
+/// crate's own VP9 request (see [`MovMuxer::check_bitstream`]) needs to make
+/// it unconditionally, not only when `wants_global_header()` is set.
+fn needs_derived_extradata(params: &CodecParameters, pkt: &Packet) -> bool {
+    if params.extradata.as_ref().is_some_and(|e| !e.is_empty()) {
+        return false;
+    }
+    !pkt.side_data.iter().any(|sd| match sd {
+        PacketSideData::NewExtradata(buf) => !buf.is_empty(),
+        _ => false,
+    })
+}
+
 fn parse_movflags(value: &str) -> Result<crate::options::MovFlags> {
     use crate::options::MovFlags;
     let mut out = MovFlags::empty();

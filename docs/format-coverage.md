@@ -15,10 +15,10 @@ provenance. A blank note means we match the reference for that format.
 
 | | Demux | Mux |
 |---|---|---|
-| Vaco | 141 | 111 |
+| Vaco | 175 | 118 |
 | Reference | 359 | 183 |
 
-Of the 412 format names either side registers, **238** are still to be
+Of the 413 format names either side registers, **215** are still to be
 written and **1** is excluded by a decision record. The
 ratio between those two numbers is the point of the other document —
 nearly everything Vaco lacks, it lacks because nobody has written it yet.
@@ -48,7 +48,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `adp` | — |  | not yet |
 | `ads` | — |  | not yet |
 | `adts` |  | — | not yet |
-| `adx` | — | — | not yet |
+| `adx` | `vaco-format-misc-audio` | — | not yet |
 | `aea` | — | — | not yet |
 | `afc` | — |  | not yet |
 | `aiff` | `vaco-format-audio-simple` | `vaco-format-audio-simple` |  |
@@ -56,9 +56,9 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `alaw` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `alias_pix` | — |  | not yet |
 | `alp` | — | — | not yet |
-| `amr` | — | — | not yet |
-| `amrnb` | — |  | not yet |
-| `amrwb` | — |  | not yet |
+| `amr` | `vaco-format-misc-audio` | — | not yet |
+| `amrnb` | `vaco-format-misc-audio` |  |  |
+| `amrwb` | `vaco-format-misc-audio` |  |  |
 | `amv` |  | — | not yet |
 | `anm` | — |  | not yet |
 | `apac` | — |  | not yet |
@@ -66,8 +66,8 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `ape` | — |  | not yet |
 | `apm` | — | — | not yet |
 | `apng` | — | — | not yet |
-| `aptx` | — | — | not yet |
-| `aptx_hd` | — | — | not yet |
+| `aptx` | `vaco-format-misc-audio` | — | not yet |
+| `aptx_hd` | `vaco-format-misc-audio` | — | not yet |
 | `apv` | — | — | not yet |
 | `aqtitle` | — |  | not yet |
 | `argo_asf` | — | — | not yet |
@@ -92,7 +92,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `bfi` | — |  | not yet |
 | `bfstm` | — |  | not yet |
 | `bin` | — |  | not yet |
-| `bink` | — |  | not yet |
+| `bink` | `vaco-format-misc` |  |  |
 | `binka` | — |  | not yet |
 | `bit` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `bitpacked` | `vaco-demux-raw` |  |  |
@@ -105,7 +105,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `c93` | — |  | not yet |
 | `caf` | `vaco-format-audio-simple` | `vaco-format-audio-simple` |  |
 | `cavsvideo` | `vaco-demux-raw` | `vaco-mux-raw` |  |
-| `cdg` | — |  | not yet |
+| `cdg` | `vaco-format-misc` |  |  |
 | `cdxl` | — |  | not yet |
 | `cine` | — |  | not yet |
 | `codec2` | — | — | not yet |
@@ -121,7 +121,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `dds_pipe` | `vaco-demux-image2` |  |  |
 | `derf` | — |  | not yet |
 | `dfa` | — |  | not yet |
-| `dfpwm` | — | — | not yet |
+| `dfpwm` | `vaco-format-misc-audio` | — | not yet |
 | `dhav` | — |  | not yet |
 | `dirac` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `dnxhd` | `vaco-demux-raw` | `vaco-mux-raw` |  |
@@ -147,13 +147,13 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `f4v` |  | `vaco-mux-mp4` |  |
 | `f64be` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `f64le` | `vaco-demux-raw` | `vaco-mux-raw` |  |
-| `ffmetadata` | — | `vaco-mux-stream` | not yet |
+| `ffmetadata` | `vaco-format-misc` | `vaco-mux-stream` |  |
 | `fifo` |  | `vaco-mux-stream` |  |
 | `film_cpk` | — | — | not yet |
 | `filmstrip` | — | — | not yet |
 | `fits` | — | — | not yet |
-| `flac` | — | — | not yet |
-| `flic` | — |  | not yet |
+| `flac` | `vaco-format-audio-simple` | `vaco-format-audio-simple` |  |
+| `flic` | `vaco-format-misc` |  |  |
 | `flv` | `vaco-demux-flv` | `vaco-mux-flv` |  |
 | `framecrc` |  | `vaco-mux-hash` |  |
 | `framehash` |  | `vaco-mux-hash` |  |
@@ -161,19 +161,19 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `frm` | — |  | not yet |
 | `fsb` | — |  | not yet |
 | `fwse` | — |  | not yet |
-| `g722` | — | — | not yet |
-| `g723_1` | — | — | not yet |
-| `g726` | — | — | not yet |
-| `g726le` | — | — | not yet |
-| `g728` | — |  | not yet |
-| `g729` | — |  | not yet |
+| `g722` | `vaco-format-misc-audio` | — | not yet |
+| `g723_1` | `vaco-format-misc-audio` | — | not yet |
+| `g726` | `vaco-format-misc-audio` | — | not yet |
+| `g726le` | `vaco-format-misc-audio` | — | not yet |
+| `g728` | `vaco-format-misc-audio` |  |  |
+| `g729` | `vaco-format-misc-audio` |  |  |
 | `gdv` | — |  | not yet |
 | `gem_pipe` | `vaco-demux-image2` |  |  |
 | `genh` | — |  | not yet |
 | `gif` | — | — | not yet |
 | `gif_pipe` | `vaco-demux-image2` |  |  |
-| `gsm` | — | — | not yet |
-| `gxf` | — | — | not yet |
+| `gsm` | `vaco-format-misc-audio` | — | not yet |
+| `gxf` | `vaco-format-gxf` | `vaco-format-gxf` |  |
 | `h261` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `h263` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `h264` | `vaco-demux-raw` | `vaco-mux-raw` |  |
@@ -181,7 +181,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `hca` | — |  | not yet |
 | `hcom` | — |  | not yet |
 | `hdr_pipe` | `vaco-demux-image2` |  |  |
-| `hds` |  | — | not yet |
+| `hds` |  | `vaco-mux-hds` |  |
 | `hevc` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `hls` | `vaco-demux-hls` | `vaco-mux-hls` |  |
 | `hnm` | — |  | not yet |
@@ -195,6 +195,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `ilbc` | — | — | not yet |
 | `image2` | `vaco-demux-image2` | `vaco-mux-image2` |  |
 | `image2pipe` | — | — | not yet |
+| `imf` | `vaco-format-imf` |  | vaco-only |
 | `ingenient` | — |  | not yet |
 | `ipmovie` | — |  | not yet |
 | `ipod` |  | `vaco-mux-mp4` |  |
@@ -203,7 +204,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `ismv` |  | `vaco-mux-mp4` |  |
 | `iss` | — |  | not yet |
 | `iv8` | — |  | not yet |
-| `ivf` | — | — | not yet |
+| `ivf` | `vaco-format-misc` | `vaco-format-misc` |  |
 | `ivr` | — |  | not yet |
 | `j2k_pipe` | `vaco-demux-image2` |  |  |
 | `jacosub` | `vaco-subtitle-text` | `vaco-subtitle-text` |  |
@@ -267,12 +268,12 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `musx` | — |  | not yet |
 | `mv` | — |  | not yet |
 | `mvi` | — |  | not yet |
-| `mxf` | `vaco-demux-mxf` | — | not yet |
+| `mxf` | `vaco-demux-mxf` | `vaco-mux-mxf` |  |
 | `mxf_d10` |  | — | not yet |
 | `mxf_opatom` |  | — | not yet |
 | `mxg` | — |  | not yet |
 | `nc` | — |  | not yet |
-| `nistsphere` | — |  | not yet |
+| `nistsphere` | `vaco-format-misc-audio` |  |  |
 | `nsp` | — |  | not yet |
 | `nsv` | — |  | not yet |
 | `null` |  | `vaco-mux-utility` |  |
@@ -306,10 +307,10 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `psp` |  | `vaco-mux-mp4` |  |
 | `psxstr` | — |  | not yet |
 | `pva` | — |  | not yet |
-| `pvf` | — |  | not yet |
+| `pvf` | `vaco-format-misc-audio` |  |  |
 | `qcp` | — |  | not yet |
 | `qdraw_pipe` | `vaco-demux-image2` |  |  |
-| `qoa` | — |  | not yet |
+| `qoa` | `vaco-format-misc-audio` |  |  |
 | `qoi_pipe` | `vaco-demux-image2` |  |  |
 | `r3d` | — |  | not yet |
 | `rawvideo` | `vaco-demux-raw` | `vaco-mux-raw` |  |
@@ -319,7 +320,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `rka` | — |  | not yet |
 | `rl2` | — |  | not yet |
 | `rm` | — | — | not yet |
-| `roq` | — | — | not yet |
+| `roq` | `vaco-format-misc` | — | not yet |
 | `rpl` | — |  | not yet |
 | `rsd` | — |  | not yet |
 | `rso` | `vaco-format-audio-simple` | `vaco-format-audio-simple` |  |
@@ -332,11 +333,11 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `s24le` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `s32be` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `s32le` | `vaco-demux-raw` | `vaco-mux-raw` |  |
-| `s337m` | `vaco-demux-raw` |  |  |
+| `s337m` | `vaco-format-spdif` |  |  |
 | `s8` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `sami` | `vaco-subtitle-text` |  |  |
 | `sap` | — | — | not yet |
-| `sbc` | — | — | not yet |
+| `sbc` | `vaco-format-misc-audio` | — | not yet |
 | `sbg` | — |  | not yet |
 | `scc` | `vaco-subtitle-text` | `vaco-subtitle-text` |  |
 | `scd` | — |  | not yet |
@@ -352,10 +353,10 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `shn` | — |  | not yet |
 | `siff` | — |  | not yet |
 | `simbiosis_imx` | — |  | not yet |
-| `sln` | — |  | not yet |
+| `sln` | `vaco-format-misc-audio` |  |  |
 | `smjpeg` | — | — | not yet |
-| `smk` | — |  | not yet |
-| `smoothstreaming` |  | — | not yet |
+| `smk` | `vaco-format-misc` |  |  |
+| `smoothstreaming` |  | `vaco-mux-smoothstreaming` |  |
 | `smush` | — |  | not yet |
 | `sol` | — |  | not yet |
 | `sox` | `vaco-format-audio-simple` | `vaco-format-audio-simple` |  |
@@ -382,7 +383,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `tiff_pipe` | `vaco-demux-image2` |  |  |
 | `tmv` | — |  | not yet |
 | `truehd` | — | — | not yet |
-| `tta` | — | — | not yet |
+| `tta` | `vaco-format-misc-audio` | — | not yet |
 | `ttml` | `vaco-subtitle-text` | `vaco-subtitle-text` |  |
 | `tty` | — |  | not yet |
 | `txd` | — |  | not yet |
@@ -398,7 +399,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `usm` | — |  | not yet |
 | `v210` | `vaco-demux-raw` |  |  |
 | `v210x` | `vaco-demux-raw` |  |  |
-| `vag` | — |  | not yet |
+| `vag` | `vaco-format-misc-audio` |  |  |
 | `vbn_pipe` | `vaco-demux-image2` |  |  |
 | `vc1` | `vaco-demux-raw` | `vaco-mux-raw` |  |
 | `vc1test` | — | — | not yet |
@@ -425,14 +426,14 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `webp` |  | — | not yet |
 | `webp_pipe` | `vaco-demux-image2` |  |  |
 | `webvtt` | `vaco-subtitle-text` | `vaco-subtitle-text` |  |
-| `whip` |  | — | not yet |
+| `whip` |  | `vaco-mux-whip` |  |
 | `wsaud` | — | — | not yet |
 | `wsd` | — |  | not yet |
 | `wsvqa` | — |  | not yet |
 | `wtv` | — | — | not yet |
-| `wv` | — | — | not yet |
+| `wv` | `vaco-format-misc-audio` | — | not yet |
 | `wve` | — |  | not yet |
-| `xa` | — |  | not yet |
+| `xa` | `vaco-format-misc-audio` |  |  |
 | `xbin` | — |  | not yet |
 | `xbm_pipe` | `vaco-demux-image2` |  |  |
 | `xmd` | — |  | not yet |
@@ -440,6 +441,6 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `xpm_pipe` | `vaco-demux-image2` |  |  |
 | `xvag` | — |  | not yet |
 | `xwd_pipe` | `vaco-demux-image2` |  |  |
-| `xwma` | — |  | not yet |
+| `xwma` | `vaco-format-misc-audio` |  |  |
 | `yop` | — |  | not yet |
 | `yuv4mpegpipe` | `vaco-demux-raw` | `vaco-mux-raw` |  |

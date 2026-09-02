@@ -1805,6 +1805,24 @@ const ALLOW_NAME_MISMATCH: &[(&str, &str)] = &[
         "stabtransform",
         "filter: paired with `stabdetect` above; same reason.",
     ),
+    (
+        "vp9_extract_vpcc",
+        "bitstream_filter: has no reference equivalent by design, not by \
+         omission — the reference's own VP9 bitstream filters are exactly \
+         `vp9_metadata`, `vp9_raw_reorder`, `vp9_superframe`, \
+         `vp9_superframe_split` (`vaco-bsf-vpx`'s own module doc measured \
+         this against `ffmpeg -bsfs`), none of which derive a `vpcC` \
+         configuration record from frame headers. This filter exists to \
+         close a vaco-specific gap `ffmpeg` never had the same way: its MP4 \
+         muxer derives a `vp09` sample entry's `vpcC` from its own decoder's \
+         internal state on the fly, with no bitstream-filter seam exposed \
+         for it at all — this workspace instead has to make that derivation \
+         an explicit, named, registry-visible step (D14.1: a mux crate \
+         cannot depend on a parse crate directly). See \
+         `vaco-bsf-vpx::extract_vpcc`'s own module doc for the bug this \
+         closes (`vaco -c copy` of VP9-in-Matroska into MP4 producing an \
+         empty `vpcC` box real `ffprobe` refuses to open).",
+    ),
 ];
 
 fn check_reference_names(rows: &[Row]) -> Result<Vec<String>, String> {

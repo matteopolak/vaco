@@ -44,6 +44,7 @@ use vaco_color::{
 };
 
 use crate::profile;
+use crate::vp9::Vp9Header;
 
 /// One `vpcC` record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +90,98 @@ pub fn parse(data: &[u8]) -> Option<VpCodecConfigurationRecord> {
         colour_primaries,
         transfer_characteristics,
         matrix_coefficients,
+    })
+}
+
+/// Serialise a [`VpCodecConfigurationRecord`] back into a `vpcC` box
+/// **payload** (`FullBox` version/flags included, matching [`parse`]'s own
+/// convention of reading them rather than expecting them stripped — see the
+/// module doc's hex dump). Always 12 bytes: this crate never writes a
+/// non-empty `codecIntializationData`, matching every real `vpcC` this
+/// module doc's own measurement and [`from_vp9_header`]'s own doc found —
+/// VP8/VP9 never populate that field.
+#[must_use]
+pub fn build(rec: &VpCodecConfigurationRecord) -> [u8; 12] {
+    let packed = (rec.bit_depth << 4) | (rec.chroma_subsampling << 1) | u8::from(rec.full_range);
+    [
+        1, // version
+        0,
+        0,
+        0, // flags
+        rec.profile,
+        rec.level,
+        packed,
+        rec.colour_primaries,
+        rec.transfer_characteristics,
+        rec.matrix_coefficients,
+        0,
+        0, // codecIntializationDataSize = 0
+    ]
+}
+
+/// The `vpcC` `chromaSubsampling` code point for `(subsampling_x,
+/// subsampling_y)`, the inverse of [`subsampling`]. `(true, true)` (4:2:0)
+/// picks `1` ("co-located") rather than `0` ("vertical"), matching what a
+/// real `libvpx-vp9` encode's own `vpcC` states for the same input — VP9's
+/// `color_config()` never actually distinguishes the two chroma-siting
+/// conventions itself (see [`crate::vp9`]'s module doc), so `1` is the only
+/// value this crate has ever observed a real encoder choose.
+#[must_use]
+const fn chroma_subsampling_code(subsampling_x: bool, subsampling_y: bool) -> u8 {
+    match (subsampling_x, subsampling_y) {
+        (true, false) => 2,
+        (false, false) => 3,
+        _ => 1,
+    }
+}
+
+/// Derive a [`VpCodecConfigurationRecord`] from a VP9 frame header, for a
+/// container (`WebM`/Matroska) that carries no `vpcC`-shaped `CodecPrivate`
+/// of its own — the gap `vaco-mux-mp4`'s own module doc names: `extradata`
+/// is muxed **verbatim**, never inspected, so a stream arriving with none
+/// needs one derived upstream, through the same `BsfProvider` seam
+/// `extract_extradata` already uses for H.264/HEVC (`vaco-bsf-vpx`'s
+/// `vp9_extract_vpcc` is the caller).
+///
+/// Returns `None` when `header` carries no [`crate::vp9::Vp9ColorConfig`] —
+/// an ordinary inter frame, which §6.2 defines to carry none at all (see
+/// [`crate::vp9`]'s module doc) — so a caller must keep offering later
+/// frames until a key frame (or an intra-only frame past profile 0) answers
+/// `Some`, exactly as a real encoder's own first frame always is.
+///
+/// # What is fabricated, and why that is still honest
+///
+/// - `level`: VP9's bitstream states no level syntax anywhere (measured
+///   against `ffprobe 8.1`, see [`crate::profile`]'s module doc) — `0`,
+///   the `WebM` Project's own documented "Level, unknown or unspecified"
+///   value for this field, not a guess at a real one.
+/// - `colour_primaries`/`transfer_characteristics`: VP9's `color_config()`
+///   states only a combined `color_space` enum (§6.2), which this crate's
+///   own [`crate::vp9::matrix_coefficients`] already documents as mapping
+///   cleanly to a matrix coefficient and *not* to primaries or transfer
+///   individually — so both are written as H.273 code point 2
+///   ("Unspecified"), matching what a real `libvpx-vp9` stream's own `vpcC`
+///   states for the identical input (measured: encoding the same clip with
+///   `-colorspace bt709` changes only the matrix byte of a real `ffmpeg -c
+///   copy` remux's `vpcC`, never the primaries/transfer bytes, which stay
+///   `02 02` throughout).
+///
+/// Everything else — `profile`, `bit_depth`, `chroma_subsampling`,
+/// `full_range`, and `matrix_coefficients` via
+/// [`crate::vp9::matrix_coefficients`] — comes straight off the bitstream,
+/// not fabricated at all.
+#[must_use]
+pub fn from_vp9_header(header: &Vp9Header) -> Option<VpCodecConfigurationRecord> {
+    let color = header.color?;
+    Some(VpCodecConfigurationRecord {
+        profile: header.profile,
+        level: 0, // "Level is unspecified" per the WebM Project's own vpcC spec.
+        bit_depth: color.bit_depth,
+        chroma_subsampling: chroma_subsampling_code(color.subsampling_x, color.subsampling_y),
+        full_range: color.full_range,
+        colour_primaries: 2,   // Unspecified — see this function's own doc.
+        transfer_characteristics: 2, // Unspecified — see this function's own doc.
+        matrix_coefficients: crate::vp9::matrix_coefficients(color.color_space).to_u8(),
     })
 }
 
@@ -217,5 +310,96 @@ mod tests {
         let params = codec_parameters(&data).unwrap();
         let v = params.video.unwrap();
         assert_eq!(v.bits_per_raw_sample, None);
+    }
+
+    #[test]
+    fn build_is_the_exact_inverse_of_parse_on_the_measured_record() {
+        let rec = parse(&MEASURED).unwrap();
+        assert_eq!(build(&rec), MEASURED);
+    }
+
+    /// The exact case this function exists for: a real `libvpx-vp9` key
+    /// frame from a `WebM` file with no `CodecPrivate` at all. Bytes taken
+    /// directly off the wire (`ffmpeg -f lavfi -i testsrc2 ... -c:v
+    /// libvpx-vp9 -b:v 200k out.webm`, first frame, `uncompressed_header()`
+    /// through `color_config()`): profile 0, 8-bit, 4:2:0, limited range,
+    /// `color_space` unspecified (0).
+    #[test]
+    fn from_vp9_header_matches_a_real_key_frame_measured_against_ffmpeg() {
+        use crate::vp9::Vp9ColorConfig;
+
+        let header = Vp9Header {
+            profile: 0,
+            show_existing_frame: false,
+            is_key_frame: true,
+            show_frame: true,
+            color: Some(Vp9ColorConfig {
+                bit_depth: 8,
+                color_space: 0, // CS_UNKNOWN
+                full_range: false,
+                subsampling_x: true,
+                subsampling_y: true,
+            }),
+            size: Some((64, 64)),
+        };
+        let rec = from_vp9_header(&header).unwrap();
+        assert_eq!(rec.profile, 0);
+        assert_eq!(rec.bit_depth, 8);
+        assert_eq!(rec.chroma_subsampling, 1);
+        assert!(!rec.full_range);
+        assert_eq!(rec.colour_primaries, 2);
+        assert_eq!(rec.transfer_characteristics, 2);
+        // Real `ffmpeg -c copy` of this exact clip writes `82 02 02 02` for
+        // the packed byte plus the three colour bytes — see the module doc.
+        assert_eq!(
+            build(&rec)[6..10],
+            [0x82, 0x02, 0x02, 0x02],
+            "must match ffmpeg's own measured vpcC bytes for this input"
+        );
+    }
+
+    /// The other half of the same measurement: `-colorspace bt709` changes
+    /// only the matrix byte of a real remux's `vpcC`, never
+    /// primaries/transfer, which stay `02 02`. `color_space = 2` is VP9's
+    /// `CS_BT_709` (`crate::vp9::matrix_coefficients`'s own table).
+    #[test]
+    fn from_vp9_header_derives_only_the_matrix_byte_from_color_space() {
+        use crate::vp9::Vp9ColorConfig;
+
+        let header = Vp9Header {
+            profile: 0,
+            show_existing_frame: false,
+            is_key_frame: true,
+            show_frame: true,
+            color: Some(Vp9ColorConfig {
+                bit_depth: 8,
+                color_space: 2, // CS_BT_709
+                full_range: false,
+                subsampling_x: true,
+                subsampling_y: true,
+            }),
+            size: Some((64, 64)),
+        };
+        let rec = from_vp9_header(&header).unwrap();
+        assert_eq!(
+            (rec.colour_primaries, rec.transfer_characteristics, rec.matrix_coefficients),
+            (2, 2, 1),
+            "matrix=1 (BT.709) per ffmpeg's own measured vpcC; primaries/transfer stay unspecified"
+        );
+    }
+
+    /// An ordinary inter frame carries no `color_config()` at all (§6.2) —
+    /// a caller must keep waiting for a frame that does, not fabricate one.
+    #[test]
+    fn from_vp9_header_refuses_a_frame_with_no_color_config() {
+        let header = Vp9Header {
+            profile: 0,
+            show_existing_frame: false,
+            is_key_frame: false,
+            show_frame: true,
+            color: None,
+            size: None,
+        };
+        assert!(from_vp9_header(&header).is_none());
     }
 }
