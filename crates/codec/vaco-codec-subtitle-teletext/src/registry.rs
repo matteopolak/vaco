@@ -170,7 +170,7 @@ fn make(_limits: Limits) -> Box<dyn vaco_codec_core::Decoder> {
 /// actual decoder-implementation name (behind `--enable-libzvbi`, absent
 /// from this project's build environment) was unmeasurable and unsafe to
 /// guess — reasonable, given D17, but incomplete: `ffmpeg -h decoder=<name>`
-/// distinguishes a name FFmpeg's codec table recognises but cannot build
+/// distinguishes a name `FFmpeg`'s codec table recognises but cannot build
 /// (`"Codec 'X' is known to FFmpeg, but no decoders for it are available"`)
 /// from one it does not know at all (`"Codec 'X' is not recognized by
 /// FFmpeg"`), and does not require the feature to actually be built to give
