@@ -112,6 +112,19 @@ missing formats are simply unwritten rather than deliberately excluded —
 `docs/why-some-formats-are-not-included.md` explains the handful that are excluded on
 purpose.
 
+### Conformance
+
+A differential suite runs 709 cases against the reference. 254 currently agree and
+455 diverge. A classified sample put roughly 90% of those divergences at genuine
+rather than version drift — clustering into about 13–14 distinct root causes, since
+the suite exercises each one through many case combinations.
+
+They are concentrated in probe metadata and container remux details — `start_time`
+defaulting to 0 rather than N/A, a raw timebase where the reference normalises one,
+an unmapped codec profile — rather than in decoded pixels, which is where the
+byte-exactness above is measured. `planning/CONFORMANCE-FINDINGS.md` has the sample
+and the method for extending it.
+
 ### Option coverage
 
 The option tables carry ffmpeg's names, but carrying a name is not implementing it.
