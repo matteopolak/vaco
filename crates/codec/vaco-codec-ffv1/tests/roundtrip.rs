@@ -311,11 +311,10 @@ const GOLOMB_RAW: &[u8] = include_bytes!("fixtures/yuv420.raw");
 const GOLOMB_W: u32 = 176;
 const GOLOMB_H: u32 = 144;
 
-/// Known-failing: see the module docs above and `codec`'s module docs for
-/// what this crate's Golomb-Rice (`coder_type = 0`) decode path — needed for
-/// `ffmpeg -c:v ffv1`'s own default output — gets wrong.
+/// The Golomb-Rice (`coder_type = 0`) twin of the range-coder cross-check
+/// above, and the one that matters most in practice: `coder_type = 0` is what
+/// a plain `ffmpeg -c:v ffv1` writes.
 #[test]
-#[ignore = "known bug: Golomb-Rice run-mode decode diverges from the first sample against a real default-coder ffmpeg file; see codec.rs's module docs"]
 fn decodes_real_ffmpeg_golomb_rice_stream_pixel_exact() {
     let mut dec = Ffv1Decoder::new(Limits::permissive());
     dec.set_extradata(GOLOMB_EXTRADATA).expect("set_extradata");

@@ -516,8 +516,7 @@ pub(crate) fn decode_frame(
                 // at the resulting byte position *within this slice's own
                 // region* (each slice is independently byte-ranged; see
                 // locate_slices). See rangecoder.rs's module docs.
-                dec.read_terminator(&params.state_transition);
-                let start = dec.byte_pos();
+                let start = dec.read_terminator(&params.state_transition);
                 let mut r = vaco_bitstream::BitReader::new(region.get(start..).unwrap_or(&[]));
                 (0..plane_count)
                     .map(|p| {

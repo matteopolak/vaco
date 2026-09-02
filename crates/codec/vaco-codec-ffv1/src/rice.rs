@@ -164,55 +164,85 @@ pub(crate) fn decode_level(state: &mut RiceState, r: &mut BitReader<'_>, bits: u
     if diff >= 0 { diff + 1 } else { diff }
 }
 
-/// One plane's run-mode bookkeeping (RFC 9043 §3.8.2.2.1): `run_index` is
-/// "reset to zero for each Plane and Slice", and `run_mode`/`run_count` track
-/// progress through the current run within one line.
+/// One plane's run-mode bookkeeping (RFC 9043 §3.8.2.2.1).
+///
+/// `run_index` is "reset to zero for each Plane and Slice" and so lives for
+/// the whole plane; `mode`/`count` are scoped to a single **Line** and are
+/// cleared by [`RunState::begin_line`]. RFC 9043 never states that scoping
+/// outright, but its own run-length pseudocode only makes sense that way: the
+/// `x + run_count <= w` guard measures the run against the line width, and a
+/// run carried across a line boundary would let `run_count` outlive the `x` it
+/// is compared against. Confirmed by black-box measurement — a real
+/// `ffmpeg -coder rice` 160x120 encode decodes byte-exact with per-line
+/// scoping and diverges partway through the first plane without it.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct RunState {
     run_index: u32,
-    /// `1` while consuming a counted run of zero differences; `2` right after
-    /// the run's length has been read and the terminating nonzero difference
-    /// still needs decoding.
+    /// `0` = not in run mode; `1` = in a run whose next length prefix is still
+    /// to be read; `2` = in the final, explicitly-counted stretch of a run.
     mode: u8,
-    count: u32,
+    /// Samples left in the current run. Signed because the RFC's own control
+    /// flow decrements first and treats the resulting `-1` as "the run ends
+    /// here, decode the terminating level".
+    count: i32,
 }
 
 impl RunState {
     /// Fresh state for a new plane (or slice), matching "`run_index` is reset
-    /// to zero for each Plane and Slice"; `mode` starts at 1 (ready to read a
-    /// new run's length the first time context 0 is seen).
+    /// to zero for each Plane and Slice".
     #[must_use]
     pub(crate) const fn new() -> Self {
         Self {
             run_index: 0,
-            mode: 1,
+            mode: 0,
             count: 0,
         }
     }
 
-    /// Called when `context == 0` and no run is currently being consumed
-    /// (`count == 0`): reads the run-length prefix (RFC 9043 §3.8.2.2.1) and
-    /// switches to mode 2 (a terminating nonzero difference follows) once the
-    /// counted run is exhausted immediately (`get_bits(1) == 0` case) or
-    /// leaves `count` set so the caller keeps emitting zero differences.
-    ///
-    /// `x_after_run` is `x + (1 << log2_run[run_index])`, i.e. the sample
-    /// position the run would reach if fully consumed — the RFC's
-    /// `x + run_count <= w` guard on whether `run_index` advances.
-    fn read_run_prefix(&mut self, r: &mut BitReader<'_>, x: usize, w: usize) {
-        if r.try_get(1).unwrap_or(0) == 1 {
-            let shift = log2_run(self.run_index as usize);
-            self.count = 1u32 << shift;
-            if x.saturating_add(self.count as usize) <= w {
-                self.run_index += 1;
-            }
+    /// Leave run mode at the start of a Line, keeping `run_index` — see the
+    /// struct's docs.
+    pub(crate) const fn begin_line(&mut self) {
+        self.mode = 0;
+        self.count = 0;
+    }
+
+    /// Whether run mode is currently active. Once entered, a run continues
+    /// until a nonzero difference regardless of the *context* of the samples
+    /// it covers (RFC 9043 §3.8.2.2: "entered when the context is 0 and left
+    /// as soon as a nonzero difference is found"), so the caller must consult
+    /// this before it consults the context.
+    #[must_use]
+    pub(crate) const fn in_run(&self) -> bool {
+        self.mode != 0
+    }
+
+    /// Enter run mode if this sample's context is 0 and a run is not already
+    /// in progress.
+    pub(crate) const fn enter_if_zero_context(&mut self, ctx: usize) {
+        if ctx == 0 && self.mode == 0 {
             self.mode = 1;
+        }
+    }
+
+    /// Reads the run-length prefix (RFC 9043 §3.8.2.2.1) when one is due.
+    ///
+    /// `x` is the sample position and `w` the Line width, together forming the
+    /// RFC's `x + run_count <= w` guard on whether `run_index` advances.
+    fn read_run_prefix(&mut self, r: &mut BitReader<'_>, x: usize, w: usize) {
+        let idx = (self.run_index as usize).min(LOG2_RUN.len() - 1);
+        if r.try_get(1).unwrap_or(0) == 1 {
+            self.count = 1i32
+                .checked_shl(log2_run(idx))
+                .unwrap_or(i32::MAX);
+            if x.saturating_add(self.count.cast_unsigned() as usize) <= w {
+                self.run_index = self.run_index.saturating_add(1);
+            }
         } else {
-            let shift = log2_run(self.run_index as usize);
+            let shift = log2_run(idx);
             self.count = if shift == 0 {
                 0
             } else {
-                r.try_get(shift).unwrap_or(0)
+                r.try_get(shift).unwrap_or(0).cast_signed()
             };
             if self.run_index > 0 {
                 self.run_index -= 1;
@@ -221,26 +251,22 @@ impl RunState {
         }
     }
 
-    /// Decode one sample's difference in Golomb-Rice mode at context 0
-    /// (the "run mode" context). Returns the difference (`0` while a counted
-    /// run is in progress, otherwise the decoded terminating value).
-    pub(crate) fn next_zero_context_diff(
-        &mut self,
-        r: &mut BitReader<'_>,
-        state: &mut RiceState,
-        bits: u32,
-        x: usize,
-        w: usize,
-    ) -> i32 {
+    /// Advance one sample inside run mode. Returns `true` if this sample's
+    /// difference is `0` (the run continues), `false` if the run ends here and
+    /// the caller must decode a terminating level with [`decode_level`].
+    ///
+    /// Only call this while [`RunState::in_run`] is true.
+    pub(crate) fn next_sample(&mut self, r: &mut BitReader<'_>, x: usize, w: usize) -> bool {
         if self.count == 0 && self.mode == 1 {
             self.read_run_prefix(r, x, w);
         }
-        if self.count > 0 {
-            self.count -= 1;
-            0
+        self.count -= 1;
+        if self.count < 0 {
+            self.mode = 0;
+            self.count = 0;
+            false
         } else {
-            self.mode = 1;
-            decode_level(state, r, bits)
+            true
         }
     }
 }

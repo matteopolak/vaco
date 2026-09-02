@@ -499,24 +499,37 @@ pub(crate) fn decode_plane_golomb(
         rice_states.resize(qts.context_count, RiceState::fresh());
     }
     // "run_index is reset to zero for each Plane and Slice" — one RunState
-    // per plane decode, scoped to this call.
+    // per plane decode, scoped to this call; its run_mode/run_count are
+    // per Line and cleared by begin_line (see RunState's docs).
     let mut run = RunState::new();
     for y in 0..h {
+        run.begin_line();
         for x in 0..w {
             let (l, t, tl, tr, ll, tt) = buf.neighbours(x, y);
             let (ctx, flip) = compute_context(qts, l, t, tl, tr, ll, tt);
             let pred = median_predictor(l, t, tl);
-            // Lazy on purpose -- see the matching comment in
-            // `decode_plane_range`.
-            #[allow(
-                clippy::unnecessary_lazy_evaluations,
-                reason = "measured: eager .ok_or() here left a real (non-eliminated) drop_glue::<Error> call in the per-sample loop -- see decode_plane_range's comment"
-            )]
-            let rs = rice_states.get_mut(ctx).ok_or_else(context_out_of_range)?;
-            let mut diff = if ctx == 0 {
-                run.next_zero_context_diff(r, rs, bits_per_raw_sample, x, w)
+            // Order matters: a run already in progress swallows this sample
+            // whatever its context is (RFC 9043 §3.8.2.2 — a run is left only
+            // on a nonzero difference, not on a nonzero context), so
+            // `in_run` is consulted before `ctx`.
+            run.enter_if_zero_context(ctx);
+            let in_run = run.in_run();
+            let zero_run_sample = in_run && run.next_sample(r, x, w);
+            let mut diff = if zero_run_sample {
+                0
             } else {
-                crate::rice::decode_level(rs, r, bits_per_raw_sample)
+                // Lazy on purpose -- see the matching comment in
+                // `decode_plane_range`.
+                #[allow(
+                    clippy::unnecessary_lazy_evaluations,
+                    reason = "measured: eager .ok_or() here left a real (non-eliminated) drop_glue::<Error> call in the per-sample loop -- see decode_plane_range's comment"
+                )]
+                let rs = rice_states.get_mut(ctx).ok_or_else(context_out_of_range)?;
+                if in_run {
+                    crate::rice::decode_level(rs, r, bits_per_raw_sample)
+                } else {
+                    rs.get_vlc_symbol(r, bits_per_raw_sample)
+                }
             };
             if flip {
                 diff = -diff;

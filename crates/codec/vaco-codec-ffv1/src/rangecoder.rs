@@ -126,8 +126,8 @@ const TERMINATOR_STATE: u8 = 129;
 /// Tracks `j_i` (bytes consumed into `low`) exactly as the spec's pseudocode
 /// does, via `pos`, so a caller that needs the Sentinel-mode handoff point
 /// (RFC 9043 §3.8.1.1.1 — the switch from a range-coded `SliceHeader` to
-/// Golomb-Rice-coded `SliceContent`) can read [`RangeDecoder::byte_pos`]
-/// right after consuming the terminator symbol.
+/// Golomb-Rice-coded `SliceContent`) gets it back from
+/// [`RangeDecoder::read_terminator`].
 #[derive(Debug, Clone)]
 pub(crate) struct RangeDecoder<'a> {
     data: &'a [u8],
@@ -190,21 +190,22 @@ impl<'a> RangeDecoder<'a> {
     }
 
     /// Read and discard the Sentinel-mode terminator symbol (state 129,
-    /// unadapting — RFC 9043 §3.8.1.1.1). Call this exactly once, right after
-    /// a range-coded structure that a Golomb-coded region follows.
-    pub(crate) fn read_terminator(&mut self, table: &StateTransition) {
+    /// unadapting — RFC 9043 §3.8.1.1.1) and return the byte offset at which
+    /// the non-range-coded region that follows begins. Call this exactly once,
+    /// right after a range-coded structure that a Golomb-coded region follows.
+    ///
+    /// The returned offset is `j - 1`, not `j`: [`RangeDecoder::pos`] counts
+    /// bytes *consumed*, and §3.8.1.1.1 says that after the terminator "the
+    /// decoder will have read one byte beyond the end of the range-coded
+    /// bytestream" — that one byte beyond is already the first byte of the
+    /// Golomb region. Measured against a real `ffmpeg -coder rice` 160x120
+    /// encode: handing the bit reader `j` decodes the very first sample of
+    /// every slice wrong (74 read as 9); handing it `j - 1` decodes all 50
+    /// frames byte-exact against `ffmpeg`'s own raw output.
+    pub(crate) fn read_terminator(&mut self, table: &StateTransition) -> usize {
         let mut state = TERMINATOR_STATE;
         let _ = self.get_rac(&mut state, table);
-    }
-
-    /// How many bytes of `data` have been consumed into `low` so far —
-    /// RFC 9043's `j_i`. After [`RangeDecoder::read_terminator`] this is
-    /// exactly where a following Golomb-coded region begins (§3.8.1.1.1: "the
-    /// decoder will have read one byte beyond the end of the range-coded
-    /// bytestream. This way the byte position of the end can be determined").
-    #[must_use]
-    pub(crate) const fn byte_pos(&self) -> usize {
-        self.pos
+        self.pos.saturating_sub(1)
     }
 
     /// Decode a nonbinary value (Figure 21's `get_symbol`).
@@ -609,8 +610,8 @@ mod tests {
         let mut dec = RangeDecoder::new(&bytes);
         let mut states = fresh_states();
         assert_eq!(dec.get_symbol(&mut states, &table, true), 42);
-        dec.read_terminator(&table);
-        assert!(dec.byte_pos() <= bytes.len() + 1);
-        assert!(dec.byte_pos() >= 2);
+        let start = dec.read_terminator(&table);
+        assert!(start <= bytes.len());
+        assert!(start >= 1);
     }
 }
