@@ -1801,13 +1801,33 @@ pub fn run_pipeline(
                                 if mode == crate::fps_mode::FpsMode::Passthrough {
                                     frames
                                 } else {
-                                    let video = p.video.as_ref().ok_or_else(|| {
-                                        internal(
-                                            "a video stream being transcoded has no video \
-                                             parameters for -fps_mode",
-                                        )
-                                    })?;
-                                    crate::fps_mode::insert(&mut spec, frames, time_base, video, mode)?
+                                    let mut video = p
+                                        .video
+                                        .as_ref()
+                                        .ok_or_else(|| {
+                                            internal(
+                                                "a video stream being transcoded has no video \
+                                                 parameters for -fps_mode",
+                                            )
+                                        })?
+                                        .clone();
+                                    // `-fps_mode` sits after any pixel-format
+                                    // auto-conversion above, so the frames it
+                                    // actually receives carry whatever that
+                                    // conversion produced, not `p.video`'s own
+                                    // pre-conversion format -- `out_video_format`
+                                    // is this same function's own source of
+                                    // truth for that, already threaded through
+                                    // for `out_params` below. Using `p.video`
+                                    // unmodified here is exactly the bug this
+                                    // fixes: `fps_mode::insert` would declare a
+                                    // filter-graph source in the *original*
+                                    // format while the frames arriving at it
+                                    // are already in the converted one.
+                                    if let Some(fmt) = out_video_format {
+                                        video.format = Some(fmt);
+                                    }
+                                    crate::fps_mode::insert(&mut spec, frames, time_base, &video, mode)?
                                 }
                             } else {
                                 frames

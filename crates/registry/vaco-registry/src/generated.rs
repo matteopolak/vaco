@@ -5486,6 +5486,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "parse-ffv1")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "ffv1",
+        long_name: Some("FFmpeg video codec #1 (Configuration Record only)"),
+        krate: "vaco-parse-ffv1",
+        feature: Some("parse-ffv1"),
+        media: Some("video"),
+        codec: Some("ffv1"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "parse-audio-misc")]
     crate::Component {
         kind: crate::Kind::Parser,
@@ -10277,7 +10289,7 @@ pub static ENCUMBERED_ENABLED: &[&str] = &[
 /// broken and reports nothing".
 pub static ENCUMBERED_ALL: &[&str] = &["aac", "h264", "hevc", "vc1"];
 
-/// Descriptors of every enabled demuxer implementation.
+/// Descriptors of every enabled `demuxer` implementation.
 pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::ac3::DEMUXER_AC3,
@@ -10630,7 +10642,7 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::y4m::DEMUXER_YUV4MPEGPIPE,
 ];
 
-/// Descriptors of every enabled muxer implementation.
+/// Descriptors of every enabled `muxer` implementation.
 pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     #[cfg(feature = "mux-mp4")]
     &::vaco_mux_mp4::MUXER_3G2,
@@ -10856,7 +10868,7 @@ pub static MUXERS: &[&::vaco_format_core::MuxerDesc] = &[
     &::vaco_mux_raw::y4m::MUXER_YUV4MPEGPIPE,
 ];
 
-/// Descriptors of every enabled decoder implementation.
+/// Descriptors of every enabled `decoder` implementation.
 pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     #[cfg(feature = "patent-encumbered-aac-decode")]
     &::vaco_codec_aac::DECODER_AAC,
@@ -11038,7 +11050,7 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_rawvideo::Y41P_DECODER,
 ];
 
-/// Descriptors of every enabled encoder implementation.
+/// Descriptors of every enabled `encoder` implementation.
 pub static ENCODERS: &[&::vaco_codec_core::EncoderDesc] = &[
     #[cfg(feature = "codec-adpcm")]
     &::vaco_codec_adpcm::ADPCM_IMA_QT_ENCODER,
@@ -11172,7 +11184,7 @@ pub static ENCODERS: &[&::vaco_codec_core::EncoderDesc] = &[
     &::vaco_codec_rawvideo::Y41P_ENCODER,
 ];
 
-/// Descriptors of every enabled parser implementation.
+/// Descriptors of every enabled `parser` implementation.
 pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     #[cfg(feature = "parse-aac")]
     &::vaco_parse_aac::PARSER,
@@ -11188,6 +11200,8 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     &::vaco_parse_image::PARSER_BMP,
     #[cfg(feature = "parse-mpegaudio")]
     &::vaco_parse_mpegaudio::PARSER_EAC3,
+    #[cfg(feature = "parse-ffv1")]
+    &::vaco_parse_ffv1::PARSER,
     #[cfg(feature = "parse-audio-misc")]
     &::vaco_parse_audio_misc::PARSER_FLAC,
     #[cfg(feature = "parse-image")]
@@ -11222,7 +11236,7 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     &::vaco_parse_image::PARSER_WEBP,
 ];
 
-/// Descriptors of every enabled filter implementation.
+/// Descriptors of every enabled `filter` implementation.
 pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_mm::misc::bench::audio::DESC,
     &::vaco_filter_adynamics::acompressor::DESC,
@@ -11553,7 +11567,7 @@ pub static FILTERS: &[&::vaco_filter_core::FilterDesc] = &[
     &::vaco_filter_source::zoneplate::DESC,
 ];
 
-/// Descriptors of every enabled filter_dispatch implementation.
+/// Descriptors of every enabled `filter_dispatch` implementation.
 pub static FILTER_REGISTRIES: &[&(dyn ::vaco_filter_graph::registry::FilterRegistry + Sync)] = &[
     &::vaco_filter_aanalysis::AmeasureRegistry,
     &::vaco_filter_adynamics::DynamicsRegistry,
@@ -11589,7 +11603,7 @@ pub static FILTER_REGISTRIES: &[&(dyn ::vaco_filter_graph::registry::FilterRegis
     &::vaco_filter_video_source::SourceRegistry,
 ];
 
-/// Descriptors of every enabled protocol implementation.
+/// Descriptors of every enabled `protocol` implementation.
 pub static PROTOCOLS: &[&::vaco_protocol_core::ProtocolDesc] = &[
     &::vaco_protocol_wrap::ASYNC_PROTOCOL,
     &::vaco_protocol_wrap::CACHE_PROTOCOL,

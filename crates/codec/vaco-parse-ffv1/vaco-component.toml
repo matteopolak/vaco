@@ -1,0 +1,10 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+
+[[component]]
+kind      = "parser"
+name      = "ffv1"
+long_name = "FFmpeg video codec #1 (Configuration Record only)"
+feature   = "parse-ffv1"
+ctor      = "vaco_parse_ffv1::PARSER"
+media     = "video"
+codec     = "ffv1"
