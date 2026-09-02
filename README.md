@@ -3,9 +3,11 @@
 A reimplementation of ffmpeg's command-line tools in Rust, written from published
 specifications rather than from FFmpeg's source.
 
-`vaco` transcodes, `vaco-probe` inspects. They take the same options as `ffmpeg` and
-`ffprobe`, print the same shapes of output, and are tested by comparing their bytes
-against the real thing.
+`vaco` transcodes, `vaco-probe` inspects. They use the same option names as `ffmpeg`
+and `ffprobe`, print the same shapes of output, and are tested by comparing their
+bytes against the real thing. Many of those options are not implemented yet — see
+[Option coverage](#option-coverage) — and the ones that aren't now fail with a
+named error rather than being accepted and ignored.
 
 This is not a drop-in replacement, and it is not close to one yet. About a third of
 the container formats are implemented, video decoding runs several times slower than
@@ -105,6 +107,26 @@ missing formats are simply unwritten rather than deliberately excluded —
 `docs/format-coverage.md` lists every format either side registers, and
 `docs/why-some-formats-are-not-included.md` explains the handful that are excluded on
 purpose.
+
+### Option coverage
+
+The option tables carry ffmpeg's names, but carrying a name is not implementing it.
+Measured across both binaries:
+
+| | `vaco` | `vaco-probe` |
+|---|---:|---:|
+| Options in the table | 172 | 65 |
+| Implemented | 72 | 57 |
+| Refused by name | 95 | 8 |
+| Accepted as a no-op | 5 | 0 |
+
+An option that isn't implemented exits with an error naming it. Until recently most
+of them were accepted and silently ignored, which is worse: `-n` did not protect an
+existing file, and `-ss`/`-t`/`-to` processed the whole input. Those now refuse.
+
+The five accepted as no-ops are deliberate: `-y` and `-nostdin` already describe what
+this build does, and `-vsync`, `-top` and `-qphist` are documented no-ops in ffmpeg
+too.
 
 ### Performance
 
