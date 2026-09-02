@@ -718,11 +718,10 @@ Fuzz results, per plan 19 §13 — exit code and exec count, not a verdict:
 
 ## One approved change to a frozen interface
 
-`Filter::flush(&mut self)`, defaulted to a no-op, was **added after the freeze
-with the orchestrator's approval** — the same precedent as
-`Muxer::stream_time_base` in `vaco-format-core`, and for the same reason: a
-defaulted method breaks no implementation, and without it the interface cannot
-express something it has to.
+`Filter::flush(&mut self)`, defaulted to a no-op, was added after the
+interface froze — the same additive precedent as `Muxer::stream_time_base`
+in `vaco-format-core`: a defaulted method breaks no implementation, and
+without it the interface cannot express something it has to.
 
 `Graph::flush` clears every link's queue and its sticky end of stream, which is
 what a seek does to the *framework*. It could not reach the *filter*. A delay
@@ -744,13 +743,12 @@ seek target, so an exhausted source stays exhausted and re-closes its output.
 
 ## Graph introspection: narrow by design
 
-`ffmpeg -h filter=graphmonitor`/`agraphmonitor` (`vaco-filter-scope`, issue
-#480) draw the *whole graph's* live state — every link's queue depth, EOF
-status, format — and building that crate found this was not just
-unimplemented but **not expressible**: `FilterContext` exposed only the
-current node's own pads, keyed through `self.node: &NodeLinks`, which
-holds only this node's own `LinkId`s. Filed as
-`planning/INTERFACE-GAPS.md` gap 22.
+`ffmpeg -h filter=graphmonitor`/`agraphmonitor` (`vaco-filter-scope`) draw
+the *whole graph's* live state — every link's queue depth, EOF status,
+format — and building that crate found this was not just unimplemented
+but **not expressible**: `FilterContext` exposed only the current node's
+own pads, keyed through `self.node: &NodeLinks`, which holds only this
+node's own `LinkId`s.
 
 Closing it added two read-only accessors: `FilterContext::graph_nodes(&self)
 -> &[NodeInfo]` (each node's id, scheduler label, `&'static str` filter
@@ -773,7 +771,8 @@ implementation — is a filter that can be written to depend on scheduling
 order, which plan 16 §1.1's own boundary ("a filter can never reach
 another filter's private state, only link state") exists to prevent, and
 is a materially worse property than the missing introspection capability
-ever was. `NodeInfo`/`LinkView` are deliberately **read-only snapshots**
+ever was — a boundary this crate's own design already drew. `NodeInfo`/`LinkView`
+are deliberately **read-only snapshots**
 taken at call time, and deliberately exclude scheduler-internal state
 (`parked_at`, `self_driven`, `last_run`) that `graphmonitor`'s `mode`
 flags do not need. A general graph accessor was considered and rejected
