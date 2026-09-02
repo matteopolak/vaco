@@ -98,7 +98,7 @@ impl VorbisDecoder {
         }
     }
 
-    fn decode_audio_packet(&mut self, payload: &[u8]) -> Result<()> {
+    fn decode_audio_packet(&mut self, payload: &[u8], pts: vaco_core::Timestamp) -> Result<()> {
         let Some(ident) = self.ident else {
             return Err(Error::InvalidData("vorbis: audio packet before headers"));
         };
@@ -258,6 +258,7 @@ impl VorbisDecoder {
             next_flag,
             ident,
             &mut budget,
+            pts,
         )
     }
 
@@ -274,6 +275,7 @@ impl VorbisDecoder {
         next_flag: bool,
         ident: Ident,
         budget: &mut Budget,
+        pts: vaco_core::Timestamp,
     ) -> Result<()> {
         let channels = ident.channels as usize;
         let win = mdct::window(
@@ -309,6 +311,7 @@ impl VorbisDecoder {
                     out_samples,
                     ident.sample_rate,
                 )?;
+                frame.pts = pts;
                 for ch in 0..channels {
                     let tail = self.overlap.get(ch).map_or(&[][..], |o| o.tail.as_slice());
                     let pcm = windowed.get(ch).map_or(&[][..], Vec::as_slice);
@@ -410,7 +413,7 @@ impl Decoder for VorbisDecoder {
             self.draining = true;
             return Ok(());
         };
-        self.decode_audio_packet(packet.payload())
+        self.decode_audio_packet(packet.payload(), packet.pts)
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {

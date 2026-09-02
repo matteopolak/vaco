@@ -227,3 +227,76 @@ fn transient_stereo_matches_ffmpeg_across_block_size_switches() {
         "4",
     );
 }
+
+/// Regression: `overlap_add` builds every output `Frame` via
+/// `Frame::alloc_audio`, whose default pts is `Timestamp::NONE`. Before
+/// `decode_audio_packet`/`overlap_add` threaded the triggering packet's
+/// `pts` through to the emitted frame, every decoded Vorbis frame silently
+/// lost the timestamp `vaco-demux-ogg`'s granule-position accounting had
+/// already computed correctly on the way in — reproduced end to end via
+/// `vaco -i sine.ogg -f wav out.wav`, which failed with "this container
+/// needs timestamps and the packet has none" despite the input packets
+/// themselves carrying real timestamps.
+#[test]
+fn every_decoded_frame_carries_a_real_non_decreasing_pts() {
+    if !ffmpeg_available() {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    }
+    let Some(ogg_bytes) = run_ffmpeg(
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "sine=frequency=440:duration=1",
+            "-ac",
+            "2",
+            "-c:a",
+            "vorbis",
+            "-strict",
+            "-2",
+            "-q:a",
+            "4",
+            "-f",
+            "ogg",
+            "-",
+        ],
+        None,
+    ) else {
+        eprintln!("skipping: ffmpeg could not produce the fixture");
+        return;
+    };
+
+    let src = MemorySource::new(ogg_bytes);
+    let mut demux =
+        vaco_demux_ogg::OggDemuxer::open(Box::new(src), &NoParsers, &FormatOptions::default())
+            .expect("open ogg");
+    let extradata = demux.streams()[0]
+        .params
+        .extradata
+        .clone()
+        .expect("vorbis stream carries packed header extradata");
+    let mut dec = VorbisDecoder::new(Limits::permissive());
+    dec.set_extradata(&extradata).expect("set_extradata");
+
+    let mut last_pts: Option<i64> = None;
+    let mut frames_seen = 0usize;
+    while let Ok(packet) = demux.read_packet() {
+        dec.send_packet(Some(&packet)).expect("send_packet");
+        while let Ok(frame) = dec.receive_frame() {
+            frames_seen += 1;
+            let pts = frame
+                .pts
+                .ticks()
+                .expect("decoded frame must carry a real pts, not Timestamp::NONE");
+            if let Some(prev) = last_pts {
+                assert!(pts >= prev, "pts went backwards: {prev} -> {pts}");
+            }
+            last_pts = Some(pts);
+        }
+    }
+    assert!(frames_seen > 0, "expected at least one decoded frame");
+}

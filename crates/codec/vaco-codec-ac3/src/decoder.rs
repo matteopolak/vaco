@@ -55,6 +55,7 @@ impl Decoder for Ac3Decoder {
             self.draining = true;
             return Ok(());
         };
+        let pts = packet.pts;
         let decoded = decode_frame(packet.payload(), &mut self.state, &self.opts)
             .map_err(|_| Error::InvalidData("ac3: could not decode frame"))?;
 
@@ -68,6 +69,7 @@ impl Decoder for Ac3Decoder {
             u32::try_from(samples).unwrap_or(0),
             decoded.sample_rate,
         )?;
+        frame.pts = pts;
 
         let mut all_channels = decoded.channels;
         if let Some(lfe) = decoded.lfe {
@@ -135,6 +137,29 @@ mod tests {
         assert!(frame.is_audio());
         dec.flush();
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    /// `send_packet` must forward the input packet's `pts` onto the decoded
+    /// frame. Before this test, `Frame::alloc_audio`'s default
+    /// (`Timestamp::NONE`) leaked straight through: every AC-3 decode
+    /// produced timestamp-less frames, and muxing the result anywhere that
+    /// requires a pts/dts (e.g. `-f wav`) failed with "this container needs
+    /// timestamps and the packet has none" even though the raw AC-3
+    /// demuxer (`vaco-demux-raw`) stamps every packet correctly on the way
+    /// in — reproduced end to end via `vaco -i x.ac3 -f wav out.wav`.
+    #[test]
+    fn send_packet_forwards_the_input_pts_onto_the_decoded_frame() {
+        let data = include_bytes!("../tests/fixtures/small_ac3.ac3");
+        let info = syncinfo::parse(data).expect("a valid ac3 header");
+        let first = &data[..info.frame_size];
+
+        let mut dec = (crate::DECODER_AC3.make)(Limits::permissive());
+        let mut packet = Packet::from_slice(&mut Budget::new(Limits::permissive()), first)
+            .expect("packet alloc");
+        packet.pts = vaco_core::Timestamp::new(12345);
+        dec.send_packet(Some(&packet)).expect("send_packet");
+        let frame = dec.receive_frame().expect("receive_frame");
+        assert_eq!(frame.pts, vaco_core::Timestamp::new(12345));
     }
 
     /// `send_packet(None)` must make `receive_frame` answer `Eof` once
