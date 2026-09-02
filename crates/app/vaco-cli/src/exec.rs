@@ -60,9 +60,9 @@
 //! order: `PipelineSpec::build` delivers it to [`Muxer::set_metadata`] at
 //! `MuxBuilder::open` (M30), after every stream is declared and its time base
 //! settled, but before the header.
-//!
-//! That was not always true. Gap 8 in `planning/INTERFACE-GAPS.md` (now
-//! closed) was that `vaco-sched`'s `MuxWork` drove a raw `dyn Muxer`, so this
+
+//! That was not always true: `vaco-sched`'s `MuxWork` used to drive a raw
+//! `dyn Muxer`, so this
 //! module used to call [`Muxer::set_metadata`] on the freshly opened muxer
 //! directly, *before* handing it to `add_output_with` — there was no later
 //! point at which it could still reach the muxer. `vaco-mux-mp4` and
@@ -414,9 +414,9 @@ pub fn resolve_output(
 /// chapter's own metadata is filled in by [`run_pipeline`] from whichever
 /// input `-map_chapters` names, at a point this function cannot see, and a
 /// *program*'s metadata has no representation in
-/// [`vaco_format_core::metadata::MuxMetadata`] at all (same class of gap as
-/// `planning/INTERFACE-GAPS.md`'s gap 1, not closed by it — see this crate's
-/// docs).
+/// [`vaco_format_core::metadata::MuxMetadata`] at all -- the same shape of
+/// gap [`vaco_format_core::metadata::MuxMetadata`] closes for
+/// tags/chapters/attachments, just not here.
 fn metadata_of(
     cli: &Cli,
     out: &OutputSpec,
@@ -1120,7 +1120,7 @@ fn graph_options_of(
                 if let Ok(Some(o)) = g.stream_option("pix_fmt", &ctx, idx) {
                     opts.pix_fmt = Some(value_str(o)?);
                 }
-                // CL-21/#222: `-fps_mode` carries `bit::VIDEO` in the option
+                // `-fps_mode` carries `bit::VIDEO` in the option
                 // table (`vaco-cli-core/src/tables/ffmpeg.rs`), matching the
                 // reference's own video-only scope.
                 if let Ok(Some(o)) = g.stream_option("fps_mode", &ctx, idx) {
@@ -1130,7 +1130,7 @@ fn graph_options_of(
                     })?);
                 }
             }
-            // CL-21/#222: `-enc_time_base` is not `bit::VIDEO`-gated in the
+            // `-enc_time_base` is not `bit::VIDEO`-gated in the
             // table (audio encoders take a time base too), so this is
             // resolved for every media type, not just inside the video arm
             // above.
@@ -1380,9 +1380,8 @@ pub fn run_pipeline(
         // the header. This used to call `Muxer::set_metadata` on the muxer
         // directly, before a single stream existed, because `vaco-sched`'s
         // `MuxWork` drove a raw `dyn Muxer` with no later point at which this
-        // module could still reach it (gap 8, `planning/INTERFACE-GAPS.md`,
-        // now closed: `MuxWork` drives a `MuxWriter`, and `MuxBuilder` is the
-        // later point). `vaco-mux-mp4`/`vaco-mux-matroska`/
+        // module could still reach it. `MuxWork` now drives a `MuxWriter`,
+        // and `MuxBuilder` is the later point. `vaco-mux-mp4`/`vaco-mux-matroska`/
         // `vaco-mux-stream`'s `ffmetadata` still resolve per-stream fields
         // lazily at `write_header` time; that laziness is no longer required
         // by this ordering, but changing those crates is out of this one's
@@ -1467,15 +1466,14 @@ pub fn run_pipeline(
                             if let Some(v) = p.video.as_ref() {
                                 // `Decoder::prime_video`'s own default is a
                                 // no-op, so this costs every decoder except
-                                // the one that actually needs it (FFV1:
-                                // E2E-GAPS.md #2) nothing. Coded size, not
-                                // display size — RFC 9043's
+                                // the one that actually needs it (FFV1)
+                                // nothing. Coded size, not display size —
+                                // RFC 9043's
                                 // `frame_pixel_width`/`frame_pixel_height`
                                 // describe the decoded picture, matching the
                                 // "coded" half of the display/coded split
-                                // this build already carries per-codec
-                                // (`planning/AGENT-CONSTRAINTS.md`'s
-                                // "Measure, do not recall" section).
+                                // this build already carries per-codec,
+                                // measured directly rather than assumed.
                                 let (width, height) = if v.coded_width > 0 && v.coded_height > 0 {
                                     (v.coded_width, v.coded_height)
                                 } else {
@@ -1680,8 +1678,8 @@ pub fn run_pipeline(
                                 match accepted_audio.first() {
                                     Some(&t) => {
                                         out_audio_format = Some(t);
-                                        // E2E-GAPS #2: give the encoder the
-                                        // stream shape it is about to
+                                        // Give the encoder the stream shape
+                                        // it is about to
                                         // receive *before* the first frame,
                                         // so an encoder whose packets are
                                         // not self-describing (`flac`'s
@@ -1719,7 +1717,7 @@ pub fn run_pipeline(
                                     None => frames,
                                 }
                             };
-                            // CL-21/#222: `-fps_mode` (video-only), inserted
+                            // `-fps_mode` (video-only), inserted
                             // after any `-vf`/auto-conversion and immediately
                             // before the encoder — see `crate::fps_mode`'s
                             // module doc for what `cfr`/`vfr` actually do and
@@ -1745,7 +1743,7 @@ pub fn run_pipeline(
                             } else {
                                 frames
                             };
-                            // CL-21/#222: `-enc_time_base` — see
+                            // `-enc_time_base` — see
                             // `crate::enc_time_base`'s module doc for the
                             // measured discrepancy between the reference's
                             // own `--help` and its actual accepted values.
@@ -1866,11 +1864,11 @@ pub fn run_pipeline(
         let t = sink.tally();
         // A stream this run actually decoded (not copied) that reached
         // `Finish::Complete` — no node errored — with zero packets muxed is
-        // not a quiet no-op. This build has no `-ss`/`-t`/`-frames` (nothing
-        // that could legitimately trim a stream to empty), so the only way a
-        // real decode-then-encode leg produces nothing is that the decode
-        // itself silently failed: `planning/E2E-GAPS.md` #6a's SPS-parse
-        // failure did exactly this, completing the whole pipeline and
+        // not a quiet no-op. This build has no `-frames` (the one remaining
+        // way to legitimately trim a stream to empty now that `-ss`/`-t`
+        // exist), so the only way a real decode-then-encode leg produces
+        // nothing is that the decode itself silently failed: an SPS-parse
+        // failure once did exactly this, completing the whole pipeline and
         // reporting `frame= 0` at exit 0. `t.streams` is built by one
         // `add_stream`/`add_stream_with` call per `out.streams` entry, in
         // that same order (`TallyingMuxer`'s own impl), so the two line up
@@ -1935,7 +1933,7 @@ fn open_output(
         .map_err(|e| muxer_open_error(out, &e))?;
     if probe.flags().contains(FormatFlags::NOFILE) {
         // A `NOFILE` muxer has no byte-oriented destination at all, but some
-        // (WHIP, `vaco-mux-whip`, #619) still need to know the URL itself —
+        // (WHIP, `vaco-mux-whip`) still need to know the URL itself —
         // an HTTP endpoint to negotiate against, not a sink to write into.
         // `Muxer::bind_url`'s doc comment names this pattern explicitly:
         // give every `NOFILE` muxer the chance to ask, the same way
@@ -2388,8 +2386,8 @@ mod tests {
     /// measured) maps a decodable h264/aac input to when neither `-c:v` nor
     /// `-c:a` is given. This replaces a test that asserted the *absence* of
     /// that mapping, which is exactly the "pin the absence of something the
-    /// project is building" trap `planning/AGENT-CONSTRAINTS.md` warns about:
-    /// it was true only because `check_codecs` never consulted
+    /// project is building" trap: it was true only because `check_codecs`
+    /// never consulted
     /// `MuxerDesc::default_video`/`default_audio` at all, not because the
     /// container has no default.
     #[test]

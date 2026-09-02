@@ -161,8 +161,8 @@ pub struct Cli {
     /// reference's own wording for that value rather than its "auto"
     /// behaviour, since nothing here auto-detects.
     pub threads: Option<usize>,
-    /// `-filter_threads N` (D2, `planning/PERF-PROGRAMME.md` track D). `None`
-    /// when unstated, which resolves to [`default_thread_count`] via
+    /// `-filter_threads N` (D2). `None` when unstated, which resolves to
+    /// [`default_thread_count`] via
     /// [`Cli::filter_thread_count`] -- reusing `-threads`' own small-fixed-
     /// count reasoning rather than the reference's raw-core-count "auto",
     /// for the same determinism reason. Declared `ValueKind::Str` in the
@@ -240,8 +240,8 @@ pub fn default_thread_count() -> usize {
 ///
 /// Re-exported rather than reimplemented: `ffprobe` answers the same question
 /// the same way, and the answer turned out to depend on `-v`/`-loglevel` as
-/// well as on `-hide_banner` (CONFORMANCE-FINDINGS 34). One definition, per
-/// D19 — see [`vaco_cli_core::loglevel`] for the measurements behind it.
+/// well as on `-hide_banner`. One definition, per D19 — see
+/// [`vaco_cli_core::loglevel`] for the measurements behind it.
 pub use vaco_cli_core::loglevel::wants_banner;
 
 /// Split and bind `argv`.
@@ -353,9 +353,9 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
 /// but that nothing downstream of [`parse`] ever reads.
 ///
 /// Before this existed they parsed successfully, exited 0, and had exactly
-/// zero effect — the same defect `-ar` had (`planning/AGENT-CONSTRAINTS.md`'s
-/// standing rule that silently wrong is worse than refusing applies just as
-/// much to an option that does nothing as to one that resamples nothing).
+/// zero effect — the same defect `-ar` had: silently wrong is worse than
+/// refusing, which applies just as much to an option that does nothing as
+/// to one that resamples nothing.
 /// Each of these is tracked as deferred work in `docs/app/vaco-cli.md`
 /// (`-hwaccel`: CL-34a; `-frame_drop_threshold`: CL-21) — refusing does not
 /// close any of those issues, it only stops the gap between "accepted" and
@@ -948,7 +948,7 @@ mod tests {
         // the reference's 39 `AVFormatContext` options), so the generic
         // schema-match loop in `format_options_of` would otherwise silently
         // drop it — the same silent drop this test would have caught before
-        // issue #634's fix, when nothing consumed `-bitexact` at all.
+        // the fix, when nothing consumed `-bitexact` at all.
         // `Muxer::set_bitexact` (`vaco-format-core`) is what a muxer actually
         // reads this bit from, via `MuxBuilder::open`.
         let cli = parse(&["-i", "a.mkv", "-c", "copy", "-bitexact", "-f", "null", "-"]).unwrap();

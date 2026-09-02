@@ -199,7 +199,7 @@ where
                 &spec.url,
             )
         })?;
-        // #641: `Input #0, …` printed as soon as the input opens, exactly
+        // `Input #0, …` printed as soon as the input opens, exactly
         // like the reference — which is *before* the "no output" check
         // below, not after it. `ffmpeg -i in.mp4` with no output prints the
         // whole dump and then that error; this used to check for a missing
@@ -282,7 +282,7 @@ where
         }
     }
 
-    // CL-17/#208: `Output #0, …` and `Press [q] to stop, [?] for help`. The
+    // `Output #0, …` and `Press [q] to stop, [?] for help`. The
     // reference prints both of these, and `Stream mapping:`, before it starts
     // writing any packet; `exec::run_pipeline` below does the mapping and the
     // writing in one blocking call with no earlier hook to print from, so
@@ -304,7 +304,7 @@ where
         }
     }
 
-    // CL-27/#230: `-print_graphs` — the reference dumps its execution graph
+    // `-print_graphs` — the reference dumps its execution graph
     // before it writes any packet, so this runs here, ahead of
     // `exec::run_pipeline` below, using its own independent graph build (see
     // `print_graphs`'s module doc for why the real, attached pipeline graph

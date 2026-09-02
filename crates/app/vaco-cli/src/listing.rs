@@ -498,8 +498,8 @@ fn write_codecs<W: Write>(w: &mut W) -> std::io::Result<()> {
         // name in this whole listing, checked by diffing every row against
         // `ffmpeg -codecs`. It stays in the enum because fifty call sites still
         // reach it when a container states PCM without saying which, and each
-        // of those is a gap worth being able to see (CONFORMANCE-FINDINGS 24);
-        // it just is not an answer to "what codecs exist".
+        // of those is a gap worth being able to see; it just is not an
+        // answer to "what codecs exist".
         if id == vaco_codec_core::CodecId::Pcm {
             continue;
         }
@@ -1735,8 +1735,8 @@ mod tests {
     ///
     /// They passed for exactly as long as the corresponding bug lasted, and
     /// failed the moment it was fixed — the "never pin the absence of something
-    /// the project is building" trap in `planning/AGENT-CONSTRAINTS.md`, in its
-    /// purest form. `-filters` printed a legend and no rows while 142 filters
+    /// the project is building" trap, in its purest form. `-filters` printed a
+    /// legend and no rows while 142 filters
     /// were registered and resolving through `-h filter=<name>`.
     ///
     /// What replaces them asserts the *shape* of a row, which stays true as the
