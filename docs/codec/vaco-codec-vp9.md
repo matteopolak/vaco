@@ -6,8 +6,9 @@ switchable sub-pel interpolation, and §8.8's in-loop deblocking filter, so
 lossy content decodes bit-exactly rather than within a filter-shaped
 tolerance. Builds on `vaco-codec-msac` (the shared VP8/VP9 boolean entropy
 engine) and `vaco-codec-dsp-idct` (the shared DCT/ADST/WHT transform math).
-Profiles 1-3 (4:2:2/4:4:0/4:4:4 chroma, 10/12-bit) are handled; threading
-remains out of scope — see "What is deliberately not here" below.
+Profiles 1-3 (4:2:2/4:4:0/4:4:4 chroma, 10/12-bit) are handled. Frame-level
+threading (`-threads N`) is implemented; tile-*column* parallelism is not
+— see "What is deliberately not here" below.
 
 ## What it is
 
@@ -53,18 +54,21 @@ VP9's DCT/ADST family almost exactly.
 
 ### What is deliberately not here
 
-**Tile/frame-parallel decode itself (the rest of epic #32, C-32c).** §8.8's
+**Tile-*column* parallel decode (the remainder of epic #32, C-32c).** §8.8's
 in-loop deblocking filter is now applied (C-32a) — see "How it works" and
 "Verification" below. Profiles 1-3 (C-32b, #327) are now handled — see the
 "Profiles 1-3" entry under "Verification" below. Multi-tile-*column*
 decode is now correct (a real bug, not just an `AvailL` simplification —
-see "Verification" below and `planning/TECH-DEBT.md`), which is a
-prerequisite for tile-parallel decode, not tile-parallel decode itself:
-tiles still decode sequentially, one `Bd` per tile, on the calling
-thread. Actually running them concurrently over
-`vaco-codec-core::threading`'s `SliceThreadedDecoder`/`FrameThreadedDecoder`
-seam (F-03) is unattempted — see `planning/TECH-DEBT.md` for what that
-would need.
+see "Verification" below and `planning/TECH-DEBT.md`), which was a
+prerequisite for frame-level threading (below) and remains one for
+tile-column threading. Frame-level threading (`-threads N`, C-32c) is now
+implemented — see "Threading" under "How it works" and "Verification"
+below. What is still missing is running one frame's own tile *columns*
+concurrently with each other (as `libvpx`'s `--row-mt`/frame-parallel modes
+can): tiles still decode sequentially, one `Bd` per tile, on whichever
+thread is running that frame's parse. `vaco-codec-core::threading`'s
+`SliceThreadedDecoder`/`PictureWriter::split_bands_mut` seam (F-03) is the
+mechanism for that — see `planning/TECH-DEBT.md` for what it would need.
 
 **Backward probability adaptation (§8.3/8.4) is not implemented, and this
 is a real, measured problem for any non-frame-parallel stream, not a
@@ -501,6 +505,44 @@ Dev-only: `proptest`. No external runtime dependencies.
   change), and both together (1024x1024, tile-columns log2=2 / tile-rows
   log2=1) — every frame, Y/U/V, byte-exact (0 of 98304/98304/1572864
   bytes differ per frame respectively).
+
+  **Frame-level threading, #328 (C-32c).** `decode_one_frame` split into a
+  serial `parse_frame_tiles` (mode-info/motion-vector/coefficient-token
+  walk, no pixels touched) and `reconstruct_frame` (prediction, inverse
+  transform, sample addition, loop filter), dispatched onto
+  `vaco_codec_core::threading::FrameRunner` so one frame's reconstruction
+  overlaps the *next* frame's parse — the same seam `vaco-codec-vp8`'s
+  #301 established. Verified byte-identical to `ffmpeg -c:v libvpx-vp9`'s
+  own decode at `-threads` 1, 2, 4 and 8 on the multi-tile-column fixture
+  above plus two new committed fixtures
+  (`tests/fixtures/vp9/vp9_two_tile_columns_512x384.ivf`,
+  `vp9_altref_invisible_frames.ivf` — see `tests/conformance.rs`'s module
+  doc), the second chosen specifically because a 2-pass `libvpx-vp9`
+  encode reliably produces real invisible alt-ref frames delivered as
+  superframes (`show_frame = 0`; 10 of 125 coded sub-frames in that
+  fixture) — the case most likely to break silently, since an invisible
+  frame must still be fully reconstructed for the reference store but must
+  never reach `Vp9Decoder::receive_frame` as output. One real bug was
+  found and fixed by the `vp9_decode` fuzz target during this work, not by
+  the differential tests: splitting parse from reconstruction moved the
+  frame's only budget-charged allocation (`ProgressPicture::allocate`,
+  sized off the header's own `mi_cols`/`mi_rows`) to *after* the expensive
+  per-block parse walk it used to gate, so an oversized declared frame ran
+  the full unbounded parse before being rejected — over 500MB allocated by
+  `ParsedBlock`/`StoredResidue` before the fuzzer's process was killed.
+  Fixed by charging the picture-sized budget before `parse_frame_tiles`
+  runs, restoring the original ordering; see `planning/TECH-DEBT.md` for
+  the general shape of this hazard. Performance: interleaved A/B (10
+  rounds, alternating start order) on a 720p/240-frame `libvpx-vp9` encode
+  measured a median 1.10x wall-clock speedup at `-threads 4` vs
+  `-threads 1` (8/10 rounds favouring `-threads 4`), confirmed by a second
+  independent `/usr/bin/time` comparison — a real but modest gain, smaller
+  than `vaco-codec-vp8`'s measured 1.22x, most likely because VP9's serial
+  parse stage is proportionally larger relative to
+  reconstruction+loop-filter than VP8's is. Tile-*column* parallelism
+  (running one frame's own tiles concurrently with each other) is a
+  separate, unimplemented piece of work — see "What is deliberately not
+  here" above.
 
   **Encoder, #330 (C-33b) — real partition/mode decision and real
   (lossless) residual, replacing #329's fixed largest-partition/`DC_PRED`/

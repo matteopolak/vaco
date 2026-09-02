@@ -13,13 +13,13 @@ use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_pixfmt::PixFmt;
 
-use crate::framebuf::Picture;
+use crate::framebuf::{self, Picture};
 use crate::header::{self, EntropyContext, FrameHeader, LoopFilterParams, PrevFrameInfo, RefFrameDims, Segmentation};
 use crate::interpredict;
 use crate::loopfilter;
 use crate::mvpred::{self, MvCell};
 use crate::predict::predict_intra;
-use crate::refframe::{RefFrameStore, RefSlot};
+use crate::refframe::{self, RefFrameStore, RefSlot};
 use crate::tables;
 use crate::transform::{dequant_factors, reconstruct};
 use crate::{superframe, tokens};
@@ -102,6 +102,13 @@ pub(crate) struct FrameCtx {
     /// is already sitting right there in `pic` from an earlier tile.
     tile_mi_col_start: usize,
     tile_mi_col_end: usize,
+    /// Every block's parsed mode/motion/residual, in decode order (issue
+    /// #328) — populated by [`decode_block`], consumed by
+    /// [`apply_residual`] on `crate::frame_task::Vp9FrameTask`'s own copy
+    /// of this frame's planes. Empty and unused when this `FrameCtx` is
+    /// only being used for reconstruction (`decode_frame_tiles`'s parse
+    /// half never reads it back).
+    parsed: Vec<ParsedBlock>,
 }
 
 impl FrameCtx {
@@ -275,7 +282,8 @@ fn decode_block(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r
         inter_frame_mode_info(bd, ctx, entropy, r, c, subsize, avail_u, avail_l)
     };
 
-    let eob_total_nonzero = residual(bd, ctx, entropy, r, c, subsize, &block);
+    let tile_mi_col_start = ctx.tile_mi_col_start;
+    let (eob_total_nonzero, residues) = residual(bd, ctx, entropy, r, c, subsize, &block);
     // §6.4.4's `decode_block`: a >=8x8 inter block with no coded residual
     // at all is stored as `skip = 1` regardless of what `read_skip` (or
     // `seg_feature_active(SEG_LVL_SKIP)`) actually produced — this is what
@@ -302,11 +310,13 @@ fn decode_block(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r
         },
         block.segment_id,
     );
+    ctx.parsed.push(ParsedBlock { r, c, subsize, block, tile_mi_col_start, residues });
 }
 
 /// Everything `residual`/`ctx.store_block` need out of whichever of
 /// `intra_frame_mode_info`/`inter_frame_mode_info` ran — one shared shape
 /// so `decode_block` does not need two divergent call sequences.
+#[derive(Clone, Copy)]
 struct DecodedBlock {
     segment_id: u8,
     skip: bool,
@@ -321,6 +331,35 @@ struct DecodedBlock {
     /// `MiSize >= BLOCK_8X8`. Meaningless (left `ZeroMv`) when `!is_inter`.
     block_mvs: [[[i32; 2]; 4]; 2],
     interp_filter: i32,
+}
+
+/// One transform block's residue, captured at parse time (issue #328) so
+/// prediction and the actual sample addition can happen later, on a worker
+/// thread, once a reference frame's pixels (for an inter block) are ready.
+/// `in_bounds` mirrors `residual`'s own `start_x < maxx && start_y < maxy`
+/// check: [`apply_residual`] only predicts/adds where this is true, exactly
+/// as `residual` only predicted/decoded tokens there. `residue` is `None`
+/// when the block was out of bounds, skipped, or decoded to all-zero — a
+/// position [`apply_residual`] then leaves the prediction alone, exactly as
+/// `residual`'s own `if nonzero` gate did in place.
+#[derive(Clone)]
+struct StoredResidue {
+    in_bounds: bool,
+    residue: Option<Vec<i64>>,
+}
+
+/// One block's complete parse result (issue #328): its mode/motion info,
+/// the tile it belongs to (`AvailL`/`have_left` are tile-relative, not
+/// frame-relative — see `FrameCtx::tile_mi_col_start`'s doc), and every
+/// transform block's residue, in exactly the order [`apply_residual`] will
+/// walk them.
+pub(crate) struct ParsedBlock {
+    r: usize,
+    c: usize,
+    subsize: i32,
+    block: DecodedBlock,
+    tile_mi_col_start: usize,
+    residues: Vec<StoredResidue>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1105,7 +1144,16 @@ fn get_plane_block_size(subsize: i32, plane: usize, subsampling_x: bool, subsamp
         .unwrap_or(tables::BLOCK_INVALID)
 }
 
-fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: usize, c: usize, mi_size: i32, block: &DecodedBlock) -> bool {
+/// The parse half of one block's residual (issue #328): decodes every
+/// coefficient token and computes each transform block's spatial residue —
+/// both pixel-independent — but defers every pixel-touching step (the
+/// whole-plane inter motion compensation, each transform block's intra
+/// prediction, and the sample addition itself) to [`apply_residual`], which
+/// runs later, on `crate::frame_task::Vp9FrameTask`'s own copy of this
+/// frame's planes. Still updates `ctx.above_nz`/`ctx.left_nz`: later blocks
+/// in this same tile need that context at parse time, which is exactly why
+/// it cannot itself be deferred.
+fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: usize, c: usize, mi_size: i32, block: &DecodedBlock) -> (bool, Vec<StoredResidue>) {
     let bsize = if mi_size < tables::BLOCK_8X8 { tables::BLOCK_8X8 } else { mi_size };
     let (subx, suby) = (ctx.header.color.subsampling_x, ctx.header.color.subsampling_y);
     let bit_depth = u32::from(ctx.header.color.bit_depth);
@@ -1114,9 +1162,89 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
     let skip = block.skip;
     let segment_id = block.segment_id;
     let y_mode = block.y_mode;
-    let uv_mode = block.uv_mode;
     let sub_modes = &block.sub_modes;
     let mut eob_total = 0usize;
+    let mut stored = Vec::new();
+
+    for plane in 0..3usize {
+        let tx_sz = if plane > 0 { get_uv_tx_size(mi_size, tx_size, subx, suby) } else { tx_size };
+        let step = 1usize << tx_sz;
+        let plane_sz = get_plane_block_size(bsize, plane, subx, suby);
+        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP.get(usize::try_from(plane_sz).unwrap_or(0)).copied().unwrap_or(1);
+        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP.get(usize::try_from(plane_sz).unwrap_or(0)).copied().unwrap_or(1);
+        let (sub_x, sub_y) = if plane > 0 { (subx, suby) } else { (false, false) };
+        let base_x = (c * 8) >> u32::from(sub_x);
+        let base_y = (r * 8) >> u32::from(sub_y);
+        let maxx = (ctx.mi_cols * 8) >> u32::from(sub_x);
+        let maxy = (ctx.mi_rows * 8) >> u32::from(sub_y);
+
+        let (dc_quant, ac_quant) = {
+            let qindex = get_qindex(ctx, segment_id);
+            let (delta_dc, delta_ac) =
+                if plane == 0 { (ctx.header.quant.delta_q_y_dc, 0) } else { (ctx.header.quant.delta_q_uv_dc, ctx.header.quant.delta_q_uv_ac) };
+            dequant_factors(ctx.header.color.bit_depth, qindex, delta_dc, delta_ac)
+        };
+
+        let mut block_idx = 0usize;
+        let mut y = 0usize;
+        while y < num4x4h {
+            let mut x = 0usize;
+            while x < num4x4w {
+                let start_x = base_x + 4 * x;
+                let start_y = base_y + 4 * y;
+                let mut nonzero = false;
+                let in_bounds = start_x < maxx && start_y < maxy;
+                let mut residue = None;
+                if in_bounds && !skip {
+                    let tx_type = get_scan_tx_type(plane, tx_sz, lossless, block.is_inter, mi_size, y_mode, sub_modes, block_idx);
+                    let scan = tables::get_scan(tx_sz, tx_type);
+                    let (coefs, eob) =
+                        tokens::decode_tokens(bd, entropy, ctx, plane, start_x, start_y, tx_sz, scan, tx_type, block.is_inter, subx, suby, bit_depth);
+                    nonzero = eob > 0;
+                    if nonzero {
+                        eob_total += 1;
+                        residue = Some(reconstruct(&coefs, tx_sz, dc_quant, ac_quant, tx_type, lossless));
+                    }
+                }
+                stored.push(StoredResidue { in_bounds, residue });
+                for i in 0..step {
+                    if let Some(row) = ctx.above_nz.get_mut(plane)
+                        && let Some(slot) = row.get_mut((start_x >> 2) + i)
+                    {
+                        *slot = nonzero;
+                    }
+                    if let Some(row) = ctx.left_nz.get_mut(plane)
+                        && let Some(slot) = row.get_mut(((start_y >> 2) % 16) + i)
+                    {
+                        *slot = nonzero;
+                    }
+                }
+                block_idx += 1;
+                x += step;
+            }
+            y += step;
+        }
+    }
+    (eob_total > 0, stored)
+}
+
+/// The reconstruction half of one block's residual (issue #328): replays
+/// exactly the geometry [`residual`] walked during parsing — itself fully
+/// determined by `mi_size`, `block.tx_size`, plane and subsampling, so no
+/// pixel data is needed to reproduce it — performing the prediction reads
+/// and sample additions `residual` deferred. `residues` must be exactly
+/// what that same call to `residual` returned, in order, and this indexes
+/// rather than tolerates a mismatch: a wrong length here is this crate's own
+/// bug, not malformed input.
+fn apply_residual(ctx: &mut FrameCtx, r: usize, c: usize, mi_size: i32, block: &DecodedBlock, residues: &[StoredResidue]) {
+    let bsize = if mi_size < tables::BLOCK_8X8 { tables::BLOCK_8X8 } else { mi_size };
+    let (subx, suby) = (ctx.header.color.subsampling_x, ctx.header.color.subsampling_y);
+    let bit_depth = u32::from(ctx.header.color.bit_depth);
+    let tx_size = block.tx_size;
+    let y_mode = block.y_mode;
+    let uv_mode = block.uv_mode;
+    let sub_modes = &block.sub_modes;
+    let mut idx = 0usize;
 
     for plane in 0..3usize {
         let tx_sz = if plane > 0 { get_uv_tx_size(mi_size, tx_size, subx, suby) } else { tx_size };
@@ -1149,13 +1277,6 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
             }
         }
 
-        let (dc_quant, ac_quant) = {
-            let qindex = get_qindex(ctx, segment_id);
-            let (delta_dc, delta_ac) =
-                if plane == 0 { (ctx.header.quant.delta_q_y_dc, 0) } else { (ctx.header.quant.delta_q_uv_dc, ctx.header.quant.delta_q_uv_ac) };
-            dequant_factors(ctx.header.color.bit_depth, qindex, delta_dc, delta_ac)
-        };
-
         let mut block_idx = 0usize;
         let mut y = 0usize;
         while y < num4x4h {
@@ -1163,8 +1284,9 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
             while x < num4x4w {
                 let start_x = base_x + 4 * x;
                 let start_y = base_y + 4 * y;
-                let mut nonzero = false;
-                if start_x < maxx && start_y < maxy {
+                let Some(entry) = residues.get(idx) else { break };
+                idx += 1;
+                if entry.in_bounds {
                     if !block.is_inter {
                         let mode = if plane > 0 {
                             uv_mode
@@ -1178,30 +1300,8 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
                         let not_on_right = x + step < num4x4w;
                         predict_block(ctx, plane, start_x, start_y, mode, tx_sz, have_left, have_above, not_on_right, maxx, maxy, bit_depth);
                     }
-
-                    if !skip {
-                        let tx_type = get_scan_tx_type(plane, tx_sz, lossless, block.is_inter, mi_size, y_mode, sub_modes, block_idx);
-                        let scan = tables::get_scan(tx_sz, tx_type);
-                        let (coefs, eob) =
-                            tokens::decode_tokens(bd, entropy, ctx, plane, start_x, start_y, tx_sz, scan, tx_type, block.is_inter, subx, suby, bit_depth);
-                        nonzero = eob > 0;
-                        if nonzero {
-                            eob_total += 1;
-                            let residue = reconstruct(&coefs, tx_sz, dc_quant, ac_quant, tx_type, lossless);
-                            add_residue(ctx, plane, start_x, start_y, tx_sz, &residue, bit_depth);
-                        }
-                    }
-                }
-                for i in 0..step {
-                    if let Some(row) = ctx.above_nz.get_mut(plane)
-                        && let Some(slot) = row.get_mut((start_x >> 2) + i)
-                    {
-                        *slot = nonzero;
-                    }
-                    if let Some(row) = ctx.left_nz.get_mut(plane)
-                        && let Some(slot) = row.get_mut(((start_y >> 2) % 16) + i)
-                    {
-                        *slot = nonzero;
+                    if let Some(residue) = &entry.residue {
+                        add_residue(ctx, plane, start_x, start_y, tx_sz, residue, bit_depth);
                     }
                 }
                 block_idx += 1;
@@ -1210,7 +1310,6 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
             y += step;
         }
     }
-    eob_total > 0
 }
 
 /// The reference-frame slot `ref_frame` (a `LAST_FRAME`/`GOLDEN_FRAME`/
@@ -1402,21 +1501,28 @@ fn decode_tile(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, mi
     }
 }
 
-/// Decode one already-superframe-split VP9 frame's tile data. Returns the
-/// reconstructed picture plus this frame's own per-MI grid and segment map
-/// (`prev_mv_grid`/`prev_segment_ids` for whichever frame reads them next).
-#[allow(clippy::too_many_arguments)]
-fn decode_frame_tiles(
+/// The serial half of frame decode (issue #328): walks every tile's
+/// mode-info and residual tokens, producing this frame's own per-MI grid
+/// (`prev_mv_grid`/`prev_segment_ids` for whichever frame reads them next —
+/// available the instant this returns, with no pixel dependency at all) and
+/// every block's parsed record for [`reconstruct_frame`] to replay later,
+/// off the caller's own thread. Carries no real picture or reference-frame
+/// store: nothing in a mode-info/residual-token walk touches either (the
+/// spec's own `residual()` reads coefficients and neighbour context, never
+/// samples) — `FrameCtx::pic`/`FrameCtx::ref_store` exist only because
+/// [`FrameCtx`] is one struct shared with reconstruction, and are given
+/// zero-sized/empty placeholders here rather than a second struct type.
+#[allow(clippy::too_many_arguments, reason = "one argument per piece of cross-frame state a threaded parse/reconstruct split has to pass explicitly instead of reading through &mut self")]
+fn parse_frame_tiles(
     header: &FrameHeader,
     entropy: &EntropyContext,
     tile_data: &[u8],
-    pic: Picture,
-    ref_store: &RefFrameStore,
     prev_mv_grid: &[MiCell],
     prev_mi_cols: usize,
     prev_mi_rows: usize,
     prev_segment_ids: &[u8],
-) -> (Picture, Vec<MiCell>, Vec<u8>) {
+    budget: &mut Budget,
+) -> Result<(Vec<ParsedBlock>, Vec<MiCell>, Vec<u8>)> {
     let cell_count = header.mi_rows.max(1) * header.mi_cols.max(1);
     let same_dims = prev_mi_cols == header.mi_cols && prev_mi_rows == header.mi_rows;
     let mut ctx = FrameCtx {
@@ -1437,10 +1543,11 @@ fn decode_frame_tiles(
         prev_segment_ids: if same_dims { prev_segment_ids.to_vec() } else { vec![0u8; cell_count] },
         segment_ids: vec![0u8; cell_count],
         prev_mv_grid: if same_dims { prev_mv_grid.to_vec() } else { Vec::new() },
-        ref_store: ref_store.clone(),
-        pic,
+        ref_store: RefFrameStore::default(),
+        pic: Picture::new(budget, 0, 0, 0, 0)?,
         tile_mi_col_start: 0,
         tile_mi_col_end: header.mi_cols,
+        parsed: Vec::new(),
     };
 
     let tile_cols = 1usize << header.tile.cols_log2;
@@ -1471,15 +1578,62 @@ fn decode_frame_tiles(
             decode_tile(&mut bd, &mut ctx, entropy, mi_row_start, mi_row_end, mi_col_start, mi_col_end);
         }
     }
-    let lf_grid: Vec<loopfilter::MiInfo> = ctx
-        .grid
-        .iter()
-        .map(|cell| loopfilter::MiInfo { mi_size: cell.mi_size, tx_size: cell.tx_size, skip: cell.skip, ref_frame0: cell.ref_frame[0], y_mode: cell.y_mode })
-        .collect();
-    let grid = loopfilter::Grid { mi: &lf_grid, segment_ids: &ctx.segment_ids, mi_rows: ctx.mi_rows, mi_cols: ctx.mi_cols };
-    loopfilter::filter_frame(&mut ctx.pic, &grid, &header.loop_filter, &header.segmentation, header.color.subsampling_x, header.color.subsampling_y, u32::from(header.color.bit_depth));
 
-    (ctx.pic, ctx.grid, ctx.segment_ids)
+    Ok((ctx.parsed, ctx.grid, ctx.segment_ids))
+}
+
+/// The parallel half of frame decode (issue #328): allocates this frame's
+/// real picture and replays every [`ParsedBlock`] [`parse_frame_tiles`]
+/// produced — prediction (intra, reading this same in-progress picture; and
+/// inter, reading `ref_store`'s now-real pixels) plus the sample addition —
+/// then applies §8.8's loop filter. Runs on
+/// `vaco_codec_core::threading::FrameRunner`'s worker thread while the
+/// *next* frame's own `parse_frame_tiles` proceeds on the caller's.
+fn reconstruct_frame(
+    header: &FrameHeader,
+    ref_store: RefFrameStore,
+    parsed: &[ParsedBlock],
+    grid: &[MiCell],
+    segment_ids: &[u8],
+    budget: &mut Budget,
+) -> Result<Picture> {
+    let luma_w = header.mi_cols * 8;
+    let luma_h = header.mi_rows * 8;
+    let chroma_w = luma_w >> u32::from(header.color.subsampling_x);
+    let chroma_h = luma_h >> u32::from(header.color.subsampling_y);
+    let pic = Picture::new(budget, luma_w, luma_h, chroma_w, chroma_h)?;
+    let mut ctx = FrameCtx {
+        header: header.clone(),
+        mi_cols: header.mi_cols,
+        mi_rows: header.mi_rows,
+        grid: Vec::new(),
+        above_partition_context: Vec::new(),
+        left_partition_context: [0u8; 8],
+        above_nz: [Vec::new(), Vec::new(), Vec::new()],
+        left_nz: [[false; 16]; 3],
+        above_seg_pred_context: Vec::new(),
+        left_seg_pred_context: [false; 8],
+        prev_segment_ids: Vec::new(),
+        segment_ids: Vec::new(),
+        prev_mv_grid: Vec::new(),
+        ref_store,
+        pic,
+        tile_mi_col_start: 0,
+        tile_mi_col_end: header.mi_cols,
+        parsed: Vec::new(),
+    };
+
+    for pb in parsed {
+        ctx.tile_mi_col_start = pb.tile_mi_col_start;
+        apply_residual(&mut ctx, pb.r, pb.c, pb.subsize, &pb.block, &pb.residues);
+    }
+
+    let lf_grid: Vec<loopfilter::MiInfo> =
+        grid.iter().map(|cell| loopfilter::MiInfo { mi_size: cell.mi_size, tx_size: cell.tx_size, skip: cell.skip, ref_frame0: cell.ref_frame[0], y_mode: cell.y_mode }).collect();
+    let lf = loopfilter::Grid { mi: &lf_grid, segment_ids, mi_rows: header.mi_rows, mi_cols: header.mi_cols };
+    loopfilter::filter_frame(&mut ctx.pic, &lf, &header.loop_filter, &header.segmentation, header.color.subsampling_x, header.color.subsampling_y, u32::from(header.color.bit_depth));
+
+    Ok(ctx.pic)
 }
 
 fn tile_offset(tile_num: usize, mis: usize, tile_size_log2: u32) -> usize {
@@ -1499,7 +1653,8 @@ struct State {
     loop_filter: LoopFilterParams,
     segmentation: Segmentation,
     frame_contexts: [EntropyContext; 4],
-    ref_store: RefFrameStore,
+    /// Handle-based (issue #328) — see `crate::refframe`'s module doc.
+    ref_store: refframe::PendingRefStore,
     prev_frame_info: Option<PrevFrameInfo>,
     prev_mv_grid: Vec<MiCell>,
     prev_mi_cols: usize,
@@ -1519,7 +1674,7 @@ impl Default for State {
             loop_filter: LoopFilterParams::default(),
             segmentation: Segmentation::default(),
             frame_contexts: std::array::from_fn(|_| EntropyContext::default()),
-            ref_store: RefFrameStore::default(),
+            ref_store: refframe::PendingRefStore::default(),
             prev_frame_info: None,
             prev_mv_grid: Vec::new(),
             prev_mi_cols: 0,
@@ -1530,11 +1685,42 @@ impl Default for State {
     }
 }
 
+/// What one dispatched-but-not-yet-collected task needs stamped onto its
+/// eventual `Frame` (issue #328).
+struct InFlight {
+    show_frame: bool,
+    pts: vaco_core::Timestamp,
+    duration: vaco_core::Duration,
+}
+
+/// VP9 decoder, VP9 Bitstream & Decoding Process Specification v0.6.
+///
+/// # Threading (issue #328, `C-32c`)
+///
+/// `-threads N` overlaps one frame's reconstruction and loop filter
+/// ([`reconstruct_frame`] — everything after this frame's own tokens are
+/// known) with the *next* frame's mode-info/token decode
+/// ([`parse_frame_tiles`]), over `vaco_codec_core::threading::FrameRunner`
+/// — the same primitive `vaco-codec-h264`/`vaco-codec-hevc`/
+/// `vaco-codec-vp8` already use. VP9's own temporal MV prediction
+/// (`UsePrevFrameMvs`) and reference-frame-store bookkeeping (§7.2's
+/// refresh/copy rules) are both resolved from `parse_frame_tiles`'s own
+/// return value — the per-MI grid and this frame's header — with no pixel
+/// dependency at all, which is what lets the *next* frame's parse begin
+/// before this one's reconstruction finishes.
+///
+/// Tile-*column* parallelism (`vaco_codec_core::threading::
+/// SliceThreadedDecoder`) is not implemented — see this crate's own doc for
+/// what that would need on top of this. This is frame-level threading only,
+/// the same scope `vaco-codec-vp8`'s equivalent issue (#301) shipped.
 pub struct Vp9Decoder {
     machine: vaco_codec_core::machine::Machine<Frame>,
     limits: Limits,
     budget: Budget,
     state: State,
+    runner: vaco_codec_core::FrameRunner<Vp9FrameTask>,
+    threads: usize,
+    in_flight: std::collections::VecDeque<InFlight>,
 }
 
 impl std::fmt::Debug for Vp9Decoder {
@@ -1547,14 +1733,63 @@ impl Vp9Decoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
         Self {
-            machine: vaco_codec_core::machine::Machine::new(vaco_codec_core::Caps::SUBFRAMES),
+            machine: vaco_codec_core::machine::Machine::new(vaco_codec_core::Caps::SUBFRAMES.union(vaco_codec_core::Caps::DELAY)),
             budget: Budget::new(limits.clone()),
             limits,
             state: State::default(),
+            runner: vaco_codec_core::FrameRunner::new(1),
+            threads: 1,
+            in_flight: std::collections::VecDeque::new(),
         }
     }
 
-    fn decode_one_frame(&mut self, data: &[u8], pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
+    const fn max_in_flight(&self) -> usize {
+        self.threads
+    }
+
+    /// Take the oldest in-flight picture's frame and hand it to the caller.
+    /// `Ok(false)` when nothing was in flight.
+    fn collect_one(&mut self, block: bool) -> Result<bool> {
+        if self.in_flight.is_empty() {
+            return Ok(false);
+        }
+        let Some(result) = (if block { self.runner.collect() } else { self.runner.try_collect() }) else {
+            return Ok(false);
+        };
+        let Some(meta) = self.in_flight.pop_front() else {
+            return Err(Error::InvalidData("vaco-codec-vp9: a frame arrived with no in-flight record"));
+        };
+        let mut frame = result?;
+        if meta.show_frame {
+            frame.pts = meta.pts;
+            frame.duration = meta.duration;
+            self.machine.emit(frame);
+        }
+        Ok(true)
+    }
+
+    fn drain_to_capacity(&mut self) -> Result<()> {
+        while self.in_flight.len() >= self.max_in_flight() {
+            if !self.collect_one(true)? {
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn drain_all(&mut self) -> Result<()> {
+        while self.collect_one(true)? {}
+        Ok(())
+    }
+
+    /// The serial half of one (sub)frame's decode (issue #328): parses the
+    /// header, decodes every tile's tokens ([`parse_frame_tiles`]),
+    /// resolves reference-frame-store and entropy persistence, and
+    /// dispatches the reconstruction half as a task. A frame that fails
+    /// header parse, or a `show_existing_frame` naming an empty slot,
+    /// dispatches nothing at all — matching the pre-threading code's own
+    /// "just skip this call" handling of both cases exactly.
+    fn split_frame(&mut self, data: &[u8], pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
         let mut ref_dims: [Option<RefFrameDims>; tables::NUM_REF_FRAMES] = [None; tables::NUM_REF_FRAMES];
         for (i, slot) in ref_dims.iter_mut().enumerate() {
             if let Some((w, h)) = self.state.ref_store.dims(u8::try_from(i).unwrap_or(0)) {
@@ -1578,13 +1813,52 @@ impl Vp9Decoder {
 
         if fh.show_existing_frame {
             if let Some(slot) = self.state.ref_store.get(fh.frame_to_show_map_idx).cloned() {
-                let mut frame = ref_slot_to_frame(&mut self.budget, &slot)?;
-                frame.pts = pts;
-                frame.duration = duration;
-                self.machine.emit(frame);
+                self.runner.dispatch(Vp9FrameTask::ShowExisting {
+                    pic_ref: slot.pic_ref,
+                    width: slot.width,
+                    height: slot.height,
+                    subsampling_x: slot.subsampling_x,
+                    subsampling_y: slot.subsampling_y,
+                    bit_depth: slot.bit_depth,
+                    limits: self.limits.clone(),
+                });
+                self.in_flight.push_back(InFlight { show_frame: true, pts, duration });
+                self.drain_to_capacity()?;
             }
             return Ok(());
         }
+
+        // The picture-sized allocation this frame will eventually need,
+        // charged against `self.budget` *before* any parse work below --
+        // `mi_cols`/`mi_rows` are attacker-controlled fields straight out
+        // of the uncompressed header (this module's doc, and the
+        // `vp9_decode` fuzz target's own doc, both call this out
+        // specifically), and `parse_frame_tiles` walks every mode-info
+        // cell they describe, accumulating a `ParsedBlock`/`StoredResidue`
+        // per block with no size cap of its own. Before this reordering
+        // (issue #328's parse/reconstruct split), the *first* thing a
+        // frame's decode did was allocate its `Picture` through
+        // `vaco_limits::Budget`, so an oversized frame was rejected here,
+        // for free, before a single mode-info cell was walked. Splitting
+        // parse from reconstruction moved the only budget-charged
+        // allocation on this path to `reconstruct_frame`, which now runs
+        // strictly after `parse_frame_tiles` -- silently reintroducing an
+        // unbounded allocation the fuzz target found in under a minute
+        // (`ParsedBlock`'s `residues: Vec<StoredResidue>` growing past
+        // 500MB before the process was OOM-killed). Charging the budget
+        // for the real output picture up front, and dispatching the
+        // `PictureWriter` half of it unchanged to the reconstruct task
+        // below, restores the original ordering exactly.
+        let luma_w = fh.mi_cols * 8;
+        let luma_h = fh.mi_rows * 8;
+        let chroma_w = luma_w >> u32::from(fh.color.subsampling_x);
+        let chroma_h = luma_h >> u32::from(fh.color.subsampling_y);
+        let plane_spec = |w: usize, h: usize| {
+            vaco_codec_core::picture::PlaneSpec::new(u32::try_from(w.saturating_mul(2)).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX))
+        };
+        let spec = vaco_codec_core::picture::PictureSpec::new(vec![plane_spec(luma_w, luma_h), plane_spec(chroma_w, chroma_h), plane_spec(chroma_w, chroma_h)]).single_band();
+        let decode_index = self.runner.next_decode_index();
+        let (writer, this_frame) = vaco_codec_core::picture::ProgressPicture::allocate(&spec, decode_index, &mut self.budget)?;
 
         // §6.2's `if (FrameIsIntra || error_resilient_mode) { setup_past_independence(); ...save_probs...; frame_context_idx = 0 }`.
         if fh.frame_is_intra || fh.error_resilient_mode {
@@ -1612,23 +1886,16 @@ impl Vp9Decoder {
 
         let tile_data = data.get(header_end..).unwrap_or(&[]);
 
-        let luma_w = fh.mi_cols * 8;
-        let luma_h = fh.mi_rows * 8;
-        let chroma_w = luma_w >> u32::from(fh.color.subsampling_x);
-        let chroma_h = luma_h >> u32::from(fh.color.subsampling_y);
-        let pic = Picture::new(&mut self.budget, luma_w, luma_h, chroma_w, chroma_h)?;
-
-        let (pic, mv_grid, segment_ids) = decode_frame_tiles(
+        let (parsed, mv_grid, segment_ids) = parse_frame_tiles(
             &fh,
             &entropy,
             tile_data,
-            pic,
-            &self.state.ref_store,
             &self.state.prev_mv_grid,
             self.state.prev_mi_cols,
             self.state.prev_mi_rows,
             &self.state.prev_segment_ids,
-        );
+            &mut self.budget,
+        )?;
 
         // §6.1.2's `refresh_probs()`: forward-updated probabilities are
         // saved back when `refresh_frame_context` is set. Backward
@@ -1641,27 +1908,44 @@ impl Vp9Decoder {
             *slot = entropy;
         }
         self.state.prev_frame_info = Some(PrevFrameInfo { width: fh.width, height: fh.height, show_frame: fh.show_frame });
-        self.state.prev_mv_grid = mv_grid;
         self.state.prev_mi_cols = fh.mi_cols;
         self.state.prev_mi_rows = fh.mi_rows;
-        self.state.prev_segment_ids = segment_ids;
+        self.state.prev_segment_ids.clone_from(&segment_ids);
 
-        let rc_pic = std::sync::Arc::new(pic);
+        // The references *this* frame predicts from — captured before this
+        // frame's own (not-yet-reconstructed) picture can become a
+        // candidate for the *next* frame's ref-frame-store slots below.
+        let ref_store_pending = self.state.ref_store.clone();
+        let grid_for_filter = mv_grid.clone();
+        self.state.prev_mv_grid = mv_grid;
+
+        // §7.2's refresh/copy rules, resolved now: `this_frame` is a
+        // handle, so this needs no pixels — see `crate::refframe`'s module
+        // doc.
         self.state.ref_store.refresh(
             fh.refresh_frame_flags,
-            &RefSlot { pic: rc_pic.clone(), width: fh.width, height: fh.height, subsampling_x: fh.color.subsampling_x, subsampling_y: fh.color.subsampling_y, bit_depth: fh.color.bit_depth },
+            &refframe::PendingRefSlot {
+                pic_ref: this_frame,
+                width: fh.width,
+                height: fh.height,
+                subsampling_x: fh.color.subsampling_x,
+                subsampling_y: fh.color.subsampling_y,
+                bit_depth: fh.color.bit_depth,
+            },
         );
 
-        if fh.show_frame {
-            let mut frame = pic_to_frame(&mut self.budget, &fh, &rc_pic)?;
-            if fh.is_key_frame {
-                frame.flags |= vaco_frame::FrameFlags::KEY;
-            }
-            frame.pts = pts;
-            frame.duration = duration;
-            self.machine.emit(frame);
-        }
-        Ok(())
+        let show_frame = fh.show_frame;
+        self.runner.dispatch(Vp9FrameTask::Decode {
+            header: Box::new(fh),
+            ref_store_pending: Box::new(ref_store_pending),
+            parsed,
+            grid: grid_for_filter,
+            segment_ids,
+            writer,
+            limits: self.limits.clone(),
+        });
+        self.in_flight.push_back(InFlight { show_frame, pts, duration });
+        self.drain_to_capacity()
     }
 }
 
@@ -1764,13 +2048,14 @@ impl Decoder for Vp9Decoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         match self.machine.accept(packet.is_none())? {
             vaco_codec_core::machine::Accept::Drain => {
+                self.drain_all()?;
                 self.machine.finish();
                 Ok(())
             }
             vaco_codec_core::machine::Accept::Input => {
                 let Some(pkt) = packet else { return Ok(()) };
                 for frame_data in superframe::split(pkt.payload()) {
-                    self.decode_one_frame(frame_data, pkt.pts, pkt.duration)?;
+                    self.split_frame(frame_data, pkt.pts, pkt.duration)?;
                 }
                 Ok(())
             }
@@ -1782,9 +2067,106 @@ impl Decoder for Vp9Decoder {
     }
 
     fn flush(&mut self) {
+        // Drains the pool before any state below is torn down, so no
+        // worker is still holding a `PictureWriter` into a picture this
+        // method is about to forget — mirrors
+        // `vaco_codec_h264::H264Decoder::flush`'s own precedent for the
+        // identical hazard.
+        self.runner.reset();
+        self.in_flight.clear();
         self.machine.flush();
         self.state = State::default();
         self.budget = Budget::new(self.limits.clone());
+    }
+
+    /// `-threads N` (issue #328). **Off by default**: `N <= 1` builds a
+    /// runner that spawns nothing and runs every picture inline at
+    /// dispatch, the exact call sequence this decoder had before frame
+    /// threading existed.
+    ///
+    /// Legal to call only before the first packet; the runner is rebuilt
+    /// here, which would discard anything in flight and desynchronise its
+    /// decode-index counter from `state.ref_store`'s own `PictureRef`s.
+    fn set_thread_count(&mut self, threads: usize) -> vaco_codec_core::Threading {
+        if self.in_flight.is_empty() {
+            self.threads = threads.max(1);
+            self.runner = vaco_codec_core::FrameRunner::new(self.threads);
+            self.threads = self.runner.threads();
+        }
+        vaco_codec_core::Threading::Frame {
+            max_frames: self.max_in_flight(),
+            // No extra *output* latency: `collect_one` still emits in
+            // dispatch order, exactly as the serial path did.
+            delay: 0,
+        }
+        .clamped_to(self.threads)
+    }
+}
+
+/// One frame's reconstruction and loop filter, or a `show_existing_frame`
+/// re-emission — the parallel half of frame threading (issue #328).
+/// `Send + 'static` by construction: every field is owned data, so there is
+/// nothing borrowed from decoder state to leak across the thread boundary.
+enum Vp9FrameTask {
+    Decode {
+        header: Box<FrameHeader>,
+        /// The reference slots *this* frame predicts from, as handles —
+        /// see `crate::refframe`'s module doc.
+        ref_store_pending: Box<refframe::PendingRefStore>,
+        parsed: Vec<ParsedBlock>,
+        /// This same frame's own per-MI grid, for the loop filter's
+        /// per-macroblock filter level and edge decisions.
+        grid: Vec<MiCell>,
+        segment_ids: Vec<u8>,
+        /// This frame's own output — published once, at the end of
+        /// [`vaco_codec_core::FrameTask::run`].
+        writer: vaco_codec_core::picture::PictureWriter,
+        limits: Limits,
+    },
+    ShowExisting {
+        pic_ref: vaco_codec_core::picture::PictureRef,
+        width: u32,
+        height: u32,
+        subsampling_x: bool,
+        subsampling_y: bool,
+        bit_depth: u8,
+        limits: Limits,
+    },
+}
+
+impl vaco_codec_core::FrameTask for Vp9FrameTask {
+    fn run(self: Box<Self>, ctx: &vaco_codec_core::TaskCtx<'_>) -> Result<Frame> {
+        match *self {
+            Self::Decode { header, ref_store_pending, parsed, grid, segment_ids, mut writer, limits } => {
+                let mut budget = Budget::new(limits);
+                let ref_store = refframe::materialize_ref_store(&ref_store_pending, ctx.decode_index(), &mut budget)?;
+                let pic = reconstruct_frame(&header, ref_store, &parsed, &grid, &segment_ids, &mut budget)?;
+
+                // Single band per plane (`PictureSpec::single_band`), so
+                // band 0 is the whole plane and this is the one place these
+                // bytes are ever copied for the picture's own consumers.
+                writer.band_mut(0, 0)?.data_mut().copy_from_slice(&framebuf::plane_to_bytes(&pic.y, &mut budget)?);
+                writer.band_mut(1, 0)?.data_mut().copy_from_slice(&framebuf::plane_to_bytes(&pic.u, &mut budget)?);
+                writer.band_mut(2, 0)?.data_mut().copy_from_slice(&framebuf::plane_to_bytes(&pic.v, &mut budget)?);
+                writer.finish()?;
+
+                let mut frame = pic_to_frame(&mut budget, &header, &pic)?;
+                if header.is_key_frame {
+                    frame.flags |= vaco_frame::FrameFlags::KEY;
+                }
+                Ok(frame)
+            }
+            Self::ShowExisting { pic_ref, width, height, subsampling_x, subsampling_y, bit_depth, limits } => {
+                let mut budget = Budget::new(limits);
+                let luma_w = usize::try_from(width).unwrap_or(0);
+                let luma_h = usize::try_from(height).unwrap_or(0);
+                let chroma_w = luma_w >> u32::from(subsampling_x);
+                let chroma_h = luma_h >> u32::from(subsampling_y);
+                let pic = framebuf::materialize(&pic_ref, ctx.decode_index(), luma_w, luma_h, chroma_w, chroma_h, &mut budget)?;
+                let slot = RefSlot { pic: std::sync::Arc::new(pic), width, height, subsampling_x, subsampling_y, bit_depth };
+                ref_slot_to_frame(&mut budget, &slot)
+            }
+        }
     }
 }
 
@@ -1794,7 +2176,7 @@ pub static VP9_DECODER: DecoderDesc = DecoderDesc {
     long_name: "VP9 (VP9 Bitstream & Decoding Process Specification v0.6)",
     id: vaco_codec_core::CodecId::Vp9,
     media_type: MediaType::Video,
-    caps: vaco_codec_core::Caps::SUBFRAMES,
+    caps: vaco_codec_core::Caps::SUBFRAMES.union(vaco_codec_core::Caps::FRAME_THREADS),
     supported_rates: &[],
     make: |limits| Box::new(Vp9Decoder::new(limits)),
 };

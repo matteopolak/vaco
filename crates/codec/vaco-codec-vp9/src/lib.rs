@@ -29,10 +29,48 @@
 //! the second tile column onward, not merely "not spec-exact at the tile
 //! edge" as this crate's own history previously characterised it — see
 //! `decode::tests::two_tile_columns_decode_correctly_on_both_sides_of_the_boundary`
-//! and `docs/codec/vaco-codec-vp9.md`'s Verification section. Actually
-//! *parallelising* tile/frame decode over `vaco-codec-core::threading`'s
-//! F-03 seam remains out of scope — `planning/TECH-DEBT.md` has what that
-//! would need.
+//! and `docs/codec/vaco-codec-vp9.md`'s Verification section.
+//!
+//! # Threading (issue #328, `C-32c`)
+//!
+//! `-threads N` overlaps *pictures*, not one picture's own tile columns.
+//! `decode::parse_frame_tiles` walks every tile's mode-info/motion-vector/
+//! coefficient-token bitstream — cheap, and where the real serial state
+//! lives (entropy persistence, §7.2's reference-frame-store bookkeeping,
+//! `UsePrevFrameMvs`'s dependency on the *previous* frame's MV grid) — on
+//! the caller's own thread, in decode order. Once a frame's tokens are
+//! fully parsed, its reconstruction (prediction, inverse transform, sample
+//! addition) and §8.8 loop filter (`decode::reconstruct_frame`, dispatched
+//! as a `Vp9FrameTask::Decode`) run on a worker thread while the *next*
+//! frame's own parse proceeds immediately, over the same
+//! `vaco_codec_core::threading::FrameRunner` seam `vaco-codec-h264`/
+//! `vaco-codec-hevc`/`vaco-codec-vp8` already use. A `show_existing_frame`
+//! packet (`Vp9FrameTask::ShowExisting`) dispatches too, rather than
+//! emitting inline, so it cannot jump ahead of a `Decode` task still being
+//! reconstructed and violate dispatch-order collection.
+//!
+//! Reference frames are `PictureRef` handles (`crate::refframe`'s
+//! `PendingRefStore`/`PendingRefSlot`) while a frame is in flight, resolved
+//! to real pixels (`crate::framebuf::materialize`, waiting on the
+//! producing task if needed) only once a *later* frame's own reconstruction
+//! task actually runs and needs them — the same handle-not-owned-picture
+//! design `vaco-codec-vp8`'s #301 established, adapted for VP9's existing
+//! `Arc<Picture>`-based `RefFrameStore`/`RefSlot` (already closer to this
+//! shape than VP8's was) and for `u16`-per-sample planes
+//! (`framebuf::plane_to_bytes`/`plane_from_bytes`, since VP9 samples run up
+//! to 12-bit and `PictureWriter`'s bands are byte-oriented).
+//!
+//! Verified byte-identical to `ffmpeg -c:v libvpx-vp9`'s own decode at
+//! `-threads` 1, 2, 4 and 8, on a multi-tile-column multi-frame stream and
+//! on a stream with real invisible alt-ref frames delivered as superframes
+//! (`show_frame = 0`, which must be fully reconstructed for the reference
+//! store but never reach [`decode::Vp9Decoder::receive_frame`] as output —
+//! see `tests/conformance.rs`'s module doc for exactly how that fixture was
+//! produced and confirmed). Tile-*column* parallelism (decoding a frame's
+//! own tile columns concurrently with each other, as `libvpx`'s
+//! `--row-mt`/frame-parallel modes can) is a separate, larger piece of work
+//! and remains out of scope — `planning/TECH-DEBT.md` has what that would
+//! need.
 //!
 //! `crate::encode` (issue #329, C-33a) adds this crate's first encoder: a
 //! real, spec-conformant all-intra key-frame bitstream writer. #330 (C-33b)

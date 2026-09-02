@@ -7104,3 +7104,91 @@ tile-parallel decode over F-03 (`vaco-codec-core::threading`'s
 `Vaco-Spec-Ref: vp9-bitstream-spec-v0.6` §6.4.1 (`decode_tile`'s per-tile
 mi-column range), §6.4.4 (`AvailL`), §6.5.1 (`find_mv_refs`'s column
 clamp).
+
+### Update: frame-level threading landed for `vaco-codec-vp9` (#328, C-32c); tile-column parallelism still does not exist
+
+The entry above's threading section is now partly stale: `-threads N`
+frame-level parallelism (the third bullet, "Frame-level
+(`FrameThreadedDecoder`) parallelism needs...") is done, following
+`vaco-codec-vp8`'s #301 pattern almost directly (`vaco_codec_core::
+threading::FrameRunner`, `vaco_codec_core::picture::PictureRef`/
+`PictureWriter`). `decode_one_frame` was split into `parse_frame_tiles`
+(serial: header, entropy, every tile's mode-info/motion-vector/coefficient-
+token walk, producing `ParsedBlock` records and the frame's own MV grid —
+no pixels touched) and `reconstruct_frame` (prediction, inverse transform,
+sample addition, §8.8 loop filter — dispatched as a `Vp9FrameTask::Decode`
+onto a worker thread while the next frame's `parse_frame_tiles` proceeds on
+the caller's thread). `show_existing_frame` dispatches too
+(`Vp9FrameTask::ShowExisting`), rather than emitting inline, so it cannot
+overtake a `Decode` task still reconstructing.
+
+Two things this bullet's own prediction undersold going in:
+
+- **`residual()` was fused with prediction, not just token decode.**
+  Unlike VP8 (already cleanly separated), VP9's `residual()` called
+  `predict_block`/`predict_inter_region`/`add_residue` per transform block,
+  interleaved with token decode, because intra prediction needs
+  already-reconstructed neighbour pixels *during* the same walk. Splitting
+  required capturing each transform block's post-`reconstruct()` (dequant +
+  inverse transform, itself pixel-independent) residue into a
+  `StoredResidue` during parse, then replaying the exact same geometry loop
+  (`apply_residual`) against real pixels during reconstruction — same
+  iteration order and count, or the replay desyncs silently.
+- **The parse/reconstruct split moved the frame's only budget-charged
+  allocation to the wrong side of the expensive work.** Before this split,
+  `decode_one_frame`'s first real step allocated the output `Picture`
+  through `vaco_limits::Budget`, so a header declaring an oversized frame
+  was rejected before any per-block work ran. After the split,
+  `parse_frame_tiles` accumulated a `ParsedBlock`/`StoredResidue` per block
+  with no budget check of its own, and the budget-charged
+  `ProgressPicture::allocate` call had moved to *after* it — the
+  `vp9_decode` fuzz target found the resulting unbounded allocation (over
+  500MB before the process was killed) in under a minute of local fuzzing.
+  Fixed by moving the picture-sized budget charge back to before
+  `parse_frame_tiles` runs, restoring the original ordering. Worth naming
+  here because it is a general hazard for this kind of split, not a
+  VP9-specific mistake: whichever budget check used to be "free" because it
+  happened to run before the expensive walk needs to be re-checked
+  explicitly once parse and reconstruct are pulled apart, not assumed to
+  still gate the same thing.
+
+Verified byte-identical to `ffmpeg -c:v libvpx-vp9`'s own decode (native
+decoder) at `-threads` 1, 2, 4 and 8 on: the existing multi-tile-column
+regression fixture; a locally `libvpx-vp9`-encoded 512x384 multi-tile-
+column, multi-frame, `-auto-alt-ref`-enabled stream; and a 2-pass
+`libvpx-vp9` encode chosen specifically because it reliably produces real
+invisible alt-ref frames delivered as superframes (`show_frame = 0`,
+confirmed by hand-parsing the VP9 uncompressed header's bits: 10 of 125
+coded sub-frames) — the case that most needed checking, since an invisible
+frame must still be fully reconstructed for the reference store but must
+never reach `receive_frame` as output, and a regression here is invisible
+to any fixture/frame-count check that lacks one. See
+`crates/codec/vaco-codec-vp9/tests/conformance.rs`'s module doc for exactly
+how each fixture was produced.
+
+Performance, interleaved A/B (alternating start order, 10 rounds) on a
+720p/240-frame `libvpx-vp9` encode (tile-columns 2, row-mt, auto-alt-ref):
+median wall time 9.52s at `-threads 1` vs 8.63s at `-threads 4`, a **1.10x**
+speedup, 8/10 rounds favouring `-threads 4` — confirmed with a second,
+independent `/usr/bin/time` comparison (3 back-to-back pairs, consistently
+~1.08-1.10x, `user` CPU time roughly flat to slightly higher at
+`-threads 4` while wall clock drops, which is the expected shape for real
+overlap rather than measurement noise). This is a real but modest gain,
+well short of `vaco-codec-vp8`'s measured 1.22x for the same kind of split
+— the likely reason is that VP9's serial parse stage (mode-info, motion
+vectors, segmentation, coefficient tokens across every tile column) is
+proportionally larger relative to reconstruction+loop-filter than VP8's is,
+so there is less to overlap. Reported here rather than oversold, per this
+file's own standing instruction not to round a modest number up. Same-
+session context, not a target: `ffmpeg`'s own (`libvpx`-independent,
+native) VP9 decoder decodes the same file in ~0.25-0.31s single-threaded —
+a ~30x absolute gap that reflects this crate being a from-scratch scalar
+Rust decoder with no SIMD, unrelated to the threading feature measured
+here.
+
+Tile-*column* parallelism (this entry's other bullets: `SliceThreadedDecoder`,
+per-tile `PictureWriter::split_bands_mut`) is still not implemented and
+remains exactly the separate, larger piece of work described above.
+
+`Vaco-Spec-Ref: vp9-bitstream-spec-v0.6` §7.2 (reference frame update),
+§8.4.1 (`decode_tiles`, tile independence), §8.8 (loop filter).
