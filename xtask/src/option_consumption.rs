@@ -318,13 +318,32 @@ pub fn run(_check: bool) -> Task {
     // Each binary's own `src/` only, not the two concatenated: an ffmpeg
     // dispatch key that happens to appear as a string literal somewhere in
     // vaco-probe (which never dispatches on it) must not clear it, and
-    // vice versa. vaco-cli-core (shared by both) is deliberately excluded
-    // from either source: its `ParsedOption`/`resolved()` helpers take
-    // `name: &str` from the caller rather than matching a literal
+    // vice versa. Most of vaco-cli-core (shared by both) is deliberately
+    // excluded from either source: its `ParsedOption`/`resolved()` helpers
+    // take `name: &str` from the caller rather than matching a literal
     // themselves, so it is infrastructure, not a dispatch site, for either
     // binary's own options -- verified by reading it, not assumed.
-    let cli_src = masked_source(&root.join("crates/app/vaco-cli/src"));
-    let probe_src = masked_source(&root.join("crates/app/vaco-probe/src"));
+    //
+    // `loglevel.rs` is the one real exception, and both binaries share it:
+    // `-v`/`-loglevel` are read straight off raw argv, before the option
+    // table exists at all (the module doc explains why -- the reference
+    // prints its banner before validating the command line), so neither
+    // binary's own `match`/`if` dispatch ever names them, even though both
+    // genuinely act on them (`vaco-cli::cli::wants_banner` re-exports it
+    // directly; `vaco-probe::cli::parse` calls
+    // `vaco_cli_core::loglevel::wants_banner` itself). Verified against the
+    // real `vaco-probe` binary, not assumed from reading this: `-v error`
+    // does suppress the banner. Appending this one file's masked text to
+    // both sources is the honest fix, not a hardcoded name exemption that
+    // would stop checking the moment the real dispatch moved.
+    let loglevel_src = strip_cfg_test(
+        &std::fs::read_to_string(root.join("crates/app/vaco-cli-core/src/loglevel.rs"))
+            .unwrap_or_default(),
+    );
+    let cli_src = masked_source(&root.join("crates/app/vaco-cli/src")) + "
+" + &loglevel_src;
+    let probe_src = masked_source(&root.join("crates/app/vaco-probe/src")) + "
+" + &loglevel_src;
 
     let ffmpeg = unconsumed(
         &root.join("crates/app/vaco-cli-core/src/tables/ffmpeg.rs"),
