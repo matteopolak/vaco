@@ -5097,3 +5097,234 @@ clean, with new tests pinning the no-cascade property (one inserted or
 removed line must report as exactly one line, not every line after it),
 the delete+insert merge into a single before/after entry, and run-to-run
 determinism of the alignment.
+
+## 60. Ranking finding 59's 13,334 field-level divergences by field name; `chroma_location` (105 cases) and DV's `avg_frame_rate`/`time_base` closed
+
+Finding 59 fixed the measurement instrument and reported 13,334 field-level
+divergences across 447 diverging cases, but flat: no way to tell a
+systematic single-root-cause field from noise. This pass ranks that total
+by field name so the backlog reads as leverage, not a pile.
+
+### Methodology
+
+`cargo run -p vaco-conformance -- run --tier core` output was parsed the
+same way finding 59's own totals were derived: for each `FAIL` block,
+every `ours="..." theirs="..."` line pair (both `exact-bytes`'s per-line
+diffs and `structured-diff`'s per-field lines) is decomposed into key=value
+pairs per writer format (`xml`/`json` via attribute/key regexes, `compact`/
+`default` via `|`- or newline-delimited `key=value` tokens), after
+unescaping the Rust-`Debug`-quoted text. A field name is counted only when
+its *value* differs between `ours` and `theirs` on that pair — not merely
+present on a line that differs for some other reason — which rules out the
+false-positive mode finding 59 had already hit once (`codec_type`/`index`/
+`codec_name` inflated by co-location, not real divergence).
+
+Two adjustments the coordinator asked for, both applied:
+
+- **`packets`-section fields reported separately**, not blended into the
+  field ranking: `pos`, `duration_time`, `pts_time`, `duration`, `dts_time`,
+  `pts`, `size`, `dts`, `flags`, `codec_type`, `stream_index` all have
+  3,000–4,000 hits apiece, entirely because `section=packets` prints one
+  line per packet and a single systematic per-packet bug (a wrong pts/dts
+  computation, the exact shape of the container-remux cluster another
+  agent already owns) multiplies into thousands of "changed" lines. Folding
+  those into the same ranking as `chroma_location` would have buried a bug
+  affecting 105 distinct cases under a handful of cases with thousands of
+  packets each.
+- **Equivalent fields grouped by inspection, not just by name**:
+  `chroma_location` missing in mpeg1/mpeg2, mpeg4, and DV is one
+  bitstream-siting-field gap with three surfaces, tracked and fixed
+  together below (the coordinator's own example, confirmed exactly right).
+
+### The ranking (top 25 by case count, packets excluded)
+
+```
+105 cases   166 hits   chroma_location      <- fixed below
+ 84 cases    96 hits   mime_codec_string
+ 83 cases   181 hits   bit_rate
+ 80 cases   158 hits   start_time
+ 79 cases    99 hits   extradata_size
+ 73 cases   122 hits   field_order
+ 71 cases   156 hits   duration_ts
+ 69 cases    97 hits   channel_layout
+ 64 cases   132 hits   nb_frames
+ 64 cases    64 hits   quarter_sample
+ 64 cases    64 hits   divx_packed
+ 58 cases   103 hits   start_pts
+ 52 cases   109 hits   avg_frame_rate      <- DV's share fixed below
+ 52 cases    84 hits   sample_fmt          <- MP2-in-PS share flagged, not fixed
+ 42 cases    83 hits   codec_tag
+ 42 cases    83 hits   codec_tag_string
+ 42 cases    70 hits   channels
+ 39 cases    76 hits   coded_width
+ 39 cases    76 hits   coded_height
+ 39 cases    76 hits   sample_aspect_ratio
+ 39 cases    76 hits   has_b_frames
+ 39 cases    76 hits   display_aspect_ratio
+ 37 cases    64 hits   color_range
+ 34 cases    79 hits   r_frame_rate
+ 30 cases    79 hits   time_base           <- DV's share fixed below
+```
+
+(`id`, `codec_name`, `codec_type`, `index`, `sample_rate`, `profile`,
+`bits_per_raw_sample` follow immediately after at 26-32 cases each — mostly
+the same handful of already-known clusters, mpeg4-in-Matroska's
+`mime_codec_string`/`quarter_sample`/`divx_packed` trio chief among them.)
+
+`chroma_location` came out on top by a clear margin — the single
+highest-leverage field-name in the whole suite — with exactly the
+two-surfaces-one-cause shape the coordinator predicted. `avg_frame_rate`
+and `time_base` are shared across many unrelated codecs' own bugs; DV
+contributes roughly 16 of each field's hits (one per writer/section
+variant × 2 profiles-worth of test axes), not the whole 109/79.
+
+### Fix 1: `chroma_location` (105 cases, the top of the list)
+
+Neither MPEG-1/2/4 Part 2 nor DV has a bitstream field for chroma sample
+siting the way H.264's VUI `chroma_sample_loc_type` does (already handled,
+commit `62f7bfa` earlier this session). Checked whether a single default
+at the `vaco-probe` layer would do it first — it would not: measured
+`vp8`/`vp9` report `chroma_location=unspecified` (no default at all), so
+this has to be set per-codec, not once centrally.
+
+Measured directly against real ffmpeg 9.0.1:
+
+| encoder | container | `chroma_location` |
+|---|---|---|
+| `mpeg2video`, `mpeg1video` | raw `.mpg` | `left` |
+| `mpeg4` | Matroska (extradata path, finding 58) | `left` |
+| `dvvideo` | raw `.dv`, NTSC (`yuv411p`) | `topleft` |
+| `dvvideo` | raw `.dv`, PAL (`yuv420p`) | `topleft` |
+
+Fixed in `crates/codec/vaco-parse-mpegvideo/src/mpeg12.rs` and `mpeg4.rs`
+(`v.color.chroma_location = ChromaLocation::Left` in each parser's
+`codec_parameters()`/`refresh_params()`) and in
+`crates/format/vaco-format-dv/src/demux.rs` (`ChromaLocation::TopLeft` on
+the `VideoParameters` literal). Verified post-fix with a rebuilt
+`vaco-probe` against real `ffprobe` field-by-field: mpeg2 (raw `.mpg`),
+mpeg4 (Matroska), DV NTSC and DV PAL all now match exactly.
+
+Direct re-measurement (not the log-scraping heuristic, which has a known
+false-positive mode on `compact`/`xml` writers explained below): the
+83-case/144-hit population of genuine `chroma_location` value mismatches
+in the pre-fix log is gone post-fix. The handful of `chroma_location`
+mentions still present in the post-fix raw log are not a residual bug —
+inspected several directly: they are `mime_codec_string` (mpeg4-in-
+Matroska/AVI) or `avg_frame_rate`/`time_base` (DV, before its own fix
+below landed) causing an entire `compact`/`xml` record-per-stream line to
+mismatch, which the LCS line-matcher then reports as a wholesale
+line-replacement — every key on that line, `chroma_location` included,
+shows up in the diff even though its value is identical on both sides.
+This is a real limitation of line-level diffing over single-line,
+many-field records (`compact`, and `xml`'s attribute-per-element style),
+worth naming for whoever ranks the *next* pass: per-key counts from these
+two writers over-count whenever another field on the same record differs,
+and a case's true field-level divergence count can only be trusted from
+`json`/`default`, or from directly re-probing the specific field named.
+
+### Fix 2: DV's `avg_frame_rate`/`time_base` (the coordinator's second flagged item)
+
+Measured against real ffmpeg 9.0.1 on three DV fixtures — a 2-frame NTSC
+clip, a 150-frame/5s NTSC clip, and a 1s PAL clip:
+
+```
+                r_frame_rate   avg_frame_rate   time_base
+NTSC (2-frame)  30000/1001     60000/1          1/60000
+NTSC (150-fr)   30000/1001     60000/1          1/60000
+PAL (25 fps)    25/1           60000/1          1/60000
+```
+
+`avg_frame_rate=60000/1` and `time_base=1/60000` hold **unconditionally**
+for DV video — not derived from the file's actual frame count or duration
+(the 150-frame clip still reports exactly `60000/1`, ruling out a
+duration-based estimate that happens to round there for the 2-frame case),
+and not `50/1` for 25 fps PAL either, ruling out "field rate = 2×true
+rate" computed per-profile. This is DV's own fixed tick rate, the same for
+both systems, chosen (not by us — by whatever encoded these fixtures; we
+only measured it) so that it divides evenly into both profiles' true frame
+durations: 2002 ticks/frame for NTSC (`60000 × 1001 / 30000`), 2400 for
+PAL (`60000 × 1 / 25`). `r_frame_rate` is untouched: it already reports the
+true rate correctly via the existing fallback to `video.frame_rate`.
+
+Fixed in `crates/format/vaco-format-dv/src/demux.rs`: `time_base` is now
+the fixed `Rational::new(1, 60_000)` (previously `profile.frame_rate`'s
+reciprocal, i.e. one tick per frame), `avg_frame_rate` is set explicitly on
+the `Stream` to `60_000/1` (previously left `Rational::UNDEFINED` and
+falling back to the true rate, which is exactly the bug), and per-frame
+`pts`/`dts` now advance by the profile's `ticks_per_frame()` instead of by
+1 per frame. `seek`'s `SeekTarget::Timestamp` branch, which previously
+treated a raw tick count as a frame index directly, now divides by
+`ticks_per_frame()` to recover it — needed because it stopped being a
+1:1 relationship the moment `time_base` changed.
+
+Verified against real ffprobe on all three fixtures above, byte-for-value
+exact on `r_frame_rate`/`avg_frame_rate`/`time_base`/`duration`. New
+regression test in `tests/reference_files.rs` asserts the measured
+`time_base`/`avg_frame_rate` and the exact first-two-packets' `pts`
+(`0`, `2002`) against the crate's own real `ntsc_sample.dv` fixture.
+
+### Also fixed in passing: a shared-tree build break
+
+`crates/codec/vaco-parse-mpegvideo/Cargo.toml` never listed `vaco-color`
+as a dependency (neither did `vaco-format-dv/Cargo.toml`) — an
+in-progress edit using `vaco_color::ChromaLocation` (the same crate
+`vaco-codec-core` already depends on for the identical type) failed to
+resolve, and broke `cargo build --workspace` for everyone until the
+dependency was added. Reported by another agent who correctly declined to
+touch this crate's file themselves rather than guess at the fix; both
+`Cargo.toml`s are corrected in the same commit as the field fixes above.
+
+### Measured leverage: before/after case counts
+
+Full `vaco-conformance --tier core` re-run, same 709 declared cases:
+
+| | agreed | diverged |
+|---|---|---|
+| before (finding 59's baseline) | 262 | 447 |
+| after this pass | 266 | 443 |
+
+Four cases move fully from diverged to agreed. The rest of
+`chroma_location`'s 105 cases and most of DV's `avg_frame_rate`/
+`time_base` cases stay in the diverged column — as finding 58 already
+established, a case with a median of 4 real field-level bugs does not
+flip to "agreed" from fixing just one of them, and "the field this pass
+targeted now matches, verified directly" is the honest bar here, the same
+one finding 58 used.
+
+### Not fixed, flagged precisely instead of grinding further
+
+Three more bugs surfaced while verifying the two fixes above, each
+spawned as its own background task rather than folded into this pass
+(none of them touch the container-remux cluster — MOV PCM packetisation,
+MPEG-TS interleaving, byte-level remux diffs — another agent already owns
+that):
+
+- **MP2-in-MPEG-PS `sample_fmt`** (the coordinator's other flagged item,
+  52 cases/84 hits' worth of `sample_fmt` divergence, though most of that
+  total is unrelated codecs): confirmed precisely, not guessed. The *same*
+  `mp2`-encoded bitstream reports `sample_fmt=fltp` in a raw `.mp2` file or
+  inside MPEG-TS, but `s16p` specifically when demuxed from MPEG-PS/VOB —
+  confirmed by extracting the exact bytes back out of the PS file with
+  `-c copy` and re-probing them raw (`fltp` again), and by testing `mp3` in
+  the same PS container (`fltp`, not `s16p` — so it is layer-specific, not
+  a general PS-audio rule). `vaco-parse-mpegaudio`'s `to_codec_parameters`
+  is genuinely codec-level and shared by every container that hands it
+  bytes, so this needs a `vaco-demux-mpegps`-side override, not a change
+  there. Not attempted — the merge/`fill_from` ordering between the
+  container's initial `CodecParameters` and the parser's own needs
+  checking first so an override actually survives, and `vaco-demux-mpegps`
+  already documents one adjacent, accepted limitation in the same function
+  (plain `stream_id`-based audio codec guessing cannot tell MP1/MP2/MP3
+  apart at all) that a rushed fix could easily compound.
+- **AVI + mpeg4/xvid reports `codec_name=unknown`**: the mpeg4 bitstream
+  parser itself is correct (verified: the identical stream in Matroska is
+  fully correct, `chroma_location` included) — this is an AVI fourcc-to-
+  `CodecId` mapping gap in `vaco-demux-avi`, unrelated to either fix above.
+- **DV always declares a second (audio) stream, even when the input has
+  none**, and never extracts DV's own embedded timecode into a `TAG`: both
+  surfaced from the `probe-dv/dv-ntsc` conformance fixture specifically
+  (which has no audio track), not from either of this pass's own hand-made
+  fixtures (which do).
+
+`cargo test`/`cargo clippy -p vaco-parse-mpegvideo -p vaco-format-dv
+--all-targets -D warnings` clean; `cargo build --workspace` clean.
