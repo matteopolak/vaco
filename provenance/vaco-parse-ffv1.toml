@@ -1,0 +1,12 @@
+# `vaco-parse-ffv1` carries its own copy of the range coder's default state
+# transition table. The values are identical to `vaco-codec-ffv1`'s -- verified
+# element by element, only the `rustfmt::skip` layout differs -- and the
+# citation is the same clause, so it is recorded here against this crate's own
+# file rather than pointed at the other crate's entry.
+
+[[table]]
+name   = "DEFAULT_STATE_TRANSITION"
+file   = "crates/codec/vaco-parse-ffv1/src/rangecoder.rs"
+source = "rfc9043"
+clause = "§3.8.1.5, Figure 24 (default_state_transition, 256 entries)"
+method = "transcribed"
