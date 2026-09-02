@@ -232,6 +232,11 @@ impl SendReceive for ImageEncoder {
                 // so the packet they hand back has no timing of its own
                 // until this copies the source frame's `pts` onto it.
                 packet.pts = frame.pts;
+                // Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
+                // `vaco-codec-webp`'s encoders: never set `Packet::duration`.
+                // Propagated from the input `Frame` for consistency with
+                // every other video/image encoder in this tree.
+                packet.duration = frame.duration;
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -379,5 +384,24 @@ mod tests {
         enc.send(Some(&frame)).expect("send");
         let out = enc.receive().expect("packet");
         assert_eq!(out.payload(), raw.as_slice());
+    }
+
+    /// Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
+    /// `vaco-codec-webp`'s encoders: never set `Packet::duration`.
+    #[test]
+    fn send_propagates_the_input_frames_real_duration() {
+        let mut frame = {
+            let raw = b"#define image_width 8\n#define image_height 1\nstatic unsigned char image_bits[] = {\n 0xFF\n };\n".to_vec();
+            let mut dec = ImageDecoder::xbm(Limits::permissive());
+            let mut budget = Budget::new(Limits::permissive());
+            let packet = Packet::from_slice(&mut budget, &raw).expect("packet");
+            dec.send(Some(&packet)).expect("send");
+            dec.receive().expect("frame")
+        };
+        frame.duration = vaco_core::Duration::from_micros(40_000);
+        let mut enc = ImageEncoder::xbm(Limits::permissive());
+        enc.send(Some(&frame)).expect("send");
+        let out = enc.receive().expect("packet");
+        assert_eq!(out.duration, vaco_core::Duration::from_micros(40_000));
     }
 }

@@ -405,6 +405,14 @@ impl SendReceive for RawVideoEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = frame.pts;
+                // Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`'s
+                // encoders: never set `Packet::duration`. This is the one
+                // real-world video-stream case among this batch (`-c:v
+                // rawvideo` into AVI/MOV/MKV/MP4), so propagation from the
+                // input `Frame` matters exactly the way it did for VP8/VP9
+                // -- a container deriving a track's total length from
+                // summed packet durations was silently undercounting it.
+                packet.duration = frame.duration;
                 // As on the decode side: every identity here is intra-only,
                 // so every packet is a keyframe.
                 packet.flags = PacketFlags::KEY;
@@ -721,6 +729,24 @@ mod tests {
         enc.send(Some(&frame)).expect("send");
         let out = enc.receive().expect("packet");
         assert_eq!(out.pts, Timestamp::new(42));
+    }
+
+    /// Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`'s encoders:
+    /// `send` never set `Packet::duration`, and this is the one codec in
+    /// this batch with a genuine real-world video-stream use (`-c:v
+    /// rawvideo` into AVI/MOV/MKV/MP4) -- a container deriving a track's
+    /// total length from summed packet durations was silently
+    /// undercounting it exactly the way it did for VP8/VP9.
+    #[test]
+    fn duration_flows_from_frame_to_packet() {
+        let mut budget = Budget::new(Limits::permissive());
+        let mut frame = Frame::alloc_video(&mut budget, PixFmt::Gray8, 4, 4).expect("alloc");
+        frame.duration = vaco_core::Duration::from_micros(40_000);
+
+        let mut enc = RawVideoEncoder::new(Limits::permissive(), Packing::Configurable);
+        enc.send(Some(&frame)).expect("send");
+        let out = enc.receive().expect("packet");
+        assert_eq!(out.duration, vaco_core::Duration::from_micros(40_000));
     }
 
     #[test]

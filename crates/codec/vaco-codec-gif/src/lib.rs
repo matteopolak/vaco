@@ -151,6 +151,15 @@ impl SendReceive for GifEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = self.pending.first().map_or(vaco_core::Timestamp::NONE, |f| f.pts);
+                // Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
+                // `vaco-codec-webp`'s encoders, shaped differently here:
+                // this encoder emits the *whole* animated GIF as one
+                // packet at drain (see the struct doc above), so its real
+                // duration is not any single frame's `duration` but the
+                // sum of every pending frame's own per-frame delay -- the
+                // same field this crate's own decoder populates from each
+                // GIF frame's Graphic Control Extension delay time.
+                packet.duration = vaco_core::Duration(self.pending.iter().map(|f| f.duration.0).sum());
                 self.pending.clear();
                 self.machine.emit(packet);
                 self.machine.finish();
@@ -297,5 +306,28 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::NeedMoreInput)));
         dec.send(None).expect("begin drain");
         assert!(matches!(dec.receive(), Err(Error::Eof)));
+    }
+
+    /// Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
+    /// `vaco-codec-webp`'s encoders, shaped for this one's own "whole
+    /// animation is one packet" design: `send` never set `packet.duration`
+    /// at all, and it must be the *sum* of every pending frame's own
+    /// per-frame delay, not any single frame's value or a fixed per-frame
+    /// constant -- three frames of three different delays are used here
+    /// specifically so a constant-delay implementation could not pass by
+    /// accident.
+    #[test]
+    fn drain_packet_duration_is_the_sum_of_every_pending_frames_delay() {
+        let delays_micros = [100_000i64, 200_000, 40_000];
+        let mut enc = GifEncoder::new(Limits::permissive());
+        for &d in &delays_micros {
+            let mut frame = checker_frame(4, 4);
+            frame.duration = vaco_core::Duration(d);
+            enc.send(Some(&frame)).expect("send frame");
+        }
+        enc.send(None).expect("begin drain");
+        let packet = enc.receive().expect("receive packet");
+        assert_eq!(packet.duration, vaco_core::Duration(delays_micros.iter().sum()));
+        assert_ne!(packet.duration, vaco_core::Duration::ZERO);
     }
 }

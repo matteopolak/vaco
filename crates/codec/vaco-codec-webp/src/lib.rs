@@ -163,6 +163,15 @@ impl Encoder for WebpEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = frame.pts;
+                // Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`'s
+                // encoders: never set `Packet::duration`. This crate's own
+                // decoder sets `frame.duration` from an animated WebP
+                // frame's `delay_ms` (`codec.rs`'s `ANMF` handling), and
+                // `vaco-codec-jpeg`'s encoder already propagates the same
+                // way, so a container deriving a track's total length from
+                // summed packet durations was silently undercounting an
+                // animated WebP's real per-frame timing here.
+                packet.duration = frame.duration;
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -348,6 +357,31 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::NeedMoreInput)));
         dec.send(None).expect("begin drain");
         assert!(matches!(dec.receive(), Err(Error::Eof)));
+    }
+
+    /// Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`'s encoders:
+    /// `send_frame` set `packet.pts` but never `packet.duration`. This
+    /// crate's own decoder sets `frame.duration` from an animated WebP
+    /// frame's real `ANMF` delay, so a container deriving a track's total
+    /// length from summed packet durations was silently undercounting
+    /// that. Checked with two *different* durations, not one fixed value,
+    /// so a constant-per-frame implementation could not pass by accident.
+    #[test]
+    fn send_frame_propagates_the_input_frames_real_duration() {
+        let mut enc = WebpEncoder::new(Limits::permissive());
+
+        let mut first = checker_frame(4, 4, PixFmt::Rgba);
+        first.duration = vaco_core::Duration::from_micros(100_000);
+        enc.send_frame(Some(&first)).expect("send frame");
+        let p0 = enc.receive_packet().expect("packet");
+        assert_eq!(p0.duration, vaco_core::Duration::from_micros(100_000));
+        assert_ne!(p0.duration, vaco_core::Duration::ZERO);
+
+        let mut second = checker_frame(4, 4, PixFmt::Rgba);
+        second.duration = vaco_core::Duration::from_micros(250_000);
+        enc.send_frame(Some(&second)).expect("send frame");
+        let p1 = enc.receive_packet().expect("packet");
+        assert_eq!(p1.duration, vaco_core::Duration::from_micros(250_000));
     }
 
     #[test]

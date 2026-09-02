@@ -198,6 +198,11 @@ impl SendReceive for JpeglsEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = frame.pts;
+                // Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
+                // `vaco-codec-webp`'s encoders: never set `Packet::duration`.
+                // Propagated from the input `Frame` for consistency with
+                // every other video/image encoder in this tree.
+                packet.duration = frame.duration;
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -248,6 +253,12 @@ pub static JPEGLS_ENCODER: vaco_codec_core::EncoderDesc = vaco_codec_core::Encod
 };
 
 #[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    reason = "test code exercising the encoder, not the untrusted-input surface \
+              the lint protects"
+)]
 mod tests {
     use super::*;
 
@@ -256,5 +267,20 @@ mod tests {
         assert_eq!(JPEGLS_DECODER.name, "jpegls");
         assert_eq!(JPEGLS_ENCODER.name, "jpegls");
         assert_eq!(JPEGLS_DECODER.id, vaco_codec_core::CodecId::JpegLs);
+    }
+
+    /// Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
+    /// `vaco-codec-webp`'s encoders: `send` used to never set
+    /// `Packet::duration`.
+    #[test]
+    fn send_propagates_the_input_frames_real_duration() {
+        let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::permissive());
+        let mut frame = Frame::alloc_video(&mut budget, vaco_pixfmt::PixFmt::Gray8, 4, 4)
+            .expect("alloc video frame");
+        frame.duration = vaco_core::Duration::from_micros(40_000);
+        let mut enc = JpeglsEncoder::new(vaco_limits::Limits::permissive());
+        enc.send(Some(&frame)).expect("send frame");
+        let packet = enc.receive().expect("receive packet");
+        assert_eq!(packet.duration, vaco_core::Duration::from_micros(40_000));
     }
 }

@@ -175,6 +175,11 @@ impl SendReceive for QoiEncoder {
                 // it hands back has no timing of its own until this copies
                 // the source frame's `pts` onto it.
                 packet.pts = frame.pts;
+                // Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
+                // `vaco-codec-webp`'s encoders: never set `Packet::duration`.
+                // Propagated from the input `Frame` for consistency with
+                // every other video/image encoder in this tree.
+                packet.duration = frame.duration;
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -389,5 +394,17 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::NeedMoreInput)));
         dec.send(None).expect("begin drain");
         assert!(matches!(dec.receive(), Err(Error::Eof)));
+    }
+
+    /// Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
+    /// `vaco-codec-webp`'s encoders: never set `Packet::duration`.
+    #[test]
+    fn send_propagates_the_input_frames_real_duration() {
+        let mut frame = checker_frame(4, 4, false);
+        frame.duration = vaco_core::Duration::from_micros(40_000);
+        let mut enc = QoiEncoder::new(Limits::permissive());
+        enc.send(Some(&frame)).expect("send frame");
+        let packet = enc.receive().expect("receive packet");
+        assert_eq!(packet.duration, vaco_core::Duration::from_micros(40_000));
     }
 }
