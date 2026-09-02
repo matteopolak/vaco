@@ -489,7 +489,7 @@ impl HevcDecoder {
         walk.recon.finish()?;
         walk.recon.materialize_into(walk.pic);
         walk.edges.finish()?;
-        walk.cu_grid.finish();
+        walk.cu_grid.finish()?;
         walk.sao_params.finish()?;
 
         #[cfg(test)]

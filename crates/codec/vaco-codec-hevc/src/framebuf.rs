@@ -204,6 +204,13 @@ impl Picture {
 /// the identical shape, including the same one-past-the-end advance on
 /// `finish` (see this module's own "Stage 1" section doc for why that is
 /// not incidental to `EdgeMarks` alone).
+///
+/// Stage 2b step 1c (`docs/codec/hevc-wavefront-threading.md`): `published`
+/// is [`crate::wavefront::RowPublish`], not a plain `Vec` — the same latent
+/// data race that document names for `EdgeMarks`/`SaoParamsGrid` applied
+/// here too, last of the three to move since it is the largest (nine
+/// heterogeneous arrays plus its own `Budget` accounting to keep
+/// self-consistent through the change).
 #[derive(Debug, Clone)]
 pub(crate) struct CuGrid {
     cols: usize,
@@ -228,9 +235,11 @@ pub(crate) struct CuGrid {
     /// [`CuGrid::begin_row`] does, since nothing writes to a `CuGrid` again
     /// once the walk that owns it is done with it.
     current: Option<CuGridBand>,
-    /// Every row band strictly before `current_band`, frozen the moment
-    /// [`CuGrid::begin_row`]/[`CuGrid::finish`] moved past it.
-    published: Vec<CuGridBand>,
+    /// Every row band strictly before `current_band`, published the moment
+    /// [`CuGrid::begin_row`]/[`CuGrid::finish`] moved past it. See this
+    /// struct's own doc for why this is [`crate::wavefront::RowPublish`]
+    /// rather than a plain `Vec`.
+    published: crate::wavefront::RowPublish<CuGridBand>,
 }
 
 /// One CTU row band's own share of [`CuGrid`]'s nine per-4x4-block arrays —
@@ -348,7 +357,15 @@ impl CuGrid {
         let band_rows = ctb_size.max(1).div_ceil(4).max(1);
         let n_bands = total_rows.div_ceil(band_rows).max(1);
         let current = CuGridBand::new(budget, cols, band_rows, has_l1)?;
-        Ok(Self { cols, band_rows, n_bands, has_l1, current_band: 0, current: Some(current), published: Vec::new() })
+        Ok(Self {
+            cols,
+            band_rows,
+            n_bands,
+            has_l1,
+            current_band: 0,
+            current: Some(current),
+            published: crate::wavefront::RowPublish::new(n_bands),
+        })
     }
 
     /// The row band containing 4x4-block row `by`.
@@ -395,19 +412,21 @@ impl CuGrid {
     /// `0`.
     ///
     /// # Errors
-    /// [`vaco_core::Error`] if `row_band` goes backward, or the new band's
-    /// allocation exceeds `budget`.
+    /// [`vaco_core::Error`] if `row_band` goes backward, the new band's
+    /// allocation exceeds `budget`, or (unreachable in practice, for the
+    /// same reason [`EdgeMarks::begin_row`]'s own `Errors` section gives)
+    /// [`crate::wavefront::RowPublish`] itself refuses a publish.
     pub(crate) fn begin_row(&mut self, budget: &mut Budget, row_band: usize) -> Result<()> {
         if row_band < self.current_band {
             return Err(Error::InvalidData("vaco-codec-hevc: cu grid rows must advance in order"));
         }
-        while self.published.len() < row_band {
+        while self.current_band < row_band {
             if let Some(band) = self.current.take() {
-                self.published.push(band);
+                self.published.publish(self.current_band, band)?;
             }
             self.current = Some(CuGridBand::new(budget, self.cols, self.band_rows, self.has_l1)?);
+            self.current_band = self.current_band.saturating_add(1);
         }
-        self.current_band = row_band;
         Ok(())
     }
 
@@ -418,12 +437,18 @@ impl CuGrid {
     /// Called once, right alongside [`EdgeMarks::finish`]/
     /// [`ReconPlane::finish`], before deblocking, SAO or
     /// `CollocatedMotionField::build` ever query this grid.
-    pub(crate) fn finish(&mut self) {
-        while self.published.len() < self.n_bands {
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`], unreachable in practice for the same reason
+    /// [`CuGrid::begin_row`]'s own `Errors` section gives.
+    pub(crate) fn finish(&mut self) -> Result<()> {
+        while self.current_band < self.n_bands {
             let Some(band) = self.current.take() else { break };
-            self.published.push(band);
+            self.published.publish(self.current_band, band)?;
+            self.current_band = self.current_band.saturating_add(1);
         }
         self.current_band = self.n_bands;
+        Ok(())
     }
 
     /// Paint one coding unit's whole footprint (in 4-sample blocks) with its
