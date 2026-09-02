@@ -713,6 +713,28 @@ fn mime_codec_string(p: &CodecParameters) -> Option<String> {
         // on the next. Closes when a `vaco-parse-vp9` exists.
         CodecId::Vp9 => Some("vp09".to_owned()),
         CodecId::Mp3 => Some("mp4a.40.34".to_owned()),
+        // `mp4a.40.<audioObjectType>` again -- MPEG audio Layer II's ISO
+        // 14496-3 object type is 33, one below Layer III's 34 already
+        // handled above. Measured directly (`ffmpeg -c:a mp2`, real
+        // `ffprobe`) identically across a raw `.mp2` file, MPEG-TS, and
+        // MPEG-PS/VOB, confirming this is a fixed per-codec string, not
+        // something a container changes (matching this function's own
+        // doc comment on `H264`). Layer I (`mp1`) would be object type 32
+        // by the same table, but this build's ffmpeg has no `mp1` *encoder*
+        // to measure against (decode-only), so it is left unhandled here
+        // rather than guessed from the pattern.
+        CodecId::Mp2 => Some("mp4a.40.33".to_owned()),
+        // `mp4v.<objectTypeIndication, hex>` -- RFC 6381's own grammar for
+        // MPEG-4 Part 2 also has a trailing `.<profile_level_indication>`,
+        // but every native `mpeg4` encode measured (three resolutions,
+        // 176x144 through 1280x720) reports `profile=Simple Profile,
+        // level=1` and exactly `mp4v.20`, never a three-part string --
+        // this crate cannot tell from what is measurable here whether
+        // ffmpeg's own trailing part is simply omitted for level 1, or
+        // omitted unconditionally. Recorded as measured for the one case
+        // reachable, not extended into the two- or three-digit forms other
+        // encoders' Core/Main/Advanced-Simple profiles might need.
+        CodecId::Mpeg4 => Some("mp4v.20".to_owned()),
         // HEVC falls through here deliberately. Measured on an `hvc1`-tagged
         // MP4: the reference prints no `mime_codec_string` at all for HEVC, in
         // any writer, at any `-show_optional_fields` setting. The
@@ -1373,6 +1395,18 @@ mod tests {
         // No profile and no level means no string at all, not a malformed one.
         let bare = CodecParameters::video().with_codec(CodecId::H264);
         assert_eq!(mime_codec_string(&bare), None);
+
+        // Measured (`ffmpeg -c:a mp2`, real `ffprobe`, identically across a
+        // raw `.mp2` file, MPEG-TS, and MPEG-PS/VOB): `mp4a.40.33`, needing
+        // neither `profile` nor `level` to be set.
+        let mp2 = CodecParameters::audio().with_codec(CodecId::Mp2);
+        assert_eq!(mime_codec_string(&mp2).as_deref(), Some("mp4a.40.33"));
+
+        // Measured (`ffmpeg -c:v mpeg4`, real `ffprobe`, three resolutions):
+        // `mp4v.20`, also needing neither field set on the measurable case
+        // (native `mpeg4` always reports Simple Profile / level 1).
+        let mpeg4 = CodecParameters::video().with_codec(CodecId::Mpeg4);
+        assert_eq!(mime_codec_string(&mpeg4).as_deref(), Some("mp4v.20"));
     }
 
     #[test]
