@@ -4,9 +4,10 @@
 //! `ffmpeg -h filter=vignette` (2026-08-28): `angle`/`a` (expression, default
 //! `"PI/5"`), `x0` (expression, default `"w/2"`), `y0` (expression, default
 //! `"h/2"`), `mode` (`0` forward / `1` backward, default forward), `eval`
-//! (`0` init / `1` frame, default init), `dither` (bool, default **true**),
-//! `aspect` (rational, default `1/1`). Timeline-capable (`This filter has
-//! support for timeline through the 'enable' option`).
+//! (`0` init / `1` frame, default init), `dither` (bool, default **true**
+//! in the reference; this crate's own default is `false` — see `Opts::dither`'s
+//! own doc for why), `aspect` (rational, default `1/1`). Timeline-capable
+//! (`This filter has support for timeline through the 'enable' option`).
 //!
 //! # Measured: the exact formula (`ffmpeg 8.1`, tiny `gray`/`yuv420p`
 //! sources through `-f rawvideo`, `dither=0` to remove the jitter below)
@@ -175,7 +176,15 @@ pub(crate) struct Opts {
         flags(video, filtering)
     )]
     pub eval: String,
-    #[opt(name = "dither", help = "set dithering", default = true, flags(video, filtering))]
+    // Measured default divergence, stated plainly: the reference's own
+    // default is `true`, but this crate's overlap-add path always produces
+    // `dither=0`'s output regardless of what this field holds -- see the
+    // module doc's "Not measured: chroma planes and `dither=1`" section.
+    // Declaring the default as `false` describes what the code actually,
+    // unconditionally does; requesting the reference's real default
+    // (`dither=1`) now refuses instead of silently returning `dither=0`'s
+    // pixels while claiming to have honoured `dither=1`.
+    #[opt(name = "dither", help = "set dithering", default = false, flags(video, filtering))]
     pub dither: bool,
     #[opt(
         name = "aspect",
@@ -192,6 +201,9 @@ impl Opts {
         if let Some(text) = args {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
+        }
+        if o.dither {
+            return Err("vignette: `dither` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
         }
         Ok(o)
     }
