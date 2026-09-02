@@ -40,6 +40,55 @@
 //!   fixture that lacks one, which is why the original single-tile-column
 //!   fixture above does not by itself cover it.
 //!
+//! ## `tests/fixtures/vp9_native/vp9_profile1_gbrp_altref.ivf`, and the
+//! ## false alarm it explains
+//!
+//! A coordinator review reported this exact regression reproduced: decoding
+//! a `libvpx-vp9` encode of `mandelbrot=size=352x288:rate=25` (2-pass,
+//! `-b:v 300k`, no explicit `-pix_fmt`) gave **exactly 2x** `ffmpeg`'s frame
+//! count (100 vs 50), with frame 0 already byte-different, thread-invariant
+//! — the textbook signature of every invisible alt-ref frame leaking
+//! through the `show_frame` gate this module's other fixture exists to
+//! guard. Direct instrumentation of [`Vp9Decoder::send_packet`]/
+//! `collect_one` on the *identical* fixture (same command, re-encoded here
+//! as `vp9_profile1_gbrp_altref.ivf`) showed the gate working exactly as
+//! designed: 50 packets in, 54 sub-frames dispatched (4 real superframes,
+//! one invisible alt-ref each), 50 marked `show_frame = true` and emitted,
+//! 4 marked `false` and correctly suppressed — 50 out, matching `ffmpeg`.
+//!
+//! The actual cause: `mandelbrot`'s native output is `gbrp` (planar RGB,
+//! no chroma subsampling), and `libvpx-vp9` accepted it as-is (VP9 profile
+//! 1, `color_space = CS_RGB`) rather than being converted to 4:2:0 first.
+//! A `gbrp` frame is **exactly 2x** the byte size of a `yuv420p` frame at
+//! the same resolution (3 full-resolution planes vs. 1 full plus 2
+//! quarter-resolution planes) — so any comparison that decodes this
+//! decoder's *native* output but assumes a `yuv420p` frame size (as
+//! `ffmpeg -pix_fmt yuv420p`'s raw dump does) will read exactly 2x the real
+//! frame count and diverge from frame 0 on every byte, with **no decoder
+//! defect anywhere in the path**. Confirmed by decoding both sides in the
+//! stream's own native `gbrp` (no conversion on either side): byte-for-byte
+//! identical, 50 frames, at `-threads` 1 and 4. See
+//! [`profile1_gbrp_frame_count_and_bytes_match_ffmpeg_natively`] below,
+//! which pins exactly this comparison (plus the frame-count assertion
+//! itself, so a real doubling regresses loudly rather than reading as a
+//! generic byte mismatch — the gap this investigation actually found: the
+//! `ffmpeg`-oracle test below used to stop comparing at whichever side ran
+//! out of bytes first, without ever checking that both sides were fully
+//! consumed, so a real frame-count mismatch would have shown as "some
+//! early frames matched" rather than failing).
+//!
+//! Separately, and *not* fixed here because it is unrelated to threading
+//! and lives outside this crate: this investigation also found that
+//! `vaco`'s own `-pix_fmt yuv420p` conversion of this same `gbrp` content
+//! does not match `ffmpeg`'s (mean per-byte difference ~43, max 115 on
+//! frame 0) — consistent with VP9's `color_space` (`CS_RGB` here) not
+//! being forwarded from `decode::pic_to_frame`'s `Frame` into whatever
+//! `vaco-scale`/pixel-format-conversion path reads it, so an RGB-native
+//! frame gets converted with the wrong (or a missing) matrix. Predates
+//! this session's changes (`pic_to_frame`'s body is untouched by #328) and
+//! is not itself a `vaco-codec-vp9` decode bug — flagged separately for
+//! whoever owns color metadata plumbing / `vaco-scale`.
+//!
 //! fuzz-crate: vaco-codec-vp9 (this is `cargo test`, not the fuzzer, but
 //! lives beside it for the same "real bitstream, not synthesised" reason).
 
@@ -208,6 +257,22 @@ fn ffmpeg_reference_yuv(path: &Path) -> Vec<u8> {
     out.stdout
 }
 
+/// `ffprobe`'s own count of displayed frames — the authoritative,
+/// format-independent number a frame-count assertion should check against,
+/// rather than inferring a count from `reference.len() / assumed_frame_size`
+/// (which silently reads as "byte mismatch" instead of "wrong count" when
+/// the assumed size is wrong — see this module's doc for exactly the case
+/// that hid).
+fn ffprobe_frame_count(path: &Path) -> usize {
+    let out = Command::new("ffprobe")
+        .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "default=nk=1:nw=1"])
+        .arg(path)
+        .output()
+        .expect("run ffprobe");
+    assert!(out.status.success(), "ffprobe failed on {}: {}", path.display(), String::from_utf8_lossy(&out.stderr));
+    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or_else(|e| panic!("ffprobe nb_read_frames for {}: {e}", path.display()))
+}
+
 /// Black-box-oracle half of the acceptance criterion: this crate's decode
 /// of each committed vector, compared byte-for-byte against `ffmpeg`'s own
 /// decode of the same file. Requires the system `ffmpeg` binary, so this is
@@ -220,6 +285,15 @@ fn decode_matches_ffmpeg_on_the_committed_vectors() {
         let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         let ours = decode_all(&mut Vp9Decoder::new(Limits::default()), &bytes);
         assert!(!ours.is_empty(), "{}: decoded zero frames", path.display());
+
+        // Frame-count equality against `ffprobe`'s own count, checked
+        // *before* any byte comparison and independently of it: a byte
+        // comparison that just stops at whichever side runs out of bytes
+        // first can silently read as "the frames it did compare matched"
+        // even when the two sides have a completely different number of
+        // frames (this module's doc has the concrete case this missed).
+        let expected_frames = ffprobe_frame_count(path);
+        assert_eq!(ours.len(), expected_frames, "{}: decoded {} frames, ffprobe reports {expected_frames}", path.display(), ours.len());
 
         let reference = ffmpeg_reference_yuv(path);
         let mut ref_offset = 0usize;
@@ -240,8 +314,76 @@ fn decode_matches_ffmpeg_on_the_committed_vectors() {
             ours.len(),
             reference.len()
         );
+        // Both sides fully consumed: `frames_compared == ours.len()` (the
+        // loop above didn't stop early for lack of reference bytes) and
+        // `ref_offset == reference.len()` (no reference bytes left over
+        // either) -- together with the frame-count assertion above, this
+        // is what actually rules out "same byte prefix, different length"
+        // rather than a real match.
+        assert_eq!(frames_compared, ours.len(), "{}: stopped comparing early, ffmpeg reference ran out of bytes first", path.display());
+        assert_eq!(ref_offset, reference.len(), "{}: ffmpeg reference has bytes left over after all of our frames were consumed", path.display());
         println!("{:<40} frames={frames_compared} byte-exact vs ffmpeg", path.file_name().unwrap_or_default().to_string_lossy());
         vectors_checked += 1;
     }
     assert!(vectors_checked > 0, "no vectors were actually compared");
+}
+
+/// The `mandelbrot`/`gbrp`/profile-1 fixture this module's doc explains:
+/// this crate's own decode of `vp9_profile1_gbrp_altref.ivf`, in the
+/// stream's *native* `gbrp` (no `yuv420p` conversion on either side, since
+/// that conversion is a separate, unrelated, not-yet-fixed bug — see the
+/// doc), with an explicit frame-count assertion checked before any byte
+/// comparison. Always run (no `ffmpeg` needed for the frame-count/
+/// thread-identity half); the `ffmpeg`-comparison half is
+/// [`profile1_gbrp_frame_count_and_bytes_match_ffmpeg_natively`] under
+/// `--ignored`.
+#[test]
+fn profile1_gbrp_thread_counts_agree_on_frame_count_and_bytes() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/vp9_native/vp9_profile1_gbrp_altref.ivf");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let mut baseline: Option<Vec<DecodedFrame>> = None;
+    for threads in [1usize, 4] {
+        let mut dec = Vp9Decoder::new(Limits::default());
+        dec.set_thread_count(threads);
+        let frames = decode_all(&mut dec, &bytes);
+        assert_eq!(frames.len(), 50, "{}: threads={threads} expected 50 shown frames (4 of 54 sub-frames are invisible alt-refs)", path.display());
+        if let Some(base) = &baseline {
+            assert_eq!(base.len(), frames.len(), "{}: threads={threads} frame count differs from threads=1", path.display());
+            for (i, (b, f)) in base.iter().zip(frames.iter()).enumerate() {
+                assert_eq!(b.yuv, f.yuv, "{}: threads={threads} frame {i} is not byte-identical to threads=1", path.display());
+            }
+        } else {
+            baseline = Some(frames);
+        }
+    }
+}
+
+#[test]
+#[ignore = "shells out to the system ffmpeg binary; run explicitly with --ignored"]
+fn profile1_gbrp_frame_count_and_bytes_match_ffmpeg_natively() {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/vp9_native/vp9_profile1_gbrp_altref.ivf");
+    let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
+    let ours = decode_all(&mut Vp9Decoder::new(Limits::default()), &bytes);
+
+    let expected_frames = ffprobe_frame_count(&path);
+    assert_eq!(ours.len(), expected_frames, "{}: decoded {} frames, ffprobe reports {expected_frames}", path.display(), ours.len());
+
+    let out = Command::new("ffmpeg")
+        .args(["-v", "error", "-i"])
+        .arg(&path)
+        .args(["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "gbrp", "-"])
+        .output()
+        .expect("run ffmpeg");
+    assert!(out.status.success(), "ffmpeg failed to decode {}: {}", path.display(), String::from_utf8_lossy(&out.stderr));
+    let reference = out.stdout;
+
+    let mut ref_offset = 0usize;
+    for (i, frame) in ours.iter().enumerate() {
+        let frame_size = (frame.width as usize) * (frame.height as usize) * 3;
+        let ref_frame = reference.get(ref_offset..ref_offset + frame_size).unwrap_or_else(|| panic!("{}: ffmpeg reference ran out of bytes at frame {i}", path.display()));
+        assert_eq!(&frame.yuv[..], ref_frame, "{}: frame {i} is not byte-identical to ffmpeg's native gbrp decode", path.display());
+        ref_offset += frame_size;
+    }
+    assert_eq!(ref_offset, reference.len(), "{}: ffmpeg reference has bytes left over", path.display());
+    println!("{:<40} frames={} byte-exact vs ffmpeg (native gbrp)", path.file_name().unwrap_or_default().to_string_lossy(), ours.len());
 }
