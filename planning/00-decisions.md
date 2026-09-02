@@ -1453,3 +1453,74 @@ already used, so the workspace and the fuzzers now share one compiler.
 Nothing else is relaxed. `#![forbid(unsafe_code)]` (D2) still holds — nightly
 does not license `unsafe` intrinsics — as do the clean room, patent gating,
 MIT-only licensing, and byte-exactness against ffmpeg.
+
+## D23 — One source of truth, enforced by the type system (2026-09-01, owner)
+
+The owner's ruling, verbatim:
+
+> you should aim for stronger type-safety. we shouldnt rely on things matching
+> across crates. one source of truth for everything should be preferred. use
+> newtypes, macros, etc. -- for example for the cli flags we have macros which
+> is good - make sure we use them all effectively. its ok if we have minor
+> differences in what we support or how we handle something compared to ffmpeg
+> as long as it makes stuff vastly simpler or easier or better for internal
+> implementation, organization, etc.
+
+This extends D19 (one definition per concept) with a mechanism and a licence.
+D19 said do not define a concept twice. D23 says **make the second definition
+impossible**, and accepts divergence from ffmpeg as the price where it buys
+real internal simplicity.
+
+### The failure this exists to stop
+
+Every one of these was a real defect this session, and each is the same shape —
+two places that had to agree, with nothing enforcing it:
+
+- The `%0Nd` zero-pad grammar was **reimplemented in four crates**
+  (`vaco-mux-hls`, `vaco-mux-stream`, `vaco-demux-image2`, `vaco-demux-dash`),
+  so one unbounded-width denial of service had four homes. A 24-byte DASH
+  manifest could request a ~10 GiB allocation.
+- `Budget::check_frame`'s bytes-per-pixel was a **flat constant repeated in six
+  crates**, RGBA-sized for subsampled YUV, so legitimate 4K files were rejected.
+  Fixed once in H.264, then found again in HEVC, ProRes, VC-1, Theora and TIFF.
+- **Five parsers** copied a syntax element into an output field with no
+  validation, so `bits_per_raw_sample=164` reached probe output.
+- **Eight decoders** hand-rolled the `Eof`-on-drain contract; four got it wrong
+  and livelocked.
+- `vaco-mux-matroska::codec::requires_extradata_str(&str)` decides *by string
+  match* which codecs need an out-of-band configuration record. That is a
+  property of the **codec**, not of one muxer — so mp4, Ogg and AVI must each
+  rediscover it, and a new codec is silently absent from all four lists.
+- `CompressionAlgo` and `EncodeOptions` are separately defined in the exr,
+  tiff, jpeg and png codecs (`dup-check` reports this today).
+
+### What to do instead
+
+- **Newtypes over primitives.** A `u32` that means "sample rate" and a `u32`
+  that means "frame count" should not be assignable to one another. A
+  bytes-per-pixel value should carry its pixel format.
+- **Put the property on the thing it describes.** "Needs an out-of-band config
+  record" belongs on the codec descriptor, read by every muxer — not in a
+  per-muxer string table.
+- **Derive, do not transcribe.** `vaco-opts-derive` already gives
+  `#[derive(Options)]` and `#[derive(OptEnum)]`, and 18 crates use them. The
+  CLI's own `tables/ffmpeg.rs` and `tables/ffprobe.rs` do **not** — they are
+  hand-written lists with no compile-time link to the code implementing each
+  option. That gap is exactly how `-ar` came to be accepted and silently
+  ignored, and how five more options sat in the table with no implementation
+  behind them. **An option that nothing implements should fail to compile, or
+  be forced to declare itself unimplemented.**
+- **Make the shared thing generate the copies**, so drift is a build error
+  rather than a runtime divergence found by a fuzzer.
+
+### The licence, and its limit
+
+Minor divergence from ffmpeg is acceptable when it buys real internal
+simplicity — a cleaner option surface, one enum instead of four, a property
+that lives where it belongs. **Document each such divergence** where a user
+would meet it.
+
+It does **not** license divergence in decoded output. Byte-exactness against
+ffmpeg on stock encoder input is the hardest-won property in this repository
+and is not a simplification target. Nor does it relax `#![forbid(unsafe_code)]`
+(D2), the clean room, patent gating, or MIT-only licensing.
