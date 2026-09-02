@@ -136,6 +136,16 @@ pub struct Options {
     pub show_data: Option<DumpFormat>,
     /// `-show_data_hash <alg>`.
     pub show_data_hash: Option<HashAlg>,
+    /// The first accepted-but-unimplemented option this run named, if any
+    /// (CLI-option audit). `analyze_frames`, `cpuflags`, `find_stream_info`,
+    /// `max_alloc`, `report`, `show_log`, `sinks`, `sources` are declared by
+    /// the option table, parsed, and validated, but nothing downstream reads
+    /// them -- the same defect class `vaco-cli`'s own
+    /// `refuse_unimplemented_options` exists for. Checked in
+    /// [`crate::run`] rather than here so the message can share the
+    /// `Error::Unsupported` path [`FRAMES_UNSUPPORTED`](crate::FRAMES_UNSUPPORTED)/
+    /// [`HASH_UNSUPPORTED`](crate::dump::HASH_UNSUPPORTED) already use.
+    pub unimplemented: Option<&'static str>,
 }
 
 impl Default for Options {
@@ -157,9 +167,30 @@ impl Default for Options {
             interval_warnings: Vec::new(),
             show_data: None,
             show_data_hash: None,
+            unimplemented: None,
         }
     }
 }
+
+/// Options this build's table declares and accepts, but that nothing
+/// downstream of [`parse`] ever reads -- see [`Options::unimplemented`]'s
+/// own doc for why this is checked at all rather than silently dropped.
+///
+/// `analyze_frames` is included even though `-show_frames`/`-count_frames`
+/// already mask the common case via [`crate::FRAMES_UNSUPPORTED`]: standalone
+/// `-analyze_frames` with neither of those set was still silently accepted
+/// before this list existed, and a second, narrower name here is simpler
+/// than special-casing it out.
+const UNIMPLEMENTED: &[&str] = &[
+    "analyze_frames",
+    "cpuflags",
+    "find_stream_info",
+    "max_alloc",
+    "report",
+    "show_log",
+    "sinks",
+    "sources",
+];
 
 /// The listing options, paired with the flag that selects them.
 ///
@@ -305,6 +336,12 @@ pub fn parse<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<Options, CliError>
                         inner,
                     }
                 })?);
+            }
+            other if o.unimplemented.is_none() && UNIMPLEMENTED.contains(&other) => {
+                // First one wins, matching how `-listing` above resolves
+                // ties -- the reference itself only ever reports one option
+                // as the reason a run failed.
+                o.unimplemented = UNIMPLEMENTED.iter().find(|&&n| n == other).copied();
             }
             _ => {}
         }

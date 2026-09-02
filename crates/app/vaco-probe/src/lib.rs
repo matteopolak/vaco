@@ -106,6 +106,35 @@ pub use emit::{Emit, Val};
 /// can see beats a gap that looks like an empty answer.
 pub const FRAMES_UNSUPPORTED: &str = "-show_frames/-count_frames need a decoder; v0.1 has none (D5, D14.4 \u{2014} roadmap CL-34b/v0.2)";
 
+/// CLI-option audit: `-analyze_frames`, `-cpuflags`, `-find_stream_info`,
+/// `-max_alloc`, `-report`, `-show_log`, `-sinks`, `-sources` are declared
+/// by this build's option table, parsed, and validated, and none of them
+/// reaches any consumer -- the ffprobe half of the same gap `vaco-cli`'s
+/// own `refuse_unimplemented_options` closed. [`Error::Unsupported`] takes
+/// `&'static str`, so this is a fixed table rather than a `format!`, one
+/// literal per name in [`crate::cli::UNIMPLEMENTED`] -- kept next to each
+/// other so an added name that is missing here is a compile-time-obvious
+/// gap (the `unreachable!` below), not a silently generic message.
+#[must_use]
+pub fn unimplemented_option_message(name: &str) -> &'static str {
+    match name {
+        "analyze_frames" => "-analyze_frames is accepted by this build's option table but not implemented yet.",
+        "cpuflags" => "-cpuflags is accepted by this build's option table but not implemented yet.",
+        "find_stream_info" => "-find_stream_info is accepted by this build's option table but not implemented yet.",
+        "max_alloc" => "-max_alloc is accepted by this build's option table but not implemented yet.",
+        "report" => "-report is accepted by this build's option table but not implemented yet.",
+        "show_log" => "-show_log is accepted by this build's option table but not implemented yet.",
+        "sinks" => "-sinks is accepted by this build's option table but not implemented yet.",
+        "sources" => "-sources is accepted by this build's option table but not implemented yet.",
+        // Not reachable while `cli::UNIMPLEMENTED` and this match agree, but
+        // a mismatch is a bug in this file, not malformed input -- so it
+        // gets a generic-but-honest message instead of a panic, the same
+        // "never panic on a state this code itself controls" rule as
+        // everywhere else in this tree.
+        _ => "an option is accepted by this build's table but not implemented yet.",
+    }
+}
+
 /// This program's version, as `program_version.version` prints it.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -186,6 +215,13 @@ fn execute<O: Write, E: Write>(
         version_listing(out, which)?;
         listing::render(out, which)?;
         return Ok(Exit::Ok);
+    }
+
+    // CLI-option audit: an accepted-but-never-consumed option, refused
+    // before anything is written for the same reason as the two checks
+    // below -- see [`Options::unimplemented`]'s own doc.
+    if let Some(name) = opts.unimplemented {
+        return Err(Error::Unsupported(unimplemented_option_message(name)));
     }
 
     // Refuse before anything is written, so the failure cannot be mistaken for
