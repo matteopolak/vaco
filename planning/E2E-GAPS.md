@@ -3708,3 +3708,56 @@ step 4's own remaining work.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 48. HEVC B4 Stage 2b: `CtxShared` behind `Arc`; `pic` pulled back out, not shared
+
+Continues step 3b toward step 4: `CtxShared` is now genuinely `Arc`-shared
+(commit `48ab450`), per the coordinator's own "yes, and it is read-only by
+construction, so `Arc<CtxShared>` needs no lock at all."
+
+**A real wrinkle surfaced before it became a bug**: `pic` was still a
+`CtxShared` field when this started, but `deblock.rs`/`sao.rs` mutate it
+extensively (`&mut s.pic.y` throughout both filter passes). `Arc<T>` only
+ever hands back `&T` short of `Arc::get_mut`'s own "nothing else holds a
+clone right now" runtime condition — naively wrapping `CtxShared` as it
+stood would have made every mutation site fail to compile, or (worse, had
+`get_mut` been reached for instead) made deblock/SAO's own correctness
+depend on a runtime invariant instead of the type system. Consistent with
+the coordinator's own stated principle (nothing should need `&mut` to a
+structure two workers share), `pic` moved back out to a direct `Ctx`
+field — exactly where it always logically belonged (the still-serial
+deblock/SAO pass that is its only real reader, never the per-row task
+`CtxShared` is built for).
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (73 unit + 6 integration
+tests, unchanged) and `cargo clippy -p vaco-codec-hevc --lib --tests -- -D
+warnings` both clean; `cargo xtask unsafe-audit` clean. Against
+`hevc_1080p.mp4`: `vaco -threads 1` before, after, and `ffmpeg`'s own
+decode all produced the identical sha256 (unchanged since ss39). The
+300x500 partial-CTU-column fixture still matched.
+
+**Serial cost**: reaches the same per-CTU/per-block field-read hot path
+ss46 already measured, via a genuinely different mechanism (`Arc`'s
+pointer indirection and one atomic refcount bump at construction, not a
+plain nested struct), so measured rather than assumed identical. Two
+wall-clock-contaminated attempts on an increasingly loaded shared machine
+(load average 10.88-17.26 across all three tries; disk also fell from 18
+to 16 GiB over the course of this one commit's measurement, other agents'
+concurrent activity) were not simply discarded and retried a third time
+from scratch: the third attempt's own CPU-seconds numbers were tight and
+consistent (16.4-17.5s across all twelve samples) even while wall-clock
+still showed a scheduling-noise outlier in one round -- exactly the
+situation this protocol's own CPU-seconds preference exists for, so that
+run's CPU-seconds column was trusted on its own terms rather than
+discarded for a wall-clock artifact it is specifically robust to.
+Per-round CPU-seconds ratio: 0.986, 1.032, 1.000, 0.985, 0.966, 1.034 --
+median **0.993x**, mean **1.000x**, candidate at or below baseline in 4 of
+6 rounds. Clears the gate; essentially neutral, consistent with the
+structural expectation (one allocation per slice at construction, not
+per-CTU) but confirmed rather than assumed.
+
+**Not done in this section**: a per-worker-owned per-row-exclusive `Ctx`
+and real thread dispatch (step 4's own remaining work).
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.

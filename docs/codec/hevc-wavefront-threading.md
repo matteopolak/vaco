@@ -752,6 +752,18 @@ itself is threaded) before the next begins:
      "just" a reorganisation, since it reaches the actual per-CTU/per-block
      hot path: CPU-seconds median 0.987x, mean 0.990x, clearing the gate.
      **Step 3 as a whole (3a + 3b) is complete.**
+
+**Also done, past step 3's own scope** (commit `48ab450`,
+`planning/E2E-GAPS.md` §48): `CtxShared` pulled out from behind a real
+`Arc`, per the coordinator's own reasoning above — read-only by
+construction, so no lock needed. `pic` moved back out of `CtxShared` to a
+direct `Ctx` field first (see "Resolved" above, `ReconPlane`'s own
+don't-share-the-writer answer applied here too: `deblock.rs`/`sao.rs`
+mutate `pic`, and `Arc<T>` cannot hand back `&mut T` short of
+`Arc::get_mut`'s own runtime condition — a static exclusion from the
+shared struct is preferred over relying on it). Measured: CPU-seconds
+median 0.993x, mean 1.000x — essentially neutral, clearing the gate.
+
 4. Only then, real `std::thread::spawn` dispatch over the row loop, reusing
    `vaco_codec_core::threading`'s `Pool`/`Queue`/`Condvar`/`ReplyGuard`
    shape (row index in place of that module's frame index, `Result<()>`
