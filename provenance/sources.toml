@@ -1344,3 +1344,31 @@ kind     = "spec"
 title    = "The Dirac Specification, version 2.2.3 (BBC Research & Development, 23 September 2008) -- an openly published, royalty-free video codec specification, and the direct ancestor of SMPTE ST 2042-1 (VC-2), which uses the same seven-filter wavelet family and the same wavelet_index numbering. crates/signal/vaco-codec-dsp-dwt/src/vc2.rs's seven LiftStep tables (taps, offsets, shifts) and its 2D interleave/synthesis structure are transcribed from this document's SS15.6.1-15.6.3, not from any reference decoder's source (D6/D7). One transcription uncertainty is recorded in that module and in the closing comment on issue #261: Table 15.6 (the \"Fidelity\" filter, wavelet_index 5) rendered with both of its lifting steps numbered \"1.\" in the fetched PDF, so the step order implemented (Type 3 before Type 2) is this crate's best reading, not a confirmed transcription."
 acquired = "2026-08-31"
 where    = "formally published specification PDF (BBC Research & Development)"
+
+[[source]]
+id       = "maxis-xa-format-doc"
+kind     = "spec"
+title    = "Maxis XA (.xa) container and EA-ADPCM codec description, corroborated across two independent community references: MultimediaWiki's \"Maxis XA\" page (header struct XAHeader -- szID/dwOutSize/wTag/wChannels/dwSampleRate/dwAvgByteRate/wAlign/wBits -- and the full EA-ADPCM decompression algorithm and coefficient table) and the Niotso Wiki / SC4Devotion Encyclopaedia's corroborating field descriptions for the same header. Neither page states byte order explicitly; little-endian was confirmed empirically, not assumed -- see vaco-format-misc-audio-xa-fixtures-probe."
+acquired = "2026-09-02"
+where    = "https://wiki.multimedia.cx/index.php/Maxis_XA ; http://wiki.niotso.org/XA ; https://wiki.sc4devotion.com/index.php?title=XA"
+
+[[source]]
+id       = "vaco-format-misc-audio-xa-fixtures-probe"
+kind     = "blackbox"
+title    = "ffmpeg/ffprobe 9.0.1, measured against hand-built Maxis XA fixtures (no reference encoder exists for this format): confirmed little-endian WAVEFORMATEX-tail byte order (a big-endian reading of the same field values produces an implausible multi-GHz sample rate through the real xa demuxer); confirmed the codec identity adpcm_ea_maxis_xa; and, by sweeping dwOutSize from 0 to 559 against a 20-block stereo fixture, found packet count is ceil(dwOutSize / block_bytes) clamped to the blocks physically present (dwOutSize = 0 yields zero packets outright), while duration/duration_ts ignore dwOutSize entirely and instead reflect the file's own full block count -- a genuine, reproduced disagreement between the reference's own packet emission and its duration estimate, not a bug in this reading of the format."
+acquired = "2026-09-02"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "wiibrew-brstm-format"
+kind     = "spec"
+title    = "WiiBrew, \"BRSTM file\" -- complete byte-level layout of the 64-byte RSTM header, the HEAD chunk's three parts (general/loop/sample-rate info, track descriptions, per-channel ADPCM coefficient/history tables), the ADPC seek-history chunk, and the DATA chunk's per-channel interleaved block layout. Read for #620's chiptune-adjacent game-audio containers; a hand-built fixture built field-for-field from this page opens correctly in the real ffmpeg brstm demuxer (correct sample_rate/channels/codec_name=adpcm_thp), but the DATA chunk's actual per-packet byte count measured as this page's own block_size field plus an unexplained, channel-dependent constant not stated anywhere on the page -- see vaco-format-misc-audio-brstm-fixtures-probe. Not shipped this pass for that reason; header-level facts from this source are confirmed correct, packet-level framing is not yet resolved."
+acquired = "2026-09-02"
+where    = "https://wiibrew.org/wiki/BRSTM_file"
+
+[[source]]
+id       = "vaco-format-misc-audio-brstm-fixtures-probe"
+kind     = "blackbox"
+title    = "ffmpeg/ffprobe 9.0.1, measured against hand-built BRSTM fixtures built field-for-field from wiibrew-brstm-format (no reference encoder exists for this format): confirmed the header parses correctly end to end (sample_rate, channels, codec_name=adpcm_thp, duration all correct against the reference for several parameter combinations). But per-packet byte size does not equal the header's own block_size field: a mono fixture with block_size swept across 32/64/96/256 bytes produced packets of exactly block_size+44 bytes every time (a clean additive constant, ruling out a scaling-formula misreading), while the same sweep at two channels produced block_size*2+80, and the file's own final (possibly padded-differently) block produced yet another, smaller constant (+28 at one data point) than a regular block's +44 -- three data points, not enough to fit a formula with confidence, and none of it is stated in the WiiBrew spec. Recorded as a genuine open question rather than shipped as a guess."
+acquired = "2026-09-02"
+where    = "the reference binary installed on the development machine"
