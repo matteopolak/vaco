@@ -103,6 +103,9 @@ impl CueOpts {
         if let Some(text) = args {
             o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
         }
+        if o.buffer.is_some() {
+            return Err("cue: `buffer` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }
@@ -393,6 +396,12 @@ impl PermsOpts {
         if let Some(text) = args {
             o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
         }
+        if o.mode != PermsMode::None {
+            return Err("perms: `mode` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.seed != -1_i64 {
+            return Err("perms: `seed` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }
@@ -407,9 +416,11 @@ impl FrameFilter for PermsFilter {
 }
 
 fn perms_build(media: MediaType, desc: FilterDesc, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
-    // Parsed and validated so a filtergraph string using this filter does
-    // not fail to parse; nothing in `opts` changes behaviour — see module
-    // doc for why there is no permission bit to act on.
+    // There is no permission bit in this pipeline model for `mode`/`seed`
+    // to act on, so `PermsOpts::parse` refuses a non-default value rather
+    // than silently accepting a filtergraph the reference would run with
+    // real effect and this build would run as a no-op instead (`cargo
+    // xtask reachability-check` rule I).
     let _opts = PermsOpts::parse(req.args)?;
     Ok(Instance {
         desc,
@@ -689,9 +700,22 @@ mod tests {
     }
 
     #[test]
-    fn perms_passes_frames_through_regardless_of_mode() {
-        let out = run_one(perms::video::create, Some("mode=random:seed=1"), gray_frame(4, 4, 0, 3));
+    fn perms_passes_frames_through_at_the_default_mode() {
+        let out = run_one(perms::video::create, None, gray_frame(4, 4, 0, 3));
         assert_eq!(out.plane(0).and_then(|p| p.row(0)).and_then(|r| r.first()).copied(), Some(3));
+    }
+
+    /// There is no permission bit in this pipeline model to honour
+    /// `mode`/`seed` with, so a non-default value must refuse rather than
+    /// silently behave like `mode=none` — the bug `perms_passes_frames_
+    /// through_regardless_of_mode` used to name as if it were the intended
+    /// behaviour. Regression for `cargo xtask reachability-check`'s rule I.
+    #[test]
+    fn perms_refuses_a_non_default_mode_or_seed_instead_of_ignoring_it() {
+        let req = Instantiate { name: "x", instance: "x", args: Some("mode=random:seed=1"), arguments: &[] };
+        assert!(perms::video::create(&req).is_err());
+        let req_seed = Instantiate { name: "x", instance: "x", args: Some("seed=7"), arguments: &[] };
+        assert!(perms::video::create(&req_seed).is_err());
     }
 
     /// `action=start` stamps a parseable wall-clock key on the frame it
