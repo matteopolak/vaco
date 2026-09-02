@@ -168,6 +168,16 @@ The `prepare-commit-msg` hook writes these for you — but **`commit-tree` bypas
 hooks**, so with the private-index recipe you must put them in the message
 yourself. Check with `cargo run -p xtask -- provenance-check` before you move on.
 
+After a ref race, also check the commit is not empty:
+
+```sh
+git show --numstat --format= "$commit" | grep -q . || echo "EMPTY — committed nothing"
+```
+
+Retrying a commit against a moved `HEAD` can produce a commit whose tree equals
+its parent's. It passes the ancestry check and reads as healthy, while claiming
+work it does not contain.
+
 Constant tables of 32+ elements need a `[[table]]` entry in
 `provenance/<crate>.toml`. Renaming or moving a table breaks its entry; update it
 in the same commit.
