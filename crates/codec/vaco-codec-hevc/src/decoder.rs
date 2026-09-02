@@ -759,7 +759,18 @@ fn decode_wpp_row_ranges(
     kind: SliceKind,
     cabac_init: bool,
 ) -> Result<()> {
-    let mut saved_ctx: Option<ContextBank> = None;
+    // Row r's own context state, as it stood right after CTU column 1
+    // finished (§9.3.2.3) -- published once per row into a fixed-size board
+    // (Stage 2b step 2, `docs/codec/hevc-wavefront-threading.md`: the same
+    // `RowPublish` primitive `EdgeMarks`/`SaoParamsGrid`/`CuGrid` already
+    // publish through, `ContextBank` being `Copy` making this the smallest
+    // of the four uses) so row r + 1 can read it back. Still driven by one
+    // worker, one row at a time, exactly as `saved_ctx` (the plain local
+    // variable this replaces) always was -- the only change is that the
+    // handoff is now expressed through the primitive Stage 2's real
+    // dispatch will need regardless, rather than through a local that only
+    // works because nothing else could observe it mid-flight.
+    let ctx_handoff: crate::wavefront::RowPublish<ContextBank> = crate::wavefront::RowPublish::new(row_ranges.len());
     // Reused across rows: `to_rbsp` clears it on every call, and each row's
     // `CabacDecoder` borrow ends (the row's CTU loop finishes) before the
     // next row refills it.
@@ -784,7 +795,12 @@ fn decode_wpp_row_ranges(
         walk.cu_grid.begin_row(budget, row_idx)?;
         walk.sao_params.begin_row(budget, row_idx)?;
         let mut ctx = if row_idx > 0 && ctbs_x >= 2 {
-            saved_ctx.unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
+            // Row `row_idx - 1`'s own publish, from this same loop's
+            // previous iteration -- always `Some` by construction (every
+            // earlier row already ran its own `col == 1` publish below
+            // before this row starts), `new_context_bank` only ever a
+            // fallback for the cases the outer `if` already excludes.
+            ctx_handoff.get(row_idx.saturating_sub(1)).copied().unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
         } else {
             new_context_bank(kind, cabac_init, qp)
         };
@@ -806,7 +822,7 @@ fn decode_wpp_row_ranges(
             // end_of_slice_segment_flag/end_of_subset_one_bit terminate
             // calls below, neither of which mutates any context.
             if col == 1 {
-                saved_ctx = Some(ctx);
+                ctx_handoff.publish(row_idx, ctx)?;
             }
 
             let terminate = cabac.decode_terminate();
