@@ -232,7 +232,18 @@ accept it. Treat it as broken until that row says otherwise.
 ### Images
 
 BMP, GIF, JPEG, JPEG-LS, JPEG XL (decode only), OpenEXR, PCX, PNG and APNG, PNM,
-QOI, SGI, TGA, TIFF, WebP, XBM, XWD. Most decode and encode.
+QOI, SGI, TGA, TIFF, WebP, XBM, XWD.
+
+Registered is doing a lot of work in that list. Probing an ffmpeg-written still,
+`vaco-probe` reports the correct size and pixel format for PNG, BMP, TIFF and GIF, and
+reports `0x0` with `pix_fmt=unknown` for PCX, SGI, PNM, QOI, XBM, XWD and JPEG-LS —
+nine of thirteen formats never populate stream parameters at all, and TGA fails to
+probe outright. The decode follows the metadata down: a colour P6 PPM comes back as
+grey, each pixel carrying the luma of the colour it should have been.
+
+Writing a still has its own bug: an output named `.png` selects the JPEG encoder
+rather than PNG, so image output needs an explicit `-c:v`. With one given, PNG, BMP
+and TIFF decode identically to ffmpeg.
 
 ### Subtitles
 
