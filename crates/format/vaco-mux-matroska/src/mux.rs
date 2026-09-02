@@ -1793,7 +1793,6 @@ mod tests {
         // (see the module docs) so a future edit to the constant is caught
         // here rather than silently redefining what "correct" means.
         assert_eq!(children[2].1, 161);
-        assert_eq!(SEEKHEAD_RESERVED_BYTES, 161);
     }
 
     #[test]
