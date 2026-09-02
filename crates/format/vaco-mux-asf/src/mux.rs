@@ -209,6 +209,10 @@ pub struct AsfMuxer {
     out: IoWriter,
     streams: Vec<StreamOut>,
     stream_codec_bytes: Vec<Vec<u8>>, // built at add_stream time, written at write_header
+    /// One Codec List Object entry per stream, built alongside
+    /// `stream_codec_bytes` at `add_stream` time — see
+    /// `build_codec_list_entry`'s own doc for the shape.
+    codec_list_entries: Vec<Vec<u8>>,
     header_written: bool,
     trailer_written: bool,
     packet_size: u32,
@@ -249,6 +253,7 @@ impl AsfMuxer {
             out: IoWriter::new(sink, &IoOptions::default())?,
             streams: Vec::new(),
             stream_codec_bytes: Vec::new(),
+            codec_list_entries: Vec::new(),
             header_written: false,
             trailer_written: false,
             packet_size: DEFAULT_PACKET_SIZE,
@@ -515,6 +520,8 @@ impl Muxer for AsfMuxer {
 
         let sp = build_stream_properties(stream_number, media, &type_specific);
         self.stream_codec_bytes.push(sp);
+        self.codec_list_entries
+            .push(build_codec_list_entry(media, codec_id, params.codec_tag));
         self.streams.push(StreamOut {
             stream_number,
             media_object_counter: 0,
@@ -538,22 +545,32 @@ impl Muxer for AsfMuxer {
 
         let file_properties = build_file_properties(self.packet_size, self.creation_date_100ns);
         let header_extension = build_header_extension();
+        let codec_list = build_codec_list(&self.codec_list_entries);
 
+        // Order measured against a real `ffmpeg 9.0.1 -c copy -f asf` file:
+        // File Properties, Header Extension, [an Extended Content
+        // Description Object this crate does not build — no metadata
+        // plumbing reaches this muxer yet, and its content is genuinely
+        // source-dependent, not a fixed shape to guess at], Stream
+        // Properties (one per stream), Codec List. This crate's own subset
+        // keeps that relative order rather than the File-Properties-then-
+        // Streams-then-Extension order it used before Codec List existed.
         let mut header_payload = Vec::new();
         header_payload.extend_from_slice(&object(
             well_known::FILE_PROPERTIES_OBJECT,
             &file_properties,
         ));
-        for sp in &self.stream_codec_bytes {
-            header_payload.extend_from_slice(&object(well_known::STREAM_PROPERTIES_OBJECT, sp));
-        }
         header_payload.extend_from_slice(&object(
             well_known::HEADER_EXTENSION_OBJECT,
             &header_extension,
         ));
-        // Header objects are counted as: File Properties + one per stream +
-        // Header Extension.
-        let num_header_objects = 2 + self.streams.len() as u32;
+        for sp in &self.stream_codec_bytes {
+            header_payload.extend_from_slice(&object(well_known::STREAM_PROPERTIES_OBJECT, sp));
+        }
+        header_payload.extend_from_slice(&object(well_known::CODEC_LIST_OBJECT, &codec_list));
+        // Header objects: File Properties + Header Extension + Codec List +
+        // one per stream.
+        let num_header_objects = 3 + self.streams.len() as u32;
 
         self.out.write(&well_known::HEADER_OBJECT.as_bytes())?;
         self.out.wl64(30 + header_payload.len() as u64)?;
@@ -760,6 +777,68 @@ fn build_stream_properties(stream_number: u8, media: MediaType, type_specific: &
     p.extend_from_slice(&flags.to_le_bytes());
     p.extend_from_slice(&0u32.to_le_bytes()); // reserved
     p.extend_from_slice(type_specific);
+    p
+}
+
+/// The Codec List Object's `Reserved1` field ([\[ASF\] §3.11]) — a fixed
+/// per-spec constant, **not** derived from anything this crate constructs.
+/// Measured directly, not transcribed from the specification text (no
+/// network access from this environment to re-check it against the PDF
+/// `docs/format/vaco-format-asf.md` cites): dumped byte-for-byte from a
+/// real `ffmpeg 9.0.1 -c copy -f asf` Codec List Object, distinct from
+/// [`well_known::CODEC_LIST_OBJECT`] (the object's own *type* GUID,
+/// `86D15240-...`) by exactly the last hex digit (`...5241`), which is the
+/// same one-digit-apart relationship the published spec text describes for
+/// this field.
+const CODEC_LIST_RESERVED_1: Guid = Guid::from_fields(
+    0x86D1_5241,
+    0x311D,
+    0x11D0,
+    [0xA3, 0xA4, 0x00, 0xA0, 0xC9, 0x03, 0x48, 0xF6],
+);
+
+/// One Codec List Object entry ([\[ASF\] §3.11](vaco_format_asf)): `Type` +
+/// length-prefixed UTF-16LE `CodecName` + length-prefixed UTF-16LE
+/// `CodecDescription` (always empty here — this crate tracks no
+/// human-readable description) + length-prefixed raw `CodecInformation`.
+///
+/// `CodecInformation` is the stream's own source `codec_tag` when the
+/// caller supplied one (measured: a real `ffmpeg` remux from an
+/// `avc1`-tagged MP4/MOV source writes `avc1` here, not a fixed ASF-side
+/// constant), falling back to this crate's own [`codec::video_fourcc`]
+/// table for a video stream with no such tag, or nothing for audio (no
+/// audio fourcc table exists here to fall back to).
+fn build_codec_list_entry(media: MediaType, codec_id: CodecId, codec_tag: Option<[u8; 4]>) -> Vec<u8> {
+    let kind: u16 = if media == MediaType::Video { 1 } else { 2 };
+    let name = codec_id.name();
+    let name_utf16: Vec<u8> = name
+        .encode_utf16()
+        .chain(std::iter::once(0u16)) // trailing null, per the measured record
+        .flat_map(u16::to_le_bytes)
+        .collect();
+    let info: Vec<u8> = codec_tag
+        .or_else(|| (media == MediaType::Video).then(|| codec::video_fourcc(codec_id)).flatten())
+        .map_or_else(Vec::new, |t| t.to_vec());
+
+    let mut e = Vec::new();
+    e.extend_from_slice(&kind.to_le_bytes());
+    e.extend_from_slice(&u16::try_from(name.len().saturating_add(1)).unwrap_or(0).to_le_bytes());
+    e.extend_from_slice(&name_utf16);
+    e.extend_from_slice(&0u16.to_le_bytes()); // CodecDescriptionLength: none tracked
+    e.extend_from_slice(&u16::try_from(info.len()).unwrap_or(0).to_le_bytes());
+    e.extend_from_slice(&info);
+    e
+}
+
+/// The Codec List Object ([\[ASF\] §3.11](vaco_format_asf)) payload: the
+/// spec's `Reserved1` GUID, an entry count, then each stream's own entry in
+/// `add_stream` order.
+fn build_codec_list(entries: &[Vec<u8>]) -> Vec<u8> {
+    let mut p = CODEC_LIST_RESERVED_1.as_bytes().to_vec();
+    p.extend_from_slice(&u32::try_from(entries.len()).unwrap_or(0).to_le_bytes());
+    for e in entries {
+        p.extend_from_slice(e);
+    }
     p
 }
 
