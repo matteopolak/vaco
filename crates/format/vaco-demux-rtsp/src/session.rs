@@ -38,6 +38,14 @@ pub struct RtspSession {
     session_id: Option<String>,
     credentials: Option<(String, String)>,
     challenge: Option<Challenge>,
+    /// The `User-Agent` header value to stamp on every outgoing request, or
+    /// empty to send none — `RtspOptions::user_agent`'s value, set via
+    /// [`Self::set_user_agent`]. Not defaulted to that option's own default
+    /// here: this module does not depend on `crate::options`, so the empty
+    /// string (send nothing) is this type's own default, and
+    /// [`crate::demux::RtspDemuxer::open`] is what actually applies the
+    /// option.
+    user_agent: String,
     /// Interleaved frames that arrived while waiting for a response to some
     /// other request — RFC 2326 does not forbid the server from sending
     /// media the instant it likes, so a frame can race a `SETUP` response.
@@ -83,6 +91,7 @@ impl RtspSession {
             session_id: None,
             credentials: None,
             challenge: None,
+            user_agent: String::new(),
             pending_frames: VecDeque::new(),
         })
     }
@@ -100,6 +109,7 @@ impl RtspSession {
             session_id: None,
             credentials: None,
             challenge: None,
+            user_agent: String::new(),
             pending_frames: VecDeque::new(),
         }
     }
@@ -111,6 +121,15 @@ impl RtspSession {
 
     pub fn set_credentials(&mut self, username: impl Into<String>, password: impl Into<String>) {
         self.credentials = Some((username.into(), password.into()));
+    }
+
+    /// Set the `User-Agent` header [`Self::roundtrip`] stamps on every
+    /// outgoing request from now on. An empty string sends none — the
+    /// reference's own behaviour when built without a version string to
+    /// report is out of scope for a clean-room reimplementation to probe,
+    /// so this crate simply omits the header rather than guessing.
+    pub fn set_user_agent(&mut self, user_agent: impl Into<String>) {
+        self.user_agent = user_agent.into();
     }
 
     fn next_cseq(&mut self) -> u32 {
@@ -128,6 +147,9 @@ impl RtspSession {
     /// session cannot answer (no credentials, or an unsupported challenge
     /// scheme); otherwise whatever [`RtspConnection::read_message`] reports.
     pub fn roundtrip(&mut self, mut req: Request) -> Result<Response> {
+        if !self.user_agent.is_empty() {
+            req.headers.push("User-Agent", self.user_agent.clone());
+        }
         if let Some(session_id) = self.session_id.clone() {
             req.headers.push("Session", session_id);
         }

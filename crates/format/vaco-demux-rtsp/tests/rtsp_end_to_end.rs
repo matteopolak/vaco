@@ -158,3 +158,97 @@ fn rtsp_demuxer_open_negotiates_udp_and_reads_one_packet() {
     assert_eq!(pkt.payload(), b"pcmu-audio-bytes");
     assert_eq!(pkt.stream_index, 0);
 }
+
+/// Regression for `cargo xtask reachability-check`'s rule I:
+/// `-initial_pause` was parsed and had no effect — `RtspDemuxer::open`
+/// always sent `PLAY` regardless. This drives `DESCRIBE`/`SETUP` the same
+/// way as the test above, then proves no `PLAY` arrives within a short
+/// window with `initial_pause: true`, and that the demuxer's own public
+/// `play()` sends the deferred one on request.
+#[test]
+fn rtsp_initial_pause_defers_play_until_asked() {
+    let rtsp_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let rtsp_addr = rtsp_listener.local_addr().unwrap();
+
+    let sdp = "v=0\r\no=- 1 1 IN IP4 127.0.0.1\r\ns=-\r\nc=IN IP4 127.0.0.1\r\nt=0 0\r\n\
+         m=audio 0 RTP/AVP 0\r\na=control:track1\r\n"
+        .to_owned();
+
+    let server = thread::spawn(move || {
+        let (stream, _) = rtsp_listener.accept().unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+
+        // DESCRIBE
+        let (line, headers) = read_request(&mut reader);
+        assert!(line.starts_with("DESCRIBE"));
+        let cseq = cseq_of(&headers);
+        write!(
+            writer,
+            "RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\nContent-Type: application/sdp\r\nContent-Length: {}\r\n\r\n{sdp}",
+            sdp.len()
+        )
+        .unwrap();
+
+        // SETUP
+        let (line, headers) = read_request(&mut reader);
+        assert!(line.starts_with("SETUP"));
+        let cseq = cseq_of(&headers);
+        write!(
+            writer,
+            "RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\nSession: TESTSESSION;timeout=60\r\n\
+             Transport: RTP/AVP;unicast;client_port=0-0;server_port=6970-6971\r\n\r\n"
+        )
+        .unwrap();
+
+        // No PLAY should show up yet: `open()` must return with the session
+        // merely set up, not playing. A short read timeout turns "nothing
+        // arrives" into a clean, bounded wait rather than a hang.
+        reader
+            .get_ref()
+            .set_read_timeout(Some(Duration::from_millis(200)))
+            .unwrap();
+        let mut probe = String::new();
+        let saw_early_play = reader.read_line(&mut probe).is_ok() && !probe.is_empty();
+        assert!(!saw_early_play, "PLAY arrived before `play()` was called: {probe:?}");
+
+        // Now wait (blocking again) for the real, caller-requested PLAY.
+        reader.get_ref().set_read_timeout(None).unwrap();
+        let (line, headers) = read_request(&mut reader);
+        assert!(line.starts_with("PLAY"));
+        let cseq = cseq_of(&headers);
+        write!(writer, "RTSP/1.0 200 OK\r\nCSeq: {cseq}\r\n\r\n").unwrap();
+    });
+
+    let registry = {
+        let mut r = ProtocolRegistry::new();
+        vaco_protocol_socket::register(&mut r);
+        r
+    };
+    let cancel = CancelToken::new();
+    let env = ProtocolEnv::new(&registry, &cancel).with_whitelist(&["tcp", "udp"]);
+    let opts = vaco_demux_rtsp::RtspOptions {
+        min_port: 41200,
+        max_port: 41300,
+        initial_pause: true,
+        ..Default::default()
+    };
+
+    let url = format!("rtsp://127.0.0.1:{}/stream", rtsp_addr.port());
+    let mut demuxer = vaco_demux_rtsp::RtspDemuxer::open(
+        &url,
+        vaco_demux_rtsp::TransportMode::UdpUnicast,
+        &opts,
+        &registry,
+        &env,
+        &vaco_format_core::discovery::NoParsers,
+    )
+    .unwrap();
+
+    // Outlast the server's own 200 ms "did an early PLAY show up" probe
+    // window before sending the real one, so the two cannot race.
+    thread::sleep(Duration::from_millis(400));
+    demuxer.play().unwrap();
+
+    server.join().unwrap();
+}

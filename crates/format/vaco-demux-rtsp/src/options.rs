@@ -96,6 +96,9 @@ opt_flags! {
 #[derive(Debug, Clone, PartialEq, Options)]
 #[options(name = "rtsp", help = "RTSP input")]
 pub struct RtspOptions {
+    /// [`crate::demux::RtspDemuxer::open`] skips its usual automatic `PLAY`
+    /// when this is set, leaving the session paused right after `SETUP`
+    /// until a caller invokes [`crate::demux::RtspDemuxer::play`] itself.
     #[opt(
         name = "initial_pause",
         help = "do not start playing the stream immediately",
@@ -104,6 +107,13 @@ pub struct RtspOptions {
     )]
     pub initial_pause: bool,
 
+    /// Not implemented: [`crate::demux::RtspDemuxer::open`] takes its
+    /// transport choice as a separate, caller-supplied `mode:
+    /// TransportMode` parameter (see [`crate::transport`]'s docs) rather
+    /// than deriving one from this field, so setting it has no effect on
+    /// which transport is actually negotiated. [`RtspOptions::validate`]
+    /// refuses a non-default value rather than silently negotiating
+    /// whatever `mode` says while claiming to have honoured this one.
     #[opt(
         name = "rtsp_transport",
         help = "set RTSP transport protocols",
@@ -114,6 +124,12 @@ pub struct RtspOptions {
     )]
     pub rtsp_transport: RtspTransportFlags,
 
+    /// Not implemented: none of `filter_src`/`listen`/`prefer_tcp`/
+    /// `satip_raw` has a corresponding mechanism anywhere in this crate
+    /// (`listen` in particular would need a server-mode SETUP acceptor
+    /// this crate, a client only, does not have — see `listen_timeout`'s
+    /// own doc). [`RtspOptions::validate`] refuses a non-default value
+    /// rather than silently ignoring whichever flags were requested.
     #[opt(
         name = "rtsp_flags",
         help = "set RTSP flags",
@@ -176,6 +192,11 @@ pub struct RtspOptions {
     )]
     pub timeout: i64,
 
+    /// Not implemented: this crate's RTP path has no reorder buffer at all
+    /// (`crate::demux::RtspDemuxer::read_udp`/`read_interleaved` hand each
+    /// packet to its depacketizer as it arrives). [`RtspOptions::validate`]
+    /// refuses a non-default value rather than silently accepting a
+    /// reordering guarantee this crate does not provide.
     #[opt(
         name = "reorder_queue_size",
         help = "set number of packets to buffer for handling of reordered packets",
@@ -185,6 +206,12 @@ pub struct RtspOptions {
     )]
     pub reorder_queue_size: i32,
 
+    /// Not implemented: [`crate::connection::connect_tcp`] hands back a
+    /// plain `std::net::TcpStream`, and `std` has no
+    /// `set_send_buffer_size`/`set_recv_buffer_size` to apply this to
+    /// without a new socket-tuning dependency. [`RtspOptions::validate`]
+    /// refuses a non-default value rather than silently keeping the OS
+    /// default buffer sizes while claiming to have honoured this one.
     #[opt(
         name = "buffer_size",
         help = "Underlying protocol send/receive buffer size",
@@ -206,6 +233,53 @@ pub struct RtspOptions {
         flags(decoding)
     )]
     pub user_agent: String,
+}
+
+impl RtspOptions {
+    /// `rtsp_transport`/`rtsp_flags`/`reorder_queue_size`/`buffer_size` are
+    /// parsed but nothing in this crate reads any of them (each field's own
+    /// doc above says why); refusing a non-default value here is the same
+    /// "silently ignoring it is the worst outcome" rule
+    /// `vaco_format_core::options::FormatOptions::validate` already applies
+    /// to its own nine unconsumed generic fields, found by `cargo xtask
+    /// reachability-check`'s rule I. `listen_timeout` is deliberately not
+    /// here: its own doc already discloses, in full, why a client-only
+    /// crate accepts and ignores a server-mode option, which is a declared
+    /// interface-parity choice rather than a silent gap.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error::Option`] naming whichever field was set.
+    pub fn validate(&self) -> vaco_core::Result<()> {
+        if self.rtsp_transport != RtspTransportFlags::empty() {
+            return Err(vaco_core::Error::Option {
+                name: "rtsp_transport".to_owned(),
+                detail: "parsed but not consumed by this demuxer; refusing rather than \
+                         silently ignoring it".to_owned(),
+            });
+        }
+        if self.rtsp_flags != RtspFlags::empty() {
+            return Err(vaco_core::Error::Option {
+                name: "rtsp_flags".to_owned(),
+                detail: "parsed but not consumed by this demuxer; refusing rather than \
+                         silently ignoring it".to_owned(),
+            });
+        }
+        if self.reorder_queue_size != -1 {
+            return Err(vaco_core::Error::Option {
+                name: "reorder_queue_size".to_owned(),
+                detail: "parsed but not consumed by this demuxer; refusing rather than \
+                         silently ignoring it".to_owned(),
+            });
+        }
+        if self.buffer_size != -1 {
+            return Err(vaco_core::Error::Option {
+                name: "buffer_size".to_owned(),
+                detail: "parsed but not consumed by this demuxer; refusing rather than \
+                         silently ignoring it".to_owned(),
+            });
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -231,5 +305,37 @@ mod tests {
         assert_eq!(o.timeout, 0);
         assert_eq!(o.reorder_queue_size, -1);
         assert_eq!(o.buffer_size, -1);
+    }
+
+    /// Regression for `cargo xtask reachability-check`'s rule I:
+    /// `rtsp_transport`/`rtsp_flags`/`reorder_queue_size`/`buffer_size` are
+    /// parsed but this crate never reads any of them, so a non-default
+    /// value must refuse rather than silently doing nothing.
+    /// `listen_timeout` is the deliberate exception (see its own doc) and
+    /// must still validate at any value.
+    #[test]
+    fn validate_refuses_the_four_unconsumed_rtsp_options() {
+        let base = RtspOptions::default();
+        assert!(base.validate().is_ok());
+
+        let mut o = base.clone();
+        o.rtsp_transport = RtspTransportFlags::TCP;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.rtsp_flags = RtspFlags::PREFER_TCP;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.reorder_queue_size = 16;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.buffer_size = 65536;
+        assert!(o.validate().is_err());
+
+        let mut o = base;
+        o.listen_timeout = 30;
+        assert!(o.validate().is_ok());
     }
 }

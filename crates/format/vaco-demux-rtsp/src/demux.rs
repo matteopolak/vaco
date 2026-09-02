@@ -135,6 +135,7 @@ impl RtspDemuxer {
         env: &ProtocolEnv<'_>,
         _parsers: &dyn ParserProvider,
     ) -> Result<Self> {
+        opts.validate()?;
         let timeout = if opts.timeout > 0 {
             Some(Duration::from_micros(
                 u64::try_from(opts.timeout).unwrap_or(0),
@@ -143,6 +144,7 @@ impl RtspDemuxer {
             None
         };
         let mut session = RtspSession::connect(url, timeout, env)?;
+        session.set_user_agent(opts.user_agent.clone());
         let sdp_text = session.describe()?;
         let sdp = vaco_format_rtp::sdp::parse(&sdp_text)?;
 
@@ -237,7 +239,9 @@ impl RtspDemuxer {
             });
         }
 
-        session.play(None)?;
+        if !opts.initial_pause {
+            session.play(None)?;
+        }
 
         Ok(Self {
             session,
