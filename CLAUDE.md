@@ -128,9 +128,19 @@ recover. Never run them over a path you do not own. Need a clean tree to build
 against? Use a private worktree or a fresh clone in your scratchpad.
 
 **Never `git commit -F <msg> -- <pathspec>`.** That form commits the *working
-tree's* content for those paths, including other agents' edits. Use the
-private-index recipe in `planning/AGENT-CONSTRAINTS.md`, and finish it with both
-guards:
+tree's* content for those paths, including other agents' edits.
+
+**`git add` writes to the shared index, so never pair it with a bare `git
+commit`.** The index belongs to the whole checkout, not to you. A correctly
+scoped `add` followed by a bare `commit` ships *everything* staged, including
+whatever another agent left there — that has already published a stale README
+that silently reverted a page of corrected measurements, and the scoped `add`
+made it look safe. A scoped `add` does not imply a scoped `commit`. If you find
+someone's stale content staged, `git add` your path's correct working-tree
+content to clear it; that touches the index only.
+
+Use the private-index recipe in `planning/AGENT-CONSTRAINTS.md` instead — it
+never touches the shared index — and finish it with both guards:
 
 ```sh
 git update-ref refs/heads/main "$commit" "$BASE" || { echo "HEAD moved; restart"; exit 1; }
