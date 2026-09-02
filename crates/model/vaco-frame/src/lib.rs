@@ -229,6 +229,22 @@ pub struct MotionVector {
     pub src_y: i32,
 }
 
+/// SMPTE ST 2086 mastering display colour volume — the values H.264/HEVC's
+/// `mastering_display_colour_volume()` SEI, AV1's `metadata_hdr_mdcv()` OBU
+/// and MP4's `mdcv` box all carry, in three different fixed-point encodings
+/// of the identical spec (D7 forbids reading which of the three came first;
+/// each producer converts its own bitstream's raw units to this shared
+/// shape).
+///
+/// `primaries[0]`/`[1]`/`[2]` are **red, green, blue**, matching the
+/// reference's own `AVMasteringDisplayMetadata.display_primaries` layout —
+/// measured with real `ffprobe -show_frames` on an HDR10 fixture
+/// (`master-display=G(13250,34500)B(7500,3000)R(34000,16000)`, i.e.
+/// green/blue/red in that order on the command line and in the bitstream
+/// itself, per H.264/HEVC/AV1 Annex D's own `c == 0, 1, 2` semantics text)
+/// printing `red_x=34000/50000 ... green_x=13250/50000 ... blue_x=7500/50000`
+/// — red first. A producer reading a green/blue/red-ordered bitstream must
+/// permute into this red/green/blue order, not copy positionally.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MasteringDisplay {
     pub primaries: [[Rational; 2]; 3],
