@@ -678,6 +678,23 @@ impl ColourInfo {
 
 impl SampleEntry<'_> {
     /// The `colr` box's contents, if this entry's extensions carry one.
+    ///
+    /// `nclx`'s explicit `full_range` bit is unambiguous, but `nclc` (the
+    /// pre-`nclx` `QuickTime` spelling, which has no such bit at all) is
+    /// not: measured against three real `ffmpeg`-produced `nclc` fixtures
+    /// with the *same* primaries/transfer/matrix codes, the reference
+    /// reports `color_range` as `tv` for `prores_ks`, `pc` for `mjpeg`
+    /// (`yuvj420p`'s own full-range convention), and `unknown` for `v210`
+    /// -- i.e. an `nclc` box's implied range is a **per-codec decoder
+    /// policy**, not a fact this container-level accessor can state on its
+    /// own. `vaco-demux-mp4::track::codec_parameters` only ever sets
+    /// `VideoParameters::color.range` from an explicit `full_range = true`
+    /// for exactly this reason; mapping the bit's absence to `Limited`
+    /// unconditionally was tried and reverted after it broke the `mjpeg`
+    /// and `v210` cases while still not fixing `prores_ks` (whose own
+    /// `pix_fmt` this tree does not yet derive correctly either, a
+    /// separate `vaco-codec-prores` gap this accessor cannot see from
+    /// here).
     #[must_use]
     pub fn colour(&self) -> Option<ColourInfo> {
         let colr = self.extension_boxes().find(boxes::COLR)?;

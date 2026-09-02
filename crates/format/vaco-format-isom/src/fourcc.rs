@@ -140,6 +140,15 @@ pub mod boxes {
         ESDS = b"esds", DOPS = b"dOps", DFLA = b"dfLa", DAC3 = b"dac3", DEC3 = b"dec3",
         DMLP = b"dmlp", ALAC = b"alac", WAVE = b"wave", FRMA = b"frma", BTRT = b"btrt",
         PASP = b"pasp", COLR = b"colr", CLAP = b"clap", FIEL = b"fiel", GAMA = b"gama",
+        // `CHNL`/`SRAT`/`CHAN`: recognised, but no reader or writer in this
+        // tree consumes them yet -- a real, disclosed gap rather than an
+        // oversight. Checked 2026-09-02: several real multichannel
+        // `ffmpeg`-produced fixtures (AAC/ALAC at 5.1 and 7.1, explicit
+        // `-channel_layout`) never emitted a `chan` box at all, so channel
+        // *count* (already read from the sample entry's own
+        // `channelcount` field) has matched the reference on every file
+        // tried; a `chan` box stating a non-default channel *order* would
+        // not be caught by that and is the actual risk this leaves open.
         CHNL = b"chnl", SRAT = b"srat", CHAN = b"chan", GLBL = b"glbl", SINF = b"sinf",
         SCHM = b"schm", SCHI = b"schi", TENC = b"tenc", DVCC = b"dvcC", DVVC = b"dvvC",
         DVWC = b"dvwC", CLLI = b"clli", MDCV = b"mdcv", SMDM = b"SmDm", COLL = b"CoLL",
