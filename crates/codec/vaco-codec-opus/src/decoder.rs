@@ -7,7 +7,7 @@ use std::collections::VecDeque;
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::Decoder;
-use vaco_core::{Error, Result};
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -301,6 +301,19 @@ impl Decoder for OpusDecoder {
             .unwrap_or_else(|| ChannelLayout::unspecified(u32::from(head.channel_count)));
         let mut frame = Frame::alloc_audio(&mut self.budget, SampleFmt::F32P, layout, samples as u32, OUTPUT_SAMPLE_RATE)?;
         frame.pts = pts;
+        // The decode-side mirror of this session's audio-decoder duration
+        // audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/
+        // `-ac3`/`-aac`/`-mpegaudio`): `samples`/`OUTPUT_SAMPLE_RATE` were
+        // already in scope, but `frame.duration` was never set. Unrelated
+        // to, and does not touch, the known stereo-amplitude bug that
+        // keeps this crate deliberately unregistered
+        // (`xtask::reachability_check::ALLOW_ORPHAN_CRATE`) -- this only
+        // affects the frame's own duration metadata, not decoded sample
+        // values.
+        let time_base = Rational::new(1, i32::try_from(OUTPUT_SAMPLE_RATE).unwrap_or(1).max(1));
+        frame.duration = Timestamp::new(i64::try_from(samples).unwrap_or(0))
+            .to_duration(time_base)
+            .unwrap_or(Duration::ZERO);
         for (ch, data) in mixed.iter().enumerate() {
             let Some(mut plane) = frame.plane_mut(ch) else { continue };
             let Some(row) = plane.row_mut(0) else { continue };

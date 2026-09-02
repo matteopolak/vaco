@@ -29,7 +29,7 @@ use std::collections::VecDeque;
 use vaco_bitstream::BitReader;
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::Decoder;
-use vaco_core::{Error, Result};
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -287,7 +287,8 @@ impl Decoder for AacDecoder {
         let samples = channels.first().map_or(0, Vec::len) as u32;
         let layout = vaco_parse_aac::tables::layout_for_config(cfg.channel_configuration)
             .unwrap_or_else(|| ChannelLayout::unspecified(channels.len() as u32));
-        let mut frame = Frame::alloc_audio(&mut self.budget, SampleFmt::F32P, layout, samples, cfg.sample_rate)?;
+        let sample_rate = cfg.sample_rate;
+        let mut frame = Frame::alloc_audio(&mut self.budget, SampleFmt::F32P, layout, samples, sample_rate)?;
         for (ch, data) in channels.iter().enumerate() {
             let Some(mut plane) = frame.plane_mut(ch) else { continue };
             let Some(row) = plane.row_mut(0) else { continue };
@@ -300,6 +301,14 @@ impl Decoder for AacDecoder {
         }
         self.config = Some(cfg);
         frame.pts = packet.pts;
+        // The decode-side mirror of this session's audio-decoder duration
+        // audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/
+        // `-ac3`): `samples`/`sample_rate` were already in scope, but
+        // `frame.duration` was never set.
+        let time_base = Rational::new(1, i32::try_from(sample_rate).unwrap_or(1).max(1));
+        frame.duration = Timestamp::new(i64::from(samples))
+            .to_duration(time_base)
+            .unwrap_or(Duration::ZERO);
         self.pending.push_back(frame);
         Ok(())
     }
@@ -331,7 +340,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
     use super::AacDecoder;
     use vaco_codec_core::Decoder;
-    use vaco_core::Error;
+    use vaco_core::{Duration, Error};
     use vaco_frame::FrameData;
     use vaco_limits::{Budget, Limits};
     use vaco_packet::Packet;
@@ -417,6 +426,21 @@ mod tests {
         dec.send_packet(Some(&packet)).unwrap();
         let frame = dec.receive_frame().unwrap();
         assert_eq!(frame.pts, vaco_core::Timestamp::new(1234));
+    }
+
+    /// The decode-side mirror of this session's audio-decoder duration
+    /// audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/`-ac3`):
+    /// `samples`/`sample_rate` were already in scope where `frame.pts`
+    /// gets set, but `frame.duration` was never set.
+    #[test]
+    fn the_decoded_frames_duration_is_real_and_nonzero() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let bytes = adts_frame_with_minimal_raw_data_block();
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, &bytes).unwrap();
+        dec.send_packet(Some(&packet)).unwrap();
+        let frame = dec.receive_frame().unwrap();
+        assert_ne!(frame.duration, Duration::ZERO);
     }
 
     #[test]

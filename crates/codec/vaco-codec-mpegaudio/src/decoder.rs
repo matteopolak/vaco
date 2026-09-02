@@ -4,7 +4,7 @@
 use std::collections::VecDeque;
 
 use vaco_codec_core::Decoder;
-use vaco_core::{Error, Result};
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_format_mpegaudio::{Layer, MpegAudioHeader};
 use vaco_frame::{Frame, FrameData};
 use vaco_limits::{Budget, Limits};
@@ -97,8 +97,17 @@ impl Decoder for MpegAudioDecoder {
             _ => (0, 0),
         };
         let mut frame = trim_gapless(frame, skip_front, skip_back, &mut budget)?;
-        if frame_sample_count(&frame) > 0 {
+        let count = frame_sample_count(&frame);
+        if count > 0 {
             frame.pts = packet.pts;
+            // The decode-side mirror of this session's audio-decoder
+            // duration audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/
+            // `-vorbis`/`-ac3`/`-aac`): `count`/`header.sample_rate_hz()`
+            // were already in scope, but `frame.duration` was never set.
+            let time_base = Rational::new(1, i32::try_from(header.sample_rate_hz()).unwrap_or(1).max(1));
+            frame.duration = Timestamp::new(i64::from(count))
+                .to_duration(time_base)
+                .unwrap_or(Duration::ZERO);
             self.pending.push_back(frame);
         }
         Ok(())
@@ -185,6 +194,45 @@ fn trim_gapless(frame: Frame, front: u32, back: u32, budget: &mut Budget) -> Res
     out.time_base = frame.time_base;
     out.flags = frame.flags;
     Ok(out)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
+mod duration_tests {
+    use super::*;
+
+    /// Same bit layout `layer1`'s own tests use to build a synthetic
+    /// MPEG-1 Layer I header: an all-zero-allocation body decodes to
+    /// silence, but it is still a real, structurally valid frame this
+    /// crate's own `send_packet` header-detection logic accepts.
+    fn header_word(version: u32, layer: u32, bitrate: u32, rate: u32, mode: u32) -> u32 {
+        (0x7FFu32 << 21)
+            | (version << 19)
+            | (layer << 17)
+            | (1 << 16)
+            | (bitrate << 12)
+            | (rate << 10)
+            | (1 << 9) // padding bit, matches the 200-byte body length below
+            | (mode << 6)
+    }
+
+    /// The decode-side mirror of this session's audio-decoder duration
+    /// audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/`-ac3`/
+    /// `-aac`): `count`/`header.sample_rate_hz()` were already in scope
+    /// where `frame.pts` gets set, but `frame.duration` was never set.
+    #[test]
+    fn send_packet_sets_a_real_nonzero_frame_duration() {
+        let header_word = header_word(0b11, 0b11, 5, 0, 0b11); // MPEG-1 Layer I, mono, 44.1kHz
+        let mut bytes = header_word.to_be_bytes().to_vec();
+        bytes.extend(std::iter::repeat_n(0u8, 200));
+
+        let mut dec = MpegAudioDecoder::new(Limits::permissive());
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, &bytes).expect("packet");
+        dec.send_packet(Some(&packet)).expect("send_packet");
+        let frame = dec.receive_frame().expect("receive_frame");
+        assert_ne!(frame.duration, Duration::ZERO);
+    }
 }
 
 #[cfg(test)]

@@ -7,7 +7,7 @@
 use std::collections::VecDeque;
 
 use vaco_codec_core::Decoder;
-use vaco_core::{Error, Result};
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -312,6 +312,17 @@ impl VorbisDecoder {
                     ident.sample_rate,
                 )?;
                 frame.pts = pts;
+                // The decode-side mirror of this session's audio-decoder
+                // duration audit (vaco-codec-pcm/-adpcm/-simple-audio):
+                // `out_samples`/`ident.sample_rate` were already in scope
+                // here, but `frame.duration` was never set. Every real
+                // video decoder in this tree sets it; this crate's own
+                // decoder was one of the remaining audio-side exceptions
+                // (`vaco-codec-ac3`/`-aac`/`-mpegaudio`/`-opus` share it).
+                let time_base = Rational::new(1, i32::try_from(ident.sample_rate).unwrap_or(1).max(1));
+                frame.duration = Timestamp::new(i64::from(out_samples))
+                    .to_duration(time_base)
+                    .unwrap_or(Duration::ZERO);
                 for ch in 0..channels {
                     let tail = self.overlap.get(ch).map_or(&[][..], |o| o.tail.as_slice());
                     let pcm = windowed.get(ch).map_or(&[][..], Vec::as_slice);
@@ -555,6 +566,76 @@ mod tests {
         // flush() resets to the feeding state: NeedMoreInput, not Eof.
         dec.flush();
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    /// The decode-side mirror of this session's audio-decoder duration
+    /// audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`): `out_samples`/
+    /// `ident.sample_rate` were already in scope where `frame.pts` gets
+    /// set, but `frame.duration` never did. Encodes with this crate's own
+    /// encoder (self-contained, no external fixture needed) and checks
+    /// every decoded frame carries a real, non-zero duration matching its
+    /// own sample count at 48 kHz.
+    #[test]
+    fn every_decoded_frame_carries_a_real_nonzero_duration() {
+        use vaco_codec_core::Encoder as _;
+
+        let mut budget = Budget::new(Limits::permissive());
+        let mut enc = crate::VorbisEncoder::new(Limits::permissive());
+        let n = 4096usize;
+        let mut frame = Frame::alloc_audio(
+            &mut budget,
+            SampleFmt::F32P,
+            vaco_chlayout::ChannelLayout::MONO,
+            n as u32,
+            48_000,
+        )
+        .unwrap();
+        {
+            let mut plane = frame.plane_mut(0).unwrap();
+            let row = plane.row_mut(0).unwrap();
+            for i in 0..n {
+                let s = 0.1_f32 * ((i % 7) as f32 - 3.0);
+                if let Some(dst) = row.get_mut(i * 4..i * 4 + 4) {
+                    dst.copy_from_slice(&s.to_le_bytes());
+                }
+            }
+        }
+        frame.pts = vaco_core::Timestamp::new(0);
+        enc.send_frame(Some(&frame)).unwrap();
+        enc.send_frame(None).unwrap();
+        let mut packets = Vec::new();
+        while let Ok(p) = enc.receive_packet() {
+            packets.push(p);
+        }
+        assert!(!packets.is_empty(), "expected at least one encoded packet");
+
+        let extradata = enc.extradata();
+        let mut dec = VorbisDecoder::new(Limits::permissive());
+        dec.set_extradata(&extradata).unwrap();
+        for p in &packets {
+            dec.send_packet(Some(p)).unwrap();
+        }
+        dec.send_packet(None).unwrap();
+
+        let mut checked_any = false;
+        loop {
+            match dec.receive_frame() {
+                Ok(f) => {
+                    let vaco_frame::FrameData::Audio { samples, sample_rate, .. } = f.data else {
+                        panic!("audio frame");
+                    };
+                    let expected = vaco_core::Timestamp::new(i64::from(samples))
+                        .to_duration(vaco_core::Rational::new(1, i32::try_from(sample_rate).unwrap()))
+                        .unwrap();
+                    assert_ne!(expected, vaco_core::Duration::ZERO);
+                    assert_eq!(f.duration, expected);
+                    checked_any = true;
+                }
+                Err(Error::Eof) => break,
+                Err(e) => panic!("unexpected decode error: {e:?}"),
+            }
+        }
+        assert!(checked_any, "expected at least one decoded frame to check");
     }
 
     #[test]

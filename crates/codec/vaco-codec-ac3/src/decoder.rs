@@ -3,7 +3,7 @@
 //! [`vaco_frame::Frame`] from the decoded samples.
 
 use vaco_codec_core::Decoder;
-use vaco_core::{Error, MediaType, Result};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_ac3::tables::acmod_layout;
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
@@ -70,6 +70,14 @@ impl Decoder for Ac3Decoder {
             decoded.sample_rate,
         )?;
         frame.pts = pts;
+        // The decode-side mirror of this session's audio-decoder duration
+        // audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`):
+        // `samples`/`decoded.sample_rate` were already in scope, but
+        // `frame.duration` was never set.
+        let time_base = Rational::new(1, i32::try_from(decoded.sample_rate).unwrap_or(1).max(1));
+        frame.duration = Timestamp::new(i64::try_from(samples).unwrap_or(0))
+            .to_duration(time_base)
+            .unwrap_or(Duration::ZERO);
 
         let mut all_channels = decoded.channels;
         if let Some(lfe) = decoded.lfe {
@@ -160,6 +168,24 @@ mod tests {
         dec.send_packet(Some(&packet)).expect("send_packet");
         let frame = dec.receive_frame().expect("receive_frame");
         assert_eq!(frame.pts, vaco_core::Timestamp::new(12345));
+    }
+
+    /// The decode-side mirror of this session's audio-decoder duration
+    /// audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`):
+    /// `samples`/`decoded.sample_rate` were already in scope, but
+    /// `frame.duration` was never set.
+    #[test]
+    fn send_packet_sets_a_real_nonzero_frame_duration() {
+        let data = include_bytes!("../tests/fixtures/small_ac3.ac3");
+        let info = syncinfo::parse(data).expect("a valid ac3 header");
+        let first = &data[..info.frame_size];
+
+        let mut dec = (crate::DECODER_AC3.make)(Limits::permissive());
+        let packet = Packet::from_slice(&mut Budget::new(Limits::permissive()), first)
+            .expect("packet alloc");
+        dec.send_packet(Some(&packet)).expect("send_packet");
+        let frame = dec.receive_frame().expect("receive_frame");
+        assert_ne!(frame.duration, Duration::ZERO);
     }
 
     /// `send_packet(None)` must make `receive_frame` answer `Eof` once
