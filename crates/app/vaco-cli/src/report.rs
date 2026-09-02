@@ -60,7 +60,10 @@ pub fn wants_report<S: AsRef<std::ffi::OsStr>>(
     argv: &[S],
     ffreport_env: Option<&str>,
 ) -> Option<ReportRequest> {
-    if argv.iter().any(|a| a.as_ref() == std::ffi::OsStr::new("-report")) {
+    if argv
+        .iter()
+        .any(|a| a.as_ref() == std::ffi::OsStr::new("-report"))
+    {
         return Some(ReportRequest::default());
     }
     ffreport_env.map(parse_ffreport)
@@ -139,7 +142,10 @@ pub fn open<S: AsRef<std::ffi::OsStr>>(
         cmd.push(' ');
         cmd.push_str(&a.as_ref().to_string_lossy());
     }
-    writeln!(file, "vaco started on {y:04}-{mo:02}-{d:02} at {h:02}:{mi:02}:{s:02} UTC")?;
+    writeln!(
+        file,
+        "vaco started on {y:04}-{mo:02}-{d:02} at {h:02}:{mi:02}:{s:02} UTC"
+    )?;
     writeln!(file, "Report written to \"{name}\"")?;
     writeln!(file, "Log level: {level}")?;
     writeln!(file, "Command line:")?;
@@ -160,7 +166,9 @@ pub struct Tee<'a, A: Write> {
 
 impl<A: Write> core::fmt::Debug for Tee<'_, A> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("Tee").field("secondary", &self.secondary).finish_non_exhaustive()
+        f.debug_struct("Tee")
+            .field("secondary", &self.secondary)
+            .finish_non_exhaustive()
     }
 }
 

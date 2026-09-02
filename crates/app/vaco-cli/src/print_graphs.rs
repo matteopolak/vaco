@@ -141,14 +141,19 @@ pub fn render(complex_filters: &[String], format: &str) -> Result<RenderOutcome,
         let built = vaco_filter_graph::parse_and_build(text, &Filters).map_err(|e| {
             Diagnostic::new(
                 AvError::EINVAL,
-                vec![format!("Error configuring filter graph: {}", e.render(text))],
+                vec![format!(
+                    "Error configuring filter graph: {}",
+                    e.render(text)
+                )],
             )
         })?;
         write_graph(&mut tf, index, text, &built).map_err(|e| text_err(&e))?;
     }
     tf.close().map_err(|e| text_err(&e))?; // GRAPHS
     tf.close().map_err(|e| text_err(&e))?; // ROOT
-    tf.finish().map_err(|e| text_err(&e)).map(RenderOutcome::Graphs)
+    tf.finish()
+        .map_err(|e| text_err(&e))
+        .map(RenderOutcome::Graphs)
 }
 
 fn text_err(e: &vaco_core::Error) -> Diagnostic {
@@ -201,7 +206,10 @@ fn write_graph(
         tf.open(SectionId::FILTER)?;
         tf.str("filter_name", &node.filter)?;
         tf.int("nb_inputs", i64::try_from(inputs.len()).unwrap_or(i64::MAX))?;
-        tf.int("nb_outputs", i64::try_from(outputs.len()).unwrap_or(i64::MAX))?;
+        tf.int(
+            "nb_outputs",
+            i64::try_from(outputs.len()).unwrap_or(i64::MAX),
+        )?;
 
         tf.open(SectionId::FILTER_INPUTS)?;
         for row in &inputs {
@@ -253,7 +261,11 @@ fn write_graph(
 
 /// Every pad of `node` that is either connected to another node or left open
 /// at this graph's own input boundary, ordered by pad index.
-fn connected_inputs(built: &BuiltGraph, node: vaco_filter_core::NodeId, graph_index: usize) -> Vec<PadRow> {
+fn connected_inputs(
+    built: &BuiltGraph,
+    node: vaco_filter_core::NodeId,
+    graph_index: usize,
+) -> Vec<PadRow> {
     let mut rows: Vec<PadRow> = built
         .open_inputs
         .iter()
@@ -286,7 +298,11 @@ fn connected_inputs(built: &BuiltGraph, node: vaco_filter_core::NodeId, graph_in
 }
 
 /// The output-side mirror of [`connected_inputs`].
-fn connected_outputs(built: &BuiltGraph, node: vaco_filter_core::NodeId, graph_index: usize) -> Vec<PadRow> {
+fn connected_outputs(
+    built: &BuiltGraph,
+    node: vaco_filter_core::NodeId,
+    graph_index: usize,
+) -> Vec<PadRow> {
     let mut rows: Vec<PadRow> = built
         .open_outputs
         .iter()
@@ -375,7 +391,10 @@ mod tests {
         let text = String::from_utf8(bytes).unwrap();
 
         assert!(text.contains("[GRAPH]"), "{text}");
-        assert!(text.contains("description=[0:v]scale=160:120[v];[1:a]volume=0.5[a]"), "{text}");
+        assert!(
+            text.contains("description=[0:v]scale=160:120[v];[1:a]volume=0.5[a]"),
+            "{text}"
+        );
         assert!(text.contains("[GRAPH_INPUT]"), "{text}");
         assert!(text.contains("link_label=0:v"), "{text}");
         assert!(text.contains("link_label=1:a"), "{text}");
@@ -383,7 +402,10 @@ mod tests {
         assert!(text.contains("filter_name=scale"), "{text}");
         assert!(text.contains("filter_name=volume"), "{text}");
         assert!(text.contains("[GRAPH_OUTPUT]"), "{text}");
-        assert!(text.contains("link_label=v") || text.contains("name=v"), "{text}");
+        assert!(
+            text.contains("link_label=v") || text.contains("name=v"),
+            "{text}"
+        );
     }
 
     #[test]

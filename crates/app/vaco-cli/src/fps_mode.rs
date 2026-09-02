@@ -68,10 +68,10 @@
 
 use vaco_codec_core::VideoParameters;
 use vaco_core::{MediaType, Rational, Result, Timestamp};
+use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
 use vaco_filter_core::sched::Graph;
 use vaco_filter_core::{Filter as CoreFilter, FilterContext, FilterDesc, FilterFlags, Pad};
-use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_frame::Frame;
 use vaco_sched::spec::{FrameTap, PipelineSpec, SourceBind};
 
@@ -166,8 +166,8 @@ fn insert_cfr(
     } else {
         Rational::new(25, 1)
     };
-    let filter = vaco_filter_video_format::fps::Filter::from_rate(rate)
-        .map_err(|e| fps_mode_err(&e))?;
+    let filter =
+        vaco_filter_video_format::fps::Filter::from_rate(rate).map_err(|e| fps_mode_err(&e))?;
     attach_one_node(
         spec,
         frames,
@@ -257,19 +257,22 @@ fn attach_one_node(
     graph
         .set_source_format(source, format)
         .map_err(|e| fps_mode_err(&e.to_string()))?;
-    graph.configure().map_err(|e| fps_mode_err(&e.to_string()))?;
-    spec.add_filter(graph, &[SourceBind::new(frames, source, time_base)], &[sink])
-        .map_err(|e| fps_mode_err(&e.to_string()))?
-        .into_iter()
-        .next()
-        .ok_or_else(|| fps_mode_err("a configured -fps_mode graph produced no sink tap"))
+    graph
+        .configure()
+        .map_err(|e| fps_mode_err(&e.to_string()))?;
+    spec.add_filter(
+        graph,
+        &[SourceBind::new(frames, source, time_base)],
+        &[sink],
+    )
+    .map_err(|e| fps_mode_err(&e.to_string()))?
+    .into_iter()
+    .next()
+    .ok_or_else(|| fps_mode_err("a configured -fps_mode graph produced no sink tap"))
 }
 
 fn fps_mode_err(detail: &str) -> Diagnostic {
-    Diagnostic::new(
-        AvError::EINVAL,
-        vec![format!("-fps_mode: {detail}")],
-    )
+    Diagnostic::new(AvError::EINVAL, vec![format!("-fps_mode: {detail}")])
 }
 
 /// `vfr`: forward every frame whose timestamp differs from the last one

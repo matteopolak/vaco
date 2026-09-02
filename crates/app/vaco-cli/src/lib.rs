@@ -91,7 +91,6 @@ pub mod stats;
 use std::ffi::OsStr;
 use std::io::Write;
 
-
 pub use exit::{AvError, Diagnostic, ExitCode};
 pub use listing::VERSION;
 

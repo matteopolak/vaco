@@ -32,7 +32,10 @@ pub fn target<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Option<String> {
     let mut iter = argv.iter();
     while let Some(a) = iter.next() {
         if a.as_ref() == std::ffi::OsStr::new("-progress") {
-            found = iter.next().and_then(|v| v.as_ref().to_str()).map(str::to_owned);
+            found = iter
+                .next()
+                .and_then(|v| v.as_ref().to_str())
+                .map(str::to_owned);
         }
     }
     found

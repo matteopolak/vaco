@@ -673,7 +673,9 @@ fn validate_bounds(
     if to <= start {
         return Err(Diagnostic::opening(
             AvError::EINVAL,
-            vec![format!("[in#{index}] -to value smaller than -ss; aborting.")],
+            vec![format!(
+                "[in#{index}] -to value smaller than -ss; aborting."
+            )],
             "input",
             url,
         ));

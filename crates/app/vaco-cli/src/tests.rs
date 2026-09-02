@@ -67,7 +67,10 @@ fn audio(number: u64, channels: u64, default: bool) -> Vec<u8> {
     let mut a = synth::float(el::SAMPLINGFREQUENCY, 48_000.0);
     a.extend_from_slice(&synth::uint(el::CHANNELS, channels));
     let mut body = synth::element(el::AUDIO, &a);
-    body.extend_from_slice(&synth::element(el::CODECPRIVATE, vaco_format_fixtures::opus::HEAD_MONO));
+    body.extend_from_slice(&synth::element(
+        el::CODECPRIVATE,
+        vaco_format_fixtures::opus::HEAD_MONO,
+    ));
     track(number, 2, "A_OPUS", &body, default)
 }
 
@@ -869,13 +872,20 @@ fn filter_complex_map_label_produces_a_real_scaled_output_file() {
     );
 
     let bytes = std::fs::read(&out_path).expect("the run must have created a real file");
-    assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"), "not a PNG: {bytes:?}");
+    assert!(
+        bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
+        "not a PNG: {bytes:?}"
+    );
     // IHDR's width/height, big-endian u32 at fixed offsets — the structural
     // check that the `scale` filter actually ran rather than the muxer
     // silently reusing the 8x8 source.
     let width = u32::from_be_bytes([bytes[16], bytes[17], bytes[18], bytes[19]]);
     let height = u32::from_be_bytes([bytes[20], bytes[21], bytes[22], bytes[23]]);
-    assert_eq!((width, height), (4, 4), "scale=4:4 did not resize the output");
+    assert_eq!(
+        (width, height),
+        (4, 4),
+        "scale=4:4 did not resize the output"
+    );
 }
 
 #[test]
@@ -900,9 +910,8 @@ fn c_copy_on_a_complex_filtergraph_output_is_a_hard_error() {
     ]);
     assert_eq!(r.code.code(), 234, "{}", r.message());
     assert!(
-        r.message().contains(
-            "Streamcopy requested for output stream fed from a complex filtergraph."
-        ),
+        r.message()
+            .contains("Streamcopy requested for output stream fed from a complex filtergraph."),
         "{}",
         r.message()
     );
@@ -974,7 +983,10 @@ fn progress_writes_the_measured_key_value_block_to_its_target() {
     let f = fixture(&four_track_file());
     let dir = tempfile::tempdir().expect("tempdir");
     let progress_path = dir.path().join("progress.txt");
-    let progress_str = progress_path.to_str().expect("utf8 tempdir path").to_owned();
+    let progress_str = progress_path
+        .to_str()
+        .expect("utf8 tempdir path")
+        .to_owned();
 
     let r = go(&[
         "-i",
@@ -1009,7 +1021,10 @@ fn a_dropped_output_writes_no_progress_file() {
     let f = fixture(&four_track_file());
     let dir = tempfile::tempdir().expect("tempdir");
     let progress_path = dir.path().join("progress.txt");
-    let progress_str = progress_path.to_str().expect("utf8 tempdir path").to_owned();
+    let progress_str = progress_path
+        .to_str()
+        .expect("utf8 tempdir path")
+        .to_owned();
 
     let r = go(&[
         "-i",
@@ -1063,8 +1078,7 @@ fn attach_writes_a_real_attachment_a_muxer_can_write_and_a_prober_reads_back() {
     // Read it back through this crate's own demux path — the same contract
     // `an_actual_muxer_writes_bytes_a_prober_can_read_back` already checks
     // for streams, applied here to a real Matroska `AttachedFile`.
-    let opened =
-        crate::input::open(0, &out_str, &crate::input::OpenRequest::default()).unwrap();
+    let opened = crate::input::open(0, &out_str, &crate::input::OpenRequest::default()).unwrap();
     let attachment = opened
         .demuxer
         .streams()
@@ -1092,9 +1106,8 @@ fn a_missing_attach_file_is_the_measured_error() {
     ]);
     assert_eq!(r.code.code(), 254, "{}", r.message());
     assert!(
-        r.message().contains(
-            "Could not open attachment file /nonexistent/vaco-cli-attach-test.txt."
-        ),
+        r.message()
+            .contains("Could not open attachment file /nonexistent/vaco-cli-attach-test.txt."),
         "{}",
         r.message()
     );

@@ -94,6 +94,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use vaco_cli_core::{MatchCtx, MetadataSpecifier, StreamInfo};
+use vaco_codec_core::CodecId;
 use vaco_core::{Disposition, Error, MediaType, Result};
 use vaco_expr::Bindings;
 use vaco_filter_core::LinkFormat;
@@ -102,7 +103,6 @@ use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::{
     Muxer, Stream, dihedral_transform_from_angle_and_flips, dihedral_transform_from_matrix,
 };
-use vaco_codec_core::CodecId;
 use vaco_pixfmt::PixFmt;
 use vaco_sched::{Driver, Finish, PipelineSpec, SourceBind};
 
@@ -1159,8 +1159,8 @@ fn check_codecs(
                     // The reference names the codec it resolved and could not
                     // encode (`codec jpegxl`), and `none` only when it
                     // resolved nothing at all.
-                    let codec = default_codec_for(format, s.media, &out.url)
-                        .map_or("none", CodecId::name);
+                    let codec =
+                        default_codec_for(format, s.media, &out.url).map_or("none", CodecId::name);
                     return Err(encoder_error(
                         out,
                         s,
@@ -3182,7 +3182,12 @@ mod tests {
         }];
         let chains = bsf_options_of(&c, &o, &streams).unwrap();
         assert_eq!(
-            chains.first().unwrap().iter().map(|b| b.name).collect::<Vec<_>>(),
+            chains
+                .first()
+                .unwrap()
+                .iter()
+                .map(|b| b.name)
+                .collect::<Vec<_>>(),
             vec!["h264_mp4toannexb", "dump_extra"]
         );
     }

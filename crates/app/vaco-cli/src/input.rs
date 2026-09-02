@@ -118,7 +118,10 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
         *probe.detect(&mut io, Some(url), None)?.desc
     };
 
-    let inner = if desc.flags.contains(vaco_format_core::FormatFlags::NEEDNUMBER) {
+    let inner = if desc
+        .flags
+        .contains(vaco_format_core::FormatFlags::NEEDNUMBER)
+    {
         // `img_%03d.png` is a pattern, not an openable file, so
         // `opener(url)` would fail before the demuxer ever got a say.
         // `DemuxerDesc::open`'s frozen signature still needs *some* source,
@@ -258,10 +261,8 @@ mod tests {
     /// `bind_url` path instead.
     #[test]
     fn an_image2_pattern_forced_by_format_opens_every_matching_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "vaco-cli-input-test-image2-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("vaco-cli-input-test-image2-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("img001.png"), b"one").unwrap();

@@ -599,7 +599,10 @@ mod tests {
         // `Options::unimplemented` is what `execute` checks to fail loudly.
         assert_eq!(p(&["-c", "h264_foo", "a.mp4"]).unimplemented, Some("c"));
         assert_eq!(p(&["-codec", "h264_foo", "a.mp4"]).unimplemented, Some("c"));
-        assert_eq!(p(&["-cpucount", "1", "a.mp4"]).unimplemented, Some("cpucount"));
+        assert_eq!(
+            p(&["-cpucount", "1", "a.mp4"]).unimplemented,
+            Some("cpucount")
+        );
     }
 
     /// Every name in `UNIMPLEMENTED` must produce its own message from

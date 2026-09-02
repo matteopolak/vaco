@@ -2199,6 +2199,7 @@ dependencies = [
  "vaco-filter-video-format",
  "vaco-format-core",
  "vaco-format-fixtures",
+ "vaco-format-nalu",
  "vaco-frame",
  "vaco-io",
  "vaco-limits",
@@ -3239,6 +3240,7 @@ version = "0.1.0"
 dependencies = [
  "proptest",
  "vaco-bitstream",
+ "vaco-chlayout",
  "vaco-codec-core",
  "vaco-color",
  "vaco-core",
@@ -4136,6 +4138,7 @@ dependencies = [
  "vaco-format-core",
  "vaco-io",
  "vaco-limits",
+ "vaco-sampfmt",
 ]
 
 [[package]]
@@ -4481,6 +4484,7 @@ dependencies = [
  "vaco-core",
  "vaco-demux-flv",
  "vaco-format-core",
+ "vaco-format-nalu",
  "vaco-io",
  "vaco-limits",
  "vaco-packet",

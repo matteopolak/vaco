@@ -205,7 +205,8 @@ fn describe(opts: &SimpleGraphOptions, media: MediaType) -> Option<String> {
 /// each mapping was measured against real `ffmpeg`.
 fn rotate_filter_text(transform: vaco_format_core::DisplayTransform) -> &'static str {
     use vaco_format_core::DisplayTransform::{
-        Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip, TransposeCclockFlip, Vflip,
+        Hflip, Rotate180, TransposeCclock, TransposeCclockFlip, TransposeClock, TransposeClockFlip,
+        Vflip,
     };
     match transform {
         Hflip => "hflip",
@@ -284,8 +285,14 @@ pub fn build(
     accepted_pix_fmts: &[PixFmt],
     accepted_sample_fmts: &[SampleFmt],
 ) -> Result<SimpleGraph, String> {
-    let text = describe(opts, media)
-        .unwrap_or_else(|| if media == MediaType::Audio { "anull" } else { "null" }.to_owned());
+    let text = describe(opts, media).unwrap_or_else(|| {
+        if media == MediaType::Audio {
+            "anull"
+        } else {
+            "null"
+        }
+        .to_owned()
+    });
 
     let registry = Filters;
     let mut built = vaco_filter_graph::parse_and_build(&text, &registry)
@@ -301,8 +308,14 @@ pub fn build(
     }
 
     let format = match media {
-        MediaType::Video => video_link(video.ok_or("a video graph needs video parameters")?, time_base),
-        MediaType::Audio => audio_link(audio.ok_or("an audio graph needs audio parameters")?, time_base),
+        MediaType::Video => video_link(
+            video.ok_or("a video graph needs video parameters")?,
+            time_base,
+        ),
+        MediaType::Audio => audio_link(
+            audio.ok_or("an audio graph needs audio parameters")?,
+            time_base,
+        ),
         _ => return Err("simple filtergraphs are only built for video and audio".to_owned()),
     };
     let src_formats = match &format {
@@ -317,7 +330,11 @@ pub fn build(
             layout,
             ..
         } => NodeFormats {
-            outputs: vec![FormatSet::audio_exact(*format, *sample_rate, layout.clone())],
+            outputs: vec![FormatSet::audio_exact(
+                *format,
+                *sample_rate,
+                layout.clone(),
+            )],
             label: "in".to_owned(),
             ..NodeFormats::default()
         },
@@ -601,11 +618,7 @@ mod tests {
             &[],
         )
         .unwrap();
-        let LinkFormat::Audio {
-            layout,
-            format,
-            ..
-        } = built.graph.sink_format(built.sink).unwrap()
+        let LinkFormat::Audio { layout, format, .. } = built.graph.sink_format(built.sink).unwrap()
         else {
             panic!("expected an audio link");
         };

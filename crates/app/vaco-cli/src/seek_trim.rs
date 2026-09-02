@@ -63,9 +63,7 @@
 //! at a GOP boundary, not a wrong bound.
 
 use vaco_core::{Duration, Error, MediaType, Result, Timestamp};
-use vaco_format_core::{
-    Chapter, Demuxer, Program, SeekFlags, SeekTarget, Stream,
-};
+use vaco_format_core::{Chapter, Demuxer, Program, SeekFlags, SeekTarget, Stream};
 use vaco_limits::Limits;
 use vaco_packet::Packet;
 
@@ -166,7 +164,9 @@ impl SeekTrim {
             .streams()
             .iter()
             .find(|s| s.index == pkt.stream_index)?;
-        pkt.pts.to_duration(stream.time_base).map(Duration::as_micros)
+        pkt.pts
+            .to_duration(stream.time_base)
+            .map(Duration::as_micros)
     }
 }
 
@@ -205,7 +205,11 @@ impl Demuxer for SeekTrim {
         self.inner.duration()
     }
 
-    fn reconfigure(&mut self, limits: &Limits, opts: &vaco_format_core::FormatOptions) -> Result<()> {
+    fn reconfigure(
+        &mut self,
+        limits: &Limits,
+        opts: &vaco_format_core::FormatOptions,
+    ) -> Result<()> {
         self.inner.reconfigure(limits, opts)
     }
 
@@ -223,7 +227,11 @@ fn reference_stream(streams: &[Stream]) -> Option<&Stream> {
     streams
         .iter()
         .find(|s| s.media_type() == Some(MediaType::Video))
-        .or_else(|| streams.iter().find(|s| s.media_type() == Some(MediaType::Audio)))
+        .or_else(|| {
+            streams
+                .iter()
+                .find(|s| s.media_type() == Some(MediaType::Audio))
+        })
         .or_else(|| streams.first())
 }
 
@@ -336,7 +344,9 @@ mod tests {
         // -ss 1 -to 3: stop at the file's own 3s mark, i.e. one packet after
         // the seek target (2s of output), matching the reference's own
         // `-ss 2 -to 5` => `time=00:00:03.00` measurement in `crate::cli`.
-        let fake = Box::new(Fake::new(vec![0, 1_000_000, 2_000_000, 3_000_000, 4_000_000]));
+        let fake = Box::new(Fake::new(vec![
+            0, 1_000_000, 2_000_000, 3_000_000, 4_000_000,
+        ]));
         let mut wrapped = SeekTrim::wrap(
             fake,
             Some(Duration::from_micros(1_000_000)),
@@ -348,7 +358,9 @@ mod tests {
 
     #[test]
     fn t_is_relative_to_ss() {
-        let fake = Box::new(Fake::new(vec![0, 1_000_000, 2_000_000, 3_000_000, 4_000_000]));
+        let fake = Box::new(Fake::new(vec![
+            0, 1_000_000, 2_000_000, 3_000_000, 4_000_000,
+        ]));
         let mut wrapped = SeekTrim::wrap(
             fake,
             Some(Duration::from_micros(1_000_000)),
@@ -407,6 +419,10 @@ mod tests {
         let fake = Box::new(Fake::new(vec![0]));
         let mut wrapped = SeekTrim::wrap(fake, Some(Duration::ZERO), None).unwrap();
         let limits = Limits::permissive();
-        assert!(wrapped.reconfigure(&limits, &FormatOptions::default()).is_ok());
+        assert!(
+            wrapped
+                .reconfigure(&limits, &FormatOptions::default())
+                .is_ok()
+        );
     }
 }

@@ -294,31 +294,32 @@ fn write_codec_impl_listing<W: Write>(w: &mut W, which: &str) -> std::io::Result
         vaco_core::MediaType::Data => 'D',
         vaco_core::MediaType::Attachment => 'T',
     };
-    let row = |name: &str, long_name: &str, media: vaco_core::MediaType, caps: vaco_codec_core::Caps| {
-        let mut flags = String::with_capacity(6);
-        flags.push(media_letter(media));
-        flags.push(if caps.contains(vaco_codec_core::Caps::FRAME_THREADS) {
-            'F'
-        } else {
-            '.'
-        });
-        flags.push(if caps.contains(vaco_codec_core::Caps::SLICE_THREADS) {
-            'S'
-        } else {
-            '.'
-        });
-        flags.push(if caps.contains(vaco_codec_core::Caps::EXPERIMENTAL) {
-            'X'
-        } else {
-            '.'
-        });
-        flags.push('.'); // draw_horiz_band: not a concept this build models.
-        flags.push('.'); // direct rendering method 1: likewise.
-        let mut line = format!(" {flags} ");
-        pad_field(&mut line, name, 20);
-        line.push_str(long_name);
-        line
-    };
+    let row =
+        |name: &str, long_name: &str, media: vaco_core::MediaType, caps: vaco_codec_core::Caps| {
+            let mut flags = String::with_capacity(6);
+            flags.push(media_letter(media));
+            flags.push(if caps.contains(vaco_codec_core::Caps::FRAME_THREADS) {
+                'F'
+            } else {
+                '.'
+            });
+            flags.push(if caps.contains(vaco_codec_core::Caps::SLICE_THREADS) {
+                'S'
+            } else {
+                '.'
+            });
+            flags.push(if caps.contains(vaco_codec_core::Caps::EXPERIMENTAL) {
+                'X'
+            } else {
+                '.'
+            });
+            flags.push('.'); // draw_horiz_band: not a concept this build models.
+            flags.push('.'); // direct rendering method 1: likewise.
+            let mut line = format!(" {flags} ");
+            pad_field(&mut line, name, 20);
+            line.push_str(long_name);
+            line
+        };
 
     if is_encoder {
         let mut rows: Vec<&'static vaco_codec_core::EncoderDesc> =
@@ -1720,7 +1721,11 @@ mod tests {
         let d = text("decoders");
         assert!(d.starts_with("Decoders:\n"), "{d}");
         let d_rows: Vec<&str> = d.lines().skip(10).collect();
-        assert_eq!(d_rows.len(), vaco_registry::decoders().len(), "one row each");
+        assert_eq!(
+            d_rows.len(),
+            vaco_registry::decoders().len(),
+            "one row each"
+        );
         for r in &d_rows {
             assert!(r.starts_with(' '), "{r:?}");
         }
@@ -1728,7 +1733,11 @@ mod tests {
         let e = text("encoders");
         assert!(e.starts_with("Encoders:\n"), "{e}");
         let e_rows: Vec<&str> = e.lines().skip(10).collect();
-        assert_eq!(e_rows.len(), vaco_registry::encoders().len(), "one row each");
+        assert_eq!(
+            e_rows.len(),
+            vaco_registry::encoders().len(),
+            "one row each"
+        );
     }
 
     /// Both of these used to assert the listing *stopped* at its header.

@@ -140,9 +140,10 @@ pub fn guard(url: &str, policy: OverwritePolicy) -> Result<(), Diagnostic> {
             eprint!("File '{url}' already exists. Overwrite? [y/N] ");
             let _ = std::io::stderr().flush();
             let mut line = String::new();
-            let answered_yes = stdin.lock().read_line(&mut line).is_ok_and(|_| {
-                matches!(line.trim().chars().next(), Some('y' | 'Y'))
-            });
+            let answered_yes = stdin
+                .lock()
+                .read_line(&mut line)
+                .is_ok_and(|_| matches!(line.trim().chars().next(), Some('y' | 'Y')));
             if answered_yes {
                 Ok(())
             } else {
@@ -153,11 +154,7 @@ pub fn guard(url: &str, policy: OverwritePolicy) -> Result<(), Diagnostic> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
     use vaco_cli_core::split::CommandLine;
@@ -203,7 +200,8 @@ mod tests {
 
     #[test]
     fn guard_refuses_an_existing_destination_under_never() {
-        let path = std::env::temp_dir().join(format!("vaco-overwrite-exists-{}.tmp", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("vaco-overwrite-exists-{}.tmp", std::process::id()));
         std::fs::write(&path, b"x").unwrap();
         let d = guard(path.to_str().unwrap(), OverwritePolicy::Never).unwrap_err();
         assert_eq!(d.exit, crate::exit::ExitCode::OK);

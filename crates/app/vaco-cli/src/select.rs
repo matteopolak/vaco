@@ -599,10 +599,7 @@ mod tests {
         assert!(!sel.dropped);
         assert_eq!(
             sel.picks,
-            vec![
-                StreamPick::demuxed(0, 0),
-                StreamPick::demuxed(0, 2),
-            ]
+            vec![StreamPick::demuxed(0, 0), StreamPick::demuxed(0, 2),]
         );
     }
 
@@ -619,7 +616,11 @@ mod tests {
                 vec![0, 0],
             )];
             let sel = resolve_simple(&f, &[], Suppressed::default(), ALL).unwrap();
-            assert_eq!(sel.picks.first().map(|p| p.as_demuxed().unwrap().1), Some(want), "{w}x{h}");
+            assert_eq!(
+                sel.picks.first().map(|p| p.as_demuxed().unwrap().1),
+                Some(want),
+                "{w}x{h}"
+            );
         }
     }
 
@@ -708,7 +709,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            sel.picks.iter().map(|p| p.as_demuxed().unwrap().1).collect::<Vec<_>>(),
+            sel.picks
+                .iter()
+                .map(|p| p.as_demuxed().unwrap().1)
+                .collect::<Vec<_>>(),
             vec![2, 3, 0, 1]
         );
     }
@@ -724,7 +728,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            sel.picks.iter().map(|p| p.as_demuxed().unwrap().1).collect::<Vec<_>>(),
+            sel.picks
+                .iter()
+                .map(|p| p.as_demuxed().unwrap().1)
+                .collect::<Vec<_>>(),
             vec![0, 1, 2, 3]
         );
         // And on its own it just removes.
@@ -736,7 +743,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            sel.picks.iter().map(|p| p.as_demuxed().unwrap().1).collect::<Vec<_>>(),
+            sel.picks
+                .iter()
+                .map(|p| p.as_demuxed().unwrap().1)
+                .collect::<Vec<_>>(),
             vec![0, 1, 3]
         );
     }
@@ -763,7 +773,10 @@ mod tests {
         let sel = resolve_simple(&multi(), &[map("0")], blocked, ALL).unwrap();
         assert!(!sel.dropped, "a match that -vn then filters still counts");
         assert_eq!(
-            sel.picks.iter().map(|p| p.as_demuxed().unwrap().1).collect::<Vec<_>>(),
+            sel.picks
+                .iter()
+                .map(|p| p.as_demuxed().unwrap().1)
+                .collect::<Vec<_>>(),
             vec![2, 3]
         );
     }

@@ -76,13 +76,13 @@ use vaco_cli_core::map::MapSpec;
 use vaco_cli_core::{MatchCtx, StreamInfo};
 use vaco_codec_core::CodecParameters;
 use vaco_core::{MediaType, Rational};
-use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
 use vaco_filter_core::LinkFormat;
+use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
 use vaco_sched::spec::{PipelineSpec, SourceBind};
 use vaco_sched::{FrameTap, InputRef};
 
-use vaco_registry::Filters;
 use crate::select::InputStreams;
+use vaco_registry::Filters;
 
 /// One `-filter_complex`/`-lavfi` **labelled** output pad, as `-map [label]`
 /// can see it before any real decode happens: label and media type only,
@@ -370,7 +370,10 @@ pub fn build_and_attach(
 
         let (formats, format) = match open.media {
             MediaType::Video => {
-                let v = p.video.as_ref().ok_or("a video pad needs video parameters")?;
+                let v = p
+                    .video
+                    .as_ref()
+                    .ok_or("a video pad needs video parameters")?;
                 let f = crate::filtergraph::video_link(v, time_base);
                 let vaco_filter_core::LinkFormat::Video { format, .. } = &f else {
                     unreachable!("video_link always returns LinkFormat::Video")
@@ -385,7 +388,10 @@ pub fn build_and_attach(
                 )
             }
             MediaType::Audio => {
-                let a = p.audio.as_ref().ok_or("an audio pad needs audio parameters")?;
+                let a = p
+                    .audio
+                    .as_ref()
+                    .ok_or("an audio pad needs audio parameters")?;
                 let f = crate::filtergraph::audio_link(a, time_base);
                 let vaco_filter_core::LinkFormat::Audio {
                     format,
@@ -398,7 +404,11 @@ pub fn build_and_attach(
                 };
                 (
                     NodeFormats {
-                        outputs: vec![FormatSet::audio_exact(*format, *sample_rate, layout.clone())],
+                        outputs: vec![FormatSet::audio_exact(
+                            *format,
+                            *sample_rate,
+                            layout.clone(),
+                        )],
                         label: "in".to_owned(),
                         ..NodeFormats::default()
                     },
