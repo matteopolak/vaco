@@ -26,6 +26,16 @@ pub struct AlacDecoder {
     bit_depth: u8,
     frame_length: u32,
     layout_hint: Option<ChannelLayout>,
+    /// `Error::Eof` once draining starts and `pending` is empty, rather than
+    /// `NeedMoreInput` forever. Before this, `send_packet(None)` was a
+    /// no-op, so `receive_frame` kept answering `NeedMoreInput` after end of
+    /// stream and the scheduler's `ProgressGuard` eventually killed the run
+    /// with `NoProgress` ("progress limit exceeded") instead of a clean
+    /// `Eof` — measured end to end via `vaco -i <alac-in-mkv> -f null -`,
+    /// which hit exactly that livelock before this field existed. Same fix
+    /// `vaco-codec-flac`'s decoder already carries (that crate's own
+    /// `draining` field doc names this crate as sharing the bug).
+    draining: bool,
 }
 
 impl AlacDecoder {
@@ -38,6 +48,7 @@ impl AlacDecoder {
             bit_depth: 16,
             frame_length: 4096,
             layout_hint: None,
+            draining: false,
         }
     }
 }
@@ -45,6 +56,7 @@ impl AlacDecoder {
 impl Decoder for AlacDecoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         let Some(packet) = packet else {
+            self.draining = true;
             return Ok(());
         };
         let mut budget = Budget::new(self.limits.clone());
@@ -62,11 +74,16 @@ impl Decoder for AlacDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(Error::NeedMoreInput)
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
         self.pending.clear();
+        self.draining = false;
     }
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
@@ -125,6 +142,35 @@ mod tests {
         assert_eq!(n, samples.len() as u32);
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
 
+        dec.flush();
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    /// `send_packet(None)` must switch `receive_frame` from `NeedMoreInput`
+    /// to `Eof` once every buffered frame has drained — the exact contract
+    /// `vaco-sched`'s drain loop polls on to know a decoder is truly done.
+    /// Before `draining` existed, `send_packet(None)` was a no-op and this
+    /// kept answering `NeedMoreInput` forever, which the scheduler's
+    /// `ProgressGuard` eventually reported as `NoProgress`
+    /// ("progress limit exceeded") instead of a clean end of stream —
+    /// reproduced end to end via `vaco -i <alac-in-mkv> -f null -`.
+    #[test]
+    fn draining_answers_eof_once_empty_not_need_more_input_forever() {
+        let samples: Vec<i32> = (0..256).map(|i| (i % 100) - 50).collect();
+        let bytes = encode_mono_packet(&samples, 44100);
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, &bytes).unwrap();
+
+        let mut dec = AlacDecoder::new(Limits::permissive());
+        dec.send_packet(Some(&packet)).unwrap();
+        dec.send_packet(None).unwrap();
+        // The one already-buffered frame still comes out first.
+        assert!(dec.receive_frame().is_ok());
+        // Only now, with nothing buffered and draining under way, is it Eof.
+        assert!(matches!(dec.receive_frame(), Err(Error::Eof)));
+        assert!(matches!(dec.receive_frame(), Err(Error::Eof)));
+
+        // flush() resets to the feeding state: NeedMoreInput, not Eof.
         dec.flush();
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
     }

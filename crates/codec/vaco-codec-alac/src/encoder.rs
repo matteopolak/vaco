@@ -23,6 +23,19 @@ pub struct AlacEncoder {
     /// this *before* the first [`Encoder::send_frame`], the same gap
     /// `vaco-codec-flac`'s own `prime_audio` closes for `STREAMINFO`.
     cookie: Option<AlacSpecificConfig>,
+    /// `Error::Eof` once draining starts and `pending` is empty, rather than
+    /// `NeedMoreInput` forever. Before this, `send_frame(None)` never
+    /// updated any state to say draining had begun, so `receive_packet`
+    /// kept answering `NeedMoreInput` after end of stream and the
+    /// scheduler's `ProgressGuard` eventually killed the run with
+    /// `NoProgress` ("progress limit exceeded") instead of a clean `Eof` —
+    /// measured end to end via `vaco -i in.wav -c:a alac out.mkv`, which hit
+    /// exactly this livelock (on the *encode* side, not the decode side
+    /// this crate's `AlacDecoder` shares the same fix for) before this
+    /// field existed. Same shape `vaco-codec-flac`'s decoder already
+    /// carries, applied to `Encoder::send_frame`/`receive_packet` instead of
+    /// `Decoder::send_packet`/`receive_frame`.
+    draining: bool,
 }
 
 impl AlacEncoder {
@@ -32,6 +45,7 @@ impl AlacEncoder {
             limits,
             pending: VecDeque::new(),
             cookie: None,
+            draining: false,
         }
     }
 }
@@ -86,6 +100,7 @@ impl Encoder for AlacEncoder {
 
     fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
         let Some(frame) = frame else {
+            self.draining = true;
             return Ok(());
         };
         let mut budget = Budget::new(self.limits.clone());
@@ -102,11 +117,16 @@ impl Encoder for AlacEncoder {
     }
 
     fn receive_packet(&mut self) -> Result<Packet> {
-        self.pending.pop_front().ok_or(Error::NeedMoreInput)
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
         self.pending.clear();
+        self.draining = false;
     }
 
     /// Mirrors `frame_codec::bytes_per_sample`'s own accepted set. Same
@@ -167,6 +187,32 @@ mod tests {
         assert!(matches!(enc.receive_packet(), Err(Error::NeedMoreInput)));
     }
 
+    /// `send_frame(None)` must switch `receive_packet` from `NeedMoreInput`
+    /// to `Eof` once every buffered packet has drained — the exact contract
+    /// `vaco-sched`'s drain loop polls on. Before `draining` existed,
+    /// `send_frame(None)` never recorded that draining had begun, so
+    /// `receive_packet` kept answering `NeedMoreInput` forever and the
+    /// scheduler's `ProgressGuard` eventually reported `NoProgress`
+    /// ("progress limit exceeded") instead of a clean end of stream —
+    /// reproduced end to end via `vaco -i in.wav -c:a alac out.mkv`.
+    #[test]
+    fn draining_answers_eof_once_empty_not_need_more_input_forever() {
+        let samples: Vec<i32> = (0..512).map(|i| (i % 200) - 100).collect();
+        let frame = mono_frame(&samples);
+        let mut enc = AlacEncoder::new(Limits::permissive());
+        enc.send_frame(Some(&frame)).unwrap();
+        enc.send_frame(None).unwrap();
+        // The one already-buffered packet still comes out first.
+        assert!(enc.receive_packet().is_ok());
+        // Only now, with nothing buffered and draining under way, is it Eof.
+        assert!(matches!(enc.receive_packet(), Err(Error::Eof)));
+        assert!(matches!(enc.receive_packet(), Err(Error::Eof)));
+
+        // flush() resets to the feeding state: NeedMoreInput, not Eof.
+        enc.flush();
+        assert!(matches!(enc.receive_packet(), Err(Error::NeedMoreInput)));
+    }
+
     #[test]
     fn encoded_packet_decodes_back_through_the_decoder() {
         let samples: Vec<i32> = (0..1024).map(|i| ((i * 3) % 400) - 200).collect();
@@ -181,10 +227,13 @@ mod tests {
         let vaco_frame::FrameData::Audio { planes, .. } = &decoded.data else {
             panic!("audio frame");
         };
+        // 16-bit input: `frame_codec::decode` matches its output `SampleFmt`
+        // to the packet's actual bit depth (S16P here), not always S32P —
+        // see that function's doc for why always-S32P was a real bug.
         let row = planes.first().unwrap().data.as_slice();
         let got: Vec<i32> = row
-            .chunks_exact(4)
-            .map(|c| i32::from_le_bytes(c.try_into().unwrap()))
+            .chunks_exact(2)
+            .map(|c| i32::from(i16::from_le_bytes(c.try_into().unwrap())))
             .collect();
         assert_eq!(got, samples);
     }
