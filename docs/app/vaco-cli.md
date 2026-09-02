@@ -540,6 +540,78 @@ stderr (observed twice per run, an artifact of the reference's own internal
 structure; this prints it once). `print_graphs.rs` matches the non-fatal
 part of that exactly.
 
+### CL-21: `-fps_mode`, `-enc_time_base`, and (still refused) `-frame_drop_threshold`
+
+Two of the three options this work package names are implemented; the third
+is still refused. Read `crate::fps_mode`'s and `crate::enc_time_base`'s own
+module docs for the full account — this is the summary.
+
+**`-fps_mode`** (`fps_mode.rs`) is real, four-way (not five-way — see below),
+video-only. `passthrough` needs no pipeline change (nothing in this build
+duplicates or drops a frame without it, so it is already what happens).
+`cfr` and `vfr` are real filter nodes inserted between the decode leg and the
+encoder with `PipelineSpec::add_filter`, built directly against
+`vaco-filter-core`'s `Graph` rather than through `-vf`'s text grammar — the
+reference's own `-fps_mode` is CLI-level logic (`ffmpeg.c`'s
+`do_video_out`), not a `libavfilter` graph node, so giving either a name in a
+filter crate that otherwise mirrors real `libavfilter` filters one to one
+would be a false claim. `cfr` reuses the already-real, already-tested
+zero-order-hold state machine behind `-vf fps=<rate>`
+(`vaco_filter_video_format::fps::Filter::from_rate`, exposed `pub` for this,
+targeting the stream's own declared rate since `-r` is not implemented in
+this build) — a defensible *shape* match, not a byte-identical reproduction
+of the reference's own separate duplicate/drop decision. `vfr` is new
+(`VfrDedup`): forward every frame whose timestamp differs from the last one
+emitted, drop one that does not — a direct transcription of the design
+table's own rule.
+
+Measured directly against `ffmpeg 9.0.1` (D6): `-fps_mode drop` is
+**refused** by the reference itself (`Invalid value drop specified for
+fps_mode of #0:0.`), so the accepted value set is `passthrough`/`cfr`/`vfr`/
+`auto`, not five values including `drop`.
+
+**`-enc_time_base`** (`enc_time_base.rs`) accepts `0` (media default:
+`1/frame_rate` video, `1/sample_rate` audio), `demux`, `filter`, or an
+explicit rational, and resolves to the rational `PipelineSpec::add_encoder`
+uses. Measured directly: the reference's own `-h full` documents `-1` as
+"match source time base", and the reference **refuses** it outright
+(`Invalid time base: -1`) — a real discrepancy between the reference's
+generated help and its actual behaviour on this build, resolved per D17 (the
+implementation matches the measured behaviour, `-1` included, not the
+`--help` text). `demux` and `filter` resolve identically in this build: no
+per-stream leg here tracks a filtergraph's own output time base separately
+from the demuxed stream's, so there is nothing distinct for `filter` to name
+yet.
+
+**`-frame_drop_threshold`** is still refused (`cli.rs`'s
+`refuse_unimplemented_options`, `GLOBAL`). It tunes exactly the reference's
+own `do_video_out` drop decision — how far *behind* schedule a frame may be
+before `cfr`/`vfr` drops it rather than duplicating/emitting it — a
+parameter neither `vaco_filter_video_format::fps::Filter` nor `VfrDedup`
+takes. Accepting the option without a real consumer would repeat exactly the
+defect `-ar` had before `refuse_unimplemented_options` existed.
+
+**What was verified**: `cargo test`/`cargo clippy --no-deps -- -D warnings`
+clean on `vaco-cli` and `vaco-filter-video-format` (a workspace-wide
+`cargo clippy` without `--no-deps` currently fails on unrelated, concurrently
+in-progress doc comments in `vaco-filter-mm`, not on anything this work
+touched). A real `vaco` binary, built and run against a real PNG fixture
+(`-f png_pipe -i testdata/tiny.png -fps_mode:v <mode> -c:v png -f image2`),
+completed successfully — real bytes on disk, non-zero exit only on a genuine
+error — for all four `-fps_mode` values and for `-enc_time_base`'s `0`/
+`demux`/`filter`/an explicit rational, and correctly refused
+`-enc_time_base -1`/an unparseable value with the reference's own wording. A
+single-frame fixture cannot show a *duplicate/drop* difference between
+modes, though (there is only ever one frame to hold); that half is verified
+at the unit level instead — `fps_mode.rs`'s and `enc_time_base.rs`'s own
+`#[cfg(test)]` modules exercise the dedup rule and the time-base resolution
+directly, and `vaco_filter_video_format::fps`'s own existing tests already
+cover the zero-order-hold algorithm `cfr` reuses. A genuine multi-frame,
+real-decoder differential against the reference (the `ffprobe -show_packets`
+comparison this work package's issue asks for) needs a source this build can
+both decode and produce more than one distinct timestamp from, which was not
+available in the time this pass had — named here rather than claimed.
+
 ## How to change it
 
 * **Adding an option** starts in `vaco-cli-core`'s table, not here. This crate
@@ -817,7 +889,7 @@ down is a decision and one that is not is a surprise.
 | `-report`/`-progress` implemented (final block only for `-progress`, see above); `-stats` implemented separately; exit codes 69/255 not implemented (named, see above) — CLOSED | CL-17 |
 | Decoder and encoder nodes, `-frames`, `-pass` | CL-19 |
 | Simple filtergraph binding, `-s`/`-aspect`/`-pix_fmt` | CL-20 |
-| `-fps_mode`, `-enc_time_base`, `-frame_drop_threshold` | CL-21 |
+| `-fps_mode` and `-enc_time_base` implemented; `-frame_drop_threshold` still refused (see above) — OPEN | CL-21 |
 | Parsing and per-frame evaluation implemented; no live-encode wiring exists in this build (see above) — CLOSED | CL-22 |
 | `-shortest`, `-apad`, `-isync` | CL-23 |
 | The ~600-case timestamp differential matrix | CL-24 |

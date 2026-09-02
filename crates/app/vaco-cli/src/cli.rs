@@ -300,12 +300,15 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
 /// standing rule that silently wrong is worse than refusing applies just as
 /// much to an option that does nothing as to one that resamples nothing).
 /// Each of these is tracked as deferred work in `docs/app/vaco-cli.md`
-/// (`-hwaccel`: CL-34a; `-fps_mode`/`-enc_time_base`/`-frame_drop_threshold`:
-/// CL-21) — refusing does not close any of those issues, it only stops the
-/// gap between "accepted" and "implemented" from reading as "works".
+/// (`-hwaccel`: CL-34a; `-frame_drop_threshold`: CL-21) — refusing does not
+/// close any of those issues, it only stops the gap between "accepted" and
+/// "implemented" from reading as "works".
 /// `-print_graphs` (CL-27) is no longer in this list: `crate::print_graphs`
 /// implements it, gated by [`crate::print_graphs::PrintGraphsSpec::resolve`]
-/// rather than a blanket refusal.
+/// rather than a blanket refusal. `-fps_mode`/`-enc_time_base` (CL-21) are
+/// also gone: `crate::fps_mode`/`crate::enc_time_base` implement them; only
+/// `-frame_drop_threshold` in that work package is still refused — see
+/// `crate::fps_mode`'s module doc for exactly why.
 ///
 /// Deliberately narrow: this names exactly the options measured to have no
 /// consuming code anywhere in `vaco-cli`/`vaco-cli-core`, not a general
@@ -317,7 +320,7 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
 /// [`Diagnostic`] naming the option, once any occurrence of one is found.
 fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
     const GLOBAL: &[&str] = &["frame_drop_threshold"];
-    const PER_FILE: &[&str] = &["hwaccel", "fps_mode", "enc_time_base"];
+    const PER_FILE: &[&str] = &["hwaccel"];
 
     for &name in GLOBAL {
         if line.last_global(name).is_some() {

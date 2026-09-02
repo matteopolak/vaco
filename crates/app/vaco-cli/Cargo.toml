@@ -45,6 +45,11 @@ vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-packet = { path = "../../model/vaco-packet" }
+# CL-21/#222: `-fps_mode`'s `vfr`/`cfr` nodes are plain `vaco-filter-core`
+# filters (`fps_mode.rs`), built and inspected directly rather than through
+# `-vf`'s text grammar -- see that module's doc for why -- which needs the
+# frame type itself, not just the codec/format layers above it.
+vaco-frame = { path = "../../model/vaco-frame" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 vaco-chlayout = { path = "../../model/vaco-chlayout" }

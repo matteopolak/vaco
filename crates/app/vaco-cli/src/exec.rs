@@ -1120,6 +1120,26 @@ fn graph_options_of(
                 if let Ok(Some(o)) = g.stream_option("pix_fmt", &ctx, idx) {
                     opts.pix_fmt = Some(value_str(o)?);
                 }
+                // CL-21/#222: `-fps_mode` carries `bit::VIDEO` in the option
+                // table (`vaco-cli-core/src/tables/ffmpeg.rs`), matching the
+                // reference's own video-only scope.
+                if let Ok(Some(o)) = g.stream_option("fps_mode", &ctx, idx) {
+                    let raw = value_str(o)?;
+                    opts.fps_mode = Some(crate::fps_mode::FpsMode::parse(&raw).map_err(|e| {
+                        Diagnostic::new(AvError::EINVAL, vec![e])
+                    })?);
+                }
+            }
+            // CL-21/#222: `-enc_time_base` is not `bit::VIDEO`-gated in the
+            // table (audio encoders take a time base too), so this is
+            // resolved for every media type, not just inside the video arm
+            // above.
+            if let Ok(Some(o)) = g.stream_option("enc_time_base", &ctx, idx) {
+                let raw = value_str(o)?;
+                opts.enc_time_base =
+                    Some(crate::enc_time_base::EncTimeBase::parse(&raw).map_err(|e| {
+                        Diagnostic::new(AvError::EINVAL, vec![e])
+                    })?);
             }
             if s.media == Some(MediaType::Audio) {
                 if let Ok(Some(o)) = g.stream_option("ar", &ctx, idx) {
@@ -1691,6 +1711,39 @@ pub fn run_pipeline(
                                     None => frames,
                                 }
                             };
+                            // CL-21/#222: `-fps_mode` (video-only), inserted
+                            // after any `-vf`/auto-conversion and immediately
+                            // before the encoder — see `crate::fps_mode`'s
+                            // module doc for what `cfr`/`vfr` actually do and
+                            // what they do not reproduce byte-for-byte from
+                            // the reference. `passthrough` costs nothing: it
+                            // is already what this leg does without it.
+                            let frames = if s.media == Some(MediaType::Video) {
+                                let mode = s
+                                    .graph_opts
+                                    .fps_mode
+                                    .unwrap_or(crate::fps_mode::FpsMode::Auto);
+                                if mode == crate::fps_mode::FpsMode::Passthrough {
+                                    frames
+                                } else {
+                                    let video = p.video.as_ref().ok_or_else(|| {
+                                        internal(
+                                            "a video stream being transcoded has no video \
+                                             parameters for -fps_mode",
+                                        )
+                                    })?;
+                                    crate::fps_mode::insert(&mut spec, frames, time_base, video, mode)?
+                                }
+                            } else {
+                                frames
+                            };
+                            // CL-21/#222: `-enc_time_base` — see
+                            // `crate::enc_time_base`'s module doc for the
+                            // measured discrepancy between the reference's
+                            // own `--help` and its actual accepted values.
+                            let time_base = s.graph_opts.enc_time_base.map_or(time_base, |tb| {
+                                tb.resolve(time_base, p.video.as_ref(), p.audio.as_ref())
+                            });
                             // Read before `encoder` moves into `add_encoder`
                             // below — see `prime_audio`'s call above for why
                             // this can already be `Some` with no frame sent.

@@ -69,11 +69,13 @@
 pub mod cli;
 pub mod complexgraph;
 pub mod dump;
+pub mod enc_time_base;
 pub mod exec;
 pub mod exit;
 pub mod filtergraph;
 pub mod filterreg;
 pub mod force_key_frames;
+pub mod fps_mode;
 pub mod help;
 pub mod input;
 pub mod listing;

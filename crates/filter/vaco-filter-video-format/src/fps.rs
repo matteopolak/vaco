@@ -150,8 +150,16 @@ struct Pending {
     slot: i64,
 }
 
+/// The `-vf fps=…` filter's state machine — public so that `vaco-cli`'s
+/// `-fps_mode cfr` (CL-21) can drive the exact same tested zero-order-hold
+/// algorithm directly, via [`Filter::from_rate`], rather than going through
+/// `-vf`'s own text grammar (`-fps_mode` is a distinct CLI-level option in
+/// the reference, not sugar for inserting this filter — see
+/// `vaco-cli`'s `fps_mode.rs` module doc for why reusing this state machine
+/// is a defensible approximation of the reference's own, separate
+/// duplicate/drop logic rather than a byte-identical reproduction of it).
 #[derive(Debug)]
-pub(crate) struct Filter {
+pub struct Filter {
     fps: Rational,
     out_tb: Rational,
     in_tb: Rational,
@@ -178,6 +186,32 @@ impl Filter {
             start_time: (opts.start_time < f64::MAX).then_some(opts.start_time),
             round: parse_round(&opts.round)?,
             eof_action: parse_eof_action(&opts.eof_action)?,
+            pending: None,
+            next_out_pts: 0,
+            last_gap: 1,
+            started: false,
+        })
+    }
+
+    /// [`Filter::new`] without `-vf fps=…`'s text grammar: `round=near`,
+    /// `eof_action=round`, `start_time` unset — the same defaults `-vf
+    /// fps=<rate>` alone gets. Used by `vaco-cli`'s `-fps_mode cfr`; see this
+    /// struct's own doc for why that reuse is not a claim of byte-identical
+    /// behaviour with the reference's own `-fps_mode` implementation.
+    ///
+    /// # Errors
+    /// A message naming the problem if `fps` is not strictly positive.
+    pub fn from_rate(fps: Rational) -> std::result::Result<Self, String> {
+        if fps.num <= 0 || fps.den <= 0 {
+            return Err(format!("fps: rate must be positive, got {fps:?}"));
+        }
+        Ok(Self {
+            fps,
+            out_tb: fps.inverse(),
+            in_tb: Rational::UNDEFINED,
+            start_time: None,
+            round: Rounding::NearestAwayFromZero,
+            eof_action: EofAction::Round,
             pending: None,
             next_out_pts: 0,
             last_gap: 1,
