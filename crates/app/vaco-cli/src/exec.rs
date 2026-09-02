@@ -1991,6 +1991,15 @@ pub fn run_pipeline(
                             // once the encoder-side mismatch above was
                             // fixed).
                             let mut out_video_format: Option<PixFmt> = None;
+                            // The graph's real output geometry, for the same
+                            // reason `out_video_format` exists: a
+                            // `-vf scale=...`/`-s` stream's frames are not the
+                            // size the input declared. Without this, `tkhd` on
+                            // a 1920x1080 source cropped to 1280x600 said
+                            // 1920x1080 while every sample was 1280x600 —
+                            // measured against ffmpeg 9.0.1, whose own `tkhd`
+                            // says 1280x600.
+                            let mut out_video_size: Option<(u32, u32)> = None;
                             let mut out_audio_format: Option<vaco_sampfmt::SampleFmt> = None;
                             let mut out_audio_rate: Option<u32> = None;
                             let mut out_audio_layout: Option<vaco_chlayout::ChannelLayout> = None;
@@ -2028,8 +2037,14 @@ pub fn run_pipeline(
                                 // input's sample rate while the samples were
                                 // resampled to a different one would be wrong.
                                 match built.graph.sink_format(built.sink) {
-                                    Ok(LinkFormat::Video { format, .. }) => {
+                                    Ok(LinkFormat::Video {
+                                        format,
+                                        width,
+                                        height,
+                                        ..
+                                    }) => {
                                         out_video_format = Some(*format);
+                                        out_video_size = Some((*width, *height));
                                     }
                                     Ok(LinkFormat::Audio {
                                         format,
@@ -2223,6 +2238,12 @@ pub fn run_pipeline(
                                 && let Some(v) = out_params.video.as_mut()
                             {
                                 v.format = Some(fmt);
+                            }
+                            if let Some((w, h)) = out_video_size
+                                && let Some(v) = out_params.video.as_mut()
+                            {
+                                v.width = w;
+                                v.height = h;
                             }
                             if let Some(fmt) = out_audio_format
                                 && let Some(a) = out_params.audio.as_mut()
