@@ -23,6 +23,7 @@
 //!   each line beneath it is `key=value` in insertion order. `pts_time`
 //!   uses the same trimmed six-decimal format as `freezedetect`'s
 //!   `lavfi.freezedetect.*` tags.
+//!
 //! What is not reproduced is the reference's log sink: `print` with no
 //! `file` writes to the reference's own log, but this project has no log
 //! sink wired in yet, so with `file` unset this filter still computes the
