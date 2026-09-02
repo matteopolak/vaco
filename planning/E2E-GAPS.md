@@ -3418,3 +3418,58 @@ context-bank handoff primitive, `Ctx`'s split, and real thread dispatch.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 43. HEVC B4 Stage 2b step 1c, and step 1 complete: `CuGrid` moves onto `RowPublish`
+
+Last of the three structures in §41's landing order. `CuGrid` (commit
+`bbabbdd`) moves its `published: Vec<CuGridBand>` to `crate::wavefront::
+RowPublish<CuGridBand>` -- the largest of the three (nine heterogeneous
+per-4x4-block arrays bundled in `CuGridBand`, plus its own `Budget`
+accounting) and the last to move for exactly that reason. `current`
+(a `Budget`-tracked `Option<CuGridBand>`) is untouched.
+
+**What changed**: `begin_row`/`finish` advance `current_band` one row at a
+time, publishing at that index instead of pushing; `finish` now returns
+`Result<()>`, its one call site in `decoder.rs` updated with `?`.
+`band_for()` -- the read side every one of `depth_at`/`mode_at`/`qp_at`/
+`inter_at`/`is_skip_at`/`cbf_luma_at` goes through -- needed zero changes:
+`RowPublish::get` returns the same `Option<&CuGridBand>` `Vec::get`
+already did. `budget_bytes()` needed no new primitive capability this
+time either -- `RowPublish::iter()`, already added for §42's own
+conversion, is exactly the shape `self.published.iter().
+map(CuGridBand::budget_bytes)` already needed.
+
+**With this section, Stage 2b step 1 is complete**: `EdgeMarks` (§41),
+`SaoParamsGrid` (§42) and `CuGrid` (this section) all publish through
+`RowPublish` instead of a plain `Vec`. The latent data race
+`docs/codec/hevc-wavefront-threading.md`'s own hazard section names for
+all three is closed on the `published` side for each. `current` staying a
+private, single-writer field on all three remains correct only because
+Stage 2's real thread dispatch (steps 2-4: the CABAC context-bank
+handoff, `Ctx`'s split, and actual `std::thread::spawn` dispatch) has not
+started -- that is the condition under which each stays correct, not
+something any of these three commits changes on its own.
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (73 unit tests, unchanged
+count from §42, plus 6 integration tests) and `cargo clippy -p
+vaco-codec-hevc --lib --tests -- -D warnings` both clean; `cargo xtask
+unsafe-audit` clean. Against `hevc_1080p.mp4` (real merge/AMVP motion
+prediction and QP prediction exercising `CuGrid`'s own read path end to
+end): `vaco -threads 1` before, after, and `ffmpeg`'s own decode all
+produced the identical sha256 (`a40b898c...`, unchanged across every
+commit in this whole chain since §39). The 300x500 partial-CTU-column
+fixture still matched ffmpeg on the frames its own unrelated remux issue
+does not corrupt.
+
+**Serial cost**: no fresh interleaved timing run, same reasoning as §§41-
+42 -- the per-CU hot path (`fill`/`fill_qp`/`fill_motion`/`fill_cbf_luma`
+and every `*_at` reader) is byte-for-byte unchanged; only `begin_row`/
+`finish` (`n_bands` calls per picture) moved from `Vec::push` to
+`RowPublish::publish`.
+
+**Not done in this section**: the CABAC context-bank handoff primitive,
+`Ctx`'s split, and real thread dispatch -- named next, in that order, in
+the design doc.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.

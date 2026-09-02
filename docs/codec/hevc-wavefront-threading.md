@@ -710,9 +710,15 @@ itself is threaded) before the next begins:
     genuine addition to the primitive itself, `RowPublish::iter()`
     (skips not-yet-published slots — a plain `Vec`'s own `iter()` never
     had gaps to skip), for `budget_bytes`'s own summation.
-1c. `CuGrid` onto `RowPublish<T>` last of the three — the largest, with
-    nine heterogeneous arrays and its own `Budget` accounting
-    (`CuGrid::budget_bytes`) to keep self-consistent through the change.
+1c. **Done** (commit `bbabbdd`, `planning/E2E-GAPS.md` §43): `CuGrid`
+    onto `RowPublish<T>` — the largest of the three, nine heterogeneous
+    arrays and its own `Budget` accounting, needed no further primitive
+    additions beyond `iter()` (already added for 1b). **Step 1 as a whole
+    is now complete**: `EdgeMarks`/`SaoParamsGrid`/`CuGrid` all publish
+    through `RowPublish` instead of a plain `Vec`, closing the "Hazard,
+    stated on its own" section's latent data race for all three on the
+    `published` side. `current` staying a private, single-writer field on
+    each remains correct only because steps 2-4 below have not started.
 2. The CABAC context-bank handoff as its own `RowPublish<ContextBank>`
    (`ContextBank` is already `Copy`, so this reuses the same primitive,
    not a new one), replacing `saved_ctx`, still single-threaded.
