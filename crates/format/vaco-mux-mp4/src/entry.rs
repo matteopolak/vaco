@@ -90,7 +90,7 @@ pub fn wrap_encrypted(entry: BuiltEntry, key_id: [u8; 16]) -> BuiltEntry {
 pub fn needs_extradata(codec: CodecId) -> bool {
     matches!(
         codec,
-        CodecId::H264 | CodecId::Hevc | CodecId::Av1 | CodecId::Vp8 | CodecId::Vp9 | CodecId::Aac
+        CodecId::H264 | CodecId::Hevc | CodecId::Av1 | CodecId::Vp8 | CodecId::Vp9 | CodecId::Aac | CodecId::Alac
     )
 }
 
@@ -214,6 +214,10 @@ fn build_audio(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
         CodecId::Flac => {
             extensions.extend_from_slice(&writer::dfla(extradata));
             FourCc::new(b"fLaC")
+        }
+        CodecId::Alac => {
+            extensions.extend_from_slice(&writer::alac(extradata));
+            FourCc::new(b"alac")
         }
         // No config box at all: `.mp3` in MP4 is self-describing (every frame
         // carries its own header), the same convention the reference uses.

@@ -514,6 +514,72 @@ fn two_tracks_interleave_and_both_demux_back() {
     assert_eq!(counts, [10, 10]);
 }
 
+/// A real, measured bug this pins down at the mux+demux level: a track
+/// whose final packet has a *shorter* duration than every earlier one (the
+/// realistic shape a lossless audio encoder's last, partial frame has) must
+/// still report the true total track duration once demuxed, not the sum of
+/// only the inferrable (dts-gap) durations. `vaco-codec-alac`'s encoder used
+/// to never set `Packet::duration` at all, so every real ALAC-in-`.m4a` file
+/// it wrote had this exact shape -- `stts`'s last run read `(1, 0)`, the
+/// declared track duration undercounted the source by exactly the last
+/// frame's sample count, and `ffmpeg`'s own decode of that file silently
+/// dropped the last frame (21 of 22, ~2.5% of the audio lost). This
+/// exercises the mux/demux mechanics directly, in ALAC's own timescale
+/// convention (samples, not an arbitrary video frame rate) -- the fix
+/// itself lives in `vaco-codec-alac::AlacEncoder::send_frame`, not here;
+/// `track_duration_converts_packet_duration_from_microseconds_to_track_ticks`
+/// already covers that this crate's own `stts` construction was never the
+/// problem.
+#[test]
+fn a_short_final_audio_packet_duration_is_not_lost() {
+    let sink = SharedDynBuf::with_limits(Limits::permissive());
+    let mut mux = MovMuxer::new(Box::new(sink.clone()) as Box<dyn MediaSink>).unwrap();
+    let mut audio_params = CodecParameters {
+        media_type: Some(MediaType::Audio),
+        codec_id: Some(CodecId::Alac),
+        extradata: Some(vec![0u8; 24]),
+        ..CodecParameters::default()
+    };
+    audio_params.audio = Some(vaco_codec_core::AudioParameters {
+        sample_rate: 44_100,
+        ..vaco_codec_core::AudioParameters::default()
+    });
+    let idx = mux.add_stream(&audio_params).unwrap();
+    mux.init().unwrap();
+    mux.write_header().unwrap();
+
+    // Three full 4096-sample frames, then one short 2184-sample final frame
+    // -- the same shape a 2-second 44.1kHz source produces against ALAC's
+    // real frame length. Every packet states its own real duration, exactly
+    // as `AlacEncoder::send_frame` now does.
+    let full = 4096i64;
+    for i in 0..3i64 {
+        let mut p = packet(idx, i * full, true, &[0xAB, 0xCD, 0xEF]);
+        p.duration = Duration::from_micros(full * 1_000_000 / 44_100);
+        mux.write_packet(&p).unwrap();
+    }
+    let mut last = packet(idx, 3 * full, true, &[0x12, 0x34]);
+    last.duration = Duration::from_micros(2184 * 1_000_000 / 44_100);
+    mux.write_packet(&last).unwrap();
+    mux.write_trailer().unwrap();
+
+    let bytes = sink.snapshot();
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    let demux = vaco_demux_mp4::Mp4Demuxer::open(
+        src,
+        &NoParsers,
+        &FormatOptions::default(),
+        vaco_demux_mp4::Mp4Options::default(),
+    )
+    .unwrap();
+    let duration_ts = demux.streams()[0].duration_ts.unwrap();
+    assert_eq!(
+        duration_ts,
+        3 * full + 2184,
+        "the short final packet's own duration must count, not fall back to 0"
+    );
+}
+
 proptest::proptest! {
     /// The part the brief calls out by name: faststart's offset fixup.
     /// Every sample's *payload bytes* must come back unchanged regardless of

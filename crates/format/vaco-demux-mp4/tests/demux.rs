@@ -693,4 +693,67 @@ mod tests {
             );
         }
     }
+
+    /// Real bytes measured from `ffmpeg -f lavfi -i "sine=frequency=440:
+    /// duration=0.2" -ac 1 -c:a alac tiny.m4a`'s own `stsd` box: one audio
+    /// sample entry (fourcc `alac`) wrapping a real `alac` full box --
+    /// 4 bytes of version+flags, then the 24-byte `ALACSpecificConfig`
+    /// itself (`frame_length = 4096` at that record's own first 4 bytes).
+    ///
+    /// Regression for a real, measured bug: `codec_parameters` used to hand
+    /// over the `alac` box's full, un-stripped 28 bytes as extradata --
+    /// version+flags included, since `CodecConfig::data` keeps them for a
+    /// full box "because they are part of the record" (true in general, but
+    /// `vaco-codec-alac`'s own `AlacCookie::parse` expects the bare
+    /// record). That shifted `frame_length` onto the version+flags' `0`,
+    /// and every packet whose `partialFrame` bit relied on the cookie's
+    /// `frame_length` (every full-length packet in a real file) decoded as
+    /// a valid-looking, silently empty frame -- `vaco` decoded about 2.5%
+    /// of a real 22-frame `ffmpeg`-produced `.m4a` and exited 0.
+    #[test]
+    fn alac_stsd_extradata_is_the_bare_config_not_the_full_box_header() {
+        let real_alac_stsd = {
+            fn from_hex(s: &str) -> Vec<u8> {
+                (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+            }
+            // The bytes captured this way are the `stsd` box's own payload
+            // (version+flags, entry_count, then the entries) -- everything
+            // after its 8-byte box header, which `StblSpec::stsd_box`
+            // expects to be present, so it is added back here.
+            let payload = from_hex("000000000000000100000048616c6163000000000000000100000000000000000001001000000000ac44000000000024616c616300000000000010000010280a0e01000000002004000ac4400000ac44");
+            let mut boxed = u32::try_from(payload.len() + 8).unwrap().to_be_bytes().to_vec();
+            boxed.extend_from_slice(b"stsd");
+            boxed.extend_from_slice(&payload);
+            boxed
+        };
+        let track = TrackSpec {
+            handler: *b"soun",
+            timescale: 44100,
+            media_duration: 4096,
+            stbl: StblSpec {
+                stsd_box: Some(real_alac_stsd),
+                stts: vec![(1, 4096)],
+                stsc: vec![(1, 1, 1)],
+                stsz: vec![100],
+                stco: vec![u32::try_from(MDAT_PAYLOAD).unwrap()],
+                has_stss: false,
+                ..StblSpec::default()
+            },
+            ..TrackSpec::default()
+        };
+        let data = fixture(44100, 4096, &[track], &[0u8; 100]);
+        let demux = open(data);
+        let stream = demux.streams().first().expect("one stream");
+        let extradata = stream.params.extradata.as_ref().expect("alac extradata must be present");
+        assert_eq!(
+            extradata.len(),
+            24,
+            "must be the bare 24-byte ALACSpecificConfig, not the 28-byte full-box-prefixed record: {extradata:02x?}"
+        );
+        assert_eq!(
+            &extradata[0..4],
+            &4096u32.to_be_bytes(),
+            "frame_length must read as 4096, not corrupted to 0 by an un-stripped version+flags prefix: {extradata:02x?}"
+        );
+    }
 }

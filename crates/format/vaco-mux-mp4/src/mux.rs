@@ -29,7 +29,7 @@ const SUPPORTED_VIDEO: &[CodecId] = &[
     CodecId::Jpeg,
     CodecId::Png,
 ];
-const SUPPORTED_AUDIO: &[CodecId] = &[CodecId::Aac, CodecId::Opus, CodecId::Flac, CodecId::Mp3];
+const SUPPORTED_AUDIO: &[CodecId] = &[CodecId::Aac, CodecId::Opus, CodecId::Flac, CodecId::Mp3, CodecId::Alac];
 
 enum Mode {
     Progressive(progressive::ProgressiveState),

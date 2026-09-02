@@ -376,6 +376,21 @@ pub fn dfla(record: &[u8]) -> Vec<u8> {
     fullbx(b"dfLa", 0, 0, record)
 }
 
+/// `alac`: the Apple Lossless specific box, a full box whose payload is the
+/// bare `ALACSpecificConfig` (Apple's own `ALACMagicCookieDescription.txt`)
+/// — the same bytes `CodecParameters::extradata` already carries for an
+/// ALAC stream (`AlacEncoder::extradata`'s own bare-24-byte convention;
+/// see `vaco-codec-alac`'s `AlacSpecificConfig::write_bare`). The version
+/// and flags this adds are what a demuxer reading the box back must strip
+/// before treating the rest as the record itself — see
+/// `vaco-demux-mp4::track::codec_parameters`'s own `ConfigFlavour::Alac`
+/// arm, added for exactly this reason after a real, measured bug where an
+/// un-stripped record's `frame_length` read as the version+flags' `0`.
+#[must_use]
+pub fn alac(record: &[u8]) -> Vec<u8> {
+    fullbx(b"alac", 0, 0, record)
+}
+
 /// One MPEG-4 descriptor: tag, expandable length, payload.
 fn descriptor(tag: u8, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::new();

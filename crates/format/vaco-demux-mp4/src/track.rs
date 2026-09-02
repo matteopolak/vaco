@@ -116,6 +116,28 @@ pub(crate) fn codec_parameters(
                 hevc_length_size = hvcc_length_size(config.data);
                 params.extradata = Some(config.data.to_vec());
             }
+            ConfigFlavour::Alac => {
+                // `alac` is a full box: `config.data` starts with 4 bytes
+                // of version+flags (per `CodecConfig::data`'s own doc,
+                // "for a full box the version and flags are still
+                // present"), and those 4 bytes are not part of the
+                // `ALACSpecificConfig` a decoder actually reads --
+                // `vaco-codec-alac`'s `AlacCookie::parse` expects either
+                // the bare 24(+)-byte record or its `frma`-wrapped
+                // "Compatibility" shape, neither of which carries this
+                // box's own header. Handing over the un-stripped 28 bytes
+                // shifts every field: `frame_length` (the first 4 bytes
+                // of the real record) reads as the version+flags' `0`
+                // instead, and every packet whose `partialFrame` bit
+                // relies on that cookie value to know its own sample
+                // count decodes as zero samples -- measured end to end
+                // on a real `ffmpeg`-produced `.m4a`: `vaco` decoded
+                // exactly the file's one genuinely `partialFrame`-tagged
+                // (explicit count) packet, its short final frame, and
+                // silently dropped the other 21 to zero samples each,
+                // exiting 0 having produced about 2.5% of the audio.
+                params.extradata = config.data.get(4..).map(<[u8]>::to_vec);
+            }
             _ => params.extradata = Some(config.data.to_vec()),
         }
     }
