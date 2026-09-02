@@ -955,9 +955,6 @@ Named, not silently missing.
 * **`-show_frames`, `-count_frames`** — D14.4 moved them to v0.2; they need
   decoders. They no longer print an empty `[FRAMES]` array: they return
   `Error::Unsupported` naming D14.4 and exit 1. See above.
-* ~~**`-show_packets`**~~ — done this wave, together with `-read_intervals`,
-  `-count_packets`, `-select_streams` over packets, `-show_data`,
-  `-data_dump_format` and `-show_data_hash`.
 * **`-read_intervals` grammar deferred: nothing.** The full grammar is
   implemented — `START`, `+START_OFFSET`, `%END`, `%+END_OFFSET`, `%+#COUNT`,
   and comma-separated lists, with the duration grammar
