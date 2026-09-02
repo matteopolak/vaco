@@ -42,8 +42,16 @@ assumption as the code will pass while both are wrong. Rotation shipped with two
 transpose directions swapped — composed from two conventions that turned out not
 to be negations of each other — and its unit test, written from that same
 assumption, passed cleanly. Only comparing full-pipeline output against ffmpeg
-caught it, on every rotated pixel. So for anything with a reference, check
-against the reference, not against your own understanding of it.
+caught it, on every rotated pixel.
+
+The largest instance so far: FFV1's encoder and decoder round-tripped each other
+byte-exactly while both disagreed with the format, so an ffmpeg-written file
+decoded to wrong pixels on 99.6% of bytes — on a *lossless* codec — and ffmpeg
+read our output as wrong pixels too. The crate's only test was that round-trip.
+A self-round-trip test proves the two halves agree, which is not the claim.
+
+So for anything with a reference, check against the reference, not against your
+own understanding of it, and never let a round-trip be a codec's only evidence.
 
 **Registered-but-wrong is worse than absent.** Where something is out of scope,
 refuse by name via `check_scope`. Never emit wrong pixels or samples.

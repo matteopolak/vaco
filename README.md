@@ -43,8 +43,9 @@ reading its source. `docs/provenance.md` records what each component was written
 H.265, AAC, VC-1 — sit behind non-default Cargo features. A default build does not
 include them. See [Patent-encumbered codecs](#patent-encumbered-codecs).
 
-The correctness bar is byte-exactness. Where a decoder is finished, its output is
-compared against FFmpeg's byte for byte on real files, not eyeballed.
+The correctness bar is byte-exactness against ffmpeg on real files. That is the bar
+each decoder is held to as it is finished; it is not yet enforced automatically, which
+is why several rows in the tables below say "no".
 
 ## Binaries
 
