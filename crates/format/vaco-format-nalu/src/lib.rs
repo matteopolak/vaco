@@ -91,7 +91,7 @@ mod header;
 mod rbsp;
 mod scan;
 
-pub use avcc::build_h264_avcc;
+pub use avcc::{LengthPrefixed, build_h264_avcc, build_hevc_hvcc, length_prefixed_config};
 pub use convert::{annexb_to_length_prefixed, length_prefixed_to_annexb};
 pub use extradata::{assemble_extradata, header_kind_for, is_parameter_set, parameter_sets};
 pub use framing::{Framing, LengthSize, Nal, NalUnits, units};
