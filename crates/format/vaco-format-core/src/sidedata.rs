@@ -110,6 +110,146 @@ pub fn is_identity_matrix(matrix: &[i32; 9]) -> bool {
     *matrix == IDENTITY
 }
 
+/// One of the eight rigid transforms a display matrix or `-display_rotation`/
+/// `-display_hflip`/`-display_vflip` can express: the four multiples of 90°,
+/// each with or without a reflection. Named after
+/// `vaco-filter-video-geometry`'s own `transpose` directions plus
+/// `hflip`/`vflip`, because that is exactly the filter chain each variant
+/// becomes — see that crate's `transpose` module doc for what each direction
+/// computes on real pixels.
+///
+/// Deliberately **not** a general rotation-by-any-angle: real devices only
+/// ever write one of these eight (0/90/180/270, optionally mirrored), and the
+/// reference's own handling of anything else is a best-effort, interpolated
+/// `rotate`-style filter with no fixed output geometry (measured: `ffmpeg
+/// 9.0.1` prints `Odd rotation angle.` to stderr and still alters pixel
+/// values for a 45° matrix). Reproducing that is out of scope; a matrix that
+/// is not exactly one of these eight is reported as `None` by both
+/// constructors below, and a caller should leave the frame unrotated rather
+/// than guess.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DisplayTransform {
+    Hflip,
+    Vflip,
+    /// `hflip` then `vflip` (order does not matter — both are their own
+    /// inverse and commute), the pixel effect of a 180° rotation.
+    Rotate180,
+    /// `transpose=dir=clock` — 90° clockwise, no reflection.
+    TransposeClock,
+    /// `transpose=dir=cclock` — 90° counter-clockwise, no reflection.
+    TransposeCclock,
+    /// `transpose=dir=clock_flip`.
+    TransposeClockFlip,
+    /// `transpose=dir=cclock_flip` (`vaco-filter-video-geometry::transpose`'s
+    /// own default direction — a plain matrix transpose).
+    TransposeCclockFlip,
+}
+
+/// Decompose a display matrix into one of the eight [`DisplayTransform`]s, or
+/// `None` if it is the identity (nothing to do) or is not exactly one of
+/// them (an arbitrary angle — see [`DisplayTransform`]'s own doc for why
+/// that is left alone rather than approximated).
+///
+/// **Measured against real `ffmpeg 9.0.1`**, not derived: every one of the
+/// eight matrices below is `ffprobe`'s own `displaymatrix` side-data dump for
+/// a real `-display_rotation`/`-display_hflip`/`-display_vflip` combination
+/// remuxed with `-c copy` (so the printed matrix is exactly what the
+/// reference itself computes) — sixteen combinations were run, and every one
+/// produced one of these eight matrices.
+///
+/// **This table's rotation-only entries (`TransposeClock`/`TransposeCclock`)
+/// were wrong once, and the bug survived this crate's own unit tests.** The
+/// first version derived them by composing two independently-measured facts
+/// — [`display_rotation`]'s clockwise-angle convention for a matrix already
+/// in a container, and the CLI's own documented counter-clockwise
+/// convention for `-display_rotation` — on the theory that one is the
+/// other's negation. That composition swapped `TransposeClock` and
+/// `TransposeCclock`, and a unit test written from the same theory naturally
+/// agreed with itself. It was only caught by a full pipeline test: decoding
+/// a real, asymmetric H.264 frame through `vaco-codec-h264`, rotating it
+/// through this function and `vaco-filter-video-geometry::transpose`, and
+/// comparing the actual output bytes against real `ffmpeg`'s own decode of
+/// the identical file — which disagreed on every rotated pixel. Every
+/// matrix below is now instead read directly off `ffprobe`'s raw
+/// `displaymatrix` dump for the plain (no-flip) `-display_rotation 90` and
+/// `-display_rotation -90` cases specifically, closing the gap the
+/// composition papered over. The four reflection entries were never wrong:
+/// their matrices came from a real `ffprobe` dump from the start, because a
+/// reflection has no clockwise/counter-clockwise convention to get
+/// backwards.
+#[must_use]
+pub fn dihedral_transform_from_matrix(matrix: &[i32; 9]) -> Option<DisplayTransform> {
+    const P: i32 = 1 << 16;
+    const N: i32 = -(1 << 16);
+    if is_identity_matrix(matrix) {
+        return None;
+    }
+    let (a, b, c, d) = (matrix[0], matrix[1], matrix[3], matrix[4]);
+    match (a, b, c, d) {
+        (N, 0, 0, P) => Some(DisplayTransform::Hflip),
+        (P, 0, 0, N) => Some(DisplayTransform::Vflip),
+        (N, 0, 0, N) => Some(DisplayTransform::Rotate180),
+        (0, N, P, 0) => Some(DisplayTransform::TransposeCclock),
+        (0, P, N, 0) => Some(DisplayTransform::TransposeClock),
+        (0, N, N, 0) => Some(DisplayTransform::TransposeClockFlip),
+        (0, P, P, 0) => Some(DisplayTransform::TransposeCclockFlip),
+        _ => None,
+    }
+}
+
+/// The [`DisplayTransform`] `-display_rotation <degrees>` (counter-clockwise,
+/// the CLI option's own documented convention — measured `ffmpeg 9.0.1 -h
+/// full`) plus `-display_hflip`/`-display_vflip` (each applied *after* the
+/// rotation, per the same documented text) resolve to, or `None` for the
+/// identity or an angle that is not a multiple of 90° within rounding
+/// (`epsilon` degrees — see [`DisplayTransform`]'s own doc for why this
+/// workspace does not attempt anything else).
+///
+/// See [`dihedral_transform_from_matrix`]'s doc for how this table was
+/// measured: sixteen real `ffmpeg` runs (four angles × the four
+/// `hflip`/`vflip` combinations), read back pixel-for-pixel.
+#[must_use]
+pub fn dihedral_transform_from_angle_and_flips(
+    degrees_ccw: f64,
+    hflip: bool,
+    vflip: bool,
+) -> Option<DisplayTransform> {
+    use DisplayTransform::{
+        Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip, TransposeCclockFlip, Vflip,
+    };
+    const EPSILON: f64 = 0.01;
+    let normalised = degrees_ccw.rem_euclid(360.0);
+    let quadrant = (normalised / 90.0).round();
+    if (normalised - quadrant * 90.0).abs() > EPSILON {
+        return None;
+    }
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "quadrant is one of 0.0/1.0/2.0/3.0/4.0 by construction above"
+    )]
+    let quadrant = (quadrant as i32).rem_euclid(4);
+    let transform = match (quadrant, hflip, vflip) {
+        (0, false, false) => return None,
+        (0, true, false) => Hflip,
+        (0, false, true) => Vflip,
+        (0, true, true) => Rotate180,
+        (1, false, false) => TransposeCclock,
+        (1, true, false) => TransposeClockFlip,
+        (1, false, true) => TransposeCclockFlip,
+        (1, true, true) => TransposeClock,
+        (2, false, false) => Rotate180,
+        (2, true, false) => Vflip,
+        (2, false, true) => Hflip,
+        (2, true, true) => return None,
+        (3, false, false) => TransposeClock,
+        (3, true, false) => TransposeCclockFlip,
+        (3, false, true) => TransposeClockFlip,
+        (3, true, true) => TransposeCclock,
+        _ => unreachable!("quadrant is 0..=3 by construction above"),
+    };
+    Some(transform)
+}
+
 #[cfg(test)]
 #[allow(clippy::float_cmp, reason = "the measured values are exact in binary")]
 mod tests {
@@ -165,6 +305,96 @@ mod tests {
             0,
             1 << 30
         ]));
+    }
+
+    /// Every row is a real `ffmpeg 9.0.1` run: `ffmpeg -display_rotation
+    /// <deg> [-display_hflip] [-display_vflip] -i <4x6 test pattern> -c copy
+    /// -f mp4 out.mp4`, then `ffprobe -show_streams out.mp4`'s own printed
+    /// `displaymatrix`. See `dihedral_transform_from_matrix`'s own doc.
+    #[test]
+    fn matches_every_measured_display_rotation_matrix() {
+        use DisplayTransform::{
+            Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip,
+            TransposeCclockFlip, Vflip,
+        };
+        const P: i32 = 65536;
+        const N: i32 = -65536;
+        let cases: &[([i32; 9], Option<DisplayTransform>)] = &[
+            ([P, 0, 0, 0, P, 0, 0, 0, 1 << 30], None), // identity
+            ([N, 0, 0, 0, P, 0, 0, 0, 1 << 30], Some(Hflip)),
+            ([P, 0, 0, 0, N, 0, 0, 0, 1 << 30], Some(Vflip)),
+            ([N, 0, 0, 0, N, 0, 0, 0, 1 << 30], Some(Rotate180)),
+            ([0, N, 0, P, 0, 0, 0, 0, 1 << 30], Some(TransposeCclock)),
+            ([0, P, 0, N, 0, 0, 0, 0, 1 << 30], Some(TransposeClock)),
+            ([0, N, 0, N, 0, 0, 0, 0, 1 << 30], Some(TransposeClockFlip)),
+            ([0, P, 0, P, 0, 0, 0, 0, 1 << 30], Some(TransposeCclockFlip)),
+        ];
+        for (matrix, want) in cases {
+            assert_eq!(
+                dihedral_transform_from_matrix(matrix),
+                *want,
+                "matrix {matrix:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_matrix_that_is_not_exactly_one_of_the_eight() {
+        // The real 45-degree matrix ffmpeg 9.0.1 computes and warns about
+        // ("Odd rotation angle.") rather than a hand-picked non-example.
+        let odd = [46_341, 46_341, 0, -46_341, 46_341, 0, 0, 0, 1 << 30];
+        assert_eq!(dihedral_transform_from_matrix(&odd), None);
+    }
+
+    /// All sixteen `-display_rotation <deg> [-display_hflip] [-display_vflip]`
+    /// combinations actually run against real `ffmpeg 9.0.1`, read back
+    /// pixel-for-pixel from a 4x6 asymmetric test pattern. See
+    /// `dihedral_transform_from_angle_and_flips`'s own doc.
+    #[test]
+    fn matches_every_measured_display_rotation_cli_combination() {
+        use DisplayTransform::{
+            Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip,
+            TransposeCclockFlip, Vflip,
+        };
+        let cases: &[(f64, bool, bool, Option<DisplayTransform>)] = &[
+            (0.0, false, false, None),
+            (0.0, true, false, Some(Hflip)),
+            (0.0, false, true, Some(Vflip)),
+            (0.0, true, true, Some(Rotate180)),
+            (90.0, false, false, Some(TransposeCclock)),
+            (90.0, true, false, Some(TransposeClockFlip)),
+            (90.0, false, true, Some(TransposeCclockFlip)),
+            (90.0, true, true, Some(TransposeClock)),
+            (-90.0, false, false, Some(TransposeClock)),
+            (-90.0, true, false, Some(TransposeCclockFlip)),
+            (-90.0, false, true, Some(TransposeClockFlip)),
+            (-90.0, true, true, Some(TransposeCclock)),
+            (180.0, false, false, Some(Rotate180)),
+            (180.0, true, false, Some(Vflip)),
+            (180.0, false, true, Some(Hflip)),
+            (180.0, true, true, None),
+            // 270 must agree with -90 (same physical angle, mod 360).
+            (270.0, false, false, Some(TransposeClock)),
+        ];
+        for (deg, hflip, vflip, want) in cases {
+            assert_eq!(
+                dihedral_transform_from_angle_and_flips(*deg, *hflip, *vflip),
+                *want,
+                "deg={deg} hflip={hflip} vflip={vflip}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_non_multiple_of_90() {
+        assert_eq!(
+            dihedral_transform_from_angle_and_flips(45.0, false, false),
+            None
+        );
+        assert_eq!(
+            dihedral_transform_from_angle_and_flips(1.0, false, false),
+            None
+        );
     }
 
     #[test]

@@ -180,6 +180,18 @@ impl Cli {
             .find(|g| g.index == index)
     }
 
+    /// The input group for `index`, for per-stream option lookups against an
+    /// *input* file's own stream numbering -- `-display_rotation`,
+    /// `-display_hflip`, `-display_vflip` and `-autorotate` are all
+    /// `INPUT, PER_STREAM` (measured, `ffmpeg 9.0.1 -h full`), unlike
+    /// `-vf`/`-s`/`-aspect`/`-pix_fmt`, which [`Cli::output_group`] serves.
+    #[must_use]
+    pub fn input_group(&self, index: u32) -> Option<&OptionGroup> {
+        self.line
+            .of_kind(GroupKind::Input)
+            .find(|g| g.index == index)
+    }
+
     /// The thread count a run actually uses: `-threads N` if stated
     /// (including `-threads 1`, which forces serial), else
     /// [`default_thread_count`].
@@ -482,9 +494,6 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
         "force_fps",
         "apply_cropping",
         "autoscale",
-        "display_rotation",
-        "display_hflip",
-        "display_vflip",
         "muxdelay",
         "muxpreload",
         "time_base",
@@ -553,7 +562,6 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
         "shortest",
         "shortest_buf_duration",
         "frames",
-        "autorotate",
     ];
 
     for &name in GLOBAL {
@@ -802,7 +810,7 @@ fn attach_of(g: &OptionGroup) -> Result<Vec<String>, Diagnostic> {
 /// ffmpeg -i            -> exit 234  "Missing argument for option 'i'."
 ///                                    "Error splitting the argument list: Invalid argument"
 /// ```
-fn split_error(e: &CliError) -> Diagnostic {
+pub(crate) fn split_error(e: &CliError) -> Diagnostic {
     let (err, first) = match e {
         CliError::UnrecognizedOption { name } => (
             AvError::OPTION_NOT_FOUND,

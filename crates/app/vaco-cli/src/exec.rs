@@ -99,7 +99,7 @@ use vaco_expr::Bindings;
 use vaco_filter_core::LinkFormat;
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::metadata::MuxMetadata;
-use vaco_format_core::{Muxer, Stream};
+use vaco_format_core::{Muxer, Stream, dihedral_transform_from_angle_and_flips, dihedral_transform_from_matrix};
 use vaco_pixfmt::PixFmt;
 use vaco_sched::{Driver, Finish, PipelineSpec, SourceBind};
 
@@ -227,7 +227,65 @@ pub fn describe(input: &InputFile) -> InputStreams {
             })
             .collect(),
         channels: streams.iter().map(channels_of).collect(),
+        display_matrix: streams.iter().map(display_matrix_of).collect(),
     }
+}
+
+/// `-display_rotation`/`-display_hflip`/`-display_vflip` (each `INPUT,
+/// PER_STREAM`, overriding the container's own matrix wholesale -- measured,
+/// `ffmpeg 9.0.1 -h full`) plus `-autorotate` (default on) resolved for one
+/// output stream's *source* input stream, or `None` if there is nothing to
+/// rotate: no matrix, an identity one, an angle that is not a clean multiple
+/// of 90° (see [`vaco_format_core::DisplayTransform`]'s own doc), a
+/// `-filter_complex`/`-lavfi` source (no container stream to read a matrix
+/// from), or `-noautorotate`.
+///
+/// # Errors
+///
+/// The specifier grammar's error (a malformed `-display_rotation:v:9`), or
+/// an invalid `-display_rotation` value.
+fn resolve_rotate(
+    cli: &Cli,
+    files: &[select::InputStreams],
+    source: StreamPick,
+) -> Result<Option<vaco_format_core::DisplayTransform>, Diagnostic> {
+    let StreamPick::Demuxed { file, stream } = source else {
+        return Ok(None);
+    };
+    let Some(input) = files.get(file as usize) else {
+        return Ok(None);
+    };
+    let ctx = MatchCtx::streams(&input.streams);
+    let group = cli.input_group(file);
+    let lookup = |name: &str| -> Result<Option<&vaco_cli_core::ParsedOption>, Diagnostic> {
+        match group {
+            Some(g) => g.stream_option(name, &ctx, stream).map_err(|e| crate::cli::split_error(&e)),
+            None => Ok(None),
+        }
+    };
+
+    let rotation_opt = lookup("display_rotation")?;
+    let hflip_opt = lookup("display_hflip")?;
+    let vflip_opt = lookup("display_vflip")?;
+
+    let transform = if rotation_opt.is_some() || hflip_opt.is_some() || vflip_opt.is_some() {
+        let degrees = rotation_opt
+            .map(|o| o.number().map_err(|e| crate::cli::split_error(&e)))
+            .transpose()?
+            .flatten()
+            .unwrap_or(0.0);
+        dihedral_transform_from_angle_and_flips(degrees, hflip_opt.is_some(), vflip_opt.is_some())
+    } else {
+        input
+            .streams
+            .iter()
+            .position(|s| s.index == stream)
+            .and_then(|pos| input.display_matrix.get(pos).copied().flatten())
+            .and_then(|matrix| dihedral_transform_from_matrix(&matrix))
+    };
+
+    let autorotate_on = !lookup("autorotate")?.is_some_and(|o| o.negated);
+    Ok(if autorotate_on { transform } else { None })
 }
 
 fn channels_of(s: &Stream) -> u32 {
@@ -236,6 +294,15 @@ fn channels_of(s: &Stream) -> u32 {
         .as_ref()
         .and_then(|a| a.layout.as_ref())
         .map_or(0, |l| l.channels)
+}
+
+/// The container's own display transformation matrix, if this stream
+/// carries one -- see `crate::select::InputStreams::display_matrix`.
+fn display_matrix_of(s: &Stream) -> Option<[i32; 9]> {
+    s.side_data.first().map(|d| {
+        let vaco_format_core::StreamSideData::DisplayMatrix(m) = d;
+        *m
+    })
 }
 
 fn stream_info(s: &Stream) -> StreamInfo {
@@ -357,7 +424,7 @@ pub fn resolve_output(
     // CL-20: resolved after `codec`, because the streamcopy/filtergraph
     // conflict check needs to know which streams are actually being
     // transcoded.
-    let graph_opts = graph_options_of(cli, out, &streams)?;
+    let graph_opts = graph_options_of(cli, out, &streams, files)?;
     for (i, (s, g)) in streams.iter_mut().zip(graph_opts).enumerate() {
         // CL-25: a further `-vf`/`-af` layered on top of a `-map [label]`
         // stream is not supported — see `crate::complexgraph`'s module docs
@@ -1072,6 +1139,7 @@ fn graph_options_of(
     cli: &Cli,
     out: &OutputSpec,
     streams: &[OutStream],
+    files: &[select::InputStreams],
 ) -> Result<Vec<crate::filtergraph::SimpleGraphOptions>, Diagnostic> {
     let view: Vec<StreamInfo> = streams
         .iter()
@@ -1129,6 +1197,7 @@ fn graph_options_of(
                         Diagnostic::new(AvError::EINVAL, vec![e])
                     })?);
                 }
+                opts.rotate = resolve_rotate(cli, files, s.source)?;
             }
             // `-enc_time_base` is not `bit::VIDEO`-gated in the
             // table (audio encoders take a time base too), so this is
@@ -2137,6 +2206,75 @@ mod tests {
         let c = cli::parse(argv).unwrap();
         let o = c.outputs.first().cloned().unwrap();
         (c, o)
+    }
+
+    fn input_with_matrix(matrix: Option<[i32; 9]>) -> select::InputStreams {
+        let mut files = select::InputStreams::default();
+        files.push_described(0, 16, 12, 0, 0); // one video stream, index 0
+        if let Some(slot) = files.display_matrix.first_mut() {
+            *slot = matrix;
+        }
+        files
+    }
+
+    /// `(0, -65536, 65536, 0)` is `-display_rotation 90`'s own real,
+    /// `ffprobe`-measured matrix (see `dihedral_transform_from_matrix`'s
+    /// doc) -- used here as a real container matrix with no CLI override at
+    /// all, exercising the "read the input's own tkhd" path.
+    const MEASURED_PLUS_90_MATRIX: [i32; 9] = [0, -65536, 0, 65536, 0, 0, 0, 0, 1 << 30];
+
+    #[test]
+    fn a_container_matrix_resolves_without_any_display_flag() {
+        let (cli, _) = out_of(&["-i", "in.mp4", "-f", "null", "-"]);
+        let files = [input_with_matrix(Some(MEASURED_PLUS_90_MATRIX))];
+        let got = resolve_rotate(&cli, &files, StreamPick::demuxed(0, 0)).unwrap();
+        assert_eq!(got, Some(vaco_format_core::DisplayTransform::TransposeCclock));
+    }
+
+    #[test]
+    fn noautorotate_suppresses_a_real_container_matrix() {
+        let (cli, _) = out_of(&["-noautorotate", "-i", "in.mp4", "-f", "null", "-"]);
+        let files = [input_with_matrix(Some(MEASURED_PLUS_90_MATRIX))];
+        let got = resolve_rotate(&cli, &files, StreamPick::demuxed(0, 0)).unwrap();
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn display_rotation_overrides_the_container_matrix_wholesale() {
+        // The container says +90 (no flip, matrix above); the CLI override
+        // says +90 with a horizontal flip, and per the reference's own
+        // documented text ("This option overrides the rotation/display
+        // transform metadata stored in the file, if any"), the override
+        // wins outright rather than composing with the container's matrix.
+        let (cli, _) = out_of(&[
+            "-display_rotation",
+            "90",
+            "-display_hflip",
+            "-i",
+            "in.mp4",
+            "-f",
+            "null",
+            "-",
+        ]);
+        let files = [input_with_matrix(Some(MEASURED_PLUS_90_MATRIX))];
+        let got = resolve_rotate(&cli, &files, StreamPick::demuxed(0, 0)).unwrap();
+        assert_eq!(got, Some(vaco_format_core::DisplayTransform::TransposeClockFlip));
+    }
+
+    #[test]
+    fn no_matrix_and_no_override_is_nothing_to_rotate() {
+        let (cli, _) = out_of(&["-i", "in.mp4", "-f", "null", "-"]);
+        let files = [input_with_matrix(None)];
+        let got = resolve_rotate(&cli, &files, StreamPick::demuxed(0, 0)).unwrap();
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn a_complex_graph_source_has_no_input_stream_to_rotate() {
+        let (cli, _) = out_of(&["-i", "in.mp4", "-f", "null", "-"]);
+        let files = [input_with_matrix(Some(MEASURED_PLUS_90_MATRIX))];
+        let got = resolve_rotate(&cli, &files, StreamPick::Complex(0)).unwrap();
+        assert_eq!(got, None);
     }
 
     #[test]

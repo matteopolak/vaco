@@ -74,7 +74,10 @@ pub use mux::{
 pub use options::{AvoidNegativeTs, FFlags, FormatOptions};
 pub use probe::{Detected, Probe, ProbeData, ProbeScore};
 pub use seek::{IndexEntry, IndexFlags, PacketIndex, SeekFlags, SeekStrategy, SeekTarget};
-pub use sidedata::{StreamSideData, display_rotation, is_identity_matrix};
+pub use sidedata::{
+    DisplayTransform, StreamSideData, dihedral_transform_from_angle_and_flips, dihedral_transform_from_matrix,
+    display_rotation, is_identity_matrix,
+};
 pub use time::{DurationEstimate, DurationSource, TimestampFixer, WrapState};
 
 /// One elementary stream in a container.

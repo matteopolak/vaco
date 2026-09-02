@@ -110,6 +110,13 @@ pub struct InputStreams {
     /// Parallel to [`InputStreams::streams`]: the channel count, which
     /// [`StreamInfo`] does not carry and audio auto-selection scores on.
     pub channels: Vec<u32>,
+    /// Parallel to [`InputStreams::streams`]: the container's own display
+    /// transformation matrix (`StreamSideData::DisplayMatrix`), for
+    /// `-autorotate`'s default-on rotation. Not on [`StreamInfo`] itself for
+    /// the same reason `channels` is not -- that type is the specifier
+    /// grammar's view of a stream (see this module's own doc), and no
+    /// specifier ever matches on a display matrix.
+    pub display_matrix: Vec<Option<[i32; 9]>>,
 }
 
 impl InputStreams {
@@ -146,6 +153,7 @@ impl InputStreams {
             ..StreamInfo::default()
         });
         self.channels.push(channels);
+        self.display_matrix.push(None);
     }
 
     fn ctx(&self) -> MatchCtx<'_> {
@@ -553,10 +561,12 @@ mod tests {
     }
 
     fn file(streams: Vec<StreamInfo>, channels: Vec<u32>) -> InputStreams {
+        let display_matrix = vec![None; streams.len()];
         InputStreams {
             streams,
             programs: Vec::new(),
             channels,
+            display_matrix,
         }
     }
 

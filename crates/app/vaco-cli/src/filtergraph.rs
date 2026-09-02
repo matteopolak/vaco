@@ -24,6 +24,24 @@
 //!   reported format and the encoder's [`accepted_pix_fmts`] is closed by
 //!   [`vaco_filter_graph::convert::DefaultConverters`], the same policy
 //!   `vaco_filter_graph::build::BuiltGraph::configure` already implements.
+//! - `-autorotate` (default on; `-noautorotate` disables), plus
+//!   `-display_rotation`/`-display_hflip`/`-display_vflip` overriding the
+//!   input's own display matrix wholesale: resolved in
+//!   `crate::exec::resolve_rotate` (it needs the *input* stream's side data
+//!   and per-stream options, which this crate's output-scoped types have no
+//!   way to reach) into a [`vaco_format_core::DisplayTransform`], inserted
+//!   as the **first** filter in the chain — before any user `-vf` — via
+//!   [`rotate_filter_text`]. Verified pixel-exact against real `ffmpeg
+//!   9.0.1` for all eight dihedral cases (90/180/270, each with or without a
+//!   reflection) on a real H.264 decode, including a non-square SAR input
+//!   (`vaco-filter-video-geometry::transpose` already inverts SAR on the
+//!   90°/270° cases). Never reached for a `-c copy` stream, which has no
+//!   decoder or filtergraph in the pipeline at all (`crate::exec`'s
+//!   `StreamCodec::Copy` branch). What this does *not* do: write the
+//!   (possibly `-noautorotate`-suppressed, or copy-stream) matrix into a
+//!   *new* output container — `vaco-mux-mp4` always writes an identity
+//!   `tkhd` matrix today, a separate, pre-existing muxer limitation this
+//!   pass did not touch.
 //!
 //! # What is not
 //!
@@ -37,11 +55,12 @@
 //! - Multiple `-af`/`-vf` occurrences on one output as *separate* graphs
 //!   (the reference's own behaviour): the last one wins, matching how `-c`
 //!   already resolves repeated per-stream options in this crate.
-//! - `-autoscale`/`-autorotate`/`apply_cropping`'s exact fixed positions
-//!   relative to `-s`/`-pix_fmt` in the chain — user filters, then `-s`'s
-//!   `scale`, then `-aspect`'s `setdar`, then `-pix_fmt`'s `format`, which is
-//!   *a* defensible order but not verified against the reference's own
-//!   ordering rule beyond what plan 14 §6.6 states.
+//! - `-autoscale`/`apply_cropping`'s exact fixed positions relative to
+//!   `-s`/`-pix_fmt` in the chain — user filters, then rotation (see
+//!   above), then `-s`'s `scale`, then `-aspect`'s `setdar`, then
+//!   `-pix_fmt`'s `format`, which is *a* defensible order but not verified
+//!   against the reference's own ordering rule beyond what plan 14 §6.6
+//!   states.
 //!
 //! [`accepted_pix_fmts`]: vaco_codec_core::Encoder::accepted_pix_fmts
 
@@ -96,6 +115,18 @@ pub struct SimpleGraphOptions {
     /// `-enc_time_base` (CL-21/#222), already parsed. Same rationale as
     /// [`SimpleGraphOptions::fps_mode`] for why it lives here.
     pub enc_time_base: Option<crate::enc_time_base::EncTimeBase>,
+    /// The rotation/flip [`vaco_format_core::sidedata::DisplayTransform`]
+    /// this stream resolved to, from the input's own display matrix (or a
+    /// `-display_rotation`/`-display_hflip`/`-display_vflip` override) and
+    /// `-autorotate` (default on, `-noautorotate` disables) -- resolved in
+    /// `crate::exec::graph_options_of` because doing so needs the *input*
+    /// stream's own side data and per-stream options, which this crate's
+    /// output-scoped [`describe`] has no way to reach. `None` means either
+    /// nothing to rotate (an identity matrix, or no matrix at all) or
+    /// `-noautorotate` -- both leave the frame untouched, so there is
+    /// nothing this field's one caller ([`describe`]) needs to tell them
+    /// apart.
+    pub rotate: Option<vaco_format_core::DisplayTransform>,
 }
 
 impl SimpleGraphOptions {
@@ -111,6 +142,7 @@ impl SimpleGraphOptions {
             || self.sample_rate.is_some()
             || self.channels.is_some()
             || self.sample_fmt.is_some()
+            || self.rotate.is_some()
     }
 }
 
@@ -129,6 +161,15 @@ pub struct SimpleGraph {
 /// build), so callers should check that first.
 fn describe(opts: &SimpleGraphOptions, media: MediaType) -> Option<String> {
     let mut parts: Vec<String> = Vec::new();
+    // `-autorotate`'s rotation happens "at the filtering stage" (measured,
+    // `ffmpeg 9.0.1 -h full`'s own `-display_rotation` text) -- first, before
+    // any user-supplied `-vf`, matching the reference inserting it
+    // immediately after the buffer source and before the parsed user graph.
+    if media == MediaType::Video
+        && let Some(transform) = opts.rotate
+    {
+        parts.push(rotate_filter_text(transform).to_owned());
+    }
     if let Some(t) = &opts.filter_text
         && !t.is_empty()
     {
@@ -157,6 +198,24 @@ fn describe(opts: &SimpleGraphOptions, media: MediaType) -> Option<String> {
         return None;
     }
     Some(parts.join(","))
+}
+
+/// The `vaco-filter-video-geometry` filter-graph text for one
+/// [`vaco_format_core::DisplayTransform`] -- see that type's own doc for how
+/// each mapping was measured against real `ffmpeg`.
+fn rotate_filter_text(transform: vaco_format_core::DisplayTransform) -> &'static str {
+    use vaco_format_core::DisplayTransform::{
+        Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip, TransposeCclockFlip, Vflip,
+    };
+    match transform {
+        Hflip => "hflip",
+        Vflip => "vflip",
+        Rotate180 => "hflip,vflip",
+        TransposeClock => "transpose=dir=clock",
+        TransposeCclock => "transpose=dir=cclock",
+        TransposeClockFlip => "transpose=dir=clock_flip",
+        TransposeCclockFlip => "transpose=dir=cclock_flip",
+    }
 }
 
 /// A [`LinkFormat`] for a decoded video stream, from the demuxer/decoder's own
