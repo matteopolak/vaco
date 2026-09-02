@@ -18,7 +18,10 @@ use crate::font8x8::{self, GLYPH_H, GLYPH_W};
 /// text lines rather than `datascope`'s fixed value grid.
 pub(crate) fn draw_glyph(rows: &mut [&mut [u8]], top: u32, left: u32, ch: u8) {
     for row in 0..GLYPH_H {
-        let Some(y) = top.checked_add(row as u32).and_then(|v| usize::try_from(v).ok()) else {
+        let Some(y) = top
+            .checked_add(row as u32)
+            .and_then(|v| usize::try_from(v).ok())
+        else {
             continue;
         };
         let Some(dst) = rows.get_mut(y) else { continue };
@@ -26,7 +29,9 @@ pub(crate) fn draw_glyph(rows: &mut [&mut [u8]], top: u32, left: u32, ch: u8) {
             if !font8x8::glyph_pixel(ch, row, col) {
                 continue;
             }
-            let Some(x) = left.checked_add(col as u32).and_then(|v| usize::try_from(v).ok())
+            let Some(x) = left
+                .checked_add(col as u32)
+                .and_then(|v| usize::try_from(v).ok())
             else {
                 continue;
             };

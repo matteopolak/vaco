@@ -14,7 +14,9 @@ use vaco_packet::Packet;
 use vaco_pixfmt::PixFmt;
 
 use crate::framebuf::{self, Picture};
-use crate::header::{self, EntropyContext, FrameHeader, LoopFilterParams, PrevFrameInfo, RefFrameDims, Segmentation};
+use crate::header::{
+    self, EntropyContext, FrameHeader, LoopFilterParams, PrevFrameInfo, RefFrameDims, Segmentation,
+};
 use crate::interpredict;
 use crate::loopfilter;
 use crate::mvpred::{self, MvCell};
@@ -60,7 +62,12 @@ struct MiCell {
 
 impl MiCell {
     fn to_mv_cell(self) -> MvCell {
-        MvCell { y_mode: self.y_mode, ref_frame: self.ref_frame, mv: self.mv, sub_mvs: self.sub_mvs }
+        MvCell {
+            y_mode: self.y_mode,
+            ref_frame: self.ref_frame,
+            mv: self.mv,
+            sub_mvs: self.sub_mvs,
+        }
     }
 }
 
@@ -124,12 +131,22 @@ impl FrameCtx {
     }
 
     fn prev_mv_cell_here(&self, r: usize, c: usize) -> MvCell {
-        self.prev_mv_grid.get(r * self.mi_cols + c).copied().unwrap_or_default().to_mv_cell()
+        self.prev_mv_grid
+            .get(r * self.mi_cols + c)
+            .copied()
+            .unwrap_or_default()
+            .to_mv_cell()
     }
 
     fn store_block(&mut self, r: usize, c: usize, subsize: i32, cell: MiCell, segment_id: u8) {
-        let h = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
-        let w = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
+        let h = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let w = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
         for y in 0..h {
             for x in 0..w {
                 let (rr, cc) = (r + y, c + x);
@@ -164,13 +181,24 @@ impl FrameCtx {
 
 /// §9.3.2's `partition` context: `bsl*4 + left*2 + above`.
 fn partition_ctx(ctx: &FrameCtx, r: usize, c: usize, bsize: i32, num8x8: usize) -> usize {
-    let bsl = tables::MI_WIDTH_LOG2_LOOKUP.get(usize::try_from(bsize).unwrap_or(0)).copied().unwrap_or(0);
-    let boffset = tables::MI_WIDTH_LOG2_LOOKUP.get(usize::try_from(tables::BLOCK_64X64).unwrap_or(0)).copied().unwrap_or(0) - bsl;
+    let bsl = tables::MI_WIDTH_LOG2_LOOKUP
+        .get(usize::try_from(bsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
+    let boffset = tables::MI_WIDTH_LOG2_LOOKUP
+        .get(usize::try_from(tables::BLOCK_64X64).unwrap_or(0))
+        .copied()
+        .unwrap_or(0)
+        - bsl;
     let mut above = 0u8;
     let mut left = 0u8;
     for i in 0..num8x8 {
         above |= ctx.above_partition_context.get(c + i).copied().unwrap_or(0);
-        left |= ctx.left_partition_context.get((r % 8) + i).copied().unwrap_or(0);
+        left |= ctx
+            .left_partition_context
+            .get((r % 8) + i)
+            .copied()
+            .unwrap_or(0);
     }
     let above_bit = usize::from((above & (1 << boffset)) > 0);
     let left_bit = usize::from((left & (1 << boffset)) > 0);
@@ -178,11 +206,21 @@ fn partition_ctx(ctx: &FrameCtx, r: usize, c: usize, bsize: i32, num8x8: usize) 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn decode_partition(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: usize, c: usize, bsize: i32) {
+fn decode_partition(
+    bd: &mut Bd<'_>,
+    ctx: &mut FrameCtx,
+    entropy: &EntropyContext,
+    r: usize,
+    c: usize,
+    bsize: i32,
+) {
     if r >= ctx.mi_rows || c >= ctx.mi_cols {
         return;
     }
-    let num8x8 = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(bsize).unwrap_or(0)).copied().unwrap_or(1);
+    let num8x8 = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+        .get(usize::try_from(bsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(1);
     let half = num8x8 >> 1;
     let has_rows = r + half < ctx.mi_rows;
     let has_cols = c + half < ctx.mi_cols;
@@ -200,19 +238,34 @@ fn decode_partition(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContex
     // in Phase C, since only a key frame's partition probabilities happen
     // to be the fixed table).
     let probs = if ctx.header.frame_is_intra {
-        tables::KF_PARTITION_PROBS.get(pctx).copied().unwrap_or([128; 3])
+        tables::KF_PARTITION_PROBS
+            .get(pctx)
+            .copied()
+            .unwrap_or([128; 3])
     } else {
-        entropy.partition_probs.get(pctx).copied().unwrap_or([128; 3])
+        entropy
+            .partition_probs
+            .get(pctx)
+            .copied()
+            .unwrap_or([128; 3])
     };
     let partition = if has_rows && has_cols {
         bd.read_tree(&tables::PARTITION_TREE, &probs)
     } else if has_cols {
         // node2 fixed at 1: the second (index-1) probability.
         let p = probs.get(1).copied().unwrap_or(128);
-        if bd.read_bool(p) { tables::PARTITION_SPLIT } else { tables::PARTITION_HORZ }
+        if bd.read_bool(p) {
+            tables::PARTITION_SPLIT
+        } else {
+            tables::PARTITION_HORZ
+        }
     } else if has_rows {
         let p = probs.get(2).copied().unwrap_or(128);
-        if bd.read_bool(p) { tables::PARTITION_SPLIT } else { tables::PARTITION_VERT }
+        if bd.read_bool(p) {
+            tables::PARTITION_SPLIT
+        } else {
+            tables::PARTITION_VERT
+        }
     } else {
         tables::PARTITION_SPLIT
     };
@@ -243,8 +296,14 @@ fn decode_partition(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContex
     }
 
     if bsize == tables::BLOCK_8X8 || partition != tables::PARTITION_SPLIT {
-        let bw = tables::B_WIDTH_LOG2_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(0);
-        let bh = tables::B_HEIGHT_LOG2_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(0);
+        let bw = tables::B_WIDTH_LOG2_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(0);
+        let bh = tables::B_HEIGHT_LOG2_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(0);
         for i in 0..num8x8 {
             if let Some(slot) = ctx.above_partition_context.get_mut(c + i) {
                 *slot = 15u8 >> bw;
@@ -256,7 +315,14 @@ fn decode_partition(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContex
     }
 }
 
-fn decode_block(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: usize, c: usize, subsize: i32) {
+fn decode_block(
+    bd: &mut Bd<'_>,
+    ctx: &mut FrameCtx,
+    entropy: &EntropyContext,
+    r: usize,
+    c: usize,
+    subsize: i32,
+) {
     let avail_u = r > 0;
     // §6.4.4's `AvailL`: unavailable at the *tile's* own left edge, not just
     // the frame's — a tile's whole reason to exist is that its edges never
@@ -265,7 +331,8 @@ fn decode_block(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r
     let avail_l = c > ctx.tile_mi_col_start;
 
     let mut block = if ctx.header.frame_is_intra {
-        let (segment_id, skip, tx_size, y_mode, uv_mode, sub_modes) = intra_frame_mode_info(bd, ctx, r, c, subsize, avail_u, avail_l);
+        let (segment_id, skip, tx_size, y_mode, uv_mode, sub_modes) =
+            intra_frame_mode_info(bd, ctx, r, c, subsize, avail_u, avail_l);
         DecodedBlock {
             segment_id,
             skip,
@@ -310,7 +377,14 @@ fn decode_block(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r
         },
         block.segment_id,
     );
-    ctx.parsed.push(ParsedBlock { r, c, subsize, block, tile_mi_col_start, residues });
+    ctx.parsed.push(ParsedBlock {
+        r,
+        c,
+        subsize,
+        block,
+        tile_mi_col_start,
+        residues,
+    });
 }
 
 /// Everything `residual`/`ctx.store_block` need out of whichever of
@@ -409,14 +483,32 @@ fn intra_frame_mode_info(
     let mut sub_modes = [tables::DC_PRED; 4];
     let y_mode;
     if subsize >= tables::BLOCK_8X8 {
-        let above_mode = if avail_u { ctx.mi_at(ix(r) - 1, ix(c)).map_or(tables::DC_PRED, |m| m.sub_modes.get(2).copied().unwrap_or(tables::DC_PRED)) } else { tables::DC_PRED };
-        let left_mode = if avail_l { ctx.mi_at(ix(r), ix(c) - 1).map_or(tables::DC_PRED, |m| m.sub_modes.get(1).copied().unwrap_or(tables::DC_PRED)) } else { tables::DC_PRED };
+        let above_mode = if avail_u {
+            ctx.mi_at(ix(r) - 1, ix(c)).map_or(tables::DC_PRED, |m| {
+                m.sub_modes.get(2).copied().unwrap_or(tables::DC_PRED)
+            })
+        } else {
+            tables::DC_PRED
+        };
+        let left_mode = if avail_l {
+            ctx.mi_at(ix(r), ix(c) - 1).map_or(tables::DC_PRED, |m| {
+                m.sub_modes.get(1).copied().unwrap_or(tables::DC_PRED)
+            })
+        } else {
+            tables::DC_PRED
+        };
         let m = read_kf_intra_mode(bd, above_mode, left_mode);
         y_mode = m;
         sub_modes = [m; 4];
     } else {
-        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
-        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
+        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
         let mut idy = 0usize;
         let mut last_mode = tables::DC_PRED;
         while idy < 2 {
@@ -425,14 +517,21 @@ fn intra_frame_mode_info(
                 let above_mode = if idy != 0 {
                     sub_modes.get(idx).copied().unwrap_or(tables::DC_PRED)
                 } else if avail_u {
-                    ctx.mi_at(ix(r) - 1, ix(c)).map_or(tables::DC_PRED, |m| m.sub_modes.get(2 + idx).copied().unwrap_or(tables::DC_PRED))
+                    ctx.mi_at(ix(r) - 1, ix(c)).map_or(tables::DC_PRED, |m| {
+                        m.sub_modes.get(2 + idx).copied().unwrap_or(tables::DC_PRED)
+                    })
                 } else {
                     tables::DC_PRED
                 };
                 let left_mode = if idx != 0 {
                     sub_modes.get(idy * 2).copied().unwrap_or(tables::DC_PRED)
                 } else if avail_l {
-                    ctx.mi_at(ix(r), ix(c) - 1).map_or(tables::DC_PRED, |m| m.sub_modes.get(1 + idy * 2).copied().unwrap_or(tables::DC_PRED))
+                    ctx.mi_at(ix(r), ix(c) - 1).map_or(tables::DC_PRED, |m| {
+                        m.sub_modes
+                            .get(1 + idy * 2)
+                            .copied()
+                            .unwrap_or(tables::DC_PRED)
+                    })
                 } else {
                     tables::DC_PRED
                 };
@@ -455,7 +554,10 @@ fn intra_frame_mode_info(
 
     let uv_mode = {
         let ai = usize::try_from(y_mode).unwrap_or(0).min(9);
-        let probs = tables::KF_UV_MODE_PROBS.get(ai).copied().unwrap_or([128; 9]);
+        let probs = tables::KF_UV_MODE_PROBS
+            .get(ai)
+            .copied()
+            .unwrap_or([128; 9]);
         bd.read_tree(&tables::INTRA_MODE_TREE, &probs)
     };
 
@@ -465,20 +567,41 @@ fn intra_frame_mode_info(
 fn read_kf_intra_mode(bd: &mut Bd<'_>, above_mode: i32, left_mode: i32) -> i32 {
     let ai = usize::try_from(above_mode).unwrap_or(0).min(9);
     let li = usize::try_from(left_mode).unwrap_or(0).min(9);
-    let probs = tables::KF_Y_MODE_PROBS.get(ai).and_then(|r| r.get(li)).copied().unwrap_or([128; 9]);
+    let probs = tables::KF_Y_MODE_PROBS
+        .get(ai)
+        .and_then(|r| r.get(li))
+        .copied()
+        .unwrap_or([128; 9]);
     bd.read_tree(&tables::INTRA_MODE_TREE, &probs)
 }
 
 fn entropy_skip_prob(ctx: &FrameCtx, sctx: usize) -> u8 {
-    ctx.header.entropy.skip_prob.get(sctx).copied().unwrap_or(128)
+    ctx.header
+        .entropy
+        .skip_prob
+        .get(sctx)
+        .copied()
+        .unwrap_or(128)
 }
 
 /// §6.4.10's `read_tx_size(allowSelect)`, shared by `intra_frame_mode_info`
 /// (which always passes `allowSelect = true`) and `inter_frame_mode_info`
 /// (`!skip || !is_inter`).
 #[allow(clippy::too_many_arguments)]
-fn read_tx_size(bd: &mut Bd<'_>, ctx: &FrameCtx, r: usize, c: usize, subsize: i32, avail_u: bool, avail_l: bool, allow_select: bool) -> i32 {
-    let max_tx_size = tables::MAX_TXSIZE_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(0);
+fn read_tx_size(
+    bd: &mut Bd<'_>,
+    ctx: &FrameCtx,
+    r: usize,
+    c: usize,
+    subsize: i32,
+    avail_u: bool,
+    avail_l: bool,
+    allow_select: bool,
+) -> i32 {
+    let max_tx_size = tables::MAX_TXSIZE_LOOKUP
+        .get(usize::try_from(subsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
     let tx_mode = ctx.header.tx_mode;
     if allow_select && tx_mode == tables::TX_MODE_SELECT && subsize >= tables::BLOCK_8X8 {
         let above_avail_cell = ctx.mi_at(ix(r) - 1, ix(c));
@@ -505,7 +628,14 @@ fn read_tx_size(bd: &mut Bd<'_>, ctx: &FrameCtx, r: usize, c: usize, subsize: i3
         }
         let tctx = usize::from((above + left) > max_tx_size);
         let row = usize::try_from(max_tx_size).unwrap_or(0);
-        let probs = ctx.header.entropy.tx_probs.get(row).and_then(|r| r.get(tctx)).copied().unwrap_or([128; 3]);
+        let probs = ctx
+            .header
+            .entropy
+            .tx_probs
+            .get(row)
+            .and_then(|r| r.get(tctx))
+            .copied()
+            .unwrap_or([128; 3]);
         let tree: &[i8] = match max_tx_size {
             x if x == tables::TX_32X32 => &tables::TX_SIZE_32_TREE,
             x if x == tables::TX_16X16 => &tables::TX_SIZE_16_TREE,
@@ -513,7 +643,12 @@ fn read_tx_size(bd: &mut Bd<'_>, ctx: &FrameCtx, r: usize, c: usize, subsize: i3
         };
         bd.read_tree(tree, &probs)
     } else {
-        max_tx_size.min(tables::TX_MODE_TO_BIGGEST_TX_SIZE.get(usize::try_from(tx_mode).unwrap_or(0)).copied().unwrap_or(0))
+        max_tx_size.min(
+            tables::TX_MODE_TO_BIGGEST_TX_SIZE
+                .get(usize::try_from(tx_mode).unwrap_or(0))
+                .copied()
+                .unwrap_or(0),
+        )
     }
 }
 
@@ -522,7 +657,10 @@ fn read_tx_size(bd: &mut Bd<'_>, ctx: &FrameCtx, r: usize, c: usize, subsize: i3
 /// (`is_inter`/`comp_mode`/`comp_ref`/`single_ref_p1`/`single_ref_p2`)
 /// reads from repeatedly.
 #[derive(Debug, Clone, Copy)]
-#[allow(clippy::struct_excessive_bools, reason = "each bool is an independent §6.4.11/9.3.2 context input (LeftIntra/AboveIntra/LeftSingle/AboveSingle), not related flags that belong in one enum")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each bool is an independent §6.4.11/9.3.2 context input (LeftIntra/AboveIntra/LeftSingle/AboveSingle), not related flags that belong in one enum"
+)]
 struct NeighborRefInfo {
     left_ref: [i32; 2],
     above_ref: [i32; 2],
@@ -532,9 +670,23 @@ struct NeighborRefInfo {
     above_single: bool,
 }
 
-fn neighbor_ref_info(ctx: &FrameCtx, r: usize, c: usize, avail_u: bool, avail_l: bool) -> NeighborRefInfo {
-    let left = if avail_l { ctx.mi_at(ix(r), ix(c) - 1) } else { None };
-    let above = if avail_u { ctx.mi_at(ix(r) - 1, ix(c)) } else { None };
+fn neighbor_ref_info(
+    ctx: &FrameCtx,
+    r: usize,
+    c: usize,
+    avail_u: bool,
+    avail_l: bool,
+) -> NeighborRefInfo {
+    let left = if avail_l {
+        ctx.mi_at(ix(r), ix(c) - 1)
+    } else {
+        None
+    };
+    let above = if avail_u {
+        ctx.mi_at(ix(r) - 1, ix(c))
+    } else {
+        None
+    };
     let left_ref = left.map_or([tables::INTRA_FRAME, tables::NONE], |m| m.ref_frame);
     let above_ref = above.map_or([tables::INTRA_FRAME, tables::NONE], |m| m.ref_frame);
     NeighborRefInfo {
@@ -549,20 +701,37 @@ fn neighbor_ref_info(ctx: &FrameCtx, r: usize, c: usize, avail_u: bool, avail_l:
 
 fn seg_feature_active_for(ctx: &FrameCtx, segment_id: u8, feature: usize) -> bool {
     ctx.header.segmentation.enabled
-        && ctx.header.segmentation.feature_enabled.get(usize::from(segment_id)).and_then(|row| row.get(feature)).copied().unwrap_or(false)
+        && ctx
+            .header
+            .segmentation
+            .feature_enabled
+            .get(usize::from(segment_id))
+            .and_then(|row| row.get(feature))
+            .copied()
+            .unwrap_or(false)
 }
 
 /// §6.4.14's `get_segment_id`: the smallest `PrevSegmentIds` value covering
 /// this block's on-screen 8x8 footprint.
 fn get_segment_id(ctx: &FrameCtx, r: usize, c: usize, subsize: i32) -> u8 {
-    let bw = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
-    let bh = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
+    let bw = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+        .get(usize::try_from(subsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(1);
+    let bh = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP
+        .get(usize::try_from(subsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(1);
     let xmis = (ctx.mi_cols.saturating_sub(c)).min(bw);
     let ymis = (ctx.mi_rows.saturating_sub(r)).min(bh);
     let mut seg = 7u8;
     for y in 0..ymis {
         for x in 0..xmis {
-            let v = ctx.prev_segment_ids.get((r + y) * ctx.mi_cols + (c + x)).copied().unwrap_or(0);
+            let v = ctx
+                .prev_segment_ids
+                .get((r + y) * ctx.mi_cols + (c + x))
+                .copied()
+                .unwrap_or(0);
             seg = seg.min(v);
         }
     }
@@ -580,12 +749,27 @@ fn inter_segment_id(bd: &mut Bd<'_>, ctx: &mut FrameCtx, r: usize, c: usize, sub
         return predicted;
     }
     if seg.temporal_update {
-        let pctx = usize::from(ctx.left_seg_pred_context.get(r % 8).copied().unwrap_or(false)) + usize::from(ctx.above_seg_pred_context.get(c).copied().unwrap_or(false));
+        let pctx = usize::from(
+            ctx.left_seg_pred_context
+                .get(r % 8)
+                .copied()
+                .unwrap_or(false),
+        ) + usize::from(ctx.above_seg_pred_context.get(c).copied().unwrap_or(false));
         let p = seg.pred_prob.get(pctx).copied().unwrap_or(255);
         let seg_id_predicted = bd.read_bool(p);
-        let id = if seg_id_predicted { predicted } else { u8::try_from(bd.read_tree(&tables::SEGMENT_TREE, &seg.tree_probs)).unwrap_or(0) };
-        let bw = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
-        let bh = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
+        let id = if seg_id_predicted {
+            predicted
+        } else {
+            u8::try_from(bd.read_tree(&tables::SEGMENT_TREE, &seg.tree_probs)).unwrap_or(0)
+        };
+        let bw = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let bh = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
         for i in 0..bw {
             if let Some(slot) = ctx.above_seg_pred_context.get_mut(c + i) {
                 *slot = seg_id_predicted;
@@ -603,19 +787,47 @@ fn inter_segment_id(bd: &mut Bd<'_>, ctx: &mut FrameCtx, r: usize, c: usize, sub
 }
 
 /// §6.4.13's `read_is_inter`.
-fn read_is_inter(bd: &mut Bd<'_>, ctx: &FrameCtx, segment_id: u8, neighbors: NeighborRefInfo, avail_u: bool, avail_l: bool) -> bool {
+fn read_is_inter(
+    bd: &mut Bd<'_>,
+    ctx: &FrameCtx,
+    segment_id: u8,
+    neighbors: NeighborRefInfo,
+    avail_u: bool,
+    avail_l: bool,
+) -> bool {
     if seg_feature_active_for(ctx, segment_id, tables::SEG_LVL_REF_FRAME) {
-        let data = ctx.header.segmentation.feature_data.get(usize::from(segment_id)).and_then(|r| r.get(tables::SEG_LVL_REF_FRAME)).copied().unwrap_or(tables::INTRA_FRAME);
+        let data = ctx
+            .header
+            .segmentation
+            .feature_data
+            .get(usize::from(segment_id))
+            .and_then(|r| r.get(tables::SEG_LVL_REF_FRAME))
+            .copied()
+            .unwrap_or(tables::INTRA_FRAME);
         return data != tables::INTRA_FRAME;
     }
     let sctx = if avail_u && avail_l {
-        if neighbors.left_intra && neighbors.above_intra { 3 } else { usize::from(neighbors.left_intra || neighbors.above_intra) }
+        if neighbors.left_intra && neighbors.above_intra {
+            3
+        } else {
+            usize::from(neighbors.left_intra || neighbors.above_intra)
+        }
     } else if avail_u || avail_l {
-        2 * usize::from(if avail_u { neighbors.above_intra } else { neighbors.left_intra })
+        2 * usize::from(if avail_u {
+            neighbors.above_intra
+        } else {
+            neighbors.left_intra
+        })
     } else {
         0
     };
-    let p = ctx.header.entropy.is_inter_prob.get(sctx).copied().unwrap_or(128);
+    let p = ctx
+        .header
+        .entropy
+        .is_inter_prob
+        .get(sctx)
+        .copied()
+        .unwrap_or(128);
     bd.read_bool(p)
 }
 
@@ -624,18 +836,35 @@ fn read_is_inter(bd: &mut Bd<'_>, ctx: &FrameCtx, segment_id: u8, neighbors: Nei
 /// tables (forward-updated by this frame's own compressed header) rather
 /// than the fixed `kf_y_mode_probs`/`kf_uv_mode_probs` a key frame's
 /// `intra_frame_mode_info` uses.
-fn intra_block_mode_info(bd: &mut Bd<'_>, entropy: &EntropyContext, subsize: i32) -> (i32, i32, [i32; 4]) {
+fn intra_block_mode_info(
+    bd: &mut Bd<'_>,
+    entropy: &EntropyContext,
+    subsize: i32,
+) -> (i32, i32, [i32; 4]) {
     let mut sub_modes = [tables::DC_PRED; 4];
     let y_mode;
     if subsize >= tables::BLOCK_8X8 {
-        let ctx_idx = tables::SIZE_GROUP_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(0);
-        let probs = entropy.y_mode_probs.get(ctx_idx).copied().unwrap_or([128; 9]);
+        let ctx_idx = tables::SIZE_GROUP_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(0);
+        let probs = entropy
+            .y_mode_probs
+            .get(ctx_idx)
+            .copied()
+            .unwrap_or([128; 9]);
         let m = bd.read_tree(&tables::INTRA_MODE_TREE, &probs);
         y_mode = m;
         sub_modes = [m; 4];
     } else {
-        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
-        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP.get(usize::try_from(subsize).unwrap_or(0)).copied().unwrap_or(1);
+        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP
+            .get(usize::try_from(subsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
         let probs = entropy.y_mode_probs.first().copied().unwrap_or([128; 9]);
         let mut idy = 0usize;
         let mut last_mode = tables::DC_PRED;
@@ -673,16 +902,37 @@ fn single_ref_p1_ctx(n: NeighborRefInfo, avail_u: bool, avail_l: bool) -> usize 
         if n.above_intra && n.left_intra {
             2
         } else if n.left_intra {
-            if n.above_single { 4 * usize::from(n.above_ref[0] == last) } else { 1 + usize::from(n.above_ref[0] == last || n.above_ref[1] == last) }
+            if n.above_single {
+                4 * usize::from(n.above_ref[0] == last)
+            } else {
+                1 + usize::from(n.above_ref[0] == last || n.above_ref[1] == last)
+            }
         } else if n.above_intra {
-            if n.left_single { 4 * usize::from(n.left_ref[0] == last) } else { 1 + usize::from(n.left_ref[0] == last || n.left_ref[1] == last) }
+            if n.left_single {
+                4 * usize::from(n.left_ref[0] == last)
+            } else {
+                1 + usize::from(n.left_ref[0] == last || n.left_ref[1] == last)
+            }
         } else if n.above_single && n.left_single {
             2 * usize::from(n.above_ref[0] == last) + 2 * usize::from(n.left_ref[0] == last)
         } else if !n.above_single && !n.left_single {
-            1 + usize::from(n.above_ref[0] == last || n.above_ref[1] == last || n.left_ref[0] == last || n.left_ref[1] == last)
+            1 + usize::from(
+                n.above_ref[0] == last
+                    || n.above_ref[1] == last
+                    || n.left_ref[0] == last
+                    || n.left_ref[1] == last,
+            )
         } else {
-            let (rfs, crf1, crf2) = if n.above_single { (n.above_ref[0], n.left_ref[0], n.left_ref[1]) } else { (n.left_ref[0], n.above_ref[0], n.above_ref[1]) };
-            if rfs == last { 3 + usize::from(crf1 == last || crf2 == last) } else { usize::from(crf1 == last || crf2 == last) }
+            let (rfs, crf1, crf2) = if n.above_single {
+                (n.above_ref[0], n.left_ref[0], n.left_ref[1])
+            } else {
+                (n.left_ref[0], n.above_ref[0], n.above_ref[1])
+            };
+            if rfs == last {
+                3 + usize::from(crf1 == last || crf2 == last)
+            } else {
+                usize::from(crf1 == last || crf2 == last)
+            }
         }
     } else if avail_u {
         if n.above_intra {
@@ -707,19 +957,31 @@ fn single_ref_p1_ctx(n: NeighborRefInfo, avail_u: bool, avail_l: bool) -> usize 
 
 /// §6.4.17's `single_ref_p2` context (§9.3.2).
 fn single_ref_p2_ctx(n: NeighborRefInfo, avail_u: bool, avail_l: bool) -> usize {
-    let (last, golden, altref) = (tables::LAST_FRAME, tables::GOLDEN_FRAME, tables::ALTREF_FRAME);
+    let (last, golden, altref) = (
+        tables::LAST_FRAME,
+        tables::GOLDEN_FRAME,
+        tables::ALTREF_FRAME,
+    );
     if avail_u && avail_l {
         if n.above_intra && n.left_intra {
             2
         } else if n.left_intra {
             if n.above_single {
-                if n.above_ref[0] == last { 3 } else { 4 * usize::from(n.above_ref[0] == golden) }
+                if n.above_ref[0] == last {
+                    3
+                } else {
+                    4 * usize::from(n.above_ref[0] == golden)
+                }
             } else {
                 1 + 2 * usize::from(n.above_ref[0] == golden || n.above_ref[1] == golden)
             }
         } else if n.above_intra {
             if n.left_single {
-                if n.left_ref[0] == last { 3 } else { 4 * usize::from(n.left_ref[0] == golden) }
+                if n.left_ref[0] == last {
+                    3
+                } else {
+                    4 * usize::from(n.left_ref[0] == golden)
+                }
             } else {
                 1 + 2 * usize::from(n.left_ref[0] == golden || n.left_ref[1] == golden)
             }
@@ -740,7 +1002,11 @@ fn single_ref_p2_ctx(n: NeighborRefInfo, avail_u: bool, avail_l: bool) -> usize 
                 2
             }
         } else {
-            let (rfs, crf1, crf2) = if n.above_single { (n.above_ref[0], n.left_ref[0], n.left_ref[1]) } else { (n.left_ref[0], n.above_ref[0], n.above_ref[1]) };
+            let (rfs, crf1, crf2) = if n.above_single {
+                (n.above_ref[0], n.left_ref[0], n.left_ref[1])
+            } else {
+                (n.left_ref[0], n.above_ref[0], n.above_ref[1])
+            };
             if rfs == golden {
                 3 + usize::from(crf1 == golden || crf2 == golden)
             } else if rfs == altref {
@@ -784,9 +1050,17 @@ fn comp_mode_ctx(n: NeighborRefInfo, avail_u: bool, avail_l: bool, comp_fixed_re
             4
         }
     } else if avail_u {
-        if n.above_single { usize::from(n.above_ref[0] == comp_fixed_ref) } else { 3 }
+        if n.above_single {
+            usize::from(n.above_ref[0] == comp_fixed_ref)
+        } else {
+            3
+        }
     } else if avail_l {
-        if n.left_single { usize::from(n.left_ref[0] == comp_fixed_ref) } else { 3 }
+        if n.left_single {
+            usize::from(n.left_ref[0] == comp_fixed_ref)
+        } else {
+            3
+        }
     } else {
         1
     }
@@ -794,27 +1068,60 @@ fn comp_mode_ctx(n: NeighborRefInfo, avail_u: bool, avail_l: bool, comp_fixed_re
 
 /// §6.4.17's `comp_ref` context (§9.3.2). `comp_fixed_ref`/`comp_var_ref`
 /// are `header.comp_fixed_ref`/`header.comp_var_ref`.
-#[allow(clippy::too_many_lines, reason = "transcribed verbatim from the spec's own comp_ref context formula, which is this long in the spec text too")]
-fn comp_ref_ctx(n: NeighborRefInfo, avail_u: bool, avail_l: bool, sign_bias: [bool; 4], comp_fixed_ref: i32, comp_var_ref: [i32; 2]) -> usize {
-    let fix_ref_idx = usize::from(sign_bias.get(usize::try_from(comp_fixed_ref).unwrap_or(0)).copied().unwrap_or(false));
+#[allow(
+    clippy::too_many_lines,
+    reason = "transcribed verbatim from the spec's own comp_ref context formula, which is this long in the spec text too"
+)]
+fn comp_ref_ctx(
+    n: NeighborRefInfo,
+    avail_u: bool,
+    avail_l: bool,
+    sign_bias: [bool; 4],
+    comp_fixed_ref: i32,
+    comp_var_ref: [i32; 2],
+) -> usize {
+    let fix_ref_idx = usize::from(
+        sign_bias
+            .get(usize::try_from(comp_fixed_ref).unwrap_or(0))
+            .copied()
+            .unwrap_or(false),
+    );
     let var_ref_idx = 1 - fix_ref_idx;
     let var1 = comp_var_ref[1];
     if avail_u && avail_l {
         if n.above_intra && n.left_intra {
             2
         } else if n.left_intra {
-            let a = if n.above_single { n.above_ref[0] } else { n.above_ref.get(var_ref_idx).copied().unwrap_or(0) };
+            let a = if n.above_single {
+                n.above_ref[0]
+            } else {
+                n.above_ref.get(var_ref_idx).copied().unwrap_or(0)
+            };
             1 + 2 * usize::from(a != var1)
         } else if n.above_intra {
-            let a = if n.left_single { n.left_ref[0] } else { n.left_ref.get(var_ref_idx).copied().unwrap_or(0) };
+            let a = if n.left_single {
+                n.left_ref[0]
+            } else {
+                n.left_ref.get(var_ref_idx).copied().unwrap_or(0)
+            };
             1 + 2 * usize::from(a != var1)
         } else {
-            let vrfa = if n.above_single { n.above_ref[0] } else { n.above_ref.get(var_ref_idx).copied().unwrap_or(0) };
-            let vrfl = if n.left_single { n.left_ref[0] } else { n.left_ref.get(var_ref_idx).copied().unwrap_or(0) };
+            let vrfa = if n.above_single {
+                n.above_ref[0]
+            } else {
+                n.above_ref.get(var_ref_idx).copied().unwrap_or(0)
+            };
+            let vrfl = if n.left_single {
+                n.left_ref[0]
+            } else {
+                n.left_ref.get(var_ref_idx).copied().unwrap_or(0)
+            };
             if vrfa == vrfl && var1 == vrfa {
                 0
             } else if n.left_single && n.above_single {
-                if (vrfa == comp_fixed_ref && vrfl == comp_var_ref[0]) || (vrfl == comp_fixed_ref && vrfa == comp_var_ref[0]) {
+                if (vrfa == comp_fixed_ref && vrfl == comp_var_ref[0])
+                    || (vrfl == comp_fixed_ref && vrfa == comp_var_ref[0])
+                {
                     4
                 } else if vrfa == vrfl {
                     3
@@ -822,7 +1129,11 @@ fn comp_ref_ctx(n: NeighborRefInfo, avail_u: bool, avail_l: bool, sign_bias: [bo
                     1
                 }
             } else if n.left_single || n.above_single {
-                let (vrfc, rfs) = if n.left_single { (vrfa, vrfl) } else { (vrfl, vrfa) };
+                let (vrfc, rfs) = if n.left_single {
+                    (vrfa, vrfl)
+                } else {
+                    (vrfl, vrfa)
+                };
                 if vrfc == var1 && rfs != var1 {
                     1
                 } else if rfs == var1 && vrfc != var1 {
@@ -858,24 +1169,72 @@ fn comp_ref_ctx(n: NeighborRefInfo, avail_u: bool, avail_l: bool, sign_bias: [bo
 }
 
 /// §6.4.17's `read_ref_frames`.
-fn read_ref_frames(bd: &mut Bd<'_>, ctx: &FrameCtx, segment_id: u8, neighbors: NeighborRefInfo, avail_u: bool, avail_l: bool) -> [i32; 2] {
+fn read_ref_frames(
+    bd: &mut Bd<'_>,
+    ctx: &FrameCtx,
+    segment_id: u8,
+    neighbors: NeighborRefInfo,
+    avail_u: bool,
+    avail_l: bool,
+) -> [i32; 2] {
     if seg_feature_active_for(ctx, segment_id, tables::SEG_LVL_REF_FRAME) {
-        let rf = ctx.header.segmentation.feature_data.get(usize::from(segment_id)).and_then(|r| r.get(tables::SEG_LVL_REF_FRAME)).copied().unwrap_or(tables::INTRA_FRAME);
+        let rf = ctx
+            .header
+            .segmentation
+            .feature_data
+            .get(usize::from(segment_id))
+            .and_then(|r| r.get(tables::SEG_LVL_REF_FRAME))
+            .copied()
+            .unwrap_or(tables::INTRA_FRAME);
         return [rf, tables::NONE];
     }
     let comp_mode = if ctx.header.reference_mode == tables::REFERENCE_MODE_SELECT {
         let cctx = comp_mode_ctx(neighbors, avail_u, avail_l, ctx.header.comp_fixed_ref);
-        let p = ctx.header.entropy.comp_mode_prob.get(cctx).copied().unwrap_or(128);
-        if bd.read_bool(p) { tables::COMPOUND_REFERENCE } else { tables::SINGLE_REFERENCE }
+        let p = ctx
+            .header
+            .entropy
+            .comp_mode_prob
+            .get(cctx)
+            .copied()
+            .unwrap_or(128);
+        if bd.read_bool(p) {
+            tables::COMPOUND_REFERENCE
+        } else {
+            tables::SINGLE_REFERENCE
+        }
     } else {
         ctx.header.reference_mode
     };
     if comp_mode == tables::COMPOUND_REFERENCE {
-        let idx = usize::from(ctx.header.ref_frame_sign_bias.get(usize::try_from(ctx.header.comp_fixed_ref).unwrap_or(0)).copied().unwrap_or(false));
-        let cctx = comp_ref_ctx(neighbors, avail_u, avail_l, ctx.header.ref_frame_sign_bias, ctx.header.comp_fixed_ref, ctx.header.comp_var_ref);
-        let p = ctx.header.entropy.comp_ref_prob.get(cctx).copied().unwrap_or(128);
+        let idx = usize::from(
+            ctx.header
+                .ref_frame_sign_bias
+                .get(usize::try_from(ctx.header.comp_fixed_ref).unwrap_or(0))
+                .copied()
+                .unwrap_or(false),
+        );
+        let cctx = comp_ref_ctx(
+            neighbors,
+            avail_u,
+            avail_l,
+            ctx.header.ref_frame_sign_bias,
+            ctx.header.comp_fixed_ref,
+            ctx.header.comp_var_ref,
+        );
+        let p = ctx
+            .header
+            .entropy
+            .comp_ref_prob
+            .get(cctx)
+            .copied()
+            .unwrap_or(128);
         let comp_ref = usize::from(bd.read_bool(p));
-        let var_ref = ctx.header.comp_var_ref.get(comp_ref).copied().unwrap_or(tables::LAST_FRAME);
+        let var_ref = ctx
+            .header
+            .comp_var_ref
+            .get(comp_ref)
+            .copied()
+            .unwrap_or(tables::LAST_FRAME);
         let mut ref_frame = [0i32; 2];
         if let Some(slot) = ref_frame.get_mut(idx) {
             *slot = ctx.header.comp_fixed_ref;
@@ -886,11 +1245,29 @@ fn read_ref_frames(bd: &mut Bd<'_>, ctx: &FrameCtx, segment_id: u8, neighbors: N
         ref_frame
     } else {
         let p1ctx = single_ref_p1_ctx(neighbors, avail_u, avail_l);
-        let p1 = ctx.header.entropy.single_ref_prob.get(p1ctx).and_then(|r| r.first()).copied().unwrap_or(128);
+        let p1 = ctx
+            .header
+            .entropy
+            .single_ref_prob
+            .get(p1ctx)
+            .and_then(|r| r.first())
+            .copied()
+            .unwrap_or(128);
         if bd.read_bool(p1) {
             let p2ctx = single_ref_p2_ctx(neighbors, avail_u, avail_l);
-            let p2 = ctx.header.entropy.single_ref_prob.get(p2ctx).and_then(|r| r.get(1)).copied().unwrap_or(128);
-            let rf = if bd.read_bool(p2) { tables::ALTREF_FRAME } else { tables::GOLDEN_FRAME };
+            let p2 = ctx
+                .header
+                .entropy
+                .single_ref_prob
+                .get(p2ctx)
+                .and_then(|r| r.get(1))
+                .copied()
+                .unwrap_or(128);
+            let rf = if bd.read_bool(p2) {
+                tables::ALTREF_FRAME
+            } else {
+                tables::GOLDEN_FRAME
+            };
             [rf, tables::NONE]
         } else {
             [tables::LAST_FRAME, tables::NONE]
@@ -900,12 +1277,20 @@ fn read_ref_frames(bd: &mut Bd<'_>, ctx: &FrameCtx, segment_id: u8, neighbors: N
 
 /// §6.4.16's `interp_filter` context (§9.3.2).
 fn interp_filter_ctx(ctx: &FrameCtx, r: usize, c: usize, avail_u: bool, avail_l: bool) -> usize {
-    let left_interp = if avail_l && ctx.mi_at(ix(r), ix(c) - 1).is_some_and(|m| m.ref_frame[0] > tables::INTRA_FRAME) {
+    let left_interp = if avail_l
+        && ctx
+            .mi_at(ix(r), ix(c) - 1)
+            .is_some_and(|m| m.ref_frame[0] > tables::INTRA_FRAME)
+    {
         usize::try_from(ctx.mi_at(ix(r), ix(c) - 1).map_or(3, |m| m.interp_filter)).unwrap_or(3)
     } else {
         3
     };
-    let above_interp = if avail_u && ctx.mi_at(ix(r) - 1, ix(c)).is_some_and(|m| m.ref_frame[0] > tables::INTRA_FRAME) {
+    let above_interp = if avail_u
+        && ctx
+            .mi_at(ix(r) - 1, ix(c))
+            .is_some_and(|m| m.ref_frame[0] > tables::INTRA_FRAME)
+    {
         usize::try_from(ctx.mi_at(ix(r) - 1, ix(c)).map_or(3, |m| m.interp_filter)).unwrap_or(3)
     } else {
         3
@@ -924,9 +1309,24 @@ fn interp_filter_ctx(ctx: &FrameCtx, r: usize, c: usize, avail_u: bool, avail_l:
 /// §6.4.16's `inter_block_mode_info`. Returns `(y_mode, BlockMvs,
 /// interp_filter)`.
 #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
-fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyContext, r: usize, c: usize, mi_size: i32, segment_id: u8, ref_frame: [i32; 2]) -> (i32, [[[i32; 2]; 4]; 2], i32) {
-    let bw = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(mi_size).unwrap_or(0)).copied().unwrap_or(1);
-    let bh = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP.get(usize::try_from(mi_size).unwrap_or(0)).copied().unwrap_or(1);
+fn inter_block_mode_info(
+    bd: &mut Bd<'_>,
+    ctx: &FrameCtx,
+    entropy: &EntropyContext,
+    r: usize,
+    c: usize,
+    mi_size: i32,
+    segment_id: u8,
+    ref_frame: [i32; 2],
+) -> (i32, [[[i32; 2]; 4]; 2], i32) {
+    let bw = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+        .get(usize::try_from(mi_size).unwrap_or(0))
+        .copied()
+        .unwrap_or(1);
+    let bh = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP
+        .get(usize::try_from(mi_size).unwrap_or(0))
+        .copied()
+        .unwrap_or(1);
     let is_compound = ref_frame[1] > tables::INTRA_FRAME;
 
     let cell_at = |rr: i32, cc: i32| ctx.mi_at(rr, cc).map(MiCell::to_mv_cell);
@@ -954,7 +1354,16 @@ fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyConte
             if let Some(slot) = mode_context.get_mut(usize::try_from(rf).unwrap_or(0)) {
                 *slot = mc;
             }
-            let (nmv, nrmv, bmv) = mvpred::find_best_ref_mvs(ref_list_mv, ctx.header.allow_high_precision_mv, r, c, ctx.mi_rows, ctx.mi_cols, bw, bh);
+            let (nmv, nrmv, bmv) = mvpred::find_best_ref_mvs(
+                ref_list_mv,
+                ctx.header.allow_high_precision_mv,
+                r,
+                c,
+                ctx.mi_rows,
+                ctx.mi_cols,
+                bw,
+                bh,
+            );
             if let Some(slot) = nearest_mv.get_mut(j) {
                 *slot = nmv;
             }
@@ -971,15 +1380,29 @@ fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyConte
     if seg_feature_active_for(ctx, segment_id, tables::SEG_LVL_SKIP) {
         y_mode = tables::ZEROMV;
     } else if mi_size >= tables::BLOCK_8X8 {
-        let mctx = usize::try_from(mode_context.get(usize::try_from(ref_frame[0]).unwrap_or(0)).copied().unwrap_or(0)).unwrap_or(0);
-        let probs = entropy.inter_mode_probs.get(mctx).copied().unwrap_or([128; 3]);
+        let mctx = usize::try_from(
+            mode_context
+                .get(usize::try_from(ref_frame[0]).unwrap_or(0))
+                .copied()
+                .unwrap_or(0),
+        )
+        .unwrap_or(0);
+        let probs = entropy
+            .inter_mode_probs
+            .get(mctx)
+            .copied()
+            .unwrap_or([128; 3]);
         let inter_mode = bd.read_tree(&tables::INTER_MODE_TREE, &probs);
         y_mode = tables::NEARESTMV + inter_mode;
     }
 
     let interp_filter = if ctx.header.interpolation_filter == tables::SWITCHABLE {
         let ictx = interp_filter_ctx(ctx, r, c, r > 0, c > ctx.tile_mi_col_start);
-        let probs = entropy.interp_filter_probs.get(ictx).copied().unwrap_or([128; 2]);
+        let probs = entropy
+            .interp_filter_probs
+            .get(ictx)
+            .copied()
+            .unwrap_or([128; 2]);
         bd.read_tree(&tables::INTERP_FILTER_TREE, &probs)
     } else {
         ctx.header.interpolation_filter
@@ -987,14 +1410,30 @@ fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyConte
 
     let mut block_mvs = [[[0i32; 2]; 4]; 2];
     if mi_size < tables::BLOCK_8X8 {
-        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP.get(usize::try_from(mi_size).unwrap_or(0)).copied().unwrap_or(1);
-        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP.get(usize::try_from(mi_size).unwrap_or(0)).copied().unwrap_or(1);
+        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP
+            .get(usize::try_from(mi_size).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP
+            .get(usize::try_from(mi_size).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
         let mut idy = 0usize;
         while idy < 2 {
             let mut idx = 0usize;
             while idx < 2 {
-                let mctx = usize::try_from(mode_context.get(usize::try_from(ref_frame[0]).unwrap_or(0)).copied().unwrap_or(0)).unwrap_or(0);
-                let probs = entropy.inter_mode_probs.get(mctx).copied().unwrap_or([128; 3]);
+                let mctx = usize::try_from(
+                    mode_context
+                        .get(usize::try_from(ref_frame[0]).unwrap_or(0))
+                        .copied()
+                        .unwrap_or(0),
+                )
+                .unwrap_or(0);
+                let probs = entropy
+                    .inter_mode_probs
+                    .get(mctx)
+                    .copied()
+                    .unwrap_or([128; 3]);
                 let inter_mode = bd.read_tree(&tables::INTER_MODE_TREE, &probs);
                 y_mode = tables::NEARESTMV + inter_mode;
                 let block = idy * 2 + idx;
@@ -1004,9 +1443,17 @@ fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyConte
                         if j > usize::from(is_compound) {
                             continue;
                         }
-                        let (ref_list_mv, _) = mvpred::find_mv_refs(&mv_ctx, mi_size, bw, bh, rf, i32::try_from(block).unwrap_or(0));
+                        let (ref_list_mv, _) = mvpred::find_mv_refs(
+                            &mv_ctx,
+                            mi_size,
+                            bw,
+                            bh,
+                            rf,
+                            i32::try_from(block).unwrap_or(0),
+                        );
                         let block_mvs_ref = block_mvs.get(j).copied().unwrap_or([[0, 0]; 4]);
-                        let (nmv, nrmv) = mvpred::append_sub8x8_mvs(ref_list_mv, block, &block_mvs_ref);
+                        let (nmv, nrmv) =
+                            mvpred::append_sub8x8_mvs(ref_list_mv, block, &block_mvs_ref);
                         if let Some(slot) = nearest_mv.get_mut(j) {
                             *slot = nmv;
                         }
@@ -1017,7 +1464,12 @@ fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyConte
                 }
                 for j in 0..=usize::from(is_compound) {
                     let m = if y_mode == tables::NEWMV {
-                        mvpred::read_mv(bd, entropy, best_mv.get(j).copied().unwrap_or([0, 0]), ctx.header.allow_high_precision_mv)
+                        mvpred::read_mv(
+                            bd,
+                            entropy,
+                            best_mv.get(j).copied().unwrap_or([0, 0]),
+                            ctx.header.allow_high_precision_mv,
+                        )
                     } else if y_mode == tables::NEARESTMV {
                         nearest_mv.get(j).copied().unwrap_or([0, 0])
                     } else if y_mode == tables::NEARMV {
@@ -1046,7 +1498,16 @@ fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyConte
             idy += num4x4h;
         }
     } else {
-        let mv = assign_mv(bd, entropy, y_mode, is_compound, nearest_mv, near_mv, best_mv, ctx.header.allow_high_precision_mv);
+        let mv = assign_mv(
+            bd,
+            entropy,
+            y_mode,
+            is_compound,
+            nearest_mv,
+            near_mv,
+            best_mv,
+            ctx.header.allow_high_precision_mv,
+        );
         for ref_list in 0..2 {
             if let Some(row) = block_mvs.get_mut(ref_list) {
                 *row = [mv.get(ref_list).copied().unwrap_or([0, 0]); 4];
@@ -1058,11 +1519,25 @@ fn inter_block_mode_info(bd: &mut Bd<'_>, ctx: &FrameCtx, entropy: &EntropyConte
 }
 
 /// §6.4.18's `assign_mv`.
-fn assign_mv(bd: &mut Bd<'_>, entropy: &EntropyContext, y_mode: i32, is_compound: bool, nearest_mv: [[i32; 2]; 2], near_mv: [[i32; 2]; 2], best_mv: [[i32; 2]; 2], allow_high_precision_mv: bool) -> [[i32; 2]; 2] {
+fn assign_mv(
+    bd: &mut Bd<'_>,
+    entropy: &EntropyContext,
+    y_mode: i32,
+    is_compound: bool,
+    nearest_mv: [[i32; 2]; 2],
+    near_mv: [[i32; 2]; 2],
+    best_mv: [[i32; 2]; 2],
+    allow_high_precision_mv: bool,
+) -> [[i32; 2]; 2] {
     let mut mv = [[0i32; 2]; 2];
     for (i, slot) in mv.iter_mut().enumerate().take(1 + usize::from(is_compound)) {
         *slot = if y_mode == tables::NEWMV {
-            mvpred::read_mv(bd, entropy, best_mv.get(i).copied().unwrap_or([0, 0]), allow_high_precision_mv)
+            mvpred::read_mv(
+                bd,
+                entropy,
+                best_mv.get(i).copied().unwrap_or([0, 0]),
+                allow_high_precision_mv,
+            )
         } else if y_mode == tables::NEARESTMV {
             nearest_mv.get(i).copied().unwrap_or([0, 0])
         } else if y_mode == tables::NEARMV {
@@ -1076,7 +1551,16 @@ fn assign_mv(bd: &mut Bd<'_>, entropy: &EntropyContext, y_mode: i32, is_compound
 
 /// §6.4.11's `inter_frame_mode_info`.
 #[allow(clippy::too_many_arguments)]
-fn inter_frame_mode_info(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: usize, c: usize, subsize: i32, avail_u: bool, avail_l: bool) -> DecodedBlock {
+fn inter_frame_mode_info(
+    bd: &mut Bd<'_>,
+    ctx: &mut FrameCtx,
+    entropy: &EntropyContext,
+    r: usize,
+    c: usize,
+    subsize: i32,
+    avail_u: bool,
+    avail_l: bool,
+) -> DecodedBlock {
     let neighbors = neighbor_ref_info(ctx, r, c, avail_u, avail_l);
 
     let segment_id = inter_segment_id(bd, ctx, r, c, subsize);
@@ -1094,7 +1578,8 @@ fn inter_frame_mode_info(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyC
 
     if is_inter {
         let ref_frame = read_ref_frames(bd, ctx, segment_id, neighbors, avail_u, avail_l);
-        let (y_mode, block_mvs, interp_filter) = inter_block_mode_info(bd, ctx, entropy, r, c, subsize, segment_id, ref_frame);
+        let (y_mode, block_mvs, interp_filter) =
+            inter_block_mode_info(bd, ctx, entropy, r, c, subsize, segment_id, ref_frame);
         DecodedBlock {
             segment_id,
             skip,
@@ -1124,18 +1609,39 @@ fn inter_frame_mode_info(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyC
     }
 }
 
-pub(crate) fn get_uv_tx_size(mi_size: i32, tx_size: i32, subsampling_x: bool, subsampling_y: bool) -> i32 {
+pub(crate) fn get_uv_tx_size(
+    mi_size: i32,
+    tx_size: i32,
+    subsampling_x: bool,
+    subsampling_y: bool,
+) -> i32 {
     if mi_size < tables::BLOCK_8X8 {
         return tables::TX_4X4;
     }
     let plane_sz = get_plane_block_size(mi_size, 1, subsampling_x, subsampling_y);
-    let max_uv = tables::MAX_TXSIZE_LOOKUP.get(usize::try_from(plane_sz).unwrap_or(0)).copied().unwrap_or(0);
+    let max_uv = tables::MAX_TXSIZE_LOOKUP
+        .get(usize::try_from(plane_sz).unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
     tx_size.min(max_uv)
 }
 
-fn get_plane_block_size(subsize: i32, plane: usize, subsampling_x: bool, subsampling_y: bool) -> i32 {
-    let subx = if plane > 0 { usize::from(subsampling_x) } else { 0 };
-    let suby = if plane > 0 { usize::from(subsampling_y) } else { 0 };
+fn get_plane_block_size(
+    subsize: i32,
+    plane: usize,
+    subsampling_x: bool,
+    subsampling_y: bool,
+) -> i32 {
+    let subx = if plane > 0 {
+        usize::from(subsampling_x)
+    } else {
+        0
+    };
+    let suby = if plane > 0 {
+        usize::from(subsampling_y)
+    } else {
+        0
+    };
     tables::SS_SIZE_LOOKUP
         .get(usize::try_from(subsize).unwrap_or(0))
         .and_then(|row| row.get(subx))
@@ -1153,9 +1659,24 @@ fn get_plane_block_size(subsize: i32, plane: usize, subsampling_x: bool, subsamp
 /// frame's planes. Still updates `ctx.above_nz`/`ctx.left_nz`: later blocks
 /// in this same tile need that context at parse time, which is exactly why
 /// it cannot itself be deferred.
-fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: usize, c: usize, mi_size: i32, block: &DecodedBlock) -> (bool, Vec<StoredResidue>) {
-    let bsize = if mi_size < tables::BLOCK_8X8 { tables::BLOCK_8X8 } else { mi_size };
-    let (subx, suby) = (ctx.header.color.subsampling_x, ctx.header.color.subsampling_y);
+fn residual(
+    bd: &mut Bd<'_>,
+    ctx: &mut FrameCtx,
+    entropy: &EntropyContext,
+    r: usize,
+    c: usize,
+    mi_size: i32,
+    block: &DecodedBlock,
+) -> (bool, Vec<StoredResidue>) {
+    let bsize = if mi_size < tables::BLOCK_8X8 {
+        tables::BLOCK_8X8
+    } else {
+        mi_size
+    };
+    let (subx, suby) = (
+        ctx.header.color.subsampling_x,
+        ctx.header.color.subsampling_y,
+    );
     let bit_depth = u32::from(ctx.header.color.bit_depth);
     let lossless = ctx.header.quant.lossless;
     let tx_size = block.tx_size;
@@ -1167,12 +1688,26 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
     let mut stored = Vec::new();
 
     for plane in 0..3usize {
-        let tx_sz = if plane > 0 { get_uv_tx_size(mi_size, tx_size, subx, suby) } else { tx_size };
+        let tx_sz = if plane > 0 {
+            get_uv_tx_size(mi_size, tx_size, subx, suby)
+        } else {
+            tx_size
+        };
         let step = 1usize << tx_sz;
         let plane_sz = get_plane_block_size(bsize, plane, subx, suby);
-        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP.get(usize::try_from(plane_sz).unwrap_or(0)).copied().unwrap_or(1);
-        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP.get(usize::try_from(plane_sz).unwrap_or(0)).copied().unwrap_or(1);
-        let (sub_x, sub_y) = if plane > 0 { (subx, suby) } else { (false, false) };
+        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP
+            .get(usize::try_from(plane_sz).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP
+            .get(usize::try_from(plane_sz).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let (sub_x, sub_y) = if plane > 0 {
+            (subx, suby)
+        } else {
+            (false, false)
+        };
         let base_x = (c * 8) >> u32::from(sub_x);
         let base_y = (r * 8) >> u32::from(sub_y);
         let maxx = (ctx.mi_cols * 8) >> u32::from(sub_x);
@@ -1180,8 +1715,14 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
 
         let (dc_quant, ac_quant) = {
             let qindex = get_qindex(ctx, segment_id);
-            let (delta_dc, delta_ac) =
-                if plane == 0 { (ctx.header.quant.delta_q_y_dc, 0) } else { (ctx.header.quant.delta_q_uv_dc, ctx.header.quant.delta_q_uv_ac) };
+            let (delta_dc, delta_ac) = if plane == 0 {
+                (ctx.header.quant.delta_q_y_dc, 0)
+            } else {
+                (
+                    ctx.header.quant.delta_q_uv_dc,
+                    ctx.header.quant.delta_q_uv_ac,
+                )
+            };
             dequant_factors(ctx.header.color.bit_depth, qindex, delta_dc, delta_ac)
         };
 
@@ -1196,14 +1737,38 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
                 let in_bounds = start_x < maxx && start_y < maxy;
                 let mut residue = None;
                 if in_bounds && !skip {
-                    let tx_type = get_scan_tx_type(plane, tx_sz, lossless, block.is_inter, mi_size, y_mode, sub_modes, block_idx);
+                    let tx_type = get_scan_tx_type(
+                        plane,
+                        tx_sz,
+                        lossless,
+                        block.is_inter,
+                        mi_size,
+                        y_mode,
+                        sub_modes,
+                        block_idx,
+                    );
                     let scan = tables::get_scan(tx_sz, tx_type);
-                    let (coefs, eob) =
-                        tokens::decode_tokens(bd, entropy, ctx, plane, start_x, start_y, tx_sz, scan, tx_type, block.is_inter, subx, suby, bit_depth);
+                    let (coefs, eob) = tokens::decode_tokens(
+                        bd,
+                        entropy,
+                        ctx,
+                        plane,
+                        start_x,
+                        start_y,
+                        tx_sz,
+                        scan,
+                        tx_type,
+                        block.is_inter,
+                        subx,
+                        suby,
+                        bit_depth,
+                    );
                     nonzero = eob > 0;
                     if nonzero {
                         eob_total += 1;
-                        residue = Some(reconstruct(&coefs, tx_sz, dc_quant, ac_quant, tx_type, lossless));
+                        residue = Some(reconstruct(
+                            &coefs, tx_sz, dc_quant, ac_quant, tx_type, lossless,
+                        ));
                     }
                 }
                 stored.push(StoredResidue { in_bounds, residue });
@@ -1236,9 +1801,23 @@ fn residual(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, r: us
 /// what that same call to `residual` returned, in order, and this indexes
 /// rather than tolerates a mismatch: a wrong length here is this crate's own
 /// bug, not malformed input.
-fn apply_residual(ctx: &mut FrameCtx, r: usize, c: usize, mi_size: i32, block: &DecodedBlock, residues: &[StoredResidue]) {
-    let bsize = if mi_size < tables::BLOCK_8X8 { tables::BLOCK_8X8 } else { mi_size };
-    let (subx, suby) = (ctx.header.color.subsampling_x, ctx.header.color.subsampling_y);
+fn apply_residual(
+    ctx: &mut FrameCtx,
+    r: usize,
+    c: usize,
+    mi_size: i32,
+    block: &DecodedBlock,
+    residues: &[StoredResidue],
+) {
+    let bsize = if mi_size < tables::BLOCK_8X8 {
+        tables::BLOCK_8X8
+    } else {
+        mi_size
+    };
+    let (subx, suby) = (
+        ctx.header.color.subsampling_x,
+        ctx.header.color.subsampling_y,
+    );
     let bit_depth = u32::from(ctx.header.color.bit_depth);
     let tx_size = block.tx_size;
     let y_mode = block.y_mode;
@@ -1247,12 +1826,26 @@ fn apply_residual(ctx: &mut FrameCtx, r: usize, c: usize, mi_size: i32, block: &
     let mut idx = 0usize;
 
     for plane in 0..3usize {
-        let tx_sz = if plane > 0 { get_uv_tx_size(mi_size, tx_size, subx, suby) } else { tx_size };
+        let tx_sz = if plane > 0 {
+            get_uv_tx_size(mi_size, tx_size, subx, suby)
+        } else {
+            tx_size
+        };
         let step = 1usize << tx_sz;
         let plane_sz = get_plane_block_size(bsize, plane, subx, suby);
-        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP.get(usize::try_from(plane_sz).unwrap_or(0)).copied().unwrap_or(1);
-        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP.get(usize::try_from(plane_sz).unwrap_or(0)).copied().unwrap_or(1);
-        let (sub_x, sub_y) = if plane > 0 { (subx, suby) } else { (false, false) };
+        let num4x4w = tables::NUM_4X4_BLOCKS_WIDE_LOOKUP
+            .get(usize::try_from(plane_sz).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let num4x4h = tables::NUM_4X4_BLOCKS_HIGH_LOOKUP
+            .get(usize::try_from(plane_sz).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let (sub_x, sub_y) = if plane > 0 {
+            (subx, suby)
+        } else {
+            (false, false)
+        };
         let base_x = (c * 8) >> u32::from(sub_x);
         let base_y = (r * 8) >> u32::from(sub_y);
         let maxx = (ctx.mi_cols * 8) >> u32::from(sub_x);
@@ -1269,11 +1862,41 @@ fn apply_residual(ctx: &mut FrameCtx, r: usize, c: usize, mi_size: i32, block: &
                 for y in 0..num4x4h {
                     for x in 0..num4x4w {
                         let block_idx = y * num4x4w + x;
-                        predict_inter_region(ctx, plane, r, c, mi_size, block, base_x + 4 * x, base_y + 4 * y, 4, 4, block_idx, subx, suby, bit_depth);
+                        predict_inter_region(
+                            ctx,
+                            plane,
+                            r,
+                            c,
+                            mi_size,
+                            block,
+                            base_x + 4 * x,
+                            base_y + 4 * y,
+                            4,
+                            4,
+                            block_idx,
+                            subx,
+                            suby,
+                            bit_depth,
+                        );
                     }
                 }
             } else {
-                predict_inter_region(ctx, plane, r, c, mi_size, block, base_x, base_y, num4x4w * 4, num4x4h * 4, 0, subx, suby, bit_depth);
+                predict_inter_region(
+                    ctx,
+                    plane,
+                    r,
+                    c,
+                    mi_size,
+                    block,
+                    base_x,
+                    base_y,
+                    num4x4w * 4,
+                    num4x4h * 4,
+                    0,
+                    subx,
+                    suby,
+                    bit_depth,
+                );
             }
         }
 
@@ -1284,7 +1907,9 @@ fn apply_residual(ctx: &mut FrameCtx, r: usize, c: usize, mi_size: i32, block: &
             while x < num4x4w {
                 let start_x = base_x + 4 * x;
                 let start_y = base_y + 4 * y;
-                let Some(entry) = residues.get(idx) else { break };
+                let Some(entry) = residues.get(idx) else {
+                    break;
+                };
                 idx += 1;
                 if entry.in_bounds {
                     if !block.is_inter {
@@ -1298,7 +1923,20 @@ fn apply_residual(ctx: &mut FrameCtx, r: usize, c: usize, mi_size: i32, block: &
                         let have_left = c > ctx.tile_mi_col_start || x > 0;
                         let have_above = r > 0 || y > 0;
                         let not_on_right = x + step < num4x4w;
-                        predict_block(ctx, plane, start_x, start_y, mode, tx_sz, have_left, have_above, not_on_right, maxx, maxy, bit_depth);
+                        predict_block(
+                            ctx,
+                            plane,
+                            start_x,
+                            start_y,
+                            mode,
+                            tx_sz,
+                            have_left,
+                            have_above,
+                            not_on_right,
+                            maxx,
+                            maxy,
+                            bit_depth,
+                        );
                     }
                     if let Some(residue) = &entry.residue {
                         add_residue(ctx, plane, start_x, start_y, tx_sz, residue, bit_depth);
@@ -1322,26 +1960,98 @@ fn ref_slot_for(ctx: &FrameCtx, ref_frame: i32) -> Option<RefSlot> {
 
 /// §8.5.2's inter prediction process for one `w x h` region of one plane.
 #[allow(clippy::too_many_arguments)]
-#[allow(clippy::many_single_char_names, reason = "x/y/w/h/a/b/v are pixel coordinates, dimensions and sample values, matching the spec's own single-letter notation")]
-fn predict_inter_region(ctx: &mut FrameCtx, plane: usize, mi_row: usize, mi_col: usize, mi_size: i32, block: &DecodedBlock, x: usize, y: usize, w: usize, h: usize, block_idx: usize, subsampling_x: bool, subsampling_y: bool, bit_depth: u32) {
+#[allow(
+    clippy::many_single_char_names,
+    reason = "x/y/w/h/a/b/v are pixel coordinates, dimensions and sample values, matching the spec's own single-letter notation"
+)]
+fn predict_inter_region(
+    ctx: &mut FrameCtx,
+    plane: usize,
+    mi_row: usize,
+    mi_col: usize,
+    mi_size: i32,
+    block: &DecodedBlock,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    block_idx: usize,
+    subsampling_x: bool,
+    subsampling_y: bool,
+    bit_depth: u32,
+) {
     let is_compound = block.ref_frame[1] > tables::NONE;
-    let bw = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(mi_size).unwrap_or(0)).copied().unwrap_or(1);
-    let bh = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP.get(usize::try_from(mi_size).unwrap_or(0)).copied().unwrap_or(1);
+    let bw = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+        .get(usize::try_from(mi_size).unwrap_or(0))
+        .copied()
+        .unwrap_or(1);
+    let bh = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP
+        .get(usize::try_from(mi_size).unwrap_or(0))
+        .copied()
+        .unwrap_or(1);
     let mi_size_ge_8x8 = mi_size >= tables::BLOCK_8X8;
     let frame_width = ctx.header.width;
     let frame_height = ctx.header.height;
 
     let mut preds: [Vec<i32>; 2] = [vec![0i32; w * h], vec![0i32; w * h]];
     for ref_list in 0..=usize::from(is_compound) {
-        let rf = block.ref_frame.get(ref_list).copied().unwrap_or(tables::NONE);
-        let Some(slot) = ref_slot_for(ctx, rf) else { continue };
-        let block_mvs = block.block_mvs.get(ref_list).copied().unwrap_or([[0, 0]; 4]);
-        let mv = interpredict::select_mv(&block_mvs, block_idx, plane, mi_size_ge_8x8, subsampling_x, subsampling_y);
-        let clamped = interpredict::clamp_mv(mv, mi_row, mi_col, ctx.mi_rows, ctx.mi_cols, bw, bh, plane, subsampling_x, subsampling_y);
-        let scaled = interpredict::scale_mv(clamped, x, y, plane, subsampling_x, subsampling_y, slot.width, slot.height, frame_width, frame_height);
+        let rf = block
+            .ref_frame
+            .get(ref_list)
+            .copied()
+            .unwrap_or(tables::NONE);
+        let Some(slot) = ref_slot_for(ctx, rf) else {
+            continue;
+        };
+        let block_mvs = block
+            .block_mvs
+            .get(ref_list)
+            .copied()
+            .unwrap_or([[0, 0]; 4]);
+        let mv = interpredict::select_mv(
+            &block_mvs,
+            block_idx,
+            plane,
+            mi_size_ge_8x8,
+            subsampling_x,
+            subsampling_y,
+        );
+        let clamped = interpredict::clamp_mv(
+            mv,
+            mi_row,
+            mi_col,
+            ctx.mi_rows,
+            ctx.mi_cols,
+            bw,
+            bh,
+            plane,
+            subsampling_x,
+            subsampling_y,
+        );
+        let scaled = interpredict::scale_mv(
+            clamped,
+            x,
+            y,
+            plane,
+            subsampling_x,
+            subsampling_y,
+            slot.width,
+            slot.height,
+            frame_width,
+            frame_height,
+        );
         let interp_filter = usize::try_from(block.interp_filter).unwrap_or(0);
         if let Some(pred) = preds.get_mut(ref_list) {
-            interpredict::block_inter_predict(pred, &slot, plane, &scaled, w, h, interp_filter, bit_depth);
+            interpredict::block_inter_predict(
+                pred,
+                &slot,
+                plane,
+                &scaled,
+                w,
+                h,
+                interp_filter,
+                bit_depth,
+            );
         }
     }
 
@@ -1356,7 +2066,11 @@ fn predict_inter_region(ctx: &mut FrameCtx, plane: usize, mi_row: usize, mi_col:
             } else {
                 preds[0].get(i * w + j).copied().unwrap_or(0)
             };
-            plane_mut.set(x + j, y + i, u16::try_from(v.clamp(0, clip_max)).unwrap_or(0));
+            plane_mut.set(
+                x + j,
+                y + i,
+                u16::try_from(v.clamp(0, clip_max)).unwrap_or(0),
+            );
         }
     }
 }
@@ -1364,9 +2078,19 @@ fn predict_inter_region(ctx: &mut FrameCtx, plane: usize, mi_row: usize, mi_col:
 fn get_qindex(ctx: &FrameCtx, segment_id: u8) -> i32 {
     let seg = &ctx.header.segmentation;
     if seg.enabled
-        && seg.feature_enabled.get(usize::from(segment_id)).and_then(|r| r.get(tables::SEG_LVL_ALT_Q)).copied().unwrap_or(false)
+        && seg
+            .feature_enabled
+            .get(usize::from(segment_id))
+            .and_then(|r| r.get(tables::SEG_LVL_ALT_Q))
+            .copied()
+            .unwrap_or(false)
     {
-        let mut data = seg.feature_data.get(usize::from(segment_id)).and_then(|r| r.get(tables::SEG_LVL_ALT_Q)).copied().unwrap_or(0);
+        let mut data = seg
+            .feature_data
+            .get(usize::from(segment_id))
+            .and_then(|r| r.get(tables::SEG_LVL_ALT_Q))
+            .copied()
+            .unwrap_or(0);
         if !seg.abs_or_delta_update {
             data += ctx.header.quant.base_q_idx;
         }
@@ -1377,18 +2101,37 @@ fn get_qindex(ctx: &FrameCtx, segment_id: u8) -> i32 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn get_scan_tx_type(plane: usize, tx_sz: i32, lossless: bool, is_inter: bool, mi_size: i32, y_mode: i32, sub_modes: &[i32; 4], block_idx: usize) -> TxType {
+fn get_scan_tx_type(
+    plane: usize,
+    tx_sz: i32,
+    lossless: bool,
+    is_inter: bool,
+    mi_size: i32,
+    y_mode: i32,
+    sub_modes: &[i32; 4],
+    block_idx: usize,
+) -> TxType {
     if plane > 0 || tx_sz == tables::TX_32X32 {
         TxType::DctDct
     } else if tx_sz == tables::TX_4X4 {
         if lossless || is_inter {
             TxType::DctDct
         } else {
-            let mode = if mi_size < tables::BLOCK_8X8 { sub_modes.get(block_idx).copied().unwrap_or(tables::DC_PRED) } else { y_mode };
-            tables::MODE2TXFM_MAP.get(usize::try_from(mode).unwrap_or(0)).copied().unwrap_or(TxType::DctDct)
+            let mode = if mi_size < tables::BLOCK_8X8 {
+                sub_modes.get(block_idx).copied().unwrap_or(tables::DC_PRED)
+            } else {
+                y_mode
+            };
+            tables::MODE2TXFM_MAP
+                .get(usize::try_from(mode).unwrap_or(0))
+                .copied()
+                .unwrap_or(TxType::DctDct)
         }
     } else {
-        tables::MODE2TXFM_MAP.get(usize::try_from(y_mode).unwrap_or(0)).copied().unwrap_or(TxType::DctDct)
+        tables::MODE2TXFM_MAP
+            .get(usize::try_from(y_mode).unwrap_or(0))
+            .copied()
+            .unwrap_or(TxType::DctDct)
     }
 }
 
@@ -1414,7 +2157,11 @@ fn predict_block(
     let (xi, yi) = (ix(x), ix(y));
     let mut above_row = vec![0i32; 2 * size + 1];
     for i in 0..size {
-        let v = if have_above { i32::from(p.get_clamped((xi + ix(i)).min(ix(maxx) - 1), yi - 1)) } else { half - 1 };
+        let v = if have_above {
+            i32::from(p.get_clamped((xi + ix(i)).min(ix(maxx) - 1), yi - 1))
+        } else {
+            half - 1
+        };
         if let Some(slot) = above_row.get_mut(1 + i) {
             *slot = v;
         }
@@ -1449,19 +2196,33 @@ fn predict_block(
     }
 
     let mut pred = vec![0i32; size * size];
-    predict_intra(&mut pred, mode, size, log2_size, &above_row, &left_col, have_left, have_above, bit_depth);
+    predict_intra(
+        &mut pred, mode, size, log2_size, &above_row, &left_col, have_left, have_above, bit_depth,
+    );
 
     let clip_max = (1i32 << bit_depth) - 1;
     let plane_mut = ctx.plane_mut(plane);
     for i in 0..size {
         for j in 0..size {
-            let v = pred.get(i * size + j).copied().unwrap_or(0).clamp(0, clip_max);
+            let v = pred
+                .get(i * size + j)
+                .copied()
+                .unwrap_or(0)
+                .clamp(0, clip_max);
             plane_mut.set(x + j, y + i, u16::try_from(v).unwrap_or(0));
         }
     }
 }
 
-fn add_residue(ctx: &mut FrameCtx, plane: usize, x: usize, y: usize, tx_sz: i32, residue: &[i64], bit_depth: u32) {
+fn add_residue(
+    ctx: &mut FrameCtx,
+    plane: usize,
+    x: usize,
+    y: usize,
+    tx_sz: i32,
+    residue: &[i64],
+    bit_depth: u32,
+) {
     let n0 = 1usize << (tx_sz + 2);
     let clip_max = (1i64 << bit_depth) - 1;
     let plane_mut = ctx.plane_mut(plane);
@@ -1476,7 +2237,15 @@ fn add_residue(ctx: &mut FrameCtx, plane: usize, x: usize, y: usize, tx_sz: i32,
 }
 
 #[allow(clippy::too_many_arguments)]
-fn decode_tile(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, mi_row_start: usize, mi_row_end: usize, mi_col_start: usize, mi_col_end: usize) {
+fn decode_tile(
+    bd: &mut Bd<'_>,
+    ctx: &mut FrameCtx,
+    entropy: &EntropyContext,
+    mi_row_start: usize,
+    mi_row_end: usize,
+    mi_col_start: usize,
+    mi_col_end: usize,
+) {
     ctx.tile_mi_col_start = mi_col_start;
     ctx.tile_mi_col_end = mi_col_end;
     let mut r = mi_row_start;
@@ -1512,7 +2281,10 @@ fn decode_tile(bd: &mut Bd<'_>, ctx: &mut FrameCtx, entropy: &EntropyContext, mi
 /// samples) — `FrameCtx::pic`/`FrameCtx::ref_store` exist only because
 /// [`FrameCtx`] is one struct shared with reconstruction, and are given
 /// zero-sized/empty placeholders here rather than a second struct type.
-#[allow(clippy::too_many_arguments, reason = "one argument per piece of cross-frame state a threaded parse/reconstruct split has to pass explicitly instead of reading through &mut self")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per piece of cross-frame state a threaded parse/reconstruct split has to pass explicitly instead of reading through &mut self"
+)]
 fn parse_frame_tiles(
     header: &FrameHeader,
     entropy: &EntropyContext,
@@ -1540,9 +2312,17 @@ fn parse_frame_tiles(
         left_nz: [[false; 16]; 3],
         above_seg_pred_context: vec![false; header.mi_cols.max(1)],
         left_seg_pred_context: [false; 8],
-        prev_segment_ids: if same_dims { prev_segment_ids.to_vec() } else { vec![0u8; cell_count] },
+        prev_segment_ids: if same_dims {
+            prev_segment_ids.to_vec()
+        } else {
+            vec![0u8; cell_count]
+        },
         segment_ids: vec![0u8; cell_count],
-        prev_mv_grid: if same_dims { prev_mv_grid.to_vec() } else { Vec::new() },
+        prev_mv_grid: if same_dims {
+            prev_mv_grid.to_vec()
+        } else {
+            Vec::new()
+        },
         ref_store: RefFrameStore::default(),
         pic: Picture::new(budget, 0, 0, 0, 0)?,
         tile_mi_col_start: 0,
@@ -1567,7 +2347,9 @@ fn parse_frame_tiles(
                 }
                 v
             };
-            let Some(this_tile) = sz.get(..tile_size) else { break };
+            let Some(this_tile) = sz.get(..tile_size) else {
+                break;
+            };
             sz = sz.get(tile_size..).unwrap_or(&[]);
 
             let mi_row_start = tile_offset(tile_row, header.mi_rows, header.tile.rows_log2);
@@ -1575,7 +2357,15 @@ fn parse_frame_tiles(
             let mi_col_start = tile_offset(tile_col, header.mi_cols, header.tile.cols_log2);
             let mi_col_end = tile_offset(tile_col + 1, header.mi_cols, header.tile.cols_log2);
             let mut bd = Bd::new(this_tile);
-            decode_tile(&mut bd, &mut ctx, entropy, mi_row_start, mi_row_end, mi_col_start, mi_col_end);
+            decode_tile(
+                &mut bd,
+                &mut ctx,
+                entropy,
+                mi_row_start,
+                mi_row_end,
+                mi_col_start,
+                mi_col_end,
+            );
         }
     }
 
@@ -1628,10 +2418,31 @@ fn reconstruct_frame(
         apply_residual(&mut ctx, pb.r, pb.c, pb.subsize, &pb.block, &pb.residues);
     }
 
-    let lf_grid: Vec<loopfilter::MiInfo> =
-        grid.iter().map(|cell| loopfilter::MiInfo { mi_size: cell.mi_size, tx_size: cell.tx_size, skip: cell.skip, ref_frame0: cell.ref_frame[0], y_mode: cell.y_mode }).collect();
-    let lf = loopfilter::Grid { mi: &lf_grid, segment_ids, mi_rows: header.mi_rows, mi_cols: header.mi_cols };
-    loopfilter::filter_frame(&mut ctx.pic, &lf, &header.loop_filter, &header.segmentation, header.color.subsampling_x, header.color.subsampling_y, u32::from(header.color.bit_depth));
+    let lf_grid: Vec<loopfilter::MiInfo> = grid
+        .iter()
+        .map(|cell| loopfilter::MiInfo {
+            mi_size: cell.mi_size,
+            tx_size: cell.tx_size,
+            skip: cell.skip,
+            ref_frame0: cell.ref_frame[0],
+            y_mode: cell.y_mode,
+        })
+        .collect();
+    let lf = loopfilter::Grid {
+        mi: &lf_grid,
+        segment_ids,
+        mi_rows: header.mi_rows,
+        mi_cols: header.mi_cols,
+    };
+    loopfilter::filter_frame(
+        &mut ctx.pic,
+        &lf,
+        &header.loop_filter,
+        &header.segmentation,
+        header.color.subsampling_x,
+        header.color.subsampling_y,
+        u32::from(header.color.bit_depth),
+    );
 
     Ok(ctx.pic)
 }
@@ -1680,7 +2491,13 @@ impl Default for State {
             prev_mi_cols: 0,
             prev_mi_rows: 0,
             prev_segment_ids: Vec::new(),
-            color: header::ColorConfig { bit_depth: 8, color_space: 1, full_range: false, subsampling_x: true, subsampling_y: true },
+            color: header::ColorConfig {
+                bit_depth: 8,
+                color_space: 1,
+                full_range: false,
+                subsampling_x: true,
+                subsampling_y: true,
+            },
         }
     }
 }
@@ -1733,7 +2550,9 @@ impl Vp9Decoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
         Self {
-            machine: vaco_codec_core::machine::Machine::new(vaco_codec_core::Caps::SUBFRAMES.union(vaco_codec_core::Caps::DELAY)),
+            machine: vaco_codec_core::machine::Machine::new(
+                vaco_codec_core::Caps::SUBFRAMES.union(vaco_codec_core::Caps::DELAY),
+            ),
             budget: Budget::new(limits.clone()),
             limits,
             state: State::default(),
@@ -1753,11 +2572,17 @@ impl Vp9Decoder {
         if self.in_flight.is_empty() {
             return Ok(false);
         }
-        let Some(result) = (if block { self.runner.collect() } else { self.runner.try_collect() }) else {
+        let Some(result) = (if block {
+            self.runner.collect()
+        } else {
+            self.runner.try_collect()
+        }) else {
             return Ok(false);
         };
         let Some(meta) = self.in_flight.pop_front() else {
-            return Err(Error::InvalidData("vaco-codec-vp9: a frame arrived with no in-flight record"));
+            return Err(Error::InvalidData(
+                "vaco-codec-vp9: a frame arrived with no in-flight record",
+            ));
         };
         let mut frame = result?;
         if meta.show_frame {
@@ -1789,11 +2614,20 @@ impl Vp9Decoder {
     /// header parse, or a `show_existing_frame` naming an empty slot,
     /// dispatches nothing at all — matching the pre-threading code's own
     /// "just skip this call" handling of both cases exactly.
-    fn split_frame(&mut self, data: &[u8], pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
-        let mut ref_dims: [Option<RefFrameDims>; tables::NUM_REF_FRAMES] = [None; tables::NUM_REF_FRAMES];
+    fn split_frame(
+        &mut self,
+        data: &[u8],
+        pts: vaco_core::Timestamp,
+        duration: vaco_core::Duration,
+    ) -> Result<()> {
+        let mut ref_dims: [Option<RefFrameDims>; tables::NUM_REF_FRAMES] =
+            [None; tables::NUM_REF_FRAMES];
         for (i, slot) in ref_dims.iter_mut().enumerate() {
             if let Some((w, h)) = self.state.ref_store.dims(u8::try_from(i).unwrap_or(0)) {
-                *slot = Some(RefFrameDims { width: w, height: h });
+                *slot = Some(RefFrameDims {
+                    width: w,
+                    height: h,
+                });
             }
         }
 
@@ -1822,7 +2656,11 @@ impl Vp9Decoder {
                     bit_depth: slot.bit_depth,
                     limits: self.limits.clone(),
                 });
-                self.in_flight.push_back(InFlight { show_frame: true, pts, duration });
+                self.in_flight.push_back(InFlight {
+                    show_frame: true,
+                    pts,
+                    duration,
+                });
                 self.drain_to_capacity()?;
             }
             return Ok(());
@@ -1854,30 +2692,59 @@ impl Vp9Decoder {
         let chroma_w = luma_w >> u32::from(fh.color.subsampling_x);
         let chroma_h = luma_h >> u32::from(fh.color.subsampling_y);
         let plane_spec = |w: usize, h: usize| {
-            vaco_codec_core::picture::PlaneSpec::new(u32::try_from(w.saturating_mul(2)).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX))
+            vaco_codec_core::picture::PlaneSpec::new(
+                u32::try_from(w.saturating_mul(2)).unwrap_or(u32::MAX),
+                u32::try_from(h).unwrap_or(u32::MAX),
+            )
         };
-        let spec = vaco_codec_core::picture::PictureSpec::new(vec![plane_spec(luma_w, luma_h), plane_spec(chroma_w, chroma_h), plane_spec(chroma_w, chroma_h)]).single_band();
+        let spec = vaco_codec_core::picture::PictureSpec::new(vec![
+            plane_spec(luma_w, luma_h),
+            plane_spec(chroma_w, chroma_h),
+            plane_spec(chroma_w, chroma_h),
+        ])
+        .single_band();
         let decode_index = self.runner.next_decode_index();
-        let (writer, this_frame) = vaco_codec_core::picture::ProgressPicture::allocate(&spec, decode_index, &mut self.budget)?;
+        let (writer, this_frame) = vaco_codec_core::picture::ProgressPicture::allocate(
+            &spec,
+            decode_index,
+            &mut self.budget,
+        )?;
 
         // §6.2's `if (FrameIsIntra || error_resilient_mode) { setup_past_independence(); ...save_probs...; frame_context_idx = 0 }`.
         if fh.frame_is_intra || fh.error_resilient_mode {
             if fh.is_key_frame || fh.error_resilient_mode || fh.reset_frame_context == 3 {
                 self.state.frame_contexts = std::array::from_fn(|_| EntropyContext::default());
             } else if fh.reset_frame_context == 2
-                && let Some(slot) = self.state.frame_contexts.get_mut(usize::from(fh.frame_context_idx))
+                && let Some(slot) = self
+                    .state
+                    .frame_contexts
+                    .get_mut(usize::from(fh.frame_context_idx))
             {
                 *slot = EntropyContext::default();
             }
             fh.frame_context_idx = 0;
         }
 
-        let mut entropy = self.state.frame_contexts.get(usize::from(fh.frame_context_idx)).cloned().unwrap_or_default();
+        let mut entropy = self
+            .state
+            .frame_contexts
+            .get(usize::from(fh.frame_context_idx))
+            .cloned()
+            .unwrap_or_default();
         let header_end = header_bytes + usize::from(fh.header_size_in_bytes);
-        let Some(compressed) = data.get(header_bytes..header_end) else { return Ok(()) };
+        let Some(compressed) = data.get(header_bytes..header_end) else {
+            return Ok(());
+        };
         let mut cbd = Bd::new(compressed);
-        let info =
-            header::parse_compressed_header(&mut cbd, fh.quant.lossless, fh.frame_is_intra, fh.allow_high_precision_mv, fh.ref_frame_sign_bias, fh.interpolation_filter, &mut entropy);
+        let info = header::parse_compressed_header(
+            &mut cbd,
+            fh.quant.lossless,
+            fh.frame_is_intra,
+            fh.allow_high_precision_mv,
+            fh.ref_frame_sign_bias,
+            fh.interpolation_filter,
+            &mut entropy,
+        );
         fh.tx_mode = info.tx_mode;
         fh.reference_mode = info.reference_mode;
         fh.comp_fixed_ref = info.comp_fixed_ref;
@@ -1903,11 +2770,18 @@ impl Vp9Decoder {
         // symbol counts into the saved context before saving it — is not
         // implemented; see the crate doc and `planning/TECH-DEBT.md`.
         if fh.refresh_frame_context
-            && let Some(slot) = self.state.frame_contexts.get_mut(usize::from(fh.frame_context_idx))
+            && let Some(slot) = self
+                .state
+                .frame_contexts
+                .get_mut(usize::from(fh.frame_context_idx))
         {
             *slot = entropy;
         }
-        self.state.prev_frame_info = Some(PrevFrameInfo { width: fh.width, height: fh.height, show_frame: fh.show_frame });
+        self.state.prev_frame_info = Some(PrevFrameInfo {
+            width: fh.width,
+            height: fh.height,
+            show_frame: fh.show_frame,
+        });
         self.state.prev_mi_cols = fh.mi_cols;
         self.state.prev_mi_rows = fh.mi_rows;
         self.state.prev_segment_ids.clone_from(&segment_ids);
@@ -1944,7 +2818,11 @@ impl Vp9Decoder {
             writer,
             limits: self.limits.clone(),
         });
-        self.in_flight.push_back(InFlight { show_frame, pts, duration });
+        self.in_flight.push_back(InFlight {
+            show_frame,
+            pts,
+            duration,
+        });
         self.drain_to_capacity()
     }
 }
@@ -1962,7 +2840,13 @@ fn ref_slot_to_frame(budget: &mut Budget, slot: &RefSlot) -> Result<Frame> {
         error_resilient_mode: false,
         intra_only: false,
         frame_is_intra: false,
-        color: header::ColorConfig { bit_depth: slot.bit_depth, color_space: 0, full_range: false, subsampling_x: slot.subsampling_x, subsampling_y: slot.subsampling_y },
+        color: header::ColorConfig {
+            bit_depth: slot.bit_depth,
+            color_space: 0,
+            full_range: false,
+            subsampling_x: slot.subsampling_x,
+            subsampling_y: slot.subsampling_y,
+        },
         width: slot.width,
         height: slot.height,
         mi_cols: 0,
@@ -1998,7 +2882,11 @@ fn pic_to_frame(budget: &mut Budget, fh: &FrameHeader, pic: &Picture) -> Result<
     // (§6.2.2), so `(x=0, y=1)` — 4:4:0-style vertical-only subsampling —
     // is syntactically legal even though no test fixture in this crate's
     // reach produces one; matched for totality, not verified.
-    let name = match (fh.color.bit_depth, fh.color.subsampling_x, fh.color.subsampling_y) {
+    let name = match (
+        fh.color.bit_depth,
+        fh.color.subsampling_x,
+        fh.color.subsampling_y,
+    ) {
         (8, true, true) => "yuv420p".to_string(),
         (8, true, false) => "yuv422p".to_string(),
         (8, false, false) => "yuv444p".to_string(),
@@ -2008,12 +2896,16 @@ fn pic_to_frame(budget: &mut Budget, fh: &FrameHeader, pic: &Picture) -> Result<
         (b, false, false) => format!("yuv444p{b}le"),
         (b, false, true) => format!("yuv440p{b}le"),
     };
-    let pix_fmt = PixFmt::from_name(&name).map_err(|_| Error::InvalidData("vp9: unsupported pixel format"))?;
+    let pix_fmt = PixFmt::from_name(&name)
+        .map_err(|_| Error::InvalidData("vp9: unsupported pixel format"))?;
 
     let width = fh.width;
     let height = fh.height;
     let mut frame = Frame::alloc_video(budget, pix_fmt, width, height)?;
-    let (w, h) = (usize::try_from(width).unwrap_or(0), usize::try_from(height).unwrap_or(0));
+    let (w, h) = (
+        usize::try_from(width).unwrap_or(0),
+        usize::try_from(height).unwrap_or(0),
+    );
     let cw = w.div_ceil(1 + usize::from(fh.color.subsampling_x));
     let ch = h.div_ceil(1 + usize::from(fh.color.subsampling_y));
     blit(&pic.y, &mut frame, 0, w, h, fh.color.bit_depth);
@@ -2022,8 +2914,17 @@ fn pic_to_frame(budget: &mut Budget, fh: &FrameHeader, pic: &Picture) -> Result<
     Ok(frame)
 }
 
-fn blit(src: &crate::framebuf::Plane, frame: &mut Frame, plane_index: usize, width: usize, height: usize, bit_depth: u8) {
-    let Some(mut dst) = frame.plane_mut(plane_index) else { return };
+fn blit(
+    src: &crate::framebuf::Plane,
+    frame: &mut Frame,
+    plane_index: usize,
+    width: usize,
+    height: usize,
+    bit_depth: u8,
+) {
+    let Some(mut dst) = frame.plane_mut(plane_index) else {
+        return;
+    };
     let two_bytes = bit_depth > 8;
     for y in 0..height {
         let Some(row) = dst.row_mut(y) else { continue };
@@ -2137,17 +3038,45 @@ enum Vp9FrameTask {
 impl vaco_codec_core::FrameTask for Vp9FrameTask {
     fn run(self: Box<Self>, ctx: &vaco_codec_core::TaskCtx<'_>) -> Result<Frame> {
         match *self {
-            Self::Decode { header, ref_store_pending, parsed, grid, segment_ids, mut writer, limits } => {
+            Self::Decode {
+                header,
+                ref_store_pending,
+                parsed,
+                grid,
+                segment_ids,
+                mut writer,
+                limits,
+            } => {
                 let mut budget = Budget::new(limits);
-                let ref_store = refframe::materialize_ref_store(&ref_store_pending, ctx.decode_index(), &mut budget)?;
-                let pic = reconstruct_frame(&header, ref_store, &parsed, &grid, &segment_ids, &mut budget)?;
+                let ref_store = refframe::materialize_ref_store(
+                    &ref_store_pending,
+                    ctx.decode_index(),
+                    &mut budget,
+                )?;
+                let pic = reconstruct_frame(
+                    &header,
+                    ref_store,
+                    &parsed,
+                    &grid,
+                    &segment_ids,
+                    &mut budget,
+                )?;
 
                 // Single band per plane (`PictureSpec::single_band`), so
                 // band 0 is the whole plane and this is the one place these
                 // bytes are ever copied for the picture's own consumers.
-                writer.band_mut(0, 0)?.data_mut().copy_from_slice(&framebuf::plane_to_bytes(&pic.y, &mut budget)?);
-                writer.band_mut(1, 0)?.data_mut().copy_from_slice(&framebuf::plane_to_bytes(&pic.u, &mut budget)?);
-                writer.band_mut(2, 0)?.data_mut().copy_from_slice(&framebuf::plane_to_bytes(&pic.v, &mut budget)?);
+                writer
+                    .band_mut(0, 0)?
+                    .data_mut()
+                    .copy_from_slice(&framebuf::plane_to_bytes(&pic.y, &mut budget)?);
+                writer
+                    .band_mut(1, 0)?
+                    .data_mut()
+                    .copy_from_slice(&framebuf::plane_to_bytes(&pic.u, &mut budget)?);
+                writer
+                    .band_mut(2, 0)?
+                    .data_mut()
+                    .copy_from_slice(&framebuf::plane_to_bytes(&pic.v, &mut budget)?);
                 writer.finish()?;
 
                 let mut frame = pic_to_frame(&mut budget, &header, &pic)?;
@@ -2156,14 +3085,37 @@ impl vaco_codec_core::FrameTask for Vp9FrameTask {
                 }
                 Ok(frame)
             }
-            Self::ShowExisting { pic_ref, width, height, subsampling_x, subsampling_y, bit_depth, limits } => {
+            Self::ShowExisting {
+                pic_ref,
+                width,
+                height,
+                subsampling_x,
+                subsampling_y,
+                bit_depth,
+                limits,
+            } => {
                 let mut budget = Budget::new(limits);
                 let luma_w = usize::try_from(width).unwrap_or(0);
                 let luma_h = usize::try_from(height).unwrap_or(0);
                 let chroma_w = luma_w >> u32::from(subsampling_x);
                 let chroma_h = luma_h >> u32::from(subsampling_y);
-                let pic = framebuf::materialize(&pic_ref, ctx.decode_index(), luma_w, luma_h, chroma_w, chroma_h, &mut budget)?;
-                let slot = RefSlot { pic: std::sync::Arc::new(pic), width, height, subsampling_x, subsampling_y, bit_depth };
+                let pic = framebuf::materialize(
+                    &pic_ref,
+                    ctx.decode_index(),
+                    luma_w,
+                    luma_h,
+                    chroma_w,
+                    chroma_h,
+                    &mut budget,
+                )?;
+                let slot = RefSlot {
+                    pic: std::sync::Arc::new(pic),
+                    width,
+                    height,
+                    subsampling_x,
+                    subsampling_y,
+                    bit_depth,
+                };
                 ref_slot_to_frame(&mut budget, &slot)
             }
         }
@@ -2182,7 +3134,13 @@ pub static VP9_DECODER: DecoderDesc = DecoderDesc {
 };
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, reason = "test code exercising a fixed real-encoder fixture, not the untrusted-input surface")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code exercising a fixed real-encoder fixture, not the untrusted-input surface"
+)]
 mod tests {
     use super::*;
     use vaco_frame::FrameData;
@@ -2214,7 +3172,15 @@ mod tests {
     #[test]
     fn two_tile_columns_decode_correctly_on_both_sides_of_the_boundary() {
         let frame = decode_first_frame(&two_tile_columns_key_frame());
-        let FrameData::Video { width, height, planes, .. } = &frame.data else { panic!("video frame") };
+        let FrameData::Video {
+            width,
+            height,
+            planes,
+            ..
+        } = &frame.data
+        else {
+            panic!("video frame")
+        };
         assert_eq!((*width, *height), (512, 64));
 
         // Expected values measured from `ffmpeg -c:v libvpx-vp9`'s own
@@ -2254,10 +3220,24 @@ mod tests {
             let start = row * v.stride;
             v.data.as_slice()[start + x]
         };
-        for (x, row, expected) in [(0usize, 0usize, 221u8), (127, 0, 16), (128, 0, 240), (255, 0, 166), (128, 31, 240), (255, 31, 166)] {
+        for (x, row, expected) in [
+            (0usize, 0usize, 221u8),
+            (127, 0, 16),
+            (128, 0, 240),
+            (255, 0, 166),
+            (128, 31, 240),
+            (255, 31, 166),
+        ] {
             assert_eq!(u_at(x, row), expected, "U({x},{row})");
         }
-        for (x, row, expected) in [(0usize, 0usize, 164u8), (127, 0, 146), (128, 0, 110), (255, 0, 16), (128, 31, 110), (255, 31, 16)] {
+        for (x, row, expected) in [
+            (0usize, 0usize, 164u8),
+            (127, 0, 146),
+            (128, 0, 110),
+            (255, 0, 16),
+            (128, 31, 110),
+            (255, 31, 16),
+        ] {
             assert_eq!(v_at(x, row), expected, "V({x},{row})");
         }
     }

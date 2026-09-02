@@ -30,8 +30,8 @@
 //! is the actual evidence this module's default is correct — this file
 //! just holds the shared closed forms.
 
-use vaco_opts::OptEnum;
 use std::f64::consts::PI;
+use vaco_opts::OptEnum;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, OptEnum)]
 #[opt_enum(unit = "win_func", base = "int")]

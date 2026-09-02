@@ -1424,18 +1424,66 @@ pub(crate) struct CodebookInfo {
 /// Indexed by Huffman codebook number 1..=11 (index 0 unused — `ZERO_HCB`
 /// has no Huffman table at all, see `section.rs`).
 pub(crate) const CODEBOOK_INFO: [CodebookInfo; 12] = [
-    CodebookInfo { unsigned: false, dim: 0, lav: 0 }, // 0: unused (ZERO_HCB)
-    CodebookInfo { unsigned: false, dim: 4, lav: 1 }, // 1
-    CodebookInfo { unsigned: false, dim: 4, lav: 1 }, // 2
-    CodebookInfo { unsigned: true, dim: 4, lav: 2 },  // 3
-    CodebookInfo { unsigned: true, dim: 4, lav: 2 },  // 4
-    CodebookInfo { unsigned: false, dim: 2, lav: 4 }, // 5
-    CodebookInfo { unsigned: false, dim: 2, lav: 4 }, // 6
-    CodebookInfo { unsigned: true, dim: 2, lav: 7 },  // 7
-    CodebookInfo { unsigned: true, dim: 2, lav: 7 },  // 8
-    CodebookInfo { unsigned: true, dim: 2, lav: 12 }, // 9
-    CodebookInfo { unsigned: true, dim: 2, lav: 12 }, // 10
-    CodebookInfo { unsigned: true, dim: 2, lav: 16 }, // 11 (ESC-extended)
+    CodebookInfo {
+        unsigned: false,
+        dim: 0,
+        lav: 0,
+    }, // 0: unused (ZERO_HCB)
+    CodebookInfo {
+        unsigned: false,
+        dim: 4,
+        lav: 1,
+    }, // 1
+    CodebookInfo {
+        unsigned: false,
+        dim: 4,
+        lav: 1,
+    }, // 2
+    CodebookInfo {
+        unsigned: true,
+        dim: 4,
+        lav: 2,
+    }, // 3
+    CodebookInfo {
+        unsigned: true,
+        dim: 4,
+        lav: 2,
+    }, // 4
+    CodebookInfo {
+        unsigned: false,
+        dim: 2,
+        lav: 4,
+    }, // 5
+    CodebookInfo {
+        unsigned: false,
+        dim: 2,
+        lav: 4,
+    }, // 6
+    CodebookInfo {
+        unsigned: true,
+        dim: 2,
+        lav: 7,
+    }, // 7
+    CodebookInfo {
+        unsigned: true,
+        dim: 2,
+        lav: 7,
+    }, // 8
+    CodebookInfo {
+        unsigned: true,
+        dim: 2,
+        lav: 12,
+    }, // 9
+    CodebookInfo {
+        unsigned: true,
+        dim: 2,
+        lav: 12,
+    }, // 10
+    CodebookInfo {
+        unsigned: true,
+        dim: 2,
+        lav: 16,
+    }, // 11 (ESC-extended)
 ];
 
 /// The Huffman table for spectral codebook `hcb` (1..=11), or `None` for 0
@@ -1461,7 +1509,12 @@ pub(crate) fn spectrum_table(hcb: u8) -> Option<&'static [VlcEntry]> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::{CODEBOOK_INFO, SCALEFACTOR_HUFFMAN, spectrum_table};
     use vaco_codec_vlc::{is_prefix_free, kraft_numerator};
 

@@ -241,7 +241,8 @@ pub fn dihedral_transform_from_angle_and_flips(
     vflip: bool,
 ) -> Option<DisplayTransform> {
     use DisplayTransform::{
-        Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip, TransposeCclockFlip, Vflip,
+        Hflip, Rotate180, TransposeCclock, TransposeCclockFlip, TransposeClock, TransposeClockFlip,
+        Vflip,
     };
     const EPSILON: f64 = 0.01;
     let normalised = degrees_ccw.rem_euclid(360.0);
@@ -343,8 +344,8 @@ mod tests {
     #[test]
     fn matches_every_measured_display_rotation_matrix() {
         use DisplayTransform::{
-            Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip,
-            TransposeCclockFlip, Vflip,
+            Hflip, Rotate180, TransposeCclock, TransposeCclockFlip, TransposeClock,
+            TransposeClockFlip, Vflip,
         };
         const P: i32 = 65536;
         const N: i32 = -65536;
@@ -377,7 +378,8 @@ mod tests {
     #[test]
     fn to_matrix_matches_the_same_measured_literals() {
         use DisplayTransform::{
-            Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip, TransposeCclockFlip, Vflip,
+            Hflip, Rotate180, TransposeCclock, TransposeCclockFlip, TransposeClock,
+            TransposeClockFlip, Vflip,
         };
         let cases: &[(DisplayTransform, [i32; 9])] = &[
             (Hflip, [N, 0, 0, 0, P, 0, 0, 0, 1 << 30]),
@@ -410,8 +412,8 @@ mod tests {
     #[test]
     fn matches_every_measured_display_rotation_cli_combination() {
         use DisplayTransform::{
-            Hflip, Rotate180, TransposeClock, TransposeCclock, TransposeClockFlip,
-            TransposeCclockFlip, Vflip,
+            Hflip, Rotate180, TransposeCclock, TransposeCclockFlip, TransposeClock,
+            TransposeClockFlip, Vflip,
         };
         let cases: &[(f64, bool, bool, Option<DisplayTransform>)] = &[
             (0.0, false, false, None),

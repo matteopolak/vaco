@@ -46,7 +46,9 @@ pub const fn psd_of_exp(exp: u8) -> i32 {
 /// latab[addr] : b + latab[addr]`.
 fn logadd(a: i32, b: i32) -> i32 {
     let c = a - b;
-    let addr = usize::try_from(c.unsigned_abs() >> 1).unwrap_or(usize::MAX).min(255);
+    let addr = usize::try_from(c.unsigned_abs() >> 1)
+        .unwrap_or(usize::MAX)
+        .min(255);
     let corr = i32::from(*LATAB.get(addr).unwrap_or(&0));
     if c >= 0 { a + corr } else { b + corr }
 }
@@ -259,7 +261,10 @@ pub fn compute_bap(exps: &[u8], params: &AllocParams) -> Vec<u8> {
 
     // §7.2.2.5: masking curve.
     let dbknee = i32::from(*DBKNEE.get(usize::from(params.dbpbcod)).unwrap_or(&0));
-    let hth_row = HTH.get(usize::from(params.fscod)).copied().unwrap_or(HTH[0]);
+    let hth_row = HTH
+        .get(usize::from(params.fscod))
+        .copied()
+        .unwrap_or(HTH[0]);
     let mut mask = [0i32; NBANDS];
     for bin in bndstrt..bndend {
         let mut e = excite.get(bin).copied().unwrap_or(0);
@@ -288,7 +293,10 @@ pub fn compute_bap(exps: &[u8], params: &AllocParams) -> Vec<u8> {
     }
 
     // §7.2.2.7: compute bit allocation.
-    let floor = FLOOR.get(usize::from(params.floorcod)).copied().unwrap_or(0);
+    let floor = FLOOR
+        .get(usize::from(params.floorcod))
+        .copied()
+        .unwrap_or(0);
     let mut i = start;
     let mut j = bndstrt;
     loop {

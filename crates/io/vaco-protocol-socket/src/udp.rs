@@ -36,8 +36,7 @@ use vaco_core::Error as CoreError;
 use vaco_io::{MediaSink, MediaSource, PeekSource, RawSource, Seekability};
 use vaco_opts::{Dict, OptionsExt, Schema, schema_of};
 use vaco_protocol_core::{
-    Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result,
-    Url,
+    Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result, Url,
 };
 
 use crate::addr;
@@ -93,12 +92,18 @@ fn local_addr(opts: &UdpOptions, domain: Domain) -> Result<SocketAddr, ProtocolE
 
 fn apply_common_options(socket: &Socket, opts: &UdpOptions) -> Result<()> {
     if opts.reuse_address() {
-        socket.set_reuse_address(true).map_err(ProtocolError::from)?;
+        socket
+            .set_reuse_address(true)
+            .map_err(ProtocolError::from)?;
     }
     if opts.buffer_size >= 0 {
         let size = usize::try_from(opts.buffer_size).unwrap_or(0);
-        socket.set_send_buffer_size(size).map_err(ProtocolError::from)?;
-        socket.set_recv_buffer_size(size).map_err(ProtocolError::from)?;
+        socket
+            .set_send_buffer_size(size)
+            .map_err(ProtocolError::from)?;
+        socket
+            .set_recv_buffer_size(size)
+            .map_err(ProtocolError::from)?;
     }
     if opts.broadcast {
         socket.set_broadcast(true).map_err(ProtocolError::from)?;
@@ -122,9 +127,7 @@ fn maybe_join_multicast(socket: &Socket, group: IpAddr) -> Result<()> {
         IpAddr::V4(g) => socket
             .join_multicast_v4(&g, &Ipv4Addr::UNSPECIFIED)
             .map_err(ProtocolError::from),
-        IpAddr::V6(g) => socket
-            .join_multicast_v6(&g, 0)
-            .map_err(ProtocolError::from),
+        IpAddr::V6(g) => socket.join_multicast_v6(&g, 0).map_err(ProtocolError::from),
     }
 }
 
@@ -155,20 +158,19 @@ fn new_socket(domain: Domain, lite: bool) -> Result<Socket> {
 /// binding `0.0.0.0`.
 fn bind_for_read(hp: &HostPort, opts: &UdpOptions, lite: bool) -> Result<UdpSocket> {
     let addrs = addr::resolve(hp)?;
-    let target = addrs
-        .into_iter()
-        .next()
-        .ok_or(ProtocolError::Malformed {
-            scheme: "udp",
-            detail: "host name resolved to no addresses",
-        })?;
+    let target = addrs.into_iter().next().ok_or(ProtocolError::Malformed {
+        scheme: "udp",
+        detail: "host name resolved to no addresses",
+    })?;
     let domain = Domain::for_address(target);
     let socket = new_socket(domain, lite)?;
     apply_common_options(&socket, opts)?;
     socket.bind(&target.into()).map_err(ProtocolError::from)?;
     maybe_join_multicast(&socket, target.ip())?;
     if opts.connect {
-        socket.connect(&target.into()).map_err(ProtocolError::from)?;
+        socket
+            .connect(&target.into())
+            .map_err(ProtocolError::from)?;
     }
     Ok(socket.into())
 }
@@ -178,13 +180,10 @@ fn bind_for_read(hp: &HostPort, opts: &UdpOptions, lite: bool) -> Result<UdpSock
 /// to send to.
 fn bind_for_write(hp: &HostPort, opts: &UdpOptions, lite: bool) -> Result<UdpSocket> {
     let addrs = addr::resolve(hp)?;
-    let target = addrs
-        .into_iter()
-        .next()
-        .ok_or(ProtocolError::Malformed {
-            scheme: "udp",
-            detail: "host name resolved to no addresses",
-        })?;
+    let target = addrs.into_iter().next().ok_or(ProtocolError::Malformed {
+        scheme: "udp",
+        detail: "host name resolved to no addresses",
+    })?;
     let domain = Domain::for_address(target);
     let socket = new_socket(domain, lite)?;
     apply_common_options(&socket, opts)?;
@@ -194,17 +193,22 @@ fn bind_for_write(hp: &HostPort, opts: &UdpOptions, lite: bool) -> Result<UdpSoc
     if let IpAddr::V4(g) = target.ip()
         && g.is_multicast()
     {
-        socket.set_multicast_ttl_v4(u32::try_from(opts.ttl).unwrap_or(16))
+        socket
+            .set_multicast_ttl_v4(u32::try_from(opts.ttl).unwrap_or(16))
             .map_err(ProtocolError::from)?;
     }
-    socket.connect(&target.into()).map_err(ProtocolError::from)?;
+    socket
+        .connect(&target.into())
+        .map_err(ProtocolError::from)?;
     Ok(socket.into())
 }
 
 fn apply_timeout(socket: &UdpSocket, opts: &UdpOptions) -> Result<()> {
     if opts.timeout > 0 {
         let d = Duration::from_micros(u64::try_from(opts.timeout).unwrap_or(0));
-        socket.set_read_timeout(Some(d)).map_err(ProtocolError::from)?;
+        socket
+            .set_read_timeout(Some(d))
+            .map_err(ProtocolError::from)?;
     }
     Ok(())
 }

@@ -94,7 +94,10 @@ pub struct Splitter {
 impl Splitter {
     #[must_use]
     pub const fn new(family: NalFamily) -> Self {
-        Self { family, pending: Vec::new() }
+        Self {
+            family,
+            pending: Vec::new(),
+        }
     }
 
     /// Feed more bytes; returns every access unit that is now fully known
@@ -212,7 +215,10 @@ mod tests {
         let units = s.push(&stream, &mut budget).unwrap();
         assert_eq!(units.len(), 1, "the first AUD only opens the stream");
         let tail = s.finish().unwrap();
-        assert!(tail.windows(4).any(|w| w == [0, 0, 0, 1]), "tail keeps its own AUD");
+        assert!(
+            tail.windows(4).any(|w| w == [0, 0, 0, 1]),
+            "tail keeps its own AUD"
+        );
     }
 
     #[test]
@@ -253,8 +259,15 @@ mod tests {
         stream.extend_from_slice(&[0, 0, 0, 1, 2, 1]); // fake trailing slice
 
         let units = s.push(&stream, &mut budget).unwrap();
-        assert_eq!(units.len(), 1, "frame 0 closes off the moment frame 1's AUD appears");
-        assert!(is_keyframe(&units[0], NalFamily::H265), "frame 0's IDR is still recognised without a leading AUD");
+        assert_eq!(
+            units.len(),
+            1,
+            "frame 0 closes off the moment frame 1's AUD appears"
+        );
+        assert!(
+            is_keyframe(&units[0], NalFamily::H265),
+            "frame 0's IDR is still recognised without a leading AUD"
+        );
         let tail = s.finish().unwrap();
         assert!(!is_keyframe(&tail, NalFamily::H265));
     }

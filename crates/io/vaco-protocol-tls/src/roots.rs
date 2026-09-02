@@ -40,7 +40,9 @@ pub fn roots_with_ca_pem(ca_pem: &str) -> Result<RootCertStore> {
         });
     }
     let mut store = default_roots();
-    let certs = ders.into_iter().map(rustls::pki_types::CertificateDer::from);
+    let certs = ders
+        .into_iter()
+        .map(rustls::pki_types::CertificateDer::from);
     let (_added, _ignored) = store.add_parsable_certificates(certs);
     Ok(store)
 }

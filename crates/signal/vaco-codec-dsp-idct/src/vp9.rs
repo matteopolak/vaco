@@ -45,8 +45,8 @@
 /// §8.7.1.1's `cos64_lookup[33]`.
 const COS64_LOOKUP: [i64; 33] = [
     16384, 16364, 16305, 16207, 16069, 15893, 15679, 15426, 15137, 14811, 14449, 14053, 13623,
-    13160, 12665, 12140, 11585, 11003, 10394, 9760, 9102, 8423, 7723, 7005, 6270, 5520, 4756,
-    3981, 3196, 2404, 1606, 804, 0,
+    13160, 12665, 12140, 11585, 11003, 10394, 9760, 9102, 8423, 7723, 7005, 6270, 5520, 4756, 3981,
+    3196, 2404, 1606, 804, 0,
 ];
 
 /// §8.7.1.1's `cos64(angle)`.
@@ -155,7 +155,10 @@ fn idct_permute(t: &mut [i64], n: u32) {
 
 /// §8.7.1.3's inverse DCT process on the already-permuted array `t[0..2^n]`,
 /// `2 <= n <= 5`.
-#[allow(clippy::many_single_char_names, reason = "mirrors the spec's own n0/n1/n2/n3 names")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "mirrors the spec's own n0/n1/n2/n3 names"
+)]
 fn idct(t: &mut [i64], n: u32) {
     let n0 = 1usize << n;
     let n1 = 1usize << (n - 1);
@@ -190,7 +193,8 @@ fn idct(t: &mut [i64], n: u32) {
             for j in 0..2 {
                 let a = n0 - n as usize + 3 - n2 * j - 4 * i;
                 let bb = n1 + n as usize - 4 + n2 * j + 4 * i;
-                let angle = 28 - 16 * i32::try_from(i).unwrap_or(0) + 56 * i32::try_from(j).unwrap_or(0);
+                let angle =
+                    28 - 16 * i32::try_from(i).unwrap_or(0) + 56 * i32::try_from(j).unwrap_or(0);
                 b(t, a, bb, angle, true);
             }
         }
@@ -317,13 +321,27 @@ fn iadst8(t: &mut [i64]) {
     adst_input_permute(t, 3);
     let mut s = [0i64; 8];
     for i in 0..4 {
-        sb(t, &mut s, 2 * i, 1 + 2 * i, 30 - 8 * i32::try_from(i).unwrap_or(0), true);
+        sb(
+            t,
+            &mut s,
+            2 * i,
+            1 + 2 * i,
+            30 - 8 * i32::try_from(i).unwrap_or(0),
+            true,
+        );
     }
     for i in 0..4 {
         sh(t, &s, i, 4 + i);
     }
     for i in 0..2 {
-        sb(t, &mut s, 4 + 3 * i, 5 + i, 24 - 16 * i32::try_from(i).unwrap_or(0), true);
+        sb(
+            t,
+            &mut s,
+            4 + 3 * i,
+            5 + i,
+            24 - 16 * i32::try_from(i).unwrap_or(0),
+            true,
+        );
     }
     for i in 0..2 {
         sh(t, &s, 4 + i, 6 + i);
@@ -345,13 +363,27 @@ fn iadst16(t: &mut [i64]) {
     adst_input_permute(t, 4);
     let mut s = [0i64; 16];
     for i in 0..8 {
-        sb(t, &mut s, 2 * i, 1 + 2 * i, 31 - 4 * i32::try_from(i).unwrap_or(0), true);
+        sb(
+            t,
+            &mut s,
+            2 * i,
+            1 + 2 * i,
+            31 - 4 * i32::try_from(i).unwrap_or(0),
+            true,
+        );
     }
     for i in 0..8 {
         sh(t, &s, i, 8 + i);
     }
     for i in 0..4 {
-        sb(t, &mut s, 8 + 2 * i, 9 + 2 * i, 28 - 16 * i32::try_from(i).unwrap_or(0), true);
+        sb(
+            t,
+            &mut s,
+            8 + 2 * i,
+            9 + 2 * i,
+            28 - 16 * i32::try_from(i).unwrap_or(0),
+            true,
+        );
     }
     for i in 0..4 {
         sh(t, &s, 8 + i, 12 + i);
@@ -406,7 +438,10 @@ fn iadst(t: &mut [i64], n: u32) {
 }
 
 /// §8.7.1.10's inverse Walsh-Hadamard transform on `t[0..4]` (lossless).
-#[allow(clippy::many_single_char_names, reason = "mirrors the spec's own a/b/c/d/e names")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "mirrors the spec's own a/b/c/d/e names"
+)]
 fn iwht4(t: &mut [i64], shift: u32) {
     let mut a = get(t, 0) >> shift;
     let mut c = get(t, 1) >> shift;
@@ -435,7 +470,10 @@ fn iwht4(t: &mut [i64], shift: u32) {
 /// [`inverse_transform_2d`] itself — the correct oracle here, since there
 /// is no independent forward-direction specification to transcribe a
 /// second time.
-#[allow(clippy::many_single_char_names, reason = "mirrors iwht4's own a/b/c/d/e names")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "mirrors iwht4's own a/b/c/d/e names"
+)]
 fn iwht4_inverse(t: &mut [i64]) {
     let a2 = get(t, 0);
     let b1 = get(t, 1);
@@ -466,7 +504,8 @@ fn iwht4_inverse(t: &mut [i64]) {
 /// [`iwht4`] pass, which is what inverting a separable transform requires.
 #[must_use]
 pub fn forward_wht4x4(residual: &[i32; 16]) -> [i64; 16] {
-    let mut t: [i64; 16] = std::array::from_fn(|i| i64::from(residual.get(i).copied().unwrap_or(0)));
+    let mut t: [i64; 16] =
+        std::array::from_fn(|i| i64::from(residual.get(i).copied().unwrap_or(0)));
     let mut col = [0i64; 4];
     for j in 0..4 {
         for (i, slot) in col.iter_mut().enumerate() {
@@ -601,7 +640,12 @@ mod tests {
     fn every_size_and_type_runs_without_panicking_on_extreme_input() {
         for n in 2..=5u32 {
             let size = (1usize << n) * (1usize << n);
-            for tx_type in [TxType::DctDct, TxType::AdstDct, TxType::DctAdst, TxType::AdstAdst] {
+            for tx_type in [
+                TxType::DctDct,
+                TxType::AdstDct,
+                TxType::DctAdst,
+                TxType::AdstAdst,
+            ] {
                 let mut d = vec![i64::from(i32::MAX); size];
                 inverse_transform_2d(&mut d, n, tx_type, false);
                 let mut d2 = vec![i64::from(i32::MIN); size];
@@ -629,7 +673,8 @@ mod tests {
     fn forward_wht4x4_round_trips_a_hand_picked_block() {
         let residual: [i32; 16] = [3, -1, 0, 7, 2, 2, -5, 1, 0, 0, 0, -9, 4, -4, 6, -2];
         let tokens = forward_wht4x4(&residual);
-        let mut dequant: [i64; 16] = std::array::from_fn(|i| tokens.get(i).copied().unwrap_or(0) * 4);
+        let mut dequant: [i64; 16] =
+            std::array::from_fn(|i| tokens.get(i).copied().unwrap_or(0) * 4);
         inverse_transform_2d(&mut dequant, 2, TxType::DctDct, true);
         for (r, &d) in residual.iter().zip(dequant.iter()) {
             assert_eq!(i64::from(*r), d, "residual {residual:?} tokens {tokens:?}");

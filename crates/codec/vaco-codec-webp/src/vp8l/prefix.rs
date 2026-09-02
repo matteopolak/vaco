@@ -17,7 +17,9 @@ use super::bitio::{BitReaderLsb, BitWriterLsb};
 use super::huffman::{EncodeTable, HuffmanTable, lengths_from_freqs};
 
 const CODE_LENGTH_CODES: usize = 19;
-const CODE_LENGTH_ORDER: [usize; CODE_LENGTH_CODES] = [17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+const CODE_LENGTH_ORDER: [usize; CODE_LENGTH_CODES] = [
+    17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+];
 
 /// Read one prefix code (either transmission form) for an alphabet of
 /// `alphabet_size` symbols.
@@ -26,7 +28,11 @@ const CODE_LENGTH_ORDER: [usize; CODE_LENGTH_CODES] = [17, 18, 0, 1, 2, 3, 4, 5,
 ///
 /// [`Error::InvalidData`] for a `max_symbol` or `color_cache_code_bits`
 /// value the spec declares invalid, or a length exceeding 15.
-pub(crate) fn read_prefix_code(r: &mut BitReaderLsb<'_>, alphabet_size: usize, budget: &mut Budget) -> Result<HuffmanTable> {
+pub(crate) fn read_prefix_code(
+    r: &mut BitReaderLsb<'_>,
+    alphabet_size: usize,
+    budget: &mut Budget,
+) -> Result<HuffmanTable> {
     let is_simple = r.read_bit() == 1;
     let mut lengths: Vec<u8> = budget.alloc(alphabet_size)?;
     if is_simple {
@@ -44,7 +50,9 @@ pub(crate) fn read_prefix_code(r: &mut BitReaderLsb<'_>, alphabet_size: usize, b
     let num_code_lengths = 4 + r.read_bits(4);
     let mut cl_lengths = vec![0u8; CODE_LENGTH_CODES];
     for i in 0..num_code_lengths as usize {
-        let Some(&order_slot) = CODE_LENGTH_ORDER.get(i) else { break };
+        let Some(&order_slot) = CODE_LENGTH_ORDER.get(i) else {
+            break;
+        };
         let l = r.read_bits(3) as u8;
         if let Some(slot) = cl_lengths.get_mut(order_slot) {
             *slot = l;
@@ -108,7 +116,9 @@ pub(crate) fn read_prefix_code(r: &mut BitReaderLsb<'_>, alphabet_size: usize, b
 
 fn set_len1(lengths: &mut [u8], symbol: usize) -> Result<()> {
     let Some(slot) = lengths.get_mut(symbol) else {
-        return Err(Error::InvalidData("vp8l: simple code length symbol out of range"));
+        return Err(Error::InvalidData(
+            "vp8l: simple code length symbol out of range",
+        ));
     };
     *slot = 1;
     Ok(())
@@ -122,7 +132,11 @@ fn set_len1(lengths: &mut [u8], symbol: usize) -> Result<()> {
 /// Propagates a [`vaco_core::Error`] only if the derived lengths somehow
 /// fail canonical assignment (never happens for output of
 /// [`lengths_from_freqs`], which always returns a valid full code).
-pub(crate) fn write_prefix_code(w: &mut BitWriterLsb, freqs: &[u64], alphabet_size: usize) -> Result<EncodeTable> {
+pub(crate) fn write_prefix_code(
+    w: &mut BitWriterLsb,
+    freqs: &[u64],
+    alphabet_size: usize,
+) -> Result<EncodeTable> {
     let lengths = lengths_from_freqs(freqs, 15);
     if lengths.len() != alphabet_size {
         return Err(Error::InvalidData("vp8l: frequency table size mismatch"));

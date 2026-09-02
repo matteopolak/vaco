@@ -225,7 +225,9 @@ impl Demuxer for AmrDemuxer {
         }
         pkt.stream_index = 0;
         let spf = u64::from(self.samples_per_frame());
-        pkt.pts = Timestamp::new(i64::try_from(self.frames_emitted.saturating_mul(spf)).unwrap_or(i64::MAX));
+        pkt.pts = Timestamp::new(
+            i64::try_from(self.frames_emitted.saturating_mul(spf)).unwrap_or(i64::MAX),
+        );
         pkt.dts = pkt.pts;
         pkt.flags = PacketFlags::KEY;
         let rate = u64::from(self.band.sample_rate());
@@ -261,9 +263,22 @@ mod tests {
     fn magic_selects_narrowband_or_wideband() {
         let mut data = MAGIC_NB.to_vec();
         data.extend(nb_frame(7));
-        let mut d = open_amr(Box::new(MemorySource::new(data)), &vaco_format_core::discovery::NoParsers)
-            .unwrap();
-        assert_eq!(d.streams().first().unwrap().params.audio.as_ref().unwrap().sample_rate, 8000);
+        let mut d = open_amr(
+            Box::new(MemorySource::new(data)),
+            &vaco_format_core::discovery::NoParsers,
+        )
+        .unwrap();
+        assert_eq!(
+            d.streams()
+                .first()
+                .unwrap()
+                .params
+                .audio
+                .as_ref()
+                .unwrap()
+                .sample_rate,
+            8000
+        );
         let pkt = d.read_packet().unwrap();
         assert_eq!(pkt.len, 1 + 31);
     }
@@ -285,6 +300,12 @@ mod tests {
     #[test]
     fn a_missing_signature_is_rejected() {
         let data = b"not amr".to_vec();
-        assert!(open_amr(Box::new(MemorySource::new(data)), &vaco_format_core::discovery::NoParsers).is_err());
+        assert!(
+            open_amr(
+                Box::new(MemorySource::new(data)),
+                &vaco_format_core::discovery::NoParsers
+            )
+            .is_err()
+        );
     }
 }

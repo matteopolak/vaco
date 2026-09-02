@@ -75,7 +75,10 @@ impl Default for Options {
 
 fn seconds(pts: Timestamp, tb: Rational) -> f64 {
     let Some(ticks) = pts.ticks() else { return 0.0 };
-    #[allow(clippy::cast_precision_loss, reason = "display-scale timestamp conversion")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "display-scale timestamp conversion"
+    )]
     {
         ticks as f64 * f64::from(tb.num) / f64::from(tb.den.max(1))
     }
@@ -84,7 +87,9 @@ fn seconds(pts: Timestamp, tb: Rational) -> f64 {
 /// Whether this frame's luma plane counts as "black" under `opts`:
 /// full-range `[0,255]` only (see this module's doc for the scope note).
 fn frame_is_black(frame: &Frame, opts: Options) -> bool {
-    let Some(plane) = frame.plane(0) else { return false };
+    let Some(plane) = frame.plane(0) else {
+        return false;
+    };
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
@@ -151,7 +156,8 @@ impl FrameFilter for Filter {
 }
 
 pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
-    let picture_black_ratio_th = f64_opt(req, "picture_black_ratio_th", f64_opt(req, "pic_th", 0.98));
+    let picture_black_ratio_th =
+        f64_opt(req, "picture_black_ratio_th", f64_opt(req, "pic_th", 0.98));
     let pixel_black_th = f64_opt(req, "pixel_black_th", f64_opt(req, "pix_th", 0.10));
     let opts = Options {
         picture_black_ratio_th,
@@ -212,8 +218,14 @@ mod tests {
             }
         }
         assert_eq!(tagged.len(), 2);
-        assert_eq!(tagged[0], (0, vec![("lavfi.black_start".to_owned(), "0".to_owned())]));
-        assert_eq!(tagged[1], (5, vec![("lavfi.black_end".to_owned(), "1".to_owned())]));
+        assert_eq!(
+            tagged[0],
+            (0, vec![("lavfi.black_start".to_owned(), "0".to_owned())])
+        );
+        assert_eq!(
+            tagged[1],
+            (5, vec![("lavfi.black_end".to_owned(), "1".to_owned())])
+        );
     }
 
     /// Distinguishing input: an irregular gap between the last black frame

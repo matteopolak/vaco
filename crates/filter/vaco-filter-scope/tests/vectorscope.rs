@@ -122,23 +122,37 @@ fn vectorscope_builds_its_histogram_from_real_frame_pixels() -> Result<()> {
 
     let hit_row = 255 - 90;
     let hit_col = 200;
-    assert_eq!(y_rows[hit_row][hit_col], 1, "single hit at intensity=0.004 should paint Y=1");
-    assert_eq!(cb_rows[hit_row][hit_col], 127, "a touched cell's chroma should read 127");
-    assert_eq!(cr_rows[hit_row][hit_col], 127, "a touched cell's chroma should read 127");
+    assert_eq!(
+        y_rows[hit_row][hit_col], 1,
+        "single hit at intensity=0.004 should paint Y=1"
+    );
+    assert_eq!(
+        cb_rows[hit_row][hit_col], 127,
+        "a touched cell's chroma should read 127"
+    );
+    assert_eq!(
+        cr_rows[hit_row][hit_col], 127,
+        "a touched cell's chroma should read 127"
+    );
 
     // The neutral background (99 of the 100 source pixels) all map to
     // cell (128, 255-128=127) with count=99, well above the single hit.
     let bg_row = 255 - 128;
     let bg_col = 128;
     assert_eq!(
-        y_rows[bg_row][bg_col],
-        99u8,
+        y_rows[bg_row][bg_col], 99u8,
         "the neutral background's own cell should show its own hit count"
     );
-    assert_eq!(cb_rows[bg_row][bg_col], 127, "the background cell was touched too, so it also reads 127");
+    assert_eq!(
+        cb_rows[bg_row][bg_col], 127,
+        "the background cell was touched too, so it also reads 127"
+    );
 
     // An entirely untouched cell stays at the neutral chroma marker.
-    assert_eq!(cb_rows[0][0], 128, "an untouched cell must not be marked as touched");
+    assert_eq!(
+        cb_rows[0][0], 128,
+        "an untouched cell must not be marked as touched"
+    );
     assert_eq!(y_rows[0][0], 0, "an untouched cell must stay at Y=0");
 
     assert!(graph.violations().is_empty());

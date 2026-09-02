@@ -134,8 +134,7 @@ pub fn pseudo_random_bytes(seed: u64, out_len: usize) -> Vec<u8> {
 /// `ice-pwd`).
 #[must_use]
 pub fn ice_credential(seed: u64, len: usize) -> String {
-    const ALPHABET: &[u8] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     pseudo_random_bytes(seed, len)
         .into_iter()
         .map(|b| {
@@ -233,12 +232,17 @@ fn push_attr(out: &mut Vec<u8>, kind: u16, value: &[u8]) {
 /// side is running the full candidate-pair state machine), then
 /// `MESSAGE-INTEGRITY` and `FINGERPRINT`.
 #[must_use]
-pub fn build_binding_request(creds: &IceCredentials, txid: &TransactionId, priority: u32) -> Vec<u8> {
+pub fn build_binding_request(
+    creds: &IceCredentials,
+    txid: &TransactionId,
+    priority: u32,
+) -> Vec<u8> {
     let username = format!("{}:{}", creds.remote_ufrag, creds.local_ufrag);
     // The tie-breaker just needs to look different per transaction; fold the
     // whole transaction id into a seed rather than indexing into it.
     let seed = txid.iter().fold(0u64, |acc, &b| {
-        acc.wrapping_mul(0x0100_0000_01B3).wrapping_add(u64::from(b))
+        acc.wrapping_mul(0x0100_0000_01B3)
+            .wrapping_add(u64::from(b))
     });
     let tie_breaker = pseudo_random_bytes(seed, 8);
     let priority_be = priority.to_be_bytes();
@@ -352,7 +356,9 @@ fn parse(buf: &[u8]) -> Result<ParsedMessage<'_>> {
     let length = usize::from(read_u16(buf, 2).ok_or_else(bad)?);
     let cookie = read_u32(buf, 4).ok_or_else(bad)?;
     if cookie != MAGIC_COOKIE {
-        return Err(Error::InvalidData("stun message has the wrong magic cookie"));
+        return Err(Error::InvalidData(
+            "stun message has the wrong magic cookie",
+        ));
     }
     let txid_slice = buf.get(8..20).ok_or_else(bad)?;
     let mut txid = [0u8; 12];
@@ -512,11 +518,7 @@ pub fn connectivity_check(
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
     use std::net::UdpSocket;
@@ -596,7 +598,10 @@ mod tests {
             let mut buf = [0u8; 512];
             let n = server.recv(&mut buf).unwrap();
             let parsed = parse(&buf[..n]).unwrap();
-            assert!(verify_integrity(&parsed, server_creds.remote_pwd.as_bytes()));
+            assert!(verify_integrity(
+                &parsed,
+                server_creds.remote_pwd.as_bytes()
+            ));
             // Binding Success Response: no XOR-MAPPED-ADDRESS needed for this
             // crate's own client to accept it, only a matching transaction id
             // and a valid MESSAGE-INTEGRITY keyed the same way the request was.

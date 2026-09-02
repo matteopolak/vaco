@@ -230,9 +230,7 @@ impl RunState {
     fn read_run_prefix(&mut self, r: &mut BitReader<'_>, x: usize, w: usize) {
         let idx = (self.run_index as usize).min(LOG2_RUN.len() - 1);
         if r.try_get(1).unwrap_or(0) == 1 {
-            self.count = 1i32
-                .checked_shl(log2_run(idx))
-                .unwrap_or(i32::MAX);
+            self.count = 1i32.checked_shl(log2_run(idx)).unwrap_or(i32::MAX);
             if x.saturating_add(self.count.cast_unsigned() as usize) <= w {
                 self.run_index = self.run_index.saturating_add(1);
             }

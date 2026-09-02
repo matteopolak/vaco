@@ -78,7 +78,12 @@ pub fn build_offer(
             rate = m.clock_rate
         );
         if !m.fmtp.is_empty() {
-            let _ = writeln!(s, "a=fmtp:{pt} {fmtp}\r", pt = m.payload_type, fmtp = m.fmtp);
+            let _ = writeln!(
+                s,
+                "a=fmtp:{pt} {fmtp}\r",
+                pt = m.payload_type,
+                fmtp = m.fmtp
+            );
         }
         let _ = writeln!(s, "a=ssrc:{ssrc} cname:vaco\r", ssrc = m.ssrc);
     }

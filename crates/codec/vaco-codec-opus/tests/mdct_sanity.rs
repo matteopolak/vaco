@@ -8,8 +8,14 @@ fn full_imdct_matches_reference_definition() -> Result<(), String> {
     let coeffs64: Vec<f64> = coeffs.iter().map(|&v| f64::from(v)).collect();
     let expected = vaco_tx::reference::imdct(&coeffs64);
 
-    let plan = Plan::<f32>::new(TxKind::Mdct, Direction::Inverse, full, 1.0, TxFlags::FULL_IMDCT)
-        .map_err(|e| format!("Plan::new failed: {e:?}"))?;
+    let plan = Plan::<f32>::new(
+        TxKind::Mdct,
+        Direction::Inverse,
+        full,
+        1.0,
+        TxFlags::FULL_IMDCT,
+    )
+    .map_err(|e| format!("Plan::new failed: {e:?}"))?;
     let mut tx = Tx::new(plan);
     let mut out = vec![0.0f32; full];
     tx.execute(&mut out, &coeffs);

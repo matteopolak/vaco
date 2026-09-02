@@ -23,7 +23,9 @@ use vaco_packet::Packet;
 use vaco_parse_aac::AdtsHeader;
 
 fn main() {
-    let path = std::env::args().nth(1).expect("usage: decode_dump <file.aac>");
+    let path = std::env::args()
+        .nth(1)
+        .expect("usage: decode_dump <file.aac>");
     let data = std::fs::read(&path).expect("read input");
     let mut dec = AacDecoder::new(Limits::strict());
     let stdout = std::io::stdout();
@@ -50,11 +52,16 @@ fn main() {
             match dec.send_packet(Some(&packet)) {
                 Ok(()) => {
                     while let Ok(frame) = dec.receive_frame() {
-                        if let FrameData::Audio { samples, planes, .. } = &frame.data {
+                        if let FrameData::Audio {
+                            samples, planes, ..
+                        } = &frame.data
+                        {
                             let channels = planes.len();
                             let mut interleaved = vec![0.0f32; *samples as usize * channels];
                             for ch in 0..channels {
-                                let Some(plane) = frame.plane(ch) else { continue };
+                                let Some(plane) = frame.plane(ch) else {
+                                    continue;
+                                };
                                 let Some(row) = plane.row(0) else { continue };
                                 for (i, chunk) in row.chunks_exact(4).enumerate() {
                                     if let Some(v) = interleaved.get_mut(i * channels + ch) {

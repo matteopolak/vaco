@@ -37,8 +37,12 @@ fn a_boxed_flac_parser_describes_the_stream_from_extradata_alone() {
     streaminfo[13] = 0xf0;
     streaminfo[16] = 0xac;
     streaminfo[17] = 0x44;
-    parser.set_extradata(&streaminfo).expect("a real STREAMINFO parses");
-    let params = parser.parameters().expect("the record described the stream");
+    parser
+        .set_extradata(&streaminfo)
+        .expect("a real STREAMINFO parses");
+    let params = parser
+        .parameters()
+        .expect("the record described the stream");
     assert_eq!(params.codec_id, Some(CodecId::Flac));
     let audio = params.audio.as_ref().expect("audio parameters");
     assert_eq!(audio.sample_rate, 44_100);

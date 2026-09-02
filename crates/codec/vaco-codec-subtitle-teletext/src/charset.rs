@@ -37,9 +37,9 @@
 /// substitution applies) for code points `0x20..=0x7F`.
 const fn base(code: u8) -> char {
     match code {
-        0x24 => '\u{A4}', // international currency sign
+        0x24 => '\u{A4}',   // international currency sign
         0x7F => '\u{2588}', // solid block (Table 35 note 4)
-        c => c as char,   // every other position is plain ASCII
+        c => c as char,     // every other position is plain ASCII
     }
 }
 
@@ -66,17 +66,17 @@ const ENGLISH: Overrides = [
 const GERMAN: Overrides = [
     (0x23, '#'),
     (0x24, '$'),
-    (0x40, '\u{A7}'),   // §
-    (0x5B, '\u{C4}'),   // Ä
-    (0x5C, '\u{D6}'),   // Ö
-    (0x5D, '\u{DC}'),   // Ü
-    (0x5E, '^'),        // spacing circumflex
-    (0x5F, '_'),        // spacing underscore
-    (0x60, '\u{B0}'),   // °
-    (0x7B, '\u{E4}'),   // ä
-    (0x7C, '\u{F6}'),   // ö
-    (0x7D, '\u{FC}'),   // ü
-    (0x7E, '\u{DF}'),   // ß
+    (0x40, '\u{A7}'), // §
+    (0x5B, '\u{C4}'), // Ä
+    (0x5C, '\u{D6}'), // Ö
+    (0x5D, '\u{DC}'), // Ü
+    (0x5E, '^'),      // spacing circumflex
+    (0x5F, '_'),      // spacing underscore
+    (0x60, '\u{B0}'), // °
+    (0x7B, '\u{E4}'), // ä
+    (0x7C, '\u{F6}'), // ö
+    (0x7D, '\u{FC}'), // ü
+    (0x7E, '\u{DF}'), // ß
 ];
 
 /// Italian ("Italian" row) — note `5/D`-`5/F` coincide with English's
@@ -90,11 +90,11 @@ const ITALIAN: Overrides = [
     (0x5D, '\u{2192}'), // →
     (0x5E, '\u{2191}'), // ↑
     (0x5F, '#'),
-    (0x60, '\u{F9}'),   // ù
-    (0x7B, '\u{E0}'),   // à
-    (0x7C, '\u{F2}'),   // ò
-    (0x7D, '\u{E8}'),   // è
-    (0x7E, '\u{EC}'),   // ì
+    (0x60, '\u{F9}'), // ù
+    (0x7B, '\u{E0}'), // à
+    (0x7C, '\u{F2}'), // ò
+    (0x7D, '\u{E8}'), // è
+    (0x7E, '\u{EC}'), // ì
 ];
 
 /// French ("French" row).
@@ -159,7 +159,10 @@ const CZECH_SLOVAK: Overrides = [
 /// international-reference glyph at that position, since G0's alphanumeric
 /// range is exactly `2/0` to `7/F`.
 #[must_use]
-#[allow(clippy::indexing_slicing, reason = "loop condition i < subset.len() keeps i in bounds; slice::get is not yet const-stable")]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "loop condition i < subset.len() keeps i in bounds; slice::get is not yet const-stable"
+)]
 pub const fn latin_g0(code: u8, national_option: u8) -> char {
     let c = code & 0x7F;
     let subset: &Overrides = match national_option & 0x7 {

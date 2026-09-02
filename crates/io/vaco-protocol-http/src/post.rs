@@ -93,9 +93,8 @@ impl HttpSink {
 
         let body = std::mem::take(&mut self.buffer);
         let mut reader = Cursor::new(body);
-        let response =
-            transport::send_body("POST", &self.target, &hdrs, self.timeout, &mut reader)
-                .map_err(Error::from)?;
+        let response = transport::send_body("POST", &self.target, &hdrs, self.timeout, &mut reader)
+            .map_err(Error::from)?;
 
         let status = response.status().as_u16();
         if !(200..300).contains(&status) {

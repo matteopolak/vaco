@@ -62,12 +62,26 @@ fn last_sig_ctx_params(log2_size: u32, is_chroma: bool) -> (u32, u32) {
 
 /// §9.3.4.2.4 (`calcPatternSigCtx`): the 2-bit "which neighbouring
 /// coefficient groups are already significant" pattern.
-fn pattern_sig_ctx(cg_flags: &[bool], cg_x: usize, cg_y: usize, groups_w: usize, groups_h: usize) -> u32 {
+fn pattern_sig_ctx(
+    cg_flags: &[bool],
+    cg_x: usize,
+    cg_y: usize,
+    groups_w: usize,
+    groups_h: usize,
+) -> u32 {
     if groups_w <= 1 && groups_h <= 1 {
         return 0;
     }
-    let right = cg_x + 1 < groups_w && cg_flags.get(cg_y * groups_w + cg_x + 1).copied().unwrap_or(false);
-    let below = cg_y + 1 < groups_h && cg_flags.get((cg_y + 1) * groups_w + cg_x).copied().unwrap_or(false);
+    let right = cg_x + 1 < groups_w
+        && cg_flags
+            .get(cg_y * groups_w + cg_x + 1)
+            .copied()
+            .unwrap_or(false);
+    let below = cg_y + 1 < groups_h
+        && cg_flags
+            .get((cg_y + 1) * groups_w + cg_x)
+            .copied()
+            .unwrap_or(false);
     u32::from(right) + (u32::from(below) << 1)
 }
 
@@ -162,9 +176,23 @@ fn sig_base(log2_size: u32, is_chroma: bool, order: ScanOrder) -> u32 {
 }
 
 /// §9.3.4.2.2 (`getSigCoeffGroupCtxInc`): `coded_sub_block_flag`'s `ctxInc`.
-fn sig_group_ctx_inc(cg_flags: &[bool], cg_x: usize, cg_y: usize, groups_w: usize, groups_h: usize) -> u32 {
-    let right = cg_x + 1 < groups_w && cg_flags.get(cg_y * groups_w + cg_x + 1).copied().unwrap_or(false);
-    let below = cg_y + 1 < groups_h && cg_flags.get((cg_y + 1) * groups_w + cg_x).copied().unwrap_or(false);
+fn sig_group_ctx_inc(
+    cg_flags: &[bool],
+    cg_x: usize,
+    cg_y: usize,
+    groups_w: usize,
+    groups_h: usize,
+) -> u32 {
+    let right = cg_x + 1 < groups_w
+        && cg_flags
+            .get(cg_y * groups_w + cg_x + 1)
+            .copied()
+            .unwrap_or(false);
+    let below = cg_y + 1 < groups_h
+        && cg_flags
+            .get((cg_y + 1) * groups_w + cg_x)
+            .copied()
+            .unwrap_or(false);
     u32::from(right || below)
 }
 
@@ -202,7 +230,9 @@ fn read_coeff_remain(cabac: &mut CabacDecoder<'_>, rice_param: u32) -> u32 {
     } else {
         let suffix_len = (prefix - REDUCTION + rice_param).min(31);
         let suffix = cabac.decode_bypass_bits(suffix_len);
-        let base = (1u32.checked_shl(prefix - REDUCTION).unwrap_or(u32::MAX)).wrapping_sub(1).wrapping_add(REDUCTION);
+        let base = (1u32.checked_shl(prefix - REDUCTION).unwrap_or(u32::MAX))
+            .wrapping_sub(1)
+            .wrapping_add(REDUCTION);
         (base << rice_param) + suffix
     }
 }
@@ -230,14 +260,25 @@ pub(crate) fn residual_coding(
     sign_data_hiding: bool,
 ) -> Coeffs {
     let size = 1usize << log2_size;
-    #[allow(clippy::integer_division, reason = "group size is always a whole 4x4 division of the transform block")]
+    #[allow(
+        clippy::integer_division,
+        reason = "group size is always a whole 4x4 division of the transform block"
+    )]
     let groups = (size / 4).max(1);
     let scan = generate_grouped(size, order);
     let group_scan = generate(groups, order);
 
     let (x_off, x_shift) = last_sig_ctx_params(log2_size, is_chroma);
     let (y_off, y_shift) = last_sig_ctx_params(log2_size, is_chroma);
-    let (last_x, last_y) = decode_last_sig_xy(cabac, ctx, log2_size, order, is_chroma, (x_off, x_shift), (y_off, y_shift));
+    let (last_x, last_y) = decode_last_sig_xy(
+        cabac,
+        ctx,
+        log2_size,
+        order,
+        is_chroma,
+        (x_off, x_shift),
+        (y_off, y_shift),
+    );
 
     let last_scan_pos = scan
         .iter()
@@ -256,7 +297,9 @@ pub(crate) fn residual_coding(
 
     for subset in (0..=last_subset).rev() {
         let sub_pos0 = subset << 4;
-        let (cg_x, cg_y) = group_scan.get(subset).map_or((0, 0), |&(x, y)| (usize::from(x), usize::from(y)));
+        let (cg_x, cg_y) = group_scan
+            .get(subset)
+            .map_or((0, 0), |&(x, y)| (usize::from(x), usize::from(y)));
 
         let mut pos: Vec<usize> = Vec::new();
         let mut last_nz_scan: Option<isize> = None;
@@ -306,7 +349,8 @@ pub(crate) fn residual_coding(
                     let full = if x == 0 && y == 0 {
                         comp_base
                     } else {
-                        let inc = sig_ctx_inc(pattern, u32::from(x), u32::from(y), log2_size, is_chroma);
+                        let inc =
+                            sig_ctx_inc(pattern, u32::from(x), u32::from(y), log2_size, is_chroma);
                         comp_base + sig_class_base + inc as usize
                     };
                     decide_at(cabac, &mut ctx.sig_coeff_flag, full) != 0
@@ -357,7 +401,9 @@ pub(crate) fn residual_coding(
         }
         c1_was_zero = c1 == 0;
 
-        if c1 == 0 && let Some(i0) = first_c2_idx {
+        if c1 == 0
+            && let Some(i0) = first_c2_idx
+        {
             let bin = decide_at(cabac, &mut ctx.greater2, ctx_set) != 0;
             if let Some(slot) = abs_level.get_mut(i0) {
                 *slot = i32::from(bin) + 2;
@@ -367,17 +413,27 @@ pub(crate) fn residual_coding(
             }
         }
 
-        let sign_count = if sign_hidden { num_nonzero - 1 } else { num_nonzero };
+        let sign_count = if sign_hidden {
+            num_nonzero - 1
+        } else {
+            num_nonzero
+        };
         let signs = cabac.decode_bypass_bits(u32::try_from(sign_count).unwrap_or(0));
 
         if escape_present {
             let mut first_coeff2 = true;
             let mut rice_param = 0u32;
             for (idx, level) in abs_level.iter_mut().enumerate() {
-                let base_level: i32 = if idx < 8 { if first_coeff2 { 3 } else { 2 } } else { 1 };
+                let base_level: i32 = if idx < 8 {
+                    if first_coeff2 { 3 } else { 2 }
+                } else {
+                    1
+                };
                 if *level == base_level {
                     let remaining = read_coeff_remain(cabac, rice_param);
-                    *level = i32::try_from(remaining).unwrap_or(i32::MAX).saturating_add(base_level);
+                    *level = i32::try_from(remaining)
+                        .unwrap_or(i32::MAX)
+                        .saturating_add(base_level);
                     if *level > (3 << rice_param) {
                         rice_param = (rice_param + 1).min(4);
                     }
@@ -398,9 +454,16 @@ pub(crate) fn residual_coding(
                 sign_at(signs, sign_count, idx)
             };
             let value = if negative { -level } else { level };
-            #[allow(clippy::integer_division, reason = "raster-position decomposition: bx/by from a flat index, the block's own coordinate system")]
-        let (bx, by) = (blk_pos % size, blk_pos / size);
-            out.push((u8::try_from(bx).unwrap_or(0), u8::try_from(by).unwrap_or(0), i32::try_from(value).unwrap_or(0)));
+            #[allow(
+                clippy::integer_division,
+                reason = "raster-position decomposition: bx/by from a flat index, the block's own coordinate system"
+            )]
+            let (bx, by) = (blk_pos % size, blk_pos / size);
+            out.push((
+                u8::try_from(bx).unwrap_or(0),
+                u8::try_from(by).unwrap_or(0),
+                i32::try_from(value).unwrap_or(0),
+            ));
         }
     }
 

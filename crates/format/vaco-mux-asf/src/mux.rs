@@ -657,9 +657,16 @@ impl Muxer for AsfMuxer {
     /// declared length-prefixed framing — the same condition
     /// [`AsfMuxer::maybe_convert`] uses, and the same shape as
     /// `vaco-mux-mpegts::MpegTsMuxer::check_bitstream`.
-    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        pkt: &Packet,
+    ) -> Result<BitstreamAction> {
         let idx = usize::try_from(pkt.stream_index).ok();
-        if idx.and_then(|i| self.streams.get(i)).is_some_and(|s| s.bsf_decided) {
+        if idx
+            .and_then(|i| self.streams.get(i))
+            .is_some_and(|s| s.bsf_decided)
+        {
             return Ok(BitstreamAction::Keep);
         }
         if let Some(s) = idx.and_then(|i| self.streams.get_mut(i)) {
@@ -808,7 +815,11 @@ const CODEC_LIST_RESERVED_1: Guid = Guid::from_fields(
 /// constant), falling back to this crate's own [`codec::video_fourcc`]
 /// table for a video stream with no such tag, or nothing for audio (no
 /// audio fourcc table exists here to fall back to).
-fn build_codec_list_entry(media: MediaType, codec_id: CodecId, codec_tag: Option<[u8; 4]>) -> Vec<u8> {
+fn build_codec_list_entry(
+    media: MediaType,
+    codec_id: CodecId,
+    codec_tag: Option<[u8; 4]>,
+) -> Vec<u8> {
     let kind: u16 = if media == MediaType::Video { 1 } else { 2 };
     let name = codec_id.name();
     let name_utf16: Vec<u8> = name
@@ -817,12 +828,20 @@ fn build_codec_list_entry(media: MediaType, codec_id: CodecId, codec_tag: Option
         .flat_map(u16::to_le_bytes)
         .collect();
     let info: Vec<u8> = codec_tag
-        .or_else(|| (media == MediaType::Video).then(|| codec::video_fourcc(codec_id)).flatten())
+        .or_else(|| {
+            (media == MediaType::Video)
+                .then(|| codec::video_fourcc(codec_id))
+                .flatten()
+        })
         .map_or_else(Vec::new, |t| t.to_vec());
 
     let mut e = Vec::new();
     e.extend_from_slice(&kind.to_le_bytes());
-    e.extend_from_slice(&u16::try_from(name.len().saturating_add(1)).unwrap_or(0).to_le_bytes());
+    e.extend_from_slice(
+        &u16::try_from(name.len().saturating_add(1))
+            .unwrap_or(0)
+            .to_le_bytes(),
+    );
     e.extend_from_slice(&name_utf16);
     e.extend_from_slice(&0u16.to_le_bytes()); // CodecDescriptionLength: none tracked
     e.extend_from_slice(&u16::try_from(info.len()).unwrap_or(0).to_le_bytes());

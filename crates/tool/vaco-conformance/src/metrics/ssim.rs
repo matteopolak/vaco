@@ -90,7 +90,12 @@ impl Metric for Ssim {
         if !geometry_matches(source, distorted) {
             return Err(format!(
                 "ssim: geometry mismatch ({}x{}@{} vs {}x{}@{})",
-                source.width, source.height, source.depth, distorted.width, distorted.height, distorted.depth
+                source.width,
+                source.height,
+                source.depth,
+                distorted.width,
+                distorted.height,
+                distorted.depth
             ));
         }
         let (Some(&src_plane), Some(&dst_plane)) =
@@ -114,7 +119,10 @@ impl Metric for Ssim {
 
         let l = max_value(source.depth);
         if l <= 0.0 {
-            return Err(format!("ssim: depth {} has no representable range", source.depth));
+            return Err(format!(
+                "ssim: depth {} has no representable range",
+                source.depth
+            ));
         }
         let c1 = (K1 * l) * (K1 * l);
         let c2 = (K2 * l) * (K2 * l);
@@ -129,8 +137,17 @@ impl Metric for Ssim {
         for top in 0..last_y {
             for left in 0..last_x {
                 let Some(local) = window_ssim(
-                    src_plane, src_stride, source.depth, dst_plane, dst_stride, distorted.depth, left, top,
-                    &window, c1, c2,
+                    src_plane,
+                    src_stride,
+                    source.depth,
+                    dst_plane,
+                    dst_stride,
+                    distorted.depth,
+                    left,
+                    top,
+                    &window,
+                    c1,
+                    c2,
                 ) else {
                     continue;
                 };
@@ -146,7 +163,10 @@ impl Metric for Ssim {
     }
 }
 
-#[expect(clippy::too_many_arguments, reason = "one window comparison genuinely has this many independent inputs; grouping them into a struct would not make the arithmetic below clearer")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one window comparison genuinely has this many independent inputs; grouping them into a struct would not make the arithmetic below clearer"
+)]
 fn window_ssim(
     src_plane: &[u8],
     src_stride: usize,

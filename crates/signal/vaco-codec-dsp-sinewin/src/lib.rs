@@ -172,7 +172,10 @@ pub fn sine_window_satisfies_princen_bradley(n: usize, tolerance: f32) -> bool {
 /// sum-to-one identity into the sum-of-*squares*-to-one Princen-Bradley
 /// needs.
 #[must_use]
-#[allow(clippy::integer_division, reason = "N/2 is an exact halving of a window length that is always even")]
+#[allow(
+    clippy::integer_division,
+    reason = "N/2 is an exact halving of a window length that is always even"
+)]
 pub fn kbd_window<const N: usize>(alpha: f64) -> [f32; N] {
     let half = N / 2;
     if half == 0 {
@@ -222,7 +225,10 @@ fn bessel_i0(x: f64) -> f64 {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "test code, fixed-size arrays")]
-    #![allow(clippy::integer_division, reason = "n/2 is an exact halving of a window length that is always even")]
+    #![allow(
+        clippy::integer_division,
+        reason = "n/2 is an exact halving of a window length that is always even"
+    )]
     use super::{sine_window, sine_window_into, sine_window_satisfies_princen_bradley};
 
     #[test]
@@ -329,7 +335,12 @@ mod tests {
         // kernel values, so it can never decrease.
         let w = super::kbd_window::<256>(6.0);
         for i in 1..128 {
-            assert!(w[i] >= w[i - 1] - 1e-6, "decreased at {i}: {} -> {}", w[i - 1], w[i]);
+            assert!(
+                w[i] >= w[i - 1] - 1e-6,
+                "decreased at {i}: {} -> {}",
+                w[i - 1],
+                w[i]
+            );
         }
     }
 }

@@ -49,7 +49,11 @@ const fn read_u16(b: [u8; 2], big_endian: bool) -> u16 {
 }
 
 const fn write_u16(v: u16, big_endian: bool) -> [u8; 2] {
-    if big_endian { v.to_be_bytes() } else { v.to_le_bytes() }
+    if big_endian {
+        v.to_be_bytes()
+    } else {
+        v.to_le_bytes()
+    }
 }
 
 /// The four-word burst preamble.

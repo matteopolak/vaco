@@ -294,7 +294,8 @@ mod tests {
         let plane = &planes[0];
         let mut out = Vec::new();
         for y in 0..*height as usize {
-            let row = &plane.data.as_slice()[y * plane.stride..y * plane.stride + *width as usize * bpp];
+            let row =
+                &plane.data.as_slice()[y * plane.stride..y * plane.stride + *width as usize * bpp];
             out.extend_from_slice(row);
         }
         out

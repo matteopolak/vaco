@@ -67,7 +67,11 @@ impl G723Demuxer {
     /// Propagates transport failure from `src`.
     pub fn open(src: Box<dyn MediaSource>) -> Result<Self> {
         let io = IoContext::new(src, &IoOptions::default())?;
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, SAMPLE_RATE.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, SAMPLE_RATE.cast_signed()),
+        );
         let mut params = CodecParameters::audio();
         params.codec_id = Some(CodecId::G7231);
         if let Some(audio) = params.audio.as_mut() {
@@ -114,8 +118,11 @@ impl Demuxer for G723Demuxer {
         self.io.read_exact(pkt.payload_mut())?;
         pkt.stream_index = 0;
         pkt.pts = Timestamp::new(
-            i64::try_from(self.frames_emitted.saturating_mul(u64::from(SAMPLES_PER_FRAME)))
-                .unwrap_or(i64::MAX),
+            i64::try_from(
+                self.frames_emitted
+                    .saturating_mul(u64::from(SAMPLES_PER_FRAME)),
+            )
+            .unwrap_or(i64::MAX),
         );
         pkt.dts = pkt.pts;
         pkt.flags = PacketFlags::KEY;

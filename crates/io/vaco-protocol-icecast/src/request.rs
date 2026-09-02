@@ -109,7 +109,11 @@ pub fn build_headers(opts: &IcecastOptions, target: &Target<'_>) -> String {
         push_header(&mut out, "Ice-Genre", &opts.genre);
     }
     push_header(&mut out, "Ice-Public", if opts.public { "1" } else { "0" });
-    push_header(&mut out, "Authorization", &basic_auth(target.user, target.password));
+    push_header(
+        &mut out,
+        "Authorization",
+        &basic_auth(target.user, target.password),
+    );
     out.push_str("\r\n");
     out
 }
@@ -127,7 +131,10 @@ fn push_header(out: &mut String, name: &str, value: &str) {
 /// decided, not here; this function only formats.
 #[must_use]
 pub fn basic_auth(user: &str, password: &str) -> String {
-    format!("Basic {}", base64_standard(format!("{user}:{password}").as_bytes()))
+    format!(
+        "Basic {}",
+        base64_standard(format!("{user}:{password}").as_bytes())
+    )
 }
 
 /// Same alphabet/padding as `vaco-protocol-httpproxy`'s private helper of the
@@ -135,8 +142,7 @@ pub fn basic_auth(user: &str, password: &str) -> String {
 /// flags type names, and a four-line function isn't worth a new shared
 /// crate).
 fn base64_standard(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] =
-        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::new();
     for chunk in bytes.chunks(3) {
         let b0 = *chunk.first().unwrap_or(&0);
@@ -265,8 +271,14 @@ Authorization: Basic c291cmNlOmhhY2ttZQ==\r\n\
 
     #[test]
     fn parse_status_line_reads_the_code() {
-        assert_eq!(parse_status_line(b"HTTP/1.1 100 Continue\r\n\r\n"), Some(100));
-        assert_eq!(parse_status_line(b"HTTP/1.1 401 Unauthorized\r\n"), Some(401));
+        assert_eq!(
+            parse_status_line(b"HTTP/1.1 100 Continue\r\n\r\n"),
+            Some(100)
+        );
+        assert_eq!(
+            parse_status_line(b"HTTP/1.1 401 Unauthorized\r\n"),
+            Some(401)
+        );
         assert_eq!(parse_status_line(b"not a status line"), None);
         assert_eq!(parse_status_line(b"incomplete"), None);
     }

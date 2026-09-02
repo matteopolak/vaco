@@ -37,7 +37,9 @@ fn a_real_sample_reports_ac3_stereo_48khz() {
     let ap = audio.params.audio.as_ref().expect("audio parameters");
     assert_eq!(ap.sample_rate, 48_000);
     assert_eq!(
-        ap.layout.as_ref().and_then(vaco_chlayout::ChannelLayout::name),
+        ap.layout
+            .as_ref()
+            .and_then(vaco_chlayout::ChannelLayout::name),
         Some("stereo")
     );
 }

@@ -52,7 +52,10 @@ use crate::common;
 use crate::keying;
 use crate::sample;
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "colorkey",
@@ -63,7 +66,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "colorkey", help = "Turns a certain color into transparency. Operates on RGB colors")]
+#[options(
+    name = "colorkey",
+    help = "Turns a certain color into transparency. Operates on RGB colors"
+)]
 pub(crate) struct Opts {
     #[opt(name = "color", alias = "c", help = "set the colorkey key color", default = "black".to_owned(), flags(video, filtering))]
     pub color: String,
@@ -97,9 +103,11 @@ impl Filter {
         let Some(alpha_comp) = sample::component(format, n.saturating_sub(1)) else {
             return;
         };
-        let (Some(cr), Some(cg), Some(cb)) =
-            (sample::component(format, 0), sample::component(format, 1), sample::component(format, 2))
-        else {
+        let (Some(cr), Some(cg), Some(cb)) = (
+            sample::component(format, 0),
+            sample::component(format, 1),
+            sample::component(format, 2),
+        ) else {
             return;
         };
         let (max_r, max_g, max_b) = (
@@ -107,12 +115,17 @@ impl Filter {
             f64::from(sample::max_value(cg)),
             f64::from(sample::max_value(cb)),
         );
-        let (Some(pr), Some(pg), Some(pb)) =
-            (input.plane(cr.plane as usize), input.plane(cg.plane as usize), input.plane(cb.plane as usize))
-        else {
+        let (Some(pr), Some(pg), Some(pb)) = (
+            input.plane(cr.plane as usize),
+            input.plane(cg.plane as usize),
+            input.plane(cb.plane as usize),
+        ) else {
             return;
         };
-        let w = pr.row_bytes().checked_div(usize::from(cr.step.max(1))).unwrap_or(0);
+        let w = pr
+            .row_bytes()
+            .checked_div(usize::from(cr.step.max(1)))
+            .unwrap_or(0);
         let rows = pr.rows();
         let src: Vec<Vec<(u16, u16, u16)>> = (0..rows)
             .map(|y| {
@@ -135,8 +148,14 @@ impl Filter {
         for y in 0..rows {
             let Some(row_src) = src.get(y) else { continue };
             for x in 0..w {
-                let Some(&(vr, vg, vb)) = row_src.get(x) else { continue };
-                let p = [f64::from(vr) / max_r, f64::from(vg) / max_g, f64::from(vb) / max_b];
+                let Some(&(vr, vg, vb)) = row_src.get(x) else {
+                    continue;
+                };
+                let p = [
+                    f64::from(vr) / max_r,
+                    f64::from(vg) / max_g,
+                    f64::from(vb) / max_b,
+                ];
                 let d = keying::rgb_distance(p, self.key);
                 let frac = keying::ramp(d, self.similarity, self.blend);
                 #[allow(
@@ -145,7 +164,10 @@ impl Filter {
                     reason = "frac in [0, 1], product in [0, alpha_max] and alpha_max fits u16 by construction; truncation is the measured reference rule"
                 )]
                 let alpha = (frac * alpha_max) as u16;
-                if let Some(row) = planes.get_mut(alpha_comp.plane as usize).and_then(|p| p.row_mut(y)) {
+                if let Some(row) = planes
+                    .get_mut(alpha_comp.plane as usize)
+                    .and_then(|p| p.row_mut(y))
+                {
                     sample::write(row, x, alpha_comp, big_endian, alpha);
                 }
             }
@@ -163,7 +185,8 @@ impl FrameFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts: Opts = common::parse(req.args)?;
-    let key = vaco_core::parse::color(&opts.color).ok_or_else(|| format!("colorkey: bad color `{}`", opts.color))?;
+    let key = vaco_core::parse::color(&opts.color)
+        .ok_or_else(|| format!("colorkey: bad color `{}`", opts.color))?;
     let set = FormatSet::video_list(common::formats_where(is_rgb_alpha));
     Ok(Instance {
         desc: DESC,
@@ -195,7 +218,11 @@ mod tests {
             row[2] = 0;
             row[3] = 255;
         }
-        let f = Filter { key: [0.0, 0.0, 0.0], similarity: 0.5, blend: 0.0 };
+        let f = Filter {
+            key: [0.0, 0.0, 0.0],
+            similarity: 0.5,
+            blend: 0.0,
+        };
         f.apply_frame(&mut frame);
         assert_eq!(frame.plane(0).unwrap().row(0).unwrap()[3], 0);
     }
@@ -212,7 +239,11 @@ mod tests {
             row[2] = 255;
             row[3] = 255;
         }
-        let f = Filter { key: [0.0, 0.0, 0.0], similarity: 0.01, blend: 0.0 };
+        let f = Filter {
+            key: [0.0, 0.0, 0.0],
+            similarity: 0.01,
+            blend: 0.0,
+        };
         f.apply_frame(&mut frame);
         assert_eq!(frame.plane(0).unwrap().row(0).unwrap()[3], 255);
     }
@@ -235,7 +266,11 @@ mod tests {
             row[2] = 255;
             row[3] = 200;
         }
-        let f = Filter { key: [0.0, 0.0, 0.0], similarity: 0.01, blend: 0.0 };
+        let f = Filter {
+            key: [0.0, 0.0, 0.0],
+            similarity: 0.01,
+            blend: 0.0,
+        };
         f.apply_frame(&mut frame);
         assert_eq!(frame.plane(0).unwrap().row(0).unwrap()[3], 255);
     }
@@ -244,7 +279,13 @@ mod tests {
     fn measured_against_the_reference_a_blend_ramp() {
         // Measured: ffmpeg 8.1, colorkey=color=black:similarity=0.2:
         // blend=0.2 on 0xRR0000 (crate::keying's doc).
-        let cases: &[(u8, u8)] = &[(0x64, 33), (0x85, 128), (0x96, 178), (0xaa, 235), (0xb1, 255)];
+        let cases: &[(u8, u8)] = &[
+            (0x64, 33),
+            (0x85, 128),
+            (0x96, 178),
+            (0xaa, 235),
+            (0xb1, 255),
+        ];
         for &(rr, expected_alpha) in cases {
             let mut budget = Budget::new(Limits::strict());
             let mut frame = Frame::alloc_video(&mut budget, PixFmt::Rgba, 1, 1).unwrap();
@@ -256,9 +297,17 @@ mod tests {
                 row[2] = 0;
                 row[3] = 255;
             }
-            let f = Filter { key: [0.0, 0.0, 0.0], similarity: 0.2, blend: 0.2 };
+            let f = Filter {
+                key: [0.0, 0.0, 0.0],
+                similarity: 0.2,
+                blend: 0.2,
+            };
             f.apply_frame(&mut frame);
-            assert_eq!(frame.plane(0).unwrap().row(0).unwrap()[3], expected_alpha, "rr=0x{rr:02x}");
+            assert_eq!(
+                frame.plane(0).unwrap().row(0).unwrap()[3],
+                expected_alpha,
+                "rr=0x{rr:02x}"
+            );
         }
     }
 
@@ -274,7 +323,11 @@ mod tests {
             row[2] = 56;
             row[3] = 255;
         }
-        let f = Filter { key: [0.0, 0.0, 0.0], similarity: 0.9, blend: 0.0 };
+        let f = Filter {
+            key: [0.0, 0.0, 0.0],
+            similarity: 0.9,
+            blend: 0.0,
+        };
         f.apply_frame(&mut frame);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(&row[0..3], &[12, 34, 56]);

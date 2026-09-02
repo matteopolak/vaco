@@ -22,7 +22,7 @@
 //! which is what confirms they are the real RP210 convention and not an
 //! artifact of that test's arbitrary tag choice.
 
-use crate::localset::{push_i64, push_rational, push_u32, push_u8, push_uid16};
+use crate::localset::{push_i64, push_rational, push_u8, push_u32, push_uid16};
 use crate::ul::INDEX_TABLE_SEGMENT;
 
 /// One video edit unit's byte position, for `IndexEntryArray`.
@@ -108,7 +108,12 @@ fn push_bytes(out: &mut Vec<u8>, tag: u16, value: &[u8]) {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 

@@ -369,6 +369,9 @@ mod tests {
         header[0..2].copy_from_slice(&0x01DAu16.to_be_bytes());
         header[3] = 2; // bpc = 2
         let mut budget = Budget::new(Limits::permissive());
-        assert!(matches!(decode(&header, &mut budget), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            decode(&header, &mut budget),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

@@ -45,7 +45,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "elbg", help = "Apply posterize effect, using the ELBG algorithm.")]
+#[options(
+    name = "elbg",
+    help = "Apply posterize effect, using the ELBG algorithm."
+)]
 pub(crate) struct Opts {
     #[opt(name = "codebook_length", alias = "l", help = "set codebook length", default = 256, range = 1..=8192, flags(video, filtering))]
     pub codebook_length: i64,
@@ -53,9 +56,19 @@ pub(crate) struct Opts {
     pub nb_steps: i64,
     #[opt(name = "seed", alias = "s", help = "set the random seed", default = -1, flags(video, filtering))]
     pub seed: i64,
-    #[opt(name = "pal8", help = "set the pal8 output", default = false, flags(video, filtering))]
+    #[opt(
+        name = "pal8",
+        help = "set the pal8 output",
+        default = false,
+        flags(video, filtering)
+    )]
     pub pal8: bool,
-    #[opt(name = "use_alpha", help = "use alpha channel for mapping", default = false, flags(video, filtering))]
+    #[opt(
+        name = "use_alpha",
+        help = "use alpha channel for mapping",
+        default = false,
+        flags(video, filtering)
+    )]
     pub use_alpha: bool,
 }
 
@@ -93,12 +106,20 @@ pub(crate) struct Filter {
 
 impl Filter {
     pub(crate) fn new(opts: &Opts) -> Self {
-        let codebook_length = usize::try_from(opts.codebook_length).unwrap_or(256).clamp(1, 8192);
+        let codebook_length = usize::try_from(opts.codebook_length)
+            .unwrap_or(256)
+            .clamp(1, 8192);
         Self { codebook_length }
     }
 
     fn posterize(&self, frame: &Frame, pool: &vaco_frame::FramePool) -> Option<Frame> {
-        let FrameData::Video { format, width, height, .. } = frame.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = frame.data
+        else {
             return None;
         };
         let src = frame.plane(0)?;
@@ -119,13 +140,21 @@ impl Filter {
         {
             let mut dst = out.plane_mut(0)?;
             for y in 0..src.rows() {
-                let (Some(src_row), Some(dst_row)) = (src.row(y), dst.row_mut(y)) else { continue };
+                let (Some(src_row), Some(dst_row)) = (src.row(y), dst.row_mut(y)) else {
+                    continue;
+                };
                 let mut dst_chunks = dst_row.chunks_exact_mut(4);
                 for src_px in src_row.chunks_exact(4) {
-                    let Some(dst_px) = dst_chunks.next() else { break };
+                    let Some(dst_px) = dst_chunks.next() else {
+                        break;
+                    };
                     let [r, g, b, a] = *src_px else { continue };
                     let idx = nearest_index(&palette, crate::quantize::Rgb { r, g, b });
-                    let mapped = palette.get(idx).copied().unwrap_or(crate::quantize::Rgb { r, g, b });
+                    let mapped =
+                        palette
+                            .get(idx)
+                            .copied()
+                            .unwrap_or(crate::quantize::Rgb { r, g, b });
                     if let [dr, dg, db, da] = dst_px {
                         *dr = mapped.r;
                         *dg = mapped.g;
@@ -158,7 +187,13 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let filter = Filter::new(&opts);
     Ok(Instance {
         desc: DESC,
-        formats: NodeFormats::uniform(1, 1, MediaType::Video, &FormatSet::video_exact(PixFmt::Rgba), req.instance),
+        formats: NodeFormats::uniform(
+            1,
+            1,
+            MediaType::Video,
+            &FormatSet::video_exact(PixFmt::Rgba),
+            req.instance,
+        ),
         filter: Box::new(Simple::new(filter)),
     })
 }
@@ -175,7 +210,11 @@ mod tests {
             for y in 0..h as usize {
                 if let Some(row) = p.row_mut(y) {
                     for (x, px) in row.chunks_exact_mut(4).enumerate() {
-                        let fill = if x % 2 == 0 { [255, 0, 0, 255] } else { [0, 0, 255, 255] };
+                        let fill = if x % 2 == 0 {
+                            [255, 0, 0, 255]
+                        } else {
+                            [0, 0, 255, 255]
+                        };
                         px.copy_from_slice(&fill);
                     }
                 }
@@ -186,7 +225,13 @@ mod tests {
 
     #[test]
     fn posterizing_to_one_colour_collapses_everything() {
-        let f = Filter::new(&Opts { codebook_length: 1, nb_steps: 1, seed: -1, pal8: false, use_alpha: false });
+        let f = Filter::new(&Opts {
+            codebook_length: 1,
+            nb_steps: 1,
+            seed: -1,
+            pal8: false,
+            use_alpha: false,
+        });
         let pool = vaco_frame::FramePool::default();
         let out = f.posterize(&two_color_frame(4, 2), &pool).unwrap();
         let plane = out.plane(0).unwrap();
@@ -201,7 +246,12 @@ mod tests {
 
     #[test]
     fn creatable_with_defaults() {
-        let req = Instantiate { name: "elbg", instance: "elbg", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "elbg",
+            instance: "elbg",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_ok());
     }
 }

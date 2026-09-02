@@ -103,7 +103,11 @@ impl AdxDemuxer {
         io.seek(header_len)?;
         let data_start = header_len;
 
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, sample_rate.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, sample_rate.cast_signed()),
+        );
         let mut params = CodecParameters::audio();
         params.codec_id = Some(CodecId::AdpcmAdx);
         if let Some(audio) = params.audio.as_mut() {
@@ -162,7 +166,13 @@ mod tests {
 
     /// The exact field values measured from the real fixture in the module
     /// docs, with a shortened audio payload.
-    fn build_file(block_size: u8, channels: u8, sample_rate: u32, total_samples: u32, blocks: u32) -> Vec<u8> {
+    fn build_file(
+        block_size: u8,
+        channels: u8,
+        sample_rate: u32,
+        total_samples: u32,
+        blocks: u32,
+    ) -> Vec<u8> {
         let mut v = Vec::new();
         let copyright_offset: u16 = 32;
         v.extend_from_slice(&(0x8000u16).to_be_bytes());

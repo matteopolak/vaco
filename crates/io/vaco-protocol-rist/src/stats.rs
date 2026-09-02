@@ -118,7 +118,15 @@ mod tests {
         rx.on_packet(2, 1, vec![1], 1);
         let reports = link_reports(&rx);
         assert_eq!(reports.len(), 2);
-        assert!(reports.iter().any(|r| r.link_id == 1 && r.stats.packets_received == 1));
-        assert!(reports.iter().any(|r| r.link_id == 2 && r.stats.packets_received == 1));
+        assert!(
+            reports
+                .iter()
+                .any(|r| r.link_id == 1 && r.stats.packets_received == 1)
+        );
+        assert!(
+            reports
+                .iter()
+                .any(|r| r.link_id == 2 && r.stats.packets_received == 1)
+        );
     }
 }

@@ -123,7 +123,12 @@ impl MediaSink for FtpSink {
         }
         let _ = self.control.finish_transfer();
         self.control.rest(pos)?;
-        let data = start_stor(&mut self.control, &self.control_host, &self.path, self.timeout)?;
+        let data = start_stor(
+            &mut self.control,
+            &self.control_host,
+            &self.path,
+            self.timeout,
+        )?;
         self.data = Some(data);
         self.pos = pos;
         Ok(pos)

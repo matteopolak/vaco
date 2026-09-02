@@ -158,8 +158,16 @@ fn a_composition_with_repeated_and_offset_resources_stitches_the_right_frames() 
     for (n, &want) in expected.iter().enumerate() {
         let pkt = demux.read_packet().unwrap();
         assert_eq!(pkt.stream_index, 0);
-        assert_eq!(pkt.pts, Timestamp::new(n as i64), "composition-timeline pts for edit unit {n}");
-        assert_eq!(pkt.payload(), &[want; 8], "edit unit {n} did not stitch the expected frame");
+        assert_eq!(
+            pkt.pts,
+            Timestamp::new(n as i64),
+            "composition-timeline pts for edit unit {n}"
+        );
+        assert_eq!(
+            pkt.payload(),
+            &[want; 8],
+            "edit unit {n} did not stitch the expected frame"
+        );
     }
     assert!(matches!(demux.read_packet(), Err(vaco_core::Error::Eof)));
 }
@@ -168,6 +176,8 @@ fn a_composition_with_repeated_and_offset_resources_stitches_the_right_frames() 
 fn bind_url_refuses_a_remote_looking_cpl_path() {
     let src = Box::new(MemorySource::new(CPL_XML.as_bytes().to_vec()));
     let mut demux = ImfDemuxer::open(src, &NoParsers).unwrap();
-    let err = demux.bind_url("https://example.com/CPL_test.xml").unwrap_err();
+    let err = demux
+        .bind_url("https://example.com/CPL_test.xml")
+        .unwrap_err();
     assert!(matches!(err, vaco_core::Error::Unsupported(_)));
 }

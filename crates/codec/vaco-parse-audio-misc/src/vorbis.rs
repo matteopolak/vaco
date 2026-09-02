@@ -57,7 +57,9 @@ impl IdentificationHeader {
     /// framing bit is clear.
     pub fn parse(data: &[u8]) -> Result<Self> {
         let Some(rest) = data.strip_prefix(MAGIC.as_slice()) else {
-            return Err(Error::InvalidData("missing Vorbis identification header magic"));
+            return Err(Error::InvalidData(
+                "missing Vorbis identification header magic",
+            ));
         };
         let Some(body) = rest.get(..HEADER_LEN - MAGIC.len()) else {
             return Err(Error::InvalidData(
@@ -68,7 +70,9 @@ impl IdentificationHeader {
             return Err(Error::InvalidData("truncated Vorbis identification header"));
         };
         if u32::from_le_bytes(version) != 0 {
-            return Err(Error::InvalidData("Vorbis identification header version is not 0"));
+            return Err(Error::InvalidData(
+                "Vorbis identification header version is not 0",
+            ));
         }
         let Some(&channels) = body.get(4) else {
             return Err(Error::InvalidData("truncated Vorbis identification header"));
@@ -414,10 +418,7 @@ mod tests {
         parser.set_extradata(&bytes).expect("valid header");
         let params = parser.parameters().expect("described");
         assert_eq!(params.codec_id, Some(CodecId::Vorbis));
-        assert_eq!(
-            params.audio.as_ref().map(|a| a.sample_rate),
-            Some(44_100)
-        );
+        assert_eq!(params.audio.as_ref().map(|a| a.sample_rate), Some(44_100));
     }
 
     #[test]
@@ -446,7 +447,9 @@ mod tests {
     #[test]
     fn parse_passes_a_packet_through_unexamined() {
         let mut parser = VorbisParser::new(Limits::strict());
-        let (packet, used) = parser.parse(&[1, 2, 3, 4]).expect("any bytes are one packet");
+        let (packet, used) = parser
+            .parse(&[1, 2, 3, 4])
+            .expect("any bytes are one packet");
         assert!(packet.is_some());
         assert_eq!(used, 4);
         assert_eq!(parser.packets(), 1);

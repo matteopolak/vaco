@@ -35,7 +35,9 @@ use vaco_pixfmt::PixFmt;
 const TEN_BIT_MASK: u32 = 0x3FF;
 
 fn read_u32_be(buf: &[u8], off: usize) -> Result<u32> {
-    let src = buf.get(off..off.saturating_add(4)).ok_or(Error::UnexpectedEof)?;
+    let src = buf
+        .get(off..off.saturating_add(4))
+        .ok_or(Error::UnexpectedEof)?;
     let &[a, b, c, d] = src else {
         return Err(Error::UnexpectedEof);
     };
@@ -69,7 +71,9 @@ pub fn decode_r10k(payload: &[u8], width: u32, height: u32, budget: &mut Budget)
     let FrameData::Video { planes, .. } = &mut frame.data else {
         return Err(Error::InvalidData("r10k: expected a video frame"));
     };
-    let plane = planes.get_mut(0).ok_or(Error::InvalidData("r10k: no plane 0"))?;
+    let plane = planes
+        .get_mut(0)
+        .ok_or(Error::InvalidData("r10k: no plane 0"))?;
     let dst_stride = plane.stride;
     let buf = plane.data.make_mut();
 
@@ -110,7 +114,9 @@ pub fn encode_r10k(frame: &Frame) -> Result<Vec<u8>> {
     if width == 0 || height == 0 {
         return Err(Error::InvalidData("r10k: picture size 0x0 is invalid"));
     }
-    let plane = planes.first().ok_or(Error::InvalidData("r10k: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("r10k: no plane 0"))?;
     let src_stride = plane.stride;
     let src = plane.data.as_slice();
 
@@ -125,7 +131,11 @@ pub fn encode_r10k(frame: &Frame) -> Result<Vec<u8>> {
             let g = (word >> 10) & TEN_BIT_MASK;
             let b = word & TEN_BIT_MASK;
             let out_word = (r << 22) | (g << 12) | (b << 2);
-            write_u32_be(&mut out, dst_row.saturating_add(x.saturating_mul(4)), out_word)?;
+            write_u32_be(
+                &mut out,
+                dst_row.saturating_add(x.saturating_mul(4)),
+                out_word,
+            )?;
         }
     }
     Ok(out)
@@ -197,6 +207,9 @@ mod tests {
     fn encoder_rejects_the_wrong_pixel_format() {
         let mut budget = Budget::new(Limits::permissive());
         let frame = Frame::alloc_video(&mut budget, PixFmt::Yuv420p, 4, 4).expect("alloc");
-        assert!(matches!(encode_r10k(&frame).unwrap_err(), Error::Unsupported(_)));
+        assert!(matches!(
+            encode_r10k(&frame).unwrap_err(),
+            Error::Unsupported(_)
+        ));
     }
 }

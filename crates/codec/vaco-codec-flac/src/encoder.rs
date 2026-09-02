@@ -398,8 +398,17 @@ impl Encoder for FlacEncoder {
 enum SubframePlan {
     Constant(i32),
     Verbatim,
-    Fixed { order: usize, residual: Vec<i32> },
-    Lpc { order: usize, precision: u32, shift: u32, qcoeffs: Vec<i32>, residual: Vec<i32> },
+    Fixed {
+        order: usize,
+        residual: Vec<i32>,
+    },
+    Lpc {
+        order: usize,
+        precision: u32,
+        shift: u32,
+        qcoeffs: Vec<i32>,
+        residual: Vec<i32>,
+    },
 }
 
 /// Pick the cheapest valid encoding for one channel's `samples`, all
@@ -494,7 +503,13 @@ fn write_subframe(bw: &mut BitWriter, plan: &SubframePlan, samples: &[i32], bps:
             }
             rice::write(bw, residual);
         }
-        SubframePlan::Lpc { order, precision, shift, qcoeffs, residual } => {
+        SubframePlan::Lpc {
+            order,
+            precision,
+            shift,
+            qcoeffs,
+            residual,
+        } => {
             for &s in samples.iter().take(*order) {
                 bw.put(bps, s as u32);
             }

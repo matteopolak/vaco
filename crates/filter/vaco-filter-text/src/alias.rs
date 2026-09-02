@@ -11,8 +11,8 @@
 //! `fontfile=`/an exact family name both bypass this table entirely and are
 //! exact on every platform.
 
-use cosmic_text::fontdb::Family;
 use cosmic_text::FontSystem;
+use cosmic_text::fontdb::Family;
 
 /// Ordered fallback family names for each generic CSS-style keyword, most
 /// platforms first. `fontdb`'s `Database::query` walks a family list and
@@ -20,13 +20,30 @@ use cosmic_text::FontSystem;
 /// against any one being absent.
 fn generic_fallbacks(keyword: &str) -> &'static [&'static str] {
     match keyword {
-        "serif" => &["Times New Roman", "Liberation Serif", "DejaVu Serif", "Noto Serif"],
-        "monospace" => &["Consolas", "Liberation Mono", "DejaVu Sans Mono", "Menlo", "Noto Sans Mono"],
+        "serif" => &[
+            "Times New Roman",
+            "Liberation Serif",
+            "DejaVu Serif",
+            "Noto Serif",
+        ],
+        "monospace" => &[
+            "Consolas",
+            "Liberation Mono",
+            "DejaVu Sans Mono",
+            "Menlo",
+            "Noto Sans Mono",
+        ],
         "cursive" => &["Comic Sans MS", "Apple Chancery", "URW Chancery L"],
         "fantasy" => &["Impact", "Papyrus"],
         // "sans-serif" / "sans" / anything unrecognised: the reference's own
         // most common fallback family.
-        _ => &["Arial", "Liberation Sans", "DejaVu Sans", "Helvetica", "Noto Sans"],
+        _ => &[
+            "Arial",
+            "Liberation Sans",
+            "DejaVu Sans",
+            "Helvetica",
+            "Noto Sans",
+        ],
     }
 }
 
@@ -38,10 +55,14 @@ fn generic_fallbacks(keyword: &str) -> &'static [&'static str] {
 pub fn resolve_family(requested: &str) -> Vec<String> {
     let lower = requested.trim().to_ascii_lowercase();
     match lower.as_str() {
-        "sans-serif" | "sans" | "" => generic_fallbacks("sans-serif").iter().map(|s| (*s).to_owned()).collect(),
-        "serif" | "monospace" | "cursive" | "fantasy" => {
-            generic_fallbacks(lower.as_str()).iter().map(|s| (*s).to_owned()).collect()
-        }
+        "sans-serif" | "sans" | "" => generic_fallbacks("sans-serif")
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
+        "serif" | "monospace" | "cursive" | "fantasy" => generic_fallbacks(lower.as_str())
+            .iter()
+            .map(|s| (*s).to_owned())
+            .collect(),
         _ => vec![requested.to_owned()],
     }
 }
@@ -85,7 +106,10 @@ mod tests {
 
     #[test]
     fn an_exact_family_name_passes_through_unchanged() {
-        assert_eq!(resolve_family("Comic Sans MS"), vec!["Comic Sans MS".to_owned()]);
+        assert_eq!(
+            resolve_family("Comic Sans MS"),
+            vec!["Comic Sans MS".to_owned()]
+        );
     }
 
     #[test]

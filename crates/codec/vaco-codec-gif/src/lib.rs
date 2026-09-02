@@ -141,7 +141,11 @@ impl SendReceive for GifEncoder {
     }
 
     fn accepted_pix_fmts(&self) -> &'static [vaco_pixfmt::PixFmt] {
-        &[vaco_pixfmt::PixFmt::Rgba, vaco_pixfmt::PixFmt::Rgb24, vaco_pixfmt::PixFmt::Gray8]
+        &[
+            vaco_pixfmt::PixFmt::Rgba,
+            vaco_pixfmt::PixFmt::Rgb24,
+            vaco_pixfmt::PixFmt::Gray8,
+        ]
     }
 
     fn send(&mut self, input: Option<&Frame>) -> Result<()> {
@@ -150,7 +154,10 @@ impl SendReceive for GifEncoder {
                 let bytes = codec::encode(&self.pending)?;
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
-                packet.pts = self.pending.first().map_or(vaco_core::Timestamp::NONE, |f| f.pts);
+                packet.pts = self
+                    .pending
+                    .first()
+                    .map_or(vaco_core::Timestamp::NONE, |f| f.pts);
                 // Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
                 // `vaco-codec-webp`'s encoders, shaped differently here:
                 // this encoder emits the *whole* animated GIF as one
@@ -159,7 +166,8 @@ impl SendReceive for GifEncoder {
                 // sum of every pending frame's own per-frame delay -- the
                 // same field this crate's own decoder populates from each
                 // GIF frame's Graphic Control Extension delay time.
-                packet.duration = vaco_core::Duration(self.pending.iter().map(|f| f.duration.0).sum());
+                packet.duration =
+                    vaco_core::Duration(self.pending.iter().map(|f| f.duration.0).sum());
                 self.pending.clear();
                 self.machine.emit(packet);
                 self.machine.finish();
@@ -327,7 +335,10 @@ mod tests {
         }
         enc.send(None).expect("begin drain");
         let packet = enc.receive().expect("receive packet");
-        assert_eq!(packet.duration, vaco_core::Duration(delays_micros.iter().sum()));
+        assert_eq!(
+            packet.duration,
+            vaco_core::Duration(delays_micros.iter().sum())
+        );
         assert_ne!(packet.duration, vaco_core::Duration::ZERO);
     }
 }

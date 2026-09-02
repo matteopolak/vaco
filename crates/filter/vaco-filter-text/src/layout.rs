@@ -17,7 +17,10 @@
 
 use std::collections::HashMap;
 
-use cosmic_text::{Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, Style as FontStyle, SwashCache, Weight};
+use cosmic_text::{
+    Attrs, Buffer, CacheKey, Family, FontSystem, Metrics, Shaping, Style as FontStyle, SwashCache,
+    Weight,
+};
 use vaco_core::Result;
 use vaco_limits::{Budget, Limits};
 
@@ -165,7 +168,11 @@ impl TextRenderer {
         let fresh = self.layout_uncached(text, style, wrap);
         self.tick += 1;
         if self.shape_cache.len() >= SHAPE_CACHE_CAP
-            && let Some(evict) = self.shape_cache.iter().min_by_key(|(_, (_, t))| *t).map(|(k, _)| k.clone())
+            && let Some(evict) = self
+                .shape_cache
+                .iter()
+                .min_by_key(|(_, (_, t))| *t)
+                .map(|(k, _)| k.clone())
         {
             self.shape_cache.remove(&evict);
         }
@@ -178,7 +185,11 @@ impl TextRenderer {
             let candidates = crate::alias::resolve_family(&style.family);
             if self.pick_family(&candidates).is_none() {
                 tracing::warn!(family = %style.family, "vaco-filter-text: no matching font face, text will not render");
-                return Layout { glyphs: Vec::new(), width: 0, height: 0 };
+                return Layout {
+                    glyphs: Vec::new(),
+                    width: 0,
+                    height: 0,
+                };
             }
         }
         let resolved = if let Some(path) = &style.fontfile {
@@ -189,16 +200,22 @@ impl TextRenderer {
                         .db()
                         .faces()
                         .last()
-                        .map(|f| f.families.first().map_or_else(String::new, |(n, _)| n.clone()))
+                        .map(|f| {
+                            f.families
+                                .first()
+                                .map_or_else(String::new, |(n, _)| n.clone())
+                        })
                         .unwrap_or_default()
                 }
                 Err(err) => {
                     tracing::warn!(?path, %err, "vaco-filter-text: could not read fontfile");
-                    self.pick_family(&crate::alias::resolve_family(&style.family)).unwrap_or_default()
+                    self.pick_family(&crate::alias::resolve_family(&style.family))
+                        .unwrap_or_default()
                 }
             }
         } else {
-            self.pick_family(&crate::alias::resolve_family(&style.family)).unwrap_or_default()
+            self.pick_family(&crate::alias::resolve_family(&style.family))
+                .unwrap_or_default()
         };
 
         let line_height = style.size_px * 1.2 + style.line_spacing;
@@ -210,8 +227,16 @@ impl TextRenderer {
         };
         buffer.set_size(&mut self.font_system, width, None);
 
-        let mut attrs = Attrs::new().weight(if style.bold { Weight::BOLD } else { Weight::NORMAL });
-        attrs = attrs.style(if style.italic { FontStyle::Italic } else { FontStyle::Normal });
+        let mut attrs = Attrs::new().weight(if style.bold {
+            Weight::BOLD
+        } else {
+            Weight::NORMAL
+        });
+        attrs = attrs.style(if style.italic {
+            FontStyle::Italic
+        } else {
+            FontStyle::Normal
+        });
         if !resolved.is_empty() {
             attrs = attrs.family(Family::Name(&resolved));
         }
@@ -237,7 +262,9 @@ impl TextRenderer {
             self.swash_cache.image_cache.clear();
         }
 
-        let height = (f64::from(line_count) * f64::from(line_height)).ceil().max(0.0);
+        let height = (f64::from(line_count) * f64::from(line_height))
+            .ceil()
+            .max(0.0);
         Layout {
             glyphs,
             width: max_w.ceil().max(0.0) as u32,
@@ -252,12 +279,26 @@ impl TextRenderer {
     /// [`vaco_core::Error::LimitExceeded`] if the mask's area exceeds this
     /// renderer's allocation budget.
     pub fn rasterise(&mut self, layout: &Layout, origin: (i32, i32)) -> Result<AlphaMask> {
-        let mut mask = AlphaMask::blank(&mut self.budget, origin.0, origin.1, layout.width.max(1), layout.height.max(1))?;
+        let mut mask = AlphaMask::blank(
+            &mut self.budget,
+            origin.0,
+            origin.1,
+            layout.width.max(1),
+            layout.height.max(1),
+        )?;
         for g in &layout.glyphs {
-            let Some(image) = self.swash_cache.get_image(&mut self.font_system, g.cache_key) else {
+            let Some(image) = self
+                .swash_cache
+                .get_image(&mut self.font_system, g.cache_key)
+            else {
                 continue;
             };
-            let (left, top, gw, gh) = (image.placement.left, image.placement.top, image.placement.width, image.placement.height);
+            let (left, top, gw, gh) = (
+                image.placement.left,
+                image.placement.top,
+                image.placement.width,
+                image.placement.height,
+            );
             let content = image.content;
             let data = image.data.clone();
             let base_x = g.x + left;
@@ -268,12 +309,22 @@ impl TextRenderer {
     }
 }
 
-fn blit_glyph(mask: &mut AlphaMask, data: &[u8], content: cosmic_text::SwashContent, gw: u32, gh: u32, base_x: i32, base_y: i32) {
+fn blit_glyph(
+    mask: &mut AlphaMask,
+    data: &[u8],
+    content: cosmic_text::SwashContent,
+    gw: u32,
+    gh: u32,
+    base_x: i32,
+    base_y: i32,
+) {
     match content {
         cosmic_text::SwashContent::Mask => {
             for y in 0..gh {
                 for x in 0..gw {
-                    let Some(&v) = data.get((y * gw + x) as usize) else { continue };
+                    let Some(&v) = data.get((y * gw + x) as usize) else {
+                        continue;
+                    };
                     let (xi, yi) = (i32::try_from(x).unwrap_or(0), i32::try_from(y).unwrap_or(0));
                     write_coverage(mask, base_x + xi, base_y + yi, v);
                 }
@@ -287,7 +338,9 @@ fn blit_glyph(mask: &mut AlphaMask, data: &[u8], content: cosmic_text::SwashCont
             for y in 0..gh {
                 for x in 0..gw {
                     let idx = ((y * gw + x) * 4) as usize;
-                    let Some(&a) = data.get(idx + 3) else { continue };
+                    let Some(&a) = data.get(idx + 3) else {
+                        continue;
+                    };
                     let (xi, yi) = (i32::try_from(x).unwrap_or(0), i32::try_from(y).unwrap_or(0));
                     write_coverage(mask, base_x + xi, base_y + yi, a);
                 }
@@ -328,7 +381,11 @@ mod tests {
     #[test]
     fn a_real_font_renders_nonzero_coverage() {
         let mut r = TextRenderer::new();
-        let style = TextStyle { family: "sans-serif".to_owned(), size_px: 32.0, ..TextStyle::default() };
+        let style = TextStyle {
+            family: "sans-serif".to_owned(),
+            size_px: 32.0,
+            ..TextStyle::default()
+        };
         let l = r.layout("Hi", &style, Wrap::None);
         if l.is_empty() {
             // No system font resolved in this environment (e.g. a
@@ -337,7 +394,10 @@ mod tests {
             return;
         }
         let mask = r.rasterise(&l, (0, 0)).unwrap();
-        assert!(mask.coverage.iter().any(|&c| c > 0), "expected at least one covered pixel");
+        assert!(
+            mask.coverage.iter().any(|&c| c > 0),
+            "expected at least one covered pixel"
+        );
     }
 
     #[test]
@@ -347,18 +407,32 @@ mod tests {
         let a = r.layout("cached text", &style, Wrap::None);
         let before = r.shape_cache.len();
         let b = r.layout("cached text", &style, Wrap::None);
-        assert_eq!(r.shape_cache.len(), before, "a repeated key must not grow the cache");
+        assert_eq!(
+            r.shape_cache.len(),
+            before,
+            "a repeated key must not grow the cache"
+        );
         assert_eq!(a.width, b.width);
     }
 
     #[test]
     fn word_wrap_bounds_line_width() {
         let mut r = TextRenderer::new();
-        let style = TextStyle { size_px: 16.0, ..TextStyle::default() };
-        let l = r.layout("a very long sentence that should wrap across several lines", &style, Wrap::Word(60.0));
+        let style = TextStyle {
+            size_px: 16.0,
+            ..TextStyle::default()
+        };
+        let l = r.layout(
+            "a very long sentence that should wrap across several lines",
+            &style,
+            Wrap::Word(60.0),
+        );
         if l.is_empty() {
             return;
         }
-        assert!(l.height > (style.size_px * 1.2) as u32, "wrapped text should span more than one line");
+        assert!(
+            l.height > (style.size_px * 1.2) as u32,
+            "wrapped text should span more than one line"
+        );
     }
 }

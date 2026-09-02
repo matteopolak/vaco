@@ -39,11 +39,7 @@ fn hamming_byte(nibble: u8) -> u8 {
 
 fn parity_byte(data: u8) -> u8 {
     let d = data & 0x7F;
-    if d.count_ones() % 2 == 1 {
-        d
-    } else {
-        d | 0x80
-    }
+    if d.count_ones() % 2 == 1 { d } else { d | 0x80 }
 }
 
 /// One EN 300 472 46-byte data unit wrapping one EN 300 706 packet.
@@ -73,7 +69,12 @@ fn header_control_bytes(page_units: u8, page_tens: u8) -> [u8; 8] {
     ]
 }
 
-fn page_text(rows: &[[vaco_codec_subtitle_teletext::Cell; 40]], row: usize, start: usize, len: usize) -> String {
+fn page_text(
+    rows: &[[vaco_codec_subtitle_teletext::Cell; 40]],
+    row: usize,
+    start: usize,
+    len: usize,
+) -> String {
     rows[row][start..start + len]
         .iter()
         .map(|c| match c.glyph {
@@ -163,7 +164,11 @@ fn encode_triplet(address: u8, mode: u8, data: u8) -> [u8; 3] {
     for i in 0..7 {
         bits[11 + i] = (data >> i) & 1;
     }
-    let get = |positions: &[usize]| -> u32 { positions.iter().fold(0u32, |acc, &p| acc ^ u32::from(bits[p])) };
+    let get = |positions: &[usize]| -> u32 {
+        positions
+            .iter()
+            .fold(0u32, |acc, &p| acc ^ u32::from(bits[p]))
+    };
     let p1 = 1 ^ get(&[0, 1, 3, 4, 6, 8, 10, 11, 13, 15, 17]);
     let p2 = 1 ^ get(&[0, 2, 3, 5, 6, 9, 10, 12, 13, 16, 17]);
     let p3 = 1 ^ get(&[1, 2, 3, 7, 8, 9, 10, 14, 15, 16, 17]);
@@ -188,7 +193,11 @@ fn encode_triplet(address: u8, mode: u8, data: u8) -> [u8; 3] {
     }
     let p6 = 1 ^ (0..23).fold(0u32, |acc, n| acc ^ ((raw >> n) & 1));
     raw |= (p6 & 1) << 23;
-    [(raw & 0xFF) as u8, ((raw >> 8) & 0xFF) as u8, ((raw >> 16) & 0xFF) as u8]
+    [
+        (raw & 0xFF) as u8,
+        ((raw >> 8) & 0xFF) as u8,
+        ((raw >> 16) & 0xFF) as u8,
+    ]
 }
 
 /// Fixture 4: a Level 1.5 page — a plain body row overwritten by packet

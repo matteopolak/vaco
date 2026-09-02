@@ -1,4 +1,9 @@
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code over a fixed fixture")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code over a fixed fixture"
+)]
 
 use vaco_bitstream::{BitReader, annexb};
 use vaco_format_nalu::RbspBuf;
@@ -54,9 +59,15 @@ fn simple_ip_single_ref_single_slice() {
                     slice_header.num_ref_idx_l0_active_minus1,
                     slice_header.first_mb_in_slice
                 );
-                let stats =
-                    vaco_codec_h264::mb::decode_slice_cavlc(&mut reader, &mut budget, sps, pps, &slice_header, None)
-                        .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
+                let stats = vaco_codec_h264::mb::decode_slice_cavlc(
+                    &mut reader,
+                    &mut budget,
+                    sps,
+                    pps,
+                    &slice_header,
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
                 println!(
                     "  -> mbs={} skipped={}",
                     stats.macroblock_count, stats.skipped_count

@@ -1,7 +1,7 @@
 //! Relative cost of the three search patterns at a realistic 8x8
 //! inter-prediction block and a ±16 search range.
 
-use vaco_codec_dsp_me::{BlockOrigin, Metric, Displacement, SearchConfig, Searcher};
+use vaco_codec_dsp_me::{BlockOrigin, Displacement, Metric, SearchConfig, Searcher};
 use vaco_codec_dsp_mecmp::Plane;
 
 const REF_W: usize = 128;

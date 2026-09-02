@@ -89,7 +89,13 @@
 //! previously reported (unverified, at the time) for `cabac_ip_simple.264`'s
 //! own address 0.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, reason = "test code over a fixed fixture")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code over a fixed fixture"
+)]
 
 use vaco_bitstream::{BitReader, annexb};
 use vaco_codec_cabac::CabacDecoder;
@@ -108,7 +114,9 @@ fn first_slice_cbp(data: &[u8]) -> Option<(u8, u8)> {
     let mut result = None;
 
     for nal in annexb::nal_units(data) {
-        let Some(header) = H264NalHeader::parse(nal) else { continue };
+        let Some(header) = H264NalHeader::parse(nal) else {
+            continue;
+        };
         match header.nal_unit_type {
             NalUnitType::Sps => {
                 rbsp.fill(nal, &mut budget).unwrap();
@@ -135,12 +143,22 @@ fn first_slice_cbp(data: &[u8]) -> Option<(u8, u8)> {
                 let slice_header =
                     SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget).unwrap();
                 let mut cabac = CabacDecoder::from_reader(reader);
-                let stats =
-                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None)
-                        .unwrap_or_else(|e| panic!("{e:?}"));
+                let stats = vaco_codec_h264::mb::decode_slice_cabac(
+                    &mut cabac,
+                    &mut budget,
+                    sps,
+                    pps,
+                    &slice_header,
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("{e:?}"));
                 assert!(!cabac.malformed(), "CABAC engine reported malformed input");
                 if result.is_none() {
-                    result = Some(stats.first_slice_mb_cbp.expect("slice had at least one macroblock"));
+                    result = Some(
+                        stats
+                            .first_slice_mb_cbp
+                            .expect("slice had at least one macroblock"),
+                    );
                 }
             }
             _ => {}

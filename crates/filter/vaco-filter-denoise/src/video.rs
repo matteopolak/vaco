@@ -126,7 +126,9 @@ impl PlaneBuf {
     /// `[0, self.max_val]`.
     pub(crate) fn write(&self, plane: &mut PlaneMut<'_>, bytes: usize) {
         for y in 0..self.height {
-            let Some(row) = plane.row_mut(y) else { continue };
+            let Some(row) = plane.row_mut(y) else {
+                continue;
+            };
             for x in 0..self.width {
                 let idx = y.saturating_mul(self.width).saturating_add(x);
                 let v = self.data.get(idx).copied().unwrap_or(0.0);
@@ -291,9 +293,7 @@ pub(crate) fn plane_dims(format: PixFmt, width: u32, height: u32, plane: u8) -> 
 /// than an error itself is exactly that callers can name their own static
 /// message rather than formatting one per call site.
 pub(crate) const fn unsupported_format() -> Error {
-    Error::Unsupported(
-        "denoise filter: unsupported pixel format layout (see video::sample_layout)",
-    )
+    Error::Unsupported("denoise filter: unsupported pixel format layout (see video::sample_layout)")
 }
 
 #[cfg(test)]
@@ -338,13 +338,7 @@ mod tests {
             let mut plane = out.plane_mut(0).unwrap();
             buf.write(&mut plane, 1);
         }
-        assert_eq!(
-            frame.plane(0).unwrap().row(0),
-            out.plane(0).unwrap().row(0)
-        );
-        assert_eq!(
-            frame.plane(0).unwrap().row(2),
-            out.plane(0).unwrap().row(2)
-        );
+        assert_eq!(frame.plane(0).unwrap().row(0), out.plane(0).unwrap().row(0));
+        assert_eq!(frame.plane(0).unwrap().row(2), out.plane(0).unwrap().row(2));
     }
 }

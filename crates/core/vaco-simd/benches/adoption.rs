@@ -326,13 +326,7 @@ fn trivial<S: Lanes>(_simd: S, x: u32) -> u32 {
 /// canonical (every lane `0` or `-1`) — that is `mask8x16::from_slice`'s own
 /// documented input shape, matching what a real `simd_gt`/`simd_eq` produces.
 #[inline(always)]
-fn c_select_native<S: Lanes>(
-    simd: S,
-    mask_i8: &[i8],
-    a: &[u8],
-    b: &[u8],
-    out: &mut [u8],
-) {
+fn c_select_native<S: Lanes>(simd: S, mask_i8: &[i8], a: &[u8], b: &[u8], out: &mut [u8]) {
     for (((mc, ac), bc), oc) in mask_i8
         .as_chunks::<16>()
         .0
@@ -569,13 +563,7 @@ pub mod probes {
     }
 
     #[inline(never)]
-    pub fn composed_select_native(
-        caps: Caps,
-        mask_i8: &[i8],
-        a: &[u8],
-        b: &[u8],
-        out: &mut [u8],
-    ) {
+    pub fn composed_select_native(caps: Caps, mask_i8: &[i8], a: &[u8], b: &[u8], out: &mut [u8]) {
         dispatch_kernel!(caps, s => c_select_native(s, mask_i8, a, b, out));
     }
 
@@ -592,7 +580,13 @@ pub mod probes {
     }
 
     #[inline(never)]
-    pub fn composed_select_native_i16(caps: Caps, mask: &[i16], a: &[i16], b: &[i16], out: &mut [i16]) {
+    pub fn composed_select_native_i16(
+        caps: Caps,
+        mask: &[i16],
+        a: &[i16],
+        b: &[i16],
+        out: &mut [i16],
+    ) {
         dispatch_kernel!(caps, s => c_select_native_i16(s, mask, a, b, out));
     }
 
@@ -604,7 +598,13 @@ pub mod probes {
     }
 
     #[inline(never)]
-    pub fn composed_select_native_i32(caps: Caps, mask: &[i32], a: &[i32], b: &[i32], out: &mut [i32]) {
+    pub fn composed_select_native_i32(
+        caps: Caps,
+        mask: &[i32],
+        a: &[i32],
+        b: &[i32],
+        out: &mut [i32],
+    ) {
         dispatch_kernel!(caps, s => c_select_native_i32(s, mask, a, b, out));
     }
 
@@ -954,9 +954,18 @@ fn group_select(caps: Caps) {
     // (which is exactly [`vaco_simd::testing::edge_patterns`]'s own pattern
     // and would not show whether a *mixed* mask changes anything).
     let mask_u8: Vec<u8> = (0..N)
-        .map(|i| if (i * 2_654_435_761_u32 as usize) % 5 < 2 { 0xFF } else { 0x00 })
+        .map(|i| {
+            if (i * 2_654_435_761_u32 as usize) % 5 < 2 {
+                0xFF
+            } else {
+                0x00
+            }
+        })
         .collect();
-    let mask_i8: Vec<i8> = mask_u8.iter().map(|&m| if m != 0 { -1 } else { 0 }).collect();
+    let mask_i8: Vec<i8> = mask_u8
+        .iter()
+        .map(|&m| if m != 0 { -1 } else { 0 })
+        .collect();
     let a: Vec<u8> = (0..N).map(|i| ((i * 37) & 0xFF) as u8).collect();
     let b: Vec<u8> = (0..N).map(|i| ((i * 91) & 0xFF) as u8).collect();
     let mut x = vec![0u8; N];
@@ -971,7 +980,14 @@ fn group_select(caps: Caps) {
 
     let mut t = Table::new("Group 7 — masked-lane select (#127's spike)");
     let (n, native) = time_pair(
-        || probes::scalar_select(black_box(&mask_u8), black_box(&a), black_box(&b), black_box(&mut x)),
+        || {
+            probes::scalar_select(
+                black_box(&mask_u8),
+                black_box(&a),
+                black_box(&b),
+                black_box(&mut x),
+            )
+        },
         || {
             probes::composed_select_native(
                 caps,
@@ -983,7 +999,14 @@ fn group_select(caps: Caps) {
         },
     );
     let (_, bitwise) = time_pair(
-        || probes::scalar_select(black_box(&mask_u8), black_box(&a), black_box(&b), black_box(&mut x)),
+        || {
+            probes::scalar_select(
+                black_box(&mask_u8),
+                black_box(&a),
+                black_box(&b),
+                black_box(&mut x),
+            )
+        },
         || {
             probes::composed_select_bitwise(
                 caps,
@@ -1011,7 +1034,13 @@ fn group_select(caps: Caps) {
     // widened sample differences and their alpha/beta/tC0 comparisons never
     // fit in a `u8` lane once the subtraction can go negative.
     let mask16: Vec<i16> = (0..N)
-        .map(|i| if (i * 2_654_435_761_u32 as usize) % 5 < 2 { -1 } else { 0 })
+        .map(|i| {
+            if (i * 2_654_435_761_u32 as usize) % 5 < 2 {
+                -1
+            } else {
+                0
+            }
+        })
         .collect();
     let a16: Vec<i16> = (0..N).map(|i| (i as i32 * 37 - 5000) as i16).collect();
     let b16: Vec<i16> = (0..N).map(|i| (i as i32 * 91 - 3000) as i16).collect();
@@ -1021,7 +1050,14 @@ fn group_select(caps: Caps) {
     probes::composed_select_native_i16(caps, &mask16, &a16, &b16, &mut y16);
     assert_eq!(x16, y16, "select_i16: composition diverged");
     let (n16, native16) = time_pair(
-        || probes::scalar_select_i16(black_box(&mask16), black_box(&a16), black_box(&b16), black_box(&mut x16)),
+        || {
+            probes::scalar_select_i16(
+                black_box(&mask16),
+                black_box(&a16),
+                black_box(&b16),
+                black_box(&mut x16),
+            )
+        },
         || {
             probes::composed_select_native_i16(
                 caps,
@@ -1040,7 +1076,13 @@ fn group_select(caps: Caps) {
     );
 
     let mask32: Vec<i32> = (0..N)
-        .map(|i| if (i * 2_654_435_761_u32 as usize) % 5 < 2 { -1 } else { 0 })
+        .map(|i| {
+            if (i * 2_654_435_761_u32 as usize) % 5 < 2 {
+                -1
+            } else {
+                0
+            }
+        })
         .collect();
     let a32: Vec<i32> = (0..N).map(|i| i as i32 * 37 - 5000).collect();
     let b32: Vec<i32> = (0..N).map(|i| i as i32 * 91 - 3000).collect();
@@ -1050,7 +1092,14 @@ fn group_select(caps: Caps) {
     probes::composed_select_native_i32(caps, &mask32, &a32, &b32, &mut y32);
     assert_eq!(x32, y32, "select_i32: composition diverged");
     let (n32, native32) = time_pair(
-        || probes::scalar_select_i32(black_box(&mask32), black_box(&a32), black_box(&b32), black_box(&mut x32)),
+        || {
+            probes::scalar_select_i32(
+                black_box(&mask32),
+                black_box(&a32),
+                black_box(&b32),
+                black_box(&mut x32),
+            )
+        },
         || {
             probes::composed_select_native_i32(
                 caps,

@@ -11,8 +11,7 @@ use vaco_codec_msac::tree::write_tree_at;
 
 use crate::encode::BoolWriter;
 use crate::tables::{
-    CATEGORY_BASE, COEFF_BANDS, COEFF_TREE, PCAT1, PCAT2, PCAT3, PCAT4, PCAT5, PCAT6, ZIGZAG,
-    token,
+    CATEGORY_BASE, COEFF_BANDS, COEFF_TREE, PCAT1, PCAT2, PCAT3, PCAT4, PCAT5, PCAT6, ZIGZAG, token,
 };
 
 /// One decoded 4x4 block: raster-order coefficients and whether any were
@@ -167,7 +166,11 @@ pub fn encode_block(
 
     while i < 16 {
         let band = COEFF_BANDS.get(i).copied().unwrap_or(7);
-        let row = probs.get(band).and_then(|b| b.get(ctx)).copied().unwrap_or([128; 11]);
+        let row = probs
+            .get(band)
+            .and_then(|b| b.get(ctx))
+            .copied()
+            .unwrap_or([128; 11]);
         let start = if prev_was_zero { 2 } else { 0 };
 
         if i == eob {

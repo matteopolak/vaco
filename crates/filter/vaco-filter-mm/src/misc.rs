@@ -101,7 +101,8 @@ impl CueOpts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         if o.buffer.is_some() {
             return Err("cue: `buffer` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
@@ -149,9 +150,16 @@ impl FrameFilter for CueFilter {
     }
 }
 
-fn cue_build(media: MediaType, desc: FilterDesc, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+fn cue_build(
+    media: MediaType,
+    desc: FilterDesc,
+    req: &Instantiate<'_>,
+) -> std::result::Result<Instance, String> {
     let opts = CueOpts::parse(req.args)?;
-    #[allow(clippy::cast_precision_loss, reason = "display-scale duration conversion")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "display-scale duration conversion"
+    )]
     let secs = |d: Option<VDuration>| d.map_or(0.0, |d| d.0 as f64 / 1_000_000.0);
     let filter = CueFilter {
         cue_micros: opts.cue,
@@ -183,7 +191,8 @@ impl RealtimeOpts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -208,8 +217,9 @@ impl FrameFilter for RealtimeFilter {
         match self.anchor {
             None => self.anchor = Some((now, t)),
             Some((anchor_wall, anchor_stream)) => {
-                let target = anchor_wall
-                    .saturating_add(StdDuration::from_secs_f64(((t - anchor_stream) / self.speed).max(0.0)));
+                let target = anchor_wall.saturating_add(StdDuration::from_secs_f64(
+                    ((t - anchor_stream) / self.speed).max(0.0),
+                ));
                 let gap = target.duration_since(now);
                 if !gap.is_zero() {
                     if gap.as_secs_f64() > self.limit_secs {
@@ -229,9 +239,16 @@ impl FrameFilter for RealtimeFilter {
     }
 }
 
-fn realtime_build(media: MediaType, desc: FilterDesc, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+fn realtime_build(
+    media: MediaType,
+    desc: FilterDesc,
+    req: &Instantiate<'_>,
+) -> std::result::Result<Instance, String> {
     let opts = RealtimeOpts::parse(req.args)?;
-    #[allow(clippy::cast_precision_loss, reason = "display-scale duration conversion")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "display-scale duration conversion"
+    )]
     let limit_secs = opts.limit.map_or(2.0, |d| d.0 as f64 / 1_000_000.0);
     let filter = RealtimeFilter {
         limit_secs,
@@ -296,7 +313,8 @@ impl BenchOpts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -322,7 +340,11 @@ fn update_stats(stats: &mut BenchStats, elapsed: f64) {
     stats.count += 1;
     stats.total += elapsed;
     stats.max = stats.max.max(elapsed);
-    stats.min = if stats.count == 1 { elapsed } else { stats.min.min(elapsed) };
+    stats.min = if stats.count == 1 {
+        elapsed
+    } else {
+        stats.min.min(elapsed)
+    };
 }
 
 impl FrameFilter for BenchFilter {
@@ -334,7 +356,10 @@ impl FrameFilter for BenchFilter {
                 frame.set_metadata("lavfi.bench.start_time", now.to_string());
             }
             BenchAction::Stop => {
-                if let Some(start) = frame.metadata_get("lavfi.bench.start_time").and_then(|s| s.parse::<f64>().ok()) {
+                if let Some(start) = frame
+                    .metadata_get("lavfi.bench.start_time")
+                    .and_then(|s| s.parse::<f64>().ok())
+                {
                     update_stats(&mut self.stats, (now - start).max(0.0));
                 }
             }
@@ -343,7 +368,11 @@ impl FrameFilter for BenchFilter {
     }
 }
 
-fn bench_build(media: MediaType, desc: FilterDesc, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+fn bench_build(
+    media: MediaType,
+    desc: FilterDesc,
+    req: &Instantiate<'_>,
+) -> std::result::Result<Instance, String> {
     let opts = BenchOpts::parse(req.args)?;
     let filter = BenchFilter {
         action: opts.action,
@@ -375,7 +404,10 @@ pub(crate) enum PermsMode {
 }
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "perms", help = "set read/write permissions for the output frames")]
+#[options(
+    name = "perms",
+    help = "set read/write permissions for the output frames"
+)]
 pub(crate) struct PermsOpts {
     #[opt(
         name = "mode",
@@ -394,7 +426,8 @@ impl PermsOpts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         if o.mode != PermsMode::None {
             return Err("perms: `mode` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
@@ -415,7 +448,11 @@ impl FrameFilter for PermsFilter {
     }
 }
 
-fn perms_build(media: MediaType, desc: FilterDesc, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+fn perms_build(
+    media: MediaType,
+    desc: FilterDesc,
+    req: &Instantiate<'_>,
+) -> std::result::Result<Instance, String> {
     // There is no permission bit in this pipeline model for `mode`/`seed`
     // to act on, so `PermsOpts::parse` refuses a non-default value rather
     // than silently accepting a filtergraph the reference would run with
@@ -497,7 +534,10 @@ const SIDEDATA_TYPE_CONSTS: &[vaco_opts::ConstDesc] = {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "sidedata", help = "delete frame side data, or select frames based on it")]
+#[options(
+    name = "sidedata",
+    help = "delete frame side data, or select frames based on it"
+)]
 pub(crate) struct SidedataOpts {
     #[opt(
         name = "mode",
@@ -524,7 +564,8 @@ impl SidedataOpts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -534,8 +575,8 @@ impl SidedataOpts {
 /// module doc for why only four of the reference's 28 map anywhere.
 fn mapped_kind(reference_type: i32) -> Option<FrameSideDataKind> {
     match reference_type {
-        1 => Some(FrameSideDataKind::ClosedCaptions),   // A53_CC
-        6 => Some(FrameSideDataKind::DisplayMatrix),    // DISPLAYMATRIX
+        1 => Some(FrameSideDataKind::ClosedCaptions), // A53_CC
+        6 => Some(FrameSideDataKind::DisplayMatrix),  // DISPLAYMATRIX
         11 => Some(FrameSideDataKind::MasteringDisplay), // MASTERING_DISPLAY_METADATA
         14 => Some(FrameSideDataKind::ContentLightLevel), // CONTENT_LIGHT_LEVEL
         _ => None,
@@ -553,7 +594,11 @@ impl FrameFilter for SidedataFilter {
         match self.mode {
             SidedataMode::Select => {
                 let has = self.kind.is_some_and(|k| frame.side_data(k).is_some());
-                Ok(if has { FrameOut::One(frame) } else { FrameOut::None })
+                Ok(if has {
+                    FrameOut::One(frame)
+                } else {
+                    FrameOut::None
+                })
             }
             SidedataMode::Delete => {
                 if let Some(k) = self.kind {
@@ -578,7 +623,11 @@ impl FrameFilter for SidedataFilter {
     }
 }
 
-fn sidedata_build(media: MediaType, desc: FilterDesc, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+fn sidedata_build(
+    media: MediaType,
+    desc: FilterDesc,
+    req: &Instantiate<'_>,
+) -> std::result::Result<Instance, String> {
     let opts = SidedataOpts::parse(req.args)?;
     let filter = SidedataFilter {
         mode: opts.mode,
@@ -596,7 +645,9 @@ fn sidedata_build(media: MediaType, desc: FilterDesc, req: &Instantiate<'_>) -> 
 macro_rules! media_pair {
     ($modname:ident, $build:expr, $vname:literal, $vdesc:literal, $aname:literal, $adesc:literal) => {
         pub mod $modname {
-            use super::{AUDIO_PAD, FilterDesc, FilterFlags, Instance, Instantiate, MediaType, VIDEO_PAD};
+            use super::{
+                AUDIO_PAD, FilterDesc, FilterFlags, Instance, Instantiate, MediaType, VIDEO_PAD,
+            };
 
             pub mod video {
                 use super::{FilterDesc, FilterFlags, Instance, Instantiate, MediaType, VIDEO_PAD};
@@ -609,7 +660,9 @@ macro_rules! media_pair {
                     flags: FilterFlags::empty(),
                 };
 
-                pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+                pub(crate) fn create(
+                    req: &Instantiate<'_>,
+                ) -> std::result::Result<Instance, String> {
                     $build(MediaType::Video, DESC, req)
                 }
             }
@@ -625,7 +678,9 @@ macro_rules! media_pair {
                     flags: FilterFlags::empty(),
                 };
 
-                pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+                pub(crate) fn create(
+                    req: &Instantiate<'_>,
+                ) -> std::result::Result<Instance, String> {
                     $build(MediaType::Audio, DESC, req)
                 }
             }
@@ -633,12 +688,54 @@ macro_rules! media_pair {
     };
 }
 
-media_pair!(cue, crate::misc::cue_build, "cue", "Delay filtering until a wallclock timestamp", "acue", "Delay filtering until a wallclock timestamp");
-media_pair!(realtime, crate::misc::realtime_build, "realtime", "Slow down filtering to match real time", "arealtime", "Slow down filtering to match real time");
-media_pair!(latency, |media, desc, req: &Instantiate<'_>| Ok(crate::misc::latency_build(media, desc, req)), "latency", "Report previous filter latency", "alatency", "Report previous filter latency");
-media_pair!(bench, crate::misc::bench_build, "bench", "Benchmark part of a filtergraph", "abench", "Benchmark part of a filtergraph");
-media_pair!(perms, crate::misc::perms_build, "perms", "Set permissions for the output frames", "aperms", "Set permissions for the output frames");
-media_pair!(sidedata, crate::misc::sidedata_build, "sidedata", "Delete frame side data, or select frames based on it", "asidedata", "Delete frame side data, or select frames based on it");
+media_pair!(
+    cue,
+    crate::misc::cue_build,
+    "cue",
+    "Delay filtering until a wallclock timestamp",
+    "acue",
+    "Delay filtering until a wallclock timestamp"
+);
+media_pair!(
+    realtime,
+    crate::misc::realtime_build,
+    "realtime",
+    "Slow down filtering to match real time",
+    "arealtime",
+    "Slow down filtering to match real time"
+);
+media_pair!(
+    latency,
+    |media, desc, req: &Instantiate<'_>| Ok(crate::misc::latency_build(media, desc, req)),
+    "latency",
+    "Report previous filter latency",
+    "alatency",
+    "Report previous filter latency"
+);
+media_pair!(
+    bench,
+    crate::misc::bench_build,
+    "bench",
+    "Benchmark part of a filtergraph",
+    "abench",
+    "Benchmark part of a filtergraph"
+);
+media_pair!(
+    perms,
+    crate::misc::perms_build,
+    "perms",
+    "Set permissions for the output frames",
+    "aperms",
+    "Set permissions for the output frames"
+);
+media_pair!(
+    sidedata,
+    crate::misc::sidedata_build,
+    "sidedata",
+    "Delete frame side data, or select frames based on it",
+    "asidedata",
+    "Delete frame side data, or select frames based on it"
+);
 
 #[cfg(test)]
 #[allow(
@@ -652,7 +749,11 @@ mod tests {
     use vaco_filter_core::mock::{gray_frame, gray_link, video_source_formats};
     use vaco_filter_core::{Graph, GraphStatus};
 
-    fn run_one(create: fn(&Instantiate<'_>) -> std::result::Result<Instance, String>, args: Option<&str>, frame: Frame) -> Frame {
+    fn run_one(
+        create: fn(&Instantiate<'_>) -> std::result::Result<Instance, String>,
+        args: Option<&str>,
+        frame: Frame,
+    ) -> Frame {
         let req = Instantiate {
             name: "x",
             instance: "x",
@@ -661,16 +762,26 @@ mod tests {
         };
         let instance = create(&req).unwrap();
         let mut graph = Graph::new();
-        let src = graph.add_source("in", MediaType::Video, video_source_formats("in", vaco_pixfmt::PixFmt::Gray8));
+        let src = graph.add_source(
+            "in",
+            MediaType::Video,
+            video_source_formats("in", vaco_pixfmt::PixFmt::Gray8),
+        );
         let node = graph.add(instance.desc, instance.formats, instance.filter);
-        let sink = graph.add_sink("out", MediaType::Video, vaco_filter_core::mock::any_video_sink("out"));
+        let sink = graph.add_sink(
+            "out",
+            MediaType::Video,
+            vaco_filter_core::mock::any_video_sink("out"),
+        );
         graph.connect(src, 0, node, 0).unwrap();
         graph.connect(node, 0, sink, 0).unwrap();
         let tb = vaco_core::Rational::new(1, 25);
         graph.set_source_format(src, gray_link(4, 4, tb)).unwrap();
         graph.configure().unwrap();
         graph.send(src, frame).unwrap();
-        graph.close_source(src, vaco_core::Timestamp::new(1)).unwrap();
+        graph
+            .close_source(src, vaco_core::Timestamp::new(1))
+            .unwrap();
         let mut out = None;
         loop {
             match graph.run().unwrap() {
@@ -690,7 +801,13 @@ mod tests {
     #[test]
     fn cue_zero_is_a_no_op_passthrough() {
         let out = run_one(cue::video::create, None, gray_frame(4, 4, 0, 7));
-        assert_eq!(out.plane(0).and_then(|p| p.row(0)).and_then(|r| r.first()).copied(), Some(7));
+        assert_eq!(
+            out.plane(0)
+                .and_then(|p| p.row(0))
+                .and_then(|r| r.first())
+                .copied(),
+            Some(7)
+        );
     }
 
     #[test]
@@ -702,7 +819,13 @@ mod tests {
     #[test]
     fn perms_passes_frames_through_at_the_default_mode() {
         let out = run_one(perms::video::create, None, gray_frame(4, 4, 0, 3));
-        assert_eq!(out.plane(0).and_then(|p| p.row(0)).and_then(|r| r.first()).copied(), Some(3));
+        assert_eq!(
+            out.plane(0)
+                .and_then(|p| p.row(0))
+                .and_then(|r| r.first())
+                .copied(),
+            Some(3)
+        );
     }
 
     /// There is no permission bit in this pipeline model to honour
@@ -712,9 +835,19 @@ mod tests {
     /// behaviour. Regression for `cargo xtask reachability-check`'s rule I.
     #[test]
     fn perms_refuses_a_non_default_mode_or_seed_instead_of_ignoring_it() {
-        let req = Instantiate { name: "x", instance: "x", args: Some("mode=random:seed=1"), arguments: &[] };
+        let req = Instantiate {
+            name: "x",
+            instance: "x",
+            args: Some("mode=random:seed=1"),
+            arguments: &[],
+        };
         assert!(perms::video::create(&req).is_err());
-        let req_seed = Instantiate { name: "x", instance: "x", args: Some("seed=7"), arguments: &[] };
+        let req_seed = Instantiate {
+            name: "x",
+            instance: "x",
+            args: Some("seed=7"),
+            arguments: &[],
+        };
         assert!(perms::video::create(&req_seed).is_err());
     }
 
@@ -724,9 +857,16 @@ mod tests {
     /// reference's own example) depends on being able to read back.
     #[test]
     fn bench_start_stamps_a_parseable_start_time() {
-        let out = run_one(bench::video::create, Some("action=start"), gray_frame(4, 4, 0, 0));
+        let out = run_one(
+            bench::video::create,
+            Some("action=start"),
+            gray_frame(4, 4, 0, 0),
+        );
         let raw = out.metadata_get("lavfi.bench.start_time").unwrap();
-        assert!(raw.parse::<f64>().is_ok(), "expected a parseable float, got {raw:?}");
+        assert!(
+            raw.parse::<f64>().is_ok(),
+            "expected a parseable float, got {raw:?}"
+        );
     }
 
     /// The running avg/max/min accumulation, tested directly against the
@@ -763,19 +903,34 @@ mod tests {
 
     #[test]
     fn sidedata_select_requires_the_kind_to_be_present() {
-        let req = Instantiate { name: "sidedata", instance: "sidedata", args: Some("mode=select:type=6"), arguments: &[] };
+        let req = Instantiate {
+            name: "sidedata",
+            instance: "sidedata",
+            args: Some("mode=select:type=6"),
+            arguments: &[],
+        };
         let instance = sidedata::video::create(&req).unwrap();
         let mut graph = Graph::new();
-        let src = graph.add_source("in", MediaType::Video, video_source_formats("in", vaco_pixfmt::PixFmt::Gray8));
+        let src = graph.add_source(
+            "in",
+            MediaType::Video,
+            video_source_formats("in", vaco_pixfmt::PixFmt::Gray8),
+        );
         let node = graph.add(instance.desc, instance.formats, instance.filter);
-        let sink = graph.add_sink("out", MediaType::Video, vaco_filter_core::mock::any_video_sink("out"));
+        let sink = graph.add_sink(
+            "out",
+            MediaType::Video,
+            vaco_filter_core::mock::any_video_sink("out"),
+        );
         graph.connect(src, 0, node, 0).unwrap();
         graph.connect(node, 0, sink, 0).unwrap();
         let tb = vaco_core::Rational::new(1, 25);
         graph.set_source_format(src, gray_link(4, 4, tb)).unwrap();
         graph.configure().unwrap();
         graph.send(src, gray_frame(4, 4, 0, 0)).unwrap();
-        graph.close_source(src, vaco_core::Timestamp::new(1)).unwrap();
+        graph
+            .close_source(src, vaco_core::Timestamp::new(1))
+            .unwrap();
         loop {
             match graph.run().unwrap() {
                 GraphStatus::Eof => break,

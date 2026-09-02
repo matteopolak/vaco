@@ -219,7 +219,11 @@ impl Work {
     pub(crate) const fn batch(&self) -> usize {
         match self {
             Self::Demux(_) => 0,
-            Self::Decode(_) | Self::Encode(_) | Self::Convert(_) | Self::ConvertAudio(_) | Self::Filter(_) => 1,
+            Self::Decode(_)
+            | Self::Encode(_)
+            | Self::Convert(_)
+            | Self::ConvertAudio(_)
+            | Self::Filter(_) => 1,
             Self::Mux(_) => 16,
         }
     }
@@ -497,9 +501,9 @@ impl Side for ConverterSide {
                 self.pending = Some(self.convert(f)?);
                 Ok(())
             }
-            Some(Payload::Packet(_)) => Err(Error::InvalidData(
-                "a packet reached a format converter",
-            )),
+            Some(Payload::Packet(_)) => {
+                Err(Error::InvalidData("a packet reached a format converter"))
+            }
             None => {
                 self.eof = true;
                 Ok(())

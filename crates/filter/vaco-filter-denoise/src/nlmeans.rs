@@ -160,7 +160,15 @@ pub(crate) fn nlmeans_plane_naive(buf: &PlaneBuf, h: f32, pr: i64, rr: i64) -> P
                     den += w;
                 }
             }
-            out.set(x, y, if den > 0.0 { num / den } else { buf.get_clamped(xi, yi) });
+            out.set(
+                x,
+                y,
+                if den > 0.0 {
+                    num / den
+                } else {
+                    buf.get_clamped(xi, yi)
+                },
+            );
         }
     }
     out
@@ -282,7 +290,15 @@ pub(crate) fn nlmeans_plane(buf: &PlaneBuf, h: f32, pr: i64, rr: i64) -> PlaneBu
             let d = den.get(idx).copied().unwrap_or(0.0);
             let xi = i64::try_from(x).unwrap_or(i64::MAX);
             let yi = i64::try_from(y).unwrap_or(i64::MAX);
-            out.set(x, y, if d > 0.0 { n / d } else { buf.get_clamped(xi, yi) });
+            out.set(
+                x,
+                y,
+                if d > 0.0 {
+                    n / d
+                } else {
+                    buf.get_clamped(xi, yi)
+                },
+            );
         }
     }
     out

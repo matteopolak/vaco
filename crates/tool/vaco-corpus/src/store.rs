@@ -87,7 +87,10 @@ impl std::fmt::Display for ObjectId {
 pub enum StoreError {
     Io(io::Error),
     /// The bytes written do not hash to the id they were stored under.
-    HashMismatch { expected: ObjectId, got: ObjectId },
+    HashMismatch {
+        expected: ObjectId,
+        got: ObjectId,
+    },
 }
 
 impl std::fmt::Display for StoreError {
@@ -95,7 +98,10 @@ impl std::fmt::Display for StoreError {
         match self {
             Self::Io(e) => write!(f, "corpus store I/O error: {e}"),
             Self::HashMismatch { expected, got } => {
-                write!(f, "corpus store hash mismatch: expected {expected}, got {got}")
+                write!(
+                    f,
+                    "corpus store hash mismatch: expected {expected}, got {got}"
+                )
             }
         }
     }
@@ -132,7 +138,10 @@ impl Store {
             return PathBuf::from(dir);
         }
         if let Ok(home) = std::env::var("HOME") {
-            return PathBuf::from(home).join(".cache").join("vaco").join("corpus");
+            return PathBuf::from(home)
+                .join(".cache")
+                .join("vaco")
+                .join("corpus");
         }
         let tmp = std::env::var("TMPDIR").unwrap_or_else(|_| "/tmp".to_owned());
         PathBuf::from(tmp).join("vaco-corpus")
@@ -159,7 +168,11 @@ impl Store {
         // index would panic on any future change to that invariant, and a
         // `get` failure degrades to a flat layout instead.
         let prefix = hex.get(..2).unwrap_or("00");
-        self.root.join("objects").join("sha256").join(prefix).join(hex)
+        self.root
+            .join("objects")
+            .join("sha256")
+            .join(prefix)
+            .join(hex)
     }
 
     /// Whether an object is already present.
@@ -295,6 +308,10 @@ mod tests {
         let a = ObjectId::of(b"one");
         let b = ObjectId::of(b"two");
         assert_ne!(store.path_for(&a), store.path_for(&b));
-        assert!(store.path_for(&a).starts_with(dir.path().join("objects").join("sha256")));
+        assert!(
+            store
+                .path_for(&a)
+                .starts_with(dir.path().join("objects").join("sha256"))
+        );
     }
 }

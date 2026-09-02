@@ -32,12 +32,27 @@ use crate::common;
 use crate::sample;
 
 const PADS: &[Pad] = &[
-    Pad { name: "default", media_type: MediaType::Video },
-    Pad { name: "threshold", media_type: MediaType::Video },
-    Pad { name: "min", media_type: MediaType::Video },
-    Pad { name: "max", media_type: MediaType::Video },
+    Pad {
+        name: "default",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "threshold",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "min",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "max",
+        media_type: MediaType::Video,
+    },
 ];
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "threshold",
@@ -48,7 +63,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "threshold", help = "Threshold first video stream using other video streams")]
+#[options(
+    name = "threshold",
+    help = "Threshold first video stream using other video streams"
+)]
 pub(crate) struct Opts {
     #[opt(name = "planes", help = "set planes to filter", default = 15, range = 0..=15, flags(video, filtering))]
     pub planes: i32,
@@ -64,18 +82,32 @@ impl PairedFilter for Filter {
         4
     }
 
-    fn filter_frames(&mut self, ctx: &mut FilterContext<'_>, inputs: SmallVec<[Frame; 4]>) -> Result<FrameOut> {
+    fn filter_frames(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut> {
         let mut it = inputs.into_iter();
-        let (Some(source), Some(thr), Some(min), Some(max)) = (it.next(), it.next(), it.next(), it.next()) else {
+        let (Some(source), Some(thr), Some(min), Some(max)) =
+            (it.next(), it.next(), it.next(), it.next())
+        else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = source.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = source.data
+        else {
             return Ok(FrameOut::One(source));
         };
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         let big_endian = format.is_big_endian();
         for ch in 0..format.component_count() {
-            let Some(comp) = sample::component(format, ch) else { continue };
+            let Some(comp) = sample::component(format, ch) else {
+                continue;
+            };
             let (Some(sp), Some(tp), Some(minp), Some(maxp), Some(mut dp)) = (
                 source.plane(comp.plane as usize),
                 thr.plane(comp.plane as usize),
@@ -85,11 +117,21 @@ impl PairedFilter for Filter {
             ) else {
                 continue;
             };
-            let w = dp.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
-            let n = dp.rows().min(sp.rows()).min(tp.rows()).min(minp.rows()).min(maxp.rows());
+            let w = dp
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
+            let n = dp
+                .rows()
+                .min(sp.rows())
+                .min(tp.rows())
+                .min(minp.rows())
+                .min(maxp.rows());
             if !sample::plane_selected(self.planes, ch) {
                 for y in 0..n {
-                    let (Some(sr), Some(dr)) = (sp.row(y), dp.row_mut(y)) else { continue };
+                    let (Some(sr), Some(dr)) = (sp.row(y), dp.row_mut(y)) else {
+                        continue;
+                    };
                     let len = sr.len().min(dr.len());
                     if let (Some(s), Some(d)) = (sr.get(..len), dr.get_mut(..len)) {
                         d.copy_from_slice(s);
@@ -98,9 +140,13 @@ impl PairedFilter for Filter {
                 continue;
             }
             for y in 0..n {
-                let (Some(sr), Some(tr), Some(minr), Some(maxr), Some(dr)) =
-                    (sp.row(y), tp.row(y), minp.row(y), maxp.row(y), dp.row_mut(y))
-                else {
+                let (Some(sr), Some(tr), Some(minr), Some(maxr), Some(dr)) = (
+                    sp.row(y),
+                    tp.row(y),
+                    minp.row(y),
+                    maxp.row(y),
+                    dp.row_mut(y),
+                ) else {
                     continue;
                 };
                 for x in 0..w {
@@ -133,7 +179,9 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     Ok(Instance {
         desc: DESC,
         formats,
-        filter: Box::new(Paired::new(Filter { planes: i64::from(opts.planes) })),
+        filter: Box::new(Paired::new(Filter {
+            planes: i64::from(opts.planes),
+        })),
     })
 }
 

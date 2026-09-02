@@ -93,7 +93,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -140,12 +141,17 @@ impl SourceFilter for Source {
     }
 
     fn produce(&mut self, ctx: &mut FilterContext<'_>) -> Result<Option<Frame>> {
-        #[allow(clippy::cast_possible_truncation, reason = "n_taps <= 32768 * 21 + 1, well within u64")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "n_taps <= 32768 * 21 + 1, well within u64"
+        )]
         let total = self.n_taps as u64;
         if self.next >= total {
             return Ok(None);
         }
-        let want = u32::try_from(total - self.next).unwrap_or(self.block).min(self.block);
+        let want = u32::try_from(total - self.next)
+            .unwrap_or(self.block)
+            .min(self.block);
         let mut frame = ctx.pool().acquire_audio(
             SampleFmt::F32,
             self.layout.clone(),
@@ -159,7 +165,10 @@ impl SourceFilter for Source {
                 for (i, px) in row.chunks_exact_mut(4).enumerate() {
                     #[allow(clippy::cast_possible_truncation, reason = "index stays within n_taps")]
                     let idx = (self.next as usize) + i;
-                    #[allow(clippy::cast_possible_truncation, reason = "tap() is a small finite value")]
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        reason = "tap() is a small finite value"
+                    )]
                     let v = tap(idx, self.n_taps, self.delay) as f32;
                     px.copy_from_slice(&v.to_le_bytes());
                 }

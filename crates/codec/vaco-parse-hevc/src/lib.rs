@@ -153,6 +153,7 @@ pub mod sps;
 mod util;
 pub mod vps;
 
+pub use a53::cc_data_from_sei;
 pub use cbs::{HevcCbs, HevcContent};
 pub use hvcc::{HevcDecoderConfigurationRecord, NalArray};
 pub use nal::{HevcNalHeader, NalUnitType};
@@ -163,7 +164,6 @@ pub use pps::Pps;
 pub use profile::{LEVELS, PROFILES, Tier, level_name, profile_name};
 pub use ptl::{Constraint, ProfileTier, ProfileTierLevel, SubLayerPtl};
 pub use rps::ShortTermRps;
-pub use a53::cc_data_from_sei;
 pub use sei::{PicStruct, SeiMessage, SeiPayload};
 pub use slice::{SliceHeader, SliceKind};
 pub use sps::{ChromaFormat, HrdParameters, ScalingListData, Sps, Timing, VuiParameters, Window};

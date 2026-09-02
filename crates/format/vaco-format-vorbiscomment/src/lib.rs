@@ -31,5 +31,5 @@ pub mod comment;
 pub mod conv;
 pub mod picture;
 
-pub use comment::{CommentIter, VorbisComment, VORBIS_MAGIC};
+pub use comment::{CommentIter, VORBIS_MAGIC, VorbisComment};
 pub use picture::{Picture, PictureType};

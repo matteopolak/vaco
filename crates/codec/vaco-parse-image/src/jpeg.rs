@@ -196,11 +196,7 @@ impl ImageHeader for Jpeg {
             // discarded into `bits_per_raw_sample` unchecked, so an
             // arbitrary byte (e.g. 164) reached probe output verbatim —
             // found by `fuzz/fuzz_targets/registry_discovery.rs`.
-            if width == 0
-                || height == 0
-                || num_components == 0
-                || !(2..=16).contains(&precision)
-            {
+            if width == 0 || height == 0 || num_components == 0 || !(2..=16).contains(&precision) {
                 return None;
             }
             let mut params = CodecParameters::video().with_codec(CodecId::Jpeg);

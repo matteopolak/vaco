@@ -577,7 +577,10 @@ impl SendReceive for PrimeVideoProbe {
     fn flush(&mut self) {}
 
     fn prime_video(&mut self, width: u32, height: u32) {
-        *self.seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((width, height));
+        *self
+            .seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((width, height));
     }
 }
 
@@ -592,7 +595,9 @@ fn prime_video_forwards_through_as_decoder_validated_and_the_box() {
     let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(probe)));
     boxed.prime_video(160, 120);
     assert_eq!(
-        *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        *seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
         Some((160, 120))
     );
 }
@@ -613,7 +618,9 @@ fn the_box_blanket_impl_forwards_prime_video_through_a_generic_decoder_bound() {
     let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(probe)));
     prime_video_through_generic_decoder(&mut boxed, 176, 144);
     assert_eq!(
-        *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        *seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
         Some((176, 144))
     );
 }
@@ -648,8 +655,10 @@ impl SendReceive for PrimeAudioProbe {
     fn flush(&mut self) {}
 
     fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
-        *self.seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some((sample_rate, layout));
+        *self
+            .seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some((sample_rate, layout));
     }
 }
 
@@ -663,7 +672,9 @@ fn prime_audio_forwards_through_as_decoder_validated_and_the_box() {
     let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(probe)));
     boxed.prime_audio(44_100, vaco_chlayout::ChannelLayout::STEREO);
     assert_eq!(
-        *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        *seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
         Some((44_100, vaco_chlayout::ChannelLayout::STEREO))
     );
 }
@@ -687,7 +698,9 @@ fn the_box_blanket_impl_forwards_prime_audio_through_a_generic_decoder_bound() {
     let mut boxed: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(probe)));
     prime_audio_through_generic_decoder(&mut boxed, 48_000, vaco_chlayout::ChannelLayout::MONO);
     assert_eq!(
-        *seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner),
+        *seen
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
         Some((48_000, vaco_chlayout::ChannelLayout::MONO))
     );
 }

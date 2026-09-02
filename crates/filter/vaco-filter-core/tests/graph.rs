@@ -31,8 +31,8 @@ use vaco_filter_core::negotiate::{
 };
 use vaco_filter_core::{
     Activity, Dual, DualFilter, Fanout, FanoutFilter, Filter, FilterContext, FilterDesc,
-    FilterFlags, FrameFilter, FrameOut, Graph, GraphStatus, LinkFormat, LinkView, NodeId,
-    NodeView, Pad, Paired, PairedFilter, Simple, Violation,
+    FilterFlags, FrameFilter, FrameOut, Graph, GraphStatus, LinkFormat, LinkView, NodeId, NodeView,
+    Pad, Paired, PairedFilter, Simple, Violation,
 };
 use vaco_pixfmt::PixFmt;
 use vaco_sampfmt::SampleFmt;
@@ -1636,7 +1636,9 @@ fn a_link_back_into_the_same_node_is_rejected_as_a_cycle_at_configure() -> Resul
     graph.connect(node, 0, sink_out, 0)?;
     graph.set_source_format(src_a, gray_link(16, 16, Rational::new(1, 25)))?;
 
-    let err = graph.configure().expect_err("a self-loop must not configure");
+    let err = graph
+        .configure()
+        .expect_err("a self-loop must not configure");
     let message = err.to_string();
     assert!(
         message.contains("cycle"),
@@ -1658,7 +1660,11 @@ struct GraphProbe {
 }
 
 impl FrameFilter for GraphProbe {
-    fn filter_frame(&mut self, ctx: &mut FilterContext<'_>, input: vaco_frame::Frame) -> Result<FrameOut> {
+    fn filter_frame(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        input: vaco_frame::Frame,
+    ) -> Result<FrameOut> {
         let mut seen = self.seen.lock().unwrap();
         if seen.is_none() {
             *seen = Some((ctx.graph_nodes().to_vec(), ctx.graph_links()));
@@ -1696,11 +1702,7 @@ fn a_filter_can_read_every_nodes_label_and_every_links_state() -> Result<()> {
             seen: std::sync::Arc::clone(&probe),
         })),
     );
-    let sink = graph.add_sink(
-        "probe_sink",
-        MediaType::Video,
-        any_video_sink("probe_sink"),
-    );
+    let sink = graph.add_sink("probe_sink", MediaType::Video, any_video_sink("probe_sink"));
     graph.connect(src, 0, node, 0)?;
     graph.connect(node, 0, sink, 0)?;
     graph.set_source_format(src, gray_link(16, 16, Rational::new(1, 25)))?;

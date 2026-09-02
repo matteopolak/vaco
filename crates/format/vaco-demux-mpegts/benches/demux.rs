@@ -257,7 +257,15 @@ fn simple_file(frames: usize) -> Vec<u8> {
             i % 5 == 0,
             false,
         );
-        w.pes(AUDIO_PID, 0xC0, Some(pts), None, &vec![0xAA; 100], true, true);
+        w.pes(
+            AUDIO_PID,
+            0xC0,
+            Some(pts),
+            None,
+            &vec![0xAA; 100],
+            true,
+            true,
+        );
     }
     w.out
 }

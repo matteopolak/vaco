@@ -98,10 +98,7 @@ pub(crate) const fn resolve_seed(seed: i64, fallback: u64) -> u64 {
     if seed < 0 {
         fallback
     } else {
-        #[allow(
-            clippy::cast_sign_loss,
-            reason = "seed >= 0 was just checked"
-        )]
+        #[allow(clippy::cast_sign_loss, reason = "seed >= 0 was just checked")]
         {
             seed as u64
         }

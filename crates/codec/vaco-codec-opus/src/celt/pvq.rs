@@ -76,7 +76,10 @@ pub fn ncwrs(n: usize, k: usize) -> u32 {
         return 1;
     }
     let u = v_and_u_row(n, k);
-    u.get(k).copied().unwrap_or(0).wrapping_add(u.get(k + 1).copied().unwrap_or(0))
+    u.get(k)
+        .copied()
+        .unwrap_or(0)
+        .wrapping_add(u.get(k + 1).copied().unwrap_or(0))
 }
 
 /// `cwrs.c`'s `cwrsi`: recover the `n`-dimensional pulse vector (each entry
@@ -112,7 +115,12 @@ pub fn decode_pulses(dec: &mut RangeDecoder<'_>, n: usize, k: usize, y: &mut [i3
         return;
     }
     let mut u = v_and_u_row(n, k);
-    let total = u.get(k).copied().unwrap_or(1).wrapping_add(u.get(k + 1).copied().unwrap_or(0)).max(1);
+    let total = u
+        .get(k)
+        .copied()
+        .unwrap_or(1)
+        .wrapping_add(u.get(k + 1).copied().unwrap_or(0))
+        .max(1);
     let idx = dec.dec_uint(total).unwrap_or(0);
     cwrsi(n, k, idx, y, &mut u);
 }
@@ -194,7 +202,9 @@ pub fn exp_rotation(x: &mut [f32], len: usize, dir: i32, stride: usize, k: i32, 
     }
     let sub_len = len / stride;
     for i in 0..stride {
-        let Some(slice) = x.get_mut(i * sub_len..(i + 1) * sub_len) else { continue };
+        let Some(slice) = x.get_mut(i * sub_len..(i + 1) * sub_len) else {
+            continue;
+        };
         if dir < 0 {
             if stride2 != 0 {
                 exp_rotation1(slice, sub_len, stride2, s, c);
@@ -247,7 +257,15 @@ pub fn extract_collapse_mask(iy: &[i32], n: usize, b: usize) -> u32 {
 
 /// `vq.c`'s `alg_unquant`: decode the PVQ shape for one (sub-)band and mix it
 /// in at `gain`. Returns the collapse mask.
-pub fn alg_unquant(dec: &mut RangeDecoder<'_>, x: &mut [f32], n: usize, k: i32, spread: i32, b: usize, gain: f32) -> u32 {
+pub fn alg_unquant(
+    dec: &mut RangeDecoder<'_>,
+    x: &mut [f32],
+    n: usize,
+    k: i32,
+    spread: i32,
+    b: usize,
+    gain: f32,
+) -> u32 {
     if k <= 0 || n < 2 {
         for v in x.iter_mut().take(n) {
             *v = 0.0;
@@ -270,8 +288,12 @@ pub fn haar1(x: &mut [f32], n0: usize, stride: usize) {
     let half = n0 / 2;
     for i in 0..stride {
         for j in 0..half {
-            let Some(&a) = x.get(stride * 2 * j + i) else { continue };
-            let Some(&b) = x.get(stride * (2 * j + 1) + i) else { continue };
+            let Some(&a) = x.get(stride * 2 * j + i) else {
+                continue;
+            };
+            let Some(&b) = x.get(stride * (2 * j + 1) + i) else {
+                continue;
+            };
             let t1 = INV_SQRT2 * a;
             let t2 = INV_SQRT2 * b;
             if let Some(slot) = x.get_mut(stride * 2 * j + i) {
@@ -302,7 +324,9 @@ pub fn deinterleave_hadamard(x: &mut [f32], n0: usize, stride: usize, hadamard: 
     } else {
         for i in 0..stride {
             for j in 0..n0 {
-                if let (Some(&v), Some(slot)) = (region.get(j * stride + i), tmp.get_mut(i * n0 + j)) {
+                if let (Some(&v), Some(slot)) =
+                    (region.get(j * stride + i), tmp.get_mut(i * n0 + j))
+                {
                     *slot = v;
                 }
             }
@@ -330,7 +354,9 @@ pub fn interleave_hadamard(x: &mut [f32], n0: usize, stride: usize, hadamard: bo
     } else {
         for i in 0..stride {
             for j in 0..n0 {
-                if let (Some(&v), Some(slot)) = (region.get(i * n0 + j), tmp.get_mut(j * stride + i)) {
+                if let (Some(&v), Some(slot)) =
+                    (region.get(i * n0 + j), tmp.get_mut(j * stride + i))
+                {
                     *slot = v;
                 }
             }
@@ -341,15 +367,25 @@ pub fn interleave_hadamard(x: &mut [f32], n0: usize, stride: usize, hadamard: bo
 
 /// `bands.c`'s `intensity_stereo`: fold the side channel into the mid at a
 /// band where dual coding is no longer worth its bits.
-pub fn intensity_stereo(x: &mut [f32], y: &[f32], band_energy_left: f32, band_energy_right: f32, n: usize) {
-    let norm = (1e-15 + band_energy_left * band_energy_left + band_energy_right * band_energy_right).sqrt() + 1e-15;
+pub fn intensity_stereo(
+    x: &mut [f32],
+    y: &[f32],
+    band_energy_left: f32,
+    band_energy_right: f32,
+    n: usize,
+) {
+    let norm =
+        (1e-15 + band_energy_left * band_energy_left + band_energy_right * band_energy_right)
+            .sqrt()
+            + 1e-15;
     let a1 = band_energy_left / norm;
     let a2 = band_energy_right / norm;
     for j in 0..n {
         if let (Some(&l), Some(&r)) = (x.get(j), y.get(j))
-            && let Some(slot) = x.get_mut(j) {
-                *slot = a1 * l + a2 * r;
-            }
+            && let Some(slot) = x.get_mut(j)
+        {
+            *slot = a1 * l + a2 * r;
+        }
     }
 }
 

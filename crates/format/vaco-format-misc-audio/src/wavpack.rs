@@ -157,7 +157,11 @@ impl WavpackDemuxer {
             _ => None,
         };
 
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, sample_rate.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, sample_rate.cast_signed()),
+        );
         let mut params = CodecParameters::audio();
         params.codec_id = Some(CodecId::WavPack);
         if let Some(audio) = params.audio.as_mut() {
@@ -208,14 +212,21 @@ impl Demuxer for WavpackDemuxer {
         pkt.flags = PacketFlags::KEY;
         pkt.pos = Some(start);
 
-        let rate = self.stream.params.audio.as_ref().map_or(1, |a| a.sample_rate.max(1));
+        let rate = self
+            .stream
+            .params
+            .audio
+            .as_ref()
+            .map_or(1, |a| a.sample_rate.max(1));
         let micros = u64::from(hdr.block_samples)
             .saturating_mul(1_000_000)
             .checked_div(u64::from(rate))
             .unwrap_or(0);
         pkt.duration = vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX));
 
-        self.frames_emitted = self.frames_emitted.saturating_add(u64::from(hdr.block_samples));
+        self.frames_emitted = self
+            .frames_emitted
+            .saturating_add(u64::from(hdr.block_samples));
         self.pos = start.saturating_add(block_len);
         Ok(pkt)
     }
@@ -231,7 +242,9 @@ impl Demuxer for WavpackDemuxer {
         let rate = self.stream.params.audio.as_ref()?.sample_rate.max(1);
         let ts = u64::try_from(self.stream.duration_ts?).ok()?;
         let micros = ts.checked_mul(1_000_000)?.checked_div(u64::from(rate))?;
-        Some(vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX)))
+        Some(vaco_core::Duration::from_micros(
+            i64::try_from(micros).unwrap_or(i64::MAX),
+        ))
     }
 }
 
@@ -283,7 +296,13 @@ mod tests {
 
     #[test]
     fn probe_requires_the_signature() {
-        assert_eq!(probe(&ProbeData::new(b"not a wavpack file at all")), ProbeScore::NONE);
-        assert_eq!(probe(&ProbeData::new(b"wvpk\x00\x00\x00\x00")), ProbeScore::MAGIC);
+        assert_eq!(
+            probe(&ProbeData::new(b"not a wavpack file at all")),
+            ProbeScore::NONE
+        );
+        assert_eq!(
+            probe(&ProbeData::new(b"wvpk\x00\x00\x00\x00")),
+            ProbeScore::MAGIC
+        );
     }
 }

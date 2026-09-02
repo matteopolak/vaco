@@ -37,21 +37,21 @@
 
 #![forbid(unsafe_code)]
 
-pub mod cabac_residual;
 mod cabac_mb_tables;
+pub mod cabac_residual;
 pub mod cavlc;
 mod cavlc_tables;
 mod deblock;
-mod frame_task;
+pub mod decoder;
 mod dequant;
-mod motion;
+mod frame_task;
 mod interp;
 mod intra;
+pub mod mb;
+mod motion;
 mod reconstruct;
 mod scan;
 mod task_pool;
-pub mod mb;
-pub mod decoder;
 
 pub use cabac_residual::{CabacResidual, ContextCategory, ContextSet, residual_block_cabac};
 pub use cavlc::{BlockKind, CavlcResidual, residual_block_cavlc};
@@ -83,8 +83,7 @@ pub const DECODER_H264: ::vaco_codec_core::DecoderDesc = ::vaco_codec_core::Deco
     long_name: "H.264 / AVC / MPEG-4 Part 10",
     id: ::vaco_codec_core::CodecId::H264,
     media_type: ::vaco_core::MediaType::Video,
-    caps: ::vaco_codec_core::Caps::PATENT_ENCUMBERED
-        .union(::vaco_codec_core::Caps::FRAME_THREADS),
+    caps: ::vaco_codec_core::Caps::PATENT_ENCUMBERED.union(::vaco_codec_core::Caps::FRAME_THREADS),
     supported_rates: &[],
     make: |limits| ::std::boxed::Box::new(decoder::H264Decoder::new(limits)),
 };

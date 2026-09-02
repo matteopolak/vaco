@@ -28,7 +28,12 @@
 //!        -x264opts "slices=2:no-8x8dct" -f h264 cavlc_ipb.264
 //! ```
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code over a fixed fixture")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code over a fixed fixture"
+)]
 
 use vaco_bitstream::{BitReader, annexb};
 use vaco_format_nalu::RbspBuf;
@@ -50,7 +55,9 @@ fn every_slice_in_a_real_ipb_two_slice_cavlc_stream_consumes_exactly_its_own_bit
     let mut total_skipped = 0u32;
 
     for nal in annexb::nal_units(data) {
-        let Some(header) = H264NalHeader::parse(nal) else { continue };
+        let Some(header) = H264NalHeader::parse(nal) else {
+            continue;
+        };
         match header.nal_unit_type {
             NalUnitType::Sps => {
                 rbsp.fill(nal, &mut budget).unwrap();
@@ -82,9 +89,15 @@ fn every_slice_in_a_real_ipb_two_slice_cavlc_stream_consumes_exactly_its_own_bit
                     _ => {}
                 }
 
-                let stats =
-                    vaco_codec_h264::mb::decode_slice_cavlc(&mut reader, &mut budget, sps, pps, &slice_header, None)
-                        .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
+                let stats = vaco_codec_h264::mb::decode_slice_cavlc(
+                    &mut reader,
+                    &mut budget,
+                    sps,
+                    pps,
+                    &slice_header,
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
                 assert!(
                     !more_rbsp_data(&reader),
                     "slice {slice_count}: macroblock loop ended with real data still \
@@ -99,7 +112,10 @@ fn every_slice_in_a_real_ipb_two_slice_cavlc_stream_consumes_exactly_its_own_bit
         }
     }
 
-    assert!(slice_count >= 20, "expected at least 20 slices, got {slice_count}");
+    assert!(
+        slice_count >= 20,
+        "expected at least 20 slices, got {slice_count}"
+    );
     assert!(i_count > 0, "expected at least one I slice");
     assert!(p_count > 0, "expected at least one P slice");
     assert!(b_count > 0, "expected at least one B slice");

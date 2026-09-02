@@ -48,13 +48,33 @@ pub const DESC: FilterDesc = FilterDesc {
 pub(crate) struct Opts {
     #[opt(name = "thresh", help = "set the threshold", default = 10, range = 0..=255, flags(video, filtering))]
     pub thresh: i32,
-    #[opt(name = "map", help = "set the map", default = false, flags(video, filtering))]
+    #[opt(
+        name = "map",
+        help = "set the map",
+        default = false,
+        flags(video, filtering)
+    )]
     pub map: bool,
-    #[opt(name = "order", help = "set the order", default = false, flags(video, filtering))]
+    #[opt(
+        name = "order",
+        help = "set the order",
+        default = false,
+        flags(video, filtering)
+    )]
     pub order: bool,
-    #[opt(name = "sharp", help = "set sharpening", default = false, flags(video, filtering))]
+    #[opt(
+        name = "sharp",
+        help = "set sharpening",
+        default = false,
+        flags(video, filtering)
+    )]
     pub sharp: bool,
-    #[opt(name = "twoway", help = "set twoway", default = false, flags(video, filtering))]
+    #[opt(
+        name = "twoway",
+        help = "set twoway",
+        default = false,
+        flags(video, filtering)
+    )]
     pub twoway: bool,
 }
 
@@ -62,7 +82,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         if o.map {
             return Err("kerndeint: `map` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
@@ -106,6 +127,9 @@ mod tests {
         assert!(Opts::parse(Some("sharp=1")).is_err());
         assert!(Opts::parse(Some("twoway=1")).is_err());
         assert!(Opts::parse(None).is_ok());
-        assert!(Opts::parse(Some("order=1")).is_ok(), "order is genuinely read");
+        assert!(
+            Opts::parse(Some("order=1")).is_ok(),
+            "order is genuinely read"
+        );
     }
 }

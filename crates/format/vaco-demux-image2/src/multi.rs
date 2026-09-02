@@ -216,8 +216,8 @@ impl Image2Demuxer {
         // transcoded has no known input codec". `None` for an extension this
         // build has no `CodecId` for, which leaves the stream exactly as
         // undescribed as it was.
-        stream.params.codec_id = fsutil::extension_of(name)
-            .and_then(vaco_codec_core::image_codec_for_extension);
+        stream.params.codec_id =
+            fsutil::extension_of(name).and_then(vaco_codec_core::image_codec_for_extension);
 
         Ok(Self {
             dir,
@@ -325,8 +325,8 @@ impl Demuxer for Image2Demuxer {
         // still image, not `0`/`1/framerate`. A `Sequence`/`Glob` plan, or an
         // explicit `-ts_from_file`, means the caller asked for a real
         // timeline, so those still get one.
-        let no_timeline =
-            matches!(self.plan, Plan::Disabled { .. }) && self.options.ts_from_file == TsFromFile::None;
+        let no_timeline = matches!(self.plan, Plan::Disabled { .. })
+            && self.options.ts_from_file == TsFromFile::None;
         let mut packet = Packet::from_slice(&mut self.budget, &bytes)?;
         packet.pts = if no_timeline {
             Timestamp::NONE
@@ -579,9 +579,8 @@ mod tests {
         ] {
             let path = dir.join(name);
             fs::write(&path, b"x").unwrap();
-            let d =
-                Image2Demuxer::open_pattern(path.to_str().unwrap(), Image2Options::default())
-                    .unwrap();
+            let d = Image2Demuxer::open_pattern(path.to_str().unwrap(), Image2Options::default())
+                .unwrap();
             assert_eq!(d.streams()[0].params.codec_id, want, "{name}");
         }
         let _ = fs::remove_dir_all(&dir);

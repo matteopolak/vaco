@@ -26,7 +26,11 @@ impl SendSession {
     /// "random" is not this sans-io crate's concern to generate.
     #[must_use]
     pub const fn new(ssrc: u32, payload_type: u8, initial_sequence_number: u16) -> Self {
-        Self { ssrc, payload_type, sequence_number: initial_sequence_number }
+        Self {
+            ssrc,
+            payload_type,
+            sequence_number: initial_sequence_number,
+        }
     }
 
     #[must_use]
@@ -70,8 +74,14 @@ mod tests {
         let mut session = SendSession::new(0xAABB_CCDD, 96, 1000);
         let first = session.packetize(0, false, b"a");
         let second = session.packetize(160, false, b"b");
-        assert_eq!(RtpPacket::parse(&first).unwrap().header.sequence_number, 1000);
-        assert_eq!(RtpPacket::parse(&second).unwrap().header.sequence_number, 1001);
+        assert_eq!(
+            RtpPacket::parse(&first).unwrap().header.sequence_number,
+            1000
+        );
+        assert_eq!(
+            RtpPacket::parse(&second).unwrap().header.sequence_number,
+            1001
+        );
         assert_eq!(session.sequence_number(), 1002);
     }
 
@@ -79,7 +89,10 @@ mod tests {
     fn sequence_number_wraps_at_u16_max() {
         let mut session = SendSession::new(1, 0, u16::MAX);
         let built = session.packetize(0, false, b"");
-        assert_eq!(RtpPacket::parse(&built).unwrap().header.sequence_number, u16::MAX);
+        assert_eq!(
+            RtpPacket::parse(&built).unwrap().header.sequence_number,
+            u16::MAX
+        );
         assert_eq!(session.sequence_number(), 0);
     }
 

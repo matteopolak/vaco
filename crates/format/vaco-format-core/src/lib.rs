@@ -75,8 +75,8 @@ pub use options::{AvoidNegativeTs, FFlags, FormatOptions};
 pub use probe::{Detected, Probe, ProbeData, ProbeScore};
 pub use seek::{IndexEntry, IndexFlags, PacketIndex, SeekFlags, SeekStrategy, SeekTarget};
 pub use sidedata::{
-    DisplayTransform, StreamSideData, dihedral_transform_from_angle_and_flips, dihedral_transform_from_matrix,
-    display_rotation, is_identity_matrix,
+    DisplayTransform, StreamSideData, dihedral_transform_from_angle_and_flips,
+    dihedral_transform_from_matrix, display_rotation, is_identity_matrix,
 };
 pub use time::{DurationEstimate, DurationSource, TimestampFixer, WrapState};
 
@@ -1254,7 +1254,10 @@ mod tests {
             Ok(())
         }
         fn bind_url(&mut self, url: &str) -> Result<()> {
-            *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(url.to_owned());
+            *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(url.to_owned());
             Ok(())
         }
     }
@@ -1268,7 +1271,9 @@ mod tests {
         let mut boxed: Box<dyn Muxer> = Box::new(RebindingMuxer(seen.clone()));
         boxed.bind_url("out_%03d.png").unwrap();
         assert_eq!(
-            seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_deref(),
+            seen.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_deref(),
             Some("out_%03d.png")
         );
     }
@@ -1297,7 +1302,10 @@ mod tests {
             Err(Error::NotSeekable)
         }
         fn bind_url(&mut self, url: &str) -> Result<()> {
-            *self.0.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(url.to_owned());
+            *self
+                .0
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(url.to_owned());
             Ok(())
         }
     }
@@ -1308,7 +1316,9 @@ mod tests {
         let mut boxed: Box<dyn Demuxer> = Box::new(RebindingDemuxer(seen.clone()));
         boxed.bind_url("img_%03d.png").unwrap();
         assert_eq!(
-            seen.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_deref(),
+            seen.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .as_deref(),
             Some("img_%03d.png")
         );
     }

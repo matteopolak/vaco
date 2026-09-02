@@ -202,8 +202,10 @@ impl RtspSession {
                     "401 response named no WWW-Authenticate challenge",
                 ));
             }
-            let mut parsed: Vec<auth::Challenge> =
-                raw.iter().filter_map(|v| auth::parse_challenge(v)).collect();
+            let mut parsed: Vec<auth::Challenge> = raw
+                .iter()
+                .filter_map(|v| auth::parse_challenge(v))
+                .collect();
             if parsed.is_empty() {
                 return Err(Error::Unsupported(
                     "WWW-Authenticate scheme is not Basic or Digest",
@@ -524,11 +526,13 @@ mod tests {
         let (client, mut server) = pair();
         let handle = thread::spawn(move || {
             let _first = read_request_head(&mut server);
-            server.write_all(
-                b"RTSP/1.0 401 Unauthorized\r\nCSeq: 1\r\n\
+            server
+                .write_all(
+                    b"RTSP/1.0 401 Unauthorized\r\nCSeq: 1\r\n\
                   WWW-Authenticate: Basic realm=\"x\"\r\n\
                   WWW-Authenticate: Digest realm=\"x\", nonce=\"n\"\r\n\r\n",
-            ).unwrap();
+                )
+                .unwrap();
             let second = read_request_head(&mut server);
             assert!(
                 second.contains("Authorization: Digest"),

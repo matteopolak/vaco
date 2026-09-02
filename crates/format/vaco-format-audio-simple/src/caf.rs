@@ -388,8 +388,9 @@ impl Muxer for CafMuxer {
         let codec = params
             .codec_id
             .ok_or(Error::Unsupported("caf: the codec must be known"))?;
-        let coded_bits = pcm::coded_bits(codec)
-            .ok_or(Error::Unsupported("caf: only PCM-shaped codecs are supported"))?;
+        let coded_bits = pcm::coded_bits(codec).ok_or(Error::Unsupported(
+            "caf: only PCM-shaped codecs are supported",
+        ))?;
         let (format_id, format_flags) = match codec {
             vaco_codec_core::CodecId::PcmAlaw => (*b"alaw", 0),
             vaco_codec_core::CodecId::PcmMulaw => (*b"ulaw", 0),
@@ -591,9 +592,11 @@ mod info_tests {
     #[test]
     fn caf_demuxer_metadata_reports_the_encoder_tag_from_a_real_file_shape() {
         let bytes = minimal_caf_with_info(&measured_info_payload());
-        let demuxer =
-            CafDemuxer::open(Box::new(MemorySource::new(bytes)), &FormatOptions::default())
-                .unwrap();
+        let demuxer = CafDemuxer::open(
+            Box::new(MemorySource::new(bytes)),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert_eq!(
             demuxer.metadata(),
             &[("encoder".to_owned(), "Lavf62.12.100".to_owned())]

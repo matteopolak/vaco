@@ -350,7 +350,11 @@ fn read_segmentation_params(r: &mut BitReader<'_>) -> SegmentationParams {
             for (j, slot) in seg.iter_mut().enumerate() {
                 if r.get_bit() != 0 {
                     let bits = SEG_FEATURE_BITS.get(j).copied().unwrap_or(0);
-                    let mag = if bits > 0 { r.get(bits).cast_signed() } else { 0 };
+                    let mag = if bits > 0 {
+                        r.get(bits).cast_signed()
+                    } else {
+                        0
+                    };
                     let signed = SEG_FEATURE_SIGNED.get(j).copied().unwrap_or(false);
                     *slot = Some(if signed {
                         if r.get_bit() != 0 { -mag } else { mag }
@@ -498,7 +502,10 @@ fn read_tile_info(r: &mut BitReader<'_>, mi_cols: u32) -> TileInfo {
 
 fn write_tile_info(w: &mut BitWriter, t: &TileInfo) {
     for i in 0..t.num_col_increments as usize {
-        w.put(1, u32::from(t.col_increments.get(i).copied().unwrap_or(false)));
+        w.put(
+            1,
+            u32::from(t.col_increments.get(i).copied().unwrap_or(false)),
+        );
     }
     w.put(1, u32::from(t.tile_rows_log2_nonzero));
     if t.tile_rows_log2_nonzero {
@@ -576,7 +583,10 @@ pub enum Vp9Header {
     /// bug this crate's own fuzzing caught: a `show_existing_frame` unit at
     /// profile 2 or 3 wrote back with profile forced to 0, changing the
     /// unit's bytes with no edit at all.
-    ShowExistingFrame { profile: u8, frame_to_show_map_idx: u8 },
+    ShowExistingFrame {
+        profile: u8,
+        frame_to_show_map_idx: u8,
+    },
     /// A coded frame.
     Frame(Box<FrameHeader>),
 }
@@ -740,11 +750,7 @@ impl Vp9Header {
                 let (rw, rh) = read_render_size(&mut r, w, h);
                 let allow_high_precision_mv = r.get_bit() != 0;
                 let filter_switchable = r.get_bit() != 0;
-                let raw_interpolation_filter = if filter_switchable {
-                    0
-                } else {
-                    r.get(2) as u8
-                };
+                let raw_interpolation_filter = if filter_switchable { 0 } else { r.get(2) as u8 };
                 inter = Some(InterFrameRefs {
                     refresh_frame_flags,
                     refs,
@@ -878,7 +884,13 @@ fn write_frame(w: &mut BitWriter, h: &FrameHeader) {
             }
             write_ref_sizing(w, inter.ref_sizing);
             let n = inter.ref_sizing.num_found_ref_bits as usize;
-            let found = inter.ref_sizing.found_ref.get(..n).unwrap_or(&[]).iter().any(|&f| f);
+            let found = inter
+                .ref_sizing
+                .found_ref
+                .get(..n)
+                .unwrap_or(&[])
+                .iter()
+                .any(|&f| f);
             if !found {
                 write_frame_size(w, h.width, h.height);
             }
@@ -1014,15 +1026,7 @@ mod tests {
             segmentation: SegmentationParams {
                 enabled: true,
                 update_map: Some(UpdateMap {
-                    tree_probs: [
-                        Some(1),
-                        None,
-                        Some(3),
-                        None,
-                        Some(5),
-                        None,
-                        Some(7),
-                    ],
+                    tree_probs: [Some(1), None, Some(3), None, Some(5), None, Some(7)],
                     pred_probs: Some([Some(9), None, Some(11)]),
                 }),
                 update_data: Some(UpdateData {

@@ -127,10 +127,11 @@ fn handshake<S: Read + Write>(
             "server closed the connection before answering 100-continue",
         )?;
         let text = String::from_utf8_lossy(&block);
-        let status = request::parse_status_line(text.as_bytes()).ok_or(ProtocolError::Malformed {
-            scheme: "icecast",
-            detail: "server sent a malformed HTTP status line",
-        })?;
+        let status =
+            request::parse_status_line(text.as_bytes()).ok_or(ProtocolError::Malformed {
+                scheme: "icecast",
+                detail: "server sent a malformed HTTP status line",
+            })?;
         if status != 100 {
             return Err(ProtocolError::Malformed {
                 scheme: "icecast",
@@ -272,7 +273,10 @@ mod tests {
     fn credentials_default_username_is_source() {
         let url = parse_url("//host/f", false).unwrap();
         let opts = IcecastOptions::default();
-        assert_eq!(credentials(&url, &opts), ("source".to_owned(), String::new()));
+        assert_eq!(
+            credentials(&url, &opts),
+            ("source".to_owned(), String::new())
+        );
     }
 
     #[test]
@@ -282,7 +286,10 @@ mod tests {
             password: "otherpass".to_owned(),
             ..Default::default()
         };
-        assert_eq!(credentials(&url, &opts), ("bob".to_owned(), "secret".to_owned()));
+        assert_eq!(
+            credentials(&url, &opts),
+            ("bob".to_owned(), "secret".to_owned())
+        );
     }
 
     #[test]
@@ -292,7 +299,10 @@ mod tests {
             password: "opt-pass".to_owned(),
             ..Default::default()
         };
-        assert_eq!(credentials(&url, &opts), ("source".to_owned(), "opt-pass".to_owned()));
+        assert_eq!(
+            credentials(&url, &opts),
+            ("source".to_owned(), "opt-pass".to_owned())
+        );
     }
 
     #[test]

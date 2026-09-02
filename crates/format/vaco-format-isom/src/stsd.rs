@@ -443,8 +443,9 @@ impl<'a> SampleEntry<'a> {
             // vs `pcm_s16be` vs `pcm_f32le`).
             b"ipcm" => find_pcmc(self.extension_boxes())
                 .and_then(|(little, bits)| signed_pcm(bits, little)),
-            b"fpcm" => find_pcmc(self.extension_boxes())
-                .and_then(|(little, bits)| float_pcm(bits, little)),
+            b"fpcm" => {
+                find_pcmc(self.extension_boxes()).and_then(|(little, bits)| float_pcm(bits, little))
+            }
             _ => None,
         }
     }
@@ -898,8 +899,8 @@ pub fn sample_entry_codec(format: FourCc) -> Option<CodecId> {
         // function doc): a width- and byte-order-blind "it is some flavour
         // of PCM" guess, safe because [`CodecId::Pcm`] exists for exactly
         // this case.
-        b"sowt" | b"twos" | b"lpcm" | b"in24" | b"in32" | b"fl32" | b"fl64" | b"NONE"
-        | b"ipcm" | b"fpcm" => Some(CodecId::Pcm),
+        b"sowt" | b"twos" | b"lpcm" | b"in24" | b"in32" | b"fl32" | b"fl64" | b"NONE" | b"ipcm"
+        | b"fpcm" => Some(CodecId::Pcm),
         // MPEG-4 timed text. Measured: the *same* SubRip content muxed into MP4
         // prints `codec_name=mov_text`, not `subrip` — the reference treats the
         // two carriages as different codecs, so this is not `CodecId::SubRip`.
@@ -1491,9 +1492,7 @@ mod tests {
     /// transfer left unspecified (`2`), matrix `bt709` (`1`), limited range.
     #[test]
     fn colr_matches_a_real_ffmpeg_nclx_atom() {
-        let payload = [
-            b'n', b'c', b'l', b'x', 0, 2, 0, 2, 0, 1, 0x00,
-        ];
+        let payload = [b'n', b'c', b'l', b'x', 0, 2, 0, 2, 0, 1, 0x00];
         let c = ColourInfo::parse(&payload).unwrap();
         assert_eq!(c.colour_type, FourCc::new(b"nclx"));
         assert_eq!(c.primaries, Some(2));
@@ -1528,10 +1527,7 @@ mod tests {
 
     #[test]
     fn a_visual_entry_reports_its_colr_box() {
-        let colr = bx(
-            b"colr",
-            &[b'n', b'c', b'l', b'x', 0, 1, 0, 1, 0, 1, 0x80],
-        );
+        let colr = bx(b"colr", &[b'n', b'c', b'l', b'x', 0, 1, 0, 1, 0, 1, 0x80]);
         let raw = visual_entry(*b"avc1", 640, 480, &colr);
         let e = SampleEntry::parse(&first_box(&raw), boxes::VIDE);
         let c = e.colour().unwrap();

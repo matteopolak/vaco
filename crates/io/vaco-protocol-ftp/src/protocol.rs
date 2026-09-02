@@ -218,14 +218,20 @@ mod tests {
     #[test]
     fn parses_userinfo() {
         let u = parse_url("//bob:secret@host/f").unwrap();
-        assert_eq!(u.userinfo, Some(("bob".to_owned(), Some("secret".to_owned()))));
+        assert_eq!(
+            u.userinfo,
+            Some(("bob".to_owned(), Some("secret".to_owned())))
+        );
     }
 
     #[test]
     fn credentials_default_to_anonymous_nopassword() {
         let url = parse_url("//host/f").unwrap();
         let opts = FtpOptions::default();
-        assert_eq!(credentials(&url, &opts), ("anonymous".to_owned(), "nopassword".to_owned()));
+        assert_eq!(
+            credentials(&url, &opts),
+            ("anonymous".to_owned(), "nopassword".to_owned())
+        );
     }
 
     #[test]
@@ -236,7 +242,10 @@ mod tests {
             password: "otherpass".to_owned(),
             ..Default::default()
         };
-        assert_eq!(credentials(&url, &opts), ("bob".to_owned(), "secret".to_owned()));
+        assert_eq!(
+            credentials(&url, &opts),
+            ("bob".to_owned(), "secret".to_owned())
+        );
     }
 
     #[test]

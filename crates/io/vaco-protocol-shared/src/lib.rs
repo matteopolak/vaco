@@ -448,8 +448,8 @@ mod fallback {
     use vaco_io::{MediaSink, MediaSource};
     use vaco_opts::{Dict, Options, Schema, schema_of};
     use vaco_protocol_core::{
-        Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags,
-        Result, Url,
+        Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result,
+        Url,
     };
 
     #[derive(Debug, Clone, PartialEq, Options)]

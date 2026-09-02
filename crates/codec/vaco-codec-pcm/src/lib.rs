@@ -110,7 +110,8 @@ fn parse_audio_extradata(extradata: &[u8]) -> Option<(u32, ChannelLayout)> {
         return None;
     }
     let channels = u32::from(ch);
-    let layout = ChannelLayout::default_for(channels).unwrap_or(ChannelLayout::unspecified(channels));
+    let layout =
+        ChannelLayout::default_for(channels).unwrap_or(ChannelLayout::unspecified(channels));
     Some((sample_rate, layout))
 }
 
@@ -132,16 +133,13 @@ pub fn audio_extradata(sample_rate: u32, channels: u8) -> [u8; 5] {
 /// workspace, so "cannot happen" still needs a typed answer.
 fn resolve(id: CodecId) -> PcmFormat {
     table::format_for(id).copied().unwrap_or_else(|| {
-        table::PCM_FORMATS
-            .first()
-            .copied()
-            .unwrap_or(PcmFormat {
-                id: CodecId::Pcm,
-                container_bytes: 1,
-                wire: WireKind::UnsignedInt { big_endian: false },
-                decoded: vaco_sampfmt::SampleFmt::U8,
-                encodable: false,
-            })
+        table::PCM_FORMATS.first().copied().unwrap_or(PcmFormat {
+            id: CodecId::Pcm,
+            container_bytes: 1,
+            wire: WireKind::UnsignedInt { big_endian: false },
+            decoded: vaco_sampfmt::SampleFmt::U8,
+            encodable: false,
+        })
     })
 }
 
@@ -261,7 +259,8 @@ impl SendReceive for PcmDecoder {
                 // future encoder following `vaco-codec-vp8`/`-vp9`'s
                 // propagate-don't-recompute pattern) would silently see a
                 // zero duration for every PCM-decoded frame.
-                let time_base = Rational::new(1, i32::try_from(self.sample_rate).unwrap_or(1).max(1));
+                let time_base =
+                    Rational::new(1, i32::try_from(self.sample_rate).unwrap_or(1).max(1));
                 frame.duration = Timestamp::new(i64::from(count))
                     .to_duration(time_base)
                     .unwrap_or(Duration::ZERO);
@@ -387,11 +386,8 @@ impl SendReceive for PcmEncoder {
                 let plane = planes
                     .first()
                     .ok_or(Error::InvalidData("pcm: no plane 0"))?;
-                let wire = codec::encode_interleaved(
-                    self.format,
-                    plane.data.as_slice(),
-                    layout.channels,
-                )?;
+                let wire =
+                    codec::encode_interleaved(self.format, plane.data.as_slice(), layout.channels)?;
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &wire)?;
                 packet.pts = frame.pts;
@@ -845,7 +841,8 @@ mod tests {
     #[test]
     fn malformed_extradata_is_ignored_not_erred() {
         let mut dec = PcmDecoder::new(Limits::permissive(), CodecId::PcmS16le);
-        dec.set_extradata(&[1, 2, 3]).expect("ignored, not an error");
+        dec.set_extradata(&[1, 2, 3])
+            .expect("ignored, not an error");
         assert_eq!(dec.sample_rate, DEFAULT_SAMPLE_RATE);
     }
 

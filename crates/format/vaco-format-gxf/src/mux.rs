@@ -52,7 +52,9 @@ fn fps_to_frame_rate_code(fps: Rational) -> Option<i32> {
     ];
     TABLE
         .iter()
-        .find(|(_, r)| i64::from(r.num) * i64::from(fps.den) == i64::from(fps.num) * i64::from(r.den))
+        .find(|(_, r)| {
+            i64::from(r.num) * i64::from(fps.den) == i64::from(fps.num) * i64::from(r.den)
+        })
         .map(|(code, _)| *code)
 }
 
@@ -62,7 +64,9 @@ fn fps_to_frame_rate_code(fps: Rational) -> Option<i32> {
 /// `buf` at `at`, bounds-checked rather than indexed directly.
 fn put_u32_le(buf: &mut [u8], at: usize, v: u32) -> Result<()> {
     buf.get_mut(at..at + 4)
-        .ok_or(Error::InvalidData("gxf: UMF field offset does not fit its own buffer"))?
+        .ok_or(Error::InvalidData(
+            "gxf: UMF field offset does not fit its own buffer",
+        ))?
         .copy_from_slice(&v.to_le_bytes());
     Ok(())
 }
@@ -127,7 +131,9 @@ impl GxfMuxer {
         let num = packet_index
             .saturating_mul(AUDIO_SAMPLES_PER_PACKET)
             .saturating_mul(u64::from(field_rate.num.unsigned_abs()));
-        let den = AUDIO_SAMPLE_RATE.saturating_mul(u64::from(field_rate.den.unsigned_abs())).max(1);
+        let den = AUDIO_SAMPLE_RATE
+            .saturating_mul(u64::from(field_rate.den.unsigned_abs()))
+            .max(1);
         u32::try_from(num.div_ceil(den)).unwrap_or(u32::MAX)
     }
 
@@ -145,9 +151,14 @@ impl GxfMuxer {
                     (7, Rational::new(24, 1)),
                     (8, Rational::new(24_000, 1001)),
                 ];
-                TABLE.iter().find(|(c, _)| *c == v.frame_rate_code).map(|(_, r)| *r)
+                TABLE
+                    .iter()
+                    .find(|(c, _)| *c == v.frame_rate_code)
+                    .map(|(_, r)| *r)
             })
-            .map_or(Rational::new(50, 1), |fps| Rational::new(fps.num.saturating_mul(2), fps.den))
+            .map_or(Rational::new(50, 1), |fps| {
+                Rational::new(fps.num.saturating_mul(2), fps.den)
+            })
     }
 
     fn write_packet_bytes(&mut self, packet_type: u8, payload: &[u8]) -> Result<()> {
@@ -167,7 +178,14 @@ impl GxfMuxer {
         self.sink.write(payload)
     }
 
-    fn write_media_packet(&mut self, media_type: u8, track_number: u8, field_number: u32, field_info: [u8; 4], essence: &[u8]) -> Result<()> {
+    fn write_media_packet(
+        &mut self,
+        media_type: u8,
+        track_number: u8,
+        field_number: u32,
+        field_info: [u8; 4],
+        essence: &[u8],
+    ) -> Result<()> {
         let mut payload = Vec::new();
         payload.push(media_type);
         payload.push(track_number);
@@ -189,10 +207,13 @@ impl Muxer for GxfMuxer {
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
         match (params.media_type, params.codec_id) {
             (Some(MediaType::Video), Some(CodecId::Mpeg2video)) if self.video.is_none() => {
-                let video = params.video.as_ref().ok_or(Error::InvalidData("gxf: video stream has no VideoParameters"))?;
-                let frame_rate_code = fps_to_frame_rate_code(video.frame_rate).ok_or(Error::Unsupported(
-                    "gxf: this muxer writes only Table 6's eight defined MPEG frame rates",
+                let video = params.video.as_ref().ok_or(Error::InvalidData(
+                    "gxf: video stream has no VideoParameters",
                 ))?;
+                let frame_rate_code =
+                    fps_to_frame_rate_code(video.frame_rate).ok_or(Error::Unsupported(
+                        "gxf: this muxer writes only Table 6's eight defined MPEG frame rates",
+                    ))?;
                 let track_id = self.next_track_id;
                 self.next_track_id += 1;
                 self.video = Some(VideoTrack {
@@ -206,7 +227,10 @@ impl Muxer for GxfMuxer {
             (Some(MediaType::Audio), Some(CodecId::PcmS16le)) if self.audio.is_none() => {
                 let track_id = self.next_track_id;
                 self.next_track_id += 1;
-                self.audio = Some(AudioTrack { track_id, bytes: Vec::new() });
+                self.audio = Some(AudioTrack {
+                    track_id,
+                    bytes: Vec::new(),
+                });
                 Ok(u32::from(track_id))
             }
             _ => Err(Error::Unsupported(
@@ -224,7 +248,10 @@ impl Muxer for GxfMuxer {
         if let Some(video) = &mut self.video
             && packet.stream_index == u32::from(video.track_id)
         {
-            video.frames.push((packet.payload().to_vec(), packet.flags.contains(PacketFlags::KEY)));
+            video.frames.push((
+                packet.payload().to_vec(),
+                packet.flags.contains(PacketFlags::KEY),
+            ));
             return Ok(());
         }
         if let Some(audio) = &mut self.audio
@@ -233,12 +260,18 @@ impl Muxer for GxfMuxer {
             audio.bytes.extend_from_slice(packet.payload());
             return Ok(());
         }
-        Err(Error::InvalidData("gxf: packet names a stream index this muxer never added"))
+        Err(Error::InvalidData(
+            "gxf: packet names a stream index this muxer never added",
+        ))
     }
 
     fn write_trailer(&mut self) -> Result<()> {
         let field_rate = self.field_rate();
-        let video_fields = self.video.as_ref().map_or(0u32, |v| u32::try_from(v.frames.len()).unwrap_or(u32::MAX).saturating_mul(2));
+        let video_fields = self.video.as_ref().map_or(0u32, |v| {
+            u32::try_from(v.frames.len())
+                .unwrap_or(u32::MAX)
+                .saturating_mul(2)
+        });
 
         let mut tracks = Vec::new();
         if let Some(v) = &self.video {
@@ -324,7 +357,9 @@ impl Muxer for GxfMuxer {
                 let mut chunk = audio
                     .bytes
                     .get(offset..end)
-                    .ok_or(Error::InvalidData("gxf: audio chunk range overran the buffered bytes"))?
+                    .ok_or(Error::InvalidData(
+                        "gxf: audio chunk range overran the buffered bytes",
+                    ))?
                     .to_vec();
                 chunk.resize(PACKET_BYTES, 0);
                 let field_number = Self::audio_packet_field_number(packet_index, field_rate);
@@ -376,7 +411,12 @@ pub const MUXER: MuxerDesc = MuxerDesc {
 };
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 

@@ -246,7 +246,10 @@ mod tests {
         let mut decoder = TextSubtitleDecoder::new(TextCodec::MovText);
         let pkt = packet_from(&[0, 0]);
         decoder.send(Some(&pkt)).unwrap();
-        assert!(matches!(decoder.receive(), Err(vaco_core::Error::NeedMoreInput)));
+        assert!(matches!(
+            decoder.receive(),
+            Err(vaco_core::Error::NeedMoreInput)
+        ));
     }
 
     #[test]

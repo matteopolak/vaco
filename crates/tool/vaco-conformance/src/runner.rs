@@ -173,13 +173,13 @@ impl MediaCache {
             return Ok(hit.clone());
         }
         let lock = vaco_corpus::embedded_catalogue();
-        let entry = lock
-            .find(name)
-            .ok_or_else(|| format!("corpus entry `{name}` is not in vaco-corpus's vaco-media.lock"))?;
+        let entry = lock.find(name).ok_or_else(|| {
+            format!("corpus entry `{name}` is not in vaco-corpus's vaco-media.lock")
+        })?;
         let store = vaco_corpus::Store::open_default();
         let policy = vaco_corpus::NetworkPolicy::from_env();
-        let bytes =
-            vaco_corpus::fetch::fetch_asset(entry, &store, policy).map_err(|e| format!("corpus `{name}`: {e}"))?;
+        let bytes = vaco_corpus::fetch::fetch_asset(entry, &store, policy)
+            .map_err(|e| format!("corpus `{name}`: {e}"))?;
 
         let dir = self
             .dir
@@ -251,18 +251,33 @@ impl UnderTest {
         let transcode = find("VACO_BIN_VACO", "vaco");
         let play = find("VACO_BIN_PLAY", "vaco-play");
 
-        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..").join("..").join("..");
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("..");
         let newest_source = newest_rust_source_mtime(&repo_root.join("crates"));
         let mut stale = Vec::new();
         if let Some(newest_source) = newest_source {
-            for (label, bin) in [("vaco-probe", &probe), ("vaco", &transcode), ("vaco-play", &play)] {
-                if bin.as_deref().is_some_and(|b| is_older_than(b, newest_source)) {
+            for (label, bin) in [
+                ("vaco-probe", &probe),
+                ("vaco", &transcode),
+                ("vaco-play", &play),
+            ] {
+                if bin
+                    .as_deref()
+                    .is_some_and(|b| is_older_than(b, newest_source))
+                {
                     stale.push(label);
                 }
             }
         }
 
-        Self { probe, transcode, play, stale }
+        Self {
+            probe,
+            transcode,
+            play,
+            stale,
+        }
     }
 
     /// The binary for `tool`, if it is built.
@@ -316,10 +331,14 @@ fn newest_rust_source_mtime(dir: &Path) -> Option<std::time::SystemTime> {
     let mut newest: Option<std::time::SystemTime> = None;
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&d) else { continue };
+        let Ok(entries) = std::fs::read_dir(&d) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
-            let Ok(file_type) = entry.file_type() else { continue };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
             if file_type.is_dir() {
                 // `target/` directories nested under a crate (none should
                 // exist under `crates/`, but a stray one would make this
@@ -812,10 +831,7 @@ impl<'a> Runner<'a> {
             }
         };
 
-        let ours_command = format!(
-            "<in-process> {}={}",
-            args.filter_name, args.filter_args
-        );
+        let ours_command = format!("<in-process> {}={}", args.filter_name, args.filter_args);
         let ours = match crate::filterexec::run(&args) {
             Ok(o) => o,
             Err(e) => {
@@ -956,7 +972,9 @@ pub const DEFAULT_CASE_TIMEOUT: Duration = crate::run::DEFAULT_TIMEOUT;
     reason = "a failing expectation in a test is a failing test"
 )]
 mod tests {
-    use super::{Runner, Tally, UnderTest, candidate_target_roots, is_older_than, newest_rust_source_mtime};
+    use super::{
+        Runner, Tally, UnderTest, candidate_target_roots, is_older_than, newest_rust_source_mtime,
+    };
     use crate::case::{Capture, Case, CaseId, Compare, Tier, Tool, Verdict};
     use crate::divergence::Allowlist;
     use crate::normalise::Chain;
@@ -975,7 +993,10 @@ mod tests {
     fn falls_back_to_the_shared_workspace_target_when_unset() {
         let manifest_dir = Path::new("/repo/crates/tool/vaco-conformance");
         let roots = candidate_target_roots(None, manifest_dir);
-        assert_eq!(roots, vec![manifest_dir.join("..").join("..").join("..").join("target")]);
+        assert_eq!(
+            roots,
+            vec![manifest_dir.join("..").join("..").join("..").join("target")]
+        );
     }
 
     #[test]
@@ -1000,7 +1021,10 @@ mod tests {
         std::fs::write(&new_src, "// new").expect("write new");
 
         let newest = newest_rust_source_mtime(dir.path()).expect("some source found");
-        assert!(is_older_than(&bin, newest), "the binary predates new.rs and must be flagged stale");
+        assert!(
+            is_older_than(&bin, newest),
+            "the binary predates new.rs and must be flagged stale"
+        );
     }
 
     #[test]
@@ -1016,7 +1040,10 @@ mod tests {
         std::fs::write(&bin, "binary").expect("write bin"); // freshly written: newer than `src`
 
         let newest = newest_rust_source_mtime(dir.path()).expect("some source found");
-        assert!(!is_older_than(&bin, newest), "a binary built after every source file must not be flagged stale");
+        assert!(
+            !is_older_than(&bin, newest),
+            "a binary built after every source file must not be flagged stale"
+        );
     }
 
     fn a_case() -> Case {

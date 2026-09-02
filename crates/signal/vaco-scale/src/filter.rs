@@ -606,10 +606,23 @@ mod tests {
         let b = bank(Kernel::Point, 8, 4);
         for d in 0..4 {
             let row = b.row(d).expect("row");
-            assert_eq!(row.iter().filter(|&&w| w != 0).count(), 1, "row {d}: {row:?} is not a single tap");
-            let (tap_idx, _) = row.iter().enumerate().find(|&(_, &w)| w != 0).expect("one nonzero tap");
+            assert_eq!(
+                row.iter().filter(|&&w| w != 0).count(),
+                1,
+                "row {d}: {row:?} is not a single tap"
+            );
+            let (tap_idx, _) = row
+                .iter()
+                .enumerate()
+                .find(|&(_, &w)| w != 0)
+                .expect("one nonzero tap");
             let picked = b.offsets[d] as usize + tap_idx;
-            assert_eq!(picked, 2 * d + 1, "row {d} picked source index {picked}, want {}", 2 * d + 1);
+            assert_eq!(
+                picked,
+                2 * d + 1,
+                "row {d} picked source index {picked}, want {}",
+                2 * d + 1
+            );
         }
     }
 

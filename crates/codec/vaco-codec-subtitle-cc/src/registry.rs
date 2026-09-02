@@ -58,7 +58,9 @@ use crate::{CcDecoder, Event};
 fn frame_of(event: &Event, packet: &Packet) -> Frame {
     let text = match event {
         Event::Cea608 { screen, .. } => screen.text(),
-        Event::Cea708 { screen, .. } => screen.as_ref().map(event::Screen::text).unwrap_or_default(),
+        Event::Cea708 { screen, .. } => {
+            screen.as_ref().map(event::Screen::text).unwrap_or_default()
+        }
     };
     let rect = SubtitleRect::text(0, 0, 0, 0, false, text);
     let mut frame = Frame::from_data(FrameData::Subtitle {
@@ -162,11 +164,7 @@ mod tests {
 
     fn odd_parity(byte: u8) -> u8 {
         let d = byte & 0x7F;
-        if d.count_ones() % 2 == 1 {
-            d
-        } else {
-            d | 0x80
-        }
+        if d.count_ones() % 2 == 1 { d } else { d | 0x80 }
     }
 
     /// One field-1 line-21 triplet carrying byte pair `(b1, b2)`.
@@ -214,7 +212,10 @@ mod tests {
         let mut decoder = CcSubtitleDecoder::new();
         let pkt = packet_from(&[]);
         decoder.send(Some(&pkt)).unwrap();
-        assert!(matches!(decoder.receive(), Err(vaco_core::Error::NeedMoreInput)));
+        assert!(matches!(
+            decoder.receive(),
+            Err(vaco_core::Error::NeedMoreInput)
+        ));
     }
 
     #[test]

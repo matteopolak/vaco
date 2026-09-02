@@ -130,7 +130,11 @@ fn an_annexb_source_is_written_as_a_real_record_and_length_prefixed_samples() {
         lengths.push(len);
         at += 4 + len;
     }
-    assert_eq!(at, mdat.len(), "length prefixes must tile the sample exactly");
+    assert_eq!(
+        at,
+        mdat.len(),
+        "length prefixes must tile the sample exactly"
+    );
     assert_eq!(lengths, vec![SPS.len(), PPS.len(), 4]);
 }
 

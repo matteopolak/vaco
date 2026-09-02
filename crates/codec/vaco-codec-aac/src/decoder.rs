@@ -155,8 +155,10 @@ fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configu
         (6, 6) => &[1, 2, 0, 5, 3, 4],
         _ => return,
     };
-    let reordered: Vec<Vec<f32>> =
-        perm.iter().map(|&i| channels.get_mut(i).map(std::mem::take).unwrap_or_default()).collect();
+    let reordered: Vec<Vec<f32>> = perm
+        .iter()
+        .map(|&i| channels.get_mut(i).map(std::mem::take).unwrap_or_default())
+        .collect();
     *channels = reordered;
 }
 
@@ -233,7 +235,14 @@ impl Decoder for AacDecoder {
                         continue;
                     };
                     let out = reconstruct::finalize_channel(
-                        stream, spec, swb_long, swb_short, max_bands_long, max_bands_short, overlap, &mut imdct,
+                        stream,
+                        spec,
+                        swb_long,
+                        swb_short,
+                        max_bands_long,
+                        max_bands_short,
+                        overlap,
+                        &mut imdct,
                     );
                     channels.push(out);
                     overlap_iter += 1;
@@ -241,25 +250,48 @@ impl Decoder for AacDecoder {
                 Element::Pair(ms_mask, ch0, ch1) => {
                     let seed0 = self.next_prng_seed();
                     let seed1 = self.next_prng_seed();
-                    let mut spec0 = reconstruct::deinterleave_channel(ch0, swb_long, swb_short, seed0);
-                    let mut spec1 = reconstruct::deinterleave_channel(ch1, swb_long, swb_short, seed1);
+                    let mut spec0 =
+                        reconstruct::deinterleave_channel(ch0, swb_long, swb_short, seed0);
+                    let mut spec1 =
+                        reconstruct::deinterleave_channel(ch1, swb_long, swb_short, seed1);
                     if let Some(mask) = ms_mask {
-                        reconstruct::apply_joint_stereo(&mut spec0, &mut spec1, ch1, swb_long, swb_short, mask);
+                        reconstruct::apply_joint_stereo(
+                            &mut spec0, &mut spec1, ch1, swb_long, swb_short, mask,
+                        );
                     }
-                    let (Some(overlap0_idx), Some(overlap1_idx)) = (overlap_iter.checked_add(0), overlap_iter.checked_add(1))
+                    let (Some(overlap0_idx), Some(overlap1_idx)) =
+                        (overlap_iter.checked_add(0), overlap_iter.checked_add(1))
                     else {
                         continue;
                     };
                     let out0 = {
-                        let Some(overlap) = self.overlap.get_mut(overlap0_idx) else { continue };
+                        let Some(overlap) = self.overlap.get_mut(overlap0_idx) else {
+                            continue;
+                        };
                         reconstruct::finalize_channel(
-                            ch0, spec0, swb_long, swb_short, max_bands_long, max_bands_short, overlap, &mut imdct,
+                            ch0,
+                            spec0,
+                            swb_long,
+                            swb_short,
+                            max_bands_long,
+                            max_bands_short,
+                            overlap,
+                            &mut imdct,
                         )
                     };
                     let out1 = {
-                        let Some(overlap) = self.overlap.get_mut(overlap1_idx) else { continue };
+                        let Some(overlap) = self.overlap.get_mut(overlap1_idx) else {
+                            continue;
+                        };
                         reconstruct::finalize_channel(
-                            ch1, spec1, swb_long, swb_short, max_bands_long, max_bands_short, overlap, &mut imdct,
+                            ch1,
+                            spec1,
+                            swb_long,
+                            swb_short,
+                            max_bands_long,
+                            max_bands_short,
+                            overlap,
+                            &mut imdct,
                         )
                     };
                     channels.push(out0);
@@ -288,10 +320,20 @@ impl Decoder for AacDecoder {
         let layout = vaco_parse_aac::tables::layout_for_config(cfg.channel_configuration)
             .unwrap_or_else(|| ChannelLayout::unspecified(channels.len() as u32));
         let sample_rate = cfg.sample_rate;
-        let mut frame = Frame::alloc_audio(&mut self.budget, SampleFmt::F32P, layout, samples, sample_rate)?;
+        let mut frame = Frame::alloc_audio(
+            &mut self.budget,
+            SampleFmt::F32P,
+            layout,
+            samples,
+            sample_rate,
+        )?;
         for (ch, data) in channels.iter().enumerate() {
-            let Some(mut plane) = frame.plane_mut(ch) else { continue };
-            let Some(row) = plane.row_mut(0) else { continue };
+            let Some(mut plane) = frame.plane_mut(ch) else {
+                continue;
+            };
+            let Some(row) = plane.row_mut(0) else {
+                continue;
+            };
             for (i, &v) in data.iter().enumerate() {
                 let bytes = v.to_le_bytes();
                 if let Some(dst) = row.get_mut(i * 4..i * 4 + 4) {
@@ -337,7 +379,12 @@ impl Decoder for AacDecoder {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::AacDecoder;
     use vaco_codec_core::Decoder;
     use vaco_core::{Duration, Error};
@@ -396,7 +443,10 @@ mod tests {
         let packet = Packet::from_slice(&mut budget, &bytes).unwrap();
         dec.send_packet(Some(&packet)).unwrap();
         let frame = dec.receive_frame().unwrap();
-        let FrameData::Audio { samples, planes, .. } = &frame.data else {
+        let FrameData::Audio {
+            samples, planes, ..
+        } = &frame.data
+        else {
             panic!("expected an audio frame");
         };
         assert_eq!(*samples, 1024);
@@ -406,7 +456,10 @@ mod tests {
         // The very first frame's overlap-add half is all-zero (nothing to
         // add from a previous frame yet), and this ICS is all-zero
         // spectral data, so the output must be exactly silent.
-        assert!(row.chunks_exact(4).all(|c| f32::from_le_bytes(c.try_into().unwrap()) == 0.0));
+        assert!(
+            row.chunks_exact(4)
+                .all(|c| f32::from_le_bytes(c.try_into().unwrap()) == 0.0)
+        );
     }
 
     /// E2E-GAPS #5-adjacent: found while verifying `-c:a pcm_s16le` on a real

@@ -165,7 +165,10 @@ fn parse_variant(v: &syn::Variant) -> syn::Result<RawVariant> {
             if !VALUE_KINDS.contains(&s.as_str()) {
                 return Err(syn::Error::new(
                     ident.span(),
-                    format!("unknown `kind`; expected one of: {}", VALUE_KINDS.join(", ")),
+                    format!(
+                        "unknown `kind`; expected one of: {}",
+                        VALUE_KINDS.join(", ")
+                    ),
                 ));
             }
             kind = Some(s);
@@ -199,7 +202,10 @@ fn parse_variant(v: &syn::Variant) -> syn::Result<RawVariant> {
     })?;
 
     let Some((name, name_span)) = name else {
-        return Err(syn::Error::new(span, format!("variant `{}` needs `name = \"...\"`", v.ident)));
+        return Err(syn::Error::new(
+            span,
+            format!("variant `{}` needs `name = \"...\"`", v.ident),
+        ));
     };
     if spec.is_some() && alias_of.is_none() {
         return Err(syn::Error::new(
@@ -232,19 +238,28 @@ fn resolve(v: &RawVariant, all: &[RawVariant]) -> syn::Result<ResolvedVariant> {
         let Some(flags) = v.flags.clone() else {
             return Err(syn::Error::new(
                 v.span,
-                format!("option `{}` needs `flags(...)` (or `alias_of = \"...\"`)", v.ident),
+                format!(
+                    "option `{}` needs `flags(...)` (or `alias_of = \"...\"`)",
+                    v.ident
+                ),
             ));
         };
         let Some(kind) = v.kind.clone() else {
             return Err(syn::Error::new(
                 v.span,
-                format!("option `{}` needs `kind = ...` (or `alias_of = \"...\"`)", v.ident),
+                format!(
+                    "option `{}` needs `kind = ...` (or `alias_of = \"...\"`)",
+                    v.ident
+                ),
             ));
         };
         let Some(help) = v.help.clone() else {
             return Err(syn::Error::new(
                 v.span,
-                format!("option `{}` needs `help = \"...\"` (or `alias_of = \"...\"`)", v.ident),
+                format!(
+                    "option `{}` needs `help = \"...\"` (or `alias_of = \"...\"`)",
+                    v.ident
+                ),
             ));
         };
         return Ok(ResolvedVariant {
@@ -293,12 +308,7 @@ fn resolve(v: &RawVariant, all: &[RawVariant]) -> syn::Result<ResolvedVariant> {
     // through it is not the silent-drift hazard a real A -> B -> C chain
     // would be. Only forbid pointing at a target that itself points
     // somewhere *else*.
-    if !is_self
-        && target
-            .alias_of
-            .as_ref()
-            .is_some_and(|t| t != &target.name)
-    {
+    if !is_self && target.alias_of.as_ref().is_some_and(|t| t != &target.name) {
         return Err(syn::Error::new(
             v.alias_of_span,
             format!(
@@ -322,21 +332,33 @@ fn resolve(v: &RawVariant, all: &[RawVariant]) -> syn::Result<ResolvedVariant> {
                 syn::Error::new(v.span, format!("option `{}` needs `kind = ...`", v.ident))
             })?,
             v.help.clone().ok_or_else(|| {
-                syn::Error::new(v.span, format!("option `{}` needs `help = \"...\"`", v.ident))
+                syn::Error::new(
+                    v.span,
+                    format!("option `{}` needs `help = \"...\"`", v.ident),
+                )
             })?,
         )
     } else {
         (
             v.argname.clone().or_else(|| target.argname.clone()),
-            v.flags.clone().or_else(|| target.flags.clone()).ok_or_else(|| {
-                syn::Error::new(v.span, "internal error: canonical option missing `flags`")
-            })?,
-            v.kind.clone().or_else(|| target.kind.clone()).ok_or_else(|| {
-                syn::Error::new(v.span, "internal error: canonical option missing `kind`")
-            })?,
-            v.help.clone().or_else(|| target.help.clone()).ok_or_else(|| {
-                syn::Error::new(v.span, "internal error: canonical option missing `help`")
-            })?,
+            v.flags
+                .clone()
+                .or_else(|| target.flags.clone())
+                .ok_or_else(|| {
+                    syn::Error::new(v.span, "internal error: canonical option missing `flags`")
+                })?,
+            v.kind
+                .clone()
+                .or_else(|| target.kind.clone())
+                .ok_or_else(|| {
+                    syn::Error::new(v.span, "internal error: canonical option missing `kind`")
+                })?,
+            v.help
+                .clone()
+                .or_else(|| target.help.clone())
+                .ok_or_else(|| {
+                    syn::Error::new(v.span, "internal error: canonical option missing `help`")
+                })?,
         )
     };
 

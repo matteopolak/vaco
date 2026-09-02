@@ -60,7 +60,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "colorchannelmixer", help = "Adjust colors by mixing color channels")]
+#[options(
+    name = "colorchannelmixer",
+    help = "Adjust colors by mixing color channels"
+)]
 pub(crate) struct Opts {
     #[opt(name = "rr", help = "set the red gain for the red channel", default = 1.0, range = -2.0..=2.0, flags(video, filtering))]
     pub rr: f64,
@@ -143,7 +146,9 @@ impl Filter {
             return;
         }
         let n = format.component_count().min(4);
-        let in_comps: Vec<_> = (0..n).filter_map(|c| sample::component(format, c)).collect();
+        let in_comps: Vec<_> = (0..n)
+            .filter_map(|c| sample::component(format, c))
+            .collect();
         let big_endian = format.is_big_endian();
         // Snapshot every input channel's samples before writing any of them:
         // an in-place mix must not let channel 0's new value feed channel
@@ -159,7 +164,11 @@ impl Filter {
             let mut rows_out = Vec::new();
             for y in 0..rows {
                 let Some(row) = plane.row(y) else { continue };
-                rows_out.push((0..width).map(|x| sample::read(row, x, comp, big_endian)).collect());
+                rows_out.push(
+                    (0..width)
+                        .map(|x| sample::read(row, x, comp, big_endian))
+                        .collect(),
+                );
             }
             originals.push(rows_out);
         }
@@ -174,7 +183,9 @@ impl Filter {
             };
             let width = row_width(plane.row_bytes(), comp.step);
             for y in 0..plane.rows() {
-                let Some(row) = plane.row_mut(y) else { continue };
+                let Some(row) = plane.row_mut(y) else {
+                    continue;
+                };
                 for x in 0..width {
                     let mut acc = 0.0f64;
                     for (src_ch, gain) in gains.iter().enumerate() {

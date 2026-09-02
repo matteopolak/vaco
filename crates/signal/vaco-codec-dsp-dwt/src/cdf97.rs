@@ -126,7 +126,10 @@ fn clamp_pos(raw: isize, len: usize) -> usize {
 /// # Errors
 ///
 /// [`Error::InvalidData`] if `a.len()` is odd or shorter than 2.
-#[allow(clippy::indexing_slicing, reason = "i stepped by 2 within a.len(), so 2*k and 2*k+1 both stay in range")]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "i stepped by 2 within a.len(), so 2*k and 2*k+1 both stay in range"
+)]
 pub fn forward_1d(a: &mut [f64]) -> Result<()> {
     check_even_length(a.len())?;
     lifting_pass(a, ALPHA, true)?;
@@ -184,23 +187,47 @@ fn check_shape(data_len: usize, width: usize, height: usize, levels: u32) -> Res
     Ok(())
 }
 
-#[allow(clippy::indexing_slicing, reason = "y bounded by h, checked once by check_shape before any level runs")]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "y bounded by h, checked once by check_shape before any level runs"
+)]
 fn filter_rows(data: &mut [f64], stride: usize, w: usize, h: usize, analysis: bool) -> Result<()> {
     for y in 0..h {
-        let row = data.get_mut(y * stride..y * stride + w).ok_or_else(err_buffer_len)?;
-        if analysis { forward_1d(row)?; } else { inverse_1d(row)?; }
+        let row = data
+            .get_mut(y * stride..y * stride + w)
+            .ok_or_else(err_buffer_len)?;
+        if analysis {
+            forward_1d(row)?;
+        } else {
+            inverse_1d(row)?;
+        }
     }
     Ok(())
 }
 
-#[allow(clippy::indexing_slicing, clippy::needless_range_loop, reason = "x/y bounded by w/h, checked once by check_shape before any level runs")]
-fn filter_cols(data: &mut [f64], stride: usize, w: usize, h: usize, scratch: &mut [f64], analysis: bool) -> Result<()> {
+#[allow(
+    clippy::indexing_slicing,
+    clippy::needless_range_loop,
+    reason = "x/y bounded by w/h, checked once by check_shape before any level runs"
+)]
+fn filter_cols(
+    data: &mut [f64],
+    stride: usize,
+    w: usize,
+    h: usize,
+    scratch: &mut [f64],
+    analysis: bool,
+) -> Result<()> {
     let col = scratch.get_mut(..h).ok_or_else(err_buffer_len)?;
     for x in 0..w {
         for y in 0..h {
             col[y] = *data.get(y * stride + x).ok_or_else(err_buffer_len)?;
         }
-        if analysis { forward_1d(col)?; } else { inverse_1d(col)?; }
+        if analysis {
+            forward_1d(col)?;
+        } else {
+            inverse_1d(col)?;
+        }
         for y in 0..h {
             *data.get_mut(y * stride + x).ok_or_else(err_buffer_len)? = col[y];
         }
@@ -211,7 +238,14 @@ fn filter_cols(data: &mut [f64], stride: usize, w: usize, h: usize, scratch: &mu
 /// See [`crate::vc2`]'s identically-named function for why analysis
 /// (rows then columns) and synthesis (columns then rows) must filter in
 /// opposite axis order to round-trip exactly.
-fn filter_rows_then_cols(data: &mut [f64], stride: usize, w: usize, h: usize, scratch: &mut [f64], analysis: bool) -> Result<()> {
+fn filter_rows_then_cols(
+    data: &mut [f64],
+    stride: usize,
+    w: usize,
+    h: usize,
+    scratch: &mut [f64],
+    analysis: bool,
+) -> Result<()> {
     if analysis {
         filter_rows(data, stride, w, h, true)?;
         filter_cols(data, stride, w, h, scratch, true)?;
@@ -222,8 +256,18 @@ fn filter_rows_then_cols(data: &mut [f64], stride: usize, w: usize, h: usize, sc
     Ok(())
 }
 
-#[allow(clippy::indexing_slicing, clippy::integer_division, reason = "y/x bounded by hh/hw, both <= w/h; scratch sized to w*h by the caller; w/h are checked even at every level by check_shape so w/2, h/2 are exact")]
-fn interleave(data: &mut [f64], stride: usize, w: usize, h: usize, scratch: &mut [f64]) -> Result<()> {
+#[allow(
+    clippy::indexing_slicing,
+    clippy::integer_division,
+    reason = "y/x bounded by hh/hw, both <= w/h; scratch sized to w*h by the caller; w/h are checked even at every level by check_shape so w/2, h/2 are exact"
+)]
+fn interleave(
+    data: &mut [f64],
+    stride: usize,
+    w: usize,
+    h: usize,
+    scratch: &mut [f64],
+) -> Result<()> {
     let (hw, hh) = (w / 2, h / 2);
     let out = scratch.get_mut(..w * h).ok_or_else(err_buffer_len)?;
     for y in 0..hh {
@@ -231,7 +275,9 @@ fn interleave(data: &mut [f64], stride: usize, w: usize, h: usize, scratch: &mut
             let ll = *data.get(y * stride + x).ok_or_else(err_buffer_len)?;
             let hl = *data.get(y * stride + hw + x).ok_or_else(err_buffer_len)?;
             let lh = *data.get((hh + y) * stride + x).ok_or_else(err_buffer_len)?;
-            let hh_ = *data.get((hh + y) * stride + hw + x).ok_or_else(err_buffer_len)?;
+            let hh_ = *data
+                .get((hh + y) * stride + hw + x)
+                .ok_or_else(err_buffer_len)?;
             out[(2 * y) * w + 2 * x] = ll;
             out[(2 * y) * w + 2 * x + 1] = hl;
             out[(2 * y + 1) * w + 2 * x] = lh;
@@ -239,23 +285,43 @@ fn interleave(data: &mut [f64], stride: usize, w: usize, h: usize, scratch: &mut
         }
     }
     for y in 0..h {
-        let dst = data.get_mut(y * stride..y * stride + w).ok_or_else(err_buffer_len)?;
+        let dst = data
+            .get_mut(y * stride..y * stride + w)
+            .ok_or_else(err_buffer_len)?;
         let src = out.get(y * w..y * w + w).ok_or_else(err_buffer_len)?;
         dst.copy_from_slice(src);
     }
     Ok(())
 }
 
-#[allow(clippy::indexing_slicing, clippy::integer_division, reason = "see interleave's own identical reason")]
-fn deinterleave(data: &mut [f64], stride: usize, w: usize, h: usize, scratch: &mut [f64]) -> Result<()> {
+#[allow(
+    clippy::indexing_slicing,
+    clippy::integer_division,
+    reason = "see interleave's own identical reason"
+)]
+fn deinterleave(
+    data: &mut [f64],
+    stride: usize,
+    w: usize,
+    h: usize,
+    scratch: &mut [f64],
+) -> Result<()> {
     let (hw, hh) = (w / 2, h / 2);
     let out = scratch.get_mut(..w * h).ok_or_else(err_buffer_len)?;
     for y in 0..hh {
         for x in 0..hw {
-            let ll = *data.get((2 * y) * stride + 2 * x).ok_or_else(err_buffer_len)?;
-            let hl = *data.get((2 * y) * stride + 2 * x + 1).ok_or_else(err_buffer_len)?;
-            let lh = *data.get((2 * y + 1) * stride + 2 * x).ok_or_else(err_buffer_len)?;
-            let hh_ = *data.get((2 * y + 1) * stride + 2 * x + 1).ok_or_else(err_buffer_len)?;
+            let ll = *data
+                .get((2 * y) * stride + 2 * x)
+                .ok_or_else(err_buffer_len)?;
+            let hl = *data
+                .get((2 * y) * stride + 2 * x + 1)
+                .ok_or_else(err_buffer_len)?;
+            let lh = *data
+                .get((2 * y + 1) * stride + 2 * x)
+                .ok_or_else(err_buffer_len)?;
+            let hh_ = *data
+                .get((2 * y + 1) * stride + 2 * x + 1)
+                .ok_or_else(err_buffer_len)?;
             out[y * w + x] = ll;
             out[y * w + hw + x] = hl;
             out[(hh + y) * w + x] = lh;
@@ -263,7 +329,9 @@ fn deinterleave(data: &mut [f64], stride: usize, w: usize, h: usize, scratch: &m
         }
     }
     for y in 0..h {
-        let dst = data.get_mut(y * stride..y * stride + w).ok_or_else(err_buffer_len)?;
+        let dst = data
+            .get_mut(y * stride..y * stride + w)
+            .ok_or_else(err_buffer_len)?;
         let src = out.get(y * w..y * w + w).ok_or_else(err_buffer_len)?;
         dst.copy_from_slice(src);
     }
@@ -284,7 +352,13 @@ fn deinterleave(data: &mut [f64], stride: usize, w: usize, h: usize, scratch: &m
 /// [`Error::InvalidData`] if `width`/`height` are not both evenly
 /// divisible by `2^levels`, or `data` is shorter than `width * height`;
 /// or as [`Budget::alloc`] if the scratch allocation is refused.
-pub fn dwt_2d(data: &mut [f64], width: usize, height: usize, levels: u32, budget: &mut Budget) -> Result<()> {
+pub fn dwt_2d(
+    data: &mut [f64],
+    width: usize,
+    height: usize,
+    levels: u32,
+    budget: &mut Budget,
+) -> Result<()> {
     check_shape(data.len(), width, height, levels)?;
     let mut scratch: Vec<f64> = budget.alloc(width.max(height).max(width * height))?;
     for level in 0..levels {
@@ -303,7 +377,13 @@ pub fn dwt_2d(data: &mut [f64], width: usize, height: usize, levels: u32, budget
 /// # Errors
 ///
 /// As [`dwt_2d`].
-pub fn idwt_2d(data: &mut [f64], width: usize, height: usize, levels: u32, budget: &mut Budget) -> Result<()> {
+pub fn idwt_2d(
+    data: &mut [f64],
+    width: usize,
+    height: usize,
+    levels: u32,
+    budget: &mut Budget,
+) -> Result<()> {
     check_shape(data.len(), width, height, levels)?;
     let mut scratch: Vec<f64> = budget.alloc(width.max(height).max(width * height))?;
     for level in (0..levels).rev() {
@@ -367,7 +447,10 @@ mod tests {
         dwt_2d(&mut a, w, h, 2, &mut budget).unwrap();
         idwt_2d(&mut a, w, h, 2, &mut budget).unwrap();
         for (x, y) in original.iter().zip(a.iter()) {
-            assert!((x - y).abs() <= MAX_ABS_ROUND_TRIP_ERROR * 1e4, "{x} vs {y}");
+            assert!(
+                (x - y).abs() <= MAX_ABS_ROUND_TRIP_ERROR * 1e4,
+                "{x} vs {y}"
+            );
         }
     }
 }

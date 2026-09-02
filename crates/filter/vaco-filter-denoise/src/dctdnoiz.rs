@@ -160,7 +160,9 @@ fn dct2d(block: &[f32], size: usize) -> Vec<f32> {
     }
     let mut out = vec![0.0f32; size * size];
     for x in 0..size {
-        let col: Vec<f32> = (0..size).filter_map(|y| rows.get(y * size + x).copied()).collect();
+        let col: Vec<f32> = (0..size)
+            .filter_map(|y| rows.get(y * size + x).copied())
+            .collect();
         let t = dct1d(&col);
         for (y, v) in t.into_iter().enumerate() {
             if let Some(dst) = out.get_mut(y * size + x) {
@@ -175,7 +177,9 @@ fn dct2d(block: &[f32], size: usize) -> Vec<f32> {
 fn idct2d(coeffs: &[f32], size: usize) -> Vec<f32> {
     let mut cols = vec![0.0f32; size * size];
     for x in 0..size {
-        let col: Vec<f32> = (0..size).filter_map(|y| coeffs.get(y * size + x).copied()).collect();
+        let col: Vec<f32> = (0..size)
+            .filter_map(|y| coeffs.get(y * size + x).copied())
+            .collect();
         let t = idct1d(&col);
         for (y, v) in t.into_iter().enumerate() {
             if let Some(dst) = cols.get_mut(y * size + x) {
@@ -200,7 +204,10 @@ fn threshold(sigma: f32, n: usize) -> f32 {
     if sigma <= 0.0 {
         return 0.0;
     }
-    #[allow(clippy::cast_precision_loss, reason = "n is a block pixel count, at most 256")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "n is a block pixel count, at most 256"
+    )]
     let nf = n as f32;
     sigma * (2.0 * nf.ln()).sqrt()
 }
@@ -301,7 +308,9 @@ mod tests {
     #[test]
     fn round_trip_dct_recovers_the_block() {
         let block = 8;
-        let data: Vec<f32> = (0..block * block).map(|i| ((i * 13) % 200) as f32).collect();
+        let data: Vec<f32> = (0..block * block)
+            .map(|i| ((i * 13) % 200) as f32)
+            .collect();
         let coeffs = dct2d(&data, block);
         let recon = idct2d(&coeffs, block);
         for (a, b) in data.iter().zip(recon.iter()) {

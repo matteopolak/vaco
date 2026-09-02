@@ -93,7 +93,9 @@ pub struct MessageReassembler {
 
 impl core::fmt::Debug for InProgress {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("InProgress").field("parts", &self.parts.len()).finish()
+        f.debug_struct("InProgress")
+            .field("parts", &self.parts.len())
+            .finish()
     }
 }
 
@@ -110,15 +112,29 @@ impl MessageReassembler {
     /// erroring — a defensive choice (this module has no reference to
     /// confirm what a real peer's own error handling looks like here), not
     /// a documented protocol rule.
-    pub fn on_delivered(&mut self, position: PacketPosition, msg_no: u32, payload: Vec<u8>) -> Option<MessageEvent> {
+    pub fn on_delivered(
+        &mut self,
+        position: PacketPosition,
+        msg_no: u32,
+        payload: Vec<u8>,
+    ) -> Option<MessageEvent> {
         match position {
             PacketPosition::Single => Some(MessageEvent::Complete { msg_no, payload }),
             PacketPosition::First => {
-                self.in_progress.insert(msg_no, InProgress { parts: vec![payload] });
+                self.in_progress.insert(
+                    msg_no,
+                    InProgress {
+                        parts: vec![payload],
+                    },
+                );
                 None
             }
             PacketPosition::Middle => {
-                self.in_progress.entry(msg_no).or_default().parts.push(payload);
+                self.in_progress
+                    .entry(msg_no)
+                    .or_default()
+                    .parts
+                    .push(payload);
                 None
             }
             PacketPosition::Last => {
@@ -167,8 +183,14 @@ mod tests {
     /// which is stated as an inference in the module docs, not draft text.
     #[test]
     fn stream_flag_selects_stream_mode_and_its_absence_selects_message_mode() {
-        assert_eq!(TransmissionMode::from_hsreq(&hsreq(srt_flags::STREAM)), TransmissionMode::Stream);
-        assert_eq!(TransmissionMode::from_hsreq(&hsreq(0)), TransmissionMode::Message);
+        assert_eq!(
+            TransmissionMode::from_hsreq(&hsreq(srt_flags::STREAM)),
+            TransmissionMode::Stream
+        );
+        assert_eq!(
+            TransmissionMode::from_hsreq(&hsreq(0)),
+            TransmissionMode::Message
+        );
         assert_eq!(
             TransmissionMode::from_hsreq(&hsreq(srt_flags::STREAM | srt_flags::TSBPDSND)),
             TransmissionMode::Stream,
@@ -181,7 +203,13 @@ mod tests {
     fn single_packet_message_completes_immediately() {
         let mut r = MessageReassembler::new();
         let event = r.on_delivered(PacketPosition::Single, 1, vec![1, 2, 3]);
-        assert_eq!(event, Some(MessageEvent::Complete { msg_no: 1, payload: vec![1, 2, 3] }));
+        assert_eq!(
+            event,
+            Some(MessageEvent::Complete {
+                msg_no: 1,
+                payload: vec![1, 2, 3]
+            })
+        );
         assert_eq!(r.in_progress_count(), 0);
     }
 
@@ -193,7 +221,10 @@ mod tests {
         assert_eq!(r.on_delivered(PacketPosition::Middle, 5, vec![2]), None);
         assert_eq!(
             r.on_delivered(PacketPosition::Last, 5, vec![3]),
-            Some(MessageEvent::Complete { msg_no: 5, payload: vec![1, 2, 3] })
+            Some(MessageEvent::Complete {
+                msg_no: 5,
+                payload: vec![1, 2, 3]
+            })
         );
         assert_eq!(r.in_progress_count(), 0);
     }
@@ -205,12 +236,22 @@ mod tests {
         r.on_delivered(PacketPosition::Middle, 9, vec![2]);
         let event = r.on_seq_dropped(9);
         assert_eq!(event, Some(MessageEvent::Dropped { msg_no: 9 }));
-        assert_eq!(r.in_progress_count(), 0, "the partial message must not linger");
+        assert_eq!(
+            r.in_progress_count(),
+            0,
+            "the partial message must not linger"
+        );
 
         // A subsequent Last for the same msg_no (a stray retransmission
         // arriving after the drop) starts fresh rather than completing a
         // message that was already given up on.
-        assert_eq!(r.on_delivered(PacketPosition::Last, 9, vec![3]), Some(MessageEvent::Complete { msg_no: 9, payload: vec![3] }));
+        assert_eq!(
+            r.on_delivered(PacketPosition::Last, 9, vec![3]),
+            Some(MessageEvent::Complete {
+                msg_no: 9,
+                payload: vec![3]
+            })
+        );
     }
 
     #[test]
@@ -218,7 +259,19 @@ mod tests {
         let mut r = MessageReassembler::new();
         r.on_delivered(PacketPosition::First, 1, vec![b'a']);
         r.on_delivered(PacketPosition::First, 2, vec![b'x']);
-        assert_eq!(r.on_delivered(PacketPosition::Last, 1, vec![b'b']), Some(MessageEvent::Complete { msg_no: 1, payload: vec![b'a', b'b'] }));
-        assert_eq!(r.on_delivered(PacketPosition::Last, 2, vec![b'y']), Some(MessageEvent::Complete { msg_no: 2, payload: vec![b'x', b'y'] }));
+        assert_eq!(
+            r.on_delivered(PacketPosition::Last, 1, vec![b'b']),
+            Some(MessageEvent::Complete {
+                msg_no: 1,
+                payload: vec![b'a', b'b']
+            })
+        );
+        assert_eq!(
+            r.on_delivered(PacketPosition::Last, 2, vec![b'y']),
+            Some(MessageEvent::Complete {
+                msg_no: 2,
+                payload: vec![b'x', b'y']
+            })
+        );
     }
 }

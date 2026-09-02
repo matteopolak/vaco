@@ -61,7 +61,11 @@ pub const DESC: FilterDesc = FilterDesc {
 pub(crate) struct Identity;
 
 impl PairedFilter for Identity {
-    fn filter_frames(&mut self, _ctx: &mut FilterContext<'_>, inputs: SmallVec<[Frame; 4]>) -> Result<FrameOut> {
+    fn filter_frames(
+        &mut self,
+        _ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut> {
         let [main, reference] = <[Frame; 2]>::try_from(inputs.into_vec())
             .unwrap_or_else(|_| unreachable!("Paired guarantees exactly input_count() frames"));
         Ok(FrameOut::One(measure(&main, &reference)))
@@ -82,7 +86,11 @@ fn measure(main: &Frame, reference: &Frame) -> Frame {
             };
             let (same, total) = vaco_filter_vdsp::identical_count(a, b);
             #[allow(clippy::cast_precision_loss, reason = "sample counts are frame-sized")]
-            let fraction = if total == 0 { 1.0 } else { same as f64 / total as f64 };
+            let fraction = if total == 0 {
+                1.0
+            } else {
+                same as f64 / total as f64
+            };
             values.push(fraction);
             tags.push((format!("lavfi.identity.identity.{label}"), fixed6(fraction)));
         }
@@ -90,7 +98,10 @@ fn measure(main: &Frame, reference: &Frame) -> Frame {
             for (key, value) in tags {
                 out.set_metadata(key, value);
             }
-            out.set_metadata("lavfi.identity.identity_avg", fixed6(simple_average(&values)));
+            out.set_metadata(
+                "lavfi.identity.identity_avg",
+                fixed6(simple_average(&values)),
+            );
         }
     }
     copy_meta(&mut out, main);
@@ -127,8 +138,14 @@ mod tests {
         let a = gray_frame(128, 8, 8);
         let b = a.clone();
         let out = measure(&a, &b);
-        assert_eq!(out.metadata_get("lavfi.identity.identity.Y"), Some("1.000000"));
-        assert_eq!(out.metadata_get("lavfi.identity.identity_avg"), Some("1.000000"));
+        assert_eq!(
+            out.metadata_get("lavfi.identity.identity.Y"),
+            Some("1.000000")
+        );
+        assert_eq!(
+            out.metadata_get("lavfi.identity.identity_avg"),
+            Some("1.000000")
+        );
     }
 
     /// Distinguishing input: half the plane bit-identical, the other half
@@ -166,8 +183,14 @@ mod tests {
         }
         let out_max = measure(&a_max_diff, &b_max_diff);
 
-        assert_eq!(out_small.metadata_get("lavfi.identity.identity.Y"), Some("0.500000"));
-        assert_eq!(out_max.metadata_get("lavfi.identity.identity.Y"), Some("0.500000"));
+        assert_eq!(
+            out_small.metadata_get("lavfi.identity.identity.Y"),
+            Some("0.500000")
+        );
+        assert_eq!(
+            out_max.metadata_get("lavfi.identity.identity.Y"),
+            Some("0.500000")
+        );
     }
 
     /// `identity_avg` averages per-component values unweighted by sample
@@ -196,10 +219,22 @@ mod tests {
             }
         }
         let out = measure(&a, &b);
-        assert_eq!(out.metadata_get("lavfi.identity.identity.Y"), Some("0.500000"));
-        assert_eq!(out.metadata_get("lavfi.identity.identity.U"), Some("1.000000"));
-        assert_eq!(out.metadata_get("lavfi.identity.identity.V"), Some("1.000000"));
+        assert_eq!(
+            out.metadata_get("lavfi.identity.identity.Y"),
+            Some("0.500000")
+        );
+        assert_eq!(
+            out.metadata_get("lavfi.identity.identity.U"),
+            Some("1.000000")
+        );
+        assert_eq!(
+            out.metadata_get("lavfi.identity.identity.V"),
+            Some("1.000000")
+        );
         // (0.5 + 1 + 1) / 3, not sample-count-weighted.
-        assert_eq!(out.metadata_get("lavfi.identity.identity_avg"), Some("0.833333"));
+        assert_eq!(
+            out.metadata_get("lavfi.identity.identity_avg"),
+            Some("0.833333")
+        );
     }
 }

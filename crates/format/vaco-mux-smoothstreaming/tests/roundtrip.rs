@@ -120,7 +120,11 @@ fn twelve_seconds_produces_three_fragments_per_track_with_matching_fragment_info
     fs::create_dir_all(dir.path().join(format!("QualityLevels({audio_bitrate})"))).unwrap();
 
     let write = WriteAccess::unrestricted(registry());
-    let mut mux = SmoothStreamingMuxer::new(manifest_url.clone(), Some(write), SmoothStreamingMuxOptions::new());
+    let mut mux = SmoothStreamingMuxer::new(
+        manifest_url.clone(),
+        Some(write),
+        SmoothStreamingMuxOptions::new(),
+    );
     let video_idx = mux.add_stream(&h264_params(video_bitrate)).unwrap();
     let audio_idx = mux.add_stream(&aac_params(audio_bitrate)).unwrap();
     mux.write_header().unwrap();
@@ -160,7 +164,10 @@ fn twelve_seconds_produces_three_fragments_per_track_with_matching_fragment_info
     mux.write_trailer().unwrap();
 
     let manifest_xml = fs::read_to_string(&manifest_path).unwrap();
-    assert!(manifest_xml.contains("Chunks=\"3\""), "video should land on exactly 3 fragments:\n{manifest_xml}");
+    assert!(
+        manifest_xml.contains("Chunks=\"3\""),
+        "video should land on exactly 3 fragments:\n{manifest_xml}"
+    );
     assert!(
         manifest_xml.contains(&format!("Bitrate=\"{video_bitrate}\"")),
         "manifest should name the video QualityLevel's real bitrate"
@@ -187,8 +194,15 @@ fn twelve_seconds_produces_three_fragments_per_track_with_matching_fragment_info
             .join(format!("FragmentInfo(video={start})"));
         let frag = fs::read(&frag_path).unwrap_or_else(|e| panic!("{frag_path:?}: {e}"));
         let info = fs::read(&info_path).unwrap_or_else(|e| panic!("{info_path:?}: {e}"));
-        assert!(frag.len() > info.len(), "Fragments must carry mdat beyond the moof FragmentInfo has");
-        assert_eq!(&frag[..info.len()], info.as_slice(), "FragmentInfo must equal the moof prefix of Fragments byte for byte");
+        assert!(
+            frag.len() > info.len(),
+            "Fragments must carry mdat beyond the moof FragmentInfo has"
+        );
+        assert_eq!(
+            &frag[..info.len()],
+            info.as_slice(),
+            "FragmentInfo must equal the moof prefix of Fragments byte for byte"
+        );
 
         let boxes = walk_boxes(&frag);
         assert_eq!(boxes[0].0, "moof");
@@ -200,7 +214,10 @@ fn twelve_seconds_produces_three_fragments_per_track_with_matching_fragment_info
     // The manifest's own top-level Duration is the longest track's total:
     // audio's 563 frames * 213_330 HNS ticks/frame, slightly longer than
     // video's exact 12.0s.
-    assert!(manifest_xml.contains("Duration=\"120104790\""), "{manifest_xml}");
+    assert!(
+        manifest_xml.contains("Duration=\"120104790\""),
+        "{manifest_xml}"
+    );
 }
 
 #[test]
@@ -208,7 +225,8 @@ fn a_stream_with_no_declared_bit_rate_is_rejected_before_any_file_is_created() {
     let dir = tempfile::tempdir().unwrap();
     let manifest_url = dir.path().join("Manifest").to_str().unwrap().to_owned();
     let write = WriteAccess::unrestricted(registry());
-    let mut mux = SmoothStreamingMuxer::new(manifest_url, Some(write), SmoothStreamingMuxOptions::new());
+    let mut mux =
+        SmoothStreamingMuxer::new(manifest_url, Some(write), SmoothStreamingMuxOptions::new());
 
     let mut params = h264_params(0);
     params.bit_rate = None;

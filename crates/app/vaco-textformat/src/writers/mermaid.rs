@@ -100,10 +100,14 @@ struct Diagram {
 
 impl Diagram {
     fn node(&mut self, id: &str) -> &mut Node {
-        let pos = self.nodes.iter().position(|(k, _)| k == id).unwrap_or_else(|| {
-            self.nodes.push((id.to_owned(), Node::default()));
-            self.nodes.len() - 1
-        });
+        let pos = self
+            .nodes
+            .iter()
+            .position(|(k, _)| k == id)
+            .unwrap_or_else(|| {
+                self.nodes.push((id.to_owned(), Node::default()));
+                self.nodes.len() - 1
+            });
         #[allow(
             clippy::indexing_slicing,
             reason = "pos was either found in nodes or is the index just pushed"
@@ -368,13 +372,8 @@ impl MermaidWriter {
     }
 }
 
-
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 mod tests {
     use crate::opts::FormatOpts;
     use crate::sections::SectionId;
@@ -440,7 +439,10 @@ mod tests {
         // Edges: input -> scale (via FILTER_INPUT's source_filter_id), and
         // scale -> the graph output boundary (via GRAPH_OUTPUT's filter_id).
         assert!(text.contains("in_0 -- video --> scale_0"), "{text}");
-        assert!(text.contains("scale_0 -- video --> output_scale_0"), "{text}");
+        assert!(
+            text.contains("scale_0 -- video --> output_scale_0"),
+            "{text}"
+        );
     }
 
     #[test]

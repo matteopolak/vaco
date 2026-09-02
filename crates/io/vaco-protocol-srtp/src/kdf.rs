@@ -100,7 +100,12 @@ fn derivation_counter_block(master_salt: &[u8; 14], label: Label) -> [u8; 16] {
     block
 }
 
-fn derive_bytes_128(master_key: &[u8; 16], master_salt: &[u8; 14], label: Label, out_len: usize) -> Vec<u8> {
+fn derive_bytes_128(
+    master_key: &[u8; 16],
+    master_salt: &[u8; 14],
+    label: Label,
+    out_len: usize,
+) -> Vec<u8> {
     let counter_block = derivation_counter_block(master_salt, label);
     let mut out = vec![0u8; out_len];
     // AES-CTR keystream from an all-zero plaintext is exactly the
@@ -111,7 +116,12 @@ fn derive_bytes_128(master_key: &[u8; 16], master_salt: &[u8; 14], label: Label,
     out
 }
 
-fn derive_bytes_256(master_key: &[u8; 32], master_salt: &[u8; 14], label: Label, out_len: usize) -> Vec<u8> {
+fn derive_bytes_256(
+    master_key: &[u8; 32],
+    master_salt: &[u8; 14],
+    label: Label,
+    out_len: usize,
+) -> Vec<u8> {
     let counter_block = derivation_counter_block(master_salt, label);
     let mut out = vec![0u8; out_len];
     ctr_apply_aes256(master_key, &counter_block, &mut out);

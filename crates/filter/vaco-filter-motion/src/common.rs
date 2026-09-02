@@ -14,10 +14,10 @@
 //! applied *within* one crate, not just across crates.
 
 use vaco_core::{Error, Result};
+use vaco_filter_vdsp::affine::{AffineMap, bilinear_sample};
 use vaco_frame::{Frame, FramePool};
 use vaco_pixfmt::PixFmt;
 use vaco_pixfmt::PixFmtFlags;
-use vaco_filter_vdsp::affine::{AffineMap, bilinear_sample};
 
 /// Reject formats this crate's byte-level, 8-bit-only pixel math cannot
 /// address.
@@ -29,13 +29,19 @@ pub(crate) fn ensure_8bit_addressable(format: PixFmt) -> Result<()> {
         return Err(Error::Unsupported("cannot address a hardware surface"));
     }
     if format.has(PixFmtFlags::BITSTREAM) {
-        return Err(Error::Unsupported("cannot address a sub-byte-packed format"));
+        return Err(Error::Unsupported(
+            "cannot address a sub-byte-packed format",
+        ));
     }
     if format.has(PixFmtFlags::PALETTE) {
-        return Err(Error::Unsupported("cannot address a palette format without its side table"));
+        return Err(Error::Unsupported(
+            "cannot address a palette format without its side table",
+        ));
     }
     if format.max_depth() != 8 {
-        return Err(Error::Unsupported("vaco-filter-motion only filters 8-bit samples"));
+        return Err(Error::Unsupported(
+            "vaco-filter-motion only filters 8-bit samples",
+        ));
     }
     Ok(())
 }
@@ -52,7 +58,10 @@ pub(crate) fn median(v: &mut [i32]) -> f64 {
     if n == 0 {
         return 0.0;
     }
-    #[allow(clippy::integer_division, reason = "middle index of a sorted slice, truncation is the intended behaviour")]
+    #[allow(
+        clippy::integer_division,
+        reason = "middle index of a sorted slice, truncation is the intended behaviour"
+    )]
     let mid = n / 2;
     if n % 2 == 1 {
         v.get(mid).copied().map_or(0.0, f64::from)
@@ -68,17 +77,32 @@ pub(crate) fn median(v: &mut [i32]) -> f64 {
 /// Median motion vector (`cur` relative to `prev`) over a `3x3` grid of
 /// block searches on plane 0. `(0.0, 0.0)` if the frame is too small for
 /// even one in-bounds search, or if no block found a match.
-pub(crate) fn estimate_motion(prev: &Frame, cur: &Frame, width: u32, height: u32, range: i32) -> (f64, f64) {
+pub(crate) fn estimate_motion(
+    prev: &Frame,
+    cur: &Frame,
+    width: u32,
+    height: u32,
+    range: i32,
+) -> (f64, f64) {
     let (Some(p0), Some(c0)) = (prev.plane(0), cur.plane(0)) else {
         return (0.0, 0.0);
     };
     let w = width as usize;
     let h = height as usize;
-    #[allow(clippy::integer_division, reason = "block size in pixels, truncation is the intended behaviour")]
+    #[allow(
+        clippy::integer_division,
+        reason = "block size in pixels, truncation is the intended behaviour"
+    )]
     let bw = 32usize.min((w / 4).max(4));
-    #[allow(clippy::integer_division, reason = "block size in pixels, truncation is the intended behaviour")]
+    #[allow(
+        clippy::integer_division,
+        reason = "block size in pixels, truncation is the intended behaviour"
+    )]
     let bh = 32usize.min((h / 4).max(4));
-    #[allow(clippy::cast_sign_loss, reason = "range is >= 1 by construction at every call site")]
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "range is >= 1 by construction at every call site"
+    )]
     let range_usize = range.max(1) as usize;
     let margin_x = range_usize.max(bw);
     let margin_y = range_usize.max(bh);
@@ -93,9 +117,15 @@ pub(crate) fn estimate_motion(prev: &Frame, cur: &Frame, width: u32, height: u32
     let mut dys: Vec<i32> = Vec::new();
     for r in 0..3usize {
         for c in 0..3usize {
-            #[allow(clippy::integer_division, reason = "grid position in pixels over a fixed 3x3 layout, truncation is the intended behaviour")]
+            #[allow(
+                clippy::integer_division,
+                reason = "grid position in pixels over a fixed 3x3 layout, truncation is the intended behaviour"
+            )]
             let bx = margin_x + usable_w * c / 2;
-            #[allow(clippy::integer_division, reason = "grid position in pixels over a fixed 3x3 layout, truncation is the intended behaviour")]
+            #[allow(
+                clippy::integer_division,
+                reason = "grid position in pixels over a fixed 3x3 layout, truncation is the intended behaviour"
+            )]
             let by = margin_y + usable_h * r / 2;
             let m = vaco_filter_vdsp::motion::search_block(c0, p0, bx, by, bw, bh, range.max(1));
             if m.cost != u32::MAX {

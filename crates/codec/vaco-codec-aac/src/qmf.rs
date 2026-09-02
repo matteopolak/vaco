@@ -496,7 +496,6 @@ impl AnalysisBank {
         Self { x: [0.0; 320] }
     }
 
-
     /// Process one QMF timeslot's worth of 32 new time-domain samples,
     /// returning 32 complex subband samples `(re, im)`, one per subband
     /// `k = 0..32`.
@@ -545,9 +544,7 @@ impl AnalysisBank {
             let mut re = 0.0f64;
             let mut im = 0.0f64;
             for (n, &un) in u.iter().enumerate() {
-                let angle = std::f64::consts::PI / 64.0
-                    * (k as f64 + 0.5)
-                    * (2.0 * n as f64 - 0.5);
+                let angle = std::f64::consts::PI / 64.0 * (k as f64 + 0.5) * (2.0 * n as f64 - 0.5);
                 re += un * 2.0 * angle.cos();
                 im += un * 2.0 * angle.sin();
             }
@@ -864,18 +861,31 @@ mod tests {
         let out = round_trip(&signal);
 
         let expected_peak = impulse_at + GROUP_DELAY as usize;
-        let (peak_idx, &peak_val) =
-            out.iter().enumerate().max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs())).unwrap();
-        assert_eq!(peak_idx, expected_peak, "the impulse's peak should land exactly at the group delay");
-        assert!((peak_val - 1.0).abs() < 1e-4, "the delayed impulse should keep unity gain: peak_val={peak_val}");
+        let (peak_idx, &peak_val) = out
+            .iter()
+            .enumerate()
+            .max_by(|(_, a), (_, b)| a.abs().total_cmp(&b.abs()))
+            .unwrap();
+        assert_eq!(
+            peak_idx, expected_peak,
+            "the impulse's peak should land exactly at the group delay"
+        );
+        assert!(
+            (peak_val - 1.0).abs() < 1e-4,
+            "the delayed impulse should keep unity gain: peak_val={peak_val}"
+        );
 
         // Every other sample should be near zero -- if this filter had
         // any real phase or cross-band defect, this is where it would
         // show up as a second peak or a smeared tail, not as a
         // correlation number that a periodic test signal could alias
         // away.
-        let energy_elsewhere: f32 =
-            out.iter().enumerate().filter(|&(i, _)| i != peak_idx).map(|(_, &v)| v * v).sum();
+        let energy_elsewhere: f32 = out
+            .iter()
+            .enumerate()
+            .filter(|&(i, _)| i != peak_idx)
+            .map(|(_, &v)| v * v)
+            .sum();
         assert!(
             energy_elsewhere < 1e-4,
             "energy outside the single peak should be negligible: energy_elsewhere={energy_elsewhere}"
@@ -949,7 +959,9 @@ mod tests {
         let n_samples = 200 * 32;
         for freq_hz in [200.0, 1000.0, 3000.0, 5000.0, 7000.0, 9000.0, 10_000.0] {
             let signal: Vec<f32> = (0..n_samples)
-                .map(|i| (2.0 * std::f64::consts::PI * freq_hz * (f64::from(i) / rate)).sin() as f32)
+                .map(|i| {
+                    (2.0 * std::f64::consts::PI * freq_hz * (f64::from(i) / rate)).sin() as f32
+                })
                 .collect();
             let out = round_trip(&signal);
             let reference: Vec<f64> = (0..n_samples)
@@ -978,15 +990,16 @@ mod tests {
         let signal: Vec<f32> = (0..n_samples)
             .map(|i| {
                 let t = f64::from(i) / rate;
-                ((2.0 * std::f64::consts::PI * f1 * t).sin() + (2.0 * std::f64::consts::PI * f2 * t).sin())
-                    as f32
+                ((2.0 * std::f64::consts::PI * f1 * t).sin()
+                    + (2.0 * std::f64::consts::PI * f2 * t).sin()) as f32
             })
             .collect();
         let out = round_trip(&signal);
         let reference: Vec<f64> = (0..n_samples)
             .map(|i| {
                 let t = f64::from(i) / rate;
-                (2.0 * std::f64::consts::PI * f1 * t).sin() + (2.0 * std::f64::consts::PI * f2 * t).sin()
+                (2.0 * std::f64::consts::PI * f1 * t).sin()
+                    + (2.0 * std::f64::consts::PI * f2 * t).sin()
             })
             .collect();
         let best_corr = correlation_at_group_delay(&out, &reference, 2000);

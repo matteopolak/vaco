@@ -20,7 +20,10 @@ use vaco_protocol_core::{ProtocolError, Result};
 const SCHEME: &str = "rtmp";
 
 fn malformed(detail: &'static str) -> ProtocolError {
-    ProtocolError::Malformed { scheme: SCHEME, detail }
+    ProtocolError::Malformed {
+        scheme: SCHEME,
+        detail,
+    }
 }
 
 /// One NetConnection/NetStream command, in either direction.
@@ -34,8 +37,18 @@ pub struct Command {
 
 impl Command {
     #[must_use]
-    pub fn new(name: impl Into<String>, transaction_id: f64, command_object: Value, arguments: Vec<Value>) -> Self {
-        Self { name: name.into(), transaction_id, command_object, arguments }
+    pub fn new(
+        name: impl Into<String>,
+        transaction_id: f64,
+        command_object: Value,
+        arguments: Vec<Value>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            transaction_id,
+            command_object,
+            arguments,
+        }
     }
 
     /// Encode as an AMF0 command message payload (the bytes that go in
@@ -61,30 +74,54 @@ impl Command {
     /// ID), or if any value in the sequence is truncated/unrecognised.
     pub fn decode(payload: &[u8]) -> Result<Self> {
         let mut cursor = 0usize;
-        let (name_value, consumed) = amf0::decode(payload.get(cursor..).ok_or_else(|| malformed("command message is empty"))?)?;
+        let (name_value, consumed) = amf0::decode(
+            payload
+                .get(cursor..)
+                .ok_or_else(|| malformed("command message is empty"))?,
+        )?;
         cursor += consumed;
         let Value::String(name) = name_value else {
-            return Err(malformed("command message does not start with a string command name"));
+            return Err(malformed(
+                "command message does not start with a string command name",
+            ));
         };
 
-        let (id_value, consumed) = amf0::decode(payload.get(cursor..).ok_or_else(|| malformed("command message has no transaction ID"))?)?;
+        let (id_value, consumed) = amf0::decode(
+            payload
+                .get(cursor..)
+                .ok_or_else(|| malformed("command message has no transaction ID"))?,
+        )?;
         cursor += consumed;
         let Value::Number(transaction_id) = id_value else {
-            return Err(malformed("command message's transaction ID is not a number"));
+            return Err(malformed(
+                "command message's transaction ID is not a number",
+            ));
         };
 
-        let (command_object, consumed) = amf0::decode(payload.get(cursor..).ok_or_else(|| malformed("command message has no command object"))?)?;
+        let (command_object, consumed) = amf0::decode(
+            payload
+                .get(cursor..)
+                .ok_or_else(|| malformed("command message has no command object"))?,
+        )?;
         cursor += consumed;
 
         let mut arguments = Vec::new();
         while cursor < payload.len() {
-            #[allow(clippy::indexing_slicing, reason = "cursor < payload.len() checked by the loop condition")]
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "cursor < payload.len() checked by the loop condition"
+            )]
             let (value, consumed) = amf0::decode(&payload[cursor..])?;
             arguments.push(value);
             cursor += consumed;
         }
 
-        Ok(Self { name, transaction_id, command_object, arguments })
+        Ok(Self {
+            name,
+            transaction_id,
+            command_object,
+            arguments,
+        })
     }
 }
 
@@ -114,13 +151,22 @@ pub fn connect_result(transaction_id: f64) -> Command {
         "_result",
         transaction_id,
         Value::Object(vec![
-            ("fmsVer".to_string(), Value::String("VACO/1,0,0,0".to_string())),
+            (
+                "fmsVer".to_string(),
+                Value::String("VACO/1,0,0,0".to_string()),
+            ),
             ("capabilities".to_string(), Value::Number(31.0)),
         ]),
         vec![Value::Object(vec![
             ("level".to_string(), Value::String("status".to_string())),
-            ("code".to_string(), Value::String("NetConnection.Connect.Success".to_string())),
-            ("description".to_string(), Value::String("Connection succeeded.".to_string())),
+            (
+                "code".to_string(),
+                Value::String("NetConnection.Connect.Success".to_string()),
+            ),
+            (
+                "description".to_string(),
+                Value::String("Connection succeeded.".to_string()),
+            ),
         ])],
     )
 }
@@ -136,7 +182,12 @@ pub fn create_stream(transaction_id: f64) -> Command {
 /// command object and one argument, the new stream ID.
 #[must_use]
 pub fn create_stream_result(transaction_id: f64, stream_id: f64) -> Command {
-    Command::new("_result", transaction_id, Value::Null, vec![Value::Number(stream_id)])
+    Command::new(
+        "_result",
+        transaction_id,
+        Value::Null,
+        vec![Value::Number(stream_id)],
+    )
 }
 
 /// Build the client's `publish` command (§7.2.2.6): stream name and
@@ -148,7 +199,10 @@ pub fn publish(stream_name: &str, publish_type: &str) -> Command {
         "publish",
         0.0,
         Value::Null,
-        vec![Value::String(stream_name.to_string()), Value::String(publish_type.to_string())],
+        vec![
+            Value::String(stream_name.to_string()),
+            Value::String(publish_type.to_string()),
+        ],
     )
 }
 
@@ -162,8 +216,14 @@ pub fn on_status_publish_start(stream_name: &str) -> Command {
         Value::Null,
         vec![Value::Object(vec![
             ("level".to_string(), Value::String("status".to_string())),
-            ("code".to_string(), Value::String("NetStream.Publish.Start".to_string())),
-            ("description".to_string(), Value::String(format!("{stream_name} is now published."))),
+            (
+                "code".to_string(),
+                Value::String("NetStream.Publish.Start".to_string()),
+            ),
+            (
+                "description".to_string(),
+                Value::String(format!("{stream_name} is now published.")),
+            ),
         ])],
     )
 }
@@ -172,7 +232,12 @@ pub fn on_status_publish_start(stream_name: &str) -> Command {
 /// argument.
 #[must_use]
 pub fn play(stream_name: &str) -> Command {
-    Command::new("play", 0.0, Value::Null, vec![Value::String(stream_name.to_string())])
+    Command::new(
+        "play",
+        0.0,
+        Value::Null,
+        vec![Value::String(stream_name.to_string())],
+    )
 }
 
 /// Build the server's `onStatus` response to a successful `play`
@@ -185,8 +250,14 @@ pub fn on_status_play_start(stream_name: &str) -> Command {
         Value::Null,
         vec![Value::Object(vec![
             ("level".to_string(), Value::String("status".to_string())),
-            ("code".to_string(), Value::String("NetStream.Play.Start".to_string())),
-            ("description".to_string(), Value::String(format!("Started playing {stream_name}."))),
+            (
+                "code".to_string(),
+                Value::String("NetStream.Play.Start".to_string()),
+            ),
+            (
+                "description".to_string(),
+                Value::String(format!("Started playing {stream_name}.")),
+            ),
         ])],
     )
 }

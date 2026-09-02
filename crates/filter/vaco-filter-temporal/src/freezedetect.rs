@@ -93,7 +93,10 @@ pub(crate) struct Filter {
 
 fn seconds(pts: Timestamp, tb: Rational) -> f64 {
     let Some(ticks) = pts.ticks() else { return 0.0 };
-    #[allow(clippy::cast_precision_loss, reason = "display-scale timestamp conversion")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "display-scale timestamp conversion"
+    )]
     {
         ticks as f64 * f64::from(tb.num) / f64::from(tb.den.max(1))
     }
@@ -189,8 +192,14 @@ impl Filter {
                     // frame spacing divides the confirmation point evenly,
                     // which is why a naive check against round-number frame
                     // rates alone would not have caught using the wrong one.
-                    self.events.push(FreezeEvent { start, end: Some(now) });
-                    frame.set_metadata("lavfi.freezedetect.freeze_duration", format_lavfi_time(now - start));
+                    self.events.push(FreezeEvent {
+                        start,
+                        end: Some(now),
+                    });
+                    frame.set_metadata(
+                        "lavfi.freezedetect.freeze_duration",
+                        format_lavfi_time(now - start),
+                    );
                     frame.set_metadata("lavfi.freezedetect.freeze_end", format_lavfi_time(now));
                 }
                 self.run_start_secs = None;
@@ -229,7 +238,10 @@ pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
         .or_else(|| str_opt(req, "d"))
         .and_then(|v| v.trim_end_matches('s').parse::<f64>().ok())
         .unwrap_or(2.0);
-    let opts = Options { noise, duration_secs };
+    let opts = Options {
+        noise,
+        duration_secs,
+    };
     Instance {
         desc: DESC,
         formats: NodeFormats::passthrough(1, 1, MediaType::Video, req.instance),
@@ -287,11 +299,17 @@ mod tests {
         };
         let mut f = Filter::new(opts);
         for n in 0..10i64 {
-            #[allow(clippy::cast_possible_truncation, reason = "n is 0..10, well within u8")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "n is 0..10, well within u8"
+            )]
             let v = (n * 20) as u8;
             let _ = f.step(frame_at(v, n, tb), tb);
         }
-        assert!(f.events().is_empty(), "a changing stream must not report a freeze");
+        assert!(
+            f.events().is_empty(),
+            "a changing stream must not report a freeze"
+        );
     }
 
     #[test]
@@ -353,7 +371,10 @@ mod tests {
         assert_eq!(tagged_frames[0].0, 5);
         assert_eq!(
             tagged_frames[0].1,
-            &[("lavfi.freezedetect.freeze_start".to_string(), "0".to_string())]
+            &[(
+                "lavfi.freezedetect.freeze_start".to_string(),
+                "0".to_string()
+            )]
         );
     }
 
@@ -379,7 +400,10 @@ mod tests {
         let confirming = out_frame(f.step(frame_at(1, 3, tb), tb));
         assert_eq!(
             confirming.metadata(),
-            &[("lavfi.freezedetect.freeze_start".to_string(), "0".to_string())]
+            &[(
+                "lavfi.freezedetect.freeze_start".to_string(),
+                "0".to_string()
+            )]
         );
         let breaking = out_frame(f.step(frame_at(2, 10, tb), tb));
         // The wrong-neighbour hypothesis (end = last similar frame's pts = 3)
@@ -387,8 +411,14 @@ mod tests {
         assert_eq!(
             breaking.metadata(),
             &[
-                ("lavfi.freezedetect.freeze_duration".to_string(), "10".to_string()),
-                ("lavfi.freezedetect.freeze_end".to_string(), "10".to_string()),
+                (
+                    "lavfi.freezedetect.freeze_duration".to_string(),
+                    "10".to_string()
+                ),
+                (
+                    "lavfi.freezedetect.freeze_end".to_string(),
+                    "10".to_string()
+                ),
             ]
         );
     }
@@ -423,7 +453,10 @@ mod tests {
         let mut f = Filter::new(opts);
         for n in 0..10i64 {
             let out = out_frame(f.step(frame_at(128, n, tb), tb));
-            assert!(out.metadata_get("lavfi.freezedetect.freeze_duration").is_none());
+            assert!(
+                out.metadata_get("lavfi.freezedetect.freeze_duration")
+                    .is_none()
+            );
             assert!(out.metadata_get("lavfi.freezedetect.freeze_end").is_none());
         }
         // Confirmed and still open per `events()`'s existing accessor.

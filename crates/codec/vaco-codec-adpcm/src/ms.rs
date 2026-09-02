@@ -58,11 +58,7 @@ impl MsState {
     fn encode_sample(&mut self, sample: i16) -> u8 {
         let predicted = self.predict();
         let err = i32::from(sample) - predicted;
-        let raw = if self.delta == 0 {
-            0
-        } else {
-            err / self.delta
-        };
+        let raw = if self.delta == 0 { 0 } else { err / self.delta };
         let nibble = (raw.clamp(-8, 7) & 0x0F) as u8;
         self.decode_nibble(nibble);
         nibble
@@ -88,19 +84,25 @@ pub(crate) fn decode_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
     let channels = channels.max(1) as usize;
     let hdr = header_bytes(channels);
     if data.len() < hdr {
-        return Err(Error::InvalidData("adpcm_ms: block shorter than its own header"));
+        return Err(Error::InvalidData(
+            "adpcm_ms: block shorter than its own header",
+        ));
     }
     let mut states = Vec::new();
     let mut cursor = 0usize;
     let mut coeff_idx = Vec::new();
     for _ in 0..channels {
-        let idx = *data.get(cursor).ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
+        let idx = *data
+            .get(cursor)
+            .ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
         coeff_idx.push(idx);
         cursor += 1;
     }
     let mut deltas = Vec::new();
     for _ in 0..channels {
-        let b = data.get(cursor..cursor + 2).ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
+        let b = data
+            .get(cursor..cursor + 2)
+            .ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
         let &[lo, hi] = b else {
             return Err(Error::InvalidData("adpcm_ms: truncated header"));
         };
@@ -109,7 +111,9 @@ pub(crate) fn decode_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
     }
     let mut sample2s = Vec::new();
     for _ in 0..channels {
-        let b = data.get(cursor..cursor + 2).ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
+        let b = data
+            .get(cursor..cursor + 2)
+            .ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
         let &[lo, hi] = b else {
             return Err(Error::InvalidData("adpcm_ms: truncated header"));
         };
@@ -118,7 +122,9 @@ pub(crate) fn decode_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
     }
     let mut sample1s = Vec::new();
     for _ in 0..channels {
-        let b = data.get(cursor..cursor + 2).ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
+        let b = data
+            .get(cursor..cursor + 2)
+            .ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
         let &[lo, hi] = b else {
             return Err(Error::InvalidData("adpcm_ms: truncated header"));
         };
@@ -129,7 +135,9 @@ pub(crate) fn decode_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
     for c in 0..channels {
         let idx = *coeff_idx.get(c).unwrap_or(&0) as usize;
         if idx >= MS_ADAPT_COEFF1.len() {
-            return Err(Error::InvalidData("adpcm_ms: predictor coefficient index out of range"));
+            return Err(Error::InvalidData(
+                "adpcm_ms: predictor coefficient index out of range",
+            ));
         }
         states.push(MsState {
             coeff1: *MS_ADAPT_COEFF1.get(idx).unwrap_or(&256),
@@ -177,7 +185,9 @@ pub(crate) fn encode_block(samples: &[i16], channels: u32) -> Result<Vec<u8>> {
         return Err(Error::InvalidData("adpcm_ms: no samples"));
     };
     if len < 2 {
-        return Err(Error::InvalidData("adpcm_ms: need at least 2 samples per channel"));
+        return Err(Error::InvalidData(
+            "adpcm_ms: need at least 2 samples per channel",
+        ));
     }
 
     let mut out = Vec::new();
@@ -215,7 +225,9 @@ pub(crate) fn encode_block(samples: &[i16], channels: u32) -> Result<Vec<u8>> {
     let mut nibble_buf: Vec<u8> = Vec::new();
     for n in 2..len {
         for (c, ch) in per_channel.iter().enumerate() {
-            let state = states.get_mut(c).ok_or(Error::InvalidData("adpcm_ms: channel"))?;
+            let state = states
+                .get_mut(c)
+                .ok_or(Error::InvalidData("adpcm_ms: channel"))?;
             let sample = ch.get(n).copied().unwrap_or(0);
             nibble_buf.push(state.encode_sample(sample));
         }

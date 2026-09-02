@@ -48,7 +48,11 @@ use vaco_core::parse::Rgba;
 /// measurement pinning down both the metric and the `sqrt(3)` divisor.
 #[must_use]
 pub(crate) fn rgb_distance(p: [f64; 3], k: [f64; 3]) -> f64 {
-    let sum_sq: f64 = p.iter().zip(k.iter()).map(|(pi, ki)| (pi - ki).powi(2)).sum();
+    let sum_sq: f64 = p
+        .iter()
+        .zip(k.iter())
+        .map(|(pi, ki)| (pi - ki).powi(2))
+        .sum();
     sum_sq.sqrt() / 3f64.sqrt()
 }
 
@@ -57,7 +61,11 @@ pub(crate) fn rgb_distance(p: [f64; 3], k: [f64; 3]) -> f64 {
 /// always an 8-bit spec).
 #[must_use]
 pub(crate) fn key_rgb(c: Rgba) -> [f64; 3] {
-    [f64::from(c.r) / 255.0, f64::from(c.g) / 255.0, f64::from(c.b) / 255.0]
+    [
+        f64::from(c.r) / 255.0,
+        f64::from(c.g) / 255.0,
+        f64::from(c.b) / 255.0,
+    ]
 }
 
 /// `clamp((distance - similarity) / blend, 0, 1)`, with `blend <= 0`
@@ -97,7 +105,13 @@ mod tests {
     fn ramp_matches_the_five_measured_points() {
         // Measured: ffmpeg 8.1, colorkey=color=black:similarity=0.2:
         // blend=0.2 on 0xRR0000 (this module's doc).
-        let cases: &[(u8, u16)] = &[(0x64, 33), (0x85, 128), (0x96, 178), (0xaa, 235), (0xb1, 255)];
+        let cases: &[(u8, u16)] = &[
+            (0x64, 33),
+            (0x85, 128),
+            (0x96, 178),
+            (0xaa, 235),
+            (0xb1, 255),
+        ];
         for &(rr, expected_alpha) in cases {
             let d = rgb_distance([f64::from(rr) / 255.0, 0.0, 0.0], [0.0, 0.0, 0.0]);
             let frac = ramp(d, 0.2, 0.2);

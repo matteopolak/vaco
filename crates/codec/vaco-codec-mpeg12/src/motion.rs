@@ -87,7 +87,11 @@ pub(crate) fn decode_vector(
             .copied()
             .unwrap_or(0);
         let special = field_and_frame_picture && t == 1;
-        let prediction = if special { raw_pmv.div_euclid(2) } else { raw_pmv };
+        let prediction = if special {
+            raw_pmv.div_euclid(2)
+        } else {
+            raw_pmv
+        };
         let fc = f_code.get(t).copied().unwrap_or(1);
         let vector = decode_component(r, fc, prediction);
         if let Some(slot) = out.get_mut(t) {

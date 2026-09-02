@@ -248,7 +248,10 @@ mod tests {
     fn accepts_a_pad_width_right_at_the_cap() {
         let pattern = format!("out%0{MAX_PAD_WIDTH}d.png");
         let p = SequencePattern::parse(&pattern).unwrap();
-        assert_eq!(p.format(7).len(), "out".len() + MAX_PAD_WIDTH + ".png".len());
+        assert_eq!(
+            p.format(7).len(),
+            "out".len() + MAX_PAD_WIDTH + ".png".len()
+        );
     }
 
     #[test]

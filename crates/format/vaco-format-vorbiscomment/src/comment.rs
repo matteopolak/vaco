@@ -189,7 +189,9 @@ fn take_string(data: &[u8]) -> Result<(&str, &[u8])> {
     let len =
         usize::try_from(len).map_err(|_| Error::InvalidData("Vorbis comment string too long"))?;
     let Some((head, tail)) = rest.split_at_checked(len) else {
-        return Err(Error::InvalidData("Vorbis comment string overruns the packet"));
+        return Err(Error::InvalidData(
+            "Vorbis comment string overruns the packet",
+        ));
     };
     let text = str::from_utf8(head)
         .map_err(|_| Error::InvalidData("Vorbis comment string is not UTF-8"))?;

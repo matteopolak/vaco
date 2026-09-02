@@ -287,11 +287,7 @@ pub fn kraft_numerator(entries: &[VlcEntry], scale_len: u8) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    #![allow(
-        clippy::unwrap_used,
-        clippy::indexing_slicing,
-        reason = "test code"
-    )]
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
     use super::{VlcEntry, VlcTable, is_prefix_free, kraft_numerator};
     use vaco_bitstream::{BitReader, BitWriter};
 
@@ -446,7 +442,8 @@ mod tests {
             let scan = table.decode(&mut r_scan);
             let lut_result = table.decode_with_lut(&mut r_lut, &lut);
             assert_eq!(
-                scan, lut_result,
+                scan,
+                lut_result,
                 "prefix {prefix:0width$b} disagreed",
                 width = table.max_len() as usize
             );

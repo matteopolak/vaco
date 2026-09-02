@@ -53,7 +53,11 @@ fn parse_weights(s: &str, frames: usize) -> Vec<f64> {
     }
     let mut out = Vec::new();
     for i in 0..frames {
-        out.push(*parsed.get(i).unwrap_or_else(|| parsed.last().unwrap_or(&1.0)));
+        out.push(
+            *parsed
+                .get(i)
+                .unwrap_or_else(|| parsed.last().unwrap_or(&1.0)),
+        );
     }
     out
 }
@@ -181,7 +185,10 @@ impl FrameFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
     let frames = usize_opt(req, "frames", 3).clamp(1, 1024);
-    let weights = parse_weights(str_opt(req, "weights").as_deref().unwrap_or("1 1 1"), frames);
+    let weights = parse_weights(
+        str_opt(req, "weights").as_deref().unwrap_or("1 1 1"),
+        frames,
+    );
     let scale = crate::video::f64_opt(req, "scale", 0.0).max(0.0);
     let planes = planes_mask_opt(req, &["planes"], 0x0F);
     let opts = Options {

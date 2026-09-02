@@ -99,7 +99,11 @@ impl Kernel for Int32ToFloatKernel {
                 src: (0..len)
                     .map(|i| {
                         let i = i64::try_from(i).unwrap_or(0);
-                        i32::try_from((i * 104_729 - 5_000_000_000).clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(0)
+                        i32::try_from(
+                            (i * 104_729 - 5_000_000_000)
+                                .clamp(i64::from(i32::MIN), i64::from(i32::MAX)),
+                        )
+                        .unwrap_or(0)
                     })
                     .collect(),
             })

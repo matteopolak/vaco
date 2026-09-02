@@ -167,9 +167,10 @@ fn all_rows() -> Result<Vec<Row>, String> {
         if !frag.exists() {
             continue;
         }
-        let text = std::fs::read_to_string(&frag).map_err(|e| format!("{}: {e}", frag.display()))?;
-        let tables =
-            crate::toml::tables(&text, &["component"]).map_err(|e| format!("{}: {e}", frag.display()))?;
+        let text =
+            std::fs::read_to_string(&frag).map_err(|e| format!("{}: {e}", frag.display()))?;
+        let tables = crate::toml::tables(&text, &["component"])
+            .map_err(|e| format!("{}: {e}", frag.display()))?;
         for t in tables {
             out.push(Row {
                 krate: name.clone(),
@@ -441,19 +442,43 @@ const ALLOW_NONDEFAULT_FEATURE: &[(&str, &str)] = &[
         "protocol-httpproxy",
         "same measurement and reasoning as protocol-http above.",
     ),
-    ("protocol-ftp", "same measurement and reasoning as protocol-http above."),
-    ("protocol-icecast", "same measurement and reasoning as protocol-http above."),
-    ("protocol-tls", "same measurement and reasoning as protocol-http above."),
-    ("protocol-dtls", "same measurement and reasoning as protocol-http above."),
-    ("protocol-socket", "same measurement and reasoning as protocol-http above."),
-    ("protocol-gopher", "same measurement and reasoning as protocol-http above."),
+    (
+        "protocol-ftp",
+        "same measurement and reasoning as protocol-http above.",
+    ),
+    (
+        "protocol-icecast",
+        "same measurement and reasoning as protocol-http above.",
+    ),
+    (
+        "protocol-tls",
+        "same measurement and reasoning as protocol-http above.",
+    ),
+    (
+        "protocol-dtls",
+        "same measurement and reasoning as protocol-http above.",
+    ),
+    (
+        "protocol-socket",
+        "same measurement and reasoning as protocol-http above.",
+    ),
+    (
+        "protocol-gopher",
+        "same measurement and reasoning as protocol-http above.",
+    ),
     (
         "demux-rtp",
         "same wasm/native-only reasoning as vaco-protocol-socket's, per \
          vaco-demux-rtsp's own fragment comment.",
     ),
-    ("demux-rtsp", "same wasm/native-only reasoning, same fragment comment as demux-rtp."),
-    ("demux-sdp", "same wasm/native-only reasoning, same fragment comment as demux-rtp."),
+    (
+        "demux-rtsp",
+        "same wasm/native-only reasoning, same fragment comment as demux-rtp.",
+    ),
+    (
+        "demux-sdp",
+        "same wasm/native-only reasoning, same fragment comment as demux-rtp.",
+    ),
     (
         "mux-whip",
         "same wasm/native-only reasoning as vaco-protocol-dtls's, per \
@@ -464,7 +489,9 @@ const ALLOW_NONDEFAULT_FEATURE: &[(&str, &str)] = &[
 fn check_nondefault_features(rows: &[Row]) -> Result<Vec<String>, String> {
     let mut features: Set<String> = Set::new();
     for r in rows {
-        if !r.default_on && let Some(f) = &r.feature {
+        if !r.default_on
+            && let Some(f) = &r.feature
+        {
             features.insert(f.clone());
         }
     }
@@ -548,7 +575,8 @@ fn function_body(text: &str, sig: &str) -> Option<String> {
 
 fn check_bsf_chaining(rows: &[Row]) -> Result<Vec<String>, String> {
     let lib_path = repo_root().join("crates/registry/vaco-registry/src/lib.rs");
-    let text = std::fs::read_to_string(&lib_path).map_err(|e| format!("{}: {e}", lib_path.display()))?;
+    let text =
+        std::fs::read_to_string(&lib_path).map_err(|e| format!("{}: {e}", lib_path.display()))?;
     let Some(body) = function_body(&text, "fn bsf_descs()") else {
         return Err(format!(
             "{}: could not find `fn bsf_descs()` — it has moved or been \
@@ -596,20 +624,47 @@ fn check_bsf_chaining(rows: &[Row]) -> Result<Vec<String>, String> {
 const ALLOW_MUXER_ONLY: &[(&str, &str)] = &[
     // Hash/checksum sinks: there is no bitstream to demux by construction —
     // the checksum *is* the output.
-    ("crc", "hash-computing muxer; no bitstream to demux by definition."),
-    ("framecrc", "hash-computing muxer; no bitstream to demux by definition."),
-    ("framehash", "hash-computing muxer; no bitstream to demux by definition."),
-    ("framemd5", "hash-computing muxer; no bitstream to demux by definition."),
-    ("hash", "hash-computing muxer; no bitstream to demux by definition."),
-    ("md5", "hash-computing muxer; no bitstream to demux by definition."),
-    ("streamhash", "hash-computing muxer; no bitstream to demux by definition."),
+    (
+        "crc",
+        "hash-computing muxer; no bitstream to demux by definition.",
+    ),
+    (
+        "framecrc",
+        "hash-computing muxer; no bitstream to demux by definition.",
+    ),
+    (
+        "framehash",
+        "hash-computing muxer; no bitstream to demux by definition.",
+    ),
+    (
+        "framemd5",
+        "hash-computing muxer; no bitstream to demux by definition.",
+    ),
+    (
+        "hash",
+        "hash-computing muxer; no bitstream to demux by definition.",
+    ),
+    (
+        "md5",
+        "hash-computing muxer; no bitstream to demux by definition.",
+    ),
+    (
+        "streamhash",
+        "hash-computing muxer; no bitstream to demux by definition.",
+    ),
     // Discard / wrapper muxers: not a format of their own.
-    ("null", "discard-output muxer; nothing is written to read back."),
+    (
+        "null",
+        "discard-output muxer; nothing is written to read back.",
+    ),
     (
         "fifo",
         "wraps another muxer for restart-on-failure; not a format of its own.",
     ),
-    ("tee", "fans out to several other muxers; not a format of its own."),
+    (
+        "tee",
+        "fans out to several other muxers; not a format of its own.",
+    ),
     (
         "mkvtimestamp_v2",
         "Matroska external-timestamps export; a timing sidecar, not a media format.",
@@ -621,7 +676,10 @@ const ALLOW_MUXER_ONLY: &[(&str, &str)] = &[
          demuxer to read, not a format of its own.",
     ),
     ("ssegment", "same as `segment`, stream-copy variant."),
-    ("stream_segment", "same as `segment`, generic streaming variant."),
+    (
+        "stream_segment",
+        "same as `segment`, generic streaming variant.",
+    ),
     (
         "hds",
         "Adobe HTTP Dynamic Streaming muxer; output-only in ffmpeg too, no \
@@ -648,10 +706,22 @@ const ALLOW_MUXER_ONLY: &[(&str, &str)] = &[
     // MPEG-PS / DVD-Video variants: read back through the generic `mpeg`
     // (MPEG-PS) demuxer, same as ffmpeg — none of these get their own
     // demuxer name there either.
-    ("dvd", "MPEG-PS/DVD-Video variant; read back through the generic `mpeg` demuxer."),
-    ("svcd", "MPEG-PS/SVCD variant; read back through the generic `mpeg` demuxer."),
-    ("vcd", "MPEG-PS/VCD variant; read back through the generic `mpeg` demuxer."),
-    ("vob", "MPEG-PS/VOB variant; read back through the generic `mpeg` demuxer."),
+    (
+        "dvd",
+        "MPEG-PS/DVD-Video variant; read back through the generic `mpeg` demuxer.",
+    ),
+    (
+        "svcd",
+        "MPEG-PS/SVCD variant; read back through the generic `mpeg` demuxer.",
+    ),
+    (
+        "vcd",
+        "MPEG-PS/VCD variant; read back through the generic `mpeg` demuxer.",
+    ),
+    (
+        "vob",
+        "MPEG-PS/VOB variant; read back through the generic `mpeg` demuxer.",
+    ),
     // mp4-family and ogg-family aliases: read back through the shared
     // demuxer, whose `extensions` list already includes each alias's
     // extension (verified against both fragments, see the module doc).
@@ -903,9 +973,9 @@ fn check_unregistered_descriptors(rows: &[Row]) -> Vec<String> {
                     // reconstructing its full module path (which this
                     // line-based scan does not know).
                     let crate_prefix = format!("{modpath}::");
-                    let registered = ctors
-                        .iter()
-                        .any(|c| c.starts_with(&crate_prefix) && c.rsplit("::").next() == Some(ident));
+                    let registered = ctors.iter().any(|c| {
+                        c.starts_with(&crate_prefix) && c.rsplit("::").next() == Some(ident)
+                    });
                     if registered {
                         continue;
                     }
@@ -993,13 +1063,15 @@ fn check_filter_dispatch(rows: &[Row]) -> Vec<String> {
 fn codec_name_table() -> Result<Map<String, String>, String> {
     let path = repo_root().join("crates/signal/vaco-codec-core/src/lib.rs");
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let start = text.find("const CODECS: &[CodecEntry] = &[").ok_or_else(|| {
-        format!(
-            "{}: could not find `const CODECS` — reachability rule G needs \
+    let start = text
+        .find("const CODECS: &[CodecEntry] = &[")
+        .ok_or_else(|| {
+            format!(
+                "{}: could not find `const CODECS` — reachability rule G needs \
              updating to match wherever it moved",
-            path.display()
-        )
-    })?;
+                path.display()
+            )
+        })?;
     let body = &text[start..];
     let end = body.find("\n];").ok_or_else(|| {
         format!(
@@ -1045,9 +1117,14 @@ fn codec_name_table() -> Result<Map<String, String>, String> {
 /// lives in `vaco-format-isom`, a plain path dependency. One hop is not
 /// enough in general (a shared table crate could itself delegate further),
 /// so this walks the full closure rather than assuming a fixed depth.
-fn transitive_crate_closure(krate: &str, all: &[(String, String, std::path::PathBuf)]) -> Set<String> {
-    let manifest_of: Map<&str, &std::path::Path> =
-        all.iter().map(|(_, n, p)| (n.as_str(), p.as_path())).collect();
+fn transitive_crate_closure(
+    krate: &str,
+    all: &[(String, String, std::path::PathBuf)],
+) -> Set<String> {
+    let manifest_of: Map<&str, &std::path::Path> = all
+        .iter()
+        .map(|(_, n, p)| (n.as_str(), p.as_path()))
+        .collect();
     let mut seen: Set<String> = Set::new();
     let mut stack = vec![krate.to_owned()];
     while let Some(n) = stack.pop() {
@@ -1088,7 +1165,10 @@ fn transitive_crate_closure(krate: &str, all: &[(String, String, std::path::Path
 /// happens to be right today is not the same claim as one that is right by
 /// construction. A person reading a specific report is still the backstop
 /// [`ALLOW_UNDEMUXABLE_DECODER`]/[`ALLOW_UNMUXABLE_ENCODER`] exist for.
-fn codecs_referenced_in(crate_names: &Set<String>, variant_to_name: &Map<String, String>) -> Set<String> {
+fn codecs_referenced_in(
+    crate_names: &Set<String>,
+    variant_to_name: &Map<String, String>,
+) -> Set<String> {
     let all = crates();
     let paths: Vec<&std::path::Path> = all
         .iter()
@@ -1162,7 +1242,11 @@ fn check_codec_reachable(
     }
     let producible = codecs_referenced_in(&universe, variant_to_name);
 
-    let action = if leaf_kind == "decoder" { "decode" } else { "encode" };
+    let action = if leaf_kind == "decoder" {
+        "decode"
+    } else {
+        "encode"
+    };
 
     let mut violations = Vec::new();
     for row in rows.iter().filter(|r| r.kind == leaf_kind) {
@@ -1342,10 +1426,7 @@ const ALLOW_UNDECODABLE_PRODUCED: &[(&str, &str)] = &[
         "WMA v1/v2 is named in T5-01/#453's spec-less-format list; no \
          crate in this tree decodes it yet.",
     ),
-    (
-        "wmav2",
-        "Same WMA/#453 scope as `wmav1` above.",
-    ),
+    ("wmav2", "Same WMA/#453 scope as `wmav1` above."),
     (
         "wmapro",
         "Same WMA/#453 scope as `wmav1` above, for the WMA Professional \
@@ -1367,15 +1448,42 @@ const ALLOW_UNDECODABLE_PRODUCED: &[(&str, &str)] = &[
          plain-text subtitle format `vaco-subtitle-text` demuxes: this \
          entry and the nine below it are one gap, not ten.",
     ),
-    ("microdvd", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
-    ("mpl2", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
-    ("pjs", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
-    ("realtext", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
-    ("sami", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
-    ("stl", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
-    ("subviewer", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
-    ("subviewer1", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
-    ("vplayer", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    (
+        "microdvd",
+        "Same vaco-codec-subtitle-text scope as `jacosub` above.",
+    ),
+    (
+        "mpl2",
+        "Same vaco-codec-subtitle-text scope as `jacosub` above.",
+    ),
+    (
+        "pjs",
+        "Same vaco-codec-subtitle-text scope as `jacosub` above.",
+    ),
+    (
+        "realtext",
+        "Same vaco-codec-subtitle-text scope as `jacosub` above.",
+    ),
+    (
+        "sami",
+        "Same vaco-codec-subtitle-text scope as `jacosub` above.",
+    ),
+    (
+        "stl",
+        "Same vaco-codec-subtitle-text scope as `jacosub` above.",
+    ),
+    (
+        "subviewer",
+        "Same vaco-codec-subtitle-text scope as `jacosub` above.",
+    ),
+    (
+        "subviewer1",
+        "Same vaco-codec-subtitle-text scope as `jacosub` above.",
+    ),
+    (
+        "vplayer",
+        "Same vaco-codec-subtitle-text scope as `jacosub` above.",
+    ),
     (
         "scte_35",
         "MediaType::Data: SCTE-35 splice cues are opaque metadata carried \
@@ -1414,10 +1522,7 @@ const ALLOW_UNDECODABLE_PRODUCED: &[(&str, &str)] = &[
         "No crate in this tree decodes AVS2 yet; only the CodecId variant \
          and container-level mapping exist (finding 4, vaco-demux-matroska).",
     ),
-    (
-        "avs3",
-        "Same scope as `avs2` above, for AVS3.",
-    ),
+    ("avs3", "Same scope as `avs2` above, for AVS3."),
     (
         "cavs",
         "Same scope as `avs2` above, for the earlier Chinese AVS \
@@ -1463,7 +1568,10 @@ const ALLOW_UNDECODABLE_PRODUCED: &[(&str, &str)] = &[
         "No crate in this tree decodes VP6 (Sorenson/On2) yet; not yet \
          scoped as its own tracked epic.",
     ),
-    ("vp6a", "Same scope as `vp6` above, for the alpha-channel variant."),
+    (
+        "vp6a",
+        "Same scope as `vp6` above, for the alpha-channel variant.",
+    ),
     ("vp6f", "Same scope as `vp6` above, for the Flash variant."),
     (
         "flashsv",
@@ -1486,7 +1594,10 @@ const ALLOW_UNDECODABLE_PRODUCED: &[(&str, &str)] = &[
         "No crate in this tree decodes id RoQ video yet \
          (vaco-format-misc::roq only demuxes the container).",
     ),
-    ("roq_dpcm", "Same scope as `roq` above, for its DPCM audio half."),
+    (
+        "roq_dpcm",
+        "Same scope as `roq` above, for its DPCM audio half.",
+    ),
     (
         "cljr",
         "No crate in this tree decodes Cirrus Logic AccuPak yet; not yet \
@@ -1502,7 +1613,10 @@ const ALLOW_UNDECODABLE_PRODUCED: &[(&str, &str)] = &[
         "No crate in this tree decodes GSM 06.10 yet; only \
          vaco-format-rtp's RTP depacketiser names the CodecId.",
     ),
-    ("gsm_ms", "Same scope as `gsm` above, for the Microsoft framing variant."),
+    (
+        "gsm_ms",
+        "Same scope as `gsm` above, for the Microsoft framing variant.",
+    ),
     (
         "amr_nb",
         "No crate in this tree decodes AMR-NB yet; only container-level \
@@ -1612,7 +1726,9 @@ fn check_decoder_exists_for_produced_codecs(
     let mut violations = Vec::new();
     for codec in &producible {
         if decodable.contains(codec)
-            || ALLOW_UNDECODABLE_PRODUCED.iter().any(|(n, _)| *n == codec.as_str())
+            || ALLOW_UNDECODABLE_PRODUCED
+                .iter()
+                .any(|(n, _)| *n == codec.as_str())
         {
             continue;
         }
@@ -1791,10 +1907,7 @@ const ALLOW_NAME_MISMATCH: &[(&str, &str)] = &[
          do, so this rests on public documentation (D7 Tier A) rather than \
          a direct measurement against this build.",
     ),
-    (
-        "subtitles",
-        "filter: same as `ass` above — needs libass.",
-    ),
+    ("subtitles", "filter: same as `ass` above — needs libass."),
     (
         "drawtext",
         "filter: a well-documented real FFmpeg filter name needing \
@@ -1948,7 +2061,12 @@ fn field_after_opt_attr(text: &str, attr_end: usize) -> Option<String> {
 /// `FormatOptions::recursion_limit` versus `RemoteAccess::recursion_limit`)
 /// in this tree, which crate scope already excludes — not within one crate,
 /// which is what would defeat this specific choice of scope.
-fn opt_field_is_read_elsewhere(text: &str, field: &str, exclude_start: usize, exclude_end: usize) -> bool {
+fn opt_field_is_read_elsewhere(
+    text: &str,
+    field: &str,
+    exclude_start: usize,
+    exclude_end: usize,
+) -> bool {
     let pattern = format!(".{field}");
     let mut search_from = 0usize;
     while let Some(rel) = text[search_from..].find(&pattern) {
@@ -2026,9 +2144,15 @@ fn mask_test_code(text: &str) -> String {
     let mut out: Vec<u8> = text.as_bytes().to_vec();
     for guard in ["#[cfg(test)]", "#[test]"] {
         let mut i = 0;
-        while let Some(rel) = std::str::from_utf8(&out[i..]).ok().and_then(|s| s.find(guard)) {
+        while let Some(rel) = std::str::from_utf8(&out[i..])
+            .ok()
+            .and_then(|s| s.find(guard))
+        {
             let start = i + rel;
-            let Some(brace_rel) = std::str::from_utf8(&out[start..]).ok().and_then(|s| s.find('{')) else {
+            let Some(brace_rel) = std::str::from_utf8(&out[start..])
+                .ok()
+                .and_then(|s| s.find('{'))
+            else {
                 i = start + guard.len();
                 continue;
             };
@@ -2133,8 +2257,7 @@ fn check_unconsumed_options() -> Result<Vec<String>, String> {
                     // otherwise every field would trivially read as used by
                     // its own `#[opt(name = "...")]`/`pub field: T,`, this
                     // time as offsets into the whole-crate `joined` text.
-                    let decl_line_end =
-                        text[end..].find(',').map_or(text.len(), |k| end + k + 1);
+                    let decl_line_end = text[end..].find(',').map_or(text.len(), |k| end + k + 1);
                     let excl_start = base_offset + start;
                     let excl_end = base_offset + decl_line_end;
                     if opt_field_is_read_elsewhere(&krate.joined, &field, excl_start, excl_end) {
@@ -2437,7 +2560,10 @@ pub fn run(_check: bool) -> Task {
             "C. bitstream-filter family missing from bsf_descs()",
             check_bsf_chaining(&rows)?,
         ),
-        ("D. muxer with no demuxer of the same name", check_muxer_only(&rows)),
+        (
+            "D. muxer with no demuxer of the same name",
+            check_muxer_only(&rows),
+        ),
         (
             "E. descriptor built but never registered",
             check_unregistered_descriptors(&rows),
@@ -2586,8 +2712,7 @@ mod tests {
     #[test]
     fn check_decoder_exists_for_produced_codecs_is_clean_against_the_real_tree() {
         let rows = all_rows().expect("rows parse against the real tree");
-        let variant_to_name =
-            codec_name_table().expect("vaco-codec-core's CODECS table parses");
+        let variant_to_name = codec_name_table().expect("vaco-codec-core's CODECS table parses");
         let violations = check_decoder_exists_for_produced_codecs(&rows, &variant_to_name);
         assert!(
             violations.is_empty(),
@@ -2607,7 +2732,11 @@ mod tests {
         assert_eq!(table.get("H264").map(String::as_str), Some("h264"));
         assert_eq!(table.get("Jpeg").map(String::as_str), Some("mjpeg"));
         assert_eq!(table.get("AacLatm").map(String::as_str), Some("aac_latm"));
-        assert!(table.len() > 50, "expected dozens of codecs, got {}", table.len());
+        assert!(
+            table.len() > 50,
+            "expected dozens of codecs, got {}",
+            table.len()
+        );
     }
 
     #[test]
@@ -2625,7 +2754,10 @@ mod tests {
         assert!(demux.contains("webm"));
         assert!(demux.contains("mov"));
         assert!(demux.contains("m4a"));
-        assert!(!demux.contains("mov,mp4,m4a"), "must split, not keep the joined line");
+        assert!(
+            !demux.contains("mov,mp4,m4a"),
+            "must split, not keep the joined line"
+        );
         let mux = reference_section(text, "muxers");
         assert_eq!(mux, std::iter::once("mov".to_owned()).collect());
     }
@@ -2692,7 +2824,9 @@ mod tests {
         let text = "#[opt(name = \"x\", default = 0)]\npub thresh: i32,\n";
         let (start, end) = opt_attr_spans(text)[0];
         let decl_end = text[end..].find(',').map_or(text.len(), |k| end + k + 1);
-        assert!(!opt_field_is_read_elsewhere(text, "thresh", start, decl_end));
+        assert!(!opt_field_is_read_elsewhere(
+            text, "thresh", start, decl_end
+        ));
     }
 
     #[test]
@@ -2722,7 +2856,11 @@ mod tests {
         let before = names.len();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(before, names.len(), "a duplicate name hides its sibling's reason");
+        assert_eq!(
+            before,
+            names.len(),
+            "a duplicate name hides its sibling's reason"
+        );
     }
 
     #[test]

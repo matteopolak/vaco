@@ -123,7 +123,12 @@ pub(crate) fn encode_minimal(value: u64) -> EncodedLen {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -162,7 +167,19 @@ mod tests {
 
     #[test]
     fn minimal_form_round_trips_through_the_decode_side_rule() {
-        for v in [0u64, 1, 79, 127, 128, 255, 256, 65535, 1 << 20, 1 << 25, u64::MAX] {
+        for v in [
+            0u64,
+            1,
+            79,
+            127,
+            128,
+            255,
+            256,
+            65535,
+            1 << 20,
+            1 << 25,
+            u64::MAX,
+        ] {
             let enc = encode_minimal(v);
             assert_eq!(decode_shim_either_form(enc.as_slice()), v);
         }

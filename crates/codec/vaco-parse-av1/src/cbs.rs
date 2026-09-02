@@ -520,7 +520,10 @@ fn write_metadata(m: &Metadata, w: &mut BitWriter) {
                 w.put(8, u32::from(b));
             }
         }
-        Metadata::Other { metadata_type, data } => {
+        Metadata::Other {
+            metadata_type,
+            data,
+        } => {
             write_metadata_leb(w, *metadata_type);
             for &b in data {
                 w.put(8, u32::from(b));

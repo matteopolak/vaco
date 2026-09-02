@@ -79,15 +79,24 @@ fn frame_from_interleaved(
     let layout = ChannelLayout::default_for(channels.max(1))
         .unwrap_or(ChannelLayout::unspecified(channels.max(1)));
     let count = samples.len() as u32 / channels.max(1);
-    let mut frame =
-        Frame::alloc_audio(&mut budget, vaco_sampfmt::SampleFmt::S16, layout, count, sample_rate)?;
+    let mut frame = Frame::alloc_audio(
+        &mut budget,
+        vaco_sampfmt::SampleFmt::S16,
+        layout,
+        count,
+        sample_rate,
+    )?;
     let FrameData::Audio { planes, .. } = &mut frame.data else {
         return Err(Error::InvalidData("simple-audio: expected an audio frame"));
     };
-    let plane = planes.get_mut(0).ok_or(Error::InvalidData("simple-audio: no plane 0"))?;
+    let plane = planes
+        .get_mut(0)
+        .ok_or(Error::InvalidData("simple-audio: no plane 0"))?;
     let bytes = i16_samples_to_bytes(samples);
     let buf = plane.data.make_mut();
-    let dst = buf.get_mut(..bytes.len().min(buf.len())).ok_or(Error::InvalidData("simple-audio: plane too short"))?;
+    let dst = buf
+        .get_mut(..bytes.len().min(buf.len()))
+        .ok_or(Error::InvalidData("simple-audio: plane too short"))?;
     let src = bytes.get(..dst.len()).unwrap_or(&[]);
     dst.copy_from_slice(src);
     frame.pts = pts;
@@ -110,7 +119,9 @@ fn interleaved_owned(frame: &Frame) -> Result<(Vec<i16>, u32)> {
     let FrameData::Audio { planes, layout, .. } = &frame.data else {
         return Err(Error::InvalidData("simple-audio: expected an audio frame"));
     };
-    let plane = planes.first().ok_or(Error::InvalidData("simple-audio: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("simple-audio: no plane 0"))?;
     Ok((bytes_to_i16_samples(plane.data.as_slice()), layout.channels))
 }
 
@@ -132,7 +143,9 @@ pub struct DfpwmDecoder {
 impl DfpwmDecoder {
     #[must_use]
     pub fn new(_limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()) }
+        Self {
+            machine: Machine::new(Caps::empty()),
+        }
     }
 }
 
@@ -165,7 +178,9 @@ pub struct DfpwmEncoder {
 impl DfpwmEncoder {
     #[must_use]
     pub fn new(_limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()) }
+        Self {
+            machine: Machine::new(Caps::empty()),
+        }
     }
 }
 
@@ -200,7 +215,10 @@ pub struct QoaDecoder {
 impl QoaDecoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+        }
     }
 }
 
@@ -250,7 +268,11 @@ pub struct QoaEncoder {
 impl QoaEncoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::SUBFRAMES.union(Caps::VARIABLE_FRAME_SIZE)), limits, states: Vec::new() }
+        Self {
+            machine: Machine::new(Caps::SUBFRAMES.union(Caps::VARIABLE_FRAME_SIZE)),
+            limits,
+            states: Vec::new(),
+        }
     }
 }
 
@@ -293,7 +315,13 @@ impl SendReceive for QoaEncoder {
                         .saturating_sub(start)
                         .min(qoa::MAX_SLICES_PER_FRAME * qoa::SLICE_SAMPLES);
                     let chunk = samples.get(start * ch..(start + take) * ch).unwrap_or(&[]);
-                    let wire = qoa::encode(&mut budget, &mut self.states, channels.max(1), *sample_rate, chunk)?;
+                    let wire = qoa::encode(
+                        &mut budget,
+                        &mut self.states,
+                        channels.max(1),
+                        *sample_rate,
+                        chunk,
+                    )?;
                     let mut packet = Packet::from_slice(&mut budget, &wire)?;
                     packet.pts = frame.pts;
                     // Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/
@@ -306,7 +334,8 @@ impl SendReceive for QoaEncoder {
                     // actually encoded (`take`, already the real remaining-
                     // sample count via `saturating_sub`), never a fixed
                     // per-packet constant.
-                    let time_base = Rational::new(1, i32::try_from(*sample_rate).unwrap_or(1).max(1));
+                    let time_base =
+                        Rational::new(1, i32::try_from(*sample_rate).unwrap_or(1).max(1));
                     packet.duration = Timestamp::new(i64::try_from(take).unwrap_or(0))
                         .to_duration(time_base)
                         .unwrap_or(Duration::ZERO);
@@ -339,7 +368,12 @@ struct ComfortNoiseConfig {
 impl Default for ComfortNoiseConfig {
     fn default() -> Self {
         let d = comfortnoise::Config::default();
-        Self { sample_rate: d.sample_rate, frame_samples: d.frame_samples, seed: d.seed, order: 8 }
+        Self {
+            sample_rate: d.sample_rate,
+            frame_samples: d.frame_samples,
+            seed: d.seed,
+            order: 8,
+        }
     }
 }
 
@@ -355,11 +389,20 @@ impl ComfortNoiseDecoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
         let cfg = ComfortNoiseConfig::default();
-        Self { machine: Machine::new(Caps::empty()), limits, generator: comfortnoise::Generator::new(cfg.seed), cfg }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            generator: comfortnoise::Generator::new(cfg.seed),
+            cfg,
+        }
     }
 
     #[must_use]
-    pub fn with_sample_rate_and_frame_samples(mut self, sample_rate: u32, frame_samples: u32) -> Self {
+    pub fn with_sample_rate_and_frame_samples(
+        mut self,
+        sample_rate: u32,
+        frame_samples: u32,
+    ) -> Self {
         if sample_rate > 0 {
             self.cfg.sample_rate = sample_rate;
         }
@@ -386,8 +429,16 @@ impl SendReceive for ComfortNoiseDecoder {
                 let Some(pkt) = input else { return Ok(()) };
                 let mut budget = Budget::new(self.limits.clone());
                 let sid = comfortnoise::parse(&mut budget, pkt.payload())?;
-                let samples = self.generator.generate(&mut budget, &sid, self.cfg.frame_samples)?;
-                let frame = frame_from_interleaved(&self.limits, &samples, 1, self.cfg.sample_rate, pkt.pts)?;
+                let samples = self
+                    .generator
+                    .generate(&mut budget, &sid, self.cfg.frame_samples)?;
+                let frame = frame_from_interleaved(
+                    &self.limits,
+                    &samples,
+                    1,
+                    self.cfg.sample_rate,
+                    pkt.pts,
+                )?;
                 self.machine.emit(frame);
                 Ok(())
             }
@@ -411,7 +462,11 @@ pub struct ComfortNoiseEncoder {
 impl ComfortNoiseEncoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, order: ComfortNoiseConfig::default().order }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            order: ComfortNoiseConfig::default().order,
+        }
     }
 }
 
@@ -558,12 +613,20 @@ mod tests {
     use vaco_core::Error;
 
     fn tone(n: usize) -> Vec<i16> {
-        (0..n).map(|i| ((i as f64 * 0.2).sin() * 6000.0) as i16).collect()
+        (0..n)
+            .map(|i| ((i as f64 * 0.2).sin() * 6000.0) as i16)
+            .collect()
     }
 
     fn frame_of(samples: &[i16], channels: u32, sample_rate: u32) -> Frame {
-        frame_from_interleaved(&Limits::permissive(), samples, channels, sample_rate, vaco_core::Timestamp::new(0))
-            .unwrap()
+        frame_from_interleaved(
+            &Limits::permissive(),
+            samples,
+            channels,
+            sample_rate,
+            vaco_core::Timestamp::new(0),
+        )
+        .unwrap()
     }
 
     #[test]
@@ -610,7 +673,9 @@ mod tests {
         let frame = dec.receive().unwrap();
 
         // 600 samples per channel at 44100 Hz.
-        let expected = Timestamp::new(600).to_duration(Rational::new(1, 44_100)).unwrap();
+        let expected = Timestamp::new(600)
+            .to_duration(Rational::new(1, 44_100))
+            .unwrap();
         assert_ne!(expected, Duration::ZERO);
         assert_eq!(frame.duration, expected);
     }
@@ -628,7 +693,10 @@ mod tests {
                 Err(e) => panic!("unexpected: {e:?}"),
             }
         }
-        assert!(packets >= 3, "expected at least 3 QOA frames, got {packets}");
+        assert!(
+            packets >= 3,
+            "expected at least 3 QOA frames, got {packets}"
+        );
     }
 
     /// Same bug class as `vaco-codec-flac`/`vaco-codec-alac`'s encoders,
@@ -657,7 +725,11 @@ mod tests {
         }
         assert_eq!(durations.len(), 3, "two full QOA frames plus one short one");
         for d in &durations {
-            assert_ne!(*d, Duration::ZERO, "every packet must carry a real duration");
+            assert_ne!(
+                *d,
+                Duration::ZERO,
+                "every packet must carry a real duration"
+            );
         }
         let time_base = Rational::new(1, 8_000);
         let full = Timestamp::new(i64::try_from(one_frame).unwrap())
@@ -677,7 +749,10 @@ mod tests {
         let frame = dec.receive().unwrap();
         let (decoded, channels) = interleaved_owned(&frame).unwrap();
         assert_eq!(channels, 1);
-        assert_eq!(decoded.len(), ComfortNoiseConfig::default().frame_samples as usize);
+        assert_eq!(
+            decoded.len(),
+            ComfortNoiseConfig::default().frame_samples as usize
+        );
     }
 
     /// Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/
@@ -690,7 +765,9 @@ mod tests {
         let mut enc = ComfortNoiseEncoder::new(Limits::permissive());
         enc.send(Some(&frame_of(&tone(400), 1, 8_000))).unwrap();
         let pkt = enc.receive().unwrap();
-        let expected = Timestamp::new(400).to_duration(Rational::new(1, 8_000)).unwrap();
+        let expected = Timestamp::new(400)
+            .to_duration(Rational::new(1, 8_000))
+            .unwrap();
         assert_ne!(expected, Duration::ZERO);
         assert_eq!(pkt.duration, expected);
     }

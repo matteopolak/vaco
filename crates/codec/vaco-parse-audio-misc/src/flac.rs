@@ -87,7 +87,9 @@ impl StreamInfo {
             | u64::from(packed[7]);
 
         if sample_rate == 0 {
-            return Err(Error::InvalidData("FLAC STREAMINFO states zero sample rate"));
+            return Err(Error::InvalidData(
+                "FLAC STREAMINFO states zero sample rate",
+            ));
         }
 
         Ok(Self {

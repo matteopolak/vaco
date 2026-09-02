@@ -283,12 +283,12 @@ impl CbsCodec for HevcCbs {
                 write_vps_data(vps, w);
                 Ok(())
             }),
-            HevcContent::Sps(sps) => {
-                write_param_set(out, budget, NalUnitType::SPS_NUT, |w| write_sps_data(sps, w))
-            }
-            HevcContent::Pps(pps) => {
-                write_param_set(out, budget, NalUnitType::PPS_NUT, |w| write_pps_data(pps, w))
-            }
+            HevcContent::Sps(sps) => write_param_set(out, budget, NalUnitType::SPS_NUT, |w| {
+                write_sps_data(sps, w)
+            }),
+            HevcContent::Pps(pps) => write_param_set(out, budget, NalUnitType::PPS_NUT, |w| {
+                write_pps_data(pps, w)
+            }),
             HevcContent::Sei { .. } => Err(Error::Unsupported(
                 "writing an HEVC SEI unit back out is not implemented",
             )),
@@ -391,14 +391,27 @@ fn write_vps_data(vps: &Vps, w: &mut BitWriter) {
     // entry per coded sub-layer (never collapses to the single-entry-repeated
     // form on read — see `Vps::parse_data`'s `first` variable), so a list
     // shorter than `max_sub_layers` is what "not present" looks like here.
-    let ordering_present = vps.max_dec_pic_buffering_minus1.len() as u32 == max_sub_layers_minus1 + 1;
+    let ordering_present =
+        vps.max_dec_pic_buffering_minus1.len() as u32 == max_sub_layers_minus1 + 1;
     w.put(1, u32::from(ordering_present));
-    let first = if ordering_present { 0 } else { max_sub_layers_minus1 };
+    let first = if ordering_present {
+        0
+    } else {
+        max_sub_layers_minus1
+    };
     for i in first..=max_sub_layers_minus1.min(MAX_SUB_LAYERS - 1) {
         let idx = (i - first) as usize;
-        w.ue(vps.max_dec_pic_buffering_minus1.get(idx).copied().unwrap_or(0));
+        w.ue(vps
+            .max_dec_pic_buffering_minus1
+            .get(idx)
+            .copied()
+            .unwrap_or(0));
         w.ue(vps.max_num_reorder_pics.get(idx).copied().unwrap_or(0));
-        w.ue(vps.max_latency_increase_plus1.get(idx).copied().unwrap_or(0));
+        w.ue(vps
+            .max_latency_increase_plus1
+            .get(idx)
+            .copied()
+            .unwrap_or(0));
     }
 
     w.put(6, u32::from(vps.max_layer_id));
@@ -498,7 +511,12 @@ fn write_ptl(w: &mut BitWriter, ptl: &ProfileTierLevel, max_num_sub_layers_minus
 
 /// `hrd_parameters(commonInfPresentFlag, maxNumSubLayersMinus1)`, §E.2.2 — the
 /// inverse of `sps::parse_hrd`.
-fn write_hrd(w: &mut BitWriter, h: &HrdParameters, common_inf_present: bool, max_sub_layers_minus1: u32) {
+fn write_hrd(
+    w: &mut BitWriter,
+    h: &HrdParameters,
+    common_inf_present: bool,
+    max_sub_layers_minus1: u32,
+) {
     if common_inf_present {
         w.put(1, u32::from(h.nal_hrd_present));
         w.put(1, u32::from(h.vcl_hrd_present));
@@ -592,14 +610,27 @@ fn write_sps_data(sps: &Sps, w: &mut BitWriter) -> Result<()> {
     w.ue(u32::from(sps.bit_depth_chroma) - 8);
     w.ue(u32::from(sps.log2_max_pic_order_cnt_lsb) - 4);
 
-    let ordering_present = sps.max_dec_pic_buffering_minus1.len() as u32 == max_sub_layers_minus1 + 1;
+    let ordering_present =
+        sps.max_dec_pic_buffering_minus1.len() as u32 == max_sub_layers_minus1 + 1;
     w.put(1, u32::from(ordering_present));
-    let first = if ordering_present { 0 } else { max_sub_layers_minus1 };
+    let first = if ordering_present {
+        0
+    } else {
+        max_sub_layers_minus1
+    };
     for i in first..=max_sub_layers_minus1.min(MAX_SUB_LAYERS - 1) {
         let idx = (i - first) as usize;
-        w.ue(sps.max_dec_pic_buffering_minus1.get(idx).copied().unwrap_or(0));
+        w.ue(sps
+            .max_dec_pic_buffering_minus1
+            .get(idx)
+            .copied()
+            .unwrap_or(0));
         w.ue(sps.max_num_reorder_pics.get(idx).copied().unwrap_or(0));
-        w.ue(sps.max_latency_increase_plus1.get(idx).copied().unwrap_or(0));
+        w.ue(sps
+            .max_latency_increase_plus1
+            .get(idx)
+            .copied()
+            .unwrap_or(0));
     }
 
     w.ue(u32::from(sps.log2_min_cb_size) - 3);
@@ -717,13 +748,19 @@ fn write_st_ref_pic_set_explicit(w: &mut BitWriter, set: &ShortTermRps, first: b
     for (i, &d) in set.delta_poc_s0.iter().enumerate() {
         w.ue((prev - d).unsigned_abs().saturating_sub(1));
         prev = d;
-        w.put(1, u32::from(set.used_by_curr_pic_s0.get(i).copied().unwrap_or(false)));
+        w.put(
+            1,
+            u32::from(set.used_by_curr_pic_s0.get(i).copied().unwrap_or(false)),
+        );
     }
     prev = 0;
     for (i, &d) in set.delta_poc_s1.iter().enumerate() {
         w.ue((d - prev).unsigned_abs().saturating_sub(1));
         prev = d;
-        w.put(1, u32::from(set.used_by_curr_pic_s1.get(i).copied().unwrap_or(false)));
+        w.put(
+            1,
+            u32::from(set.used_by_curr_pic_s1.get(i).copied().unwrap_or(false)),
+        );
     }
 }
 
@@ -1007,7 +1044,11 @@ fn write_deblocking_control(w: &mut BitWriter, d: &DeblockingControl) {
 }
 
 /// `pps_range_extension()`, §7.3.2.3.2 — the inverse of `read_range_extension`.
-fn write_pps_range_extension(w: &mut BitWriter, r: &PpsRangeExtension, transform_skip_enabled: bool) {
+fn write_pps_range_extension(
+    w: &mut BitWriter,
+    r: &PpsRangeExtension,
+    transform_skip_enabled: bool,
+) {
     if transform_skip_enabled {
         w.ue(r.log2_max_transform_skip_block_size_minus2);
     }

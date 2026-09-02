@@ -2,8 +2,8 @@
 //! (spec §5.2.2), and the mapping between a distance *code* and an actual
 //! scan-line pixel offset.
 
-use super::distance_map::DISTANCE_MAP;
 use super::bitio::BitReaderLsb;
+use super::distance_map::DISTANCE_MAP;
 
 /// Recover a (length or distance) value from a prefix code plus the extra
 /// bits that follow it in the stream. Spec's own pseudocode, transcribed
@@ -46,7 +46,10 @@ pub(crate) fn distance_code_to_dist(distance_code: u32, image_width: u32) -> i64
     if distance_code > 120 {
         return i64::from(distance_code - 120);
     }
-    let (xi, yi) = DISTANCE_MAP.get((distance_code.saturating_sub(1)) as usize).copied().unwrap_or((0, 1));
+    let (xi, yi) = DISTANCE_MAP
+        .get((distance_code.saturating_sub(1)) as usize)
+        .copied()
+        .unwrap_or((0, 1));
     let dist = i64::from(xi) + i64::from(yi) * i64::from(image_width);
     dist.max(1)
 }
@@ -54,8 +57,8 @@ pub(crate) fn distance_code_to_dist(distance_code: u32, image_width: u32) -> i64
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
-    use super::*;
     use super::super::bitio::BitWriterLsb;
+    use super::*;
 
     #[test]
     fn value_to_prefix_and_back_agree_for_every_length_in_range() {

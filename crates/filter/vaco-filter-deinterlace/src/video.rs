@@ -93,7 +93,12 @@ pub(crate) fn alloc_like(
 /// range, which happens at the edges of odd-height planes — every caller
 /// documents its own edge policy rather than relying on this silently doing
 /// nothing.
-pub(crate) fn copy_row(dst: &mut vaco_frame::PlaneMut<'_>, dy: usize, src: vaco_frame::PlaneRef<'_>, sy: usize) {
+pub(crate) fn copy_row(
+    dst: &mut vaco_frame::PlaneMut<'_>,
+    dy: usize,
+    src: vaco_frame::PlaneRef<'_>,
+    sy: usize,
+) {
     let Some(src_row) = src.row(sy) else { return };
     let n = src_row.len();
     if let Some(dst_row) = dst.row_mut(dy) {
@@ -133,7 +138,9 @@ pub(crate) fn extract_field(pool: &FramePool, src: &Frame, top: bool) -> Result<
     let mut out = alloc_like(pool, src, format, width, field_h.max(1))?;
     for p in 0..format.plane_count() {
         let out_rows = format.plane_height(field_h.max(1), p as u8) as usize;
-        let Some(src_plane) = src.plane(p) else { continue };
+        let Some(src_plane) = src.plane(p) else {
+            continue;
+        };
         let Some(mut dst_plane) = out.plane_mut(p) else {
             continue;
         };
@@ -205,7 +212,9 @@ pub(crate) fn weave_fields(
 /// `separatefields`/`weave`'s field order on an unmarked frame behaves like
 /// `setfield=bff`, not `setfield=tff` (`ffmpeg` 8.1, `2x8` gray-ramp probe).
 pub(crate) fn is_tff(frame: &Frame) -> bool {
-    frame.flags.contains(vaco_frame::FrameFlags::TOP_FIELD_FIRST)
+    frame
+        .flags
+        .contains(vaco_frame::FrameFlags::TOP_FIELD_FIRST)
 }
 
 #[cfg(test)]
@@ -248,7 +257,11 @@ pub(crate) mod test_support {
     /// Fill plane 0 of an existing frame with the same row-index ramp
     /// [`ramp_frame`] uses, without reallocating — for tests that need to
     /// set flags before filling.
-    #[allow(clippy::unwrap_used, clippy::cast_possible_truncation, reason = "test fixture")]
+    #[allow(
+        clippy::unwrap_used,
+        clippy::cast_possible_truncation,
+        reason = "test fixture"
+    )]
     pub(crate) fn fill_row_ramp(frame: &mut Frame) {
         let rows = frame.plane(0).map_or(0, |p| p.rows());
         if let Some(mut p) = frame.plane_mut(0) {

@@ -25,7 +25,11 @@ impl Plane {
     pub fn new(budget: &mut Budget, width: usize, height: usize) -> Result<Self> {
         let len = width.saturating_mul(height);
         let data = budget.alloc(len)?;
-        Ok(Self { width, height, data })
+        Ok(Self {
+            width,
+            height,
+            data,
+        })
     }
 
     #[must_use]
@@ -47,7 +51,10 @@ impl Plane {
         let max_x = i32::try_from(self.width.saturating_sub(1)).unwrap_or(0);
         let max_y = i32::try_from(self.height.saturating_sub(1)).unwrap_or(0);
         let (cx, cy) = (x.clamp(0, max_x), y.clamp(0, max_y));
-        let (ux, uy) = (usize::try_from(cx).unwrap_or(0), usize::try_from(cy).unwrap_or(0));
+        let (ux, uy) = (
+            usize::try_from(cx).unwrap_or(0),
+            usize::try_from(cy).unwrap_or(0),
+        );
         self.data.get(uy * self.width + ux).copied().unwrap_or(0)
     }
 
@@ -126,7 +133,10 @@ impl Picture {
     /// without the two borrows aliasing since `y` and `u`/`v` are always
     /// different fields.
     #[must_use]
-    pub const fn luma_and_chroma_mut(&mut self, plane_index: usize) -> (&Plane, Option<&mut Plane>) {
+    pub const fn luma_and_chroma_mut(
+        &mut self,
+        plane_index: usize,
+    ) -> (&Plane, Option<&mut Plane>) {
         let chroma = match plane_index {
             1 => self.u.as_mut(),
             2 => self.v.as_mut(),

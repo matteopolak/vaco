@@ -64,7 +64,10 @@ impl LockEntry {
     fn from_table(table: &toml_min::Table) -> Option<Self> {
         let name = table.get("name")?.as_str()?.to_owned();
         let suite = table.get("suite")?.as_str()?.to_owned();
-        let url = table.get("url").and_then(TomlValue::as_str).map(str::to_owned);
+        let url = table
+            .get("url")
+            .and_then(TomlValue::as_str)
+            .map(str::to_owned);
         let sha256 = table
             .get("sha256")
             .and_then(TomlValue::as_str)
@@ -94,7 +97,10 @@ impl LockEntry {
                     .collect()
             })
             .unwrap_or_default();
-        let member = table.get("member").and_then(TomlValue::as_str).map(str::to_owned);
+        let member = table
+            .get("member")
+            .and_then(TomlValue::as_str)
+            .map(str::to_owned);
         Some(Self {
             name,
             suite,
@@ -147,7 +153,10 @@ pub struct MediaLock {
 #[derive(Debug)]
 pub enum LockError {
     Parse(toml_min::TomlError),
-    MissingField { entry_index: usize, field: &'static str },
+    MissingField {
+        entry_index: usize,
+        field: &'static str,
+    },
 }
 
 impl std::fmt::Display for LockError {
@@ -179,7 +188,11 @@ impl MediaLock {
     /// A syntax error, or an `[[entry]]` missing `name`/`suite`.
     pub fn parse(src: &str) -> Result<Self, LockError> {
         let doc = toml_min::parse(src).map_err(LockError::Parse)?;
-        let schema = doc.top.get("schema").and_then(TomlValue::as_integer).unwrap_or(1);
+        let schema = doc
+            .top
+            .get("schema")
+            .and_then(TomlValue::as_integer)
+            .unwrap_or(1);
         let mut entries = Vec::new();
         for (idx, table) in doc.section("entry").iter().enumerate() {
             let entry = LockEntry::from_table(table).ok_or(LockError::MissingField {
@@ -276,8 +289,17 @@ mod tests {
     #[test]
     fn is_fetchable_distinguishes_documented_gaps() {
         let lock = sample();
-        assert!(lock.find("pngsuite-basn0g01").expect("present").is_fetchable());
-        assert!(!lock.find("jctvc-not-yet-sourced").expect("present").is_fetchable());
+        assert!(
+            lock.find("pngsuite-basn0g01")
+                .expect("present")
+                .is_fetchable()
+        );
+        assert!(
+            !lock
+                .find("jctvc-not-yet-sourced")
+                .expect("present")
+                .is_fetchable()
+        );
     }
 
     #[test]

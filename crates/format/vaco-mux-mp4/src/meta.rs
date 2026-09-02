@@ -112,4 +112,3 @@ pub fn build_udta(opts: &MuxOptions) -> Option<Vec<u8>> {
         Some(writer::udta(&udta_children))
     }
 }
-

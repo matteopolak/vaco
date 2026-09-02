@@ -131,7 +131,9 @@ fn ivf_frame_payloads(bytes: &[u8]) -> Vec<&[u8]> {
     while let Some(hdr) = bytes.get(off..off + 12) {
         let size = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
         let payload_start = off + 12;
-        let Some(payload) = bytes.get(payload_start..payload_start + size) else { break };
+        let Some(payload) = bytes.get(payload_start..payload_start + size) else {
+            break;
+        };
         frames.push(payload);
         off = payload_start + size;
     }
@@ -149,10 +151,14 @@ struct DecodedFrame {
 
 fn drain_ready(dec: &mut Vp9Decoder, out: &mut Vec<DecodedFrame>) {
     while let Ok(frame) = dec.receive_frame() {
-        let Some((width, height)) = frame.dimensions() else { continue };
+        let Some((width, height)) = frame.dimensions() else {
+            continue;
+        };
         let mut yuv = Vec::new();
         for idx in 0..3 {
-            let Some(plane) = frame.plane(idx) else { continue };
+            let Some(plane) = frame.plane(idx) else {
+                continue;
+            };
             for r in 0..plane.rows() {
                 yuv.extend_from_slice(plane.row(r).unwrap_or(&[]));
             }
@@ -169,7 +175,9 @@ fn decode_all(dec: &mut Vp9Decoder, ivf_bytes: &[u8]) -> Vec<DecodedFrame> {
     let mut budget = Budget::new(Limits::default());
     let mut out = Vec::new();
     for payload in ivf_frame_payloads(ivf_bytes) {
-        let Ok(packet) = Packet::from_slice(&mut budget, payload) else { continue };
+        let Ok(packet) = Packet::from_slice(&mut budget, payload) else {
+            continue;
+        };
         if dec.send_packet(Some(&packet)).is_err() {
             continue;
         }
@@ -201,7 +209,11 @@ fn fixture_paths() -> Vec<PathBuf> {
         .filter(|p| p.extension().is_some_and(|e| e == "ivf"))
         .collect();
     entries.sort();
-    assert!(!entries.is_empty(), "no .ivf vectors found in {}", dir.display());
+    assert!(
+        !entries.is_empty(),
+        "no .ivf vectors found in {}",
+        dir.display()
+    );
     entries
 }
 
@@ -220,7 +232,11 @@ fn threads_are_byte_identical() {
             let mut dec = Vp9Decoder::new(Limits::default());
             let granted = dec.set_thread_count(threads);
             let frames = decode_all(&mut dec, &bytes);
-            assert!(!frames.is_empty(), "{}: threads={threads} decoded zero frames", path.display());
+            assert!(
+                !frames.is_empty(),
+                "{}: threads={threads} decoded zero frames",
+                path.display()
+            );
             if let Some(base) = &baseline {
                 assert_eq!(
                     base.len(),
@@ -229,10 +245,21 @@ fn threads_are_byte_identical() {
                     path.display()
                 );
                 for (i, (b, f)) in base.iter().zip(frames.iter()).enumerate() {
-                    assert_eq!(b.width, f.width, "{}: threads={threads} frame {i} width differs", path.display());
-                    assert_eq!(b.height, f.height, "{}: threads={threads} frame {i} height differs", path.display());
                     assert_eq!(
-                        b.yuv, f.yuv,
+                        b.width,
+                        f.width,
+                        "{}: threads={threads} frame {i} width differs",
+                        path.display()
+                    );
+                    assert_eq!(
+                        b.height,
+                        f.height,
+                        "{}: threads={threads} frame {i} height differs",
+                        path.display()
+                    );
+                    assert_eq!(
+                        b.yuv,
+                        f.yuv,
                         "{}: threads={threads} frame {i} is not byte-identical to threads=1",
                         path.display()
                     );
@@ -250,10 +277,23 @@ fn ffmpeg_reference_yuv(path: &Path) -> Vec<u8> {
     let out = Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
         .arg(path)
-        .args(["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"])
+        .args([
+            "-fps_mode",
+            "passthrough",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "yuv420p",
+            "-",
+        ])
         .output()
         .expect("run ffmpeg");
-    assert!(out.status.success(), "ffmpeg failed to decode {}: {}", path.display(), String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "ffmpeg failed to decode {}: {}",
+        path.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
     out.stdout
 }
 
@@ -265,12 +305,30 @@ fn ffmpeg_reference_yuv(path: &Path) -> Vec<u8> {
 /// that hid).
 fn ffprobe_frame_count(path: &Path) -> usize {
     let out = Command::new("ffprobe")
-        .args(["-v", "error", "-count_frames", "-select_streams", "v:0", "-show_entries", "stream=nb_read_frames", "-of", "default=nk=1:nw=1"])
+        .args([
+            "-v",
+            "error",
+            "-count_frames",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=nb_read_frames",
+            "-of",
+            "default=nk=1:nw=1",
+        ])
         .arg(path)
         .output()
         .expect("run ffprobe");
-    assert!(out.status.success(), "ffprobe failed on {}: {}", path.display(), String::from_utf8_lossy(&out.stderr));
-    String::from_utf8_lossy(&out.stdout).trim().parse().unwrap_or_else(|e| panic!("ffprobe nb_read_frames for {}: {e}", path.display()))
+    assert!(
+        out.status.success(),
+        "ffprobe failed on {}: {}",
+        path.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout)
+        .trim()
+        .parse()
+        .unwrap_or_else(|e| panic!("ffprobe nb_read_frames for {}: {e}", path.display()))
 }
 
 /// Black-box-oracle half of the acceptance criterion: this crate's decode
@@ -293,7 +351,13 @@ fn decode_matches_ffmpeg_on_the_committed_vectors() {
         // even when the two sides have a completely different number of
         // frames (this module's doc has the concrete case this missed).
         let expected_frames = ffprobe_frame_count(path);
-        assert_eq!(ours.len(), expected_frames, "{}: decoded {} frames, ffprobe reports {expected_frames}", path.display(), ours.len());
+        assert_eq!(
+            ours.len(),
+            expected_frames,
+            "{}: decoded {} frames, ffprobe reports {expected_frames}",
+            path.display(),
+            ours.len()
+        );
 
         let reference = ffmpeg_reference_yuv(path);
         let mut ref_offset = 0usize;
@@ -302,9 +366,16 @@ fn decode_matches_ffmpeg_on_the_committed_vectors() {
             let y_size = (frame.width as usize) * (frame.height as usize);
             let c_size = frame.width.div_ceil(2) as usize * frame.height.div_ceil(2) as usize;
             let frame_size = y_size + 2 * c_size;
-            let Some(ref_frame) = reference.get(ref_offset..ref_offset + frame_size) else { break };
+            let Some(ref_frame) = reference.get(ref_offset..ref_offset + frame_size) else {
+                break;
+            };
             ref_offset += frame_size;
-            assert_eq!(&frame.yuv[..], ref_frame, "{}: frame {frames_compared} is not byte-identical to ffmpeg", path.display());
+            assert_eq!(
+                &frame.yuv[..],
+                ref_frame,
+                "{}: frame {frames_compared} is not byte-identical to ffmpeg",
+                path.display()
+            );
             frames_compared += 1;
         }
         assert!(
@@ -320,9 +391,22 @@ fn decode_matches_ffmpeg_on_the_committed_vectors() {
         // either) -- together with the frame-count assertion above, this
         // is what actually rules out "same byte prefix, different length"
         // rather than a real match.
-        assert_eq!(frames_compared, ours.len(), "{}: stopped comparing early, ffmpeg reference ran out of bytes first", path.display());
-        assert_eq!(ref_offset, reference.len(), "{}: ffmpeg reference has bytes left over after all of our frames were consumed", path.display());
-        println!("{:<40} frames={frames_compared} byte-exact vs ffmpeg", path.file_name().unwrap_or_default().to_string_lossy());
+        assert_eq!(
+            frames_compared,
+            ours.len(),
+            "{}: stopped comparing early, ffmpeg reference ran out of bytes first",
+            path.display()
+        );
+        assert_eq!(
+            ref_offset,
+            reference.len(),
+            "{}: ffmpeg reference has bytes left over after all of our frames were consumed",
+            path.display()
+        );
+        println!(
+            "{:<40} frames={frames_compared} byte-exact vs ffmpeg",
+            path.file_name().unwrap_or_default().to_string_lossy()
+        );
         vectors_checked += 1;
     }
     assert!(vectors_checked > 0, "no vectors were actually compared");
@@ -339,18 +423,34 @@ fn decode_matches_ffmpeg_on_the_committed_vectors() {
 /// `--ignored`.
 #[test]
 fn profile1_gbrp_thread_counts_agree_on_frame_count_and_bytes() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/vp9_native/vp9_profile1_gbrp_altref.ivf");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/vp9_native/vp9_profile1_gbrp_altref.ivf");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let mut baseline: Option<Vec<DecodedFrame>> = None;
     for threads in [1usize, 4] {
         let mut dec = Vp9Decoder::new(Limits::default());
         dec.set_thread_count(threads);
         let frames = decode_all(&mut dec, &bytes);
-        assert_eq!(frames.len(), 50, "{}: threads={threads} expected 50 shown frames (4 of 54 sub-frames are invisible alt-refs)", path.display());
+        assert_eq!(
+            frames.len(),
+            50,
+            "{}: threads={threads} expected 50 shown frames (4 of 54 sub-frames are invisible alt-refs)",
+            path.display()
+        );
         if let Some(base) = &baseline {
-            assert_eq!(base.len(), frames.len(), "{}: threads={threads} frame count differs from threads=1", path.display());
+            assert_eq!(
+                base.len(),
+                frames.len(),
+                "{}: threads={threads} frame count differs from threads=1",
+                path.display()
+            );
             for (i, (b, f)) in base.iter().zip(frames.iter()).enumerate() {
-                assert_eq!(b.yuv, f.yuv, "{}: threads={threads} frame {i} is not byte-identical to threads=1", path.display());
+                assert_eq!(
+                    b.yuv,
+                    f.yuv,
+                    "{}: threads={threads} frame {i} is not byte-identical to threads=1",
+                    path.display()
+                );
             }
         } else {
             baseline = Some(frames);
@@ -361,29 +461,70 @@ fn profile1_gbrp_thread_counts_agree_on_frame_count_and_bytes() {
 #[test]
 #[ignore = "shells out to the system ffmpeg binary; run explicitly with --ignored"]
 fn profile1_gbrp_frame_count_and_bytes_match_ffmpeg_natively() {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/vp9_native/vp9_profile1_gbrp_altref.ivf");
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures/vp9_native/vp9_profile1_gbrp_altref.ivf");
     let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
     let ours = decode_all(&mut Vp9Decoder::new(Limits::default()), &bytes);
 
     let expected_frames = ffprobe_frame_count(&path);
-    assert_eq!(ours.len(), expected_frames, "{}: decoded {} frames, ffprobe reports {expected_frames}", path.display(), ours.len());
+    assert_eq!(
+        ours.len(),
+        expected_frames,
+        "{}: decoded {} frames, ffprobe reports {expected_frames}",
+        path.display(),
+        ours.len()
+    );
 
     let out = Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
         .arg(&path)
-        .args(["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "gbrp", "-"])
+        .args([
+            "-fps_mode",
+            "passthrough",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "gbrp",
+            "-",
+        ])
         .output()
         .expect("run ffmpeg");
-    assert!(out.status.success(), "ffmpeg failed to decode {}: {}", path.display(), String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "ffmpeg failed to decode {}: {}",
+        path.display(),
+        String::from_utf8_lossy(&out.stderr)
+    );
     let reference = out.stdout;
 
     let mut ref_offset = 0usize;
     for (i, frame) in ours.iter().enumerate() {
         let frame_size = (frame.width as usize) * (frame.height as usize) * 3;
-        let ref_frame = reference.get(ref_offset..ref_offset + frame_size).unwrap_or_else(|| panic!("{}: ffmpeg reference ran out of bytes at frame {i}", path.display()));
-        assert_eq!(&frame.yuv[..], ref_frame, "{}: frame {i} is not byte-identical to ffmpeg's native gbrp decode", path.display());
+        let ref_frame = reference
+            .get(ref_offset..ref_offset + frame_size)
+            .unwrap_or_else(|| {
+                panic!(
+                    "{}: ffmpeg reference ran out of bytes at frame {i}",
+                    path.display()
+                )
+            });
+        assert_eq!(
+            &frame.yuv[..],
+            ref_frame,
+            "{}: frame {i} is not byte-identical to ffmpeg's native gbrp decode",
+            path.display()
+        );
         ref_offset += frame_size;
     }
-    assert_eq!(ref_offset, reference.len(), "{}: ffmpeg reference has bytes left over", path.display());
-    println!("{:<40} frames={} byte-exact vs ffmpeg (native gbrp)", path.file_name().unwrap_or_default().to_string_lossy(), ours.len());
+    assert_eq!(
+        ref_offset,
+        reference.len(),
+        "{}: ffmpeg reference has bytes left over",
+        path.display()
+    );
+    println!(
+        "{:<40} frames={} byte-exact vs ffmpeg (native gbrp)",
+        path.file_name().unwrap_or_default().to_string_lossy(),
+        ours.len()
+    );
 }

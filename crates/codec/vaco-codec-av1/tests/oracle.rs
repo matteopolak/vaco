@@ -102,7 +102,11 @@ fn decode_luma(fixture: &[u8], width: usize, height: usize) -> Result<Vec<u8>, E
 /// small average: mean/max absolute error plus the worst 8x8 block's own
 /// mean error.
 fn assert_luma_matches(name: &str, ours: &[u8], reference: &[u8], width: usize, height: usize) {
-    assert_eq!(ours.len(), reference.len(), "{name}: luma plane size mismatch");
+    assert_eq!(
+        ours.len(),
+        reference.len(),
+        "{name}: luma plane size mismatch"
+    );
     let mut sum_abs = 0i64;
     let mut max_abs = 0i64;
     let mut mismatches = 0usize;
@@ -128,15 +132,24 @@ fn assert_luma_matches(name: &str, ours: &[u8], reference: &[u8], width: usize, 
     }
     let total = (width * height) as f64;
     let mean_abs = sum_abs as f64 / total;
-    eprintln!("{name}: {mismatches}/{} samples differ; mean |diff| = {mean_abs:.3}; max |diff| = {max_abs}", width * height);
-    assert_eq!(mismatches, 0, "{name}: {mismatches} of {} luma samples differ from ffmpeg (mean |diff| {mean_abs:.3}, max {max_abs})", width * height);
+    eprintln!(
+        "{name}: {mismatches}/{} samples differ; mean |diff| = {mean_abs:.3}; max |diff| = {max_abs}",
+        width * height
+    );
+    assert_eq!(
+        mismatches,
+        0,
+        "{name}: {mismatches} of {} luma samples differ from ffmpeg (mean |diff| {mean_abs:.3}, max {max_abs})",
+        width * height
+    );
 }
 
 #[test]
 fn flat_128_keyframe_is_byte_exact_against_ffmpeg() {
     let fixture: &[u8] = include_bytes!("fixtures/flat128.obu");
     let reference: &[u8] = include_bytes!("fixtures/flat128_ref.yuv");
-    let luma = decode_luma(fixture, 64, 64).expect("decode of a flat, skip=1 keyframe must not fail");
+    let luma =
+        decode_luma(fixture, 64, 64).expect("decode of a flat, skip=1 keyframe must not fail");
     assert_luma_matches("flat128", &luma, &reference[..64 * 64], 64, 64);
 }
 
@@ -144,14 +157,16 @@ fn flat_128_keyframe_is_byte_exact_against_ffmpeg() {
 fn flat_100_keyframe_round_trips_a_large_dc_residual_byte_exact() {
     let fixture: &[u8] = include_bytes!("fixtures/flat100.obu");
     let reference: &[u8] = include_bytes!("fixtures/flat100_ref.yuv");
-    let luma = decode_luma(fixture, 16, 16).expect("decode of a flat, DC-residual keyframe must not fail");
+    let luma =
+        decode_luma(fixture, 16, 16).expect("decode of a flat, DC-residual keyframe must not fail");
     assert_luma_matches("flat100", &luma, &reference[..16 * 16], 16, 16);
 }
 
 #[test]
 fn decodes_a_real_svt_av1_keyframe_without_error() {
     let fixture: &[u8] = include_bytes!("fixtures/testsrc64.obu");
-    let luma = decode_luma(fixture, 64, 64).expect("decode of a real, feature-reduced libsvtav1 keyframe must not fail");
+    let luma = decode_luma(fixture, 64, 64)
+        .expect("decode of a real, feature-reduced libsvtav1 keyframe must not fail");
     assert_eq!(luma.len(), 64 * 64);
 }
 
@@ -199,6 +214,7 @@ fn testsrc64_matches_ffmpeg_byte_for_byte() {
 fn checkerboard_dc_pred_dct_dct_matches_ffmpeg_byte_for_byte() {
     let fixture: &[u8] = include_bytes!("fixtures/checker.obu");
     let reference: &[u8] = include_bytes!("fixtures/checker_ref.yuv");
-    let luma = decode_luma(fixture, 64, 64).expect("decode of a real libsvtav1 checkerboard keyframe must not fail");
+    let luma = decode_luma(fixture, 64, 64)
+        .expect("decode of a real libsvtav1 checkerboard keyframe must not fail");
     assert_luma_matches("checker", &luma, &reference[..64 * 64], 64, 64);
 }

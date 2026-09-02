@@ -54,7 +54,11 @@ use vaco_codec_vlc::VlcTable;
     reason = "the spec states this decomposition (mod/off, w/x/y/z) as truncating integer division literally, not a precision loss"
 )]
 fn index_to_tuple(mut idx: i64, unsigned: bool, dim: u8, lav: i64) -> [i64; 4] {
-    let (modulus, off) = if unsigned { (lav + 1, 0) } else { (2 * lav + 1, lav) };
+    let (modulus, off) = if unsigned {
+        (lav + 1, 0)
+    } else {
+        (2 * lav + 1, lav)
+    };
     let mut out = [0i64; 4];
     if dim == 4 {
         let m3 = modulus * modulus * modulus;
@@ -101,9 +105,12 @@ fn read_escape(r: &mut BitReader<'_>) -> i64 {
 
 /// Decode one tuple (dim 2 or 4 signed spectral values) for codebook `hcb`.
 fn decode_one_tuple(r: &mut BitReader<'_>, hcb: u8) -> Result<Vec<i32>> {
-    let info = CODEBOOK_INFO.get(usize::from(hcb)).copied().ok_or(
-        Error::InvalidData("vaco-codec-aac: spectral_data codebook out of range"),
-    )?;
+    let info = CODEBOOK_INFO
+        .get(usize::from(hcb))
+        .copied()
+        .ok_or(Error::InvalidData(
+            "vaco-codec-aac: spectral_data codebook out of range",
+        ))?;
     let table = spectrum_table(hcb).ok_or(Error::InvalidData(
         "vaco-codec-aac: spectral_data codebook has no Huffman table",
     ))?;
@@ -250,7 +257,12 @@ pub(crate) fn read_one_group(
 /// for the bug this shape caught.
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::{index_to_tuple, read_one_group};
     use crate::spectral_tables::SPECTRUM_HCB_7;
     use vaco_bitstream::{BitReader, BitWriter};

@@ -3,7 +3,14 @@
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
-const NAMES: &[&str] = &["amplify", "delogo", "epx", "noise", "removelogo", "vignette"];
+const NAMES: &[&str] = &[
+    "amplify",
+    "delogo",
+    "epx",
+    "noise",
+    "removelogo",
+    "vignette",
+];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]

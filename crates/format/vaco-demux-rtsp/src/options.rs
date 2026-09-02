@@ -254,28 +254,32 @@ impl RtspOptions {
             return Err(vaco_core::Error::Option {
                 name: "rtsp_transport".to_owned(),
                 detail: "parsed but not consumed by this demuxer; refusing rather than \
-                         silently ignoring it".to_owned(),
+                         silently ignoring it"
+                    .to_owned(),
             });
         }
         if self.rtsp_flags != RtspFlags::empty() {
             return Err(vaco_core::Error::Option {
                 name: "rtsp_flags".to_owned(),
                 detail: "parsed but not consumed by this demuxer; refusing rather than \
-                         silently ignoring it".to_owned(),
+                         silently ignoring it"
+                    .to_owned(),
             });
         }
         if self.reorder_queue_size != -1 {
             return Err(vaco_core::Error::Option {
                 name: "reorder_queue_size".to_owned(),
                 detail: "parsed but not consumed by this demuxer; refusing rather than \
-                         silently ignoring it".to_owned(),
+                         silently ignoring it"
+                    .to_owned(),
             });
         }
         if self.buffer_size != -1 {
             return Err(vaco_core::Error::Option {
                 name: "buffer_size".to_owned(),
                 detail: "parsed but not consumed by this demuxer; refusing rather than \
-                         silently ignoring it".to_owned(),
+                         silently ignoring it"
+                    .to_owned(),
             });
         }
         Ok(())

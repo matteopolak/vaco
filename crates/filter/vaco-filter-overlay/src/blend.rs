@@ -277,7 +277,12 @@ pub(crate) struct Opts {
     pub c2_opacity: f64,
     #[opt(name = "c3_opacity", help = "set opacity for component #3", default = 1.0, range = 0.0..=1.0, flags(video, filtering))]
     pub c3_opacity: f64,
-    #[opt(name = "shortest", help = "force termination when the shortest input terminates", default = false, flags(video, filtering))]
+    #[opt(
+        name = "shortest",
+        help = "force termination when the shortest input terminates",
+        default = false,
+        flags(video, filtering)
+    )]
     pub shortest: bool,
 }
 
@@ -324,7 +329,13 @@ impl FrameSyncFilter for Filter {
         let Some(top) = event.take(0) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = top.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = top.data
+        else {
             return Ok(FrameOut::One(top));
         };
         if common::ensure_8bit_addressable(format).is_err() {
@@ -338,25 +349,34 @@ impl FrameSyncFilter for Filter {
         for plane in 0..plane_count.min(4) {
             let mode = self.modes.get(plane).copied().unwrap_or(Mode::Normal);
             let opacity = self.opacities.get(plane).copied().unwrap_or(1.0);
-            let Some(a_plane) = top.plane(plane) else { continue };
-            let Some(b_plane) = bottom.plane(plane) else { continue };
-            let Some(mut dst) = out.plane_mut(plane) else { continue };
+            let Some(a_plane) = top.plane(plane) else {
+                continue;
+            };
+            let Some(b_plane) = bottom.plane(plane) else {
+                continue;
+            };
+            let Some(mut dst) = out.plane_mut(plane) else {
+                continue;
+            };
             let ph = common::to_i32(format.plane_height(height, plane as u8)).max(0);
             for y in 0..ph {
                 let Ok(uy) = usize::try_from(y) else { continue };
-                let Some(a_row) = a_plane.row(uy) else { continue };
-                let Some(b_row) = b_plane.row(uy) else { continue };
-                let Some(dst_row) = dst.row_mut(uy) else { continue };
+                let Some(a_row) = a_plane.row(uy) else {
+                    continue;
+                };
+                let Some(b_row) = b_plane.row(uy) else {
+                    continue;
+                };
+                let Some(dst_row) = dst.row_mut(uy) else {
+                    continue;
+                };
                 let n = a_row.len().min(b_row.len()).min(dst_row.len());
                 for x in 0..n {
                     let (Some(&a), Some(&b)) = (a_row.get(x), b_row.get(x)) else {
                         continue;
                     };
                     let blended = mode.apply(a, b);
-                    #[allow(
-                        clippy::cast_precision_loss,
-                        reason = "8-bit samples fit f64 exactly"
-                    )]
+                    #[allow(clippy::cast_precision_loss, reason = "8-bit samples fit f64 exactly")]
                     let out_val = if (opacity - 1.0).abs() < f64::EPSILON {
                         blended
                     } else {

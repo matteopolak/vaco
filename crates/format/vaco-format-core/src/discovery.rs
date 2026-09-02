@@ -1835,4 +1835,3 @@ mod tests {
         assert!(d.streams()[0].params.extradata.is_none());
     }
 }
-

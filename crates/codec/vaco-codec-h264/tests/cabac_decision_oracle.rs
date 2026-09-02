@@ -47,7 +47,10 @@ fn decode_decision_round_trips_after_a_long_run_of_the_same_bin() {
     for _ in 0..bits.len() {
         got.push(dec.decode_decision(&mut dec_ctx));
     }
-    assert_eq!(got, bits, "decode_decision did not round-trip after a long run of the same bin");
+    assert_eq!(
+        got, bits,
+        "decode_decision did not round-trip after a long run of the same bin"
+    );
     assert!(!dec.malformed());
 }
 
@@ -73,8 +76,13 @@ fn decode_decision_round_trips_across_many_pseudorandom_sequences() {
         let bytes = enc.finish();
         let mut dec = CabacDecoder::new(&bytes);
         let mut dec_ctx = ContextModel::init_h264(20, -15, slice_qp);
-        let got: Vec<u32> = (0..bits.len()).map(|_| dec.decode_decision(&mut dec_ctx)).collect();
-        assert_eq!(got, bits, "trial {trial}: decode_decision did not round-trip, len={len}");
+        let got: Vec<u32> = (0..bits.len())
+            .map(|_| dec.decode_decision(&mut dec_ctx))
+            .collect();
+        assert_eq!(
+            got, bits,
+            "trial {trial}: decode_decision did not round-trip, len={len}"
+        );
         assert!(!dec.malformed(), "trial {trial}: malformed");
     }
 }

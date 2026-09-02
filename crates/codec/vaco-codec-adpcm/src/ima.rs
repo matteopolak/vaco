@@ -94,7 +94,11 @@ impl ImaState {
     reason = "an eighth-of-peak target step is a deliberate floor division, not a rounding bug"
 )]
 pub(crate) fn estimate_initial_index(samples: &[i16]) -> i32 {
-    let peak = samples.iter().map(|s| i32::from(*s).unsigned_abs()).max().unwrap_or(0);
+    let peak = samples
+        .iter()
+        .map(|s| i32::from(*s).unsigned_abs())
+        .max()
+        .unwrap_or(0);
     // Aim for a step roughly a sixteenth of the peak: comfortably inside the
     // 4-bit code's dynamic range even at the peak sample.
     let target = i32::try_from((peak / 16).max(1)).unwrap_or(i32::MAX);
@@ -131,7 +135,9 @@ pub(crate) fn decode_wav_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
     let channels = channels.max(1) as usize;
     let header_bytes = WAV_HEADER_BYTES.saturating_mul(channels);
     if data.len() < header_bytes {
-        return Err(Error::InvalidData("adpcm_ima_wav: block shorter than its own header"));
+        return Err(Error::InvalidData(
+            "adpcm_ima_wav: block shorter than its own header",
+        ));
     }
     let mut states = Vec::new();
     // Per-channel decoded sample streams, later interleaved.
@@ -155,7 +161,9 @@ pub(crate) fn decode_wav_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
         if group.len() < 4 {
             break; // a short trailing group carries no complete nibble set
         }
-        let state = states.get_mut(chan).ok_or(Error::InvalidData("adpcm_ima_wav: channel index"))?;
+        let state = states
+            .get_mut(chan)
+            .ok_or(Error::InvalidData("adpcm_ima_wav: channel index"))?;
         let out = per_channel
             .get_mut(chan)
             .ok_or(Error::InvalidData("adpcm_ima_wav: channel index"))?;
@@ -209,7 +217,9 @@ pub(crate) fn encode_wav_block(samples: &[i16], channels: u32) -> Result<Vec<u8>
     let groups = remaining.div_ceil(8);
     for g in 0..groups {
         for (c, ch) in per_channel.iter().enumerate() {
-            let state = states.get_mut(c).ok_or(Error::InvalidData("adpcm_ima_wav: channel"))?;
+            let state = states
+                .get_mut(c)
+                .ok_or(Error::InvalidData("adpcm_ima_wav: channel"))?;
             let base = 1 + g * 8;
             let mut byte_group = [0u8; 4];
             for k in 0..8usize {
@@ -217,7 +227,10 @@ pub(crate) fn encode_wav_block(samples: &[i16], channels: u32) -> Result<Vec<u8>
                 // Padding samples (past the real end) repeat the last real
                 // sample, which encodes to a zero-magnitude nibble and keeps
                 // the block a whole number of 4-byte groups.
-                let sample = ch.get(idx).copied().unwrap_or_else(|| ch.last().copied().unwrap_or(0));
+                let sample = ch
+                    .get(idx)
+                    .copied()
+                    .unwrap_or_else(|| ch.last().copied().unwrap_or(0));
                 let code = state.encode_sample(sample);
                 if let Some(slot) = byte_group.get_mut(k / 2) {
                     if k % 2 == 0 {
@@ -255,7 +268,9 @@ pub(crate) fn decode_qt_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
     let channels = channels.max(1) as usize;
     let set_bytes = QT_CHUNK_BYTES.saturating_mul(channels);
     if set_bytes == 0 || !data.len().is_multiple_of(set_bytes) {
-        return Err(Error::InvalidData("adpcm_ima_qt: not a whole number of chunk sets"));
+        return Err(Error::InvalidData(
+            "adpcm_ima_qt: not a whole number of chunk sets",
+        ));
     }
     let sets = data.len() / set_bytes;
     let mut per_channel: Vec<Vec<i16>> = vec![Vec::new(); channels];
@@ -304,10 +319,7 @@ pub(crate) fn encode_qt_block(samples: &[i16], channels: u32) -> Result<Vec<u8>>
     let mut out = Vec::new();
     for s in 0..sets {
         for ch in &per_channel {
-            let Some(&first) = ch
-                .get(s * QT_SAMPLES_PER_CHUNK)
-                .or_else(|| ch.last())
-            else {
+            let Some(&first) = ch.get(s * QT_SAMPLES_PER_CHUNK).or_else(|| ch.last()) else {
                 continue;
             };
             let window_start = s * QT_SAMPLES_PER_CHUNK;
@@ -321,7 +333,10 @@ pub(crate) fn encode_qt_block(samples: &[i16], channels: u32) -> Result<Vec<u8>>
             let mut body = [0u8; 32];
             for k in 0..QT_SAMPLES_PER_CHUNK {
                 let idx = s * QT_SAMPLES_PER_CHUNK + k;
-                let sample = ch.get(idx).copied().unwrap_or_else(|| ch.last().copied().unwrap_or(0));
+                let sample = ch
+                    .get(idx)
+                    .copied()
+                    .unwrap_or_else(|| ch.last().copied().unwrap_or(0));
                 let code = state.encode_sample(sample);
                 if let Some(slot) = body.get_mut(k / 2) {
                     if k % 2 == 0 {
@@ -354,7 +369,9 @@ pub(crate) fn interleave(per_channel: &[Vec<i16>]) -> Vec<i16> {
 
 pub(crate) fn deinterleave(samples: &[i16], channels: usize) -> Result<Vec<Vec<i16>>> {
     if channels == 0 || !samples.len().is_multiple_of(channels) {
-        return Err(Error::InvalidData("adpcm: sample count not a multiple of channel count"));
+        return Err(Error::InvalidData(
+            "adpcm: sample count not a multiple of channel count",
+        ));
     }
     let mut out = vec![Vec::new(); channels];
     for (n, &s) in samples.iter().enumerate() {

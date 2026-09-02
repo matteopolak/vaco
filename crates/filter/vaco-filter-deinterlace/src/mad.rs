@@ -72,8 +72,8 @@
 //! it first, per that crate's own such note.
 
 use vaco_core::{Error, Result};
-use vaco_filter_core::adapt::{FrameFilter, FrameOut};
 use vaco_filter_core::FilterContext;
+use vaco_filter_core::adapt::{FrameFilter, FrameOut};
 use vaco_frame::{Frame, FrameData, FramePool, PlaneRef};
 
 use crate::video::{alloc_like, copy_row, dims, ensure_addressable, is_tff};
@@ -205,7 +205,9 @@ pub(crate) fn deinterlace_frame(
     for p in 0..format.plane_count() {
         let rows = format.plane_height(height, p as u8) as usize;
         let cols = format.plane_width(width, p as u8) as usize;
-        let Some(cur_plane) = cur.plane(p) else { continue };
+        let Some(cur_plane) = cur.plane(p) else {
+            continue;
+        };
         let prev_plane = prev.and_then(|f| f.plane(p));
         let next_plane = next.and_then(|f| f.plane(p));
         let Some(mut dst_plane) = out.plane_mut(p) else {
@@ -587,14 +589,8 @@ mod oracle {
             })
             .collect();
 
-        let input_comb: u64 = frames
-            .iter()
-            .map(|f| frame_comb_score(f, format))
-            .sum();
-        let our_comb: u64 = ours
-            .iter()
-            .map(|f| frame_comb_score(f, format))
-            .sum();
+        let input_comb: u64 = frames.iter().map(|f| frame_comb_score(f, format)).sum();
+        let our_comb: u64 = ours.iter().map(|f| frame_comb_score(f, format)).sum();
         // Structural claim: real deinterlacing happened, not a pass-through
         // or a random-looking substitute. Checked once, on the sum across
         // all six frames, then individually below so one lucky frame
@@ -652,7 +648,9 @@ mod oracle {
                 ],
                 Some(&interlaced),
             )
-            .unwrap_or_else(|| panic!("ffmpeg -vf {vf} failed on a fixture ffmpeg itself just produced"));
+            .unwrap_or_else(|| {
+                panic!("ffmpeg -vf {vf} failed on a fixture ffmpeg itself just produced")
+            });
             assert_eq!(
                 reference.len(),
                 fbytes * FRAMES,
@@ -807,7 +805,11 @@ mod oracle {
             Some(&interlaced),
         )
         .expect("ffmpeg -vf yadif failed on a fixture ffmpeg itself just produced");
-        assert_eq!(reference.len(), fbytes * FRAMES, "reference output is not the expected size");
+        assert_eq!(
+            reference.len(),
+            fbytes * FRAMES,
+            "reference output is not the expected size"
+        );
         let ref_frames: Vec<Frame> = (0..FRAMES)
             .map(|i| frame_from_yuv420p(&pool, W, H, &reference[i * fbytes..(i + 1) * fbytes]))
             .collect();

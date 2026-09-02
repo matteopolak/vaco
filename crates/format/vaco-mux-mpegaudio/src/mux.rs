@@ -130,7 +130,8 @@ impl Muxer for MpegAudioMuxer {
         // alternates length by one byte through the padding bit to average out
         // a fractional bits-per-frame. What stays constant is the bit rate the
         // frame header itself declares.
-        let bitrate_index = MpegAudioHeader::parse_bytes(packet.payload()).map_or(255, |h| h.bitrate_index);
+        let bitrate_index =
+            MpegAudioHeader::parse_bytes(packet.payload()).map_or(255, |h| h.bitrate_index);
         match self.first_bitrate_index {
             None => self.first_bitrate_index = Some(bitrate_index),
             Some(first) if first != bitrate_index => self.constant_length = false,

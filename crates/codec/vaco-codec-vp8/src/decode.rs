@@ -45,11 +45,11 @@
 //! doc for how the two were told apart from real bugs, including an
 //! `ffmpeg` default-vsync frame-duplication trap in the harness itself).
 
+use vaco_codec_core::CodecId;
 use vaco_codec_core::machine::{Accept, Machine};
 use vaco_codec_core::picture::{PictureSpec, PlaneSpec, ProgressPicture};
 use vaco_codec_core::{Decoder, DecoderDesc, FrameRunner, Threading};
 use vaco_codec_msac::Vp8BoolDecoder as Bd;
-use vaco_codec_core::CodecId;
 use vaco_core::{Error, MediaType, Result};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
@@ -82,11 +82,19 @@ pub(crate) fn ux(v: i32) -> usize {
 }
 
 pub(crate) fn above_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
-    if y < 0 { predict::OFF_FRAME_ABOVE } else { plane.get(x, y) }
+    if y < 0 {
+        predict::OFF_FRAME_ABOVE
+    } else {
+        plane.get(x, y)
+    }
 }
 
 pub(crate) fn left_pixel(plane: &Plane, x: i32, y: i32) -> u8 {
-    if x < 0 { predict::OFF_FRAME_LEFT } else { plane.get(x, y) }
+    if x < 0 {
+        predict::OFF_FRAME_LEFT
+    } else {
+        plane.get(x, y)
+    }
 }
 
 /// `x`/`y` are the block's own top-left position (not already decremented,
@@ -129,8 +137,8 @@ pub(crate) fn gather_left<const N: usize>(plane: &Plane, x: i32, y: i32) -> [u8;
 /// parse stage and onto a worker thread.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MbInfo {
-    pub(crate) ref_frame: u8, // 0 = intra
-    pub(crate) mv: Mv,        // eighth-pel; representative MV (SPLITMV: subblock 15's)
+    pub(crate) ref_frame: u8,     // 0 = intra
+    pub(crate) mv: Mv,            // eighth-pel; representative MV (SPLITMV: subblock 15's)
     pub(crate) sub_mvs: [Mv; 16], // eighth-pel per-subblock MV (all equal to `mv` unless SPLITMV)
     pub(crate) is_splitmv: bool,
     pub(crate) has_y2: bool,
@@ -309,7 +317,11 @@ fn decode_macroblock(
 
     // -- segment id --
     let segment_id = if ctx.header.segmentation.enabled && ctx.header.segmentation.update_map {
-        let id = u8::try_from(bd.read_tree(&tables::MB_SEGMENT_TREE, &ctx.header.segmentation.tree_probs)).unwrap_or(0);
+        let id = u8::try_from(bd.read_tree(
+            &tables::MB_SEGMENT_TREE,
+            &ctx.header.segmentation.tree_probs,
+        ))
+        .unwrap_or(0);
         if let Some(slot) = ctx.segment_map.get_mut(mb_idx) {
             *slot = id;
         }
@@ -357,7 +369,10 @@ fn decode_macroblock(
                     sub_modes.get(i - 4).copied().unwrap_or(tables::B_DC_PRED)
                 };
                 let l = if sub_col == 0 {
-                    ctx.left_bmode.get(sub_row).copied().unwrap_or(tables::B_DC_PRED)
+                    ctx.left_bmode
+                        .get(sub_row)
+                        .copied()
+                        .unwrap_or(tables::B_DC_PRED)
                 } else {
                     sub_modes.get(i - 1).copied().unwrap_or(tables::B_DC_PRED)
                 };
@@ -381,10 +396,28 @@ fn decode_macroblock(
             *r = [sub_modes[12], sub_modes[13], sub_modes[14], sub_modes[15]];
         }
         ctx.left_bmode = [sub_modes[3], sub_modes[7], sub_modes[11], sub_modes[15]];
-        let parsed = parse_intra(ctx, entropy, token_bd, col, row, mode, uv_mode, &sub_modes, skip_coeff, segment_id);
-        let any_coeff = any_nonzero_coeff(parsed.y2_block.as_ref(), &parsed.y_blocks, &parsed.u_blocks, &parsed.v_blocks);
+        let parsed = parse_intra(
+            ctx, entropy, token_bd, col, row, mode, uv_mode, &sub_modes, skip_coeff, segment_id,
+        );
+        let any_coeff = any_nonzero_coeff(
+            parsed.y2_block.as_ref(),
+            &parsed.y_blocks,
+            &parsed.u_blocks,
+            &parsed.v_blocks,
+        );
         store_parsed(ctx, col, row, ParsedMb::Intra(parsed));
-        store_mb(ctx, col, row, segment_id, any_coeff, 0, mode, (0, 0), [(0, 0); 16], false);
+        store_mb(
+            ctx,
+            col,
+            row,
+            segment_id,
+            any_coeff,
+            0,
+            mode,
+            (0, 0),
+            [(0, 0); 16],
+            false,
+        );
         return;
     }
 
@@ -400,10 +433,28 @@ fn decode_macroblock(
             sub_modes = [derived_bmode(mode); 16];
         }
         let uv_mode = bd.read_tree(&tables::UV_MODE_TREE, &entropy.uv_mode_prob);
-        let parsed = parse_intra(ctx, entropy, token_bd, col, row, mode, uv_mode, &sub_modes, skip_coeff, segment_id);
-        let any_coeff = any_nonzero_coeff(parsed.y2_block.as_ref(), &parsed.y_blocks, &parsed.u_blocks, &parsed.v_blocks);
+        let parsed = parse_intra(
+            ctx, entropy, token_bd, col, row, mode, uv_mode, &sub_modes, skip_coeff, segment_id,
+        );
+        let any_coeff = any_nonzero_coeff(
+            parsed.y2_block.as_ref(),
+            &parsed.y_blocks,
+            &parsed.u_blocks,
+            &parsed.v_blocks,
+        );
         store_parsed(ctx, col, row, ParsedMb::Intra(parsed));
-        store_mb(ctx, col, row, segment_id, any_coeff, 0, mode, (0, 0), [(0, 0); 16], false);
+        store_mb(
+            ctx,
+            col,
+            row,
+            segment_id,
+            any_coeff,
+            0,
+            mode,
+            (0, 0),
+            [(0, 0); 16],
+            false,
+        );
         return;
     }
 
@@ -421,10 +472,16 @@ fn decode_macroblock(
             is_splitmv: m.is_splitmv,
         })
     };
-    let current_sign_bias = sign_bias.get(usize::from(ref_frame)).copied().unwrap_or(false);
-    let near = mv::find_near_mvs(neighbor(above), neighbor(left), neighbor(above_left), |rf| {
-        sign_bias.get(usize::from(rf)).copied().unwrap_or(false) == current_sign_bias
-    });
+    let current_sign_bias = sign_bias
+        .get(usize::from(ref_frame))
+        .copied()
+        .unwrap_or(false);
+    let near = mv::find_near_mvs(
+        neighbor(above),
+        neighbor(left),
+        neighbor(above_left),
+        |rf| sign_bias.get(usize::from(rf)).copied().unwrap_or(false) == current_sign_bias,
+    );
 
     let (to_left, to_right, to_top, to_bottom) = mv_bounds(col, row, ctx.mb_cols, ctx.mb_rows);
     let clamp = |mv: Mv| mv::clamp_mv(mv, to_left, to_right, to_top, to_bottom);
@@ -476,16 +533,37 @@ fn decode_macroblock(
     }
 
     let parsed = parse_inter(
-        ctx, entropy, token_bd, col, row, ref_frame, whole_mv, &sub_mvs, is_splitmv,
-        skip_coeff, segment_id,
+        ctx, entropy, token_bd, col, row, ref_frame, whole_mv, &sub_mvs, is_splitmv, skip_coeff,
+        segment_id,
     );
-    let any_coeff = any_nonzero_coeff(parsed.y2_block.as_ref(), &parsed.y_blocks, &parsed.u_blocks, &parsed.v_blocks);
+    let any_coeff = any_nonzero_coeff(
+        parsed.y2_block.as_ref(),
+        &parsed.y_blocks,
+        &parsed.u_blocks,
+        &parsed.v_blocks,
+    );
     let stored_sub_mvs = if is_splitmv { sub_mvs } else { [whole_mv; 16] };
     store_parsed(ctx, col, row, ParsedMb::Inter(parsed));
-    store_mb(ctx, col, row, segment_id, any_coeff, ref_frame, mode, whole_mv, stored_sub_mvs, is_splitmv);
+    store_mb(
+        ctx,
+        col,
+        row,
+        segment_id,
+        any_coeff,
+        ref_frame,
+        mode,
+        whole_mv,
+        stored_sub_mvs,
+        is_splitmv,
+    );
 }
 
-pub(crate) fn mv_bounds(col: usize, row: usize, mb_cols: usize, mb_rows: usize) -> (i32, i32, i32, i32) {
+pub(crate) fn mv_bounds(
+    col: usize,
+    row: usize,
+    mb_cols: usize,
+    mb_rows: usize,
+) -> (i32, i32, i32, i32) {
     let col = ix(col);
     let row = ix(row);
     let to_left = -((col + 1) << 7);
@@ -579,7 +657,8 @@ fn parse_intra(
 ) -> ParsedIntra {
     let has_y2 = y_mode != tables::B_PRED;
     let quant = dequant_for(ctx, segment_id);
-    let (y_blocks, y2_block, u_blocks, v_blocks) = decode_residuals(bd, ctx, entropy, col, row, has_y2, skip_coeff, &quant);
+    let (y_blocks, y2_block, u_blocks, v_blocks) =
+        decode_residuals(bd, ctx, entropy, col, row, has_y2, skip_coeff, &quant);
     ParsedIntra {
         y_mode,
         uv_mode,
@@ -595,7 +674,15 @@ fn parse_intra(
 /// [`parse_intra`] used to do after its own residual decode, driven by the
 /// already-parsed record instead. Runs on
 /// [`crate::frame_task::Vp8FrameTask`]'s own copy of this frame's planes.
-pub(crate) fn apply_intra(y: &mut Plane, u: &mut Plane, v: &mut Plane, mb_cols: usize, col: usize, row: usize, p: &ParsedIntra) {
+pub(crate) fn apply_intra(
+    y: &mut Plane,
+    u: &mut Plane,
+    v: &mut Plane,
+    mb_cols: usize,
+    col: usize,
+    row: usize,
+    p: &ParsedIntra,
+) {
     let base_x = ix(col * 16);
     let base_y = ix(row * 16);
 
@@ -616,7 +703,14 @@ pub(crate) fn apply_intra(y: &mut Plane, u: &mut Plane, v: &mut Plane, mb_cols: 
             write_residual_block(y, x, y_pos, &pred, block);
         }
     } else {
-        predict_and_write_16(y, base_x, base_y, p.y_mode, &p.y_blocks, p.y2_block.as_ref());
+        predict_and_write_16(
+            y,
+            base_x,
+            base_y,
+            p.y_mode,
+            &p.y_blocks,
+            p.y2_block.as_ref(),
+        );
     }
 
     predict_and_write_8(u, ix(col * 8), ix(row * 8), p.uv_mode, &p.u_blocks);
@@ -627,7 +721,12 @@ pub(crate) fn apply_intra(y: &mut Plane, u: &mut Plane, v: &mut Plane, mb_cols: 
 /// coefficient — RFC 6386 §15.1's actual loop-filter skip test (see
 /// [`MbInfo::any_coeff`]'s doc), computed from what token decode actually
 /// produced rather than from the `mb_skip_coeff` bitstream flag.
-fn any_nonzero_coeff(y2: Option<&BlockCoeffs>, y: &[BlockCoeffs; 16], u: &[BlockCoeffs; 4], v: &[BlockCoeffs; 4]) -> bool {
+fn any_nonzero_coeff(
+    y2: Option<&BlockCoeffs>,
+    y: &[BlockCoeffs; 16],
+    u: &[BlockCoeffs; 4],
+    v: &[BlockCoeffs; 4],
+) -> bool {
     y2.is_some_and(|b| b.has_coeffs)
         || y.iter().any(|b| b.has_coeffs)
         || u.iter().any(|b| b.has_coeffs)
@@ -663,7 +762,14 @@ fn b_pred(mode: i32, above8: &[u8; 8], left4: &[u8; 4], corner: u8) -> [[u8; 4];
     }
 }
 
-fn gather_above_right(plane: &Plane, col: usize, row: usize, sub_col: usize, sub_row: usize, mb_cols: usize) -> [u8; 8] {
+fn gather_above_right(
+    plane: &Plane,
+    col: usize,
+    row: usize,
+    sub_col: usize,
+    sub_row: usize,
+    mb_cols: usize,
+) -> [u8; 8] {
     let base_x = ix(col * 16);
     let base_y = ix(row * 16);
     let x = base_x + ix(sub_col * 4);
@@ -692,7 +798,14 @@ fn gather_above_right(plane: &Plane, col: usize, row: usize, sub_col: usize, sub
     out
 }
 
-pub(crate) fn predict_and_write_16(plane: &mut Plane, x: i32, y: i32, mode: i32, blocks: &[BlockCoeffs; 16], y2: Option<&BlockCoeffs>) {
+pub(crate) fn predict_and_write_16(
+    plane: &mut Plane,
+    x: i32,
+    y: i32,
+    mode: i32,
+    blocks: &[BlockCoeffs; 16],
+    y2: Option<&BlockCoeffs>,
+) {
     let above: [u8; 16] = gather_above(plane, x, y);
     let left: [u8; 16] = gather_left(plane, x, y);
     let corner = corner_pixel(plane, x, y);
@@ -752,7 +865,13 @@ pub(crate) fn get2d<const N: usize>(m: &[[u8; N]; N], r: usize, c: usize) -> u8 
     m.get(r).and_then(|row| row.get(c)).copied().unwrap_or(0)
 }
 
-pub(crate) fn predict_and_write_8(plane: &mut Plane, x: i32, y: i32, mode: i32, blocks: &[BlockCoeffs; 4]) {
+pub(crate) fn predict_and_write_8(
+    plane: &mut Plane,
+    x: i32,
+    y: i32,
+    mode: i32,
+    blocks: &[BlockCoeffs; 4],
+) {
     let above: [u8; 8] = gather_above(plane, x, y);
     let left: [u8; 8] = gather_left(plane, x, y);
     let corner = corner_pixel(plane, x, y);
@@ -784,7 +903,13 @@ pub(crate) fn predict_and_write_8(plane: &mut Plane, x: i32, y: i32, mode: i32, 
     }
 }
 
-pub(crate) fn write_residual_block(plane: &mut Plane, x: i32, y: i32, pred: &[[u8; 4]; 4], block: &BlockCoeffs) {
+pub(crate) fn write_residual_block(
+    plane: &mut Plane,
+    x: i32,
+    y: i32,
+    pred: &[[u8; 4]; 4],
+    block: &BlockCoeffs,
+) {
     let residue = if block.has_coeffs {
         transform::inverse_dct(&block.coeffs)
     } else {
@@ -842,7 +967,12 @@ fn decode_residuals(
     has_y2: bool,
     skip_coeff: bool,
     quant: &transform::DequantFactors,
-) -> ([BlockCoeffs; 16], Option<BlockCoeffs>, [BlockCoeffs; 4], [BlockCoeffs; 4]) {
+) -> (
+    [BlockCoeffs; 16],
+    Option<BlockCoeffs>,
+    [BlockCoeffs; 4],
+    [BlockCoeffs; 4],
+) {
     let empty = BlockCoeffs {
         coeffs: [0; 16],
         has_coeffs: false,
@@ -878,13 +1008,23 @@ fn decode_residuals(
                 *a = false;
             }
         }
-        return (y_blocks, if has_y2 { Some(empty) } else { None }, u_blocks, v_blocks);
+        return (
+            y_blocks,
+            if has_y2 { Some(empty) } else { None },
+            u_blocks,
+            v_blocks,
+        );
     }
 
     if has_y2 {
         let above_ctx = usize::from(ctx.above_y2.get(col).copied().unwrap_or(false));
         let left_ctx = usize::from(ctx.left_y2);
-        let block = tokens::decode_block(bd, &entropy.coeff_probs[tables::PLANE_Y2], 0, above_ctx + left_ctx);
+        let block = tokens::decode_block(
+            bd,
+            &entropy.coeff_probs[tables::PLANE_Y2],
+            0,
+            above_ctx + left_ctx,
+        );
         ctx.left_y2 = block.has_coeffs;
         if let Some(a) = ctx.above_y2.get_mut(col) {
             *a = block.has_coeffs;
@@ -892,9 +1032,16 @@ fn decode_residuals(
         y2_block = Some(dequantize(&block, quant.y2_dc, quant.y2_ac));
     }
 
-    let y_plane = if has_y2 { tables::PLANE_Y_AFTER_Y2 } else { tables::PLANE_Y_NO_Y2 };
+    let y_plane = if has_y2 {
+        tables::PLANE_Y_AFTER_Y2
+    } else {
+        tables::PLANE_Y_NO_Y2
+    };
     let first = usize::from(has_y2);
-    let probs = entropy.coeff_probs.get(y_plane).unwrap_or(&entropy.coeff_probs[0]);
+    let probs = entropy
+        .coeff_probs
+        .get(y_plane)
+        .unwrap_or(&entropy.coeff_probs[0]);
     #[allow(
         clippy::integer_division,
         reason = "splitting a 0..16 subblock index into its 4x4 grid position"
@@ -956,7 +1103,12 @@ fn decode_residuals(
             } else {
                 usize::from(plane_blocks.get(i - 1).is_some_and(|b| b.has_coeffs))
             };
-            let block = tokens::decode_block(bd, &entropy.coeff_probs[tables::PLANE_UV], 0, above_ctx + left_ctx);
+            let block = tokens::decode_block(
+                bd,
+                &entropy.coeff_probs[tables::PLANE_UV],
+                0,
+                above_ctx + left_ctx,
+            );
             if let Some(slot) = plane_blocks.get_mut(i) {
                 *slot = dequantize(&block, quant.uv_dc, quant.uv_ac);
             }
@@ -1013,7 +1165,16 @@ fn parse_inter(
 /// [`crate::frame_task::Vp8FrameTask`]'s own copy of this frame's planes,
 /// against a reference already materialised by
 /// [`crate::framebuf::materialize`].
-pub(crate) fn apply_inter(y: &mut Plane, u: &mut Plane, v: &mut Plane, refp: Option<&Picture>, version: u8, col: usize, row: usize, p: &ParsedInter) {
+pub(crate) fn apply_inter(
+    y: &mut Plane,
+    u: &mut Plane,
+    v: &mut Plane,
+    refp: Option<&Picture>,
+    version: u8,
+    col: usize,
+    row: usize,
+    p: &ParsedInter,
+) {
     let Some(refp) = refp else {
         return;
     };
@@ -1039,7 +1200,11 @@ pub(crate) fn apply_inter(y: &mut Plane, u: &mut Plane, v: &mut Plane, refp: Opt
         let sub_row = i / 4;
         let x = base_x + ix(sub_col * 4);
         let y_pos = base_y + ix(sub_row * 4);
-        let mv = if is_splitmv { sub_mvs.get(i).copied().unwrap_or(whole_mv) } else { whole_mv };
+        let mv = if is_splitmv {
+            sub_mvs.get(i).copied().unwrap_or(whole_mv)
+        } else {
+            whole_mv
+        };
         let pred = mc_block::<4, 4>(&refp.y, x, y_pos, mv, version);
         let mut block = *y_block;
         if has_y2
@@ -1074,11 +1239,23 @@ pub(crate) fn apply_inter(y: &mut Plane, u: &mut Plane, v: &mut Plane, refp: Opt
         ];
         let sum_r: i32 = luma_idxs
             .iter()
-            .map(|&k| if is_splitmv { sub_mvs.get(k).copied().unwrap_or(whole_mv).0 } else { whole_mv.0 })
+            .map(|&k| {
+                if is_splitmv {
+                    sub_mvs.get(k).copied().unwrap_or(whole_mv).0
+                } else {
+                    whole_mv.0
+                }
+            })
             .sum();
         let sum_c: i32 = luma_idxs
             .iter()
-            .map(|&k| if is_splitmv { sub_mvs.get(k).copied().unwrap_or(whole_mv).1 } else { whole_mv.1 })
+            .map(|&k| {
+                if is_splitmv {
+                    sub_mvs.get(k).copied().unwrap_or(whole_mv).1
+                } else {
+                    whole_mv.1
+                }
+            })
             .sum();
         let chroma_mv = (round_div8(sum_r), round_div8(sum_c));
         let cx = ix(col * 8) + ix(sub_col * 4);
@@ -1101,13 +1278,19 @@ pub(crate) fn apply_inter(y: &mut Plane, u: &mut Plane, v: &mut Plane, refp: Opt
 /// process".
 fn reconstruction_filter(version: u8) -> (bool, bool) {
     match version {
-        0 => (false, false),  // bicubic (6-tap), sub-pel
+        0 => (false, false),    // bicubic (6-tap), sub-pel
         1 | 2 => (true, false), // bilinear, sub-pel
-        _ => (true, true),    // "none": truncate to full-pel
+        _ => (true, true),      // "none": truncate to full-pel
     }
 }
 
-pub(crate) fn mc_block<const W: usize, const H: usize>(refp: &Plane, x: i32, y: i32, mv: Mv, version: u8) -> [[u8; W]; H] {
+pub(crate) fn mc_block<const W: usize, const H: usize>(
+    refp: &Plane,
+    x: i32,
+    y: i32,
+    mv: Mv,
+    version: u8,
+) -> [[u8; W]; H] {
     let (bilinear, full_pel) = reconstruction_filter(version);
     let mv = if full_pel { (mv.0 & !7, mv.1 & !7) } else { mv };
     let int_r = mv.0 >> 3;
@@ -1155,7 +1338,17 @@ pub(crate) fn apply_loop_filter_task(
             skip_inner: mb.has_y2 && !mb.any_coeff,
         })
         .collect();
-    loopfilter::apply_frame(y, u, v, mb_cols, mb_rows, sharpness_level, key_frame, filter_simple, &mb_info);
+    loopfilter::apply_frame(
+        y,
+        u,
+        v,
+        mb_cols,
+        mb_rows,
+        sharpness_level,
+        key_frame,
+        filter_simple,
+        &mb_info,
+    );
 }
 
 /// Decoder state that persists across packets: the reference frame slots
@@ -1173,7 +1366,6 @@ struct State {
     width: u16,
     height: u16,
 }
-
 
 /// RFC 6386 §9.5: split the token-partition byte range into `num_partitions`
 /// slices. When there is one partition it is the whole range unmodified;
@@ -1322,7 +1514,15 @@ fn split_frame(
                 continue;
             };
             for col in 0..state.mb_cols {
-                decode_macroblock(&mut bd, token_bd, &mut ctx, &state.entropy, sign_bias, col, row);
+                decode_macroblock(
+                    &mut bd,
+                    token_bd,
+                    &mut ctx,
+                    &state.entropy,
+                    sign_bias,
+                    col,
+                    row,
+                );
             }
         }
 
@@ -1338,7 +1538,12 @@ fn split_frame(
     // the *next* frame's last/golden/altref slots below.
     let refs_for_this_frame = state.refs.clone();
 
-    let plane_spec = |w: usize, h: usize| PlaneSpec::new(u32::try_from(w).unwrap_or(u32::MAX), u32::try_from(h).unwrap_or(u32::MAX));
+    let plane_spec = |w: usize, h: usize| {
+        PlaneSpec::new(
+            u32::try_from(w).unwrap_or(u32::MAX),
+            u32::try_from(h).unwrap_or(u32::MAX),
+        )
+    };
     let spec = PictureSpec::new(vec![
         plane_spec(state.mb_cols * 16, state.mb_rows * 16),
         plane_spec(state.mb_cols * 8, state.mb_rows * 8),
@@ -1378,7 +1583,13 @@ fn split_frame(
     Ok((task, fh.show_frame))
 }
 
-pub(crate) fn blit(src: &Plane, frame: &mut Frame, plane_index: usize, width: usize, height: usize) {
+pub(crate) fn blit(
+    src: &Plane,
+    frame: &mut Frame,
+    plane_index: usize,
+    width: usize,
+    height: usize,
+) {
     let Some(mut dst) = frame.plane_mut(plane_index) else {
         return;
     };
@@ -1466,11 +1677,17 @@ impl Vp8Decoder {
         if self.in_flight.is_empty() {
             return Ok(false);
         }
-        let Some(result) = (if block { self.runner.collect() } else { self.runner.try_collect() }) else {
+        let Some(result) = (if block {
+            self.runner.collect()
+        } else {
+            self.runner.try_collect()
+        }) else {
             return Ok(false);
         };
         let Some(meta) = self.in_flight.pop_front() else {
-            return Err(Error::InvalidData("vaco-codec-vp8: a frame arrived with no in-flight record"));
+            return Err(Error::InvalidData(
+                "vaco-codec-vp8: a frame arrived with no in-flight record",
+            ));
         };
         let mut frame = result?;
         if meta.show_frame {
@@ -1513,7 +1730,13 @@ impl Decoder for Vp8Decoder {
             Accept::Input => {
                 let Some(pkt) = packet else { return Ok(()) };
                 let decode_index = self.runner.next_decode_index();
-                let (task, show_frame) = split_frame(&mut self.state, &self.limits, &mut self.budget, pkt.payload(), decode_index)?;
+                let (task, show_frame) = split_frame(
+                    &mut self.state,
+                    &self.limits,
+                    &mut self.budget,
+                    pkt.payload(),
+                    decode_index,
+                )?;
                 self.runner.dispatch(task);
                 self.in_flight.push_back(InFlight {
                     show_frame,
@@ -1603,7 +1826,12 @@ mod token_partition_tests {
         residual.extend_from_slice(&[0xDA, 0xDB, 0xDC, 0xDD]); // partition 3 (last, remainder)
 
         let parts = split_token_partitions(&residual, 4);
-        let want: [&[u8]; 4] = [&[0xAA, 0xAB], &[0xBA, 0xBB, 0xBC], &[0xCA], &[0xDA, 0xDB, 0xDC, 0xDD]];
+        let want: [&[u8]; 4] = [
+            &[0xAA, 0xAB],
+            &[0xBA, 0xBB, 0xBC],
+            &[0xCA],
+            &[0xDA, 0xDB, 0xDC, 0xDD],
+        ];
         assert_eq!(parts, want);
     }
 

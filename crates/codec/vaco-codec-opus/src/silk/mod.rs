@@ -71,7 +71,9 @@ impl SilkDecoder {
             channels,
             rate,
             nb_subfr,
-            mono: (0..channels).map(|_| MonoState::new(rate.khz(), nb_subfr)).collect(),
+            mono: (0..channels)
+                .map(|_| MonoState::new(rate.khz(), nb_subfr))
+                .collect(),
             stereo: StereoState::default(),
         }
     }
@@ -131,8 +133,11 @@ impl SilkDecoder {
             if n_frames_per_packet == 1 {
                 lbrr_flags[c][0] = true;
             } else {
-                let table: &[u8] =
-                    if n_frames_per_packet == 2 { &tables::LBRR_FLAGS_2_ICDF } else { &tables::LBRR_FLAGS_3_ICDF };
+                let table: &[u8] = if n_frames_per_packet == 2 {
+                    &tables::LBRR_FLAGS_2_ICDF
+                } else {
+                    &tables::LBRR_FLAGS_3_ICDF
+                };
                 let sym = dec.icdf(table, 8).unwrap_or(0) + 1;
                 for (f, flag) in lbrr_flags[c].iter_mut().enumerate() {
                     *flag = (sym >> f) & 1 != 0;
@@ -152,7 +157,11 @@ impl SilkDecoder {
                         let _ = dec.icdf(&tables::STEREO_ONLY_CODE_MID_ICDF, 8);
                     }
                 }
-                let cond = if i > 0 && lbrr_flags[c][i - 1] { CondCoding::Conditional } else { CondCoding::Independent };
+                let cond = if i > 0 && lbrr_flags[c][i - 1] {
+                    CondCoding::Conditional
+                } else {
+                    CondCoding::Independent
+                };
                 let vad = vad_flags[c][i];
                 if let Some(st) = self.mono.get_mut(c) {
                     let _ = decode::decode_frame(dec, st, cond, vad);
@@ -166,14 +175,18 @@ impl SilkDecoder {
         if channels == 2 {
             ms_pred = decode_stereo_pred(dec);
             if vad_flags.get(1).and_then(|v| v.first()).copied() == Some(false) {
-                decode_only_middle = dec.icdf(&tables::STEREO_ONLY_CODE_MID_ICDF, 8).unwrap_or(0) != 0;
+                decode_only_middle =
+                    dec.icdf(&tables::STEREO_ONLY_CODE_MID_ICDF, 8).unwrap_or(0) != 0;
             }
         }
 
-        if channels == 2 && !decode_only_middle && self.stereo.prev_decode_only_middle
-            && let Some(side) = self.mono.get_mut(1) {
-                *side = MonoState::new(self.rate.khz(), self.nb_subfr);
-            }
+        if channels == 2
+            && !decode_only_middle
+            && self.stereo.prev_decode_only_middle
+            && let Some(side) = self.mono.get_mut(1)
+        {
+            *side = MonoState::new(self.rate.khz(), self.nb_subfr);
+        }
         let has_side = !decode_only_middle;
 
         let mut mid_pcm = Vec::new();
@@ -191,7 +204,11 @@ impl SilkDecoder {
                 } else {
                     CondCoding::Conditional
                 };
-                let vad = vad_flags.get(c).and_then(|v| v.get(i)).copied().unwrap_or(false);
+                let vad = vad_flags
+                    .get(c)
+                    .and_then(|v| v.get(i))
+                    .copied()
+                    .unwrap_or(false);
                 if let Some(st) = self.mono.get_mut(c) {
                     let out = decode::decode_frame(dec, st, cond, vad);
                     // Advance the persistent PCM history.
@@ -207,7 +224,9 @@ impl SilkDecoder {
                     if c == 0 {
                         mid_pcm.extend_from_slice(&out.pcm);
                     } else {
-                        side_pcm.get_or_insert_with(Vec::new).extend_from_slice(&out.pcm);
+                        side_pcm
+                            .get_or_insert_with(Vec::new)
+                            .extend_from_slice(&out.pcm);
                     }
                 }
             }
@@ -218,7 +237,8 @@ impl SilkDecoder {
 
         if channels == 2 {
             let side = side_pcm.unwrap_or_else(|| vec![0.0; mid_pcm.len()]);
-            let (l, r) = stereo_ms_to_lr(&mut self.stereo, &mid_pcm, &side, ms_pred, self.rate.khz());
+            let (l, r) =
+                stereo_ms_to_lr(&mut self.stereo, &mid_pcm, &side, ms_pred, self.rate.khz());
             vec![l, r]
         } else {
             vec![mid_pcm]
@@ -238,8 +258,14 @@ fn decode_stereo_pred(dec: &mut RangeDecoder<'_>) -> [f32; 2] {
     let mut pred = [0.0f32; 2];
     for c in 0..2 {
         let idx0 = (ix[c][0] + 3 * ix[c][2]).clamp(0, 15) as usize;
-        let low = tables::STEREO_PRED_QUANT_Q13.get(idx0).copied().unwrap_or(0.0);
-        let high = tables::STEREO_PRED_QUANT_Q13.get(idx0 + 1).copied().unwrap_or(low);
+        let low = tables::STEREO_PRED_QUANT_Q13
+            .get(idx0)
+            .copied()
+            .unwrap_or(0.0);
+        let high = tables::STEREO_PRED_QUANT_Q13
+            .get(idx0 + 1)
+            .copied()
+            .unwrap_or(low);
         let step = (high - low) * (0.5 / tables::STEREO_QUANT_SUB_STEPS);
         pred[c] = low + step * (2.0 * ix[c][1] as f32 + 1.0);
     }
@@ -249,7 +275,13 @@ fn decode_stereo_pred(dec: &mut RangeDecoder<'_>) -> [f32; 2] {
 
 /// `stereo_MS_to_LR.c`'s `silk_stereo_MS_to_LR`, on this crate's
 /// PCM-adjacent-scale `f32` samples.
-fn stereo_ms_to_lr(state: &mut StereoState, mid_in: &[f32], side_in: &[f32], pred: [f32; 2], fs_khz: i32) -> (Vec<f32>, Vec<f32>) {
+fn stereo_ms_to_lr(
+    state: &mut StereoState,
+    mid_in: &[f32],
+    side_in: &[f32],
+    pred: [f32; 2],
+    fs_khz: i32,
+) -> (Vec<f32>, Vec<f32>) {
     let n = mid_in.len();
     // `x1`/`x2` carry a 2-sample lookahead/lookbehind buffer, matching the
     // reference's `x1[n+1]`-centred indexing.

@@ -76,7 +76,8 @@ use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
 use vaco_format_core::{
-    Demuxer, DemuxerDesc, FormatFlags, Muxer, MuxerDesc, ParserProvider, SeekFlags, SeekTarget, Stream,
+    Demuxer, DemuxerDesc, FormatFlags, Muxer, MuxerDesc, ParserProvider, SeekFlags, SeekTarget,
+    Stream,
 };
 use vaco_io::{IoContext, IoOptions, IoWriter, MediaSink, MediaSource};
 use vaco_limits::{Budget, Limits};
@@ -141,7 +142,11 @@ fn parse_frame_header(buf: &[u8]) -> Option<(usize, u32)> {
     // check on them — cheap, and it keeps those bit patterns from ever being
     // accepted as a frame boundary even in the unlikely event the CRC-8
     // happened to match too.
-    if b3 & 0x01 != 0 || block_code == 0 || channel_assignment > 10 || sample_size_code == 0b011 || rate_code == 0x0F
+    if b3 & 0x01 != 0
+        || block_code == 0
+        || channel_assignment > 10
+        || sample_size_code == 0b011
+        || rate_code == 0x0F
     {
         return None;
     }
@@ -150,11 +155,7 @@ fn parse_frame_header(buf: &[u8]) -> Option<(usize, u32)> {
     let lead = *buf.get(pos)?;
     let utf8_len = utf8_number_len(lead)?;
     let utf8_bytes = buf.get(pos..pos.checked_add(utf8_len)?)?;
-    if utf8_bytes
-        .iter()
-        .skip(1)
-        .any(|&b| b & 0xC0 != 0x80)
-    {
+    if utf8_bytes.iter().skip(1).any(|&b| b & 0xC0 != 0x80) {
         return None; // continuation bytes must read `10xxxxxx`
     }
     pos = pos.checked_add(utf8_len)?;
@@ -222,7 +223,11 @@ fn crc8(data: &[u8]) -> u8 {
     for &byte in data {
         crc ^= byte;
         for _ in 0..8 {
-            crc = if crc & 0x80 != 0 { (crc << 1) ^ 0x07 } else { crc << 1 };
+            crc = if crc & 0x80 != 0 {
+                (crc << 1) ^ 0x07
+            } else {
+                crc << 1
+            };
         }
     }
     crc
@@ -272,7 +277,10 @@ impl FlacDemuxer {
             if block_type == 0 {
                 let mut body = [0u8; 34];
                 let take = (len as usize).min(34);
-                io.read_exact(body.get_mut(..take).ok_or(Error::InvalidData("flac: bad STREAMINFO length"))?)?;
+                io.read_exact(
+                    body.get_mut(..take)
+                        .ok_or(Error::InvalidData("flac: bad STREAMINFO length"))?,
+                )?;
                 if len as usize > take {
                     io.skip(u64::from(len) - take as u64)?;
                 }
@@ -290,19 +298,24 @@ impl FlacDemuxer {
             "flac: no `flac` parser registered in this build (enable parse-audio-misc)",
         ))?;
         parser.set_extradata(&streaminfo)?;
-        let mut params = parser
-            .parameters()
-            .cloned()
-            .ok_or(Error::InvalidData("flac: STREAMINFO did not describe a stream"))?;
+        let mut params = parser.parameters().cloned().ok_or(Error::InvalidData(
+            "flac: STREAMINFO did not describe a stream",
+        ))?;
         params.extradata = Some(streaminfo.to_vec());
         let sample_rate = params
             .audio
             .as_ref()
             .map(|a| a.sample_rate)
             .filter(|&r| r > 0)
-            .ok_or(Error::InvalidData("flac: STREAMINFO states zero sample rate"))?;
+            .ok_or(Error::InvalidData(
+                "flac: STREAMINFO states zero sample rate",
+            ))?;
 
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, sample_rate.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, sample_rate.cast_signed()),
+        );
         stream.params = params;
 
         let mut demuxer = Self {
@@ -400,7 +413,10 @@ pub const DEMUXER: DemuxerDesc = DemuxerDesc {
     open: open_demuxer,
 };
 
-fn open_demuxer(src: Box<dyn MediaSource>, parsers: &dyn ParserProvider) -> Result<Box<dyn Demuxer>> {
+fn open_demuxer(
+    src: Box<dyn MediaSource>,
+    parsers: &dyn ParserProvider,
+) -> Result<Box<dyn Demuxer>> {
     Ok(Box::new(FlacDemuxer::open(src, parsers)?))
 }
 
@@ -487,7 +503,9 @@ impl Muxer for FlacMuxer {
 
     fn write_trailer(&mut self) -> Result<()> {
         if !self.header_written {
-            return Err(Error::InvalidData("flac: trailer written before the header"));
+            return Err(Error::InvalidData(
+                "flac: trailer written before the header",
+            ));
         }
         self.out.flush()
     }
@@ -541,7 +559,8 @@ mod tests {
         let sink = MemorySink::new();
         let buf = sink.shared();
         let mut m = FlacMuxer::new(Box::new(sink)).unwrap();
-        m.add_stream(&params_with_extradata(b"fLaC-header")).unwrap();
+        m.add_stream(&params_with_extradata(b"fLaC-header"))
+            .unwrap();
         m.write_header().unwrap();
         let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::permissive());
         let p1 = Packet::from_slice(&mut budget, &[0xFF, 0xF8, 1, 2, 3]).unwrap();
@@ -558,8 +577,12 @@ mod tests {
     #[test]
     fn a_second_stream_is_refused() {
         let mut m = FlacMuxer::new(Box::new(MemorySink::new())).unwrap();
-        m.add_stream(&params_with_extradata(b"fLaC-header")).unwrap();
-        assert!(m.add_stream(&params_with_extradata(b"fLaC-header")).is_err());
+        m.add_stream(&params_with_extradata(b"fLaC-header"))
+            .unwrap();
+        assert!(
+            m.add_stream(&params_with_extradata(b"fLaC-header"))
+                .is_err()
+        );
     }
 
     #[test]

@@ -69,7 +69,11 @@ pub(crate) struct Options {
 /// Similarity metric of `frame` against `prev`: `0.0` identical, `1.0`
 /// maximally different.
 fn metric(frame: &Frame, prev: &Frame, chroma: bool) -> f64 {
-    let n = if chroma { frame.plane_count().min(3) } else { 1 };
+    let n = if chroma {
+        frame.plane_count().min(3)
+    } else {
+        1
+    };
     let mut sum = 0.0;
     let mut count = 0;
     for plane in 0..n.max(1) {
@@ -78,7 +82,11 @@ fn metric(frame: &Frame, prev: &Frame, chroma: bool) -> f64 {
             count += 1;
         }
     }
-    if count == 0 { 0.0 } else { sum / f64::from(count) }
+    if count == 0 {
+        0.0
+    } else {
+        sum / f64::from(count)
+    }
 }
 
 #[derive(Debug)]

@@ -160,7 +160,9 @@ fn frame_from_samples(
     let FrameData::Audio { planes, .. } = &mut frame.data else {
         return Err(Error::InvalidData("adpcm: expected an audio frame"));
     };
-    let plane = planes.get_mut(0).ok_or(Error::InvalidData("adpcm: no plane 0"))?;
+    let plane = planes
+        .get_mut(0)
+        .ok_or(Error::InvalidData("adpcm: no plane 0"))?;
     let bytes = i16_samples_to_bytes(samples);
     let buf = plane.data.make_mut();
     let dst = buf
@@ -193,7 +195,9 @@ fn frame_samples_owned(frame: &Frame) -> Result<(Vec<i16>, u32)> {
     let FrameData::Audio { planes, layout, .. } = &frame.data else {
         return Err(Error::InvalidData("adpcm: expected an audio frame"));
     };
-    let plane = planes.first().ok_or(Error::InvalidData("adpcm: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("adpcm: no plane 0"))?;
     Ok((bytes_to_i16_samples(plane.data.as_slice()), layout.channels))
 }
 
@@ -257,7 +261,11 @@ pub struct AdpcmImaWavDecoder {
 impl AdpcmImaWavDecoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, cfg: ImaWavConfig::default() }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            cfg: ImaWavConfig::default(),
+        }
     }
     #[must_use]
     pub fn with_audio_params(mut self, sample_rate: u32, layout: ChannelLayout) -> Self {
@@ -291,7 +299,13 @@ impl SendReceive for AdpcmImaWavDecoder {
             Accept::Input => {
                 let Some(pkt) = input else { return Ok(()) };
                 let samples = ima::decode_wav_block(pkt.payload(), self.cfg.layout.channels)?;
-                let frame = frame_from_samples(&self.limits, &samples, self.cfg.layout.channels, self.cfg.sample_rate, pkt.pts)?;
+                let frame = frame_from_samples(
+                    &self.limits,
+                    &samples,
+                    self.cfg.layout.channels,
+                    self.cfg.sample_rate,
+                    pkt.pts,
+                )?;
                 self.machine.emit(frame);
                 Ok(())
             }
@@ -315,7 +329,11 @@ pub struct AdpcmImaWavEncoder {
 impl AdpcmImaWavEncoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, cfg: ImaWavConfig::default() }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            cfg: ImaWavConfig::default(),
+        }
     }
     #[must_use]
     pub fn with_audio_params(mut self, layout: ChannelLayout) -> Self {
@@ -376,7 +394,11 @@ pub struct AdpcmImaQtDecoder {
 impl AdpcmImaQtDecoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, cfg: ImaQtConfig::default() }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            cfg: ImaQtConfig::default(),
+        }
     }
     #[must_use]
     pub fn with_audio_params(mut self, sample_rate: u32, layout: ChannelLayout) -> Self {
@@ -409,7 +431,13 @@ impl SendReceive for AdpcmImaQtDecoder {
             Accept::Input => {
                 let Some(pkt) = input else { return Ok(()) };
                 let samples = ima::decode_qt_block(pkt.payload(), self.cfg.layout.channels)?;
-                let frame = frame_from_samples(&self.limits, &samples, self.cfg.layout.channels, self.cfg.sample_rate, pkt.pts)?;
+                let frame = frame_from_samples(
+                    &self.limits,
+                    &samples,
+                    self.cfg.layout.channels,
+                    self.cfg.sample_rate,
+                    pkt.pts,
+                )?;
                 self.machine.emit(frame);
                 Ok(())
             }
@@ -432,7 +460,11 @@ pub struct AdpcmImaQtEncoder {
 impl AdpcmImaQtEncoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, cfg: ImaQtConfig::default() }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            cfg: ImaQtConfig::default(),
+        }
     }
     #[must_use]
     pub fn with_audio_params(mut self, layout: ChannelLayout) -> Self {
@@ -492,7 +524,11 @@ pub struct AdpcmMsDecoder {
 impl AdpcmMsDecoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, cfg: MsConfig::default() }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            cfg: MsConfig::default(),
+        }
     }
     #[must_use]
     pub fn with_audio_params(mut self, sample_rate: u32, layout: ChannelLayout) -> Self {
@@ -525,7 +561,13 @@ impl SendReceive for AdpcmMsDecoder {
             Accept::Input => {
                 let Some(pkt) = input else { return Ok(()) };
                 let samples = ms::decode_block(pkt.payload(), self.cfg.layout.channels)?;
-                let frame = frame_from_samples(&self.limits, &samples, self.cfg.layout.channels, self.cfg.sample_rate, pkt.pts)?;
+                let frame = frame_from_samples(
+                    &self.limits,
+                    &samples,
+                    self.cfg.layout.channels,
+                    self.cfg.sample_rate,
+                    pkt.pts,
+                )?;
                 self.machine.emit(frame);
                 Ok(())
             }
@@ -548,7 +590,11 @@ pub struct AdpcmMsEncoder {
 impl AdpcmMsEncoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, cfg: MsConfig::default() }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            cfg: MsConfig::default(),
+        }
     }
     #[must_use]
     pub fn with_audio_params(mut self, layout: ChannelLayout) -> Self {
@@ -608,7 +654,11 @@ pub struct AdpcmSwfDecoder {
 impl AdpcmSwfDecoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, cfg: SwfConfig::default() }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            cfg: SwfConfig::default(),
+        }
     }
     #[must_use]
     pub fn with_audio_params(mut self, sample_rate: u32, layout: ChannelLayout) -> Self {
@@ -664,7 +714,13 @@ impl SendReceive for AdpcmSwfDecoder {
                 let extra = payload_bits.saturating_sub(7) / (channels * bits_guess).max(1);
                 let sample_count = extra.saturating_add(1);
                 let samples = swf::decode_block(pkt.payload(), channels, sample_count)?;
-                let frame = frame_from_samples(&self.limits, &samples, channels, self.cfg.sample_rate, pkt.pts)?;
+                let frame = frame_from_samples(
+                    &self.limits,
+                    &samples,
+                    channels,
+                    self.cfg.sample_rate,
+                    pkt.pts,
+                )?;
                 self.machine.emit(frame);
                 Ok(())
             }
@@ -687,7 +743,11 @@ pub struct AdpcmSwfEncoder {
 impl AdpcmSwfEncoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits, cfg: SwfConfig::default() }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            cfg: SwfConfig::default(),
+        }
     }
     #[must_use]
     pub fn with_audio_params(mut self, layout: ChannelLayout) -> Self {
@@ -756,7 +816,9 @@ pub struct AdpcmG726Decoder {
 impl AdpcmG726Decoder {
     #[must_use]
     pub fn new(_limits: Limits, _left_justified: bool) -> Self {
-        Self { machine: Machine::new(Caps::empty()) }
+        Self {
+            machine: Machine::new(Caps::empty()),
+        }
     }
 }
 impl SendReceive for AdpcmG726Decoder {
@@ -786,7 +848,9 @@ pub struct AdpcmG726Encoder {
 impl AdpcmG726Encoder {
     #[must_use]
     pub fn new(_limits: Limits, _left_justified: bool) -> Self {
-        Self { machine: Machine::new(Caps::empty()) }
+        Self {
+            machine: Machine::new(Caps::empty()),
+        }
     }
 }
 impl SendReceive for AdpcmG726Encoder {
@@ -824,7 +888,9 @@ pub struct AdpcmG722Decoder {
 impl AdpcmG722Decoder {
     #[must_use]
     pub fn new(_limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()) }
+        Self {
+            machine: Machine::new(Caps::empty()),
+        }
     }
 }
 impl SendReceive for AdpcmG722Decoder {
@@ -854,7 +920,9 @@ pub struct AdpcmG722Encoder {
 impl AdpcmG722Encoder {
     #[must_use]
     pub fn new(_limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()) }
+        Self {
+            machine: Machine::new(Caps::empty()),
+        }
     }
 }
 impl SendReceive for AdpcmG722Encoder {
@@ -904,16 +972,24 @@ fn make_swf_encoder(limits: Limits) -> Box<dyn Encoder> {
     Box::new(AsEncoder(Validated::new(AdpcmSwfEncoder::new(limits))))
 }
 fn make_g726_decoder(limits: Limits) -> Box<dyn Decoder> {
-    Box::new(AsDecoder(Validated::new(AdpcmG726Decoder::new(limits, false))))
+    Box::new(AsDecoder(Validated::new(AdpcmG726Decoder::new(
+        limits, false,
+    ))))
 }
 fn make_g726_encoder(limits: Limits) -> Box<dyn Encoder> {
-    Box::new(AsEncoder(Validated::new(AdpcmG726Encoder::new(limits, false))))
+    Box::new(AsEncoder(Validated::new(AdpcmG726Encoder::new(
+        limits, false,
+    ))))
 }
 fn make_g726le_decoder(limits: Limits) -> Box<dyn Decoder> {
-    Box::new(AsDecoder(Validated::new(AdpcmG726Decoder::new(limits, true))))
+    Box::new(AsDecoder(Validated::new(AdpcmG726Decoder::new(
+        limits, true,
+    ))))
 }
 fn make_g726le_encoder(limits: Limits) -> Box<dyn Encoder> {
-    Box::new(AsEncoder(Validated::new(AdpcmG726Encoder::new(limits, true))))
+    Box::new(AsEncoder(Validated::new(AdpcmG726Encoder::new(
+        limits, true,
+    ))))
 }
 fn make_g722_decoder(limits: Limits) -> Box<dyn Decoder> {
     Box::new(AsDecoder(Validated::new(AdpcmG722Decoder::new(limits))))
@@ -1073,11 +1149,20 @@ mod tests {
     use vaco_core::Error;
 
     fn tone(n: usize) -> Vec<i16> {
-        (0..n).map(|i| ((i as f64 * 0.2).sin() * 6000.0) as i16).collect()
+        (0..n)
+            .map(|i| ((i as f64 * 0.2).sin() * 6000.0) as i16)
+            .collect()
     }
 
     fn frame_of(samples: &[i16], channels: u32) -> Frame {
-        frame_from_samples(&Limits::permissive(), samples, channels, 8000, vaco_core::Timestamp::new(0)).unwrap()
+        frame_from_samples(
+            &Limits::permissive(),
+            samples,
+            channels,
+            8000,
+            vaco_core::Timestamp::new(0),
+        )
+        .unwrap()
     }
 
     #[test]

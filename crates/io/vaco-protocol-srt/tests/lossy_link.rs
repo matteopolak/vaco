@@ -25,7 +25,9 @@
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 
-use vaco_protocol_srt::arq::{ReceiveConfig, ReceiveStats, ReceiveWindow, SendConfig, SendStats, SendWindow};
+use vaco_protocol_srt::arq::{
+    ReceiveConfig, ReceiveStats, ReceiveWindow, SendConfig, SendStats, SendWindow,
+};
 
 /// A tiny deterministic PRNG (xorshift32) — not `rand`, so this test adds
 /// no new dependency (D10) for what is just "a reproducible sequence of
@@ -58,7 +60,11 @@ impl Xorshift32 {
 /// the latency-window drop policy resolve everything still outstanding.
 ///
 /// Returns `(delivered_in_order, dropped)`.
-fn simulate(packet_count: u32, loss_percent: u32, seed: u32) -> (Vec<(u32, Vec<u8>)>, Vec<u32>, SendStats, ReceiveStats) {
+fn simulate(
+    packet_count: u32,
+    loss_percent: u32,
+    seed: u32,
+) -> (Vec<(u32, Vec<u8>)>, Vec<u32>, SendStats, ReceiveStats) {
     const ROUND_MS: u64 = 10; // matches ack::FULL_ACK_INTERVAL_MS's own granularity
     const DRAIN_ROUNDS: u64 = 300; // 3s of extra time to resolve retries within the 1s latency window
 
@@ -70,7 +76,11 @@ fn simulate(packet_count: u32, loss_percent: u32, seed: u32) -> (Vec<(u32, Vec<u
     let mut dropped = Vec::new();
     let mut now_ms: u64;
 
-    let send_one = |seq_no: u32, sender: &mut SendWindow, receiver: &mut ReceiveWindow, now_ms: u64, rng: &mut Xorshift32| {
+    let send_one = |seq_no: u32,
+                    sender: &mut SendWindow,
+                    receiver: &mut ReceiveWindow,
+                    now_ms: u64,
+                    rng: &mut Xorshift32| {
         let payload = seq_no.to_be_bytes().to_vec();
         sender.on_send(seq_no, 0, payload.clone(), now_ms);
         if !rng.hits(loss_percent) {
@@ -163,7 +173,10 @@ fn assert_stats_are_sound(
     // Independently-computed: a conservation invariant against the same
     // `packet_count` the test loop used to drive the simulation, not
     // against `delivered`/`dropped` themselves.
-    assert_eq!(receive_stats.packets_delivered + receive_stats.packets_dropped, u64::from(packet_count));
+    assert_eq!(
+        receive_stats.packets_delivered + receive_stats.packets_dropped,
+        u64::from(packet_count)
+    );
 
     // Merely reported: the counter agrees with the events it itself
     // returned. A real bug in `ReceiveWindow` shared between the counter
@@ -185,7 +198,11 @@ fn assert_sound_delivery(packet_count: u32, delivered: &[(u32, Vec<u8>)], droppe
     let mut last = 0u32;
     for (seq, payload) in delivered {
         assert!(*seq > last, "delivery must be strictly in order");
-        assert_eq!(*payload, seq.to_be_bytes().to_vec(), "payload must be the one actually sent for this sequence number");
+        assert_eq!(
+            *payload,
+            seq.to_be_bytes().to_vec(),
+            "payload must be the one actually sent for this sequence number"
+        );
         last = *seq;
     }
 }
@@ -251,6 +268,10 @@ fn a_packet_lost_on_every_attempt_is_eventually_dropped_not_stalled_on_forever()
         let _ = sender.on_tick(ms); // RTO fires repeatedly; every resend is dropped by this test on purpose
     }
 
-    assert_eq!(dropped, vec![2], "packet 2 must be given up on, not waited for forever");
+    assert_eq!(
+        dropped,
+        vec![2],
+        "packet 2 must be given up on, not waited for forever"
+    );
     assert_eq!(delivered, vec![(1, vec![1]), (3, vec![3])]);
 }

@@ -848,9 +848,7 @@ fn a_decoder_that_never_drains_is_a_livelock_the_guard_catches_not_a_hang() {
         packets(0, 1, 0),
     )));
     let tap = spec.input_stream(input, 0).unwrap();
-    let frames = spec
-        .add_decoder(tap, Box::new(NeverDrainsDecoder))
-        .unwrap();
+    let frames = spec.add_decoder(tap, Box::new(NeverDrainsDecoder)).unwrap();
     let encoded = spec
         .add_encoder(frames, Box::new(MockEncoder::new(0)), TB)
         .unwrap();
@@ -860,7 +858,9 @@ fn a_decoder_that_never_drains_is_a_livelock_the_guard_catches_not_a_hang() {
         .unwrap();
 
     let mut pipeline = spec.build().unwrap();
-    let err = pipeline.run().expect_err("a stuck decoder must not run forever");
+    let err = pipeline
+        .run()
+        .expect_err("a stuck decoder must not run forever");
     assert!(
         matches!(err, Error::LimitExceeded { .. }),
         "expected the no-progress guard's LimitExceeded, got {err:?}"
@@ -1288,9 +1288,16 @@ fn a_sample_converter_turns_planar_float_into_the_encoders_declared_format() {
         packets(0, 1, 0),
     )));
     let tap = spec.input_stream(input, 0).unwrap();
-    let frames = spec.add_decoder(tap, Box::new(PlanarFloatDecoder::default())).unwrap();
+    let frames = spec
+        .add_decoder(tap, Box::new(PlanarFloatDecoder::default()))
+        .unwrap();
     let converted = spec
-        .add_sample_converter(frames, vaco_sampfmt::SampleFmt::S16, TB, Limits::permissive())
+        .add_sample_converter(
+            frames,
+            vaco_sampfmt::SampleFmt::S16,
+            TB,
+            Limits::permissive(),
+        )
         .unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let encoded = spec
@@ -1326,7 +1333,13 @@ fn a_converter_is_a_cheap_passthrough_when_formats_already_agree() {
         .add_decoder(tap, Box::new(GrayDecoder::new(0)))
         .unwrap();
     let converted = spec
-        .add_converter(frames, vaco_pixfmt::PixFmt::Gray8, TB, Limits::permissive(), 0)
+        .add_converter(
+            frames,
+            vaco_pixfmt::PixFmt::Gray8,
+            TB,
+            Limits::permissive(),
+            0,
+        )
         .unwrap();
     let encoded = spec
         .add_encoder(converted, Box::new(MockEncoder::new(0)), TB)

@@ -20,8 +20,16 @@ use crate::solid::Solid;
 /// [`Error::Unsupported`] if `frame` is not video, or for the pixel-format
 /// classes [`crate::solid::Solid::resolve`] does not handle (see its doc).
 pub fn fill(frame: &mut Frame, rect: Rect, color: Rgba) -> Result<()> {
-    let FrameData::Video { format, width, height, .. } = frame.data else {
-        return Err(Error::Unsupported("vaco-filter-draw::fill: not a video frame"));
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = frame.data
+    else {
+        return Err(Error::Unsupported(
+            "vaco-filter-draw::fill: not a video frame",
+        ));
     };
     let solid = Solid::resolve(color, format, frame.color)?;
     let rect = rect.clip(width, height);
@@ -33,7 +41,14 @@ pub fn fill(frame: &mut Frame, rect: Rect, color: Rgba) -> Result<()> {
 /// The write loop [`fill`] and [`crate::blend::blend`] (for a fully opaque
 /// colour) share: every component on every plane whose projected rectangle
 /// is non-empty.
-pub(crate) fn write_solid(frame: &mut Frame, format: PixFmt, width: u32, height: u32, rect: Rect, solid: &Solid) {
+pub(crate) fn write_solid(
+    frame: &mut Frame,
+    format: PixFmt,
+    width: u32,
+    height: u32,
+    rect: Rect,
+    solid: &Solid,
+) {
     let desc = format.descriptor();
     let big_endian = format.is_big_endian();
     for plane_idx in 0..desc.planes {
@@ -62,7 +77,12 @@ pub(crate) fn write_solid(frame: &mut Frame, format: PixFmt, width: u32, height:
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_frame::FramePool;
@@ -71,7 +91,17 @@ mod tests {
     fn fill_whole_frame_yuv420p() {
         let pool = FramePool::default();
         let mut f = pool.acquire_video(PixFmt::Yuv420p, 16, 16).unwrap();
-        fill(&mut f, Rect::full(16, 16), Rgba { r: 255, g: 0, b: 0, a: 255 }).unwrap();
+        fill(
+            &mut f,
+            Rect::full(16, 16),
+            Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        )
+        .unwrap();
         assert_eq!(f.plane(0).unwrap().row(0).unwrap()[0], 0x51);
         assert_eq!(f.plane(1).unwrap().row(0).unwrap()[0], 0x5a);
         assert_eq!(f.plane(2).unwrap().row(0).unwrap()[0], 0xf0);
@@ -84,7 +114,22 @@ mod tests {
         // Equal R=G=B is a fixed point of any BT.601-weighted luma sum
         // (weights sum to 1), so full-range `gray` reproduces it exactly —
         // matches `ffmpeg -pix_fmt gray` on `0xc8c8c8` printing `0xc8`.
-        fill(&mut f, Rect { x: 0, y: 0, w: 4, h: 8 }, Rgba { r: 200, g: 200, b: 200, a: 255 }).unwrap();
+        fill(
+            &mut f,
+            Rect {
+                x: 0,
+                y: 0,
+                w: 4,
+                h: 8,
+            },
+            Rgba {
+                r: 200,
+                g: 200,
+                b: 200,
+                a: 255,
+            },
+        )
+        .unwrap();
         let row = f.plane(0).unwrap().row(0).unwrap().to_vec();
         assert_eq!(&row[0..4], &[200, 200, 200, 200]);
         assert_eq!(&row[4..8], &[0, 0, 0, 0]);
@@ -97,7 +142,17 @@ mod tests {
         // defaults to full range where `yuv420p` defaults to limited.
         let pool = FramePool::default();
         let mut f = pool.acquire_video(PixFmt::Gray8, 2, 2).unwrap();
-        fill(&mut f, Rect::full(2, 2), Rgba { r: 255, g: 0, b: 0, a: 255 }).unwrap();
+        fill(
+            &mut f,
+            Rect::full(2, 2),
+            Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        )
+        .unwrap();
         assert_eq!(f.plane(0).unwrap().row(0).unwrap()[0], 76);
     }
 
@@ -105,7 +160,17 @@ mod tests {
     fn fill_high_bit_depth_scales_correctly() {
         let pool = FramePool::default();
         let mut f = pool.acquire_video(PixFmt::Gray16le, 4, 4).unwrap();
-        fill(&mut f, Rect::full(4, 4), Rgba { r: 255, g: 255, b: 255, a: 255 }).unwrap();
+        fill(
+            &mut f,
+            Rect::full(4, 4),
+            Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+        )
+        .unwrap();
         let row = f.plane(0).unwrap().row(0).unwrap();
         // gray16le's single component is full 16-bit luma at limited range,
         // so white (255 in 8-bit) maps through the same BT.601 luma levels.

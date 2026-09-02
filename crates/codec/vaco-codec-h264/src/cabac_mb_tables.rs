@@ -1,4 +1,7 @@
-#![allow(clippy::unreadable_literal, reason = "spec tables, not derived numbers")]
+#![allow(
+    clippy::unreadable_literal,
+    reason = "spec tables, not derived numbers"
+)]
 //! CABAC macroblock-layer context-initialisation tables, ITU-T H.264
 //! clause 9.3.1.1, Tables 9-12 through 9-18 — the `(m, n)` pairs
 //! [`crate::cabac_mb`] builds its per-syntax-element [`ContextInit`] arrays

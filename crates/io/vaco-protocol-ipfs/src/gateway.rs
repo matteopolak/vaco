@@ -56,8 +56,16 @@ pub fn home_gateway_file(home: &str) -> String {
 /// `$IPFS_GATEWAY`, the `$IPFS_PATH` gateway file's contents, the
 /// `$HOME/.ipfs` gateway file's contents.
 #[must_use]
-pub fn resolve(option: &str, env_gateway: Option<&str>, path_file: Option<&str>, home_file: Option<&str>) -> Option<String> {
-    for raw in [Some(option), env_gateway, path_file, home_file].into_iter().flatten() {
+pub fn resolve(
+    option: &str,
+    env_gateway: Option<&str>,
+    path_file: Option<&str>,
+    home_file: Option<&str>,
+) -> Option<String> {
+    for raw in [Some(option), env_gateway, path_file, home_file]
+        .into_iter()
+        .flatten()
+    {
         let trimmed = raw.trim().trim_end_matches('/');
         if !trimmed.is_empty() {
             return Some(trimmed.to_owned());
@@ -85,7 +93,12 @@ mod tests {
     #[test]
     fn option_wins_over_everything_else() {
         assert_eq!(
-            resolve("http://opt", Some("http://env"), Some("http://path"), Some("http://home")),
+            resolve(
+                "http://opt",
+                Some("http://env"),
+                Some("http://path"),
+                Some("http://home")
+            ),
             Some("http://opt".to_owned())
         );
     }
@@ -93,7 +106,12 @@ mod tests {
     #[test]
     fn env_wins_when_option_is_unset() {
         assert_eq!(
-            resolve("", Some("http://env"), Some("http://path"), Some("http://home")),
+            resolve(
+                "",
+                Some("http://env"),
+                Some("http://path"),
+                Some("http://home")
+            ),
             Some("http://env".to_owned())
         );
     }
@@ -108,7 +126,10 @@ mod tests {
 
     #[test]
     fn home_file_is_the_last_resort() {
-        assert_eq!(resolve("", None, None, Some("http://home")), Some("http://home".to_owned()));
+        assert_eq!(
+            resolve("", None, None, Some("http://home")),
+            Some("http://home".to_owned())
+        );
     }
 
     #[test]
@@ -118,19 +139,34 @@ mod tests {
 
     #[test]
     fn trailing_slash_is_stripped_regardless_of_source() {
-        assert_eq!(resolve("http://opt/", None, None, None), Some("http://opt".to_owned()));
-        assert_eq!(resolve("", Some("http://env/"), None, None), Some("http://env".to_owned()));
+        assert_eq!(
+            resolve("http://opt/", None, None, None),
+            Some("http://opt".to_owned())
+        );
+        assert_eq!(
+            resolve("", Some("http://env/"), None, None),
+            Some("http://env".to_owned())
+        );
     }
 
     #[test]
     fn a_gateway_files_trailing_newline_is_trimmed() {
-        assert_eq!(resolve("", None, Some("http://path\n"), None), Some("http://path".to_owned()));
+        assert_eq!(
+            resolve("", None, Some("http://path\n"), None),
+            Some("http://path".to_owned())
+        );
     }
 
     #[test]
     fn ipfs_path_file_has_the_measured_no_separator_bug() {
-        assert_eq!(ipfs_path_gateway_file("/tmp/fake_ipfs"), "/tmp/fake_ipfsgateway");
-        assert_eq!(ipfs_path_gateway_file("/tmp/fake_ipfs/"), "/tmp/fake_ipfs/gateway");
+        assert_eq!(
+            ipfs_path_gateway_file("/tmp/fake_ipfs"),
+            "/tmp/fake_ipfsgateway"
+        );
+        assert_eq!(
+            ipfs_path_gateway_file("/tmp/fake_ipfs/"),
+            "/tmp/fake_ipfs/gateway"
+        );
     }
 
     #[test]
@@ -148,11 +184,17 @@ mod tests {
 
     #[test]
     fn build_target_handles_a_bare_cid_with_no_path() {
-        assert_eq!(build_target("http://gw", "ipfs", "//QmBareCidOnly"), "http://gw/ipfs/QmBareCidOnly");
+        assert_eq!(
+            build_target("http://gw", "ipfs", "//QmBareCidOnly"),
+            "http://gw/ipfs/QmBareCidOnly"
+        );
     }
 
     #[test]
     fn build_target_uses_ipns_for_the_ipns_kind() {
-        assert_eq!(build_target("http://gw", "ipns", "//example.com/x"), "http://gw/ipns/example.com/x");
+        assert_eq!(
+            build_target("http://gw", "ipns", "//example.com/x"),
+            "http://gw/ipns/example.com/x"
+        );
     }
 }

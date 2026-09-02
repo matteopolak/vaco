@@ -55,10 +55,7 @@ pub use mux::SwfMuxer;
 #[must_use]
 pub fn probe(data: &vaco_format_core::ProbeData<'_>) -> vaco_format_core::ProbeScore {
     let sig = [data.get(0), data.get(1), data.get(2)];
-    let is_swf = matches!(
-        sig,
-        [Some(b'F' | b'C' | b'Z'), Some(b'W'), Some(b'S')]
-    );
+    let is_swf = matches!(sig, [Some(b'F' | b'C' | b'Z'), Some(b'W'), Some(b'S')]);
     if is_swf {
         vaco_format_core::ProbeScore(51)
     } else {

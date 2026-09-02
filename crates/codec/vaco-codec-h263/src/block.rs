@@ -215,8 +215,7 @@ pub(crate) fn decode_h261_coefficients(r: &mut BitReader<'_>, intra: bool) -> Re
             r,
             tables::H261_TCOEFF.iter().filter(|c: &&H261Coeff| {
                 if is_first {
-                    c.run != tables::H261_EOB
-                        && !(!c.first_only && c.run == 0 && c.level == 1)
+                    c.run != tables::H261_EOB && !(!c.first_only && c.run == 0 && c.level == 1)
                 } else {
                     !c.first_only
                 }
@@ -380,7 +379,9 @@ fn decode_extended_level(r: &mut BitReader<'_>) -> i32 {
         *slot = r.get_bit();
     }
     // b11..b1, restored to their original (pre-rotation) positions.
-    let bits = [t[5], t[6], t[7], t[8], t[9], t[10], t[0], t[1], t[2], t[3], t[4]];
+    let bits = [
+        t[5], t[6], t[7], t[8], t[9], t[10], t[0], t[1], t[2], t[3], t[4],
+    ];
     let mut magnitude: u32 = 0;
     for b in bits {
         magnitude = (magnitude << 1) | b;
@@ -442,7 +443,11 @@ fn decode_h263_event(r: &mut BitReader<'_>) -> Option<H263Event> {
 /// distinct name at call sites and in tests that have nothing to do with
 /// Annex T, so they read the same as before that annex existed.
 #[cfg(test)]
-pub(crate) fn decode_h263_coefficients(r: &mut BitReader<'_>, intra: bool, has_tcoef: bool) -> Result<[i32; 64]> {
+pub(crate) fn decode_h263_coefficients(
+    r: &mut BitReader<'_>,
+    intra: bool,
+    has_tcoef: bool,
+) -> Result<[i32; 64]> {
     decode_h263_coefficients_mq(r, intra, has_tcoef, false)
 }
 
@@ -454,7 +459,12 @@ pub(crate) fn decode_h263_coefficients(r: &mut BitReader<'_>, intra: bool, has_t
 /// decoded as its literal two's-complement value (`-128`), same as any
 /// other bit pattern — this crate does not reject bitstreams for
 /// violating an encoder-side "shall not send" restriction.
-pub(crate) fn decode_h263_coefficients_mq(r: &mut BitReader<'_>, intra: bool, has_tcoef: bool, mq: bool) -> Result<[i32; 64]> {
+pub(crate) fn decode_h263_coefficients_mq(
+    r: &mut BitReader<'_>,
+    intra: bool,
+    has_tcoef: bool,
+    mq: bool,
+) -> Result<[i32; 64]> {
     let mut qfs = [0i32; 64];
     let mut n: usize = if intra {
         let dc = r.get(8) as u8;
@@ -533,7 +543,10 @@ pub(crate) fn annex_i_dequant(level: i32, quant: u8) -> i32 {
 /// [`annex_i_dequant`] applied to a whole block's 64 coefficients (after
 /// [`inverse_scan`] has already put them in raster order).
 #[must_use]
-#[allow(dead_code, reason = "landed ahead of its consumer -- see annex_i_dequant")]
+#[allow(
+    dead_code,
+    reason = "landed ahead of its consumer -- see annex_i_dequant"
+)]
 pub(crate) fn annex_i_dequantise(qf: &[i32; 64], quant: u8) -> [i32; 64] {
     let mut out = [0i32; 64];
     for (o, &level) in out.iter_mut().zip(qf.iter()) {
@@ -544,7 +557,10 @@ pub(crate) fn annex_i_dequantise(qf: &[i32; 64], quant: u8) -> [i32; 64] {
 
 /// Annex I §I.3: `clipAC()` — "clipping to the range -2048 to 2047".
 #[must_use]
-#[allow(dead_code, reason = "landed ahead of its consumer -- see annex_i_dequant")]
+#[allow(
+    dead_code,
+    reason = "landed ahead of its consumer -- see annex_i_dequant"
+)]
 pub(crate) fn clip_ac(x: i32) -> i32 {
     x.clamp(-2048, 2047)
 }
@@ -561,7 +577,10 @@ pub(crate) fn clip_ac(x: i32) -> i32 {
     clippy::integer_division,
     reason = "the evenness test `x % 2` is not an approximated division; there is no truncating division anywhere in this formula"
 )]
-#[allow(dead_code, reason = "landed ahead of its consumer -- see annex_i_dequant")]
+#[allow(
+    dead_code,
+    reason = "landed ahead of its consumer -- see annex_i_dequant"
+)]
 pub(crate) fn oddify_clip_dc(x: i32) -> i32 {
     let x = if x % 2 == 0 { x + 1 } else { x };
     x.clamp(0, 2047)
@@ -586,9 +605,19 @@ pub(crate) fn oddify_clip_dc(x: i32) -> i32 {
 /// referenced neighbour is unavailable, and the DC "oddification"
 /// ([`oddify_clip_dc`]) every mode applies at the end.
 #[must_use]
-#[allow(dead_code, reason = "landed ahead of its consumer -- see annex_i_dequant")]
-pub(crate) fn annex_i_reconstruct(rec_c: &[i32; 64], mode: u8, block_a: Option<&[i32; 64]>, block_b: Option<&[i32; 64]>) -> [i32; 64] {
-    let at = |block: &[i32; 64], u: usize, v: usize| -> i32 { block.get(v * 8 + u).copied().unwrap_or(0) };
+#[allow(
+    dead_code,
+    reason = "landed ahead of its consumer -- see annex_i_dequant"
+)]
+pub(crate) fn annex_i_reconstruct(
+    rec_c: &[i32; 64],
+    mode: u8,
+    block_a: Option<&[i32; 64]>,
+    block_b: Option<&[i32; 64]>,
+) -> [i32; 64] {
+    let at = |block: &[i32; 64], u: usize, v: usize| -> i32 {
+        block.get(v * 8 + u).copied().unwrap_or(0)
+    };
     let c = |u: usize, v: usize| -> i32 { rec_c.get(v * 8 + u).copied().unwrap_or(0) };
 
     // Kept as one arm per Annex I §I.3 mode rather than merged by clippy's
@@ -597,13 +626,22 @@ pub(crate) fn annex_i_reconstruct(rec_c: &[i32; 64], mode: u8, block_a: Option<&
     // the primary text, and each arm here maps to that mode's own
     // pseudocode paragraph -- merging them would trade that traceability
     // for a few fewer lines.
-    #[allow(clippy::match_same_arms, reason = "each arm mirrors a distinct paragraph of Annex I's own per-mode pseudocode; a textual coincidence between modes is not a reason to fold them together")]
+    #[allow(
+        clippy::match_same_arms,
+        reason = "each arm mirrors a distinct paragraph of Annex I's own per-mode pseudocode; a textual coincidence between modes is not a reason to fold them together"
+    )]
     // The two-neighbour Mode 0 average must truncate towards zero, per
     // §I.3's own "operator '/' ... division by truncation" -- `i32::midpoint`
     // instead rounds towards negative infinity, which disagrees with the
     // spec whenever the sum is odd and negative.
-    #[allow(clippy::manual_midpoint, reason = "i32::midpoint rounds towards negative infinity; Annex I's own '/' is truncating division, so the manual form is the correct one, not a missed simplification")]
-    #[allow(clippy::integer_division, reason = "Annex I §I.3's own Mode 0 formula for two valid neighbours is literally '(RecA'(0,0) + RecB'(0,0)) / 2', operator '/' explicitly defined in that section as division by truncation -- not an approximation of anything else")]
+    #[allow(
+        clippy::manual_midpoint,
+        reason = "i32::midpoint rounds towards negative infinity; Annex I's own '/' is truncating division, so the manual form is the correct one, not a missed simplification"
+    )]
+    #[allow(
+        clippy::integer_division,
+        reason = "Annex I §I.3's own Mode 0 formula for two valid neighbours is literally '(RecA'(0,0) + RecB'(0,0)) / 2', operator '/' explicitly defined in that section as division by truncation -- not an approximation of anything else"
+    )]
     let temp_dc = match (mode, block_a, block_b) {
         (0, Some(a), Some(b)) => c(0, 0) + (at(a, 0, 0) + at(b, 0, 0)) / 2,
         (0, Some(a), None) => c(0, 0) + at(a, 0, 0),
@@ -889,11 +927,19 @@ mod tests {
         let last_row = tables::H263_TCOEF
             .iter()
             .find(|c| c.last)
-            .unwrap_or(&H263Coeff { bits: "0", last: false, run: 0, level: 0 });
+            .unwrap_or(&H263Coeff {
+                bits: "0",
+                last: false,
+                run: 0,
+                level: 0,
+            });
         let bytes = bits_to_bytes(&format!("{}0", last_row.bits));
         let mut r = BitReader::new(&bytes);
         let qfs = decode_h263_coefficients(&mut r, false, true).unwrap_or([0i32; 64]);
-        assert_eq!(qfs.get(usize::from(last_row.run)).copied(), Some(i32::from(last_row.level)));
+        assert_eq!(
+            qfs.get(usize::from(last_row.run)).copied(),
+            Some(i32::from(last_row.level))
+        );
     }
 
     #[test]

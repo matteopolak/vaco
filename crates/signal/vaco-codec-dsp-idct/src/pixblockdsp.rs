@@ -22,10 +22,15 @@
 /// at whatever it already held, not by aborting.
 pub fn get_pixels(dst: &mut [i16], src: &[u8], stride: usize, w: usize, h: usize) {
     for row in 0..h {
-        let Some(src_row) = src.get(row.saturating_mul(stride)..).and_then(|r| r.get(..w)) else {
+        let Some(src_row) = src
+            .get(row.saturating_mul(stride)..)
+            .and_then(|r| r.get(..w))
+        else {
             return;
         };
-        let Some(dst_row) = dst.get_mut(row.saturating_mul(w)..).and_then(|r| r.get_mut(..w))
+        let Some(dst_row) = dst
+            .get_mut(row.saturating_mul(w)..)
+            .and_then(|r| r.get_mut(..w))
         else {
             return;
         };
@@ -51,13 +56,21 @@ pub fn diff_pixels(
     h: usize,
 ) {
     for row in 0..h {
-        let Some(row1) = src1.get(row.saturating_mul(stride1)..).and_then(|r| r.get(..w)) else {
+        let Some(row1) = src1
+            .get(row.saturating_mul(stride1)..)
+            .and_then(|r| r.get(..w))
+        else {
             return;
         };
-        let Some(row2) = src2.get(row.saturating_mul(stride2)..).and_then(|r| r.get(..w)) else {
+        let Some(row2) = src2
+            .get(row.saturating_mul(stride2)..)
+            .and_then(|r| r.get(..w))
+        else {
             return;
         };
-        let Some(dst_row) = dst.get_mut(row.saturating_mul(w)..).and_then(|r| r.get_mut(..w))
+        let Some(dst_row) = dst
+            .get_mut(row.saturating_mul(w)..)
+            .and_then(|r| r.get_mut(..w))
         else {
             return;
         };

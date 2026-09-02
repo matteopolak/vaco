@@ -210,7 +210,13 @@ mod tests {
         };
         let mut f = Filter::new(opts);
         let replace_frame = frame_of(255, 0);
-        let sources = [frame_of(10, 0), frame_of(20, 1), frame_of(30, 2), frame_of(40, 3), frame_of(50, 4)];
+        let sources = [
+            frame_of(10, 0),
+            frame_of(20, 1),
+            frame_of(30, 2),
+            frame_of(40, 3),
+            frame_of(50, 4),
+        ];
         let mut out = Vec::new();
         for src in sources {
             let FrameOut::One(fr) = f.on_pair(src, Some(&replace_frame)) else {

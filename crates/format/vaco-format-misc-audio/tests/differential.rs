@@ -49,7 +49,9 @@ fn open_file(path: &Path) -> Box<dyn MediaSource> {
 }
 
 fn fixture(name: &str) -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 #[test]
@@ -111,7 +113,9 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 48_000,
             channels: 2,
             reference_duration_us: None,
-            reference_packet_sizes: Some(&[1024,1024,1024,1024,1024,1024,1024,1024,1024,1024,1024,1024,944]),
+            reference_packet_sizes: Some(&[
+                1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024, 944,
+            ]),
         },
         Row {
             file: "aptx_hd.aptx_hd",
@@ -119,7 +123,10 @@ fn every_fixture_matches_the_measured_reference_row() {
             sample_rate: 48_000,
             channels: 2,
             reference_duration_us: None,
-            reference_packet_sizes: Some(&[1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,1536,96]),
+            reference_packet_sizes: Some(&[
+                1536, 1536, 1536, 1536, 1536, 1536, 1536, 1536, 1536, 1536, 1536, 1536, 1536, 1536,
+                96,
+            ]),
         },
         Row {
             file: "sbc.sbc",
@@ -253,7 +260,9 @@ fn every_fixture_matches_the_measured_reference_row() {
 /// The probe for every registered demuxer must not claim a plain text file.
 #[test]
 fn no_probe_claims_prose() {
-    use vaco_format_misc_audio::{adx, amr, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xa, xwma};
+    use vaco_format_misc_audio::{
+        adx, amr, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xa, xwma,
+    };
 
     let text = ProbeData::new(b"The quick brown fox jumps over the lazy dog. Not media.");
     let probes: &[fn(&ProbeData<'_>) -> vaco_format_core::probe::ProbeScore] = &[

@@ -318,7 +318,10 @@ mod tests {
     fn rejects_bad_magic() {
         let mut budget = Budget::new(Limits::permissive());
         let err = codec::decode(b"not an exr", &mut budget).unwrap_err();
-        assert!(matches!(err, Error::InvalidData(_) | Error::Unsupported(_) | Error::UnexpectedEof));
+        assert!(matches!(
+            err,
+            Error::InvalidData(_) | Error::Unsupported(_) | Error::UnexpectedEof
+        ));
     }
 
     #[test]
@@ -369,7 +372,8 @@ mod tests {
             ("zip16", CompressionAlgo::Zip16),
         ] {
             let mut enc = ExrEncoder::new(Limits::permissive());
-            enc.set_option("compression", key_value).expect("set_option");
+            enc.set_option("compression", key_value)
+                .expect("set_option");
             assert_eq!(enc.options.compression, Some(algo));
             enc.send(Some(&frame)).expect("send frame");
             let packet = enc.receive().expect("receive packet");

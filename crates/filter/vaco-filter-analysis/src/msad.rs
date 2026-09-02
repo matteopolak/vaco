@@ -51,7 +51,11 @@ pub const DESC: FilterDesc = FilterDesc {
 pub(crate) struct Msad;
 
 impl PairedFilter for Msad {
-    fn filter_frames(&mut self, _ctx: &mut FilterContext<'_>, inputs: SmallVec<[Frame; 4]>) -> Result<FrameOut> {
+    fn filter_frames(
+        &mut self,
+        _ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut> {
         let [main, reference] = <[Frame; 2]>::try_from(inputs.into_vec())
             .unwrap_or_else(|_| unreachable!("Paired guarantees exactly input_count() frames"));
         Ok(FrameOut::One(measure(&main, &reference)))

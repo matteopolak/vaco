@@ -134,7 +134,12 @@ fn parse_asset(asset: &XmlNode) -> Result<AssetMapEntry> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_limits::Limits;

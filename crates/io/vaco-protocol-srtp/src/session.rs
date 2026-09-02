@@ -27,7 +27,11 @@ pub fn build_iv(salt: &[u8; 14], ssrc: u32, index: u64) -> [u8; 16] {
     // big-endian representation via `.skip(2)` on the byte iterator
     // itself avoids indexing the fixed-size array with a non-constant
     // offset.
-    for (slot, b) in iv.iter_mut().skip(8).zip(index.to_be_bytes().into_iter().skip(2)) {
+    for (slot, b) in iv
+        .iter_mut()
+        .skip(8)
+        .zip(index.to_be_bytes().into_iter().skip(2))
+    {
         *slot ^= b;
     }
     iv
@@ -38,7 +42,12 @@ pub fn build_iv(salt: &[u8; 14], ssrc: u32, index: u64) -> [u8; 16] {
 /// transmitted on the wire, which is exactly why a receiver has to track
 /// it out of band rather than reading it from the packet).
 #[must_use]
-pub fn compute_auth_tag(auth_key: &[u8], authenticated_portion: &[u8], roc: u32, tag_len: usize) -> Vec<u8> {
+pub fn compute_auth_tag(
+    auth_key: &[u8],
+    authenticated_portion: &[u8],
+    roc: u32,
+    tag_len: usize,
+) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(authenticated_portion);
     buf.extend_from_slice(&roc.to_be_bytes());
@@ -68,7 +77,10 @@ pub struct RolloverTracker {
 impl RolloverTracker {
     #[must_use]
     pub const fn new() -> Self {
-        Self { roc: 0, highest_seq: None }
+        Self {
+            roc: 0,
+            highest_seq: None,
+        }
     }
 
     /// Observe one arriving sequence number, returning the 48-bit packet
@@ -82,7 +94,10 @@ impl RolloverTracker {
                 self.roc = self.roc.wrapping_add(1);
             }
         }
-        if self.highest_seq.is_none_or(|h| seq > h || (h > 0x8000 && seq < 0x8000)) {
+        if self
+            .highest_seq
+            .is_none_or(|h| seq > h || (h > 0x8000 && seq < 0x8000))
+        {
             self.highest_seq = Some(seq);
         }
         (u64::from(self.roc) << 16) | u64::from(seq)
@@ -102,7 +117,12 @@ pub struct SrtpContext {
 impl SrtpContext {
     #[must_use]
     pub const fn new(keys: SessionKeys, ssrc: u32) -> Self {
-        Self { keys, ssrc, tag_len: DEFAULT_TAG_LEN, rollover: RolloverTracker::new() }
+        Self {
+            keys,
+            ssrc,
+            tag_len: DEFAULT_TAG_LEN,
+            rollover: RolloverTracker::new(),
+        }
     }
 
     /// Encrypt `payload` in place and append an authentication tag,
@@ -117,7 +137,10 @@ impl SrtpContext {
         let index = self.rollover.observe(seq);
         let iv = build_iv(&self.keys.salt, self.ssrc, index);
         let mut buf = header_and_payload.to_vec();
-        #[allow(clippy::indexing_slicing, reason = "header_len is caller-supplied and bounded by header_and_payload.len() in this crate's own callers")]
+        #[allow(
+            clippy::indexing_slicing,
+            reason = "header_len is caller-supplied and bounded by header_and_payload.len() in this crate's own callers"
+        )]
         let payload = &mut buf[header_len..];
         apply_keystream(&self.keys.cipher_key, &iv, payload);
         let roc = self.rollover.current_roc();
@@ -143,7 +166,10 @@ impl SrtpContext {
         }
         let iv = build_iv(&self.keys.salt, self.ssrc, index);
         let mut plaintext = authenticated.to_vec();
-        #[allow(clippy::indexing_slicing, reason = "header_len already checked against packet.len() above")]
+        #[allow(
+            clippy::indexing_slicing,
+            reason = "header_len already checked against packet.len() above"
+        )]
         let payload = &mut plaintext[header_len..];
         apply_keystream(&self.keys.cipher_key, &iv, payload);
         Some(plaintext)
@@ -233,7 +259,10 @@ mod tests {
         plaintext.extend_from_slice(b"secret media payload");
 
         let protected = sender.protect(1, header.len(), &plaintext);
-        assert_ne!(&protected[header.len()..protected.len() - DEFAULT_TAG_LEN], b"secret media payload");
+        assert_ne!(
+            &protected[header.len()..protected.len() - DEFAULT_TAG_LEN],
+            b"secret media payload"
+        );
 
         let recovered = receiver.unprotect(1, header.len(), &protected).unwrap();
         assert_eq!(recovered, plaintext);

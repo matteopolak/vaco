@@ -145,7 +145,10 @@ mod tests {
     #[test]
     fn a_full_bucket_permits_up_to_capacity_immediately() {
         let mut p = Pacer::new(1000, 0); // 1000 B/s, capacity 1000 B
-        assert!(p.permit(0, 1000), "a cold start must not hold back the first send");
+        assert!(
+            p.permit(0, 1000),
+            "a cold start must not hold back the first send"
+        );
         assert!(!p.permit(0, 1), "the bucket is now empty");
     }
 
@@ -153,8 +156,14 @@ mod tests {
     fn tokens_refill_linearly_with_elapsed_time() {
         let mut p = Pacer::new(1000, 0);
         assert!(p.permit(0, 1000)); // drain it
-        assert!(!p.permit(500, 600), "only 500ms elapsed -> 500 bytes accrued, not 600");
-        assert!(p.permit(500, 500), "exactly the accrued amount must be permitted");
+        assert!(
+            !p.permit(500, 600),
+            "only 500ms elapsed -> 500 bytes accrued, not 600"
+        );
+        assert!(
+            p.permit(500, 500),
+            "exactly the accrued amount must be permitted"
+        );
         assert!(!p.permit(500, 1));
     }
 

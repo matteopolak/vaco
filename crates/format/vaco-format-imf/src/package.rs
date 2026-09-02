@@ -72,7 +72,9 @@ impl Package {
     /// reports otherwise.
     pub fn for_cpl(cpl: Cpl, cpl_path: &str) -> Result<Self> {
         let path = local_path_only(cpl_path)?;
-        let base_dir = path.parent().map_or_else(|| PathBuf::from("."), Path::to_path_buf);
+        let base_dir = path
+            .parent()
+            .map_or_else(|| PathBuf::from("."), Path::to_path_buf);
 
         let assetmap_path = find_assetmap(&base_dir)?;
         let assetmap_bytes = std::fs::read_to_string(&assetmap_path).map_err(Error::Io)?;
@@ -107,9 +109,12 @@ impl Package {
     /// does not list, which is a real, reportable inconsistency, not a
     /// silently-skipped track.
     pub fn resolve_track_file(&self, track_file_id: &str) -> Result<PathBuf> {
-        let entry = self.assetmap.resolve(track_file_id).ok_or(Error::InvalidData(
-            "imf: CPL names a TrackFileId the ASSETMAP does not list",
-        ))?;
+        let entry = self
+            .assetmap
+            .resolve(track_file_id)
+            .ok_or(Error::InvalidData(
+                "imf: CPL names a TrackFileId the ASSETMAP does not list",
+            ))?;
         Ok(self.base_dir.join(&entry.path))
     }
 
@@ -147,7 +152,11 @@ fn find_assetmap(dir: &Path) -> Result<PathBuf> {
     }
     let entries = std::fs::read_dir(dir).map_err(Error::Io)?;
     for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().eq_ignore_ascii_case(ASSETMAP_FILENAME) {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .eq_ignore_ascii_case(ASSETMAP_FILENAME)
+        {
             return Ok(entry.path());
         }
     }
@@ -166,7 +175,9 @@ fn find_assetmap(dir: &Path) -> Result<PathBuf> {
 fn local_path_only(url: &str) -> Result<PathBuf> {
     if let Some(colon) = url.find(':')
         && url[colon + 1..].starts_with("//")
-        && url[..colon].chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
+        && url[..colon]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.')
         && !cfg!(windows)
     {
         return Err(Error::Unsupported(
@@ -177,14 +188,25 @@ fn local_path_only(url: &str) -> Result<PathBuf> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
     #[test]
     fn a_bare_local_path_is_accepted() {
-        assert_eq!(local_path_only("/tmp/x/CPL.xml").unwrap(), PathBuf::from("/tmp/x/CPL.xml"));
-        assert_eq!(local_path_only("CPL.xml").unwrap(), PathBuf::from("CPL.xml"));
+        assert_eq!(
+            local_path_only("/tmp/x/CPL.xml").unwrap(),
+            PathBuf::from("/tmp/x/CPL.xml")
+        );
+        assert_eq!(
+            local_path_only("CPL.xml").unwrap(),
+            PathBuf::from("CPL.xml")
+        );
     }
 
     #[test]

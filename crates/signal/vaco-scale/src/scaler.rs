@@ -9,8 +9,8 @@ use vaco_limits::{Budget, Limits};
 use crate::exec::{self, DstPlane, SrcPlane};
 use crate::options::ScaleOptions;
 use crate::plan::Plan;
-use crate::special::{self, mono_polarity};
 use crate::spec::ImageSpec;
+use crate::special::{self, mono_polarity};
 use vaco_pixfmt::PixFmt;
 
 /// A configured conversion.
@@ -149,7 +149,13 @@ impl Scaler {
         };
 
         if plan_dst_spec.format == real_dst_spec.format {
-            return run_plan(&self.plan, &self.budget, self.pool.as_deref(), effective_src, dst);
+            return run_plan(
+                &self.plan,
+                &self.budget,
+                self.pool.as_deref(),
+                effective_src,
+                dst,
+            );
         }
 
         let mut dst_proxy = Frame::alloc_video(
@@ -323,11 +329,7 @@ pub fn supports_conversion(src: &ImageSpec, dst: &ImageSpec, opts: &ScaleOptions
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
     use vaco_pixfmt::PixFmt;

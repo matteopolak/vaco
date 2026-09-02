@@ -73,8 +73,12 @@ pub(crate) fn apply(x_quant: &mut [i32], swb_offset: &[u16], pulse: &PulseData) 
     let mut k = u32::from(start_offset);
     for (&offset, &amp) in pulse.offsets.iter().zip(pulse.amplitudes.iter()) {
         k = k.saturating_add(u32::from(offset));
-        let Some(sfb) = (usize::from(pulse.start_sfb)..swb_offset.len().saturating_sub(1))
-            .find(|&sfb| swb_offset.get(sfb + 1).is_some_and(|&top| k < u32::from(top)))
+        let Some(sfb) =
+            (usize::from(pulse.start_sfb)..swb_offset.len().saturating_sub(1)).find(|&sfb| {
+                swb_offset
+                    .get(sfb + 1)
+                    .is_some_and(|&top| k < u32::from(top))
+            })
         else {
             return;
         };
@@ -92,7 +96,12 @@ pub(crate) fn apply(x_quant: &mut [i32], swb_offset: &[u16], pulse: &PulseData) 
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::{PulseData, apply};
     use vaco_bitstream::{BitReader, BitWriter};
 

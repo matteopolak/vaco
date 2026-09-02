@@ -46,7 +46,9 @@ pub const DESC: FilterDesc = FilterDesc {
 
 const BASE_VARS: &[&str] = &["iw", "ih", "dar", "sar", "hsub", "vsub"];
 const WH_VARS: &[&str] = &["iw", "ih", "dar", "sar", "hsub", "vsub", "t", "w", "h"];
-const XY_VARS: &[&str] = &["iw", "ih", "dar", "sar", "hsub", "vsub", "t", "w", "h", "x", "y"];
+const XY_VARS: &[&str] = &[
+    "iw", "ih", "dar", "sar", "hsub", "vsub", "t", "w", "h", "x", "y",
+];
 
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "drawgrid", help = "Draw a colored grid on the input video.")]
@@ -63,7 +65,12 @@ pub(crate) struct Opts {
     pub color: String,
     #[opt(name = "thickness", alias = "t", help = "set grid line thickness", default = "1".to_owned(), flags(video, filtering))]
     pub thickness: String,
-    #[opt(name = "replace", help = "replace color & alpha", default = false, flags(video, filtering))]
+    #[opt(
+        name = "replace",
+        help = "replace color & alpha",
+        default = false,
+        flags(video, filtering)
+    )]
     pub replace: bool,
 }
 
@@ -167,10 +174,20 @@ fn on_grid_line(v: i64, offset: i64, period: i64, thickness: i64) -> bool {
 
 impl FrameFilter for Filter {
     fn filter_frame(&mut self, _ctx: &mut FilterContext<'_>, input: Frame) -> Result<FrameOut> {
-        let FrameData::Video { format, width, height, .. } = input.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = input.data
+        else {
             return Ok(FrameOut::One(input));
         };
-        if !format.is_rgb() || !format.is_planar() || format.plane_count() != 3 || format.has_alpha() || format.max_depth() != 8
+        if !format.is_rgb()
+            || !format.is_planar()
+            || format.plane_count() != 3
+            || format.has_alpha()
+            || format.max_depth() != 8
         {
             return Ok(FrameOut::One(input));
         }

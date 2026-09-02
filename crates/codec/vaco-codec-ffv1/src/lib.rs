@@ -494,8 +494,10 @@ mod tests {
     #[test]
     fn set_option_coder_accepts_the_value_this_encoder_already_produces() {
         let mut enc = Ffv1Encoder::new(Limits::permissive());
-        enc.set_option("coder", "range_def").expect("already the default");
-        enc.set_option("coder", "-2").expect("numeric spelling of the same value");
+        enc.set_option("coder", "range_def")
+            .expect("already the default");
+        enc.set_option("coder", "-2")
+            .expect("numeric spelling of the same value");
     }
 
     /// `-coder rice`/`-coder ac`/`-coder range_tab` all name a coder this
@@ -520,7 +522,8 @@ mod tests {
     fn set_option_slices_accepts_one_and_rejects_others() {
         let mut enc = Ffv1Encoder::new(Limits::permissive());
         enc.set_option("slices", "1").expect("already the default");
-        enc.set_option("slices", "0").expect("auto-detect, same result");
+        enc.set_option("slices", "0")
+            .expect("auto-detect, same result");
         assert!(matches!(
             enc.set_option("slices", "4"),
             Err(Error::Option { .. })

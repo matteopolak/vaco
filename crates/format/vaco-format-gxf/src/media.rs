@@ -44,10 +44,13 @@ impl MediaPreamble {
     /// # Errors
     /// [`Error::InvalidData`] if fewer than 16 bytes are given.
     pub fn parse(bytes: &[u8]) -> Result<Self> {
-        let b: &[u8; 16] = bytes
-            .get(..16)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(Error::InvalidData("gxf: media packet preamble is shorter than 16 bytes"))?;
+        let b: &[u8; 16] =
+            bytes
+                .get(..16)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::InvalidData(
+                    "gxf: media packet preamble is shorter than 16 bytes",
+                ))?;
         Ok(Self {
             media_type: b[0],
             track_number: b[1],
@@ -117,7 +120,12 @@ impl MpegFrameInfo {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -126,8 +134,10 @@ mod tests {
     /// track=0, `field_number=0`, an I-frame, flags=0x01 (timeline field
     /// valid). Bytes transcribed once from
     /// `tests/fixtures/ffmpeg_pal_mpeg2_pcm.gxf`.
-    const FIRST_VIDEO_PREAMBLE: [u8; 16] =
-        [0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x92, 0xbc, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00];
+    const FIRST_VIDEO_PREAMBLE: [u8; 16] = [
+        0x0c, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0d, 0x00, 0x92, 0xbc, 0x00, 0x00, 0x00, 0x00, 0x01,
+        0x00,
+    ];
 
     #[test]
     fn parses_the_real_fixtures_first_video_preamble() {

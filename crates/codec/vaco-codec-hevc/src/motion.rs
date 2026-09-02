@@ -159,39 +159,102 @@ impl PartMode {
         let half = size >> 1;
         let quarter = size >> 2;
         match self {
-            Self::TwoNx2N => PuRect { x: x0, y: y0, w: size, h: size },
-            Self::TwoNxN => PuRect { x: x0, y: y0 + i32::try_from(pu_idx).unwrap_or(0) * half, w: size, h: half },
-            Self::Nx2N => PuRect { x: x0 + i32::try_from(pu_idx).unwrap_or(0) * half, y: y0, w: half, h: size },
+            Self::TwoNx2N => PuRect {
+                x: x0,
+                y: y0,
+                w: size,
+                h: size,
+            },
+            Self::TwoNxN => PuRect {
+                x: x0,
+                y: y0 + i32::try_from(pu_idx).unwrap_or(0) * half,
+                w: size,
+                h: half,
+            },
+            Self::Nx2N => PuRect {
+                x: x0 + i32::try_from(pu_idx).unwrap_or(0) * half,
+                y: y0,
+                w: half,
+                h: size,
+            },
             Self::NxN => {
-                let (dx, dy) = (i32::try_from(pu_idx & 1).unwrap_or(0), i32::try_from(pu_idx >> 1).unwrap_or(0));
-                PuRect { x: x0 + dx * half, y: y0 + dy * half, w: half, h: half }
+                let (dx, dy) = (
+                    i32::try_from(pu_idx & 1).unwrap_or(0),
+                    i32::try_from(pu_idx >> 1).unwrap_or(0),
+                );
+                PuRect {
+                    x: x0 + dx * half,
+                    y: y0 + dy * half,
+                    w: half,
+                    h: half,
+                }
             }
             Self::TwoNxNu => {
                 if pu_idx == 0 {
-                    PuRect { x: x0, y: y0, w: size, h: quarter }
+                    PuRect {
+                        x: x0,
+                        y: y0,
+                        w: size,
+                        h: quarter,
+                    }
                 } else {
-                    PuRect { x: x0, y: y0 + quarter, w: size, h: size - quarter }
+                    PuRect {
+                        x: x0,
+                        y: y0 + quarter,
+                        w: size,
+                        h: size - quarter,
+                    }
                 }
             }
             Self::TwoNxNd => {
                 if pu_idx == 0 {
-                    PuRect { x: x0, y: y0, w: size, h: size - quarter }
+                    PuRect {
+                        x: x0,
+                        y: y0,
+                        w: size,
+                        h: size - quarter,
+                    }
                 } else {
-                    PuRect { x: x0, y: y0 + size - quarter, w: size, h: quarter }
+                    PuRect {
+                        x: x0,
+                        y: y0 + size - quarter,
+                        w: size,
+                        h: quarter,
+                    }
                 }
             }
             Self::NLx2N => {
                 if pu_idx == 0 {
-                    PuRect { x: x0, y: y0, w: quarter, h: size }
+                    PuRect {
+                        x: x0,
+                        y: y0,
+                        w: quarter,
+                        h: size,
+                    }
                 } else {
-                    PuRect { x: x0 + quarter, y: y0, w: size - quarter, h: size }
+                    PuRect {
+                        x: x0 + quarter,
+                        y: y0,
+                        w: size - quarter,
+                        h: size,
+                    }
                 }
             }
             Self::NRx2N => {
                 if pu_idx == 0 {
-                    PuRect { x: x0, y: y0, w: size - quarter, h: size }
+                    PuRect {
+                        x: x0,
+                        y: y0,
+                        w: size - quarter,
+                        h: size,
+                    }
                 } else {
-                    PuRect { x: x0 + size - quarter, y: y0, w: quarter, h: size }
+                    PuRect {
+                        x: x0 + size - quarter,
+                        y: y0,
+                        w: quarter,
+                        h: size,
+                    }
                 }
             }
         }
@@ -201,7 +264,8 @@ impl PartMode {
 /// `isDiffMER`, §8.5.3.2.3: whether two positions fall in different merge
 /// estimation regions, gated by the PPS's `Log2ParallelMergeLevel`.
 fn is_diff_mer(x_n: i32, y_n: i32, x_p: i32, y_p: i32, log2_parallel_merge_level: u32) -> bool {
-    (x_n >> log2_parallel_merge_level) != (x_p >> log2_parallel_merge_level) || (y_n >> log2_parallel_merge_level) != (y_p >> log2_parallel_merge_level)
+    (x_n >> log2_parallel_merge_level) != (x_p >> log2_parallel_merge_level)
+        || (y_n >> log2_parallel_merge_level) != (y_p >> log2_parallel_merge_level)
 }
 
 /// §8.5.3.2.9's distance scale factor (HM's `xGetDistScaleFactor`, a `static`
@@ -210,7 +274,12 @@ fn is_diff_mer(x_n: i32, y_n: i32, x_p: i32, y_p: i32, log2_parallel_merge_level
 /// already agree, checked *before* either is clamped to `[-128, 127]`, since
 /// HM's own equality test runs on the unclamped values.
 #[must_use]
-pub(crate) fn dist_scale_factor(curr_poc: i64, curr_ref_poc: i64, other_poc: i64, other_ref_poc: i64) -> i32 {
+pub(crate) fn dist_scale_factor(
+    curr_poc: i64,
+    curr_ref_poc: i64,
+    other_poc: i64,
+    other_ref_poc: i64,
+) -> i32 {
     let diff_b = curr_poc - curr_ref_poc;
     let diff_d = other_poc - other_ref_poc;
     if diff_d == diff_b {
@@ -231,7 +300,10 @@ pub(crate) fn dist_scale_factor(curr_poc: i64, curr_ref_poc: i64, other_poc: i64
     // value that can be negative, so this stays real division rather than
     // `>>`, unlike the `size`-halving divisions elsewhere in this crate's
     // inter-prediction code.
-    #[allow(clippy::integer_division, reason = "deliberate truncating division, matching HM's own xGetDistScaleFactor exactly")]
+    #[allow(
+        clippy::integer_division,
+        reason = "deliberate truncating division, matching HM's own xGetDistScaleFactor exactly"
+    )]
     let x = (0x4000 + (tdd / 2).abs()) / tdd;
     let scaled = (i64::from(tdb) * i64::from(x) + 32) >> 6;
     i32::try_from(scaled.clamp(-4096, 4095)).unwrap_or(0)
@@ -248,7 +320,10 @@ pub(crate) fn scale_mv(mv: Mv, scale: i32) -> Mv {
         let biased = product + 127 + i64::from(product < 0);
         i32::try_from((biased >> 8).clamp(-32768, 32767)).unwrap_or(0)
     };
-    Mv { x: round(mv.x), y: round(mv.y) }
+    Mv {
+        x: round(mv.x),
+        y: round(mv.y),
+    }
 }
 
 /// `TComDataCU::clipMv`: clamp a motion vector so the reference-sample fetch
@@ -257,14 +332,24 @@ pub(crate) fn scale_mv(mv: Mv, scale: i32) -> Mv {
 /// `ctb_size` is the SPS's fixed CTB width/height, both matching HM's own
 /// `m_uiCUPelX`/`sps.getMaxCUWidth()` exactly.
 #[must_use]
-pub(crate) fn clip_mv(mv: Mv, cu_x0: i32, cu_y0: i32, pic_width: i32, pic_height: i32, ctb_size: i32) -> Mv {
+pub(crate) fn clip_mv(
+    mv: Mv,
+    cu_x0: i32,
+    cu_y0: i32,
+    pic_width: i32,
+    pic_height: i32,
+    ctb_size: i32,
+) -> Mv {
     const SHIFT: i32 = 2;
     const OFFSET: i32 = 8;
     let hor_max = (pic_width + OFFSET - cu_x0 - 1) << SHIFT;
     let hor_min = (-ctb_size - OFFSET - cu_x0 + 1) << SHIFT;
     let ver_max = (pic_height + OFFSET - cu_y0 - 1) << SHIFT;
     let ver_min = (-ctb_size - OFFSET - cu_y0 + 1) << SHIFT;
-    Mv { x: mv.x.max(hor_min).min(hor_max), y: mv.y.max(ver_min).min(ver_max) }
+    Mv {
+        x: mv.x.max(hor_min).min(hor_max),
+        y: mv.y.max(ver_min).min(ver_max),
+    }
 }
 
 /// A pre-fetched temporal candidate, already resolved (and scaled, if the
@@ -319,7 +404,10 @@ fn lookup(grid: &CuGrid<'_>, pos: (i32, i32)) -> Option<MotionInfo> {
 /// reference picture for motion compensation. `ref_pocs_l1`/`temporal_l1` are
 /// ignored (and may be empty/`None`) whenever `is_b` is `false` — a P slice
 /// never populates a candidate's `l1`.
-#[allow(clippy::too_many_arguments, reason = "one call site (ctu.rs); every argument is a distinct clause-8.5.3.2.2/.4/.5 input")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call site (ctu.rs); every argument is a distinct clause-8.5.3.2.2/.4/.5 input"
+)]
 pub(crate) fn derive_merge_candidates(
     grid: &CuGrid<'_>,
     pu: PuRect,
@@ -340,8 +428,16 @@ pub(crate) fn derive_merge_candidates(
     let pos = spatial_positions(pu);
     let (x_p, y_p) = (pu.x, pu.y);
 
-    let a1_excluded = pu_idx == 1 && matches!(part_mode, PartMode::Nx2N | PartMode::NLx2N | PartMode::NRx2N);
-    let b1_excluded = pu_idx == 1 && matches!(part_mode, PartMode::TwoNxN | PartMode::TwoNxNu | PartMode::TwoNxNd);
+    let a1_excluded = pu_idx == 1
+        && matches!(
+            part_mode,
+            PartMode::Nx2N | PartMode::NLx2N | PartMode::NRx2N
+        );
+    let b1_excluded = pu_idx == 1
+        && matches!(
+            part_mode,
+            PartMode::TwoNxN | PartMode::TwoNxNu | PartMode::TwoNxNd
+        );
 
     let a1 = (!a1_excluded && is_diff_mer(pos.a1.0, pos.a1.1, x_p, y_p, log2_parallel_merge_level))
         .then(|| lookup(grid, pos.a1))
@@ -351,9 +447,10 @@ pub(crate) fn derive_merge_candidates(
     }
 
     if cands.len() < max_num_merge_cand {
-        let b1 = (!b1_excluded && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level))
-            .then(|| lookup(grid, pos.b1))
-            .flatten();
+        let b1 = (!b1_excluded
+            && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level))
+        .then(|| lookup(grid, pos.b1))
+        .flatten();
         if let Some(m) = b1
             && a1 != Some(m)
         {
@@ -362,8 +459,13 @@ pub(crate) fn derive_merge_candidates(
     }
 
     if cands.len() < max_num_merge_cand {
-        let b1 = (!b1_excluded && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b1)).flatten();
-        let b0 = (is_diff_mer(pos.b0.0, pos.b0.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b0)).flatten();
+        let b1 = (!b1_excluded
+            && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level))
+        .then(|| lookup(grid, pos.b1))
+        .flatten();
+        let b0 = (is_diff_mer(pos.b0.0, pos.b0.1, x_p, y_p, log2_parallel_merge_level))
+            .then(|| lookup(grid, pos.b0))
+            .flatten();
         if let Some(m) = b0
             && b1 != Some(m)
         {
@@ -372,7 +474,9 @@ pub(crate) fn derive_merge_candidates(
     }
 
     if cands.len() < max_num_merge_cand {
-        let a0 = (is_diff_mer(pos.a0.0, pos.a0.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.a0)).flatten();
+        let a0 = (is_diff_mer(pos.a0.0, pos.a0.1, x_p, y_p, log2_parallel_merge_level))
+            .then(|| lookup(grid, pos.a0))
+            .flatten();
         if let Some(m) = a0
             && a1 != Some(m)
         {
@@ -381,8 +485,13 @@ pub(crate) fn derive_merge_candidates(
     }
 
     if cands.len() < max_num_merge_cand && cands.len() < 4 {
-        let b1 = (!b1_excluded && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b1)).flatten();
-        let b2 = (is_diff_mer(pos.b2.0, pos.b2.1, x_p, y_p, log2_parallel_merge_level)).then(|| lookup(grid, pos.b2)).flatten();
+        let b1 = (!b1_excluded
+            && is_diff_mer(pos.b1.0, pos.b1.1, x_p, y_p, log2_parallel_merge_level))
+        .then(|| lookup(grid, pos.b1))
+        .flatten();
+        let b2 = (is_diff_mer(pos.b2.0, pos.b2.1, x_p, y_p, log2_parallel_merge_level))
+            .then(|| lookup(grid, pos.b2))
+            .flatten();
         if let Some(m) = b2
             && a1 != Some(m)
             && b1 != Some(m)
@@ -400,9 +509,21 @@ pub(crate) fn derive_merge_candidates(
     // (§8.5.3.2.9, invoked once per list) are independent: either, both or
     // neither may succeed, and the candidate is added whenever at least one
     // does (`availableFlagCol = availableFlagL0Col || availableFlagL1Col`).
-    if cands.len() < max_num_merge_cand && (temporal_l0.is_some() || (is_b && temporal_l1.is_some())) {
-        let l0 = temporal_l0.map(|mv| UniMotion { mv, ref_poc: ref_pocs_l0.first().copied().unwrap_or(0) });
-        let l1 = if is_b { temporal_l1.map(|mv| UniMotion { mv, ref_poc: ref_pocs_l1.first().copied().unwrap_or(0) }) } else { None };
+    if cands.len() < max_num_merge_cand
+        && (temporal_l0.is_some() || (is_b && temporal_l1.is_some()))
+    {
+        let l0 = temporal_l0.map(|mv| UniMotion {
+            mv,
+            ref_poc: ref_pocs_l0.first().copied().unwrap_or(0),
+        });
+        let l1 = if is_b {
+            temporal_l1.map(|mv| UniMotion {
+                mv,
+                ref_poc: ref_pocs_l1.first().copied().unwrap_or(0),
+            })
+        } else {
+            None
+        };
         cands.push(MotionInfo { l0, l1 });
     }
 
@@ -418,19 +539,32 @@ pub(crate) fn derive_merge_candidates(
         if num_orig > 1 && cands.len() < max_num_merge_cand {
             const PRIORITY0: [usize; 12] = [0, 1, 0, 2, 1, 2, 0, 3, 1, 3, 2, 3];
             const PRIORITY1: [usize; 12] = [1, 0, 2, 0, 2, 1, 3, 0, 3, 1, 3, 2];
-            let num_combos = num_orig.saturating_mul(num_orig.saturating_sub(1)).min(PRIORITY0.len());
+            let num_combos = num_orig
+                .saturating_mul(num_orig.saturating_sub(1))
+                .min(PRIORITY0.len());
             for k in 0..num_combos {
                 if cands.len() >= max_num_merge_cand {
                     break;
                 }
-                let (Some(&i0), Some(&i1)) = (PRIORITY0.get(k), PRIORITY1.get(k)) else { continue };
+                let (Some(&i0), Some(&i1)) = (PRIORITY0.get(k), PRIORITY1.get(k)) else {
+                    continue;
+                };
                 if i0 >= num_orig || i1 >= num_orig {
                     continue;
                 }
-                let (Some(l0_cand), Some(l1_cand)) = (cands.get(i0).copied(), cands.get(i1).copied()) else { continue };
-                let (Some(a), Some(b)) = (l0_cand.l0, l1_cand.l1) else { continue };
+                let (Some(l0_cand), Some(l1_cand)) =
+                    (cands.get(i0).copied(), cands.get(i1).copied())
+                else {
+                    continue;
+                };
+                let (Some(a), Some(b)) = (l0_cand.l0, l1_cand.l1) else {
+                    continue;
+                };
                 if a.ref_poc != b.ref_poc || a.mv != b.mv {
-                    cands.push(MotionInfo { l0: Some(a), l1: Some(b) });
+                    cands.push(MotionInfo {
+                        l0: Some(a),
+                        l1: Some(b),
+                    });
                 }
             }
         }
@@ -445,12 +579,27 @@ pub(crate) fn derive_merge_candidates(
     // specification's own formula and HM's `r`/`refcnt` state machine, which
     // freezes `r` at `0` the same way once `refcnt == numRefIdx - 1`) — not a
     // plain modulo cycle, which would keep wrapping.
-    let num_ref_idx = if is_b { ref_pocs_l0.len().min(ref_pocs_l1.len()) } else { ref_pocs_l0.len() }.max(1);
+    let num_ref_idx = if is_b {
+        ref_pocs_l0.len().min(ref_pocs_l1.len())
+    } else {
+        ref_pocs_l0.len()
+    }
+    .max(1);
     let mut zero_idx: usize = 0;
     while cands.len() < max_num_merge_cand {
         let idx = if zero_idx < num_ref_idx { zero_idx } else { 0 };
-        let l0 = Some(UniMotion { mv: Mv::ZERO, ref_poc: ref_pocs_l0.get(idx).copied().unwrap_or(0) });
-        let l1 = if is_b { Some(UniMotion { mv: Mv::ZERO, ref_poc: ref_pocs_l1.get(idx).copied().unwrap_or(0) }) } else { None };
+        let l0 = Some(UniMotion {
+            mv: Mv::ZERO,
+            ref_poc: ref_pocs_l0.get(idx).copied().unwrap_or(0),
+        });
+        let l1 = if is_b {
+            Some(UniMotion {
+                mv: Mv::ZERO,
+                ref_poc: ref_pocs_l1.get(idx).copied().unwrap_or(0),
+            })
+        } else {
+            None
+        };
         cands.push(MotionInfo { l0, l1 });
         zero_idx += 1;
     }
@@ -465,7 +614,10 @@ pub(crate) fn derive_merge_candidates(
 /// already-fetched-and-scaled §8.5.3.2.8 candidate for *this* `refIdx`
 /// (unlike merge, AMVP's temporal candidate is scaled against the real
 /// target `refIdx`, not a fixed `0`).
-#[allow(clippy::too_many_arguments, reason = "one call site (ctu.rs); every argument is a distinct clause-8.5.3.2.6/.7 input")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call site (ctu.rs); every argument is a distinct clause-8.5.3.2.6/.7 input"
+)]
 pub(crate) fn derive_amvp_candidates(
     grid: &CuGrid<'_>,
     pu: PuRect,
@@ -492,9 +644,13 @@ pub(crate) fn derive_amvp_candidates(
         }
     };
 
-    if let Some(m) = amvp_unscaled(below_left, target_list, target_ref_poc).or_else(|| amvp_unscaled(left, target_list, target_ref_poc)) {
+    if let Some(m) = amvp_unscaled(below_left, target_list, target_ref_poc)
+        .or_else(|| amvp_unscaled(left, target_list, target_ref_poc))
+    {
         push_unique(m, &mut cands);
-    } else if let Some(m) = amvp_scaled(below_left, target_list, curr_poc, target_ref_poc).or_else(|| amvp_scaled(left, target_list, curr_poc, target_ref_poc)) {
+    } else if let Some(m) = amvp_scaled(below_left, target_list, curr_poc, target_ref_poc)
+        .or_else(|| amvp_scaled(left, target_list, curr_poc, target_ref_poc))
+    {
         push_unique(m, &mut cands);
     }
 
@@ -530,7 +686,10 @@ pub(crate) fn derive_amvp_candidates(
     while cands.len() < 2 {
         cands.push(Mv::ZERO);
     }
-    [cands.first().copied().unwrap_or(Mv::ZERO), cands.get(1).copied().unwrap_or(Mv::ZERO)]
+    [
+        cands.first().copied().unwrap_or(Mv::ZERO),
+        cands.get(1).copied().unwrap_or(Mv::ZERO),
+    ]
 }
 
 /// `xAddMVPCandUnscaled`: a neighbour contributes its raw motion vector only
@@ -541,10 +700,17 @@ pub(crate) fn derive_amvp_candidates(
 /// current PU is *not* deriving for can still contribute, using that other
 /// list's own motion vector as-is, whenever it happens to name the same
 /// reference picture.
-fn amvp_unscaled(neighbour: Option<MotionInfo>, target_list: RefList, target_ref_poc: i64) -> Option<Mv> {
+fn amvp_unscaled(
+    neighbour: Option<MotionInfo>,
+    target_list: RefList,
+    target_ref_poc: i64,
+) -> Option<Mv> {
     let m = neighbour?;
     let own = target_list.pick(m).filter(|u| u.ref_poc == target_ref_poc);
-    let other = target_list.other().pick(m).filter(|u| u.ref_poc == target_ref_poc);
+    let other = target_list
+        .other()
+        .pick(m)
+        .filter(|u| u.ref_poc == target_ref_poc);
     own.or(other).map(|u| u.mv)
 }
 
@@ -555,15 +721,31 @@ fn amvp_unscaled(neighbour: Option<MotionInfo>, target_list: RefList, target_ref
 /// own `neibPOC` argument is always `currPOC` here, since the neighbour is
 /// in the same picture as the PU being predicted. Same own-list-then-other
 /// order as [`amvp_unscaled`].
-fn amvp_scaled(neighbour: Option<MotionInfo>, target_list: RefList, curr_poc: i64, target_ref_poc: i64) -> Option<Mv> {
+fn amvp_scaled(
+    neighbour: Option<MotionInfo>,
+    target_list: RefList,
+    curr_poc: i64,
+    target_ref_poc: i64,
+) -> Option<Mv> {
     let m = neighbour?;
-    let u = target_list.pick(m).or_else(|| target_list.other().pick(m))?;
+    let u = target_list
+        .pick(m)
+        .or_else(|| target_list.other().pick(m))?;
     let scale = dist_scale_factor(curr_poc, target_ref_poc, curr_poc, u.ref_poc);
-    Some(if scale == 4096 { u.mv } else { scale_mv(u.mv, scale) })
+    Some(if scale == 4096 {
+        u.mv
+    } else {
+        scale_mv(u.mv, scale)
+    })
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, reason = "test code over fixed scenarios")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test code over fixed scenarios"
+)]
 mod tests {
     use super::*;
 
@@ -592,7 +774,17 @@ mod tests {
 
     #[test]
     fn clip_mv_clamps_to_the_picture_plus_margin() {
-        let mv = clip_mv(Mv { x: 100_000, y: -100_000 }, 0, 0, 64, 64, 64);
+        let mv = clip_mv(
+            Mv {
+                x: 100_000,
+                y: -100_000,
+            },
+            0,
+            0,
+            64,
+            64,
+            64,
+        );
         assert!(mv.x < 100_000);
         assert!(mv.y > -100_000);
     }
@@ -624,8 +816,17 @@ mod tests {
     #[test]
     fn amvp_falls_back_to_zero_when_nothing_is_available() {
         let cu_grid_shared = CuGridShared::new(64, 64, true, 64);
-        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), &cu_grid_shared).unwrap();
-        let pu = PuRect { x: 0, y: 0, w: 16, h: 16 };
+        let grid = CuGrid::new(
+            &mut vaco_limits::Budget::new(vaco_limits::Limits::strict()),
+            &cu_grid_shared,
+        )
+        .unwrap();
+        let pu = PuRect {
+            x: 0,
+            y: 0,
+            w: 16,
+            h: 16,
+        };
         let cands = derive_amvp_candidates(&grid, pu, 2, 10, 8, RefList::L0, None);
         assert_eq!(cands, [Mv::ZERO, Mv::ZERO]);
     }
@@ -638,10 +839,31 @@ mod tests {
         // second time — see `a_b_slice_zero_fill_clamps_at_zero_rather_than_wrapping`
         // for the same rule on the B-slice (dual-list) side.
         let cu_grid_shared = CuGridShared::new(64, 64, true, 64);
-        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), &cu_grid_shared).unwrap();
-        let pu = PuRect { x: 0, y: 0, w: 16, h: 16 };
+        let grid = CuGrid::new(
+            &mut vaco_limits::Budget::new(vaco_limits::Limits::strict()),
+            &cu_grid_shared,
+        )
+        .unwrap();
+        let pu = PuRect {
+            x: 0,
+            y: 0,
+            w: 16,
+            h: 16,
+        };
         let ref_poc_l0 = [100i64, 90i64];
-        let cands = derive_merge_candidates(&grid, pu, 0, PartMode::TwoNx2N, 2, 5, &ref_poc_l0, &[], None, None, false);
+        let cands = derive_merge_candidates(
+            &grid,
+            pu,
+            0,
+            PartMode::TwoNx2N,
+            2,
+            5,
+            &ref_poc_l0,
+            &[],
+            None,
+            None,
+            false,
+        );
         assert_eq!(cands.len(), 5);
         let expect_idx = [0usize, 1, 0, 0, 0];
         for (c, &idx) in cands.iter().zip(expect_idx.iter()) {
@@ -658,11 +880,32 @@ mod tests {
         // every later candidate reuses ref_idx 0 forever — not a modulo cycle
         // back through 1. Five candidates needed, none from spatial/temporal.
         let cu_grid_shared = CuGridShared::new(64, 64, true, 64);
-        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), &cu_grid_shared).unwrap();
-        let pu = PuRect { x: 0, y: 0, w: 16, h: 16 };
+        let grid = CuGrid::new(
+            &mut vaco_limits::Budget::new(vaco_limits::Limits::strict()),
+            &cu_grid_shared,
+        )
+        .unwrap();
+        let pu = PuRect {
+            x: 0,
+            y: 0,
+            w: 16,
+            h: 16,
+        };
         let ref_poc_l0 = [100i64, 90i64];
         let ref_poc_l1 = [200i64, 190i64];
-        let cands = derive_merge_candidates(&grid, pu, 0, PartMode::TwoNx2N, 2, 5, &ref_poc_l0, &ref_poc_l1, None, None, true);
+        let cands = derive_merge_candidates(
+            &grid,
+            pu,
+            0,
+            PartMode::TwoNx2N,
+            2,
+            5,
+            &ref_poc_l0,
+            &ref_poc_l1,
+            None,
+            None,
+            true,
+        );
         assert_eq!(cands.len(), 5);
         let expect_idx = [0usize, 1, 0, 0, 0];
         for (c, &idx) in cands.iter().zip(expect_idx.iter()) {
@@ -678,8 +921,17 @@ mod tests {
         // 0 (l0CandIdx=0, l1CandIdx=1) must produce a genuinely bi-predictive
         // third candidate before the zero-fill ever runs.
         let cu_grid_shared = CuGridShared::new(64, 64, true, 64);
-        let grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), &cu_grid_shared).unwrap();
-        let pu = PuRect { x: 8, y: 8, w: 8, h: 8 };
+        let grid = CuGrid::new(
+            &mut vaco_limits::Budget::new(vaco_limits::Limits::strict()),
+            &cu_grid_shared,
+        )
+        .unwrap();
+        let pu = PuRect {
+            x: 8,
+            y: 8,
+            w: 8,
+            h: 8,
+        };
         let ref_poc_l0 = [10i64];
         let ref_poc_l1 = [20i64];
         let temporal_l0 = Some(Mv { x: 4, y: 0 });
@@ -690,10 +942,25 @@ mod tests {
         // two separate L0-only/L1-only ones, so assert the derivation
         // instead exercises the zero-fill/temporal paths without panicking
         // and never emits a malformed (both-`None`) candidate.
-        let cands = derive_merge_candidates(&grid, pu, 0, PartMode::TwoNx2N, 2, 5, &ref_poc_l0, &ref_poc_l1, temporal_l0, temporal_l1, true);
+        let cands = derive_merge_candidates(
+            &grid,
+            pu,
+            0,
+            PartMode::TwoNx2N,
+            2,
+            5,
+            &ref_poc_l0,
+            &ref_poc_l1,
+            temporal_l0,
+            temporal_l1,
+            true,
+        );
         assert_eq!(cands.len(), 5);
         for c in &cands {
-            assert!(c.l0.is_some() || c.l1.is_some(), "no candidate may be predFlagL0==0 && predFlagL1==0");
+            assert!(
+                c.l0.is_some() || c.l1.is_some(),
+                "no candidate may be predFlagL0==0 && predFlagL1==0"
+            );
         }
     }
 
@@ -703,11 +970,33 @@ mod tests {
         // L0 AMVP candidate targeting the same POC 8 — HM's own
         // `xAddMVPCandUnscaled` two-list search, matched by POC value alone.
         let cu_grid_shared = CuGridShared::new(64, 64, true, 64);
-        let mut grid = CuGrid::new(&mut vaco_limits::Budget::new(vaco_limits::Limits::strict()), &cu_grid_shared).unwrap();
+        let mut grid = CuGrid::new(
+            &mut vaco_limits::Budget::new(vaco_limits::Limits::strict()),
+            &cu_grid_shared,
+        )
+        .unwrap();
         // Left neighbour of the PU at (16, 0): (15, 0), block (3, 0).
         grid.fill(0, 0, 4, 4, 0, 0);
-        grid.fill_motion(0, 0, 4, 4, MotionInfo { l0: None, l1: Some(UniMotion { mv: Mv { x: 40, y: -8 }, ref_poc: 8 }) }, false);
-        let pu = PuRect { x: 16, y: 0, w: 16, h: 16 };
+        grid.fill_motion(
+            0,
+            0,
+            4,
+            4,
+            MotionInfo {
+                l0: None,
+                l1: Some(UniMotion {
+                    mv: Mv { x: 40, y: -8 },
+                    ref_poc: 8,
+                }),
+            },
+            false,
+        );
+        let pu = PuRect {
+            x: 16,
+            y: 0,
+            w: 16,
+            h: 16,
+        };
         let cands = derive_amvp_candidates(&grid, pu, 2, 10, 8, RefList::L0, None);
         assert_eq!(cands[0], Mv { x: 40, y: -8 });
     }

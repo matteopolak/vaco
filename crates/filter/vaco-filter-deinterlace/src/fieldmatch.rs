@@ -352,10 +352,16 @@ mod tests {
         assert!(Opts::parse(Some("cthresh=10")).is_err());
         assert!(Opts::parse(Some("chroma=1")).is_err());
         for name in ["pc", "pc_u", "pc_n_ub", "pcn", "pcn_ub"] {
-            assert!(Opts::parse(Some(&format!("mode={name}"))).is_err(), "mode={name}");
+            assert!(
+                Opts::parse(Some(&format!("mode={name}"))).is_err(),
+                "mode={name}"
+            );
         }
         for name in ["bottom", "top"] {
-            assert!(Opts::parse(Some(&format!("field={name}"))).is_err(), "field={name}");
+            assert!(
+                Opts::parse(Some(&format!("field={name}"))).is_err(),
+                "field={name}"
+            );
         }
         assert!(Opts::parse(None).is_ok());
     }

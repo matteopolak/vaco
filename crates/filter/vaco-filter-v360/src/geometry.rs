@@ -278,7 +278,11 @@ mod tests {
     #[test]
     fn flat_rejects_a_direction_behind_the_camera() {
         let fov = PI / 2.0;
-        assert!(Projection::Flat.uv_from_dir((0.0, 0.0, -1.0), fov, fov).is_none());
+        assert!(
+            Projection::Flat
+                .uv_from_dir((0.0, 0.0, -1.0), fov, fov)
+                .is_none()
+        );
     }
 
     /// The measured convention this crate's whole sign scheme rests on:

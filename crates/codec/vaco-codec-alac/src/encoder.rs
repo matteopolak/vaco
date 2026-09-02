@@ -126,11 +126,18 @@ impl Encoder for AlacEncoder {
         // computes the real value from what this encoder already knows
         // (`num_samples`, `sample_rate`) rather than trusting a field nothing
         // populates.
-        let FrameData::Audio { samples, sample_rate, .. } = &frame.data else {
+        let FrameData::Audio {
+            samples,
+            sample_rate,
+            ..
+        } = &frame.data
+        else {
             return Err(Error::Unsupported("alac: encoder needs an audio frame"));
         };
         let time_base = Rational::new(1, i32::try_from(*sample_rate).unwrap_or(1).max(1));
-        packet.duration = Timestamp::new(i64::from(*samples)).to_duration(time_base).unwrap_or(Duration::ZERO);
+        packet.duration = Timestamp::new(i64::from(*samples))
+            .to_duration(time_base)
+            .unwrap_or(Duration::ZERO);
         // Every packet is independently decodable: the adaptive Golomb-Rice
         // state (`rice.rs`) and the predictor's transmitted coefficients
         // both reset per packet — there is no cross-packet state — matching
@@ -276,7 +283,9 @@ mod tests {
     #[test]
     fn send_frame_sets_a_real_nonzero_packet_duration() {
         let mut budget = Budget::new(Limits::permissive());
-        let mut frame = Frame::alloc_audio(&mut budget, SampleFmt::S16P, ChannelLayout::MONO, 500, 1000).unwrap();
+        let mut frame =
+            Frame::alloc_audio(&mut budget, SampleFmt::S16P, ChannelLayout::MONO, 500, 1000)
+                .unwrap();
         {
             let mut plane = frame.plane_mut(0).unwrap();
             let row = plane.row_mut(0).unwrap();

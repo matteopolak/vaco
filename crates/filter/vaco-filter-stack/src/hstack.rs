@@ -66,7 +66,12 @@ pub const DESC: FilterDesc = FilterDesc {
 pub(crate) struct Opts {
     #[opt(name = "inputs", help = "set number of inputs", default = 2, range = 2..=64, flags(video, filtering))]
     pub inputs: i64,
-    #[opt(name = "shortest", help = "force termination when the shortest input terminates", default = false, flags(video, filtering))]
+    #[opt(
+        name = "shortest",
+        help = "force termination when the shortest input terminates",
+        default = false,
+        flags(video, filtering)
+    )]
     pub shortest: bool,
 }
 
@@ -133,7 +138,13 @@ impl FrameSyncFilter for Filter {
         };
         let total_width: u32 = self.widths.iter().copied().fold(0u32, u32::saturating_add);
         if let Some(mut out) = ctx.output_link(0).cloned() {
-            if let LinkFormat::Video { width: w, height: h, format: fmt, .. } = &mut out {
+            if let LinkFormat::Video {
+                width: w,
+                height: h,
+                format: fmt,
+                ..
+            } = &mut out
+            {
                 *w = total_width;
                 *h = height;
                 *fmt = format;
@@ -161,15 +172,21 @@ impl FrameSyncFilter for Filter {
             let mut col_offset = 0usize;
             for i in 0..self.n {
                 let Some(frame) = event.get(i) else { continue };
-                let Some(src) = frame.plane(plane) else { continue };
-                let Some(mut dst) = out.plane_mut(plane) else { continue };
+                let Some(src) = frame.plane(plane) else {
+                    continue;
+                };
+                let Some(mut dst) = out.plane_mut(plane) else {
+                    continue;
+                };
                 let ph = common::to_i32(format.plane_height(height, plane as u8)).max(0);
                 let mut written = 0usize;
                 for y in 0..ph {
                     let Ok(uy) = usize::try_from(y) else { continue };
                     let Some(src_row) = src.row(uy) else { continue };
                     written = written.max(src_row.len());
-                    let Some(dst_row) = dst.row_mut(uy) else { continue };
+                    let Some(dst_row) = dst.row_mut(uy) else {
+                        continue;
+                    };
                     if let Some(seg) = dst_row.get_mut(col_offset..col_offset + src_row.len()) {
                         seg.copy_from_slice(src_row);
                     }

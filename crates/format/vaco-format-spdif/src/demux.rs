@@ -91,7 +91,9 @@ impl SpdifDemuxer {
             return Err(Error::Eof);
         }
         let Some(header) = BurstHeader::parse(peeked, false) else {
-            return Err(Error::InvalidData("spdif: expected an IEC 61937 sync burst"));
+            return Err(Error::InvalidData(
+                "spdif: expected an IEC 61937 sync burst",
+            ));
         };
         if header.data_type() != DATA_TYPE_AC3 {
             return Err(Error::Unsupported(
@@ -194,7 +196,11 @@ impl Demuxer for SpdifDemuxer {
             SeekTarget::Byte(pos) => pos / burst,
             SeekTarget::Timestamp { ts, .. } => {
                 let ticks = ts.ticks().unwrap_or(0);
-                if ticks < 0 { 0 } else { ticks.cast_unsigned() / 1536 }
+                if ticks < 0 {
+                    0
+                } else {
+                    ticks.cast_unsigned() / 1536
+                }
             }
             SeekTarget::Frame { frame, .. } => frame,
         };

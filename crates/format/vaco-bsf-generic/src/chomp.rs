@@ -111,6 +111,9 @@ mod tests {
         // loop is a `take_while`, not a constant.
         let payload = b"hello\x00\x00\x00";
         let fixed_trim = payload.get(..payload.len() - 1).unwrap_or(&[]);
-        assert!(fixed_trim.ends_with(&[0, 0]), "still padded after a fixed trim");
+        assert!(
+            fixed_trim.ends_with(&[0, 0]),
+            "still padded after a fixed trim"
+        );
     }
 }

@@ -73,7 +73,9 @@ fn modern_mode_waits_for_100_continue_before_sending_the_body() {
     let e = env(&registry, &cancel);
     let url = format!("icecast://source:hackme@127.0.0.1:{port}/mount.mp3");
 
-    let mut sink = registry.create(&url, IoFlags::WRITE, &Dict::new(), &e).unwrap();
+    let mut sink = registry
+        .create(&url, IoFlags::WRITE, &Dict::new(), &e)
+        .unwrap();
     sink.write(b"stream-bytes").unwrap();
     sink.flush().unwrap();
     drop(sink);
@@ -148,5 +150,8 @@ fn a_whitelist_naming_only_icecast_refuses_the_nested_tcp_open() {
         .create(&url, IoFlags::WRITE, &Dict::new(), &e)
         .err()
         .unwrap();
-    assert!(matches!(err, vaco_protocol_core::ProtocolError::Denied { .. }));
+    assert!(matches!(
+        err,
+        vaco_protocol_core::ProtocolError::Denied { .. }
+    ));
 }

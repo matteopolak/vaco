@@ -59,7 +59,13 @@ impl BondedReceiver {
     /// is exactly [`ReceiveBuffer::on_packet`]'s own — bonding changes
     /// nothing about *when* a packet is delivered, only that it may have
     /// arrived by more than one path.
-    pub fn on_packet(&mut self, link_id: u32, seq: u32, payload: Vec<u8>, now_ms: u64) -> Vec<BufferEvent> {
+    pub fn on_packet(
+        &mut self,
+        link_id: u32,
+        seq: u32,
+        payload: Vec<u8>,
+        now_ms: u64,
+    ) -> Vec<BufferEvent> {
         self.link_stats.entry(link_id).or_default().packets_received += 1;
         self.buffer.on_packet(seq, payload, now_ms)
     }
@@ -93,8 +99,17 @@ mod tests {
         let mut rx = BondedReceiver::new(BufferConfig::new(), 0);
         let events_a = rx.on_packet(1, 0, vec![0], 0);
         let events_b = rx.on_packet(2, 0, vec![0], 1); // same seq, same payload, other link
-        assert_eq!(events_a, vec![BufferEvent::Delivered { seq: 0, payload: vec![0] }]);
-        assert!(events_b.is_empty(), "the second copy of seq 0 must not be delivered again");
+        assert_eq!(
+            events_a,
+            vec![BufferEvent::Delivered {
+                seq: 0,
+                payload: vec![0]
+            }]
+        );
+        assert!(
+            events_b.is_empty(),
+            "the second copy of seq 0 must not be delivered again"
+        );
         assert_eq!(rx.link_stats(1).packets_received, 1);
         assert_eq!(rx.link_stats(2).packets_received, 1);
     }
@@ -121,8 +136,16 @@ mod tests {
                 record(&event, &mut delivered);
             }
         }
-        assert_eq!(delivered.len(), 100, "every packet must still be delivered via the surviving link");
-        assert_eq!(delivered, (0u32..100).collect::<Vec<_>>(), "delivery order must still be in-order");
+        assert_eq!(
+            delivered.len(),
+            100,
+            "every packet must still be delivered via the surviving link"
+        );
+        assert_eq!(
+            delivered,
+            (0u32..100).collect::<Vec<_>>(),
+            "delivery order must still be in-order"
+        );
         assert_eq!(rx.link_stats(1).packets_received, 50);
         assert_eq!(rx.link_stats(2).packets_received, 100);
     }

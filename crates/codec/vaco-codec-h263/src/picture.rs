@@ -34,6 +34,8 @@ impl RefPicture {
         };
         let cols = row.len().max(1);
         let xx = x.clamp(0, i32::try_from(cols).unwrap_or(i32::MAX) - 1);
-        row.get(usize::try_from(xx).unwrap_or(0)).copied().unwrap_or(0)
+        row.get(usize::try_from(xx).unwrap_or(0))
+            .copied()
+            .unwrap_or(0)
     }
 }

@@ -237,7 +237,10 @@ pub(crate) fn parse_picture_header(r: &mut BitReader<'_>) -> Result<(PictureHead
     let log2_desired_slice_size_in_mb = r.get(2) as u8;
     let _reserved = r.get(4);
     Ok((
-        PictureHeader { picture_size, log2_desired_slice_size_in_mb },
+        PictureHeader {
+            picture_size,
+            log2_desired_slice_size_in_mb,
+        },
         picture_header_size,
     ))
 }
@@ -278,11 +281,7 @@ impl SliceHeader {
     /// The quantization scale factor `qScale`, Table 15.
     pub(crate) fn q_scale(self) -> u32 {
         let qi = u32::from(self.quantization_index);
-        if qi <= 128 {
-            qi
-        } else {
-            128 + 4 * (qi - 128)
-        }
+        if qi <= 128 { qi } else { 128 + 4 * (qi - 128) }
     }
 }
 
@@ -298,11 +297,17 @@ pub(crate) fn parse_slice_header(r: &mut BitReader<'_>, has_alpha: bool) -> Resu
     }
     let quantization_index = r.get(8) as u8;
     if quantization_index == 0 || quantization_index > 224 {
-        return Err(Error::InvalidData("prores: quantization_index out of range"));
+        return Err(Error::InvalidData(
+            "prores: quantization_index out of range",
+        ));
     }
     let coded_size_of_y_data = r.get(16) as u16;
     let coded_size_of_cb_data = r.get(16) as u16;
-    let coded_size_of_cr_data = if has_alpha { Some(r.get(16) as u16) } else { None };
+    let coded_size_of_cr_data = if has_alpha {
+        Some(r.get(16) as u16)
+    } else {
+        None
+    };
     Ok(SliceHeader {
         quantization_index,
         coded_size_of_y_data,
@@ -321,7 +326,8 @@ pub(crate) fn parse_slice_table(
     for slot in &mut sizes {
         *slot = r
             .try_get(16)
-            .map_err(|_| Error::InvalidData("prores: slice table truncated"))? as u16;
+            .map_err(|_| Error::InvalidData("prores: slice table truncated"))?
+            as u16;
     }
     Ok(sizes)
 }
@@ -346,9 +352,45 @@ mod tests {
 
     #[test]
     fn q_scale_matches_table_15() {
-        assert_eq!(SliceHeader { quantization_index: 1, coded_size_of_y_data: 0, coded_size_of_cb_data: 0, coded_size_of_cr_data: None }.q_scale(), 1);
-        assert_eq!(SliceHeader { quantization_index: 128, coded_size_of_y_data: 0, coded_size_of_cb_data: 0, coded_size_of_cr_data: None }.q_scale(), 128);
-        assert_eq!(SliceHeader { quantization_index: 129, coded_size_of_y_data: 0, coded_size_of_cb_data: 0, coded_size_of_cr_data: None }.q_scale(), 132);
-        assert_eq!(SliceHeader { quantization_index: 224, coded_size_of_y_data: 0, coded_size_of_cb_data: 0, coded_size_of_cr_data: None }.q_scale(), 512);
+        assert_eq!(
+            SliceHeader {
+                quantization_index: 1,
+                coded_size_of_y_data: 0,
+                coded_size_of_cb_data: 0,
+                coded_size_of_cr_data: None
+            }
+            .q_scale(),
+            1
+        );
+        assert_eq!(
+            SliceHeader {
+                quantization_index: 128,
+                coded_size_of_y_data: 0,
+                coded_size_of_cb_data: 0,
+                coded_size_of_cr_data: None
+            }
+            .q_scale(),
+            128
+        );
+        assert_eq!(
+            SliceHeader {
+                quantization_index: 129,
+                coded_size_of_y_data: 0,
+                coded_size_of_cb_data: 0,
+                coded_size_of_cr_data: None
+            }
+            .q_scale(),
+            132
+        );
+        assert_eq!(
+            SliceHeader {
+                quantization_index: 224,
+                coded_size_of_y_data: 0,
+                coded_size_of_cb_data: 0,
+                coded_size_of_cr_data: None
+            }
+            .q_scale(),
+            512
+        );
     }
 }

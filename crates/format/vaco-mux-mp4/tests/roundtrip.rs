@@ -402,13 +402,9 @@ fn cenc_write_round_trips_through_demux_decryption() {
         ..vaco_demux_mp4::Mp4Options::default()
     };
     let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
-    let mut demux = vaco_demux_mp4::Mp4Demuxer::open(
-        src,
-        &NoParsers,
-        &FormatOptions::default(),
-        mp4_opts,
-    )
-    .unwrap();
+    let mut demux =
+        vaco_demux_mp4::Mp4Demuxer::open(src, &NoParsers, &FormatOptions::default(), mp4_opts)
+            .unwrap();
     let mut got = Vec::new();
     while let Ok(pkt) = demux.read_packet() {
         got.push(pkt.payload().to_vec());
@@ -436,7 +432,8 @@ fn cenc_and_movflags_set_option_validate_like_with_options() {
     let sink2 = SharedDynBuf::with_limits(Limits::permissive());
     let mut mux2 = MovMuxer::new(Box::new(sink2) as Box<dyn MediaSink>).unwrap();
     mux2.set_option("movflags", "+frag_keyframe").unwrap();
-    mux2.set_option("encryption_scheme", "cenc-aes-ctr").unwrap();
+    mux2.set_option("encryption_scheme", "cenc-aes-ctr")
+        .unwrap();
     mux2.set_option("encryption_key", &"11".repeat(16)).unwrap();
     mux2.set_option("encryption_kid", &"22".repeat(16)).unwrap();
     mux2.add_stream(&h264_params()).unwrap();
@@ -610,7 +607,10 @@ fn a_short_final_audio_packet_duration_is_not_lost() {
         p.duration = Duration::from_micros(full_duration_micros);
         mux.write_packet(&p).unwrap();
     }
-    #[expect(clippy::integer_division, reason = "same reasoning as full_duration_micros above")]
+    #[expect(
+        clippy::integer_division,
+        reason = "same reasoning as full_duration_micros above"
+    )]
     let last_duration_micros = 2184 * 1_000_000 / 44_100;
     let mut last = packet(idx, 3 * full, true, &[0x12, 0x34]);
     last.duration = Duration::from_micros(last_duration_micros);
@@ -955,14 +955,10 @@ fn extract_extradata_through_mux_writer_fills_in_the_avcc_add_stream_left_empty(
     let mut params = h264_params();
     params.extradata = None;
 
-    let mut builder = vaco_format_core::mux::MuxBuilder::new(
-        Box::new(mux),
-        &FormatOptions::default(),
-    )
-    .with_bsfs(Arc::new(OnlyExtractExtradata));
-    let v = builder
-        .add_stream(&params, Rational::new(1, 30))
-        .unwrap();
+    let mut builder =
+        vaco_format_core::mux::MuxBuilder::new(Box::new(mux), &FormatOptions::default())
+            .with_bsfs(Arc::new(OnlyExtractExtradata));
+    let v = builder.add_stream(&params, Rational::new(1, 30)).unwrap();
     let mut writer = builder.open().unwrap();
 
     // In-band SPS/PPS ahead of the IDR, Annex-B framed — what an AVI-sourced

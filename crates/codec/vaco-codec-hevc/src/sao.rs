@@ -152,7 +152,11 @@ impl SaoParamsGridShared {
     pub(crate) fn new(ctbs_x: u32, ctbs_y: u32) -> Self {
         let ctbs_x = usize::try_from(ctbs_x).unwrap_or(0).max(1);
         let n_bands = usize::try_from(ctbs_y).unwrap_or(0).max(1);
-        Self { ctbs_x, n_bands, published: crate::wavefront::RowPublish::new(n_bands) }
+        Self {
+            ctbs_x,
+            n_bands,
+            published: crate::wavefront::RowPublish::new(n_bands),
+        }
     }
 }
 
@@ -161,7 +165,11 @@ impl<'a> SaoParamsGrid<'a> {
     /// [`vaco_core::Error`] if the first row's allocation exceeds `budget`.
     pub(crate) fn new(budget: &mut Budget, shared: &'a SaoParamsGridShared) -> Result<Self> {
         let current: Vec<CtuSao> = budget.alloc(shared.ctbs_x)?;
-        Ok(Self { shared, current_band: 0, current: Some(current) })
+        Ok(Self {
+            shared,
+            current_band: 0,
+            current: Some(current),
+        })
     }
 
     /// Total addressable CTUs (`ctbs_x * ctbs_y`) — every raster address
@@ -188,7 +196,9 @@ impl<'a> SaoParamsGrid<'a> {
     /// refuses a publish.
     pub(crate) fn begin_row(&mut self, budget: &mut Budget, row: usize) -> Result<()> {
         if row < self.current_band {
-            return Err(Error::InvalidData("vaco-codec-hevc: sao params rows must advance in order"));
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: sao params rows must advance in order",
+            ));
         }
         while self.current_band < row {
             if let Some(band) = self.current.take() {
@@ -213,7 +223,9 @@ impl<'a> SaoParamsGrid<'a> {
     /// [`SaoParamsGrid::begin_row`]'s own `Errors` section gives.
     pub(crate) fn finish(&mut self) -> Result<()> {
         while self.current_band < self.shared.n_bands {
-            let Some(band) = self.current.take() else { break };
+            let Some(band) = self.current.take() else {
+                break;
+            };
             self.shared.published.publish(self.current_band, band)?;
             self.current_band = self.current_band.saturating_add(1);
         }
@@ -229,7 +241,10 @@ impl<'a> SaoParamsGrid<'a> {
     #[must_use]
     /// `addr`'s own (row, col) — the CTU row it lives in, and its column
     /// within that row.
-    #[allow(clippy::integer_division, reason = "row/col = raster address / the fixed CTU row width, its own remainder")]
+    #[allow(
+        clippy::integer_division,
+        reason = "row/col = raster address / the fixed CTU row width, its own remainder"
+    )]
     fn row_col(&self, addr: usize) -> (usize, usize) {
         let ctbs_x = self.shared.ctbs_x.max(1);
         (addr / ctbs_x, addr % ctbs_x)
@@ -237,7 +252,9 @@ impl<'a> SaoParamsGrid<'a> {
 
     #[must_use]
     pub(crate) fn get(&self, addr: u32) -> CtuSao {
-        let Ok(addr) = usize::try_from(addr) else { return CtuSao::default() };
+        let Ok(addr) = usize::try_from(addr) else {
+            return CtuSao::default();
+        };
         let (row, col) = self.row_col(addr);
         let band = match row.cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.as_ref(),
@@ -254,7 +271,9 @@ impl<'a> SaoParamsGrid<'a> {
     /// (every real call targets the CTU just decoded, always in
     /// `current`'s own row).
     pub(crate) fn set(&mut self, addr: u32, value: &CtuSao) {
-        let Ok(addr) = usize::try_from(addr) else { return };
+        let Ok(addr) = usize::try_from(addr) else {
+            return;
+        };
         let (row, col) = self.row_col(addr);
         if row != self.current_band {
             return;
@@ -272,8 +291,17 @@ impl<'a> SaoParamsGrid<'a> {
     #[must_use]
     pub(crate) fn budget_bytes(&self) -> u64 {
         let size = u64::try_from(std::mem::size_of::<CtuSao>()).unwrap_or(u64::MAX);
-        let band_bytes = |b: &Vec<CtuSao>| u64::try_from(b.len()).unwrap_or(u64::MAX).saturating_mul(size);
-        let published: u64 = self.shared.published.iter().map(band_bytes).fold(0u64, u64::saturating_add);
+        let band_bytes = |b: &Vec<CtuSao>| {
+            u64::try_from(b.len())
+                .unwrap_or(u64::MAX)
+                .saturating_mul(size)
+        };
+        let published: u64 = self
+            .shared
+            .published
+            .iter()
+            .map(band_bytes)
+            .fold(0u64, u64::saturating_add);
         published.saturating_add(self.current.as_ref().map_or(0, band_bytes))
     }
 }
@@ -312,7 +340,13 @@ fn parse_max_uvlc(cabac: &mut CabacDecoder<'_>, max_symbol: u32) -> u32 {
 /// for a chroma component that is not the channel's first
 /// (`compIdx == firstCompOfChType` in HM), the already-decoded sibling's
 /// mode to copy the type/class from without reading any more bits.
-fn parse_component(cabac: &mut CabacDecoder<'_>, is_new: bool, is_bo: bool, reads_class: bool, shared_class: u8) -> SaoMode {
+fn parse_component(
+    cabac: &mut CabacDecoder<'_>,
+    is_new: bool,
+    is_bo: bool,
+    reads_class: bool,
+    shared_class: u8,
+) -> SaoMode {
     if !is_new {
         return SaoMode::Off;
     }
@@ -337,7 +371,11 @@ fn parse_component(cabac: &mut CabacDecoder<'_>, is_new: bool, is_bo: bool, read
         }
         SaoMode::Bo { offsets }
     } else {
-        let class = if reads_class { u8::try_from(cabac.decode_bypass_bits(2)).unwrap_or(0) } else { shared_class };
+        let class = if reads_class {
+            u8::try_from(cabac.decode_bypass_bits(2)).unwrap_or(0)
+        } else {
+            shared_class
+        };
         // §7.3.8.3's own EO layout: offset[PLAIN] is always inferred 0 (never
         // coded), and the two "peak" classes negate the coded magnitude —
         // HM's `parseSAOBlkParam` assigns exactly this shape.
@@ -363,11 +401,23 @@ pub(crate) fn parse_ctu_sao(
     let ctu_x = addr.checked_rem(ctbs_x).unwrap_or(0);
     let ctu_y = addr.checked_div(ctbs_x).unwrap_or(0);
 
-    let left_merge = if ctu_x > 0 { decode_merge_flag(cabac, ctx)? } else { false };
-    let above_merge = if ctu_y > 0 && !left_merge { decode_merge_flag(cabac, ctx)? } else { false };
+    let left_merge = if ctu_x > 0 {
+        decode_merge_flag(cabac, ctx)?
+    } else {
+        false
+    };
+    let above_merge = if ctu_y > 0 && !left_merge {
+        decode_merge_flag(cabac, ctx)?
+    } else {
+        false
+    };
 
     if left_merge || above_merge {
-        let src_addr = if left_merge { addr.saturating_sub(1) } else { addr.saturating_sub(ctbs_x) };
+        let src_addr = if left_merge {
+            addr.saturating_sub(1)
+        } else {
+            addr.saturating_sub(ctbs_x)
+        };
         let src = prev.get(src_addr);
         // A merge still forces a channel's mode to `Off` when this slice
         // has that channel's SAO disabled entirely (`sliceEnabled[compIdx]`
@@ -398,7 +448,11 @@ pub(crate) fn parse_ctu_sao(
     let (cb, cr) = if sao_chroma {
         let (is_new, is_bo) = read_type_idx(cabac, ctx)?;
         let cb = parse_component(cabac, is_new, is_bo, true, 0);
-        let cb_class = if let SaoMode::Eo { class, .. } = cb { class } else { 0 };
+        let cb_class = if let SaoMode::Eo { class, .. } = cb {
+            class
+        } else {
+            0
+        };
         let cr = parse_component(cabac, is_new, is_bo, false, cb_class);
         (cb, cr)
     } else {
@@ -411,14 +465,20 @@ pub(crate) fn parse_ctu_sao(
 /// `parseSaoMerge`: the single shared context both `sao_merge_left_flag` and
 /// `sao_merge_up_flag` are coded with.
 fn decode_merge_flag(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank) -> Result<bool> {
-    let cm = ctx.sao_merge_flag.first_mut().ok_or(vaco_core::Error::InvalidData("sao_merge_flag ctx"))?;
+    let cm = ctx
+        .sao_merge_flag
+        .first_mut()
+        .ok_or(vaco_core::Error::InvalidData("sao_merge_flag ctx"))?;
     Ok(cabac.decode_decision(cm) != 0)
 }
 
 /// `parseSaoTypeIdx`: one context-coded bin (0 = off), then, only if set, one
 /// bypass bin distinguishing BO (0) from EO (1). Returns `(is_new, is_bo)`.
 fn read_type_idx(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank) -> Result<(bool, bool)> {
-    let cm = ctx.sao_type_idx.first_mut().ok_or(vaco_core::Error::InvalidData("sao_type_idx ctx"))?;
+    let cm = ctx
+        .sao_type_idx
+        .first_mut()
+        .ok_or(vaco_core::Error::InvalidData("sao_type_idx ctx"))?;
     if cabac.decode_decision(cm) == 0 {
         return Ok((false, false));
     }
@@ -447,7 +507,10 @@ impl Snapshot {
     fn capture(budget: &mut Budget, plane: &crate::framebuf::Plane) -> Result<Self> {
         let (width, _height) = plane.dims();
         let data = plane.clone_samples(budget)?;
-        Ok(Self { width: i32::try_from(width).unwrap_or(0), data })
+        Ok(Self {
+            width: i32::try_from(width).unwrap_or(0),
+            data,
+        })
     }
 
     /// One full row of captured samples, `None` past the last row (including
@@ -458,7 +521,9 @@ impl Snapshot {
     /// class's two neighbour rows), it amortises the check that used to be
     /// repeated at every pixel.
     fn row(&self, y: i32) -> Option<&[u8]> {
-        let (Ok(yu), Ok(width)) = (usize::try_from(y), usize::try_from(self.width)) else { return None };
+        let (Ok(yu), Ok(width)) = (usize::try_from(y), usize::try_from(self.width)) else {
+            return None;
+        };
         let start = yu.checked_mul(width)?;
         self.data.get(start..start.saturating_add(width))
     }
@@ -480,7 +545,10 @@ impl Snapshot {
 
 /// Filter one component's plane for one CTU's rectangle, per §8.7.3.2/.3
 /// (`TComSampleAdaptiveOffset::offsetBlock`).
-#[allow(clippy::too_many_arguments, reason = "mirrors HM's own offsetBlock signature")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors HM's own offsetBlock signature"
+)]
 fn offset_block(
     plane: &mut crate::framebuf::Plane,
     snapshot: &Snapshot,
@@ -492,7 +560,9 @@ fn offset_block(
     bit_depth: u32,
 ) {
     let max_value = (1i32 << bit_depth) - 1;
-    let (Ok(x0u), Ok(width_u)) = (usize::try_from(x0), usize::try_from(width)) else { return };
+    let (Ok(x0u), Ok(width_u)) = (usize::try_from(x0), usize::try_from(width)) else {
+        return;
+    };
     match mode {
         SaoMode::Off => {}
         // `PERF-PROGRAMME.md` item B1: `offset_block`'s own 5.35% share was
@@ -507,10 +577,16 @@ fn offset_block(
             let shift = bit_depth.saturating_sub(5);
             for y in y0..y0 + height {
                 let Ok(yu) = usize::try_from(y) else { continue };
-                let Some(src_row) = snapshot.row(y).and_then(|r| r.get(x0u..x0u.saturating_add(width_u))) else {
+                let Some(src_row) = snapshot
+                    .row(y)
+                    .and_then(|r| r.get(x0u..x0u.saturating_add(width_u)))
+                else {
                     continue;
                 };
-                if let Some(dst_row) = plane.row_mut(yu).and_then(|r| r.get_mut(x0u..x0u.saturating_add(width_u))) {
+                if let Some(dst_row) = plane
+                    .row_mut(yu)
+                    .and_then(|r| r.get_mut(x0u..x0u.saturating_add(width_u)))
+                {
                     for (d, &sv) in dst_row.iter_mut().zip(src_row) {
                         let v = i32::from(sv);
                         let band = usize::try_from(v >> shift).unwrap_or(0);
@@ -534,11 +610,17 @@ fn offset_block(
                 // re-deriving the same row's y-bounds check): a diagonal
                 // class's neighbour row is constant across the whole row,
                 // so `y + dy0`/`y + dy1` only need resolving here.
-                let (Some(cur_row), Some(row_a), Some(row_b)) = (snapshot.row(y), snapshot.row(y + dy0), snapshot.row(y + dy1)) else {
+                let (Some(cur_row), Some(row_a), Some(row_b)) = (
+                    snapshot.row(y),
+                    snapshot.row(y + dy0),
+                    snapshot.row(y + dy1),
+                ) else {
                     continue;
                 };
                 let Ok(yu) = usize::try_from(y) else { continue };
-                let Some(dst_row) = plane.row_mut(yu) else { continue };
+                let Some(dst_row) = plane.row_mut(yu) else {
+                    continue;
+                };
                 for x in x0..x0 + width {
                     let Ok(xu) = usize::try_from(x) else { continue };
                     let Some(&sv) = cur_row.get(xu) else { continue };
@@ -592,16 +674,48 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
         if width <= 0 || height <= 0 {
             continue;
         }
-        offset_block(&mut s.pic.y, &snap_y, params.y, x0, y0, width, height, s.shared.bit_depth_luma);
+        offset_block(
+            &mut s.pic.y,
+            &snap_y,
+            params.y,
+            x0,
+            y0,
+            width,
+            height,
+            s.shared.bit_depth_luma,
+        );
 
         let (cx0, cy0, cw, ch) = (x0 >> 1, y0 >> 1, (width + 1) >> 1, (height + 1) >> 1);
-        offset_block(&mut s.pic.cb, &snap_cb, params.cb, cx0, cy0, cw, ch, s.shared.bit_depth_chroma);
-        offset_block(&mut s.pic.cr, &snap_cr, params.cr, cx0, cy0, cw, ch, s.shared.bit_depth_chroma);
+        offset_block(
+            &mut s.pic.cb,
+            &snap_cb,
+            params.cb,
+            cx0,
+            cy0,
+            cw,
+            ch,
+            s.shared.bit_depth_chroma,
+        );
+        offset_block(
+            &mut s.pic.cr,
+            &snap_cr,
+            params.cr,
+            cx0,
+            cy0,
+            cw,
+            ch,
+            s.shared.bit_depth_chroma,
+        );
     }
     // The three snapshots are pure working state for the loop just above —
     // give their charge back before they drop, rather than letting it ride
     // on `budget.committed()` until `Budget` itself is dropped. See
     // `Snapshot::byte_len`'s own doc.
-    budget.release(snap_y.byte_len().saturating_add(snap_cb.byte_len()).saturating_add(snap_cr.byte_len()));
+    budget.release(
+        snap_y
+            .byte_len()
+            .saturating_add(snap_cb.byte_len())
+            .saturating_add(snap_cr.byte_len()),
+    );
     Ok(())
 }

@@ -411,7 +411,8 @@ pub(crate) fn refill_table(
                 if s.offset != end {
                     break;
                 }
-                let sample_fits = source_size.is_none_or(|n| end.saturating_add(u64::from(s.size)) <= n);
+                let sample_fits =
+                    source_size.is_none_or(|n| end.saturating_add(u64::from(s.size)) <= n);
                 if !sample_fits {
                     break;
                 }

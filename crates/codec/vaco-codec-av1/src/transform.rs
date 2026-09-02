@@ -107,13 +107,19 @@ impl Av1TxType {
     /// `flipUD`, §7.12.3.
     #[must_use]
     pub const fn flip_ud(self) -> bool {
-        matches!(self, Self::FlipadstDct | Self::FlipadstAdst | Self::VFlipadst | Self::FlipadstFlipadst)
+        matches!(
+            self,
+            Self::FlipadstDct | Self::FlipadstAdst | Self::VFlipadst | Self::FlipadstFlipadst
+        )
     }
 
     /// `flipLR`, §7.12.3.
     #[must_use]
     pub const fn flip_lr(self) -> bool {
-        matches!(self, Self::DctFlipadst | Self::AdstFlipadst | Self::HFlipadst | Self::FlipadstFlipadst)
+        matches!(
+            self,
+            Self::DctFlipadst | Self::AdstFlipadst | Self::HFlipadst | Self::FlipadstFlipadst
+        )
     }
 }
 
@@ -129,13 +135,25 @@ const COS128_LOOKUP: [i32; 65] = [
 fn cos128(angle: i32) -> i64 {
     let angle2 = angle.rem_euclid(256);
     let v = if angle2 <= 64 {
-        COS128_LOOKUP.get(usize::try_from(angle2).unwrap_or(0)).copied().unwrap_or(0)
+        COS128_LOOKUP
+            .get(usize::try_from(angle2).unwrap_or(0))
+            .copied()
+            .unwrap_or(0)
     } else if angle2 <= 128 {
-        -COS128_LOOKUP.get(usize::try_from(128 - angle2).unwrap_or(0)).copied().unwrap_or(0)
+        -COS128_LOOKUP
+            .get(usize::try_from(128 - angle2).unwrap_or(0))
+            .copied()
+            .unwrap_or(0)
     } else if angle2 <= 192 {
-        -COS128_LOOKUP.get(usize::try_from(angle2 - 128).unwrap_or(0)).copied().unwrap_or(0)
+        -COS128_LOOKUP
+            .get(usize::try_from(angle2 - 128).unwrap_or(0))
+            .copied()
+            .unwrap_or(0)
     } else {
-        COS128_LOOKUP.get(usize::try_from(256 - angle2).unwrap_or(0)).copied().unwrap_or(0)
+        COS128_LOOKUP
+            .get(usize::try_from(256 - angle2).unwrap_or(0))
+            .copied()
+            .unwrap_or(0)
     };
     i64::from(v)
 }
@@ -228,12 +246,21 @@ fn idct_permute(t: &mut [i64], n: u32) {
 /// its 31 ordered steps, each named after the step number in the
 /// specification so a reviewer can match this function to the text line by
 /// line rather than trusting a restructured equivalent.
-#[allow(clippy::many_single_char_names, reason = "the specification's own loop variable names (i, j)")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "the specification's own loop variable names (i, j)"
+)]
 fn idct(t: &mut [i64], n: u32, r: u32) {
     idct_permute(t, n);
     if n == 6 {
         for i in 0..16 {
-            butterfly(t, 32 + i, 63 - i, 63 - 4 * i32::try_from(brev(4, u32::try_from(i).unwrap_or(0))).unwrap_or(0), false);
+            butterfly(
+                t,
+                32 + i,
+                63 - i,
+                63 - 4 * i32::try_from(brev(4, u32::try_from(i).unwrap_or(0))).unwrap_or(0),
+                false,
+            );
         }
     }
     if n >= 5 {
@@ -264,7 +291,13 @@ fn idct(t: &mut [i64], n: u32, r: u32) {
                 let ii = i32::try_from(i).unwrap_or(0);
                 let jj = i32::try_from(j).unwrap_or(0);
                 let a = i32::try_from(brev(2, u32::try_from(i).unwrap_or(0))).unwrap_or(0);
-                butterfly(t, 62 - i * 4 - j, 33 + i * 4 + j, 60 - 16 * a + 64 * jj, true);
+                butterfly(
+                    t,
+                    62 - i * 4 - j,
+                    33 + i * 4 + j,
+                    60 - 16 * a + 64 * jj,
+                    true,
+                );
                 let _ = ii;
             }
         }
@@ -285,7 +318,13 @@ fn idct(t: &mut [i64], n: u32, r: u32) {
             for j in 0..2 {
                 let jj = i32::try_from(j).unwrap_or(0);
                 let ii = i32::try_from(i).unwrap_or(0);
-                butterfly(t, 30 - 4 * i - j, 17 + 4 * i + j, 24 + (jj << 6) + ((1 - ii) << 5), true);
+                butterfly(
+                    t,
+                    30 - 4 * i - j,
+                    17 + 4 * i + j,
+                    24 + (jj << 6) + ((1 - ii) << 5),
+                    true,
+                );
             }
         }
     }
@@ -323,7 +362,13 @@ fn idct(t: &mut [i64], n: u32, r: u32) {
             for j in 0..4 {
                 let ii = i32::try_from(i).unwrap_or(0);
                 let jj = i32::try_from(j).unwrap_or(0);
-                butterfly(t, 61 - i * 8 - j, 34 + i * 8 + j, 56 - ii * 32 + (jj >> 1) * 64, true);
+                butterfly(
+                    t,
+                    61 - i * 8 - j,
+                    34 + i * 8 + j,
+                    56 - ii * 32 + (jj >> 1) * 64,
+                    true,
+                );
             }
         }
     }
@@ -638,7 +683,11 @@ pub fn inverse_transform_2d(
     let h = 1usize << log2_h;
     let tw = w.min(32);
 
-    let row_shift = if lossless { 0 } else { transform_row_shift(log2_w, log2_h) };
+    let row_shift = if lossless {
+        0
+    } else {
+        transform_row_shift(log2_w, log2_h)
+    };
     let col_shift = if lossless { 0 } else { 4 };
     let row_clamp = u32::from(bit_depth) + 8;
     let col_clamp = (u32::from(bit_depth) + 6).max(16);
@@ -692,7 +741,8 @@ pub fn inverse_transform_2d(
         for i in 0..h {
             let v = round2(col_buf.get(i).copied().unwrap_or(0), col_shift);
             if let Some(dst) = residual_out.get_mut(i * w + j) {
-                *dst = i32::try_from(v.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(0);
+                *dst =
+                    i32::try_from(v.clamp(i64::from(i32::MIN), i64::from(i32::MAX))).unwrap_or(0);
             }
         }
     }
@@ -707,14 +757,23 @@ fn transform_row_shift(log2_w: u32, log2_h: u32) -> u32 {
         if u32::from(crate::tables::TX_WIDTH_LOG2.get(i).copied().unwrap_or(0)) == log2_w
             && u32::from(crate::tables::TX_HEIGHT_LOG2.get(i).copied().unwrap_or(0)) == log2_h
         {
-            return u32::from(crate::tables::TRANSFORM_ROW_SHIFT.get(i).copied().unwrap_or(0));
+            return u32::from(
+                crate::tables::TRANSFORM_ROW_SHIFT
+                    .get(i)
+                    .copied()
+                    .unwrap_or(0),
+            );
         }
     }
     0
 }
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing, clippy::unwrap_used, reason = "test code over fixed fixtures")]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    reason = "test code over fixed fixtures"
+)]
 mod tests {
     use super::*;
 
@@ -733,9 +792,15 @@ mod tests {
             let mut out = vec![0i32; n * n];
             inverse_transform_2d(Av1TxType::DctDct, log2, log2, false, 8, &dequant, &mut out);
             let first = out[0];
-            assert!(first != 0, "DC-only input produced an all-zero residual at size {n}");
+            assert!(
+                first != 0,
+                "DC-only input produced an all-zero residual at size {n}"
+            );
             for &v in &out {
-                assert_eq!(v, first, "DC-only DCT_DCT must be spatially flat at size {n}: {out:?}");
+                assert_eq!(
+                    v, first,
+                    "DC-only DCT_DCT must be spatially flat at size {n}: {out:?}"
+                );
             }
         }
     }
@@ -752,9 +817,15 @@ mod tests {
         dequant[0] = 1000;
         let mut out = vec![0i32; 64];
         inverse_transform_2d(Av1TxType::Idtx, 3, 3, false, 8, &dequant, &mut out);
-        assert_ne!(out[0], 0, "the one nonzero input must produce a nonzero (0,0) output");
+        assert_ne!(
+            out[0], 0,
+            "the one nonzero input must produce a nonzero (0,0) output"
+        );
         for (i, &v) in out.iter().enumerate().skip(1) {
-            assert_eq!(v, 0, "IDTX must not mix position 0 into position {i}: {out:?}");
+            assert_eq!(
+                v, 0,
+                "IDTX must not mix position 0 into position {i}: {out:?}"
+            );
         }
     }
 
@@ -787,7 +858,15 @@ mod tests {
                 }
                 let mut out = vec![0i32; w * h];
                 for tt in 0..16u8 {
-                    inverse_transform_2d(Av1TxType::from_ordinal(tt), log2w, log2h, false, 8, &dequant, &mut out);
+                    inverse_transform_2d(
+                        Av1TxType::from_ordinal(tt),
+                        log2w,
+                        log2h,
+                        false,
+                        8,
+                        &dequant,
+                        &mut out,
+                    );
                 }
             }
         }
@@ -800,6 +879,9 @@ mod tests {
         let mut out = vec![0i32; 16];
         inverse_transform_2d(Av1TxType::DctDct, 2, 2, true, 8, &dequant, &mut out);
         let first = out[0];
-        assert!(out.iter().all(|&v| v == first), "lossless WHT DC-only must be flat: {out:?}");
+        assert!(
+            out.iter().all(|&v| v == first),
+            "lossless WHT DC-only must be flat: {out:?}"
+        );
     }
 }

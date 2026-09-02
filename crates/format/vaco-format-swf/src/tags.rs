@@ -38,7 +38,11 @@ impl TagHeader {
     /// [`Error::UnexpectedEof`] if `buf` is too short for the header form it
     /// declares.
     pub fn parse(buf: &[u8]) -> Result<Self> {
-        let raw = u16::from_le_bytes(buf.get(0..2).and_then(|s| s.try_into().ok()).ok_or(Error::UnexpectedEof)?);
+        let raw = u16::from_le_bytes(
+            buf.get(0..2)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::UnexpectedEof)?,
+        );
         let code = raw >> 6;
         let short_len = raw & 0x3F;
         if short_len == LONG_LENGTH_MARKER {
@@ -87,11 +91,7 @@ impl TagHeader {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
 

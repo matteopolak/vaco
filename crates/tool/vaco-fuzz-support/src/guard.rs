@@ -123,8 +123,13 @@ mod tests {
             guard.tick(true).expect("progress resets the stall count");
         }
         for _ in 0..64 {
-            guard.tick(false).expect("64 stalls is still within tolerance");
+            guard
+                .tick(false)
+                .expect("64 stalls is still within tolerance");
         }
-        assert!(guard.tick(false).is_err(), "the 65th consecutive stall must fail");
+        assert!(
+            guard.tick(false).is_err(),
+            "the 65th consecutive stall must fail"
+        );
     }
 }

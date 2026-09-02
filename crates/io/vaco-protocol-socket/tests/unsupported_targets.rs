@@ -25,7 +25,12 @@ fn unix_open_fails_with_unsupported_not_a_panic() {
     let cancel = CancelToken::new();
     let env = ProtocolEnv::new(&r, &cancel).with_whitelist(&["unix"]);
     let err = r
-        .open("unix:/tmp/does-not-matter.sock", IoFlags::READ, &Dict::new(), &env)
+        .open(
+            "unix:/tmp/does-not-matter.sock",
+            IoFlags::READ,
+            &Dict::new(),
+            &env,
+        )
         .err();
     assert!(matches!(err, Some(ProtocolError::Unsupported { .. })));
 }

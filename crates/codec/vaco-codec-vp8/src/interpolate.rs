@@ -42,7 +42,11 @@ pub fn predict_block<const W: usize, const H: usize>(
     vfrac: usize,
     bilinear: bool,
 ) -> [[u8; W]; H] {
-    let table = if bilinear { &BILINEAR_FILTERS } else { &SIXTAP_FILTERS };
+    let table = if bilinear {
+        &BILINEAR_FILTERS
+    } else {
+        &SIXTAP_FILTERS
+    };
     let hfil = table.get(hfrac).copied().unwrap_or([0, 0, 128, 0, 0, 0]);
     let vfil = table.get(vfrac).copied().unwrap_or([0, 0, 128, 0, 0, 0]);
 
@@ -75,7 +79,11 @@ pub fn predict_block<const W: usize, const H: usize>(
         for (c, px) in row.iter_mut().enumerate() {
             *px = interp(&vfil, |k| {
                 let idx = usize::try_from(si(r) + 2 + k).unwrap_or(0);
-                temp_rows.get(idx).and_then(|row| row.get(c)).copied().unwrap_or(0)
+                temp_rows
+                    .get(idx)
+                    .and_then(|row| row.get(c))
+                    .copied()
+                    .unwrap_or(0)
             });
         }
     }

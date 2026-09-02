@@ -33,7 +33,9 @@ pub fn clear_block(block: &mut [i16]) {
 /// shorter than the region needs.
 pub fn fill_block(dst: &mut [u8], stride: usize, w: usize, h: usize, value: u8) {
     for row in 0..h {
-        let Some(dst_row) = dst.get_mut(row.saturating_mul(stride)..).and_then(|r| r.get_mut(..w))
+        let Some(dst_row) = dst
+            .get_mut(row.saturating_mul(stride)..)
+            .and_then(|r| r.get_mut(..w))
         else {
             return;
         };
@@ -53,7 +55,9 @@ pub fn put_pixels_clamped(src: &[i16], dst: &mut [u8], stride: usize, w: usize, 
         let Some(src_row) = src.get(row.saturating_mul(w)..).and_then(|r| r.get(..w)) else {
             return;
         };
-        let Some(dst_row) = dst.get_mut(row.saturating_mul(stride)..).and_then(|r| r.get_mut(..w))
+        let Some(dst_row) = dst
+            .get_mut(row.saturating_mul(stride)..)
+            .and_then(|r| r.get_mut(..w))
         else {
             return;
         };
@@ -71,10 +75,15 @@ pub fn put_pixels_clamped(src: &[i16], dst: &mut [u8], stride: usize, w: usize, 
 /// Same truncate-rather-than-panic contract as the rest of this module.
 pub fn add_pixels_clamped(residual: &[i16], dst: &mut [u8], stride: usize, w: usize, h: usize) {
     for row in 0..h {
-        let Some(res_row) = residual.get(row.saturating_mul(w)..).and_then(|r| r.get(..w)) else {
+        let Some(res_row) = residual
+            .get(row.saturating_mul(w)..)
+            .and_then(|r| r.get(..w))
+        else {
             return;
         };
-        let Some(dst_row) = dst.get_mut(row.saturating_mul(stride)..).and_then(|r| r.get_mut(..w))
+        let Some(dst_row) = dst
+            .get_mut(row.saturating_mul(stride)..)
+            .and_then(|r| r.get_mut(..w))
         else {
             return;
         };

@@ -41,8 +41,16 @@ use crate::dc::{mid_grey, round_div};
 /// Dispatched, bit-exact [`crate::dc_predict`].
 #[must_use]
 pub fn dc_predict(caps: Caps, top: &[u16], left: &[u16], size: usize, bit_depth: u32) -> u16 {
-    let top = if top.len() >= size { top.get(..size) } else { None };
-    let left = if left.len() >= size { left.get(..size) } else { None };
+    let top = if top.len() >= size {
+        top.get(..size)
+    } else {
+        None
+    };
+    let left = if left.len() >= size {
+        left.get(..size)
+    } else {
+        None
+    };
 
     match (top, left) {
         (Some(t), Some(l)) => {
@@ -130,7 +138,10 @@ mod tests {
                 scalar(&[], &top, size, 8)
             );
         }
-        assert_eq!(dc_predict(Caps::detect(), &[], &[], 8, 10), scalar(&[], &[], 8, 10));
+        assert_eq!(
+            dc_predict(Caps::detect(), &[], &[], 8, 10),
+            scalar(&[], &[], 8, 10)
+        );
     }
 
     #[test]

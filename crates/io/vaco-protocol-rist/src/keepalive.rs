@@ -185,7 +185,11 @@ mod tests {
         for (set, expected_bit) in setters {
             let mut flags = CapabilityFlags::default();
             set(&mut flags);
-            assert_eq!(flags.to_bits(), expected_bit, "bit mismatch for a single flag");
+            assert_eq!(
+                flags.to_bits(),
+                expected_bit,
+                "bit mismatch for a single flag"
+            );
             assert_eq!(CapabilityFlags::from_bits(expected_bit), flags);
         }
     }

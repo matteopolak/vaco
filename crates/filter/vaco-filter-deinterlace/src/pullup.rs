@@ -317,5 +317,4 @@ mod tests {
         assert!(Opts::parse(Some("sb=1")).is_err());
         assert!(Opts::parse(None).is_ok());
     }
-
 }

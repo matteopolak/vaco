@@ -39,14 +39,29 @@ use crate::common;
 use crate::sample;
 
 const PADS: &[Pad] = &[
-    Pad { name: "source", media_type: MediaType::Video },
-    Pad { name: "filter1", media_type: MediaType::Video },
-    Pad { name: "filter2", media_type: MediaType::Video },
+    Pad {
+        name: "source",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "filter1",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "filter2",
+        media_type: MediaType::Video,
+    },
 ];
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "maskedmax", help = "Apply filtering with maximum difference of two streams")]
+#[options(
+    name = "maskedmax",
+    help = "Apply filtering with maximum difference of two streams"
+)]
 pub(crate) struct Opts {
     #[opt(name = "planes", help = "set planes", default = 15, range = 0..=15, flags(video, filtering))]
     pub planes: i32,
@@ -75,18 +90,30 @@ impl PairedFilter for Filter {
         3
     }
 
-    fn filter_frames(&mut self, ctx: &mut FilterContext<'_>, inputs: SmallVec<[Frame; 4]>) -> Result<FrameOut> {
+    fn filter_frames(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut> {
         let mut it = inputs.into_iter();
         let (Some(source), Some(filter1), Some(filter2)) = (it.next(), it.next(), it.next()) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = source.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = source.data
+        else {
             return Ok(FrameOut::One(source));
         };
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         let big_endian = format.is_big_endian();
         for ch in 0..format.component_count() {
-            let Some(comp) = sample::component(format, ch) else { continue };
+            let Some(comp) = sample::component(format, ch) else {
+                continue;
+            };
             let (Some(sp), Some(f1p), Some(f2p), Some(mut dp)) = (
                 source.plane(comp.plane as usize),
                 filter1.plane(comp.plane as usize),
@@ -95,11 +122,16 @@ impl PairedFilter for Filter {
             ) else {
                 continue;
             };
-            let w = dp.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+            let w = dp
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
             let n = dp.rows().min(sp.rows()).min(f1p.rows()).min(f2p.rows());
             if !sample::plane_selected(self.planes, ch) {
                 for y in 0..n {
-                    let (Some(sr), Some(dr)) = (sp.row(y), dp.row_mut(y)) else { continue };
+                    let (Some(sr), Some(dr)) = (sp.row(y), dp.row_mut(y)) else {
+                        continue;
+                    };
                     let len = sr.len().min(dr.len());
                     if let (Some(s), Some(d)) = (sr.get(..len), dr.get_mut(..len)) {
                         d.copy_from_slice(s);
@@ -108,7 +140,8 @@ impl PairedFilter for Filter {
                 continue;
             }
             for y in 0..n {
-                let (Some(sr), Some(f1r), Some(f2r), Some(dr)) = (sp.row(y), f1p.row(y), f2p.row(y), dp.row_mut(y))
+                let (Some(sr), Some(f1r), Some(f2r), Some(dr)) =
+                    (sp.row(y), f1p.row(y), f2p.row(y), dp.row_mut(y))
                 else {
                     continue;
                 };
@@ -146,7 +179,11 @@ impl PairedFilter for Filter {
     }
 }
 
-fn build(desc: FilterDesc, pick: Pick, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+fn build(
+    desc: FilterDesc,
+    pick: Pick,
+    req: &Instantiate<'_>,
+) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
     let set = FormatSet::video_list(common::formats_where(sample::is_addressable));
     let formats = NodeFormats {
@@ -158,7 +195,10 @@ fn build(desc: FilterDesc, pick: Pick, req: &Instantiate<'_>) -> std::result::Re
     Ok(Instance {
         desc,
         formats,
-        filter: Box::new(Paired::new(Filter { planes: i64::from(opts.planes), pick })),
+        filter: Box::new(Paired::new(Filter {
+            planes: i64::from(opts.planes),
+            pick,
+        })),
     })
 }
 

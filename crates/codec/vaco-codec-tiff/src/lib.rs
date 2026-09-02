@@ -360,7 +360,9 @@ mod tests {
         let frame = checker_frame(3, 3, PixFmt::Rgb24);
         let mut enc = TiffEncoder::new(Limits::permissive());
         enc.send(Some(&frame)).expect("send frame");
-        let packet = enc.receive().expect("receive packet immediately, no drain needed");
+        let packet = enc
+            .receive()
+            .expect("receive packet immediately, no drain needed");
         assert!(matches!(enc.receive(), Err(Error::NeedMoreInput)));
         enc.send(None).expect("begin drain");
         assert!(matches!(enc.receive(), Err(Error::Eof)));
@@ -446,9 +448,13 @@ mod tests {
     #[test]
     fn compression_algo_accepts_both_the_name_and_the_number() {
         let mut by_name = TiffEncoder::new(Limits::permissive());
-        by_name.set_option("compression_algo", "deflate").expect("set_option");
+        by_name
+            .set_option("compression_algo", "deflate")
+            .expect("set_option");
         let mut by_number = TiffEncoder::new(Limits::permissive());
-        by_number.set_option("compression_algo", "32946").expect("set_option");
+        by_number
+            .set_option("compression_algo", "32946")
+            .expect("set_option");
         assert_eq!(
             by_name.options.compression_algo,
             by_number.options.compression_algo

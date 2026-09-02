@@ -72,8 +72,12 @@ pub fn decode(data: &[u8], budget: &mut Budget) -> Result<Frame> {
     let row_bytes = row_bytes_for_bits(width);
     let needed = row_bytes.saturating_mul(height as usize);
 
-    let bits_at = text.find("_bits").ok_or(Error::InvalidData("xbm: no _bits array"))?;
-    let body = text.get(bits_at..).ok_or(Error::InvalidData("xbm: truncated"))?;
+    let bits_at = text
+        .find("_bits")
+        .ok_or(Error::InvalidData("xbm: no _bits array"))?;
+    let body = text
+        .get(bits_at..)
+        .ok_or(Error::InvalidData("xbm: truncated"))?;
     let mut bytes = Vec::new();
     let mut rest = body;
     while bytes.len() < needed {
@@ -81,11 +85,20 @@ pub fn decode(data: &[u8], budget: &mut Budget) -> Result<Frame> {
             return Err(Error::InvalidData("xbm: not enough byte literals"));
         };
         let hex_start = off + 2;
-        let hex_rest = rest.get(hex_start..).ok_or(Error::InvalidData("xbm: truncated"))?;
-        let hex: String = hex_rest.chars().take_while(char::is_ascii_hexdigit).take(2).collect();
-        let value = u8::from_str_radix(&hex, 16).map_err(|_| Error::InvalidData("xbm: bad hex byte"))?;
+        let hex_rest = rest
+            .get(hex_start..)
+            .ok_or(Error::InvalidData("xbm: truncated"))?;
+        let hex: String = hex_rest
+            .chars()
+            .take_while(char::is_ascii_hexdigit)
+            .take(2)
+            .collect();
+        let value =
+            u8::from_str_radix(&hex, 16).map_err(|_| Error::InvalidData("xbm: bad hex byte"))?;
         bytes.push(value);
-        rest = hex_rest.get(hex.len()..).ok_or(Error::InvalidData("xbm: truncated"))?;
+        rest = hex_rest
+            .get(hex.len()..)
+            .ok_or(Error::InvalidData("xbm: truncated"))?;
     }
 
     let mut frame = Frame::alloc_video(budget, PixFmt::MonoWhite, width, height)?;
@@ -128,7 +141,9 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
         return Err(Error::Unsupported("xbm: encoder needs monowhite input"));
     }
     let (width, height) = (*width, *height);
-    let plane = planes.first().ok_or(Error::InvalidData("xbm: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("xbm: no plane 0"))?;
     let stride = plane.stride;
     let src = plane.data.as_slice();
     let row_bytes = row_bytes_for_bits(width);

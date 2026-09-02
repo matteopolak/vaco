@@ -169,9 +169,10 @@ fn parse_handshake_packet(data: &[u8]) -> Result<(HandshakeCif, Vec<Extension>)>
         return Err(malformed("expected a Handshake control packet"));
     }
     let (cif, consumed) = HandshakeCif::parse(&pkt.cif)?;
-    let extensions = pkt.cif.get(consumed..).map_or_else(Vec::new, |rest| {
-        parse_extensions(rest).unwrap_or_default()
-    });
+    let extensions = pkt
+        .cif
+        .get(consumed..)
+        .map_or_else(Vec::new, |rest| parse_extensions(rest).unwrap_or_default());
     Ok((cif, extensions))
 }
 
@@ -253,8 +254,10 @@ impl CallerHandshake {
                     syn_cookie: cif.syn_cookie,
                     peer_ip: self.params.local_ip,
                 };
-                let extensions =
-                    hs_extensions_for_request(&self.params, self.params.encryption != EncryptionField::None);
+                let extensions = hs_extensions_for_request(
+                    &self.params,
+                    self.params.encryption != EncryptionField::None,
+                );
                 self.state = CallerState::AwaitConclusionResponse;
                 Ok(HandshakeOutcome::Send(build_handshake_packet(
                     cif.socket_id,
@@ -326,14 +329,24 @@ impl ListenerHandshake {
     /// # Errors
     /// [`ProtocolError::Malformed`] if `data` does not parse as a Handshake
     /// control packet, or arrives in the wrong state.
-    pub fn on_packet(&mut self, data: &[u8], timestamp: u32, now_unix_secs: u64) -> Result<HandshakeOutcome> {
+    pub fn on_packet(
+        &mut self,
+        data: &[u8],
+        timestamp: u32,
+        now_unix_secs: u64,
+    ) -> Result<HandshakeOutcome> {
         match self.state {
             ListenerState::AwaitInduction => {
                 let (cif, _ext) = parse_handshake_packet(data)?;
                 if cif.handshake_type != HandshakeType::Induction {
                     return Err(malformed("expected an INDUCTION request"));
                 }
-                let local_ip_bytes: Vec<u8> = self.params.local_ip.iter().flat_map(|w| w.to_be_bytes()).collect();
+                let local_ip_bytes: Vec<u8> = self
+                    .params
+                    .local_ip
+                    .iter()
+                    .flat_map(|w| w.to_be_bytes())
+                    .collect();
                 let cookie = cookie::compute(
                     &local_ip_bytes,
                     0,
@@ -439,9 +452,25 @@ pub struct RendezvousHandshake {
 
 impl RendezvousHandshake {
     #[must_use]
-    pub fn new(params: HandshakeParams, peer_ip: &[u8], peer_port: u16, local_port: u16, now_unix_secs: u64) -> Self {
-        let local_ip_bytes: Vec<u8> = params.local_ip.iter().flat_map(|w| w.to_be_bytes()).collect();
-        let local_cookie = cookie::compute(&local_ip_bytes, local_port, peer_ip, peer_port, now_unix_secs);
+    pub fn new(
+        params: HandshakeParams,
+        peer_ip: &[u8],
+        peer_port: u16,
+        local_port: u16,
+        now_unix_secs: u64,
+    ) -> Self {
+        let local_ip_bytes: Vec<u8> = params
+            .local_ip
+            .iter()
+            .flat_map(|w| w.to_be_bytes())
+            .collect();
+        let local_cookie = cookie::compute(
+            &local_ip_bytes,
+            local_port,
+            peer_ip,
+            peer_port,
+            now_unix_secs,
+        );
         Self {
             params,
             state: RendezvousState::Waving,
@@ -546,7 +575,14 @@ impl RendezvousHandshake {
                     peer_hsreq: find_hsreq_or_hsrsp(&ext),
                 };
                 Ok(HandshakeOutcome::SendAndConnected(
-                    build_handshake_packet(cif.socket_id, timestamp, 5, HandshakeType::Agreement, &agreement, &[]),
+                    build_handshake_packet(
+                        cif.socket_id,
+                        timestamp,
+                        5,
+                        HandshakeType::Agreement,
+                        &agreement,
+                        &[],
+                    ),
                     info,
                 ))
             }
@@ -596,5 +632,4 @@ impl RendezvousHandshake {
             RendezvousState::Done => Err(malformed("handshake already finished")),
         }
     }
-
 }

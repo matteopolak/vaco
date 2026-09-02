@@ -55,7 +55,10 @@ fn open_generic<S: Read + Write + Send + 'static>(
     Ok(Box::new(PeekSource::new(ReaderSource::new(stream))))
 }
 
-fn create_generic<S: Write + Send + 'static>(mut stream: S, path: &str) -> Result<Box<dyn MediaSink>> {
+fn create_generic<S: Write + Send + 'static>(
+    mut stream: S,
+    path: &str,
+) -> Result<Box<dyn MediaSink>> {
     send_selector(&mut stream, path)?;
     Ok(Box::new(WriterSink::new(stream)))
 }

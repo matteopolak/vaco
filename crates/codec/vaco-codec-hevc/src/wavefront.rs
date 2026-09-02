@@ -38,7 +38,10 @@
 //! `0af678e` landed the per-CTU-tile primitive `ReconPlane` needed the same
 //! way, one commit before `1ba192d` wired it in).
 
-#![allow(dead_code, reason = "landed ahead of the EdgeMarks/CuGrid/SaoParamsGrid wiring and the Stage 2 dispatch that will call it; see the module doc")]
+#![allow(
+    dead_code,
+    reason = "landed ahead of the EdgeMarks/CuGrid/SaoParamsGrid wiring and the Stage 2 dispatch that will call it; see the module doc"
+)]
 
 use std::sync::OnceLock;
 
@@ -58,7 +61,9 @@ impl<T> RowPublish<T> {
     /// `n_bands`, never grown or shrunk afterward.
     #[must_use]
     pub(crate) fn new(n: usize) -> Self {
-        Self { slots: (0..n).map(|_| OnceLock::new()).collect() }
+        Self {
+            slots: (0..n).map(|_| OnceLock::new()).collect(),
+        }
     }
 
     /// Row bands this board has slots for.
@@ -78,10 +83,9 @@ impl<T> RowPublish<T> {
     /// # Errors
     /// [`vaco_core::Error`] if `row` is out of range or already published.
     pub(crate) fn publish(&self, row: usize, value: T) -> Result<()> {
-        let slot = self
-            .slots
-            .get(row)
-            .ok_or(Error::InvalidData("vaco-codec-hevc: row publish index out of range"))?;
+        let slot = self.slots.get(row).ok_or(Error::InvalidData(
+            "vaco-codec-hevc: row publish index out of range",
+        ))?;
         slot.set(value)
             .map_err(|_dropped| Error::InvalidData("vaco-codec-hevc: row already published"))
     }
@@ -114,7 +118,12 @@ impl<T> RowPublish<T> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, reason = "test code over fixed scenarios")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test code over fixed scenarios"
+)]
 mod tests {
     use super::RowPublish;
 
@@ -131,7 +140,9 @@ mod tests {
     #[test]
     fn publish_then_get_round_trips_the_value() {
         let board = RowPublish::new(3);
-        board.publish(1, vec![1u8, 2, 3]).expect("first publish of row 1 succeeds");
+        board
+            .publish(1, vec![1u8, 2, 3])
+            .expect("first publish of row 1 succeeds");
         assert_eq!(board.get(0), None);
         assert_eq!(board.get(1), Some(&vec![1u8, 2, 3]));
         assert_eq!(board.get(2), None);
@@ -207,7 +218,9 @@ mod tests {
                         acc = acc.wrapping_add(i);
                     }
                     std::hint::black_box(acc);
-                    board.publish(row, row * row).unwrap_or_else(|e| unreachable!("row {row} publish failed: {e}"));
+                    board
+                        .publish(row, row * row)
+                        .unwrap_or_else(|e| unreachable!("row {row} publish failed: {e}"));
                 });
             }
             for _ in 0..4 {
@@ -217,7 +230,11 @@ mod tests {
                     while !seen.iter().all(|&s| s) {
                         for (row, seen_row) in seen.iter_mut().enumerate() {
                             if let Some(&v) = board.get(row) {
-                                assert_eq!(v, row * row, "row {row} published a torn or wrong value");
+                                assert_eq!(
+                                    v,
+                                    row * row,
+                                    "row {row} published a torn or wrong value"
+                                );
                                 *seen_row = true;
                             }
                         }
@@ -263,7 +280,9 @@ mod tests {
         assert_eq!(cloned.get(2), Some(&3));
         // And the clone is independent -- publishing into the original
         // after cloning must not appear in the clone.
-        board.publish(1, 2u32).expect("row 1 publishes after the clone was taken");
+        board
+            .publish(1, 2u32)
+            .expect("row 1 publishes after the clone was taken");
         assert_eq!(board.get(1), Some(&2));
         assert_eq!(cloned.get(1), None);
     }

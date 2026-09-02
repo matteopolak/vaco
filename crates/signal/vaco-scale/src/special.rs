@@ -174,7 +174,11 @@ pub(crate) fn pack_mono(gray: &Frame, dst: &mut Frame, polarity: MonoPolarity) -
 /// # Errors
 /// [`Error::InvalidData`] if `src` is not video or has no plane 0;
 /// [`Error::LimitExceeded`] if the `gray8` proxy exceeds `budget`.
-pub(crate) fn unpack_mono(src: &Frame, budget: &mut Budget, polarity: MonoPolarity) -> Result<Frame> {
+pub(crate) fn unpack_mono(
+    src: &Frame,
+    budget: &mut Budget,
+    polarity: MonoPolarity,
+) -> Result<Frame> {
     let FrameData::Video {
         width,
         height,

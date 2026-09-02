@@ -1060,11 +1060,16 @@ mod tests {
     /// hex-dumping the muxed file.
     #[test]
     fn vpcc_does_not_double_the_full_box_header() {
-        let real_payload: [u8; 12] = [0x01, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x82, 0x02, 0x02, 0x02, 0x00, 0x00];
+        let real_payload: [u8; 12] = [
+            0x01, 0x00, 0x00, 0x00, 0x00, 0x0a, 0x82, 0x02, 0x02, 0x02, 0x00, 0x00,
+        ];
         let bytes = vpcc(&real_payload);
         let b = only_box(&bytes);
         assert_eq!(b.kind(), FourCc::new(b"vpcC"));
-        assert_eq!(b.payload, &real_payload, "must not gain a second version+flags header");
+        assert_eq!(
+            b.payload, &real_payload,
+            "must not gain a second version+flags header"
+        );
     }
 
     #[test]

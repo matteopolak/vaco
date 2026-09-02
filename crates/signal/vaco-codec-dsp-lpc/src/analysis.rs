@@ -266,7 +266,10 @@ mod tests {
         let mut prev = ld.error(0);
         for order in 1..=ld.order_computed() {
             let e = ld.error(order);
-            assert!(e <= prev + 1e-9, "error increased at order {order}: {prev} -> {e}");
+            assert!(
+                e <= prev + 1e-9,
+                "error increased at order {order}: {prev} -> {e}"
+            );
             prev = e;
         }
     }

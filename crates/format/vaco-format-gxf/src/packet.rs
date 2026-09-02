@@ -111,7 +111,12 @@ pub fn read_header(io: &mut IoContext) -> Result<PacketHeader> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_io::{IoOptions, MemorySource};
@@ -128,7 +133,8 @@ mod tests {
     fn reads_a_map_header_matching_the_real_fixture() {
         // The exact 16 bytes at offset 0 of `ffmpeg_pal_mpeg2_pcm.gxf`.
         let bytes = header_bytes(PKT_MAP, 352);
-        let mut io = IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
+        let mut io =
+            IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
         let h = read_header(&mut io).unwrap();
         assert_eq!(h.packet_type, PKT_MAP);
         assert_eq!(h.length, 352);
@@ -139,7 +145,8 @@ mod tests {
     fn a_bad_leader_is_rejected() {
         let mut bytes = header_bytes(PKT_MEDIA, 16);
         bytes[4] = 0x02;
-        let mut io = IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
+        let mut io =
+            IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
         assert!(read_header(&mut io).is_err());
     }
 
@@ -147,21 +154,27 @@ mod tests {
     fn a_bad_trailer_is_rejected() {
         let mut bytes = header_bytes(PKT_EOS, 16);
         bytes[15] = 0x00;
-        let mut io = IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
+        let mut io =
+            IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
         assert!(read_header(&mut io).is_err());
     }
 
     #[test]
     fn a_length_shorter_than_the_header_is_rejected() {
         let bytes = header_bytes(PKT_EOS, 10);
-        let mut io = IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
+        let mut io =
+            IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
         assert!(matches!(read_header(&mut io), Err(Error::InvalidData(_))));
     }
 
     #[test]
     fn an_oversized_length_is_rejected_before_allocating() {
         let bytes = header_bytes(PKT_MEDIA, u32::MAX);
-        let mut io = IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
-        assert!(matches!(read_header(&mut io), Err(Error::LimitExceeded { .. })));
+        let mut io =
+            IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
+        assert!(matches!(
+            read_header(&mut io),
+            Err(Error::LimitExceeded { .. })
+        ));
     }
 }

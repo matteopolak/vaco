@@ -144,7 +144,11 @@ pub(crate) fn read_float(row: &[u8], x: usize, comp: Component, big_endian: bool
 pub(crate) fn write_float(row: &mut [u8], x: usize, comp: Component, big_endian: bool, value: f32) {
     let off = x.saturating_mul(comp.step as usize);
     let off = off.saturating_add(comp.offset as usize);
-    let bytes = if big_endian { value.to_be_bytes() } else { value.to_le_bytes() };
+    let bytes = if big_endian {
+        value.to_be_bytes()
+    } else {
+        value.to_le_bytes()
+    };
     for (i, b) in bytes.into_iter().enumerate() {
         if let Some(slot) = row.get_mut(off.saturating_add(i)) {
             *slot = b;
@@ -215,7 +219,13 @@ mod tests {
 
     #[test]
     fn eight_bit_round_trips() {
-        let comp = Component { plane: 0, step: 1, offset: 0, shift: 0, depth: 8 };
+        let comp = Component {
+            plane: 0,
+            step: 1,
+            offset: 0,
+            shift: 0,
+            depth: 8,
+        };
         let mut row = [0u8; 4];
         write(&mut row, 2, comp, false, 0xab);
         assert_eq!(read(&row, 2, comp, false), 0xab);
@@ -223,7 +233,13 @@ mod tests {
 
     #[test]
     fn ten_bit_le_masks_to_depth() {
-        let comp = Component { plane: 0, step: 2, offset: 0, shift: 0, depth: 10 };
+        let comp = Component {
+            plane: 0,
+            step: 2,
+            offset: 0,
+            shift: 0,
+            depth: 10,
+        };
         let mut row = [0u8; 4];
         write(&mut row, 0, comp, false, 0x3ff);
         assert_eq!(read(&row, 0, comp, false), 0x3ff);
@@ -233,7 +249,13 @@ mod tests {
 
     #[test]
     fn big_endian_round_trips() {
-        let comp = Component { plane: 0, step: 2, offset: 0, shift: 0, depth: 16 };
+        let comp = Component {
+            plane: 0,
+            step: 2,
+            offset: 0,
+            shift: 0,
+            depth: 16,
+        };
         let mut row = [0u8; 4];
         write(&mut row, 1, comp, true, 0x1234);
         assert_eq!(read(&row, 1, comp, true), 0x1234);
@@ -242,9 +264,21 @@ mod tests {
 
     #[test]
     fn max_value_saturates_at_sixteen_bits() {
-        let comp16 = Component { plane: 0, step: 2, offset: 0, shift: 0, depth: 16 };
+        let comp16 = Component {
+            plane: 0,
+            step: 2,
+            offset: 0,
+            shift: 0,
+            depth: 16,
+        };
         assert_eq!(max_value(comp16), u16::MAX);
-        let comp9 = Component { plane: 0, step: 2, offset: 0, shift: 0, depth: 9 };
+        let comp9 = Component {
+            plane: 0,
+            step: 2,
+            offset: 0,
+            shift: 0,
+            depth: 9,
+        };
         assert_eq!(max_value(comp9), 511);
     }
 
@@ -271,7 +305,13 @@ mod tests {
 
     #[test]
     fn float_round_trips_le_and_be() {
-        let comp = Component { plane: 0, step: 4, offset: 0, shift: 0, depth: 32 };
+        let comp = Component {
+            plane: 0,
+            step: 4,
+            offset: 0,
+            shift: 0,
+            depth: 32,
+        };
         let mut row = [0u8; 8];
         write_float(&mut row, 1, comp, false, -1.5);
         assert_eq!(read_float(&row, 1, comp, false), -1.5);
@@ -281,7 +321,13 @@ mod tests {
 
     #[test]
     fn float_read_past_the_row_is_zero_not_a_panic() {
-        let comp = Component { plane: 0, step: 4, offset: 0, shift: 0, depth: 32 };
+        let comp = Component {
+            plane: 0,
+            step: 4,
+            offset: 0,
+            shift: 0,
+            depth: 32,
+        };
         let row = [0u8; 2];
         assert_eq!(read_float(&row, 0, comp, false), 0.0);
     }

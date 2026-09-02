@@ -153,9 +153,12 @@ impl Screen {
                 .unwrap_or(self.rows.len());
             self.rows.insert(pos, Row::new(row));
         }
-        self.rows.iter_mut().find(|r| r.row == row).unwrap_or_else(|| {
-            unreachable!("row was just found present, or inserted immediately above")
-        })
+        self.rows
+            .iter_mut()
+            .find(|r| r.row == row)
+            .unwrap_or_else(|| {
+                unreachable!("row was just found present, or inserted immediately above")
+            })
     }
 
     /// Remove `row` entirely, if present.

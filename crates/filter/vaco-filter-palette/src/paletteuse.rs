@@ -46,10 +46,19 @@ use vaco_filter_graph::registry::{Instance, Instantiate};
 use crate::quantize::{Rgb, nearest_index};
 
 const VIDEO_PAD: &[vaco_filter_core::Pad] = &[
-    vaco_filter_core::Pad { name: "default", media_type: MediaType::Video },
-    vaco_filter_core::Pad { name: "palette", media_type: MediaType::Video },
+    vaco_filter_core::Pad {
+        name: "default",
+        media_type: MediaType::Video,
+    },
+    vaco_filter_core::Pad {
+        name: "palette",
+        media_type: MediaType::Video,
+    },
 ];
-const OUTPUT_PAD: &[vaco_filter_core::Pad] = &[vaco_filter_core::Pad { name: "default", media_type: MediaType::Video }];
+const OUTPUT_PAD: &[vaco_filter_core::Pad] = &[vaco_filter_core::Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "paletteuse",
@@ -60,7 +69,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "paletteuse", help = "Use a palette to downsample an input video stream.")]
+#[options(
+    name = "paletteuse",
+    help = "Use a palette to downsample an input video stream."
+)]
 pub(crate) struct Opts {
     #[opt(name = "dither", help = "select dithering mode", default = "sierra2_4a".to_owned(), flags(video, filtering))]
     pub dither: String,
@@ -68,7 +80,12 @@ pub(crate) struct Opts {
     pub bayer_scale: i64,
     #[opt(name = "diff_mode", help = "set frame difference mode", default = "0".to_owned(), flags(video, filtering))]
     pub diff_mode: String,
-    #[opt(name = "new", help = "take new palette for each output frame", default = false, flags(video, filtering))]
+    #[opt(
+        name = "new",
+        help = "take new palette for each output frame",
+        default = false,
+        flags(video, filtering)
+    )]
     pub new: bool,
     #[opt(name = "alpha_threshold", help = "set the alpha threshold for transparency", default = 128, range = 0..=255, flags(video, filtering))]
     pub alpha_threshold: i64,
@@ -100,7 +117,11 @@ pub(crate) struct Filter {
 
 impl Filter {
     pub(crate) fn new(opts: &Opts) -> Self {
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "range = 0..=255 is enforced by the option schema")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            reason = "range = 0..=255 is enforced by the option schema"
+        )]
         let alpha_threshold = opts.alpha_threshold as u8;
         Self {
             always_reparse: opts.new,
@@ -138,8 +159,13 @@ impl FrameSyncFilter for Filter {
     }
 
     fn configure(&mut self, ctx: &mut FilterContext<'_>) -> Result<()> {
-        if let (Some(LinkFormat::Video { width, height, .. }), Some(mut out)) = (ctx.input_link(0).cloned(), ctx.output_link(0).cloned())
-            && let LinkFormat::Video { width: ow, height: oh, .. } = &mut out
+        if let (Some(LinkFormat::Video { width, height, .. }), Some(mut out)) =
+            (ctx.input_link(0).cloned(), ctx.output_link(0).cloned())
+            && let LinkFormat::Video {
+                width: ow,
+                height: oh,
+                ..
+            } = &mut out
         {
             *ow = width;
             *oh = height;
@@ -148,7 +174,11 @@ impl FrameSyncFilter for Filter {
         Ok(())
     }
 
-    fn on_event(&mut self, ctx: &mut FilterContext<'_>, event: &mut FrameSyncEvent<'_>) -> Result<FrameOut> {
+    fn on_event(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        event: &mut FrameSyncEvent<'_>,
+    ) -> Result<FrameOut> {
         if (self.palette.is_none() || self.always_reparse)
             && let Some(palette_frame) = event.get(1)
         {
@@ -162,7 +192,13 @@ impl FrameSyncFilter for Filter {
         let Some(video) = event.get(0) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = video.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = video.data
+        else {
             return Ok(FrameOut::None);
         };
         let Some(palette) = self.palette.as_ref().filter(|p| !p.is_empty()) else {
@@ -175,10 +211,14 @@ impl FrameSyncFilter for Filter {
             return Ok(FrameOut::One(video.clone()));
         };
         for y in 0..src.rows() {
-            let (Some(src_row), Some(dst_row)) = (src.row(y), dst.row_mut(y)) else { continue };
+            let (Some(src_row), Some(dst_row)) = (src.row(y), dst.row_mut(y)) else {
+                continue;
+            };
             let mut dst_chunks = dst_row.chunks_exact_mut(4);
             for src_px in src_row.chunks_exact(4) {
-                let Some(dst_px) = dst_chunks.next() else { break };
+                let Some(dst_px) = dst_chunks.next() else {
+                    break;
+                };
                 let [sr, sg, sb, sa] = *src_px else { continue };
                 if sa < self.alpha_threshold {
                     if let [r, g, b, a] = dst_px {
@@ -189,7 +229,11 @@ impl FrameSyncFilter for Filter {
                     }
                     continue;
                 }
-                let color = Rgb { r: sr, g: sg, b: sb };
+                let color = Rgb {
+                    r: sr,
+                    g: sg,
+                    b: sb,
+                };
                 let idx = nearest_index(palette, color);
                 let mapped = palette.get(idx).copied().unwrap_or(color);
                 if let [r, g, b, a] = dst_px {
@@ -210,14 +254,36 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let opts = Opts::parse(req.args)?;
     if !matches!(
         opts.dither.as_str(),
-        "0" | "none" | "1" | "bayer" | "2" | "heckbert" | "3" | "floyd_steinberg" | "4" | "sierra2" | "5" | "sierra2_4a" | "6" | "sierra3" | "7" | "burkes" | "8" | "atkinson"
+        "0" | "none"
+            | "1"
+            | "bayer"
+            | "2"
+            | "heckbert"
+            | "3"
+            | "floyd_steinberg"
+            | "4"
+            | "sierra2"
+            | "5"
+            | "sierra2_4a"
+            | "6"
+            | "sierra3"
+            | "7"
+            | "burkes"
+            | "8"
+            | "atkinson"
     ) {
         return Err(format!("paletteuse: bad `dither` `{}`", opts.dither));
     }
     let filter = Filter::new(&opts);
     Ok(Instance {
         desc: DESC,
-        formats: NodeFormats::uniform(2, 1, MediaType::Video, &FormatSet::video_exact(PixFmt::Rgba), req.instance),
+        formats: NodeFormats::uniform(
+            2,
+            1,
+            MediaType::Video,
+            &FormatSet::video_exact(PixFmt::Rgba),
+            req.instance,
+        ),
         filter: Box::new(Synced::new(filter)),
     })
 }
@@ -254,18 +320,35 @@ mod tests {
         }
         let plane = f.plane(0).unwrap();
         let palette = Filter::parse_palette(&plane);
-        assert_eq!(palette, vec![Rgb { r: 10, g: 20, b: 30 }]);
+        assert_eq!(
+            palette,
+            vec![Rgb {
+                r: 10,
+                g: 20,
+                b: 30
+            }]
+        );
     }
 
     #[test]
     fn creatable_with_defaults() {
-        let req = Instantiate { name: "paletteuse", instance: "paletteuse", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "paletteuse",
+            instance: "paletteuse",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_ok());
     }
 
     #[test]
     fn bad_dither_is_a_clean_error() {
-        let req = Instantiate { name: "paletteuse", instance: "paletteuse", args: Some("dither=nonsense"), arguments: &[] };
+        let req = Instantiate {
+            name: "paletteuse",
+            instance: "paletteuse",
+            args: Some("dither=nonsense"),
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 

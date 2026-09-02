@@ -4,7 +4,14 @@
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
-const NAMES: &[&str] = &["sine", "anoisesrc", "aevalsrc", "afdelaysrc", "sinc", "hilbert"];
+const NAMES: &[&str] = &[
+    "sine",
+    "anoisesrc",
+    "aevalsrc",
+    "afdelaysrc",
+    "sinc",
+    "hilbert",
+];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]

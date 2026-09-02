@@ -210,11 +210,7 @@ fn lsf_scalefac_compress(sc: u16) -> ([u8; 4], [u8; 4], bool) {
         )
     } else {
         let x = sc.min(511) - 500;
-        (
-            [(x / 3) as u8, (x % 3) as u8, 0, 0],
-            [11, 10, 0, 0],
-            true,
-        )
+        ([(x / 3) as u8, (x % 3) as u8, 0, 0], [11, 10, 0, 0], true)
     }
 }
 
@@ -233,7 +229,10 @@ const fn scfsi_group(band: usize) -> usize {
 /// Decode one long-block (`block_type` 0, 1 or 3) granule's scalefactors and
 /// Huffman-coded spectral lines into 576 requantised `xr` values. Returns
 /// all zeros for `block_type == 2` — see the module doc's short-block gap.
-#[allow(clippy::too_many_arguments, reason = "one granule's worth of side-info-derived context")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one granule's worth of side-info-derived context"
+)]
 fn decode_granule(
     r: &mut BitReader<'_>,
     g: &mut GranuleInfo,
@@ -259,8 +258,14 @@ fn decode_granule(
         let mut band = 0usize;
         for (bits, &count) in slen.iter().zip(nr_of_sfb.iter()) {
             for _ in 0..count {
-                let Some(slot) = scalefac.get_mut(band) else { break };
-                *slot = if *bits == 0 { 0 } else { r.get(u32::from(*bits)) as u8 };
+                let Some(slot) = scalefac.get_mut(band) else {
+                    break;
+                };
+                *slot = if *bits == 0 {
+                    0
+                } else {
+                    r.get(u32::from(*bits)) as u8
+                };
                 band += 1;
             }
         }
@@ -274,7 +279,10 @@ fn decode_granule(
             *slot = if bits == 0 {
                 0
             } else if is_second_granule && scfsi.get(scfsi_group(band)).copied().unwrap_or(false) {
-                prev_scalefac.and_then(|p| p.get(band)).copied().unwrap_or(0)
+                prev_scalefac
+                    .and_then(|p| p.get(band))
+                    .copied()
+                    .unwrap_or(0)
             } else {
                 r.get(u32::from(bits)) as u8
             };
@@ -506,14 +514,16 @@ pub(crate) fn decode(
     let is_lsf = header.version.is_low_sample_rate();
     let channels = usize::from(header.channels());
     if synth.len() < channels || state.overlap.len() < channels {
-        return Err(Error::Unsupported("mpegaudio: missing per-channel decode state"));
+        return Err(Error::Unsupported(
+            "mpegaudio: missing per-channel decode state",
+        ));
     }
     let side_info_len = header
         .side_info_len()
         .ok_or(Error::InvalidData("mpegaudio: not a Layer III header"))?;
-    let side_bytes = body
-        .get(..side_info_len)
-        .ok_or(Error::InvalidData("mpegaudio: packet shorter than its side info"))?;
+    let side_bytes = body.get(..side_info_len).ok_or(Error::InvalidData(
+        "mpegaudio: packet shorter than its side info",
+    ))?;
     let this_frame_main_data = body.get(side_info_len..).unwrap_or(&[]);
 
     let mut side_reader = BitReader::new(side_bytes);
@@ -556,7 +566,9 @@ pub(crate) fn decode(
                 is_lsf,
                 granule_end_bit,
             );
-            if gr_idx == 0 && let Some(slot) = prev_scalefac.get_mut(ch) {
+            if gr_idx == 0
+                && let Some(slot) = prev_scalefac.get_mut(ch)
+            {
                 *slot = Some(scalefac);
             }
             xr_ch.push(xr);
@@ -764,7 +776,6 @@ mod imdct_tests {
     }
 }
 
-
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod frequency_placement_tests {
@@ -779,7 +790,10 @@ mod frequency_placement_tests {
     /// III's pipeline from side-info parsing and Huffman decoding — the
     /// two halves an end-to-end real-file comparison cannot tell apart.
     #[test]
-    #[allow(clippy::integer_division, reason = "test code: halving a sample count for a DFT window")]
+    #[allow(
+        clippy::integer_division,
+        reason = "test code: halving a sample count for a DFT window"
+    )]
     fn a_single_spectral_line_produces_its_own_frequency() {
         let sample_rate = 44100.0;
         let line = 144usize; // subband 8, k = 0

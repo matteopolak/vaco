@@ -76,7 +76,10 @@ fn every_noise_shaping_name_produces_a_distinct_nonempty_curve() {
     let mut seen: Vec<Vec<f64>> = Vec::new();
     for name in ALL_NS {
         let m = DitherMethod::from_name(name).unwrap();
-        assert!(m.is_noise_shaping(), "{name} should resolve to a noise-shaping method");
+        assert!(
+            m.is_noise_shaping(),
+            "{name} should resolve to a noise-shaping method"
+        );
         let c = m
             .noise_shape_coeffs()
             .unwrap_or_else(|| panic!("{name} has no coefficients"))
@@ -108,8 +111,14 @@ fn shibata_family_is_a_single_curve_scaled_by_strength() {
     assert_eq!(low.len(), mid.len());
     assert_eq!(high.len(), mid.len());
     for i in 0..mid.len() {
-        assert!((low[i] - 0.5 * mid[i]).abs() < 1e-9, "low_shibata is not 0.5x shibata at tap {i}");
-        assert!((high[i] - 1.5 * mid[i]).abs() < 1e-9, "high_shibata is not 1.5x shibata at tap {i}");
+        assert!(
+            (low[i] - 0.5 * mid[i]).abs() < 1e-9,
+            "low_shibata is not 0.5x shibata at tap {i}"
+        );
+        assert!(
+            (high[i] - 1.5 * mid[i]).abs() < 1e-9,
+            "high_shibata is not 1.5x shibata at tap {i}"
+        );
     }
 }
 
@@ -122,7 +131,10 @@ fn noise_shaping_dither_changes_the_output_versus_none() {
     for name in ALL_NS {
         let shaped = run_s16(&opts_with(name), &x);
         assert_eq!(shaped.len(), none.len());
-        assert_ne!(shaped, none, "{name} produced byte-identical output to dither_method=none");
+        assert_ne!(
+            shaped, none,
+            "{name} produced byte-identical output to dither_method=none"
+        );
     }
 }
 
@@ -134,7 +146,10 @@ fn noise_shaping_dither_differs_from_plain_tpdf() {
     let tpdf = run_s16(&opts_with("triangular"), &x);
     for name in ALL_NS {
         let shaped = run_s16(&opts_with(name), &x);
-        assert_ne!(shaped, tpdf, "{name} is byte-identical to plain triangular dither");
+        assert_ne!(
+            shaped, tpdf,
+            "{name} is byte-identical to plain triangular dither"
+        );
     }
 }
 
@@ -195,7 +210,8 @@ fn noise_shaping_is_chunk_invariant() {
         let mut written = 0usize;
         for chunk in bytes.chunks(8 * 37) {
             let src = AudioRef::packed(SampleFmt::F64, 1, chunk).unwrap();
-            let mut dst = AudioMut::packed(SampleFmt::S16, 1, &mut out_piece[written * 2..]).unwrap();
+            let mut dst =
+                AudioMut::packed(SampleFmt::S16, 1, &mut out_piece[written * 2..]).unwrap();
             written += piecewise.convert(Some(src), &mut dst).unwrap();
         }
         assert_eq!(
@@ -229,7 +245,10 @@ fn noise_shaping_reset_reproduces_a_fresh_stream() {
         let mut dst = AudioMut::packed(SampleFmt::S16, 1, &mut out2).unwrap();
         rs.convert(Some(src), &mut dst).unwrap();
     }
-    assert_eq!(out1, out2, "reset did not clear the noise-shaping error history");
+    assert_eq!(
+        out1, out2,
+        "reset did not clear the noise-shaping error history"
+    );
 }
 
 // ── the spectral measurement plan 17 §B.6 calls for ─────────────────────

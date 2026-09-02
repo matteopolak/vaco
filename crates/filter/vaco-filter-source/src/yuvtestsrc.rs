@@ -55,7 +55,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }

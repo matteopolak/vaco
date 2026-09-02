@@ -170,7 +170,10 @@ fn agraphmonitor_runs_end_to_end_from_a_real_audio_source() -> Result<()> {
     let out = graph.recv(sink)?;
     assert!(matches!(
         out.data,
-        vaco_frame::FrameData::Video { format: vaco_pixfmt::PixFmt::Gray8, .. }
+        vaco_frame::FrameData::Video {
+            format: vaco_pixfmt::PixFmt::Gray8,
+            ..
+        }
     ));
     Ok(())
 }

@@ -53,7 +53,9 @@ fn read_header(r: &mut Reader<'_>) -> Result<Header> {
         return Err(Error::Unsupported("xwd: only 24bpp ZPixmap is supported"));
     }
     if byte_order != 1 || bitmap_pad != 32 {
-        return Err(Error::Unsupported("xwd: only MSBFirst, 32-bit-padded rows are supported"));
+        return Err(Error::Unsupported(
+            "xwd: only MSBFirst, 32-bit-padded rows are supported",
+        ));
     }
     if width == 0 || height == 0 || width != window_width || height != window_height {
         return Err(Error::InvalidData("xwd: invalid dimensions"));
@@ -141,7 +143,9 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
         return Err(Error::Unsupported("xwd: encoder needs rgb24 input"));
     }
     let (width, height) = (*width, *height);
-    let plane = planes.first().ok_or(Error::InvalidData("xwd: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("xwd: no plane 0"))?;
     let bytes_per_line = ((width as usize) * 3).next_multiple_of(4);
     let data_offset = FIXED_HEADER_LEN + 1; // one NUL byte, no name text
 
@@ -152,10 +156,10 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
         24, // pixmap_depth
         width,
         height,
-        0, // xoffset
-        1, // byte_order: MSBFirst
+        0,  // xoffset
+        1,  // byte_order: MSBFirst
         32, // bitmap_unit
-        0, // bitmap_bit_order
+        0,  // bitmap_bit_order
         32, // bitmap_pad
         24, // bits_per_pixel
         bytes_per_line as u32,
@@ -233,6 +237,9 @@ mod tests {
         let mut header = [0u8; FIXED_HEADER_LEN];
         header[3 * 4..4 * 4].copy_from_slice(&8u32.to_be_bytes()); // pixmap_depth
         let mut budget = Budget::new(Limits::permissive());
-        assert!(matches!(decode(&header, &mut budget), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            decode(&header, &mut budget),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

@@ -45,7 +45,7 @@ use vaco_frame::{Frame, FrameFlags};
 use vaco_limits::{Budget, Limits};
 use vaco_pixfmt::PixFmt;
 
-use crate::decode::{MbInfo, ParsedMb, apply_intra, apply_inter, apply_loop_filter_task, blit};
+use crate::decode::{MbInfo, ParsedMb, apply_inter, apply_intra, apply_loop_filter_task, blit};
 use crate::framebuf::{Picture, Plane, RefFrames, materialize};
 
 /// This frame's three reference slots, already waited-for and copied into
@@ -120,9 +120,21 @@ impl FrameTask for Vp8FrameTask {
         let mut budget = Budget::new(limits);
 
         let materialized = MaterializedRefs {
-            last: refs.last.as_ref().map(|r| materialize(r, ctx.decode_index(), mb_cols, mb_rows, &mut budget)).transpose()?,
-            golden: refs.golden.as_ref().map(|r| materialize(r, ctx.decode_index(), mb_cols, mb_rows, &mut budget)).transpose()?,
-            altref: refs.altref.as_ref().map(|r| materialize(r, ctx.decode_index(), mb_cols, mb_rows, &mut budget)).transpose()?,
+            last: refs
+                .last
+                .as_ref()
+                .map(|r| materialize(r, ctx.decode_index(), mb_cols, mb_rows, &mut budget))
+                .transpose()?,
+            golden: refs
+                .golden
+                .as_ref()
+                .map(|r| materialize(r, ctx.decode_index(), mb_cols, mb_rows, &mut budget))
+                .transpose()?,
+            altref: refs
+                .altref
+                .as_ref()
+                .map(|r| materialize(r, ctx.decode_index(), mb_cols, mb_rows, &mut budget))
+                .transpose()?,
         };
 
         let mut y = Plane::new(&mut budget, mb_cols * 16, mb_rows * 16)?;
@@ -132,9 +144,20 @@ impl FrameTask for Vp8FrameTask {
         for row in 0..mb_rows {
             for col in 0..mb_cols {
                 match parsed.get(row * mb_cols + col) {
-                    Some(ParsedMb::Intra(p)) => apply_intra(&mut y, &mut u, &mut v, mb_cols, col, row, p),
+                    Some(ParsedMb::Intra(p)) => {
+                        apply_intra(&mut y, &mut u, &mut v, mb_cols, col, row, p)
+                    }
                     Some(ParsedMb::Inter(p)) => {
-                        apply_inter(&mut y, &mut u, &mut v, materialized.get(p.ref_frame), version, col, row, p);
+                        apply_inter(
+                            &mut y,
+                            &mut u,
+                            &mut v,
+                            materialized.get(p.ref_frame),
+                            version,
+                            col,
+                            row,
+                            p,
+                        );
                     }
                     None => {}
                 }
@@ -142,24 +165,57 @@ impl FrameTask for Vp8FrameTask {
             ctx.check_cancelled()?;
         }
 
-        apply_loop_filter_task(&mut y, &mut u, &mut v, mb_cols, mb_rows, &mbs, filter_level, sharpness_level, key_frame, filter_simple);
+        apply_loop_filter_task(
+            &mut y,
+            &mut u,
+            &mut v,
+            mb_cols,
+            mb_rows,
+            &mbs,
+            filter_level,
+            sharpness_level,
+            key_frame,
+            filter_simple,
+        );
 
         // Single band per plane (`PictureSpec::single_band`), so band 0 is
         // the whole plane and this is the one place these bytes are ever
         // copied for the picture's own consumers.
-        writer.band_mut(0, 0)?.data_mut().copy_from_slice(y.as_bytes());
-        writer.band_mut(1, 0)?.data_mut().copy_from_slice(u.as_bytes());
-        writer.band_mut(2, 0)?.data_mut().copy_from_slice(v.as_bytes());
+        writer
+            .band_mut(0, 0)?
+            .data_mut()
+            .copy_from_slice(y.as_bytes());
+        writer
+            .band_mut(1, 0)?
+            .data_mut()
+            .copy_from_slice(u.as_bytes());
+        writer
+            .band_mut(2, 0)?
+            .data_mut()
+            .copy_from_slice(v.as_bytes());
         writer.finish()?;
 
-        let fmt = PixFmt::from_name("yuv420p").map_err(|_| Error::InvalidData("vp8: yuv420p pixel format is not registered"))?;
+        let fmt = PixFmt::from_name("yuv420p")
+            .map_err(|_| Error::InvalidData("vp8: yuv420p pixel format is not registered"))?;
         let mut frame = Frame::alloc_video(&mut budget, fmt, u32::from(width), u32::from(height))?;
         if key_frame {
             frame.flags |= FrameFlags::KEY;
         }
         blit(&y, &mut frame, 0, usize::from(width), usize::from(height));
-        blit(&u, &mut frame, 1, usize::from(width).div_ceil(2), usize::from(height).div_ceil(2));
-        blit(&v, &mut frame, 2, usize::from(width).div_ceil(2), usize::from(height).div_ceil(2));
+        blit(
+            &u,
+            &mut frame,
+            1,
+            usize::from(width).div_ceil(2),
+            usize::from(height).div_ceil(2),
+        );
+        blit(
+            &v,
+            &mut frame,
+            2,
+            usize::from(width).div_ceil(2),
+            usize::from(height).div_ceil(2),
+        );
         Ok(frame)
     }
 }

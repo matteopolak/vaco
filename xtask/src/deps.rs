@@ -51,7 +51,11 @@ const BANNED: &[Banned] = &[
         // `vaco-protocol-http` is here for the same reason `ring` is below:
         // Cargo feature unification, not a second declaration. See `ring`'s
         // entry for the full explanation.
-        permitted_via: &["vaco-protocol-tls", "vaco-protocol-dtls", "vaco-protocol-http"],
+        permitted_via: &[
+            "vaco-protocol-tls",
+            "vaco-protocol-dtls",
+            "vaco-protocol-http",
+        ],
     },
     Banned {
         name: "cmake",
@@ -134,7 +138,10 @@ const BANNED: &[Banned] = &[
 /// character, divided by four. Every indentation unit (`"│   "`, `"    "`,
 /// `"├── "`, `"└── "`) is exactly four characters wide.
 fn line_depth_and_name(line: &str) -> Option<(usize, &str)> {
-    let prefix_chars = line.chars().take_while(|c| !c.is_ascii_alphanumeric()).count();
+    let prefix_chars = line
+        .chars()
+        .take_while(|c| !c.is_ascii_alphanumeric())
+        .count();
     let name_start = line
         .char_indices()
         .nth(prefix_chars)
@@ -218,7 +225,11 @@ pub fn run() -> Task {
         }
         let spec = format!("{name}@{}", version.trim_start_matches('v'));
         let inverted = capture(Command::new("cargo").current_dir(&root).args([
-            "tree", "-i", &spec, "-e", "normal,build",
+            "tree",
+            "-i",
+            &spec,
+            "-e",
+            "normal,build",
         ]))?;
         let bad: Vec<String> = reachers(&inverted)
             .into_iter()

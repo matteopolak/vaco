@@ -65,21 +65,31 @@ pub(crate) struct ShowInfo {
 
 impl ShowInfo {
     fn step(&mut self, mut frame: Frame) -> Frame {
-        let FrameData::Video { format, width, height, .. } = frame.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = frame.data
+        else {
             return frame;
         };
         let plane_count = frame.plane_count();
 
         let pts_ticks = frame.pts.ticks();
         let tb = frame.time_base;
-        #[allow(clippy::cast_precision_loss, reason = "tick counts here are frame-scale, far below 2^53")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "tick counts here are frame-scale, far below 2^53"
+        )]
         let seconds = |ticks: i64| -> String {
             if tb.den == 0 {
                 return "N/A".to_owned();
             }
             trimmed_time(ticks as f64 * f64::from(tb.num) / f64::from(tb.den))
         };
-        let pts_str = pts_ticks.map_or_else(|| "-9223372036854775808".to_owned(), |t| t.to_string());
+        let pts_str =
+            pts_ticks.map_or_else(|| "-9223372036854775808".to_owned(), |t| t.to_string());
         let pts_time = pts_ticks.map_or_else(|| "N/A".to_owned(), seconds);
         let duration_str = frame.duration.0.to_string();
         let duration_time = seconds(frame.duration.0);
@@ -99,14 +109,20 @@ impl ShowInfo {
         let mut means = Vec::new();
         let mut stdevs = Vec::new();
         for idx in 0..plane_count {
-            let Some(plane) = frame.plane(idx) else { continue };
+            let Some(plane) = frame.plane(idx) else {
+                continue;
+            };
             let mut bytes = Vec::new();
             for row in plane.rows_iter() {
                 bytes.extend_from_slice(row);
             }
             plane_checksums.push(format!("{:08X}", vaco_hash::adler32_seeded(&bytes, 0, 0)));
             let (mean, stdev) = mean_stdev(&bytes);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "mean of u8 samples fits comfortably in i64")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                clippy::cast_sign_loss,
+                reason = "mean of u8 samples fits comfortably in i64"
+            )]
             means.push(mean.round() as i64);
             stdevs.push(format!("{stdev:.1}"));
             checksum_bytes.extend_from_slice(&bytes);
@@ -125,7 +141,11 @@ impl ShowInfo {
             h = height,
             i = i_field,
             plane_checksums = plane_checksums.join(" "),
-            means = means.iter().map(i64::to_string).collect::<Vec<_>>().join(" "),
+            means = means
+                .iter()
+                .map(i64::to_string)
+                .collect::<Vec<_>>()
+                .join(" "),
             stdevs = stdevs.join(" "),
         );
         let color_line = format!(
@@ -151,13 +171,20 @@ fn mean_stdev(bytes: &[u8]) -> (f64, f64) {
     if bytes.is_empty() {
         return (0.0, 0.0);
     }
-    #[allow(clippy::cast_precision_loss, reason = "plane byte counts are far below 2^53")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "plane byte counts are far below 2^53"
+    )]
     let n = bytes.len() as f64;
     #[allow(clippy::cast_precision_loss, reason = "individual samples are 0..=255")]
     let sum: f64 = bytes.iter().map(|&b| f64::from(b)).sum();
     let mean = sum / n;
     #[allow(clippy::cast_precision_loss, reason = "individual samples are 0..=255")]
-    let variance: f64 = bytes.iter().map(|&b| (f64::from(b) - mean).powi(2)).sum::<f64>() / n;
+    let variance: f64 = bytes
+        .iter()
+        .map(|&b| (f64::from(b) - mean).powi(2))
+        .sum::<f64>()
+        / n;
     (mean, variance.sqrt())
 }
 
@@ -185,7 +212,9 @@ mod tests {
     use vaco_pixfmt::PixFmt;
 
     fn video_frame(w: u32, h: u32) -> Frame {
-        FramePool::default().acquire_video(PixFmt::Yuv420p, w, h).unwrap()
+        FramePool::default()
+            .acquire_video(PixFmt::Yuv420p, w, h)
+            .unwrap()
     }
 
     /// Measured: `ffmpeg 8.1`, `-f lavfi -i "color=c=red:s=4x2:d=1:r=1,

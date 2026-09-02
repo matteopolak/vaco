@@ -560,7 +560,10 @@ fn adts_header(frame_len: u16) -> [u8; 7] {
 fn one_pes_with_two_adts_frames_becomes_two_packets() {
     let mut w = TsWriter::new();
     w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
-    w.section(PMT_PID, &pmt(1, 0, 0x1FFF, &[(0x0F, AUDIO_PID, Vec::new())]));
+    w.section(
+        PMT_PID,
+        &pmt(1, 0, 0x1FFF, &[(0x0F, AUDIO_PID, Vec::new())]),
+    );
 
     let mut payload = Vec::new();
     payload.extend_from_slice(&adts_header(17));
@@ -612,7 +615,10 @@ fn one_pes_with_two_adts_frames_becomes_two_packets() {
 fn audio_duration_ts_includes_the_last_frames_own_length() {
     let mut w = TsWriter::new();
     w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
-    w.section(PMT_PID, &pmt(1, 0, 0x1FFF, &[(0x0F, AUDIO_PID, Vec::new())]));
+    w.section(
+        PMT_PID,
+        &pmt(1, 0, 0x1FFF, &[(0x0F, AUDIO_PID, Vec::new())]),
+    );
 
     let mut payload = Vec::new();
     payload.extend_from_slice(&adts_header(17));
@@ -680,16 +686,11 @@ fn every_packet_carries_its_pes_stream_id() {
 fn a_non_adts_aac_payload_is_not_split() {
     let mut w = TsWriter::new();
     w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
-    w.section(PMT_PID, &pmt(1, 0, 0x1FFF, &[(0x0F, AUDIO_PID, Vec::new())]));
-    w.pes(
-        AUDIO_PID,
-        0xC0,
-        Some(90_000),
-        None,
-        &[0u8; 32],
-        true,
-        true,
+    w.section(
+        PMT_PID,
+        &pmt(1, 0, 0x1FFF, &[(0x0F, AUDIO_PID, Vec::new())]),
     );
+    w.pes(AUDIO_PID, 0xC0, Some(90_000), None, &[0u8; 32], true, true);
     let mut d = open(w.out);
     let packets = drain(&mut d);
     assert_eq!(packets.len(), 1);

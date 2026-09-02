@@ -150,7 +150,11 @@ impl Edge {
                 // periodic reflection at all (checked, not just
                 // unconfirmed), so a second bounce is clamped rather
                 // than guessed at.
-                let reflected = if coord < 0 { -coord } else { 2 * len - 1 - coord };
+                let reflected = if coord < 0 {
+                    -coord
+                } else {
+                    2 * len - 1 - coord
+                };
                 Some(reflected.clamp(0, len - 1))
             }
         }
@@ -199,7 +203,13 @@ impl PairedFilter for Filter {
         let (Some(source), Some(xmap), Some(ymap)) = (source, xmap, ymap) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = source.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = source.data
+        else {
             return Ok(FrameOut::One(source));
         };
         if common::ensure_8bit_addressable(format).is_err() {
@@ -219,12 +229,18 @@ impl PairedFilter for Filter {
         // the module doc).
         for plane in 1..format.plane_count() {
             let ph = common::to_i32(format.plane_height(height, plane as u8)).max(0);
-            let Some(src) = source.plane(plane) else { continue };
-            let Some(mut dst) = out.plane_mut(plane) else { continue };
+            let Some(src) = source.plane(plane) else {
+                continue;
+            };
+            let Some(mut dst) = out.plane_mut(plane) else {
+                continue;
+            };
             for y in 0..ph {
                 let Ok(uy) = usize::try_from(y) else { continue };
                 let Some(src_row) = src.row(uy) else { continue };
-                let Some(dst_row) = dst.row_mut(uy) else { continue };
+                let Some(dst_row) = dst.row_mut(uy) else {
+                    continue;
+                };
                 let n = src_row.len().min(dst_row.len());
                 if let (Some(d), Some(s)) = (dst_row.get_mut(..n), src_row.get(..n)) {
                     d.copy_from_slice(s);
@@ -238,9 +254,15 @@ impl PairedFilter for Filter {
         };
         for y in 0..h {
             let Ok(uy) = usize::try_from(y) else { continue };
-            let Some(xrow) = xmap_plane.row(uy) else { continue };
-            let Some(yrow) = ymap_plane.row(uy) else { continue };
-            let Some(dst_row) = dst0.row_mut(uy) else { continue };
+            let Some(xrow) = xmap_plane.row(uy) else {
+                continue;
+            };
+            let Some(yrow) = ymap_plane.row(uy) else {
+                continue;
+            };
+            let Some(dst_row) = dst0.row_mut(uy) else {
+                continue;
+            };
             for x in 0..w {
                 let Ok(ux) = usize::try_from(x) else { continue };
                 let (Some(&xv), Some(&yv)) = (xrow.get(ux), yrow.get(ux)) else {
@@ -272,8 +294,8 @@ impl PairedFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
-    let edge =
-        Edge::from_name(&opts.edge).ok_or_else(|| format!("displace: bad `edge` `{}`", opts.edge))?;
+    let edge = Edge::from_name(&opts.edge)
+        .ok_or_else(|| format!("displace: bad `edge` `{}`", opts.edge))?;
     let filter = Filter { edge };
     Ok(Instance {
         desc: DESC,

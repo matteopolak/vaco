@@ -170,7 +170,13 @@ impl PairedFilter for Filter {
         let (Some(source), Some(xmap), Some(ymap)) = (source, xmap, ymap) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = source.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = source.data
+        else {
             return Ok(FrameOut::One(source));
         };
         if common::ensure_8bit_addressable(format).is_err() {
@@ -193,9 +199,15 @@ impl PairedFilter for Filter {
         let h = u16::try_from(height).unwrap_or(u16::MAX);
         for y in 0..height {
             let uy = y as usize;
-            let Some(xrow) = xmap_plane.row(uy) else { continue };
-            let Some(yrow) = ymap_plane.row(uy) else { continue };
-            let Some(dst_row) = dst0.row_mut(uy) else { continue };
+            let Some(xrow) = xmap_plane.row(uy) else {
+                continue;
+            };
+            let Some(yrow) = ymap_plane.row(uy) else {
+                continue;
+            };
+            let Some(dst_row) = dst0.row_mut(uy) else {
+                continue;
+            };
             for x in 0..width {
                 let ux = x as usize;
                 let (Some(sx), Some(sy)) = (read_u16le(xrow, ux), read_u16le(yrow, ux)) else {
@@ -226,8 +238,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let opts = Opts::parse(req.args)?;
     if opts.format != "gray" {
         return Err(
-            "remap: `format=color` (the default) is not implemented; pass `format=gray`"
-                .to_owned(),
+            "remap: `format=color` (the default) is not implemented; pass `format=gray`".to_owned(),
         );
     }
     let rgba = vaco_core::parse::color(&opts.fill)

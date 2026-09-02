@@ -228,7 +228,9 @@ impl SwfDemuxer {
         match th.code {
             TAG_DEFINE_VIDEO_STREAM => self.on_define_video_stream(&payload)?,
             TAG_VIDEO_FRAME => self.on_video_frame(&payload)?,
-            TAG_SOUND_STREAM_HEAD | TAG_SOUND_STREAM_HEAD2 => self.on_sound_stream_head(&payload)?,
+            TAG_SOUND_STREAM_HEAD | TAG_SOUND_STREAM_HEAD2 => {
+                self.on_sound_stream_head(&payload)?
+            }
             TAG_SOUND_STREAM_BLOCK => self.on_sound_stream_block(&payload)?,
             _ => {}
         }
@@ -247,16 +249,28 @@ impl SwfDemuxer {
             return Ok(());
         }
         let character_id = u16::from_le_bytes(
-            payload.get(0..2).and_then(|s| s.try_into().ok()).ok_or(Error::UnexpectedEof)?,
+            payload
+                .get(0..2)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::UnexpectedEof)?,
         );
         let num_frames = u16::from_le_bytes(
-            payload.get(2..4).and_then(|s| s.try_into().ok()).ok_or(Error::UnexpectedEof)?,
+            payload
+                .get(2..4)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::UnexpectedEof)?,
         );
         let width = u16::from_le_bytes(
-            payload.get(4..6).and_then(|s| s.try_into().ok()).ok_or(Error::UnexpectedEof)?,
+            payload
+                .get(4..6)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::UnexpectedEof)?,
         );
         let height = u16::from_le_bytes(
-            payload.get(6..8).and_then(|s| s.try_into().ok()).ok_or(Error::UnexpectedEof)?,
+            payload
+                .get(6..8)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::UnexpectedEof)?,
         );
         let codec_byte = *payload.get(9).ok_or(Error::UnexpectedEof)?;
         let codec = video_codec_from_swf(codec_byte);
@@ -293,13 +307,19 @@ impl SwfDemuxer {
             return Ok(());
         };
         let stream_id = u16::from_le_bytes(
-            payload.get(0..2).and_then(|s| s.try_into().ok()).ok_or(Error::UnexpectedEof)?,
+            payload
+                .get(0..2)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::UnexpectedEof)?,
         );
         if stream_id != video.character_id {
             return Ok(());
         }
         let frame_num = u16::from_le_bytes(
-            payload.get(2..4).and_then(|s| s.try_into().ok()).ok_or(Error::UnexpectedEof)?,
+            payload
+                .get(2..4)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::UnexpectedEof)?,
         );
         if video.codec.is_none() {
             return Err(Error::Unsupported("swf: unrecognised video codec"));
@@ -368,7 +388,10 @@ impl SwfDemuxer {
             return Ok(());
         };
         let sample_count = u16::from_le_bytes(
-            payload.get(0..2).and_then(|s| s.try_into().ok()).ok_or(Error::UnexpectedEof)?,
+            payload
+                .get(0..2)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::UnexpectedEof)?,
         );
         // Only MP3 carries the 2-byte `SeekSamples` field after the sample
         // count (measured: this is what `ffmpeg -c:a mp3` writes); PCM's

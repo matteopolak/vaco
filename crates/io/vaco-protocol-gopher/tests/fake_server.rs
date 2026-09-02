@@ -50,7 +50,9 @@ fn reads_a_binary_resource() {
     let cancel = CancelToken::new();
     let e = env(&registry, &cancel);
     let url = format!("gopher://127.0.0.1:{}/9/some/selector", addr.port());
-    let mut source = registry.open(&url, IoFlags::READ, &Dict::new(), &e).unwrap();
+    let mut source = registry
+        .open(&url, IoFlags::READ, &Dict::new(), &e)
+        .unwrap();
 
     let mut got = Vec::new();
     let mut buf = [0u8; 6];
@@ -83,7 +85,10 @@ fn an_unsupported_type_is_refused() {
         .open(&url, IoFlags::READ, &Dict::new(), &e)
         .err()
         .unwrap();
-    assert!(!matches!(err, vaco_protocol_core::ProtocolError::Denied { .. }));
+    assert!(!matches!(
+        err,
+        vaco_protocol_core::ProtocolError::Denied { .. }
+    ));
     handle.join().unwrap();
 }
 
@@ -106,7 +111,9 @@ fn writes_the_selector_then_raw_bytes() {
         // The block scope's end drops `sink`, closing the connection —
         // that close is what signals EOF to `read_to_end` on the thread
         // above.
-        let mut sink = registry.create(&url, IoFlags::WRITE, &Dict::new(), &e).unwrap();
+        let mut sink = registry
+            .create(&url, IoFlags::WRITE, &Dict::new(), &e)
+            .unwrap();
         sink.write(b"hello output data").unwrap();
         sink.flush().unwrap();
     }

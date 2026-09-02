@@ -166,7 +166,12 @@ fn excerpt(ours: &[u8], theirs: &[u8], at: usize) -> String {
     let start = at.saturating_sub(WINDOW);
     let hex = |buf: &[u8], from: usize| -> String {
         buf.get(from..(from + WINDOW * 2).min(buf.len()))
-            .map(|w| w.iter().map(|b| format!("{b:02x}")).collect::<Vec<_>>().join(" "))
+            .map(|w| {
+                w.iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
             .unwrap_or_default()
     };
     format!(

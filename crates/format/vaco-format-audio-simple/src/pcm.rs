@@ -441,9 +441,8 @@ impl RawPcmDemuxer {
                 .saturating_mul(1_000_000)
                 .checked_div(rate)
                 .unwrap_or(0);
-            pkt.duration = vaco_core::Duration::from_micros(
-                i64::try_from(micros).unwrap_or(i64::MAX),
-            );
+            pkt.duration =
+                vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX));
         }
         self.frames_emitted = self.frames_emitted.saturating_add(whole_frames.max(1));
         Ok(pkt)

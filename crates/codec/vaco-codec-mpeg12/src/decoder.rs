@@ -38,7 +38,9 @@ use vaco_parse_mpegvideo::a53::cc_data_after_identifier;
 use vaco_pixfmt::PixFmt;
 
 use crate::block::Mpeg2Idct;
-use crate::headers::{self, PictureCodingExtension, PictureHeader, SequenceExtension, SequenceHeader};
+use crate::headers::{
+    self, PictureCodingExtension, PictureHeader, SequenceExtension, SequenceHeader,
+};
 use crate::macroblock::{self, ActivePicture, ChromaFormat};
 use crate::motion::MotionPredictor;
 use crate::picture::RefPicture;
@@ -127,7 +129,9 @@ impl Mpeg12Decoder {
         closed_captions: Vec<u8>,
     ) -> Result<()> {
         let Some(seq) = self.seq.clone() else {
-            return Err(Error::InvalidData("mpeg12: picture before any sequence_header"));
+            return Err(Error::InvalidData(
+                "mpeg12: picture before any sequence_header",
+            ));
         };
         let width = seq.header.width.max(1);
         let height = seq.header.height.max(1);
@@ -159,8 +163,12 @@ impl Mpeg12Decoder {
         // `progressive_sequence` is `false`, the wrong value for a `None`
         // extension specifically).
         let progressive_sequence = seq.ext.is_none_or(|ext| ext.progressive_sequence);
-        let extra_fields =
-            pulldown_extra_fields(progressive_sequence, pce.progressive_frame, pce.repeat_first_field, pce.top_field_first);
+        let extra_fields = pulldown_extra_fields(
+            progressive_sequence,
+            pce.progressive_frame,
+            pce.repeat_first_field,
+            pce.top_field_first,
+        );
         frame.set_repeat_pict(extra_fields);
 
         let supported = pce.is_frame_picture() && hdr.coding_type != headers::PictureType::D;
@@ -219,7 +227,12 @@ impl Mpeg12Decoder {
         }
     }
 
-    fn decode_access_unit(&mut self, data: &[u8], pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
+    fn decode_access_unit(
+        &mut self,
+        data: &[u8],
+        pts: vaco_core::Timestamp,
+        duration: vaco_core::Duration,
+    ) -> Result<()> {
         let mut pos = 0usize;
         let mut pending_picture: Option<(PictureHeader, Option<PictureCodingExtension>)> = None;
         // ATSC A/53 closed captions (interface gap 18's attachment half —
@@ -299,9 +312,18 @@ impl Mpeg12Decoder {
                     let slice_data = data.get(body_start..next).unwrap_or(&[]);
                     if let Some((hdr, pce_opt)) = pending_picture.take() {
                         let pce = pce_opt.unwrap_or_else(|| {
-                            PictureCodingExtension::mpeg1_default(hdr.forward_f_code, hdr.backward_f_code)
+                            PictureCodingExtension::mpeg1_default(
+                                hdr.forward_f_code,
+                                hdr.backward_f_code,
+                            )
                         });
-                        self.begin_picture(hdr, pce, pts, duration, std::mem::take(&mut pending_cc))?;
+                        self.begin_picture(
+                            hdr,
+                            pce,
+                            pts,
+                            duration,
+                            std::mem::take(&mut pending_cc),
+                        )?;
                     }
                     let seq = self.seq.clone();
                     if let (Some(ap), Some(seq)) = (self.current.as_mut(), seq) {
@@ -376,12 +398,14 @@ fn new_idct() -> Mpeg2Idct {
     // this decoder can trigger.
     match vaco_codec_dsp_idct::mpeg2::idct8x8_f32() {
         Ok(idct) => idct,
-        Err(_) => {
+        Err(_) =>
+        {
             #[allow(
                 clippy::expect_used,
                 reason = "genuinely unreachable: a length-8 DCT-III plan cannot fail to build"
             )]
-            vaco_codec_dsp_idct::mpeg2::idct8x8_f32().expect("length-8 IDCT construction cannot fail")
+            vaco_codec_dsp_idct::mpeg2::idct8x8_f32()
+                .expect("length-8 IDCT construction cannot fail")
         }
     }
 }
@@ -432,7 +456,12 @@ impl Decoder for Mpeg12Decoder {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -499,8 +528,14 @@ mod tests {
             ..PictureCodingExtension::mpeg1_default(0, 0)
         };
         assert!(
-            dec.begin_picture(hdr, pce, vaco_core::Timestamp::default(), vaco_core::Duration::default(), Vec::new())
-                .is_ok()
+            dec.begin_picture(
+                hdr,
+                pce,
+                vaco_core::Timestamp::default(),
+                vaco_core::Duration::default(),
+                Vec::new()
+            )
+            .is_ok()
         );
         let ap = dec.current.as_ref();
         assert!(ap.is_some(), "begin_picture did not populate current");
@@ -536,8 +571,14 @@ mod tests {
             ..PictureCodingExtension::mpeg1_default(0, 0)
         };
         assert!(
-            dec.begin_picture(hdr, pce, vaco_core::Timestamp::default(), vaco_core::Duration::default(), Vec::new())
-                .is_ok()
+            dec.begin_picture(
+                hdr,
+                pce,
+                vaco_core::Timestamp::default(),
+                vaco_core::Duration::default(),
+                Vec::new()
+            )
+            .is_ok()
         );
         let ap = dec.current.as_ref();
         assert!(ap.is_some(), "begin_picture did not populate current");
@@ -556,7 +597,11 @@ mod tests {
 
     impl BitPacker {
         fn new() -> Self {
-            Self { buf: Vec::new(), cur: 0, nbits: 0 }
+            Self {
+                buf: Vec::new(),
+                cur: 0,
+                nbits: 0,
+            }
         }
 
         fn push(&mut self, value: u32, width: u32) {
@@ -654,7 +699,8 @@ mod tests {
     #[test]
     fn flush_resets_reference_state() {
         let mut dec = Mpeg12Decoder::new(Limits::strict());
-        let Ok(frame) = Frame::alloc_video(&mut Budget::new(Limits::strict()), PixFmt::Yuv420p, 16, 16)
+        let Ok(frame) =
+            Frame::alloc_video(&mut Budget::new(Limits::strict()), PixFmt::Yuv420p, 16, 16)
         else {
             return;
         };

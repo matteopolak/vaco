@@ -125,7 +125,9 @@ impl KmMessage {
     /// `SLen`/message length would run past the end of `data`.
     pub fn parse(data: &[u8]) -> Result<Self> {
         if data.len() < FIXED_LEN {
-            return Err(malformed("KM message shorter than the 16-byte fixed header"));
+            return Err(malformed(
+                "KM message shorter than the 16-byte fixed header",
+            ));
         }
         let w0 = be32(data, 0)?;
         // Masked to 3 bits (0..=7), always in u8 range.

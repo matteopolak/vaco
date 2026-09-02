@@ -179,7 +179,8 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
         let base_offset = read_sized(&mut r, base_offset_size);
         let extent_count = r.be16();
         let mut extents = Vec::new();
-        for _ in 0..u32::from(extent_count).min(u32::try_from(MAX_EXTENTS_PER_ITEM).unwrap_or(u32::MAX))
+        for _ in
+            0..u32::from(extent_count).min(u32::try_from(MAX_EXTENTS_PER_ITEM).unwrap_or(u32::MAX))
         {
             if (full.version == 1 || full.version == 2) && index_size > 0 {
                 let _extent_index = read_sized(&mut r, index_size);

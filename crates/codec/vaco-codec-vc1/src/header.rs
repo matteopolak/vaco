@@ -30,8 +30,14 @@ use crate::tables::PQINDEX_TO_PQUANT;
 /// Table 263 (`STRUCT_C`) plus this crate's own width/height convention —
 /// see the module doc.
 #[derive(Debug, Clone, Copy)]
-#[allow(dead_code, reason = "profile_main/dquant are recorded from the bitstream for completeness and future P/B-picture work; this crate's constant-MQUANT, no-VOPDQUANT I-frame decode path does not consume them yet")]
-#[allow(clippy::struct_excessive_bools, reason = "each field is an independent flag decoded straight off STRUCT_C (Table 263); grouping them into an enum would not remove any state, just rename it")]
+#[allow(
+    dead_code,
+    reason = "profile_main/dquant are recorded from the bitstream for completeness and future P/B-picture work; this crate's constant-MQUANT, no-VOPDQUANT I-frame decode path does not consume them yet"
+)]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "each field is an independent flag decoded straight off STRUCT_C (Table 263); grouping them into an enum would not remove any state, just rename it"
+)]
 pub(crate) struct SequenceInfo {
     pub(crate) profile_main: bool,
     pub(crate) loopfilter: bool,
@@ -47,10 +53,12 @@ pub(crate) struct SequenceInfo {
 /// Advanced profile (`PROFILE == 12`) outright — its sequence/entry-point
 /// layer is a real in-band bitstream this crate does not parse at all.
 pub(crate) fn parse_extradata(data: &[u8]) -> Result<SequenceInfo> {
-    let bytes: &[u8; 12] = data
-        .get(..12)
-        .and_then(|s| s.try_into().ok())
-        .ok_or(Error::InvalidData("vc1: extradata must be at least 12 bytes (STRUCT_C + VERT_SIZE + HORIZ_SIZE)"))?;
+    let bytes: &[u8; 12] =
+        data.get(..12)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(Error::InvalidData(
+                "vc1: extradata must be at least 12 bytes (STRUCT_C + VERT_SIZE + HORIZ_SIZE)",
+            ))?;
     let struct_c = u32::from_be_bytes([
         *bytes.first().unwrap_or(&0),
         *bytes.get(1).unwrap_or(&0),
@@ -95,11 +103,17 @@ pub(crate) fn parse_extradata(data: &[u8]) -> Result<SequenceInfo> {
     let profile_main = match profile {
         4 => true,
         0 => false,
-        _ => return Err(Error::Unsupported("vc1: only Simple/Main profile extradata is supported")),
+        _ => {
+            return Err(Error::Unsupported(
+                "vc1: only Simple/Main profile extradata is supported",
+            ));
+        }
     };
 
     if vert == 0 || horiz == 0 || vert > 8192 || horiz > 8192 {
-        return Err(Error::InvalidData("vc1: implausible VERT_SIZE/HORIZ_SIZE in extradata"));
+        return Err(Error::InvalidData(
+            "vc1: implausible VERT_SIZE/HORIZ_SIZE in extradata",
+        ));
     }
 
     Ok(SequenceInfo {
@@ -129,7 +143,10 @@ pub(crate) struct PictureHeader {
 /// Decode the `0b`/`10b`/`11b` variable-length index used by `PTYPE`
 /// (`MAXBFRAMES == 0` case handled by the caller) and `TRANSACFRM`/
 /// `TRANSACFRM2` (Table 39).
-#[allow(clippy::same_functions_in_if_condition, reason = "each get_bit() call reads a distinct, sequential bit of the codeword -- not a repeated check of the same condition")]
+#[allow(
+    clippy::same_functions_in_if_condition,
+    reason = "each get_bit() call reads a distinct, sequential bit of the codeword -- not a repeated check of the same condition"
+)]
 fn vlc_012(r: &mut BitReader<'_>) -> u32 {
     if r.get_bit() == 0 {
         0
@@ -151,7 +168,10 @@ fn vlc_012(r: &mut BitReader<'_>) -> u32 {
 /// than re-deriving them from `seq`) because [`SequenceInfo`] does not
 /// carry them at all: this crate's own extradata convention (see module
 /// doc) only forwards the fields this crate's decode path actually reads.
-pub(crate) fn parse_i_picture_header(r: &mut BitReader<'_>, seq: &SequenceInfo) -> Result<PictureHeader> {
+pub(crate) fn parse_i_picture_header(
+    r: &mut BitReader<'_>,
+    seq: &SequenceInfo,
+) -> Result<PictureHeader> {
     let _frmcnt = r.get(2);
     let ptype = r.get_bit();
     if ptype != 0 {
@@ -162,7 +182,11 @@ pub(crate) fn parse_i_picture_header(r: &mut BitReader<'_>, seq: &SequenceInfo) 
     let Some(&(pquant_implicit, uniform_implicit)) = PQINDEX_TO_PQUANT.get(pqindex as usize) else {
         return Err(Error::InvalidData("vc1: PQINDEX out of range"));
     };
-    let halfqp = if pqindex <= 8 { r.get_bit() != 0 } else { false };
+    let halfqp = if pqindex <= 8 {
+        r.get_bit() != 0
+    } else {
+        false
+    };
     let (mut pquant, mut uniform_quantizer) = (u32::from(pquant_implicit), uniform_implicit);
     if seq.quantizer == 0b01 {
         let pquantizer = r.get_bit();
@@ -180,7 +204,9 @@ pub(crate) fn parse_i_picture_header(r: &mut BitReader<'_>, seq: &SequenceInfo) 
     if seq.multires {
         let respic = r.get(2);
         if respic != 0 {
-            return Err(Error::Unsupported("vc1: RESPIC != 0 (down-sampled I frame) not implemented"));
+            return Err(Error::Unsupported(
+                "vc1: RESPIC != 0 (down-sampled I frame) not implemented",
+            ));
         }
     }
     let transacfrm = vlc_012(r);
@@ -199,7 +225,10 @@ pub(crate) fn parse_i_picture_header(r: &mut BitReader<'_>, seq: &SequenceInfo) 
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, reason = "a test that cannot set up is a failed test")]
+#[allow(
+    clippy::expect_used,
+    reason = "a test that cannot set up is a failed test"
+)]
 mod tests {
     use super::*;
 

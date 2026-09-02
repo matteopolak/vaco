@@ -43,7 +43,10 @@ pub(crate) enum Duration {
 }
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "interleave", help = "temporally interleave frames from several inputs")]
+#[options(
+    name = "interleave",
+    help = "temporally interleave frames from several inputs"
+)]
 pub(crate) struct Opts {
     #[opt(name = "nb_inputs", alias = "n", help = "number of inputs", default = 2, range = 1..=i32::MAX, flags(filtering))]
     pub nb_inputs: i32,
@@ -117,10 +120,12 @@ impl FilterTrait for Filter {
                 ctx.request_input(p);
                 return Ok(Activity::NeedInput);
             };
-            let tb = ctx.input_link(p).map_or(vaco_core::Rational::UNDEFINED, |l| match l {
-                vaco_filter_core::LinkFormat::Video { time_base, .. }
-                | vaco_filter_core::LinkFormat::Audio { time_base, .. } => *time_base,
-            });
+            let tb = ctx
+                .input_link(p)
+                .map_or(vaco_core::Rational::UNDEFINED, |l| match l {
+                    vaco_filter_core::LinkFormat::Video { time_base, .. }
+                    | vaco_filter_core::LinkFormat::Audio { time_base, .. } => *time_base,
+                });
             let t = frame.pts.to_seconds(tb).unwrap_or(f64::INFINITY);
             if best.is_none_or(|(_, bt)| t < bt) {
                 best = Some((p, t));
@@ -239,10 +244,22 @@ mod tests {
         };
         let instance = video::create(&req).unwrap();
         let mut graph = Graph::new();
-        let a = graph.add_source("a", MediaType::Video, video_source_formats("a", vaco_pixfmt::PixFmt::Gray8));
-        let b = graph.add_source("b", MediaType::Video, video_source_formats("b", vaco_pixfmt::PixFmt::Gray8));
+        let a = graph.add_source(
+            "a",
+            MediaType::Video,
+            video_source_formats("a", vaco_pixfmt::PixFmt::Gray8),
+        );
+        let b = graph.add_source(
+            "b",
+            MediaType::Video,
+            video_source_formats("b", vaco_pixfmt::PixFmt::Gray8),
+        );
         let node = graph.add(instance.desc, instance.formats, instance.filter);
-        let sink = graph.add_sink("out", MediaType::Video, vaco_filter_core::mock::any_video_sink("out"));
+        let sink = graph.add_sink(
+            "out",
+            MediaType::Video,
+            vaco_filter_core::mock::any_video_sink("out"),
+        );
         graph.connect(a, 0, node, 0).unwrap();
         graph.connect(b, 0, node, 1).unwrap();
         graph.connect(node, 0, sink, 0).unwrap();

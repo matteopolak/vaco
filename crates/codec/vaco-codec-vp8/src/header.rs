@@ -93,7 +93,10 @@ impl Default for EntropyContext {
 /// The fully parsed compressed frame header (everything through the
 /// mode-probability and MV-probability updates, i.e. all of RFC 6386 §9
 /// except the macroblock-by-macroblock records that follow it).
-#[allow(clippy::struct_excessive_bools, reason = "RFC 6386 §9's frame header genuinely has this many independent flags")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "RFC 6386 §9's frame header genuinely has this many independent flags"
+)]
 #[derive(Debug, Clone)]
 pub struct FrameHeader {
     pub key_frame: bool,
@@ -275,21 +278,20 @@ pub fn parse(
         refresh_last,
     ) = if key_frame {
         let refresh_entropy_probs = bd.read_flag();
-        (
-            true,
-            true,
-            0,
-            0,
-            false,
-            false,
-            refresh_entropy_probs,
-            true,
-        )
+        (true, true, 0, 0, false, false, refresh_entropy_probs, true)
     } else {
         let refresh_golden = bd.read_flag();
         let refresh_altref = bd.read_flag();
-        let copy_to_golden = if refresh_golden { 0 } else { bd.read_literal(2) };
-        let copy_to_altref = if refresh_altref { 0 } else { bd.read_literal(2) };
+        let copy_to_golden = if refresh_golden {
+            0
+        } else {
+            bd.read_literal(2)
+        };
+        let copy_to_altref = if refresh_altref {
+            0
+        } else {
+            bd.read_literal(2)
+        };
         let sign_bias_golden = bd.read_flag();
         let sign_bias_altref = bd.read_flag();
         let refresh_entropy_probs = bd.read_flag();

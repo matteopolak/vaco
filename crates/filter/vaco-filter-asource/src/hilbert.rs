@@ -62,7 +62,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -129,20 +130,27 @@ impl SourceFilter for Source {
         if self.next >= total {
             return Ok(None);
         }
-        let want = u32::try_from(total - self.next).unwrap_or(self.block).min(self.block);
+        let want = u32::try_from(total - self.next)
+            .unwrap_or(self.block)
+            .min(self.block);
         let layout = vaco_chlayout::ChannelLayout::from_name("mono")
             .or_else(|| vaco_chlayout::ChannelLayout::default_for(1))
-            .ok_or(vaco_core::Error::Unsupported("no mono channel layout available"))?;
-        let mut frame =
-            ctx.pool()
-                .acquire_audio(SampleFmt::F32, layout, want, self.sample_rate)?;
+            .ok_or(vaco_core::Error::Unsupported(
+                "no mono channel layout available",
+            ))?;
+        let mut frame = ctx
+            .pool()
+            .acquire_audio(SampleFmt::F32, layout, want, self.sample_rate)?;
         if let Some(mut plane) = frame.plane_mut(0)
             && let Some(row) = plane.row_mut(0)
         {
             for (i, px) in row.chunks_exact_mut(4).enumerate() {
                 #[allow(clippy::cast_possible_truncation, reason = "index stays within n_taps")]
                 let idx = (self.next as usize) + i;
-                #[allow(clippy::cast_possible_truncation, reason = "tap() is a small finite value")]
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "tap() is a small finite value"
+                )]
                 let v = tap(idx, self.n_taps, self.win) as f32;
                 px.copy_from_slice(&v.to_le_bytes());
             }

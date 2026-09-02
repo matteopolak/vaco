@@ -38,7 +38,11 @@ pub(crate) const INV_ANG_TABLE: [i32; 9] = [0, 4096, 1638, 910, 630, 482, 390, 3
 pub(crate) fn mpm_list(left: u8, above: u8) -> [u8; 3] {
     if left == above {
         if left > DC_IDX {
-            [left, ((u32::from(left) + 29) % 32) as u8 + 2, ((u32::from(left) + 31) % 32) as u8 + 2]
+            [
+                left,
+                ((u32::from(left) + 29) % 32) as u8 + 2,
+                ((u32::from(left) + 31) % 32) as u8 + 2,
+            ]
         } else {
             [PLANAR_IDX, DC_IDX, VER_IDX]
         }
@@ -80,7 +84,10 @@ pub(crate) fn chroma_mode(syntax_value: u8, luma_mode: u8) -> u8 {
         return luma_mode;
     }
     let candidates = [PLANAR_IDX, VER_IDX, HOR_IDX, DC_IDX];
-    let picked = candidates.get(usize::from(syntax_value)).copied().unwrap_or(DC_IDX);
+    let picked = candidates
+        .get(usize::from(syntax_value))
+        .copied()
+        .unwrap_or(DC_IDX);
     if picked == luma_mode { 34 } else { picked }
 }
 
@@ -90,7 +97,11 @@ pub(crate) fn chroma_mode(syntax_value: u8, luma_mode: u8) -> u8 {
 /// only — an 8x8 *chroma* block (reached from a 16x16 luma CU at 4:2:0) is
 /// always diagonal. Every other size is diagonal too.
 #[must_use]
-pub(crate) fn scan_order_for_mode(mode: u8, log2_size: u32, is_chroma: bool) -> crate::scan::ScanOrder {
+pub(crate) fn scan_order_for_mode(
+    mode: u8,
+    log2_size: u32,
+    is_chroma: bool,
+) -> crate::scan::ScanOrder {
     let mode_dependent = log2_size == 2 || (log2_size == 3 && !is_chroma);
     if !mode_dependent {
         return crate::scan::ScanOrder::Diag;
@@ -119,7 +130,10 @@ mod tests {
     #[test]
     fn equal_non_angular_neighbours_are_planar_dc_ver() {
         assert_eq!(mpm_list(DC_IDX, DC_IDX), [PLANAR_IDX, DC_IDX, VER_IDX]);
-        assert_eq!(mpm_list(PLANAR_IDX, PLANAR_IDX), [PLANAR_IDX, DC_IDX, VER_IDX]);
+        assert_eq!(
+            mpm_list(PLANAR_IDX, PLANAR_IDX),
+            [PLANAR_IDX, DC_IDX, VER_IDX]
+        );
     }
 
     #[test]

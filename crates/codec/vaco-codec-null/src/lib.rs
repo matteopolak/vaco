@@ -207,10 +207,7 @@ mod tests {
     fn descriptor_built_encoder_never_emits_either() {
         let mut enc = VNULL_ENCODER.build(Limits::permissive());
         enc.send_frame(Some(&dummy_frame())).expect("send");
-        assert!(matches!(
-            enc.receive_packet(),
-            Err(Error::NeedMoreInput)
-        ));
+        assert!(matches!(enc.receive_packet(), Err(Error::NeedMoreInput)));
         enc.send_frame(None).expect("drain");
         assert!(matches!(enc.receive_packet(), Err(Error::Eof)));
     }

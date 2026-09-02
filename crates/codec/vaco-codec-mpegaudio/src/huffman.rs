@@ -54,7 +54,11 @@ pub(crate) fn decode_big_value(r: &mut BitReader<'_>, table_select: u8) -> Optio
 
 /// Decode one quadruple `(v, w, x, y)` from the `count1` region.
 pub(crate) fn decode_count1(r: &mut BitReader<'_>, table_select: u8) -> Option<[i32; 4]> {
-    let table = if table_select == 0 { HUFF_QUAD_A } else { HUFF_QUAD_B };
+    let table = if table_select == 0 {
+        HUFF_QUAD_A
+    } else {
+        HUFF_QUAD_B
+    };
     let (packed, _) = lookup(r, table)?;
     let mut out = [0i32; 4];
     for (i, slot) in out.iter_mut().enumerate() {

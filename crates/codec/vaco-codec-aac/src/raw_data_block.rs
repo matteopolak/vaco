@@ -190,7 +190,12 @@ pub(crate) fn read(r: &mut BitReader<'_>, sfi: u8) -> Result<Vec<Element>> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::{Element, read};
     use vaco_bitstream::{BitReader, BitWriter};
 

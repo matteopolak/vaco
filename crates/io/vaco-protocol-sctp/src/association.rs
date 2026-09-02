@@ -19,14 +19,19 @@
 //! `SHUTDOWN COMPLETE` are chunk types [`crate::chunk`] can build, but
 //! this state machine does not drive a shutdown handshake).
 
-use crate::chunk::{Chunk, DataChunk, DataFlags, GapAckBlock, InitAckChunk, InitChunk, SackChunk, pad_to_4};
+use crate::chunk::{
+    Chunk, DataChunk, DataFlags, GapAckBlock, InitAckChunk, InitChunk, SackChunk, pad_to_4,
+};
 use crate::packet::{CommonHeader, build_with_checksum, verify_checksum};
 use vaco_protocol_core::{ProtocolError, Result};
 
 const SCHEME: &str = "sctp";
 
 fn malformed(detail: &'static str) -> ProtocolError {
-    ProtocolError::Malformed { scheme: SCHEME, detail }
+    ProtocolError::Malformed {
+        scheme: SCHEME,
+        detail,
+    }
 }
 
 /// `IMPLEMENTATION-DEFINED`: RFC 4960 names no required advertised
@@ -88,7 +93,12 @@ pub struct Association {
 
 impl Association {
     #[must_use]
-    pub fn new_client(local_port: u16, peer_port: u16, local_verification_tag: u32, local_initial_tsn: u32) -> Self {
+    pub fn new_client(
+        local_port: u16,
+        peer_port: u16,
+        local_verification_tag: u32,
+        local_initial_tsn: u32,
+    ) -> Self {
         Self {
             role: Role::Client,
             state: State::Closed,
@@ -104,7 +114,12 @@ impl Association {
     }
 
     #[must_use]
-    pub fn new_server(local_port: u16, peer_port: u16, local_verification_tag: u32, local_initial_tsn: u32) -> Self {
+    pub fn new_server(
+        local_port: u16,
+        peer_port: u16,
+        local_verification_tag: u32,
+        local_initial_tsn: u32,
+    ) -> Self {
         Self {
             role: Role::Server,
             state: State::Closed,
@@ -132,8 +147,19 @@ impl Association {
     /// Never in normal use — this method does not touch `peer_*` fields.
     #[must_use]
     pub fn initiate(&mut self) -> Vec<u8> {
-        let init = InitChunk { initiate_tag: self.local_verification_tag, advertised_receiver_window_credit: DEFAULT_ADVERTISED_RECEIVER_WINDOW, outbound_streams: 1, inbound_streams: 1, initial_tsn: self.local_initial_tsn };
-        let header = CommonHeader { source_port: self.local_port, destination_port: self.peer_port, verification_tag: 0, checksum: 0 };
+        let init = InitChunk {
+            initiate_tag: self.local_verification_tag,
+            advertised_receiver_window_credit: DEFAULT_ADVERTISED_RECEIVER_WINDOW,
+            outbound_streams: 1,
+            inbound_streams: 1,
+            initial_tsn: self.local_initial_tsn,
+        };
+        let header = CommonHeader {
+            source_port: self.local_port,
+            destination_port: self.peer_port,
+            verification_tag: 0,
+            checksum: 0,
+        };
         self.state = State::CookieWait;
         one_chunk_packet(&header, &Chunk::Init(init))
     }
@@ -154,7 +180,11 @@ impl Association {
         let mut cursor = crate::packet::COMMON_HEADER_LEN;
         let mut outgoing = Vec::new();
         while cursor < packet.len() {
-            let (chunk, consumed) = crate::chunk::parse_one(packet.get(cursor..).ok_or_else(|| malformed("SCTP packet chunk area is truncated"))?)?;
+            let (chunk, consumed) = crate::chunk::parse_one(
+                packet
+                    .get(cursor..)
+                    .ok_or_else(|| malformed("SCTP packet chunk area is truncated"))?,
+            )?;
             if let Some(reply) = self.handle_chunk(&header, &chunk)? {
                 outgoing.push(reply);
             }
@@ -170,7 +200,12 @@ impl Association {
             (Role::Server, State::Closed, Chunk::Init(init)) => {
                 self.peer_verification_tag = init.initiate_tag;
                 self.peer_initial_tsn = Some(init.initial_tsn);
-                let cookie = build_cookie(self.local_verification_tag, init.initiate_tag, self.local_initial_tsn, init.initial_tsn);
+                let cookie = build_cookie(
+                    self.local_verification_tag,
+                    init.initiate_tag,
+                    self.local_initial_tsn,
+                    init.initial_tsn,
+                );
                 let init_ack = InitAckChunk {
                     initiate_tag: self.local_verification_tag,
                     advertised_receiver_window_credit: DEFAULT_ADVERTISED_RECEIVER_WINDOW,
@@ -179,8 +214,16 @@ impl Association {
                     initial_tsn: self.local_initial_tsn,
                     state_cookie: cookie,
                 };
-                let out_header = CommonHeader { source_port: self.local_port, destination_port: self.peer_port, verification_tag: self.peer_verification_tag, checksum: 0 };
-                Ok(Some(one_chunk_packet(&out_header, &Chunk::InitAck(init_ack))))
+                let out_header = CommonHeader {
+                    source_port: self.local_port,
+                    destination_port: self.peer_port,
+                    verification_tag: self.peer_verification_tag,
+                    checksum: 0,
+                };
+                Ok(Some(one_chunk_packet(
+                    &out_header,
+                    &Chunk::InitAck(init_ack),
+                )))
             }
             // Client, awaiting INIT ACK.
             (Role::Client, State::CookieWait, Chunk::InitAck(init_ack)) => {
@@ -190,16 +233,31 @@ impl Association {
                 self.peer_verification_tag = init_ack.initiate_tag;
                 self.peer_initial_tsn = Some(init_ack.initial_tsn);
                 self.state = State::CookieEchoed;
-                let out_header = CommonHeader { source_port: self.local_port, destination_port: self.peer_port, verification_tag: self.peer_verification_tag, checksum: 0 };
-                Ok(Some(one_chunk_packet(&out_header, &Chunk::CookieEcho(init_ack.state_cookie.clone()))))
+                let out_header = CommonHeader {
+                    source_port: self.local_port,
+                    destination_port: self.peer_port,
+                    verification_tag: self.peer_verification_tag,
+                    checksum: 0,
+                };
+                Ok(Some(one_chunk_packet(
+                    &out_header,
+                    &Chunk::CookieEcho(init_ack.state_cookie.clone()),
+                )))
             }
             // Server, awaiting COOKIE ECHO.
-            (Role::Server, State::Closed, Chunk::CookieEcho(_cookie)) if self.peer_verification_tag != 0 => {
+            (Role::Server, State::Closed, Chunk::CookieEcho(_cookie))
+                if self.peer_verification_tag != 0 =>
+            {
                 if header.verification_tag != self.local_verification_tag {
                     return Err(malformed("SCTP COOKIE ECHO has the wrong verification tag"));
                 }
                 self.state = State::Established;
-                let out_header = CommonHeader { source_port: self.local_port, destination_port: self.peer_port, verification_tag: self.peer_verification_tag, checksum: 0 };
+                let out_header = CommonHeader {
+                    source_port: self.local_port,
+                    destination_port: self.peer_port,
+                    verification_tag: self.peer_verification_tag,
+                    checksum: 0,
+                };
                 Ok(Some(one_chunk_packet(&out_header, &Chunk::CookieAck)))
             }
             // Client, awaiting COOKIE ACK.
@@ -216,13 +274,28 @@ impl Association {
                     return Err(malformed("SCTP DATA chunk has the wrong verification tag"));
                 }
                 self.receive.on_data(data.tsn, &data.user_data);
-                let cum = self.receive.cumulative_tsn_ack.unwrap_or(data.tsn.wrapping_sub(1));
-                let sack = SackChunk { cumulative_tsn_ack: cum, advertised_receiver_window_credit: DEFAULT_ADVERTISED_RECEIVER_WINDOW, gap_ack_blocks: Vec::<GapAckBlock>::new(), duplicate_tsns: Vec::new() };
-                let out_header = CommonHeader { source_port: self.local_port, destination_port: self.peer_port, verification_tag: self.peer_verification_tag, checksum: 0 };
+                let cum = self
+                    .receive
+                    .cumulative_tsn_ack
+                    .unwrap_or(data.tsn.wrapping_sub(1));
+                let sack = SackChunk {
+                    cumulative_tsn_ack: cum,
+                    advertised_receiver_window_credit: DEFAULT_ADVERTISED_RECEIVER_WINDOW,
+                    gap_ack_blocks: Vec::<GapAckBlock>::new(),
+                    duplicate_tsns: Vec::new(),
+                };
+                let out_header = CommonHeader {
+                    source_port: self.local_port,
+                    destination_port: self.peer_port,
+                    verification_tag: self.peer_verification_tag,
+                    checksum: 0,
+                };
                 Ok(Some(one_chunk_packet(&out_header, &Chunk::Sack(sack))))
             }
             (_, State::Established, Chunk::Sack(_sack)) => Ok(None),
-            _ => Err(malformed("SCTP chunk is not valid for this association's current state")),
+            _ => Err(malformed(
+                "SCTP chunk is not valid for this association's current state",
+            )),
         }
     }
 
@@ -239,21 +312,38 @@ impl Association {
     /// # Errors
     /// [`ProtocolError::Unsupported`] if this association is not yet
     /// `Established`.
-    pub fn send_data(&mut self, stream_id: u16, payload_protocol_id: u32, payload: &[u8]) -> Result<Vec<u8>> {
+    pub fn send_data(
+        &mut self,
+        stream_id: u16,
+        payload_protocol_id: u32,
+        payload: &[u8],
+    ) -> Result<Vec<u8>> {
         if self.state != State::Established {
-            return Err(ProtocolError::Unsupported { scheme: SCHEME, operation: "send_data before the association is Established" });
+            return Err(ProtocolError::Unsupported {
+                scheme: SCHEME,
+                operation: "send_data before the association is Established",
+            });
         }
         let tsn = self.next_tsn;
         self.next_tsn = self.next_tsn.wrapping_add(1);
         let data = DataChunk {
-            flags: DataFlags { unordered: false, beginning_fragment: true, ending_fragment: true },
+            flags: DataFlags {
+                unordered: false,
+                beginning_fragment: true,
+                ending_fragment: true,
+            },
             tsn,
             stream_id,
             stream_sequence_number: 0,
             payload_protocol_id,
             user_data: payload.to_vec(),
         };
-        let header = CommonHeader { source_port: self.local_port, destination_port: self.peer_port, verification_tag: self.peer_verification_tag, checksum: 0 };
+        let header = CommonHeader {
+            source_port: self.local_port,
+            destination_port: self.peer_port,
+            verification_tag: self.peer_verification_tag,
+            checksum: 0,
+        };
         Ok(one_chunk_packet(&header, &Chunk::Data(data)))
     }
 }
@@ -262,7 +352,12 @@ impl Association {
 /// handshake statelessly on `COOKIE ECHO` (in a real server, without
 /// keeping the half-open association around) — but **not
 /// authenticated**, see this module's own top-level scope note.
-fn build_cookie(server_tag: u32, client_tag: u32, server_initial_tsn: u32, client_initial_tsn: u32) -> Vec<u8> {
+fn build_cookie(
+    server_tag: u32,
+    client_tag: u32,
+    server_initial_tsn: u32,
+    client_initial_tsn: u32,
+) -> Vec<u8> {
     let mut cookie = Vec::new();
     cookie.extend_from_slice(&server_tag.to_be_bytes());
     cookie.extend_from_slice(&client_tag.to_be_bytes());
@@ -341,7 +436,10 @@ mod tests {
             let packet = client.send_data(1, 0, &[i]).unwrap();
             server.on_packet(&packet).unwrap();
         }
-        assert_eq!(server.received_data(), &[vec![0], vec![1], vec![2], vec![3], vec![4]]);
+        assert_eq!(
+            server.received_data(),
+            &[vec![0], vec![1], vec![2], vec![3], vec![4]]
+        );
     }
 
     #[test]
@@ -368,8 +466,24 @@ mod tests {
         // Forge a DATA-shaped packet under the wrong tag directly: skip
         // straight to Established-shaped state to isolate the tag check
         // from the handshake sequencing check.
-        let header = CommonHeader { source_port: 10000, destination_port: 20000, verification_tag: 0xFFFF_FFFF, checksum: 0 };
-        let data = Chunk::Data(DataChunk { flags: DataFlags { unordered: false, beginning_fragment: true, ending_fragment: true }, tsn: 1, stream_id: 0, stream_sequence_number: 0, payload_protocol_id: 0, user_data: vec![1] });
+        let header = CommonHeader {
+            source_port: 10000,
+            destination_port: 20000,
+            verification_tag: 0xFFFF_FFFF,
+            checksum: 0,
+        };
+        let data = Chunk::Data(DataChunk {
+            flags: DataFlags {
+                unordered: false,
+                beginning_fragment: true,
+                ending_fragment: true,
+            },
+            tsn: 1,
+            stream_id: 0,
+            stream_sequence_number: 0,
+            payload_protocol_id: 0,
+            user_data: vec![1],
+        });
         let packet = one_chunk_packet(&header, &data);
         assert!(server.on_packet(&packet).is_err());
     }

@@ -84,10 +84,7 @@ pub const EMBEDDED_SUITES: &str = include_str!("../suites.toml");
 /// A syntax error, or a `[[suite]]` missing `name`/`codec`/`mode`.
 pub fn parse(src: &str) -> Result<Vec<SuiteEntry>, SuitesError> {
     let root = toml::parse(src).map_err(SuitesError::Parse)?;
-    let rows = root
-        .get("suite")
-        .and_then(Value::as_array)
-        .unwrap_or(&[]);
+    let rows = root.get("suite").and_then(Value::as_array).unwrap_or(&[]);
 
     let mut out = Vec::new();
     for (idx, row) in rows.iter().enumerate() {
@@ -103,12 +100,21 @@ pub fn parse(src: &str) -> Result<Vec<SuiteEntry>, SuitesError> {
             .and_then(Value::as_str)
             .unwrap_or("")
             .to_owned();
-        out.push(SuiteEntry { name, codec, mode, note });
+        out.push(SuiteEntry {
+            name,
+            codec,
+            mode,
+            note,
+        });
     }
     Ok(out)
 }
 
-fn field_str(table: &toml::Table, index: usize, field: &'static str) -> Result<String, SuitesError> {
+fn field_str(
+    table: &toml::Table,
+    index: usize,
+    field: &'static str,
+) -> Result<String, SuitesError> {
     table
         .get(field)
         .and_then(Value::as_str)

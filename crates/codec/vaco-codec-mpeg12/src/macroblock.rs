@@ -359,8 +359,12 @@ fn decode_coded_macroblock(
             return;
         }
     };
-    let Some(mbt) = vlc::decode(r, mb_type_table.iter(), |row| (row.bits, 0), MAX_MB_TYPE_LEN)
-    else {
+    let Some(mbt) = vlc::decode(
+        r,
+        mb_type_table.iter(),
+        |row| (row.bits, 0),
+        MAX_MB_TYPE_LEN,
+    ) else {
         ap.slice_ok = false;
         return;
     };
@@ -393,10 +397,7 @@ fn decode_coded_macroblock(
     }
 
     let mut dct_type = 0u8;
-    if ap.pce.is_frame_picture()
-        && !ap.pce.frame_pred_frame_dct
-        && (mbt.intra || mbt.pattern)
-    {
+    if ap.pce.is_frame_picture() && !ap.pce.frame_pred_frame_dct && (mbt.intra || mbt.pattern) {
         dct_type = r.get(1) as u8;
     }
 
@@ -421,7 +422,13 @@ fn decode_coded_macroblock(
             if field_based {
                 *select_slot = i32::try_from(r.get(1)).unwrap_or(0);
             }
-            *vec_slot = motion::decode_vector(r, &mut ap.fwd_pred, i, ap.pce.f_code[0], field_and_frame_picture);
+            *vec_slot = motion::decode_vector(
+                r,
+                &mut ap.fwd_pred,
+                i,
+                ap.pce.f_code[0],
+                field_and_frame_picture,
+            );
         }
     }
     if read_bwd {
@@ -434,7 +441,13 @@ fn decode_coded_macroblock(
             if field_based {
                 *select_slot = i32::try_from(r.get(1)).unwrap_or(0);
             }
-            *vec_slot = motion::decode_vector(r, &mut ap.bwd_pred, i, ap.pce.f_code[1], field_and_frame_picture);
+            *vec_slot = motion::decode_vector(
+                r,
+                &mut ap.bwd_pred,
+                i,
+                ap.pce.f_code[1],
+                field_and_frame_picture,
+            );
         }
     }
     if mbt.intra && ap.pce.concealment_motion_vectors {
@@ -575,7 +588,12 @@ fn decode_coded_macroblock(
     clippy::integer_division,
     reason = "mb_x/mb_y are exact grid coordinates (mb_addr = mb_y * mb_width + mb_x, both non-negative), not an approximation"
 )]
-fn decode_skipped_macroblock(idct: &mut Mpeg2Idct, ap: &mut ActivePicture, seq: &Sequence, mb_addr: u32) {
+fn decode_skipped_macroblock(
+    idct: &mut Mpeg2Idct,
+    ap: &mut ActivePicture,
+    seq: &Sequence,
+    mb_addr: u32,
+) {
     let mb_x = mb_addr % seq.mb_width;
     let mb_y = mb_addr / seq.mb_width;
     let mut pred = MbPrediction::zero();
@@ -658,7 +676,10 @@ fn decode_skipped_macroblock(idct: &mut Mpeg2Idct, ap: &mut ActivePicture, seq: 
 #[must_use]
 const fn full_pel_scale(vecs: [[i32; 2]; 2], full_pel: bool) -> [[i32; 2]; 2] {
     if full_pel {
-        [[vecs[0][0] * 2, vecs[0][1] * 2], [vecs[1][0] * 2, vecs[1][1] * 2]]
+        [
+            [vecs[0][0] * 2, vecs[0][1] * 2],
+            [vecs[1][0] * 2, vecs[1][1] * 2],
+        ]
     } else {
         vecs
     }
@@ -711,17 +732,56 @@ fn form_macroblock_prediction(
 
     if !field_based {
         form_component(
-            fwd_ref, bwd_ref, fwd_vecs[0], bwd_vecs[0], 0, 0, 1, 0, 0, px, py, 16, 16,
-            &mut pred.luma, 16,
+            fwd_ref,
+            bwd_ref,
+            fwd_vecs[0],
+            bwd_vecs[0],
+            0,
+            0,
+            1,
+            0,
+            0,
+            px,
+            py,
+            16,
+            16,
+            &mut pred.luma,
+            16,
         );
         let fwd_c = chroma_format.scale_vector(fwd_vecs[0]);
         let bwd_c = chroma_format.scale_vector(bwd_vecs[0]);
         form_component(
-            fwd_ref, bwd_ref, fwd_c, bwd_c, 1, 1, 1, 0, 0, cx, cy, cw, ch, &mut pred.cb,
+            fwd_ref,
+            bwd_ref,
+            fwd_c,
+            bwd_c,
+            1,
+            1,
+            1,
+            0,
+            0,
+            cx,
+            cy,
+            cw,
+            ch,
+            &mut pred.cb,
             CHROMA_PRED_STRIDE,
         );
         form_component(
-            fwd_ref, bwd_ref, fwd_c, bwd_c, 2, 2, 1, 0, 0, cx, cy, cw, ch, &mut pred.cr,
+            fwd_ref,
+            bwd_ref,
+            fwd_c,
+            bwd_c,
+            2,
+            2,
+            1,
+            0,
+            0,
+            cx,
+            cy,
+            cw,
+            ch,
+            &mut pred.cr,
             CHROMA_PRED_STRIDE,
         );
         return;
@@ -745,8 +805,21 @@ fn form_macroblock_prediction(
 
         let mut luma_field = [0u8; 128]; // 16 wide x 8 tall
         form_component(
-            fwd_ref, bwd_ref, fv, bv, 0, 0, 2, fwd_parity, bwd_parity, px, py / 2, 16, 8,
-            &mut luma_field, 16,
+            fwd_ref,
+            bwd_ref,
+            fv,
+            bv,
+            0,
+            0,
+            2,
+            fwd_parity,
+            bwd_parity,
+            px,
+            py / 2,
+            16,
+            8,
+            &mut luma_field,
+            16,
         );
         deinterleave_rows(&luma_field, 16, 8, &mut pred.luma, 16, parity);
 
@@ -757,23 +830,70 @@ fn form_macroblock_prediction(
         // smaller formats just use the leading `cw` columns of it.
         let mut cb_field = [0u8; 128];
         form_component(
-            fwd_ref, bwd_ref, fv_c, bv_c, 1, 1, 2, fwd_parity, bwd_parity, cx, cy / 2, cw,
-            ch_field, &mut cb_field, cw,
+            fwd_ref,
+            bwd_ref,
+            fv_c,
+            bv_c,
+            1,
+            1,
+            2,
+            fwd_parity,
+            bwd_parity,
+            cx,
+            cy / 2,
+            cw,
+            ch_field,
+            &mut cb_field,
+            cw,
         );
-        deinterleave_rows(&cb_field, cw, ch_field, &mut pred.cb, CHROMA_PRED_STRIDE, parity);
+        deinterleave_rows(
+            &cb_field,
+            cw,
+            ch_field,
+            &mut pred.cb,
+            CHROMA_PRED_STRIDE,
+            parity,
+        );
         let mut cr_field = [0u8; 128];
         form_component(
-            fwd_ref, bwd_ref, fv_c, bv_c, 2, 2, 2, fwd_parity, bwd_parity, cx, cy / 2, cw,
-            ch_field, &mut cr_field, cw,
+            fwd_ref,
+            bwd_ref,
+            fv_c,
+            bv_c,
+            2,
+            2,
+            2,
+            fwd_parity,
+            bwd_parity,
+            cx,
+            cy / 2,
+            cw,
+            ch_field,
+            &mut cr_field,
+            cw,
         );
-        deinterleave_rows(&cr_field, cw, ch_field, &mut pred.cr, CHROMA_PRED_STRIDE, parity);
+        deinterleave_rows(
+            &cr_field,
+            cw,
+            ch_field,
+            &mut pred.cr,
+            CHROMA_PRED_STRIDE,
+            parity,
+        );
     }
 }
 
 /// Copy `src` (`w` wide, `h` tall) into every `parity`-th row of `dst`
 /// (`dst_stride` wide, `2 * h` logical rows), i.e. the inverse of reading a
 /// reference with `row_scale = 2`.
-fn deinterleave_rows(src: &[u8], w: usize, h: usize, dst: &mut [u8], dst_stride: usize, parity: i32) {
+fn deinterleave_rows(
+    src: &[u8],
+    w: usize,
+    h: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    parity: i32,
+) {
     let parity = usize::try_from(parity).unwrap_or(0);
     for y in 0..h {
         let Some(src_row) = src.get(y * w..y * w + w) else {
@@ -840,14 +960,56 @@ fn form_component(
     }
 }
 
-fn write_prediction_only(ap: &mut ActivePicture, mb_x: u32, mb_y: u32, pred: &MbPrediction, chroma_format: ChromaFormat) {
+fn write_prediction_only(
+    ap: &mut ActivePicture,
+    mb_x: u32,
+    mb_y: u32,
+    pred: &MbPrediction,
+    chroma_format: ChromaFormat,
+) {
     let (cw, ch) = chroma_format.chroma_mb_pixels();
-    write_plane(&mut ap.frame, 0, mb_x * 16, mb_y * 16, &pred.luma, 16, 16, 16);
-    write_plane(&mut ap.frame, 1, mb_x * cw as u32, mb_y * ch as u32, &pred.cb, cw, ch, CHROMA_PRED_STRIDE);
-    write_plane(&mut ap.frame, 2, mb_x * cw as u32, mb_y * ch as u32, &pred.cr, cw, ch, CHROMA_PRED_STRIDE);
+    write_plane(
+        &mut ap.frame,
+        0,
+        mb_x * 16,
+        mb_y * 16,
+        &pred.luma,
+        16,
+        16,
+        16,
+    );
+    write_plane(
+        &mut ap.frame,
+        1,
+        mb_x * cw as u32,
+        mb_y * ch as u32,
+        &pred.cb,
+        cw,
+        ch,
+        CHROMA_PRED_STRIDE,
+    );
+    write_plane(
+        &mut ap.frame,
+        2,
+        mb_x * cw as u32,
+        mb_y * ch as u32,
+        &pred.cr,
+        cw,
+        ch,
+        CHROMA_PRED_STRIDE,
+    );
 }
 
-fn write_plane(frame: &mut Frame, plane_idx: usize, ox: u32, oy: u32, src: &[u8], w: usize, h: usize, src_stride: usize) {
+fn write_plane(
+    frame: &mut Frame,
+    plane_idx: usize,
+    ox: u32,
+    oy: u32,
+    src: &[u8],
+    w: usize,
+    h: usize,
+    src_stride: usize,
+) {
     let Some(mut plane) = frame.plane_mut(plane_idx) else {
         return;
     };
@@ -876,7 +1038,11 @@ fn write_plane(frame: &mut Frame, plane_idx: usize, ox: u32, oy: u32, src: &[u8]
 /// about extending to 4:2:2/4:4:4 required revisiting it, since Table 6-20
 /// and its Figures never mention field/frame DCT reorganisation applying
 /// to chroma at all, only to luma (§6.3.17.1's own `dct_type` semantics).
-fn block_geometry(i: usize, dct_type: u8, chroma_format: ChromaFormat) -> (usize, i32, i32, i32, i32) {
+fn block_geometry(
+    i: usize,
+    dct_type: u8,
+    chroma_format: ChromaFormat,
+) -> (usize, i32, i32, i32, i32) {
     if i >= 4 {
         let (plane, col, row) = chroma_format.chroma_block_slot(i - 4);
         return (plane, col, row, 1, 0);
@@ -924,7 +1090,8 @@ fn reconstruct_macroblock(
             _ if i % 2 == 0 => 1,
             _ => 2,
         };
-        let (plane_idx, col_off, row_off, row_scale, row_parity) = block_geometry(i, dct_type, chroma_format);
+        let (plane_idx, col_off, row_off, row_scale, row_parity) =
+            block_geometry(i, dct_type, chroma_format);
 
         let f: [i32; 64] = if coded {
             let intra_dc = if intra {
@@ -983,7 +1150,14 @@ fn reconstruct_macroblock(
             } else {
                 ap.non_intra_matrix
             };
-            let dequant = block::dequantise(&qf, &matrix, quantiser_scale, intra, intra_dc_mult, ap.mpeg1);
+            let dequant = block::dequantise(
+                &qf,
+                &matrix,
+                quantiser_scale,
+                intra,
+                intra_dc_mult,
+                ap.mpeg1,
+            );
             block::inverse_transform(idct, &dequant)
         } else {
             [0i32; 64]
@@ -1018,7 +1192,10 @@ fn reconstruct_macroblock(
                 let Some(dst) = dst_row.get_mut(frame_col) else {
                     continue;
                 };
-                let residual = f.get(usize::try_from(by).unwrap_or(0) * 8 + bx).copied().unwrap_or(0);
+                let residual = f
+                    .get(usize::try_from(by).unwrap_or(0) * 8 + bx)
+                    .copied()
+                    .unwrap_or(0);
                 let p = i32::from(
                     pred_buf
                         .get(row_in_mb * pred_stride + col_in_mb)

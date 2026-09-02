@@ -68,16 +68,36 @@ pub const ESCAPE: i16 = -2;
 
 macro_rules! rl {
     ($bits:literal, eob) => {
-        RunLevel { bits: $bits, run: EOB, level: 0, first_coefficient_only: false }
+        RunLevel {
+            bits: $bits,
+            run: EOB,
+            level: 0,
+            first_coefficient_only: false,
+        }
     };
     ($bits:literal, escape) => {
-        RunLevel { bits: $bits, run: ESCAPE, level: 0, first_coefficient_only: false }
+        RunLevel {
+            bits: $bits,
+            run: ESCAPE,
+            level: 0,
+            first_coefficient_only: false,
+        }
     };
     ($bits:literal, $run:literal, $level:literal) => {
-        RunLevel { bits: $bits, run: $run, level: $level, first_coefficient_only: false }
+        RunLevel {
+            bits: $bits,
+            run: $run,
+            level: $level,
+            first_coefficient_only: false,
+        }
     };
     ($bits:literal, $run:literal, $level:literal, first) => {
-        RunLevel { bits: $bits, run: $run, level: $level, first_coefficient_only: true }
+        RunLevel {
+            bits: $bits,
+            run: $run,
+            level: $level,
+            first_coefficient_only: true,
+        }
     };
 }
 
@@ -204,7 +224,6 @@ pub const TABLE_ZERO: &[RunLevel] = &[
     rl!("0000000000011100", 30, 1),
     rl!("0000000000011011", 31, 1),
 ];
-
 
 /// Table B.15 — DCT coefficients Table one. Used only for intra blocks when
 /// `intra_vlc_format == 1` (Table 7-3); there is no "first coefficient"

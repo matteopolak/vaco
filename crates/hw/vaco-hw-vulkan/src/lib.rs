@@ -42,7 +42,7 @@ use vaco_hw_core::{HwAccelDesc, HwDeviceCaps, HwDeviceContext, HwDeviceType};
 
 mod probe;
 
-pub use probe::{probe, ProbeOutcome};
+pub use probe::{ProbeOutcome, probe};
 
 /// The opened "device" — nothing beyond its capabilities, mirroring
 /// `vaco-hw-videotoolbox`'s equivalent: this crate implements no decode

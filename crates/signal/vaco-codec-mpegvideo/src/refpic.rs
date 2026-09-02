@@ -129,13 +129,21 @@ mod tests {
         if let Some(r) = buf.push_reference("P3") {
             emitted.push(r);
         }
-        emitted.push(PictureReorderBuffer::<&'static str>::emit_non_reference("B1"));
-        emitted.push(PictureReorderBuffer::<&'static str>::emit_non_reference("B2"));
+        emitted.push(PictureReorderBuffer::<&'static str>::emit_non_reference(
+            "B1",
+        ));
+        emitted.push(PictureReorderBuffer::<&'static str>::emit_non_reference(
+            "B2",
+        ));
         if let Some(r) = buf.push_reference("P6") {
             emitted.push(r);
         }
-        emitted.push(PictureReorderBuffer::<&'static str>::emit_non_reference("B4"));
-        emitted.push(PictureReorderBuffer::<&'static str>::emit_non_reference("B5"));
+        emitted.push(PictureReorderBuffer::<&'static str>::emit_non_reference(
+            "B4",
+        ));
+        emitted.push(PictureReorderBuffer::<&'static str>::emit_non_reference(
+            "B5",
+        ));
         if let Some(r) = buf.drain() {
             emitted.push(r);
         }

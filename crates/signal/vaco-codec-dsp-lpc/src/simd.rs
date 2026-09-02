@@ -116,7 +116,9 @@ mod tests {
 
     #[test]
     fn matches_scalar_on_a_sine_ramp() {
-        let samples: Vec<f64> = (0..500).map(|i| (f64::from(i) * 0.13).sin() * 1000.0).collect();
+        let samples: Vec<f64> = (0..500)
+            .map(|i| (f64::from(i) * 0.13).sin() * 1000.0)
+            .collect();
         let mut want = vec![0.0; 20];
         scalar(&samples, &mut want);
         let mut got = vec![0.0; 20];

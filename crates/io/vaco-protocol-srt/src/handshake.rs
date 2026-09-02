@@ -367,7 +367,8 @@ pub fn parse_extensions(data: &[u8]) -> Result<Vec<Extension>> {
 pub fn serialize_extension(ext: &Extension) -> Vec<u8> {
     let mut out = Vec::new();
     let blocks = ext.contents.len().div_ceil(4);
-    let header = (u32::from(ext.ext_type) << 16) | (u32::try_from(blocks).unwrap_or(u32::MAX) & 0xffff);
+    let header =
+        (u32::from(ext.ext_type) << 16) | (u32::try_from(blocks).unwrap_or(u32::MAX) & 0xffff);
     out.extend_from_slice(&header.to_be_bytes());
     out.extend_from_slice(&ext.contents);
     let padding = blocks.saturating_mul(4).saturating_sub(ext.contents.len());
@@ -556,7 +557,9 @@ mod tests {
     fn hsreq_body_matches_the_drafts_own_field_layout() {
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&0x0001_0402u32.to_be_bytes()); // SRT Version 1.4.2
-        bytes.extend_from_slice(&(srt_flags::TSBPDSND | srt_flags::TSBPDRCV | srt_flags::CRYPT).to_be_bytes());
+        bytes.extend_from_slice(
+            &(srt_flags::TSBPDSND | srt_flags::TSBPDRCV | srt_flags::CRYPT).to_be_bytes(),
+        );
         bytes.extend_from_slice(&[0x00, 0x78, 0x00, 0x78]); // 120ms/120ms delay
 
         let hsreq = HsReqBody::parse(&bytes).unwrap();

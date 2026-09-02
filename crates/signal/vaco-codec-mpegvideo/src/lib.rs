@@ -100,7 +100,14 @@ mod tests {
     fn two_families_use_the_shared_pipeline_differently() {
         // "MPEG-style": a P-picture row that can carry a quantiser change.
         let mpeg_style = vec![
-            MbTypeEntry::new(0b1, 1, MbTypeFlags { motion_forward: true, ..MbTypeFlags::default() }),
+            MbTypeEntry::new(
+                0b1,
+                1,
+                MbTypeFlags {
+                    motion_forward: true,
+                    ..MbTypeFlags::default()
+                },
+            ),
             MbTypeEntry::new(
                 0b01,
                 2,
@@ -116,11 +123,22 @@ mod tests {
         // syntax element for, rather than this crate forcing every family
         // to populate every field meaningfully.
         let h263_style = vec![
-            MbTypeEntry::new(0b0, 1, MbTypeFlags { intra: true, ..MbTypeFlags::default() }),
+            MbTypeEntry::new(
+                0b0,
+                1,
+                MbTypeFlags {
+                    intra: true,
+                    ..MbTypeFlags::default()
+                },
+            ),
             MbTypeEntry::new(
                 0b1,
                 1,
-                MbTypeFlags { motion_forward: true, pattern: true, ..MbTypeFlags::default() },
+                MbTypeFlags {
+                    motion_forward: true,
+                    pattern: true,
+                    ..MbTypeFlags::default()
+                },
             ),
         ];
 
@@ -132,7 +150,11 @@ mod tests {
         let flags = decode_mb_type(&mut r, &mpeg_style);
         assert_eq!(
             flags,
-            Some(MbTypeFlags { motion_forward: true, quant: true, ..MbTypeFlags::default() })
+            Some(MbTypeFlags {
+                motion_forward: true,
+                quant: true,
+                ..MbTypeFlags::default()
+            })
         );
 
         let mut w2 = BitWriter::new();
@@ -141,6 +163,12 @@ mod tests {
         let h263_bytes = w2.finish();
         let mut r2 = BitReader::new(&h263_bytes);
         let flags2 = decode_mb_type(&mut r2, &h263_style);
-        assert_eq!(flags2, Some(MbTypeFlags { intra: true, ..MbTypeFlags::default() }));
+        assert_eq!(
+            flags2,
+            Some(MbTypeFlags {
+                intra: true,
+                ..MbTypeFlags::default()
+            })
+        );
     }
 }

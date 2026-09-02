@@ -25,7 +25,12 @@ impl Default for TextStyle {
             size_px: 16.0,
             bold: false,
             italic: false,
-            color: Rgba { r: 255, g: 255, b: 255, a: 255 },
+            color: Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
             line_spacing: 0.0,
         }
     }

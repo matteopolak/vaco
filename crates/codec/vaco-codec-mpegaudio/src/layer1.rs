@@ -34,7 +34,9 @@ pub(crate) fn decode(
 ) -> Result<Frame> {
     let channels = usize::from(header.channels());
     if synth.len() < channels {
-        return Err(Error::Unsupported("mpegaudio: missing per-channel synthesis state"));
+        return Err(Error::Unsupported(
+            "mpegaudio: missing per-channel synthesis state",
+        ));
     }
     let mut r = BitReader::new(body);
 
@@ -53,7 +55,11 @@ pub(crate) fn decode(
     let mut scalefactor = [[1.0f32; SUBBANDS]; 2];
     for sb in 0..SUBBANDS {
         for ch in 0..channels {
-            let bal = allocation.get(ch).and_then(|c| c.get(sb)).copied().unwrap_or(0);
+            let bal = allocation
+                .get(ch)
+                .and_then(|c| c.get(sb))
+                .copied()
+                .unwrap_or(0);
             if bal != 0 {
                 let idx = usize::from(r.get(6) as u8);
                 let value = LAYER12_SCALEFACTORS.get(idx).copied().unwrap_or(0.0);
@@ -72,13 +78,21 @@ pub(crate) fn decode(
         let mut subband_sample = [[0.0f32; SUBBANDS]; 2];
         for sb in 0..SUBBANDS {
             for ch in 0..channels {
-                let bal = allocation.get(ch).and_then(|c| c.get(sb)).copied().unwrap_or(0);
+                let bal = allocation
+                    .get(ch)
+                    .and_then(|c| c.get(sb))
+                    .copied()
+                    .unwrap_or(0);
                 if bal == 0 {
                     continue;
                 }
                 let nb = u32::from(bal) + 1;
                 let code = r.get(nb);
-                let factor = scalefactor.get(ch).and_then(|c| c.get(sb)).copied().unwrap_or(0.0);
+                let factor = scalefactor
+                    .get(ch)
+                    .and_then(|c| c.get(sb))
+                    .copied()
+                    .unwrap_or(0.0);
                 let value = layer1_dequant(code, nb) * factor;
                 if let Some(slot) = subband_sample.get_mut(ch).and_then(|c| c.get_mut(sb)) {
                     *slot = value;

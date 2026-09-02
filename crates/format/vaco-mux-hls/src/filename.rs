@@ -121,7 +121,10 @@ mod tests {
 
     #[test]
     fn a_width_at_the_cap_still_pads_exactly() {
-        assert_eq!(expand("seg_%064d.ts", 7).len(), "seg_".len() + 64 + ".ts".len());
+        assert_eq!(
+            expand("seg_%064d.ts", 7).len(),
+            "seg_".len() + 64 + ".ts".len()
+        );
     }
 
     #[test]

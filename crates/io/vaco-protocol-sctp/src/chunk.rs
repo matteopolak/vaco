@@ -14,7 +14,10 @@ use vaco_protocol_core::{ProtocolError, Result};
 const SCHEME: &str = "sctp";
 
 fn malformed(detail: &'static str) -> ProtocolError {
-    ProtocolError::Malformed { scheme: SCHEME, detail }
+    ProtocolError::Malformed {
+        scheme: SCHEME,
+        detail,
+    }
 }
 
 pub const TYPE_DATA: u8 = 0;
@@ -57,7 +60,9 @@ pub enum Chunk {
     Heartbeat(Vec<u8>),
     HeartbeatAck(Vec<u8>),
     Abort(Vec<u8>),
-    Shutdown { cumulative_tsn_ack: u32 },
+    Shutdown {
+        cumulative_tsn_ack: u32,
+    },
     ShutdownAck,
     ShutdownComplete,
     Error(Vec<u8>),
@@ -68,7 +73,11 @@ pub enum Chunk {
     /// than silently eaten (the top two bits of the type byte say how);
     /// this variant keeps the raw type and value so a caller can apply
     /// that policy instead of this crate guessing it.
-    Unknown { chunk_type: u8, flags: u8, value: Vec<u8> },
+    Unknown {
+        chunk_type: u8,
+        flags: u8,
+        value: Vec<u8>,
+    },
 }
 
 /// Parse one chunk from the front of `buf`, returning it and how many
@@ -79,14 +88,26 @@ pub enum Chunk {
 /// [`ProtocolError::Malformed`] on a truncated header, a declared length
 /// shorter than the fixed header, or a length that runs past `buf`.
 pub fn parse_one(buf: &[u8]) -> Result<(Chunk, usize)> {
-    let chunk_type = *buf.first().ok_or_else(|| malformed("SCTP chunk header is truncated"))?;
-    let flags = *buf.get(1).ok_or_else(|| malformed("SCTP chunk header is truncated"))?;
-    let length_bytes: [u8; 2] = buf.get(2..4).ok_or_else(|| malformed("SCTP chunk header is truncated"))?.try_into().unwrap_or([0; 2]);
+    let chunk_type = *buf
+        .first()
+        .ok_or_else(|| malformed("SCTP chunk header is truncated"))?;
+    let flags = *buf
+        .get(1)
+        .ok_or_else(|| malformed("SCTP chunk header is truncated"))?;
+    let length_bytes: [u8; 2] = buf
+        .get(2..4)
+        .ok_or_else(|| malformed("SCTP chunk header is truncated"))?
+        .try_into()
+        .unwrap_or([0; 2]);
     let length = usize::from(u16::from_be_bytes(length_bytes));
     if length < 4 {
-        return Err(malformed("SCTP chunk length is shorter than its own header"));
+        return Err(malformed(
+            "SCTP chunk length is shorter than its own header",
+        ));
     }
-    let value = buf.get(4..length).ok_or_else(|| malformed("SCTP chunk runs past the end of the packet"))?;
+    let value = buf
+        .get(4..length)
+        .ok_or_else(|| malformed("SCTP chunk runs past the end of the packet"))?;
     // The padding itself is allowed to be missing on the very last chunk
     // in a packet (nothing follows it to need separating from), so
     // `consumed` only claims padding bytes that are actually present.
@@ -102,15 +123,25 @@ pub fn parse_one(buf: &[u8]) -> Result<(Chunk, usize)> {
         TYPE_HEARTBEAT_ACK => Chunk::HeartbeatAck(value.to_vec()),
         TYPE_ABORT => Chunk::Abort(value.to_vec()),
         TYPE_SHUTDOWN => {
-            let tsn_bytes: [u8; 4] = value.get(..4).ok_or_else(|| malformed("SCTP SHUTDOWN chunk is truncated"))?.try_into().unwrap_or([0; 4]);
-            Chunk::Shutdown { cumulative_tsn_ack: u32::from_be_bytes(tsn_bytes) }
+            let tsn_bytes: [u8; 4] = value
+                .get(..4)
+                .ok_or_else(|| malformed("SCTP SHUTDOWN chunk is truncated"))?
+                .try_into()
+                .unwrap_or([0; 4]);
+            Chunk::Shutdown {
+                cumulative_tsn_ack: u32::from_be_bytes(tsn_bytes),
+            }
         }
         TYPE_SHUTDOWN_ACK => Chunk::ShutdownAck,
         TYPE_SHUTDOWN_COMPLETE => Chunk::ShutdownComplete,
         TYPE_ERROR => Chunk::Error(value.to_vec()),
         TYPE_COOKIE_ECHO => Chunk::CookieEcho(value.to_vec()),
         TYPE_COOKIE_ACK => Chunk::CookieAck,
-        other => Chunk::Unknown { chunk_type: other, flags, value: value.to_vec() },
+        other => Chunk::Unknown {
+            chunk_type: other,
+            flags,
+            value: value.to_vec(),
+        },
     };
     Ok((chunk, consumed))
 }
@@ -127,18 +158,27 @@ pub fn encode(chunk: &Chunk) -> Vec<u8> {
         Chunk::Heartbeat(v) => (TYPE_HEARTBEAT, 0, v.clone()),
         Chunk::HeartbeatAck(v) => (TYPE_HEARTBEAT_ACK, 0, v.clone()),
         Chunk::Abort(v) => (TYPE_ABORT, 0, v.clone()),
-        Chunk::Shutdown { cumulative_tsn_ack } => (TYPE_SHUTDOWN, 0, cumulative_tsn_ack.to_be_bytes().to_vec()),
+        Chunk::Shutdown { cumulative_tsn_ack } => {
+            (TYPE_SHUTDOWN, 0, cumulative_tsn_ack.to_be_bytes().to_vec())
+        }
         Chunk::ShutdownAck => (TYPE_SHUTDOWN_ACK, 0, Vec::new()),
         Chunk::ShutdownComplete => (TYPE_SHUTDOWN_COMPLETE, 0, Vec::new()),
         Chunk::Error(v) => (TYPE_ERROR, 0, v.clone()),
         Chunk::CookieEcho(v) => (TYPE_COOKIE_ECHO, 0, v.clone()),
         Chunk::CookieAck => (TYPE_COOKIE_ACK, 0, Vec::new()),
-        Chunk::Unknown { chunk_type, flags, value } => (*chunk_type, *flags, value.clone()),
+        Chunk::Unknown {
+            chunk_type,
+            flags,
+            value,
+        } => (*chunk_type, *flags, value.clone()),
     };
     let mut out = Vec::new();
     out.push(chunk_type);
     out.push(flags);
-    #[allow(clippy::cast_possible_truncation, reason = "an SCTP chunk's own length field is 16 bits; nothing in this crate builds a chunk anywhere near u16::MAX")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "an SCTP chunk's own length field is 16 bits; nothing in this crate builds a chunk anywhere near u16::MAX"
+    )]
     let length = (4 + value.len()) as u16;
     out.extend_from_slice(&length.to_be_bytes());
     out.extend_from_slice(&value);
@@ -165,7 +205,9 @@ pub struct DataChunk {
 
 impl DataChunk {
     fn flags(&self) -> u8 {
-        (u8::from(self.flags.unordered) << 2) | (u8::from(self.flags.beginning_fragment) << 1) | u8::from(self.flags.ending_fragment)
+        (u8::from(self.flags.unordered) << 2)
+            | (u8::from(self.flags.beginning_fragment) << 1)
+            | u8::from(self.flags.ending_fragment)
     }
 
     fn encode_value(&self) -> Vec<u8> {
@@ -179,17 +221,51 @@ impl DataChunk {
     }
 
     fn parse(flags_byte: u8, value: &[u8]) -> Result<Self> {
-        let tsn = u32::from_be_bytes(value.get(0..4).ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?.try_into().unwrap_or([0; 4]));
-        let stream_id = u16::from_be_bytes(value.get(4..6).ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?.try_into().unwrap_or([0; 2]));
-        let stream_sequence_number = u16::from_be_bytes(value.get(6..8).ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?.try_into().unwrap_or([0; 2]));
-        let payload_protocol_id = u32::from_be_bytes(value.get(8..12).ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?.try_into().unwrap_or([0; 4]));
-        let user_data = value.get(12..).ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?.to_vec();
+        let tsn = u32::from_be_bytes(
+            value
+                .get(0..4)
+                .ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?
+                .try_into()
+                .unwrap_or([0; 4]),
+        );
+        let stream_id = u16::from_be_bytes(
+            value
+                .get(4..6)
+                .ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?
+                .try_into()
+                .unwrap_or([0; 2]),
+        );
+        let stream_sequence_number = u16::from_be_bytes(
+            value
+                .get(6..8)
+                .ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?
+                .try_into()
+                .unwrap_or([0; 2]),
+        );
+        let payload_protocol_id = u32::from_be_bytes(
+            value
+                .get(8..12)
+                .ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?
+                .try_into()
+                .unwrap_or([0; 4]),
+        );
+        let user_data = value
+            .get(12..)
+            .ok_or_else(|| malformed("SCTP DATA chunk is truncated"))?
+            .to_vec();
         let flags = DataFlags {
             unordered: flags_byte & 0b100 != 0,
             beginning_fragment: flags_byte & 0b010 != 0,
             ending_fragment: flags_byte & 0b001 != 0,
         };
-        Ok(Self { flags, tsn, stream_id, stream_sequence_number, payload_protocol_id, user_data })
+        Ok(Self {
+            flags,
+            tsn,
+            stream_id,
+            stream_sequence_number,
+            payload_protocol_id,
+            user_data,
+        })
     }
 }
 
@@ -216,13 +292,40 @@ impl InitChunk {
     }
 
     fn parse(value: &[u8]) -> Result<Self> {
-        let fixed = value.get(..INIT_FIXED_LEN).ok_or_else(|| malformed("SCTP INIT chunk is truncated"))?;
+        let fixed = value
+            .get(..INIT_FIXED_LEN)
+            .ok_or_else(|| malformed("SCTP INIT chunk is truncated"))?;
         Ok(Self {
-            initiate_tag: u32::from_be_bytes(fixed.get(0..4).and_then(|s| s.try_into().ok()).unwrap_or([0; 4])),
-            advertised_receiver_window_credit: u32::from_be_bytes(fixed.get(4..8).and_then(|s| s.try_into().ok()).unwrap_or([0; 4])),
-            outbound_streams: u16::from_be_bytes(fixed.get(8..10).and_then(|s| s.try_into().ok()).unwrap_or([0; 2])),
-            inbound_streams: u16::from_be_bytes(fixed.get(10..12).and_then(|s| s.try_into().ok()).unwrap_or([0; 2])),
-            initial_tsn: u32::from_be_bytes(fixed.get(12..16).and_then(|s| s.try_into().ok()).unwrap_or([0; 4])),
+            initiate_tag: u32::from_be_bytes(
+                fixed
+                    .get(0..4)
+                    .and_then(|s| s.try_into().ok())
+                    .unwrap_or([0; 4]),
+            ),
+            advertised_receiver_window_credit: u32::from_be_bytes(
+                fixed
+                    .get(4..8)
+                    .and_then(|s| s.try_into().ok())
+                    .unwrap_or([0; 4]),
+            ),
+            outbound_streams: u16::from_be_bytes(
+                fixed
+                    .get(8..10)
+                    .and_then(|s| s.try_into().ok())
+                    .unwrap_or([0; 2]),
+            ),
+            inbound_streams: u16::from_be_bytes(
+                fixed
+                    .get(10..12)
+                    .and_then(|s| s.try_into().ok())
+                    .unwrap_or([0; 2]),
+            ),
+            initial_tsn: u32::from_be_bytes(
+                fixed
+                    .get(12..16)
+                    .and_then(|s| s.try_into().ok())
+                    .unwrap_or([0; 4]),
+            ),
         })
         // Optional parameters after the fixed part (e.g. IPv4/IPv6
         // Address, Cookie Preservative) are deliberately not parsed —
@@ -257,7 +360,10 @@ impl InitAckChunk {
         // chunk's own value (RFC 4960 §3.2.1's parameter padding rule is
         // the same shape as the outer chunk padding rule).
         out.extend_from_slice(&PARAM_STATE_COOKIE.to_be_bytes());
-        #[allow(clippy::cast_possible_truncation, reason = "a state cookie is never anywhere near u16::MAX bytes in this crate's own use")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "a state cookie is never anywhere near u16::MAX bytes in this crate's own use"
+        )]
         let param_len = (4 + self.state_cookie.len()) as u16;
         out.extend_from_slice(&param_len.to_be_bytes());
         out.extend_from_slice(&self.state_cookie);
@@ -266,17 +372,51 @@ impl InitAckChunk {
     }
 
     fn parse(value: &[u8]) -> Result<Self> {
-        let fixed = value.get(..INIT_FIXED_LEN).ok_or_else(|| malformed("SCTP INIT ACK chunk is truncated"))?;
-        let initiate_tag = u32::from_be_bytes(fixed.get(0..4).and_then(|s| s.try_into().ok()).unwrap_or([0; 4]));
-        let advertised_receiver_window_credit = u32::from_be_bytes(fixed.get(4..8).and_then(|s| s.try_into().ok()).unwrap_or([0; 4]));
-        let outbound_streams = u16::from_be_bytes(fixed.get(8..10).and_then(|s| s.try_into().ok()).unwrap_or([0; 2]));
-        let inbound_streams = u16::from_be_bytes(fixed.get(10..12).and_then(|s| s.try_into().ok()).unwrap_or([0; 2]));
-        let initial_tsn = u32::from_be_bytes(fixed.get(12..16).and_then(|s| s.try_into().ok()).unwrap_or([0; 4]));
+        let fixed = value
+            .get(..INIT_FIXED_LEN)
+            .ok_or_else(|| malformed("SCTP INIT ACK chunk is truncated"))?;
+        let initiate_tag = u32::from_be_bytes(
+            fixed
+                .get(0..4)
+                .and_then(|s| s.try_into().ok())
+                .unwrap_or([0; 4]),
+        );
+        let advertised_receiver_window_credit = u32::from_be_bytes(
+            fixed
+                .get(4..8)
+                .and_then(|s| s.try_into().ok())
+                .unwrap_or([0; 4]),
+        );
+        let outbound_streams = u16::from_be_bytes(
+            fixed
+                .get(8..10)
+                .and_then(|s| s.try_into().ok())
+                .unwrap_or([0; 2]),
+        );
+        let inbound_streams = u16::from_be_bytes(
+            fixed
+                .get(10..12)
+                .and_then(|s| s.try_into().ok())
+                .unwrap_or([0; 2]),
+        );
+        let initial_tsn = u32::from_be_bytes(
+            fixed
+                .get(12..16)
+                .and_then(|s| s.try_into().ok())
+                .unwrap_or([0; 4]),
+        );
 
         let params = value.get(INIT_FIXED_LEN..).unwrap_or(&[]);
         let state_cookie = find_state_cookie(params)?;
 
-        Ok(Self { initiate_tag, advertised_receiver_window_credit, outbound_streams, inbound_streams, initial_tsn, state_cookie })
+        Ok(Self {
+            initiate_tag,
+            advertised_receiver_window_credit,
+            outbound_streams,
+            inbound_streams,
+            initial_tsn,
+            state_cookie,
+        })
     }
 }
 
@@ -286,12 +426,28 @@ impl InitAckChunk {
 /// own declared length rather than interpreted.
 fn find_state_cookie(mut params: &[u8]) -> Result<Vec<u8>> {
     while params.len() >= 4 {
-        let param_type = u16::from_be_bytes(params.get(0..2).ok_or_else(|| malformed("SCTP INIT ACK parameter is truncated"))?.try_into().unwrap_or([0; 2]));
-        let param_len = usize::from(u16::from_be_bytes(params.get(2..4).ok_or_else(|| malformed("SCTP INIT ACK parameter is truncated"))?.try_into().unwrap_or([0; 2])));
+        let param_type = u16::from_be_bytes(
+            params
+                .get(0..2)
+                .ok_or_else(|| malformed("SCTP INIT ACK parameter is truncated"))?
+                .try_into()
+                .unwrap_or([0; 2]),
+        );
+        let param_len = usize::from(u16::from_be_bytes(
+            params
+                .get(2..4)
+                .ok_or_else(|| malformed("SCTP INIT ACK parameter is truncated"))?
+                .try_into()
+                .unwrap_or([0; 2]),
+        ));
         if param_len < 4 {
-            return Err(malformed("SCTP INIT ACK parameter length is shorter than its own header"));
+            return Err(malformed(
+                "SCTP INIT ACK parameter length is shorter than its own header",
+            ));
         }
-        let param_value = params.get(4..param_len).ok_or_else(|| malformed("SCTP INIT ACK parameter runs past the chunk"))?;
+        let param_value = params
+            .get(4..param_len)
+            .ok_or_else(|| malformed("SCTP INIT ACK parameter runs past the chunk"))?;
         if param_type == PARAM_STATE_COOKIE {
             return Ok(param_value.to_vec());
         }
@@ -320,7 +476,10 @@ impl SackChunk {
         let mut out = Vec::new();
         out.extend_from_slice(&self.cumulative_tsn_ack.to_be_bytes());
         out.extend_from_slice(&self.advertised_receiver_window_credit.to_be_bytes());
-        #[allow(clippy::cast_possible_truncation, reason = "SCTP's own gap-ack-block/duplicate-TSN counts are 16 bits; not exceeded by anything this crate builds")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "SCTP's own gap-ack-block/duplicate-TSN counts are 16 bits; not exceeded by anything this crate builds"
+        )]
         out.extend_from_slice(&(self.gap_ack_blocks.len() as u16).to_be_bytes());
         #[allow(clippy::cast_possible_truncation, reason = "see gap_ack_blocks above")]
         out.extend_from_slice(&(self.duplicate_tsns.len() as u16).to_be_bytes());
@@ -335,26 +494,73 @@ impl SackChunk {
     }
 
     fn parse(value: &[u8]) -> Result<Self> {
-        let cumulative_tsn_ack = u32::from_be_bytes(value.get(0..4).ok_or_else(|| malformed("SCTP SACK chunk is truncated"))?.try_into().unwrap_or([0; 4]));
-        let advertised_receiver_window_credit = u32::from_be_bytes(value.get(4..8).ok_or_else(|| malformed("SCTP SACK chunk is truncated"))?.try_into().unwrap_or([0; 4]));
-        let gap_count = usize::from(u16::from_be_bytes(value.get(8..10).ok_or_else(|| malformed("SCTP SACK chunk is truncated"))?.try_into().unwrap_or([0; 2])));
-        let dup_count = usize::from(u16::from_be_bytes(value.get(10..12).ok_or_else(|| malformed("SCTP SACK chunk is truncated"))?.try_into().unwrap_or([0; 2])));
+        let cumulative_tsn_ack = u32::from_be_bytes(
+            value
+                .get(0..4)
+                .ok_or_else(|| malformed("SCTP SACK chunk is truncated"))?
+                .try_into()
+                .unwrap_or([0; 4]),
+        );
+        let advertised_receiver_window_credit = u32::from_be_bytes(
+            value
+                .get(4..8)
+                .ok_or_else(|| malformed("SCTP SACK chunk is truncated"))?
+                .try_into()
+                .unwrap_or([0; 4]),
+        );
+        let gap_count = usize::from(u16::from_be_bytes(
+            value
+                .get(8..10)
+                .ok_or_else(|| malformed("SCTP SACK chunk is truncated"))?
+                .try_into()
+                .unwrap_or([0; 2]),
+        ));
+        let dup_count = usize::from(u16::from_be_bytes(
+            value
+                .get(10..12)
+                .ok_or_else(|| malformed("SCTP SACK chunk is truncated"))?
+                .try_into()
+                .unwrap_or([0; 2]),
+        ));
 
         let mut cursor = 12usize;
         let mut gap_ack_blocks = Vec::new();
         for _ in 0..gap_count {
-            let start = u16::from_be_bytes(value.get(cursor..cursor + 2).ok_or_else(|| malformed("SCTP SACK gap ack block is truncated"))?.try_into().unwrap_or([0; 2]));
-            let end = u16::from_be_bytes(value.get(cursor + 2..cursor + 4).ok_or_else(|| malformed("SCTP SACK gap ack block is truncated"))?.try_into().unwrap_or([0; 2]));
+            let start = u16::from_be_bytes(
+                value
+                    .get(cursor..cursor + 2)
+                    .ok_or_else(|| malformed("SCTP SACK gap ack block is truncated"))?
+                    .try_into()
+                    .unwrap_or([0; 2]),
+            );
+            let end = u16::from_be_bytes(
+                value
+                    .get(cursor + 2..cursor + 4)
+                    .ok_or_else(|| malformed("SCTP SACK gap ack block is truncated"))?
+                    .try_into()
+                    .unwrap_or([0; 2]),
+            );
             gap_ack_blocks.push(GapAckBlock { start, end });
             cursor += 4;
         }
         let mut duplicate_tsns = Vec::new();
         for _ in 0..dup_count {
-            let tsn = u32::from_be_bytes(value.get(cursor..cursor + 4).ok_or_else(|| malformed("SCTP SACK duplicate TSN is truncated"))?.try_into().unwrap_or([0; 4]));
+            let tsn = u32::from_be_bytes(
+                value
+                    .get(cursor..cursor + 4)
+                    .ok_or_else(|| malformed("SCTP SACK duplicate TSN is truncated"))?
+                    .try_into()
+                    .unwrap_or([0; 4]),
+            );
             duplicate_tsns.push(tsn);
             cursor += 4;
         }
-        Ok(Self { cumulative_tsn_ack, advertised_receiver_window_credit, gap_ack_blocks, duplicate_tsns })
+        Ok(Self {
+            cumulative_tsn_ack,
+            advertised_receiver_window_credit,
+            gap_ack_blocks,
+            duplicate_tsns,
+        })
     }
 }
 
@@ -372,32 +578,59 @@ mod tests {
 
     #[test]
     fn init_chunk_round_trips() {
-        let chunk = Chunk::Init(InitChunk { initiate_tag: 1, advertised_receiver_window_credit: 65536, outbound_streams: 10, inbound_streams: 10, initial_tsn: 42 });
+        let chunk = Chunk::Init(InitChunk {
+            initiate_tag: 1,
+            advertised_receiver_window_credit: 65536,
+            outbound_streams: 10,
+            inbound_streams: 10,
+            initial_tsn: 42,
+        });
         assert_eq!(round_trip(&chunk), chunk);
     }
 
     #[test]
     fn init_ack_chunk_round_trips_including_the_state_cookie() {
-        let chunk = Chunk::InitAck(InitAckChunk { initiate_tag: 2, advertised_receiver_window_credit: 65536, outbound_streams: 5, inbound_streams: 5, initial_tsn: 100, state_cookie: b"opaque-cookie-bytes".to_vec() });
+        let chunk = Chunk::InitAck(InitAckChunk {
+            initiate_tag: 2,
+            advertised_receiver_window_credit: 65536,
+            outbound_streams: 5,
+            inbound_streams: 5,
+            initial_tsn: 100,
+            state_cookie: b"opaque-cookie-bytes".to_vec(),
+        });
         assert_eq!(round_trip(&chunk), chunk);
     }
 
     #[test]
     fn init_ack_with_an_odd_length_cookie_still_round_trips_through_padding() {
-        let chunk = Chunk::InitAck(InitAckChunk { initiate_tag: 2, advertised_receiver_window_credit: 65536, outbound_streams: 5, inbound_streams: 5, initial_tsn: 100, state_cookie: b"x".to_vec() });
+        let chunk = Chunk::InitAck(InitAckChunk {
+            initiate_tag: 2,
+            advertised_receiver_window_credit: 65536,
+            outbound_streams: 5,
+            inbound_streams: 5,
+            initial_tsn: 100,
+            state_cookie: b"x".to_vec(),
+        });
         assert_eq!(round_trip(&chunk), chunk);
     }
 
     #[test]
     fn cookie_echo_and_cookie_ack_round_trip() {
-        assert_eq!(round_trip(&Chunk::CookieEcho(b"cookie".to_vec())), Chunk::CookieEcho(b"cookie".to_vec()));
+        assert_eq!(
+            round_trip(&Chunk::CookieEcho(b"cookie".to_vec())),
+            Chunk::CookieEcho(b"cookie".to_vec())
+        );
         assert_eq!(round_trip(&Chunk::CookieAck), Chunk::CookieAck);
     }
 
     #[test]
     fn data_chunk_round_trips_its_fixed_fields() {
         let chunk = Chunk::Data(DataChunk {
-            flags: DataFlags { unordered: false, beginning_fragment: false, ending_fragment: false },
+            flags: DataFlags {
+                unordered: false,
+                beginning_fragment: false,
+                ending_fragment: false,
+            },
             tsn: 7,
             stream_id: 1,
             stream_sequence_number: 0,
@@ -420,20 +653,40 @@ mod tests {
 
     #[test]
     fn shutdown_and_shutdown_ack_and_shutdown_complete_round_trip() {
-        assert_eq!(round_trip(&Chunk::Shutdown { cumulative_tsn_ack: 5 }), Chunk::Shutdown { cumulative_tsn_ack: 5 });
+        assert_eq!(
+            round_trip(&Chunk::Shutdown {
+                cumulative_tsn_ack: 5
+            }),
+            Chunk::Shutdown {
+                cumulative_tsn_ack: 5
+            }
+        );
         assert_eq!(round_trip(&Chunk::ShutdownAck), Chunk::ShutdownAck);
-        assert_eq!(round_trip(&Chunk::ShutdownComplete), Chunk::ShutdownComplete);
+        assert_eq!(
+            round_trip(&Chunk::ShutdownComplete),
+            Chunk::ShutdownComplete
+        );
     }
 
     #[test]
     fn heartbeat_and_heartbeat_ack_carry_opaque_info_unchanged() {
-        assert_eq!(round_trip(&Chunk::Heartbeat(b"info".to_vec())), Chunk::Heartbeat(b"info".to_vec()));
-        assert_eq!(round_trip(&Chunk::HeartbeatAck(b"info".to_vec())), Chunk::HeartbeatAck(b"info".to_vec()));
+        assert_eq!(
+            round_trip(&Chunk::Heartbeat(b"info".to_vec())),
+            Chunk::Heartbeat(b"info".to_vec())
+        );
+        assert_eq!(
+            round_trip(&Chunk::HeartbeatAck(b"info".to_vec())),
+            Chunk::HeartbeatAck(b"info".to_vec())
+        );
     }
 
     #[test]
     fn an_unrecognised_chunk_type_is_preserved_not_rejected() {
-        let chunk = Chunk::Unknown { chunk_type: 200, flags: 0x5, value: b"???".to_vec() };
+        let chunk = Chunk::Unknown {
+            chunk_type: 200,
+            flags: 0x5,
+            value: b"???".to_vec(),
+        };
         assert_eq!(round_trip(&chunk), chunk);
     }
 
@@ -468,7 +721,9 @@ mod tests {
     #[test]
     fn multiple_chunks_parse_sequentially_using_the_padded_consumed_length() {
         let a = Chunk::CookieAck;
-        let b = Chunk::Shutdown { cumulative_tsn_ack: 1 };
+        let b = Chunk::Shutdown {
+            cumulative_tsn_ack: 1,
+        };
         let mut buf = Vec::new();
         let mut a_bytes = encode(&a);
         pad_to_4(&mut a_bytes);

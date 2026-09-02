@@ -99,12 +99,11 @@ pub fn handshake(
         opts.verifyhost.as_str()
     };
     let config = crate::verify::client_config(opts, ca_pem)?;
-    let name = ServerName::try_from(verify_name.to_owned()).map_err(|_| {
-        ProtocolError::Malformed {
+    let name =
+        ServerName::try_from(verify_name.to_owned()).map_err(|_| ProtocolError::Malformed {
             scheme: "tls",
             detail: "host name is not a valid TLS server name",
-        }
-    })?;
+        })?;
     let mut conn = ClientConnection::new(config, name).map_err(|_| ProtocolError::Malformed {
         scheme: "tls",
         detail: "could not start a TLS client connection",

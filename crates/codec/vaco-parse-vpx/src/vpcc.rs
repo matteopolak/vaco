@@ -179,7 +179,7 @@ pub fn from_vp9_header(header: &Vp9Header) -> Option<VpCodecConfigurationRecord>
         bit_depth: color.bit_depth,
         chroma_subsampling: chroma_subsampling_code(color.subsampling_x, color.subsampling_y),
         full_range: color.full_range,
-        colour_primaries: 2,   // Unspecified — see this function's own doc.
+        colour_primaries: 2,         // Unspecified — see this function's own doc.
         transfer_characteristics: 2, // Unspecified — see this function's own doc.
         matrix_coefficients: crate::vp9::matrix_coefficients(color.color_space).to_u8(),
     })
@@ -382,7 +382,11 @@ mod tests {
         };
         let rec = from_vp9_header(&header).unwrap();
         assert_eq!(
-            (rec.colour_primaries, rec.transfer_characteristics, rec.matrix_coefficients),
+            (
+                rec.colour_primaries,
+                rec.transfer_characteristics,
+                rec.matrix_coefficients
+            ),
             (2, 2, 1),
             "matrix=1 (BT.709) per ffmpeg's own measured vpcC; primaries/transfer stay unspecified"
         );

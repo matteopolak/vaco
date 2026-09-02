@@ -25,7 +25,9 @@ use std::hint::black_box;
 use std::time::Instant;
 
 use vaco_codec_dsp_deblock::batch;
-use vaco_codec_dsp_deblock::{ChromaLine, EdgeThresholds, LumaLine, filter_chroma_line, filter_luma_line};
+use vaco_codec_dsp_deblock::{
+    ChromaLine, EdgeThresholds, LumaLine, filter_chroma_line, filter_luma_line,
+};
 
 const ITERS: usize = 2_000;
 const REPS: usize = 100;
@@ -78,7 +80,18 @@ fn luma_fixture() -> LumaFixture {
         q3[i] = base.wrapping_add(2).wrapping_add(next() % 6);
         bs[i] = (i % 5) as u8; // 0,1,2,3,4 repeating -- every strength represented
     }
-    LumaFixture { p0, p1, p2, p3, q0, q1, q2, q3, bs, edge: EdgeThresholds::derive(32, 32, 0, 0) }
+    LumaFixture {
+        p0,
+        p1,
+        p2,
+        p3,
+        q0,
+        q1,
+        q2,
+        q3,
+        bs,
+        edge: EdgeThresholds::derive(32, 32, 0, 0),
+    }
 }
 
 pub(crate) mod probes {
@@ -88,7 +101,9 @@ pub(crate) mod probes {
     use vaco_simd::Caps;
 
     #[inline(never)]
-    pub(crate) fn scalar_luma(f: &LumaFixture) -> ([u8; 16], [u8; 16], [u8; 16], [u8; 16], [u8; 16], [u8; 16]) {
+    pub(crate) fn scalar_luma(
+        f: &LumaFixture,
+    ) -> ([u8; 16], [u8; 16], [u8; 16], [u8; 16], [u8; 16], [u8; 16]) {
         let mut op0 = [0u8; 16];
         let mut op1 = [0u8; 16];
         let mut op2 = [0u8; 16];
@@ -125,7 +140,8 @@ pub(crate) mod probes {
         let mut oq1 = f.q1;
         let mut oq2 = f.q2;
         batch::filter_luma_edge(
-            caps, &mut op0, &mut op1, &mut op2, &f.p3, &mut oq0, &mut oq1, &mut oq2, &f.q3, &f.bs, f.edge,
+            caps, &mut op0, &mut op1, &mut op2, &f.p3, &mut oq0, &mut oq1, &mut oq2, &f.q3, &f.bs,
+            f.edge,
         );
         (op0, op1, op2, oq0, oq1, oq2)
     }
@@ -144,7 +160,10 @@ pub(crate) mod probes {
         let mut op0 = [0u8; 8];
         let mut oq0 = [0u8; 8];
         for i in 0..8 {
-            let mut line = ChromaLine { p: [f.p0[i], f.p1[i]], q: [f.q0[i], f.q1[i]] };
+            let mut line = ChromaLine {
+                p: [f.p0[i], f.p1[i]],
+                q: [f.q0[i], f.q1[i]],
+            };
             if let Some(bs) = NonZeroU8::new(f.bs[i]) {
                 filter_chroma_line(&mut line, bs, f.edge);
             }
@@ -182,7 +201,14 @@ fn chroma_fixture() -> probes::ChromaFixture {
         q1[i] = base.wrapping_add(3).wrapping_add(next() % 6);
         bs[i] = (i % 5) as u8;
     }
-    probes::ChromaFixture { p0, p1, q0, q1, bs, edge: EdgeThresholds::derive(34, 34, 0, 0) }
+    probes::ChromaFixture {
+        p0,
+        p1,
+        q0,
+        q1,
+        bs,
+        edge: EdgeThresholds::derive(34, 34, 0, 0),
+    }
 }
 
 /// Spin for ~300ms so macOS promotes this process off an efficiency core

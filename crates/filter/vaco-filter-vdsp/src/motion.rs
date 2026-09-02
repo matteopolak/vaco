@@ -43,17 +43,36 @@ fn as_me_plane(p: PlaneRef<'_>) -> MePlane<'_> {
 /// zero offset) falls outside `refp` — a caller-visible "no match found"
 /// rather than a fabricated vector.
 #[must_use]
-pub fn search_block(cur: PlaneRef<'_>, refp: PlaneRef<'_>, bx: usize, by: usize, bw: usize, bh: usize, range: i32) -> BlockMatch {
+pub fn search_block(
+    cur: PlaneRef<'_>,
+    refp: PlaneRef<'_>,
+    bx: usize,
+    by: usize,
+    bw: usize,
+    bh: usize,
+    range: i32,
+) -> BlockMatch {
     let cur_me = as_me_plane(cur);
     let ref_me = as_me_plane(refp);
     let Some(cur_block) = cur_me.sub(bx, by, bw, bh) else {
-        return BlockMatch { dx: 0, dy: 0, cost: u32::MAX };
+        return BlockMatch {
+            dx: 0,
+            dy: 0,
+            cost: u32::MAX,
+        };
     };
 
-    let mut best = BlockMatch { dx: 0, dy: 0, cost: u32::MAX };
+    let mut best = BlockMatch {
+        dx: 0,
+        dy: 0,
+        cost: u32::MAX,
+    };
     for dy in -range..=range {
         for dx in -range..=range {
-            #[allow(clippy::cast_possible_wrap, reason = "block coordinates are frame-bounded, far below i64::MAX")]
+            #[allow(
+                clippy::cast_possible_wrap,
+                reason = "block coordinates are frame-bounded, far below i64::MAX"
+            )]
             let (rx, ry) = (bx as i64 + i64::from(dx), by as i64 + i64::from(dy));
             if rx < 0 || ry < 0 {
                 continue;
@@ -96,9 +115,21 @@ mod tests {
 
     #[test]
     fn identical_frames_find_the_zero_vector_at_zero_cost() {
-        let f = plane_of(&[&[1, 2, 3, 4], &[5, 6, 7, 8], &[9, 10, 11, 12], &[13, 14, 15, 16]]);
+        let f = plane_of(&[
+            &[1, 2, 3, 4],
+            &[5, 6, 7, 8],
+            &[9, 10, 11, 12],
+            &[13, 14, 15, 16],
+        ]);
         let mv = search_block(f.plane(0).unwrap(), f.plane(0).unwrap(), 1, 1, 2, 2, 2);
-        assert_eq!(mv, BlockMatch { dx: 0, dy: 0, cost: 0 });
+        assert_eq!(
+            mv,
+            BlockMatch {
+                dx: 0,
+                dy: 0,
+                cost: 0
+            }
+        );
     }
 
     #[test]
@@ -121,7 +152,14 @@ mod tests {
             &[0, 0, 0, 0, 0],
         ]);
         let mv = search_block(cur.plane(0).unwrap(), refp.plane(0).unwrap(), 1, 1, 2, 2, 3);
-        assert_eq!(mv, BlockMatch { dx: 1, dy: 1, cost: 0 });
+        assert_eq!(
+            mv,
+            BlockMatch {
+                dx: 1,
+                dy: 1,
+                cost: 0
+            }
+        );
     }
 
     #[test]

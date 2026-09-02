@@ -20,8 +20,7 @@ impl Synthesis {
         let mut matrix = [[0.0f32; 32]; 64];
         for (i, row) in matrix.iter_mut().enumerate() {
             for (k, cell) in row.iter_mut().enumerate() {
-                let angle =
-                    std::f64::consts::PI * ((16 + i) as f64) * ((2 * k + 1) as f64) / 64.0;
+                let angle = std::f64::consts::PI * ((16 + i) as f64) * ((2 * k + 1) as f64) / 64.0;
                 *cell = angle.cos() as f32;
             }
         }
@@ -61,7 +60,9 @@ impl Synthesis {
 
         let mut out = [0.0f32; 32];
         for (j, slot) in out.iter_mut().enumerate() {
-            let sum: f32 = (0..16).map(|i| u.get(j + 32 * i).copied().unwrap_or(0.0)).sum();
+            let sum: f32 = (0..16)
+                .map(|i| u.get(j + 32 * i).copied().unwrap_or(0.0))
+                .sum();
             *slot = sum;
         }
         out

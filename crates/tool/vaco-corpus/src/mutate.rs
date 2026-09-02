@@ -228,7 +228,11 @@ pub fn mutate_at_boundaries(data: &[u8], boundaries: &[usize], seed: u64) -> Vec
 /// forever; on exhaustion the smallest interesting input found so far is
 /// returned.
 #[must_use]
-pub fn minimise(data: &[u8], mut interesting: impl FnMut(&[u8]) -> bool, max_iterations: usize) -> Vec<u8> {
+pub fn minimise(
+    data: &[u8],
+    mut interesting: impl FnMut(&[u8]) -> bool,
+    max_iterations: usize,
+) -> Vec<u8> {
     if !interesting(data) {
         return data.to_vec();
     }
@@ -360,7 +364,10 @@ mod tests {
             },
             5,
         );
-        assert!(calls <= 6, "budget of 5 plus the initial check, got {calls}");
+        assert!(
+            calls <= 6,
+            "budget of 5 plus the initial check, got {calls}"
+        );
         assert!(!min.is_empty());
     }
 

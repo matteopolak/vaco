@@ -442,7 +442,9 @@ impl BsfProvider for NoBsfs {
         _name: &str,
         _params: &CodecParameters,
     ) -> vaco_core::Result<Box<dyn BitstreamFilter>> {
-        Err(vaco_core::Error::Unsupported("test provider grants no filters"))
+        Err(vaco_core::Error::Unsupported(
+            "test provider grants no filters",
+        ))
     }
 }
 
@@ -689,7 +691,11 @@ fn compressed_audio_strh_time_base_is_one_frame_not_one_sample() {
     assert_eq!((scale, rate), (256, 11025), "strh dwScale/dwRate");
 
     let strf_at = bytes.windows(4).position(|w| w == b"strf").unwrap();
-    assert_eq!(le32_at(&bytes, strf_at + 8 + 4), 44_100, "strf nSamplesPerSec");
+    assert_eq!(
+        le32_at(&bytes, strf_at + 8 + 4),
+        44_100,
+        "strf nSamplesPerSec"
+    );
 }
 
 /// Measured: a compressed audio stream's `strf.nAvgBytesPerSec` is its own

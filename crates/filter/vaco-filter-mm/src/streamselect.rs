@@ -52,7 +52,9 @@ fn parse_map(value: &str, inputs: usize) -> std::result::Result<Vec<usize>, Stri
             .parse()
             .map_err(|_| format!("streamselect: bad map index `{tok}`"))?;
         if idx >= inputs {
-            return Err(format!("streamselect: map index {idx} out of range for {inputs} inputs"));
+            return Err(format!(
+                "streamselect: map index {idx} out of range for {inputs} inputs"
+            ));
         }
         out.push(idx);
     }
@@ -131,12 +133,15 @@ impl FilterTrait for Filter {
 
     fn command(&mut self, name: &str, value: &str) -> Result<()> {
         if name != "map" {
-            return Err(vaco_core::Error::Unsupported("streamselect: unknown command"));
+            return Err(vaco_core::Error::Unsupported(
+                "streamselect: unknown command",
+            ));
         }
-        let replacement = parse_map(value, self.inputs).map_err(|detail| vaco_core::Error::Option {
-            name: "map".to_owned(),
-            detail,
-        })?;
+        let replacement =
+            parse_map(value, self.inputs).map_err(|detail| vaco_core::Error::Option {
+                name: "map".to_owned(),
+                detail,
+            })?;
         if replacement.len() != self.map.len() {
             return Err(vaco_core::Error::Option {
                 name: "map".to_owned(),
@@ -248,10 +253,22 @@ mod tests {
         };
         let instance = video::create(&req).unwrap();
         let mut graph = Graph::new();
-        let a = graph.add_source("a", MediaType::Video, video_source_formats("a", vaco_pixfmt::PixFmt::Gray8));
-        let b = graph.add_source("b", MediaType::Video, video_source_formats("b", vaco_pixfmt::PixFmt::Gray8));
+        let a = graph.add_source(
+            "a",
+            MediaType::Video,
+            video_source_formats("a", vaco_pixfmt::PixFmt::Gray8),
+        );
+        let b = graph.add_source(
+            "b",
+            MediaType::Video,
+            video_source_formats("b", vaco_pixfmt::PixFmt::Gray8),
+        );
         let node = graph.add(instance.desc, instance.formats, instance.filter);
-        let sink = graph.add_sink("out", MediaType::Video, vaco_filter_core::mock::any_video_sink("out"));
+        let sink = graph.add_sink(
+            "out",
+            MediaType::Video,
+            vaco_filter_core::mock::any_video_sink("out"),
+        );
         graph.connect(a, 0, node, 0).unwrap();
         graph.connect(b, 0, node, 1).unwrap();
         graph.connect(node, 0, sink, 0).unwrap();
@@ -274,7 +291,12 @@ mod tests {
                 GraphStatus::Eof => break,
                 GraphStatus::HasOutput(_) => {
                     while let Ok(f) = graph.recv(sink) {
-                        luma.push(f.plane(0).and_then(|p| p.row(0)).and_then(|r| r.first()).copied());
+                        luma.push(
+                            f.plane(0)
+                                .and_then(|p| p.row(0))
+                                .and_then(|r| r.first())
+                                .copied(),
+                        );
                     }
                 }
                 GraphStatus::NeedInput(_) => {}

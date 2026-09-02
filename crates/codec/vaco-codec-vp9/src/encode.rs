@@ -133,9 +133,23 @@ fn plane_mut(pic: &mut Picture, plane: usize) -> &mut crate::framebuf::Plane {
 /// coder must derive identical context from identical history, which is why
 /// this is not "reading a competitor's source": it is the necessary other
 /// half of this crate's own decoder.
-fn partition_ctx(above: &[u8], left: [u8; 8], r: usize, c: usize, bsize: i32, num8x8: usize) -> usize {
-    let bsl = tables::MI_WIDTH_LOG2_LOOKUP.get(usize::try_from(bsize).unwrap_or(0)).copied().unwrap_or(0);
-    let boffset = tables::MI_WIDTH_LOG2_LOOKUP.get(usize::try_from(tables::BLOCK_64X64).unwrap_or(0)).copied().unwrap_or(0) - bsl;
+fn partition_ctx(
+    above: &[u8],
+    left: [u8; 8],
+    r: usize,
+    c: usize,
+    bsize: i32,
+    num8x8: usize,
+) -> usize {
+    let bsl = tables::MI_WIDTH_LOG2_LOOKUP
+        .get(usize::try_from(bsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
+    let boffset = tables::MI_WIDTH_LOG2_LOOKUP
+        .get(usize::try_from(tables::BLOCK_64X64).unwrap_or(0))
+        .copied()
+        .unwrap_or(0)
+        - bsl;
     let mut above_bits = 0u8;
     let mut left_bits = 0u8;
     for i in 0..num8x8 {
@@ -149,7 +163,10 @@ fn partition_ctx(above: &[u8], left: [u8; 8], r: usize, c: usize, bsize: i32, nu
 
 /// Pixel width/height of a >=8x8 square block size (`8`/`16`/`32`/`64`).
 fn block_pixel_size(bsize: i32) -> usize {
-    8 * tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(bsize).unwrap_or(0)).copied().unwrap_or(1)
+    8 * tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+        .get(usize::try_from(bsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(1)
 }
 
 /// One coding block's per-MI state a later block's skip/mode context needs
@@ -181,7 +198,10 @@ struct EncCtx {
 }
 
 impl EncCtx {
-    #[allow(clippy::integer_division, reason = "4:2:0 chroma is exactly half luma; luma_w/luma_h are always 8*mi_cols/8*mi_rows, hence always even")]
+    #[allow(
+        clippy::integer_division,
+        reason = "4:2:0 chroma is exactly half luma; luma_w/luma_h are always 8*mi_cols/8*mi_rows, hence always even"
+    )]
     fn new(budget: &mut Budget, mi_cols: usize, mi_rows: usize) -> Result<Self> {
         let luma_w = mi_cols * 8;
         let luma_h = mi_rows * 8;
@@ -191,9 +211,19 @@ impl EncCtx {
             mi_rows,
             above_partition_context: vec![0u8; mi_cols.max(1)],
             left_partition_context: [0u8; 8],
-            mi_grid: vec![EncMiCell { skip: false, y_mode: tables::DC_PRED }; mi_cols.max(1) * mi_rows.max(1)],
+            mi_grid: vec![
+                EncMiCell {
+                    skip: false,
+                    y_mode: tables::DC_PRED
+                };
+                mi_cols.max(1) * mi_rows.max(1)
+            ],
             pic,
-            above_nz: [vec![false; mi_cols * 2 + 16], vec![false; mi_cols * 2 + 16], vec![false; mi_cols * 2 + 16]],
+            above_nz: [
+                vec![false; mi_cols * 2 + 16],
+                vec![false; mi_cols * 2 + 16],
+                vec![false; mi_cols * 2 + 16],
+            ],
             left_nz: [[false; 16]; 3],
         })
     }
@@ -210,12 +240,21 @@ impl EncCtx {
     }
 
     fn store_block(&mut self, r: usize, c: usize, bsize: i32, cell: EncMiCell) {
-        let h = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP.get(usize::try_from(bsize).unwrap_or(0)).copied().unwrap_or(1);
-        let w = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(bsize).unwrap_or(0)).copied().unwrap_or(1);
+        let h = tables::NUM_8X8_BLOCKS_HIGH_LOOKUP
+            .get(usize::try_from(bsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
+        let w = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+            .get(usize::try_from(bsize).unwrap_or(0))
+            .copied()
+            .unwrap_or(1);
         for y in 0..h {
             for x in 0..w {
                 let (rr, cc) = (r + y, c + x);
-                if rr < self.mi_rows && cc < self.mi_cols && let Some(slot) = self.mi_grid.get_mut(rr * self.mi_cols + cc) {
+                if rr < self.mi_rows
+                    && cc < self.mi_cols
+                    && let Some(slot) = self.mi_grid.get_mut(rr * self.mi_cols + cc)
+                {
                     *slot = cell;
                 }
             }
@@ -237,11 +276,19 @@ impl<'a> Source<'a> {
             return Err(Error::InvalidData("vp9 encode: expected a video frame"));
         };
         if *format != PixFmt::Yuv420p {
-            return Err(Error::Unsupported("vp9 encode: only 4:2:0 8-bit input is supported (see Vp9Encoder::accepted_pix_fmts)"));
+            return Err(Error::Unsupported(
+                "vp9 encode: only 4:2:0 8-bit input is supported (see Vp9Encoder::accepted_pix_fmts)",
+            ));
         }
-        let y = frame.plane(0).ok_or(Error::InvalidData("vp9 encode: frame has no Y plane"))?;
-        let u = frame.plane(1).ok_or(Error::InvalidData("vp9 encode: frame has no U plane"))?;
-        let v = frame.plane(2).ok_or(Error::InvalidData("vp9 encode: frame has no V plane"))?;
+        let y = frame
+            .plane(0)
+            .ok_or(Error::InvalidData("vp9 encode: frame has no Y plane"))?;
+        let u = frame
+            .plane(1)
+            .ok_or(Error::InvalidData("vp9 encode: frame has no U plane"))?;
+        let v = frame
+            .plane(2)
+            .ok_or(Error::InvalidData("vp9 encode: frame has no V plane"))?;
         Ok(Self {
             y: MePlane::new(y.as_slice(), y.stride(), y.row_bytes(), y.rows()),
             u: MePlane::new(u.as_slice(), u.stride(), u.row_bytes(), u.rows()),
@@ -283,13 +330,21 @@ const ZERO_BLOCK: [u8; 4096] = [0u8; 4096];
 /// multiples-of-64 requirement) split into four quadrants of half the
 /// size? See [`VARIANCE_SPLIT_THRESHOLD_PER_PIXEL`]'s doc for what "should"
 /// means here.
-#[allow(clippy::many_single_char_names, reason = "r/c are this crate's own mi-row/mi-col convention throughout decode.rs and encode.rs; x/y/n are pixel coordinates and a sample count")]
-#[allow(clippy::integer_division, reason = "normalising a block-area-scaled variance to per-pixel terms for a threshold comparison; the heuristic's own threshold constant is chosen against this same truncating division, not an exact ratio")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "r/c are this crate's own mi-row/mi-col convention throughout decode.rs and encode.rs; x/y/n are pixel coordinates and a sample count"
+)]
+#[allow(
+    clippy::integer_division,
+    reason = "normalising a block-area-scaled variance to per-pixel terms for a threshold comparison; the heuristic's own threshold constant is chosen against this same truncating division, not an exact ratio"
+)]
 fn should_split(src: &Source<'_>, r: usize, c: usize, bsize: i32) -> bool {
     let size = block_pixel_size(bsize);
     let x = c * 8;
     let y = r * 8;
-    let Some(block) = src.y.sub(x, y, size, size) else { return false };
+    let Some(block) = src.y.sub(x, y, size, size) else {
+        return false;
+    };
     let zero = ZERO_BLOCK.get(..size * size).unwrap_or(&[]);
     let zero_plane = MePlane::new(zero, size, size, size);
     let var = variance(block, zero_plane);
@@ -307,13 +362,29 @@ fn should_split(src: &Source<'_>, r: usize, c: usize, bsize: i32) -> bool {
 /// `predict_block` checks before extending the above-right region is
 /// always true here).
 #[allow(clippy::too_many_arguments)]
-fn assemble_edges(pic: &Picture, plane: usize, x: usize, y: usize, size: usize, have_left: bool, have_above: bool, not_on_right: bool, maxx: usize, maxy: usize, bit_depth: u32) -> (Vec<i32>, Vec<i32>) {
+fn assemble_edges(
+    pic: &Picture,
+    plane: usize,
+    x: usize,
+    y: usize,
+    size: usize,
+    have_left: bool,
+    have_above: bool,
+    not_on_right: bool,
+    maxx: usize,
+    maxy: usize,
+    bit_depth: u32,
+) -> (Vec<i32>, Vec<i32>) {
     let half = 1i32 << (bit_depth - 1);
     let p = plane_ref(pic, plane);
     let (xi, yi) = (ix(x), ix(y));
     let mut above_row = vec![0i32; 2 * size + 1];
     for i in 0..size {
-        let v = if have_above { i32::from(p.get_clamped((xi + ix(i)).min(ix(maxx) - 1), yi - 1)) } else { half - 1 };
+        let v = if have_above {
+            i32::from(p.get_clamped((xi + ix(i)).min(ix(maxx) - 1), yi - 1))
+        } else {
+            half - 1
+        };
         if let Some(slot) = above_row.get_mut(1 + i) {
             *slot = v;
         }
@@ -340,7 +411,11 @@ fn assemble_edges(pic: &Picture, plane: usize, x: usize, y: usize, size: usize, 
     }
     let mut left_col = vec![0i32; size];
     for (i, slot) in left_col.iter_mut().enumerate() {
-        *slot = if have_left { i32::from(p.get_clamped(xi - 1, (yi + ix(i)).min(ix(maxy) - 1))) } else { half + 1 };
+        *slot = if have_left {
+            i32::from(p.get_clamped(xi - 1, (yi + ix(i)).min(ix(maxy) - 1)))
+        } else {
+            half + 1
+        };
     }
     (above_row, left_col)
 }
@@ -350,21 +425,51 @@ fn assemble_edges(pic: &Picture, plane: usize, x: usize, y: usize, size: usize, 
 /// `(r, c)`/`bsize` — see the module doc's "Intra mode" bullet for why the
 /// top-left 4x4 stands in for the whole (possibly much larger) block.
 #[allow(clippy::too_many_arguments)]
-fn choose_mode(ctx: &EncCtx, src: &Source<'_>, plane: usize, r: usize, c: usize, bsize: i32, avail_u: bool, avail_l: bool, bit_depth: u32) -> i32 {
+fn choose_mode(
+    ctx: &EncCtx,
+    src: &Source<'_>,
+    plane: usize,
+    r: usize,
+    c: usize,
+    bsize: i32,
+    avail_u: bool,
+    avail_l: bool,
+    bit_depth: u32,
+) -> i32 {
     let is_chroma = plane > 0;
     let base_x = (c * 8) >> u32::from(is_chroma);
     let base_y = (r * 8) >> u32::from(is_chroma);
-    let (maxx, maxy) = if is_chroma { (ctx.mi_cols * 4, ctx.mi_rows * 4) } else { (ctx.mi_cols * 8, ctx.mi_rows * 8) };
+    let (maxx, maxy) = if is_chroma {
+        (ctx.mi_cols * 4, ctx.mi_rows * 4)
+    } else {
+        (ctx.mi_cols * 8, ctx.mi_rows * 8)
+    };
     let size_px = block_pixel_size(bsize) >> u32::from(is_chroma);
     let not_on_right = size_px > 4;
-    let (above_row, left_col) = assemble_edges(&ctx.pic, plane, base_x, base_y, 4, avail_l, avail_u, not_on_right, maxx, maxy, bit_depth);
-    let Some(src_block) = src.plane(plane).sub(base_x, base_y, 4, 4) else { return tables::DC_PRED };
+    let (above_row, left_col) = assemble_edges(
+        &ctx.pic,
+        plane,
+        base_x,
+        base_y,
+        4,
+        avail_l,
+        avail_u,
+        not_on_right,
+        maxx,
+        maxy,
+        bit_depth,
+    );
+    let Some(src_block) = src.plane(plane).sub(base_x, base_y, 4, 4) else {
+        return tables::DC_PRED;
+    };
 
     let mut best_mode = tables::DC_PRED;
     let mut best_cost = u32::MAX;
     for mode in 0..10i32 {
         let mut pred = [0i32; 16];
-        crate::predict::predict_intra(&mut pred, mode, 4, 2, &above_row, &left_col, avail_l, avail_u, bit_depth);
+        crate::predict::predict_intra(
+            &mut pred, mode, 4, 2, &above_row, &left_col, avail_l, avail_u, bit_depth,
+        );
         let mut pred_u8 = [0u8; 16];
         for (slot, &v) in pred_u8.iter_mut().zip(pred.iter()) {
             *slot = u8::try_from(v.clamp(0, 255)).unwrap_or(0);
@@ -396,9 +501,23 @@ struct PendingUnit {
 /// the module doc's "How residual coding works" for the two-pass shape
 /// (reconstruct everything first, decide `skip`, then either write real
 /// tokens or write none).
-#[allow(clippy::too_many_lines, reason = "one coding block's whole mode-decision-then-residual sequence, kept together rather than split across calls that would each need most of these same parameters")]
-#[allow(clippy::integer_division, reason = "4:2:0 chroma dimensions and the 4x4-units-per-block count are both exact halvings of already-even quantities (mi-aligned luma dimensions, and block_pixel_size's own powers of two)")]
-fn encode_leaf(be: &mut Be, ctx: &mut EncCtx, src: &Source<'_>, entropy: &EntropyContext, r: usize, c: usize, bsize: i32) {
+#[allow(
+    clippy::too_many_lines,
+    reason = "one coding block's whole mode-decision-then-residual sequence, kept together rather than split across calls that would each need most of these same parameters"
+)]
+#[allow(
+    clippy::integer_division,
+    reason = "4:2:0 chroma dimensions and the 4x4-units-per-block count are both exact halvings of already-even quantities (mi-aligned luma dimensions, and block_pixel_size's own powers of two)"
+)]
+fn encode_leaf(
+    be: &mut Be,
+    ctx: &mut EncCtx,
+    src: &Source<'_>,
+    entropy: &EntropyContext,
+    r: usize,
+    c: usize,
+    bsize: i32,
+) {
     const BIT_DEPTH: u32 = 8;
     let avail_u = r > 0;
     let avail_l = c > 0;
@@ -419,7 +538,11 @@ fn encode_leaf(be: &mut Be, ctx: &mut EncCtx, src: &Source<'_>, entropy: &Entrop
         let is_chroma = plane > 0;
         let base_x = (c * 8) >> u32::from(is_chroma);
         let base_y = (r * 8) >> u32::from(is_chroma);
-        let (maxx, maxy) = if is_chroma { (maxx_c, maxy_c) } else { (maxx_y, maxy_y) };
+        let (maxx, maxy) = if is_chroma {
+            (maxx_c, maxy_c)
+        } else {
+            (maxx_y, maxy_y)
+        };
         let size = block_pixel_size(bsize) >> u32::from(is_chroma);
         let num4 = (size / 4).max(1);
 
@@ -433,10 +556,24 @@ fn encode_leaf(be: &mut Be, ctx: &mut EncCtx, src: &Source<'_>, entropy: &Entrop
                 let have_left = c > 0 || x4 > 0;
                 let have_above = r > 0 || y4 > 0;
                 let not_on_right = x4 + 1 < num4;
-                let (above_row, left_col) = assemble_edges(&ctx.pic, plane, start_x, start_y, 4, have_left, have_above, not_on_right, maxx, maxy, BIT_DEPTH);
+                let (above_row, left_col) = assemble_edges(
+                    &ctx.pic,
+                    plane,
+                    start_x,
+                    start_y,
+                    4,
+                    have_left,
+                    have_above,
+                    not_on_right,
+                    maxx,
+                    maxy,
+                    BIT_DEPTH,
+                );
 
                 let mut pred = [0i32; 16];
-                crate::predict::predict_intra(&mut pred, mode, 4, 2, &above_row, &left_col, have_left, have_above, BIT_DEPTH);
+                crate::predict::predict_intra(
+                    &mut pred, mode, 4, 2, &above_row, &left_col, have_left, have_above, BIT_DEPTH,
+                );
 
                 let mut residual = [0i32; 16];
                 for i in 0..4usize {
@@ -469,20 +606,39 @@ fn encode_leaf(be: &mut Be, ctx: &mut EncCtx, src: &Source<'_>, entropy: &Entrop
                     }
                 }
 
-                pending.push(PendingUnit { plane, x: start_x, y: start_y, tokens: tok });
+                pending.push(PendingUnit {
+                    plane,
+                    x: start_x,
+                    y: start_y,
+                    tokens: tok,
+                });
             }
         }
     }
 
-    let above_skip = ctx.mi_at(ix(r).wrapping_sub(1), ix(c)).is_some_and(|m| m.skip);
-    let left_skip = ctx.mi_at(ix(r), ix(c).wrapping_sub(1)).is_some_and(|m| m.skip);
+    let above_skip = ctx
+        .mi_at(ix(r).wrapping_sub(1), ix(c))
+        .is_some_and(|m| m.skip);
+    let left_skip = ctx
+        .mi_at(ix(r), ix(c).wrapping_sub(1))
+        .is_some_and(|m| m.skip);
     let sctx = usize::from(avail_u && above_skip) + usize::from(avail_l && left_skip);
     let skip_prob = tables::DEFAULT_SKIP_PROB.get(sctx).copied().unwrap_or(128);
     let skip = !any_nonzero;
     be.write_bool(skip_prob, skip);
 
-    let above_mode = if avail_u { ctx.mi_at(ix(r).wrapping_sub(1), ix(c)).map_or(tables::DC_PRED, |m| m.y_mode) } else { tables::DC_PRED };
-    let left_mode = if avail_l { ctx.mi_at(ix(r), ix(c).wrapping_sub(1)).map_or(tables::DC_PRED, |m| m.y_mode) } else { tables::DC_PRED };
+    let above_mode = if avail_u {
+        ctx.mi_at(ix(r).wrapping_sub(1), ix(c))
+            .map_or(tables::DC_PRED, |m| m.y_mode)
+    } else {
+        tables::DC_PRED
+    };
+    let left_mode = if avail_l {
+        ctx.mi_at(ix(r), ix(c).wrapping_sub(1))
+            .map_or(tables::DC_PRED, |m| m.y_mode)
+    } else {
+        tables::DC_PRED
+    };
     let y_probs = tables::KF_Y_MODE_PROBS
         .get(usize::try_from(above_mode).unwrap_or(0))
         .and_then(|row| row.get(usize::try_from(left_mode).unwrap_or(0)))
@@ -490,7 +646,10 @@ fn encode_leaf(be: &mut Be, ctx: &mut EncCtx, src: &Source<'_>, entropy: &Entrop
         .unwrap_or([128; 9]);
     be.write_tree(&tables::INTRA_MODE_TREE, &y_probs, y_mode);
 
-    let uv_probs = tables::KF_UV_MODE_PROBS.get(usize::try_from(y_mode).unwrap_or(0)).copied().unwrap_or([128; 9]);
+    let uv_probs = tables::KF_UV_MODE_PROBS
+        .get(usize::try_from(y_mode).unwrap_or(0))
+        .copied()
+        .unwrap_or([128; 9]);
     be.write_tree(&tables::INTRA_MODE_TREE, &uv_probs, uv_mode);
 
     let scan = tables::get_scan(tables::TX_4X4, TxType::DctDct);
@@ -511,7 +670,25 @@ fn encode_leaf(be: &mut Be, ctx: &mut EncCtx, src: &Source<'_>, entropy: &Entrop
         }
     } else {
         for p in &pending {
-            let _nonzero = tokens::encode_tokens(be, entropy, &p.tokens, ctx.mi_cols, ctx.mi_rows, &mut ctx.above_nz, &mut ctx.left_nz, p.plane, p.x, p.y, tables::TX_4X4, scan, TxType::DctDct, false, true, true, BIT_DEPTH);
+            let _nonzero = tokens::encode_tokens(
+                be,
+                entropy,
+                &p.tokens,
+                ctx.mi_cols,
+                ctx.mi_rows,
+                &mut ctx.above_nz,
+                &mut ctx.left_nz,
+                p.plane,
+                p.x,
+                p.y,
+                tables::TX_4X4,
+                scan,
+                TxType::DctDct,
+                false,
+                true,
+                true,
+                BIT_DEPTH,
+            );
         }
     }
 
@@ -521,15 +698,36 @@ fn encode_leaf(be: &mut Be, ctx: &mut EncCtx, src: &Source<'_>, entropy: &Entrop
 /// Write one partition recursion level: real content-adaptive `NONE`
 /// (via [`should_split`]) vs `SPLIT` (issue #330), never below `BLOCK_8X8`
 /// — see the module doc for scope.
-fn encode_partition(be: &mut Be, ctx: &mut EncCtx, src: &Source<'_>, entropy: &EntropyContext, r: usize, c: usize, bsize: i32) {
+fn encode_partition(
+    be: &mut Be,
+    ctx: &mut EncCtx,
+    src: &Source<'_>,
+    entropy: &EntropyContext,
+    r: usize,
+    c: usize,
+    bsize: i32,
+) {
     if r >= ctx.mi_rows || c >= ctx.mi_cols {
         return;
     }
-    let num8x8 = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(bsize).unwrap_or(0)).copied().unwrap_or(1);
+    let num8x8 = tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+        .get(usize::try_from(bsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(1);
     let half = num8x8 >> 1;
 
-    let pctx = partition_ctx(&ctx.above_partition_context, ctx.left_partition_context, r, c, bsize, num8x8);
-    let probs = tables::KF_PARTITION_PROBS.get(pctx).copied().unwrap_or([128; 3]);
+    let pctx = partition_ctx(
+        &ctx.above_partition_context,
+        ctx.left_partition_context,
+        r,
+        c,
+        bsize,
+        num8x8,
+    );
+    let probs = tables::KF_PARTITION_PROBS
+        .get(pctx)
+        .copied()
+        .unwrap_or([128; 3]);
 
     let split = bsize != tables::BLOCK_8X8 && should_split(src, r, c, bsize);
     if split {
@@ -551,8 +749,14 @@ fn encode_partition(be: &mut Be, ctx: &mut EncCtx, src: &Source<'_>, entropy: &E
     // §9.3.2's post-partition context update, at the leaf only (the
     // `SPLIT` branch above returns before reaching here). Generic over
     // `bsize` already — a leaf can now be 8x8, 16x16, 32x32 or 64x64.
-    let bw = tables::B_WIDTH_LOG2_LOOKUP.get(usize::try_from(bsize).unwrap_or(0)).copied().unwrap_or(0);
-    let bh = tables::B_HEIGHT_LOG2_LOOKUP.get(usize::try_from(bsize).unwrap_or(0)).copied().unwrap_or(0);
+    let bw = tables::B_WIDTH_LOG2_LOOKUP
+        .get(usize::try_from(bsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
+    let bh = tables::B_HEIGHT_LOG2_LOOKUP
+        .get(usize::try_from(bsize).unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
     for i in 0..num8x8 {
         if let Some(slot) = ctx.above_partition_context.get_mut(c + i) {
             *slot = 15u8 >> bw;
@@ -591,7 +795,12 @@ fn encode_compressed_header() -> Vec<u8> {
 /// `width`x`height`, single tile, loop filter and segmentation disabled,
 /// `base_q_idx = 0` with every delta zero (`lossless = true`, which is what
 /// buys the zero-bit `tx_mode` above).
-fn encode_uncompressed_header(width: u32, height: u32, compressed_header_len: u16, sb64_cols: usize) -> Vec<u8> {
+fn encode_uncompressed_header(
+    width: u32,
+    height: u32,
+    compressed_header_len: u16,
+    sb64_cols: usize,
+) -> Vec<u8> {
     use vaco_bitstream::BitWriter;
     let mut w = BitWriter::new();
     w.put(2, 0b10); // frame_marker
@@ -675,7 +884,9 @@ pub fn encode_keyframe(budget: &mut Budget, frame: &Frame) -> Result<Vec<u8>> {
         return Err(Error::Unsupported("vp9 encode: zero-sized frame"));
     }
     if width > 65536 || height > 65536 {
-        return Err(Error::InvalidData("vp9 encode: frame_size() cannot represent a dimension over 65536"));
+        return Err(Error::InvalidData(
+            "vp9 encode: frame_size() cannot represent a dimension over 65536",
+        ));
     }
     if !width.is_multiple_of(64) || !height.is_multiple_of(64) {
         return Err(Error::Unsupported(
@@ -690,7 +901,11 @@ pub fn encode_keyframe(budget: &mut Budget, frame: &Frame) -> Result<Vec<u8>> {
     let sb64_cols = mi_cols.div_ceil(8);
 
     let compressed = encode_compressed_header();
-    let header_len = u16::try_from(compressed.len()).map_err(|_| Error::InvalidData("vp9 encode: compressed header too large for its own 16-bit length field"))?;
+    let header_len = u16::try_from(compressed.len()).map_err(|_| {
+        Error::InvalidData(
+            "vp9 encode: compressed header too large for its own 16-bit length field",
+        )
+    })?;
     let mut out = encode_uncompressed_header(width, height, header_len, sb64_cols);
     out.extend_from_slice(&compressed);
 
@@ -738,7 +953,10 @@ impl std::fmt::Debug for Vp9Encoder {
 impl Vp9Encoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { machine: Machine::new(Caps::empty()), limits }
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+        }
     }
 }
 
@@ -944,7 +1162,9 @@ mod tests {
     }
 
     fn plane_bytes(frame: &Frame, idx: usize) -> Vec<u8> {
-        let FrameData::Video { .. } = &frame.data else { panic!("video frame") };
+        let FrameData::Video { .. } = &frame.data else {
+            panic!("video frame")
+        };
         let p = frame.plane(idx).expect("plane");
         let mut out = Vec::new();
         for row in p.rows_iter() {
@@ -956,7 +1176,9 @@ mod tests {
     #[test]
     fn a_64x64_frame_round_trips_through_our_own_decoder() {
         let (_, frame) = encode_and_decode(64, 64);
-        let FrameData::Video { width, height, .. } = frame.data else { panic!("video frame") };
+        let FrameData::Video { width, height, .. } = frame.data else {
+            panic!("video frame")
+        };
         assert_eq!((width, height), (64, 64));
     }
 
@@ -966,7 +1188,9 @@ mod tests {
         // context carry (`above_partition_context` persists across the
         // whole frame; `left_partition_context` resets each SB row).
         let (_, frame) = encode_and_decode(192, 128);
-        let FrameData::Video { width, height, .. } = frame.data else { panic!("video frame") };
+        let FrameData::Video { width, height, .. } = frame.data else {
+            panic!("video frame")
+        };
         assert_eq!((width, height), (192, 128));
     }
 
@@ -992,7 +1216,12 @@ mod tests {
                 let d = plane_bytes(&decoded, plane);
                 assert_eq!(s.len(), d.len(), "{w}x{h} plane {plane} size mismatch");
                 let diffs = s.iter().zip(d.iter()).filter(|(a, b)| a != b).count();
-                assert_eq!(diffs, 0, "{w}x{h} plane {plane}: {diffs} of {} samples differ (lossless round trip must be exact)", s.len());
+                assert_eq!(
+                    diffs,
+                    0,
+                    "{w}x{h} plane {plane}: {diffs} of {} samples differ (lossless round trip must be exact)",
+                    s.len()
+                );
             }
         }
     }
@@ -1001,9 +1230,15 @@ mod tests {
     fn non_multiple_of_64_dimensions_are_rejected_not_guessed() {
         let mut budget = Budget::new(Limits::permissive());
         let frame = make_test_frame(&mut budget, 65, 64);
-        assert!(matches!(encode_keyframe(&mut budget, &frame), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            encode_keyframe(&mut budget, &frame),
+            Err(Error::Unsupported(_))
+        ));
         let frame = make_test_frame(&mut budget, 64, 100);
-        assert!(matches!(encode_keyframe(&mut budget, &frame), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            encode_keyframe(&mut budget, &frame),
+            Err(Error::Unsupported(_))
+        ));
     }
 
     #[test]
@@ -1044,7 +1279,9 @@ mod tests {
             let mut budget = Budget::new(Limits::permissive());
             let frame = make_test_frame(&mut budget, w, h);
             let bytes = encode_keyframe(&mut budget, &frame).expect("encode");
-            let path = format!("/private/tmp/claude-501/-Users-matthew-projects-vaco/fd623546-f87e-4491-a6f3-60abedbd999a/scratchpad/vp9_c33b_{w}x{h}.ivf");
+            let path = format!(
+                "/private/tmp/claude-501/-Users-matthew-projects-vaco/fd623546-f87e-4491-a6f3-60abedbd999a/scratchpad/vp9_c33b_{w}x{h}.ivf"
+            );
             std::fs::write(&path, ivf(w as u16, h as u16, &bytes)).expect("write fixture");
             eprintln!("wrote {path} ({} bytes of frame data)", bytes.len());
         }
@@ -1060,7 +1297,10 @@ mod tests {
         enc.send_frame(Some(&frame)).expect("send");
         let pkt = enc.receive_packet().expect("packet");
         assert!(pkt.is_key());
-        assert!(matches!(enc.receive_packet(), Err(CoreError::NeedMoreInput)));
+        assert!(matches!(
+            enc.receive_packet(),
+            Err(CoreError::NeedMoreInput)
+        ));
         enc.send_frame(None).expect("drain");
         assert!(matches!(enc.receive_packet(), Err(CoreError::Eof)));
     }
@@ -1109,7 +1349,10 @@ mod tests {
         assert_eq!(extradata.len(), 12, "FullBox header + 8 fixed vpcC fields");
         assert_eq!(&extradata[..4], &[1, 0, 0, 0], "version=1, flags=0");
         assert_eq!(extradata[4], 0, "profile 0");
-        assert_eq!(extradata[6], 0x82, "bitDepth=8, chromaSubsampling=1 (4:2:0), fullRange=0");
+        assert_eq!(
+            extradata[6], 0x82,
+            "bitDepth=8, chromaSubsampling=1 (4:2:0), fullRange=0"
+        );
         assert_eq!(&extradata[10..12], &[0, 0], "codecIntializationDataSize");
     }
 
@@ -1129,14 +1372,22 @@ mod tests {
     #[test]
     fn a_frame_ending_in_the_superframe_marker_pattern_gets_one_byte_of_padding() {
         let plain = vec![0x11u8, 0x22, 0x33];
-        assert_eq!(disambiguate_superframe_marker(plain.clone()), plain, "no collision, no change");
+        assert_eq!(
+            disambiguate_superframe_marker(plain.clone()),
+            plain,
+            "no collision, no change"
+        );
 
         let mut colliding = plain.clone();
         colliding.push(0xC4); // 0b110_00_100: matches the marker pattern
         let padded = disambiguate_superframe_marker(colliding.clone());
         assert_eq!(padded.len(), colliding.len() + 1);
         assert_eq!(padded.last(), Some(&0));
-        assert_eq!(&padded[..colliding.len()], colliding.as_slice(), "original bytes untouched, just padded");
+        assert_eq!(
+            &padded[..colliding.len()],
+            colliding.as_slice(),
+            "original bytes untouched, just padded"
+        );
         assert_eq!(
             crate::superframe::split(&padded),
             vec![padded.as_slice()],

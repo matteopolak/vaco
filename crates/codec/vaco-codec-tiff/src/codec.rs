@@ -5,9 +5,9 @@
 
 use std::io::Cursor;
 
+use tiff::ColorType;
 use tiff::decoder::DecodingResult;
 use tiff::encoder::colortype;
-use tiff::ColorType;
 use vaco_core::{Error, Result};
 use vaco_frame::{Frame, FrameData, FrameFlags};
 use vaco_limits::Budget;
@@ -68,7 +68,12 @@ struct Page {
 /// own. Palette, CMYK, floating point and other bit depths are a documented
 /// coverage gap (plan 15 §4A.2's TIFF risk note: "coverage, not
 /// correctness"), reported as [`Error::Unsupported`] rather than guessed at.
-fn page_from_result(width: u32, height: u32, color: ColorType, result: DecodingResult) -> Result<Page> {
+fn page_from_result(
+    width: u32,
+    height: u32,
+    color: ColorType,
+    result: DecodingResult,
+) -> Result<Page> {
     match (color, result) {
         (ColorType::Gray(8), DecodingResult::U8(v)) => Ok(Page {
             width,
@@ -160,8 +165,8 @@ fn frame_from_page(budget: &mut Budget, page: &Page) -> Result<Frame> {
 /// itself does not implement (CCITT G3/G4, JPEG-in-TIFF — a genuine coverage
 /// gap, not a bug). [`Error::LimitExceeded`] when a page exceeds `budget`.
 pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
-    let mut decoder =
-        tiff::decoder::Decoder::new(Cursor::new(bytes)).map_err(|_| Error::InvalidData("tiff: header"))?;
+    let mut decoder = tiff::decoder::Decoder::new(Cursor::new(bytes))
+        .map_err(|_| Error::InvalidData("tiff: header"))?;
     let mut out = Vec::new();
     loop {
         let (width, height) = decoder
@@ -281,7 +286,13 @@ pub fn encode(frames: &[Frame], options: &EncodeOptions) -> Result<Vec<u8>> {
             .map_err(|_| Error::InvalidData("tiff: header encode"))?
             .with_compression(compression);
         for frame in frames {
-            let FrameData::Video { format, width, height, .. } = &frame.data else {
+            let FrameData::Video {
+                format,
+                width,
+                height,
+                ..
+            } = &frame.data
+            else {
                 return Err(Error::Unsupported("tiff: audio frame"));
             };
             let (width, height) = (*width, *height);
@@ -313,21 +324,24 @@ pub fn encode(frames: &[Frame], options: &EncodeOptions) -> Result<Vec<u8>> {
 fn to_encodable(frame: &Frame, format: PixFmt) -> Result<Encodable> {
     Ok(match format {
         PixFmt::Gray8 => Encodable::Gray8(packed_plane_bytes(frame, plane_row_bytes(frame, 1)?)?),
-        PixFmt::Gray16le | PixFmt::Gray16be => {
-            Encodable::Gray16(unpack_u16(&packed_plane_bytes(frame, plane_row_bytes(frame, 2)?)?))
-        }
+        PixFmt::Gray16le | PixFmt::Gray16be => Encodable::Gray16(unpack_u16(&packed_plane_bytes(
+            frame,
+            plane_row_bytes(frame, 2)?,
+        )?)),
         // The `tiff` crate's encoder has no grayscale+alpha `ColorType`
         // marker (only `Gray*`, `RGB*`, `RGBA*`, `CMYK*`, `YCbCr8`), so
         // `Ya8`/`Ya16` cannot round-trip through encode — a real coverage
         // gap, not an oversight; decode still supports them.
         PixFmt::Rgb24 => Encodable::Rgb8(packed_plane_bytes(frame, plane_row_bytes(frame, 3)?)?),
-        PixFmt::Rgb48le | PixFmt::Rgb48be => {
-            Encodable::Rgb16(unpack_u16(&packed_plane_bytes(frame, plane_row_bytes(frame, 6)?)?))
-        }
+        PixFmt::Rgb48le | PixFmt::Rgb48be => Encodable::Rgb16(unpack_u16(&packed_plane_bytes(
+            frame,
+            plane_row_bytes(frame, 6)?,
+        )?)),
         PixFmt::Rgba => Encodable::Rgba8(packed_plane_bytes(frame, plane_row_bytes(frame, 4)?)?),
-        PixFmt::Rgba64le | PixFmt::Rgba64be => {
-            Encodable::Rgba16(unpack_u16(&packed_plane_bytes(frame, plane_row_bytes(frame, 8)?)?))
-        }
+        PixFmt::Rgba64le | PixFmt::Rgba64be => Encodable::Rgba16(unpack_u16(&packed_plane_bytes(
+            frame,
+            plane_row_bytes(frame, 8)?,
+        )?)),
         _ => return Err(Error::Unsupported("tiff: encode pixel format")),
     })
 }

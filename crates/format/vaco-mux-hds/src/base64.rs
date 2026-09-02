@@ -10,8 +10,7 @@
 //! this crate follows the same, already-established convention rather than
 //! introducing the first `base64` crate dependency.
 
-const ALPHABET: &[u8; 64] =
-    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 #[must_use]
 pub fn encode(input: &[u8]) -> String {
@@ -26,7 +25,8 @@ pub fn encode(input: &[u8]) -> String {
         let c2 = ((b1 & 0b0000_1111) << 2) | (b2 >> 6);
         let c3 = b2 & 0b0011_1111;
 
-        let alphabet = |i: u8| char::from(ALPHABET.get(usize::from(i & 0x3f)).copied().unwrap_or(b'A'));
+        let alphabet =
+            |i: u8| char::from(ALPHABET.get(usize::from(i & 0x3f)).copied().unwrap_or(b'A'));
         out.push(alphabet(c0));
         out.push(alphabet(c1));
         out.push(if chunk.len() > 1 { alphabet(c2) } else { '=' });

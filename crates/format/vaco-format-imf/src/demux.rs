@@ -130,7 +130,10 @@ impl TrackCursor {
     fn new(stream_index: u32, resources: Vec<Resource>) -> Self {
         let total_units = resources
             .iter()
-            .map(|r| r.source_duration.saturating_mul(u64::from(r.repeat_count.max(1))))
+            .map(|r| {
+                r.source_duration
+                    .saturating_mul(u64::from(r.repeat_count.max(1)))
+            })
             .fold(0u64, u64::saturating_add);
         Self {
             stream_index,
@@ -169,7 +172,9 @@ impl TrackCursor {
         self.composition_unit = self.composition_unit.saturating_add(1);
         self.unit_in_resource = self.unit_in_resource.saturating_add(1);
         if let Some(res) = self.current_resource() {
-            let total = res.source_duration.saturating_mul(u64::from(res.repeat_count.max(1)));
+            let total = res
+                .source_duration
+                .saturating_mul(u64::from(res.repeat_count.max(1)));
             if self.unit_in_resource >= total {
                 self.resource_idx += 1;
                 self.unit_in_resource = 0;
@@ -193,7 +198,9 @@ impl TrackCursor {
         let clamped = target.min(self.total_units.saturating_sub(1));
         let mut remaining = clamped;
         for (idx, res) in self.resources.iter().enumerate() {
-            let total = res.source_duration.saturating_mul(u64::from(res.repeat_count.max(1)));
+            let total = res
+                .source_duration
+                .saturating_mul(u64::from(res.repeat_count.max(1)));
             if remaining < total || idx + 1 == self.resources.len() {
                 self.resource_idx = idx;
                 self.unit_in_resource = remaining.min(total.saturating_sub(1));
@@ -294,17 +301,19 @@ impl ImfDemuxer {
             .map(|(i, _)| i)
     }
 
-    fn ensure_open<'a>(package: &Package, cursor: &'a mut TrackCursor) -> Result<&'a mut OpenResource> {
+    fn ensure_open<'a>(
+        package: &Package,
+        cursor: &'a mut TrackCursor,
+    ) -> Result<&'a mut OpenResource> {
         if cursor.open.is_none() {
-            let res = cursor
-                .current_resource()
-                .ok_or(Error::InvalidData("imf: track cursor has no current resource"))?;
+            let res = cursor.current_resource().ok_or(Error::InvalidData(
+                "imf: track cursor has no current resource",
+            ))?;
             cursor.open = Some(open_resource(package, &res.track_file_id)?);
         }
-        cursor
-            .open
-            .as_mut()
-            .ok_or(Error::InvalidData("imf: track cursor failed to open its resource"))
+        cursor.open.as_mut().ok_or(Error::InvalidData(
+            "imf: track cursor failed to open its resource",
+        ))
     }
 }
 
@@ -329,7 +338,9 @@ impl Demuxer for ImfDemuxer {
             return Err(Error::Eof);
         };
         let opened = Self::ensure_open(package, cursor)?;
-        let mut pkt = opened.demux.read_edit_unit(opened.mxf_stream_index, file_unit)?;
+        let mut pkt = opened
+            .demux
+            .read_edit_unit(opened.mxf_stream_index, file_unit)?;
         pkt.stream_index = cursor.stream_index;
         let ticks = i64::try_from(cursor.composition_unit).unwrap_or(i64::MAX);
         pkt.pts = Timestamp::new(ticks);
@@ -348,7 +359,11 @@ impl Demuxer for ImfDemuxer {
         if self.package.is_none() {
             return Err(Error::NotSeekable);
         }
-        let Some(cursor) = self.tracks.iter_mut().find(|t| t.stream_index == stream_index) else {
+        let Some(cursor) = self
+            .tracks
+            .iter_mut()
+            .find(|t| t.stream_index == stream_index)
+        else {
             return Err(Error::NotSeekable);
         };
         let Some(target_unit) = ts.ticks() else {

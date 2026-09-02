@@ -668,7 +668,6 @@ mod tests {
         }
     }
 
-
     #[test]
     fn quality_band_needs_a_justification() {
         let err =

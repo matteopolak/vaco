@@ -31,15 +31,28 @@ mod tests {
     fn every_declared_name_is_creatable_with_no_arguments() {
         let registry = PaletteRegistry;
         for &name in NAMES {
-            let req = Instantiate { name, instance: name, args: None, arguments: &[] };
-            assert!(registry.create(&req).is_ok(), "{name} should be creatable with defaults");
+            let req = Instantiate {
+                name,
+                instance: name,
+                args: None,
+                arguments: &[],
+            };
+            assert!(
+                registry.create(&req).is_ok(),
+                "{name} should be creatable with defaults"
+            );
         }
     }
 
     #[test]
     fn an_unknown_name_is_a_clean_error_not_a_panic() {
         let registry = PaletteRegistry;
-        let req = Instantiate { name: "not-a-real-filter", instance: "not-a-real-filter", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "not-a-real-filter",
+            instance: "not-a-real-filter",
+            args: None,
+            arguments: &[],
+        };
         assert!(registry.create(&req).is_err());
     }
 }

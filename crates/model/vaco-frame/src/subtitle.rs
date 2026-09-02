@@ -147,7 +147,11 @@ impl SubtitleRect {
             w,
             h,
             forced,
-            content: SubtitleContent::Bitmap { stride, data, palette },
+            content: SubtitleContent::Bitmap {
+                stride,
+                data,
+                palette,
+            },
         })
     }
 
@@ -188,9 +192,15 @@ mod tests {
         let mut budget = Budget::new(Limits::strict());
         let pixels = [1u8, 2, 3, 4, 5, 6];
         let palette = vec![[0, 0, 0, 0], [255, 255, 255, 255]];
-        let r = SubtitleRect::bitmap(&mut budget, 5, 5, 3, 2, true, 3, &pixels, palette.clone()).unwrap();
+        let r = SubtitleRect::bitmap(&mut budget, 5, 5, 3, 2, true, 3, &pixels, palette.clone())
+            .unwrap();
         assert_eq!((r.w, r.h), (3, 2));
-        let SubtitleContent::Bitmap { stride, data, palette: p } = &r.content else {
+        let SubtitleContent::Bitmap {
+            stride,
+            data,
+            palette: p,
+        } = &r.content
+        else {
             unreachable!("just constructed a Bitmap rect");
         };
         assert_eq!(*stride, 3);

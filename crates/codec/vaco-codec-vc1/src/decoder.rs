@@ -103,7 +103,10 @@ enum PredDir {
 }
 
 /// SS8.1.3.3: `DCStepSize` from `MQUANT`.
-#[allow(clippy::integer_division, reason = "MQUANT/2 is the spec's own integer-truncating formula, not a shortcut around a real division")]
+#[allow(
+    clippy::integer_division,
+    reason = "MQUANT/2 is the spec's own integer-truncating formula, not a shortcut around a real division"
+)]
 fn dc_step_size(mquant: u32) -> i32 {
     match mquant {
         1 | 2 => 2 * i32::try_from(mquant).unwrap_or(2),
@@ -118,7 +121,12 @@ fn dc_step_size(mquant: u32) -> i32 {
 /// SS8.1.3.2 Figure 39: DC predictor and direction, Simple/Main I/BI.
 /// `default_predictor` is used for any of A/B/C that is out of frame
 /// bounds (there is no slice boundary in this crate's single-slice scope).
-fn dc_predictor(default_predictor: i32, a: Option<i32>, b: Option<i32>, c: Option<i32>) -> (PredDir, i32) {
+fn dc_predictor(
+    default_predictor: i32,
+    a: Option<i32>,
+    b: Option<i32>,
+    c: Option<i32>,
+) -> (PredDir, i32) {
     let a = a.unwrap_or(default_predictor);
     let b = b.unwrap_or(default_predictor);
     let c = c.unwrap_or(default_predictor);
@@ -130,9 +138,15 @@ fn dc_predictor(default_predictor: i32, a: Option<i32>, b: Option<i32>, c: Optio
 }
 
 /// SS8.1.3.1 Figure 37: DC differential magnitude + sign decode.
-fn decode_dc_differential(r: &mut BitReader<'_>, table: &[vaco_codec_vlc::VlcEntry], mquant: u32) -> Result<i32> {
+fn decode_dc_differential(
+    r: &mut BitReader<'_>,
+    table: &[vaco_codec_vlc::VlcEntry],
+    mquant: u32,
+) -> Result<i32> {
     let vlc = VlcTable::new(table);
-    let mag = vlc.decode(r).ok_or(Error::InvalidData("vc1: DC VLC decode failed"))?;
+    let mag = vlc
+        .decode(r)
+        .ok_or(Error::InvalidData("vc1: DC VLC decode failed"))?;
     let mut differential = if mag == tables::ESCAPE_DC {
         let bits = match mquant {
             1 => 10,
@@ -164,7 +178,10 @@ struct AcSymbol {
     last: bool,
 }
 
-#[allow(clippy::too_many_lines, reason = "one entropy-decode state machine (VLC index / escape mode 1/2/3), splitting it would just move the shared mutable escape-mode-3 state across a function boundary")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one entropy-decode state machine (VLC index / escape mode 1/2/3), splitting it would just move the shared mutable escape-mode-3 state across a function boundary"
+)]
 fn decode_ac_symbol(
     r: &mut BitReader<'_>,
     set: &AcCodingSet,
@@ -174,44 +191,85 @@ fn decode_ac_symbol(
     pquant: u32,
 ) -> Result<AcSymbol> {
     let vlc = VlcTable::new(set.code);
-    let index = vlc.decode(r).ok_or(Error::InvalidData("vc1: AC VLC decode failed"))?;
+    let index = vlc
+        .decode(r)
+        .ok_or(Error::InvalidData("vc1: AC VLC decode failed"))?;
     if index != set.escape_index {
         let idx = index as usize;
-        let &(run, level) = set.run_level.get(idx).ok_or(Error::InvalidData("vc1: AC index out of range"))?;
+        let &(run, level) = set
+            .run_level
+            .get(idx)
+            .ok_or(Error::InvalidData("vc1: AC index out of range"))?;
         let last = idx >= set.start_index_of_last;
         let sign = r.get_bit();
-        let level = if sign == 1 { -i32::from(level) } else { i32::from(level) };
-        return Ok(AcSymbol { run: u32::from(run), level, last });
+        let level = if sign == 1 {
+            -i32::from(level)
+        } else {
+            i32::from(level)
+        };
+        return Ok(AcSymbol {
+            run: u32::from(run),
+            level,
+            last,
+        });
     }
 
-    let escmode = VlcTable::new(&tables::ESCMODE).decode(r).ok_or(Error::InvalidData("vc1: ESCMODE decode failed"))?;
+    let escmode = VlcTable::new(&tables::ESCMODE)
+        .decode(r)
+        .ok_or(Error::InvalidData("vc1: ESCMODE decode failed"))?;
     match escmode {
         1 => {
-            let idx2 = vlc.decode(r).ok_or(Error::InvalidData("vc1: ACCOEF2 decode failed"))?;
+            let idx2 = vlc
+                .decode(r)
+                .ok_or(Error::InvalidData("vc1: ACCOEF2 decode failed"))?;
             let idx = idx2 as usize;
-            let &(run, level) = set.run_level.get(idx).ok_or(Error::InvalidData("vc1: AC index out of range"))?;
+            let &(run, level) = set
+                .run_level
+                .get(idx)
+                .ok_or(Error::InvalidData("vc1: AC index out of range"))?;
             let last = idx >= set.start_index_of_last;
             let delta = if last {
-                set.last_delta_level_by_run.get(run as usize).copied().unwrap_or(0)
+                set.last_delta_level_by_run
+                    .get(run as usize)
+                    .copied()
+                    .unwrap_or(0)
             } else {
-                set.not_last_delta_level_by_run.get(run as usize).copied().unwrap_or(0)
+                set.not_last_delta_level_by_run
+                    .get(run as usize)
+                    .copied()
+                    .unwrap_or(0)
             };
             let mut level = i32::from(level) + i32::from(delta);
             if r.get_bit() == 1 {
                 level = -level;
             }
-            Ok(AcSymbol { run: u32::from(run), level, last })
+            Ok(AcSymbol {
+                run: u32::from(run),
+                level,
+                last,
+            })
         }
         2 => {
-            let idx2 = vlc.decode(r).ok_or(Error::InvalidData("vc1: ACCOEF2 decode failed"))?;
+            let idx2 = vlc
+                .decode(r)
+                .ok_or(Error::InvalidData("vc1: ACCOEF2 decode failed"))?;
             let idx = idx2 as usize;
-            let &(run, level) = set.run_level.get(idx).ok_or(Error::InvalidData("vc1: AC index out of range"))?;
+            let &(run, level) = set
+                .run_level
+                .get(idx)
+                .ok_or(Error::InvalidData("vc1: AC index out of range"))?;
             let last = idx >= set.start_index_of_last;
             let level_idx = (level.saturating_sub(1)) as usize;
             let delta = if last {
-                set.last_delta_run_by_level.get(level_idx).copied().unwrap_or(0)
+                set.last_delta_run_by_level
+                    .get(level_idx)
+                    .copied()
+                    .unwrap_or(0)
             } else {
-                set.not_last_delta_run_by_level.get(level_idx).copied().unwrap_or(0)
+                set.not_last_delta_run_by_level
+                    .get(level_idx)
+                    .copied()
+                    .unwrap_or(0)
             };
             let run = u32::from(run) + u32::from(delta) + 1;
             let mut level = i32::from(level);
@@ -260,7 +318,14 @@ fn decode_ac_run_level(
     let mut array = [0i32; 64];
     let mut pos = 1usize;
     loop {
-        let sym = decode_ac_symbol(r, set, first_mode3, mode3_level_bits, mode3_run_bits, pquant)?;
+        let sym = decode_ac_symbol(
+            r,
+            set,
+            first_mode3,
+            mode3_level_bits,
+            mode3_run_bits,
+            pquant,
+        )?;
         pos = pos.saturating_add(sym.run as usize);
         if let Some(slot) = array.get_mut(pos) {
             *slot = sym.level;
@@ -324,7 +389,10 @@ struct FrameCtx<'a> {
 /// and reconstruction into `plane` at `(base_x, base_y)`. Returns the
 /// dequantized DC value and first AC row/column, for use as a later
 /// neighbour's predictor.
-#[allow(clippy::too_many_arguments, reason = "one block-reconstruction call site; the arguments are the whole of a block's neighbour/coding context")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one block-reconstruction call site; the arguments are the whole of a block's neighbour/coding context"
+)]
 fn decode_intra_block(
     r: &mut BitReader<'_>,
     ctx: &FrameCtx<'_>,
@@ -349,15 +417,26 @@ fn decode_intra_block(
     // SS8.1.3.2's own formula: `(1024 + DCStepSize>>1) / DCStepSize` --
     // integer-truncating division is the specified rounding, not an
     // approximation of a real one.
-    #[allow(clippy::integer_division, reason = "the spec's own default_predictor formula truncates, not approximates")]
+    #[allow(
+        clippy::integer_division,
+        reason = "the spec's own default_predictor formula truncates, not approximates"
+    )]
     let default_predictor = if ctx.seq.overlap && ctx.ph.pquant >= 9 {
         0
     } else {
         let step = dc_step_size(ctx.mquant);
-        if step == 0 { 0 } else { (1024 + step / 2) / step }
+        if step == 0 {
+            0
+        } else {
+            (1024 + step / 2) / step
+        }
     };
     let pred_a = row.checked_sub(1).map(|r0| grid.dc_at(r0, col));
-    let pred_b = if row > 0 && col > 0 { Some(grid.dc_at(row - 1, col - 1)) } else { None };
+    let pred_b = if row > 0 && col > 0 {
+        Some(grid.dc_at(row - 1, col - 1))
+    } else {
+        None
+    };
     let pred_c = col.checked_sub(1).map(|c0| grid.dc_at(row, c0));
     let (dir, dc_pred) = dc_predictor(default_predictor, pred_a, pred_b, pred_c);
 
@@ -371,7 +450,14 @@ fn decode_intra_block(
         *slot = dc_coeff;
     }
     if coded {
-        let raw = decode_ac_run_level(r, ac_set, first_mode3, mode3_level_bits, mode3_run_bits, ctx.ph.pquant)?;
+        let raw = decode_ac_run_level(
+            r,
+            ac_set,
+            first_mode3,
+            mode3_level_bits,
+            mode3_run_bits,
+            ctx.ph.pquant,
+        )?;
         for i in 1..64usize {
             let Some(&v) = raw.get(i) else { continue };
             let dequant = dequant_ac(v, ctx.double_quant, ctx.ph.uniform_quantizer, ctx.mquant);
@@ -386,7 +472,12 @@ fn decode_intra_block(
     if acpred {
         match dir {
             PredDir::Top => {
-                if let Some(top_row) = row.checked_sub(1).map(|r0| grid.ac_row.get(grid.idx(r0, col)).copied().unwrap_or([0; 7])) {
+                if let Some(top_row) = row.checked_sub(1).map(|r0| {
+                    grid.ac_row
+                        .get(grid.idx(r0, col))
+                        .copied()
+                        .unwrap_or([0; 7])
+                }) {
                     for (k, &pred) in top_row.iter().enumerate() {
                         if let Some(slot) = grid_coeffs.get_mut(k + 1) {
                             *slot += pred;
@@ -395,7 +486,12 @@ fn decode_intra_block(
                 }
             }
             PredDir::Left => {
-                if let Some(left_col) = col.checked_sub(1).map(|c0| grid.ac_col.get(grid.idx(row, c0)).copied().unwrap_or([0; 7])) {
+                if let Some(left_col) = col.checked_sub(1).map(|c0| {
+                    grid.ac_col
+                        .get(grid.idx(row, c0))
+                        .copied()
+                        .unwrap_or([0; 7])
+                }) {
                     for (k, &pred) in left_col.iter().enumerate() {
                         if let Some(slot) = grid_coeffs.get_mut((k + 1) * 8) {
                             *slot += pred;
@@ -426,8 +522,14 @@ fn decode_intra_block(
             if px >= plane_w || py >= plane_h {
                 continue;
             }
-            let Some(&v) = residual.get(y * 8 + x) else { continue };
-            let sample = if add_offset { clip_u8(v + 128) } else { clip_u8(v) };
+            let Some(&v) = residual.get(y * 8 + x) else {
+                continue;
+            };
+            let sample = if add_offset {
+                clip_u8(v + 128)
+            } else {
+                clip_u8(v)
+            };
             let off = py.saturating_mul(stride).saturating_add(px);
             if let Some(dst) = plane.get_mut(off) {
                 *dst = sample;
@@ -455,19 +557,32 @@ pub struct Vc1Decoder {
 impl Vc1Decoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { limits, seq: None, pending: VecDeque::new(), draining: false }
+        Self {
+            limits,
+            seq: None,
+            pending: VecDeque::new(),
+            draining: false,
+        }
     }
 
     fn decode_frame(&mut self, payload: &[u8]) -> Result<Frame> {
-        let seq = self.seq.ok_or(Error::InvalidData("vc1: set_extradata must be called before decoding"))?;
+        let seq = self.seq.ok_or(Error::InvalidData(
+            "vc1: set_extradata must be called before decoding",
+        ))?;
         if seq.overlap {
-            return Err(Error::Unsupported("vc1: OVERLAP == 1 (overlap smoothing) is not implemented"));
+            return Err(Error::Unsupported(
+                "vc1: OVERLAP == 1 (overlap smoothing) is not implemented",
+            ));
         }
         if seq.loopfilter {
-            return Err(Error::Unsupported("vc1: LOOPFILTER == 1 (in-loop deblocking) is not implemented"));
+            return Err(Error::Unsupported(
+                "vc1: LOOPFILTER == 1 (in-loop deblocking) is not implemented",
+            ));
         }
         if payload.len() <= 1 {
-            return Err(Error::Unsupported("vc1: skipped P frame (coded size <= 1 byte) with no preceding I frame"));
+            return Err(Error::Unsupported(
+                "vc1: skipped P frame (coded size <= 1 byte) with no preceding I frame",
+            ));
         }
 
         let mut r = BitReader::new(payload);
@@ -481,14 +596,25 @@ impl Vc1Decoder {
                 ));
             }
         };
-        let dc_luma_table: &[vaco_codec_vlc::VlcEntry] =
-            if ph.transdctab { &tables::DC_HIGH_LUMA } else { &tables::DC_LOW_LUMA };
-        let dc_chroma_table: &[vaco_codec_vlc::VlcEntry] =
-            if ph.transdctab { &tables::DC_HIGH_CHROMA } else { &tables::DC_LOW_CHROMA };
+        let dc_luma_table: &[vaco_codec_vlc::VlcEntry] = if ph.transdctab {
+            &tables::DC_HIGH_LUMA
+        } else {
+            &tables::DC_LOW_LUMA
+        };
+        let dc_chroma_table: &[vaco_codec_vlc::VlcEntry] = if ph.transdctab {
+            &tables::DC_HIGH_CHROMA
+        } else {
+            &tables::DC_LOW_CHROMA
+        };
 
         let mquant = ph.pquant;
         let double_quant = 2 * i32::try_from(mquant).unwrap_or(0) + i32::from(ph.halfqp);
-        let ctx = FrameCtx { ph: &ph, seq: &seq, mquant, double_quant };
+        let ctx = FrameCtx {
+            ph: &ph,
+            seq: &seq,
+            mquant,
+            double_quant,
+        };
 
         let mut budget = Budget::new(self.limits.clone());
         // VC-1 (this decoder) is always 4:2:0 8-bit — `PixFmt::Yuv420p`,
@@ -497,7 +623,9 @@ impl Vc1Decoder {
         // enough to false-reject a legitimate large frame under a tight
         // budget). Charge the format's own average, the same quantity
         // `Frame::alloc_video` checks again right below.
-        let bpp = u32::from(PixFmt::Yuv420p.bits_per_pixel()).div_ceil(8).max(1);
+        let bpp = u32::from(PixFmt::Yuv420p.bits_per_pixel())
+            .div_ceil(8)
+            .max(1);
         budget.check_frame(seq.width, seq.height, bpp)?;
         let mut frame = Frame::alloc_video(&mut budget, PixFmt::Yuv420p, seq.width, seq.height)?;
         let FrameData::Video { planes, .. } = &mut frame.data else {
@@ -506,19 +634,31 @@ impl Vc1Decoder {
 
         let mb_w = seq.width.div_ceil(16) as usize;
         let mb_h = seq.height.div_ceil(16) as usize;
-        let mut luma_grid = BlockGrid::new(&mut budget, mb_h.saturating_mul(2), mb_w.saturating_mul(2))?;
+        let mut luma_grid =
+            BlockGrid::new(&mut budget, mb_h.saturating_mul(2), mb_w.saturating_mul(2))?;
         let mut cb_grid = BlockGrid::new(&mut budget, mb_h, mb_w)?;
         let mut cr_grid = BlockGrid::new(&mut budget, mb_h, mb_w)?;
-        let mut luma_coded: Vec<bool> = budget.alloc(mb_h.saturating_mul(2).saturating_mul(mb_w.saturating_mul(2)))?;
+        let mut luma_coded: Vec<bool> = budget.alloc(
+            mb_h.saturating_mul(2)
+                .saturating_mul(mb_w.saturating_mul(2)),
+        )?;
         let luma_coded_cols = mb_w.saturating_mul(2);
 
         let (luma_stride, luma_w, luma_h) = {
-            let p = planes.first().ok_or(Error::InvalidData("vc1: frame has no luma plane"))?;
+            let p = planes
+                .first()
+                .ok_or(Error::InvalidData("vc1: frame has no luma plane"))?;
             (p.stride, seq.width as usize, seq.height as usize)
         };
         let (chroma_stride, chroma_w, chroma_h) = {
-            let p = planes.get(1).ok_or(Error::InvalidData("vc1: frame has no chroma plane"))?;
-            (p.stride, (seq.width as usize).div_ceil(2), (seq.height as usize).div_ceil(2))
+            let p = planes
+                .get(1)
+                .ok_or(Error::InvalidData("vc1: frame has no chroma plane"))?;
+            (
+                p.stride,
+                (seq.width as usize).div_ceil(2),
+                (seq.height as usize).div_ceil(2),
+            )
         };
 
         let mut first_mode3 = true;
@@ -527,10 +667,13 @@ impl Vc1Decoder {
 
         for mb_row in 0..mb_h {
             for mb_col in 0..mb_w {
-                let coded_idx = |br: usize, bc: usize| br.saturating_mul(luma_coded_cols).saturating_add(bc);
+                let coded_idx =
+                    |br: usize, bc: usize| br.saturating_mul(luma_coded_cols).saturating_add(bc);
                 let get_coded = |br: Option<usize>, bc: Option<usize>| -> bool {
                     match (br, bc) {
-                        (Some(br), Some(bc)) => luma_coded.get(coded_idx(br, bc)).copied().unwrap_or(false),
+                        (Some(br), Some(bc)) => {
+                            luma_coded.get(coded_idx(br, bc)).copied().unwrap_or(false)
+                        }
                         _ => false,
                     }
                 };
@@ -542,7 +685,9 @@ impl Vc1Decoder {
                 let l3 = get_coded(Some(by0.saturating_add(1)), bx0.checked_sub(1));
                 let lt3 = get_coded(by0.checked_sub(1), bx0.checked_sub(1));
 
-                let decoded_cbpcy = VlcTable::new(&tables::CBPCY_I).decode(&mut r).ok_or(Error::InvalidData("vc1: CBPCY VLC decode failed"))?;
+                let decoded_cbpcy = VlcTable::new(&tables::CBPCY_I)
+                    .decode(&mut r)
+                    .ok_or(Error::InvalidData("vc1: CBPCY VLC decode failed"))?;
 
                 let pred_y0 = if lt3 == t2 { l1 } else { t2 };
                 let pred_y0 = pred_y0 ^ (((decoded_cbpcy >> 5) & 1) != 0);
@@ -566,11 +711,29 @@ impl Vc1Decoder {
                 for &(br, bc, coded) in &luma_positions {
                     let base_x = bc.saturating_mul(8);
                     let base_y = br.saturating_mul(8);
-                    let plane = planes.first_mut().ok_or(Error::InvalidData("vc1: frame has no luma plane"))?;
+                    let plane = planes
+                        .first_mut()
+                        .ok_or(Error::InvalidData("vc1: frame has no luma plane"))?;
                     let (dc, ac_row, ac_col) = decode_intra_block(
-                        &mut r, &ctx, ac_y, dc_luma_table, true, coded, acpred, &luma_grid, br, bc,
-                        &mut first_mode3, &mut mode3_level_bits, &mut mode3_run_bits,
-                        plane.data.make_mut(), luma_stride, luma_w, luma_h, base_x, base_y,
+                        &mut r,
+                        &ctx,
+                        ac_y,
+                        dc_luma_table,
+                        true,
+                        coded,
+                        acpred,
+                        &luma_grid,
+                        br,
+                        bc,
+                        &mut first_mode3,
+                        &mut mode3_level_bits,
+                        &mut mode3_run_bits,
+                        plane.data.make_mut(),
+                        luma_stride,
+                        luma_w,
+                        luma_h,
+                        base_x,
+                        base_y,
                     )?;
                     luma_grid.set(br, bc, dc, ac_row, ac_col);
                     if let Some(slot) = luma_coded.get_mut(coded_idx(br, bc)) {
@@ -578,14 +741,35 @@ impl Vc1Decoder {
                     }
                 }
 
-                for (plane_idx, coded, grid) in [(1usize, cb_coded, &mut cb_grid), (2usize, cr_coded, &mut cr_grid)] {
+                for (plane_idx, coded, grid) in [
+                    (1usize, cb_coded, &mut cb_grid),
+                    (2usize, cr_coded, &mut cr_grid),
+                ] {
                     let base_x = mb_col.saturating_mul(8);
                     let base_y = mb_row.saturating_mul(8);
-                    let plane = planes.get_mut(plane_idx).ok_or(Error::InvalidData("vc1: frame missing chroma plane"))?;
+                    let plane = planes
+                        .get_mut(plane_idx)
+                        .ok_or(Error::InvalidData("vc1: frame missing chroma plane"))?;
                     let (dc, ac_row, ac_col) = decode_intra_block(
-                        &mut r, &ctx, ac_c, dc_chroma_table, false, coded, acpred, grid, mb_row, mb_col,
-                        &mut first_mode3, &mut mode3_level_bits, &mut mode3_run_bits,
-                        plane.data.make_mut(), chroma_stride, chroma_w, chroma_h, base_x, base_y,
+                        &mut r,
+                        &ctx,
+                        ac_c,
+                        dc_chroma_table,
+                        false,
+                        coded,
+                        acpred,
+                        grid,
+                        mb_row,
+                        mb_col,
+                        &mut first_mode3,
+                        &mut mode3_level_bits,
+                        &mut mode3_run_bits,
+                        plane.data.make_mut(),
+                        chroma_stride,
+                        chroma_w,
+                        chroma_h,
+                        base_x,
+                        base_y,
                     )?;
                     grid.set(mb_row, mb_col, dc, ac_row, ac_col);
                 }
@@ -610,7 +794,11 @@ impl Decoder for Vc1Decoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(if self.draining { Error::Eof } else { Error::NeedMoreInput })
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
@@ -646,7 +834,10 @@ pub const DECODER_VC1: ::vaco_codec_core::DecoderDesc = ::vaco_codec_core::Decod
 };
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "a test that cannot set up is a failed test")]
+#[allow(
+    clippy::unwrap_used,
+    reason = "a test that cannot set up is a failed test"
+)]
 mod tests {
     use super::*;
 
@@ -692,7 +883,9 @@ mod tests {
     /// 4:2:0 frame is only 10.67 MB.
     #[test]
     fn a_legitimately_large_frame_is_accepted_by_the_frame_budget() {
-        let bpp = u32::from(PixFmt::Yuv420p.bits_per_pixel()).div_ceil(8).max(1);
+        let bpp = u32::from(PixFmt::Yuv420p.bits_per_pixel())
+            .div_ceil(8)
+            .max(1);
         assert_eq!(bpp, 2, "yuv420p averages 12 bits/pixel, not 24");
 
         let budget = Budget::new(Limits::strict());
@@ -702,7 +895,6 @@ mod tests {
         );
     }
 
-
     /// `send_packet(None)` must make `receive_frame` answer `Eof` once
     /// `pending` is drained, not `NeedMoreInput` forever -- see
     /// `vaco-codec-ac3`'s decoder's own `draining` field doc for the full
@@ -711,8 +903,14 @@ mod tests {
     #[test]
     fn draining_answers_eof_once_empty_not_need_more_input_forever() {
         let mut dec = Vc1Decoder::new(Limits::permissive());
-        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)), "empty and not draining yet");
+        assert!(
+            matches!(dec.receive_frame(), Err(Error::NeedMoreInput)),
+            "empty and not draining yet"
+        );
         dec.send_packet(None).unwrap();
-        assert!(matches!(dec.receive_frame(), Err(Error::Eof)), "must answer Eof once drained and empty, not NeedMoreInput forever");
+        assert!(
+            matches!(dec.receive_frame(), Err(Error::Eof)),
+            "must answer Eof once drained and empty, not NeedMoreInput forever"
+        );
     }
 }

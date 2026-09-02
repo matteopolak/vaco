@@ -112,7 +112,10 @@ fn run_consumer(name: &str) -> i32 {
     };
 
     let Some(received) = buf.get(..n) else {
-        eprintln!("consumer: read reported {n} bytes into a {}-byte buffer", buf.len());
+        eprintln!(
+            "consumer: read reported {n} bytes into a {}-byte buffer",
+            buf.len()
+        );
         return 1;
     };
     if received == PAYLOAD {
@@ -173,10 +176,8 @@ fn orchestrate() {
     let consumer = spawn_role("consumer", &name).expect("failed to spawn consumer process");
     let producer = spawn_role("producer", &name).expect("failed to spawn producer process");
 
-    let producer_status =
-        wait_bounded("producer", producer).unwrap_or_else(|e| panic!("{e}"));
-    let consumer_status =
-        wait_bounded("consumer", consumer).unwrap_or_else(|e| panic!("{e}"));
+    let producer_status = wait_bounded("producer", producer).unwrap_or_else(|e| panic!("{e}"));
+    let consumer_status = wait_bounded("consumer", consumer).unwrap_or_else(|e| panic!("{e}"));
 
     assert!(
         producer_status.success(),

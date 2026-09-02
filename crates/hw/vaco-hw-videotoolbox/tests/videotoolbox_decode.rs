@@ -5,7 +5,12 @@
 //! different output, and this test does not have a reference frame to
 //! compare against in any case.
 #![cfg(target_os = "macos")]
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::indexing_slicing)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use vaco_hw_core::HwAccel;
 use vaco_hw_videotoolbox::{VideoToolboxDecoder, nal_unit_type, split_annex_b};
@@ -69,7 +74,10 @@ fn decodes_a_real_keyframe_to_the_right_dimensions_and_format() {
     else {
         panic!("expected a video frame");
     };
-    assert!(!format.is_hw(), "downloaded frame must be a real software pixel format");
+    assert!(
+        !format.is_hw(),
+        "downloaded frame must be a real software pixel format"
+    );
     assert_eq!((width, height), (64, 64));
     assert_eq!(planes.len(), 2, "NV12 has two planes");
 
@@ -93,5 +101,8 @@ fn decoding_garbage_slice_data_fails_cleanly_rather_than_panicking() {
         .decode_slice(&[0x65, 0xFF, 0xFF, 0xFF, 0xFF])
         .expect("decode_slice only buffers bytes; it never inspects them");
     let result = decoder.end_frame();
-    assert!(result.is_err(), "garbage slice data must not decode successfully");
+    assert!(
+        result.is_err(),
+        "garbage slice data must not decode successfully"
+    );
 }

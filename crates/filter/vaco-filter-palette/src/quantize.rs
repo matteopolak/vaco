@@ -176,10 +176,20 @@ fn average_color(entries: &[Entry]) -> Rgb {
     if count == 0 {
         return Rgb::default();
     }
-    #[allow(clippy::integer_division, reason = "component averages of u8-derived sums, truncation is the intended rounding")]
+    #[allow(
+        clippy::integer_division,
+        reason = "component averages of u8-derived sums, truncation is the intended rounding"
+    )]
     let (r, g, b) = (rs / count, gs / count, bs / count);
-    #[allow(clippy::cast_possible_truncation, reason = "each average is a weighted mean of u8 values, so it stays within 0..=255")]
-    Rgb { r: r as u8, g: g as u8, b: b as u8 }
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "each average is a weighted mean of u8 values, so it stays within 0..=255"
+    )]
+    Rgb {
+        r: r as u8,
+        g: g as u8,
+        b: b as u8,
+    }
 }
 
 /// The index into `palette` whose colour is closest (squared Euclidean RGB
@@ -193,8 +203,14 @@ pub fn nearest_index(palette: &[Rgb], color: Rgb) -> usize {
         let dr = i32::from(p.r) - i32::from(color.r);
         let dg = i32::from(p.g) - i32::from(color.g);
         let db = i32::from(p.b) - i32::from(color.b);
-        #[allow(clippy::cast_sign_loss, reason = "a sum of three squared i32 deltas is always non-negative")]
-        let dist = dr.saturating_mul(dr).saturating_add(dg.saturating_mul(dg)).saturating_add(db.saturating_mul(db)) as u32;
+        #[allow(
+            clippy::cast_sign_loss,
+            reason = "a sum of three squared i32 deltas is always non-negative"
+        )]
+        let dist = dr
+            .saturating_mul(dr)
+            .saturating_add(dg.saturating_mul(dg))
+            .saturating_add(db.saturating_mul(db)) as u32;
         if dist < best_dist {
             best_dist = dist;
             best = i;
@@ -237,8 +253,35 @@ mod tests {
 
     #[test]
     fn nearest_index_picks_the_closest_entry() {
-        let palette = [Rgb { r: 0, g: 0, b: 0 }, Rgb { r: 255, g: 255, b: 255 }];
-        assert_eq!(nearest_index(&palette, Rgb { r: 10, g: 10, b: 10 }), 0);
-        assert_eq!(nearest_index(&palette, Rgb { r: 250, g: 250, b: 250 }), 1);
+        let palette = [
+            Rgb { r: 0, g: 0, b: 0 },
+            Rgb {
+                r: 255,
+                g: 255,
+                b: 255,
+            },
+        ];
+        assert_eq!(
+            nearest_index(
+                &palette,
+                Rgb {
+                    r: 10,
+                    g: 10,
+                    b: 10
+                }
+            ),
+            0
+        );
+        assert_eq!(
+            nearest_index(
+                &palette,
+                Rgb {
+                    r: 250,
+                    g: 250,
+                    b: 250
+                }
+            ),
+            1
+        );
     }
 }

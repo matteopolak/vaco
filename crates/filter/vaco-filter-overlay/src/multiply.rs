@@ -70,7 +70,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "multiply", help = "Multiply first video stream with second video stream.")]
+#[options(
+    name = "multiply",
+    help = "Multiply first video stream with second video stream."
+)]
 pub(crate) struct Opts {
     #[opt(name = "scale", help = "set scale", default = 1.0, range = 0.0..=9.0, flags(video, filtering))]
     pub scale: f64,
@@ -107,7 +110,13 @@ impl PairedFilter for Filter {
         let (Some(b), Some(a)) = (inputs.pop(), inputs.pop()) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = a.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = a.data
+        else {
             return Ok(FrameOut::One(a));
         };
         if common::ensure_8bit_addressable(format).is_err() {
@@ -116,28 +125,36 @@ impl PairedFilter for Filter {
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         let plane_count = format.plane_count();
         for plane in 0..plane_count {
-            let Some(a_plane) = a.plane(plane) else { continue };
-            let Some(b_plane) = b.plane(plane) else { continue };
-            let Some(mut dst) = out.plane_mut(plane) else { continue };
+            let Some(a_plane) = a.plane(plane) else {
+                continue;
+            };
+            let Some(b_plane) = b.plane(plane) else {
+                continue;
+            };
+            let Some(mut dst) = out.plane_mut(plane) else {
+                continue;
+            };
             let ph = common::to_i32(format.plane_height(height, plane as u8)).max(0);
             for y in 0..ph {
                 let Ok(uy) = usize::try_from(y) else { continue };
-                let Some(a_row) = a_plane.row(uy) else { continue };
-                let Some(b_row) = b_plane.row(uy) else { continue };
-                let Some(dst_row) = dst.row_mut(uy) else { continue };
+                let Some(a_row) = a_plane.row(uy) else {
+                    continue;
+                };
+                let Some(b_row) = b_plane.row(uy) else {
+                    continue;
+                };
+                let Some(dst_row) = dst.row_mut(uy) else {
+                    continue;
+                };
                 let n = a_row.len().min(b_row.len()).min(dst_row.len());
                 for x in 0..n {
                     let (Some(&av), Some(&bv)) = (a_row.get(x), b_row.get(x)) else {
                         continue;
                     };
-                    #[allow(
-                        clippy::cast_precision_loss,
-                        reason = "8-bit samples fit f64 exactly"
-                    )]
-                    let normalized = (f64::from(av) / 255.0) * (f64::from(bv) / 255.0)
-                        * self.scale
-                        * 255.0
-                        + self.offset * 255.0;
+                    #[allow(clippy::cast_precision_loss, reason = "8-bit samples fit f64 exactly")]
+                    let normalized =
+                        (f64::from(av) / 255.0) * (f64::from(bv) / 255.0) * self.scale * 255.0
+                            + self.offset * 255.0;
                     #[allow(
                         clippy::cast_possible_truncation,
                         clippy::cast_sign_loss,

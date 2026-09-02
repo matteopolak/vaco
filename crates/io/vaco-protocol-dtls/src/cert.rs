@@ -53,7 +53,8 @@ pub fn generate_self_signed() -> Result<(X509, PKey<Private>)> {
         .map_err(|_| openssl_err("could not set the certificate's common name"))?;
     let name = name_builder.build();
 
-    let mut serial = BigNum::new().map_err(|_| openssl_err("could not allocate a serial number"))?;
+    let mut serial =
+        BigNum::new().map_err(|_| openssl_err("could not allocate a serial number"))?;
     serial
         .rand(64, MsbOption::MAYBE_ZERO, false)
         .map_err(|_| openssl_err("could not randomise the serial number"))?;
@@ -120,7 +121,10 @@ mod tests {
         let cert_pem = String::from_utf8(cert.to_pem().unwrap()).unwrap();
         let key_pem = String::from_utf8(key.private_key_to_pem_pkcs8().unwrap()).unwrap();
         let (cert2, _key2) = parse_pem(&cert_pem, &key_pem).unwrap();
-        assert_eq!(cert.subject_name().to_der().unwrap(), cert2.subject_name().to_der().unwrap());
+        assert_eq!(
+            cert.subject_name().to_der().unwrap(),
+            cert2.subject_name().to_der().unwrap()
+        );
     }
 
     #[test]

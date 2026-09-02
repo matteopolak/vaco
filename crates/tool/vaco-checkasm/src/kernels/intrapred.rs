@@ -37,14 +37,38 @@ impl Kernel for DcPredictKernel {
         let widths = edge::element_widths(2); // u16 lanes are two bytes each.
         let mut cases = Vec::new();
         for size in edge::lengths_around(&widths) {
-            let top: Vec<u16> = (0..size).map(|i| u16::try_from((i * 37) % 4096).unwrap_or(0)).collect();
-            let left: Vec<u16> = (0..size).map(|i| u16::try_from((i * 91) % 4096).unwrap_or(0)).collect();
+            let top: Vec<u16> = (0..size)
+                .map(|i| u16::try_from((i * 37) % 4096).unwrap_or(0))
+                .collect();
+            let left: Vec<u16> = (0..size)
+                .map(|i| u16::try_from((i * 91) % 4096).unwrap_or(0))
+                .collect();
             for bit_depth in [8u32, 10, 12] {
                 // Both available, top-only, left-only, neither.
-                cases.push(DcPredictCase { top: top.clone(), left: left.clone(), size, bit_depth });
-                cases.push(DcPredictCase { top: top.clone(), left: Vec::new(), size, bit_depth });
-                cases.push(DcPredictCase { top: Vec::new(), left: left.clone(), size, bit_depth });
-                cases.push(DcPredictCase { top: Vec::new(), left: Vec::new(), size, bit_depth });
+                cases.push(DcPredictCase {
+                    top: top.clone(),
+                    left: left.clone(),
+                    size,
+                    bit_depth,
+                });
+                cases.push(DcPredictCase {
+                    top: top.clone(),
+                    left: Vec::new(),
+                    size,
+                    bit_depth,
+                });
+                cases.push(DcPredictCase {
+                    top: Vec::new(),
+                    left: left.clone(),
+                    size,
+                    bit_depth,
+                });
+                cases.push(DcPredictCase {
+                    top: Vec::new(),
+                    left: Vec::new(),
+                    size,
+                    bit_depth,
+                });
             }
         }
         // u16 saturation boundaries, on their own.

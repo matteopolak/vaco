@@ -26,7 +26,11 @@ fn output_pixfmt(color: png::ColorType, depth: png::BitDepth) -> Result<PixFmt> 
         (C::Rgb, D::Sixteen) => native16(PixFmt::Rgb48le, PixFmt::Rgb48be),
         (C::Rgba, D::Eight) => PixFmt::Rgba,
         (C::Rgba, D::Sixteen) => native16(PixFmt::Rgba64le, PixFmt::Rgba64be),
-        _ => return Err(Error::Unsupported("png: colour type/bit depth after expansion")),
+        _ => {
+            return Err(Error::Unsupported(
+                "png: colour type/bit depth after expansion",
+            ));
+        }
     })
 }
 
@@ -150,10 +154,21 @@ struct RawFrame {
 
 /// Composite one 8-bit RGBA subframe onto an 8-bit RGBA canvas at
 /// `(x, y)`, per `blend_op` (PNG spec §"Alpha channel information").
-fn blend_rgba8(canvas: &mut [u8], canvas_w: u32, x: u32, y: u32, w: u32, h: u32, src: &[u8], over: bool) {
+fn blend_rgba8(
+    canvas: &mut [u8],
+    canvas_w: u32,
+    x: u32,
+    y: u32,
+    w: u32,
+    h: u32,
+    src: &[u8],
+    over: bool,
+) {
     for row in 0..h {
         let cy = y + row;
-        let Some(src_row) = src.get(row as usize * w as usize * 4..(row as usize + 1) * w as usize * 4) else {
+        let Some(src_row) =
+            src.get(row as usize * w as usize * 4..(row as usize + 1) * w as usize * 4)
+        else {
             continue;
         };
         let cx_start = cy as usize * canvas_w as usize + x as usize;
@@ -195,10 +210,20 @@ fn blend_rgba8(canvas: &mut [u8], canvas_w: u32, x: u32, y: u32, w: u32, h: u32,
 
 /// Convert one subframe's own (colour type, bit depth) bytes to tightly
 /// packed 8-bit RGBA, the common currency APNG compositing runs in.
-fn to_rgba8(color: png::ColorType, depth: png::BitDepth, width: u32, height: u32, bytes: &[u8]) -> Vec<u8> {
+fn to_rgba8(
+    color: png::ColorType,
+    depth: png::BitDepth,
+    width: u32,
+    height: u32,
+    bytes: &[u8],
+) -> Vec<u8> {
     let px = (width as usize) * (height as usize);
     let mut out = vec![0u8; px * 4];
-    let bpc = if depth == png::BitDepth::Sixteen { 2 } else { 1 };
+    let bpc = if depth == png::BitDepth::Sixteen {
+        2
+    } else {
+        1
+    };
     let stride = color.samples() * bpc;
 
     // One sample from a `bpc`-byte chunk: the high (first, big-endian) byte
@@ -288,8 +313,14 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
             ),
             None => (0, 0, png::DisposeOp::None, png::BlendOp::Source, 1, 30),
         };
-        let want = (info.width as usize) * (info.height as usize) * info.color_type.samples()
-            * if info.bit_depth == png::BitDepth::Sixteen { 2 } else { 1 };
+        let want = (info.width as usize)
+            * (info.height as usize)
+            * info.color_type.samples()
+            * if info.bit_depth == png::BitDepth::Sixteen {
+                2
+            } else {
+                1
+            };
         raw_frames.push(RawFrame {
             x_offset,
             y_offset,
@@ -373,7 +404,9 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         match rf.dispose_op {
             png::DisposeOp::Background => {
                 for row in 0..rf.height {
-                    let start = ((rf.y_offset + row) as usize * canvas_w as usize + rf.x_offset as usize) * 4;
+                    let start = ((rf.y_offset + row) as usize * canvas_w as usize
+                        + rf.x_offset as usize)
+                        * 4;
                     if let Some(slice) = canvas.get_mut(start..start + rf.width as usize * 4) {
                         slice.fill(0);
                     }
@@ -393,9 +426,11 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
 fn map_decode_err(e: &png::DecodingError) -> Error {
     match e {
         png::DecodingError::IoError(_) => Error::UnexpectedEof,
-        png::DecodingError::LimitsExceeded => {
-            Error::LimitExceeded { limit: "png_frame", requested: 0, cap: 0 }
-        }
+        png::DecodingError::LimitsExceeded => Error::LimitExceeded {
+            limit: "png_frame",
+            requested: 0,
+            cap: 0,
+        },
         _ => Error::InvalidData("png: malformed stream"),
     }
 }
@@ -404,7 +439,11 @@ fn map_decode_err(e: &png::DecodingError) -> Error {
 /// planes, swapping 16-bit samples from PNG's big-endian wire format to
 /// whichever endianness the pixel format declares.
 fn write_native(frame: &mut Frame, rf: &RawFrame) {
-    let bpc = if rf.depth == png::BitDepth::Sixteen { 2 } else { 1 };
+    let bpc = if rf.depth == png::BitDepth::Sixteen {
+        2
+    } else {
+        1
+    };
     let channels = rf.color.samples();
     let row_bytes = rf.width as usize * channels * bpc;
     let swap = rf.depth == png::BitDepth::Sixteen && !is_be_native();
@@ -480,7 +519,13 @@ pub fn encode(frames: &[Frame], _budget: &mut Budget, options: &EncodeOptions) -
     let Some(first) = frames.first() else {
         return Err(Error::InvalidData("png: no frames to encode"));
     };
-    let vaco_frame::FrameData::Video { format, width, height, .. } = &first.data else {
+    let vaco_frame::FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = &first.data
+    else {
         return Err(Error::Unsupported("png: audio frame"));
     };
     let (width, height) = (*width, *height);
@@ -561,11 +606,21 @@ fn png_color_for(fmt: PixFmt) -> Result<(png::ColorType, png::BitDepth)> {
 /// Bytes for one frame's plane, big-endian for 16-bit samples (what PNG's
 /// wire format requires), packed with no row padding.
 fn native_bytes(frame: &Frame, color: png::ColorType, depth: png::BitDepth) -> Result<Vec<u8>> {
-    let vaco_frame::FrameData::Video { width, height, planes, .. } = &frame.data else {
+    let vaco_frame::FrameData::Video {
+        width,
+        height,
+        planes,
+        ..
+    } = &frame.data
+    else {
         return Err(Error::Unsupported("png: audio frame"));
     };
     let plane = planes.first().ok_or(Error::InvalidData("png: no plane"))?;
-    let bpc = if depth == png::BitDepth::Sixteen { 2 } else { 1 };
+    let bpc = if depth == png::BitDepth::Sixteen {
+        2
+    } else {
+        1
+    };
     let row_bytes = *width as usize * color.samples() * bpc;
     let swap = depth == png::BitDepth::Sixteen && !is_be_native();
     let mut out = vec![0u8; row_bytes * *height as usize];

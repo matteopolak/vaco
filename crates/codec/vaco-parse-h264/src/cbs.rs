@@ -702,20 +702,17 @@ mod tests {
         cbs.split(&data, Framing::AnnexB, &mut f, &mut b)
             .expect("splits");
 
-        let H264Content::Sps { nal_ref_idc, mut sps } =
-            cbs.read_unit(&f, 0, &mut b).expect("an sps")
+        let H264Content::Sps {
+            nal_ref_idc,
+            mut sps,
+        } = cbs.read_unit(&f, 0, &mut b).expect("an sps")
         else {
             panic!("expected an sps");
         };
         let original_dims = sps.dimensions();
         sps.level_idc = 51;
-        cbs.update_unit(
-            &mut f,
-            0,
-            &H264Content::Sps { nal_ref_idc, sps },
-            &mut b,
-        )
-        .expect("rewrites");
+        cbs.update_unit(&mut f, 0, &H264Content::Sps { nal_ref_idc, sps }, &mut b)
+            .expect("rewrites");
 
         let H264Content::Sps { sps, .. } = cbs.read_unit(&f, 0, &mut b).expect("re-read") else {
             panic!("expected an sps");

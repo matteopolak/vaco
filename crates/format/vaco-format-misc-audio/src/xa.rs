@@ -161,7 +161,11 @@ impl XaDemuxer {
         let _bits = io.rl16()?;
         let data_start = io.pos();
 
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, sample_rate.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, sample_rate.cast_signed()),
+        );
         let mut params = CodecParameters::audio();
         if let Some(audio) = params.audio.as_mut() {
             audio.sample_rate = sample_rate;
@@ -229,7 +233,13 @@ mod tests {
     use super::*;
     use vaco_io::MemorySource;
 
-    fn build_file(tag: [u8; 4], channels: u16, sample_rate: u32, blocks_present: u32, out_size: u32) -> Vec<u8> {
+    fn build_file(
+        tag: [u8; 4],
+        channels: u16,
+        sample_rate: u32,
+        blocks_present: u32,
+        out_size: u32,
+    ) -> Vec<u8> {
         let bytes_per_sample: u16 = 2;
         let align = bytes_per_sample * channels;
         let avg_byte_rate = sample_rate.saturating_mul(u32::from(align));
@@ -253,7 +263,9 @@ mod tests {
     fn out_size_for(channels: u16, blocks: u32) -> u32 {
         let bytes_per_sample = 2u32;
         let align = bytes_per_sample * u32::from(channels);
-        blocks.saturating_mul(SAMPLES_PER_BLOCK).saturating_mul(align)
+        blocks
+            .saturating_mul(SAMPLES_PER_BLOCK)
+            .saturating_mul(align)
     }
 
     #[test]
@@ -262,7 +274,17 @@ mod tests {
         let d = XaDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
         let s = d.streams().first().unwrap();
         assert_eq!(s.params.audio.as_ref().unwrap().sample_rate, 22_050);
-        assert_eq!(s.params.audio.as_ref().unwrap().layout.as_ref().unwrap().channels, 2);
+        assert_eq!(
+            s.params
+                .audio
+                .as_ref()
+                .unwrap()
+                .layout
+                .as_ref()
+                .unwrap()
+                .channels,
+            2
+        );
         // duration reflects the file's own full block count, independent of
         // dwOutSize -- see the module doc.
         assert_eq!(s.duration_ts, Some(140));
@@ -336,7 +358,10 @@ mod tests {
     fn probe_checks_the_two_byte_magic_and_the_pcm_tag() {
         let data = build_file(*b"XAI\0", 1, 8000, 1, out_size_for(1, 1));
         assert_eq!(probe(&ProbeData::new(&data)), ProbeScore::MAGIC_CHECKED);
-        assert_eq!(probe(&ProbeData::new(b"not xa at all...")), ProbeScore::NONE);
+        assert_eq!(
+            probe(&ProbeData::new(b"not xa at all...")),
+            ProbeScore::NONE
+        );
     }
 
     #[test]

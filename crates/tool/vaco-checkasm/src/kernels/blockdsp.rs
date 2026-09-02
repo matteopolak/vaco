@@ -66,7 +66,11 @@ impl Kernel for AddPixelsClampedKernel {
                 // per-lane overflow (the bug this kernel's doc names) is
                 // reachable at every vector-width tail, not just len == 1.
                 let residual_boundary: Vec<i16> = (0..len)
-                    .map(|i| *boundaries_i16.get(i % boundaries_i16.len().max(1)).unwrap_or(&0))
+                    .map(|i| {
+                        *boundaries_i16
+                            .get(i % boundaries_i16.len().max(1))
+                            .unwrap_or(&0)
+                    })
                     .collect();
                 for residual in [residual_ramp, residual_boundary] {
                     // stride == w (contiguous rows) and stride < w
@@ -102,7 +106,14 @@ impl Kernel for AddPixelsClampedKernel {
 
     fn vector(case: &Self::Case) -> Vec<Self::Lane> {
         let mut dst = case.dst_init.clone();
-        simd::add_pixels_clamped_vector(Caps::detect(), &case.residual, &mut dst, case.stride, case.w, case.h);
+        simd::add_pixels_clamped_vector(
+            Caps::detect(),
+            &case.residual,
+            &mut dst,
+            case.stride,
+            case.w,
+            case.h,
+        );
         dst
     }
 }

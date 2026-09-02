@@ -119,7 +119,9 @@ impl FrameFilter for Filter {
         if let Some(dar) = self.dar {
             let (w, h) = match &input.data {
                 vaco_frame::FrameData::Video { width, height, .. } => (*width, *height),
-                vaco_frame::FrameData::Audio { .. } | vaco_frame::FrameData::Subtitle { .. } => (0, 0),
+                vaco_frame::FrameData::Audio { .. } | vaco_frame::FrameData::Subtitle { .. } => {
+                    (0, 0)
+                }
             };
             if let Some(sar) = Self::sar_for(dar, w, h) {
                 input.sample_aspect_ratio = sar;

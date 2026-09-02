@@ -41,7 +41,11 @@ impl WindowSequence {
     /// How many of the 128-line short windows this sequence's block holds:
     /// 8 for `EightShort`, 1 (a single 1024-line window) for everything else.
     pub(crate) const fn num_windows(self) -> usize {
-        if matches!(self, Self::EightShort) { 8 } else { 1 }
+        if matches!(self, Self::EightShort) {
+            8
+        } else {
+            1
+        }
     }
 
     /// Whether this is the short-window sequence — determines which of
@@ -87,7 +91,11 @@ impl IcsInfo {
     /// Length is [`Self::num_window_groups`].
     pub(crate) fn window_group_lengths(&self) -> Vec<u8> {
         let mut lengths = Vec::new();
-        for &starts in self.group_starts.iter().take(self.window_sequence.num_windows()) {
+        for &starts in self
+            .group_starts
+            .iter()
+            .take(self.window_sequence.num_windows())
+        {
             if starts || lengths.is_empty() {
                 lengths.push(1);
             } else if let Some(last) = lengths.last_mut() {
@@ -153,7 +161,12 @@ impl IcsInfo {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::{IcsInfo, WindowSequence};
     use vaco_bitstream::{BitReader, BitWriter};
 

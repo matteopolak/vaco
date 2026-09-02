@@ -161,8 +161,10 @@ fn ac3_never_panics_on_arbitrary_bytes() {
 fn ac3_finds_a_frame_fed_one_byte_at_a_time() {
     let mut garbage = vec![0u8; 23];
     garbage.extend(ac3_frame(0x11));
-    let mut driver =
-        vaco_codec_core::ParserDriver::new(Ac3Parser::new(Limits::permissive()), Limits::permissive());
+    let mut driver = vaco_codec_core::ParserDriver::new(
+        Ac3Parser::new(Limits::permissive()),
+        Limits::permissive(),
+    );
     let mut units = Vec::new();
     for byte in &garbage {
         driver.push(std::slice::from_ref(byte)).unwrap();
@@ -182,7 +184,11 @@ fn ac3_finds_a_frame_fed_one_byte_at_a_time() {
             Err(e) => panic!("unexpected driver error at eof: {e:?}"),
         }
     }
-    assert_eq!(units, vec![768], "the frame was lost across a byte-at-a-time feed");
+    assert_eq!(
+        units,
+        vec![768],
+        "the frame was lost across a byte-at-a-time feed"
+    );
 }
 
 #[test]
@@ -195,6 +201,3 @@ fn the_three_descriptors_answer_for_the_right_codecs() {
     assert!(!crate::PARSER_AC3.handles(CodecId::Eac3));
     assert!(crate::PARSER_EAC3.handles(CodecId::Eac3));
 }
-
-
-

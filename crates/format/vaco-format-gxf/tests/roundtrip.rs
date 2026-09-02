@@ -70,7 +70,13 @@ fn a_video_and_audio_file_round_trips_through_the_sibling_demuxer() {
 
     // Five video frames, one key then four non-key, distinct sizes so a
     // wrong offset shows up as a wrong length.
-    let frame_sizes: [(usize, bool); 5] = [(4000, true), (900, false), (800, false), (750, false), (820, false)];
+    let frame_sizes: [(usize, bool); 5] = [
+        (4000, true),
+        (900, false),
+        (800, false),
+        (750, false),
+        (820, false),
+    ];
     for &(size, key) in &frame_sizes {
         let payload = vec![0xAB; size];
         mux.write_packet(&packet(video_idx, &payload, key)).unwrap();
@@ -79,16 +85,24 @@ fn a_video_and_audio_file_round_trips_through_the_sibling_demuxer() {
     // 70,000 audio bytes: one full 65,536-byte packet plus one short
     // (partial) final packet — exercises the padding/valid-sample path.
     let audio_bytes = vec![0x11u8; 70_000];
-    mux.write_packet(&packet(audio_idx, &audio_bytes, true)).unwrap();
+    mux.write_packet(&packet(audio_idx, &audio_bytes, true))
+        .unwrap();
 
     mux.write_trailer().unwrap();
     let bytes = sink.snapshot();
     assert!(!bytes.is_empty());
 
-    let mut demux = GxfDemuxer::open(Box::new(MemorySource::new(bytes)), &vaco_format_core::discovery::NoParsers).unwrap();
+    let mut demux = GxfDemuxer::open(
+        Box::new(MemorySource::new(bytes)),
+        &vaco_format_core::discovery::NoParsers,
+    )
+    .unwrap();
     assert_eq!(demux.streams().len(), 2);
     assert_eq!(demux.streams()[0].media_type(), Some(MediaType::Video));
-    assert_eq!(demux.streams()[0].params.codec_id, Some(CodecId::Mpeg2video));
+    assert_eq!(
+        demux.streams()[0].params.codec_id,
+        Some(CodecId::Mpeg2video)
+    );
     assert_eq!(demux.streams()[1].media_type(), Some(MediaType::Audio));
     assert_eq!(demux.streams()[1].params.codec_id, Some(CodecId::PcmS16le));
     for s in demux.streams() {
@@ -115,7 +129,10 @@ fn a_video_and_audio_file_round_trips_through_the_sibling_demuxer() {
     assert_eq!(audio2.stream_index, audio_idx);
     assert_eq!(audio2.payload().len(), 65_536); // padded to the fixed packet size.
     assert_eq!(&audio2.payload()[..4_464], &audio_bytes[65_536..]);
-    assert_eq!(&audio2.payload()[4_464..], vec![0u8; 65_536 - 4_464].as_slice());
+    assert_eq!(
+        &audio2.payload()[4_464..],
+        vec![0u8; 65_536 - 4_464].as_slice()
+    );
 
     assert!(matches!(demux.read_packet(), Err(vaco_core::Error::Eof)));
 }

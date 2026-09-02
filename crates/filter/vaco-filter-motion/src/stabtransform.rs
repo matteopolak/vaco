@@ -92,7 +92,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         if o.relative != 0 {
             return Err("stabtransform: `relative` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
@@ -116,7 +117,8 @@ impl Opts {
 /// A clean message naming the path for a missing/unreadable file, a bad
 /// magic line, or a line that does not parse as two floats.
 pub(crate) fn read_transforms(path: &str) -> std::result::Result<Vec<(f64, f64)>, String> {
-    let text = std::fs::read_to_string(path).map_err(|e| format!("stabtransform: cannot read `{path}`: {e}"))?;
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| format!("stabtransform: cannot read `{path}`: {e}"))?;
     let mut lines = text.lines();
     let magic = lines.next().unwrap_or_default();
     if magic != FILE_MAGIC {
@@ -128,10 +130,17 @@ pub(crate) fn read_transforms(path: &str) -> std::result::Result<Vec<(f64, f64)>
     for (i, line) in lines.enumerate() {
         let mut parts = line.split_whitespace();
         let (Some(dx), Some(dy)) = (parts.next(), parts.next()) else {
-            return Err(format!("stabtransform: `{path}` line {}: expected `dx dy`", i + 2));
+            return Err(format!(
+                "stabtransform: `{path}` line {}: expected `dx dy`",
+                i + 2
+            ));
         };
-        let dx: f64 = dx.parse().map_err(|_| format!("stabtransform: `{path}` line {}: bad dx", i + 2))?;
-        let dy: f64 = dy.parse().map_err(|_| format!("stabtransform: `{path}` line {}: bad dy", i + 2))?;
+        let dx: f64 = dx
+            .parse()
+            .map_err(|_| format!("stabtransform: `{path}` line {}: bad dx", i + 2))?;
+        let dy: f64 = dy
+            .parse()
+            .map_err(|_| format!("stabtransform: `{path}` line {}: bad dy", i + 2))?;
         out.push((dx, dy));
     }
     Ok(out)
@@ -169,7 +178,10 @@ fn smooth(trajectory: &[(f64, f64)], radius: usize) -> Vec<(f64, f64)> {
     for i in 0..n {
         let lo = i.saturating_sub(radius);
         let hi = (i.saturating_add(radius)).min(n.saturating_sub(1));
-        #[allow(clippy::cast_precision_loss, reason = "window size is bounded by the option's own 0..=1000 range")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "window size is bounded by the option's own 0..=1000 range"
+        )]
         let count = (hi.saturating_sub(lo).saturating_add(1)) as f64;
         let mut sum = (0.0, 0.0);
         for point in trajectory.get(lo..=hi).unwrap_or(&[]) {
@@ -196,7 +208,11 @@ impl Filter {
         let relative = read_transforms(&opts.input)?;
         let trajectory = trajectory_of(&relative);
         #[allow(clippy::cast_sign_loss, reason = "range is 0..=1000")]
-        let radius = if opts.tripod != 0 { 0 } else { opts.smoothing as usize };
+        let radius = if opts.tripod != 0 {
+            0
+        } else {
+            opts.smoothing as usize
+        };
         let smoothed = smooth(&trajectory, radius);
         let corrections: Vec<(f64, f64)> = trajectory
             .iter()
@@ -224,7 +240,11 @@ impl Filter {
     }
 
     fn correction_for(&mut self) -> (f64, f64) {
-        let raw = self.corrections.get(self.index).copied().unwrap_or((0.0, 0.0));
+        let raw = self
+            .corrections
+            .get(self.index)
+            .copied()
+            .unwrap_or((0.0, 0.0));
         self.index = self.index.saturating_add(1);
         let signed = if self.invert { (-raw.0, -raw.1) } else { raw };
         match self.maxshift {
@@ -237,7 +257,13 @@ impl Filter {
     /// inherent method rather than going through [`FrameFilter`] directly
     /// in tests.
     pub(crate) fn process(&mut self, pool: &FramePool, frame: Frame) -> Result<FrameOut> {
-        let FrameData::Video { format, width, height, .. } = frame.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = frame.data
+        else {
             return Ok(FrameOut::One(frame));
         };
         if !self.checked_format {
@@ -283,13 +309,24 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_pixfmt::PixFmt;
 
     fn tmp_path(name: &str) -> String {
-        std::env::temp_dir().join(format!("vaco-stabtransform-test-{name}-{}", std::process::id())).to_string_lossy().into_owned()
+        std::env::temp_dir()
+            .join(format!(
+                "vaco-stabtransform-test-{name}-{}",
+                std::process::id()
+            ))
+            .to_string_lossy()
+            .into_owned()
     }
 
     fn write_transforms(path: &str, relative: &[(f64, f64)]) {
@@ -308,8 +345,13 @@ mod tests {
             for y in 0..h as usize {
                 if let Some(row) = p.row_mut(y) {
                     for (x, cell) in row.iter_mut().enumerate() {
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, reason = "test fixture, small bounded values")]
-                        let v = (((x as i32 - shift).rem_euclid(256)) as u8).wrapping_add((y * 7) as u8);
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            clippy::cast_possible_wrap,
+                            reason = "test fixture, small bounded values"
+                        )]
+                        let v = (((x as i32 - shift).rem_euclid(256)) as u8)
+                            .wrapping_add((y * 7) as u8);
                         *cell = v;
                     }
                 }
@@ -338,7 +380,10 @@ mod tests {
         let trajectory = vec![(0.0, 0.0), (0.0, 0.0), (100.0, 0.0), (0.0, 0.0), (0.0, 0.0)];
         let smoothed = smooth(&trajectory, 2);
         let spike_smoothed = smoothed[2].0;
-        assert!(spike_smoothed > 0.0 && spike_smoothed < 100.0, "expected a damped, nonzero value, got {spike_smoothed}");
+        assert!(
+            spike_smoothed > 0.0 && spike_smoothed < 100.0,
+            "expected a damped, nonzero value, got {spike_smoothed}"
+        );
     }
 
     #[test]
@@ -356,7 +401,11 @@ mod tests {
         let path = tmp_path("jitter");
         write_transforms(&path, &relative);
 
-        let opts = Opts { input: path.clone(), smoothing: 3, ..Opts::default() };
+        let opts = Opts {
+            input: path.clone(),
+            smoothing: 3,
+            ..Opts::default()
+        };
         let mut filt = Filter::new(&opts).unwrap();
         let pool = FramePool::default();
         let corrected: Vec<Frame> = raw
@@ -367,8 +416,14 @@ mod tests {
             })
             .collect();
 
-        let raw_diff: u64 = raw.windows(2).map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap())).sum();
-        let corrected_diff: u64 = corrected.windows(2).map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap())).sum();
+        let raw_diff: u64 = raw
+            .windows(2)
+            .map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap()))
+            .sum();
+        let corrected_diff: u64 = corrected
+            .windows(2)
+            .map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap()))
+            .sum();
 
         assert!(
             corrected_diff < raw_diff,

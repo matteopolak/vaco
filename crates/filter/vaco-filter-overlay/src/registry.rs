@@ -3,7 +3,9 @@
 
 use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 
-const NAMES: &[&str] = &["blend", "multiply", "mix", "xmedian", "xfade", "displace", "remap"];
+const NAMES: &[&str] = &[
+    "blend", "multiply", "mix", "xmedian", "xfade", "displace", "remap",
+];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
 #[derive(Debug, Clone, Copy, Default)]

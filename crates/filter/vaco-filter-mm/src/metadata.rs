@@ -133,7 +133,12 @@ pub(crate) struct Opts {
     pub expr: Option<String>,
     #[opt(name = "file", help = "file to print metadata to", default = None, flags(filtering))]
     pub file: Option<String>,
-    #[opt(name = "direct", help = "reduce buffering in print mode", default = false, flags(filtering))]
+    #[opt(
+        name = "direct",
+        help = "reduce buffering in print mode",
+        default = false,
+        flags(filtering)
+    )]
     pub direct: bool,
 }
 
@@ -247,7 +252,11 @@ impl Filter {
         }
         let mut lines = Vec::new();
         let mut header = String::new();
-        let _ = write!(header, "frame:{n:<5}pts:{pts:<8}pts_time:{}", format_time(t));
+        let _ = write!(
+            header,
+            "frame:{n:<5}pts:{pts:<8}pts_time:{}",
+            format_time(t)
+        );
         lines.push(header);
         for (k, v) in entries {
             lines.push(format!("{k}={v}"));
@@ -260,7 +269,10 @@ impl Filter {
             }
             if file == "-" {
                 let _ = std::io::stdout().write_all(text.as_bytes());
-            } else if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(file)
+            } else if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(file)
             {
                 let _ = f.write_all(text.as_bytes());
             }
@@ -294,9 +306,9 @@ impl FrameFilter for Filter {
             }
             Mode::Delete => match (&self.key, &self.value) {
                 (Some(key), Some(value)) => {
-                    let should_delete = frame
-                        .metadata_get(key)
-                        .is_some_and(|current| compare(self.function, current, value, self.expr.as_ref()));
+                    let should_delete = frame.metadata_get(key).is_some_and(|current| {
+                        compare(self.function, current, value, self.expr.as_ref())
+                    });
                     if should_delete {
                         let _ = frame.remove_metadata(key);
                     }
@@ -424,9 +436,17 @@ mod tests {
         };
         let instance = video::create(&req).unwrap();
         let mut graph = Graph::new();
-        let src = graph.add_source("in", MediaType::Video, video_source_formats("in", vaco_pixfmt::PixFmt::Gray8));
+        let src = graph.add_source(
+            "in",
+            MediaType::Video,
+            video_source_formats("in", vaco_pixfmt::PixFmt::Gray8),
+        );
         let node = graph.add(instance.desc, instance.formats, instance.filter);
-        let sink = graph.add_sink("out", MediaType::Video, vaco_filter_core::mock::any_video_sink("out"));
+        let sink = graph.add_sink(
+            "out",
+            MediaType::Video,
+            vaco_filter_core::mock::any_video_sink("out"),
+        );
         graph.connect(src, 0, node, 0).unwrap();
         graph.connect(node, 0, sink, 0).unwrap();
         let tb = Rational::new(1, 25);
@@ -466,12 +486,18 @@ mod tests {
             args: Some("mode=select"),
             arguments: &[],
         };
-        assert!(video::create(&req).is_err(), "key must be required for select");
+        assert!(
+            video::create(&req).is_err(),
+            "key must be required for select"
+        );
     }
 
     #[test]
     fn add_does_not_overwrite_an_existing_key() {
-        let out = run_one("mode=add:key=foo:value=baz", frame_with(Some(("foo", "bar"))));
+        let out = run_one(
+            "mode=add:key=foo:value=baz",
+            frame_with(Some(("foo", "bar"))),
+        );
         assert_eq!(out.metadata_get("foo"), Some("bar"));
     }
 
@@ -511,7 +537,13 @@ mod tests {
         assert_eq!(
             {
                 let mut s = String::new();
-                let _ = write!(s, "frame:{:<5}pts:{:<8}pts_time:{}", 10, 10, format_time(10.0));
+                let _ = write!(
+                    s,
+                    "frame:{:<5}pts:{:<8}pts_time:{}",
+                    10,
+                    10,
+                    format_time(10.0)
+                );
                 s
             },
             "frame:10   pts:10      pts_time:10"
@@ -551,6 +583,9 @@ mod tests {
         let mut frame = frame_with(Some(("foo", "bar")));
         frame.set_metadata("baz", "qux");
         filter.print(&frame, 0, 0, 0.0);
-        assert_eq!(filter.printed(), &["frame:0    pts:0       pts_time:0", "foo=bar", "baz=qux"]);
+        assert_eq!(
+            filter.printed(),
+            &["frame:0    pts:0       pts_time:0", "foo=bar", "baz=qux"]
+        );
     }
 }

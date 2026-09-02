@@ -88,9 +88,13 @@ pub fn select(
                 }
             }
             Err(if named_but_unusable {
-                Error::Unsupported("requested hardware backend is present but unusable for this codec")
+                Error::Unsupported(
+                    "requested hardware backend is present but unusable for this codec",
+                )
             } else {
-                Error::Unsupported("requested hardware backend is not compiled in or not registered")
+                Error::Unsupported(
+                    "requested hardware backend is not compiled in or not registered",
+                )
             })
         }
     }
@@ -337,8 +341,16 @@ mod tests {
         assert!(hw.hw_pix_fmt.is_hw());
 
         let mut budget = Budget::new(Limits::strict());
-        let downloaded = hw.download(&mut budget).expect("mock surface always downloads");
-        let vaco_frame::FrameData::Video { format, width, height, .. } = downloaded.data else {
+        let downloaded = hw
+            .download(&mut budget)
+            .expect("mock surface always downloads");
+        let vaco_frame::FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = downloaded.data
+        else {
             panic!("expected a video frame");
         };
         assert!(!format.is_hw());

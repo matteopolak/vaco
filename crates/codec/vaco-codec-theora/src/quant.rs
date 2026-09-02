@@ -159,9 +159,7 @@ impl QuantParams {
                             continue;
                         }
                         if qi > 63 {
-                            return Err(Error::InvalidData(
-                                "theora: quant ranges overshoot qi 63",
-                            ));
+                            return Err(Error::InvalidData("theora: quant ranges overshoot qi 63"));
                         }
                         break;
                     }
@@ -196,7 +194,12 @@ impl QuantParams {
         reason = "the spec's own base-matrix interpolation and 100ths-of-a-pixel-value scale-down are both exact integer divisions on non-negative operands (section 6.4.3), not rounding shortcuts"
     )]
     pub(crate) fn matrix(&self, qti: usize, pli: usize, qi: u32) -> [i32; 64] {
-        let nqrs = self.nqrs.get(qti).and_then(|p| p.get(pli)).copied().unwrap_or(0);
+        let nqrs = self
+            .nqrs
+            .get(qti)
+            .and_then(|p| p.get(pli))
+            .copied()
+            .unwrap_or(0);
         let qrsizes = self
             .qrsizes
             .get(qti)

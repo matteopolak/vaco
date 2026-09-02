@@ -143,9 +143,16 @@ fn remuxing_a_real_sample_is_still_readable_by_the_reference() {
     };
     let _ = std::fs::remove_file(&path);
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "ffprobe failed: {}", String::from_utf8_lossy(&out.stderr));
+    assert!(
+        out.status.success(),
+        "ffprobe failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
     assert!(text.contains("codec_name=flv1"), "missing flv1 in: {text}");
     assert!(text.contains("codec_name=mp3"), "missing mp3 in: {text}");
     assert!(text.contains("width=64"), "missing width in: {text}");
-    assert!(text.contains("sample_rate=44100"), "missing sample_rate in: {text}");
+    assert!(
+        text.contains("sample_rate=44100"),
+        "missing sample_rate in: {text}"
+    );
 }

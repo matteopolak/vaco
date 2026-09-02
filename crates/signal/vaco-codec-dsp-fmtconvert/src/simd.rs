@@ -147,7 +147,10 @@ fn int32_to_float_body<S: Lanes>(simd: S, src: &[i32], dst: &mut [f32]) {
     let Some((dst_full, dst_tail)) = dst.split_at_mut_checked(full) else {
         return scalar_tail_i32(src, dst, 1.0);
     };
-    for (s_chunk, d_chunk) in src_full.chunks_exact(n.max(1)).zip(dst_full.chunks_exact_mut(n.max(1))) {
+    for (s_chunk, d_chunk) in src_full
+        .chunks_exact(n.max(1))
+        .zip(dst_full.chunks_exact_mut(n.max(1)))
+    {
         let v = <S::i32s as SimdBase<S>>::from_slice(simd, s_chunk);
         let f: S::f32s = SimdCvtFloat::float_from(v);
         (f * scale).store_slice(d_chunk);
@@ -166,7 +169,10 @@ fn int32_to_float_fmul_body<S: Lanes>(simd: S, src: &[i32], mul: f32, dst: &mut 
     let Some((dst_full, dst_tail)) = dst.split_at_mut_checked(full) else {
         return scalar_tail_fmul(src, dst, mul);
     };
-    for (s_chunk, d_chunk) in src_full.chunks_exact(n.max(1)).zip(dst_full.chunks_exact_mut(n.max(1))) {
+    for (s_chunk, d_chunk) in src_full
+        .chunks_exact(n.max(1))
+        .zip(dst_full.chunks_exact_mut(n.max(1)))
+    {
         let v = <S::i32s as SimdBase<S>>::from_slice(simd, s_chunk);
         let f: S::f32s = SimdCvtFloat::float_from(v);
         (f * mulv).store_slice(d_chunk);
@@ -229,7 +235,9 @@ mod tests {
 
     #[test]
     fn int32_to_float_matches_scalar_on_a_ramp() {
-        let src: Vec<i32> = (0..300i64).map(|i| (i * 7_919_431 - 500_000_000) as i32).collect();
+        let src: Vec<i32> = (0..300i64)
+            .map(|i| (i * 7_919_431 - 500_000_000) as i32)
+            .collect();
         let mut got = vec![0.0f32; src.len()];
         int32_to_float(Caps::detect(), &src, &mut got);
         let mut want = vec![0.0f32; src.len()];
@@ -250,7 +258,9 @@ mod tests {
     #[test]
     fn every_tail_length_matches_scalar() {
         for len in 0..40 {
-            let src: Vec<i16> = (0..len).map(|i| i16::try_from((i * 91) % 30000).unwrap_or(0)).collect();
+            let src: Vec<i16> = (0..len)
+                .map(|i| i16::try_from((i * 91) % 30000).unwrap_or(0))
+                .collect();
             let mut got = vec![0.0f32; len];
             int16_to_float_vector(Caps::detect(), &src, &mut got);
             let mut want = vec![0.0f32; len];

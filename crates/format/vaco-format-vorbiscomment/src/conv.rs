@@ -42,7 +42,11 @@ mod tests {
         assert_eq!(TABLE.to_native("disc"), Some("DISCNUMBER"));
         assert_eq!(TABLE.to_native("album_artist"), Some("ALBUMARTIST"));
         assert_eq!(TABLE.to_generic("TRACKNUMBER"), Some("track"));
-        assert_eq!(TABLE.to_generic("trackNUMBER"), Some("track"), "case-insensitive");
+        assert_eq!(
+            TABLE.to_generic("trackNUMBER"),
+            Some("track"),
+            "case-insensitive"
+        );
     }
 
     #[test]
@@ -61,7 +65,11 @@ mod tests {
             keys::PERFORMER,
             keys::PUBLISHER,
         ] {
-            assert_eq!(TABLE.to_native(key), None, "{key} is renamed but was not measured to be");
+            assert_eq!(
+                TABLE.to_native(key),
+                None,
+                "{key} is renamed but was not measured to be"
+            );
             assert_eq!(
                 TABLE.map_key(key, Direction::ToNative).as_ref(),
                 key,

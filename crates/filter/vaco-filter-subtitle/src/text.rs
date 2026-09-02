@@ -6,7 +6,7 @@
 //! overrides.
 
 use vaco_core::{Error, Result};
-use vaco_filter_text::{mask, Anchor, TextRenderer, TextStyle, Wrap};
+use vaco_filter_text::{Anchor, TextRenderer, TextStyle, Wrap, mask};
 use vaco_frame::{Frame, FrameData};
 
 /// Default styling for a subtitle format that carries no styling of its
@@ -26,7 +26,11 @@ impl SimpleTextStyle {
     #[must_use]
     pub fn for_frame_height(height: u32) -> Self {
         let size_px = (f64::from(height) * 0.05).max(12.0) as f32;
-        Self { size_px, outline_px: 2, margin_bottom: (f64::from(height) * 0.04) as u32 }
+        Self {
+            size_px,
+            outline_px: 2,
+            margin_bottom: (f64::from(height) * 0.04) as u32,
+        }
     }
 }
 
@@ -37,16 +41,28 @@ impl SimpleTextStyle {
 /// [`Error::Unsupported`] for a non-video frame or an unsupported pixel
 /// format; [`vaco_core::Error::LimitExceeded`] if rasterisation exceeds
 /// `renderer`'s own budget.
-pub fn composite_simple_text(renderer: &mut TextRenderer, frame: &mut Frame, text: &str, style: &SimpleTextStyle) -> Result<()> {
+pub fn composite_simple_text(
+    renderer: &mut TextRenderer,
+    frame: &mut Frame,
+    text: &str,
+    style: &SimpleTextStyle,
+) -> Result<()> {
     let FrameData::Video { width, height, .. } = frame.data else {
-        return Err(Error::Unsupported("vaco-filter-subtitle::text: not a video frame"));
+        return Err(Error::Unsupported(
+            "vaco-filter-subtitle::text: not a video frame",
+        ));
     };
     if text.trim().is_empty() {
         return Ok(());
     }
     let text_style = TextStyle {
         size_px: style.size_px,
-        color: vaco_core::Rgba { r: 255, g: 255, b: 255, a: 255 },
+        color: vaco_core::Rgba {
+            r: 255,
+            g: 255,
+            b: 255,
+            a: 255,
+        },
         ..TextStyle::default()
     };
     let wrap = Wrap::Word(f32::from(u16::try_from(width).unwrap_or(u16::MAX)) * 0.9);
@@ -56,14 +72,29 @@ pub fn composite_simple_text(renderer: &mut TextRenderer, frame: &mut Frame, tex
     }
     let target_x = f64::from(width) / 2.0;
     let target_y = f64::from(height) - f64::from(style.margin_bottom);
-    let (ox, oy) = Anchor::BottomCenter.place(target_x as f32, target_y as f32, layout.width as f32, layout.height as f32);
+    let (ox, oy) = Anchor::BottomCenter.place(
+        target_x as f32,
+        target_y as f32,
+        layout.width as f32,
+        layout.height as f32,
+    );
     let origin = (ox.round() as i32, oy.round() as i32);
 
     let base_mask = renderer.rasterise(&layout, origin)?;
     let color_info = frame.color;
     if style.outline_px > 0 {
         let dilated = base_mask.dilate(renderer.budget_mut(), style.outline_px)?;
-        mask::composite(frame, &dilated, vaco_core::Rgba { r: 0, g: 0, b: 0, a: 255 }, color_info)?;
+        mask::composite(
+            frame,
+            &dilated,
+            vaco_core::Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            color_info,
+        )?;
     }
     mask::composite(frame, &base_mask, text_style.color, color_info)
 }

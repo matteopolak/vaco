@@ -260,7 +260,10 @@ fn write_no_coeff_prob_updates(bw: &mut BoolWriter) {
 /// from (see the module doc); this is an original heuristic in the
 /// well-known `lambda ~ k * qstep^2` shape most block-based RD encoders
 /// use, not a transcription of any specific implementation's constant.
-#[allow(clippy::integer_division, reason = "an intentional coarse scale-down, not a size split")]
+#[allow(
+    clippy::integer_division,
+    reason = "an intentional coarse scale-down, not a size split"
+)]
 fn rd_lambda(ac_dequant: i32) -> u64 {
     let q = u64::try_from(ac_dequant.max(1)).unwrap_or(1);
     (q * q / 16).max(1)
@@ -323,9 +326,17 @@ fn qscale_to_vp8_qp(qscale: f64, min_qscale: f64, max_qscale: f64) -> i32 {
     let max_q = max_qscale.max(min_q * 1.0001);
     let q = qscale.clamp(min_q, max_q);
     let span = (max_q / min_q).ln();
-    let t = if span > 0.0 { (q / min_q).ln() / span } else { 0.0 };
+    let t = if span > 0.0 {
+        (q / min_q).ln() / span
+    } else {
+        0.0
+    };
     let qp = (t * 127.0).round();
-    if qp.is_finite() { qp.clamp(0.0, 127.0) as i32 } else { 0 }
+    if qp.is_finite() {
+        qp.clamp(0.0, 127.0) as i32
+    } else {
+        0
+    }
 }
 
 /// A simple, documented heuristic mapping this frame's quantiser to a loop
@@ -333,7 +344,10 @@ fn qscale_to_vp8_qp(qscale: f64, min_qscale: f64, max_qscale: f64) -> i32 {
 /// choose it (`crate::loopfilter` implements the filter itself, which is
 /// normative; this selection is not). Coarser quantisation leaves more
 /// blocking to smooth over, so the level rises with `qp`.
-#[allow(clippy::integer_division, reason = "a coarse linear heuristic, not a size split")]
+#[allow(
+    clippy::integer_division,
+    reason = "a coarse linear heuristic, not a size split"
+)]
 fn filter_level_for_qp(qp: i32) -> i32 {
     (qp / 2).clamp(0, 63)
 }
@@ -343,7 +357,12 @@ fn filter_level_for_qp(qp: i32) -> i32 {
 /// The 3-byte uncompressed frame tag plus, for a key frame, the 3-byte
 /// start code and the two 4-byte-aligned `(dimension, scale)` pairs —
 /// exactly what `vaco_parse_vpx::vp8::parse_frame_tag` reads.
-fn encode_uncompressed_header(key_frame: bool, width: u32, height: u32, first_part_size: u32) -> Vec<u8> {
+fn encode_uncompressed_header(
+    key_frame: bool,
+    width: u32,
+    height: u32,
+    first_part_size: u32,
+) -> Vec<u8> {
     let mut out = Vec::new();
     // RFC 6386 §9.1: bit 0 is inverted (0 = key frame); version 0
     // (bicubic/6-tap, sub-pel) is always selected here since this
@@ -367,13 +386,22 @@ fn encode_uncompressed_header(key_frame: bool, width: u32, height: u32, first_pa
 
 fn frame_dims(frame: &Frame) -> Result<(u32, u32)> {
     match &frame.data {
-        FrameData::Video { width, height, format, .. } => {
+        FrameData::Video {
+            width,
+            height,
+            format,
+            ..
+        } => {
             if *format != PixFmt::Yuv420p {
-                return Err(Error::Unsupported("vp8 encode: only yuv420p input is supported"));
+                return Err(Error::Unsupported(
+                    "vp8 encode: only yuv420p input is supported",
+                ));
             }
             Ok((*width, *height))
         }
-        FrameData::Audio { .. } | FrameData::Subtitle { .. } => Err(Error::InvalidData("vp8 encode: expected a video frame")),
+        FrameData::Audio { .. } | FrameData::Subtitle { .. } => {
+            Err(Error::InvalidData("vp8 encode: expected a video frame"))
+        }
     }
 }
 
@@ -441,7 +469,14 @@ fn block_coeffs_dequant(qcoeffs: &[i32; 16], dc: i32, ac: i32, skip_dc: bool) ->
 
 /// One quadrant of a 16x16/8x8 prediction matrix as a spatial residue
 /// against the original source pixels.
-fn residue_block<const N: usize>(orig: &Plane, pred: &[[u8; N]; N], base_x: i32, base_y: i32, sub_row: usize, sub_col: usize) -> [i32; 16] {
+fn residue_block<const N: usize>(
+    orig: &Plane,
+    pred: &[[u8; N]; N],
+    base_x: i32,
+    base_y: i32,
+    sub_row: usize,
+    sub_col: usize,
+) -> [i32; 16] {
     let mut out = [0i32; 16];
     for r in 0..4 {
         for c in 0..4 {
@@ -457,7 +492,13 @@ fn residue_block<const N: usize>(orig: &Plane, pred: &[[u8; N]; N], base_x: i32,
     out
 }
 
-fn orig_block(orig: &Plane, base_x: i32, base_y: i32, sub_row: usize, sub_col: usize) -> [[u8; 4]; 4] {
+fn orig_block(
+    orig: &Plane,
+    base_x: i32,
+    base_y: i32,
+    sub_row: usize,
+    sub_col: usize,
+) -> [[u8; 4]; 4] {
     let mut out = [[0u8; 4]; 4];
     for (r, row) in out.iter_mut().enumerate() {
         for (c, px) in row.iter_mut().enumerate() {
@@ -484,8 +525,14 @@ struct ModeEval<const NB: usize> {
 /// for a plane that folds its DC through a Y2 block (`dc_dequant`/`ac_dequant`
 /// are `y1_dc`/`y1_ac` for luma) — chroma calls the sibling
 /// [`eval_intra_no_y2`] instead, since chroma has no Y2 concept at all.
-#[allow(clippy::too_many_arguments, reason = "one candidate's full RD evaluation")]
-#[allow(clippy::integer_division, reason = "splitting a subblock index into its NxN grid position; N is always a multiple of 4")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one candidate's full RD evaluation"
+)]
+#[allow(
+    clippy::integer_division,
+    reason = "splitting a subblock index into its NxN grid position; N is always a multiple of 4"
+)]
 fn eval_with_y2<const N: usize, const NB: usize>(
     orig: &Plane,
     pred: &[[u8; N]; N],
@@ -538,7 +585,11 @@ fn eval_with_y2<const N: usize, const NB: usize>(
         if dc_val != 0 {
             block.has_coeffs = true;
         }
-        let residue = if block.has_coeffs { transform::inverse_dct(&block.coeffs) } else { [0; 16] };
+        let residue = if block.has_coeffs {
+            transform::inverse_dct(&block.coeffs)
+        } else {
+            [0; 16]
+        };
         let sub_row = i / grid.max(1);
         let sub_col = i % grid.max(1);
         let mut recon_block = [[0u8; 4]; 4];
@@ -565,12 +616,21 @@ fn eval_with_y2<const N: usize, const NB: usize>(
     }
     let y2_rate = coeff_rate_estimate_bits(&y2_q, 0);
     cost = cost.saturating_add(lambda.saturating_mul(y2_rate));
-    ModeEval { cost, q, recon, y2_q, y2_recon }
+    ModeEval {
+        cost,
+        q,
+        recon,
+        y2_q,
+        y2_recon,
+    }
 }
 
 /// Chroma's sibling of [`eval_with_y2`]: no Y2 block, DC quantised and
 /// scanned like every other position.
-#[allow(clippy::integer_division, reason = "splitting a subblock index into its NxN grid position; N is always a multiple of 4")]
+#[allow(
+    clippy::integer_division,
+    reason = "splitting a subblock index into its NxN grid position; N is always a multiple of 4"
+)]
 fn eval_intra_no_y2<const N: usize, const NB: usize>(
     orig: &Plane,
     pred: &[[u8; N]; N],
@@ -591,7 +651,11 @@ fn eval_intra_no_y2<const N: usize, const NB: usize>(
         let f = transform::forward_dct(&residue);
         let qi = transform::quantize_block(&f, dc_dequant, ac_dequant);
         let block = block_coeffs_dequant(&qi, dc_dequant, ac_dequant, false);
-        let residue_out = if block.has_coeffs { transform::inverse_dct(&block.coeffs) } else { [0; 16] };
+        let residue_out = if block.has_coeffs {
+            transform::inverse_dct(&block.coeffs)
+        } else {
+            [0; 16]
+        };
         let mut recon_block = [[0u8; 4]; 4];
         for r in 0..4 {
             for c in 0..4 {
@@ -625,7 +689,10 @@ fn intra_pred_16(work_y: &Plane, base_x: i32, base_y: i32, mode: i32) -> [[u8; 1
         m if m == tables::V_PRED => predict::predict_v(&above),
         m if m == tables::H_PRED => predict::predict_h(&left),
         m if m == tables::TM_PRED => predict::predict_tm(&above, &left, corner),
-        _ => predict::predict_dc(if base_y > 0 { Some(&above) } else { None }, if base_x > 0 { Some(&left) } else { None }),
+        _ => predict::predict_dc(
+            if base_y > 0 { Some(&above) } else { None },
+            if base_x > 0 { Some(&left) } else { None },
+        ),
     }
 }
 
@@ -637,25 +704,65 @@ fn intra_pred_8(work: &Plane, base_x: i32, base_y: i32, mode: i32) -> [[u8; 8]; 
         m if m == tables::V_PRED => predict::predict_v(&above),
         m if m == tables::H_PRED => predict::predict_h(&left),
         m if m == tables::TM_PRED => predict::predict_tm(&above, &left, corner),
-        _ => predict::predict_dc(if base_y > 0 { Some(&above) } else { None }, if base_x > 0 { Some(&left) } else { None }),
+        _ => predict::predict_dc(
+            if base_y > 0 { Some(&above) } else { None },
+            if base_x > 0 { Some(&left) } else { None },
+        ),
     }
 }
 
-const INTRA_MODES: [i32; 4] = [tables::DC_PRED, tables::V_PRED, tables::H_PRED, tables::TM_PRED];
+const INTRA_MODES: [i32; 4] = [
+    tables::DC_PRED,
+    tables::V_PRED,
+    tables::H_PRED,
+    tables::TM_PRED,
+];
 
 /// Try every whole-block luma intra mode and keep the cheapest, RD-wise.
-fn best_intra_luma(orig_y: &Plane, work_y: &Plane, base_x: i32, base_y: i32, quant: &transform::DequantFactors, lambda: u64) -> (i32, ModeEval<16>) {
+fn best_intra_luma(
+    orig_y: &Plane,
+    work_y: &Plane,
+    base_x: i32,
+    base_y: i32,
+    quant: &transform::DequantFactors,
+    lambda: u64,
+) -> (i32, ModeEval<16>) {
     let mut best_mode = tables::DC_PRED;
     let mut best: Option<ModeEval<16>> = None;
     for &mode in &INTRA_MODES {
         let pred = intra_pred_16(work_y, base_x, base_y, mode);
-        let eval = eval_with_y2::<16, 16>(orig_y, &pred, base_x, base_y, quant.y1_dc, quant.y1_ac, quant.y2_dc, quant.y2_ac, lambda);
+        let eval = eval_with_y2::<16, 16>(
+            orig_y,
+            &pred,
+            base_x,
+            base_y,
+            quant.y1_dc,
+            quant.y1_ac,
+            quant.y2_dc,
+            quant.y2_ac,
+            lambda,
+        );
         if best.as_ref().is_none_or(|b| eval.cost < b.cost) {
             best_mode = mode;
             best = Some(eval);
         }
     }
-    (best_mode, best.unwrap_or_else(|| eval_with_y2::<16, 16>(orig_y, &[[128; 16]; 16], base_x, base_y, quant.y1_dc, quant.y1_ac, quant.y2_dc, quant.y2_ac, lambda)))
+    (
+        best_mode,
+        best.unwrap_or_else(|| {
+            eval_with_y2::<16, 16>(
+                orig_y,
+                &[[128; 16]; 16],
+                base_x,
+                base_y,
+                quant.y1_dc,
+                quant.y1_ac,
+                quant.y2_dc,
+                quant.y2_ac,
+                lambda,
+            )
+        }),
+    )
 }
 
 /// Try every whole-block chroma intra mode (shared by U and V — RFC 6386
@@ -671,7 +778,14 @@ fn best_intra_chroma(
     base_y: i32,
     quant: &transform::DequantFactors,
     lambda: u64,
-) -> (i32, u64, [[i32; 16]; 4], [BlockCoeffs; 4], [[i32; 16]; 4], [BlockCoeffs; 4]) {
+) -> (
+    i32,
+    u64,
+    [[i32; 16]; 4],
+    [BlockCoeffs; 4],
+    [[i32; 16]; 4],
+    [BlockCoeffs; 4],
+) {
     let mut best_mode = tables::DC_PRED;
     let mut best_cost = u64::MAX;
     let mut best_u = ([[0i32; 16]; 4], [BlockCoeffs::default(); 4]);
@@ -679,8 +793,24 @@ fn best_intra_chroma(
     for &mode in &INTRA_MODES {
         let pred_u = intra_pred_8(work_u, base_x, base_y, mode);
         let pred_v = intra_pred_8(work_v, base_x, base_y, mode);
-        let (qu, ru, cu) = eval_intra_no_y2::<8, 4>(orig_u, &pred_u, base_x, base_y, quant.uv_dc, quant.uv_ac, lambda);
-        let (qv, rv, cv) = eval_intra_no_y2::<8, 4>(orig_v, &pred_v, base_x, base_y, quant.uv_dc, quant.uv_ac, lambda);
+        let (qu, ru, cu) = eval_intra_no_y2::<8, 4>(
+            orig_u,
+            &pred_u,
+            base_x,
+            base_y,
+            quant.uv_dc,
+            quant.uv_ac,
+            lambda,
+        );
+        let (qv, rv, cv) = eval_intra_no_y2::<8, 4>(
+            orig_v,
+            &pred_v,
+            base_x,
+            base_y,
+            quant.uv_dc,
+            quant.uv_ac,
+            lambda,
+        );
         let cost = cu.saturating_add(cv);
         if cost < best_cost {
             best_cost = cost;
@@ -721,15 +851,27 @@ fn eval_inter_candidate(
     version: u8,
 ) -> InterCandidate {
     let pred_y = mc_pred16(&refp.y, base_x, base_y, mv, version);
-    let y_eval = eval_with_y2::<16, 16>(orig_y, &pred_y, base_x, base_y, quant.y1_dc, quant.y1_ac, quant.y2_dc, quant.y2_ac, lambda);
+    let y_eval = eval_with_y2::<16, 16>(
+        orig_y,
+        &pred_y,
+        base_x,
+        base_y,
+        quant.y1_dc,
+        quant.y1_ac,
+        quant.y2_dc,
+        quant.y2_ac,
+        lambda,
+    );
 
     let chroma_mv = (decode::round_div8(mv.0 * 4), decode::round_div8(mv.1 * 4));
     let cx = ix(col * 8);
     let cy = ix(row * 8);
     let pred_u = mc_pred8(&refp.u, cx, cy, chroma_mv, version);
     let pred_v = mc_pred8(&refp.v, cx, cy, chroma_mv, version);
-    let (qu, ru, cu) = eval_intra_no_y2::<8, 4>(orig_u, &pred_u, cx, cy, quant.uv_dc, quant.uv_ac, lambda);
-    let (qv, rv, cv) = eval_intra_no_y2::<8, 4>(orig_v, &pred_v, cx, cy, quant.uv_dc, quant.uv_ac, lambda);
+    let (qu, ru, cu) =
+        eval_intra_no_y2::<8, 4>(orig_u, &pred_u, cx, cy, quant.uv_dc, quant.uv_ac, lambda);
+    let (qv, rv, cv) =
+        eval_intra_no_y2::<8, 4>(orig_v, &pred_v, cx, cy, quant.uv_dc, quant.uv_ac, lambda);
 
     InterCandidate {
         submode,
@@ -741,7 +883,10 @@ fn eval_inter_candidate(
     }
 }
 
-#[allow(clippy::integer_division, reason = "splitting a subblock index into its 4x4 grid position")]
+#[allow(
+    clippy::integer_division,
+    reason = "splitting a subblock index into its 4x4 grid position"
+)]
 fn mc_pred16(refp: &Plane, base_x: i32, base_y: i32, mv: Mv, version: u8) -> [[u8; 16]; 16] {
     let mut out = [[0u8; 16]; 16];
     for sub_row in 0..4 {
@@ -764,7 +909,10 @@ fn mc_pred16(refp: &Plane, base_x: i32, base_y: i32, mv: Mv, version: u8) -> [[u
     out
 }
 
-#[allow(clippy::integer_division, reason = "splitting a subblock index into its 2x2 grid position")]
+#[allow(
+    clippy::integer_division,
+    reason = "splitting a subblock index into its 2x2 grid position"
+)]
 fn mc_pred8(refp: &Plane, base_x: i32, base_y: i32, mv: Mv, version: u8) -> [[u8; 8]; 8] {
     let mut out = [[0u8; 8]; 8];
     for sub_row in 0..2 {
@@ -827,8 +975,11 @@ fn decide_mb(fe: &FrameEncoder<'_>, work: &mut Picture, mbs: &mut [EncMb], col: 
     let base_y = ix(row * 16);
     let chroma_x = ix(col * 8);
     let chroma_y = ix(row * 8);
-    let (best_y_mode, y_eval) = best_intra_luma(&fe.src.y, &work.y, base_x, base_y, &fe.quant, fe.lambda);
-    let (best_uv_mode, chroma_cost, uq, ur, vq, vr) = best_intra_chroma(&fe.src.u, &fe.src.v, &work.u, &work.v, chroma_x, chroma_y, &fe.quant, fe.lambda);
+    let (best_y_mode, y_eval) =
+        best_intra_luma(&fe.src.y, &work.y, base_x, base_y, &fe.quant, fe.lambda);
+    let (best_uv_mode, chroma_cost, uq, ur, vq, vr) = best_intra_chroma(
+        &fe.src.u, &fe.src.v, &work.u, &work.v, chroma_x, chroma_y, &fe.quant, fe.lambda,
+    );
     let intra_cost = y_eval.cost.saturating_add(chroma_cost);
 
     let mut best_inter: Option<InterCandidate> = None;
@@ -841,25 +992,54 @@ fn decide_mb(fe: &FrameEncoder<'_>, work: &mut Picture, mbs: &mut [EncMb], col: 
         let left = neighbor(mbs, fe.mb_cols, ix(col) - 1, ix(row));
         let above_left = neighbor(mbs, fe.mb_cols, ix(col) - 1, ix(row) - 1);
         let near = mv::find_near_mvs(above, left, above_left, |_| true);
-        let (to_left, to_right, to_top, to_bottom) = decode::mv_bounds(col, row, fe.mb_cols, fe.mb_rows);
+        let (to_left, to_right, to_top, to_bottom) =
+            decode::mv_bounds(col, row, fe.mb_cols, fe.mb_rows);
         let clamp = |m: Mv| mv::clamp_mv(m, to_left, to_right, to_top, to_bottom);
         let nearest = clamp(near.nearest);
         let near_mv = clamp(near.near);
         let best_pred = clamp(near.best);
 
-        let mut candidates: Vec<(i32, Mv)> = vec![(tables::MV_ZEROMV, (0, 0)), (tables::MV_NEARESTMV, nearest), (tables::MV_NEARMV, near_mv)];
+        let mut candidates: Vec<(i32, Mv)> = vec![
+            (tables::MV_ZEROMV, (0, 0)),
+            (tables::MV_NEARESTMV, nearest),
+            (tables::MV_NEARMV, near_mv),
+        ];
 
-        let cur_y = MePlane::new(fe.src.y.as_bytes(), fe.src.y.stride, fe.src.y.width, fe.src.y.height);
-        let ref_y = MePlane::new(last.y.as_bytes(), last.y.stride, last.y.width, last.y.height);
-        let block = BlockOrigin { x: ux(base_x), y: ux(base_y), width: 16, height: 16 };
-        let cfg = SearchConfig { metric: Metric::Sad, range: 16 };
-        let start = Displacement { x: best_pred.1 / 8, y: best_pred.0 / 8 };
+        let cur_y = MePlane::new(
+            fe.src.y.as_bytes(),
+            fe.src.y.stride,
+            fe.src.y.width,
+            fe.src.y.height,
+        );
+        let ref_y = MePlane::new(
+            last.y.as_bytes(),
+            last.y.stride,
+            last.y.width,
+            last.y.height,
+        );
+        let block = BlockOrigin {
+            x: ux(base_x),
+            y: ux(base_y),
+            width: 16,
+            height: 16,
+        };
+        let cfg = SearchConfig {
+            metric: Metric::Sad,
+            range: 16,
+        };
+        let start = Displacement {
+            x: best_pred.1 / 8,
+            y: best_pred.0 / 8,
+        };
         let search = fe.searcher.diamond_search(cur_y, ref_y, block, &cfg, start);
         let new_mv: Mv = (search.mv.y * 8, search.mv.x * 8);
         candidates.push((tables::MV_NEWMV, new_mv));
 
         for (submode, mv) in candidates {
-            let cand = eval_inter_candidate(&fe.src.y, &fe.src.u, &fe.src.v, last, base_x, base_y, col, row, submode, mv, &fe.quant, fe.lambda, fe.version);
+            let cand = eval_inter_candidate(
+                &fe.src.y, &fe.src.u, &fe.src.v, last, base_x, base_y, col, row, submode, mv,
+                &fe.quant, fe.lambda, fe.version,
+            );
             if best_inter.as_ref().is_none_or(|b| cand.cost < b.cost) {
                 best_inter = Some(cand);
             }
@@ -884,7 +1064,10 @@ fn decide_mb(fe: &FrameEncoder<'_>, work: &mut Picture, mbs: &mut [EncMb], col: 
         for (slot, src) in mb.v.iter_mut().zip(cand.v.0.iter()) {
             *slot = *src;
         }
-        mb.skip = !any_nonzero(&mb.y) && !mb.y2.iter().any(|&c| c != 0) && !any_nonzero(&mb.u) && !any_nonzero(&mb.v);
+        mb.skip = !any_nonzero(&mb.y)
+            && !mb.y2.iter().any(|&c| c != 0)
+            && !any_nonzero(&mb.u)
+            && !any_nonzero(&mb.v);
 
         // Reconstruct via `decode::mc_block` + `decode::write_residual_block`
         // directly -- the same pair `decode::reconstruct_inter` composes --
@@ -900,7 +1083,10 @@ fn decide_mb(fe: &FrameEncoder<'_>, work: &mut Picture, mbs: &mut [EncMb], col: 
                 let block = cand.y_eval.recon.get(i).copied().unwrap_or_default();
                 decode::write_residual_block(&mut work.y, x, y, &pred, &block);
             }
-            let chroma_mv = (decode::round_div8(cand.mv.0 * 4), decode::round_div8(cand.mv.1 * 4));
+            let chroma_mv = (
+                decode::round_div8(cand.mv.0 * 4),
+                decode::round_div8(cand.mv.1 * 4),
+            );
             for i in 0..4 {
                 let sub_row = i / 2;
                 let sub_col = i % 2;
@@ -930,9 +1116,19 @@ fn decide_mb(fe: &FrameEncoder<'_>, work: &mut Picture, mbs: &mut [EncMb], col: 
         for (slot, src) in mb.v.iter_mut().zip(vq.iter()) {
             *slot = *src;
         }
-        mb.skip = !any_nonzero(&mb.y) && !mb.y2.iter().any(|&c| c != 0) && !any_nonzero(&mb.u) && !any_nonzero(&mb.v);
+        mb.skip = !any_nonzero(&mb.y)
+            && !mb.y2.iter().any(|&c| c != 0)
+            && !any_nonzero(&mb.u)
+            && !any_nonzero(&mb.v);
 
-        decode::predict_and_write_16(&mut work.y, base_x, base_y, best_y_mode, &y_eval.recon, Some(&y_eval.y2_recon));
+        decode::predict_and_write_16(
+            &mut work.y,
+            base_x,
+            base_y,
+            best_y_mode,
+            &y_eval.recon,
+            Some(&y_eval.y2_recon),
+        );
         decode::predict_and_write_8(&mut work.u, chroma_x, chroma_y, best_uv_mode, &ur);
         decode::predict_and_write_8(&mut work.v, chroma_x, chroma_y, best_uv_mode, &vr);
     }
@@ -950,9 +1146,19 @@ fn decide_mb(fe: &FrameEncoder<'_>, work: &mut Picture, mbs: &mut [EncMb], col: 
 /// behaviour [`crate::framebuf::Plane::get_clamped`] gives a reference read,
 /// applied here once at copy time instead of on every prediction/motion
 /// read.
-fn copy_from_frame(frame: &Frame, plane_index: usize, true_w: usize, true_h: usize, mb_w: usize, mb_h: usize, budget: &mut Budget) -> Result<Plane> {
+fn copy_from_frame(
+    frame: &Frame,
+    plane_index: usize,
+    true_w: usize,
+    true_h: usize,
+    mb_w: usize,
+    mb_h: usize,
+    budget: &mut Budget,
+) -> Result<Plane> {
     let mut plane = Plane::new(budget, mb_w, mb_h)?;
-    let Some(src) = frame.plane(plane_index) else { return Ok(plane) };
+    let Some(src) = frame.plane(plane_index) else {
+        return Ok(plane);
+    };
     for y in 0..mb_h {
         let sy = y.min(true_h.saturating_sub(1));
         let row = src.row(sy).unwrap_or(&[]);
@@ -1048,7 +1254,13 @@ fn reset_ctx_for_skip(ctx: &mut TokenCtx, col: usize) {
 fn write_residuals(token_bw: &mut BoolWriter, ctx: &mut TokenCtx, col: usize, mb: &EncMb) {
     let above_ctx = usize::from(ctx.above_y2.get(col).copied().unwrap_or(false));
     let left_ctx = usize::from(ctx.left_y2);
-    let has_y2 = tokens::encode_block(token_bw, &tables::DEFAULT_COEFF_PROBS[tables::PLANE_Y2], &mb.y2, 0, above_ctx + left_ctx);
+    let has_y2 = tokens::encode_block(
+        token_bw,
+        &tables::DEFAULT_COEFF_PROBS[tables::PLANE_Y2],
+        &mb.y2,
+        0,
+        above_ctx + left_ctx,
+    );
     ctx.left_y2 = has_y2;
     if let Some(a) = ctx.above_y2.get_mut(col) {
         *a = has_y2;
@@ -1056,12 +1268,21 @@ fn write_residuals(token_bw: &mut BoolWriter, ctx: &mut TokenCtx, col: usize, mb
 
     let y_probs = &tables::DEFAULT_COEFF_PROBS[tables::PLANE_Y_AFTER_Y2];
     let mut y_has = [false; 16];
-    #[allow(clippy::integer_division, reason = "splitting a 0..16 subblock index into its 4x4 grid position")]
+    #[allow(
+        clippy::integer_division,
+        reason = "splitting a 0..16 subblock index into its 4x4 grid position"
+    )]
     for i in 0..16 {
         let sub_col = i % 4;
         let sub_row = i / 4;
         let above_ctx = if sub_row == 0 {
-            usize::from(ctx.above_y.get(col).and_then(|r| r.get(sub_col)).copied().unwrap_or(false))
+            usize::from(
+                ctx.above_y
+                    .get(col)
+                    .and_then(|r| r.get(sub_col))
+                    .copied()
+                    .unwrap_or(false),
+            )
         } else {
             usize::from(y_has.get(i - 4).copied().unwrap_or(false))
         };
@@ -1083,14 +1304,26 @@ fn write_residuals(token_bw: &mut BoolWriter, ctx: &mut TokenCtx, col: usize, mb
     ctx.left_y = [yh(3), yh(7), yh(11), yh(15)];
 
     let uv_probs = &tables::DEFAULT_COEFF_PROBS[tables::PLANE_UV];
-    #[allow(clippy::integer_division, reason = "splitting a 0..4 subblock index into its 2x2 grid position")]
-    for (blocks, above_state, left_state) in [(&mb.u, &mut ctx.above_u, &mut ctx.left_u), (&mb.v, &mut ctx.above_v, &mut ctx.left_v)] {
+    #[allow(
+        clippy::integer_division,
+        reason = "splitting a 0..4 subblock index into its 2x2 grid position"
+    )]
+    for (blocks, above_state, left_state) in [
+        (&mb.u, &mut ctx.above_u, &mut ctx.left_u),
+        (&mb.v, &mut ctx.above_v, &mut ctx.left_v),
+    ] {
         let mut has4 = [false; 4];
         for i in 0..4 {
             let sub_col = i % 2;
             let sub_row = i / 2;
             let above_ctx = if sub_row == 0 {
-                usize::from(above_state.get(col).and_then(|r| r.get(sub_col)).copied().unwrap_or(false))
+                usize::from(
+                    above_state
+                        .get(col)
+                        .and_then(|r| r.get(sub_col))
+                        .copied()
+                        .unwrap_or(false),
+                )
             } else {
                 usize::from(has4.get(i - 2).copied().unwrap_or(false))
             };
@@ -1128,7 +1361,15 @@ fn write_no_mv_prob_updates(bw: &mut BoolWriter) {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn write_compressed_header(bw: &mut BoolWriter, key_frame: bool, qp: i32, filter_level: i32, prob_skip_false: u8, prob_intra: u8, prob_last: u8) {
+fn write_compressed_header(
+    bw: &mut BoolWriter,
+    key_frame: bool,
+    qp: i32,
+    filter_level: i32,
+    prob_skip_false: u8,
+    prob_intra: u8,
+    prob_last: u8,
+) {
     if key_frame {
         bw.write_literal(1, 0); // color_space
         bw.write_literal(1, 0); // clamping_type
@@ -1180,10 +1421,27 @@ const PROB_LAST: u8 = 250;
 
 /// Pass 2: write the bitstream from [`decide_frame`]'s decisions. Returns
 /// `(first_partition_bytes, token_partition_bytes)`.
-fn write_frame(mbs: &[EncMb], mb_cols: usize, mb_rows: usize, key_frame: bool, qp: i32, filter_level: i32, prob_skip_false: u8, prob_intra: u8) -> (Vec<u8>, Vec<u8>) {
+fn write_frame(
+    mbs: &[EncMb],
+    mb_cols: usize,
+    mb_rows: usize,
+    key_frame: bool,
+    qp: i32,
+    filter_level: i32,
+    prob_skip_false: u8,
+    prob_intra: u8,
+) -> (Vec<u8>, Vec<u8>) {
     let mut bw = BoolWriter::new();
     let mut token_bw = BoolWriter::new();
-    write_compressed_header(&mut bw, key_frame, qp, filter_level, prob_skip_false, prob_intra, PROB_LAST);
+    write_compressed_header(
+        &mut bw,
+        key_frame,
+        qp,
+        filter_level,
+        prob_skip_false,
+        prob_intra,
+        PROB_LAST,
+    );
 
     let mut ctx = TokenCtx {
         above_y: vec![[false; 4]; mb_cols],
@@ -1199,7 +1457,9 @@ fn write_frame(mbs: &[EncMb], mb_cols: usize, mb_rows: usize, key_frame: bool, q
         ctx.left_v = [false; 2];
         ctx.left_y2 = false;
         for col in 0..mb_cols {
-            let Some(mb) = mbs.get(row * mb_cols + col).copied() else { continue };
+            let Some(mb) = mbs.get(row * mb_cols + col).copied() else {
+                continue;
+            };
             bw.write_bool(prob_skip_false, mb.skip);
 
             if key_frame {
@@ -1209,14 +1469,19 @@ fn write_frame(mbs: &[EncMb], mb_cols: usize, mb_rows: usize, key_frame: bool, q
                 bw.write_bool(prob_intra, !mb.is_intra);
                 if mb.is_intra {
                     bw.write_tree(&tables::YMODE_TREE, &tables::YMODE_PROB_DEFAULT, mb.y_mode);
-                    bw.write_tree(&tables::UV_MODE_TREE, &tables::UV_MODE_PROB_DEFAULT, mb.uv_mode);
+                    bw.write_tree(
+                        &tables::UV_MODE_TREE,
+                        &tables::UV_MODE_PROB_DEFAULT,
+                        mb.uv_mode,
+                    );
                 } else {
                     bw.write_bool(PROB_LAST, false); // ref_frame: always LAST
                     let above = neighbor(mbs, mb_cols, ix(col), ix(row) - 1);
                     let left = neighbor(mbs, mb_cols, ix(col) - 1, ix(row));
                     let above_left = neighbor(mbs, mb_cols, ix(col) - 1, ix(row) - 1);
                     let near = mv::find_near_mvs(above, left, above_left, |_| true);
-                    let (to_left, to_right, to_top, to_bottom) = decode::mv_bounds(col, row, mb_cols, mb_rows);
+                    let (to_left, to_right, to_top, to_bottom) =
+                        decode::mv_bounds(col, row, mb_cols, mb_rows);
                     let best = mv::clamp_mv(near.best, to_left, to_right, to_top, to_bottom);
                     let probs = mv::mv_ref_probs(near.cnt);
                     let local = if mb.inter_mode == tables::MV_NEARESTMV {
@@ -1235,7 +1500,10 @@ fn write_frame(mbs: &[EncMb], mb_cols: usize, mb_rows: usize, key_frame: bool, q
                         // eighth-pel `Mv`; exact since every candidate MV
                         // here comes from a whole-pel search (always a
                         // multiple of 8 eighth-pel units).
-                        #[allow(clippy::integer_division, reason = "exact: both operands are multiples of 8 (whole-pel MVs only)")]
+                        #[allow(
+                            clippy::integer_division,
+                            reason = "exact: both operands are multiples of 8 (whole-pel MVs only)"
+                        )]
                         let (dr, dc) = ((mb.mv.0 - best.0) / 2, (mb.mv.1 - best.1) / 2);
                         mv::write_mv(&mut bw, &tables::DEFAULT_MV_CONTEXT, (dr, dc));
                     }
@@ -1291,15 +1559,28 @@ fn empirical_prob(true_count: usize, total: usize, cheap_when_common: bool) -> u
     if total == 0 {
         return 128;
     }
-    #[allow(clippy::cast_precision_loss, reason = "probability estimate, not exact arithmetic")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "probability estimate, not exact arithmetic"
+    )]
     let frac = true_count as f64 / total as f64;
     let p = if cheap_when_common { frac } else { 1.0 - frac };
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "clamped into u8 range immediately below")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "clamped into u8 range immediately below"
+    )]
     let scaled = (p * 255.0).round() as i64;
     u8::try_from(scaled.clamp(1, 254)).unwrap_or(128)
 }
 
-fn encode_frame(state: &mut EncState, rc: &mut RateController, rc_cfg: &RateControlConfig, budget: &mut Budget, frame: &Frame) -> Result<(Vec<u8>, bool)> {
+fn encode_frame(
+    state: &mut EncState,
+    rc: &mut RateController,
+    rc_cfg: &RateControlConfig,
+    budget: &mut Budget,
+    frame: &Frame,
+) -> Result<(Vec<u8>, bool)> {
     let (width, height) = frame_dims(frame)?;
     let key_frame = state.mb_cols == 0 || state.width != width || state.height != height;
     if key_frame {
@@ -1318,8 +1599,24 @@ fn encode_frame(state: &mut EncState, rc: &mut RateController, rc_cfg: &RateCont
 
     let src = Picture {
         y: copy_from_frame(frame, 0, true_w, true_h, mb_cols * 16, mb_rows * 16, budget)?,
-        u: copy_from_frame(frame, 1, chroma_w, chroma_h, mb_cols * 8, mb_rows * 8, budget)?,
-        v: copy_from_frame(frame, 2, chroma_w, chroma_h, mb_cols * 8, mb_rows * 8, budget)?,
+        u: copy_from_frame(
+            frame,
+            1,
+            chroma_w,
+            chroma_h,
+            mb_cols * 8,
+            mb_rows * 8,
+            budget,
+        )?,
+        v: copy_from_frame(
+            frame,
+            2,
+            chroma_w,
+            chroma_h,
+            mb_cols * 8,
+            mb_rows * 8,
+            budget,
+        )?,
     };
 
     let qscale = rc.next_qscale(state.prev_complexity);
@@ -1328,7 +1625,18 @@ fn encode_frame(state: &mut EncState, rc: &mut RateController, rc_cfg: &RateCont
     let lambda = rd_lambda(quant.y1_ac);
     let version = 0u8;
 
-    let (mbs, mut work) = decide_frame(&src, &state.refs, &state.searcher, mb_cols, mb_rows, key_frame, quant, lambda, version, budget)?;
+    let (mbs, mut work) = decide_frame(
+        &src,
+        &state.refs,
+        &state.searcher,
+        mb_cols,
+        mb_rows,
+        key_frame,
+        quant,
+        lambda,
+        version,
+        budget,
+    )?;
 
     let skip_count = mbs.iter().filter(|m| m.skip).count();
     let intra_count = mbs.iter().filter(|m| m.is_intra).count();
@@ -1339,22 +1647,53 @@ fn encode_frame(state: &mut EncState, rc: &mut RateController, rc_cfg: &RateCont
     if filter_level > 0 {
         let mb_info: Vec<crate::loopfilter::MbFilterInfo> = mbs
             .iter()
-            .map(|m| crate::loopfilter::MbFilterInfo { filter_level, skip_inner: m.skip })
+            .map(|m| crate::loopfilter::MbFilterInfo {
+                filter_level,
+                skip_inner: m.skip,
+            })
             .collect();
-        crate::loopfilter::apply_frame(&mut work.y, &mut work.u, &mut work.v, mb_cols, mb_rows, 0, key_frame, false, &mb_info);
+        crate::loopfilter::apply_frame(
+            &mut work.y,
+            &mut work.u,
+            &mut work.v,
+            mb_cols,
+            mb_rows,
+            0,
+            key_frame,
+            false,
+            &mb_info,
+        );
     }
 
     let complexity = vaco_codec_dsp_mecmp::ssd(
         MePlane::new(src.y.as_bytes(), src.y.stride, src.y.width, src.y.height),
-        MePlane::new(work.y.as_bytes(), work.y.stride, work.y.width, work.y.height),
+        MePlane::new(
+            work.y.as_bytes(),
+            work.y.stride,
+            work.y.width,
+            work.y.height,
+        ),
     );
-    #[allow(clippy::cast_precision_loss, reason = "complexity feedback, not exact arithmetic")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "complexity feedback, not exact arithmetic"
+    )]
     {
         state.prev_complexity = complexity as f64 + 1.0;
     }
 
-    let (first_partition, token_partition) = write_frame(&mbs, mb_cols, mb_rows, key_frame, qp, filter_level, prob_skip_false, prob_intra);
-    let first_part_size = u32::try_from(first_partition.len()).map_err(|_| Error::InvalidData("vp8 encode: compressed header too large"))?;
+    let (first_partition, token_partition) = write_frame(
+        &mbs,
+        mb_cols,
+        mb_rows,
+        key_frame,
+        qp,
+        filter_level,
+        prob_skip_false,
+        prob_intra,
+    );
+    let first_part_size = u32::try_from(first_partition.len())
+        .map_err(|_| Error::InvalidData("vp8 encode: compressed header too large"))?;
     if first_part_size > 0x7_ffff {
         return Err(Error::InvalidData(
             "vp8 encode: compressed header overflows the frame tag's 19-bit first_part_size field",
@@ -1365,7 +1704,10 @@ fn encode_frame(state: &mut EncState, rc: &mut RateController, rc_cfg: &RateCont
     out.extend_from_slice(&first_partition);
     out.extend_from_slice(&token_partition);
 
-    #[allow(clippy::cast_precision_loss, reason = "bit-count feedback to rate control, not exact arithmetic")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "bit-count feedback to rate control, not exact arithmetic"
+    )]
     let bits = (out.len() as u64).saturating_mul(8);
     rc.report(FrameReport { bits, qscale });
 
@@ -1416,7 +1758,10 @@ const VPCC_RECORD: [u8; 12] = [1, 0, 0, 0, 0, 0, 0x82, 2, 2, 2, 0, 0];
 impl Vp8Encoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self::with_rate_control(limits, RateControlConfig::constant_quality(DEFAULT_CONSTANT_QSCALE))
+        Self::with_rate_control(
+            limits,
+            RateControlConfig::constant_quality(DEFAULT_CONSTANT_QSCALE),
+        )
     }
 
     /// Construct with an explicit rate-control policy — the seam a caller
@@ -1445,7 +1790,13 @@ impl Encoder for Vp8Encoder {
             Accept::Input => {
                 let Some(frame) = frame else { return Ok(()) };
                 let mut budget = Budget::new(self.limits.clone());
-                let (bytes, is_key) = encode_frame(&mut self.state, &mut self.rc, &self.rc_cfg, &mut budget, frame)?;
+                let (bytes, is_key) = encode_frame(
+                    &mut self.state,
+                    &mut self.rc,
+                    &self.rc_cfg,
+                    &mut budget,
+                    frame,
+                )?;
                 let mut packet_budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut packet_budget, &bytes)?;
                 packet.pts = frame.pts;
@@ -1574,7 +1925,11 @@ mod tests {
     /// deliberately not flat, so intra/inter prediction has real structure
     /// to work against (a flat source would trivially skip everything and
     /// prove nothing about mode decision).
-    #[allow(clippy::integer_division, clippy::cast_possible_wrap, reason = "test fixture: a coarse checkerboard pattern, not exact arithmetic")]
+    #[allow(
+        clippy::integer_division,
+        clippy::cast_possible_wrap,
+        reason = "test fixture: a coarse checkerboard pattern, not exact arithmetic"
+    )]
     fn textured_frame(width: u32, height: u32, phase: i32) -> Frame {
         let mut budget = Budget::new(Limits::permissive());
         let fmt = PixFmt::from_name("yuv420p").expect("yuv420p registered");
@@ -1584,7 +1939,8 @@ mod tests {
             for r in 0..rows {
                 if let Some(row) = y.row_mut(r) {
                     for (c, px) in row.iter_mut().enumerate() {
-                        let v = (((c as i32 + phase) / 4) % 2) * 200 + ((r as i32 / 8) % 2) * 20 + 20;
+                        let v =
+                            (((c as i32 + phase) / 4) % 2) * 200 + ((r as i32 / 8) % 2) * 20 + 20;
                         *px = v.clamp(0, 255) as u8;
                     }
                 }
@@ -1596,7 +1952,10 @@ mod tests {
                 for r in 0..rows {
                     if let Some(row) = p.row_mut(r) {
                         for (c, px) in row.iter_mut().enumerate() {
-                            let v = (((c as i32 + phase) / 4) % 2) * 150 + ((r as i32 / 8) % 2) * 30 + 40 + i32::try_from(plane_idx).unwrap_or(0) * 10;
+                            let v = (((c as i32 + phase) / 4) % 2) * 150
+                                + ((r as i32 / 8) % 2) * 30
+                                + 40
+                                + i32::try_from(plane_idx).unwrap_or(0) * 10;
                             *px = v.clamp(0, 255) as u8;
                         }
                     }
@@ -1619,12 +1978,16 @@ mod tests {
     /// `AGENT-CONSTRAINTS.md`'s "measure the thing that can be wrong, not
     /// the thing that is convenient".
     fn plane_mse(a: &Frame, b: &Frame, plane_index: usize) -> f64 {
-        let (Some(pa), Some(pb)) = (a.plane(plane_index), b.plane(plane_index)) else { return f64::INFINITY };
+        let (Some(pa), Some(pb)) = (a.plane(plane_index), b.plane(plane_index)) else {
+            return f64::INFINITY;
+        };
         let rows = pa.rows().min(pb.rows());
         let mut sum = 0f64;
         let mut n = 0f64;
         for r in 0..rows {
-            let (Some(ra), Some(rb)) = (pa.row(r), pb.row(r)) else { continue };
+            let (Some(ra), Some(rb)) = (pa.row(r), pb.row(r)) else {
+                continue;
+            };
             for (&x, &y) in ra.iter().zip(rb.iter()) {
                 let d = f64::from(x) - f64::from(y);
                 sum += d * d;
@@ -1650,17 +2013,26 @@ mod tests {
         assert_eq!(decoded.len(), 1);
         let plane = decoded[0].plane(0).expect("luma plane");
         let all_flat = plane.rows_iter().all(|row| row.iter().all(|&b| b == 128));
-        assert!(!all_flat, "expected real intra prediction, not the old flat-128 stand-in");
+        assert!(
+            !all_flat,
+            "expected real intra prediction, not the old flat-128 stand-in"
+        );
 
         // A textured source at a moderate default qscale should reconstruct
         // reasonably closely -- not byte-exact (lossy), but well under a
         // flat/uncorrelated-noise MSE. Checked on all three planes: see
         // `plane_mse`'s doc for the real bug a luma-only check missed.
         let mse = luma_mse(&src, &decoded[0]);
-        assert!(mse < 900.0, "luma MSE too high for a working intra encoder: {mse}");
+        assert!(
+            mse < 900.0,
+            "luma MSE too high for a working intra encoder: {mse}"
+        );
         for plane in [1, 2] {
             let cmse = plane_mse(&src, &decoded[0], plane);
-            assert!(cmse < 900.0, "chroma plane {plane} MSE too high for a working intra encoder: {cmse}");
+            assert!(
+                cmse < 900.0,
+                "chroma plane {plane} MSE too high for a working intra encoder: {cmse}"
+            );
         }
     }
 
@@ -1706,7 +2078,10 @@ mod tests {
         assert_eq!(extradata.len(), 12, "FullBox header + 8 fixed vpcC fields");
         assert_eq!(&extradata[..4], &[1, 0, 0, 0], "version=1, flags=0");
         assert_eq!(extradata[4], 0, "profile 0");
-        assert_eq!(extradata[6], 0x82, "bitDepth=8, chromaSubsampling=1 (4:2:0), fullRange=0");
+        assert_eq!(
+            extradata[6], 0x82,
+            "bitDepth=8, chromaSubsampling=1 (4:2:0), fullRange=0"
+        );
         assert_eq!(&extradata[10..12], &[0, 0], "codecIntializationDataSize");
     }
 
@@ -1717,12 +2092,16 @@ mod tests {
         // faithful (and so, on real content, smaller) as the value rises.
         let src = textured_frame(64, 48, 0);
         let mut low_q = Vp8Encoder::new(Limits::permissive());
-        low_q.set_option("qscale", "2").expect("a valid qscale is accepted");
+        low_q
+            .set_option("qscale", "2")
+            .expect("a valid qscale is accepted");
         low_q.send_frame(Some(&src)).expect("send");
         let low_q_len = low_q.receive_packet().expect("receive").payload().len();
 
         let mut high_q = Vp8Encoder::new(Limits::permissive());
-        high_q.set_option("qscale", "60").expect("a valid qscale is accepted");
+        high_q
+            .set_option("qscale", "60")
+            .expect("a valid qscale is accepted");
         high_q.send_frame(Some(&src)).expect("send");
         let high_q_len = high_q.receive_packet().expect("receive").payload().len();
 
@@ -1736,11 +2115,14 @@ mod tests {
     fn set_option_b_switches_to_cbr_and_rejects_a_malformed_value() {
         let mut enc = Vp8Encoder::new(Limits::permissive());
         assert_eq!(enc.rc_cfg.mode, RcMode::ConstantQuality);
-        enc.set_option("b", "200000").expect("a valid bitrate is accepted");
+        enc.set_option("b", "200000")
+            .expect("a valid bitrate is accepted");
         assert_eq!(enc.rc_cfg.mode, RcMode::Cbr);
         assert_eq!(enc.rc_cfg.target_bitrate_bps, 200_000);
 
-        let err = enc.set_option("b", "not-a-number").expect_err("garbage should not parse");
+        let err = enc
+            .set_option("b", "not-a-number")
+            .expect_err("garbage should not parse");
         assert!(matches!(err, vaco_core::Error::Option { name, .. } if name == "b"));
     }
 
@@ -1750,7 +2132,8 @@ mod tests {
         // does not consume (e.g. `-g` on an intra-only encoder) is accepted
         // silently rather than rejected.
         let mut enc = Vp8Encoder::new(Limits::permissive());
-        enc.set_option("g", "50").expect("an unknown generic option is a no-op, not an error");
+        enc.set_option("g", "50")
+            .expect("an unknown generic option is a no-op, not an error");
     }
 
     #[test]
@@ -1762,7 +2145,10 @@ mod tests {
         let mut budget = Budget::new(Limits::permissive());
         let fmt = PixFmt::from_name("yuv420p").expect("yuv420p registered");
         let flat = Frame::alloc_video(&mut budget, fmt, 32, 32).expect("alloc"); // zeroed -> flat
-        let mut enc = Vp8Encoder::with_rate_control(Limits::permissive(), RateControlConfig::constant_quality(0.2));
+        let mut enc = Vp8Encoder::with_rate_control(
+            Limits::permissive(),
+            RateControlConfig::constant_quality(0.2),
+        );
         enc.send_frame(Some(&flat)).expect("send");
         let packet = enc.receive_packet().expect("receive");
         let bytes = packet.payload();
@@ -1792,7 +2178,10 @@ mod tests {
             if i == 0 {
                 assert!(packet.flags.contains(PacketFlags::KEY));
             } else {
-                assert!(!packet.flags.contains(PacketFlags::KEY), "frame {i} should be inter");
+                assert!(
+                    !packet.flags.contains(PacketFlags::KEY),
+                    "frame {i} should be inter"
+                );
             }
             packets.push(packet.payload().to_vec());
         }
@@ -1804,7 +2193,10 @@ mod tests {
             assert!(mse < 2500.0, "luma MSE too high for an inter frame: {mse}");
             for plane in [1, 2] {
                 let cmse = plane_mse(src, dec, plane);
-                assert!(cmse < 2500.0, "chroma plane {plane} MSE too high for an inter frame: {cmse}");
+                assert!(
+                    cmse < 2500.0,
+                    "chroma plane {plane} MSE too high for an inter frame: {cmse}"
+                );
             }
         }
     }
@@ -1901,7 +2293,10 @@ mod tests {
                 cmd.args(&decoder_args);
                 cmd.arg("-i").arg(&path).arg("-f").arg("null").arg("-");
                 let status = cmd.status().expect("run ffmpeg");
-                assert!(status.success(), "ffmpeg ({name}) rejected our VP8 bitstream with args {decoder_args:?}");
+                assert!(
+                    status.success(),
+                    "ffmpeg ({name}) rejected our VP8 bitstream with args {decoder_args:?}"
+                );
             }
 
             let _ = std::fs::remove_file(&path);
@@ -1911,8 +2306,13 @@ mod tests {
     fn dump_yuv420p(frame: &Frame, width: u32, height: u32, out: &mut Vec<u8>) {
         let cw = width.div_ceil(2) as usize;
         let ch = height.div_ceil(2) as usize;
-        for (plane_idx, (w, h)) in [(width as usize, height as usize), (cw, ch), (cw, ch)].into_iter().enumerate() {
-            let Some(p) = frame.plane(plane_idx) else { continue };
+        for (plane_idx, (w, h)) in [(width as usize, height as usize), (cw, ch), (cw, ch)]
+            .into_iter()
+            .enumerate()
+        {
+            let Some(p) = frame.plane(plane_idx) else {
+                continue;
+            };
             for r in 0..h {
                 let row = p.row(r).unwrap_or(&[]);
                 for c in 0..w {
@@ -1955,7 +2355,10 @@ mod tests {
             .arg(&dec_path)
             .status()
             .expect("run ffmpeg decode");
-        assert!(status.success(), "ffmpeg failed to decode our bitstream to raw video");
+        assert!(
+            status.success(),
+            "ffmpeg failed to decode our bitstream to raw video"
+        );
 
         let output = std::process::Command::new("ffmpeg")
             .args(["-v", "info", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s"])
@@ -1966,17 +2369,28 @@ mod tests {
             .arg(format!("{width}x{height}"))
             .arg("-i")
             .arg(&dec_path)
-            .args(["-lavfi", "psnr=stats_file=-;[0:v][1:v]ssim", "-f", "null", "-"])
+            .args([
+                "-lavfi",
+                "psnr=stats_file=-;[0:v][1:v]ssim",
+                "-f",
+                "null",
+                "-",
+            ])
             .output()
             .expect("run ffmpeg psnr/ssim");
         let stderr = String::from_utf8_lossy(&output.stderr);
         println!("--- ffmpeg PSNR/SSIM measurement ---\n{stderr}");
-        assert!(output.status.success(), "ffmpeg psnr/ssim measurement failed");
-        assert!(stderr.contains("PSNR") || stderr.contains("psnr"), "no PSNR reported: {stderr}");
+        assert!(
+            output.status.success(),
+            "ffmpeg psnr/ssim measurement failed"
+        );
+        assert!(
+            stderr.contains("PSNR") || stderr.contains("psnr"),
+            "no PSNR reported: {stderr}"
+        );
 
         let _ = std::fs::remove_file(&ivf_path);
         let _ = std::fs::remove_file(&src_path);
         let _ = std::fs::remove_file(&dec_path);
     }
 }
-

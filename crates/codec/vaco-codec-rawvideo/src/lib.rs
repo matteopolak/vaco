@@ -230,7 +230,9 @@ pub fn parse_video_extradata(extradata: &[u8]) -> Option<(u32, u32, Option<PixFm
     let format = if rest.is_empty() {
         None
     } else {
-        std::str::from_utf8(rest).ok().and_then(|name| PixFmt::from_name(name).ok())
+        std::str::from_utf8(rest)
+            .ok()
+            .and_then(|name| PixFmt::from_name(name).ok())
     };
     Some((width, height, format))
 }
@@ -576,7 +578,11 @@ mod tests {
 
     #[test]
     fn decoder_defaults_to_zero_by_zero_which_is_invalid() {
-        let mut dec = RawVideoDecoder::new(Limits::permissive(), CodecId::Rawvideo, Packing::Configurable);
+        let mut dec = RawVideoDecoder::new(
+            Limits::permissive(),
+            CodecId::Rawvideo,
+            Packing::Configurable,
+        );
         let mut budget = Budget::new(Limits::permissive());
         let payload = Packet::from_slice(&mut budget, &[0u8; 16]).expect("packet");
         let err = dec.send(Some(&payload)).unwrap_err();
@@ -585,13 +591,23 @@ mod tests {
 
     #[test]
     fn with_video_params_configures_a_registry_built_decoder() {
-        let mut dec = RawVideoDecoder::new(Limits::permissive(), CodecId::Rawvideo, Packing::Configurable)
-            .with_video_params(4, 4, PixFmt::Gray8);
+        let mut dec = RawVideoDecoder::new(
+            Limits::permissive(),
+            CodecId::Rawvideo,
+            Packing::Configurable,
+        )
+        .with_video_params(4, 4, PixFmt::Gray8);
         let mut budget = Budget::new(Limits::permissive());
         let pkt = Packet::from_slice(&mut budget, &[7u8; 16]).expect("packet");
         dec.send(Some(&pkt)).expect("send");
         let frame = dec.receive().expect("frame");
-        let FrameData::Video { format, width, height, .. } = &frame.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = &frame.data
+        else {
             panic!("video frame")
         };
         assert_eq!(*format, PixFmt::Gray8);
@@ -602,8 +618,13 @@ mod tests {
 
     #[test]
     fn set_extradata_configures_width_height_and_format() {
-        let mut dec = RawVideoDecoder::new(Limits::permissive(), CodecId::Rawvideo, Packing::Configurable);
-        dec.set_extradata(&video_extradata(4, 4, Some(PixFmt::Gray8))).expect("ok");
+        let mut dec = RawVideoDecoder::new(
+            Limits::permissive(),
+            CodecId::Rawvideo,
+            Packing::Configurable,
+        );
+        dec.set_extradata(&video_extradata(4, 4, Some(PixFmt::Gray8)))
+            .expect("ok");
         assert_eq!(dec.width, 4);
         assert_eq!(dec.height, 4);
         assert_eq!(dec.pixel_format, PixFmt::Gray8);
@@ -611,14 +632,23 @@ mod tests {
 
     #[test]
     fn malformed_extradata_is_ignored_not_erred() {
-        let mut dec = RawVideoDecoder::new(Limits::permissive(), CodecId::Rawvideo, Packing::Configurable);
-        dec.set_extradata(&[1, 2, 3]).expect("ignored, not an error");
+        let mut dec = RawVideoDecoder::new(
+            Limits::permissive(),
+            CodecId::Rawvideo,
+            Packing::Configurable,
+        );
+        dec.set_extradata(&[1, 2, 3])
+            .expect("ignored, not an error");
         assert_eq!(dec.width, 0);
     }
 
     #[test]
     fn extradata_without_a_pixel_format_leaves_the_default() {
-        let mut dec = RawVideoDecoder::new(Limits::permissive(), CodecId::Rawvideo, Packing::Configurable);
+        let mut dec = RawVideoDecoder::new(
+            Limits::permissive(),
+            CodecId::Rawvideo,
+            Packing::Configurable,
+        );
         dec.set_extradata(&video_extradata(4, 4, None)).expect("ok");
         assert_eq!(dec.pixel_format, DEFAULT_PIXEL_FORMAT);
     }
@@ -632,11 +662,21 @@ mod tests {
         let packet = enc.receive().expect("packet");
         assert!(packet.is_key());
 
-        let mut dec = RawVideoDecoder::new(Limits::permissive(), CodecId::Rawvideo, Packing::Configurable)
-            .with_video_params(3, 2, PixFmt::Rgb24);
+        let mut dec = RawVideoDecoder::new(
+            Limits::permissive(),
+            CodecId::Rawvideo,
+            Packing::Configurable,
+        )
+        .with_video_params(3, 2, PixFmt::Rgb24);
         dec.send(Some(&packet)).expect("send");
         let decoded = dec.receive().expect("frame");
-        let FrameData::Video { format, width, height, .. } = &decoded.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = &decoded.data
+        else {
             panic!("video frame")
         };
         assert_eq!(*format, PixFmt::Rgb24);
@@ -719,8 +759,12 @@ mod tests {
         let mut budget = Budget::new(Limits::permissive());
         let mut pkt = Packet::from_slice(&mut budget, &[0u8; 16]).expect("packet");
         pkt.pts = Timestamp::new(42);
-        let mut dec = RawVideoDecoder::new(Limits::permissive(), CodecId::Rawvideo, Packing::Configurable)
-            .with_video_params(4, 4, PixFmt::Gray8);
+        let mut dec = RawVideoDecoder::new(
+            Limits::permissive(),
+            CodecId::Rawvideo,
+            Packing::Configurable,
+        )
+        .with_video_params(4, 4, PixFmt::Gray8);
         dec.send(Some(&pkt)).expect("send");
         let frame = dec.receive().expect("frame");
         assert_eq!(frame.pts, Timestamp::new(42));
@@ -754,7 +798,11 @@ mod tests {
         let decoders: &[(&DecoderDesc, &str, CodecId)] = &[
             (&RAWVIDEO_DECODER, "rawvideo", CodecId::Rawvideo),
             (&BITPACKED_DECODER, "bitpacked", CodecId::Bitpacked),
-            (&WRAPPED_AVFRAME_DECODER, "wrapped_avframe", CodecId::WrappedAvframe),
+            (
+                &WRAPPED_AVFRAME_DECODER,
+                "wrapped_avframe",
+                CodecId::WrappedAvframe,
+            ),
             (&V210_DECODER, "v210", CodecId::V210),
             (&V210X_DECODER, "v210x", CodecId::V210x),
             (&R210_DECODER, "r210", CodecId::R210),
@@ -800,10 +848,15 @@ mod tests {
         let via_desc = dec.receive().expect("frame");
 
         let mut budget2 = Budget::new(Limits::permissive());
-        let via_direct = decode_raw(&payload, 2, 1, PixFmt::X2rgb10be, &mut budget2).expect("decode");
+        let via_direct =
+            decode_raw(&payload, 2, 1, PixFmt::X2rgb10be, &mut budget2).expect("decode");
 
-        let FrameData::Video { planes: p1, .. } = &via_desc.data else { panic!() };
-        let FrameData::Video { planes: p2, .. } = &via_direct.data else { panic!() };
+        let FrameData::Video { planes: p1, .. } = &via_desc.data else {
+            panic!()
+        };
+        let FrameData::Video { planes: p2, .. } = &via_direct.data else {
+            panic!()
+        };
         assert_eq!(p1[0].data.as_slice()[..8], p2[0].data.as_slice()[..8]);
     }
 }

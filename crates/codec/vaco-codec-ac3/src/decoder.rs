@@ -99,7 +99,11 @@ impl Decoder for Ac3Decoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(if self.draining { Error::Eof } else { Error::NeedMoreInput })
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
@@ -199,11 +203,16 @@ mod tests {
         let first = &data[..info.frame_size];
 
         let mut dec = Ac3Decoder::new(Limits::permissive());
-        let packet = Packet::from_slice(&mut Budget::new(Limits::permissive()), first).expect("packet alloc");
+        let packet = Packet::from_slice(&mut Budget::new(Limits::permissive()), first)
+            .expect("packet alloc");
         dec.send_packet(Some(&packet)).expect("send_packet");
         dec.receive_frame().expect("one real frame before draining");
 
-        dec.send_packet(None).expect("send_packet(None) starts draining");
-        assert!(matches!(dec.receive_frame(), Err(Error::Eof)), "must answer Eof once drained and empty, not NeedMoreInput forever");
+        dec.send_packet(None)
+            .expect("send_packet(None) starts draining");
+        assert!(
+            matches!(dec.receive_frame(), Err(Error::Eof)),
+            "must answer Eof once drained and empty, not NeedMoreInput forever"
+        );
     }
 }

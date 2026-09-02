@@ -144,7 +144,8 @@ aGVsbG8gd29ybGQ=
 
     #[test]
     fn whitespace_inside_the_body_is_tolerated() {
-        let text = "-----BEGIN CERTIFICATE-----\naGVs\r\nbG8g\nd29ybGQ=\n-----END CERTIFICATE-----\n";
+        let text =
+            "-----BEGIN CERTIFICATE-----\naGVs\r\nbG8g\nd29ybGQ=\n-----END CERTIFICATE-----\n";
         let blocks = extract_der_blocks(text, "CERTIFICATE").unwrap();
         assert_eq!(blocks[0], b"hello world");
     }

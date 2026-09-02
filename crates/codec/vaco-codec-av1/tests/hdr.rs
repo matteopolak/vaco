@@ -30,7 +30,11 @@
 //! max_luminance=256000/256`, `max_content=1000 max_average=400` -- the
 //! exact values this test asserts on the decoded `Frame`'s side data.
 
-#![allow(clippy::unwrap_used, clippy::panic, reason = "test code over a fixed, checked-in fixture")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "test code over a fixed, checked-in fixture"
+)]
 
 use vaco_codec_av1::Av1Decoder;
 use vaco_codec_core::Decoder;
@@ -55,19 +59,61 @@ fn a_real_svt_av1_stream_attaches_the_measured_mastering_display_and_cll() {
     // red, green, blue -- AV1's own bitstream order, unlike H.264/HEVC's
     // green/blue/red (see `mastering_display_from_mdcv`'s own doc for the
     // black-box measurement that caught this the first time).
-    assert_eq!(mastering.primaries[0][0], vaco_core::Rational::new(46_399, 65_536), "red_x");
-    assert_eq!(mastering.primaries[0][1], vaco_core::Rational::new(19_137, 65_536), "red_y");
-    assert_eq!(mastering.primaries[1][0], vaco_core::Rational::new(11_141, 65_536), "green_x");
-    assert_eq!(mastering.primaries[1][1], vaco_core::Rational::new(52_232, 65_536), "green_y");
-    assert_eq!(mastering.primaries[2][0], vaco_core::Rational::new(8_585, 65_536), "blue_x");
-    assert_eq!(mastering.primaries[2][1], vaco_core::Rational::new(3_015, 65_536), "blue_y");
-    assert_eq!(mastering.white_point[0], vaco_core::Rational::new(20_493, 65_536), "white_point_x");
-    assert_eq!(mastering.white_point[1], vaco_core::Rational::new(21_561, 65_536), "white_point_y");
-    assert_eq!(mastering.min_luminance, vaco_core::Rational::new(82, 16_384), "min_luminance");
-    assert_eq!(mastering.max_luminance, vaco_core::Rational::new(256_000, 256), "max_luminance");
+    assert_eq!(
+        mastering.primaries[0][0],
+        vaco_core::Rational::new(46_399, 65_536),
+        "red_x"
+    );
+    assert_eq!(
+        mastering.primaries[0][1],
+        vaco_core::Rational::new(19_137, 65_536),
+        "red_y"
+    );
+    assert_eq!(
+        mastering.primaries[1][0],
+        vaco_core::Rational::new(11_141, 65_536),
+        "green_x"
+    );
+    assert_eq!(
+        mastering.primaries[1][1],
+        vaco_core::Rational::new(52_232, 65_536),
+        "green_y"
+    );
+    assert_eq!(
+        mastering.primaries[2][0],
+        vaco_core::Rational::new(8_585, 65_536),
+        "blue_x"
+    );
+    assert_eq!(
+        mastering.primaries[2][1],
+        vaco_core::Rational::new(3_015, 65_536),
+        "blue_y"
+    );
+    assert_eq!(
+        mastering.white_point[0],
+        vaco_core::Rational::new(20_493, 65_536),
+        "white_point_x"
+    );
+    assert_eq!(
+        mastering.white_point[1],
+        vaco_core::Rational::new(21_561, 65_536),
+        "white_point_y"
+    );
+    assert_eq!(
+        mastering.min_luminance,
+        vaco_core::Rational::new(82, 16_384),
+        "min_luminance"
+    );
+    assert_eq!(
+        mastering.max_luminance,
+        vaco_core::Rational::new(256_000, 256),
+        "max_luminance"
+    );
 
     let Some(cll) = frame.side_data.iter().find_map(|sd| match sd {
-        vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall } => Some((*max_cll, *max_fall)),
+        vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall } => {
+            Some((*max_cll, *max_fall))
+        }
         _ => None,
     }) else {
         panic!("frame should carry ContentLightLevel side data");

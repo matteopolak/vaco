@@ -257,9 +257,9 @@ static OBJECT_TYPE_TABLE: &[(u8, Option<CodecId>)] = &[
     (0x63, Some(CodecId::Mpeg2video)), // Visual ISO/IEC 13818-2 Spatial Profile
     (0x64, Some(CodecId::Mpeg2video)), // Visual ISO/IEC 13818-2 High Profile
     (0x65, Some(CodecId::Mpeg2video)), // Visual ISO/IEC 13818-2 422 Profile
-    (0x66, Some(CodecId::Aac)), // Audio ISO/IEC 13818-7 Main Profile
-    (0x67, Some(CodecId::Aac)), // Audio ISO/IEC 13818-7 LowComplexity Profile
-    (0x68, Some(CodecId::Aac)), // Audio ISO/IEC 13818-7 Scaleable Sampling Rate
+    (0x66, Some(CodecId::Aac)),        // Audio ISO/IEC 13818-7 Main Profile
+    (0x67, Some(CodecId::Aac)),        // Audio ISO/IEC 13818-7 LowComplexity Profile
+    (0x68, Some(CodecId::Aac)),        // Audio ISO/IEC 13818-7 Scaleable Sampling Rate
     // MPEG-1/2 backward-compatible audio (layers 1-3, undifferentiated by the
     // object type alone); treated as MP3, unmeasured — this crate's own `mov`
     // probes never produced it (`libmp3lame` writes `.mp3` directly, no

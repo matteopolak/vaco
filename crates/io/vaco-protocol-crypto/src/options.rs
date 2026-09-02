@@ -129,7 +129,11 @@ impl std::fmt::Debug for KeyMaterial {
 /// set"`, `"{direction} IV not set"`, or `"invalid {direction} key/IV size
 /// (N bytes, block size is 16)"`.
 pub fn resolve(opts: &CryptoOptions, flags: IoFlags) -> Result<KeyMaterial> {
-    let direction = if flags.write { "encryption" } else { "decryption" };
+    let direction = if flags.write {
+        "encryption"
+    } else {
+        "decryption"
+    };
     let (key, iv) = if flags.write {
         (
             pick(&opts.encryption_key, &opts.key),

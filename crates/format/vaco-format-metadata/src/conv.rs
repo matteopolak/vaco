@@ -91,7 +91,11 @@ impl MetadataConv {
     /// untouched. Order is preserved and duplicate keys are not merged,
     /// matching [`vaco_format_core::Chapter::metadata`]'s own convention.
     #[must_use]
-    pub fn convert(&self, entries: &[(String, String)], direction: Direction) -> Vec<(String, String)> {
+    pub fn convert(
+        &self,
+        entries: &[(String, String)],
+        direction: Direction,
+    ) -> Vec<(String, String)> {
         entries
             .iter()
             .map(|(k, v)| (self.map_key(k, direction).into_owned(), v.clone()))

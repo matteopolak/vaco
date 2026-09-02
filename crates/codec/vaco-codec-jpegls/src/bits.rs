@@ -103,10 +103,7 @@ impl<'a> BitReader<'a> {
             self.bit_pos = 1;
             self.last_was_ff = false;
         }
-        let byte = *self
-            .data
-            .get(self.byte_pos)
-            .ok_or(Error::UnexpectedEof)?;
+        let byte = *self.data.get(self.byte_pos).ok_or(Error::UnexpectedEof)?;
         let bit = (byte >> (7 - self.bit_pos)) & 1;
         self.bit_pos += 1;
         if self.bit_pos == 8 {

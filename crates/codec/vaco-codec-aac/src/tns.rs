@@ -97,7 +97,12 @@ impl TnsData {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::TnsData;
     use crate::ics::WindowSequence;
     use vaco_bitstream::{BitReader, BitWriter};

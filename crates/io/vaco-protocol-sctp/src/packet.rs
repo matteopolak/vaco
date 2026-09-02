@@ -7,7 +7,10 @@ use vaco_protocol_core::{ProtocolError, Result};
 const SCHEME: &str = "sctp";
 
 fn malformed(detail: &'static str) -> ProtocolError {
-    ProtocolError::Malformed { scheme: SCHEME, detail }
+    ProtocolError::Malformed {
+        scheme: SCHEME,
+        detail,
+    }
 }
 
 pub const COMMON_HEADER_LEN: usize = 12;
@@ -33,7 +36,11 @@ impl CommonHeader {
     /// # Errors
     /// [`ProtocolError::Malformed`] if `buf` is shorter than 12 bytes.
     pub fn parse(buf: &[u8]) -> Result<Self> {
-        let b: [u8; COMMON_HEADER_LEN] = buf.get(..COMMON_HEADER_LEN).ok_or_else(|| malformed("SCTP common header is truncated"))?.try_into().unwrap_or([0; COMMON_HEADER_LEN]);
+        let b: [u8; COMMON_HEADER_LEN] = buf
+            .get(..COMMON_HEADER_LEN)
+            .ok_or_else(|| malformed("SCTP common header is truncated"))?
+            .try_into()
+            .unwrap_or([0; COMMON_HEADER_LEN]);
         Ok(Self {
             source_port: u16::from_be_bytes([b[0], b[1]]),
             destination_port: u16::from_be_bytes([b[2], b[3]]),
@@ -62,7 +69,10 @@ impl CommonHeader {
 /// zeroed field, then writes the result into that field).
 #[must_use]
 pub fn compute_checksum(header: &CommonHeader, chunks: &[u8]) -> u32 {
-    let zeroed = CommonHeader { checksum: 0, ..*header };
+    let zeroed = CommonHeader {
+        checksum: 0,
+        ..*header
+    };
     let mut buf = Vec::new();
     buf.extend_from_slice(&zeroed.build());
     buf.extend_from_slice(chunks);
@@ -75,7 +85,10 @@ pub fn compute_checksum(header: &CommonHeader, chunks: &[u8]) -> u32 {
 #[must_use]
 pub fn build_with_checksum(header: &CommonHeader, chunks: &[u8]) -> Vec<u8> {
     let checksum = compute_checksum(header, chunks);
-    let final_header = CommonHeader { checksum, ..*header };
+    let final_header = CommonHeader {
+        checksum,
+        ..*header
+    };
     let mut out = Vec::new();
     out.extend_from_slice(&final_header.build());
     out.extend_from_slice(chunks);
@@ -100,7 +113,12 @@ mod tests {
     use super::*;
 
     fn sample_header() -> CommonHeader {
-        CommonHeader { source_port: 1000, destination_port: 2000, verification_tag: 0xDEAD_BEEF, checksum: 0 }
+        CommonHeader {
+            source_port: 1000,
+            destination_port: 2000,
+            verification_tag: 0xDEAD_BEEF,
+            checksum: 0,
+        }
     }
 
     #[test]

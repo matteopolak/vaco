@@ -123,7 +123,8 @@ mod tests {
             .unwrap();
         assert_eq!(idx, 0);
         mux.write_header().unwrap();
-        mux.write_packet(&frame(b"\xff\xd8fakejpeg\xff\xd9")).unwrap();
+        mux.write_packet(&frame(b"\xff\xd8fakejpeg\xff\xd9"))
+            .unwrap();
         mux.write_trailer().unwrap();
         let bytes = mirror.take();
         assert_eq!(

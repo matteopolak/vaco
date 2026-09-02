@@ -21,8 +21,8 @@ use block2::RcBlock;
 use objc2_core_foundation::CFRetained;
 use objc2_core_media::{
     CMBlockBuffer, CMFormatDescription, CMSampleBuffer, CMSampleTimingInfo, CMTime,
-    CMVideoFormatDescriptionCreateFromH264ParameterSets,
-    kCMBlockBufferAssureMemoryNowFlag, kCMTimeInvalid,
+    CMVideoFormatDescriptionCreateFromH264ParameterSets, kCMBlockBufferAssureMemoryNowFlag,
+    kCMTimeInvalid,
 };
 use objc2_core_video::{
     CVImageBuffer, CVPixelBuffer, CVPixelBufferGetBaseAddressOfPlane,
@@ -226,7 +226,8 @@ impl HwAccel for VideoToolboxDecoder {
                 "VideoToolbox rejected this access unit's compressed data",
             ));
         }
-        let outcome = std::rc::Rc::try_unwrap(outcome).map_or(Outcome::Pending, RefCell::into_inner);
+        let outcome =
+            std::rc::Rc::try_unwrap(outcome).map_or(Outcome::Pending, RefCell::into_inner);
         match outcome {
             Outcome::Image(image) => {
                 let (width, height) = pixel_buffer_dimensions(&image);
@@ -272,7 +273,8 @@ unsafe impl Sync for VideoToolboxSurface {}
 
 impl std::fmt::Debug for VideoToolboxSurface {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("VideoToolboxSurface").finish_non_exhaustive()
+        f.debug_struct("VideoToolboxSurface")
+            .finish_non_exhaustive()
     }
 }
 
@@ -312,7 +314,12 @@ impl HwSurface for VideoToolboxSurface {
 ///
 /// Assumes the buffer is already locked by the caller — this function only
 /// reads.
-fn download_nv12(image: &CVPixelBuffer, width: u32, height: u32, budget: &mut Budget) -> Result<Frame> {
+fn download_nv12(
+    image: &CVPixelBuffer,
+    width: u32,
+    height: u32,
+    budget: &mut Budget,
+) -> Result<Frame> {
     if CVPixelBufferGetPlaneCount(image) != 2 {
         return Err(Error::Unsupported(
             "VideoToolbox produced a pixel buffer shape this crate does not read (expected two NV12 planes)",
@@ -335,7 +342,11 @@ fn download_nv12(image: &CVPixelBuffer, width: u32, height: u32, budget: &mut Bu
         // twice the sample width, not the plane width itself. `Nv12`'s own
         // `vaco-pixfmt` layout already knows this; we only need to copy
         // exactly the bytes the plane actually has, per row.
-        let row_bytes = if plane_index == 0 { plane_width } else { plane_width * 2 };
+        let row_bytes = if plane_index == 0 {
+            plane_width
+        } else {
+            plane_width * 2
+        };
         for row in 0..plane_height.min(plane.rows()) {
             // SAFETY: `base` plus `row * src_stride` stays within the
             // locked pixel buffer's plane, because `row < plane_height` and
@@ -344,7 +355,10 @@ fn download_nv12(image: &CVPixelBuffer, width: u32, height: u32, budget: &mut Bu
             // conforming NV12 buffer, and the buffer is locked for the
             // duration of this whole function.
             let src_row = unsafe {
-                std::slice::from_raw_parts(base.as_ptr().cast::<u8>().add(row * src_stride), row_bytes)
+                std::slice::from_raw_parts(
+                    base.as_ptr().cast::<u8>().add(row * src_stride),
+                    row_bytes,
+                )
             };
             let Some(dst_row) = plane.row_mut(row) else {
                 break;
@@ -382,17 +396,23 @@ fn create_h264_format_description(
     // buffers have to outlive this call as locals — they do, as `sps`/`pps`,
     // both non-empty per the check above, which is what makes `as_ptr()`
     // non-null here.
-    let sps_ptr = NonNull::new(sps.as_ptr().cast_mut())
-        .ok_or(Error::Unsupported("unreachable: a non-empty slice's pointer is never null"))?;
-    let pps_ptr = NonNull::new(pps.as_ptr().cast_mut())
-        .ok_or(Error::Unsupported("unreachable: a non-empty slice's pointer is never null"))?;
+    let sps_ptr = NonNull::new(sps.as_ptr().cast_mut()).ok_or(Error::Unsupported(
+        "unreachable: a non-empty slice's pointer is never null",
+    ))?;
+    let pps_ptr = NonNull::new(pps.as_ptr().cast_mut()).ok_or(Error::Unsupported(
+        "unreachable: a non-empty slice's pointer is never null",
+    ))?;
     let mut pointers = [sps_ptr, pps_ptr];
     let mut sizes = [sps.len(), pps.len()];
     let Some(pointers_head) = NonNull::new(pointers.as_mut_ptr()) else {
-        return Err(Error::Unsupported("unreachable: a local array is never null"));
+        return Err(Error::Unsupported(
+            "unreachable: a local array is never null",
+        ));
     };
     let Some(sizes_head) = NonNull::new(sizes.as_mut_ptr()) else {
-        return Err(Error::Unsupported("unreachable: a local array is never null"));
+        return Err(Error::Unsupported(
+            "unreachable: a local array is never null",
+        ));
     };
 
     let mut desc_ptr: *const CMFormatDescription = std::ptr::null();
@@ -456,15 +476,15 @@ fn create_block_buffer(data: &[u8]) -> Result<CFRetained<CMBlockBuffer>> {
     let block_buffer = unsafe { CFRetained::from_raw(block_ptr) };
 
     let Some(source) = NonNull::new(data.as_ptr().cast_mut().cast()) else {
-        return Err(Error::Unsupported("unreachable: a live slice is never null"));
+        return Err(Error::Unsupported(
+            "unreachable: a live slice is never null",
+        ));
     };
     // SAFETY: `source` points at `data`, which is live and at least
     // `data.len()` bytes; `block_buffer` was just allocated above with
     // exactly that capacity (`kCMBlockBufferAssureMemoryNowFlag`), so
     // copying the whole of `data` into it at offset 0 stays in bounds.
-    let status = unsafe {
-        CMBlockBuffer::replace_data_bytes(source, &block_buffer, 0, data.len())
-    };
+    let status = unsafe { CMBlockBuffer::replace_data_bytes(source, &block_buffer, 0, data.len()) };
     if status != NO_ERR {
         return Err(Error::Unsupported(
             "VideoToolbox refused to fill a block buffer with this access unit's bytes",

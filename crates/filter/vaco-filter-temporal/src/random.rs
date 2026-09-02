@@ -64,7 +64,11 @@ impl Filter {
             reason = "seed<0 means 'pick one'; a fixed fallback keeps this deterministic \
                       for tests, which is the property this crate can promise (see module doc)"
         )]
-        let seed_u64 = if seed < 0 { 0x5EED_5EED_5EED_5EEDu64 } else { seed as u64 };
+        let seed_u64 = if seed < 0 {
+            0x5EED_5EED_5EED_5EEDu64
+        } else {
+            seed as u64
+        };
         Self {
             capacity: capacity.max(2),
             rng: SplitMix64::new(seed_u64),
@@ -160,7 +164,10 @@ mod tests {
         let mut sorted_out = output.clone();
         sorted_in.sort_unstable();
         sorted_out.sort_unstable();
-        assert_eq!(sorted_in, sorted_out, "shuffle must be a permutation, not a lossy filter");
+        assert_eq!(
+            sorted_in, sorted_out,
+            "shuffle must be a permutation, not a lossy filter"
+        );
         assert_eq!(output.len(), input.len());
     }
 
@@ -181,7 +188,11 @@ mod tests {
         } else if let FrameOut::One(fr) = f.eof() {
             output.push(tag_of(&fr));
         }
-        assert_eq!(output, vec![1, 2, 3], "never filled the cache: no shuffling occurs");
+        assert_eq!(
+            output,
+            vec![1, 2, 3],
+            "never filled the cache: no shuffling occurs"
+        );
     }
 
     #[test]

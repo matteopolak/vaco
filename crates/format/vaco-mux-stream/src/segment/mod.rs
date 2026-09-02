@@ -780,7 +780,10 @@ mod tests {
         seg.write_packet(&packet(0, 1500, true)).unwrap(); // cuts to segment 1
         seg.write_trailer().unwrap();
 
-        assert!(*opened.lock().unwrap() >= 2, "expected at least 2 segments to open");
+        assert!(
+            *opened.lock().unwrap() >= 2,
+            "expected at least 2 segments to open"
+        );
         let metadata_seen = metadata_seen.lock().unwrap();
         let bitexact_seen = bitexact_seen.lock().unwrap();
         assert!(
@@ -848,7 +851,7 @@ mod tests {
                 ..StreamSpec::default()
             },
         )
-            .unwrap();
+        .unwrap();
         seg.write_header().unwrap();
         seg.write_packet(&packet(0, 0, true)).unwrap();
         seg.write_packet(&packet(0, 1500, true)).unwrap(); // cuts to segment 1

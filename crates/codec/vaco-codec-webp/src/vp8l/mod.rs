@@ -89,7 +89,13 @@ fn insert_cache(cache: &mut [u32], bits: u32, color: u32) {
 /// top level, `entropy-coded-image` for every sub-image role (predictor,
 /// color, color-indexing table, and the entropy image itself). The only
 /// difference is whether the meta-prefix mechanism is even consulted.
-fn decode_image_stream(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32, height: u32, is_top_level: bool) -> Result<Vec<u32>> {
+fn decode_image_stream(
+    r: &mut BitReaderLsb<'_>,
+    budget: &mut Budget,
+    width: u32,
+    height: u32,
+    is_top_level: bool,
+) -> Result<Vec<u32>> {
     if width == 0 || height == 0 {
         return Err(Error::InvalidData("vp8l: zero-sized image stream"));
     }
@@ -107,16 +113,27 @@ fn decode_image_stream(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32
     };
     let cache_size = cache_bits.map_or(0u32, |b| 1u32 << b);
 
-    let (num_groups, entropy_image, prefix_bits, prefix_image_width) = if is_top_level && r.read_bit() == 1 {
-        let prefix_bits = r.read_bits(3) + 2;
-        let prefix_image_width = div_round_up_shift(width, prefix_bits);
-        let prefix_image_height = div_round_up_shift(height, prefix_bits);
-        let entropy = decode_image_stream(r, budget, prefix_image_width, prefix_image_height, false)?;
-        let max_code = entropy.iter().map(|&p| (p >> 8) & 0xffff).max().unwrap_or(0);
-        (max_code.saturating_add(1), Some(entropy), prefix_bits, prefix_image_width)
-    } else {
-        (1u32, None, 0u32, 0u32)
-    };
+    let (num_groups, entropy_image, prefix_bits, prefix_image_width) =
+        if is_top_level && r.read_bit() == 1 {
+            let prefix_bits = r.read_bits(3) + 2;
+            let prefix_image_width = div_round_up_shift(width, prefix_bits);
+            let prefix_image_height = div_round_up_shift(height, prefix_bits);
+            let entropy =
+                decode_image_stream(r, budget, prefix_image_width, prefix_image_height, false)?;
+            let max_code = entropy
+                .iter()
+                .map(|&p| (p >> 8) & 0xffff)
+                .max()
+                .unwrap_or(0);
+            (
+                max_code.saturating_add(1),
+                Some(entropy),
+                prefix_bits,
+                prefix_image_width,
+            )
+        } else {
+            (1u32, None, 0u32, 0u32)
+        };
     if num_groups == 0 || num_groups > (1 << 16) {
         return Err(Error::InvalidData("vp8l: too many prefix code groups"));
     }
@@ -135,7 +152,11 @@ fn decode_image_stream(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32
     let width_usize = width as usize;
     let total = width_usize.saturating_mul(height as usize);
     let mut out: Vec<u32> = budget.alloc(total)?;
-    let mut cache: Vec<u32> = if let Some(b) = cache_bits { budget.alloc(1usize << b)? } else { Vec::new() };
+    let mut cache: Vec<u32> = if let Some(b) = cache_bits {
+        budget.alloc(1usize << b)?
+    } else {
+        Vec::new()
+    };
 
     let mut pos: usize = 0;
     while pos < total {
@@ -147,7 +168,9 @@ fn decode_image_stream(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32
                 let (x, y) = row_col(pos, width_usize);
                 let bx = x >> prefix_bits;
                 let by = y >> prefix_bits;
-                let eidx = by.saturating_mul(prefix_image_width as usize).saturating_add(bx);
+                let eidx = by
+                    .saturating_mul(prefix_image_width as usize)
+                    .saturating_add(bx);
                 let code = entropy.get(eidx).copied().unwrap_or(0);
                 ((code >> 8) & 0xffff) as usize
             }
@@ -180,7 +203,9 @@ fn decode_image_stream(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32
             }
             let dist = dist as usize;
             if dist > pos {
-                return Err(Error::InvalidData("vp8l: backward reference before start of image"));
+                return Err(Error::InvalidData(
+                    "vp8l: backward reference before start of image",
+                ));
             }
             let src_start = pos - dist;
             for i in 0..length {
@@ -223,7 +248,12 @@ struct TransformInfo {
 /// `pixels` in place once every transform's own side data has been read.
 /// Returns the working width the ARGB image was actually decoded at (a
 /// color-indexing transform can shrink it).
-fn read_transforms(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32, height: u32) -> Result<(Vec<TransformInfo>, u32)> {
+fn read_transforms(
+    r: &mut BitReaderLsb<'_>,
+    budget: &mut Budget,
+    width: u32,
+    height: u32,
+) -> Result<(Vec<TransformInfo>, u32)> {
     let mut transforms = Vec::new();
     let mut cur_width = width;
     let mut seen = [false; 4];
@@ -242,10 +272,22 @@ fn read_transforms(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32, he
                 let tw = div_round_up_shift(cur_width, size_bits);
                 let th = div_round_up_shift(height, size_bits);
                 let sub = decode_image_stream(r, budget, tw, th, false)?;
-                transforms.push(TransformInfo { ty, size_bits, sub, sub_width: tw as usize, width_bits: 0 });
+                transforms.push(TransformInfo {
+                    ty,
+                    size_bits,
+                    sub,
+                    sub_width: tw as usize,
+                    width_bits: 0,
+                });
             }
             transform::SUBTRACT_GREEN => {
-                transforms.push(TransformInfo { ty, size_bits: 0, sub: Vec::new(), sub_width: 0, width_bits: 0 });
+                transforms.push(TransformInfo {
+                    ty,
+                    size_bits: 0,
+                    sub: Vec::new(),
+                    sub_width: 0,
+                    width_bits: 0,
+                });
             }
             transform::COLOR_INDEXING => {
                 let color_table_size = r.read_bits(8) + 1;
@@ -257,7 +299,10 @@ fn read_transforms(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32, he
                     acc[1] = (acc[1] + i32::from((px >> 16) as u8)) & 0xff;
                     acc[2] = (acc[2] + i32::from((px >> 8) as u8)) & 0xff;
                     acc[3] = (acc[3] + i32::from(px as u8)) & 0xff;
-                    *slot = ((acc[0] as u32) << 24) | ((acc[1] as u32) << 16) | ((acc[2] as u32) << 8) | (acc[3] as u32);
+                    *slot = ((acc[0] as u32) << 24)
+                        | ((acc[1] as u32) << 16)
+                        | ((acc[2] as u32) << 8)
+                        | (acc[3] as u32);
                 }
                 let width_bits = match color_table_size {
                     0..=2 => 3,
@@ -266,7 +311,13 @@ fn read_transforms(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32, he
                     _ => 0,
                 };
                 cur_width = div_round_up_shift(cur_width, width_bits);
-                transforms.push(TransformInfo { ty, size_bits: 0, sub: table, sub_width: color_table_size as usize, width_bits });
+                transforms.push(TransformInfo {
+                    ty,
+                    size_bits: 0,
+                    sub: table,
+                    sub_width: color_table_size as usize,
+                    width_bits,
+                });
             }
             _ => return Err(Error::InvalidData("vp8l: bad transform type")),
         }
@@ -274,19 +325,46 @@ fn read_transforms(r: &mut BitReaderLsb<'_>, budget: &mut Budget, width: u32, he
     Ok((transforms, cur_width))
 }
 
-fn apply_inverse_transforms(pixels: &mut Vec<u32>, transforms: &[TransformInfo], decode_width: u32, real_width: u32, height: u32) {
+fn apply_inverse_transforms(
+    pixels: &mut Vec<u32>,
+    transforms: &[TransformInfo],
+    decode_width: u32,
+    real_width: u32,
+    height: u32,
+) {
     let mut working_width = decode_width as usize;
     for t in transforms.iter().rev() {
         match t.ty {
             transform::SUBTRACT_GREEN => transform::inverse_subtract_green(pixels),
             transform::PREDICTOR => {
-                transform::inverse_predictor(pixels, working_width, height as usize, &t.sub, t.size_bits, t.sub_width);
+                transform::inverse_predictor(
+                    pixels,
+                    working_width,
+                    height as usize,
+                    &t.sub,
+                    t.size_bits,
+                    t.sub_width,
+                );
             }
             transform::COLOR => {
-                transform::inverse_color(pixels, working_width, height as usize, &t.sub, t.size_bits, t.sub_width);
+                transform::inverse_color(
+                    pixels,
+                    working_width,
+                    height as usize,
+                    &t.sub,
+                    t.size_bits,
+                    t.sub_width,
+                );
             }
             transform::COLOR_INDEXING => {
-                *pixels = transform::inverse_color_indexing(pixels, working_width, real_width as usize, height as usize, &t.sub, t.width_bits);
+                *pixels = transform::inverse_color_indexing(
+                    pixels,
+                    working_width,
+                    real_width as usize,
+                    height as usize,
+                    &t.sub,
+                    t.width_bits,
+                );
                 working_width = real_width as usize;
             }
             _ => {}
@@ -327,7 +405,12 @@ pub(crate) fn decode(payload: &[u8], budget: &mut Budget) -> Result<DecodedImage
     }
     apply_inverse_transforms(&mut pixels, &transforms, decode_width, width, height);
 
-    Ok(DecodedImage { width, height, alpha_is_used, pixels })
+    Ok(DecodedImage {
+        width,
+        height,
+        alpha_is_used,
+        pixels,
+    })
 }
 
 /// Encode `pixels` (`width * height` packed `0xAARRGGBB` values, row-major)
@@ -338,7 +421,13 @@ pub(crate) fn decode(payload: &[u8], budget: &mut Budget) -> Result<DecodedImage
 ///
 /// [`Error::InvalidData`] if `width`/`height` do not fit VP8L's 14-bit
 /// dimensions, or `pixels.len() != width * height`.
-pub(crate) fn encode(pixels: &[u32], width: u32, height: u32, alpha_is_used: bool, budget: &mut Budget) -> Result<Vec<u8>> {
+pub(crate) fn encode(
+    pixels: &[u32],
+    width: u32,
+    height: u32,
+    alpha_is_used: bool,
+    budget: &mut Budget,
+) -> Result<Vec<u8>> {
     if width == 0 || height == 0 || width > (1 << 14) || height > (1 << 14) {
         return Err(Error::InvalidData("vp8l: image dimensions out of range"));
     }
@@ -391,7 +480,10 @@ fn encode_image_stream(w: &mut BitWriterLsb, pixels: &[u32], budget: &mut Budget
     let mut pos = 0usize;
     while pos < pixels.len() {
         if let Some(m) = matcher.find_and_insert(pixels, pos) {
-            tokens.push(Token::Match { length: m.length as u32, distance: m.distance as u32 });
+            tokens.push(Token::Match {
+                length: m.length as u32,
+                distance: m.distance as u32,
+            });
             pos += m.length;
         } else {
             let p = pixels.get(pos).copied().unwrap_or(0);
@@ -463,7 +555,12 @@ fn encode_image_stream(w: &mut BitWriterLsb, pixels: &[u32], budget: &mut Budget
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::integer_division, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::integer_division,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_limits::Limits;

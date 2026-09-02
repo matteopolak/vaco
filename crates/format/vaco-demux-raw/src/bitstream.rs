@@ -809,9 +809,8 @@ mod tests {
         // `raw_codec_name` fallback (for a spec with no parser codec at all)
         // is not invented alongside it.
         let src = Box::new(MemorySource::new(vec![0, 0, 1, 0xB3, 1, 2, 3]));
-        let d =
-            BitstreamDemuxer::open(&MPEGVIDEO, src, &NoParsers, &BitstreamOptions::default())
-                .unwrap();
+        let d = BitstreamDemuxer::open(&MPEGVIDEO, src, &NoParsers, &BitstreamOptions::default())
+            .unwrap();
         assert_eq!(d.streams()[0].params.codec_id, Some(CodecId::Mpeg2video));
         assert_eq!(d.streams()[0].metadata_get("raw_codec_name"), None);
     }

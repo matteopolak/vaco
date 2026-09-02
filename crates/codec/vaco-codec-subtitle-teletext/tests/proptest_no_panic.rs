@@ -4,8 +4,8 @@
 //! needs a nightly toolchain and is not part of the standard gate).
 
 use proptest::prelude::*;
-use vaco_codec_subtitle_teletext::hamming;
 use vaco_codec_subtitle_teletext::TeletextDecoder;
+use vaco_codec_subtitle_teletext::hamming;
 
 proptest! {
     #[test]

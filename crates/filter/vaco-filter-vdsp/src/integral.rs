@@ -27,20 +27,36 @@ impl Integral {
         for y in 0..height {
             let mut row_sum: u64 = 0;
             for x in 0..width {
-                let sample = plane.get(y.saturating_mul(width).saturating_add(x)).copied().unwrap_or(0);
+                let sample = plane
+                    .get(y.saturating_mul(width).saturating_add(x))
+                    .copied()
+                    .unwrap_or(0);
                 row_sum = row_sum.saturating_add(u64::from(sample));
-                let above = data.get(y.saturating_mul(stride).saturating_add(x + 1)).copied().unwrap_or(0);
-                if let Some(cell) = data.get_mut((y + 1).saturating_mul(stride).saturating_add(x + 1)) {
+                let above = data
+                    .get(y.saturating_mul(stride).saturating_add(x + 1))
+                    .copied()
+                    .unwrap_or(0);
+                if let Some(cell) =
+                    data.get_mut((y + 1).saturating_mul(stride).saturating_add(x + 1))
+                {
                     *cell = row_sum.saturating_add(above);
                 }
             }
         }
-        Self { data, stride, width, height }
+        Self {
+            data,
+            stride,
+            width,
+            height,
+        }
     }
 
     #[must_use]
     fn at(&self, x: usize, y: usize) -> u64 {
-        self.data.get(y.saturating_mul(self.stride).saturating_add(x)).copied().unwrap_or(0)
+        self.data
+            .get(y.saturating_mul(self.stride).saturating_add(x))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Sum of the rectangle `(x, y)..(x+w, y+h)`, clipped to the table's own
@@ -60,13 +76,19 @@ impl Integral {
 
     /// The rectangle's arithmetic mean, or `0` for a zero-area rectangle.
     #[must_use]
-    #[allow(clippy::integer_division, reason = "arithmetic mean over an integer sample count")]
+    #[allow(
+        clippy::integer_division,
+        reason = "arithmetic mean over an integer sample count"
+    )]
     pub fn rect_mean(&self, x: usize, y: usize, w: usize, h: usize) -> f64 {
         let area = w.saturating_mul(h);
         if area == 0 {
             return 0.0;
         }
-        #[allow(clippy::cast_precision_loss, reason = "display-scale mean; plane sizes are far below 2^53")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "display-scale mean; plane sizes are far below 2^53"
+        )]
         {
             self.rect_sum(x, y, w, h) as f64 / area as f64
         }

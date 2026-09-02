@@ -212,7 +212,10 @@ fn prime_audio_makes_extradata_available_before_the_first_frame() {
 
     enc.prime_audio(44_100, ChannelLayout::MONO, SampleFmt::S16P);
     let primed = Encoder::extradata(&enc).expect("extradata after priming");
-    assert!(primed.starts_with(b"fLaC"), "must start with the fLaC magic");
+    assert!(
+        primed.starts_with(b"fLaC"),
+        "must start with the fLaC magic"
+    );
 
     // And it must be the *same* extradata `ingest` would have produced from
     // a real frame -- priming is a shortcut to the same state, not a

@@ -63,10 +63,25 @@ fn frame_init(lf: &LoopFilterParams, seg: &Segmentation) -> LvlLookup {
     let last = usize::try_from(tables::LAST_FRAME).unwrap_or(1);
     for (segment_id, seg_lookup) in lvl_lookup.iter_mut().enumerate() {
         let mut lvl_seg = lf.level;
-        let alt_l_active = seg.enabled && seg.feature_enabled.get(segment_id).and_then(|r| r.get(tables::SEG_LVL_ALT_L)).copied().unwrap_or(false);
+        let alt_l_active = seg.enabled
+            && seg
+                .feature_enabled
+                .get(segment_id)
+                .and_then(|r| r.get(tables::SEG_LVL_ALT_L))
+                .copied()
+                .unwrap_or(false);
         if alt_l_active {
-            let alt_l = seg.feature_data.get(segment_id).and_then(|r| r.get(tables::SEG_LVL_ALT_L)).copied().unwrap_or(0);
-            lvl_seg = if seg.abs_or_delta_update { alt_l } else { alt_l + lf.level };
+            let alt_l = seg
+                .feature_data
+                .get(segment_id)
+                .and_then(|r| r.get(tables::SEG_LVL_ALT_L))
+                .copied()
+                .unwrap_or(0);
+            lvl_seg = if seg.abs_or_delta_update {
+                alt_l
+            } else {
+                alt_l + lf.level
+            };
             lvl_seg = lvl_seg.clamp(0, tables::MAX_LOOP_FILTER);
         }
         if !lf.delta_enabled {
@@ -111,11 +126,17 @@ pub(crate) struct Grid<'a> {
 
 impl Grid<'_> {
     fn at(&self, row: usize, col: usize) -> MiInfo {
-        self.mi.get(row * self.mi_cols + col).copied().unwrap_or_default()
+        self.mi
+            .get(row * self.mi_cols + col)
+            .copied()
+            .unwrap_or_default()
     }
 
     fn segment_id(&self, row: usize, col: usize) -> u8 {
-        self.segment_ids.get(row * self.mi_cols + col).copied().unwrap_or(0)
+        self.segment_ids
+            .get(row * self.mi_cols + col)
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -125,8 +146,19 @@ impl Grid<'_> {
 /// (`for row ... for col ... for plane ... for pass`) spells out, which its
 /// own NOTE says "needs to be respected by any implementation" since later
 /// edges read samples earlier edges already modified.
-#[allow(clippy::too_many_arguments, reason = "mirrors the spec's own frame-level inputs: three planes, subsampling, bit depth, and the filter/segmentation parameter blocks")]
-pub(crate) fn filter_frame(pic: &mut Picture, grid: &Grid<'_>, lf: &LoopFilterParams, seg: &Segmentation, subsampling_x: bool, subsampling_y: bool, bit_depth: u32) {
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the spec's own frame-level inputs: three planes, subsampling, bit depth, and the filter/segmentation parameter blocks"
+)]
+pub(crate) fn filter_frame(
+    pic: &mut Picture,
+    grid: &Grid<'_>,
+    lf: &LoopFilterParams,
+    seg: &Segmentation,
+    subsampling_x: bool,
+    subsampling_y: bool,
+    bit_depth: u32,
+) {
     if lf.level == 0 {
         return;
     }
@@ -137,7 +169,19 @@ pub(crate) fn filter_frame(pic: &mut Picture, grid: &Grid<'_>, lf: &LoopFilterPa
         while col < grid.mi_cols {
             for plane in 0..3usize {
                 for pass in 0..2usize {
-                    superblock_filter(pic, grid, &lvl_lookup, lf.sharpness, plane, pass, row, col, subsampling_x, subsampling_y, bit_depth);
+                    superblock_filter(
+                        pic,
+                        grid,
+                        &lvl_lookup,
+                        lf.sharpness,
+                        plane,
+                        pass,
+                        row,
+                        col,
+                        subsampling_x,
+                        subsampling_y,
+                        bit_depth,
+                    );
                 }
             }
             col += 8;
@@ -147,7 +191,10 @@ pub(crate) fn filter_frame(pic: &mut Picture, grid: &Grid<'_>, lf: &LoopFilterPa
 }
 
 /// §8.8.2's superblock loop filter process.
-#[allow(clippy::too_many_arguments, reason = "mirrors the spec's own inputs: plane, pass, superblock position, subsampling, bit depth")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the spec's own inputs: plane, pass, superblock position, subsampling, bit depth"
+)]
 fn superblock_filter(
     pic: &mut Picture,
     grid: &Grid<'_>,
@@ -161,7 +208,11 @@ fn superblock_filter(
     subsampling_y: bool,
     bit_depth: u32,
 ) {
-    let (sub_x, sub_y) = if plane == 0 { (false, false) } else { (subsampling_x, subsampling_y) };
+    let (sub_x, sub_y) = if plane == 0 {
+        (false, false)
+    } else {
+        (subsampling_x, subsampling_y)
+    };
     let (dx, dy, sub, edge_len) = if pass == 0 {
         (1i32, 0i32, sub_x, 64usize >> u32::from(sub_y))
     } else {
@@ -171,9 +222,15 @@ fn superblock_filter(
     for edge in 0..edge_count {
         for i in 0..edge_len {
             let (x, y) = if pass == 0 {
-                (col * 8 + edge * (4 << u32::from(sub_x)), row * 8 + (i << u32::from(sub_y)))
+                (
+                    col * 8 + edge * (4 << u32::from(sub_x)),
+                    row * 8 + (i << u32::from(sub_y)),
+                )
             } else {
-                (col * 8 + (i << u32::from(sub_x)), row * 8 + edge * (4 << u32::from(sub_y)))
+                (
+                    col * 8 + (i << u32::from(sub_x)),
+                    row * 8 + edge * (4 << u32::from(sub_y)),
+                )
             };
             let loop_col = ((x >> 3) >> u32::from(sub_x)) << u32::from(sub_x);
             let loop_row = ((y >> 3) >> u32::from(sub_y)) << u32::from(sub_y);
@@ -181,37 +238,87 @@ fn superblock_filter(
                 continue;
             }
             let info = grid.at(loop_row, loop_col);
-            let tx_sz = if plane > 0 { get_uv_tx_size(info.mi_size, info.tx_size, subsampling_x, subsampling_y) } else { info.tx_size };
-            let sb_size = if sub { info.mi_size.max(tables::BLOCK_16X16) } else { info.mi_size };
+            let tx_sz = if plane > 0 {
+                get_uv_tx_size(info.mi_size, info.tx_size, subsampling_x, subsampling_y)
+            } else {
+                info.tx_size
+            };
+            let sb_size = if sub {
+                info.mi_size.max(tables::BLOCK_16X16)
+            } else {
+                info.mi_size
+            };
             let is_intra = info.ref_frame0 <= tables::INTRA_FRAME;
 
             let is_block_edge = if pass == 0 {
-                let w = 8 * tables::NUM_8X8_BLOCKS_WIDE_LOOKUP.get(usize::try_from(sb_size).unwrap_or(0)).copied().unwrap_or(1);
+                let w = 8 * tables::NUM_8X8_BLOCKS_WIDE_LOOKUP
+                    .get(usize::try_from(sb_size).unwrap_or(0))
+                    .copied()
+                    .unwrap_or(1);
                 w > 0 && x % w == 0
             } else {
-                let h = 8 * tables::NUM_8X8_BLOCKS_HIGH_LOOKUP.get(usize::try_from(sb_size).unwrap_or(0)).copied().unwrap_or(1);
+                let h = 8 * tables::NUM_8X8_BLOCKS_HIGH_LOOKUP
+                    .get(usize::try_from(sb_size).unwrap_or(0))
+                    .copied()
+                    .unwrap_or(1);
                 h > 0 && y % h == 0
             };
             // §8.8.2 step 11's chroma-right-edge special case: a horizontal
             // boundary that would land exactly on the right-hand image edge
             // for a subsampled plane is not a real transform edge.
             let odd_cols = grid.mi_cols % 2 == 1;
-            let chroma_right_edge = pass == 1 && sub_x && odd_cols && edge % 2 == 1 && x + 8 >= grid.mi_cols * 8;
-            let is_tx_edge = if chroma_right_edge { false } else { tx_sz >= 0 && edge % (1usize << tx_sz) == 0 };
+            let chroma_right_edge =
+                pass == 1 && sub_x && odd_cols && edge % 2 == 1 && x + 8 >= grid.mi_cols * 8;
+            let is_tx_edge = if chroma_right_edge {
+                false
+            } else {
+                tx_sz >= 0 && edge % (1usize << tx_sz) == 0
+            };
             let is_32_edge = edge % 8 == 0;
 
-            let on_screen = !(x >= 8 * grid.mi_cols || y >= 8 * grid.mi_rows || (pass == 0 && x == 0) || (pass == 1 && y == 0));
-            let apply_filter = on_screen && (is_block_edge || (is_tx_edge && is_intra) || (is_tx_edge && !info.skip));
+            let on_screen = !(x >= 8 * grid.mi_cols
+                || y >= 8 * grid.mi_rows
+                || (pass == 0 && x == 0)
+                || (pass == 1 && y == 0));
+            let apply_filter = on_screen
+                && (is_block_edge || (is_tx_edge && is_intra) || (is_tx_edge && !info.skip));
             if !apply_filter {
                 continue;
             }
 
-            let filter_size = filter_size(tx_sz, is_32_edge, pass, x, y, sub_x, sub_y, grid.mi_cols, grid.mi_rows);
-            let (lvl, limit, blimit, thresh) = adaptive_strength(lvl_lookup, sharpness, grid.segment_id(loop_row, loop_col), info);
+            let filter_size = filter_size(
+                tx_sz,
+                is_32_edge,
+                pass,
+                x,
+                y,
+                sub_x,
+                sub_y,
+                grid.mi_cols,
+                grid.mi_rows,
+            );
+            let (lvl, limit, blimit, thresh) = adaptive_strength(
+                lvl_lookup,
+                sharpness,
+                grid.segment_id(loop_row, loop_col),
+                info,
+            );
             if lvl > 0 {
                 let px = x >> u32::from(sub_x);
                 let py = y >> u32::from(sub_y);
-                filter_sample(pic, plane, px, py, dx, dy, limit, blimit, thresh, filter_size, bit_depth);
+                filter_sample(
+                    pic,
+                    plane,
+                    px,
+                    py,
+                    dx,
+                    dy,
+                    limit,
+                    blimit,
+                    thresh,
+                    filter_size,
+                    bit_depth,
+                );
             }
         }
     }
@@ -219,8 +326,22 @@ fn superblock_filter(
 
 /// §8.8.3's filter size process.
 #[allow(clippy::too_many_arguments, reason = "mirrors the spec's own inputs")]
-fn filter_size(tx_sz: i32, is_32_edge: bool, pass: usize, x: usize, y: usize, sub_x: bool, sub_y: bool, mi_cols: usize, mi_rows: usize) -> i32 {
-    let base_size = if tx_sz == tables::TX_4X4 && is_32_edge { tables::TX_8X8 } else { tx_sz.min(tables::TX_16X16) };
+fn filter_size(
+    tx_sz: i32,
+    is_32_edge: bool,
+    pass: usize,
+    x: usize,
+    y: usize,
+    sub_x: bool,
+    sub_y: bool,
+    mi_cols: usize,
+    mi_rows: usize,
+) -> i32 {
+    let base_size = if tx_sz == tables::TX_4X4 && is_32_edge {
+        tables::TX_8X8
+    } else {
+        tx_sz.min(tables::TX_16X16)
+    };
     let at_right_edge = pass == 0 && sub_x && (x >> 3) == mi_cols.saturating_sub(1);
     let at_bottom_edge = pass == 1 && sub_y && (y >> 3) == mi_rows.saturating_sub(1);
     if base_size == tables::TX_16X16 && (at_right_edge || at_bottom_edge) {
@@ -232,8 +353,16 @@ fn filter_size(tx_sz: i32, is_32_edge: bool, pass: usize, x: usize, y: usize, su
 
 /// §8.8.4's adaptive filter strength process. Returns `(lvl, limit, blimit,
 /// thresh)`.
-fn adaptive_strength(lvl_lookup: &LvlLookup, sharpness: i32, segment_id: u8, info: MiInfo) -> (i32, i32, i32, i32) {
-    let mode_type = i32::from(matches!(info.y_mode, tables::NEARESTMV | tables::NEARMV | tables::NEWMV));
+fn adaptive_strength(
+    lvl_lookup: &LvlLookup,
+    sharpness: i32,
+    segment_id: u8,
+    info: MiInfo,
+) -> (i32, i32, i32, i32) {
+    let mode_type = i32::from(matches!(
+        info.y_mode,
+        tables::NEARESTMV | tables::NEARMV | tables::NEWMV
+    ));
     let ref_frame = usize::try_from(info.ref_frame0).unwrap_or(0);
     let lvl = lvl_lookup
         .get(usize::from(segment_id))
@@ -241,8 +370,16 @@ fn adaptive_strength(lvl_lookup: &LvlLookup, sharpness: i32, segment_id: u8, inf
         .and_then(|r| r.get(usize::try_from(mode_type).unwrap_or(0)))
         .copied()
         .unwrap_or(0);
-    let shift = if sharpness > 4 { 2 } else { i32::from(sharpness > 0) };
-    let limit = if sharpness > 0 { (lvl >> shift).clamp(1, 9 - sharpness) } else { (lvl >> shift).max(1) };
+    let shift = if sharpness > 4 {
+        2
+    } else {
+        i32::from(sharpness > 0)
+    };
+    let limit = if sharpness > 0 {
+        (lvl >> shift).clamp(1, 9 - sharpness)
+    } else {
+        (lvl >> shift).max(1)
+    };
     let blimit = 2 * (lvl + 2) + limit;
     let thresh = lvl >> 4;
     (lvl, limit, blimit, thresh)
@@ -251,10 +388,30 @@ fn adaptive_strength(lvl_lookup: &LvlLookup, sharpness: i32, segment_id: u8, inf
 /// §8.8.5's sample filtering process: the filter mask, then whichever of
 /// the narrow/wide filters the masks and `filterSize` select.
 #[allow(clippy::too_many_arguments, reason = "mirrors the spec's own inputs")]
-#[allow(clippy::integer_division, reason = "spec-defined: §8.8.5.1's filterMask formula is `Abs(p0-q0)*2 + Abs(p1-q1)/2 > blimitBd`, an exact integer division")]
-fn filter_sample(pic: &mut Picture, plane: usize, x: usize, y: usize, dx: i32, dy: i32, limit: i32, blimit: i32, thresh: i32, filter_size: i32, bit_depth: u32) {
+#[allow(
+    clippy::integer_division,
+    reason = "spec-defined: §8.8.5.1's filterMask formula is `Abs(p0-q0)*2 + Abs(p1-q1)/2 > blimitBd`, an exact integer division"
+)]
+fn filter_sample(
+    pic: &mut Picture,
+    plane: usize,
+    x: usize,
+    y: usize,
+    dx: i32,
+    dy: i32,
+    limit: i32,
+    blimit: i32,
+    thresh: i32,
+    filter_size: i32,
+    bit_depth: u32,
+) {
     let p = plane_ref(pic, plane);
-    let sample = |i: i32| i32::from(p.get_clamped(i32::try_from(x).unwrap_or(0) + i * dx, i32::try_from(y).unwrap_or(0) + i * dy));
+    let sample = |i: i32| {
+        i32::from(p.get_clamped(
+            i32::try_from(x).unwrap_or(0) + i * dx,
+            i32::try_from(y).unwrap_or(0) + i * dy,
+        ))
+    };
     let (q0, q1, q2, q3) = (sample(0), sample(1), sample(2), sample(3));
     let (p0, p1, p2, p3) = (sample(-1), sample(-2), sample(-3), sample(-4));
 
@@ -294,7 +451,12 @@ fn filter_sample(pic: &mut Picture, plane: usize, x: usize, y: usize, dx: i32, d
 
     let flat_mask2 = filter_size >= tables::TX_16X16 && {
         let p = plane_ref(pic, plane);
-        let sample = |i: i32| i32::from(p.get_clamped(i32::try_from(x).unwrap_or(0) + i * dx, i32::try_from(y).unwrap_or(0) + i * dy));
+        let sample = |i: i32| {
+            i32::from(p.get_clamped(
+                i32::try_from(x).unwrap_or(0) + i * dx,
+                i32::try_from(y).unwrap_or(0) + i * dy,
+            ))
+        };
         let (q4, q5, q6, q7) = (sample(4), sample(5), sample(6), sample(7));
         let (p4, p5, p6, p7) = (sample(-5), sample(-6), sample(-7), sample(-8));
         let mut m = (p7 - p0).abs() > threshold_bd;
@@ -336,7 +498,16 @@ fn filter4_clamp(value: i32, bit_depth: u32) -> i32 {
 }
 
 /// §8.8.5.2's narrow filter process.
-fn narrow_filter(pic: &mut Picture, plane: usize, x: usize, y: usize, dx: i32, dy: i32, hev_mask: bool, bit_depth: u32) {
+fn narrow_filter(
+    pic: &mut Picture,
+    plane: usize,
+    x: usize,
+    y: usize,
+    dx: i32,
+    dy: i32,
+    hev_mask: bool,
+    bit_depth: u32,
+) {
     let ix = i32::try_from(x).unwrap_or(0);
     let iy = i32::try_from(y).unwrap_or(0);
     let p = plane_ref(pic, plane);
@@ -347,7 +518,11 @@ fn narrow_filter(pic: &mut Picture, plane: usize, x: usize, y: usize, dx: i32, d
     let bias = 0x80i32 << (bit_depth - 8);
     let (ps1, ps0, qs0, qs1) = (p1 - bias, p0 - bias, q0 - bias, q1 - bias);
 
-    let mut filter = if hev_mask { filter4_clamp(ps1 - qs1, bit_depth) } else { 0 };
+    let mut filter = if hev_mask {
+        filter4_clamp(ps1 - qs1, bit_depth)
+    } else {
+        0
+    };
     filter = filter4_clamp(filter + 3 * (qs0 - ps0), bit_depth);
     let filter1 = filter4_clamp(filter + 4, bit_depth) >> 3;
     let filter2 = filter4_clamp(filter + 3, bit_depth) >> 3;
@@ -374,9 +549,24 @@ fn narrow_filter(pic: &mut Picture, plane: usize, x: usize, y: usize, dx: i32, d
 
 /// §8.8.5.3's wide filter process. `log2Size` is 3 (modifies 3 samples each
 /// side) or 4 (7 samples each side).
-#[allow(clippy::too_many_arguments, reason = "mirrors the spec's own inputs plus the bit depth its output clamp needs")]
-#[allow(clippy::many_single_char_names, reason = "x/y/n/i/j/p/t are pixel coordinates, tap-window bounds and loop/accumulator variables matching the spec's own single-letter notation for this box filter")]
-fn wide_filter(pic: &mut Picture, plane: usize, x: usize, y: usize, dx: i32, dy: i32, log2_size: u32, bit_depth: u32) {
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the spec's own inputs plus the bit depth its output clamp needs"
+)]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "x/y/n/i/j/p/t are pixel coordinates, tap-window bounds and loop/accumulator variables matching the spec's own single-letter notation for this box filter"
+)]
+fn wide_filter(
+    pic: &mut Picture,
+    plane: usize,
+    x: usize,
+    y: usize,
+    dx: i32,
+    dy: i32,
+    log2_size: u32,
+    bit_depth: u32,
+) {
     let ix = i32::try_from(x).unwrap_or(0);
     let iy = i32::try_from(y).unwrap_or(0);
     let n = (1i32 << (log2_size - 1)) - 1;
@@ -404,7 +594,10 @@ fn wide_filter(pic: &mut Picture, plane: usize, x: usize, y: usize, dx: i32, dy:
     let dst = plane_mut(pic, plane);
     let mut i = -n;
     while i < n {
-        let v = out.get(usize::try_from(i + n).unwrap_or(0)).copied().unwrap_or(0);
+        let v = out
+            .get(usize::try_from(i + n).unwrap_or(0))
+            .copied()
+            .unwrap_or(0);
         if let (Ok(ux), Ok(uy)) = (usize::try_from(ix + i * dx), usize::try_from(iy + i * dy)) {
             dst.set(ux, uy, u16::try_from(v.clamp(0, max)).unwrap_or(0));
         }
@@ -426,7 +619,12 @@ mod tests {
         // `LvlLookup` entry is `Clip3(0, MAX_LOOP_FILTER, ...)`-bounded, so
         // this can never collide with a genuine value and a bad test index
         // still fails loudly via the surrounding `assert_eq!` mismatch.
-        lookup.get(segment).and_then(|s| s.get(ref_frame)).and_then(|r| r.get(mode)).copied().unwrap_or(i32::MIN)
+        lookup
+            .get(segment)
+            .and_then(|s| s.get(ref_frame))
+            .and_then(|r| r.get(mode))
+            .copied()
+            .unwrap_or(i32::MIN)
     }
 
     /// §8.8.1 with `loop_filter_delta_enabled == false`: every `(ref, mode)`
@@ -436,7 +634,13 @@ mod tests {
     /// running the code under test.
     #[test]
     fn frame_init_without_deltas_is_uniform_per_segment() {
-        let lf = LoopFilterParams { level: 20, sharpness: 0, delta_enabled: false, ref_deltas: [9, 9, 9, 9], mode_deltas: [9, 9] };
+        let lf = LoopFilterParams {
+            level: 20,
+            sharpness: 0,
+            delta_enabled: false,
+            ref_deltas: [9, 9, 9, 9],
+            mode_deltas: [9, 9],
+        };
         let seg = Segmentation::default();
         let lookup = frame_init(&lf, &seg);
         for segment in &lookup {
@@ -455,7 +659,13 @@ mod tests {
     /// both `Clip3(0, 63, ...)` — for `level = 40` (`nShift = 40 >> 5 = 1`).
     #[test]
     fn frame_init_with_deltas_matches_the_spec_formula() {
-        let lf = LoopFilterParams { level: 40, sharpness: 0, delta_enabled: true, ref_deltas: [3, -2, 1, 0], mode_deltas: [-1, 4] };
+        let lf = LoopFilterParams {
+            level: 40,
+            sharpness: 0,
+            delta_enabled: true,
+            ref_deltas: [3, -2, 1, 0],
+            mode_deltas: [-1, 4],
+        };
         let seg = Segmentation::default();
         let lookup = frame_init(&lf, &seg);
         let n_shift = 1; // 40 >> 5
@@ -477,8 +687,18 @@ mod tests {
     /// level.
     #[test]
     fn seg_lvl_alt_l_absolute_replaces_the_frame_level() {
-        let lf = LoopFilterParams { level: 50, sharpness: 0, delta_enabled: false, ref_deltas: [0; 4], mode_deltas: [0; 2] };
-        let mut seg = Segmentation { enabled: true, abs_or_delta_update: true, ..Segmentation::default() };
+        let lf = LoopFilterParams {
+            level: 50,
+            sharpness: 0,
+            delta_enabled: false,
+            ref_deltas: [0; 4],
+            mode_deltas: [0; 2],
+        };
+        let mut seg = Segmentation {
+            enabled: true,
+            abs_or_delta_update: true,
+            ..Segmentation::default()
+        };
         if let Some(row) = seg.feature_enabled.get_mut(2) {
             row[tables::SEG_LVL_ALT_L] = true;
         }
@@ -496,8 +716,18 @@ mod tests {
     /// `MAX_LOOP_FILTER` — chosen here specifically to exercise the clamp.
     #[test]
     fn seg_lvl_alt_l_delta_adds_to_the_frame_level_and_clamps() {
-        let lf = LoopFilterParams { level: 60, sharpness: 0, delta_enabled: false, ref_deltas: [0; 4], mode_deltas: [0; 2] };
-        let mut seg = Segmentation { enabled: true, abs_or_delta_update: false, ..Segmentation::default() };
+        let lf = LoopFilterParams {
+            level: 60,
+            sharpness: 0,
+            delta_enabled: false,
+            ref_deltas: [0; 4],
+            mode_deltas: [0; 2],
+        };
+        let mut seg = Segmentation {
+            enabled: true,
+            abs_or_delta_update: false,
+            ..Segmentation::default()
+        };
         if let Some(row) = seg.feature_enabled.get_mut(1) {
             row[tables::SEG_LVL_ALT_L] = true;
         }
@@ -514,10 +744,20 @@ mod tests {
     #[test]
     fn adaptive_strength_matches_the_spec_formula_at_zero_sharpness() {
         let mut lookup: LvlLookup = [[[0i32; 2]; tables::MAX_REF_FRAMES]; tables::MAX_SEGMENTS];
-        if let Some(v) = lookup.get_mut(0).and_then(|s| s.get_mut(1)).and_then(|r| r.get_mut(1)) {
+        if let Some(v) = lookup
+            .get_mut(0)
+            .and_then(|s| s.get_mut(1))
+            .and_then(|r| r.get_mut(1))
+        {
             *v = 16; // segment 0, LAST_FRAME, modeType 1.
         }
-        let info = MiInfo { mi_size: tables::BLOCK_8X8, tx_size: tables::TX_8X8, skip: false, ref_frame0: tables::LAST_FRAME, y_mode: tables::NEARESTMV };
+        let info = MiInfo {
+            mi_size: tables::BLOCK_8X8,
+            tx_size: tables::TX_8X8,
+            skip: false,
+            ref_frame0: tables::LAST_FRAME,
+            y_mode: tables::NEARESTMV,
+        };
         let (lvl, limit, blimit, thresh) = adaptive_strength(&lookup, 0, 0, info);
         assert_eq!(lvl, 16);
         assert_eq!(limit, 16); // Max(1, 16 >> 0)
@@ -530,10 +770,20 @@ mod tests {
     #[test]
     fn adaptive_strength_clips_the_limit_when_sharpness_is_set() {
         let mut lookup: LvlLookup = [[[0i32; 2]; tables::MAX_REF_FRAMES]; tables::MAX_SEGMENTS];
-        if let Some(v) = lookup.get_mut(0).and_then(|s| s.get_mut(0)).and_then(|r| r.get_mut(0)) {
+        if let Some(v) = lookup
+            .get_mut(0)
+            .and_then(|s| s.get_mut(0))
+            .and_then(|r| r.get_mut(0))
+        {
             *v = 40; // segment 0, INTRA_FRAME, modeType 0.
         }
-        let info = MiInfo { mi_size: tables::BLOCK_8X8, tx_size: tables::TX_8X8, skip: false, ref_frame0: tables::INTRA_FRAME, y_mode: tables::DC_PRED };
+        let info = MiInfo {
+            mi_size: tables::BLOCK_8X8,
+            tx_size: tables::TX_8X8,
+            skip: false,
+            ref_frame0: tables::INTRA_FRAME,
+            y_mode: tables::DC_PRED,
+        };
         // sharpness = 6 (> 4): shift = 2, lvl >> shift = 10, but Clip3(1, 9-6=3, 10) = 3.
         let (lvl, limit, _, _) = adaptive_strength(&lookup, 6, 0, info);
         assert_eq!(lvl, 40);
@@ -546,13 +796,25 @@ mod tests {
     #[test]
     fn filter_size_promotes_and_demotes_per_the_spec() {
         // TX_4X4 on a 32-sample boundary promotes to TX_8X8.
-        assert_eq!(filter_size(tables::TX_4X4, true, 0, 64, 0, false, false, 10, 10), tables::TX_8X8);
+        assert_eq!(
+            filter_size(tables::TX_4X4, true, 0, 64, 0, false, false, 10, 10),
+            tables::TX_8X8
+        );
         // TX_4X4 off a 32-sample boundary stays TX_4X4.
-        assert_eq!(filter_size(tables::TX_4X4, false, 0, 64, 0, false, false, 10, 10), tables::TX_4X4);
+        assert_eq!(
+            filter_size(tables::TX_4X4, false, 0, 64, 0, false, false, 10, 10),
+            tables::TX_4X4
+        );
         // TX_16X16 vertical pass at the frame's last mi column, subsampled:
         // demoted to TX_8X8 so the chroma filter never reads past the edge.
-        assert_eq!(filter_size(tables::TX_16X16, false, 0, 72, 0, true, false, 10, 10), tables::TX_8X8);
+        assert_eq!(
+            filter_size(tables::TX_16X16, false, 0, 72, 0, true, false, 10, 10),
+            tables::TX_8X8
+        );
         // The same position without chroma subsampling is unaffected.
-        assert_eq!(filter_size(tables::TX_16X16, false, 0, 72, 0, false, false, 10, 10), tables::TX_16X16);
+        assert_eq!(
+            filter_size(tables::TX_16X16, false, 0, 72, 0, false, false, 10, 10),
+            tables::TX_16X16
+        );
     }
 }

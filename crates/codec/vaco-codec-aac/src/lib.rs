@@ -52,21 +52,21 @@
 
 pub mod config;
 pub mod decoder;
-pub mod pce;
-mod spectral_tables;
 mod ics;
 mod ics_stream;
-mod scalefactor;
+pub mod pce;
 mod pulse;
+mod qmf;
 mod raw_data_block;
+mod reconstruct;
+mod sbr_huffman_tables;
+mod scalefactor;
 mod section;
 mod spectral;
+mod spectral_tables;
 mod swb_tables;
 mod tns;
 mod tns_apply;
-mod reconstruct;
-mod sbr_huffman_tables;
-mod qmf;
 
 pub use config::{ChannelResolution, DecoderConfig};
 pub use decoder::AacDecoder;

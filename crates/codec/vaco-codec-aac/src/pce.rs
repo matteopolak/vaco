@@ -234,7 +234,12 @@ pub fn find_leading_program_config_element(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::{ChannelElementRef, ProgramConfigElement, find_leading_program_config_element};
     use vaco_bitstream::{BitReader, BitWriter};
 
@@ -288,10 +293,22 @@ mod tests {
         assert_eq!(
             order,
             vec![
-                ChannelElementRef { is_cpe: false, tag: 0 },
-                ChannelElementRef { is_cpe: true, tag: 1 },
-                ChannelElementRef { is_cpe: true, tag: 2 },
-                ChannelElementRef { is_cpe: false, tag: 3 },
+                ChannelElementRef {
+                    is_cpe: false,
+                    tag: 0
+                },
+                ChannelElementRef {
+                    is_cpe: true,
+                    tag: 1
+                },
+                ChannelElementRef {
+                    is_cpe: true,
+                    tag: 2
+                },
+                ChannelElementRef {
+                    is_cpe: false,
+                    tag: 3
+                },
             ]
         );
     }

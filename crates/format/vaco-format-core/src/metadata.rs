@@ -206,7 +206,10 @@ mod tests {
     fn a_stream_disposition_vec_of_only_empty_flags_is_still_empty() {
         let mut m = MuxMetadata::default();
         m.stream_disposition = vec![Disposition::empty(), Disposition::empty()];
-        assert!(m.is_empty(), "no flag is actually set, so this carries no real information");
+        assert!(
+            m.is_empty(),
+            "no flag is actually set, so this carries no real information"
+        );
     }
 
     #[test]

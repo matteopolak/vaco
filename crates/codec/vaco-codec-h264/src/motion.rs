@@ -268,7 +268,10 @@ mod tests {
         assert_eq!(p_skip_mv(a, b, Neighbour::UNAVAILABLE), (8, 0));
         // ... and the genuinely-absent case still does zero, so this is a
         // real distinction and not a blanket loosening.
-        assert_eq!(p_skip_mv(Neighbour::UNAVAILABLE, b, Neighbour::UNAVAILABLE), (0, 0));
+        assert_eq!(
+            p_skip_mv(Neighbour::UNAVAILABLE, b, Neighbour::UNAVAILABLE),
+            (0, 0)
+        );
     }
 
     /// Clause 8.4.1.3.1's "`B` and `C` both not available" shortcut is

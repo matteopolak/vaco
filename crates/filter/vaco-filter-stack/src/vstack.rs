@@ -44,7 +44,12 @@ pub const DESC: FilterDesc = FilterDesc {
 pub(crate) struct Opts {
     #[opt(name = "inputs", help = "set number of inputs", default = 2, range = 2..=64, flags(video, filtering))]
     pub inputs: i64,
-    #[opt(name = "shortest", help = "force termination when the shortest input terminates", default = false, flags(video, filtering))]
+    #[opt(
+        name = "shortest",
+        help = "force termination when the shortest input terminates",
+        default = false,
+        flags(video, filtering)
+    )]
     pub shortest: bool,
 }
 
@@ -109,13 +114,15 @@ impl FrameSyncFilter for Filter {
         let (Some(width), Some(format)) = (width, format) else {
             return Ok(());
         };
-        let total_height: u32 = self
-            .heights
-            .iter()
-            .copied()
-            .fold(0u32, u32::saturating_add);
+        let total_height: u32 = self.heights.iter().copied().fold(0u32, u32::saturating_add);
         if let Some(mut out) = ctx.output_link(0).cloned() {
-            if let LinkFormat::Video { width: w, height: h, format: fmt, .. } = &mut out {
+            if let LinkFormat::Video {
+                width: w,
+                height: h,
+                format: fmt,
+                ..
+            } = &mut out
+            {
                 *w = width;
                 *h = total_height;
                 *fmt = format;
@@ -136,19 +143,19 @@ impl FrameSyncFilter for Filter {
         }) else {
             return Ok(FrameOut::None);
         };
-        let total_height: u32 = self
-            .heights
-            .iter()
-            .copied()
-            .fold(0u32, u32::saturating_add);
+        let total_height: u32 = self.heights.iter().copied().fold(0u32, u32::saturating_add);
         let mut out = ctx.pool().acquire_video(format, width, total_height)?;
         let plane_count = format.plane_count();
         for plane in 0..plane_count {
             let mut row_offset = 0usize;
             for i in 0..self.n {
                 let Some(frame) = event.get(i) else { continue };
-                let Some(src) = frame.plane(plane) else { continue };
-                let Some(mut dst) = out.plane_mut(plane) else { continue };
+                let Some(src) = frame.plane(plane) else {
+                    continue;
+                };
+                let Some(mut dst) = out.plane_mut(plane) else {
+                    continue;
+                };
                 let input_height = self.heights.get(i).copied().unwrap_or(0);
                 let ph = common::to_i32(format.plane_height(input_height, plane as u8)).max(0);
                 for y in 0..ph {

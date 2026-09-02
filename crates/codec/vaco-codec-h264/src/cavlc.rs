@@ -76,7 +76,9 @@ fn decode_coeff_token(r: &mut BitReader<'_>, nc: i32) -> Result<(u8, u8)> {
         let total_coeff = (code >> 2) as u8 + 1;
         let trailing_ones = (code & 0b11) as u8;
         if total_coeff > 16 {
-            return Err(Error::InvalidData("coeff_token: fixed-length code out of range"));
+            return Err(Error::InvalidData(
+                "coeff_token: fixed-length code out of range",
+            ));
         }
         return Ok((trailing_ones, total_coeff));
     }
@@ -102,9 +104,10 @@ fn decode_coeff_token(r: &mut BitReader<'_>, nc: i32) -> Result<(u8, u8)> {
         4..=7 => COEFF_TOKEN_NC4,
         _ => return Err(Error::InvalidData("coeff_token: nC out of range")),
     };
-    let candidates = table.iter().map(|&(t1, tc, len, code)| (len, code, (t1, tc)));
-    decode_prefix_free(r, candidates)
-        .ok_or(Error::InvalidData("coeff_token: no matching code"))
+    let candidates = table
+        .iter()
+        .map(|&(t1, tc, len, code)| (len, code, (t1, tc)));
+    decode_prefix_free(r, candidates).ok_or(Error::InvalidData("coeff_token: no matching code"))
 }
 
 /// Reads one bit at a time and returns the payload of the first table entry
@@ -176,7 +179,12 @@ fn decode_run_before(r: &mut BitReader<'_>, zeros_left: u8) -> Result<u8> {
 
 /// One `level` value, clause 9.2.2.1, threading `suffix_length` across calls
 /// the way the specification's own state variable does.
-fn decode_level(r: &mut BitReader<'_>, suffix_length: &mut u32, is_first: bool, trailing_ones: u8) -> Result<i32> {
+fn decode_level(
+    r: &mut BitReader<'_>,
+    suffix_length: &mut u32,
+    is_first: bool,
+    trailing_ones: u8,
+) -> Result<i32> {
     // Clause 9.2.2.1, re-verified against a primary edition's text after
     // this crate's original transcription turned out wrong here (see the
     // module doc's "Redone from primary spec text" section): `levelCode =
@@ -365,7 +373,12 @@ pub fn residual_block_cavlc(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::items_after_statements, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::items_after_statements,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::cavlc_tables::coeff_token_fixed_length;
@@ -489,7 +502,10 @@ mod tests {
         ] {
             for &(_, _, len, code) in table {
                 assert!(len > 0 && len <= 16, "implausible length {len}");
-                assert!(u32::from(code) < (1u32 << len), "code {code:#b} wider than len {len}");
+                assert!(
+                    u32::from(code) < (1u32 << len),
+                    "code {code:#b} wider than len {len}"
+                );
             }
             for (i, &(_t1_a, _tc_a, len_a, code_a)) in table.iter().enumerate() {
                 for &(_t1_b, _tc_b, len_b, code_b) in &table[i + 1..] {
@@ -521,7 +537,10 @@ mod tests {
         for &(pattern, expected) in cases {
             let data = bits(pattern);
             let mut r = BitReader::new(&data);
-            assert_eq!(decode_total_zeros(&mut r, BlockKind::Block4x4, 1).unwrap(), expected);
+            assert_eq!(
+                decode_total_zeros(&mut r, BlockKind::Block4x4, 1).unwrap(),
+                expected
+            );
         }
     }
 
@@ -656,6 +675,9 @@ mod tests {
         let mut r = BitReader::new(&data);
         let mut b = budget();
         let result = residual_block_cavlc(&mut r, 0, 16, &mut b);
-        assert!(matches!(result, Err(Error::InvalidData(_))), "got {result:?}");
+        assert!(
+            matches!(result, Err(Error::InvalidData(_))),
+            "got {result:?}"
+        );
     }
 }

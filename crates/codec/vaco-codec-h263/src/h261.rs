@@ -68,7 +68,12 @@ impl H261Decoder {
         }
     }
 
-    fn begin_picture(&mut self, cif: bool, pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
+    fn begin_picture(
+        &mut self,
+        cif: bool,
+        pts: vaco_core::Timestamp,
+        duration: vaco_core::Duration,
+    ) -> Result<()> {
         self.finish_picture();
         let (w, h) = if cif { (352, 288) } else { (176, 144) };
         let mut frame = Frame::alloc_video(&mut self.budget, PixFmt::Yuv420p, w, h)?;
@@ -87,7 +92,12 @@ impl H261Decoder {
         self.machine.emit(ap.frame);
     }
 
-    fn decode_access_unit(&mut self, data: &[u8], pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
+    fn decode_access_unit(
+        &mut self,
+        data: &[u8],
+        pts: vaco_core::Timestamp,
+        duration: vaco_core::Duration,
+    ) -> Result<()> {
         let total_bits = (data.len() as u64) * 8;
         let mut bit = 0u64;
         while let Some(sc_bit) = find_prefix(data, bit, total_bits) {
@@ -109,7 +119,14 @@ impl H261Decoder {
                 skip_pei_chain(&mut r);
                 let mb_start = r.bit_pos();
                 let end_bit = if let Some(ap) = self.current.as_mut() {
-                    decode_gob(&mut r, ap, &mut self.idct, self.reference.as_ref(), gn, gquant)
+                    decode_gob(
+                        &mut r,
+                        ap,
+                        &mut self.idct,
+                        self.reference.as_ref(),
+                        gn,
+                        gquant,
+                    )
                 } else {
                     mb_start
                 };
@@ -326,7 +343,9 @@ fn decode_gob(
 
         let (col, row) = addr_to_col_row(mb_addr, GOB_MB_WIDTH);
         let (mb_x, mb_y) = (gob_mb_x0 + col, gob_mb_y0 + row);
-        if !reconstruct_macroblock(r, idct, ap, reference, mb_x, mb_y, &mtype, mv, cbp_mask, quant) {
+        if !reconstruct_macroblock(
+            r, idct, ap, reference, mb_x, mb_y, &mtype, mv, cbp_mask, quant,
+        ) {
             break r.bit_pos();
         }
 

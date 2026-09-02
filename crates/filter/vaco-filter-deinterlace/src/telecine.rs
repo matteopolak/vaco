@@ -63,8 +63,16 @@ pub const DESC: FilterDesc = FilterDesc {
 /// to `"23"` (the reference's own default) if the string is empty or has no
 /// digits at all.
 pub(crate) fn parse_pattern(s: &str) -> Vec<u8> {
-    let digits: Vec<u8> = s.chars().filter_map(|c| c.to_digit(10)).map(|d| d as u8).collect();
-    if digits.is_empty() { vec![2, 3] } else { digits }
+    let digits: Vec<u8> = s
+        .chars()
+        .filter_map(|c| c.to_digit(10))
+        .map(|d| d as u8)
+        .collect();
+    if digits.is_empty() {
+        vec![2, 3]
+    } else {
+        digits
+    }
 }
 
 #[derive(Debug, Clone, vaco_opts::Options)]
@@ -88,7 +96,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -159,7 +168,9 @@ impl Filter {
         let is_top = self.field_index.is_multiple_of(2) == self.first_field_top;
         self.field_index = self.field_index.saturating_add(1);
         let mut field = extract_field(pool, src, is_top)?;
-        field.flags.set(vaco_frame::FrameFlags::TOP_FIELD_FIRST, is_top);
+        field
+            .flags
+            .set(vaco_frame::FrameFlags::TOP_FIELD_FIRST, is_top);
         self.pending.push_back(field);
         Ok(())
     }
@@ -228,7 +239,9 @@ mod tests {
         // measured 24-in/30-out (24 = 4*6, 30 = 5*6).
         let pool = FramePool::default();
         let mut filt = Filter::new(vec![2, 3], true);
-        let inputs: Vec<Frame> = (0..8u8).map(|n| frame_with_rows(&pool, 4, n * 10)).collect();
+        let inputs: Vec<Frame> = (0..8u8)
+            .map(|n| frame_with_rows(&pool, 4, n * 10))
+            .collect();
         let mut total_out = 0;
         for f in inputs {
             // Drive push/drain directly (no FilterContext needed at this level).
@@ -242,7 +255,10 @@ mod tests {
             };
             total_out += v.len();
         }
-        assert_eq!(total_out, 10, "8 input frames over a 2-frame/5-output cycle -> 10 output");
+        assert_eq!(
+            total_out, 10,
+            "8 input frames over a 2-frame/5-output cycle -> 10 output"
+        );
     }
 
     #[test]

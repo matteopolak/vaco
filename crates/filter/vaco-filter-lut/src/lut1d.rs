@@ -77,7 +77,10 @@ use vaco_filter_graph::registry::{Instance, Instantiate};
 use crate::common;
 use crate::sample;
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "lut1d",
@@ -141,7 +144,8 @@ impl Lut1d {
             let (Some(r), Some(g), Some(b)) = (parts.next(), parts.next(), parts.next()) else {
                 return Err(format!("lut1d: malformed row `{line}`"));
             };
-            let (Ok(r), Ok(g), Ok(b)) = (r.parse::<f64>(), g.parse::<f64>(), b.parse::<f64>()) else {
+            let (Ok(r), Ok(g), Ok(b)) = (r.parse::<f64>(), g.parse::<f64>(), b.parse::<f64>())
+            else {
                 return Err(format!("lut1d: non-numeric row `{line}`"));
             };
             data.push([r, g, b]);
@@ -155,7 +159,11 @@ impl Lut1d {
 
     fn at(&self, ch: usize, i: usize) -> f64 {
         let i = i.min(self.size.saturating_sub(1));
-        self.data.get(i).and_then(|row| row.get(ch)).copied().unwrap_or(0.0)
+        self.data
+            .get(i)
+            .and_then(|row| row.get(ch))
+            .copied()
+            .unwrap_or(0.0)
     }
 
     /// Sample channel `ch`'s own curve at normalised input `v` in `[0, 1]`.
@@ -274,12 +282,21 @@ impl Filter {
         }
         let big_endian = format.is_big_endian();
         for ch in 0..3usize {
-            let Some(comp) = sample::component(format, ch) else { continue };
-            let Some(mut plane) = input.plane_mut(comp.plane as usize) else { continue };
+            let Some(comp) = sample::component(format, ch) else {
+                continue;
+            };
+            let Some(mut plane) = input.plane_mut(comp.plane as usize) else {
+                continue;
+            };
             let max = f64::from(sample::max_value(comp));
-            let w = plane.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+            let w = plane
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
             for y in 0..plane.rows() {
-                let Some(row) = plane.row_mut(y) else { continue };
+                let Some(row) = plane.row_mut(y) else {
+                    continue;
+                };
                 for x in 0..w {
                     let v = f64::from(sample::read(row, x, comp, big_endian)) / max;
                     let out = self.table.sample(ch, v, self.interp);
@@ -307,7 +324,9 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
         .map_err(|e| format!("lut1d: could not read `{}`: {e}", opts.file))?;
     let table = Lut1d::parse(&text)?;
     let interp = Interp::from_opt(opts.interp)?;
-    let set = FormatSet::video_list(common::formats_where(|f| f.is_rgb() && sample::is_addressable(f)));
+    let set = FormatSet::video_list(common::formats_where(|f| {
+        f.is_rgb() && sample::is_addressable(f)
+    }));
     Ok(Instance {
         desc: DESC,
         formats: NodeFormats::uniform(1, 1, MediaType::Video, &set, req.instance),
@@ -362,9 +381,13 @@ mod tests {
         // (1,1,1) (this module's doc).
         let t = Lut1d::parse("LUT_1D_SIZE 3\n0 0 0\n0.5 0.25 0.75\n1 1 1\n").unwrap();
         let v = 128.0 / 255.0;
-        let nearest: Vec<u16> = (0..3).map(|ch| to_u16(t.sample(ch, v, Interp::Nearest), 255.0)).collect();
+        let nearest: Vec<u16> = (0..3)
+            .map(|ch| to_u16(t.sample(ch, v, Interp::Nearest), 255.0))
+            .collect();
         assert_eq!(nearest, vec![127, 63, 191]);
-        let linear: Vec<u16> = (0..3).map(|ch| to_u16(t.sample(ch, v, Interp::Linear), 255.0)).collect();
+        let linear: Vec<u16> = (0..3)
+            .map(|ch| to_u16(t.sample(ch, v, Interp::Linear), 255.0))
+            .collect();
         assert_eq!(linear, vec![128, 64, 191]);
     }
 
@@ -381,7 +404,10 @@ mod tests {
             row[3] = 128;
         }
         let half = Lut1d::parse("LUT_1D_SIZE 2\n0 0 0\n0.5 0.5 0.5\n").unwrap();
-        let f = Filter { table: half, interp: Interp::Linear };
+        let f = Filter {
+            table: half,
+            interp: Interp::Linear,
+        };
         f.apply_frame(&mut frame);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(row, &[64, 64, 64, 128]);
@@ -389,7 +415,12 @@ mod tests {
 
     #[test]
     fn creatable_requires_a_file() {
-        let req = Instantiate { name: "lut1d", instance: "lut1d", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "lut1d",
+            instance: "lut1d",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 

@@ -33,8 +33,16 @@ use crate::solid::Solid;
 /// # Errors
 /// Same as [`crate::fill::fill`].
 pub fn blend(frame: &mut Frame, rect: Rect, color: Rgba) -> Result<()> {
-    let FrameData::Video { format, width, height, .. } = frame.data else {
-        return Err(Error::Unsupported("vaco-filter-draw::blend: not a video frame"));
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = frame.data
+    else {
+        return Err(Error::Unsupported(
+            "vaco-filter-draw::blend: not a video frame",
+        ));
     };
     let solid = Solid::resolve(color, format, frame.color)?;
     let rect = rect.clip(width, height);
@@ -103,7 +111,11 @@ fn blend_channel(dst: u32, src: u32, a: f64) -> u32 {
 /// `src_a + dst_a*(1 - src_a)`, all normalised to `0.0..=1.0` by `depth` and
 /// re-quantised.
 fn composite_alpha(src_a: u32, dst_a: u32, depth: u8) -> u32 {
-    let max = if depth >= 32 { u32::MAX } else { (1u32 << depth) - 1 };
+    let max = if depth >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << depth) - 1
+    };
     if max == 0 {
         return 0;
     }
@@ -121,7 +133,12 @@ fn composite_alpha(src_a: u32, dst_a: u32, depth: u8) -> u32 {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_frame::FramePool;
@@ -132,8 +149,28 @@ mod tests {
         let pool = FramePool::default();
         let mut a = pool.acquire_video(PixFmt::Gray8, 4, 4).unwrap();
         let mut b = pool.acquire_video(PixFmt::Gray8, 4, 4).unwrap();
-        crate::fill::fill(&mut a, Rect::full(4, 4), Rgba { r: 100, g: 0, b: 0, a: 255 }).unwrap();
-        blend(&mut b, Rect::full(4, 4), Rgba { r: 100, g: 0, b: 0, a: 255 }).unwrap();
+        crate::fill::fill(
+            &mut a,
+            Rect::full(4, 4),
+            Rgba {
+                r: 100,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        )
+        .unwrap();
+        blend(
+            &mut b,
+            Rect::full(4, 4),
+            Rgba {
+                r: 100,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        )
+        .unwrap();
         assert_eq!(a.plane(0).unwrap().row(0), b.plane(0).unwrap().row(0));
     }
 
@@ -141,9 +178,29 @@ mod tests {
     fn fully_transparent_blend_leaves_the_frame_untouched() {
         let pool = FramePool::default();
         let mut f = pool.acquire_video(PixFmt::Gray8, 4, 4).unwrap();
-        crate::fill::fill(&mut f, Rect::full(4, 4), Rgba { r: 7, g: 0, b: 0, a: 255 }).unwrap();
+        crate::fill::fill(
+            &mut f,
+            Rect::full(4, 4),
+            Rgba {
+                r: 7,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        )
+        .unwrap();
         let before = f.plane(0).unwrap().row(0).unwrap()[0];
-        blend(&mut f, Rect::full(4, 4), Rgba { r: 250, g: 0, b: 0, a: 0 }).unwrap();
+        blend(
+            &mut f,
+            Rect::full(4, 4),
+            Rgba {
+                r: 250,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        )
+        .unwrap();
         assert_eq!(f.plane(0).unwrap().row(0).unwrap()[0], before);
     }
 
@@ -167,9 +224,32 @@ mod tests {
         let pool = FramePool::default();
         let mut f = pool.acquire_video(PixFmt::Yuva420p, 4, 4).unwrap();
         // Start fully transparent.
-        crate::fill::fill(&mut f, Rect::full(4, 4), Rgba { r: 0, g: 0, b: 0, a: 0 }).unwrap();
-        blend(&mut f, Rect::full(4, 4), Rgba { r: 255, g: 0, b: 0, a: 128 }).unwrap();
+        crate::fill::fill(
+            &mut f,
+            Rect::full(4, 4),
+            Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 0,
+            },
+        )
+        .unwrap();
+        blend(
+            &mut f,
+            Rect::full(4, 4),
+            Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 128,
+            },
+        )
+        .unwrap();
         let a = f.plane(3).unwrap().row(0).unwrap()[0];
-        assert!(a > 0, "compositing a translucent colour over transparent must raise alpha");
+        assert!(
+            a > 0,
+            "compositing a translucent colour over transparent must raise alpha"
+        );
     }
 }

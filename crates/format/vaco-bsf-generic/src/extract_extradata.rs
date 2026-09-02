@@ -79,9 +79,9 @@ pub const DESC: BsfDesc = BsfDesc {
 };
 
 fn build(params: &CodecParameters) -> Result<Box<dyn BitstreamFilter>> {
-    let codec = params
-        .codec_id
-        .ok_or(Error::Unsupported("extract_extradata: stream has no codec id"))?;
+    let codec = params.codec_id.ok_or(Error::Unsupported(
+        "extract_extradata: stream has no codec id",
+    ))?;
     // The one definition of "which codecs does this filter cover"
     // (`vaco_format_nalu::header_kind_for`) -- see that function's own doc
     // for the real bug a second copy of this match caused elsewhere

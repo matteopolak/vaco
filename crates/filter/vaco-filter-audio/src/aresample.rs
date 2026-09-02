@@ -251,7 +251,8 @@ impl Filter {
     /// this one started at `pts` and carried `written` output samples.
     fn advance_next_pts(&mut self, pts: vaco_core::Timestamp, written: usize) {
         if let Some(ticks) = pts.ticks() {
-            self.next_pts = vaco_core::Timestamp::new(ticks.saturating_add_unsigned(written as u64));
+            self.next_pts =
+                vaco_core::Timestamp::new(ticks.saturating_add_unsigned(written as u64));
         }
     }
 }
@@ -281,11 +282,7 @@ impl Filter {
 /// roughly every 4096 real ones, which is why the corruption measured as a
 /// small, *uniform* pitch shift (438 Hz instead of 440) rather than an
 /// isolated glitch: densely spread structured error, not an edge artefact.
-fn shrink_to_written(
-    ctx: &mut FilterContext<'_>,
-    frame: Frame,
-    written: usize,
-) -> Result<Frame> {
+fn shrink_to_written(ctx: &mut FilterContext<'_>, frame: Frame, written: usize) -> Result<Frame> {
     let vaco_frame::FrameData::Audio {
         format,
         sample_rate,
@@ -320,7 +317,9 @@ fn shrink_to_written(
             planes: dst_planes, ..
         } = &mut shrunk.data
         else {
-            return Err(Error::InvalidData("a freshly allocated audio frame is not audio"));
+            return Err(Error::InvalidData(
+                "a freshly allocated audio frame is not audio",
+            ));
         };
         for (src, dst) in src_planes.iter().zip(dst_planes.iter_mut()) {
             let dst_buf = dst.data.make_mut();
@@ -654,7 +653,7 @@ use vaco_frame::Frame;
 mod tests {
     use vaco_core::{MediaType, Timestamp};
     use vaco_filter_core::Graph;
-    use vaco_filter_core::mock::{audio_frame, audio_link, audio_source_formats, any_audio_sink};
+    use vaco_filter_core::mock::{any_audio_sink, audio_frame, audio_link, audio_source_formats};
     use vaco_frame::FrameData;
 
     use vaco_filter_graph::registry::Instantiate;
@@ -713,7 +712,14 @@ mod tests {
             sent += n;
             graph.run().unwrap();
             while let Ok(f) = graph.recv(sink) {
-                let FrameData::Audio { samples, planes, format, layout, .. } = &f.data else {
+                let FrameData::Audio {
+                    samples,
+                    planes,
+                    format,
+                    layout,
+                    ..
+                } = &f.data
+                else {
                     panic!("expected an audio frame");
                 };
                 // The other half of the regression: each plane's actual byte
@@ -722,15 +728,22 @@ mod tests {
                 // bugs cancelling out. A packed plane carries every channel
                 // interleaved; a planar one carries one channel per plane.
                 let bytes_per_sample = format.bytes_per_sample() as u64;
-                let per_plane_channels = if format.is_planar() { 1 } else { layout.channels.max(1) };
-                let expected_bytes = u64::from(*samples) * u64::from(per_plane_channels) * bytes_per_sample;
+                let per_plane_channels = if format.is_planar() {
+                    1
+                } else {
+                    layout.channels.max(1)
+                };
+                let expected_bytes =
+                    u64::from(*samples) * u64::from(per_plane_channels) * bytes_per_sample;
                 for plane in planes {
                     assert_eq!(plane.data.as_slice().len() as u64, expected_bytes);
                 }
                 total_reported += u64::from(*samples);
             }
         }
-        graph.close_source(src, Timestamp::new(i64::from(total_in))).unwrap();
+        graph
+            .close_source(src, Timestamp::new(i64::from(total_in)))
+            .unwrap();
         graph.run().unwrap();
         while let Ok(f) = graph.recv(sink) {
             let FrameData::Audio { samples, .. } = &f.data else {
@@ -743,4 +756,3 @@ mod tests {
         assert_eq!(total_reported, expected);
     }
 }
-

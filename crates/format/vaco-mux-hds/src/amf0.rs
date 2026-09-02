@@ -104,11 +104,7 @@ pub fn encode_on_metadata(meta: &OnMetaData) -> Vec<u8> {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
 
@@ -133,7 +129,11 @@ mod tests {
     #[test]
     fn matches_the_measured_reference_shape_except_the_encoder_string() {
         let bytes = encode_on_metadata(&sample());
-        assert_eq!(&bytes[0..3], &[0x02, 0x00, 0x0a], "onMetaData string marker+length");
+        assert_eq!(
+            &bytes[0..3],
+            &[0x02, 0x00, 0x0a],
+            "onMetaData string marker+length"
+        );
         assert_eq!(&bytes[3..13], b"onMetaData");
         assert_eq!(bytes[13], 0x08, "ECMA array marker");
         assert_eq!(&bytes[14..18], &12u32.to_be_bytes());
@@ -149,6 +149,10 @@ mod tests {
         let bytes = encode_on_metadata(&sample());
         let pos = bytes.windows(6).position(|w| w == b"stereo").unwrap();
         assert_eq!(bytes[pos + 6], 0x01, "stereo is an AMF0 Boolean");
-        assert_eq!(bytes[pos + 7], 0x00, "stereo is always false, regardless of real channel count");
+        assert_eq!(
+            bytes[pos + 7],
+            0x00,
+            "stereo is always false, regardless of real channel count"
+        );
     }
 }

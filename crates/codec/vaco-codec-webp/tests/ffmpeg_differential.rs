@@ -23,7 +23,13 @@
 //! the convention `vaco-codec-vorbis`/`vaco-codec-flac`'s own differential
 //! tests use.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::cast_precision_loss, clippy::panic)]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::cast_precision_loss,
+    clippy::panic
+)]
 
 use std::io::Write;
 use std::process::{Command, Stdio};
@@ -40,7 +46,11 @@ fn tool_available(bin: &str) -> bool {
 fn run(bin: &str, args: &[&str], stdin_bytes: Option<&[u8]>) -> Option<Vec<u8>> {
     let mut cmd = Command::new(bin);
     cmd.args(args)
-        .stdin(if stdin_bytes.is_some() { Stdio::piped() } else { Stdio::null() })
+        .stdin(if stdin_bytes.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
     let mut child = cmd.spawn().ok()?;
@@ -99,7 +109,18 @@ fn decode_webp_to_rgb24_via_ffmpeg(webp_bytes: &[u8]) -> Option<Vec<u8>> {
     // warning about tests that cannot fail — the fix is `webp_pipe`.
     run(
         "ffmpeg",
-        &["-hide_banner", "-f", "webp_pipe", "-i", "-", "-pix_fmt", "rgb24", "-f", "rawvideo", "-"],
+        &[
+            "-hide_banner",
+            "-f",
+            "webp_pipe",
+            "-i",
+            "-",
+            "-pix_fmt",
+            "rgb24",
+            "-f",
+            "rawvideo",
+            "-",
+        ],
         Some(webp_bytes),
     )
 }
@@ -152,7 +173,10 @@ fn native_lossless_encode_round_trips_exactly_through_ffmpeg() {
         eprintln!("skip: ffmpeg could not decode our VP8L output");
         return;
     };
-    assert_eq!(decoded_by_ffmpeg, raw, "lossless WebP must round-trip byte-exact (D11 Exact)");
+    assert_eq!(
+        decoded_by_ffmpeg, raw,
+        "lossless WebP must round-trip byte-exact (D11 Exact)"
+    );
 }
 
 #[test]
@@ -174,7 +198,19 @@ fn native_lossless_decode_matches_dwebp_on_a_real_cwebp_file() {
 
     // Real photographic-ish content, into a PNG cwebp can read.
     let ok = Command::new("ffmpeg")
-        .args(["-hide_banner", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", &format!("{w}x{h}"), "-i", "-", png_path.to_str().unwrap()])
+        .args([
+            "-hide_banner",
+            "-y",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "rgb24",
+            "-s",
+            &format!("{w}x{h}"),
+            "-i",
+            "-",
+            png_path.to_str().unwrap(),
+        ])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -194,7 +230,17 @@ fn native_lossless_decode_matches_dwebp_on_a_real_cwebp_file() {
     // and the color cache, not just subtract-green — the feature surface
     // this crate's own encoder never emits and so cannot self-verify.
     let cwebp_ok = Command::new("cwebp")
-        .args(["-quiet", "-lossless", "-m", "6", "-q", "100", png_path.to_str().unwrap(), "-o", cwebp_path.to_str().unwrap()])
+        .args([
+            "-quiet",
+            "-lossless",
+            "-m",
+            "6",
+            "-q",
+            "100",
+            png_path.to_str().unwrap(),
+            "-o",
+            cwebp_path.to_str().unwrap(),
+        ])
         .status()
         .is_ok_and(|s| s.success());
     if !cwebp_ok {
@@ -205,12 +251,18 @@ fn native_lossless_decode_matches_dwebp_on_a_real_cwebp_file() {
 
     let cwebp_bytes = std::fs::read(&cwebp_path).expect("read cwebp output");
 
-    let dwebp_ppm = run("dwebp", &[cwebp_path.to_str().unwrap(), "-ppm", "-o", "-"], None).expect("dwebp decode");
+    let dwebp_ppm = run(
+        "dwebp",
+        &[cwebp_path.to_str().unwrap(), "-ppm", "-o", "-"],
+        None,
+    )
+    .expect("dwebp decode");
     // Strip the PPM header ("P6\n<w> <h>\n255\n") to get raw RGB24 bytes.
     let dwebp_rgb = strip_ppm_header(&dwebp_ppm);
 
     let mut budget = Budget::new(Limits::permissive());
-    let decoded_frames = vaco_codec_webp::decode(&cwebp_bytes, &mut budget).expect("this crate's own VP8L decode");
+    let decoded_frames =
+        vaco_codec_webp::decode(&cwebp_bytes, &mut budget).expect("this crate's own VP8L decode");
     assert_eq!(decoded_frames.len(), 1);
     let ours = frame_rgb24_bytes(&decoded_frames[0]);
 
@@ -218,7 +270,10 @@ fn native_lossless_decode_matches_dwebp_on_a_real_cwebp_file() {
         panic!("video frame");
     };
     assert_eq!((width, height), (w, h));
-    assert_eq!(ours, dwebp_rgb, "this crate's VP8L decode must match dwebp byte-for-byte on a real cwebp file");
+    assert_eq!(
+        ours, dwebp_rgb,
+        "this crate's VP8L decode must match dwebp byte-for-byte on a real cwebp file"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -262,7 +317,17 @@ fn native_lossless_decode_handles_alpha_matching_dwebp() {
     }
 
     let cwebp_ok = Command::new("cwebp")
-        .args(["-quiet", "-lossless", "-m", "6", "-q", "100", png_path.to_str().unwrap(), "-o", cwebp_path.to_str().unwrap()])
+        .args([
+            "-quiet",
+            "-lossless",
+            "-m",
+            "6",
+            "-q",
+            "100",
+            png_path.to_str().unwrap(),
+            "-o",
+            cwebp_path.to_str().unwrap(),
+        ])
         .status()
         .is_ok_and(|s| s.success());
     if !cwebp_ok {
@@ -277,24 +342,43 @@ fn native_lossless_decode_handles_alpha_matching_dwebp() {
     // not the `image-webp` VP8X fallback.
     assert_eq!(cwebp_bytes.get(12..16), Some(b"VP8L".as_slice()));
 
-    let dwebp_pam = run("dwebp", &[cwebp_path.to_str().unwrap(), "-pam", "-o", "-"], None).expect("dwebp decode");
+    let dwebp_pam = run(
+        "dwebp",
+        &[cwebp_path.to_str().unwrap(), "-pam", "-o", "-"],
+        None,
+    )
+    .expect("dwebp decode");
     let dwebp_rgba = strip_pam_header(&dwebp_pam);
 
     let mut budget = Budget::new(Limits::permissive());
-    let decoded_frames = vaco_codec_webp::decode(&cwebp_bytes, &mut budget).expect("this crate's own VP8L decode");
+    let decoded_frames =
+        vaco_codec_webp::decode(&cwebp_bytes, &mut budget).expect("this crate's own VP8L decode");
     assert_eq!(decoded_frames.len(), 1);
-    let FrameData::Video { format, width, height, .. } = decoded_frames[0].data else {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = decoded_frames[0].data
+    else {
         panic!("video frame");
     };
     assert_eq!((width, height), (w, h));
-    assert_eq!(format, PixFmt::Rgba, "an image with non-opaque alpha must decode as Rgba");
+    assert_eq!(
+        format,
+        PixFmt::Rgba,
+        "an image with non-opaque alpha must decode as Rgba"
+    );
 
     let plane = decoded_frames[0].plane(0).expect("plane 0");
     let mut ours = Vec::new();
     for row in plane.rows_iter() {
         ours.extend_from_slice(row);
     }
-    assert_eq!(ours, dwebp_rgba, "this crate's VP8L alpha decode must match dwebp byte-for-byte");
+    assert_eq!(
+        ours, dwebp_rgba,
+        "this crate's VP8L alpha decode must match dwebp byte-for-byte"
+    );
 
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -336,7 +420,11 @@ fn psnr(a: &[u8], b: &[u8]) -> f64 {
         })
         .sum::<f64>()
         / n as f64;
-    if mse <= 0.0 { f64::INFINITY } else { 10.0 * (255.0f64 * 255.0 / mse).log10() }
+    if mse <= 0.0 {
+        f64::INFINITY
+    } else {
+        10.0 * (255.0f64 * 255.0 / mse).log10()
+    }
 }
 
 #[test]

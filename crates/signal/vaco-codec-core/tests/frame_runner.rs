@@ -15,7 +15,9 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use vaco_codec_core::picture::{PictureRef, PictureSpec, PictureWriter, PlaneSpec, ProgressPicture};
+use vaco_codec_core::picture::{
+    PictureRef, PictureSpec, PictureWriter, PlaneSpec, ProgressPicture,
+};
 use vaco_codec_core::{FrameRunner, FrameTask, TaskCtx};
 use vaco_core::Result;
 use vaco_frame::Frame;
@@ -50,7 +52,10 @@ impl FrameTask for Chained {
             None => 0u8,
             Some(r) => {
                 let view = ctx.wait_rows(r, 0, 0)?;
-                view.row(0).and_then(|row| row.first().copied()).unwrap_or(0) + 1
+                view.row(0)
+                    .and_then(|row| row.first().copied())
+                    .unwrap_or(0)
+                    + 1
             }
         };
         // Uneven work, so completion order differs from dispatch order.

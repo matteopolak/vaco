@@ -90,7 +90,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "hue", help = "Adjust the hue and saturation of the input video")]
+#[options(
+    name = "hue",
+    help = "Adjust the hue and saturation of the input video"
+)]
 pub(crate) struct Opts {
     #[opt(name = "h", help = "set the hue angle degrees expression", default = 0.0, range = -360.0..=360.0, flags(video, filtering))]
     pub h: f64,
@@ -123,8 +126,12 @@ impl Filter {
         if format.is_rgb() || !sample::is_addressable(format) {
             return;
         }
-        let Some(u_comp) = sample::component(format, 1) else { return };
-        let Some(v_comp) = sample::component(format, 2) else { return };
+        let Some(u_comp) = sample::component(format, 1) else {
+            return;
+        };
+        let Some(v_comp) = sample::component(format, 2) else {
+            return;
+        };
         if u_comp.plane == v_comp.plane {
             self.rotate_interleaved(input, u_comp, v_comp);
         } else {
@@ -140,15 +147,24 @@ impl Filter {
     /// needing two simultaneous mutable borrows of the same `Frame`'s
     /// plane list, which this crate's `Frame`/`PlaneMut` API does not
     /// expose a split-borrow accessor for.
-    fn rotate_planar(&self, input: &mut Frame, u_comp: vaco_pixfmt::Component, v_comp: vaco_pixfmt::Component) {
+    fn rotate_planar(
+        &self,
+        input: &mut Frame,
+        u_comp: vaco_pixfmt::Component,
+        v_comp: vaco_pixfmt::Component,
+    ) {
         let big_endian = false;
         let u_max = f64::from(sample::max_value(u_comp));
         let v_max = f64::from(sample::max_value(v_comp));
         let mid_u = f64::midpoint(u_max, 1.0);
         let mid_v = f64::midpoint(v_max, 1.0);
 
-        let Some((u_width, u_samples)) = read_plane(input, u_comp, big_endian) else { return };
-        let Some((v_width, v_samples)) = read_plane(input, v_comp, big_endian) else { return };
+        let Some((u_width, u_samples)) = read_plane(input, u_comp, big_endian) else {
+            return;
+        };
+        let Some((v_width, v_samples)) = read_plane(input, v_comp, big_endian) else {
+            return;
+        };
         let width = u_width.min(v_width);
         let samples = u_samples.len().min(v_samples.len());
 
@@ -173,19 +189,28 @@ impl Filter {
     /// so this path is defensive scaffolding rather than a confirmed
     /// behaviour, kept simple (one pass, no double-buffering) since it is
     /// unreachable from any format `create` currently accepts.
-    fn rotate_interleaved(&self, input: &mut Frame, u_comp: vaco_pixfmt::Component, v_comp: vaco_pixfmt::Component) {
+    fn rotate_interleaved(
+        &self,
+        input: &mut Frame,
+        u_comp: vaco_pixfmt::Component,
+        v_comp: vaco_pixfmt::Component,
+    ) {
         let big_endian = false;
         let u_max = f64::from(sample::max_value(u_comp));
         let v_max = f64::from(sample::max_value(v_comp));
         let mid_u = f64::midpoint(u_max, 1.0);
         let mid_v = f64::midpoint(v_max, 1.0);
-        let Some(mut plane) = input.plane_mut(u_comp.plane as usize) else { return };
+        let Some(mut plane) = input.plane_mut(u_comp.plane as usize) else {
+            return;
+        };
         let width = plane
             .row_bytes()
             .checked_div(usize::from(u_comp.step.max(v_comp.step).max(1)))
             .unwrap_or(0);
         for y in 0..plane.rows() {
-            let Some(row) = plane.row_mut(y) else { continue };
+            let Some(row) = plane.row_mut(y) else {
+                continue;
+            };
             for x in 0..width {
                 let u = sample::read(row, x, u_comp, big_endian);
                 let v = sample::read(row, x, v_comp, big_endian);
@@ -208,9 +233,16 @@ impl Filter {
 /// handled by recording each row's own length and having the caller `zip`
 /// against the other component's buffer, which naturally stops at the
 /// shorter side rather than panicking.
-fn read_plane(frame: &mut Frame, comp: vaco_pixfmt::Component, big_endian: bool) -> Option<(usize, Vec<u16>)> {
+fn read_plane(
+    frame: &mut Frame,
+    comp: vaco_pixfmt::Component,
+    big_endian: bool,
+) -> Option<(usize, Vec<u16>)> {
     let plane = frame.plane_mut(comp.plane as usize)?;
-    let width = plane.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+    let width = plane
+        .row_bytes()
+        .checked_div(usize::from(comp.step.max(1)))
+        .unwrap_or(0);
     let mut samples = Vec::new();
     for y in 0..plane.rows() {
         let Some(row) = plane.row(y) else { continue };
@@ -223,11 +255,19 @@ fn read_plane(frame: &mut Frame, comp: vaco_pixfmt::Component, big_endian: bool)
 
 /// The inverse of [`read_plane`]: write `samples` (row-major, `width`
 /// columns per row) back into `comp`'s plane.
-fn write_plane(frame: &mut Frame, comp: vaco_pixfmt::Component, big_endian: bool, width: usize, samples: &[u16]) {
+fn write_plane(
+    frame: &mut Frame,
+    comp: vaco_pixfmt::Component,
+    big_endian: bool,
+    width: usize,
+    samples: &[u16],
+) {
     if width == 0 {
         return;
     }
-    let Some(mut plane) = frame.plane_mut(comp.plane as usize) else { return };
+    let Some(mut plane) = frame.plane_mut(comp.plane as usize) else {
+        return;
+    };
     let mut rest = samples;
     for y in 0..plane.rows() {
         if rest.len() < width {
@@ -266,7 +306,9 @@ impl FrameFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts: Opts = common::parse(req.args)?;
-    let set = FormatSet::video_list(common::formats_where(|f| !f.is_rgb() && sample::is_addressable(f)));
+    let set = FormatSet::video_list(common::formats_where(|f| {
+        !f.is_rgb() && sample::is_addressable(f)
+    }));
     Ok(Instance {
         desc: DESC,
         formats: NodeFormats::uniform(1, 1, MediaType::Video, &set, req.instance),

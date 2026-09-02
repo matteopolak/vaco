@@ -90,10 +90,7 @@ pub fn synthesize(warmup: &[i32], residual: &[i64], qcoeffs: &[i32], shift: u32,
         *slot = sample;
 
         for i in (1..order).rev() {
-            if let (Some(prev), Some(cur)) = (
-                history.get(i - 1).copied(),
-                history.get_mut(i),
-            ) {
+            if let (Some(prev), Some(cur)) = (history.get(i - 1).copied(), history.get_mut(i)) {
                 *cur = prev;
             }
         }

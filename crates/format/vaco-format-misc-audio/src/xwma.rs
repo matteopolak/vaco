@@ -201,7 +201,11 @@ impl XwmaDemuxer {
             None => data_len,
         };
 
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, sample_rate.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, sample_rate.cast_signed()),
+        );
         let mut params = CodecParameters::audio();
         params.codec_id = codec_for_format_tag(format_tag);
         if extra.is_empty() && format_tag == 0x0161 {
@@ -213,7 +217,10 @@ impl XwmaDemuxer {
             audio.layout = ChannelLayout::default_for(u32::from(channels));
         }
         stream.params = params;
-        #[allow(clippy::integer_division, reason = "bytes_per_sample from a bit depth measured to always be byte-aligned")]
+        #[allow(
+            clippy::integer_division,
+            reason = "bytes_per_sample from a bit depth measured to always be byte-aligned"
+        )]
         let bytes_per_sample = u32::from(bits_per_sample) / 8;
         let pcm_frame_bytes = bytes_per_sample.saturating_mul(u32::from(channels));
         if has_dpds && pcm_frame_bytes > 0 {
@@ -223,7 +230,10 @@ impl XwmaDemuxer {
             // — confirmed exactly across mono/stereo and 8/16-bit fixtures
             // (`data_len / (channels * bytes_per_sample)`, verified against
             // both `wmav1`/`wmav2`). See the module doc.
-            #[allow(clippy::integer_division, reason = "matches the measured reference formula exactly")]
+            #[allow(
+                clippy::integer_division,
+                reason = "matches the measured reference formula exactly"
+            )]
             let frames = clamped_len / u64::from(pcm_frame_bytes);
             stream.duration_ts = i64::try_from(frames).ok();
         } else if avg_bytes_per_sec > 0 {
@@ -231,7 +241,8 @@ impl XwmaDemuxer {
                 clippy::integer_division,
                 reason = "sample-count estimate from a byte count; matches the measured reference formula"
             )]
-            let frames = clamped_len.saturating_mul(u64::from(sample_rate)) / u64::from(avg_bytes_per_sec);
+            let frames =
+                clamped_len.saturating_mul(u64::from(sample_rate)) / u64::from(avg_bytes_per_sec);
             stream.duration_ts = i64::try_from(frames).ok();
         }
 
@@ -252,7 +263,10 @@ impl XwmaDemuxer {
         })
     }
 
-    #[allow(clippy::integer_division, reason = "packet-duration estimate from a byte count; matches the measured reference formula")]
+    #[allow(
+        clippy::integer_division,
+        reason = "packet-duration estimate from a byte count; matches the measured reference formula"
+    )]
     fn samples_for(&self, bytes: usize) -> i64 {
         (bytes as u64 * u64::from(self.sample_rate) / u64::from(self.avg_bytes_per_sec))
             .try_into()
@@ -327,9 +341,14 @@ impl Demuxer for XwmaDemuxer {
                 frame_to_bytes(u64::try_from(ts.ticks().unwrap_or(0).max(0)).unwrap_or(0))
             }
         };
-        #[allow(clippy::integer_division, reason = "block-align a byte offset down to a packet boundary")]
+        #[allow(
+            clippy::integer_division,
+            reason = "block-align a byte offset down to a packet boundary"
+        )]
         let block = byte_offset / u64::from(self.block_align);
-        let aligned = block.saturating_mul(u64::from(self.block_align)).min(self.data_len);
+        let aligned = block
+            .saturating_mul(u64::from(self.block_align))
+            .min(self.data_len);
         self.io.seek(self.data_start.saturating_add(aligned))?;
         self.bytes_read = aligned;
         self.eof = false;
@@ -340,15 +359,23 @@ impl Demuxer for XwmaDemuxer {
         clippy::integer_division,
         reason = "sample-count estimate from a byte count; matches the measured reference formula"
     )]
-    #[allow(clippy::integer_division, reason = "matches the measured reference formula exactly, both branches")]
+    #[allow(
+        clippy::integer_division,
+        reason = "matches the measured reference formula exactly, both branches"
+    )]
     fn duration(&self) -> Option<Duration> {
         let frames = if self.has_dpds && self.pcm_frame_bytes > 0 {
             self.data_len / u64::from(self.pcm_frame_bytes)
         } else {
-            self.data_len.saturating_mul(u64::from(self.sample_rate)) / u64::from(self.avg_bytes_per_sec)
+            self.data_len.saturating_mul(u64::from(self.sample_rate))
+                / u64::from(self.avg_bytes_per_sec)
         };
-        let micros = frames.checked_mul(1_000_000)?.checked_div(u64::from(self.sample_rate))?;
-        Some(Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX)))
+        let micros = frames
+            .checked_mul(1_000_000)?
+            .checked_div(u64::from(self.sample_rate))?;
+        Some(Duration::from_micros(
+            i64::try_from(micros).unwrap_or(i64::MAX),
+        ))
     }
 }
 

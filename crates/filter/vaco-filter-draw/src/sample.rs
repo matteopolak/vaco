@@ -42,7 +42,9 @@ pub const fn container_bytes(comp: &Component) -> Option<usize> {
 #[must_use]
 pub fn read(row: &[u8], x: usize, comp: &Component, big_endian: bool) -> Option<u32> {
     let bytes = container_bytes(comp)?;
-    let addr = x.checked_mul(usize::from(comp.step))?.checked_add(usize::from(comp.offset))?;
+    let addr = x
+        .checked_mul(usize::from(comp.step))?
+        .checked_add(usize::from(comp.offset))?;
     let raw = if bytes == 1 {
         u32::from(*row.get(addr)?)
     } else {
@@ -121,11 +123,20 @@ pub fn write(row: &mut [u8], x: usize, comp: &Component, value: u32, big_endian:
 }
 
 const fn mask_for(depth: u8) -> u32 {
-    if depth >= 32 { u32::MAX } else { (1u32 << depth) - 1 }
+    if depth >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << depth) - 1
+    }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 

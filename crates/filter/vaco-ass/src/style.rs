@@ -5,7 +5,10 @@
 use vaco_core::Rgba;
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::struct_excessive_bools, reason = "the V4+ style format's own four independent boolean fields, not a state machine")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "the V4+ style format's own four independent boolean fields, not a state machine"
+)]
 pub struct Style {
     pub name: String,
     pub fontname: String,
@@ -43,10 +46,30 @@ impl Default for Style {
             name: "Default".to_owned(),
             fontname: "Arial".to_owned(),
             fontsize: 20.0,
-            primary_colour: Rgba { r: 255, g: 255, b: 255, a: 255 },
-            secondary_colour: Rgba { r: 255, g: 0, b: 0, a: 255 },
-            outline_colour: Rgba { r: 0, g: 0, b: 0, a: 255 },
-            back_colour: Rgba { r: 0, g: 0, b: 0, a: 255 },
+            primary_colour: Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255,
+            },
+            secondary_colour: Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            outline_colour: Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            back_colour: Rgba {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
             bold: false,
             italic: false,
             underline: false,
@@ -67,7 +90,10 @@ impl Default for Style {
 }
 
 fn field<'a>(cols: &[&'a str], format: &[&str], name: &str) -> Option<&'a str> {
-    format.iter().position(|f| f.eq_ignore_ascii_case(name)).and_then(|i| cols.get(i).copied())
+    format
+        .iter()
+        .position(|f| f.eq_ignore_ascii_case(name))
+        .and_then(|i| cols.get(i).copied())
 }
 
 fn parse_bool_flag(s: &str) -> bool {
@@ -96,10 +122,18 @@ pub fn parse_style(cols: &[&str], format: &[&str]) -> Style {
         name: get("Name").unwrap_or(&base.name).trim().to_owned(),
         fontname: get("Fontname").unwrap_or(&base.fontname).trim().to_owned(),
         fontsize: get("Fontsize").map_or(base.fontsize, |v| parse_f64(v, base.fontsize)),
-        primary_colour: get("PrimaryColour").and_then(crate::color::parse_color).unwrap_or(base.primary_colour),
-        secondary_colour: get("SecondaryColour").and_then(crate::color::parse_color).unwrap_or(base.secondary_colour),
-        outline_colour: get("OutlineColour").and_then(crate::color::parse_color).unwrap_or(base.outline_colour),
-        back_colour: get("BackColour").and_then(crate::color::parse_color).unwrap_or(base.back_colour),
+        primary_colour: get("PrimaryColour")
+            .and_then(crate::color::parse_color)
+            .unwrap_or(base.primary_colour),
+        secondary_colour: get("SecondaryColour")
+            .and_then(crate::color::parse_color)
+            .unwrap_or(base.secondary_colour),
+        outline_colour: get("OutlineColour")
+            .and_then(crate::color::parse_color)
+            .unwrap_or(base.outline_colour),
+        back_colour: get("BackColour")
+            .and_then(crate::color::parse_color)
+            .unwrap_or(base.back_colour),
         bold: get("Bold").map_or(base.bold, parse_bool_flag),
         italic: get("Italic").map_or(base.italic, parse_bool_flag),
         underline: get("Underline").map_or(base.underline, parse_bool_flag),
@@ -108,7 +142,8 @@ pub fn parse_style(cols: &[&str], format: &[&str]) -> Style {
         scale_y: get("ScaleY").map_or(base.scale_y, |v| parse_f64(v, base.scale_y)),
         spacing: get("Spacing").map_or(base.spacing, |v| parse_f64(v, base.spacing)),
         angle: get("Angle").map_or(base.angle, |v| parse_f64(v, base.angle)),
-        border_style: get("BorderStyle").map_or(base.border_style, |v| parse_i32(v, base.border_style)),
+        border_style: get("BorderStyle")
+            .map_or(base.border_style, |v| parse_i32(v, base.border_style)),
         outline: get("Outline").map_or(base.outline, |v| parse_f64(v, base.outline)),
         shadow: get("Shadow").map_or(base.shadow, |v| parse_f64(v, base.shadow)),
         alignment: get("Alignment").map_or(base.alignment, |v| parse_i32(v, base.alignment)),
@@ -119,20 +154,54 @@ pub fn parse_style(cols: &[&str], format: &[&str]) -> Style {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, clippy::float_cmp, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    clippy::float_cmp,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
     #[test]
     fn parses_a_typical_v4_plus_style_line() {
-        let format = ["Name", "Fontname", "Fontsize", "PrimaryColour", "Bold", "Alignment", "MarginL", "MarginR", "MarginV"];
-        let cols = ["Default", "Arial", "24", "&H00FFFFFF", "-1", "2", "10", "10", "10"];
+        let format = [
+            "Name",
+            "Fontname",
+            "Fontsize",
+            "PrimaryColour",
+            "Bold",
+            "Alignment",
+            "MarginL",
+            "MarginR",
+            "MarginV",
+        ];
+        let cols = [
+            "Default",
+            "Arial",
+            "24",
+            "&H00FFFFFF",
+            "-1",
+            "2",
+            "10",
+            "10",
+            "10",
+        ];
         let style = parse_style(&cols, &format);
         assert_eq!(style.name, "Default");
         assert_eq!(style.fontsize, 24.0);
         assert!(style.bold);
         assert_eq!(style.alignment, 2);
-        assert_eq!(style.primary_colour, Rgba { r: 255, g: 255, b: 255, a: 255 });
+        assert_eq!(
+            style.primary_colour,
+            Rgba {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 255
+            }
+        );
     }
 
     #[test]

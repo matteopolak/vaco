@@ -52,7 +52,9 @@ pub fn planar_predict(
         let Some(&left_y) = left.get(y) else {
             return;
         };
-        let Some(dst_row) = dst.get_mut(y.saturating_mul(size)..).and_then(|r| r.get_mut(..size))
+        let Some(dst_row) = dst
+            .get_mut(y.saturating_mul(size)..)
+            .and_then(|r| r.get_mut(..size))
         else {
             return;
         };

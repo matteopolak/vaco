@@ -50,7 +50,12 @@ impl Kernel for FirMcKernel {
 
     fn vector(case: &Self::Case) -> Vec<Self::Lane> {
         let mut out = vec![0u8; case.dst_len];
-        fir::fir_row(Caps::detect(), &case.src, &taps::H264_LUMA_HALFPEL, &mut out);
+        fir::fir_row(
+            Caps::detect(),
+            &case.src,
+            &taps::H264_LUMA_HALFPEL,
+            &mut out,
+        );
         out
     }
 }

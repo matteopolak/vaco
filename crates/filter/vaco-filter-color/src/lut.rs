@@ -61,7 +61,10 @@ const VIDEO_PAD: &[Pad] = &[Pad {
 const VARS: &[&str] = &["val", "clipval", "maxval", "minval", "negval", "w", "h"];
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "lut", help = "Compute and apply a lookup table to the input video")]
+#[options(
+    name = "lut",
+    help = "Compute and apply a lookup table to the input video"
+)]
 pub(crate) struct Opts {
     #[opt(name = "c0", alias = "y", alias = "r", help = "set component #0 expression", default = "clipval".to_owned(), flags(video, filtering))]
     pub c0: String,
@@ -86,7 +89,15 @@ impl Table {
             let v = val as f64;
             let clipval = v.clamp(0.0, max);
             let negval = max - v;
-            let out = expr.eval(&[v, clipval, max, 0.0, negval, f64::from(width), f64::from(height)]);
+            let out = expr.eval(&[
+                v,
+                clipval,
+                max,
+                0.0,
+                negval,
+                f64::from(width),
+                f64::from(height),
+            ]);
             #[allow(
                 clippy::cast_possible_truncation,
                 clippy::cast_sign_loss,
@@ -112,7 +123,9 @@ pub(crate) struct Filter {
 impl Filter {
     fn new(o: &Opts) -> std::result::Result<Self, String> {
         let bindings = Bindings::new(VARS);
-        let parse = |s: &str| Expr::parse(s, &bindings).map_err(|e| format!("lut: bad expression `{s}`: {e}"));
+        let parse = |s: &str| {
+            Expr::parse(s, &bindings).map_err(|e| format!("lut: bad expression `{s}`: {e}"))
+        };
         Ok(Self {
             exprs: [parse(&o.c0)?, parse(&o.c1)?, parse(&o.c2)?, parse(&o.c3)?],
             tables: Vec::new(),
@@ -151,7 +164,9 @@ impl Filter {
                 .checked_div(usize::from(comp.step.max(1)))
                 .unwrap_or(0);
             for y in 0..plane.rows() {
-                let Some(row) = plane.row_mut(y) else { continue };
+                let Some(row) = plane.row_mut(y) else {
+                    continue;
+                };
                 for x in 0..width {
                     let v = sample::read(row, x, comp, big_endian);
                     let out = table.apply(v);

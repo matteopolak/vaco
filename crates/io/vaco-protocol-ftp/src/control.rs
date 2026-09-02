@@ -53,7 +53,11 @@ impl Session {
     /// # Errors
     /// [`ProtocolError::Denied`] if `"tcp"` is not permitted by `env`;
     /// otherwise whatever the connection attempt or greeting failed with.
-    pub fn connect(hp: &HostPort, timeout: Option<Duration>, env: &ProtocolEnv<'_>) -> Result<Self> {
+    pub fn connect(
+        hp: &HostPort,
+        timeout: Option<Duration>,
+        env: &ProtocolEnv<'_>,
+    ) -> Result<Self> {
         let stream = vaco_protocol_dial::dial_tcp(hp, timeout, env)?;
         let mut session = Self {
             reader: BufReader::new(stream),
@@ -73,13 +77,14 @@ impl Session {
     /// continued until a line starting with the same code and a space).
     fn read_response(&mut self) -> Result<FtpResponse> {
         let first = self.read_line()?;
-        let code = first
-            .get(..3)
-            .and_then(|c| c.parse::<u16>().ok())
-            .ok_or(ProtocolError::Malformed {
-                scheme: "ftp",
-                detail: "server response did not start with a three-digit code",
-            })?;
+        let code =
+            first
+                .get(..3)
+                .and_then(|c| c.parse::<u16>().ok())
+                .ok_or(ProtocolError::Malformed {
+                    scheme: "ftp",
+                    detail: "server response did not start with a three-digit code",
+                })?;
         let is_multiline = first.as_bytes().get(3) == Some(&b'-');
         if !is_multiline {
             let text = first.get(4..).unwrap_or("").trim_end().to_owned();

@@ -15,7 +15,11 @@ use vaco_core::Rgba;
 /// (`\alpha`/`\1a`-`\4a` are a distinct tag from `\c`/`\1c`-`\4c`).
 #[must_use]
 pub fn parse_color(s: &str) -> Option<Rgba> {
-    let inner = s.trim().trim_start_matches("&H").trim_start_matches("&h").trim_end_matches('&');
+    let inner = s
+        .trim()
+        .trim_start_matches("&H")
+        .trim_start_matches("&h")
+        .trim_end_matches('&');
     let hex = inner.trim();
     let value = u32::from_str_radix(hex, 16).ok()?;
     match hex.len() {
@@ -23,14 +27,24 @@ pub fn parse_color(s: &str) -> Option<Rgba> {
             let b = (value >> 16) & 0xFF;
             let g = (value >> 8) & 0xFF;
             let r = value & 0xFF;
-            Some(Rgba { r: r as u8, g: g as u8, b: b as u8, a: 255 })
+            Some(Rgba {
+                r: r as u8,
+                g: g as u8,
+                b: b as u8,
+                a: 255,
+            })
         }
         7..=8 => {
             let aa = (value >> 24) & 0xFF;
             let b = (value >> 16) & 0xFF;
             let g = (value >> 8) & 0xFF;
             let r = value & 0xFF;
-            Some(Rgba { r: r as u8, g: g as u8, b: b as u8, a: invert_alpha(aa) })
+            Some(Rgba {
+                r: r as u8,
+                g: g as u8,
+                b: b as u8,
+                a: invert_alpha(aa),
+            })
         }
         _ => None,
     }
@@ -40,7 +54,11 @@ pub fn parse_color(s: &str) -> Option<Rgba> {
 /// bare value, leaving RGB untouched.
 #[must_use]
 pub fn parse_alpha_only(s: &str) -> Option<u8> {
-    let inner = s.trim().trim_start_matches("&H").trim_start_matches("&h").trim_end_matches('&');
+    let inner = s
+        .trim()
+        .trim_start_matches("&H")
+        .trim_start_matches("&h")
+        .trim_end_matches('&');
     let value = u32::from_str_radix(inner.trim(), 16).ok()?;
     Some(invert_alpha(value & 0xFF))
 }
@@ -50,7 +68,13 @@ const fn invert_alpha(ass_alpha: u32) -> u8 {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, clippy::float_cmp, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    clippy::float_cmp,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 

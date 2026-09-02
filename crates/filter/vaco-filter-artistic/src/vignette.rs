@@ -184,7 +184,12 @@ pub(crate) struct Opts {
     // unconditionally does; requesting the reference's real default
     // (`dither=1`) now refuses instead of silently returning `dither=0`'s
     // pixels while claiming to have honoured `dither=1`.
-    #[opt(name = "dither", help = "set dithering", default = false, flags(video, filtering))]
+    #[opt(
+        name = "dither",
+        help = "set dithering",
+        default = false,
+        flags(video, filtering)
+    )]
     pub dither: bool,
     #[opt(
         name = "aspect",
@@ -217,7 +222,13 @@ struct Params {
     angle: f64,
 }
 
-fn eval_params(angle_expr: &Expr, x0_expr: &Expr, y0_expr: &Expr, width: u32, height: u32) -> Params {
+fn eval_params(
+    angle_expr: &Expr,
+    x0_expr: &Expr,
+    y0_expr: &Expr,
+    width: u32,
+    height: u32,
+) -> Params {
     let vars = [f64::from(width), f64::from(height)];
     let x0 = x0_expr.eval(&vars);
     let y0 = y0_expr.eval(&vars);
@@ -264,11 +275,7 @@ fn apply_forward(value: u8, factor: f64, baseline: f64) -> u8 {
 fn apply_backward(value: u8, factor: f64, baseline: f64) -> u8 {
     if factor <= 1e-9 {
         let v = f64::from(value);
-        return if v >= baseline {
-            255
-        } else {
-            0
-        };
+        return if v >= baseline { 255 } else { 0 };
     }
     let raw = baseline + (f64::from(value) - baseline) / factor;
     #[allow(
@@ -293,8 +300,8 @@ pub(crate) struct Filter {
 impl Filter {
     fn new(opts: &Opts) -> std::result::Result<Self, String> {
         let bindings = Bindings::new(WH_VARS);
-        let angle_expr =
-            Expr::parse(&opts.angle, &bindings).map_err(|e| format!("vignette: bad `angle` `{e}`"))?;
+        let angle_expr = Expr::parse(&opts.angle, &bindings)
+            .map_err(|e| format!("vignette: bad `angle` `{e}`"))?;
         let x0_expr =
             Expr::parse(&opts.x0, &bindings).map_err(|e| format!("vignette: bad `x0` `{e}`"))?;
         let y0_expr =
@@ -355,7 +362,11 @@ impl FrameFilter for Filter {
             let p8 = p as u8;
             let pw = common::to_i32(format.plane_width(width, p8));
             let ph = common::to_i32(format.plane_height(height, p8));
-            let baseline = if p == 0 || is_rgb || p >= 3 { 0.0 } else { 128.0 };
+            let baseline = if p == 0 || is_rgb || p >= 3 {
+                0.0
+            } else {
+                128.0
+            };
             let Some(src_plane) = input.plane(p) else {
                 continue;
             };

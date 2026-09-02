@@ -149,8 +149,7 @@ impl AlacSpecificConfig {
         else {
             return Err(Error::InvalidData("truncated ALACSpecificConfig"));
         };
-        let Some(avg_bit_rate) = body.get(16..20).and_then(|s| <[u8; 4]>::try_from(s).ok())
-        else {
+        let Some(avg_bit_rate) = body.get(16..20).and_then(|s| <[u8; 4]>::try_from(s).ok()) else {
             return Err(Error::InvalidData("truncated ALACSpecificConfig"));
         };
         let Some(sample_rate) = body.get(20..24).and_then(|s| <[u8; 4]>::try_from(s).ok()) else {
@@ -217,7 +216,14 @@ impl AlacSpecificConfig {
     /// `vaco-codec-alac`'s own constants directly, since this crate is the
     /// lower layer and does not depend on the encoder that uses this.
     #[must_use]
-    pub const fn for_encode(sample_rate: u32, num_channels: u8, bit_depth: u8, pb: u8, mb: u8, kb: u8) -> Self {
+    pub const fn for_encode(
+        sample_rate: u32,
+        num_channels: u8,
+        bit_depth: u8,
+        pb: u8,
+        mb: u8,
+        kb: u8,
+    ) -> Self {
         Self {
             frame_length: 4096,
             compatible_version: 0,
@@ -418,9 +424,8 @@ fn strip_frma_wrapper(data: &[u8]) -> Option<&[u8]> {
 /// an ALAC-specific parser once a trailing `ALACChannelLayoutInfo` is
 /// possible on the *other* shapes this function does not match).
 fn strip_full_box_wrapper(data: &[u8]) -> Option<&[u8]> {
-    let is_full_box =
-        data.get(0..4) == Some(&(u32::try_from(LEN + 12).unwrap_or(0)).to_be_bytes())
-            && data.get(4..8) == Some(b"alac".as_slice());
+    let is_full_box = data.get(0..4) == Some(&(u32::try_from(LEN + 12).unwrap_or(0)).to_be_bytes())
+        && data.get(4..8) == Some(b"alac".as_slice());
     if !is_full_box {
         return None;
     }
@@ -599,7 +604,10 @@ mod tests {
     #[test]
     fn a_frma_wrapped_cookie_matches_the_bare_config() {
         let cookie = AlacCookie::parse(&frma_fixture(bare_fixture())).expect("valid frma cookie");
-        assert_eq!(cookie.config, AlacSpecificConfig::parse(&bare_fixture()).expect("valid bare config"));
+        assert_eq!(
+            cookie.config,
+            AlacSpecificConfig::parse(&bare_fixture()).expect("valid bare config")
+        );
         assert!(cookie.channel_layout.is_none());
     }
 
@@ -612,7 +620,10 @@ mod tests {
         let mut data = frma_fixture(bare_fixture());
         data.extend_from_slice(&channel_layout_info((101 << 16) | 2)); // stereo
         let cookie = AlacCookie::parse(&data).expect("valid cookie");
-        assert_eq!(cookie.config, AlacSpecificConfig::parse(&bare_fixture()).expect("valid bare config"));
+        assert_eq!(
+            cookie.config,
+            AlacSpecificConfig::parse(&bare_fixture()).expect("valid bare config")
+        );
         assert_eq!(cookie.layout(), ChannelLayout::STEREO);
     }
 
@@ -636,7 +647,9 @@ mod tests {
     #[test]
     fn a_boxed_parser_via_extradata_describes_the_stream_and_states_a_duration() {
         let mut parser = AlacParser::new(Limits::strict());
-        parser.set_extradata(&wrapped_fixture()).expect("valid cookie");
+        parser
+            .set_extradata(&wrapped_fixture())
+            .expect("valid cookie");
         let params = parser.parameters().expect("described");
         assert_eq!(params.codec_id, Some(CodecId::Alac));
         let audio = params.audio.as_ref().expect("audio parameters");

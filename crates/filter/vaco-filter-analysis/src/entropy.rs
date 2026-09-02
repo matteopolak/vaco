@@ -91,7 +91,10 @@ fn shannon(counts: &[u64], total: u64) -> f64 {
     if total == 0 {
         return 0.0;
     }
-    #[allow(clippy::cast_precision_loss, reason = "sample/delta counts are frame-sized")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "sample/delta counts are frame-sized"
+    )]
     let total_f = total as f64;
     let sum: f64 = counts
         .iter()
@@ -121,7 +124,9 @@ fn plane_entropy(plane: PlaneRef<'_>, mode: Mode) -> Option<(f64, f64)> {
         Mode::Diff => {
             let mut delta = [0u64; 256];
             for i in 1..256 {
-                let (Some(&cur), Some(&prev), Some(slot)) = (hist.get(i), hist.get(i - 1), delta.get_mut(i)) else {
+                let (Some(&cur), Some(&prev), Some(slot)) =
+                    (hist.get(i), hist.get(i - 1), delta.get_mut(i))
+                else {
                     continue;
                 };
                 *slot = cur.abs_diff(prev);
@@ -162,7 +167,10 @@ impl Filter {
                 continue;
             };
             let mode = self.opts.mode.label();
-            tags.push((format!("lavfi.entropy.entropy.{mode}.{name}"), fixed6(entropy)));
+            tags.push((
+                format!("lavfi.entropy.entropy.{mode}.{name}"),
+                fixed6(entropy),
+            ));
             tags.push((
                 format!("lavfi.entropy.normalized_entropy.{mode}.{name}"),
                 fixed6(normalized),
@@ -238,7 +246,10 @@ mod tests {
         let f = ramp_frame(16, 16);
         let mut filt = Filter::new(Options::default());
         let out = filt.step(f);
-        assert_eq!(out.metadata_get("lavfi.entropy.entropy.normal.Y"), Some("8.000000"));
+        assert_eq!(
+            out.metadata_get("lavfi.entropy.entropy.normal.Y"),
+            Some("8.000000")
+        );
         assert_eq!(
             out.metadata_get("lavfi.entropy.normalized_entropy.normal.Y"),
             Some("1.000000")
@@ -252,7 +263,10 @@ mod tests {
         let f = flat_frame(128, 8, 8);
         let mut filt = Filter::new(Options::default());
         let out = filt.step(f);
-        assert_eq!(out.metadata_get("lavfi.entropy.entropy.normal.Y"), Some("0.000000"));
+        assert_eq!(
+            out.metadata_get("lavfi.entropy.entropy.normal.Y"),
+            Some("0.000000")
+        );
     }
 
     /// Distinguishing input: a skewed three-level histogram (90/9/1 at
@@ -280,7 +294,10 @@ mod tests {
         }
         let mut filt = Filter::new(Options::default());
         let out = filt.step(f);
-        assert_eq!(out.metadata_get("lavfi.entropy.entropy.normal.Y"), Some("0.515895"));
+        assert_eq!(
+            out.metadata_get("lavfi.entropy.entropy.normal.Y"),
+            Some("0.515895")
+        );
         assert_eq!(
             out.metadata_get("lavfi.entropy.normalized_entropy.normal.Y"),
             Some("0.064487")
@@ -311,7 +328,10 @@ mod tests {
         let mut filt = Filter::new(Options::default());
         filt.opts.mode = Mode::Diff;
         let out = filt.step(f);
-        assert_eq!(out.metadata_get("lavfi.entropy.entropy.diff.Y"), Some("0.691776"));
+        assert_eq!(
+            out.metadata_get("lavfi.entropy.entropy.diff.Y"),
+            Some("0.691776")
+        );
         assert_eq!(
             out.metadata_get("lavfi.entropy.normalized_entropy.diff.Y"),
             Some("0.086472")
@@ -330,6 +350,9 @@ mod tests {
         let f = ramp_frame(16, 16);
         let mut filt = Filter::new(Options { mode: Mode::Diff });
         let out = filt.step(f);
-        assert_eq!(out.metadata_get("lavfi.entropy.entropy.diff.Y"), Some("0.000000"));
+        assert_eq!(
+            out.metadata_get("lavfi.entropy.entropy.diff.Y"),
+            Some("0.000000")
+        );
     }
 }

@@ -42,7 +42,9 @@ pub fn expand(text: &str, ctx: &ExpandContext<'_>) -> String {
             i += 2 + end + 1;
             continue;
         }
-        let Some(c) = text[i..].chars().next() else { break };
+        let Some(c) = text[i..].chars().next() else {
+            break;
+        };
         out.push(c);
         i += c.len_utf8();
     }
@@ -84,7 +86,10 @@ fn format_pts(rest: Option<&str>, pts: Option<f64>) -> String {
 /// not a lossy quantity, so `clippy::integer_division` (denied workspace-
 /// wide as a guard against silent precision loss elsewhere) does not apply
 /// here.
-#[allow(clippy::integer_division, reason = "exact base-60/100 decomposition of a duration, not a lossy division")]
+#[allow(
+    clippy::integer_division,
+    reason = "exact base-60/100 decomposition of a duration, not a lossy division"
+)]
 fn split_centiseconds(total_cs: i64) -> (i64, i64, i64, i64) {
     let (h, rem) = (total_cs / 360_000, total_cs % 360_000);
     let (m, rem) = (rem / 6_000, rem % 6_000);
@@ -96,17 +101,25 @@ fn expand_metadata(rest: Option<&str>, metadata: &[(String, String)]) -> String 
     let mut sub = rest.unwrap_or("").splitn(2, ':');
     let key = sub.next().unwrap_or("");
     let default = sub.next().unwrap_or("");
-    metadata.iter().find(|(k, _)| k == key).map_or_else(|| default.to_owned(), |(_, v)| v.clone())
+    metadata
+        .iter()
+        .find(|(k, _)| k == key)
+        .map_or_else(|| default.to_owned(), |(_, v)| v.clone())
 }
 
 fn expand_expr(rest: Option<&str>, ctx: &ExpandContext<'_>) -> String {
-    let Some(src) = rest else { return String::new() };
+    let Some(src) = rest else {
+        return String::new();
+    };
     let bindings = Bindings::new(&["n", "t"]);
     let Ok(expr) = Expr::parse(src, &bindings) else {
         return String::new();
     };
     let t = ctx.pts_seconds.unwrap_or(0.0);
-    #[allow(clippy::cast_precision_loss, reason = "frame_num display precision loss is inconsequential")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "frame_num display precision loss is inconsequential"
+    )]
     let vars = [ctx.frame_num as f64, t];
     format!("{}", expr.eval(&vars))
 }
@@ -116,7 +129,11 @@ mod tests {
     use super::*;
 
     fn ctx() -> ExpandContext<'static> {
-        ExpandContext { pts_seconds: Some(1.5), frame_num: 42, metadata: &[] }
+        ExpandContext {
+            pts_seconds: Some(1.5),
+            frame_num: 42,
+            metadata: &[],
+        }
     }
 
     #[test]

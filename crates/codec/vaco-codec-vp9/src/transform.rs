@@ -8,20 +8,31 @@ use vaco_codec_dsp_idct::vp9::{TxType, inverse_transform_2d};
 fn dc_q(bit_depth: u8, b: i32) -> i32 {
     let row = usize::from((bit_depth - 8) >> 1).min(2);
     let idx = usize::try_from(b.clamp(0, 255)).unwrap_or(0);
-    tables::DC_QLOOKUP.get(row).and_then(|r| r.get(idx)).copied().unwrap_or(4)
+    tables::DC_QLOOKUP
+        .get(row)
+        .and_then(|r| r.get(idx))
+        .copied()
+        .unwrap_or(4)
 }
 
 fn ac_q(bit_depth: u8, b: i32) -> i32 {
     let row = usize::from((bit_depth - 8) >> 1).min(2);
     let idx = usize::try_from(b.clamp(0, 255)).unwrap_or(0);
-    tables::AC_QLOOKUP.get(row).and_then(|r| r.get(idx)).copied().unwrap_or(4)
+    tables::AC_QLOOKUP
+        .get(row)
+        .and_then(|r| r.get(idx))
+        .copied()
+        .unwrap_or(4)
 }
 
 /// The per-plane, per-coefficient-position quantizer values a block needs:
 /// `(dc, ac)`.
 #[must_use]
 pub fn dequant_factors(bit_depth: u8, qindex: i32, delta_dc: i32, delta_ac: i32) -> (i32, i32) {
-    (dc_q(bit_depth, qindex + delta_dc), ac_q(bit_depth, qindex + delta_ac))
+    (
+        dc_q(bit_depth, qindex + delta_dc),
+        ac_q(bit_depth, qindex + delta_ac),
+    )
 }
 
 /// §8.6.2's reconstruct process: dequantize `tokens` (raster-order,
@@ -29,8 +40,18 @@ pub fn dequant_factors(bit_depth: u8, qindex: i32, delta_dc: i32, delta_ac: i32)
 /// return the residual (still raster order) ready to be added to the
 /// prediction and clipped.
 #[must_use]
-#[allow(clippy::integer_division, reason = "§8.6.2's reconstruct process: dqDenom is 1 or 2, truncating toward zero (the spec's own '/' operator)")]
-pub fn reconstruct(tokens: &[i32], tx_sz: i32, dc_quant: i32, ac_quant: i32, tx_type: TxType, lossless: bool) -> Vec<i64> {
+#[allow(
+    clippy::integer_division,
+    reason = "§8.6.2's reconstruct process: dqDenom is 1 or 2, truncating toward zero (the spec's own '/' operator)"
+)]
+pub fn reconstruct(
+    tokens: &[i32],
+    tx_sz: i32,
+    dc_quant: i32,
+    ac_quant: i32,
+    tx_type: TxType,
+    lossless: bool,
+) -> Vec<i64> {
     let n = u32::try_from(tx_sz + 2).unwrap_or(2);
     let n0 = 1usize << n;
     let dq_denom: i64 = if tx_sz == tables::TX_32X32 { 2 } else { 1 };

@@ -663,7 +663,9 @@ mod tests {
     #[test]
     fn opus_tags_share_the_same_grammar_after_their_own_magic() {
         let mut bytes = OPUS_COMMENT_MAGIC.to_vec();
-        bytes.extend_from_slice(&vorbis_comment_bytes("", &[("title", "x")])[VORBIS_COMMENT_MAGIC.len()..]);
+        bytes.extend_from_slice(
+            &vorbis_comment_bytes("", &[("title", "x")])[VORBIS_COMMENT_MAGIC.len()..],
+        );
         let tags = parse_comment_header(&bytes, OPUS_COMMENT_MAGIC);
         assert_eq!(tags, vec![("title".to_string(), "x".to_string())]);
     }

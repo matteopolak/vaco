@@ -142,7 +142,14 @@ pub fn plane_sad(a: PlaneRef<'_>, b: PlaneRef<'_>) -> u64 {
 /// clipped to both planes' bounds. `decimate` and `mpdecimate` divide the
 /// frame into blocks and threshold each block's SAD independently.
 #[must_use]
-pub fn block_sad(a: PlaneRef<'_>, b: PlaneRef<'_>, bx: usize, by: usize, bw: usize, bh: usize) -> u64 {
+pub fn block_sad(
+    a: PlaneRef<'_>,
+    b: PlaneRef<'_>,
+    bx: usize,
+    by: usize,
+    bw: usize,
+    bh: usize,
+) -> u64 {
     let rows = a.rows().min(b.rows()).min(by.saturating_add(bh));
     let mut sad: u64 = 0;
     for y in by..rows {
@@ -204,7 +211,9 @@ pub fn comb_score(plane: PlaneRef<'_>) -> u64 {
     }
     let mut score: u64 = 0;
     for y in 1..rows.saturating_sub(1) {
-        let (Some(above), Some(center), Some(below)) = (plane.row(y - 1), plane.row(y), plane.row(y + 1)) else {
+        let (Some(above), Some(center), Some(below)) =
+            (plane.row(y - 1), plane.row(y), plane.row(y + 1))
+        else {
             continue;
         };
         let width = above.len().min(center.len()).min(below.len());
@@ -385,7 +394,10 @@ mod tests {
         let combed = comb_score(f.plane(0).unwrap());
         let smooth = ramp_plane(4, 8);
         let smooth_score = comb_score(smooth.plane(0).unwrap());
-        assert!(combed > smooth_score, "combed={combed} smooth={smooth_score}");
+        assert!(
+            combed > smooth_score,
+            "combed={combed} smooth={smooth_score}"
+        );
         assert!(combed > 0);
     }
 

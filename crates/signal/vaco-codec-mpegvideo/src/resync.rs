@@ -34,7 +34,11 @@ pub fn find_bit_pattern(r: &mut BitReader<'_>, pattern: u32, len: u8, max_bits: 
     if len == 0 || len > 32 {
         return false;
     }
-    let mask = if len == 32 { u32::MAX } else { (1u32 << len) - 1 };
+    let mask = if len == 32 {
+        u32::MAX
+    } else {
+        (1u32 << len) - 1
+    };
     let wanted = pattern & mask;
     for _ in 0..max_bits {
         if r.check().is_err() {

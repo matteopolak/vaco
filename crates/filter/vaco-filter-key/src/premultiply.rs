@@ -107,17 +107,34 @@ use crate::common;
 use crate::sample;
 
 const PADS: &[Pad] = &[
-    Pad { name: "main", media_type: MediaType::Video },
-    Pad { name: "alpha", media_type: MediaType::Video },
+    Pad {
+        name: "main",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "alpha",
+        media_type: MediaType::Video,
+    },
 ];
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "premultiply", help = "(Un)PreMultiply first stream with first plane of second stream")]
+#[options(
+    name = "premultiply",
+    help = "(Un)PreMultiply first stream with first plane of second stream"
+)]
 pub(crate) struct Opts {
     #[opt(name = "planes", help = "set planes", default = 15, range = 0..=15, flags(video, filtering))]
     pub planes: i32,
-    #[opt(name = "inplace", help = "enable inplace mode (not implemented; parsed only)", default = false, flags(video, filtering))]
+    #[opt(
+        name = "inplace",
+        help = "enable inplace mode (not implemented; parsed only)",
+        default = false,
+        flags(video, filtering)
+    )]
     pub inplace: bool,
 }
 
@@ -166,7 +183,11 @@ pub(crate) fn apply(frame: &mut Frame, planes: i64, divide: bool) {
         .map(|y| {
             alpha_plane
                 .row(y)
-                .map(|r| (0..alpha_w).map(|x| sample::read(r, x, alpha_comp, big_endian)).collect())
+                .map(|r| {
+                    (0..alpha_w)
+                        .map(|x| sample::read(r, x, alpha_comp, big_endian))
+                        .collect()
+                })
                 .unwrap_or_default()
         })
         .collect();
@@ -174,12 +195,23 @@ pub(crate) fn apply(frame: &mut Frame, planes: i64, divide: bool) {
         if !sample::plane_selected(planes, ch) {
             continue;
         }
-        let Some(comp) = sample::component(format, ch) else { continue };
-        let Some(mut plane) = frame.plane_mut(comp.plane as usize) else { continue };
-        let w = plane.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+        let Some(comp) = sample::component(format, ch) else {
+            continue;
+        };
+        let Some(mut plane) = frame.plane_mut(comp.plane as usize) else {
+            continue;
+        };
+        let w = plane
+            .row_bytes()
+            .checked_div(usize::from(comp.step.max(1)))
+            .unwrap_or(0);
         for y in 0..plane.rows() {
-            let Some(alpha_row) = alpha_rows.get(y) else { continue };
-            let Some(row) = plane.row_mut(y) else { continue };
+            let Some(alpha_row) = alpha_rows.get(y) else {
+                continue;
+            };
+            let Some(row) = plane.row_mut(y) else {
+                continue;
+            };
             for x in 0..w {
                 let a = f64::from(alpha_row.get(x).copied().unwrap_or(0));
                 let v = f64::from(sample::read(row, x, comp, big_endian));
@@ -207,7 +239,11 @@ struct Filter {
 }
 
 impl FrameSyncFilter for Filter {
-    fn on_event(&mut self, _ctx: &mut FilterContext<'_>, event: &mut FrameSyncEvent<'_>) -> Result<FrameOut> {
+    fn on_event(
+        &mut self,
+        _ctx: &mut FilterContext<'_>,
+        event: &mut FrameSyncEvent<'_>,
+    ) -> Result<FrameOut> {
         let Some(mut main) = event.take(0) else {
             return Ok(FrameOut::None);
         };
@@ -225,7 +261,11 @@ impl FrameSyncFilter for Filter {
     }
 }
 
-fn build(desc: FilterDesc, divide: bool, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+fn build(
+    desc: FilterDesc,
+    divide: bool,
+    req: &Instantiate<'_>,
+) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
     if opts.inplace {
         return Err(format!(

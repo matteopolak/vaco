@@ -418,10 +418,7 @@ impl RateController {
             let implied_k = (frame.bits as f64) * frame.qscale / self.last_complexity;
             if implied_k.is_finite() && implied_k > 0.0 {
                 self.complexity_k = if self.k_initialized {
-                    COMPLEXITY_EMA_ALPHA.mul_add(
-                        implied_k - self.complexity_k,
-                        self.complexity_k,
-                    )
+                    COMPLEXITY_EMA_ALPHA.mul_add(implied_k - self.complexity_k, self.complexity_k)
                 } else {
                     implied_k
                 };

@@ -115,7 +115,8 @@ fn nth_slice_and_extradata(data: &[u8], n: usize) -> (Vec<u8>, Vec<u8>) {
 #[test]
 fn resolves_cavlc_from_a_real_x264_cavlc_stream() {
     let mut d = decoder();
-    d.set_extradata(include_bytes!("fixtures/cavlc_extradata.bin")).unwrap();
+    d.set_extradata(include_bytes!("fixtures/cavlc_extradata.bin"))
+        .unwrap();
     let pkt = packet(include_bytes!("fixtures/cavlc_idr_slice.264"));
     let err = d.send_packet(Some(&pkt)).unwrap_err();
     let Error::Unsupported(msg) = err else {
@@ -180,7 +181,8 @@ fn a_high_profile_8x8_transform_stream_now_decodes() {
     // agent who *fixes* the gap a debugging session; asserting the
     // mapping (a real decode) instead, not the emptiness.
     let mut d = decoder();
-    d.set_extradata(include_bytes!("fixtures/cabac_extradata.bin")).unwrap();
+    d.set_extradata(include_bytes!("fixtures/cabac_extradata.bin"))
+        .unwrap();
     let pkt = packet(include_bytes!("fixtures/cabac_idr_slice.264"));
     d.send_packet(Some(&pkt)).unwrap();
     // `H264Decoder` now declares `Caps::DELAY` (B-slice output reordering
@@ -192,7 +194,13 @@ fn a_high_profile_8x8_transform_stream_now_decodes() {
     // send before a frame is guaranteed available.
     d.send_packet(None).unwrap();
     let frame = d.receive_frame().unwrap();
-    let FrameData::Video { format, width, height, planes } = &frame.data else {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        planes,
+    } = &frame.data
+    else {
         panic!("expected a video frame, got {:?}", frame.data);
     };
     assert_eq!(format.name(), "yuv420p");
@@ -208,7 +216,8 @@ fn a_high_profile_8x8_transform_stream_now_decodes() {
 #[test]
 fn decodes_a_real_frame_from_a_real_x264_cabac_stream() {
     let mut d = decoder();
-    let (extradata, slice) = split_extradata_and_first_slice(include_bytes!("fixtures/cabac_i_only.264"));
+    let (extradata, slice) =
+        split_extradata_and_first_slice(include_bytes!("fixtures/cabac_i_only.264"));
     d.set_extradata(&extradata).unwrap();
     let pkt = packet(&slice);
     d.send_packet(Some(&pkt)).unwrap();
@@ -217,7 +226,13 @@ fn decodes_a_real_frame_from_a_real_x264_cabac_stream() {
     // ready, so this test signals end of stream first.
     d.send_packet(None).unwrap();
     let frame = d.receive_frame().unwrap();
-    let FrameData::Video { format, width, height, planes } = &frame.data else {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        planes,
+    } = &frame.data
+    else {
         panic!("expected a video frame, got {:?}", frame.data);
     };
     assert_eq!(format.name(), "yuv420p");
@@ -261,7 +276,8 @@ fn eof_drains_cleanly() {
 #[test]
 fn flush_does_not_panic_and_leaves_the_decoder_usable() {
     let mut d = decoder();
-    let (extradata, slice) = split_extradata_and_first_slice(include_bytes!("fixtures/cabac_i_only.264"));
+    let (extradata, slice) =
+        split_extradata_and_first_slice(include_bytes!("fixtures/cabac_i_only.264"));
     d.set_extradata(&extradata).unwrap();
     d.flush();
     let pkt = packet(&slice);
@@ -293,14 +309,18 @@ fn flush_does_not_panic_and_leaves_the_decoder_usable() {
 #[test]
 fn a_real_bt709_stream_stamps_its_measured_colour_onto_the_decoded_frame() {
     let mut d = decoder();
-    let (extradata, slice) = split_extradata_and_first_slice(include_bytes!("fixtures/vui_bt709.264"));
+    let (extradata, slice) =
+        split_extradata_and_first_slice(include_bytes!("fixtures/vui_bt709.264"));
     d.set_extradata(&extradata).unwrap();
     let pkt = packet(&slice);
     d.send_packet(Some(&pkt)).unwrap();
     d.send_packet(None).unwrap();
     let frame = d.receive_frame().unwrap();
     assert_eq!(frame.color.primaries, vaco_color::ColorPrimaries::Bt709);
-    assert_eq!(frame.color.transfer, vaco_color::TransferCharacteristic::Bt709);
+    assert_eq!(
+        frame.color.transfer,
+        vaco_color::TransferCharacteristic::Bt709
+    );
     assert_eq!(frame.color.matrix, vaco_color::MatrixCoefficients::Bt709);
     assert_eq!(frame.color.range, vaco_color::ColorRange::Limited);
 }
@@ -319,17 +339,30 @@ fn a_real_bt709_stream_stamps_its_measured_colour_onto_the_decoded_frame() {
 #[test]
 fn a_stream_with_no_vui_still_decodes_to_the_unspecified_default() {
     let mut d = decoder();
-    let (extradata, slice) = split_extradata_and_first_slice(include_bytes!("fixtures/cabac_i_only.264"));
+    let (extradata, slice) =
+        split_extradata_and_first_slice(include_bytes!("fixtures/cabac_i_only.264"));
     d.set_extradata(&extradata).unwrap();
     let pkt = packet(&slice);
     d.send_packet(Some(&pkt)).unwrap();
     d.send_packet(None).unwrap();
     let frame = d.receive_frame().unwrap();
-    assert_eq!(frame.color.primaries, vaco_color::ColorPrimaries::Unspecified);
-    assert_eq!(frame.color.transfer, vaco_color::TransferCharacteristic::Unspecified);
-    assert_eq!(frame.color.matrix, vaco_color::MatrixCoefficients::Unspecified);
+    assert_eq!(
+        frame.color.primaries,
+        vaco_color::ColorPrimaries::Unspecified
+    );
+    assert_eq!(
+        frame.color.transfer,
+        vaco_color::TransferCharacteristic::Unspecified
+    );
+    assert_eq!(
+        frame.color.matrix,
+        vaco_color::MatrixCoefficients::Unspecified
+    );
     assert_eq!(frame.color.range, vaco_color::ColorRange::Unspecified);
-    assert_eq!(frame.color.chroma_location, vaco_color::ChromaLocation::Left);
+    assert_eq!(
+        frame.color.chroma_location,
+        vaco_color::ChromaLocation::Left
+    );
 }
 
 /// [`split_extradata_and_first_slice`]'s sibling for an access unit whose
@@ -382,8 +415,9 @@ fn split_extradata_and_first_access_unit(data: &[u8]) -> (Vec<u8>, Vec<u8>) {
 #[test]
 fn a_real_hdr10_stream_attaches_the_measured_mastering_display_and_cll() {
     let mut d = decoder();
-    let (extradata, access_unit) =
-        split_extradata_and_first_access_unit(include_bytes!("fixtures/hdr10_mastering_display.264"));
+    let (extradata, access_unit) = split_extradata_and_first_access_unit(include_bytes!(
+        "fixtures/hdr10_mastering_display.264"
+    ));
     d.set_extradata(&extradata).unwrap();
     let mut budget = Budget::new(Limits::default());
     let pkt = Packet::from_slice(&mut budget, &access_unit).unwrap();
@@ -399,19 +433,61 @@ fn a_real_hdr10_stream_attaches_the_measured_mastering_display_and_cll() {
     };
     // red, green, blue — see `vaco_frame::MasteringDisplay`'s own doc for
     // why this is not the bitstream's green/blue/red order.
-    assert_eq!(mastering.primaries[0][0], vaco_core::Rational::new(34_000, 50_000), "red_x");
-    assert_eq!(mastering.primaries[0][1], vaco_core::Rational::new(16_000, 50_000), "red_y");
-    assert_eq!(mastering.primaries[1][0], vaco_core::Rational::new(13_250, 50_000), "green_x");
-    assert_eq!(mastering.primaries[1][1], vaco_core::Rational::new(34_500, 50_000), "green_y");
-    assert_eq!(mastering.primaries[2][0], vaco_core::Rational::new(7_500, 50_000), "blue_x");
-    assert_eq!(mastering.primaries[2][1], vaco_core::Rational::new(3_000, 50_000), "blue_y");
-    assert_eq!(mastering.white_point[0], vaco_core::Rational::new(15_635, 50_000), "white_point_x");
-    assert_eq!(mastering.white_point[1], vaco_core::Rational::new(16_450, 50_000), "white_point_y");
-    assert_eq!(mastering.min_luminance, vaco_core::Rational::new(1, 10_000), "min_luminance");
-    assert_eq!(mastering.max_luminance, vaco_core::Rational::new(10_000_000, 10_000), "max_luminance");
+    assert_eq!(
+        mastering.primaries[0][0],
+        vaco_core::Rational::new(34_000, 50_000),
+        "red_x"
+    );
+    assert_eq!(
+        mastering.primaries[0][1],
+        vaco_core::Rational::new(16_000, 50_000),
+        "red_y"
+    );
+    assert_eq!(
+        mastering.primaries[1][0],
+        vaco_core::Rational::new(13_250, 50_000),
+        "green_x"
+    );
+    assert_eq!(
+        mastering.primaries[1][1],
+        vaco_core::Rational::new(34_500, 50_000),
+        "green_y"
+    );
+    assert_eq!(
+        mastering.primaries[2][0],
+        vaco_core::Rational::new(7_500, 50_000),
+        "blue_x"
+    );
+    assert_eq!(
+        mastering.primaries[2][1],
+        vaco_core::Rational::new(3_000, 50_000),
+        "blue_y"
+    );
+    assert_eq!(
+        mastering.white_point[0],
+        vaco_core::Rational::new(15_635, 50_000),
+        "white_point_x"
+    );
+    assert_eq!(
+        mastering.white_point[1],
+        vaco_core::Rational::new(16_450, 50_000),
+        "white_point_y"
+    );
+    assert_eq!(
+        mastering.min_luminance,
+        vaco_core::Rational::new(1, 10_000),
+        "min_luminance"
+    );
+    assert_eq!(
+        mastering.max_luminance,
+        vaco_core::Rational::new(10_000_000, 10_000),
+        "max_luminance"
+    );
 
     let Some(cll) = frame.side_data.iter().find_map(|sd| match sd {
-        vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall } => Some((*max_cll, *max_fall)),
+        vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall } => {
+            Some((*max_cll, *max_fall))
+        }
         _ => None,
     }) else {
         panic!("frame should carry ContentLightLevel side data");

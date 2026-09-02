@@ -5,9 +5,7 @@
 //! line-interleaved scans are covered — see [`crate`]'s module doc for why.
 
 use crate::bits::{BitReader, BitWriter};
-use crate::context::{
-    Contexts as CtxTable, RunModeState, context_index, med,
-};
+use crate::context::{Contexts as CtxTable, RunModeState, context_index, med};
 use crate::golomb::{self, map_alternate, map_regular, unmap_alternate, unmap_regular};
 use crate::marker;
 use vaco_core::{Error, Result};
@@ -91,11 +89,30 @@ fn sample_set(buf: &mut [u8], geo: Geometry, comp: usize, x: usize, y: usize, v:
 /// §3.6's boundary rules: zero north neighbours on the first line; `a`/`d`
 /// copy `b` at the left/right edges; `c` at the left edge carries the `a`
 /// used for column 0 of the *previous* line.
-#[allow(clippy::many_single_char_names, reason = "matches the LOCO-I paper's own notation: a/b/c/d neighbours, g/m run-mode parameter, k Golomb parameter, x/y coordinates")]
-fn neighbors(buf: &[u8], geo: Geometry, comp: usize, x: usize, y: usize, prev_first_a: i32) -> Neighbors {
+#[allow(
+    clippy::many_single_char_names,
+    reason = "matches the LOCO-I paper's own notation: a/b/c/d neighbours, g/m run-mode parameter, k Golomb parameter, x/y coordinates"
+)]
+fn neighbors(
+    buf: &[u8],
+    geo: Geometry,
+    comp: usize,
+    x: usize,
+    y: usize,
+    prev_first_a: i32,
+) -> Neighbors {
     if y == 0 {
-        let a = if x == 0 { 0 } else { sample_get(buf, geo, comp, x - 1, y) };
-        Neighbors { a, b: 0, c: 0, d: 0 }
+        let a = if x == 0 {
+            0
+        } else {
+            sample_get(buf, geo, comp, x - 1, y)
+        };
+        Neighbors {
+            a,
+            b: 0,
+            c: 0,
+            d: 0,
+        }
     } else {
         let b = sample_get(buf, geo, comp, x, y - 1);
         let d = if x + 1 < geo.width {
@@ -132,7 +149,11 @@ fn decode_regular_sample(
     let k = ctx.k();
     let use_alt = ctx.use_alternate_mapping(k);
     let y = golomb::decode(reader, k)?;
-    let mapped_eps = if use_alt { unmap_alternate(y) } else { unmap_regular(y) };
+    let mapped_eps = if use_alt {
+        unmap_alternate(y)
+    } else {
+        unmap_regular(y)
+    };
     ctx.update(mapped_eps);
     let raw_eps = if flip { -mapped_eps } else { mapped_eps };
     Ok(wrap_to_sample(corrected + raw_eps))
@@ -154,7 +175,11 @@ fn encode_regular_sample(
     let eps = reduce_mod_alpha(signed_eps);
     let k = ctx.k();
     let use_alt = ctx.use_alternate_mapping(k);
-    let mapped = if use_alt { map_alternate(eps) } else { map_regular(eps) };
+    let mapped = if use_alt {
+        map_alternate(eps)
+    } else {
+        map_regular(eps)
+    };
     golomb::encode(writer, mapped, k);
     ctx.update(eps);
     Ok(())
@@ -200,7 +225,11 @@ fn decode_ri_sample(
         .ok_or_else(context_missing)?;
     let k = ctx.k();
     let y = golomb::decode_limited(reader, k, golomb::ri_qmax(run_g))?;
-    let shifted = if same { unmap_alternate(y) } else { unmap_regular(y) };
+    let shifted = if same {
+        unmap_alternate(y)
+    } else {
+        unmap_regular(y)
+    };
     ctx.update(shifted);
     let eps = if same {
         if shifted >= 0 { shifted + 1 } else { shifted }
@@ -235,7 +264,11 @@ fn encode_ri_sample(
     } else {
         eps
     };
-    let mapped = if same { map_alternate(shifted) } else { map_regular(shifted) };
+    let mapped = if same {
+        map_alternate(shifted)
+    } else {
+        map_regular(shifted)
+    };
     golomb::encode_limited(writer, mapped, k, golomb::ri_qmax(run_g));
     ctx.update(shifted);
     Ok(())
@@ -244,7 +277,11 @@ fn encode_ri_sample(
 /// §3.5's run-mode subroutine, decode direction. Returns the column after
 /// the run (either `width`, or one past the decoded run-interruption
 /// sample).
-#[allow(clippy::too_many_arguments, clippy::many_single_char_names, reason = "one call site per run; every argument is load-bearing plane geometry or shared state, and names match the paper (g/m run parameter, x/y coordinates)")]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::many_single_char_names,
+    reason = "one call site per run; every argument is load-bearing plane geometry or shared state, and names match the paper (g/m run parameter, x/y coordinates)"
+)]
 fn decode_run(
     ctxs: &mut CtxTable,
     comp_state: &mut CompState,
@@ -284,7 +321,11 @@ fn decode_run(
             }
             x += r;
             comp_state.run.bump_down();
-            let b_val = if y == 0 { 0 } else { sample_get(buf, geo, comp, x, y - 1) };
+            let b_val = if y == 0 {
+                0
+            } else {
+                sample_get(buf, geo, comp, x, y - 1)
+            };
             let sample_val = decode_ri_sample(ctxs, reader, a_val, b_val, g)?;
             sample_set(buf, geo, comp, x, y, sample_val);
             return Ok(x + 1);
@@ -293,7 +334,11 @@ fn decode_run(
 }
 
 /// §3.5's run-mode subroutine, encode direction.
-#[allow(clippy::too_many_arguments, clippy::many_single_char_names, reason = "one call site per run; every argument is load-bearing plane geometry or shared state, and names match the paper (g/m run parameter, x/y coordinates)")]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::many_single_char_names,
+    reason = "one call site per run; every argument is load-bearing plane geometry or shared state, and names match the paper (g/m run parameter, x/y coordinates)"
+)]
 fn encode_run(
     ctxs: &mut CtxTable,
     comp_state: &mut CompState,
@@ -329,7 +374,11 @@ fn encode_run(
             writer.put_bits(r as u32, g);
             x += r;
             comp_state.run.bump_down();
-            let b_val = if y == 0 { 0 } else { sample_get(buf, geo, comp, x, y - 1) };
+            let b_val = if y == 0 {
+                0
+            } else {
+                sample_get(buf, geo, comp, x, y - 1)
+            };
             let actual = sample_get(buf, geo, comp, x, y) as u8;
             encode_ri_sample(ctxs, writer, a_val, b_val, actual, g)?;
             return Ok(x + 1);
@@ -513,7 +562,9 @@ pub fn decode(data: &[u8], budget: &mut Budget) -> Result<Frame> {
     let FrameData::Video { planes, .. } = &mut frame.data else {
         return Err(Error::InvalidData("jpegls: expected a video frame"));
     };
-    let plane = planes.get_mut(0).ok_or(Error::InvalidData("jpegls: no plane 0"))?;
+    let plane = planes
+        .get_mut(0)
+        .ok_or(Error::InvalidData("jpegls: no plane 0"))?;
     let geo = Geometry {
         stride: plane.stride,
         bpp,
@@ -564,12 +615,19 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
     let (nf, bpp): (u8, usize) = match *format {
         PixFmt::Gray8 => (1, 1),
         PixFmt::Rgb24 => (3, 3),
-        _ => return Err(Error::Unsupported("jpegls: encoder needs gray8 or rgb24 input")),
+        _ => {
+            return Err(Error::Unsupported(
+                "jpegls: encoder needs gray8 or rgb24 input",
+            ));
+        }
     };
-    if *width == 0 || *height == 0 || *width > u32::from(u16::MAX) || *height > u32::from(u16::MAX) {
+    if *width == 0 || *height == 0 || *width > u32::from(u16::MAX) || *height > u32::from(u16::MAX)
+    {
         return Err(Error::InvalidData("jpegls: zero-sized or oversized frame"));
     }
-    let plane = planes.first().ok_or(Error::InvalidData("jpegls: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("jpegls: no plane 0"))?;
     let geo = Geometry {
         stride: plane.stride,
         bpp,
@@ -580,7 +638,10 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
 
     let mut out = Vec::new();
     marker::write_soi(&mut out);
-    #[allow(clippy::cast_possible_truncation, reason = "already bounded to u16::MAX above")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "already bounded to u16::MAX above"
+    )]
     let (w16, h16) = (*width as u16, *height as u16);
     marker::write_sof55(&mut out, w16, h16, nf);
     let ilv = u8::from(nf != 1);
@@ -639,7 +700,13 @@ mod tests {
     fn decode_gray(data: &[u8]) -> (u32, u32, Vec<u8>) {
         let mut budget = Budget::new(Limits::permissive());
         let frame = decode(data, &mut budget).unwrap();
-        let FrameData::Video { width, height, planes, .. } = &frame.data else {
+        let FrameData::Video {
+            width,
+            height,
+            planes,
+            ..
+        } = &frame.data
+        else {
             unreachable!()
         };
         let plane = &planes[0];
@@ -792,4 +859,3 @@ mod tests {
         }
     }
 }
-

@@ -135,14 +135,28 @@ impl Filter {
         common::estimate_motion(prev, cur, width, height, self.range)
     }
 
-    fn warp(&self, pool: &FramePool, frame: &Frame, format: vaco_pixfmt::PixFmt, width: u32, height: u32, corr: (f64, f64)) -> Option<Frame> {
+    fn warp(
+        &self,
+        pool: &FramePool,
+        frame: &Frame,
+        format: vaco_pixfmt::PixFmt,
+        width: u32,
+        height: u32,
+        corr: (f64, f64),
+    ) -> Option<Frame> {
         common::warp_translate(pool, frame, format, width, height, corr, self.edge)
     }
 }
 
 impl FrameFilter for Filter {
     fn filter_frame(&mut self, ctx: &mut FilterContext<'_>, frame: Frame) -> Result<FrameOut> {
-        let FrameData::Video { format, width, height, .. } = frame.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = frame.data
+        else {
             return Ok(FrameOut::One(frame));
         };
         if !self.checked_format {
@@ -158,7 +172,10 @@ impl FrameFilter for Filter {
         self.trajectory.1 += motion.1;
         self.smoothed.0 += (self.trajectory.0 - self.smoothed.0) * SMOOTHING_ALPHA;
         self.smoothed.1 += (self.trajectory.1 - self.smoothed.1) * SMOOTHING_ALPHA;
-        let corr = (self.trajectory.0 - self.smoothed.0, self.trajectory.1 - self.smoothed.1);
+        let corr = (
+            self.trajectory.0 - self.smoothed.0,
+            self.trajectory.1 - self.smoothed.1,
+        );
         let out = self.warp(ctx.pool(), &frame, format, width, height, corr);
         self.prev = Some(frame.clone());
         match out {
@@ -206,8 +223,13 @@ mod tests {
                         // A diagonal ramp pattern, distinctive enough that a
                         // horizontal shift is unambiguously detectable by
                         // block search, and stable under the fixed 3x3 grid.
-                        #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, reason = "test fixture, small bounded values")]
-                        let v = (((x as i32 - shift).rem_euclid(256)) as u8).wrapping_add((y * 7) as u8);
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            clippy::cast_possible_wrap,
+                            reason = "test fixture, small bounded values"
+                        )]
+                        let v = (((x as i32 - shift).rem_euclid(256)) as u8)
+                            .wrapping_add((y * 7) as u8);
                         *cell = v;
                     }
                 }
@@ -247,11 +269,25 @@ mod tests {
         let jitters = [0i32, 6, -6, 6, -6, 6, -6];
         let raw: Vec<Frame> = jitters.iter().map(|&s| shifted_frame(w, h, s)).collect();
 
-        let mut filt = Filter::new(&Opts { rx: 16, ry: 16, edge: "original".to_owned() }).unwrap();
-        let corrected: Vec<Frame> = raw.iter().map(|f| feed(&mut filt, f.clone(), w, h)).collect();
+        let mut filt = Filter::new(&Opts {
+            rx: 16,
+            ry: 16,
+            edge: "original".to_owned(),
+        })
+        .unwrap();
+        let corrected: Vec<Frame> = raw
+            .iter()
+            .map(|f| feed(&mut filt, f.clone(), w, h))
+            .collect();
 
-        let raw_diff: u64 = raw.windows(2).map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap())).sum();
-        let corrected_diff: u64 = corrected.windows(2).map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap())).sum();
+        let raw_diff: u64 = raw
+            .windows(2)
+            .map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap()))
+            .sum();
+        let corrected_diff: u64 = corrected
+            .windows(2)
+            .map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap()))
+            .sum();
 
         assert!(
             corrected_diff < raw_diff,
@@ -261,13 +297,23 @@ mod tests {
 
     #[test]
     fn creatable_with_defaults() {
-        let req = Instantiate { name: "deshake", instance: "deshake", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "deshake",
+            instance: "deshake",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_ok());
     }
 
     #[test]
     fn bad_edge_is_a_clean_error() {
-        let req = Instantiate { name: "deshake", instance: "deshake", args: Some("edge=nonsense"), arguments: &[] };
+        let req = Instantiate {
+            name: "deshake",
+            instance: "deshake",
+            args: Some("edge=nonsense"),
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 }

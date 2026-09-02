@@ -365,10 +365,7 @@ mod tests {
             ("a_target".to_string(), "vaco-core".to_string()),
             ("b_target".to_string(), "vaco-frame".to_string()),
         ];
-        let referenced_by = refs(&[
-            ("a_target", &["vaco-core"]),
-            ("b_target", &["vaco-frame"]),
-        ]);
+        let referenced_by = refs(&[("a_target", &["vaco-core"]), ("b_target", &["vaco-frame"])]);
         let layer_of = layers(&[("vaco-core", "core"), ("vaco-frame", "model")]);
 
         let out = render(&entries, &referenced_by, &layer_of);

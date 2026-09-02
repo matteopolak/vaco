@@ -115,12 +115,18 @@ pub(crate) fn tap(n: usize, n_taps: usize, kind: Kind, beta: f64) -> f64 {
     let impulse = |k: usize| -> f64 {
         #[allow(clippy::cast_precision_loss, reason = "k is a small tap index")]
         let k_f = k as f64;
-        if (k_f - center).abs() < 1e-9 { 1.0 } else { 0.0 }
+        if (k_f - center).abs() < 1e-9 {
+            1.0
+        } else {
+            0.0
+        }
     };
     match kind {
         Kind::Lowpass(fc) => lowpass_tap(n, n_taps, fc, beta),
         Kind::Highpass(fc) => impulse(n) - lowpass_tap(n, n_taps, fc, beta),
-        Kind::Bandpass(lo, hi) => lowpass_tap(n, n_taps, hi, beta) - lowpass_tap(n, n_taps, lo, beta),
+        Kind::Bandpass(lo, hi) => {
+            lowpass_tap(n, n_taps, hi, beta) - lowpass_tap(n, n_taps, lo, beta)
+        }
         Kind::Bandreject(lo, hi) => {
             impulse(n) - (lowpass_tap(n, n_taps, hi, beta) - lowpass_tap(n, n_taps, lo, beta))
         }
@@ -154,7 +160,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -204,20 +211,27 @@ impl SourceFilter for Source {
         if self.next >= total {
             return Ok(None);
         }
-        let want = u32::try_from(total - self.next).unwrap_or(self.block).min(self.block);
+        let want = u32::try_from(total - self.next)
+            .unwrap_or(self.block)
+            .min(self.block);
         let layout = vaco_chlayout::ChannelLayout::from_name("mono")
             .or_else(|| vaco_chlayout::ChannelLayout::default_for(1))
-            .ok_or(vaco_core::Error::Unsupported("no mono channel layout available"))?;
-        let mut frame =
-            ctx.pool()
-                .acquire_audio(SampleFmt::F32, layout, want, self.sample_rate)?;
+            .ok_or(vaco_core::Error::Unsupported(
+                "no mono channel layout available",
+            ))?;
+        let mut frame = ctx
+            .pool()
+            .acquire_audio(SampleFmt::F32, layout, want, self.sample_rate)?;
         if let Some(mut plane) = frame.plane_mut(0)
             && let Some(row) = plane.row_mut(0)
         {
             for (i, px) in row.chunks_exact_mut(4).enumerate() {
                 #[allow(clippy::cast_possible_truncation, reason = "index stays within n_taps")]
                 let idx = (self.next as usize) + i;
-                #[allow(clippy::cast_possible_truncation, reason = "tap() is a small finite value")]
+                #[allow(
+                    clippy::cast_possible_truncation,
+                    reason = "tap() is a small finite value"
+                )]
                 let v = tap(idx, self.n_taps, self.kind, self.beta) as f32;
                 px.copy_from_slice(&v.to_le_bytes());
             }
@@ -303,7 +317,9 @@ mod tests {
         // A lowpass FIR's DC gain (sum of taps) should be close to 1.0.
         let n_taps = 501;
         let beta = kaiser_beta_from_attenuation(120.0);
-        let sum: f64 = (0..n_taps).map(|n| tap(n, n_taps, Kind::Lowpass(0.1), beta)).sum();
+        let sum: f64 = (0..n_taps)
+            .map(|n| tap(n, n_taps, Kind::Lowpass(0.1), beta))
+            .sum();
         assert!((sum - 1.0).abs() < 0.01, "{sum}");
     }
 
@@ -311,7 +327,9 @@ mod tests {
     fn highpass_kernel_has_near_zero_dc_gain() {
         let n_taps = 501;
         let beta = kaiser_beta_from_attenuation(120.0);
-        let sum: f64 = (0..n_taps).map(|n| tap(n, n_taps, Kind::Highpass(0.1), beta)).sum();
+        let sum: f64 = (0..n_taps)
+            .map(|n| tap(n, n_taps, Kind::Highpass(0.1), beta))
+            .sum();
         assert!(sum.abs() < 0.01, "{sum}");
     }
 

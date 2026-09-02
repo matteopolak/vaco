@@ -110,10 +110,22 @@ pub(crate) struct ImdctPlans {
 
 impl ImdctPlans {
     pub(crate) fn new() -> Result<Self> {
-        let long = Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, LONG_LEN, 1.0, TxFlags::FULL_IMDCT)
-            .map_err(|_| Error::InvalidData("vaco-codec-aac: failed to build the long IMDCT plan"))?;
-        let short = Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, SHORT_LEN, 1.0, TxFlags::FULL_IMDCT)
-            .map_err(|_| Error::InvalidData("vaco-codec-aac: failed to build the short IMDCT plan"))?;
+        let long = Plan::<f64>::new(
+            TxKind::Mdct,
+            Direction::Inverse,
+            LONG_LEN,
+            1.0,
+            TxFlags::FULL_IMDCT,
+        )
+        .map_err(|_| Error::InvalidData("vaco-codec-aac: failed to build the long IMDCT plan"))?;
+        let short = Plan::<f64>::new(
+            TxKind::Mdct,
+            Direction::Inverse,
+            SHORT_LEN,
+            1.0,
+            TxFlags::FULL_IMDCT,
+        )
+        .map_err(|_| Error::InvalidData("vaco-codec-aac: failed to build the short IMDCT plan"))?;
         Ok(Self {
             long: Tx::new(long),
             short: Tx::new(short),
@@ -148,7 +160,12 @@ fn deinterleave_and_rescale(
 ) -> Vec<Vec<f32>> {
     let mut spec = vec![vec![0.0f32; window_len]; num_windows];
     let mut window_base = 0usize;
-    for (g, (group_xq, group_bv)) in stream.x_quant.iter().zip(stream.band_values.iter()).enumerate() {
+    for (g, (group_xq, group_bv)) in stream
+        .x_quant
+        .iter()
+        .zip(stream.band_values.iter())
+        .enumerate()
+    {
         let glen = usize::from(group_lengths.get(g).copied().unwrap_or(1));
         let mut pos = 0usize; // position within this group's flat x_quant array
         let mut j = 0usize; // position within each window's own spectrum
@@ -175,15 +192,19 @@ fn deinterleave_and_rescale(
                             0.0
                         };
                         for (k, s) in samples.into_iter().enumerate() {
-                            if let Some(slot) = spec.get_mut(out_win).and_then(|w| w.get_mut(j + k)) {
+                            if let Some(slot) = spec.get_mut(out_win).and_then(|w| w.get_mut(j + k))
+                            {
                                 *slot = (f64::from(s) * scale) as f32;
                             }
                         }
                     }
                     BandValue::Scalefactor(sf) => {
                         for k in 0..width {
-                            let Some(&xq) = group_xq.get(pos + win * width + k) else { continue };
-                            if let Some(slot) = spec.get_mut(out_win).and_then(|w| w.get_mut(j + k)) {
+                            let Some(&xq) = group_xq.get(pos + win * width + k) else {
+                                continue;
+                            };
+                            if let Some(slot) = spec.get_mut(out_win).and_then(|w| w.get_mut(j + k))
+                            {
                                 *slot = inverse_quantize_and_rescale(xq, sf);
                             }
                         }
@@ -245,7 +266,11 @@ fn apply_intensity_stereo(
             for win in 0..glen {
                 let out_win = window_base + win;
                 for k in 0..width {
-                    let l = left.get(out_win).and_then(|w| w.get(j + k)).copied().unwrap_or(0.0);
+                    let l = left
+                        .get(out_win)
+                        .and_then(|w| w.get(j + k))
+                        .copied()
+                        .unwrap_or(0.0);
                     if let Some(slot) = right.get_mut(out_win).and_then(|w| w.get_mut(j + k)) {
                         *slot = l * scale;
                     }
@@ -277,7 +302,12 @@ fn apply_ms_stereo(
                 break;
             };
             let width = usize::from(hi - lo);
-            let used = ms_mask.used.get(g).and_then(|g| g.get(sfb)).copied().unwrap_or(false);
+            let used = ms_mask
+                .used
+                .get(g)
+                .and_then(|g| g.get(sfb))
+                .copied()
+                .unwrap_or(false);
             let is_special = matches!(
                 value,
                 BandValue::IntensityPosition(_) | BandValue::NoiseEnergy(_)
@@ -308,12 +338,27 @@ fn apply_ms_stereo(
 }
 
 /// Apply this channel's TNS filters, one call per window.
-fn apply_tns(stream: &IcsStream, spec: &mut [Vec<f32>], swb_offset: &[u16], max_sfb: usize, max_bands: u8, is_short: bool) {
+fn apply_tns(
+    stream: &IcsStream,
+    spec: &mut [Vec<f32>],
+    swb_offset: &[u16],
+    max_sfb: usize,
+    max_bands: u8,
+    is_short: bool,
+) {
     let Some(tns) = &stream.tns else { return };
     let num_swb = swb_offset.len().saturating_sub(1);
     for (w, filters) in tns.per_window.iter().enumerate() {
         if let Some(window_spec) = spec.get_mut(w) {
-            tns_apply::apply_to_window(window_spec, filters, swb_offset, num_swb, max_sfb, max_bands, is_short);
+            tns_apply::apply_to_window(
+                window_spec,
+                filters,
+                swb_offset,
+                num_swb,
+                max_sfb,
+                max_bands,
+                is_short,
+            );
         }
     }
 }
@@ -333,14 +378,26 @@ fn apply_tns(stream: &IcsStream, spec: &mut [Vec<f32>], swb_offset: &[u16], max_
 /// edge case — see that crate's own doc comment and
 /// `docs/signal/vaco-codec-dsp-sinewin.md`.
 fn build_window(sequence: WindowSequence, this_shape: bool, prev_shape: bool) -> [f32; LONG_LEN] {
-    let long_left_full: [f32; LONG_LEN] =
-        if prev_shape { kbd_window::<LONG_LEN>(KBD_ALPHA_LONG) } else { sine_window::<LONG_LEN>() };
-    let long_right_full: [f32; LONG_LEN] =
-        if this_shape { kbd_window::<LONG_LEN>(KBD_ALPHA_LONG) } else { sine_window::<LONG_LEN>() };
-    let short_left_full: [f32; SHORT_LEN] =
-        if prev_shape { kbd_window::<SHORT_LEN>(KBD_ALPHA_SHORT) } else { sine_window::<SHORT_LEN>() };
-    let short_right_full: [f32; SHORT_LEN] =
-        if this_shape { kbd_window::<SHORT_LEN>(KBD_ALPHA_SHORT) } else { sine_window::<SHORT_LEN>() };
+    let long_left_full: [f32; LONG_LEN] = if prev_shape {
+        kbd_window::<LONG_LEN>(KBD_ALPHA_LONG)
+    } else {
+        sine_window::<LONG_LEN>()
+    };
+    let long_right_full: [f32; LONG_LEN] = if this_shape {
+        kbd_window::<LONG_LEN>(KBD_ALPHA_LONG)
+    } else {
+        sine_window::<LONG_LEN>()
+    };
+    let short_left_full: [f32; SHORT_LEN] = if prev_shape {
+        kbd_window::<SHORT_LEN>(KBD_ALPHA_SHORT)
+    } else {
+        sine_window::<SHORT_LEN>()
+    };
+    let short_right_full: [f32; SHORT_LEN] = if this_shape {
+        kbd_window::<SHORT_LEN>(KBD_ALPHA_SHORT)
+    } else {
+        sine_window::<SHORT_LEN>()
+    };
     let mut w = [0.0f32; LONG_LEN];
     match sequence {
         WindowSequence::OnlyLong => {
@@ -411,12 +468,27 @@ pub(crate) fn deinterleave_channel(
 ) -> Vec<Vec<f32>> {
     let ics = &stream.ics;
     let is_short = ics.window_sequence.is_short();
-    let swb_offset = if is_short { swb_offset_short } else { swb_offset_long };
+    let swb_offset = if is_short {
+        swb_offset_short
+    } else {
+        swb_offset_long
+    };
     let group_lengths = ics.window_group_lengths();
-    let window_len = if is_short { SHORT_LEN / 2 } else { LONG_LEN / 2 };
+    let window_len = if is_short {
+        SHORT_LEN / 2
+    } else {
+        LONG_LEN / 2
+    };
     let num_windows = ics.window_sequence.num_windows();
     let mut prng = Prng(prng_seed);
-    deinterleave_and_rescale(stream, &group_lengths, swb_offset, window_len, num_windows, &mut prng)
+    deinterleave_and_rescale(
+        stream,
+        &group_lengths,
+        swb_offset,
+        window_len,
+        num_windows,
+        &mut prng,
+    )
 }
 
 /// Apply M/S stereo, then intensity stereo, across an already-deinterleaved
@@ -432,10 +504,28 @@ pub(crate) fn apply_joint_stereo(
 ) {
     let ics = &right_stream.ics;
     let is_short = ics.window_sequence.is_short();
-    let swb_offset = if is_short { swb_offset_short } else { swb_offset_long };
+    let swb_offset = if is_short {
+        swb_offset_short
+    } else {
+        swb_offset_long
+    };
     let group_lengths = ics.window_group_lengths();
-    apply_ms_stereo(left_spec, right_spec, right_stream, &group_lengths, swb_offset, ms_mask);
-    apply_intensity_stereo(left_spec, right_spec, right_stream, &group_lengths, swb_offset, Some(ms_mask.used.as_slice()));
+    apply_ms_stereo(
+        left_spec,
+        right_spec,
+        right_stream,
+        &group_lengths,
+        swb_offset,
+        ms_mask,
+    );
+    apply_intensity_stereo(
+        left_spec,
+        right_spec,
+        right_stream,
+        &group_lengths,
+        swb_offset,
+        Some(ms_mask.used.as_slice()),
+    );
 }
 
 /// Apply TNS, then IMDCT/windowing, then overlap-add, turning one channel's
@@ -458,10 +548,25 @@ pub(crate) fn finalize_channel(
 ) -> Vec<f32> {
     let ics = &stream.ics;
     let is_short = ics.window_sequence.is_short();
-    let swb_offset = if is_short { swb_offset_short } else { swb_offset_long };
-    let max_bands = if is_short { max_bands_short } else { max_bands_long };
+    let swb_offset = if is_short {
+        swb_offset_short
+    } else {
+        swb_offset_long
+    };
+    let max_bands = if is_short {
+        max_bands_short
+    } else {
+        max_bands_long
+    };
 
-    apply_tns(stream, &mut spec, swb_offset, usize::from(ics.max_sfb), max_bands, is_short);
+    apply_tns(
+        stream,
+        &mut spec,
+        swb_offset,
+        usize::from(ics.max_sfb),
+        max_bands,
+        is_short,
+    );
 
     // IMDCT + windowing, one call per window.
     let mut windowed: Vec<Vec<f32>> = Vec::new();
@@ -470,8 +575,11 @@ pub(crate) fn finalize_channel(
         // boundary: its left half takes the previous block's shape, its
         // right half (and every later window, left and right alike) takes
         // this block's own shape (§4.6.11.3.2).
-        let this_short: [f32; SHORT_LEN] =
-            if ics.window_shape { kbd_window::<SHORT_LEN>(KBD_ALPHA_SHORT) } else { sine_window::<SHORT_LEN>() };
+        let this_short: [f32; SHORT_LEN] = if ics.window_shape {
+            kbd_window::<SHORT_LEN>(KBD_ALPHA_SHORT)
+        } else {
+            sine_window::<SHORT_LEN>()
+        };
         let first_left: [f32; SHORT_LEN] = if overlap.prev_window_shape {
             kbd_window::<SHORT_LEN>(KBD_ALPHA_SHORT)
         } else {
@@ -492,14 +600,25 @@ pub(crate) fn finalize_channel(
             let mut out = vec![0.0f32; SHORT_LEN];
             for (i, slot) in out.iter_mut().enumerate() {
                 let raw = time.get(i).copied().unwrap_or(0.0) * scale;
-                let shape = if idx == 0 && i < SHORT_LEN / 2 { &first_left } else { &this_short };
+                let shape = if idx == 0 && i < SHORT_LEN / 2 {
+                    &first_left
+                } else {
+                    &this_short
+                };
                 *slot = (raw * f64::from(shape.get(i).copied().unwrap_or(0.0))) as f32;
             }
             windowed.push(out);
         }
     } else {
-        let win = build_window(ics.window_sequence, ics.window_shape, overlap.prev_window_shape);
-        let mut coeffs: Vec<f64> = spec.first().map(|w| w.iter().map(|&v| f64::from(v)).collect()).unwrap_or_default();
+        let win = build_window(
+            ics.window_sequence,
+            ics.window_shape,
+            overlap.prev_window_shape,
+        );
+        let mut coeffs: Vec<f64> = spec
+            .first()
+            .map(|w| w.iter().map(|&v| f64::from(v)).collect())
+            .unwrap_or_default();
         coeffs.resize(LONG_LEN / 2, 0.0);
         let mut time = vec![0.0f64; LONG_LEN];
         imdct.long.execute(&mut time, &coeffs);
@@ -520,7 +639,10 @@ pub(crate) fn finalize_channel(
     let z = if is_short {
         overlap_add_eight_short(&windowed)
     } else {
-        windowed.into_iter().next().unwrap_or_else(|| vec![0.0; LONG_LEN])
+        windowed
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| vec![0.0; LONG_LEN])
     };
 
     let half = LONG_LEN / 2;
@@ -543,7 +665,9 @@ pub(crate) fn finalize_channel(
             *slot = (first + prev) * PCM_TO_FLOAT_SCALE;
         }
     }
-    overlap.second_half = z.get(half..).map_or_else(|| vec![0.0; half], <[f32]>::to_vec);
+    overlap.second_half = z
+        .get(half..)
+        .map_or_else(|| vec![0.0; half], <[f32]>::to_vec);
     overlap.prev_window_shape = ics.window_shape;
 
     output
@@ -562,7 +686,10 @@ fn overlap_add_eight_short(windowed: &[Vec<f32>]) -> Vec<f32> {
         // underflows in practice; `checked_sub`/`checked_add` keep that a
         // checked fact rather than an assumed one, skipping the window
         // entirely (rather than panicking) if it ever did not hold.
-        let Some(base) = lead.checked_sub(half_short).and_then(|b| b.checked_add(j * half_short)) else {
+        let Some(base) = lead
+            .checked_sub(half_short)
+            .and_then(|b| b.checked_add(j * half_short))
+        else {
             continue;
         };
         for (i, &v) in win.iter().enumerate() {
@@ -576,7 +703,12 @@ fn overlap_add_eight_short(windowed: &[Vec<f32>]) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::inverse_quantize_and_rescale;
 
     #[test]

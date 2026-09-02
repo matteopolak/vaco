@@ -106,7 +106,8 @@ impl QoaDemuxer {
             }
             let byte = |i: usize| header.get(i).copied().unwrap_or(0);
             let num_channels = u32::from(byte(0));
-            let sample_rate = (u32::from(byte(1)) << 16) | (u32::from(byte(2)) << 8) | u32::from(byte(3));
+            let sample_rate =
+                (u32::from(byte(1)) << 16) | (u32::from(byte(2)) << 8) | u32::from(byte(3));
             (num_channels, sample_rate)
         };
         if num_channels == 0 || sample_rate == 0 {
@@ -200,7 +201,9 @@ impl Demuxer for QoaDemuxer {
             .total_samples
             .checked_mul(1_000_000)?
             .checked_div(u64::from(self.sample_rate.max(1)))?;
-        Some(Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX)))
+        Some(Duration::from_micros(
+            i64::try_from(micros).unwrap_or(i64::MAX),
+        ))
     }
 }
 

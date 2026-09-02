@@ -97,7 +97,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         if o.accuracy != 15 {
             return Err("stabdetect: `accuracy` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
@@ -110,7 +111,13 @@ impl Opts {
 }
 
 /// Contrast (max - min luma) of one block, used to honour `mincontrast`.
-fn block_contrast(plane: vaco_frame::PlaneRef<'_>, bx: usize, by: usize, bw: usize, bh: usize) -> u8 {
+fn block_contrast(
+    plane: vaco_frame::PlaneRef<'_>,
+    bx: usize,
+    by: usize,
+    bw: usize,
+    bh: usize,
+) -> u8 {
     let mut lo = u8::MAX;
     let mut hi = 0u8;
     for y in by..by.saturating_add(bh) {
@@ -142,10 +149,15 @@ impl Filter {
             .map_err(|e| format!("stabdetect: cannot create `{}`: {e}", opts.result))?;
         let mut writer = std::io::BufWriter::new(file);
         writeln!(writer, "{FILE_MAGIC}").map_err(|e| format!("stabdetect: write failed: {e}"))?;
-        #[allow(clippy::cast_precision_loss, reason = "0.0-1.0 option range, precision loss is not observable")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "0.0-1.0 option range, precision loss is not observable"
+        )]
         let min_contrast_255 = (opts.mincontrast.clamp(0.0, 1.0) * 255.0) as u8;
         Ok(Self {
-            range: common::to_i32(opts.shakiness.clamp(1, 10)).saturating_mul(4).max(1),
+            range: common::to_i32(opts.shakiness.clamp(1, 10))
+                .saturating_mul(4)
+                .max(1),
             min_contrast_255,
             tripod: (opts.tripod > 0).then_some(common::to_i32(opts.tripod) as u64),
             writer,
@@ -162,7 +174,9 @@ impl Filter {
         } else {
             self.prev.as_ref()
         };
-        let Some(refp) = reference else { return (0.0, 0.0) };
+        let Some(refp) = reference else {
+            return (0.0, 0.0);
+        };
         let raw = common::estimate_motion(refp, cur, width, height, self.range);
         if self.min_contrast_255 == 0 {
             return raw;
@@ -174,7 +188,9 @@ impl Filter {
         // frame is judged too flat to trust and the motion estimate is
         // suppressed to zero rather than reported as (likely spurious)
         // block-search noise.
-        let Some(plane) = cur.plane(0) else { return raw };
+        let Some(plane) = cur.plane(0) else {
+            return raw;
+        };
         let (w, h) = (width as usize, height as usize);
         if block_contrast(plane, 0, 0, w, h) < self.min_contrast_255 {
             return (0.0, 0.0);
@@ -192,7 +208,13 @@ impl Filter {
     /// `vaco-filter-geometry::shuffleframes`'s own tests give for testing
     /// this way.
     pub(crate) fn process(&mut self, frame: Frame) -> Result<FrameOut> {
-        let FrameData::Video { format, width, height, .. } = frame.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = frame.data
+        else {
             return Ok(FrameOut::One(frame));
         };
         if !self.checked_format {
@@ -251,7 +273,13 @@ mod tests {
     use vaco_pixfmt::PixFmt;
 
     fn tmp_path(name: &str) -> String {
-        std::env::temp_dir().join(format!("vaco-stabdetect-test-{name}-{}", std::process::id())).to_string_lossy().into_owned()
+        std::env::temp_dir()
+            .join(format!(
+                "vaco-stabdetect-test-{name}-{}",
+                std::process::id()
+            ))
+            .to_string_lossy()
+            .into_owned()
     }
 
     fn flat_frame(w: u32, h: u32, value: u8) -> Frame {
@@ -271,7 +299,12 @@ mod tests {
     fn creatable_with_defaults_and_writes_the_magic_header() {
         let path = tmp_path("defaults");
         let req_args = format!("result={path}");
-        let req = Instantiate { name: "stabdetect", instance: "stabdetect", args: Some(&req_args), arguments: &[] };
+        let req = Instantiate {
+            name: "stabdetect",
+            instance: "stabdetect",
+            args: Some(&req_args),
+            arguments: &[],
+        };
         assert!(create(&req).is_ok());
         let contents = std::fs::read_to_string(&path).unwrap();
         assert!(contents.starts_with(FILE_MAGIC));
@@ -281,7 +314,10 @@ mod tests {
     #[test]
     fn one_line_per_frame_is_appended() {
         let path = tmp_path("perframe");
-        let opts = Opts { result: path.clone(), ..Opts::default() };
+        let opts = Opts {
+            result: path.clone(),
+            ..Opts::default()
+        };
         let mut f = Filter::new(&opts).unwrap();
         let frame = flat_frame(64, 64, 128);
         for _ in 0..3 {
@@ -297,7 +333,11 @@ mod tests {
     #[test]
     fn a_flat_low_contrast_source_reports_zero_motion() {
         let path = tmp_path("flat");
-        let opts = Opts { result: path.clone(), mincontrast: 0.3, ..Opts::default() };
+        let opts = Opts {
+            result: path.clone(),
+            mincontrast: 0.3,
+            ..Opts::default()
+        };
         let mut f = Filter::new(&opts).unwrap();
         // Two flat, identical-value frames: below any contrast threshold,
         // and genuinely zero relative motion either way.

@@ -24,7 +24,11 @@ impl<'a> Reader<'a> {
     /// # Errors
     /// [`Error::UnexpectedEof`] if the cursor is at the end.
     pub(crate) fn u8(&mut self) -> Result<u8> {
-        let b = self.data.get(self.pos).copied().ok_or(Error::UnexpectedEof)?;
+        let b = self
+            .data
+            .get(self.pos)
+            .copied()
+            .ok_or(Error::UnexpectedEof)?;
         self.pos += 1;
         Ok(b)
     }

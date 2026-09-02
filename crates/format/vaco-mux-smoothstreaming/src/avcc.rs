@@ -133,7 +133,13 @@ mod tests {
     #[test]
     fn rejects_truncated_or_non_avcc_input() {
         assert!(avcc_to_annexb(&[]).is_none());
-        assert!(avcc_to_annexb(&[0, 1, 2, 3, 4, 5]).is_none(), "version byte must be 1");
-        assert!(avcc_to_annexb(&[1, 0, 0, 0, 0, 5]).is_none(), "5 SPS declared, none present");
+        assert!(
+            avcc_to_annexb(&[0, 1, 2, 3, 4, 5]).is_none(),
+            "version byte must be 1"
+        );
+        assert!(
+            avcc_to_annexb(&[1, 0, 0, 0, 0, 5]).is_none(),
+            "5 SPS declared, none present"
+        );
     }
 }

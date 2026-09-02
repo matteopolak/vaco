@@ -223,10 +223,10 @@ pub fn winnow(kgrams: &[(u64, usize)]) -> Vec<(u64, usize)> {
         return Vec::new();
     }
     if kgrams.len() <= W {
-        let best = kgrams
-            .iter()
-            .copied()
-            .fold(kgrams[0], |acc, cand| if cand.0 <= acc.0 { cand } else { acc });
+        let best = kgrams.iter().copied().fold(
+            kgrams[0],
+            |acc, cand| if cand.0 <= acc.0 { cand } else { acc },
+        );
         return vec![best];
     }
     let mut out = Vec::new();
@@ -288,7 +288,9 @@ pub struct Index {
 impl Index {
     #[must_use]
     pub fn new() -> Self {
-        Self { by_hash: Map::new() }
+        Self {
+            by_hash: Map::new(),
+        }
     }
 
     /// Index one corpus file under `name` (a label for reporting — the
@@ -296,7 +298,10 @@ impl Index {
     pub fn add(&mut self, name: &str, src: &str) {
         let fp = fingerprint(src);
         for (hash, start) in fp.marks {
-            self.by_hash.entry(hash).or_default().push((name.to_owned(), start));
+            self.by_hash
+                .entry(hash)
+                .or_default()
+                .push((name.to_owned(), start));
         }
     }
 
@@ -391,7 +396,11 @@ pub fn run(args: &[String]) -> Task {
         let Ok(src) = std::fs::read_to_string(&path) else {
             continue;
         };
-        let name = path.strip_prefix(&corpus_dir).unwrap_or(&path).display().to_string();
+        let name = path
+            .strip_prefix(&corpus_dir)
+            .unwrap_or(&path)
+            .display()
+            .to_string();
         index.add(&name, &src);
     }
     if index.is_empty() {
@@ -408,7 +417,11 @@ pub fn run(args: &[String]) -> Task {
             let Ok(src) = std::fs::read_to_string(&file) else {
                 continue;
             };
-            let label = file.strip_prefix(&root).unwrap_or(&file).display().to_string();
+            let label = file
+                .strip_prefix(&root)
+                .unwrap_or(&file)
+                .display()
+                .to_string();
             findings.extend(scan_file(&label, &src, &index));
         }
     }
@@ -556,8 +569,10 @@ mod tests {
             // `Finding` trips it rather than silently starting to leak text.
             assert_eq!(
                 std::mem::size_of_val(f),
-                std::mem::size_of::<String>() * 2 + std::mem::size_of::<(usize, usize)>() +
-                    std::mem::size_of::<usize>() + std::mem::size_of::<u64>()
+                std::mem::size_of::<String>() * 2
+                    + std::mem::size_of::<(usize, usize)>()
+                    + std::mem::size_of::<usize>()
+                    + std::mem::size_of::<u64>()
             );
         }
     }
@@ -575,7 +590,9 @@ mod tests {
         let canon: Vec<&str> = toks.iter().map(|t| t.canon.as_str()).collect();
         assert_eq!(
             canon,
-            ["Ident", "Ident", "=", "Num", ";", "Ident", "Ident", "=", "Num", ";"]
+            [
+                "Ident", "Ident", "=", "Num", ";", "Ident", "Ident", "=", "Num", ";"
+            ]
         );
     }
 

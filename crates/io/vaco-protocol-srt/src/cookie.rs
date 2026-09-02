@@ -40,7 +40,13 @@ use vaco_hash::HashAlgo;
     clippy::integer_division,
     reason = "a 60-second bucket is an exact quotient by design, not a lossy scale-down"
 )]
-pub fn compute(local_ip: &[u8], local_port: u16, peer_ip: &[u8], peer_port: u16, now_unix_secs: u64) -> u32 {
+pub fn compute(
+    local_ip: &[u8],
+    local_port: u16,
+    peer_ip: &[u8],
+    peer_port: u16,
+    now_unix_secs: u64,
+) -> u32 {
     let minute_bucket = now_unix_secs / 60;
     let mut preimage = Vec::new();
     preimage.extend_from_slice(local_ip);

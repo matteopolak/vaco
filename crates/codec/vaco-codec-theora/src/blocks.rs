@@ -79,8 +79,8 @@ impl PlaneGeom {
                             u16::try_from(by).unwrap_or(u16::MAX),
                         );
                     }
-                    let raster_idx = (by as usize).saturating_mul(blocks_wide as usize)
-                        + bx as usize;
+                    let raster_idx =
+                        (by as usize).saturating_mul(blocks_wide as usize) + bx as usize;
                     if let Some(slot) = raster_to_coded.get_mut(raster_idx) {
                         *slot = bi;
                     }
@@ -152,7 +152,12 @@ pub(crate) struct FrameGeom {
 }
 
 impl FrameGeom {
-    pub(crate) fn build(fmbw: u32, fmbh: u32, pf: PixelFormat, budget: &mut Budget) -> Result<Self> {
+    pub(crate) fn build(
+        fmbw: u32,
+        fmbh: u32,
+        pf: PixelFormat,
+        budget: &mut Budget,
+    ) -> Result<Self> {
         let (lw, lh) = (fmbw.saturating_mul(2), fmbh.saturating_mul(2));
         let (cw, ch) = pf.chroma_blocks(fmbw, fmbh);
         let y = PlaneGeom::build(lw, lh, 0, budget)?;

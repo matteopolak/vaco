@@ -110,7 +110,10 @@ impl Metric for Psnr {
         }
         let max = max_value(source.depth);
         if max <= 0.0 {
-            return Err(format!("{}: depth {} has no representable range", self.name, source.depth));
+            return Err(format!(
+                "{}: depth {} has no representable range",
+                self.name, source.depth
+            ));
         }
 
         let mse = match self.plane {
@@ -203,12 +206,8 @@ mod tests {
         // Same relative error (1 code point) at a wider bit depth should
         // still register as a very high but finite PSNR, not panic or
         // silently truncate to the 8-bit range.
-        let source: Vec<u8> = (0..8)
-            .flat_map(|_| 500_u16.to_le_bytes())
-            .collect();
-        let distorted: Vec<u8> = (0..8)
-            .flat_map(|_| 501_u16.to_le_bytes())
-            .collect();
+        let source: Vec<u8> = (0..8).flat_map(|_| 500_u16.to_le_bytes()).collect();
+        let distorted: Vec<u8> = (0..8).flat_map(|_| 501_u16.to_le_bytes()).collect();
         let a = signal(&source, 4, 2, 10);
         let b = signal(&distorted, 4, 2, 10);
         let score = Psnr::y().score(&a, &b).unwrap();

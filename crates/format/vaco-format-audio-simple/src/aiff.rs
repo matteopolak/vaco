@@ -384,16 +384,16 @@ impl Muxer for AiffMuxer {
                 ));
             }
         };
-        let coded_bits = pcm::coded_bits(codec)
-            .ok_or(Error::Unsupported("aiff: only PCM-shaped codecs are supported"))?;
+        let coded_bits = pcm::coded_bits(codec).ok_or(Error::Unsupported(
+            "aiff: only PCM-shaped codecs are supported",
+        ))?;
         let channels = audio.layout.as_ref().map_or(1, |l| l.channels).max(1) as u16;
         self.stream = Some(MuxStream {
             sample_rate: audio.sample_rate.max(1),
             channels,
             sample_size: u16::from(coded_bits),
             compression,
-            bytes_per_frame: u32::from(channels)
-                .saturating_mul(u32::from(coded_bits.div_ceil(8))),
+            bytes_per_frame: u32::from(channels).saturating_mul(u32::from(coded_bits.div_ceil(8))),
         });
         Ok(0)
     }
@@ -404,8 +404,11 @@ impl Muxer for AiffMuxer {
             .ok_or(Error::InvalidData("aiff: no stream added"))?;
         self.out.write(&FORM)?;
         self.out.wb32(0)?; // patched in write_trailer
-        self.out
-            .write(if s.compression.is_some() { &AIFC } else { &AIFF })?;
+        self.out.write(if s.compression.is_some() {
+            &AIFC
+        } else {
+            &AIFF
+        })?;
 
         if s.compression.is_some() {
             self.out.write(b"FVER")?;
@@ -483,8 +486,7 @@ impl Muxer for AiffMuxer {
         // COMM.numSampleFrames: FORM header(12) + FVER, when present +
         // COMM tag+size(8) + channels(2) lands right at it.
         self.out.seek(12 + fver + (4 + 4) + 2)?;
-        self.out
-            .wb32(u32::try_from(frames).unwrap_or(u32::MAX))?;
+        self.out.wb32(u32::try_from(frames).unwrap_or(u32::MAX))?;
 
         // Both offsets move with the form type.
         let ssnd_size_pos = 12 + fver + (4 + 4 + comm) + 4;

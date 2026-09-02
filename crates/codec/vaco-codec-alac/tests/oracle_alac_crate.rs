@@ -219,10 +219,12 @@ fn this_crates_own_decoder_reads_a_real_ffmpeg_alac_packet_bit_for_bit() {
 
     let mut budget = Budget::new(Limits::permissive());
     let mut dec = AlacDecoder::new(Limits::permissive());
-    dec.set_extradata(&cookie_bytes).expect("set_extradata on a real cookie");
+    dec.set_extradata(&cookie_bytes)
+        .expect("set_extradata on a real cookie");
     let mut packet = Packet::from_slice(&mut budget, &packet_bytes).expect("packet from_slice");
     packet.pts = Timestamp::new(0);
-    dec.send_packet(Some(&packet)).expect("this crate's decoder must accept a real ffmpeg packet");
+    dec.send_packet(Some(&packet))
+        .expect("this crate's decoder must accept a real ffmpeg packet");
     let decoded = dec.receive_frame().expect("receive_frame");
     let FrameData::Audio {
         planes, samples, ..
@@ -259,7 +261,9 @@ fn this_crates_own_encoder_output_is_accepted_by_the_oracle_decoder() {
     use vaco_codec_alac::AlacEncoder;
     use vaco_codec_core::Encoder;
 
-    let samples: Vec<i16> = (0..4096).map(|i| (((i * 37) % 3001) - 1500) as i16).collect();
+    let samples: Vec<i16> = (0..4096)
+        .map(|i| (((i * 37) % 3001) - 1500) as i16)
+        .collect();
     let mut budget = Budget::new(Limits::permissive());
     let mut frame = Frame::alloc_audio(
         &mut budget,
@@ -280,15 +284,23 @@ fn this_crates_own_encoder_output_is_accepted_by_the_oracle_decoder() {
     }
 
     let mut enc = AlacEncoder::new(Limits::permissive());
-    enc.prime_audio(44100, vaco_chlayout::ChannelLayout::MONO, vaco_sampfmt::SampleFmt::S16P);
+    enc.prime_audio(
+        44100,
+        vaco_chlayout::ChannelLayout::MONO,
+        vaco_sampfmt::SampleFmt::S16P,
+    );
     enc.send_frame(Some(&frame)).expect("send_frame");
     let packet = enc.receive_packet().expect("receive_packet");
     let cookie = enc.extradata().expect("cookie after prime_audio");
     eprintln!("cookie = {cookie:02x?}");
     eprintln!("packet len = {}", packet.payload().len());
-    eprintln!("packet first bytes = {:02x?}", &packet.payload()[..packet.payload().len().min(16)]);
+    eprintln!(
+        "packet first bytes = {:02x?}",
+        &packet.payload()[..packet.payload().len().min(16)]
+    );
 
-    let info = alac::StreamInfo::from_cookie(&cookie).expect("alac crate must parse this crate's own cookie");
+    let info = alac::StreamInfo::from_cookie(&cookie)
+        .expect("alac crate must parse this crate's own cookie");
     let mut oracle_decoder = alac::Decoder::new(info.clone());
     let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];
     let result = oracle_decoder.decode_packet(packet.payload(), &mut out);
@@ -302,7 +314,10 @@ fn this_crates_own_encoder_output_is_accepted_by_the_oracle_decoder() {
         .map(|&s| i32::from(s))
         .collect();
     let expected: Vec<i32> = samples.iter().map(|&s| i32::from(s)).collect();
-    assert_eq!(oracle_pcm, expected, "oracle decode of our own encoder's output must match the source samples");
+    assert_eq!(
+        oracle_pcm, expected,
+        "oracle decode of our own encoder's output must match the source samples"
+    );
 }
 
 #[test]
@@ -310,7 +325,9 @@ fn escape_mode_manual_packet_is_accepted_by_the_oracle_decoder() {
     use vaco_bitstream::BitWriter;
     use vaco_limits::{Budget, Limits};
 
-    let samples: Vec<i16> = (0..4096).map(|i| (((i * 37) % 3001) - 1500) as i16).collect();
+    let samples: Vec<i16> = (0..4096)
+        .map(|i| (((i * 37) % 3001) - 1500) as i16)
+        .collect();
     let mut budget = Budget::new(Limits::permissive());
     let mut w = BitWriter::with_capacity(&mut budget, 16000).unwrap();
     w.put(3, 0); // ID_SCE
@@ -343,7 +360,9 @@ fn crate_cookie_bytes() -> Vec<u8> {
     use vaco_codec_alac::AlacSpecificConfig;
     // 40/10/14: this crate's own `rice::{PB0,MB0,KB0}` -- `pub(crate)`, so
     // restated literally here rather than named, from an external test.
-    AlacSpecificConfig::for_encode(44100, 1, 16, 40, 10, 14).write_bare().to_vec()
+    AlacSpecificConfig::for_encode(44100, 1, 16, 40, 10, 14)
+        .write_bare()
+        .to_vec()
 }
 
 #[test]
@@ -351,7 +370,9 @@ fn escape_mode_partial_frame_manual_packet_is_accepted_by_the_oracle_decoder() {
     use vaco_bitstream::BitWriter;
     use vaco_limits::{Budget, Limits};
 
-    let samples: Vec<i16> = (0..2944).map(|i| (((i * 37) % 3001) - 1500) as i16).collect();
+    let samples: Vec<i16> = (0..2944)
+        .map(|i| (((i * 37) % 3001) - 1500) as i16)
+        .collect();
     let mut budget = Budget::new(Limits::permissive());
     let mut w = BitWriter::with_capacity(&mut budget, 16000).unwrap();
     w.put(3, 0); // ID_SCE
@@ -373,7 +394,10 @@ fn escape_mode_partial_frame_manual_packet_is_accepted_by_the_oracle_decoder() {
     let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];
     let result = oracle_decoder.decode_packet(&bytes, &mut out);
     match &result {
-        Ok(pcm) => eprintln!("PARTIAL ESCAPE MODE: oracle decoded {} samples ok", pcm.len()),
+        Ok(pcm) => eprintln!(
+            "PARTIAL ESCAPE MODE: oracle decoded {} samples ok",
+            pcm.len()
+        ),
         Err(e) => eprintln!("PARTIAL ESCAPE MODE: oracle decode FAILED: {e:?}"),
     }
     let pcm = result.expect("oracle must decode partial escape-mode packet");
@@ -385,7 +409,9 @@ fn escape_mode_explicit_count_full_frame_is_accepted_by_the_oracle_decoder() {
     use vaco_bitstream::BitWriter;
     use vaco_limits::{Budget, Limits};
 
-    let samples: Vec<i16> = (0..4096).map(|i| (((i * 37) % 3001) - 1500) as i16).collect();
+    let samples: Vec<i16> = (0..4096)
+        .map(|i| (((i * 37) % 3001) - 1500) as i16)
+        .collect();
     let mut budget = Budget::new(Limits::permissive());
     let mut w = BitWriter::with_capacity(&mut budget, 16000).unwrap();
     w.put(3, 0); // ID_SCE
@@ -406,7 +432,10 @@ fn escape_mode_explicit_count_full_frame_is_accepted_by_the_oracle_decoder() {
     let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];
     let result = oracle_decoder.decode_packet(&bytes, &mut out);
     match &result {
-        Ok(pcm) => eprintln!("EXPLICIT+FULL ESCAPE MODE: oracle decoded {} samples ok", pcm.len()),
+        Ok(pcm) => eprintln!(
+            "EXPLICIT+FULL ESCAPE MODE: oracle decoded {} samples ok",
+            pcm.len()
+        ),
         Err(e) => eprintln!("EXPLICIT+FULL ESCAPE MODE: oracle decode FAILED: {e:?}"),
     }
     let pcm = result.expect("oracle must decode explicit-count full-frame escape-mode packet");
@@ -416,11 +445,15 @@ fn escape_mode_explicit_count_full_frame_is_accepted_by_the_oracle_decoder() {
 #[test]
 fn stereo_escape_mode_chan_bits_equals_bit_depth_is_accepted_by_the_oracle_decoder() {
     use vaco_bitstream::BitWriter;
-    use vaco_limits::{Budget, Limits};
     use vaco_codec_alac::AlacSpecificConfig;
+    use vaco_limits::{Budget, Limits};
 
-    let left: Vec<i16> = (0..2048).map(|i| (((i * 37) % 3001) - 1500) as i16).collect();
-    let right: Vec<i16> = (0..2048).map(|i| (((i * 59) % 2001) - 1000) as i16).collect();
+    let left: Vec<i16> = (0..2048)
+        .map(|i| (((i * 37) % 3001) - 1500) as i16)
+        .collect();
+    let right: Vec<i16> = (0..2048)
+        .map(|i| (((i * 59) % 2001) - 1000) as i16)
+        .collect();
     let mut budget = Budget::new(Limits::permissive());
     let mut w = BitWriter::with_capacity(&mut budget, 16000).unwrap();
     w.put(3, 1); // ID_CPE
@@ -436,17 +469,27 @@ fn stereo_escape_mode_chan_bits_equals_bit_depth_is_accepted_by_the_oracle_decod
     w.align_zero();
     let bytes = w.finish();
 
-    let cookie = AlacSpecificConfig::for_encode(44100, 2, 16, 40, 10, 14).write_bare().to_vec();
+    let cookie = AlacSpecificConfig::for_encode(44100, 2, 16, 40, 10, 14)
+        .write_bare()
+        .to_vec();
     let info = alac::StreamInfo::from_cookie(&cookie).expect("cookie parse");
     let mut oracle_decoder = alac::Decoder::new(info.clone());
     let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];
     let result = oracle_decoder.decode_packet(&bytes, &mut out);
     match &result {
-        Ok(pcm) => eprintln!("STEREO ESCAPE (chan_bits=bit_depth): oracle decoded {} samples ok", pcm.len()),
+        Ok(pcm) => eprintln!(
+            "STEREO ESCAPE (chan_bits=bit_depth): oracle decoded {} samples ok",
+            pcm.len()
+        ),
         Err(e) => eprintln!("STEREO ESCAPE (chan_bits=bit_depth): oracle decode FAILED: {e:?}"),
     }
-    let pcm = result.expect("oracle must decode stereo escape-mode packet with chan_bits=bit_depth");
-    let expected: Vec<i16> = left.iter().zip(right.iter()).flat_map(|(&l, &r)| [l, r]).collect();
+    let pcm =
+        result.expect("oracle must decode stereo escape-mode packet with chan_bits=bit_depth");
+    let expected: Vec<i16> = left
+        .iter()
+        .zip(right.iter())
+        .flat_map(|(&l, &r)| [l, r])
+        .collect();
     assert_eq!(pcm, expected);
 }
 
@@ -461,8 +504,12 @@ fn this_crates_own_stereo_encoder_output_is_accepted_by_the_oracle_decoder() {
     use vaco_codec_alac::AlacEncoder;
     use vaco_codec_core::Encoder;
 
-    let left: Vec<i16> = (0..3000).map(|i| (((i * 37) % 3001) - 1500) as i16).collect();
-    let right: Vec<i16> = (0..3000).map(|i| (((i * 59) % 2001) - 1000) as i16).collect();
+    let left: Vec<i16> = (0..3000)
+        .map(|i| (((i * 37) % 3001) - 1500) as i16)
+        .collect();
+    let right: Vec<i16> = (0..3000)
+        .map(|i| (((i * 59) % 2001) - 1000) as i16)
+        .collect();
     let mut budget = Budget::new(Limits::permissive());
     let mut frame = Frame::alloc_audio(
         &mut budget,
@@ -492,12 +539,17 @@ fn this_crates_own_stereo_encoder_output_is_accepted_by_the_oracle_decoder() {
     }
 
     let mut enc = AlacEncoder::new(Limits::permissive());
-    enc.prime_audio(44100, vaco_chlayout::ChannelLayout::STEREO, vaco_sampfmt::SampleFmt::S16P);
+    enc.prime_audio(
+        44100,
+        vaco_chlayout::ChannelLayout::STEREO,
+        vaco_sampfmt::SampleFmt::S16P,
+    );
     enc.send_frame(Some(&frame)).expect("send_frame");
     let packet = enc.receive_packet().expect("receive_packet");
     let cookie = enc.extradata().expect("cookie after prime_audio");
 
-    let info = alac::StreamInfo::from_cookie(&cookie).expect("alac crate must parse this crate's own cookie");
+    let info = alac::StreamInfo::from_cookie(&cookie)
+        .expect("alac crate must parse this crate's own cookie");
     let mut oracle_decoder = alac::Decoder::new(info.clone());
     let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];
     let result = oracle_decoder.decode_packet(packet.payload(), &mut out);
@@ -505,9 +557,17 @@ fn this_crates_own_stereo_encoder_output_is_accepted_by_the_oracle_decoder() {
         Ok(pcm) => eprintln!("STEREO oracle decoded {} interleaved samples ok", pcm.len()),
         Err(e) => eprintln!("STEREO oracle decode FAILED: {e:?}"),
     }
-    let oracle_pcm = result.expect("independent alac crate must decode this crate's own stereo encoder output");
-    let expected: Vec<i16> = left.iter().zip(right.iter()).flat_map(|(&l, &r)| [l, r]).collect();
-    assert_eq!(oracle_pcm, expected, "oracle decode of our own stereo encoder output must match the source samples, interleaved");
+    let oracle_pcm =
+        result.expect("independent alac crate must decode this crate's own stereo encoder output");
+    let expected: Vec<i16> = left
+        .iter()
+        .zip(right.iter())
+        .flat_map(|(&l, &r)| [l, r])
+        .collect();
+    assert_eq!(
+        oracle_pcm, expected,
+        "oracle decode of our own stereo encoder output must match the source samples, interleaved"
+    );
 }
 
 /// Stereo content designed to force mid/side selection: near-identical
@@ -521,7 +581,8 @@ fn this_crates_own_stereo_encoder_output_is_accepted_by_the_oracle_decoder() {
 /// what a packet's header actually said, a latent bug invisible until an
 /// encoder (this one) finally emitted a non-zero `mixres` to decode back.
 #[test]
-fn highly_correlated_stereo_content_is_smaller_than_independent_channels_and_the_oracle_accepts_it() {
+fn highly_correlated_stereo_content_is_smaller_than_independent_channels_and_the_oracle_accepts_it()
+{
     use vaco_codec_alac::AlacEncoder;
     use vaco_codec_core::Encoder;
 
@@ -535,10 +596,21 @@ fn highly_correlated_stereo_content_is_smaller_than_independent_channels_and_the
     // Right is left plus a small, mostly-constant offset -- correlated,
     // not identical (identical channels are the easy case; this is closer
     // to real, imperfectly-correlated stereo material).
-    let right: Vec<i16> = left.iter().enumerate().map(|(i, &l)| l.saturating_add(20 + i16::try_from(i % 7).unwrap_or(0))).collect();
+    let right: Vec<i16> = left
+        .iter()
+        .enumerate()
+        .map(|(i, &l)| l.saturating_add(20 + i16::try_from(i % 7).unwrap_or(0)))
+        .collect();
 
     let mut budget = Budget::new(Limits::permissive());
-    let mut frame = Frame::alloc_audio(&mut budget, SampleFmt::S16P, ChannelLayout::STEREO, n as u32, 44100).expect("alloc_audio");
+    let mut frame = Frame::alloc_audio(
+        &mut budget,
+        SampleFmt::S16P,
+        ChannelLayout::STEREO,
+        n as u32,
+        44100,
+    )
+    .expect("alloc_audio");
     {
         let mut plane = frame.plane_mut(0).expect("plane 0");
         let row = plane.row_mut(0).expect("row 0");
@@ -571,7 +643,14 @@ fn highly_correlated_stereo_content_is_smaller_than_independent_channels_and_the
     // beat it now.
     let encode_mono = |samples: &[i16]| -> usize {
         let mut b = Budget::new(Limits::permissive());
-        let mut f = Frame::alloc_audio(&mut b, SampleFmt::S16P, ChannelLayout::MONO, samples.len() as u32, 44100).expect("alloc_audio");
+        let mut f = Frame::alloc_audio(
+            &mut b,
+            SampleFmt::S16P,
+            ChannelLayout::MONO,
+            samples.len() as u32,
+            44100,
+        )
+        .expect("alloc_audio");
         {
             let mut plane = f.plane_mut(0).expect("plane 0");
             let row = plane.row_mut(0).expect("row 0");
@@ -586,14 +665,18 @@ fn highly_correlated_stereo_content_is_smaller_than_independent_channels_and_the
         e.receive_packet().expect("receive_packet").payload().len()
     };
     let independent_total = encode_mono(&left) + encode_mono(&right);
-    eprintln!("stereo (decorrelated) = {} bytes, two independent mono encodes = {independent_total} bytes", packet.payload().len());
+    eprintln!(
+        "stereo (decorrelated) = {} bytes, two independent mono encodes = {independent_total} bytes",
+        packet.payload().len()
+    );
     assert!(
         packet.payload().len() < independent_total,
         "correlated stereo content must compress smaller as one decorrelated CPE element than as two independent channels: {} >= {independent_total}",
         packet.payload().len()
     );
 
-    let info = alac::StreamInfo::from_cookie(&cookie).expect("alac crate must parse this crate's own cookie");
+    let info = alac::StreamInfo::from_cookie(&cookie)
+        .expect("alac crate must parse this crate's own cookie");
     let mut oracle_decoder = alac::Decoder::new(info.clone());
     let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];
     let oracle_pcm = oracle_decoder
@@ -604,5 +687,8 @@ fn highly_correlated_stereo_content_is_smaller_than_independent_channels_and_the
         expected.push(left[i]);
         expected.push(right[i]);
     }
-    assert_eq!(oracle_pcm, expected, "oracle decode of matrixed stereo must match the source, interleaved, sample-exact");
+    assert_eq!(
+        oracle_pcm, expected,
+        "oracle decode of matrixed stereo must match the source, interleaved, sample-exact"
+    );
 }

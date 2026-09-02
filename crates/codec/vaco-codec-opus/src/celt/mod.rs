@@ -52,7 +52,10 @@ struct ChannelState {
 
 impl ChannelState {
     fn new() -> Self {
-        Self { overlap_mem: vec![0.0; OVERLAP], preemph_mem: 0.0 }
+        Self {
+            overlap_mem: vec![0.0; OVERLAP],
+            preemph_mem: 0.0,
+        }
     }
 }
 
@@ -105,7 +108,14 @@ impl CeltDecoder {
         if let Some(p) = self.plans.get(&full_len) {
             return Some(Arc::clone(p));
         }
-        let plan = Plan::<f32>::new(TxKind::Mdct, Direction::Inverse, full_len, 1.0, TxFlags::FULL_IMDCT).ok()?;
+        let plan = Plan::<f32>::new(
+            TxKind::Mdct,
+            Direction::Inverse,
+            full_len,
+            1.0,
+            TxFlags::FULL_IMDCT,
+        )
+        .ok()?;
         self.plans.insert(full_len, Arc::clone(&plan));
         Some(plan)
     }
@@ -175,14 +185,39 @@ impl CeltDecoder {
         };
         let short_blocks = if is_transient { m } else { 0 };
 
-        let intra_ener = if tell + 3 <= total_bits_bytes { dec.bit_logp(3) } else { false };
-        energy::unquant_coarse_energy(dec, &mut self.old_band_e, NB_EBANDS, start_band, end_band, intra_ener, channels, lm as usize);
+        let intra_ener = if tell + 3 <= total_bits_bytes {
+            dec.bit_logp(3)
+        } else {
+            false
+        };
+        energy::unquant_coarse_energy(
+            dec,
+            &mut self.old_band_e,
+            NB_EBANDS,
+            start_band,
+            end_band,
+            intra_ener,
+            channels,
+            lm as usize,
+        );
 
         let mut tf_res = vec![0i32; NB_EBANDS];
-        tf_decode(dec, start_band, end_band, is_transient, &mut tf_res, lm, total_bits_bytes);
+        tf_decode(
+            dec,
+            start_band,
+            end_band,
+            is_transient,
+            &mut tf_res,
+            lm,
+            total_bits_bytes,
+        );
 
         tell = dec.tell();
-        let spread = if tell + 4 <= total_bits_bytes { dec.icdf(&tables::SPREAD_ICDF, 5).unwrap_or(2) } else { 2 };
+        let spread = if tell + 4 <= total_bits_bytes {
+            dec.icdf(&tables::SPREAD_ICDF, 5).unwrap_or(2)
+        } else {
+            2
+        };
 
         let cap = rate::init_caps(&EBANDS, lm, channels as i32);
         let mut offsets = vec![0i32; NB_EBANDS];
@@ -194,7 +229,9 @@ impl CeltDecoder {
             let quanta = (width << BITRES).min((6 << BITRES).max(width));
             let mut dynalloc_loop_logp = dynalloc_logp;
             let mut boost = 0i32;
-            while tell + (dynalloc_loop_logp << BITRES) < total_bits_q3 && boost < cap.get(i).copied().unwrap_or(0) {
+            while tell + (dynalloc_loop_logp << BITRES) < total_bits_q3
+                && boost < cap.get(i).copied().unwrap_or(0)
+            {
                 if !dec.bit_logp(dynalloc_loop_logp as u32) {
                     tell = dec.tell_frac();
                     break;
@@ -210,15 +247,39 @@ impl CeltDecoder {
             }
         }
 
-        let alloc_trim = if tell + (6 << BITRES) <= total_bits_q3 { dec.icdf(&tables::TRIM_ICDF, 7).unwrap_or(5) } else { 5 };
+        let alloc_trim = if tell + (6 << BITRES) <= total_bits_q3 {
+            dec.icdf(&tables::TRIM_ICDF, 7).unwrap_or(5)
+        } else {
+            5
+        };
 
         let mut bits = ((len_bytes as i32 * 8) << BITRES) - dec.tell_frac() - 1;
-        let anti_collapse_rsv = i32::from(is_transient && lm >= 2 && bits >= (lm + 2) << BITRES) << BITRES;
+        let anti_collapse_rsv =
+            i32::from(is_transient && lm >= 2 && bits >= (lm + 2) << BITRES) << BITRES;
         bits -= anti_collapse_rsv;
 
-        let alloc = rate::compute_allocation(dec, &EBANDS, start_band, end_band, &offsets, &cap, alloc_trim, bits, channels as i32, lm);
+        let alloc = rate::compute_allocation(
+            dec,
+            &EBANDS,
+            start_band,
+            end_band,
+            &offsets,
+            &cap,
+            alloc_trim,
+            bits,
+            channels as i32,
+            lm,
+        );
 
-        energy::unquant_fine_energy(dec, &mut self.old_band_e, NB_EBANDS, start_band, end_band, channels, &alloc.fine_energy);
+        energy::unquant_fine_energy(
+            dec,
+            &mut self.old_band_e,
+            NB_EBANDS,
+            start_band,
+            end_band,
+            channels,
+            &alloc.fine_energy,
+        );
 
         let mut x = vec![0.0f32; channels * n];
         let mut collapse_masks = vec![0u8; NB_EBANDS * channels];
@@ -246,7 +307,11 @@ impl CeltDecoder {
             );
         }
 
-        let anti_collapse_on = if anti_collapse_rsv > 0 { dec.dec_bits(1) != 0 } else { false };
+        let anti_collapse_on = if anti_collapse_rsv > 0 {
+            dec.dec_bits(1) != 0
+        } else {
+            false
+        };
 
         let bits_left = len_bytes as i32 * 8 - dec.tell();
         energy::unquant_energy_finalise(
@@ -262,11 +327,31 @@ impl CeltDecoder {
         );
 
         if anti_collapse_on {
-            anti_collapse(&mut x, &collapse_masks, lm, channels, n, start_band, end_band, &self.old_band_e, &self.old_log_e, &self.old_log_e2, &alloc.pulses, &mut self.rng);
+            anti_collapse(
+                &mut x,
+                &collapse_masks,
+                lm,
+                channels,
+                n,
+                start_band,
+                end_band,
+                &self.old_band_e,
+                &self.old_log_e,
+                &self.old_log_e2,
+                &alloc.pulses,
+                &mut self.rng,
+            );
         }
 
         let mut band_e = vec![0.0f32; channels * NB_EBANDS];
-        energy::log2_amp(&self.old_band_e, &mut band_e, NB_EBANDS, start_band, end_band, channels);
+        energy::log2_amp(
+            &self.old_band_e,
+            &mut band_e,
+            NB_EBANDS,
+            start_band,
+            end_band,
+            channels,
+        );
 
         if silence {
             band_e.fill(0.0);
@@ -366,7 +451,9 @@ impl CeltDecoder {
             for j in 0..OVERLAP.min(n) {
                 pcm[j] = acc[j] + state.overlap_mem.get(j).copied().unwrap_or(0.0);
             }
-            if let (Some(dst), Some(src)) = (pcm.get_mut(OVERLAP.min(n)..n), acc.get(OVERLAP.min(n)..n)) {
+            if let (Some(dst), Some(src)) =
+                (pcm.get_mut(OVERLAP.min(n)..n), acc.get(OVERLAP.min(n)..n))
+            {
                 dst.copy_from_slice(src);
             }
             for j in 0..OVERLAP {
@@ -389,7 +476,15 @@ impl CeltDecoder {
 }
 
 /// `celt.c`'s `tf_decode`.
-fn tf_decode(dec: &mut RangeDecoder<'_>, start: usize, end: usize, is_transient: bool, tf_res: &mut [i32], lm: i32, total_bits: i32) {
+fn tf_decode(
+    dec: &mut RangeDecoder<'_>,
+    start: usize,
+    end: usize,
+    is_transient: bool,
+    tf_res: &mut [i32],
+    lm: i32,
+    total_bits: i32,
+) {
     let mut tell = dec.tell();
     let mut logp = if is_transient { 2 } else { 4 };
     let tf_select_rsv = i32::from(lm > 0 && tell + logp < total_bits);
@@ -426,7 +521,10 @@ fn tf_decode(dec: &mut RangeDecoder<'_>, start: usize, end: usize, is_transient:
 /// all-zero under a short transient with low-level noise, so the energy
 /// this frame's coarse/fine decode already committed to is not silently
 /// lost.
-#[expect(clippy::too_many_arguments, reason = "mirrors celt/bands.c's anti_collapse")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors celt/bands.c's anti_collapse"
+)]
 fn anti_collapse(
     x: &mut [f32],
     collapse_masks: &[u8],
@@ -456,7 +554,9 @@ fn anti_collapse(
                 prev1 = prev1.max(prev1_log_e.get(NB_EBANDS + i).copied().unwrap_or(-28.0));
                 prev2 = prev2.max(prev2_log_e.get(NB_EBANDS + i).copied().unwrap_or(-28.0));
             }
-            let e_diff = (log_e.get(c * NB_EBANDS + i).copied().unwrap_or(-28.0) - prev1.min(prev2)).max(0.0);
+            let e_diff = (log_e.get(c * NB_EBANDS + i).copied().unwrap_or(-28.0)
+                - prev1.min(prev2))
+            .max(0.0);
             let mut r = 2.0 * (-e_diff).exp2();
             if lm == 3 {
                 r *= std::f32::consts::SQRT_2;

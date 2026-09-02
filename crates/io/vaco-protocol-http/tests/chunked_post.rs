@@ -87,9 +87,7 @@ fn a_written_and_flushed_body_arrives_chunked_and_intact() {
     // (accepting the connection is enough to prove the chunked framing);
     // `flush()` will see the connection close before a response arrives.
     // What matters for this test is what the server actually received.
-    let mut sink = r
-        .create(&url, IoFlags::WRITE, &Dict::new(), &env)
-        .unwrap();
+    let mut sink = r.create(&url, IoFlags::WRITE, &Dict::new(), &env).unwrap();
     sink.write(b"hello, ").unwrap();
     sink.write(b"chunked ").unwrap();
     sink.write(b"world").unwrap();
@@ -101,9 +99,9 @@ fn a_written_and_flushed_body_arrives_chunked_and_intact() {
 
     let (headers, body) = server.join().unwrap();
     assert_eq!(body, b"hello, chunked world");
-    let has_chunked_header = headers
-        .iter()
-        .any(|(k, v)| k.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked"));
+    let has_chunked_header = headers.iter().any(|(k, v)| {
+        k.eq_ignore_ascii_case("transfer-encoding") && v.eq_ignore_ascii_case("chunked")
+    });
     assert!(has_chunked_header, "headers were: {headers:?}");
     let has_content_length = headers
         .iter()
@@ -128,9 +126,7 @@ fn writing_after_flush_is_refused_not_panicked() {
     let cancel = CancelToken::new();
     let env = ProtocolEnv::new(&r, &cancel).with_whitelist(&["http"]);
     let url = format!("http://{addr}/upload");
-    let mut sink = r
-        .create(&url, IoFlags::WRITE, &Dict::new(), &env)
-        .unwrap();
+    let mut sink = r.create(&url, IoFlags::WRITE, &Dict::new(), &env).unwrap();
     sink.write(b"first").unwrap();
     let _ = sink.flush();
     assert!(sink.write(b"too late").is_err());

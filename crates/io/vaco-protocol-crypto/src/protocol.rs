@@ -82,7 +82,9 @@ impl Protocol for CryptoProtocol {
         // when the inner URL would otherwise be denied by the whitelist, so
         // the same ordering is reproduced here rather than opening first.
         let material = options::resolve(&parsed, flags)?;
-        let inner = env.registry.open(&inner_url(url), IoFlags::READ, opts, env)?;
+        let inner = env
+            .registry
+            .open(&inner_url(url), IoFlags::READ, opts, env)?;
         Ok(Box::new(CryptoSource::new(inner, material)))
     }
 
@@ -261,7 +263,8 @@ mod tests {
         let err = CRYPTO_PROTOCOL
             .proto
             .open(&url, IoFlags::READ, &opts, &e)
-            .err().unwrap();
+            .err()
+            .unwrap();
         assert!(matches!(
             err,
             vaco_protocol_core::ProtocolError::Denied { .. }
@@ -282,7 +285,8 @@ mod tests {
         let err = CRYPTO_PROTOCOL
             .proto
             .open(&url, IoFlags::READ, &opts, &e)
-            .err().unwrap();
+            .err()
+            .unwrap();
         // Not `Denied` (the whitelist), and not an I/O error about a missing
         // file — the option error, reported without ever reaching either.
         assert!(!matches!(

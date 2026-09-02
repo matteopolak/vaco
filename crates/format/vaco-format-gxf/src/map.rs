@@ -38,9 +38,9 @@ fn parse_tlv_items<'a>(bytes: &'a [u8], budget: &mut Budget) -> Result<HashMap<u
                 .get(off + 1)
                 .ok_or(Error::InvalidData("gxf: truncated tag/length/value item"))?,
         );
-        let value = bytes
-            .get(off + 2..off + 2 + len)
-            .ok_or(Error::InvalidData("gxf: tag/length/value item overruns its section"))?;
+        let value = bytes.get(off + 2..off + 2 + len).ok_or(Error::InvalidData(
+            "gxf: tag/length/value item overruns its section",
+        ))?;
         items.insert(tag, value);
         off += 2 + len;
     }
@@ -148,7 +148,8 @@ impl TrackDescription {
     /// no need for a persistent parsed form.
     fn mpeg_aux_param<'a>(&'a self, name: &str) -> Option<&'a str> {
         let aux = self.mpeg_video_aux.as_deref()?;
-        aux.lines().find_map(|line| line.strip_prefix(name)?.strip_prefix(' '))
+        aux.lines()
+            .find_map(|line| line.strip_prefix(name)?.strip_prefix(' '))
     }
 
     /// `Cg` (Table 7): `true` for a closed GOP structure. `None` when this
@@ -163,9 +164,9 @@ fn parse_track(payload: &[u8], off: &mut usize) -> Result<TrackDescription> {
     let media_type = *payload
         .get(*off)
         .ok_or(Error::InvalidData("gxf: truncated track description"))?;
-    let media_type = media_type
-        .checked_sub(0x80)
-        .ok_or(Error::InvalidData("gxf: track media type byte has no 0x80 bias"))?;
+    let media_type = media_type.checked_sub(0x80).ok_or(Error::InvalidData(
+        "gxf: track media type byte has no 0x80 bias",
+    ))?;
     let track_id = *payload
         .get(*off + 1)
         .ok_or(Error::InvalidData("gxf: truncated track description"))?;
@@ -176,12 +177,16 @@ fn parse_track(payload: &[u8], off: &mut usize) -> Result<TrackDescription> {
         payload
             .get(*off + 2..*off + 4)
             .and_then(|s| <[u8; 2]>::try_from(s).ok())
-            .ok_or(Error::InvalidData("gxf: truncated track description length"))?,
+            .ok_or(Error::InvalidData(
+                "gxf: truncated track description length",
+            ))?,
     ));
     *off += 4;
     let desc = payload
         .get(*off..*off + desc_len)
-        .ok_or(Error::InvalidData("gxf: track description overruns the track section"))?;
+        .ok_or(Error::InvalidData(
+            "gxf: track description overruns the track section",
+        ))?;
     *off += desc_len;
 
     let mut budget = Budget::new(vaco_limits::Limits::permissive());
@@ -234,12 +239,12 @@ pub const MAX_TRACKS: usize = 48;
 /// section-length field, or a tag/length/value item that runs past its
 /// declared section. [`Error::Unsupported`] past [`MAX_TRACKS`].
 pub fn parse(payload: &[u8], budget: &mut Budget) -> Result<MapPacket> {
-    let preamble = payload
-        .get(0..2)
-        .ok_or(Error::InvalidData("gxf: map packet payload is shorter than its preamble"))?;
-    let version_byte = *preamble
-        .first()
-        .ok_or(Error::InvalidData("gxf: map packet payload is shorter than its preamble"))?;
+    let preamble = payload.get(0..2).ok_or(Error::InvalidData(
+        "gxf: map packet payload is shorter than its preamble",
+    ))?;
+    let version_byte = *preamble.first().ok_or(Error::InvalidData(
+        "gxf: map packet payload is shorter than its preamble",
+    ))?;
     if version_byte & 0xE0 != MAP_VERSION_0 {
         return Err(Error::Unsupported(
             "gxf: map packet version is not 0 (this crate reads only version 0, per SMPTE 360-2009)",
@@ -250,11 +255,13 @@ pub fn parse(payload: &[u8], budget: &mut Budget) -> Result<MapPacket> {
         payload
             .get(2..4)
             .and_then(|s| <[u8; 2]>::try_from(s).ok())
-            .ok_or(Error::InvalidData("gxf: truncated material data section length"))?,
+            .ok_or(Error::InvalidData(
+                "gxf: truncated material data section length",
+            ))?,
     ));
-    let mat_bytes = payload
-        .get(4..4 + mat_len)
-        .ok_or(Error::InvalidData("gxf: material data section overruns the map packet"))?;
+    let mat_bytes = payload.get(4..4 + mat_len).ok_or(Error::InvalidData(
+        "gxf: material data section overruns the map packet",
+    ))?;
     let material = parse_material(&parse_tlv_items(mat_bytes, budget)?)?;
 
     let mut off = 4 + mat_len;
@@ -262,13 +269,17 @@ pub fn parse(payload: &[u8], budget: &mut Budget) -> Result<MapPacket> {
         payload
             .get(off..off + 2)
             .and_then(|s| <[u8; 2]>::try_from(s).ok())
-            .ok_or(Error::InvalidData("gxf: truncated track description section length"))?,
+            .ok_or(Error::InvalidData(
+                "gxf: truncated track description section length",
+            ))?,
     ));
     off += 2;
     let trk_end = off
         .checked_add(trk_len)
         .filter(|&e| e <= payload.len())
-        .ok_or(Error::InvalidData("gxf: track description section overruns the map packet"))?;
+        .ok_or(Error::InvalidData(
+            "gxf: track description section overruns the map packet",
+        ))?;
 
     let mut tracks = Vec::new();
     while off < trk_end {
@@ -290,7 +301,12 @@ pub fn parse(payload: &[u8], budget: &mut Budget) -> Result<MapPacket> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_limits::Limits;
@@ -326,7 +342,10 @@ mod tests {
         let video = &map.tracks[0];
         assert_eq!(video.media_type, 12); // MPEG-2 625 (Table 5)
         assert_eq!(video.track_id, 0);
-        assert_eq!(video.media_file_name.as_deref(), Some("EXT:/PDR/default/ES.M0"));
+        assert_eq!(
+            video.media_file_name.as_deref(),
+            Some("EXT:/PDR/default/ES.M0")
+        );
         assert_eq!(video.frame_rate_code, Some(6)); // 25 fps (Table 6)
         assert_eq!(video.lines_per_frame_code, Some(2)); // 625 lines
         assert_eq!(video.fields_per_frame_code, Some(2)); // interlaced storage
@@ -336,7 +355,10 @@ mod tests {
         let audio = &map.tracks[1];
         assert_eq!(audio.media_type, 10); // Audio PCM 16 (Table 5)
         assert_eq!(audio.track_id, 1);
-        assert_eq!(audio.media_file_name.as_deref(), Some("EXT:/PDR/default/ES.A0"));
+        assert_eq!(
+            audio.media_file_name.as_deref(),
+            Some("EXT:/PDR/default/ES.A0")
+        );
         assert_eq!(audio.frame_rate_code, Some(-2)); // "not available" (Table 6)
         assert_eq!(audio.aux_binary, Some([0u8; 8]));
 
@@ -362,9 +384,15 @@ mod tests {
 }
 
 fn push_tlv(buf: &mut Vec<u8>, tag: u8, value: &[u8]) {
-    debug_assert!(value.len() <= 0xFF, "gxf: tag/length/value item value longer than a byte can state");
+    debug_assert!(
+        value.len() <= 0xFF,
+        "gxf: tag/length/value item value longer than a byte can state"
+    );
     buf.push(tag);
-    #[allow(clippy::cast_possible_truncation, reason = "callers only ever pass values this crate itself sized to fit a u8 length")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "callers only ever pass values this crate itself sized to fit a u8 length"
+    )]
     buf.push(value.len() as u8);
     buf.extend_from_slice(value);
 }
@@ -398,7 +426,11 @@ pub fn encode(map: &MapPacket) -> Vec<u8> {
     push_tlv(&mut material, 0x42, &map.material.last_field.to_be_bytes());
     push_tlv(&mut material, 0x43, &map.material.mark_in.to_be_bytes());
     push_tlv(&mut material, 0x44, &map.material.mark_out.to_be_bytes());
-    push_tlv(&mut material, 0x45, &map.material.estimated_size_1024_bytes.to_be_bytes());
+    push_tlv(
+        &mut material,
+        0x45,
+        &map.material.estimated_size_1024_bytes.to_be_bytes(),
+    );
 
     let mut tracks = Vec::new();
     for t in &map.tracks {
@@ -439,7 +471,12 @@ pub fn encode(map: &MapPacket) -> Vec<u8> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod encode_tests {
     use super::*;
     use vaco_limits::Limits;
@@ -478,9 +515,15 @@ mod encode_tests {
         let bytes = encode(&original);
         let mut b = Budget::new(Limits::permissive());
         let parsed = parse(&bytes, &mut b).unwrap();
-        assert_eq!(parsed.material.media_file_name, original.material.media_file_name);
+        assert_eq!(
+            parsed.material.media_file_name,
+            original.material.media_file_name
+        );
         assert_eq!(parsed.material.last_field, original.material.last_field);
-        assert_eq!(parsed.material.estimated_size_1024_bytes, original.material.estimated_size_1024_bytes);
+        assert_eq!(
+            parsed.material.estimated_size_1024_bytes,
+            original.material.estimated_size_1024_bytes
+        );
         assert_eq!(parsed.tracks.len(), 2);
         assert_eq!(parsed.tracks[0].media_type, 12);
         assert_eq!(parsed.tracks[0].track_id, 0);

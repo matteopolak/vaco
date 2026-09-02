@@ -32,8 +32,8 @@
 use vaco_bitstream::GolombRead;
 use vaco_limits::{Budget, Limits};
 
-use crate::header::{HeaderKind, NalHeader};
 use crate::framing::Framing;
+use crate::header::{HeaderKind, NalHeader};
 use crate::rbsp::RbspBuf;
 
 /// `profile_idc` values whose `seq_parameter_set_data()` carries
@@ -124,7 +124,6 @@ fn high_profile_extension(sps_nal: &[u8]) -> Option<[u8; 4]> {
         0,
     ])
 }
-
 
 /// The HEVC fields an `hvcC` header needs that only the SPS carries — the
 /// `profile_tier_level()` block verbatim plus the four values that follow it
@@ -240,7 +239,9 @@ pub fn build_hevc_hvcc(vps: &[&[u8]], sps: &[&[u8]], pps: &[&[u8]]) -> Option<Ve
     out.extend_from_slice(&0u16.to_be_bytes()); // avgFrameRate
     // constantFrameRate(2) = 0, numTemporalLayers(3), temporalIdNested(1),
     // lengthSizeMinusOne(2) = 3.
-    out.push(((info.num_temporal_layers & 0x07) << 3) | ((info.temporal_id_nested & 1) << 2) | 0x03);
+    out.push(
+        ((info.num_temporal_layers & 0x07) << 3) | ((info.temporal_id_nested & 1) << 2) | 0x03,
+    );
 
     let arrays: [(u8, &[&[u8]]); 3] = [(32, vps), (33, sps), (34, pps)];
     out.push(u8::try_from(arrays.iter().filter(|(_, u)| !u.is_empty()).count()).unwrap_or(3));
@@ -528,7 +529,10 @@ mod tests {
         let hvcc = build_hevc_hvcc(&[&HEVC_VPS], &[&HEVC_SPS], &[&HEVC_PPS]).unwrap();
         assert_eq!(record_nal_length_size(HeaderKind::H265, &hvcc), Some(4));
         // Annex-B and empty declare nothing.
-        assert_eq!(record_nal_length_size(HeaderKind::H264, &[0, 0, 0, 1, 0x67]), None);
+        assert_eq!(
+            record_nal_length_size(HeaderKind::H264, &[0, 0, 0, 1, 0x67]),
+            None
+        );
         assert_eq!(record_nal_length_size(HeaderKind::H264, &[]), None);
     }
 

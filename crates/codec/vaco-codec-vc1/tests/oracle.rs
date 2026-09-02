@@ -40,9 +40,18 @@ const EXTRADATA: [u8; 12] = {
     let vert = 576u32.to_le_bytes();
     let horiz = 720u32.to_le_bytes();
     [
-        struct_c[0], struct_c[1], struct_c[2], struct_c[3],
-        vert[0], vert[1], vert[2], vert[3],
-        horiz[0], horiz[1], horiz[2], horiz[3],
+        struct_c[0],
+        struct_c[1],
+        struct_c[2],
+        struct_c[3],
+        vert[0],
+        vert[1],
+        vert[2],
+        vert[3],
+        horiz[0],
+        horiz[1],
+        horiz[2],
+        horiz[3],
     ]
 };
 
@@ -84,10 +93,17 @@ fn i_frame_matches_ffmpeg_per_plane() {
 
     let mut budget = Budget::new(Limits::permissive());
     let pkt = Packet::from_slice(&mut budget, payload).unwrap();
-    dec.send_packet(Some(&pkt)).expect("decode must not fail on this real fixture");
+    dec.send_packet(Some(&pkt))
+        .expect("decode must not fail on this real fixture");
     let frame = dec.receive_frame().expect("one frame must be produced");
 
-    let FrameData::Video { planes, width, height, .. } = &frame.data else {
+    let FrameData::Video {
+        planes,
+        width,
+        height,
+        ..
+    } = &frame.data
+    else {
         panic!("decoded frame has no video data");
     };
     assert_eq!(*width, 720);
@@ -105,7 +121,9 @@ fn i_frame_matches_ffmpeg_per_plane() {
         let mut out = vec![0u8; plane_w * plane_h];
         for row in 0..plane_h {
             let src_off = row * p.stride;
-            let Some(src) = data.get(src_off..src_off + plane_w) else { continue };
+            let Some(src) = data.get(src_off..src_off + plane_w) else {
+                continue;
+            };
             let dst_off = row * plane_w;
             if let Some(dst) = out.get_mut(dst_off..dst_off + plane_w) {
                 dst.copy_from_slice(src);
@@ -124,8 +142,12 @@ fn i_frame_matches_ffmpeg_per_plane() {
 
     eprintln!(
         "Y: max={} mean={:.3}  U: max={} mean={:.3}  V: max={} mean={:.3}",
-        y_stats.max_abs_diff, y_stats.mean_abs_diff, u_stats.max_abs_diff, u_stats.mean_abs_diff,
-        v_stats.max_abs_diff, v_stats.mean_abs_diff,
+        y_stats.max_abs_diff,
+        y_stats.mean_abs_diff,
+        u_stats.max_abs_diff,
+        u_stats.mean_abs_diff,
+        v_stats.max_abs_diff,
+        v_stats.mean_abs_diff,
     );
 
     // Per 705779d/D17: byte-exactness is not the bar, a small unstructured
@@ -134,7 +156,19 @@ fn i_frame_matches_ffmpeg_per_plane() {
     // is the first real bitstream this crate has ever decoded) but do
     // assert the *shape* that matters: no channel is wildly wrong, which
     // is what a swapped table, a wrong scan, or a sign error would produce.
-    assert!(y_stats.mean_abs_diff < 8.0, "luma mean deviation too high: {:.3}", y_stats.mean_abs_diff);
-    assert!(u_stats.mean_abs_diff < 8.0, "Cb mean deviation too high: {:.3}", u_stats.mean_abs_diff);
-    assert!(v_stats.mean_abs_diff < 8.0, "Cr mean deviation too high: {:.3}", v_stats.mean_abs_diff);
+    assert!(
+        y_stats.mean_abs_diff < 8.0,
+        "luma mean deviation too high: {:.3}",
+        y_stats.mean_abs_diff
+    );
+    assert!(
+        u_stats.mean_abs_diff < 8.0,
+        "Cb mean deviation too high: {:.3}",
+        u_stats.mean_abs_diff
+    );
+    assert!(
+        v_stats.mean_abs_diff < 8.0,
+        "Cr mean deviation too high: {:.3}",
+        v_stats.mean_abs_diff
+    );
 }

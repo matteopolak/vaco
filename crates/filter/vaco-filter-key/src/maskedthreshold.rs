@@ -72,10 +72,19 @@ use crate::common;
 use crate::sample;
 
 const PADS: &[Pad] = &[
-    Pad { name: "source", media_type: MediaType::Video },
-    Pad { name: "reference", media_type: MediaType::Video },
+    Pad {
+        name: "source",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "reference",
+        media_type: MediaType::Video,
+    },
 ];
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "maskedthreshold",
@@ -86,7 +95,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "maskedthreshold", help = "Pick pixels comparing absolute difference of two streams with threshold")]
+#[options(
+    name = "maskedthreshold",
+    help = "Pick pixels comparing absolute difference of two streams with threshold"
+)]
 pub(crate) struct Opts {
     #[opt(name = "threshold", help = "set threshold", default = 1, range = 0..=65535, flags(video, filtering))]
     pub threshold: i32,
@@ -125,18 +137,30 @@ struct Filter {
 }
 
 impl PairedFilter for Filter {
-    fn filter_frames(&mut self, ctx: &mut FilterContext<'_>, inputs: SmallVec<[Frame; 4]>) -> Result<FrameOut> {
+    fn filter_frames(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut> {
         let mut it = inputs.into_iter();
         let (Some(source), Some(reference)) = (it.next(), it.next()) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = source.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = source.data
+        else {
             return Ok(FrameOut::One(source));
         };
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         let big_endian = format.is_big_endian();
         for ch in 0..format.component_count() {
-            let Some(comp) = sample::component(format, ch) else { continue };
+            let Some(comp) = sample::component(format, ch) else {
+                continue;
+            };
             let (Some(sp), Some(rp), Some(mut dp)) = (
                 source.plane(comp.plane as usize),
                 reference.plane(comp.plane as usize),
@@ -144,11 +168,16 @@ impl PairedFilter for Filter {
             ) else {
                 continue;
             };
-            let w = dp.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+            let w = dp
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
             let n = dp.rows().min(sp.rows()).min(rp.rows());
             if !sample::plane_selected(self.planes, ch) {
                 for y in 0..n {
-                    let (Some(sr), Some(dr)) = (sp.row(y), dp.row_mut(y)) else { continue };
+                    let (Some(sr), Some(dr)) = (sp.row(y), dp.row_mut(y)) else {
+                        continue;
+                    };
                     let len = sr.len().min(dr.len());
                     if let (Some(s), Some(d)) = (sr.get(..len), dr.get_mut(..len)) {
                         d.copy_from_slice(s);
@@ -220,7 +249,12 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
 mod tests {
     #[test]
     fn hand_computed_pick_on_measured_cases() {
-        let cases: &[(i32, i32, i32, i32)] = &[(100, 102, 5, 100), (100, 106, 5, 106), (100, 96, 5, 100), (100, 94, 5, 94)];
+        let cases: &[(i32, i32, i32, i32)] = &[
+            (100, 102, 5, 100),
+            (100, 106, 5, 106),
+            (100, 96, 5, 100),
+            (100, 94, 5, 94),
+        ];
         for &(source, reference, threshold, expected) in cases {
             let diff = (source - reference).abs();
             let out = if diff <= threshold { source } else { reference };

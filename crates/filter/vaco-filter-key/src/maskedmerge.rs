@@ -20,7 +20,9 @@
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::negotiate::{FormatSet, NodeFormats, Tie};
-use vaco_filter_core::{Activity, Filter as FilterTrait, FilterContext, FilterDesc, FilterFlags, Pad};
+use vaco_filter_core::{
+    Activity, Filter as FilterTrait, FilterContext, FilterDesc, FilterFlags, Pad,
+};
 use vaco_frame::FrameData;
 use vaco_opts::OptionsExt as _;
 
@@ -30,11 +32,23 @@ use crate::common;
 use crate::sample;
 
 const PADS: &[Pad] = &[
-    Pad { name: "base", media_type: MediaType::Video },
-    Pad { name: "overlay", media_type: MediaType::Video },
-    Pad { name: "mask", media_type: MediaType::Video },
+    Pad {
+        name: "base",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "overlay",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "mask",
+        media_type: MediaType::Video,
+    },
 ];
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "maskedmerge",
@@ -45,7 +59,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "maskedmerge", help = "Merge first stream with second stream using third stream as mask")]
+#[options(
+    name = "maskedmerge",
+    help = "Merge first stream with second stream using third stream as mask"
+)]
 pub(crate) struct Opts {
     #[opt(name = "planes", help = "set planes", default = 15, range = 0..=15, flags(video, filtering))]
     pub planes: i32,
@@ -70,7 +87,11 @@ struct Filter {
 impl FilterTrait for Filter {
     fn activate(&mut self, ctx: &mut FilterContext<'_>) -> Result<Activity> {
         if !ctx.output_has_room(0) {
-            return Ok(if ctx.output_closed(0) { Activity::Eof } else { Activity::Blocked });
+            return Ok(if ctx.output_closed(0) {
+                Activity::Eof
+            } else {
+                Activity::Blocked
+            });
         }
         if (0..3).any(|p| ctx.input_at_eof(p)) {
             ctx.close_all_outputs();
@@ -88,7 +109,13 @@ impl FilterTrait for Filter {
             ctx.forward_wanted();
             return Ok(Activity::NeedInput);
         };
-        let FrameData::Video { format, width, height, .. } = base.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = base.data
+        else {
             let _ = ctx.take_input(0);
             let _ = ctx.take_input(1);
             let _ = ctx.take_input(2);
@@ -98,7 +125,9 @@ impl FilterTrait for Filter {
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         let big_endian = format.is_big_endian();
         for ch in 0..format.component_count() {
-            let Some(comp) = sample::component(format, ch) else { continue };
+            let Some(comp) = sample::component(format, ch) else {
+                continue;
+            };
             let (Some(base_plane), Some(overlay_plane), Some(mask_plane), Some(mut dst_plane)) = (
                 base.plane(comp.plane as usize),
                 overlay.plane(comp.plane as usize),
@@ -110,7 +139,8 @@ impl FilterTrait for Filter {
             if !sample::plane_selected(self.planes, ch) {
                 let n = dst_plane.rows().min(base_plane.rows());
                 for y in 0..n {
-                    let (Some(src_row), Some(dst_row)) = (base_plane.row(y), dst_plane.row_mut(y)) else {
+                    let (Some(src_row), Some(dst_row)) = (base_plane.row(y), dst_plane.row_mut(y))
+                    else {
                         continue;
                     };
                     let len = src_row.len().min(dst_row.len());
@@ -121,12 +151,22 @@ impl FilterTrait for Filter {
                 continue;
             }
             let max = f64::from(sample::max_value(comp));
-            let w = dst_plane.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
-            let n = dst_plane.rows().min(base_plane.rows()).min(overlay_plane.rows()).min(mask_plane.rows());
+            let w = dst_plane
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
+            let n = dst_plane
+                .rows()
+                .min(base_plane.rows())
+                .min(overlay_plane.rows())
+                .min(mask_plane.rows());
             for y in 0..n {
-                let (Some(base_row), Some(overlay_row), Some(mask_row), Some(dst_row)) =
-                    (base_plane.row(y), overlay_plane.row(y), mask_plane.row(y), dst_plane.row_mut(y))
-                else {
+                let (Some(base_row), Some(overlay_row), Some(mask_row), Some(dst_row)) = (
+                    base_plane.row(y),
+                    overlay_plane.row(y),
+                    mask_plane.row(y),
+                    dst_plane.row_mut(y),
+                ) else {
                     continue;
                 };
                 for x in 0..w {
@@ -172,7 +212,9 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     Ok(Instance {
         desc: DESC,
         formats,
-        filter: Box::new(Filter { planes: i64::from(opts.planes) }),
+        filter: Box::new(Filter {
+            planes: i64::from(opts.planes),
+        }),
     })
 }
 

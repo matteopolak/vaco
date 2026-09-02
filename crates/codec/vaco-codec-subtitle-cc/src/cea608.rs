@@ -287,11 +287,7 @@ mod tests {
     use super::*;
 
     fn parity(byte: u8) -> u8 {
-        if odd_parity(byte) {
-            byte
-        } else {
-            byte | 0x80
-        }
+        if odd_parity(byte) { byte } else { byte | 0x80 }
     }
 
     fn pair(a: u8, b: u8) -> [u8; 2] {
@@ -310,7 +306,9 @@ mod tests {
         assert_eq!(dec.feed(pair(0x11, 0x40), &mut errors), None);
         assert_eq!(dec.feed(pair(b'H', b'i'), &mut errors), None);
         // EOC swaps the buffers into view.
-        let screen = dec.feed(pair(0x14, 0x2F), &mut errors).expect("EOC shows a screen");
+        let screen = dec
+            .feed(pair(0x14, 0x2F), &mut errors)
+            .expect("EOC shows a screen");
         assert_eq!(screen.text(), "Hi");
         assert_eq!(errors, 0);
     }

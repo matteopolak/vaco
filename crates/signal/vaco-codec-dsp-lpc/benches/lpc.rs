@@ -16,7 +16,9 @@ const BLOCK: usize = 4096;
 const ORDER: usize = 32;
 
 fn ramp() -> Vec<f64> {
-    (0..BLOCK).map(|i| (i as f64 * 0.01).sin() * 1000.0).collect()
+    (0..BLOCK)
+        .map(|i| (i as f64 * 0.01).sin() * 1000.0)
+        .collect()
 }
 
 #[divan::bench]

@@ -92,7 +92,8 @@ impl Muxer for PatternWriterMuxer {
     }
 
     fn write_packet(&mut self, packet: &Packet) -> Result<()> {
-        self.writer.write_frame(packet.payload(), packet.pts.ticks())
+        self.writer
+            .write_frame(packet.payload(), packet.pts.ticks())
     }
 
     fn write_trailer(&mut self) -> Result<()> {

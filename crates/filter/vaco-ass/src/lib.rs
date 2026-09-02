@@ -28,6 +28,6 @@ pub mod script;
 pub mod style;
 pub mod tags;
 
-pub use plan::{plan_event, EventPlan, ResolvedStyle, TextRun};
-pub use script::{parse, Event, Script, ScriptInfo};
+pub use plan::{EventPlan, ResolvedStyle, TextRun, plan_event};
+pub use script::{Event, Script, ScriptInfo, parse};
 pub use style::Style;

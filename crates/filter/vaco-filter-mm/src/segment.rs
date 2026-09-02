@@ -68,7 +68,11 @@ fn parse_boundaries_indices(spec: &str) -> std::result::Result<Vec<Boundary>, St
         let value: i64 = digits
             .parse()
             .map_err(|_| format!("segment: bad boundary `{tok}`"))?;
-        running = if relative { running.saturating_add(value) } else { value };
+        running = if relative {
+            running.saturating_add(value)
+        } else {
+            value
+        };
         out.push(Boundary::Index(running));
     }
     Ok(out)
@@ -83,8 +87,12 @@ fn parse_boundaries_seconds(spec: &str) -> std::result::Result<Vec<Boundary>, St
             continue;
         }
         let relative = tok.starts_with('+');
-        let d = vaco_core::parse::duration(tok).ok_or_else(|| format!("segment: bad timestamp `{tok}`"))?;
-        #[allow(clippy::cast_precision_loss, reason = "display-scale duration conversion")]
+        let d = vaco_core::parse::duration(tok)
+            .ok_or_else(|| format!("segment: bad timestamp `{tok}`"))?;
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "display-scale duration conversion"
+        )]
         let secs = d.0 as f64 / 1_000_000.0;
         running = if relative { running + secs } else { secs };
         out.push(Boundary::Seconds(running));
@@ -294,7 +302,9 @@ mod tests {
             .collect();
         graph.connect(src, 0, node, 0).unwrap();
         for (i, &sink) in sinks.iter().enumerate() {
-            graph.connect(node, u32::try_from(i).unwrap(), sink, 0).unwrap();
+            graph
+                .connect(node, u32::try_from(i).unwrap(), sink, 0)
+                .unwrap();
         }
         let tb = vaco_core::Rational::new(1, 25);
         graph.set_source_format(src, gray_link(4, 4, tb)).unwrap();
@@ -325,7 +335,9 @@ mod tests {
             graph.send(src, gray_frame(4, 4, i, 0)).unwrap();
             drain(&mut graph, &mut counts);
         }
-        graph.close_source(src, vaco_core::Timestamp::new(n)).unwrap();
+        graph
+            .close_source(src, vaco_core::Timestamp::new(n))
+            .unwrap();
         while !drain(&mut graph, &mut counts) {}
         counts
     }

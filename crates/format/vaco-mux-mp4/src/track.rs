@@ -415,7 +415,11 @@ mod tests {
         push(&mut t, 10, 10, 0, 0, false);
         push(&mut t, 20, 10, 1024, 0, false);
         t.last_duration_hint = 1024;
-        assert_eq!(t.media_time(), 0, "cts_offset alone cannot see a negative dts");
+        assert_eq!(
+            t.media_time(),
+            0,
+            "cts_offset alone cannot see a negative dts"
+        );
         assert_eq!(t.presented_duration(), t.media_duration() - 1024);
     }
 

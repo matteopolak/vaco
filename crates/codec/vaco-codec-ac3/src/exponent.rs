@@ -52,7 +52,11 @@ pub fn decode(r: &mut BitReader<'_>, absexp: u8, ncodes: usize, strategy: ExpStr
     let mut prev = absexp;
     for _ in 0..ncodes {
         let code = r.get(7);
-        for m in [decode_digit(code, 25), decode_digit(code % 25, 5), code % 25 % 5] {
+        for m in [
+            decode_digit(code, 25),
+            decode_digit(code % 25, 5),
+            code % 25 % 5,
+        ] {
             let dexp = i32::from(u8::try_from(m).unwrap_or(0)) - 2;
             let next = (i64::from(prev) + i64::from(dexp)).clamp(0, 24);
             prev = u8::try_from(next).unwrap_or(prev);

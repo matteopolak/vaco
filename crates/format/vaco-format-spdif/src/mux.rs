@@ -173,9 +173,9 @@ mod tests {
         let mirror = sink.clone();
         let mut mux = SpdifMuxer::new(Box::new(sink));
         let idx = mux
-            .add_stream(&CodecParameters::new(MediaType::Audio).with_codec(
-                vaco_codec_core::CodecId::Ac3,
-            ))
+            .add_stream(
+                &CodecParameters::new(MediaType::Audio).with_codec(vaco_codec_core::CodecId::Ac3),
+            )
             .unwrap();
         assert_eq!(idx, 0);
         mux.write_header().unwrap();
@@ -183,7 +183,10 @@ mod tests {
         mux.write_trailer().unwrap();
         let bytes = mirror.take();
         assert_eq!(bytes.len(), AC3_BURST_BYTES);
-        assert_eq!(&bytes[0..8], &[0x72, 0xF8, 0x1F, 0x4E, 0x01, 0x00, 0x00, 0x18]);
+        assert_eq!(
+            &bytes[0..8],
+            &[0x72, 0xF8, 0x1F, 0x4E, 0x01, 0x00, 0x00, 0x18]
+        );
         // The AC-3 sync word 0x0B77 appears byte-swapped in the burst.
         assert_eq!(&bytes[8..10], &[0x77, 0x0B]);
         assert!(bytes[8 + 768..].iter().all(|&b| b == 0));

@@ -130,7 +130,9 @@ pub fn encode_pbm(frame: &Frame) -> Result<Vec<u8>> {
         return Err(Error::Unsupported("pbm: encoder needs monowhite input"));
     }
     let (width, height) = (*width, *height);
-    let plane = planes.first().ok_or(Error::InvalidData("pnm: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("pnm: no plane 0"))?;
     let row_len = row_bytes_for_bits(width);
     let mut out = format!("P4\n{width} {height}\n").into_bytes();
     let src = plane.data.as_slice();
@@ -212,7 +214,9 @@ fn decode_gray_or_rgb(data: &[u8], budget: &mut Budget, kind: Kind) -> Result<Fr
             let dst = buf
                 .get_mut(dst_off..dst_off.saturating_add(pixel_bytes))
                 .ok_or(Error::InvalidData("pnm: pixel out of bounds"))?;
-            let src = pixel.get(..pixel_bytes).ok_or(Error::InvalidData("pnm: short pixel"))?;
+            let src = pixel
+                .get(..pixel_bytes)
+                .ok_or(Error::InvalidData("pnm: short pixel"))?;
             dst.copy_from_slice(src);
         }
     }
@@ -293,12 +297,16 @@ fn encode_gray_or_rgb(frame: &Frame, kind: Kind) -> Result<Vec<u8>> {
         Kind::Bitmap => false,
     };
     if !narrow && !want_wide {
-        return Err(Error::Unsupported("pnm: unexpected pixel format for encoder"));
+        return Err(Error::Unsupported(
+            "pnm: unexpected pixel format for encoder",
+        ));
     }
     let sample_bytes = if want_wide { 2 } else { 1 };
     let maxval = if want_wide { 65535 } else { 255 };
     let (width, height) = (*width, *height);
-    let plane = planes.first().ok_or(Error::InvalidData("pnm: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("pnm: no plane 0"))?;
     let src = plane.data.as_slice();
     let pixel_bytes = sample_bytes * channels;
 

@@ -106,5 +106,8 @@ fn fetch_rejects_a_server_that_serves_the_wrong_bytes() {
 
     let err = fetch::fetch(&e, &store, NetworkPolicy::Allowed).unwrap_err();
     assert!(matches!(err, fetch::FetchError::Store(_)));
-    assert!(!store.has(&wrong_hash), "a hash mismatch must store nothing");
+    assert!(
+        !store.has(&wrong_hash),
+        "a hash mismatch must store nothing"
+    );
 }

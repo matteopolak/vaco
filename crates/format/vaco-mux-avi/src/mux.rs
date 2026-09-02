@@ -408,7 +408,8 @@ impl AviMuxer {
                 .saturating_add(duration_ticks);
             let gap = target.saturating_sub(stream.count);
             if gap > 0 {
-                let entry_bytes = u64::try_from(core::mem::size_of::<IdxEntry>()).unwrap_or(u64::MAX);
+                let entry_bytes =
+                    u64::try_from(core::mem::size_of::<IdxEntry>()).unwrap_or(u64::MAX);
                 self.grid_budget.consume_fuel(gap)?;
                 let idx_bytes = gap
                     .checked_mul(entry_bytes)
@@ -805,10 +806,10 @@ impl Muxer for AviMuxer {
             // `write_packet` never reads audio timestamps at all, so nothing
             // here needed the coarser unit; only the `strh` field did.
             out.time_base = Rational::new(1, sample_rate);
-            out.strh_time_base = compressed_audio_frame_size(codec_id).map_or(
-                out.time_base,
-                |frame_size| Rational::new(frame_size.cast_signed(), sample_rate).reduced(),
-            );
+            out.strh_time_base = compressed_audio_frame_size(codec_id)
+                .map_or(out.time_base, |frame_size| {
+                    Rational::new(frame_size.cast_signed(), sample_rate).reduced()
+                });
             out.audio_format_tag = audio_format_tag(codec_id)
                 .ok_or(Error::Unsupported("avi: codec has no AVI wFormatTag"))?;
             out.audio_extradata = params.extradata.clone().filter(|e| !e.is_empty());
@@ -874,7 +875,11 @@ impl Muxer for AviMuxer {
         let avih_total_frames_rel = write_avih(&mut hdrl, &self.streams);
         let mut strl_offsets = Vec::new();
         for (index, s) in self.streams.iter().enumerate() {
-            strl_offsets.push(write_strl(&mut hdrl, u32::try_from(index).unwrap_or(u32::MAX), s));
+            strl_offsets.push(write_strl(
+                &mut hdrl,
+                u32::try_from(index).unwrap_or(u32::MAX),
+                s,
+            ));
         }
         hdrl.extend_from_slice(b"JUNK");
         hdrl.extend_from_slice(&(HDRL_JUNK.len() as u32).to_le_bytes());
@@ -888,12 +893,12 @@ impl Muxer for AviMuxer {
         self.avih_total_frames_at = hdrl_body_start + avih_total_frames_rel as u64;
         for (s, offsets) in self.streams.iter_mut().zip(strl_offsets) {
             s.length_field_at = (hdrl_body_start + offsets.length_field_at as u64) as usize;
-            s.suggested_buffer_at =
-                (hdrl_body_start + offsets.suggested_buffer_at as u64) as usize;
+            s.suggested_buffer_at = (hdrl_body_start + offsets.suggested_buffer_at as u64) as usize;
         }
 
         self.out.write_tag(b"JUNK")?;
-        self.out.wl32(u32::try_from(RIFF_JUNK.len()).unwrap_or(u32::MAX))?;
+        self.out
+            .wl32(u32::try_from(RIFF_JUNK.len()).unwrap_or(u32::MAX))?;
         self.out.write(&RIFF_JUNK)?;
 
         self.out.write_tag(b"LIST")?;

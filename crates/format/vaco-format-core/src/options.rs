@@ -586,64 +586,82 @@ impl FormatOptions {
         if self.avioflags != AvioFlags::empty() {
             return Err(vaco_core::Error::Option {
                 name: "avioflags".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.packetsize != 0 {
             return Err(vaco_core::Error::Option {
                 name: "packetsize".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.cryptokey != vaco_opts::Binary::default() {
             return Err(vaco_core::Error::Option {
                 name: "cryptokey".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.fdebug != FDebugFlags::empty() {
             return Err(vaco_core::Error::Option {
                 name: "fdebug".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.use_wallclock_as_timestamps {
             return Err(vaco_core::Error::Option {
                 name: "use_wallclock_as_timestamps".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.skip_initial_bytes != 0_i64 {
             return Err(vaco_core::Error::Option {
                 name: "skip_initial_bytes".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.dump_separator != String::new() {
             return Err(vaco_core::Error::Option {
                 name: "dump_separator".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.protocol_whitelist != String::new() {
             return Err(vaco_core::Error::Option {
                 name: "protocol_whitelist".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.protocol_blacklist != String::new() {
             return Err(vaco_core::Error::Option {
                 name: "protocol_blacklist".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         // `rtbufsize`/`max_delay`/`err_detect`: this doc's own table used to
@@ -654,22 +672,28 @@ impl FormatOptions {
         if self.rtbufsize != 3_041_280 {
             return Err(vaco_core::Error::Option {
                 name: "rtbufsize".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.max_delay != -1 {
             return Err(vaco_core::Error::Option {
                 name: "max_delay".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         if self.err_detect != ErrDetectFlags::CRCCHECK {
             return Err(vaco_core::Error::Option {
                 name: "err_detect".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         // `recursion_limit` (default 10): ours, not the reference's, meant as
@@ -685,8 +709,10 @@ impl FormatOptions {
         if self.recursion_limit != 10 {
             return Err(vaco_core::Error::Option {
                 name: "recursion_limit".to_owned(),
-                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
-                         refusing rather than silently ignoring it".to_owned(),
+                detail:
+                    "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it"
+                        .to_owned(),
             });
         }
         Ok(())

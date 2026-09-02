@@ -523,9 +523,13 @@ mod free_format_tests {
         data.resize(30, 0);
         data.extend_from_slice(&this_header.to_bytes());
 
-        let mut io = IoContext::new(Box::new(MemorySource::new(data)), &IoOptions::default()).unwrap();
+        let mut io =
+            IoContext::new(Box::new(MemorySource::new(data)), &IoOptions::default()).unwrap();
         let len = measure_free_format_len(&mut io, this_header).unwrap();
-        assert_eq!(len, 30, "must skip the false sync and land on the real next frame");
+        assert_eq!(
+            len, 30,
+            "must skip the false sync and land on the real next frame"
+        );
     }
 
     /// A genuine same-parameters header at the very next 4 bytes is
@@ -537,7 +541,8 @@ mod free_format_tests {
         data.resize(21, 0);
         data.extend_from_slice(&this_header.to_bytes());
 
-        let mut io = IoContext::new(Box::new(MemorySource::new(data)), &IoOptions::default()).unwrap();
+        let mut io =
+            IoContext::new(Box::new(MemorySource::new(data)), &IoOptions::default()).unwrap();
         let len = measure_free_format_len(&mut io, this_header).unwrap();
         assert_eq!(len, 21);
     }

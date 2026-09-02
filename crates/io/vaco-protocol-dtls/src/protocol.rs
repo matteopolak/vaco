@@ -6,8 +6,7 @@ use vaco_core::Error as CoreError;
 use vaco_io::{MediaSink, MediaSource, PeekSource, RawSource, Seekability};
 use vaco_opts::{Dict, OptionsExt, Schema, schema_of};
 use vaco_protocol_core::{
-    Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result,
-    Url,
+    Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result, Url,
 };
 
 use crate::connect::{self, DtlsStream};
@@ -156,10 +155,22 @@ impl DtlsProtocol {
         let ca_pem = ca_file_pem(opts)?;
         if flags.listen || opts.listen > 0 {
             let socket = listen::bind_accept(&hp, env.rw_timeout)?;
-            listen::handshake(socket, opts, cert_pem.as_deref(), key_pem.as_deref(), ca_pem.as_deref())
+            listen::handshake(
+                socket,
+                opts,
+                cert_pem.as_deref(),
+                key_pem.as_deref(),
+                ca_pem.as_deref(),
+            )
         } else {
             let socket = connect::connect_udp(&hp, env.rw_timeout, env)?;
-            connect::handshake(socket, opts, cert_pem.as_deref(), key_pem.as_deref(), ca_pem.as_deref())
+            connect::handshake(
+                socket,
+                opts,
+                cert_pem.as_deref(),
+                key_pem.as_deref(),
+                ca_pem.as_deref(),
+            )
         }
     }
 }

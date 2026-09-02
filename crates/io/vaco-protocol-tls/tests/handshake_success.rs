@@ -42,14 +42,12 @@ fn registry() -> ProtocolRegistry {
 }
 
 fn server_config() -> Arc<ServerConfig> {
-    let certs: Vec<CertificateDer<'static>> = vaco_protocol_tls::pem::extract_der_blocks(
-        CERT_PEM,
-        "CERTIFICATE",
-    )
-    .unwrap()
-    .into_iter()
-    .map(CertificateDer::from)
-    .collect();
+    let certs: Vec<CertificateDer<'static>> =
+        vaco_protocol_tls::pem::extract_der_blocks(CERT_PEM, "CERTIFICATE")
+            .unwrap()
+            .into_iter()
+            .map(CertificateDer::from)
+            .collect();
     let key_der = vaco_protocol_tls::pem::extract_der_blocks(KEY_PEM, "PRIVATE KEY")
         .unwrap()
         .into_iter()
@@ -123,7 +121,13 @@ fn verify_true_succeeds_against_a_trusted_private_ca() {
 
     let mut opts = Dict::new();
     opts.set("verify", "1");
-    opts.set("ca_file", concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/localhost-cert.pem"));
+    opts.set(
+        "ca_file",
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/localhost-cert.pem"
+        ),
+    );
 
     let mut src = r.open(&url, IoFlags::READ, &opts, &env).unwrap();
     let mut buf = [0u8; 64];

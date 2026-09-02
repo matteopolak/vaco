@@ -98,7 +98,10 @@ use vaco_filter_graph::registry::{Instance, Instantiate};
 use crate::common;
 use crate::sample;
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "lut3d",
@@ -170,7 +173,8 @@ impl Cube3d {
             let (Some(r), Some(g), Some(b)) = (parts.next(), parts.next(), parts.next()) else {
                 return Err(format!("lut3d: malformed row `{line}`"));
             };
-            let (Ok(r), Ok(g), Ok(b)) = (r.parse::<f64>(), g.parse::<f64>(), b.parse::<f64>()) else {
+            let (Ok(r), Ok(g), Ok(b)) = (r.parse::<f64>(), g.parse::<f64>(), b.parse::<f64>())
+            else {
                 return Err(format!("lut3d: non-numeric row `{line}`"));
             };
             data.push([r, g, b]);
@@ -203,8 +207,16 @@ impl Cube3d {
             return self.at(0, 0, 0);
         }
         let scale = (self.size - 1) as f64;
-        let (rf, gf, bf) = (r.clamp(0.0, 1.0) * scale, g.clamp(0.0, 1.0) * scale, b.clamp(0.0, 1.0) * scale);
-        let (r0, g0, b0) = (rf.floor() as usize, gf.floor() as usize, bf.floor() as usize);
+        let (rf, gf, bf) = (
+            r.clamp(0.0, 1.0) * scale,
+            g.clamp(0.0, 1.0) * scale,
+            b.clamp(0.0, 1.0) * scale,
+        );
+        let (r0, g0, b0) = (
+            rf.floor() as usize,
+            gf.floor() as usize,
+            bf.floor() as usize,
+        );
         let (rd, gd, bd) = (rf - r0 as f64, gf - g0 as f64, bf - b0 as f64);
         let c000 = self.at(r0, g0, b0);
         let c100 = self.at(r0 + 1, g0, b0);
@@ -300,7 +312,10 @@ impl Filter {
         let max_g = f64::from(sample::max_value(cg));
         let max_b = f64::from(sample::max_value(cb));
         let rows = pr.rows();
-        let w = pr.row_bytes().checked_div(usize::from(cr.step.max(1))).unwrap_or(0);
+        let w = pr
+            .row_bytes()
+            .checked_div(usize::from(cr.step.max(1)))
+            .unwrap_or(0);
         // Snapshot the source before any plane is (potentially) aliased
         // with another for a packed format where R/G/B share bytes.
         let src: Vec<Vec<(u16, u16, u16)>> = (0..rows)
@@ -327,8 +342,14 @@ impl Filter {
         for y in 0..rows {
             let Some(row_src) = src.get(y) else { continue };
             for x in 0..w {
-                let Some(&(vr, vg, vb)) = row_src.get(x) else { continue };
-                let (r, g, b) = (f64::from(vr) / max_r, f64::from(vg) / max_g, f64::from(vb) / max_b);
+                let Some(&(vr, vg, vb)) = row_src.get(x) else {
+                    continue;
+                };
+                let (r, g, b) = (
+                    f64::from(vr) / max_r,
+                    f64::from(vg) / max_g,
+                    f64::from(vb) / max_b,
+                );
                 let out = match self.interp {
                     Interp::Nearest => self.cube.sample_nearest(r, g, b),
                     Interp::Trilinear => self.cube.sample_trilinear(r, g, b),
@@ -370,7 +391,9 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
         .map_err(|e| format!("lut3d: could not read `{}`: {e}", opts.file))?;
     let cube = Cube3d::parse(&text)?;
     let interp = Interp::from_opt(opts.interp)?;
-    let set = FormatSet::video_list(common::formats_where(|f| f.is_rgb() && sample::is_addressable(f)));
+    let set = FormatSet::video_list(common::formats_where(|f| {
+        f.is_rgb() && sample::is_addressable(f)
+    }));
     Ok(Instance {
         desc: DESC,
         formats: NodeFormats::uniform(1, 1, MediaType::Video, &set, req.instance),
@@ -411,7 +434,12 @@ mod tests {
         // itself) must reproduce its input exactly under trilinear
         // interpolation, for any interior point too.
         let cube = identity_cube();
-        for &(r, g, b) in &[(0.0, 0.0, 0.0), (1.0, 1.0, 1.0), (0.3, 0.7, 0.5), (0.123, 0.456, 0.789)] {
+        for &(r, g, b) in &[
+            (0.0, 0.0, 0.0),
+            (1.0, 1.0, 1.0),
+            (0.3, 0.7, 0.5),
+            (0.123, 0.456, 0.789),
+        ] {
             let out = cube.sample_trilinear(r, g, b);
             assert!((out[0] - r).abs() < 1e-9, "r: {out:?} vs {r}");
             assert!((out[1] - g).abs() < 1e-9, "g: {out:?} vs {g}");
@@ -432,7 +460,10 @@ mod tests {
             row[1] = 0x34;
             row[2] = 0x56;
         }
-        let f = Filter { cube: identity_cube(), interp: Interp::Trilinear };
+        let f = Filter {
+            cube: identity_cube(),
+            interp: Interp::Trilinear,
+        };
         f.apply_frame(&mut frame);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(row, &[0x12, 0x34, 0x56]);
@@ -460,7 +491,10 @@ mod tests {
             row[1] = 0x80;
             row[2] = 0x80;
         }
-        let f = Filter { cube, interp: Interp::Nearest };
+        let f = Filter {
+            cube,
+            interp: Interp::Nearest,
+        };
         f.apply_frame(&mut frame);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(row, &[0x7f, 0x7f, 0x7f]);

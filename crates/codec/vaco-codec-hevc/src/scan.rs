@@ -137,7 +137,11 @@ mod tests {
                 let scan = generate(size, order);
                 assert_eq!(scan.len(), size * size, "size={size} order={order:?}");
                 let set: HashSet<_> = scan.iter().copied().collect();
-                assert_eq!(set.len(), scan.len(), "size={size} order={order:?} has duplicates");
+                assert_eq!(
+                    set.len(),
+                    scan.len(),
+                    "size={size} order={order:?} has duplicates"
+                );
                 for &(x, y) in &scan {
                     assert!((x as usize) < size && (y as usize) < size);
                 }
@@ -196,13 +200,21 @@ mod tests {
                 let scan = generate_grouped(size, order);
                 assert_eq!(scan.len(), size * size);
                 let set: HashSet<_> = scan.iter().copied().collect();
-                assert_eq!(set.len(), scan.len(), "size={size} order={order:?} has duplicates");
+                assert_eq!(
+                    set.len(),
+                    scan.len(),
+                    "size={size} order={order:?} has duplicates"
+                );
                 // Every run of 16 consecutive scan positions stays within one
                 // 4x4 sub-block (the property a flat full-size scan breaks).
                 for chunk in scan.chunks(16) {
                     let (gx, gy) = (chunk[0].0 >> 2, chunk[0].1 >> 2);
                     for &(x, y) in chunk {
-                        assert_eq!((x >> 2, y >> 2), (gx, gy), "size={size} order={order:?} chunk crosses a sub-block");
+                        assert_eq!(
+                            (x >> 2, y >> 2),
+                            (gx, gy),
+                            "size={size} order={order:?} chunk crosses a sub-block"
+                        );
                     }
                 }
             }

@@ -295,7 +295,9 @@ impl VorbisEncoder {
         packet.pts = self
             .base_pts
             .map(|base| {
-                base.saturating_add(i64::from(self.windows_emitted) * i64::try_from(HOP).unwrap_or(i64::MAX))
+                base.saturating_add(
+                    i64::from(self.windows_emitted) * i64::try_from(HOP).unwrap_or(i64::MAX),
+                )
             })
             .map_or(vaco_core::Timestamp::NONE, vaco_core::Timestamp::new);
         // Same bug class as `vaco-codec-flac`/`vaco-codec-alac`'s encoders,

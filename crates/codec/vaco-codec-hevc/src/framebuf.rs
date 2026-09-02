@@ -26,7 +26,10 @@ use crate::intra_mode::DC_IDX;
 
 /// A luma pixel coordinate's 4-sample block index — the whole reason
 /// [`CuGrid`] exists at this granularity.
-#[allow(clippy::integer_division, reason = "block index = pixel coordinate / the fixed 4-sample block size")]
+#[allow(
+    clippy::integer_division,
+    reason = "block index = pixel coordinate / the fixed 4-sample block size"
+)]
 const fn block_of(x: usize) -> usize {
     x / 4
 }
@@ -73,7 +76,14 @@ impl Plane {
         let ready_cols = width.div_ceil(4).max(1);
         let ready_rows = height.div_ceil(4).max(1);
         let ready = vec![false; ready_cols.saturating_mul(ready_rows)];
-        Ok(Self { width, height, data, ready_cols, ready_rows, ready })
+        Ok(Self {
+            width,
+            height,
+            data,
+            ready_cols,
+            ready_rows,
+            ready,
+        })
     }
 
     fn index(&self, x: usize, y: usize) -> Option<usize> {
@@ -101,7 +111,10 @@ impl Plane {
     /// the plane's own storage is `u8`.
     #[must_use]
     pub(crate) fn get(&self, x: usize, y: usize) -> u16 {
-        self.index(x, y).and_then(|i| self.data.get(i)).copied().map_or(0, u16::from)
+        self.index(x, y)
+            .and_then(|i| self.data.get(i))
+            .copied()
+            .map_or(0, u16::from)
     }
 
     /// Write a final reconstructed sample and mark its 4x4 block available.
@@ -123,8 +136,14 @@ impl Plane {
         if w == 0 || h == 0 || x0 >= self.width || y0 >= self.height {
             return;
         }
-        let x1 = x0.saturating_add(w).saturating_sub(1).min(self.width.saturating_sub(1));
-        let y1 = y0.saturating_add(h).saturating_sub(1).min(self.height.saturating_sub(1));
+        let x1 = x0
+            .saturating_add(w)
+            .saturating_sub(1)
+            .min(self.width.saturating_sub(1));
+        let y1 = y0
+            .saturating_add(h)
+            .saturating_sub(1)
+            .min(self.height.saturating_sub(1));
         let (bx0, by0, bx1, by1) = (block_of(x0), block_of(y0), block_of(x1), block_of(y1));
         for by in by0..=by1 {
             for bx in bx0..=bx1 {
@@ -308,7 +327,8 @@ impl CuGridBand {
     /// [`CuGrid::budget_bytes`]'s own doc for why the whole grid's total is
     /// just this summed across every band.
     fn budget_bytes(&self) -> u64 {
-        let bytes = |len: usize, size: usize| u64::try_from(len.saturating_mul(size)).unwrap_or(u64::MAX);
+        let bytes =
+            |len: usize, size: usize| u64::try_from(len.saturating_mul(size)).unwrap_or(u64::MAX);
         bytes(self.depth.len(), 1)
             .saturating_add(bytes(self.mode.len(), 1))
             .saturating_add(bytes(self.qp.len(), 1))
@@ -355,12 +375,23 @@ impl CuGridShared {
     /// by [`CuGrid`] — see [`EdgeMarksShared::new`]'s own doc for why a
     /// borrow, not an `Arc`.
     #[must_use]
-    pub(crate) fn new(luma_width: usize, luma_height: usize, has_l1: bool, ctb_size: usize) -> Self {
+    pub(crate) fn new(
+        luma_width: usize,
+        luma_height: usize,
+        has_l1: bool,
+        ctb_size: usize,
+    ) -> Self {
         let cols = luma_width.div_ceil(4).max(1);
         let total_rows = luma_height.div_ceil(4).max(1);
         let band_rows = ctb_size.max(1).div_ceil(4).max(1);
         let n_bands = total_rows.div_ceil(band_rows).max(1);
-        Self { cols, band_rows, n_bands, has_l1, published: crate::wavefront::RowPublish::new(n_bands) }
+        Self {
+            cols,
+            band_rows,
+            n_bands,
+            has_l1,
+            published: crate::wavefront::RowPublish::new(n_bands),
+        }
     }
 }
 
@@ -382,18 +413,28 @@ impl<'a> CuGrid<'a> {
     /// [`vaco_core::Error`] if the first band's allocation exceeds `budget`.
     pub(crate) fn new(budget: &mut Budget, shared: &'a CuGridShared) -> Result<Self> {
         let current = CuGridBand::new(budget, shared.cols, shared.band_rows, shared.has_l1)?;
-        Ok(Self { shared, current_band: 0, current: Some(current) })
+        Ok(Self {
+            shared,
+            current_band: 0,
+            current: Some(current),
+        })
     }
 
     /// The row band containing 4x4-block row `by`.
-    #[allow(clippy::integer_division, reason = "row band index = block row / the fixed CTB row-band height")]
+    #[allow(
+        clippy::integer_division,
+        reason = "row band index = block row / the fixed CTB row-band height"
+    )]
     fn band_of(&self, by: usize) -> usize {
         by / self.shared.band_rows
     }
 
     /// `by`'s own row within whichever band [`CuGrid::band_of`] says it
     /// belongs to.
-    #[allow(clippy::integer_division, reason = "same fixed CTB row-band height as band_of, its own remainder")]
+    #[allow(
+        clippy::integer_division,
+        reason = "same fixed CTB row-band height as band_of, its own remainder"
+    )]
     fn local_of(&self, by: usize) -> usize {
         by % self.shared.band_rows
     }
@@ -435,13 +476,20 @@ impl<'a> CuGrid<'a> {
     /// [`crate::wavefront::RowPublish`] itself refuses a publish.
     pub(crate) fn begin_row(&mut self, budget: &mut Budget, row_band: usize) -> Result<()> {
         if row_band < self.current_band {
-            return Err(Error::InvalidData("vaco-codec-hevc: cu grid rows must advance in order"));
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: cu grid rows must advance in order",
+            ));
         }
         while self.current_band < row_band {
             if let Some(band) = self.current.take() {
                 self.shared.published.publish(self.current_band, band)?;
             }
-            self.current = Some(CuGridBand::new(budget, self.shared.cols, self.shared.band_rows, self.shared.has_l1)?);
+            self.current = Some(CuGridBand::new(
+                budget,
+                self.shared.cols,
+                self.shared.band_rows,
+                self.shared.has_l1,
+            )?);
             self.current_band = self.current_band.saturating_add(1);
         }
         Ok(())
@@ -460,7 +508,9 @@ impl<'a> CuGrid<'a> {
     /// [`CuGrid::begin_row`]'s own `Errors` section gives.
     pub(crate) fn finish(&mut self) -> Result<()> {
         while self.current_band < self.shared.n_bands {
-            let Some(band) = self.current.take() else { break };
+            let Some(band) = self.current.take() else {
+                break;
+            };
             self.shared.published.publish(self.current_band, band)?;
             self.current_band = self.current_band.saturating_add(1);
         }
@@ -470,11 +520,21 @@ impl<'a> CuGrid<'a> {
 
     /// Paint one coding unit's whole footprint (in 4-sample blocks) with its
     /// final quadtree depth and, for intra, its luma mode.
-    pub(crate) fn fill(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, depth: u8, mode: u8) {
+    pub(crate) fn fill(
+        &mut self,
+        bx0: usize,
+        by0: usize,
+        blocks_w: usize,
+        blocks_h: usize,
+        depth: u8,
+        mode: u8,
+    ) {
         let cols = self.shared.cols;
         let band_rows = self.shared.band_rows;
         let local_by0 = self.local_of(by0);
-        let Some(band) = self.current_band_mut(by0) else { return };
+        let Some(band) = self.current_band_mut(by0) else {
+            return;
+        };
         for local_by in local_by0..local_by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
                 if let Some(i) = cu_index_in(cols, band_rows, bx, local_by) {
@@ -503,7 +563,12 @@ impl<'a> CuGrid<'a> {
         };
         let (bx, by) = (block_of(px), block_of(py));
         let band = self.band_for(by)?;
-        let i = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by))?;
+        let i = cu_index_in(
+            self.shared.cols,
+            self.shared.band_rows,
+            bx,
+            self.local_of(by),
+        )?;
         if !band.written.get(i).copied().unwrap_or(false) {
             return None;
         }
@@ -522,7 +587,12 @@ impl<'a> CuGrid<'a> {
         let Some(band) = self.band_for(by) else {
             return DC_IDX;
         };
-        let Some(i) = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by)) else {
+        let Some(i) = cu_index_in(
+            self.shared.cols,
+            self.shared.band_rows,
+            bx,
+            self.local_of(by),
+        ) else {
             return DC_IDX;
         };
         if !band.written.get(i).copied().unwrap_or(false) {
@@ -535,11 +605,20 @@ impl<'a> CuGrid<'a> {
     /// finalised luma `QpY` — called once per coding unit, after its whole
     /// transform tree has been walked (see this struct's own doc for why
     /// that timing differs from [`CuGrid::fill`]'s).
-    pub(crate) fn fill_qp(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, qp: i8) {
+    pub(crate) fn fill_qp(
+        &mut self,
+        bx0: usize,
+        by0: usize,
+        blocks_w: usize,
+        blocks_h: usize,
+        qp: i8,
+    ) {
         let cols = self.shared.cols;
         let band_rows = self.shared.band_rows;
         let local_by0 = self.local_of(by0);
-        let Some(band) = self.current_band_mut(by0) else { return };
+        let Some(band) = self.current_band_mut(by0) else {
+            return;
+        };
         for local_by in local_by0..local_by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
                 if let Some(i) = cu_index_in(cols, band_rows, bx, local_by) {
@@ -567,7 +646,12 @@ impl<'a> CuGrid<'a> {
         };
         let (bx, by) = (block_of(px), block_of(py));
         let band = self.band_for(by)?;
-        let i = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by))?;
+        let i = cu_index_in(
+            self.shared.cols,
+            self.shared.band_rows,
+            bx,
+            self.local_of(by),
+        )?;
         if !band.qp_written.get(i).copied().unwrap_or(false) {
             return None;
         }
@@ -581,16 +665,40 @@ impl<'a> CuGrid<'a> {
     /// z-scan order" availability, which for an inter PU includes an earlier
     /// PU of its own CU). `info.l1` is `None` for a P-slice PU (or a
     /// uni-predictive B-slice one) and simply leaves `pred_l1` clear.
-    pub(crate) fn fill_motion(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, info: crate::motion::MotionInfo, is_skip: bool) {
-        let l0 = info.l0.map(|u| (i16::try_from(u.mv.x).unwrap_or(0), i16::try_from(u.mv.y).unwrap_or(0), u.ref_poc));
-        let l1 = info.l1.map(|u| (i16::try_from(u.mv.x).unwrap_or(0), i16::try_from(u.mv.y).unwrap_or(0), u.ref_poc));
+    pub(crate) fn fill_motion(
+        &mut self,
+        bx0: usize,
+        by0: usize,
+        blocks_w: usize,
+        blocks_h: usize,
+        info: crate::motion::MotionInfo,
+        is_skip: bool,
+    ) {
+        let l0 = info.l0.map(|u| {
+            (
+                i16::try_from(u.mv.x).unwrap_or(0),
+                i16::try_from(u.mv.y).unwrap_or(0),
+                u.ref_poc,
+            )
+        });
+        let l1 = info.l1.map(|u| {
+            (
+                i16::try_from(u.mv.x).unwrap_or(0),
+                i16::try_from(u.mv.y).unwrap_or(0),
+                u.ref_poc,
+            )
+        });
         let cols = self.shared.cols;
         let band_rows = self.shared.band_rows;
         let local_by0 = self.local_of(by0);
-        let Some(band) = self.current_band_mut(by0) else { return };
+        let Some(band) = self.current_band_mut(by0) else {
+            return;
+        };
         for local_by in local_by0..local_by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
-                let Some(i) = cu_index_in(cols, band_rows, bx, local_by) else { continue };
+                let Some(i) = cu_index_in(cols, band_rows, bx, local_by) else {
+                    continue;
+                };
                 if let Some(slot) = band.is_skip.get_mut(i) {
                     *slot = is_skip;
                 }
@@ -638,7 +746,12 @@ impl<'a> CuGrid<'a> {
         };
         let (bx, by) = (block_of(px), block_of(py));
         let band = self.band_for(by)?;
-        let i = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by))?;
+        let i = cu_index_in(
+            self.shared.cols,
+            self.shared.band_rows,
+            bx,
+            self.local_of(by),
+        )?;
         if !band.written.get(i).copied().unwrap_or(false) {
             return None;
         }
@@ -648,11 +761,17 @@ impl<'a> CuGrid<'a> {
             return None;
         }
         let l0 = pred_l0.then(|| crate::motion::UniMotion {
-            mv: crate::motion::Mv { x: i32::from(band.mv0_x.get(i).copied().unwrap_or(0)), y: i32::from(band.mv0_y.get(i).copied().unwrap_or(0)) },
+            mv: crate::motion::Mv {
+                x: i32::from(band.mv0_x.get(i).copied().unwrap_or(0)),
+                y: i32::from(band.mv0_y.get(i).copied().unwrap_or(0)),
+            },
             ref_poc: band.ref_poc0.get(i).copied().unwrap_or(0),
         });
         let l1 = pred_l1.then(|| crate::motion::UniMotion {
-            mv: crate::motion::Mv { x: i32::from(band.mv1_x.get(i).copied().unwrap_or(0)), y: i32::from(band.mv1_y.get(i).copied().unwrap_or(0)) },
+            mv: crate::motion::Mv {
+                x: i32::from(band.mv1_x.get(i).copied().unwrap_or(0)),
+                y: i32::from(band.mv1_y.get(i).copied().unwrap_or(0)),
+            },
             ref_poc: band.ref_poc1.get(i).copied().unwrap_or(0),
         });
         Some(crate::motion::MotionInfo { l0, l1 })
@@ -670,7 +789,12 @@ impl<'a> CuGrid<'a> {
         let Some(band) = self.band_for(by) else {
             return false;
         };
-        let Some(i) = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by)) else {
+        let Some(i) = cu_index_in(
+            self.shared.cols,
+            self.shared.band_rows,
+            bx,
+            self.local_of(by),
+        ) else {
             return false;
         };
         if !band.written.get(i).copied().unwrap_or(false) {
@@ -683,11 +807,20 @@ impl<'a> CuGrid<'a> {
     /// 4-sample blocks) with whether it coded any non-zero coefficient —
     /// called once per leaf from `ctu::reconstruct_luma_inter`, mirroring
     /// [`CuGrid::fill_motion`]'s own per-leaf timing.
-    pub(crate) fn fill_cbf_luma(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, cbf: bool) {
+    pub(crate) fn fill_cbf_luma(
+        &mut self,
+        bx0: usize,
+        by0: usize,
+        blocks_w: usize,
+        blocks_h: usize,
+        cbf: bool,
+    ) {
         let cols = self.shared.cols;
         let band_rows = self.shared.band_rows;
         let local_by0 = self.local_of(by0);
-        let Some(band) = self.current_band_mut(by0) else { return };
+        let Some(band) = self.current_band_mut(by0) else {
+            return;
+        };
         for local_by in local_by0..local_by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
                 if let Some(i) = cu_index_in(cols, band_rows, bx, local_by)
@@ -712,7 +845,12 @@ impl<'a> CuGrid<'a> {
         let Some(band) = self.band_for(by) else {
             return false;
         };
-        let Some(i) = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by)) else {
+        let Some(i) = cu_index_in(
+            self.shared.cols,
+            self.shared.band_rows,
+            bx,
+            self.local_of(by),
+        ) else {
             return false;
         };
         band.cbf_luma.get(i).copied().unwrap_or(false)
@@ -746,7 +884,12 @@ impl<'a> CuGrid<'a> {
     /// still fit under the ceiling by coincidence.
     #[must_use]
     pub(crate) fn budget_bytes(&self) -> u64 {
-        let published: u64 = self.shared.published.iter().map(CuGridBand::budget_bytes).fold(0u64, u64::saturating_add);
+        let published: u64 = self
+            .shared
+            .published
+            .iter()
+            .map(CuGridBand::budget_bytes)
+            .fold(0u64, u64::saturating_add);
         published.saturating_add(self.current.as_ref().map_or(0, CuGridBand::budget_bytes))
     }
 }
@@ -853,7 +996,12 @@ struct EdgeBand {
 
 impl EdgeBand {
     fn new(len: usize) -> Self {
-        Self { vert: vec![false; len], horiz: vec![false; len], tu_vert: vec![false; len], tu_horiz: vec![false; len] }
+        Self {
+            vert: vec![false; len],
+            horiz: vec![false; len],
+            tu_vert: vec![false; len],
+            tu_horiz: vec![false; len],
+        }
     }
 }
 
@@ -897,18 +1045,28 @@ impl<'a> EdgeMarks<'a> {
     #[must_use]
     pub(crate) fn new(shared: &'a EdgeMarksShared) -> Self {
         let band_len = shared.cols.saturating_mul(shared.band_rows);
-        Self { shared, current_band: 0, current: EdgeBand::new(band_len) }
+        Self {
+            shared,
+            current_band: 0,
+            current: EdgeBand::new(band_len),
+        }
     }
 
     /// The row band containing 4x4-block row `by`.
-    #[allow(clippy::integer_division, reason = "row band index = block row / the fixed CTB row-band height")]
+    #[allow(
+        clippy::integer_division,
+        reason = "row band index = block row / the fixed CTB row-band height"
+    )]
     fn band_of(&self, by: usize) -> usize {
         by / self.shared.band_rows
     }
 
     /// `by`'s own row within whichever band [`EdgeMarks::band_of`] says it
     /// belongs to.
-    #[allow(clippy::integer_division, reason = "same fixed CTB row-band height as band_of, its own remainder")]
+    #[allow(
+        clippy::integer_division,
+        reason = "same fixed CTB row-band height as band_of, its own remainder"
+    )]
     fn local_of(&self, by: usize) -> usize {
         by % self.shared.band_rows
     }
@@ -933,7 +1091,9 @@ impl<'a> EdgeMarks<'a> {
     /// itself refuses a publish.
     pub(crate) fn begin_row(&mut self, row_band: usize) -> Result<()> {
         if row_band < self.current_band {
-            return Err(Error::InvalidData("vaco-codec-hevc: edge marks rows must advance in order"));
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: edge marks rows must advance in order",
+            ));
         }
         let band_len = self.shared.cols.saturating_mul(self.shared.band_rows);
         while self.current_band < row_band {
@@ -977,8 +1137,12 @@ impl<'a> EdgeMarks<'a> {
         if x0 <= 0 || x0 % grid != 0 {
             return;
         }
-        let Ok(bx) = usize::try_from(x0 >> 2) else { return };
-        let Ok(by0) = usize::try_from(y0 >> 2) else { return };
+        let Ok(bx) = usize::try_from(x0 >> 2) else {
+            return;
+        };
+        let Ok(by0) = usize::try_from(y0 >> 2) else {
+            return;
+        };
         if self.band_of(by0) != self.current_band {
             return;
         }
@@ -999,8 +1163,12 @@ impl<'a> EdgeMarks<'a> {
         if y0 <= 0 || y0 % grid != 0 {
             return;
         }
-        let Ok(by) = usize::try_from(y0 >> 2) else { return };
-        let Ok(bx0) = usize::try_from(x0 >> 2) else { return };
+        let Ok(by) = usize::try_from(y0 >> 2) else {
+            return;
+        };
+        let Ok(bx0) = usize::try_from(x0 >> 2) else {
+            return;
+        };
         if self.band_of(by) != self.current_band {
             return;
         }
@@ -1019,13 +1187,23 @@ impl<'a> EdgeMarks<'a> {
     /// 4x4 block row containing `y`.
     #[must_use]
     pub(crate) fn vert_at(&self, x: i32, y: i32) -> bool {
-        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
+            return false;
+        };
         let (bx, by) = (block_of(x), block_of(y));
         let local_by = self.local_of(by);
-        let Some(i) = self.index_in(bx, local_by) else { return false };
+        let Some(i) = self.index_in(bx, local_by) else {
+            return false;
+        };
         match self.band_of(by).cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.vert.get(i).copied().unwrap_or(false),
-            std::cmp::Ordering::Less => self.shared.published.get(self.band_of(by)).and_then(|b| b.vert.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self
+                .shared
+                .published
+                .get(self.band_of(by))
+                .and_then(|b| b.vert.get(i))
+                .copied()
+                .unwrap_or(false),
             std::cmp::Ordering::Greater => false,
         }
     }
@@ -1034,13 +1212,23 @@ impl<'a> EdgeMarks<'a> {
     /// 4x4 block column containing `x`.
     #[must_use]
     pub(crate) fn horiz_at(&self, x: i32, y: i32) -> bool {
-        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
+            return false;
+        };
         let (bx, by) = (block_of(x), block_of(y));
         let local_by = self.local_of(by);
-        let Some(i) = self.index_in(bx, local_by) else { return false };
+        let Some(i) = self.index_in(bx, local_by) else {
+            return false;
+        };
         match self.band_of(by).cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.horiz.get(i).copied().unwrap_or(false),
-            std::cmp::Ordering::Less => self.shared.published.get(self.band_of(by)).and_then(|b| b.horiz.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self
+                .shared
+                .published
+                .get(self.band_of(by))
+                .and_then(|b| b.horiz.get(i))
+                .copied()
+                .unwrap_or(false),
             std::cmp::Ordering::Greater => false,
         }
     }
@@ -1055,8 +1243,12 @@ impl<'a> EdgeMarks<'a> {
         if x0 <= 0 || x0 % grid != 0 {
             return;
         }
-        let Ok(bx) = usize::try_from(x0 >> 2) else { return };
-        let Ok(by0) = usize::try_from(y0 >> 2) else { return };
+        let Ok(bx) = usize::try_from(x0 >> 2) else {
+            return;
+        };
+        let Ok(by0) = usize::try_from(y0 >> 2) else {
+            return;
+        };
         if self.band_of(by0) != self.current_band {
             return;
         }
@@ -1077,8 +1269,12 @@ impl<'a> EdgeMarks<'a> {
         if y0 <= 0 || y0 % grid != 0 {
             return;
         }
-        let Ok(by) = usize::try_from(y0 >> 2) else { return };
-        let Ok(bx0) = usize::try_from(x0 >> 2) else { return };
+        let Ok(by) = usize::try_from(y0 >> 2) else {
+            return;
+        };
+        let Ok(bx0) = usize::try_from(x0 >> 2) else {
+            return;
+        };
         if self.band_of(by) != self.current_band {
             return;
         }
@@ -1097,13 +1293,23 @@ impl<'a> EdgeMarks<'a> {
     /// [`EdgeMarks::vert_at`]) is also a transform-block edge.
     #[must_use]
     pub(crate) fn tu_vert_at(&self, x: i32, y: i32) -> bool {
-        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
+            return false;
+        };
         let (bx, by) = (block_of(x), block_of(y));
         let local_by = self.local_of(by);
-        let Some(i) = self.index_in(bx, local_by) else { return false };
+        let Some(i) = self.index_in(bx, local_by) else {
+            return false;
+        };
         match self.band_of(by).cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.tu_vert.get(i).copied().unwrap_or(false),
-            std::cmp::Ordering::Less => self.shared.published.get(self.band_of(by)).and_then(|b| b.tu_vert.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self
+                .shared
+                .published
+                .get(self.band_of(by))
+                .and_then(|b| b.tu_vert.get(i))
+                .copied()
+                .unwrap_or(false),
             std::cmp::Ordering::Greater => false,
         }
     }
@@ -1112,13 +1318,23 @@ impl<'a> EdgeMarks<'a> {
     /// [`EdgeMarks::horiz_at`]) is also a transform-block edge.
     #[must_use]
     pub(crate) fn tu_horiz_at(&self, x: i32, y: i32) -> bool {
-        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
+        let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
+            return false;
+        };
         let (bx, by) = (block_of(x), block_of(y));
         let local_by = self.local_of(by);
-        let Some(i) = self.index_in(bx, local_by) else { return false };
+        let Some(i) = self.index_in(bx, local_by) else {
+            return false;
+        };
         match self.band_of(by).cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.tu_horiz.get(i).copied().unwrap_or(false),
-            std::cmp::Ordering::Less => self.shared.published.get(self.band_of(by)).and_then(|b| b.tu_horiz.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self
+                .shared
+                .published
+                .get(self.band_of(by))
+                .and_then(|b| b.tu_horiz.get(i))
+                .copied()
+                .unwrap_or(false),
             std::cmp::Ordering::Greater => false,
         }
     }
@@ -1279,14 +1495,20 @@ struct TileBuffer {
 
 impl TileBuffer {
     fn zeroed(w: usize, h: usize) -> Self {
-        Self { data: vec![0u8; w.saturating_mul(h)], w, h }
+        Self {
+            data: vec![0u8; w.saturating_mul(h)],
+            w,
+            h,
+        }
     }
 
     fn get(&self, lx: usize, ly: usize) -> Option<u8> {
         if lx >= self.w || ly >= self.h {
             return None;
         }
-        self.data.get(ly.saturating_mul(self.w).saturating_add(lx)).copied()
+        self.data
+            .get(ly.saturating_mul(self.w).saturating_add(lx))
+            .copied()
     }
 
     fn row_mut(&mut self, ly: usize) -> Option<&mut [u8]> {
@@ -1321,7 +1543,12 @@ pub(crate) struct ReconPlaneShared {
 impl ReconPlaneShared {
     /// # Errors
     /// [`vaco_core::Error`] if the allocation exceeds `budget`.
-    pub(crate) fn new(budget: &mut Budget, width: usize, height: usize, ctb_size: usize) -> Result<Self> {
+    pub(crate) fn new(
+        budget: &mut Budget,
+        width: usize,
+        height: usize,
+        ctb_size: usize,
+    ) -> Result<Self> {
         let ctb_size = ctb_size.max(1);
         let n_row_bands = height.div_ceil(ctb_size).max(1);
         let n_col_bands = width.div_ceil(ctb_size).max(1);
@@ -1380,7 +1607,13 @@ impl<'a> ReconPlane<'a> {
     /// `(row, col)`'s own real pixel dimensions — `ctb_size` square except
     /// at the picture's right/bottom edge, where the last row/column of
     /// tiles is whatever remains.
-    fn tile_dims(width: usize, height: usize, ctb_size: usize, row: usize, col: usize) -> (usize, usize) {
+    fn tile_dims(
+        width: usize,
+        height: usize,
+        ctb_size: usize,
+        row: usize,
+        col: usize,
+    ) -> (usize, usize) {
         let w = ctb_size.min(width.saturating_sub(col.saturating_mul(ctb_size)));
         let h = ctb_size.min(height.saturating_sub(row.saturating_mul(ctb_size)));
         (w, h)
@@ -1389,7 +1622,8 @@ impl<'a> ReconPlane<'a> {
     /// `(row, col)`'s own raster CTU address — the index [`RowPublish`]
     /// addresses it by.
     fn tile_addr(&self, row: usize, col: usize) -> usize {
-        row.saturating_mul(self.shared.n_col_bands).saturating_add(col)
+        row.saturating_mul(self.shared.n_col_bands)
+            .saturating_add(col)
     }
 
     pub(crate) fn new(shared: &'a ReconPlaneShared) -> Self {
@@ -1407,14 +1641,20 @@ impl<'a> ReconPlane<'a> {
     }
 
     /// The CTU tile containing luma-grid pixel `(x, y)`.
-    #[allow(clippy::integer_division, reason = "tile index = pixel coordinate / the fixed CTB tile size")]
+    #[allow(
+        clippy::integer_division,
+        reason = "tile index = pixel coordinate / the fixed CTB tile size"
+    )]
     fn tile_of(&self, x: usize, y: usize) -> (usize, usize) {
         (y / self.shared.ctb_size, x / self.shared.ctb_size)
     }
 
     /// `(x, y)`'s own position within whichever tile [`ReconPlane::tile_of`]
     /// says it belongs to.
-    #[allow(clippy::integer_division, reason = "same fixed CTB tile size as tile_of, its own remainder")]
+    #[allow(
+        clippy::integer_division,
+        reason = "same fixed CTB tile size as tile_of, its own remainder"
+    )]
     fn local_of(&self, x: usize, y: usize) -> (usize, usize) {
         (x % self.shared.ctb_size, y % self.shared.ctb_size)
     }
@@ -1444,14 +1684,24 @@ impl<'a> ReconPlane<'a> {
             // next row — the two raster-order successors of a published
             // tile.
             (row == self.current_row && col == self.current_col.saturating_add(1))
-                || (row == self.current_row.saturating_add(1) && col == 0 && self.current_row.saturating_add(1) < self.shared.n_row_bands)
+                || (row == self.current_row.saturating_add(1)
+                    && col == 0
+                    && self.current_row.saturating_add(1) < self.shared.n_row_bands)
         } else {
             false
         };
         if !is_next {
-            return Err(Error::InvalidData("vaco-codec-hevc: recon plane CTUs must advance one at a time in raster order"));
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: recon plane CTUs must advance one at a time in raster order",
+            ));
         }
-        let (w, h) = Self::tile_dims(self.shared.width, self.shared.height, self.shared.ctb_size, row, col);
+        let (w, h) = Self::tile_dims(
+            self.shared.width,
+            self.shared.height,
+            self.shared.ctb_size,
+            row,
+            col,
+        );
         self.current = TileBuffer::zeroed(w, h);
         self.current_row = row;
         self.current_col = col;
@@ -1473,7 +1723,9 @@ impl<'a> ReconPlane<'a> {
     /// or if publishing fails.
     pub(crate) fn publish_ctu(&mut self, row: usize, col: usize) -> Result<()> {
         if (row, col) != (self.current_row, self.current_col) {
-            return Err(Error::InvalidData("vaco-codec-hevc: recon plane publish targeted a CTU that is not open"));
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: recon plane publish targeted a CTU that is not open",
+            ));
         }
         let addr = self.tile_addr(row, col);
         let finished = std::mem::take(&mut self.current);
@@ -1494,15 +1746,31 @@ impl<'a> ReconPlane<'a> {
     /// # Errors
     /// [`vaco_core::Error`] if publishing fails.
     pub(crate) fn finish(&mut self) -> Result<()> {
-        let col_start = if self.current_published { self.current_col.saturating_add(1) } else { self.current_col };
+        let col_start = if self.current_published {
+            self.current_col.saturating_add(1)
+        } else {
+            self.current_col
+        };
         for row in self.current_row..self.shared.n_row_bands {
-            let start = if row == self.current_row { col_start } else { 0 };
+            let start = if row == self.current_row {
+                col_start
+            } else {
+                0
+            };
             for col in start..self.shared.n_col_bands {
                 let addr = self.tile_addr(row, col);
-                let buf = if (row, col) == (self.current_row, self.current_col) && !self.current_published {
+                let buf = if (row, col) == (self.current_row, self.current_col)
+                    && !self.current_published
+                {
                     std::mem::take(&mut self.current)
                 } else {
-                    let (w, h) = Self::tile_dims(self.shared.width, self.shared.height, self.shared.ctb_size, row, col);
+                    let (w, h) = Self::tile_dims(
+                        self.shared.width,
+                        self.shared.height,
+                        self.shared.ctb_size,
+                        row,
+                        col,
+                    );
                     TileBuffer::zeroed(w, h)
                 };
                 self.shared.published.publish(addr, buf)?;
@@ -1518,7 +1786,8 @@ impl<'a> ReconPlane<'a> {
     /// raster CTU order — the "already published, safe to read read-only"
     /// test every read method below shares.
     fn is_published(&self, row: usize, col: usize) -> bool {
-        (row, col) < (self.current_row, self.current_col) || ((row, col) == (self.current_row, self.current_col) && self.current_published)
+        (row, col) < (self.current_row, self.current_col)
+            || ((row, col) == (self.current_row, self.current_col) && self.current_published)
     }
 
     /// Whether `(x, y)`'s containing CTU is the one currently open for
@@ -1545,7 +1814,10 @@ impl<'a> ReconPlane<'a> {
             return false;
         }
         let (lx, ly) = self.local_of(x, y);
-        self.ready_index(block_of(lx), block_of(ly)).and_then(|i| self.ready.get(i)).copied().unwrap_or(false)
+        self.ready_index(block_of(lx), block_of(ly))
+            .and_then(|i| self.ready.get(i))
+            .copied()
+            .unwrap_or(false)
     }
 
     /// The sample at `(x, y)`, or `0` out of range or not yet written —
@@ -1563,7 +1835,9 @@ impl<'a> ReconPlane<'a> {
         }
         if self.is_published(row, col) {
             let addr = self.tile_addr(row, col);
-            let Some(tile) = self.shared.published.get(addr) else { return 0 };
+            let Some(tile) = self.shared.published.get(addr) else {
+                return 0;
+            };
             return tile.get(lx, ly).map_or(0, u16::from);
         }
         0
@@ -1582,8 +1856,14 @@ impl<'a> ReconPlane<'a> {
             return;
         }
         let (lx0, ly0) = self.local_of(x0, y0);
-        let lx1 = lx0.saturating_add(w).saturating_sub(1).min(self.shared.ctb_size.saturating_sub(1));
-        let ly1 = ly0.saturating_add(h).saturating_sub(1).min(self.shared.ctb_size.saturating_sub(1));
+        let lx1 = lx0
+            .saturating_add(w)
+            .saturating_sub(1)
+            .min(self.shared.ctb_size.saturating_sub(1));
+        let ly1 = ly0
+            .saturating_add(h)
+            .saturating_sub(1)
+            .min(self.shared.ctb_size.saturating_sub(1));
         let (bx0, by0, bx1, by1) = (block_of(lx0), block_of(ly0), block_of(lx1), block_of(ly1));
         for by in by0..=by1 {
             for bx in bx0..=bx1 {
@@ -1622,7 +1902,13 @@ impl<'a> ReconPlane<'a> {
             return;
         }
         let (lx0, ly0) = self.local_of(x0, y0);
-        let Some(dst) = self.current.row_mut(ly0).and_then(|r| r.get_mut(lx0..lx0.saturating_add(src.len()))) else { return };
+        let Some(dst) = self
+            .current
+            .row_mut(ly0)
+            .and_then(|r| r.get_mut(lx0..lx0.saturating_add(src.len())))
+        else {
+            return;
+        };
         dst.copy_from_slice(src);
     }
 
@@ -1637,13 +1923,24 @@ impl<'a> ReconPlane<'a> {
         for row in 0..self.shared.n_row_bands {
             for col in 0..self.shared.n_col_bands {
                 let addr = self.tile_addr(row, col);
-                let Some(tile) = self.shared.published.get(addr) else { continue };
+                let Some(tile) = self.shared.published.get(addr) else {
+                    continue;
+                };
                 let x0 = col.saturating_mul(self.shared.ctb_size);
                 let y0 = row.saturating_mul(self.shared.ctb_size);
                 for ly in 0..tile.h {
-                    let Some(src_row) = tile.data.get(ly.saturating_mul(tile.w)..).and_then(|r| r.get(..tile.w)) else { continue };
+                    let Some(src_row) = tile
+                        .data
+                        .get(ly.saturating_mul(tile.w)..)
+                        .and_then(|r| r.get(..tile.w))
+                    else {
+                        continue;
+                    };
                     let y = y0.saturating_add(ly);
-                    if let Some(dst_row) = dst.row_mut(y).and_then(|r| r.get_mut(x0..x0.saturating_add(tile.w))) {
+                    if let Some(dst_row) = dst
+                        .row_mut(y)
+                        .and_then(|r| r.get_mut(x0..x0.saturating_add(tile.w)))
+                    {
                         dst_row.copy_from_slice(src_row);
                     }
                     dst.mark_row_ready(y, x0, tile.w);
@@ -1676,7 +1973,12 @@ impl ReconPictureShared {
     ///
     /// # Errors
     /// [`vaco_core::Error`] if any plane's allocation exceeds `budget`.
-    pub(crate) fn new(budget: &mut Budget, luma_width: usize, luma_height: usize, ctb_size: usize) -> Result<Self> {
+    pub(crate) fn new(
+        budget: &mut Budget,
+        luma_width: usize,
+        luma_height: usize,
+        ctb_size: usize,
+    ) -> Result<Self> {
         let cw = luma_width.div_ceil(2);
         let ch = luma_height.div_ceil(2);
         let cctb = ctb_size.div_ceil(2).max(1);

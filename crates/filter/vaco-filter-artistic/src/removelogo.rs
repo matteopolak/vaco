@@ -170,12 +170,14 @@ pub fn parse_pgm(bytes: &[u8], budget: &mut Budget) -> Result<Mask> {
         }
         data.get(start..*pos).map(<[u8]>::to_vec)
     };
-    let magic = next_token(bytes, &mut pos).ok_or(Error::InvalidData("removelogo: empty mask file"))?;
+    let magic =
+        next_token(bytes, &mut pos).ok_or(Error::InvalidData("removelogo: empty mask file"))?;
     if magic != b"P5" {
         return Err(Error::InvalidData("removelogo: mask is not a P5 PGM"));
     }
     let parse_dim = |data: &[u8], pos: &mut usize| -> Result<i32> {
-        let tok = next_token(data, pos).ok_or(Error::InvalidData("removelogo: truncated PGM header"))?;
+        let tok =
+            next_token(data, pos).ok_or(Error::InvalidData("removelogo: truncated PGM header"))?;
         std::str::from_utf8(&tok)
             .ok()
             .and_then(|s| s.parse::<i32>().ok())
@@ -191,16 +193,15 @@ pub fn parse_pgm(bytes: &[u8], budget: &mut Budget) -> Result<Mask> {
     if bytes.get(pos).is_some_and(u8::is_ascii_whitespace) {
         pos += 1;
     }
-    #[allow(
-        clippy::cast_sign_loss,
-        reason = "width/height are checked > 0 above"
-    )]
+    #[allow(clippy::cast_sign_loss, reason = "width/height are checked > 0 above")]
     let pixel_count = (width as usize).saturating_mul(height as usize);
     let Some(pixel_bytes) = bytes.get(pos..) else {
         return Err(Error::InvalidData("removelogo: truncated PGM pixel data"));
     };
     if pixel_bytes.len() < pixel_count {
-        return Err(Error::InvalidData("removelogo: PGM shorter than its declared size"));
+        return Err(Error::InvalidData(
+            "removelogo: PGM shorter than its declared size",
+        ));
     }
     let mut active: Vec<bool> = budget
         .alloc(pixel_count)
@@ -371,12 +372,11 @@ mod tests {
 
     #[test]
     fn bounding_box_covers_exactly_the_active_pixels() {
-        let bytes = pgm(4, 4, &[
-            0, 0, 0, 0,
-            0, 200, 200, 0,
-            0, 200, 200, 0,
-            0, 0, 0, 0,
-        ]);
+        let bytes = pgm(
+            4,
+            4,
+            &[0, 0, 0, 0, 0, 200, 200, 0, 0, 200, 200, 0, 0, 0, 0, 0],
+        );
         let mut budget = Budget::new(Limits::strict());
         let mask = parse_pgm(&bytes, &mut budget).unwrap();
         let b = mask.bounding_box().unwrap();
@@ -413,7 +413,9 @@ mod tests {
     #[test]
     fn never_panics_on_arbitrary_bytes() {
         for seed in 0u8..=255 {
-            let bytes: Vec<u8> = (0..64).map(|i: u8| i.wrapping_mul(seed).wrapping_add(seed)).collect();
+            let bytes: Vec<u8> = (0..64)
+                .map(|i: u8| i.wrapping_mul(seed).wrapping_add(seed))
+                .collect();
             let mut budget = Budget::new(Limits::strict());
             let _ = parse_pgm(&bytes, &mut budget);
         }

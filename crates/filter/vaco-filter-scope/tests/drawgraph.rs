@@ -2,7 +2,12 @@
 //! `Frame::metadata_get`) through a real `Graph`, not just this crate's
 //! own pure-function unit tests of `value_to_row`/`parse_fg_hex`.
 
-#![allow(clippy::panic, clippy::expect_used, clippy::unwrap_used, reason = "test code")]
+#![allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test code"
+)]
 
 use vaco_core::{MediaType, Rational, Result, Timestamp};
 use vaco_filter_core::mock;
@@ -66,13 +71,17 @@ fn drawgraph_plots_a_real_metadata_value_from_a_real_frame() -> Result<()> {
     graph.run()?;
 
     let out = graph.recv(sink)?;
-    let plane = out.plane(0).expect("drawgraph always draws to plane 0 (G, in gbrp)");
+    let plane = out
+        .plane(0)
+        .expect("drawgraph always draws to plane 0 (G, in gbrp)");
     // `slide=frame` (the default) fills left-to-right from column 0, not
     // a scroll that always appends at the right edge (see the module
     // doc's 2026-08-28 correction) — so the single frame this test sends
     // lands its ink in column 0. value=255 with min=0:max=255 maps to
     // row 0 exactly (the unmargined formula's own top edge).
-    let first_col_has_ink = plane.rows_iter().any(|row| row.first().is_some_and(|&px| px < 250));
+    let first_col_has_ink = plane
+        .rows_iter()
+        .any(|row| row.first().is_some_and(|&px| px < 250));
     assert!(
         first_col_has_ink,
         "expected drawgraph to have plotted the real metadata value onto its first column"

@@ -54,7 +54,14 @@ use vaco_simd::{Caps, dispatch_kernel, ops};
 /// not need to change if a wider target (AVX-512 is untested) inverts the
 /// ratio; re-measure there before flipping this to call
 /// [`add_pixels_clamped_vector`] instead.
-pub fn add_pixels_clamped(caps: Caps, residual: &[i16], dst: &mut [u8], stride: usize, w: usize, h: usize) {
+pub fn add_pixels_clamped(
+    caps: Caps,
+    residual: &[i16],
+    dst: &mut [u8],
+    stride: usize,
+    w: usize,
+    h: usize,
+) {
     let _ = caps;
     crate::blockdsp::add_pixels_clamped(residual, dst, stride, w, h);
 }
@@ -63,12 +70,24 @@ pub fn add_pixels_clamped(caps: Caps, residual: &[i16], dst: &mut [u8], stride: 
 /// see that function's doc for why. Exists so `vaco-checkasm` can keep
 /// verifying it under `Differential` independently of which path
 /// [`add_pixels_clamped`] routes through.
-pub fn add_pixels_clamped_vector(caps: Caps, residual: &[i16], dst: &mut [u8], stride: usize, w: usize, h: usize) {
+pub fn add_pixels_clamped_vector(
+    caps: Caps,
+    residual: &[i16],
+    dst: &mut [u8],
+    stride: usize,
+    w: usize,
+    h: usize,
+) {
     for row in 0..h {
-        let Some(res_row) = residual.get(row.saturating_mul(w)..).and_then(|r| r.get(..w)) else {
+        let Some(res_row) = residual
+            .get(row.saturating_mul(w)..)
+            .and_then(|r| r.get(..w))
+        else {
             return;
         };
-        let Some(dst_row) = dst.get_mut(row.saturating_mul(stride)..).and_then(|r| r.get_mut(..w))
+        let Some(dst_row) = dst
+            .get_mut(row.saturating_mul(stride)..)
+            .and_then(|r| r.get_mut(..w))
         else {
             return;
         };

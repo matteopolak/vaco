@@ -98,7 +98,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -118,7 +119,10 @@ pub const DESC: FilterDesc = FilterDesc {
 /// One sample, per the formula in the module doc. `n` is the absolute
 /// sample index from the start of the stream.
 pub(crate) fn sample_at(n: u64, frequency: f64, beep_factor: f64, sample_rate: u32) -> i16 {
-    #[allow(clippy::cast_precision_loss, reason = "audio sample counts stay far below 2^53")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "audio sample counts stay far below 2^53"
+    )]
     let n_f = n as f64;
     let sr_f = f64::from(sample_rate.max(1));
     let freq = if beep_factor > 0.0 {
@@ -184,10 +188,12 @@ impl SourceFilter for Source {
         });
         let layout = vaco_chlayout::ChannelLayout::from_name("mono")
             .or_else(|| vaco_chlayout::ChannelLayout::default_for(1))
-            .ok_or(vaco_core::Error::Unsupported("no mono channel layout available"))?;
-        let mut frame =
-            ctx.pool()
-                .acquire_audio(SampleFmt::S16, layout, want, self.sample_rate)?;
+            .ok_or(vaco_core::Error::Unsupported(
+                "no mono channel layout available",
+            ))?;
+        let mut frame = ctx
+            .pool()
+            .acquire_audio(SampleFmt::S16, layout, want, self.sample_rate)?;
         if let Some(mut plane) = frame.plane_mut(0)
             && let Some(row) = plane.row_mut(0)
         {
@@ -266,9 +272,13 @@ mod tests {
         // about half of all samples (apparent dither), confirmed at n=2
         // specifically (formula says 512, measured reference says 511).
         for &n in &[0u64, 1, 3, 4, 5, 6, 100, 1000, 10000, 44099] {
-            #[allow(clippy::cast_precision_loss, reason = "n stays far below 2^53 in this test")]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "n stays far below 2^53 in this test"
+            )]
             let n_f = n as f64;
-            let expected = (4095.0 * (2.0 * std::f64::consts::PI * 440.0 * n_f / 44100.0).sin()).floor();
+            let expected =
+                (4095.0 * (2.0 * std::f64::consts::PI * 440.0 * n_f / 44100.0).sin()).floor();
             #[allow(
                 clippy::cast_possible_truncation,
                 reason = "expected is bounded to [-4095, 4095]"
@@ -288,8 +298,12 @@ mod tests {
         let n = 44099u64;
         #[allow(clippy::cast_precision_loss, reason = "n stays far below 2^53")]
         let n_f = n as f64;
-        let expected = (4095.0 * (2.0 * std::f64::consts::PI * 440.0 * n_f / 44100.0).sin()).floor();
-        #[allow(clippy::cast_possible_truncation, reason = "expected is bounded to [-4095, 4095]")]
+        let expected =
+            (4095.0 * (2.0 * std::f64::consts::PI * 440.0 * n_f / 44100.0).sin()).floor();
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "expected is bounded to [-4095, 4095]"
+        )]
         let expected_i16 = expected as i16;
         assert_eq!(sample_at(n, 440.0, 0.0, 44100), expected_i16);
     }

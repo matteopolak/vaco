@@ -66,7 +66,12 @@ pub(crate) struct Opts {
     pub layout: String,
     #[opt(name = "grid", help = "set fixed size grid layout", default = String::new(), flags(video, filtering))]
     pub grid: String,
-    #[opt(name = "shortest", help = "force termination when the shortest input terminates", default = false, flags(video, filtering))]
+    #[opt(
+        name = "shortest",
+        help = "force termination when the shortest input terminates",
+        default = false,
+        flags(video, filtering)
+    )]
     pub shortest: bool,
 }
 
@@ -168,7 +173,13 @@ impl FrameSyncFilter for Filter {
             .copied()
             .fold(0u32, u32::saturating_add);
         if let Some(mut out) = ctx.output_link(0).cloned() {
-            if let LinkFormat::Video { width: w, height: h, format: fmt, .. } = &mut out {
+            if let LinkFormat::Video {
+                width: w,
+                height: h,
+                format: fmt,
+                ..
+            } = &mut out
+            {
                 *w = total_width;
                 *h = total_height;
                 *fmt = format;
@@ -199,14 +210,20 @@ impl FrameSyncFilter for Filter {
             .iter()
             .copied()
             .fold(0u32, u32::saturating_add);
-        let mut out = ctx.pool().acquire_video(format, total_width, total_height)?;
+        let mut out = ctx
+            .pool()
+            .acquire_video(format, total_width, total_height)?;
         let cols = usize::try_from(self.cols).unwrap_or(1).max(1);
         let plane_count = format.plane_count();
         for plane in 0..plane_count {
             for i in 0..self.n {
                 let Some(frame) = event.get(i) else { continue };
-                let Some(src) = frame.plane(plane) else { continue };
-                let Some(mut dst) = out.plane_mut(plane) else { continue };
+                let Some(src) = frame.plane(plane) else {
+                    continue;
+                };
+                let Some(mut dst) = out.plane_mut(plane) else {
+                    continue;
+                };
                 let c = i % cols;
                 #[allow(
                     clippy::integer_division,
@@ -266,7 +283,9 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
         let Some((cols, rows)) = vaco_core::parse::image_size(&opts.grid) else {
             return Err(format!("xstack: bad `grid` `{}`", opts.grid));
         };
-        if usize::try_from(cols).unwrap_or(0).saturating_mul(usize::try_from(rows).unwrap_or(0))
+        if usize::try_from(cols)
+            .unwrap_or(0)
+            .saturating_mul(usize::try_from(rows).unwrap_or(0))
             != n
         {
             return Err(format!(

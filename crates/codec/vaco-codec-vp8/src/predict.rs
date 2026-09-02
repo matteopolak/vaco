@@ -185,7 +185,11 @@ pub fn b_ld(above: &[u8; 8]) -> [[u8; 4]; 4] {
     for (r, row) in out.iter_mut().enumerate() {
         for (c, px) in row.iter_mut().enumerate() {
             let k = r + c;
-            *px = if k == 6 { avg3(a6, a7, a7) } else { avg3p(above, k + 1) };
+            *px = if k == 6 {
+                avg3(a6, a7, a7)
+            } else {
+                avg3p(above, k + 1)
+            };
         }
     }
     out
@@ -282,7 +286,12 @@ pub fn b_hu(left: &[u8; 4]) -> [[u8; 4]; 4] {
             avg2(left[2], left[3]),
             avg3(left[2], left[3], left[3]),
         ],
-        [avg2(left[2], left[3]), avg3(left[2], left[3], left[3]), l3, l3],
+        [
+            avg2(left[2], left[3]),
+            avg3(left[2], left[3], left[3]),
+            l3,
+            l3,
+        ],
         [l3, l3, l3, l3],
     ]
 }

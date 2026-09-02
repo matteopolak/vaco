@@ -25,7 +25,12 @@ impl FilterRegistry for MotionRegistry {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -37,7 +42,12 @@ mod tests {
             // its module doc, and `vidstabtransform`'s own identical
             // requirement) and is expected to fail cleanly without one.
             if name == "stabtransform" {
-                let req = Instantiate { name, instance: name, args: None, arguments: &[] };
+                let req = Instantiate {
+                    name,
+                    instance: name,
+                    args: None,
+                    arguments: &[],
+                };
                 assert!(registry.create(&req).is_err());
                 continue;
             }
@@ -48,11 +58,25 @@ mod tests {
             // in whatever directory `cargo test` happens to run from, so
             // it is pointed at a scratch path here instead.
             let args = (name == "stabdetect").then(|| {
-                std::env::temp_dir().join(format!("vaco-motion-registry-test-{}.trf", std::process::id())).to_string_lossy().into_owned()
+                std::env::temp_dir()
+                    .join(format!(
+                        "vaco-motion-registry-test-{}.trf",
+                        std::process::id()
+                    ))
+                    .to_string_lossy()
+                    .into_owned()
             });
             let args_str = args.as_ref().map(|p| format!("result={p}"));
-            let req = Instantiate { name, instance: name, args: args_str.as_deref(), arguments: &[] };
-            assert!(registry.create(&req).is_ok(), "{name} should be creatable with defaults");
+            let req = Instantiate {
+                name,
+                instance: name,
+                args: args_str.as_deref(),
+                arguments: &[],
+            };
+            assert!(
+                registry.create(&req).is_ok(),
+                "{name} should be creatable with defaults"
+            );
             if let Some(p) = args {
                 let _ = std::fs::remove_file(p);
             }
@@ -62,7 +86,12 @@ mod tests {
     #[test]
     fn an_unknown_name_is_a_clean_error_not_a_panic() {
         let registry = MotionRegistry;
-        let req = Instantiate { name: "not-a-real-filter", instance: "not-a-real-filter", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "not-a-real-filter",
+            instance: "not-a-real-filter",
+            args: None,
+            arguments: &[],
+        };
         assert!(registry.create(&req).is_err());
     }
 
@@ -85,8 +114,13 @@ mod tests {
                 for y in 0..h as usize {
                     if let Some(row) = p.row_mut(y) {
                         for (x, cell) in row.iter_mut().enumerate() {
-                            #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap, reason = "test fixture, small bounded values")]
-                            let v = (((x as i32 - shift).rem_euclid(256)) as u8).wrapping_add((y * 7) as u8);
+                            #[allow(
+                                clippy::cast_possible_truncation,
+                                clippy::cast_possible_wrap,
+                                reason = "test fixture, small bounded values"
+                            )]
+                            let v = (((x as i32 - shift).rem_euclid(256)) as u8)
+                                .wrapping_add((y * 7) as u8);
                             *cell = v;
                         }
                     }
@@ -99,15 +133,25 @@ mod tests {
         let jitters = [0i32, 6, -6, 6, -6, 6, -6];
         let raw: Vec<vaco_frame::Frame> = jitters.iter().map(|&s| shifted_frame(w, h, s)).collect();
 
-        let path = std::env::temp_dir().join(format!("vaco-motion-e2e-{}.trf", std::process::id())).to_string_lossy().into_owned();
-        let detect_opts = crate::stabdetect::Opts { result: path.clone(), ..Default::default() };
+        let path = std::env::temp_dir()
+            .join(format!("vaco-motion-e2e-{}.trf", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let detect_opts = crate::stabdetect::Opts {
+            result: path.clone(),
+            ..Default::default()
+        };
         let mut detector = crate::stabdetect::Filter::new(&detect_opts).unwrap();
         for f in &raw {
             detector.process(f.clone()).unwrap();
         }
         detector.reset();
 
-        let transform_opts = crate::stabtransform::Opts { input: path.clone(), smoothing: 3, ..Default::default() };
+        let transform_opts = crate::stabtransform::Opts {
+            input: path.clone(),
+            smoothing: 3,
+            ..Default::default()
+        };
         let mut transformer = crate::stabtransform::Filter::new(&transform_opts).unwrap();
         let pool = FramePool::default();
         let corrected: Vec<vaco_frame::Frame> = raw
@@ -118,8 +162,14 @@ mod tests {
             })
             .collect();
 
-        let raw_diff: u64 = raw.windows(2).map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap())).sum();
-        let corrected_diff: u64 = corrected.windows(2).map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap())).sum();
+        let raw_diff: u64 = raw
+            .windows(2)
+            .map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap()))
+            .sum();
+        let corrected_diff: u64 = corrected
+            .windows(2)
+            .map(|w2| vaco_filter_vdsp::plane_sad(w2[0].plane(0).unwrap(), w2[1].plane(0).unwrap()))
+            .sum();
         assert!(
             corrected_diff < raw_diff,
             "end-to-end stabdetect -> stabtransform should reduce jitter: raw={raw_diff} corrected={corrected_diff}"

@@ -246,7 +246,9 @@ fn ssd_simd<S: Lanes>(simd: S, cur: Plane<'_>, refp: Plane<'_>) -> u64 {
     }
 
     let vec_sum = i64::from(ops::simd::hsum_i32(acc0)) + i64::from(ops::simd::hsum_i32(acc1));
-    u64::try_from(vec_sum.max(0)).unwrap_or(0).wrapping_add(tail)
+    u64::try_from(vec_sum.max(0))
+        .unwrap_or(0)
+        .wrapping_add(tail)
 }
 
 // ---------------------------------------------------------------- variance
@@ -639,14 +641,26 @@ pub struct MecmpKernels {
 impl KernelSet for MecmpKernels {
     fn for_tier(tier: Tier) -> Self {
         Self {
-            sad: if tier.is_scalar() { sad } else { sad_dispatched },
-            ssd: if tier.is_scalar() { ssd } else { ssd_dispatched },
+            sad: if tier.is_scalar() {
+                sad
+            } else {
+                sad_dispatched
+            },
+            ssd: if tier.is_scalar() {
+                ssd
+            } else {
+                ssd_dispatched
+            },
             variance: if tier.is_scalar() {
                 variance
             } else {
                 variance_dispatched
             },
-            satd: if tier.is_scalar() { satd } else { satd_dispatched },
+            satd: if tier.is_scalar() {
+                satd
+            } else {
+                satd_dispatched
+            },
         }
     }
 

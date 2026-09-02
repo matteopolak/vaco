@@ -23,7 +23,10 @@ type HmacSha1 = Hmac<Sha1>;
 /// unreachable rather than a real fallibility this function is hiding.
 #[must_use]
 pub fn hmac_sha1(key: &[u8], data: &[u8]) -> [u8; 20] {
-    #[allow(clippy::expect_used, reason = "HMAC accepts any key length by RFC 2104 definition")]
+    #[allow(
+        clippy::expect_used,
+        reason = "HMAC accepts any key length by RFC 2104 definition"
+    )]
     let mut mac = HmacSha1::new_from_slice(key).expect("HMAC-SHA1 accepts any key length");
     mac.update(data);
     let result = mac.finalize().into_bytes();

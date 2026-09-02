@@ -84,8 +84,12 @@ mod tests {
         assert!(xml.contains("<streamType>recorded</streamType>"));
         assert!(xml.contains("<deliveryType>streaming</deliveryType>"));
         assert!(xml.contains("<duration>12.069000</duration>"));
-        assert!(xml.contains("<bootstrapInfo profile=\"named\" url=\"stream0.abst\" id=\"bootstrap0\" />"));
-        assert!(xml.contains("<media bitrate=\"469\" url=\"stream0\" bootstrapInfoId=\"bootstrap0\">"));
+        assert!(xml.contains(
+            "<bootstrapInfo profile=\"named\" url=\"stream0.abst\" id=\"bootstrap0\" />"
+        ));
+        assert!(
+            xml.contains("<media bitrate=\"469\" url=\"stream0\" bootstrapInfoId=\"bootstrap0\">")
+        );
         assert!(xml.trim_end().ends_with("</manifest>"));
     }
 

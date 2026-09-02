@@ -118,12 +118,22 @@ pub const FRAMES_UNSUPPORTED: &str = "-show_frames/-count_frames need a decoder;
 #[must_use]
 pub fn unimplemented_option_message(name: &str) -> &'static str {
     match name {
-        "analyze_frames" => "-analyze_frames is accepted by this build's option table but not implemented yet.",
-        "c" => "-c/-codec is accepted by this build's option table but not implemented yet: this build has no decoder at all (D5/D14.4), so there is nothing for a forced decoder name to override.",
-        "cpucount" => "-cpucount is accepted by this build's option table but not implemented yet: this binary spawns no threads and depends on no decoder whose thread pool sizing it could affect.",
+        "analyze_frames" => {
+            "-analyze_frames is accepted by this build's option table but not implemented yet."
+        }
+        "c" => {
+            "-c/-codec is accepted by this build's option table but not implemented yet: this build has no decoder at all (D5/D14.4), so there is nothing for a forced decoder name to override."
+        }
+        "cpucount" => {
+            "-cpucount is accepted by this build's option table but not implemented yet: this binary spawns no threads and depends on no decoder whose thread pool sizing it could affect."
+        }
         "cpuflags" => "-cpuflags is accepted by this build's option table but not implemented yet.",
-        "find_stream_info" => "-find_stream_info is accepted by this build's option table but not implemented yet.",
-        "max_alloc" => "-max_alloc is accepted by this build's option table but not implemented yet.",
+        "find_stream_info" => {
+            "-find_stream_info is accepted by this build's option table but not implemented yet."
+        }
+        "max_alloc" => {
+            "-max_alloc is accepted by this build's option table but not implemented yet."
+        }
         "report" => "-report is accepted by this build's option table but not implemented yet.",
         "show_log" => "-show_log is accepted by this build's option table but not implemented yet.",
         "sinks" => "-sinks is accepted by this build's option table but not implemented yet.",
@@ -376,7 +386,10 @@ fn open(url: &str, force: Option<&str>) -> Result<Input> {
     // and the URL is the only place its codec identity is stated — so without
     // this branch `vaco-probe` reported `0,0,unknown` for a file the CLI read
     // correctly, and the two binaries disagreed about the same input.
-    let inner = if desc.flags.contains(vaco_format_core::FormatFlags::NEEDNUMBER) {
+    let inner = if desc
+        .flags
+        .contains(vaco_format_core::FormatFlags::NEEDNUMBER)
+    {
         let placeholder: Box<dyn vaco_io::MediaSource> =
             Box::new(vaco_io::MemorySource::new(Vec::new()));
         let mut inner = (desc.open)(placeholder, &vaco_registry::Parsers)?;

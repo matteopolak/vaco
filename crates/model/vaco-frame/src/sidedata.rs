@@ -146,7 +146,10 @@ impl FrameMetadata {
     /// The value stored under `key`, if any.
     #[must_use]
     pub fn get(&self, key: &str) -> Option<&str> {
-        self.0.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+        self.0
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v.as_str())
     }
 
     /// Insert `key`/`value`, or overwrite `key`'s value in place if it is
@@ -294,8 +297,10 @@ impl Frame {
     /// empty one, which is what keeps [`Frame::metadata`] a zero-cost `&[]`
     /// for the overwhelming majority of frames that carry no metadata.
     pub fn set_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
-        if let Some(FrameSideData::Metadata(m)) =
-            self.side_data.iter_mut().find(|d| d.kind() == FrameSideDataKind::Metadata)
+        if let Some(FrameSideData::Metadata(m)) = self
+            .side_data
+            .iter_mut()
+            .find(|d| d.kind() == FrameSideDataKind::Metadata)
         {
             m.set(key, value);
             return;
@@ -316,8 +321,10 @@ impl Frame {
     /// (`FrameSideDataKind::Metadata`); this is the finer-grained half that
     /// was missing.
     pub fn remove_metadata(&mut self, key: &str) -> Option<String> {
-        if let Some(FrameSideData::Metadata(m)) =
-            self.side_data.iter_mut().find(|d| d.kind() == FrameSideDataKind::Metadata)
+        if let Some(FrameSideData::Metadata(m)) = self
+            .side_data
+            .iter_mut()
+            .find(|d| d.kind() == FrameSideDataKind::Metadata)
         {
             return m.remove(key);
         }
@@ -345,8 +352,10 @@ impl Frame {
     /// [`Frame::set_metadata`] uses — a frame that never calls this carries
     /// no [`FrameSideDataKind::Log`] entry at all.
     pub fn push_log_line(&mut self, line: impl Into<String>) {
-        if let Some(FrameSideData::Log(lines)) =
-            self.side_data.iter_mut().find(|d| d.kind() == FrameSideDataKind::Log)
+        if let Some(FrameSideData::Log(lines)) = self
+            .side_data
+            .iter_mut()
+            .find(|d| d.kind() == FrameSideDataKind::Log)
         {
             lines.push(line.into());
             return;

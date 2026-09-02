@@ -16,7 +16,14 @@
 //! evidence the layers compose correctly, not evidence of interop with a
 //! second, independent implementation.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_cmp, clippy::indexing_slicing, reason = "test code")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::float_cmp,
+    clippy::indexing_slicing,
+    reason = "test code"
+)]
 
 use vaco_protocol_rtmp::command::{self, Command};
 use vaco_protocol_rtmp::message::{Dechunker, RtmpMessage, chunk_message};
@@ -35,13 +42,23 @@ fn send(name_stream_id: u32, cmd: &Command) -> Vec<u8> {
 }
 
 fn receive_one(dechunker: &mut Dechunker, wire: &[u8]) -> Command {
-    let messages = dechunker.feed(wire).expect("well-formed chunk stream bytes decode");
-    assert_eq!(messages.len(), 1, "expected exactly one reassembled message");
+    let messages = dechunker
+        .feed(wire)
+        .expect("well-formed chunk stream bytes decode");
+    assert_eq!(
+        messages.len(),
+        1,
+        "expected exactly one reassembled message"
+    );
     Command::decode(&messages[0].payload).expect("a command message's payload decodes as a Command")
 }
 
 fn status_code(cmd: &Command) -> String {
-    let vaco_protocol_rtmp::amf0::Value::Object(pairs) = cmd.arguments.first().expect("status commands carry one info-object argument") else {
+    let vaco_protocol_rtmp::amf0::Value::Object(pairs) = cmd
+        .arguments
+        .first()
+        .expect("status commands carry one info-object argument")
+    else {
         panic!("status argument is not an AMF0 object");
     };
     for (key, value) in pairs {
@@ -80,7 +97,11 @@ fn publish_flow_emits_the_specs_own_command_sequence() {
     let result = command::create_stream_result(create_cmd.transaction_id, stream_id);
     let on_client = receive_one(&mut client_side, &send(0, &result));
     assert_eq!(on_client.name, "_result");
-    let vaco_protocol_rtmp::amf0::Value::Number(returned_id) = on_client.arguments.first().expect("createStream _result carries the new stream ID") else {
+    let vaco_protocol_rtmp::amf0::Value::Number(returned_id) = on_client
+        .arguments
+        .first()
+        .expect("createStream _result carries the new stream ID")
+    else {
         panic!("createStream _result argument is not a Number");
     };
     assert_eq!(*returned_id, stream_id);
@@ -108,7 +129,10 @@ fn play_flow_emits_the_specs_own_command_sequence() {
 
     let create_cmd = command::create_stream(2.0);
     receive_one(&mut server_side, &send(0, &create_cmd));
-    receive_one(&mut client_side, &send(0, &command::create_stream_result(2.0, 1.0)));
+    receive_one(
+        &mut client_side,
+        &send(0, &command::create_stream_result(2.0, 1.0)),
+    );
 
     let play_cmd = command::play("mystream");
     let on_server = receive_one(&mut server_side, &send(1, &play_cmd));

@@ -6,7 +6,9 @@
 //! cargo bench -p vaco-codec-dsp-fmtconvert
 //! ```
 
-use vaco_codec_dsp_fmtconvert::{float_to_int16, int16_to_float, int32_to_float, interleave_f32, simd};
+use vaco_codec_dsp_fmtconvert::{
+    float_to_int16, int16_to_float, int32_to_float, interleave_f32, simd,
+};
 use vaco_simd::Caps;
 
 fn main() {

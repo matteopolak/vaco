@@ -89,14 +89,22 @@ fn map_err(e: &exr::error::Error) -> Error {
     match e {
         exr::error::Error::Io(_) => Error::UnexpectedEof,
         exr::error::Error::NotSupported(_) => Error::Unsupported("exr: unsupported layout"),
-        exr::error::Error::Invalid(_) | exr::error::Error::Aborted => Error::InvalidData("exr: malformed stream"),
+        exr::error::Error::Invalid(_) | exr::error::Error::Aborted => {
+            Error::InvalidData("exr: malformed stream")
+        }
     }
 }
 
 /// Read one frame's plane as a flat `f32` RGBA buffer, upconverting 8-bit
 /// integer formats and filling alpha as `1.0` for the three-channel ones.
 fn frame_to_rgba_f32(frame: &Frame) -> Result<(usize, usize, Vec<f32>)> {
-    let FrameData::Video { format, width, height, .. } = &frame.data else {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = &frame.data
+    else {
         return Err(Error::Unsupported("exr: audio frame"));
     };
     let (width, height) = (*width as usize, *height as usize);
@@ -108,7 +116,9 @@ fn frame_to_rgba_f32(frame: &Frame) -> Result<(usize, usize, Vec<f32>)> {
             for (row_idx, row) in plane.rows_iter().take(height).enumerate() {
                 let dst_start = row_idx * width * 4;
                 for (i, chunk) in row.chunks_exact(4).enumerate() {
-                    if let (Some(dst), Ok(bytes)) = (out.get_mut(dst_start + i), <[u8; 4]>::try_from(chunk)) {
+                    if let (Some(dst), Ok(bytes)) =
+                        (out.get_mut(dst_start + i), <[u8; 4]>::try_from(chunk))
+                    {
                         *dst = f32::from_ne_bytes(bytes);
                     }
                 }
@@ -119,7 +129,9 @@ fn frame_to_rgba_f32(frame: &Frame) -> Result<(usize, usize, Vec<f32>)> {
                 for (px, chunk) in row.chunks_exact(12).enumerate() {
                     let dst_start = (row_idx * width + px) * 4;
                     for (c, bytes4) in chunk.chunks_exact(4).enumerate() {
-                        if let (Some(dst), Ok(b)) = (out.get_mut(dst_start + c), <[u8; 4]>::try_from(bytes4)) {
+                        if let (Some(dst), Ok(b)) =
+                            (out.get_mut(dst_start + c), <[u8; 4]>::try_from(bytes4))
+                        {
                             *dst = f32::from_ne_bytes(b);
                         }
                     }
@@ -133,7 +145,9 @@ fn frame_to_rgba_f32(frame: &Frame) -> Result<(usize, usize, Vec<f32>)> {
             for (row_idx, row) in plane.rows_iter().take(height).enumerate() {
                 for (px, chunk) in row.chunks_exact(4).enumerate() {
                     let dst_start = (row_idx * width + px) * 4;
-                    if let (Some(dst), &[r, g, b, a]) = (out.get_mut(dst_start..dst_start + 4), chunk) {
+                    if let (Some(dst), &[r, g, b, a]) =
+                        (out.get_mut(dst_start..dst_start + 4), chunk)
+                    {
                         dst.copy_from_slice(&[
                             f32::from(r) / 255.0,
                             f32::from(g) / 255.0,
@@ -148,8 +162,14 @@ fn frame_to_rgba_f32(frame: &Frame) -> Result<(usize, usize, Vec<f32>)> {
             for (row_idx, row) in plane.rows_iter().take(height).enumerate() {
                 for (px, chunk) in row.chunks_exact(3).enumerate() {
                     let dst_start = (row_idx * width + px) * 4;
-                    if let (Some(dst), &[r, g, b]) = (out.get_mut(dst_start..dst_start + 4), chunk) {
-                        dst.copy_from_slice(&[f32::from(r) / 255.0, f32::from(g) / 255.0, f32::from(b) / 255.0, 1.0]);
+                    if let (Some(dst), &[r, g, b]) = (out.get_mut(dst_start..dst_start + 4), chunk)
+                    {
+                        dst.copy_from_slice(&[
+                            f32::from(r) / 255.0,
+                            f32::from(g) / 255.0,
+                            f32::from(b) / 255.0,
+                            1.0,
+                        ]);
                     }
                 }
             }
@@ -223,7 +243,10 @@ pub fn encode(frame: &Frame, options: &EncodeOptions) -> Result<Vec<u8>> {
     let mut out: Vec<u8> = Vec::new();
     {
         let mut cursor = Cursor::new(&mut out);
-        image.write().to_buffered(&mut cursor).map_err(|_| Error::InvalidData("exr: encode"))?;
+        image
+            .write()
+            .to_buffered(&mut cursor)
+            .map_err(|_| Error::InvalidData("exr: encode"))?;
     }
     Ok(out)
 }

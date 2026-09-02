@@ -66,7 +66,10 @@ pub(crate) struct Filter {
 }
 
 impl Filter {
-    #[allow(dead_code, reason = "exercised by this module's tests; see the module doc")]
+    #[allow(
+        dead_code,
+        reason = "exercised by this module's tests; see the module doc"
+    )]
     pub(crate) const fn stats(&self) -> Stats {
         self.stats
     }

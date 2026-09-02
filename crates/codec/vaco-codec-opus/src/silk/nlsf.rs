@@ -26,13 +26,25 @@ fn nlsf_unpack(cb: &NlsfCodebook, cb1_index: usize) -> (Vec<usize>, Vec<i32>) {
     let mut pred = vec![0i32; cb.order];
     let base = cb1_index * cb.order / 2;
     for i in (0..cb.order).step_by(2) {
-        let Some(&entry) = cb.ec_sel.get(base + i / 2) else { break };
+        let Some(&entry) = cb.ec_sel.get(base + i / 2) else {
+            break;
+        };
         let entry = i32::from(entry);
         ec_ix[i] = ((entry >> 1) & 7) as usize * (2 * NLSF_QUANT_MAX_AMPLITUDE as usize + 1);
-        pred[i] = i32::from(cb.pred.get(i + ((entry & 1) as usize) * (cb.order - 1)).copied().unwrap_or(0));
+        pred[i] = i32::from(
+            cb.pred
+                .get(i + ((entry & 1) as usize) * (cb.order - 1))
+                .copied()
+                .unwrap_or(0),
+        );
         if let (Some(ix1), Some(p1)) = (ec_ix.get_mut(i + 1), pred.get_mut(i + 1)) {
             *ix1 = ((entry >> 5) & 7) as usize * (2 * NLSF_QUANT_MAX_AMPLITUDE as usize + 1);
-            *p1 = i32::from(cb.pred.get(i + 1 + (((entry >> 4) & 1) as usize) * (cb.order - 1)).copied().unwrap_or(0));
+            *p1 = i32::from(
+                cb.pred
+                    .get(i + 1 + (((entry >> 4) & 1) as usize) * (cb.order - 1))
+                    .copied()
+                    .unwrap_or(0),
+            );
         }
     }
     (ec_ix, pred)
@@ -40,14 +52,24 @@ fn nlsf_unpack(cb: &NlsfCodebook, cb1_index: usize) -> (Vec<usize>, Vec<i32>) {
 
 /// Decode the first-stage vector index and every residual index.
 /// `celt/decode_indices.c`'s NLSF section, `psDec->psNLSF_CB` half.
-pub fn decode_nlsf_indices(dec: &mut RangeDecoder<'_>, cb: &NlsfCodebook, signal_type_voiced_half: bool) -> (usize, Vec<i32>) {
+pub fn decode_nlsf_indices(
+    dec: &mut RangeDecoder<'_>,
+    cb: &NlsfCodebook,
+    signal_type_voiced_half: bool,
+) -> (usize, Vec<i32>) {
     let row = usize::from(signal_type_voiced_half) * cb.n_vectors;
-    let row_icdf = cb.cb1_icdf.get(row..row + cb.n_vectors).unwrap_or(cb.cb1_icdf);
+    let row_icdf = cb
+        .cb1_icdf
+        .get(row..row + cb.n_vectors)
+        .unwrap_or(cb.cb1_icdf);
     let cb1_index = dec.icdf(row_icdf, 8).unwrap_or(0).max(0) as usize;
     let (ec_ix, _pred) = nlsf_unpack(cb, cb1_index.min(cb.n_vectors.saturating_sub(1)));
     let mut indices = vec![0i32; cb.order];
     for i in 0..cb.order {
-        let table = cb.ec_icdf.get(*ec_ix.get(i).unwrap_or(&0)..).unwrap_or(cb.ec_icdf);
+        let table = cb
+            .ec_icdf
+            .get(*ec_ix.get(i).unwrap_or(&0)..)
+            .unwrap_or(cb.ec_icdf);
         let mut ix = dec.icdf(table, 8).unwrap_or(0);
         if ix == 0 {
             ix -= dec.icdf(&NLSF_EXT_ICDF, 8).unwrap_or(0);
@@ -66,7 +88,10 @@ pub fn decode_nlsf_indices(dec: &mut RangeDecoder<'_>, cb: &NlsfCodebook, signal
 #[must_use]
 pub fn nlsf_decode(cb: &NlsfCodebook, cb1_index: usize, residual_indices: &[i32]) -> Vec<i32> {
     let order = cb.order;
-    let cb1_row = cb.cb1.get(cb1_index * order..cb1_index * order + order).unwrap_or(&[]);
+    let cb1_row = cb
+        .cb1
+        .get(cb1_index * order..cb1_index * order + order)
+        .unwrap_or(&[]);
     let mut nlsf: Vec<i32> = cb1_row.iter().map(|&v| i32::from(v) << 7).collect();
     nlsf.resize(order, 0);
 
@@ -153,14 +178,18 @@ fn laroia_weights(nlsf: &[i32], d: usize) -> Vec<f32> {
 /// ordering algorithm on Q15 integers, not something a float re-derivation
 /// would improve on.
 fn stabilize(nlsf: &mut [i32], delta_min: &[f32], l: usize) {
-    let dmin: Vec<i32> = delta_min.iter().map(|&v| (v * 32768.0).round() as i32).collect();
+    let dmin: Vec<i32> = delta_min
+        .iter()
+        .map(|&v| (v * 32768.0).round() as i32)
+        .collect();
     let d = |i: usize| dmin.get(i).copied().unwrap_or(1);
 
     for _ in 0..20 {
         let mut min_diff = nlsf.first().copied().unwrap_or(0) - d(0);
         let mut idx = 0i32;
         for i in 1..l {
-            let diff = nlsf.get(i).copied().unwrap_or(0) - (nlsf.get(i - 1).copied().unwrap_or(0) + d(i));
+            let diff =
+                nlsf.get(i).copied().unwrap_or(0) - (nlsf.get(i - 1).copied().unwrap_or(0) + d(i));
             if diff < min_diff {
                 min_diff = diff;
                 idx = i as i32;
@@ -195,7 +224,10 @@ fn stabilize(nlsf: &mut [i32], delta_min: &[f32], l: usize) {
                 max_center -= d(k);
             }
             max_center -= d(i) >> 1;
-            let mid = (i64::from(nlsf.get(i - 1).copied().unwrap_or(0)) + i64::from(nlsf.get(i).copied().unwrap_or(0)) + 1) >> 1;
+            let mid = (i64::from(nlsf.get(i - 1).copied().unwrap_or(0))
+                + i64::from(nlsf.get(i).copied().unwrap_or(0))
+                + 1)
+                >> 1;
             let center = (mid as i32).clamp(min_center, max_center);
             if let Some(slot) = nlsf.get_mut(i - 1) {
                 *slot = center - (d(i) >> 1);
@@ -247,11 +279,20 @@ fn stabilize(nlsf: &mut [i32], delta_min: &[f32], l: usize) {
 /// depends on).
 #[must_use]
 pub fn nlsf_to_lpc(nlsf_q15: &[i32], order: usize) -> Vec<f32> {
-    let cos_vals: Vec<f32> =
-        (0..order).map(|k| 2.0 * (std::f32::consts::PI * f32::from(nlsf_q15.get(k).copied().unwrap_or(0) as i16) / 32768.0).cos()).collect();
+    let cos_vals: Vec<f32> = (0..order)
+        .map(|k| {
+            2.0 * (std::f32::consts::PI * f32::from(nlsf_q15.get(k).copied().unwrap_or(0) as i16)
+                / 32768.0)
+                .cos()
+        })
+        .collect();
     let dd = order / 2;
-    let p_in: Vec<f32> = (0..dd).map(|k| cos_vals.get(2 * k).copied().unwrap_or(0.0)).collect();
-    let q_in: Vec<f32> = (0..dd).map(|k| cos_vals.get(2 * k + 1).copied().unwrap_or(0.0)).collect();
+    let p_in: Vec<f32> = (0..dd)
+        .map(|k| cos_vals.get(2 * k).copied().unwrap_or(0.0))
+        .collect();
+    let q_in: Vec<f32> = (0..dd)
+        .map(|k| cos_vals.get(2 * k + 1).copied().unwrap_or(0.0))
+        .collect();
     let p = find_poly(&p_in, dd);
     let q = find_poly(&q_in, dd);
 
@@ -341,7 +382,9 @@ fn is_stable(a: &[f32]) -> bool {
     let n = a.len();
     let mut coeffs = a.to_vec();
     for m in (1..=n).rev() {
-        let Some(&k) = coeffs.get(m - 1) else { return false };
+        let Some(&k) = coeffs.get(m - 1) else {
+            return false;
+        };
         if !(-0.9999..=0.9999).contains(&k) {
             return false;
         }

@@ -647,9 +647,16 @@ impl Muxer for MpegTsMuxer {
     /// [`MpegTsMuxer::maybe_convert`] uses. VVC is deliberately excluded:
     /// this crate has no `vvc_mp4toannexb` to ask for, so it keeps
     /// `maybe_convert`'s framing-only behaviour as its only conversion.
-    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        pkt: &Packet,
+    ) -> Result<BitstreamAction> {
         let idx = usize::try_from(pkt.stream_index).ok();
-        if idx.and_then(|i| self.streams.get(i)).is_some_and(|s| s.bsf_decided) {
+        if idx
+            .and_then(|i| self.streams.get(i))
+            .is_some_and(|s| s.bsf_decided)
+        {
             return Ok(BitstreamAction::Keep);
         }
         if let Some(s) = idx.and_then(|i| self.streams.get_mut(i)) {
@@ -894,7 +901,9 @@ mod tests {
         expected.extend_from_slice(&[0, 0, 0, 1]);
         expected.extend_from_slice(&idr);
         assert!(
-            bytes.windows(expected.len()).any(|w| w == expected.as_slice()),
+            bytes
+                .windows(expected.len())
+                .any(|w| w == expected.as_slice()),
             "expected the AUD immediately before the converted access unit"
         );
     }
@@ -944,7 +953,9 @@ mod tests {
             match name {
                 "h264_mp4toannexb" => (vaco_bsf_h2645::h264_mp4toannexb::DESC.build)(params),
                 "hevc_mp4toannexb" => (vaco_bsf_h2645::hevc_mp4toannexb::DESC.build)(params),
-                _ => Err(Error::Unsupported("test provider knows only the mp4toannexb pair")),
+                _ => Err(Error::Unsupported(
+                    "test provider knows only the mp4toannexb pair",
+                )),
             }
         }
     }
@@ -1025,7 +1036,9 @@ mod tests {
         // `a_length_prefixed_h264_packet_is_converted_to_annex_b` test above
         // already makes.
         assert!(
-            bytes.windows(expected.len()).any(|w| w == expected.as_slice()),
+            bytes
+                .windows(expected.len())
+                .any(|w| w == expected.as_slice()),
             "expected the SPS/PPS-spliced sample verbatim in the muxed bytes"
         );
     }

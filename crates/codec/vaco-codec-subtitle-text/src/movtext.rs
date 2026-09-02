@@ -238,10 +238,7 @@ mod tests {
         // The exact bytes the reference wrote for "Hello world\nsecond line"
         // with <i>world</i>: styl start=6 end=11 face=0x02.
         let s = sample("Hello world\nsecond line", &[(6, 11, FACE_ITALIC)]);
-        assert_eq!(
-            to_ass(&s).unwrap(),
-            "Hello {\\i1}world{\\r}\\Nsecond line"
-        );
+        assert_eq!(to_ass(&s).unwrap(), "Hello {\\i1}world{\\r}\\Nsecond line");
     }
 
     #[test]

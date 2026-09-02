@@ -114,10 +114,16 @@ mod tests {
         assert_eq!(read_tree(&UV_MODE_TREE, |_| false), 0);
         // "10" -> V_PRED (1).
         let mut bits = [true, false].into_iter();
-        assert_eq!(read_tree(&UV_MODE_TREE, |_| bits.next().unwrap_or(false)), 1);
+        assert_eq!(
+            read_tree(&UV_MODE_TREE, |_| bits.next().unwrap_or(false)),
+            1
+        );
         // "110" -> H_PRED (2).
         let mut bits = [true, true, false].into_iter();
-        assert_eq!(read_tree(&UV_MODE_TREE, |_| bits.next().unwrap_or(false)), 2);
+        assert_eq!(
+            read_tree(&UV_MODE_TREE, |_| bits.next().unwrap_or(false)),
+            2
+        );
         // "111" -> TM_PRED (3).
         assert_eq!(read_tree(&UV_MODE_TREE, |_| true), 3);
     }

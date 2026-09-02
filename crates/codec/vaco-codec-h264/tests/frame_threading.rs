@@ -56,7 +56,10 @@ fn observe(frame: &Frame) -> Observable {
             let (w, h) = if i == 0 {
                 (*width as usize, *height as usize)
             } else {
-                ((*width as usize).div_ceil(2), (*height as usize).div_ceil(2))
+                (
+                    (*width as usize).div_ceil(2),
+                    (*height as usize).div_ceil(2),
+                )
             };
             let data = plane.data.as_slice();
             let mut out = Vec::new();
@@ -140,7 +143,10 @@ fn decode(stream: &[u8], threads: usize) -> Vec<Observable> {
 
 fn assert_invariant(name: &str, stream: &[u8]) {
     let serial = decode(stream, 1);
-    assert!(!serial.is_empty(), "{name}: the serial decode produced no frames");
+    assert!(
+        !serial.is_empty(),
+        "{name}: the serial decode produced no frames"
+    );
     for threads in [2, 3, 4, 8] {
         let got = decode(stream, threads);
         assert_eq!(
@@ -165,7 +171,8 @@ fn assert_invariant(name: &str, stream: &[u8]) {
             for (p, (pa, pb)) in a.1.iter().zip(b.1.iter()).enumerate() {
                 let differing = pa.iter().zip(pb.iter()).filter(|(x, y)| x != y).count();
                 assert_eq!(
-                    differing, 0,
+                    differing,
+                    0,
                     "{name}: frame {i} plane {p} differs in {differing} of {} bytes at \
                      {threads} threads",
                     pa.len()

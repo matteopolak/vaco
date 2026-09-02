@@ -577,7 +577,13 @@ pub mod simd {
 /// `mask`, `a`, `b` and `out` must be the same length; a length mismatch is
 /// handled by processing only the shared prefix, since this is a library
 /// entry point over caller-controlled slices and should not panic on it.
-pub fn dispatched_select_u8_row(caps: crate::Caps, mask: &[u8], a: &[u8], b: &[u8], out: &mut [u8]) {
+pub fn dispatched_select_u8_row(
+    caps: crate::Caps,
+    mask: &[u8],
+    a: &[u8],
+    b: &[u8],
+    out: &mut [u8],
+) {
     let n = mask.len().min(a.len()).min(b.len()).min(out.len());
     let (Some(mask), Some(a), Some(b), Some(out)) =
         (mask.get(..n), a.get(..n), b.get(..n), out.get_mut(..n))
@@ -622,7 +628,12 @@ fn select_row<S: crate::Lanes>(simd: S, mask: &[u8], a: &[u8], b: &[u8], out: &m
         m.select(va, vb).store_slice(oc);
     }
 
-    for (((m, a), b), o) in mask_tail.iter().zip(a_tail).zip(b_tail).zip(out_tail.iter_mut()) {
+    for (((m, a), b), o) in mask_tail
+        .iter()
+        .zip(a_tail)
+        .zip(b_tail)
+        .zip(out_tail.iter_mut())
+    {
         *o = select_u8(*m, *a, *b);
     }
 }

@@ -210,7 +210,11 @@ impl SmoothStreamingMuxer {
     /// written, and every `QualityLevels(N)/Fragments(...)`/`FragmentInfo(...)`
     /// file is resolved relative to it.
     #[must_use]
-    pub fn new(manifest_url: String, write: Option<WriteAccess>, opts: SmoothStreamingMuxOptions) -> Self {
+    pub fn new(
+        manifest_url: String,
+        write: Option<WriteAccess>,
+        opts: SmoothStreamingMuxOptions,
+    ) -> Self {
         Self {
             manifest_url,
             write,
@@ -337,8 +341,8 @@ impl Muxer for SmoothStreamingMuxer {
         let bitrate = params.bit_rate.ok_or(Error::InvalidData(
             "smoothstreaming needs a declared bit_rate: it names the QualityLevels() folder",
         ))?;
-        let stream_index = u32::try_from(self.tracks.len())
-            .map_err(|_| Error::InvalidData("too many streams"))?;
+        let stream_index =
+            u32::try_from(self.tracks.len()).map_err(|_| Error::InvalidData("too many streams"))?;
         let track_id = stream_index + 1;
 
         let track = match params.codec_id {
@@ -445,11 +449,7 @@ impl Muxer for SmoothStreamingMuxer {
         }
 
         let flags = if is_video {
-            if packet.is_key() {
-                0
-            } else {
-                0x0001_0000
-            }
+            if packet.is_key() { 0 } else { 0x0001_0000 }
         } else {
             0
         };

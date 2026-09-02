@@ -153,7 +153,9 @@ pub const CAT_PROBS: [&[u8]; 7] = [
     &[173, 148, 140],
     &[176, 155, 140, 135],
     &[180, 157, 141, 134, 130],
-    &[254, 254, 254, 252, 249, 243, 230, 196, 177, 153, 140, 133, 130, 129],
+    &[
+        254, 254, 254, 252, 249, 243, 230, 196, 177, 153, 140, 133, 130, 129,
+    ],
 ];
 
 /// §10.2 — `energy_class[12]`, indexed by token.
@@ -194,7 +196,8 @@ pub const DEFAULT_SKIP_PROB: [u8; 3] = include!("tables/default_skip_prob.in");
 /// by `maxTxSize`; see the module doc on why the padding lines up).
 pub const DEFAULT_TX_PROBS: [[[u8; 3]; 2]; 4] = include!("tables/default_tx_probs.in");
 /// §10.5 — `default_coef_probs[4][2][2][6][6][3]`.
-pub const DEFAULT_COEF_PROBS: [[[[[[u8; 3]; 6]; 6]; 2]; 2]; 4] = include!("tables/default_coef_probs.in");
+pub const DEFAULT_COEF_PROBS: [[[[[[u8; 3]; 6]; 6]; 2]; 2]; 4] =
+    include!("tables/default_coef_probs.in");
 
 /// §10.3 — `pareto_table[128][8]`.
 pub const PARETO_TABLE: [[u8; 8]; 128] = include!("tables/pareto_table.in");
@@ -247,8 +250,10 @@ pub const NUM_8X8_BLOCKS_WIDE_LOOKUP: [usize; 13] = [1, 1, 1, 1, 1, 2, 2, 2, 4, 
 pub const MI_HEIGHT_LOG2_LOOKUP: [u32; 13] = [0, 0, 0, 0, 1, 0, 1, 2, 1, 2, 3, 2, 3];
 pub const NUM_8X8_BLOCKS_HIGH_LOOKUP: [usize; 13] = [1, 1, 1, 1, 2, 1, 2, 4, 2, 4, 8, 4, 8];
 pub const SIZE_GROUP_LOOKUP: [usize; 13] = [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 3, 3];
-pub const MAX_TXSIZE_LOOKUP: [i32; 13] =
-    [TX_4X4, TX_4X4, TX_4X4, TX_8X8, TX_8X8, TX_8X8, TX_16X16, TX_16X16, TX_16X16, TX_32X32, TX_32X32, TX_32X32, TX_32X32];
+pub const MAX_TXSIZE_LOOKUP: [i32; 13] = [
+    TX_4X4, TX_4X4, TX_4X4, TX_8X8, TX_8X8, TX_8X8, TX_16X16, TX_16X16, TX_16X16, TX_32X32,
+    TX_32X32, TX_32X32, TX_32X32,
+];
 /// §6.2's `tx_mode_to_biggest_tx_size[TX_MODES]`.
 pub const TX_MODE_TO_BIGGEST_TX_SIZE: [i32; 5] = [TX_4X4, TX_8X8, TX_16X16, TX_32X32, TX_32X32];
 
@@ -286,20 +291,20 @@ pub const SS_SIZE_LOOKUP: [[[i32; 2]; 2]; 13] = [
 pub const MODE2TXFM_MAP: [vaco_codec_dsp_idct::vp9::TxType; 14] = {
     use vaco_codec_dsp_idct::vp9::TxType::{AdstAdst, AdstDct, DctAdst, DctDct};
     [
-        DctDct,  // DC
-        AdstDct, // V
-        DctAdst, // H
-        DctDct,  // D45
+        DctDct,   // DC
+        AdstDct,  // V
+        DctAdst,  // H
+        DctDct,   // D45
         AdstAdst, // D135
-        AdstDct, // D117
-        DctAdst, // D153
-        DctAdst, // D207
-        AdstDct, // D63
+        AdstDct,  // D117
+        DctAdst,  // D153
+        DctAdst,  // D207
+        AdstDct,  // D63
         AdstAdst, // TM
-        DctDct,  // NEARESTMV
-        DctDct,  // NEARMV
-        DctDct,  // ZEROMV
-        DctDct,  // NEWMV
+        DctDct,   // NEARESTMV
+        DctDct,   // NEARMV
+        DctDct,   // ZEROMV
+        DctDct,   // NEWMV
     ]
 };
 
@@ -381,13 +386,34 @@ pub const MV_OFFSET_BITS: usize = 10;
 /// §9.3.1 — `inter_mode_tree[6]` (leaves are `y_mode - NEARESTMV`, i.e.
 /// `inter_mode` itself, matching the `read_tree` result this crate then
 /// adds `NEARESTMV` to).
-pub const INTER_MODE_TREE: [i8; 6] = [-(ZEROMV - NEARESTMV) as i8, 2, -0i8 /* NEARESTMV - NEARESTMV */, 4, -(NEARMV - NEARESTMV) as i8, -(NEWMV - NEARESTMV) as i8];
+pub const INTER_MODE_TREE: [i8; 6] = [
+    -(ZEROMV - NEARESTMV) as i8,
+    2,
+    -0i8, /* NEARESTMV - NEARESTMV */
+    4,
+    -(NEARMV - NEARESTMV) as i8,
+    -(NEWMV - NEARESTMV) as i8,
+];
 /// §9.3.1 — `interp_filter_tree[4]`.
-pub const INTERP_FILTER_TREE: [i8; 4] = [-(EIGHTTAP as i8), 2, -(EIGHTTAP_SMOOTH as i8), -(EIGHTTAP_SHARP as i8)];
+pub const INTERP_FILTER_TREE: [i8; 4] = [
+    -(EIGHTTAP as i8),
+    2,
+    -(EIGHTTAP_SMOOTH as i8),
+    -(EIGHTTAP_SHARP as i8),
+];
 /// §9.3.1 — `mv_joint_tree[6]`.
-pub const MV_JOINT_TREE: [i8; 6] = [-(MV_JOINT_ZERO as i8), 2, -(MV_JOINT_HNZVZ as i8), 4, -(MV_JOINT_HZVNZ as i8), -(MV_JOINT_HNZVNZ as i8)];
+pub const MV_JOINT_TREE: [i8; 6] = [
+    -(MV_JOINT_ZERO as i8),
+    2,
+    -(MV_JOINT_HNZVZ as i8),
+    4,
+    -(MV_JOINT_HZVNZ as i8),
+    -(MV_JOINT_HNZVNZ as i8),
+];
 /// §9.3.1 — `mv_class_tree[20]` (leaves are the plain `mv_class` integer 0..10).
-pub const MV_CLASS_TREE: [i8; 20] = [-0, 2, -1, 4, 6, 8, -2, -3, 10, 12, -4, -5, -6, 14, 16, 18, -7, -8, -9, -10];
+pub const MV_CLASS_TREE: [i8; 20] = [
+    -0, 2, -1, 4, 6, 8, -2, -3, 10, 12, -4, -5, -6, 14, 16, 18, -7, -8, -9, -10,
+];
 /// §9.3.1 — `mv_fr_tree[6]`, shared by `mv_class0_fr` and `mv_fr`.
 pub const MV_FR_TREE: [i8; 6] = [-0, 2, -1, 4, -2, -3];
 
@@ -395,19 +421,136 @@ pub const MV_FR_TREE: [i8; 6] = [-0, 2, -1, 4, -2, -3];
 /// offsets (row, col) `find_mv_refs` searches, in priority order, per block
 /// size.
 pub const MV_REF_BLOCKS: [[[i32; 2]; MVREF_NEIGHBOURS]; 13] = [
-    [[-1, 0], [0, -1], [-1, -1], [-2, 0], [0, -2], [-2, -1], [-1, -2], [-2, -2]],
-    [[-1, 0], [0, -1], [-1, -1], [-2, 0], [0, -2], [-2, -1], [-1, -2], [-2, -2]],
-    [[-1, 0], [0, -1], [-1, -1], [-2, 0], [0, -2], [-2, -1], [-1, -2], [-2, -2]],
-    [[-1, 0], [0, -1], [-1, -1], [-2, 0], [0, -2], [-2, -1], [-1, -2], [-2, -2]],
-    [[0, -1], [-1, 0], [1, -1], [-1, -1], [0, -2], [-2, 0], [-2, -1], [-1, -2]],
-    [[-1, 0], [0, -1], [-1, 1], [-1, -1], [-2, 0], [0, -2], [-1, -2], [-2, -1]],
-    [[-1, 0], [0, -1], [-1, 1], [1, -1], [-1, -1], [-3, 0], [0, -3], [-3, -3]],
-    [[0, -1], [-1, 0], [2, -1], [-1, -1], [-1, 1], [0, -3], [-3, 0], [-3, -3]],
-    [[-1, 0], [0, -1], [-1, 2], [-1, -1], [1, -1], [-3, 0], [0, -3], [-3, -3]],
-    [[-1, 1], [1, -1], [-1, 2], [2, -1], [-1, -1], [-3, 0], [0, -3], [-3, -3]],
-    [[0, -1], [-1, 0], [4, -1], [-1, 2], [-1, -1], [0, -3], [-3, 0], [2, -1]],
-    [[-1, 0], [0, -1], [-1, 4], [2, -1], [-1, -1], [-3, 0], [0, -3], [-1, 2]],
-    [[-1, 3], [3, -1], [-1, 4], [4, -1], [-1, -1], [-1, 0], [0, -1], [-1, 6]],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, -1],
+        [-2, 0],
+        [0, -2],
+        [-2, -1],
+        [-1, -2],
+        [-2, -2],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, -1],
+        [-2, 0],
+        [0, -2],
+        [-2, -1],
+        [-1, -2],
+        [-2, -2],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, -1],
+        [-2, 0],
+        [0, -2],
+        [-2, -1],
+        [-1, -2],
+        [-2, -2],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, -1],
+        [-2, 0],
+        [0, -2],
+        [-2, -1],
+        [-1, -2],
+        [-2, -2],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [1, -1],
+        [-1, -1],
+        [0, -2],
+        [-2, 0],
+        [-2, -1],
+        [-1, -2],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, 1],
+        [-1, -1],
+        [-2, 0],
+        [0, -2],
+        [-1, -2],
+        [-2, -1],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, 1],
+        [1, -1],
+        [-1, -1],
+        [-3, 0],
+        [0, -3],
+        [-3, -3],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [2, -1],
+        [-1, -1],
+        [-1, 1],
+        [0, -3],
+        [-3, 0],
+        [-3, -3],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, 2],
+        [-1, -1],
+        [1, -1],
+        [-3, 0],
+        [0, -3],
+        [-3, -3],
+    ],
+    [
+        [-1, 1],
+        [1, -1],
+        [-1, 2],
+        [2, -1],
+        [-1, -1],
+        [-3, 0],
+        [0, -3],
+        [-3, -3],
+    ],
+    [
+        [0, -1],
+        [-1, 0],
+        [4, -1],
+        [-1, 2],
+        [-1, -1],
+        [0, -3],
+        [-3, 0],
+        [2, -1],
+    ],
+    [
+        [-1, 0],
+        [0, -1],
+        [-1, 4],
+        [2, -1],
+        [-1, -1],
+        [-3, 0],
+        [0, -3],
+        [-1, 2],
+    ],
+    [
+        [-1, 3],
+        [3, -1],
+        [-1, 4],
+        [4, -1],
+        [-1, -1],
+        [-1, 0],
+        [0, -1],
+        [-1, 6],
+    ],
 ];
 
 /// §6.5.1's `mode_2_counter[MB_MODE_COUNT]`, indexed by a neighbour's
@@ -415,8 +558,27 @@ pub const MV_REF_BLOCKS: [[[i32; 2]; MVREF_NEIGHBOURS]; 13] = [
 pub const MODE_2_COUNTER: [i32; 14] = [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 0, 0, 3, 1];
 /// §6.5.1's `counter_to_context[19]`, indexed by the summed `mode_2_counter`
 /// contribution of up to two neighbours (range 0..18).
-pub const COUNTER_TO_CONTEXT: [i32; 19] =
-    [BOTH_PREDICTED, NEW_PLUS_NON_INTRA, BOTH_NEW, ZERO_PLUS_PREDICTED, NEW_PLUS_NON_INTRA, INVALID_CASE, BOTH_ZERO, INVALID_CASE, INVALID_CASE, INTRA_PLUS_NON_INTRA, INTRA_PLUS_NON_INTRA, INVALID_CASE, INTRA_PLUS_NON_INTRA, INVALID_CASE, INVALID_CASE, INVALID_CASE, INVALID_CASE, INVALID_CASE, BOTH_INTRA];
+pub const COUNTER_TO_CONTEXT: [i32; 19] = [
+    BOTH_PREDICTED,
+    NEW_PLUS_NON_INTRA,
+    BOTH_NEW,
+    ZERO_PLUS_PREDICTED,
+    NEW_PLUS_NON_INTRA,
+    INVALID_CASE,
+    BOTH_ZERO,
+    INVALID_CASE,
+    INVALID_CASE,
+    INTRA_PLUS_NON_INTRA,
+    INTRA_PLUS_NON_INTRA,
+    INVALID_CASE,
+    INTRA_PLUS_NON_INTRA,
+    INVALID_CASE,
+    INVALID_CASE,
+    INVALID_CASE,
+    INVALID_CASE,
+    INVALID_CASE,
+    BOTH_INTRA,
+];
 /// §6.5.11's `idx_n_column_to_subblock[4][2]`.
 pub const IDX_N_COLUMN_TO_SUBBLOCK: [[usize; 2]; 4] = [[1, 2], [1, 3], [3, 2], [3, 3]];
 
@@ -434,13 +596,16 @@ pub const DEFAULT_COMP_MODE_PROB: [u8; 5] = include!("tables/default_comp_mode_p
 pub const DEFAULT_COMP_REF_PROB: [u8; 5] = include!("tables/default_comp_ref_prob.in");
 pub const DEFAULT_SINGLE_REF_PROB: [[u8; 2]; 5] = include!("tables/default_single_ref_prob.in");
 pub const DEFAULT_INTER_MODE_PROBS: [[u8; 3]; 7] = include!("tables/default_inter_mode_probs.in");
-pub const DEFAULT_INTERP_FILTER_PROBS: [[u8; 2]; 4] = include!("tables/default_interp_filter_probs.in");
+pub const DEFAULT_INTERP_FILTER_PROBS: [[u8; 2]; 4] =
+    include!("tables/default_interp_filter_probs.in");
 pub const DEFAULT_MV_JOINT_PROBS: [u8; 3] = include!("tables/default_mv_joint_probs.in");
 pub const DEFAULT_MV_SIGN_PROB: [u8; 2] = include!("tables/default_mv_sign_prob.in");
 pub const DEFAULT_MV_CLASS_PROBS: [[u8; 10]; 2] = include!("tables/default_mv_class_probs.in");
 pub const DEFAULT_MV_CLASS0_BIT_PROB: [u8; 2] = include!("tables/default_mv_class0_bit_prob.in");
-pub const DEFAULT_MV_BITS_PROB: [[u8; MV_OFFSET_BITS]; 2] = include!("tables/default_mv_bits_prob.in");
-pub const DEFAULT_MV_CLASS0_FR_PROBS: [[[u8; 3]; CLASS0_SIZE]; 2] = include!("tables/default_mv_class0_fr_probs.in");
+pub const DEFAULT_MV_BITS_PROB: [[u8; MV_OFFSET_BITS]; 2] =
+    include!("tables/default_mv_bits_prob.in");
+pub const DEFAULT_MV_CLASS0_FR_PROBS: [[[u8; 3]; CLASS0_SIZE]; 2] =
+    include!("tables/default_mv_class0_fr_probs.in");
 pub const DEFAULT_MV_FR_PROBS: [[u8; 3]; 2] = include!("tables/default_mv_fr_probs.in");
 pub const DEFAULT_MV_CLASS0_HP_PROB: [u8; 2] = include!("tables/default_mv_class0_hp_prob.in");
 pub const DEFAULT_MV_HP_PROB: [u8; 2] = include!("tables/default_mv_hp_prob.in");

@@ -26,9 +26,9 @@ pub fn to_rgba(budget: &mut Budget, bitmap: &IndexedBitmap) -> Result<Vec<u8>> {
         .rect()
         .area()
         .ok_or(Error::InvalidData("subtitle bitmap: rect area overflows"))?;
-    let byte_len = area
-        .checked_mul(4)
-        .ok_or(Error::InvalidData("subtitle bitmap: rgba byte count overflows"))?;
+    let byte_len = area.checked_mul(4).ok_or(Error::InvalidData(
+        "subtitle bitmap: rgba byte count overflows",
+    ))?;
     let len = usize::try_from(byte_len)
         .map_err(|_| Error::InvalidData("subtitle bitmap: too large for this platform"))?;
     let mut out = budget.alloc::<u8>(len)?;

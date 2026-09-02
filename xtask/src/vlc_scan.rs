@@ -423,7 +423,10 @@ pub fn run(_check: bool) -> Task {
                 let b = &codes[*j];
                 let reason = KNOWN_INTENTIONAL
                     .iter()
-                    .find(|k| k.table == target.table && (k.spelling == a.spelling || k.spelling == b.spelling))
+                    .find(|k| {
+                        k.table == target.table
+                            && (k.spelling == a.spelling || k.spelling == b.spelling)
+                    })
                     .map_or("(reason not found)", |k| k.reason);
                 report.push(format!(
                     "    (known-intentional) {} (len {}) / {} (len {}) — {reason}",
@@ -433,12 +436,16 @@ pub fn run(_check: bool) -> Task {
         }
     }
 
-    println!("vlc-scan: {} table(s) checked across {} crate(s)", TARGETS.len(), {
-        let mut names: Vec<&str> = TARGETS.iter().map(|t| t.crate_name).collect();
-        names.sort_unstable();
-        names.dedup();
-        names.len()
-    });
+    println!(
+        "vlc-scan: {} table(s) checked across {} crate(s)",
+        TARGETS.len(),
+        {
+            let mut names: Vec<&str> = TARGETS.iter().map(|t| t.crate_name).collect();
+            names.sort_unstable();
+            names.dedup();
+            names.len()
+        }
+    );
     for line in &report {
         println!("  {line}");
     }
@@ -492,8 +499,16 @@ mod tests {
     #[test]
     fn a_prefix_conflict_is_found_regardless_of_which_entry_is_shorter() {
         let codes = vec![
-            Code { len: 1, code: 0b0, spelling: "\"0\"".into() },
-            Code { len: 2, code: 0b01, spelling: "\"01\"".into() },
+            Code {
+                len: 1,
+                code: 0b0,
+                spelling: "\"0\"".into(),
+            },
+            Code {
+                len: 2,
+                code: 0b01,
+                spelling: "\"01\"".into(),
+            },
         ];
         let conflicts = prefix_conflicts(&codes);
         assert_eq!(conflicts, vec![(0, 1)]);
@@ -502,8 +517,16 @@ mod tests {
     #[test]
     fn equal_length_duplicates_are_a_conflict() {
         let codes = vec![
-            Code { len: 3, code: 0b010, spelling: "a".into() },
-            Code { len: 3, code: 0b010, spelling: "b".into() },
+            Code {
+                len: 3,
+                code: 0b010,
+                spelling: "a".into(),
+            },
+            Code {
+                len: 3,
+                code: 0b010,
+                spelling: "b".into(),
+            },
         ];
         assert_eq!(prefix_conflicts(&codes).len(), 1);
     }
@@ -511,9 +534,21 @@ mod tests {
     #[test]
     fn a_clean_code_has_no_conflicts() {
         let codes = vec![
-            Code { len: 1, code: 0b0, spelling: "a".into() },
-            Code { len: 2, code: 0b10, spelling: "b".into() },
-            Code { len: 2, code: 0b11, spelling: "c".into() },
+            Code {
+                len: 1,
+                code: 0b0,
+                spelling: "a".into(),
+            },
+            Code {
+                len: 2,
+                code: 0b10,
+                spelling: "b".into(),
+            },
+            Code {
+                len: 2,
+                code: 0b11,
+                spelling: "c".into(),
+            },
         ];
         assert!(prefix_conflicts(&codes).is_empty());
     }
@@ -523,8 +558,8 @@ mod tests {
         let root = repo_root();
         for target in TARGETS {
             let path = root.join(target.file);
-            let text = std::fs::read_to_string(&path)
-                .unwrap_or_else(|e| panic!("{}: {e}", target.file));
+            let text =
+                std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", target.file));
             let block = extract_block(&text, target.table)
                 .unwrap_or_else(|| panic!("{}: const {} not found", target.file, target.table));
             let codes = extract_codes(block, target.shape);

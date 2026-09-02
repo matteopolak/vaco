@@ -149,7 +149,13 @@ mod tests {
 
     #[test]
     fn eight_bit_round_trips() {
-        let comp = Component { plane: 0, step: 1, offset: 0, shift: 0, depth: 8 };
+        let comp = Component {
+            plane: 0,
+            step: 1,
+            offset: 0,
+            shift: 0,
+            depth: 8,
+        };
         let mut row = [0u8; 4];
         write(&mut row, 2, comp, false, 0xab);
         assert_eq!(read(&row, 2, comp, false), 0xab);
@@ -157,7 +163,13 @@ mod tests {
 
     #[test]
     fn ten_bit_le_masks_to_depth() {
-        let comp = Component { plane: 0, step: 2, offset: 0, shift: 0, depth: 10 };
+        let comp = Component {
+            plane: 0,
+            step: 2,
+            offset: 0,
+            shift: 0,
+            depth: 10,
+        };
         let mut row = [0u8; 4];
         write(&mut row, 0, comp, false, 0x3ff);
         assert_eq!(read(&row, 0, comp, false), 0x3ff);
@@ -167,7 +179,13 @@ mod tests {
 
     #[test]
     fn big_endian_round_trips() {
-        let comp = Component { plane: 0, step: 2, offset: 0, shift: 0, depth: 16 };
+        let comp = Component {
+            plane: 0,
+            step: 2,
+            offset: 0,
+            shift: 0,
+            depth: 16,
+        };
         let mut row = [0u8; 4];
         write(&mut row, 1, comp, true, 0x1234);
         assert_eq!(read(&row, 1, comp, true), 0x1234);
@@ -176,9 +194,21 @@ mod tests {
 
     #[test]
     fn max_value_saturates_at_sixteen_bits() {
-        let comp16 = Component { plane: 0, step: 2, offset: 0, shift: 0, depth: 16 };
+        let comp16 = Component {
+            plane: 0,
+            step: 2,
+            offset: 0,
+            shift: 0,
+            depth: 16,
+        };
         assert_eq!(max_value(comp16), u16::MAX);
-        let comp9 = Component { plane: 0, step: 2, offset: 0, shift: 0, depth: 9 };
+        let comp9 = Component {
+            plane: 0,
+            step: 2,
+            offset: 0,
+            shift: 0,
+            depth: 9,
+        };
         assert_eq!(max_value(comp9), 511);
     }
 

@@ -287,10 +287,8 @@ impl Muxer for FlvMuxer {
         let mut extradata = params.extradata.clone();
         let mut needs_nal_repack = false;
         if let Some(kind) = params.codec_id.and_then(vaco_format_nalu::header_kind_for)
-            && let Some(config) = vaco_format_nalu::length_prefixed_config(
-                kind,
-                extradata.as_deref().unwrap_or(&[]),
-            )
+            && let Some(config) =
+                vaco_format_nalu::length_prefixed_config(kind, extradata.as_deref().unwrap_or(&[]))
         {
             extradata = Some(config.record);
             needs_nal_repack = config.repack;
@@ -637,7 +635,11 @@ impl FlvMuxer {
     /// resolve it into a configuration record, and write the sequence header
     /// this stream could not have at [`Muxer::write_header`] time.
     fn adopt_new_extradata(&mut self, idx: usize, packet: &Packet) -> Result<()> {
-        if self.streams.get(idx).is_some_and(|(s, _)| s.seq_header_written) {
+        if self
+            .streams
+            .get(idx)
+            .is_some_and(|(s, _)| s.seq_header_written)
+        {
             return Ok(());
         }
         let Some(new_extradata) = packet.side_data.iter().find_map(|sd| match sd {
@@ -649,10 +651,7 @@ impl FlvMuxer {
         let Some((state, extra)) = self.streams.get_mut(idx) else {
             return Ok(());
         };
-        let Some(kind) = state
-            .codec_id
-            .and_then(vaco_format_nalu::header_kind_for)
-        else {
+        let Some(kind) = state.codec_id.and_then(vaco_format_nalu::header_kind_for) else {
             return Ok(());
         };
         let Some(config) = vaco_format_nalu::length_prefixed_config(kind, &new_extradata) else {

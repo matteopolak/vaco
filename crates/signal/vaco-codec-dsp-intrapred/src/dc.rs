@@ -20,8 +20,16 @@
 /// rather than trying to signal partial availability here).
 #[must_use]
 pub fn dc_predict(top: &[u16], left: &[u16], size: usize, bit_depth: u32) -> u16 {
-    let top = if top.len() >= size { top.get(..size) } else { None };
-    let left = if left.len() >= size { left.get(..size) } else { None };
+    let top = if top.len() >= size {
+        top.get(..size)
+    } else {
+        None
+    };
+    let left = if left.len() >= size {
+        left.get(..size)
+    } else {
+        None
+    };
 
     match (top, left) {
         (Some(t), Some(l)) => {

@@ -77,13 +77,33 @@ pub const DESC: FilterDesc = FilterDesc {
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "idet", help = "Interlace detect Filter")]
 pub(crate) struct Opts {
-    #[opt(name = "intl_thres", help = "set interlacing threshold", default = 1.04, flags(video, filtering))]
+    #[opt(
+        name = "intl_thres",
+        help = "set interlacing threshold",
+        default = 1.04,
+        flags(video, filtering)
+    )]
     pub intl_thres: f64,
-    #[opt(name = "prog_thres", help = "set progressive threshold", default = 1.5, flags(video, filtering))]
+    #[opt(
+        name = "prog_thres",
+        help = "set progressive threshold",
+        default = 1.5,
+        flags(video, filtering)
+    )]
     pub prog_thres: f64,
-    #[opt(name = "rep_thres", help = "set repeat threshold", default = 3.0, flags(video, filtering))]
+    #[opt(
+        name = "rep_thres",
+        help = "set repeat threshold",
+        default = 3.0,
+        flags(video, filtering)
+    )]
     pub rep_thres: f64,
-    #[opt(name = "half_life", help = "half life of cumulative statistics", default = 0.0, flags(video, filtering))]
+    #[opt(
+        name = "half_life",
+        help = "half life of cumulative statistics",
+        default = 0.0,
+        flags(video, filtering)
+    )]
     pub half_life: f64,
     #[opt(
         name = "analyze_interlaced_flag",
@@ -98,7 +118,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         #[allow(
             clippy::float_cmp,
@@ -164,7 +185,10 @@ impl Filter {
         }
     }
 
-    #[allow(dead_code, reason = "exercised by this module's tests; see the module doc")]
+    #[allow(
+        dead_code,
+        reason = "exercised by this module's tests; see the module doc"
+    )]
     pub(crate) const fn classification(&self) -> Tally {
         self.tally
     }
@@ -268,7 +292,10 @@ mod tests {
             let _ = filt.classify(&mut ramp_frame(8, 16));
         }
         let t = filt.classification();
-        assert_eq!(t.interlaced, 0, "a smooth ramp must never classify interlaced");
+        assert_eq!(
+            t.interlaced, 0,
+            "a smooth ramp must never classify interlaced"
+        );
         assert_eq!(t.progressive, 5);
     }
 
@@ -279,7 +306,10 @@ mod tests {
             let _ = filt.classify(&mut combed_frame());
         }
         let t = filt.classification();
-        assert_eq!(t.progressive, 0, "strict row alternation must never classify progressive");
+        assert_eq!(
+            t.progressive, 0,
+            "strict row alternation must never classify progressive"
+        );
         assert_eq!(t.interlaced, 5);
     }
 
@@ -301,8 +331,14 @@ mod tests {
         let mut f = ramp_frame(8, 16);
         let class = filt.classify(&mut f);
         assert_eq!(class, Class::Progressive);
-        assert_eq!(f.metadata_get("lavfi.idet.single.current_frame"), Some("progressive"));
-        assert_eq!(f.metadata_get("lavfi.idet.repeated.current_frame"), Some("neither"));
+        assert_eq!(
+            f.metadata_get("lavfi.idet.single.current_frame"),
+            Some("progressive")
+        );
+        assert_eq!(
+            f.metadata_get("lavfi.idet.repeated.current_frame"),
+            Some("neither")
+        );
     }
 
     /// `prog_thres`/`rep_thres`/`half_life`/`analyze_interlaced_flag` are

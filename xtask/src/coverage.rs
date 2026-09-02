@@ -32,8 +32,8 @@ pub fn run(check: bool) -> Task {
             continue;
         }
         let text = std::fs::read_to_string(&frag).map_err(|e| format!("{name}: {e}"))?;
-        let tables = toml::tables(&text, &["component"])
-            .map_err(|e| format!("{}: {e}", frag.display()))?;
+        let tables =
+            toml::tables(&text, &["component"]).map_err(|e| format!("{}: {e}", frag.display()))?;
         for t in tables {
             let Some(component) = t.get("name") else {
                 continue;

@@ -31,11 +31,16 @@ const fn blue(p: u32) -> i32 {
     (p & 0xff).cast_signed()
 }
 const fn pack(a: i32, r: i32, g: i32, b: i32) -> u32 {
-    (((a as u32) & 0xff) << 24) | (((r as u32) & 0xff) << 16) | (((g as u32) & 0xff) << 8) | ((b as u32) & 0xff)
+    (((a as u32) & 0xff) << 24)
+        | (((r as u32) & 0xff) << 16)
+        | (((g as u32) & 0xff) << 8)
+        | ((b as u32) & 0xff)
 }
 
 fn at(buf: &[u32], w: usize, x: usize, y: usize) -> u32 {
-    buf.get(y.saturating_mul(w).saturating_add(x)).copied().unwrap_or(0)
+    buf.get(y.saturating_mul(w).saturating_add(x))
+        .copied()
+        .unwrap_or(0)
 }
 
 fn average2(a: i32, b: i32) -> i32 {
@@ -70,8 +75,14 @@ fn select(l: u32, t: u32, tl: u32) -> u32 {
     let p_r = red(l) + red(t) - red(tl);
     let p_g = green(l) + green(t) - green(tl);
     let p_b = blue(l) + blue(t) - blue(tl);
-    let p_l = (p_a - alpha(l)).abs() + (p_r - red(l)).abs() + (p_g - green(l)).abs() + (p_b - blue(l)).abs();
-    let p_t = (p_a - alpha(t)).abs() + (p_r - red(t)).abs() + (p_g - green(t)).abs() + (p_b - blue(t)).abs();
+    let p_l = (p_a - alpha(l)).abs()
+        + (p_r - red(l)).abs()
+        + (p_g - green(l)).abs()
+        + (p_b - blue(l)).abs();
+    let p_t = (p_a - alpha(t)).abs()
+        + (p_r - red(t)).abs()
+        + (p_g - green(t)).abs()
+        + (p_b - blue(t)).abs();
     if p_l < p_t { l } else { t }
 }
 
@@ -120,11 +131,20 @@ fn predict_pixel(mode: u8, l: u32, t: u32, tl: u32, tr: u32) -> u32 {
 /// Inverse predictor transform: `buf` holds residuals in, reconstructed
 /// pixels out. `modes` is the (green channel of the) predictor sub-image,
 /// one entry per `(1 << size_bits)`-square block, `mode_width` wide.
-pub(crate) fn inverse_predictor(buf: &mut [u32], width: usize, height: usize, modes: &[u32], size_bits: u32, mode_width: usize) {
+pub(crate) fn inverse_predictor(
+    buf: &mut [u32],
+    width: usize,
+    height: usize,
+    modes: &[u32],
+    size_bits: u32,
+    mode_width: usize,
+) {
     for y in 0..height {
         for x in 0..width {
             let idx = y * width + x;
-            let Some(&residual) = buf.get(idx) else { continue };
+            let Some(&residual) = buf.get(idx) else {
+                continue;
+            };
             let pred = if x == 0 && y == 0 {
                 0xff00_0000
             } else if y == 0 {
@@ -139,7 +159,11 @@ pub(crate) fn inverse_predictor(buf: &mut [u32], width: usize, height: usize, mo
                 // above-and-right (there is none) but the leftmost pixel of
                 // the current row — already decoded, since we scan left to
                 // right.
-                let tr = if x + 1 == width { at(buf, width, 0, y) } else { at(buf, width, x + 1, y - 1) };
+                let tr = if x + 1 == width {
+                    at(buf, width, 0, y)
+                } else {
+                    at(buf, width, x + 1, y - 1)
+                };
                 let block_idx = (y >> size_bits) * mode_width + (x >> size_bits);
                 let mode_pixel = modes.get(block_idx).copied().unwrap_or(0);
                 let mode = (green(mode_pixel) & 0x0f) as u8;
@@ -165,7 +189,14 @@ fn color_transform_delta(t: i8, c: i8) -> i32 {
 /// Inverse color transform: adds back the green-derived deltas to red/blue.
 /// `cte` is the color-transform-element sub-image, one entry per
 /// `(1 << size_bits)`-square block, `cte_width` wide.
-pub(crate) fn inverse_color(buf: &mut [u32], width: usize, height: usize, cte: &[u32], size_bits: u32, cte_width: usize) {
+pub(crate) fn inverse_color(
+    buf: &mut [u32],
+    width: usize,
+    height: usize,
+    cte: &[u32],
+    size_bits: u32,
+    cte_width: usize,
+) {
     for y in 0..height {
         for x in 0..width {
             let idx = y * width + x;
@@ -242,7 +273,11 @@ pub(crate) fn inverse_color_indexing(
                 if out_x >= real_width {
                     break;
                 }
-                let idx = if width_bits == 0 { packed } else { (packed >> (u32::try_from(sub).unwrap_or(0) * per_pixel_bits)) & mask };
+                let idx = if width_bits == 0 {
+                    packed
+                } else {
+                    (packed >> (u32::try_from(sub).unwrap_or(0) * per_pixel_bits)) & mask
+                };
                 let color = table.get(idx as usize).copied().unwrap_or(0);
                 if let Some(slot) = out.get_mut(y * real_width + out_x) {
                     *slot = color;
@@ -260,7 +295,11 @@ mod tests {
 
     #[test]
     fn subtract_green_round_trips() {
-        let mut buf = vec![pack(255, 10, 200, 5), pack(0, 0, 0, 0), pack(128, 255, 1, 254)];
+        let mut buf = vec![
+            pack(255, 10, 200, 5),
+            pack(0, 0, 0, 0),
+            pack(128, 255, 1, 254),
+        ];
         let original = buf.clone();
         forward_subtract_green(&mut buf);
         inverse_subtract_green(&mut buf);

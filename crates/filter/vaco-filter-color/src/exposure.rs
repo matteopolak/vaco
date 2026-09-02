@@ -54,7 +54,10 @@ use vaco_filter_graph::registry::{Instance, Instantiate};
 use crate::common;
 use crate::sample;
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "exposure",
@@ -83,12 +86,21 @@ pub(crate) struct Filter {
 
 impl Filter {
     fn new(o: &Opts) -> Self {
-        #[allow(clippy::cast_possible_truncation, reason = "option range is -3..=3, exact in f32")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "option range is -3..=3, exact in f32"
+        )]
         let exposure = o.exposure as f32;
-        #[allow(clippy::cast_possible_truncation, reason = "option range is -1..=1, exact in f32")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "option range is -1..=1, exact in f32"
+        )]
         let black = o.black as f32;
         let scale = 2f32.powf(exposure);
-        Self { scale, bs: black * scale }
+        Self {
+            scale,
+            bs: black * scale,
+        }
     }
 
     fn apply_frame(&self, input: &mut Frame) {
@@ -103,11 +115,20 @@ impl Filter {
         let inv = 1.0 / denom;
         let n = format.component_count().min(4);
         for ch in 0..n {
-            let Some(comp) = sample::component(format, ch) else { continue };
-            let Some(mut plane) = input.plane_mut(comp.plane as usize) else { continue };
-            let w = plane.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+            let Some(comp) = sample::component(format, ch) else {
+                continue;
+            };
+            let Some(mut plane) = input.plane_mut(comp.plane as usize) else {
+                continue;
+            };
+            let w = plane
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
             for y in 0..plane.rows() {
-                let Some(row) = plane.row_mut(y) else { continue };
+                let Some(row) = plane.row_mut(y) else {
+                    continue;
+                };
                 for x in 0..w {
                     let v = sample::read_float(row, x, comp, big_endian);
                     // Not `mul_add`: FMA skips the intermediate rounding step
@@ -181,7 +202,10 @@ mod tests {
         // every sample exactly, including a value already below zero
         // (unclipped).
         let mut frame = frame_with(0.2, 0.5, -0.1);
-        let f = Filter::new(&Opts { exposure: -1.0, black: 0.0 });
+        let f = Filter::new(&Opts {
+            exposure: -1.0,
+            black: 0.0,
+        });
         f.apply_frame(&mut frame);
         let row = frame.plane(2).unwrap().row(0).unwrap();
         let r = f32::from_le_bytes(row[..4].try_into().unwrap());
@@ -192,9 +216,17 @@ mod tests {
     fn measured_against_the_reference_exposure_and_black() {
         // Measured: ffmpeg 8.1, exposure=1:black=0.1 on gbrpf32le.
         // (v - 0.1) * 2.5, equivalently (v*2 - 0.2) / abs(1 - 0.2).
-        for (v, expected) in [(0.0_f32, -0.25_f32), (0.05, -0.125), (0.2, 0.25), (1.5, 3.5)] {
+        for (v, expected) in [
+            (0.0_f32, -0.25_f32),
+            (0.05, -0.125),
+            (0.2, 0.25),
+            (1.5, 3.5),
+        ] {
             let mut frame = frame_with(v, 0.5, 0.5);
-            let f = Filter::new(&Opts { exposure: 1.0, black: 0.1 });
+            let f = Filter::new(&Opts {
+                exposure: 1.0,
+                black: 0.1,
+            });
             f.apply_frame(&mut frame);
             assert_eq!(read_g(&frame), expected, "v={v}");
         }
@@ -207,7 +239,10 @@ mod tests {
         // as a positive-denominator case — the `abs` in the formula, not a
         // guess.
         let mut frame = frame_with(1.0, 0.5, 0.5);
-        let f = Filter::new(&Opts { exposure: 3.0, black: 0.9 });
+        let f = Filter::new(&Opts {
+            exposure: 3.0,
+            black: 0.9,
+        });
         f.apply_frame(&mut frame);
         // (1*8 - 7.2) / abs(1 - 7.2) = 0.8 / 6.2
         let expected = 0.8_f32 / 6.2_f32;
@@ -225,7 +260,10 @@ mod tests {
             row[1] = 20;
             row[2] = 30;
         }
-        let f = Filter::new(&Opts { exposure: 2.0, black: 0.0 });
+        let f = Filter::new(&Opts {
+            exposure: 2.0,
+            black: 0.0,
+        });
         f.apply_frame(&mut frame);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(row, &[10, 20, 30]);
@@ -233,7 +271,12 @@ mod tests {
 
     #[test]
     fn create_via_the_registry_negotiates_gbrpf32le_only() {
-        let req = Instantiate { name: "exposure", instance: "exposure", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "exposure",
+            instance: "exposure",
+            args: None,
+            arguments: &[],
+        };
         let instance = create(&req).unwrap();
         assert_eq!(instance.desc.name, "exposure");
     }

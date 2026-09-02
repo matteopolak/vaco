@@ -5,8 +5,8 @@
 //! / [`openssl::ssl::Ssl::accept`] the caller drives afterwards.
 
 use openssl::ssl::{SslContext, SslContextBuilder, SslMethod, SslVerifyMode};
-use openssl::x509::store::X509StoreBuilder;
 use openssl::x509::X509;
+use openssl::x509::store::X509StoreBuilder;
 use vaco_protocol_core::{ProtocolError, Result};
 
 use crate::options::DtlsOptions;
@@ -30,7 +30,11 @@ fn openssl_err(detail: &'static str) -> ProtocolError {
 /// The certificate/key a caller configured, or a freshly generated
 /// self-signed one — see [`crate::cert`]'s module docs for why generating
 /// one is the right default rather than an error.
-fn resolve_identity(opts: &DtlsOptions, cert_file_pem: Option<&str>, key_file_pem: Option<&str>) -> Result<(X509, openssl::pkey::PKey<openssl::pkey::Private>)> {
+fn resolve_identity(
+    opts: &DtlsOptions,
+    cert_file_pem: Option<&str>,
+    key_file_pem: Option<&str>,
+) -> Result<(X509, openssl::pkey::PKey<openssl::pkey::Private>)> {
     if !opts.cert_pem.is_empty() && !opts.key_pem.is_empty() {
         return crate::cert::parse_pem(&opts.cert_pem, &opts.key_pem);
     }

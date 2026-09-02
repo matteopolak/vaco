@@ -59,7 +59,13 @@ impl<'a> SymbolDecoder<'a> {
         let value = ((1u32 << 15) - 1) ^ padded_buf;
         let range = 1u32 << 15;
         let max_bits = i64::try_from(sz.saturating_mul(8)).unwrap_or(i64::MAX) - 15;
-        Self { reader, value, range, max_bits, disable_cdf_update }
+        Self {
+            reader,
+            value,
+            range,
+            max_bits,
+            disable_cdf_update,
+        }
     }
 
     /// `read_symbol(cdf)`, §8.2.6.
@@ -78,7 +84,10 @@ impl<'a> SymbolDecoder<'a> {
     )]
     pub fn read_symbol(&mut self, cdf: &mut [u16]) -> u32 {
         let n = cdf.len().saturating_sub(1);
-        debug_assert!(n >= 2, "read_symbol needs cdf[N-1] == 32768 for some N >= 2");
+        debug_assert!(
+            n >= 2,
+            "read_symbol needs cdf[N-1] == 32768 for some N >= 2"
+        );
 
         let mut cur = self.range;
         let mut prev;
@@ -90,7 +99,9 @@ impl<'a> SymbolDecoder<'a> {
             let cdf_val = u32::from(cdf.get(idx).copied().unwrap_or(1 << 15));
             let f = (1u32 << 15) - cdf_val;
             cur = ((self.range >> 8) * (f >> EC_PROB_SHIFT)) >> (7 - EC_PROB_SHIFT);
-            let remaining = u32::try_from(n).unwrap_or(0).saturating_sub(u32::try_from(symbol).unwrap_or(0) + 1);
+            let remaining = u32::try_from(n)
+                .unwrap_or(0)
+                .saturating_sub(u32::try_from(symbol).unwrap_or(0) + 1);
             cur += EC_MIN_PROB * remaining;
             if self.value >= cur {
                 break;
@@ -169,7 +180,8 @@ impl<'a> SymbolDecoder<'a> {
 /// The CDF adaptation rule inside `read_symbol`, §8.2.6's final block.
 fn update_cdf(cdf: &mut [u16], symbol: u32, n: usize) {
     let count = cdf.get(n).copied().unwrap_or(0);
-    let rate = 3 + u32::from(count > 15) + u32::from(count > 31) + n.checked_ilog2().unwrap_or(0).min(2);
+    let rate =
+        3 + u32::from(count > 15) + u32::from(count > 31) + n.checked_ilog2().unwrap_or(0).min(2);
     let mut tmp: u16 = 0;
     for (i, slot) in cdf.iter_mut().take(n.saturating_sub(1)).enumerate() {
         if u32::try_from(i).unwrap_or(0) == symbol {
@@ -207,7 +219,9 @@ mod tests {
         // every correct adaptation must have, checked over many pseudo-random
         // bit patterns rather than one fixed trace.
         for seed in 0u8..64 {
-            let data: Vec<u8> = (0..64).map(|i: u8| i.wrapping_mul(seed).wrapping_add(seed)).collect();
+            let data: Vec<u8> = (0..64)
+                .map(|i: u8| i.wrapping_mul(seed).wrapping_add(seed))
+                .collect();
             let mut sd = SymbolDecoder::new(&data, false);
             let mut cdf = [8192u16, 16384, 24576, 1 << 15, 0];
             for _ in 0..200 {
@@ -259,7 +273,10 @@ mod tests {
         let mut cdf = [8192u16, 1 << 15, 0];
         let before = cdf;
         let _ = sd.read_symbol(&mut cdf);
-        assert_eq!(before, cdf, "disable_cdf_update must skip the adaptation step entirely");
+        assert_eq!(
+            before, cdf,
+            "disable_cdf_update must skip the adaptation step entirely"
+        );
     }
 
     /// An independent Python transliteration of the same specification text
@@ -279,6 +296,10 @@ mod tests {
         for _ in 0..6 {
             symbols.push(sd.read_symbol(&mut cdf));
         }
-        assert_eq!(symbols, [1, 0, 1, 1, 1, 0], "diverged from the independent Python trace");
+        assert_eq!(
+            symbols,
+            [1, 0, 1, 1, 1, 0],
+            "diverged from the independent Python trace"
+        );
     }
 }

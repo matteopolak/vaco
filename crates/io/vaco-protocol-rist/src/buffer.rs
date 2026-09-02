@@ -151,7 +151,12 @@ impl ReceiveBuffer {
             self.next_deliver += 1;
             self.gap_opened_at_ms = if self.pending.contains_key(&self.next_deliver) {
                 None
-            } else if self.pending.keys().next_back().is_some_and(|&h| h > self.next_deliver) {
+            } else if self
+                .pending
+                .keys()
+                .next_back()
+                .is_some_and(|&h| h > self.next_deliver)
+            {
                 Some(opened_at) // gap persists, same clock start
             } else {
                 None

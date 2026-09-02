@@ -39,7 +39,9 @@ fn read_header(r: &mut Reader<'_>) -> Result<Header> {
     let data_offset = r.u32_le()? as usize;
     let dib_size = r.u32_le()?;
     if dib_size < 40 {
-        return Err(Error::Unsupported("bmp: only BITMAPINFOHEADER is supported"));
+        return Err(Error::Unsupported(
+            "bmp: only BITMAPINFOHEADER is supported",
+        ));
     }
     let width = r.i32_le()?;
     let height = r.i32_le()?;
@@ -214,7 +216,9 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
         _ => return Err(Error::Unsupported("bmp: encoder needs bgr24 or bgra input")),
     };
     let (width, height) = (*width, *height);
-    let plane = planes.first().ok_or(Error::InvalidData("bmp: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("bmp: no plane 0"))?;
     let pixel_bytes = (bpp >> 3) as usize;
     let dst_stride = row_stride(width, bpp);
     let pixel_data_len = dst_stride * height as usize;
@@ -315,6 +319,9 @@ mod tests {
         let mut raw = tiny_bgr24();
         raw[30..34].copy_from_slice(&1u32.to_le_bytes()); // BI_RLE8
         let mut budget = Budget::new(Limits::permissive());
-        assert!(matches!(decode(&raw, &mut budget), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            decode(&raw, &mut budget),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

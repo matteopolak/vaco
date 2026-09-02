@@ -7,10 +7,17 @@
 //! every test in this file identically. The draft-derived checks live in
 //! `packet.rs`/`handshake.rs`'s own unit tests, against hand-built bytes.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, reason = "test code")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test code"
+)]
 
 use vaco_protocol_srt::handshake::EncryptionField;
-use vaco_protocol_srt::session::{CallerHandshake, HandshakeParams, ListenerHandshake, HandshakeOutcome, RendezvousHandshake};
+use vaco_protocol_srt::session::{
+    CallerHandshake, HandshakeOutcome, HandshakeParams, ListenerHandshake, RendezvousHandshake,
+};
 
 fn params(socket_id: u32) -> HandshakeParams {
     HandshakeParams {
@@ -45,11 +52,13 @@ fn caller_and_listener_reach_connected_in_four_messages() {
 
     // 4. Listener -> Caller: CONCLUSION response, and the listener is
     // connected the moment it sends it.
-    let (listener_conclusion_reply, listener_info) =
-        match listener.on_packet(&caller_conclusion, 3, 1_000_000).unwrap() {
-            HandshakeOutcome::SendAndConnected(bytes, info) => (bytes, info),
-            other => panic!("expected SendAndConnected, got {other:?}"),
-        };
+    let (listener_conclusion_reply, listener_info) = match listener
+        .on_packet(&caller_conclusion, 3, 1_000_000)
+        .unwrap()
+    {
+        HandshakeOutcome::SendAndConnected(bytes, info) => (bytes, info),
+        other => panic!("expected SendAndConnected, got {other:?}"),
+    };
     assert_eq!(listener_info.peer_socket_id, 1);
     assert_eq!(listener_info.peer_initial_seq_no, 1000);
 
@@ -60,7 +69,10 @@ fn caller_and_listener_reach_connected_in_four_messages() {
     };
     assert_eq!(caller_info.peer_socket_id, 2);
     assert_eq!(caller_info.peer_initial_seq_no, 1000);
-    assert!(caller_info.peer_hsreq.is_some(), "listener's HSRSP must be visible to the caller");
+    assert!(
+        caller_info.peer_hsreq.is_some(),
+        "listener's HSRSP must be visible to the caller"
+    );
 }
 
 #[test]
@@ -104,4 +116,3 @@ fn rendezvous_reaches_connected_regardless_of_who_wins_the_cookie_contest() {
     assert_eq!(initiator_info.peer_initial_seq_no, 1000);
     assert_eq!(responder_info.peer_initial_seq_no, 1000);
 }
-

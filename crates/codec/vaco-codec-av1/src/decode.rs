@@ -118,7 +118,11 @@ struct BlockDecoded {
 
 impl BlockDecoded {
     fn new(w: usize, h: usize) -> Self {
-        Self { w: w + 2, h: h + 2, data: vec![false; (w + 2) * (h + 2)] }
+        Self {
+            w: w + 2,
+            h: h + 2,
+            data: vec![false; (w + 2) * (h + 2)],
+        }
     }
 
     fn get(&self, y: i32, x: i32) -> bool {
@@ -216,13 +220,15 @@ impl FrameCtx {
             *slot = cell;
         }
     }
-
 }
 
 /// `is_inside(candidateR, candidateC)`, §5.11.51 — whether a mode-info
 /// position lies within the *current tile*'s bounds (not the frame's).
 fn is_inside(ts: &TileState<'_>, r: i32, c: i32) -> bool {
-    r >= ix(ts.mi_row_start) && r < ix(ts.mi_row_end) && c >= ix(ts.mi_col_start) && c < ix(ts.mi_col_end)
+    r >= ix(ts.mi_row_start)
+        && r < ix(ts.mi_row_end)
+        && c >= ix(ts.mi_col_start)
+        && c < ix(ts.mi_col_end)
 }
 
 /// The AV1 decoder.
@@ -253,7 +259,12 @@ impl Av1Decoder {
         }
     }
 
-    fn decode_temporal_unit(&mut self, data: &[u8], pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
+    fn decode_temporal_unit(
+        &mut self,
+        data: &[u8],
+        pts: vaco_core::Timestamp,
+        duration: vaco_core::Duration,
+    ) -> Result<()> {
         let unit_list = units(data, Av1Framing::ObuStream);
         let mut pending_header: Option<FrameHeader> = None;
         // Finding 22b (planning/INTERFACE-GAPS.md): `vaco_parse_av1::metadata`
@@ -279,7 +290,8 @@ impl Av1Decoder {
                                 pending_mastering_display = Some(mastering_display_from_mdcv(mdcv));
                             }
                             vaco_parse_av1::Metadata::HdrCll(cll) => {
-                                pending_content_light = Some((u32::from(cll.max_cll), u32::from(cll.max_fall)));
+                                pending_content_light =
+                                    Some((u32::from(cll.max_cll), u32::from(cll.max_fall)));
                             }
                             _ => {}
                         }
@@ -287,9 +299,16 @@ impl Av1Decoder {
                 }
                 t if t == ObuType::FRAME_HEADER => {
                     let Some(seq) = self.seq.clone() else {
-                        return Err(Error::InvalidData("vaco-codec-av1: frame header before any sequence header"));
+                        return Err(Error::InvalidData(
+                            "vaco-codec-av1: frame header before any sequence header",
+                        ));
                     };
-                    let fh = FrameHeader::parse(payload, &seq, unit.header.temporal_id, unit.header.spatial_id)?;
+                    let fh = FrameHeader::parse(
+                        payload,
+                        &seq,
+                        unit.header.temporal_id,
+                        unit.header.spatial_id,
+                    )?;
                     pending_header = Some(fh);
                 }
                 t if t == ObuType::FRAME => {
@@ -300,11 +319,20 @@ impl Av1Decoder {
                     // tile group's start is wherever the frame header
                     // parse actually finished (byte-aligned), not assumed.
                     let Some(seq) = self.seq.clone() else {
-                        return Err(Error::InvalidData("vaco-codec-av1: frame header before any sequence header"));
+                        return Err(Error::InvalidData(
+                            "vaco-codec-av1: frame header before any sequence header",
+                        ));
                     };
                     let mut r = vaco_bitstream::BitReader::new(payload);
-                    let fh = FrameHeader::parse_from_reader(&mut r, &seq, unit.header.temporal_id, unit.header.spatial_id)?;
-                    r.check().map_err(|_| Error::InvalidData("frame_obu's frame_header_obu ran past its payload"))?;
+                    let fh = FrameHeader::parse_from_reader(
+                        &mut r,
+                        &seq,
+                        unit.header.temporal_id,
+                        unit.header.spatial_id,
+                    )?;
+                    r.check().map_err(|_| {
+                        Error::InvalidData("frame_obu's frame_header_obu ran past its payload")
+                    })?;
                     r.align();
                     let tile_payload = r.remaining_bytes();
                     let frame = decode_frame(&seq, &fh, tile_payload, &mut self.budget)?;
@@ -312,10 +340,15 @@ impl Av1Decoder {
                     frame.pts = pts;
                     frame.duration = duration;
                     if let Some(mastering_display) = pending_mastering_display {
-                        frame.set_side_data(vaco_frame::FrameSideData::MasteringDisplay(Box::new(mastering_display)));
+                        frame.set_side_data(vaco_frame::FrameSideData::MasteringDisplay(Box::new(
+                            mastering_display,
+                        )));
                     }
                     if let Some((max_cll, max_fall)) = pending_content_light {
-                        frame.set_side_data(vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall });
+                        frame.set_side_data(vaco_frame::FrameSideData::ContentLightLevel {
+                            max_cll,
+                            max_fall,
+                        });
                     }
                     if fh.show_frame {
                         self.machine.emit(frame);
@@ -323,20 +356,29 @@ impl Av1Decoder {
                 }
                 t if t == ObuType::TILE_GROUP => {
                     let Some(fh) = pending_header.take() else {
-                        return Err(Error::InvalidData("vaco-codec-av1: tile group with no pending frame header"));
+                        return Err(Error::InvalidData(
+                            "vaco-codec-av1: tile group with no pending frame header",
+                        ));
                     };
                     let Some(seq) = self.seq.clone() else {
-                        return Err(Error::InvalidData("vaco-codec-av1: tile group before any sequence header"));
+                        return Err(Error::InvalidData(
+                            "vaco-codec-av1: tile group before any sequence header",
+                        ));
                     };
                     let frame = decode_frame(&seq, &fh, payload, &mut self.budget)?;
                     let mut frame = frame;
                     frame.pts = pts;
                     frame.duration = duration;
                     if let Some(mastering_display) = pending_mastering_display {
-                        frame.set_side_data(vaco_frame::FrameSideData::MasteringDisplay(Box::new(mastering_display)));
+                        frame.set_side_data(vaco_frame::FrameSideData::MasteringDisplay(Box::new(
+                            mastering_display,
+                        )));
                     }
                     if let Some((max_cll, max_fall)) = pending_content_light {
-                        frame.set_side_data(vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall });
+                        frame.set_side_data(vaco_frame::FrameSideData::ContentLightLevel {
+                            max_cll,
+                            max_fall,
+                        });
                     }
                     if fh.show_frame {
                         self.machine.emit(frame);
@@ -418,22 +460,43 @@ pub static AV1_DECODER: DecoderDesc = DecoderDesc {
 /// Caught by writing the green/blue/red permutation first (the doc's own
 /// claim) and having this exact test fail with primaries visibly rotated
 /// one slot before correcting it.
-fn mastering_display_from_mdcv(mdcv: vaco_parse_av1::metadata::HdrMdcv) -> vaco_frame::MasteringDisplay {
-    let chromaticity = |(x, y): (u16, u16)| [vaco_core::Rational::new(i32::from(x), 65_536), vaco_core::Rational::new(i32::from(y), 65_536)];
+fn mastering_display_from_mdcv(
+    mdcv: vaco_parse_av1::metadata::HdrMdcv,
+) -> vaco_frame::MasteringDisplay {
+    let chromaticity = |(x, y): (u16, u16)| {
+        [
+            vaco_core::Rational::new(i32::from(x), 65_536),
+            vaco_core::Rational::new(i32::from(y), 65_536),
+        ]
+    };
     vaco_frame::MasteringDisplay {
         primaries: mdcv.primary_chromaticity.map(chromaticity),
         white_point: chromaticity(mdcv.white_point_chromaticity),
-        max_luminance: vaco_core::Rational::new(i32::try_from(mdcv.luminance_max).unwrap_or(i32::MAX), 256),
-        min_luminance: vaco_core::Rational::new(i32::try_from(mdcv.luminance_min).unwrap_or(i32::MAX), 16_384),
+        max_luminance: vaco_core::Rational::new(
+            i32::try_from(mdcv.luminance_max).unwrap_or(i32::MAX),
+            256,
+        ),
+        min_luminance: vaco_core::Rational::new(
+            i32::try_from(mdcv.luminance_min).unwrap_or(i32::MAX),
+            16_384,
+        ),
     }
 }
 
-fn decode_frame(seq: &SequenceHeader, fh: &FrameHeader, tile_group_payload: &[u8], budget: &mut Budget) -> Result<Frame> {
+fn decode_frame(
+    seq: &SequenceHeader,
+    fh: &FrameHeader,
+    tile_group_payload: &[u8],
+    budget: &mut Budget,
+) -> Result<Frame> {
     let mi_cols = 2 * ((fh.size.coded_width + 7) >> 3);
     let mi_rows = 2 * ((fh.size.coded_height + 7) >> 3);
     let (mi_cols, mi_rows) = (mi_cols as usize, mi_rows as usize);
     let mono = seq.color_config.mono_chrome;
-    let (sub_x, sub_y) = (seq.color_config.subsampling_x, seq.color_config.subsampling_y);
+    let (sub_x, sub_y) = (
+        seq.color_config.subsampling_x,
+        seq.color_config.subsampling_y,
+    );
     let luma_w = mi_cols * 4;
     let luma_h = mi_rows * 4;
     let chroma_w = luma_w >> u32::from(sub_x);
@@ -467,7 +530,11 @@ fn decode_tiles(ctx: &mut FrameCtx, payload: &[u8]) -> Result<()> {
     let num_tiles = tile.cols * tile.rows;
     let mut r = vaco_bitstream::BitReader::new(payload);
     let start_bit_pos = r.bit_pos();
-    let tile_start_and_end_present_flag = if num_tiles > 1 { r.get_bit() != 0 } else { false };
+    let tile_start_and_end_present_flag = if num_tiles > 1 {
+        r.get_bit() != 0
+    } else {
+        false
+    };
     let (tg_start, tg_end) = if num_tiles == 1 || !tile_start_and_end_present_flag {
         (0usize, num_tiles.saturating_sub(1))
     } else {
@@ -480,14 +547,20 @@ fn decode_tiles(ctx: &mut FrameCtx, payload: &[u8]) -> Result<()> {
     let consumed = r.bit_pos() - start_bit_pos;
     let pad = u32::try_from((8 - (consumed % 8)) % 8).unwrap_or(0);
     let _ = r.get(pad);
-    #[allow(clippy::integer_division, reason = "byte_alignment() (5.11.4): counting whole bytes consumed, not a fraction")]
+    #[allow(
+        clippy::integer_division,
+        reason = "byte_alignment() (5.11.4): counting whole bytes consumed, not a fraction"
+    )]
     let header_bytes = usize::try_from((r.bit_pos() - start_bit_pos) / 8).unwrap_or(0);
     let empty: &[u8] = &[];
     let mut remaining: &[u8] = payload.get(header_bytes..).unwrap_or(empty);
     let mut sz = remaining.len();
 
     for tile_num in tg_start..=tg_end {
-        #[allow(clippy::integer_division, reason = "5.11.1's own TileNum / TileCols row derivation")]
+        #[allow(
+            clippy::integer_division,
+            reason = "5.11.1's own TileNum / TileCols row derivation"
+        )]
         let tile_row = tile_num / tile.cols.max(1);
         let tile_col = tile_num % tile.cols.max(1);
         let last_tile = tile_num == tg_end;
@@ -505,12 +578,33 @@ fn decode_tiles(ctx: &mut FrameCtx, payload: &[u8]) -> Result<()> {
         let this_tile_data = remaining.get(..tile_size).unwrap_or(remaining);
         remaining = remaining.get(tile_size..).unwrap_or(empty);
 
-        let mi_row_start = usize::try_from(tile.mi_row_starts.get(tile_row).copied().unwrap_or(0)).unwrap_or(0);
-        let mi_row_end = usize::try_from(tile.mi_row_starts.get(tile_row + 1).copied().unwrap_or(ctx.mi_rows as u32)).unwrap_or(ctx.mi_rows);
-        let mi_col_start = usize::try_from(tile.mi_col_starts.get(tile_col).copied().unwrap_or(0)).unwrap_or(0);
-        let mi_col_end = usize::try_from(tile.mi_col_starts.get(tile_col + 1).copied().unwrap_or(ctx.mi_cols as u32)).unwrap_or(ctx.mi_cols);
+        let mi_row_start =
+            usize::try_from(tile.mi_row_starts.get(tile_row).copied().unwrap_or(0)).unwrap_or(0);
+        let mi_row_end = usize::try_from(
+            tile.mi_row_starts
+                .get(tile_row + 1)
+                .copied()
+                .unwrap_or(ctx.mi_rows as u32),
+        )
+        .unwrap_or(ctx.mi_rows);
+        let mi_col_start =
+            usize::try_from(tile.mi_col_starts.get(tile_col).copied().unwrap_or(0)).unwrap_or(0);
+        let mi_col_end = usize::try_from(
+            tile.mi_col_starts
+                .get(tile_col + 1)
+                .copied()
+                .unwrap_or(ctx.mi_cols as u32),
+        )
+        .unwrap_or(ctx.mi_cols);
 
-        decode_one_tile(ctx, this_tile_data, mi_row_start, mi_row_end, mi_col_start, mi_col_end)?;
+        decode_one_tile(
+            ctx,
+            this_tile_data,
+            mi_row_start,
+            mi_row_end,
+            mi_col_start,
+            mi_col_end,
+        )?;
     }
     Ok(())
 }
@@ -523,21 +617,50 @@ fn read_le(data: &[u8], n: usize) -> (u64, usize) {
     (v, n)
 }
 
-#[allow(clippy::too_many_lines, reason = "decode_tile()'s own superblock walk, section 5.11.2")]
-#[allow(clippy::many_single_char_names, reason = "mirrors the spec's own r/c/w/h/v loop-variable names for the superblock walk")]
-fn decode_one_tile(ctx: &mut FrameCtx, tile_data: &[u8], mi_row_start: usize, mi_row_end: usize, mi_col_start: usize, mi_col_end: usize) -> Result<()> {
+#[allow(
+    clippy::too_many_lines,
+    reason = "decode_tile()'s own superblock walk, section 5.11.2"
+)]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "mirrors the spec's own r/c/w/h/v loop-variable names for the superblock walk"
+)]
+fn decode_one_tile(
+    ctx: &mut FrameCtx,
+    tile_data: &[u8],
+    mi_row_start: usize,
+    mi_row_end: usize,
+    mi_col_start: usize,
+    mi_col_end: usize,
+) -> Result<()> {
     let num_planes = if ctx.seq_mono { 1 } else { 3 };
-    let above_len = [ctx.mi_cols, ctx.mi_cols >> u32::from(ctx.subsampling_x), ctx.mi_cols >> u32::from(ctx.subsampling_x)];
-    let left_len = [ctx.mi_rows, ctx.mi_rows >> u32::from(ctx.subsampling_y), ctx.mi_rows >> u32::from(ctx.subsampling_y)];
+    let above_len = [
+        ctx.mi_cols,
+        ctx.mi_cols >> u32::from(ctx.subsampling_x),
+        ctx.mi_cols >> u32::from(ctx.subsampling_x),
+    ];
+    let left_len = [
+        ctx.mi_rows,
+        ctx.mi_rows >> u32::from(ctx.subsampling_y),
+        ctx.mi_rows >> u32::from(ctx.subsampling_y),
+    ];
 
     let mut ts = TileState {
         sd: SymbolDecoder::new(tile_data, ctx.header.disable_cdf_update),
         cdf: TileCdf::new(ctx.header.quant.base_q_idx),
-        above_level: std::array::from_fn(|p| vec![0u8; above_len.get(p).copied().unwrap_or(1).max(1)]),
+        above_level: std::array::from_fn(|p| {
+            vec![0u8; above_len.get(p).copied().unwrap_or(1).max(1)]
+        }),
         above_dc: std::array::from_fn(|p| vec![0u8; above_len.get(p).copied().unwrap_or(1).max(1)]),
-        left_level: std::array::from_fn(|p| vec![0u8; left_len.get(p).copied().unwrap_or(1).max(1)]),
+        left_level: std::array::from_fn(|p| {
+            vec![0u8; left_len.get(p).copied().unwrap_or(1).max(1)]
+        }),
         left_dc: std::array::from_fn(|p| vec![0u8; left_len.get(p).copied().unwrap_or(1).max(1)]),
-        block_decoded: [BlockDecoded::new(0, 0), BlockDecoded::new(0, 0), BlockDecoded::new(0, 0)],
+        block_decoded: [
+            BlockDecoded::new(0, 0),
+            BlockDecoded::new(0, 0),
+            BlockDecoded::new(0, 0),
+        ],
         current_q_index: i32::from(ctx.header.quant.base_q_idx),
         mi_row_start,
         mi_row_end,
@@ -564,7 +687,11 @@ fn decode_one_tile(ctx: &mut FrameCtx, tile_data: &[u8], mi_row_start: usize, mi
             let sb_w4 = mi_col_end.saturating_sub(c);
             let sb_h4 = mi_row_end.saturating_sub(r);
             for (plane, bd) in ts.block_decoded.iter_mut().enumerate() {
-                let (sx, sy) = if plane > 0 { (ctx.subsampling_x, ctx.subsampling_y) } else { (false, false) };
+                let (sx, sy) = if plane > 0 {
+                    (ctx.subsampling_x, ctx.subsampling_y)
+                } else {
+                    (false, false)
+                };
                 let w = (sb_size4 >> u32::from(sx)).max(1);
                 let h = (sb_size4 >> u32::from(sy)).max(1);
                 *bd = BlockDecoded::new(w + 1, h + 1);
@@ -578,7 +705,11 @@ fn decode_one_tile(ctx: &mut FrameCtx, tile_data: &[u8], mi_row_start: usize, mi
                 }
                 bd.set(ix(h), -1, false);
             }
-            let sb_size = if ctx.use_128x128_superblock { 15u8 } else { 12u8 };
+            let sb_size = if ctx.use_128x128_superblock {
+                15u8
+            } else {
+                12u8
+            };
             decode_partition(ctx, &mut ts, r, c, sb_size)?;
             c += sb_size4;
         }
@@ -589,24 +720,53 @@ fn decode_one_tile(ctx: &mut FrameCtx, tile_data: &[u8], mi_row_start: usize, mi
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments, reason = "mirrors decode_partition's own recursive signature, section 5.11.4")]
-fn decode_partition(ctx: &mut FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, b_size: u8) -> Result<()> {
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors decode_partition's own recursive signature, section 5.11.4"
+)]
+fn decode_partition(
+    ctx: &mut FrameCtx,
+    ts: &mut TileState<'_>,
+    r: usize,
+    c: usize,
+    b_size: u8,
+) -> Result<()> {
     if r >= ctx.mi_rows || c >= ctx.mi_cols {
         return Ok(());
     }
     let avail_u = is_inside(ts, ix(r) - 1, ix(c));
     let avail_l = is_inside(ts, ix(r), ix(c) - 1);
-    let num4x4 = i32::from(tables::NUM_4X4_BLOCKS_WIDE.get(usize::from(b_size)).copied().unwrap_or(1));
+    let num4x4 = i32::from(
+        tables::NUM_4X4_BLOCKS_WIDE
+            .get(usize::from(b_size))
+            .copied()
+            .unwrap_or(1),
+    );
     let half4 = num4x4 >> 1;
     let quarter4 = half4 >> 1;
     let has_rows = ix(r) + half4 < ix(ctx.mi_rows);
     let has_cols = ix(c) + half4 < ix(ctx.mi_cols);
 
-    let bsl = tables::MI_WIDTH_LOG2.get(usize::from(b_size)).copied().unwrap_or(0);
+    let bsl = tables::MI_WIDTH_LOG2
+        .get(usize::from(b_size))
+        .copied()
+        .unwrap_or(0);
     let above_smaller = avail_u
-        && ctx.mi_at(ix(r) - 1, ix(c)).is_some_and(|m| tables::MI_WIDTH_LOG2.get(usize::from(m.mi_size)).copied().unwrap_or(0) < bsl);
+        && ctx.mi_at(ix(r) - 1, ix(c)).is_some_and(|m| {
+            tables::MI_WIDTH_LOG2
+                .get(usize::from(m.mi_size))
+                .copied()
+                .unwrap_or(0)
+                < bsl
+        });
     let left_smaller = avail_l
-        && ctx.mi_at(ix(r), ix(c) - 1).is_some_and(|m| tables::MI_HEIGHT_LOG2.get(usize::from(m.mi_size)).copied().unwrap_or(0) < bsl);
+        && ctx.mi_at(ix(r), ix(c) - 1).is_some_and(|m| {
+            tables::MI_HEIGHT_LOG2
+                .get(usize::from(m.mi_size))
+                .copied()
+                .unwrap_or(0)
+                < bsl
+        });
     let part_ctx = usize::from(left_smaller) * 2 + usize::from(above_smaller);
 
     let partition = if b_size < BLOCK_8X8 {
@@ -629,13 +789,25 @@ fn decode_partition(ctx: &mut FrameCtx, ts: &mut TileState<'_>, r: usize, c: usi
         PARTITION_HORZ => {
             decode_block(ctx, ts, r, c, sub_size)?;
             if has_rows {
-                decode_block(ctx, ts, r + usize::try_from(half4).unwrap_or(0), c, sub_size)?;
+                decode_block(
+                    ctx,
+                    ts,
+                    r + usize::try_from(half4).unwrap_or(0),
+                    c,
+                    sub_size,
+                )?;
             }
         }
         PARTITION_VERT => {
             decode_block(ctx, ts, r, c, sub_size)?;
             if has_cols {
-                decode_block(ctx, ts, r, c + usize::try_from(half4).unwrap_or(0), sub_size)?;
+                decode_block(
+                    ctx,
+                    ts,
+                    r,
+                    c + usize::try_from(half4).unwrap_or(0),
+                    sub_size,
+                )?;
             }
         }
         PARTITION_SPLIT => {
@@ -702,11 +874,41 @@ fn partition_subsize(partition: u32, b_size: u8) -> u8 {
 
 fn partition_cdf_for(ts: &mut TileState<'_>, bsl: u16, ctx: usize) -> Vec<u16> {
     match bsl {
-        1 => ts.cdf.partition_w8.get(ctx).copied().unwrap_or_default().to_vec(),
-        2 => ts.cdf.partition_w16.get(ctx).copied().unwrap_or_default().to_vec(),
-        3 => ts.cdf.partition_w32.get(ctx).copied().unwrap_or_default().to_vec(),
-        4 => ts.cdf.partition_w64.get(ctx).copied().unwrap_or_default().to_vec(),
-        _ => ts.cdf.partition_w128.get(ctx).copied().unwrap_or_default().to_vec(),
+        1 => ts
+            .cdf
+            .partition_w8
+            .get(ctx)
+            .copied()
+            .unwrap_or_default()
+            .to_vec(),
+        2 => ts
+            .cdf
+            .partition_w16
+            .get(ctx)
+            .copied()
+            .unwrap_or_default()
+            .to_vec(),
+        3 => ts
+            .cdf
+            .partition_w32
+            .get(ctx)
+            .copied()
+            .unwrap_or_default()
+            .to_vec(),
+        4 => ts
+            .cdf
+            .partition_w64
+            .get(ctx)
+            .copied()
+            .unwrap_or_default()
+            .to_vec(),
+        _ => ts
+            .cdf
+            .partition_w128
+            .get(ctx)
+            .copied()
+            .unwrap_or_default()
+            .to_vec(),
     }
 }
 
@@ -761,7 +963,11 @@ fn read_split_or(ts: &mut TileState<'_>, bsl: u16, ctx: usize, horz: bool) -> u3
     let has_128 = n == 8; // BLOCK_128X128 has no *_4 partitions.
     let diff = |idx: usize| -> i32 {
         let hi = i32::from(real.get(idx).copied().unwrap_or(0));
-        let lo = if idx == 0 { 0 } else { i32::from(real.get(idx - 1).copied().unwrap_or(0)) };
+        let lo = if idx == 0 {
+            0
+        } else {
+            i32::from(real.get(idx - 1).copied().unwrap_or(0))
+        };
         hi - lo
     };
     let mut psum = if horz {
@@ -778,16 +984,43 @@ fn read_split_or(ts: &mut TileState<'_>, bsl: u16, ctx: usize, horz: bool) -> u3
             + diff(usize::try_from(PARTITION_VERT_A).unwrap_or(0))
     };
     if !has_128 {
-        psum += if horz { diff(usize::try_from(PARTITION_VERT_4).unwrap_or(0)) } else { diff(usize::try_from(PARTITION_HORZ_4).unwrap_or(0)) };
+        psum += if horz {
+            diff(usize::try_from(PARTITION_VERT_4).unwrap_or(0))
+        } else {
+            diff(usize::try_from(PARTITION_HORZ_4).unwrap_or(0))
+        };
     }
-    let mut cdf = [u16::try_from((1i32 << 15) - psum).unwrap_or(0), 1u16 << 15, 0u16];
+    let mut cdf = [
+        u16::try_from((1i32 << 15) - psum).unwrap_or(0),
+        1u16 << 15,
+        0u16,
+    ];
     ts.sd.read_symbol(&mut cdf)
 }
 
-#[allow(clippy::too_many_lines, reason = "decode_block()'s own per-block walk plus mode-info, sections 5.11.5-5.11.9")]
-fn decode_block(ctx: &mut FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, mi_size: u8) -> Result<()> {
-    let bw4 = usize::from(tables::NUM_4X4_BLOCKS_WIDE.get(usize::from(mi_size)).copied().unwrap_or(1));
-    let bh4 = usize::from(tables::NUM_4X4_BLOCKS_HIGH.get(usize::from(mi_size)).copied().unwrap_or(1));
+#[allow(
+    clippy::too_many_lines,
+    reason = "decode_block()'s own per-block walk plus mode-info, sections 5.11.5-5.11.9"
+)]
+fn decode_block(
+    ctx: &mut FrameCtx,
+    ts: &mut TileState<'_>,
+    r: usize,
+    c: usize,
+    mi_size: u8,
+) -> Result<()> {
+    let bw4 = usize::from(
+        tables::NUM_4X4_BLOCKS_WIDE
+            .get(usize::from(mi_size))
+            .copied()
+            .unwrap_or(1),
+    );
+    let bh4 = usize::from(
+        tables::NUM_4X4_BLOCKS_HIGH
+            .get(usize::from(mi_size))
+            .copied()
+            .unwrap_or(1),
+    );
     let has_chroma = if (bh4 == 1 && ctx.subsampling_y && r.is_multiple_of(2))
         || (bw4 == 1 && ctx.subsampling_x && c.is_multiple_of(2))
     {
@@ -810,11 +1043,32 @@ fn decode_block(ctx: &mut FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, 
     read_cdef(ctx, ts, r, c, mi_size, skip);
     read_delta_qindex_lf(ctx, ts, mi_size, skip);
 
-    let above_mode = if avail_u { ctx.mi_at(ix(r) - 1, ix(c)).map_or(DC_PRED, |m| m.y_mode) } else { DC_PRED };
-    let left_mode = if avail_l { ctx.mi_at(ix(r), ix(c) - 1).map_or(DC_PRED, |m| m.y_mode) } else { DC_PRED };
-    let above_ctx = tables::INTRA_MODE_CONTEXT.get(usize::from(above_mode)).copied().unwrap_or(0) as usize;
-    let left_ctx = tables::INTRA_MODE_CONTEXT.get(usize::from(left_mode)).copied().unwrap_or(0) as usize;
-    let mut y_cdf = ts.cdf.intra_frame_y_mode.get(above_ctx).and_then(|row| row.get(left_ctx)).copied().unwrap_or_default().to_vec();
+    let above_mode = if avail_u {
+        ctx.mi_at(ix(r) - 1, ix(c)).map_or(DC_PRED, |m| m.y_mode)
+    } else {
+        DC_PRED
+    };
+    let left_mode = if avail_l {
+        ctx.mi_at(ix(r), ix(c) - 1).map_or(DC_PRED, |m| m.y_mode)
+    } else {
+        DC_PRED
+    };
+    let above_ctx = tables::INTRA_MODE_CONTEXT
+        .get(usize::from(above_mode))
+        .copied()
+        .unwrap_or(0) as usize;
+    let left_ctx = tables::INTRA_MODE_CONTEXT
+        .get(usize::from(left_mode))
+        .copied()
+        .unwrap_or(0) as usize;
+    let mut y_cdf = ts
+        .cdf
+        .intra_frame_y_mode
+        .get(above_ctx)
+        .and_then(|row| row.get(left_ctx))
+        .copied()
+        .unwrap_or_default()
+        .to_vec();
     let y_mode = u8::try_from(ts.sd.read_symbol(&mut y_cdf)).unwrap_or(0);
     if let Some(row) = ts.cdf.intra_frame_y_mode.get_mut(above_ctx)
         && let Some(slot) = row.get_mut(left_ctx)
@@ -826,14 +1080,25 @@ fn decode_block(ctx: &mut FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, 
 
     let angle_delta_y = read_angle_delta(ts, mi_size, y_mode);
 
-    let (mut uv_mode, mut angle_delta_uv, mut cfl_alpha_u, mut cfl_alpha_v) = (DC_PRED, 0i32, 0i32, 0i32);
+    let (mut uv_mode, mut angle_delta_uv, mut cfl_alpha_u, mut cfl_alpha_v) =
+        (DC_PRED, 0i32, 0i32, 0i32);
     if has_chroma {
         let cfl_allowed = block_size_cfl_allowed(mi_size, ctx.header.coded_lossless);
         let n = if cfl_allowed { 14 } else { 13 };
         let mut cdf: Vec<u16> = if cfl_allowed {
-            ts.cdf.uv_mode_cfl_allowed.get(usize::from(y_mode)).copied().unwrap_or_default().to_vec()
+            ts.cdf
+                .uv_mode_cfl_allowed
+                .get(usize::from(y_mode))
+                .copied()
+                .unwrap_or_default()
+                .to_vec()
         } else {
-            ts.cdf.uv_mode_cfl_not_allowed.get(usize::from(y_mode)).copied().unwrap_or_default().to_vec()
+            ts.cdf
+                .uv_mode_cfl_not_allowed
+                .get(usize::from(y_mode))
+                .copied()
+                .unwrap_or_default()
+                .to_vec()
         };
         let sym = u8::try_from(ts.sd.read_symbol(&mut cdf)).unwrap_or(0);
         uv_mode = sym;
@@ -861,7 +1126,14 @@ fn decode_block(ctx: &mut FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, 
     read_palette_mode_info(ctx, ts, mi_size, y_mode, uv_mode, has_chroma)?;
     read_filter_intra(ctx, ts, mi_size, y_mode)?;
 
-    let cell = MiCell { mi_size, y_mode, uv_mode, tx_size: 0, skip, segment_id };
+    let cell = MiCell {
+        mi_size,
+        y_mode,
+        uv_mode,
+        tx_size: 0,
+        skip,
+        segment_id,
+    };
     for y in 0..bh4 {
         for x in 0..bw4 {
             ctx.store(r + y, c + x, cell);
@@ -880,7 +1152,23 @@ fn decode_block(ctx: &mut FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, 
     // compute_prediction() is a no-op for a pure intra, non-inter-intra
     // block (the whole-block predict_inter/inter-intra path never runs);
     // prediction happens per transform block inside residual() instead.
-    residual(ctx, ts, r, c, mi_size, has_chroma, skip, y_mode, uv_mode, angle_delta_y, angle_delta_uv, cfl_alpha_u, cfl_alpha_v, avail_u, avail_l)?;
+    residual(
+        ctx,
+        ts,
+        r,
+        c,
+        mi_size,
+        has_chroma,
+        skip,
+        y_mode,
+        uv_mode,
+        angle_delta_y,
+        angle_delta_uv,
+        cfl_alpha_u,
+        cfl_alpha_v,
+        avail_u,
+        avail_l,
+    )?;
     Ok(())
 }
 
@@ -903,7 +1191,13 @@ fn read_angle_delta(ts: &mut TileState<'_>, mi_size: u8, mode: u8) -> i32 {
         return 0;
     }
     let idx = usize::from(mode - V_PRED);
-    let mut cdf = ts.cdf.angle_delta.get(idx).copied().unwrap_or_default().to_vec();
+    let mut cdf = ts
+        .cdf
+        .angle_delta
+        .get(idx)
+        .copied()
+        .unwrap_or_default()
+        .to_vec();
     let sym = i32::try_from(ts.sd.read_symbol(&mut cdf)).unwrap_or(0);
     if let Some(row) = ts.cdf.angle_delta.get_mut(idx) {
         for (d, s) in row.iter_mut().zip(cdf.iter()) {
@@ -921,7 +1215,14 @@ fn read_angle_delta(ts: &mut TileState<'_>, mi_size: u8, mode: u8) -> i32 {
 /// whenever the syntax makes them present, and only a block that actually
 /// sets one returns [`Error::Unsupported`] (the full palette-colour-array
 /// syntax after that is not implemented).
-fn read_palette_mode_info(ctx: &mut FrameCtx, ts: &mut TileState<'_>, mi_size: u8, y_mode: u8, uv_mode: u8, has_chroma: bool) -> Result<()> {
+fn read_palette_mode_info(
+    ctx: &mut FrameCtx,
+    ts: &mut TileState<'_>,
+    mi_size: u8,
+    y_mode: u8,
+    uv_mode: u8,
+    has_chroma: bool,
+) -> Result<()> {
     if mi_size < BLOCK_8X8 || !ctx.header.allow_screen_content_tools {
         return Ok(());
     }
@@ -931,18 +1232,38 @@ fn read_palette_mode_info(ctx: &mut FrameCtx, ts: &mut TileState<'_>, mi_size: u
         return Ok(());
     }
     let bsize_ctx = usize::from(
-        tables::MI_WIDTH_LOG2.get(usize::from(mi_size)).copied().unwrap_or(0) + tables::MI_HEIGHT_LOG2.get(usize::from(mi_size)).copied().unwrap_or(0),
+        tables::MI_WIDTH_LOG2
+            .get(usize::from(mi_size))
+            .copied()
+            .unwrap_or(0)
+            + tables::MI_HEIGHT_LOG2
+                .get(usize::from(mi_size))
+                .copied()
+                .unwrap_or(0),
     )
     .saturating_sub(2);
 
     if y_mode == DC_PRED {
-        let mut cdf = ts.cdf.palette_y_mode.get(bsize_ctx).and_then(|r| r.first()).copied().unwrap_or_default();
+        let mut cdf = ts
+            .cdf
+            .palette_y_mode
+            .get(bsize_ctx)
+            .and_then(|r| r.first())
+            .copied()
+            .unwrap_or_default();
         let has_palette_y = ts.sd.read_symbol(&mut cdf) != 0;
-        if let Some(slot) = ts.cdf.palette_y_mode.get_mut(bsize_ctx).and_then(|r| r.first_mut()) {
+        if let Some(slot) = ts
+            .cdf
+            .palette_y_mode
+            .get_mut(bsize_ctx)
+            .and_then(|r| r.first_mut())
+        {
             *slot = cdf;
         }
         if has_palette_y {
-            return Err(Error::Unsupported("vaco-codec-av1: has_palette_y is not decoded"));
+            return Err(Error::Unsupported(
+                "vaco-codec-av1: has_palette_y is not decoded",
+            ));
         }
     }
     if has_chroma && uv_mode == DC_PRED {
@@ -952,7 +1273,9 @@ fn read_palette_mode_info(ctx: &mut FrameCtx, ts: &mut TileState<'_>, mi_size: u
             *slot = cdf;
         }
         if has_palette_uv {
-            return Err(Error::Unsupported("vaco-codec-av1: has_palette_uv is not decoded"));
+            return Err(Error::Unsupported(
+                "vaco-codec-av1: has_palette_uv is not decoded",
+            ));
         }
     }
     Ok(())
@@ -968,7 +1291,12 @@ fn read_palette_mode_info(ctx: &mut FrameCtx, ts: &mut TileState<'_>, mi_size: u
 /// defaults to it on) does not imply any particular block actually uses
 /// it, so [`Error::Unsupported`] is only returned on `use_filter_intra ==
 /// true`, not on `enable_filter_intra` alone.
-fn read_filter_intra(ctx: &mut FrameCtx, ts: &mut TileState<'_>, mi_size: u8, y_mode: u8) -> Result<()> {
+fn read_filter_intra(
+    ctx: &mut FrameCtx,
+    ts: &mut TileState<'_>,
+    mi_size: u8,
+    y_mode: u8,
+) -> Result<()> {
     if !ctx.enable_filter_intra || y_mode != DC_PRED {
         return Ok(());
     }
@@ -977,7 +1305,13 @@ fn read_filter_intra(ctx: &mut FrameCtx, ts: &mut TileState<'_>, mi_size: u8, y_
     if bw.max(bh) > 32 {
         return Ok(());
     }
-    let mut cdf = ts.cdf.filter_intra.get(usize::from(mi_size)).copied().unwrap_or_default().to_vec();
+    let mut cdf = ts
+        .cdf
+        .filter_intra
+        .get(usize::from(mi_size))
+        .copied()
+        .unwrap_or_default()
+        .to_vec();
     let use_filter_intra = ts.sd.read_symbol(&mut cdf) != 0;
     if let Some(slot) = ts.cdf.filter_intra.get_mut(usize::from(mi_size)) {
         for (d, s) in slot.iter_mut().zip(cdf.iter()) {
@@ -988,7 +1322,9 @@ fn read_filter_intra(ctx: &mut FrameCtx, ts: &mut TileState<'_>, mi_size: u8, y_
         let mut mode_cdf = ts.cdf.filter_intra_mode;
         let _ = ts.sd.read_symbol(&mut mode_cdf);
         ts.cdf.filter_intra_mode = mode_cdf;
-        return Err(Error::Unsupported("vaco-codec-av1: use_filter_intra is not decoded"));
+        return Err(Error::Unsupported(
+            "vaco-codec-av1: use_filter_intra is not decoded",
+        ));
     }
     Ok(())
 }
@@ -999,7 +1335,10 @@ fn read_cfl_alphas(ts: &mut TileState<'_>) -> (i32, i32, i32, i32) {
     for (d, s) in ts.cdf.cfl_sign.iter_mut().zip(signs_cdf.iter()) {
         *d = *s;
     }
-    #[allow(clippy::integer_division, reason = "5.11.45's own cfl_alpha_signs decode formula")]
+    #[allow(
+        clippy::integer_division,
+        reason = "5.11.45's own cfl_alpha_signs decode formula"
+    )]
     let sign_u = (signs + 1) / 3;
     let sign_v = (signs + 1) % 3;
     let mut alpha_u = 0;
@@ -1012,7 +1351,13 @@ fn read_cfl_alphas(ts: &mut TileState<'_>) -> (i32, i32, i32, i32) {
         // (confirmed against the specification's own worked table, not
         // just the "= cfl_alpha_signs - 2" shortcut it separately notes).
         let ctx = usize::try_from((sign_u - 1) * 3 + sign_v).unwrap_or(0);
-        let mut cdf = ts.cdf.cfl_alpha.get(ctx).copied().unwrap_or_default().to_vec();
+        let mut cdf = ts
+            .cdf
+            .cfl_alpha
+            .get(ctx)
+            .copied()
+            .unwrap_or_default()
+            .to_vec();
         let v = i32::try_from(ts.sd.read_symbol(&mut cdf)).unwrap_or(0);
         if let Some(row) = ts.cdf.cfl_alpha.get_mut(ctx) {
             for (d, s) in row.iter_mut().zip(cdf.iter()) {
@@ -1024,7 +1369,13 @@ fn read_cfl_alphas(ts: &mut TileState<'_>) -> (i32, i32, i32, i32) {
     if sign_v != 0 {
         // cfl_alpha_v's context, §8.3.2: (signV - 1) * 3 + signU.
         let ctx = usize::try_from((sign_v - 1) * 3 + sign_u).unwrap_or(0);
-        let mut cdf = ts.cdf.cfl_alpha.get(ctx).copied().unwrap_or_default().to_vec();
+        let mut cdf = ts
+            .cdf
+            .cfl_alpha
+            .get(ctx)
+            .copied()
+            .unwrap_or_default()
+            .to_vec();
         let v = i32::try_from(ts.sd.read_symbol(&mut cdf)).unwrap_or(0);
         if let Some(row) = ts.cdf.cfl_alpha.get_mut(ctx) {
             for (d, s) in row.iter_mut().zip(cdf.iter()) {
@@ -1036,7 +1387,14 @@ fn read_cfl_alphas(ts: &mut TileState<'_>) -> (i32, i32, i32, i32) {
     (sign_u, sign_v, alpha_u, alpha_v)
 }
 
-fn read_skip(ctx: &mut FrameCtx, ts: &mut TileState<'_>, avail_u: bool, avail_l: bool, r: usize, c: usize) -> bool {
+fn read_skip(
+    ctx: &mut FrameCtx,
+    ts: &mut TileState<'_>,
+    avail_u: bool,
+    avail_l: bool,
+    r: usize,
+    c: usize,
+) -> bool {
     let mut skip_ctx = 0usize;
     if avail_u && ctx.mi_at(ix(r) - 1, ix(c)).is_some_and(|m| m.skip) {
         skip_ctx += 1;
@@ -1044,7 +1402,13 @@ fn read_skip(ctx: &mut FrameCtx, ts: &mut TileState<'_>, avail_u: bool, avail_l:
     if avail_l && ctx.mi_at(ix(r), ix(c) - 1).is_some_and(|m| m.skip) {
         skip_ctx += 1;
     }
-    let mut cdf = ts.cdf.skip.get(skip_ctx).copied().unwrap_or_default().to_vec();
+    let mut cdf = ts
+        .cdf
+        .skip
+        .get(skip_ctx)
+        .copied()
+        .unwrap_or_default()
+        .to_vec();
     let v = ts.sd.read_symbol(&mut cdf) != 0;
     if let Some(row) = ts.cdf.skip.get_mut(skip_ctx) {
         for (d, s) in row.iter_mut().zip(cdf.iter()) {
@@ -1060,29 +1424,57 @@ fn read_skip(ctx: &mut FrameCtx, ts: &mut TileState<'_>, avail_u: bool, avail_l:
 /// is real bit-consuming syntax that every later symbol read depends on
 /// landing in the right place, whether or not this crate ever uses the
 /// value.
-fn read_cdef(ctx: &mut FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, mi_size: u8, skip: bool) {
+fn read_cdef(
+    ctx: &mut FrameCtx,
+    ts: &mut TileState<'_>,
+    r: usize,
+    c: usize,
+    mi_size: u8,
+    skip: bool,
+) {
     if skip || ctx.header.coded_lossless || ctx.header.cdef_bits == 0 || ctx.header.allow_intrabc {
         return;
     }
     let cdef_size4 = 16usize; // Num_4x4_Blocks_Wide[BLOCK_64X64]
     let (ur, uc) = (r & !(cdef_size4 - 1), c & !(cdef_size4 - 1));
-    #[allow(clippy::integer_division, reason = "5.11.56's own cdef_idx unit-grid coordinates: r/64, c/64 in pixels")]
+    #[allow(
+        clippy::integer_division,
+        reason = "5.11.56's own cdef_idx unit-grid coordinates: r/64, c/64 in pixels"
+    )]
     let (gr, gc) = (ur / cdef_size4, uc / cdef_size4);
-    let Some(idx) = gr.checked_mul(ctx.cdef_stride).and_then(|base| base.checked_add(gc)) else {
+    let Some(idx) = gr
+        .checked_mul(ctx.cdef_stride)
+        .and_then(|base| base.checked_add(gc))
+    else {
         return;
     };
     if ctx.cdef_idx.get(idx).copied().unwrap_or(-1) != -1 {
         return;
     }
     let value = i32::try_from(ts.sd.read_literal(ctx.header.cdef_bits)).unwrap_or(0);
-    let w4 = usize::from(tables::NUM_4X4_BLOCKS_WIDE.get(usize::from(mi_size)).copied().unwrap_or(1));
-    let h4 = usize::from(tables::NUM_4X4_BLOCKS_HIGH.get(usize::from(mi_size)).copied().unwrap_or(1));
+    let w4 = usize::from(
+        tables::NUM_4X4_BLOCKS_WIDE
+            .get(usize::from(mi_size))
+            .copied()
+            .unwrap_or(1),
+    );
+    let h4 = usize::from(
+        tables::NUM_4X4_BLOCKS_HIGH
+            .get(usize::from(mi_size))
+            .copied()
+            .unwrap_or(1),
+    );
     let mut i = ur;
     while i < ur + h4 {
         let mut j = uc;
         while j < uc + w4 {
-            #[allow(clippy::integer_division, reason = "5.11.56's own cdef_idx unit-grid coordinates: i/64, j/64 in pixels")]
-            let slot_idx = (i / cdef_size4).checked_mul(ctx.cdef_stride).and_then(|base| base.checked_add(j / cdef_size4));
+            #[allow(
+                clippy::integer_division,
+                reason = "5.11.56's own cdef_idx unit-grid coordinates: i/64, j/64 in pixels"
+            )]
+            let slot_idx = (i / cdef_size4)
+                .checked_mul(ctx.cdef_stride)
+                .and_then(|base| base.checked_add(j / cdef_size4));
             if let Some(slot) = slot_idx.and_then(|k| ctx.cdef_idx.get_mut(k)) {
                 *slot = value;
             }
@@ -1093,7 +1485,11 @@ fn read_cdef(ctx: &mut FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, mi_
 }
 
 fn read_delta_qindex_lf(ctx: &mut FrameCtx, ts: &mut TileState<'_>, mi_size: u8, skip: bool) {
-    let sb_size_ord = if ctx.use_128x128_superblock { 15u8 } else { 12u8 };
+    let sb_size_ord = if ctx.use_128x128_superblock {
+        15u8
+    } else {
+        12u8
+    };
     if mi_size == sb_size_ord && skip {
         return;
     }
@@ -1106,17 +1502,45 @@ fn read_delta_qindex_lf(ctx: &mut FrameCtx, ts: &mut TileState<'_>, mi_size: u8,
     let _ = (ts.current_q_index, ctx.header.delta.delta_q_present);
 }
 
-fn read_tx_size(ctx: &FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, mi_size: u8, avail_u: bool, avail_l: bool, allow_select: bool) -> u8 {
+fn read_tx_size(
+    ctx: &FrameCtx,
+    ts: &mut TileState<'_>,
+    r: usize,
+    c: usize,
+    mi_size: u8,
+    avail_u: bool,
+    avail_l: bool,
+    allow_select: bool,
+) -> u8 {
     if ctx.header.coded_lossless {
         return 0; // TX_4X4
     }
-    let max_rect_tx = u8::try_from(tables::MAX_TX_SIZE_RECT.get(usize::from(mi_size)).copied().unwrap_or(0)).unwrap_or(0);
-    let max_tx_depth = tables::MAX_TX_DEPTH.get(usize::from(mi_size)).copied().unwrap_or(0);
+    let max_rect_tx = u8::try_from(
+        tables::MAX_TX_SIZE_RECT
+            .get(usize::from(mi_size))
+            .copied()
+            .unwrap_or(0),
+    )
+    .unwrap_or(0);
+    let max_tx_depth = tables::MAX_TX_DEPTH
+        .get(usize::from(mi_size))
+        .copied()
+        .unwrap_or(0);
     if mi_size == 0 || !allow_select || ctx.header.tx_mode != frame_header::TxMode::Select {
         return max_rect_tx;
     }
-    let max_tx_w = u32::from(tables::TX_WIDTH.get(usize::from(max_rect_tx)).copied().unwrap_or(4));
-    let max_tx_h = u32::from(tables::TX_HEIGHT.get(usize::from(max_rect_tx)).copied().unwrap_or(4));
+    let max_tx_w = u32::from(
+        tables::TX_WIDTH
+            .get(usize::from(max_rect_tx))
+            .copied()
+            .unwrap_or(4),
+    );
+    let max_tx_h = u32::from(
+        tables::TX_HEIGHT
+            .get(usize::from(max_rect_tx))
+            .copied()
+            .unwrap_or(4),
+    );
     // tx_depth's own context formula, §8.3.2: `aboveW`/`leftH` are 0 when
     // the neighbour is unavailable (a plain `else` in the specification's
     // own text, not a call to get_above_tx_width()/get_left_tx_height() --
@@ -1129,22 +1553,60 @@ fn read_tx_size(ctx: &FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, mi_s
     // neighbour's *coding* block size, which is what this function used to
     // read here.
     let above_w = if avail_u {
-        ctx.mi_at(ix(r) - 1, ix(c)).map_or(0, |m| u32::from(tables::TX_WIDTH.get(usize::from(m.tx_size)).copied().unwrap_or(4)))
+        ctx.mi_at(ix(r) - 1, ix(c)).map_or(0, |m| {
+            u32::from(
+                tables::TX_WIDTH
+                    .get(usize::from(m.tx_size))
+                    .copied()
+                    .unwrap_or(4),
+            )
+        })
     } else {
         0
     };
     let left_h = if avail_l {
-        ctx.mi_at(ix(r), ix(c) - 1).map_or(0, |m| u32::from(tables::TX_HEIGHT.get(usize::from(m.tx_size)).copied().unwrap_or(4)))
+        ctx.mi_at(ix(r), ix(c) - 1).map_or(0, |m| {
+            u32::from(
+                tables::TX_HEIGHT
+                    .get(usize::from(m.tx_size))
+                    .copied()
+                    .unwrap_or(4),
+            )
+        })
     } else {
         0
     };
     let ctx_v = usize::from(above_w >= max_tx_w) + usize::from(left_h >= max_tx_h);
 
     let mut cdf: Vec<u16> = match max_tx_depth {
-        4 => ts.cdf.tx_64x64.get(ctx_v).copied().unwrap_or_default().to_vec(),
-        3 => ts.cdf.tx_32x32.get(ctx_v).copied().unwrap_or_default().to_vec(),
-        2 => ts.cdf.tx_16x16.get(ctx_v).copied().unwrap_or_default().to_vec(),
-        _ => ts.cdf.tx_8x8.get(ctx_v).copied().unwrap_or_default().to_vec(),
+        4 => ts
+            .cdf
+            .tx_64x64
+            .get(ctx_v)
+            .copied()
+            .unwrap_or_default()
+            .to_vec(),
+        3 => ts
+            .cdf
+            .tx_32x32
+            .get(ctx_v)
+            .copied()
+            .unwrap_or_default()
+            .to_vec(),
+        2 => ts
+            .cdf
+            .tx_16x16
+            .get(ctx_v)
+            .copied()
+            .unwrap_or_default()
+            .to_vec(),
+        _ => ts
+            .cdf
+            .tx_8x8
+            .get(ctx_v)
+            .copied()
+            .unwrap_or_default()
+            .to_vec(),
     };
     let tx_depth = ts.sd.read_symbol(&mut cdf);
     match max_tx_depth {
@@ -1179,7 +1641,13 @@ fn read_tx_size(ctx: &FrameCtx, ts: &mut TileState<'_>, r: usize, c: usize, mi_s
     }
     let mut tx = max_rect_tx;
     for _ in 0..tx_depth {
-        tx = u8::try_from(tables::SPLIT_TX_SIZE.get(usize::from(tx)).copied().unwrap_or(u16::from(tx))).unwrap_or(tx);
+        tx = u8::try_from(
+            tables::SPLIT_TX_SIZE
+                .get(usize::from(tx))
+                .copied()
+                .unwrap_or(u16::from(tx)),
+        )
+        .unwrap_or(tx);
     }
     tx
 }
@@ -1211,7 +1679,11 @@ fn residual(
     let bh = tables::block_height(mi_size);
     let width_chunks = (bw >> 6).max(1);
     let height_chunks = (bh >> 6).max(1);
-    let mi_size_chunk = if width_chunks > 1 || height_chunks > 1 { 12u8 } else { mi_size };
+    let mi_size_chunk = if width_chunks > 1 || height_chunks > 1 {
+        12u8
+    } else {
+        mi_size
+    };
 
     let tx_size = ctx.mi_at(ix(mi_row), ix(mi_col)).map_or(0, |m| m.tx_size);
 
@@ -1221,13 +1693,46 @@ fn residual(
             let mi_col_chunk = mi_col + usize::try_from(chunk_x << 4).unwrap_or(0);
             let plane_count = if has_chroma { 3 } else { 1 };
             for plane in 0..plane_count {
-                let tx_sz = if ctx.header.coded_lossless { 0u8 } else { get_tx_size(plane, tx_size, mi_size) };
-                let step_x = usize::from(tables::TX_WIDTH.get(usize::from(tx_sz)).copied().unwrap_or(4)) >> 2;
-                let step_y = usize::from(tables::TX_HEIGHT.get(usize::from(tx_sz)).copied().unwrap_or(4)) >> 2;
-                let plane_sz = get_plane_residual_size(mi_size_chunk, plane, ctx.subsampling_x, ctx.subsampling_y);
-                let num4x4_w = usize::from(tables::NUM_4X4_BLOCKS_WIDE.get(usize::from(plane_sz)).copied().unwrap_or(1));
-                let num4x4_h = usize::from(tables::NUM_4X4_BLOCKS_HIGH.get(usize::from(plane_sz)).copied().unwrap_or(1));
-                let (sub_x, sub_y) = if plane > 0 { (ctx.subsampling_x, ctx.subsampling_y) } else { (false, false) };
+                let tx_sz = if ctx.header.coded_lossless {
+                    0u8
+                } else {
+                    get_tx_size(plane, tx_size, mi_size)
+                };
+                let step_x = usize::from(
+                    tables::TX_WIDTH
+                        .get(usize::from(tx_sz))
+                        .copied()
+                        .unwrap_or(4),
+                ) >> 2;
+                let step_y = usize::from(
+                    tables::TX_HEIGHT
+                        .get(usize::from(tx_sz))
+                        .copied()
+                        .unwrap_or(4),
+                ) >> 2;
+                let plane_sz = get_plane_residual_size(
+                    mi_size_chunk,
+                    plane,
+                    ctx.subsampling_x,
+                    ctx.subsampling_y,
+                );
+                let num4x4_w = usize::from(
+                    tables::NUM_4X4_BLOCKS_WIDE
+                        .get(usize::from(plane_sz))
+                        .copied()
+                        .unwrap_or(1),
+                );
+                let num4x4_h = usize::from(
+                    tables::NUM_4X4_BLOCKS_HIGH
+                        .get(usize::from(plane_sz))
+                        .copied()
+                        .unwrap_or(1),
+                );
+                let (sub_x, sub_y) = if plane > 0 {
+                    (ctx.subsampling_x, ctx.subsampling_y)
+                } else {
+                    (false, false)
+                };
                 let base_x_block = (mi_col >> u32::from(ctx.subsampling_x && plane > 0)) * 4;
                 let base_y_block = (mi_row >> u32::from(ctx.subsampling_y && plane > 0)) * 4;
 
@@ -1275,9 +1780,21 @@ fn get_tx_size(plane: usize, tx_size: u8, mi_size: u8) -> u8 {
         return tx_size;
     }
     let plane_sz = get_plane_residual_size(mi_size, plane, true, true);
-    let uv_tx = u8::try_from(tables::MAX_TX_SIZE_RECT.get(usize::from(plane_sz)).copied().unwrap_or(0)).unwrap_or(0);
-    let w = tables::TX_WIDTH.get(usize::from(uv_tx)).copied().unwrap_or(4);
-    let h = tables::TX_HEIGHT.get(usize::from(uv_tx)).copied().unwrap_or(4);
+    let uv_tx = u8::try_from(
+        tables::MAX_TX_SIZE_RECT
+            .get(usize::from(plane_sz))
+            .copied()
+            .unwrap_or(0),
+    )
+    .unwrap_or(0);
+    let w = tables::TX_WIDTH
+        .get(usize::from(uv_tx))
+        .copied()
+        .unwrap_or(4);
+    let h = tables::TX_HEIGHT
+        .get(usize::from(uv_tx))
+        .copied()
+        .unwrap_or(4);
     if w == 64 || h == 64 {
         if w == 16 {
             return 9; // TX_16X32
@@ -1290,8 +1807,17 @@ fn get_tx_size(plane: usize, tx_size: u8, mi_size: u8) -> u8 {
     uv_tx
 }
 
-fn get_plane_residual_size(subsize: u8, plane: usize, subsampling_x: bool, subsampling_y: bool) -> u8 {
-    let (sx, sy) = if plane > 0 { (usize::from(subsampling_x), usize::from(subsampling_y)) } else { (0, 0) };
+fn get_plane_residual_size(
+    subsize: u8,
+    plane: usize,
+    subsampling_x: bool,
+    subsampling_y: bool,
+) -> u8 {
+    let (sx, sy) = if plane > 0 {
+        (usize::from(subsampling_x), usize::from(subsampling_y))
+    } else {
+        (0, 0)
+    };
     let v = tables::conversion::SUBSAMPLED_SIZE
         .get(usize::from(subsize))
         .and_then(|a| a.get(sx))
@@ -1333,30 +1859,78 @@ fn transform_block(
 ) -> Result<()> {
     let start_x = base_x + 4 * x;
     let start_y = base_y + 4 * y;
-    let (sub_x, sub_y) = if plane > 0 { (ctx.subsampling_x, ctx.subsampling_y) } else { (false, false) };
+    let (sub_x, sub_y) = if plane > 0 {
+        (ctx.subsampling_x, ctx.subsampling_y)
+    } else {
+        (false, false)
+    };
     let max_x = (ctx.mi_cols * 4) >> u32::from(sub_x);
     let max_y = (ctx.mi_rows * 4) >> u32::from(sub_y);
     if start_x >= max_x || start_y >= max_y {
         return Ok(());
     }
-    let step_x = usize::from(tables::TX_WIDTH.get(usize::from(tx_sz)).copied().unwrap_or(4)) >> 2;
-    let step_y = usize::from(tables::TX_HEIGHT.get(usize::from(tx_sz)).copied().unwrap_or(4)) >> 2;
-    let sb_mask = if ctx.use_128x128_superblock { 31i32 } else { 15i32 };
+    let step_x = usize::from(
+        tables::TX_WIDTH
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(4),
+    ) >> 2;
+    let step_y = usize::from(
+        tables::TX_HEIGHT
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(4),
+    ) >> 2;
+    let sb_mask = if ctx.use_128x128_superblock {
+        31i32
+    } else {
+        15i32
+    };
     let row = ix(start_y) << u32::from(sub_y) >> 2;
     let col = ix(start_x) << u32::from(sub_x) >> 2;
     let sub_block_mi_row = row & sb_mask;
     let sub_block_mi_col = col & sb_mask;
 
     let is_cfl = plane > 0 && uv_mode == UV_CFL_PRED;
-    let mode = if plane == 0 { y_mode } else if is_cfl { DC_PRED } else { uv_mode };
-    let angle_delta = if plane == 0 { angle_delta_y } else { angle_delta_uv };
-    let log2_w = u32::from(tables::TX_WIDTH_LOG2.get(usize::from(tx_sz)).copied().unwrap_or(2));
-    let log2_h = u32::from(tables::TX_HEIGHT_LOG2.get(usize::from(tx_sz)).copied().unwrap_or(2));
+    let mode = if plane == 0 {
+        y_mode
+    } else if is_cfl {
+        DC_PRED
+    } else {
+        uv_mode
+    };
+    let angle_delta = if plane == 0 {
+        angle_delta_y
+    } else {
+        angle_delta_uv
+    };
+    let log2_w = u32::from(
+        tables::TX_WIDTH_LOG2
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(2),
+    );
+    let log2_h = u32::from(
+        tables::TX_HEIGHT_LOG2
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(2),
+    );
 
     let have_left_here = avail_l || x > 0;
     let have_above_here = avail_u || y > 0;
-    let have_above_right = ts.block_decoded.get(plane).is_some_and(|bd| bd.get((sub_block_mi_row >> u32::from(sub_y)) - 1, (sub_block_mi_col >> u32::from(sub_x)) + ix(step_x)));
-    let have_below_left = ts.block_decoded.get(plane).is_some_and(|bd| bd.get((sub_block_mi_row >> u32::from(sub_y)) + ix(step_y), (sub_block_mi_col >> u32::from(sub_x)) - 1));
+    let have_above_right = ts.block_decoded.get(plane).is_some_and(|bd| {
+        bd.get(
+            (sub_block_mi_row >> u32::from(sub_y)) - 1,
+            (sub_block_mi_col >> u32::from(sub_x)) + ix(step_x),
+        )
+    });
+    let have_below_left = ts.block_decoded.get(plane).is_some_and(|bd| {
+        bd.get(
+            (sub_block_mi_row >> u32::from(sub_y)) + ix(step_y),
+            (sub_block_mi_col >> u32::from(sub_x)) - 1,
+        )
+    });
 
     {
         let plane_ref = ctx.pic.plane(plane);
@@ -1395,28 +1969,74 @@ fn transform_block(
         let h = 1i32 << log2_h;
         let (luma, chroma) = ctx.pic.luma_and_chroma_mut(plane);
         if let Some(chroma) = chroma {
-            predict::predict_chroma_from_luma(chroma, luma, ix(start_x), ix(start_y), w, h, sub_x, sub_y, alpha, max_luma_w, max_luma_h, log2_w, log2_h, ctx.bit_depth);
+            predict::predict_chroma_from_luma(
+                chroma,
+                luma,
+                ix(start_x),
+                ix(start_y),
+                w,
+                h,
+                sub_x,
+                sub_y,
+                alpha,
+                max_luma_w,
+                max_luma_h,
+                log2_w,
+                log2_h,
+                ctx.bit_depth,
+            );
         }
     }
 
     if !skip {
-        let (eob, tx_type) = coeffs(ctx, ts, plane, start_x, start_y, tx_sz, mi_row, mi_col, y_mode, uv_mode, reduced_tx_set, base_q_idx, ctx.header.coded_lossless);
+        let (eob, tx_type) = coeffs(
+            ctx,
+            ts,
+            plane,
+            start_x,
+            start_y,
+            tx_sz,
+            mi_row,
+            mi_col,
+            y_mode,
+            uv_mode,
+            reduced_tx_set,
+            base_q_idx,
+            ctx.header.coded_lossless,
+        );
         if eob > 0 {
-            reconstruct(ctx, ts, plane, start_x, start_y, tx_sz, tx_type, ctx.header.coded_lossless);
+            reconstruct(
+                ctx,
+                ts,
+                plane,
+                start_x,
+                start_y,
+                tx_sz,
+                tx_type,
+                ctx.header.coded_lossless,
+            );
         }
     }
 
     for i in 0..step_y {
         for j in 0..step_x {
             if let Some(bd) = ts.block_decoded.get_mut(plane) {
-                bd.set((sub_block_mi_row >> u32::from(sub_y)) + ix(i), (sub_block_mi_col >> u32::from(sub_x)) + ix(j), true);
+                bd.set(
+                    (sub_block_mi_row >> u32::from(sub_y)) + ix(i),
+                    (sub_block_mi_col >> u32::from(sub_x)) + ix(j),
+                    true,
+                );
             }
         }
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments, clippy::too_many_lines, reason = "mirrors coeffs()'s own inputs, section 5.11.39")]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "mirrors coeffs()'s own inputs, section 5.11.39"
+)]
 fn coeffs(
     ctx: &mut FrameCtx,
     ts: &mut TileState<'_>,
@@ -1432,22 +2052,64 @@ fn coeffs(
     base_q_idx: u8,
     lossless: bool,
 ) -> (i32, Av1TxType) {
-    let (sub_x, sub_y) = if plane > 0 { (ctx.subsampling_x, ctx.subsampling_y) } else { (false, false) };
+    let (sub_x, sub_y) = if plane > 0 {
+        (ctx.subsampling_x, ctx.subsampling_y)
+    } else {
+        (false, false)
+    };
     let x4 = start_x >> 2;
     let y4 = start_y >> 2;
-    let w4 = usize::from(tables::TX_WIDTH.get(usize::from(tx_sz)).copied().unwrap_or(4)) >> 2;
-    let h4 = usize::from(tables::TX_HEIGHT.get(usize::from(tx_sz)).copied().unwrap_or(4)) >> 2;
-    let tx_sz_sqr = tables::TX_SIZE_SQR.get(usize::from(tx_sz)).copied().unwrap_or(0);
-    let tx_sz_sqr_up = tables::TX_SIZE_SQR_UP.get(usize::from(tx_sz)).copied().unwrap_or(0);
+    let w4 = usize::from(
+        tables::TX_WIDTH
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(4),
+    ) >> 2;
+    let h4 = usize::from(
+        tables::TX_HEIGHT
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(4),
+    ) >> 2;
+    let tx_sz_sqr = tables::TX_SIZE_SQR
+        .get(usize::from(tx_sz))
+        .copied()
+        .unwrap_or(0);
+    let tx_sz_sqr_up = tables::TX_SIZE_SQR_UP
+        .get(usize::from(tx_sz))
+        .copied()
+        .unwrap_or(0);
     let tx_sz_ctx = usize::from((tx_sz_sqr + tx_sz_sqr_up + 1) >> 1);
     let ptype = usize::from(plane > 0);
 
-    let seg_eob = if tx_sz == 17 || tx_sz == 18 { 512 } else { (i32::from(tables::TX_WIDTH.get(usize::from(tx_sz)).copied().unwrap_or(4)) * i32::from(tables::TX_HEIGHT.get(usize::from(tx_sz)).copied().unwrap_or(4))).min(1024) };
+    let seg_eob = if tx_sz == 17 || tx_sz == 18 {
+        512
+    } else {
+        (i32::from(
+            tables::TX_WIDTH
+                .get(usize::from(tx_sz))
+                .copied()
+                .unwrap_or(4),
+        ) * i32::from(
+            tables::TX_HEIGHT
+                .get(usize::from(tx_sz))
+                .copied()
+                .unwrap_or(4),
+        ))
+        .min(1024)
+    };
     let mut quant = vec![0i32; usize::try_from(seg_eob).unwrap_or(0).max(1)];
 
     let mi_size = ctx.mi_at(ix(mi_row), ix(mi_col)).map_or(0, |m| m.mi_size);
     let all_zero_ctx = txb_skip_ctx(ctx, ts, plane, x4, y4, w4, h4, tx_sz, mi_size, sub_x, sub_y);
-    let mut cdf = ts.cdf.txb_skip.get(tx_sz_ctx).and_then(|r| r.get(all_zero_ctx)).copied().unwrap_or_default().to_vec();
+    let mut cdf = ts
+        .cdf
+        .txb_skip
+        .get(tx_sz_ctx)
+        .and_then(|r| r.get(all_zero_ctx))
+        .copied()
+        .unwrap_or_default()
+        .to_vec();
     let all_zero = ts.sd.read_symbol(&mut cdf) != 0;
     if let Some(row) = ts.cdf.txb_skip.get_mut(tx_sz_ctx)
         && let Some(slot) = row.get_mut(all_zero_ctx)
@@ -1469,15 +2131,39 @@ fn coeffs(
         tx_type = compute_tx_type(plane, tx_sz, tx_type, lossless, reduced_tx_set, uv_mode);
         let scan = get_scan(tx_sz, tx_type);
 
-        let eob_multisize = i32::from(tables::TX_WIDTH_LOG2.get(usize::from(tx_sz)).copied().unwrap_or(2).min(5)) + i32::from(tables::TX_HEIGHT_LOG2.get(usize::from(tx_sz)).copied().unwrap_or(2).min(5)) - 4;
+        let eob_multisize = i32::from(
+            tables::TX_WIDTH_LOG2
+                .get(usize::from(tx_sz))
+                .copied()
+                .unwrap_or(2)
+                .min(5),
+        ) + i32::from(
+            tables::TX_HEIGHT_LOG2
+                .get(usize::from(tx_sz))
+                .copied()
+                .unwrap_or(2)
+                .min(5),
+        ) - 4;
         let tx_class_2d = get_tx_class(tx_type) == 0;
         let eob_ctx = usize::from(!tx_class_2d);
         let eob_pt = read_eob_pt(ts, eob_multisize, ptype, eob_ctx) + 1;
-        eob = if eob_pt < 2 { eob_pt } else { (1 << (eob_pt - 2)) + 1 };
+        eob = if eob_pt < 2 {
+            eob_pt
+        } else {
+            (1 << (eob_pt - 2)) + 1
+        };
         let mut eob_shift = (eob_pt - 3).max(-1);
         if eob_shift >= 0 {
             let eob_extra_ctx = usize::try_from(eob_pt - 3).unwrap_or(0);
-            let mut cdf = ts.cdf.eob_extra.get(tx_sz_ctx).and_then(|r| r.get(ptype)).and_then(|r| r.get(eob_extra_ctx)).copied().unwrap_or_default().to_vec();
+            let mut cdf = ts
+                .cdf
+                .eob_extra
+                .get(tx_sz_ctx)
+                .and_then(|r| r.get(ptype))
+                .and_then(|r| r.get(eob_extra_ctx))
+                .copied()
+                .unwrap_or_default()
+                .to_vec();
             let eob_extra = ts.sd.read_symbol(&mut cdf) != 0;
             if let Some(a) = ts.cdf.eob_extra.get_mut(tx_sz_ctx)
                 && let Some(b) = a.get_mut(ptype)
@@ -1500,10 +2186,21 @@ fn coeffs(
         }
 
         for c in (0..eob).rev() {
-            let pos = scan.get(usize::try_from(c).unwrap_or(0)).copied().unwrap_or(0);
+            let pos = scan
+                .get(usize::try_from(c).unwrap_or(0))
+                .copied()
+                .unwrap_or(0);
             let level = if c == eob - 1 {
                 let ctx_eob = get_coeff_base_ctx(tx_sz, plane, pos, c, true, &quant, tx_type);
-                let mut cdf = ts.cdf.coeff_base_eob.get(tx_sz_ctx).and_then(|r| r.get(ptype)).and_then(|r| r.get(ctx_eob)).copied().unwrap_or_default().to_vec();
+                let mut cdf = ts
+                    .cdf
+                    .coeff_base_eob
+                    .get(tx_sz_ctx)
+                    .and_then(|r| r.get(ptype))
+                    .and_then(|r| r.get(ctx_eob))
+                    .copied()
+                    .unwrap_or_default()
+                    .to_vec();
                 let v = ts.sd.read_symbol(&mut cdf);
                 if let Some(a) = ts.cdf.coeff_base_eob.get_mut(tx_sz_ctx)
                     && let Some(b) = a.get_mut(ptype)
@@ -1516,7 +2213,15 @@ fn coeffs(
                 i32::try_from(v).unwrap_or(0) + 1
             } else {
                 let ctx_base = get_coeff_base_ctx(tx_sz, plane, pos, c, false, &quant, tx_type);
-                let mut cdf = ts.cdf.coeff_base.get(tx_sz_ctx).and_then(|r| r.get(ptype)).and_then(|r| r.get(ctx_base)).copied().unwrap_or_default().to_vec();
+                let mut cdf = ts
+                    .cdf
+                    .coeff_base
+                    .get(tx_sz_ctx)
+                    .and_then(|r| r.get(ptype))
+                    .and_then(|r| r.get(ctx_base))
+                    .copied()
+                    .unwrap_or_default()
+                    .to_vec();
                 let v = ts.sd.read_symbol(&mut cdf);
                 if let Some(a) = ts.cdf.coeff_base.get_mut(tx_sz_ctx)
                     && let Some(b) = a.get_mut(ptype)
@@ -1532,10 +2237,21 @@ fn coeffs(
             if level > NUM_BASE_LEVELS {
                 let br_ctx = get_coeff_br_ctx(tx_sz, plane, pos, tx_type, &quant);
                 let br_tx_sz_ctx = tx_sz_ctx.min(3);
-                #[allow(clippy::integer_division, reason = "8.3.2's coeff_br loop count, COEFF_BASE_RANGE / (BR_CDF_SIZE - 1)")]
+                #[allow(
+                    clippy::integer_division,
+                    reason = "8.3.2's coeff_br loop count, COEFF_BASE_RANGE / (BR_CDF_SIZE - 1)"
+                )]
                 let br_loops = COEFF_BASE_RANGE / (BR_CDF_SIZE - 1);
                 for _ in 0..br_loops {
-                    let mut cdf = ts.cdf.coeff_br.get(br_tx_sz_ctx).and_then(|r| r.get(ptype)).and_then(|r| r.get(br_ctx)).copied().unwrap_or_default().to_vec();
+                    let mut cdf = ts
+                        .cdf
+                        .coeff_br
+                        .get(br_tx_sz_ctx)
+                        .and_then(|r| r.get(ptype))
+                        .and_then(|r| r.get(br_ctx))
+                        .copied()
+                        .unwrap_or_default()
+                        .to_vec();
                     let coeff_br = ts.sd.read_symbol(&mut cdf);
                     if let Some(a) = ts.cdf.coeff_br.get_mut(br_tx_sz_ctx)
                         && let Some(b) = a.get_mut(ptype)
@@ -1557,12 +2273,22 @@ fn coeffs(
         }
 
         for c in 0..eob {
-            let pos = scan.get(usize::try_from(c).unwrap_or(0)).copied().unwrap_or(0);
+            let pos = scan
+                .get(usize::try_from(c).unwrap_or(0))
+                .copied()
+                .unwrap_or(0);
             let cur = quant.get(usize::from(pos)).copied().unwrap_or(0);
             let sign = if cur != 0 {
                 if c == 0 {
                     let dc_ctx = dc_sign_ctx(ctx, ts, plane, x4, y4, w4, h4, sub_x, sub_y);
-                    let mut cdf = ts.cdf.dc_sign.get(ptype).and_then(|r| r.get(dc_ctx)).copied().unwrap_or_default().to_vec();
+                    let mut cdf = ts
+                        .cdf
+                        .dc_sign
+                        .get(ptype)
+                        .and_then(|r| r.get(dc_ctx))
+                        .copied()
+                        .unwrap_or_default()
+                        .to_vec();
                     let v = ts.sd.read_symbol(&mut cdf) != 0;
                     if let Some(a) = ts.cdf.dc_sign.get_mut(ptype)
                         && let Some(slot) = a.get_mut(dc_ctx)
@@ -1643,12 +2369,45 @@ fn coeffs(
 /// (needed for the `bw == w && bh == h` / `bw * bh > w * h` comparisons
 /// against the plane's own residual block size, distinct from the
 /// transform size `tx_sz`).
-#[allow(clippy::too_many_arguments, reason = "mirrors the specification's own all_zero context derivation, section 8.3.2")]
-fn txb_skip_ctx(ctx: &FrameCtx, ts: &TileState<'_>, plane: usize, x4: usize, y4: usize, w4: usize, h4: usize, tx_sz: u8, mi_size: u8, sub_x: bool, sub_y: bool) -> usize {
-    let max_x4 = if plane > 0 { ctx.mi_cols >> u32::from(sub_x) } else { ctx.mi_cols };
-    let max_y4 = if plane > 0 { ctx.mi_rows >> u32::from(sub_y) } else { ctx.mi_rows };
-    let w = i32::from(tables::TX_WIDTH.get(usize::from(tx_sz)).copied().unwrap_or(4));
-    let h = i32::from(tables::TX_HEIGHT.get(usize::from(tx_sz)).copied().unwrap_or(4));
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the specification's own all_zero context derivation, section 8.3.2"
+)]
+fn txb_skip_ctx(
+    ctx: &FrameCtx,
+    ts: &TileState<'_>,
+    plane: usize,
+    x4: usize,
+    y4: usize,
+    w4: usize,
+    h4: usize,
+    tx_sz: u8,
+    mi_size: u8,
+    sub_x: bool,
+    sub_y: bool,
+) -> usize {
+    let max_x4 = if plane > 0 {
+        ctx.mi_cols >> u32::from(sub_x)
+    } else {
+        ctx.mi_cols
+    };
+    let max_y4 = if plane > 0 {
+        ctx.mi_rows >> u32::from(sub_y)
+    } else {
+        ctx.mi_rows
+    };
+    let w = i32::from(
+        tables::TX_WIDTH
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(4),
+    );
+    let h = i32::from(
+        tables::TX_HEIGHT
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(4),
+    );
     let bsize = get_plane_residual_size(mi_size, plane, sub_x, sub_y);
     let bw = i32::try_from(tables::block_width(bsize)).unwrap_or(w);
     let bh = i32::try_from(tables::block_height(bsize)).unwrap_or(h);
@@ -1658,12 +2417,24 @@ fn txb_skip_ctx(ctx: &FrameCtx, ts: &TileState<'_>, plane: usize, x4: usize, y4:
         let mut left = 0u8;
         for k in 0..w4 {
             if x4 + k < max_x4 {
-                top = top.max(ts.above_level.get(plane).and_then(|a| a.get(x4 + k)).copied().unwrap_or(0));
+                top = top.max(
+                    ts.above_level
+                        .get(plane)
+                        .and_then(|a| a.get(x4 + k))
+                        .copied()
+                        .unwrap_or(0),
+                );
             }
         }
         for k in 0..h4 {
             if y4 + k < max_y4 {
-                left = left.max(ts.left_level.get(plane).and_then(|a| a.get(y4 + k)).copied().unwrap_or(0));
+                left = left.max(
+                    ts.left_level
+                        .get(plane)
+                        .and_then(|a| a.get(y4 + k))
+                        .copied()
+                        .unwrap_or(0),
+                );
             }
         }
         if bw == w && bh == h {
@@ -1684,14 +2455,38 @@ fn txb_skip_ctx(ctx: &FrameCtx, ts: &TileState<'_>, plane: usize, x4: usize, y4:
         let mut left = false;
         for i in 0..w4 {
             if x4 + i < max_x4 {
-                above |= ts.above_level.get(plane).and_then(|a| a.get(x4 + i)).copied().unwrap_or(0) != 0;
-                above |= ts.above_dc.get(plane).and_then(|a| a.get(x4 + i)).copied().unwrap_or(0) != 0;
+                above |= ts
+                    .above_level
+                    .get(plane)
+                    .and_then(|a| a.get(x4 + i))
+                    .copied()
+                    .unwrap_or(0)
+                    != 0;
+                above |= ts
+                    .above_dc
+                    .get(plane)
+                    .and_then(|a| a.get(x4 + i))
+                    .copied()
+                    .unwrap_or(0)
+                    != 0;
             }
         }
         for i in 0..h4 {
             if y4 + i < max_y4 {
-                left |= ts.left_level.get(plane).and_then(|a| a.get(y4 + i)).copied().unwrap_or(0) != 0;
-                left |= ts.left_dc.get(plane).and_then(|a| a.get(y4 + i)).copied().unwrap_or(0) != 0;
+                left |= ts
+                    .left_level
+                    .get(plane)
+                    .and_then(|a| a.get(y4 + i))
+                    .copied()
+                    .unwrap_or(0)
+                    != 0;
+                left |= ts
+                    .left_dc
+                    .get(plane)
+                    .and_then(|a| a.get(y4 + i))
+                    .copied()
+                    .unwrap_or(0)
+                    != 0;
             }
         }
         let mut c = usize::from(above) + usize::from(left) + 7;
@@ -1702,13 +2497,37 @@ fn txb_skip_ctx(ctx: &FrameCtx, ts: &TileState<'_>, plane: usize, x4: usize, y4:
     }
 }
 
-fn dc_sign_ctx(ctx: &FrameCtx, ts: &TileState<'_>, plane: usize, x4: usize, y4: usize, w4: usize, h4: usize, sub_x: bool, sub_y: bool) -> usize {
-    let max_x4 = if plane > 0 { ctx.mi_cols >> u32::from(sub_x) } else { ctx.mi_cols };
-    let max_y4 = if plane > 0 { ctx.mi_rows >> u32::from(sub_y) } else { ctx.mi_rows };
+fn dc_sign_ctx(
+    ctx: &FrameCtx,
+    ts: &TileState<'_>,
+    plane: usize,
+    x4: usize,
+    y4: usize,
+    w4: usize,
+    h4: usize,
+    sub_x: bool,
+    sub_y: bool,
+) -> usize {
+    let max_x4 = if plane > 0 {
+        ctx.mi_cols >> u32::from(sub_x)
+    } else {
+        ctx.mi_cols
+    };
+    let max_y4 = if plane > 0 {
+        ctx.mi_rows >> u32::from(sub_y)
+    } else {
+        ctx.mi_rows
+    };
     let mut dc_sign = 0i32;
     for k in 0..w4 {
         if x4 + k < max_x4 {
-            match ts.above_dc.get(plane).and_then(|a| a.get(x4 + k)).copied().unwrap_or(0) {
+            match ts
+                .above_dc
+                .get(plane)
+                .and_then(|a| a.get(x4 + k))
+                .copied()
+                .unwrap_or(0)
+            {
                 1 => dc_sign -= 1,
                 2 => dc_sign += 1,
                 _ => {}
@@ -1717,7 +2536,13 @@ fn dc_sign_ctx(ctx: &FrameCtx, ts: &TileState<'_>, plane: usize, x4: usize, y4: 
     }
     for k in 0..h4 {
         if y4 + k < max_y4 {
-            match ts.left_dc.get(plane).and_then(|a| a.get(y4 + k)).copied().unwrap_or(0) {
+            match ts
+                .left_dc
+                .get(plane)
+                .and_then(|a| a.get(y4 + k))
+                .copied()
+                .unwrap_or(0)
+            {
                 1 => dc_sign -= 1,
                 2 => dc_sign += 1,
                 _ => {}
@@ -1731,10 +2556,34 @@ fn dc_sign_ctx(ctx: &FrameCtx, ts: &TileState<'_>, plane: usize, x4: usize, y4: 
     }
 }
 
-fn get_coeff_base_ctx(tx_sz: u8, plane: usize, pos: u16, c: i32, is_eob: bool, quant: &[i32], tx_type: Av1TxType) -> usize {
-    let adj = u8::try_from(tables::ADJUSTED_TX_SIZE.get(usize::from(tx_sz)).copied().unwrap_or(u16::from(tx_sz))).unwrap_or(tx_sz);
-    let bwl = u32::from(tables::TX_WIDTH_LOG2.get(usize::from(adj)).copied().unwrap_or(2));
-    let height = i32::from(tables::TX_HEIGHT.get(usize::from(adj)).copied().unwrap_or(4));
+fn get_coeff_base_ctx(
+    tx_sz: u8,
+    plane: usize,
+    pos: u16,
+    c: i32,
+    is_eob: bool,
+    quant: &[i32],
+    tx_type: Av1TxType,
+) -> usize {
+    let adj = u8::try_from(
+        tables::ADJUSTED_TX_SIZE
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(u16::from(tx_sz)),
+    )
+    .unwrap_or(tx_sz);
+    let bwl = u32::from(
+        tables::TX_WIDTH_LOG2
+            .get(usize::from(adj))
+            .copied()
+            .unwrap_or(2),
+    );
+    let height = i32::from(
+        tables::TX_HEIGHT
+            .get(usize::from(adj))
+            .copied()
+            .unwrap_or(4),
+    );
     let width = 1i32 << bwl;
     if is_eob {
         // coeff_base_eob's own context, 8.3.2: get_coeff_base_ctx(..., isEob=1)
@@ -1751,11 +2600,17 @@ fn get_coeff_base_ctx(tx_sz: u8, plane: usize, pos: u16, c: i32, is_eob: bool, q
         if c == 0 {
             return 0;
         }
-        #[allow(clippy::integer_division, reason = "8.3.2's get_coeff_base_ctx thresholds, height << bwl divided by 8")]
+        #[allow(
+            clippy::integer_division,
+            reason = "8.3.2's get_coeff_base_ctx thresholds, height << bwl divided by 8"
+        )]
         if c <= (height << bwl) / 8 {
             return 1;
         }
-        #[allow(clippy::integer_division, reason = "8.3.2's get_coeff_base_ctx thresholds, height << bwl divided by 4")]
+        #[allow(
+            clippy::integer_division,
+            reason = "8.3.2's get_coeff_base_ctx thresholds, height << bwl divided by 4"
+        )]
         if c <= (height << bwl) / 4 {
             return 2;
         }
@@ -1790,19 +2645,49 @@ fn get_coeff_base_ctx(tx_sz: u8, plane: usize, pos: u16, c: i32, is_eob: bool, q
         }
         let ro = usize::try_from(row.min(4)).unwrap_or(0);
         let co = usize::try_from(col.min(4)).unwrap_or(0);
-        let off = tables::COEFF_BASE_CTX_OFFSET.get(usize::from(tx_sz)).and_then(|a| a.get(ro)).and_then(|b| b.get(co)).copied().unwrap_or(0);
+        let off = tables::COEFF_BASE_CTX_OFFSET
+            .get(usize::from(tx_sz))
+            .and_then(|a| a.get(ro))
+            .and_then(|b| b.get(co))
+            .copied()
+            .unwrap_or(0);
         return usize::try_from(ctx).unwrap_or(0) + usize::from(off);
     }
     let idx = if tx_class == 2 { row } else { col };
-    let off = tables::COEFF_BASE_POS_CTX_OFFSET.get(usize::try_from(idx.min(2)).unwrap_or(0)).copied().unwrap_or(0);
+    let off = tables::COEFF_BASE_POS_CTX_OFFSET
+        .get(usize::try_from(idx.min(2)).unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
     usize::try_from(ctx).unwrap_or(0) + usize::from(off)
 }
 
-fn get_coeff_br_ctx(tx_sz: u8, _plane: usize, pos: u16, tx_type: Av1TxType, quant: &[i32]) -> usize {
-    let adj = u8::try_from(tables::ADJUSTED_TX_SIZE.get(usize::from(tx_sz)).copied().unwrap_or(u16::from(tx_sz))).unwrap_or(tx_sz);
-    let bwl = u32::from(tables::TX_WIDTH_LOG2.get(usize::from(adj)).copied().unwrap_or(2));
+fn get_coeff_br_ctx(
+    tx_sz: u8,
+    _plane: usize,
+    pos: u16,
+    tx_type: Av1TxType,
+    quant: &[i32],
+) -> usize {
+    let adj = u8::try_from(
+        tables::ADJUSTED_TX_SIZE
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(u16::from(tx_sz)),
+    )
+    .unwrap_or(tx_sz);
+    let bwl = u32::from(
+        tables::TX_WIDTH_LOG2
+            .get(usize::from(adj))
+            .copied()
+            .unwrap_or(2),
+    );
     let txw = 1i32 << bwl;
-    let txh = i32::from(tables::TX_HEIGHT.get(usize::from(adj)).copied().unwrap_or(4));
+    let txh = i32::from(
+        tables::TX_HEIGHT
+            .get(usize::from(adj))
+            .copied()
+            .unwrap_or(4),
+    );
     let row = i32::from(pos) >> bwl;
     let col = i32::from(pos) - (row << bwl);
     let tx_class = get_tx_class(tx_type);
@@ -1817,7 +2702,11 @@ fn get_coeff_br_ctx(tx_sz: u8, _plane: usize, pos: u16, tx_type: Av1TxType, quan
         let cc = col + dc;
         if rr >= 0 && cc >= 0 && rr < txh && cc < txw {
             let idx = usize::try_from(rr * txw + cc).unwrap_or(0);
-            mag += quant.get(idx).copied().unwrap_or(0).min(NUM_BASE_LEVELS + COEFF_BASE_RANGE + 1);
+            mag += quant
+                .get(idx)
+                .copied()
+                .unwrap_or(0)
+                .min(NUM_BASE_LEVELS + COEFF_BASE_RANGE + 1);
         }
     }
     let mag = ((mag + 1) >> 1).min(6);
@@ -1864,8 +2753,14 @@ const TX_SET_INTRA_1: u8 = 1;
 const TX_SET_INTRA_2: u8 = 2;
 
 fn get_tx_set(tx_sz: u8, reduced_tx_set: bool) -> u8 {
-    let sqr = tables::TX_SIZE_SQR.get(usize::from(tx_sz)).copied().unwrap_or(0);
-    let sqr_up = tables::TX_SIZE_SQR_UP.get(usize::from(tx_sz)).copied().unwrap_or(0);
+    let sqr = tables::TX_SIZE_SQR
+        .get(usize::from(tx_sz))
+        .copied()
+        .unwrap_or(0);
+    let sqr_up = tables::TX_SIZE_SQR_UP
+        .get(usize::from(tx_sz))
+        .copied()
+        .unwrap_or(0);
     if sqr_up > 3 {
         return TX_SET_DCTONLY;
     }
@@ -1881,15 +2776,34 @@ fn get_tx_set(tx_sz: u8, reduced_tx_set: bool) -> u8 {
 const TX_TYPE_INTRA_INV_SET1: [u8; 7] = [9, 0, 10, 11, 3, 1, 2];
 const TX_TYPE_INTRA_INV_SET2: [u8; 5] = [9, 0, 3, 1, 2];
 
-fn read_transform_type(_ctx: &FrameCtx, ts: &mut TileState<'_>, tx_sz: u8, reduced_tx_set: bool, base_q_idx: u8, y_mode: u8) -> Av1TxType {
+fn read_transform_type(
+    _ctx: &FrameCtx,
+    ts: &mut TileState<'_>,
+    tx_sz: u8,
+    reduced_tx_set: bool,
+    base_q_idx: u8,
+    y_mode: u8,
+) -> Av1TxType {
     let set = get_tx_set(tx_sz, reduced_tx_set);
     if set == TX_SET_DCTONLY || base_q_idx == 0 {
         return Av1TxType::DctDct;
     }
-    let sqr = usize::from(tables::TX_SIZE_SQR.get(usize::from(tx_sz)).copied().unwrap_or(0));
+    let sqr = usize::from(
+        tables::TX_SIZE_SQR
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(0),
+    );
     let intra_dir = usize::from(y_mode);
     let ordinal = if set == TX_SET_INTRA_1 {
-        let mut cdf = ts.cdf.intra_tx_type_set1.get(sqr).and_then(|r| r.get(intra_dir)).copied().unwrap_or_default().to_vec();
+        let mut cdf = ts
+            .cdf
+            .intra_tx_type_set1
+            .get(sqr)
+            .and_then(|r| r.get(intra_dir))
+            .copied()
+            .unwrap_or_default()
+            .to_vec();
         let v = ts.sd.read_symbol(&mut cdf);
         if let Some(a) = ts.cdf.intra_tx_type_set1.get_mut(sqr)
             && let Some(slot) = a.get_mut(intra_dir)
@@ -1898,9 +2812,19 @@ fn read_transform_type(_ctx: &FrameCtx, ts: &mut TileState<'_>, tx_sz: u8, reduc
                 *d = *s;
             }
         }
-        TX_TYPE_INTRA_INV_SET1.get(usize::try_from(v).unwrap_or(0)).copied().unwrap_or(0)
+        TX_TYPE_INTRA_INV_SET1
+            .get(usize::try_from(v).unwrap_or(0))
+            .copied()
+            .unwrap_or(0)
     } else {
-        let mut cdf = ts.cdf.intra_tx_type_set2.get(sqr).and_then(|r| r.get(intra_dir)).copied().unwrap_or_default().to_vec();
+        let mut cdf = ts
+            .cdf
+            .intra_tx_type_set2
+            .get(sqr)
+            .and_then(|r| r.get(intra_dir))
+            .copied()
+            .unwrap_or_default()
+            .to_vec();
         let v = ts.sd.read_symbol(&mut cdf);
         if let Some(a) = ts.cdf.intra_tx_type_set2.get_mut(sqr)
             && let Some(slot) = a.get_mut(intra_dir)
@@ -1909,13 +2833,26 @@ fn read_transform_type(_ctx: &FrameCtx, ts: &mut TileState<'_>, tx_sz: u8, reduc
                 *d = *s;
             }
         }
-        TX_TYPE_INTRA_INV_SET2.get(usize::try_from(v).unwrap_or(0)).copied().unwrap_or(0)
+        TX_TYPE_INTRA_INV_SET2
+            .get(usize::try_from(v).unwrap_or(0))
+            .copied()
+            .unwrap_or(0)
     };
     Av1TxType::from_ordinal(ordinal)
 }
 
-fn compute_tx_type(plane: usize, tx_sz: u8, luma_tx_type: Av1TxType, lossless: bool, reduced_tx_set: bool, uv_mode: u8) -> Av1TxType {
-    let sqr_up = tables::TX_SIZE_SQR_UP.get(usize::from(tx_sz)).copied().unwrap_or(0);
+fn compute_tx_type(
+    plane: usize,
+    tx_sz: u8,
+    luma_tx_type: Av1TxType,
+    lossless: bool,
+    reduced_tx_set: bool,
+    uv_mode: u8,
+) -> Av1TxType {
+    let sqr_up = tables::TX_SIZE_SQR_UP
+        .get(usize::from(tx_sz))
+        .copied()
+        .unwrap_or(0);
     if lossless || sqr_up > 3 {
         return Av1TxType::DctDct;
     }
@@ -1923,9 +2860,16 @@ fn compute_tx_type(plane: usize, tx_sz: u8, luma_tx_type: Av1TxType, lossless: b
     if plane == 0 {
         return luma_tx_type;
     }
-    let (col, row) = tables::MODE_TO_TXFM.get(usize::from(uv_mode)).copied().unwrap_or((tables::Tx1D::Dct, tables::Tx1D::Dct));
+    let (col, row) = tables::MODE_TO_TXFM
+        .get(usize::from(uv_mode))
+        .copied()
+        .unwrap_or((tables::Tx1D::Dct, tables::Tx1D::Dct));
     let tx_type = tx1d_pair_to_type(col, row);
-    if tx_type_in_set_intra(set, tx_type) { tx_type } else { Av1TxType::DctDct }
+    if tx_type_in_set_intra(set, tx_type) {
+        tx_type
+    } else {
+        Av1TxType::DctDct
+    }
 }
 
 fn tx1d_pair_to_type(col: tables::Tx1D, row: tables::Tx1D) -> Av1TxType {
@@ -1956,14 +2900,25 @@ fn get_scan(tx_sz: u8, tx_type: Av1TxType) -> &'static [u16] {
     if tx_sz == 18 {
         return &tables::scan::DEFAULT_SCAN_32X16;
     }
-    if tables::TX_SIZE_SQR_UP.get(usize::from(tx_sz)).copied().unwrap_or(0) == 4 {
+    if tables::TX_SIZE_SQR_UP
+        .get(usize::from(tx_sz))
+        .copied()
+        .unwrap_or(0)
+        == 4
+    {
         return &tables::scan::DEFAULT_SCAN_32X32;
     }
     if tx_type == Av1TxType::Idtx {
         return default_scan(tx_sz);
     }
-    let prefer_row = matches!(tx_type, Av1TxType::VDct | Av1TxType::VAdst | Av1TxType::VFlipadst);
-    let prefer_col = matches!(tx_type, Av1TxType::HDct | Av1TxType::HAdst | Av1TxType::HFlipadst);
+    let prefer_row = matches!(
+        tx_type,
+        Av1TxType::VDct | Av1TxType::VAdst | Av1TxType::VFlipadst
+    );
+    let prefer_col = matches!(
+        tx_type,
+        Av1TxType::HDct | Av1TxType::HAdst | Av1TxType::HFlipadst
+    );
     if prefer_row {
         mrow_scan(tx_sz)
     } else if prefer_col {
@@ -2026,7 +2981,14 @@ fn mcol_scan(tx_sz: u8) -> &'static [u16] {
 fn read_eob_pt(ts: &mut TileState<'_>, eob_multisize: i32, ptype: usize, ctx: usize) -> i32 {
     macro_rules! read_eob {
         ($field:ident) => {{
-            let mut cdf = ts.cdf.$field.get(ptype).and_then(|r| r.get(ctx)).copied().unwrap_or_default().to_vec();
+            let mut cdf = ts
+                .cdf
+                .$field
+                .get(ptype)
+                .and_then(|r| r.get(ctx))
+                .copied()
+                .unwrap_or_default()
+                .to_vec();
             let v = ts.sd.read_symbol(&mut cdf);
             if let Some(a) = ts.cdf.$field.get_mut(ptype)
                 && let Some(slot) = a.get_mut(ctx)
@@ -2040,7 +3002,13 @@ fn read_eob_pt(ts: &mut TileState<'_>, eob_multisize: i32, ptype: usize, ctx: us
     }
     macro_rules! read_eob_noctx {
         ($field:ident) => {{
-            let mut cdf = ts.cdf.$field.get(ptype).copied().unwrap_or_default().to_vec();
+            let mut cdf = ts
+                .cdf
+                .$field
+                .get(ptype)
+                .copied()
+                .unwrap_or_default()
+                .to_vec();
             let v = ts.sd.read_symbol(&mut cdf);
             if let Some(slot) = ts.cdf.$field.get_mut(ptype) {
                 for (d, s) in slot.iter_mut().zip(cdf.iter()) {
@@ -2061,9 +3029,28 @@ fn read_eob_pt(ts: &mut TileState<'_>, eob_multisize: i32, ptype: usize, ctx: us
     }
 }
 
-fn reconstruct(ctx: &mut FrameCtx, _ts: &mut TileState<'_>, plane: usize, start_x: usize, start_y: usize, tx_sz: u8, tx_type: Av1TxType, lossless: bool) {
-    let log2_w = u32::from(tables::TX_WIDTH_LOG2.get(usize::from(tx_sz)).copied().unwrap_or(2));
-    let log2_h = u32::from(tables::TX_HEIGHT_LOG2.get(usize::from(tx_sz)).copied().unwrap_or(2));
+fn reconstruct(
+    ctx: &mut FrameCtx,
+    _ts: &mut TileState<'_>,
+    plane: usize,
+    start_x: usize,
+    start_y: usize,
+    tx_sz: u8,
+    tx_type: Av1TxType,
+    lossless: bool,
+) {
+    let log2_w = u32::from(
+        tables::TX_WIDTH_LOG2
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(2),
+    );
+    let log2_h = u32::from(
+        tables::TX_HEIGHT_LOG2
+            .get(usize::from(tx_sz))
+            .copied()
+            .unwrap_or(2),
+    );
     let w = 1usize << log2_w;
     let h = 1usize << log2_h;
     let tw = w.min(32);
@@ -2085,7 +3072,10 @@ fn reconstruct(ctx: &mut FrameCtx, _ts: &mut TileState<'_>, plane: usize, start_
             let idx = i * tw + j;
             let dq = i64::from(quant.get(idx).copied().unwrap_or(0)) * i64::from(q);
             let sign = if dq < 0 { -1i64 } else { 1 };
-            #[allow(clippy::integer_division, reason = "7.12.3's own dequantized-coefficient formula: dq2 = Round2Signed style division by dqDenom")]
+            #[allow(
+                clippy::integer_division,
+                reason = "7.12.3's own dequantized-coefficient formula: dq2 = Round2Signed style division by dqDenom"
+            )]
             let dq2 = sign * ((dq.abs()) & 0x00FF_FFFF) / i64::from(dq_denom.max(1));
             let bound = 1i64 << (7 + i32::from(ctx.bit_depth));
             let clamped = dq2.clamp(-bound, bound - 1);
@@ -2096,7 +3086,15 @@ fn reconstruct(ctx: &mut FrameCtx, _ts: &mut TileState<'_>, plane: usize, start_
     }
 
     let mut residual_buf = vec![0i32; w * h];
-    transform::inverse_transform_2d(tx_type, log2_w, log2_h, lossless, ctx.bit_depth, &dequant, &mut residual_buf);
+    transform::inverse_transform_2d(
+        tx_type,
+        log2_w,
+        log2_h,
+        lossless,
+        ctx.bit_depth,
+        &dequant,
+        &mut residual_buf,
+    );
 
     let flip_ud = tx_type.flip_ud();
     let flip_lr = tx_type.flip_lr();
@@ -2121,14 +3119,34 @@ fn dequant_values(ctx: &FrameCtx, plane: usize, base_q_idx: i32) -> (i32, i32) {
         1 => (ctx.header.quant.delta_q_u_dc, ctx.header.quant.delta_q_u_ac),
         _ => (ctx.header.quant.delta_q_v_dc, ctx.header.quant.delta_q_v_ac),
     };
-    let dc_q = tables::quant::DC_QLOOKUP.get(depth_idx).and_then(|r| r.get(usize::try_from((base_q_idx + dc_delta).clamp(0, 255)).unwrap_or(0))).copied().unwrap_or(4);
-    let ac_q = tables::quant::AC_QLOOKUP.get(depth_idx).and_then(|r| r.get(usize::try_from((base_q_idx + ac_delta).clamp(0, 255)).unwrap_or(0))).copied().unwrap_or(4);
+    let dc_q = tables::quant::DC_QLOOKUP
+        .get(depth_idx)
+        .and_then(|r| r.get(usize::try_from((base_q_idx + dc_delta).clamp(0, 255)).unwrap_or(0)))
+        .copied()
+        .unwrap_or(4);
+    let ac_q = tables::quant::AC_QLOOKUP
+        .get(depth_idx)
+        .and_then(|r| r.get(usize::try_from((base_q_idx + ac_delta).clamp(0, 255)).unwrap_or(0)))
+        .copied()
+        .unwrap_or(4);
     (i32::from(dc_q), i32::from(ac_q))
 }
 
-fn pic_to_frame(budget: &mut Budget, seq: &SequenceHeader, fh: &FrameHeader, pic: &Picture, mi_cols: usize, mi_rows: usize) -> Result<Frame> {
+fn pic_to_frame(
+    budget: &mut Budget,
+    seq: &SequenceHeader,
+    fh: &FrameHeader,
+    pic: &Picture,
+    mi_cols: usize,
+    mi_rows: usize,
+) -> Result<Frame> {
     let cc = &seq.color_config;
-    let name = match (cc.bit_depth, cc.mono_chrome, cc.subsampling_x, cc.subsampling_y) {
+    let name = match (
+        cc.bit_depth,
+        cc.mono_chrome,
+        cc.subsampling_x,
+        cc.subsampling_y,
+    ) {
         (8, true, _, _) => "gray".to_string(),
         (8, false, true, true) => "yuv420p".to_string(),
         (8, false, true, false) => "yuv422p".to_string(),
@@ -2139,29 +3157,70 @@ fn pic_to_frame(budget: &mut Budget, seq: &SequenceHeader, fh: &FrameHeader, pic
         (b, false, false, false) => format!("yuv444p{b}le"),
         (b, false, false, true) => format!("yuv440p{b}le"),
     };
-    let pix_fmt = PixFmt::from_name(&name).map_err(|_| Error::InvalidData("vaco-codec-av1: unsupported pixel format"))?;
+    let pix_fmt = PixFmt::from_name(&name)
+        .map_err(|_| Error::InvalidData("vaco-codec-av1: unsupported pixel format"))?;
     let width = fh.size.upscaled_width;
     let height = fh.size.coded_height;
     let mut frame = Frame::alloc_video(budget, pix_fmt, width, height)?;
-    let (w, h) = (usize::try_from(width).unwrap_or(0), usize::try_from(height).unwrap_or(0));
-    #[allow(clippy::integer_division, reason = "chroma plane width/height at 4:2:0 subsampling: exact halving of the luma dimension")]
-    let cw = if cc.subsampling_x { mi_cols * 4 / 2 } else { mi_cols * 4 };
-    #[allow(clippy::integer_division, reason = "chroma plane width/height at 4:2:0 subsampling: exact halving of the luma dimension")]
-    let ch = if cc.subsampling_y { mi_rows * 4 / 2 } else { mi_rows * 4 };
+    let (w, h) = (
+        usize::try_from(width).unwrap_or(0),
+        usize::try_from(height).unwrap_or(0),
+    );
+    #[allow(
+        clippy::integer_division,
+        reason = "chroma plane width/height at 4:2:0 subsampling: exact halving of the luma dimension"
+    )]
+    let cw = if cc.subsampling_x {
+        mi_cols * 4 / 2
+    } else {
+        mi_cols * 4
+    };
+    #[allow(
+        clippy::integer_division,
+        reason = "chroma plane width/height at 4:2:0 subsampling: exact halving of the luma dimension"
+    )]
+    let ch = if cc.subsampling_y {
+        mi_rows * 4 / 2
+    } else {
+        mi_rows * 4
+    };
     blit(&pic.y, &mut frame, 0, w, h, cc.bit_depth);
     if !cc.mono_chrome {
         if let Some(u) = &pic.u {
-            blit(u, &mut frame, 1, cw.min(w.div_ceil(1 + usize::from(cc.subsampling_x))), ch.min(h.div_ceil(1 + usize::from(cc.subsampling_y))), cc.bit_depth);
+            blit(
+                u,
+                &mut frame,
+                1,
+                cw.min(w.div_ceil(1 + usize::from(cc.subsampling_x))),
+                ch.min(h.div_ceil(1 + usize::from(cc.subsampling_y))),
+                cc.bit_depth,
+            );
         }
         if let Some(v) = &pic.v {
-            blit(v, &mut frame, 2, cw.min(w.div_ceil(1 + usize::from(cc.subsampling_x))), ch.min(h.div_ceil(1 + usize::from(cc.subsampling_y))), cc.bit_depth);
+            blit(
+                v,
+                &mut frame,
+                2,
+                cw.min(w.div_ceil(1 + usize::from(cc.subsampling_x))),
+                ch.min(h.div_ceil(1 + usize::from(cc.subsampling_y))),
+                cc.bit_depth,
+            );
         }
     }
     Ok(frame)
 }
 
-fn blit(src: &Plane, frame: &mut Frame, plane_index: usize, width: usize, height: usize, bit_depth: u8) {
-    let Some(mut dst) = frame.plane_mut(plane_index) else { return };
+fn blit(
+    src: &Plane,
+    frame: &mut Frame,
+    plane_index: usize,
+    width: usize,
+    height: usize,
+    bit_depth: u8,
+) {
+    let Some(mut dst) = frame.plane_mut(plane_index) else {
+        return;
+    };
     let two_bytes = bit_depth > 8;
     for y in 0..height {
         let Some(row) = dst.row_mut(y) else { continue };

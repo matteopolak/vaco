@@ -25,7 +25,8 @@ type HuffMap = HashMap<(u8, u16), u16>;
 /// RFC 1951 §3.2.5: length code base values for symbols 257..=285, indexed
 /// from 0.
 const LEN_BASE: [u16; 29] = [
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258,
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258,
 ];
 /// Extra bits read after each length code, same indexing as [`LEN_BASE`].
 const LEN_EXTRA: [u8; 29] = [
@@ -33,16 +34,19 @@ const LEN_EXTRA: [u8; 29] = [
 ];
 /// RFC 1951 §3.2.5: distance code base values for symbols 0..=29.
 const DIST_BASE: [u16; 30] = [
-    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073, 4097, 6145,
-    8193, 12289, 16385, 24577,
+    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
+    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
 ];
 /// Extra bits read after each distance code, same indexing as [`DIST_BASE`].
 const DIST_EXTRA: [u8; 30] = [
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13, 13,
+    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
+    13,
 ];
 /// RFC 1951 §3.2.7: the order code-length code lengths are transmitted in,
 /// for a dynamic-Huffman block header.
-const CLEN_ORDER: [u8; 19] = [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+const CLEN_ORDER: [u8; 19] = [
+    16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+];
 
 struct BitReader<'a> {
     data: &'a [u8],
@@ -98,7 +102,9 @@ impl<'a> BitReader<'a> {
         let s = self
             .data
             .get(self.byte_pos..self.byte_pos + 2)
-            .ok_or(ZipError::Malformed("stored-block length ran past end of stream"))?;
+            .ok_or(ZipError::Malformed(
+                "stored-block length ran past end of stream",
+            ))?;
         let arr: [u8; 2] = s
             .try_into()
             .map_err(|_| ZipError::Malformed("stored-block length ran past end of stream"))?;
@@ -146,13 +152,15 @@ fn build_huffman(lengths: &[u8]) -> Result<HuffMap, ZipError> {
         if l == 0 {
             continue;
         }
-        let symbol = u16::try_from(sym).map_err(|_| ZipError::Malformed("huffman alphabet too large"))?;
+        let symbol =
+            u16::try_from(sym).map_err(|_| ZipError::Malformed("huffman alphabet too large"))?;
         let slot = next_code
             .get_mut(usize::from(l))
             .ok_or(ZipError::Malformed("huffman code length over 15 bits"))?;
         let this_code = *slot;
         *slot += 1;
-        let code16 = u16::try_from(this_code).map_err(|_| ZipError::Malformed("huffman code overflowed 16 bits"))?;
+        let code16 = u16::try_from(this_code)
+            .map_err(|_| ZipError::Malformed("huffman code overflowed 16 bits"))?;
         map.insert((l, code16), symbol);
     }
     Ok(map)
@@ -181,7 +189,9 @@ fn decode_symbol(br: &mut BitReader<'_>, map: &HuffMap) -> Result<u16, ZipError>
             return Ok(sym);
         }
     }
-    Err(ZipError::Malformed("no huffman code in this table matched the bitstream"))
+    Err(ZipError::Malformed(
+        "no huffman code in this table matched the bitstream",
+    ))
 }
 
 /// Decode one compressed block's symbol stream (fixed or dynamic — the two
@@ -206,13 +216,21 @@ fn inflate_block(
             return Ok(());
         }
         let li = usize::from(sym - 257);
-        let base = *LEN_BASE.get(li).ok_or(ZipError::Malformed("length code out of range"))?;
-        let extra = *LEN_EXTRA.get(li).ok_or(ZipError::Malformed("length code out of range"))?;
+        let base = *LEN_BASE
+            .get(li)
+            .ok_or(ZipError::Malformed("length code out of range"))?;
+        let extra = *LEN_EXTRA
+            .get(li)
+            .ok_or(ZipError::Malformed("length code out of range"))?;
         let length = u32::from(base) + br.bits(u32::from(extra))?;
 
         let dsym = usize::from(decode_symbol(br, dist_map)?);
-        let dbase = *DIST_BASE.get(dsym).ok_or(ZipError::Malformed("distance code out of range"))?;
-        let dextra = *DIST_EXTRA.get(dsym).ok_or(ZipError::Malformed("distance code out of range"))?;
+        let dbase = *DIST_BASE
+            .get(dsym)
+            .ok_or(ZipError::Malformed("distance code out of range"))?;
+        let dextra = *DIST_EXTRA
+            .get(dsym)
+            .ok_or(ZipError::Malformed("distance code out of range"))?;
         let distance = usize::try_from(u32::from(dbase) + br.bits(u32::from(dextra))?)
             .map_err(|_| ZipError::Malformed("distance overflow"))?;
         if distance == 0 || distance > out.len() {
@@ -227,10 +245,9 @@ fn inflate_block(
                 .len()
                 .checked_sub(distance)
                 .ok_or(ZipError::Malformed("back-reference underflowed the output"))?;
-            let byte = *out
-                .as_slice()
-                .get(idx)
-                .ok_or(ZipError::Malformed("back-reference indexed past the output"))?;
+            let byte = *out.as_slice().get(idx).ok_or(ZipError::Malformed(
+                "back-reference indexed past the output",
+            ))?;
             out.push_slice(budget, &[byte])?;
         }
     }
@@ -248,7 +265,11 @@ fn inflate_block(
 /// (reserved block type, a Huffman code no table entry matches, a
 /// back-reference pointing before the start of output); [`ZipError::Limit`]
 /// if the budget or fuel cap is hit.
-pub(super) fn inflate(data: &[u8], declared_len: usize, budget: &mut Budget) -> Result<Vec<u8>, ZipError> {
+pub(super) fn inflate(
+    data: &[u8],
+    declared_len: usize,
+    budget: &mut Budget,
+) -> Result<Vec<u8>, ZipError> {
     let mut br = BitReader::new(data);
     let mut out = budget.incremental::<u8>(declared_len);
     loop {
@@ -290,9 +311,9 @@ pub(super) fn inflate(data: &[u8], declared_len: usize, budget: &mut Budget) -> 
                         0..=15 => lengths.push(u8::try_from(sym).unwrap_or(0)),
                         16 => {
                             let rep = br.bits(2)? + 3;
-                            let prev = *lengths
-                                .last()
-                                .ok_or(ZipError::Malformed("repeat-previous code with no previous length"))?;
+                            let prev = *lengths.last().ok_or(ZipError::Malformed(
+                                "repeat-previous code with no previous length",
+                            ))?;
                             for _ in 0..rep {
                                 lengths.push(prev);
                             }
@@ -305,15 +326,19 @@ pub(super) fn inflate(data: &[u8], declared_len: usize, budget: &mut Budget) -> 
                             let rep = usize::try_from(br.bits(7)? + 11).unwrap_or(0);
                             lengths.extend(std::iter::repeat_n(0_u8, rep));
                         }
-                        _ => return Err(ZipError::Malformed("code-length alphabet has no symbol above 18")),
+                        _ => {
+                            return Err(ZipError::Malformed(
+                                "code-length alphabet has no symbol above 18",
+                            ));
+                        }
                     }
                 }
-                let lit_lengths = lengths
-                    .get(..hlit)
-                    .ok_or(ZipError::Malformed("code length sequence shorter than HLIT"))?;
-                let dist_lengths = lengths
-                    .get(hlit..hlit + hdist)
-                    .ok_or(ZipError::Malformed("code length sequence shorter than HLIT+HDIST"))?;
+                let lit_lengths = lengths.get(..hlit).ok_or(ZipError::Malformed(
+                    "code length sequence shorter than HLIT",
+                ))?;
+                let dist_lengths = lengths.get(hlit..hlit + hdist).ok_or(ZipError::Malformed(
+                    "code length sequence shorter than HLIT+HDIST",
+                ))?;
                 let lit_map = build_huffman(lit_lengths)?;
                 let dist_map = build_huffman(dist_lengths)?;
                 inflate_block(&mut br, &lit_map, &dist_map, &mut out, budget)?;
@@ -345,7 +370,9 @@ mod tests {
     #[test]
     fn decompresses_a_known_fixed_huffman_stream() {
         // zlib.compressobj(level=9, wbits=-15).compress(b"hello world") + flush()
-        let compressed: &[u8] = &[0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x28, 0xcf, 0x2f, 0xca, 0x49, 0x01, 0x00];
+        let compressed: &[u8] = &[
+            0xcb, 0x48, 0xcd, 0xc9, 0xc9, 0x57, 0x28, 0xcf, 0x2f, 0xca, 0x49, 0x01, 0x00,
+        ];
         let mut budget = Budget::new(Limits::strict());
         let out = inflate(compressed, 11, &mut budget).expect("inflates");
         assert_eq!(out, b"hello world");
@@ -376,25 +403,30 @@ mod tests {
     #[test]
     fn decompresses_a_dynamic_huffman_stream() {
         let compressed: &[u8] = &[
-            0x75, 0x95, 0x5b, 0xae, 0xc3, 0x20, 0x0c, 0x44, 0xb7, 0x92, 0xad, 0x81, 0x2e, 0x4a, 0xab, 0x9b, 0xb6,
-            0x91, 0x9a, 0x2f, 0x56, 0x5f, 0x95, 0x29, 0xf8, 0xd8, 0x24, 0x1f, 0x21, 0xc4, 0xd8, 0xe3, 0xf1, 0x8b,
-            0xac, 0xe9, 0xf1, 0x48, 0xcb, 0x7f, 0xda, 0xf7, 0xb4, 0xe4, 0x72, 0xa4, 0xa5, 0xec, 0xef, 0xfb, 0xf6,
-            0x7a, 0xea, 0xe3, 0xb8, 0xc5, 0xf5, 0xfb, 0xfc, 0x95, 0xed, 0x48, 0x54, 0x48, 0xdb, 0x7e, 0xd3, 0xd1,
-            0xf7, 0x11, 0x98, 0x64, 0x3f, 0xa3, 0x1f, 0xa6, 0x0c, 0xe1, 0xac, 0x9a, 0x35, 0xd7, 0xfb, 0xcb, 0x81,
-            0xca, 0xcc, 0x54, 0xdb, 0xb1, 0x84, 0xa4, 0x06, 0x71, 0x35, 0x33, 0xea, 0x75, 0x1e, 0x06, 0xdd, 0x6c,
-            0x1a, 0x95, 0xb5, 0x25, 0xc2, 0x45, 0x5f, 0x87, 0x46, 0x80, 0xef, 0x5a, 0xfd, 0xad, 0x88, 0xc0, 0xe2,
-            0x3c, 0x0d, 0x16, 0x87, 0x39, 0x34, 0x1f, 0x6d, 0x97, 0x43, 0x38, 0xa0, 0x36, 0x80, 0x6b, 0x4c, 0xbc,
-            0x2b, 0x82, 0xa3, 0xc4, 0xd5, 0x90, 0x80, 0x27, 0x4a, 0x32, 0xd5, 0xbe, 0x89, 0x19, 0xab, 0xe3, 0x27,
-            0x28, 0x30, 0xe8, 0xfe, 0x9a, 0x0a, 0x43, 0x1e, 0x76, 0xf0, 0x16, 0x60, 0xc9, 0x1e, 0xe8, 0xd0, 0x1a,
-            0x31, 0x43, 0x29, 0xf4, 0x8d, 0x01, 0x33, 0x58, 0x30, 0x24, 0x29, 0xa1, 0x82, 0x91, 0x0e, 0x25, 0xc8,
-            0x56, 0x3e, 0xd7, 0x27, 0x79, 0x14, 0xe6, 0x3a, 0xdd, 0xbe, 0x2f, 0x72, 0x09, 0xd0, 0x75, 0x9a, 0x2c,
-            0x56, 0xc2, 0xe5, 0xd0, 0x8b, 0xfa, 0x1b, 0xf1, 0xb3, 0xe5, 0xf3, 0xcc, 0xc4, 0xe5, 0xe9, 0x84, 0x96,
-            0x73, 0xc6, 0x81, 0x2c, 0xa1, 0x11, 0xac, 0x8c, 0xa2, 0xa4, 0x6f, 0xed, 0x43, 0xab, 0xc7, 0x8a, 0xb1,
-            0xdd, 0xc3, 0x2c, 0xa3, 0x3c, 0x33, 0x77, 0x81, 0x3b, 0xf7, 0xa4, 0xee, 0xf8, 0x7b, 0x1b, 0x83, 0xf6,
-            0xf2, 0xe9, 0x3e, 0x91, 0x12, 0xe3, 0x16, 0xd9, 0x15, 0xf7, 0xe0, 0xe9, 0xf5, 0x63, 0xe3, 0x19, 0x93,
-            0x46, 0x48, 0x94, 0x65, 0x4a, 0x36, 0xfb, 0x06, 0xed, 0x3e, 0x5f, 0x4c, 0x4c, 0x43, 0x3d, 0x6f, 0xa5,
-            0x8b, 0xda, 0xba, 0x59, 0x85, 0x53, 0x14, 0x08, 0x2d, 0x33, 0x35, 0xe2, 0x74, 0x31, 0x74, 0xf4, 0x38,
-            0x9d, 0x4e, 0x6e, 0x4b, 0xbe, 0xba, 0xec, 0x2f, 0x72, 0x1c, 0xff, 0x01, 0x2e, 0x77, 0xa0, 0xf4, 0x01,
+            0x75, 0x95, 0x5b, 0xae, 0xc3, 0x20, 0x0c, 0x44, 0xb7, 0x92, 0xad, 0x81, 0x2e, 0x4a,
+            0xab, 0x9b, 0xb6, 0x91, 0x9a, 0x2f, 0x56, 0x5f, 0x95, 0x29, 0xf8, 0xd8, 0x24, 0x1f,
+            0x21, 0xc4, 0xd8, 0xe3, 0xf1, 0x8b, 0xac, 0xe9, 0xf1, 0x48, 0xcb, 0x7f, 0xda, 0xf7,
+            0xb4, 0xe4, 0x72, 0xa4, 0xa5, 0xec, 0xef, 0xfb, 0xf6, 0x7a, 0xea, 0xe3, 0xb8, 0xc5,
+            0xf5, 0xfb, 0xfc, 0x95, 0xed, 0x48, 0x54, 0x48, 0xdb, 0x7e, 0xd3, 0xd1, 0xf7, 0x11,
+            0x98, 0x64, 0x3f, 0xa3, 0x1f, 0xa6, 0x0c, 0xe1, 0xac, 0x9a, 0x35, 0xd7, 0xfb, 0xcb,
+            0x81, 0xca, 0xcc, 0x54, 0xdb, 0xb1, 0x84, 0xa4, 0x06, 0x71, 0x35, 0x33, 0xea, 0x75,
+            0x1e, 0x06, 0xdd, 0x6c, 0x1a, 0x95, 0xb5, 0x25, 0xc2, 0x45, 0x5f, 0x87, 0x46, 0x80,
+            0xef, 0x5a, 0xfd, 0xad, 0x88, 0xc0, 0xe2, 0x3c, 0x0d, 0x16, 0x87, 0x39, 0x34, 0x1f,
+            0x6d, 0x97, 0x43, 0x38, 0xa0, 0x36, 0x80, 0x6b, 0x4c, 0xbc, 0x2b, 0x82, 0xa3, 0xc4,
+            0xd5, 0x90, 0x80, 0x27, 0x4a, 0x32, 0xd5, 0xbe, 0x89, 0x19, 0xab, 0xe3, 0x27, 0x28,
+            0x30, 0xe8, 0xfe, 0x9a, 0x0a, 0x43, 0x1e, 0x76, 0xf0, 0x16, 0x60, 0xc9, 0x1e, 0xe8,
+            0xd0, 0x1a, 0x31, 0x43, 0x29, 0xf4, 0x8d, 0x01, 0x33, 0x58, 0x30, 0x24, 0x29, 0xa1,
+            0x82, 0x91, 0x0e, 0x25, 0xc8, 0x56, 0x3e, 0xd7, 0x27, 0x79, 0x14, 0xe6, 0x3a, 0xdd,
+            0xbe, 0x2f, 0x72, 0x09, 0xd0, 0x75, 0x9a, 0x2c, 0x56, 0xc2, 0xe5, 0xd0, 0x8b, 0xfa,
+            0x1b, 0xf1, 0xb3, 0xe5, 0xf3, 0xcc, 0xc4, 0xe5, 0xe9, 0x84, 0x96, 0x73, 0xc6, 0x81,
+            0x2c, 0xa1, 0x11, 0xac, 0x8c, 0xa2, 0xa4, 0x6f, 0xed, 0x43, 0xab, 0xc7, 0x8a, 0xb1,
+            0xdd, 0xc3, 0x2c, 0xa3, 0x3c, 0x33, 0x77, 0x81, 0x3b, 0xf7, 0xa4, 0xee, 0xf8, 0x7b,
+            0x1b, 0x83, 0xf6, 0xf2, 0xe9, 0x3e, 0x91, 0x12, 0xe3, 0x16, 0xd9, 0x15, 0xf7, 0xe0,
+            0xe9, 0xf5, 0x63, 0xe3, 0x19, 0x93, 0x46, 0x48, 0x94, 0x65, 0x4a, 0x36, 0xfb, 0x06,
+            0xed, 0x3e, 0x5f, 0x4c, 0x4c, 0x43, 0x3d, 0x6f, 0xa5, 0x8b, 0xda, 0xba, 0x59, 0x85,
+            0x53, 0x14, 0x08, 0x2d, 0x33, 0x35, 0xe2, 0x74, 0x31, 0x74, 0xf4, 0x38, 0x9d, 0x4e,
+            0x6e, 0x4b, 0xbe, 0xba, 0xec, 0x2f, 0x72, 0x1c, 0xff, 0x01, 0x2e, 0x77, 0xa0, 0xf4,
+            0x01,
         ];
         let mut budget = Budget::new(Limits::strict());
         let out = inflate(compressed, 1701, &mut budget).expect("inflates");

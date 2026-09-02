@@ -142,7 +142,13 @@ pub fn handshake(
     key_file_pem: Option<&str>,
     ca_file_pem: Option<&str>,
 ) -> Result<DtlsStream> {
-    handshake_over(UdpTransport::new(socket), opts, cert_file_pem, key_file_pem, ca_file_pem)
+    handshake_over(
+        UdpTransport::new(socket),
+        opts,
+        cert_file_pem,
+        key_file_pem,
+        ca_file_pem,
+    )
 }
 
 /// As [`handshake`], but over any caller-supplied [`Read`]/[`Write`]
@@ -231,7 +237,10 @@ mod tests {
         // Send garbage that is not a DTLS record from the "peer" side, then
         // let the handshake attempt read it back as a response.
         listener
-            .send_to(b"not dtls at all, sixteen bytes plus", client.local_addr().unwrap())
+            .send_to(
+                b"not dtls at all, sixteen bytes plus",
+                client.local_addr().unwrap(),
+            )
             .unwrap();
         client
             .set_read_timeout(Some(Duration::from_millis(500)))

@@ -194,7 +194,11 @@ fn fill_raw_h(window: &[[u8; 21]; 21], w: usize, h: usize, raw_h: &mut [[i32; 16
 /// `H[r][ox]`: the clipped horizontal half-pel sample (position `b`) at
 /// output row `r` and column `ox` -- `0..=h` rather than `0..h` because
 /// the `g`/`p`/`r` positions average against the *next* row's own `H`.
-#[allow(clippy::indexing_slicing, clippy::needless_range_loop, reason = "see fill_raw_h's own identical reason")]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::needless_range_loop,
+    reason = "see fill_raw_h's own identical reason"
+)]
 fn fill_h_plane(raw_h: &[[i32; 16]; 21], w: usize, h: usize, h_plane: &mut [[u8; 16]; 17]) {
     for r in 0..=h {
         for ox in 0..w {
@@ -207,7 +211,11 @@ fn fill_h_plane(raw_h: &[[i32; 16]; 21], w: usize, h: usize, h_plane: &mut [[u8;
 /// output row `oy` and column `c` -- `0..=w` for the same reason `H`
 /// above needs one extra row, one column short of the partition's own
 /// right edge.
-#[allow(clippy::indexing_slicing, clippy::needless_range_loop, reason = "see fill_raw_h's own identical reason")]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::needless_range_loop,
+    reason = "see fill_raw_h's own identical reason"
+)]
 fn fill_v_plane(window: &[[u8; 21]; 21], w: usize, h: usize, v_plane: &mut [[u8; 17]; 16]) {
     for oy in 0..h {
         for c in 0..=w {
@@ -226,7 +234,11 @@ fn fill_v_plane(window: &[[u8; 21]; 21], w: usize, h: usize, v_plane: &mut [[u8;
 /// `J[oy][ox]`: both axes half-pel -- position `j`'s own two-pass
 /// derivation, a second six-tap filter down the raw horizontal sums,
 /// rounded and clipped exactly once.
-#[allow(clippy::indexing_slicing, clippy::needless_range_loop, reason = "see fill_raw_h's own identical reason")]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::needless_range_loop,
+    reason = "see fill_raw_h's own identical reason"
+)]
 fn fill_j_plane(raw_h: &[[i32; 16]; 21], w: usize, h: usize, j_plane: &mut [[u8; 16]; 16]) {
     for oy in 0..h {
         for ox in 0..w {
@@ -478,7 +490,13 @@ pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
 /// ...)`/`Clip3(0, PicHeightInSamplesC - 1, ...)` edge clamping is what
 /// that wrapping applies.
 #[must_use]
-pub(crate) fn chroma_mc_sample<F: Fn(i32, i32) -> u8>(fetch: F, x: i32, y: i32, mv_x: i32, mv_y: i32) -> u8 {
+pub(crate) fn chroma_mc_sample<F: Fn(i32, i32) -> u8>(
+    fetch: F,
+    x: i32,
+    y: i32,
+    mv_x: i32,
+    mv_y: i32,
+) -> u8 {
     // eq. (8-180)..(8-183), the xC/yC-relative half already folded into
     // `x`/`y` by the caller: `xIntC`/`yIntC` is `x`/`y` plus the integer
     // part of the eighth-sample motion vector, `xFracC`/`yFracC` its low
@@ -657,7 +675,10 @@ mod tests {
         // (int_x = 0, frac_x = -1) decomposition would produce.
         let fetch = |x: i32, _y: i32| if x <= -1 { 0u8 } else { 255u8 };
         let got = chroma_mc_sample(fetch, 0, 0, -1, 0);
-        assert!(got > 200, "got={got}, expected close to the x=0 sample (255)");
+        assert!(
+            got > 200,
+            "got={got}, expected close to the x=0 sample (255)"
+        );
     }
 
     /// The whole point of batching: predicting a partition in one
@@ -684,7 +705,17 @@ mod tests {
             let v = (x * 7 + y * 13 + (x * y) % 5) % 256;
             u8::try_from(v).unwrap_or(0)
         };
-        for &(w, h) in &[(4usize, 4usize), (8, 4), (4, 8), (8, 8), (16, 8), (8, 16), (16, 16), (12, 4), (4, 12)] {
+        for &(w, h) in &[
+            (4usize, 4usize),
+            (8, 4),
+            (4, 8),
+            (8, 8),
+            (16, 8),
+            (8, 16),
+            (16, 16),
+            (12, 4),
+            (4, 12),
+        ] {
             for fx in 0..4u32 {
                 for fy in 0..4u32 {
                     // Two anchors: comfortably interior, and close enough to
@@ -700,7 +731,8 @@ mod tests {
                         luma_qpel_partition(fetch, ax, ay, w, h, fx, fy, &mut got);
                         for oy in 0..h {
                             for ox in 0..w {
-                                let want = luma_qpel_sample(fetch, ax + ox as i32, ay + oy as i32, fx, fy);
+                                let want =
+                                    luma_qpel_sample(fetch, ax + ox as i32, ay + oy as i32, fx, fy);
                                 assert_eq!(
                                     got[oy][ox], want,
                                     "w={w} h={h} fx={fx} fy={fy} anchor=({ax},{ay}) ox={ox} oy={oy}"

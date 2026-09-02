@@ -32,8 +32,7 @@ use vaco_core::Error as CoreError;
 use vaco_io::{MediaSink, MediaSource, PeekSource, RawSource, Seekability};
 use vaco_opts::{Dict, OptionsExt, Schema, schema_of};
 use vaco_protocol_core::{
-    Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result,
-    Url,
+    Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result, Url,
 };
 use vaco_time::{Instant, sleep};
 
@@ -61,7 +60,9 @@ fn options(opts: &Dict) -> Result<TcpOptions> {
 /// [`ProtocolEnv::rw_timeout`] when left at its default.
 fn effective_timeout(opts: &TcpOptions, env_timeout: Option<Duration>) -> Option<Duration> {
     if opts.timeout >= 0 {
-        Some(Duration::from_micros(u64::try_from(opts.timeout).unwrap_or(0)))
+        Some(Duration::from_micros(
+            u64::try_from(opts.timeout).unwrap_or(0),
+        ))
     } else {
         env_timeout
     }
@@ -133,8 +134,8 @@ pub fn connect(hp: &HostPort, opts: &TcpOptions, timeout: Option<Duration>) -> R
     let mut last_err: Option<ProtocolError> = None;
     for sockaddr in addrs {
         let domain = Domain::for_address(sockaddr);
-        let socket =
-            Socket::new(domain, Type::STREAM, Some(socket2::Protocol::TCP)).map_err(ProtocolError::from)?;
+        let socket = Socket::new(domain, Type::STREAM, Some(socket2::Protocol::TCP))
+            .map_err(ProtocolError::from)?;
         if let Some(local) = local_bind_addr(opts, domain)?
             && let Err(e) = socket.bind(&local.into())
         {
@@ -182,7 +183,9 @@ pub fn listen_accept(
         hp.port,
     );
     let listener = TcpListener::bind(bind_addr).map_err(ProtocolError::from)?;
-    listener.set_nonblocking(true).map_err(ProtocolError::from)?;
+    listener
+        .set_nonblocking(true)
+        .map_err(ProtocolError::from)?;
 
     let deadline = listen_timeout.map(|t| Instant::now().saturating_add(t));
     // Bounded by iteration count too, per `vaco-time`'s own guidance: on a
@@ -323,7 +326,9 @@ impl Protocol for TcpProtocol {
             connect(&hp, &opts, timeout)?
         };
         if let Some(t) = timeout {
-            stream.set_read_timeout(Some(t)).map_err(ProtocolError::from)?;
+            stream
+                .set_read_timeout(Some(t))
+                .map_err(ProtocolError::from)?;
         }
         Ok(Box::new(PeekSource::new(TcpSource::new(stream))))
     }
@@ -346,7 +351,9 @@ impl Protocol for TcpProtocol {
             connect(&hp, &opts, timeout)?
         };
         if let Some(t) = timeout {
-            stream.set_write_timeout(Some(t)).map_err(ProtocolError::from)?;
+            stream
+                .set_write_timeout(Some(t))
+                .map_err(ProtocolError::from)?;
         }
         Ok(Box::new(TcpSink::new(stream)))
     }

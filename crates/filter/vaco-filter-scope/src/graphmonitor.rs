@@ -145,7 +145,9 @@
 use vaco_core::{Duration, MediaType, Rational, Result, Rounding, Timestamp};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
-use vaco_filter_core::{FilterContext, FilterDesc, FilterFlags, LinkFormat, LinkView, NodeId, NodeView, Pad};
+use vaco_filter_core::{
+    FilterContext, FilterDesc, FilterFlags, LinkFormat, LinkView, NodeId, NodeView, Pad,
+};
 use vaco_frame::Frame;
 use vaco_opts::{OptionsExt as _, VideoRate};
 use vaco_pixfmt::PixFmt;
@@ -312,7 +314,11 @@ fn render(nodes: &[NodeView], links: &[LinkView]) -> Vec<Line> {
         for link in &inputs {
             let peer = node_label(nodes, link.src.node);
             let text = pad_line(&format!("in{}", link.dst.pad), peer, link);
-            lines.push(Line { top: y, left: MARGIN + INDENT, text });
+            lines.push(Line {
+                top: y,
+                left: MARGIN + INDENT,
+                text,
+            });
             drawn += 1;
             y += if drawn == total {
                 PITCH_BLOCK_GAP
@@ -325,9 +331,17 @@ fn render(nodes: &[NodeView], links: &[LinkView]) -> Vec<Line> {
         for link in &outputs {
             let peer = node_label(nodes, link.dst.node);
             let text = pad_line(&format!("out{}", link.src.pad), peer, link);
-            lines.push(Line { top: y, left: MARGIN + INDENT, text });
+            lines.push(Line {
+                top: y,
+                left: MARGIN + INDENT,
+                text,
+            });
             drawn += 1;
-            y += if drawn == total { PITCH_BLOCK_GAP } else { PITCH_SAME };
+            y += if drawn == total {
+                PITCH_BLOCK_GAP
+            } else {
+                PITCH_SAME
+            };
         }
     }
     lines
@@ -339,7 +353,14 @@ impl FrameFilter for Filter {
             .input_link(0)
             .map_or(Rational::UNDEFINED, LinkFormat::time_base);
         if let Some(mut out) = ctx.output_link(0).cloned() {
-            if let LinkFormat::Video { width, height, time_base, frame_rate, .. } = &mut out {
+            if let LinkFormat::Video {
+                width,
+                height,
+                time_base,
+                frame_rate,
+                ..
+            } = &mut out
+            {
                 *width = self.width;
                 *height = self.height;
                 *time_base = self.out_base;
@@ -373,7 +394,9 @@ impl FrameFilter for Filter {
         }
         self.next_due = slot.saturating_add(1);
 
-        let mut out = ctx.pool().acquire_video(PixFmt::Gray8, self.width, self.height)?;
+        let mut out = ctx
+            .pool()
+            .acquire_video(PixFmt::Gray8, self.width, self.height)?;
         if let Some(mut plane) = out.plane_mut(0) {
             plane.fill(0);
         }
@@ -466,15 +489,23 @@ pub(crate) fn create_audio(req: &Instantiate<'_>) -> std::result::Result<Instanc
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
-    use vaco_filter_core::link::{Direction, PadRef};
-    use vaco_filter_core::link::LinkStats;
     use vaco_filter_core::LinkId;
+    use vaco_filter_core::link::LinkStats;
+    use vaco_filter_core::link::{Direction, PadRef};
 
     fn link(src: NodeId, src_pad: u32, dst: NodeId, dst_pad: u32, media: MediaType) -> LinkView {
         LinkView {
             id: LinkId(0),
-            src: PadRef { node: src, direction: Direction::Output, pad: src_pad },
-            dst: PadRef { node: dst, direction: Direction::Input, pad: dst_pad },
+            src: PadRef {
+                node: src,
+                direction: Direction::Output,
+                pad: src_pad,
+            },
+            dst: PadRef {
+                node: dst,
+                direction: Direction::Input,
+                pad: dst_pad,
+            },
             media,
             queued: 0,
             capacity: 8,
@@ -485,9 +516,19 @@ mod tests {
 
     #[test]
     fn creatable_with_defaults() {
-        let req = Instantiate { name: "graphmonitor", instance: "graphmonitor", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "graphmonitor",
+            instance: "graphmonitor",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_ok());
-        let req = Instantiate { name: "agraphmonitor", instance: "agraphmonitor", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "agraphmonitor",
+            instance: "agraphmonitor",
+            args: None,
+            arguments: &[],
+        };
         assert!(create_audio(&req).is_ok());
     }
 
@@ -524,8 +565,16 @@ mod tests {
         let a = NodeId(0);
         let b = NodeId(1);
         let nodes = vec![
-            NodeView { id: a, label: "src".to_owned(), filter_name: "testsrc" },
-            NodeView { id: b, label: "scale_0".to_owned(), filter_name: "scale" },
+            NodeView {
+                id: a,
+                label: "src".to_owned(),
+                filter_name: "testsrc",
+            },
+            NodeView {
+                id: b,
+                label: "scale_0".to_owned(),
+                filter_name: "scale",
+            },
         ];
         let links = vec![link(a, 0, b, 0, MediaType::Video)];
         let lines = render(&nodes, &links);
@@ -558,9 +607,21 @@ mod tests {
         let b = NodeId(1);
         let c = NodeId(2);
         let nodes = vec![
-            NodeView { id: a, label: "src".to_owned(), filter_name: "testsrc" },
-            NodeView { id: b, label: "mid".to_owned(), filter_name: "scale" },
-            NodeView { id: c, label: "sink".to_owned(), filter_name: "nullsink" },
+            NodeView {
+                id: a,
+                label: "src".to_owned(),
+                filter_name: "testsrc",
+            },
+            NodeView {
+                id: b,
+                label: "mid".to_owned(),
+                filter_name: "scale",
+            },
+            NodeView {
+                id: c,
+                label: "sink".to_owned(),
+                filter_name: "nullsink",
+            },
         ];
         let links = vec![
             link(a, 0, b, 0, MediaType::Video),
@@ -570,8 +631,14 @@ mod tests {
         // `mid`'s own in0 (from `src`) and out0 (to `sink`) — named by peer
         // to avoid matching `sink`'s own in0 or `src`'s own out0, which
         // also start with the same prefixes.
-        let in0 = lines.iter().find(|l| l.text.starts_with(b"in0: src")).unwrap();
-        let out0 = lines.iter().find(|l| l.text.starts_with(b"out0: sink")).unwrap();
+        let in0 = lines
+            .iter()
+            .find(|l| l.text.starts_with(b"in0: src"))
+            .unwrap();
+        let out0 = lines
+            .iter()
+            .find(|l| l.text.starts_with(b"out0: sink"))
+            .unwrap();
         assert_eq!(out0.top - in0.top, PITCH_DIRECTION_CHANGE);
     }
 
@@ -582,8 +649,16 @@ mod tests {
         let a = NodeId(0);
         let b = NodeId(1);
         let nodes = vec![
-            NodeView { id: a, label: "one".to_owned(), filter_name: "f" },
-            NodeView { id: b, label: "two".to_owned(), filter_name: "g" },
+            NodeView {
+                id: a,
+                label: "one".to_owned(),
+                filter_name: "f",
+            },
+            NodeView {
+                id: b,
+                label: "two".to_owned(),
+                filter_name: "g",
+            },
         ];
         let links = vec![link(a, 0, b, 0, MediaType::Video)];
         let lines = render(&nodes, &links);
@@ -599,8 +674,16 @@ mod tests {
         let a = NodeId(0);
         let b = NodeId(1);
         let nodes = vec![
-            NodeView { id: a, label: "isolated".to_owned(), filter_name: "f" },
-            NodeView { id: b, label: "next".to_owned(), filter_name: "g" },
+            NodeView {
+                id: a,
+                label: "isolated".to_owned(),
+                filter_name: "f",
+            },
+            NodeView {
+                id: b,
+                label: "next".to_owned(),
+                filter_name: "g",
+            },
         ];
         let lines = render(&nodes, &[]);
         assert_eq!(lines.len(), 2);

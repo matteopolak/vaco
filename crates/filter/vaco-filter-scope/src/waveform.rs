@@ -105,7 +105,12 @@ impl FrameFilter for Filter {
         let Some(mut out) = ctx.output_link(0).cloned() else {
             return Ok(());
         };
-        if let LinkFormat::Video { width: w, height: h, .. } = &mut out {
+        if let LinkFormat::Video {
+            width: w,
+            height: h,
+            ..
+        } = &mut out
+        {
             *w = width;
             *h = LEVELS;
         }
@@ -157,7 +162,9 @@ impl FrameFilter for Filter {
         let mut acc = vec![0u32; usize::try_from(pw.max(0)).unwrap_or(0) * 256];
         for y in 0..ph {
             let Ok(uy) = usize::try_from(y) else { continue };
-            let Some(row) = src_plane.row(uy) else { continue };
+            let Some(row) = src_plane.row(uy) else {
+                continue;
+            };
             for x in 0..pw {
                 let Ok(ux) = usize::try_from(x) else { continue };
                 let Some(&v) = row.get(ux) else { continue };

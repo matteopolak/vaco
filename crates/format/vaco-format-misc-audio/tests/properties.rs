@@ -7,10 +7,12 @@
 use proptest::prelude::*;
 use vaco_codec_core::CodecParameters;
 use vaco_core::{Error, MediaType, Rational};
-use vaco_format_core::discovery::NoParsers;
 use vaco_format_core::DemuxerDesc;
+use vaco_format_core::discovery::NoParsers;
 use vaco_format_misc_audio::block::{BlockDemuxer, DEFAULT_TARGET_PACKET_BYTES};
-use vaco_format_misc_audio::{adx, amr, g723, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xa, xwma};
+use vaco_format_misc_audio::{
+    adx, amr, g723, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xa, xwma,
+};
 use vaco_io::{IoContext, IoOptions, MemorySource};
 use vaco_limits::{Budget, Limits};
 

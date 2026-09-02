@@ -113,15 +113,15 @@ use crate::transform::chroma_qp;
 /// DEFAULT_INTRA_TC_OFFSET` (`51 + 1 + 2`) entries, indexed by
 /// `Clip3(0, 53, qp + 2*(bS-1) + tcOffsetDiv2*2)`.
 const TC_TABLE: [i32; 54] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4,
-    5, 5, 6, 6, 7, 8, 9, 10, 11, 13, 14, 16, 18, 20, 22, 24,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3,
+    3, 3, 3, 4, 4, 4, 5, 5, 6, 6, 7, 8, 9, 10, 11, 13, 14, 16, 18, 20, 22, 24,
 ];
 
 /// HM's `sm_betaTable`, `TComLoopFilter.cpp` — `MAX_QP + 1` (`52`) entries,
 /// indexed by `Clip3(0, 51, qp + betaOffsetDiv2*2)`.
 const BETA_TABLE: [i32; 52] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 24, 26,
-    28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+    20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64,
 ];
 
 /// `Clip3(-c, c, v)`, clause 8.7.2.3/8.7.2.4's own bound on a filter delta.
@@ -136,13 +136,19 @@ fn clip3_sym(c: i32, v: i32) -> i32 {
 /// case before P-slices existed) and `0` when `bS == 1`.
 fn tc_for_qp(qp: i32, bs: i32, tc_offset_div2: i32) -> i32 {
     let idx = (qp + 2 * (bs - 1) + tc_offset_div2 * 2).clamp(0, 53);
-    TC_TABLE.get(usize::try_from(idx).unwrap_or(0)).copied().unwrap_or(0)
+    TC_TABLE
+        .get(usize::try_from(idx).unwrap_or(0))
+        .copied()
+        .unwrap_or(0)
 }
 
 /// `iIndexB`/`sm_betaTable[iIndexB]`.
 fn beta_for_qp(qp: i32, beta_offset_div2: i32) -> i32 {
     let idx = (qp + beta_offset_div2 * 2).clamp(0, 51);
-    BETA_TABLE.get(usize::try_from(idx).unwrap_or(0)).copied().unwrap_or(0)
+    BETA_TABLE
+        .get(usize::try_from(idx).unwrap_or(0))
+        .copied()
+        .unwrap_or(0)
 }
 
 /// `ClipBD`, this crate's 8-bit-only scope (see the crate doc) collapsing
@@ -179,7 +185,9 @@ fn sample(plane: &Plane, dir: Dir, across: i32, along: i32, k: i32) -> i32 {
         Dir::Vert => (across + k, along),
         Dir::Horiz => (along, across + k),
     };
-    let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return 0 };
+    let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
+        return 0;
+    };
     i32::from(plane.get(x, y))
 }
 
@@ -197,8 +205,19 @@ fn set_sample(plane: &mut Plane, dir: Dir, across: i32, along: i32, k: i32, v: u
 /// `xUseStrongFiltering`: whether the strong (`bS == 4`-shaped, but reached
 /// here purely from the `d`/`beta`/`tc` test — HEVC has no separate `bS == 4`
 /// concept the way H.264 does) filter applies to one line.
-#[allow(clippy::too_many_arguments, reason = "mirrors HM's own xUseStrongFiltering signature")]
-fn use_strong_filtering(plane: &Plane, dir: Dir, bx: i32, by: i32, d2: i32, beta: i32, tc: i32) -> bool {
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors HM's own xUseStrongFiltering signature"
+)]
+fn use_strong_filtering(
+    plane: &Plane,
+    dir: Dir,
+    bx: i32,
+    by: i32,
+    d2: i32,
+    beta: i32,
+    tc: i32,
+) -> bool {
     let p3 = sample(plane, dir, bx, by, -4);
     let p0 = sample(plane, dir, bx, by, -1);
     let q0 = sample(plane, dir, bx, by, 0);
@@ -209,8 +228,22 @@ fn use_strong_filtering(plane: &Plane, dir: Dir, bx: i32, by: i32, d2: i32, beta
 
 /// `xPelFilterLuma`: filter one line (one fixed position along the edge)
 /// against a precomputed `tc`/strong-or-weak decision.
-#[allow(clippy::too_many_arguments, reason = "mirrors HM's own xPelFilterLuma signature")]
-fn filter_luma_line(plane: &mut Plane, dir: Dir, bx: i32, by: i32, tc: i32, strong: bool, thr_cut: i32, filter_p: bool, filter_q: bool, bit_depth: u32) {
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors HM's own xPelFilterLuma signature"
+)]
+fn filter_luma_line(
+    plane: &mut Plane,
+    dir: Dir,
+    bx: i32,
+    by: i32,
+    tc: i32,
+    strong: bool,
+    thr_cut: i32,
+    filter_p: bool,
+    filter_q: bool,
+    bit_depth: u32,
+) {
     let p3 = sample(plane, dir, bx, by, -4);
     let p2 = sample(plane, dir, bx, by, -3);
     let p1 = sample(plane, dir, bx, by, -2);
@@ -274,9 +307,25 @@ fn filter_chroma_line(plane: &mut Plane, dir: Dir, bx: i32, by: i32, tc: i32, bi
 /// `xCalcDP`/`xCalcDQ` combined with the per-4-line-group decision from
 /// `xEdgeFilterLuma`'s own `iBlkIdx` loop: filter one 4-line group crossing
 /// one luma edge, or do nothing if the group's own `d < beta` gate fails.
-fn filter_luma_group(plane: &mut Plane, dir: Dir, bx: i32, by0: i32, tc: i32, beta: i32, bit_depth: u32) {
-    let dp = |at: i32| (sample(plane, dir, bx, at, -3) - 2 * sample(plane, dir, bx, at, -2) + sample(plane, dir, bx, at, -1)).abs();
-    let dq = |at: i32| (sample(plane, dir, bx, at, 0) - 2 * sample(plane, dir, bx, at, 1) + sample(plane, dir, bx, at, 2)).abs();
+fn filter_luma_group(
+    plane: &mut Plane,
+    dir: Dir,
+    bx: i32,
+    by0: i32,
+    tc: i32,
+    beta: i32,
+    bit_depth: u32,
+) {
+    let dp = |at: i32| {
+        (sample(plane, dir, bx, at, -3) - 2 * sample(plane, dir, bx, at, -2)
+            + sample(plane, dir, bx, at, -1))
+        .abs()
+    };
+    let dq = |at: i32| {
+        (sample(plane, dir, bx, at, 0) - 2 * sample(plane, dir, bx, at, 1)
+            + sample(plane, dir, bx, at, 2))
+        .abs()
+    };
 
     let dp0 = dp(by0);
     let dq0 = dq(by0);
@@ -293,7 +342,18 @@ fn filter_luma_group(plane: &mut Plane, dir: Dir, bx: i32, by0: i32, tc: i32, be
         && use_strong_filtering(plane, dir, bx, by0 + 3, 2 * (dp3 + dq3), beta, tc);
     let thr_cut = tc * 10;
     for i in 0..4 {
-        filter_luma_line(plane, dir, bx, by0 + i, tc, strong, thr_cut, filter_p, filter_q, bit_depth);
+        filter_luma_line(
+            plane,
+            dir,
+            bx,
+            by0 + i,
+            tc,
+            strong,
+            thr_cut,
+            filter_p,
+            filter_q,
+            bit_depth,
+        );
     }
 }
 
@@ -371,7 +431,9 @@ fn boundary_strength(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
 
     let ref_of = |u: Option<crate::motion::UniMotion>| u.map(|u| u.ref_poc);
     let mv_of = |u: Option<crate::motion::UniMotion>| u.map_or(crate::motion::Mv::ZERO, |u| u.mv);
-    let diff_ge4 = |a: crate::motion::Mv, b: crate::motion::Mv| (a.x - b.x).abs() >= 4 || (a.y - b.y).abs() >= 4;
+    let diff_ge4 = |a: crate::motion::Mv, b: crate::motion::Mv| {
+        (a.x - b.x).abs() >= 4 || (a.y - b.y).abs() >= 4
+    };
 
     let (ref_p0, ref_p1) = (ref_of(p.l0), ref_of(p.l1));
     let (ref_q0, ref_q1) = (ref_of(q.l0), ref_of(q.l1));
@@ -383,7 +445,11 @@ fn boundary_strength(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
             // Different L0/L1 references on the P side (or, on a P-slice
             // edge, P's own L1 trivially `None` against L0's real POC).
             let matches_straight = ref_p0 == ref_q0;
-            let (a0, a1, b0, b1) = if matches_straight { (mv_q0, mv_p0, mv_q1, mv_p1) } else { (mv_q1, mv_p0, mv_q0, mv_p1) };
+            let (a0, a1, b0, b1) = if matches_straight {
+                (mv_q0, mv_p0, mv_q1, mv_p1)
+            } else {
+                (mv_q1, mv_p0, mv_q0, mv_p1)
+            };
             return i32::from(diff_ge4(a0, a1) || diff_ge4(b0, b1));
         }
         // Same reference picture on both of P's own lists: §8.7.2.4's own
@@ -408,7 +474,10 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
     let chroma_grid = grid.max(16);
 
     let (width, height) = s.pic.y.dims();
-    let (width, height) = (i32::try_from(width).unwrap_or(0), i32::try_from(height).unwrap_or(0));
+    let (width, height) = (
+        i32::try_from(width).unwrap_or(0),
+        i32::try_from(height).unwrap_or(0),
+    );
 
     // Vertical edges: luma at every `grid` column, chroma at every
     // `chroma_grid` column (see the module doc for why chroma is coarser).
@@ -422,7 +491,15 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     let qp = qp_avg(s, Dir::Vert, x, y);
                     let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
                     let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
-                    filter_luma_group(&mut s.pic.y, Dir::Vert, x, y, tc, beta, s.shared.bit_depth_luma);
+                    filter_luma_group(
+                        &mut s.pic.y,
+                        Dir::Vert,
+                        x,
+                        y,
+                        tc,
+                        beta,
+                        s.shared.bit_depth_luma,
+                    );
                 }
             }
             y += 4;
@@ -438,14 +515,36 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
             // of its own, so `bS` is the only gate it has).
             if s.edges.vert_at(x, y) && boundary_strength(s, Dir::Vert, x, y) == 2 {
                 let qp = qp_avg(s, Dir::Vert, x, y);
-                let cb_tc = tc_for_qp(chroma_qp(qp, s.shared.cb_qp_offset), 2, s.shared.tc_offset_div2);
-                let cr_tc = tc_for_qp(chroma_qp(qp, s.shared.cr_qp_offset), 2, s.shared.tc_offset_div2);
+                let cb_tc = tc_for_qp(
+                    chroma_qp(qp, s.shared.cb_qp_offset),
+                    2,
+                    s.shared.tc_offset_div2,
+                );
+                let cr_tc = tc_for_qp(
+                    chroma_qp(qp, s.shared.cr_qp_offset),
+                    2,
+                    s.shared.tc_offset_div2,
+                );
                 let cx = x >> 1;
                 let cy0 = y >> 1;
                 let rows = (grid >> 1).max(1);
                 for i in 0..rows {
-                    filter_chroma_line(&mut s.pic.cb, Dir::Vert, cx, cy0 + i, cb_tc, s.shared.bit_depth_chroma);
-                    filter_chroma_line(&mut s.pic.cr, Dir::Vert, cx, cy0 + i, cr_tc, s.shared.bit_depth_chroma);
+                    filter_chroma_line(
+                        &mut s.pic.cb,
+                        Dir::Vert,
+                        cx,
+                        cy0 + i,
+                        cb_tc,
+                        s.shared.bit_depth_chroma,
+                    );
+                    filter_chroma_line(
+                        &mut s.pic.cr,
+                        Dir::Vert,
+                        cx,
+                        cy0 + i,
+                        cr_tc,
+                        s.shared.bit_depth_chroma,
+                    );
                 }
             }
             y += grid;
@@ -464,7 +563,15 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     let qp = qp_avg(s, Dir::Horiz, x, y);
                     let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
                     let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
-                    filter_luma_group(&mut s.pic.y, Dir::Horiz, y, x, tc, beta, s.shared.bit_depth_luma);
+                    filter_luma_group(
+                        &mut s.pic.y,
+                        Dir::Horiz,
+                        y,
+                        x,
+                        tc,
+                        beta,
+                        s.shared.bit_depth_luma,
+                    );
                 }
             }
             x += 4;
@@ -477,14 +584,36 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
         while x < width {
             if s.edges.horiz_at(x, y) && boundary_strength(s, Dir::Horiz, x, y) == 2 {
                 let qp = qp_avg(s, Dir::Horiz, x, y);
-                let cb_tc = tc_for_qp(chroma_qp(qp, s.shared.cb_qp_offset), 2, s.shared.tc_offset_div2);
-                let cr_tc = tc_for_qp(chroma_qp(qp, s.shared.cr_qp_offset), 2, s.shared.tc_offset_div2);
+                let cb_tc = tc_for_qp(
+                    chroma_qp(qp, s.shared.cb_qp_offset),
+                    2,
+                    s.shared.tc_offset_div2,
+                );
+                let cr_tc = tc_for_qp(
+                    chroma_qp(qp, s.shared.cr_qp_offset),
+                    2,
+                    s.shared.tc_offset_div2,
+                );
                 let cy = y >> 1;
                 let cx0 = x >> 1;
                 let cols = (grid >> 1).max(1);
                 for i in 0..cols {
-                    filter_chroma_line(&mut s.pic.cb, Dir::Horiz, cy, cx0 + i, cb_tc, s.shared.bit_depth_chroma);
-                    filter_chroma_line(&mut s.pic.cr, Dir::Horiz, cy, cx0 + i, cr_tc, s.shared.bit_depth_chroma);
+                    filter_chroma_line(
+                        &mut s.pic.cb,
+                        Dir::Horiz,
+                        cy,
+                        cx0 + i,
+                        cb_tc,
+                        s.shared.bit_depth_chroma,
+                    );
+                    filter_chroma_line(
+                        &mut s.pic.cr,
+                        Dir::Horiz,
+                        cy,
+                        cx0 + i,
+                        cr_tc,
+                        s.shared.bit_depth_chroma,
+                    );
                 }
             }
             x += grid;

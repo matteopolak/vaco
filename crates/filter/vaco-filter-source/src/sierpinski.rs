@@ -78,7 +78,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -116,11 +117,7 @@ fn render_triangle(width: u32, height: u32, jump: u32, seed: u64) -> Vec<bool> {
     }
     let w = f64::from(width);
     let h = f64::from(height);
-    let vertices = [
-        (w / 2.0, 0.0),
-        (0.0, h - 1.0),
-        (w - 1.0, h - 1.0),
-    ];
+    let vertices = [(w / 2.0, 0.0), (0.0, h - 1.0), (w - 1.0, h - 1.0)];
     let mut rng = SplitMix64::new(seed);
     let mut p = (w / 2.0, h / 2.0);
     #[allow(
@@ -306,11 +303,7 @@ mod tests {
         for (y, row) in ROWS.iter().enumerate() {
             for (x, ch) in row.chars().enumerate() {
                 let expect = ch == '#';
-                assert_eq!(
-                    carpet_filled(x as u32, y as u32),
-                    expect,
-                    "({x},{y})"
-                );
+                assert_eq!(carpet_filled(x as u32, y as u32), expect, "({x},{y})");
             }
         }
     }

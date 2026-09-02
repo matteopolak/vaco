@@ -213,7 +213,12 @@ pub fn compare(case: &Case, pair: &Pair<'_>, band: &QualityBand) -> Verdict {
 /// [`compare`], taking an explicit [`Registry`] — the seam a caller with its
 /// own metric set (or a test double) uses instead of [`default_registry`].
 #[must_use]
-pub fn compare_with(case: &Case, pair: &Pair<'_>, band: &QualityBand, registry: &Registry) -> Verdict {
+pub fn compare_with(
+    case: &Case,
+    pair: &Pair<'_>,
+    band: &QualityBand,
+    registry: &Registry,
+) -> Verdict {
     let Some(metric) = registry.get(&band.metric) else {
         return Verdict::Skipped(SkipReason::ModeUnimplemented(
             "quality-band: band names a metric this build has not registered \

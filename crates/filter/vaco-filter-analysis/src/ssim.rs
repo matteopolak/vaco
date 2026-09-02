@@ -107,7 +107,10 @@ fn plane_ssim(a: PlaneRef<'_>, b: PlaneRef<'_>) -> f64 {
     let kernel = gaussian_kernel();
     let radius = RADIUS;
     let rows = a.rows().min(b.rows());
-    let cols = a.row(0).map_or(0, <[u8]>::len).min(b.row(0).map_or(0, <[u8]>::len));
+    let cols = a
+        .row(0)
+        .map_or(0, <[u8]>::len)
+        .min(b.row(0).map_or(0, <[u8]>::len));
     if rows < WINDOW || cols < WINDOW {
         return 1.0;
     }
@@ -163,7 +166,11 @@ fn plane_ssim(a: PlaneRef<'_>, b: PlaneRef<'_>) -> f64 {
 pub(crate) struct Ssim;
 
 impl PairedFilter for Ssim {
-    fn filter_frames(&mut self, _ctx: &mut FilterContext<'_>, inputs: SmallVec<[Frame; 4]>) -> Result<FrameOut> {
+    fn filter_frames(
+        &mut self,
+        _ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut> {
         let [main, reference] = <[Frame; 2]>::try_from(inputs.into_vec())
             .unwrap_or_else(|_| unreachable!("Paired guarantees exactly input_count() frames"));
         Ok(FrameOut::One(measure(&main, &reference)))
@@ -183,7 +190,10 @@ fn measure(main: &Frame, reference: &Frame) -> Frame {
                 continue;
             };
             let rows = a.rows().min(b.rows());
-            let cols = a.row(0).map_or(0, <[u8]>::len).min(b.row(0).map_or(0, <[u8]>::len));
+            let cols = a
+                .row(0)
+                .map_or(0, <[u8]>::len)
+                .min(b.row(0).map_or(0, <[u8]>::len));
             let samples = (rows as u64).saturating_mul(cols as u64);
             let score = plane_ssim(a, b);
             per_component.push((score, samples));

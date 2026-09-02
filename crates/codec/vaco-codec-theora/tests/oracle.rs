@@ -84,8 +84,11 @@ const C_SIZE: usize = (WIDTH / 2) * (HEIGHT / 2);
 
 /// Decode every keyframe in `fixtures/bear.ogv`, keyed by packet index.
 fn decode_keyframes() -> Vec<(usize, Vec<u8>, Vec<u8>, Vec<u8>)> {
-    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bear.ogv"))
-        .expect("reads fixture");
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/bear.ogv"
+    ))
+    .expect("reads fixture");
     let mut d = vaco_demux_ogg::OggDemuxer::open(
         Box::new(MemorySource::new(bytes)),
         &NoParsers,
@@ -142,7 +145,10 @@ fn decode_keyframes() -> Vec<(usize, Vec<u8>, Vec<u8>, Vec<u8>)> {
 
 fn reference_frame(packet_index: usize) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let path = format!(
-        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bear_frame{}.yuv"),
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/bear_frame{}.yuv"
+        ),
         packet_index
     );
     let data = std::fs::read(&path).unwrap_or_else(|e| panic!("reads {path}: {e}"));
@@ -201,8 +207,11 @@ fn keyframes_match_ffmpegs_decode_byte_exact_per_plane() {
 /// constant frame rate — *identical* `duration` across every one of them.
 #[test]
 fn keyframes_carry_the_demuxers_real_pts_and_a_real_constant_duration() {
-    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bear.ogv"))
-        .expect("reads fixture");
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/bear.ogv"
+    ))
+    .expect("reads fixture");
     let mut d = vaco_demux_ogg::OggDemuxer::open(
         Box::new(MemorySource::new(bytes)),
         &NoParsers,
@@ -238,7 +247,10 @@ fn keyframes_carry_the_demuxers_real_pts_and_a_real_constant_duration() {
         let Ok(frame) = dec.receive_frame() else {
             continue;
         };
-        assert_eq!(frame.pts, sent_pts, "decoded frame must carry the packet's own pts");
+        assert_eq!(
+            frame.pts, sent_pts,
+            "decoded frame must carry the packet's own pts"
+        );
         assert_ne!(
             frame.duration,
             vaco_core::Duration::ZERO,
@@ -246,7 +258,11 @@ fn keyframes_carry_the_demuxers_real_pts_and_a_real_constant_duration() {
         );
         checked.push(frame.duration);
     }
-    assert_eq!(checked.len(), 3, "expected exactly the three known keyframes of bear.ogv");
+    assert_eq!(
+        checked.len(),
+        3,
+        "expected exactly the three known keyframes of bear.ogv"
+    );
     assert!(
         checked.windows(2).all(|w| w[0] == w[1]),
         "bear.ogv is constant frame rate; every keyframe's duration must be identical: {checked:?}"

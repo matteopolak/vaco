@@ -73,7 +73,10 @@ use crate::{ChromaLine, EdgeThresholds, LumaLine, filter_chroma_line, filter_lum
 /// (`p0..p3`, `q0..q3`, `bs`) must be the same length; a length mismatch
 /// processes only the shared prefix rather than panicking, matching this
 /// crate's no-panic contract on caller-controlled slices.
-#[allow(clippy::too_many_arguments, reason = "one argument per clause-8.7 sample/threshold name")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per clause-8.7 sample/threshold name"
+)]
 pub fn filter_luma_edge(
     caps: Caps,
     p0: &mut [u8],
@@ -87,10 +90,20 @@ pub fn filter_luma_edge(
     bs: &[u8],
     edge: EdgeThresholds,
 ) {
-    let len = [p0.len(), p1.len(), p2.len(), p3.len(), q0.len(), q1.len(), q2.len(), q3.len(), bs.len()]
-        .into_iter()
-        .min()
-        .unwrap_or(0);
+    let len = [
+        p0.len(),
+        p1.len(),
+        p2.len(),
+        p3.len(),
+        q0.len(),
+        q1.len(),
+        q2.len(),
+        q3.len(),
+        bs.len(),
+    ]
+    .into_iter()
+    .min()
+    .unwrap_or(0);
     let (Some(p0), Some(p1), Some(p2), Some(p3), Some(q0), Some(q1), Some(q2), Some(q3), Some(bs)) = (
         p0.get_mut(..len),
         p1.get_mut(..len),
@@ -120,10 +133,17 @@ pub fn filter_chroma_edge(
     bs: &[u8],
     edge: EdgeThresholds,
 ) {
-    let len = [p0.len(), p1.len(), q0.len(), q1.len(), bs.len()].into_iter().min().unwrap_or(0);
-    let (Some(p0), Some(p1), Some(q0), Some(q1), Some(bs)) =
-        (p0.get_mut(..len), p1.get(..len), q0.get_mut(..len), q1.get(..len), bs.get(..len))
-    else {
+    let len = [p0.len(), p1.len(), q0.len(), q1.len(), bs.len()]
+        .into_iter()
+        .min()
+        .unwrap_or(0);
+    let (Some(p0), Some(p1), Some(q0), Some(q1), Some(bs)) = (
+        p0.get_mut(..len),
+        p1.get(..len),
+        q0.get_mut(..len),
+        q1.get(..len),
+        bs.get(..len),
+    ) else {
         return;
     };
     dispatch_kernel!(caps, s => filter_chroma_edge_body(s, p0, p1, q0, q1, bs, edge));
@@ -208,7 +228,9 @@ fn load_i16_group_padded<S: Lanes>(simd: S, chunk: &[u8]) -> S::i16s {
 fn store_i16_group_padded<S: Lanes>(v: S::i16s, out: &mut [u8]) {
     let n_i16 = <S::i16s as SimdBase<S>>::N;
     let mut buf = [0i16; MAX_NATIVE_WIDTH];
-    let Some(buf_n) = buf.get_mut(..n_i16) else { return };
+    let Some(buf_n) = buf.get_mut(..n_i16) else {
+        return;
+    };
     v.store_slice(buf_n);
     let take = out.len().min(buf_n.len());
     if let (Some(o), Some(s)) = (out.get_mut(..take), buf_n.get(..take)) {
@@ -254,7 +276,17 @@ fn filter_luma_edge_body<S: Lanes>(
     let full = (len / n) * n;
 
     for base in (0..full).step_by(n.max(1)) {
-        let (Some(p0c), Some(p1c), Some(p2c), Some(p3c), Some(q0c), Some(q1c), Some(q2c), Some(q3c), Some(bsc)) = (
+        let (
+            Some(p0c),
+            Some(p1c),
+            Some(p2c),
+            Some(p3c),
+            Some(q0c),
+            Some(q1c),
+            Some(q2c),
+            Some(q3c),
+            Some(bsc),
+        ) = (
             p0.get(base..base + n),
             p1.get(base..base + n),
             p2.get(base..base + n),
@@ -264,7 +296,8 @@ fn filter_luma_edge_body<S: Lanes>(
             q2.get(base..base + n),
             q3.get(base..base + n),
             bs.get(base..base + n),
-        ) else {
+        )
+        else {
             break;
         };
 
@@ -288,22 +321,36 @@ fn filter_luma_edge_body<S: Lanes>(
         let (q3lo, q3hi) = ops::simd::widen_u8_i16::<S>(q3v);
         let (bslo, bshi) = ops::simd::widen_u8_i16::<S>(bsv);
 
-        let (p0nlo, p1nlo, p2nlo, q0nlo, q1nlo, q2nlo) =
-            filter_luma_lanes::<S>(simd, p0lo, p1lo, p2lo, p3lo, q0lo, q1lo, q2lo, q3lo, bslo, edge);
-        let (p0nhi, p1nhi, p2nhi, q0nhi, q1nhi, q2nhi) =
-            filter_luma_lanes::<S>(simd, p0hi, p1hi, p2hi, p3hi, q0hi, q1hi, q2hi, q3hi, bshi, edge);
+        let (p0nlo, p1nlo, p2nlo, q0nlo, q1nlo, q2nlo) = filter_luma_lanes::<S>(
+            simd, p0lo, p1lo, p2lo, p3lo, q0lo, q1lo, q2lo, q3lo, bslo, edge,
+        );
+        let (p0nhi, p1nhi, p2nhi, q0nhi, q1nhi, q2nhi) = filter_luma_lanes::<S>(
+            simd, p0hi, p1hi, p2hi, p3hi, q0hi, q1hi, q2hi, q3hi, bshi, edge,
+        );
 
-        let Some(p0o) = p0.get_mut(base..base + n) else { break };
+        let Some(p0o) = p0.get_mut(base..base + n) else {
+            break;
+        };
         ops::simd::pack_u8_from_i16::<S>(p0nlo, p0nhi).store_slice(p0o);
-        let Some(p1o) = p1.get_mut(base..base + n) else { break };
+        let Some(p1o) = p1.get_mut(base..base + n) else {
+            break;
+        };
         ops::simd::pack_u8_from_i16::<S>(p1nlo, p1nhi).store_slice(p1o);
-        let Some(p2o) = p2.get_mut(base..base + n) else { break };
+        let Some(p2o) = p2.get_mut(base..base + n) else {
+            break;
+        };
         ops::simd::pack_u8_from_i16::<S>(p2nlo, p2nhi).store_slice(p2o);
-        let Some(q0o) = q0.get_mut(base..base + n) else { break };
+        let Some(q0o) = q0.get_mut(base..base + n) else {
+            break;
+        };
         ops::simd::pack_u8_from_i16::<S>(q0nlo, q0nhi).store_slice(q0o);
-        let Some(q1o) = q1.get_mut(base..base + n) else { break };
+        let Some(q1o) = q1.get_mut(base..base + n) else {
+            break;
+        };
         ops::simd::pack_u8_from_i16::<S>(q1nlo, q1nhi).store_slice(q1o);
-        let Some(q2o) = q2.get_mut(base..base + n) else { break };
+        let Some(q2o) = q2.get_mut(base..base + n) else {
+            break;
+        };
         ops::simd::pack_u8_from_i16::<S>(q2nlo, q2nhi).store_slice(q2o);
     }
 
@@ -317,7 +364,17 @@ fn filter_luma_edge_body<S: Lanes>(
     let mut full = full;
     while len - full >= n_i16 {
         let base = full;
-        let (Some(p0c), Some(p1c), Some(p2c), Some(p3c), Some(q0c), Some(q1c), Some(q2c), Some(q3c), Some(bsc)) = (
+        let (
+            Some(p0c),
+            Some(p1c),
+            Some(p2c),
+            Some(p3c),
+            Some(q0c),
+            Some(q1c),
+            Some(q2c),
+            Some(q3c),
+            Some(bsc),
+        ) = (
             p0.get(base..base + n_i16),
             p1.get(base..base + n_i16),
             p2.get(base..base + n_i16),
@@ -327,7 +384,8 @@ fn filter_luma_edge_body<S: Lanes>(
             q2.get(base..base + n_i16),
             q3.get(base..base + n_i16),
             bs.get(base..base + n_i16),
-        ) else {
+        )
+        else {
             break;
         };
 
@@ -410,7 +468,10 @@ fn filter_luma_edge_body<S: Lanes>(
 /// exists for. Returns `(p0n, p1n, p2n, q0n, q1n, q2n)`; `p3`/`q3` are
 /// read-only inputs, matching [`crate::filter_luma_line`].
 #[inline(always)]
-#[allow(clippy::too_many_arguments, reason = "one argument per clause-8.7 sample/threshold name")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one argument per clause-8.7 sample/threshold name"
+)]
 fn filter_luma_lanes<S: Lanes>(
     simd: S,
     p0: S::i16s,
@@ -468,12 +529,24 @@ fn filter_luma_lanes<S: Lanes>(
     let q0n_normal = clip1_vec::<S>(simd, q0 - delta);
     let p1n_normal = ops::simd::select_i16::<S>(
         ap_lt_beta,
-        clip1_vec::<S>(simd, p1 + clip3_sym_vec::<S, S::i16s>(tc0, (p2 + ((p0 + q0 + one) >> 1u32) - (p1 << 1u32)) >> 1u32)),
+        clip1_vec::<S>(
+            simd,
+            p1 + clip3_sym_vec::<S, S::i16s>(
+                tc0,
+                (p2 + ((p0 + q0 + one) >> 1u32) - (p1 << 1u32)) >> 1u32,
+            ),
+        ),
         p1,
     );
     let q1n_normal = ops::simd::select_i16::<S>(
         aq_lt_beta,
-        clip1_vec::<S>(simd, q1 + clip3_sym_vec::<S, S::i16s>(tc0, (q2 + ((p0 + q0 + one) >> 1u32) - (q1 << 1u32)) >> 1u32)),
+        clip1_vec::<S>(
+            simd,
+            q1 + clip3_sym_vec::<S, S::i16s>(
+                tc0,
+                (q2 + ((p0 + q0 + one) >> 1u32) - (q1 << 1u32)) >> 1u32,
+            ),
+        ),
         q1,
     );
     // Clause 8.7.2.3's `bS < 4` case never touches p2/q2 at all.
@@ -487,10 +560,17 @@ fn filter_luma_lanes<S: Lanes>(
 
     let p0n_strong = ops::simd::select_i16::<S>(
         strong_p,
-        clip1_vec::<S>(simd, (p2 + two * p1 + two * p0 + two * q0 + q1 + four) >> 3u32),
+        clip1_vec::<S>(
+            simd,
+            (p2 + two * p1 + two * p0 + two * q0 + q1 + four) >> 3u32,
+        ),
         clip1_vec::<S>(simd, (two * p1 + p0 + q1 + two) >> 2u32),
     );
-    let p1n_strong = ops::simd::select_i16::<S>(strong_p, clip1_vec::<S>(simd, (p2 + p1 + p0 + q0 + two) >> 2u32), p1);
+    let p1n_strong = ops::simd::select_i16::<S>(
+        strong_p,
+        clip1_vec::<S>(simd, (p2 + p1 + p0 + q0 + two) >> 2u32),
+        p1,
+    );
     let p2n_strong = ops::simd::select_i16::<S>(
         strong_p,
         clip1_vec::<S>(simd, (two * p3 + three * p2 + p1 + p0 + q0 + four) >> 3u32),
@@ -499,10 +579,17 @@ fn filter_luma_lanes<S: Lanes>(
 
     let q0n_strong = ops::simd::select_i16::<S>(
         strong_q,
-        clip1_vec::<S>(simd, (q2 + two * q1 + two * q0 + two * p0 + p1 + four) >> 3u32),
+        clip1_vec::<S>(
+            simd,
+            (q2 + two * q1 + two * q0 + two * p0 + p1 + four) >> 3u32,
+        ),
         clip1_vec::<S>(simd, (two * q1 + q0 + p1 + two) >> 2u32),
     );
-    let q1n_strong = ops::simd::select_i16::<S>(strong_q, clip1_vec::<S>(simd, (q2 + q1 + q0 + p0 + two) >> 2u32), q1);
+    let q1n_strong = ops::simd::select_i16::<S>(
+        strong_q,
+        clip1_vec::<S>(simd, (q2 + q1 + q0 + p0 + two) >> 2u32),
+        q1,
+    );
     let q2n_strong = ops::simd::select_i16::<S>(
         strong_q,
         clip1_vec::<S>(simd, (two * q3 + three * q2 + q1 + q0 + p0 + four) >> 3u32),
@@ -532,7 +619,10 @@ fn filter_luma_lanes<S: Lanes>(
 /// The level-generic body behind [`filter_chroma_edge`]. Same shape as
 /// [`filter_luma_edge_body`] at chroma's narrower window.
 #[inline(always)]
-#[allow(clippy::integer_division, reason = "computing the native-width prefix length")]
+#[allow(
+    clippy::integer_division,
+    reason = "computing the native-width prefix length"
+)]
 fn filter_chroma_edge_body<S: Lanes>(
     simd: S,
     p0: &mut [u8],
@@ -572,9 +662,13 @@ fn filter_chroma_edge_body<S: Lanes>(
         let (p0nlo, q0nlo) = filter_chroma_lanes::<S>(simd, p0lo, p1lo, q0lo, q1lo, bslo, edge);
         let (p0nhi, q0nhi) = filter_chroma_lanes::<S>(simd, p0hi, p1hi, q0hi, q1hi, bshi, edge);
 
-        let Some(p0o) = p0.get_mut(base..base + n) else { break };
+        let Some(p0o) = p0.get_mut(base..base + n) else {
+            break;
+        };
         ops::simd::pack_u8_from_i16::<S>(p0nlo, p0nhi).store_slice(p0o);
-        let Some(q0o) = q0.get_mut(base..base + n) else { break };
+        let Some(q0o) = q0.get_mut(base..base + n) else {
+            break;
+        };
         ops::simd::pack_u8_from_i16::<S>(q0nlo, q0nhi).store_slice(q0o);
     }
 
@@ -614,8 +708,14 @@ fn filter_chroma_edge_body<S: Lanes>(
 
     for i in full..len {
         let mut line = ChromaLine {
-            p: [p0.get(i).copied().unwrap_or(0), p1.get(i).copied().unwrap_or(0)],
-            q: [q0.get(i).copied().unwrap_or(0), q1.get(i).copied().unwrap_or(0)],
+            p: [
+                p0.get(i).copied().unwrap_or(0),
+                p1.get(i).copied().unwrap_or(0),
+            ],
+            q: [
+                q0.get(i).copied().unwrap_or(0),
+                q1.get(i).copied().unwrap_or(0),
+            ],
         };
         if let Some(bsi) = bs.get(i).copied().and_then(NonZeroU8::new) {
             filter_chroma_line(&mut line, bsi, edge);
@@ -654,8 +754,13 @@ fn filter_chroma_lanes<S: Lanes>(
         reason = "alpha/beta/tC0 are Table 8-16/8-17 entries, always small -- always representable \
                   in i16"
     )]
-    let (alpha_v, beta_v, tc0_1, tc0_2, tc0_3) =
-        (splat(edge.alpha as i16), splat(edge.beta as i16), splat(edge.tc0[0] as i16), splat(edge.tc0[1] as i16), splat(edge.tc0[2] as i16));
+    let (alpha_v, beta_v, tc0_1, tc0_2, tc0_3) = (
+        splat(edge.alpha as i16),
+        splat(edge.beta as i16),
+        splat(edge.tc0[0] as i16),
+        splat(edge.tc0[1] as i16),
+        splat(edge.tc0[2] as i16),
+    );
 
     let d_p0q0 = ops::simd::abs_i16::<S, S::i16s>(p0 - q0);
     let d_p1p0 = ops::simd::abs_i16::<S, S::i16s>(p1 - p0);
@@ -680,7 +785,10 @@ fn filter_chroma_lanes<S: Lanes>(
     let q0n = ops::simd::select_i16::<S>(is_bs4, q0n_strong, q0n_normal);
 
     let apply = samples_pass & !bs.simd_eq(zero);
-    (ops::simd::select_i16::<S>(apply, p0n, p0), ops::simd::select_i16::<S>(apply, q0n, q0))
+    (
+        ops::simd::select_i16::<S>(apply, p0n, p0),
+        ops::simd::select_i16::<S>(apply, q0n, q0),
+    )
 }
 
 #[cfg(test)]
@@ -706,7 +814,10 @@ mod tests {
     ) -> Vec<LumaLine> {
         (0..bs.len())
             .map(|i| {
-                let mut line = LumaLine { p: [p0[i], p1[i], p2[i], p3[i]], q: [q0[i], q1[i], q2[i], q3[i]] };
+                let mut line = LumaLine {
+                    p: [p0[i], p1[i], p2[i], p3[i]],
+                    q: [q0[i], q1[i], q2[i], q3[i]],
+                };
                 if let Some(bsi) = NonZeroU8::new(bs[i]) {
                     filter_luma_line(&mut line, bsi, edge);
                 }
@@ -715,10 +826,20 @@ mod tests {
             .collect()
     }
 
-    fn scalar_chroma(p0: &[u8], p1: &[u8], q0: &[u8], q1: &[u8], bs: &[u8], edge: EdgeThresholds) -> Vec<ChromaLine> {
+    fn scalar_chroma(
+        p0: &[u8],
+        p1: &[u8],
+        q0: &[u8],
+        q1: &[u8],
+        bs: &[u8],
+        edge: EdgeThresholds,
+    ) -> Vec<ChromaLine> {
         (0..bs.len())
             .map(|i| {
-                let mut line = ChromaLine { p: [p0[i], p1[i]], q: [q0[i], q1[i]] };
+                let mut line = ChromaLine {
+                    p: [p0[i], p1[i]],
+                    q: [q0[i], q1[i]],
+                };
                 if let Some(bsi) = NonZeroU8::new(bs[i]) {
                     filter_chroma_line(&mut line, bsi, edge);
                 }
@@ -728,8 +849,9 @@ mod tests {
     }
 
     fn edges() -> impl Strategy<Value = EdgeThresholds> {
-        (0u8..=51, 0u8..=51, -12i32..=12, -12i32..=12)
-            .prop_map(|(qp_p, qp_q, off_a, off_b)| EdgeThresholds::derive(qp_p, qp_q, off_a * 2, off_b * 2))
+        (0u8..=51, 0u8..=51, -12i32..=12, -12i32..=12).prop_map(|(qp_p, qp_q, off_a, off_b)| {
+            EdgeThresholds::derive(qp_p, qp_q, off_a * 2, off_b * 2)
+        })
     }
 
     proptest! {
@@ -792,7 +914,19 @@ mod tests {
     #[test]
     fn empty_batch_is_a_no_op() {
         let edge = EdgeThresholds::derive(30, 30, 0, 0);
-        filter_luma_edge(Caps::detect(), &mut [], &mut [], &mut [], &[], &mut [], &mut [], &mut [], &[], &[], edge);
+        filter_luma_edge(
+            Caps::detect(),
+            &mut [],
+            &mut [],
+            &mut [],
+            &[],
+            &mut [],
+            &mut [],
+            &mut [],
+            &[],
+            &[],
+            edge,
+        );
         filter_chroma_edge(Caps::detect(), &mut [], &[], &mut [], &[], &[], edge);
     }
 
@@ -812,9 +946,16 @@ mod tests {
         let bs: Vec<u8> = (0..16u8).map(|i| i % 5).collect();
         filter_luma_edge(
             Caps::detect(),
-            &mut p0, &mut p1, &mut p2, &p3,
-            &mut q0, &mut q1, &mut q2, &q3,
-            &bs, edge,
+            &mut p0,
+            &mut p1,
+            &mut p2,
+            &p3,
+            &mut q0,
+            &mut q1,
+            &mut q2,
+            &q3,
+            &bs,
+            edge,
         );
         assert_eq!(p0, [128u8; 16]);
         assert_eq!(p1, [128u8; 16]);

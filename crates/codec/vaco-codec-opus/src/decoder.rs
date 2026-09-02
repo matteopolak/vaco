@@ -11,7 +11,7 @@ use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
-use vaco_parse_opus::{Bandwidth, IdentificationHeader, Mode, OpusPacket, OUTPUT_SAMPLE_RATE};
+use vaco_parse_opus::{Bandwidth, IdentificationHeader, Mode, OUTPUT_SAMPLE_RATE, OpusPacket};
 use vaco_sampfmt::SampleFmt;
 
 use crate::celt::CeltDecoder;
@@ -81,12 +81,17 @@ impl StreamDecoder {
     }
 
     fn ensure_silk(&mut self, channels: usize, rate: InternalRate, frame_ms: u32) {
-        if !self.silk_ready || self.silk.internal_khz() != rate.khz() || self.coded_channels != channels {
+        if !self.silk_ready
+            || self.silk.internal_khz() != rate.khz()
+            || self.coded_channels != channels
+        {
             self.silk.reconfigure(channels, rate, frame_ms);
             self.silk_ready = true;
             self.coded_channels = channels;
             let factor = (48 / rate.khz()).max(1) as usize;
-            self.resamplers = (0..channels).map(|_| crate::silk::resample::Upsampler::new(factor)).collect();
+            self.resamplers = (0..channels)
+                .map(|_| crate::silk::resample::Upsampler::new(factor))
+                .collect();
         }
     }
 
@@ -120,7 +125,14 @@ impl StreamDecoder {
         let frame_samples = toc.frame_samples() as usize;
 
         let pcm = match toc.mode() {
-            Mode::CeltOnly => self.celt.decode(&mut dec, payload.len(), frame_samples, channels, 0, celt_end_band(bandwidth)),
+            Mode::CeltOnly => self.celt.decode(
+                &mut dec,
+                payload.len(),
+                frame_samples,
+                channels,
+                0,
+                celt_end_band(bandwidth),
+            ),
             Mode::SilkOnly => {
                 let rate = silk_rate_for_bandwidth(bandwidth, false);
                 let frame_ms = (frame_samples / 48).max(10) as u32;
@@ -134,7 +146,14 @@ impl StreamDecoder {
                 self.ensure_silk(channels, rate, frame_ms);
                 let silk_pcm = self.silk.decode(&mut dec, frame_ms);
                 let silk_48k = self.resample_and_normalize(&silk_pcm);
-                let celt_48k = self.celt.decode(&mut dec, payload.len(), frame_samples, channels, HYBRID_START_BAND, celt_end_band(bandwidth));
+                let celt_48k = self.celt.decode(
+                    &mut dec,
+                    payload.len(),
+                    frame_samples,
+                    channels,
+                    HYBRID_START_BAND,
+                    celt_end_band(bandwidth),
+                );
                 let mut mixed = Vec::new();
                 for c in 0..channels {
                     let s = silk_48k.get(c).map_or(&[][..], Vec::as_slice);
@@ -142,7 +161,8 @@ impl StreamDecoder {
                     let n = frame_samples;
                     let mut v = vec![0.0f32; n];
                     for (i, slot) in v.iter_mut().enumerate().take(n) {
-                        *slot = s.get(i).copied().unwrap_or(0.0) + ce.get(i).copied().unwrap_or(0.0);
+                        *slot =
+                            s.get(i).copied().unwrap_or(0.0) + ce.get(i).copied().unwrap_or(0.0);
                     }
                     mixed.push(v);
                 }
@@ -168,7 +188,11 @@ impl StreamDecoder {
             .enumerate()
             .map(|(c, ch)| {
                 let normalized: Vec<f32> = ch.iter().map(|&v| v / 32768.0).collect();
-                if let Some(r) = self.resamplers.get_mut(c) { r.process(&normalized) } else { normalized }
+                if let Some(r) = self.resamplers.get_mut(c) {
+                    r.process(&normalized)
+                } else {
+                    normalized
+                }
             })
             .collect()
     }
@@ -223,12 +247,21 @@ impl OpusDecoder {
         if self.streams.len() == stream_count {
             return;
         }
-        self.streams = (0..stream_count).map(|i| StreamDecoder::new(if i < coupled { 2 } else { 1 })).collect();
+        self.streams = (0..stream_count)
+            .map(|i| StreamDecoder::new(if i < coupled { 2 } else { 1 }))
+            .collect();
     }
 
-    fn mix_to_output(head: &IdentificationHeader, per_stream: &[Vec<Vec<f32>>]) -> (Vec<Vec<f32>>, usize) {
+    fn mix_to_output(
+        head: &IdentificationHeader,
+        per_stream: &[Vec<Vec<f32>>],
+    ) -> (Vec<Vec<f32>>, usize) {
         let out_channels = usize::from(head.channel_count).max(1);
-        let samples = per_stream.iter().flat_map(|s| s.iter().map(Vec::len)).max().unwrap_or(0);
+        let samples = per_stream
+            .iter()
+            .flat_map(|s| s.iter().map(Vec::len))
+            .max()
+            .unwrap_or(0);
         let mut out = vec![vec![0.0f32; samples]; out_channels];
 
         if head.mapping_family.has_mapping_table() && !head.channel_mapping.is_empty() {
@@ -282,12 +315,18 @@ impl Decoder for OpusDecoder {
         let payload = packet.payload();
         let stream_count = self.streams.len();
         let per_stream: Vec<Vec<Vec<f32>>> = if stream_count <= 1 {
-            let parsed = OpusPacket::parse(payload).map_err(|_| Error::InvalidData("vaco-codec-opus: malformed Opus packet"))?;
-            let pcm = self.streams.first_mut().map(|s| s.decode_packet(&parsed)).unwrap_or_default();
+            let parsed = OpusPacket::parse(payload)
+                .map_err(|_| Error::InvalidData("vaco-codec-opus: malformed Opus packet"))?;
+            let pcm = self
+                .streams
+                .first_mut()
+                .map(|s| s.decode_packet(&parsed))
+                .unwrap_or_default();
             vec![pcm]
         } else {
-            let split = vaco_parse_opus::split_streams(payload, stream_count)
-                .map_err(|_| Error::InvalidData("vaco-codec-opus: malformed multistream Opus packet"))?;
+            let split = vaco_parse_opus::split_streams(payload, stream_count).map_err(|_| {
+                Error::InvalidData("vaco-codec-opus: malformed multistream Opus packet")
+            })?;
             split
                 .iter()
                 .zip(self.streams.iter_mut())
@@ -299,7 +338,13 @@ impl Decoder for OpusDecoder {
         let layout = head
             .channel_layout()
             .unwrap_or_else(|| ChannelLayout::unspecified(u32::from(head.channel_count)));
-        let mut frame = Frame::alloc_audio(&mut self.budget, SampleFmt::F32P, layout, samples as u32, OUTPUT_SAMPLE_RATE)?;
+        let mut frame = Frame::alloc_audio(
+            &mut self.budget,
+            SampleFmt::F32P,
+            layout,
+            samples as u32,
+            OUTPUT_SAMPLE_RATE,
+        )?;
         frame.pts = pts;
         // The decode-side mirror of this session's audio-decoder duration
         // audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/
@@ -315,8 +360,12 @@ impl Decoder for OpusDecoder {
             .to_duration(time_base)
             .unwrap_or(Duration::ZERO);
         for (ch, data) in mixed.iter().enumerate() {
-            let Some(mut plane) = frame.plane_mut(ch) else { continue };
-            let Some(row) = plane.row_mut(0) else { continue };
+            let Some(mut plane) = frame.plane_mut(ch) else {
+                continue;
+            };
+            let Some(row) = plane.row_mut(0) else {
+                continue;
+            };
             for (i, &v) in data.iter().enumerate() {
                 let bytes = v.to_le_bytes();
                 if let Some(dst) = row.get_mut(i * 4..i * 4 + 4) {

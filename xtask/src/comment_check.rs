@@ -188,10 +188,10 @@ fn issue_ref(line: &str) -> Option<&str> {
                 .and_then(|s| s.chars().next_back())
                 .is_some_and(|c| c.is_ascii_alphanumeric());
             let tail = after.get(digits.len()..).unwrap_or_default();
-            let stream_pair = tail.starts_with(':')
-                && tail[1..].starts_with(|c: char| c.is_ascii_digit());
-            let stream_name = tail.starts_with('/')
-                && tail[1..].starts_with(|c: char| c.is_ascii_alphabetic());
+            let stream_pair =
+                tail.starts_with(':') && tail[1..].starts_with(|c: char| c.is_ascii_digit());
+            let stream_name =
+                tail.starts_with('/') && tail[1..].starts_with(|c: char| c.is_ascii_alphabetic());
             if !glued_to_a_word && !stream_pair && !stream_name {
                 return Some(digits);
             }
@@ -247,10 +247,22 @@ mod tests {
     /// short issue number by digit count alone, and must not be flagged.
     #[test]
     fn the_references_own_stream_notation_is_not_an_issue_reference() {
-        assert_eq!(issue_ref("/// `Stream #0:0 -> #0:0 (copy)`, one per output"), None);
-        assert_eq!(issue_ref("/// [vost#0:0] Streamcopy requested for output"), None);
-        assert_eq!(issue_ref("/// [out#0/matroska @ 0x…] Error opening output"), None);
-        assert_eq!(issue_ref("/// [in#0] -to value smaller than -ss; aborting."), None);
+        assert_eq!(
+            issue_ref("/// `Stream #0:0 -> #0:0 (copy)`, one per output"),
+            None
+        );
+        assert_eq!(
+            issue_ref("/// [vost#0:0] Streamcopy requested for output"),
+            None
+        );
+        assert_eq!(
+            issue_ref("/// [out#0/matroska @ 0x…] Error opening output"),
+            None
+        );
+        assert_eq!(
+            issue_ref("/// [in#0] -to value smaller than -ss; aborting."),
+            None
+        );
         assert_eq!(issue_ref("/// [out#0/null] video:7KiB audio:16KiB"), None);
     }
 
@@ -259,8 +271,17 @@ mod tests {
     /// preceding word character is the reference's own notation.
     #[test]
     fn a_real_citation_next_to_punctuation_is_still_found() {
-        assert_eq!(issue_ref("// CL-21/#222: `-fps_mode` carries bit::VIDEO"), Some("222"));
-        assert_eq!(issue_ref("// (WHIP, `vaco-mux-whip`, #619) still need"), Some("619"));
-        assert_eq!(issue_ref("//#7 at the very start of the comment"), Some("7"));
+        assert_eq!(
+            issue_ref("// CL-21/#222: `-fps_mode` carries bit::VIDEO"),
+            Some("222")
+        );
+        assert_eq!(
+            issue_ref("// (WHIP, `vaco-mux-whip`, #619) still need"),
+            Some("619")
+        );
+        assert_eq!(
+            issue_ref("//#7 at the very start of the comment"),
+            Some("7")
+        );
     }
 }

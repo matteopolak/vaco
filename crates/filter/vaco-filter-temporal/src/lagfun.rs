@@ -34,7 +34,9 @@ use vaco_frame::Frame;
 
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
-use crate::video::{PlaneBuf, VIDEO_PAD, copy_meta, f64_opt, plane_dims, planes_mask_opt, sample_layout};
+use crate::video::{
+    PlaneBuf, VIDEO_PAD, copy_meta, f64_opt, plane_dims, planes_mask_opt, sample_layout,
+};
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "lagfun",

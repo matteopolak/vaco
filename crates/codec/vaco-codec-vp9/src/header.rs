@@ -53,7 +53,13 @@ fn color_config(r: &mut BitReader<'_>, profile: u8) -> ColorConfig {
             (full_range, true, true)
         }
     };
-    ColorConfig { bit_depth, color_space, full_range, subsampling_x, subsampling_y }
+    ColorConfig {
+        bit_depth,
+        color_space,
+        full_range,
+        subsampling_x,
+        subsampling_y,
+    }
 }
 
 /// §6.2.8's loop filter parameters (parsed and stored; not applied by this
@@ -106,7 +112,11 @@ pub struct QuantParams {
 }
 
 fn read_delta_q(r: &mut BitReader<'_>) -> i32 {
-    if r.get(1) != 0 { signed_literal(r, 4) } else { 0 }
+    if r.get(1) != 0 {
+        signed_literal(r, 4)
+    } else {
+        0
+    }
 }
 
 fn quantization_params(r: &mut BitReader<'_>) -> QuantParams {
@@ -115,7 +125,13 @@ fn quantization_params(r: &mut BitReader<'_>) -> QuantParams {
     let delta_q_uv_dc = read_delta_q(r);
     let delta_q_uv_ac = read_delta_q(r);
     let lossless = base_q_idx == 0 && delta_q_y_dc == 0 && delta_q_uv_dc == 0 && delta_q_uv_ac == 0;
-    QuantParams { base_q_idx, delta_q_y_dc, delta_q_uv_dc, delta_q_uv_ac, lossless }
+    QuantParams {
+        base_q_idx,
+        delta_q_y_dc,
+        delta_q_uv_dc,
+        delta_q_uv_ac,
+        lossless,
+    }
 }
 
 /// §6.2.11's segmentation parameters, persisted across frames (a frame that
@@ -152,7 +168,11 @@ impl Default for Segmentation {
 }
 
 fn read_prob(r: &mut BitReader<'_>) -> u8 {
-    if r.get(1) != 0 { u8::try_from(r.get(8)).unwrap_or(255) } else { 255 }
+    if r.get(1) != 0 {
+        u8::try_from(r.get(8)).unwrap_or(255)
+    } else {
+        255
+    }
 }
 
 fn segmentation_params(r: &mut BitReader<'_>, prev: Segmentation) -> Segmentation {
@@ -169,7 +189,11 @@ fn segmentation_params(r: &mut BitReader<'_>, prev: Segmentation) -> Segmentatio
         }
         seg.temporal_update = r.get(1) != 0;
         for slot in &mut seg.pred_prob {
-            *slot = if seg.temporal_update { read_prob(r) } else { 255 };
+            *slot = if seg.temporal_update {
+                read_prob(r)
+            } else {
+                255
+            };
         }
     }
     let update_data = r.get(1) != 0;
@@ -185,9 +209,15 @@ fn segmentation_params(r: &mut BitReader<'_>, prev: Segmentation) -> Segmentatio
                 }
                 let mut value = 0i32;
                 if enabled {
-                    let bits = tables::SEGMENTATION_FEATURE_BITS.get(j).copied().unwrap_or(0);
+                    let bits = tables::SEGMENTATION_FEATURE_BITS
+                        .get(j)
+                        .copied()
+                        .unwrap_or(0);
                     value = i32::try_from(r.get(bits)).unwrap_or(0);
-                    if tables::SEGMENTATION_FEATURE_SIGNED.get(j).copied().unwrap_or(false)
+                    if tables::SEGMENTATION_FEATURE_SIGNED
+                        .get(j)
+                        .copied()
+                        .unwrap_or(false)
                         && r.get(1) != 0
                     {
                         value = -value;
@@ -246,7 +276,10 @@ fn tile_info(r: &mut BitReader<'_>, sb64_cols: usize) -> TileInfo {
             rows_log2 = 2;
         }
     }
-    TileInfo { cols_log2, rows_log2 }
+    TileInfo {
+        cols_log2,
+        rows_log2,
+    }
 }
 
 /// One `RefFrameWidth`/`RefFrameHeight`/`RefFrameSignBias`-relevant entry
@@ -483,7 +516,13 @@ pub fn parse_uncompressed_header(
             color = if profile > 0 {
                 color_config(&mut r, profile)
             } else {
-                ColorConfig { bit_depth: 8, color_space: 1, full_range: false, subsampling_x: true, subsampling_y: true }
+                ColorConfig {
+                    bit_depth: 8,
+                    color_space: 1,
+                    full_range: false,
+                    subsampling_x: true,
+                    subsampling_y: true,
+                }
             };
             refresh_frame_flags = u8::try_from(r.get(8)).unwrap_or(0);
             (width, height) = frame_size(&mut r);
@@ -523,7 +562,11 @@ pub fn parse_uncompressed_header(
     // crate never applies the loop filter (out of scope; see the crate
     // doc), only quantization-affecting segmentation state matters for
     // pixel correctness.
-    let seg_base = if frame_is_intra { Segmentation::default() } else { prev_seg };
+    let seg_base = if frame_is_intra {
+        Segmentation::default()
+    } else {
+        prev_seg
+    };
     let segmentation = segmentation_params(&mut r, seg_base);
 
     let (mi_cols, mi_rows, sb64_cols, sb64_rows) = compute_image_size(width, height);
@@ -589,7 +632,11 @@ pub fn parse_uncompressed_header(
 /// treated as "not found" rather than trusted — untrusted bitstream data
 /// must not desync the reader by skipping bits `found_ref == 1` would
 /// otherwise commit to reading.
-fn frame_size_with_refs(r: &mut BitReader<'_>, ref_frame_idx: [u8; 3], ref_dims: &[Option<RefFrameDims>; tables::NUM_REF_FRAMES]) -> Option<(u32, u32)> {
+fn frame_size_with_refs(
+    r: &mut BitReader<'_>,
+    ref_frame_idx: [u8; 3],
+    ref_dims: &[Option<RefFrameDims>; tables::NUM_REF_FRAMES],
+) -> Option<(u32, u32)> {
     let mut found_at = None;
     for (i, &idx) in ref_frame_idx.iter().enumerate() {
         let found_ref = r.get(1) != 0;
@@ -622,7 +669,10 @@ fn read_interpolation_filter(r: &mut BitReader<'_>) -> i32 {
         tables::SWITCHABLE
     } else {
         let raw = usize::try_from(r.get(2)).unwrap_or(0);
-        tables::LITERAL_TO_TYPE.get(raw).copied().unwrap_or(tables::EIGHTTAP)
+        tables::LITERAL_TO_TYPE
+            .get(raw)
+            .copied()
+            .unwrap_or(tables::EIGHTTAP)
     }
 }
 
@@ -725,7 +775,11 @@ fn inv_recenter_nonneg(v: i32, m: i32) -> i32 {
     if v > 2 * m {
         return v;
     }
-    if v & 1 != 0 { m - ((v + 1) >> 1) } else { m + (v >> 1) }
+    if v & 1 != 0 {
+        m - ((v + 1) >> 1)
+    } else {
+        m + (v >> 1)
+    }
 }
 
 /// §6.3.5's `inv_remap_prob`. The spec decrements `m` (`m--`) immediately
@@ -800,7 +854,12 @@ pub fn parse_compressed_header(
     for slot in &mut entropy.skip_prob {
         *slot = diff_update_prob(bd, *slot);
     }
-    let mut info = CompressedHeaderInfo { tx_mode, reference_mode: tables::SINGLE_REFERENCE, comp_fixed_ref: 0, comp_var_ref: [0; 2] };
+    let mut info = CompressedHeaderInfo {
+        tx_mode,
+        reference_mode: tables::SINGLE_REFERENCE,
+        comp_fixed_ref: 0,
+        comp_var_ref: [0; 2],
+    };
     if !frame_is_intra {
         read_inter_mode_probs(bd, entropy);
         // §6.3's `compressed_header()`: `read_interp_filter_probs()` is only
@@ -869,7 +928,10 @@ fn read_is_inter_probs(bd: &mut Bd<'_>, entropy: &mut EntropyContext) {
 
 /// §6.3.12's `frame_reference_mode`.
 fn frame_reference_mode(bd: &mut Bd<'_>, sign_bias: [bool; 4], info: &mut CompressedHeaderInfo) {
-    let last = sign_bias.get(usize::try_from(tables::LAST_FRAME).unwrap_or(0)).copied().unwrap_or(false);
+    let last = sign_bias
+        .get(usize::try_from(tables::LAST_FRAME).unwrap_or(0))
+        .copied()
+        .unwrap_or(false);
     let mut compound_reference_allowed = false;
     for i in 1..tables::REFS_PER_FRAME {
         let bias = sign_bias.get(i + 1).copied().unwrap_or(false);
@@ -879,7 +941,11 @@ fn frame_reference_mode(bd: &mut Bd<'_>, sign_bias: [bool; 4], info: &mut Compre
     }
     info.reference_mode = if compound_reference_allowed {
         if bd.read_bool(128) {
-            let mode = if bd.read_bool(128) { tables::REFERENCE_MODE_SELECT } else { tables::COMPOUND_REFERENCE };
+            let mode = if bd.read_bool(128) {
+                tables::REFERENCE_MODE_SELECT
+            } else {
+                tables::COMPOUND_REFERENCE
+            };
             setup_compound_reference_mode(sign_bias, info);
             mode
         } else {
@@ -892,7 +958,12 @@ fn frame_reference_mode(bd: &mut Bd<'_>, sign_bias: [bool; 4], info: &mut Compre
 
 /// §6.3.18's `setup_compound_reference_mode`.
 fn setup_compound_reference_mode(sign_bias: [bool; 4], info: &mut CompressedHeaderInfo) {
-    let bias = |rf: i32| sign_bias.get(usize::try_from(rf).unwrap_or(0)).copied().unwrap_or(false);
+    let bias = |rf: i32| {
+        sign_bias
+            .get(usize::try_from(rf).unwrap_or(0))
+            .copied()
+            .unwrap_or(false)
+    };
     if bias(tables::LAST_FRAME) == bias(tables::GOLDEN_FRAME) {
         info.comp_fixed_ref = tables::ALTREF_FRAME;
         info.comp_var_ref = [tables::LAST_FRAME, tables::GOLDEN_FRAME];
@@ -906,7 +977,11 @@ fn setup_compound_reference_mode(sign_bias: [bool; 4], info: &mut CompressedHead
 }
 
 /// §6.3.13's `frame_reference_mode_probs`.
-fn frame_reference_mode_probs(bd: &mut Bd<'_>, info: &CompressedHeaderInfo, entropy: &mut EntropyContext) {
+fn frame_reference_mode_probs(
+    bd: &mut Bd<'_>,
+    info: &CompressedHeaderInfo,
+    entropy: &mut EntropyContext,
+) {
     if info.reference_mode == tables::REFERENCE_MODE_SELECT {
         for slot in &mut entropy.comp_mode_prob {
             *slot = diff_update_prob(bd, *slot);
@@ -986,13 +1061,21 @@ fn mv_probs(bd: &mut Bd<'_>, allow_high_precision_mv: bool, entropy: &mut Entrop
 }
 
 fn read_coef_probs(bd: &mut Bd<'_>, tx_mode: i32, entropy: &mut EntropyContext) {
-    let max_tx_size = tables::TX_MODE_TO_BIGGEST_TX_SIZE.get(usize::try_from(tx_mode).unwrap_or(0)).copied().unwrap_or(0);
+    let max_tx_size = tables::TX_MODE_TO_BIGGEST_TX_SIZE
+        .get(usize::try_from(tx_mode).unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
     for tx_sz in 0..=max_tx_size {
         let update = bd.read_literal(1) != 0;
         if !update {
             continue;
         }
-        let Some(tx_table) = entropy.coef_probs.get_mut(usize::try_from(tx_sz).unwrap_or(0)) else { continue };
+        let Some(tx_table) = entropy
+            .coef_probs
+            .get_mut(usize::try_from(tx_sz).unwrap_or(0))
+        else {
+            continue;
+        };
         for i_table in tx_table.iter_mut() {
             for j_table in i_table.iter_mut() {
                 for (k, k_table) in j_table.iter_mut().enumerate() {
@@ -1009,7 +1092,10 @@ fn read_coef_probs(bd: &mut Bd<'_>, tx_mode: i32, entropy: &mut EntropyContext) 
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, reason = "test code exercising a fixed real-encoder fixture, not the untrusted-input surface")]
+#[allow(
+    clippy::expect_used,
+    reason = "test code exercising a fixed real-encoder fixture, not the untrusted-input surface"
+)]
 mod tests {
     use super::*;
 
@@ -1044,10 +1130,23 @@ mod tests {
     #[test]
     fn inter_frame_color_config_carries_forward_from_the_previous_frame() {
         let data = real_inter_frame_profile1_yuv422();
-        let established = ColorConfig { bit_depth: 8, color_space: 1, full_range: false, subsampling_x: true, subsampling_y: false };
-        let ref_dims: [Option<RefFrameDims>; tables::NUM_REF_FRAMES] =
-            [Some(RefFrameDims { width: 160, height: 96 }); tables::NUM_REF_FRAMES];
-        let prev_frame = Some(PrevFrameInfo { width: 160, height: 96, show_frame: true });
+        let established = ColorConfig {
+            bit_depth: 8,
+            color_space: 1,
+            full_range: false,
+            subsampling_x: true,
+            subsampling_y: false,
+        };
+        let ref_dims: [Option<RefFrameDims>; tables::NUM_REF_FRAMES] = [Some(RefFrameDims {
+            width: 160,
+            height: 96,
+        });
+            tables::NUM_REF_FRAMES];
+        let prev_frame = Some(PrevFrameInfo {
+            width: 160,
+            height: 96,
+            show_frame: true,
+        });
         let (fh, _) = parse_uncompressed_header(
             &data,
             LoopFilterParams::default(),
@@ -1059,7 +1158,10 @@ mod tests {
         .expect("a real encoder's inter-frame header parses");
         assert!(!fh.is_key_frame);
         assert!(!fh.intra_only);
-        assert_eq!(fh.color, established, "a regular inter frame must carry the sequence's color config forward, not reset it");
+        assert_eq!(
+            fh.color, established,
+            "a regular inter frame must carry the sequence's color config forward, not reset it"
+        );
     }
 
     #[test]
@@ -1068,13 +1170,35 @@ mod tests {
         // previous test is reading `prev_color` through, not merely
         // matching it by coincidence with some other hardcoded value.
         let data = real_inter_frame_profile1_yuv422();
-        let wrong_default = ColorConfig { bit_depth: 8, color_space: 1, full_range: false, subsampling_x: true, subsampling_y: true };
-        let ref_dims: [Option<RefFrameDims>; tables::NUM_REF_FRAMES] =
-            [Some(RefFrameDims { width: 160, height: 96 }); tables::NUM_REF_FRAMES];
-        let prev_frame = Some(PrevFrameInfo { width: 160, height: 96, show_frame: true });
-        let (fh, _) =
-            parse_uncompressed_header(&data, LoopFilterParams::default(), Segmentation::default(), &ref_dims, prev_frame, wrong_default)
-                .expect("a real encoder's inter-frame header parses");
-        assert_eq!(fh.color, wrong_default, "an inter frame's color must equal whatever prev_color it was given");
+        let wrong_default = ColorConfig {
+            bit_depth: 8,
+            color_space: 1,
+            full_range: false,
+            subsampling_x: true,
+            subsampling_y: true,
+        };
+        let ref_dims: [Option<RefFrameDims>; tables::NUM_REF_FRAMES] = [Some(RefFrameDims {
+            width: 160,
+            height: 96,
+        });
+            tables::NUM_REF_FRAMES];
+        let prev_frame = Some(PrevFrameInfo {
+            width: 160,
+            height: 96,
+            show_frame: true,
+        });
+        let (fh, _) = parse_uncompressed_header(
+            &data,
+            LoopFilterParams::default(),
+            Segmentation::default(),
+            &ref_dims,
+            prev_frame,
+            wrong_default,
+        )
+        .expect("a real encoder's inter-frame header parses");
+        assert_eq!(
+            fh.color, wrong_default,
+            "an inter frame's color must equal whatever prev_color it was given"
+        );
     }
 }

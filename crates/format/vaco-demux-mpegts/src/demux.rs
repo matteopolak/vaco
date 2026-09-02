@@ -982,7 +982,8 @@ impl MpegTsDemuxer {
             pkt.dts = base_dts;
             pkt.pos = Some(pos);
             pkt.flags = flags;
-            pkt.side_data.push(PacketSideData::MpegtsStreamId(stream_id));
+            pkt.side_data
+                .push(PacketSideData::MpegtsStreamId(stream_id));
             if pkt.is_key()
                 && let Some(v) = base_dts.ticks()
             {
@@ -1019,7 +1020,8 @@ impl MpegTsDemuxer {
             pkt.dts = base_dts.offset(delta);
             pkt.pos = if samples_before == 0 { Some(pos) } else { None };
             pkt.flags = flags;
-            pkt.side_data.push(PacketSideData::MpegtsStreamId(stream_id));
+            pkt.side_data
+                .push(PacketSideData::MpegtsStreamId(stream_id));
             if pkt.is_key()
                 && let Some(v) = pkt.dts.ticks()
             {
@@ -1439,23 +1441,32 @@ const MPEGAUDIO_BITRATE_KBPS: [[[u16; 16]; 2]; 2] = [
     // MPEG-2/2.5
     [
         // Layer II/III
-        [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+        [
+            0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0,
+        ],
         // Layer I
-        [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0],
+        [
+            0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0,
+        ],
     ],
     // MPEG-1
     [
         // Layer II
-        [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0],
+        [
+            0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0,
+        ],
         // Layer I
-        [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0],
+        [
+            0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0,
+        ],
     ],
 ];
 /// MPEG-1 Layer III's bitrate table is its own row, distinct from Layer II's
 /// (the only version/layer combination where the two differ) — ISO/IEC
 /// 11172-3 Table 3.14.
-const MPEGAUDIO_BITRATE_KBPS_MPEG1_LAYER3: [u16; 16] =
-    [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
+const MPEGAUDIO_BITRATE_KBPS_MPEG1_LAYER3: [u16; 16] = [
+    0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0,
+];
 
 /// ISO/IEC 11172-3 §2.4.2.3 `sampling_frequency` — `[mpeg_version_id]`,
 /// `sampling_frequency_index` 3 ("reserved") absent so the lookup simply
@@ -1623,7 +1634,11 @@ mod mpegaudio_split_tests {
         let mut payload = one.clone();
         payload.extend_from_slice(&one);
         let frames = split_mpegaudio(&payload);
-        assert_eq!(frames.len(), 2, "one real PES from this fixture carries two frames");
+        assert_eq!(
+            frames.len(),
+            2,
+            "one real PES from this fixture carries two frames"
+        );
         assert_eq!(frames[0].offset, 0);
         assert_eq!(frames[1].offset, 1253);
     }
@@ -1864,8 +1879,8 @@ impl Demuxer for MpegTsDemuxer {
 mod frame_size_tests {
     use super::audio_frame_ticks;
     use vaco_codec_core::{AudioParameters, CodecId, CodecParameters};
-    use vaco_format_mpegts_tables::TIME_BASE;
     use vaco_format_core::Stream;
+    use vaco_format_mpegts_tables::TIME_BASE;
 
     fn audio_stream(codec: Option<CodecId>, sample_rate: u32) -> Stream {
         let mut stream = Stream::new(0, vaco_core::MediaType::Audio, TIME_BASE);

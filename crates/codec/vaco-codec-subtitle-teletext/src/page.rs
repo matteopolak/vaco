@@ -208,10 +208,8 @@ impl Page {
         let byte13 = nibble(payload.get(7));
         page.corrupt_hamming = corrupt_hamming;
 
-        page.subcode = u16::from(s1)
-            | (u16::from(s2) << 4)
-            | (u16::from(s3) << 7)
-            | (u16::from(s4) << 11);
+        page.subcode =
+            u16::from(s1) | (u16::from(s2) << 4) | (u16::from(s3) << 7) | (u16::from(s4) << 11);
 
         page.control = ControlBits {
             erase_page: c4 != 0,
@@ -328,7 +326,10 @@ impl Page {
     }
 }
 
-#[allow(clippy::too_many_arguments, reason = "one spacing-attribute state machine step")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one spacing-attribute state machine step"
+)]
 fn apply_control(
     code: u8,
     fg: &mut Color,
@@ -385,11 +386,7 @@ mod tests {
 
     fn parity_byte(data: u8) -> u8 {
         let d = data & 0x7F;
-        if d.count_ones() % 2 == 1 {
-            d
-        } else {
-            d | 0x80
-        }
+        if d.count_ones() % 2 == 1 { d } else { d | 0x80 }
     }
 
     fn hamming_byte(nibble: u8) -> u8 {

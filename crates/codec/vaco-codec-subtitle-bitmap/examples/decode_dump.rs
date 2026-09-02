@@ -51,7 +51,9 @@ fn parse_palette_csv(s: &str) -> Palette {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let mode = args.get(1).expect("usage: decode_dump <dvb|pgs|vobsub> ...");
+    let mode = args
+        .get(1)
+        .expect("usage: decode_dump <dvb|pgs|vobsub> ...");
     let limits = Limits::permissive();
 
     match mode.as_str() {
@@ -91,8 +93,12 @@ fn main() {
             }
         }
         "vobsub" => {
-            let path = args.get(2).expect("usage: decode_dump vobsub <file> <palette>");
-            let palette_csv = args.get(3).expect("usage: decode_dump vobsub <file> <palette>");
+            let path = args
+                .get(2)
+                .expect("usage: decode_dump vobsub <file> <palette>");
+            let palette_csv = args
+                .get(3)
+                .expect("usage: decode_dump vobsub <file> <palette>");
             let data = std::fs::read(path).expect("read fixture");
             let palette = parse_palette_csv(palette_csv);
             let event = vobsub::decode_spu(&data, &palette, &limits).expect("decode");

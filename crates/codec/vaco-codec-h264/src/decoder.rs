@@ -175,13 +175,24 @@ fn mastering_display_from_sei(
     max_luminance: u32,
     min_luminance: u32,
 ) -> vaco_frame::MasteringDisplay {
-    let chromaticity = |(x, y): (u16, u16)| [vaco_core::Rational::new(i32::from(x), 50_000), vaco_core::Rational::new(i32::from(y), 50_000)];
+    let chromaticity = |(x, y): (u16, u16)| {
+        [
+            vaco_core::Rational::new(i32::from(x), 50_000),
+            vaco_core::Rational::new(i32::from(y), 50_000),
+        ]
+    };
     let [green, blue, red] = primaries_gbr;
     vaco_frame::MasteringDisplay {
         primaries: [chromaticity(red), chromaticity(green), chromaticity(blue)],
         white_point: chromaticity(white_point),
-        max_luminance: vaco_core::Rational::new(i32::try_from(max_luminance).unwrap_or(i32::MAX), 10_000),
-        min_luminance: vaco_core::Rational::new(i32::try_from(min_luminance).unwrap_or(i32::MAX), 10_000),
+        max_luminance: vaco_core::Rational::new(
+            i32::try_from(max_luminance).unwrap_or(i32::MAX),
+            10_000,
+        ),
+        min_luminance: vaco_core::Rational::new(
+            i32::try_from(min_luminance).unwrap_or(i32::MAX),
+            10_000,
+        ),
     }
 }
 
@@ -226,7 +237,8 @@ fn dpb_picture_spec(mbs_wide: u32, mbs_high: u32, banded: bool) -> PictureSpec {
         PlaneSpec::new(cw, ch),
     ]);
     if banded {
-        spec.with_band_height(ROW_BAND_HEIGHT).with_guard(ROW_BAND_GUARD)
+        spec.with_band_height(ROW_BAND_HEIGHT)
+            .with_guard(ROW_BAND_GUARD)
     } else {
         spec.single_band()
     }
@@ -238,7 +250,11 @@ fn dpb_picture_spec(mbs_wide: u32, mbs_high: u32, banded: bool) -> PictureSpec {
 /// sort/search by. Short-term references only (`PicNum == FrameNumWrap` for
 /// a non-MBAFF frame picture), matching this decoder's own scope.
 fn frame_num_wrap(stored: u32, curr: u32, max_frame_num: u32) -> i64 {
-    if stored > curr { i64::from(stored) - i64::from(max_frame_num) } else { i64::from(stored) }
+    if stored > curr {
+        i64::from(stored) - i64::from(max_frame_num)
+    } else {
+        i64::from(stored)
+    }
 }
 
 /// Clause 8.2.4.3.1's short-term reordering (`modification_of_pic_nums_idc`
@@ -298,10 +314,15 @@ fn apply_ref_list_modification(
             v
         };
         curr_pic_num_pred = pic_num_no_wrap;
-        let pic_num =
-            if pic_num_no_wrap > i64::from(curr_frame_num) { pic_num_no_wrap - max_pic_num } else { pic_num_no_wrap };
+        let pic_num = if pic_num_no_wrap > i64::from(curr_frame_num) {
+            pic_num_no_wrap - max_pic_num
+        } else {
+            pic_num_no_wrap
+        };
         let Some(found) = (0..dpb.len()).find(|&i| {
-            dpb.get(i).is_some_and(|p| frame_num_wrap(p.frame_num, curr_frame_num, max_frame_num) == pic_num)
+            dpb.get(i).is_some_and(|p| {
+                frame_num_wrap(p.frame_num, curr_frame_num, max_frame_num) == pic_num
+            })
         }) else {
             return Err(Error::InvalidData(
                 "vaco-codec-h264: ref_pic_list_modification named a picture not present in the DPB",
@@ -551,8 +572,12 @@ impl H264Decoder {
                                     max_luminance,
                                     min_luminance,
                                 } => {
-                                    mastering_display =
-                                        Some(mastering_display_from_sei(primaries, white_point, max_luminance, min_luminance));
+                                    mastering_display = Some(mastering_display_from_sei(
+                                        primaries,
+                                        white_point,
+                                        max_luminance,
+                                        min_luminance,
+                                    ));
                                 }
                                 vaco_parse_h264::SeiPayload::ContentLightLevel {
                                     max_content_light_level,
@@ -599,11 +624,13 @@ impl H264Decoder {
             let _slice_type = g.ue_v(9)?;
             g.ue_v(255)? as u8
         };
-        let (pps, sps) = self
-            .parser
-            .parameter_sets()
-            .sps_for_pps(pps_id)
-            .ok_or(Error::Unsupported("vaco-codec-h264: referenced PPS/SPS not seen yet"))?;
+        let (pps, sps) =
+            self.parser
+                .parameter_sets()
+                .sps_for_pps(pps_id)
+                .ok_or(Error::Unsupported(
+                    "vaco-codec-h264: referenced PPS/SPS not seen yet",
+                ))?;
 
         let mut reader = BitReader::new(rbsp);
         reader.skip(8);
@@ -651,7 +678,10 @@ impl H264Decoder {
         // `&mut self` to allocate through -- a method call's `&mut self`
         // conservatively borrows the whole struct, so `sps` cannot still
         // be alive by then.
-        let reorder_window = sps.max_num_reorder_frames().unwrap_or(max_num_ref_frames).max(1) as usize;
+        let reorder_window = sps
+            .max_num_reorder_frames()
+            .unwrap_or(max_num_ref_frames)
+            .max(1) as usize;
         let curr_poc = info.poc.value();
         let is_b_slice = matches!(slice_header.kind, SliceKind::B);
         // Extracted now, not read from `sps`/`pps` again later: both
@@ -677,13 +707,21 @@ impl H264Decoder {
             let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
             idx.sort_by_key(|&i| {
                 let poc = i64::from(self.dpb.get(i).map_or(0, |p| p.poc));
-                if poc < i64::from(curr_poc) { (0i8, -poc) } else { (1i8, poc) }
+                if poc < i64::from(curr_poc) {
+                    (0i8, -poc)
+                } else {
+                    (1i8, poc)
+                }
             });
             idx
         } else {
             let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
             idx.sort_by_key(|&i| {
-                core::cmp::Reverse(frame_num_wrap(self.dpb.get(i).map_or(0, |p| p.frame_num), curr_frame_num, max_frame_num))
+                core::cmp::Reverse(frame_num_wrap(
+                    self.dpb.get(i).map_or(0, |p| p.frame_num),
+                    curr_frame_num,
+                    max_frame_num,
+                ))
             });
             idx
         };
@@ -692,7 +730,11 @@ impl H264Decoder {
             let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
             idx.sort_by_key(|&i| {
                 let poc = i64::from(self.dpb.get(i).map_or(0, |p| p.poc));
-                if poc > i64::from(curr_poc) { (0i8, poc) } else { (1i8, -poc) }
+                if poc > i64::from(curr_poc) {
+                    (0i8, poc)
+                } else {
+                    (1i8, -poc)
+                }
             });
             // Clause 8.2.4.2.3's own swap: if list 1 has more than one
             // entry and is identical to list 0, its first two entries
@@ -749,9 +791,9 @@ impl H264Decoder {
         // `crate::task_pool`'s own doc (item A0). `_into` appends onto it
         // exactly as the plain `decode_slice_cabac`/`decode_slice_cavlc`
         // append onto the empty one they build themselves.
-        let recycled_macroblocks = self.pools.acquire_macroblocks(
-            (mbs_wide as usize).saturating_mul(mbs_high as usize),
-        );
+        let recycled_macroblocks = self
+            .pools
+            .acquire_macroblocks((mbs_wide as usize).saturating_mul(mbs_high as usize));
         let stats = if pps.entropy_coding_mode {
             let mut cabac = CabacDecoder::from_reader(reader);
             let stats = crate::mb::decode_slice_cabac_into(
@@ -806,16 +848,30 @@ impl H264Decoder {
         // slices: the pictures they name may still be reconstructing on a
         // worker, and only the frame task -- the half that actually reads a
         // sample -- ever waits for them.
-        let ref_list0: Vec<PictureRef> =
-            list0_idx.iter().filter_map(|&i| self.dpb.get(i)).map(|r| r.planes.clone()).collect();
-        let ref_list1: Vec<PictureRef> =
-            list1_idx.iter().filter_map(|&i| self.dpb.get(i)).map(|r| r.planes.clone()).collect();
+        let ref_list0: Vec<PictureRef> = list0_idx
+            .iter()
+            .filter_map(|&i| self.dpb.get(i))
+            .map(|r| r.planes.clone())
+            .collect();
+        let ref_list1: Vec<PictureRef> = list1_idx
+            .iter()
+            .filter_map(|&i| self.dpb.get(i))
+            .map(|r| r.planes.clone())
+            .collect();
         // `crate::deblock::boundary_strength`'s own reference-picture-identity
         // lookup (its own doc): the same DPB positions as `ref_list0`/
         // `ref_list1` above, as POCs rather than sample planes -- deblocking
         // never touches pixels, only needs to tell two references apart.
-        let ref_list0_poc: Vec<i32> = list0_idx.iter().filter_map(|&i| self.dpb.get(i)).map(|r| r.poc).collect();
-        let ref_list1_poc: Vec<i32> = list1_idx.iter().filter_map(|&i| self.dpb.get(i)).map(|r| r.poc).collect();
+        let ref_list0_poc: Vec<i32> = list0_idx
+            .iter()
+            .filter_map(|&i| self.dpb.get(i))
+            .map(|r| r.poc)
+            .collect();
+        let ref_list1_poc: Vec<i32> = list1_idx
+            .iter()
+            .filter_map(|&i| self.dpb.get(i))
+            .map(|r| r.poc)
+            .collect();
 
         // Clause 8.4.2.3's `pred_weight_table()`, already parsed by
         // `vaco-parse-h264` (it has to be, the bits are in the slice
@@ -858,8 +914,11 @@ impl H264Decoder {
         // What this picture will cost the budget: the task's own working set
         // (see the note at the reservation below) plus, if it is a reference,
         // one more coded picture for its DPB entry.
-        let mb_bytes =
-            (stats.macroblocks.len().saturating_mul(core::mem::size_of::<crate::mb::MbSummary>())) as u64;
+        let mb_bytes = (stats
+            .macroblocks
+            .len()
+            .saturating_mul(core::mem::size_of::<crate::mb::MbSummary>()))
+            as u64;
         let coded_bytes = coded_picture_bytes(mbs_wide, mbs_high);
         let task_charge = coded_bytes
             .saturating_add(output_frame_bytes(dimensions, coded_bytes))
@@ -916,10 +975,10 @@ impl H264Decoder {
                             // for a frame `CurrPicNum == frame_num` and a
                             // stored frame's own `PicNum` is its
                             // `FrameNumWrap`.
-                            let pic_num_x =
-                                i64::from(curr_frame_num) - (i64::from(cmd.arg0) + 1);
+                            let pic_num_x = i64::from(curr_frame_num) - (i64::from(cmd.arg0) + 1);
                             if let Some(pos) = self.dpb.iter().position(|p| {
-                                frame_num_wrap(p.frame_num, curr_frame_num, max_frame_num) == pic_num_x
+                                frame_num_wrap(p.frame_num, curr_frame_num, max_frame_num)
+                                    == pic_num_x
                             }) && let Some(evicted) = self.dpb.remove(pos)
                             {
                                 self.budget.release(evicted.charged);
@@ -985,15 +1044,15 @@ impl H264Decoder {
                     let by = u32::try_from(i >> 2).unwrap_or(0);
                     let x = mb.mb_x * 4 + bx;
                     let y = mb.mb_y * 4 + by;
-                    if let Some(idx) = usize::try_from(y.saturating_mul(luma4_width).saturating_add(x)).ok()
+                    if let Some(idx) =
+                        usize::try_from(y.saturating_mul(luma4_width).saturating_add(x)).ok()
                         && let Some(slot) = motion.get_mut(idx)
                     {
                         *slot = block;
                     }
                 }
             }
-            let motion_bytes =
-                (motion.len().saturating_mul(core::mem::size_of::<MvInfo>())) as u64;
+            let motion_bytes = (motion.len().saturating_mul(core::mem::size_of::<MvInfo>())) as u64;
             // The DPB entry's own samples, charged here and released when this
             // entry is evicted. `allocate` hands back the sole writer (which
             // goes to the task) and a shareable reader (which goes in the DPB
@@ -1154,7 +1213,6 @@ impl H264Decoder {
         while self.collect_one(true)? {}
         Ok(())
     }
-
 }
 
 /// Clause 8.4.2.3.2's implicit bi-prediction weight for one `(ref_idx_l0,
@@ -1182,8 +1240,14 @@ fn implicit_weight(curr_poc: i32, ref0_poc: i32, ref1_poc: i32) -> ImplicitWeigh
     if !(-64..=128).contains(&w1) {
         return ImplicitWeight { w0: 32, w1: 32 };
     }
-    #[allow(clippy::cast_possible_truncation, reason = "w0/w1 are checked into -64..=128 immediately above")]
-    ImplicitWeight { w0: w0 as i32, w1: w1 as i32 }
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "w0/w1 are checked into -64..=128 immediately above"
+    )]
+    ImplicitWeight {
+        w0: w0 as i32,
+        w1: w1 as i32,
+    }
 }
 
 /// Copies one `width x height` region of `src` (row-major, `src_stride`
@@ -1191,14 +1255,25 @@ fn implicit_weight(curr_poc: i32, ref0_poc: i32, ref1_poc: i32) -> ImplicitWeigh
 /// [`crate::interp`]'s own edge-clamping is not needed here, since the
 /// crop region is always within the coded picture by construction (clause
 /// 7.4.2.1.1's own range constraint on the crop offsets).
-pub(crate) fn blit_plane(src: &[u8], src_stride: usize, x0: usize, y0: usize, frame: &mut Frame, plane_index: usize, width: usize, height: usize) {
+pub(crate) fn blit_plane(
+    src: &[u8],
+    src_stride: usize,
+    x0: usize,
+    y0: usize,
+    frame: &mut Frame,
+    plane_index: usize,
+    width: usize,
+    height: usize,
+) {
     let Some(mut dst) = frame.plane_mut(plane_index) else {
         return;
     };
     for y in 0..height {
         let Some(row) = dst.row_mut(y) else { continue };
         let src_row_start = (y0 + y).saturating_mul(src_stride).saturating_add(x0);
-        let src_row = src.get(src_row_start..src_row_start.saturating_add(width)).unwrap_or(&[]);
+        let src_row = src
+            .get(src_row_start..src_row_start.saturating_add(width))
+            .unwrap_or(&[]);
         for (x, out) in row.iter_mut().enumerate().take(width) {
             *out = src_row.get(x).copied().unwrap_or(0);
         }

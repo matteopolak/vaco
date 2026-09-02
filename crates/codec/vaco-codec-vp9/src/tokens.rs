@@ -10,17 +10,32 @@ use crate::header::EntropyContext;
 use crate::tables;
 
 /// §9.3.2's `pareto(node, prob)`.
-#[allow(clippy::integer_division, reason = "spec-defined: x = (prob-1)/2, prob in 1..=255")]
+#[allow(
+    clippy::integer_division,
+    reason = "spec-defined: x = (prob-1)/2, prob in 1..=255"
+)]
 fn pareto(node: usize, prob: u8) -> u8 {
     if node < 2 {
         return prob;
     }
     let x = (usize::from(prob).saturating_sub(1)) / 2;
     if prob & 1 != 0 {
-        tables::PARETO_TABLE.get(x).and_then(|r| r.get(node - 2)).copied().unwrap_or(prob)
+        tables::PARETO_TABLE
+            .get(x)
+            .and_then(|r| r.get(node - 2))
+            .copied()
+            .unwrap_or(prob)
     } else {
-        let a = tables::PARETO_TABLE.get(x).and_then(|r| r.get(node - 2)).copied().unwrap_or(prob);
-        let b = tables::PARETO_TABLE.get(x + 1).and_then(|r| r.get(node - 2)).copied().unwrap_or(prob);
+        let a = tables::PARETO_TABLE
+            .get(x)
+            .and_then(|r| r.get(node - 2))
+            .copied()
+            .unwrap_or(prob);
+        let b = tables::PARETO_TABLE
+            .get(x + 1)
+            .and_then(|r| r.get(node - 2))
+            .copied()
+            .unwrap_or(prob);
         u8::try_from((u16::from(a) + u16::from(b)) >> 1).unwrap_or(prob)
     }
 }
@@ -31,7 +46,14 @@ fn pareto(node: usize, prob: u8) -> u8 {
 /// `REF_TYPES` = 2) as well as tx size/plane type/band/context — an inter
 /// block reads an entirely different probability table from an intra block
 /// at the same position, not just a different `TxType` selection.
-fn coef_row(entropy: &EntropyContext, tx_sz: usize, plane0: usize, is_inter: bool, band: usize, ctx: usize) -> &[u8; 3] {
+fn coef_row(
+    entropy: &EntropyContext,
+    tx_sz: usize,
+    plane0: usize,
+    is_inter: bool,
+    band: usize,
+    ctx: usize,
+) -> &[u8; 3] {
     entropy
         .coef_probs
         .get(tx_sz)
@@ -43,13 +65,24 @@ fn coef_row(entropy: &EntropyContext, tx_sz: usize, plane0: usize, is_inter: boo
 }
 
 /// §9.3.2's neighbour positions for the token-cache context, `nb[0]`/`nb[1]`.
-#[allow(clippy::many_single_char_names, reason = "mirrors the spec's own i/j/pos/n/c names directly")]
-fn neighbors(c: usize, pos: usize, n: usize, tx_type: vaco_codec_dsp_idct::vp9::TxType) -> (usize, usize) {
+#[allow(
+    clippy::many_single_char_names,
+    reason = "mirrors the spec's own i/j/pos/n/c names directly"
+)]
+fn neighbors(
+    c: usize,
+    pos: usize,
+    n: usize,
+    tx_type: vaco_codec_dsp_idct::vp9::TxType,
+) -> (usize, usize) {
     use vaco_codec_dsp_idct::vp9::TxType::{AdstDct, DctAdst};
     if c == 0 {
         return (0, 0);
     }
-    #[allow(clippy::integer_division, reason = "spec-defined: i = pos/n, j = pos%n, a raster decomposition")]
+    #[allow(
+        clippy::integer_division,
+        reason = "spec-defined: i = pos/n, j = pos%n, a raster decomposition"
+    )]
     let i = pos / n;
     let j = pos % n;
     if i > 0 && j > 0 {
@@ -95,7 +128,11 @@ pub(crate) fn decode_tokens(
     let mut token_cache = vec![0usize; seg_eob];
     let plane0 = usize::from(plane > 0);
 
-    let (sx, sy) = if plane > 0 { (subsampling_x, subsampling_y) } else { (false, false) };
+    let (sx, sy) = if plane > 0 {
+        (subsampling_x, subsampling_y)
+    } else {
+        (false, false)
+    };
     let max_x = (2 * ctx.mi_cols) >> u32::from(sx);
     let max_y = (2 * ctx.mi_rows) >> u32::from(sy);
     let x4 = start_x >> 2;
@@ -105,10 +142,20 @@ pub(crate) fn decode_tokens(
     let mut left = false;
     for i in 0..numpts {
         if x4 + i < max_x {
-            above |= ctx.above_nz.get(plane).and_then(|r| r.get(x4 + i)).copied().unwrap_or(false);
+            above |= ctx
+                .above_nz
+                .get(plane)
+                .and_then(|r| r.get(x4 + i))
+                .copied()
+                .unwrap_or(false);
         }
         if y4 + i < max_y {
-            left |= ctx.left_nz.get(plane).and_then(|r| r.get((y4 + i) % 16)).copied().unwrap_or(false);
+            left |= ctx
+                .left_nz
+                .get(plane)
+                .and_then(|r| r.get((y4 + i) % 16))
+                .copied()
+                .unwrap_or(false);
         }
     }
     let c0_ctx = usize::from(above) + usize::from(left);
@@ -149,7 +196,10 @@ pub(crate) fn decode_tokens(
         let token = bd.read_tree(&tables::TOKEN_TREE, &node_probs);
 
         if let Some(slot) = token_cache.get_mut(pos) {
-            *slot = tables::ENERGY_CLASS.get(usize::try_from(token).unwrap_or(0)).copied().unwrap_or(0);
+            *slot = tables::ENERGY_CLASS
+                .get(usize::try_from(token).unwrap_or(0))
+                .copied()
+                .unwrap_or(0);
         }
 
         if token == tables::token::ZERO_TOKEN {
@@ -220,7 +270,10 @@ fn write_coef(be: &mut Be, token: i32, abs_val: i32, bit_depth: u32) {
     for e in 0..num_extra {
         let shift = num_extra - 1 - e;
         let bit = (remaining >> shift) & 1;
-        let p = probs.get(usize::try_from(e).unwrap_or(0)).copied().unwrap_or(128);
+        let p = probs
+            .get(usize::try_from(e).unwrap_or(0))
+            .copied()
+            .unwrap_or(128);
         be.write_bool(p, bit != 0);
     }
 }
@@ -268,7 +321,11 @@ pub(crate) fn encode_tokens(
     let mut token_cache = vec![0usize; seg_eob];
     let plane0 = usize::from(plane > 0);
 
-    let (sx, sy) = if plane > 0 { (subsampling_x, subsampling_y) } else { (false, false) };
+    let (sx, sy) = if plane > 0 {
+        (subsampling_x, subsampling_y)
+    } else {
+        (false, false)
+    };
     let max_x = (2 * mi_cols) >> u32::from(sx);
     let max_y = (2 * mi_rows) >> u32::from(sy);
     let x4 = start_x >> 2;
@@ -278,10 +335,18 @@ pub(crate) fn encode_tokens(
     let mut left = false;
     for i in 0..numpts {
         if x4 + i < max_x {
-            above |= above_nz.get(plane).and_then(|r| r.get(x4 + i)).copied().unwrap_or(false);
+            above |= above_nz
+                .get(plane)
+                .and_then(|r| r.get(x4 + i))
+                .copied()
+                .unwrap_or(false);
         }
         if y4 + i < max_y {
-            left |= left_nz.get(plane).and_then(|r| r.get((y4 + i) % 16)).copied().unwrap_or(false);
+            left |= left_nz
+                .get(plane)
+                .and_then(|r| r.get((y4 + i) % 16))
+                .copied()
+                .unwrap_or(false);
         }
     }
     let c0_ctx = usize::from(above) + usize::from(left);
@@ -335,7 +400,10 @@ pub(crate) fn encode_tokens(
         be.write_tree(&tables::TOKEN_TREE, &node_probs, token);
 
         if let Some(slot) = token_cache.get_mut(pos) {
-            *slot = tables::ENERGY_CLASS.get(usize::try_from(token).unwrap_or(0)).copied().unwrap_or(0);
+            *slot = tables::ENERGY_CLASS
+                .get(usize::try_from(token).unwrap_or(0))
+                .copied()
+                .unwrap_or(0);
         }
 
         if token == tables::token::ZERO_TOKEN {
@@ -350,7 +418,11 @@ pub(crate) fn encode_tokens(
         // `check_eob` is guaranteed true here: either `eob_c == 0` (nothing
         // written yet) or position `eob_c - 1` held a nonzero value by
         // definition, and only `ZERO_TOKEN` ever leaves `check_eob` false.
-        let band = if tx_sz == tables::TX_4X4 { tables::COEFBAND_4X4.get(eob_c).copied().unwrap_or(5) } else { tables::COEFBAND_8X8PLUS.get(eob_c).copied().unwrap_or(5) };
+        let band = if tx_sz == tables::TX_4X4 {
+            tables::COEFBAND_4X4.get(eob_c).copied().unwrap_or(5)
+        } else {
+            tables::COEFBAND_8X8PLUS.get(eob_c).copied().unwrap_or(5)
+        };
         let bctx = if eob_c == 0 {
             c0_ctx
         } else {
@@ -396,7 +468,10 @@ fn read_coef(bd: &mut Bd<'_>, token: i32, bit_depth: u32) -> i32 {
     }
     let probs = tables::CAT_PROBS.get(cat).copied().unwrap_or(&[128]);
     for e in 0..num_extra {
-        let p = probs.get(usize::try_from(e).unwrap_or(0)).copied().unwrap_or(128);
+        let p = probs
+            .get(usize::try_from(e).unwrap_or(0))
+            .copied()
+            .unwrap_or(128);
         let bit = i32::from(bd.read_bool(p));
         coef += bit << (num_extra - 1 - e);
     }
@@ -404,7 +479,11 @@ fn read_coef(bd: &mut Bd<'_>, token: i32, bit_depth: u32) -> i32 {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code exercising a fixed set of hand-picked coefficient blocks")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test code exercising a fixed set of hand-picked coefficient blocks"
+)]
 mod tests {
     use super::*;
     use vaco_codec_dsp_idct::vp9::TxType;
@@ -422,7 +501,25 @@ mod tests {
         be.write_bool(128, false);
         let mut above_nz = [vec![false; 32], vec![false; 32], vec![false; 32]];
         let mut left_nz = [[false; 16]; 3];
-        let nz = encode_tokens(&mut be, &entropy, coefs_raster, 8, 8, &mut above_nz, &mut left_nz, 0, 0, 0, tables::TX_4X4, scan, TxType::DctDct, false, true, true, 8);
+        let nz = encode_tokens(
+            &mut be,
+            &entropy,
+            coefs_raster,
+            8,
+            8,
+            &mut above_nz,
+            &mut left_nz,
+            0,
+            0,
+            0,
+            tables::TX_4X4,
+            scan,
+            TxType::DctDct,
+            false,
+            true,
+            true,
+            8,
+        );
         let bytes = be.finish();
 
         // `Bd::new` itself already consumes the mandatory leading marker

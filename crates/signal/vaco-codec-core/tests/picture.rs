@@ -270,8 +270,8 @@ fn a_picture_larger_than_the_budget_is_refused() {
 fn a_nine_row_read_never_straddles_a_band_when_the_guard_is_eight() {
     let mut budget = Budget::new(Limits::permissive());
     let (width, height, band_h, guard) = (64u32, 128u32, 32u32, 8u32);
-    let (mut w, r) = ProgressPicture::allocate(&spec(width, height, band_h, guard), 0, &mut budget)
-        .unwrap();
+    let (mut w, r) =
+        ProgressPicture::allocate(&spec(width, height, band_h, guard), 0, &mut budget).unwrap();
     for k in 0..w.band_count(0) {
         fill(&mut w, k);
     }
@@ -311,13 +311,18 @@ fn a_seven_row_guard_is_one_row_too_few_for_a_nine_row_read() {
     let mut scratch = BlockScratch::new(&mut budget, 16, 16).unwrap();
     // Rows 24..=32: eight rows above the seam at 32 and one below it.
     let block = view.block(0, 24, 9, 9, &mut scratch).unwrap();
-    assert_eq!(block.stride, 9, "with a 7-row guard this read must take the copy path");
+    assert_eq!(
+        block.stride, 9,
+        "with a 7-row guard this read must take the copy path"
+    );
 }
 
 // --- Column bands: the 2-D tile grid a wavefront needs -----------------
 
 fn tiled_spec(width: u32, height: u32, band_w: u32, band_h: u32) -> PictureSpec {
-    PictureSpec::new(vec![PlaneSpec::new(width, height).with_bands(band_w, band_h)])
+    PictureSpec::new(vec![
+        PlaneSpec::new(width, height).with_bands(band_w, band_h),
+    ])
 }
 
 /// Every byte of tile `(row_band, col_band)` is filled with a value derived
@@ -335,7 +340,8 @@ fn fill_tile(writer: &mut vaco_codec_core::PictureWriter, row_band: usize, col_b
 #[test]
 fn column_bands_publish_independently_of_each_other() {
     let mut budget = Budget::new(Limits::permissive());
-    let (mut w, r) = ProgressPicture::allocate(&tiled_spec(48, 32, 16, 16), 0, &mut budget).unwrap();
+    let (mut w, r) =
+        ProgressPicture::allocate(&tiled_spec(48, 32, 16, 16), 0, &mut budget).unwrap();
     assert_eq!(w.row_bands(0), 2);
     assert_eq!(w.col_bands(0), 3);
 
@@ -361,7 +367,11 @@ fn column_bands_publish_independently_of_each_other() {
     let v02 = fill_tile(&mut w, 0, 2);
     w.publish_tile(0, 0, 2).unwrap();
     assert_eq!(r.ready_cols(0, 0), 3, "every column of row 0 is done");
-    assert_eq!(r.ready_rows(0), 16, "row 0 is now fully done across its whole width");
+    assert_eq!(
+        r.ready_rows(0),
+        16,
+        "row 0 is now fully done across its whole width"
+    );
     assert_eq!(r.try_tile(0, 0, 1).unwrap().data[0], v01);
     assert_eq!(r.try_tile(0, 0, 2).unwrap().data[0], v02);
 
@@ -371,7 +381,8 @@ fn column_bands_publish_independently_of_each_other() {
 #[test]
 fn publish_tile_out_of_order_in_a_row_is_refused() {
     let mut budget = Budget::new(Limits::permissive());
-    let (mut w, _r) = ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
+    let (mut w, _r) =
+        ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
     fill_tile(&mut w, 0, 1);
     assert!(
         w.publish_tile(0, 0, 1).is_err(),
@@ -382,7 +393,8 @@ fn publish_tile_out_of_order_in_a_row_is_refused() {
 #[test]
 fn a_tile_may_not_be_written_after_publication() {
     let mut budget = Budget::new(Limits::permissive());
-    let (mut w, _r) = ProgressPicture::allocate(&tiled_spec(32, 16, 16, 16), 0, &mut budget).unwrap();
+    let (mut w, _r) =
+        ProgressPicture::allocate(&tiled_spec(32, 16, 16, 16), 0, &mut budget).unwrap();
     fill_tile(&mut w, 0, 0);
     w.publish_tile(0, 0, 0).unwrap();
     assert!(w.tile_mut(0, 0, 0).is_err());
@@ -391,7 +403,8 @@ fn a_tile_may_not_be_written_after_publication() {
 #[test]
 fn publish_through_refuses_a_column_banded_plane_and_vice_versa() {
     let mut budget = Budget::new(Limits::permissive());
-    let (mut tiled_w, _r) = ProgressPicture::allocate(&tiled_spec(32, 16, 16, 16), 0, &mut budget).unwrap();
+    let (mut tiled_w, _r) =
+        ProgressPicture::allocate(&tiled_spec(32, 16, 16, 16), 0, &mut budget).unwrap();
     assert!(tiled_w.publish_through(0, 0).is_err());
 
     let mut budget = Budget::new(Limits::permissive());
@@ -409,7 +422,8 @@ fn wait_tile_refuses_a_row_banded_plane() {
 #[test]
 fn plane_view_block_refuses_a_column_banded_plane() {
     let mut budget = Budget::new(Limits::permissive());
-    let (mut w, r) = ProgressPicture::allocate(&tiled_spec(32, 16, 16, 16), 0, &mut budget).unwrap();
+    let (mut w, r) =
+        ProgressPicture::allocate(&tiled_spec(32, 16, 16, 16), 0, &mut budget).unwrap();
     fill_tile(&mut w, 0, 0);
     w.publish_tile(0, 0, 0).unwrap();
     fill_tile(&mut w, 0, 1);
@@ -441,8 +455,16 @@ fn chroma_sized_tiles_use_their_own_geometry_independent_of_luma() {
         PlaneSpec::new(32, 32).with_bands(16, 16),
     ]);
     let (mut w, r) = ProgressPicture::allocate(&spec, 0, &mut budget).unwrap();
-    assert_eq!((w.row_bands(0), w.col_bands(0)), (2, 2), "luma: 64/32 each way");
-    assert_eq!((w.row_bands(1), w.col_bands(1)), (2, 2), "chroma: 32/16 each way");
+    assert_eq!(
+        (w.row_bands(0), w.col_bands(0)),
+        (2, 2),
+        "luma: 64/32 each way"
+    );
+    assert_eq!(
+        (w.row_bands(1), w.col_bands(1)),
+        (2, 2),
+        "chroma: 32/16 each way"
+    );
 
     for rb in 0..2 {
         for cb in 0..2 {
@@ -462,13 +484,17 @@ fn chroma_sized_tiles_use_their_own_geometry_independent_of_luma() {
     let luma = r.wait_tile(0, 1, 1).unwrap();
     assert_eq!(luma.stride, 32, "luma's own tile width");
     let chroma = r.wait_tile(1, 1, 1).unwrap();
-    assert_eq!(chroma.stride, 16, "chroma's own, independently-sized tile width");
+    assert_eq!(
+        chroma.stride, 16,
+        "chroma's own, independently-sized tile width"
+    );
 }
 
 #[test]
 fn a_reader_blocks_until_the_specific_tile_it_asked_for_publishes() {
     let mut budget = Budget::new(Limits::permissive());
-    let (mut w, r) = ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
+    let (mut w, r) =
+        ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
     let reached = Arc::new(AtomicBool::new(false));
     let reader = {
         let r = r.clone();
@@ -520,7 +546,8 @@ fn a_dropped_writer_wakes_tile_waiters_with_an_error() {
 #[test]
 fn a_later_row_starts_before_an_earlier_row_finishes_its_whole_width() {
     let mut budget = Budget::new(Limits::permissive());
-    let (mut w, r) = ProgressPicture::allocate(&tiled_spec(64, 32, 16, 16), 0, &mut budget).unwrap();
+    let (mut w, r) =
+        ProgressPicture::allocate(&tiled_spec(64, 32, 16, 16), 0, &mut budget).unwrap();
     assert_eq!(w.col_bands(0), 4, "four CTU-shaped columns per row");
 
     // Publish row 0's tiles one at a time from this thread, and hand row 1's
@@ -587,9 +614,15 @@ fn band_ref_reads_back_a_still_staged_row_band() {
     // is a plain read of whatever is there, not a "has anyone written here"
     // signal (that is what `PictureRef::ready_rows`/`try_rows` are for, and
     // they only ever answer for *published* bands).
-    assert_eq!(w.band_ref(0, 0).unwrap().data[0], 0, "unwritten, but present and zero");
+    assert_eq!(
+        w.band_ref(0, 0).unwrap().data[0],
+        0,
+        "unwritten, but present and zero"
+    );
     fill(&mut w, 0);
-    let seen = w.band_ref(0, 0).expect("band 0 is staged, not yet published");
+    let seen = w
+        .band_ref(0, 0)
+        .expect("band 0 is staged, not yet published");
     assert_eq!(seen.data[0], 0, "row 0's own fill value");
     assert_eq!(seen.data[seen.stride], 1, "row 1's own fill value");
     // Reading it back does not consume or otherwise disturb it: the normal
@@ -604,16 +637,22 @@ fn band_ref_reads_back_a_still_staged_row_band() {
 #[test]
 fn tile_ref_reads_back_a_still_staged_tile() {
     let mut budget = Budget::new(Limits::permissive());
-    let (mut w, _r) = ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
-    assert_eq!(w.tile_ref(0, 0, 1).unwrap().data[0], 0, "unwritten, but present and zero");
+    let (mut w, _r) =
+        ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
+    assert_eq!(
+        w.tile_ref(0, 0, 1).unwrap().data[0],
+        0,
+        "unwritten, but present and zero"
+    );
     let v = fill_tile(&mut w, 0, 1);
-    let seen = w.tile_ref(0, 0, 1).expect("tile (0, 1) is staged, not yet published");
+    let seen = w
+        .tile_ref(0, 0, 1)
+        .expect("tile (0, 1) is staged, not yet published");
     assert_eq!(seen.data[0], v);
     w.publish_tile(0, 0, 0).unwrap();
     w.publish_tile(0, 0, 1).unwrap();
     assert!(w.tile_ref(0, 0, 1).is_none(), "published now, not staged");
 }
-
 
 /// A picture-wrapper-shaped caller: re-derive a fresh, single-use `BandMut`
 /// per row rather than holding one open across many calls, and return
@@ -629,8 +668,16 @@ fn into_row_mut_outlives_the_band_that_produced_it() {
     let (mut w, r) = ProgressPicture::allocate(&spec(32, 16, 16, 4), 0, &mut budget).unwrap();
     row_mut(&mut w, 0).unwrap().fill(9);
     row_mut(&mut w, 1).unwrap().fill(3);
-    assert_eq!(w.band_ref(0, 0).unwrap().data[0], 9, "row 0 kept its own write");
-    assert_eq!(w.band_ref(0, 0).unwrap().data[32], 3, "row 1 kept its own, independent write");
+    assert_eq!(
+        w.band_ref(0, 0).unwrap().data[0],
+        9,
+        "row 0 kept its own write"
+    );
+    assert_eq!(
+        w.band_ref(0, 0).unwrap().data[32],
+        3,
+        "row 1 kept its own, independent write"
+    );
     w.publish_through(0, 0).unwrap();
     let view = r.finished(0).unwrap();
     assert_eq!(view.row(0).unwrap()[0], 9);

@@ -8,7 +8,7 @@
 
 use vaco_core::Duration;
 
-use crate::style::{parse_style, Style};
+use crate::style::{Style, parse_style};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScriptInfo {
@@ -25,7 +25,12 @@ pub struct ScriptInfo {
 
 impl Default for ScriptInfo {
     fn default() -> Self {
-        Self { play_res_x: 384, play_res_y: 288, wrap_style: 0, scaled_border_and_shadow: true }
+        Self {
+            play_res_x: 384,
+            play_res_y: 288,
+            wrap_style: 0,
+            scaled_border_and_shadow: true,
+        }
     }
 }
 
@@ -54,13 +59,21 @@ pub struct Script {
 impl Script {
     #[must_use]
     pub fn style(&self, name: &str) -> Style {
-        self.styles.iter().find(|s| s.name == name).cloned().unwrap_or_default()
+        self.styles
+            .iter()
+            .find(|s| s.name == name)
+            .cloned()
+            .unwrap_or_default()
     }
 
     /// Events (in file order) whose `[start, end)` interval contains `t`,
     /// comments excluded.
     pub fn active_at(&self, t: Duration) -> impl Iterator<Item = &Event> {
-        self.events.iter().filter(move |e| !e.is_comment && e.start.as_micros() <= t.as_micros() && t.as_micros() < e.end.as_micros())
+        self.events.iter().filter(move |e| {
+            !e.is_comment
+                && e.start.as_micros() <= t.as_micros()
+                && t.as_micros() < e.end.as_micros()
+        })
     }
 }
 
@@ -111,12 +124,16 @@ fn split_key_value(line: &str) -> Option<(&str, &str)> {
 }
 
 fn parse_info_line(line: &str, info: &mut ScriptInfo) {
-    let Some((key, value)) = split_key_value(line) else { return };
+    let Some((key, value)) = split_key_value(line) else {
+        return;
+    };
     match key {
         "PlayResX" => info.play_res_x = value.parse().unwrap_or(info.play_res_x),
         "PlayResY" => info.play_res_y = value.parse().unwrap_or(info.play_res_y),
         "WrapStyle" => info.wrap_style = value.parse().unwrap_or(info.wrap_style),
-        "ScaledBorderAndShadow" => info.scaled_border_and_shadow = value.eq_ignore_ascii_case("yes"),
+        "ScaledBorderAndShadow" => {
+            info.scaled_border_and_shadow = value.eq_ignore_ascii_case("yes")
+        }
         _ => {}
     }
 }
@@ -136,7 +153,9 @@ fn parse_styles_line(line: &str, format: &mut Vec<String>, styles: &mut Vec<Styl
 }
 
 fn parse_events_line(line: &str, format: &mut Vec<String>, events: &mut Vec<Event>) {
-    let Some((key, value)) = split_key_value(line) else { return };
+    let Some((key, value)) = split_key_value(line) else {
+        return;
+    };
     if key.eq_ignore_ascii_case("Format") {
         *format = value.split(',').map(|s| s.trim().to_owned()).collect();
         return;
@@ -152,12 +171,19 @@ fn parse_events_line(line: &str, format: &mut Vec<String>, events: &mut Vec<Even
     // to contain commas, so split into exactly `format.len()` pieces.
     let cols: Vec<&str> = value.splitn(format.len(), ',').map(str::trim).collect();
     let get = |name: &str| -> Option<&str> {
-        format.iter().position(|f| f.eq_ignore_ascii_case(name)).and_then(|i| cols.get(i).copied())
+        format
+            .iter()
+            .position(|f| f.eq_ignore_ascii_case(name))
+            .and_then(|i| cols.get(i).copied())
     };
     let event = Event {
         layer: get("Layer").and_then(|v| v.parse().ok()).unwrap_or(0),
-        start: get("Start").and_then(vaco_format_subtitle::time::parse_ass_time).unwrap_or(Duration::ZERO),
-        end: get("End").and_then(vaco_format_subtitle::time::parse_ass_time).unwrap_or(Duration::ZERO),
+        start: get("Start")
+            .and_then(vaco_format_subtitle::time::parse_ass_time)
+            .unwrap_or(Duration::ZERO),
+        end: get("End")
+            .and_then(vaco_format_subtitle::time::parse_ass_time)
+            .unwrap_or(Duration::ZERO),
         style: get("Style").unwrap_or("Default").to_owned(),
         margin_l: get("MarginL").and_then(|v| v.parse().ok()).unwrap_or(0),
         margin_r: get("MarginR").and_then(|v| v.parse().ok()).unwrap_or(0),
@@ -169,7 +195,13 @@ fn parse_events_line(line: &str, format: &mut Vec<String>, events: &mut Vec<Even
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, clippy::float_cmp, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    clippy::float_cmp,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -213,7 +245,11 @@ Comment: 0,0:00:00.00,0:00:01.00,Default,,0,0,0,,not shown
     fn comment_lines_are_excluded_from_active_at() {
         let s = parse(SAMPLE);
         let t = Duration::from_micros(500_000);
-        assert_eq!(s.active_at(t).count(), 0, "the comment line must not render");
+        assert_eq!(
+            s.active_at(t).count(),
+            0,
+            "the comment line must not render"
+        );
     }
 
     #[test]

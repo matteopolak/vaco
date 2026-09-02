@@ -115,7 +115,10 @@ impl VagDemuxer {
         let sample_rate = io.rb32()?.max(1);
         io.seek(HEADER_LEN)?;
 
-        #[allow(clippy::integer_division, reason = "exact block count from a byte count")]
+        #[allow(
+            clippy::integer_division,
+            reason = "exact block count from a byte count"
+        )]
         let declared_blocks = u64::from(data_size) / u64::from(BLOCK_BYTES);
         let block_count = match io.size() {
             Some(size) => {
@@ -130,7 +133,11 @@ impl VagDemuxer {
             None => Some(declared_blocks),
         };
 
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, sample_rate.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, sample_rate.cast_signed()),
+        );
         let params = CodecParameters::audio();
         stream.params = params;
         if let Some(audio) = stream.params.audio.as_mut() {
@@ -170,7 +177,8 @@ impl Demuxer for VagDemuxer {
             return Err(Error::Eof);
         }
 
-        let pos = HEADER_LEN.saturating_add(self.blocks_emitted.saturating_mul(u64::from(BLOCK_BYTES)));
+        let pos =
+            HEADER_LEN.saturating_add(self.blocks_emitted.saturating_mul(u64::from(BLOCK_BYTES)));
         let mut pkt = Packet::alloc(&mut self.budget, BLOCK_BYTES as usize)?;
         let n = self.io.read_partial(pkt.payload_mut())?;
         if n == 0 {
@@ -184,13 +192,21 @@ impl Demuxer for VagDemuxer {
         }
         pkt.len = n;
         pkt.stream_index = 0;
-        let frame_index = self.blocks_emitted.saturating_mul(u64::from(SAMPLES_PER_BLOCK));
+        let frame_index = self
+            .blocks_emitted
+            .saturating_mul(u64::from(SAMPLES_PER_BLOCK));
         pkt.pts = vaco_core::Timestamp::new(i64::try_from(frame_index).unwrap_or(i64::MAX));
         pkt.dts = pkt.pts;
         pkt.duration = vaco_core::Duration::from_micros(
             i64::from(SAMPLES_PER_BLOCK)
                 .saturating_mul(1_000_000)
-                .checked_div(i64::from(self.stream.params.audio.as_ref().map_or(1, |a| a.sample_rate.max(1))))
+                .checked_div(i64::from(
+                    self.stream
+                        .params
+                        .audio
+                        .as_ref()
+                        .map_or(1, |a| a.sample_rate.max(1)),
+                ))
                 .unwrap_or(0),
         );
         pkt.flags = PacketFlags::KEY;
@@ -213,7 +229,9 @@ impl Demuxer for VagDemuxer {
                 block.saturating_mul(u64::from(SAMPLES_PER_BLOCK))
             }
             SeekTarget::Frame { frame, .. } => frame,
-            SeekTarget::Timestamp { ts, .. } => u64::try_from(ts.ticks().unwrap_or(0).max(0)).unwrap_or(0),
+            SeekTarget::Timestamp { ts, .. } => {
+                u64::try_from(ts.ticks().unwrap_or(0).max(0)).unwrap_or(0)
+            }
         };
         let block = frame / u64::from(SAMPLES_PER_BLOCK);
         let byte_pos = HEADER_LEN.saturating_add(block.saturating_mul(u64::from(BLOCK_BYTES)));
@@ -228,7 +246,9 @@ impl Demuxer for VagDemuxer {
         let frames = blocks.saturating_mul(u64::from(SAMPLES_PER_BLOCK));
         let rate = u64::from(self.stream.params.audio.as_ref()?.sample_rate.max(1));
         let micros = frames.checked_mul(1_000_000)?.checked_div(rate)?;
-        Some(vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX)))
+        Some(vaco_core::Duration::from_micros(
+            i64::try_from(micros).unwrap_or(i64::MAX),
+        ))
     }
 }
 
@@ -260,7 +280,17 @@ mod tests {
         let d = VagDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
         let s = d.streams().first().unwrap();
         assert_eq!(s.params.audio.as_ref().unwrap().sample_rate, 22_050);
-        assert_eq!(s.params.audio.as_ref().unwrap().layout.as_ref().unwrap().channels, 1);
+        assert_eq!(
+            s.params
+                .audio
+                .as_ref()
+                .unwrap()
+                .layout
+                .as_ref()
+                .unwrap()
+                .channels,
+            1
+        );
         assert_eq!(s.duration_ts, Some(280));
     }
 
@@ -290,7 +320,10 @@ mod tests {
     fn probe_checks_the_full_magic() {
         let data = build_file(8000, 1);
         assert_eq!(probe(&ProbeData::new(&data)), ProbeScore::MAGIC_CHECKED);
-        assert_eq!(probe(&ProbeData::new(b"not vag at all..")), ProbeScore::NONE);
+        assert_eq!(
+            probe(&ProbeData::new(b"not vag at all..")),
+            ProbeScore::NONE
+        );
     }
 
     #[test]

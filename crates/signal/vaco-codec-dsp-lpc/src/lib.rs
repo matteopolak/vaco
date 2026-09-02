@@ -79,8 +79,8 @@ mod quantize;
 pub mod simd;
 mod synthesis;
 
-pub use analysis::{autocorrelate, levinson_durbin, LevinsonDurbin};
-pub use quantize::{quantize, QuantizedLpc};
+pub use analysis::{LevinsonDurbin, autocorrelate, levinson_durbin};
+pub use quantize::{QuantizedLpc, quantize};
 pub use synthesis::{predict, synthesize};
 
 /// Largest predictor order this crate computes. FLAC's own subframe format

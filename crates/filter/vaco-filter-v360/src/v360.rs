@@ -92,9 +92,19 @@ pub(crate) struct Opts {
     pub ih_fov: f64,
     #[opt(name = "iv_fov", help = "input vertical field of view in degrees, 0 for this crate's own default (90 for flat)", default = 0.0, range = 0.0..=360.0, flags(video, filtering))]
     pub iv_fov: f64,
-    #[opt(name = "h_flip", help = "flip out video horizontally", default = false, flags(video, filtering))]
+    #[opt(
+        name = "h_flip",
+        help = "flip out video horizontally",
+        default = false,
+        flags(video, filtering)
+    )]
     pub h_flip: bool,
-    #[opt(name = "v_flip", help = "flip out video vertically", default = false, flags(video, filtering))]
+    #[opt(
+        name = "v_flip",
+        help = "flip out video vertically",
+        default = false,
+        flags(video, filtering)
+    )]
     pub v_flip: bool,
 }
 
@@ -102,7 +112,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -144,13 +155,19 @@ fn ensure_8bit_addressable(format: PixFmt) -> Result<()> {
         return Err(Error::Unsupported("cannot address a hardware surface"));
     }
     if format.has(PixFmtFlags::BITSTREAM) {
-        return Err(Error::Unsupported("cannot address a sub-byte-packed format"));
+        return Err(Error::Unsupported(
+            "cannot address a sub-byte-packed format",
+        ));
     }
     if format.has(PixFmtFlags::PALETTE) {
-        return Err(Error::Unsupported("cannot address a palette format without its side table"));
+        return Err(Error::Unsupported(
+            "cannot address a palette format without its side table",
+        ));
     }
     if format.max_depth() != 8 {
-        return Err(Error::Unsupported("vaco-filter-v360 only projects 8-bit samples"));
+        return Err(Error::Unsupported(
+            "vaco-filter-v360 only projects 8-bit samples",
+        ));
     }
     Ok(())
 }
@@ -159,7 +176,10 @@ fn sample_nearest(plane: vaco_frame::PlaneRef<'_>, x: f64, y: f64) -> Option<u8>
     if x < -0.5 || y < -0.5 {
         return None;
     }
-    #[allow(clippy::cast_sign_loss, reason = "rounded, then checked against the plane's own bounds below")]
+    #[allow(
+        clippy::cast_sign_loss,
+        reason = "rounded, then checked against the plane's own bounds below"
+    )]
     let (xi, yi) = (x.round() as usize, y.round() as usize);
     plane.row(yi)?.get(xi).copied()
 }
@@ -215,7 +235,10 @@ impl Filter {
         })
     }
 
-    #[allow(clippy::too_many_arguments, reason = "a per-pixel sampler over two independent planes genuinely takes this many operands")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "a per-pixel sampler over two independent planes genuinely takes this many operands"
+    )]
     fn project_plane(
         &self,
         src: vaco_frame::PlaneRef<'_>,
@@ -225,31 +248,47 @@ impl Filter {
         fill: u8,
     ) {
         for oy in 0..out_h {
-            #[allow(clippy::cast_precision_loss, reason = "pixel coordinates, far below f64's exact-integer range")]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "pixel coordinates, far below f64's exact-integer range"
+            )]
             let mut v_out = (oy as f64 + 0.5) / out_h as f64;
             if self.v_flip {
                 v_out = 1.0 - v_out;
             }
             let Some(row) = dst.row_mut(oy) else { continue };
             for (ox, cell) in row.iter_mut().enumerate() {
-                #[allow(clippy::cast_precision_loss, reason = "pixel coordinates, far below f64's exact-integer range")]
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "pixel coordinates, far below f64's exact-integer range"
+                )]
                 let mut u_out = (ox as f64 + 0.5) / out_w as f64;
                 if self.h_flip {
                     u_out = 1.0 - u_out;
                 }
-                let local: Dir = self.output.dir_from_uv(u_out, v_out, self.out_h_fov, self.out_v_fov);
+                let local: Dir =
+                    self.output
+                        .dir_from_uv(u_out, v_out, self.out_h_fov, self.out_v_fov);
                 // `Filter::new` already refuses any nonzero `roll` (see
                 // the module doc); `orient` itself takes only `yaw`/
                 // `pitch`, since no verified formula involving `roll`
                 // exists to give it.
                 let world = orient(local, self.yaw, self.pitch);
-                let Some((u_in, v_in)) = self.input.uv_from_dir(world, self.in_h_fov, self.in_v_fov) else {
+                let Some((u_in, v_in)) =
+                    self.input.uv_from_dir(world, self.in_h_fov, self.in_v_fov)
+                else {
                     *cell = fill;
                     continue;
                 };
-                #[allow(clippy::cast_precision_loss, reason = "pixel coordinates, far below f64's exact-integer range")]
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "pixel coordinates, far below f64's exact-integer range"
+                )]
                 let sx = u_in.mul_add(src.row_bytes() as f64, -0.5);
-                #[allow(clippy::cast_precision_loss, reason = "pixel coordinates, far below f64's exact-integer range")]
+                #[allow(
+                    clippy::cast_precision_loss,
+                    reason = "pixel coordinates, far below f64's exact-integer range"
+                )]
                 let sy = v_in.mul_add(src.rows() as f64, -0.5);
                 let sampled = match self.interp {
                     Interp::Nearest => sample_nearest(src, sx, sy),
@@ -261,7 +300,13 @@ impl Filter {
     }
 
     fn process(&mut self, pool: &FramePool, frame: Frame) -> Result<FrameOut> {
-        let FrameData::Video { format, width, height, .. } = frame.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = frame.data
+        else {
             return Ok(FrameOut::One(frame));
         };
         if !self.checked_format {
@@ -276,11 +321,16 @@ impl Filter {
         out.duration = frame.duration;
         let chroma_fill = !format.is_rgb();
         for p in 0..format.plane_count() {
-            #[allow(clippy::cast_possible_truncation, reason = "plane index is always small (max 4)")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "plane index is always small (max 4)"
+            )]
             let p8 = p as u8;
             let out_pw = format.plane_width(out_w, p8) as usize;
             let out_ph = format.plane_height(out_h, p8) as usize;
-            let Some(src_plane) = frame.plane(p) else { continue };
+            let Some(src_plane) = frame.plane(p) else {
+                continue;
+            };
             let Some(mut dst_plane) = out.plane_mut(p) else {
                 continue;
             };
@@ -342,7 +392,9 @@ mod tests {
     }
 
     fn find(frame: &Frame, val: u8) -> Vec<(usize, usize)> {
-        let Some(plane) = frame.plane(0) else { return Vec::new() };
+        let Some(plane) = frame.plane(0) else {
+            return Vec::new();
+        };
         let mut out = Vec::new();
         for y in 0..plane.rows() {
             let Some(row) = plane.row(y) else { continue };
@@ -357,13 +409,23 @@ mod tests {
 
     #[test]
     fn creatable_with_defaults() {
-        let req = Instantiate { name: "v360", instance: "v360", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "v360",
+            instance: "v360",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_ok());
     }
 
     #[test]
     fn an_unsupported_projection_is_a_clean_error() {
-        let req = Instantiate { name: "v360", instance: "v360", args: Some("input=c3x2"), arguments: &[] };
+        let req = Instantiate {
+            name: "v360",
+            instance: "v360",
+            args: Some("input=c3x2"),
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 
@@ -377,7 +439,13 @@ mod tests {
         let (w, h) = (360u32, 180u32);
         let frame = marker_frame(w, h, w / 2, h / 2, 235);
         for output in ["e", "flat"] {
-            let opts = Opts { output: output.to_owned(), w: 200, h: 200, interp: "near".to_owned(), ..Opts::default() };
+            let opts = Opts {
+                output: output.to_owned(),
+                w: 200,
+                h: 200,
+                interp: "near".to_owned(),
+                ..Opts::default()
+            };
             let mut filt = Filter::new(&opts).unwrap();
             let pool = FramePool::default();
             let FrameOut::One(out) = filt.process(&pool, frame.clone()).unwrap() else {
@@ -385,7 +453,8 @@ mod tests {
             };
             let hits = find(&out, 235);
             assert!(
-                hits.iter().any(|&(x, y)| x.abs_diff(100) <= 1 && y.abs_diff(100) <= 1),
+                hits.iter()
+                    .any(|&(x, y)| x.abs_diff(100) <= 1 && y.abs_diff(100) <= 1),
                 "output={output}: expected a hit near (100, 100), got {hits:?}"
             );
         }
@@ -398,13 +467,20 @@ mod tests {
     /// `yaw`/`pitch`).
     #[test]
     fn roll_combined_with_yaw_is_a_clean_error() {
-        let opts = Opts { yaw: 10.0, roll: 5.0, ..Opts::default() };
+        let opts = Opts {
+            yaw: 10.0,
+            roll: 5.0,
+            ..Opts::default()
+        };
         assert!(Filter::new(&opts).is_err());
     }
 
     #[test]
     fn roll_alone_is_also_a_clean_error() {
-        let opts = Opts { roll: 5.0, ..Opts::default() };
+        let opts = Opts {
+            roll: 5.0,
+            ..Opts::default()
+        };
         assert!(Filter::new(&opts).is_err());
     }
 
@@ -414,10 +490,20 @@ mod tests {
     #[test]
     fn yaw_90_brings_the_right_quarter_marker_to_centre() {
         let (w, h) = (360u32, 180u32);
-        #[allow(clippy::cast_possible_truncation, reason = "0.75 * 360 is exactly representable")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "0.75 * 360 is exactly representable"
+        )]
         let mark_x = (0.75 * f64::from(w)) as u32;
         let frame = marker_frame(w, h, mark_x, h / 2, 200);
-        let opts = Opts { output: "flat".to_owned(), w: 200, h: 200, yaw: 90.0, interp: "near".to_owned(), ..Opts::default() };
+        let opts = Opts {
+            output: "flat".to_owned(),
+            w: 200,
+            h: 200,
+            yaw: 90.0,
+            interp: "near".to_owned(),
+            ..Opts::default()
+        };
         let mut filt = Filter::new(&opts).unwrap();
         let pool = FramePool::default();
         let FrameOut::One(out) = filt.process(&pool, frame).unwrap() else {
@@ -425,7 +511,8 @@ mod tests {
         };
         let hits = find(&out, 200);
         assert!(
-            hits.iter().any(|&(x, y)| x.abs_diff(100) <= 1 && y.abs_diff(100) <= 1),
+            hits.iter()
+                .any(|&(x, y)| x.abs_diff(100) <= 1 && y.abs_diff(100) <= 1),
             "expected a hit near (100, 100), got {hits:?}"
         );
     }
@@ -488,7 +575,11 @@ mod oracle {
     fn run_ffmpeg(args: &[&str], stdin_bytes: Option<&[u8]>) -> Option<Vec<u8>> {
         let mut cmd = Command::new("ffmpeg");
         cmd.args(args)
-            .stdin(if stdin_bytes.is_some() { Stdio::piped() } else { Stdio::null() })
+            .stdin(if stdin_bytes.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut child = cmd.spawn().ok()?;
@@ -497,7 +588,11 @@ mod oracle {
         }
         let out = child.wait_with_output().ok()?;
         if !out.status.success() {
-            eprintln!("ffmpeg {args:?} exited with {}: {}", out.status, String::from_utf8_lossy(&out.stderr));
+            eprintln!(
+                "ffmpeg {args:?} exited with {}: {}",
+                out.status,
+                String::from_utf8_lossy(&out.stderr)
+            );
             return None;
         }
         Some(out.stdout)
@@ -542,7 +637,15 @@ mod oracle {
         if n == 0 {
             return f64::INFINITY;
         }
-        let mse: f64 = a[..n].iter().zip(&b[..n]).map(|(&x, &y)| { let d = f64::from(x) - f64::from(y); d * d }).sum::<f64>() / n as f64;
+        let mse: f64 = a[..n]
+            .iter()
+            .zip(&b[..n])
+            .map(|(&x, &y)| {
+                let d = f64::from(x) - f64::from(y);
+                d * d
+            })
+            .sum::<f64>()
+            / n as f64;
         if mse == 0.0 {
             return f64::INFINITY;
         }
@@ -551,14 +654,27 @@ mod oracle {
 
     fn measure(yaw: f64, pitch: f64) {
         if !ffmpeg_available() {
-            eprintln!("skipping v360 oracle measurement (yaw={yaw} pitch={pitch}): ffmpeg not on PATH");
+            eprintln!(
+                "skipping v360 oracle measurement (yaw={yaw} pitch={pitch}): ffmpeg not on PATH"
+            );
             return;
         }
         let source = run_ffmpeg(
             &[
-                "-hide_banner", "-loglevel", "error",
-                "-f", "lavfi", "-i", &format!("testsrc2=size={W}x{H}:rate=1"),
-                "-frames:v", "1", "-pix_fmt", "yuv420p", "-f", "rawvideo", "-",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("testsrc2=size={W}x{H}:rate=1"),
+                "-frames:v",
+                "1",
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "rawvideo",
+                "-",
             ],
             None,
         )
@@ -578,17 +694,42 @@ mod oracle {
         );
         let reference = run_ffmpeg(
             &[
-                "-hide_banner", "-loglevel", "error",
-                "-f", "rawvideo", "-pix_fmt", "yuv420p", "-s", &format!("{W}x{H}"), "-i", "-",
-                "-vf", &vf, "-pix_fmt", "yuv420p", "-f", "rawvideo", "-",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "rawvideo",
+                "-pix_fmt",
+                "yuv420p",
+                "-s",
+                &format!("{W}x{H}"),
+                "-i",
+                "-",
+                "-vf",
+                &vf,
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "rawvideo",
+                "-",
             ],
             Some(&source),
         )
-        .unwrap_or_else(|| panic!("ffmpeg -vf {vf} failed on a fixture ffmpeg itself just produced"));
+        .unwrap_or_else(|| {
+            panic!("ffmpeg -vf {vf} failed on a fixture ffmpeg itself just produced")
+        });
 
         let pool = FramePool::default();
         let src_frame = frame_from_yuv420p(&pool, W, H, &source);
-        let opts = Opts { output: "flat".to_owned(), w: i64::from(OUT_W), h: i64::from(OUT_H), yaw, pitch, interp: "line".to_owned(), ..Opts::default() };
+        let opts = Opts {
+            output: "flat".to_owned(),
+            w: i64::from(OUT_W),
+            h: i64::from(OUT_H),
+            yaw,
+            pitch,
+            interp: "line".to_owned(),
+            ..Opts::default()
+        };
         let mut filt = Filter::new(&opts).unwrap();
         let FrameOut::One(ours) = filt.process(&pool, src_frame).unwrap() else {
             panic!("expected one output frame")

@@ -136,7 +136,10 @@ fn parse_command(text: &str) -> std::result::Result<Cmd, String> {
         .filter(|s| !s.is_empty())
         .ok_or_else(|| "sendcmd: missing command".to_owned())?
         .to_owned();
-    let arg = parts.next().map(|s| s.trim().trim_matches('\'').to_owned()).filter(|s| !s.is_empty());
+    let arg = parts
+        .next()
+        .map(|s| s.trim().trim_matches('\'').to_owned())
+        .filter(|s| !s.is_empty());
     Ok(Cmd {
         flags,
         is_expr,
@@ -163,10 +166,18 @@ fn parse_interval(text: &str) -> std::result::Result<Interval, String> {
         return Err("sendcmd: interval with no commands".to_owned());
     };
     let (time_spec, commands_text) = text.split_at(split_at);
-    let (start_s, end_s) = time_spec.split_once('-').map_or((time_spec, None), |(a, b)| (a, Some(b)));
-    let start: f64 = start_s.trim().parse().map_err(|_| format!("sendcmd: bad start time `{start_s}`"))?;
+    let (start_s, end_s) = time_spec
+        .split_once('-')
+        .map_or((time_spec, None), |(a, b)| (a, Some(b)));
+    let start: f64 = start_s
+        .trim()
+        .parse()
+        .map_err(|_| format!("sendcmd: bad start time `{start_s}`"))?;
     let end: f64 = match end_s {
-        Some(e) => e.trim().parse().map_err(|_| format!("sendcmd: bad end time `{e}`"))?,
+        Some(e) => e
+            .trim()
+            .parse()
+            .map_err(|_| format!("sendcmd: bad end time `{e}`"))?,
         None => f64::INFINITY,
     };
     let commands = commands_text
@@ -178,7 +189,11 @@ fn parse_interval(text: &str) -> std::result::Result<Interval, String> {
     if commands.is_empty() {
         return Err("sendcmd: interval with no commands".to_owned());
     }
-    Ok(Interval { start, end, commands })
+    Ok(Interval {
+        start,
+        end,
+        commands,
+    })
 }
 
 fn parse_script(text: &str) -> std::result::Result<Vec<Interval>, String> {
@@ -204,7 +219,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -234,7 +250,9 @@ impl Filter {
     /// path, which only ever sees a frame's timing — a recorded gap, not a
     /// silent one, since no worked reference example exercises `W`/`H`.
     fn resolve_arg(cmd: &Cmd, vars: [f64; 9]) -> String {
-        if cmd.is_expr && let Some(arg) = &cmd.arg {
+        if cmd.is_expr
+            && let Some(arg) = &cmd.arg
+        {
             let bindings = Bindings::new(&["POS", "PTS", "N", "T", "TS", "TE", "TI", "W", "H"]);
             // Parse errors fall back to the literal text rather than
             // panicking or dropping the command.
@@ -271,9 +289,20 @@ impl Filter {
                     } else {
                         0.0
                     };
-                    let vars = [pts, pts, self.n, t, interval.start, interval.end, ti, 0.0, 0.0];
+                    let vars = [
+                        pts,
+                        pts,
+                        self.n,
+                        t,
+                        interval.start,
+                        interval.end,
+                        ti,
+                        0.0,
+                        0.0,
+                    ];
                     let arg = Self::resolve_arg(cmd, vars);
-                    self.fired.push((cmd.target.clone(), cmd.command.clone(), arg));
+                    self.fired
+                        .push((cmd.target.clone(), cmd.command.clone(), arg));
                 }
             }
         }
@@ -466,9 +495,17 @@ mod tests {
         };
         let instance = video::create(&req).unwrap();
         let mut graph = Graph::new();
-        let src = graph.add_source("in", MediaType::Video, video_source_formats("in", vaco_pixfmt::PixFmt::Gray8));
+        let src = graph.add_source(
+            "in",
+            MediaType::Video,
+            video_source_formats("in", vaco_pixfmt::PixFmt::Gray8),
+        );
         let node = graph.add(instance.desc, instance.formats, instance.filter);
-        let sink = graph.add_sink("out", MediaType::Video, vaco_filter_core::mock::any_video_sink("out"));
+        let sink = graph.add_sink(
+            "out",
+            MediaType::Video,
+            vaco_filter_core::mock::any_video_sink("out"),
+        );
         graph.connect(src, 0, node, 0).unwrap();
         graph.connect(node, 0, sink, 0).unwrap();
         let tb = vaco_core::Rational::new(1, 25);
@@ -477,7 +514,9 @@ mod tests {
         for i in 0..3i64 {
             graph.send(src, gray_frame(1, 1, i, 5)).unwrap();
         }
-        graph.close_source(src, vaco_core::Timestamp::new(3)).unwrap();
+        graph
+            .close_source(src, vaco_core::Timestamp::new(3))
+            .unwrap();
         let mut pts = Vec::new();
         loop {
             match graph.run().unwrap() {

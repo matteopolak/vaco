@@ -72,7 +72,13 @@ fn discover_gateway(opts: &IpfsOptions, scheme: &'static str) -> Result<String> 
 /// provided." *before* even attempting gateway discovery) or if no gateway
 /// can be found; propagates whatever the nested `http`/`https` open returns
 /// otherwise.
-fn open_generic(scheme: &'static str, kind: &'static str, url: &Url, opts: &Dict, env: &ProtocolEnv<'_>) -> Result<Box<dyn MediaSource>> {
+fn open_generic(
+    scheme: &'static str,
+    kind: &'static str,
+    url: &Url,
+    opts: &Dict,
+    env: &ProtocolEnv<'_>,
+) -> Result<Box<dyn MediaSource>> {
     let rest = url.rest.strip_prefix("//").unwrap_or(&url.rest);
     if rest.is_empty() {
         return Err(ProtocolError::Malformed {
@@ -94,11 +100,23 @@ fn open_generic(scheme: &'static str, kind: &'static str, url: &Url, opts: &Dict
 pub struct IpfsProtocol;
 
 impl Protocol for IpfsProtocol {
-    fn open(&self, url: &Url, _flags: IoFlags, opts: &Dict, env: &ProtocolEnv<'_>) -> Result<Box<dyn MediaSource>> {
+    fn open(
+        &self,
+        url: &Url,
+        _flags: IoFlags,
+        opts: &Dict,
+        env: &ProtocolEnv<'_>,
+    ) -> Result<Box<dyn MediaSource>> {
         open_generic("ipfs", "ipfs", url, opts, env)
     }
 
-    fn create(&self, _url: &Url, _flags: IoFlags, _opts: &Dict, _env: &ProtocolEnv<'_>) -> Result<Box<dyn MediaSink>> {
+    fn create(
+        &self,
+        _url: &Url,
+        _flags: IoFlags,
+        _opts: &Dict,
+        _env: &ProtocolEnv<'_>,
+    ) -> Result<Box<dyn MediaSink>> {
         // Input-only: `-h protocol=ipfs` marks `-gateway` `.D.` (decoding)
         // only, and `-protocols` lists `ipfs` under `Input:` alone.
         Err(ProtocolError::Unsupported {
@@ -115,11 +133,23 @@ impl Protocol for IpfsProtocol {
 pub struct IpnsProtocol;
 
 impl Protocol for IpnsProtocol {
-    fn open(&self, url: &Url, _flags: IoFlags, opts: &Dict, env: &ProtocolEnv<'_>) -> Result<Box<dyn MediaSource>> {
+    fn open(
+        &self,
+        url: &Url,
+        _flags: IoFlags,
+        opts: &Dict,
+        env: &ProtocolEnv<'_>,
+    ) -> Result<Box<dyn MediaSource>> {
         open_generic("ipns", "ipns", url, opts, env)
     }
 
-    fn create(&self, _url: &Url, _flags: IoFlags, _opts: &Dict, _env: &ProtocolEnv<'_>) -> Result<Box<dyn MediaSink>> {
+    fn create(
+        &self,
+        _url: &Url,
+        _flags: IoFlags,
+        _opts: &Dict,
+        _env: &ProtocolEnv<'_>,
+    ) -> Result<Box<dyn MediaSink>> {
         Err(ProtocolError::Unsupported {
             scheme: "ipns",
             operation: "writing (ipns: is an input-only protocol)",

@@ -94,7 +94,11 @@ impl MonoState {
     }
 
     fn codebook(&self) -> &'static NlsfCodebook {
-        if self.lpc_order == 16 { &tables::NLSF_CB_WB } else { &tables::NLSF_CB_NB_MB }
+        if self.lpc_order == 16 {
+            &tables::NLSF_CB_WB
+        } else {
+            &tables::NLSF_CB_NB_MB
+        }
     }
 
     /// Update the subframe count for a new packet's regular-SILK-frame
@@ -128,7 +132,13 @@ struct Indices {
     seed: u32,
 }
 
-fn decode_indices(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCoding, decode_lbrr: bool, vad_active: bool) -> Indices {
+fn decode_indices(
+    dec: &mut RangeDecoder<'_>,
+    st: &mut MonoState,
+    cond: CondCoding,
+    decode_lbrr: bool,
+    vad_active: bool,
+) -> Indices {
     let ix = if decode_lbrr || vad_active {
         dec.icdf(&tables::TYPE_OFFSET_VAD_ICDF, 8).unwrap_or(0) + 2
     } else {
@@ -151,10 +161,15 @@ fn decode_indices(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCodi
     }
 
     let cb = st.codebook();
-    let (nlsf_cb1, nlsf_residual) = nlsf::decode_nlsf_indices(dec, cb, signal_type == SignalType::Voiced);
+    let (nlsf_cb1, nlsf_residual) =
+        nlsf::decode_nlsf_indices(dec, cb, signal_type == SignalType::Voiced);
 
-    let nlsf_interp_q2 =
-        if st.nb_subfr == 4 { dec.icdf(&tables::NLSF_INTERPOLATION_FACTOR_ICDF, 8).unwrap_or(4) } else { 4 };
+    let nlsf_interp_q2 = if st.nb_subfr == 4 {
+        dec.icdf(&tables::NLSF_INTERPOLATION_FACTOR_ICDF, 8)
+            .unwrap_or(4)
+    } else {
+        4
+    };
 
     let mut lag_index = 0i32;
     let mut contour_index = 0i32;
@@ -184,7 +199,11 @@ fn decode_indices(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCodi
         ec_prev_lag_index = lag_index;
 
         let contour_icdf: &[u8] = if st.fs_khz == 8 {
-            if st.nb_subfr == 4 { &tables::PITCH_CONTOUR_NB_ICDF } else { &tables::PITCH_CONTOUR_10MS_NB_ICDF }
+            if st.nb_subfr == 4 {
+                &tables::PITCH_CONTOUR_NB_ICDF
+            } else {
+                &tables::PITCH_CONTOUR_10MS_NB_ICDF
+            }
         } else if st.nb_subfr == 4 {
             &tables::PITCH_CONTOUR_ICDF
         } else {
@@ -192,7 +211,10 @@ fn decode_indices(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCodi
         };
         contour_index = dec.icdf(contour_icdf, 8).unwrap_or(0);
 
-        per_index = dec.icdf(&tables::LTP_PER_INDEX_ICDF, 8).unwrap_or(0).clamp(0, 2) as usize;
+        per_index = dec
+            .icdf(&tables::LTP_PER_INDEX_ICDF, 8)
+            .unwrap_or(0)
+            .clamp(0, 2) as usize;
         let gain_icdf: &[u8] = match per_index {
             0 => &tables::LTP_GAIN_ICDF_0,
             1 => &tables::LTP_GAIN_ICDF_1,
@@ -202,7 +224,11 @@ fn decode_indices(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCodi
             *v = dec.icdf(gain_icdf, 8).unwrap_or(0).max(0) as usize;
         }
 
-        ltp_scale_index = if cond == CondCoding::Independent { dec.icdf(&tables::LTPSCALE_ICDF, 8).unwrap_or(0).max(0) as usize } else { 0 };
+        ltp_scale_index = if cond == CondCoding::Independent {
+            dec.icdf(&tables::LTPSCALE_ICDF, 8).unwrap_or(0).max(0) as usize
+        } else {
+            0
+        };
     }
 
     let seed = dec.icdf(&tables::UNIFORM4_ICDF, 8).unwrap_or(0).max(0) as u32;
@@ -243,7 +269,8 @@ fn gains_dequant(gains_raw: &[i32], prev_ind: &mut i32, conditional: bool) -> Ve
         }
         *prev_ind = (*prev_ind).clamp(0, tables::N_LEVELS_QGAIN - 1);
         let log_db_q7 = (tables::MIN_QGAIN_DB * 128.0 / 6.0 + 16.0 * 128.0)
-            + (*prev_ind as f32) * ((tables::MAX_QGAIN_DB - tables::MIN_QGAIN_DB) * 128.0 / 6.0) / (tables::N_LEVELS_QGAIN as f32 - 1.0);
+            + (*prev_ind as f32) * ((tables::MAX_QGAIN_DB - tables::MIN_QGAIN_DB) * 128.0 / 6.0)
+                / (tables::N_LEVELS_QGAIN as f32 - 1.0);
         let log_db_q7 = log_db_q7.min(3967.0);
         // `silk_log2lin`'s result is `Gains_Q16` (real gain * 65536); this
         // module works in real units throughout (see the module doc), so
@@ -264,14 +291,34 @@ fn decode_pitch(lag_index: i32, contour_index: i32, fs_khz: i32, nb_subfr: usize
         .map(|k| {
             let offset = if fs_khz == 8 {
                 if nb_subfr == 4 {
-                    i32::from(*tables::CB_LAGS_STAGE2.get(k).and_then(|r| r.get(ci)).unwrap_or(&0))
+                    i32::from(
+                        *tables::CB_LAGS_STAGE2
+                            .get(k)
+                            .and_then(|r| r.get(ci))
+                            .unwrap_or(&0),
+                    )
                 } else {
-                    i32::from(*tables::CB_LAGS_STAGE2_10MS.get(k).and_then(|r| r.get(ci)).unwrap_or(&0))
+                    i32::from(
+                        *tables::CB_LAGS_STAGE2_10MS
+                            .get(k)
+                            .and_then(|r| r.get(ci))
+                            .unwrap_or(&0),
+                    )
                 }
             } else if nb_subfr == 4 {
-                i32::from(*tables::CB_LAGS_STAGE3.get(k).and_then(|r| r.get(ci)).unwrap_or(&0))
+                i32::from(
+                    *tables::CB_LAGS_STAGE3
+                        .get(k)
+                        .and_then(|r| r.get(ci))
+                        .unwrap_or(&0),
+                )
             } else {
-                i32::from(*tables::CB_LAGS_STAGE3_10MS.get(k).and_then(|r| r.get(ci)).unwrap_or(&0))
+                i32::from(
+                    *tables::CB_LAGS_STAGE3_10MS
+                        .get(k)
+                        .and_then(|r| r.get(ci))
+                        .unwrap_or(&0),
+                )
             };
             (lag + offset).clamp(min_lag, max_lag)
         })
@@ -280,9 +327,18 @@ fn decode_pitch(lag_index: i32, contour_index: i32, fs_khz: i32, nb_subfr: usize
 
 /// `decode_pulses.c` + `shell_coder.c` + `code_signs.c`: the excitation
 /// pulse signal for a whole SILK frame.
-fn decode_excitation(dec: &mut RangeDecoder<'_>, signal_type: SignalType, quant_offset_type: usize, frame_length: usize, seed0: u32) -> Vec<i32> {
+fn decode_excitation(
+    dec: &mut RangeDecoder<'_>,
+    signal_type: SignalType,
+    quant_offset_type: usize,
+    frame_length: usize,
+    seed0: u32,
+) -> Vec<i32> {
     let rate_row = usize::from(signal_type == SignalType::Voiced);
-    let rate_level = dec.icdf(&tables::RATE_LEVELS_ICDF[rate_row], 8).unwrap_or(0).clamp(0, 9) as usize;
+    let rate_level = dec
+        .icdf(&tables::RATE_LEVELS_ICDF[rate_row], 8)
+        .unwrap_or(0)
+        .clamp(0, 9) as usize;
 
     let iter = frame_length.div_ceil(16);
     let mut sum_pulses = vec![0i32; iter];
@@ -293,7 +349,11 @@ fn decode_excitation(dec: &mut RangeDecoder<'_>, signal_type: SignalType, quant_
         while sp == 17 {
             n_lshifts[i] += 1;
             let extra_row = &tables::PULSES_PER_BLOCK_ICDF[9];
-            cdf = if n_lshifts[i] == 10 { extra_row.get(1..).unwrap_or(extra_row) } else { extra_row };
+            cdf = if n_lshifts[i] == 10 {
+                extra_row.get(1..).unwrap_or(extra_row)
+            } else {
+                extra_row
+            };
             sp = dec.icdf(cdf, 8).unwrap_or(0);
         }
         sum_pulses[i] = sp;
@@ -332,7 +392,9 @@ fn decode_excitation(dec: &mut RangeDecoder<'_>, signal_type: SignalType, quant_
     // counts above 6 (up to `SILK_MAX_PULSES` before the escape path) would
     // otherwise read past the row into the next one.
     let sign_base = 7 * ((quant_offset_type + 2 * signal_type as usize).min(5));
-    let table = tables::SIGN_ICDF.get(sign_base..sign_base + 7).unwrap_or(&tables::SIGN_ICDF[0..7]);
+    let table = tables::SIGN_ICDF
+        .get(sign_base..sign_base + 7)
+        .unwrap_or(&tables::SIGN_ICDF[0..7]);
     for i in 0..iter {
         let p = sum_pulses[i] | (n_lshifts[i] << 5);
         if p <= 0 {
@@ -345,9 +407,10 @@ fn decode_excitation(dec: &mut RangeDecoder<'_>, signal_type: SignalType, quant_
             if pulses.get(idx).copied().unwrap_or(0) != 0 {
                 let sign = dec.icdf(&icdf, 8).unwrap_or(0);
                 if sign == 0
-                    && let Some(slot) = pulses.get_mut(idx) {
-                        *slot = -*slot;
-                    }
+                    && let Some(slot) = pulses.get_mut(idx)
+                {
+                    *slot = -*slot;
+                }
             }
         }
     }
@@ -392,7 +455,12 @@ fn shell_decode(dec: &mut RangeDecoder<'_>, out: &mut [i32; 16], total: i32) {
 fn decode_split(out: &mut [i32], dec: &mut RangeDecoder<'_>, p: i32, table: &[u8]) {
     let (c1, c2);
     if p > 0 {
-        let offset = usize::from(tables::SHELL_CODE_TABLE_OFFSETS.get(p as usize).copied().unwrap_or(0));
+        let offset = usize::from(
+            tables::SHELL_CODE_TABLE_OFFSETS
+                .get(p as usize)
+                .copied()
+                .unwrap_or(0),
+        );
         let row = table.get(offset..).unwrap_or(&[0]);
         c1 = dec.icdf(row, 8).unwrap_or(0);
         c2 = p - c1;
@@ -418,9 +486,20 @@ pub struct FrameOutput {
 
 /// `decode_frame.c`'s normal (non-PLC) path: indices, excitation,
 /// parameters and the core synthesis filter, for one regular frame.
-pub fn decode_frame(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCoding, vad_active: bool) -> FrameOutput {
+pub fn decode_frame(
+    dec: &mut RangeDecoder<'_>,
+    st: &mut MonoState,
+    cond: CondCoding,
+    vad_active: bool,
+) -> FrameOutput {
     let ind = decode_indices(dec, st, cond, false, vad_active);
-    let pulses = decode_excitation(dec, ind.signal_type, ind.quant_offset_type, st.nb_subfr * st.subfr_length, ind.seed);
+    let pulses = decode_excitation(
+        dec,
+        ind.signal_type,
+        ind.quant_offset_type,
+        st.nb_subfr * st.subfr_length,
+        ind.seed,
+    );
 
     let conditional = cond != CondCoding::Independent;
     let mut prev_ind = st.last_gain_index;
@@ -429,10 +508,22 @@ pub fn decode_frame(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCo
 
     let cb = st.codebook();
     let nlsf_curr = nlsf::nlsf_decode(cb, ind.nlsf_cb1, &ind.nlsf_residual);
-    let interp = if st.first_frame_after_reset { 4 } else { ind.nlsf_interp_q2 };
-    let nlsf0 = if interp < 4 { nlsf::interpolate_nlsf(&st.prev_nlsf_q15, &nlsf_curr, interp) } else { nlsf_curr.clone() };
+    let interp = if st.first_frame_after_reset {
+        4
+    } else {
+        ind.nlsf_interp_q2
+    };
+    let nlsf0 = if interp < 4 {
+        nlsf::interpolate_nlsf(&st.prev_nlsf_q15, &nlsf_curr, interp)
+    } else {
+        nlsf_curr.clone()
+    };
     let a1 = nlsf::nlsf_to_lpc(&nlsf_curr, st.lpc_order);
-    let a0 = if interp < 4 { nlsf::nlsf_to_lpc(&nlsf0, st.lpc_order) } else { a1.clone() };
+    let a0 = if interp < 4 {
+        nlsf::nlsf_to_lpc(&nlsf0, st.lpc_order)
+    } else {
+        a1.clone()
+    };
     st.prev_nlsf_q15 = nlsf_curr;
     // This was the first frame after construction/reset (which forces
     // `interp=4`, matching `decode_parameters.c`'s own
@@ -469,7 +560,8 @@ pub fn decode_frame(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCo
         0.0
     };
 
-    let quant_offset = tables::QUANTIZATION_OFFSETS_Q10[usize::from(ind.signal_type == SignalType::Voiced)][ind.quant_offset_type];
+    let quant_offset = tables::QUANTIZATION_OFFSETS_Q10
+        [usize::from(ind.signal_type == SignalType::Voiced)][ind.quant_offset_type];
 
     let pcm = synthesize(
         st,
@@ -485,7 +577,10 @@ pub fn decode_frame(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCo
         ltp_scale,
     );
 
-    FrameOutput { pcm, signal_type: ind.signal_type }
+    FrameOutput {
+        pcm,
+        signal_type: ind.signal_type,
+    }
 }
 
 /// `decode_core.c`'s `silk_decode_core`.
@@ -508,7 +603,10 @@ pub fn decode_frame(dec: &mut RangeDecoder<'_>, st: &mut MonoState, cond: CondCo
 /// whose gain changed. Re-deriving it from `out_buf` on *every* subframe
 /// (an earlier version of this function did) reads the wrong history for
 /// subframes that share the previous subframe's LPC coefficients.
-#[expect(clippy::too_many_arguments, reason = "mirrors silk_decode_core's parameter set")]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "mirrors silk_decode_core's parameter set"
+)]
 fn synthesize(
     st: &mut MonoState,
     pulses: &[i32],
@@ -568,7 +666,11 @@ fn synthesize(
             return 0.0;
         }
         let pos = pos as usize;
-        if pos < old.len() { old.get(pos).copied().unwrap_or(0.0) } else { new.get(pos - old.len()).copied().unwrap_or(0.0) }
+        if pos < old.len() {
+            old.get(pos).copied().unwrap_or(0.0)
+        } else {
+            new.get(pos - old.len()).copied().unwrap_or(0.0)
+        }
     };
 
     for k in 0..st.nb_subfr {

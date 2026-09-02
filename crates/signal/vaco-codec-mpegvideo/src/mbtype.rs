@@ -116,16 +116,30 @@ mod tests {
     /// -> forward-only, `00` -> forward+pattern.
     fn table() -> Vec<MbTypeEntry> {
         vec![
-            MbTypeEntry::new(0b1, 1, MbTypeFlags { intra: true, ..MbTypeFlags::default() }),
+            MbTypeEntry::new(
+                0b1,
+                1,
+                MbTypeFlags {
+                    intra: true,
+                    ..MbTypeFlags::default()
+                },
+            ),
             MbTypeEntry::new(
                 0b01,
                 2,
-                MbTypeFlags { motion_forward: true, ..MbTypeFlags::default() },
+                MbTypeFlags {
+                    motion_forward: true,
+                    ..MbTypeFlags::default()
+                },
             ),
             MbTypeEntry::new(
                 0b00,
                 2,
-                MbTypeFlags { motion_forward: true, pattern: true, ..MbTypeFlags::default() },
+                MbTypeFlags {
+                    motion_forward: true,
+                    pattern: true,
+                    ..MbTypeFlags::default()
+                },
             ),
         ]
     }

@@ -86,7 +86,10 @@ impl std::fmt::Display for ZipError {
             Self::Malformed(why) => write!(f, "malformed zip: {why}"),
             Self::MemberNotFound(name) => write!(f, "zip has no member `{name}`"),
             Self::UnsupportedMethod { member, method } => {
-                write!(f, "member `{member}` uses unsupported compression method {method}")
+                write!(
+                    f,
+                    "member `{member}` uses unsupported compression method {method}"
+                )
             }
             Self::TooLarge => write!(f, "zip exceeds the {MAX_ZIP_BYTES}-byte reader cap"),
             Self::Crc32Mismatch { member } => {
@@ -137,7 +140,9 @@ const LOCAL_SIG: u32 = 0x0403_4b50;
 /// offset). Returns the byte offset the record starts at.
 fn find_eocd(zip: &[u8]) -> Result<usize, ZipError> {
     let scan_from = zip.len().saturating_sub(22 + MAX_EOCD_COMMENT);
-    let window = zip.get(scan_from..).ok_or(ZipError::Malformed("empty archive"))?;
+    let window = zip
+        .get(scan_from..)
+        .ok_or(ZipError::Malformed("empty archive"))?;
     // Scan backward: a comment could itself contain four bytes that look like
     // the signature, and the true EOCD is always the *last* match.
     for start in (0..window.len().saturating_sub(21)).rev() {
@@ -145,7 +150,9 @@ fn find_eocd(zip: &[u8]) -> Result<usize, ZipError> {
             return Ok(scan_from + start);
         }
     }
-    Err(ZipError::Malformed("no End Of Central Directory record found"))
+    Err(ZipError::Malformed(
+        "no End Of Central Directory record found",
+    ))
 }
 
 /// Parse the central directory into every entry it names.
@@ -167,23 +174,36 @@ fn read_central_directory(zip: &[u8], budget: &mut Budget) -> Result<Vec<Central
     for _ in 0..disk_entries {
         budget.consume_fuel(1)?;
         if u32_le(zip, pos) != Some(CENTRAL_SIG) {
-            return Err(ZipError::Malformed("central directory record has the wrong signature"));
+            return Err(ZipError::Malformed(
+                "central directory record has the wrong signature",
+            ));
         }
-        let method = u16_le(zip, pos + 10).ok_or(ZipError::Malformed("truncated central record"))?;
+        let method =
+            u16_le(zip, pos + 10).ok_or(ZipError::Malformed("truncated central record"))?;
         let crc32 = u32_le(zip, pos + 16).ok_or(ZipError::Malformed("truncated central record"))?;
-        let compressed_size =
-            u64::from(u32_le(zip, pos + 20).ok_or(ZipError::Malformed("truncated central record"))?);
-        let uncompressed_size =
-            u64::from(u32_le(zip, pos + 24).ok_or(ZipError::Malformed("truncated central record"))?);
-        let name_len = usize::from(u16_le(zip, pos + 28).ok_or(ZipError::Malformed("truncated central record"))?);
-        let extra_len = usize::from(u16_le(zip, pos + 30).ok_or(ZipError::Malformed("truncated central record"))?);
-        let comment_len =
-            usize::from(u16_le(zip, pos + 32).ok_or(ZipError::Malformed("truncated central record"))?);
-        let local_header_offset =
-            u64::from(u32_le(zip, pos + 42).ok_or(ZipError::Malformed("truncated central record"))?);
+        let compressed_size = u64::from(
+            u32_le(zip, pos + 20).ok_or(ZipError::Malformed("truncated central record"))?,
+        );
+        let uncompressed_size = u64::from(
+            u32_le(zip, pos + 24).ok_or(ZipError::Malformed("truncated central record"))?,
+        );
+        let name_len = usize::from(
+            u16_le(zip, pos + 28).ok_or(ZipError::Malformed("truncated central record"))?,
+        );
+        let extra_len = usize::from(
+            u16_le(zip, pos + 30).ok_or(ZipError::Malformed("truncated central record"))?,
+        );
+        let comment_len = usize::from(
+            u16_le(zip, pos + 32).ok_or(ZipError::Malformed("truncated central record"))?,
+        );
+        let local_header_offset = u64::from(
+            u32_le(zip, pos + 42).ok_or(ZipError::Malformed("truncated central record"))?,
+        );
         let name_bytes = zip
             .get(pos + 46..pos + 46 + name_len)
-            .ok_or(ZipError::Malformed("central record name runs past end of file"))?;
+            .ok_or(ZipError::Malformed(
+                "central record name runs past end of file",
+            ))?;
         let name = String::from_utf8_lossy(name_bytes).into_owned();
         out.push(CentralEntry {
             method,
@@ -205,12 +225,17 @@ fn read_central_directory(zip: &[u8], budget: &mut Budget) -> Result<Vec<Central
 /// **not** the central directory's own extra-field length, which is not
 /// guaranteed to match (APPNOTE.TXT allows the two to differ).
 fn local_data_offset(zip: &[u8], local_header_offset: u64) -> Result<usize, ZipError> {
-    let at = usize::try_from(local_header_offset).map_err(|_| ZipError::Malformed("local header offset overflow"))?;
+    let at = usize::try_from(local_header_offset)
+        .map_err(|_| ZipError::Malformed("local header offset overflow"))?;
     if u32_le(zip, at) != Some(LOCAL_SIG) {
-        return Err(ZipError::Malformed("local file header has the wrong signature"));
+        return Err(ZipError::Malformed(
+            "local file header has the wrong signature",
+        ));
     }
-    let name_len = usize::from(u16_le(zip, at + 26).ok_or(ZipError::Malformed("truncated local header"))?);
-    let extra_len = usize::from(u16_le(zip, at + 28).ok_or(ZipError::Malformed("truncated local header"))?);
+    let name_len =
+        usize::from(u16_le(zip, at + 26).ok_or(ZipError::Malformed("truncated local header"))?);
+    let extra_len =
+        usize::from(u16_le(zip, at + 28).ok_or(ZipError::Malformed("truncated local header"))?);
     at.checked_add(30 + name_len + extra_len)
         .ok_or(ZipError::Malformed("local header length overflow"))
 }
@@ -223,11 +248,18 @@ pub fn crc32(data: &[u8]) -> u32 {
     let mut table = [0_u32; 256];
     let mut n = 0;
     while n < 256 {
-        #[allow(clippy::cast_possible_truncation, reason = "n < 256 fits in u8 by construction")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "n < 256 fits in u8 by construction"
+        )]
         let mut c = n as u32;
         let mut k = 0;
         while k < 8 {
-            c = if c & 1 != 0 { 0xEDB8_8320 ^ (c >> 1) } else { c >> 1 };
+            c = if c & 1 != 0 {
+                0xEDB8_8320 ^ (c >> 1)
+            } else {
+                c >> 1
+            };
             k += 1;
         }
         if let Some(slot) = table.get_mut(n as usize) {
@@ -262,14 +294,14 @@ pub fn extract(zip: &[u8], member: &str) -> Result<Vec<u8>, ZipError> {
         .ok_or_else(|| ZipError::MemberNotFound(member.to_owned()))?;
 
     let data_start = local_data_offset(zip, entry.local_header_offset)?;
-    let compressed_len =
-        usize::try_from(entry.compressed_size).map_err(|_| ZipError::Malformed("compressed size overflow"))?;
+    let compressed_len = usize::try_from(entry.compressed_size)
+        .map_err(|_| ZipError::Malformed("compressed size overflow"))?;
     let compressed = zip
         .get(data_start..data_start + compressed_len)
         .ok_or(ZipError::Malformed("member data runs past end of archive"))?;
 
-    let uncompressed_len =
-        usize::try_from(entry.uncompressed_size).map_err(|_| ZipError::Malformed("uncompressed size overflow"))?;
+    let uncompressed_len = usize::try_from(entry.uncompressed_size)
+        .map_err(|_| ZipError::Malformed("uncompressed size overflow"))?;
 
     let out = match entry.method {
         0 => {

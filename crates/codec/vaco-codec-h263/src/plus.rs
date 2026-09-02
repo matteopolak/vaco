@@ -90,7 +90,11 @@ pub(crate) struct PlusHeader {
     clippy::too_many_lines,
     reason = "one linear read of one bitstream structure (PLUSPTYPE plus every field Figure 8 lists after it); splitting it up would just thread the same BitReader and PlusModes through several functions that are each called exactly once, from here"
 )]
-pub(crate) fn parse(r: &mut BitReader<'_>, modes: &mut PlusModes, fallback_dims: Option<(u32, u32)>) -> Option<PlusHeader> {
+pub(crate) fn parse(
+    r: &mut BitReader<'_>,
+    modes: &mut PlusModes,
+    fallback_dims: Option<(u32, u32)>,
+) -> Option<PlusHeader> {
     let ufep = r.get(3);
     if ufep != 0 && ufep != 1 {
         return None; // reserved UFEP value.
@@ -226,13 +230,19 @@ pub(crate) fn parse(r: &mut BitReader<'_>, modes: &mut PlusModes, fallback_dims:
         return None;
     }
     let intra = match picture_type_code {
-        0 => true,  // I-picture.
-        1 => false, // P-picture.
+        0 => true,        // I-picture.
+        1 => false,       // P-picture.
         _ => return None, // Improved PB / B / EI / EP: Annexes M/O, out of scope.
     };
 
     if width == 0 || height == 0 {
         return None;
     }
-    Some(PlusHeader { width, height, intra, cpm, rtype })
+    Some(PlusHeader {
+        width,
+        height,
+        intra,
+        cpm,
+        rtype,
+    })
 }

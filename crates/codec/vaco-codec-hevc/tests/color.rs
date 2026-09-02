@@ -20,7 +20,10 @@
 //! exact four values [`a_real_bt709_stream_stamps_its_measured_colour_onto_the_decoded_frame`]
 //! asserts on the decoded `Frame`.
 
-#![allow(clippy::unwrap_used, reason = "test code over fixed, checked-in fixtures")]
+#![allow(
+    clippy::unwrap_used,
+    reason = "test code over fixed, checked-in fixtures"
+)]
 
 use vaco_codec_core::Decoder;
 use vaco_codec_hevc::HevcDecoder;
@@ -40,7 +43,10 @@ fn decode_first_frame(bytes: &[u8]) -> vaco_frame::Frame {
 fn a_real_bt709_stream_stamps_its_measured_colour_onto_the_decoded_frame() {
     let frame = decode_first_frame(include_bytes!("fixtures/vui_bt709.hevc"));
     assert_eq!(frame.color.primaries, vaco_color::ColorPrimaries::Bt709);
-    assert_eq!(frame.color.transfer, vaco_color::TransferCharacteristic::Bt709);
+    assert_eq!(
+        frame.color.transfer,
+        vaco_color::TransferCharacteristic::Bt709
+    );
     assert_eq!(frame.color.matrix, vaco_color::MatrixCoefficients::Bt709);
     assert_eq!(frame.color.range, vaco_color::ColorRange::Limited);
 }
@@ -58,9 +64,21 @@ fn a_real_bt709_stream_stamps_its_measured_colour_onto_the_decoded_frame() {
 #[test]
 fn a_stream_with_partial_vui_infers_range_but_leaves_colour_description_unspecified() {
     let frame = decode_first_frame(include_bytes!("fixtures/flat_gray_64x64.hevc"));
-    assert_eq!(frame.color.primaries, vaco_color::ColorPrimaries::Unspecified);
-    assert_eq!(frame.color.transfer, vaco_color::TransferCharacteristic::Unspecified);
-    assert_eq!(frame.color.matrix, vaco_color::MatrixCoefficients::Unspecified);
+    assert_eq!(
+        frame.color.primaries,
+        vaco_color::ColorPrimaries::Unspecified
+    );
+    assert_eq!(
+        frame.color.transfer,
+        vaco_color::TransferCharacteristic::Unspecified
+    );
+    assert_eq!(
+        frame.color.matrix,
+        vaco_color::MatrixCoefficients::Unspecified
+    );
     assert_eq!(frame.color.range, vaco_color::ColorRange::Limited);
-    assert_eq!(frame.color.chroma_location, vaco_color::ChromaLocation::Left);
+    assert_eq!(
+        frame.color.chroma_location,
+        vaco_color::ChromaLocation::Left
+    );
 }

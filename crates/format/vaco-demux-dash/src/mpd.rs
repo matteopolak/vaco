@@ -440,13 +440,7 @@ mod tests {
     /// entirely by MPD content an attacker controls.
     #[test]
     fn an_absurd_pad_width_from_the_manifest_is_capped_not_honoured() {
-        let out = substitute(
-            "seg-$Number%09999999999d$.m4s",
-            "v0",
-            0,
-            Some(7),
-            None,
-        );
+        let out = substitute("seg-$Number%09999999999d$.m4s", "v0", 0, Some(7), None);
         assert!(out.len() < 200, "got {} bytes", out.len());
         assert!(out.starts_with("seg-"));
         assert!(out.ends_with("7.m4s"));

@@ -55,11 +55,26 @@ const NOT_YET_COVERED: &[(&str, &str)] = &[
     // pixel/sample decode census this pass built.
     ("ass", "text subtitle output; not a pixel/sample stream"),
     ("cc_dec", "text subtitle output; not a pixel/sample stream"),
-    ("dvb_teletext", "text subtitle output; not a pixel/sample stream"),
-    ("dvbsub", "bitmap subtitle overlay; needs a compare mode this crate does not have yet"),
-    ("dvdsub", "bitmap subtitle overlay; needs a compare mode this crate does not have yet"),
-    ("mov_text", "text subtitle output; not a pixel/sample stream"),
-    ("pgssub", "bitmap subtitle overlay; needs a compare mode this crate does not have yet"),
+    (
+        "dvb_teletext",
+        "text subtitle output; not a pixel/sample stream",
+    ),
+    (
+        "dvbsub",
+        "bitmap subtitle overlay; needs a compare mode this crate does not have yet",
+    ),
+    (
+        "dvdsub",
+        "bitmap subtitle overlay; needs a compare mode this crate does not have yet",
+    ),
+    (
+        "mov_text",
+        "text subtitle output; not a pixel/sample stream",
+    ),
+    (
+        "pgssub",
+        "bitmap subtitle overlay; needs a compare mode this crate does not have yet",
+    ),
     ("ssa", "text subtitle output; not a pixel/sample stream"),
     ("subrip", "text subtitle output; not a pixel/sample stream"),
     ("text", "text subtitle output; not a pixel/sample stream"),
@@ -73,7 +88,10 @@ const NOT_YET_COVERED: &[(&str, &str)] = &[
     // fundamental one) -- they are covered now; see
     // decode-video-r10k-r210.toml, decode-video-v210.toml,
     // decode-video-y41p.toml and decode-video-avui.toml.
-    ("mp1", "ffmpeg 9.0.1 has no mp1 encoder (`-encoders` confirms mp2/mp2fixed only)"),
+    (
+        "mp1",
+        "ffmpeg 9.0.1 has no mp1 encoder (`-encoders` confirms mp2/mp2fixed only)",
+    ),
     (
         "qoa",
         "ffmpeg 9.0.1 demuxes qoa but has no encoder for it (`-encoders` confirms); the \
@@ -96,7 +114,10 @@ const NOT_YET_COVERED: &[(&str, &str)] = &[
          rejects (\"Decoding error: Invalid data found\") -- not usable as a case comparing \
          against a working reference decode",
     ),
-    ("jpegxl", "this ffmpeg 9.0.1 build has neither a jpegxl encoder nor decoder (`-decoders`/`-encoders` confirm) -- no oracle to compare against at all"),
+    (
+        "jpegxl",
+        "this ffmpeg 9.0.1 build has neither a jpegxl encoder nor decoder (`-decoders`/`-encoders` confirm) -- no oracle to compare against at all",
+    ),
     (
         "theora",
         "this ffmpeg 9.0.1 build has no theora encoder (`-encoders` confirms); \
@@ -109,7 +130,10 @@ const NOT_YET_COVERED: &[(&str, &str)] = &[
          fuzz/corpus/vc1_decode holds bare per-frame payloads for the fuzz target's own entry \
          point (checked 2026-09-02), not a file any container demuxer opens",
     ),
-    ("v210x", "ffmpeg has no v210x encoder (`-encoders` confirms decode-only)"),
+    (
+        "v210x",
+        "ffmpeg has no v210x encoder (`-encoders` confirms decode-only)",
+    ),
     (
         "wrapped_avframe",
         "internal AVFrame passthrough pseudo-codec; checked 2026-09-02 that no muxer (mov, \
@@ -132,7 +156,9 @@ fn decoder_components(root: &std::path::Path) -> Result<BTreeMap<String, String>
             continue;
         }
         let text = std::fs::read_to_string(&frag).map_err(|e| format!("{name}: {e}"))?;
-        for t in crate::toml::tables(&text, &["component"]).map_err(|e| format!("{}: {e}", frag.display()))? {
+        for t in crate::toml::tables(&text, &["component"])
+            .map_err(|e| format!("{}: {e}", frag.display()))?
+        {
             if t.get("kind") == Some("decoder")
                 && let Some(cname) = t.get("name")
             {
@@ -211,7 +237,9 @@ pub fn run(_check: bool) -> Task {
         let covered = tagged.contains(name);
         let deferred = not_yet_covered.contains_key(name.as_str());
         if !covered && !deferred {
-            missing.push(format!("  {name} ({owner}): no decode case and not in NOT_YET_COVERED"));
+            missing.push(format!(
+                "  {name} ({owner}): no decode case and not in NOT_YET_COVERED"
+            ));
         }
         if covered && deferred {
             stale_allowlist.push(format!(
@@ -281,13 +309,20 @@ mod tests {
         let before = names.len();
         names.sort_unstable();
         names.dedup();
-        assert_eq!(names.len(), before, "NOT_YET_COVERED lists the same decoder twice");
+        assert_eq!(
+            names.len(),
+            before,
+            "NOT_YET_COVERED lists the same decoder twice"
+        );
     }
 
     #[test]
     fn a_decoder_tag_is_found_regardless_of_surrounding_toml_shape() {
         let text = "[[media]]\nid = \"x\"\ntags = [\"decoder:made_up_codec\", \"other\"]\n";
-        assert_eq!(extract_decoder_tags(text), BTreeSet::from(["made_up_codec".to_owned()]));
+        assert_eq!(
+            extract_decoder_tags(text),
+            BTreeSet::from(["made_up_codec".to_owned()])
+        );
     }
 
     #[test]

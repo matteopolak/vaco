@@ -34,7 +34,7 @@ use crate::dither::{Dither, NoiseShapeState};
 use crate::mix::{MixLevels, MixMatrix, Rematrix, build_matrix};
 use crate::opts::ResampleOptions;
 use crate::rate::{RateConvert, RateParams};
-use crate::timestamp::{self, Decision, Policy, SoftWindow, Tracker, MAX_COMPENSATION_SAMPLES};
+use crate::timestamp::{self, Decision, MAX_COMPENSATION_SAMPLES, Policy, SoftWindow, Tracker};
 
 /// A configured conversion from one [`AudioSpec`] to another.
 #[derive(Debug)]
@@ -459,9 +459,9 @@ impl<T: Internal> Pipeline<T> {
         // drop or a net-negative soft correction only lowers actual output,
         // which a caller sizing a buffer from this bound does not need to know.
         let hard_extra = usize::try_from(self.pending_hard.max(0)).unwrap_or(usize::MAX);
-        let soft_extra = self
-            .soft
-            .map_or(0, |s| usize::try_from(s.remaining_delta.max(0)).unwrap_or(usize::MAX));
+        let soft_extra = self.soft.map_or(0, |s| {
+            usize::try_from(s.remaining_delta.max(0)).unwrap_or(usize::MAX)
+        });
         from_rate
             .saturating_add(self.pending_len())
             .saturating_add(hard_extra)
@@ -633,7 +633,8 @@ impl<T: Internal> Pipeline<T> {
             reason = "delta is bounded by MAX_COMPENSATION_SAMPLES, far below f64's exact range"
         )]
         let delta_out = (delta_in as f64) * out_rate / in_rate;
-        let cap = (self.comp_policy.max_soft_comp.abs() * self.comp_policy.comp_duration_s).max(0.0);
+        let cap =
+            (self.comp_policy.max_soft_comp.abs() * self.comp_policy.comp_duration_s).max(0.0);
         let delta_out = delta_out.clamp(-cap, cap).round();
         if delta_out == 0.0 || !delta_out.is_finite() {
             return Ok(());

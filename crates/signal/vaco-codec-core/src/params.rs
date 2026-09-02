@@ -287,7 +287,11 @@ impl CodecParameters {
             let bpp = v
                 .format
                 .map_or(4, |f| u32::from(f.bits_per_pixel()).div_ceil(8).max(1));
-            budget.check_frame(v.coded_width.max(v.width), v.coded_height.max(v.height), bpp)?;
+            budget.check_frame(
+                v.coded_width.max(v.width),
+                v.coded_height.max(v.height),
+                bpp,
+            )?;
         }
         if let Some(a) = &self.audio {
             budget.check_sample_rate(u64::from(a.sample_rate))?;

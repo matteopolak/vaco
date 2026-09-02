@@ -164,7 +164,11 @@ impl PipeDemuxer {
         let data = read_all(&mut io, &mut budget)?;
         let spans = framing::compute_spans(spec.framing, &data);
 
-        let mut stream = Stream::new(0, MediaType::Video, crate::multi::time_base_for(options.framerate));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Video,
+            crate::multi::time_base_for(options.framerate),
+        );
         stream.params.media_type = Some(MediaType::Video);
         stream.params.codec_id = spec.codec_id;
         stream.params.video = Some(crate::multi::stream_video(options.framerate));

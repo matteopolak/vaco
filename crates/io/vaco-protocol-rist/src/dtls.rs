@@ -167,7 +167,11 @@ pub fn negotiated_cipher_is_required_suite(stream: &DtlsStream) -> bool {
         .ssl()
         .current_cipher()
         .map(|cipher| cipher.name())
-        .is_some_and(|name| REQUIRED_CIPHER_SUITES.iter().any(|s| s.openssl_name == name))
+        .is_some_and(|name| {
+            REQUIRED_CIPHER_SUITES
+                .iter()
+                .any(|s| s.openssl_name == name)
+        })
 }
 
 #[cfg(test)]

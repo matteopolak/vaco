@@ -6,8 +6,7 @@ use vaco_core::Error as CoreError;
 use vaco_io::{MediaSink, MediaSource, PeekSource, RawSource, Seekability};
 use vaco_opts::{Dict, OptionsExt, Schema, schema_of};
 use vaco_protocol_core::{
-    Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result,
-    Url,
+    Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result, Url,
 };
 
 use crate::connect::{self, TlsStream};

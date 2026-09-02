@@ -11,7 +11,7 @@ use vaco_pixfmt::PixFmt;
 use crate::blocks::FrameGeom;
 use crate::frame::{self, crop_plane};
 use crate::ident::{Ident, PixelFormat};
-use crate::setup::{self, Setup, COMMENT_MAGIC, IDENT_MAGIC, SETUP_MAGIC};
+use crate::setup::{self, COMMENT_MAGIC, IDENT_MAGIC, SETUP_MAGIC, Setup};
 
 /// Unpack the Xiph-laced `extradata` blob a container hands a Theora
 /// stream: a packet count minus one, each packet's length lace-encoded
@@ -166,7 +166,10 @@ impl TheoraDecoder {
         // `-aac`/`-mpegaudio`/`-opus`), here on the one remaining video
         // decoder that had it too. `frd == 0` is invalid per the spec
         // (section 6.2 step 12) but guarded rather than trusted.
-        let time_base = Rational::new(i32::try_from(ident.frd.max(1)).unwrap_or(1), i32::try_from(ident.frn.max(1)).unwrap_or(1));
+        let time_base = Rational::new(
+            i32::try_from(ident.frd.max(1)).unwrap_or(1),
+            i32::try_from(ident.frn.max(1)).unwrap_or(1),
+        );
         out.duration = Timestamp::new(1)
             .to_duration(time_base)
             .unwrap_or(Duration::ZERO);
@@ -185,7 +188,11 @@ impl Decoder for TheoraDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.take().ok_or(if self.draining { Error::Eof } else { Error::NeedMoreInput })
+        self.pending.take().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
@@ -332,7 +339,6 @@ mod tests {
         );
     }
 
-
     /// `send_packet(None)` must make `receive_frame` answer `Eof` once
     /// `pending` is drained, not `NeedMoreInput` forever -- see
     /// `vaco-codec-ac3`'s decoder's own `draining` field doc for the full
@@ -341,8 +347,14 @@ mod tests {
     #[test]
     fn draining_answers_eof_once_empty_not_need_more_input_forever() {
         let mut dec = TheoraDecoder::new(Limits::permissive());
-        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)), "empty and not draining yet");
+        assert!(
+            matches!(dec.receive_frame(), Err(Error::NeedMoreInput)),
+            "empty and not draining yet"
+        );
         dec.send_packet(None).unwrap();
-        assert!(matches!(dec.receive_frame(), Err(Error::Eof)), "must answer Eof once drained and empty, not NeedMoreInput forever");
+        assert!(
+            matches!(dec.receive_frame(), Err(Error::Eof)),
+            "must answer Eof once drained and empty, not NeedMoreInput forever"
+        );
     }
 }

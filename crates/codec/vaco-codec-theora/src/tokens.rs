@@ -124,7 +124,9 @@ pub(crate) fn decode_coeff_token(
                 _ => (9, 69),
             };
             let sign = r.get(1);
-            let mag = i32::try_from(r.get(extra_bits)).unwrap_or(i32::MAX).saturating_add(offset);
+            let mag = i32::try_from(r.get(extra_bits))
+                .unwrap_or(i32::MAX)
+                .saturating_add(offset);
             set(coeffs, ti, if sign == 0 { mag } else { -mag });
             CoeffToken {
                 new_ti: ti + 1,
@@ -164,7 +166,9 @@ pub(crate) fn decode_coeff_token(
         }
         30 => {
             let sign = r.get(1);
-            let mag = i32::try_from(r.get(1)).unwrap_or(i32::MAX).saturating_add(2);
+            let mag = i32::try_from(r.get(1))
+                .unwrap_or(i32::MAX)
+                .saturating_add(2);
             set(coeffs, ti, 0);
             set(coeffs, ti + 1, if sign == 0 { mag } else { -mag });
             let new_ti = ti + 2;
@@ -176,7 +180,9 @@ pub(crate) fn decode_coeff_token(
         _ => {
             // token 31
             let sign = r.get(1);
-            let mag = i32::try_from(r.get(1)).unwrap_or(i32::MAX).saturating_add(2);
+            let mag = i32::try_from(r.get(1))
+                .unwrap_or(i32::MAX)
+                .saturating_add(2);
             let rlen = r.get(1) + 2;
             for z in 0..rlen {
                 set(coeffs, ti + z, 0);

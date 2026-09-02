@@ -181,12 +181,17 @@ pub fn sound_parameters(descriptor: &MetadataSet) -> CodecParameters {
     // block align and channel count are both present — measured to agree
     // exactly on a real file (`block_align=4, channels=2` implies 16 bits,
     // matching `AudioQuantizationBits=16` on that same descriptor).
-    #[allow(clippy::integer_division, reason = "channels is checked non-zero immediately above")]
-    let bits = descriptor.get_u32(PropertyId::AudioQuantizationBits).or_else(|| {
-        let block_align = u32::from(descriptor.get_u16(PropertyId::AudioBlockAlign)?);
-        let ch = channels?;
-        (ch > 0).then(|| (block_align / ch) * 8)
-    });
+    #[allow(
+        clippy::integer_division,
+        reason = "channels is checked non-zero immediately above"
+    )]
+    let bits = descriptor
+        .get_u32(PropertyId::AudioQuantizationBits)
+        .or_else(|| {
+            let block_align = u32::from(descriptor.get_u16(PropertyId::AudioBlockAlign)?);
+            let ch = channels?;
+            (ch > 0).then(|| (block_align / ch) * 8)
+        });
     if bits == Some(16) {
         audio.format = Some(SampleFmt::S16);
         // `AES3PCMDescriptor` (0x47) is the class measured to carry raw,
@@ -272,9 +277,7 @@ pub fn picture_parameters(descriptor: &MetadataSet) -> CodecParameters {
         // in JPEG's unchecked `precision`
         // (crash-b105f0b6cfac5b713adef84be6cdd3c1d57599a0). `u8::try_from`
         // alone only rejected values above 255, not the 65..=255 range or 0.
-        video.bits_per_raw_sample = u8::try_from(depth)
-            .ok()
-            .filter(|&b| (1..=64).contains(&b));
+        video.bits_per_raw_sample = u8::try_from(depth).ok().filter(|&b| (1..=64).contains(&b));
     }
     if let Some(coding) = descriptor.get_ul(PropertyId::PictureEssenceCoding) {
         params.codec_id = PICTURE_ESSENCE_CODING
@@ -386,7 +389,10 @@ mod tests {
     #[test]
     fn an_out_of_range_component_depth_is_not_reported() {
         for depth in [0u32, 65, 255, 4096] {
-            let d = descriptor_with(vec![(PropertyId::ComponentDepth, depth.to_be_bytes().to_vec())]);
+            let d = descriptor_with(vec![(
+                PropertyId::ComponentDepth,
+                depth.to_be_bytes().to_vec(),
+            )]);
             let params = picture_parameters(&d);
             let v = params.video.unwrap();
             assert_eq!(v.bits_per_raw_sample, None, "depth={depth}");
@@ -395,7 +401,10 @@ mod tests {
 
     #[test]
     fn a_plausible_component_depth_is_reported() {
-        let d = descriptor_with(vec![(PropertyId::ComponentDepth, 10u32.to_be_bytes().to_vec())]);
+        let d = descriptor_with(vec![(
+            PropertyId::ComponentDepth,
+            10u32.to_be_bytes().to_vec(),
+        )]);
         let params = picture_parameters(&d);
         let v = params.video.unwrap();
         assert_eq!(v.bits_per_raw_sample, Some(10));

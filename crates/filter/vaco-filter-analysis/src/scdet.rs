@@ -63,13 +63,19 @@ pub(crate) struct Options {
 
 impl Default for Options {
     fn default() -> Self {
-        Self { threshold: 10.0, sc_pass: false }
+        Self {
+            threshold: 10.0,
+            sc_pass: false,
+        }
     }
 }
 
 fn seconds(pts: Timestamp, tb: Rational) -> f64 {
     let Some(ticks) = pts.ticks() else { return 0.0 };
-    #[allow(clippy::cast_precision_loss, reason = "display-scale timestamp conversion")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "display-scale timestamp conversion"
+    )]
     {
         ticks as f64 * f64::from(tb.num) / f64::from(tb.den.max(1))
     }
@@ -90,13 +96,18 @@ pub(crate) struct Filter {
 
 impl Filter {
     pub(crate) fn new(opts: Options) -> Self {
-        Self { opts, prev: None, prev_mafd: 0.0 }
+        Self {
+            opts,
+            prev: None,
+            prev_mafd: 0.0,
+        }
     }
 
     /// The mean absolute luma difference from the previous frame, scaled to
     /// `0..100` by `/256` — `0.0` for the first frame (no predecessor).
     fn mafd(&self, frame: &Frame) -> f64 {
-        let (Some(cur), Some(prev)) = (frame.plane(0), self.prev.as_ref().and_then(|p| p.plane(0))) else {
+        let (Some(cur), Some(prev)) = (frame.plane(0), self.prev.as_ref().and_then(|p| p.plane(0)))
+        else {
             return 0.0;
         };
         let rows = cur.rows().min(prev.rows());
@@ -116,8 +127,15 @@ impl Filter {
 
     fn step(&mut self, mut frame: Frame, tb: Rational) -> Option<Frame> {
         let mafd = self.mafd(&frame);
-        #[allow(clippy::float_cmp, reason = "the measured rule is exact repetition, not proximity")]
-        let score = if self.prev.is_none() || mafd == self.prev_mafd { 0.0 } else { mafd };
+        #[allow(
+            clippy::float_cmp,
+            reason = "the measured rule is exact repetition, not proximity"
+        )]
+        let score = if self.prev.is_none() || mafd == self.prev_mafd {
+            0.0
+        } else {
+            mafd
+        };
         frame.set_metadata("lavfi.scd.mafd", fixed3(mafd));
         frame.set_metadata("lavfi.scd.score", fixed3(score));
         let is_change = score >= self.opts.threshold;
@@ -151,7 +169,11 @@ impl FrameFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
     let opts = Options {
-        threshold: f64_opt(req, "threshold", f64_opt(req, "t", Options::default().threshold)),
+        threshold: f64_opt(
+            req,
+            "threshold",
+            f64_opt(req, "t", Options::default().threshold),
+        ),
         sc_pass: req
             .named("sc_pass")
             .or_else(|| req.named("s"))
@@ -193,7 +215,10 @@ mod tests {
     /// Measured: `Y=0 -> Y=30` scales to `mafd = 30*100/256 = 11.71875`.
     #[test]
     fn mafd_matches_the_measured_scale_factor() {
-        let mut f = Filter::new(Options { threshold: 0.0, sc_pass: false });
+        let mut f = Filter::new(Options {
+            threshold: 0.0,
+            sc_pass: false,
+        });
         let _ = f.step(gray_frame(0, 2, 2), Rational::new(1, 1));
         let out = f.step(gray_frame(30, 2, 2), Rational::new(1, 1)).unwrap();
         assert_eq!(out.metadata_get("lavfi.scd.mafd"), Some("11.719"));
@@ -204,7 +229,10 @@ mod tests {
     /// to `0`, even though `mafd` itself stays nonzero.
     #[test]
     fn a_repeated_mafd_suppresses_the_score() {
-        let mut f = Filter::new(Options { threshold: 0.0, sc_pass: false });
+        let mut f = Filter::new(Options {
+            threshold: 0.0,
+            sc_pass: false,
+        });
         let _ = f.step(gray_frame(0, 2, 2), Rational::new(1, 1));
         let _ = f.step(gray_frame(30, 2, 2), Rational::new(1, 1));
         // Y goes 30 -> 60, an identical step size, so mafd repeats exactly.
@@ -217,7 +245,10 @@ mod tests {
     /// not clamped to zero — ruling out a "decrease clamps" hypothesis.
     #[test]
     fn a_different_lower_mafd_is_not_clamped_to_zero() {
-        let mut f = Filter::new(Options { threshold: 0.0, sc_pass: false });
+        let mut f = Filter::new(Options {
+            threshold: 0.0,
+            sc_pass: false,
+        });
         let _ = f.step(gray_frame(0, 2, 2), Rational::new(1, 1));
         let _ = f.step(gray_frame(30, 2, 2), Rational::new(1, 1));
         let out = f.step(gray_frame(15, 2, 2), Rational::new(1, 1)).unwrap();
@@ -227,7 +258,10 @@ mod tests {
 
     #[test]
     fn sc_pass_drops_frames_below_threshold() {
-        let mut f = Filter::new(Options { threshold: 50.0, sc_pass: true });
+        let mut f = Filter::new(Options {
+            threshold: 50.0,
+            sc_pass: true,
+        });
         assert!(f.step(gray_frame(0, 2, 2), Rational::new(1, 1)).is_none());
         // A small step keeps score well under threshold=50 -> dropped.
         assert!(f.step(gray_frame(10, 2, 2), Rational::new(1, 1)).is_none());

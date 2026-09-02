@@ -36,8 +36,8 @@
 //! behaviour, which is worse than an honestly approximate constant.
 
 use vaco_core::{Duration, Error, Result, Timestamp};
-use vaco_format_core::seek::{SeekFlags, SeekTarget};
 use vaco_format_core::Stream;
+use vaco_format_core::seek::{SeekFlags, SeekTarget};
 use vaco_io::{IoContext, Seekability};
 use vaco_limits::Budget;
 use vaco_packet::{Packet, PacketFlags};
@@ -218,7 +218,10 @@ impl BlockDemuxer {
         if let Some(audio) = self.stream.params.audio.as_ref() {
             let rate = u64::from(audio.sample_rate.max(1));
             let frames = whole_blocks.saturating_mul(u64::from(self.frames_per_block));
-            let micros = frames.saturating_mul(1_000_000).checked_div(rate).unwrap_or(0);
+            let micros = frames
+                .saturating_mul(1_000_000)
+                .checked_div(rate)
+                .unwrap_or(0);
             pkt.duration = Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX));
         }
         self.blocks_emitted = self.blocks_emitted.saturating_add(whole_blocks.max(1));

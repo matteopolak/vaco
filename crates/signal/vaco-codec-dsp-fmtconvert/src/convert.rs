@@ -23,11 +23,7 @@ pub fn clip_u8(x: f32) -> u8 {
 }
 
 fn round_half_away_from_zero(x: f32) -> f32 {
-    if x.is_nan() {
-        0.0
-    } else {
-        x.round()
-    }
+    if x.is_nan() { 0.0 } else { x.round() }
 }
 
 fn clip_i32_from_f32(x: f32, lo: f32, hi: f32) -> i32 {
@@ -107,7 +103,9 @@ pub fn float_to_int32(dst: &mut [i32], src: &[f32]) {
         *d = if scaled.is_nan() {
             0
         } else {
-            scaled.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
+            scaled
+                .round()
+                .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
         };
     }
 }

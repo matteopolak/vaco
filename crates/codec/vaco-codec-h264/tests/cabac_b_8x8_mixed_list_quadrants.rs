@@ -87,7 +87,11 @@ fn packed(plane: &vaco_frame::Plane, row_bytes: usize, rows: usize) -> Vec<u8> {
 fn b_8x8_quadrants_using_different_lists_are_byte_exact_against_ffmpeg() {
     let stream: &[u8] = include_bytes!("fixtures/cabac_b_8x8_mixed_list_quadrants.264");
     let reference: &[u8] = include_bytes!("fixtures/cabac_b_8x8_mixed_list_quadrants_ref.yuv");
-    assert_eq!(reference.len(), FRAMES * FRAME, "reference fixture is not {FRAMES} whole frames");
+    assert_eq!(
+        reference.len(),
+        FRAMES * FRAME,
+        "reference fixture is not {FRAMES} whole frames"
+    );
 
     let mut d = H264Decoder::new(Limits::default());
     let mut budget = Budget::new(Limits::default());
@@ -108,7 +112,11 @@ fn b_8x8_quadrants_using_different_lists_are_byte_exact_against_ffmpeg() {
             _ => {}
         }
     }
-    assert_eq!(slices.len(), FRAMES, "fixture should carry one slice per picture, {FRAMES} pictures");
+    assert_eq!(
+        slices.len(),
+        FRAMES,
+        "fixture should carry one slice per picture, {FRAMES} pictures"
+    );
     d.set_extradata(&extradata).unwrap();
 
     // B slices reorder, so this drives the real send/receive protocol and
@@ -136,7 +144,12 @@ fn b_8x8_quadrants_using_different_lists_are_byte_exact_against_ffmpeg() {
             Err(e) => panic!("receive_frame failed while draining end of stream: {e:?}"),
         }
     }
-    assert_eq!(frames.len(), FRAMES, "expected {FRAMES} frames out, got {}", frames.len());
+    assert_eq!(
+        frames.len(),
+        FRAMES,
+        "expected {FRAMES} frames out, got {}",
+        frames.len()
+    );
 
     let mut report: Vec<(usize, [(usize, u8); 3])> = Vec::new();
     for (idx, frame) in frames.iter().enumerate() {
@@ -160,7 +173,11 @@ fn b_8x8_quadrants_using_different_lists_are_byte_exact_against_ffmpeg() {
 
         let mut per_plane = [(0usize, 0u8); 3];
         for p in 0..3 {
-            assert_eq!(got[p].len(), want[p].len(), "frame {idx} plane {p}: wrong size");
+            assert_eq!(
+                got[p].len(),
+                want[p].len(),
+                "frame {idx} plane {p}: wrong size"
+            );
             for (g, w) in got[p].iter().zip(want[p].iter()) {
                 if g != w {
                     per_plane[p].0 += 1;
@@ -173,7 +190,10 @@ fn b_8x8_quadrants_using_different_lists_are_byte_exact_against_ffmpeg() {
 
     let first_bad = report.iter().find(|(_, p)| p.iter().any(|(n, _)| *n > 0));
     if let Some((idx, per_plane)) = first_bad {
-        let total: usize = report.iter().map(|(_, p)| p.iter().map(|(n, _)| n).sum::<usize>()).sum();
+        let total: usize = report
+            .iter()
+            .map(|(_, p)| p.iter().map(|(n, _)| n).sum::<usize>())
+            .sum();
         let summary: String = report
             .iter()
             .filter(|(_, p)| p.iter().any(|(n, _)| *n > 0))

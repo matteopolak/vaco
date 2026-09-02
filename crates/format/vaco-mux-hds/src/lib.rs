@@ -222,9 +222,14 @@ impl Level {
     }
 
     fn gating_running_ms(&self) -> u64 {
-        self.video
-            .as_ref()
-            .map_or_else(|| self.audio.as_ref().map_or(self.fragment_start_ms, |a| a.running_ms), |v| v.running_ms)
+        self.video.as_ref().map_or_else(
+            || {
+                self.audio
+                    .as_ref()
+                    .map_or(self.fragment_start_ms, |a| a.running_ms)
+            },
+            |v| v.running_ms,
+        )
     }
 }
 
@@ -296,10 +301,18 @@ impl HdsMuxer {
     /// `(level index, is_video)` for the level that owns `stream_index`.
     fn locate(&self, stream_index: u32) -> Result<(usize, bool)> {
         for (i, level) in self.levels.iter().enumerate() {
-            if level.video.as_ref().is_some_and(|t| t.stream_index == stream_index) {
+            if level
+                .video
+                .as_ref()
+                .is_some_and(|t| t.stream_index == stream_index)
+            {
                 return Ok((i, true));
             }
-            if level.audio.as_ref().is_some_and(|t| t.stream_index == stream_index) {
+            if level
+                .audio
+                .as_ref()
+                .is_some_and(|t| t.stream_index == stream_index)
+            {
                 return Ok((i, false));
             }
         }
@@ -317,12 +330,18 @@ impl HdsMuxer {
             return Ok(());
         }
         if let Some(video) = &level.video {
-            let payload = flv::video_payload(true, flv::AVC_PACKET_TYPE_SEQUENCE_HEADER, 0, &video.sequence_header);
+            let payload = flv::video_payload(
+                true,
+                flv::AVC_PACKET_TYPE_SEQUENCE_HEADER,
+                0,
+                &video.sequence_header,
+            );
             let ts = u32::try_from(video.running_ms).unwrap_or(u32::MAX);
             flv::write_tag(&mut level.pending_tags, flv::TAG_TYPE_VIDEO, ts, &payload);
         }
         if let Some(audio) = &level.audio {
-            let payload = flv::audio_payload(flv::AAC_PACKET_TYPE_SEQUENCE_HEADER, &audio.sequence_header);
+            let payload =
+                flv::audio_payload(flv::AAC_PACKET_TYPE_SEQUENCE_HEADER, &audio.sequence_header);
             let ts = u32::try_from(audio.running_ms).unwrap_or(u32::MAX);
             flv::write_tag(&mut level.pending_tags, flv::TAG_TYPE_AUDIO, ts, &payload);
         }
@@ -443,7 +462,8 @@ impl Muxer for HdsMuxer {
             None => true,
         };
         if needs_new_level {
-            let index = u32::try_from(self.levels.len()).map_err(|_| Error::InvalidData("too many quality levels"))?;
+            let index = u32::try_from(self.levels.len())
+                .map_err(|_| Error::InvalidData("too many quality levels"))?;
             self.levels.push(Level::new(index));
         }
         let Some(level) = self.levels.last_mut() else {
@@ -503,7 +523,12 @@ impl Muxer for HdsMuxer {
             };
             let ts = u32::try_from(video.running_ms).unwrap_or(u32::MAX);
             let cts = Self::composition_time_ms(packet.pts, packet.dts);
-            let payload = flv::video_payload(packet.is_key(), flv::AVC_PACKET_TYPE_NALU, cts, packet.payload());
+            let payload = flv::video_payload(
+                packet.is_key(),
+                flv::AVC_PACKET_TYPE_NALU,
+                cts,
+                packet.payload(),
+            );
             flv::write_tag(&mut level.pending_tags, flv::TAG_TYPE_VIDEO, ts, &payload);
             video.running_ms = video.running_ms.saturating_add(dur_ms);
         } else {
@@ -516,10 +541,9 @@ impl Muxer for HdsMuxer {
             audio.running_ms = audio.running_ms.saturating_add(dur_ms);
 
             let audio_only_should_flush = level.video.is_none()
-                && level
-                    .audio
-                    .as_ref()
-                    .is_some_and(|a| a.running_ms.saturating_sub(level.fragment_start_ms) >= threshold);
+                && level.audio.as_ref().is_some_and(|a| {
+                    a.running_ms.saturating_sub(level.fragment_start_ms) >= threshold
+                });
             if audio_only_should_flush {
                 self.flush_level(level_idx)?;
             }

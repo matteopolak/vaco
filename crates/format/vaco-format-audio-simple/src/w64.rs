@@ -303,8 +303,9 @@ impl Muxer for W64Muxer {
         let codec = params
             .codec_id
             .ok_or(Error::Unsupported("w64: the codec must be known"))?;
-        let coded_bits = pcm::coded_bits(codec)
-            .ok_or(Error::Unsupported("w64: only PCM-shaped codecs are supported"))?;
+        let coded_bits = pcm::coded_bits(codec).ok_or(Error::Unsupported(
+            "w64: only PCM-shaped codecs are supported",
+        ))?;
         let channels = audio.layout.as_ref().map_or(1, |l| l.channels).max(1) as u16;
         self.stream = Some(MuxStream {
             sample_rate: audio.sample_rate.max(1),
@@ -316,8 +317,7 @@ impl Muxer for W64Muxer {
                 _ if pcm::is_float(codec) => 3,
                 _ => 1,
             },
-            bytes_per_frame: u32::from(channels)
-                .saturating_mul(u32::from(coded_bits.div_ceil(8))),
+            bytes_per_frame: u32::from(channels).saturating_mul(u32::from(coded_bits.div_ceil(8))),
         });
         Ok(0)
     }

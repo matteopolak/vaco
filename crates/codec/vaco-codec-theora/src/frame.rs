@@ -181,7 +181,11 @@ fn run_length_code(r: &mut BitReader<'_>) -> (u32, u32) {
     }
 }
 
-fn decode_long_run_string(r: &mut BitReader<'_>, nbits: u32, budget: &mut Budget) -> Result<Vec<bool>> {
+fn decode_long_run_string(
+    r: &mut BitReader<'_>,
+    nbits: u32,
+    budget: &mut Budget,
+) -> Result<Vec<bool>> {
     let mut bits: Vec<bool> = budget.alloc(nbits as usize)?;
     if nbits == 0 {
         return Ok(bits);
@@ -300,7 +304,9 @@ fn decode_coefficients(
                 16 * hg + hti_c
             };
             let Some(table) = tables.get(hti as usize) else {
-                return Err(Error::InvalidData("theora: huffman table index out of range"));
+                return Err(Error::InvalidData(
+                    "theora: huffman table index out of range",
+                ));
             };
             let token = table.decode(r);
             if token < 7 {
@@ -392,11 +398,10 @@ fn undo_dc_prediction(coeffs: &mut [BlockCoeffs], geom: &FrameGeom) {
                     .then(|| plane.coded_of(bx - 1, by - 1))
                     .flatten();
                 let lower = (by > 0).then(|| plane.coded_of(bx, by - 1)).flatten();
-                let lr = (by > 0)
-                    .then(|| plane.coded_of(bx + 1, by - 1))
-                    .flatten();
+                let lr = (by > 0).then(|| plane.coded_of(bx + 1, by - 1)).flatten();
 
-                let (p0, p1, p2, p3) = (left.is_some(), ll.is_some(), lower.is_some(), lr.is_some());
+                let (p0, p1, p2, p3) =
+                    (left.is_some(), ll.is_some(), lower.is_some(), lr.is_some());
                 let dcpred = if !p0 && !p1 && !p2 && !p3 {
                     lastdc
                 } else {

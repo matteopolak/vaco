@@ -228,13 +228,25 @@ pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
     // `i32::MAX` before the cast, not just floored at zero, so a huge or
     // `inf` graph-text value cannot wrap through the `f64 -> u32` cast.
     let round = f64_opt(req, "round", 16.0).clamp(0.0, INT_MAX);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "round is clamped to 0.0..=i32::MAX above")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "round is clamped to 0.0..=i32::MAX above"
+    )]
     let round = round as u32;
     let skip = f64_opt(req, "skip", 2.0).clamp(0.0, INT_MAX);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "skip is clamped to 0.0..=i32::MAX above")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "skip is clamped to 0.0..=i32::MAX above"
+    )]
     let skip = skip as u32;
     let reset_count = f64_opt(req, "reset_count", f64_opt(req, "reset", 0.0)).clamp(0.0, INT_MAX);
-    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "reset_count is clamped to 0.0..=i32::MAX above")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        clippy::cast_sign_loss,
+        reason = "reset_count is clamped to 0.0..=i32::MAX above"
+    )]
     let reset_count = reset_count as u32;
     Instance {
         desc: DESC,

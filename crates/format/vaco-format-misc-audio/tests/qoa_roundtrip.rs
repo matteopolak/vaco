@@ -48,7 +48,14 @@ fn synth_i16(seconds: f64) -> Vec<i16> {
 /// per <https://qoaformat.org/qoa-specification.pdf>.
 fn build_qoa_file(samples: &[i16]) -> Vec<u8> {
     let mut budget = Budget::new(Limits::permissive());
-    let mut frame = Frame::alloc_audio(&mut budget, vaco_sampfmt::SampleFmt::S16, ChannelLayout::MONO, samples.len() as u32, SAMPLE_RATE).unwrap();
+    let mut frame = Frame::alloc_audio(
+        &mut budget,
+        vaco_sampfmt::SampleFmt::S16,
+        ChannelLayout::MONO,
+        samples.len() as u32,
+        SAMPLE_RATE,
+    )
+    .unwrap();
     {
         let mut plane = frame.plane_mut(0).unwrap();
         let row = plane.row_mut(0).unwrap();
@@ -131,5 +138,8 @@ fn a_real_encoded_tone_survives_demux_and_decode() {
         nb += b * b;
     }
     let corr = dot / (na.sqrt() * nb.sqrt()).max(1e-9);
-    assert!(corr > 0.9, "decoded tone poorly correlated with the original: {corr:.4}");
+    assert!(
+        corr > 0.9,
+        "decoded tone poorly correlated with the original: {corr:.4}"
+    );
 }

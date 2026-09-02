@@ -132,11 +132,17 @@ impl TtaDemuxer {
         let _seek_table_crc = io.rl32()?;
 
         if audio_format != 1 {
-            return Err(Error::Unsupported("tta: only PCM (audio_format=1) is supported"));
+            return Err(Error::Unsupported(
+                "tta: only PCM (audio_format=1) is supported",
+            ));
         }
         let format = sample_fmt_for(bits_per_sample);
 
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, sample_rate.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, sample_rate.cast_signed()),
+        );
         let mut params = CodecParameters::audio();
         params.codec_id = Some(CodecId::Tta);
         if let Some(audio) = params.audio.as_mut() {
@@ -178,16 +184,25 @@ impl Demuxer for TtaDemuxer {
         pkt.dts = pkt.pts;
         pkt.flags = PacketFlags::KEY;
 
-        let this_frame_samples = self
-            .frame_len_samples
-            .min(self.total_samples.saturating_sub(self.frames_emitted_samples));
+        let this_frame_samples = self.frame_len_samples.min(
+            self.total_samples
+                .saturating_sub(self.frames_emitted_samples),
+        );
         let micros = this_frame_samples
             .saturating_mul(1_000_000)
-            .checked_div(u64::from(self.stream.params.audio.as_ref().map_or(1, |a| a.sample_rate.max(1))))
+            .checked_div(u64::from(
+                self.stream
+                    .params
+                    .audio
+                    .as_ref()
+                    .map_or(1, |a| a.sample_rate.max(1)),
+            ))
             .unwrap_or(0);
         pkt.duration = vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX));
 
-        self.frames_emitted_samples = self.frames_emitted_samples.saturating_add(this_frame_samples);
+        self.frames_emitted_samples = self
+            .frames_emitted_samples
+            .saturating_add(this_frame_samples);
         self.next_frame = self.next_frame.saturating_add(1);
         Ok(pkt)
     }
@@ -201,8 +216,13 @@ impl Demuxer for TtaDemuxer {
 
     fn duration(&self) -> Option<vaco_core::Duration> {
         let rate = self.stream.params.audio.as_ref()?.sample_rate.max(1);
-        let micros = self.total_samples.checked_mul(1_000_000)?.checked_div(u64::from(rate))?;
-        Some(vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX)))
+        let micros = self
+            .total_samples
+            .checked_mul(1_000_000)?
+            .checked_div(u64::from(rate))?;
+        Some(vaco_core::Duration::from_micros(
+            i64::try_from(micros).unwrap_or(i64::MAX),
+        ))
     }
 }
 
@@ -236,7 +256,17 @@ mod tests {
         let data = build_file(44_100, 2, 13_230, &payload);
         let src = Box::new(MemorySource::new(data));
         let mut d = TtaDemuxer::open(src).unwrap();
-        assert_eq!(d.streams().first().unwrap().params.audio.as_ref().unwrap().sample_rate, 44_100);
+        assert_eq!(
+            d.streams()
+                .first()
+                .unwrap()
+                .params
+                .audio
+                .as_ref()
+                .unwrap()
+                .sample_rate,
+            44_100
+        );
         let pkt = d.read_packet().unwrap();
         assert_eq!(pkt.payload(), payload.as_slice());
         assert_eq!(pkt.pts.ticks(), Some(0));

@@ -54,13 +54,32 @@ pub(crate) fn track_number_d10(n: u32) -> [u8; 4] {
 pub(crate) fn essence_key(track_number: [u8; 4]) -> [u8; 16] {
     let p = GC_ESSENCE_PREFIX;
     [
-        p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11], track_number[0],
-        track_number[1], track_number[2], track_number[3],
+        p[0],
+        p[1],
+        p[2],
+        p[3],
+        p[4],
+        p[5],
+        p[6],
+        p[7],
+        p[8],
+        p[9],
+        p[10],
+        p[11],
+        track_number[0],
+        track_number[1],
+        track_number[2],
+        track_number[3],
     ]
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 

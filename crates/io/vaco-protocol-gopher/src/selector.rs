@@ -87,10 +87,7 @@ mod tests {
         // Measured: gopher://host/some/selector (no explicit type) sends
         // "/selector", not "ome/selector" — "some" up to the next '/' is
         // discarded wholesale, not kept minus one character.
-        assert_eq!(
-            parse("some/selector"),
-            Some(('s', "/selector".to_owned()))
-        );
+        assert_eq!(parse("some/selector"), Some(('s', "/selector".to_owned())));
     }
 
     #[test]
@@ -115,7 +112,9 @@ mod tests {
         for ty in ['5', '9', 's'] {
             assert!(check_type(ty).is_ok(), "{ty}");
         }
-        for ty in ['0', '1', '2', '3', '4', '6', '7', '8', 'g', 'h', 'I', 'i', 'T', 'w'] {
+        for ty in [
+            '0', '1', '2', '3', '4', '6', '7', '8', 'g', 'h', 'I', 'i', 'T', 'w',
+        ] {
             assert!(check_type(ty).is_err(), "{ty}");
         }
     }

@@ -255,7 +255,9 @@ impl Ul {
             // turned out to be, not 0x48 `WaveAudioDescriptor` — measured,
             // not assumed); 0x42/0x48 remain spec-derived (ST377-1 Annex,
             // RP210) and unexercised — see docs/format/vaco-demux-mxf.md.
-            b @ (0x24 | 0x27 | 0x28 | 0x51 | 0x42 | 0x47 | 0x48 | 0x44) => StructuralClass::Descriptor(b),
+            b @ (0x24 | 0x27 | 0x28 | 0x51 | 0x42 | 0x47 | 0x48 | 0x44) => {
+                StructuralClass::Descriptor(b)
+            }
             other => StructuralClass::Unknown(other),
         })
     }

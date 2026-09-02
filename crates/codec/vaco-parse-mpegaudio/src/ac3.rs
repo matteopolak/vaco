@@ -50,9 +50,8 @@ fn to_codec_parameters(info: &SyncInfo, bsi: Option<&Bsi>) -> CodecParameters {
     let mut params = CodecParameters::audio().with_codec(codec_for_kind(info.kind));
     if info.samples > 0 {
         let bits = (info.frame_size as u64).saturating_mul(8);
-        params.bit_rate = Some(
-            bits.saturating_mul(u64::from(info.sample_rate)) / u64::from(info.samples),
-        );
+        params.bit_rate =
+            Some(bits.saturating_mul(u64::from(info.sample_rate)) / u64::from(info.samples));
     }
     let layout = bsi.map(|b| acmod_layout(b.acmod, b.lfeon));
     params.audio = Some(AudioParameters {

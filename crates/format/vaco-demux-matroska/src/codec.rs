@@ -459,7 +459,11 @@ mod tests {
             ("A_PCM/FLOAT/IEEE", 64, CodecId::PcmF64le),
         ];
         for (id, depth, want) in cases {
-            assert_eq!(resolve_pcm(id, Some(depth)), Some(want), "{id} at {depth}-bit");
+            assert_eq!(
+                resolve_pcm(id, Some(depth)),
+                Some(want),
+                "{id} at {depth}-bit"
+            );
         }
     }
 

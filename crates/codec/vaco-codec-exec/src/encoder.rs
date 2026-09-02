@@ -116,7 +116,9 @@ pub struct ExecEncoder {
 
 impl std::fmt::Debug for ExecEncoder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ExecEncoder").field("tool", &self.tool.program).finish_non_exhaustive()
+        f.debug_struct("ExecEncoder")
+            .field("tool", &self.tool.program)
+            .finish_non_exhaustive()
     }
 }
 
@@ -146,7 +148,10 @@ impl ExecEncoder {
             args.push(format!("{crf}"));
         }
         if self.tool.input_mode == InputMode::TempY4mFile {
-            let path = self.temp_path.as_ref().map_or_else(String::new, |p| p.display().to_string());
+            let path = self
+                .temp_path
+                .as_ref()
+                .map_or_else(String::new, |p| p.display().to_string());
             args.push("--input".to_owned());
             args.push(path);
         }
@@ -176,7 +181,8 @@ impl ExecEncoder {
             }
             InputMode::TempY4mFile => {
                 let mut path = std::env::temp_dir();
-                let unique = u64::from(std::process::id()) * 0x1000 + (self.timings.len() as u64 & 0xfff);
+                let unique =
+                    u64::from(std::process::id()) * 0x1000 + (self.timings.len() as u64 & 0xfff);
                 path.push(format!("vaco-codec-exec-{unique}.y4m"));
                 let mut file = File::create(&path).map_err(Error::Io)?;
                 y4m::write_header(&mut file, &geometry).map_err(Error::Io)?;
@@ -190,13 +196,19 @@ impl ExecEncoder {
     fn write_frame(&mut self, frame: &Frame) -> Result<()> {
         match self.tool.input_mode {
             InputMode::Stdin => {
-                let proc = self.proc.as_mut().ok_or(Error::Unsupported("vaco-codec-exec: encoder not started"))?;
+                let proc = self
+                    .proc
+                    .as_mut()
+                    .ok_or(Error::Unsupported("vaco-codec-exec: encoder not started"))?;
                 let mut bytes = Vec::new();
                 y4m::write_frame(&mut bytes, frame)?;
                 proc.write_stdin(&bytes)
             }
             InputMode::TempY4mFile => {
-                let file = self.temp_file.as_mut().ok_or(Error::Unsupported("vaco-codec-exec: encoder not started"))?;
+                let file = self
+                    .temp_file
+                    .as_mut()
+                    .ok_or(Error::Unsupported("vaco-codec-exec: encoder not started"))?;
                 y4m::write_frame(file, frame)
             }
         }
@@ -213,7 +225,10 @@ impl ExecEncoder {
     }
 
     fn emit_unit(&mut self, unit: &[u8]) -> Result<()> {
-        let (pts, duration) = self.timings.pop_front().unwrap_or((Timestamp::NONE, Duration::ZERO));
+        let (pts, duration) = self
+            .timings
+            .pop_front()
+            .unwrap_or((Timestamp::NONE, Duration::ZERO));
         let mut budget = Budget::new(self.limits.clone());
         let buffer = to_buffer(unit, &mut budget)?;
         let mut packet = Packet::new(buffer, unit.len());
@@ -268,7 +283,11 @@ impl ExecEncoder {
     fn block_for_more(&mut self) -> Result<()> {
         // No frames were ever sent (or the tool never started for some other
         // reason): nothing more will ever arrive.
-        let Some(chunk) = self.proc.as_ref().and_then(ExecProcess::recv_stdout_blocking) else {
+        let Some(chunk) = self
+            .proc
+            .as_ref()
+            .and_then(ExecProcess::recv_stdout_blocking)
+        else {
             if self.proc.is_none() {
                 self.machine.finish();
                 return Ok(());
@@ -278,7 +297,8 @@ impl ExecEncoder {
             if let Some(proc) = self.proc.as_mut() {
                 proc.wait()?;
             }
-            let tail = std::mem::replace(&mut self.splitter, Splitter::new(self.tool.family)).finish();
+            let tail =
+                std::mem::replace(&mut self.splitter, Splitter::new(self.tool.family)).finish();
             if let Some(tail) = tail {
                 self.emit_unit(&tail)?;
             }
@@ -351,7 +371,10 @@ impl Encoder for ExecEncoder {
                     detail: format!("expected a bitrate in bits/second, got '{value}'"),
                 })?;
                 if bps > 0.0 {
-                    self.rate = RateChoice { bitrate_kbps: Some((bps / 1000.0).round() as u32), crf: None };
+                    self.rate = RateChoice {
+                        bitrate_kbps: Some((bps / 1000.0).round() as u32),
+                        crf: None,
+                    };
                 }
                 Ok(())
             }
@@ -360,7 +383,10 @@ impl Encoder for ExecEncoder {
                     name: key.to_owned(),
                     detail: format!("expected a quality value, got '{value}'"),
                 })?;
-                self.rate = RateChoice { bitrate_kbps: None, crf: Some(crf) };
+                self.rate = RateChoice {
+                    bitrate_kbps: None,
+                    crf: Some(crf),
+                };
                 Ok(())
             }
             _ => Ok(()),
@@ -370,7 +396,10 @@ impl Encoder for ExecEncoder {
 
 impl ExecEncoder {
     fn draining_now(&self) -> bool {
-        matches!(self.machine.stage(), vaco_codec_core::machine::Stage::Draining)
+        matches!(
+            self.machine.stage(),
+            vaco_codec_core::machine::Stage::Draining
+        )
     }
 }
 
@@ -454,9 +483,27 @@ mod tests {
                 Err(e) => panic!("unexpected error: {e:?}"),
             }
         }
-        assert_eq!(packets.len(), 5, "one access unit per input frame (bframes=0)");
-        assert!(packets[0].flags.contains(PacketFlags::KEY), "first frame is a keyframe");
-        assert!(packets[0].data.as_slice().windows(4).any(|w| w == [0, 0, 0, 1]) || packets[0].data.as_slice().windows(3).any(|w| w == [0, 0, 1]));
+        assert_eq!(
+            packets.len(),
+            5,
+            "one access unit per input frame (bframes=0)"
+        );
+        assert!(
+            packets[0].flags.contains(PacketFlags::KEY),
+            "first frame is a keyframe"
+        );
+        assert!(
+            packets[0]
+                .data
+                .as_slice()
+                .windows(4)
+                .any(|w| w == [0, 0, 0, 1])
+                || packets[0]
+                    .data
+                    .as_slice()
+                    .windows(3)
+                    .any(|w| w == [0, 0, 1])
+        );
     }
 
     /// The [`InputMode::TempY4mFile`] path — real `x265`, if installed.
@@ -483,8 +530,18 @@ mod tests {
                 Err(e) => panic!("unexpected error: {e:?}"),
             }
         }
-        assert_eq!(packets.len(), 5, "one access unit per input frame (bframes=0)");
-        assert!(packets[0].flags.contains(PacketFlags::KEY), "first frame is a keyframe");
-        assert!(enc.temp_path.is_none(), "the temp file is cleaned up once the child exits");
+        assert_eq!(
+            packets.len(),
+            5,
+            "one access unit per input frame (bframes=0)"
+        );
+        assert!(
+            packets[0].flags.contains(PacketFlags::KEY),
+            "first frame is a keyframe"
+        );
+        assert!(
+            enc.temp_path.is_none(),
+            "the temp file is cleaned up once the child exits"
+        );
     }
 }

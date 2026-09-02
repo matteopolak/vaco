@@ -55,7 +55,13 @@ impl Y4mGeometry {
     /// [`vaco_core::Error::Unsupported`] for anything but a
     /// [`SUPPORTED_FORMAT`] video frame.
     pub fn from_frame(frame: &Frame) -> Result<Self> {
-        let FrameData::Video { format, width, height, .. } = &frame.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = &frame.data
+        else {
             return Err(vaco_core::Error::Unsupported(
                 "vaco-codec-exec: not a video frame",
             ));
@@ -77,7 +83,10 @@ impl Y4mGeometry {
             i64::from(tb.den)
                 .checked_div(ticks.saturating_mul(i64::from(tb.num)))
                 .and_then(|v| i32::try_from(v).ok())
-                .map_or(Rational { num: 25, den: 1 }, |num| Rational { num: num.max(1), den: 1 })
+                .map_or(Rational { num: 25, den: 1 }, |num| Rational {
+                    num: num.max(1),
+                    den: 1,
+                })
         } else {
             Rational { num: 25, den: 1 }
         };
@@ -86,7 +95,12 @@ impl Y4mGeometry {
         } else {
             Rational::ONE
         };
-        Ok(Self { width: *width, height: *height, fps, sar })
+        Ok(Self {
+            width: *width,
+            height: *height,
+            fps,
+            sar,
+        })
     }
 
     /// The one Y4M header line this stream will ever write.
@@ -115,7 +129,13 @@ pub fn write_header(out: &mut impl Write, geometry: &Y4mGeometry) -> io::Result<
 /// video frame of the geometry `write_header` was given; otherwise whatever
 /// `out.write_all` returns, wrapped in [`vaco_core::Error::Io`].
 pub fn write_frame(out: &mut impl Write, frame: &Frame) -> Result<()> {
-    let FrameData::Video { format, width, height, planes } = &frame.data else {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        planes,
+    } = &frame.data
+    else {
         return Err(vaco_core::Error::Unsupported(
             "vaco-codec-exec: not a video frame",
         ));
@@ -135,7 +155,8 @@ pub fn write_frame(out: &mut impl Write, frame: &Frame) -> Result<()> {
             let start = row.saturating_mul(plane.stride);
             let end = start.saturating_add(row_bytes).min(data.len());
             let start = start.min(end);
-            out.write_all(data.get(start..end).unwrap_or(&[])).map_err(vaco_core::Error::Io)?;
+            out.write_all(data.get(start..end).unwrap_or(&[]))
+                .map_err(vaco_core::Error::Io)?;
         }
     }
     Ok(())
@@ -156,8 +177,16 @@ mod tests {
 
     #[test]
     fn header_line_matches_the_measured_ffmpeg_shape() {
-        let geom = Y4mGeometry { width: 64, height: 64, fps: Rational { num: 5, den: 1 }, sar: Rational::ONE };
-        assert_eq!(geom.header_line(), "YUV4MPEG2 W64 H64 F5:1 Ip A1:1 C420jpeg\n");
+        let geom = Y4mGeometry {
+            width: 64,
+            height: 64,
+            fps: Rational { num: 5, den: 1 },
+            sar: Rational::ONE,
+        };
+        assert_eq!(
+            geom.header_line(),
+            "YUV4MPEG2 W64 H64 F5:1 Ip A1:1 C420jpeg\n"
+        );
     }
 
     #[test]

@@ -178,10 +178,19 @@ impl FrameFilter for Filter {
         let Some(mut out) = ctx.output_link(0).cloned() else {
             return Ok(());
         };
-        let resolved = if self.width == 0 { in_w.max(1) } else { self.width };
+        let resolved = if self.width == 0 {
+            in_w.max(1)
+        } else {
+            self.width
+        };
         self.width = resolved;
         self.canvas = vec![0u8; usize::try_from(resolved).unwrap_or(1) * 256];
-        if let LinkFormat::Video { width: w, height: h, .. } = &mut out {
+        if let LinkFormat::Video {
+            width: w,
+            height: h,
+            ..
+        } = &mut out
+        {
             *w = resolved;
             *h = LEVELS;
         }
@@ -241,7 +250,9 @@ impl FrameFilter for Filter {
         }
         self.frame_count += 1;
 
-        let mut out = ctx.pool().acquire_video(PixFmt::Gray8, self.width, LEVELS)?;
+        let mut out = ctx
+            .pool()
+            .acquire_video(PixFmt::Gray8, self.width, LEVELS)?;
         if let Some(mut dst) = out.plane_mut(0) {
             for row in 0..256usize {
                 let Some(dst_row) = dst.row_mut(row) else {
@@ -251,7 +262,8 @@ impl FrameFilter for Filter {
                     continue;
                 };
                 let n = dst_row.len().min(src_row.len());
-                if let (Some(dst_slice), Some(src_slice)) = (dst_row.get_mut(..n), src_row.get(..n)) {
+                if let (Some(dst_slice), Some(src_slice)) = (dst_row.get_mut(..n), src_row.get(..n))
+                {
                     dst_slice.copy_from_slice(src_slice);
                 }
             }

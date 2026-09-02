@@ -103,7 +103,11 @@ mod tests {
         let q = quantize(&[0.5, 0.25], 15);
         assert_eq!(q.order, 2);
         let scale = (1i64 << q.shift) as f64;
-        let recovered: Vec<f64> = q.coefficients().iter().map(|&c| f64::from(c) / scale).collect();
+        let recovered: Vec<f64> = q
+            .coefficients()
+            .iter()
+            .map(|&c| f64::from(c) / scale)
+            .collect();
         assert!((recovered[0] - 0.5).abs() < 1e-9);
         assert!((recovered[1] - 0.25).abs() < 1e-9);
     }
@@ -113,7 +117,10 @@ mod tests {
         let q = quantize(&[1.9, -1.9, 0.001, -0.9999], 12);
         let bound = 1i64 << 11; // precision=12 -> [-2048, 2047]
         for &c in q.coefficients() {
-            assert!(i64::from(c) >= -bound && i64::from(c) < bound, "{c} out of range");
+            assert!(
+                i64::from(c) >= -bound && i64::from(c) < bound,
+                "{c} out of range"
+            );
         }
     }
 

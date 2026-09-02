@@ -171,7 +171,11 @@ impl Component {
                 effective_seed as u64
             }
         };
-        let effective_strength = if strength != 0 { strength } else { all_strength };
+        let effective_strength = if strength != 0 {
+            strength
+        } else {
+            all_strength
+        };
         #[allow(
             clippy::cast_possible_truncation,
             reason = "range = 0..=100 is enforced by the option schema"
@@ -431,7 +435,7 @@ mod tests {
         let set = FlagSet::parse("a+p+t+u").unwrap();
         assert_eq!(
             set,
-FlagSet::AVERAGED | FlagSet::PATTERN | FlagSet::TEMPORAL | FlagSet::UNIFORM
+            FlagSet::AVERAGED | FlagSet::PATTERN | FlagSet::TEMPORAL | FlagSet::UNIFORM
         );
     }
 

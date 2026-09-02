@@ -49,7 +49,9 @@ pub(crate) fn decode(
 ) -> Result<Frame> {
     let channels = usize::from(header.channels());
     if synth.len() < channels {
-        return Err(Error::Unsupported("mpegaudio: missing per-channel synthesis state"));
+        return Err(Error::Unsupported(
+            "mpegaudio: missing per-channel synthesis state",
+        ));
     }
     let bitrate_per_channel = header
         .bitrate_kbps()
@@ -67,7 +69,11 @@ pub(crate) fn decode(
         let nbal = table.get(sb).map_or(0, |row| row.nbal);
         for ch in alloc_idx.iter_mut().take(channels) {
             if let Some(slot) = ch.get_mut(sb) {
-                *slot = if nbal == 0 { 0 } else { r.get(u32::from(nbal)) as u8 };
+                *slot = if nbal == 0 {
+                    0
+                } else {
+                    r.get(u32::from(nbal)) as u8
+                };
             }
         }
     }
@@ -152,8 +158,10 @@ pub(crate) fn decode(
                     let combined = r.get(bits);
                     let triple = layer2_dequant_grouped(combined, nlevels);
                     for (offset, &v) in triple.iter().enumerate() {
-                        if let Some(slot) =
-                            sample.get_mut(base + offset).and_then(|g| g.get_mut(ch)).and_then(|c| c.get_mut(sb))
+                        if let Some(slot) = sample
+                            .get_mut(base + offset)
+                            .and_then(|g| g.get_mut(ch))
+                            .and_then(|c| c.get_mut(sb))
                         {
                             *slot = v * factor;
                         }
@@ -162,8 +170,10 @@ pub(crate) fn decode(
                     for offset in 0..3 {
                         let code = r.get(bits);
                         let v = layer2_dequant_ungrouped(code, bits, nlevels);
-                        if let Some(slot) =
-                            sample.get_mut(base + offset).and_then(|g| g.get_mut(ch)).and_then(|c| c.get_mut(sb))
+                        if let Some(slot) = sample
+                            .get_mut(base + offset)
+                            .and_then(|g| g.get_mut(ch))
+                            .and_then(|c| c.get_mut(sb))
                         {
                             *slot = v * factor;
                         }
@@ -221,7 +231,10 @@ const fn distinct_count(pattern: u8) -> usize {
 }
 
 fn get2<T: Copy + Default>(a: &[[T; SUBBANDS]; 2], ch: usize, sb: usize) -> T {
-    a.get(ch).and_then(|c| c.get(sb)).copied().unwrap_or_default()
+    a.get(ch)
+        .and_then(|c| c.get(sb))
+        .copied()
+        .unwrap_or_default()
 }
 
 fn set2<T>(a: &mut [[T; SUBBANDS]; 2], ch: usize, sb: usize, value: T) {
@@ -229,4 +242,3 @@ fn set2<T>(a: &mut [[T; SUBBANDS]; 2], ch: usize, sb: usize, value: T) {
         *slot = value;
     }
 }
-

@@ -9,7 +9,9 @@
 //! fixed-point builds — it must, since a one-bit-per-band difference here
 //! desyncs the entropy coder for the rest of the frame.
 
-use crate::celt::tables::{BAND_ALLOCATION, CACHE_BITS50, CACHE_CAPS50, CACHE_INDEX50, LOG2_FRAC_TABLE, NB_EBANDS};
+use crate::celt::tables::{
+    BAND_ALLOCATION, CACHE_BITS50, CACHE_CAPS50, CACHE_INDEX50, LOG2_FRAC_TABLE, NB_EBANDS,
+};
 use crate::range::{BITRES, RangeDecoder};
 
 const ALLOC_STEPS: i32 = 6;
@@ -20,7 +22,11 @@ const FINE_OFFSET: i32 = 21;
 /// `K` the cache tables are addressed by.
 #[must_use]
 pub const fn get_pulses(i: i32) -> i32 {
-    if i < 8 { i } else { (8 + (i & 7)) << ((i >> 3) - 1) }
+    if i < 8 {
+        i
+    } else {
+        (8 + (i & 7)) << ((i >> 3) - 1)
+    }
 }
 
 /// The raw PVQ-cost cache row for a `(LM+1, band)` pair — `row[0]` is the
@@ -58,9 +64,17 @@ pub fn bits2pulses(lm: i32, band: usize, bits: i32) -> i32 {
             lo = mid;
         }
     }
-    let lo_cost = if lo == 0 { -1 } else { i32::from(cache.get(lo as usize).copied().unwrap_or(255)) };
+    let lo_cost = if lo == 0 {
+        -1
+    } else {
+        i32::from(cache.get(lo as usize).copied().unwrap_or(255))
+    };
     let hi_cost = i32::from(cache.get(hi as usize).copied().unwrap_or(255));
-    if bits - lo_cost <= hi_cost - bits { lo } else { hi }
+    if bits - lo_cost <= hi_cost - bits {
+        lo
+    } else {
+        hi
+    }
 }
 
 /// `rate.c`'s `pulses2bits`: the bit cost (`1/8`-bit units) of a
@@ -138,7 +152,12 @@ pub fn compute_allocation(
     for j in start..end {
         let n = i32::from(ebands[j + 1] - ebands[j]);
         thresh[j] = (channels << BITRES).max(((3 * n) << lm << BITRES) >> 4);
-        trim_offset[j] = (channels * n * (alloc_trim - 5 - lm) * (end as i32 - j as i32 - 1) * (1 << (lm + BITRES as i32))) >> 6;
+        trim_offset[j] = (channels
+            * n
+            * (alloc_trim - 5 - lm)
+            * (end as i32 - j as i32 - 1)
+            * (1 << (lm + BITRES as i32)))
+            >> 6;
         if n << lm == 1 {
             trim_offset[j] -= channels << BITRES;
         }
@@ -153,7 +172,8 @@ pub fn compute_allocation(
         let mut done = false;
         for j in (start..end).rev() {
             let n = i32::from(ebands[j + 1] - ebands[j]);
-            let mut bitsj = ((channels * n * i32::from(BAND_ALLOCATION[mid as usize][j])) << lm) >> 2;
+            let mut bitsj =
+                ((channels * n * i32::from(BAND_ALLOCATION[mid as usize][j])) << lm) >> 2;
             if bitsj > 0 {
                 bitsj = (bitsj + trim_offset[j]).max(0);
             }
@@ -264,7 +284,12 @@ pub fn compute_allocation(
         }
         psum -= bits[j as usize] + intensity_rsv_mut;
         if intensity_rsv_mut > 0 {
-            intensity_rsv_mut = i32::from(LOG2_FRAC_TABLE.get((j - start as i32) as usize).copied().unwrap_or(0));
+            intensity_rsv_mut = i32::from(
+                LOG2_FRAC_TABLE
+                    .get((j - start as i32) as usize)
+                    .copied()
+                    .unwrap_or(0),
+            );
         }
         psum += intensity_rsv_mut;
         if band_bits >= alloc_floor {
@@ -279,13 +304,20 @@ pub fn compute_allocation(
 
     let mut intensity = 0i32;
     if intensity_rsv > 0 {
-        intensity = start as i32 + dec.dec_uint((coded_bands + 1 - start as i32).max(1) as u32).unwrap_or(0) as i32;
+        intensity = start as i32
+            + dec
+                .dec_uint((coded_bands + 1 - start as i32).max(1) as u32)
+                .unwrap_or(0) as i32;
     }
     if intensity <= start as i32 {
         total += dual_stereo_rsv;
         dual_stereo_rsv = 0;
     }
-    let dual_stereo = if dual_stereo_rsv > 0 { dec.bit_logp(1) } else { false };
+    let dual_stereo = if dual_stereo_rsv > 0 {
+        dec.bit_logp(1)
+    } else {
+        false
+    };
 
     let mut left = total - psum;
     let percoeff = left / i32::from(ebands[coded_bands as usize] - ebands[start]);
@@ -310,7 +342,8 @@ pub fn compute_allocation(
         if n > 1 {
             excess = (bits[j] - cap[j]).max(0);
             bits[j] -= excess;
-            let den = channels * n + i32::from(channels == 2 && n > 2 && !dual_stereo && (j as i32) < intensity);
+            let den = channels * n
+                + i32::from(channels == 2 && n > 2 && !dual_stereo && (j as i32) < intensity);
             let nclogn = den * (i32::from(crate::celt::tables::LOG_N[j]) + logm);
             let mut offset = (nclogn >> 1) - den * FINE_OFFSET;
             if n == 2 {
@@ -337,7 +370,8 @@ pub fn compute_allocation(
         }
         if excess > 0 {
             let stereo_shift = i32::from(channels == 2);
-            let extra_fine = (excess >> (stereo_shift + BITRES as i32)).min(MAX_FINE_BITS - fine_energy[j]);
+            let extra_fine =
+                (excess >> (stereo_shift + BITRES as i32)).min(MAX_FINE_BITS - fine_energy[j]);
             fine_energy[j] += extra_fine;
             let extra_bits = (extra_fine * channels) << BITRES;
             fine_priority[j] = extra_bits >= excess - balance;

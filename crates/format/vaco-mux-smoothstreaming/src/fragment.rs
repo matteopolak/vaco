@@ -127,7 +127,9 @@ pub fn build_fragment(
     // start of `moof` to the start of `mdat`'s payload: `moof`'s own size
     // plus `mdat`'s 8-byte header.
     let moof_len = u32::try_from(moof_bytes.len()).unwrap_or(u32::MAX);
-    let data_offset = i32::try_from(moof_len).unwrap_or(i32::MAX).saturating_add(8);
+    let data_offset = i32::try_from(moof_len)
+        .unwrap_or(i32::MAX)
+        .saturating_add(8);
     patch_trun_data_offset(&mut moof_bytes, data_offset);
 
     let mut mdat = Vec::new();
@@ -148,9 +150,7 @@ pub fn build_fragment(
 /// untrusted input.
 fn patch_trun_data_offset(moof_bytes: &mut [u8], data_offset: i32) {
     let needle = b"trun";
-    if let Some(pos) = moof_bytes
-        .windows(4)
-        .position(|w| w == needle)
+    if let Some(pos) = moof_bytes.windows(4).position(|w| w == needle)
         && let Some(field) = moof_bytes.get_mut(pos + 8..pos + 12)
     {
         field.copy_from_slice(&data_offset.to_be_bytes());
@@ -212,10 +212,10 @@ mod tests {
         let apos = audio_moof.windows(4).position(|w| w == b"trun").unwrap();
         // `pos` is the 4-byte `"trun"` type tag; the version+flags word
         // (1-byte version, 3-byte flags, big-endian) follows immediately.
-        let vflags = u32::from_be_bytes(video_moof[vpos + 4..vpos + 8].try_into().unwrap())
-            & 0x00ff_ffff;
-        let aflags = u32::from_be_bytes(audio_moof[apos + 4..apos + 8].try_into().unwrap())
-            & 0x00ff_ffff;
+        let vflags =
+            u32::from_be_bytes(video_moof[vpos + 4..vpos + 8].try_into().unwrap()) & 0x00ff_ffff;
+        let aflags =
+            u32::from_be_bytes(audio_moof[apos + 4..apos + 8].try_into().unwrap()) & 0x00ff_ffff;
         assert_eq!(vflags, TR_FLAGS_VIDEO);
         assert_eq!(aflags, TR_FLAGS_AUDIO);
     }

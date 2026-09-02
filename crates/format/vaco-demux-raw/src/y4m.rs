@@ -366,15 +366,9 @@ mod tests {
     #[test]
     fn the_interlace_tag_maps_to_the_measured_field_order() {
         let header = |line: &[u8]| parse_header(line).unwrap().field_order;
-        assert_eq!(
-            header(b"YUV4MPEG2 W4 H4 F25:1 Ip"),
-            FieldOrder::Progressive
-        );
+        assert_eq!(header(b"YUV4MPEG2 W4 H4 F25:1 Ip"), FieldOrder::Progressive);
         assert_eq!(header(b"YUV4MPEG2 W4 H4 F25:1 It"), FieldOrder::TopFirst);
-        assert_eq!(
-            header(b"YUV4MPEG2 W4 H4 F25:1 Ib"),
-            FieldOrder::BottomFirst
-        );
+        assert_eq!(header(b"YUV4MPEG2 W4 H4 F25:1 Ib"), FieldOrder::BottomFirst);
         // No `I` tag at all: unmeasured (every real encoder writes one),
         // but the spec states it is optional, and this crate must not
         // invent a `Progressive` where nothing was said.

@@ -731,7 +731,11 @@ mod tests {
             ("t_huffman_noise_bal_3_0dB", &T_HUFFMAN_NOISE_BAL_3_0DB),
         ];
         for (name, table) in tables {
-            assert_eq!(table.len() % 2, 1, "{name} should have an odd (2*LAV+1) entry count");
+            assert_eq!(
+                table.len() % 2,
+                1,
+                "{name} should have an odd (2*LAV+1) entry count"
+            );
             let mut symbols: Vec<u32> = table.iter().map(|e| e.symbol).collect();
             symbols.sort_unstable();
             let expected: Vec<u32> = (0..table.len() as u32).collect();

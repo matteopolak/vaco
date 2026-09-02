@@ -90,7 +90,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "amplify", help = "Amplify changes between successive video frames.")]
+#[options(
+    name = "amplify",
+    help = "Amplify changes between successive video frames."
+)]
 pub(crate) struct Opts {
     #[opt(name = "radius", help = "set radius", default = 2, range = 1..=63, flags(video, filtering))]
     pub radius: i64,
@@ -217,14 +220,18 @@ impl Filter {
                 };
                 let n = dst_row.len().min(center_row.len());
                 for x in 0..n {
-                    let Some(&cv) = center_row.get(x) else { continue };
+                    let Some(&cv) = center_row.get(x) else {
+                        continue;
+                    };
                     let Some(dst) = dst_row.get_mut(x) else {
                         continue;
                     };
                     *dst = if selected && window_planes.len() == 2 * self.radius + 1 {
                         let sum: f64 = window_planes
                             .iter()
-                            .map(|p| f64::from(p.row(uy).and_then(|r| r.get(x)).copied().unwrap_or(0)))
+                            .map(|p| {
+                                f64::from(p.row(uy).and_then(|r| r.get(x)).copied().unwrap_or(0))
+                            })
                             .sum();
                         #[allow(
                             clippy::cast_precision_loss,
@@ -341,7 +348,10 @@ mod tests {
         let mut f = Filter::new(&opts(2, 1.0, 10.0, 0.0, 65535.0, 65535.0));
         assert_eq!(f.capacity(), 6);
         let pool = vaco_frame::FramePool::default();
-        let dummy = || pool.acquire_video(vaco_pixfmt::PixFmt::Gray8, 1, 1).unwrap();
+        let dummy = || {
+            pool.acquire_video(vaco_pixfmt::PixFmt::Gray8, 1, 1)
+                .unwrap()
+        };
         for i in 0..5 {
             f.buf.push_back(dummy());
             assert!(f.buf.len() < f.capacity(), "frame {i}: not ready yet");

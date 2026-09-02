@@ -126,9 +126,9 @@ mod common;
 pub mod delogo;
 pub mod epx;
 pub mod noise;
+pub mod registry;
 pub mod removelogo;
 mod rng;
-pub mod registry;
 pub mod vignette;
 
 pub use registry::ArtisticRegistry;

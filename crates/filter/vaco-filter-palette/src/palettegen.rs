@@ -57,11 +57,19 @@ const SIDE_USIZE: usize = 16;
 const CELLS: usize = SIDE_USIZE * SIDE_USIZE;
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "palettegen", help = "Find the optimal palette for a given stream.")]
+#[options(
+    name = "palettegen",
+    help = "Find the optimal palette for a given stream."
+)]
 pub(crate) struct Opts {
     #[opt(name = "max_colors", help = "set the maximum number of colors to use in the palette", default = 256, range = 2..=256, flags(video, filtering))]
     pub max_colors: i64,
-    #[opt(name = "reserve_transparent", help = "reserve a palette entry for transparency", default = true, flags(video, filtering))]
+    #[opt(
+        name = "reserve_transparent",
+        help = "reserve a palette entry for transparency",
+        default = true,
+        flags(video, filtering)
+    )]
     pub reserve_transparent: bool,
     #[opt(name = "transparency_color", help = "set a background color for transparency", default = "lime".to_owned(), flags(video, filtering))]
     pub transparency_color: String,
@@ -92,10 +100,18 @@ pub(crate) struct Filter {
 
 impl Filter {
     pub(crate) fn new(opts: &Opts) -> std::result::Result<Self, String> {
-        if !matches!(opts.stats_mode.as_str(), "full" | "0" | "diff" | "1" | "single" | "2") {
-            return Err(format!("palettegen: bad `stats_mode` `{}`", opts.stats_mode));
+        if !matches!(
+            opts.stats_mode.as_str(),
+            "full" | "0" | "diff" | "1" | "single" | "2"
+        ) {
+            return Err(format!(
+                "palettegen: bad `stats_mode` `{}`",
+                opts.stats_mode
+            ));
         }
-        let max_colors = usize::try_from(opts.max_colors).unwrap_or(256).clamp(2, 256);
+        let max_colors = usize::try_from(opts.max_colors)
+            .unwrap_or(256)
+            .clamp(2, 256);
         Ok(Self {
             hist: Histogram::new(),
             max_colors,
@@ -113,7 +129,9 @@ impl Filter {
         let mut out = pool.acquire_video(PixFmt::Rgba, SIDE, SIDE).ok()?;
         let mut plane = out.plane_mut(0)?;
         for y in 0..plane.rows() {
-            let Some(row) = plane.row_mut(y) else { continue };
+            let Some(row) = plane.row_mut(y) else {
+                continue;
+            };
             for (x, px) in row.chunks_exact_mut(4).enumerate() {
                 let idx = y.saturating_mul(SIDE_USIZE).saturating_add(x);
                 if let [r, g, b, a] = px {
@@ -190,7 +208,13 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let filter = Filter::new(&opts)?;
     Ok(Instance {
         desc: DESC,
-        formats: NodeFormats::uniform(1, 1, MediaType::Video, &FormatSet::video_exact(PixFmt::Rgba), req.instance),
+        formats: NodeFormats::uniform(
+            1,
+            1,
+            MediaType::Video,
+            &FormatSet::video_exact(PixFmt::Rgba),
+            req.instance,
+        ),
         filter: Box::new(Simple::new(filter)),
     })
 }
@@ -234,13 +258,23 @@ mod tests {
 
     #[test]
     fn creatable_with_defaults() {
-        let req = Instantiate { name: "palettegen", instance: "palettegen", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "palettegen",
+            instance: "palettegen",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_ok());
     }
 
     #[test]
     fn bad_stats_mode_is_a_clean_error() {
-        let req = Instantiate { name: "palettegen", instance: "palettegen", args: Some("stats_mode=bogus"), arguments: &[] };
+        let req = Instantiate {
+            name: "palettegen",
+            instance: "palettegen",
+            args: Some("stats_mode=bogus"),
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 }

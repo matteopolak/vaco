@@ -50,8 +50,8 @@
 
 #![forbid(unsafe_code)]
 
-mod common;
 pub mod blend;
+mod common;
 pub mod displace;
 pub mod mix;
 pub mod multiply;

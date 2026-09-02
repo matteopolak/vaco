@@ -145,7 +145,11 @@ pub fn measure(ours: &[u8], theirs: &[u8], geometry: Option<Geometry>) -> Deviat
     )]
     let n = compared as f64;
     let mean_abs = if compared == 0 { 0.0 } else { sum_abs / n };
-    let rms = if compared == 0 { 0.0 } else { (sum_sq / n).sqrt() };
+    let rms = if compared == 0 {
+        0.0
+    } else {
+        (sum_sq / n).sqrt()
+    };
 
     let shape = geometry
         .filter(|g| g.width.saturating_mul(g.height) == compared && g.width > 0 && g.height > 0)
@@ -188,9 +192,15 @@ fn classify_shape(diffs: &[f64], g: Geometry) -> Shape {
         return Shape::Unstructured;
     };
 
-    #[expect(clippy::cast_precision_loss, reason = "conformance reporting ratio, small counts")]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "conformance reporting ratio, small counts"
+    )]
     let largest_fraction = largest.size as f64 / total_differing as f64;
-    #[expect(clippy::cast_precision_loss, reason = "conformance reporting ratio, small counts")]
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "conformance reporting ratio, small counts"
+    )]
     let clustered_fraction = components
         .iter()
         .filter(|c| c.size >= 4)
@@ -326,16 +336,21 @@ impl ClusterStats {
         if self.total_differing == 0 {
             return 0.0;
         }
-        #[expect(clippy::cast_precision_loss, reason = "conformance reporting ratio, small counts")]
+        #[expect(
+            clippy::cast_precision_loss,
+            reason = "conformance reporting ratio, small counts"
+        )]
         {
             self.clustered as f64 / self.total_differing as f64
         }
     }
 }
 
-
 #[cfg(test)]
-#[expect(clippy::indexing_slicing, reason = "test fixture construction over known-in-bounds indices")]
+#[expect(
+    clippy::indexing_slicing,
+    reason = "test fixture construction over known-in-bounds indices"
+)]
 mod tests {
     use super::*;
     use crate::case::Tolerance;
@@ -357,7 +372,10 @@ mod tests {
 
     #[test]
     fn scattered_independent_noise_is_unstructured() {
-        let g = Geometry { width: 16, height: 16 };
+        let g = Geometry {
+            width: 16,
+            height: 16,
+        };
         // Isolated single-pixel differences, spread out with no two adjacent
         // — the "±1 rounding scatter" case.
         let set: Vec<(usize, usize)> = (0..16).map(|i| (i, i)).collect();
@@ -373,7 +391,10 @@ mod tests {
 
     #[test]
     fn every_row_but_the_first_is_structured() {
-        let g = Geometry { width: 8, height: 8 };
+        let g = Geometry {
+            width: 8,
+            height: 8,
+        };
         let ours = vec![0u8; g.width * g.height];
         let mut theirs = ours.clone();
         for r in 1..g.height {
@@ -391,7 +412,10 @@ mod tests {
 
     #[test]
     fn a_contiguous_block_is_structured() {
-        let g = Geometry { width: 16, height: 16 };
+        let g = Geometry {
+            width: 16,
+            height: 16,
+        };
         let ours = vec![0u8; g.width * g.height];
         let mut theirs = ours.clone();
         for r in 4..8 {
@@ -409,7 +433,10 @@ mod tests {
         // the "every macroblock of one type" shape: no single component is
         // even close to 30% of the total, but almost everything is
         // clustered rather than isolated.
-        let g = Geometry { width: 32, height: 32 };
+        let g = Geometry {
+            width: 32,
+            height: 32,
+        };
         let ours = vec![0u8; g.width * g.height];
         let mut theirs = ours.clone();
         for &(br, bc) in &[(0usize, 0usize), (0, 16), (16, 0), (16, 16)] {
@@ -427,21 +454,39 @@ mod tests {
     fn magnitude_and_shape_are_independent_axes() {
         // Small max_abs, but structured -- the ruling's whole point: size
         // alone must not be allowed to wave this through.
-        let g = Geometry { width: 8, height: 8 };
+        let g = Geometry {
+            width: 8,
+            height: 8,
+        };
         let ours = vec![0u8; g.width * g.height];
         let mut theirs = ours.clone();
         for b in theirs.iter_mut().take(g.width) {
             *b = 1; // row 0 only, off by 1
         }
         let d = measure(&ours, &theirs, Some(g));
-        let tolerance = Tolerance { max_abs: 2.0, max_ulp: 0, max_rms: 2.0 };
+        let tolerance = Tolerance {
+            max_abs: 2.0,
+            max_ulp: 0,
+            max_rms: 2.0,
+        };
         assert!(d.within_magnitude(&tolerance), "magnitude alone looks fine");
-        assert!(d.is_structured(), "but the shape check must still catch it: {:?}", d.shape);
+        assert!(
+            d.is_structured(),
+            "but the shape check must still catch it: {:?}",
+            d.shape
+        );
     }
 
     #[test]
     fn geometry_that_does_not_fit_the_buffer_falls_back_to_unstructured() {
-        let d = measure(&[1, 2, 3, 4], &[1, 2, 3, 5], Some(Geometry { width: 3, height: 3 }));
+        let d = measure(
+            &[1, 2, 3, 4],
+            &[1, 2, 3, 5],
+            Some(Geometry {
+                width: 3,
+                height: 3,
+            }),
+        );
         assert_eq!(d.shape, Shape::Unstructured);
     }
 
@@ -455,7 +500,10 @@ mod tests {
 
     #[test]
     fn largest_connected_component_matches_a_hand_built_grid() {
-        let g = Geometry { width: 4, height: 4 };
+        let g = Geometry {
+            width: 4,
+            height: 4,
+        };
         let raw = grid(g, &[(0, 0), (0, 1), (1, 0), (3, 3)]);
         let mask: Vec<bool> = raw.iter().map(|&b| b == 1).collect();
         assert_eq!(largest_connected_component(&mask, g), 3);

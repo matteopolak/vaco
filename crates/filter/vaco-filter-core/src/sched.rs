@@ -601,7 +601,8 @@ impl Graph {
             let Some(mut filter) = node.filter.take() else {
                 continue;
             };
-            let mut ctx = FilterContext::new(&mut self.links, &links, &self.pool, &self.node_labels);
+            let mut ctx =
+                FilterContext::new(&mut self.links, &links, &self.pool, &self.node_labels);
             let result = filter.configure(&mut ctx);
             if let Some(node) = self.nodes.get_mut(idx) {
                 node.filter = Some(filter);

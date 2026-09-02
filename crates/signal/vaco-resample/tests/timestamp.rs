@@ -96,7 +96,10 @@ fn hard_compensation_boundary_is_exact_at_min_hard_comp() {
     rs.advance_pts(2400 + 4800).unwrap();
     let x = ramp(100);
     let out = feed(&mut rs, &x);
-    assert_eq!(out, 100, "a drift of exactly min_hard_comp must not compensate");
+    assert_eq!(
+        out, 100,
+        "a drift of exactly min_hard_comp must not compensate"
+    );
 }
 
 #[test]
@@ -115,7 +118,11 @@ fn hard_compensation_inserts_exactly_one_sample_past_the_boundary() {
     // exactly 4801 samples of silence, as one step.
     rs.advance_pts(2400 + 4801).unwrap();
     let out = feed(&mut rs, &ramp(100));
-    assert_eq!(out, 100 + 4801, "hard compensation must fill the exact deficit");
+    assert_eq!(
+        out,
+        100 + 4801,
+        "hard compensation must fill the exact deficit"
+    );
 }
 
 #[test]
@@ -133,7 +140,11 @@ fn hard_compensation_fills_a_full_second_gap_exactly() {
 
     rs.advance_pts(48000 + 48000).unwrap(); // a further one-second jump
     let out = feed(&mut rs, &ramp(48000));
-    assert_eq!(out, 48000 + 48000, "async=1 must fill the whole gap, no more");
+    assert_eq!(
+        out,
+        48000 + 48000,
+        "async=1 must fill the whole gap, no more"
+    );
 }
 
 #[test]
@@ -154,7 +165,11 @@ fn hard_compensation_drops_samples_for_negative_drift() {
     // The source is 4801 samples *ahead* of its declared position: drop them.
     rs.advance_pts(2400 - 4801).unwrap();
     let out = feed(&mut rs, &ramp(5000));
-    assert_eq!(out, 5000 - 4801, "hard compensation must drop the exact surplus");
+    assert_eq!(
+        out,
+        5000 - 4801,
+        "hard compensation must drop the exact surplus"
+    );
 }
 
 // ── `first_pts`: an assumed baseline, not a label ───────────────────────────
@@ -172,7 +187,10 @@ fn first_pts_matching_the_real_start_avoids_a_spurious_correction() {
     let mut rs = build(&opts);
     rs.advance_pts(48000).unwrap(); // matches first_pts: no drift
     let out = feed(&mut rs, &ramp(4800));
-    assert_eq!(out, 4800, "a first pts matching first_pts must not compensate");
+    assert_eq!(
+        out, 4800,
+        "a first pts matching first_pts must not compensate"
+    );
 }
 
 #[test]
@@ -238,7 +256,10 @@ fn soft_compensation_is_bounded_by_max_soft_comp_per_window() {
     // bound, not a measured-to-the-sample reference number (§"What is
     // ours, not measured").
     let extra = total_out as i64 - total_in as i64;
-    assert!(extra > 0, "a source running fast of its clock should gain samples, got {extra}");
+    assert!(
+        extra > 0,
+        "a source running fast of its clock should gain samples, got {extra}"
+    );
     assert!(
         extra <= 50 * 1000,
         "soft compensation inserted more than the whole stream, extra={extra}"
@@ -367,8 +388,7 @@ fn manual_set_compensation_rejects_a_delta_past_the_bound() {
     opts.first_pts = 0;
     let mut rs = build(&opts);
 
-    let too_much = i32::try_from(vaco_resample::MAX_COMPENSATION_SAMPLES + 1)
-        .unwrap_or(i32::MAX);
+    let too_much = i32::try_from(vaco_resample::MAX_COMPENSATION_SAMPLES + 1).unwrap_or(i32::MAX);
     let err = rs.set_compensation(too_much, 1000).unwrap_err();
     assert!(matches!(err, Error::LimitExceeded { .. }), "got {err:?}");
 }
@@ -469,15 +489,21 @@ fn compensation_option_defaults_match_the_reference() {
     assert_eq!(d.comp_duration, 1.0);
     assert_eq!(d.max_soft_comp, 0.0);
     assert_eq!(d.async_samples, 0.0);
-    assert_eq!(d.first_pts, i64::MIN, "reference default is AV_NOPTS_VALUE-shaped");
+    assert_eq!(
+        d.first_pts,
+        i64::MIN,
+        "reference default is AV_NOPTS_VALUE-shaped"
+    );
     assert_eq!(d.first_pts(), None);
 }
 
 #[test]
 fn compensation_options_parse_by_the_reference_names() {
     let mut o = ResampleOptions::default();
-    o.set_from_str("min_comp=0.5:min_hard_comp=0.2:comp_duration=2:max_soft_comp=10:async=3:first_pts=12345")
-        .unwrap();
+    o.set_from_str(
+        "min_comp=0.5:min_hard_comp=0.2:comp_duration=2:max_soft_comp=10:async=3:first_pts=12345",
+    )
+    .unwrap();
     assert_eq!(o.min_comp, 0.5);
     assert_eq!(o.min_hard_comp, 0.2);
     assert_eq!(o.comp_duration, 2.0);

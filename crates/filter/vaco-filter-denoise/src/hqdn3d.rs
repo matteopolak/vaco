@@ -145,8 +145,13 @@ fn spatial_pass(buf: &PlaneBuf, spatial: f32) -> PlaneBuf {
     let mut horiz = buf.clone();
     for y in 0..height {
         for x in 0..width {
-            let Some(center) = buf.get(x, y) else { continue };
-            #[allow(clippy::cast_possible_wrap, reason = "x/y are plane coordinates, far below i64 overflow")]
+            let Some(center) = buf.get(x, y) else {
+                continue;
+            };
+            #[allow(
+                clippy::cast_possible_wrap,
+                reason = "x/y are plane coordinates, far below i64 overflow"
+            )]
             let (xi, yi) = (x as i64, y as i64);
             let left = buf.get_clamped(xi - 1, yi);
             let right = buf.get_clamped(xi + 1, yi);
@@ -160,8 +165,13 @@ fn spatial_pass(buf: &PlaneBuf, spatial: f32) -> PlaneBuf {
     let mut out = horiz.clone();
     for y in 0..height {
         for x in 0..width {
-            let Some(center) = horiz.get(x, y) else { continue };
-            #[allow(clippy::cast_possible_wrap, reason = "x/y are plane coordinates, far below i64 overflow")]
+            let Some(center) = horiz.get(x, y) else {
+                continue;
+            };
+            #[allow(
+                clippy::cast_possible_wrap,
+                reason = "x/y are plane coordinates, far below i64 overflow"
+            )]
             let (xi, yi) = (x as i64, y as i64);
             let up = horiz.get_clamped(xi, yi - 1);
             let down = horiz.get_clamped(xi, yi + 1);
@@ -227,7 +237,10 @@ impl FrameFilter for Hqdn3d {
         }
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         for p in 0..plane_count {
-            #[allow(clippy::cast_possible_truncation, reason = "plane_count() is at most 4")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "plane_count() is at most 4"
+            )]
             let plane_idx = p as u8;
             let Some((bytes, max_val)) = video::sample_layout(format, plane_idx) else {
                 return Err(video::unsupported_format());

@@ -39,7 +39,6 @@
 //! nothing pretends otherwise.
 
 use vaco_chlayout::ChannelLayout;
-use vaco_sampfmt::SampleFmt;
 use vaco_codec_core::{AudioParameters, CodecId, CodecParameters, Parser, VideoParameters};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;
@@ -49,6 +48,7 @@ use vaco_format_core::{Demuxer, ParserProvider, Stream};
 use vaco_io::{IoContext, IoOptions, MediaSource, Seekability};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
+use vaco_sampfmt::SampleFmt;
 
 use crate::codec::{self, OggCodec};
 use crate::granule::{self, GranuleMapping, GranuleTimeline};
@@ -271,7 +271,9 @@ impl OggDemuxer {
         let Ok(()) = self.io.seek(size.saturating_sub(window)).map(|_| ()) else {
             return;
         };
-        let read = self.budget.alloc::<u8>(usize::try_from(window).unwrap_or(0));
+        let read = self
+            .budget
+            .alloc::<u8>(usize::try_from(window).unwrap_or(0));
         let buf = match read {
             Ok(mut buf) => {
                 let n = self.io.read_partial(&mut buf).unwrap_or(0);
@@ -450,10 +452,10 @@ impl OggDemuxer {
     fn classify_and_emit(&mut self, idx: usize, page_granule: i64, completed: Vec<Vec<u8>>) {
         let mut data_bytes: Vec<Vec<u8>> = Vec::new();
         for bytes in completed {
-            let Some((header_index, header_total, codec, stream_index)) =
-                self.logical.get(idx).map(|l| {
-                    (l.header_seen, l.header_total, l.codec, l.stream_index)
-                })
+            let Some((header_index, header_total, codec, stream_index)) = self
+                .logical
+                .get(idx)
+                .map(|l| (l.header_seen, l.header_total, l.codec, l.stream_index))
             else {
                 continue;
             };
@@ -510,10 +512,9 @@ impl OggDemuxer {
                         l.header_bytes.push(bytes);
                     }
                     if is_last_header {
-                        let packed = self
-                            .logical
-                            .get_mut(idx)
-                            .map(|l| codec::pack_xiph_headers(&core::mem::take(&mut l.header_bytes)));
+                        let packed = self.logical.get_mut(idx).map(|l| {
+                            codec::pack_xiph_headers(&core::mem::take(&mut l.header_bytes))
+                        });
                         if let Some(packed) = packed {
                             let si = usize::try_from(stream_index).unwrap_or(usize::MAX);
                             if let Some(stream) = self.streams.get_mut(si) {
@@ -1034,10 +1035,7 @@ mod tests {
         bos.extend_from_slice(&0_i16.to_le_bytes()); // output gain
         bos.push(0); // channel mapping family
         let (_, _, params) = describe(OggCodec::Opus, &bos);
-        assert_eq!(
-            params.audio.as_ref().unwrap().format,
-            Some(SampleFmt::F32P)
-        );
+        assert_eq!(params.audio.as_ref().unwrap().format, Some(SampleFmt::F32P));
     }
 
     /// A minimal, valid-enough Vorbis identification packet — same shape as

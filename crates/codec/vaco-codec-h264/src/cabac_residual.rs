@@ -482,26 +482,58 @@ impl ContextSet {
             CabacInit::PSpB(idc) => 1 + usize::from(idc.min(2)),
         };
 
-
         let (sig, last, bin0, binn): (
             &[CabacInitRow],
             &[CabacInitRow],
             &[CabacInitRow],
             &[CabacInitRow],
         ) = match category {
-                ContextCategory::LumaDc => (&SIG_LUMA_DC, &LAST_LUMA_DC, &ABS_BIN0_LUMA_DC, &ABS_BINN_LUMA_DC),
-                ContextCategory::LumaAc => (&SIG_LUMA_AC, &LAST_LUMA_AC, &ABS_BIN0_LUMA_AC, &ABS_BINN_LUMA_AC),
-                ContextCategory::Luma4x4 => (&SIG_LUMA4X4, &LAST_LUMA4X4, &ABS_BIN0_LUMA4X4, &ABS_BINN_LUMA4X4),
-                ContextCategory::ChromaDc => (&SIG_CHROMA_DC, &LAST_CHROMA_DC, &ABS_BIN0_CHROMA_DC, &ABS_BINN_CHROMA_DC),
-                ContextCategory::ChromaAc => (&SIG_CHROMA_AC, &LAST_CHROMA_AC, &ABS_BIN0_CHROMA_AC, &ABS_BINN_CHROMA_AC),
-                ContextCategory::Luma8x8 => (&SIG_LUMA8X8, &LAST_LUMA8X8, &ABS_BIN0_LUMA8X8, &ABS_BINN_LUMA8X8),
-            };
+            ContextCategory::LumaDc => (
+                &SIG_LUMA_DC,
+                &LAST_LUMA_DC,
+                &ABS_BIN0_LUMA_DC,
+                &ABS_BINN_LUMA_DC,
+            ),
+            ContextCategory::LumaAc => (
+                &SIG_LUMA_AC,
+                &LAST_LUMA_AC,
+                &ABS_BIN0_LUMA_AC,
+                &ABS_BINN_LUMA_AC,
+            ),
+            ContextCategory::Luma4x4 => (
+                &SIG_LUMA4X4,
+                &LAST_LUMA4X4,
+                &ABS_BIN0_LUMA4X4,
+                &ABS_BINN_LUMA4X4,
+            ),
+            ContextCategory::ChromaDc => (
+                &SIG_CHROMA_DC,
+                &LAST_CHROMA_DC,
+                &ABS_BIN0_CHROMA_DC,
+                &ABS_BINN_CHROMA_DC,
+            ),
+            ContextCategory::ChromaAc => (
+                &SIG_CHROMA_AC,
+                &LAST_CHROMA_AC,
+                &ABS_BIN0_CHROMA_AC,
+                &ABS_BINN_CHROMA_AC,
+            ),
+            ContextCategory::Luma8x8 => (
+                &SIG_LUMA8X8,
+                &LAST_LUMA8X8,
+                &ABS_BIN0_LUMA8X8,
+                &ABS_BINN_LUMA8X8,
+            ),
+        };
 
         let build = |rows: &[[(i16, i16); 4]], dst: &mut [ContextModel]| {
-            let inits: Vec<ContextInit> = rows.iter().map(|row| {
-                let (m, n) = row.get(col).copied().unwrap_or((0, 0));
-                ContextInit::new(m, n)
-            }).collect();
+            let inits: Vec<ContextInit> = rows
+                .iter()
+                .map(|row| {
+                    let (m, n) = row.get(col).copied().unwrap_or((0, 0));
+                    ContextInit::new(m, n)
+                })
+                .collect();
             init_contexts(dst, &inits, slice_qp);
         };
         let mut s = Self {
@@ -543,7 +575,9 @@ impl ContextSet {
             i
         };
         let scratch = &mut self.scratch;
-        self.significant_coeff_flag.get_mut(usize::from(idx)).unwrap_or(scratch)
+        self.significant_coeff_flag
+            .get_mut(usize::from(idx))
+            .unwrap_or(scratch)
     }
 
     /// [`Self::sig_mut`]'s own counterpart for `last_significant_coeff_flag`,
@@ -555,7 +589,9 @@ impl ContextSet {
             i
         };
         let scratch = &mut self.scratch;
-        self.last_significant_coeff_flag.get_mut(usize::from(idx)).unwrap_or(scratch)
+        self.last_significant_coeff_flag
+            .get_mut(usize::from(idx))
+            .unwrap_or(scratch)
     }
 
     fn abs_level_bin0_mut(&mut self, idx: u32) -> &mut ContextModel {
@@ -614,7 +650,10 @@ pub fn residual_block_cabac(
     // are read for scan positions 0..maxNumCoeff-2 inclusive; the final
     // position's significance is never signalled — it is implied by having
     // reached it without an earlier last_significant_coeff_flag == 1.
-    debug_assert!(max_num_coeff >= 1, "residual_block_cabac: max_num_coeff must be >= 1");
+    debug_assert!(
+        max_num_coeff >= 1,
+        "residual_block_cabac: max_num_coeff must be >= 1"
+    );
     let last_scan_idx = max_num_coeff.saturating_sub(1);
     'scan: for i in 0..last_scan_idx {
         if cabac.decode_decision(ctx.sig_mut(i)) == 1 {
@@ -660,7 +699,11 @@ pub fn residual_block_cabac(
             .min(MAX_LEVEL);
         let sign = cabac.decode_bypass();
         let magnitude_signed = magnitude.cast_signed();
-        levels.push(if sign == 1 { -magnitude_signed } else { magnitude_signed });
+        levels.push(if sign == 1 {
+            -magnitude_signed
+        } else {
+            magnitude_signed
+        });
     }
     levels.reverse();
 
@@ -683,7 +726,11 @@ fn decode_coeff_abs_level_minus1(
     let mut prefix = 0u32;
     while prefix < U_COFF {
         let bin = if prefix == 0 {
-            let idx = if *num_gt1 != 0 { 0 } else { (1 + *num_eq1).min(4) };
+            let idx = if *num_gt1 != 0 {
+                0
+            } else {
+                (1 + *num_eq1).min(4)
+            };
             cabac.decode_decision(ctx.abs_level_bin0_mut(idx))
         } else {
             let idx = (*num_gt1).min(4);
@@ -714,7 +761,12 @@ fn decode_coeff_abs_level_minus1(
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::items_after_statements, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::items_after_statements,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_codec_cabac::CabacEncoder;
@@ -765,7 +817,11 @@ mod tests {
             let prefix = magnitude.min(U_COFF);
             for k in 0..prefix {
                 let c = if k == 0 {
-                    let idx = if num_gt1 != 0 { 0 } else { (1 + num_eq1).min(4) };
+                    let idx = if num_gt1 != 0 {
+                        0
+                    } else {
+                        (1 + num_eq1).min(4)
+                    };
                     ctx.abs_level_bin0_mut(idx)
                 } else {
                     let idx = num_gt1.min(4);
@@ -775,7 +831,11 @@ mod tests {
             }
             if prefix < U_COFF {
                 let c = if prefix == 0 {
-                    let idx = if num_gt1 != 0 { 0 } else { (1 + num_eq1).min(4) };
+                    let idx = if num_gt1 != 0 {
+                        0
+                    } else {
+                        (1 + num_eq1).min(4)
+                    };
                     ctx.abs_level_bin0_mut(idx)
                 } else {
                     let idx = num_gt1.min(4);
@@ -807,8 +867,7 @@ mod tests {
         let mut dec = CabacDecoder::new(&bytes);
         let mut ctx2 = ContextSet::new(ContextCategory::Luma4x4, 26, CabacInit::IorSi);
         let mut b = budget();
-        let out = residual_block_cabac(&mut dec, &mut ctx2, 16, &mut b)
-            .unwrap();
+        let out = residual_block_cabac(&mut dec, &mut ctx2, 16, &mut b).unwrap();
         assert_eq!(out.positions, positions);
         assert_eq!(out.levels, levels);
     }
@@ -826,8 +885,7 @@ mod tests {
         let mut dec = CabacDecoder::new(&bytes);
         let mut ctx2 = ContextSet::new(ContextCategory::LumaDc, 26, CabacInit::IorSi);
         let mut b = budget();
-        let out = residual_block_cabac(&mut dec, &mut ctx2, 16, &mut b)
-            .unwrap();
+        let out = residual_block_cabac(&mut dec, &mut ctx2, 16, &mut b).unwrap();
         assert_eq!(out.positions, positions);
         assert_eq!(out.levels, levels);
     }
@@ -847,8 +905,7 @@ mod tests {
         let mut dec = CabacDecoder::new(&bytes);
         let mut ctx2 = ContextSet::new(ContextCategory::LumaAc, 26, CabacInit::IorSi);
         let mut b = budget();
-        let out = residual_block_cabac(&mut dec, &mut ctx2, 15, &mut b)
-            .unwrap();
+        let out = residual_block_cabac(&mut dec, &mut ctx2, 15, &mut b).unwrap();
         assert_eq!(out.positions, positions);
         assert_eq!(out.levels, levels);
     }
@@ -867,8 +924,7 @@ mod tests {
         let mut dec = CabacDecoder::new(&bytes);
         let mut ctx2 = ContextSet::new(ContextCategory::Luma4x4, 26, CabacInit::IorSi);
         let mut b = budget();
-        let out = residual_block_cabac(&mut dec, &mut ctx2, 16, &mut b)
-            .unwrap();
+        let out = residual_block_cabac(&mut dec, &mut ctx2, 16, &mut b).unwrap();
         assert_eq!(out.positions, positions);
         assert_eq!(out.levels, levels);
     }
@@ -914,8 +970,12 @@ mod tests {
             ContextCategory::ChromaAc,
             ContextCategory::Luma8x8,
         ];
-        const INITS: [CabacInit; 4] =
-            [CabacInit::IorSi, CabacInit::PSpB(0), CabacInit::PSpB(1), CabacInit::PSpB(2)];
+        const INITS: [CabacInit; 4] = [
+            CabacInit::IorSi,
+            CabacInit::PSpB(0),
+            CabacInit::PSpB(1),
+            CabacInit::PSpB(2),
+        ];
         for qp in 0..=51i8 {
             for &category in &CATEGORIES {
                 for &init in &INITS {
@@ -967,30 +1027,102 @@ mod table_distinctness {
 
     fn named_tables() -> Vec<(&'static str, Vec<(i16, i16)>)> {
         vec![
-            ("SIG_LUMA_DC", SIG_LUMA_DC.iter().flatten().copied().collect()),
-            ("SIG_LUMA_AC", SIG_LUMA_AC.iter().flatten().copied().collect()),
-            ("SIG_LUMA4X4", SIG_LUMA4X4.iter().flatten().copied().collect()),
-            ("SIG_CHROMA_AC", SIG_CHROMA_AC.iter().flatten().copied().collect()),
-            ("SIG_CHROMA_DC", SIG_CHROMA_DC.iter().flatten().copied().collect()),
-            ("LAST_LUMA_DC", LAST_LUMA_DC.iter().flatten().copied().collect()),
-            ("LAST_LUMA_AC", LAST_LUMA_AC.iter().flatten().copied().collect()),
-            ("LAST_LUMA4X4", LAST_LUMA4X4.iter().flatten().copied().collect()),
-            ("LAST_CHROMA_AC", LAST_CHROMA_AC.iter().flatten().copied().collect()),
-            ("LAST_CHROMA_DC", LAST_CHROMA_DC.iter().flatten().copied().collect()),
-            ("ABS_BIN0_LUMA_DC", ABS_BIN0_LUMA_DC.iter().flatten().copied().collect()),
-            ("ABS_BINN_LUMA_DC", ABS_BINN_LUMA_DC.iter().flatten().copied().collect()),
-            ("ABS_BIN0_LUMA_AC", ABS_BIN0_LUMA_AC.iter().flatten().copied().collect()),
-            ("ABS_BINN_LUMA_AC", ABS_BINN_LUMA_AC.iter().flatten().copied().collect()),
-            ("ABS_BIN0_LUMA4X4", ABS_BIN0_LUMA4X4.iter().flatten().copied().collect()),
-            ("ABS_BINN_LUMA4X4", ABS_BINN_LUMA4X4.iter().flatten().copied().collect()),
-            ("ABS_BIN0_CHROMA_AC", ABS_BIN0_CHROMA_AC.iter().flatten().copied().collect()),
-            ("ABS_BINN_CHROMA_AC", ABS_BINN_CHROMA_AC.iter().flatten().copied().collect()),
-            ("ABS_BIN0_CHROMA_DC", ABS_BIN0_CHROMA_DC.iter().flatten().copied().collect()),
-            ("ABS_BINN_CHROMA_DC", ABS_BINN_CHROMA_DC.iter().flatten().copied().collect()),
-            ("SIG_LUMA8X8", SIG_LUMA8X8.iter().flatten().copied().collect()),
-            ("LAST_LUMA8X8", LAST_LUMA8X8.iter().flatten().copied().collect()),
-            ("ABS_BIN0_LUMA8X8", ABS_BIN0_LUMA8X8.iter().flatten().copied().collect()),
-            ("ABS_BINN_LUMA8X8", ABS_BINN_LUMA8X8.iter().flatten().copied().collect()),
+            (
+                "SIG_LUMA_DC",
+                SIG_LUMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "SIG_LUMA_AC",
+                SIG_LUMA_AC.iter().flatten().copied().collect(),
+            ),
+            (
+                "SIG_LUMA4X4",
+                SIG_LUMA4X4.iter().flatten().copied().collect(),
+            ),
+            (
+                "SIG_CHROMA_AC",
+                SIG_CHROMA_AC.iter().flatten().copied().collect(),
+            ),
+            (
+                "SIG_CHROMA_DC",
+                SIG_CHROMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "LAST_LUMA_DC",
+                LAST_LUMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "LAST_LUMA_AC",
+                LAST_LUMA_AC.iter().flatten().copied().collect(),
+            ),
+            (
+                "LAST_LUMA4X4",
+                LAST_LUMA4X4.iter().flatten().copied().collect(),
+            ),
+            (
+                "LAST_CHROMA_AC",
+                LAST_CHROMA_AC.iter().flatten().copied().collect(),
+            ),
+            (
+                "LAST_CHROMA_DC",
+                LAST_CHROMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BIN0_LUMA_DC",
+                ABS_BIN0_LUMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BINN_LUMA_DC",
+                ABS_BINN_LUMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BIN0_LUMA_AC",
+                ABS_BIN0_LUMA_AC.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BINN_LUMA_AC",
+                ABS_BINN_LUMA_AC.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BIN0_LUMA4X4",
+                ABS_BIN0_LUMA4X4.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BINN_LUMA4X4",
+                ABS_BINN_LUMA4X4.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BIN0_CHROMA_AC",
+                ABS_BIN0_CHROMA_AC.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BINN_CHROMA_AC",
+                ABS_BINN_CHROMA_AC.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BIN0_CHROMA_DC",
+                ABS_BIN0_CHROMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BINN_CHROMA_DC",
+                ABS_BINN_CHROMA_DC.iter().flatten().copied().collect(),
+            ),
+            (
+                "SIG_LUMA8X8",
+                SIG_LUMA8X8.iter().flatten().copied().collect(),
+            ),
+            (
+                "LAST_LUMA8X8",
+                LAST_LUMA8X8.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BIN0_LUMA8X8",
+                ABS_BIN0_LUMA8X8.iter().flatten().copied().collect(),
+            ),
+            (
+                "ABS_BINN_LUMA8X8",
+                ABS_BINN_LUMA8X8.iter().flatten().copied().collect(),
+            ),
         ]
     }
 
@@ -1028,7 +1160,11 @@ mod table_distinctness {
     #[test]
     fn named_tables_is_not_accidentally_empty() {
         let tables = named_tables();
-        assert_eq!(tables.len(), 24, "expected exactly 24 named tables in this file");
+        assert_eq!(
+            tables.len(),
+            24,
+            "expected exactly 24 named tables in this file"
+        );
         for (name, vals) in &tables {
             assert!(!vals.is_empty(), "table {name} flattened to zero entries");
         }

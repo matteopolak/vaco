@@ -125,11 +125,16 @@ impl Options {
 }
 
 fn clip_pixel(buf: &PlaneBuf, x: usize, y: usize, mode: u8) -> f32 {
-    let Some(center) = buf.get(x, y) else { return 0.0 };
+    let Some(center) = buf.get(x, y) else {
+        return 0.0;
+    };
     if mode == 0 {
         return center;
     }
-    #[allow(clippy::cast_possible_wrap, reason = "x/y are plane coordinates, far below i64 overflow")]
+    #[allow(
+        clippy::cast_possible_wrap,
+        reason = "x/y are plane coordinates, far below i64 overflow"
+    )]
     let (xi, yi) = (x as i64, y as i64);
     let mut nbrs = [0.0f32; 8];
     let mut i = 0;
@@ -186,7 +191,10 @@ impl FrameFilter for RemoveGrain {
         };
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         for p in 0..format.plane_count() {
-            #[allow(clippy::cast_possible_truncation, reason = "plane_count() is at most 4")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "plane_count() is at most 4"
+            )]
             let plane_idx = p as u8;
             let Some((bytes, max_val)) = video::sample_layout(format, plane_idx) else {
                 return Err(video::unsupported_format());
@@ -216,7 +224,12 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 

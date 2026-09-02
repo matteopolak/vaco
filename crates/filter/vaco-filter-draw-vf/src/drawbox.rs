@@ -90,7 +90,9 @@ pub const DESC: FilterDesc = FilterDesc {
 /// (cross-referenceable, in resolution order) are appended per use.
 const BASE_VARS: &[&str] = &["iw", "ih", "dar", "sar", "hsub", "vsub"];
 const WH_VARS: &[&str] = &["iw", "ih", "dar", "sar", "hsub", "vsub", "t", "w", "h"];
-const XY_VARS: &[&str] = &["iw", "ih", "dar", "sar", "hsub", "vsub", "t", "w", "h", "x", "y"];
+const XY_VARS: &[&str] = &[
+    "iw", "ih", "dar", "sar", "hsub", "vsub", "t", "w", "h", "x", "y",
+];
 
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "drawbox", help = "Draw a colored box on the input video.")]
@@ -107,7 +109,12 @@ pub(crate) struct Opts {
     pub color: String,
     #[opt(name = "thickness", alias = "t", help = "set the box thickness", default = "3".to_owned(), flags(video, filtering))]
     pub thickness: String,
-    #[opt(name = "replace", help = "replace color & alpha", default = false, flags(video, filtering))]
+    #[opt(
+        name = "replace",
+        help = "replace color & alpha",
+        default = false,
+        flags(video, filtering)
+    )]
     pub replace: bool,
 }
 
@@ -259,15 +266,28 @@ fn in_stroke(px: i64, py: i64, rect: Rect, thickness: i64, fill: bool) -> bool {
     let from_top = py - rect.y;
     let from_right = rect.x + rect.w - 1 - px;
     let from_bottom = rect.y + rect.h - 1 - py;
-    from_left < thickness || from_top < thickness || from_right < thickness || from_bottom < thickness
+    from_left < thickness
+        || from_top < thickness
+        || from_right < thickness
+        || from_bottom < thickness
 }
 
 impl FrameFilter for Filter {
     fn filter_frame(&mut self, _ctx: &mut FilterContext<'_>, input: Frame) -> Result<FrameOut> {
-        let FrameData::Video { format, width, height, .. } = input.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = input.data
+        else {
             return Ok(FrameOut::One(input));
         };
-        if !format.is_rgb() || !format.is_planar() || format.plane_count() != 3 || format.has_alpha() || format.max_depth() != 8
+        if !format.is_rgb()
+            || !format.is_planar()
+            || format.plane_count() != 3
+            || format.has_alpha()
+            || format.max_depth() != 8
         {
             return Ok(FrameOut::One(input));
         }
@@ -378,7 +398,12 @@ mod tests {
 
     #[test]
     fn fill_covers_the_whole_rectangle_not_just_an_outline() {
-        let rect = Rect { x: 2, y: 2, w: 5, h: 5 };
+        let rect = Rect {
+            x: 2,
+            y: 2,
+            w: 5,
+            h: 5,
+        };
         let mut count = 0;
         for py in 0..10 {
             for px in 0..10 {
@@ -392,7 +417,12 @@ mod tests {
 
     #[test]
     fn a_thin_outline_leaves_the_interior_untouched() {
-        let rect = Rect { x: 0, y: 0, w: 10, h: 10 };
+        let rect = Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
         assert!(in_stroke(0, 0, rect, 2, false));
         assert!(in_stroke(1, 5, rect, 2, false));
         assert!(!in_stroke(5, 5, rect, 2, false));

@@ -196,11 +196,7 @@ impl SendReceive for PngEncoder {
                     return Ok(());
                 };
                 let mut budget = Budget::new(self.limits.clone());
-                let bytes = codec::encode(
-                    std::slice::from_ref(frame),
-                    &mut budget,
-                    &self.options,
-                )?;
+                let bytes = codec::encode(std::slice::from_ref(frame), &mut budget, &self.options)?;
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 // One frame in, one PNG file out, immediately -- not the
                 // batch-at-drain shape this used to have (see this module's
@@ -254,12 +250,13 @@ impl SendReceive for PngEncoder {
                     name: "compression_level".to_owned(),
                     detail: format!("not an integer: {value:?}"),
                 })?;
-                let level = u8::try_from(level).ok().filter(|v| *v <= 9).ok_or_else(|| {
-                    Error::Option {
+                let level = u8::try_from(level)
+                    .ok()
+                    .filter(|v| *v <= 9)
+                    .ok_or_else(|| Error::Option {
                         name: "compression_level".to_owned(),
                         detail: format!("must be 0-9, got {level}"),
-                    }
-                })?;
+                    })?;
                 self.options.compression_level = Some(level);
                 Ok(())
             }
@@ -373,7 +370,9 @@ mod tests {
 
     #[test]
     fn round_trips_apng() {
-        let frames: Vec<Frame> = (0..3).map(|i| checker_frame(4 + i, 4, PixFmt::Rgba)).collect();
+        let frames: Vec<Frame> = (0..3)
+            .map(|i| checker_frame(4 + i, 4, PixFmt::Rgba))
+            .collect();
         // APNG requires one canvas size; re-encode against the first frame's
         // dimensions only (the test exercises multi-frame plumbing, not
         // per-frame resizing).
@@ -409,7 +408,9 @@ mod tests {
         let frame = checker_frame(3, 3, PixFmt::Rgb24);
         let mut enc = PngEncoder::new(Limits::permissive());
         enc.send(Some(&frame)).expect("send frame");
-        let packet = enc.receive().expect("receive packet immediately, no drain needed");
+        let packet = enc
+            .receive()
+            .expect("receive packet immediately, no drain needed");
         assert!(matches!(enc.receive(), Err(Error::NeedMoreInput)));
         enc.send(None).expect("begin drain");
         assert!(matches!(enc.receive(), Err(Error::Eof)));
@@ -453,7 +454,10 @@ mod tests {
             dec.send(Some(packet)).expect("send packet");
             dec.receive().expect("receive the one frame");
             dec.send(None).expect("begin drain");
-            assert!(matches!(dec.receive(), Err(Error::Eof)), "packet held more than one frame");
+            assert!(
+                matches!(dec.receive(), Err(Error::Eof)),
+                "packet held more than one frame"
+            );
         }
     }
 

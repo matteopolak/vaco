@@ -167,12 +167,10 @@ impl MxfDemuxer {
 
         let (streams, bindings, format_metadata) = build_streams(&graph, &mut budget)?;
 
-        let total_essence_len = essence_origin.and_then(|origin| {
-            io.size().map(|size| size.saturating_sub(origin))
-        });
-        let duration_of = |seg: &IndexTableSegment| -> i64 {
-            effective_index_duration(seg, total_essence_len)
-        };
+        let total_essence_len =
+            essence_origin.and_then(|origin| io.size().map(|size| size.saturating_sub(origin)));
+        let duration_of =
+            |seg: &IndexTableSegment| -> i64 { effective_index_duration(seg, total_essence_len) };
 
         let indices = first_essence
             .as_ref()
@@ -537,7 +535,12 @@ fn is_clip_wrapped(first: &FirstEssenceElement, seg: &IndexTableSegment) -> bool
 /// itself is unknown (a non-seekable source, where no size-derived bound is
 /// possible at all).
 fn effective_index_duration(seg: &IndexTableSegment, total_essence_len: Option<u64>) -> i64 {
-    let size_bound = if seg.is_cbe() { total_essence_len } else { None }.map(|total| {
+    let size_bound = if seg.is_cbe() {
+        total_essence_len
+    } else {
+        None
+    }
+    .map(|total| {
         #[allow(
             clippy::integer_division,
             reason = "edit_unit_byte_count is checked non-zero via is_cbe() above"
@@ -632,9 +635,7 @@ fn build_indices(
                 let size = seg.entries.get(i + 1).map_or_else(
                     || {
                         if clip_wrapped {
-                            first_essence
-                                .value_len
-                                .saturating_sub(entry.stream_offset)
+                            first_essence.value_len.saturating_sub(entry.stream_offset)
                         } else {
                             0
                         }
@@ -938,7 +939,11 @@ mod tests {
         // partition pack in between) -- the case that exposed
         // `metadata::scan_region` walking straight through the essence
         // body to the footer instead of stopping at it.
-        let expected = [(6144u64, 150_000usize), (157_184, 150_000), (308_224, 150_000)];
+        let expected = [
+            (6144u64, 150_000usize),
+            (157_184, 150_000),
+            (308_224, 150_000),
+        ];
         for (pos, size) in expected {
             let pkt = demux.read_packet().unwrap();
             assert_eq!(pkt.pos, Some(pos));
@@ -978,7 +983,9 @@ mod tests {
 
     #[test]
     fn op1a_video_audio_fixture_reports_both_streams_with_measured_sound_parameters() {
-        let demux = open_fixture(include_bytes!("../tests/fixtures/op1a_mpeg2_pcm_sample.mxf"));
+        let demux = open_fixture(include_bytes!(
+            "../tests/fixtures/op1a_mpeg2_pcm_sample.mxf"
+        ));
         // A two-essence-track package: before `metadata::resolve_track_descriptor`
         // expanded the package's `MultipleDescriptor` via `SubDescriptorUIDs`,
         // every track resolved to the same descriptor id (one with none of
@@ -1007,8 +1014,11 @@ mod tests {
     }
 
     #[test]
-    fn op1a_video_audio_fixture_demuxes_interleaved_packets_matching_measured_positions_and_sizes() {
-        let mut demux = open_fixture(include_bytes!("../tests/fixtures/op1a_mpeg2_pcm_sample.mxf"));
+    fn op1a_video_audio_fixture_demuxes_interleaved_packets_matching_measured_positions_and_sizes()
+    {
+        let mut demux = open_fixture(include_bytes!(
+            "../tests/fixtures/op1a_mpeg2_pcm_sample.mxf"
+        ));
         // Measured with `ffprobe -show_packets`: video and audio essence
         // elements alternate, and the audio packet's own `len` (`7680`)
         // matches `ffprobe`'s reported size exactly -- unlike the D-10 AES3
@@ -1033,7 +1043,9 @@ mod tests {
 
     #[test]
     fn d10_audio_fixture_reports_measured_channels_and_sample_rate_but_no_codec_id() {
-        let demux = open_fixture(include_bytes!("../tests/fixtures/d10_mpeg2_aes3_sample.mxf"));
+        let demux = open_fixture(include_bytes!(
+            "../tests/fixtures/d10_mpeg2_aes3_sample.mxf"
+        ));
         assert_eq!(demux.streams().len(), 2);
         let audio = &demux.streams()[1];
         assert_eq!(audio.media_type(), Some(MediaType::Audio));
@@ -1053,7 +1065,9 @@ mod tests {
 
     #[test]
     fn d10_audio_fixture_packet_length_is_the_real_aes3_bundle_not_ffprobes_unpacked_size() {
-        let mut demux = open_fixture(include_bytes!("../tests/fixtures/d10_mpeg2_aes3_sample.mxf"));
+        let mut demux = open_fixture(include_bytes!(
+            "../tests/fixtures/d10_mpeg2_aes3_sample.mxf"
+        ));
         demux.read_packet().unwrap(); // video, stream 0
         let audio_pkt = demux.read_packet().unwrap();
         assert_eq!(audio_pkt.stream_index, 1);

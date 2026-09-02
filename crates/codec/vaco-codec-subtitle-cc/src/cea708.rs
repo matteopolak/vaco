@@ -19,9 +19,9 @@
 
 pub mod tables;
 
+use crate::Event;
 use crate::event::{Screen, Style};
 use crate::triplet::{CcType, Triplet};
-use crate::Event;
 pub use tables::WindowGeometry;
 
 /// A DTVCC packet's payload is at most 127 bytes: its header byte's length
@@ -69,11 +69,15 @@ impl Default for Service {
 impl Service {
     fn current_window_mut(&mut self) -> Option<&mut Window> {
         let id = self.current_window?;
-        self.windows.get_mut(usize::from(id)).and_then(Option::as_mut)
+        self.windows
+            .get_mut(usize::from(id))
+            .and_then(Option::as_mut)
     }
 
     fn window_mut(&mut self, id: u8) -> Option<&mut Window> {
-        self.windows.get_mut(usize::from(id)).and_then(Option::as_mut)
+        self.windows
+            .get_mut(usize::from(id))
+            .and_then(Option::as_mut)
     }
 
     fn for_each_bit(&mut self, bitmap: u8, mut f: impl FnMut(&mut Window)) {
@@ -91,7 +95,9 @@ impl Service {
             if bitmap & (1 << id) == 0 {
                 continue;
             }
-            let Some(w) = self.window_mut(id) else { continue };
+            let Some(w) = self.window_mut(id) else {
+                continue;
+            };
             let screen = w.geometry.visible.then(|| w.screen.clone());
             events.push(Event::Cea708 {
                 service_no,
@@ -103,7 +109,9 @@ impl Service {
     }
 
     fn write_char(&mut self, ch: char, service_no: u8, events: &mut Vec<Event>) {
-        let Some(id) = self.current_window else { return };
+        let Some(id) = self.current_window else {
+            return;
+        };
         let Some(w) = self.window_mut(id) else { return };
         let (row, col, style) = (w.pen_row, w.pen_col, w.pen_style);
         w.screen.row_mut(row).put(col, ch, style);
@@ -258,7 +266,10 @@ impl Cea708Decoder {
         service
     }
 
-    #[allow(clippy::too_many_lines, reason = "one dispatch table, not repeated logic")]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one dispatch table, not repeated logic"
+    )]
     fn dispatch_code(&mut self, service_no: u8, code: &[u8], events: &mut Vec<Event>) {
         let Some(&op) = code.first() else { return };
         let service = self.service_mut(service_no);

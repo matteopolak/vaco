@@ -76,7 +76,10 @@ impl PartitionedFir {
             partitions.push(freq);
         }
 
-        let history = VecDeque::from(vec![vec![0.0f64; fft_len.saturating_mul(2)]; num_partitions]);
+        let history = VecDeque::from(vec![
+            vec![0.0f64; fft_len.saturating_mul(2)];
+            num_partitions
+        ]);
         Some(Self {
             block,
             fft_len,
@@ -116,10 +119,18 @@ impl PartitionedFir {
 
         let mut acc = vec![0.0f64; self.fft_len.saturating_mul(2)];
         for (p, h) in self.partitions.iter().enumerate() {
-            let Some(x) = self.history.get(p) else { continue };
+            let Some(x) = self.history.get(p) else {
+                continue;
+            };
             for k in 0..self.fft_len {
-                let (hr, hi) = (h.get(2 * k).copied().unwrap_or(0.0), h.get(2 * k + 1).copied().unwrap_or(0.0));
-                let (xr, xi) = (x.get(2 * k).copied().unwrap_or(0.0), x.get(2 * k + 1).copied().unwrap_or(0.0));
+                let (hr, hi) = (
+                    h.get(2 * k).copied().unwrap_or(0.0),
+                    h.get(2 * k + 1).copied().unwrap_or(0.0),
+                );
+                let (xr, xi) = (
+                    x.get(2 * k).copied().unwrap_or(0.0),
+                    x.get(2 * k + 1).copied().unwrap_or(0.0),
+                );
                 // Complex multiply-accumulate: (hr + i*hi) * (xr + i*xi).
                 if let Some(re) = acc.get_mut(2 * k) {
                     *re += hr.mul_add(xr, -(hi * xi));
@@ -132,7 +143,10 @@ impl PartitionedFir {
 
         let mut time_out = vec![0.0f64; self.fft_len.saturating_mul(2)];
         self.inv.execute(&mut time_out, &acc);
-        #[allow(clippy::cast_precision_loss, reason = "fft_len is a block-derived count, far below 2^53")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "fft_len is a block-derived count, far below 2^53"
+        )]
         let norm = 1.0 / self.fft_len as f64;
 
         let mut out = vec![0.0f64; self.block];

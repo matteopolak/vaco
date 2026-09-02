@@ -191,7 +191,10 @@ impl FrameFilter for Atadenoise {
         }
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         for p in 0..plane_count {
-            #[allow(clippy::cast_possible_truncation, reason = "plane_count() is at most 4")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "plane_count() is at most 4"
+            )]
             let plane_idx = p as u8;
             let Some((bytes, max_val)) = video::sample_layout(format, plane_idx) else {
                 return Err(video::unsupported_format());
@@ -219,10 +222,7 @@ impl FrameFilter for Atadenoise {
             let samples: Vec<&PlaneBuf> = hist.iter().collect();
             for y in 0..ph {
                 for x in 0..pw {
-                    let values: Vec<f32> = samples
-                        .iter()
-                        .filter_map(|b| b.get(x, y))
-                        .collect();
+                    let values: Vec<f32> = samples.iter().filter_map(|b| b.get(x, y)).collect();
                     result.set(x, y, average_pixel(&values, t, max_val));
                 }
             }

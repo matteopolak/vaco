@@ -59,12 +59,19 @@ pub(crate) struct MvRefContext<'a> {
 impl MvRefContext<'_> {
     /// §6.5.2's `is_inside`.
     fn is_inside(&self, r: i32, c: i32) -> bool {
-        let Ok(r) = usize::try_from(r) else { return false };
-        r < self.mi_rows && c >= i32::try_from(self.mi_col_start).unwrap_or(0) && c < i32::try_from(self.mi_col_end).unwrap_or(0)
+        let Ok(r) = usize::try_from(r) else {
+            return false;
+        };
+        r < self.mi_rows
+            && c >= i32::try_from(self.mi_col_start).unwrap_or(0)
+            && c < i32::try_from(self.mi_col_end).unwrap_or(0)
     }
 
     fn sign_bias(&self, rf: i32) -> bool {
-        self.ref_frame_sign_bias.get(usize::try_from(rf).unwrap_or(0)).copied().unwrap_or(false)
+        self.ref_frame_sign_bias
+            .get(usize::try_from(rf).unwrap_or(0))
+            .copied()
+            .unwrap_or(false)
     }
 }
 
@@ -85,16 +92,27 @@ fn add_mv_ref_list(list: &mut [[i32; 2]; 2], count: &mut usize, mv: [i32; 2]) {
 fn get_sub_block_mv(cell: MvCell, ref_list: usize, delta_col: i32, block: i32) -> [i32; 2] {
     let idx = if block >= 0 {
         let col_is_zero = usize::from(delta_col == 0);
-        tables::IDX_N_COLUMN_TO_SUBBLOCK.get(usize::try_from(block).unwrap_or(0)).and_then(|r| r.get(col_is_zero)).copied().unwrap_or(3)
+        tables::IDX_N_COLUMN_TO_SUBBLOCK
+            .get(usize::try_from(block).unwrap_or(0))
+            .and_then(|r| r.get(col_is_zero))
+            .copied()
+            .unwrap_or(3)
     } else {
         3
     };
-    cell.sub_mvs.get(ref_list).and_then(|r| r.get(idx)).copied().unwrap_or([0, 0])
+    cell.sub_mvs
+        .get(ref_list)
+        .and_then(|r| r.get(idx))
+        .copied()
+        .unwrap_or([0, 0])
 }
 
 /// §6.5.10's `get_block_mv`.
 fn get_block_mv(cell: MvCell, ref_list: usize) -> ([i32; 2], i32) {
-    (cell.mv.get(ref_list).copied().unwrap_or([0, 0]), cell.ref_frame.get(ref_list).copied().unwrap_or(0))
+    (
+        cell.mv.get(ref_list).copied().unwrap_or([0, 0]),
+        cell.ref_frame.get(ref_list).copied().unwrap_or(0),
+    )
 }
 
 /// §6.5.9's `scale_mv`.
@@ -107,7 +125,12 @@ fn scale_mv(ctx: &MvRefContext<'_>, mut mv: [i32; 2], cand_frame: i32, ref_frame
 }
 
 /// §6.5.7's `if_same_ref_frame_add_mv`.
-fn if_same_ref_frame_add_mv(cell: MvCell, ref_frame: i32, list: &mut [[i32; 2]; 2], count: &mut usize) {
+fn if_same_ref_frame_add_mv(
+    cell: MvCell,
+    ref_frame: i32,
+    list: &mut [[i32; 2]; 2],
+    count: &mut usize,
+) {
     for j in 0..2 {
         let (mv, cand_frame) = get_block_mv(cell, j);
         if cand_frame == ref_frame {
@@ -118,7 +141,13 @@ fn if_same_ref_frame_add_mv(cell: MvCell, ref_frame: i32, list: &mut [[i32; 2]; 
 }
 
 /// §6.5.8's `if_diff_ref_frame_add_mv`.
-fn if_diff_ref_frame_add_mv(ctx: &MvRefContext<'_>, cell: MvCell, ref_frame: i32, list: &mut [[i32; 2]; 2], count: &mut usize) {
+fn if_diff_ref_frame_add_mv(
+    ctx: &MvRefContext<'_>,
+    cell: MvCell,
+    ref_frame: i32,
+    list: &mut [[i32; 2]; 2],
+    count: &mut usize,
+) {
     let (mv0, frame0) = get_block_mv(cell, 0);
     let (mv1, frame1) = get_block_mv(cell, 1);
     let mvs_same = mv0 == mv1;
@@ -144,13 +173,21 @@ fn if_diff_ref_frame_add_mv(ctx: &MvRefContext<'_>, cell: MvCell, ref_frame: i32
 // encoder placed it.
 fn clamp_mv_row(mv_row: i32, border: i32, mi_row: usize, mi_rows: usize, bh: usize) -> i32 {
     let mb_to_top = -(i32::try_from(mi_row).unwrap_or(0) * tables::MI_SIZE * 8);
-    let mb_to_bottom = (i32::try_from(mi_rows).unwrap_or(0) - i32::try_from(bh).unwrap_or(0) - i32::try_from(mi_row).unwrap_or(0)) * tables::MI_SIZE * 8;
+    let mb_to_bottom = (i32::try_from(mi_rows).unwrap_or(0)
+        - i32::try_from(bh).unwrap_or(0)
+        - i32::try_from(mi_row).unwrap_or(0))
+        * tables::MI_SIZE
+        * 8;
     mv_row.clamp(mb_to_top - border, mb_to_bottom + border)
 }
 
 fn clamp_mv_col(mv_col: i32, border: i32, mi_col: usize, mi_cols: usize, bw: usize) -> i32 {
     let mb_to_left = -(i32::try_from(mi_col).unwrap_or(0) * tables::MI_SIZE * 8);
-    let mb_to_right = (i32::try_from(mi_cols).unwrap_or(0) - i32::try_from(bw).unwrap_or(0) - i32::try_from(mi_col).unwrap_or(0)) * tables::MI_SIZE * 8;
+    let mb_to_right = (i32::try_from(mi_cols).unwrap_or(0)
+        - i32::try_from(bw).unwrap_or(0)
+        - i32::try_from(mi_col).unwrap_or(0))
+        * tables::MI_SIZE
+        * 8;
     mv_col.clamp(mb_to_left - border, mb_to_right + border)
 }
 
@@ -159,23 +196,44 @@ fn clamp_mv_col(mv_col: i32, border: i32, mi_col: usize, mi_cols: usize, bw: usi
 /// `ZeroMv`), `ModeContext` only meaningful when `block < 0` (a sub-8x8
 /// call's `ModeContext` is never read — `inter_mode` for the whole block is
 /// decoded once, before any `append_sub8x8_mvs` call).
-#[allow(clippy::too_many_arguments, reason = "mirrors the spec's own find_mv_refs(refFrame, block) plus the block-size/border inputs Rust can't read off implicit globals")]
-pub(crate) fn find_mv_refs(ctx: &MvRefContext<'_>, mi_size: i32, bw: usize, bh: usize, ref_frame: i32, block: i32) -> ([[i32; 2]; 2], i32) {
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors the spec's own find_mv_refs(refFrame, block) plus the block-size/border inputs Rust can't read off implicit globals"
+)]
+pub(crate) fn find_mv_refs(
+    ctx: &MvRefContext<'_>,
+    mi_size: i32,
+    bw: usize,
+    bh: usize,
+    ref_frame: i32,
+    block: i32,
+) -> ([[i32; 2]; 2], i32) {
     let mut ref_list_mv = [[0i32; 2]; 2];
     let mut ref_mv_count = 0usize;
     let mut different_ref_found = false;
     let mut context_counter = 0i32;
 
-    let search = tables::MV_REF_BLOCKS.get(usize::try_from(mi_size).unwrap_or(0)).copied().unwrap_or([[0; 2]; tables::MVREF_NEIGHBOURS]);
+    let search = tables::MV_REF_BLOCKS
+        .get(usize::try_from(mi_size).unwrap_or(0))
+        .copied()
+        .unwrap_or([[0; 2]; tables::MVREF_NEIGHBOURS]);
 
     for i in 0..2 {
-        let Some(&[dr, dc]) = search.get(i) else { continue };
-        let (cr, cc) = (i32::try_from(ctx.mi_row).unwrap_or(0) + dr, i32::try_from(ctx.mi_col).unwrap_or(0) + dc);
+        let Some(&[dr, dc]) = search.get(i) else {
+            continue;
+        };
+        let (cr, cc) = (
+            i32::try_from(ctx.mi_row).unwrap_or(0) + dr,
+            i32::try_from(ctx.mi_col).unwrap_or(0) + dc,
+        );
         if ctx.is_inside(cr, cc)
             && let Some(cell) = (ctx.cell_at)(cr, cc)
         {
             different_ref_found = true;
-            context_counter += tables::MODE_2_COUNTER.get(usize::try_from(cell.y_mode).unwrap_or(0)).copied().unwrap_or(0);
+            context_counter += tables::MODE_2_COUNTER
+                .get(usize::try_from(cell.y_mode).unwrap_or(0))
+                .copied()
+                .unwrap_or(0);
             for j in 0..2 {
                 if cell.ref_frame.get(j).copied().unwrap_or(0) == ref_frame {
                     let mv = get_sub_block_mv(cell, j, dc, block);
@@ -186,8 +244,13 @@ pub(crate) fn find_mv_refs(ctx: &MvRefContext<'_>, mi_size: i32, bw: usize, bh: 
         }
     }
     for i in 2..tables::MVREF_NEIGHBOURS {
-        let Some(&[dr, dc]) = search.get(i) else { continue };
-        let (cr, cc) = (i32::try_from(ctx.mi_row).unwrap_or(0) + dr, i32::try_from(ctx.mi_col).unwrap_or(0) + dc);
+        let Some(&[dr, dc]) = search.get(i) else {
+            continue;
+        };
+        let (cr, cc) = (
+            i32::try_from(ctx.mi_row).unwrap_or(0) + dr,
+            i32::try_from(ctx.mi_col).unwrap_or(0) + dc,
+        );
         if ctx.is_inside(cr, cc)
             && let Some(cell) = (ctx.cell_at)(cr, cc)
         {
@@ -201,8 +264,13 @@ pub(crate) fn find_mv_refs(ctx: &MvRefContext<'_>, mi_size: i32, bw: usize, bh: 
     }
     if different_ref_found {
         for i in 0..tables::MVREF_NEIGHBOURS {
-            let Some(&[dr, dc]) = search.get(i) else { continue };
-            let (cr, cc) = (i32::try_from(ctx.mi_row).unwrap_or(0) + dr, i32::try_from(ctx.mi_col).unwrap_or(0) + dc);
+            let Some(&[dr, dc]) = search.get(i) else {
+                continue;
+            };
+            let (cr, cc) = (
+                i32::try_from(ctx.mi_row).unwrap_or(0) + dr,
+                i32::try_from(ctx.mi_col).unwrap_or(0) + dc,
+            );
             if ctx.is_inside(cr, cc)
                 && let Some(cell) = (ctx.cell_at)(cr, cc)
             {
@@ -214,7 +282,10 @@ pub(crate) fn find_mv_refs(ctx: &MvRefContext<'_>, mi_size: i32, bw: usize, bh: 
         let cell = (ctx.prev_cell)();
         if_diff_ref_frame_add_mv(ctx, cell, ref_frame, &mut ref_list_mv, &mut ref_mv_count);
     }
-    let mode_context = tables::COUNTER_TO_CONTEXT.get(usize::try_from(context_counter).unwrap_or(0)).copied().unwrap_or(tables::INVALID_CASE);
+    let mode_context = tables::COUNTER_TO_CONTEXT
+        .get(usize::try_from(context_counter).unwrap_or(0))
+        .copied()
+        .unwrap_or(tables::INVALID_CASE);
     for slot in &mut ref_list_mv {
         slot[0] = clamp_mv_row(slot[0], tables::MV_BORDER, ctx.mi_row, ctx.mi_rows, bh);
         slot[1] = clamp_mv_col(slot[1], tables::MV_BORDER, ctx.mi_col, ctx.mi_cols, bw);
@@ -224,11 +295,21 @@ pub(crate) fn find_mv_refs(ctx: &MvRefContext<'_>, mi_size: i32, bw: usize, bh: 
 
 /// §6.5.13's `use_mv_hp`.
 fn use_mv_hp(mv: [i32; 2]) -> bool {
-    (mv[0].abs() >> 3) < tables::COMPANDED_MVREF_THRESH && (mv[1].abs() >> 3) < tables::COMPANDED_MVREF_THRESH
+    (mv[0].abs() >> 3) < tables::COMPANDED_MVREF_THRESH
+        && (mv[1].abs() >> 3) < tables::COMPANDED_MVREF_THRESH
 }
 
 /// §6.5.12's `find_best_ref_mvs`. Returns `(NearestMv, NearMv, BestMv)`.
-pub(crate) fn find_best_ref_mvs(mut ref_list_mv: [[i32; 2]; 2], allow_high_precision_mv: bool, mi_row: usize, mi_col: usize, mi_rows: usize, mi_cols: usize, bw: usize, bh: usize) -> ([i32; 2], [i32; 2], [i32; 2]) {
+pub(crate) fn find_best_ref_mvs(
+    mut ref_list_mv: [[i32; 2]; 2],
+    allow_high_precision_mv: bool,
+    mi_row: usize,
+    mi_col: usize,
+    mi_rows: usize,
+    mi_cols: usize,
+    bw: usize,
+    bh: usize,
+) -> ([i32; 2], [i32; 2], [i32; 2]) {
     for slot in &mut ref_list_mv {
         let mut delta_row = slot[0];
         let mut delta_col = slot[1];
@@ -271,12 +352,23 @@ pub(crate) fn append_sub8x8_mvs(
             }
         }
     } else if block <= 2 {
-        push(&mut sub8x8_mvs, &mut dst, block_mvs.first().copied().unwrap_or([0, 0]));
+        push(
+            &mut sub8x8_mvs,
+            &mut dst,
+            block_mvs.first().copied().unwrap_or([0, 0]),
+        );
     } else {
-        push(&mut sub8x8_mvs, &mut dst, block_mvs.get(2).copied().unwrap_or([0, 0]));
+        push(
+            &mut sub8x8_mvs,
+            &mut dst,
+            block_mvs.get(2).copied().unwrap_or([0, 0]),
+        );
         let mut idx = 1i32;
         while idx >= 0 && dst < 2 {
-            let cand = block_mvs.get(usize::try_from(idx).unwrap_or(0)).copied().unwrap_or([0, 0]);
+            let cand = block_mvs
+                .get(usize::try_from(idx).unwrap_or(0))
+                .copied()
+                .unwrap_or([0, 0]);
             if cand != first(&sub8x8_mvs) {
                 push(&mut sub8x8_mvs, &mut dst, cand);
             }
@@ -294,12 +386,20 @@ pub(crate) fn append_sub8x8_mvs(
     if dst < 2 {
         push(&mut sub8x8_mvs, &mut dst, [0, 0]);
     }
-    (sub8x8_mvs.first().copied().unwrap_or([0, 0]), sub8x8_mvs.get(1).copied().unwrap_or([0, 0]))
+    (
+        sub8x8_mvs.first().copied().unwrap_or([0, 0]),
+        sub8x8_mvs.get(1).copied().unwrap_or([0, 0]),
+    )
 }
 
 /// §6.3.6's `inv_recenter_nonneg`... no — §6.5's `read_mv`/`read_mv_component`.
 /// §6.4.19's `read_mv`. `best_mv` is `BestMv[ref]`. Returns the final `Mv`.
-pub(crate) fn read_mv(bd: &mut Bd<'_>, entropy: &EntropyContext, best_mv: [i32; 2], allow_high_precision_mv: bool) -> [i32; 2] {
+pub(crate) fn read_mv(
+    bd: &mut Bd<'_>,
+    entropy: &EntropyContext,
+    best_mv: [i32; 2],
+    allow_high_precision_mv: bool,
+) -> [i32; 2] {
     let use_hp = allow_high_precision_mv && use_mv_hp(best_mv);
     let mut diff = [0i32, 0i32];
     let joint = bd.read_tree(&tables::MV_JOINT_TREE, &entropy.mv_joint_probs);
@@ -316,12 +416,21 @@ pub(crate) fn read_mv(bd: &mut Bd<'_>, entropy: &EntropyContext, best_mv: [i32; 
 fn read_mv_component(bd: &mut Bd<'_>, entropy: &EntropyContext, comp: usize, use_hp: bool) -> i32 {
     let sign_prob = entropy.mv_sign_prob.get(comp).copied().unwrap_or(128);
     let sign = bd.read_bool(sign_prob);
-    let class_probs = entropy.mv_class_probs.get(comp).copied().unwrap_or([128; 10]);
+    let class_probs = entropy
+        .mv_class_probs
+        .get(comp)
+        .copied()
+        .unwrap_or([128; 10]);
     let mv_class = bd.read_tree(&tables::MV_CLASS_TREE, &class_probs);
     let mag = if mv_class == tables::MV_CLASS_0 {
         let bit_prob = entropy.mv_class0_bit_prob.get(comp).copied().unwrap_or(128);
         let class0_bit = i32::from(bd.read_bool(bit_prob));
-        let fr_probs = entropy.mv_class0_fr_probs.get(comp).and_then(|r| r.get(usize::try_from(class0_bit).unwrap_or(0))).copied().unwrap_or([128; 3]);
+        let fr_probs = entropy
+            .mv_class0_fr_probs
+            .get(comp)
+            .and_then(|r| r.get(usize::try_from(class0_bit).unwrap_or(0)))
+            .copied()
+            .unwrap_or([128; 3]);
         let class0_fr = bd.read_tree(&tables::MV_FR_TREE, &fr_probs);
         let class0_hp = if use_hp {
             let hp_prob = entropy.mv_class0_hp_prob.get(comp).copied().unwrap_or(128);
@@ -334,7 +443,12 @@ fn read_mv_component(bd: &mut Bd<'_>, entropy: &EntropyContext, comp: usize, use
         let mut d = 0i32;
         let n = usize::try_from(mv_class).unwrap_or(0);
         for i in 0..n {
-            let bit_prob = entropy.mv_bits_prob.get(comp).and_then(|r| r.get(i)).copied().unwrap_or(128);
+            let bit_prob = entropy
+                .mv_bits_prob
+                .get(comp)
+                .and_then(|r| r.get(i))
+                .copied()
+                .unwrap_or(128);
             let mv_bit = i32::from(bd.read_bool(bit_prob));
             d |= mv_bit << i;
         }

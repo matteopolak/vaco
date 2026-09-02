@@ -101,7 +101,9 @@ pub(crate) fn sequence_header(payload: &[u8]) -> SequenceHeader {
 fn read_quant_matrix(r: &mut BitReader<'_>, out: &mut [u8; 64]) {
     for n in 0..64usize {
         let value = r.get(8) as u8;
-        if let Some(pos) = tables::ZIGZAG_SCAN.iter().position(|&s| usize::from(s) == n)
+        if let Some(pos) = tables::ZIGZAG_SCAN
+            .iter()
+            .position(|&s| usize::from(s) == n)
             && let Some(slot) = out.get_mut(pos)
         {
             *slot = value;
@@ -188,7 +190,10 @@ impl PictureType {
 /// being used for the prediction."
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct PictureHeader {
-    #[allow(dead_code, reason = "parsed for correct framing, not consumed — see this struct's own doc comment")]
+    #[allow(
+        dead_code,
+        reason = "parsed for correct framing, not consumed — see this struct's own doc comment"
+    )]
     pub temporal_reference: u16,
     pub coding_type: PictureType,
     pub full_pel_forward_vector: bool,
@@ -261,7 +266,10 @@ pub(crate) struct PictureCodingExtension {
     pub intra_vlc_format: bool,
     pub alternate_scan: bool,
     pub repeat_first_field: bool,
-    #[allow(dead_code, reason = "parsed for correct framing, not yet consumed — see this struct's own doc comment")]
+    #[allow(
+        dead_code,
+        reason = "parsed for correct framing, not yet consumed — see this struct's own doc comment"
+    )]
     pub progressive_frame: bool,
 }
 
@@ -274,10 +282,10 @@ impl PictureCodingExtension {
     #[must_use]
     pub(crate) const fn mpeg1_default(forward_f_code: u8, backward_f_code: u8) -> Self {
         Self {
-            f_code: [[forward_f_code, forward_f_code], [
-                backward_f_code,
-                backward_f_code,
-            ]],
+            f_code: [
+                [forward_f_code, forward_f_code],
+                [backward_f_code, backward_f_code],
+            ],
             intra_dc_precision: 0,
             picture_structure: 0b11,
             top_field_first: false,

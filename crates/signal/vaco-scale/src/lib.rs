@@ -63,8 +63,8 @@ pub mod options;
 pub mod plan;
 pub mod rowio;
 mod scaler;
-mod special;
 pub mod spec;
+mod special;
 
 pub use exec::{DstPlane, SrcPlane};
 pub use filter::{FilterBank, Kernel};

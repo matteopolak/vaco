@@ -289,13 +289,17 @@ pub fn materialize(
     let mut out = Picture::new(budget, mb_cols, mb_rows)?;
     for (plane_idx, dst) in [&mut out.y, &mut out.u, &mut out.v].into_iter().enumerate() {
         let height = u32::try_from(dst.height).unwrap_or(u32::MAX);
-        let view = reference.wait_rows_for(waiter_decode_index, plane_idx, height.saturating_sub(1))?;
-        let src = view
-            .contiguous_all()
-            .ok_or(Error::InvalidData("vp8: a single-band reference plane was not one contiguous borrow"))?;
+        let view =
+            reference.wait_rows_for(waiter_decode_index, plane_idx, height.saturating_sub(1))?;
+        let src = view.contiguous_all().ok_or(Error::InvalidData(
+            "vp8: a single-band reference plane was not one contiguous borrow",
+        ))?;
         for y in 0..dst.height {
             let row_start = y.saturating_mul(src.stride);
-            let row = src.data.get(row_start..row_start.saturating_add(dst.width)).unwrap_or(&[]);
+            let row = src
+                .data
+                .get(row_start..row_start.saturating_add(dst.width))
+                .unwrap_or(&[]);
             for (x, &v) in row.iter().enumerate() {
                 dst.set(x, y, v);
             }

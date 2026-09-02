@@ -112,7 +112,9 @@ impl Filter {
         // No previous frame yet: this crate's documented choice is `y := x`
         // (see module doc), so the first frame blends against itself.
         let previous = self.prev.clone().unwrap_or_else(|| frame.clone());
-        let mut result = self.apply(&frame, &previous).unwrap_or_else(|| frame.clone());
+        let mut result = self
+            .apply(&frame, &previous)
+            .unwrap_or_else(|| frame.clone());
         copy_meta(&mut result, &frame);
         self.prev = Some(frame);
         FrameOut::One(result)

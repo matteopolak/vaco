@@ -103,8 +103,14 @@ pub fn form_prediction<S: Sampler>(
             let sy_next = (field_y + 1) * row_scale + row_parity;
             let value = match (half_x, half_y) {
                 (false, false) => src.sample(plane_idx, sx, sy),
-                (false, true) => avg2(src.sample(plane_idx, sx, sy), src.sample(plane_idx, sx, sy_next)),
-                (true, false) => avg2(src.sample(plane_idx, sx, sy), src.sample(plane_idx, sx + 1, sy)),
+                (false, true) => avg2(
+                    src.sample(plane_idx, sx, sy),
+                    src.sample(plane_idx, sx, sy_next),
+                ),
+                (true, false) => avg2(
+                    src.sample(plane_idx, sx, sy),
+                    src.sample(plane_idx, sx + 1, sy),
+                ),
                 (true, true) => avg4(
                     src.sample(plane_idx, sx, sy),
                     src.sample(plane_idx, sx + 1, sy),
@@ -133,7 +139,7 @@ pub fn average_predictions(a: &[u8], b: &[u8], out: &mut [u8]) {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::indexing_slicing, reason = "test code")]
-    use super::{Sampler, avg2, avg4, average_predictions, form_prediction};
+    use super::{Sampler, average_predictions, avg2, avg4, form_prediction};
 
     #[test]
     fn avg2_rounds_half_away_from_zero() {

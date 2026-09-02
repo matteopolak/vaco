@@ -408,7 +408,10 @@ fn metadata_preserves_insertion_order_and_overwrites_in_place() {
             ("lavfi.signalstats.YMAX".to_string(), "210".to_string()),
         ]
     );
-    assert_eq!(frame.metadata_get("lavfi.signalstats.YAVG"), Some("59.6797"));
+    assert_eq!(
+        frame.metadata_get("lavfi.signalstats.YAVG"),
+        Some("59.6797")
+    );
     assert_eq!(frame.metadata_get("lavfi.signalstats.nonexistent"), None);
 }
 
@@ -420,7 +423,10 @@ fn metadata_coexists_with_typed_side_data() {
     frame.set_metadata("lavfi.freezedetect.freeze_start", "0");
     assert_eq!(frame.side_data.len(), 2);
     assert!(frame.side_data(FrameSideDataKind::DisplayMatrix).is_some());
-    assert_eq!(frame.metadata_get("lavfi.freezedetect.freeze_start"), Some("0"));
+    assert_eq!(
+        frame.metadata_get("lavfi.freezedetect.freeze_start"),
+        Some("0")
+    );
 }
 
 #[test]
@@ -543,7 +549,10 @@ fn log_lines_preserve_push_order() {
     frame.push_log_line("color_range:unknown color_space:unknown");
     assert_eq!(
         frame.log_lines(),
-        &["n:0 pts:0 pts_time:0".to_string(), "color_range:unknown color_space:unknown".to_string()]
+        &[
+            "n:0 pts:0 pts_time:0".to_string(),
+            "color_range:unknown color_space:unknown".to_string()
+        ]
     );
 }
 
@@ -564,13 +573,26 @@ fn motion_vectors_side_data_round_trips_through_set_and_remove() {
     let mut frame = Frame::alloc_video(&mut b, PixFmt::Rgb24, 8, 8).unwrap();
     assert!(frame.side_data(FrameSideDataKind::MotionVectors).is_none());
 
-    let mv = MotionVector { source: -1, w: 16, h: 16, dst_x: 32, dst_y: 48, src_x: 30, src_y: 50 };
+    let mv = MotionVector {
+        source: -1,
+        w: 16,
+        h: 16,
+        dst_x: 32,
+        dst_y: 48,
+        src_x: 30,
+        src_y: 50,
+    };
     frame.set_side_data(FrameSideData::MotionVectors(vec![mv]));
-    let Some(FrameSideData::MotionVectors(mvs)) = frame.side_data(FrameSideDataKind::MotionVectors) else {
+    let Some(FrameSideData::MotionVectors(mvs)) = frame.side_data(FrameSideDataKind::MotionVectors)
+    else {
         unreachable!("just attached a MotionVectors entry");
     };
     assert_eq!(mvs.as_slice(), [mv]);
-    assert!(frame.remove_side_data(FrameSideDataKind::MotionVectors).is_some());
+    assert!(
+        frame
+            .remove_side_data(FrameSideDataKind::MotionVectors)
+            .is_some()
+    );
     assert!(frame.side_data(FrameSideDataKind::MotionVectors).is_none());
 }
 

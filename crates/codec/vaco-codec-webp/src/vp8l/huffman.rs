@@ -76,7 +76,10 @@ impl HuffmanTable {
             return Ok(Self::Single(u32::try_from(sym).unwrap_or(0)));
         }
         let codes = canonical_codes(lengths)?;
-        let mut nodes = vec![Node::Branch { zero: u32::MAX, one: u32::MAX }];
+        let mut nodes = vec![Node::Branch {
+            zero: u32::MAX,
+            one: u32::MAX,
+        }];
         for &(sym, len) in &present {
             let code = codes.get(sym).copied().unwrap_or(0);
             let mut cur = 0usize;
@@ -98,7 +101,10 @@ impl HuffmanTable {
                         nodes.push(Node::Leaf(sym as u32));
                         nodes.len() - 1
                     } else {
-                        nodes.push(Node::Branch { zero: u32::MAX, one: u32::MAX });
+                        nodes.push(Node::Branch {
+                            zero: u32::MAX,
+                            one: u32::MAX,
+                        });
                         nodes.len() - 1
                     };
                     let Some(Node::Branch { zero, one }) = nodes.get_mut(cur) else {
@@ -130,7 +136,11 @@ impl HuffmanTable {
                         Some(Node::Leaf(sym)) => return *sym,
                         Some(Node::Branch { zero, one }) => {
                             let bit = r.read_bit();
-                            cur = if bit == 0 { *zero as usize } else { *one as usize };
+                            cur = if bit == 0 {
+                                *zero as usize
+                            } else {
+                                *one as usize
+                            };
                         }
                         None => return 0,
                     }
@@ -193,10 +203,18 @@ impl EncodeTable {
         let present = lengths.iter().filter(|&&l| l > 0).count();
         if present <= 1 {
             let single = lengths.iter().position(|&l| l > 0).unwrap_or(0) as u32;
-            return Ok(Self { lengths, codes: Vec::new(), single: Some(single) });
+            return Ok(Self {
+                lengths,
+                codes: Vec::new(),
+                single: Some(single),
+            });
         }
         let codes = canonical_codes(&lengths)?;
-        Ok(Self { lengths, codes, single: None })
+        Ok(Self {
+            lengths,
+            codes,
+            single: None,
+        })
     }
 
     pub(crate) fn write(&self, w: &mut BitWriterLsb, symbol: usize) {
@@ -223,7 +241,9 @@ impl EncodeTable {
 pub(crate) fn lengths_from_freqs(freqs: &[u64], limit: u8) -> Vec<u8> {
     let n = freqs.len();
     let mut lengths = vec![0u8; n];
-    let present: Vec<usize> = (0..n).filter(|&i| freqs.get(i).is_some_and(|&f| f > 0)).collect();
+    let present: Vec<usize> = (0..n)
+        .filter(|&i| freqs.get(i).is_some_and(|&f| f > 0))
+        .collect();
     if present.is_empty() {
         if let Some(slot) = lengths.first_mut() {
             *slot = 1;
@@ -238,7 +258,10 @@ pub(crate) fn lengths_from_freqs(freqs: &[u64], limit: u8) -> Vec<u8> {
         }
         return lengths;
     }
-    let weights: Vec<u64> = present.iter().map(|&i| freqs.get(i).copied().unwrap_or(1).max(1)).collect();
+    let weights: Vec<u64> = present
+        .iter()
+        .map(|&i| freqs.get(i).copied().unwrap_or(1).max(1))
+        .collect();
     let raw = huffman_tree_lengths(&weights);
     if raw.iter().all(|&l| l <= limit) {
         for (idx, &sym) in present.iter().enumerate() {
@@ -276,7 +299,10 @@ impl Ord for HeapItem {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         // Reverse for a min-heap; break ties by insertion order for a
         // deterministic (not spec-mandated) tree shape.
-        other.weight.cmp(&self.weight).then(other.seq.cmp(&self.seq))
+        other
+            .weight
+            .cmp(&self.weight)
+            .then(other.seq.cmp(&self.seq))
     }
 }
 impl PartialOrd for HeapItem {
@@ -299,7 +325,11 @@ fn huffman_tree_lengths(weights: &[u64]) -> Vec<u8> {
     let mut parent: Vec<Option<usize>> = vec![None; n];
     let mut seq = 0u32;
     for (i, &w) in weights.iter().enumerate() {
-        heap.push(HeapItem { weight: w, seq, node: i });
+        heap.push(HeapItem {
+            weight: w,
+            seq,
+            node: i,
+        });
         seq += 1;
     }
     let mut next_id = n;
@@ -315,7 +345,11 @@ fn huffman_tree_lengths(weights: &[u64]) -> Vec<u8> {
         if let Some(slot) = parent.get_mut(b.node) {
             *slot = Some(new_id);
         }
-        heap.push(HeapItem { weight: a.weight.saturating_add(b.weight), seq, node: new_id });
+        heap.push(HeapItem {
+            weight: a.weight.saturating_add(b.weight),
+            seq,
+            node: new_id,
+        });
         seq += 1;
     }
 
@@ -406,7 +440,11 @@ mod tests {
     fn lengths_from_freqs_produce_a_full_kraft_sum() {
         let freqs = [100u64, 50, 25, 1, 1, 1, 1];
         let lengths = lengths_from_freqs(&freqs, 15);
-        let sum: f64 = lengths.iter().filter(|&&l| l > 0).map(|&l| 2f64.powi(-i32::from(l))).sum();
+        let sum: f64 = lengths
+            .iter()
+            .filter(|&&l| l > 0)
+            .map(|&l| 2f64.powi(-i32::from(l)))
+            .sum();
         assert!((sum - 1.0).abs() < 1e-9, "kraft sum {sum}");
     }
 
@@ -423,7 +461,11 @@ mod tests {
         }
         let lengths = lengths_from_freqs(&freqs, 8);
         assert!(lengths.iter().all(|&l| l <= 8));
-        let sum: f64 = lengths.iter().filter(|&&l| l > 0).map(|&l| 2f64.powi(-i32::from(l))).sum();
+        let sum: f64 = lengths
+            .iter()
+            .filter(|&&l| l > 0)
+            .map(|&l| 2f64.powi(-i32::from(l)))
+            .sum();
         assert!((sum - 1.0).abs() < 1e-6, "kraft sum {sum}");
     }
 }

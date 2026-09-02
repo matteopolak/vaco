@@ -32,10 +32,13 @@ use vaco_core::Rgba;
 
 use crate::script::{Event, Script};
 use crate::style::Style;
-use crate::tags::{tokenize, Item};
+use crate::tags::{Item, tokenize};
 
 #[derive(Debug, Clone, PartialEq)]
-#[allow(clippy::struct_excessive_bools, reason = "one flag per independent glyph-formatting override tag, not a state machine")]
+#[allow(
+    clippy::struct_excessive_bools,
+    reason = "one flag per independent glyph-formatting override tag, not a state machine"
+)]
 pub struct ResolvedStyle {
     pub fontname: String,
     pub fontsize: f64,
@@ -138,29 +141,51 @@ pub fn plan_event(script: &Script, event: &Event) -> EventPlan {
             }
             Item::Tag { name, arg } => {
                 if !buf.is_empty() {
-                    runs.push(TextRun { style: cursor.cur.clone(), text: std::mem::take(&mut buf) });
+                    runs.push(TextRun {
+                        style: cursor.cur.clone(),
+                        text: std::mem::take(&mut buf),
+                    });
                 }
                 apply_tag(&mut cursor, &name, arg.as_deref(), &mut drawing_depth);
             }
         }
     }
     if !buf.is_empty() {
-        runs.push(TextRun { style: cursor.cur.clone(), text: buf });
+        runs.push(TextRun {
+            style: cursor.cur.clone(),
+            text: buf,
+        });
     }
 
     EventPlan {
         alignment: cursor.alignment,
         pos: cursor.pos,
-        margin_l: if event.margin_l != 0 { event.margin_l } else { cursor.base.margin_l },
-        margin_r: if event.margin_r != 0 { event.margin_r } else { cursor.base.margin_r },
-        margin_v: if event.margin_v != 0 { event.margin_v } else { cursor.base.margin_v },
+        margin_l: if event.margin_l != 0 {
+            event.margin_l
+        } else {
+            cursor.base.margin_l
+        },
+        margin_r: if event.margin_r != 0 {
+            event.margin_r
+        } else {
+            cursor.base.margin_r
+        },
+        margin_v: if event.margin_v != 0 {
+            event.margin_v
+        } else {
+            cursor.base.margin_v
+        },
         clip: cursor.clip,
         runs,
     }
 }
 
 fn parse_num(s: &str) -> Option<f64> {
-    s.trim().trim_start_matches('&').trim_end_matches('&').parse().ok()
+    s.trim()
+        .trim_start_matches('&')
+        .trim_end_matches('&')
+        .parse()
+        .ok()
 }
 
 fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_depth: &mut u32) {
@@ -170,7 +195,13 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
         "i" => cursor.cur.italic = parse_num(a).unwrap_or(0.0) != 0.0,
         "u" => cursor.cur.underline = parse_num(a).unwrap_or(0.0) != 0.0,
         "s" => cursor.cur.strikeout = parse_num(a).unwrap_or(0.0) != 0.0,
-        "fn" => cursor.cur.fontname = if a.is_empty() { cursor.base.fontname.clone() } else { a.to_owned() },
+        "fn" => {
+            cursor.cur.fontname = if a.is_empty() {
+                cursor.base.fontname.clone()
+            } else {
+                a.to_owned()
+            }
+        }
         "fs" => {
             if let Some(rel) = a.strip_prefix('+') {
                 cursor.cur.fontsize += parse_num(rel).unwrap_or(0.0);
@@ -191,10 +222,17 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
         "xbord" | "ybord" => cursor.cur.outline = parse_num(a).unwrap_or(cursor.cur.outline),
         "shad" | "xshad" | "yshad" => cursor.cur.shadow = parse_num(a).unwrap_or(cursor.cur.shadow),
         "blur" | "be" => cursor.cur.blur = parse_num(a).unwrap_or(cursor.cur.blur),
-        "c" | "1c" => cursor.cur.primary = crate::color::parse_color(a).unwrap_or(cursor.cur.primary),
+        "c" | "1c" => {
+            cursor.cur.primary = crate::color::parse_color(a).unwrap_or(cursor.cur.primary)
+        }
         // Secondary colour affects karaoke's unsung portion only, not implemented.
-        "3c" => cursor.cur.outline_colour = crate::color::parse_color(a).unwrap_or(cursor.cur.outline_colour),
-        "4c" => cursor.cur.back_colour = crate::color::parse_color(a).unwrap_or(cursor.cur.back_colour),
+        "3c" => {
+            cursor.cur.outline_colour =
+                crate::color::parse_color(a).unwrap_or(cursor.cur.outline_colour)
+        }
+        "4c" => {
+            cursor.cur.back_colour = crate::color::parse_color(a).unwrap_or(cursor.cur.back_colour)
+        }
         "alpha" => {
             if let Some(av) = crate::color::parse_alpha_only(a) {
                 cursor.cur.primary.a = av;
@@ -265,7 +303,11 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
         // `\fad`/`\fade` (parsed, not applied) and `\k`/`\kf`/`\ko` (karaoke
         // timing, not applied) fall through to the wildcard arm below.
         "r" => {
-            let target = if a.is_empty() { cursor.base.clone() } else { cursor.script.style(a) };
+            let target = if a.is_empty() {
+                cursor.base.clone()
+            } else {
+                cursor.script.style(a)
+            };
             cursor.cur = ResolvedStyle::from_style(&target);
         }
         _ => {}
@@ -298,7 +340,13 @@ const fn legacy_alignment(v: i32) -> Option<i32> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, clippy::float_cmp, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    clippy::float_cmp,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::script::parse;
@@ -355,7 +403,15 @@ mod tests {
     fn color_tag_changes_primary_colour() {
         let (script, event) = one_event(r"{\c&H0000FF&}x");
         let plan = plan_event(&script, &event);
-        assert_eq!(plan.runs[0].style.primary, Rgba { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(
+            plan.runs[0].style.primary,
+            Rgba {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 255
+            }
+        );
     }
 
     #[test]

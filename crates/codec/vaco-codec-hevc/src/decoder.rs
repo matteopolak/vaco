@@ -62,14 +62,15 @@
 //! check, below.
 
 use vaco_codec_cabac::CabacDecoder;
-use vaco_codec_core::Decoder;
 use vaco_codec_core::Caps;
+use vaco_codec_core::Decoder;
 use vaco_core::{Error, Result};
 use vaco_format_nalu::{RbspBuf, units};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_parse_hevc::{
-    ChromaFormat, HevcNalHeader, HevcParser, PocState, Pps, SliceHeader, SliceKind, Sps, cc_data_from_sei, sei,
+    ChromaFormat, HevcNalHeader, HevcParser, PocState, Pps, SliceHeader, SliceKind, Sps,
+    cc_data_from_sei, sei,
 };
 
 use crate::cabac_ctx::ContextBank;
@@ -174,7 +175,9 @@ impl HevcDecoder {
         let mut mastering_display = None;
         let mut content_light = None;
         for nal in units(payload, framing) {
-            let Some(header) = HevcNalHeader::parse(nal.data) else { continue };
+            let Some(header) = HevcNalHeader::parse(nal.data) else {
+                continue;
+            };
             if !header.is_base_layer() {
                 continue;
             }
@@ -197,8 +200,12 @@ impl HevcDecoder {
                                 max_luminance,
                                 min_luminance,
                             } => {
-                                mastering_display =
-                                    Some(mastering_display_from_sei(primaries, white_point, max_luminance, min_luminance));
+                                mastering_display = Some(mastering_display_from_sei(
+                                    primaries,
+                                    white_point,
+                                    max_luminance,
+                                    min_luminance,
+                                ));
                             }
                             vaco_parse_hevc::SeiPayload::ContentLightLevel {
                                 max_content_light_level,
@@ -221,23 +228,27 @@ impl HevcDecoder {
             ));
         }
         let Some(ebsp) = slice_nal else { return Ok(()) };
-        let header = HevcNalHeader::parse(ebsp).ok_or(Error::InvalidData("vaco-codec-hevc: empty NAL unit"))?;
+        let header = HevcNalHeader::parse(ebsp)
+            .ok_or(Error::InvalidData("vaco-codec-hevc: empty NAL unit"))?;
 
         self.rbsp.fill(ebsp, &mut self.budget)?;
         let rbsp = self.rbsp.as_slice();
 
-        let pps_id = vaco_parse_hevc::slice::peek_pps_id(rbsp)
-            .ok_or(Error::InvalidData("vaco-codec-hevc: slice segment header truncated before pps_id"))?;
+        let pps_id = vaco_parse_hevc::slice::peek_pps_id(rbsp).ok_or(Error::InvalidData(
+            "vaco-codec-hevc: slice segment header truncated before pps_id",
+        ))?;
         // Cloned rather than borrowed: the CTU walk below needs `&mut
         // self.budget` for the rest of this function, which a borrow of
         // `self.parser`'s tables held open across that call would conflict
         // with.
         let (pps, sps) = {
-            let (p, s) = self
-                .parser
-                .parameter_sets()
-                .sps_for_pps(pps_id)
-                .ok_or(Error::Unsupported("vaco-codec-hevc: referenced PPS/SPS not seen yet"))?;
+            let (p, s) =
+                self.parser
+                    .parameter_sets()
+                    .sps_for_pps(pps_id)
+                    .ok_or(Error::Unsupported(
+                        "vaco-codec-hevc: referenced PPS/SPS not seen yet",
+                    ))?;
             (p.clone(), s.clone())
         };
 
@@ -262,10 +273,14 @@ impl HevcDecoder {
         // (`weightb=1`) — see `docs/codec/vaco-codec-hevc.md`'s B-slice
         // section for the full measured sweep. The refusal is lifted.
         if hdr.dependent {
-            return Err(Error::Unsupported("vaco-codec-hevc: dependent slice segments are not supported"));
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: dependent slice segments are not supported",
+            ));
         }
         if !hdr.first_slice_segment_in_pic {
-            return Err(Error::Unsupported("vaco-codec-hevc: multiple slice segments per picture are not supported"));
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: multiple slice segments per picture are not supported",
+            ));
         }
 
         reader.align();
@@ -283,12 +298,20 @@ impl HevcDecoder {
         // immediately before deblocking, and is what deblocking/SAO/
         // emission (and every future picture's own reference reads) keep
         // using exactly as before.
-        let ctb_size = usize::try_from(1u32 << (u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size)))
-            .unwrap_or(1)
-            .max(1);
+        let ctb_size = usize::try_from(
+            1u32 << (u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size)),
+        )
+        .unwrap_or(1)
+        .max(1);
         let ctb_size_u32 = u32::try_from(ctb_size).unwrap_or(1).max(1);
-        let ctbs_x = u32::try_from(width).unwrap_or(0).div_ceil(ctb_size_u32).max(1);
-        let ctbs_y = u32::try_from(height).unwrap_or(0).div_ceil(ctb_size_u32).max(1);
+        let ctbs_x = u32::try_from(width)
+            .unwrap_or(0)
+            .div_ceil(ctb_size_u32)
+            .max(1);
+        let ctbs_y = u32::try_from(height)
+            .unwrap_or(0)
+            .div_ceil(ctb_size_u32)
+            .max(1);
         // Stage 2b's "try `std::thread::scope`" resolution
         // (`docs/codec/hevc-wavefront-threading.md`): every one of these
         // five `*Shared` boards is now a plain local, owned by this same
@@ -296,9 +319,11 @@ impl HevcDecoder {
         // `edges`/`sao_params` (which all borrow from one) are alive below
         // — no `Arc`, no reference counting, matching `std::thread::scope`'s
         // own borrowing shape ahead of step 4's real dispatch.
-        let recon_shared = crate::framebuf::ReconPictureShared::new(&mut self.budget, width, height, ctb_size)?;
+        let recon_shared =
+            crate::framebuf::ReconPictureShared::new(&mut self.budget, width, height, ctb_size)?;
         let mut recon = crate::framebuf::ReconPicture::new(&recon_shared);
-        let cu_grid_shared = crate::framebuf::CuGridShared::new(width, height, hdr.kind == SliceKind::B, ctb_size);
+        let cu_grid_shared =
+            crate::framebuf::CuGridShared::new(width, height, hdr.kind == SliceKind::B, ctb_size);
         let cu_grid = CuGrid::new(&mut self.budget, &cu_grid_shared)?;
         let edges_shared = crate::framebuf::EdgeMarksShared::new(width, height, ctb_size);
         let edges = crate::framebuf::EdgeMarks::new(&edges_shared);
@@ -308,18 +333,31 @@ impl HevcDecoder {
         // ITU-T H.265 §8.3.1: this picture's own picture order count, and
         // (§8.1) whether it is the one IRAP in its sequence that clears
         // RASL output rather than merely refreshing prediction.
-        let no_rasl_output =
-            header.nal_unit_type.is_idr() || header.nal_unit_type.is_bla() || (header.nal_unit_type.is_cra() && !self.poc_state.started());
-        let poc = self.poc_state.advance_with(&sps, &hdr, header.temporal_id, no_rasl_output);
+        let no_rasl_output = header.nal_unit_type.is_idr()
+            || header.nal_unit_type.is_bla()
+            || (header.nal_unit_type.is_cra() && !self.poc_state.started());
+        let poc = self
+            .poc_state
+            .advance_with(&sps, &hdr, header.temporal_id, no_rasl_output);
 
-        let max_dec_pic_buffering = usize::try_from(sps.max_dec_pic_buffering()).unwrap_or(1).max(1);
+        let max_dec_pic_buffering = usize::try_from(sps.max_dec_pic_buffering())
+            .unwrap_or(1)
+            .max(1);
         let max_num_reorder_pics = usize::try_from(sps.max_num_reorder_pics()).unwrap_or(0);
         let max_latency_increase = sps.max_latency_increase_plus1.last().copied().unwrap_or(0);
-        let dpb = self
-            .dpb
-            .get_or_insert_with(|| Dpb::new(max_dec_pic_buffering, max_num_reorder_pics, max_latency_increase));
+        let dpb = self.dpb.get_or_insert_with(|| {
+            Dpb::new(
+                max_dec_pic_buffering,
+                max_num_reorder_pics,
+                max_latency_increase,
+            )
+        });
 
-        let sets = crate::dpb::derive_reference_pic_sets(poc.value, hdr.short_term_rps.as_ref(), !hdr.long_term_refs.is_empty())?;
+        let sets = crate::dpb::derive_reference_pic_sets(
+            poc.value,
+            hdr.short_term_rps.as_ref(),
+            !hdr.long_term_refs.is_empty(),
+        )?;
 
         // §C.5.2.2: an IRAP with `NoRaslOutputFlag` bumps everything still
         // pending (unless `no_output_of_prior_pics_flag` says to drop it
@@ -328,7 +366,12 @@ impl HevcDecoder {
         // meaningless against an empty DPB anyway) runs.
         if header.nal_unit_type.is_irap() && no_rasl_output {
             let pocs = dpb.clear_for_irap(hdr.no_output_of_prior_pics);
-            Self::emit_pocs(self.dpb.as_ref(), &mut self.budget, &mut self.machine, &pocs)?;
+            Self::emit_pocs(
+                self.dpb.as_ref(),
+                &mut self.budget,
+                &mut self.machine,
+                &pocs,
+            )?;
             if let Some(dpb) = self.dpb.as_mut() {
                 dpb.clear_all(&mut self.budget);
             }
@@ -343,7 +386,12 @@ impl HevcDecoder {
             // post-store bump below.
             dpb.apply_reference_picture_set(&sets, &mut self.budget);
             let pre_bumped = dpb.bump_pre_decode();
-            Self::emit_pocs(self.dpb.as_ref(), &mut self.budget, &mut self.machine, &pre_bumped)?;
+            Self::emit_pocs(
+                self.dpb.as_ref(),
+                &mut self.budget,
+                &mut self.machine,
+                &pre_bumped,
+            )?;
             if let Some(dpb) = self.dpb.as_mut() {
                 dpb.reap_unused(&mut self.budget);
             }
@@ -364,18 +412,30 @@ impl HevcDecoder {
             let dpb_ref = self.dpb.as_ref();
             let ref_pics_l0: Vec<RefPic<'_>> = list0
                 .iter()
-                .filter_map(|&p| dpb_ref.and_then(|d| d.reference_picture(p)).map(|pic| RefPic { poc: p, pic }))
+                .filter_map(|&p| {
+                    dpb_ref
+                        .and_then(|d| d.reference_picture(p))
+                        .map(|pic| RefPic { poc: p, pic })
+                })
                 .collect();
             let ref_pics_l1: Vec<RefPic<'_>> = list1
                 .iter()
-                .filter_map(|&p| dpb_ref.and_then(|d| d.reference_picture(p)).map(|pic| RefPic { poc: p, pic }))
+                .filter_map(|&p| {
+                    dpb_ref
+                        .and_then(|d| d.reference_picture(p))
+                        .map(|pic| RefPic { poc: p, pic })
+                })
                 .collect();
             // §8.5.3.2.9: `ColPic` is named from `RefPicList0` or
             // `RefPicList1` depending on `collocated_from_l0_flag` — a P
             // slice's own parser default (`collocated_from_l0 == true`)
             // makes this collapse to the pre-existing `list0`-only lookup.
             let collocated = if hdr.temporal_mvp_enabled {
-                let col_list = if hdr.collocated_from_l0 { &list0 } else { &list1 };
+                let col_list = if hdr.collocated_from_l0 {
+                    &list0
+                } else {
+                    &list1
+                };
                 col_list
                     .get(usize::try_from(hdr.collocated_ref_idx).unwrap_or(0))
                     .and_then(|&p| dpb_ref.and_then(|d| d.collocated_for(p)))
@@ -386,21 +446,35 @@ impl HevcDecoder {
             // lists has a POC no greater than the current picture's. Always
             // `true` trivially for a P slice (list1 is empty).
             let is_low_delay = list0.iter().chain(list1.iter()).all(|&p| p <= poc.value);
-            let max_num_merge_cand = usize::try_from(5u32.saturating_sub(hdr.five_minus_max_num_merge_cand)).unwrap_or(1).max(1);
+            let max_num_merge_cand =
+                usize::try_from(5u32.saturating_sub(hdr.five_minus_max_num_merge_cand))
+                    .unwrap_or(1)
+                    .max(1);
             // §8.5.3.3.4.1's `weightedPredFlag`: `weighted_pred_flag` for a P
             // slice, `weighted_bipred_flag` for a B slice — resolved once per
             // slice rather than per PU. `pred_weight_table()`'s own presence
             // condition in `vaco-parse-hevc` already gates on exactly this,
             // so `hdr.pred_weight_table.is_some()` alone is enough; no
             // separate flag check is needed here.
-            let weights_l0 = hdr
-                .pred_weight_table
-                .as_ref()
-                .map(|t| crate::weight::resolve_list(t, 0, ref_pics_l0.len(), u32::from(sps.bit_depth_luma), u32::from(sps.bit_depth_chroma)));
+            let weights_l0 = hdr.pred_weight_table.as_ref().map(|t| {
+                crate::weight::resolve_list(
+                    t,
+                    0,
+                    ref_pics_l0.len(),
+                    u32::from(sps.bit_depth_luma),
+                    u32::from(sps.bit_depth_chroma),
+                )
+            });
             let weights_l1 = if is_b {
-                hdr.pred_weight_table
-                    .as_ref()
-                    .map(|t| crate::weight::resolve_list(t, 1, ref_pics_l1.len(), u32::from(sps.bit_depth_luma), u32::from(sps.bit_depth_chroma)))
+                hdr.pred_weight_table.as_ref().map(|t| {
+                    crate::weight::resolve_list(
+                        t,
+                        1,
+                        ref_pics_l1.len(),
+                        u32::from(sps.bit_depth_luma),
+                        u32::from(sps.bit_depth_chroma),
+                    )
+                })
             } else {
                 None
             };
@@ -432,7 +506,14 @@ impl HevcDecoder {
             hdr.sao_chroma,
             inter,
         );
-        let mut walk = Ctx::new(&ctx_shared, &mut pic, &mut recon, cu_grid, edges, sao_params);
+        let mut walk = Ctx::new(
+            &ctx_shared,
+            &mut pic,
+            &mut recon,
+            cu_grid,
+            edges,
+            sao_params,
+        );
 
         let qp_i8 = i8::try_from(slice_qp.clamp(0, 51)).unwrap_or(0);
         let ctb_size_i = i32::try_from(ctb_size_u32).unwrap_or(0);
@@ -480,7 +561,9 @@ impl HevcDecoder {
                 walk.recon.publish_ctu(row_us, col_us)?;
                 let end = cabac.decode_terminate();
                 if cabac.malformed() {
-                    return Err(Error::InvalidData("vaco-codec-hevc: CABAC decode ran past the slice segment data"));
+                    return Err(Error::InvalidData(
+                        "vaco-codec-hevc: CABAC decode ran past the slice segment data",
+                    ));
                 }
                 if end != 0 {
                     break;
@@ -515,10 +598,18 @@ impl HevcDecoder {
         let collocated_out = if hdr.kind == SliceKind::I {
             None
         } else {
-            Some(CollocatedMotionField::build(poc.value, width, height, |x, y| walk.cu_grid.inter_at(x, y)))
+            Some(CollocatedMotionField::build(
+                poc.value,
+                width,
+                height,
+                |x, y| walk.cu_grid.inter_at(x, y),
+            ))
         };
 
-        let out_dims = sps.dimensions().unwrap_or((sps.pic_width_in_luma_samples, sps.pic_height_in_luma_samples));
+        let out_dims = sps.dimensions().unwrap_or((
+            sps.pic_width_in_luma_samples,
+            sps.pic_height_in_luma_samples,
+        ));
         let meta = PictureMeta {
             pts: pkt.pts,
             duration: pkt.duration,
@@ -559,14 +650,28 @@ impl HevcDecoder {
         // `pic` moves into `dpb.store` a few lines down instead.
         drop(walk);
 
-        let dpb = self.dpb.as_mut().ok_or(Error::InvalidData("vaco-codec-hevc: DPB missing after its own first use"))?;
-        dpb.store(pic, meta, poc.value, hdr.pic_output, is_reference, collocated_out);
+        let dpb = self.dpb.as_mut().ok_or(Error::InvalidData(
+            "vaco-codec-hevc: DPB missing after its own first use",
+        ))?;
+        dpb.store(
+            pic,
+            meta,
+            poc.value,
+            hdr.pic_output,
+            is_reference,
+            collocated_out,
+        );
         // §C.5.2.3's own "additional bumping" — reorder/latency only, run
         // against the DPB state *after* this picture is stored (see
         // `Dpb::bump_pre_decode`'s own doc for why capacity is deliberately
         // absent here and handled earlier instead).
         let bumped = dpb.bump_post_decode(poc.value);
-        Self::emit_pocs(self.dpb.as_ref(), &mut self.budget, &mut self.machine, &bumped)?;
+        Self::emit_pocs(
+            self.dpb.as_ref(),
+            &mut self.budget,
+            &mut self.machine,
+            &bumped,
+        )?;
         if let Some(dpb) = self.dpb.as_mut() {
             dpb.reap_unused(&mut self.budget);
         }
@@ -582,10 +687,18 @@ impl HevcDecoder {
     /// with it even though the two touch disjoint fields — the borrow
     /// checker cannot see across a method boundary the way it can across
     /// plain field accesses in one function body.
-    fn emit_pocs(dpb: Option<&Dpb>, budget: &mut Budget, machine: &mut vaco_codec_core::machine::Machine<vaco_frame::Frame>, pocs: &[i64]) -> Result<()> {
+    fn emit_pocs(
+        dpb: Option<&Dpb>,
+        budget: &mut Budget,
+        machine: &mut vaco_codec_core::machine::Machine<vaco_frame::Frame>,
+        pocs: &[i64],
+    ) -> Result<()> {
         let Some(dpb) = dpb else { return Ok(()) };
         for &poc in pocs {
-            let (Some(pic), Some(meta)) = (dpb.picture_for_output(poc), dpb.output_meta(poc)) else { continue };
+            let (Some(pic), Some(meta)) = (dpb.picture_for_output(poc), dpb.output_meta(poc))
+            else {
+                continue;
+            };
             let mut frame = pic_to_frame(budget, meta.out_width, meta.out_height, pic)?;
             frame.pts = meta.pts;
             frame.duration = meta.duration;
@@ -598,10 +711,15 @@ impl HevcDecoder {
                 frame.set_side_data(vaco_frame::FrameSideData::ClosedCaptions(buffer));
             }
             if let Some(mastering_display) = meta.mastering_display {
-                frame.set_side_data(vaco_frame::FrameSideData::MasteringDisplay(Box::new(mastering_display)));
+                frame.set_side_data(vaco_frame::FrameSideData::MasteringDisplay(Box::new(
+                    mastering_display,
+                )));
             }
             if let Some((max_cll, max_fall)) = meta.content_light {
-                frame.set_side_data(vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall });
+                frame.set_side_data(vaco_frame::FrameSideData::ContentLightLevel {
+                    max_cll,
+                    max_fall,
+                });
             }
             machine.emit(frame);
         }
@@ -633,7 +751,12 @@ fn new_context_bank(kind: SliceKind, cabac_init: bool, qp: i8) -> ContextBank {
 /// columns — one CTU row is exactly one substream here: `ctbs_y` rows need
 /// `ctbs_y - 1` entry points (the last row's length is whatever remains).
 /// A stream whose count disagrees is rejected rather than guessed at.
-fn wpp_row_ranges(budget: &mut Budget, data_len: usize, offsets: &[u32], ctbs_y: u32) -> Result<Vec<(usize, usize)>> {
+fn wpp_row_ranges(
+    budget: &mut Budget,
+    data_len: usize,
+    offsets: &[u32],
+    ctbs_y: u32,
+) -> Result<Vec<(usize, usize)>> {
     let ctbs_y = usize::try_from(ctbs_y).unwrap_or(1).max(1);
     if offsets.len().saturating_add(1) != ctbs_y {
         return Err(Error::InvalidData(
@@ -643,12 +766,15 @@ fn wpp_row_ranges(budget: &mut Budget, data_len: usize, offsets: &[u32], ctbs_y:
     let mut ranges: Vec<(usize, usize)> = budget.alloc(ctbs_y)?;
     let mut start = 0usize;
     for (i, off) in offsets.iter().enumerate() {
-        let len = usize::try_from(*off).map_err(|_| Error::InvalidData("vaco-codec-hevc: entry point offset too large"))?;
-        let end = start
-            .checked_add(len)
-            .ok_or(Error::InvalidData("vaco-codec-hevc: entry point offset overflow"))?;
+        let len = usize::try_from(*off)
+            .map_err(|_| Error::InvalidData("vaco-codec-hevc: entry point offset too large"))?;
+        let end = start.checked_add(len).ok_or(Error::InvalidData(
+            "vaco-codec-hevc: entry point offset overflow",
+        ))?;
         if end > data_len {
-            return Err(Error::InvalidData("vaco-codec-hevc: entry point offset exceeds the slice segment data"));
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: entry point offset exceeds the slice segment data",
+            ));
         }
         if let Some(slot) = ranges.get_mut(i) {
             *slot = (start, end);
@@ -714,7 +840,10 @@ fn ebsp_offset_for_rbsp_len(ebsp: &[u8], rbsp_target_len: usize) -> usize {
 /// < frameWidthInCtus` is exactly "a column-1 CTU exists in the row above").
 /// `ContextBank` is `Copy`, so "snapshot" is a plain assignment, not a
 /// serialisation format of its own.
-#[allow(clippy::too_many_arguments, reason = "one call site (decode_packet); a sub-struct would not aid clarity")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call site (decode_packet); a sub-struct would not aid clarity"
+)]
 fn decode_wpp_rows(
     budget: &mut Budget,
     ebsp: &[u8],
@@ -745,7 +874,17 @@ fn decode_wpp_rows(
     let row_ranges_bytes = u64::try_from(row_ranges.len())
         .unwrap_or(u64::MAX)
         .saturating_mul(u64::try_from(std::mem::size_of::<(usize, usize)>()).unwrap_or(u64::MAX));
-    let result = decode_wpp_row_ranges(budget, &row_ranges, ebsp_slice_data, walk, ctbs_x, ctb_size_i, qp, kind, cabac_init);
+    let result = decode_wpp_row_ranges(
+        budget,
+        &row_ranges,
+        ebsp_slice_data,
+        walk,
+        ctbs_x,
+        ctb_size_i,
+        qp,
+        kind,
+        cabac_init,
+    );
     budget.release(row_ranges_bytes);
     result
 }
@@ -754,7 +893,10 @@ fn decode_wpp_rows(
 /// function can release `row_ranges`'s own `Budget` charge on every exit
 /// path (this one's `Result` return, not an early `return` buried in the
 /// loop below) — see that caller's own comment.
-#[allow(clippy::too_many_arguments, reason = "mirrors decode_wpp_rows's own signature, one call site")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors decode_wpp_rows's own signature, one call site"
+)]
 fn decode_wpp_row_ranges(
     budget: &mut Budget,
     row_ranges: &[(usize, usize)],
@@ -777,16 +919,17 @@ fn decode_wpp_row_ranges(
     // handoff is now expressed through the primitive Stage 2's real
     // dispatch will need regardless, rather than through a local that only
     // works because nothing else could observe it mid-flight.
-    let ctx_handoff: crate::wavefront::RowPublish<ContextBank> = crate::wavefront::RowPublish::new(row_ranges.len());
+    let ctx_handoff: crate::wavefront::RowPublish<ContextBank> =
+        crate::wavefront::RowPublish::new(row_ranges.len());
     // Reused across rows: `to_rbsp` clears it on every call, and each row's
     // `CabacDecoder` borrow ends (the row's CTU loop finishes) before the
     // next row refills it.
     let mut row_rbsp: Vec<u8> = Vec::new();
 
     for (row_idx, &(start, end)) in row_ranges.iter().enumerate() {
-        let row_ebsp = ebsp_slice_data
-            .get(start..end)
-            .ok_or(Error::InvalidData("vaco-codec-hevc: entry point range out of bounds"))?;
+        let row_ebsp = ebsp_slice_data.get(start..end).ok_or(Error::InvalidData(
+            "vaco-codec-hevc: entry point range out of bounds",
+        ))?;
         let row_bytes = vaco_bitstream::annexb::to_rbsp(row_ebsp, &mut row_rbsp);
         let mut cabac = CabacDecoder::new(row_bytes);
         // §8.6.1's `qPY_PREV` resets to `SliceQpY` at the start of every CTB
@@ -807,7 +950,10 @@ fn decode_wpp_row_ranges(
             // earlier row already ran its own `col == 1` publish below
             // before this row starts), `new_context_bank` only ever a
             // fallback for the cases the outer `if` already excludes.
-            ctx_handoff.get(row_idx.saturating_sub(1)).copied().unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
+            ctx_handoff
+                .get(row_idx.saturating_sub(1))
+                .copied()
+                .unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
         } else {
             new_context_bank(kind, cabac_init, qp)
         };
@@ -834,7 +980,9 @@ fn decode_wpp_row_ranges(
 
             let terminate = cabac.decode_terminate();
             if cabac.malformed() {
-                return Err(Error::InvalidData("vaco-codec-hevc: CABAC decode ran past the slice segment data"));
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: CABAC decode ran past the slice segment data",
+                ));
             }
             if terminate != 0 {
                 stop = true;
@@ -867,7 +1015,9 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
         return unsupported("vaco-codec-hevc: separate_colour_plane_flag is not supported");
     }
     if sps.scaling_list_enabled {
-        return unsupported("vaco-codec-hevc: custom scaling lists are not supported (flat scaling only)");
+        return unsupported(
+            "vaco-codec-hevc: custom scaling lists are not supported (flat scaling only)",
+        );
     }
     if sps.pcm.is_some() {
         return unsupported("vaco-codec-hevc: I_PCM is not supported");
@@ -929,17 +1079,33 @@ fn mastering_display_from_sei(
     max_luminance: u32,
     min_luminance: u32,
 ) -> vaco_frame::MasteringDisplay {
-    let chromaticity = |(x, y): (u16, u16)| [vaco_core::Rational::new(i32::from(x), 50_000), vaco_core::Rational::new(i32::from(y), 50_000)];
+    let chromaticity = |(x, y): (u16, u16)| {
+        [
+            vaco_core::Rational::new(i32::from(x), 50_000),
+            vaco_core::Rational::new(i32::from(y), 50_000),
+        ]
+    };
     let [green, blue, red] = primaries_gbr;
     vaco_frame::MasteringDisplay {
         primaries: [chromaticity(red), chromaticity(green), chromaticity(blue)],
         white_point: chromaticity(white_point),
-        max_luminance: vaco_core::Rational::new(i32::try_from(max_luminance).unwrap_or(i32::MAX), 10_000),
-        min_luminance: vaco_core::Rational::new(i32::try_from(min_luminance).unwrap_or(i32::MAX), 10_000),
+        max_luminance: vaco_core::Rational::new(
+            i32::try_from(max_luminance).unwrap_or(i32::MAX),
+            10_000,
+        ),
+        min_luminance: vaco_core::Rational::new(
+            i32::try_from(min_luminance).unwrap_or(i32::MAX),
+            10_000,
+        ),
     }
 }
 
-fn pic_to_frame(budget: &mut Budget, width: u32, height: u32, pic: &Picture) -> Result<vaco_frame::Frame> {
+fn pic_to_frame(
+    budget: &mut Budget,
+    width: u32,
+    height: u32,
+    pic: &Picture,
+) -> Result<vaco_frame::Frame> {
     let pix_fmt = vaco_pixfmt::PixFmt::from_name("yuv420p")
         .map_err(|_| Error::InvalidData("vaco-codec-hevc: yuv420p pixel format missing"))?;
     let before = budget.committed();
@@ -960,12 +1126,24 @@ fn pic_to_frame(budget: &mut Budget, width: u32, height: u32, pic: &Picture) -> 
 /// made the plane's own storage `u8` (the same type `vaco_frame::Frame`'s
 /// own plane already used), so what used to be a per-sample narrowing
 /// conversion is now a real `copy_from_slice`.
-fn blit(src: &crate::framebuf::Plane, frame: &mut vaco_frame::Frame, plane_index: usize, width: usize, height: usize) {
-    let Some(mut dst) = frame.plane_mut(plane_index) else { return };
+fn blit(
+    src: &crate::framebuf::Plane,
+    frame: &mut vaco_frame::Frame,
+    plane_index: usize,
+    width: usize,
+    height: usize,
+) {
+    let Some(mut dst) = frame.plane_mut(plane_index) else {
+        return;
+    };
     for y in 0..height.min(dst.rows()) {
         let Some(row) = dst.row_mut(y) else { continue };
         let len = width.min(row.len());
-        let (Some(dst_row), Some(src_row)) = (row.get_mut(..len), src.row(y).and_then(|r| r.get(..len))) else { continue };
+        let (Some(dst_row), Some(src_row)) =
+            (row.get_mut(..len), src.row(y).and_then(|r| r.get(..len)))
+        else {
+            continue;
+        };
         dst_row.copy_from_slice(src_row);
     }
 }
@@ -1068,11 +1246,18 @@ pub(crate) struct DeblockLagResult {
 /// not an argument about the filter's own tap span, an empirical answer
 /// for this exact content's own boundary-strength/threshold decisions.
 #[cfg(test)]
-fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut Budget) -> Vec<DeblockLagResult> {
+fn run_deblock_lag_probe(
+    walk: &Ctx<'_>,
+    probe: &DeblockLagProbe,
+    budget: &mut Budget,
+) -> Vec<DeblockLagResult> {
     let ctb = 1usize << walk.shared.log2_ctb_size;
     let target_row_start = probe.target_ctu_row.saturating_mul(ctb);
     let target_row_end = target_row_start.saturating_add(ctb);
-    let (width, height) = (usize::try_from(walk.shared.pic_width).unwrap_or(0), usize::try_from(walk.shared.pic_height).unwrap_or(0));
+    let (width, height) = (
+        usize::try_from(walk.shared.pic_width).unwrap_or(0),
+        usize::try_from(walk.shared.pic_height).unwrap_or(0),
+    );
 
     // `deblock::filter_picture` never reads `Ctx::recon` -- every retarget
     // below builds its own throwaway `ReconPictureShared`/`ReconPicture`
@@ -1091,7 +1276,8 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
     // buys back.
     let mut pristine_pic = walk.pic.clone();
     {
-        let Ok(recon_shared) = crate::framebuf::ReconPictureShared::new(budget, width, height, ctb) else {
+        let Ok(recon_shared) = crate::framebuf::ReconPictureShared::new(budget, width, height, ctb)
+        else {
             // Allocation failure here means the probe cannot run at all; an
             // empty result reads as "missing lag N" in the test's own
             // assertions, which is a loud, specific failure rather than a
@@ -1108,12 +1294,20 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
         .lags
         .iter()
         .map(|&lag| {
-            let below_first_corrupt_ctu_row = probe.target_ctu_row.saturating_add(1).saturating_add(lag);
+            let below_first_corrupt_ctu_row =
+                probe.target_ctu_row.saturating_add(1).saturating_add(lag);
             let mut below_pic = walk.pic.clone();
-            invert_rows_from(&mut below_pic, below_first_corrupt_ctu_row.saturating_mul(ctb));
-            let below_matches = crate::framebuf::ReconPictureShared::new(budget, width, height, ctb).is_ok_and(|recon_shared| {
+            invert_rows_from(
+                &mut below_pic,
+                below_first_corrupt_ctu_row.saturating_mul(ctb),
+            );
+            let below_matches = crate::framebuf::ReconPictureShared::new(
+                budget, width, height, ctb,
+            )
+            .is_ok_and(|recon_shared| {
                 let mut throwaway_recon = crate::framebuf::ReconPicture::new(&recon_shared);
-                let mut below_ctx = walk.retarget_pic_for_test(&mut below_pic, &mut throwaway_recon);
+                let mut below_ctx =
+                    walk.retarget_pic_for_test(&mut below_pic, &mut throwaway_recon);
                 deblock::filter_picture(&mut below_ctx);
                 capture_rows(&below_pic, target_row_start, target_row_end) == reference
             });
@@ -1127,15 +1321,26 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
             // precisely so every lag it asks for is meaningful.
             let above_first_pristine_ctu_row = probe.target_ctu_row.saturating_sub(lag);
             let mut above_pic = walk.pic.clone();
-            invert_rows_before(&mut above_pic, above_first_pristine_ctu_row.saturating_mul(ctb));
-            let above_matches = crate::framebuf::ReconPictureShared::new(budget, width, height, ctb).is_ok_and(|recon_shared| {
+            invert_rows_before(
+                &mut above_pic,
+                above_first_pristine_ctu_row.saturating_mul(ctb),
+            );
+            let above_matches = crate::framebuf::ReconPictureShared::new(
+                budget, width, height, ctb,
+            )
+            .is_ok_and(|recon_shared| {
                 let mut throwaway_recon = crate::framebuf::ReconPicture::new(&recon_shared);
-                let mut above_ctx = walk.retarget_pic_for_test(&mut above_pic, &mut throwaway_recon);
+                let mut above_ctx =
+                    walk.retarget_pic_for_test(&mut above_pic, &mut throwaway_recon);
                 deblock::filter_picture(&mut above_ctx);
                 capture_rows(&above_pic, target_row_start, target_row_end) == reference
             });
 
-            DeblockLagResult { lag, below_matches, above_matches }
+            DeblockLagResult {
+                lag,
+                below_matches,
+                above_matches,
+            }
         })
         .collect()
 }
@@ -1145,13 +1350,22 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
 /// three of at once, and independent of whichever `Plane` produced it
 /// (`==`-comparable across two entirely separate corrupted clones).
 #[cfg(test)]
-fn capture_rows(pic: &Picture, luma_row_start: usize, luma_row_end: usize) -> (Vec<Vec<u16>>, Vec<Vec<u16>>, Vec<Vec<u16>>) {
+fn capture_rows(
+    pic: &Picture,
+    luma_row_start: usize,
+    luma_row_end: usize,
+) -> (Vec<Vec<u16>>, Vec<Vec<u16>>, Vec<Vec<u16>>) {
     let capture_plane = |plane: &crate::framebuf::Plane, from: usize, to: usize| -> Vec<Vec<u16>> {
         let (w, h) = plane.dims();
-        (from..to.min(h)).map(|y| (0..w).map(|x| plane.get(x, y)).collect()).collect()
+        (from..to.min(h))
+            .map(|y| (0..w).map(|x| plane.get(x, y)).collect())
+            .collect()
     };
     let (_, ch) = pic.cb.dims();
-    #[allow(clippy::integer_division, reason = "chroma row index = luma row index / the fixed 4:2:0 subsampling factor")]
+    #[allow(
+        clippy::integer_division,
+        reason = "chroma row index = luma row index / the fixed 4:2:0 subsampling factor"
+    )]
     let c_from = (luma_row_start / 2).min(ch);
     let c_to = luma_row_end.div_ceil(2).min(ch);
     (
@@ -1166,7 +1380,10 @@ fn capture_rows(pic: &Picture, luma_row_start: usize, luma_row_end: usize) -> (V
 #[cfg(test)]
 fn invert_rows_from(pic: &mut Picture, luma_from: usize) {
     invert_plane_rows(&mut pic.y, luma_from, usize::MAX);
-    #[allow(clippy::integer_division, reason = "chroma row index = luma row index / the fixed 4:2:0 subsampling factor")]
+    #[allow(
+        clippy::integer_division,
+        reason = "chroma row index = luma row index / the fixed 4:2:0 subsampling factor"
+    )]
     let c_from = luma_from / 2;
     invert_plane_rows(&mut pic.cb, c_from, usize::MAX);
     invert_plane_rows(&mut pic.cr, c_from, usize::MAX);
@@ -1177,7 +1394,10 @@ fn invert_rows_from(pic: &mut Picture, luma_from: usize) {
 #[cfg(test)]
 fn invert_rows_before(pic: &mut Picture, luma_before: usize) {
     invert_plane_rows(&mut pic.y, 0, luma_before);
-    #[allow(clippy::integer_division, reason = "chroma row index = luma row index / the fixed 4:2:0 subsampling factor")]
+    #[allow(
+        clippy::integer_division,
+        reason = "chroma row index = luma row index / the fixed 4:2:0 subsampling factor"
+    )]
     let c_before = luma_before / 2;
     invert_plane_rows(&mut pic.cb, 0, c_before);
     invert_plane_rows(&mut pic.cr, 0, c_before);
@@ -1196,7 +1416,13 @@ fn invert_plane_rows(plane: &mut crate::framebuf::Plane, from: usize, to: usize)
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code over fixed scenarios")]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code over fixed scenarios"
+)]
 mod deblock_lag_tests {
     use super::{DeblockLagProbe, HevcDecoder};
     use vaco_codec_core::Decoder;
@@ -1233,7 +1459,10 @@ mod deblock_lag_tests {
     #[test]
     fn deblocking_depends_on_exactly_one_ctu_row_each_side() {
         let mut decoder = HevcDecoder::new(Limits::permissive());
-        decoder.deblock_lag_probe = Some(DeblockLagProbe { target_ctu_row: 2, lags: vec![0, 1, 2] });
+        decoder.deblock_lag_probe = Some(DeblockLagProbe {
+            target_ctu_row: 2,
+            lags: vec![0, 1, 2],
+        });
         let mut budget = Budget::new(Limits::permissive());
         let packet = Packet::from_slice(&mut budget, FIXTURE).expect("packet from fixture bytes");
         decoder.send_packet(Some(&packet)).expect("fixture decodes");
@@ -1243,23 +1472,53 @@ mod deblock_lag_tests {
         // test actually checks.
         while decoder.receive_frame().is_ok() {}
 
-        let results = decoder.deblock_lag_probe_result.take().expect("probe ran during decode_packet");
-        assert_eq!(results.len(), 3, "one result per requested lag: {results:?}");
+        let results = decoder
+            .deblock_lag_probe_result
+            .take()
+            .expect("probe ran during decode_packet");
+        assert_eq!(
+            results.len(),
+            3,
+            "one result per requested lag: {results:?}"
+        );
 
-        let at = |lag: usize| results.iter().find(|r| r.lag == lag).unwrap_or_else(|| panic!("missing lag {lag} in {results:?}"));
+        let at = |lag: usize| {
+            results
+                .iter()
+                .find(|r| r.lag == lag)
+                .unwrap_or_else(|| panic!("missing lag {lag} in {results:?}"))
+        };
 
         // The "boundary row moves" half: the immediately adjacent CTU row
         // must matter, in both directions.
-        assert!(!at(0).below_matches, "corrupting the CTU row directly below row 2 must move row 2's own deblocked output: {results:?}");
-        assert!(!at(0).above_matches, "corrupting the CTU row directly above row 2 must move row 2's own deblocked output: {results:?}");
+        assert!(
+            !at(0).below_matches,
+            "corrupting the CTU row directly below row 2 must move row 2's own deblocked output: {results:?}"
+        );
+        assert!(
+            !at(0).above_matches,
+            "corrupting the CTU row directly above row 2 must move row 2's own deblocked output: {results:?}"
+        );
 
         // The "nothing outside the watermark moves" half: once the
         // immediate neighbour is pristine, everything further away must be
         // irrelevant, in both directions.
-        assert!(at(1).below_matches, "row 2's own output must not depend on anything two or more CTU rows below it: {results:?}");
-        assert!(at(1).above_matches, "row 2's own output must not depend on anything two or more CTU rows above it: {results:?}");
-        assert!(at(2).below_matches, "a wider lag than the true extent must still match: {results:?}");
-        assert!(at(2).above_matches, "a wider lag than the true extent must still match: {results:?}");
+        assert!(
+            at(1).below_matches,
+            "row 2's own output must not depend on anything two or more CTU rows below it: {results:?}"
+        );
+        assert!(
+            at(1).above_matches,
+            "row 2's own output must not depend on anything two or more CTU rows above it: {results:?}"
+        );
+        assert!(
+            at(2).below_matches,
+            "a wider lag than the true extent must still match: {results:?}"
+        );
+        assert!(
+            at(2).above_matches,
+            "a wider lag than the true extent must still match: {results:?}"
+        );
     }
 
     /// The same two-sided bound as
@@ -1273,22 +1532,43 @@ mod deblock_lag_tests {
     fn deblocking_bound_holds_at_every_interior_row() {
         for target_ctu_row in [1usize, 3usize] {
             let mut decoder = HevcDecoder::new(Limits::permissive());
-            decoder.deblock_lag_probe = Some(DeblockLagProbe { target_ctu_row, lags: vec![0, 1] });
+            decoder.deblock_lag_probe = Some(DeblockLagProbe {
+                target_ctu_row,
+                lags: vec![0, 1],
+            });
             let mut budget = Budget::new(Limits::permissive());
-            let packet = Packet::from_slice(&mut budget, FIXTURE).expect("packet from fixture bytes");
+            let packet =
+                Packet::from_slice(&mut budget, FIXTURE).expect("packet from fixture bytes");
             decoder.send_packet(Some(&packet)).expect("fixture decodes");
             decoder.send_packet(None).expect("drain");
             while decoder.receive_frame().is_ok() {}
 
-            let results = decoder.deblock_lag_probe_result.take().expect("probe ran during decode_packet");
+            let results = decoder
+                .deblock_lag_probe_result
+                .take()
+                .expect("probe ran during decode_packet");
             let at = |lag: usize| {
-                results.iter().find(|r| r.lag == lag).unwrap_or_else(|| panic!("missing lag {lag} in {results:?} for row {target_ctu_row}"))
+                results.iter().find(|r| r.lag == lag).unwrap_or_else(|| {
+                    panic!("missing lag {lag} in {results:?} for row {target_ctu_row}")
+                })
             };
 
-            assert!(!at(0).below_matches, "row {target_ctu_row}: immediate below neighbour must matter: {results:?}");
-            assert!(!at(0).above_matches, "row {target_ctu_row}: immediate above neighbour must matter: {results:?}");
-            assert!(at(1).below_matches, "row {target_ctu_row}: nothing two rows below should matter: {results:?}");
-            assert!(at(1).above_matches, "row {target_ctu_row}: nothing two rows above should matter: {results:?}");
+            assert!(
+                !at(0).below_matches,
+                "row {target_ctu_row}: immediate below neighbour must matter: {results:?}"
+            );
+            assert!(
+                !at(0).above_matches,
+                "row {target_ctu_row}: immediate above neighbour must matter: {results:?}"
+            );
+            assert!(
+                at(1).below_matches,
+                "row {target_ctu_row}: nothing two rows below should matter: {results:?}"
+            );
+            assert!(
+                at(1).above_matches,
+                "row {target_ctu_row}: nothing two rows above should matter: {results:?}"
+            );
         }
     }
 }

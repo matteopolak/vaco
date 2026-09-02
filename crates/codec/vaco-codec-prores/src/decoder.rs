@@ -59,7 +59,15 @@ fn alpha_sample(value: i32, sixteen_bit: bool, bit_depth: u32) -> u16 {
     (max_out * v / max_in).round().clamp(0.0, max_out) as u16
 }
 
-fn write_sample_u16le(buf: &mut [u8], stride: usize, x: usize, y: usize, w: usize, h: usize, value: u16) {
+fn write_sample_u16le(
+    buf: &mut [u8],
+    stride: usize,
+    x: usize,
+    y: usize,
+    w: usize,
+    h: usize,
+    value: u16,
+) {
     if x >= w || y >= h {
         return;
     }
@@ -114,7 +122,10 @@ fn scan_table_for(fh: &FrameHeader) -> &'static [usize; 64] {
 /// Reconstruct one 8x8 block and write it into `plane`, dequantizing with
 /// weight matrix `w` and scale `q_scale` (SS7.3), inverse-transforming
 /// (SS7.4), and converting to samples (SS7.5.1).
-#[allow(clippy::too_many_arguments, reason = "one reconstruction call site; splitting would just move the same context into a struct nobody else uses")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one reconstruction call site; splitting would just move the same context into a struct nobody else uses"
+)]
 fn reconstruct_block(
     idct: &mut Idct8x8<f64>,
     qfs: &[i32; 64],
@@ -146,12 +157,23 @@ fn reconstruct_block(
             };
             let sample = sample_from_reconstructed(v, bit_depth);
             let final_row = field.row(base_y_picture + y);
-            write_sample_u16le(plane, stride, base_x + x, final_row, plane_w, plane_h, sample);
+            write_sample_u16le(
+                plane,
+                stride,
+                base_x + x,
+                final_row,
+                plane_w,
+                plane_h,
+                sample,
+            );
         }
     }
 }
 
-#[allow(clippy::too_many_arguments, reason = "slice decode needs the whole picture's context; a struct would just rename these fields")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "slice decode needs the whole picture's context; a struct would just rename these fields"
+)]
 fn decode_slice(
     slice_bytes: &[u8],
     fh: &FrameHeader,
@@ -215,8 +237,19 @@ fn decode_slice(
             let base_x = (mb_col_offset as usize + m).saturating_mul(16) + bx;
             let base_y = (mb_row as usize).saturating_mul(16).saturating_add(by);
             reconstruct_block(
-                idct, &qfs, scan_table, &fh.luma_quant, q_scale, bit_depth,
-                luma_plane.data.make_mut(), luma_stride, luma_w, luma_h, base_x, base_y, field,
+                idct,
+                &qfs,
+                scan_table,
+                &fh.luma_quant,
+                q_scale,
+                bit_depth,
+                luma_plane.data.make_mut(),
+                luma_stride,
+                luma_w,
+                luma_h,
+                base_x,
+                base_y,
+                field,
             );
         }
     }
@@ -247,8 +280,19 @@ fn decode_slice(
                 let base_x = (mb_col_offset as usize + m).saturating_mul(chroma_mb_width) + bx;
                 let base_y = (mb_row as usize).saturating_mul(16).saturating_add(by);
                 reconstruct_block(
-                    idct, &qfs, scan_table, &fh.chroma_quant, q_scale, bit_depth,
-                    buf, stride, chroma_w, chroma_h, base_x, base_y, field,
+                    idct,
+                    &qfs,
+                    scan_table,
+                    &fh.chroma_quant,
+                    q_scale,
+                    bit_depth,
+                    buf,
+                    stride,
+                    chroma_w,
+                    chroma_h,
+                    base_x,
+                    base_y,
+                    field,
                 );
             }
         }
@@ -262,10 +306,8 @@ fn decode_slice(
             .min(picture_vertical_size.saturating_sub(rows_above))
             .max(1);
         let row_width = 16u32.saturating_mul(slice_size_in_mb);
-        let num_alpha_values = usize::try_from(
-            row_width.saturating_mul(slice_vertical_size),
-        )
-        .unwrap_or(usize::MAX);
+        let num_alpha_values =
+            usize::try_from(row_width.saturating_mul(slice_vertical_size)).unwrap_or(usize::MAX);
         let alpha_data = slice_bytes.get(cursor..).unwrap_or(&[]);
         let alpha_values =
             crate::coeff::decode_scanned_alpha(alpha_data, num_alpha_values, sixteen_bit, budget)?;
@@ -278,7 +320,10 @@ fn decode_slice(
                 // Raster row/col from a linear index — a genuine division,
                 // not a shortcut around one (mirrors `vaco-codec-av1`'s own
                 // `TileNum / TileCols` row derivation).
-                #[allow(clippy::integer_division, reason = "raster row/col from linear alpha value index")]
+                #[allow(
+                    clippy::integer_division,
+                    reason = "raster row/col from linear alpha value index"
+                )]
                 let (row, col) = (idx / row_width, idx % row_width);
                 let base_x = (mb_col_offset.saturating_mul(16)).saturating_add(col) as usize;
                 let base_y = mb_row.saturating_mul(16).saturating_add(row) as usize;
@@ -296,7 +341,9 @@ fn be16(data: &[u8], off: usize) -> Result<u16> {
     let b = data
         .get(off..off.saturating_add(2))
         .ok_or(Error::InvalidData("prores: truncated"))?;
-    let arr: [u8; 2] = b.try_into().map_err(|_| Error::InvalidData("prores: truncated"))?;
+    let arr: [u8; 2] = b
+        .try_into()
+        .map_err(|_| Error::InvalidData("prores: truncated"))?;
     Ok(u16::from_be_bytes(arr))
 }
 
@@ -304,7 +351,9 @@ fn be32(data: &[u8], off: usize) -> Result<u32> {
     let b = data
         .get(off..off.saturating_add(4))
         .ok_or(Error::InvalidData("prores: truncated"))?;
-    let arr: [u8; 4] = b.try_into().map_err(|_| Error::InvalidData("prores: truncated"))?;
+    let arr: [u8; 4] = b
+        .try_into()
+        .map_err(|_| Error::InvalidData("prores: truncated"))?;
     Ok(u32::from_be_bytes(arr))
 }
 
@@ -324,12 +373,18 @@ pub struct ProresDecoder {
 impl ProresDecoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
-        Self { limits, pending: VecDeque::new(), draining: false }
+        Self {
+            limits,
+            pending: VecDeque::new(),
+            draining: false,
+        }
     }
 
     fn decode_frame_payload(&mut self, payload: &[u8]) -> Result<Frame> {
         if payload.get(4..8) != Some(FRAME_IDENTIFIER) {
-            return Err(Error::InvalidData("prores: missing 'icpf' frame identifier"));
+            return Err(Error::InvalidData(
+                "prores: missing 'icpf' frame identifier",
+            ));
         }
         let header_start = 8usize;
         let frame_header_size = be16(payload, header_start)? as usize;
@@ -354,7 +409,11 @@ impl ProresDecoder {
         // itself checks against right below.
         let pix_fmt = pix_fmt_for(&fh);
         let bpp = u32::from(pix_fmt.bits_per_pixel()).div_ceil(8).max(1);
-        budget.check_frame(u32::from(fh.horizontal_size), u32::from(fh.vertical_size), bpp)?;
+        budget.check_frame(
+            u32::from(fh.horizontal_size),
+            u32::from(fh.vertical_size),
+            bpp,
+        )?;
         let mut frame = Frame::alloc_video(
             &mut budget,
             pix_fmt,
@@ -380,7 +439,8 @@ impl ProresDecoder {
             let picture_vh = header::picture_vertical_size(&fh, is_first);
             let height_in_mb = picture_vh.div_ceil(16);
             let width_in_mb = fh.width_in_mb();
-            let slice_sizes = header::slice_sizes_in_mb(width_in_mb, ph.log2_desired_slice_size_in_mb);
+            let slice_sizes =
+                header::slice_sizes_in_mb(width_in_mb, ph.log2_desired_slice_size_in_mb);
             let num_slices_per_row = slice_sizes.len();
             let table_count = (height_in_mb as usize).saturating_mul(num_slices_per_row);
 
@@ -400,16 +460,24 @@ impl ProresDecoder {
             for i in 0..height_in_mb {
                 let mut mb_col_offset = 0u32;
                 for &slice_size in &slice_sizes {
-                    let coded_size = *table.get(table_idx).ok_or(Error::InvalidData(
-                        "prores: slice table short",
-                    ))? as usize;
+                    let coded_size = *table
+                        .get(table_idx)
+                        .ok_or(Error::InvalidData("prores: slice table short"))?
+                        as usize;
                     table_idx += 1;
                     let slice_bytes = payload
                         .get(slice_cursor..slice_cursor.saturating_add(coded_size))
                         .ok_or(Error::InvalidData("prores: slice truncated"))?;
                     decode_slice(
-                        slice_bytes, &fh, i, mb_col_offset, slice_size, field, &mut idct,
-                        &mut *planes, &mut budget,
+                        slice_bytes,
+                        &fh,
+                        i,
+                        mb_col_offset,
+                        slice_size,
+                        field,
+                        &mut idct,
+                        &mut *planes,
+                        &mut budget,
                     )?;
                     mb_col_offset = mb_col_offset.saturating_add(slice_size);
                     slice_cursor = slice_cursor.saturating_add(coded_size);
@@ -446,7 +514,11 @@ impl Decoder for ProresDecoder {
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(if self.draining { Error::Eof } else { Error::NeedMoreInput })
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
@@ -476,7 +548,10 @@ pub const DECODER_PRORES: vaco_codec_core::DecoderDesc = vaco_codec_core::Decode
 };
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "a test that cannot set up is a failed test")]
+#[allow(
+    clippy::unwrap_used,
+    reason = "a test that cannot set up is a failed test"
+)]
 mod tests {
     use super::*;
 
@@ -537,7 +612,6 @@ mod tests {
         );
     }
 
-
     /// `send_packet(None)` must make `receive_frame` answer `Eof` once
     /// `pending` is drained, not `NeedMoreInput` forever -- see
     /// `vaco-codec-ac3`'s decoder's own `draining` field doc for the full
@@ -546,8 +620,14 @@ mod tests {
     #[test]
     fn draining_answers_eof_once_empty_not_need_more_input_forever() {
         let mut dec = ProresDecoder::new(Limits::permissive());
-        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)), "empty and not draining yet");
+        assert!(
+            matches!(dec.receive_frame(), Err(Error::NeedMoreInput)),
+            "empty and not draining yet"
+        );
         dec.send_packet(None).unwrap();
-        assert!(matches!(dec.receive_frame(), Err(Error::Eof)), "must answer Eof once drained and empty, not NeedMoreInput forever");
+        assert!(
+            matches!(dec.receive_frame(), Err(Error::Eof)),
+            "must answer Eof once drained and empty, not NeedMoreInput forever"
+        );
     }
 }

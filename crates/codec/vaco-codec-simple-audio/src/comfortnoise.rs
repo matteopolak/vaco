@@ -160,7 +160,11 @@ impl Default for Config {
     fn default() -> Self {
         // RFC 3389 §4: the static RTP payload type for CN is defined for an
         // 8kHz clock; 20ms is ordinary RTP packetisation practice.
-        Self { sample_rate: 8_000, frame_samples: 160, seed: 0x00A0_157E }
+        Self {
+            sample_rate: 8_000,
+            frame_samples: 160,
+            seed: 0x00A0_157E,
+        }
     }
 }
 
@@ -169,7 +173,12 @@ impl Default for Config {
 /// caller keeping one [`Config`]-derived generator alive across many
 /// packets should thread the same seed through, the way this module's own
 /// `Generator` does).
-fn synthesize(budget: &mut Budget, frame: &SidFrame, samples: u32, rng: &mut Rng) -> Result<Vec<i16>> {
+fn synthesize(
+    budget: &mut Budget,
+    frame: &SidFrame,
+    samples: u32,
+    rng: &mut Rng,
+) -> Result<Vec<i16>> {
     let a = reflection_to_direct(&frame.reflection);
     let n = samples as usize;
     let mut excitation = budget.alloc::<f64>(n)?;
@@ -201,7 +210,11 @@ fn synthesize(budget: &mut Budget, frame: &SidFrame, samples: u32, rng: &mut Rng
     let target_rms = 32767.0 * 10f64.powf(-f64::from(frame.level) / 20.0);
     let measured_sq: f64 = shaped.iter().map(|x| x * x).sum();
     let measured_rms = (measured_sq / (n.max(1) as f64)).sqrt();
-    let scale = if measured_rms > 1e-9 { target_rms / measured_rms } else { 0.0 };
+    let scale = if measured_rms > 1e-9 {
+        target_rms / measured_rms
+    } else {
+        0.0
+    };
 
     let mut out = budget.alloc::<i16>(n)?;
     for (slot, &x) in out.iter_mut().zip(shaped.iter()) {
@@ -227,7 +240,12 @@ impl Generator {
 
     /// # Errors
     /// Propagates a [`vaco_limits`] allocation failure.
-    pub fn generate(&mut self, budget: &mut Budget, frame: &SidFrame, samples: u32) -> Result<Vec<i16>> {
+    pub fn generate(
+        &mut self,
+        budget: &mut Budget,
+        frame: &SidFrame,
+        samples: u32,
+    ) -> Result<Vec<i16>> {
         synthesize(budget, frame, samples, &mut self.rng)
     }
 }
@@ -240,9 +258,13 @@ impl Generator {
 /// [`vaco_core::Error::InvalidData`] if `samples` is empty.
 pub fn analyze(samples: &[i16], order: usize) -> Result<SidFrame> {
     if samples.is_empty() {
-        return Err(Error::InvalidData("comfortnoise: cannot analyse an empty block"));
+        return Err(Error::InvalidData(
+            "comfortnoise: cannot analyse an empty block",
+        ));
     }
-    let order = order.min(MAX_MODEL_ORDER).min(samples.len().saturating_sub(1));
+    let order = order
+        .min(MAX_MODEL_ORDER)
+        .min(samples.len().saturating_sub(1));
 
     let sum_sq: f64 = samples.iter().map(|&s| f64::from(s) * f64::from(s)).sum();
     let rms = (sum_sq / (samples.len() as f64)).sqrt().max(1.0);
@@ -250,7 +272,10 @@ pub fn analyze(samples: &[i16], order: usize) -> Result<SidFrame> {
     let level = (-dbov).round().clamp(0.0, 127.0) as u8;
 
     if order == 0 {
-        return Ok(SidFrame { level, reflection: Vec::new() });
+        return Ok(SidFrame {
+            level,
+            reflection: Vec::new(),
+        });
     }
 
     let windowed: Vec<f64> = samples.iter().map(|&s| f64::from(s)).collect();
@@ -293,7 +318,10 @@ mod tests {
     #[test]
     fn generated_noise_matches_the_requested_level() {
         let mut budget = Budget::new(Limits::permissive());
-        let frame = SidFrame { level: 20, reflection: vec![0.3, -0.1] };
+        let frame = SidFrame {
+            level: 20,
+            reflection: vec![0.3, -0.1],
+        };
         let mut generator = Generator::new(0x1234_5678);
         let samples = generator.generate(&mut budget, &frame, 4000).unwrap();
         let sum_sq: f64 = samples.iter().map(|&s| f64::from(s) * f64::from(s)).sum();
@@ -302,13 +330,19 @@ mod tests {
         // A finite noise block's measured RMS fluctuates around its target;
         // this checks the generator lands in the right regime, not an
         // exact match.
-        assert!((rms - target).abs() / target < 0.25, "rms {rms} vs target {target}");
+        assert!(
+            (rms - target).abs() / target < 0.25,
+            "rms {rms} vs target {target}"
+        );
     }
 
     #[test]
     fn zero_order_model_still_produces_shaped_level() {
         let mut budget = Budget::new(Limits::permissive());
-        let frame = SidFrame { level: 10, reflection: Vec::new() };
+        let frame = SidFrame {
+            level: 10,
+            reflection: Vec::new(),
+        };
         let mut generator = Generator::new(1);
         let samples = generator.generate(&mut budget, &frame, 800).unwrap();
         assert_eq!(samples.len(), 800);

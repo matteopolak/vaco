@@ -61,17 +61,21 @@
     reason = "exercised by this module's own tests; not yet wired into vaco-codec-h264's own public decode/receive_frame surface"
 )]
 
-use vaco_codec_dsp_idct::h264::{idct4x4, idct8x8};
 use vaco_codec_core::picture::{BlockScratch, PlaneView};
+use vaco_codec_dsp_idct::h264::{idct4x4, idct8x8};
 use vaco_limits::Budget;
 
-use crate::dequant::{chroma_qp, dequant_4x4, dequant_8x8, dequant_chroma_dc_2x2, dequant_luma_dc_4x4};
+use crate::dequant::{
+    chroma_qp, dequant_4x4, dequant_8x8, dequant_chroma_dc_2x2, dequant_luma_dc_4x4,
+};
 use crate::intra::{
-    Neighbours4, Neighbours8, Neighbours16, NeighboursChroma, predict_intra4x4, predict_intra8x8,
-    predict_intra16x16, predict_intra_chroma,
+    Neighbours4, Neighbours8, Neighbours16, NeighboursChroma, predict_intra_chroma,
+    predict_intra4x4, predict_intra8x8, predict_intra16x16,
 };
 use crate::mb::{MbResidual, MbSummary, MvInfo, blk_xy};
-use crate::scan::{build_luma_ac_block, inverse_scan_chroma_dc, inverse_scan_luma_8x8, inverse_scan_luma_dc};
+use crate::scan::{
+    build_luma_ac_block, inverse_scan_chroma_dc, inverse_scan_luma_8x8, inverse_scan_luma_dc,
+};
 
 /// Clause 8.5.1/8.5.2, `Intra_16x16` luma only: predict, then add clause
 /// 8.5.2's own per-4x4-block dequantised-and-transformed residual, then
@@ -367,7 +371,11 @@ impl PictureBuffer {
 
     fn set_chroma_pixel(&mut self, comp: usize, x: u32, y: u32, v: u8) {
         let w = self.chroma_width();
-        let plane = if comp == 0 { &mut self.cb } else { &mut self.cr };
+        let plane = if comp == 0 {
+            &mut self.cb
+        } else {
+            &mut self.cr
+        };
         if let Some(slot) = plane.get_mut((y * w + x) as usize) {
             *slot = v;
         }
@@ -378,7 +386,11 @@ impl PictureBuffer {
     /// a time.
     fn write_row_chroma(&mut self, comp: usize, x: u32, y: u32, row: &[u8]) {
         let w = self.chroma_width() as usize;
-        let plane = if comp == 0 { &mut self.cb } else { &mut self.cr };
+        let plane = if comp == 0 {
+            &mut self.cb
+        } else {
+            &mut self.cr
+        };
         let start = y as usize * w + x as usize;
         if let Some(dst) = plane.get_mut(start..start.saturating_add(row.len())) {
             dst.copy_from_slice(row);
@@ -476,7 +488,11 @@ fn intra8x8_neighbours(buf: &PictureBuffer, i8x8: u32, x: i32, y: i32) -> Neighb
     let left_available = (0..8).all(|dy| buf.available(x - 1, y + dy));
     let left = core::array::from_fn(|dy| buf.pixel(x - 1, y + coord(dy)));
     let corner_available = buf.available(x - 1, y - 1);
-    let corner = if corner_available { buf.pixel(x - 1, y - 1) } else { 0 };
+    let corner = if corner_available {
+        buf.pixel(x - 1, y - 1)
+    } else {
+        0
+    };
 
     let top_right_forced_unavailable = i8x8 == 3;
     let top_right_available =
@@ -514,13 +530,23 @@ fn intra8x8_neighbours(buf: &PictureBuffer, i8x8: u32, x: i32, y: i32) -> Neighb
     clippy::many_single_char_names,
     reason = "x/y/n/c/d/r/p mirror clause 8.5's own variable names (pixel position, neighbours, coefficients, dequantised, residual, prediction sample) -- the same convention reconstruct_intra4x4_mb already uses"
 )]
-fn reconstruct_intra8x8_mb(buf: &mut PictureBuffer, mb_x: u32, mb_y: u32, qpy: i32, residual: &MbResidual) {
+fn reconstruct_intra8x8_mb(
+    buf: &mut PictureBuffer,
+    mb_x: u32,
+    mb_y: u32,
+    qpy: i32,
+    residual: &MbResidual,
+) {
     for i8x8 in 0..4u32 {
         let (qx, qy) = (i8x8 & 1, i8x8 >> 1);
         let x = mb_x * 16 + qx * 8;
         let y = mb_y * 16 + qy * 8;
         let n = intra8x8_neighbours(buf, i8x8, coord(x), coord(y));
-        let mode = residual.intra8x8_pred_mode.get(i8x8 as usize).copied().unwrap_or(2);
+        let mode = residual
+            .intra8x8_pred_mode
+            .get(i8x8 as usize)
+            .copied()
+            .unwrap_or(2);
         let pred = predict_intra8x8(mode, n);
 
         let ac = residual.luma8x8.get(i8x8 as usize).and_then(Option::as_ref);
@@ -735,7 +761,16 @@ pub(crate) fn reconstruct_picture_with_inter(
         } else if mb.is_intra4x4 {
             reconstruct_intra4x4_mb(&mut buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
         } else {
-            reconstruct_inter_mb(&mut buf, mb, ref_list0, &[], ref_width, ref_height, InterWeights::none(), &mut scratch);
+            reconstruct_inter_mb(
+                &mut buf,
+                mb,
+                ref_list0,
+                &[],
+                ref_width,
+                ref_height,
+                InterWeights::none(),
+                &mut scratch,
+            );
         }
     }
     Ok(buf.luma)
@@ -816,12 +851,18 @@ fn sample_luma_block(
             }
             let cx = ax.clamp(0, ref_width as i32 - 1) as u32;
             let cy = ay.clamp(0, ref_height as i32 - 1) as u32;
-            plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
+            plane
+                .get((cy * ref_width + cx) as usize)
+                .copied()
+                .unwrap_or(0)
         };
         let fetch_fast = |ax: i32, ay: i32| -> u8 {
             let cx = ax as u32;
             let cy = ay as u32;
-            plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
+            plane
+                .get((cy * ref_width + cx) as usize)
+                .copied()
+                .unwrap_or(0)
         };
         for (i, row) in pred.iter_mut().enumerate() {
             for (j, v) in row.iter_mut().enumerate() {
@@ -879,7 +920,8 @@ fn sample_luma_partition(
     let plane = match plane {
         RefPlane::Flat(data) => data,
         RefPlane::Banded(view) => {
-            let Ok(b) = view.block(rx0, ry0, (w + 5) as u32, (h + 5) as u32, &mut scratch.block) else {
+            let Ok(b) = view.block(rx0, ry0, (w + 5) as u32, (h + 5) as u32, &mut scratch.block)
+            else {
                 // Only reachable if a caller reconstructed a macroblock row
                 // before waiting for the rows its motion vectors reach.
                 scratch.failed = true;
@@ -905,12 +947,18 @@ fn sample_luma_partition(
         }
         let cx = ax.clamp(0, ref_width as i32 - 1) as u32;
         let cy = ay.clamp(0, ref_height as i32 - 1) as u32;
-        plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
+        plane
+            .get((cy * ref_width + cx) as usize)
+            .copied()
+            .unwrap_or(0)
     };
     let fetch_fast = |ax: i32, ay: i32| -> u8 {
         let cx = ax as u32;
         let cy = ay as u32;
-        plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
+        plane
+            .get((cy * ref_width + cx) as usize)
+            .copied()
+            .unwrap_or(0)
     };
     if safe {
         crate::interp::luma_qpel_partition(fetch_fast, x0, y0, w, h, frac_x, frac_y, &mut out);
@@ -971,7 +1019,13 @@ fn partition_rects(mv_blocks: &[MvInfo; 16]) -> ([PartitionRect; 16], usize) {
     };
     let at = |bx: u32, by: u32| mv_blocks[(by * 4 + bx) as usize];
     let mut done = [[false; 4]; 4];
-    let mut rects = [PartitionRect { bx: 0, by: 0, bw: 0, bh: 0, info: MvInfo::default() }; 16];
+    let mut rects = [PartitionRect {
+        bx: 0,
+        by: 0,
+        bw: 0,
+        bh: 0,
+        info: MvInfo::default(),
+    }; 16];
     let mut n = 0usize;
     for by in 0..4u32 {
         for bx in 0..4u32 {
@@ -980,13 +1034,18 @@ fn partition_rects(mv_blocks: &[MvInfo; 16]) -> ([PartitionRect; 16], usize) {
             }
             let k0 = key(&at(bx, by));
             let mut bw = 1u32;
-            while bx + bw < 4 && !done[by as usize][(bx + bw) as usize] && key(&at(bx + bw, by)) == k0 {
+            while bx + bw < 4
+                && !done[by as usize][(bx + bw) as usize]
+                && key(&at(bx + bw, by)) == k0
+            {
                 bw += 1;
             }
             let mut bh = 1u32;
             'grow_down: while by + bh < 4 {
                 for dx in 0..bw {
-                    if done[(by + bh) as usize][(bx + dx) as usize] || key(&at(bx + dx, by + bh)) != k0 {
+                    if done[(by + bh) as usize][(bx + dx) as usize]
+                        || key(&at(bx + dx, by + bh)) != k0
+                    {
                         break 'grow_down;
                     }
                 }
@@ -998,7 +1057,13 @@ fn partition_rects(mv_blocks: &[MvInfo; 16]) -> ([PartitionRect; 16], usize) {
                 }
             }
             if let Some(slot) = rects.get_mut(n) {
-                *slot = PartitionRect { bx: bx as u8, by: by as u8, bw: bw as u8, bh: bh as u8, info: at(bx, by) };
+                *slot = PartitionRect {
+                    bx: bx as u8,
+                    by: by as u8,
+                    bw: bw as u8,
+                    bh: bh as u8,
+                    info: at(bx, by),
+                };
             }
             n += 1;
         }
@@ -1052,10 +1117,30 @@ fn reconstruct_inter_mb(
         // weight entry applies depends on `ref_idx`, not on the list
         // membership alone.
         let p0 = info.reads_l0().then(|| {
-            sample_luma_partition(ref_list0.get(ref_idx0).map_or(empty, |r| r.luma), ref_width, ref_height, x, y, w, h, info.mv_l0(), scratch)
+            sample_luma_partition(
+                ref_list0.get(ref_idx0).map_or(empty, |r| r.luma),
+                ref_width,
+                ref_height,
+                x,
+                y,
+                w,
+                h,
+                info.mv_l0(),
+                scratch,
+            )
         });
         let p1 = info.reads_l1().then(|| {
-            sample_luma_partition(ref_list1.get(ref_idx1).map_or(empty, |r| r.luma), ref_width, ref_height, x, y, w, h, info.mv_l1(), scratch)
+            sample_luma_partition(
+                ref_list1.get(ref_idx1).map_or(empty, |r| r.luma),
+                ref_width,
+                ref_height,
+                x,
+                y,
+                w,
+                h,
+                info.mv_l1(),
+                scratch,
+            )
         });
         let (row0, col0) = (usize::from(rect.by) * 4, usize::from(rect.bx) * 4);
         for oy in 0..h {
@@ -1076,7 +1161,10 @@ fn reconstruct_inter_mb(
                     (None, Some(b)) => weights.single(1, ref_idx1, b),
                     (None, None) => 0,
                 };
-                if let Some(dst) = pred_mb.get_mut(row0 + oy).and_then(|r| r.get_mut(col0 + ox)) {
+                if let Some(dst) = pred_mb
+                    .get_mut(row0 + oy)
+                    .and_then(|r| r.get_mut(col0 + ox))
+                {
                     *dst = v;
                 }
             }
@@ -1089,14 +1177,19 @@ fn reconstruct_inter_mb(
             let x = mb.mb_x * 16 + qx * 8;
             let y = mb.mb_y * 16 + qy * 8;
             let (row0, col0) = (qy as usize * 8, qx as usize * 8);
-            let ac = mb.residual.luma8x8.get(i8x8 as usize).and_then(Option::as_ref);
+            let ac = mb
+                .residual
+                .luma8x8
+                .get(i8x8 as usize)
+                .and_then(Option::as_ref);
             let c = inverse_scan_luma_8x8(ac);
             let d = dequant_8x8(&c, mb.qpy);
             let r = idct8x8(&d);
             let mut block = [[0u8; 8]; 8];
             for (i, row) in block.iter_mut().enumerate() {
                 for (j, v) in row.iter_mut().enumerate() {
-                    let sum = i32::from(pred_mb[row0 + i][col0 + j]) + r.get(i * 8 + j).copied().unwrap_or(0);
+                    let sum = i32::from(pred_mb[row0 + i][col0 + j])
+                        + r.get(i * 8 + j).copied().unwrap_or(0);
                     *v = sum.clamp(0, 255) as u8;
                 }
             }
@@ -1123,7 +1216,8 @@ fn reconstruct_inter_mb(
         let mut block = [[0u8; 4]; 4];
         for (i, row) in block.iter_mut().enumerate() {
             for (j, v) in row.iter_mut().enumerate() {
-                let sum = i32::from(pred_mb[row0 + i][col0 + j]) + r.get(i * 4 + j).copied().unwrap_or(0);
+                let sum =
+                    i32::from(pred_mb[row0 + i][col0 + j]) + r.get(i * 4 + j).copied().unwrap_or(0);
                 *v = sum.clamp(0, 255) as u8;
             }
         }
@@ -1278,7 +1372,12 @@ pub(crate) struct InterWeights<'a> {
 
 impl InterWeights<'_> {
     const fn none() -> Self {
-        Self { l0: None, l1: None, mode: BiPredMode::Default, implicit: None }
+        Self {
+            l0: None,
+            l1: None,
+            mode: BiPredMode::Default,
+            implicit: None,
+        }
     }
 
     /// One list's own single-list prediction (`Pred_L0`/`Pred_L1`, clause
@@ -1311,18 +1410,39 @@ impl InterWeights<'_> {
                 }
             }
             BiPredMode::Explicit => {
-                let w0 = weight_for(self.l0, ref_idx0).unwrap_or(PredWeight { log2_denom: 0, weight: 1, offset: 0 });
-                let w1 = weight_for(self.l1, ref_idx1).unwrap_or(PredWeight { log2_denom: 0, weight: 1, offset: 0 });
+                let w0 = weight_for(self.l0, ref_idx0).unwrap_or(PredWeight {
+                    log2_denom: 0,
+                    weight: 1,
+                    offset: 0,
+                });
+                let w1 = weight_for(self.l1, ref_idx1).unwrap_or(PredWeight {
+                    log2_denom: 0,
+                    weight: 1,
+                    offset: 0,
+                });
                 let log_wd = w0.log2_denom;
                 let round = 1i32 << log_wd;
-                let sum = p0.saturating_mul(w0.weight).saturating_add(p1.saturating_mul(w1.weight)).saturating_add(round);
+                let sum = p0
+                    .saturating_mul(w0.weight)
+                    .saturating_add(p1.saturating_mul(w1.weight))
+                    .saturating_add(round);
                 let shifted = sum >> (log_wd + 1);
                 let offset = (w0.offset + w1.offset + 1) >> 1;
-                shifted.saturating_add(offset).clamp(0, 255).cast_unsigned_u8()
+                shifted
+                    .saturating_add(offset)
+                    .clamp(0, 255)
+                    .cast_unsigned_u8()
             }
             BiPredMode::Implicit => {
-                let w = self.implicit.map_or(ImplicitWeight { w0: 32, w1: 32 }, |t| t.get(ref_idx0, ref_idx1));
-                let sum = p0.saturating_mul(w.w0).saturating_add(p1.saturating_mul(w.w1)).saturating_add(32);
+                let w = self
+                    .implicit
+                    .map_or(ImplicitWeight { w0: 32, w1: 32 }, |t| {
+                        t.get(ref_idx0, ref_idx1)
+                    });
+                let sum = p0
+                    .saturating_mul(w.w0)
+                    .saturating_add(p1.saturating_mul(w.w1))
+                    .saturating_add(32);
                 (sum >> 6).clamp(0, 255).cast_unsigned_u8()
             }
         }
@@ -1352,7 +1472,9 @@ impl SliceWeightTables {
     /// `luma_weight_l0_flag`/`chroma_weight_l0_flag` was 0: the neutral
     /// weight `2^logWD` with offset 0, i.e. an identity.
     pub(crate) fn from_table(table: Option<&vaco_parse_h264::PredWeightTable>) -> Self {
-        let Some(t) = table else { return Self::default() };
+        let Some(t) = table else {
+            return Self::default();
+        };
         let luma_denom = t.luma_log2_weight_denom;
         let chroma_denom = t.chroma_log2_weight_denom.unwrap_or(0);
         let neutral = |denom: u8| 1i32 << denom;
@@ -1374,7 +1496,13 @@ impl SliceWeightTables {
         };
         let (luma, chroma) = build(&t.l0);
         let (luma1, chroma1) = build(&t.l1);
-        Self { weighted: true, luma, chroma, luma1, chroma1 }
+        Self {
+            weighted: true,
+            luma,
+            chroma,
+            luma1,
+            chroma1,
+        }
     }
 
     fn luma(&self) -> SliceWeights<'_> {
@@ -1474,7 +1602,10 @@ impl ReadScratch {
     ///
     /// [`vaco_core::Error::LimitExceeded`] when the budget refuses.
     pub(crate) fn new(budget: &mut Budget) -> vaco_core::Result<Self> {
-        Ok(Self { block: BlockScratch::new(budget, 21, 21)?, failed: false })
+        Ok(Self {
+            block: BlockScratch::new(budget, 21, 21)?,
+            failed: false,
+        })
     }
 
     /// Turn a raised failure flag into an error, and clear it.
@@ -1550,7 +1681,12 @@ fn chroma_neighbours(buf: &PictureBuffer, comp: usize, mb_x: u32, mb_y: u32) -> 
     clippy::indexing_slicing,
     reason = "bx/by are 0/1 from blk_xy(0..4), x_o/y_o in {0,4}, i/j in 0..4 -- every index below is provably in range, not bitstream-derived"
 )]
-fn add_chroma_residual(mut pred: [[u8; 8]; 8], comp: usize, mb: &MbSummary, qpc: i32) -> [[u8; 8]; 8] {
+fn add_chroma_residual(
+    mut pred: [[u8; 8]; 8],
+    comp: usize,
+    mb: &MbSummary,
+    qpc: i32,
+) -> [[u8; 8]; 8] {
     let dc_raw = inverse_scan_chroma_dc(mb.residual.chroma_dc.get(comp).and_then(Option::as_ref));
     let dc = dequant_chroma_dc_2x2(&dc_raw, qpc);
     for blk in 0..4u32 {
@@ -1633,15 +1769,24 @@ pub(crate) struct RowReach {
     reason = "a negative reach is clamped to zero by the saturating conversion below; row numbers are u32 by construction"
 )]
 pub(crate) fn row_reference_reach(row: &[MbSummary]) -> RowReach {
-    let mut reach = RowReach { luma: [[None; MAX_REF_IDX]; 2], chroma: [[None; MAX_REF_IDX]; 2] };
+    let mut reach = RowReach {
+        luma: [[None; MAX_REF_IDX]; 2],
+        chroma: [[None; MAX_REF_IDX]; 2],
+    };
     for mb in row {
         if mb.is_intra16x16 || mb.is_intra4x4 || mb.is_intra8x8 || mb.is_ipcm {
             continue;
         }
         for (i, info) in mb.mv_blocks.iter().enumerate() {
             let by = (i >> 2) as u32;
-            let y = mb.mb_y.saturating_mul(16).saturating_add(by.saturating_mul(4));
-            let cy = mb.mb_y.saturating_mul(8).saturating_add(by.saturating_mul(2));
+            let y = mb
+                .mb_y
+                .saturating_mul(16)
+                .saturating_add(by.saturating_mul(4));
+            let cy = mb
+                .mb_y
+                .saturating_mul(8)
+                .saturating_add(by.saturating_mul(2));
             for list in 0..2usize {
                 let (reads, idx, mv) = if list == 0 {
                     (info.reads_l0(), info.ref_idx_l0(), info.mv_l0())
@@ -1684,7 +1829,12 @@ fn sample_chroma_2x2(
     mv: (i16, i16),
     scratch: &mut ReadScratch,
 ) -> [[u8; 2]; 2] {
-    #[allow(clippy::cast_possible_wrap, clippy::cast_sign_loss, clippy::cast_possible_truncation, reason = "mirrors this function's own pre-existing arithmetic")]
+    #[allow(
+        clippy::cast_possible_wrap,
+        clippy::cast_sign_loss,
+        clippy::cast_possible_truncation,
+        reason = "mirrors this function's own pre-existing arithmetic"
+    )]
     {
         let (mvx, mvy) = (i32::from(mv.0), i32::from(mv.1));
         let mut out = [[0u8; 2]; 2];
@@ -1706,7 +1856,13 @@ fn sample_chroma_2x2(
                 };
                 for (dy, row) in out.iter_mut().enumerate() {
                     for (dx, v) in row.iter_mut().enumerate() {
-                        *v = crate::interp::chroma_mc_sample(fetch, cx0 + dx as i32, cy0 + dy as i32, mvx, mvy);
+                        *v = crate::interp::chroma_mc_sample(
+                            fetch,
+                            cx0 + dx as i32,
+                            cy0 + dy as i32,
+                            mvx,
+                            mvy,
+                        );
                     }
                 }
                 return out;
@@ -1718,11 +1874,20 @@ fn sample_chroma_2x2(
             }
             let cx = ax.clamp(0, chroma_width as i32 - 1) as u32;
             let cy = ay.clamp(0, chroma_height as i32 - 1) as u32;
-            plane.get((cy * chroma_width + cx) as usize).copied().unwrap_or(0)
+            plane
+                .get((cy * chroma_width + cx) as usize)
+                .copied()
+                .unwrap_or(0)
         };
         for (dy, row) in out.iter_mut().enumerate() {
             for (dx, v) in row.iter_mut().enumerate() {
-                *v = crate::interp::chroma_mc_sample(fetch, cx0 + dx as i32, cy0 + dy as i32, mvx, mvy);
+                *v = crate::interp::chroma_mc_sample(
+                    fetch,
+                    cx0 + dx as i32,
+                    cy0 + dy as i32,
+                    mvx,
+                    mvy,
+                );
             }
         }
         out
@@ -1757,16 +1922,36 @@ fn predict_chroma_inter(
         let info = mb.mv_blocks[(by * 4 + bx) as usize];
         let ref_idx0 = info.ref_idx_l0().max(0) as usize;
         let ref_idx1 = info.ref_idx_l1().max(0) as usize;
-        let plane0 = ref_list0.get(ref_idx0).map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
-        let plane1 = ref_list1.get(ref_idx1).map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
+        let plane0 = ref_list0
+            .get(ref_idx0)
+            .map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
+        let plane1 = ref_list1
+            .get(ref_idx1)
+            .map_or(empty, |r| if comp == 0 { r.cb } else { r.cr });
         let cx0 = (mb.mb_x * 8 + bx * 2) as i32;
         let cy0 = (mb.mb_y * 8 + by * 2) as i32;
-        let p0 = info
-            .reads_l0()
-            .then(|| sample_chroma_2x2(plane0, chroma_width, chroma_height, cx0, cy0, info.mv_l0(), scratch));
-        let p1 = info
-            .reads_l1()
-            .then(|| sample_chroma_2x2(plane1, chroma_width, chroma_height, cx0, cy0, info.mv_l1(), scratch));
+        let p0 = info.reads_l0().then(|| {
+            sample_chroma_2x2(
+                plane0,
+                chroma_width,
+                chroma_height,
+                cx0,
+                cy0,
+                info.mv_l0(),
+                scratch,
+            )
+        });
+        let p1 = info.reads_l1().then(|| {
+            sample_chroma_2x2(
+                plane1,
+                chroma_width,
+                chroma_height,
+                cx0,
+                cy0,
+                info.mv_l1(),
+                scratch,
+            )
+        });
 
         for dy in 0..2i32 {
             for dx in 0..2i32 {
@@ -1881,7 +2066,10 @@ pub(crate) struct PictureCtx<'a> {
 
 impl<'a> PictureCtx<'a> {
     /// Derive the picture-constant reconstruction state.
-    #[allow(clippy::too_many_arguments, reason = "one argument per picture-constant input, all of which reconstruction needs")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one argument per picture-constant input, all of which reconstruction needs"
+    )]
     pub(crate) fn new(
         mbs_wide: u32,
         mbs_high: u32,
@@ -1924,7 +2112,8 @@ fn reconstruct_mb(
 ) -> vaco_core::Result<()> {
     let (ref_width, ref_height) = (ctx.ref_width, ctx.ref_height);
     let (chroma_width, chroma_height) = (ctx.chroma_width, ctx.chroma_height);
-    let (chroma_qp_offset_cb, chroma_qp_offset_cr) = (ctx.chroma_qp_offset_cb, ctx.chroma_qp_offset_cr);
+    let (chroma_qp_offset_cb, chroma_qp_offset_cr) =
+        (ctx.chroma_qp_offset_cb, ctx.chroma_qp_offset_cr);
     let (ref_list0, ref_list1) = (ctx.ref_list0, ctx.ref_list1);
     let weights = ctx.weights;
     let bipred_mode = ctx.bipred_mode;
@@ -1950,7 +2139,8 @@ fn reconstruct_mb(
             left,
             corner: buf.pixel(coord(x) - 1, coord(y) - 1),
         };
-        let block = reconstruct_intra16x16_luma(mb.intra16x16_pred_mode, neighbours, mb.qpy, &mb.residual);
+        let block =
+            reconstruct_intra16x16_luma(mb.intra16x16_pred_mode, neighbours, mb.qpy, &mb.residual);
         for (i, row) in block.iter().enumerate() {
             buf.write_row_luma(x, y + i as u32, row);
         }
@@ -1963,17 +2153,44 @@ fn reconstruct_mb(
     } else if mb.is_intra8x8 {
         reconstruct_intra8x8_mb(buf, mb.mb_x, mb.mb_y, mb.qpy, &mb.residual);
     } else {
-        let luma_weights = InterWeights { l0: weights.luma(), l1: weights.luma1(), mode: bipred_mode, implicit };
-        reconstruct_inter_mb(buf, mb, ref_list0, ref_list1, ref_width, ref_height, luma_weights, scratch);
+        let luma_weights = InterWeights {
+            l0: weights.luma(),
+            l1: weights.luma1(),
+            mode: bipred_mode,
+            implicit,
+        };
+        reconstruct_inter_mb(
+            buf,
+            mb,
+            ref_list0,
+            ref_list1,
+            ref_width,
+            ref_height,
+            luma_weights,
+            scratch,
+        );
     }
 
     let qpc_cb = chroma_qp(mb.qpy, chroma_qp_offset_cb);
     let qpc_cr = chroma_qp(mb.qpy, chroma_qp_offset_cr);
     for (comp, qpc) in [(0usize, qpc_cb), (1usize, qpc_cr)] {
         let pred = if is_inter {
-            let chroma_weights =
-                InterWeights { l0: weights.chroma(comp), l1: weights.chroma1(comp), mode: bipred_mode, implicit };
-            predict_chroma_inter(mb, comp, ref_list0, ref_list1, chroma_width, chroma_height, chroma_weights, scratch)
+            let chroma_weights = InterWeights {
+                l0: weights.chroma(comp),
+                l1: weights.chroma1(comp),
+                mode: bipred_mode,
+                implicit,
+            };
+            predict_chroma_inter(
+                mb,
+                comp,
+                ref_list0,
+                ref_list1,
+                chroma_width,
+                chroma_height,
+                chroma_weights,
+                scratch,
+            )
         } else {
             let neighbours = chroma_neighbours(buf, comp, mb.mb_x, mb.mb_y);
             predict_intra_chroma(mb.intra_chroma_pred_mode, neighbours)
@@ -1988,8 +2205,6 @@ fn reconstruct_mb(
     buf.mark_chroma_mb_decoded(mb.mb_x, mb.mb_y);
     Ok(())
 }
-
-
 
 /// Clause 8.4/8.5 reconstruction and clause 8.7 deblocking, driven a macroblock
 /// row at a time so a caller can publish finished rows while the picture is
@@ -2044,7 +2259,11 @@ pub(crate) const fn chroma_rows_final(d: u32) -> u32 {
 /// [`PictureReconstructor::reconstruct_all`] plus whole-picture filtering,
 /// which is order-independent and therefore always right -- rather than
 /// silently reconstructing a subset.
-pub(crate) fn macroblocks_in_raster_order(macroblocks: &[MbSummary], mbs_wide: u32, mbs_high: u32) -> bool {
+pub(crate) fn macroblocks_in_raster_order(
+    macroblocks: &[MbSummary],
+    mbs_wide: u32,
+    mbs_high: u32,
+) -> bool {
     macroblocks.len() == (mbs_wide as usize).saturating_mul(mbs_high as usize)
         && macroblocks
             .iter()
@@ -2058,10 +2277,18 @@ impl PictureReconstructor {
     /// # Errors
     ///
     /// [`vaco_core::Error::LimitExceeded`] when the budget refuses.
-    pub(crate) fn new(mbs_wide: u32, mbs_high: u32, budget: &mut Budget) -> vaco_core::Result<Self> {
+    pub(crate) fn new(
+        mbs_wide: u32,
+        mbs_high: u32,
+        budget: &mut Budget,
+    ) -> vaco_core::Result<Self> {
         let scratch = ReadScratch::new(budget)?;
         let buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
-        Ok(Self { buf, scratch, cursor: 0 })
+        Ok(Self {
+            buf,
+            scratch,
+            cursor: 0,
+        })
     }
 
     /// Reconstruct every macroblock of row `my`.
@@ -2128,7 +2355,11 @@ impl PictureReconstructor {
 
     /// The finished picture.
     pub(crate) fn finish(self) -> ReconstructedPicture {
-        ReconstructedPicture { luma: self.buf.luma, cb: self.buf.cb, cr: self.buf.cr }
+        ReconstructedPicture {
+            luma: self.buf.luma,
+            cb: self.buf.cb,
+            cr: self.buf.cr,
+        }
     }
 
     /// `(mbs_wide, mbs_high)` this reconstructor's three sample planes and
@@ -2171,7 +2402,6 @@ impl PictureReconstructor {
     }
 }
 
-
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,
@@ -2195,7 +2425,11 @@ mod tests {
     /// from `ffmpeg`'s own decode -- not by running this function.
     #[test]
     fn explicit_weighted_prediction_matches_the_measured_x264_parameters() {
-        let w = PredWeight { log2_denom: 4, weight: 15, offset: -3 };
+        let w = PredWeight {
+            log2_denom: 4,
+            weight: 15,
+            offset: -3,
+        };
         // ((p * 15 + 8) >> 4) - 3, clipped.
         assert_eq!(w.apply(4), 1);
         assert_eq!(w.apply(0), 0, "clipped at the bottom, not wrapped");
@@ -2208,11 +2442,23 @@ mod tests {
     /// same one with a zero shift.
     #[test]
     fn a_zero_log2_denominator_skips_the_rounding_term() {
-        let w = PredWeight { log2_denom: 0, weight: 1, offset: 7 };
+        let w = PredWeight {
+            log2_denom: 0,
+            weight: 1,
+            offset: 7,
+        };
         assert_eq!(w.apply(10), 17);
-        let doubling = PredWeight { log2_denom: 0, weight: 2, offset: 0 };
+        let doubling = PredWeight {
+            log2_denom: 0,
+            weight: 2,
+            offset: 0,
+        };
         assert_eq!(doubling.apply(100), 200);
-        assert_eq!(doubling.apply(200), 255, "Clip1 saturates rather than wrapping");
+        assert_eq!(
+            doubling.apply(200),
+            255,
+            "Clip1 saturates rather than wrapping"
+        );
     }
 
     /// The neutral weight is an exact identity for every sample value --
@@ -2221,7 +2467,11 @@ mod tests {
     #[test]
     fn the_neutral_weight_is_an_exact_identity() {
         for denom in 0..=7u8 {
-            let w = PredWeight { log2_denom: denom, weight: 1 << denom, offset: 0 };
+            let w = PredWeight {
+                log2_denom: denom,
+                weight: 1 << denom,
+                offset: 0,
+            };
             for v in 0..=255u8 {
                 assert_eq!(w.apply(v), v, "denom={denom} v={v}");
             }
@@ -2238,15 +2488,27 @@ mod tests {
             luma_log2_weight_denom: 5,
             chroma_log2_weight_denom: Some(6),
             l0: vec![
-                vaco_parse_h264::slice::RefWeight { luma: Some((20, -4)), chroma: None },
-                vaco_parse_h264::slice::RefWeight { luma: None, chroma: None },
+                vaco_parse_h264::slice::RefWeight {
+                    luma: Some((20, -4)),
+                    chroma: None,
+                },
+                vaco_parse_h264::slice::RefWeight {
+                    luma: None,
+                    chroma: None,
+                },
             ],
             l1: Vec::new(),
         };
         let w = SliceWeightTables::from_table(Some(&table));
         let luma = w.luma().expect("weighted");
-        assert_eq!((luma[0].log2_denom, luma[0].weight, luma[0].offset), (5, 20, -4));
-        assert_eq!((luma[1].log2_denom, luma[1].weight, luma[1].offset), (5, 32, 0));
+        assert_eq!(
+            (luma[0].log2_denom, luma[0].weight, luma[0].offset),
+            (5, 20, -4)
+        );
+        assert_eq!(
+            (luma[1].log2_denom, luma[1].weight, luma[1].offset),
+            (5, 32, 0)
+        );
         let cb = w.chroma(0).expect("weighted");
         assert_eq!((cb[0].log2_denom, cb[0].weight, cb[0].offset), (6, 64, 0));
         // No table at all is distinct from a table of neutral weights.
@@ -2542,9 +2804,13 @@ mod tests {
                         if cabac.malformed() {
                             return Err("CABAC engine reported malformed input".to_owned());
                         }
-                        let mut luma =
-                            reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high, &mut budget)
-                                .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))?;
+                        let mut luma = reconstruct_picture_luma(
+                            &stats.macroblocks,
+                            mbs_wide,
+                            mbs_high,
+                            &mut budget,
+                        )
+                        .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))?;
                         if apply_deblocking {
                             crate::deblock::deblock_picture_luma(
                                 &mut luma,
@@ -2725,7 +2991,10 @@ mod tests {
             let base = idx * frame_stride;
             let planes: [(&[u8], &[u8]); 3] = [
                 (&pic.luma, &reference[base..base + luma_len]),
-                (&pic.cb, &reference[base + luma_len..base + luma_len + chroma_len]),
+                (
+                    &pic.cb,
+                    &reference[base + luma_len..base + luma_len + chroma_len],
+                ),
                 (
                     &pic.cr,
                     &reference[base + luma_len + chroma_len..base + luma_len + 2 * chroma_len],
@@ -2751,7 +3020,11 @@ mod tests {
                 mismatch[p], total[p]
             );
         }
-        assert_eq!(mismatch, [0, 0, 0], "byte-exact against ffmpeg -skip_loop_filter all, every plane");
+        assert_eq!(
+            mismatch,
+            [0, 0, 0],
+            "byte-exact against ffmpeg -skip_loop_filter all, every plane"
+        );
     }
 
     /// The same corpus against `ffmpeg`'s own real, deblocked decode --
@@ -2920,8 +3193,13 @@ mod tests {
                             return Err("CABAC engine reported malformed input".to_owned());
                         }
                         let luma = if slice_header.kind == SliceKind::I {
-                            reconstruct_picture_luma(&stats.macroblocks, mbs_wide, mbs_high, &mut budget)
-                                .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))?
+                            reconstruct_picture_luma(
+                                &stats.macroblocks,
+                                mbs_wide,
+                                mbs_high,
+                                &mut budget,
+                            )
+                            .map_err(|e| format!("reconstruct_picture_luma failed: {e:?}"))?
                         } else {
                             let empty = RefPlane::Flat(&[]);
                             let ref_list0: Vec<RefPicturePlanes<'_>> = dpb
@@ -3019,7 +3297,10 @@ mod tests {
             frames.len()
         );
         assert_eq!(failed, 0, "every frame must decode without a hard error");
-        assert_eq!(mismatch, 0, "byte-exact against ffmpeg -skip_loop_filter all");
+        assert_eq!(
+            mismatch, 0,
+            "byte-exact against ffmpeg -skip_loop_filter all"
+        );
     }
 
     /// [`decode_ip_stream_luma`]'s own sibling, driving [`reconstruct_picture`]
@@ -3095,18 +3376,19 @@ mod tests {
                         if cabac.malformed() {
                             return Err("CABAC engine reported malformed input".to_owned());
                         }
-                        let ref_list0: Vec<RefPicturePlanes<'_>> = if slice_header.kind == SliceKind::I {
-                            Vec::new()
-                        } else {
-                            dpb.iter()
-                                .rev()
-                                .map(|p| RefPicturePlanes {
-                                    luma: RefPlane::Flat(&p.luma),
-                                    cb: RefPlane::Flat(&p.cb),
-                                    cr: RefPlane::Flat(&p.cr),
-                                })
-                                .collect()
-                        };
+                        let ref_list0: Vec<RefPicturePlanes<'_>> =
+                            if slice_header.kind == SliceKind::I {
+                                Vec::new()
+                            } else {
+                                dpb.iter()
+                                    .rev()
+                                    .map(|p| RefPicturePlanes {
+                                        luma: RefPlane::Flat(&p.luma),
+                                        cb: RefPlane::Flat(&p.cb),
+                                        cr: RefPlane::Flat(&p.cr),
+                                    })
+                                    .collect()
+                            };
                         reconstruct_picture(
                             &stats.macroblocks,
                             mbs_wide,
@@ -3154,7 +3436,8 @@ mod tests {
         use vaco_parse_h264::{H264NalHeader, NalUnitType, ParameterSets, SliceHeader};
 
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple.264");
-        let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple_deblocked_ref.yuv");
+        let reference: &[u8] =
+            include_bytes!("../tests/fixtures/cabac_ip_simple_deblocked_ref.yuv");
         let (luma_len, chroma_len) = (64 * 64, 32 * 32);
 
         let mut params = ParameterSets::new();
@@ -3162,7 +3445,9 @@ mod tests {
         let mut rbsp = RbspBuf::new();
 
         for nal in annexb::nal_units(data) {
-            let Some(header) = H264NalHeader::parse(nal) else { continue };
+            let Some(header) = H264NalHeader::parse(nal) else {
+                continue;
+            };
             match header.nal_unit_type {
                 NalUnitType::Sps => {
                     rbsp.fill(nal, &mut budget).unwrap();
@@ -3187,15 +3472,35 @@ mod tests {
                     };
                     let (pps, sps) = params.sps_for_pps(pps_id).unwrap();
                     let slice_header =
-                        SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget).unwrap();
-                    let mbs_wide = sps.pic_width_in_mbs;
-                    let mbs_high = sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
-                    let mut cabac = CabacDecoder::from_reader(reader);
-                    let stats =
-                        crate::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None).unwrap();
-                    let mut pic =
-                        reconstruct_picture(&stats.macroblocks, mbs_wide, mbs_high, pps.chroma_qp_index_offset, pps.second_chroma_qp_index_offset, &[], &[], &SliceWeightTables::default(), BiPredMode::Default, None, &mut budget)
+                        SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget)
                             .unwrap();
+                    let mbs_wide = sps.pic_width_in_mbs;
+                    let mbs_high =
+                        sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
+                    let mut cabac = CabacDecoder::from_reader(reader);
+                    let stats = crate::mb::decode_slice_cabac(
+                        &mut cabac,
+                        &mut budget,
+                        sps,
+                        pps,
+                        &slice_header,
+                        None,
+                    )
+                    .unwrap();
+                    let mut pic = reconstruct_picture(
+                        &stats.macroblocks,
+                        mbs_wide,
+                        mbs_high,
+                        pps.chroma_qp_index_offset,
+                        pps.second_chroma_qp_index_offset,
+                        &[],
+                        &[],
+                        &SliceWeightTables::default(),
+                        BiPredMode::Default,
+                        None,
+                        &mut budget,
+                    )
+                    .unwrap();
                     crate::deblock::deblock_picture_luma(
                         &mut pic.luma,
                         &stats.macroblocks,
@@ -3208,9 +3513,10 @@ mod tests {
                         &[],
                     )
                     .unwrap();
-                    for (chroma, offset) in
-                        [(&mut pic.cb, pps.chroma_qp_index_offset), (&mut pic.cr, pps.second_chroma_qp_index_offset)]
-                    {
+                    for (chroma, offset) in [
+                        (&mut pic.cb, pps.chroma_qp_index_offset),
+                        (&mut pic.cr, pps.second_chroma_qp_index_offset),
+                    ] {
                         crate::deblock::deblock_picture_chroma(
                             chroma,
                             &stats.macroblocks,
@@ -3225,7 +3531,11 @@ mod tests {
                         );
                     }
                     assert_eq!(pic.luma, reference[..luma_len], "frame 0 luma");
-                    assert_eq!(pic.cb, reference[luma_len..luma_len + chroma_len], "frame 0 Cb");
+                    assert_eq!(
+                        pic.cb,
+                        reference[luma_len..luma_len + chroma_len],
+                        "frame 0 Cb"
+                    );
                     assert_eq!(
                         pic.cr,
                         reference[luma_len + chroma_len..luma_len + 2 * chroma_len],
@@ -3299,7 +3609,8 @@ mod tests {
         use vaco_parse_h264::{H264NalHeader, NalUnitType, ParameterSets, SliceHeader, SliceKind};
 
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple.264");
-        let reference: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple_deblocked_ref.yuv");
+        let reference: &[u8] =
+            include_bytes!("../tests/fixtures/cabac_ip_simple_deblocked_ref.yuv");
         let (luma_len, chroma_len) = (64 * 64, 32 * 32);
         let frame_stride = luma_len + 2 * chroma_len;
 
@@ -3312,7 +3623,9 @@ mod tests {
         let mut frame_idx = 0usize;
 
         for nal in annexb::nal_units(data) {
-            let Some(header) = H264NalHeader::parse(nal) else { continue };
+            let Some(header) = H264NalHeader::parse(nal) else {
+                continue;
+            };
             match header.nal_unit_type {
                 NalUnitType::Sps => {
                     rbsp.fill(nal, &mut budget).unwrap();
@@ -3337,14 +3650,27 @@ mod tests {
                     };
                     let (pps, sps) = params.sps_for_pps(pps_id).unwrap();
                     let slice_header =
-                        SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget).unwrap();
+                        SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget)
+                            .unwrap();
                     let mbs_wide = sps.pic_width_in_mbs;
-                    let mbs_high = sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
+                    let mbs_high =
+                        sps.pic_height_in_map_units * if sps.frame_mbs_only { 1 } else { 2 };
                     let mut cabac = CabacDecoder::from_reader(reader);
-                    let stats =
-                        crate::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None).unwrap();
-                    assert!(!cabac.malformed(), "frame {frame_idx}: CABAC engine reported malformed input");
-                    let ref_list0: Vec<RefPicturePlanes<'_>> = if slice_header.kind == SliceKind::I {
+                    let stats = crate::mb::decode_slice_cabac(
+                        &mut cabac,
+                        &mut budget,
+                        sps,
+                        pps,
+                        &slice_header,
+                        None,
+                    )
+                    .unwrap();
+                    assert!(
+                        !cabac.malformed(),
+                        "frame {frame_idx}: CABAC engine reported malformed input"
+                    );
+                    let ref_list0: Vec<RefPicturePlanes<'_>> = if slice_header.kind == SliceKind::I
+                    {
                         Vec::new()
                     } else {
                         dpb.iter()
@@ -3372,7 +3698,8 @@ mod tests {
                         clippy::cast_possible_wrap,
                         reason = "a test harness's own list index, bounded by this fixture's 25 pictures"
                     )]
-                    let ref_list0_poc: Vec<i32> = (0..ref_list0.len()).map(|i| -(i as i32) - 1).collect();
+                    let ref_list0_poc: Vec<i32> =
+                        (0..ref_list0.len()).map(|i| -(i as i32) - 1).collect();
                     let mut pic = reconstruct_picture(
                         &stats.macroblocks,
                         mbs_wide,
@@ -3400,9 +3727,10 @@ mod tests {
                         &[],
                     )
                     .unwrap();
-                    for (chroma, offset) in
-                        [(&mut pic.cb, pps.chroma_qp_index_offset), (&mut pic.cr, pps.second_chroma_qp_index_offset)]
-                    {
+                    for (chroma, offset) in [
+                        (&mut pic.cb, pps.chroma_qp_index_offset),
+                        (&mut pic.cr, pps.second_chroma_qp_index_offset),
+                    ] {
                         crate::deblock::deblock_picture_chroma(
                             chroma,
                             &stats.macroblocks,
@@ -3421,8 +3749,14 @@ mod tests {
                     let base = frame_idx * frame_stride;
                     let planes: [(&[u8], &[u8]); 3] = [
                         (&pic.luma, &reference[base..base + luma_len]),
-                        (&pic.cb, &reference[base + luma_len..base + luma_len + chroma_len]),
-                        (&pic.cr, &reference[base + luma_len + chroma_len..base + frame_stride]),
+                        (
+                            &pic.cb,
+                            &reference[base + luma_len..base + luma_len + chroma_len],
+                        ),
+                        (
+                            &pic.cr,
+                            &reference[base + luma_len + chroma_len..base + frame_stride],
+                        ),
                     ];
                     for (plane_idx, (got, want)) in planes.iter().enumerate() {
                         for (&a, &b) in got.iter().zip(want.iter()) {
@@ -3441,7 +3775,11 @@ mod tests {
             "cabac_ip_simple (full deblocking, {frame_idx} frames): Y {}/{} U {}/{} V {}/{} differ",
             mismatch[0], total[0], mismatch[1], total[1], mismatch[2], total[2]
         );
-        assert_eq!(mismatch, [0, 0, 0], "byte-exact against ffmpeg's real (deblocked) decode");
+        assert_eq!(
+            mismatch,
+            [0, 0, 0],
+            "byte-exact against ffmpeg's real (deblocked) decode"
+        );
     }
 
     /// [`cabac_ip_simple_decodes_and_reports_its_own_match_against_ffmpeg`]'s
@@ -3463,13 +3801,19 @@ mod tests {
         for (idx, frame) in frames.iter().enumerate() {
             let Ok(pic) = frame else {
                 failed += 1;
-                eprintln!("cabac_ip_simple frame {idx}: {}", frame.as_ref().unwrap_err());
+                eprintln!(
+                    "cabac_ip_simple frame {idx}: {}",
+                    frame.as_ref().unwrap_err()
+                );
                 continue;
             };
             let base = idx * frame_stride;
             let planes: [(&[u8], &[u8]); 3] = [
                 (&pic.luma, &reference[base..base + luma_len]),
-                (&pic.cb, &reference[base + luma_len..base + luma_len + chroma_len]),
+                (
+                    &pic.cb,
+                    &reference[base + luma_len..base + luma_len + chroma_len],
+                ),
                 (
                     &pic.cr,
                     &reference[base + luma_len + chroma_len..base + luma_len + 2 * chroma_len],
@@ -3505,7 +3849,11 @@ mod tests {
             );
         }
         assert_eq!(failed, 0, "every frame must decode without a hard error");
-        assert_eq!(mismatch, [0, 0, 0], "byte-exact against ffmpeg -skip_loop_filter all, every plane");
+        assert_eq!(
+            mismatch,
+            [0, 0, 0],
+            "byte-exact against ffmpeg -skip_loop_filter all, every plane"
+        );
     }
 
     /// [`sample_luma_partition`] against [`sample_luma_block`], the
@@ -3558,7 +3906,17 @@ mod tests {
                             }
                         }
                     }
-                    let got = sample_luma_partition(RefPlane::Flat(&plane), ref_width, ref_height, x, y, w, h, mv, &mut scratch);
+                    let got = sample_luma_partition(
+                        RefPlane::Flat(&plane),
+                        ref_width,
+                        ref_height,
+                        x,
+                        y,
+                        w,
+                        h,
+                        mv,
+                        &mut scratch,
+                    );
                     for oy in 0..h {
                         for ox in 0..w {
                             assert_eq!(
@@ -3587,7 +3945,10 @@ mod tests {
         let uniform = [mv_at(4, -2); 16];
         let (rects, n) = partition_rects(&uniform);
         assert_eq!(n, 1, "a uniform grid must merge into exactly one rectangle");
-        assert_eq!((rects[0].bx, rects[0].by, rects[0].bw, rects[0].bh), (0, 0, 4, 4));
+        assert_eq!(
+            (rects[0].bx, rects[0].by, rects[0].bw, rects[0].bh),
+            (0, 0, 4, 4)
+        );
 
         // 16x8: top two 4x4 rows share one vector, bottom two share another.
         let mut split = [MvInfo::default(); 16];
@@ -3597,8 +3958,14 @@ mod tests {
             }
         }
         let (rects, n) = partition_rects(&split);
-        assert_eq!(n, 2, "top/bottom 16x8 split must recover exactly two rectangles");
-        let mut shapes: Vec<(u8, u8, u8, u8)> = rects[..n].iter().map(|r| (r.bx, r.by, r.bw, r.bh)).collect();
+        assert_eq!(
+            n, 2,
+            "top/bottom 16x8 split must recover exactly two rectangles"
+        );
+        let mut shapes: Vec<(u8, u8, u8, u8)> = rects[..n]
+            .iter()
+            .map(|r| (r.bx, r.by, r.bw, r.bh))
+            .collect();
         shapes.sort_unstable();
         assert_eq!(shapes, vec![(0, 0, 4, 2), (0, 2, 4, 2)]);
 
@@ -3612,8 +3979,14 @@ mod tests {
         }
         let (rects, n) = partition_rects(&quads);
         assert_eq!(n, 4, "four differently-moving quadrants must not merge");
-        let mut shapes: Vec<(u8, u8, u8, u8)> = rects[..n].iter().map(|r| (r.bx, r.by, r.bw, r.bh)).collect();
+        let mut shapes: Vec<(u8, u8, u8, u8)> = rects[..n]
+            .iter()
+            .map(|r| (r.bx, r.by, r.bw, r.bh))
+            .collect();
         shapes.sort_unstable();
-        assert_eq!(shapes, vec![(0, 0, 2, 2), (0, 2, 2, 2), (2, 0, 2, 2), (2, 2, 2, 2)]);
+        assert_eq!(
+            shapes,
+            vec![(0, 0, 2, 2), (0, 2, 2, 2), (2, 0, 2, 2), (2, 2, 2, 2)]
+        );
     }
 }

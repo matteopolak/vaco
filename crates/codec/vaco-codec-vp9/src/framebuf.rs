@@ -24,7 +24,11 @@ impl Plane {
     pub fn new(budget: &mut Budget, width: usize, height: usize) -> vaco_core::Result<Self> {
         let len = width.saturating_mul(height);
         let data = budget.alloc(len)?;
-        Ok(Self { width, height, data })
+        Ok(Self {
+            width,
+            height,
+            data,
+        })
     }
 
     #[must_use]
@@ -45,7 +49,10 @@ impl Plane {
     pub fn get_clamped(&self, x: i32, y: i32) -> u16 {
         let cx = x.clamp(0, i32::try_from(self.width.saturating_sub(1)).unwrap_or(0));
         let cy = y.clamp(0, i32::try_from(self.height.saturating_sub(1)).unwrap_or(0));
-        let (ux, uy) = (usize::try_from(cx).unwrap_or(0), usize::try_from(cy).unwrap_or(0));
+        let (ux, uy) = (
+            usize::try_from(cx).unwrap_or(0),
+            usize::try_from(cy).unwrap_or(0),
+        );
         self.data.get(uy * self.width + ux).copied().unwrap_or(0)
     }
 
@@ -108,11 +115,19 @@ pub fn plane_to_bytes(plane: &Plane, budget: &mut Budget) -> vaco_core::Result<V
 
 /// The inverse of [`plane_to_bytes`]: reinterpret `width * height * 2`
 /// little-endian bytes back into a [`Plane`]'s samples.
-fn plane_from_bytes(bytes: &[u8], width: usize, height: usize, budget: &mut Budget) -> vaco_core::Result<Plane> {
+fn plane_from_bytes(
+    bytes: &[u8],
+    width: usize,
+    height: usize,
+    budget: &mut Budget,
+) -> vaco_core::Result<Plane> {
     let mut plane = Plane::new(budget, width, height)?;
     for (i, slot) in plane.data.iter_mut().enumerate() {
         let off = i * 2;
-        *slot = bytes.get(off..off + 2).and_then(|b| b.try_into().ok()).map_or(0, u16::from_le_bytes);
+        *slot = bytes
+            .get(off..off + 2)
+            .and_then(|b| b.try_into().ok())
+            .map_or(0, u16::from_le_bytes);
     }
     Ok(plane)
 }
@@ -138,11 +153,16 @@ pub fn materialize(
     chroma_h: usize,
     budget: &mut Budget,
 ) -> vaco_core::Result<Picture> {
-    let dims = [(0usize, luma_w, luma_h), (1, chroma_w, chroma_h), (2, chroma_w, chroma_h)];
+    let dims = [
+        (0usize, luma_w, luma_h),
+        (1, chroma_w, chroma_h),
+        (2, chroma_w, chroma_h),
+    ];
     let mut planes = Vec::new();
     for (plane_idx, w, h) in dims {
         let height = u32::try_from(h).unwrap_or(u32::MAX);
-        let view = reference.wait_rows_for(waiter_decode_index, plane_idx, height.saturating_sub(1))?;
+        let view =
+            reference.wait_rows_for(waiter_decode_index, plane_idx, height.saturating_sub(1))?;
         let src = view.contiguous_all().ok_or(vaco_core::Error::InvalidData(
             "vp9: a single-band reference plane was not one contiguous borrow",
         ))?;
@@ -164,7 +184,9 @@ pub fn materialize(
     }
     let mut it = planes.into_iter();
     let (Some(y), Some(u), Some(v)) = (it.next(), it.next(), it.next()) else {
-        return Err(vaco_core::Error::InvalidData("vp9: materialize produced fewer than three planes"));
+        return Err(vaco_core::Error::InvalidData(
+            "vp9: materialize produced fewer than three planes",
+        ));
     };
     Ok(Picture { y, u, v })
 }

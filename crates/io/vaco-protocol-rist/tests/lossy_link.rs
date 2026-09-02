@@ -47,7 +47,10 @@ impl Xorshift32 {
 #[derive(Debug, Clone)]
 struct WirePacket {
     seq: u32,
-    #[allow(dead_code, reason = "documents provenance; ReceiveBuffer does not branch on it")]
+    #[allow(
+        dead_code,
+        reason = "documents provenance; ReceiveBuffer does not branch on it"
+    )]
     origin: Origin,
     payload: Vec<u8>,
 }
@@ -110,8 +113,14 @@ fn simulate(
         // retransmissions (§5.3.3), same seq/payload as the original.
         let missing = receiver.missing();
         assert_eq!(
-            missing.iter().copied().collect::<std::collections::BTreeSet<_>>(),
-            still_missing.iter().copied().collect::<std::collections::BTreeSet<_>>(),
+            missing
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
+            still_missing
+                .iter()
+                .copied()
+                .collect::<std::collections::BTreeSet<_>>(),
             "the buffer's own missing() must agree with what the link actually dropped this round"
         );
         if missing.is_empty() {
@@ -206,10 +215,17 @@ fn assert_sound_delivery(packet_count: u32, delivered: &[(u32, Vec<u8>)], droppe
     let mut seen: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
     for &(seq, ref payload) in delivered {
         assert!(seen.insert(seq), "sequence {seq} delivered more than once");
-        assert_eq!(*payload, seq.to_be_bytes().to_vec(), "delivered payload for {seq} does not match what was sent");
+        assert_eq!(
+            *payload,
+            seq.to_be_bytes().to_vec(),
+            "delivered payload for {seq} does not match what was sent"
+        );
     }
     for &seq in dropped {
-        assert!(seen.insert(seq), "sequence {seq} both delivered and dropped, or dropped twice");
+        assert!(
+            seen.insert(seq),
+            "sequence {seq} both delivered and dropped, or dropped twice"
+        );
     }
     assert_eq!(
         seen,
@@ -229,7 +245,10 @@ fn zero_loss_recovers_everything_on_the_first_round() {
 #[test]
 fn five_percent_loss_recovers_the_whole_set_within_a_few_rounds() {
     let (delivered, dropped) = simulate(500, 5, 6, 0xC0FF_EE02, &[]);
-    assert!(dropped.is_empty(), "5% loss with 6 retry rounds should recover everything");
+    assert!(
+        dropped.is_empty(),
+        "5% loss with 6 retry rounds should recover everything"
+    );
     assert_eq!(delivered.len(), 500);
     assert_sound_delivery(500, &delivered, &dropped);
 }

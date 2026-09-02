@@ -80,11 +80,18 @@ pub const MAX_FETCH_BYTES: u64 = 512 * 1024 * 1024;
 pub enum FetchError {
     /// The entry names no URL or no expected hash (a documented gap; see
     /// `suites.toml`).
-    NotFetchable { name: String },
+    NotFetchable {
+        name: String,
+    },
     /// A cache miss and the caller did not opt into the network.
-    NetworkDisabled { name: String },
+    NetworkDisabled {
+        name: String,
+    },
     /// The response exceeded [`MAX_FETCH_BYTES`].
-    TooLarge { name: String, limit: u64 },
+    TooLarge {
+        name: String,
+        limit: u64,
+    },
     Protocol(vaco_protocol_core::ProtocolError),
     Io(vaco_core::Error),
     Store(StoreError),
@@ -147,7 +154,11 @@ fn http_only_registry() -> ProtocolRegistry {
 /// # Errors
 /// [`FetchError`] as [`fetch`], plus [`FetchError::Zip`] if `entry.member`
 /// is set and the fetched bytes are not a well-formed ZIP containing it.
-pub fn fetch_asset(entry: &LockEntry, store: &Store, policy: NetworkPolicy) -> Result<Vec<u8>, FetchError> {
+pub fn fetch_asset(
+    entry: &LockEntry,
+    store: &Store,
+    policy: NetworkPolicy,
+) -> Result<Vec<u8>, FetchError> {
     let bytes = fetch(entry, store, policy)?;
     match &entry.member {
         Some(member) => crate::zip::extract(&bytes, member).map_err(FetchError::Zip),
@@ -162,7 +173,11 @@ pub fn fetch_asset(entry: &LockEntry, store: &Store, policy: NetworkPolicy) -> R
 ///
 /// # Errors
 /// See [`FetchError`].
-pub fn fetch(entry: &LockEntry, store: &Store, policy: NetworkPolicy) -> Result<Vec<u8>, FetchError> {
+pub fn fetch(
+    entry: &LockEntry,
+    store: &Store,
+    policy: NetworkPolicy,
+) -> Result<Vec<u8>, FetchError> {
     let (Some(url), Some(expected)) = (&entry.url, &entry.sha256) else {
         return Err(FetchError::NotFetchable {
             name: entry.name.clone(),
@@ -256,18 +271,12 @@ mod tests {
     #[test]
     fn network_policy_from_var_is_opt_in() {
         assert_eq!(NetworkPolicy::from_var(None), NetworkPolicy::CacheOnly);
-        assert_eq!(
-            NetworkPolicy::from_var(Some("1")),
-            NetworkPolicy::Allowed
-        );
+        assert_eq!(NetworkPolicy::from_var(Some("1")), NetworkPolicy::Allowed);
         assert_eq!(
             NetworkPolicy::from_var(Some("yes")),
             NetworkPolicy::CacheOnly
         );
-        assert_eq!(
-            NetworkPolicy::from_var(Some("")),
-            NetworkPolicy::CacheOnly
-        );
+        assert_eq!(NetworkPolicy::from_var(Some("")), NetworkPolicy::CacheOnly);
     }
 
     #[test]

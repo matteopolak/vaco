@@ -50,7 +50,12 @@ pub(crate) struct Opts {
     pub random_fill_ratio: f64,
     #[opt(name = "random_seed", alias = "seed", help = "set the seed for filling the initial grid randomly", default = -1_i64, flags(filtering))]
     pub random_seed: i64,
-    #[opt(name = "stitch", help = "stitch boundaries", default = true, flags(filtering))]
+    #[opt(
+        name = "stitch",
+        help = "stitch boundaries",
+        default = true,
+        flags(filtering)
+    )]
     pub stitch: bool,
     #[opt(name = "mold", help = "set mold speed for dead cells", default = 0, range = 0..=255, flags(filtering))]
     pub mold: i32,
@@ -66,7 +71,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -176,7 +182,11 @@ pub(crate) fn step(grid: &[bool], w: usize, h: usize, rule: Rule, stitch: bool) 
         for x in 0..w {
             let n = neighbour_count(grid, w, h, x, y, stitch);
             let alive = grid.get(y * w + x).copied().unwrap_or(false);
-            let next = if alive { rule.survives_on(n) } else { rule.births_on(n) };
+            let next = if alive {
+                rule.survives_on(n)
+            } else {
+                rule.births_on(n)
+            };
             if let Some(slot) = out.get_mut(y * w + x) {
                 *slot = next;
             }
@@ -228,11 +238,7 @@ impl SourceFilter for Source {
             for row_idx in 0..plane.rows() {
                 if let Some(dst) = plane.row_mut(row_idx) {
                     for (x, px) in dst.chunks_exact_mut(4).enumerate() {
-                        let alive = self
-                            .grid
-                            .get(row_idx * w + x)
-                            .copied()
-                            .unwrap_or(false);
+                        let alive = self.grid.get(row_idx * w + x).copied().unwrap_or(false);
                         let rgb = if alive { self.life_rgb } else { self.death_rgb };
                         if let [r, g, b, a] = px {
                             *r = rgb[0];

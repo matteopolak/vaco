@@ -365,13 +365,11 @@ impl Suite {
             && matches!(compare, Compare::Behavioural)
             && string(compare_t, "downgrade_reason").is_none()
         {
-            return Err(
-                "a `filter`-tool case using mode `behavioural` needs a \
+            return Err("a `filter`-tool case using mode `behavioural` needs a \
                  `downgrade_reason`: filter output is pixel data with an exact-or-not \
                  answer, so settling for outcome-class-only needs the same declared \
                  justification `structured-diff` needs relative to C0"
-                    .to_owned(),
-            );
+                .to_owned());
         }
 
         Ok(Self {

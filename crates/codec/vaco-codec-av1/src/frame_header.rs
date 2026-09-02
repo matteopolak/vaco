@@ -88,17 +88,31 @@ pub struct Segmentation {
 
 impl Segmentation {
     fn disabled() -> Self {
-        Self { enabled: false, feature_enabled: [[false; SEG_LVL_MAX]; MAX_SEGMENTS], feature_data: [[0; SEG_LVL_MAX]; MAX_SEGMENTS] }
+        Self {
+            enabled: false,
+            feature_enabled: [[false; SEG_LVL_MAX]; MAX_SEGMENTS],
+            feature_data: [[0; SEG_LVL_MAX]; MAX_SEGMENTS],
+        }
     }
 
     #[must_use]
     pub fn feature_active(&self, segment_id: usize, feature: usize) -> bool {
-        self.enabled && self.feature_enabled.get(segment_id).and_then(|f| f.get(feature)).copied().unwrap_or(false)
+        self.enabled
+            && self
+                .feature_enabled
+                .get(segment_id)
+                .and_then(|f| f.get(feature))
+                .copied()
+                .unwrap_or(false)
     }
 
     #[must_use]
     pub fn feature_data(&self, segment_id: usize, feature: usize) -> i32 {
-        self.feature_data.get(segment_id).and_then(|f| f.get(feature)).copied().unwrap_or(0)
+        self.feature_data
+            .get(segment_id)
+            .and_then(|f| f.get(feature))
+            .copied()
+            .unwrap_or(0)
     }
 }
 
@@ -194,10 +208,16 @@ impl FrameHeader {
     /// `frame_type`, or `allow_intrabc` (intra block copy is not
     /// implemented). [`Error::InvalidData`] if the payload is truncated or a
     /// value is out of range.
-    pub fn parse(payload: &[u8], seq: &SequenceHeader, temporal_id: u8, spatial_id: u8) -> Result<Self> {
+    pub fn parse(
+        payload: &[u8],
+        seq: &SequenceHeader,
+        temporal_id: u8,
+        spatial_id: u8,
+    ) -> Result<Self> {
         let mut r = BitReader::new(payload);
         let result = Self::parse_from_reader(&mut r, seq, temporal_id, spatial_id);
-        r.check().map_err(|_| Error::InvalidData("frame_header_obu ran past the end of its payload"))?;
+        r.check()
+            .map_err(|_| Error::InvalidData("frame_header_obu ran past the end of its payload"))?;
         result
     }
 
@@ -214,7 +234,12 @@ impl FrameHeader {
     ///
     /// # Errors
     /// As [`FrameHeader::parse`].
-    pub fn parse_from_reader(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spatial_id: u8) -> Result<Self> {
+    pub fn parse_from_reader(
+        r: &mut BitReader<'_>,
+        seq: &SequenceHeader,
+        temporal_id: u8,
+        spatial_id: u8,
+    ) -> Result<Self> {
         parse_inner(r, seq, temporal_id, spatial_id)
     }
 
@@ -232,8 +257,16 @@ impl FrameHeader {
     }
 }
 
-#[allow(clippy::too_many_lines, reason = "uncompressed_header() is one syntax structure in the specification")]
-fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spatial_id: u8) -> Result<FrameHeader> {
+#[allow(
+    clippy::too_many_lines,
+    reason = "uncompressed_header() is one syntax structure in the specification"
+)]
+fn parse_inner(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    temporal_id: u8,
+    spatial_id: u8,
+) -> Result<FrameHeader> {
     let id_len = u32::from(seq.additional_frame_id_length) + u32::from(seq.delta_frame_id_length);
 
     let (frame_type, show_frame, error_resilient_mode);
@@ -244,24 +277,44 @@ fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spa
     } else {
         let show_existing_frame = r.get_bit() != 0;
         if show_existing_frame {
-            return Err(Error::Unsupported("vaco-codec-av1: show_existing_frame is not decoded"));
+            return Err(Error::Unsupported(
+                "vaco-codec-av1: show_existing_frame is not decoded",
+            ));
         }
         frame_type = frame_type_from_bits(r.get(2));
         show_frame = r.get_bit() != 0;
-        if show_frame && seq.decoder_model_info_present_flag && !seq.timing_info.is_some_and(|t| t.equal_picture_interval) {
-            return Err(Error::Unsupported("vaco-codec-av1: temporal_point_info() is not decoded"));
+        if show_frame
+            && seq.decoder_model_info_present_flag
+            && !seq.timing_info.is_some_and(|t| t.equal_picture_interval)
+        {
+            return Err(Error::Unsupported(
+                "vaco-codec-av1: temporal_point_info() is not decoded",
+            ));
         }
-        let _showable_frame = if show_frame { frame_type != FrameType::Key } else { r.get_bit() != 0 };
+        let _showable_frame = if show_frame {
+            frame_type != FrameType::Key
+        } else {
+            r.get_bit() != 0
+        };
         error_resilient_mode =
-            if frame_type == FrameType::Switch || (frame_type == FrameType::Key && show_frame) { true } else { r.get_bit() != 0 };
+            if frame_type == FrameType::Switch || (frame_type == FrameType::Key && show_frame) {
+                true
+            } else {
+                r.get_bit() != 0
+            };
     }
     if !frame_type.is_intra() {
-        return Err(Error::Unsupported("vaco-codec-av1: inter frames are not decoded"));
+        return Err(Error::Unsupported(
+            "vaco-codec-av1: inter frames are not decoded",
+        ));
     }
 
     let disable_cdf_update = r.get_bit() != 0;
-    let allow_screen_content_tools =
-        if seq.seq_force_screen_content_tools == SELECT_VALUE { r.get_bit() != 0 } else { seq.seq_force_screen_content_tools != 0 };
+    let allow_screen_content_tools = if seq.seq_force_screen_content_tools == SELECT_VALUE {
+        r.get_bit() != 0
+    } else {
+        seq.seq_force_screen_content_tools != 0
+    };
     // force_integer_mv: read only to consume the right bits; FrameIsIntra
     // forces the value to 1 regardless, and this crate has no inter motion
     // vectors to apply it to.
@@ -307,11 +360,12 @@ fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spa
     }
 
     let all_frames: u32 = (1u32 << NUM_REF_FRAMES) - 1;
-    let refresh_frame_flags = if frame_type == FrameType::Switch || (frame_type == FrameType::Key && show_frame) {
-        all_frames
-    } else {
-        r.get(8)
-    };
+    let refresh_frame_flags =
+        if frame_type == FrameType::Switch || (frame_type == FrameType::Key && show_frame) {
+            all_frames
+        } else {
+            r.get(8)
+        };
     if error_resilient_mode && seq.enable_order_hint && refresh_frame_flags != all_frames {
         for _ in 0..NUM_REF_FRAMES {
             let _ref_order_hint = r.get(u32::from(seq.order_hint_bits));
@@ -319,13 +373,19 @@ fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spa
     }
 
     let size = parse_frame_size(r, seq, frame_size_override_flag)?;
-    let allow_intrabc =
-        if allow_screen_content_tools && size.upscaled_width == size.coded_width { r.get_bit() != 0 } else { false };
+    let allow_intrabc = if allow_screen_content_tools && size.upscaled_width == size.coded_width {
+        r.get_bit() != 0
+    } else {
+        false
+    };
     if allow_intrabc {
-        return Err(Error::Unsupported("vaco-codec-av1: allow_intrabc (intra block copy) is not decoded"));
+        return Err(Error::Unsupported(
+            "vaco-codec-av1: allow_intrabc (intra block copy) is not decoded",
+        ));
     }
 
-    let disable_frame_end_update_cdf = seq.reduced_still_picture_header || disable_cdf_update || r.get_bit() != 0;
+    let disable_frame_end_update_cdf =
+        seq.reduced_still_picture_header || disable_cdf_update || r.get_bit() != 0;
 
     let num_planes = if seq.color_config.mono_chrome { 1 } else { 3 };
     let mi_cols = 2 * ((size.coded_width + 7) >> 3);
@@ -340,7 +400,8 @@ fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spa
     let mut lossless_array = [false; MAX_SEGMENTS];
     for (segment_id, slot) in lossless_array.iter_mut().enumerate() {
         let qindex = if segmentation.feature_active(segment_id, SEG_LVL_ALT_Q) {
-            (i32::from(quant.base_q_idx) + segmentation.feature_data(segment_id, SEG_LVL_ALT_Q)).clamp(0, 255)
+            (i32::from(quant.base_q_idx) + segmentation.feature_data(segment_id, SEG_LVL_ALT_Q))
+                .clamp(0, 255)
         } else {
             i32::from(quant.base_q_idx)
         };
@@ -361,7 +422,13 @@ fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spa
     let cdef_bits = parse_cdef_params(r, seq, coded_lossless, allow_intrabc, num_planes);
     parse_lr_params(r, seq, all_lossless, allow_intrabc, num_planes);
 
-    let tx_mode = if coded_lossless { TxMode::Only4x4 } else if r.get_bit() != 0 { TxMode::Select } else { TxMode::Largest };
+    let tx_mode = if coded_lossless {
+        TxMode::Only4x4
+    } else if r.get_bit() != 0 {
+        TxMode::Select
+    } else {
+        TxMode::Largest
+    };
     // frame_reference_mode()/skip_mode_params(): both are unconditional
     // no-op assignments when FrameIsIntra, with no bits read.
     // allow_warped_motion: FrameIsIntra forces 0, no bit read.
@@ -395,15 +462,29 @@ fn parse_inner(r: &mut BitReader<'_>, seq: &SequenceHeader, temporal_id: u8, spa
 const SUPERRES_NUM: u32 = 8;
 const SUPERRES_DENOM_MIN: u32 = 9;
 
-#[allow(clippy::integer_division, reason = "§5.9.7's own rounding-division pseudocode")]
-fn parse_frame_size(r: &mut BitReader<'_>, seq: &SequenceHeader, frame_size_override_flag: bool) -> Result<FrameSize> {
+#[allow(
+    clippy::integer_division,
+    reason = "§5.9.7's own rounding-division pseudocode"
+)]
+fn parse_frame_size(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    frame_size_override_flag: bool,
+) -> Result<FrameSize> {
     let (mut frame_width, frame_height) = if frame_size_override_flag {
-        (r.get(u32::from(seq.frame_width_bits)) + 1, r.get(u32::from(seq.frame_height_bits)) + 1)
+        (
+            r.get(u32::from(seq.frame_width_bits)) + 1,
+            r.get(u32::from(seq.frame_height_bits)) + 1,
+        )
     } else {
         (seq.max_frame_width, seq.max_frame_height)
     };
     let use_superres = seq.enable_superres && r.get_bit() != 0;
-    let superres_denom = if use_superres { r.get(3) + SUPERRES_DENOM_MIN } else { SUPERRES_NUM };
+    let superres_denom = if use_superres {
+        r.get(3) + SUPERRES_DENOM_MIN
+    } else {
+        SUPERRES_NUM
+    };
     let upscaled_width = frame_width;
     if use_superres {
         frame_width = (upscaled_width * SUPERRES_NUM + superres_denom / 2) / superres_denom.max(1);
@@ -412,9 +493,19 @@ fn parse_frame_size(r: &mut BitReader<'_>, seq: &SequenceHeader, frame_size_over
         return Err(Error::InvalidData("frame_size() produced a zero dimension"));
     }
     let render_and_frame_size_different = r.get_bit() != 0;
-    let (render_width, render_height) =
-        if render_and_frame_size_different { (r.get(16) + 1, r.get(16) + 1) } else { (upscaled_width, frame_height) };
-    Ok(FrameSize { coded_width: frame_width, coded_height: frame_height, upscaled_width, render_width, render_height, use_superres })
+    let (render_width, render_height) = if render_and_frame_size_different {
+        (r.get(16) + 1, r.get(16) + 1)
+    } else {
+        (upscaled_width, frame_height)
+    };
+    Ok(FrameSize {
+        coded_width: frame_width,
+        coded_height: frame_height,
+        upscaled_width,
+        render_width,
+        render_height,
+        use_superres,
+    })
 }
 
 fn tile_log2(blk_size: u32, target: u32) -> u32 {
@@ -428,7 +519,12 @@ fn tile_log2(blk_size: u32, target: u32) -> u32 {
     k
 }
 
-fn parse_tile_info(r: &mut BitReader<'_>, seq: &SequenceHeader, mi_cols: u32, mi_rows: u32) -> Av1TileInfo {
+fn parse_tile_info(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    mi_cols: u32,
+    mi_rows: u32,
+) -> Av1TileInfo {
     let (sb_cols, sb_rows, sb_shift) = if seq.use_128x128_superblock {
         ((mi_cols + 31) >> 5, (mi_rows + 31) >> 5, 5u32)
     } else {
@@ -440,7 +536,10 @@ fn parse_tile_info(r: &mut BitReader<'_>, seq: &SequenceHeader, mi_cols: u32, mi
     let min_log2_tile_cols = tile_log2(max_tile_width_sb.max(1), sb_cols);
     let max_log2_tile_cols = tile_log2(1, sb_cols.min(MAX_TILE_COLS));
     let max_log2_tile_rows = tile_log2(1, sb_rows.min(MAX_TILE_ROWS));
-    let min_log2_tiles = min_log2_tile_cols.max(tile_log2(max_tile_area_sb.max(1), sb_rows.saturating_mul(sb_cols)));
+    let min_log2_tiles = min_log2_tile_cols.max(tile_log2(
+        max_tile_area_sb.max(1),
+        sb_rows.saturating_mul(sb_cols),
+    ));
 
     let uniform_tile_spacing_flag = r.get_bit() != 0;
     let (mut mi_col_starts, mut mi_row_starts, cols, rows, cols_log2, rows_log2);
@@ -503,7 +602,10 @@ fn parse_tile_info(r: &mut BitReader<'_>, seq: &SequenceHeader, mi_cols: u32, mi
         } else {
             max_tile_area_sb = sb_rows.saturating_mul(sb_cols);
         }
-        #[allow(clippy::integer_division, reason = "\u{a7}5.9.15's own maxTileHeightSb = Max(maxTileAreaSb / widestTileSb, 1)")]
+        #[allow(
+            clippy::integer_division,
+            reason = "\u{a7}5.9.15's own maxTileHeightSb = Max(maxTileAreaSb / widestTileSb, 1)"
+        )]
         let max_tile_height_sb = (max_tile_area_sb / widest_tile_sb.max(1)).max(1);
         start_sb = 0;
         mi_row_starts = Vec::new();
@@ -526,21 +628,38 @@ fn parse_tile_info(r: &mut BitReader<'_>, seq: &SequenceHeader, mi_cols: u32, mi
         (0, 1)
     };
 
-    Av1TileInfo { cols, rows, cols_log2, rows_log2, mi_col_starts, mi_row_starts, context_update_tile_id, tile_size_bytes }
+    Av1TileInfo {
+        cols,
+        rows,
+        cols_log2,
+        rows_log2,
+        mi_col_starts,
+        mi_row_starts,
+        context_update_tile_id,
+        tile_size_bytes,
+    }
 }
 
 fn read_delta_q(r: &mut BitReader<'_>) -> i32 {
     if r.get_bit() != 0 { su(r, 7) } else { 0 }
 }
 
-fn parse_quantization_params(r: &mut BitReader<'_>, seq: &SequenceHeader, num_planes: u32) -> Result<QuantizationParams> {
+fn parse_quantization_params(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    num_planes: u32,
+) -> Result<QuantizationParams> {
     let base_q_idx = u8::try_from(r.get(8)).unwrap_or(0);
     let delta_q_y_dc = read_delta_q(r);
     let (delta_q_u_dc, delta_q_u_ac, delta_q_v_dc, delta_q_v_ac) = if num_planes > 1 {
         let diff_uv_delta = seq.color_config.separate_uv_delta_q && r.get_bit() != 0;
         let u_dc = read_delta_q(r);
         let u_ac = read_delta_q(r);
-        if diff_uv_delta { (u_dc, u_ac, read_delta_q(r), read_delta_q(r)) } else { (u_dc, u_ac, u_dc, u_ac) }
+        if diff_uv_delta {
+            (u_dc, u_ac, read_delta_q(r), read_delta_q(r))
+        } else {
+            (u_dc, u_ac, u_dc, u_ac)
+        }
     } else {
         (0, 0, 0, 0)
     };
@@ -552,9 +671,19 @@ fn parse_quantization_params(r: &mut BitReader<'_>, seq: &SequenceHeader, num_pl
             let _qm_v = r.get(4);
         }
         // else: qm_v = qm_u, no bits.
-        return Err(Error::Unsupported("vaco-codec-av1: using_qmatrix is not decoded"));
+        return Err(Error::Unsupported(
+            "vaco-codec-av1: using_qmatrix is not decoded",
+        ));
     }
-    Ok(QuantizationParams { base_q_idx, delta_q_y_dc, delta_q_u_dc, delta_q_u_ac, delta_q_v_dc, delta_q_v_ac, using_qmatrix })
+    Ok(QuantizationParams {
+        base_q_idx,
+        delta_q_y_dc,
+        delta_q_u_dc,
+        delta_q_u_ac,
+        delta_q_v_dc,
+        delta_q_v_ac,
+        using_qmatrix,
+    })
 }
 
 fn parse_segmentation_params(r: &mut BitReader<'_>, primary_ref_frame: u32) -> Segmentation {
@@ -586,7 +715,9 @@ fn parse_segmentation_params(r: &mut BitReader<'_>, primary_ref_frame: u32) -> S
                         clipped = if SEG_FEATURE_SIGNED.get(j).copied().unwrap_or(false) {
                             su(r, bits + 1).clamp(-limit, limit)
                         } else {
-                            i32::try_from(r.get(bits)).unwrap_or(i32::MAX).clamp(0, limit)
+                            i32::try_from(r.get(bits))
+                                .unwrap_or(i32::MAX)
+                                .clamp(0, limit)
                         };
                     }
                 }
@@ -603,13 +734,21 @@ fn parse_segmentation_params(r: &mut BitReader<'_>, primary_ref_frame: u32) -> S
             }
         }
     }
-    Segmentation { enabled: true, feature_enabled, feature_data }
+    Segmentation {
+        enabled: true,
+        feature_enabled,
+        feature_data,
+    }
 }
 
 fn parse_delta_params(r: &mut BitReader<'_>, base_q_idx: u8, allow_intrabc: bool) -> DeltaParams {
     let delta_q_present = base_q_idx > 0 && r.get_bit() != 0;
     let delta_q_res = if delta_q_present { r.get(2) } else { 0 };
-    let mut delta = DeltaParams { delta_q_present, delta_q_res, ..DeltaParams::default() };
+    let mut delta = DeltaParams {
+        delta_q_present,
+        delta_q_res,
+        ..DeltaParams::default()
+    };
     if delta_q_present {
         delta.delta_lf_present = !allow_intrabc && r.get_bit() != 0;
         if delta.delta_lf_present {
@@ -620,7 +759,13 @@ fn parse_delta_params(r: &mut BitReader<'_>, base_q_idx: u8, allow_intrabc: bool
     delta
 }
 
-fn parse_loop_filter_params(r: &mut BitReader<'_>, seq: &SequenceHeader, coded_lossless: bool, allow_intrabc: bool, num_planes: u32) {
+fn parse_loop_filter_params(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    coded_lossless: bool,
+    allow_intrabc: bool,
+    num_planes: u32,
+) {
     if coded_lossless || allow_intrabc {
         return;
     }
@@ -650,7 +795,13 @@ fn parse_loop_filter_params(r: &mut BitReader<'_>, seq: &SequenceHeader, coded_l
     let _ = seq;
 }
 
-fn parse_cdef_params(r: &mut BitReader<'_>, seq: &SequenceHeader, coded_lossless: bool, allow_intrabc: bool, num_planes: u32) -> u32 {
+fn parse_cdef_params(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    coded_lossless: bool,
+    allow_intrabc: bool,
+    num_planes: u32,
+) -> u32 {
     if coded_lossless || allow_intrabc || !seq.enable_cdef {
         return 0;
     }
@@ -669,7 +820,13 @@ fn parse_cdef_params(r: &mut BitReader<'_>, seq: &SequenceHeader, coded_lossless
     cdef_bits
 }
 
-fn parse_lr_params(r: &mut BitReader<'_>, seq: &SequenceHeader, all_lossless: bool, allow_intrabc: bool, num_planes: u32) {
+fn parse_lr_params(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    all_lossless: bool,
+    allow_intrabc: bool,
+    num_planes: u32,
+) {
     if all_lossless || allow_intrabc || !seq.enable_restoration {
         return;
     }
@@ -700,7 +857,13 @@ fn parse_lr_params(r: &mut BitReader<'_>, seq: &SequenceHeader, all_lossless: bo
     }
 }
 
-fn parse_film_grain_params(r: &mut BitReader<'_>, seq: &SequenceHeader, frame_type: FrameType, show_frame: bool, showable_frame: bool) {
+fn parse_film_grain_params(
+    r: &mut BitReader<'_>,
+    seq: &SequenceHeader,
+    frame_type: FrameType,
+    show_frame: bool,
+    showable_frame: bool,
+) {
     if !seq.film_grain_params_present || (!show_frame && !showable_frame) {
         return;
     }
@@ -709,7 +872,11 @@ fn parse_film_grain_params(r: &mut BitReader<'_>, seq: &SequenceHeader, frame_ty
         return;
     }
     let _grain_seed = r.get(16);
-    let update_grain = if frame_type == FrameType::Inter { r.get_bit() != 0 } else { true };
+    let update_grain = if frame_type == FrameType::Inter {
+        r.get_bit() != 0
+    } else {
+        true
+    };
     if !update_grain {
         let _film_grain_params_ref_idx = r.get(3);
         return;
@@ -719,7 +886,11 @@ fn parse_film_grain_params(r: &mut BitReader<'_>, seq: &SequenceHeader, frame_ty
         let _value = r.get(8);
         let _scaling = r.get(8);
     }
-    let chroma_scaling_from_luma = if seq.color_config.mono_chrome { false } else { r.get_bit() != 0 };
+    let chroma_scaling_from_luma = if seq.color_config.mono_chrome {
+        false
+    } else {
+        r.get_bit() != 0
+    };
     let (num_cb_points, num_cr_points);
     if seq.color_config.mono_chrome
         || chroma_scaling_from_luma
@@ -777,13 +948,20 @@ fn parse_film_grain_params(r: &mut BitReader<'_>, seq: &SequenceHeader, frame_ty
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, reason = "test code over fixed fixtures")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test code over fixed fixtures"
+)]
 mod tests {
     use super::*;
     use vaco_limits::{Budget, Limits};
 
     fn seq_header() -> SequenceHeader {
-        let payload = [0x00, 0x00, 0x00, 0x0c, 0xc5, 0x03, 0x65, 0x00, 0xbe, 0x00, 0x10];
+        let payload = [
+            0x00, 0x00, 0x00, 0x0c, 0xc5, 0x03, 0x65, 0x00, 0xbe, 0x00, 0x10,
+        ];
         let mut b = Budget::new(Limits::strict());
         SequenceHeader::parse(&payload, &mut b).expect("a real sequence header parses")
     }
@@ -801,7 +979,9 @@ mod tests {
     fn random_bytes_never_panic() {
         let seq = seq_header();
         for seed in 0u8..40 {
-            let data: Vec<u8> = (0..24).map(|i: u8| i.wrapping_mul(seed).wrapping_add(7)).collect();
+            let data: Vec<u8> = (0..24)
+                .map(|i: u8| i.wrapping_mul(seed).wrapping_add(7))
+                .collect();
             let _ = FrameHeader::parse(&data, &seq, 0, 0);
         }
     }

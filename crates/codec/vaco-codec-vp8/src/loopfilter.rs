@@ -235,7 +235,9 @@ pub fn apply_frame(
 ) {
     for row in 0..mb_rows {
         for col in 0..mb_cols {
-            let Some(mb) = mb_info.get(row * mb_cols + col).copied() else { continue };
+            let Some(mb) = mb_info.get(row * mb_cols + col).copied() else {
+                continue;
+            };
             if mb.filter_level == 0 {
                 continue;
             }
@@ -244,7 +246,17 @@ pub fn apply_frame(
             let hev = hev_threshold(mb.filter_level, key_frame);
 
             if col > 0 {
-                filter_vertical_edge(y, ix(col * 16), ix(row * 16), 16, hev, il, mbe, true, filter_simple);
+                filter_vertical_edge(
+                    y,
+                    ix(col * 16),
+                    ix(row * 16),
+                    16,
+                    hev,
+                    il,
+                    mbe,
+                    true,
+                    filter_simple,
+                );
                 if !filter_simple {
                     filter_vertical_edge(u, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
                     filter_vertical_edge(v, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
@@ -252,27 +264,117 @@ pub fn apply_frame(
             }
             if !mb.skip_inner {
                 for k in [4, 8, 12] {
-                    filter_vertical_edge(y, ix(col * 16 + k), ix(row * 16), 16, hev, il, sbe, false, filter_simple);
+                    filter_vertical_edge(
+                        y,
+                        ix(col * 16 + k),
+                        ix(row * 16),
+                        16,
+                        hev,
+                        il,
+                        sbe,
+                        false,
+                        filter_simple,
+                    );
                 }
                 if !filter_simple {
-                    filter_vertical_edge(u, ix(col * 8 + 4), ix(row * 8), 8, hev, il, sbe, false, false);
-                    filter_vertical_edge(v, ix(col * 8 + 4), ix(row * 8), 8, hev, il, sbe, false, false);
+                    filter_vertical_edge(
+                        u,
+                        ix(col * 8 + 4),
+                        ix(row * 8),
+                        8,
+                        hev,
+                        il,
+                        sbe,
+                        false,
+                        false,
+                    );
+                    filter_vertical_edge(
+                        v,
+                        ix(col * 8 + 4),
+                        ix(row * 8),
+                        8,
+                        hev,
+                        il,
+                        sbe,
+                        false,
+                        false,
+                    );
                 }
             }
             if row > 0 {
-                filter_horizontal_edge(y, ix(col * 16), ix(row * 16), 16, hev, il, mbe, true, filter_simple);
+                filter_horizontal_edge(
+                    y,
+                    ix(col * 16),
+                    ix(row * 16),
+                    16,
+                    hev,
+                    il,
+                    mbe,
+                    true,
+                    filter_simple,
+                );
                 if !filter_simple {
-                    filter_horizontal_edge(u, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
-                    filter_horizontal_edge(v, ix(col * 8), ix(row * 8), 8, hev, il, mbe, true, false);
+                    filter_horizontal_edge(
+                        u,
+                        ix(col * 8),
+                        ix(row * 8),
+                        8,
+                        hev,
+                        il,
+                        mbe,
+                        true,
+                        false,
+                    );
+                    filter_horizontal_edge(
+                        v,
+                        ix(col * 8),
+                        ix(row * 8),
+                        8,
+                        hev,
+                        il,
+                        mbe,
+                        true,
+                        false,
+                    );
                 }
             }
             if !mb.skip_inner {
                 for k in [4, 8, 12] {
-                    filter_horizontal_edge(y, ix(col * 16), ix(row * 16 + k), 16, hev, il, sbe, false, filter_simple);
+                    filter_horizontal_edge(
+                        y,
+                        ix(col * 16),
+                        ix(row * 16 + k),
+                        16,
+                        hev,
+                        il,
+                        sbe,
+                        false,
+                        filter_simple,
+                    );
                 }
                 if !filter_simple {
-                    filter_horizontal_edge(u, ix(col * 8), ix(row * 8 + 4), 8, hev, il, sbe, false, false);
-                    filter_horizontal_edge(v, ix(col * 8), ix(row * 8 + 4), 8, hev, il, sbe, false, false);
+                    filter_horizontal_edge(
+                        u,
+                        ix(col * 8),
+                        ix(row * 8 + 4),
+                        8,
+                        hev,
+                        il,
+                        sbe,
+                        false,
+                        false,
+                    );
+                    filter_horizontal_edge(
+                        v,
+                        ix(col * 8),
+                        ix(row * 8 + 4),
+                        8,
+                        hev,
+                        il,
+                        sbe,
+                        false,
+                        false,
+                    );
                 }
             }
         }
@@ -280,7 +382,17 @@ pub fn apply_frame(
 }
 
 #[allow(clippy::too_many_arguments)]
-fn filter_vertical_edge(plane: &mut Plane, x: i32, y: i32, len: i32, hev: i32, il: i32, limit: i32, mb_edge: bool, simple: bool) {
+fn filter_vertical_edge(
+    plane: &mut Plane,
+    x: i32,
+    y: i32,
+    len: i32,
+    hev: i32,
+    il: i32,
+    limit: i32,
+    mb_edge: bool,
+    simple: bool,
+) {
     for i in 0..len {
         let row = y + i;
         let get = |o: i32| plane.get(x + o, row);
@@ -292,7 +404,11 @@ fn filter_vertical_edge(plane: &mut Plane, x: i32, y: i32, len: i32, hev: i32, i
         }
         let p = [get(-1), get(-2), get(-3), get(-4)];
         let q = [get(0), get(1), get(2), get(3)];
-        let (np, nq) = if mb_edge { mb_filter(hev, il, limit, p, q) } else { subblock_filter(hev, il, limit, p, q) };
+        let (np, nq) = if mb_edge {
+            mb_filter(hev, il, limit, p, q)
+        } else {
+            subblock_filter(hev, il, limit, p, q)
+        };
         for k in 0..4 {
             if let Some(&v) = np.get(k) {
                 plane.set(ux(x - 1 - ix(k)), ux(row), v);
@@ -305,7 +421,17 @@ fn filter_vertical_edge(plane: &mut Plane, x: i32, y: i32, len: i32, hev: i32, i
 }
 
 #[allow(clippy::too_many_arguments)]
-fn filter_horizontal_edge(plane: &mut Plane, x: i32, y: i32, len: i32, hev: i32, il: i32, limit: i32, mb_edge: bool, simple: bool) {
+fn filter_horizontal_edge(
+    plane: &mut Plane,
+    x: i32,
+    y: i32,
+    len: i32,
+    hev: i32,
+    il: i32,
+    limit: i32,
+    mb_edge: bool,
+    simple: bool,
+) {
     for i in 0..len {
         let col = x + i;
         let get = |o: i32| plane.get(col, y + o);
@@ -317,7 +443,11 @@ fn filter_horizontal_edge(plane: &mut Plane, x: i32, y: i32, len: i32, hev: i32,
         }
         let p = [get(-1), get(-2), get(-3), get(-4)];
         let q = [get(0), get(1), get(2), get(3)];
-        let (np, nq) = if mb_edge { mb_filter(hev, il, limit, p, q) } else { subblock_filter(hev, il, limit, p, q) };
+        let (np, nq) = if mb_edge {
+            mb_filter(hev, il, limit, p, q)
+        } else {
+            subblock_filter(hev, il, limit, p, q)
+        };
         for k in 0..4 {
             if let Some(&v) = np.get(k) {
                 plane.set(ux(col), ux(y - 1 - ix(k)), v);

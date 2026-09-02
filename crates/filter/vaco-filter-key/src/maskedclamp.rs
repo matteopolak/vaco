@@ -35,11 +35,23 @@ use crate::common;
 use crate::sample;
 
 const PADS: &[Pad] = &[
-    Pad { name: "base", media_type: MediaType::Video },
-    Pad { name: "dark", media_type: MediaType::Video },
-    Pad { name: "bright", media_type: MediaType::Video },
+    Pad {
+        name: "base",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "dark",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "bright",
+        media_type: MediaType::Video,
+    },
 ];
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "maskedclamp",
@@ -50,7 +62,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "maskedclamp", help = "Clamp first stream with second stream and third stream")]
+#[options(
+    name = "maskedclamp",
+    help = "Clamp first stream with second stream and third stream"
+)]
 pub(crate) struct Opts {
     #[opt(name = "undershoot", help = "set undershoot", default = 0, range = 0..=65535, flags(video, filtering))]
     pub undershoot: i32,
@@ -72,18 +87,30 @@ impl PairedFilter for Filter {
         3
     }
 
-    fn filter_frames(&mut self, ctx: &mut FilterContext<'_>, inputs: SmallVec<[Frame; 4]>) -> Result<FrameOut> {
+    fn filter_frames(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut> {
         let mut it = inputs.into_iter();
         let (Some(base), Some(dark), Some(bright)) = (it.next(), it.next(), it.next()) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = base.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = base.data
+        else {
             return Ok(FrameOut::One(base));
         };
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         let big_endian = format.is_big_endian();
         for ch in 0..format.component_count() {
-            let Some(comp) = sample::component(format, ch) else { continue };
+            let Some(comp) = sample::component(format, ch) else {
+                continue;
+            };
             let (Some(bp), Some(dkp), Some(brp), Some(mut dp)) = (
                 base.plane(comp.plane as usize),
                 dark.plane(comp.plane as usize),
@@ -92,11 +119,16 @@ impl PairedFilter for Filter {
             ) else {
                 continue;
             };
-            let w = dp.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+            let w = dp
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
             let n = dp.rows().min(bp.rows()).min(dkp.rows()).min(brp.rows());
             if !sample::plane_selected(self.planes, ch) {
                 for y in 0..n {
-                    let (Some(sr), Some(dr)) = (bp.row(y), dp.row_mut(y)) else { continue };
+                    let (Some(sr), Some(dr)) = (bp.row(y), dp.row_mut(y)) else {
+                        continue;
+                    };
                     let len = sr.len().min(dr.len());
                     if let (Some(s), Some(d)) = (sr.get(..len), dr.get_mut(..len)) {
                         d.copy_from_slice(s);

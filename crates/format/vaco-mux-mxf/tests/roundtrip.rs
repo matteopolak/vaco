@@ -75,7 +75,11 @@ fn packet(stream_index: u32, pts: i64, bytes: &[u8], key: bool) -> Packet {
 #[test]
 fn a_video_only_file_round_trips_through_the_sibling_demuxer() {
     let sink = SharedDynBuf::with_limits(Limits::permissive());
-    let mut mux = MxfMuxer::new(Box::new(sink.clone()), &vaco_format_core::FormatOptions::default()).unwrap();
+    let mut mux = MxfMuxer::new(
+        Box::new(sink.clone()),
+        &vaco_format_core::FormatOptions::default(),
+    )
+    .unwrap();
     mux.add_stream(&video_params(720, 576)).unwrap();
     mux.init().unwrap();
     mux.write_header().unwrap();
@@ -103,21 +107,25 @@ fn a_video_only_file_round_trips_through_the_sibling_demuxer() {
         let pkt = demux.read_packet().unwrap();
         assert_eq!(pkt.payload(), *frame);
     }
-    assert!(matches!(
-        demux.read_packet(),
-        Err(vaco_core::Error::Eof)
-    ));
+    assert!(matches!(demux.read_packet(), Err(vaco_core::Error::Eof)));
 
     // Duration: the footer's restated graph states 3 edit units at 25/1 —
     // this is the header-metadata `Duration` this crate's own D14.1
     // boundary chose to defer to the footer (see `mux.rs`'s module docs).
-    assert_eq!(demux.duration().map(vaco_core::Duration::as_micros), Some(120_000));
+    assert_eq!(
+        demux.duration().map(vaco_core::Duration::as_micros),
+        Some(120_000)
+    );
 }
 
 #[test]
 fn a_video_and_audio_file_reports_both_streams_via_the_multiple_descriptor_expansion() {
     let sink = SharedDynBuf::with_limits(Limits::permissive());
-    let mut mux = MxfMuxer::new(Box::new(sink.clone()), &vaco_format_core::FormatOptions::default()).unwrap();
+    let mut mux = MxfMuxer::new(
+        Box::new(sink.clone()),
+        &vaco_format_core::FormatOptions::default(),
+    )
+    .unwrap();
     mux.add_stream(&video_params(720, 576)).unwrap();
     mux.add_stream(&audio_params(48_000, 2)).unwrap();
     mux.init().unwrap();
@@ -200,7 +208,6 @@ fn a_non_seekable_sink_still_produces_a_sequentially_readable_file() {
     mux.write_trailer().unwrap();
 }
 
-
 #[test]
 fn a_real_ffprobe_reports_the_correct_stream_shape_for_a_video_only_file() {
     // The strongest available claim (see this crate's own docs and the
@@ -210,14 +217,21 @@ fn a_real_ffprobe_reports_the_correct_stream_shape_for_a_video_only_file() {
     // Skips gracefully if `ffprobe` is not on PATH, the same pattern
     // `vaco-format-swf`'s own reference-file test uses.
     let sink = SharedDynBuf::with_limits(Limits::permissive());
-    let mut mux = MxfMuxer::new(Box::new(sink.clone()), &vaco_format_core::FormatOptions::default())
-        .unwrap();
+    let mut mux = MxfMuxer::new(
+        Box::new(sink.clone()),
+        &vaco_format_core::FormatOptions::default(),
+    )
+    .unwrap();
     mux.add_stream(&video_params(720, 576)).unwrap();
     mux.init().unwrap();
     mux.write_header().unwrap();
-    for (i, frame) in [&[0xAAu8; 4096][..], &[0xBBu8; 1024][..], &[0xCCu8; 2048][..]]
-        .iter()
-        .enumerate()
+    for (i, frame) in [
+        &[0xAAu8; 4096][..],
+        &[0xBBu8; 1024][..],
+        &[0xCCu8; 2048][..],
+    ]
+    .iter()
+    .enumerate()
     {
         mux.write_packet(&packet(0, i as i64, frame, i == 0))
             .unwrap();
@@ -253,7 +267,10 @@ fn a_real_ffprobe_reports_the_correct_stream_shape_for_a_video_only_file() {
         "ffprobe failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(text.contains("codec_type=video"), "missing video in: {text}");
+    assert!(
+        text.contains("codec_type=video"),
+        "missing video in: {text}"
+    );
     assert!(
         text.contains("codec_name=mpeg2video"),
         "missing mpeg2video in: {text}"
@@ -283,8 +300,11 @@ fn a_real_ffprobe_resolves_both_tracks_of_a_multiple_descriptor_file() {
     // `pcm_s16le` for the audio stream even once its dimensions/rate
     // resolved.
     let sink = SharedDynBuf::with_limits(Limits::permissive());
-    let mut mux = MxfMuxer::new(Box::new(sink.clone()), &vaco_format_core::FormatOptions::default())
-        .unwrap();
+    let mut mux = MxfMuxer::new(
+        Box::new(sink.clone()),
+        &vaco_format_core::FormatOptions::default(),
+    )
+    .unwrap();
     mux.add_stream(&video_params(720, 576)).unwrap();
     mux.add_stream(&audio_params(48_000, 2)).unwrap();
     mux.init().unwrap();
@@ -299,7 +319,10 @@ fn a_real_ffprobe_resolves_both_tracks_of_a_multiple_descriptor_file() {
 
     let bytes = sink.snapshot();
     let dir = std::env::temp_dir();
-    let path = dir.join(format!("vaco-mxf-mux-test-multi-{}.mxf", std::process::id()));
+    let path = dir.join(format!(
+        "vaco-mxf-mux-test-multi-{}.mxf",
+        std::process::id()
+    ));
     std::fs::write(&path, &bytes).expect("write temp file");
 
     let Ok(out) = std::process::Command::new("ffprobe")
@@ -326,19 +349,28 @@ fn a_real_ffprobe_resolves_both_tracks_of_a_multiple_descriptor_file() {
         "ffprobe failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(text.contains("codec_type=video"), "missing video in: {text}");
+    assert!(
+        text.contains("codec_type=video"),
+        "missing video in: {text}"
+    );
     assert!(
         text.contains("codec_name=mpeg2video"),
         "missing mpeg2video in: {text}"
     );
     assert!(text.contains("width=720"), "missing width in: {text}");
     assert!(text.contains("height=576"), "missing height in: {text}");
-    assert!(text.contains("codec_type=audio"), "missing audio in: {text}");
+    assert!(
+        text.contains("codec_type=audio"),
+        "missing audio in: {text}"
+    );
     assert!(
         text.contains("codec_name=pcm_s16le"),
         "missing pcm_s16le in: {text}"
     );
-    assert!(text.contains("sample_rate=48000"), "missing sample_rate in: {text}");
+    assert!(
+        text.contains("sample_rate=48000"),
+        "missing sample_rate in: {text}"
+    );
     assert!(text.contains("channels=2"), "missing channels in: {text}");
 }
 
@@ -356,7 +388,8 @@ fn a_d10_file_round_trips_through_the_sibling_demuxer() {
 
     let sink = SharedDynBuf::with_limits(Limits::permissive());
     let mut mux = (MUXER_D10.open)(Box::new(sink.clone())).unwrap();
-    mux.add_stream(&video_params_d10(720, 576, 30_000_000)).unwrap();
+    mux.add_stream(&video_params_d10(720, 576, 30_000_000))
+        .unwrap();
     mux.init().unwrap();
     mux.write_header().unwrap();
 
@@ -396,7 +429,8 @@ fn a_real_ffprobe_reports_the_correct_stream_shape_for_a_d10_file() {
 
     let sink = SharedDynBuf::with_limits(Limits::permissive());
     let mut mux = (MUXER_D10.open)(Box::new(sink.clone())).unwrap();
-    mux.add_stream(&video_params_d10(720, 576, 30_000_000)).unwrap();
+    mux.add_stream(&video_params_d10(720, 576, 30_000_000))
+        .unwrap();
     mux.init().unwrap();
     mux.write_header().unwrap();
     for i in 0..2 {
@@ -434,7 +468,10 @@ fn a_real_ffprobe_reports_the_correct_stream_shape_for_a_d10_file() {
         "ffprobe failed: {}",
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(text.contains("codec_type=video"), "missing video in: {text}");
+    assert!(
+        text.contains("codec_type=video"),
+        "missing video in: {text}"
+    );
     assert!(
         text.contains("codec_name=mpeg2video"),
         "missing mpeg2video in: {text}"
@@ -496,7 +533,11 @@ fn an_op_atom_file_round_trips_through_the_sibling_demuxer() {
     assert_eq!((v.width, v.height), (720, 576));
 
     let pkt = demux.read_packet().unwrap();
-    assert_eq!(pkt.payload().len(), total_len, "clip-wrapped essence read back as one packet");
+    assert_eq!(
+        pkt.payload().len(),
+        total_len,
+        "clip-wrapped essence read back as one packet"
+    );
     assert!(matches!(demux.read_packet(), Err(vaco_core::Error::Eof)));
 }
 
@@ -530,23 +571,32 @@ fn the_random_index_pack_names_every_partition_with_its_own_body_sid() {
     // shape applies: header (BodySID = 0, no essence), body (BodySID = 1),
     // footer (BodySID = 0) -- three entries, in that order.
     let sink = SharedDynBuf::with_limits(Limits::permissive());
-    let mut mux = MxfMuxer::new(Box::new(sink.clone()), &vaco_format_core::FormatOptions::default()).unwrap();
+    let mut mux = MxfMuxer::new(
+        Box::new(sink.clone()),
+        &vaco_format_core::FormatOptions::default(),
+    )
+    .unwrap();
     mux.add_stream(&video_params(720, 576)).unwrap();
     mux.init().unwrap();
     mux.write_header().unwrap();
-    mux.write_packet(&packet(0, 0, &[0xAAu8; 4096], true)).unwrap();
+    mux.write_packet(&packet(0, 0, &[0xAAu8; 4096], true))
+        .unwrap();
     mux.write_trailer().unwrap();
 
     let bytes = sink.snapshot();
     let file_len = bytes.len() as u64;
-    let mut io = vaco_io::IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
+    let mut io =
+        vaco_io::IoContext::new(Box::new(MemorySource::new(bytes)), &IoOptions::default()).unwrap();
     let mut budget = Budget::new(Limits::permissive());
     let rip = vaco_demux_mxf::partition::find_rip(&mut io, &mut budget, file_len)
         .unwrap()
         .expect("a seekable file's trailer names a real Random Index Pack");
 
     assert_eq!(rip.entries.len(), 3, "header, body, footer -- one each");
-    assert_eq!((rip.entries[0].body_sid, rip.entries[0].byte_offset), (0, 0));
+    assert_eq!(
+        (rip.entries[0].body_sid, rip.entries[0].byte_offset),
+        (0, 0)
+    );
     assert_eq!(rip.entries[1].body_sid, 1);
     assert_eq!(rip.entries[2].body_sid, 0);
     // Body and footer offsets are strictly increasing (each partition

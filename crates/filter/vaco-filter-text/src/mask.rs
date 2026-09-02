@@ -18,10 +18,10 @@
 
 use vaco_color::ColorInfo;
 use vaco_core::{Error, Result};
+use vaco_filter_draw::Rgba;
 use vaco_filter_draw::rect::Rect;
 use vaco_filter_draw::sample;
 use vaco_filter_draw::solid::Solid;
-use vaco_filter_draw::Rgba;
 use vaco_frame::{Frame, FrameData};
 use vaco_limits::Budget;
 use vaco_pixfmt::PixFmtFlags;
@@ -45,11 +45,22 @@ impl AlphaMask {
     ///
     /// # Errors
     /// [`vaco_core::Error::LimitExceeded`] if `w * h` exceeds the budget.
-    #[allow(clippy::many_single_char_names, reason = "x/y/w/h is this crate's and vaco-filter-draw::rect's established rectangle vocabulary")]
+    #[allow(
+        clippy::many_single_char_names,
+        reason = "x/y/w/h is this crate's and vaco-filter-draw::rect's established rectangle vocabulary"
+    )]
     pub fn blank(budget: &mut Budget, x: i32, y: i32, w: u32, h: u32) -> Result<Self> {
-        let n = usize::try_from(w).unwrap_or(0).saturating_mul(usize::try_from(h).unwrap_or(0));
+        let n = usize::try_from(w)
+            .unwrap_or(0)
+            .saturating_mul(usize::try_from(h).unwrap_or(0));
         let coverage = budget.alloc::<u8>(n)?;
-        Ok(Self { x, y, w, h, coverage })
+        Ok(Self {
+            x,
+            y,
+            w,
+            h,
+            coverage,
+        })
     }
 
     #[must_use]
@@ -64,7 +75,10 @@ impl AlphaMask {
         if dx >= self.w as usize || dy >= self.h as usize {
             return 0;
         }
-        self.coverage.get(dy * self.w as usize + dx).copied().unwrap_or(0)
+        self.coverage
+            .get(dy * self.w as usize + dx)
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Blit `src` onto this mask at `(dst_x, dst_y)`, taking the brighter of
@@ -146,7 +160,13 @@ impl AlphaMask {
         let new_w = self.w.saturating_add(2 * radius);
         let new_h = self.h.saturating_add(2 * radius);
         let r = i32::try_from(radius).unwrap_or(i32::MAX);
-        let mut out = Self::blank(budget, self.x.saturating_sub(r), self.y.saturating_sub(r), new_w, new_h)?;
+        let mut out = Self::blank(
+            budget,
+            self.x.saturating_sub(r),
+            self.y.saturating_sub(r),
+            new_w,
+            new_h,
+        )?;
         let (new_wi, new_hi, self_wi, self_hi) = (
             i32::try_from(new_w).unwrap_or(0),
             i32::try_from(new_h).unwrap_or(0),
@@ -167,7 +187,10 @@ impl AlphaMask {
                         if sx < 0 || sy < 0 || sx >= self_wi || sy >= self_hi {
                             continue;
                         }
-                        let Some(&v) = self.coverage.get(sy as usize * self.w as usize + sx as usize) else {
+                        let Some(&v) = self
+                            .coverage
+                            .get(sy as usize * self.w as usize + sx as usize)
+                        else {
                             continue;
                         };
                         if v > best {
@@ -178,7 +201,10 @@ impl AlphaMask {
                         }
                     }
                 }
-                if let Some(slot) = out.coverage.get_mut(oy as usize * new_w as usize + ox as usize) {
+                if let Some(slot) = out
+                    .coverage
+                    .get_mut(oy as usize * new_w as usize + ox as usize)
+                {
                     *slot = best;
                 }
             }
@@ -191,7 +217,13 @@ impl AlphaMask {
     /// rasterised mask instead of rasterising twice.
     #[must_use]
     pub fn translated(&self, dx: i32, dy: i32) -> Self {
-        Self { x: self.x + dx, y: self.y + dy, w: self.w, h: self.h, coverage: self.coverage.clone() }
+        Self {
+            x: self.x + dx,
+            y: self.y + dy,
+            w: self.w,
+            h: self.h,
+            coverage: self.coverage.clone(),
+        }
     }
 }
 
@@ -257,9 +289,22 @@ fn box_blur_pass(src: &[u8], w: u32, h: u32, radius: u32) -> Vec<u8> {
 /// # Errors
 /// [`Error::Unsupported`] for a non-video frame or an unsupported pixel
 /// format (see [`Solid::resolve`]).
-pub fn composite(frame: &mut Frame, mask: &AlphaMask, color: Rgba, color_info: ColorInfo) -> Result<()> {
-    let FrameData::Video { format, width, height, .. } = frame.data else {
-        return Err(Error::Unsupported("vaco-filter-text::mask: not a video frame"));
+pub fn composite(
+    frame: &mut Frame,
+    mask: &AlphaMask,
+    color: Rgba,
+    color_info: ColorInfo,
+) -> Result<()> {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = frame.data
+    else {
+        return Err(Error::Unsupported(
+            "vaco-filter-text::mask: not a video frame",
+        ));
     };
     if mask.w == 0 || mask.h == 0 || color.a == 0 {
         return Ok(());
@@ -361,7 +406,11 @@ fn blend_channel(dst: u32, src: u32, a: f64) -> u32 {
 
 /// Porter-Duff "over" on a destination alpha channel: `sa + da*(1-sa)`.
 fn composite_alpha(src_a: u32, dst_a: u32, depth: u8, coverage_a: f64) -> u32 {
-    let max = if depth >= 32 { u32::MAX } else { (1u32 << depth) - 1 };
+    let max = if depth >= 32 {
+        u32::MAX
+    } else {
+        (1u32 << depth) - 1
+    };
     if max == 0 {
         return 0;
     }
@@ -398,9 +447,30 @@ mod tests {
         let pool = FramePool::default();
         let mut a = pool.acquire_video(PixFmt::Gray8, 4, 4).unwrap();
         let mut b = pool.acquire_video(PixFmt::Gray8, 4, 4).unwrap();
-        vaco_filter_draw::fill::fill(&mut a, Rect::full(4, 4), Rgba { r: 100, g: 0, b: 0, a: 255 }).unwrap();
+        vaco_filter_draw::fill::fill(
+            &mut a,
+            Rect::full(4, 4),
+            Rgba {
+                r: 100,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        )
+        .unwrap();
         let mask = full_mask(&mut budget, 4, 4);
-        composite(&mut b, &mask, Rgba { r: 100, g: 0, b: 0, a: 255 }, ColorInfo::default()).unwrap();
+        composite(
+            &mut b,
+            &mask,
+            Rgba {
+                r: 100,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            ColorInfo::default(),
+        )
+        .unwrap();
         assert_eq!(a.plane(0).unwrap().row(0), b.plane(0).unwrap().row(0));
     }
 
@@ -409,10 +479,31 @@ mod tests {
         let mut budget = Budget::new(Limits::default());
         let pool = FramePool::default();
         let mut f = pool.acquire_video(PixFmt::Gray8, 4, 4).unwrap();
-        vaco_filter_draw::fill::fill(&mut f, Rect::full(4, 4), Rgba { r: 7, g: 0, b: 0, a: 255 }).unwrap();
+        vaco_filter_draw::fill::fill(
+            &mut f,
+            Rect::full(4, 4),
+            Rgba {
+                r: 7,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+        )
+        .unwrap();
         let before = f.plane(0).unwrap().row(0).unwrap()[0];
         let mask = AlphaMask::blank(&mut budget, 0, 0, 4, 4).unwrap();
-        composite(&mut f, &mask, Rgba { r: 250, g: 0, b: 0, a: 255 }, ColorInfo::default()).unwrap();
+        composite(
+            &mut f,
+            &mask,
+            Rgba {
+                r: 250,
+                g: 0,
+                b: 0,
+                a: 255,
+            },
+            ColorInfo::default(),
+        )
+        .unwrap();
         assert_eq!(f.plane(0).unwrap().row(0).unwrap()[0], before);
     }
 
@@ -437,8 +528,14 @@ mod tests {
             *c = 255;
         }
         let blurred = m.box_blur(&mut budget, 1, 3).unwrap();
-        assert!(blurred.coverage_at(1, 2) > 0, "blur should spread coverage to a neighbour");
-        assert!(blurred.coverage_at(2, 2) < 255, "blur should reduce the peak");
+        assert!(
+            blurred.coverage_at(1, 2) > 0,
+            "blur should spread coverage to a neighbour"
+        );
+        assert!(
+            blurred.coverage_at(2, 2) < 255,
+            "blur should reduce the peak"
+        );
     }
 
     #[test]

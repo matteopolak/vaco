@@ -97,12 +97,18 @@ fn clamped_sample(plane: &Plane, x: i32, y: i32) -> i32 {
 /// `src -= (N/2 - 1) * cStride` before its dot product).
 fn tap_sum_horizontal(plane: &Plane, x0: i32, y: i32, taps: &[i32]) -> i32 {
     let half = i32::try_from(taps.len() >> 1).unwrap_or(0) - 1;
-    taps.iter().enumerate().map(|(i, &c)| c * clamped_sample(plane, x0 + i32::try_from(i).unwrap_or(0) - half, y)).sum()
+    taps.iter()
+        .enumerate()
+        .map(|(i, &c)| c * clamped_sample(plane, x0 + i32::try_from(i).unwrap_or(0) - half, y))
+        .sum()
 }
 
 fn tap_sum_vertical(plane: &Plane, x: i32, y0: i32, taps: &[i32]) -> i32 {
     let half = i32::try_from(taps.len() >> 1).unwrap_or(0) - 1;
-    taps.iter().enumerate().map(|(i, &c)| c * clamped_sample(plane, x, y0 + i32::try_from(i).unwrap_or(0) - half)).sum()
+    taps.iter()
+        .enumerate()
+        .map(|(i, &c)| c * clamped_sample(plane, x, y0 + i32::try_from(i).unwrap_or(0) - half))
+        .sum()
 }
 
 /// Same as [`tap_sum_horizontal`] but reading from an already-produced `i32`
@@ -114,7 +120,10 @@ fn tap_sum_vertical(plane: &Plane, x: i32, y0: i32, taps: &[i32]) -> i32 {
 /// intermediate buffer is exactly `width` wide with no horizontal padding of
 /// its own.
 fn tap_sum_vertical_buf(buf: &[i32], stride: usize, x: usize, row0: usize, taps: &[i32]) -> i32 {
-    taps.iter().enumerate().map(|(i, &c)| c * buf.get((row0 + i) * stride + x).copied().unwrap_or(0)).sum()
+    taps.iter()
+        .enumerate()
+        .map(|(i, &c)| c * buf.get((row0 + i) * stride + x).copied().unwrap_or(0))
+        .sum()
 }
 
 /// §8.5.3.3.3/.4.2's motion-compensated prediction for one plane: `ref_plane`
@@ -129,14 +138,29 @@ fn tap_sum_vertical_buf(buf: &[i32], stride: usize, x: usize, row0: usize, taps:
 /// Always produces a *final* prediction (`isLast == true` throughout, per
 /// the module doc): output values are already rounded and clipped to
 /// `[0, (1 << bit_depth) - 1]`.
-pub(crate) fn predict_block(ref_plane: &Plane, int_x0: i32, int_y0: i32, frac_x: i32, frac_y: i32, width: usize, height: usize, bit_depth: u32, is_luma: bool, out: &mut [i32]) {
+pub(crate) fn predict_block(
+    ref_plane: &Plane,
+    int_x0: i32,
+    int_y0: i32,
+    frac_x: i32,
+    frac_y: i32,
+    width: usize,
+    height: usize,
+    bit_depth: u32,
+    is_luma: bool,
+    out: &mut [i32],
+) {
     let max_val = (1i32 << bit_depth) - 1;
 
     if frac_x == 0 && frac_y == 0 {
         for y in 0..height {
             for x in 0..width {
                 if let Some(slot) = out.get_mut(y * width + x) {
-                    *slot = clamped_sample(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), int_y0 + i32::try_from(y).unwrap_or(0));
+                    *slot = clamped_sample(
+                        ref_plane,
+                        int_x0 + i32::try_from(x).unwrap_or(0),
+                        int_y0 + i32::try_from(y).unwrap_or(0),
+                    );
                 }
             }
         }
@@ -145,9 +169,13 @@ pub(crate) fn predict_block(ref_plane: &Plane, int_x0: i32, int_y0: i32, frac_x:
 
     let filter_row = |frac: i32| -> &'static [i32] {
         if is_luma {
-            LUMA_FILTER.get(usize::try_from(frac).unwrap_or(0) & 3).map_or(&[][..], |r| &r[..])
+            LUMA_FILTER
+                .get(usize::try_from(frac).unwrap_or(0) & 3)
+                .map_or(&[][..], |r| &r[..])
         } else {
-            CHROMA_FILTER.get(usize::try_from(frac).unwrap_or(0) & 7).map_or(&[][..], |r| &r[..])
+            CHROMA_FILTER
+                .get(usize::try_from(frac).unwrap_or(0) & 7)
+                .map_or(&[][..], |r| &r[..])
         }
     };
     let h_taps = filter_row(frac_x);
@@ -160,7 +188,12 @@ pub(crate) fn predict_block(ref_plane: &Plane, int_x0: i32, int_y0: i32, frac_x:
         let offset = 1i32 << (IF_FILTER_PREC - 1);
         for y in 0..height {
             for x in 0..width {
-                let sum = tap_sum_horizontal(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), int_y0 + i32::try_from(y).unwrap_or(0), h_taps);
+                let sum = tap_sum_horizontal(
+                    ref_plane,
+                    int_x0 + i32::try_from(x).unwrap_or(0),
+                    int_y0 + i32::try_from(y).unwrap_or(0),
+                    h_taps,
+                );
                 if let Some(slot) = out.get_mut(y * width + x) {
                     *slot = ((sum + offset) >> IF_FILTER_PREC).clamp(0, max_val);
                 }
@@ -175,7 +208,12 @@ pub(crate) fn predict_block(ref_plane: &Plane, int_x0: i32, int_y0: i32, frac_x:
         let offset = 1i32 << (IF_FILTER_PREC - 1);
         for y in 0..height {
             for x in 0..width {
-                let sum = tap_sum_vertical(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), int_y0 + i32::try_from(y).unwrap_or(0), v_taps);
+                let sum = tap_sum_vertical(
+                    ref_plane,
+                    int_x0 + i32::try_from(x).unwrap_or(0),
+                    int_y0 + i32::try_from(y).unwrap_or(0),
+                    v_taps,
+                );
                 if let Some(slot) = out.get_mut(y * width + x) {
                     *slot = ((sum + offset) >> IF_FILTER_PREC).clamp(0, max_val);
                 }
@@ -205,7 +243,12 @@ pub(crate) fn predict_block(ref_plane: &Plane, int_x0: i32, int_y0: i32, frac_x:
     for row in 0..buf_rows {
         let src_y = int_y0 + i32::try_from(row).unwrap_or(0) - half;
         for x in 0..width {
-            let sum = tap_sum_horizontal(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), src_y, h_taps);
+            let sum = tap_sum_horizontal(
+                ref_plane,
+                int_x0 + i32::try_from(x).unwrap_or(0),
+                src_y,
+                h_taps,
+            );
             if let Some(slot) = tmp.get_mut(row * width + x) {
                 *slot = (sum + h_offset) >> h_shift;
             }
@@ -239,12 +282,26 @@ pub(crate) fn predict_block(ref_plane: &Plane, int_x0: i32, int_y0: i32, frac_x:
 /// `shift3` at `Min(4, BitDepth-8) == 0`, `6`, and `Max(2, 14-BitDepth) == 6`
 /// respectively, so — unlike [`predict_block`] — this takes no `bit_depth`
 /// parameter: there is only one value it could be.
-pub(crate) fn predict_block_intermediate(ref_plane: &Plane, int_x0: i32, int_y0: i32, frac_x: i32, frac_y: i32, width: usize, height: usize, is_luma: bool, out: &mut [i32]) {
+pub(crate) fn predict_block_intermediate(
+    ref_plane: &Plane,
+    int_x0: i32,
+    int_y0: i32,
+    frac_x: i32,
+    frac_y: i32,
+    width: usize,
+    height: usize,
+    is_luma: bool,
+    out: &mut [i32],
+) {
     if frac_x == 0 && frac_y == 0 {
         // Case 1: predSampleLXL = refSample << shift3 (shift3 == 6 at 8-bit).
         for y in 0..height {
             for x in 0..width {
-                let v = clamped_sample(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), int_y0 + i32::try_from(y).unwrap_or(0)) << IF_FILTER_PREC;
+                let v = clamped_sample(
+                    ref_plane,
+                    int_x0 + i32::try_from(x).unwrap_or(0),
+                    int_y0 + i32::try_from(y).unwrap_or(0),
+                ) << IF_FILTER_PREC;
                 if let Some(slot) = out.get_mut(y * width + x) {
                     *slot = v;
                 }
@@ -255,9 +312,13 @@ pub(crate) fn predict_block_intermediate(ref_plane: &Plane, int_x0: i32, int_y0:
 
     let filter_row = |frac: i32| -> &'static [i32] {
         if is_luma {
-            LUMA_FILTER.get(usize::try_from(frac).unwrap_or(0) & 3).map_or(&[][..], |r| &r[..])
+            LUMA_FILTER
+                .get(usize::try_from(frac).unwrap_or(0) & 3)
+                .map_or(&[][..], |r| &r[..])
         } else {
-            CHROMA_FILTER.get(usize::try_from(frac).unwrap_or(0) & 7).map_or(&[][..], |r| &r[..])
+            CHROMA_FILTER
+                .get(usize::try_from(frac).unwrap_or(0) & 7)
+                .map_or(&[][..], |r| &r[..])
         }
     };
     let h_taps = filter_row(frac_x);
@@ -267,7 +328,12 @@ pub(crate) fn predict_block_intermediate(ref_plane: &Plane, int_x0: i32, int_y0:
         // Case 2 (horizontal only): predSampleLXL = sum, unshifted (shift1 == 0).
         for y in 0..height {
             for x in 0..width {
-                let sum = tap_sum_horizontal(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), int_y0 + i32::try_from(y).unwrap_or(0), h_taps);
+                let sum = tap_sum_horizontal(
+                    ref_plane,
+                    int_x0 + i32::try_from(x).unwrap_or(0),
+                    int_y0 + i32::try_from(y).unwrap_or(0),
+                    h_taps,
+                );
                 if let Some(slot) = out.get_mut(y * width + x) {
                     *slot = sum;
                 }
@@ -280,7 +346,12 @@ pub(crate) fn predict_block_intermediate(ref_plane: &Plane, int_x0: i32, int_y0:
         // Case 3 (vertical only): same, unshifted.
         for y in 0..height {
             for x in 0..width {
-                let sum = tap_sum_vertical(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), int_y0 + i32::try_from(y).unwrap_or(0), v_taps);
+                let sum = tap_sum_vertical(
+                    ref_plane,
+                    int_x0 + i32::try_from(x).unwrap_or(0),
+                    int_y0 + i32::try_from(y).unwrap_or(0),
+                    v_taps,
+                );
                 if let Some(slot) = out.get_mut(y * width + x) {
                     *slot = sum;
                 }
@@ -307,7 +378,12 @@ pub(crate) fn predict_block_intermediate(ref_plane: &Plane, int_x0: i32, int_y0:
     for row in 0..buf_rows {
         let src_y = int_y0 + i32::try_from(row).unwrap_or(0) - half;
         for x in 0..width {
-            let sum = tap_sum_horizontal(ref_plane, int_x0 + i32::try_from(x).unwrap_or(0), src_y, h_taps);
+            let sum = tap_sum_horizontal(
+                ref_plane,
+                int_x0 + i32::try_from(x).unwrap_or(0),
+                src_y,
+                h_taps,
+            );
             if let Some(slot) = tmp.get_mut(row * width + x) {
                 *slot = sum;
             }
@@ -351,7 +427,8 @@ pub(crate) fn apply_weight(pred: i32, weight: Weight, bit_depth: u32) -> i32 {
     let max_val = (1i32 << bit_depth) - 1;
     let val = if weight.log2_wd >= 1 {
         let rounding = 1i32 << (weight.log2_wd - 1);
-        (pred.saturating_mul(weight.w).saturating_add(rounding) >> weight.log2_wd).saturating_add(weight.o)
+        (pred.saturating_mul(weight.w).saturating_add(rounding) >> weight.log2_wd)
+            .saturating_add(weight.o)
     } else {
         pred.saturating_mul(weight.w).saturating_add(weight.o)
     };
@@ -389,16 +466,30 @@ pub(crate) fn default_biprediction(pred_l0: i32, pred_l1: i32, bit_depth: u32) -
 /// list 0 and list 1 of the same component — `w0.log2_wd` is used for both
 /// sides.
 #[must_use]
-pub(crate) fn apply_weight_bi(pred_l0: i32, w0: Weight, pred_l1: i32, w1: Weight, bit_depth: u32) -> i32 {
+pub(crate) fn apply_weight_bi(
+    pred_l0: i32,
+    w0: Weight,
+    pred_l1: i32,
+    w1: Weight,
+    bit_depth: u32,
+) -> i32 {
     let max_val = (1i32 << bit_depth) - 1;
     let log2_wd = w0.log2_wd;
     let rounding = (w0.o.saturating_add(w1.o).saturating_add(1)) << log2_wd;
-    let val = (pred_l0.saturating_mul(w0.w).saturating_add(pred_l1.saturating_mul(w1.w)).saturating_add(rounding)) >> (log2_wd + 1);
+    let val = (pred_l0
+        .saturating_mul(w0.w)
+        .saturating_add(pred_l1.saturating_mul(w1.w))
+        .saturating_add(rounding))
+        >> (log2_wd + 1);
     val.clamp(0, max_val)
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code over fixed scenarios")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test code over fixed scenarios"
+)]
 mod tests {
     use super::*;
     use vaco_limits::{Budget, Limits};
@@ -479,7 +570,11 @@ mod tests {
         // `default_biprediction` gives, the bi-predictive analogue of
         // `weight::tests::a_neutral_weight_collapses_to_the_default_shift_and_offset`.
         for denom in 0..=7i32 {
-            let w = Weight { log2_wd: denom + 6, w: 1 << denom, o: 0 };
+            let w = Weight {
+                log2_wd: denom + 6,
+                w: 1 << denom,
+                o: 0,
+            };
             for (p0, p1) in [(-500, 300), (0, 0), (4032, 100), (30000, -1000)] {
                 let got = apply_weight_bi(p0, w, p1, w, 8);
                 let want = default_biprediction(p0, p1, 8);
@@ -492,8 +587,16 @@ mod tests {
     fn apply_weight_bi_matches_a_hand_derivation() {
         // log2Wd = 10, w0=15,o0=-3, w1=17,o1=2.
         // (200*15 + 100*17 + ((-3+2+1)<<10)) >> 11 = (3000+1700+0) >> 11 = 4700>>11 = 2.
-        let w0 = Weight { log2_wd: 10, w: 15, o: -3 };
-        let w1 = Weight { log2_wd: 10, w: 17, o: 2 };
+        let w0 = Weight {
+            log2_wd: 10,
+            w: 15,
+            o: -3,
+        };
+        let w1 = Weight {
+            log2_wd: 10,
+            w: 17,
+            o: 2,
+        };
         assert_eq!(apply_weight_bi(200, w0, 100, w1, 8), 2);
     }
 }

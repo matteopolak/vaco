@@ -29,9 +29,11 @@ fn main() {
     let path = std::env::args().nth(1).expect("usage: decode_dump <file>");
     let data = std::fs::read(&path).expect("read input file");
     let src = Box::new(MemorySource::new(data));
-    let mut demuxer =
-        vaco_demux_mpegaudio::MpegAudioDemuxer::open(src, &vaco_format_core::FormatOptions::default())
-            .expect("open mpeg audio stream");
+    let mut demuxer = vaco_demux_mpegaudio::MpegAudioDemuxer::open(
+        src,
+        &vaco_format_core::FormatOptions::default(),
+    )
+    .expect("open mpeg audio stream");
 
     let mut decoder = vaco_codec_mpegaudio::MpegAudioDecoder::new(Limits::permissive());
     let stdout = std::io::stdout();
@@ -71,7 +73,10 @@ fn main() {
 }
 
 fn write_frame(out: &mut impl Write, frame: &vaco_frame::Frame) {
-    let FrameData::Audio { samples, layout, .. } = &frame.data else {
+    let FrameData::Audio {
+        samples, layout, ..
+    } = &frame.data
+    else {
         return;
     };
     let channels = layout.channels.max(1) as usize;

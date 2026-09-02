@@ -74,11 +74,15 @@ impl Solid {
     /// variants) — none of this crate's callers need those today.
     pub fn resolve(color: Rgba, fmt: PixFmt, color_info: ColorInfo) -> Result<Self> {
         let desc = fmt.descriptor();
-        if desc
-            .flags
-            .intersects(PixFmtFlags::PALETTE | PixFmtFlags::BITSTREAM | PixFmtFlags::HW_ACCEL | PixFmtFlags::FLOAT)
-        {
-            return Err(Error::Unsupported("vaco-filter-draw: palette/bitstream/hw/float pixel format"));
+        if desc.flags.intersects(
+            PixFmtFlags::PALETTE
+                | PixFmtFlags::BITSTREAM
+                | PixFmtFlags::HW_ACCEL
+                | PixFmtFlags::FLOAT,
+        ) {
+            return Err(Error::Unsupported(
+                "vaco-filter-draw: palette/bitstream/hw/float pixel format",
+            ));
         }
         if desc.flags.contains(PixFmtFlags::XYZ) {
             return Err(Error::Unsupported("vaco-filter-draw: XYZ pixel formats"));
@@ -104,7 +108,9 @@ impl Solid {
         };
         let coeffs = matrix
             .rgb_to_ycbcr_with(color_info.primaries)
-            .ok_or(Error::Unsupported("vaco-filter-draw: matrix has no linear R'G'B'->Y'CbCr form"))?;
+            .ok_or(Error::Unsupported(
+                "vaco-filter-draw: matrix has no linear R'G'B'->Y'CbCr form",
+            ))?;
         let red = f64::from(color.r) / 255.0;
         let green = f64::from(color.g) / 255.0;
         let blue = f64::from(color.b) / 255.0;
@@ -127,7 +133,9 @@ impl Solid {
         let y_depth = depth_of(0);
         let luma = range
             .luma_levels(u32::from(y_depth))
-            .ok_or(Error::Unsupported("vaco-filter-draw: unsupported luma bit depth"))?;
+            .ok_or(Error::Unsupported(
+                "vaco-filter-draw: unsupported luma bit depth",
+            ))?;
         channel[0] = quantise(luma_e, luma.offset, luma.scale, luma.min, luma.max);
 
         // A single-component format (`gray8`, `gray16le`, ...) has no Cb/Cr
@@ -138,7 +146,9 @@ impl Solid {
             let c_depth = depth_of(1).max(depth_of(2));
             let chroma = range
                 .chroma_levels(u32::from(c_depth))
-                .ok_or(Error::Unsupported("vaco-filter-draw: unsupported chroma bit depth"))?;
+                .ok_or(Error::Unsupported(
+                    "vaco-filter-draw: unsupported chroma bit depth",
+                ))?;
             channel[1] = quantise(cb, chroma.offset, chroma.scale, chroma.min, chroma.max);
             channel[2] = quantise(cr, chroma.offset, chroma.scale, chroma.min, chroma.max);
         }
@@ -150,12 +160,22 @@ impl Solid {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
     fn red() -> Rgba {
-        Rgba { r: 255, g: 0, b: 0, a: 255 }
+        Rgba {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        }
     }
 
     #[test]
@@ -191,7 +211,12 @@ mod tests {
             matrix: MatrixCoefficients::Bt709,
             ..ColorInfo::default()
         };
-        let black = Rgba { r: 0, g: 0, b: 0, a: 255 };
+        let black = Rgba {
+            r: 0,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
         let solid = Solid::resolve(black, PixFmt::Yuv444p, info).unwrap();
         assert_eq!(solid.channel[0], 0);
         assert_eq!(solid.channel[1], 128);
@@ -201,7 +226,12 @@ mod tests {
     #[test]
     fn alpha_formats_carry_the_fourth_channel() {
         let info = ColorInfo::default();
-        let translucent = Rgba { r: 255, g: 0, b: 0, a: 128 };
+        let translucent = Rgba {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 128,
+        };
         let solid = Solid::resolve(translucent, PixFmt::Yuva420p, info).unwrap();
         assert_eq!(solid.channel[3], 128);
     }

@@ -64,12 +64,16 @@ impl SrtOptions {
 
     #[must_use]
     pub const fn receive_config(&self) -> ReceiveConfig {
-        ReceiveConfig { latency_ms: self.latency_ms }
+        ReceiveConfig {
+            latency_ms: self.latency_ms,
+        }
     }
 
     #[must_use]
     pub const fn send_config(&self) -> SendConfig {
-        SendConfig { rto_ms: self.rto_ms }
+        SendConfig {
+            rto_ms: self.rto_ms,
+        }
     }
 
     /// A [`crate::arq::SendWindow`] built from [`Self::send_config`] and,
@@ -128,10 +132,16 @@ mod tests {
 
     #[test]
     fn a_configured_rate_limit_reaches_the_built_send_window() {
-        let opts = SrtOptions { rate_limit_bytes_per_sec: Some(1000), ..SrtOptions::new() };
+        let opts = SrtOptions {
+            rate_limit_bytes_per_sec: Some(1000),
+            ..SrtOptions::new()
+        };
         let mut window = opts.send_window(0);
         assert_eq!(window.rate_limit_bytes_per_sec(), Some(1000));
         assert!(window.send_permitted(0, 1000));
-        assert!(!window.send_permitted(0, 1), "the one-second burst budget is now spent");
+        assert!(
+            !window.send_permitted(0, 1),
+            "the one-second burst budget is now spent"
+        );
     }
 }

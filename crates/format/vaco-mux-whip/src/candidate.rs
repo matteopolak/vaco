@@ -56,9 +56,7 @@ pub fn parse(line: &str) -> Result<Candidate> {
     // Only UDP candidates are usable at all: this crate's DTLS/SRTP path is
     // UDP-only, matching every WHIP peer measured so far.
     if !transport.eq_ignore_ascii_case("udp") {
-        return Err(Error::Unsupported(
-            "only UDP ICE candidates are supported",
-        ));
+        return Err(Error::Unsupported("only UDP ICE candidates are supported"));
     }
     Ok(Candidate {
         component,

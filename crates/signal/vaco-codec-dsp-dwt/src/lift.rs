@@ -83,7 +83,10 @@ impl LiftStep {
     /// This step with `kind` replaced by its own exact inverse.
     #[must_use]
     pub const fn inverted(self) -> Self {
-        Self { kind: self.kind.inverse(), ..self }
+        Self {
+            kind: self.kind.inverse(),
+            ..self
+        }
     }
 }
 
@@ -124,7 +127,11 @@ pub fn apply_step(a: &mut [i32], step: &LiftStep) -> Result<()> {
     check_even_length(a.len())?;
     let len = a.len();
     let half = len / 2;
-    let bias: i64 = if step.shift > 0 { 1i64 << (step.shift - 1) } else { 0 };
+    let bias: i64 = if step.shift > 0 {
+        1i64 << (step.shift - 1)
+    } else {
+        0
+    };
     for n in 0..half {
         let n = i32::try_from(n).unwrap_or(i32::MAX);
         let mut sum: i64 = 0;
@@ -146,11 +153,20 @@ pub fn apply_step(a: &mut [i32], step: &LiftStep) -> Result<()> {
             sum += i64::from(tap) * i64::from(sample);
         }
         sum += bias;
-        let delta = i32::try_from(sum >> step.shift).unwrap_or(if sum < 0 { i32::MIN } else { i32::MAX });
+        let delta =
+            i32::try_from(sum >> step.shift).unwrap_or(if sum < 0 { i32::MIN } else { i32::MAX });
         let n_usize = usize::try_from(n).unwrap_or(usize::MAX);
-        let idx = if step.kind.writes_even() { 2 * n_usize } else { 2 * n_usize + 1 };
+        let idx = if step.kind.writes_even() {
+            2 * n_usize
+        } else {
+            2 * n_usize + 1
+        };
         let slot = a.get_mut(idx).ok_or_else(err_out_of_range)?;
-        *slot = if step.kind.adds() { slot.wrapping_add(delta) } else { slot.wrapping_sub(delta) };
+        *slot = if step.kind.adds() {
+            slot.wrapping_add(delta)
+        } else {
+            slot.wrapping_sub(delta)
+        };
     }
     Ok(())
 }
@@ -203,7 +219,12 @@ mod tests {
 
     #[test]
     fn a_single_step_is_undone_by_its_own_inverse() {
-        let step = LiftStep { kind: StepKind::Type2, taps: &[1, 1], offset: 0, shift: 2 };
+        let step = LiftStep {
+            kind: StepKind::Type2,
+            taps: &[1, 1],
+            offset: 0,
+            shift: 2,
+        };
         let original: Vec<i32> = (0..16i32).map(|i| i * 3 - 7).collect();
         let mut a = original.clone();
         apply_step(&mut a, &step).unwrap();
@@ -214,10 +235,13 @@ mod tests {
 
     #[test]
     fn odd_length_is_refused() {
-        let step = LiftStep { kind: StepKind::Type1, taps: &[1], offset: 0, shift: 0 };
+        let step = LiftStep {
+            kind: StepKind::Type1,
+            taps: &[1],
+            offset: 0,
+            shift: 0,
+        };
         let mut a = vec![1, 2, 3];
         assert!(apply_step(&mut a, &step).is_err());
     }
 }
-
-

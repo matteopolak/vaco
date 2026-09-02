@@ -655,7 +655,11 @@ mod tests {
             let mut dec = RangeDecoder::new(&bytes);
             let mut dec_states = fresh_states();
             for &v in &values {
-                assert_eq!(dec.get_symbol(&mut dec_states, &table, true), v, "n={count}");
+                assert_eq!(
+                    dec.get_symbol(&mut dec_states, &table, true),
+                    v,
+                    "n={count}"
+                );
             }
             let end = dec.read_terminator(&table);
             assert_eq!(

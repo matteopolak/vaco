@@ -20,7 +20,10 @@ use vaco_protocol_core::{ProtocolError, Result};
 const SCHEME: &str = "rtmp";
 
 fn malformed(detail: &'static str) -> ProtocolError {
-    ProtocolError::Malformed { scheme: SCHEME, detail }
+    ProtocolError::Malformed {
+        scheme: SCHEME,
+        detail,
+    }
 }
 
 /// One AMF0 value. `Object`/`EcmaArray` are `Vec<(String, Value)>` rather
@@ -82,7 +85,10 @@ pub fn encode(value: &Value, out: &mut Vec<u8>) {
         Value::Undefined => out.push(MARKER_UNDEFINED),
         Value::EcmaArray(pairs) => {
             out.push(MARKER_ECMA_ARRAY);
-            #[allow(clippy::cast_possible_truncation, reason = "AMF0's own length field is u32; a real command object never approaches u32::MAX pairs")]
+            #[allow(
+                clippy::cast_possible_truncation,
+                reason = "AMF0's own length field is u32; a real command object never approaches u32::MAX pairs"
+            )]
             out.extend_from_slice(&(pairs.len() as u32).to_be_bytes());
             encode_pairs(pairs, out);
         }
@@ -109,7 +115,10 @@ fn encode_string(s: &str, out: &mut Vec<u8>) {
         out.extend_from_slice(&len.to_be_bytes());
     } else {
         out.push(MARKER_LONG_STRING);
-        #[allow(clippy::cast_possible_truncation, reason = "the try_from(u16) above already failed, so len > u16::MAX; u32 is AMF0's own long-string length field width")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "the try_from(u16) above already failed, so len > u16::MAX; u32 is AMF0's own long-string length field width"
+        )]
         out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
     }
     out.extend_from_slice(bytes);
@@ -119,7 +128,10 @@ fn encode_string(s: &str, out: &mut Vec<u8>) {
 /// by AMF0's own end marker: a zero-length key followed by `0x09`.
 fn encode_pairs(pairs: &[(String, Value)], out: &mut Vec<u8>) {
     for (key, value) in pairs {
-        #[allow(clippy::cast_possible_truncation, reason = "an object key is never anywhere near u16::MAX bytes in practice")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "an object key is never anywhere near u16::MAX bytes in practice"
+        )]
         out.extend_from_slice(&(key.len() as u16).to_be_bytes());
         out.extend_from_slice(key.as_bytes());
         encode(value, out);
@@ -136,15 +148,23 @@ fn encode_pairs(pairs: &[(String, Value)], out: &mut Vec<u8>) {
 /// deliberately-unsupported marker byte, or a string whose declared
 /// length is not valid UTF-8.
 pub fn decode(buf: &[u8]) -> Result<(Value, usize)> {
-    let marker = *buf.first().ok_or_else(|| malformed("AMF0 value is empty"))?;
+    let marker = *buf
+        .first()
+        .ok_or_else(|| malformed("AMF0 value is empty"))?;
     let rest = buf.get(1..).unwrap_or(&[]);
     match marker {
         MARKER_NUMBER => {
-            let bytes: [u8; 8] = rest.get(..8).ok_or_else(|| malformed("AMF0 number is truncated"))?.try_into().unwrap_or([0; 8]);
+            let bytes: [u8; 8] = rest
+                .get(..8)
+                .ok_or_else(|| malformed("AMF0 number is truncated"))?
+                .try_into()
+                .unwrap_or([0; 8]);
             Ok((Value::Number(f64::from_be_bytes(bytes)), 9))
         }
         MARKER_BOOLEAN => {
-            let b = *rest.first().ok_or_else(|| malformed("AMF0 boolean is truncated"))?;
+            let b = *rest
+                .first()
+                .ok_or_else(|| malformed("AMF0 boolean is truncated"))?;
             Ok((Value::Boolean(b != 0), 2))
         }
         MARKER_STRING => {
@@ -162,43 +182,75 @@ pub fn decode(buf: &[u8]) -> Result<(Value, usize)> {
         MARKER_NULL => Ok((Value::Null, 1)),
         MARKER_UNDEFINED => Ok((Value::Undefined, 1)),
         MARKER_ECMA_ARRAY => {
-            let _count = rest.get(..4).ok_or_else(|| malformed("AMF0 ECMA array count is truncated"))?;
-            let (pairs, consumed) = decode_pairs(rest.get(4..).ok_or_else(|| malformed("AMF0 ECMA array is truncated"))?)?;
+            let _count = rest
+                .get(..4)
+                .ok_or_else(|| malformed("AMF0 ECMA array count is truncated"))?;
+            let (pairs, consumed) = decode_pairs(
+                rest.get(4..)
+                    .ok_or_else(|| malformed("AMF0 ECMA array is truncated"))?,
+            )?;
             Ok((Value::EcmaArray(pairs), 1 + 4 + consumed))
         }
         MARKER_STRICT_ARRAY => {
-            let count_bytes: [u8; 4] = rest.get(..4).ok_or_else(|| malformed("AMF0 strict array count is truncated"))?.try_into().unwrap_or([0; 4]);
+            let count_bytes: [u8; 4] = rest
+                .get(..4)
+                .ok_or_else(|| malformed("AMF0 strict array count is truncated"))?
+                .try_into()
+                .unwrap_or([0; 4]);
             let count = u32::from_be_bytes(count_bytes);
             let mut items: Vec<Value> = Vec::new();
             let mut cursor = 4usize;
             for _ in 0..count {
-                let (value, consumed) = decode(rest.get(cursor..).ok_or_else(|| malformed("AMF0 strict array is truncated"))?)?;
+                let (value, consumed) = decode(
+                    rest.get(cursor..)
+                        .ok_or_else(|| malformed("AMF0 strict array is truncated"))?,
+                )?;
                 items.push(value);
                 cursor += consumed;
             }
             Ok((Value::StrictArray(items), 1 + cursor))
         }
         MARKER_DATE => {
-            let bytes: [u8; 8] = rest.get(..8).ok_or_else(|| malformed("AMF0 date is truncated"))?.try_into().unwrap_or([0; 8]);
+            let bytes: [u8; 8] = rest
+                .get(..8)
+                .ok_or_else(|| malformed("AMF0 date is truncated"))?
+                .try_into()
+                .unwrap_or([0; 8]);
             Ok((Value::Date(f64::from_be_bytes(bytes)), 1 + 8 + 2))
         }
-        _ => Err(malformed("AMF0 marker byte is unrecognised or unsupported by this crate")),
+        _ => Err(malformed(
+            "AMF0 marker byte is unrecognised or unsupported by this crate",
+        )),
     }
 }
 
 fn decode_short_string(buf: &[u8]) -> Result<(String, usize)> {
-    let len_bytes: [u8; 2] = buf.get(..2).ok_or_else(|| malformed("AMF0 string length is truncated"))?.try_into().unwrap_or([0; 2]);
+    let len_bytes: [u8; 2] = buf
+        .get(..2)
+        .ok_or_else(|| malformed("AMF0 string length is truncated"))?
+        .try_into()
+        .unwrap_or([0; 2]);
     let len = usize::from(u16::from_be_bytes(len_bytes));
-    let bytes = buf.get(2..2 + len).ok_or_else(|| malformed("AMF0 string body is truncated"))?;
-    let s = String::from_utf8(bytes.to_vec()).map_err(|_| malformed("AMF0 string is not valid UTF-8"))?;
+    let bytes = buf
+        .get(2..2 + len)
+        .ok_or_else(|| malformed("AMF0 string body is truncated"))?;
+    let s = String::from_utf8(bytes.to_vec())
+        .map_err(|_| malformed("AMF0 string is not valid UTF-8"))?;
     Ok((s, 2 + len))
 }
 
 fn decode_long_string(buf: &[u8]) -> Result<(String, usize)> {
-    let len_bytes: [u8; 4] = buf.get(..4).ok_or_else(|| malformed("AMF0 long string length is truncated"))?.try_into().unwrap_or([0; 4]);
+    let len_bytes: [u8; 4] = buf
+        .get(..4)
+        .ok_or_else(|| malformed("AMF0 long string length is truncated"))?
+        .try_into()
+        .unwrap_or([0; 4]);
     let len = u32::from_be_bytes(len_bytes) as usize;
-    let bytes = buf.get(4..4 + len).ok_or_else(|| malformed("AMF0 long string body is truncated"))?;
-    let s = String::from_utf8(bytes.to_vec()).map_err(|_| malformed("AMF0 long string is not valid UTF-8"))?;
+    let bytes = buf
+        .get(4..4 + len)
+        .ok_or_else(|| malformed("AMF0 long string body is truncated"))?;
+    let s = String::from_utf8(bytes.to_vec())
+        .map_err(|_| malformed("AMF0 long string is not valid UTF-8"))?;
     Ok((s, 4 + len))
 }
 
@@ -206,20 +258,34 @@ fn decode_pairs(buf: &[u8]) -> Result<(Vec<(String, Value)>, usize)> {
     let mut pairs = Vec::new();
     let mut cursor = 0usize;
     loop {
-        let key_len_bytes: [u8; 2] = buf.get(cursor..cursor + 2).ok_or_else(|| malformed("AMF0 object key length is truncated"))?.try_into().unwrap_or([0; 2]);
+        let key_len_bytes: [u8; 2] = buf
+            .get(cursor..cursor + 2)
+            .ok_or_else(|| malformed("AMF0 object key length is truncated"))?
+            .try_into()
+            .unwrap_or([0; 2]);
         let key_len = usize::from(u16::from_be_bytes(key_len_bytes));
         if key_len == 0 {
-            let end_marker = *buf.get(cursor + 2).ok_or_else(|| malformed("AMF0 object end marker is truncated"))?;
+            let end_marker = *buf
+                .get(cursor + 2)
+                .ok_or_else(|| malformed("AMF0 object end marker is truncated"))?;
             if end_marker != OBJECT_END {
-                return Err(malformed("AMF0 object has a zero-length key that is not the end marker"));
+                return Err(malformed(
+                    "AMF0 object has a zero-length key that is not the end marker",
+                ));
             }
             cursor += 3;
             break;
         }
-        let key_bytes = buf.get(cursor + 2..cursor + 2 + key_len).ok_or_else(|| malformed("AMF0 object key body is truncated"))?;
-        let key = String::from_utf8(key_bytes.to_vec()).map_err(|_| malformed("AMF0 object key is not valid UTF-8"))?;
+        let key_bytes = buf
+            .get(cursor + 2..cursor + 2 + key_len)
+            .ok_or_else(|| malformed("AMF0 object key body is truncated"))?;
+        let key = String::from_utf8(key_bytes.to_vec())
+            .map_err(|_| malformed("AMF0 object key is not valid UTF-8"))?;
         cursor += 2 + key_len;
-        let (value, consumed) = decode(buf.get(cursor..).ok_or_else(|| malformed("AMF0 object value is truncated"))?)?;
+        let (value, consumed) = decode(
+            buf.get(cursor..)
+                .ok_or_else(|| malformed("AMF0 object value is truncated"))?,
+        )?;
         pairs.push((key, value));
         cursor += consumed;
     }
@@ -254,8 +320,14 @@ mod tests {
 
     #[test]
     fn string_round_trips() {
-        assert_eq!(round_trip(&Value::String("rtmp://example/live".to_string())), Value::String("rtmp://example/live".to_string()));
-        assert_eq!(round_trip(&Value::String(String::new())), Value::String(String::new()));
+        assert_eq!(
+            round_trip(&Value::String("rtmp://example/live".to_string())),
+            Value::String("rtmp://example/live".to_string())
+        );
+        assert_eq!(
+            round_trip(&Value::String(String::new())),
+            Value::String(String::new())
+        );
     }
 
     #[test]
@@ -268,7 +340,10 @@ mod tests {
     fn object_round_trips_preserving_key_order() {
         let obj = Value::Object(vec![
             ("app".to_string(), Value::String("live".to_string())),
-            ("flashVer".to_string(), Value::String("FMLE/3.0".to_string())),
+            (
+                "flashVer".to_string(),
+                Value::String("FMLE/3.0".to_string()),
+            ),
             ("audioSampleAccess".to_string(), Value::Boolean(true)),
         ]);
         assert_eq!(round_trip(&obj), obj);
@@ -276,26 +351,39 @@ mod tests {
 
     #[test]
     fn ecma_array_round_trips() {
-        let arr = Value::EcmaArray(vec![("0".to_string(), Value::Number(1.0)), ("1".to_string(), Value::Number(2.0))]);
+        let arr = Value::EcmaArray(vec![
+            ("0".to_string(), Value::Number(1.0)),
+            ("1".to_string(), Value::Number(2.0)),
+        ]);
         assert_eq!(round_trip(&arr), arr);
     }
 
     #[test]
     fn strict_array_round_trips() {
-        let arr = Value::StrictArray(vec![Value::Number(1.0), Value::String("x".to_string()), Value::Null]);
+        let arr = Value::StrictArray(vec![
+            Value::Number(1.0),
+            Value::String("x".to_string()),
+            Value::Null,
+        ]);
         assert_eq!(round_trip(&arr), arr);
     }
 
     #[test]
     fn date_round_trips() {
-        assert_eq!(round_trip(&Value::Date(1_000_000.0)), Value::Date(1_000_000.0));
+        assert_eq!(
+            round_trip(&Value::Date(1_000_000.0)),
+            Value::Date(1_000_000.0)
+        );
     }
 
     #[test]
     fn nested_object_in_object_round_trips() {
         let obj = Value::Object(vec![(
             "level".to_string(),
-            Value::Object(vec![("code".to_string(), Value::String("NetConnection.Connect.Success".to_string()))]),
+            Value::Object(vec![(
+                "code".to_string(),
+                Value::String("NetConnection.Connect.Success".to_string()),
+            )]),
         )]);
         assert_eq!(round_trip(&obj), obj);
     }

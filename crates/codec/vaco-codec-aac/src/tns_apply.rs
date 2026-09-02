@@ -25,7 +25,11 @@ const TNS_MAX_BANDS_SHORT: [u8; 12] = [9, 9, 10, 14, 14, 14, 14, 14, 14, 14, 14,
 /// value in the table if `sfi` is somehow out of range (defensive only —
 /// callers only ever pass a valid `sfi`, already checked upstream).
 pub(crate) fn tns_max_bands(sfi: u8, is_short: bool) -> u8 {
-    let table = if is_short { TNS_MAX_BANDS_SHORT } else { TNS_MAX_BANDS_LONG };
+    let table = if is_short {
+        TNS_MAX_BANDS_SHORT
+    } else {
+        TNS_MAX_BANDS_LONG
+    };
     table.get(usize::from(sfi)).copied().unwrap_or(51)
 }
 
@@ -56,7 +60,11 @@ fn tns_decode_coef(order: u8, coef_res: bool, coef_compress: bool, coef: &[u8]) 
     let mut tmp2 = Vec::new();
     for &raw in coef.iter().take(usize::from(order)) {
         let signed = i32::from(raw);
-        let tmp = if signed & s_mask != 0 { signed | n_mask } else { signed };
+        let tmp = if signed & s_mask != 0 {
+            signed | n_mask
+        } else {
+            signed
+        };
         let angle = if tmp >= 0 {
             f64::from(tmp) / iqfac
         } else {
@@ -134,7 +142,11 @@ pub(crate) fn apply_to_window(
     max_bands: u8,
     is_short: bool,
 ) {
-    let max_order = if is_short { TNS_MAX_ORDER_SHORT } else { TNS_MAX_ORDER_LONG };
+    let max_order = if is_short {
+        TNS_MAX_ORDER_SHORT
+    } else {
+        TNS_MAX_ORDER_LONG
+    };
     let mut bottom = num_swb;
     for filt in filters {
         let top = bottom;
@@ -146,8 +158,12 @@ pub(crate) fn apply_to_window(
         let ceiling = usize::from(max_bands).min(max_sfb);
         let bottom_clamped = bottom.min(ceiling);
         let top_clamped = top.min(ceiling);
-        let Some(&start_off) = swb_offset.get(bottom_clamped) else { continue };
-        let Some(&end_off) = swb_offset.get(top_clamped) else { continue };
+        let Some(&start_off) = swb_offset.get(bottom_clamped) else {
+            continue;
+        };
+        let Some(&end_off) = swb_offset.get(top_clamped) else {
+            continue;
+        };
         let (start_off, end_off) = (usize::from(start_off), usize::from(end_off));
         if end_off <= start_off {
             continue;
@@ -165,7 +181,12 @@ pub(crate) fn apply_to_window(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::{apply_to_window, tns_max_bands};
     use crate::tns::TnsFilter;
 

@@ -218,7 +218,11 @@ mod tests {
             graph.connect(prev, 0, node, 0).unwrap();
             prev = node;
         }
-        let sink = graph.add_sink("out", MediaType::Video, vaco_filter_core::mock::any_video_sink("out"));
+        let sink = graph.add_sink(
+            "out",
+            MediaType::Video,
+            vaco_filter_core::mock::any_video_sink("out"),
+        );
         graph.connect(prev, 0, sink, 0).unwrap();
         let tb = vaco_core::Rational::new(1, 25);
         graph.set_source_format(src, gray_link(1, 1, tb)).unwrap();
@@ -232,14 +236,22 @@ mod tests {
             let luma = (i * 10) as u8;
             graph.send(src, gray_frame(1, 1, i, luma)).unwrap();
         }
-        graph.close_source(src, vaco_core::Timestamp::new(n)).unwrap();
+        graph
+            .close_source(src, vaco_core::Timestamp::new(n))
+            .unwrap();
         let mut out = Vec::new();
         loop {
             match graph.run().unwrap() {
                 GraphStatus::Eof => break,
                 GraphStatus::HasOutput(_) => {
                     while let Ok(f) = graph.recv(sink) {
-                        out.push(f.plane(0).and_then(|p| p.row(0)).and_then(|r| r.first()).copied().unwrap_or(0));
+                        out.push(
+                            f.plane(0)
+                                .and_then(|p| p.row(0))
+                                .and_then(|r| r.first())
+                                .copied()
+                                .unwrap_or(0),
+                        );
                     }
                 }
                 GraphStatus::NeedInput(_) => {}

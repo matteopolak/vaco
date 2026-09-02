@@ -102,7 +102,9 @@ mod tests {
 
     #[test]
     fn rfc3686_vector_4_aes192() {
-        let key: [u8; 24] = hex("16AF5B145FC9F579C175F93E3BFB0EED863D06CCFDB78515").try_into().unwrap();
+        let key: [u8; 24] = hex("16AF5B145FC9F579C175F93E3BFB0EED863D06CCFDB78515")
+            .try_into()
+            .unwrap();
         let block = counter_block("00000048", "36733C147D6D93CB");
         let mut data = hex("53696E676C6520626C6F636B206D7367");
         ctr_apply_aes192(&key, &block, &mut data);
@@ -111,7 +113,9 @@ mod tests {
 
     #[test]
     fn rfc3686_vector_5_aes192() {
-        let key: [u8; 24] = hex("7C5CB2401B3DC33C19E7340819E0F69C678C3DB8E6F6A91A").try_into().unwrap();
+        let key: [u8; 24] = hex("7C5CB2401B3DC33C19E7340819E0F69C678C3DB8E6F6A91A")
+            .try_into()
+            .unwrap();
         let block = counter_block("0096B03B", "020C6EADC2CB500D");
         let mut data = hex("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F");
         ctr_apply_aes192(&key, &block, &mut data);
@@ -123,7 +127,9 @@ mod tests {
 
     #[test]
     fn rfc3686_vector_6_aes192() {
-        let key: [u8; 24] = hex("02BF391EE8ECB159B959617B0965279BF59B60A786D3E0FE").try_into().unwrap();
+        let key: [u8; 24] = hex("02BF391EE8ECB159B959617B0965279BF59B60A786D3E0FE")
+            .try_into()
+            .unwrap();
         let block = counter_block("0007BDFD", "5CBD60278DCC0912");
         let mut data =
             hex("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212223");
@@ -136,8 +142,9 @@ mod tests {
 
     #[test]
     fn rfc3686_vector_7_aes256() {
-        let key: [u8; 32] =
-            hex("776BEFF2851DB06F4C8A0542C8696F6C6A81AF1EEC96B4D37FC1D689E6C1C104").try_into().unwrap();
+        let key: [u8; 32] = hex("776BEFF2851DB06F4C8A0542C8696F6C6A81AF1EEC96B4D37FC1D689E6C1C104")
+            .try_into()
+            .unwrap();
         let block = counter_block("00000060", "DB5672C97AA8F0B2");
         let mut data = hex("53696E676C6520626C6F636B206D7367");
         ctr_apply_aes256(&key, &block, &mut data);
@@ -146,8 +153,9 @@ mod tests {
 
     #[test]
     fn rfc3686_vector_8_aes256() {
-        let key: [u8; 32] =
-            hex("F6D66D6BD52D59BB0796365879EFF886C66DD51A5B6A99744B50590C87A23884").try_into().unwrap();
+        let key: [u8; 32] = hex("F6D66D6BD52D59BB0796365879EFF886C66DD51A5B6A99744B50590C87A23884")
+            .try_into()
+            .unwrap();
         let block = counter_block("00FAAC24", "C1585EF15A43D875");
         let mut data = hex("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F");
         ctr_apply_aes256(&key, &block, &mut data);
@@ -159,8 +167,9 @@ mod tests {
 
     #[test]
     fn rfc3686_vector_9_aes256() {
-        let key: [u8; 32] =
-            hex("FF7A617CE69148E4F1726E2F43581DE2AA62D9F805532EDFF1EED687FB54153D").try_into().unwrap();
+        let key: [u8; 32] = hex("FF7A617CE69148E4F1726E2F43581DE2AA62D9F805532EDFF1EED687FB54153D")
+            .try_into()
+            .unwrap();
         let block = counter_block("001CC5B7", "51A51D70A1C11148");
         let mut data =
             hex("000102030405060708090A0B0C0D0E0F101112131415161718191A1B1C1D1E1F20212223");

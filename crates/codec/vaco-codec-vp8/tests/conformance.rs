@@ -100,7 +100,9 @@ fn ivf_frame_payloads(bytes: &[u8]) -> Vec<&[u8]> {
     while let Some(hdr) = bytes.get(off..off + 12) {
         let size = u32::from_le_bytes([hdr[0], hdr[1], hdr[2], hdr[3]]) as usize;
         let payload_start = off + 12;
-        let Some(payload) = bytes.get(payload_start..payload_start + size) else { break };
+        let Some(payload) = bytes.get(payload_start..payload_start + size) else {
+            break;
+        };
         frames.push(payload);
         off = payload_start + size;
     }
@@ -116,13 +118,17 @@ fn ivf_frame_payloads(bytes: &[u8]) -> Vec<&[u8]> {
 /// meaningless rather than wrong.
 fn has_scaled_key_frame(bytes: &[u8]) -> bool {
     for payload in ivf_frame_payloads(bytes) {
-        let Some(&[b0, b1, b2]) = payload.get(0..3) else { continue };
+        let Some(&[b0, b1, b2]) = payload.get(0..3) else {
+            continue;
+        };
         let tag0 = u32::from(b0) | (u32::from(b1) << 8) | (u32::from(b2) << 16);
         let key_frame = tag0 & 1 == 0;
         if !key_frame {
             continue;
         }
-        let Some(dims) = payload.get(6..10) else { continue };
+        let Some(dims) = payload.get(6..10) else {
+            continue;
+        };
         let w = u16::from_le_bytes([dims[0], dims[1]]);
         let h = u16::from_le_bytes([dims[2], dims[3]]);
         if w >> 14 != 0 || h >> 14 != 0 {
@@ -158,7 +164,15 @@ fn ffmpeg_reference_yuv(path: &Path) -> Vec<u8> {
     let out = Command::new("ffmpeg")
         .args(["-v", "error", "-i"])
         .arg(path)
-        .args(["-fps_mode", "passthrough", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"])
+        .args([
+            "-fps_mode",
+            "passthrough",
+            "-f",
+            "rawvideo",
+            "-pix_fmt",
+            "yuv420p",
+            "-",
+        ])
         .output()
         .expect("run ffmpeg");
     assert!(
@@ -186,9 +200,16 @@ fn compare_plane(a: &[u8], b: &[u8]) -> PlaneDiff {
         max = max.max(d);
         sum += i64::from(d);
     }
-    #[allow(clippy::cast_precision_loss, reason = "n is a byte count of a small test vector, far below f64's exact-integer range")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "n is a byte count of a small test vector, far below f64's exact-integer range"
+    )]
     let mean = if n == 0 { 0.0 } else { sum as f64 / n as f64 };
-    PlaneDiff { max, mean, exact: max == 0 && a.len() == b.len() }
+    PlaneDiff {
+        max,
+        mean,
+        exact: max == 0 && a.len() == b.len(),
+    }
 }
 
 fn fixtures_dir() -> PathBuf {
@@ -208,11 +229,27 @@ fn decode_matches_ffmpeg_per_plane_on_the_real_vp8_test_vectors() {
         .filter(|p| p.extension().is_some_and(|e| e == "ivf"))
         .collect();
     entries.sort();
-    assert!(!entries.is_empty(), "no .ivf vectors found in {}", dir.display());
+    assert!(
+        !entries.is_empty(),
+        "no .ivf vectors found in {}",
+        dir.display()
+    );
 
-    let mut worst_y = PlaneDiff { max: 0, mean: 0.0, exact: true };
-    let mut worst_u = PlaneDiff { max: 0, mean: 0.0, exact: true };
-    let mut worst_v = PlaneDiff { max: 0, mean: 0.0, exact: true };
+    let mut worst_y = PlaneDiff {
+        max: 0,
+        mean: 0.0,
+        exact: true,
+    };
+    let mut worst_u = PlaneDiff {
+        max: 0,
+        mean: 0.0,
+        exact: true,
+    };
+    let mut worst_v = PlaneDiff {
+        max: 0,
+        mean: 0.0,
+        exact: true,
+    };
     let mut vectors_checked = 0usize;
 
     for path in &entries {
@@ -241,11 +278,16 @@ fn decode_matches_ffmpeg_per_plane_on_the_real_vp8_test_vectors() {
             let y_size = (frame.width as usize) * (frame.height as usize);
             let c_size = frame.width.div_ceil(2) as usize * frame.height.div_ceil(2) as usize;
             let frame_size = y_size + 2 * c_size;
-            let Some(ref_frame) = reference.get(ref_offset..ref_offset + frame_size) else { break };
+            let Some(ref_frame) = reference.get(ref_offset..ref_offset + frame_size) else {
+                break;
+            };
             ref_offset += frame_size;
 
             let y = compare_plane(&frame.yuv[..y_size], &ref_frame[..y_size]);
-            let u = compare_plane(&frame.yuv[y_size..y_size + c_size], &ref_frame[y_size..y_size + c_size]);
+            let u = compare_plane(
+                &frame.yuv[y_size..y_size + c_size],
+                &ref_frame[y_size..y_size + c_size],
+            );
             let v = compare_plane(&frame.yuv[y_size + c_size..], &ref_frame[y_size + c_size..]);
             y_max = y_max.max(y.max);
             u_max = u_max.max(u.max);
@@ -263,7 +305,10 @@ fn decode_matches_ffmpeg_per_plane_on_the_real_vp8_test_vectors() {
             ours.len(),
             reference.len()
         );
-        #[allow(clippy::cast_precision_loss, reason = "frames_compared is a small per-vector frame count")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "frames_compared is a small per-vector frame count"
+        )]
         let n = frames_compared as f64;
         println!(
             "{:<40} frames={frames_compared:<4} Y(max={y_max:>3} mean={:.4}) U(max={u_max:>3} mean={:.4}) V(max={v_max:>3} mean={:.4}) exact={all_exact}",
@@ -287,7 +332,15 @@ fn decode_matches_ffmpeg_per_plane_on_the_real_vp8_test_vectors() {
 
     println!(
         "worst across {vectors_checked} vectors: Y(max={} mean={:.4} exact={}) U(max={} mean={:.4} exact={}) V(max={} mean={:.4} exact={})",
-        worst_y.max, worst_y.mean, worst_y.exact, worst_u.max, worst_u.mean, worst_u.exact, worst_v.max, worst_v.mean, worst_v.exact
+        worst_y.max,
+        worst_y.mean,
+        worst_y.exact,
+        worst_u.max,
+        worst_u.mean,
+        worst_u.exact,
+        worst_v.max,
+        worst_v.mean,
+        worst_v.exact
     );
 
     // Every committed vector decodes byte-exact per plane (issue #301,
@@ -302,9 +355,21 @@ fn decode_matches_ffmpeg_per_plane_on_the_real_vp8_test_vectors() {
     // way the two display-rescale vectors already are — never widen this
     // bound instead.
     assert!(vectors_checked > 0, "no vectors were actually compared");
-    assert!(worst_y.exact, "luma was not byte-exact on every vector: max={} mean={:.4}", worst_y.max, worst_y.mean);
-    assert!(worst_u.exact, "chroma-U was not byte-exact on every vector: max={} mean={:.4}", worst_u.max, worst_u.mean);
-    assert!(worst_v.exact, "chroma-V was not byte-exact on every vector: max={} mean={:.4}", worst_v.max, worst_v.mean);
+    assert!(
+        worst_y.exact,
+        "luma was not byte-exact on every vector: max={} mean={:.4}",
+        worst_y.max, worst_y.mean
+    );
+    assert!(
+        worst_u.exact,
+        "chroma-U was not byte-exact on every vector: max={} mean={:.4}",
+        worst_u.max, worst_u.mean
+    );
+    assert!(
+        worst_v.exact,
+        "chroma-V was not byte-exact on every vector: max={} mean={:.4}",
+        worst_v.max, worst_v.mean
+    );
 }
 
 /// Frame threading (issue #301): every committed fixture decodes to
@@ -322,7 +387,11 @@ fn threads_are_byte_identical() {
         .filter(|p| p.extension().is_some_and(|e| e == "ivf"))
         .collect();
     entries.sort();
-    assert!(!entries.is_empty(), "no .ivf vectors found in {}", dir.display());
+    assert!(
+        !entries.is_empty(),
+        "no .ivf vectors found in {}",
+        dir.display()
+    );
 
     for path in &entries {
         let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
@@ -339,10 +408,21 @@ fn threads_are_byte_identical() {
                     path.display()
                 );
                 for (i, (b, f)) in base.iter().zip(frames.iter()).enumerate() {
-                    assert_eq!(b.width, f.width, "{}: threads={threads} frame {i} width differs", path.display());
-                    assert_eq!(b.height, f.height, "{}: threads={threads} frame {i} height differs", path.display());
                     assert_eq!(
-                        b.yuv, f.yuv,
+                        b.width,
+                        f.width,
+                        "{}: threads={threads} frame {i} width differs",
+                        path.display()
+                    );
+                    assert_eq!(
+                        b.height,
+                        f.height,
+                        "{}: threads={threads} frame {i} height differs",
+                        path.display()
+                    );
+                    assert_eq!(
+                        b.yuv,
+                        f.yuv,
                         "{}: threads={threads} frame {i} is not byte-identical to threads=1",
                         path.display()
                     );
@@ -358,10 +438,14 @@ fn threads_are_byte_identical() {
 /// (so the caller can set the thread count first) instead of building one.
 fn drain_ready(dec: &mut Vp8Decoder, out: &mut Vec<DecodedFrame>) {
     while let Ok(frame) = dec.receive_frame() {
-        let Some((width, height)) = frame.dimensions() else { continue };
+        let Some((width, height)) = frame.dimensions() else {
+            continue;
+        };
         let mut yuv = Vec::new();
         for idx in 0..3 {
-            let Some(plane) = frame.plane(idx) else { continue };
+            let Some(plane) = frame.plane(idx) else {
+                continue;
+            };
             for r in 0..plane.rows() {
                 yuv.extend_from_slice(plane.row(r).unwrap_or(&[]));
             }
@@ -374,7 +458,9 @@ fn decode_all(dec: &mut Vp8Decoder, ivf_bytes: &[u8]) -> Vec<DecodedFrame> {
     let mut budget = Budget::new(Limits::default());
     let mut out = Vec::new();
     for payload in ivf_frame_payloads(ivf_bytes) {
-        let Ok(packet) = Packet::from_slice(&mut budget, payload) else { continue };
+        let Ok(packet) = Packet::from_slice(&mut budget, payload) else {
+            continue;
+        };
         if dec.send_packet(Some(&packet)).is_err() {
             continue;
         }

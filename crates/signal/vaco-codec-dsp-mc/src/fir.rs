@@ -143,8 +143,7 @@ fn fir_row_body<S: Lanes, const N: usize>(simd: S, src: &[u8], taps: &TapSet<N>,
             let v = <S::u8s as SimdBase<S>>::from_slice(simd, window);
             acc = ops::simd::wmla_u8_i16::<S>(acc, v, c);
         }
-        ops::simd::pack_u8_from_i16::<S>(acc.0 >> taps.shift, acc.1 >> taps.shift)
-            .store_slice(out);
+        ops::simd::pack_u8_from_i16::<S>(acc.0 >> taps.shift, acc.1 >> taps.shift).store_slice(out);
     }
 
     let tail_base = full;
@@ -301,7 +300,10 @@ mod tests {
 
     #[test]
     fn every_shipped_tap_set_sums_to_exactly_its_own_scale() {
-        assert_eq!(taps::BILINEAR.coeffs.iter().sum::<i16>(), 1 << taps::BILINEAR.shift);
+        assert_eq!(
+            taps::BILINEAR.coeffs.iter().sum::<i16>(),
+            1 << taps::BILINEAR.shift
+        );
         assert_eq!(
             taps::H264_LUMA_HALFPEL.coeffs.iter().sum::<i16>(),
             1 << taps::H264_LUMA_HALFPEL.shift

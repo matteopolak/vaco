@@ -129,11 +129,19 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
 }
 
 fn open_muxer_d10(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
-    Ok(Box::new(MxfMuxer::new_variant(sink, &FormatOptions::default(), ul::MxfVariant::D10)?))
+    Ok(Box::new(MxfMuxer::new_variant(
+        sink,
+        &FormatOptions::default(),
+        ul::MxfVariant::D10,
+    )?))
 }
 
 fn open_muxer_opatom(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
-    Ok(Box::new(MxfMuxer::new_variant(sink, &FormatOptions::default(), ul::MxfVariant::OpAtom)?))
+    Ok(Box::new(MxfMuxer::new_variant(
+        sink,
+        &FormatOptions::default(),
+        ul::MxfVariant::OpAtom,
+    )?))
 }
 
 #[derive(Debug)]
@@ -256,18 +264,19 @@ impl MxfMuxer {
             .tracks
             .first()
             .ok_or(Error::InvalidData("mxf_d10: no essence track"))?;
-        let bit_rate = track
-            .params
-            .bit_rate
-            .ok_or(Error::Unsupported("mxf_d10: the video stream needs an explicit bit_rate"))?;
+        let bit_rate = track.params.bit_rate.ok_or(Error::Unsupported(
+            "mxf_d10: the video stream needs an explicit bit_rate",
+        ))?;
         let fps_num = i64::from(self.edit_rate.num).max(1);
         let fps_den = i64::from(self.edit_rate.den).max(1);
         #[allow(
             clippy::integer_division,
             reason = "exact CBR frame-byte-count arithmetic (bit_rate * fps_den / (8 * fps_num)); a real D-10 bit_rate is always an exact multiple of 8 * fps_num for a standard frame rate, so this never truncates a real value"
         )]
-        let frame_bytes =
-            i64::try_from(bit_rate).unwrap_or(i64::MAX).saturating_mul(fps_den) / (8 * fps_num);
+        let frame_bytes = i64::try_from(bit_rate)
+            .unwrap_or(i64::MAX)
+            .saturating_mul(fps_den)
+            / (8 * fps_num);
         let system_item_block = round_up_to_kag(20);
         let essence_block = round_up_to_kag(20 + frame_bytes);
         let edit_unit_byte_count =
@@ -307,12 +316,22 @@ impl Muxer for MxfMuxer {
                 "mxf_d10: audio is not yet implemented by this muxer (see docs/format/vaco-mux-mxf.md)",
             ));
         }
-        if media == MediaType::Video && self.pending.iter().any(|p| p.media_type == Some(MediaType::Video)) {
+        if media == MediaType::Video
+            && self
+                .pending
+                .iter()
+                .any(|p| p.media_type == Some(MediaType::Video))
+        {
             return Err(Error::Unsupported(
                 "mxf: this muxer writes at most one video track",
             ));
         }
-        if media == MediaType::Audio && self.pending.iter().any(|p| p.media_type == Some(MediaType::Audio)) {
+        if media == MediaType::Audio
+            && self
+                .pending
+                .iter()
+                .any(|p| p.media_type == Some(MediaType::Audio))
+        {
             return Err(Error::Unsupported(
                 "mxf: this muxer writes at most one audio track",
             ));
@@ -430,7 +449,10 @@ impl Muxer for MxfMuxer {
         };
 
         let header_byte_count = klv_len_minimal(&ul::primer_pack_key(), &primer_bytes)
-            + sets.iter().map(|(k, v)| klv_len_structural(k, v)).sum::<u64>()
+            + sets
+                .iter()
+                .map(|(k, v)| klv_len_structural(k, v))
+                .sum::<u64>()
             + d10_index.as_ref().map_or(0, |(k, v)| klv_len(k, v));
         let index_byte_count = d10_index.as_ref().map_or(0, |(k, v)| klv_len(k, v));
 
@@ -456,7 +478,8 @@ impl Muxer for MxfMuxer {
         // the buffer `partition::write` actually built.
         self.footer_field_positions
             .push(self.header_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET);
-        self.rip_entries.push((body_sid, self.header_this_partition));
+        self.rip_entries
+            .push((body_sid, self.header_this_partition));
         klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
 
         klv::write_minimal(&mut self.out, &ul::primer_pack_key(), &primer_bytes)?;
@@ -505,7 +528,8 @@ impl Muxer for MxfMuxer {
             partition::write(&mut self.out, &ul::body_partition_key(), &body_fields)?;
             self.footer_field_positions
                 .push(body_this_partition + 20 + partition::FOOTER_PARTITION_FIELD_OFFSET);
-            self.rip_entries.push((ESSENCE_BODY_SID, body_this_partition));
+            self.rip_entries
+                .push((ESSENCE_BODY_SID, body_this_partition));
             klv::pad_to_kag(&mut self.out, KAG_SIZE)?;
         }
 
@@ -618,7 +642,6 @@ impl Muxer for MxfMuxer {
     }
 
     fn write_trailer(&mut self) -> Result<()> {
-
         if self.trailer_written {
             return Ok(());
         }
@@ -626,7 +649,13 @@ impl Muxer for MxfMuxer {
             return Err(Error::InvalidData("mxf: init() was not called"));
         }
 
-        let duration = self.packet_counts.iter().copied().max().unwrap_or(0).cast_signed();
+        let duration = self
+            .packet_counts
+            .iter()
+            .copied()
+            .max()
+            .unwrap_or(0)
+            .cast_signed();
 
         // OP-Atom's essence is clip-wrapped: exactly one Generic Container
         // element for the whole file (measured this session against a real
@@ -786,7 +815,9 @@ fn klv_len_structural(key: &[u8; 16], value: &[u8]) -> u64 {
     let class = key[14];
     if matches!(
         class,
-        ul::class::MPEG_VIDEO_DESCRIPTOR | ul::class::AES3_PCM_DESCRIPTOR | ul::class::CDCI_ESSENCE_DESCRIPTOR
+        ul::class::MPEG_VIDEO_DESCRIPTOR
+            | ul::class::AES3_PCM_DESCRIPTOR
+            | ul::class::CDCI_ESSENCE_DESCRIPTOR
     ) {
         klv_len(key, value)
     } else {

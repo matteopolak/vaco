@@ -41,13 +41,21 @@ fn metadata_block(text: &str) -> Vec<u8> {
     out
 }
 
-fn spawn_icy_server(metaint: usize, audio_chunks: &[&[u8]], metadata: &[&str]) -> std::net::SocketAddr {
+fn spawn_icy_server(
+    metaint: usize,
+    audio_chunks: &[&[u8]],
+    metadata: &[&str],
+) -> std::net::SocketAddr {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
     let addr = listener.local_addr().expect("addr");
 
     let mut body = Vec::new();
     for (chunk, meta) in audio_chunks.iter().zip(metadata.iter()) {
-        assert_eq!(chunk.len(), metaint, "test fixture chunk must match metaint");
+        assert_eq!(
+            chunk.len(),
+            metaint,
+            "test fixture chunk must match metaint"
+        );
         body.extend_from_slice(chunk);
         body.extend(metadata_block(meta));
     }
@@ -115,7 +123,10 @@ fn interleaved_metadata_is_stripped_from_the_audio_stream() {
     expected.extend_from_slice(&a);
     expected.extend_from_slice(&b);
     expected.extend_from_slice(&c);
-    assert_eq!(audio, expected, "audio bytes must be exactly the un-interleaved chunks");
+    assert_eq!(
+        audio, expected,
+        "audio bytes must be exactly the un-interleaved chunks"
+    );
 }
 
 #[test]

@@ -158,8 +158,8 @@ fn fixture(name: &str) -> Vec<u8> {
 fn reported_parameters_match_the_reference() {
     for case in cases() {
         let data = fixture(&format!("{}.{}", case.stem, case.ext));
-        let params = (case.parse)(&data)
-            .unwrap_or_else(|| panic!("{}: no parameters at all", case.stem));
+        let params =
+            (case.parse)(&data).unwrap_or_else(|| panic!("{}: no parameters at all", case.stem));
         let video = params
             .video
             .unwrap_or_else(|| panic!("{}: no video parameters", case.stem));
@@ -240,7 +240,12 @@ fn decoded_pixels_match_the_reference() {
         else {
             panic!("{}: not a video frame", case.stem);
         };
-        assert_eq!((*width, *height), (case.width, case.height), "{}", case.stem);
+        assert_eq!(
+            (*width, *height),
+            (case.width, case.height),
+            "{}",
+            case.stem
+        );
         assert_eq!(*format, case.format, "{}", case.stem);
 
         // `-f rawvideo` writes every plane back to back with no padding, so

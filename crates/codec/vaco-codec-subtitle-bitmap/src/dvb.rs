@@ -152,9 +152,7 @@ impl DvbSubDecoder {
             // demuxer's blind fixed-size chunking makes ordinary) silently
             // poisons the buffer until it hits its cap. Found by this crate's
             // own decoder test feeding a packet of prose.
-            if !self.pending.is_empty()
-                && self.pending.first() != Some(&segments::SYNC_BYTE)
-            {
+            if !self.pending.is_empty() && self.pending.first() != Some(&segments::SYNC_BYTE) {
                 if let Some(at) = self.pending.iter().position(|&b| b == segments::SYNC_BYTE) {
                     self.resync_discarded = self.resync_discarded.saturating_add(at as u64);
                     self.pending.drain(..at);
@@ -234,7 +232,9 @@ pub fn decode_display_set(data: &[u8], limits: &Limits) -> Result<SubtitleEvent>
                 let (id, obj) = decode_object_data(payload, limits)?;
                 objects.insert(id, obj);
             }
-            SegmentType::EndOfDisplaySet | SegmentType::DisplayDefinition | SegmentType::Other(_) => {}
+            SegmentType::EndOfDisplaySet
+            | SegmentType::DisplayDefinition
+            | SegmentType::Other(_) => {}
         }
     }
 
@@ -266,7 +266,9 @@ pub fn decode_display_set(data: &[u8], limits: &Limits) -> Result<SubtitleEvent>
 
     Ok(SubtitleEvent {
         start: Duration::ZERO,
-        end: Some(Duration::from_micros(i64::from(page_time_out).saturating_mul(1_000_000))),
+        end: Some(Duration::from_micros(
+            i64::from(page_time_out).saturating_mul(1_000_000),
+        )),
         forced: false,
         rects,
     })
@@ -312,10 +314,20 @@ fn parse_page_composition(payload: &[u8]) -> Result<(u8, Vec<(u8, u32, u32)>)> {
     let mut regions = Vec::new();
     let mut i = 2usize;
     while let Some(&region_id) = payload.get(i) {
-        let x = rb16_at(payload, i.checked_add(2).ok_or(Error::InvalidData("dvbsub: offset overflow"))?)?;
-        let y = rb16_at(payload, i.checked_add(4).ok_or(Error::InvalidData("dvbsub: offset overflow"))?)?;
+        let x = rb16_at(
+            payload,
+            i.checked_add(2)
+                .ok_or(Error::InvalidData("dvbsub: offset overflow"))?,
+        )?;
+        let y = rb16_at(
+            payload,
+            i.checked_add(4)
+                .ok_or(Error::InvalidData("dvbsub: offset overflow"))?,
+        )?;
         regions.push((region_id, u32::from(x), u32::from(y)));
-        i = i.checked_add(6).ok_or(Error::InvalidData("dvbsub: offset overflow"))?;
+        i = i
+            .checked_add(6)
+            .ok_or(Error::InvalidData("dvbsub: offset overflow"))?;
     }
     Ok((timeout, regions))
 }
@@ -325,7 +337,10 @@ fn rb16_at(buf: &[u8], at: usize) -> Result<u16> {
         .get(at)
         .ok_or(Error::InvalidData("dvbsub: segment truncated"))?;
     let lo = *buf
-        .get(at.checked_add(1).ok_or(Error::InvalidData("dvbsub: offset overflow"))?)
+        .get(
+            at.checked_add(1)
+                .ok_or(Error::InvalidData("dvbsub: offset overflow"))?,
+        )
         .ok_or(Error::InvalidData("dvbsub: segment truncated"))?;
     Ok(u16::from(hi) << 8 | u16::from(lo))
 }
@@ -390,7 +405,11 @@ fn parse_region_composition_full(payload: &[u8], limits: &Limits) -> Result<(u8,
         let y = (u32::from(b4) & 0x0F) << 8 | u32::from(b5);
         objects.push(ObjectPlacement { object_id, x, y });
         i = i
-            .checked_add(if object_type == 1 || object_type == 2 { 8 } else { 6 })
+            .checked_add(if object_type == 1 || object_type == 2 {
+                8
+            } else {
+                6
+            })
             .ok_or(Error::InvalidData("dvbsub: offset overflow"))?;
     }
 
@@ -843,7 +862,12 @@ fn default_clut_16(index: u32) -> Rgba {
         if b2 == 0 && b3 == 0 && b4 == 0 {
             return Rgba::TRANSPARENT;
         }
-        return Rgba::new(pct(100.0 * f64::from(b4)), pct(100.0 * f64::from(b3)), pct(100.0 * f64::from(b2)), 255);
+        return Rgba::new(
+            pct(100.0 * f64::from(b4)),
+            pct(100.0 * f64::from(b3)),
+            pct(100.0 * f64::from(b2)),
+            255,
+        );
     }
     Rgba::new(
         pct(50.0 * f64::from(b4)),
@@ -854,7 +878,10 @@ fn default_clut_16(index: u32) -> Rgba {
 }
 
 /// §10.1, an 8-bit CLUT-entry index split into bits `b1..b8`.
-#[allow(clippy::many_single_char_names, reason = "b1..b8 are EN 300 743's own field names for this formula")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "b1..b8 are EN 300 743's own field names for this formula"
+)]
 fn default_clut_256(index: u32) -> Rgba {
     let b1 = (index >> 7) & 1;
     let b2 = (index >> 6) & 1;
@@ -871,7 +898,12 @@ fn default_clut_256(index: u32) -> Rgba {
             if b6 == 0 && b7 == 0 && b8 == 0 {
                 return Rgba::new(0, 0, 0, 0);
             }
-            return Rgba::new(pct(100.0 * f(b8)), pct(100.0 * f(b7)), pct(100.0 * f(b6)), pct(75.0));
+            return Rgba::new(
+                pct(100.0 * f(b8)),
+                pct(100.0 * f(b7)),
+                pct(100.0 * f(b6)),
+                pct(75.0),
+            );
         }
         return Rgba::new(
             pct(33.3 * f(b8) + 66.7 * f(b4)),

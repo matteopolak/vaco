@@ -216,8 +216,8 @@ impl Searcher {
         let Some(cost) = self.candidate_cost(cur, refp, block, metric, mv) else {
             return false;
         };
-        let better = cost < best.cost
-            || (cost == best.cost && mv.magnitude_sq() < best.mv.magnitude_sq());
+        let better =
+            cost < best.cost || (cost == best.cost && mv.magnitude_sq() < best.mv.magnitude_sq());
         if better {
             *best = SearchResult { mv, cost };
         }
@@ -244,7 +244,14 @@ impl Searcher {
                 if dx == 0 && dy == 0 {
                     continue; // `start` itself, already evaluated above
                 }
-                self.consider(cur, refp, block, cfg.metric, start.offset(dx, dy), &mut best);
+                self.consider(
+                    cur,
+                    refp,
+                    block,
+                    cfg.metric,
+                    start.offset(dx, dy),
+                    &mut best,
+                );
             }
         }
         best
@@ -493,7 +500,10 @@ mod tests {
             let full = searcher.full_search(cur, refp, f.block, &cfg, Displacement::ZERO);
             let diamond = searcher.diamond_search(cur, refp, f.block, &cfg, Displacement::ZERO);
 
-            assert_eq!(full.cost, 0, "full search must find the exact shift ({dx},{dy})");
+            assert_eq!(
+                full.cost, 0,
+                "full search must find the exact shift ({dx},{dy})"
+            );
             assert_eq!(
                 diamond.cost, 0,
                 "diamond search must recover the true shift ({dx},{dy}), found {:?}",

@@ -244,7 +244,10 @@ const LEVEL_SCALE8X8_V: [[i32; 6]; 6] = [
     reason = "cat is one of the six literal constants 0..=5 below, into a fixed 6-element row -- not a bitstream-derived index"
 )]
 fn level_scale8x8(m: u32, i: u32, j: u32) -> i32 {
-    let row = LEVEL_SCALE8X8_V.get((m % 6) as usize).copied().unwrap_or([16; 6]);
+    let row = LEVEL_SCALE8X8_V
+        .get((m % 6) as usize)
+        .copied()
+        .unwrap_or([16; 6]);
     let (ic, jc) = (i % 4, j % 4);
     let cat = if ic == 0 && jc == 0 {
         0
@@ -484,7 +487,10 @@ mod tests {
     fn no_two_level_scale8x8_rows_are_byte_identical() {
         for (i, row_a) in LEVEL_SCALE8X8_V.iter().enumerate() {
             for row_b in LEVEL_SCALE8X8_V.iter().skip(i + 1) {
-                assert_ne!(row_a, row_b, "two rows of LEVEL_SCALE8X8_V are byte-identical");
+                assert_ne!(
+                    row_a, row_b,
+                    "two rows of LEVEL_SCALE8X8_V are byte-identical"
+                );
             }
         }
     }

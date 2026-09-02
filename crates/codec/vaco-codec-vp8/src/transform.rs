@@ -69,19 +69,28 @@ impl DequantFactors {
 
 type Mat4 = [[i32; 4]; 4];
 
-#[allow(clippy::many_single_char_names, reason = "naming all 16 flat positions is clearer than indexing them")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "naming all 16 flat positions is clearer than indexing them"
+)]
 fn to_mat(flat: &[i32; 16]) -> Mat4 {
     let [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p] = *flat;
     [[a, b, c, d], [e, f, g, h], [i, j, k, l], [m, n, o, p]]
 }
 
-#[allow(clippy::many_single_char_names, reason = "naming all 16 flat positions is clearer than indexing them")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "naming all 16 flat positions is clearer than indexing them"
+)]
 fn to_flat(mat: Mat4) -> [i32; 16] {
     let [[a, b, c, d], [e, f, g, h], [i, j, k, l], [m, n, o, p]] = mat;
     [a, b, c, d, e, f, g, h, i, j, k, l, m, n, o, p]
 }
 
-#[allow(clippy::many_single_char_names, reason = "naming all 16 flat positions is clearer than indexing them")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "naming all 16 flat positions is clearer than indexing them"
+)]
 fn transpose(mat: Mat4) -> Mat4 {
     let [[a, b, c, d], [e, f, g, h], [i, j, k, l], [m, n, o, p]] = mat;
     [[a, e, i, m], [b, f, j, n], [c, g, k, o], [d, h, l, p]]
@@ -249,7 +258,10 @@ pub fn forward_wht(dcs: &[i32; 16]) -> [i32; 16] {
 /// crate's dequantiser (this module, above) only ever multiplies a level
 /// back out, so any rounding rule that inverts it is a valid encoder.
 #[must_use]
-#[allow(clippy::integer_division, reason = "nearest-integer quantisation, not a size split")]
+#[allow(
+    clippy::integer_division,
+    reason = "nearest-integer quantisation, not a size split"
+)]
 fn quantize_one(coeff: i32, step: i32) -> i32 {
     if step <= 0 {
         return 0;
@@ -299,7 +311,10 @@ mod tests {
     fn dequant_special_cases_match_the_spec_formulas() {
         let d = DequantFactors::new(0, 0, 0, 0, 0, 0);
         assert_eq!(d.y2_dc, dc_q(0) * 2);
-        #[allow(clippy::integer_division, reason = "matches the spec formula under test")]
+        #[allow(
+            clippy::integer_division,
+            reason = "matches the spec formula under test"
+        )]
         let expected_y2_ac = (ac_q(0) * 155 / 100).max(8);
         assert_eq!(d.y2_ac, expected_y2_ac);
         assert_eq!(d.uv_dc, dc_q(0).min(132));
@@ -380,12 +395,20 @@ mod tests {
     /// one is very unlikely to agree with the other by accident, unlike two
     /// verbatim copies of the same code (`AGENT-CONSTRAINTS.md`'s "an oracle
     /// you wrote shares your misreading").
-    #[allow(clippy::indexing_slicing, reason = "test-only literal port, mirroring the C source's own indexing")]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "test-only literal port, mirroring the C source's own indexing"
+    )]
     mod literal_reference {
         pub(super) fn fdct(input: &[i32; 16]) -> [i32; 16] {
             let mut tmp = [0i32; 16];
             for i in 0..4 {
-                let ip = [input[i * 4], input[i * 4 + 1], input[i * 4 + 2], input[i * 4 + 3]];
+                let ip = [
+                    input[i * 4],
+                    input[i * 4 + 1],
+                    input[i * 4 + 2],
+                    input[i * 4 + 3],
+                ];
                 let a1 = (ip[0] + ip[3]) * 8;
                 let b1 = (ip[1] + ip[2]) * 8;
                 let c1 = (ip[1] - ip[2]) * 8;
@@ -412,7 +435,12 @@ mod tests {
         pub(super) fn fwht(input: &[i32; 16]) -> [i32; 16] {
             let mut tmp = [0i32; 16];
             for i in 0..4 {
-                let ip = [input[i * 4], input[i * 4 + 1], input[i * 4 + 2], input[i * 4 + 3]];
+                let ip = [
+                    input[i * 4],
+                    input[i * 4 + 1],
+                    input[i * 4 + 2],
+                    input[i * 4 + 3],
+                ];
                 let a1 = (ip[0] + ip[2]) * 4;
                 let d1 = (ip[1] + ip[3]) * 4;
                 let c1 = (ip[1] - ip[3]) * 4;

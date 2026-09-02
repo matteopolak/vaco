@@ -16,10 +16,10 @@ pub mod scan;
 pub use conversion::{
     ADJUSTED_TX_SIZE, COEFF_BASE_CTX_OFFSET, DR_INTRA_DERIVATIVE, INTRA_MODE_CONTEXT,
     MAG_REF_OFFSET_WITH_TX_CLASS, MAX_TX_DEPTH, MAX_TX_SIZE_RECT, MI_HEIGHT_LOG2, MI_WIDTH_LOG2,
-    MODE_TO_ANGLE, NUM_4X4_BLOCKS_HIGH, NUM_4X4_BLOCKS_WIDE, PARTITION_SUBSIZE, SIG_REF_DIFF_OFFSET,
-    SIZE_GROUP, SM_WEIGHTS_TX_4X4, SM_WEIGHTS_TX_8X8, SM_WEIGHTS_TX_16X16, SM_WEIGHTS_TX_32X32,
-    SM_WEIGHTS_TX_64X64, SPLIT_TX_SIZE, TRANSFORM_ROW_SHIFT, TX_HEIGHT, TX_HEIGHT_LOG2, TX_SIZE_SQR,
-    TX_SIZE_SQR_UP, TX_WIDTH, TX_WIDTH_LOG2,
+    MODE_TO_ANGLE, NUM_4X4_BLOCKS_HIGH, NUM_4X4_BLOCKS_WIDE, PARTITION_SUBSIZE,
+    SIG_REF_DIFF_OFFSET, SIZE_GROUP, SM_WEIGHTS_TX_4X4, SM_WEIGHTS_TX_8X8, SM_WEIGHTS_TX_16X16,
+    SM_WEIGHTS_TX_32X32, SM_WEIGHTS_TX_64X64, SPLIT_TX_SIZE, TRANSFORM_ROW_SHIFT, TX_HEIGHT,
+    TX_HEIGHT_LOG2, TX_SIZE_SQR, TX_SIZE_SQR_UP, TX_WIDTH, TX_WIDTH_LOG2,
 };
 
 /// `BLOCK_INVALID`, §3: one past the last real `BLOCK_SIZES` ordinal —
@@ -38,13 +38,25 @@ pub const MI_SIZE: u32 = 4;
 /// than extracted.
 #[must_use]
 pub fn block_width(bsize: u8) -> u32 {
-    MI_SIZE * u32::from(NUM_4X4_BLOCKS_WIDE.get(usize::from(bsize)).copied().unwrap_or(1))
+    MI_SIZE
+        * u32::from(
+            NUM_4X4_BLOCKS_WIDE
+                .get(usize::from(bsize))
+                .copied()
+                .unwrap_or(1),
+        )
 }
 
 /// `Block_Height[x]`, §9.3: `4 * Num_4x4_Blocks_High[x]`.
 #[must_use]
 pub fn block_height(bsize: u8) -> u32 {
-    MI_SIZE * u32::from(NUM_4X4_BLOCKS_HIGH.get(usize::from(bsize)).copied().unwrap_or(1))
+    MI_SIZE
+        * u32::from(
+            NUM_4X4_BLOCKS_HIGH
+                .get(usize::from(bsize))
+                .copied()
+                .unwrap_or(1),
+        )
 }
 
 /// One 1D transform kind, as used per-axis by [`crate::transform`] — the row
@@ -91,14 +103,19 @@ pub const MODE_TO_TXFM: [(Tx1D, Tx1D); 14] = [
 pub const COEFF_BASE_POS_CTX_OFFSET: [u16; 3] = [26, 31, 36];
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing, reason = "test code over fixed-shape spec tables")]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "test code over fixed-shape spec tables"
+)]
 mod tests {
     use super::*;
 
     fn is_permutation(scan: &[u16]) -> bool {
         let mut seen = vec![false; scan.len()];
         for &s in scan {
-            let Some(slot) = seen.get_mut(usize::from(s)) else { return false };
+            let Some(slot) = seen.get_mut(usize::from(s)) else {
+                return false;
+            };
             if *slot {
                 return false;
             }

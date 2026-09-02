@@ -258,6 +258,10 @@ mod tests {
         let mut f = (DESC.build)(&aac_params()).unwrap();
         f.send_packet(Some(&pkt(&frame))).unwrap();
         let out = f.receive_packet().unwrap();
-        assert_eq!(out.payload(), &[0xAA; 4], "the 2 CRC bytes must also be stripped");
+        assert_eq!(
+            out.payload(),
+            &[0xAA; 4],
+            "the 2 CRC bytes must also be stripped"
+        );
     }
 }

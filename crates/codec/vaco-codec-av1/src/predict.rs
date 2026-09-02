@@ -55,13 +55,19 @@ impl Edge {
     const BASE: i32 = 2;
 
     fn new(len: usize) -> Self {
-        Self { data: vec![0; len + usize::try_from(Self::BASE).unwrap_or(0)] }
+        Self {
+            data: vec![0; len + usize::try_from(Self::BASE).unwrap_or(0)],
+        }
     }
 
     #[must_use]
     pub fn get(&self, i: i32) -> i32 {
         let idx = i + Self::BASE;
-        usize::try_from(idx).ok().and_then(|idx| self.data.get(idx)).copied().unwrap_or(0)
+        usize::try_from(idx)
+            .ok()
+            .and_then(|idx| self.data.get(idx))
+            .copied()
+            .unwrap_or(0)
     }
 
     pub fn set(&mut self, i: i32, v: i32) {
@@ -189,7 +195,17 @@ fn predict_basic(above: &Edge, left: &Edge, w: usize, h: usize) -> Vec<Vec<u16>>
 }
 
 /// §7.11.2.5.
-fn predict_dc(above: &Edge, left: &Edge, have_left: bool, have_above: bool, log2_w: u32, log2_h: u32, w: usize, h: usize, bit_depth: u8) -> Vec<Vec<u16>> {
+fn predict_dc(
+    above: &Edge,
+    left: &Edge,
+    have_left: bool,
+    have_above: bool,
+    log2_w: u32,
+    log2_h: u32,
+    w: usize,
+    h: usize,
+    bit_depth: u8,
+) -> Vec<Vec<u16>> {
     let value = if have_left && have_above {
         let mut sum = 0i64;
         for k in 0..h {
@@ -199,7 +215,10 @@ fn predict_dc(above: &Edge, left: &Edge, have_left: bool, have_above: bool, log2
             sum += i64::from(above.get(i32::try_from(k).unwrap_or(0)));
         }
         sum += i64::try_from((w + h) >> 1).unwrap_or(0);
-        #[allow(clippy::integer_division, reason = "\u{a7}7.11.2.5's own avg = sum / (w + h)")]
+        #[allow(
+            clippy::integer_division,
+            reason = "\u{a7}7.11.2.5's own avg = sum / (w + h)"
+        )]
         let avg = sum / i64::try_from(w + h).unwrap_or(1);
         i32::try_from(avg).unwrap_or(0)
     } else if have_left {
@@ -232,7 +251,15 @@ fn sm_weights(log2: u32) -> &'static [u16] {
 }
 
 /// §7.11.2.6.
-fn predict_smooth(mode: PredMode, above: &Edge, left: &Edge, log2_w: u32, log2_h: u32, w: usize, h: usize) -> Vec<Vec<u16>> {
+fn predict_smooth(
+    mode: PredMode,
+    above: &Edge,
+    left: &Edge,
+    log2_w: u32,
+    log2_h: u32,
+    w: usize,
+    h: usize,
+) -> Vec<Vec<u16>> {
     let mut pred = vec![vec![0u16; w]; h];
     let above_last = above.get(i32::try_from(w).unwrap_or(0).saturating_sub(1));
     let left_last = left.get(i32::try_from(h).unwrap_or(0).saturating_sub(1));
@@ -285,12 +312,18 @@ fn intra_edge_filter(edge: &mut Edge, sz: i32, strength: u8) {
         return;
     }
     let orig: Vec<i32> = (0..sz).map(|i| edge.get(i - 1)).collect();
-    let kernel = INTRA_EDGE_KERNEL.get(usize::from(strength.saturating_sub(1))).copied().unwrap_or([0; 5]);
+    let kernel = INTRA_EDGE_KERNEL
+        .get(usize::from(strength.saturating_sub(1)))
+        .copied()
+        .unwrap_or([0; 5]);
     for i in 1..sz {
         let mut s = 0i32;
         for (j, k) in kernel.iter().enumerate() {
             let idx = (i - 2 + i32::try_from(j).unwrap_or(0)).clamp(0, sz - 1);
-            s += k * orig.get(usize::try_from(idx).unwrap_or(0)).copied().unwrap_or(0);
+            s += k * orig
+                .get(usize::try_from(idx).unwrap_or(0))
+                .copied()
+                .unwrap_or(0);
         }
         let v = (s + 8) >> 4;
         edge.set(i - 1, v);
@@ -307,9 +340,21 @@ fn edge_filter_strength(w: i32, h: i32, filter_type: u8, delta: i32) -> u8 {
         } else if blk_wh <= 16 {
             u8::from(d >= 40)
         } else if blk_wh <= 24 {
-            if d >= 32 { 3 } else if d >= 16 { 2 } else { u8::from(d >= 8) }
+            if d >= 32 {
+                3
+            } else if d >= 16 {
+                2
+            } else {
+                u8::from(d >= 8)
+            }
         } else if blk_wh <= 32 {
-            if d >= 32 { 3 } else if d >= 4 { 2 } else { 1 }
+            if d >= 32 {
+                3
+            } else if d >= 4 {
+                2
+            } else {
+                1
+            }
         } else {
             3
         }
@@ -372,7 +417,11 @@ fn upsample_edge(edge: &mut Edge, num_px: i32, bit_depth: u8) {
 /// every real decode of this crate's own (smooth-mode-sparse) test corpus
 /// measured, and is the specification's own "neither neighbour is a smooth
 /// mode" case.
-#[allow(clippy::too_many_arguments, clippy::too_many_lines, reason = "mirrors the directional intra prediction process, section 7.11.2.4")]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "mirrors the directional intra prediction process, section 7.11.2.4"
+)]
 fn predict_directional(
     above_in: &Edge,
     left_in: &Edge,
@@ -390,7 +439,12 @@ fn predict_directional(
 ) -> Vec<Vec<u16>> {
     let mut above = above_in.clone();
     let mut left = left_in.clone();
-    let p_angle = i32::from(tables::MODE_TO_ANGLE.get(usize::from(mode_ordinal)).copied().unwrap_or(0)) + angle_delta * 3;
+    let p_angle = i32::from(
+        tables::MODE_TO_ANGLE
+            .get(usize::from(mode_ordinal))
+            .copied()
+            .unwrap_or(0),
+    ) + angle_delta * 3;
 
     let mut upsample_above = false;
     let mut upsample_left = false;
@@ -422,21 +476,40 @@ fn predict_directional(
 
     let dr = &tables::DR_INTRA_DERIVATIVE;
     let dx = if p_angle < 90 {
-        i32::from(dr.get(usize::try_from(p_angle).unwrap_or(0)).copied().unwrap_or(0))
+        i32::from(
+            dr.get(usize::try_from(p_angle).unwrap_or(0))
+                .copied()
+                .unwrap_or(0),
+        )
     } else if p_angle > 90 && p_angle < 180 {
-        i32::from(dr.get(usize::try_from(180 - p_angle).unwrap_or(0)).copied().unwrap_or(0))
+        i32::from(
+            dr.get(usize::try_from(180 - p_angle).unwrap_or(0))
+                .copied()
+                .unwrap_or(0),
+        )
     } else {
         0
     };
     let dy = if p_angle > 90 && p_angle < 180 {
-        i32::from(dr.get(usize::try_from(p_angle - 90).unwrap_or(0)).copied().unwrap_or(0))
+        i32::from(
+            dr.get(usize::try_from(p_angle - 90).unwrap_or(0))
+                .copied()
+                .unwrap_or(0),
+        )
     } else if p_angle > 180 {
-        i32::from(dr.get(usize::try_from(270 - p_angle).unwrap_or(0)).copied().unwrap_or(0))
+        i32::from(
+            dr.get(usize::try_from(270 - p_angle).unwrap_or(0))
+                .copied()
+                .unwrap_or(0),
+        )
     } else {
         0
     };
 
-    let (wu, hu) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
+    let (wu, hu) = (
+        usize::try_from(w).unwrap_or(0),
+        usize::try_from(h).unwrap_or(0),
+    );
     let mut pred = vec![vec![0u16; wu]; hu];
     let ua = i32::from(upsample_above);
     let ul = i32::from(upsample_left);
@@ -449,7 +522,10 @@ fn predict_directional(
                 let shift = ((idx << ua) >> 1) & 0x1F;
                 let max_base_x = (w + h - 1) << ua;
                 let v = if base < max_base_x {
-                    round2(above.get(base) * (32 - shift) + above.get(base + 1) * shift, 5)
+                    round2(
+                        above.get(base) * (32 - shift) + above.get(base + 1) * shift,
+                        5,
+                    )
                 } else {
                     above.get(max_base_x)
                 };
@@ -459,16 +535,24 @@ fn predict_directional(
     } else if p_angle > 90 && p_angle < 180 {
         for (i, row) in pred.iter_mut().enumerate() {
             for (j, slot) in row.iter_mut().enumerate() {
-                let idx1 = (i32::try_from(j).unwrap_or(0) << 6) - (i32::try_from(i).unwrap_or(0) + 1) * dx;
+                let idx1 =
+                    (i32::try_from(j).unwrap_or(0) << 6) - (i32::try_from(i).unwrap_or(0) + 1) * dx;
                 let base1 = idx1 >> (6 - ua);
                 let v = if base1 >= -(1 << ua) {
                     let shift = ((idx1 << ua) >> 1) & 0x1F;
-                    round2(above.get(base1) * (32 - shift) + above.get(base1 + 1) * shift, 5)
+                    round2(
+                        above.get(base1) * (32 - shift) + above.get(base1 + 1) * shift,
+                        5,
+                    )
                 } else {
-                    let idx2 = (i32::try_from(i).unwrap_or(0) << 6) - (i32::try_from(j).unwrap_or(0) + 1) * dy;
+                    let idx2 = (i32::try_from(i).unwrap_or(0) << 6)
+                        - (i32::try_from(j).unwrap_or(0) + 1) * dy;
                     let base2 = idx2 >> (6 - ul);
                     let shift = ((idx2 << ul) >> 1) & 0x1F;
-                    round2(left.get(base2) * (32 - shift) + left.get(base2 + 1) * shift, 5)
+                    round2(
+                        left.get(base2) * (32 - shift) + left.get(base2 + 1) * shift,
+                        5,
+                    )
                 };
                 *slot = u16::try_from(v.clamp(0, i32::from(u16::MAX))).unwrap_or(0);
             }
@@ -479,19 +563,31 @@ fn predict_directional(
                 let idx = (i32::try_from(j).unwrap_or(0) + 1) * dy;
                 let base = (idx >> (6 - ul)) + (i32::try_from(i).unwrap_or(0) << ul);
                 let shift = ((idx << ul) >> 1) & 0x1F;
-                let v = round2(left.get(base) * (32 - shift) + left.get(base + 1) * shift, 5);
+                let v = round2(
+                    left.get(base) * (32 - shift) + left.get(base + 1) * shift,
+                    5,
+                );
                 *slot = u16::try_from(v.clamp(0, i32::from(u16::MAX))).unwrap_or(0);
             }
         }
     } else if p_angle == 90 {
         for row in &mut pred {
             for (j, slot) in row.iter_mut().enumerate() {
-                *slot = u16::try_from(above.get(i32::try_from(j).unwrap_or(0)).clamp(0, i32::from(u16::MAX))).unwrap_or(0);
+                *slot = u16::try_from(
+                    above
+                        .get(i32::try_from(j).unwrap_or(0))
+                        .clamp(0, i32::from(u16::MAX)),
+                )
+                .unwrap_or(0);
             }
         }
     } else {
         for (i, row) in pred.iter_mut().enumerate() {
-            let v = u16::try_from(left.get(i32::try_from(i).unwrap_or(0)).clamp(0, i32::from(u16::MAX))).unwrap_or(0);
+            let v = u16::try_from(
+                left.get(i32::try_from(i).unwrap_or(0))
+                    .clamp(0, i32::from(u16::MAX)),
+            )
+            .unwrap_or(0);
             for slot in row.iter_mut() {
                 *slot = v;
             }
@@ -534,16 +630,49 @@ pub fn predict_intra(
     filter_intra: bool,
 ) -> Result<Vec<Vec<u16>>> {
     if filter_intra {
-        return Err(Error::Unsupported("vaco-codec-av1: use_filter_intra is not decoded"));
+        return Err(Error::Unsupported(
+            "vaco-codec-av1: use_filter_intra is not decoded",
+        ));
     }
     let w = 1i32 << log2_w;
     let h = 1i32 << log2_h;
-    let (above, left) = build_edges(plane, x, y, have_left, have_above, have_above_right, have_below_left, w, h, max_x, max_y, bit_depth);
+    let (above, left) = build_edges(
+        plane,
+        x,
+        y,
+        have_left,
+        have_above,
+        have_above_right,
+        have_below_left,
+        w,
+        h,
+        max_x,
+        max_y,
+        bit_depth,
+    );
 
     let pred = match mode {
-        PredMode::Directional(ord) => predict_directional(&above, &left, ord, angle_delta, w, h, max_x, max_y, x, y, enable_edge_filter, 0, bit_depth),
-        PredMode::SmoothAll | PredMode::SmoothV | PredMode::SmoothH => predict_smooth(mode, &above, &left, log2_w, log2_h, w as usize, h as usize),
-        PredMode::Dc => predict_dc(&above, &left, have_left, have_above, log2_w, log2_h, w as usize, h as usize, bit_depth),
+        PredMode::Directional(ord) => predict_directional(
+            &above,
+            &left,
+            ord,
+            angle_delta,
+            w,
+            h,
+            max_x,
+            max_y,
+            x,
+            y,
+            enable_edge_filter,
+            0,
+            bit_depth,
+        ),
+        PredMode::SmoothAll | PredMode::SmoothV | PredMode::SmoothH => {
+            predict_smooth(mode, &above, &left, log2_w, log2_h, w as usize, h as usize)
+        }
+        PredMode::Dc => predict_dc(
+            &above, &left, have_left, have_above, log2_w, log2_h, w as usize, h as usize, bit_depth,
+        ),
         PredMode::Paeth => predict_basic(&above, &left, w as usize, h as usize),
     };
     Ok(pred)
@@ -556,7 +685,10 @@ pub fn predict_intra(
 /// transform block decoded for this mode-info block, which can be smaller
 /// than the full luma plane when chroma runs ahead of luma in raster
 /// order).
-#[allow(clippy::too_many_arguments, reason = "mirrors predict_chroma_from_luma's own input list, section 7.11.5")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "mirrors predict_chroma_from_luma's own input list, section 7.11.5"
+)]
 pub fn predict_chroma_from_luma(
     chroma: &mut Plane,
     luma: &Plane,
@@ -602,17 +734,28 @@ pub fn predict_chroma_from_luma(
     for i in 0..h {
         for j in 0..w {
             let dc = i32::from(chroma.get_clamped(start_x + j, start_y + i));
-            let lij = l.get(usize::try_from(i).unwrap_or(0)).and_then(|r| r.get(usize::try_from(j).unwrap_or(0))).copied().unwrap_or(0);
+            let lij = l
+                .get(usize::try_from(i).unwrap_or(0))
+                .and_then(|r| r.get(usize::try_from(j).unwrap_or(0)))
+                .copied()
+                .unwrap_or(0);
             let scaled_luma = round2_signed(alpha * (lij - luma_avg), 6);
             let v = clip1(dc + scaled_luma, bit_depth);
-            let (ux, uy) = (usize::try_from(start_x + j).unwrap_or(0), usize::try_from(start_y + i).unwrap_or(0));
+            let (ux, uy) = (
+                usize::try_from(start_x + j).unwrap_or(0),
+                usize::try_from(start_y + i).unwrap_or(0),
+            );
             chroma.set(ux, uy, v);
         }
     }
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code over fixed fixtures")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test code over fixed fixtures"
+)]
 mod tests {
     use super::*;
     use vaco_limits::{Budget, Limits};
@@ -631,7 +774,25 @@ mod tests {
     #[test]
     fn dc_prediction_of_a_flat_neighbourhood_reproduces_its_value() {
         let plane = flat_plane(128, 32);
-        let pred = predict_intra(&plane, 8, 8, true, true, false, false, PredMode::Dc, 0, 2, 2, 31, 31, 8, true, false).unwrap();
+        let pred = predict_intra(
+            &plane,
+            8,
+            8,
+            true,
+            true,
+            false,
+            false,
+            PredMode::Dc,
+            0,
+            2,
+            2,
+            31,
+            31,
+            8,
+            true,
+            false,
+        )
+        .unwrap();
         for row in &pred {
             for &v in row {
                 assert_eq!(v, 128);
@@ -642,7 +803,25 @@ mod tests {
     #[test]
     fn no_neighbours_falls_back_to_the_bit_depth_midpoint() {
         let plane = flat_plane(0, 16);
-        let pred = predict_intra(&plane, 0, 0, false, false, false, false, PredMode::Dc, 0, 2, 2, 15, 15, 8, true, false).unwrap();
+        let pred = predict_intra(
+            &plane,
+            0,
+            0,
+            false,
+            false,
+            false,
+            false,
+            PredMode::Dc,
+            0,
+            2,
+            2,
+            15,
+            15,
+            8,
+            true,
+            false,
+        )
+        .unwrap();
         assert_eq!(pred[0][0], 128);
     }
 
@@ -650,9 +829,21 @@ mod tests {
     fn directional_and_smooth_never_panic_across_every_block_size() {
         let plane = flat_plane(90, 64);
         for log2 in [2u32, 3, 4, 5] {
-            for mode in [PredMode::Dc, PredMode::Paeth, PredMode::SmoothAll, PredMode::SmoothV, PredMode::SmoothH, PredMode::Directional(0), PredMode::Directional(4)] {
+            for mode in [
+                PredMode::Dc,
+                PredMode::Paeth,
+                PredMode::SmoothAll,
+                PredMode::SmoothV,
+                PredMode::SmoothH,
+                PredMode::Directional(0),
+                PredMode::Directional(4),
+            ] {
                 for delta in [-3i32, 0, 3] {
-                    let _ = predict_intra(&plane, 16, 16, true, true, true, true, mode, delta, log2, log2, 63, 63, 8, true, false).unwrap();
+                    let _ = predict_intra(
+                        &plane, 16, 16, true, true, true, true, mode, delta, log2, log2, 63, 63, 8,
+                        true, false,
+                    )
+                    .unwrap();
                 }
             }
         }
@@ -661,7 +852,24 @@ mod tests {
     #[test]
     fn filter_intra_is_reported_unsupported_not_guessed() {
         let plane = flat_plane(0, 16);
-        let err = predict_intra(&plane, 0, 0, true, true, false, false, PredMode::Dc, 0, 2, 2, 15, 15, 8, true, true);
+        let err = predict_intra(
+            &plane,
+            0,
+            0,
+            true,
+            true,
+            false,
+            false,
+            PredMode::Dc,
+            0,
+            2,
+            2,
+            15,
+            15,
+            8,
+            true,
+            true,
+        );
         assert!(err.is_err());
     }
 }

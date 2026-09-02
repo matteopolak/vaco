@@ -64,17 +64,43 @@ pub(crate) struct Opts {
     pub rate: vaco_opts::VideoRate,
     #[opt(name = "octaves", help = "set the number of components", default = 1, range = 1..=i32::MAX, flags(filtering))]
     pub octaves: i32,
-    #[opt(name = "persistence", help = "set the octaves persistence", default = 1.0, flags(filtering))]
+    #[opt(
+        name = "persistence",
+        help = "set the octaves persistence",
+        default = 1.0,
+        flags(filtering)
+    )]
     pub persistence: f64,
-    #[opt(name = "xscale", help = "set x-scale factor", default = 1.0, flags(filtering))]
+    #[opt(
+        name = "xscale",
+        help = "set x-scale factor",
+        default = 1.0,
+        flags(filtering)
+    )]
     pub xscale: f64,
-    #[opt(name = "yscale", help = "set y-scale factor", default = 1.0, flags(filtering))]
+    #[opt(
+        name = "yscale",
+        help = "set y-scale factor",
+        default = 1.0,
+        flags(filtering)
+    )]
     pub yscale: f64,
-    #[opt(name = "tscale", help = "set t-scale factor", default = 1.0, flags(filtering))]
+    #[opt(
+        name = "tscale",
+        help = "set t-scale factor",
+        default = 1.0,
+        flags(filtering)
+    )]
     pub tscale: f64,
     #[opt(name = "random_mode", help = "set random mode", unit = "perlin_random_mode", default = RandomMode::Random, default_repr = "random", flags(filtering))]
     pub random_mode: RandomMode,
-    #[opt(name = "random_seed", alias = "seed", help = "set the seed", default = 0_u32, flags(filtering))]
+    #[opt(
+        name = "random_seed",
+        alias = "seed",
+        help = "set the seed",
+        default = 0_u32,
+        flags(filtering)
+    )]
     pub random_seed: u32,
 }
 
@@ -82,7 +108,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }

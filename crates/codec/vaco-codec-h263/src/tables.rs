@@ -29,14 +29,70 @@ pub fn bits_of(s: &str) -> (u32, u8) {
 /// `ZIGZAG_SCAN[n]` is the `(row, col)` position the `n`-th transmitted
 /// coefficient belongs at, 0-indexed (the spec figures are 1-indexed).
 pub const ZIGZAG_SCAN: [(u8, u8); 64] = [
-    (0, 0), (0, 1), (1, 0), (2, 0), (1, 1), (0, 2), (0, 3), (1, 2),
-    (2, 1), (3, 0), (4, 0), (3, 1), (2, 2), (1, 3), (0, 4), (0, 5),
-    (1, 4), (2, 3), (3, 2), (4, 1), (5, 0), (6, 0), (5, 1), (4, 2),
-    (3, 3), (2, 4), (1, 5), (0, 6), (0, 7), (1, 6), (2, 5), (3, 4),
-    (4, 3), (5, 2), (6, 1), (7, 0), (7, 1), (6, 2), (5, 3), (4, 4),
-    (3, 5), (2, 6), (1, 7), (2, 7), (3, 6), (4, 5), (5, 4), (6, 3),
-    (7, 2), (7, 3), (6, 4), (5, 5), (4, 6), (3, 7), (4, 7), (5, 6),
-    (6, 5), (7, 4), (7, 5), (6, 6), (5, 7), (6, 7), (7, 6), (7, 7),
+    (0, 0),
+    (0, 1),
+    (1, 0),
+    (2, 0),
+    (1, 1),
+    (0, 2),
+    (0, 3),
+    (1, 2),
+    (2, 1),
+    (3, 0),
+    (4, 0),
+    (3, 1),
+    (2, 2),
+    (1, 3),
+    (0, 4),
+    (0, 5),
+    (1, 4),
+    (2, 3),
+    (3, 2),
+    (4, 1),
+    (5, 0),
+    (6, 0),
+    (5, 1),
+    (4, 2),
+    (3, 3),
+    (2, 4),
+    (1, 5),
+    (0, 6),
+    (0, 7),
+    (1, 6),
+    (2, 5),
+    (3, 4),
+    (4, 3),
+    (5, 2),
+    (6, 1),
+    (7, 0),
+    (7, 1),
+    (6, 2),
+    (5, 3),
+    (4, 4),
+    (3, 5),
+    (2, 6),
+    (1, 7),
+    (2, 7),
+    (3, 6),
+    (4, 5),
+    (5, 4),
+    (6, 3),
+    (7, 2),
+    (7, 3),
+    (6, 4),
+    (5, 5),
+    (4, 6),
+    (3, 7),
+    (4, 7),
+    (5, 6),
+    (6, 5),
+    (7, 4),
+    (7, 5),
+    (6, 6),
+    (5, 7),
+    (6, 7),
+    (7, 6),
+    (7, 7),
 ];
 
 // ---------------------------------------------------------------- H.261
@@ -261,16 +317,36 @@ pub(crate) const H261_ESCAPE: i16 = -2;
 
 macro_rules! h261_c {
     ($bits:literal, eob) => {
-        H261Coeff { bits: $bits, run: H261_EOB, level: 0, first_only: false }
+        H261Coeff {
+            bits: $bits,
+            run: H261_EOB,
+            level: 0,
+            first_only: false,
+        }
     };
     ($bits:literal, escape) => {
-        H261Coeff { bits: $bits, run: H261_ESCAPE, level: 0, first_only: false }
+        H261Coeff {
+            bits: $bits,
+            run: H261_ESCAPE,
+            level: 0,
+            first_only: false,
+        }
     };
     ($bits:literal, $run:literal, $level:literal) => {
-        H261Coeff { bits: $bits, run: $run, level: $level, first_only: false }
+        H261Coeff {
+            bits: $bits,
+            run: $run,
+            level: $level,
+            first_only: false,
+        }
     };
     ($bits:literal, $run:literal, $level:literal, first) => {
-        H261Coeff { bits: $bits, run: $run, level: $level, first_only: true }
+        H261Coeff {
+            bits: $bits,
+            run: $run,
+            level: $level,
+            first_only: true,
+        }
     };
 }
 
@@ -527,7 +603,12 @@ pub(crate) struct H263Coeff {
 
 macro_rules! h263_c {
     ($bits:literal, $last:literal, $run:literal, $level:literal) => {
-        H263Coeff { bits: $bits, last: $last, run: $run, level: $level }
+        H263Coeff {
+            bits: $bits,
+            last: $last,
+            run: $run,
+            level: $level,
+        }
     };
 }
 
@@ -638,7 +719,6 @@ pub(crate) const H263_TCOEF: &[H263Coeff] = &[
     h263_c!("000001011110", true, 39, 1),
     h263_c!("000001011111", true, 40, 1),
 ];
-
 
 // ------------------------------------------------------------ Annex I
 
@@ -799,7 +879,10 @@ mod annex_i_tests {
         let codes: Vec<&str> = H263_INTRA_TCOEF.iter().map(|c| c.bits).collect();
         for (i, a) in codes.iter().enumerate() {
             for b in codes.iter().skip(i + 1) {
-                assert!(!a.starts_with(*b) && !b.starts_with(*a), "{a} and {b} are not prefix-free");
+                assert!(
+                    !a.starts_with(*b) && !b.starts_with(*a),
+                    "{a} and {b} are not prefix-free"
+                );
             }
         }
     }

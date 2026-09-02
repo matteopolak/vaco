@@ -29,7 +29,13 @@ const SUPPORTED_VIDEO: &[CodecId] = &[
     CodecId::Jpeg,
     CodecId::Png,
 ];
-const SUPPORTED_AUDIO: &[CodecId] = &[CodecId::Aac, CodecId::Opus, CodecId::Flac, CodecId::Mp3, CodecId::Alac];
+const SUPPORTED_AUDIO: &[CodecId] = &[
+    CodecId::Aac,
+    CodecId::Opus,
+    CodecId::Flac,
+    CodecId::Mp3,
+    CodecId::Alac,
+];
 
 enum Mode {
     Progressive(progressive::ProgressiveState),
@@ -369,7 +375,9 @@ impl Muxer for MovMuxer {
         // `vaco-mux-matroska::mux::flush_header_bytes` already uses for its
         // own out-of-band-record gate.
         for t in &self.tracks {
-            if t.params.codec_id == Some(CodecId::Vp9) && t.params.extradata.as_ref().is_none_or(Vec::is_empty) {
+            if t.params.codec_id == Some(CodecId::Vp9)
+                && t.params.extradata.as_ref().is_none_or(Vec::is_empty)
+            {
                 return Err(Error::Unsupported(
                     "mp4: vp9 has no vpcC configuration record and none could be derived from \
                      the bitstream; refusing rather than writing an empty vpcC box",
@@ -410,7 +418,11 @@ impl Muxer for MovMuxer {
         self.opts.bitexact = bitexact;
     }
 
-    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        pkt: &Packet,
+    ) -> Result<BitstreamAction> {
         // Without this, a `GLOBALHEADER` track with empty extradata asks for
         // `extract_extradata` on every one of `decide_bitstream`'s re-asks:
         // nothing about `params` changes between them, so the *filter
@@ -419,7 +431,10 @@ impl Muxer for MovMuxer {
         // unreachable before a `BsfProvider` actually supplied
         // `extract_extradata`, which is what makes it worth guarding now.
         let idx = usize::try_from(pkt.stream_index).ok();
-        if idx.and_then(|i| self.tracks.get(i)).is_some_and(|t| t.bsf_decided) {
+        if idx
+            .and_then(|i| self.tracks.get(i))
+            .is_some_and(|t| t.bsf_decided)
+        {
             return Ok(BitstreamAction::Keep);
         }
         if let Some(t) = idx.and_then(|i| self.tracks.get_mut(i)) {

@@ -621,4 +621,3 @@ mod tests {
         assert!(Ac3Demuxer::open(src, false).is_err());
     }
 }
-

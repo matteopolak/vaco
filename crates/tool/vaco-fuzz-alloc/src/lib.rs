@@ -180,11 +180,7 @@ unsafe impl GlobalAlloc for Counting {
         let live_before = LIVE.load(Ordering::Relaxed);
         let live_without_old = live_before.saturating_sub(old_size);
         if new_size > old_size
-            && would_exceed(
-                live_without_old,
-                new_size,
-                CEILING.load(Ordering::Relaxed),
-            )
+            && would_exceed(live_without_old, new_size, CEILING.load(Ordering::Relaxed))
         {
             eprintln!(
                 "{CEILING_MESSAGE_PREFIX} live={} req={} ceiling={}",

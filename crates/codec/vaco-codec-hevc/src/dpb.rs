@@ -63,7 +63,10 @@
 // placeholder call from `decoder.rs`, is the honest reflection of that: this
 // stage is complete and tested on its own terms, not stubbed in to satisfy
 // the lint.
-#![allow(dead_code, reason = "landed ahead of the P-slice stage that will call it; see the module doc")]
+#![allow(
+    dead_code,
+    reason = "landed ahead of the P-slice stage that will call it; see the module doc"
+)]
 
 use vaco_core::{Error, Result};
 use vaco_parse_hevc::rps::ShortTermRps;
@@ -130,7 +133,9 @@ pub(crate) fn derive_reference_pic_sets(
     long_term_refs_present: bool,
 ) -> Result<ReferencePicSets> {
     if long_term_refs_present {
-        return Err(Error::Unsupported("vaco-codec-hevc: long-term reference pictures are not supported"));
+        return Err(Error::Unsupported(
+            "vaco-codec-hevc: long-term reference pictures are not supported",
+        ));
     }
     let Some(rps) = short_term_rps else {
         return Ok(ReferencePicSets::default());
@@ -208,11 +213,17 @@ pub(crate) fn build_ref_pic_lists(
 /// one whenever `num_ref_idx_lX_active_minus1` requires a non-empty list; an
 /// empty `combined` on a malformed stream returns an empty list rather than
 /// panicking on the modulo below.
-fn build_one_list(combined: &[i64], num_ref_idx_active_minus1: u32, modification: Option<&[u32]>) -> Vec<i64> {
+fn build_one_list(
+    combined: &[i64],
+    num_ref_idx_active_minus1: u32,
+    modification: Option<&[u32]>,
+) -> Vec<i64> {
     if combined.is_empty() {
         return Vec::new();
     }
-    let count = usize::try_from(num_ref_idx_active_minus1).unwrap_or(0).saturating_add(1);
+    let count = usize::try_from(num_ref_idx_active_minus1)
+        .unwrap_or(0)
+        .saturating_add(1);
     // `RefPicListTempX` is `combined` cycled until it is at least `count`
     // long — never materialised as its own `Vec`; indexing `combined` with
     // `rIdx % combined.len()` gives the same value directly.
@@ -223,7 +234,9 @@ fn build_one_list(combined: &[i64], num_ref_idx_active_minus1: u32, modification
                 combined.get(src % combined.len()).copied().unwrap_or(0)
             })
             .collect(),
-        _ => (0..count).map(|r| combined.get(r % combined.len()).copied().unwrap_or(0)).collect(),
+        _ => (0..count)
+            .map(|r| combined.get(r % combined.len()).copied().unwrap_or(0))
+            .collect(),
     }
 }
 
@@ -341,20 +354,43 @@ impl Dpb {
     /// unaffected by *when* it is emitted, only *whether the emission order
     /// itself is right*.
     #[must_use]
-    pub(crate) fn new(max_dec_pic_buffering: usize, max_num_reorder_pics: usize, max_latency_increase_plus1: u32) -> Self {
-        let sps_max_latency_pictures = (max_latency_increase_plus1 != 0)
-            .then(|| u32::try_from(max_num_reorder_pics).unwrap_or(u32::MAX).saturating_add(max_latency_increase_plus1).saturating_sub(1));
-        Self { entries: Vec::new(), max_dec_pic_buffering, max_num_reorder_pics, sps_max_latency_pictures }
+    pub(crate) fn new(
+        max_dec_pic_buffering: usize,
+        max_num_reorder_pics: usize,
+        max_latency_increase_plus1: u32,
+    ) -> Self {
+        let sps_max_latency_pictures = (max_latency_increase_plus1 != 0).then(|| {
+            u32::try_from(max_num_reorder_pics)
+                .unwrap_or(u32::MAX)
+                .saturating_add(max_latency_increase_plus1)
+                .saturating_sub(1)
+        });
+        Self {
+            entries: Vec::new(),
+            max_dec_pic_buffering,
+            max_num_reorder_pics,
+            sps_max_latency_pictures,
+        }
     }
 
     /// §8.3.2's last step: a picture already in the DPB is short-term if its
     /// POC appears in `sets` at all (`StCurrBefore`, `StCurrAfter` or
     /// `StFoll` — all three are "still a reference", only the first two are
     /// "used by the current picture"), and unused for reference otherwise.
-    pub(crate) fn apply_reference_picture_set(&mut self, sets: &ReferencePicSets, budget: &mut Budget) {
+    pub(crate) fn apply_reference_picture_set(
+        &mut self,
+        sets: &ReferencePicSets,
+        budget: &mut Budget,
+    ) {
         for e in &mut self.entries {
-            let kept = sets.st_curr_before.contains(&e.poc) || sets.st_curr_after.contains(&e.poc) || sets.st_foll.contains(&e.poc);
-            e.marking = if kept { Marking::ShortTerm } else { Marking::Unused };
+            let kept = sets.st_curr_before.contains(&e.poc)
+                || sets.st_curr_after.contains(&e.poc)
+                || sets.st_foll.contains(&e.poc);
+            e.marking = if kept {
+                Marking::ShortTerm
+            } else {
+                Marking::Unused
+            };
         }
         self.remove_unused(budget);
     }
@@ -377,7 +413,12 @@ impl Dpb {
         if no_output_of_prior_pics {
             Vec::new()
         } else {
-            let mut pending: Vec<i64> = self.entries.iter().filter(|e| e.needed_for_output).map(|e| e.poc).collect();
+            let mut pending: Vec<i64> = self
+                .entries
+                .iter()
+                .filter(|e| e.needed_for_output)
+                .map(|e| e.poc)
+                .collect();
             pending.sort_unstable();
             pending
         }
@@ -437,11 +478,17 @@ impl Dpb {
             // each loop iteration since a bump earlier in *this* call can
             // turn a still-referenced entry into a removable one before
             // `reap_unused` physically drops it.
-            let occupied = dpb.entries.iter().filter(|e| e.needed_for_output || e.marking != Marking::Unused).count();
+            let occupied = dpb
+                .entries
+                .iter()
+                .filter(|e| e.needed_for_output || e.marking != Marking::Unused)
+                .count();
             let over_reorder = needed > dpb.max_num_reorder_pics;
-            let over_latency = dpb
-                .sps_max_latency_pictures
-                .is_some_and(|bound| dpb.entries.iter().any(|e| e.needed_for_output && e.latency_count >= bound));
+            let over_latency = dpb.sps_max_latency_pictures.is_some_and(|bound| {
+                dpb.entries
+                    .iter()
+                    .any(|e| e.needed_for_output && e.latency_count >= bound)
+            });
             let over_capacity = occupied >= dpb.max_dec_pic_buffering;
             over_reorder || over_latency || over_capacity
         })
@@ -465,9 +512,11 @@ impl Dpb {
         self.bump_while(|dpb| {
             let needed = dpb.entries.iter().filter(|e| e.needed_for_output).count();
             let over_reorder = needed > dpb.max_num_reorder_pics;
-            let over_latency = dpb
-                .sps_max_latency_pictures
-                .is_some_and(|bound| dpb.entries.iter().any(|e| e.needed_for_output && e.latency_count >= bound));
+            let over_latency = dpb.sps_max_latency_pictures.is_some_and(|bound| {
+                dpb.entries
+                    .iter()
+                    .any(|e| e.needed_for_output && e.latency_count >= bound)
+            });
             over_reorder || over_latency
         })
     }
@@ -515,7 +564,10 @@ impl Dpb {
     /// it is read.
     #[must_use]
     pub(crate) fn picture_for_output(&self, poc: i64) -> Option<&Picture> {
-        self.entries.iter().find(|e| e.poc == poc).map(|e| &e.picture)
+        self.entries
+            .iter()
+            .find(|e| e.poc == poc)
+            .map(|e| &e.picture)
     }
 
     /// The [`PictureMeta`] a picture named by `poc` was stored with —
@@ -523,7 +575,10 @@ impl Dpb {
     /// actual output frame.
     #[must_use]
     pub(crate) fn output_meta(&self, poc: i64) -> Option<PictureMeta> {
-        self.entries.iter().find(|e| e.poc == poc).map(|e| e.meta.clone())
+        self.entries
+            .iter()
+            .find(|e| e.poc == poc)
+            .map(|e| e.meta.clone())
     }
 
     /// Physically drop every entry that is neither needed for output nor
@@ -549,14 +604,29 @@ impl Dpb {
     /// picture with a *smaller* POC than something already pending is stored
     /// later in decode order, exactly what a hierarchical-B GOP does by
     /// construction).
-    #[allow(clippy::too_many_arguments, reason = "one call site (decoder.rs); every argument is a distinct DPB-entry field")]
-    pub(crate) fn store(&mut self, picture: Picture, meta: PictureMeta, poc: i64, needed_for_output: bool, is_reference: bool, collocated: Option<CollocatedMotionField>) {
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one call site (decoder.rs); every argument is a distinct DPB-entry field"
+    )]
+    pub(crate) fn store(
+        &mut self,
+        picture: Picture,
+        meta: PictureMeta,
+        poc: i64,
+        needed_for_output: bool,
+        is_reference: bool,
+        collocated: Option<CollocatedMotionField>,
+    ) {
         self.entries.push(DpbEntry {
             picture,
             meta,
             poc,
             needed_for_output,
-            marking: if is_reference { Marking::ShortTerm } else { Marking::Unused },
+            marking: if is_reference {
+                Marking::ShortTerm
+            } else {
+                Marking::Unused
+            },
             latency_count: 0,
             collocated,
         });
@@ -569,7 +639,10 @@ impl Dpb {
     /// and when it exists but recorded no motion (an I picture).
     #[must_use]
     pub(crate) fn collocated_for(&self, poc: i64) -> Option<CollocatedMotionField> {
-        self.entries.iter().find(|e| e.poc == poc).and_then(|e| e.collocated.clone())
+        self.entries
+            .iter()
+            .find(|e| e.poc == poc)
+            .and_then(|e| e.collocated.clone())
     }
 
     /// End of stream: the POCs of everything still pending, in POC order.
@@ -579,7 +652,12 @@ impl Dpb {
     /// [`Dpb::picture_for_output`].
     #[must_use]
     pub(crate) fn flush(&self) -> Vec<i64> {
-        let mut pending: Vec<i64> = self.entries.iter().filter(|e| e.needed_for_output).map(|e| e.poc).collect();
+        let mut pending: Vec<i64> = self
+            .entries
+            .iter()
+            .filter(|e| e.needed_for_output)
+            .map(|e| e.poc)
+            .collect();
         pending.sort_unstable();
         pending
     }
@@ -590,7 +668,10 @@ impl Dpb {
     /// or never a reference at all).
     #[must_use]
     pub(crate) fn reference_picture(&self, poc: i64) -> Option<&Picture> {
-        self.entries.iter().find(|e| e.poc == poc && e.marking == Marking::ShortTerm).map(|e| &e.picture)
+        self.entries
+            .iter()
+            .find(|e| e.poc == poc && e.marking == Marking::ShortTerm)
+            .map(|e| &e.picture)
     }
 
     /// Drops every entry that is neither needed for output nor used for
@@ -622,7 +703,10 @@ impl Dpb {
     /// to also cross a bump threshold.
     #[cfg(test)]
     fn latency_of(&self, poc: i64) -> Option<u32> {
-        self.entries.iter().find(|e| e.poc == poc).map(|e| e.latency_count)
+        self.entries
+            .iter()
+            .find(|e| e.poc == poc)
+            .map(|e| e.latency_count)
     }
 }
 
@@ -686,7 +770,12 @@ impl CollocatedMotionField {
     /// elements, strictly smaller than the picture's own already-budgeted
     /// pixel planes it is derived from, so no allocation path opens here
     /// that the picture's own construction did not already bound.
-    pub(crate) fn build(poc: i64, luma_width: usize, luma_height: usize, sample_at: impl Fn(i32, i32) -> Option<crate::motion::MotionInfo>) -> Self {
+    pub(crate) fn build(
+        poc: i64,
+        luma_width: usize,
+        luma_height: usize,
+        sample_at: impl Fn(i32, i32) -> Option<crate::motion::MotionInfo>,
+    ) -> Self {
         let cols = luma_width.div_ceil(16).max(1);
         let rows = luma_height.div_ceil(16).max(1);
         let len = cols.saturating_mul(rows);
@@ -707,7 +796,9 @@ impl CollocatedMotionField {
             for bx in 0..cols {
                 let x = i32::try_from(bx.saturating_mul(16)).unwrap_or(0);
                 let y = i32::try_from(by.saturating_mul(16)).unwrap_or(0);
-                let Some(info) = sample_at(x, y) else { continue };
+                let Some(info) = sample_at(x, y) else {
+                    continue;
+                };
                 let i = by * cols + bx;
                 if let Some(u) = info.l0 {
                     if let Some(slot) = field.pred_l0.get_mut(i) {
@@ -763,11 +854,17 @@ impl CollocatedMotionField {
             return None;
         }
         let l0 = pred_l0.then(|| crate::motion::UniMotion {
-            mv: crate::motion::Mv { x: i32::from(self.mv0_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv0_y.get(i).copied().unwrap_or(0)) },
+            mv: crate::motion::Mv {
+                x: i32::from(self.mv0_x.get(i).copied().unwrap_or(0)),
+                y: i32::from(self.mv0_y.get(i).copied().unwrap_or(0)),
+            },
             ref_poc: self.ref_poc0.get(i).copied().unwrap_or(0),
         });
         let l1 = pred_l1.then(|| crate::motion::UniMotion {
-            mv: crate::motion::Mv { x: i32::from(self.mv1_x.get(i).copied().unwrap_or(0)), y: i32::from(self.mv1_y.get(i).copied().unwrap_or(0)) },
+            mv: crate::motion::Mv {
+                x: i32::from(self.mv1_x.get(i).copied().unwrap_or(0)),
+                y: i32::from(self.mv1_y.get(i).copied().unwrap_or(0)),
+            },
             ref_poc: self.ref_poc1.get(i).copied().unwrap_or(0),
         });
         Some(crate::motion::MotionInfo { l0, l1 })
@@ -775,7 +872,12 @@ impl CollocatedMotionField {
 }
 
 #[cfg(test)]
-#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing, reason = "test code over fixed scenarios")]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test code over fixed scenarios"
+)]
 mod tests {
     use super::*;
 
@@ -829,7 +931,8 @@ mod tests {
 
     #[test]
     fn long_term_references_are_refused_by_name() {
-        let err = derive_reference_pic_sets(10, None, true).expect_err("long-term refs are unsupported");
+        let err =
+            derive_reference_pic_sets(10, None, true).expect_err("long-term refs are unsupported");
         assert!(matches!(err, Error::Unsupported(_)));
     }
 
@@ -837,7 +940,11 @@ mod tests {
 
     #[test]
     fn a_p_slice_builds_only_list_0_from_before_then_after() {
-        let sets = ReferencePicSets { st_curr_before: vec![9, 7], st_curr_after: vec![14], st_foll: vec![] };
+        let sets = ReferencePicSets {
+            st_curr_before: vec![9, 7],
+            st_curr_after: vec![14],
+            st_foll: vec![],
+        };
         let (l0, l1) = build_ref_pic_lists(&sets, 1, 0, None, false);
         // num_ref_idx_l0_active_minus1 = 1 -> two entries, temp list is
         // [9, 7, 14] cycled -> [9, 7].
@@ -847,7 +954,11 @@ mod tests {
 
     #[test]
     fn a_b_slice_s_list_1_puts_after_before_before() {
-        let sets = ReferencePicSets { st_curr_before: vec![9], st_curr_after: vec![14, 20], st_foll: vec![] };
+        let sets = ReferencePicSets {
+            st_curr_before: vec![9],
+            st_curr_after: vec![14, 20],
+            st_foll: vec![],
+        };
         let (l0, l1) = build_ref_pic_lists(&sets, 0, 1, None, true);
         assert_eq!(l0, [9]); // list0 temp = [9, 14, 20], one entry
         assert_eq!(l1, [14, 20]); // list1 temp = [14, 20, 9], two entries
@@ -855,7 +966,11 @@ mod tests {
 
     #[test]
     fn the_temp_list_cycles_when_more_entries_are_requested_than_exist() {
-        let sets = ReferencePicSets { st_curr_before: vec![9], st_curr_after: vec![14], st_foll: vec![] };
+        let sets = ReferencePicSets {
+            st_curr_before: vec![9],
+            st_curr_after: vec![14],
+            st_foll: vec![],
+        };
         // combined = [9, 14], but 4 entries requested (minus1 = 3).
         let (l0, _) = build_ref_pic_lists(&sets, 3, 0, None, false);
         assert_eq!(l0, [9, 14, 9, 14]);
@@ -863,8 +978,15 @@ mod tests {
 
     #[test]
     fn ref_pic_list_modification_reorders_by_explicit_index() {
-        let sets = ReferencePicSets { st_curr_before: vec![9, 7], st_curr_after: vec![14], st_foll: vec![] };
-        let modification = RefPicListModification { list_entry_l0: vec![2, 0], list_entry_l1: vec![] };
+        let sets = ReferencePicSets {
+            st_curr_before: vec![9, 7],
+            st_curr_after: vec![14],
+            st_foll: vec![],
+        };
+        let modification = RefPicListModification {
+            list_entry_l0: vec![2, 0],
+            list_entry_l1: vec![],
+        };
         let (l0, _) = build_ref_pic_lists(&sets, 1, 0, Some(&modification), false);
         // combined temp = [9, 7, 14]; list_entry_l0 picks index 2 then 0.
         assert_eq!(l0, [14, 9]);
@@ -887,7 +1009,11 @@ mod tests {
         dpb.store(tiny_picture(), tiny_meta(), 4, false, true, None);
         assert_eq!(dpb.pocs(), [0, 4]);
         // Only POC 4 is still referenced by the new set.
-        let sets = ReferencePicSets { st_curr_before: vec![4], st_curr_after: vec![], st_foll: vec![] };
+        let sets = ReferencePicSets {
+            st_curr_before: vec![4],
+            st_curr_after: vec![],
+            st_foll: vec![],
+        };
         dpb.apply_reference_picture_set(&sets, &mut budget());
         assert_eq!(dpb.pocs(), [4]);
     }
@@ -896,7 +1022,11 @@ mod tests {
     fn a_picture_kept_only_in_st_foll_survives_marking() {
         let mut dpb = Dpb::new(16, 16, 0);
         dpb.store(tiny_picture(), tiny_meta(), 4, false, true, None);
-        let sets = ReferencePicSets { st_curr_before: vec![], st_curr_after: vec![], st_foll: vec![4] };
+        let sets = ReferencePicSets {
+            st_curr_before: vec![],
+            st_curr_after: vec![],
+            st_foll: vec![4],
+        };
         dpb.apply_reference_picture_set(&sets, &mut budget());
         assert_eq!(dpb.pocs(), [4]);
     }
@@ -910,10 +1040,16 @@ mod tests {
         // reorder condition, run with each store's own POC right after it.
         let mut dpb = Dpb::new(16, 2, 0);
         dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
-        assert!(dpb.bump_post_decode(0).is_empty(), "only one pending picture: nothing to bump yet");
+        assert!(
+            dpb.bump_post_decode(0).is_empty(),
+            "only one pending picture: nothing to bump yet"
+        );
         dpb.store(tiny_picture(), tiny_meta(), 8, true, false, None);
         let out = dpb.bump_post_decode(8);
-        assert!(out.is_empty(), "two pending is not yet over the limit of two");
+        assert!(
+            out.is_empty(),
+            "two pending is not yet over the limit of two"
+        );
         dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None);
         let out = dpb.bump_post_decode(4);
         assert_eq!(out, [0], "bumps the smallest POC, not decode order");
@@ -930,7 +1066,10 @@ mod tests {
         let mut dpb = Dpb::new(2, 0, 0);
         dpb.store(tiny_picture(), tiny_meta(), 0, false, true, None);
         dpb.store(tiny_picture(), tiny_meta(), 4, false, true, None);
-        assert!(dpb.bump_pre_decode().is_empty(), "nothing needs output, so nothing bumps");
+        assert!(
+            dpb.bump_pre_decode().is_empty(),
+            "nothing needs output, so nothing bumps"
+        );
         assert_eq!(dpb.pocs(), [0, 4], "both stay as references, not output");
     }
 
@@ -951,7 +1090,11 @@ mod tests {
         dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None);
         dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
         let out = dpb.bump_pre_decode();
-        assert_eq!(out, [0], "smallest POC first, even though POC 4 was stored earlier");
+        assert_eq!(
+            out,
+            [0],
+            "smallest POC first, even though POC 4 was stored earlier"
+        );
     }
 
     #[test]
@@ -1007,8 +1150,15 @@ mod tests {
         let mut dpb = Dpb::new(16, 16, 0);
         dpb.store(tiny_picture(), tiny_meta(), 8, true, false, None);
         dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
-        assert!(dpb.bump_post_decode(0).is_empty(), "no bump condition is active in this test");
-        assert_eq!(dpb.latency_of(8), Some(1), "POC 8 follows the just-stored POC 0 (8 > 0)");
+        assert!(
+            dpb.bump_post_decode(0).is_empty(),
+            "no bump condition is active in this test"
+        );
+        assert_eq!(
+            dpb.latency_of(8),
+            Some(1),
+            "POC 8 follows the just-stored POC 0 (8 > 0)"
+        );
         assert_eq!(dpb.latency_of(0), Some(0), "a picture never follows itself");
     }
 
@@ -1025,10 +1175,17 @@ mod tests {
         // is left needing output.
         let mut dpb = Dpb::new(16, 1, 1);
         dpb.store(tiny_picture(), tiny_meta(), 8, true, false, None);
-        assert!(dpb.bump_post_decode(8).is_empty(), "nothing follows POC 8 yet, and only one picture is pending");
+        assert!(
+            dpb.bump_post_decode(8).is_empty(),
+            "nothing follows POC 8 yet, and only one picture is pending"
+        );
         dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
         let out = dpb.bump_post_decode(0);
-        assert_eq!(out, [0, 8], "both pending pictures are flushed once POC 8's own latency trips the bound");
+        assert_eq!(
+            out,
+            [0, 8],
+            "both pending pictures are flushed once POC 8's own latency trips the bound"
+        );
     }
 
     #[test]
@@ -1047,7 +1204,10 @@ mod tests {
         dpb.store(tiny_picture(), tiny_meta(), 0, true, false, None);
         let out = dpb.bump_post_decode(0);
         assert_eq!(dpb.latency_of(8), Some(1));
-        assert!(out.is_empty(), "PicLatencyCount is 1, still below the correct bound of 6");
+        assert!(
+            out.is_empty(),
+            "PicLatencyCount is 1, still below the correct bound of 6"
+        );
     }
 
     /// The bug `bump_while`'s own doc records: a bumped, non-reference
@@ -1063,10 +1223,19 @@ mod tests {
         dpb.store(tiny_picture(), tiny_meta(), 4, true, false, None);
         let out = dpb.bump_post_decode(4);
         assert_eq!(out, [0]);
-        assert!(dpb.picture_for_output(0).is_some(), "bumped picture's own pixels must survive until reaped");
+        assert!(
+            dpb.picture_for_output(0).is_some(),
+            "bumped picture's own pixels must survive until reaped"
+        );
         dpb.reap_unused(&mut budget());
-        assert!(dpb.picture_for_output(0).is_none(), "reaping removes it once the caller has read it");
-        assert!(dpb.picture_for_output(4).is_some(), "the still-pending picture is untouched");
+        assert!(
+            dpb.picture_for_output(0).is_none(),
+            "reaping removes it once the caller has read it"
+        );
+        assert!(
+            dpb.picture_for_output(4).is_some(),
+            "the still-pending picture is untouched"
+        );
     }
 
     #[test]
@@ -1080,15 +1249,36 @@ mod tests {
         let mut b = budget();
         let mut dpb = Dpb::new(16, 1, 0);
         let charged_at_start = b.committed();
-        dpb.store(Picture::new(&mut b, 4, 4).expect("small alloc"), tiny_meta(), 0, true, false, None);
+        dpb.store(
+            Picture::new(&mut b, 4, 4).expect("small alloc"),
+            tiny_meta(),
+            0,
+            true,
+            false,
+            None,
+        );
         let one_picture_bytes = b.committed() - charged_at_start;
-        assert!(one_picture_bytes > 0, "storing a real Picture must charge real bytes");
-        dpb.store(Picture::new(&mut b, 4, 4).expect("small alloc"), tiny_meta(), 4, true, false, None);
+        assert!(
+            one_picture_bytes > 0,
+            "storing a real Picture must charge real bytes"
+        );
+        dpb.store(
+            Picture::new(&mut b, 4, 4).expect("small alloc"),
+            tiny_meta(),
+            4,
+            true,
+            false,
+            None,
+        );
         let out = dpb.bump_post_decode(4);
         assert_eq!(out, [0]);
         let before_reap = b.committed();
         dpb.reap_unused(&mut b);
-        assert_eq!(before_reap - b.committed(), one_picture_bytes, "reaping POC 0 must release exactly what it was charged");
+        assert_eq!(
+            before_reap - b.committed(),
+            one_picture_bytes,
+            "reaping POC 0 must release exactly what it was charged"
+        );
     }
 
     #[test]

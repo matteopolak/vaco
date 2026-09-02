@@ -103,7 +103,10 @@ fn plane_stats(plane: PlaneRef<'_>) -> Option<(u8, u8, f64, u8, u8)> {
             break;
         }
     }
-    #[allow(clippy::cast_possible_truncation, reason = "histogram indices are 0..=255")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "histogram indices are 0..=255"
+    )]
     Some((min as u8, low as u8, avg, high as u8, max as u8))
 }
 
@@ -114,7 +117,10 @@ fn plane_tags(prefix: &str, plane: PlaneRef<'_>, out: &mut Vec<(String, String)>
     out.push((format!("lavfi.signalstats.{prefix}MIN"), g6(f64::from(min))));
     out.push((format!("lavfi.signalstats.{prefix}LOW"), g6(f64::from(low))));
     out.push((format!("lavfi.signalstats.{prefix}AVG"), g6(avg)));
-    out.push((format!("lavfi.signalstats.{prefix}HIGH"), g6(f64::from(high))));
+    out.push((
+        format!("lavfi.signalstats.{prefix}HIGH"),
+        g6(f64::from(high)),
+    ));
     out.push((format!("lavfi.signalstats.{prefix}MAX"), g6(f64::from(max))));
 }
 
@@ -185,7 +191,10 @@ fn histogram_stats(histogram: &[u64], total: u64) -> Option<(u16, u16, f64, u16,
     }
     #[allow(clippy::cast_precision_loss, reason = "sum/total are frame-sized")]
     let avg = sum as f64 / total_f;
-    #[allow(clippy::cast_possible_truncation, reason = "histogram indices fit u16 (max 360)")]
+    #[allow(
+        clippy::cast_possible_truncation,
+        reason = "histogram indices fit u16 (max 360)"
+    )]
     Some((min as u16, low as u16, avg, high as u16, max as u16))
 }
 
@@ -264,7 +273,9 @@ fn dif(cur: PlaneRef<'_>, prev: &[Vec<u8>]) -> Option<f64> {
     let mut total: u64 = 0;
     for y in 0..rows {
         let Some(row) = cur.row(y) else { continue };
-        let Some(prev_row) = prev.get(y) else { continue };
+        let Some(prev_row) = prev.get(y) else {
+            continue;
+        };
         let width = row.len().min(prev_row.len());
         for x in 0..width {
             let (Some(&cur), Some(&prev)) = (row.get(x), prev_row.get(x)) else {
@@ -296,7 +307,9 @@ fn bit_depth(plane: PlaneRef<'_>) -> u32 {
 }
 
 fn plane_bytes(plane: PlaneRef<'_>) -> Vec<Vec<u8>> {
-    (0..plane.rows()).map(|y| plane.row(y).map(<[u8]>::to_vec).unwrap_or_default()).collect()
+    (0..plane.rows())
+        .map(|y| plane.row(y).map(<[u8]>::to_vec).unwrap_or_default())
+        .collect()
 }
 
 #[derive(Debug, Default)]
@@ -333,7 +346,10 @@ impl SignalStats {
                 .and_then(|prev| dif(plane, prev))
                 .unwrap_or(0.0);
             tags.push((format!("lavfi.signalstats.{name}DIF"), g6(dif_value)));
-            tags.push((format!("lavfi.signalstats.{name}BITDEPTH"), bit_depth(plane).to_string()));
+            tags.push((
+                format!("lavfi.signalstats.{name}BITDEPTH"),
+                bit_depth(plane).to_string(),
+            ));
             if let Some(slot) = current.get_mut(idx) {
                 *slot = Some(bytes);
             }
@@ -373,7 +389,10 @@ mod tests {
             for y in 0..p.rows() {
                 if let Some(row) = p.row_mut(y) {
                     for byte in row {
-                        #[allow(clippy::cast_possible_truncation, reason = "v stays < 256 by construction")]
+                        #[allow(
+                            clippy::cast_possible_truncation,
+                            reason = "v stays < 256 by construction"
+                        )]
                         {
                             *byte = v as u8;
                         }

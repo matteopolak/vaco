@@ -107,11 +107,16 @@ impl Metric for SpectralDistance {
         if !geometry_matches(source, distorted) {
             return Err(format!(
                 "spectral-lsd: geometry mismatch ({}x{}@{} vs {}x{}@{})",
-                source.width, source.height, source.depth, distorted.width, distorted.height, distorted.depth
+                source.width,
+                source.height,
+                source.depth,
+                distorted.width,
+                distorted.height,
+                distorted.depth
             ));
         }
-        let src_samples =
-            channel_samples(source).ok_or_else(|| "spectral-lsd: could not read source samples".to_owned())?;
+        let src_samples = channel_samples(source)
+            .ok_or_else(|| "spectral-lsd: could not read source samples".to_owned())?;
         let dst_samples = channel_samples(distorted)
             .ok_or_else(|| "spectral-lsd: could not read distorted samples".to_owned())?;
         if src_samples.is_empty() {
@@ -122,9 +127,10 @@ impl Metric for SpectralDistance {
         let mut blocks = 0u64;
         for chunk_start in (0..src_samples.len()).step_by(BLOCK) {
             let end = (chunk_start + BLOCK).min(src_samples.len());
-            let (Some(s_chunk), Some(d_chunk)) =
-                (src_samples.get(chunk_start..end), dst_samples.get(chunk_start..end))
-            else {
+            let (Some(s_chunk), Some(d_chunk)) = (
+                src_samples.get(chunk_start..end),
+                dst_samples.get(chunk_start..end),
+            ) else {
                 continue;
             };
             if let Some(lsd) = block_lsd(s_chunk, d_chunk) {

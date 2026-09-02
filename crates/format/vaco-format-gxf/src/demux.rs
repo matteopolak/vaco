@@ -96,8 +96,9 @@ impl std::fmt::Debug for GxfDemuxer {
 }
 
 fn read_payload(io: &mut IoContext, budget: &mut Budget, header: &PacketHeader) -> Result<Vec<u8>> {
-    let len = usize::try_from(header.payload_len())
-        .map_err(|_| Error::InvalidData("gxf: packet payload length does not fit this platform's usize"))?;
+    let len = usize::try_from(header.payload_len()).map_err(|_| {
+        Error::InvalidData("gxf: packet payload length does not fit this platform's usize")
+    })?;
     let mut buf = budget.alloc::<u8>(len)?;
     io.read_exact(&mut buf)?;
     Ok(buf)
@@ -126,7 +127,11 @@ const fn frame_rate_code_to_fps(code: i32) -> Option<Rational> {
 /// module docs, and `media.rs`'s own real-fixture test: ten 25 fps frames
 /// land at field numbers `0, 2, 4, ..., 18`).
 fn derive_field_rate(map: &MapPacket) -> Option<Rational> {
-    let fps = map.tracks.iter().find_map(|t| t.frame_rate_code).and_then(frame_rate_code_to_fps)?;
+    let fps = map
+        .tracks
+        .iter()
+        .find_map(|t| t.frame_rate_code)
+        .and_then(frame_rate_code_to_fps)?;
     Some(Rational::new(fps.num.saturating_mul(2), fps.den))
 }
 
@@ -149,13 +154,19 @@ const fn sd_dimensions(lines_per_frame_code: Option<i32>) -> Option<(u32, u32)> 
 fn build_codec_params(track: &TrackDescription) -> Option<CodecParameters> {
     use vaco_codec_core::{AudioParameters, VideoParameters};
 
-    let frame_rate = track.frame_rate_code.and_then(frame_rate_code_to_fps).unwrap_or(Rational::UNDEFINED);
+    let frame_rate = track
+        .frame_rate_code
+        .and_then(frame_rate_code_to_fps)
+        .unwrap_or(Rational::UNDEFINED);
     let dims = sd_dimensions(track.lines_per_frame_code);
 
     let video = |codec_id: CodecId| {
         let mut p = CodecParameters::new(MediaType::Video);
         p.codec_id = Some(codec_id);
-        let mut v = VideoParameters { frame_rate, ..VideoParameters::default() };
+        let mut v = VideoParameters {
+            frame_rate,
+            ..VideoParameters::default()
+        };
         if let Some((w, h)) = dims {
             v.width = w;
             v.height = h;
@@ -174,7 +185,11 @@ fn build_codec_params(track: &TrackDescription) -> Option<CodecParameters> {
         }
         9 | 10 => {
             let mut p = CodecParameters::new(MediaType::Audio);
-            p.codec_id = Some(if track.media_type == 9 { CodecId::PcmS24le } else { CodecId::PcmS16le });
+            p.codec_id = Some(if track.media_type == 9 {
+                CodecId::PcmS24le
+            } else {
+                CodecId::PcmS16le
+            });
             p.audio = Some(AudioParameters {
                 // Fixed by clause 7.4.2.3: audio is always 48 kHz mono per
                 // track (a compressed stream's stereo pair is carried as
@@ -191,7 +206,10 @@ fn build_codec_params(track: &TrackDescription) -> Option<CodecParameters> {
         17 => {
             let mut p = CodecParameters::new(MediaType::Audio);
             p.codec_id = Some(CodecId::Ac3);
-            p.audio = Some(AudioParameters { sample_rate: 48_000, ..AudioParameters::default() });
+            p.audio = Some(AudioParameters {
+                sample_rate: 48_000,
+                ..AudioParameters::default()
+            });
             Some(p)
         }
         18 => {
@@ -202,7 +220,10 @@ fn build_codec_params(track: &TrackDescription) -> Option<CodecParameters> {
             // and its samples are real bytes; only the codec identity is
             // unknown, so `codec_id` is left `None` rather than guessed.
             let mut p = CodecParameters::new(MediaType::Audio);
-            p.audio = Some(AudioParameters { sample_rate: 48_000, ..AudioParameters::default() });
+            p.audio = Some(AudioParameters {
+                sample_rate: 48_000,
+                ..AudioParameters::default()
+            });
             Some(p)
         }
         // 19, 21: reserved. Clause "Table 5": "A receiver shall ignore
@@ -225,7 +246,9 @@ impl GxfDemuxer {
 
         let header = packet::read_header(&mut io)?;
         if header.packet_type != packet::PKT_MAP {
-            return Err(Error::InvalidData("gxf: stream does not begin with a map packet"));
+            return Err(Error::InvalidData(
+                "gxf: stream does not begin with a map packet",
+            ));
         }
         let payload = read_payload(&mut io, &mut budget, &header)?;
         let map = map::parse(&payload, &mut budget)?;
@@ -244,7 +267,13 @@ impl GxfDemuxer {
             let mut stream = Stream::new(index, media_type, time_base);
             stream.params = params;
             streams.push(stream);
-            bindings.insert(track.track_id, TrackBinding { stream_index: index, media_type: track.media_type });
+            bindings.insert(
+                track.track_id,
+                TrackBinding {
+                    stream_index: index,
+                    media_type: track.media_type,
+                },
+            );
         }
 
         Ok(Self {
@@ -339,7 +368,22 @@ impl Demuxer for GxfDemuxer {
 #[must_use]
 pub fn probe(data: &ProbeData<'_>) -> ProbeScore {
     const MAP_HEADER: [u8; 16] = [
-        0x00, 0x00, 0x00, 0x00, 0x01, packet::PKT_MAP, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xE1, 0xE2,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x01,
+        packet::PKT_MAP,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0x00,
+        0xE1,
+        0xE2,
     ];
     // The length field (bytes 6..10) is data-dependent, so it is excluded
     // from the fixed prefix/suffix this checks rather than wildcarded byte
@@ -361,7 +405,10 @@ pub fn probe(data: &ProbeData<'_>) -> ProbeScore {
 /// right seam rather than a byte-offset one.
 pub const FLAGS: FormatFlags = FormatFlags::GENERIC_INDEX;
 
-fn open_boxed(source: Box<dyn MediaSource>, parsers: &dyn ParserProvider) -> Result<Box<dyn Demuxer>> {
+fn open_boxed(
+    source: Box<dyn MediaSource>,
+    parsers: &dyn ParserProvider,
+) -> Result<Box<dyn Demuxer>> {
     Ok(Box::new(GxfDemuxer::open(source, parsers)?))
 }
 
@@ -378,7 +425,12 @@ pub const DEMUXER: DemuxerDesc = DemuxerDesc {
 };
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_format_core::discovery::NoParsers;
@@ -394,7 +446,10 @@ mod tests {
         let demux = open_fixture();
         assert_eq!(demux.streams().len(), 3);
         assert_eq!(demux.streams()[0].media_type(), Some(MediaType::Video));
-        assert_eq!(demux.streams()[0].params.codec_id, Some(CodecId::Mpeg2video));
+        assert_eq!(
+            demux.streams()[0].params.codec_id,
+            Some(CodecId::Mpeg2video)
+        );
         assert_eq!(demux.streams()[1].media_type(), Some(MediaType::Audio));
         assert_eq!(demux.streams()[1].params.codec_id, Some(CodecId::PcmS16le));
         assert_eq!(demux.streams()[2].media_type(), Some(MediaType::Data));

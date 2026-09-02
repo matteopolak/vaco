@@ -110,8 +110,9 @@ impl Filter {
                         }
                     }
                     samples.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-                    let rank = ((n.saturating_sub(1)) as f64 * self.opts.percentile.clamp(0.0, 1.0))
-                        .round();
+                    let rank = ((n.saturating_sub(1)) as f64
+                        * self.opts.percentile.clamp(0.0, 1.0))
+                    .round();
                     #[allow(
                         clippy::cast_possible_truncation,
                         clippy::cast_sign_loss,

@@ -90,7 +90,13 @@ pub fn wrap_encrypted(entry: BuiltEntry, key_id: [u8; 16]) -> BuiltEntry {
 pub fn needs_extradata(codec: CodecId) -> bool {
     matches!(
         codec,
-        CodecId::H264 | CodecId::Hevc | CodecId::Av1 | CodecId::Vp8 | CodecId::Vp9 | CodecId::Aac | CodecId::Alac
+        CodecId::H264
+            | CodecId::Hevc
+            | CodecId::Av1
+            | CodecId::Vp8
+            | CodecId::Vp9
+            | CodecId::Aac
+            | CodecId::Alac
     )
 }
 
@@ -293,9 +299,21 @@ fn flac_streaminfo_metadata_block(extradata: &[u8]) -> Result<[u8; 38]> {
 fn opus_head_to_dops(extradata: &[u8]) -> Result<Vec<u8>> {
     let bad = || Error::Unsupported("mp4: Opus extradata is not a recognised OpusHead shape");
     let rest = extradata.strip_prefix(b"OpusHead").ok_or_else(bad)?;
-    let pre_skip: [u8; 2] = rest.get(2..4).ok_or_else(bad)?.try_into().map_err(|_| bad())?;
-    let rate: [u8; 4] = rest.get(4..8).ok_or_else(bad)?.try_into().map_err(|_| bad())?;
-    let gain: [u8; 2] = rest.get(8..10).ok_or_else(bad)?.try_into().map_err(|_| bad())?;
+    let pre_skip: [u8; 2] = rest
+        .get(2..4)
+        .ok_or_else(bad)?
+        .try_into()
+        .map_err(|_| bad())?;
+    let rate: [u8; 4] = rest
+        .get(4..8)
+        .ok_or_else(bad)?
+        .try_into()
+        .map_err(|_| bad())?;
+    let gain: [u8; 2] = rest
+        .get(8..10)
+        .ok_or_else(bad)?
+        .try_into()
+        .map_err(|_| bad())?;
     let mut out = Vec::new();
     out.push(*rest.first().ok_or_else(bad)?); // version
     out.push(*rest.get(1).ok_or_else(bad)?); // channel count
@@ -337,7 +355,8 @@ fn build_audio(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
             FourCc::new(b"Opus")
         }
         CodecId::Flac => {
-            extensions.extend_from_slice(&writer::dfla(&flac_streaminfo_metadata_block(extradata)?));
+            extensions
+                .extend_from_slice(&writer::dfla(&flac_streaminfo_metadata_block(extradata)?));
             FourCc::new(b"fLaC")
         }
         CodecId::Alac => {
@@ -371,7 +390,9 @@ mod tests {
     /// The same real `ffmpeg -c:a libopus -f mp4` box `vaco-demux-mp4::track`
     /// tests against from the other direction: version 0, channels 2,
     /// `pre_skip` 0x0138 = 312, rate 0x0000bb80 = 48000, gain 0, family 0.
-    const REAL_DOPS: [u8; 11] = [0x00, 0x02, 0x01, 0x38, 0x00, 0x00, 0xbb, 0x80, 0x00, 0x00, 0x00];
+    const REAL_DOPS: [u8; 11] = [
+        0x00, 0x02, 0x01, 0x38, 0x00, 0x00, 0xbb, 0x80, 0x00, 0x00, 0x00,
+    ];
 
     fn opus_head(pre_skip: u16, rate: u32) -> Vec<u8> {
         let mut h = b"OpusHead".to_vec();
@@ -392,6 +413,9 @@ mod tests {
 
     #[test]
     fn opus_head_to_dops_rejects_anything_without_the_magic() {
-        assert!(opus_head_to_dops(&REAL_DOPS).is_err(), "REAL_DOPS has no OpusHead magic");
+        assert!(
+            opus_head_to_dops(&REAL_DOPS).is_err(),
+            "REAL_DOPS has no OpusHead magic"
+        );
     }
 }

@@ -53,7 +53,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "xmedian", help = "Pick median pixels from several video inputs.")]
+#[options(
+    name = "xmedian",
+    help = "Pick median pixels from several video inputs."
+)]
 pub(crate) struct Opts {
     #[opt(name = "inputs", help = "set number of inputs", default = 3, range = 3..=64, flags(video, filtering))]
     pub inputs: i64,
@@ -61,7 +64,12 @@ pub(crate) struct Opts {
     pub percentile: f64,
     #[opt(name = "eof_action", help = "set eof action", default = "repeat".to_owned(), flags(video, filtering))]
     pub eof_action: String,
-    #[opt(name = "shortest", help = "force termination when the shortest input terminates", default = false, flags(video, filtering))]
+    #[opt(
+        name = "shortest",
+        help = "force termination when the shortest input terminates",
+        default = false,
+        flags(video, filtering)
+    )]
     pub shortest: bool,
 }
 
@@ -105,7 +113,12 @@ impl FrameSyncFilter for Filter {
         event: &mut FrameSyncEvent<'_>,
     ) -> Result<FrameOut> {
         let Some((format, width, height)) = event.get(0).and_then(|f| match &f.data {
-            FrameData::Video { format, width, height, .. } => Some((*format, *width, *height)),
+            FrameData::Video {
+                format,
+                width,
+                height,
+                ..
+            } => Some((*format, *width, *height)),
             FrameData::Audio { .. } | FrameData::Subtitle { .. } => None,
         }) else {
             return Ok(FrameOut::None);
@@ -125,16 +138,22 @@ impl FrameSyncFilter for Filter {
         let mut values: Vec<u8> = Vec::new();
         for plane in 0..plane_count {
             let ph = common::to_i32(format.plane_height(height, plane as u8)).max(0);
-            let Some(mut dst) = out.plane_mut(plane) else { continue };
+            let Some(mut dst) = out.plane_mut(plane) else {
+                continue;
+            };
             for y in 0..ph {
                 let Ok(uy) = usize::try_from(y) else { continue };
-                let Some(dst_row) = dst.row_mut(uy) else { continue };
+                let Some(dst_row) = dst.row_mut(uy) else {
+                    continue;
+                };
                 let row_len = dst_row.len();
                 for x in 0..row_len {
                     values.clear();
                     for i in 0..self.n {
                         let Some(frame) = event.get(i) else { continue };
-                        let Some(p) = frame.plane(plane) else { continue };
+                        let Some(p) = frame.plane(plane) else {
+                            continue;
+                        };
                         let Some(row) = p.row(uy) else { continue };
                         if let Some(&v) = row.get(x) {
                             values.push(v);

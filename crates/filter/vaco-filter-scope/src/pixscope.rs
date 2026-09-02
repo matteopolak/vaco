@@ -301,7 +301,8 @@ impl FrameFilter for Filter {
         let full_res_chroma = plane_count < 2
             || (format.plane_width(width, 1) == width && format.plane_height(height, 1) == height);
         let supported = full_res_chroma
-            && ((is_rgb && format.is_planar() && plane_count == 3) || (!is_rgb && plane_count <= 3));
+            && ((is_rgb && format.is_planar() && plane_count == 3)
+                || (!is_rgb && plane_count <= 3));
         if !supported || width < 640 || height < 480 {
             // Undocumented reference floor (`"min supported resolution is
             // 640x480"`) and the format families this pass measured — see
@@ -337,7 +338,13 @@ impl FrameFilter for Filter {
                 let px0 = x0.min(pw.saturating_sub(1));
                 let py0 = y0.min(ph.saturating_sub(1));
                 let rows: Vec<&[u8]> = src.rows_iter().collect();
-                Some(compute_stats(&rows, px0, py0, w.min(pw - px0), h.min(ph - py0)))
+                Some(compute_stats(
+                    &rows,
+                    px0,
+                    py0,
+                    w.min(pw - px0),
+                    h.min(ph - py0),
+                ))
             })
             .collect();
 
@@ -426,8 +433,16 @@ fn render_plane(
     let panel_top = win_top + win_h + PANEL_GAP;
     let panel_left = win_left;
     let panel_h = PANEL_ROW_PITCH * 4 + PANEL_GROUP_GAP;
-    for row in rows.iter_mut().skip(panel_top as usize).take(panel_h as usize) {
-        for px in row.iter_mut().skip(panel_left as usize).take(win_w as usize) {
+    for row in rows
+        .iter_mut()
+        .skip(panel_top as usize)
+        .take(panel_h as usize)
+    {
+        for px in row
+            .iter_mut()
+            .skip(panel_left as usize)
+            .take(win_w as usize)
+        {
             *px = 0;
         }
     }
@@ -464,7 +479,14 @@ fn draw_field(rows: &mut [&mut [u8]], top: u32, panel_left: u32, col: u32, text:
 /// reference's own default (this module: flush to the frame's bottom
 /// right), otherwise a fraction of the frame the window's top-left sits
 /// at, the same convention `x`/`y` use for the sampled window.
-fn window_block_origin(wx: f64, wy: f64, width: u32, height: u32, win_w: u32, win_h: u32) -> (u32, u32) {
+fn window_block_origin(
+    wx: f64,
+    wy: f64,
+    width: u32,
+    height: u32,
+    win_w: u32,
+    win_h: u32,
+) -> (u32, u32) {
     let panel_h = PANEL_ROW_PITCH * 4 + PANEL_GROUP_GAP + PANEL_GAP;
     if wx < 0.0 || wy < 0.0 {
         let left = width.saturating_sub(win_w);
@@ -610,13 +632,26 @@ mod tests {
             std: 83.98,
         }];
         render_plane(
-            &mut rows, 10, 10, 3, 3, -1.0, -1.0, width, height, &["Y"], &stats,
+            &mut rows,
+            10,
+            10,
+            3,
+            3,
+            -1.0,
+            -1.0,
+            width,
+            height,
+            &["Y"],
+            &stats,
         );
 
         // Marker box: outline around the sampled window (x0-1..x0+3+2,
         // clamped) must have painted white pixels.
         let lit = rows[8..16].iter().any(|r| r[8..16].contains(&255));
-        assert!(lit, "expected the marker box outline near the sampled window");
+        assert!(
+            lit,
+            "expected the marker box outline near the sampled window"
+        );
 
         // The magnified window is fixed-size and anchored bottom-right on
         // a 500x500 canvas well clear of the marker box, so its first

@@ -51,7 +51,9 @@ pub struct ExecProcess {
 
 impl std::fmt::Debug for ExecProcess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ExecProcess").field("stderr_tail", &self.stderr_tail()).finish_non_exhaustive()
+        f.debug_struct("ExecProcess")
+            .field("stderr_tail", &self.stderr_tail())
+            .finish_non_exhaustive()
     }
 }
 
@@ -191,7 +193,10 @@ impl ExecProcess {
     /// The last [`STDERR_TAIL_LINES`] lines the child wrote to stderr.
     #[must_use]
     pub fn stderr_tail(&self) -> Vec<String> {
-        self.stderr_tail.lock().map(|t| t.iter().cloned().collect()).unwrap_or_default()
+        self.stderr_tail
+            .lock()
+            .map(|t| t.iter().cloned().collect())
+            .unwrap_or_default()
     }
 }
 
@@ -221,7 +226,8 @@ mod tests {
 
     #[test]
     fn spawning_a_nonexistent_binary_is_unsupported_not_a_panic() {
-        let err = ExecProcess::spawn("vaco-codec-exec-definitely-not-a-real-binary", &[]).unwrap_err();
+        let err =
+            ExecProcess::spawn("vaco-codec-exec-definitely-not-a-real-binary", &[]).unwrap_err();
         assert!(matches!(err, Error::Unsupported(_)));
     }
 

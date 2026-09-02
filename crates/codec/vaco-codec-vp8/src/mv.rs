@@ -8,7 +8,11 @@ use vaco_codec_msac::Vp8BoolDecoder as Bd;
 use vaco_codec_msac::tree::write_tree;
 
 use crate::encode::BoolWriter;
-use crate::tables::{MVPARTITION_PROB, MVPARTITION_TREE, MVP_BITS, MVP_IS_SHORT, MVP_SHORT, MVP_SIGN, MV_PARTITIONS, MV_PARTITION_COUNTS, SMALL_MVTREE, SUB_MV_REF_PROB, SUB_MV_REF_TREE, VP8_MODE_CONTEXTS};
+use crate::tables::{
+    MV_PARTITION_COUNTS, MV_PARTITIONS, MVP_BITS, MVP_IS_SHORT, MVP_SHORT, MVP_SIGN,
+    MVPARTITION_PROB, MVPARTITION_TREE, SMALL_MVTREE, SUB_MV_REF_PROB, SUB_MV_REF_TREE,
+    VP8_MODE_CONTEXTS,
+};
 
 /// A motion vector in quarter-pel units, `(row, col)`.
 pub type Mv = (i32, i32);
@@ -120,11 +124,7 @@ pub struct NearMvs {
 }
 
 fn bias(mv: Mv, same_sign: bool) -> Mv {
-    if same_sign {
-        mv
-    } else {
-        (-mv.0, -mv.1)
-    }
+    if same_sign { mv } else { (-mv.0, -mv.1) }
 }
 
 /// RFC 6386 §16.3's `vp8_find_near_mvs`. `sign_bias_matches` tells whether a
@@ -292,8 +292,14 @@ pub fn decode_split(
     left_boundary: impl Fn(usize) -> Mv,
 ) -> [Mv; 16] {
     let partition_type = bd.read_tree(&MVPARTITION_TREE, &MVPARTITION_PROB) as usize;
-    let layout = MV_PARTITIONS.get(partition_type).copied().unwrap_or(MV_PARTITIONS[3]);
-    let count = MV_PARTITION_COUNTS.get(partition_type).copied().unwrap_or(16);
+    let layout = MV_PARTITIONS
+        .get(partition_type)
+        .copied()
+        .unwrap_or(MV_PARTITIONS[3]);
+    let count = MV_PARTITION_COUNTS
+        .get(partition_type)
+        .copied()
+        .unwrap_or(16);
 
     let mut out = [(0i32, 0i32); 16];
     #[allow(

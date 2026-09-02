@@ -33,7 +33,9 @@ const GROUP_PIXELS: usize = 8;
 const GROUP_BYTES: usize = 12;
 
 fn row_bytes(width: u32) -> usize {
-    (width as usize).div_ceil(GROUP_PIXELS).saturating_mul(GROUP_BYTES)
+    (width as usize)
+        .div_ceil(GROUP_PIXELS)
+        .saturating_mul(GROUP_BYTES)
 }
 
 fn split_planes_mut(planes: &mut [Plane]) -> Result<(&mut Plane, &mut Plane, &mut Plane)> {
@@ -42,9 +44,15 @@ fn split_planes_mut(planes: &mut [Plane]) -> Result<(&mut Plane, &mut Plane, &mu
     }
     let (first, rest) = planes.split_at_mut(1);
     let (second, third) = rest.split_at_mut(1);
-    let y = first.get_mut(0).ok_or(Error::InvalidData("y41p: missing Y plane"))?;
-    let u = second.get_mut(0).ok_or(Error::InvalidData("y41p: missing U plane"))?;
-    let v = third.get_mut(0).ok_or(Error::InvalidData("y41p: missing V plane"))?;
+    let y = first
+        .get_mut(0)
+        .ok_or(Error::InvalidData("y41p: missing Y plane"))?;
+    let u = second
+        .get_mut(0)
+        .ok_or(Error::InvalidData("y41p: missing U plane"))?;
+    let v = third
+        .get_mut(0)
+        .ok_or(Error::InvalidData("y41p: missing V plane"))?;
     Ok((y, u, v))
 }
 
@@ -53,7 +61,12 @@ fn split_planes_mut(planes: &mut [Plane]) -> Result<(&mut Plane, &mut Plane, &mu
 /// # Errors
 /// [`Error::InvalidData`] for a `0x0` picture size, [`Error::UnexpectedEof`]
 /// if `payload` is shorter than the padded geometry implies.
-pub(crate) fn decode(payload: &[u8], width: u32, height: u32, budget: &mut Budget) -> Result<Frame> {
+pub(crate) fn decode(
+    payload: &[u8],
+    width: u32,
+    height: u32,
+    budget: &mut Budget,
+) -> Result<Frame> {
     if width == 0 || height == 0 {
         return Err(Error::InvalidData("y41p: picture size 0x0 is invalid"));
     }
@@ -144,11 +157,21 @@ pub(crate) fn encode(frame: &Frame) -> Result<Vec<u8>> {
     if planes.len() != 3 {
         return Err(Error::InvalidData("y41p: expected exactly three planes"));
     }
-    let y_plane = planes.first().ok_or(Error::InvalidData("y41p: missing Y plane"))?;
-    let u_plane = planes.get(1).ok_or(Error::InvalidData("y41p: missing U plane"))?;
-    let v_plane = planes.get(2).ok_or(Error::InvalidData("y41p: missing V plane"))?;
+    let y_plane = planes
+        .first()
+        .ok_or(Error::InvalidData("y41p: missing Y plane"))?;
+    let u_plane = planes
+        .get(1)
+        .ok_or(Error::InvalidData("y41p: missing U plane"))?;
+    let v_plane = planes
+        .get(2)
+        .ok_or(Error::InvalidData("y41p: missing V plane"))?;
     let (y_stride, u_stride, v_stride) = (y_plane.stride, u_plane.stride, v_plane.stride);
-    let (y_buf, u_buf, v_buf) = (y_plane.data.as_slice(), u_plane.data.as_slice(), v_plane.data.as_slice());
+    let (y_buf, u_buf, v_buf) = (
+        y_plane.data.as_slice(),
+        u_plane.data.as_slice(),
+        v_plane.data.as_slice(),
+    );
 
     let stride = row_bytes(width);
     let mut out = vec![0u8; stride.saturating_mul(height as usize)];

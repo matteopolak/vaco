@@ -53,10 +53,19 @@ use crate::common;
 use crate::sample;
 
 const DUAL_PADS: &[Pad] = &[
-    Pad { name: "source", media_type: MediaType::Video },
-    Pad { name: "filtered", media_type: MediaType::Video },
+    Pad {
+        name: "source",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "filtered",
+        media_type: MediaType::Video,
+    },
 ];
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "limitdiff",
@@ -73,7 +82,12 @@ pub(crate) struct Opts {
     pub threshold: f64,
     #[opt(name = "elasticity", help = "set the elasticity", default = 2.0, range = 0.0..=10.0, flags(video, filtering))]
     pub elasticity: f64,
-    #[opt(name = "reference", help = "enable reference stream (not incorporated into the formula)", default = false, flags(video, filtering))]
+    #[opt(
+        name = "reference",
+        help = "enable reference stream (not incorporated into the formula)",
+        default = false,
+        flags(video, filtering)
+    )]
     pub reference: bool,
     #[opt(name = "planes", help = "set the planes to filter", default = 15, range = 0..=15, flags(video, filtering))]
     pub planes: i32,
@@ -108,29 +122,48 @@ impl PairedFilter for Filter {
         if self.reference { 3 } else { 2 }
     }
 
-    fn filter_frames(&mut self, ctx: &mut FilterContext<'_>, inputs: SmallVec<[Frame; 4]>) -> Result<FrameOut> {
+    fn filter_frames(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut> {
         let mut it = inputs.into_iter();
         let (Some(c1), Some(c2)) = (it.next(), it.next()) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = c1.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = c1.data
+        else {
             return Ok(FrameOut::One(c1));
         };
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         let big_endian = format.is_big_endian();
         for ch in 0..format.component_count() {
-            let Some(comp) = sample::component(format, ch) else { continue };
-            let (Some(p1), Some(p2), Some(mut dp)) =
-                (c1.plane(comp.plane as usize), c2.plane(comp.plane as usize), out.plane_mut(comp.plane as usize))
-            else {
+            let Some(comp) = sample::component(format, ch) else {
                 continue;
             };
-            let w = dp.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+            let (Some(p1), Some(p2), Some(mut dp)) = (
+                c1.plane(comp.plane as usize),
+                c2.plane(comp.plane as usize),
+                out.plane_mut(comp.plane as usize),
+            ) else {
+                continue;
+            };
+            let w = dp
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
             let n = dp.rows().min(p1.rows()).min(p2.rows());
             let selected = (self.planes >> ch.min(31)) & 1 != 0;
             if !selected {
                 for y in 0..n {
-                    let (Some(sr), Some(dr)) = (p1.row(y), dp.row_mut(y)) else { continue };
+                    let (Some(sr), Some(dr)) = (p1.row(y), dp.row_mut(y)) else {
+                        continue;
+                    };
                     let len = sr.len().min(dr.len());
                     if let (Some(s), Some(d)) = (sr.get(..len), dr.get_mut(..len)) {
                         d.copy_from_slice(s);
@@ -141,7 +174,9 @@ impl PairedFilter for Filter {
             let max = f64::from(sample::max_value(comp));
             let threshold_px = self.threshold * max;
             for y in 0..n {
-                let (Some(r1), Some(r2), Some(rd)) = (p1.row(y), p2.row(y), dp.row_mut(y)) else { continue };
+                let (Some(r1), Some(r2), Some(rd)) = (p1.row(y), p2.row(y), dp.row_mut(y)) else {
+                    continue;
+                };
                 for x in 0..w {
                     let v1 = f64::from(sample::read(r1, x, comp, big_endian));
                     let v2 = f64::from(sample::read(r2, x, comp, big_endian));
@@ -187,7 +222,12 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::float_cmp, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::float_cmp,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -221,7 +261,12 @@ mod tests {
         // planes=1 selects only channel 0; channel 1 must copy c1 verbatim
         // regardless of c2 — exercised at the Frame level via `create`'s
         // own registry test in `registry.rs`, this just pins the mask math.
-        let f = Filter { threshold: 0.0, elasticity: 2.0, reference: false, planes: 1 };
+        let f = Filter {
+            threshold: 0.0,
+            elasticity: 2.0,
+            reference: false,
+            planes: 1,
+        };
         assert_eq!(f.planes & 1, 1);
         assert_eq!((f.planes >> 1) & 1, 0);
     }

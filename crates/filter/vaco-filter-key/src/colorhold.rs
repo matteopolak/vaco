@@ -43,7 +43,10 @@ use crate::common;
 use crate::keying;
 use crate::sample;
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "colorhold",
@@ -54,7 +57,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "colorhold", help = "Turns a certain color range into gray. Operates on RGB colors")]
+#[options(
+    name = "colorhold",
+    help = "Turns a certain color range into gray. Operates on RGB colors"
+)]
 pub(crate) struct Opts {
     #[opt(name = "color", alias = "c", help = "set the colorhold key color", default = "black".to_owned(), flags(video, filtering))]
     pub color: String,
@@ -80,9 +86,11 @@ impl Filter {
             return;
         }
         let big_endian = format.is_big_endian();
-        let (Some(cr), Some(cg), Some(cb)) =
-            (sample::component(format, 0), sample::component(format, 1), sample::component(format, 2))
-        else {
+        let (Some(cr), Some(cg), Some(cb)) = (
+            sample::component(format, 0),
+            sample::component(format, 1),
+            sample::component(format, 2),
+        ) else {
             return;
         };
         let (max_r, max_g, max_b) = (
@@ -90,12 +98,17 @@ impl Filter {
             f64::from(sample::max_value(cg)),
             f64::from(sample::max_value(cb)),
         );
-        let (Some(pr), Some(pg), Some(pb)) =
-            (input.plane(cr.plane as usize), input.plane(cg.plane as usize), input.plane(cb.plane as usize))
-        else {
+        let (Some(pr), Some(pg), Some(pb)) = (
+            input.plane(cr.plane as usize),
+            input.plane(cg.plane as usize),
+            input.plane(cb.plane as usize),
+        ) else {
             return;
         };
-        let w = pr.row_bytes().checked_div(usize::from(cr.step.max(1))).unwrap_or(0);
+        let w = pr
+            .row_bytes()
+            .checked_div(usize::from(cr.step.max(1)))
+            .unwrap_or(0);
         let rows = pr.rows();
         let src: Vec<Vec<(u16, u16, u16)>> = (0..rows)
             .map(|y| {
@@ -126,7 +139,9 @@ impl Filter {
         for y in 0..rows {
             let Some(row_src) = src.get(y) else { continue };
             for x in 0..w {
-                let Some(&(vr, vg, vb)) = row_src.get(x) else { continue };
+                let Some(&(vr, vg, vb)) = row_src.get(x) else {
+                    continue;
+                };
                 let (fr, fg, fb) = (f64::from(vr), f64::from(vg), f64::from(vb));
                 let p = [fr / max_r, fg / max_g, fb / max_b];
                 let d = keying::rgb_distance(p, self.key);
@@ -159,8 +174,8 @@ impl FrameFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts: Opts = common::parse(req.args)?;
-    let key =
-        vaco_core::parse::color(&opts.color).ok_or_else(|| format!("colorhold: bad color `{}`", opts.color))?;
+    let key = vaco_core::parse::color(&opts.color)
+        .ok_or_else(|| format!("colorhold: bad color `{}`", opts.color))?;
     let set = FormatSet::video_list(common::formats_where(is_rgb_alpha));
     Ok(Instance {
         desc: DESC,
@@ -197,15 +212,26 @@ mod tests {
     #[test]
     fn matching_color_is_held_exactly() {
         let mut frame = one_pixel([0xf0, 0x00, 0x00]);
-        let f = Filter { key: keying::key_rgb(vaco_core::parse::color("red").unwrap()), similarity: 0.1, blend: 0.0 };
+        let f = Filter {
+            key: keying::key_rgb(vaco_core::parse::color("red").unwrap()),
+            similarity: 0.1,
+            blend: 0.0,
+        };
         f.apply_frame(&mut frame);
-        assert_eq!(&frame.plane(0).unwrap().row(0).unwrap()[0..3], &[0xf0, 0x00, 0x00]);
+        assert_eq!(
+            &frame.plane(0).unwrap().row(0).unwrap()[0..3],
+            &[0xf0, 0x00, 0x00]
+        );
     }
 
     #[test]
     fn non_matching_color_becomes_the_plain_rgb_mean() {
         let mut frame = one_pixel([0xff, 0x00, 0x00]);
-        let f = Filter { key: [0.0, 0.0, 0.0], similarity: 0.1, blend: 0.0 };
+        let f = Filter {
+            key: [0.0, 0.0, 0.0],
+            similarity: 0.1,
+            blend: 0.0,
+        };
         f.apply_frame(&mut frame);
         let row = frame.plane(0).unwrap().row(0).unwrap();
         assert_eq!(&row[0..3], &[0x55, 0x55, 0x55]);
@@ -226,12 +252,21 @@ mod tests {
         ];
         for &(rr, expected) in cases {
             let mut frame = one_pixel([rr, 0, 0]);
-            let f = Filter { key: [0.0, 0.0, 0.0], similarity: 0.2, blend: 0.2 };
+            let f = Filter {
+                key: [0.0, 0.0, 0.0],
+                similarity: 0.2,
+                blend: 0.2,
+            };
             f.apply_frame(&mut frame);
             let row = frame.plane(0).unwrap().row(0).unwrap();
             for ch in 0..3 {
                 let diff = i32::from(row[ch]) - i32::from(expected[ch]);
-                assert!(diff.abs() <= 1, "rr=0x{rr:02x} ch={ch} got={} want~{}", row[ch], expected[ch]);
+                assert!(
+                    diff.abs() <= 1,
+                    "rr=0x{rr:02x} ch={ch} got={} want~{}",
+                    row[ch],
+                    expected[ch]
+                );
             }
         }
     }

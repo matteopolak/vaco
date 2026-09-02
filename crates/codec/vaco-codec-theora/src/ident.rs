@@ -117,9 +117,7 @@ impl Ident {
             2 => PixelFormat::Yuv422,
             3 => PixelFormat::Yuv444,
             _ => {
-                return Err(Error::Unsupported(
-                    "theora: reserved pixel format value 1",
-                ));
+                return Err(Error::Unsupported("theora: reserved pixel format value 1"));
             }
         };
         if picw > fmbw.saturating_mul(16) || pich > fmbh.saturating_mul(16) {

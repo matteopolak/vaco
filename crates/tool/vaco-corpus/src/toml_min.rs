@@ -345,7 +345,10 @@ mod tests {
             panic!("expected array");
         };
         assert_eq!(items.len(), 3);
-        assert_eq!(row.get("note").and_then(TomlValue::as_str), Some("line\nbreak"));
+        assert_eq!(
+            row.get("note").and_then(TomlValue::as_str),
+            Some("line\nbreak")
+        );
     }
 
     #[test]
@@ -358,7 +361,10 @@ mod tests {
     #[test]
     fn a_hash_inside_a_string_is_not_a_comment() {
         let doc = parse("note = \"a # b\"\n").expect("parses");
-        assert_eq!(doc.top.get("note").and_then(TomlValue::as_str), Some("a # b"));
+        assert_eq!(
+            doc.top.get("note").and_then(TomlValue::as_str),
+            Some("a # b")
+        );
     }
 
     #[test]

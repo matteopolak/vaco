@@ -169,10 +169,7 @@ mod size_experiment {
     // shapes, `Option` boxed, confirms the arithmetic rather than asserting
     // it from memory. Variants are otherwise unused by design -- this type
     // exists only for `size_of`.
-    #[allow(
-        dead_code,
-        reason = "exists only for size_of:: -- see the module doc"
-    )]
+    #[allow(dead_code, reason = "exists only for size_of:: -- see the module doc")]
     enum ErrorShapeWithBoxedOption {
         InvalidData(&'static str),
         UnexpectedEof,

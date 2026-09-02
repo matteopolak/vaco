@@ -102,7 +102,11 @@ fn decode_and_compare() -> ((f64, usize), (f64, usize), (f64, usize)) {
     blit(&frame, 1, WIDTH / 2, HEIGHT / 2, &mut got_u);
     blit(&frame, 2, WIDTH / 2, HEIGHT / 2, &mut got_v);
 
-    (compare("Y", &got_y, want_y), compare("U", &got_u, want_u), compare("V", &got_v, want_v))
+    (
+        compare("Y", &got_y, want_y),
+        compare("U", &got_u, want_u),
+        compare("V", &got_v, want_v),
+    )
 }
 
 /// Decodes without error or panic and reports per-plane agreement against
@@ -152,12 +156,27 @@ fn dense_content_is_byte_exact() {
     let ((y_mean, y_exact), (u_mean, u_exact), (v_mean, v_exact)) = decode_and_compare();
     let y_size = WIDTH * HEIGHT;
     let c_size = (WIDTH / 2) * (HEIGHT / 2);
-    assert_eq!(y_exact, y_size, "luma plane: not byte-exact, mean abs diff {y_mean}");
-    assert_eq!(u_exact, c_size, "Cb plane: not byte-exact, mean abs diff {u_mean}");
-    assert_eq!(v_exact, c_size, "Cr plane: not byte-exact, mean abs diff {v_mean}");
+    assert_eq!(
+        y_exact, y_size,
+        "luma plane: not byte-exact, mean abs diff {y_mean}"
+    );
+    assert_eq!(
+        u_exact, c_size,
+        "Cb plane: not byte-exact, mean abs diff {u_mean}"
+    );
+    assert_eq!(
+        v_exact, c_size,
+        "Cr plane: not byte-exact, mean abs diff {v_mean}"
+    );
 }
 
-fn blit(frame: &vaco_frame::Frame, plane_index: usize, width: usize, height: usize, out: &mut [u8]) {
+fn blit(
+    frame: &vaco_frame::Frame,
+    plane_index: usize,
+    width: usize,
+    height: usize,
+    out: &mut [u8],
+) {
     let plane = frame.plane(plane_index).expect("plane present");
     for y in 0..height {
         let row = plane.row(y).expect("row in range");

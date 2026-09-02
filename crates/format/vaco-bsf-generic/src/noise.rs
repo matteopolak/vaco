@@ -64,7 +64,9 @@ impl XorShift64Star {
     reason = "must match BsfDesc::build's fn-pointer signature, shared by every filter"
 )]
 fn build(params: &CodecParameters) -> Result<Box<dyn BitstreamFilter>> {
-    let seed = params.codec_id.map_or(0x9E37_79B9, |c| c as u64 ^ 0x9E37_79B9);
+    let seed = params
+        .codec_id
+        .map_or(0x9E37_79B9, |c| c as u64 ^ 0x9E37_79B9);
     Ok(Box::new(MappedFilter::new(Noise {
         // Both zero: the identity transform, per the module docs. Structured
         // as fields, not constants, so a future options seam only needs to
@@ -150,6 +152,9 @@ mod tests {
         let a = build_noisy(0);
         let b = build_noisy(0);
         assert_eq!(a, b, "same seed must reproduce the same corruption");
-        assert_ne!(a, b"AAAAAAAAAA", "amount=100% must change every byte's chance");
+        assert_ne!(
+            a, b"AAAAAAAAAA",
+            "amount=100% must change every byte's chance"
+        );
     }
 }

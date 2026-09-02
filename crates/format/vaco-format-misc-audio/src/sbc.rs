@@ -114,11 +114,14 @@ impl SbcDemuxer {
     pub fn open(src: Box<dyn MediaSource>) -> Result<Self> {
         let mut io = IoContext::new(src, &IoOptions::default())?;
         let raw = io.peek(4)?;
-        let hdr4: [u8; 4] = raw
-            .get(..4)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(Error::InvalidData("sbc: file shorter than one frame header"))?;
-        let first = parse_frame_header(hdr4).ok_or(Error::InvalidData("sbc: invalid frame sync"))?;
+        let hdr4: [u8; 4] =
+            raw.get(..4)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(Error::InvalidData(
+                    "sbc: file shorter than one frame header",
+                ))?;
+        let first =
+            parse_frame_header(hdr4).ok_or(Error::InvalidData("sbc: invalid frame sync"))?;
 
         let mut stream = Stream::new(
             0,
@@ -170,7 +173,12 @@ impl Demuxer for SbcDemuxer {
         pkt.pts = Timestamp::new(i64::try_from(self.frames_emitted).unwrap_or(i64::MAX));
         pkt.dts = pkt.pts;
         pkt.flags = PacketFlags::KEY;
-        let rate = self.stream.params.audio.as_ref().map_or(1, |a| a.sample_rate.max(1));
+        let rate = self
+            .stream
+            .params
+            .audio
+            .as_ref()
+            .map_or(1, |a| a.sample_rate.max(1));
         let micros = u64::from(hdr.samples_per_frame)
             .saturating_mul(1_000_000)
             .checked_div(u64::from(rate))
@@ -226,7 +234,10 @@ mod tests {
 
     #[test]
     fn probe_is_extension_only() {
-        assert_eq!(probe(&ProbeData::new(b"\x9c\x31\x3c\x71")), ProbeScore::NONE);
+        assert_eq!(
+            probe(&ProbeData::new(b"\x9c\x31\x3c\x71")),
+            ProbeScore::NONE
+        );
         assert_eq!(
             probe(&ProbeData::new(b"whatever").with_filename("x.sbc")),
             ProbeScore::EXTENSION

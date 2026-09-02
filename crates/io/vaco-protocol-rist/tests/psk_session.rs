@@ -11,11 +11,16 @@
 //! shape: a clear `GreHeader` (`K`=1 carrying the nonce, `S`=1 carrying
 //! the sequence number) followed by an encrypted body.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, reason = "test code")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test code"
+)]
 
 use vaco_protocol_rist::gre::{
-    GreHeader, PROTOCOL_TYPE_IP, ReducedUdpHeader, RistVersion, VSF_ETHERTYPE, VSF_PROTOCOL_TYPE_RIST,
-    VSF_SUBTYPE_REDUCED_OVERHEAD, VsfHeader,
+    GreHeader, PROTOCOL_TYPE_IP, ReducedUdpHeader, RistVersion, VSF_ETHERTYPE,
+    VSF_PROTOCOL_TYPE_RIST, VSF_SUBTYPE_REDUCED_OVERHEAD, VsfHeader,
 };
 use vaco_protocol_rist::psk::{self, KeyBits};
 
@@ -23,7 +28,12 @@ const PASSPHRASE: &[u8] = b"Reliable Internet Stream Transport";
 
 /// Build one PSK-encrypted tunnel packet: a clear `GreHeader` (nonce,
 /// sequence number) followed by an encrypted body.
-fn build_encrypted_packet(nonce: u32, sequence_number: u32, key_bits: KeyBits, body: &[u8]) -> Vec<u8> {
+fn build_encrypted_packet(
+    nonce: u32,
+    sequence_number: u32,
+    key_bits: KeyBits,
+    body: &[u8],
+) -> Vec<u8> {
     let header = GreHeader {
         checksum: None,
         key_or_nonce: Some(nonce),
@@ -151,8 +161,20 @@ fn a_wrong_passphrase_does_not_silently_recover_the_plaintext() {
     let packet = build_encrypted_packet(1, 1, KeyBits::Aes128, &body);
 
     let (header, consumed) = GreHeader::parse(&packet).unwrap();
-    let wrong_key = psk::derive_key(b"the wrong passphrase entirely", header.key_or_nonce.unwrap(), KeyBits::Aes128);
+    let wrong_key = psk::derive_key(
+        b"the wrong passphrase entirely",
+        header.key_or_nonce.unwrap(),
+        KeyBits::Aes128,
+    );
     let mut wrongly_decrypted = packet[consumed..].to_vec();
-    psk::apply_keystream(&wrong_key, header.sequence_number.unwrap(), &mut wrongly_decrypted).unwrap();
-    assert_ne!(wrongly_decrypted, body, "a wrong passphrase must not happen to recover the same bytes");
+    psk::apply_keystream(
+        &wrong_key,
+        header.sequence_number.unwrap(),
+        &mut wrongly_decrypted,
+    )
+    .unwrap();
+    assert_ne!(
+        wrongly_decrypted, body,
+        "a wrong passphrase must not happen to recover the same bytes"
+    );
 }

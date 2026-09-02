@@ -67,7 +67,10 @@ pub mod opus {
     ];
 
     #[cfg(test)]
-    #[allow(clippy::indexing_slicing, reason = "test code: a panic is the assertion mechanism")]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "test code: a panic is the assertion mechanism"
+    )]
     mod tests {
         use super::HEAD_MONO;
 
@@ -77,7 +80,11 @@ pub mod opus {
             assert_eq!(&HEAD_MONO[..8], b"OpusHead");
             assert_eq!(HEAD_MONO[8], 1, "version");
             assert_eq!(HEAD_MONO[9], 1, "channel count (mono)");
-            assert_eq!(u16::from_le_bytes([HEAD_MONO[10], HEAD_MONO[11]]), 312, "pre_skip");
+            assert_eq!(
+                u16::from_le_bytes([HEAD_MONO[10], HEAD_MONO[11]]),
+                312,
+                "pre_skip"
+            );
             assert_eq!(
                 u32::from_le_bytes([HEAD_MONO[12], HEAD_MONO[13], HEAD_MONO[14], HEAD_MONO[15]]),
                 48_000,

@@ -1290,7 +1290,14 @@ mod tests {
         };
 
         assert!(matches!(
-            stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, false),
+            stream_value(
+                &field,
+                &stream,
+                &p,
+                Some(MediaType::Video),
+                Counts::NONE,
+                false
+            ),
             Val::Absent
         ));
 
@@ -1336,10 +1343,7 @@ mod tests {
         stream.metadata_set("ts_packetsize", "188");
         stream.metadata_set("language", "eng");
         let visible = stream_visible_metadata(&stream);
-        assert_eq!(
-            visible,
-            vec![("language".to_owned(), "eng".to_owned())]
-        );
+        assert_eq!(visible, vec![("language".to_owned(), "eng".to_owned())]);
     }
 
     /// A codec with no profile is *absent*, not the string `unknown`.
@@ -1393,9 +1397,23 @@ mod tests {
             Val::S(s) => Some(s),
             _ => None,
         };
-        let named = stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, false);
+        let named = stream_value(
+            &field,
+            &stream,
+            &p,
+            Some(MediaType::Video),
+            Counts::NONE,
+            false,
+        );
         assert_eq!(text(named).as_deref(), Some("High"));
-        let numeric = stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, true);
+        let numeric = stream_value(
+            &field,
+            &stream,
+            &p,
+            Some(MediaType::Video),
+            Counts::NONE,
+            true,
+        );
         assert_eq!(text(numeric).as_deref(), Some("100"));
     }
 
@@ -1413,7 +1431,14 @@ mod tests {
         let stream = Stream::new(0, MediaType::Video, vaco_core::Rational::new(1, 1000));
         let mut p = CodecParameters::video().with_codec(CodecId::Vp8);
         p.profile = Some(vaco_codec_core::Profile::new(0, ""));
-        let v = stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, false);
+        let v = stream_value(
+            &field,
+            &stream,
+            &p,
+            Some(MediaType::Video),
+            Counts::NONE,
+            false,
+        );
         let text = match v {
             Val::S(s) => Some(s),
             _ => None,
@@ -1604,7 +1629,14 @@ mod tests {
             v.field_order = vaco_codec_core::FieldOrder::Unknown;
         }
         assert!(matches!(
-            stream_value(&field, &stream, &p, Some(MediaType::Video), Counts::NONE, false),
+            stream_value(
+                &field,
+                &stream,
+                &p,
+                Some(MediaType::Video),
+                Counts::NONE,
+                false
+            ),
             Val::Absent
         ));
 

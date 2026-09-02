@@ -125,7 +125,11 @@ pub fn push_color(out: &mut String, r: u8, g: u8, b: u8) {
                 started = true;
             }
             if started {
-                out.push(char::from_digit(nib, 16).unwrap_or('0').to_ascii_uppercase());
+                out.push(
+                    char::from_digit(nib, 16)
+                        .unwrap_or('0')
+                        .to_ascii_uppercase(),
+                );
             }
         }
     }
@@ -169,10 +173,7 @@ pub fn parse_color(value: &str) -> Option<(u8, u8, u8)> {
         ("cyan", (0x00, 0xFF, 0xFF)),
     ];
     let lower = v.to_ascii_lowercase();
-    named
-        .iter()
-        .find(|(n, _)| *n == lower)
-        .map(|(_, rgb)| *rgb)
+    named.iter().find(|(n, _)| *n == lower).map(|(_, rgb)| *rgb)
 }
 
 #[cfg(test)]
@@ -182,8 +183,8 @@ mod tests {
 
     #[test]
     fn parses_a_reference_shaped_dialogue_chunk() {
-        let d = parse_chunk("0,0,Default,Speaker,5,6,7,fx,{\\i1}hi{\\i0} there, with, commas")
-            .unwrap();
+        let d =
+            parse_chunk("0,0,Default,Speaker,5,6,7,fx,{\\i1}hi{\\i0} there, with, commas").unwrap();
         assert_eq!(d.read_order, 0);
         assert_eq!(d.style, "Default");
         assert_eq!(d.name, "Speaker");

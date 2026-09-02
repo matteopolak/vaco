@@ -90,11 +90,16 @@ impl PgsDecoder {
     /// or a segment's own payload is structurally short;
     /// [`Error::LimitExceeded`] if a claimed object size is unreasonable or
     /// an in-progress object's accumulated bytes pass [`MAX_OBJECT_BYTES`].
-    pub fn push_segment(&mut self, record: &[u8], limits: &Limits) -> Result<Option<SubtitleEvent>> {
-        let header = sup::parse_header(record).ok_or(Error::InvalidData("pgs: not a segment record"))?;
-        let payload = record
-            .get(sup::HEADER_LEN..)
-            .ok_or(Error::InvalidData("pgs: segment shorter than its own header"))?;
+    pub fn push_segment(
+        &mut self,
+        record: &[u8],
+        limits: &Limits,
+    ) -> Result<Option<SubtitleEvent>> {
+        let header =
+            sup::parse_header(record).ok_or(Error::InvalidData("pgs: not a segment record"))?;
+        let payload = record.get(sup::HEADER_LEN..).ok_or(Error::InvalidData(
+            "pgs: segment shorter than its own header",
+        ))?;
         match header.kind {
             SegmentType::Pcs => {
                 self.start_pts = Timestamp::new(i64::from(header.pts));
@@ -184,7 +189,11 @@ impl PgsDecoder {
     }
 
     fn compose(&mut self, limits: &Limits) -> Result<SubtitleEvent> {
-        let palette = self.palettes.get(&self.palette_id).cloned().unwrap_or_default();
+        let palette = self
+            .palettes
+            .get(&self.palette_id)
+            .cloned()
+            .unwrap_or_default();
         let mut rects = Vec::new();
         let mut forced = false;
         for comp in &self.composition {
@@ -192,26 +201,33 @@ impl PgsDecoder {
             let Some(obj) = self.objects.get(&comp.object_id) else {
                 continue;
             };
-            let (crop_x, crop_y, width, height) = comp
-                .crop
-                .unwrap_or((0, 0, obj.width, obj.height));
+            let (crop_x, crop_y, width, height) =
+                comp.crop.unwrap_or((0, 0, obj.width, obj.height));
             let rect = Rect::new(comp.x, comp.y, width, height, limits)?;
             let mut budget = Budget::new(limits.clone());
             let mut bitmap = IndexedBitmap::allocate(&mut budget, rect, palette.clone())?;
             for y in 0..height {
-                let Some(sy) = crop_y.checked_add(y) else { break };
+                let Some(sy) = crop_y.checked_add(y) else {
+                    break;
+                };
                 for x in 0..width {
-                    let Some(sx) = crop_x.checked_add(x) else { break };
+                    let Some(sx) = crop_x.checked_add(x) else {
+                        break;
+                    };
                     if sx >= obj.width || sy >= obj.height {
                         continue;
                     }
-                    let Some(src_at) = usize::try_from(u64::from(sy) * u64::from(obj.width) + u64::from(sx)).ok() else {
+                    let Some(src_at) =
+                        usize::try_from(u64::from(sy) * u64::from(obj.width) + u64::from(sx)).ok()
+                    else {
                         continue;
                     };
                     let Some(&value) = obj.indices.get(src_at) else {
                         continue;
                     };
-                    let Some(dst_at) = usize::try_from(u64::from(y) * u64::from(width) + u64::from(x)).ok() else {
+                    let Some(dst_at) =
+                        usize::try_from(u64::from(y) * u64::from(width) + u64::from(x)).ok()
+                    else {
                         continue;
                     };
                     if let Some(slot) = bitmap.indices_mut().get_mut(dst_at) {
@@ -231,20 +247,33 @@ impl PgsDecoder {
 }
 
 fn rb16(buf: &[u8], at: usize) -> Result<u16> {
-    let hi = *buf.get(at).ok_or(Error::InvalidData("pgs: segment truncated"))?;
+    let hi = *buf
+        .get(at)
+        .ok_or(Error::InvalidData("pgs: segment truncated"))?;
     let lo = *buf
-        .get(at.checked_add(1).ok_or(Error::InvalidData("pgs: offset overflow"))?)
+        .get(
+            at.checked_add(1)
+                .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+        )
         .ok_or(Error::InvalidData("pgs: segment truncated"))?;
     Ok(u16::from(hi) << 8 | u16::from(lo))
 }
 
 fn rb24(buf: &[u8], at: usize) -> Result<usize> {
-    let b0 = *buf.get(at).ok_or(Error::InvalidData("pgs: segment truncated"))?;
+    let b0 = *buf
+        .get(at)
+        .ok_or(Error::InvalidData("pgs: segment truncated"))?;
     let b1 = *buf
-        .get(at.checked_add(1).ok_or(Error::InvalidData("pgs: offset overflow"))?)
+        .get(
+            at.checked_add(1)
+                .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+        )
         .ok_or(Error::InvalidData("pgs: segment truncated"))?;
     let b2 = *buf
-        .get(at.checked_add(2).ok_or(Error::InvalidData("pgs: offset overflow"))?)
+        .get(
+            at.checked_add(2)
+                .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+        )
         .ok_or(Error::InvalidData("pgs: segment truncated"))?;
     Ok((usize::from(b0) << 16) | (usize::from(b1) << 8) | usize::from(b2))
 }
@@ -261,19 +290,46 @@ fn parse_pcs(payload: &[u8]) -> Result<Vec<CompositionObject>> {
     for _ in 0..count {
         let object_id = rb16(payload, i)?;
         let flags = *payload
-            .get(i.checked_add(3).ok_or(Error::InvalidData("pgs: offset overflow"))?)
+            .get(
+                i.checked_add(3)
+                    .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+            )
             .ok_or(Error::InvalidData("pgs: composition object truncated"))?;
         let cropped = flags & 0x80 != 0;
         let forced = flags & 0x40 != 0;
-        let x = u32::from(rb16(payload, i.checked_add(4).ok_or(Error::InvalidData("pgs: offset overflow"))?)?);
-        let y = u32::from(rb16(payload, i.checked_add(6).ok_or(Error::InvalidData("pgs: offset overflow"))?)?);
-        let mut next = i.checked_add(8).ok_or(Error::InvalidData("pgs: offset overflow"))?;
+        let x = u32::from(rb16(
+            payload,
+            i.checked_add(4)
+                .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+        )?);
+        let y = u32::from(rb16(
+            payload,
+            i.checked_add(6)
+                .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+        )?);
+        let mut next = i
+            .checked_add(8)
+            .ok_or(Error::InvalidData("pgs: offset overflow"))?;
         let crop = if cropped {
             let cx = u32::from(rb16(payload, next)?);
-            let cy = u32::from(rb16(payload, next.checked_add(2).ok_or(Error::InvalidData("pgs: offset overflow"))?)?);
-            let cw = u32::from(rb16(payload, next.checked_add(4).ok_or(Error::InvalidData("pgs: offset overflow"))?)?);
-            let ch = u32::from(rb16(payload, next.checked_add(6).ok_or(Error::InvalidData("pgs: offset overflow"))?)?);
-            next = next.checked_add(8).ok_or(Error::InvalidData("pgs: offset overflow"))?;
+            let cy = u32::from(rb16(
+                payload,
+                next.checked_add(2)
+                    .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+            )?);
+            let cw = u32::from(rb16(
+                payload,
+                next.checked_add(4)
+                    .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+            )?);
+            let ch = u32::from(rb16(
+                payload,
+                next.checked_add(6)
+                    .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+            )?);
+            next = next
+                .checked_add(8)
+                .ok_or(Error::InvalidData("pgs: offset overflow"))?;
             Some((cx, cy, cw, ch))
         } else {
             None
@@ -300,21 +356,35 @@ fn parse_pds(payload: &[u8]) -> Result<(u8, Palette)> {
     let mut i = 2usize;
     while let Some(&entry_id) = payload.get(i) {
         let y = *payload
-            .get(i.checked_add(1).ok_or(Error::InvalidData("pgs: offset overflow"))?)
+            .get(
+                i.checked_add(1)
+                    .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+            )
             .ok_or(Error::InvalidData("pgs: PDS entry truncated"))?;
         let cr = *payload
-            .get(i.checked_add(2).ok_or(Error::InvalidData("pgs: offset overflow"))?)
+            .get(
+                i.checked_add(2)
+                    .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+            )
             .ok_or(Error::InvalidData("pgs: PDS entry truncated"))?;
         let cb = *payload
-            .get(i.checked_add(3).ok_or(Error::InvalidData("pgs: offset overflow"))?)
+            .get(
+                i.checked_add(3)
+                    .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+            )
             .ok_or(Error::InvalidData("pgs: PDS entry truncated"))?;
         let alpha = *payload
-            .get(i.checked_add(4).ok_or(Error::InvalidData("pgs: offset overflow"))?)
+            .get(
+                i.checked_add(4)
+                    .ok_or(Error::InvalidData("pgs: offset overflow"))?,
+            )
             .ok_or(Error::InvalidData("pgs: PDS entry truncated"))?;
         if let Some(slot) = table.get_mut(usize::from(entry_id)) {
             *slot = vaco_format_subtitle_bitmap::ycbcrt_to_rgba(y, cb, cr, alpha);
         }
-        i = i.checked_add(5).ok_or(Error::InvalidData("pgs: offset overflow"))?;
+        i = i
+            .checked_add(5)
+            .ok_or(Error::InvalidData("pgs: offset overflow"))?;
     }
     Ok((id, Palette::new(table)?))
 }
@@ -388,7 +458,14 @@ mod rle {
         Ok(out)
     }
 
-    fn write_run(out: &mut [u8], width: usize, row: usize, col: &mut usize, colour: u8, len: usize) {
+    fn write_run(
+        out: &mut [u8],
+        width: usize,
+        row: usize,
+        col: &mut usize,
+        colour: u8,
+        len: usize,
+    ) {
         for _ in 0..len {
             if *col >= width {
                 break;

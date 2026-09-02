@@ -146,7 +146,12 @@ pub(crate) struct Opts {
     pub w: String,
     #[opt(name = "h", help = "set logo height", default = "-1".to_owned(), flags(video, filtering))]
     pub h: String,
-    #[opt(name = "show", help = "show delogo area", default = false, flags(video, filtering))]
+    #[opt(
+        name = "show",
+        help = "show delogo area",
+        default = false,
+        flags(video, filtering)
+    )]
     pub show: bool,
 }
 
@@ -183,10 +188,14 @@ impl Filter {
     fn new(opts: &Opts) -> std::result::Result<Self, String> {
         let bindings = Bindings::new(XY_VARS);
         Ok(Self {
-            x_expr: Expr::parse(&opts.x, &bindings).map_err(|e| format!("delogo: bad `x` `{e}`"))?,
-            y_expr: Expr::parse(&opts.y, &bindings).map_err(|e| format!("delogo: bad `y` `{e}`"))?,
-            w_expr: Expr::parse(&opts.w, &bindings).map_err(|e| format!("delogo: bad `w` `{e}`"))?,
-            h_expr: Expr::parse(&opts.h, &bindings).map_err(|e| format!("delogo: bad `h` `{e}`"))?,
+            x_expr: Expr::parse(&opts.x, &bindings)
+                .map_err(|e| format!("delogo: bad `x` `{e}`"))?,
+            y_expr: Expr::parse(&opts.y, &bindings)
+                .map_err(|e| format!("delogo: bad `y` `{e}`"))?,
+            w_expr: Expr::parse(&opts.w, &bindings)
+                .map_err(|e| format!("delogo: bad `w` `{e}`"))?,
+            h_expr: Expr::parse(&opts.h, &bindings)
+                .map_err(|e| format!("delogo: bad `h` `{e}`"))?,
             show: opts.show,
         })
     }
@@ -396,7 +405,15 @@ mod tests {
             }
         }
         let mut rows = rows_of(&grid);
-        fill_box(&mut rows, Rect { x0: 3, y0: 3, w: 4, h: 4 });
+        fill_box(
+            &mut rows,
+            Rect {
+                x0: 3,
+                y0: 3,
+                w: 4,
+                h: 4,
+            },
+        );
         for row in rows.iter().take(7).skip(3) {
             for &px in row.iter().take(7).skip(3) {
                 assert_eq!(px, 50);
@@ -417,7 +434,15 @@ mod tests {
             }
         }
         let mut rows = rows_of(&grid);
-        fill_box(&mut rows, Rect { x0: 3, y0: 3, w: 4, h: 4 });
+        fill_box(
+            &mut rows,
+            Rect {
+                x0: 3,
+                y0: 3,
+                w: 4,
+                h: 4,
+            },
+        );
         let expected = [
             (3, 3, 10),
             (4, 3, 16),
@@ -441,9 +466,18 @@ mod tests {
     #[test]
     fn matches_the_wide_box_probe_away_from_its_anomalous_column() {
         let mut rows: Vec<Vec<u8>> = (0..20)
-            .map(|_| (0..20).map(|x: usize| if x >= 13 { 100 } else { 0 }).collect())
+            .map(|_| {
+                (0..20)
+                    .map(|x: usize| if x >= 13 { 100 } else { 0 })
+                    .collect()
+            })
             .collect();
-        let b = Rect { x0: 3, y0: 3, w: 10, h: 6 };
+        let b = Rect {
+            x0: 3,
+            y0: 3,
+            w: 10,
+            h: 6,
+        };
         fill_box(&mut rows, b);
         let expected_rows: [[u8; 10]; 6] = [
             [4, 6, 8, 9, 11, 13, 16, 21, 28, 61],
@@ -473,9 +507,21 @@ mod tests {
     #[test]
     fn wide_box_anomalous_column_residual_stays_within_its_measured_bound() {
         let mut rows: Vec<Vec<u8>> = (0..20)
-            .map(|_| (0..20).map(|x: usize| if x >= 13 { 100 } else { 0 }).collect())
+            .map(|_| {
+                (0..20)
+                    .map(|x: usize| if x >= 13 { 100 } else { 0 })
+                    .collect()
+            })
             .collect();
-        fill_box(&mut rows, Rect { x0: 3, y0: 3, w: 10, h: 6 });
+        fill_box(
+            &mut rows,
+            Rect {
+                x0: 3,
+                y0: 3,
+                w: 10,
+                h: 6,
+            },
+        );
         // Reference values at x=12 (dist_right == 1) for rows 3..=8 are
         // 61, 69, 71, 71, 69, 61.
         let reference = [61i32, 69, 71, 71, 69, 61];

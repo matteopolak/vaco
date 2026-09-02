@@ -35,7 +35,9 @@
 //! seekable.
 
 use crate::header::SwfHeader;
-use crate::tags::{TAG_END, TAG_SHOW_FRAME, TAG_SOUND_STREAM_BLOCK, TAG_SOUND_STREAM_HEAD2, TagHeader};
+use crate::tags::{
+    TAG_END, TAG_SHOW_FRAME, TAG_SOUND_STREAM_BLOCK, TAG_SOUND_STREAM_HEAD2, TagHeader,
+};
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_format_core::{FormatFlags, Muxer};
@@ -114,16 +116,23 @@ impl SwfMuxer {
 
     fn add_video_stream(&mut self, params: &CodecParameters) -> Result<u32> {
         if self.video.is_some() {
-            return Err(Error::Unsupported("swf: only one video stream is supported"));
+            return Err(Error::Unsupported(
+                "swf: only one video stream is supported",
+            ));
         }
         let Some(CodecId::Flv1) = params.codec_id else {
             return Err(Error::Unsupported(
                 "swf: only FLV1 (Sorenson H.263) video is supported",
             ));
         };
-        let video = params.video.as_ref().ok_or(Error::Unsupported("swf: missing video parameters"))?;
-        let width = u16::try_from(video.width).map_err(|_| Error::Unsupported("swf: width does not fit in 16 bits"))?;
-        let height = u16::try_from(video.height).map_err(|_| Error::Unsupported("swf: height does not fit in 16 bits"))?;
+        let video = params
+            .video
+            .as_ref()
+            .ok_or(Error::Unsupported("swf: missing video parameters"))?;
+        let width = u16::try_from(video.width)
+            .map_err(|_| Error::Unsupported("swf: width does not fit in 16 bits"))?;
+        let height = u16::try_from(video.height)
+            .map_err(|_| Error::Unsupported("swf: height does not fit in 16 bits"))?;
         self.stage_width_twips = i32::try_from(video.width).unwrap_or(0).saturating_mul(20);
         self.stage_height_twips = i32::try_from(video.height).unwrap_or(0).saturating_mul(20);
         self.frame_rate_raw = frame_rate_to_raw(video.frame_rate)?;
@@ -158,18 +167,30 @@ impl SwfMuxer {
 
     fn add_audio_stream(&mut self, params: &CodecParameters) -> Result<u32> {
         if self.audio.is_some() {
-            return Err(Error::Unsupported("swf: only one audio stream is supported"));
+            return Err(Error::Unsupported(
+                "swf: only one audio stream is supported",
+            ));
         }
-        let codec = params.codec_id.ok_or(Error::Unsupported("swf: missing audio codec"))?;
-        let codec_byte = crate::demux::audio_codec_to_swf(codec)
-            .ok_or(Error::Unsupported("swf: only MP3 or 16-bit PCM audio is supported"))?;
-        let audio = params.audio.as_ref().ok_or(Error::Unsupported("swf: missing audio parameters"))?;
+        let codec = params
+            .codec_id
+            .ok_or(Error::Unsupported("swf: missing audio codec"))?;
+        let codec_byte = crate::demux::audio_codec_to_swf(codec).ok_or(Error::Unsupported(
+            "swf: only MP3 or 16-bit PCM audio is supported",
+        ))?;
+        let audio = params
+            .audio
+            .as_ref()
+            .ok_or(Error::Unsupported("swf: missing audio parameters"))?;
         let rate_idx = sample_rate_to_index(audio.sample_rate)?;
         let channels = audio.layout.as_ref().map_or(1, |l| l.iter().count());
         let type_bit: u8 = match channels {
             1 => 0,
             2 => 1,
-            _ => return Err(Error::Unsupported("swf: only mono or stereo audio is supported")),
+            _ => {
+                return Err(Error::Unsupported(
+                    "swf: only mono or stereo audio is supported",
+                ));
+            }
         };
         let size_bit: u8 = 1; // 16-bit, matching every measured sample
 
@@ -240,7 +261,9 @@ impl SwfMuxer {
         let header = TagHeader::write(TAG_SOUND_STREAM_BLOCK, tag.len() as u32)?;
         self.tag_buf.extend_from_slice(&header);
         self.tag_buf.extend_from_slice(&tag);
-        audio.samples_written = audio.samples_written.saturating_add(u64::from(approx_samples));
+        audio.samples_written = audio
+            .samples_written
+            .saturating_add(u64::from(approx_samples));
         let _ = audio.codec_byte;
         Ok(())
     }
@@ -255,7 +278,8 @@ fn frame_rate_to_raw(rate: Rational) -> Result<u16> {
         return Err(Error::Unsupported("swf: video stream has no frame rate"));
     }
     let scaled = i64::from(rate.num).saturating_mul(256) / i64::from(rate.den);
-    u16::try_from(scaled).map_err(|_| Error::Unsupported("swf: frame rate out of range for an 8.8 fixed value"))
+    u16::try_from(scaled)
+        .map_err(|_| Error::Unsupported("swf: frame rate out of range for an 8.8 fixed value"))
 }
 
 impl Muxer for SwfMuxer {
@@ -290,13 +314,17 @@ impl Muxer for SwfMuxer {
 
     fn write_trailer(&mut self) -> Result<()> {
         if let Some(video) = &self.video
-            && let Some(slot) = self.tag_buf.get_mut(video.num_frames_offset..video.num_frames_offset + 2)
+            && let Some(slot) = self
+                .tag_buf
+                .get_mut(video.num_frames_offset..video.num_frames_offset + 2)
         {
             let frame_count = u16::try_from(video.frame_count).unwrap_or(u16::MAX);
             slot.copy_from_slice(&frame_count.to_le_bytes());
         }
         if let Some(audio) = &self.audio
-            && let Some(slot) = self.tag_buf.get_mut(audio.sample_count_offset..audio.sample_count_offset + 2)
+            && let Some(slot) = self
+                .tag_buf
+                .get_mut(audio.sample_count_offset..audio.sample_count_offset + 2)
         {
             let samples = u16::try_from(audio.samples_written).unwrap_or(u16::MAX);
             slot.copy_from_slice(&samples.to_le_bytes());
@@ -311,10 +339,14 @@ impl Muxer for SwfMuxer {
             stage_width_twips: self.stage_width_twips,
             stage_height_twips: self.stage_height_twips,
             frame_rate_raw: self.frame_rate_raw,
-            frame_count: self.video.as_ref().map_or(0, |v| u16::try_from(v.frame_count).unwrap_or(u16::MAX)),
+            frame_count: self
+                .video
+                .as_ref()
+                .map_or(0, |v| u16::try_from(v.frame_count).unwrap_or(u16::MAX)),
         };
         let mut header_bytes = header.write();
-        let file_length = u32::try_from(header_bytes.len().saturating_add(self.tag_buf.len())).unwrap_or(u32::MAX);
+        let file_length = u32::try_from(header_bytes.len().saturating_add(self.tag_buf.len()))
+            .unwrap_or(u32::MAX);
         if let Some(slot) = header_bytes.get_mut(4..8) {
             slot.copy_from_slice(&file_length.to_le_bytes());
         }

@@ -45,7 +45,10 @@ use vaco_filter_graph::registry::{Instance, Instantiate};
 use crate::common;
 use crate::sample;
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "colormatrix",
@@ -83,11 +86,11 @@ const fn named(value: i64, name: &'static str) -> vaco_opts::ConstDesc {
 /// standard luma coefficients — `Kg = 1 - Kr - Kb` in every case.
 const fn kr_kb(id: i32) -> Option<(f64, f64)> {
     match id {
-        0 => Some((0.2126, 0.0722)),   // BT.709
-        1 => Some((0.30, 0.11)),       // FCC (1953 NTSC)
-        2 => Some((0.299, 0.114)),     // BT.601 / BT.470 / BT.470bg / SMPTE 170M
-        3 => Some((0.212, 0.087)),     // SMPTE 240M
-        4 => Some((0.2627, 0.0593)),   // BT.2020
+        0 => Some((0.2126, 0.0722)), // BT.709
+        1 => Some((0.30, 0.11)),     // FCC (1953 NTSC)
+        2 => Some((0.299, 0.114)),   // BT.601 / BT.470 / BT.470bg / SMPTE 170M
+        3 => Some((0.212, 0.087)),   // SMPTE 240M
+        4 => Some((0.2627, 0.0593)), // BT.2020
         _ => None,
     }
 }
@@ -129,23 +132,40 @@ pub(crate) struct Filter {
 
 impl Filter {
     fn new(o: &Opts) -> Option<Self> {
-        Some(Self { src: kr_kb(o.src)?, dst: kr_kb(o.dst)? })
+        Some(Self {
+            src: kr_kb(o.src)?,
+            dst: kr_kb(o.dst)?,
+        })
     }
 
     fn apply_frame(&self, input: &mut Frame) {
-        let FrameData::Video { format, .. } = input.data else { return };
+        let FrameData::Video { format, .. } = input.data else {
+            return;
+        };
         if format.is_rgb() || !sample::is_addressable(format) || format.component_count() < 3 {
             return;
         }
-        let Some(y_comp) = sample::component(format, 0) else { return };
-        let Some(u_comp) = sample::component(format, 1) else { return };
-        let Some(v_comp) = sample::component(format, 2) else { return };
+        let Some(y_comp) = sample::component(format, 0) else {
+            return;
+        };
+        let Some(u_comp) = sample::component(format, 1) else {
+            return;
+        };
+        let Some(v_comp) = sample::component(format, 2) else {
+            return;
+        };
         let (log2w, log2h) = format.log2_chroma();
         let big_endian = format.is_big_endian();
 
-        let Some((yw, yh, y_samples)) = read_plane(input, y_comp, big_endian) else { return };
-        let Some((cw, ch, u_samples)) = read_plane(input, u_comp, big_endian) else { return };
-        let Some((_, _, v_samples)) = read_plane(input, v_comp, big_endian) else { return };
+        let Some((yw, yh, y_samples)) = read_plane(input, y_comp, big_endian) else {
+            return;
+        };
+        let Some((cw, ch, u_samples)) = read_plane(input, u_comp, big_endian) else {
+            return;
+        };
+        let Some((_, _, v_samples)) = read_plane(input, v_comp, big_endian) else {
+            return;
+        };
 
         let y_max = f64::from(sample::max_value(y_comp));
         let c_max = f64::from(sample::max_value(u_comp));
@@ -166,8 +186,16 @@ impl Filter {
                 ) else {
                     continue;
                 };
-                let rgb = to_rgb(self.src.0, self.src.1, f64::from(y_v), f64::from(cb_v), f64::from(cr_v), mid);
-                let (converted_luma, _, _) = from_rgb(self.dst.0, self.dst.1, rgb.0, rgb.1, rgb.2, mid);
+                let rgb = to_rgb(
+                    self.src.0,
+                    self.src.1,
+                    f64::from(y_v),
+                    f64::from(cb_v),
+                    f64::from(cr_v),
+                    mid,
+                );
+                let (converted_luma, _, _) =
+                    from_rgb(self.dst.0, self.dst.1, rgb.0, rgb.1, rgb.2, mid);
                 *slot = clamp_round(converted_luma, y_max);
             }
         }
@@ -187,8 +215,16 @@ impl Filter {
                 ) else {
                     continue;
                 };
-                let rgb = to_rgb(self.src.0, self.src.1, f64::from(y_v), f64::from(cb_v), f64::from(cr_v), mid);
-                let (_, new_cb, new_cr) = from_rgb(self.dst.0, self.dst.1, rgb.0, rgb.1, rgb.2, mid);
+                let rgb = to_rgb(
+                    self.src.0,
+                    self.src.1,
+                    f64::from(y_v),
+                    f64::from(cb_v),
+                    f64::from(cr_v),
+                    mid,
+                );
+                let (_, new_cb, new_cr) =
+                    from_rgb(self.dst.0, self.dst.1, rgb.0, rgb.1, rgb.2, mid);
                 if let Some(slot) = new_u.get_mut(chroma_idx) {
                     *slot = clamp_round(new_cb, c_max);
                 }
@@ -217,9 +253,16 @@ fn clamp_round(value: f64, max: f64) -> u16 {
 
 /// Read one component's whole plane into a row-major buffer, plus its width
 /// and height in samples.
-fn read_plane(frame: &mut Frame, comp: Component, big_endian: bool) -> Option<(usize, usize, Vec<u16>)> {
+fn read_plane(
+    frame: &mut Frame,
+    comp: Component,
+    big_endian: bool,
+) -> Option<(usize, usize, Vec<u16>)> {
     let plane = frame.plane_mut(comp.plane as usize)?;
-    let width = plane.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+    let width = plane
+        .row_bytes()
+        .checked_div(usize::from(comp.step.max(1)))
+        .unwrap_or(0);
     let height = plane.rows();
     let mut samples = Vec::new();
     for y in 0..height {
@@ -232,11 +275,19 @@ fn read_plane(frame: &mut Frame, comp: Component, big_endian: bool) -> Option<(u
 }
 
 /// The inverse of [`read_plane`].
-fn write_plane(frame: &mut Frame, comp: Component, big_endian: bool, width: usize, samples: &[u16]) {
+fn write_plane(
+    frame: &mut Frame,
+    comp: Component,
+    big_endian: bool,
+    width: usize,
+    samples: &[u16],
+) {
     if width == 0 {
         return;
     }
-    let Some(mut plane) = frame.plane_mut(comp.plane as usize) else { return };
+    let Some(mut plane) = frame.plane_mut(comp.plane as usize) else {
+        return;
+    };
     let mut rest = samples;
     for y in 0..plane.rows() {
         if rest.len() < width {
@@ -263,7 +314,9 @@ impl FrameFilter for Filter {
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts: Opts = common::parse(req.args)?;
     let either = Filter::new(&opts).map_or(FilterEither::NoOp, FilterEither::Convert);
-    let set = FormatSet::video_list(common::formats_where(|f| !f.is_rgb() && sample::is_addressable(f)));
+    let set = FormatSet::video_list(common::formats_where(|f| {
+        !f.is_rgb() && sample::is_addressable(f)
+    }));
     Ok(Instance {
         desc: DESC,
         formats: NodeFormats::uniform(1, 1, MediaType::Video, &set, req.instance),

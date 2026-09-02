@@ -6,7 +6,9 @@ use vaco_codec_cbs::{CbsCodec, CbsFragment, CbsUnit, UnitOrigin};
 use vaco_core::{Error, Result};
 use vaco_limits::Budget;
 
-use crate::header::{FrameHeader, HuffmanTable, QuantTable, parse_dht, parse_dqt, write_dht, write_dqt};
+use crate::header::{
+    FrameHeader, HuffmanTable, QuantTable, parse_dht, parse_dqt, write_dht, write_dqt,
+};
 
 const SOI: u8 = 0xD8;
 const EOI: u8 = 0xD9;
@@ -62,7 +64,10 @@ pub enum JpegContent {
     Dht(Vec<HuffmanTable>),
     /// Anything else: `APPn`, `COM`, `DRI`, `SOS`'s own header, and any
     /// marker this crate does not type.
-    Raw { marker: u8, payload: Vec<u8> },
+    Raw {
+        marker: u8,
+        payload: Vec<u8>,
+    },
 }
 
 impl JpegContent {
@@ -283,12 +288,11 @@ fn origin(offset: usize) -> UnitOrigin {
 /// <payload>`, where `len` is `payload.len() + 2` (the length field counts
 /// itself, §B.1.1.4).
 fn write_segment(out: &mut Vec<u8>, budget: &mut Budget, marker: u8, payload: &[u8]) -> Result<()> {
-    let len = payload
-        .len()
-        .checked_add(2)
-        .ok_or(Error::InvalidData("jpeg: segment too long to have a length field"))?;
-    let len_u16 =
-        u16::try_from(len).map_err(|_| Error::InvalidData("jpeg: segment too long for a 16-bit length"))?;
+    let len = payload.len().checked_add(2).ok_or(Error::InvalidData(
+        "jpeg: segment too long to have a length field",
+    ))?;
+    let len_u16 = u16::try_from(len)
+        .map_err(|_| Error::InvalidData("jpeg: segment too long for a 16-bit length"))?;
     budget.check((payload.len() + 4) as u64)?;
     out.push(0xFF);
     out.push(marker);
@@ -326,7 +330,8 @@ mod tests {
         let mut cbs = Cbs::new(JpegCbs::new());
         let mut f = CbsFragment::new();
         let mut b = budget();
-        cbs.split(&data, JpegFraming, &mut f, &mut b).expect("splits");
+        cbs.split(&data, JpegFraming, &mut f, &mut b)
+            .expect("splits");
         let types: Vec<u32> = f.units().iter().map(|u| u.unit_type).collect();
         assert_eq!(
             types,
@@ -372,7 +377,8 @@ mod tests {
         let mut cbs = Cbs::new(JpegCbs::new());
         let mut b = budget();
         let mut f = CbsFragment::new();
-        cbs.split(&data, JpegFraming, &mut f, &mut b).expect("splits");
+        cbs.split(&data, JpegFraming, &mut f, &mut b)
+            .expect("splits");
 
         for (idx, want_kind) in [(3, "dqt"), (4, "dht"), (5, "sof")] {
             let content = cbs.read_unit(&f, idx, &mut b).expect("reads");
@@ -383,8 +389,13 @@ mod tests {
                 other => panic!("unit {idx}: expected {want_kind}, got {other:?}"),
             }
             let before = f.units()[idx].data.clone();
-            cbs.update_unit(&mut f, idx, &content, &mut b).expect("rewrites");
-            assert_eq!(f.units()[idx].data, before, "unit {idx} re-encodes identically");
+            cbs.update_unit(&mut f, idx, &content, &mut b)
+                .expect("rewrites");
+            assert_eq!(
+                f.units()[idx].data,
+                before,
+                "unit {idx} re-encodes identically"
+            );
         }
         f.release(&mut b);
     }
@@ -396,7 +407,8 @@ mod tests {
         let mut cbs = Cbs::new(JpegCbs::new());
         let mut b = budget();
         let mut f = CbsFragment::new();
-        cbs.split(&data, JpegFraming, &mut f, &mut b).expect("splits");
+        cbs.split(&data, JpegFraming, &mut f, &mut b)
+            .expect("splits");
 
         let JpegContent::Sof(mut sof) = cbs.read_unit(&f, 5, &mut b).expect("reads") else {
             panic!("expected a SOF");
@@ -462,7 +474,8 @@ mod tests {
         let mut cbs = Cbs::new(JpegCbs::new());
         let mut b = budget();
         let mut f = CbsFragment::new();
-        cbs.split(&data, JpegFraming, &mut f, &mut b).expect("splits");
+        cbs.split(&data, JpegFraming, &mut f, &mut b)
+            .expect("splits");
         let types: Vec<u32> = f.units().iter().map(|u| u.unit_type).collect();
         assert_eq!(
             types,
@@ -476,7 +489,8 @@ mod tests {
             ]
         );
         let mut out = Vec::new();
-        cbs.assemble(&f, JpegFraming, &mut out, &mut b).expect("assembles");
+        cbs.assemble(&f, JpegFraming, &mut out, &mut b)
+            .expect("assembles");
         assert_eq!(out, data);
         f.release(&mut b);
     }
@@ -507,7 +521,8 @@ mod tests {
         let mut cbs = Cbs::new(JpegCbs::new());
         let mut f = CbsFragment::new();
         let mut b = budget();
-        cbs.split(&data, JpegFraming, &mut f, &mut b).expect("splits");
+        cbs.split(&data, JpegFraming, &mut f, &mut b)
+            .expect("splits");
         let types: Vec<u32> = f.units().iter().map(|u| u.unit_type).collect();
         assert_eq!(types, vec![FILL_UNIT_TYPE, u32::from(TEM)]);
 
@@ -515,8 +530,12 @@ mod tests {
         assert_eq!(content, JpegContent::Marker(0xFF));
 
         let mut out = Vec::new();
-        cbs.assemble(&f, JpegFraming, &mut out, &mut b).expect("assembles");
-        assert_eq!(out, data, "the fill byte must survive an untouched round trip");
+        cbs.assemble(&f, JpegFraming, &mut out, &mut b)
+            .expect("assembles");
+        assert_eq!(
+            out, data,
+            "the fill byte must survive an untouched round trip"
+        );
         f.release(&mut b);
     }
 }

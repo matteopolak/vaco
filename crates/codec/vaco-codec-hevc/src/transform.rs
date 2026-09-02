@@ -18,8 +18,9 @@ const INV_QUANT_SCALES: [i32; 6] = [40, 45, 51, 57, 64, 72];
 /// Index is the (already-offset, clamped 0..=57) luma-derived chroma QP;
 /// value is the mapped chroma QP.
 const CHROMA_QP_MAP_420: [u8; 58] = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 29,
-    30, 31, 32, 33, 33, 34, 34, 35, 35, 36, 36, 37, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51,
+    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25,
+    26, 27, 28, 29, 29, 30, 31, 32, 33, 33, 34, 34, 35, 35, 36, 36, 37, 37, 38, 39, 40, 41, 42, 43,
+    44, 45, 46, 47, 48, 49, 50, 51,
 ];
 
 /// §8.6.1's chroma QP derivation for 4:2:0 (`QpParam`'s chroma branch, this
@@ -29,7 +30,12 @@ const CHROMA_QP_MAP_420: [u8; 58] = [
 pub(crate) fn chroma_qp(luma_qp: i32, chroma_qp_offset: i32) -> i32 {
     let base = (luma_qp + chroma_qp_offset).clamp(0, 57);
     let base_u = usize::try_from(base).unwrap_or(0);
-    i32::from(CHROMA_QP_MAP_420.get(base_u).copied().unwrap_or_else(|| u8::try_from(base).unwrap_or(0)))
+    i32::from(
+        CHROMA_QP_MAP_420
+            .get(base_u)
+            .copied()
+            .unwrap_or_else(|| u8::try_from(base).unwrap_or(0)),
+    )
 }
 
 /// §8.6.3's scaling process for one `size x size` block with a flat scaling
@@ -48,9 +54,15 @@ pub(crate) fn dequant(coeffs: &[(u8, u8, i32)], size: usize, qp: i32, bit_depth:
     let qp = qp.max(0);
     let per = qp / 6;
     let rem = qp % 6;
-    let scale = INV_QUANT_SCALES.get(usize::try_from(rem).unwrap_or(0)).copied().unwrap_or(64);
+    let scale = INV_QUANT_SCALES
+        .get(usize::try_from(rem).unwrap_or(0))
+        .copied()
+        .unwrap_or(64);
     let right_shift = 6 - (transform_shift + per);
-    let (min, max) = (-(1i64 << max_log2_tr_dynamic_range), (1i64 << max_log2_tr_dynamic_range) - 1);
+    let (min, max) = (
+        -(1i64 << max_log2_tr_dynamic_range),
+        (1i64 << max_log2_tr_dynamic_range) - 1,
+    );
 
     for &(x, y, level) in coeffs {
         let (x, y) = (usize::from(x), usize::from(y));
@@ -83,7 +95,12 @@ pub(crate) fn dequant(coeffs: &[(u8, u8, i32)], size: usize, qp: i32, bit_depth:
 /// SPS), i.e. `12` always here — kept as an explicit function of `bit_depth`
 /// anyway so the one non-obvious constant in this file has a name.
 #[must_use]
-pub(crate) fn inverse_transform(dequantised: &[i32], size: usize, use_dst: bool, bit_depth: u32) -> Vec<i32> {
+pub(crate) fn inverse_transform(
+    dequantised: &[i32],
+    size: usize,
+    use_dst: bool,
+    bit_depth: u32,
+) -> Vec<i32> {
     let mut out = vec![0i32; size * size];
     let clip = ClipRange::non_extended();
     match size {
@@ -94,7 +111,9 @@ pub(crate) fn inverse_transform(dequantised: &[i32], size: usize, use_dst: bool,
         32 => idct2d_dct::<32>(dequantised, &mut out, clip),
         _ => {}
     }
-    let bd_shift = 20i32.saturating_sub(i32::try_from(bit_depth).unwrap_or(8)).max(0);
+    let bd_shift = 20i32
+        .saturating_sub(i32::try_from(bit_depth).unwrap_or(8))
+        .max(0);
     if bd_shift > 0 {
         let round = 1i64 << (bd_shift - 1);
         for v in &mut out {

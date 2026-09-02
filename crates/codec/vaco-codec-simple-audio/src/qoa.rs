@@ -51,7 +51,9 @@ fn get_u8(b: &[u8], off: usize) -> u8 {
 }
 
 fn get_be_i16(b: &[u8], off: usize) -> i16 {
-    b.get(off..off + 2).and_then(|s| <[u8; 2]>::try_from(s).ok()).map_or(0, i16::from_be_bytes)
+    b.get(off..off + 2)
+        .and_then(|s| <[u8; 2]>::try_from(s).ok())
+        .map_or(0, i16::from_be_bytes)
 }
 
 fn put_be_i16(out: &mut [u8], off: usize, v: i16) {
@@ -95,7 +97,9 @@ impl LmsState {
             .history
             .iter()
             .zip(self.weights.iter())
-            .fold(0i64, |acc, (h, w)| acc.wrapping_add(i64::from(*h) * i64::from(*w)));
+            .fold(0i64, |acc, (h, w)| {
+                acc.wrapping_add(i64::from(*h) * i64::from(*w))
+            });
         p >> 13
     }
 
@@ -122,9 +126,16 @@ fn dequant_scalefactor(sf_quant: u32) -> i64 {
 /// `[3]` — dequantise and scale one residual, "round to nearest, ties away
 /// from zero".
 fn dequant_residual(sf: i64, qr: u32) -> i64 {
-    let tab = DEQUANT_TAB.get(qr as usize % DEQUANT_TAB.len()).copied().unwrap_or(0.75);
+    let tab = DEQUANT_TAB
+        .get(qr as usize % DEQUANT_TAB.len())
+        .copied()
+        .unwrap_or(0.75);
     let r = (sf as f64) * tab;
-    if r < 0.0 { (r - 0.5).ceil() as i64 } else { (r + 0.5).floor() as i64 }
+    if r < 0.0 {
+        (r - 0.5).ceil() as i64
+    } else {
+        (r + 0.5).floor() as i64
+    }
 }
 
 /// One decoded frame: interleaved `i16` PCM plus the header facts a caller
@@ -157,7 +168,9 @@ pub struct QoaDecodedFrame {
 )]
 pub fn decode(budget: &mut Budget, data: &[u8]) -> Result<QoaDecodedFrame> {
     if data.len() < FRAME_HEADER_BYTES {
-        return Err(Error::InvalidData("qoa: packet shorter than a frame header"));
+        return Err(Error::InvalidData(
+            "qoa: packet shorter than a frame header",
+        ));
     }
     let num_channels = u32::from(get_u8(data, 0));
     if num_channels == 0 {
@@ -193,7 +206,9 @@ pub fn decode(budget: &mut Budget, data: &[u8]) -> Result<QoaDecodedFrame> {
 
     let slice_bytes = after_header.get(lms_bytes..).unwrap_or(&[]);
     let full_slice_groups = slice_bytes.len() / (SLICE_BYTES * channels.max(1));
-    let declared_slice_groups = (fsamples as usize).div_ceil(SLICE_SAMPLES).min(MAX_SLICES_PER_FRAME);
+    let declared_slice_groups = (fsamples as usize)
+        .div_ceil(SLICE_SAMPLES)
+        .min(MAX_SLICES_PER_FRAME);
     // Never decode more than the bytes on hand actually contain, and never
     // more than the header itself declares — whichever is smaller.
     let slice_groups = full_slice_groups.min(declared_slice_groups);
@@ -280,15 +295,21 @@ pub fn encode(
 ) -> Result<Vec<u8>> {
     let ch = channels as usize;
     if ch == 0 || states.len() != ch {
-        return Err(Error::InvalidData("qoa: channel count does not match LMS state count"));
+        return Err(Error::InvalidData(
+            "qoa: channel count does not match LMS state count",
+        ));
     }
     if !samples.len().is_multiple_of(ch) {
-        return Err(Error::InvalidData("qoa: sample buffer is not a whole number of frames"));
+        return Err(Error::InvalidData(
+            "qoa: sample buffer is not a whole number of frames",
+        ));
     }
     let samples_per_channel = samples.len() / ch;
     let slice_groups = samples_per_channel.div_ceil(SLICE_SAMPLES);
     if slice_groups > MAX_SLICES_PER_FRAME {
-        return Err(Error::InvalidData("qoa: more samples than one frame can hold"));
+        return Err(Error::InvalidData(
+            "qoa: more samples than one frame can hold",
+        ));
     }
 
     let total_bytes = FRAME_HEADER_BYTES + ch * LMS_STATE_BYTES + slice_groups * ch * SLICE_BYTES;
@@ -431,13 +452,22 @@ mod tests {
         let frame = decode(&mut budget, &wire).unwrap();
 
         let left: Vec<i16> = frame.interleaved.iter().step_by(2).copied().collect();
-        let right: Vec<i16> = frame.interleaved.iter().skip(1).step_by(2).copied().collect();
+        let right: Vec<i16> = frame
+            .interleaved
+            .iter()
+            .skip(1)
+            .step_by(2)
+            .copied()
+            .collect();
         let left_energy: i64 = left.iter().map(|&s| i64::from(s) * i64::from(s)).sum();
         let right_energy: i64 = right.iter().map(|&s| i64::from(s) * i64::from(s)).sum();
         assert!(left_energy > 1_000_000, "left channel lost its signal");
         // The right (silent) channel must stay near zero — a swapped or
         // interleaved-wrong decode would leak the tone into it.
-        assert!(right_energy < left_energy / 10, "signal leaked into the silent channel");
+        assert!(
+            right_energy < left_energy / 10,
+            "signal leaked into the silent channel"
+        );
     }
 
     #[test]

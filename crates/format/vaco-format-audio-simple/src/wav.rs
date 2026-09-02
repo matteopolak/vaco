@@ -405,14 +405,15 @@ impl Muxer for WavMuxer {
         // it here was refusing a real `ffmpeg 9.0.1`-accepted `-c copy`
         // for a property that was never true of the bytes on the wire.
         if codec == vaco_codec_core::CodecId::Aac {
-            let extradata = params
-                .extradata
-                .clone()
-                .filter(|e| !e.is_empty())
-                .ok_or(Error::Unsupported(
-                    "wav: this AAC stream has no AudioSpecificConfig to copy \
+            let extradata =
+                params
+                    .extradata
+                    .clone()
+                    .filter(|e| !e.is_empty())
+                    .ok_or(Error::Unsupported(
+                        "wav: this AAC stream has no AudioSpecificConfig to copy \
                      (needs one from the source container, or a decode)",
-                ))?;
+                    ))?;
             // `nBlockAlign`: measured against two real `ffmpeg 9.0.1`
             // AAC-in-MP4 -> WAV encodes at different channel counts and bit
             // rates (mono/70 kb/s, stereo/192 kb/s) — both produced exactly
@@ -454,10 +455,10 @@ impl Muxer for WavMuxer {
         }
         // The coded width, not the decoded format's: `pcm_s24le` decodes to
         // `s32` and would be written as 32-bit.
-        let coded_bits = pcm::coded_bits(codec)
-            .ok_or(Error::Unsupported("wav: only PCM-shaped codecs are supported"))?;
-        let block_align =
-            u32::from(channels).saturating_mul(u32::from(coded_bits.div_ceil(8)));
+        let coded_bits = pcm::coded_bits(codec).ok_or(Error::Unsupported(
+            "wav: only PCM-shaped codecs are supported",
+        ))?;
+        let block_align = u32::from(channels).saturating_mul(u32::from(coded_bits.div_ceil(8)));
         self.stream = Some(MuxStream {
             sample_rate,
             channels,
@@ -498,7 +499,11 @@ impl Muxer for WavMuxer {
         // chunk's own declared size. Reproduced exactly rather than
         // following the general RIFF rule, since this is what the
         // reference's own bytes state.
-        let fmt_payload_len = if compressed { 18 + s.extradata.len() } else { 16 };
+        let fmt_payload_len = if compressed {
+            18 + s.extradata.len()
+        } else {
+            16
+        };
         let fmt_len = fmt_payload_len + fmt_payload_len % 2;
         self.out.wl32(u32::try_from(fmt_len).unwrap_or(u32::MAX))?;
         self.out.wl16(s.format_tag)?;
@@ -648,9 +653,11 @@ mod tests {
     #[test]
     fn list_info_isft_surfaces_as_an_encoder_tag() {
         let bytes = wav_with_isft(b"Lavf62.12.100\0");
-        let demux =
-            WavDemuxer::open(Box::new(MemorySource::new(bytes)), &FormatOptions::default())
-                .unwrap();
+        let demux = WavDemuxer::open(
+            Box::new(MemorySource::new(bytes)),
+            &FormatOptions::default(),
+        )
+        .unwrap();
         assert_eq!(
             demux.metadata(),
             &[("encoder".to_owned(), "Lavf62.12.100".to_owned())]

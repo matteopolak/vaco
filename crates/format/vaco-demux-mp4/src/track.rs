@@ -337,7 +337,10 @@ fn dops_to_opus_head(data: &[u8]) -> Option<(Vec<u8>, u16)> {
 /// tell "this container asserted progressive" apart from "this container
 /// said nothing."
 fn field_order(entry: &SampleEntry<'_>) -> FieldOrder {
-    let Some(fiel) = entry.extension_boxes().find(vaco_format_isom::fourcc::boxes::FIEL) else {
+    let Some(fiel) = entry
+        .extension_boxes()
+        .find(vaco_format_isom::fourcc::boxes::FIEL)
+    else {
         return FieldOrder::Unknown;
     };
     let mut r = vaco_bitstream::ByteReader::new(fiel.payload);
@@ -522,7 +525,11 @@ mod tests {
         let mut data = [0u8; 22];
         for (raw, want) in [(0u8, Some(1u8)), (1, Some(2)), (2, None), (3, Some(4))] {
             data[21] = raw;
-            assert_eq!(hvcc_length_size(&data), want, "raw lengthSizeMinusOne={raw}");
+            assert_eq!(
+                hvcc_length_size(&data),
+                want,
+                "raw lengthSizeMinusOne={raw}"
+            );
         }
     }
 
@@ -576,16 +583,20 @@ mod tests {
             FieldOrder::BottomCodedFirst
         );
         // No `fiel` atom at all: not stated, not guessed.
-        assert_eq!(field_order(&entry_with_extensions(&[])), FieldOrder::Unknown);
+        assert_eq!(
+            field_order(&entry_with_extensions(&[])),
+            FieldOrder::Unknown
+        );
     }
-
 
     /// A real `dOps` box payload, measured from `ffmpeg -f lavfi -i
     /// "sine=...:sample_rate=48000" -ac 2 -c:a libopus -f mp4`: version 0,
     /// channels 2, `pre_skip` 0x0138 = 312 (`ffprobe` reports
     /// `initial_padding=312` for the same file), rate 0x0000bb80 = 48000,
     /// gain 0, family 0.
-    const REAL_DOPS: [u8; 11] = [0x00, 0x02, 0x01, 0x38, 0x00, 0x00, 0xbb, 0x80, 0x00, 0x00, 0x00];
+    const REAL_DOPS: [u8; 11] = [
+        0x00, 0x02, 0x01, 0x38, 0x00, 0x00, 0xbb, 0x80, 0x00, 0x00, 0x00,
+    ];
 
     #[test]
     fn dops_to_opus_head_reconstructs_a_real_measured_box() {

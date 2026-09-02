@@ -97,7 +97,11 @@ pub mod bench_support {
     use crate::common::{self, Rounding};
 
     fn rounding(trunc: bool) -> Rounding {
-        if trunc { Rounding::Trunc } else { Rounding::Nearest }
+        if trunc {
+            Rounding::Trunc
+        } else {
+            Rounding::Nearest
+        }
     }
 
     /// The `O(w*h)` sliding-window box average, as shipped.

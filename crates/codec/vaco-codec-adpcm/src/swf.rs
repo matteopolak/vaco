@@ -125,7 +125,11 @@ impl SwfState {
         let step = *IMA_STEP_TABLE.get(self.index as usize).unwrap_or(&7);
         let mag_bits = self.bits - 1;
         let diff = i32::from(sample) - self.predictor;
-        let (sign, mut mag) = if diff < 0 { (1u32, -diff) } else { (0u32, diff) };
+        let (sign, mut mag) = if diff < 0 {
+            (1u32, -diff)
+        } else {
+            (0u32, diff)
+        };
         let mut code = 0u32;
         let mut tmp = step;
         for i in (0..mag_bits).rev() {

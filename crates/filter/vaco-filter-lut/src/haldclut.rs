@@ -53,10 +53,19 @@ use crate::lut3d::Cube3d;
 use crate::sample;
 
 const PADS: &[Pad] = &[
-    Pad { name: "main", media_type: MediaType::Video },
-    Pad { name: "clut", media_type: MediaType::Video },
+    Pad {
+        name: "main",
+        media_type: MediaType::Video,
+    },
+    Pad {
+        name: "clut",
+        media_type: MediaType::Video,
+    },
 ];
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "haldclut",
@@ -75,9 +84,19 @@ pub(crate) struct Opts {
     pub interp: i32,
     #[opt(name = "eof_action", help = "action to take when encountering EOF from secondary input", default = "repeat".to_owned(), flags(video, filtering))]
     pub eof_action: String,
-    #[opt(name = "shortest", help = "force termination when the shortest input terminates", default = false, flags(video, filtering))]
+    #[opt(
+        name = "shortest",
+        help = "force termination when the shortest input terminates",
+        default = false,
+        flags(video, filtering)
+    )]
     pub shortest: bool,
-    #[opt(name = "repeatlast", help = "extend last frame of secondary streams beyond EOF", default = true, flags(video, filtering))]
+    #[opt(
+        name = "repeatlast",
+        help = "extend last frame of secondary streams beyond EOF",
+        default = true,
+        flags(video, filtering)
+    )]
     pub repeatlast: bool,
     #[opt(name = "ts_sync_mode", help = "how strictly to sync streams based on secondary input timestamps", default = "default".to_owned(), flags(video, filtering))]
     pub ts_sync_mode: String,
@@ -100,7 +119,13 @@ impl Opts {
 /// A clean error if `frame` is not RGB, not addressable, not square, or
 /// its side is not a perfect cube (`level^3`).
 pub(crate) fn decode_hald(frame: &Frame) -> std::result::Result<Cube3d, String> {
-    let FrameData::Video { format, width, height, .. } = frame.data else {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = frame.data
+    else {
         return Err("haldclut: CLUT input is not a video frame".to_owned());
     };
     if !format.is_rgb() || !sample::is_addressable(format) {
@@ -121,7 +146,11 @@ pub(crate) fn decode_hald(frame: &Frame) -> std::result::Result<Cube3d, String> 
     ) else {
         return Err("haldclut: CLUT format has no RGB components".to_owned());
     };
-    let (Some(pr), Some(pg), Some(pb)) = (frame.plane(cr.plane as usize), frame.plane(cg.plane as usize), frame.plane(cb.plane as usize)) else {
+    let (Some(pr), Some(pg), Some(pb)) = (
+        frame.plane(cr.plane as usize),
+        frame.plane(cg.plane as usize),
+        frame.plane(cb.plane as usize),
+    ) else {
         return Err("haldclut: CLUT frame has no planes".to_owned());
     };
     let big_endian = format.is_big_endian();
@@ -162,14 +191,24 @@ pub(crate) struct HaldClut {
 }
 
 impl FrameSyncFilter for HaldClut {
-    fn on_event(&mut self, ctx: &mut FilterContext<'_>, event: &mut FrameSyncEvent<'_>) -> Result<FrameOut> {
+    fn on_event(
+        &mut self,
+        ctx: &mut FilterContext<'_>,
+        event: &mut FrameSyncEvent<'_>,
+    ) -> Result<FrameOut> {
         let (Some(main), Some(clut_frame)) = (event.take(0), event.get(1)) else {
             return Ok(FrameOut::None);
         };
         let Ok(cube) = decode_hald(clut_frame) else {
             return Ok(FrameOut::One(main));
         };
-        let FrameData::Video { format, width, height, .. } = main.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = main.data
+        else {
             return Ok(FrameOut::One(main));
         };
         if !format.is_rgb() || !sample::is_addressable(format) {
@@ -189,7 +228,11 @@ impl FrameSyncFilter for HaldClut {
             f64::from(sample::max_value(cg)),
             f64::from(sample::max_value(cb)),
         );
-        let (Some(pr), Some(pg), Some(pb)) = (main.plane(cr.plane as usize), main.plane(cg.plane as usize), main.plane(cb.plane as usize)) else {
+        let (Some(pr), Some(pg), Some(pb)) = (
+            main.plane(cr.plane as usize),
+            main.plane(cg.plane as usize),
+            main.plane(cb.plane as usize),
+        ) else {
             return Ok(FrameOut::One(main));
         };
         // Same reasoning as `lut3d`: a packed format shares one plane
@@ -197,9 +240,14 @@ impl FrameSyncFilter for HaldClut {
         // once via `planes_mut` rather than three separate `plane_mut`
         // calls.
         let mut out_planes = out.planes_mut();
-        let w = pr.row_bytes().checked_div(usize::from(cr.step.max(1))).unwrap_or(0);
+        let w = pr
+            .row_bytes()
+            .checked_div(usize::from(cr.step.max(1)))
+            .unwrap_or(0);
         for y in 0..pr.rows() {
-            let (Some(rr), Some(rg), Some(rb)) = (pr.row(y), pg.row(y), pb.row(y)) else { continue };
+            let (Some(rr), Some(rg), Some(rb)) = (pr.row(y), pg.row(y), pb.row(y)) else {
+                continue;
+            };
             for x in 0..w {
                 let r = f64::from(sample::read(rr, x, cr, big_endian)) / max_r;
                 let g = f64::from(sample::read(rg, x, cg, big_endian)) / max_g;
@@ -214,13 +262,22 @@ impl FrameSyncFilter for HaldClut {
                     reason = "clamped to [0, 1] before scaling, so the product is in [0, max] and max fits in u16 by construction; truncation (not rounding) is the measured reference behaviour, see vaco_filter_lut::lut3d's module doc"
                 )]
                 let to_u16 = |v: f64, max: f64| v.clamp(0.0, 1.0).mul_add(max, 0.0) as u16;
-                if let Some(row) = out_planes.get_mut(cr.plane as usize).and_then(|p| p.row_mut(y)) {
+                if let Some(row) = out_planes
+                    .get_mut(cr.plane as usize)
+                    .and_then(|p| p.row_mut(y))
+                {
                     sample::write(row, x, cr, big_endian, to_u16(out_v[0], max_r));
                 }
-                if let Some(row) = out_planes.get_mut(cg.plane as usize).and_then(|p| p.row_mut(y)) {
+                if let Some(row) = out_planes
+                    .get_mut(cg.plane as usize)
+                    .and_then(|p| p.row_mut(y))
+                {
                     sample::write(row, x, cg, big_endian, to_u16(out_v[1], max_g));
                 }
-                if let Some(row) = out_planes.get_mut(cb.plane as usize).and_then(|p| p.row_mut(y)) {
+                if let Some(row) = out_planes
+                    .get_mut(cb.plane as usize)
+                    .and_then(|p| p.row_mut(y))
+                {
                     sample::write(row, x, cb, big_endian, to_u16(out_v[2], max_b));
                 }
             }
@@ -286,7 +343,9 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
             ts_sync,
         },
     };
-    let rgb_set = FormatSet::video_list(common::formats_where(|f| f.is_rgb() && sample::is_addressable(f)));
+    let rgb_set = FormatSet::video_list(common::formats_where(|f| {
+        f.is_rgb() && sample::is_addressable(f)
+    }));
     let formats = NodeFormats {
         inputs: vec![rgb_set.clone(), rgb_set.clone()],
         outputs: vec![rgb_set],
@@ -328,7 +387,9 @@ mod tests {
         for idx in 0..total {
             let red_idx = (idx as u32) % count;
             let green_idx = (idx as u32).checked_div(count).unwrap_or(0) % count;
-            let blue_idx = (idx as u32).checked_div(count.saturating_mul(count)).unwrap_or(0);
+            let blue_idx = (idx as u32)
+                .checked_div(count.saturating_mul(count))
+                .unwrap_or(0);
             let px = idx % row_width;
             let py = idx.checked_div(row_width).unwrap_or(0);
             let mut plane = frame.plane_mut(0).unwrap();

@@ -778,7 +778,10 @@ fn values(body: &str, key: &str) -> Vec<String> {
         .filter(|v| {
             key != "Vaco-Spec-Ref"
                 || !matches!(
-                    v.split_whitespace().next().map(str::to_ascii_lowercase).as_deref(),
+                    v.split_whitespace()
+                        .next()
+                        .map(str::to_ascii_lowercase)
+                        .as_deref(),
                     Some("none" | "n/a")
                 )
         })

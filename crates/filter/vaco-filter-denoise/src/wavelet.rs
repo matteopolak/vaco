@@ -183,7 +183,11 @@ impl Decomposition {
     /// to every detail band, in place. `sigma` is this decomposition's
     /// finest-band noise estimate, passed once so a caller's threshold
     /// formula can use it without recomputing it.
-    pub(crate) fn shrink(&mut self, method: ThresholdMethod, mut threshold_for: impl FnMut(usize, f32) -> f32) {
+    pub(crate) fn shrink(
+        &mut self,
+        method: ThresholdMethod,
+        mut threshold_for: impl FnMut(usize, f32) -> f32,
+    ) {
         let sigma = self.finest_band_sigma();
         for (level, band) in self.details.iter_mut().enumerate() {
             let t = threshold_for(level, sigma);

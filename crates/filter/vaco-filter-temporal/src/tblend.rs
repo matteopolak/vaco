@@ -197,7 +197,10 @@ impl Mode {
                     clippy::cast_sign_loss,
                     reason = "a, b are 8-bit-plane samples clamped to 0..=255"
                 )]
-                let (ai, bi) = (a.round().clamp(0.0, 255.0) as u8, b.round().clamp(0.0, 255.0) as u8);
+                let (ai, bi) = (
+                    a.round().clamp(0.0, 255.0) as u8,
+                    b.round().clamp(0.0, 255.0) as u8,
+                );
                 let r = match self {
                     Self::And => ai & bi,
                     Self::Or => ai | bi,
@@ -259,8 +262,10 @@ impl Filter {
                 continue;
             };
             let (pw, ph) = plane_dims(format, width, height, plane_idx);
-            let a_buf = crate::video::PlaneBuf::read(current.plane(plane_idx)?, pw, ph, bytes, max_val);
-            let b_buf = crate::video::PlaneBuf::read(previous.plane(plane_idx)?, pw, ph, bytes, max_val);
+            let a_buf =
+                crate::video::PlaneBuf::read(current.plane(plane_idx)?, pw, ph, bytes, max_val);
+            let b_buf =
+                crate::video::PlaneBuf::read(previous.plane(plane_idx)?, pw, ph, bytes, max_val);
             let mut result = a_buf.clone();
             let op = self.op_for(plane_idx);
 
@@ -318,10 +323,11 @@ impl Filter {
         };
         // Measured: `A` is the just-arrived (current) frame, `B` the one
         // before it.
-        self.blend(frame, &previous).map_or(FrameOut::None, |mut out| {
-            copy_meta(&mut out, frame);
-            FrameOut::One(out)
-        })
+        self.blend(frame, &previous)
+            .map_or(FrameOut::None, |mut out| {
+                copy_meta(&mut out, frame);
+                FrameOut::One(out)
+            })
     }
 }
 
@@ -353,7 +359,9 @@ fn parse_channel(req: &Instantiate<'_>, idx: usize) -> Result<ChannelOp, String>
     let mode = if expr.is_some() {
         None
     } else {
-        let name = str_opt(req, &mode_key).or(all_mode).unwrap_or_else(|| "normal".to_owned());
+        let name = str_opt(req, &mode_key)
+            .or(all_mode)
+            .unwrap_or_else(|| "normal".to_owned());
         Some(Mode::from_name(&name)?)
     };
 
@@ -363,7 +371,11 @@ fn parse_channel(req: &Instantiate<'_>, idx: usize) -> Result<ChannelOp, String>
         .unwrap_or(1.0)
         .clamp(0.0, 1.0);
 
-    Ok(ChannelOp { mode, expr, opacity })
+    Ok(ChannelOp {
+        mode,
+        expr,
+        opacity,
+    })
 }
 
 pub(crate) fn create(req: &Instantiate<'_>) -> Result<Instance, String> {
@@ -490,10 +502,18 @@ mod tests {
             (64, 128, 171),
             (200, 10, 46),
         ] {
-            assert_eq!(Mode::Dodge.apply(a as f32, b as f32) as i32, want, "dodge {a} {b}");
+            assert_eq!(
+                Mode::Dodge.apply(a as f32, b as f32) as i32,
+                want,
+                "dodge {a} {b}"
+            );
         }
         for (a, b, want) in [(255, 0, 0), (128, 255, 255), (96, 160, 2), (224, 96, 74)] {
-            assert_eq!(Mode::Burn.apply(a as f32, b as f32) as i32, want, "burn {a} {b}");
+            assert_eq!(
+                Mode::Burn.apply(a as f32, b as f32) as i32,
+                want,
+                "burn {a} {b}"
+            );
         }
     }
 
@@ -522,8 +542,17 @@ mod tests {
 
     #[test]
     fn divide_matches_measured_fixture_pairs() {
-        for (a, b, want) in [(255, 0, 255), (128, 255, 128), (64, 128, 127), (96, 160, 153)] {
-            assert_eq!(Mode::Divide.apply(a as f32, b as f32) as i32, want, "divide {a} {b}");
+        for (a, b, want) in [
+            (255, 0, 255),
+            (128, 255, 128),
+            (64, 128, 127),
+            (96, 160, 153),
+        ] {
+            assert_eq!(
+                Mode::Divide.apply(a as f32, b as f32) as i32,
+                want,
+                "divide {a} {b}"
+            );
         }
     }
 
@@ -544,7 +573,10 @@ mod tests {
         let a = 200.0f32;
         let b = 10.0f32;
         let raw = op.mode.unwrap().apply(a, b);
-        assert!((raw - a).abs() > 1.0, "multiply(200,10) != 200, sanity check on fixture");
+        assert!(
+            (raw - a).abs() > 1.0,
+            "multiply(200,10) != 200, sanity check on fixture"
+        );
         let mixed = a.mul_add(1.0 - op.opacity as f32, raw * op.opacity as f32);
         assert!((mixed - a).abs() < 1e-4);
     }

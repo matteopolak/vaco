@@ -27,7 +27,9 @@ impl SequentialMvPredictor {
     /// start of a slice.
     #[must_use]
     pub const fn new() -> Self {
-        Self { pmv: [[0, 0], [0, 0]] }
+        Self {
+            pmv: [[0, 0], [0, 0]],
+        }
     }
 
     /// Reset to zero: a slice boundary, or any macroblock whose own coding

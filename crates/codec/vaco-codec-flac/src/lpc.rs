@@ -14,7 +14,7 @@
 //!
 //! Vaco-Spec-Ref: rfc-9639-flac Section 9.2.6, "Linear Predictor Subframe"
 
-use vaco_codec_dsp_lpc::{autocorrelate, levinson_durbin, predict, quantize, MAX_ORDER};
+use vaco_codec_dsp_lpc::{MAX_ORDER, autocorrelate, levinson_durbin, predict, quantize};
 
 /// Coefficient precision this encoder always requests. RFC 9639 §9.2.6
 /// stores `precision - 1` in a 4-bit field (`0b1111` forbidden), so 15 is
@@ -100,7 +100,11 @@ fn lpc_residual(samples: &[i32], qcoeffs: &[i32], shift: u32, order: usize) -> V
     for i in order..samples.len() {
         let mut history = [0i32; MAX_ORDER];
         for (k, slot) in history.iter_mut().take(order).enumerate() {
-            *slot = i.checked_sub(1 + k).and_then(|idx| samples.get(idx)).copied().unwrap_or(0);
+            *slot = i
+                .checked_sub(1 + k)
+                .and_then(|idx| samples.get(idx))
+                .copied()
+                .unwrap_or(0);
         }
         let Some(history) = history.get(..order) else {
             continue;

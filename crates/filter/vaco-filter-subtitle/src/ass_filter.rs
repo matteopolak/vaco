@@ -29,13 +29,16 @@ use vaco_core::{Duration, Error, MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_filter_core::negotiate::NodeFormats;
 use vaco_filter_core::{FilterContext, FilterDesc, FilterFlags, Pad};
-use vaco_filter_text::{mask, Anchor, TextRenderer, TextStyle};
+use vaco_filter_text::{Anchor, TextRenderer, TextStyle, mask};
 use vaco_frame::{Frame, FrameData};
 use vaco_opts::OptionsExt as _;
 
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "ass",
@@ -56,7 +59,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -72,10 +76,14 @@ impl Filter {
         if opts.filename.is_empty() {
             return Err("ass: filename is required".to_owned());
         }
-        let bytes = std::fs::read(&opts.filename).map_err(|e| format!("ass: could not read `{}`: {e}", opts.filename))?;
+        let bytes = std::fs::read(&opts.filename)
+            .map_err(|e| format!("ass: could not read `{}`: {e}", opts.filename))?;
         let (utf8, _) = vaco_format_subtitle::encoding::decode_to_utf8_bytes(&bytes);
         let text = String::from_utf8_lossy(&utf8).into_owned();
-        Ok(Self { script: vaco_ass::parse(&text), renderer: TextRenderer::new() })
+        Ok(Self {
+            script: vaco_ass::parse(&text),
+            renderer: TextRenderer::new(),
+        })
     }
 }
 
@@ -88,18 +96,35 @@ impl Filter {
 /// # Errors
 /// [`Error::Unsupported`] if `frame` is not video; whatever
 /// [`vaco_filter_text::mask::composite`] or rasterisation reports.
-pub fn render_at(script: &vaco_ass::Script, renderer: &mut TextRenderer, frame: &mut Frame, t: Duration) -> Result<()> {
+pub fn render_at(
+    script: &vaco_ass::Script,
+    renderer: &mut TextRenderer,
+    frame: &mut Frame,
+    t: Duration,
+) -> Result<()> {
     let FrameData::Video { width, height, .. } = frame.data else {
-        return Err(Error::Unsupported("vaco-filter-subtitle::ass: not a video frame"));
+        return Err(Error::Unsupported(
+            "vaco-filter-subtitle::ass: not a video frame",
+        ));
     };
-    let scale_x = if script.info.play_res_x == 0 { 1.0 } else { f64::from(width) / f64::from(script.info.play_res_x) };
-    let scale_y = if script.info.play_res_y == 0 { 1.0 } else { f64::from(height) / f64::from(script.info.play_res_y) };
+    let scale_x = if script.info.play_res_x == 0 {
+        1.0
+    } else {
+        f64::from(width) / f64::from(script.info.play_res_x)
+    };
+    let scale_y = if script.info.play_res_y == 0 {
+        1.0
+    } else {
+        f64::from(height) / f64::from(script.info.play_res_y)
+    };
     let events: Vec<_> = script.active_at(t).cloned().collect();
     let color_info = frame.color;
 
     for event in &events {
         let plan = vaco_ass::plan_event(script, event);
-        let Some(first) = plan.runs.first() else { continue };
+        let Some(first) = plan.runs.first() else {
+            continue;
+        };
         let text: String = plan.runs.iter().map(|r| r.text.as_str()).collect();
         if text.trim().is_empty() {
             continue;
@@ -122,9 +147,23 @@ pub fn render_at(script: &vaco_ass::Script, renderer: &mut TextRenderer, frame: 
         let (target_x, target_y) = if let Some((px, py)) = plan.pos {
             (px * scale_x, py * scale_y)
         } else {
-            edge_position(plan.alignment, width, height, plan.margin_l, plan.margin_r, plan.margin_v, scale_x, scale_y)
+            edge_position(
+                plan.alignment,
+                width,
+                height,
+                plan.margin_l,
+                plan.margin_r,
+                plan.margin_v,
+                scale_x,
+                scale_y,
+            )
         };
-        let (ox, oy) = anchor.place(target_x as f32, target_y as f32, layout.width as f32, layout.height as f32);
+        let (ox, oy) = anchor.place(
+            target_x as f32,
+            target_y as f32,
+            layout.width as f32,
+            layout.height as f32,
+        );
         let origin = (ox.round() as i32, oy.round() as i32);
 
         let mut base_mask = renderer.rasterise(&layout, origin)?;
@@ -153,9 +192,24 @@ pub fn render_at(script: &vaco_ass::Script, renderer: &mut TextRenderer, frame: 
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments, reason = "one geometry resolution, matching drawbox's own precedent for this shape")]
-#[allow(clippy::integer_division, reason = "an exact 3-column/3-row grid index from the numpad alignment code, not a lossy division")]
-fn edge_position(alignment: i32, width: u32, height: u32, margin_l: i32, margin_r: i32, margin_v: i32, sx: f64, sy: f64) -> (f64, f64) {
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one geometry resolution, matching drawbox's own precedent for this shape"
+)]
+#[allow(
+    clippy::integer_division,
+    reason = "an exact 3-column/3-row grid index from the numpad alignment code, not a lossy division"
+)]
+fn edge_position(
+    alignment: i32,
+    width: u32,
+    height: u32,
+    margin_l: i32,
+    margin_r: i32,
+    margin_v: i32,
+    sx: f64,
+    sy: f64,
+) -> (f64, f64) {
     let col = ((alignment - 1) % 3).max(0);
     let row = (alignment - 1) / 3;
     let x = match col {
@@ -180,7 +234,12 @@ fn shadow_px(shadow: f64, sx: f64, sy: f64) -> (i32, i32) {
     (v, v)
 }
 
-fn apply_clip(mask: &mut vaco_filter_text::AlphaMask, clip: (f64, f64, f64, f64), sx: f64, sy: f64) {
+fn apply_clip(
+    mask: &mut vaco_filter_text::AlphaMask,
+    clip: (f64, f64, f64, f64),
+    sx: f64,
+    sy: f64,
+) {
     let (x1, y1, x2, y2) = clip;
     let (fx1, fy1, fx2, fy2) = (x1 * sx, y1 * sy, x2 * sx, y2 * sy);
     for row in 0..mask.h {
@@ -202,7 +261,10 @@ impl FrameFilter for Filter {
             return Ok(FrameOut::One(input));
         }
         let t = input.pts.to_seconds(input.time_base).unwrap_or(0.0);
-        #[allow(clippy::cast_possible_truncation, reason = "microsecond precision from a real playback timestamp fits i64 for any real duration")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "microsecond precision from a real playback timestamp fits i64 for any real duration"
+        )]
         let dur = Duration::from_micros((t * 1_000_000.0).round() as i64);
         let mut out = input;
         render_at(&self.script, &mut self.renderer, &mut out, dur)?;
@@ -227,7 +289,12 @@ mod tests {
 
     #[test]
     fn missing_filename_is_a_clean_error() {
-        let req = Instantiate { name: "ass", instance: "ass", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "ass",
+            instance: "ass",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 
@@ -259,7 +326,13 @@ mod tests {
         let mut renderer = TextRenderer::new();
         let pool = FramePool::default();
         let mut frame = pool.acquire_video(PixFmt::Yuv420p, 640, 480).unwrap();
-        render_at(&script, &mut renderer, &mut frame, Duration::from_micros(1_000_000)).unwrap();
+        render_at(
+            &script,
+            &mut renderer,
+            &mut frame,
+            Duration::from_micros(1_000_000),
+        )
+        .unwrap();
         let _ = std::fs::remove_file(&path);
     }
 

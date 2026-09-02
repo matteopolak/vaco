@@ -83,7 +83,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -175,7 +176,10 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     Ok(Instance {
         desc: DESC,
         formats: NodeFormats::passthrough(1, 1, MediaType::Video, req.instance),
-        filter: Box::new(Simple::new(Filter::new(parse_pattern(&opts.pattern), start_frame))),
+        filter: Box::new(Simple::new(Filter::new(
+            parse_pattern(&opts.pattern),
+            start_frame,
+        ))),
     })
 }
 
@@ -188,8 +192,8 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
 )]
 mod tests {
     use super::*;
-    use crate::video::test_support::row_value;
     use crate::telecine;
+    use crate::video::test_support::row_value;
     use vaco_frame::FramePool;
     use vaco_pixfmt::PixFmt;
 
@@ -260,5 +264,4 @@ mod tests {
             assert_eq!(opts.first_field, expected, "first_field={name}");
         }
     }
-
 }

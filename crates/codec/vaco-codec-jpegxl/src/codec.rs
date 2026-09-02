@@ -47,8 +47,8 @@ fn output_pixfmt(format: jxl_oxide::PixelFormat) -> Result<PixFmt> {
 /// [`Error::Unsupported`] for a CMYK colour space, or a render failure.
 /// [`Error::LimitExceeded`] when a frame exceeds `budget`.
 pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
-    let image =
-        jxl_oxide::JxlImage::read_with_defaults(Cursor::new(bytes)).map_err(|_| Error::InvalidData("jpegxl: header"))?;
+    let image = jxl_oxide::JxlImage::read_with_defaults(Cursor::new(bytes))
+        .map_err(|_| Error::InvalidData("jpegxl: header"))?;
     let format = output_pixfmt(image.pixel_format())?;
     let channels = image.pixel_format().channels();
     let width = image.width();
@@ -94,7 +94,10 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         if let Some((num, den)) = tps
             && num > 0
         {
-            frame.time_base = vaco_core::Rational::new(i32::try_from(den).unwrap_or(1), i32::try_from(num).unwrap_or(1));
+            frame.time_base = vaco_core::Rational::new(
+                i32::try_from(den).unwrap_or(1),
+                i32::try_from(num).unwrap_or(1),
+            );
             frame.duration = vaco_core::Duration(i64::from(render.duration()));
         }
         frame.flags = FrameFlags::KEY;

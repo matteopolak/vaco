@@ -36,7 +36,10 @@ const C8: [i32; 8] = [0, 0, 0, 0, 1, 1, 1, 1];
 /// The result is clamped to the spec's own stated output range,
 /// `(-512, 511]`.
 #[must_use]
-#[allow(clippy::many_single_char_names, reason = "d/e/r/c mirror Figure 159's own D/E/R/C8 variable names one-for-one; renaming them would make this function harder to check against the spec, not easier")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "d/e/r/c mirror Figure 159's own D/E/R/C8 variable names one-for-one; renaming them would make this function harder to check against the spec, not easier"
+)]
 pub(crate) fn inverse_transform_8x8(d: &[i32; 64]) -> [i32; 64] {
     // First pass: E = (D . T8 + 4) >> 3 -- each row of D is transformed by
     // T8 on the right (a horizontal 1-D transform per row).
@@ -45,12 +48,20 @@ pub(crate) fn inverse_transform_8x8(d: &[i32; 64]) -> [i32; 64] {
         for col in 0..8usize {
             let mut acc = 0i64;
             for k in 0..8usize {
-                let Some(&dv) = d.get(row * 8 + k) else { continue };
-                let Some(&t) = T8.get(k).and_then(|r| r.get(col)) else { continue };
+                let Some(&dv) = d.get(row * 8 + k) else {
+                    continue;
+                };
+                let Some(&t) = T8.get(k).and_then(|r| r.get(col)) else {
+                    continue;
+                };
                 acc += i64::from(dv) * i64::from(t);
             }
-            let Some(slot) = e.get_mut(row * 8 + col) else { continue };
-            *slot = i32::try_from((acc + 4) >> 3).unwrap_or(0).clamp(-4096, 4095);
+            let Some(slot) = e.get_mut(row * 8 + col) else {
+                continue;
+            };
+            *slot = i32::try_from((acc + 4) >> 3)
+                .unwrap_or(0)
+                .clamp(-4096, 4095);
         }
     }
 
@@ -63,12 +74,18 @@ pub(crate) fn inverse_transform_8x8(d: &[i32; 64]) -> [i32; 64] {
             let mut acc = 0i64;
             for k in 0..8usize {
                 // T8' [row][k] == T8[k][row] (transpose).
-                let Some(&t) = T8.get(k).and_then(|r| r.get(row)) else { continue };
-                let Some(&ev) = e.get(k * 8 + col) else { continue };
+                let Some(&t) = T8.get(k).and_then(|r| r.get(row)) else {
+                    continue;
+                };
+                let Some(&ev) = e.get(k * 8 + col) else {
+                    continue;
+                };
                 acc += i64::from(t) * i64::from(ev);
             }
             let Some(&c) = C8.get(row) else { continue };
-            let Some(slot) = r.get_mut(row * 8 + col) else { continue };
+            let Some(slot) = r.get_mut(row * 8 + col) else {
+                continue;
+            };
             let v = i32::try_from((acc + i64::from(c) + 64) >> 7).unwrap_or(0);
             *slot = v.clamp(-512, 511);
         }
@@ -92,7 +109,10 @@ mod tests {
         }
         let out = inverse_transform_8x8(&d);
         let first = out.first().copied().unwrap_or(0);
-        assert!(out.iter().all(|&v| v == first), "DC-only block must be uniform: {out:?}");
+        assert!(
+            out.iter().all(|&v| v == first),
+            "DC-only block must be uniform: {out:?}"
+        );
     }
 
     #[test]
@@ -109,7 +129,10 @@ mod tests {
         for seed in [1i32, -1, 2047, -2048, 999, -999] {
             let d = [seed; 64];
             let out = inverse_transform_8x8(&d);
-            assert!(out.iter().all(|&v| (-512..=511).contains(&v)), "seed {seed} produced out-of-range output");
+            assert!(
+                out.iter().all(|&v| (-512..=511).contains(&v)),
+                "seed {seed} produced out-of-range output"
+            );
         }
     }
 }

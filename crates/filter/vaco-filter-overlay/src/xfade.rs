@@ -119,7 +119,13 @@ impl FrameSyncFilter for Filter {
         let Some(main) = event.take(0) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = main.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = main.data
+        else {
             return Ok(FrameOut::One(main));
         };
         if common::ensure_8bit_addressable(format).is_err() {
@@ -140,24 +146,33 @@ impl FrameSyncFilter for Filter {
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         let plane_count = format.plane_count();
         for plane in 0..plane_count {
-            let Some(a_plane) = main.plane(plane) else { continue };
-            let Some(b_plane) = second.plane(plane) else { continue };
-            let Some(mut dst) = out.plane_mut(plane) else { continue };
+            let Some(a_plane) = main.plane(plane) else {
+                continue;
+            };
+            let Some(b_plane) = second.plane(plane) else {
+                continue;
+            };
+            let Some(mut dst) = out.plane_mut(plane) else {
+                continue;
+            };
             let ph = common::to_i32(format.plane_height(height, plane as u8)).max(0);
             for y in 0..ph {
                 let Ok(uy) = usize::try_from(y) else { continue };
-                let Some(a_row) = a_plane.row(uy) else { continue };
-                let Some(b_row) = b_plane.row(uy) else { continue };
-                let Some(dst_row) = dst.row_mut(uy) else { continue };
+                let Some(a_row) = a_plane.row(uy) else {
+                    continue;
+                };
+                let Some(b_row) = b_plane.row(uy) else {
+                    continue;
+                };
+                let Some(dst_row) = dst.row_mut(uy) else {
+                    continue;
+                };
                 let n = a_row.len().min(b_row.len()).min(dst_row.len());
                 for x in 0..n {
                     let (Some(&a), Some(&b)) = (a_row.get(x), b_row.get(x)) else {
                         continue;
                     };
-                    #[allow(
-                        clippy::cast_precision_loss,
-                        reason = "8-bit samples fit f64 exactly"
-                    )]
+                    #[allow(clippy::cast_precision_loss, reason = "8-bit samples fit f64 exactly")]
                     let value = f64::from(a) + progress * (f64::from(b) - f64::from(a));
                     #[allow(
                         clippy::cast_possible_truncation,

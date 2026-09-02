@@ -9,7 +9,10 @@ pub enum Item {
     /// whatever followed it — the parenthesised contents with the
     /// parentheses stripped, or a bare value up to the next `\` or the
     /// block's end.
-    Tag { name: String, arg: Option<String> },
+    Tag {
+        name: String,
+        arg: Option<String>,
+    },
 }
 
 /// Tokenize one event's raw `Text` field.
@@ -72,7 +75,9 @@ fn tokenize_tags(inner: &str) -> Vec<Item> {
     let mut rest = inner;
     while let Some(start) = rest.find('\\') {
         rest = &rest[start + 1..];
-        let name_len = rest.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(rest.len());
+        let name_len = rest
+            .find(|c: char| !c.is_ascii_alphabetic())
+            .unwrap_or(rest.len());
         let name: String = rest[..name_len].to_ascii_lowercase();
         rest = &rest[name_len..];
         if name.is_empty() {
@@ -98,12 +103,18 @@ fn tokenize_tags(inner: &str) -> Vec<Item> {
                 }
             }
             if let Some(end) = end {
-                out.push(Item::Tag { name, arg: Some(rest[1..end].to_owned()) });
+                out.push(Item::Tag {
+                    name,
+                    arg: Some(rest[1..end].to_owned()),
+                });
                 rest = &rest[end + 1..];
                 continue;
             }
             // Unterminated paren: take the rest as the argument.
-            out.push(Item::Tag { name, arg: Some(rest[1..].to_owned()) });
+            out.push(Item::Tag {
+                name,
+                arg: Some(rest[1..].to_owned()),
+            });
             rest = "";
             continue;
         }
@@ -111,7 +122,11 @@ fn tokenize_tags(inner: &str) -> Vec<Item> {
         let arg = &rest[..arg_len];
         out.push(Item::Tag {
             name,
-            arg: if arg.is_empty() { None } else { Some(arg.to_owned()) },
+            arg: if arg.is_empty() {
+                None
+            } else {
+                Some(arg.to_owned())
+            },
         });
         rest = &rest[arg_len..];
     }
@@ -119,7 +134,13 @@ fn tokenize_tags(inner: &str) -> Vec<Item> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, clippy::float_cmp, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    clippy::float_cmp,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -137,7 +158,13 @@ mod tests {
     fn a_bare_value_tag() {
         assert_eq!(
             tokenize("{\\b1}bold"),
-            vec![Item::Tag { name: "b".to_owned(), arg: Some("1".to_owned()) }, Item::Text("bold".to_owned())]
+            vec![
+                Item::Tag {
+                    name: "b".to_owned(),
+                    arg: Some("1".to_owned())
+                },
+                Item::Text("bold".to_owned())
+            ]
         );
     }
 
@@ -145,7 +172,13 @@ mod tests {
     fn a_parenthesised_tag() {
         assert_eq!(
             tokenize("{\\pos(100,200)}x"),
-            vec![Item::Tag { name: "pos".to_owned(), arg: Some("100,200".to_owned()) }, Item::Text("x".to_owned())]
+            vec![
+                Item::Tag {
+                    name: "pos".to_owned(),
+                    arg: Some("100,200".to_owned())
+                },
+                Item::Text("x".to_owned())
+            ]
         );
     }
 
@@ -155,8 +188,14 @@ mod tests {
         assert_eq!(
             items,
             vec![
-                Item::Tag { name: "b".to_owned(), arg: Some("1".to_owned()) },
-                Item::Tag { name: "i".to_owned(), arg: Some("1".to_owned()) },
+                Item::Tag {
+                    name: "b".to_owned(),
+                    arg: Some("1".to_owned())
+                },
+                Item::Tag {
+                    name: "i".to_owned(),
+                    arg: Some("1".to_owned())
+                },
                 Item::Text("x".to_owned()),
             ]
         );
@@ -174,7 +213,10 @@ mod tests {
         assert_eq!(
             items,
             vec![
-                Item::Tag { name: "t".to_owned(), arg: Some("0,500,\\fscx150".to_owned()) },
+                Item::Tag {
+                    name: "t".to_owned(),
+                    arg: Some("0,500,\\fscx150".to_owned())
+                },
                 Item::Text("x".to_owned()),
             ]
         );

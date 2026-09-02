@@ -64,9 +64,7 @@ fn sends_a_datagram_via_create() {
         .unwrap();
 
     let url = format!("udp://{addr}");
-    let mut sink = r
-        .create(&url, IoFlags::WRITE, &Dict::new(), &env)
-        .unwrap();
+    let mut sink = r.create(&url, IoFlags::WRITE, &Dict::new(), &env).unwrap();
     sink.write(b"pong").unwrap();
 
     let mut buf = [0u8; 64];

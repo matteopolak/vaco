@@ -69,7 +69,9 @@ pub struct SendConfig {
 
 impl Default for SendConfig {
     fn default() -> Self {
-        Self { rto_ms: DEFAULT_RTO_MS }
+        Self {
+            rto_ms: DEFAULT_RTO_MS,
+        }
     }
 }
 
@@ -219,7 +221,9 @@ pub struct ReceiveConfig {
 
 impl Default for ReceiveConfig {
     fn default() -> Self {
-        Self { latency_ms: DEFAULT_LATENCY_MS }
+        Self {
+            latency_ms: DEFAULT_LATENCY_MS,
+        }
     }
 }
 
@@ -436,11 +440,22 @@ mod tests {
 
         let tick_early = r.on_tick(50);
         assert_eq!(tick_early.delivered, vec![(1, vec![1])]);
-        assert!(tick_early.dropped.is_empty(), "still within the latency window");
+        assert!(
+            tick_early.dropped.is_empty(),
+            "still within the latency window"
+        );
 
         let tick_late = r.on_tick(100);
-        assert_eq!(tick_late.dropped, vec![2], "gave up waiting at the latency deadline");
-        assert_eq!(tick_late.delivered, vec![(3, vec![3])], "delivery continues past the drop");
+        assert_eq!(
+            tick_late.dropped,
+            vec![2],
+            "gave up waiting at the latency deadline"
+        );
+        assert_eq!(
+            tick_late.delivered,
+            vec![(3, vec![3])],
+            "delivery continues past the drop"
+        );
     }
 
     #[test]
@@ -448,6 +463,9 @@ mod tests {
         let mut r = ReceiveWindow::new(ReceiveConfig::default(), 1);
         r.on_data(1, vec![1], 0);
         let _ = r.on_tick(0);
-        assert!(r.on_data(1, vec![1], 5).is_empty(), "already delivered, must not re-buffer");
+        assert!(
+            r.on_data(1, vec![1], 5).is_empty(),
+            "already delivered, must not re-buffer"
+        );
     }
 }

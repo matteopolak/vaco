@@ -217,8 +217,7 @@ impl FrameFilter for Filter {
             // wrong channel. See the module doc's "Not implemented".
             return Ok(FrameOut::One(input));
         }
-        let Some(LinkFormat::Video { height: in_h, .. }) = ctx.input_link(0).cloned()
-        else {
+        let Some(LinkFormat::Video { height: in_h, .. }) = ctx.input_link(0).cloned() else {
             return Ok(FrameOut::One(input));
         };
         let mut out = ctx.pool().acquire_video(format, self.width, self.height)?;

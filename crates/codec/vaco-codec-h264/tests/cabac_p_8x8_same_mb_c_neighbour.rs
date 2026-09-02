@@ -74,7 +74,11 @@ fn packed(plane: &vaco_frame::Plane, row_bytes: usize, rows: usize) -> Vec<u8> {
 fn canl3_sva_b_p_8x8_macroblocks_are_byte_exact_against_ffmpeg() {
     let stream: &[u8] = include_bytes!("fixtures/cabac_p_8x8_same_mb_c_neighbour.264");
     let reference: &[u8] = include_bytes!("fixtures/cabac_p_8x8_same_mb_c_neighbour_ref.yuv");
-    assert_eq!(reference.len(), FRAMES * FRAME, "reference fixture is not 17 whole frames");
+    assert_eq!(
+        reference.len(),
+        FRAMES * FRAME,
+        "reference fixture is not 17 whole frames"
+    );
 
     let mut d = H264Decoder::new(Limits::default());
     let mut budget = Budget::new(Limits::default());
@@ -95,7 +99,11 @@ fn canl3_sva_b_p_8x8_macroblocks_are_byte_exact_against_ffmpeg() {
             _ => {}
         }
     }
-    assert_eq!(slices.len(), FRAMES, "fixture should carry one slice per picture, 17 pictures");
+    assert_eq!(
+        slices.len(),
+        FRAMES,
+        "fixture should carry one slice per picture, 17 pictures"
+    );
     d.set_extradata(&extradata).unwrap();
 
     // No B slices in this fixture, so decode order and display order
@@ -124,7 +132,12 @@ fn canl3_sva_b_p_8x8_macroblocks_are_byte_exact_against_ffmpeg() {
             Err(e) => panic!("receive_frame failed while draining end of stream: {e:?}"),
         }
     }
-    assert_eq!(frames.len(), FRAMES, "expected {FRAMES} frames out, got {}", frames.len());
+    assert_eq!(
+        frames.len(),
+        FRAMES,
+        "expected {FRAMES} frames out, got {}",
+        frames.len()
+    );
 
     let mut report: Vec<(usize, [(usize, u8); 3])> = Vec::new();
     for (idx, frame) in frames.iter().enumerate() {
@@ -148,7 +161,11 @@ fn canl3_sva_b_p_8x8_macroblocks_are_byte_exact_against_ffmpeg() {
 
         let mut per_plane = [(0usize, 0u8); 3];
         for p in 0..3 {
-            assert_eq!(got[p].len(), want[p].len(), "frame {idx} plane {p}: wrong size");
+            assert_eq!(
+                got[p].len(),
+                want[p].len(),
+                "frame {idx} plane {p}: wrong size"
+            );
             for (g, w) in got[p].iter().zip(want[p].iter()) {
                 if g != w {
                     per_plane[p].0 += 1;
@@ -161,7 +178,10 @@ fn canl3_sva_b_p_8x8_macroblocks_are_byte_exact_against_ffmpeg() {
 
     let first_bad = report.iter().find(|(_, p)| p.iter().any(|(n, _)| *n > 0));
     if let Some((idx, per_plane)) = first_bad {
-        let total: usize = report.iter().map(|(_, p)| p.iter().map(|(n, _)| n).sum::<usize>()).sum();
+        let total: usize = report
+            .iter()
+            .map(|(_, p)| p.iter().map(|(n, _)| n).sum::<usize>())
+            .sum();
         let summary: String = report
             .iter()
             .filter(|(_, p)| p.iter().any(|(n, _)| *n > 0))

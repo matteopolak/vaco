@@ -16,7 +16,9 @@
 //! reference itself rejects any key that is not exactly 16 bytes).
 
 use vaco_crypto::aes::Aes128;
-use vaco_crypto::aes::cipher::{Array, BlockCipherDecrypt, BlockModeEncrypt, KeyInit, KeyIvInit, block_padding::Pkcs7};
+use vaco_crypto::aes::cipher::{
+    Array, BlockCipherDecrypt, BlockModeEncrypt, KeyInit, KeyIvInit, block_padding::Pkcs7,
+};
 
 /// AES's (and this protocol's) block size. Every key and IV this protocol
 /// accepts is exactly one block, and every ciphertext this protocol produces
@@ -64,7 +66,11 @@ pub fn encrypt(key: &[u8; BLOCK], iv: &[u8; BLOCK], plaintext: &[u8]) -> Vec<u8>
 /// [`crate::source::CryptoSource`] (streaming, one block behind) and
 /// [`decrypt_all`] (whole-buffer, for tests and the fuzz target) build on.
 #[must_use]
-pub fn decrypt_block(key: &[u8; BLOCK], chain: &mut [u8; BLOCK], block: &[u8; BLOCK]) -> [u8; BLOCK] {
+pub fn decrypt_block(
+    key: &[u8; BLOCK],
+    chain: &mut [u8; BLOCK],
+    block: &[u8; BLOCK],
+) -> [u8; BLOCK] {
     let cipher = Aes128::new(&Array::from(*key));
     let mut work = Array::from(*block);
     cipher.decrypt_block(&mut work);
@@ -185,7 +191,11 @@ mod tests {
     #[test]
     fn block_zero_of_an_all_zero_plaintext_matches_the_reference() {
         let ct = encrypt(&KEY, &IV, &[0u8; 256]);
-        assert_eq!(ct.len(), 272, "256-byte aligned input pads to a full extra block");
+        assert_eq!(
+            ct.len(),
+            272,
+            "256-byte aligned input pads to a full extra block"
+        );
         assert_eq!(ct.get(..BLOCK).unwrap(), &BLOCK0_OF_ZERO_PLAINTEXT);
     }
 

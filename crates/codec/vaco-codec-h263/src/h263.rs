@@ -50,12 +50,14 @@ use crate::vlc;
 pub(crate) fn new_idct() -> H26xIdct {
     match vaco_codec_dsp_idct::mpeg2::idct8x8_f32() {
         Ok(idct) => idct,
-        Err(_) => {
+        Err(_) =>
+        {
             #[allow(
                 clippy::expect_used,
                 reason = "genuinely unreachable: a length-8 DCT-III plan cannot fail to build"
             )]
-            vaco_codec_dsp_idct::mpeg2::idct8x8_f32().expect("length-8 IDCT construction cannot fail")
+            vaco_codec_dsp_idct::mpeg2::idct8x8_f32()
+                .expect("length-8 IDCT construction cannot fail")
         }
     }
 }
@@ -66,10 +68,10 @@ pub(crate) fn new_idct() -> H26xIdct {
 /// this crate's baseline scope).
 pub(crate) const fn source_format_dims(code: u32) -> Option<(u32, u32)> {
     match code {
-        1 => Some((128, 96)),   // sub-QCIF
-        2 => Some((176, 144)),  // QCIF
-        3 => Some((352, 288)),  // CIF
-        4 => Some((704, 576)),  // 4CIF
+        1 => Some((128, 96)),    // sub-QCIF
+        2 => Some((176, 144)),   // QCIF
+        3 => Some((352, 288)),   // CIF
+        4 => Some((704, 576)),   // 4CIF
         5 => Some((1408, 1152)), // 16CIF
         _ => None,
     }
@@ -259,13 +261,24 @@ impl H263Decoder {
         // to parse for an unrelated reason, and filtering a flat
         // placeholder would be pure waste even though it is a no-op.
         if ap.deblocking_filter && !ap.unsupported {
-            deblock::filter_picture(&mut ap.frame, ap.mb_width, ap.mb_height, &ap.mb_coded, &ap.mb_quant);
+            deblock::filter_picture(
+                &mut ap.frame,
+                ap.mb_width,
+                ap.mb_height,
+                &ap.mb_coded,
+                &ap.mb_quant,
+            );
         }
         self.reference = Some(RefPicture::new(ap.frame.clone()));
         self.machine.emit(ap.frame);
     }
 
-    fn decode_access_unit(&mut self, data: &[u8], pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
+    fn decode_access_unit(
+        &mut self,
+        data: &[u8],
+        pts: vaco_core::Timestamp,
+        duration: vaco_core::Duration,
+    ) -> Result<()> {
         let mut pos = 0usize;
         while let Some(sc) = find_prefix(data, pos) {
             let mut r = BitReader::new(data);
@@ -280,11 +293,18 @@ impl H263Decoder {
             // distinction the `gn == 0` check below makes for `PSC` vs
             // `GBSC`, just checked one bit earlier so a slice header is
             // never misread as a 5-bit `GN`.
-            if self.current.as_ref().is_some_and(|ap| ap.slice_structured && !ap.unsupported) && r.peek(1) == 1 {
+            if self
+                .current
+                .as_ref()
+                .is_some_and(|ap| ap.slice_structured && !ap.unsupported)
+                && r.peek(1) == 1
+            {
                 if let Some(ap) = self.current.as_mut() {
                     decode_slice(&mut r, ap, &mut self.idct, self.reference.as_ref());
                 }
-                pos = usize::try_from(r.bit_pos().div_ceil(8)).unwrap_or(data.len()).max(sc + 3);
+                pos = usize::try_from(r.bit_pos().div_ceil(8))
+                    .unwrap_or(data.len())
+                    .max(sc + 3);
                 continue;
             }
 
@@ -317,7 +337,10 @@ impl H263Decoder {
                     let umv = (ptype >> 3) & 1 == 1;
                     let sac = (ptype >> 2) & 1 == 1;
                     let advanced_pred = (ptype >> 1) & 1 == 1;
-                    let unsupported = sac || advanced_pred || is_pb || source_format_dims(source_format).is_none();
+                    let unsupported = sac
+                        || advanced_pred
+                        || is_pb
+                        || source_format_dims(source_format).is_none();
                     let (w, h) = source_format_dims(source_format).unwrap_or((176, 144));
 
                     let mut frame = Frame::alloc_video(&mut self.budget, PixFmt::Yuv420p, w, h)?;
@@ -369,7 +392,9 @@ impl H263Decoder {
                         decode_gob(&mut r, ap, &mut self.idct, self.reference.as_ref(), 0, 0);
                     }
                 }
-                pos = usize::try_from(r.bit_pos().div_ceil(8)).unwrap_or(data.len()).max(sc + 3);
+                pos = usize::try_from(r.bit_pos().div_ceil(8))
+                    .unwrap_or(data.len())
+                    .max(sc + 3);
                 continue;
             }
 
@@ -383,9 +408,18 @@ impl H263Decoder {
                     && !ap.unsupported
                 {
                     ap.quant = gquant.clamp(1, 31);
-                    decode_gob(&mut r, ap, &mut self.idct, self.reference.as_ref(), gn * ap.mb_width, 0);
+                    decode_gob(
+                        &mut r,
+                        ap,
+                        &mut self.idct,
+                        self.reference.as_ref(),
+                        gn * ap.mb_width,
+                        0,
+                    );
                 }
-                pos = usize::try_from(r.bit_pos().div_ceil(8)).unwrap_or(data.len()).max(sc + 3);
+                pos = usize::try_from(r.bit_pos().div_ceil(8))
+                    .unwrap_or(data.len())
+                    .max(sc + 3);
                 continue;
             }
 
@@ -403,7 +437,13 @@ impl H263Decoder {
     /// is in use; a `PLUSPTYPE` picture with no Slice Structured mode
     /// still uses the ordinary GOB layer (§K.1: the slice layer "is used
     /// in place of the GOB layer" only in that one optional mode).
-    fn decode_plus_picture(&mut self, r: &mut BitReader<'_>, _ptype8: u32, pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
+    fn decode_plus_picture(
+        &mut self,
+        r: &mut BitReader<'_>,
+        _ptype8: u32,
+        pts: vaco_core::Timestamp,
+        duration: vaco_core::Duration,
+    ) -> Result<()> {
         let header = plus::parse(r, &mut self.plus_modes, self.last_plus_dims);
         let (w, h, intra, cpm, unsupported) = if let Some(hdr) = &header {
             self.last_plus_dims = Some((hdr.width, hdr.height));
@@ -556,10 +596,15 @@ fn predictors(
     slice_ids: Option<(&[u32], u32)>,
 ) -> ([i32; 2], [i32; 2], [i32; 2]) {
     let get = |x: i32, y: i32| -> Option<[i32; 2]> {
-        if x < 0 || y < 0 || x >= i32::try_from(mb_width).unwrap_or(0) || y >= i32::try_from(mb_height).unwrap_or(0) {
+        if x < 0
+            || y < 0
+            || x >= i32::try_from(mb_width).unwrap_or(0)
+            || y >= i32::try_from(mb_height).unwrap_or(0)
+        {
             return None;
         }
-        let idx = usize::try_from(y).unwrap_or(0) * mb_width as usize + usize::try_from(x).unwrap_or(0);
+        let idx =
+            usize::try_from(y).unwrap_or(0) * mb_width as usize + usize::try_from(x).unwrap_or(0);
         // Annex K §K.1 rule 1 (`Vaco-Spec-Ref: itu-t-h263` K.1): "the
         // prediction of motion vector values are the same as if a GOB
         // header were present" — a neighbour in a different slice is
@@ -670,7 +715,12 @@ fn set_one_block_mv(ap: &mut ActivePicture, mb_x: u32, mb_y: u32, block: u8, mv:
 /// Slice Structured mode combined with Advanced Prediction is rejected
 /// at the picture header (`plus::parse`) before this is ever called, so
 /// unlike [`predictors`] this has no slice-boundary case to check.
-fn annex_f_predictors(ap: &ActivePicture, mb_x: u32, mb_y: u32, block: u8) -> ([i32; 2], [i32; 2], [i32; 2]) {
+fn annex_f_predictors(
+    ap: &ActivePicture,
+    mb_x: u32,
+    mb_y: u32,
+    block: u8,
+) -> ([i32; 2], [i32; 2], [i32; 2]) {
     let grid_w = ap.mb_width * 2;
     let grid_h = ap.mb_height * 2;
     let (bx, by) = block_row_col(block);
@@ -680,10 +730,15 @@ fn annex_f_predictors(ap: &ActivePicture, mb_x: u32, mb_y: u32, block: u8) -> ([
     let get = |dx: i32, dy: i32| -> Option<[i32; 2]> {
         let gx = own_gx + dx;
         let gy = own_gy + dy;
-        if gx < 0 || gy < 0 || gx >= i32::try_from(grid_w).unwrap_or(0) || gy >= i32::try_from(grid_h).unwrap_or(0) {
+        if gx < 0
+            || gy < 0
+            || gx >= i32::try_from(grid_w).unwrap_or(0)
+            || gy >= i32::try_from(grid_h).unwrap_or(0)
+        {
             return None;
         }
-        let idx = usize::try_from(gy).unwrap_or(0) * grid_w as usize + usize::try_from(gx).unwrap_or(0);
+        let idx =
+            usize::try_from(gy).unwrap_or(0) * grid_w as usize + usize::try_from(gx).unwrap_or(0);
         ap.block_mv.get(idx).copied()
     };
     let mv1 = get(offsets[0].0, offsets[0].1).unwrap_or([0, 0]);
@@ -720,7 +775,16 @@ fn annex_f_predictors(ap: &ActivePicture, mb_x: u32, mb_y: u32, block: u8) -> ([
     clippy::too_many_arguments,
     reason = "one remote lookup genuinely needs the macroblock position, which block within it, its own already-decoded vector, the direction offset, and whether that direction is the special-cased 'below' one — collapsing these into a struct would not make any call site clearer, there being exactly four call sites, one per direction"
 )]
-fn annex_f_remote(ap: &ActivePicture, mb_x: u32, mb_y: u32, block: u8, own_mv: [i32; 2], dgx: i32, dgy: i32, is_below: bool) -> [i32; 2] {
+fn annex_f_remote(
+    ap: &ActivePicture,
+    mb_x: u32,
+    mb_y: u32,
+    block: u8,
+    own_mv: [i32; 2],
+    dgx: i32,
+    dgy: i32,
+    is_below: bool,
+) -> [i32; 2] {
     if is_below && matches!(block, 2 | 3) {
         return own_mv;
     }
@@ -731,7 +795,11 @@ fn annex_f_remote(ap: &ActivePicture, mb_x: u32, mb_y: u32, block: u8, own_mv: [
     let own_gy = i32::try_from(mb_y * 2 + by).unwrap_or(0);
     let gx = own_gx + dgx;
     let gy = own_gy + dgy;
-    if gx < 0 || gy < 0 || gx >= i32::try_from(grid_w).unwrap_or(0) || gy >= i32::try_from(grid_h).unwrap_or(0) {
+    if gx < 0
+        || gy < 0
+        || gx >= i32::try_from(grid_w).unwrap_or(0)
+        || gy >= i32::try_from(grid_h).unwrap_or(0)
+    {
         return own_mv;
     }
     let nb_mb_x = fine_to_mb(u32::try_from(gx).unwrap_or(0));
@@ -811,7 +879,14 @@ enum MbOutcome {
 /// loop below so Annex K's rectangular-slice scan (which does not visit
 /// `mb_index` in a simple `+1` sequence — see [`decode_slice_rect`]) can
 /// share it exactly rather than re-deriving the macroblock layer.
-fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H26xIdct, reference: Option<&RefPicture>, mb_index: u32, slice_id: u32) -> MbOutcome {
+fn try_decode_one_mb(
+    r: &mut BitReader<'_>,
+    ap: &mut ActivePicture,
+    idct: &mut H26xIdct,
+    reference: Option<&RefPicture>,
+    mb_index: u32,
+    slice_id: u32,
+) -> MbOutcome {
     if r.check().is_err() {
         return MbOutcome::Fail;
     }
@@ -838,7 +913,19 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
             }
             set_block_mv(ap, col, row, [[0, 0]; 4]);
         }
-        return if reconstruct_or_defer(r, idct, ap, reference, col, row, false, [0, 0], 0, false, false) {
+        return if reconstruct_or_defer(
+            r,
+            idct,
+            ap,
+            reference,
+            col,
+            row,
+            false,
+            [0, 0],
+            0,
+            false,
+            false,
+        ) {
             MbOutcome::Decoded
         } else {
             MbOutcome::Fail
@@ -853,7 +940,11 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
     let Some(&(_, mb_type, cbpc)) = vlc::decode(r, mcbpc_table, |c| c.0, 9) else {
         return MbOutcome::Fail;
     };
-    let is_stuffing = if ap.intra { mb_type == 8 } else { mb_type == 20 };
+    let is_stuffing = if ap.intra {
+        mb_type == 8
+    } else {
+        mb_type == 20
+    };
     if is_stuffing {
         if r.check().is_err() {
             return MbOutcome::Fail;
@@ -926,7 +1017,19 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
         if let Some(slot) = ap.mb_quant.get_mut(idx) {
             *slot = ap.quant;
         }
-        return if reconstruct_or_defer(r, idct, ap, reference, col, row, false, block_final[0], cbp, true, true) {
+        return if reconstruct_or_defer(
+            r,
+            idct,
+            ap,
+            reference,
+            col,
+            row,
+            false,
+            block_final[0],
+            cbp,
+            true,
+            true,
+        ) {
             MbOutcome::Decoded
         } else {
             MbOutcome::Fail
@@ -950,7 +1053,9 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
         let (mv1, mv2, mv3) = if ap.advanced_prediction {
             annex_f_predictors(ap, col, row, 0)
         } else {
-            let slice_ctx = ap.slice_structured.then_some((ap.mb_slice_id.as_slice(), slice_id));
+            let slice_ctx = ap
+                .slice_structured
+                .then_some((ap.mb_slice_id.as_slice(), slice_id));
             predictors(&ap.mv_grid, ap.mb_width, ap.mb_height, col, row, slice_ctx)
         };
         let pred_x = motion::median3(mv1[0], mv2[0], mv3[0]);
@@ -984,7 +1089,9 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
         set_block_mv(ap, col, row, [if intra_mb { [0, 0] } else { mv }; 4]);
     }
 
-    if reconstruct_or_defer(r, idct, ap, reference, col, row, intra_mb, mv, cbp, true, false) {
+    if reconstruct_or_defer(
+        r, idct, ap, reference, col, row, intra_mb, mv, cbp, true, false,
+    ) {
         MbOutcome::Decoded
     } else {
         MbOutcome::Fail
@@ -996,14 +1103,22 @@ fn try_decode_one_mb(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H
 /// above so Annex F's four-vectors-per-macroblock case (`mb_type == 2`)
 /// can call it four times without re-deriving the `UMV`
 /// legacy/`PLUSPTYPE` branching.
-fn decode_one_mv(r: &mut BitReader<'_>, ap: &ActivePicture, pred_x: i32, pred_y: i32) -> Option<[i32; 2]> {
+fn decode_one_mv(
+    r: &mut BitReader<'_>,
+    ap: &ActivePicture,
+    pred_x: i32,
+    pred_y: i32,
+) -> Option<[i32; 2]> {
     if ap.umv_plus {
         // Annex D §D.2, `PLUSPTYPE` present: Table D.3 (see
         // `motion::h263_umv_vector_plus`'s own docs for why no range
         // correction is needed here).
         let dh = block::decode_table_d3(r);
         let dv = block::decode_table_d3(r);
-        let mv = [motion::h263_umv_vector_plus(pred_x, dh), motion::h263_umv_vector_plus(pred_y, dv)];
+        let mv = [
+            motion::h263_umv_vector_plus(pred_x, dh),
+            motion::h263_umv_vector_plus(pred_y, dv),
+        ];
         // §D.2: a (+0.5, +0.5) difference pair needs one stuffing bit
         // consumed afterward, to prevent start-code emulation.
         if dh == 1 && dv == 1 {
@@ -1054,7 +1169,9 @@ fn reconstruct_or_defer(
     four_vector: bool,
 ) -> bool {
     if !ap.advanced_prediction {
-        return reconstruct_macroblock(r, idct, ap, reference, mb_x, mb_y, intra, mv, cbp, coded_mb);
+        return reconstruct_macroblock(
+            r, idct, ap, reference, mb_x, mb_y, intra, mv, cbp, coded_mb,
+        );
     }
     let Some(residuals) = decode_block_residuals(r, idct, ap, intra, cbp, coded_mb) else {
         return false;
@@ -1062,7 +1179,14 @@ fn reconstruct_or_defer(
     if let Some(prev) = ap.pending.take() {
         apply_reconstruction(ap, reference, &prev);
     }
-    ap.pending = Some(PendingMb { mb_x, mb_y, intra, mv, four_vector, residuals });
+    ap.pending = Some(PendingMb {
+        mb_x,
+        mb_y,
+        intra,
+        mv,
+        four_vector,
+        residuals,
+    });
     true
 }
 
@@ -1071,11 +1195,22 @@ fn reconstruct_or_defer(
 /// exactly [`reconstruct_macroblock`]'s own per-block coefficient decode,
 /// factored out so it can run immediately (bitstream order) while the
 /// prediction it will be added to waits for [`apply_reconstruction`].
-fn decode_block_residuals(r: &mut BitReader<'_>, idct: &mut H26xIdct, ap: &ActivePicture, intra: bool, cbp: u8, coded_mb: bool) -> Option<[[i32; 64]; 6]> {
+fn decode_block_residuals(
+    r: &mut BitReader<'_>,
+    idct: &mut H26xIdct,
+    ap: &ActivePicture,
+    intra: bool,
+    cbp: u8,
+    coded_mb: bool,
+) -> Option<[[i32; 64]; 6]> {
     let mut out = [[0i32; 64]; 6];
     for (i, slot) in out.iter_mut().enumerate() {
         let (plane, _, _) = block_geometry(i);
-        let block_quant = if plane == 0 || !ap.mq { ap.quant } else { block::quant_c(ap.quant) };
+        let block_quant = if plane == 0 || !ap.mq {
+            ap.quant
+        } else {
+            block::quant_c(ap.quant)
+        };
         let cbp_bit = (cbp >> (5 - i)) & 1 == 1;
         let residual: [i32; 64] = if intra {
             let qfs = block::decode_h263_coefficients_mq(r, true, cbp_bit, ap.mq).ok()?;
@@ -1104,7 +1239,11 @@ fn decode_block_residuals(r: &mut BitReader<'_>, idct: &mut H26xIdct, ap: &Activ
 /// either the four-vector `motion::annex_f_chroma_mv` combination or the
 /// default `motion::h263_chroma_mv` rule, per `pending.four_vector` —
 /// add the already-decoded residual, clip, and write.
-fn apply_reconstruction(ap: &mut ActivePicture, reference: Option<&RefPicture>, pending: &PendingMb) {
+fn apply_reconstruction(
+    ap: &mut ActivePicture,
+    reference: Option<&RefPicture>,
+    pending: &PendingMb,
+) {
     let mb_x = pending.mb_x;
     let mb_y = pending.mb_y;
     let intra = pending.intra;
@@ -1169,7 +1308,15 @@ fn apply_reconstruction(ap: &mut ActivePicture, reference: Option<&RefPicture>, 
                             let sx = i32::try_from(px_ox + x).unwrap_or(0);
                             let sy = i32::try_from(px_oy + y).unwrap_or(0);
                             if let Some(slot) = pred.get_mut((y * bw + x) as usize) {
-                                *slot = motion::sample_half_pel(refp, plane, sx, sy, mv_x, mv_y, ap.rcontrol);
+                                *slot = motion::sample_half_pel(
+                                    refp,
+                                    plane,
+                                    sx,
+                                    sy,
+                                    mv_x,
+                                    mv_y,
+                                    ap.rcontrol,
+                                );
                             }
                         }
                     }
@@ -1189,7 +1336,12 @@ fn apply_reconstruction(ap: &mut ActivePicture, reference: Option<&RefPicture>, 
                 let Some(dst) = dst_row.get_mut(usize::try_from(px_ox + x).unwrap_or(0)) else {
                     continue;
                 };
-                let r_val = pending.residuals.get(i).and_then(|res| res.get((y * bw + x) as usize)).copied().unwrap_or(0);
+                let r_val = pending
+                    .residuals
+                    .get(i)
+                    .and_then(|res| res.get((y * bw + x) as usize))
+                    .copied()
+                    .unwrap_or(0);
                 let p_val = i32::from(pred.get((y * bw + x) as usize).copied().unwrap_or(0));
                 *dst = (r_val + p_val).clamp(0, 255) as u8;
             }
@@ -1220,7 +1372,14 @@ fn apply_reconstruction(ap: &mut ActivePicture, reference: Option<&RefPicture>, 
 /// Returns `false` on a coefficient-decode failure or unsupported
 /// `mb_type`, at which point the caller stops the whole picture rather
 /// than continuing on an untrustworthy bit position.
-fn decode_gob(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H26xIdct, reference: Option<&RefPicture>, start_mb: u32, slice_id: u32) -> bool {
+fn decode_gob(
+    r: &mut BitReader<'_>,
+    ap: &mut ActivePicture,
+    idct: &mut H26xIdct,
+    reference: Option<&RefPicture>,
+    start_mb: u32,
+    slice_id: u32,
+) -> bool {
     let total_mbs = ap.mb_width * ap.mb_height;
     let mut mb_index = start_mb;
     while mb_index < total_mbs {
@@ -1242,7 +1401,15 @@ fn decode_gob(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H26xIdct
 /// macroblocks. A `rect_width` equal to the picture's own `mb_width`
 /// degenerates to plain raster order, so this also covers a
 /// rectangular-mode slice that happens to span the picture's full width.
-fn decode_slice_rect(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H26xIdct, reference: Option<&RefPicture>, start_mb: u32, rect_width: u32, slice_id: u32) -> bool {
+fn decode_slice_rect(
+    r: &mut BitReader<'_>,
+    ap: &mut ActivePicture,
+    idct: &mut H26xIdct,
+    reference: Option<&RefPicture>,
+    start_mb: u32,
+    rect_width: u32,
+    slice_id: u32,
+) -> bool {
     let total_mbs = ap.mb_width * ap.mb_height;
     let rect_width = rect_width.max(1).min(ap.mb_width);
     let mut mb_index = start_mb;
@@ -1313,13 +1480,20 @@ const fn swi_field_width(mb_width: u32) -> u32 {
 /// (the picture header's own byte alignment already covers it) and no
 /// `SSBI`/`SQUANT` (the picture layer's `PQUANT`, already applied to
 /// `ap.quant` by the caller, is this slice's starting `QUANT`).
-fn decode_first_slice(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H26xIdct, reference: Option<&RefPicture>) {
+fn decode_first_slice(
+    r: &mut BitReader<'_>,
+    ap: &mut ActivePicture,
+    idct: &mut H26xIdct,
+    reference: Option<&RefPicture>,
+) {
     r.skip(1); // SEPB1.
     let mba = r.get(mba_field_width(ap.mb_width * ap.mb_height));
     if ap.rectangular_slices {
         r.skip(1); // SEPB2: always present here when RS is active (§K.2.6).
     }
-    let rect_width = ap.rectangular_slices.then(|| r.get(swi_field_width(ap.mb_width)) + 1);
+    let rect_width = ap
+        .rectangular_slices
+        .then(|| r.get(swi_field_width(ap.mb_width)) + 1);
     r.skip(1); // SEPB3.
     match rect_width {
         Some(w) => {
@@ -1335,7 +1509,12 @@ fn decode_first_slice(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut 
 /// slice other than the one immediately following the picture start code
 /// — reached from the main scan loop right after its `SSC` (the same
 /// 17-bit prefix `PSC`/`GBSC` share) and one already-peeked `SEPB1` bit.
-fn decode_slice(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H26xIdct, reference: Option<&RefPicture>) {
+fn decode_slice(
+    r: &mut BitReader<'_>,
+    ap: &mut ActivePicture,
+    idct: &mut H26xIdct,
+    reference: Option<&RefPicture>,
+) {
     r.skip(1); // SEPB1 (already peeked by the caller to reach here).
     if ap.cpm {
         r.skip(4); // SSBI.
@@ -1348,7 +1527,9 @@ fn decode_slice(r: &mut BitReader<'_>, ap: &mut ActivePicture, idct: &mut H26xId
         r.skip(1);
     }
     ap.quant = (r.get(5) as u8).clamp(1, 31); // SQUANT.
-    let rect_width = ap.rectangular_slices.then(|| r.get(swi_field_width(ap.mb_width)) + 1);
+    let rect_width = ap
+        .rectangular_slices
+        .then(|| r.get(swi_field_width(ap.mb_width)) + 1);
     r.skip(1); // SEPB3.
     r.skip(2); // GFID.
     match rect_width {
@@ -1405,7 +1586,15 @@ fn reconstruct_macroblock(
                             let sx = i32::try_from(px_ox + x).unwrap_or(0);
                             let sy = i32::try_from(px_oy + y).unwrap_or(0);
                             if let Some(slot) = pred.get_mut((y * bw + x) as usize) {
-                                *slot = motion::sample_half_pel(refp, plane, sx, sy, mv_x, mv_y, ap.rcontrol);
+                                *slot = motion::sample_half_pel(
+                                    refp,
+                                    plane,
+                                    sx,
+                                    sy,
+                                    mv_x,
+                                    mv_y,
+                                    ap.rcontrol,
+                                );
                             }
                         }
                     }
@@ -1421,7 +1610,11 @@ fn reconstruct_macroblock(
 
         // Annex T §T.3: chrominance blocks dequantise against `QUANT_C`,
         // not `QUANT`, whenever Modified Quantization is active.
-        let block_quant = if plane == 0 || !ap.mq { ap.quant } else { block::quant_c(ap.quant) };
+        let block_quant = if plane == 0 || !ap.mq {
+            ap.quant
+        } else {
+            block::quant_c(ap.quant)
+        };
 
         // §5.4: `INTRADC` is unconditional for an intra block, but `TCOEF`
         // (the AC part) is gated by the *same* `CBP` bit an inter block's

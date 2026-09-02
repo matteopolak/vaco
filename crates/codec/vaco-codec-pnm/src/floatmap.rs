@@ -53,7 +53,9 @@ fn read_header(r: &mut Reader<'_>, sample: Sample) -> Result<Header> {
         _ => return Err(Error::InvalidData("pfm/phm: bad magic")),
     };
     if want_sample != sample {
-        return Err(Error::InvalidData("pfm/phm: magic does not match this codec"));
+        return Err(Error::InvalidData(
+            "pfm/phm: magic does not match this codec",
+        ));
     }
     let width = r.decimal()?;
     let height = r.decimal()?;
@@ -162,11 +164,17 @@ fn encode_generic(frame: &Frame, sample: Sample) -> Result<Vec<u8>> {
         (PixFmt::Grayf16be, Sample::F16) => ("Ph", 1, false),
         (PixFmt::Rgbf16le, Sample::F16) => ("PH", 3, true),
         (PixFmt::Rgbf16be, Sample::F16) => ("PH", 3, false),
-        _ => return Err(Error::Unsupported("pfm/phm: unexpected pixel format for encoder")),
+        _ => {
+            return Err(Error::Unsupported(
+                "pfm/phm: unexpected pixel format for encoder",
+            ));
+        }
     };
     let sample_bytes = if sample == Sample::F32 { 4 } else { 2 };
     let (width, height) = (*width, *height);
-    let plane = planes.first().ok_or(Error::InvalidData("pfm/phm: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("pfm/phm: no plane 0"))?;
     let row_len = (width as usize)
         .saturating_mul(channels)
         .saturating_mul(sample_bytes);

@@ -40,35 +40,105 @@ pub enum WaveletKind {
 }
 
 const DD_9_7: &[LiftStep] = &[
-    LiftStep { kind: StepKind::Type2, taps: &[1, 1], offset: 0, shift: 2 },
-    LiftStep { kind: StepKind::Type3, taps: &[-1, 9, 9, -1], offset: -1, shift: 4 },
+    LiftStep {
+        kind: StepKind::Type2,
+        taps: &[1, 1],
+        offset: 0,
+        shift: 2,
+    },
+    LiftStep {
+        kind: StepKind::Type3,
+        taps: &[-1, 9, 9, -1],
+        offset: -1,
+        shift: 4,
+    },
 ];
 
 const LEGALL_5_3: &[LiftStep] = &[
-    LiftStep { kind: StepKind::Type2, taps: &[1, 1], offset: 0, shift: 2 },
-    LiftStep { kind: StepKind::Type3, taps: &[1, 1], offset: 0, shift: 1 },
+    LiftStep {
+        kind: StepKind::Type2,
+        taps: &[1, 1],
+        offset: 0,
+        shift: 2,
+    },
+    LiftStep {
+        kind: StepKind::Type3,
+        taps: &[1, 1],
+        offset: 0,
+        shift: 1,
+    },
 ];
 
 const DD_13_7: &[LiftStep] = &[
-    LiftStep { kind: StepKind::Type2, taps: &[-1, 9, 9, -1], offset: -1, shift: 5 },
-    LiftStep { kind: StepKind::Type3, taps: &[-1, 9, 9, -1], offset: -1, shift: 4 },
+    LiftStep {
+        kind: StepKind::Type2,
+        taps: &[-1, 9, 9, -1],
+        offset: -1,
+        shift: 5,
+    },
+    LiftStep {
+        kind: StepKind::Type3,
+        taps: &[-1, 9, 9, -1],
+        offset: -1,
+        shift: 4,
+    },
 ];
 
 const HAAR: &[LiftStep] = &[
-    LiftStep { kind: StepKind::Type2, taps: &[1], offset: 1, shift: 1 },
-    LiftStep { kind: StepKind::Type3, taps: &[1], offset: 0, shift: 0 },
+    LiftStep {
+        kind: StepKind::Type2,
+        taps: &[1],
+        offset: 1,
+        shift: 1,
+    },
+    LiftStep {
+        kind: StepKind::Type3,
+        taps: &[1],
+        offset: 0,
+        shift: 0,
+    },
 ];
 
 const FIDELITY: &[LiftStep] = &[
-    LiftStep { kind: StepKind::Type3, taps: &[-2, 10, -25, 81, 81, -25, 10, -2], offset: -3, shift: 8 },
-    LiftStep { kind: StepKind::Type2, taps: &[-8, 21, -46, 161, 161, -46, 21, -8], offset: -3, shift: 8 },
+    LiftStep {
+        kind: StepKind::Type3,
+        taps: &[-2, 10, -25, 81, 81, -25, 10, -2],
+        offset: -3,
+        shift: 8,
+    },
+    LiftStep {
+        kind: StepKind::Type2,
+        taps: &[-8, 21, -46, 161, 161, -46, 21, -8],
+        offset: -3,
+        shift: 8,
+    },
 ];
 
 const DAUBECHIES_9_7_INT: &[LiftStep] = &[
-    LiftStep { kind: StepKind::Type2, taps: &[1817, 1817], offset: 0, shift: 12 },
-    LiftStep { kind: StepKind::Type4, taps: &[3616, 3616], offset: 0, shift: 12 },
-    LiftStep { kind: StepKind::Type1, taps: &[217, 217], offset: 0, shift: 12 },
-    LiftStep { kind: StepKind::Type3, taps: &[6497, 6497], offset: 0, shift: 12 },
+    LiftStep {
+        kind: StepKind::Type2,
+        taps: &[1817, 1817],
+        offset: 0,
+        shift: 12,
+    },
+    LiftStep {
+        kind: StepKind::Type4,
+        taps: &[3616, 3616],
+        offset: 0,
+        shift: 12,
+    },
+    LiftStep {
+        kind: StepKind::Type1,
+        taps: &[217, 217],
+        offset: 0,
+        shift: 12,
+    },
+    LiftStep {
+        kind: StepKind::Type3,
+        taps: &[6497, 6497],
+        offset: 0,
+        shift: 12,
+    },
 ];
 
 impl WaveletKind {
@@ -120,9 +190,7 @@ fn check_shape(data_len: usize, width: usize, height: usize, levels: u32) -> Res
     if width == 0 || height == 0 {
         return Err(err_dimensions());
     }
-    let divisor = 1usize
-        .checked_shl(levels)
-        .ok_or_else(err_dimensions)?;
+    let divisor = 1usize.checked_shl(levels).ok_or_else(err_dimensions)?;
     if !width.is_multiple_of(divisor) || !height.is_multiple_of(divisor) {
         return Err(err_dimensions());
     }
@@ -134,10 +202,22 @@ fn check_shape(data_len: usize, width: usize, height: usize, levels: u32) -> Res
 
 /// Filter every row of the `w x h` region (top-left of `data`, row-major,
 /// stride `stride`) with 1D analysis or synthesis.
-#[allow(clippy::indexing_slicing, reason = "y bounded by h, checked once by check_shape before any level runs")]
-fn filter_rows(data: &mut [i32], stride: usize, w: usize, h: usize, steps: &[LiftStep], analysis: bool) -> Result<()> {
+#[allow(
+    clippy::indexing_slicing,
+    reason = "y bounded by h, checked once by check_shape before any level runs"
+)]
+fn filter_rows(
+    data: &mut [i32],
+    stride: usize,
+    w: usize,
+    h: usize,
+    steps: &[LiftStep],
+    analysis: bool,
+) -> Result<()> {
     for y in 0..h {
-        let row = data.get_mut(y * stride..y * stride + w).ok_or_else(err_buffer_len)?;
+        let row = data
+            .get_mut(y * stride..y * stride + w)
+            .ok_or_else(err_buffer_len)?;
         if analysis {
             run_analysis(row, steps)?;
         } else {
@@ -150,8 +230,20 @@ fn filter_rows(data: &mut [i32], stride: usize, w: usize, h: usize, steps: &[Lif
 /// Filter every column of the `w x h` region with 1D analysis or
 /// synthesis, gathering into contiguous `scratch` and scattering back
 /// (a column is not contiguous in a row-major buffer).
-#[allow(clippy::indexing_slicing, clippy::needless_range_loop, reason = "x/y bounded by w/h, checked once by check_shape before any level runs")]
-fn filter_cols(data: &mut [i32], stride: usize, w: usize, h: usize, steps: &[LiftStep], scratch: &mut [i32], analysis: bool) -> Result<()> {
+#[allow(
+    clippy::indexing_slicing,
+    clippy::needless_range_loop,
+    reason = "x/y bounded by w/h, checked once by check_shape before any level runs"
+)]
+fn filter_cols(
+    data: &mut [i32],
+    stride: usize,
+    w: usize,
+    h: usize,
+    steps: &[LiftStep],
+    scratch: &mut [i32],
+    analysis: bool,
+) -> Result<()> {
     let col = scratch.get_mut(..h).ok_or_else(err_buffer_len)?;
     for x in 0..w {
         for y in 0..h {
@@ -202,8 +294,18 @@ fn filter_rows_then_cols(
 /// layout §15.6.1's own synthesis interleave step reads: `LL` at
 /// `(2y, 2x)`, `HL` at `(2y, 2x+1)`, `LH` at `(2y+1, 2x)`, `HH` at
 /// `(2y+1, 2x+1)`.
-#[allow(clippy::indexing_slicing, clippy::integer_division, reason = "y/x bounded by hh/hw, both <= w/h; scratch sized to w*h by the caller; w/h are checked even at every level by check_shape so w/2, h/2 are exact")]
-fn interleave(data: &mut [i32], stride: usize, w: usize, h: usize, scratch: &mut [i32]) -> Result<()> {
+#[allow(
+    clippy::indexing_slicing,
+    clippy::integer_division,
+    reason = "y/x bounded by hh/hw, both <= w/h; scratch sized to w*h by the caller; w/h are checked even at every level by check_shape so w/2, h/2 are exact"
+)]
+fn interleave(
+    data: &mut [i32],
+    stride: usize,
+    w: usize,
+    h: usize,
+    scratch: &mut [i32],
+) -> Result<()> {
     let (hw, hh) = (w / 2, h / 2);
     let out = scratch.get_mut(..w * h).ok_or_else(err_buffer_len)?;
     for y in 0..hh {
@@ -211,7 +313,9 @@ fn interleave(data: &mut [i32], stride: usize, w: usize, h: usize, scratch: &mut
             let ll = *data.get(y * stride + x).ok_or_else(err_buffer_len)?;
             let hl = *data.get(y * stride + hw + x).ok_or_else(err_buffer_len)?;
             let lh = *data.get((hh + y) * stride + x).ok_or_else(err_buffer_len)?;
-            let hh_ = *data.get((hh + y) * stride + hw + x).ok_or_else(err_buffer_len)?;
+            let hh_ = *data
+                .get((hh + y) * stride + hw + x)
+                .ok_or_else(err_buffer_len)?;
             out[(2 * y) * w + 2 * x] = ll;
             out[(2 * y) * w + 2 * x + 1] = hl;
             out[(2 * y + 1) * w + 2 * x] = lh;
@@ -219,7 +323,9 @@ fn interleave(data: &mut [i32], stride: usize, w: usize, h: usize, scratch: &mut
         }
     }
     for y in 0..h {
-        let dst = data.get_mut(y * stride..y * stride + w).ok_or_else(err_buffer_len)?;
+        let dst = data
+            .get_mut(y * stride..y * stride + w)
+            .ok_or_else(err_buffer_len)?;
         let src = out.get(y * w..y * w + w).ok_or_else(err_buffer_len)?;
         dst.copy_from_slice(src);
     }
@@ -228,16 +334,34 @@ fn interleave(data: &mut [i32], stride: usize, w: usize, h: usize, scratch: &mut
 
 /// The exact inverse of [`interleave`]: split the checkerboard back into
 /// four `hw x hh` quadrants at the corners of the `w x h` region.
-#[allow(clippy::indexing_slicing, clippy::integer_division, reason = "see interleave's own identical reason")]
-fn deinterleave(data: &mut [i32], stride: usize, w: usize, h: usize, scratch: &mut [i32]) -> Result<()> {
+#[allow(
+    clippy::indexing_slicing,
+    clippy::integer_division,
+    reason = "see interleave's own identical reason"
+)]
+fn deinterleave(
+    data: &mut [i32],
+    stride: usize,
+    w: usize,
+    h: usize,
+    scratch: &mut [i32],
+) -> Result<()> {
     let (hw, hh) = (w / 2, h / 2);
     let out = scratch.get_mut(..w * h).ok_or_else(err_buffer_len)?;
     for y in 0..hh {
         for x in 0..hw {
-            let ll = *data.get((2 * y) * stride + 2 * x).ok_or_else(err_buffer_len)?;
-            let hl = *data.get((2 * y) * stride + 2 * x + 1).ok_or_else(err_buffer_len)?;
-            let lh = *data.get((2 * y + 1) * stride + 2 * x).ok_or_else(err_buffer_len)?;
-            let hh_ = *data.get((2 * y + 1) * stride + 2 * x + 1).ok_or_else(err_buffer_len)?;
+            let ll = *data
+                .get((2 * y) * stride + 2 * x)
+                .ok_or_else(err_buffer_len)?;
+            let hl = *data
+                .get((2 * y) * stride + 2 * x + 1)
+                .ok_or_else(err_buffer_len)?;
+            let lh = *data
+                .get((2 * y + 1) * stride + 2 * x)
+                .ok_or_else(err_buffer_len)?;
+            let hh_ = *data
+                .get((2 * y + 1) * stride + 2 * x + 1)
+                .ok_or_else(err_buffer_len)?;
             out[y * w + x] = ll;
             out[y * w + hw + x] = hl;
             out[(hh + y) * w + x] = lh;
@@ -245,20 +369,34 @@ fn deinterleave(data: &mut [i32], stride: usize, w: usize, h: usize, scratch: &m
         }
     }
     for y in 0..h {
-        let dst = data.get_mut(y * stride..y * stride + w).ok_or_else(err_buffer_len)?;
+        let dst = data
+            .get_mut(y * stride..y * stride + w)
+            .ok_or_else(err_buffer_len)?;
         let src = out.get(y * w..y * w + w).ok_or_else(err_buffer_len)?;
         dst.copy_from_slice(src);
     }
     Ok(())
 }
 
-#[allow(clippy::indexing_slicing, reason = "y/x bounded by h/w, checked by check_shape before this runs")]
-fn shift_region(data: &mut [i32], stride: usize, w: usize, h: usize, shift: u32, left: bool) -> Result<()> {
+#[allow(
+    clippy::indexing_slicing,
+    reason = "y/x bounded by h/w, checked by check_shape before this runs"
+)]
+fn shift_region(
+    data: &mut [i32],
+    stride: usize,
+    w: usize,
+    h: usize,
+    shift: u32,
+    left: bool,
+) -> Result<()> {
     if shift == 0 {
         return Ok(());
     }
     for y in 0..h {
-        let row = data.get_mut(y * stride..y * stride + w).ok_or_else(err_buffer_len)?;
+        let row = data
+            .get_mut(y * stride..y * stride + w)
+            .ok_or_else(err_buffer_len)?;
         for v in row.iter_mut() {
             *v = if left {
                 v.wrapping_shl(shift)
@@ -282,7 +420,14 @@ fn shift_region(data: &mut [i32], stride: usize, w: usize, h: usize, shift: u32,
 /// [`Error::InvalidData`] if `width`/`height` are not both evenly
 /// divisible by `2^levels`, or `data` is shorter than `width * height`;
 /// as [`Budget::alloc`] if the scratch allocation is refused.
-pub fn idwt_2d(data: &mut [i32], width: usize, height: usize, kind: WaveletKind, levels: u32, budget: &mut Budget) -> Result<()> {
+pub fn idwt_2d(
+    data: &mut [i32],
+    width: usize,
+    height: usize,
+    kind: WaveletKind,
+    levels: u32,
+    budget: &mut Budget,
+) -> Result<()> {
     check_shape(data.len(), width, height, levels)?;
     let mut scratch: Vec<i32> = budget.alloc(width.max(height).max(width * height))?;
     let steps = kind.steps();
@@ -306,7 +451,14 @@ pub fn idwt_2d(data: &mut [i32], width: usize, height: usize, kind: WaveletKind,
 /// # Errors
 ///
 /// As [`idwt_2d`].
-pub fn dwt_2d(data: &mut [i32], width: usize, height: usize, kind: WaveletKind, levels: u32, budget: &mut Budget) -> Result<()> {
+pub fn dwt_2d(
+    data: &mut [i32],
+    width: usize,
+    height: usize,
+    kind: WaveletKind,
+    levels: u32,
+    budget: &mut Budget,
+) -> Result<()> {
     check_shape(data.len(), width, height, levels)?;
     let mut scratch: Vec<i32> = budget.alloc(width.max(height).max(width * height))?;
     let steps = kind.steps();
@@ -348,9 +500,15 @@ mod tests {
             let mut a = original.clone();
             let mut budget = Budget::new(Limits::default());
             dwt_2d(&mut a, w, h, kind, 2, &mut budget).unwrap();
-            assert_ne!(a, original, "{kind:?}: the transform must actually change the data");
+            assert_ne!(
+                a, original,
+                "{kind:?}: the transform must actually change the data"
+            );
             idwt_2d(&mut a, w, h, kind, 2, &mut budget).unwrap();
-            assert_eq!(a, original, "{kind:?}: forward-then-inverse must round-trip exactly");
+            assert_eq!(
+                a, original,
+                "{kind:?}: forward-then-inverse must round-trip exactly"
+            );
         }
     }
 

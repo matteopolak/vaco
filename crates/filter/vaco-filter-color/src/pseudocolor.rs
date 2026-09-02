@@ -51,7 +51,10 @@ use vaco_filter_graph::registry::{Instance, Instantiate};
 use crate::common;
 use crate::sample;
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "pseudocolor",
@@ -61,7 +64,9 @@ pub const DESC: FilterDesc = FilterDesc {
     flags: FilterFlags::TIMELINE_GENERIC,
 };
 
-const VARS: &[&str] = &["val", "ymin", "ymax", "umin", "umax", "vmin", "vmax", "w", "h"];
+const VARS: &[&str] = &[
+    "val", "ymin", "ymax", "umin", "umax", "vmin", "vmax", "w", "h",
+];
 
 /// `ffmpeg -h filter=pseudocolor`'s own named constants for `preset`/`p`
 /// (one field, two names via `alias`). Not implemented (see the field's
@@ -267,7 +272,9 @@ pub(crate) struct Filter {
 impl Filter {
     fn new(o: &Opts) -> std::result::Result<Self, String> {
         let bindings = Bindings::new(VARS);
-        let parse = |s: &str| Expr::parse(s, &bindings).map_err(|e| format!("pseudocolor: bad expression `{s}`: {e}"));
+        let parse = |s: &str| {
+            Expr::parse(s, &bindings).map_err(|e| format!("pseudocolor: bad expression `{s}`: {e}"))
+        };
         Ok(Self {
             exprs: [parse(&o.c0)?, parse(&o.c1)?, parse(&o.c2)?, parse(&o.c3)?],
             index: o.index as usize,
@@ -338,25 +345,41 @@ impl Filter {
             .map(|y| {
                 base_plane
                     .row(y)
-                    .map(|r| (0..base_w).map(|x| sample::read(r, x, base_comp, big_endian)).collect())
+                    .map(|r| {
+                        (0..base_w)
+                            .map(|x| sample::read(r, x, base_comp, big_endian))
+                            .collect()
+                    })
                     .unwrap_or_default()
             })
             .collect();
         for (ch, table) in self.tables.iter().enumerate() {
             let Some(table) = table else { continue };
-            let Some(comp) = sample::component(format, ch) else { continue };
-            let Some(mut plane) = input.plane_mut(comp.plane as usize) else { continue };
+            let Some(comp) = sample::component(format, ch) else {
+                continue;
+            };
+            let Some(mut plane) = input.plane_mut(comp.plane as usize) else {
+                continue;
+            };
             let max = f64::from(sample::max_value(comp));
-            let w = plane.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+            let w = plane
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
             for y in 0..plane.rows() {
-                let Some(base_row) = base_rows.get(y) else { continue };
-                let Some(row) = plane.row_mut(y) else { continue };
+                let Some(base_row) = base_rows.get(y) else {
+                    continue;
+                };
+                let Some(row) = plane.row_mut(y) else {
+                    continue;
+                };
                 for x in 0..w {
                     let base_v = base_row.get(x).copied().unwrap_or(0);
                     let base_idx = base_v as usize;
                     let out = table.get(base_idx).copied().unwrap_or(base_v);
                     let orig = sample::read(row, x, comp, big_endian);
-                    let blended = f64::from(orig) * (1.0 - self.opacity) + f64::from(out) * self.opacity;
+                    let blended =
+                        f64::from(orig) * (1.0 - self.opacity) + f64::from(out) * self.opacity;
                     #[allow(
                         clippy::cast_possible_truncation,
                         clippy::cast_sign_loss,
@@ -374,7 +397,13 @@ impl Filter {
 
 impl FrameFilter for Filter {
     fn configure(&mut self, ctx: &mut FilterContext<'_>) -> Result<()> {
-        if let Some(LinkFormat::Video { format, width, height, .. }) = ctx.input_link(0).cloned() {
+        if let Some(LinkFormat::Video {
+            format,
+            width,
+            height,
+            ..
+        }) = ctx.input_link(0).cloned()
+        {
             self.rebuild_tables(format, width, height);
         }
         Ok(())

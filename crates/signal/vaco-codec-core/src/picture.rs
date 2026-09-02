@@ -483,7 +483,10 @@ impl ProgressPicture {
                 height: p.height,
                 band_h: p.band_h,
                 band_w: p.band_w,
-                band_shift: p.band_h.is_power_of_two().then(|| p.band_h.trailing_zeros()),
+                band_shift: p
+                    .band_h
+                    .is_power_of_two()
+                    .then(|| p.band_h.trailing_zeros()),
                 col_shift: (tiled && p.band_w.is_power_of_two()).then(|| p.band_w.trailing_zeros()),
                 guard,
                 stride: if tiled { 0 } else { p.stride },
@@ -745,12 +748,21 @@ impl PictureWriter {
     /// tile has already been published — at which point it is immutable and
     /// shared, and writing to it would be exactly the race this design exists
     /// to prevent.
-    pub fn tile_mut(&mut self, plane: usize, row_band: usize, col_band: usize) -> Result<BandMut<'_>> {
+    pub fn tile_mut(
+        &mut self,
+        plane: usize,
+        row_band: usize,
+        col_band: usize,
+    ) -> Result<BandMut<'_>> {
         let geom = self.picture.plane(plane)?;
         let flat = geom
             .flat(row_band, col_band)
             .ok_or(Error::InvalidData("tile index out of range"))?;
-        let (guard, own_stride, own_w) = (geom.guard, geom.stride_for(row_band, col_band), geom.col_body_w(col_band));
+        let (guard, own_stride, own_w) = (
+            geom.guard,
+            geom.stride_for(row_band, col_band),
+            geom.col_body_w(col_band),
+        );
         let pw = self
             .planes
             .get_mut(plane)
@@ -984,7 +996,9 @@ impl PictureWriter {
     ) -> Result<Vec<BandRangeMut<'_>>> {
         let geom = self.picture.plane(plane)?;
         if geom.n_col_bands != 1 {
-            return Err(Error::InvalidData("split_bands_mut needs a row-banded (single-column) plane"));
+            return Err(Error::InvalidData(
+                "split_bands_mut needs a row-banded (single-column) plane",
+            ));
         }
         let (stride, guard, band_h, width_bytes) =
             (geom.stride, geom.guard, geom.band_h, geom.width_bytes);
@@ -1264,7 +1278,12 @@ impl PictureRef {
     ///
     /// [`Error::InvalidData`] if the plane or tile does not exist, if `plane`
     /// is not column-banded, or if the producing task failed.
-    pub fn wait_tile(&self, plane: usize, row_band: usize, col_band: usize) -> Result<BlockRef<'_>> {
+    pub fn wait_tile(
+        &self,
+        plane: usize,
+        row_band: usize,
+        col_band: usize,
+    ) -> Result<BlockRef<'_>> {
         let p = self.0.plane(plane)?;
         if p.n_col_bands <= 1 {
             return Err(Error::InvalidData("wait_tile needs a column-banded plane"));
@@ -1302,7 +1321,13 @@ impl PictureRef {
     /// # Errors
     ///
     /// As [`PictureRef::wait_tile`].
-    pub fn wait_tile_for(&self, waiter: u64, plane: usize, row_band: usize, col_band: usize) -> Result<BlockRef<'_>> {
+    pub fn wait_tile_for(
+        &self,
+        waiter: u64,
+        plane: usize,
+        row_band: usize,
+        col_band: usize,
+    ) -> Result<BlockRef<'_>> {
         debug_assert!(
             self.decode_index() < waiter,
             "a frame task may only wait on pictures earlier in decode order"

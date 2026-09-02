@@ -61,7 +61,9 @@ pub(crate) fn combo(
         let rice_step = 1u64
             .checked_shl(k_rice)
             .ok_or(Error::InvalidData("prores: rice shift overflow"))?;
-        Ok(u64::from(q).saturating_mul(rice_step).saturating_add(suffix))
+        Ok(u64::from(q)
+            .saturating_mul(rice_step)
+            .saturating_add(suffix))
     } else {
         let q_inner = q - (last_rice_q + 1);
         let suffix_bits = q_inner.saturating_add(k_exp);
@@ -124,7 +126,10 @@ pub(crate) fn signed_to_symbol(n: i64) -> u64 {
 /// odd symbols are `-((S+1)/2)` (negative).
 pub(crate) fn symbol_to_signed(s: u64) -> i64 {
     if s.is_multiple_of(2) {
-        #[allow(clippy::integer_division, reason = "s is even here, so s / 2 is exact per RDD 36 Table 8's own inverse mapping")]
+        #[allow(
+            clippy::integer_division,
+            reason = "s is even here, so s / 2 is exact per RDD 36 Table 8's own inverse mapping"
+        )]
         (s / 2).cast_signed()
     } else {
         -(s.div_ceil(2).cast_signed())
@@ -202,9 +207,7 @@ mod tests {
 
     #[test]
     fn combo_round_trips_many_values() {
-        for (last_rice_q, k_rice, k_exp) in
-            [(2u32, 0u32, 1u32), (1, 2, 3), (1, 1, 2), (2, 0, 2)]
-        {
+        for (last_rice_q, k_rice, k_exp) in [(2u32, 0u32, 1u32), (1, 2, 3), (1, 1, 2), (2, 0, 2)] {
             for n in 0..1000u64 {
                 let mut w = BitWriter::new();
                 write_combo(&mut w, last_rice_q, k_rice, k_exp, n);
@@ -212,7 +215,10 @@ mod tests {
                 let bytes = w.finish();
                 let mut r = BitReader::new(&bytes);
                 let got = combo(&mut r, last_rice_q, k_rice, k_exp).unwrap();
-                assert_eq!(got, n, "lastRiceQ={last_rice_q} kRice={k_rice} kExp={k_exp} n={n}");
+                assert_eq!(
+                    got, n,
+                    "lastRiceQ={last_rice_q} kRice={k_rice} kExp={k_exp} n={n}"
+                );
             }
         }
     }

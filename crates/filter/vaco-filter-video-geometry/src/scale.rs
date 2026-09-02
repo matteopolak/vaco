@@ -400,7 +400,8 @@ fn parse_scale_opts(req: &Instantiate<'_>) -> std::result::Result<ScaleOptions, 
     }
     let mut opts = ScaleOptions::default();
     if let Some(flags) = req.named("flags") {
-        opts.parse(&format!("sws_flags={flags}")).map_err(|e| e.to_string())?;
+        opts.parse(&format!("sws_flags={flags}"))
+            .map_err(|e| e.to_string())?;
     }
     if let Some(p0) = req.named("param0") {
         let v: f64 = p0

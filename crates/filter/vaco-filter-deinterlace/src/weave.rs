@@ -83,7 +83,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -235,7 +236,11 @@ mod tests {
         let inputs: Vec<Frame> = (0..5).map(|_| ramp_frame(2, 4)).collect();
         let mut w = Filter::new(true, false);
         let out = drive(&mut w, &pool, inputs);
-        assert_eq!(out.len(), 2, "5 fields, non-overlapping -> 2 frames, 1 dropped");
+        assert_eq!(
+            out.len(),
+            2,
+            "5 fields, non-overlapping -> 2 frames, 1 dropped"
+        );
     }
 
     /// Pinned against the reference's own named spelling
@@ -247,5 +252,4 @@ mod tests {
             assert_eq!(opts.first_field, expected, "first_field={name}");
         }
     }
-
 }

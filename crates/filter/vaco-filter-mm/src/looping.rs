@@ -212,7 +212,10 @@ fn build(media: MediaType, desc: FilterDesc, opts: &Opts, req: &Instantiate<'_>)
 pub mod video {
     use vaco_core::Duration as VDuration;
 
-    #[allow(unused_imports, reason = "AUDIO_PAD is unused in this module's own build call")]
+    #[allow(
+        unused_imports,
+        reason = "AUDIO_PAD is unused in this module's own build call"
+    )]
     use super::{
         AUDIO_PAD, FilterDesc, FilterFlags, Instance, Instantiate, MediaType, Opts, Pad, VIDEO_PAD,
         build,
@@ -236,7 +239,8 @@ pub mod video {
             use vaco_opts::OptionsExt as _;
             let mut o = Self::default();
             if let Some(text) = args {
-                o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+                o.set_from_string(text, "=", ":")
+                    .map_err(|e| e.to_string())?;
             }
             Ok(o)
         }
@@ -267,7 +271,10 @@ pub mod video {
 pub mod audio {
     use vaco_core::Duration as VDuration;
 
-    #[allow(unused_imports, reason = "VIDEO_PAD is unused in this module's own build call")]
+    #[allow(
+        unused_imports,
+        reason = "VIDEO_PAD is unused in this module's own build call"
+    )]
     use super::{
         AUDIO_PAD, FilterDesc, FilterFlags, Instance, Instantiate, MediaType, Opts, Pad, VIDEO_PAD,
         build,
@@ -291,7 +298,8 @@ pub mod audio {
             use vaco_opts::OptionsExt as _;
             let mut o = Self::default();
             if let Some(text) = args {
-                o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+                o.set_from_string(text, "=", ":")
+                    .map_err(|e| e.to_string())?;
             }
             Ok(o)
         }
@@ -346,7 +354,11 @@ mod tests {
             video_source_formats("in", vaco_pixfmt::PixFmt::Gray8),
         );
         let node = graph.add(instance.desc, instance.formats, instance.filter);
-        let sink = graph.add_sink("out", MediaType::Video, vaco_filter_core::mock::any_video_sink("out"));
+        let sink = graph.add_sink(
+            "out",
+            MediaType::Video,
+            vaco_filter_core::mock::any_video_sink("out"),
+        );
         graph.connect(src, 0, node, 0).unwrap();
         graph.connect(node, 0, sink, 0).unwrap();
         let tb = vaco_core::Rational::new(1, 25);
@@ -355,7 +367,9 @@ mod tests {
         for i in 0..n_in {
             graph.send(src, gray_frame(4, 4, i, 0)).unwrap();
         }
-        graph.close_source(src, vaco_core::Timestamp::new(n_in)).unwrap();
+        graph
+            .close_source(src, vaco_core::Timestamp::new(n_in))
+            .unwrap();
         let mut out = Vec::new();
         loop {
             match graph.run().unwrap() {
@@ -390,7 +404,10 @@ mod tests {
     /// reference (`ffmpeg 8.1`): pts `0..7`, not `0..4` followed by `0,0,0`.
     #[test]
     fn replayed_frames_continue_the_pts_sequence() {
-        assert_eq!(run("loop=3:size=1:start=0", 5), vec![0, 1, 2, 3, 4, 5, 6, 7]);
+        assert_eq!(
+            run("loop=3:size=1:start=0", 5),
+            vec![0, 1, 2, 3, 4, 5, 6, 7]
+        );
     }
 
     #[test]

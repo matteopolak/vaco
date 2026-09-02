@@ -57,7 +57,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -180,8 +181,9 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
             clippy::cast_possible_truncation,
             reason = "exprs.len() is a small channel count"
         )]
-        vaco_chlayout::ChannelLayout::default_for(exprs.len() as u32)
-            .ok_or_else(|| "aevalsrc: no default channel layout for this many channels".to_owned())?
+        vaco_chlayout::ChannelLayout::default_for(exprs.len() as u32).ok_or_else(|| {
+            "aevalsrc: no default channel layout for this many channels".to_owned()
+        })?
     } else {
         vaco_chlayout::ChannelLayout::from_name(&opts.channel_layout)
             .ok_or_else(|| format!("aevalsrc: bad channel_layout `{}`", opts.channel_layout))?

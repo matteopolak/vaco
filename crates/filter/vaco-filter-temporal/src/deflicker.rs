@@ -206,7 +206,9 @@ impl FrameFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
     let size = usize_opt(req, "size", usize_opt(req, "s", 5)).clamp(2, 129);
-    let mode_str = str_opt(req, "mode").or_else(|| str_opt(req, "m")).unwrap_or_else(|| "am".to_owned());
+    let mode_str = str_opt(req, "mode")
+        .or_else(|| str_opt(req, "m"))
+        .unwrap_or_else(|| "am".to_owned());
     let opts = Options {
         size,
         mode: Mean::parse(&mode_str),
@@ -257,7 +259,9 @@ mod tests {
         let mut f = Filter::new(opts());
         for _ in 0..8 {
             let out = f.step(frame_of(100));
-            let FrameOut::One(fr) = out else { panic!("expected a frame") };
+            let FrameOut::One(fr) = out else {
+                panic!("expected a frame")
+            };
             assert_eq!(sample(&fr), 100);
         }
     }
@@ -273,7 +277,11 @@ mod tests {
         let FrameOut::One(fr) = f.step(frame_of(200)) else {
             panic!("expected a frame")
         };
-        assert_eq!(sample(&fr), 120, "200 * (120/200) = 120, below the outlier's own 200");
+        assert_eq!(
+            sample(&fr),
+            120,
+            "200 * (120/200) = 120, below the outlier's own 200"
+        );
     }
 
     #[test]

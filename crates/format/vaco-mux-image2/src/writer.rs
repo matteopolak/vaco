@@ -215,8 +215,7 @@ mod tests {
             let nested = dir.join("nested");
             fs::create_dir_all(&nested).unwrap();
             let pattern = nested.join(pattern_name);
-            let mut w =
-                Image2MuxWriter::create(pattern.to_str().unwrap(), options).unwrap();
+            let mut w = Image2MuxWriter::create(pattern.to_str().unwrap(), options).unwrap();
             w.write_frame(b"bytes", None).unwrap();
             assert_eq!(fs::read(&pattern).unwrap(), b"bytes", "{pattern_name}");
         }

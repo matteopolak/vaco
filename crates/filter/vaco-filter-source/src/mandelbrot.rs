@@ -91,13 +91,33 @@ pub(crate) struct Opts {
     pub start_x: f64,
     #[opt(name = "start_y", help = "set the initial y position", default = -0.131_825_9_f64, range = -100.0..=100.0, flags(filtering))]
     pub start_y: f64,
-    #[opt(name = "start_scale", help = "set the initial scale value", default = 3.0, flags(filtering))]
+    #[opt(
+        name = "start_scale",
+        help = "set the initial scale value",
+        default = 3.0,
+        flags(filtering)
+    )]
     pub start_scale: f64,
-    #[opt(name = "end_scale", help = "set the terminal scale value", default = 0.3, flags(filtering))]
+    #[opt(
+        name = "end_scale",
+        help = "set the terminal scale value",
+        default = 0.3,
+        flags(filtering)
+    )]
     pub end_scale: f64,
-    #[opt(name = "end_pts", help = "set the terminal pts value", default = 400.0, flags(filtering))]
+    #[opt(
+        name = "end_pts",
+        help = "set the terminal pts value",
+        default = 400.0,
+        flags(filtering)
+    )]
     pub end_pts: f64,
-    #[opt(name = "bailout", help = "set the bailout value", default = 10.0, flags(filtering))]
+    #[opt(
+        name = "bailout",
+        help = "set the bailout value",
+        default = 10.0,
+        flags(filtering)
+    )]
     pub bailout: f64,
     #[opt(name = "outer", help = "set outer coloring mode", unit = "mandelbrot_outer", default = Outer::NormalizedIterationCount, default_repr = "normalized_iteration_count", flags(filtering))]
     pub outer: Outer,
@@ -109,7 +129,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -149,7 +170,8 @@ pub(crate) fn escape(cx: f64, cy: f64, maxiter: u32, bailout: f64) -> Escape {
             // Smooth escape count: standard normalised-iteration-count
             // formula (Linas Vepstas / common fractal literature).
             let n_f = f64::from(n);
-            let smooth_n = n_f + 1.0 - (abs2.sqrt().ln() / bailout.ln()).ln() / std::f64::consts::LN_2;
+            let smooth_n =
+                n_f + 1.0 - (abs2.sqrt().ln() / bailout.ln()).ln() / std::f64::consts::LN_2;
             return Escape::Escaped { smooth_n };
         }
         let (nzx, nzy) = (zx * zx - zy * zy + cx, 2.0 * zx * zy + cy);
@@ -285,10 +307,16 @@ impl SourceFilter for Source {
                 let cy = self.start_y + (f64::from(yy) / f64::from(h) - 0.5) * scale;
                 if let Some(row) = plane.row_mut(row_idx) {
                     for (x, px) in row.chunks_exact_mut(4).enumerate() {
-                        #[allow(clippy::cast_precision_loss, reason = "pixel coordinates are small")]
+                        #[allow(
+                            clippy::cast_precision_loss,
+                            reason = "pixel coordinates are small"
+                        )]
                         let cx = self.start_x
-                            + (x as f64 / f64::from(w) - 0.5) * scale * (f64::from(w) / f64::from(h));
-                        let (r, g, b) = color_at(cx, cy, self.maxiter, self.bailout, self.outer, self.inner);
+                            + (x as f64 / f64::from(w) - 0.5)
+                                * scale
+                                * (f64::from(w) / f64::from(h));
+                        let (r, g, b) =
+                            color_at(cx, cy, self.maxiter, self.bailout, self.outer, self.inner);
                         if let [pr, pg, pb, pa] = px {
                             *pr = r;
                             *pg = g;

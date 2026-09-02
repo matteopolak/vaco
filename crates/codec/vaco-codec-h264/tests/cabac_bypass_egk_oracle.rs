@@ -76,7 +76,10 @@ fn bypass_egk_round_trips_across_every_realistic_h264_coefficient_value() {
                  realistic value — the 32-bin ceiling should be nowhere \
                  near reachable here"
             );
-            assert_eq!(got, value, "k={k} value={value}: decode_bypass_egk did not round-trip");
+            assert_eq!(
+                got, value,
+                "k={k} value={value}: decode_bypass_egk did not round-trip"
+            );
         }
     }
 }
@@ -148,11 +151,15 @@ fn uegk_round_trips_prefix_and_bypass_egk_suffix_together() {
         let mut dec_ctx = ContextModel::init_h264(0, 41, 26);
         let got = dec.decode_uegk(&mut dec_ctx, u_coff, k, false);
         assert_eq!(
-            got, value.cast_signed(),
+            got,
+            value.cast_signed(),
             "value={value}: decode_uegk did not round-trip (malformed={})",
             dec.malformed()
         );
-        assert!(!dec.malformed(), "value={value}: engine reported malformed on a well-formed stream");
+        assert!(
+            !dec.malformed(),
+            "value={value}: engine reported malformed on a well-formed stream"
+        );
     }
 }
 
@@ -176,7 +183,10 @@ fn bypass_single_bit_and_bypass_bits_round_trip() {
         for i in 0..8 {
             got |= dec.decode_bypass() << i;
         }
-        assert_eq!(got, pattern, "pattern={pattern:#010b}: decode_bypass did not round-trip bit-for-bit");
+        assert_eq!(
+            got, pattern,
+            "pattern={pattern:#010b}: decode_bypass did not round-trip bit-for-bit"
+        );
         assert!(!dec.malformed());
     }
 
@@ -188,7 +198,10 @@ fn bypass_single_bit_and_bypass_bits_round_trip() {
             let bytes = enc.finish();
             let mut dec = CabacDecoder::new(&bytes);
             let got = dec.decode_bypass_bits(n);
-            assert_eq!(got, value, "n={n} value={value}: decode_bypass_bits did not round-trip");
+            assert_eq!(
+                got, value,
+                "n={n} value={value}: decode_bypass_bits did not round-trip"
+            );
             assert!(!dec.malformed());
         }
     }

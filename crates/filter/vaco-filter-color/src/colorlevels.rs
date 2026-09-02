@@ -52,7 +52,10 @@ use vaco_filter_graph::registry::{Instance, Instantiate};
 use crate::common;
 use crate::sample;
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "colorlevels",
@@ -140,17 +143,32 @@ impl Filter {
         let big_endian = format.is_big_endian();
         let n = format.component_count().min(4);
         for ch in 0..n {
-            let Some(comp) = sample::component(format, ch) else { continue };
-            let Some(&(imin, imax, omin, omax)) = self.ranges.get(ch) else { continue };
+            let Some(comp) = sample::component(format, ch) else {
+                continue;
+            };
+            let Some(&(imin, imax, omin, omax)) = self.ranges.get(ch) else {
+                continue;
+            };
             let max = f64::from(sample::max_value(comp));
             let denom = imax - imin;
-            let Some(mut plane) = input.plane_mut(comp.plane as usize) else { continue };
-            let w = plane.row_bytes().checked_div(usize::from(comp.step.max(1))).unwrap_or(0);
+            let Some(mut plane) = input.plane_mut(comp.plane as usize) else {
+                continue;
+            };
+            let w = plane
+                .row_bytes()
+                .checked_div(usize::from(comp.step.max(1)))
+                .unwrap_or(0);
             for y in 0..plane.rows() {
-                let Some(row) = plane.row_mut(y) else { continue };
+                let Some(row) = plane.row_mut(y) else {
+                    continue;
+                };
                 for x in 0..w {
                     let v = f64::from(sample::read(row, x, comp, big_endian)) / max;
-                    let t = if denom.abs() < 1e-12 { 0.0 } else { ((v - imin) / denom).clamp(0.0, 1.0) };
+                    let t = if denom.abs() < 1e-12 {
+                        0.0
+                    } else {
+                        ((v - imin) / denom).clamp(0.0, 1.0)
+                    };
                     let out = (omin + t * (omax - omin)) * max;
                     #[allow(
                         clippy::cast_possible_truncation,
@@ -180,7 +198,9 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
             "colorlevels: `preserve` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string(),
         );
     }
-    let set = FormatSet::video_list(common::formats_where(|f| f.is_rgb() && sample::is_addressable(f)));
+    let set = FormatSet::video_list(common::formats_where(|f| {
+        f.is_rgb() && sample::is_addressable(f)
+    }));
     Ok(Instance {
         desc: DESC,
         formats: NodeFormats::uniform(1, 1, MediaType::Video, &set, req.instance),
@@ -196,7 +216,11 @@ mod tests {
     use vaco_pixfmt::PixFmt;
 
     fn opts_with_output_range(romin: f64, romax: f64) -> Opts {
-        Opts { romin, romax, ..Opts::default() }
+        Opts {
+            romin,
+            romax,
+            ..Opts::default()
+        }
     }
 
     #[test]
@@ -241,7 +265,11 @@ mod tests {
         // 255, not something beyond it.
         let mut budget = Budget::new(Limits::strict());
         let mut frame = Frame::alloc_video(&mut budget, PixFmt::Rgb24, 1, 1).unwrap();
-        let o = Opts { rimin: 0.2, rimax: 0.8, ..Opts::default() };
+        let o = Opts {
+            rimin: 0.2,
+            rimax: 0.8,
+            ..Opts::default()
+        };
         {
             let mut p = frame.plane_mut(0).unwrap();
             let row = p.row_mut(0).unwrap();

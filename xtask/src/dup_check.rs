@@ -516,18 +516,16 @@ const DISTINCT: &[(&str, &str)] = &[
 ///
 /// Distinct from [`DISTINCT`]: these are the same concept twice, tracked so they
 /// cannot be forgotten and cannot grow silently.
-const KNOWN_DUPLICATE: &[(&str, &str)] = &[
-    (
-        "CommentIter",
-        "vaco-parse-opus (`OpusTags`, RFC 7845 §5.2) and \
+const KNOWN_DUPLICATE: &[(&str, &str)] = &[(
+    "CommentIter",
+    "vaco-parse-opus (`OpusTags`, RFC 7845 §5.2) and \
          vaco-format-vorbiscomment (the Vorbis/FLAC vendor-plus-tag-list \
          shape, Xiph Vorbis I §5.2) both iterate a length-prefixed \
          `TAG=value` string list — the same wire shape, read by two \
          independent readers. Not merged: `vaco-parse-opus` predates this \
          work package and editing it is out of scope here. Recorded rather \
          than silently duplicated a third time.",
-    ),
-];
+)];
 
 // Both original entries are resolved. `CancelToken` and `Disposition` now live
 // in `vaco-core`, below every crate that wanted them, and the old spellings are

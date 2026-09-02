@@ -99,9 +99,7 @@ pub enum FrameData {
     /// the three in-flight T2-13 subtitle-codec crates
     /// (`vaco-codec-subtitle-bitmap`/`-cc`/`-teletext`) are meant to be
     /// wired to, not a claim that any of them are wired today.
-    Subtitle {
-        rects: SmallVec<[SubtitleRect; 2]>,
-    },
+    Subtitle { rects: SmallVec<[SubtitleRect; 2]> },
 }
 
 #[derive(Debug, Clone)]

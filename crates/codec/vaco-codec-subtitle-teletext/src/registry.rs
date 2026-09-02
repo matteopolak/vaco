@@ -200,11 +200,7 @@ mod tests {
 
     fn parity_byte(data: u8) -> u8 {
         let d = data & 0x7F;
-        if d.count_ones() % 2 == 1 {
-            d
-        } else {
-            d | 0x80
-        }
+        if d.count_ones() % 2 == 1 { d } else { d | 0x80 }
     }
 
     fn hamming_byte(nibble: u8) -> u8 {
@@ -277,11 +273,17 @@ mod tests {
         let mut budget = Budget::new(Limits::permissive());
         let mut pkt = Packet::from_slice(&mut budget, &header).unwrap();
         decoder.send(Some(&pkt)).unwrap();
-        assert!(matches!(decoder.receive(), Err(vaco_core::Error::NeedMoreInput)));
+        assert!(matches!(
+            decoder.receive(),
+            Err(vaco_core::Error::NeedMoreInput)
+        ));
 
         pkt = Packet::from_slice(&mut budget, &row).unwrap();
         decoder.send(Some(&pkt)).unwrap();
-        assert!(matches!(decoder.receive(), Err(vaco_core::Error::NeedMoreInput)));
+        assert!(matches!(
+            decoder.receive(),
+            Err(vaco_core::Error::NeedMoreInput)
+        ));
 
         // The frame's timing comes from whichever packet's `push` call
         // caused the page to finish assembling (the *next* header, per
@@ -311,7 +313,10 @@ mod tests {
         let mut budget = Budget::new(Limits::permissive());
         let pkt = Packet::from_slice(&mut budget, &header).unwrap();
         decoder.send(Some(&pkt)).unwrap();
-        assert!(matches!(decoder.receive(), Err(vaco_core::Error::NeedMoreInput)));
+        assert!(matches!(
+            decoder.receive(),
+            Err(vaco_core::Error::NeedMoreInput)
+        ));
 
         decoder.send(None).unwrap();
         let frame = decoder.receive();

@@ -135,7 +135,9 @@ impl PlaneBuf {
 
     pub(crate) fn write(&self, plane: &mut PlaneMut<'_>, bytes: usize) {
         for y in 0..self.height {
-            let Some(row) = plane.row_mut(y) else { continue };
+            let Some(row) = plane.row_mut(y) else {
+                continue;
+            };
             for x in 0..self.width {
                 let idx = y.saturating_mul(self.width).saturating_add(x);
                 let v = self.data.get(idx).copied().unwrap_or(0.0);

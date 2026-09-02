@@ -51,8 +51,7 @@ fn cases() -> Vec<MecmpCase> {
             let max = vec![255u8; len];
             let ramp: Vec<u8> = (0..len).map(|i| (i % 256) as u8).collect();
             let reverse_ramp: Vec<u8> = ramp.iter().rev().copied().collect();
-            let alternating: Vec<u8> =
-                (0..len).map(|i| if i % 2 == 0 { 0 } else { 255 }).collect();
+            let alternating: Vec<u8> = (0..len).map(|i| if i % 2 == 0 { 0 } else { 255 }).collect();
             let boundary_tiled: Vec<u8> = (0..len)
                 .map(|i| *boundaries.get(i % boundaries.len().max(1)).unwrap_or(&0))
                 .collect();

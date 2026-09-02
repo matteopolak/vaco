@@ -99,7 +99,12 @@ fn set_at<T: Copy>(v: &mut [T], idx: usize, value: T) {
     }
 }
 
-fn sample(plane: &ReconPlane<'_>, x: i32, y: i32, is_intra_neighbor: &impl Fn(i32, i32) -> bool) -> (bool, u16) {
+fn sample(
+    plane: &ReconPlane<'_>,
+    x: i32,
+    y: i32,
+    is_intra_neighbor: &impl Fn(i32, i32) -> bool,
+) -> (bool, u16) {
     if plane.is_ready(x, y) && is_intra_neighbor(x, y) {
         let (Ok(ux), Ok(uy)) = (usize::try_from(x), usize::try_from(y)) else {
             return (false, 0);
@@ -120,7 +125,9 @@ fn substitute(line: &mut [u16], avail: &[bool], bit_depth: u32) {
         return;
     }
     if !avail.first().copied().unwrap_or(false) {
-        let Some(j) = avail.iter().position(|&a| a) else { return };
+        let Some(j) = avail.iter().position(|&a| a) else {
+            return;
+        };
         let v = line.get(j).copied().unwrap_or(0);
         if let Some(slice) = line.get_mut(0..j) {
             slice.fill(v);
@@ -150,7 +157,11 @@ fn left_at(line: &[u16], size: usize, i: i32) -> u16 {
         return line.get(2 * size).copied().unwrap_or(0);
     }
     let idx = 2 * iz(size) - 1 - i;
-    usize::try_from(idx).ok().and_then(|k| line.get(k)).copied().unwrap_or(0)
+    usize::try_from(idx)
+        .ok()
+        .and_then(|k| line.get(k))
+        .copied()
+        .unwrap_or(0)
 }
 
 /// Whether §8.4.4.2.3's reference-sample smoothing filter applies to this
@@ -163,7 +174,9 @@ pub(crate) fn should_filter(mode: u8, size: usize, is_luma: bool) -> bool {
     if !is_luma || mode == DC_IDX || size < 4 {
         return false;
     }
-    let diff = (i32::from(mode) - i32::from(HOR_IDX)).abs().min((i32::from(mode) - i32::from(VER_IDX)).abs());
+    let diff = (i32::from(mode) - i32::from(HOR_IDX))
+        .abs()
+        .min((i32::from(mode) - i32::from(VER_IDX)).abs());
     let size_index = size.trailing_zeros().saturating_sub(2) as usize;
     let threshold = FILTER_THRESHOLD.get(size_index).copied().unwrap_or(0);
     diff > threshold
@@ -173,7 +186,12 @@ pub(crate) fn should_filter(mode: u8, size: usize, is_luma: bool) -> bool {
 /// intra-smoothing bilinear replacement for 32x32 luma
 /// (`useStrongIntraSmoothing`), applied to a fresh copy of `line`.
 #[must_use]
-pub(crate) fn filter_reference_line(line: &[u16], size: usize, bit_depth: u32, strong_smoothing_enabled: bool) -> Vec<u16> {
+pub(crate) fn filter_reference_line(
+    line: &[u16],
+    size: usize,
+    bit_depth: u32,
+    strong_smoothing_enabled: bool,
+) -> Vec<u16> {
     let mut out = line.to_vec();
     let n = size;
     let bottom_left = line.first().copied().unwrap_or(0);
@@ -185,8 +203,10 @@ pub(crate) fn filter_reference_line(line: &[u16], size: usize, bit_depth: u32, s
         let threshold = 1i32 << bit_depth.saturating_sub(5);
         let mid_left = i32::from(left_at(line, n, iz(n) - 1));
         let mid_top = i32::from(top_at(line, n, iz(n) - 1));
-        let bilinear_left = (i32::from(bottom_left) + i32::from(top_left) - 2 * mid_left).abs() < threshold;
-        let bilinear_above = (i32::from(top_left) + i32::from(top_right) - 2 * mid_top).abs() < threshold;
+        let bilinear_left =
+            (i32::from(bottom_left) + i32::from(top_left) - 2 * mid_left).abs() < threshold;
+        let bilinear_above =
+            (i32::from(top_left) + i32::from(top_right) - 2 * mid_top).abs() < threshold;
         strong = bilinear_left && bilinear_above;
     }
 
@@ -195,14 +215,18 @@ pub(crate) fn filter_reference_line(line: &[u16], size: usize, bit_depth: u32, s
         let n64 = i64::try_from(n).unwrap_or(0);
         for i in 1..2 * n {
             let i64_ = i64::try_from(i).unwrap_or(0);
-            let v = (((2 * n64 - i64_) * i64::from(bottom_left)) + (i64_ * i64::from(top_left)) + n64) >> shift;
+            let v =
+                (((2 * n64 - i64_) * i64::from(bottom_left)) + (i64_ * i64::from(top_left)) + n64)
+                    >> shift;
             if let Some(slot) = out.get_mut(i) {
                 *slot = u16::try_from(v).unwrap_or(0);
             }
         }
         for i in 1..2 * n {
             let i64_ = i64::try_from(i).unwrap_or(0);
-            let v = (((2 * n64 - i64_) * i64::from(top_left)) + (i64_ * i64::from(top_right)) + n64) >> shift;
+            let v =
+                (((2 * n64 - i64_) * i64::from(top_left)) + (i64_ * i64::from(top_right)) + n64)
+                    >> shift;
             if let Some(slot) = out.get_mut(2 * n + i) {
                 *slot = u16::try_from(v).unwrap_or(0);
             }
@@ -252,7 +276,13 @@ pub(crate) fn predict_planar(line: &[u16], size: usize, dst: &mut [u16]) {
 }
 
 /// `INTRA_DC` plus, for luma, §8.4.4.2.5's edge-smoothing post-filter.
-pub(crate) fn predict_dc(line: &[u16], size: usize, bit_depth: u32, is_luma: bool, dst: &mut [u16]) {
+pub(crate) fn predict_dc(
+    line: &[u16],
+    size: usize,
+    bit_depth: u32,
+    is_luma: bool,
+    dst: &mut [u16],
+) {
     let n = size;
     let n_i = iz(n);
     let top: Vec<u16> = (0..n_i).map(|i| top_at(line, n, i)).collect();
@@ -265,18 +295,24 @@ pub(crate) fn predict_dc(line: &[u16], size: usize, bit_depth: u32, is_luma: boo
         if let Some(v) = dst.get_mut(0) {
             let t = i32::from(top_at(line, n, 0));
             let l = i32::from(left_at(line, n, 0));
-            *v = u16::try_from((t + l + 2 * i32::from(dc) + 2) >> 2).unwrap_or(0).min(max as u16);
+            *v = u16::try_from((t + l + 2 * i32::from(dc) + 2) >> 2)
+                .unwrap_or(0)
+                .min(max as u16);
         }
         for x in 1..n {
             if let Some(v) = dst.get_mut(x) {
                 let t = i32::from(top_at(line, n, iz(x)));
-                *v = u16::try_from((t + 3 * i32::from(dc) + 2) >> 2).unwrap_or(0).min(max as u16);
+                *v = u16::try_from((t + 3 * i32::from(dc) + 2) >> 2)
+                    .unwrap_or(0)
+                    .min(max as u16);
             }
         }
         for y in 1..n {
             if let Some(v) = dst.get_mut(y * n) {
                 let l = i32::from(left_at(line, n, iz(y)));
-                *v = u16::try_from((l + 3 * i32::from(dc) + 2) >> 2).unwrap_or(0).min(max as u16);
+                *v = u16::try_from((l + 3 * i32::from(dc) + 2) >> 2)
+                    .unwrap_or(0)
+                    .min(max as u16);
             }
         }
     }
@@ -284,10 +320,21 @@ pub(crate) fn predict_dc(line: &[u16], size: usize, bit_depth: u32, is_luma: boo
 
 /// The 33 angular modes, §8.4.4.2.6. `mode` is 2..=34 (`DC_IDX`/`PLANAR_IDX`
 /// are handled by the other two functions).
-pub(crate) fn predict_angular(line: &[u16], size: usize, mode: u8, bit_depth: u32, is_luma: bool, dst: &mut [u16]) {
+pub(crate) fn predict_angular(
+    line: &[u16],
+    size: usize,
+    mode: u8,
+    bit_depth: u32,
+    is_luma: bool,
+    dst: &mut [u16],
+) {
     let n = size;
     let is_ver = mode >= 18;
-    let angle_mode: i32 = if is_ver { i32::from(mode) - i32::from(VER_IDX) } else { -(i32::from(mode) - i32::from(HOR_IDX)) };
+    let angle_mode: i32 = if is_ver {
+        i32::from(mode) - i32::from(VER_IDX)
+    } else {
+        -(i32::from(mode) - i32::from(HOR_IDX))
+    };
     let abs_mode = usize::try_from(angle_mode.unsigned_abs()).unwrap_or(0);
     let angle = angle_mode.signum() * ANG_TABLE.get(abs_mode).copied().unwrap_or(0);
     let inv_angle = INV_ANG_TABLE.get(abs_mode).copied().unwrap_or(0);
@@ -295,8 +342,20 @@ pub(crate) fn predict_angular(line: &[u16], size: usize, mode: u8, bit_depth: u3
     // `main(k)`/`side(k)` for k in -(2n).. 2n: main is refAbove for vertical
     // modes, refLeft for horizontal; side is the other one. `main(0)` and
     // `side(0)` are both the above-left corner.
-    let main = |k: i32| if is_ver { top_at(line, n, k - 1) } else { left_at(line, n, k - 1) };
-    let side = |k: i32| if is_ver { left_at(line, n, k - 1) } else { top_at(line, n, k - 1) };
+    let main = |k: i32| {
+        if is_ver {
+            top_at(line, n, k - 1)
+        } else {
+            left_at(line, n, k - 1)
+        }
+    };
+    let side = |k: i32| {
+        if is_ver {
+            left_at(line, n, k - 1)
+        } else {
+            top_at(line, n, k - 1)
+        }
+    };
 
     // For angle < 0, extend `main` backward via `side`, HM's own
     // `invAngleSum` walk (rounding constant 128, an 8-bit fixed-point
@@ -319,7 +378,11 @@ pub(crate) fn predict_angular(line: &[u16], size: usize, mode: u8, bit_depth: u3
             i32::from(main(k))
         } else {
             let idx = iz(ext_needed) + k;
-            usize::try_from(idx).ok().and_then(|i| main_ext.get(i)).copied().unwrap_or(0)
+            usize::try_from(idx)
+                .ok()
+                .and_then(|i| main_ext.get(i))
+                .copied()
+                .unwrap_or(0)
         }
     };
 
@@ -365,7 +428,14 @@ pub(crate) fn predict_angular(line: &[u16], size: usize, mode: u8, bit_depth: u3
 }
 
 /// Dispatch on `mode` (0..=34) and compose the whole prediction block.
-pub(crate) fn predict(mode: u8, line: &[u16], size: usize, bit_depth: u32, is_luma: bool, dst: &mut [u16]) {
+pub(crate) fn predict(
+    mode: u8,
+    line: &[u16],
+    size: usize,
+    bit_depth: u32,
+    is_luma: bool,
+    dst: &mut [u16],
+) {
     match mode {
         PLANAR_IDX => predict_planar(line, size, dst),
         DC_IDX => predict_dc(line, size, bit_depth, is_luma, dst),

@@ -49,7 +49,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "lut2", help = "Compute and apply a lookup table from two video inputs")]
+#[options(
+    name = "lut2",
+    help = "Compute and apply a lookup table from two video inputs"
+)]
 pub(crate) struct Opts {
     #[opt(name = "c0", help = "set component #0 expression", default = "x".to_owned(), flags(video, filtering))]
     pub c0: String,
@@ -85,7 +88,9 @@ pub(crate) struct Lut2 {
 impl Lut2 {
     fn new(o: &Opts) -> std::result::Result<Self, String> {
         let bindings = Bindings::new(VARS);
-        let parse = |s: &str| Expr::parse(s, &bindings).map_err(|e| format!("lut2: bad expression `{s}`: {e}"));
+        let parse = |s: &str| {
+            Expr::parse(s, &bindings).map_err(|e| format!("lut2: bad expression `{s}`: {e}"))
+        };
         Ok(Self {
             exprs: [parse(&o.c0)?, parse(&o.c1)?, parse(&o.c2)?, parse(&o.c3)?],
         })
@@ -101,7 +106,13 @@ impl FrameSyncFilter for Lut2 {
         let (Some(main), Some(second)) = (event.take(0), event.get(1).cloned()) else {
             return Ok(FrameOut::None);
         };
-        let FrameData::Video { format, width, height, .. } = main.data else {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = main.data
+        else {
             return Ok(FrameOut::One(main));
         };
         if !sample::is_addressable(format) {
@@ -184,7 +195,12 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::float_cmp, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::float_cmp,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 

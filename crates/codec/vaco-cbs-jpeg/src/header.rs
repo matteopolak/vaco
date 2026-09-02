@@ -262,12 +262,15 @@ mod tests {
         assert_eq!(h.precision, 8);
         assert_eq!((h.width, h.height), (64, 48));
         assert_eq!(h.components.len(), 3);
-        assert_eq!(h.components[0], FrameComponent {
-            id: 1,
-            h: 2,
-            v: 2,
-            quant_table: 0,
-        });
+        assert_eq!(
+            h.components[0],
+            FrameComponent {
+                id: 1,
+                h: 2,
+                v: 2,
+                quant_table: 0,
+            }
+        );
         assert_eq!(h.write(), REAL_SOF0_PAYLOAD);
     }
 
@@ -334,7 +337,11 @@ mod tests {
         assert_eq!(tables.len(), 1);
         assert_eq!(tables[0].precision, 0xF);
         assert_eq!(tables[0].id, 0xF);
-        assert_eq!(write_dqt(&tables), payload, "the reserved nibble must survive whole");
+        assert_eq!(
+            write_dqt(&tables),
+            payload,
+            "the reserved nibble must survive whole"
+        );
     }
 
     /// The real four-table `DHT` from the `baseline.jpg` fixture (DC/AC for

@@ -121,7 +121,11 @@ mod tests {
 
     #[test]
     fn round_trips_aes128() {
-        let key = derive_key(b"Reliable Internet Stream Transport", 0x5249_5354, KeyBits::Aes128);
+        let key = derive_key(
+            b"Reliable Internet Stream Transport",
+            0x5249_5354,
+            KeyBits::Aes128,
+        );
         let mut data = b"a lossy link is not a reason to give up on delivery".to_vec();
         let original = data.clone();
         apply_keystream(&key, 7, &mut data).unwrap();
@@ -132,7 +136,11 @@ mod tests {
 
     #[test]
     fn round_trips_aes256() {
-        let key = derive_key(b"Reliable Internet Stream Transport", 0x5249_5354, KeyBits::Aes256);
+        let key = derive_key(
+            b"Reliable Internet Stream Transport",
+            0x5249_5354,
+            KeyBits::Aes256,
+        );
         assert_eq!(key.len(), 32);
         let mut data = vec![0xAAu8; 100];
         let original = data.clone();

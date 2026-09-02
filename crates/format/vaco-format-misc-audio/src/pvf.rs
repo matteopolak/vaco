@@ -108,11 +108,18 @@ impl PvfDemuxer {
             32 => (SampleFmt::S32, CodecId::PcmS32be),
             _ => (SampleFmt::S16, CodecId::PcmS16be),
         };
-        #[allow(clippy::integer_division, reason = "bits is checked above to be 8/16/32; exact")]
+        #[allow(
+            clippy::integer_division,
+            reason = "bits is checked above to be 8/16/32; exact"
+        )]
         let bytes_per_sample = bits / 8;
         let data_start = io.pos();
 
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, sample_rate.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, sample_rate.cast_signed()),
+        );
         let mut params = vaco_codec_core::CodecParameters::audio();
         params.codec_id = Some(codec_id);
         if let Some(audio) = params.audio.as_mut() {

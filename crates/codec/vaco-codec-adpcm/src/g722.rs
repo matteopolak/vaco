@@ -77,7 +77,11 @@ impl Band {
             diff = -diff;
         }
         self.predictor += diff;
-        let mult = if magnitude == 0 { 220 } else { 256 + magnitude.cast_signed() * 32 };
+        let mult = if magnitude == 0 {
+            220
+        } else {
+            256 + magnitude.cast_signed() * 32
+        };
         self.step = ((self.step * mult) >> 8).clamp(2, 8192);
         self.predictor
     }
@@ -85,7 +89,11 @@ impl Band {
     fn encode_sample(&mut self, sample: i32) -> u32 {
         let mag_bits = self.bits - 1;
         let diff = sample - self.predictor;
-        let (sign, mut mag) = if diff < 0 { (1u32, -diff) } else { (0u32, diff) };
+        let (sign, mut mag) = if diff < 0 {
+            (1u32, -diff)
+        } else {
+            (0u32, diff)
+        };
         let mut code = 0u32;
         let mut tmp = self.step;
         for i in (0..mag_bits).rev() {

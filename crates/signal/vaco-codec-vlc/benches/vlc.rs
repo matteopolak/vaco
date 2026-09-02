@@ -70,16 +70,18 @@ fn scan(bencher: Bencher<'_, '_>) {
     let table = VlcTable::new(&entries);
     let bytes = stream_of(&entries, REPS);
     let n = REPS * entries.len();
-    bencher.counter(divan::counter::ItemsCount::new(n)).bench_local(|| {
-        let mut r = BitReader::new(black_box(&bytes));
-        let mut count = 0u32;
-        for _ in 0..n {
-            if let Some(sym) = table.decode(&mut r) {
-                count = count.wrapping_add(black_box(sym));
+    bencher
+        .counter(divan::counter::ItemsCount::new(n))
+        .bench_local(|| {
+            let mut r = BitReader::new(black_box(&bytes));
+            let mut count = 0u32;
+            for _ in 0..n {
+                if let Some(sym) = table.decode(&mut r) {
+                    count = count.wrapping_add(black_box(sym));
+                }
             }
-        }
-        black_box(count)
-    });
+            black_box(count)
+        });
 }
 
 #[divan::bench]
@@ -89,14 +91,16 @@ fn lut(bencher: Bencher<'_, '_>) {
     let lut = table.build_lut();
     let bytes = stream_of(&entries, REPS);
     let n = REPS * entries.len();
-    bencher.counter(divan::counter::ItemsCount::new(n)).bench_local(|| {
-        let mut r = BitReader::new(black_box(&bytes));
-        let mut count = 0u32;
-        for _ in 0..n {
-            if let Some(sym) = table.decode_with_lut(&mut r, black_box(&lut)) {
-                count = count.wrapping_add(black_box(sym));
+    bencher
+        .counter(divan::counter::ItemsCount::new(n))
+        .bench_local(|| {
+            let mut r = BitReader::new(black_box(&bytes));
+            let mut count = 0u32;
+            for _ in 0..n {
+                if let Some(sym) = table.decode_with_lut(&mut r, black_box(&lut)) {
+                    count = count.wrapping_add(black_box(sym));
+                }
             }
-        }
-        black_box(count)
-    });
+            black_box(count)
+        });
 }

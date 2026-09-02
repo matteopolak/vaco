@@ -24,7 +24,9 @@ use std::collections::VecDeque;
 use vaco_bsf_core::{BsfDesc, MappedFilter, PacketMap};
 use vaco_codec_core::{BitstreamFilter, CodecId, CodecParameters};
 use vaco_core::Result;
-use vaco_format_nalu::{Framing, HeaderKind, LengthSize, NalHeader, convert::length_prefixed_to_annexb, units};
+use vaco_format_nalu::{
+    Framing, HeaderKind, LengthSize, NalHeader, convert::length_prefixed_to_annexb, units,
+};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_parse_hevc::HevcDecoderConfigurationRecord;
@@ -100,7 +102,12 @@ impl PacketMap for HevcMp4ToAnnexb {
         };
 
         let mut annexb = Vec::new();
-        length_prefixed_to_annexb(p.payload(), length_size, &mut annexb, &mut self.convert_budget)?;
+        length_prefixed_to_annexb(
+            p.payload(),
+            length_size,
+            &mut annexb,
+            &mut self.convert_budget,
+        )?;
 
         let final_bytes = if self.param_sets.is_empty() {
             annexb
@@ -228,10 +235,8 @@ mod tests {
         let annexb = [0, 0, 0, 1, 0x40, 0x01, 0, 0, 0, 1, 0x26, 0x01];
         let params = CodecParameters::video().with_codec(CodecId::Hevc);
         let mut f = (DESC.build)(&params).unwrap();
-        f.send_packet(Some(
-            &Packet::from_slice(&mut budget(), &annexb).unwrap(),
-        ))
-        .unwrap();
+        f.send_packet(Some(&Packet::from_slice(&mut budget(), &annexb).unwrap()))
+            .unwrap();
         assert_eq!(f.receive_packet().unwrap().payload(), &annexb);
     }
 

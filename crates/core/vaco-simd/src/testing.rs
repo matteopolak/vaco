@@ -191,8 +191,7 @@ where
         for i in 0..n {
             for j in [i, n - 1 - i, (i + 1) % n] {
                 for k in [n - 1 - i, (i + 2) % n] {
-                    let (Some(mask), Some(a), Some(b)) =
-                        (pats.get(i), pats.get(j), pats.get(k))
+                    let (Some(mask), Some(a), Some(b)) = (pats.get(i), pats.get(j), pats.get(k))
                     else {
                         // `i`, `j` and `k` are all constructed from `0..n`
                         // modulo/subtraction arithmetic above, so this is

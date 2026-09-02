@@ -159,7 +159,11 @@ impl<'a> Pair<'a> {
         ours: quality::Signal<'a>,
         theirs: quality::Signal<'a>,
     ) -> Self {
-        self.signals = Some(quality::QualitySignals { source, ours, theirs });
+        self.signals = Some(quality::QualitySignals {
+            source,
+            ours,
+            theirs,
+        });
         self
     }
 }

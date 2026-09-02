@@ -32,10 +32,7 @@ const MARKER_MASK: u8 = 0xE0;
 /// do not exactly fill the region ahead of the index) — a caller should treat
 /// this the same as "malformed input", not silently fall back to "one frame",
 /// which would hand a decoder the index bytes as if they were coded data.
-pub fn sub_frame_ranges(
-    data: &[u8],
-    budget: &mut Budget,
-) -> Result<Option<Vec<(usize, usize)>>> {
+pub fn sub_frame_ranges(data: &[u8], budget: &mut Budget) -> Result<Option<Vec<(usize, usize)>>> {
     let Some(&marker) = data.last() else {
         return Ok(None);
     };
@@ -45,9 +42,11 @@ pub fn sub_frame_ranges(
     let bytes_per_size = usize::from((marker >> 3) & 0x3) + 1;
     let frame_count = usize::from(marker & 0x7) + 1;
     let index_size = 2usize
-        .checked_add(bytes_per_size.checked_mul(frame_count).ok_or(
-            Error::InvalidData("vp9 superframe index: size overflow"),
-        )?)
+        .checked_add(
+            bytes_per_size
+                .checked_mul(frame_count)
+                .ok_or(Error::InvalidData("vp9 superframe index: size overflow"))?,
+        )
         .ok_or(Error::InvalidData("vp9 superframe index: size overflow"))?;
     if index_size > data.len() {
         // Not enough room for an index this marker describes: this is an
@@ -120,7 +119,8 @@ pub fn write_index(out: &mut Vec<u8>, budget: &mut Budget, frame_lens: &[usize])
     };
     let index_len = 2 + bytes_per_size * frame_lens.len();
     budget.check(index_len as u64)?;
-    let marker = MARKER_PATTERN | (((bytes_per_size - 1) as u8) << 3) | (frame_lens.len() - 1) as u8;
+    let marker =
+        MARKER_PATTERN | (((bytes_per_size - 1) as u8) << 3) | (frame_lens.len() - 1) as u8;
     out.push(marker);
     for &len in frame_lens {
         let len = len as u64;
@@ -165,7 +165,9 @@ mod tests {
     fn a_two_frame_index_yields_both_ranges() {
         let buf = built(&[10, 20]);
         let mut budget = Budget::new(Limits::strict());
-        let ranges = sub_frame_ranges(&buf, &mut budget).expect("no error").expect("an index");
+        let ranges = sub_frame_ranges(&buf, &mut budget)
+            .expect("no error")
+            .expect("an index");
         assert_eq!(ranges, vec![(0, 10), (10, 30)]);
     }
 
@@ -180,7 +182,10 @@ mod tests {
     fn a_short_buffer_never_panics() {
         let mut budget = Budget::new(Limits::strict());
         assert_eq!(sub_frame_ranges(&[], &mut budget).expect("no error"), None);
-        assert_eq!(sub_frame_ranges(&[0xC0], &mut budget).expect("no error"), None);
+        assert_eq!(
+            sub_frame_ranges(&[0xC0], &mut budget).expect("no error"),
+            None
+        );
     }
 
     #[test]
@@ -191,7 +196,9 @@ mod tests {
         out.extend(std::iter::repeat_n(0xCCu8, 30));
         let mut budget = Budget::new(Limits::strict());
         write_index(&mut out, &mut budget, &lens).expect("writes");
-        let ranges = sub_frame_ranges(&out, &mut budget).expect("no error").expect("an index");
+        let ranges = sub_frame_ranges(&out, &mut budget)
+            .expect("no error")
+            .expect("an index");
         assert_eq!(ranges, vec![(0, 100), (100, 350), (350, 380)]);
     }
 
@@ -207,7 +214,9 @@ mod tests {
         let mut out = vec![0u8; 70_010];
         let mut budget = Budget::new(Limits::strict());
         write_index(&mut out, &mut budget, &lens).expect("writes");
-        let ranges = sub_frame_ranges(&out, &mut budget).expect("no error").expect("an index");
+        let ranges = sub_frame_ranges(&out, &mut budget)
+            .expect("no error")
+            .expect("an index");
         assert_eq!(ranges, vec![(0, 70_000), (70_000, 70_010)]);
     }
 }

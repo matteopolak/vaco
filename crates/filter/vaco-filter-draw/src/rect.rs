@@ -20,7 +20,12 @@ impl Rect {
     /// The whole frame.
     #[must_use]
     pub const fn full(width: u32, height: u32) -> Self {
-        Self { x: 0, y: 0, w: width, h: height }
+        Self {
+            x: 0,
+            y: 0,
+            w: width,
+            h: height,
+        }
     }
 
     /// Clip to `0..frame_w` × `0..frame_h`, shrinking `w`/`h` rather than
@@ -50,11 +55,7 @@ impl Rect {
     #[must_use]
     pub fn on_plane(self, fmt: PixFmt, plane: u8, frame_w: u32, frame_h: u32) -> Self {
         let (log2_w, log2_h) = fmt.log2_chroma();
-        let is_chroma = fmt
-            .descriptor()
-            .components
-            .iter()
-            .any(|c| c.plane == plane)
+        let is_chroma = fmt.descriptor().components.iter().any(|c| c.plane == plane)
             && plane_is_chroma(fmt, plane);
         let (sw, sh) = if is_chroma { (log2_w, log2_h) } else { (0, 0) };
         let x0 = self.x >> sw;
@@ -86,7 +87,12 @@ impl Rect {
         if t.saturating_mul(2) >= self.w || t.saturating_mul(2) >= self.h {
             return vec![self];
         }
-        let top = Self { x: self.x, y: self.y, w: self.w, h: t };
+        let top = Self {
+            x: self.x,
+            y: self.y,
+            w: self.w,
+            h: t,
+        };
         let bottom = Self {
             x: self.x,
             y: self.y + self.h - t,
@@ -114,7 +120,11 @@ fn plane_is_chroma(fmt: PixFmt, plane: u8) -> bool {
     // 1 or 2 (U/Cb or V/Cr) of a non-RGB format — RGB has no chroma planes
     // even though `gbrp`'s green plane is physically plane 0's near-neighbour
     // in some formats, so the RGB check comes first.
-    if fmt.descriptor().flags.contains(vaco_pixfmt::PixFmtFlags::RGB) {
+    if fmt
+        .descriptor()
+        .flags
+        .contains(vaco_pixfmt::PixFmtFlags::RGB)
+    {
         return false;
     }
     fmt.descriptor()
@@ -125,64 +135,136 @@ fn plane_is_chroma(fmt: PixFmt, plane: u8) -> bool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
     #[test]
     fn clip_shrinks_rather_than_moves() {
-        let r = Rect { x: 5, y: 5, w: 100, h: 100 }.clip(10, 10);
-        assert_eq!(r, Rect { x: 5, y: 5, w: 5, h: 5 });
+        let r = Rect {
+            x: 5,
+            y: 5,
+            w: 100,
+            h: 100,
+        }
+        .clip(10, 10);
+        assert_eq!(
+            r,
+            Rect {
+                x: 5,
+                y: 5,
+                w: 5,
+                h: 5
+            }
+        );
     }
 
     #[test]
     fn fully_outside_clips_to_zero_area() {
-        let r = Rect { x: 20, y: 20, w: 10, h: 10 }.clip(10, 10);
+        let r = Rect {
+            x: 20,
+            y: 20,
+            w: 10,
+            h: 10,
+        }
+        .clip(10, 10);
         assert_eq!(r.w, 0);
         assert_eq!(r.h, 0);
     }
 
     #[test]
     fn luma_plane_projection_is_the_identity() {
-        let r = Rect { x: 3, y: 4, w: 10, h: 8 };
+        let r = Rect {
+            x: 3,
+            y: 4,
+            w: 10,
+            h: 8,
+        };
         let p = r.on_plane(PixFmt::Yuv420p, 0, 64, 64);
         assert_eq!(p, r);
     }
 
     #[test]
     fn chroma_plane_projection_halves_both_axes_for_420() {
-        let r = Rect { x: 4, y: 4, w: 8, h: 8 };
+        let r = Rect {
+            x: 4,
+            y: 4,
+            w: 8,
+            h: 8,
+        };
         let p = r.on_plane(PixFmt::Yuv420p, 1, 64, 64);
-        assert_eq!(p, Rect { x: 2, y: 2, w: 4, h: 4 });
+        assert_eq!(
+            p,
+            Rect {
+                x: 2,
+                y: 2,
+                w: 4,
+                h: 4
+            }
+        );
     }
 
     #[test]
     fn adjacent_odd_edged_rectangles_tile_without_a_gap_on_chroma() {
         // Two rectangles sharing the edge x=5 (odd, not chroma-aligned).
-        let left = Rect { x: 0, y: 0, w: 5, h: 8 };
-        let right = Rect { x: 5, y: 0, w: 5, h: 8 };
+        let left = Rect {
+            x: 0,
+            y: 0,
+            w: 5,
+            h: 8,
+        };
+        let right = Rect {
+            x: 5,
+            y: 0,
+            w: 5,
+            h: 8,
+        };
         let lp = left.on_plane(PixFmt::Yuv420p, 1, 64, 64);
         let rp = right.on_plane(PixFmt::Yuv420p, 1, 64, 64);
-        assert_eq!(lp.x + lp.w, rp.x, "no gap and no overlap at the shared edge");
+        assert_eq!(
+            lp.x + lp.w,
+            rp.x,
+            "no gap and no overlap at the shared edge"
+        );
     }
 
     #[test]
     fn rgb_formats_never_decimate() {
-        let r = Rect { x: 1, y: 1, w: 5, h: 5 };
+        let r = Rect {
+            x: 1,
+            y: 1,
+            w: 5,
+            h: 5,
+        };
         let p = r.on_plane(PixFmt::Gbrp, 0, 64, 64);
         assert_eq!(p, r);
     }
 
     #[test]
     fn oversized_thickness_degrades_to_a_filled_box() {
-        let r = Rect { x: 0, y: 0, w: 10, h: 10 };
+        let r = Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
         let ring = r.border_ring(10);
         assert_eq!(ring, vec![r]);
     }
 
     #[test]
     fn normal_thickness_yields_four_border_strips() {
-        let r = Rect { x: 0, y: 0, w: 10, h: 10 };
+        let r = Rect {
+            x: 0,
+            y: 0,
+            w: 10,
+            h: 10,
+        };
         let ring = r.border_ring(2);
         assert_eq!(ring.len(), 4);
         // Total border area = outer area - inner area.

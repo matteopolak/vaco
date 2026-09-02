@@ -135,7 +135,10 @@ mod tests {
         let probe = UdpSocket::bind("127.0.0.1:0").unwrap();
         let addr = probe.local_addr().unwrap();
         drop(probe);
-        let hp = HostPort { port: addr.port(), ..hp };
+        let hp = HostPort {
+            port: addr.port(),
+            ..hp
+        };
 
         let client = UdpSocket::bind("127.0.0.1:0").unwrap();
         let client_addr = client.local_addr().unwrap();

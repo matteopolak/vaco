@@ -42,10 +42,14 @@ fn read_header(r: &mut Reader<'_>) -> Result<Header> {
     let descriptor = r.u8()?;
 
     if color_map_type != 0 {
-        return Err(Error::Unsupported("tga: colour-mapped images are not supported"));
+        return Err(Error::Unsupported(
+            "tga: colour-mapped images are not supported",
+        ));
     }
     if descriptor & RIGHT_TO_LEFT != 0 {
-        return Err(Error::Unsupported("tga: right-to-left storage is not supported"));
+        return Err(Error::Unsupported(
+            "tga: right-to-left storage is not supported",
+        ));
     }
     let (truecolor, rle) = match image_type {
         2 => (true, false),
@@ -186,10 +190,16 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
         PixFmt::Bgr24 => (2, 24),
         PixFmt::Bgra => (2, 32),
         PixFmt::Gray8 => (3, 8),
-        _ => return Err(Error::Unsupported("tga: encoder needs bgr24, bgra or gray8 input")),
+        _ => {
+            return Err(Error::Unsupported(
+                "tga: encoder needs bgr24, bgra or gray8 input",
+            ));
+        }
     };
     let (width, height) = (*width, *height);
-    let plane = planes.first().ok_or(Error::InvalidData("tga: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("tga: no plane 0"))?;
     let pixel_bytes = usize::from(pixel_depth >> 3);
     let row_bytes = (width as usize).saturating_mul(pixel_bytes);
 
@@ -292,6 +302,9 @@ mod tests {
         header[1] = 1; // colour_map_type
         header[2] = 1; // colormap image_type
         let mut budget = Budget::new(Limits::permissive());
-        assert!(matches!(decode(&header, &mut budget), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            decode(&header, &mut budget),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

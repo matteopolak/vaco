@@ -116,7 +116,11 @@ fn twelve_seconds_produces_two_fragments_with_restated_sequence_headers() {
         let mut pkt = Packet::from_slice(&mut budget, &[0xAB, 0xCD, 0xEF, 0x01]).unwrap();
         pkt.stream_index = video_idx;
         pkt.duration = Duration::from_micros(VIDEO_FRAME_US);
-        pkt.flags = if is_key { PacketFlags::KEY } else { PacketFlags::empty() };
+        pkt.flags = if is_key {
+            PacketFlags::KEY
+        } else {
+            PacketFlags::empty()
+        };
         mux.write_packet(&pkt).unwrap();
     }
 
@@ -133,7 +137,10 @@ fn twelve_seconds_produces_two_fragments_with_restated_sequence_headers() {
     mux.write_trailer().unwrap();
 
     let manifest_xml = fs::read_to_string(&manifest_path).unwrap();
-    assert!(manifest_xml.contains("<bootstrapInfo profile=\"named\" url=\"stream0.abst\" id=\"bootstrap0\" />"));
+    assert!(
+        manifest_xml
+            .contains("<bootstrapInfo profile=\"named\" url=\"stream0.abst\" id=\"bootstrap0\" />")
+    );
     assert!(manifest_xml.contains("bitrate=\"469\""), "{manifest_xml}"); // 400_000+69_000 bps -> 469 kbit/s
     assert!(manifest_xml.contains("url=\"stream0\""));
 
@@ -153,10 +160,17 @@ fn twelve_seconds_produces_two_fragments_with_restated_sequence_headers() {
     // FrameType/CodecID byte at offset 11, AVCPacketType at offset 12).
     let payload2 = &frag2[8..];
     assert_eq!(payload2[0], 9, "first tag in fragment 2 is video");
-    assert_eq!(payload2[12], 0x00, "video AVCPacketType=0 (sequence header)");
+    assert_eq!(
+        payload2[12], 0x00,
+        "video AVCPacketType=0 (sequence header)"
+    );
     // The AAC sequence header tag follows immediately after the video one.
-    let video_tag_total = 11 + u32::from_be_bytes([0, payload2[1], payload2[2], payload2[3]]) as usize + 4;
-    assert_eq!(payload2[video_tag_total], 8, "second tag in fragment 2 is audio");
+    let video_tag_total =
+        11 + u32::from_be_bytes([0, payload2[1], payload2[2], payload2[3]]) as usize + 4;
+    assert_eq!(
+        payload2[video_tag_total], 8,
+        "second tag in fragment 2 is audio"
+    );
     assert_eq!(
         payload2[video_tag_total + 12],
         0x00,
@@ -169,7 +183,8 @@ fn twelve_seconds_produces_two_fragments_with_restated_sequence_headers() {
     // asrt's own fragmentsPerSegment (last 4 bytes of the asrt payload,
     // found via the "asrt" tag) must equal 2.
     let asrt_pos = abst.windows(4).position(|w| w == b"asrt").unwrap();
-    let fragments_per_segment = u32::from_be_bytes(abst[asrt_pos + 17..asrt_pos + 21].try_into().unwrap());
+    let fragments_per_segment =
+        u32::from_be_bytes(abst[asrt_pos + 17..asrt_pos + 21].try_into().unwrap());
     assert_eq!(fragments_per_segment, 2);
 
     // Structural bar met; playback through a real Flash/HDS client is not

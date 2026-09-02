@@ -45,7 +45,11 @@ fn main() -> ExitCode {
         "list" => {
             let lock = embedded_catalogue();
             for entry in &lock.entries {
-                let status = if entry.is_fetchable() { "fetchable" } else { "gap" };
+                let status = if entry.is_fetchable() {
+                    "fetchable"
+                } else {
+                    "gap"
+                };
                 println!("{:<32} {:<20} {status}", entry.name, entry.suite);
             }
             ExitCode::SUCCESS

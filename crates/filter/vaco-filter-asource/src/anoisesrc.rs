@@ -86,7 +86,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -113,7 +114,13 @@ struct ColorState {
     prev2: f64,
 }
 
-fn next_sample(color: NoiseColor, amplitude: f64, density: f64, rng: &mut SplitMix64, state: &mut ColorState) -> f64 {
+fn next_sample(
+    color: NoiseColor,
+    amplitude: f64,
+    density: f64,
+    rng: &mut SplitMix64,
+    state: &mut ColorState,
+) -> f64 {
     let white = rng.next_bipolar();
     match color {
         NoiseColor::White => amplitude * white,
@@ -192,15 +199,23 @@ impl SourceFilter for Source {
         });
         let layout = vaco_chlayout::ChannelLayout::from_name("mono")
             .or_else(|| vaco_chlayout::ChannelLayout::default_for(1))
-            .ok_or(vaco_core::Error::Unsupported("no mono channel layout available"))?;
-        let mut frame =
-            ctx.pool()
-                .acquire_audio(SampleFmt::F64, layout, want, self.sample_rate)?;
+            .ok_or(vaco_core::Error::Unsupported(
+                "no mono channel layout available",
+            ))?;
+        let mut frame = ctx
+            .pool()
+            .acquire_audio(SampleFmt::F64, layout, want, self.sample_rate)?;
         if let Some(mut plane) = frame.plane_mut(0)
             && let Some(row) = plane.row_mut(0)
         {
             for px in row.chunks_exact_mut(8) {
-                let s = next_sample(self.color, self.amplitude, self.density, &mut self.rng, &mut self.state);
+                let s = next_sample(
+                    self.color,
+                    self.amplitude,
+                    self.density,
+                    &mut self.rng,
+                    &mut self.state,
+                );
                 px.copy_from_slice(&s.to_le_bytes());
             }
         }

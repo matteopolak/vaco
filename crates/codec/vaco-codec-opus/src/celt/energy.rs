@@ -27,7 +27,11 @@ pub fn unquant_coarse_energy(
     lm: usize,
 ) {
     let prob_model = &E_PROB_MODEL[lm.min(3)][usize::from(intra)];
-    let (coef, beta) = if intra { (0.0, BETA_INTRA) } else { (PRED_COEF[lm.min(3)], BETA_COEF[lm.min(3)]) };
+    let (coef, beta) = if intra {
+        (0.0, BETA_INTRA)
+    } else {
+        (PRED_COEF[lm.min(3)], BETA_COEF[lm.min(3)])
+    };
     let budget = (dec.storage() as i32).saturating_mul(8);
     let mut prev = [0.0f32; 2];
 
@@ -49,7 +53,9 @@ pub fn unquant_coarse_energy(
             };
             let q = qi as f32;
             let idx = i + c * nb_ebands;
-            let Some(prev_e) = prev.get_mut(c) else { continue };
+            let Some(prev_e) = prev.get_mut(c) else {
+                continue;
+            };
             let old = old_band_e.get(idx).copied().unwrap_or(-9.0).max(-9.0);
             // `quant_bands.c` only clamps this to `+-GCONST(28.f)` inside
             // `#ifdef FIXED_POINT`, where it exists to stop the Q-format
@@ -144,7 +150,14 @@ pub fn unquant_energy_finalise(
 }
 
 /// `quant_bands.c`'s `log2Amp`: log-domain band energy to linear amplitude.
-pub fn log2_amp(old_band_e: &[f32], band_e: &mut [f32], nb_ebands: usize, start: usize, end: usize, channels: usize) {
+pub fn log2_amp(
+    old_band_e: &[f32],
+    band_e: &mut [f32],
+    nb_ebands: usize,
+    start: usize,
+    end: usize,
+    channels: usize,
+) {
     use crate::celt::tables::E_MEANS;
     for c in 0..channels {
         for i in 0..nb_ebands {
@@ -152,7 +165,8 @@ pub fn log2_amp(old_band_e: &[f32], band_e: &mut [f32], nb_ebands: usize, start:
             let amp = if i < start || i >= end {
                 0.0
             } else {
-                let lg = old_band_e.get(idx).copied().unwrap_or(0.0) + E_MEANS.get(i).copied().unwrap_or(0.0);
+                let lg = old_band_e.get(idx).copied().unwrap_or(0.0)
+                    + E_MEANS.get(i).copied().unwrap_or(0.0);
                 lg.exp2()
             };
             if let Some(slot) = band_e.get_mut(idx) {

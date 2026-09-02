@@ -27,4 +27,4 @@ pub mod text;
 
 pub use bitmap::composite_bitmap;
 pub use registry::SubtitleRegistry;
-pub use text::{composite_simple_text, SimpleTextStyle};
+pub use text::{SimpleTextStyle, composite_simple_text};

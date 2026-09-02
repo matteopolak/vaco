@@ -133,7 +133,11 @@ pub(crate) fn decode_scanned_coefficients(
             .map_err(|_| Error::InvalidData("prores: coefficient sign truncated"))?;
         let abs_level = abs_level_minus_1.saturating_add(1);
         let abs_level_signed = i64::try_from(abs_level).unwrap_or(i64::MAX);
-        let level: i64 = if sign == 1 { -abs_level_signed } else { abs_level_signed };
+        let level: i64 = if sign == 1 {
+            -abs_level_signed
+        } else {
+            abs_level_signed
+        };
         if n < num_coefficients {
             if let Some(slot) = coeffs.get_mut(n) {
                 *slot = clamp_i32(level);
@@ -173,7 +177,9 @@ pub(crate) fn decode_scanned_alpha(
     while n < num_values {
         guard += 1;
         if guard > num_values.saturating_add(16) {
-            return Err(Error::InvalidData("prores: scanned alpha did not terminate"));
+            return Err(Error::InvalidData(
+                "prores: scanned alpha did not terminate",
+            ));
         }
         let (alpha_difference, is_modulo) = decode_alpha_difference(&mut r, sixteen_bit)?;
         let sum = previous_alpha.wrapping_add(alpha_difference);

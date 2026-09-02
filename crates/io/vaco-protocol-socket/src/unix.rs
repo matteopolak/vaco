@@ -21,7 +21,7 @@ mod native {
 
     use vaco_core::Error as CoreError;
     use vaco_io::{MediaSink, MediaSource, PeekSource, RawSource, Seekability};
-    use vaco_opts::{ConstDesc, Dict, OptionsExt, Options, Schema, schema_of};
+    use vaco_opts::{ConstDesc, Dict, Options, OptionsExt, Schema, schema_of};
     use vaco_protocol_core::{
         Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result,
         Url,
@@ -35,8 +35,18 @@ mod native {
     /// `-type`'s named constants.
     const TYPE_CONSTS: &[ConstDesc] = &[
         ConstDesc::new("stream", "Stream (reliable stream-oriented)", "type", 1),
-        ConstDesc::new("datagram", "Datagram (unreliable packet-oriented)", "type", 2),
-        ConstDesc::new("seqpacket", "Seqpacket (reliable packet-oriented)", "type", 5),
+        ConstDesc::new(
+            "datagram",
+            "Datagram (unreliable packet-oriented)",
+            "type",
+            2,
+        ),
+        ConstDesc::new(
+            "seqpacket",
+            "Seqpacket (reliable packet-oriented)",
+            "type",
+            5,
+        ),
     ];
 
     /// `-h protocol=unix`.
@@ -44,7 +54,12 @@ mod native {
     #[options(name = "unix", help = "Unix domain socket")]
     pub struct UnixOptions {
         /// Bind and accept rather than connect.
-        #[opt(name = "listen", help = "Open socket for listening", default = false, flags(param))]
+        #[opt(
+            name = "listen",
+            help = "Open socket for listening",
+            default = false,
+            flags(param)
+        )]
         pub listen: bool,
 
         /// In **milliseconds**, `-1` = wait indefinitely. Applied to `-listen`'s
@@ -111,7 +126,9 @@ mod native {
     }
 
     fn accept_stream(listener: &UnixListener, timeout: Option<Duration>) -> Result<UnixStream> {
-        listener.set_nonblocking(true).map_err(ProtocolError::from)?;
+        listener
+            .set_nonblocking(true)
+            .map_err(ProtocolError::from)?;
         let deadline = timeout.map(|t| Instant::now().saturating_add(t));
         let max_polls = timeout.map_or(usize::MAX, |t| {
             t.as_nanos()
@@ -373,9 +390,9 @@ mod native {
             network: false,
             nested_scheme: false,
             server_capable: true,
-        readable: true,
-        writable: true,
-    },
+            readable: true,
+            writable: true,
+        },
         default_whitelist: &[],
         options: Some(unix_schema),
         proto: &UnixProtocol,
@@ -384,7 +401,6 @@ mod native {
     fn unix_schema() -> &'static Schema {
         schema_of::<UnixOptions>()
     }
-
 }
 
 #[cfg(unix)]
@@ -401,14 +417,17 @@ mod fallback {
     use vaco_io::{MediaSink, MediaSource};
     use vaco_opts::{Dict, Options, Schema, schema_of};
     use vaco_protocol_core::{
-        Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags,
-        Result, Url,
+        Access, IoFlags, Protocol, ProtocolDesc, ProtocolEnv, ProtocolError, ProtocolFlags, Result,
+        Url,
     };
 
     /// Empty on this target: there is nothing to configure for a protocol
     /// that cannot open anything.
     #[derive(Debug, Clone, PartialEq, Options)]
-    #[options(name = "unix", help = "Unix domain socket (unavailable on this platform)")]
+    #[options(
+        name = "unix",
+        help = "Unix domain socket (unavailable on this platform)"
+    )]
     pub struct UnixOptions {}
 
     /// The `unix:` protocol, unavailable form.
@@ -454,9 +473,9 @@ mod fallback {
             network: false,
             nested_scheme: false,
             server_capable: false,
-        readable: true,
-        writable: true,
-    },
+            readable: true,
+            writable: true,
+        },
         default_whitelist: &[],
         options: Some(unix_schema),
         proto: &UnixProtocol,

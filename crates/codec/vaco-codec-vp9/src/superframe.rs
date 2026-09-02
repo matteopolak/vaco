@@ -12,7 +12,10 @@
 #[must_use]
 pub fn split(data: &[u8]) -> Vec<&[u8]> {
     if let Some(ranges) = try_split(data) {
-        return ranges.into_iter().filter_map(|(s, e)| data.get(s..e)).collect();
+        return ranges
+            .into_iter()
+            .filter_map(|(s, e)| data.get(s..e))
+            .collect();
     }
     vec![data]
 }

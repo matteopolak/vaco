@@ -74,7 +74,9 @@ fn bytes_per_sample(fmt: SampleFmt) -> Result<usize> {
     match fmt {
         SampleFmt::S16P => Ok(2),
         SampleFmt::S32P => Ok(4),
-        _ => Err(Error::Unsupported("alac: encoder accepts s16p or s32p input only")),
+        _ => Err(Error::Unsupported(
+            "alac: encoder accepts s16p or s32p input only",
+        )),
     }
 }
 
@@ -113,19 +115,34 @@ fn write_sample_s16(buf: &mut [u8], index: usize, value: i32) {
     let off = index.saturating_mul(2);
     if let Some(dst) = buf.get_mut(off..off.saturating_add(2)) {
         let clamped = value.clamp(i32::from(i16::MIN), i32::from(i16::MAX));
-        #[expect(clippy::cast_possible_truncation, reason = "just clamped to i16's range")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "just clamped to i16's range"
+        )]
         dst.copy_from_slice(&(clamped as i16).to_le_bytes());
     }
 }
 
 /// One channel's decoded predictor output, per `modeU`/`modeV`.
-fn predict_channel(residuals: &[i32], coefs: &mut [i32], order: usize, mode: u32, chanbits: u32, denshift: u32, budget: &mut Budget) -> Result<Vec<i32>> {
+fn predict_channel(
+    residuals: &[i32],
+    coefs: &mut [i32],
+    order: usize,
+    mode: u32,
+    chanbits: u32,
+    denshift: u32,
+    budget: &mut Budget,
+) -> Result<Vec<i32>> {
     if mode == 0 {
-        Ok(unpc_block(residuals, coefs, order, chanbits, denshift, budget)?)
+        Ok(unpc_block(
+            residuals, coefs, order, chanbits, denshift, budget,
+        )?)
     } else {
         let empty: &mut [i32] = &mut [];
         let stage1 = unpc_block(residuals, empty, 31, chanbits, 0, budget)?;
-        Ok(unpc_block(&stage1, coefs, order, chanbits, denshift, budget)?)
+        Ok(unpc_block(
+            &stage1, coefs, order, chanbits, denshift, budget,
+        )?)
     }
 }
 
@@ -136,7 +153,9 @@ fn unmix(u: i32, v: i32, mixbits: u32, mixres: i32) -> (i32, i32) {
     if mixres == 0 {
         (u, v)
     } else {
-        let l = u.wrapping_add(v).wrapping_sub((mixres.wrapping_mul(v)) >> mixbits);
+        let l = u
+            .wrapping_add(v)
+            .wrapping_sub((mixres.wrapping_mul(v)) >> mixbits);
         let r = l.wrapping_sub(v);
         (l, r)
     }
@@ -178,11 +197,18 @@ struct ElementHeader {
     chan_bits: u32,
 }
 
-fn read_element_header(r: &mut BitReader<'_>, bit_depth: u8, frame_length: u32, extra_chanbits: u32) -> Result<ElementHeader> {
+fn read_element_header(
+    r: &mut BitReader<'_>,
+    bit_depth: u8,
+    frame_length: u32,
+    extra_chanbits: u32,
+) -> Result<ElementHeader> {
     let _instance_tag = r.get(4);
     let unused = r.get(12);
     if unused != 0 {
-        return Err(Error::InvalidData("alac: element header's 12 unused bits are nonzero"));
+        return Err(Error::InvalidData(
+            "alac: element header's 12 unused bits are nonzero",
+        ));
     }
     let header_nibble = r.get(4);
     let partial_frame = (header_nibble >> 3) & 1;
@@ -191,7 +217,9 @@ fn read_element_header(r: &mut BitReader<'_>, bit_depth: u8, frame_length: u32, 
         return Err(Error::InvalidData("alac: reserved bytesShifted value"));
     }
     if bytes_shifted != 0 {
-        return Err(Error::Unsupported("alac: bytesShifted (wasted-bits) frames are not implemented"));
+        return Err(Error::Unsupported(
+            "alac: bytesShifted (wasted-bits) frames are not implemented",
+        ));
     }
     let escape = (header_nibble & 1) != 0;
     let num_samples = if partial_frame != 0 {
@@ -219,7 +247,9 @@ fn read_element_header(r: &mut BitReader<'_>, bit_depth: u8, frame_length: u32, 
             "alac: element declares zero samples -- likely a corrupt cookie (frame_length) or packet header, not a legitimately empty frame",
         ));
     }
-    let chan_bits = u32::from(bit_depth).wrapping_sub(bytes_shifted * 8).wrapping_add(extra_chanbits);
+    let chan_bits = u32::from(bit_depth)
+        .wrapping_sub(bytes_shifted * 8)
+        .wrapping_add(extra_chanbits);
     Ok(ElementHeader {
         num_samples,
         escape,
@@ -244,7 +274,10 @@ fn read_channel_params(r: &mut BitReader<'_>) -> ChannelParams {
     let order = (h2 & 0x1f) as usize;
     let mut coefs = vec![0i32; order];
     for c in &mut coefs {
-        #[expect(clippy::cast_possible_truncation, reason = "r.get(16) is masked to 16 bits already")]
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "r.get(16) is masked to 16 bits already"
+        )]
         let raw = r.get(16) as u16;
         *c = i32::from(raw.cast_signed());
     }
@@ -297,7 +330,14 @@ fn read_channel_params(r: &mut BitReader<'_>) -> ChannelParams {
     clippy::many_single_char_names,
     reason = "r/u/v/a/b/n match ALACDecoder::Decode's own bitstream reader and per-sample U/V channel names"
 )]
-pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length: u32, layout_hint: Option<ChannelLayout>, budget: &mut Budget) -> Result<Frame> {
+pub(crate) fn decode(
+    bytes: &[u8],
+    sample_rate: u32,
+    bit_depth: u8,
+    frame_length: u32,
+    layout_hint: Option<ChannelLayout>,
+    budget: &mut Budget,
+) -> Result<Frame> {
     let mut r = BitReader::new(bytes);
     let tag = r.get(3);
 
@@ -324,11 +364,22 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
                 let _mix_res = r.get(8);
                 let (mb, pb, kb) = ag_defaults();
                 let ch = read_channel_params(&mut r);
-                #[expect(clippy::integer_division, reason = "the reference's own pbFactor/4 scaling")]
+                #[expect(
+                    clippy::integer_division,
+                    reason = "the reference's own pbFactor/4 scaling"
+                )]
                 let params = AgParams::new(mb, (pb * ch.pb_factor) / 4, kb);
                 let residuals = dyn_decomp(&params, &mut r, n, hdr.chan_bits);
                 let mut coefs = ch.coefs;
-                predict_channel(&residuals, &mut coefs, ch.order, ch.mode, hdr.chan_bits, ch.den_shift, budget)?
+                predict_channel(
+                    &residuals,
+                    &mut coefs,
+                    ch.order,
+                    ch.mode,
+                    hdr.chan_bits,
+                    ch.den_shift,
+                    budget,
+                )?
             };
             (1u8, u, Vec::new(), hdr.num_samples, 0u32, 0i32)
         }
@@ -378,22 +429,47 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
                 // writes `1`, but the field is not unsigned in general;
                 // ffmpeg's own ALAC muxer measured non-zero values here on
                 // real stereo content).
-                #[expect(clippy::cast_possible_truncation, reason = "r.get(8) is masked to 8 bits already")]
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "r.get(8) is masked to 8 bits already"
+                )]
                 let mix_res_raw = r.get(8) as u8;
                 let mix_res = i32::from(mix_res_raw.cast_signed());
                 let (mb, pb, kb) = ag_defaults();
                 let chu = read_channel_params(&mut r);
                 let chv = read_channel_params(&mut r);
-                #[expect(clippy::integer_division, reason = "the reference's own pbFactor/4 scaling")]
+                #[expect(
+                    clippy::integer_division,
+                    reason = "the reference's own pbFactor/4 scaling"
+                )]
                 let params_u = AgParams::new(mb, (pb * chu.pb_factor) / 4, kb);
                 let res_u = dyn_decomp(&params_u, &mut r, n, hdr.chan_bits);
                 let mut coefs_u = chu.coefs;
-                let u = predict_channel(&res_u, &mut coefs_u, chu.order, chu.mode, hdr.chan_bits, chu.den_shift, budget)?;
-                #[expect(clippy::integer_division, reason = "the reference's own pbFactor/4 scaling")]
+                let u = predict_channel(
+                    &res_u,
+                    &mut coefs_u,
+                    chu.order,
+                    chu.mode,
+                    hdr.chan_bits,
+                    chu.den_shift,
+                    budget,
+                )?;
+                #[expect(
+                    clippy::integer_division,
+                    reason = "the reference's own pbFactor/4 scaling"
+                )]
                 let params_v = AgParams::new(mb, (pb * chv.pb_factor) / 4, kb);
                 let res_v = dyn_decomp(&params_v, &mut r, n, hdr.chan_bits);
                 let mut coefs_v = chv.coefs;
-                let v = predict_channel(&res_v, &mut coefs_v, chv.order, chv.mode, hdr.chan_bits, chv.den_shift, budget)?;
+                let v = predict_channel(
+                    &res_v,
+                    &mut coefs_v,
+                    chv.order,
+                    chv.mode,
+                    hdr.chan_bits,
+                    chv.den_shift,
+                    budget,
+                )?;
                 (2u8, u, v, hdr.num_samples, mix_bits, mix_res)
             }
         }
@@ -407,11 +483,23 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
         (2, Some(h)) if h.channels == 2 => h,
         (1, _) => ChannelLayout::MONO,
         (2, _) => ChannelLayout::STEREO,
-        _ => return Err(Error::Unsupported("alac: more than 2 channels is not implemented")),
+        _ => {
+            return Err(Error::Unsupported(
+                "alac: more than 2 channels is not implemented",
+            ));
+        }
     };
 
-    let out_fmt = if bit_depth <= 16 { SampleFmt::S16P } else { SampleFmt::S32P };
-    let write_sample: fn(&mut [u8], usize, i32) = if out_fmt == SampleFmt::S16P { write_sample_s16 } else { write_sample_s32 };
+    let out_fmt = if bit_depth <= 16 {
+        SampleFmt::S16P
+    } else {
+        SampleFmt::S32P
+    };
+    let write_sample: fn(&mut [u8], usize, i32) = if out_fmt == SampleFmt::S16P {
+        write_sample_s16
+    } else {
+        write_sample_s32
+    };
     let mut frame = Frame::alloc_audio(budget, out_fmt, layout, num_samples, sample_rate)?;
     let FrameData::Audio { ref mut planes, .. } = frame.data else {
         return Err(Error::Unsupported("alac: allocated frame was not audio"));
@@ -436,7 +524,10 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
         // decoded with the wrong channel values, silently, the whole
         // time). `predict_channel` already reconstructed U and V; only
         // the final unmix is left.
-        if let Some((left_plane, right_plane)) = planes.split_first_mut().map(|(l, rest)| (l, rest.first_mut())) {
+        if let Some((left_plane, right_plane)) = planes
+            .split_first_mut()
+            .map(|(l, rest)| (l, rest.first_mut()))
+        {
             let l_stride = left_plane.stride;
             let l_row = left_plane.data.make_mut();
             let mut left_buf = vec![0u8; l_stride];
@@ -494,7 +585,12 @@ struct StereoCandidate {
 /// (its cost is not linear in residual magnitude near the adaptive mean's
 /// escape threshold). The cost this exists to compare is real bits, so it
 /// is measured as real bits.
-fn channel_bit_cost(samples: &[i32], order: usize, chan_bits: u32, budget: &mut Budget) -> Result<u64> {
+fn channel_bit_cost(
+    samples: &[i32],
+    order: usize,
+    chan_bits: u32,
+    budget: &mut Budget,
+) -> Result<u64> {
     let mut coefs = vec![0i32; order];
     let residuals = pc_block(samples, &mut coefs, order, chan_bits, DENSHIFT);
     let (mb, pb, kb) = ag_defaults();
@@ -522,7 +618,13 @@ fn channel_bit_cost(samples: &[i32], order: usize, chan_bits: u32, budget: &mut 
 /// only chase a smaller second-order effect this crate's own encoder does
 /// not otherwise rate-distortion-optimize for (see [`PREDICTOR_ORDER`]'s
 /// doc on the same scope decision for the predictor order/denshift).
-fn choose_stereo_mix(samp_l: &[i32], samp_r: &[i32], order: usize, chan_bits: u32, budget: &mut Budget) -> Result<StereoCandidate> {
+fn choose_stereo_mix(
+    samp_l: &[i32],
+    samp_r: &[i32],
+    order: usize,
+    chan_bits: u32,
+    budget: &mut Budget,
+) -> Result<StereoCandidate> {
     let pass_through = StereoCandidate {
         mixbits: 0,
         mixres: 0,
@@ -550,10 +652,16 @@ fn choose_stereo_mix(samp_l: &[i32], samp_r: &[i32], order: usize, chan_bits: u3
         v: mid_v,
     };
 
-    let pass_through_bits = channel_bit_cost(&pass_through.u, order, chan_bits, budget)?.saturating_add(channel_bit_cost(&pass_through.v, order, chan_bits, budget)?);
-    let mid_side_bits = channel_bit_cost(&mid_side.u, order, chan_bits, budget)?.saturating_add(channel_bit_cost(&mid_side.v, order, chan_bits, budget)?);
+    let pass_through_bits = channel_bit_cost(&pass_through.u, order, chan_bits, budget)?
+        .saturating_add(channel_bit_cost(&pass_through.v, order, chan_bits, budget)?);
+    let mid_side_bits = channel_bit_cost(&mid_side.u, order, chan_bits, budget)?
+        .saturating_add(channel_bit_cost(&mid_side.v, order, chan_bits, budget)?);
 
-    Ok(if mid_side_bits < pass_through_bits { mid_side } else { pass_through })
+    Ok(if mid_side_bits < pass_through_bits {
+        mid_side
+    } else {
+        pass_through
+    })
 }
 
 /// The nominal predictor order this encoder always writes, before either
@@ -649,7 +757,9 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
     };
     let channels = layout.channels;
     if channels == 0 || channels > u32::from(MAX_CHANNELS) {
-        return Err(Error::Unsupported("alac: encoder supports mono or stereo input only"));
+        return Err(Error::Unsupported(
+            "alac: encoder supports mono or stereo input only",
+        ));
     }
     let bytes = bytes_per_sample(*format)?;
     let bit_depth = if bytes == 2 { 16u32 } else { 32u32 };
@@ -670,7 +780,10 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
         None
     };
 
-    let capacity_hint = (num_samples as usize).saturating_mul(channels as usize).saturating_mul(bytes).saturating_add(64);
+    let capacity_hint = (num_samples as usize)
+        .saturating_mul(channels as usize)
+        .saturating_mul(bytes)
+        .saturating_add(64);
     let mut w = BitWriter::with_capacity(budget, capacity_hint)?;
     let order = PREDICTOR_ORDER.min(MAX_ORDER);
     let (mb, pb, kb) = ag_defaults();
@@ -679,7 +792,10 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
     // `PB_FACTOR_NUM_BYTE`'s own doc below for why `pbFactor` must be 4,
     // not 0, for this crate's chosen `(mb, pb, kb)` to mean what they say.
     let mode_denshift_byte = DENSHIFT & 0xf; // modeU/modeV = 0
-    #[expect(clippy::cast_possible_truncation, reason = "PREDICTOR_ORDER is 8, well within the 5-bit order field")]
+    #[expect(
+        clippy::cast_possible_truncation,
+        reason = "PREDICTOR_ORDER is 8, well within the 5-bit order field"
+    )]
     let pbfactor_order_byte = PB_FACTOR_NUM_BYTE | (order as u32 & 0x1f);
 
     if channels == 1 {
@@ -696,7 +812,9 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
             w.put(16, 0); // initial coefficients: this predictor always starts a block at zero, see `encode`'s doc
         }
         let chan_bits = bit_depth;
-        let samp: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(&plane0, i, bytes)).collect();
+        let samp: Vec<i32> = (0..num_samples as usize)
+            .map(|i| read_sample(&plane0, i, bytes))
+            .collect();
         let mut coefs = vec![0i32; order];
         let residuals = pc_block(&samp, &mut coefs, order, chan_bits, DENSHIFT);
         let params = AgParams::new(mb, pb, kb);
@@ -715,8 +833,12 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
     let Some(plane1) = plane1.as_ref() else {
         return Err(Error::Unsupported("alac: encoder needs plane 1 for stereo"));
     };
-    let samp_l: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(&plane0, i, bytes)).collect();
-    let samp_r: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(plane1, i, bytes)).collect();
+    let samp_l: Vec<i32> = (0..num_samples as usize)
+        .map(|i| read_sample(&plane0, i, bytes))
+        .collect();
+    let samp_r: Vec<i32> = (0..num_samples as usize)
+        .map(|i| read_sample(plane1, i, bytes))
+        .collect();
     // Chosen once, up front, because `mixBits`/`mixRes` are part of the
     // element header written *before* either channel's coefficients or
     // residuals -- see `choose_stereo_mix`'s own doc for what the two
@@ -729,7 +851,10 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
     w.put(4, 1 << 3); // partialFrame=1, bytesShifted=0, escape=0
     w.put(32, num_samples);
     w.put(8, chosen.mixbits);
-    #[expect(clippy::cast_sign_loss, reason = "mixres is a small signed value (0 or ±1 here); the 8-bit field is a byte-wise two's-complement slot per the reference, matching decode's own i32 round-trip through the same width")]
+    #[expect(
+        clippy::cast_sign_loss,
+        reason = "mixres is a small signed value (0 or ±1 here); the 8-bit field is a byte-wise two's-complement slot per the reference, matching decode's own i32 round-trip through the same width"
+    )]
     w.put(8, chosen.mixres as u32);
     w.put(8, mode_denshift_byte);
     w.put(8, pbfactor_order_byte);
@@ -773,7 +898,11 @@ mod tests {
                     for mixres in [0i32, 1, -1, 2, -2, 4, -4] {
                         let (u, v) = mix16(l, r, mixbits, mixres);
                         let (l2, r2) = unmix(u, v, mixbits, mixres);
-                        assert_eq!((l2, r2), (l, r), "l={l} r={r} mixbits={mixbits} mixres={mixres}");
+                        assert_eq!(
+                            (l2, r2),
+                            (l, r),
+                            "l={l} r={r} mixbits={mixbits} mixres={mixres}"
+                        );
                     }
                 }
             }
@@ -782,7 +911,14 @@ mod tests {
 
     fn mono_frame(samples: &[i16]) -> Frame {
         let mut b = budget();
-        let mut frame = Frame::alloc_audio(&mut b, SampleFmt::S16P, ChannelLayout::MONO, samples.len() as u32, 44100).unwrap();
+        let mut frame = Frame::alloc_audio(
+            &mut b,
+            SampleFmt::S16P,
+            ChannelLayout::MONO,
+            samples.len() as u32,
+            44100,
+        )
+        .unwrap();
         {
             let mut plane = frame.plane_mut(0).unwrap();
             let row = plane.row_mut(0).unwrap();
@@ -795,7 +931,14 @@ mod tests {
 
     fn stereo_frame(left: &[i16], right: &[i16]) -> Frame {
         let mut b = budget();
-        let mut frame = Frame::alloc_audio(&mut b, SampleFmt::S16P, ChannelLayout::STEREO, left.len() as u32, 44100).unwrap();
+        let mut frame = Frame::alloc_audio(
+            &mut b,
+            SampleFmt::S16P,
+            ChannelLayout::STEREO,
+            left.len() as u32,
+            44100,
+        )
+        .unwrap();
         {
             let mut plane = frame.plane_mut(0).unwrap();
             let row = plane.row_mut(0).unwrap();
@@ -821,7 +964,10 @@ mod tests {
         let bytes = encode(&frame, &mut b).unwrap();
         let mut b2 = budget();
         let decoded = decode(&bytes, 44100, 16, 4096, Some(ChannelLayout::MONO), &mut b2).unwrap();
-        let FrameData::Audio { planes, samples: n, .. } = decoded.data else {
+        let FrameData::Audio {
+            planes, samples: n, ..
+        } = decoded.data
+        else {
             unreachable!("audio")
         };
         assert_eq!(n, samples.len() as u32);
@@ -843,8 +989,19 @@ mod tests {
         let mut b = budget();
         let bytes = encode(&frame, &mut b).unwrap();
         let mut b2 = budget();
-        let decoded = decode(&bytes, 44100, 16, 4096, Some(ChannelLayout::STEREO), &mut b2).unwrap();
-        let FrameData::Audio { planes, samples: n, .. } = decoded.data else {
+        let decoded = decode(
+            &bytes,
+            44100,
+            16,
+            4096,
+            Some(ChannelLayout::STEREO),
+            &mut b2,
+        )
+        .unwrap();
+        let FrameData::Audio {
+            planes, samples: n, ..
+        } = decoded.data
+        else {
             unreachable!("audio")
         };
         assert_eq!(n, left.len() as u32);
@@ -874,7 +1031,9 @@ mod tests {
 
     #[test]
     fn full_scale_extremes_round_trip() {
-        let samples: Vec<i16> = (0..64).map(|i| if i % 2 == 0 { i16::MAX } else { i16::MIN }).collect();
+        let samples: Vec<i16> = (0..64)
+            .map(|i| if i % 2 == 0 { i16::MAX } else { i16::MIN })
+            .collect();
         let frame = mono_frame(&samples);
         let mut b = budget();
         let bytes = encode(&frame, &mut b).unwrap();
@@ -923,7 +1082,9 @@ mod tests {
         // frame_length = 0: exactly what a mis-extracted cookie handed to
         // `set_extradata` would produce.
         let result = decode(&bytes, 44100, 16, 0, Some(ChannelLayout::MONO), &mut b2);
-        assert!(matches!(result, Err(Error::InvalidData(_))), "expected InvalidData, got {result:?}");
+        assert!(
+            matches!(result, Err(Error::InvalidData(_))),
+            "expected InvalidData, got {result:?}"
+        );
     }
 }
-

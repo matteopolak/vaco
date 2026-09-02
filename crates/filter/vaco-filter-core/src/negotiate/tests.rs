@@ -521,10 +521,18 @@ impl ConverterFactory for Spy {
         // exactly `aresample`'s own shape when the user asked for a rate
         // change and nothing else.
         let mut out = downstream.clone();
-        if out.sample_formats.as_ref().is_none_or(|c| matches!(c, Constraint::Any)) {
+        if out
+            .sample_formats
+            .as_ref()
+            .is_none_or(|c| matches!(c, Constraint::Any))
+        {
             out.sample_formats = upstream.sample_formats.clone();
         }
-        if out.channel_layouts.as_ref().is_none_or(|c| matches!(c, Constraint::Any)) {
+        if out
+            .channel_layouts
+            .as_ref()
+            .is_none_or(|c| matches!(c, Constraint::Any))
+        {
             out.channel_layouts = upstream.channel_layouts.clone();
         }
         Some(ConverterSpec {
@@ -574,10 +582,18 @@ fn a_converters_upstream_carries_a_tied_propertys_resolved_value_not_none() {
         ties: Vec::new(),
         label: "sink".to_owned(),
     });
-    plan.connect(PadRef::output(source, 0), PadRef::input(middle, 0), MediaType::Audio)
-        .expect("connect");
-    plan.connect(PadRef::output(middle, 0), PadRef::input(sink, 0), MediaType::Audio)
-        .expect("connect");
+    plan.connect(
+        PadRef::output(source, 0),
+        PadRef::input(middle, 0),
+        MediaType::Audio,
+    )
+    .expect("connect");
+    plan.connect(
+        PadRef::output(middle, 0),
+        PadRef::input(sink, 0),
+        MediaType::Audio,
+    )
+    .expect("connect");
 
     let spy = Spy::new();
     let mut conflicts = Vec::new();

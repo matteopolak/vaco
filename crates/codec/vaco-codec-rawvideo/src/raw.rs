@@ -29,7 +29,13 @@ use vaco_pixfmt::PixFmt;
 /// geometry, [`Error::UnexpectedEof`] if `payload` is shorter than the
 /// declared geometry implies, and whatever [`Frame::alloc_video`] returns for
 /// an over-budget or hardware-only format.
-pub fn decode_raw(payload: &[u8], width: u32, height: u32, format: PixFmt, budget: &mut Budget) -> Result<Frame> {
+pub fn decode_raw(
+    payload: &[u8],
+    width: u32,
+    height: u32,
+    format: PixFmt,
+    budget: &mut Budget,
+) -> Result<Frame> {
     if width == 0 || height == 0 {
         // Matches `vaco-demux-raw::rawvideo`'s own wording for the identical
         // situation on the demux side.
@@ -141,9 +147,12 @@ mod tests {
         let mut budget = Budget::new(Limits::permissive());
         let width = 5u32;
         let height = 3u32;
-        let layout = PixFmt::Yuv420p.plane_layout(width, height, 1).expect("layout");
+        let layout = PixFmt::Yuv420p
+            .plane_layout(width, height, 1)
+            .expect("layout");
         let payload: Vec<u8> = (0..layout.total).map(|i| (i % 251) as u8).collect();
-        let frame = decode_raw(&payload, width, height, PixFmt::Yuv420p, &mut budget).expect("decode");
+        let frame =
+            decode_raw(&payload, width, height, PixFmt::Yuv420p, &mut budget).expect("decode");
         let encoded = encode_raw(&frame).expect("encode");
         assert_eq!(encoded, payload);
     }
@@ -153,9 +162,12 @@ mod tests {
         let mut budget = Budget::new(Limits::permissive());
         let width = 7u32;
         let height = 2u32;
-        let layout = PixFmt::Rgb24.plane_layout(width, height, 1).expect("layout");
+        let layout = PixFmt::Rgb24
+            .plane_layout(width, height, 1)
+            .expect("layout");
         let payload: Vec<u8> = (0..layout.total).map(|i| (i * 3 % 256) as u8).collect();
-        let frame = decode_raw(&payload, width, height, PixFmt::Rgb24, &mut budget).expect("decode");
+        let frame =
+            decode_raw(&payload, width, height, PixFmt::Rgb24, &mut budget).expect("decode");
         let encoded = encode_raw(&frame).expect("encode");
         assert_eq!(encoded, payload);
     }

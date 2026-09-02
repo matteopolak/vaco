@@ -72,7 +72,12 @@ fn timestamp_extended(timestamp_ms: u32) -> u8 {
 
 /// `VIDEODATA`/`AVCVIDEOPACKET` payload (FLV video tag body).
 #[must_use]
-pub fn video_payload(is_key: bool, avc_packet_type: u8, composition_time_ms: i32, body: &[u8]) -> Vec<u8> {
+pub fn video_payload(
+    is_key: bool,
+    avc_packet_type: u8,
+    composition_time_ms: i32,
+    body: &[u8],
+) -> Vec<u8> {
     let mut out = Vec::new();
     let frame_type: u8 = if is_key { 1 } else { 2 };
     out.push((frame_type << 4) | 7); // CodecID 7 = AVC

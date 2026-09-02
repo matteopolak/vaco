@@ -29,7 +29,9 @@ fn read_header(r: &mut Reader<'_>) -> Result<Header> {
     let encoding = r.u8()?;
     let bpp = r.u8()?;
     if manufacturer != 0x0A || encoding != 1 || bpp != 8 {
-        return Err(Error::Unsupported("pcx: only RLE-encoded 8-bit planes are supported"));
+        return Err(Error::Unsupported(
+            "pcx: only RLE-encoded 8-bit planes are supported",
+        ));
     }
     let xmin = r.u16_le()?;
     let ymin = r.u16_le()?;
@@ -172,7 +174,9 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
         return Err(Error::Unsupported("pcx: encoder needs rgb24 input"));
     }
     let (width, height) = (*width, *height);
-    let plane = planes.first().ok_or(Error::InvalidData("pcx: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("pcx: no plane 0"))?;
     let bytes_per_line = (width as usize).next_multiple_of(2);
 
     let mut out = vec![0u8; HEADER_LEN];
@@ -260,6 +264,9 @@ mod tests {
         header[2] = 0; // encoding = uncompressed, unsupported
         header[3] = 8;
         let mut budget = Budget::new(Limits::permissive());
-        assert!(matches!(decode(&header, &mut budget), Err(Error::Unsupported(_))));
+        assert!(matches!(
+            decode(&header, &mut budget),
+            Err(Error::Unsupported(_))
+        ));
     }
 }

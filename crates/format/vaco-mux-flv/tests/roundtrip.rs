@@ -263,7 +263,9 @@ fn an_annexb_source_gets_a_real_record_and_length_prefixed_tags() {
     let sink = MemorySink::new();
     let shared: SharedBytes = sink.shared();
     let mut mux = FlvMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
-    let v = mux.add_stream(&video_params(&annexb(&[&SPS, &PPS]))).unwrap();
+    let v = mux
+        .add_stream(&video_params(&annexb(&[&SPS, &PPS])))
+        .unwrap();
     mux.write_header().unwrap();
     let slice = [0x65u8, 0x11, 0x22, 0x33];
     mux.write_packet(&packet(v, 0, 0, &annexb(&[&SPS, &PPS, &slice]), true))
@@ -296,5 +298,8 @@ fn an_annexb_source_gets_a_real_record_and_length_prefixed_tags() {
         expected_payload.extend_from_slice(&(u.len() as u32).to_be_bytes());
         expected_payload.extend_from_slice(u);
     }
-    assert_eq!(&payload[..expected_payload.len()], expected_payload.as_slice());
+    assert_eq!(
+        &payload[..expected_payload.len()],
+        expected_payload.as_slice()
+    );
 }

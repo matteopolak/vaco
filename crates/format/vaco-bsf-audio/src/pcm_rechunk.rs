@@ -61,11 +61,19 @@ const NB_OUT_SAMPLES: u64 = 1024;
 /// [`CodecId`] variant in this workspace.
 fn bytes_per_sample(id: CodecId) -> Option<usize> {
     Some(match id {
-        CodecId::PcmU8 | CodecId::PcmS8 | CodecId::PcmAlaw | CodecId::PcmMulaw | CodecId::PcmVidc => 1,
+        CodecId::PcmU8
+        | CodecId::PcmS8
+        | CodecId::PcmAlaw
+        | CodecId::PcmMulaw
+        | CodecId::PcmVidc => 1,
         CodecId::PcmS16le | CodecId::PcmS16be | CodecId::PcmU16le | CodecId::PcmU16be => 2,
         CodecId::PcmS24le | CodecId::PcmS24be | CodecId::PcmU24le | CodecId::PcmU24be => 3,
-        CodecId::PcmS32le | CodecId::PcmS32be | CodecId::PcmU32le | CodecId::PcmU32be
-        | CodecId::PcmF32le | CodecId::PcmF32be => 4,
+        CodecId::PcmS32le
+        | CodecId::PcmS32be
+        | CodecId::PcmU32le
+        | CodecId::PcmU32be
+        | CodecId::PcmF32le
+        | CodecId::PcmF32be => 4,
         CodecId::PcmF64le | CodecId::PcmF64be => 8,
         _ => return None,
     })
@@ -111,7 +119,8 @@ struct PcmRechunk {
 
 impl PcmRechunk {
     fn chunk_bytes(&self) -> usize {
-        self.frame_bytes.saturating_mul(usize::try_from(NB_OUT_SAMPLES).unwrap_or(usize::MAX))
+        self.frame_bytes
+            .saturating_mul(usize::try_from(NB_OUT_SAMPLES).unwrap_or(usize::MAX))
     }
 
     fn emit_chunk(&mut self, bytes: &[u8], out: &mut VecDeque<Packet>) -> Result<()> {
@@ -122,10 +131,9 @@ impl PcmRechunk {
         np.stream_index = base.stream_index;
         np.flags = base.flags;
         let offset_ticks = self.chunks_emitted.saturating_mul(NB_OUT_SAMPLES);
-        np.pts = base
-            .pts
-            .ticks()
-            .map_or(Timestamp::NONE, |t| Timestamp::new(t.saturating_add_unsigned(offset_ticks)));
+        np.pts = base.pts.ticks().map_or(Timestamp::NONE, |t| {
+            Timestamp::new(t.saturating_add_unsigned(offset_ticks))
+        });
         np.dts = np.pts;
         if self.sample_rate > 0 {
             #[allow(
@@ -249,7 +257,10 @@ mod tests {
         let mut f = (DESC.build)(&p).unwrap();
         f.send_packet(Some(&pkt(&raw))).unwrap();
         assert_eq!(f.receive_packet().unwrap().payload().len(), 1024 * 2 * 2);
-        assert!(f.receive_packet().is_err(), "must not have split a single chunk");
+        assert!(
+            f.receive_packet().is_err(),
+            "must not have split a single chunk"
+        );
     }
 
     #[test]

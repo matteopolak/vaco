@@ -189,14 +189,18 @@ pub fn line_diffs(ours: &[u8], theirs: &[u8]) -> Vec<FieldDiff> {
         for j in (0..m).rev() {
             let Some(row) = lcs.get(i + 1) else { continue };
             let diag = row.get(j + 1).copied().unwrap_or(0);
-            let Some(cur_row) = lcs.get_mut(i) else { continue };
+            let Some(cur_row) = lcs.get_mut(i) else {
+                continue;
+            };
             if a.get(i) == b.get(j) {
                 if let Some(slot) = cur_row.get_mut(j) {
                     *slot = diag.saturating_add(1);
                 }
             } else {
                 let up = cur_row.get(j + 1).copied().unwrap_or(0);
-                let Some(down_row) = lcs.get(i + 1) else { continue };
+                let Some(down_row) = lcs.get(i + 1) else {
+                    continue;
+                };
                 let down = down_row.get(j).copied().unwrap_or(0);
                 if let Some(slot) = lcs.get_mut(i).and_then(|r| r.get_mut(j)) {
                     *slot = up.max(down);
@@ -283,9 +287,15 @@ fn merge_adjacent_replacements(diffs: Vec<FieldDiff>) -> Vec<FieldDiff> {
             || (prev_is_insert && d.theirs == "<absent>" && d.ours != "<absent>");
         if merges {
             out.push(if prev_is_delete {
-                FieldDiff { theirs: d.theirs, ..prev }
+                FieldDiff {
+                    theirs: d.theirs,
+                    ..prev
+                }
             } else {
-                FieldDiff { ours: d.ours, ..prev }
+                FieldDiff {
+                    ours: d.ours,
+                    ..prev
+                }
             });
         } else {
             out.push(prev);

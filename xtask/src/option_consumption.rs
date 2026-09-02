@@ -340,9 +340,11 @@ pub fn run(_check: bool) -> Task {
         &std::fs::read_to_string(root.join("crates/app/vaco-cli-core/src/loglevel.rs"))
             .unwrap_or_default(),
     );
-    let cli_src = masked_source(&root.join("crates/app/vaco-cli/src")) + "
+    let cli_src = masked_source(&root.join("crates/app/vaco-cli/src"))
+        + "
 " + &loglevel_src;
-    let probe_src = masked_source(&root.join("crates/app/vaco-probe/src")) + "
+    let probe_src = masked_source(&root.join("crates/app/vaco-probe/src"))
+        + "
 " + &loglevel_src;
 
     let ffmpeg = unconsumed(

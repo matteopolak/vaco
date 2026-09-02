@@ -226,7 +226,10 @@ mod tests {
                 assert!(!seen[idx], "duplicate position {idx}");
                 seen[idx] = true;
             }
-            assert!(seen.iter().all(|&s| s), "scan does not cover every position");
+            assert!(
+                seen.iter().all(|&s| s),
+                "scan does not cover every position"
+            );
         }
     }
 

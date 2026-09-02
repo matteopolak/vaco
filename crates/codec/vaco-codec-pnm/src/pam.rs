@@ -163,7 +163,11 @@ pub fn decode(data: &[u8], budget: &mut Budget) -> Result<Frame> {
                 let bit = match sample {
                     0 => false,
                     1 => true,
-                    _ => return Err(Error::InvalidData("pam: BLACKANDWHITE sample must be 0 or 1")),
+                    _ => {
+                        return Err(Error::InvalidData(
+                            "pam: BLACKANDWHITE sample must be 0 or 1",
+                        ));
+                    }
                 };
                 set_bit(buf, stride, y as usize, x as usize, bit)?;
             }
@@ -220,7 +224,11 @@ fn tuple_for_format(format: PixFmt) -> Result<(Tuple, &'static str)> {
         PixFmt::Ya8 | PixFmt::Ya16be => (Tuple::GrayscaleAlpha, "GRAYSCALE_ALPHA"),
         PixFmt::Rgb24 | PixFmt::Rgb48be => (Tuple::Rgb, "RGB"),
         PixFmt::Rgba | PixFmt::Rgba64be => (Tuple::RgbAlpha, "RGB_ALPHA"),
-        _ => return Err(Error::Unsupported("pam: encoder needs a mapped pixel format")),
+        _ => {
+            return Err(Error::Unsupported(
+                "pam: encoder needs a mapped pixel format",
+            ));
+        }
     })
 }
 
@@ -240,7 +248,9 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
     };
     let (tuple, tupltype_name) = tuple_for_format(*format)?;
     let (width, height) = (*width, *height);
-    let plane = planes.first().ok_or(Error::InvalidData("pam: no plane 0"))?;
+    let plane = planes
+        .first()
+        .ok_or(Error::InvalidData("pam: no plane 0"))?;
     let depth = tuple.depth();
 
     if tuple == Tuple::BlackAndWhite {

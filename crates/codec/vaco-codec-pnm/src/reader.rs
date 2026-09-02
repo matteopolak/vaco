@@ -68,15 +68,14 @@ impl<'a> Reader<'a> {
         if self.pos == start {
             return Err(Error::UnexpectedEof);
         }
-        self.data
-            .get(start..self.pos)
-            .ok_or(Error::UnexpectedEof)
+        self.data.get(start..self.pos).ok_or(Error::UnexpectedEof)
     }
 
     /// A decimal token, parsed as `u32`.
     pub(crate) fn decimal(&mut self) -> Result<u32> {
         let tok = self.token()?;
-        let s = std::str::from_utf8(tok).map_err(|_| Error::InvalidData("pnm: non-ASCII number"))?;
+        let s =
+            std::str::from_utf8(tok).map_err(|_| Error::InvalidData("pnm: non-ASCII number"))?;
         s.parse().map_err(|_| Error::InvalidData("pnm: bad number"))
     }
 

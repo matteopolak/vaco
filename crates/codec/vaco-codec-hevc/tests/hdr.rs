@@ -57,19 +57,61 @@ fn a_real_hdr10_stream_attaches_the_measured_mastering_display_and_cll() {
     };
     // red, green, blue -- see `vaco_frame::MasteringDisplay`'s own doc for
     // why this is not the bitstream's green/blue/red order.
-    assert_eq!(mastering.primaries[0][0], vaco_core::Rational::new(34_000, 50_000), "red_x");
-    assert_eq!(mastering.primaries[0][1], vaco_core::Rational::new(16_000, 50_000), "red_y");
-    assert_eq!(mastering.primaries[1][0], vaco_core::Rational::new(13_250, 50_000), "green_x");
-    assert_eq!(mastering.primaries[1][1], vaco_core::Rational::new(34_500, 50_000), "green_y");
-    assert_eq!(mastering.primaries[2][0], vaco_core::Rational::new(7_500, 50_000), "blue_x");
-    assert_eq!(mastering.primaries[2][1], vaco_core::Rational::new(3_000, 50_000), "blue_y");
-    assert_eq!(mastering.white_point[0], vaco_core::Rational::new(15_635, 50_000), "white_point_x");
-    assert_eq!(mastering.white_point[1], vaco_core::Rational::new(16_450, 50_000), "white_point_y");
-    assert_eq!(mastering.min_luminance, vaco_core::Rational::new(1, 10_000), "min_luminance");
-    assert_eq!(mastering.max_luminance, vaco_core::Rational::new(10_000_000, 10_000), "max_luminance");
+    assert_eq!(
+        mastering.primaries[0][0],
+        vaco_core::Rational::new(34_000, 50_000),
+        "red_x"
+    );
+    assert_eq!(
+        mastering.primaries[0][1],
+        vaco_core::Rational::new(16_000, 50_000),
+        "red_y"
+    );
+    assert_eq!(
+        mastering.primaries[1][0],
+        vaco_core::Rational::new(13_250, 50_000),
+        "green_x"
+    );
+    assert_eq!(
+        mastering.primaries[1][1],
+        vaco_core::Rational::new(34_500, 50_000),
+        "green_y"
+    );
+    assert_eq!(
+        mastering.primaries[2][0],
+        vaco_core::Rational::new(7_500, 50_000),
+        "blue_x"
+    );
+    assert_eq!(
+        mastering.primaries[2][1],
+        vaco_core::Rational::new(3_000, 50_000),
+        "blue_y"
+    );
+    assert_eq!(
+        mastering.white_point[0],
+        vaco_core::Rational::new(15_635, 50_000),
+        "white_point_x"
+    );
+    assert_eq!(
+        mastering.white_point[1],
+        vaco_core::Rational::new(16_450, 50_000),
+        "white_point_y"
+    );
+    assert_eq!(
+        mastering.min_luminance,
+        vaco_core::Rational::new(1, 10_000),
+        "min_luminance"
+    );
+    assert_eq!(
+        mastering.max_luminance,
+        vaco_core::Rational::new(10_000_000, 10_000),
+        "max_luminance"
+    );
 
     let Some(cll) = frame.side_data.iter().find_map(|sd| match sd {
-        vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall } => Some((*max_cll, *max_fall)),
+        vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall } => {
+            Some((*max_cll, *max_fall))
+        }
         _ => None,
     }) else {
         panic!("frame should carry ContentLightLevel side data");

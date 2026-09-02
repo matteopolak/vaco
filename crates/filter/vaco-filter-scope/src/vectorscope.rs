@@ -183,7 +183,10 @@ impl FrameFilter for Filter {
                         continue;
                     };
                     let v = count.saturating_mul(per_hit).min(255);
-                    #[allow(clippy::cast_possible_truncation, reason = "just clamped to 0..=255 above")]
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        reason = "just clamped to 0..=255 above"
+                    )]
                     {
                         *dst = v as u8;
                     }

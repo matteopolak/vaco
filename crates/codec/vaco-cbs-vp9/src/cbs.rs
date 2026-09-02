@@ -199,7 +199,8 @@ mod tests {
         let mut cbs = Cbs::new(Vp9Cbs::new());
         let mut f = CbsFragment::new();
         let mut b = budget();
-        cbs.split(&data, Vp9Framing, &mut f, &mut b).expect("splits");
+        cbs.split(&data, Vp9Framing, &mut f, &mut b)
+            .expect("splits");
         assert_eq!(f.len(), 1);
         f.release(&mut b);
     }
@@ -213,11 +214,13 @@ mod tests {
         let mut cbs = Cbs::new(Vp9Cbs::new());
         let mut b = budget();
         let mut f = CbsFragment::new();
-        cbs.split(&data, Vp9Framing, &mut f, &mut b).expect("splits");
+        cbs.split(&data, Vp9Framing, &mut f, &mut b)
+            .expect("splits");
         let content = cbs.read_unit(&f, 0, &mut b).expect("reads");
         assert!(matches!(content.header, Vp9Header::Frame(_)));
         let before = f.units()[0].data.clone();
-        cbs.update_unit(&mut f, 0, &content, &mut b).expect("rewrites");
+        cbs.update_unit(&mut f, 0, &content, &mut b)
+            .expect("rewrites");
         assert_eq!(f.units()[0].data, before, "re-encodes identically");
         f.release(&mut b);
     }
@@ -229,14 +232,16 @@ mod tests {
         let mut cbs = Cbs::new(Vp9Cbs::new());
         let mut b = budget();
         let mut f = CbsFragment::new();
-        cbs.split(&data, Vp9Framing, &mut f, &mut b).expect("splits");
+        cbs.split(&data, Vp9Framing, &mut f, &mut b)
+            .expect("splits");
         let mut content = cbs.read_unit(&f, 0, &mut b).expect("reads");
         let Vp9Header::Frame(fh) = &mut content.header else {
             panic!("expected a coded frame");
         };
         let original_size = (fh.width, fh.height);
         fh.loop_filter.level = 30;
-        cbs.update_unit(&mut f, 0, &content, &mut b).expect("rewrites");
+        cbs.update_unit(&mut f, 0, &content, &mut b)
+            .expect("rewrites");
 
         let reread = cbs.read_unit(&f, 0, &mut b).expect("re-reads");
         let Vp9Header::Frame(fh) = &reread.header else {
@@ -265,7 +270,8 @@ mod tests {
         let mut cbs = Cbs::new(Vp9Cbs::new());
         let mut b = budget();
         let mut f = CbsFragment::new();
-        cbs.split(&data, Vp9Framing, &mut f, &mut b).expect("splits");
+        cbs.split(&data, Vp9Framing, &mut f, &mut b)
+            .expect("splits");
         // Two frame units, plus the index's own trailing bytes as a third —
         // see `INDEX_UNIT_TYPE`'s doc for why that third unit exists.
         assert_eq!(f.len(), 3);
@@ -275,7 +281,8 @@ mod tests {
         assert_eq!(f.units()[2].data, vec![marker, 40, 25, marker]);
 
         let mut out = Vec::new();
-        cbs.assemble(&f, Vp9Framing, &mut out, &mut b).expect("assembles");
+        cbs.assemble(&f, Vp9Framing, &mut out, &mut b)
+            .expect("assembles");
         assert_eq!(out, data);
         f.release(&mut b);
     }
@@ -310,12 +317,14 @@ mod tests {
         let mut cbs = Cbs::new(Vp9Cbs::new());
         let mut b = budget();
         let mut f = CbsFragment::new();
-        cbs.split(&data, Vp9Framing, &mut f, &mut b).expect("splits");
+        cbs.split(&data, Vp9Framing, &mut f, &mut b)
+            .expect("splits");
         assert_eq!(f.len(), 2, "one frame unit plus the index unit");
         assert_eq!(f.units()[1].unit_type, INDEX_UNIT_TYPE);
 
         let mut out = Vec::new();
-        cbs.assemble(&f, Vp9Framing, &mut out, &mut b).expect("assembles");
+        cbs.assemble(&f, Vp9Framing, &mut out, &mut b)
+            .expect("assembles");
         assert_eq!(out, data);
         f.release(&mut b);
     }

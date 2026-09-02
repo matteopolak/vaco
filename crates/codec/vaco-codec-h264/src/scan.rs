@@ -272,7 +272,10 @@ mod tests {
     #[test]
     fn zigzag8x8_prefix_matches_zigzag4x4() {
         for i in 0..10 {
-            assert_eq!(ZIGZAG_8X8[i], ZIGZAG_4X4[i], "8x8 and 4x4 zig-zag scans must agree on their common prefix");
+            assert_eq!(
+                ZIGZAG_8X8[i], ZIGZAG_4X4[i],
+                "8x8 and 4x4 zig-zag scans must agree on their common prefix"
+            );
         }
     }
 

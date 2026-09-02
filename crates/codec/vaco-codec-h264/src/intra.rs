@@ -125,18 +125,30 @@ pub(crate) fn predict_intra16x16(mode: u8, n: Neighbours16) -> [[u8; 16]; 16] {
                 if x < 0 {
                     i32::from(n.corner)
                 } else {
-                    usize::try_from(x).ok().and_then(|i| n.top.get(i)).copied().map_or(0, i32::from)
+                    usize::try_from(x)
+                        .ok()
+                        .and_then(|i| n.top.get(i))
+                        .copied()
+                        .map_or(0, i32::from)
                 }
             };
             let p_left = |y: i32| -> i32 {
                 if y < 0 {
                     i32::from(n.corner)
                 } else {
-                    usize::try_from(y).ok().and_then(|i| n.left.get(i)).copied().map_or(0, i32::from)
+                    usize::try_from(y)
+                        .ok()
+                        .and_then(|i| n.left.get(i))
+                        .copied()
+                        .map_or(0, i32::from)
                 }
             };
-            let h: i32 = (0i32..8).map(|x_prime| (x_prime + 1) * (p_top(8 + x_prime) - p_top(6 - x_prime))).sum();
-            let v: i32 = (0i32..8).map(|y_prime| (y_prime + 1) * (p_left(8 + y_prime) - p_left(6 - y_prime))).sum();
+            let h: i32 = (0i32..8)
+                .map(|x_prime| (x_prime + 1) * (p_top(8 + x_prime) - p_top(6 - x_prime)))
+                .sum();
+            let v: i32 = (0i32..8)
+                .map(|y_prime| (y_prime + 1) * (p_left(8 + y_prime) - p_left(6 - y_prime)))
+                .sum();
             let a = 16 * (p_left(15) + p_top(15));
             let b = (5 * h + 32) >> 6;
             let c = (5 * v + 32) >> 6;
@@ -158,8 +170,10 @@ pub(crate) fn predict_intra16x16(mode: u8, n: Neighbours16) -> [[u8; 16]; 16] {
             // at size 16 (count 16 or 32, both powers of two), verified
             // bit-exact against this module's own pre-existing tests below
             // (which pin real expected bytes) before landing.
-            let top_u16: [u16; 16] = core::array::from_fn(|i| u16::from(n.top.get(i).copied().unwrap_or(0)));
-            let left_u16: [u16; 16] = core::array::from_fn(|i| u16::from(n.left.get(i).copied().unwrap_or(0)));
+            let top_u16: [u16; 16] =
+                core::array::from_fn(|i| u16::from(n.top.get(i).copied().unwrap_or(0)));
+            let left_u16: [u16; 16] =
+                core::array::from_fn(|i| u16::from(n.left.get(i).copied().unwrap_or(0)));
             let top: &[u16] = if n.top_available { &top_u16 } else { &[] };
             let left: &[u16] = if n.left_available { &left_u16 } else { &[] };
             let dc = vaco_codec_dsp_intrapred::dc_predict(top, left, 16, 8);
@@ -222,18 +236,30 @@ pub(crate) fn predict_intra_chroma(mode: u8, n: NeighboursChroma) -> [[u8; 8]; 8
                 if x < 0 {
                     i32::from(n.corner)
                 } else {
-                    usize::try_from(x).ok().and_then(|i| n.top.get(i)).copied().map_or(0, i32::from)
+                    usize::try_from(x)
+                        .ok()
+                        .and_then(|i| n.top.get(i))
+                        .copied()
+                        .map_or(0, i32::from)
                 }
             };
             let p_left = |y: i32| -> i32 {
                 if y < 0 {
                     i32::from(n.corner)
                 } else {
-                    usize::try_from(y).ok().and_then(|i| n.left.get(i)).copied().map_or(0, i32::from)
+                    usize::try_from(y)
+                        .ok()
+                        .and_then(|i| n.left.get(i))
+                        .copied()
+                        .map_or(0, i32::from)
                 }
             };
-            let h: i32 = (0i32..4).map(|x_prime| (x_prime + 1) * (p_top(4 + x_prime) - p_top(2 - x_prime))).sum();
-            let v: i32 = (0i32..4).map(|y_prime| (y_prime + 1) * (p_left(4 + y_prime) - p_left(2 - y_prime))).sum();
+            let h: i32 = (0i32..4)
+                .map(|x_prime| (x_prime + 1) * (p_top(4 + x_prime) - p_top(2 - x_prime)))
+                .sum();
+            let v: i32 = (0i32..4)
+                .map(|y_prime| (y_prime + 1) * (p_left(4 + y_prime) - p_left(2 - y_prime)))
+                .sum();
             let a = 16 * (p_left(7) + p_top(7));
             let b = (17 * h + 16) >> 5;
             let c = (17 * v + 16) >> 5;
@@ -685,8 +711,10 @@ fn filter_intra8x8_refs(n: Neighbours8) -> (u8, [u8; 16], [u8; 8]) {
     // Widen to i32 for the filter taps, then narrow back -- every input is
     // 0..=255 and every tap is a non-negative weighted average (a plain
     // 3-tap low-pass, clause 8.3.2.2.1), so the result is always in range.
-    let raw_top: [i32; 16] = core::array::from_fn(|i| i32::from(top16.get(i).copied().unwrap_or(0)));
-    let raw_left: [i32; 8] = core::array::from_fn(|i| i32::from(left8.get(i).copied().unwrap_or(0)));
+    let raw_top: [i32; 16] =
+        core::array::from_fn(|i| i32::from(top16.get(i).copied().unwrap_or(0)));
+    let raw_left: [i32; 8] =
+        core::array::from_fn(|i| i32::from(left8.get(i).copied().unwrap_or(0)));
     let raw_z = i32::from(z);
 
     let mut filt_z = raw_z;
@@ -758,9 +786,17 @@ fn p8(z: u8, top: &[u8; 16], left: [u8; 8], x: i32, y: i32) -> i32 {
         return i32::from(z);
     }
     if y == -1 {
-        return usize::try_from(x).ok().and_then(|i| top.get(i)).copied().map_or(0, i32::from);
+        return usize::try_from(x)
+            .ok()
+            .and_then(|i| top.get(i))
+            .copied()
+            .map_or(0, i32::from);
     }
-    usize::try_from(y).ok().and_then(|i| left.get(i)).copied().map_or(0, i32::from)
+    usize::try_from(y)
+        .ok()
+        .and_then(|i| left.get(i))
+        .copied()
+        .map_or(0, i32::from)
 }
 
 /// The nine `Intra_8x8` modes (clause 8.3.2.2.2..8.3.2.2.10, Table 8-2's
@@ -820,9 +856,15 @@ pub(crate) fn predict_intra8x8(mode: u8, n: Neighbours8) -> [[u8; 8]; 8] {
                 for (x, v) in row.iter_mut().enumerate() {
                     let (x, y) = (block8_index_to_i32(x), block8_index_to_i32(y));
                     *v = match x.cmp(&y) {
-                        core::cmp::Ordering::Greater => (p(x - y - 2, -1) + 2 * p(x - y - 1, -1) + p(x - y, -1) + 2) >> 2,
-                        core::cmp::Ordering::Less => (p(-1, y - x - 2) + 2 * p(-1, y - x - 1) + p(-1, y - x) + 2) >> 2,
-                        core::cmp::Ordering::Equal => (p(0, -1) + 2 * p(-1, -1) + p(-1, 0) + 2) >> 2,
+                        core::cmp::Ordering::Greater => {
+                            (p(x - y - 2, -1) + 2 * p(x - y - 1, -1) + p(x - y, -1) + 2) >> 2
+                        }
+                        core::cmp::Ordering::Less => {
+                            (p(-1, y - x - 2) + 2 * p(-1, y - x - 1) + p(-1, y - x) + 2) >> 2
+                        }
+                        core::cmp::Ordering::Equal => {
+                            (p(0, -1) + 2 * p(-1, -1) + p(-1, 0) + 2) >> 2
+                        }
                     } as u8;
                 }
             }
@@ -845,7 +887,11 @@ pub(crate) fn predict_intra8x8(mode: u8, n: Neighbours8) -> [[u8; 8]; 8] {
                     *v = if z_vr >= 0 && z_vr % 2 == 0 {
                         (p(x - (y >> 1) - 1, -1) + p(x - (y >> 1), -1) + 1) >> 1
                     } else if z_vr > 0 {
-                        (p(x - (y >> 1) - 2, -1) + 2 * p(x - (y >> 1) - 1, -1) + p(x - (y >> 1), -1) + 2) >> 2
+                        (p(x - (y >> 1) - 2, -1)
+                            + 2 * p(x - (y >> 1) - 1, -1)
+                            + p(x - (y >> 1), -1)
+                            + 2)
+                            >> 2
                     } else if z_vr == -1 {
                         (p(-1, 0) + 2 * p(-1, -1) + p(0, -1) + 2) >> 2
                     } else {
@@ -868,7 +914,11 @@ pub(crate) fn predict_intra8x8(mode: u8, n: Neighbours8) -> [[u8; 8]; 8] {
                     *v = if z_hd >= 0 && z_hd % 2 == 0 {
                         (p(-1, y - (x >> 1) - 1) + p(-1, y - (x >> 1)) + 1) >> 1
                     } else if z_hd > 0 {
-                        (p(-1, y - (x >> 1) - 2) + 2 * p(-1, y - (x >> 1) - 1) + p(-1, y - (x >> 1)) + 2) >> 2
+                        (p(-1, y - (x >> 1) - 2)
+                            + 2 * p(-1, y - (x >> 1) - 1)
+                            + p(-1, y - (x >> 1))
+                            + 2)
+                            >> 2
                     } else if z_hd == -1 {
                         (p(-1, 0) + 2 * p(-1, -1) + p(0, -1) + 2) >> 2
                     } else {
@@ -888,7 +938,11 @@ pub(crate) fn predict_intra8x8(mode: u8, n: Neighbours8) -> [[u8; 8]; 8] {
                     *v = if y % 2 == 0 {
                         (p(x + (y >> 1), -1) + p(x + (y >> 1) + 1, -1) + 1) >> 1
                     } else {
-                        (p(x + (y >> 1), -1) + 2 * p(x + (y >> 1) + 1, -1) + p(x + (y >> 1) + 2, -1) + 2) >> 2
+                        (p(x + (y >> 1), -1)
+                            + 2 * p(x + (y >> 1) + 1, -1)
+                            + p(x + (y >> 1) + 2, -1)
+                            + 2)
+                            >> 2
                     } as u8;
                 }
             }
@@ -927,7 +981,11 @@ pub(crate) fn predict_intra8x8(mode: u8, n: Neighbours8) -> [[u8; 8]; 8] {
         _ => {
             let dc = match (n.top_available, n.left_available) {
                 (true, true) => {
-                    let sum: u32 = top[..8].iter().chain(left.iter()).map(|&v| u32::from(v)).sum();
+                    let sum: u32 = top[..8]
+                        .iter()
+                        .chain(left.iter())
+                        .map(|&v| u32::from(v))
+                        .sum();
                     ((sum + 8) >> 4) as u8
                 }
                 (true, false) => {
@@ -954,7 +1012,12 @@ pub(crate) fn predict_intra8x8(mode: u8, n: Neighbours8) -> [[u8; 8]; 8] {
 /// pair) -- kept as its own named function rather than a bare alias so a
 /// caller reads which block size's mode it is inferring.
 #[must_use]
-pub(crate) const fn infer_intra8x8_pred_mode(mode_a: u8, mode_b: u8, prev_flag: bool, rem: u8) -> u8 {
+pub(crate) const fn infer_intra8x8_pred_mode(
+    mode_a: u8,
+    mode_b: u8,
+    prev_flag: bool,
+    rem: u8,
+) -> u8 {
     infer_intra4x4_pred_mode(mode_a, mode_b, prev_flag, rem)
 }
 
@@ -1272,7 +1335,10 @@ mod tests {
             corner: 0,
         };
         let out = predict_intra8x8(1, n); // Horizontal
-        assert_eq!(out[0][0], 3, "filtered left[0] must be (z + 2*left[0] + left[1] + 2) >> 2 = 3");
+        assert_eq!(
+            out[0][0], 3,
+            "filtered left[0] must be (z + 2*left[0] + left[1] + 2) >> 2 = 3"
+        );
         // Every other row of left[] is unaffected by the corner (only
         // left[0] blends in `z`), so rows 1..7 stay exactly 4.
         for row in &out[1..] {

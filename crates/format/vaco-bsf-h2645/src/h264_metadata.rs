@@ -215,7 +215,9 @@ impl PacketMap for H264Metadata {
             Aud::Remove => {
                 let mut buf = Vec::new();
                 for nal in units(p.payload(), Framing::AnnexB) {
-                    if NalHeader::parse(HeaderKind::H264, nal.data).is_some_and(|h| h.nal_unit_type == NAL_AUD) {
+                    if NalHeader::parse(HeaderKind::H264, nal.data)
+                        .is_some_and(|h| h.nal_unit_type == NAL_AUD)
+                    {
                         continue;
                     }
                     buf.extend_from_slice(&[0, 0, 0, 1]);
@@ -226,7 +228,9 @@ impl PacketMap for H264Metadata {
             Aud::Insert => {
                 let kinds = units(p.payload(), Framing::AnnexB).filter_map(|nal| {
                     let header = NalHeader::parse(HeaderKind::H264, nal.data)?;
-                    if header.nal_unit_type == NAL_SLICE_IDR || header.nal_unit_type == NAL_SLICE_NON_IDR {
+                    if header.nal_unit_type == NAL_SLICE_IDR
+                        || header.nal_unit_type == NAL_SLICE_NON_IDR
+                    {
                         peek_slice_kind(nal.data, &mut self.budget)
                     } else {
                         None
@@ -262,7 +266,10 @@ impl PacketMap for H264Metadata {
             })?;
             Ok(())
         } else {
-            Err(Error::Option { name: name.to_owned(), detail: "not implemented".to_owned() })
+            Err(Error::Option {
+                name: name.to_owned(),
+                detail: "not implemented".to_owned(),
+            })
         }
     }
 }

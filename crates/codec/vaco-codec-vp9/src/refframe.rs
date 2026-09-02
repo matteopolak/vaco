@@ -138,7 +138,9 @@ pub fn materialize_ref_store(
     let mut cache: std::collections::HashMap<u64, Arc<Picture>> = std::collections::HashMap::new();
     let mut out = RefFrameStore::default();
     for i in 0..tables::NUM_REF_FRAMES {
-        let Some(p) = pending.get(u8::try_from(i).unwrap_or(0)) else { continue };
+        let Some(p) = pending.get(u8::try_from(i).unwrap_or(0)) else {
+            continue;
+        };
         let pic = if let Some(cached) = cache.get(&p.pic_ref.decode_index()) {
             cached.clone()
         } else {
@@ -146,12 +148,27 @@ pub fn materialize_ref_store(
             let luma_h = usize::try_from(p.height).unwrap_or(0);
             let chroma_w = luma_w >> u32::from(p.subsampling_x);
             let chroma_h = luma_h >> u32::from(p.subsampling_y);
-            let pic = Arc::new(crate::framebuf::materialize(&p.pic_ref, waiter_decode_index, luma_w, luma_h, chroma_w, chroma_h, budget)?);
+            let pic = Arc::new(crate::framebuf::materialize(
+                &p.pic_ref,
+                waiter_decode_index,
+                luma_w,
+                luma_h,
+                chroma_w,
+                chroma_h,
+                budget,
+            )?);
             cache.insert(p.pic_ref.decode_index(), pic.clone());
             pic
         };
         if let Some(dst) = out.slots.get_mut(i) {
-            *dst = Some(RefSlot { pic, width: p.width, height: p.height, subsampling_x: p.subsampling_x, subsampling_y: p.subsampling_y, bit_depth: p.bit_depth });
+            *dst = Some(RefSlot {
+                pic,
+                width: p.width,
+                height: p.height,
+                subsampling_x: p.subsampling_x,
+                subsampling_y: p.subsampling_y,
+                bit_depth: p.bit_depth,
+            });
         }
     }
     Ok(out)

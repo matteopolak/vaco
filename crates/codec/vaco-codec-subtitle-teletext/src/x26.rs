@@ -41,7 +41,7 @@
 //! bytes because the two need different things from the result — corruption
 //! detection alone versus the address/mode/data fields themselves.
 
-use crate::hamming::{self, triplet_address, triplet_data, triplet_mode, Correction};
+use crate::hamming::{self, Correction, triplet_address, triplet_data, triplet_mode};
 use crate::page::{Glyph, Page};
 
 /// Row Address group mode: Full Row Colour (§12.3.3, Table 28). Sets the
@@ -201,7 +201,10 @@ fn compose(national_option: u8, mark: u8, base_code: u8) -> char {
 /// others common enough across Table 36's wider language set to be worth
 /// composing correctly rather than leaving bare. A combination not listed
 /// here falls back to the unmodified base letter (see [`compose`]).
-#[allow(clippy::too_many_lines, reason = "one flat lookup table, not control flow")]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one flat lookup table, not control flow"
+)]
 fn diacritic(base: char, mark: u8) -> Option<char> {
     Some(match (mark, base) {
         // 1: grave
@@ -415,7 +418,9 @@ mod tests {
             bits[11 + i] = (data >> i) & 1;
         }
         let get = |positions: &[usize]| -> u32 {
-            positions.iter().fold(0u32, |acc, &p| acc ^ u32::from(bits[p]))
+            positions
+                .iter()
+                .fold(0u32, |acc, &p| acc ^ u32::from(bits[p]))
         };
         let p1 = 1 ^ get(&[0, 1, 3, 4, 6, 8, 10, 11, 13, 15, 17]);
         let p2 = 1 ^ get(&[0, 2, 3, 5, 6, 9, 10, 12, 13, 16, 17]);
@@ -441,7 +446,11 @@ mod tests {
         }
         let p6 = 1 ^ (0..23).fold(0u32, |acc, n| acc ^ ((raw >> n) & 1));
         raw |= (p6 & 1) << 23;
-        [(raw & 0xFF) as u8, ((raw >> 8) & 0xFF) as u8, ((raw >> 16) & 0xFF) as u8]
+        [
+            (raw & 0xFF) as u8,
+            ((raw >> 8) & 0xFF) as u8,
+            ((raw >> 16) & 0xFF) as u8,
+        ]
     }
 
     fn encode_row_triplet(address: u8, mode: u8, data: u8) -> [u8; 3] {

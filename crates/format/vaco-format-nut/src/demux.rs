@@ -182,9 +182,9 @@ impl NutDemuxer {
         // checksum (measured — see `vaco-hash::crc32_nut`'s docs for the
         // derivation): the checksum is the last 4 bytes of this span, not
         // 4 bytes after it.
-        let payload_len = forward_ptr
-            .checked_sub(4)
-            .ok_or(Error::InvalidData("nut: forward_ptr too small to hold a checksum"))?;
+        let payload_len = forward_ptr.checked_sub(4).ok_or(Error::InvalidData(
+            "nut: forward_ptr too small to hold a checksum",
+        ))?;
         let mut payload = self.budget.alloc::<u8>(payload_len as usize)?;
         self.io.read_exact(&mut payload)?;
         // The footer checksum, likewise consumed and not verified.

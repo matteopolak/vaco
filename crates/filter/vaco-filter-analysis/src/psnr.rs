@@ -67,7 +67,11 @@ const MAX: f64 = 255.0;
 pub(crate) struct Psnr;
 
 impl PairedFilter for Psnr {
-    fn filter_frames(&mut self, _ctx: &mut FilterContext<'_>, inputs: SmallVec<[Frame; 4]>) -> Result<FrameOut> {
+    fn filter_frames(
+        &mut self,
+        _ctx: &mut FilterContext<'_>,
+        inputs: SmallVec<[Frame; 4]>,
+    ) -> Result<FrameOut> {
         let [main, reference] = <[Frame; 2]>::try_from(inputs.into_vec())
             .unwrap_or_else(|_| unreachable!("Paired guarantees exactly input_count() frames"));
         Ok(FrameOut::One(measure(&main, &reference)))
@@ -105,7 +109,10 @@ fn measure(main: &Frame, reference: &Frame) -> Frame {
                 sse as f64 / samples as f64
             };
             per_component.push((mse, samples));
-            tags.push((format!("lavfi.psnr.mse.{}", label.to_lowercase()), fixed6(mse)));
+            tags.push((
+                format!("lavfi.psnr.mse.{}", label.to_lowercase()),
+                fixed6(mse),
+            ));
             tags.push((
                 format!("lavfi.psnr.psnr.{}", label.to_lowercase()),
                 psnr_string(mse),

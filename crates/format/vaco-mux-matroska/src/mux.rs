@@ -651,7 +651,12 @@ impl MatroskaMuxer {
     /// `Name`'s position is **not** measured — neither sample file used here
     /// sets a per-track title — so it stays where it always has, right
     /// after `FlagLacing`.
-    fn track_entry_bytes(t: &TrackOut, name: Option<&str>, language: &str, disposition: Disposition) -> Vec<u8> {
+    fn track_entry_bytes(
+        t: &TrackOut,
+        name: Option<&str>,
+        language: &str,
+        disposition: Disposition,
+    ) -> Vec<u8> {
         let mut body = write_uint(el::TRACKNUMBER, t.number);
         // Full 8-byte width, not the fewest octets `write_uint` would pick —
         // measured, the reference always writes `TrackUID` this way even
@@ -1148,9 +1153,7 @@ impl MatroskaMuxer {
         // carries no "first" qualifier).
         let is_first_for_track = matches!(self.wrote_first_block.get(idx), Some(false));
         if is_first_for_track && packet.pts.ticks().is_none() {
-            return Err(Error::InvalidData(
-                "matroska: first pts value must be set",
-            ));
+            return Err(Error::InvalidData("matroska: first pts value must be set"));
         }
         if let Some(seen) = self.wrote_first_block.get_mut(idx) {
             *seen = true;
@@ -1314,9 +1317,16 @@ impl Muxer for MatroskaMuxer {
     /// itself regardless of the container carrying it as one opaque sample,
     /// and Matroska's `invisible`/lacing block support is an alternative
     /// *representation* of the same content, never a requirement.
-    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        pkt: &Packet,
+    ) -> Result<BitstreamAction> {
         let idx = usize::try_from(pkt.stream_index).ok();
-        if idx.and_then(|i| self.tracks.get(i)).is_some_and(|t| t.bsf_decided) {
+        if idx
+            .and_then(|i| self.tracks.get(i))
+            .is_some_and(|t| t.bsf_decided)
+        {
             return Ok(BitstreamAction::Keep);
         }
         if let Some(t) = idx.and_then(|i| self.tracks.get_mut(i)) {
@@ -1853,7 +1863,9 @@ mod tests {
         // packed byte/three colour bytes/zero init-data size) — distinctive
         // marker bytes so a false negative here could not slip through by
         // accident.
-        p.extradata = Some(vec![0x01, 0x00, 0x00, 0x00, 0xAA, 0xBB, 0x82, 0x02, 0x02, 0x02, 0x00, 0x00]);
+        p.extradata = Some(vec![
+            0x01, 0x00, 0x00, 0x00, 0xAA, 0xBB, 0x82, 0x02, 0x02, 0x02, 0x00, 0x00,
+        ]);
         let idx = mux.add_stream(&p).unwrap();
         mux.write_header().unwrap();
         mux.write_packet(&pkt(idx, 0, true)).unwrap();

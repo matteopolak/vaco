@@ -49,17 +49,27 @@ fn chunk_at(bytes: &[u8], want_fourcc: [u8; 4]) -> Option<&[u8]> {
 pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
     if let Some(payload) = chunk_at(bytes, *b"VP8L") {
         let image = vp8l::decode(payload, budget)?;
-        let frame = argb_to_frame(budget, &image.pixels, image.width, image.height, image.alpha_is_used)?;
+        let frame = argb_to_frame(
+            budget,
+            &image.pixels,
+            image.width,
+            image.height,
+            image.alpha_is_used,
+        )?;
         return Ok(vec![frame]);
     }
 
-    let mut decoder =
-        image_webp::WebPDecoder::new(Cursor::new(bytes)).map_err(|_| Error::InvalidData("webp: header"))?;
+    let mut decoder = image_webp::WebPDecoder::new(Cursor::new(bytes))
+        .map_err(|_| Error::InvalidData("webp: header"))?;
     let (width, height) = decoder.dimensions();
     let has_alpha = decoder.has_alpha();
     let bpp = if has_alpha { 4 } else { 3 };
     budget.check_frame(width, height, bpp)?;
-    let format = if has_alpha { PixFmt::Rgba } else { PixFmt::Rgb24 };
+    let format = if has_alpha {
+        PixFmt::Rgba
+    } else {
+        PixFmt::Rgb24
+    };
 
     let Some(buf_len) = decoder.output_buffer_size() else {
         return Err(Error::Unsupported("webp: image too large"));
@@ -68,7 +78,9 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
     let mut out = Vec::new();
     if !decoder.is_animated() {
         let mut buf: Vec<u8> = budget.alloc(buf_len)?;
-        decoder.read_image(&mut buf).map_err(|_| Error::InvalidData("webp: image data"))?;
+        decoder
+            .read_image(&mut buf)
+            .map_err(|_| Error::InvalidData("webp: image data"))?;
         let frame = frame_from_packed(budget, format, width, height, bpp as usize, &buf)?;
         out.push(frame);
         return Ok(out);
@@ -143,9 +155,18 @@ fn frame_from_packed(
 ///
 /// [`Error::Unsupported`] for a non-video frame or a pixel format this
 /// crate does not map to ARGB (`Gray8`/`Ya8`/`Rgb24`/`Rgba`).
-#[allow(clippy::many_single_char_names, reason = "a/r/g/b are the ARGB channel names, clearer here than any longer alternative")]
+#[allow(
+    clippy::many_single_char_names,
+    reason = "a/r/g/b are the ARGB channel names, clearer here than any longer alternative"
+)]
 pub(crate) fn frame_to_argb(frame: &Frame) -> Result<(Vec<u32>, u32, u32, bool)> {
-    let FrameData::Video { format, width, height, .. } = &frame.data else {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = &frame.data
+    else {
         return Err(Error::Unsupported("webp: audio frame"));
     };
     let (width, height) = (*width, *height);
@@ -187,16 +208,32 @@ pub(crate) fn frame_to_argb(frame: &Frame) -> Result<(Vec<u32>, u32, u32, bool)>
                 _ => return Err(Error::Unsupported("webp: encode pixel format")),
             };
             if let Some(slot) = pixels.get_mut(y * w + x) {
-                *slot = (u32::from(a) << 24) | (u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b);
+                *slot = (u32::from(a) << 24)
+                    | (u32::from(r) << 16)
+                    | (u32::from(g) << 8)
+                    | u32::from(b);
             }
         }
     }
     Ok((pixels, width, height, has_alpha_channel))
 }
 
-#[allow(clippy::many_single_char_names, reason = "a/r/g/b are the ARGB channel names, clearer here than any longer alternative")]
-fn argb_to_frame(budget: &mut Budget, pixels: &[u32], width: u32, height: u32, has_alpha: bool) -> Result<Frame> {
-    let format = if has_alpha { PixFmt::Rgba } else { PixFmt::Rgb24 };
+#[allow(
+    clippy::many_single_char_names,
+    reason = "a/r/g/b are the ARGB channel names, clearer here than any longer alternative"
+)]
+fn argb_to_frame(
+    budget: &mut Budget,
+    pixels: &[u32],
+    width: u32,
+    height: u32,
+    has_alpha: bool,
+) -> Result<Frame> {
+    let format = if has_alpha {
+        PixFmt::Rgba
+    } else {
+        PixFmt::Rgb24
+    };
     let mut frame = Frame::alloc_video(budget, format, width, height)?;
     let bpp = if has_alpha { 4 } else { 3 };
     let w = width as usize;
@@ -205,7 +242,9 @@ fn argb_to_frame(budget: &mut Budget, pixels: &[u32], width: u32, height: u32, h
             if y >= height as usize {
                 break;
             }
-            let Some(row) = plane.row_mut(y) else { continue };
+            let Some(row) = plane.row_mut(y) else {
+                continue;
+            };
             for x in 0..w {
                 let px = pixels.get(y * w + x).copied().unwrap_or(0);
                 let a = ((px >> 24) & 0xff) as u8;
@@ -257,7 +296,13 @@ pub fn encode(frame: &Frame) -> Result<Vec<u8>> {
 pub(crate) fn encode_lossy(frame: &Frame, limits: &vaco_limits::Limits) -> Result<Vec<u8>> {
     use vaco_codec_core::Encoder as _;
 
-    let FrameData::Video { format, width, height, .. } = &frame.data else {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = &frame.data
+    else {
         return Err(Error::Unsupported("webp: audio frame"));
     };
     let (width, height) = (*width, *height);
@@ -267,7 +312,8 @@ pub(crate) fn encode_lossy(frame: &Frame, limits: &vaco_limits::Limits) -> Resul
     } else {
         let src_spec = vaco_scale::ImageSpec::new(*format, width, height);
         let dst_spec = vaco_scale::ImageSpec::new(PixFmt::Yuv420p, width, height);
-        let mut scaler = vaco_scale::Scaler::new(&src_spec, &dst_spec, &vaco_scale::ScaleOptions::default())?;
+        let mut scaler =
+            vaco_scale::Scaler::new(&src_spec, &dst_spec, &vaco_scale::ScaleOptions::default())?;
         let mut budget = Budget::new(limits.clone());
         let mut dst = Frame::alloc_video(&mut budget, PixFmt::Yuv420p, width, height)?;
         scaler.scale_frame(frame, &mut dst)?;
@@ -399,7 +445,11 @@ mod tests {
         let FrameData::Video { format, .. } = &decoded[0].data else {
             panic!("expected a video frame");
         };
-        assert_eq!(*format, PixFmt::Rgba, "an all-opaque Rgba input must still decode back as Rgba");
+        assert_eq!(
+            *format,
+            PixFmt::Rgba,
+            "an all-opaque Rgba input must still decode back as Rgba"
+        );
         assert_eq!(frame_bytes(&frame), frame_bytes(&decoded[0]));
     }
 

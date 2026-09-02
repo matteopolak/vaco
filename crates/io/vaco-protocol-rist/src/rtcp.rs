@@ -50,7 +50,9 @@ fn u32_at(buf: &[u8], at: usize) -> Result<u32> {
     let s = buf
         .get(at..at + 4)
         .ok_or_else(|| malformed("RIST RTCP field runs past the buffer"))?;
-    let arr: [u8; 4] = s.try_into().map_err(|_| malformed("RIST RTCP field is not 4 bytes"))?;
+    let arr: [u8; 4] = s
+        .try_into()
+        .map_err(|_| malformed("RIST RTCP field is not 4 bytes"))?;
     Ok(u32::from_be_bytes(arr))
 }
 
@@ -58,7 +60,9 @@ fn u16_at(buf: &[u8], at: usize) -> Result<u16> {
     let s = buf
         .get(at..at + 2)
         .ok_or_else(|| malformed("RIST RTCP field runs past the buffer"))?;
-    let arr: [u8; 2] = s.try_into().map_err(|_| malformed("RIST RTCP field is not 2 bytes"))?;
+    let arr: [u8; 2] = s
+        .try_into()
+        .map_err(|_| malformed("RIST RTCP field is not 2 bytes"))?;
     Ok(u16::from_be_bytes(arr))
 }
 
@@ -89,7 +93,11 @@ impl RttEcho {
         let is_response = match count_or_fmt {
             RTT_ECHO_REQUEST_SUBTYPE => false,
             RTT_ECHO_RESPONSE_SUBTYPE => true,
-            _ => return Err(malformed("RTT echo subtype is neither request (2) nor response (3)")),
+            _ => {
+                return Err(malformed(
+                    "RTT echo subtype is neither request (2) nor response (3)",
+                ));
+            }
         };
         let ssrc_media_source = u32_at(data, 0)?;
         let name = u32_at(data, 4)?;
@@ -164,7 +172,9 @@ impl GenericNack {
         let ssrc_media_source = u32_at(data, 4)?;
         let fci = data.get(8..).unwrap_or(&[]);
         if !fci.len().is_multiple_of(4) {
-            return Err(malformed("Generic NACK FCI is not a whole number of 4-byte entries"));
+            return Err(malformed(
+                "Generic NACK FCI is not a whole number of 4-byte entries",
+            ));
         }
         let mut entries = Vec::new();
         let mut pos = 0usize;
@@ -235,7 +245,9 @@ impl RangeNack {
         }
         let ranges_buf = data.get(8..).unwrap_or(&[]);
         if !ranges_buf.len().is_multiple_of(4) {
-            return Err(malformed("range NACK ranges are not a whole number of 4-byte entries"));
+            return Err(malformed(
+                "range NACK ranges are not a whole number of 4-byte entries",
+            ));
         }
         let mut ranges = Vec::new();
         let mut pos = 0usize;
@@ -440,14 +452,19 @@ mod tests {
         };
         let (count_or_fmt, body) = echo.serialize();
         let mut packet = Vec::new();
-        #[allow(clippy::integer_division, reason = "RTCP length is defined in 32-bit words; body.len() is a multiple of 4 by construction here")]
+        #[allow(
+            clippy::integer_division,
+            reason = "RTCP length is defined in 32-bit words; body.len() is a multiple of 4 by construction here"
+        )]
         let length_words = u16::try_from((4 + body.len()) / 4 - 1).unwrap();
         packet.push((2 << 6) | count_or_fmt); // V=2, P=0, Subtype
         packet.push(PT_APP);
         packet.extend_from_slice(&length_words.to_be_bytes());
         packet.extend_from_slice(&body);
 
-        let parsed: Vec<_> = vaco_rtp::rtcp::iter_compound(&packet).collect::<Result<_>>().unwrap();
+        let parsed: Vec<_> = vaco_rtp::rtcp::iter_compound(&packet)
+            .collect::<Result<_>>()
+            .unwrap();
         assert_eq!(parsed.len(), 1);
         match &parsed[0] {
             vaco_rtp::rtcp::RtcpPacket::Other {

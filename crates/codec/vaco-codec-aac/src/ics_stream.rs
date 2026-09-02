@@ -64,11 +64,9 @@ pub(crate) fn read(
     let global_gain = r.get(8) as u8;
 
     let ics = if common_window {
-        shared_ics
-            .cloned()
-            .ok_or(Error::InvalidData(
-                "vaco-codec-aac: common_window is set but no shared ics_info is available",
-            ))?
+        shared_ics.cloned().ok_or(Error::InvalidData(
+            "vaco-codec-aac: common_window is set but no shared ics_info is available",
+        ))?
     } else {
         IcsInfo::read(r)?
     };
@@ -149,7 +147,12 @@ pub(crate) fn read(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::read;
     use crate::spectral_tables::SCALEFACTOR_HUFFMAN;
     use vaco_bitstream::{BitReader, BitWriter};

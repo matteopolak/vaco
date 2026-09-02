@@ -52,16 +52,22 @@
 //! structural floor (right place, right shape, not garbage), not a claim
 //! of visual parity.
 
-#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing, clippy::panic, reason = "integration test")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "integration test"
+)]
 
 use std::io::{Read as _, Write as _};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use vaco_ass::parse as parse_ass;
+use vaco_conformance::compare::quality::Metric as _;
 use vaco_conformance::compare::quality::Signal;
 use vaco_conformance::metrics::{Psnr, Ssim};
-use vaco_conformance::compare::quality::Metric as _;
 use vaco_filter_subtitle::ass_filter;
 use vaco_filter_text::TextRenderer;
 use vaco_frame::FramePool;
@@ -90,7 +96,12 @@ Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,Hello ASS World\n";
 /// a wedged process is killed and treated as "not usable" rather than
 /// hanging the test suite.
 fn probe_ass_capable(bin: &str) -> bool {
-    let Ok(mut child) = Command::new(bin).arg("-filters").stdout(Stdio::piped()).stderr(Stdio::null()).spawn() else {
+    let Ok(mut child) = Command::new(bin)
+        .arg("-filters")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
         return false;
     };
     let start = Instant::now();
@@ -100,7 +111,9 @@ fn probe_ass_capable(bin: &str) -> bool {
                 if !status.success() {
                     return false;
                 }
-                let Some(mut out) = child.stdout.take() else { return false };
+                let Some(mut out) = child.stdout.take() else {
+                    return false;
+                };
                 let mut buf = String::new();
                 let _ = out.read_to_string(&mut buf);
                 let has = |name: &str| buf.lines().any(|l| l.split_whitespace().any(|w| w == name));
@@ -110,7 +123,9 @@ fn probe_ass_capable(bin: &str) -> bool {
                 if start.elapsed() > PROBE_TIMEOUT {
                     let _ = child.kill();
                     let _ = child.wait();
-                    eprintln!("vaco-filter-subtitle ssim test: `{bin} -filters` did not return within {PROBE_TIMEOUT:?} — treating as unavailable");
+                    eprintln!(
+                        "vaco-filter-subtitle ssim test: `{bin} -filters` did not return within {PROBE_TIMEOUT:?} — treating as unavailable"
+                    );
                     return false;
                 }
                 std::thread::sleep(Duration::from_millis(100));
@@ -210,17 +225,32 @@ fn our_render() -> Vec<u8> {
     vaco_filter_draw::fill::fill(
         &mut frame,
         vaco_filter_draw::rect::Rect::full(WIDTH, HEIGHT),
-        vaco_core::Rgba { r: 0x40, g: 0x40, b: 0x40, a: 255 },
+        vaco_core::Rgba {
+            r: 0x40,
+            g: 0x40,
+            b: 0x40,
+            a: 255,
+        },
     )
     .unwrap();
     let script = parse_ass(SCRIPT);
     let mut renderer = TextRenderer::new();
-    ass_filter::render_at(&script, &mut renderer, &mut frame, vaco_core::Duration::ZERO).unwrap();
+    ass_filter::render_at(
+        &script,
+        &mut renderer,
+        &mut frame,
+        vaco_core::Duration::ZERO,
+    )
+    .unwrap();
 
     let mut out = Vec::new();
     for plane_idx in 0..3 {
         let plane = frame.plane(plane_idx).unwrap();
-        let (w, h) = if plane_idx == 0 { (WIDTH, HEIGHT) } else { (WIDTH.div_ceil(2), HEIGHT.div_ceil(2)) };
+        let (w, h) = if plane_idx == 0 {
+            (WIDTH, HEIGHT)
+        } else {
+            (WIDTH.div_ceil(2), HEIGHT.div_ceil(2))
+        };
         for y in 0..h as usize {
             if let Some(row) = plane.row(y) {
                 out.extend_from_slice(row.get(..w as usize).unwrap_or(row));
@@ -231,7 +261,13 @@ fn our_render() -> Vec<u8> {
 }
 
 fn plane_signal(bytes: &[u8], width: u32, height: u32) -> Signal<'_> {
-    Signal { planes: vec![bytes], strides: vec![width as usize], width, height, depth: 8 }
+    Signal {
+        planes: vec![bytes],
+        strides: vec![width as usize],
+        width,
+        height,
+        depth: 8,
+    }
 }
 
 #[test]
@@ -261,13 +297,24 @@ fn ssim_against_ffmpegs_own_ass_filter() {
     let c_w = WIDTH.div_ceil(2);
     let c_h = HEIGHT.div_ceil(2);
     let c_size = (c_w * c_h) as usize;
-    assert_eq!(reference.len(), y_size + 2 * c_size, "reference frame size mismatch — did the ass filter run at all?");
-    assert_eq!(ours.len(), reference.len(), "our own render must be the same raw size");
+    assert_eq!(
+        reference.len(),
+        y_size + 2 * c_size,
+        "reference frame size mismatch — did the ass filter run at all?"
+    );
+    assert_eq!(
+        ours.len(),
+        reference.len(),
+        "our own render must be the same raw size"
+    );
 
     let ssim = Ssim;
     let psnr = Psnr::y();
-    let planes: [(&str, usize, usize, u32, u32); 3] =
-        [("Y", 0, y_size, WIDTH, HEIGHT), ("U", y_size, c_size, c_w, c_h), ("V", y_size + c_size, c_size, c_w, c_h)];
+    let planes: [(&str, usize, usize, u32, u32); 3] = [
+        ("Y", 0, y_size, WIDTH, HEIGHT),
+        ("U", y_size, c_size, c_w, c_h),
+        ("V", y_size + c_size, c_size, c_w, c_h),
+    ];
 
     for (name, offset, len, w, h) in planes {
         let ref_plane = &reference[offset..offset + len];
@@ -283,6 +330,9 @@ fn ssim_against_ffmpegs_own_ass_filter() {
         // disagree on anti-aliasing and hinting. 0.5 is a structural
         // floor — "the text is roughly there, roughly the right shape and
         // colour, not garbage or absent" — not a claim of visual parity.
-        assert!(score > 0.5, "plane {name} SSIM {score:.4} is too low to be the same rendered content");
+        assert!(
+            score > 0.5,
+            "plane {name} SSIM {score:.4} is too low to be the same rendered content"
+        );
     }
 }

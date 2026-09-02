@@ -628,7 +628,8 @@ mod tests {
         let mut tee = TeeMuxer::new(&outputs, vec![slot_a, slot_b]).unwrap();
 
         let mut meta = MuxMetadata::default();
-        meta.tags.push(("title".to_owned(), "a tee'd file".to_owned()));
+        meta.tags
+            .push(("title".to_owned(), "a tee'd file".to_owned()));
         tee.set_metadata(&meta).unwrap();
         tee.set_bitexact(true);
 

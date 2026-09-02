@@ -26,13 +26,17 @@ impl AffineMap {
     /// No transform: `src == dst`.
     #[must_use]
     pub const fn identity() -> Self {
-        Self { m: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]] }
+        Self {
+            m: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        }
     }
 
     /// A pure translation by `(dx, dy)`.
     #[must_use]
     pub const fn translation(dx: f64, dy: f64) -> Self {
-        Self { m: [[1.0, 0.0, dx], [0.0, 1.0, dy]] }
+        Self {
+            m: [[1.0, 0.0, dx], [0.0, 1.0, dy]],
+        }
     }
 
     /// A rotation by `theta` radians about `(cx, cy)`, composed with a
@@ -78,10 +82,15 @@ pub fn bilinear_sample(src: PlaneRef<'_>, x: f64, y: f64) -> Option<u8> {
     }
     let x1 = (x0 + 1).min(w - 1);
     let y1 = (y0 + 1).min(h - 1);
-    #[allow(clippy::cast_precision_loss, reason = "pixel coordinates, far below f64's exact-integer range")]
+    #[allow(
+        clippy::cast_precision_loss,
+        reason = "pixel coordinates, far below f64's exact-integer range"
+    )]
     let (fx, fy) = (x - x0 as f64, y - y0 as f64);
 
-    let px = |xi: usize, yi: usize| -> f64 { f64::from(src.row(yi).and_then(|r| r.get(xi)).copied().unwrap_or(0)) };
+    let px = |xi: usize, yi: usize| -> f64 {
+        f64::from(src.row(yi).and_then(|r| r.get(xi)).copied().unwrap_or(0))
+    };
 
     let top = px(x0, y0) * (1.0 - fx) + px(x1, y0) * fx;
     let bottom = px(x0, y1) * (1.0 - fx) + px(x1, y1) * fx;
@@ -97,11 +106,20 @@ pub fn bilinear_sample(src: PlaneRef<'_>, x: f64, y: f64) -> Option<u8> {
 /// through `map`. Pixels whose source falls outside `src` are left at
 /// `fill`.
 #[must_use]
-pub fn warp_plane(src: PlaneRef<'_>, dst_w: usize, dst_h: usize, map: &AffineMap, fill: u8) -> Vec<u8> {
+pub fn warp_plane(
+    src: PlaneRef<'_>,
+    dst_w: usize,
+    dst_h: usize,
+    map: &AffineMap,
+    fill: u8,
+) -> Vec<u8> {
     let mut out = vec![fill; dst_w.saturating_mul(dst_h)];
     for y in 0..dst_h {
         for x in 0..dst_w {
-            #[allow(clippy::cast_precision_loss, reason = "pixel coordinates, far below f64's exact-integer range")]
+            #[allow(
+                clippy::cast_precision_loss,
+                reason = "pixel coordinates, far below f64's exact-integer range"
+            )]
             let (sx, sy) = map.apply(x as f64, y as f64);
             if let Some(value) = bilinear_sample(src, sx, sy)
                 && let Some(cell) = out.get_mut(y.saturating_mul(dst_w).saturating_add(x))
@@ -146,7 +164,13 @@ mod tests {
     fn translation_shifts_content_and_fills_the_uncovered_edge() {
         let f = plane_of(&[&[10, 20, 30]]);
         // Shifting the *sample point* by +1 in x means dst(x) reads src(x+1).
-        let out = warp_plane(f.plane(0).unwrap(), 3, 1, &AffineMap::translation(1.0, 0.0), 255);
+        let out = warp_plane(
+            f.plane(0).unwrap(),
+            3,
+            1,
+            &AffineMap::translation(1.0, 0.0),
+            255,
+        );
         assert_eq!(out, vec![20, 30, 255]);
     }
 

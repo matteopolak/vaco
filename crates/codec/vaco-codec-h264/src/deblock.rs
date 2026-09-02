@@ -286,14 +286,21 @@ impl<'a> MbGrid<'a> {
                 *slot = Some(mb);
             }
         }
-        Self { mbs_wide, mbs_high, by_addr }
+        Self {
+            mbs_wide,
+            mbs_high,
+            by_addr,
+        }
     }
 
     fn at(&self, mx: u32, my: u32) -> Option<&'a MbSummary> {
         if mx >= self.mbs_wide || my >= self.mbs_high {
             return None;
         }
-        self.by_addr.get((my * self.mbs_wide + mx) as usize).copied().flatten()
+        self.by_addr
+            .get((my * self.mbs_wide + mx) as usize)
+            .copied()
+            .flatten()
     }
 
     fn qpy(&self, mx: u32, my: u32) -> u8 {
@@ -334,7 +341,10 @@ impl<'a> MbGrid<'a> {
 /// check that schedule against.
 #[cfg_attr(
     not(test),
-    allow(dead_code, reason = "the row-driven schedule is what the decoder uses; this is its test oracle")
+    allow(
+        dead_code,
+        reason = "the row-driven schedule is what the decoder uses; this is its test oracle"
+    )
 )]
 #[allow(
     clippy::unnecessary_wraps,
@@ -376,7 +386,6 @@ pub(crate) fn deblock_picture_luma(
     Ok(())
 }
 
-
 /// Runs clause 8.7's deblocking filter over one already-fully-reconstructed
 /// 4:2:0 chroma plane (`Cb` or `Cr`), in place -- the chroma sibling of
 /// [`deblock_picture_luma`], reusing luma-derived boundary strength at half
@@ -388,7 +397,10 @@ pub(crate) fn deblock_picture_luma(
 /// [`deblock_picture_luma`]'s chroma sibling, and kept for the same reason.
 #[cfg_attr(
     not(test),
-    allow(dead_code, reason = "the row-driven schedule is what the decoder uses; this is its test oracle")
+    allow(
+        dead_code,
+        reason = "the row-driven schedule is what the decoder uses; this is its test oracle"
+    )
 )]
 #[allow(
     clippy::integer_division,
@@ -492,7 +504,9 @@ impl<'a> DeblockCtx<'a> {
         let mbs_wide = self.mbs_wide;
         let width = mbs_wide.saturating_mul(16);
 
-        let get = |luma: &[u8], x: u32, y: u32| -> u8 { luma.get((y * width + x) as usize).copied().unwrap_or(0) };
+        let get = |luma: &[u8], x: u32, y: u32| -> u8 {
+            luma.get((y * width + x) as usize).copied().unwrap_or(0)
+        };
         let set = |luma: &mut [u8], x: u32, y: u32, v: u8| {
             if let Some(slot) = luma.get_mut((y * width + x) as usize) {
                 *slot = v;
@@ -500,7 +514,9 @@ impl<'a> DeblockCtx<'a> {
         };
 
         for mx in 0..mbs_wide {
-            let Some(here) = grid.at(mx, my) else { continue };
+            let Some(here) = grid.at(mx, my) else {
+                continue;
+            };
             let qp_here = grid.qpy(mx, my);
 
             // Vertical edges first, left to right (clause 8.7's own
@@ -553,8 +569,20 @@ impl<'a> DeblockCtx<'a> {
                 let mut bs_by_blk_row = [0u8; 4];
                 for (blk_row, slot) in bs_by_blk_row.iter_mut().enumerate() {
                     let q_blk = blk_row * 4 + (local / 4) as usize;
-                    let p_blk = if mb_edge { blk_row * 4 + 3 } else { blk_row * 4 + (local / 4 - 1) as usize };
-                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                    let p_blk = if mb_edge {
+                        blk_row * 4 + 3
+                    } else {
+                        blk_row * 4 + (local / 4 - 1) as usize
+                    };
+                    *slot = boundary_strength(
+                        mb_edge,
+                        p_mb,
+                        p_blk,
+                        here,
+                        q_blk,
+                        ref_list0_poc,
+                        ref_list1_poc,
+                    );
                 }
                 for row in 0..16u32 {
                     let y = my * 16 + row;
@@ -588,7 +616,8 @@ impl<'a> DeblockCtx<'a> {
                     }
                 }
                 batch::filter_luma_edge(
-                    caps, &mut p0a, &mut p1a, &mut p2a, &p3a, &mut q0a, &mut q1a, &mut q2a, &q3a, &bsa, edge,
+                    caps, &mut p0a, &mut p1a, &mut p2a, &p3a, &mut q0a, &mut q1a, &mut q2a, &q3a,
+                    &bsa, edge,
                 );
                 for row in 0..16u32 {
                     let y = my * 16 + row;
@@ -640,8 +669,20 @@ impl<'a> DeblockCtx<'a> {
                 let mut bs_by_blk_col = [0u8; 4];
                 for (blk_col, slot) in bs_by_blk_col.iter_mut().enumerate() {
                     let q_blk = (local / 4) as usize * 4 + blk_col;
-                    let p_blk = if mb_edge { 12 + blk_col } else { (local / 4 - 1) as usize * 4 + blk_col };
-                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                    let p_blk = if mb_edge {
+                        12 + blk_col
+                    } else {
+                        (local / 4 - 1) as usize * 4 + blk_col
+                    };
+                    *slot = boundary_strength(
+                        mb_edge,
+                        p_mb,
+                        p_blk,
+                        here,
+                        q_blk,
+                        ref_list0_poc,
+                        ref_list1_poc,
+                    );
                 }
                 for col in 0..16u32 {
                     let x = mx * 16 + col;
@@ -675,7 +716,8 @@ impl<'a> DeblockCtx<'a> {
                     }
                 }
                 batch::filter_luma_edge(
-                    caps, &mut p0a, &mut p1a, &mut p2a, &p3a, &mut q0a, &mut q1a, &mut q2a, &q3a, &bsa, edge,
+                    caps, &mut p0a, &mut p1a, &mut p2a, &p3a, &mut q0a, &mut q1a, &mut q2a, &q3a,
+                    &bsa, edge,
                 );
                 for col in 0..16u32 {
                     let x = mx * 16 + col;
@@ -716,7 +758,9 @@ impl<'a> DeblockCtx<'a> {
             u8::try_from(v.clamp(0, 51)).unwrap_or(51)
         };
 
-        let get = |c: &[u8], x: u32, y: u32| -> u8 { c.get((y * width + x) as usize).copied().unwrap_or(0) };
+        let get = |c: &[u8], x: u32, y: u32| -> u8 {
+            c.get((y * width + x) as usize).copied().unwrap_or(0)
+        };
         let set = |c: &mut [u8], x: u32, y: u32, v: u8| {
             if let Some(slot) = c.get_mut((y * width + x) as usize) {
                 *slot = v;
@@ -724,7 +768,9 @@ impl<'a> DeblockCtx<'a> {
         };
 
         for mx in 0..mbs_wide {
-            let Some(here) = grid.at(mx, my) else { continue };
+            let Some(here) = grid.at(mx, my) else {
+                continue;
+            };
             let qp_here = qpc(mx, my);
 
             // Vertical: chroma-local x == 0 (macroblock boundary, luma
@@ -762,9 +808,20 @@ impl<'a> DeblockCtx<'a> {
                     // row `row` is luma row `2*row`, whose own 4-row group
                     // is `(2*row) / 4 == row / 2`.
                     let q_blk = blk_row * 4 + (luma_local / 4) as usize;
-                    let p_blk =
-                        if mb_edge { blk_row * 4 + 3 } else { blk_row * 4 + (luma_local / 4 - 1) as usize };
-                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                    let p_blk = if mb_edge {
+                        blk_row * 4 + 3
+                    } else {
+                        blk_row * 4 + (luma_local / 4 - 1) as usize
+                    };
+                    *slot = boundary_strength(
+                        mb_edge,
+                        p_mb,
+                        p_blk,
+                        here,
+                        q_blk,
+                        ref_list0_poc,
+                        ref_list1_poc,
+                    );
                 }
                 for row in 0..8u32 {
                     let y = my * 8 + row;
@@ -819,8 +876,20 @@ impl<'a> DeblockCtx<'a> {
                 let mut bs_by_blk_col = [0u8; 4];
                 for (blk_col, slot) in bs_by_blk_col.iter_mut().enumerate() {
                     let q_blk = (luma_local / 4) as usize * 4 + blk_col;
-                    let p_blk = if mb_edge { 12 + blk_col } else { (luma_local / 4 - 1) as usize * 4 + blk_col };
-                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, ref_list0_poc, ref_list1_poc);
+                    let p_blk = if mb_edge {
+                        12 + blk_col
+                    } else {
+                        (luma_local / 4 - 1) as usize * 4 + blk_col
+                    };
+                    *slot = boundary_strength(
+                        mb_edge,
+                        p_mb,
+                        p_blk,
+                        here,
+                        q_blk,
+                        ref_list0_poc,
+                        ref_list1_poc,
+                    );
                 }
                 for col in 0..8u32 {
                     let x = mx * 8 + col;
@@ -854,7 +923,12 @@ impl<'a> DeblockCtx<'a> {
 }
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing, clippy::unwrap_used, clippy::integer_division, reason = "test code")]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::unwrap_used,
+    clippy::integer_division,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use crate::mb::{MbResidual, MvInfo};
@@ -892,11 +966,15 @@ mod tests {
     /// A plane that varies enough for filtering to move bytes, by less than
     /// the thresholds at `qpy = 40` so that it is not suppressed.
     fn plane(w: usize, h: usize) -> Vec<u8> {
-        (0..w * h).map(|i| 128 + ((i * 7 + (i / w) * 5) % 7) as u8).collect()
+        (0..w * h)
+            .map(|i| 128 + ((i * 7 + (i / w) * 5) % 7) as u8)
+            .collect()
     }
 
     fn changed_rows(before: &[u8], after: &[u8], w: usize, h: usize) -> Vec<usize> {
-        (0..h).filter(|&y| before[y * w..(y + 1) * w] != after[y * w..(y + 1) * w]).collect()
+        (0..h)
+            .filter(|&y| before[y * w..(y + 1) * w] != after[y * w..(y + 1) * w])
+            .collect()
     }
 
     /// Row granularity rests entirely on knowing how far *up* filtering one
@@ -919,8 +997,15 @@ mod tests {
         let mut after = before.clone();
         ctx.luma_mb_row(&mut after, 1);
         let changed = changed_rows(&before, &after, w, h);
-        assert!(!changed.is_empty(), "the filter did not move a single byte, so this proves nothing");
-        assert_eq!(*changed.iter().min().unwrap(), 13, "the top edge's `p2` is row my * 16 - 3");
+        assert!(
+            !changed.is_empty(),
+            "the filter did not move a single byte, so this proves nothing"
+        );
+        assert_eq!(
+            *changed.iter().min().unwrap(),
+            13,
+            "the top edge's `p2` is row my * 16 - 3"
+        );
         assert!(
             *changed.iter().max().unwrap() <= 30,
             "nothing below `my * 16 + 14` may move: {changed:?}"
@@ -942,8 +1027,15 @@ mod tests {
         let mut after = before.clone();
         ctx.chroma_mb_row(&mut after, 0, 1);
         let changed = changed_rows(&before, &after, w, h);
-        assert!(!changed.is_empty(), "the filter did not move a single byte, so this proves nothing");
-        assert_eq!(*changed.iter().min().unwrap(), 7, "the top edge's `p0` is row my * 8 - 1");
+        assert!(
+            !changed.is_empty(),
+            "the filter did not move a single byte, so this proves nothing"
+        );
+        assert_eq!(
+            *changed.iter().min().unwrap(),
+            7,
+            "the top edge's `p0` is row my * 8 - 1"
+        );
         assert!(
             *changed.iter().max().unwrap() <= 15,
             "nothing below `my * 8 + 7` may move: {changed:?}"

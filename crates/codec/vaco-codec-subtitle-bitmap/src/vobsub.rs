@@ -77,7 +77,13 @@ fn decode_run(data: &[u8], nibble_offset: &mut usize, remaining: usize) -> Optio
 /// Decode one interlaced field's lines, each padded/truncated to exactly
 /// `width` pixels, byte-aligning `nibble_offset` after every line per the
 /// spec's own "four fill bits of 0 are added" rule.
-fn decode_field(data: &[u8], start_byte: usize, width: u32, lines: u32, limits: &Limits) -> Result<Vec<Vec<u8>>> {
+fn decode_field(
+    data: &[u8],
+    start_byte: usize,
+    width: u32,
+    lines: u32,
+    limits: &Limits,
+) -> Result<Vec<Vec<u8>>> {
     if width > limits.max_dimension {
         return Err(Error::LimitExceeded {
             limit: "vobsub_spu_width",
@@ -92,7 +98,9 @@ fn decode_field(data: &[u8], start_byte: usize, width: u32, lines: u32, limits: 
         let mut row = vec![0u8; width];
         let mut col = 0usize;
         while col < width {
-            let Some((len, colour)) = decode_run(data, &mut nibble_offset, width.saturating_sub(col)) else {
+            let Some((len, colour)) =
+                decode_run(data, &mut nibble_offset, width.saturating_sub(col))
+            else {
                 break;
             };
             let end = col.saturating_add(len).min(width);
@@ -143,12 +151,18 @@ fn parse_control_sequences(data: &[u8], first_cs: usize) -> Result<SpuState> {
             break;
         }
         let stm = u32::from(read_u16(data, cs)?);
-        let next = usize::from(read_u16(data, cs.checked_add(2).ok_or(Error::InvalidData("vobsub: SPU offset overflow"))?)?);
-        let mut i = cs.checked_add(4).ok_or(Error::InvalidData("vobsub: SPU offset overflow"))?;
+        let next = usize::from(read_u16(
+            data,
+            cs.checked_add(2)
+                .ok_or(Error::InvalidData("vobsub: SPU offset overflow"))?,
+        )?);
+        let mut i = cs
+            .checked_add(4)
+            .ok_or(Error::InvalidData("vobsub: SPU offset overflow"))?;
         loop {
-            let cmd = *data
-                .get(i)
-                .ok_or(Error::InvalidData("vobsub: control sequence ran off the end"))?;
+            let cmd = *data.get(i).ok_or(Error::InvalidData(
+                "vobsub: control sequence ran off the end",
+            ))?;
             i = i.saturating_add(1);
             match cmd {
                 0xFF => break,
@@ -203,10 +217,7 @@ fn parse_control_sequences(data: &[u8], first_cs: usize) -> Result<SpuState> {
                 }
                 0x06 => {
                     state.top_offset = Some(usize::from(read_u16(data, i)?));
-                    state.bottom_offset = Some(usize::from(read_u16(
-                        data,
-                        i.saturating_add(2),
-                    )?));
+                    state.bottom_offset = Some(usize::from(read_u16(data, i.saturating_add(2))?));
                     i = i.saturating_add(4);
                 }
                 0x07 => {
@@ -225,9 +236,9 @@ fn parse_control_sequences(data: &[u8], first_cs: usize) -> Result<SpuState> {
 }
 
 fn byte_at(data: &[u8], at: usize) -> Result<u8> {
-    data.get(at)
-        .copied()
-        .ok_or(Error::InvalidData("vobsub: control sequence argument truncated"))
+    data.get(at).copied().ok_or(Error::InvalidData(
+        "vobsub: control sequence argument truncated",
+    ))
 }
 
 fn read_u16(data: &[u8], at: usize) -> Result<u16> {
@@ -265,9 +276,9 @@ pub fn decode_spu(data: &[u8], palette: &Palette, limits: &Limits) -> Result<Sub
     let height = ey.saturating_sub(sy).saturating_add(1);
     let rect = Rect::new(sx, sy, width, height, limits)?;
 
-    let top_offset = state
-        .top_offset
-        .ok_or(Error::InvalidData("vobsub: SPU never set a pixel data address"))?;
+    let top_offset = state.top_offset.ok_or(Error::InvalidData(
+        "vobsub: SPU never set a pixel data address",
+    ))?;
     let bottom_offset = state.bottom_offset.unwrap_or(top_offset);
     let top_lines = height.div_ceil(2);
     let bottom_lines = height >> 1;
@@ -306,7 +317,9 @@ pub fn decode_spu(data: &[u8], palette: &Palette, limits: &Limits) -> Result<Sub
 
     Ok(SubtitleEvent {
         start: Duration::from_micros(state.start_ticks.map_or(0, ticks_to_micros)),
-        end: state.stop_ticks.map(|t| Duration::from_micros(ticks_to_micros(t))),
+        end: state
+            .stop_ticks
+            .map(|t| Duration::from_micros(ticks_to_micros(t))),
         forced: state.forced,
         rects: vec![bitmap],
     })

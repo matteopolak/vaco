@@ -136,8 +136,12 @@ mod tests {
     #[test]
     fn rejects_bad_magic() {
         let mut budget = Budget::new(Limits::permissive());
-        let err = codec::decode(b"not a jpeg xl file at all, padded a bit more", &mut budget).unwrap_err();
-        assert!(matches!(err, Error::InvalidData(_) | Error::Unsupported(_) | Error::UnexpectedEof));
+        let err = codec::decode(b"not a jpeg xl file at all, padded a bit more", &mut budget)
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            Error::InvalidData(_) | Error::Unsupported(_) | Error::UnexpectedEof
+        ));
     }
 
     #[test]
@@ -153,6 +157,9 @@ mod tests {
 
         let mut dec = JxlDecoder::new(Limits::permissive());
         let err = dec.send(Some(&packet)).unwrap_err();
-        assert!(matches!(err, Error::InvalidData(_) | Error::Unsupported(_) | Error::UnexpectedEof));
+        assert!(matches!(
+            err,
+            Error::InvalidData(_) | Error::Unsupported(_) | Error::UnexpectedEof
+        ));
     }
 }

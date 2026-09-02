@@ -352,9 +352,7 @@ impl StreamHeader {
         // real crash) rather than any real reordering. 256 is far beyond
         // any real codec's need while still catching that class of input.
         if decode_delay > 256 {
-            return Err(Error::InvalidData(
-                "nut: decode_delay is implausibly large",
-            ));
+            return Err(Error::InvalidData("nut: decode_delay is implausibly large"));
         }
         let stream_flags = read_v(&mut c)?;
         let codec_specific_data = read_vb(&mut c, budget)?;

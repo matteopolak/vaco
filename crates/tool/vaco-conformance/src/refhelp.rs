@@ -164,7 +164,11 @@ maskedthreshold AVOptions:
      diff            1            ..FV....... 
 ";
         let consts = parse(help, "maskedthreshold");
-        assert_eq!(consts.len(), 1, "only `mode` has named constants: {consts:?}");
+        assert_eq!(
+            consts.len(),
+            1,
+            "only `mode` has named constants: {consts:?}"
+        );
         assert_eq!(
             consts.get("mode"),
             Some(&vec![("abs".to_owned(), 0), ("diff".to_owned(), 1)])

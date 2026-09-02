@@ -19,7 +19,12 @@
 //! address in the picture was actually visited (`stats.macroblock_count`
 //! matches `pic_width_in_mbs * pic_height_in_map_units`).
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code over a fixed fixture")]
+#![allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code over a fixed fixture"
+)]
 
 use vaco_bitstream::{BitReader, annexb};
 use vaco_codec_cabac::CabacDecoder;
@@ -39,7 +44,11 @@ use vaco_parse_h264::{H264NalHeader, NalUnitType, ParameterSets, SliceHeader};
 /// `more_rbsp_data()` closes it for CAVLC.
 fn assert_slice_ends_at_rbsp_trailing_bits(reader: &mut BitReader<'_>, slice_count: u32) {
     let pos = reader.bit_pos();
-    let pad_bits = if pos.is_multiple_of(8) { 8 } else { 8 - (pos % 8) };
+    let pad_bits = if pos.is_multiple_of(8) {
+        8
+    } else {
+        8 - (pos % 8)
+    };
     let stop_pattern = reader.get(u32::try_from(pad_bits).unwrap());
     let expected = 1u32 << (pad_bits - 1);
     assert_eq!(
@@ -55,7 +64,6 @@ fn assert_slice_ends_at_rbsp_trailing_bits(reader: &mut BitReader<'_>, slice_cou
          cabac_zero_word padding: {trailer:?}"
     );
 }
-
 
 #[test]
 #[ignore = "known incomplete, but measurably moved by a second fix: the \
@@ -87,7 +95,9 @@ fn every_slice_in_a_real_ip_cabac_stream_consumes_exactly_its_own_bits() {
     let mut p_count = 0u32;
 
     for nal in annexb::nal_units(data) {
-        let Some(header) = H264NalHeader::parse(nal) else { continue };
+        let Some(header) = H264NalHeader::parse(nal) else {
+            continue;
+        };
         match header.nal_unit_type {
             NalUnitType::Sps => {
                 rbsp.fill(nal, &mut budget).unwrap();
@@ -120,11 +130,20 @@ fn every_slice_in_a_real_ip_cabac_stream_consumes_exactly_its_own_bits() {
                 }
 
                 let mut cabac = CabacDecoder::from_reader(reader);
-                let stats =
-                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None)
-                        .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
+                let stats = vaco_codec_h264::mb::decode_slice_cabac(
+                    &mut cabac,
+                    &mut budget,
+                    sps,
+                    pps,
+                    &slice_header,
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
 
-                assert!(!cabac.malformed(), "slice {slice_count}: CABAC engine reported malformed input");
+                assert!(
+                    !cabac.malformed(),
+                    "slice {slice_count}: CABAC engine reported malformed input"
+                );
                 let total_mbs = sps.pic_width_in_mbs
                     * sps.pic_height_in_map_units
                     * if sps.frame_mbs_only { 1 } else { 2 };
@@ -141,7 +160,10 @@ fn every_slice_in_a_real_ip_cabac_stream_consumes_exactly_its_own_bits() {
     }
 
     println!("slices={slice_count} I={i_count} P={p_count}");
-    assert!(slice_count >= 20, "expected at least 20 slices, got {slice_count}");
+    assert!(
+        slice_count >= 20,
+        "expected at least 20 slices, got {slice_count}"
+    );
     assert!(i_count > 0, "expected at least one I slice");
     assert!(p_count > 0, "expected at least one P slice");
 }
@@ -169,7 +191,9 @@ fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
     let mut idc_seen = std::collections::HashSet::new();
 
     for nal in annexb::nal_units(data) {
-        let Some(header) = H264NalHeader::parse(nal) else { continue };
+        let Some(header) = H264NalHeader::parse(nal) else {
+            continue;
+        };
         match header.nal_unit_type {
             NalUnitType::Sps => {
                 rbsp.fill(nal, &mut budget).unwrap();
@@ -203,11 +227,20 @@ fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
                 idc_seen.insert(slice_header.cabac_init_idc);
 
                 let mut cabac = CabacDecoder::from_reader(reader);
-                let stats =
-                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None)
-                        .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
+                let stats = vaco_codec_h264::mb::decode_slice_cabac(
+                    &mut cabac,
+                    &mut budget,
+                    sps,
+                    pps,
+                    &slice_header,
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
 
-                assert!(!cabac.malformed(), "slice {slice_count}: CABAC engine reported malformed input");
+                assert!(
+                    !cabac.malformed(),
+                    "slice {slice_count}: CABAC engine reported malformed input"
+                );
                 let total_mbs = sps.pic_width_in_mbs
                     * sps.pic_height_in_map_units
                     * if sps.frame_mbs_only { 1 } else { 2 };
@@ -223,8 +256,13 @@ fn every_slice_in_a_real_multiref_cabac_stream_consumes_exactly_its_own_bits() {
         }
     }
 
-    println!("slices={slice_count} I={i_count} P={p_count} cabac_init_idc values seen={idc_seen:?}");
-    assert!(slice_count >= 40, "expected at least 40 slices, got {slice_count}");
+    println!(
+        "slices={slice_count} I={i_count} P={p_count} cabac_init_idc values seen={idc_seen:?}"
+    );
+    assert!(
+        slice_count >= 40,
+        "expected at least 40 slices, got {slice_count}"
+    );
     assert!(i_count > 0, "expected at least one I slice");
     assert!(p_count > 0, "expected at least one P slice");
 }
@@ -315,7 +353,9 @@ fn every_slice_in_a_real_multiref_cabac_stream_visits_every_macroblock() {
     let mut short_slices = Vec::new();
 
     for nal in annexb::nal_units(data) {
-        let Some(header) = H264NalHeader::parse(nal) else { continue };
+        let Some(header) = H264NalHeader::parse(nal) else {
+            continue;
+        };
         match header.nal_unit_type {
             NalUnitType::Sps => {
                 rbsp.fill(nal, &mut budget).unwrap();
@@ -343,11 +383,22 @@ fn every_slice_in_a_real_multiref_cabac_stream_visits_every_macroblock() {
                     SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget).unwrap();
                 let total_mbs = sps.pic_width_in_mbs * sps.pic_height_in_map_units;
                 let mut cabac = CabacDecoder::from_reader(reader);
-                let stats =
-                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None)
-                        .unwrap_or_else(|e| panic!("slice {slice_idx}: {e:?}"));
+                let stats = vaco_codec_h264::mb::decode_slice_cabac(
+                    &mut cabac,
+                    &mut budget,
+                    sps,
+                    pps,
+                    &slice_header,
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("slice {slice_idx}: {e:?}"));
                 if stats.macroblock_count != total_mbs {
-                    short_slices.push((slice_idx, stats.macroblock_count, total_mbs, slice_header.num_ref_idx_l0_active_minus1));
+                    short_slices.push((
+                        slice_idx,
+                        stats.macroblock_count,
+                        total_mbs,
+                        slice_header.num_ref_idx_l0_active_minus1,
+                    ));
                 }
                 slice_idx += 1;
             }
@@ -356,7 +407,10 @@ fn every_slice_in_a_real_multiref_cabac_stream_visits_every_macroblock() {
     }
 
     println!("short slices (idx, got, total, num_ref_idx_l0_active_minus1): {short_slices:?}");
-    assert!(short_slices.is_empty(), "every slice must visit its own picture's full macroblock count");
+    assert!(
+        short_slices.is_empty(),
+        "every slice must visit its own picture's full macroblock count"
+    );
 }
 
 #[test]
@@ -380,7 +434,9 @@ fn every_slice_in_a_real_i_only_cabac_stream_consumes_exactly_its_own_bits() {
     let mut slice_count = 0u32;
 
     for nal in annexb::nal_units(data) {
-        let Some(header) = H264NalHeader::parse(nal) else { continue };
+        let Some(header) = H264NalHeader::parse(nal) else {
+            continue;
+        };
         match header.nal_unit_type {
             NalUnitType::Sps => {
                 rbsp.fill(nal, &mut budget).unwrap();
@@ -407,14 +463,26 @@ fn every_slice_in_a_real_i_only_cabac_stream_consumes_exactly_its_own_bits() {
                 let slice_header =
                     SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget).unwrap();
                 let mut cabac = CabacDecoder::from_reader(reader);
-                let stats =
-                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None)
-                        .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
-                assert!(!cabac.malformed(), "slice {slice_count}: CABAC engine reported malformed input");
+                let stats = vaco_codec_h264::mb::decode_slice_cabac(
+                    &mut cabac,
+                    &mut budget,
+                    sps,
+                    pps,
+                    &slice_header,
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
+                assert!(
+                    !cabac.malformed(),
+                    "slice {slice_count}: CABAC engine reported malformed input"
+                );
                 let total_mbs = sps.pic_width_in_mbs
                     * sps.pic_height_in_map_units
                     * if sps.frame_mbs_only { 1 } else { 2 };
-                assert_eq!(stats.macroblock_count, total_mbs, "slice {slice_count}: short");
+                assert_eq!(
+                    stats.macroblock_count, total_mbs,
+                    "slice {slice_count}: short"
+                );
                 let mut trailer_reader = cabac.into_reader();
                 assert_slice_ends_at_rbsp_trailing_bits(&mut trailer_reader, slice_count);
                 slice_count += 1;
@@ -481,7 +549,9 @@ fn a_single_flat_macroblock_with_no_residual_at_all_still_fails_bit_exactness() 
     let mut rbsp = RbspBuf::new();
     let mut slice_count = 0u32;
     for nal in annexb::nal_units(data) {
-        let Some(header) = H264NalHeader::parse(nal) else { continue };
+        let Some(header) = H264NalHeader::parse(nal) else {
+            continue;
+        };
         match header.nal_unit_type {
             NalUnitType::Sps => {
                 rbsp.fill(nal, &mut budget).unwrap();
@@ -508,11 +578,23 @@ fn a_single_flat_macroblock_with_no_residual_at_all_still_fails_bit_exactness() 
                 let slice_header =
                     SliceHeader::parse_data(&mut reader, header, sps, pps, &mut budget).unwrap();
                 let mut cabac = CabacDecoder::from_reader(reader);
-                let stats =
-                    vaco_codec_h264::mb::decode_slice_cabac(&mut cabac, &mut budget, sps, pps, &slice_header, None)
-                        .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
-                assert!(!cabac.malformed(), "slice {slice_count}: CABAC engine reported malformed input");
-                assert_eq!(stats.macroblock_count, 1, "slice {slice_count}: expected exactly one macroblock");
+                let stats = vaco_codec_h264::mb::decode_slice_cabac(
+                    &mut cabac,
+                    &mut budget,
+                    sps,
+                    pps,
+                    &slice_header,
+                    None,
+                )
+                .unwrap_or_else(|e| panic!("slice {slice_count}: {e:?}"));
+                assert!(
+                    !cabac.malformed(),
+                    "slice {slice_count}: CABAC engine reported malformed input"
+                );
+                assert_eq!(
+                    stats.macroblock_count, 1,
+                    "slice {slice_count}: expected exactly one macroblock"
+                );
                 assert_eq!(
                     stats.first_slice_mb_cbp,
                     Some((0, 0)),

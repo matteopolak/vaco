@@ -76,9 +76,7 @@ impl Muxer for Yuv4MpegMuxer {
         if let Some(codec_id) = params.codec_id
             && !matches!(codec_id, CodecId::Rawvideo | CodecId::WrappedAvframe)
         {
-            return Err(Error::Unsupported(
-                "yuv4mpegpipe carries raw video only",
-            ));
+            return Err(Error::Unsupported("yuv4mpegpipe carries raw video only"));
         }
         self.params = Some(params.clone());
         Ok(0)

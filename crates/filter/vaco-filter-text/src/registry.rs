@@ -29,7 +29,12 @@ mod tests {
     fn every_declared_name_is_creatable_with_no_arguments() {
         let registry = TextRegistry;
         for &name in NAMES {
-            let req = Instantiate { name, instance: name, args: None, arguments: &[] };
+            let req = Instantiate {
+                name,
+                instance: name,
+                args: None,
+                arguments: &[],
+            };
             let _ = registry.create(&req);
         }
     }

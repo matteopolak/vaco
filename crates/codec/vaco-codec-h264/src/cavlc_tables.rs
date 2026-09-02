@@ -1,4 +1,7 @@
-#![allow(clippy::unreadable_literal, reason = "spec tables, not derived numbers")]
+#![allow(
+    clippy::unreadable_literal,
+    reason = "spec tables, not derived numbers"
+)]
 //! Table 9-5 (`coeff_token`), Tables 9-7/9-8/9-9 (`total_zeros`) and Table
 //! 9-10 (`run_before`), ITU-T H.264 (ISO/IEC 14496-10) clause 9.2.
 //!

@@ -477,7 +477,11 @@ fn build_edts(track: &TrackState, movie_timescale: u32) -> Vec<u8> {
     let segment_duration = rescale(track.presented_duration(), track.timescale, movie_timescale);
     let mut body = Vec::new();
     body.extend_from_slice(&1u32.to_be_bytes()); // entry_count
-    body.extend_from_slice(&u32::try_from(segment_duration).unwrap_or(u32::MAX).to_be_bytes());
+    body.extend_from_slice(
+        &u32::try_from(segment_duration)
+            .unwrap_or(u32::MAX)
+            .to_be_bytes(),
+    );
     body.extend_from_slice(&media_time.to_be_bytes());
     body.extend_from_slice(&0x0001_0000u32.to_be_bytes()); // rate 1.0
     let elst = vaco_format_isom::build::fullbx(b"elst", 0, 0, &body);
@@ -521,7 +525,9 @@ fn build_stbl(
         // this mirrors on the write side so `saio`'s one offset points at
         // exactly what a demuxer reading `senc` back would compute.
         let sample_count = u32::try_from(track.samples.len()).unwrap_or(u32::MAX);
-        let ivs: Vec<[u8; 8]> = (1..=u64::from(sample_count)).map(u64::to_be_bytes).collect();
+        let ivs: Vec<[u8; 8]> = (1..=u64::from(sample_count))
+            .map(u64::to_be_bytes)
+            .collect();
         let senc_abs_start = stbl_abs_start
             .saturating_add(8)
             .saturating_add(body.len() as u64);

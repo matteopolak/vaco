@@ -48,9 +48,7 @@ impl ProbeOutcome {
                 max_dimension: 8192,
                 readback_pix_fmt: vaco_pixfmt::PixFmt::Nv12,
             }),
-            Self::NoLoader => Err(Error::Unsupported(
-                "no Vulkan loader found on this system",
-            )),
+            Self::NoLoader => Err(Error::Unsupported("no Vulkan loader found on this system")),
             Self::InstanceCreationFailed(_) => Err(Error::Unsupported(
                 "Vulkan loader found, but instance creation failed",
             )),
@@ -112,7 +110,10 @@ pub fn probe() -> ProbeOutcome {
             .filter_map(|ext| ext.extension_name_as_c_str().ok())
             .filter_map(|s| s.to_str().ok())
             .collect();
-        if REQUIRED_EXTENSIONS.iter().all(|req| names.iter().any(|n| n == req)) {
+        if REQUIRED_EXTENSIONS
+            .iter()
+            .all(|req| names.iter().any(|n| n == req))
+        {
             return ProbeOutcome::Capable;
         }
     }

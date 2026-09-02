@@ -129,7 +129,10 @@ pub(crate) const DISTANCE_MAP: [(i32, i32); 120] = [
 ];
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing, reason = "test code, not the untrusted-input surface the lint protects")]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "test code, not the untrusted-input surface the lint protects"
+)]
 mod tests {
     use super::*;
 

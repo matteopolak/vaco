@@ -26,7 +26,9 @@ use vaco_packet::Packet;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
-    let (Some(codec), Some(input_path), Some(output_path)) = (args.get(1), args.get(2), args.get(3)) else {
+    let (Some(codec), Some(input_path), Some(output_path)) =
+        (args.get(1), args.get(2), args.get(3))
+    else {
         eprintln!("usage: decode_dump <h261|h263> <input> <output.yuv>");
         std::process::exit(2);
     };

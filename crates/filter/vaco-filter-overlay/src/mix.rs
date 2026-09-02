@@ -145,7 +145,12 @@ impl FrameSyncFilter for Filter {
         event: &mut FrameSyncEvent<'_>,
     ) -> Result<FrameOut> {
         let Some((format, width, height)) = event.get(0).and_then(|f| match &f.data {
-            FrameData::Video { format, width, height, .. } => Some((*format, *width, *height)),
+            FrameData::Video {
+                format,
+                width,
+                height,
+                ..
+            } => Some((*format, *width, *height)),
             FrameData::Audio { .. } | FrameData::Subtitle { .. } => None,
         }) else {
             return Ok(FrameOut::None);
@@ -154,21 +159,31 @@ impl FrameSyncFilter for Filter {
             return Ok(FrameOut::None);
         }
         let sum_weights: f64 = self.weights.iter().sum();
-        let divisor = if self.scale == 0.0 { sum_weights } else { self.scale };
+        let divisor = if self.scale == 0.0 {
+            sum_weights
+        } else {
+            self.scale
+        };
         let mut out = ctx.pool().acquire_video(format, width, height)?;
         let plane_count = format.plane_count();
         for plane in 0..plane_count {
             let ph = common::to_i32(format.plane_height(height, plane as u8)).max(0);
-            let Some(mut dst) = out.plane_mut(plane) else { continue };
+            let Some(mut dst) = out.plane_mut(plane) else {
+                continue;
+            };
             for y in 0..ph {
                 let Ok(uy) = usize::try_from(y) else { continue };
-                let Some(dst_row) = dst.row_mut(uy) else { continue };
+                let Some(dst_row) = dst.row_mut(uy) else {
+                    continue;
+                };
                 let row_len = dst_row.len();
                 for x in 0..row_len {
                     let mut acc = 0.0f64;
                     for i in 0..self.n {
                         let Some(frame) = event.get(i) else { continue };
-                        let Some(p) = frame.plane(plane) else { continue };
+                        let Some(p) = frame.plane(plane) else {
+                            continue;
+                        };
                         let Some(row) = p.row(uy) else { continue };
                         let Some(&v) = row.get(x) else { continue };
                         let w = self.weights.get(i).copied().unwrap_or(1.0);

@@ -123,7 +123,12 @@ const HD_BARS: [Yuv; 7] = [
     (51, 109, 212),
     (28, 212, 120),
 ];
-const HD_ROW2: [(u32, Yuv); 4] = [(39, (188, 128, 128)), (73, (57, 128, 128)), (277, (180, 128, 128)), (319, (32, 128, 128))];
+const HD_ROW2: [(u32, Yuv); 4] = [
+    (39, (188, 128, 128)),
+    (73, (57, 128, 128)),
+    (277, (180, 128, 128)),
+    (319, (32, 128, 128)),
+];
 const HD_RAMP_START: u32 = 74;
 const HD_RAMP_END: u32 = 277;
 const HD_RAMP_LEFT_A: (u32, Yuv) = (39, (219, 128, 128));
@@ -223,7 +228,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -271,7 +277,11 @@ impl SourceFilter for Source {
             .pool()
             .acquire_video(PixFmt::Yuv420p, self.width, self.height)?;
         let (w, h) = (self.width, self.height);
-        let pick = if self.hd { hd_frame_pixel } else { sd_frame_pixel };
+        let pick = if self.hd {
+            hd_frame_pixel
+        } else {
+            sd_frame_pixel
+        };
         if let Some(mut plane) = frame.plane_mut(0) {
             for row_idx in 0..plane.rows() {
                 #[allow(clippy::cast_possible_truncation, reason = "row < h")]
@@ -319,7 +329,11 @@ impl SourceFilter for Source {
     }
 }
 
-fn make_instance(req: &Instantiate<'_>, desc: FilterDesc, hd: bool) -> std::result::Result<Instance, String> {
+fn make_instance(
+    req: &Instantiate<'_>,
+    desc: FilterDesc,
+    hd: bool,
+) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
     let (width, height) = opts.size;
     let rate = opts.rate.0;
@@ -433,7 +447,11 @@ mod tests {
                 args: None,
                 arguments: &[],
             };
-            let desc = if name == "smptebars" { sd::DESC } else { hd::DESC };
+            let desc = if name == "smptebars" {
+                sd::DESC
+            } else {
+                hd::DESC
+            };
             assert!(make_instance(&req, desc, name == "smptehdbars").is_ok());
         }
     }

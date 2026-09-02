@@ -27,7 +27,13 @@ fn dc_predict_dispatched_32(bencher: divan::Bencher<'_, '_>) {
     let left = [64u16; SIZE];
     let caps = Caps::detect();
     bencher.bench_local(|| {
-        simd::dc_predict(caps, divan::black_box(&top), divan::black_box(&left), SIZE, 8)
+        simd::dc_predict(
+            caps,
+            divan::black_box(&top),
+            divan::black_box(&left),
+            SIZE,
+            8,
+        )
     });
 }
 

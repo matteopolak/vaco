@@ -74,7 +74,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -152,7 +153,9 @@ impl SourceFilter for Source {
         if self.total_frames.is_some_and(|n| self.next as u64 >= n) {
             return Ok(None);
         }
-        let mut frame = ctx.pool().acquire_video(PixFmt::Rgb24, self.side, self.side)?;
+        let mut frame = ctx
+            .pool()
+            .acquire_video(PixFmt::Rgb24, self.side, self.side)?;
         if let Some(mut plane) = frame.plane_mut(0) {
             for y in 0..plane.rows() {
                 #[allow(

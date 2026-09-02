@@ -210,7 +210,10 @@ fn rtsp_initial_pause_defers_play_until_asked() {
             .unwrap();
         let mut probe = String::new();
         let saw_early_play = reader.read_line(&mut probe).is_ok() && !probe.is_empty();
-        assert!(!saw_early_play, "PLAY arrived before `play()` was called: {probe:?}");
+        assert!(
+            !saw_early_play,
+            "PLAY arrived before `play()` was called: {probe:?}"
+        );
 
         // Now wait (blocking again) for the real, caller-requested PLAY.
         reader.get_ref().set_read_timeout(None).unwrap();

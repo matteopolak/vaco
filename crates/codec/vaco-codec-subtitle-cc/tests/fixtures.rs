@@ -190,7 +190,11 @@ fn last_text(fixture: &Fixture) -> String {
     let mut dec = CcDecoder::default();
     let mut last = String::new();
     for event in dec.feed(&fixture.cc_data) {
-        if let Event::Cea608 { screen, .. } | Event::Cea708 { screen: Some(screen), .. } = event
+        if let Event::Cea608 { screen, .. }
+        | Event::Cea708 {
+            screen: Some(screen),
+            ..
+        } = event
             && !screen.is_empty()
         {
             last = screen.text();
@@ -209,7 +213,10 @@ fn fixture_table() {
         real_world_transformers(),
     ];
 
-    println!("{:<55} {:<30} {:<30} match", "fixture", "expected", "actual");
+    println!(
+        "{:<55} {:<30} {:<30} match",
+        "fixture", "expected", "actual"
+    );
     let mut all_matched = true;
     for fixture in &fixtures {
         let actual = last_text(fixture);
@@ -223,5 +230,8 @@ fn fixture_table() {
             if matched { "y" } else { "n" }
         );
     }
-    assert!(all_matched, "one or more fixtures did not match; see table above");
+    assert!(
+        all_matched,
+        "one or more fixtures did not match; see table above"
+    );
 }

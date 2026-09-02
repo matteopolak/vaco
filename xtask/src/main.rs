@@ -80,7 +80,9 @@ fn main() {
             );
             eprintln!("  comment-check   comments stay short and self-contained");
             eprintln!("  provenance-check  every large constant table names its source (D15)");
-            eprintln!("  vlc-scan        hand-transcribed VLC tables are pairwise prefix-free (tier 1 of 3)");
+            eprintln!(
+                "  vlc-scan        hand-transcribed VLC tables are pairwise prefix-free (tier 1 of 3)"
+            );
             eprintln!(
                 "  fuzz-check      every fuzz/ target still compiles (D6); skips \
                  without nightly+cargo-fuzz"

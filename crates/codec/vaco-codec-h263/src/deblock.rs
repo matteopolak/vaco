@@ -242,11 +242,41 @@ pub(crate) fn filter_picture(
     mb_coded: &[bool],
     mb_quant: &[u8],
 ) {
-    let luma_geom = PlaneGeometry { blocks_per_mb: 2, mb_width };
-    let chroma_geom = PlaneGeometry { blocks_per_mb: 1, mb_width };
-    filter_plane(frame, 0, mb_width * 16, mb_height * 16, &luma_geom, mb_coded, mb_quant);
-    filter_plane(frame, 1, mb_width * 8, mb_height * 8, &chroma_geom, mb_coded, mb_quant);
-    filter_plane(frame, 2, mb_width * 8, mb_height * 8, &chroma_geom, mb_coded, mb_quant);
+    let luma_geom = PlaneGeometry {
+        blocks_per_mb: 2,
+        mb_width,
+    };
+    let chroma_geom = PlaneGeometry {
+        blocks_per_mb: 1,
+        mb_width,
+    };
+    filter_plane(
+        frame,
+        0,
+        mb_width * 16,
+        mb_height * 16,
+        &luma_geom,
+        mb_coded,
+        mb_quant,
+    );
+    filter_plane(
+        frame,
+        1,
+        mb_width * 8,
+        mb_height * 8,
+        &chroma_geom,
+        mb_coded,
+        mb_quant,
+    );
+    filter_plane(
+        frame,
+        2,
+        mb_width * 8,
+        mb_height * 8,
+        &chroma_geom,
+        mb_coded,
+        mb_quant,
+    );
 }
 
 #[cfg(test)]
@@ -284,7 +314,10 @@ mod tests {
         // A small step (d = (0-4*0+4*10-10)/8 = 30/8 = 3, inside
         // strength) gets smoothed.
         let (_, b1, c1, _) = filter4(0, 0, 10, 10, 8);
-        assert!(b1 > 0 && c1 < 10, "small step should be smoothed: b1={b1} c1={c1}");
+        assert!(
+            b1 > 0 && c1 < 10,
+            "small step should be smoothed: b1={b1} c1={c1}"
+        );
         // A large step (d = (0-4*0+4*100-100)/8 = 300/8 = 37, past
         // 2*strength=16) is left alone — this is a real edge, not
         // blocking noise.

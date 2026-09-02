@@ -207,7 +207,10 @@ fn dyn_code_32bit(w: &mut BitWriter, m: u32, k: u32, n: u32, maxbits: u32) {
         w.put_long(u32::from(maxbits.min(32) != 0), 0); // unreachable in practice; see caller
         return;
     }
-    #[expect(clippy::integer_division, reason = "Golomb coding's quotient/remainder split is exactly this division")]
+    #[expect(
+        clippy::integer_division,
+        reason = "Golomb coding's quotient/remainder split is exactly this division"
+    )]
     let div = n / m;
     if div < MAX_PREFIX_32 {
         let modulo = n - m * div;
@@ -245,7 +248,10 @@ fn dyn_code_16bit(w: &mut BitWriter, m: u32, k: u32, n: u32) {
         w.put(MAX_DATATYPE_BITS_16, n);
         return;
     }
-    #[expect(clippy::integer_division, reason = "Golomb coding's quotient/remainder split is exactly this division")]
+    #[expect(
+        clippy::integer_division,
+        reason = "Golomb coding's quotient/remainder split is exactly this division"
+    )]
     let div = n / m;
     if div < MAX_PREFIX_16 {
         let modulo = n - m * div;
@@ -273,7 +279,12 @@ fn dyn_code_16bit(w: &mut BitWriter, m: u32, k: u32, n: u32) {
     clippy::many_single_char_names,
     reason = "names (m, k, n, c, mb, pb, kb) deliberately match the reference's own dyn_decomp for auditability against the cited source"
 )]
-pub(crate) fn dyn_decomp(params: &AgParams, r: &mut BitReader<'_>, num_samples: usize, maxbits: u32) -> Vec<i32> {
+pub(crate) fn dyn_decomp(
+    params: &AgParams,
+    r: &mut BitReader<'_>,
+    num_samples: usize,
+    maxbits: u32,
+) -> Vec<i32> {
     let mut out = Vec::new();
     let mut mb = params.mb0;
     let mut zmode = false;
@@ -303,7 +314,9 @@ pub(crate) fn dyn_decomp(params: &AgParams, r: &mut BitReader<'_>, num_samples: 
 
         if (mb << MMULSHIFT) < QB && c < num_samples {
             zmode = true;
-            let k2 = lead(mb).wrapping_sub(BITOFF).wrapping_add((mb.wrapping_add(MOFF)) >> MDENSHIFT);
+            let k2 = lead(mb)
+                .wrapping_sub(BITOFF)
+                .wrapping_add((mb.wrapping_add(MOFF)) >> MDENSHIFT);
             let mz = ((1u32 << (k2 & 31)) - 1) & params.wb;
             let run = dyn_get_16bit(r, mz, k2 & 31);
             let run = run.min((num_samples - c) as u32);
@@ -366,7 +379,9 @@ pub(crate) fn dyn_comp(params: &AgParams, w: &mut BitWriter, residuals: &[i32], 
                     break;
                 }
             }
-            let k2 = lead(mb).wrapping_sub(BITOFF).wrapping_add((mb.wrapping_add(MOFF)) >> MDENSHIFT);
+            let k2 = lead(mb)
+                .wrapping_sub(BITOFF)
+                .wrapping_add((mb.wrapping_add(MOFF)) >> MDENSHIFT);
             let mz = ((1u32 << (k2 & 31)) - 1) & params.wb;
             dyn_code_16bit(w, mz, k2 & 31, run);
             mb = 0;
@@ -432,4 +447,3 @@ mod tests {
         assert_eq!(lg3a(509), 9);
     }
 }
-

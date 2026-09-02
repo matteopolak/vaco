@@ -33,8 +33,6 @@ use std::collections::VecDeque;
 
 use vaco_codec_core::{AudioParameters, CodecId, CodecParameters, VideoParameters};
 use vaco_color::{ChromaLocation, ColorInfo};
-use vaco_pixfmt::PixFmt;
-use vaco_sampfmt::SampleFmt;
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::seek::{SeekFlags, SeekTarget};
@@ -42,6 +40,8 @@ use vaco_format_core::{Demuxer, Stream};
 use vaco_io::{IoContext, IoOptions, MediaSource, Seekability};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
+use vaco_pixfmt::PixFmt;
+use vaco_sampfmt::SampleFmt;
 
 use crate::profile::DvProfile;
 
@@ -431,7 +431,10 @@ mod codec_identity_tests {
             let d = DvDemuxer::open(src).expect("open");
             let streams = vaco_format_core::Demuxer::streams(&d);
             assert_eq!(streams[0].params.codec_id, Some(CodecId::Dvvideo));
-            assert_eq!(streams[0].params.video.as_ref().unwrap().format, Some(want_pix));
+            assert_eq!(
+                streams[0].params.video.as_ref().unwrap().format,
+                Some(want_pix)
+            );
             assert_eq!(streams[1].params.codec_id, Some(CodecId::PcmS16le));
             assert_eq!(
                 streams[1].params.audio.as_ref().unwrap().format,

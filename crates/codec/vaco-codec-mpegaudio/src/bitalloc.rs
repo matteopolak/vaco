@@ -22,7 +22,11 @@ pub(crate) fn code_to_fraction(code: u32, nb: u32) -> f32 {
     let half = 1i64 << (nb - 1);
     let full = 1i64 << nb;
     let flipped = i64::from(code) ^ half;
-    let signed = if flipped >= half { flipped - full } else { flipped };
+    let signed = if flipped >= half {
+        flipped - full
+    } else {
+        flipped
+    };
     signed as f32 / half as f32
 }
 

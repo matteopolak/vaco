@@ -180,10 +180,7 @@ mod tests {
 
     #[test]
     fn a_bare_ass_text_field_passes_through() {
-        assert_eq!(
-            decode(TextCodec::Ass, b"just prose").unwrap(),
-            "just prose"
-        );
+        assert_eq!(decode(TextCodec::Ass, b"just prose").unwrap(), "just prose");
     }
 
     #[test]

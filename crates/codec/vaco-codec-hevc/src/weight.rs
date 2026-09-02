@@ -61,7 +61,13 @@ pub(crate) struct RefWeights {
 /// `num_ref_idx_lX_active_minus1 + 1`) falls back to the neutral,
 /// unweighted values, the same values §7.3.6.3 itself assigns whenever
 /// `luma_weight_lX_flag[i]`/the chroma equivalent is `0`.
-pub(crate) fn resolve_list(table: &PredWeightTable, list: usize, num_refs: usize, bit_depth_luma: u32, bit_depth_chroma: u32) -> Vec<RefWeights> {
+pub(crate) fn resolve_list(
+    table: &PredWeightTable,
+    list: usize,
+    num_refs: usize,
+    bit_depth_luma: u32,
+    bit_depth_chroma: u32,
+) -> Vec<RefWeights> {
     let list = usize::from(list != 0);
     let s1_luma = shift1(bit_depth_luma);
     let s1_chroma = shift1(bit_depth_chroma);
@@ -88,19 +94,33 @@ pub(crate) fn resolve_list(table: &PredWeightTable, list: usize, num_refs: usize
 
     (0..num_refs)
         .map(|i| {
-            let (dw, o) = luma_list.and_then(|l| l.get(i).copied()).flatten().unwrap_or((0, 0));
-            let luma = Weight { log2_wd: luma_log2_wd, w: luma_denom_pow.saturating_add(dw), o };
+            let (dw, o) = luma_list
+                .and_then(|l| l.get(i).copied())
+                .flatten()
+                .unwrap_or((0, 0));
+            let luma = Weight {
+                log2_wd: luma_log2_wd,
+                w: luma_denom_pow.saturating_add(dw),
+                o,
+            };
 
             let chroma_entry = chroma_list.and_then(|l| l.get(i).copied()).flatten();
             let chroma = [0usize, 1usize].map(|c| {
-                let (dwc, doc) = chroma_entry.and_then(|pair| pair.get(c).copied()).unwrap_or((0, 0));
+                let (dwc, doc) = chroma_entry
+                    .and_then(|pair| pair.get(c).copied())
+                    .unwrap_or((0, 0));
                 let w = chroma_denom_pow.saturating_add(dwc);
                 // §8.5.3.3.4.3's `ChromaOffsetLX[i][j]`:
                 //   Clip3(-halfRange, halfRange - 1,
                 //         (halfRange + delta) - ((halfRange * w) >> ChromaLog2WeightDenom))
                 let predicted = half_range_c.saturating_mul(w) >> chroma_log2_denom;
-                let o = (half_range_c.saturating_add(doc) - predicted).clamp(-half_range_c, half_range_c - 1);
-                Weight { log2_wd: chroma_log2_wd, w, o }
+                let o = (half_range_c.saturating_add(doc) - predicted)
+                    .clamp(-half_range_c, half_range_c - 1);
+                Weight {
+                    log2_wd: chroma_log2_wd,
+                    w,
+                    o,
+                }
             });
             RefWeights { luma, chroma }
         })
@@ -108,7 +128,11 @@ pub(crate) fn resolve_list(table: &PredWeightTable, list: usize, num_refs: usize
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code over fixed scenarios")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test code over fixed scenarios"
+)]
 mod tests {
     use super::*;
 

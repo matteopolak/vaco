@@ -127,21 +127,24 @@ impl CcDecoder {
         for triplet in triplet::iter_triplets(cc_data, &mut self.stats.skipped_triplets) {
             match triplet.cc_type {
                 CcType::Ntsc608Field1 => {
-                    if let Some(screen) =
-                        self.field1.feed(triplet.data, &mut self.stats.parity_errors)
+                    if let Some(screen) = self
+                        .field1
+                        .feed(triplet.data, &mut self.stats.parity_errors)
                     {
                         events.push(Event::Cea608 { field: 1, screen });
                     }
                 }
                 CcType::Ntsc608Field2 => {
-                    if let Some(screen) =
-                        self.field2.feed(triplet.data, &mut self.stats.parity_errors)
+                    if let Some(screen) = self
+                        .field2
+                        .feed(triplet.data, &mut self.stats.parity_errors)
                     {
                         events.push(Event::Cea608 { field: 2, screen });
                     }
                 }
                 CcType::Dtvcc708PacketStart | CcType::Dtvcc708PacketData => {
-                    self.dtvcc.feed(triplet, &mut events, &mut self.stats.dtvcc_desync);
+                    self.dtvcc
+                        .feed(triplet, &mut events, &mut self.stats.dtvcc_desync);
                 }
             }
         }

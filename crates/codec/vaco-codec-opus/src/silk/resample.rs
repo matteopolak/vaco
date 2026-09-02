@@ -27,7 +27,12 @@ impl Upsampler {
         let mut taps = vec![0.0f32; n];
         for (i, t) in taps.iter_mut().enumerate() {
             let x = i as isize - half_taps as isize;
-            let sinc = if x == 0 { 1.0 } else { (std::f32::consts::PI * x as f32 / factor as f32).sin() / (std::f32::consts::PI * x as f32 / factor as f32) };
+            let sinc = if x == 0 {
+                1.0
+            } else {
+                (std::f32::consts::PI * x as f32 / factor as f32).sin()
+                    / (std::f32::consts::PI * x as f32 / factor as f32)
+            };
             // Blackman window for stopband attenuation.
             let w = 0.42 - 0.5 * (2.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos()
                 + 0.08 * (4.0 * std::f32::consts::PI * i as f32 / (n - 1) as f32).cos();
@@ -40,7 +45,11 @@ impl Upsampler {
             }
         }
         let history = vec![0.0f32; n];
-        Self { factor, taps, history }
+        Self {
+            factor,
+            taps,
+            history,
+        }
     }
 
     /// Upsample `input` by this resampler's factor, in place across calls
@@ -67,7 +76,9 @@ impl Upsampler {
                 let mut m = 0usize;
                 loop {
                     let tap_idx = phase + m * self.factor;
-                    let Some(&tap) = self.taps.get(tap_idx) else { break };
+                    let Some(&tap) = self.taps.get(tap_idx) else {
+                        break;
+                    };
                     let src_idx = self.history.len() + i - m;
                     acc += tap * buf.get(src_idx).copied().unwrap_or(0.0);
                     m += 1;

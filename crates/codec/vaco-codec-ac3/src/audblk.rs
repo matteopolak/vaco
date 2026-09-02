@@ -535,11 +535,7 @@ fn apply_rematrix(channels: &mut [Vec<f32>], acmod: u8, rematflg: [bool; 4]) {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::unwrap_used,
-    clippy::indexing_slicing,
-    reason = "test code"
-)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
 

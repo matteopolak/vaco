@@ -30,14 +30,8 @@ pub struct ManifestStream {
 
 #[derive(Debug, Clone)]
 pub enum StreamKind {
-    Video {
-        max_width: u32,
-        max_height: u32,
-    },
-    Audio {
-        sampling_rate: u32,
-        channels: u32,
-    },
+    Video { max_width: u32, max_height: u32 },
+    Audio { sampling_rate: u32, channels: u32 },
 }
 
 impl StreamKind {
@@ -160,7 +154,9 @@ mod tests {
         ];
         let xml = build_manifest(&streams);
         assert!(xml.starts_with("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"));
-        assert!(xml.contains("<SmoothStreamingMedia MajorVersion=\"2\" MinorVersion=\"0\" Duration=\"30213333\">"));
+        assert!(xml.contains(
+            "<SmoothStreamingMedia MajorVersion=\"2\" MinorVersion=\"0\" Duration=\"30213333\">"
+        ));
         assert!(xml.contains(
             "<StreamIndex Type=\"video\" QualityLevels=\"1\" Chunks=\"1\" Url=\"QualityLevels({bitrate})/Fragments(video={start time})\">"
         ));

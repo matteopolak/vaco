@@ -17,7 +17,12 @@ use vaco_hash::sha2::Sha256;
 
 /// Derive `out_len` bytes via PBKDF2-HMAC-SHA256.
 #[must_use]
-pub fn pbkdf2_hmac_sha256(password: &[u8], salt: &[u8], iterations: u32, out_len: usize) -> Vec<u8> {
+pub fn pbkdf2_hmac_sha256(
+    password: &[u8],
+    salt: &[u8],
+    iterations: u32,
+    out_len: usize,
+) -> Vec<u8> {
     let mut out = vec![0u8; out_len];
     pbkdf2::pbkdf2_hmac::<Sha256>(password, salt, iterations, &mut out);
     out
@@ -43,7 +48,9 @@ mod tests {
         let out = pbkdf2_hmac_sha256(b"passwd", b"salt", 1, 64);
         assert_eq!(
             out,
-            hex("55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783")
+            hex(
+                "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783"
+            )
         );
     }
 
@@ -52,7 +59,9 @@ mod tests {
         let out = pbkdf2_hmac_sha256(b"Password", b"NaCl", 80_000, 64);
         assert_eq!(
             out,
-            hex("4ddcd8f60b98be21830cee5ef22701f9641a4418d04c0414aeff08876b34ab56a1d425a1225833549adb841b51c9b3176a272bdebba1d078478f62b397f33c8d")
+            hex(
+                "4ddcd8f60b98be21830cee5ef22701f9641a4418d04c0414aeff08876b34ab56a1d425a1225833549adb841b51c9b3176a272bdebba1d078478f62b397f33c8d"
+            )
         );
     }
 

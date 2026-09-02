@@ -295,7 +295,12 @@ fn parse_resource(node: &XmlNode, cpl_rate: Rational) -> Result<Resource> {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::expect_used, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::expect_used,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
     use vaco_limits::Limits;
@@ -372,15 +377,24 @@ mod tests {
         let track = &tracks[0];
         assert_eq!(track.track_id, "44444444-4444-4444-4444-444444444444");
         assert_eq!(track.resources.len(), 2);
-        assert_eq!(track.resources[0].track_file_id, "cccccccc-2222-2222-2222-222222222222");
+        assert_eq!(
+            track.resources[0].track_file_id,
+            "cccccccc-2222-2222-2222-222222222222"
+        );
         assert_eq!(track.resources[0].entry_point, 10);
         assert_eq!(track.resources[0].source_duration, 100);
-        assert_eq!(track.resources[1].track_file_id, "dddddddd-3333-3333-3333-333333333333");
+        assert_eq!(
+            track.resources[1].track_file_id,
+            "dddddddd-3333-3333-3333-333333333333"
+        );
     }
 
     #[test]
     fn a_resource_edit_rate_mismatch_is_unsupported() {
-        let xml = SAMPLE.replace("<EditRate>24 1</EditRate>\n              <IntrinsicDuration>240", "<EditRate>25 1</EditRate>\n              <IntrinsicDuration>240");
+        let xml = SAMPLE.replace(
+            "<EditRate>24 1</EditRate>\n              <IntrinsicDuration>240",
+            "<EditRate>25 1</EditRate>\n              <IntrinsicDuration>240",
+        );
         let mut b = Budget::new(Limits::permissive());
         let err = parse(&xml, &mut b).unwrap_err();
         assert!(matches!(err, Error::Unsupported(_)));

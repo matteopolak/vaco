@@ -165,7 +165,12 @@ impl Default for BoolEncoder {
 impl BoolEncoder {
     #[must_use]
     pub const fn new() -> Self {
-        Self { output: Vec::new(), range: 255, bottom: 0, bit_count: 24 }
+        Self {
+            output: Vec::new(),
+            range: 255,
+            bottom: 0,
+            bit_count: 24,
+        }
     }
 
     fn add_one_to_output(&mut self) {

@@ -134,7 +134,10 @@ pub(crate) fn annex_f_chroma_mv(mvs: [i32; 4]) -> i32 {
     let total = mvs[0] + mvs[1] + mvs[2] + mvs[3];
     let base = total.div_euclid(16);
     let sixteenths = total.rem_euclid(16);
-    let snapped = BUCKET.get(usize::try_from(sixteenths).unwrap_or(0)).copied().unwrap_or(0);
+    let snapped = BUCKET
+        .get(usize::try_from(sixteenths).unwrap_or(0))
+        .copied()
+        .unwrap_or(0);
     2 * base + snapped
 }
 
@@ -239,8 +242,16 @@ pub(crate) fn sample_half_pel(
 
     match (half_x, half_y) {
         (false, false) => refp.sample(plane, x, y),
-        (true, false) => avg2(refp.sample(plane, x, y), refp.sample(plane, x + 1, y), rcontrol),
-        (false, true) => avg2(refp.sample(plane, x, y), refp.sample(plane, x, y + 1), rcontrol),
+        (true, false) => avg2(
+            refp.sample(plane, x, y),
+            refp.sample(plane, x + 1, y),
+            rcontrol,
+        ),
+        (false, true) => avg2(
+            refp.sample(plane, x, y),
+            refp.sample(plane, x, y + 1),
+            rcontrol,
+        ),
         (true, true) => avg4(
             refp.sample(plane, x, y),
             refp.sample(plane, x + 1, y),
@@ -258,14 +269,8 @@ pub(crate) fn sample_half_pel(
 /// row, respectively" and this crate's existing `pred[y * 8 + x]`
 /// row-major convention for an 8x8 block).
 const OBMC_H0: [i32; 64] = [
-    4, 5, 5, 5, 5, 5, 5, 4,
-    5, 5, 5, 5, 5, 5, 5, 5,
-    5, 5, 6, 6, 6, 6, 5, 5,
-    5, 5, 6, 6, 6, 6, 5, 5,
-    5, 5, 6, 6, 6, 6, 5, 5,
-    5, 5, 6, 6, 6, 6, 5, 5,
-    5, 5, 5, 5, 5, 5, 5, 5,
-    4, 5, 5, 5, 5, 5, 5, 4,
+    4, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 6, 6, 6, 6, 5, 5, 5, 5, 6, 6, 6, 6, 5, 5,
+    5, 5, 6, 6, 6, 6, 5, 5, 5, 5, 6, 6, 6, 6, 5, 5, 5, 5, 5, 5, 5, 5, 5, 5, 4, 5, 5, 5, 5, 5, 5, 4,
 ];
 
 /// Annex F §F.3 (Figure F.3): weighting values `H1(i, j)` for the
@@ -277,14 +282,8 @@ const OBMC_H0: [i32; 64] = [
 /// distance-from-the-relevant-border weighting applies whichever half a
 /// row falls in.
 const OBMC_H1: [i32; 64] = [
-    2, 2, 2, 2, 2, 2, 2, 2,
-    1, 1, 2, 2, 2, 2, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 1, 1, 1, 1, 1, 1,
-    1, 1, 2, 2, 2, 2, 1, 1,
-    2, 2, 2, 2, 2, 2, 2, 2,
+    2, 2, 2, 2, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
+    1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2,
 ];
 
 /// Annex F §F.3 (Figure F.4): weighting values `H2(i, j)` for the
@@ -298,16 +297,9 @@ const OBMC_H1: [i32; 64] = [
 /// 8` at every one of the 64 cells is a shape invariant, checked by this
 /// module's own tests).
 const OBMC_H2: [i32; 64] = [
-    2, 1, 1, 1, 1, 1, 1, 2,
-    2, 2, 1, 1, 1, 1, 2, 2,
-    2, 2, 1, 1, 1, 1, 2, 2,
-    2, 2, 1, 1, 1, 1, 2, 2,
-    2, 2, 1, 1, 1, 1, 2, 2,
-    2, 2, 1, 1, 1, 1, 2, 2,
-    2, 2, 1, 1, 1, 1, 2, 2,
-    2, 1, 1, 1, 1, 1, 1, 2,
+    2, 1, 1, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 2, 2,
+    2, 2, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 2, 1, 1, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 2,
 ];
-
 
 /// One weighting value from an OBMC table (`OBMC_H0`/`OBMC_H1`/`OBMC_H2`,
 /// each flattened row-major, row `j` then column `i`) — `0` on an
@@ -360,7 +352,14 @@ pub(crate) fn annex_f_obmc_luma_block(
             let q = sample_half_pel(refp, 0, x, y, mv_own[0], mv_own[1], rcontrol);
             let rr = sample_half_pel(refp, 0, x, y, mv_vert[0], mv_vert[1], rcontrol);
             let s = sample_half_pel(refp, 0, x, y, mv_horiz[0], mv_horiz[1], rcontrol);
-            let p = obmc_combine(q, rr, s, obmc_weight(&OBMC_H0, j, i), obmc_weight(&OBMC_H1, j, i), obmc_weight(&OBMC_H2, j, i));
+            let p = obmc_combine(
+                q,
+                rr,
+                s,
+                obmc_weight(&OBMC_H0, j, i),
+                obmc_weight(&OBMC_H1, j, i),
+                obmc_weight(&OBMC_H2, j, i),
+            );
             if let Some(slot) = out.get_mut(j * 8 + i) {
                 *slot = p;
             }
@@ -436,7 +435,9 @@ pub(crate) fn h261_loop_filter(block: &mut [u8], w: usize, h: usize) {
             } else {
                 (get_at(&src, x - 1, y) + 2 * get_at(&src, x, y) + get_at(&src, x + 1, y) + 2) / 4
             };
-            if let Some(slot) = tmp.get_mut(usize::try_from(y).unwrap_or(0) * w + usize::try_from(x).unwrap_or(0)) {
+            if let Some(slot) =
+                tmp.get_mut(usize::try_from(y).unwrap_or(0) * w + usize::try_from(x).unwrap_or(0))
+            {
                 *slot = v;
             }
         }
@@ -448,7 +449,9 @@ pub(crate) fn h261_loop_filter(block: &mut [u8], w: usize, h: usize) {
             } else {
                 (get_at(&tmp, x, y - 1) + 2 * get_at(&tmp, x, y) + get_at(&tmp, x, y + 1) + 2) / 4
             };
-            if let Some(slot) = block.get_mut(usize::try_from(y).unwrap_or(0) * w + usize::try_from(x).unwrap_or(0)) {
+            if let Some(slot) =
+                block.get_mut(usize::try_from(y).unwrap_or(0) * w + usize::try_from(x).unwrap_or(0))
+            {
                 *slot = v.clamp(0, 255) as u8;
             }
         }
@@ -472,10 +475,16 @@ mod tests {
         // Predictor 40 (half-pel) is outside [-31, 32] (positive side):
         // the result must land in [0, 63].
         let v = h263_umv_vector_legacy(40, -32);
-        assert!((0..=63).contains(&v), "expected sign-matched result, got {v}");
+        assert!(
+            (0..=63).contains(&v),
+            "expected sign-matched result, got {v}"
+        );
         // Predictor -40: result must land in [-63, 0].
         let v = h263_umv_vector_legacy(-40, 31);
-        assert!((-63..=0).contains(&v), "expected sign-matched result, got {v}");
+        assert!(
+            (-63..=0).contains(&v),
+            "expected sign-matched result, got {v}"
+        );
     }
 
     #[test]
@@ -511,7 +520,9 @@ mod tests {
         // transcription slip a mere shape/plausibility check would miss.
         for j in 0..8 {
             for i in 0..8 {
-                let sum = obmc_weight(&OBMC_H0, j, i) + obmc_weight(&OBMC_H1, j, i) + obmc_weight(&OBMC_H2, j, i);
+                let sum = obmc_weight(&OBMC_H0, j, i)
+                    + obmc_weight(&OBMC_H1, j, i)
+                    + obmc_weight(&OBMC_H2, j, i);
                 assert_eq!(sum, 8, "cell ({i}, {j}) summed to {sum}, not 8");
             }
         }

@@ -99,12 +99,26 @@ impl SwfHeader {
         let rect_len = rect_start
             .len()
             .checked_sub(rect_bytes.len())
-            .ok_or(Error::InvalidData("swf: RECT parse consumed more than it read"))?;
+            .ok_or(Error::InvalidData(
+                "swf: RECT parse consumed more than it read",
+            ))?;
 
         let after_rect = FIXED_HEADER_LEN.saturating_add(rect_len);
-        let tail = buf.get(after_rect..after_rect.saturating_add(4)).ok_or(Error::UnexpectedEof)?;
-        let frame_rate_raw = u16::from_le_bytes(tail.get(0..2).ok_or(Error::UnexpectedEof)?.try_into().unwrap_or([0, 0]));
-        let frame_count = u16::from_le_bytes(tail.get(2..4).ok_or(Error::UnexpectedEof)?.try_into().unwrap_or([0, 0]));
+        let tail = buf
+            .get(after_rect..after_rect.saturating_add(4))
+            .ok_or(Error::UnexpectedEof)?;
+        let frame_rate_raw = u16::from_le_bytes(
+            tail.get(0..2)
+                .ok_or(Error::UnexpectedEof)?
+                .try_into()
+                .unwrap_or([0, 0]),
+        );
+        let frame_count = u16::from_le_bytes(
+            tail.get(2..4)
+                .ok_or(Error::UnexpectedEof)?
+                .try_into()
+                .unwrap_or([0, 0]),
+        );
 
         Ok((
             Self {

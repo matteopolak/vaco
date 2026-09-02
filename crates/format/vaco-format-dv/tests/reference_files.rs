@@ -53,7 +53,10 @@ fn a_real_ntsc_sample_reports_the_measured_dimensions_and_frame_rate() {
     // `sample_aspect_ratio=8:9`. DV's luma is always sampled at a fixed
     // 720 columns regardless of the picture's true 4:3 shape, so this is
     // not derivable from width/height alone.
-    assert_eq!(vp.sample_aspect_ratio, vaco_core::Rational { num: 8, den: 9 });
+    assert_eq!(
+        vp.sample_aspect_ratio,
+        vaco_core::Rational { num: 8, den: 9 }
+    );
     // Measured (`ffmpeg -c:v dvvideo`, real `ffprobe`): `field_order=
     // unknown`. DV carries no interlace-flag bit this crate reads,
     // and `VideoParameters::field_order`'s own `#[default]` is
@@ -101,7 +104,10 @@ fn a_real_ntsc_sample_reports_the_measured_time_base_and_avg_frame_rate() {
         .expect("a video stream");
     assert_eq!(
         video.time_base,
-        vaco_core::Rational { num: 1, den: 60_000 }
+        vaco_core::Rational {
+            num: 1,
+            den: 60_000
+        }
     );
     assert_eq!(
         video.avg_frame_rate,

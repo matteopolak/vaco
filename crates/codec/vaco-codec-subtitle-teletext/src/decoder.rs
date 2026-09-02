@@ -17,7 +17,7 @@
 //! behaviour when `C4=1` (the common case) and a deviation when a broadcast
 //! relies on `C4=0` partial updates, which this crate does not reconstruct.
 
-use crate::packet::{packets, RECORD_LEN};
+use crate::packet::{RECORD_LEN, packets};
 use crate::page::Page;
 
 /// A page finished assembling: a later X/0 for the same magazine (or a
@@ -82,7 +82,10 @@ impl TeletextDecoder {
             let need = RECORD_LEN.saturating_sub(self.pending_len);
             let take = need.min(cursor.len());
             let end = self.pending_len.saturating_add(take);
-            if let (Some(dst), Some(src)) = (self.pending.get_mut(self.pending_len..end), cursor.get(..take)) {
+            if let (Some(dst), Some(src)) = (
+                self.pending.get_mut(self.pending_len..end),
+                cursor.get(..take),
+            ) {
                 dst.copy_from_slice(src);
             }
             self.pending_len = end;
@@ -134,7 +137,10 @@ impl TeletextDecoder {
                     page: finished,
                 });
             }
-            *slot = Some(Box::new(Page::from_header(address.magazine, packet.payload)));
+            *slot = Some(Box::new(Page::from_header(
+                address.magazine,
+                packet.payload,
+            )));
             return;
         }
 
@@ -203,11 +209,7 @@ mod tests {
 
     fn parity_byte(data: u8) -> u8 {
         let d = data & 0x7F;
-        if d.count_ones() % 2 == 1 {
-            d
-        } else {
-            d | 0x80
-        }
+        if d.count_ones() % 2 == 1 { d } else { d | 0x80 }
     }
 
     fn data_unit(magazine: u8, packet_no: u8, body: &[u8]) -> Vec<u8> {

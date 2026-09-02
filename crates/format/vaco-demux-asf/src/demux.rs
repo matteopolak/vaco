@@ -440,7 +440,11 @@ impl AsfDemuxer {
         // reasoning as `vaco-demux-avi::demux::read_one` — pts stays unset
         // for video rather than fabricating a value the reference never
         // claims to have.
-        pkt.pts = if media_type == Some(MediaType::Video) { Timestamp::NONE } else { ts };
+        pkt.pts = if media_type == Some(MediaType::Video) {
+            Timestamp::NONE
+        } else {
+            ts
+        };
         pkt.dts = ts;
         pkt.duration = Duration::ZERO;
         pkt.flags = if key {

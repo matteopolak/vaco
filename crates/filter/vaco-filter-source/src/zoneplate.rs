@@ -84,27 +84,82 @@ pub(crate) struct Opts {
     pub to: i32,
     #[opt(name = "k0", help = "set 0-order phase", default = 0, flags(filtering))]
     pub k0: i32,
-    #[opt(name = "kx", help = "set 1-order X-axis phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "kx",
+        help = "set 1-order X-axis phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub kx: i32,
-    #[opt(name = "ky", help = "set 1-order Y-axis phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "ky",
+        help = "set 1-order Y-axis phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub ky: i32,
-    #[opt(name = "kt", help = "set 1-order T-axis phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "kt",
+        help = "set 1-order T-axis phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub kt: i32,
-    #[opt(name = "kxt", help = "set X-axis*T-axis product phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "kxt",
+        help = "set X-axis*T-axis product phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub kxt: i32,
-    #[opt(name = "kyt", help = "set Y-axis*T-axis product phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "kyt",
+        help = "set Y-axis*T-axis product phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub kyt: i32,
-    #[opt(name = "kxy", help = "set X-axis*Y-axis product phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "kxy",
+        help = "set X-axis*Y-axis product phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub kxy: i32,
-    #[opt(name = "kx2", help = "set 2-order X-axis phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "kx2",
+        help = "set 2-order X-axis phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub kx2: i32,
-    #[opt(name = "ky2", help = "set 2-order Y-axis phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "ky2",
+        help = "set 2-order Y-axis phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub ky2: i32,
-    #[opt(name = "kt2", help = "set 2-order T-axis phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "kt2",
+        help = "set 2-order T-axis phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub kt2: i32,
-    #[opt(name = "ku", help = "set 0-order U-color phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "ku",
+        help = "set 0-order U-color phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub ku: i32,
-    #[opt(name = "kv", help = "set 0-order V-color phase", default = 0, flags(filtering))]
+    #[opt(
+        name = "kv",
+        help = "set 0-order V-color phase",
+        default = 0,
+        flags(filtering)
+    )]
     pub kv: i32,
 }
 
@@ -112,7 +167,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }

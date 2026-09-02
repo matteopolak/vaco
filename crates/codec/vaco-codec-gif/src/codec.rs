@@ -21,7 +21,9 @@ use vaco_pixfmt::PixFmt;
 fn composite(canvas: &mut [u8], canvas_w: u32, x: u32, y: u32, w: u32, h: u32, src: &[u8]) {
     for row in 0..h {
         let cy = y + row;
-        let Some(src_row) = src.get(row as usize * w as usize * 4..(row as usize + 1) * w as usize * 4) else {
+        let Some(src_row) =
+            src.get(row as usize * w as usize * 4..(row as usize + 1) * w as usize * 4)
+        else {
             continue;
         };
         let dst_start = (cy as usize * canvas_w as usize + x as usize) * 4;
@@ -200,7 +202,13 @@ fn delay_hundredths(frame: &Frame) -> u16 {
 /// Convert one RGB(A)/gray frame to tightly packed RGBA8, the only shape
 /// `gif::Frame::from_rgba` accepts.
 fn to_rgba8(frame: &Frame) -> Result<Vec<u8>> {
-    let FrameData::Video { format, width, height, .. } = &frame.data else {
+    let FrameData::Video {
+        format,
+        width,
+        height,
+        ..
+    } = &frame.data
+    else {
         return Err(Error::Unsupported("gif: audio frame"));
     };
     let (width, height) = (*width as usize, *height as usize);

@@ -169,7 +169,10 @@ mod tests {
     fn voice_and_class_spans_contribute_only_their_text() {
         assert_eq!(to_ass("<v Roger>Hi there"), "Hi there");
         assert_eq!(to_ass("<c.yellow>classy</c>"), "classy");
-        assert_eq!(to_ass("<ruby>base<rt>anno</rt></ruby> plain"), "baseanno plain");
+        assert_eq!(
+            to_ass("<ruby>base<rt>anno</rt></ruby> plain"),
+            "baseanno plain"
+        );
     }
 
     #[test]

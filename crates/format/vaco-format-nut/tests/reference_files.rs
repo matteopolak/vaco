@@ -134,7 +134,11 @@ fn timestamps_are_monotone_per_stream_and_dts_never_exceeds_pts() {
                 let dts = p.dts.ticks().expect("a real dts");
                 assert!(dts <= pts, "dts {dts} > pts {pts}");
                 if let Some(&prev) = last_pts.get(&p.stream_index) {
-                    assert!(pts >= prev, "pts went backwards on stream {}: {prev} -> {pts}", p.stream_index);
+                    assert!(
+                        pts >= prev,
+                        "pts went backwards on stream {}: {prev} -> {pts}",
+                        p.stream_index
+                    );
                 }
                 last_pts.insert(p.stream_index, pts);
             }

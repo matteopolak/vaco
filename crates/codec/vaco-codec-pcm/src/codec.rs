@@ -84,7 +84,10 @@ struct ScratchBuf {
 
 impl ScratchBuf {
     const fn new() -> Self {
-        Self { buf: [0; 8], len: 0 }
+        Self {
+            buf: [0; 8],
+            len: 0,
+        }
     }
 
     fn push(&mut self, byte: u8) {
@@ -146,7 +149,11 @@ fn decode_sample_into(format: PcmFormat, bytes: &[u8], out: &mut ScratchBuf) -> 
                     let widened = widen(centred, container_bits, 32);
                     out.extend_from_slice(&(widened as i32).to_ne_bytes());
                 }
-                _ => return Err(Error::Unsupported("pcm: unexpected decoded format for int wire")),
+                _ => {
+                    return Err(Error::Unsupported(
+                        "pcm: unexpected decoded format for int wire",
+                    ));
+                }
             }
         }
         WireKind::Float { big_endian } => {
@@ -160,7 +167,11 @@ fn decode_sample_into(format: PcmFormat, bytes: &[u8], out: &mut ScratchBuf) -> 
                     let v = f64::from_bits(raw);
                     out.extend_from_slice(&v.to_ne_bytes());
                 }
-                _ => return Err(Error::Unsupported("pcm: unexpected decoded format for float wire")),
+                _ => {
+                    return Err(Error::Unsupported(
+                        "pcm: unexpected decoded format for float wire",
+                    ));
+                }
             }
         }
         WireKind::ALaw => {
@@ -217,7 +228,11 @@ fn encode_sample(format: PcmFormat, bytes: &[u8], out: &mut Vec<u8>) -> Result<(
                     let v = i32::from_ne_bytes([a, b, c, d]);
                     narrow(i64::from(v), 32, container_bits)
                 }
-                _ => return Err(Error::Unsupported("pcm: unexpected sample format for int wire")),
+                _ => {
+                    return Err(Error::Unsupported(
+                        "pcm: unexpected sample format for int wire",
+                    ));
+                }
             };
             let raw = match format.wire {
                 WireKind::SignedInt { .. } => (centred as u64) & mask(container_bits),
@@ -253,7 +268,11 @@ fn encode_sample(format: PcmFormat, bytes: &[u8], out: &mut Vec<u8>) -> Result<(
                 write_uint(v.to_bits(), &mut buf, big_endian);
                 out.extend_from_slice(&buf);
             }
-            _ => return Err(Error::Unsupported("pcm: unexpected sample format for float wire")),
+            _ => {
+                return Err(Error::Unsupported(
+                    "pcm: unexpected sample format for float wire",
+                ));
+            }
         },
         WireKind::ALaw | WireKind::MuLaw | WireKind::Vidc => {
             let &[a, b] = bytes else {
@@ -271,7 +290,11 @@ fn encode_sample(format: PcmFormat, bytes: &[u8], out: &mut Vec<u8>) -> Result<(
 }
 
 const fn mask(bits: u32) -> u64 {
-    if bits >= 64 { u64::MAX } else { (1u64 << bits) - 1 }
+    if bits >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << bits) - 1
+    }
 }
 
 /// Left-shift a centred value from `from_bits` of precision to `to_bits`,
@@ -307,9 +330,7 @@ fn narrow(value: i64, from_bits: u32, to_bits: u32) -> i64 {
 /// differently because A-law and mu-law bias their magnitude before search
 /// in different ways below.
 const SEG_AEND: [i32; 8] = [0x1F, 0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF];
-const SEG_UEND: [i32; 8] = [
-    0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF,
-];
+const SEG_UEND: [i32; 8] = [0x3F, 0x7F, 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF, 0x1FFF];
 
 /// The first segment whose boundary `val` does not exceed, or 8 (out of
 /// range — clamped by the caller before this is ever reached in practice).
@@ -352,7 +373,11 @@ fn linear_to_alaw(pcm: i16) -> u8 {
     let byte = if seg >= 8 {
         0x7F
     } else {
-        let low = if seg < 2 { (v >> 1) & 0x0F } else { (v >> seg) & 0x0F };
+        let low = if seg < 2 {
+            (v >> 1) & 0x0F
+        } else {
+            (v >> seg) & 0x0F
+        };
         ((seg as u8) << 4) | (low as u8)
     };
     byte ^ mask
@@ -365,10 +390,8 @@ fn mulaw_to_linear(u_val: u8) -> i16 {
     let seg = (u_val & 0x70) >> 4;
     let mut t = (i32::from(u_val & 0x0F) << 3) + BIAS;
     t <<= seg;
-    let magnitude = (if sign { BIAS - t } else { t - BIAS }).clamp(
-        i32::from(i16::MIN),
-        i32::from(i16::MAX),
-    );
+    let magnitude =
+        (if sign { BIAS - t } else { t - BIAS }).clamp(i32::from(i16::MIN), i32::from(i16::MAX));
     magnitude as i16
 }
 
@@ -466,13 +489,11 @@ pub fn decode_interleaved(
 /// # Errors
 /// [`Error::Unsupported`] if `format.encodable` is false; otherwise whatever
 /// `encode_sample` returns.
-pub fn encode_interleaved(
-    format: PcmFormat,
-    samples: &[u8],
-    channels: u32,
-) -> Result<Vec<u8>> {
+pub fn encode_interleaved(format: PcmFormat, samples: &[u8], channels: u32) -> Result<Vec<u8>> {
     if !format.encodable {
-        return Err(Error::Unsupported("pcm: this format has no registered encoder"));
+        return Err(Error::Unsupported(
+            "pcm: this format has no registered encoder",
+        ));
     }
     let channels = channels.max(1);
     let in_bytes_per_sample = format.decoded.bytes_per_sample();
@@ -612,7 +633,11 @@ mod tests {
             let lin = mulaw_to_linear(b);
             let back = linear_to_mulaw(lin);
             if b == 0x7F {
-                assert_eq!(mulaw_to_linear(back), lin, "the two zero codes both decode to 0");
+                assert_eq!(
+                    mulaw_to_linear(back),
+                    lin,
+                    "the two zero codes both decode to 0"
+                );
                 continue;
             }
             assert_eq!(back, b, "byte {b:#04x} -> {lin} -> {back:#04x}");

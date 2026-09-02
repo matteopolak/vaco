@@ -104,7 +104,11 @@ impl G726State {
     fn encode_sample(&mut self, sample: i16) -> u32 {
         let mag_bits = self.bits - 1;
         let diff = i32::from(sample) - self.predictor;
-        let (sign, mut mag) = if diff < 0 { (1u32, -diff) } else { (0u32, diff) };
+        let (sign, mut mag) = if diff < 0 {
+            (1u32, -diff)
+        } else {
+            (0u32, diff)
+        };
         let mut code = 0u32;
         let mut tmp = self.step;
         for i in (0..mag_bits).rev() {
@@ -188,7 +192,12 @@ fn unpack_codes(data: &[u8], bits: u32, left_justified: bool, count: usize) -> R
 ///
 /// # Errors
 /// [`Error::UnexpectedEof`] if `data` is shorter than `sample_count` codes.
-pub(crate) fn decode(data: &[u8], bits: u32, left_justified: bool, sample_count: usize) -> Result<Vec<i16>> {
+pub(crate) fn decode(
+    data: &[u8],
+    bits: u32,
+    left_justified: bool,
+    sample_count: usize,
+) -> Result<Vec<i16>> {
     let bits = bits.clamp(2, 5);
     let codes = unpack_codes(data, bits, left_justified, sample_count)?;
     let mut state = G726State::new(bits);

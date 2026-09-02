@@ -66,7 +66,11 @@ impl Matcher {
         if pos.saturating_add(MIN_MATCH) > pixels.len() {
             return None;
         }
-        let (p0, p1, p2) = (*pixels.get(pos)?, *pixels.get(pos + 1)?, *pixels.get(pos + 2)?);
+        let (p0, p1, p2) = (
+            *pixels.get(pos)?,
+            *pixels.get(pos + 1)?,
+            *pixels.get(pos + 2)?,
+        );
         let h = hash3(p0, p1, p2);
         let candidate = self.head.get(h).copied().unwrap_or(-1);
         if let Some(slot) = self.head.get_mut(h) {
@@ -84,7 +88,14 @@ impl Matcher {
         while len < max_len && pixels.get(c + len) == pixels.get(pos + len) {
             len += 1;
         }
-        if len >= MIN_MATCH { Some(Match { length: len, distance: pos - c }) } else { None }
+        if len >= MIN_MATCH {
+            Some(Match {
+                length: len,
+                distance: pos - c,
+            })
+        } else {
+            None
+        }
     }
 }
 

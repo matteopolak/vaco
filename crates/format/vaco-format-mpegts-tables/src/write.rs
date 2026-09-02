@@ -240,7 +240,15 @@ pub fn write_sdt(
         body.push((len & 0xFF) as u8);
         body.extend_from_slice(&s.descriptors);
     }
-    build_section(TABLE_SDT_ACTUAL, transport_stream_id, version, 0, 0, true, &body)
+    build_section(
+        TABLE_SDT_ACTUAL,
+        transport_stream_id,
+        version,
+        0,
+        0,
+        true,
+        &body,
+    )
 }
 
 #[cfg(test)]
@@ -267,10 +275,14 @@ mod tests {
         assert_eq!(sdt[0], 0x42);
         assert_eq!(sdt[1] & 0xF0, 0xF0, "SDT: {:02x?}", &sdt[..3]);
 
-        let pat = super::write_pat(1, 0, &[super::PatEntryOut {
-            program_number: 1,
-            pid: 0x1000,
-        }])
+        let pat = super::write_pat(
+            1,
+            0,
+            &[super::PatEntryOut {
+                program_number: 1,
+                pid: 0x1000,
+            }],
+        )
         .unwrap();
         assert_eq!(pat[0], 0x00);
         assert_eq!(pat[1] & 0xF0, 0xB0, "PAT: {:02x?}", &pat[..3]);

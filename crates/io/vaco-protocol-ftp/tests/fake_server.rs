@@ -102,7 +102,10 @@ fn run_control(conn: TcpStream, data_port: u16, epsv_supported: bool) {
             "SIZE" => send(&mut writer, "213 15\r\n"),
             "EPSV" => {
                 if epsv_supported {
-                    send(&mut writer, &format!("229 Entering Extended Passive Mode (|||{data_port}|)\r\n"));
+                    send(
+                        &mut writer,
+                        &format!("229 Entering Extended Passive Mode (|||{data_port}|)\r\n"),
+                    );
                 } else {
                     send(&mut writer, "500 Unknown command EPSV\r\n");
                 }
@@ -115,7 +118,10 @@ fn run_control(conn: TcpStream, data_port: u16, epsv_supported: bool) {
                     send(&mut writer, "500 PASV should not have been sent\r\n");
                 } else {
                     let (p1, p2) = (data_port >> 8, data_port & 0xff);
-                    send(&mut writer, &format!("227 Entering Passive Mode (127,0,0,1,{p1},{p2})\r\n"));
+                    send(
+                        &mut writer,
+                        &format!("227 Entering Passive Mode (127,0,0,1,{p1},{p2})\r\n"),
+                    );
                 }
             }
             "RETR" | "STOR" => {
@@ -145,8 +151,13 @@ fn reads_a_file_via_epsv() {
     let registry = registry();
     let cancel = CancelToken::new();
     let e = env(&registry, &cancel);
-    let url = format!("ftp://127.0.0.1:{}/pub/file.bin", server.control_addr.port());
-    let mut source = registry.open(&url, IoFlags::READ, &Dict::new(), &e).unwrap();
+    let url = format!(
+        "ftp://127.0.0.1:{}/pub/file.bin",
+        server.control_addr.port()
+    );
+    let mut source = registry
+        .open(&url, IoFlags::READ, &Dict::new(), &e)
+        .unwrap();
 
     let mut got = Vec::new();
     let mut buf = [0u8; 4];
@@ -168,7 +179,9 @@ fn falls_back_to_pasv_when_epsv_is_refused() {
     let cancel = CancelToken::new();
     let e = env(&registry, &cancel);
     let url = format!("ftp://127.0.0.1:{}/f.bin", server.control_addr.port());
-    let mut source = registry.open(&url, IoFlags::READ, &Dict::new(), &e).unwrap();
+    let mut source = registry
+        .open(&url, IoFlags::READ, &Dict::new(), &e)
+        .unwrap();
 
     let mut got = Vec::new();
     source.read_exact_to_end(&mut got);
@@ -205,7 +218,9 @@ fn writes_a_file_via_stor() {
     let url = format!("ftp://127.0.0.1:{}/out.bin", server.control_addr.port());
 
     {
-        let mut sink = registry.create(&url, IoFlags::WRITE, &Dict::new(), &e).unwrap();
+        let mut sink = registry
+            .create(&url, IoFlags::WRITE, &Dict::new(), &e)
+            .unwrap();
         sink.write(b"hello ftp world").unwrap();
         sink.flush().unwrap();
     }
@@ -225,5 +240,8 @@ fn a_whitelist_naming_only_ftp_refuses_the_nested_tcp_open() {
         .open(&url, IoFlags::READ, &Dict::new(), &e)
         .err()
         .unwrap();
-    assert!(matches!(err, vaco_protocol_core::ProtocolError::Denied { .. }));
+    assert!(matches!(
+        err,
+        vaco_protocol_core::ProtocolError::Denied { .. }
+    ));
 }

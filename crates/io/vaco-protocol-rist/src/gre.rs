@@ -24,14 +24,22 @@ fn malformed(detail: &'static str) -> Error {
 }
 
 fn u16_at(buf: &[u8], at: usize) -> Result<u16> {
-    let s = buf.get(at..at + 2).ok_or_else(|| malformed("GRE field runs past the buffer"))?;
-    let arr: [u8; 2] = s.try_into().map_err(|_| malformed("GRE field is not 2 bytes"))?;
+    let s = buf
+        .get(at..at + 2)
+        .ok_or_else(|| malformed("GRE field runs past the buffer"))?;
+    let arr: [u8; 2] = s
+        .try_into()
+        .map_err(|_| malformed("GRE field is not 2 bytes"))?;
     Ok(u16::from_be_bytes(arr))
 }
 
 fn u32_at(buf: &[u8], at: usize) -> Result<u32> {
-    let s = buf.get(at..at + 4).ok_or_else(|| malformed("GRE field runs past the buffer"))?;
-    let arr: [u8; 4] = s.try_into().map_err(|_| malformed("GRE field is not 4 bytes"))?;
+    let s = buf
+        .get(at..at + 4)
+        .ok_or_else(|| malformed("GRE field runs past the buffer"))?;
+    let arr: [u8; 4] = s
+        .try_into()
+        .map_err(|_| malformed("GRE field is not 4 bytes"))?;
     Ok(u32::from_be_bytes(arr))
 }
 

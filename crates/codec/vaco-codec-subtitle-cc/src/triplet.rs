@@ -54,23 +54,21 @@ pub fn iter_triplets<'a>(
     cc_data: &'a [u8],
     skipped: &'a mut u64,
 ) -> impl Iterator<Item = Triplet> + 'a {
-    cc_data
-        .chunks(3)
-        .filter_map(move |chunk| {
-            let [marker_and_type, d1, d2] = chunk else {
-                *skipped += 1;
-                return None;
-            };
-            let cc_valid = (marker_and_type & 0x04) != 0;
-            if !cc_valid {
-                *skipped += 1;
-                return None;
-            }
-            Some(Triplet {
-                cc_type: CcType::from_bits(*marker_and_type),
-                data: [*d1, *d2],
-            })
+    cc_data.chunks(3).filter_map(move |chunk| {
+        let [marker_and_type, d1, d2] = chunk else {
+            *skipped += 1;
+            return None;
+        };
+        let cc_valid = (marker_and_type & 0x04) != 0;
+        if !cc_valid {
+            *skipped += 1;
+            return None;
+        }
+        Some(Triplet {
+            cc_type: CcType::from_bits(*marker_and_type),
+            data: [*d1, *d2],
         })
+    })
 }
 
 #[cfg(test)]

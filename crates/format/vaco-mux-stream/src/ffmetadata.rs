@@ -705,10 +705,7 @@ mod tests {
             m.add_stream(&CodecParameters::new(MediaType::Audio))
                 .unwrap();
             let meta = MuxMetadata {
-                stream_tags: vec![
-                    vec![("language".to_owned(), "eng".to_owned())],
-                    Vec::new(),
-                ],
+                stream_tags: vec![vec![("language".to_owned(), "eng".to_owned())], Vec::new()],
                 ..MuxMetadata::default()
             };
             m.set_metadata(&meta).unwrap();

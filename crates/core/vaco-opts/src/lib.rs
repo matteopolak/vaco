@@ -101,10 +101,6 @@ pub use value::{
     OptValue, OptValueKind, ParseCtx, SerCtx, parse_flag_bits, parse_integer, serialize_flag_bits,
 };
 
-/// `#[derive(OptEnum)]` — turn a fieldless enum into a unit of named constants.
-pub use vaco_opts_derive::OptEnum;
-/// `#[derive(Options)]` — project a struct's fields into an option schema.
-pub use vaco_opts_derive::Options;
 /// `#[derive(CliOptionTable)]` — turn a fieldless enum into a
 /// `vaco_cli_core::table::OptDesc` argv-flag table. Lives here because this
 /// is where the project's derive-macro infrastructure lives, not because the
@@ -112,6 +108,10 @@ pub use vaco_opts_derive::Options;
 /// `vaco_cli_core::table::ArgFlags`'s own doc for why the two flag
 /// vocabularies are kept apart.
 pub use vaco_opts_derive::CliOptionTable;
+/// `#[derive(OptEnum)]` — turn a fieldless enum into a unit of named constants.
+pub use vaco_opts_derive::OptEnum;
+/// `#[derive(Options)]` — project a struct's fields into an option schema.
+pub use vaco_opts_derive::Options;
 
 /// Runtime support for macro expansion. Not a stable surface.
 #[doc(hidden)]

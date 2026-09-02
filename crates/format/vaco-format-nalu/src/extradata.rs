@@ -187,7 +187,11 @@ mod tests {
             CodecId::Png,
             CodecId::Mp3,
         ] {
-            assert_eq!(header_kind_for(codec), None, "{codec:?} must not claim a HeaderKind");
+            assert_eq!(
+                header_kind_for(codec),
+                None,
+                "{codec:?} must not claim a HeaderKind"
+            );
         }
     }
 
@@ -265,7 +269,10 @@ mod tests {
         let framing = Framing::length_prefixed(4).unwrap();
         let sets = parameter_sets(&lp, framing, HeaderKind::H264);
         assert_eq!(sets, vec![&sps[..]]);
-        assert_eq!(assemble_extradata(sets), [&[0, 0, 1][..], &sps[..]].concat());
+        assert_eq!(
+            assemble_extradata(sets),
+            [&[0, 0, 1][..], &sps[..]].concat()
+        );
     }
 
     /// VVC has no measured convention yet, so it must not silently guess one.

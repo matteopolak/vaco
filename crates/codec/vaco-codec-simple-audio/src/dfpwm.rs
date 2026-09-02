@@ -77,7 +77,11 @@ impl Default for State {
     fn default() -> Self {
         // The spec's own initial values: charge 0, strength 1, previous bit
         // 0 "to simplify implementation".
-        Self { q: 0, s: 1, last_bit: false }
+        Self {
+            q: 0,
+            s: 1,
+            last_bit: false,
+        }
     }
 }
 
@@ -101,7 +105,11 @@ impl State {
         }
         self.q = q_next;
 
-        let (r, z): (i32, i32) = if bit == self.last_bit { (RI, 255) } else { (RD, 0) };
+        let (r, z): (i32, i32) = if bit == self.last_bit {
+            (RI, 255)
+        } else {
+            (RD, 0)
+        };
         let mut s_next = self.s + (r * (z - self.s) + 128) / 256;
         if s_next == self.s && self.s != z {
             s_next += if z < self.s { -1 } else { 1 };
@@ -182,7 +190,9 @@ mod tests {
     use vaco_limits::Limits;
 
     fn tone(n: usize) -> Vec<i16> {
-        (0..n).map(|i| ((f64::from(i as u32) * 0.1).sin() * 20000.0) as i16).collect()
+        (0..n)
+            .map(|i| ((f64::from(i as u32) * 0.1).sin() * 20000.0) as i16)
+            .collect()
     }
 
     #[test]
@@ -204,14 +214,20 @@ mod tests {
         // design — not a byte-exactness one.
         let window = 32;
         let mut max_avg_err = 0i64;
-        for w in samples.windows(window).step_by(window).zip(decoded.windows(window).step_by(window))
+        for w in samples
+            .windows(window)
+            .step_by(window)
+            .zip(decoded.windows(window).step_by(window))
         {
             let (s, d) = w;
             let avg_s: i64 = s.iter().map(|&x| i64::from(x)).sum::<i64>() / window as i64;
             let avg_d: i64 = d.iter().map(|&x| i64::from(x)).sum::<i64>() / window as i64;
             max_avg_err = max_avg_err.max((avg_s - avg_d).abs());
         }
-        assert!(max_avg_err < 12000, "windowed average error too large: {max_avg_err}");
+        assert!(
+            max_avg_err < 12000,
+            "windowed average error too large: {max_avg_err}"
+        );
     }
 
     #[test]
@@ -222,12 +238,19 @@ mod tests {
         let wire = encode(&mut budget, &mut enc_state, &samples).unwrap();
         let mut dec_state = State::default();
         let decoded = decode(&mut budget, &mut dec_state, &wire).unwrap();
-        let max_abs = decoded.iter().map(|&s| i32::from(s).abs()).max().unwrap_or(0);
+        let max_abs = decoded
+            .iter()
+            .map(|&s| i32::from(s).abs())
+            .max()
+            .unwrap_or(0);
         // The predictor's own step size for an alternating-bit run around
         // zero settles small; it never claims true silence (bit 0 is a
         // step toward one target, not "no step"), so this bounds the
         // steady-state ripple rather than asserting exact zero.
-        assert!(max_abs < 8000, "silence produced too large a ripple: {max_abs}");
+        assert!(
+            max_abs < 8000,
+            "silence produced too large a ripple: {max_abs}"
+        );
     }
 
     #[test]

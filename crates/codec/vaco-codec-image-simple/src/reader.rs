@@ -23,7 +23,11 @@ impl<'a> Reader<'a> {
     }
 
     pub(crate) fn u8(&mut self) -> Result<u8> {
-        let b = self.data.get(self.pos).copied().ok_or(Error::UnexpectedEof)?;
+        let b = self
+            .data
+            .get(self.pos)
+            .copied()
+            .ok_or(Error::UnexpectedEof)?;
         self.pos += 1;
         Ok(b)
     }

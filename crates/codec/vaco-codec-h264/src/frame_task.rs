@@ -162,8 +162,15 @@ pub(crate) struct H264FrameTask {
 /// so waiting once for every row costs one atomic load and hands back the plane
 /// as one slice -- [`RefPlane::Flat`], which is the plain indexed fetch the
 /// decoder has always used.
-fn whole_planes_of<'a>(ctx: &TaskCtx<'_>, reference: &'a PictureRef) -> Result<RefPicturePlanes<'a>> {
-    let mut out: [RefPlane<'a>; 3] = [RefPlane::Flat(&[]), RefPlane::Flat(&[]), RefPlane::Flat(&[])];
+fn whole_planes_of<'a>(
+    ctx: &TaskCtx<'_>,
+    reference: &'a PictureRef,
+) -> Result<RefPicturePlanes<'a>> {
+    let mut out: [RefPlane<'a>; 3] = [
+        RefPlane::Flat(&[]),
+        RefPlane::Flat(&[]),
+        RefPlane::Flat(&[]),
+    ];
     for (plane, slot) in out.iter_mut().enumerate() {
         // `wait_rows` clamps the row it waits for to the plane's own height, so
         // `u32::MAX` is "every row".
@@ -194,8 +201,18 @@ fn wait_row_planes<'r>(
 ) -> Result<()> {
     for (i, reference) in refs.iter().enumerate() {
         let Some(slot) = out.get_mut(i) else { break };
-        let luma_to = reach.luma.get(list).and_then(|a| a.get(i)).copied().flatten();
-        let chroma_to = reach.chroma.get(list).and_then(|a| a.get(i)).copied().flatten();
+        let luma_to = reach
+            .luma
+            .get(list)
+            .and_then(|a| a.get(i))
+            .copied()
+            .flatten();
+        let chroma_to = reach
+            .chroma
+            .get(list)
+            .and_then(|a| a.get(i))
+            .copied()
+            .flatten();
         for (plane, want) in [(0usize, luma_to), (1, chroma_to), (2, chroma_to)] {
             let view = match want {
                 Some(y) => Some(ctx.wait_rows(reference, plane, y)?),
@@ -240,7 +257,9 @@ impl RowPublisher {
     ) -> Result<()> {
         let count = writer.band_count(plane);
         loop {
-            let Some(&k) = self.next.get(plane) else { return Ok(()) };
+            let Some(&k) = self.next.get(plane) else {
+                return Ok(());
+            };
             if k >= count {
                 return Ok(());
             }
@@ -320,12 +339,16 @@ impl FrameTask for H264FrameTask {
                 &ref_list1_poc,
             )
         });
-        let strides = ((mbs_wide as usize).saturating_mul(16), (mbs_wide as usize).saturating_mul(8));
+        let strides = (
+            (mbs_wide as usize).saturating_mul(16),
+            (mbs_wide as usize).saturating_mul(8),
+        );
         let heights = (mbs_high.saturating_mul(16), mbs_high.saturating_mul(8));
         let mut publisher = RowPublisher::new();
         let mut recon = pools.acquire_reconstructor(mbs_wide, mbs_high, &mut budget)?;
 
-        let row_wise = row_progress && macroblocks_in_raster_order(&macroblocks, mbs_wide, mbs_high);
+        let row_wise =
+            row_progress && macroblocks_in_raster_order(&macroblocks, mbs_wide, mbs_high);
         if row_wise {
             let empty = RefPicturePlanes {
                 luma: RefPlane::Flat(&[]),
@@ -337,7 +360,9 @@ impl FrameTask for H264FrameTask {
             let mbw = mbs_wide as usize;
             for my in 0..mbs_high {
                 let start = (my as usize).saturating_mul(mbw);
-                let row = macroblocks.get(start..start.saturating_add(mbw)).unwrap_or(&[]);
+                let row = macroblocks
+                    .get(start..start.saturating_add(mbw))
+                    .unwrap_or(&[]);
                 let reach = row_reference_reach(row);
                 wait_row_planes(ctx, &ref_list0, &reach, 0, &mut planes0)?;
                 wait_row_planes(ctx, &ref_list1, &reach, 1, &mut planes1)?;
@@ -362,7 +387,10 @@ impl FrameTask for H264FrameTask {
                         }
                         let done = my - 1;
                         recon.deblock_row(d, done, chroma_qp_offset_cb, chroma_qp_offset_cr);
-                        (luma_rows_final(done).min(heights.0), chroma_rows_final(done).min(heights.1))
+                        (
+                            luma_rows_final(done).min(heights.0),
+                            chroma_rows_final(done).min(heights.1),
+                        )
                     }
                     None => (
                         my.saturating_add(1).saturating_mul(16).min(heights.0),
@@ -480,8 +508,26 @@ pub(crate) fn build_frame(
     let (w, h) = (width as usize, height as usize);
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
     crate::decoder::blit_plane(luma, luma_stride, luma_x0, luma_y0, &mut frame, 0, w, h);
-    crate::decoder::blit_plane(cb, chroma_stride, chroma_x0, chroma_y0, &mut frame, 1, cw, ch);
-    crate::decoder::blit_plane(cr, chroma_stride, chroma_x0, chroma_y0, &mut frame, 2, cw, ch);
+    crate::decoder::blit_plane(
+        cb,
+        chroma_stride,
+        chroma_x0,
+        chroma_y0,
+        &mut frame,
+        1,
+        cw,
+        ch,
+    );
+    crate::decoder::blit_plane(
+        cr,
+        chroma_stride,
+        chroma_x0,
+        chroma_y0,
+        &mut frame,
+        2,
+        cw,
+        ch,
+    );
 
     frame.pts = geometry.pts;
     frame.duration = geometry.duration;

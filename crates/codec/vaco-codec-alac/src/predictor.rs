@@ -64,7 +64,14 @@ fn wrap_to_chanbits(v: i32, chanbits: u32) -> i32 {
 /// one). `order == 31` is the reference's "apply a first-difference
 /// integrator, no coefficients" mode, used as the first pass of `modeU ==
 /// 1` two-stage prediction.
-pub(crate) fn unpc_block(pc1: &[i32], coefs: &mut [i32], order: usize, chanbits: u32, denshift: u32, budget: &mut Budget) -> vaco_core::Result<Vec<i32>> {
+pub(crate) fn unpc_block(
+    pc1: &[i32],
+    coefs: &mut [i32],
+    order: usize,
+    chanbits: u32,
+    denshift: u32,
+    budget: &mut Budget,
+) -> vaco_core::Result<Vec<i32>> {
     let num = pc1.len();
     let mut out: Vec<i32> = budget.alloc(num)?;
     if num == 0 {
@@ -94,7 +101,11 @@ pub(crate) fn unpc_block(pc1: &[i32], coefs: &mut [i32], order: usize, chanbits:
     }
 
     let order = order.min(MAX_ORDER).min(num.saturating_sub(1).max(1));
-    let denhalf: i64 = if denshift == 0 { 0 } else { 1i64 << (denshift - 1) };
+    let denhalf: i64 = if denshift == 0 {
+        0
+    } else {
+        1i64 << (denshift - 1)
+    };
 
     let warmup_end = order.min(num.saturating_sub(1));
     for j in 1..=warmup_end {
@@ -111,7 +122,10 @@ pub(crate) fn unpc_block(pc1: &[i32], coefs: &mut [i32], order: usize, chanbits:
         let mut sum1: i64 = 0;
         for k in 0..order {
             let coef = i64::from(coefs.get(k).copied().unwrap_or(0));
-            let hist = out.get(j.wrapping_sub(1).wrapping_sub(k)).copied().unwrap_or(0);
+            let hist = out
+                .get(j.wrapping_sub(1).wrapping_sub(k))
+                .copied()
+                .unwrap_or(0);
             // Deliberately `hist - top`, the opposite sign from the
             // adaptation step's `dd = top - hist` below -- the reference
             // itself uses both polarities in the same function
@@ -134,14 +148,21 @@ pub(crate) fn unpc_block(pc1: &[i32], coefs: &mut [i32], order: usize, chanbits:
 
         if sg > 0 {
             for k in (0..order).rev() {
-                let hist = out.get(j.wrapping_sub(1).wrapping_sub(k)).copied().unwrap_or(0);
+                let hist = out
+                    .get(j.wrapping_sub(1).wrapping_sub(k))
+                    .copied()
+                    .unwrap_or(0);
                 let dd = top.wrapping_sub(hist);
                 let sgn = dd.signum();
                 if let Some(c) = coefs.get_mut(k) {
                     *c = c.wrapping_sub(sgn);
                 }
-                #[expect(clippy::cast_possible_truncation, reason = "same bound as `predicted` above")]
-                let contribution = ((i64::from(sgn).wrapping_mul(i64::from(dd))) >> denshift) as i32;
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "same bound as `predicted` above"
+                )]
+                let contribution =
+                    ((i64::from(sgn).wrapping_mul(i64::from(dd))) >> denshift) as i32;
                 #[expect(
                     clippy::cast_possible_wrap,
                     reason = "order - k is always < MAX_ORDER (32), fits comfortably in i32"
@@ -154,15 +175,25 @@ pub(crate) fn unpc_block(pc1: &[i32], coefs: &mut [i32], order: usize, chanbits:
             }
         } else if sg < 0 {
             for k in (0..order).rev() {
-                let hist = out.get(j.wrapping_sub(1).wrapping_sub(k)).copied().unwrap_or(0);
+                let hist = out
+                    .get(j.wrapping_sub(1).wrapping_sub(k))
+                    .copied()
+                    .unwrap_or(0);
                 let dd = top.wrapping_sub(hist);
                 let sgn = dd.signum();
                 if let Some(c) = coefs.get_mut(k) {
                     *c = c.wrapping_add(sgn);
                 }
-                #[expect(clippy::cast_possible_truncation, reason = "same bound as `predicted` above")]
-                let contribution = ((i64::from(-sgn).wrapping_mul(i64::from(dd))) >> denshift) as i32;
-                #[expect(clippy::cast_possible_wrap, reason = "order - k is always < MAX_ORDER (32)")]
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "same bound as `predicted` above"
+                )]
+                let contribution =
+                    ((i64::from(-sgn).wrapping_mul(i64::from(dd))) >> denshift) as i32;
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "order - k is always < MAX_ORDER (32)"
+                )]
                 let weight = (order - k) as i32;
                 del0 = del0.wrapping_sub(weight.wrapping_mul(contribution));
                 if del0 >= 0 {
@@ -197,7 +228,13 @@ pub(crate) fn unpc_block(pc1: &[i32], coefs: &mut [i32], order: usize, chanbits:
 /// the reference, never the transmitted residual alone, and `samp[j]`
 /// (`reconstructed`) is already in range, so plain wrapping subtraction
 /// reproduces the exact residual [`unpc_block`] needs to invert back to it.
-pub(crate) fn pc_block(samp: &[i32], coefs: &mut [i32], order: usize, chanbits: u32, denshift: u32) -> Vec<i32> {
+pub(crate) fn pc_block(
+    samp: &[i32],
+    coefs: &mut [i32],
+    order: usize,
+    chanbits: u32,
+    denshift: u32,
+) -> Vec<i32> {
     let num = samp.len();
     let mut out = vec![0i32; num];
     if num == 0 {
@@ -226,7 +263,11 @@ pub(crate) fn pc_block(samp: &[i32], coefs: &mut [i32], order: usize, chanbits: 
     }
 
     let order = order.min(MAX_ORDER).min(num.saturating_sub(1).max(1));
-    let denhalf: i64 = if denshift == 0 { 0 } else { 1i64 << (denshift - 1) };
+    let denhalf: i64 = if denshift == 0 {
+        0
+    } else {
+        1i64 << (denshift - 1)
+    };
 
     let warmup_end = order.min(num.saturating_sub(1));
     for j in 1..=warmup_end {
@@ -277,9 +318,16 @@ pub(crate) fn pc_block(samp: &[i32], coefs: &mut [i32], order: usize, chanbits: 
                 if let Some(c) = coefs.get_mut(k) {
                     *c = c.wrapping_sub(sgn);
                 }
-                #[expect(clippy::cast_possible_truncation, reason = "same bound as `predicted` above")]
-                let contribution = ((i64::from(sgn).wrapping_mul(i64::from(dd))) >> denshift) as i32;
-                #[expect(clippy::cast_possible_wrap, reason = "order - k is always < MAX_ORDER (32)")]
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "same bound as `predicted` above"
+                )]
+                let contribution =
+                    ((i64::from(sgn).wrapping_mul(i64::from(dd))) >> denshift) as i32;
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "order - k is always < MAX_ORDER (32)"
+                )]
                 let weight = (order - k) as i32;
                 del0 = del0.wrapping_sub(weight.wrapping_mul(contribution));
                 if del0 <= 0 {
@@ -294,9 +342,16 @@ pub(crate) fn pc_block(samp: &[i32], coefs: &mut [i32], order: usize, chanbits: 
                 if let Some(c) = coefs.get_mut(k) {
                     *c = c.wrapping_add(sgn);
                 }
-                #[expect(clippy::cast_possible_truncation, reason = "same bound as `predicted` above")]
-                let contribution = ((i64::from(-sgn).wrapping_mul(i64::from(dd))) >> denshift) as i32;
-                #[expect(clippy::cast_possible_wrap, reason = "order - k is always < MAX_ORDER (32)")]
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "same bound as `predicted` above"
+                )]
+                let contribution =
+                    ((i64::from(-sgn).wrapping_mul(i64::from(dd))) >> denshift) as i32;
+                #[expect(
+                    clippy::cast_possible_wrap,
+                    reason = "order - k is always < MAX_ORDER (32)"
+                )]
                 let weight = (order - k) as i32;
                 del0 = del0.wrapping_sub(weight.wrapping_mul(contribution));
                 if del0 >= 0 {
@@ -367,8 +422,15 @@ mod tests {
     #[test]
     fn never_panics_on_a_short_or_empty_buffer() {
         let mut coefs = [0i32; 4];
-        assert!(unpc_block(&[], &mut coefs, 4, 16, 9, &mut budget()).unwrap().is_empty());
-        assert_eq!(unpc_block(&[42], &mut coefs, 4, 16, 9, &mut budget()).unwrap(), vec![42]);
+        assert!(
+            unpc_block(&[], &mut coefs, 4, 16, 9, &mut budget())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            unpc_block(&[42], &mut coefs, 4, 16, 9, &mut budget()).unwrap(),
+            vec![42]
+        );
     }
 
     /// `pc_block` (encode) followed by `unpc_block` (decode), sharing zero-
@@ -385,13 +447,24 @@ mod tests {
         let residuals = pc_block(samples, &mut enc_coefs, order, chanbits, denshift);
         assert_eq!(residuals.len(), samples.len());
         let mut dec_coefs = vec![0i32; order.min(MAX_ORDER)];
-        let decoded = unpc_block(&residuals, &mut dec_coefs, order, chanbits, denshift, &mut budget()).unwrap();
+        let decoded = unpc_block(
+            &residuals,
+            &mut dec_coefs,
+            order,
+            chanbits,
+            denshift,
+            &mut budget(),
+        )
+        .unwrap();
         assert_eq!(decoded, samples, "order {order} denshift {denshift}");
         // The two sides must also leave the *same* adapted coefficient
         // state behind, since a real multi-packet stream never resets
         // mid-block and any drift here would only show up several blocks
         // later as a much harder to trace divergence.
-        assert_eq!(enc_coefs, dec_coefs, "order {order} denshift {denshift}: coefs diverged");
+        assert_eq!(
+            enc_coefs, dec_coefs,
+            "order {order} denshift {denshift}: coefs diverged"
+        );
     }
 
     #[test]
@@ -443,11 +516,22 @@ mod tests {
                 // below promises every input sample already fits, and
                 // that promise, not this function's own correctness, is
                 // what an out-of-range value would actually be testing.
-                #[expect(clippy::cast_possible_truncation, reason = "deliberately keeping only the low 16 bits")]
+                #[expect(
+                    clippy::cast_possible_truncation,
+                    reason = "deliberately keeping only the low 16 bits"
+                )]
                 i32::from(state as i16)
             })
             .collect();
-        let extremes: Vec<i32> = (0..300).map(|i| if i % 2 == 0 { i32::from(i16::MAX) } else { i32::from(i16::MIN) }).collect();
+        let extremes: Vec<i32> = (0..300)
+            .map(|i| {
+                if i % 2 == 0 {
+                    i32::from(i16::MAX)
+                } else {
+                    i32::from(i16::MIN)
+                }
+            })
+            .collect();
         for &order in &[4usize, 8] {
             pc_roundtrips(&noisy, order, 9);
             pc_roundtrips(&extremes, order, 9);

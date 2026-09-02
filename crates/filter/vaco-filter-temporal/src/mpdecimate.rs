@@ -113,10 +113,7 @@ impl Filter {
                     BLOCK,
                     BLOCK,
                 );
-                #[allow(
-                    clippy::cast_possible_wrap,
-                    reason = "block SAD is far below i64::MAX"
-                )]
+                #[allow(clippy::cast_possible_wrap, reason = "block SAD is far below i64::MAX")]
                 let sad = sad as i64;
                 if sad > self.opts.hi {
                     return false;

@@ -172,7 +172,8 @@ fn take_u32(data: &[u8]) -> Result<(u32, &[u8])> {
 
 fn take_str(data: &[u8]) -> Result<(&str, &[u8])> {
     let (len, rest) = take_u32(data)?;
-    let len = usize::try_from(len).map_err(|_| Error::InvalidData("FLAC picture string too long"))?;
+    let len =
+        usize::try_from(len).map_err(|_| Error::InvalidData("FLAC picture string too long"))?;
     let Some((head, tail)) = rest.split_at_checked(len) else {
         return Err(Error::InvalidData("FLAC picture string overruns the block"));
     };

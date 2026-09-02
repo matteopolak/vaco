@@ -57,7 +57,8 @@ impl<'a> RangeDecoder<'a> {
             end_offs: 0,
             end_window: 0,
             nend_bits: 0,
-            nbits_total: (CODE_BITS as i32 + 1) - (((CODE_BITS - CODE_EXTRA) / SYM_BITS) * SYM_BITS) as i32,
+            nbits_total: (CODE_BITS as i32 + 1)
+                - (((CODE_BITS - CODE_EXTRA) / SYM_BITS) * SYM_BITS) as i32,
             rng: 1 << CODE_EXTRA,
             val: 0,
             ext: 0,
@@ -65,7 +66,10 @@ impl<'a> RangeDecoder<'a> {
             error: false,
         };
         dec.rem = dec.read_byte();
-        dec.val = dec.rng.wrapping_sub(1).wrapping_sub(dec.rem >> (SYM_BITS - CODE_EXTRA));
+        dec.val = dec
+            .rng
+            .wrapping_sub(1)
+            .wrapping_sub(dec.rem >> (SYM_BITS - CODE_EXTRA));
         dec.normalize();
         dec
     }
@@ -123,7 +127,11 @@ impl<'a> RangeDecoder<'a> {
     fn update(&mut self, fl: u32, fh: u32, ft: u32) {
         let s = self.ext.wrapping_mul(ft - fh);
         self.val = self.val.wrapping_sub(s);
-        self.rng = if fl > 0 { self.ext.wrapping_mul(fh - fl) } else { self.rng.wrapping_sub(s) };
+        self.rng = if fl > 0 {
+            self.ext.wrapping_mul(fh - fl)
+        } else {
+            self.rng.wrapping_sub(s)
+        };
         self.normalize();
     }
 
@@ -265,7 +273,11 @@ impl<'a> RangeDecoder<'a> {
         // (briefly, right after construction) even non-positive; callers
         // compare it directly rather than treating it as a bit count that
         // must be `>= 0`.
-        let ilog = if self.rng == 0 { 0 } else { 32 - self.rng.leading_zeros() };
+        let ilog = if self.rng == 0 {
+            0
+        } else {
+            32 - self.rng.leading_zeros()
+        };
         self.nbits_total - ilog as i32
     }
 

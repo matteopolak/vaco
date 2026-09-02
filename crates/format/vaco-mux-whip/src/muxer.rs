@@ -178,11 +178,7 @@ impl std::fmt::Debug for WhipMuxer {
 fn codec_rtp_info(codec: CodecId, params: &CodecParameters) -> Result<(&'static str, u32, String)> {
     match codec {
         CodecId::H264 => Ok(("H264", 90_000, h264_fmtp(params))),
-        CodecId::Opus => Ok((
-            "opus",
-            48_000,
-            "minptime=10;useinbandfec=1".to_owned(),
-        )),
+        CodecId::Opus => Ok(("opus", 48_000, "minptime=10;useinbandfec=1".to_owned())),
         _ => Err(Error::Unsupported(
             "the whip muxer carries H.264 video and Opus audio only",
         )),
@@ -200,7 +196,9 @@ fn codec_rtp_info(codec: CodecId, params: &CodecParameters) -> Result<(&'static 
 /// way), so the constraint-flags byte specifically is not recoverable here;
 /// zero is what every encoder observed so far actually sends anyway.
 fn h264_fmtp(params: &CodecParameters) -> String {
-    let profile_idc = params.profile.map_or(0x42, |p| p.value.clamp(0, 0xFF) as u8);
+    let profile_idc = params
+        .profile
+        .map_or(0x42, |p| p.value.clamp(0, 0xFF) as u8);
     let level_idc = params.level.map_or(0x1f, |l| l.0.clamp(0, 0xFF) as u8);
     format!(
         "level-asymmetry-allowed=1;packetization-mode=1;profile-level-id={profile_idc:02x}00{level_idc:02x}"
@@ -228,7 +226,11 @@ impl Muxer for WhipMuxer {
         let kind = match params.effective_media_type() {
             Some(MediaType::Video) => "video",
             Some(MediaType::Audio) => "audio",
-            _ => return Err(Error::Unsupported("the whip muxer carries audio/video only")),
+            _ => {
+                return Err(Error::Unsupported(
+                    "the whip muxer carries audio/video only",
+                ));
+            }
         };
         let index = u32::try_from(self.streams.len()).unwrap_or(u32::MAX);
         let seed = time_seed() ^ u64::from(index).wrapping_mul(0x9E37_79B9_7F4A_7C15);
@@ -257,7 +259,9 @@ impl Muxer for WhipMuxer {
             ));
         };
         if self.streams.is_empty() {
-            return Err(Error::InvalidData("the whip muxer needs at least one stream"));
+            return Err(Error::InvalidData(
+                "the whip muxer needs at least one stream",
+            ));
         }
         let session = negotiate(&endpoint, &self.streams)?;
         self.session = Some(session);
@@ -331,7 +335,10 @@ impl Muxer for WhipMuxer {
     fn stream_time_base(&self, stream_index: u32) -> Option<vaco_core::Rational> {
         let idx = usize::try_from(stream_index).ok()?;
         let clock_rate = self.streams.get(idx)?.clock_rate;
-        Some(vaco_core::Rational::new(1, i32::try_from(clock_rate).unwrap_or(90_000)))
+        Some(vaco_core::Rational::new(
+            1,
+            i32::try_from(clock_rate).unwrap_or(90_000),
+        ))
     }
 
     fn bind_url(&mut self, url: &str) -> Result<()> {
@@ -612,8 +619,7 @@ fn negotiate(endpoint: &str, streams: &[StreamState]) -> Result<Session> {
         socket,
         local_pwd: local_pwd.clone(),
     };
-    let stream =
-        vaco_protocol_dtls::connect::handshake_over(demux, &dtls_opts, None, None, None)?;
+    let stream = vaco_protocol_dtls::connect::handshake_over(demux, &dtls_opts, None, None, None)?;
 
     let peer_cert = stream
         .ssl()
@@ -647,11 +653,7 @@ fn negotiate(endpoint: &str, streams: &[StreamState]) -> Result<Session> {
         .ok_or(Error::InvalidData("SRTP keying material was too short"))?;
     let keys: SessionKeys = derive_session_keys_aes128(&client_key, &client_salt);
 
-    let raw_socket = stream
-        .get_ref()
-        .socket()
-        .try_clone()
-        .map_err(Error::Io)?;
+    let raw_socket = stream.get_ref().socket().try_clone().map_err(Error::Io)?;
     drop(stream);
 
     let contexts = streams

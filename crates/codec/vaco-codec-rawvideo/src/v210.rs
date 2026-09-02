@@ -59,11 +59,15 @@ const ROW_BYTE_ALIGN: usize = 128;
 const TEN_BIT_MASK: u32 = 0x3FF;
 
 fn row_bytes(width: u32) -> usize {
-    (width as usize).div_ceil(ROW_PIXEL_ALIGN).saturating_mul(ROW_BYTE_ALIGN)
+    (width as usize)
+        .div_ceil(ROW_PIXEL_ALIGN)
+        .saturating_mul(ROW_BYTE_ALIGN)
 }
 
 fn read_u32_le(buf: &[u8], off: usize) -> Result<u32> {
-    let src = buf.get(off..off.saturating_add(4)).ok_or(Error::UnexpectedEof)?;
+    let src = buf
+        .get(off..off.saturating_add(4))
+        .ok_or(Error::UnexpectedEof)?;
     let &[a, b, c, d] = src else {
         return Err(Error::UnexpectedEof);
     };
@@ -110,9 +114,15 @@ fn split_planes_mut(planes: &mut [Plane]) -> Result<(&mut Plane, &mut Plane, &mu
     }
     let (first, rest) = planes.split_at_mut(1);
     let (second, third) = rest.split_at_mut(1);
-    let y = first.get_mut(0).ok_or(Error::InvalidData("v210: missing Y plane"))?;
-    let cb = second.get_mut(0).ok_or(Error::InvalidData("v210: missing Cb plane"))?;
-    let cr = third.get_mut(0).ok_or(Error::InvalidData("v210: missing Cr plane"))?;
+    let y = first
+        .get_mut(0)
+        .ok_or(Error::InvalidData("v210: missing Y plane"))?;
+    let cb = second
+        .get_mut(0)
+        .ok_or(Error::InvalidData("v210: missing Cb plane"))?;
+    let cr = third
+        .get_mut(0)
+        .ok_or(Error::InvalidData("v210: missing Cr plane"))?;
     Ok((y, cb, cr))
 }
 
@@ -121,7 +131,12 @@ fn split_planes_mut(planes: &mut [Plane]) -> Result<(&mut Plane, &mut Plane, &mu
 /// # Errors
 /// [`Error::InvalidData`] for a `0x0` picture size, [`Error::UnexpectedEof`]
 /// if `payload` is shorter than the padded geometry implies.
-pub(crate) fn decode(payload: &[u8], width: u32, height: u32, budget: &mut Budget) -> Result<Frame> {
+pub(crate) fn decode(
+    payload: &[u8],
+    width: u32,
+    height: u32,
+    budget: &mut Budget,
+) -> Result<Frame> {
     if width == 0 || height == 0 {
         return Err(Error::InvalidData("v210: picture size 0x0 is invalid"));
     }
@@ -177,7 +192,9 @@ pub(crate) fn decode(payload: &[u8], width: u32, height: u32, budget: &mut Budge
                 }
                 write_sample(y_buf, y_row.saturating_add(x.saturating_mul(2)), y_val)?;
             }
-            for (p, (cb_val, cr_val)) in [(cb0, cr0), (cb2, cr2), (cb4, cr4)].into_iter().enumerate() {
+            for (p, (cb_val, cr_val)) in
+                [(cb0, cr0), (cb2, cr2), (cb4, cr4)].into_iter().enumerate()
+            {
                 let x = pixel_base.saturating_add(p.saturating_mul(2));
                 if x >= width {
                     break;
@@ -216,11 +233,21 @@ pub(crate) fn encode(frame: &Frame) -> Result<Vec<u8>> {
     if planes.len() != 3 {
         return Err(Error::InvalidData("v210: expected exactly three planes"));
     }
-    let y_plane = planes.first().ok_or(Error::InvalidData("v210: missing Y plane"))?;
-    let cb_plane = planes.get(1).ok_or(Error::InvalidData("v210: missing Cb plane"))?;
-    let cr_plane = planes.get(2).ok_or(Error::InvalidData("v210: missing Cr plane"))?;
+    let y_plane = planes
+        .first()
+        .ok_or(Error::InvalidData("v210: missing Y plane"))?;
+    let cb_plane = planes
+        .get(1)
+        .ok_or(Error::InvalidData("v210: missing Cb plane"))?;
+    let cr_plane = planes
+        .get(2)
+        .ok_or(Error::InvalidData("v210: missing Cr plane"))?;
     let (y_stride, cb_stride, cr_stride) = (y_plane.stride, cb_plane.stride, cr_plane.stride);
-    let (y_buf, cb_buf, cr_buf) = (y_plane.data.as_slice(), cb_plane.data.as_slice(), cr_plane.data.as_slice());
+    let (y_buf, cb_buf, cr_buf) = (
+        y_plane.data.as_slice(),
+        cb_plane.data.as_slice(),
+        cr_plane.data.as_slice(),
+    );
 
     let stride = row_bytes(width);
     let mut out = vec![0u8; stride.saturating_mul(height as usize)];
@@ -333,7 +360,13 @@ mod tests {
         let height = 1u32;
         let payload = vec![0u8; row_bytes(width)];
         let frame = decode(&payload, width, height, &mut budget).expect("decode");
-        let FrameData::Video { format, width: w, height: h, .. } = &frame.data else {
+        let FrameData::Video {
+            format,
+            width: w,
+            height: h,
+            ..
+        } = &frame.data
+        else {
             panic!("video frame")
         };
         assert_eq!(*format, PixFmt::Yuv422p10le);

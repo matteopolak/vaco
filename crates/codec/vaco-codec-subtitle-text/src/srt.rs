@@ -184,10 +184,7 @@ mod tests {
 
     #[test]
     fn nested_tags_close_in_reverse() {
-        assert_eq!(
-            to_ass("<b><i>bi</i></b>"),
-            "{\\b1}{\\i1}bi{\\i0}{\\b0}"
-        );
+        assert_eq!(to_ass("<b><i>bi</i></b>"), "{\\b1}{\\i1}bi{\\i0}{\\b0}");
     }
 
     #[test]

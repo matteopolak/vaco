@@ -75,9 +75,7 @@ const LONG_88_96: [u16; 42] = [
 ];
 
 /// `swb_offset_short_window`, 32/44.1/48 kHz. 14 bands, 15 boundaries.
-const SHORT_32_44_48: [u16; 15] = [
-    0, 4, 8, 12, 16, 20, 28, 36, 44, 56, 68, 80, 96, 112, 128,
-];
+const SHORT_32_44_48: [u16; 15] = [0, 4, 8, 12, 16, 20, 28, 36, 44, 56, 68, 80, 96, 112, 128];
 
 /// `swb_offset_short_window`, 8 kHz. 15 bands, 16 boundaries.
 const SHORT_8: [u16; 16] = [
@@ -132,7 +130,12 @@ pub(crate) fn swb_offset_short(sfi: u8) -> Option<&'static [u16]> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::{swb_offset_long, swb_offset_short};
 
     #[test]

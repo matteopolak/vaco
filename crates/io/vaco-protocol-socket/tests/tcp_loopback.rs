@@ -62,9 +62,7 @@ fn writes_bytes_through_create() {
     let cancel = CancelToken::new();
     let env = ProtocolEnv::new(&r, &cancel).with_whitelist(&["tcp"]);
     let url = format!("tcp://{addr}");
-    let mut sink = r
-        .create(&url, IoFlags::WRITE, &Dict::new(), &env)
-        .unwrap();
+    let mut sink = r.create(&url, IoFlags::WRITE, &Dict::new(), &env).unwrap();
     vaco_io::MediaSink::write(&mut *sink, b"ping").unwrap();
     drop(sink);
 

@@ -104,7 +104,12 @@ pub(crate) fn read_all_groups(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        reason = "test code"
+    )]
     use super::read_all_groups;
     use vaco_bitstream::{BitReader, BitWriter};
 

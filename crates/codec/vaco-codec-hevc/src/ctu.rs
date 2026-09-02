@@ -24,7 +24,7 @@ use crate::cabac_ctx::ContextBank;
 use crate::framebuf::{CuGrid, EdgeMarks, Picture, Plane, ReconPicture};
 use crate::intra_mode::{self, DC_IDX, DM_CHROMA_IDX};
 use crate::intra_pred;
-use crate::motion::{self, Mv, MotionInfo, PartMode, PuRect, RefList, UniMotion};
+use crate::motion::{self, MotionInfo, Mv, PartMode, PuRect, RefList, UniMotion};
 use crate::residual::{self, Coeffs};
 use crate::sao;
 use crate::transform;
@@ -271,7 +271,10 @@ impl<'p> InterSliceParams<'p> {
             motion::RefList::L0 => (&self.ref_pics_l0, &self.ref_pics_l1),
             motion::RefList::L1 => (&self.ref_pics_l1, &self.ref_pics_l0),
         };
-        own.iter().chain(other.iter()).find(|r| r.poc == poc).map(|r| r.pic)
+        own.iter()
+            .chain(other.iter())
+            .find(|r| r.poc == poc)
+            .map(|r| r.pic)
     }
 
     /// The `RefPicListX` index a `poc` resolves to on `list`, for
@@ -314,7 +317,10 @@ impl<'p> CtxShared<'p> {
     /// `edges`/`cu_grid`/`sao_params`/`recon` borrow from — see this
     /// module's own "don't share the writer" resolution for why every one
     /// of these `*Shared` types is now a plain borrow rather than an `Arc`.
-    #[allow(clippy::too_many_arguments, reason = "one call site (decoder.rs), grouping into a sub-struct would not aid clarity")]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "one call site (decoder.rs), grouping into a sub-struct would not aid clarity"
+    )]
     pub(crate) fn new(
         sps: &Sps,
         pps: &Pps,
@@ -327,7 +333,8 @@ impl<'p> CtxShared<'p> {
         inter: Option<InterSliceParams<'p>>,
     ) -> Self {
         let is_p_slice = inter.is_some();
-        let log2_ctb_size = u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size);
+        let log2_ctb_size =
+            u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size);
         let width = usize::try_from(sps.pic_width_in_luma_samples).unwrap_or(0);
         let ctb_size = 1u32 << log2_ctb_size;
         let ctbs_x = u32::try_from(width).unwrap_or(0).div_ceil(ctb_size).max(1);
@@ -337,7 +344,8 @@ impl<'p> CtxShared<'p> {
             log2_ctb_size,
             log2_min_cb_size: u32::from(sps.log2_min_cb_size),
             log2_min_tb_size: u32::from(sps.log2_min_tb_size),
-            log2_max_tb_size: u32::from(sps.log2_min_tb_size) + u32::from(sps.log2_diff_max_min_tb_size),
+            log2_max_tb_size: u32::from(sps.log2_min_tb_size)
+                + u32::from(sps.log2_diff_max_min_tb_size),
             max_transform_hierarchy_depth_intra: sps.max_transform_hierarchy_depth_intra,
             slice_qp,
             sign_data_hiding: pps.sign_data_hiding_enabled,
@@ -405,7 +413,11 @@ impl<'p> Ctx<'p> {
     /// a test living outside this module could not do anyway: most of
     /// `Ctx`'s fields are private to `ctu`, by design).
     #[cfg(test)]
-    pub(crate) fn retarget_pic_for_test<'q>(&self, pic: &'q mut Picture, recon: &'q mut ReconPicture<'q>) -> Ctx<'q>
+    pub(crate) fn retarget_pic_for_test<'q>(
+        &self,
+        pic: &'q mut Picture,
+        recon: &'q mut ReconPicture<'q>,
+    ) -> Ctx<'q>
     where
         'p: 'q,
     {
@@ -440,7 +452,9 @@ impl<'p> Ctx<'p> {
     /// (`AGENT-CONSTRAINTS.md`'s code rules), not a case anyone expects to
     /// hit.
     fn inter(&self) -> Result<&InterSliceParams<'p>> {
-        self.shared.inter.as_ref().ok_or(Error::InvalidData("vaco-codec-hevc: inter CU decode reached with no P-slice context"))
+        self.shared.inter.as_ref().ok_or(Error::InvalidData(
+            "vaco-codec-hevc: inter CU decode reached with no P-slice context",
+        ))
     }
 
     /// The total bytes [`Budget::alloc`] charged for this `Ctx`'s own two
@@ -460,7 +474,9 @@ impl<'p> Ctx<'p> {
     /// stock-`libx265` fixtures `cu_grid`'s own charge did.
     #[must_use]
     pub(crate) fn working_budget_bytes(&self) -> u64 {
-        self.cu_grid.budget_bytes().saturating_add(self.sao_params.budget_bytes())
+        self.cu_grid
+            .budget_bytes()
+            .saturating_add(self.sao_params.budget_bytes())
     }
 }
 
@@ -510,7 +526,12 @@ fn derive_qp_y(qp_y_pred: i32, cu_qp_delta_val: i32) -> i32 {
 /// last one means +1" shape does not fall out of the more obvious
 /// early-return-on-cap reading (confirmed by tracing both against the same
 /// bit sequence before trusting the port).
-fn read_unary_max(cabac: &mut CabacDecoder<'_>, ctx0: &mut ContextModel, ctx1: &mut ContextModel, max_symbol: u32) -> u32 {
+fn read_unary_max(
+    cabac: &mut CabacDecoder<'_>,
+    ctx0: &mut ContextModel,
+    ctx1: &mut ContextModel,
+    max_symbol: u32,
+) -> u32 {
     if max_symbol == 0 {
         return 0;
     }
@@ -545,13 +566,23 @@ fn read_unary_max(cabac: &mut CabacDecoder<'_>, ctx0: &mut ContextModel, ctx1: &
 /// `xReadEpExGolomb`) — [`vaco_codec_cabac::CabacDecoder::decode_bypass_egk`]
 /// already implements the latter bit-for-bit (its own doc derives the same
 /// "run of 1s, terminating 0, then that many suffix bits" shape).
-fn maybe_parse_cu_qp_delta(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, has_residual: bool) -> Result<()> {
+fn maybe_parse_cu_qp_delta(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &mut Ctx<'_>,
+    has_residual: bool,
+) -> Result<()> {
     if !s.shared.cu_qp_delta_enabled || s.is_cu_qp_delta_coded || !has_residual {
         return Ok(());
     }
     s.is_cu_qp_delta_coded = true;
-    let (ctx0, rest) = ctx.cu_qp_delta.split_first_mut().ok_or(Error::InvalidData("cu_qp_delta ctx"))?;
-    let ctx1 = rest.first_mut().ok_or(Error::InvalidData("cu_qp_delta ctx"))?;
+    let (ctx0, rest) = ctx
+        .cu_qp_delta
+        .split_first_mut()
+        .ok_or(Error::InvalidData("cu_qp_delta ctx"))?;
+    let ctx1 = rest
+        .first_mut()
+        .ok_or(Error::InvalidData("cu_qp_delta ctx"))?;
     let mut abs_val = read_unary_max(cabac, ctx0, ctx1, 5);
     if abs_val >= 5 {
         abs_val += cabac.decode_bypass_egk(0);
@@ -571,9 +602,24 @@ fn maybe_parse_cu_qp_delta(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, 
 /// addressing). Parses `sao()` (§7.3.8.3) first, exactly where
 /// `coding_tree_unit()`'s own syntax table puts it, when either
 /// `slice_sao_luma_flag` or `slice_sao_chroma_flag` is set.
-pub(crate) fn decode_ctu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, addr: u32) -> Result<()> {
+pub(crate) fn decode_ctu(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &mut Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    addr: u32,
+) -> Result<()> {
     if s.shared.sao_luma || s.shared.sao_chroma {
-        let params = sao::parse_ctu_sao(cabac, ctx, addr, s.shared.ctbs_x, s.shared.sao_luma, s.shared.sao_chroma, &s.sao_params)?;
+        let params = sao::parse_ctu_sao(
+            cabac,
+            ctx,
+            addr,
+            s.shared.ctbs_x,
+            s.shared.sao_luma,
+            s.shared.sao_chroma,
+            &s.sao_params,
+        )?;
         s.sao_params.set(addr, &params);
     }
     coding_quadtree(cabac, ctx, s, x0, y0, s.shared.log2_ctb_size, 0)
@@ -597,10 +643,19 @@ fn coding_quadtree(
     } else if at_min {
         false
     } else {
-        let left = s.cu_grid.depth_at(x0 - 1, y0).is_some_and(|d| u32::from(d) > depth);
-        let above = s.cu_grid.depth_at(x0, y0 - 1).is_some_and(|d| u32::from(d) > depth);
+        let left = s
+            .cu_grid
+            .depth_at(x0 - 1, y0)
+            .is_some_and(|d| u32::from(d) > depth);
+        let above = s
+            .cu_grid
+            .depth_at(x0, y0 - 1)
+            .is_some_and(|d| u32::from(d) > depth);
         let inc = u32::from(left) + u32::from(above);
-        let cm = ctx.split_cu_flag.get_mut(inc as usize).ok_or(Error::InvalidData("split_cu_flag ctx out of range"))?;
+        let cm = ctx
+            .split_cu_flag
+            .get_mut(inc as usize)
+            .ok_or(Error::InvalidData("split_cu_flag ctx out of range"))?;
         cabac.decode_decision(cm) != 0
     };
 
@@ -642,7 +697,15 @@ struct Pu {
 /// either (§7.3.8.5's own field order — `decode_intra_cu` is the
 /// I-slice-and-`pred_mode_flag==1` body either way, since an inter slice can
 /// still code an intra-refresh CU).
-fn coding_unit(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, depth: u32) -> Result<()> {
+fn coding_unit(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &mut Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    log2_size: u32,
+    depth: u32,
+) -> Result<()> {
     if s.shared.is_p_slice {
         coding_unit_p(cabac, ctx, s, x0, y0, log2_size, depth)
     } else {
@@ -659,7 +722,8 @@ fn finalize_cu_qp(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32) {
     let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
     let bx0 = usize::try_from(x0 >> 2).unwrap_or(0);
     let by0 = usize::try_from(y0 >> 2).unwrap_or(0);
-    s.cu_grid.fill_qp(bx0, by0, blocks, blocks, i8::try_from(qp_y).unwrap_or(0));
+    s.cu_grid
+        .fill_qp(bx0, by0, blocks, blocks, i8::try_from(qp_y).unwrap_or(0));
     s.qp_y_prev = qp_y;
 }
 
@@ -677,7 +741,10 @@ fn decode_intra_cu(
     // means `PART_2Nx2N`, `0` means `PART_NxN`) is present exactly when
     // this CU sits at the minimum coding block size.
     let is_nxn = if log2_size == s.shared.log2_min_cb_size {
-        let cm = ctx.part_size.first_mut().ok_or(Error::InvalidData("part_size ctx"))?;
+        let cm = ctx
+            .part_size
+            .first_mut()
+            .ok_or(Error::InvalidData("part_size ctx"))?;
         let bin = cabac.decode_decision(cm);
         bin == 0
     } else {
@@ -687,10 +754,26 @@ fn decode_intra_cu(
     let pus: Vec<Pu> = if is_nxn {
         let half = size >> 1;
         vec![
-            Pu { x: x0, y: y0, size: half },
-            Pu { x: x0 + half, y: y0, size: half },
-            Pu { x: x0, y: y0 + half, size: half },
-            Pu { x: x0 + half, y: y0 + half, size: half },
+            Pu {
+                x: x0,
+                y: y0,
+                size: half,
+            },
+            Pu {
+                x: x0 + half,
+                y: y0,
+                size: half,
+            },
+            Pu {
+                x: x0,
+                y: y0 + half,
+                size: half,
+            },
+            Pu {
+                x: x0 + half,
+                y: y0 + half,
+                size: half,
+            },
         ]
     } else {
         vec![Pu { x: x0, y: y0, size }]
@@ -700,7 +783,10 @@ fn decode_intra_cu(
     // `mpm_idx`/`rem_intra_luma_pred_mode`.
     let mut prev_flags = [false; 4];
     for slot in prev_flags.iter_mut().take(pus.len()) {
-        let cm = ctx.prev_intra_luma_pred.first_mut().ok_or(Error::InvalidData("prev_intra ctx"))?;
+        let cm = ctx
+            .prev_intra_luma_pred
+            .first_mut()
+            .ok_or(Error::InvalidData("prev_intra ctx"))?;
         *slot = cabac.decode_decision(cm) != 0;
     }
 
@@ -719,12 +805,20 @@ fn decode_intra_cu(
     let ctb_size = 1i32 << s.shared.log2_ctb_size;
     for (i, pu) in pus.iter().enumerate() {
         let left = s.cu_grid.mode_at(pu.x - 1, pu.y);
-        let above = if pu.y % ctb_size == 0 { DC_IDX } else { s.cu_grid.mode_at(pu.x, pu.y - 1) };
+        let above = if pu.y % ctb_size == 0 {
+            DC_IDX
+        } else {
+            s.cu_grid.mode_at(pu.x, pu.y - 1)
+        };
         let mpm = intra_mode::mpm_list(left, above);
         let prev_flag = prev_flags.get(i).copied().unwrap_or(false);
         let mode = if prev_flag {
             let first = cabac.decode_bypass() != 0;
-            let idx = if first { 1 + usize::from(cabac.decode_bypass() != 0) } else { 0 };
+            let idx = if first {
+                1 + usize::from(cabac.decode_bypass() != 0)
+            } else {
+                0
+            };
             mpm.get(idx).copied().unwrap_or(DC_IDX)
         } else {
             let rem = u8::try_from(cabac.decode_bypass_bits(5)).unwrap_or(0);
@@ -736,13 +830,23 @@ fn decode_intra_cu(
         let blocks = usize::try_from((pu.size >> 2).max(1)).unwrap_or(1);
         let bx0 = usize::try_from(pu.x >> 2).unwrap_or(0);
         let by0 = usize::try_from(pu.y >> 2).unwrap_or(0);
-        s.cu_grid.fill(bx0, by0, blocks, blocks, u8::try_from(depth).unwrap_or(u8::MAX), mode);
+        s.cu_grid.fill(
+            bx0,
+            by0,
+            blocks,
+            blocks,
+            u8::try_from(depth).unwrap_or(u8::MAX),
+            mode,
+        );
     }
 
     // intra_chroma_pred_mode: once per CU, referencing PU0's luma mode —
     // chroma always predicts as a single 2Nx2N block regardless of `PartMode`.
     let chroma_syntax = {
-        let cm = ctx.intra_chroma_pred_mode.first_mut().ok_or(Error::InvalidData("chroma ctx"))?;
+        let cm = ctx
+            .intra_chroma_pred_mode
+            .first_mut()
+            .ok_or(Error::InvalidData("chroma ctx"))?;
         if cabac.decode_decision(cm) == 0 {
             DM_CHROMA_IDX
         } else {
@@ -754,7 +858,12 @@ fn decode_intra_cu(
     // §7.3.8.5: `rqt_root_cbf` does not exist for intra CUs (it is inferred
     // 1) — transform_tree() always runs.
     let intra_split_depth_extra = u32::from(is_nxn);
-    let quadtree_tu_log2_min = quadtree_tu_log2_min_in_cu(s, log2_size, s.shared.max_transform_hierarchy_depth_intra, intra_split_depth_extra);
+    let quadtree_tu_log2_min = quadtree_tu_log2_min_in_cu(
+        s,
+        log2_size,
+        s.shared.max_transform_hierarchy_depth_intra,
+        intra_split_depth_extra,
+    );
 
     transform_tree(
         cabac,
@@ -797,11 +906,18 @@ fn ctx_skip_flag(s: &Ctx<'_>, x0: i32, y0: i32) -> usize {
 
 /// `parseMergeIndex`/§9.3.3.2: a truncated-unary code, `cMax =
 /// MaxNumMergeCand - 1`, bin 0 context-coded, every further bin bypass.
-fn parse_merge_index(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, max_num_merge_cand: usize) -> Result<usize> {
+fn parse_merge_index(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    max_num_merge_cand: usize,
+) -> Result<usize> {
     if max_num_merge_cand <= 1 {
         return Ok(0);
     }
-    let cm = ctx.merge_idx.first_mut().ok_or(Error::InvalidData("merge_idx ctx"))?;
+    let cm = ctx
+        .merge_idx
+        .first_mut()
+        .ok_or(Error::InvalidData("merge_idx ctx"))?;
     let first_bin = cabac.decode_decision(cm);
     if first_bin == 0 {
         return Ok(0);
@@ -820,7 +936,10 @@ fn parse_merge_index(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, max_nu
 /// bin (`xReadUnaryMaxSymbol`'s own `uiMaxSymbol == 1` case returns after the
 /// first bin — see `ctu.rs`'s own `Vaco-Spec-Ref`'d HM reading).
 fn parse_mvp_idx(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank) -> Result<usize> {
-    let cm = ctx.mvp_idx.first_mut().ok_or(Error::InvalidData("mvp_idx ctx"))?;
+    let cm = ctx
+        .mvp_idx
+        .first_mut()
+        .ok_or(Error::InvalidData("mvp_idx ctx"))?;
     let val = cabac.decode_decision(cm);
     Ok(usize::from(val != 0))
 }
@@ -828,11 +947,18 @@ fn parse_mvp_idx(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank) -> Result<
 /// `parseRefFrmIdx`/§9.3.3.2: bin 0 (`ctx[0]`) says "is it more than 0";
 /// every further bin up to `NumRefIdxL0 - 2` of them is context-coded via
 /// `ctx[1]` for the first and bypass afterward, truncated-unary shaped.
-fn parse_ref_idx(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, num_ref_idx_l0: usize) -> Result<usize> {
+fn parse_ref_idx(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    num_ref_idx_l0: usize,
+) -> Result<usize> {
     if num_ref_idx_l0 <= 1 {
         return Ok(0);
     }
-    let (ctx0, rest) = ctx.ref_pic.split_first_mut().ok_or(Error::InvalidData("ref_idx ctx"))?;
+    let (ctx0, rest) = ctx
+        .ref_pic
+        .split_first_mut()
+        .ok_or(Error::InvalidData("ref_idx ctx"))?;
     let bin0 = cabac.decode_decision(ctx0);
     if bin0 == 0 {
         return Ok(0);
@@ -863,7 +989,10 @@ fn parse_ref_idx(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, num_ref_id
 /// two axes are genuinely interleaved (`greater0` for both axes before
 /// either axis's `greater1`), not decoded axis-by-axis.
 fn parse_mvd(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank) -> Result<Mv> {
-    let (ctx0, rest) = ctx.mvd.split_first_mut().ok_or(Error::InvalidData("mvd ctx"))?;
+    let (ctx0, rest) = ctx
+        .mvd
+        .split_first_mut()
+        .ok_or(Error::InvalidData("mvd ctx"))?;
     let mut hor_abs = cabac.decode_decision(ctx0);
     let ver_abs_gr0_bin = cabac.decode_decision(ctx0);
     let mut ver_abs = ver_abs_gr0_bin;
@@ -894,7 +1023,10 @@ fn parse_mvd(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank) -> Result<Mv> 
     }
     let hor = i32::try_from(hor_abs).unwrap_or(i32::MAX);
     let ver = i32::try_from(ver_abs).unwrap_or(i32::MAX);
-    Ok(Mv { x: if hor_sign != 0 { -hor } else { hor }, y: if ver_sign != 0 { -ver } else { ver } })
+    Ok(Mv {
+        x: if hor_sign != 0 { -hor } else { hor },
+        y: if ver_sign != 0 { -ver } else { ver },
+    })
 }
 
 /// §7.3.8.5's inter `part_mode`: the `uiMaxNumBits`-bin prefix
@@ -904,11 +1036,20 @@ fn parse_mvd(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank) -> Result<Mv> 
 /// port of HM's own `parsePartSize` inter branch, since its bin-count
 /// derivation (`uiMaxNumBits`) does not fall out of the binarisation table
 /// alone without also knowing the min-CB/AMP gating it is entangled with.
-fn parse_part_mode_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, at_min_cb_size: bool, size: i32, amp_enabled: bool) -> Result<PartMode> {
+fn parse_part_mode_inter(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    at_min_cb_size: bool,
+    size: i32,
+    amp_enabled: bool,
+) -> Result<PartMode> {
     let max_num_bits: usize = if at_min_cb_size && size != 8 { 3 } else { 2 };
     let mut mode_idx = 0usize;
     for i in 0..max_num_bits {
-        let cm = ctx.part_size.get_mut(i).ok_or(Error::InvalidData("part_size ctx"))?;
+        let cm = ctx
+            .part_size
+            .get_mut(i)
+            .ok_or(Error::InvalidData("part_size ctx"))?;
         let bin = cabac.decode_decision(cm);
         if bin != 0 {
             break;
@@ -923,14 +1064,28 @@ fn parse_part_mode_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, at
     };
     if amp_enabled && !at_min_cb_size {
         if mode == PartMode::TwoNxN {
-            let cm = ctx.part_size.get_mut(3).ok_or(Error::InvalidData("part_size ctx"))?;
+            let cm = ctx
+                .part_size
+                .get_mut(3)
+                .ok_or(Error::InvalidData("part_size ctx"))?;
             if cabac.decode_decision(cm) == 0 {
-                mode = if cabac.decode_bypass() == 0 { PartMode::TwoNxNu } else { PartMode::TwoNxNd };
+                mode = if cabac.decode_bypass() == 0 {
+                    PartMode::TwoNxNu
+                } else {
+                    PartMode::TwoNxNd
+                };
             }
         } else if mode == PartMode::Nx2N {
-            let cm = ctx.part_size.get_mut(3).ok_or(Error::InvalidData("part_size ctx"))?;
+            let cm = ctx
+                .part_size
+                .get_mut(3)
+                .ok_or(Error::InvalidData("part_size ctx"))?;
             if cabac.decode_decision(cm) == 0 {
-                mode = if cabac.decode_bypass() == 0 { PartMode::NLx2N } else { PartMode::NRx2N };
+                mode = if cabac.decode_bypass() == 0 {
+                    PartMode::NLx2N
+                } else {
+                    PartMode::NRx2N
+                };
             }
         }
     }
@@ -955,16 +1110,32 @@ enum InterPredIdc {
 /// otherwise only the second (`L0`-vs-`L1`) bin is read. The first bin's
 /// `ctxInc` is the CU's own quadtree `depth` (HM's `getCtxInterDir`); the
 /// second bin always uses context index 4.
-fn parse_inter_pred_idc(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, part_mode: PartMode, size: i32, depth: u32) -> Result<InterPredIdc> {
+fn parse_inter_pred_idc(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    part_mode: PartMode,
+    size: i32,
+    depth: u32,
+) -> Result<InterPredIdc> {
     if part_mode == PartMode::TwoNx2N || size != 8 {
         let d = usize::try_from(depth).unwrap_or(0).min(3);
-        let cm = ctx.inter_dir.get_mut(d).ok_or(Error::InvalidData("inter_dir ctx"))?;
+        let cm = ctx
+            .inter_dir
+            .get_mut(d)
+            .ok_or(Error::InvalidData("inter_dir ctx"))?;
         if cabac.decode_decision(cm) != 0 {
             return Ok(InterPredIdc::Bi);
         }
     }
-    let cm = ctx.inter_dir.get_mut(4).ok_or(Error::InvalidData("inter_dir ctx"))?;
-    Ok(if cabac.decode_decision(cm) != 0 { InterPredIdc::L1 } else { InterPredIdc::L0 })
+    let cm = ctx
+        .inter_dir
+        .get_mut(4)
+        .ok_or(Error::InvalidData("inter_dir ctx"))?;
+    Ok(if cabac.decode_decision(cm) != 0 {
+        InterPredIdc::L1
+    } else {
+        InterPredIdc::L0
+    })
 }
 
 /// §8.5.3.2.9's own per-position collocated-motion-vector derivation, for
@@ -986,7 +1157,13 @@ fn parse_inter_pred_idc(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, par
 /// position — which subsumes the "only one list used" case above without a
 /// separate branch: [`RefList::pick`] already returns `None` for an unused
 /// list, and `.or_else(pick(other))` is exactly HM's fallback).
-fn col_mvp(s: &Ctx<'_>, pos: (i32, i32), target_list: motion::RefList, curr_poc: i64, target_ref_poc: i64) -> Option<Mv> {
+fn col_mvp(
+    s: &Ctx<'_>,
+    pos: (i32, i32),
+    target_list: motion::RefList,
+    curr_poc: i64,
+    target_ref_poc: i64,
+) -> Option<Mv> {
     let inter = s.inter().ok()?;
     let collocated = inter.collocated.as_ref()?;
     let info = collocated.get(pos.0, pos.1)?;
@@ -997,9 +1174,15 @@ fn col_mvp(s: &Ctx<'_>, pos: (i32, i32), target_list: motion::RefList, curr_poc:
     } else {
         motion::RefList::L0
     };
-    let uni = col_list.pick(info).or_else(|| col_list.other().pick(info))?;
+    let uni = col_list
+        .pick(info)
+        .or_else(|| col_list.other().pick(info))?;
     let scale = motion::dist_scale_factor(curr_poc, target_ref_poc, collocated.poc, uni.ref_poc);
-    Some(if scale == 4096 { uni.mv } else { motion::scale_mv(uni.mv, scale) })
+    Some(if scale == 4096 {
+        uni.mv
+    } else {
+        motion::scale_mv(uni.mv, scale)
+    })
 }
 
 /// §8.5.3.2.8's temporal candidate: try the bottom-right position, falling
@@ -1037,7 +1220,16 @@ fn col_mvp(s: &Ctx<'_>, pos: (i32, i32), target_list: motion::RefList, curr_poc:
 /// is refuted by this trace), and HM's own trace shows that position is
 /// genuinely intra in the collocated picture (`xGetColMVP_fail
 /// reason=notInter`) — exactly the case this fix now falls back for.
-fn temporal_candidate(s: &Ctx<'_>, pu_x: i32, pu_y: i32, pu_w: i32, pu_h: i32, curr_poc: i64, target_ref_poc: i64, target_list: motion::RefList) -> Result<motion::TemporalCandidate> {
+fn temporal_candidate(
+    s: &Ctx<'_>,
+    pu_x: i32,
+    pu_y: i32,
+    pu_w: i32,
+    pu_h: i32,
+    curr_poc: i64,
+    target_ref_poc: i64,
+    target_list: motion::RefList,
+) -> Result<motion::TemporalCandidate> {
     if s.inter()?.collocated.is_none() {
         return Ok(None);
     }
@@ -1047,7 +1239,9 @@ fn temporal_candidate(s: &Ctx<'_>, pu_x: i32, pu_y: i32, pu_w: i32, pu_h: i32, c
     let same_ctb_row = (pu_y >> s.shared.log2_ctb_size) == (y_br >> s.shared.log2_ctb_size);
     let br_in_bounds = x_br < s.shared.pic_width && y_br < s.shared.pic_height && same_ctb_row;
 
-    let br = br_in_bounds.then(|| col_mvp(s, (x_br, y_br), target_list, curr_poc, target_ref_poc)).flatten();
+    let br = br_in_bounds
+        .then(|| col_mvp(s, (x_br, y_br), target_list, curr_poc, target_ref_poc))
+        .flatten();
     let result = br.or_else(|| {
         // §8.5.3.2.9's centre fallback: `(nPbW/4/2)*4` in each axis, matching
         // HM's own z-scan-index arithmetic (see `crate::motion`'s own doc on
@@ -1070,15 +1264,29 @@ fn temporal_candidate(s: &Ctx<'_>, pu_x: i32, pu_y: i32, pu_w: i32, pu_h: i32, c
 /// `pred_mode_flag` — an inter slice can still code an intra-refresh CU,
 /// which reuses [`decode_intra_cu`] unchanged (its own `part_mode`/MPM/
 /// transform-tree logic has no dependency on the enclosing slice's type).
-fn coding_unit_p(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, depth: u32) -> Result<()> {
+fn coding_unit_p(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &mut Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    log2_size: u32,
+    depth: u32,
+) -> Result<()> {
     let skip_ctx = ctx_skip_flag(s, x0, y0);
-    let cm = ctx.skip_flag.get_mut(skip_ctx).ok_or(Error::InvalidData("skip_flag ctx out of range"))?;
+    let cm = ctx
+        .skip_flag
+        .get_mut(skip_ctx)
+        .ok_or(Error::InvalidData("skip_flag ctx out of range"))?;
     let is_skip = cabac.decode_decision(cm) != 0;
     if is_skip {
         return decode_skip_cu(cabac, ctx, s, x0, y0, log2_size, depth);
     }
 
-    let cm = ctx.pred_mode.first_mut().ok_or(Error::InvalidData("pred_mode ctx"))?;
+    let cm = ctx
+        .pred_mode
+        .first_mut()
+        .ok_or(Error::InvalidData("pred_mode ctx"))?;
     let is_intra = cabac.decode_decision(cm) != 0;
     if is_intra {
         decode_intra_cu(cabac, ctx, s, x0, y0, log2_size, depth)
@@ -1090,7 +1298,15 @@ fn coding_unit_p(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ct
 /// A skip CU: §7.3.8.5's `if (cu_skip_flag) { ... return }` shape — a single
 /// `PART_2Nx2N` PU, merge-only, no residual (no `rqt_root_cbf`, no transform
 /// tree at all).
-fn decode_skip_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, depth: u32) -> Result<()> {
+fn decode_skip_cu(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &mut Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    log2_size: u32,
+    depth: u32,
+) -> Result<()> {
     let size = 1i32 << log2_size;
     // A skip CU never reaches `transform_tree_inter`/`transform_unit_inter`
     // — the only other call sites that mark this picture's deblocking edges
@@ -1110,14 +1326,37 @@ fn decode_skip_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut C
     s.edges.mark_tu_horiz(x0, y0, size, grid);
     let max_num_merge_cand = s.inter()?.max_num_merge_cand;
     let merge_idx = parse_merge_index(cabac, ctx, max_num_merge_cand)?;
-    let pu = PuRect { x: x0, y: y0, w: size, h: size };
-    let chosen = resolve_merge_candidate(s, x0, y0, size, pu, 0, PartMode::TwoNx2N, merge_idx, max_num_merge_cand)?;
+    let pu = PuRect {
+        x: x0,
+        y: y0,
+        w: size,
+        h: size,
+    };
+    let chosen = resolve_merge_candidate(
+        s,
+        x0,
+        y0,
+        size,
+        pu,
+        0,
+        PartMode::TwoNx2N,
+        merge_idx,
+        max_num_merge_cand,
+    )?;
     write_inter_cu_no_residual(s, x0, y0, size, &[(pu, chosen)])?;
     let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
     let bx0 = usize::try_from(x0 >> 2).unwrap_or(0);
     let by0 = usize::try_from(y0 >> 2).unwrap_or(0);
-    s.cu_grid.fill(bx0, by0, blocks, blocks, u8::try_from(depth).unwrap_or(u8::MAX), DC_IDX);
-    s.cu_grid.fill_motion(bx0, by0, blocks, blocks, chosen, true);
+    s.cu_grid.fill(
+        bx0,
+        by0,
+        blocks,
+        blocks,
+        u8::try_from(depth).unwrap_or(u8::MAX),
+        DC_IDX,
+    );
+    s.cu_grid
+        .fill_motion(bx0, by0, blocks, blocks, chosen, true);
     finalize_cu_qp(s, x0, y0, size);
     Ok(())
 }
@@ -1127,8 +1366,21 @@ fn decode_skip_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut C
 /// `TwoNx2N`) and the non-skip merge path (any PU/`PartMode`). `cu_x0`/
 /// `cu_y0`/`cu_size` are the CU's own geometry (distinct from `pu`'s own,
 /// used only by the merge-parallelism override below).
-#[allow(clippy::too_many_arguments, reason = "every argument is a distinct merge-derivation input; a sub-struct would not aid clarity at one internal call site")]
-fn resolve_merge_candidate(s: &Ctx<'_>, cu_x0: i32, cu_y0: i32, cu_size: i32, pu: PuRect, pu_idx: usize, part_mode: PartMode, merge_idx: usize, max_num_merge_cand: usize) -> Result<MotionInfo> {
+#[allow(
+    clippy::too_many_arguments,
+    reason = "every argument is a distinct merge-derivation input; a sub-struct would not aid clarity at one internal call site"
+)]
+fn resolve_merge_candidate(
+    s: &Ctx<'_>,
+    cu_x0: i32,
+    cu_y0: i32,
+    cu_size: i32,
+    pu: PuRect,
+    pu_idx: usize,
+    part_mode: PartMode,
+    merge_idx: usize,
+    max_num_merge_cand: usize,
+) -> Result<MotionInfo> {
     let inter = s.inter()?;
     // §8.5.3.2.2's own merge-parallelism special case: an 8x8 CU split into
     // more than one PU, with `Log2ParallelMergeLevel > 2`, derives every one
@@ -1136,19 +1388,47 @@ fn resolve_merge_candidate(s: &Ctx<'_>, cu_x0: i32, cu_y0: i32, cu_size: i32, pu
     // `PART_2Nx2N` PU — HM's own `decodePUWise` applies this by temporarily
     // overriding `PartSize` before calling `getInterMergeCandidates`, not by
     // branching inside the derivation itself.
-    let merge_override = inter.log2_parallel_merge_level > 2 && part_mode != PartMode::TwoNx2N && cu_size == 8;
+    let merge_override =
+        inter.log2_parallel_merge_level > 2 && part_mode != PartMode::TwoNx2N && cu_size == 8;
     let (eff_pu, eff_idx, eff_mode) = if merge_override {
-        (PuRect { x: cu_x0, y: cu_y0, w: cu_size, h: cu_size }, 0usize, PartMode::TwoNx2N)
+        (
+            PuRect {
+                x: cu_x0,
+                y: cu_y0,
+                w: cu_size,
+                h: cu_size,
+            },
+            0usize,
+            PartMode::TwoNx2N,
+        )
     } else {
         (pu, pu_idx, part_mode)
     };
 
     let (temporal_l0, temporal_l1) = if inter.collocated.is_some() {
         let ref_poc0_l0 = inter.ref_pics_l0.first().map_or(inter.cur_poc, |r| r.poc);
-        let t0 = temporal_candidate(s, eff_pu.x, eff_pu.y, eff_pu.w, eff_pu.h, inter.cur_poc, ref_poc0_l0, RefList::L0)?;
+        let t0 = temporal_candidate(
+            s,
+            eff_pu.x,
+            eff_pu.y,
+            eff_pu.w,
+            eff_pu.h,
+            inter.cur_poc,
+            ref_poc0_l0,
+            RefList::L0,
+        )?;
         let t1 = if inter.is_b {
             let ref_poc0_l1 = inter.ref_pics_l1.first().map_or(inter.cur_poc, |r| r.poc);
-            temporal_candidate(s, eff_pu.x, eff_pu.y, eff_pu.w, eff_pu.h, inter.cur_poc, ref_poc0_l1, RefList::L1)?
+            temporal_candidate(
+                s,
+                eff_pu.x,
+                eff_pu.y,
+                eff_pu.w,
+                eff_pu.h,
+                inter.cur_poc,
+                ref_poc0_l1,
+                RefList::L1,
+            )?
         } else {
             None
         };
@@ -1171,7 +1451,9 @@ fn resolve_merge_candidate(s: &Ctx<'_>, cu_x0: i32, cu_y0: i32, cu_size: i32, pu
         temporal_l1,
         inter.is_b,
     );
-    cands.get(merge_idx).copied().ok_or(Error::InvalidData("vaco-codec-hevc: merge_idx out of range"))
+    cands.get(merge_idx).copied().ok_or(Error::InvalidData(
+        "vaco-codec-hevc: merge_idx out of range",
+    ))
 }
 
 /// Motion-compensate one PU (luma + both chroma planes) directly into a
@@ -1185,32 +1467,136 @@ struct CuPrediction {
     cr: Vec<i32>,
 }
 
-fn build_cu_prediction(s: &Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect, MotionInfo)]) -> Result<CuPrediction> {
+fn build_cu_prediction(
+    s: &Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    size: i32,
+    pus: &[(PuRect, MotionInfo)],
+) -> Result<CuPrediction> {
     let inter = s.inter()?;
     let ctb_size = 1i32 << s.shared.log2_ctb_size;
     let csize = (size >> 1).max(1);
-    let mut pred = CuPrediction { size, y: vec![0i32; (size * size) as usize], cb: vec![0i32; (csize * csize) as usize], cr: vec![0i32; (csize * csize) as usize] };
+    let mut pred = CuPrediction {
+        size,
+        y: vec![0i32; (size * size) as usize],
+        cb: vec![0i32; (csize * csize) as usize],
+        cr: vec![0i32; (csize * csize) as usize],
+    };
 
     for (pu, info) in pus {
         // Clipped once per list (§8.5.3.2's own `clipMv`, `crate::motion`'s
         // own doc), reused for luma (shift 2) and both chroma planes (shift
         // 3) below — not re-derived per plane.
-        let clipped_l0 = info.l0.map(|u| motion::clip_mv(u.mv, x0, y0, s.shared.pic_width, s.shared.pic_height, ctb_size));
-        let clipped_l1 = info.l1.map(|u| motion::clip_mv(u.mv, x0, y0, s.shared.pic_width, s.shared.pic_height, ctb_size));
+        let clipped_l0 = info.l0.map(|u| {
+            motion::clip_mv(
+                u.mv,
+                x0,
+                y0,
+                s.shared.pic_width,
+                s.shared.pic_height,
+                ctb_size,
+            )
+        });
+        let clipped_l1 = info.l1.map(|u| {
+            motion::clip_mv(
+                u.mv,
+                x0,
+                y0,
+                s.shared.pic_width,
+                s.shared.pic_height,
+                ctb_size,
+            )
+        });
 
-        let (w, h) = (usize::try_from(pu.w).unwrap_or(0), usize::try_from(pu.h).unwrap_or(0));
-        let y_buf = predict_component(inter, *info, clipped_l0, clipped_l1, pu.x, pu.y, 2, 3, w, h, s.shared.bit_depth_luma, true, |pic| &pic.y, |rw| rw.luma)?;
-        blit(&mut pred.y, usize::try_from(size).unwrap_or(1), usize::try_from(pu.x - x0).unwrap_or(0), usize::try_from(pu.y - y0).unwrap_or(0), w, h, &y_buf);
+        let (w, h) = (
+            usize::try_from(pu.w).unwrap_or(0),
+            usize::try_from(pu.h).unwrap_or(0),
+        );
+        let y_buf = predict_component(
+            inter,
+            *info,
+            clipped_l0,
+            clipped_l1,
+            pu.x,
+            pu.y,
+            2,
+            3,
+            w,
+            h,
+            s.shared.bit_depth_luma,
+            true,
+            |pic| &pic.y,
+            |rw| rw.luma,
+        )?;
+        blit(
+            &mut pred.y,
+            usize::try_from(size).unwrap_or(1),
+            usize::try_from(pu.x - x0).unwrap_or(0),
+            usize::try_from(pu.y - y0).unwrap_or(0),
+            w,
+            h,
+            &y_buf,
+        );
 
         // Chroma (4:2:0): half-resolution PU rectangle, the same raw `mv`
         // interpreted at eighth-sample precision (shift 3, mask 7) — see
         // `mc.rs`'s own doc for why both components share one raw `mv`.
         let (cx0, cy0, cw, ch) = (pu.x >> 1, pu.y >> 1, (pu.w >> 1).max(1), (pu.h >> 1).max(1));
-        let (cw_u, ch_u) = (usize::try_from(cw).unwrap_or(0), usize::try_from(ch).unwrap_or(0));
-        let cb_buf = predict_component(inter, *info, clipped_l0, clipped_l1, cx0, cy0, 3, 7, cw_u, ch_u, s.shared.bit_depth_chroma, false, |pic| &pic.cb, |rw| rw.chroma[0])?;
-        let cr_buf = predict_component(inter, *info, clipped_l0, clipped_l1, cx0, cy0, 3, 7, cw_u, ch_u, s.shared.bit_depth_chroma, false, |pic| &pic.cr, |rw| rw.chroma[1])?;
-        blit(&mut pred.cb, usize::try_from(csize).unwrap_or(1), usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0), usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0), cw_u, ch_u, &cb_buf);
-        blit(&mut pred.cr, usize::try_from(csize).unwrap_or(1), usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0), usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0), cw_u, ch_u, &cr_buf);
+        let (cw_u, ch_u) = (
+            usize::try_from(cw).unwrap_or(0),
+            usize::try_from(ch).unwrap_or(0),
+        );
+        let cb_buf = predict_component(
+            inter,
+            *info,
+            clipped_l0,
+            clipped_l1,
+            cx0,
+            cy0,
+            3,
+            7,
+            cw_u,
+            ch_u,
+            s.shared.bit_depth_chroma,
+            false,
+            |pic| &pic.cb,
+            |rw| rw.chroma[0],
+        )?;
+        let cr_buf = predict_component(
+            inter,
+            *info,
+            clipped_l0,
+            clipped_l1,
+            cx0,
+            cy0,
+            3,
+            7,
+            cw_u,
+            ch_u,
+            s.shared.bit_depth_chroma,
+            false,
+            |pic| &pic.cr,
+            |rw| rw.chroma[1],
+        )?;
+        blit(
+            &mut pred.cb,
+            usize::try_from(csize).unwrap_or(1),
+            usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0),
+            usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0),
+            cw_u,
+            ch_u,
+            &cb_buf,
+        );
+        blit(
+            &mut pred.cr,
+            usize::try_from(csize).unwrap_or(1),
+            usize::try_from(cx0 - (x0 >> 1)).unwrap_or(0),
+            usize::try_from(cy0 - (y0 >> 1)).unwrap_or(0),
+            cw_u,
+            ch_u,
+            &cr_buf,
+        );
     }
     Ok(pred)
 }
@@ -1232,7 +1618,10 @@ fn build_cu_prediction(s: &Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect,
 /// own component (luma, Cb or Cr) out of a [`Picture`]/[`RefWeights`]
 /// without three near-identical call sites duplicating the whole
 /// uni/bi-predictive branch above.
-#[allow(clippy::too_many_arguments, reason = "one call site per component (luma/Cb/Cr) inside build_cu_prediction; every argument is a distinct §8.5.3.3 input")]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call site per component (luma/Cb/Cr) inside build_cu_prediction; every argument is a distinct §8.5.3.3 input"
+)]
 fn predict_component(
     inter: &InterSliceParams<'_>,
     info: MotionInfo,
@@ -1249,37 +1638,97 @@ fn predict_component(
     plane_of: impl Fn(&Picture) -> &Plane,
     weight_of: impl Fn(&RefWeights) -> crate::mc::Weight,
 ) -> Result<Vec<i32>> {
-    let sample = |mv: Mv| (origin_x + (mv.x >> shift), origin_y + (mv.y >> shift), mv.x & mask, mv.y & mask);
-    let unknown_ref = || Error::InvalidData("vaco-codec-hevc: merge/AMVP candidate names an unknown reference POC");
+    let sample = |mv: Mv| {
+        (
+            origin_x + (mv.x >> shift),
+            origin_y + (mv.y >> shift),
+            mv.x & mask,
+            mv.y & mask,
+        )
+    };
+    let unknown_ref = || {
+        Error::InvalidData("vaco-codec-hevc: merge/AMVP candidate names an unknown reference POC")
+    };
 
     let uni = |list: RefList, u: UniMotion, clipped: Option<Mv>| -> Result<Vec<i32>> {
-        let ref_pic = inter.plane_for_poc(list, u.ref_poc).ok_or_else(unknown_ref)?;
+        let ref_pic = inter
+            .plane_for_poc(list, u.ref_poc)
+            .ok_or_else(unknown_ref)?;
         let (ix, iy, fx, fy) = sample(clipped.unwrap_or(Mv::ZERO));
         let weight = inter.weights_for(list, u.ref_poc).map(|rw| weight_of(&rw));
         let mut buf = vec![0i32; w * h];
         if let Some(wt) = weight {
-            crate::mc::predict_block_intermediate(plane_of(ref_pic), ix, iy, fx, fy, w, h, is_luma, &mut buf);
+            crate::mc::predict_block_intermediate(
+                plane_of(ref_pic),
+                ix,
+                iy,
+                fx,
+                fy,
+                w,
+                h,
+                is_luma,
+                &mut buf,
+            );
             for v in &mut buf {
                 *v = crate::mc::apply_weight(*v, wt, bit_depth);
             }
         } else {
-            crate::mc::predict_block(plane_of(ref_pic), ix, iy, fx, fy, w, h, bit_depth, is_luma, &mut buf);
+            crate::mc::predict_block(
+                plane_of(ref_pic),
+                ix,
+                iy,
+                fx,
+                fy,
+                w,
+                h,
+                bit_depth,
+                is_luma,
+                &mut buf,
+            );
         }
         Ok(buf)
     };
 
     match (info.l0, info.l1) {
         (Some(l0), Some(l1)) => {
-            let ref0 = inter.plane_for_poc(RefList::L0, l0.ref_poc).ok_or_else(unknown_ref)?;
-            let ref1 = inter.plane_for_poc(RefList::L1, l1.ref_poc).ok_or_else(unknown_ref)?;
+            let ref0 = inter
+                .plane_for_poc(RefList::L0, l0.ref_poc)
+                .ok_or_else(unknown_ref)?;
+            let ref1 = inter
+                .plane_for_poc(RefList::L1, l1.ref_poc)
+                .ok_or_else(unknown_ref)?;
             let (ix0, iy0, fx0, fy0) = sample(clipped_l0.unwrap_or(Mv::ZERO));
             let (ix1, iy1, fx1, fy1) = sample(clipped_l1.unwrap_or(Mv::ZERO));
             let mut buf0 = vec![0i32; w * h];
             let mut buf1 = vec![0i32; w * h];
-            crate::mc::predict_block_intermediate(plane_of(ref0), ix0, iy0, fx0, fy0, w, h, is_luma, &mut buf0);
-            crate::mc::predict_block_intermediate(plane_of(ref1), ix1, iy1, fx1, fy1, w, h, is_luma, &mut buf1);
-            let w0 = inter.weights_for(RefList::L0, l0.ref_poc).map(|rw| weight_of(&rw));
-            let w1 = inter.weights_for(RefList::L1, l1.ref_poc).map(|rw| weight_of(&rw));
+            crate::mc::predict_block_intermediate(
+                plane_of(ref0),
+                ix0,
+                iy0,
+                fx0,
+                fy0,
+                w,
+                h,
+                is_luma,
+                &mut buf0,
+            );
+            crate::mc::predict_block_intermediate(
+                plane_of(ref1),
+                ix1,
+                iy1,
+                fx1,
+                fy1,
+                w,
+                h,
+                is_luma,
+                &mut buf1,
+            );
+            let w0 = inter
+                .weights_for(RefList::L0, l0.ref_poc)
+                .map(|rw| weight_of(&rw));
+            let w1 = inter
+                .weights_for(RefList::L1, l1.ref_poc)
+                .map(|rw| weight_of(&rw));
             let mut out = vec![0i32; w * h];
             for (i, o) in out.iter_mut().enumerate() {
                 let p0 = buf0.get(i).copied().unwrap_or(0);
@@ -1293,7 +1742,9 @@ fn predict_component(
         }
         (Some(l0), None) => uni(RefList::L0, l0, clipped_l0),
         (None, Some(l1)) => uni(RefList::L1, l1, clipped_l1),
-        (None, None) => Err(Error::InvalidData("vaco-codec-hevc: a coded PU predicts from neither reference list")),
+        (None, None) => Err(Error::InvalidData(
+            "vaco-codec-hevc: a coded PU predicts from neither reference list",
+        )),
     }
 }
 
@@ -1306,11 +1757,15 @@ fn predict_component(
 /// rather than one bounds-checked lookup per sample.
 fn blit(dst: &mut [i32], dst_stride: usize, x0: usize, y0: usize, w: usize, h: usize, src: &[i32]) {
     for row in 0..h {
-        let dst_start = y0.saturating_add(row).saturating_mul(dst_stride).saturating_add(x0);
+        let dst_start = y0
+            .saturating_add(row)
+            .saturating_mul(dst_stride)
+            .saturating_add(x0);
         let src_start = row.saturating_mul(w);
-        let (Some(dst_row), Some(src_row)) =
-            (dst.get_mut(dst_start..dst_start.saturating_add(w)), src.get(src_start..src_start.saturating_add(w)))
-        else {
+        let (Some(dst_row), Some(src_row)) = (
+            dst.get_mut(dst_start..dst_start.saturating_add(w)),
+            src.get(src_start..src_start.saturating_add(w)),
+        ) else {
             continue;
         };
         dst_row.copy_from_slice(src_row);
@@ -1320,7 +1775,13 @@ fn blit(dst: &mut [i32], dst_stride: usize, x0: usize, y0: usize, w: usize, h: u
 /// A non-skip merged `PART_2Nx2N` CU with `rqt_root_cbf == 0` (inferred, per
 /// §7.3.8.5's own presence condition — never actually parsed) writes its MC
 /// prediction straight to the picture, unmodified.
-fn write_inter_cu_no_residual(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32, pus: &[(PuRect, MotionInfo)]) -> Result<()> {
+fn write_inter_cu_no_residual(
+    s: &mut Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    size: i32,
+    pus: &[(PuRect, MotionInfo)],
+) -> Result<()> {
     let pred = build_cu_prediction(s, x0, y0, size, pus)?;
     write_pred_block(&mut s.recon.y, x0, y0, pred.size, pred.size, &pred.y);
     let csize = (size >> 1).max(1);
@@ -1344,8 +1805,18 @@ fn write_inter_cu_no_residual(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32, pus:
 /// slice the way `Plane::row_mut` used to.
 const MAX_CTB: usize = 64;
 
-fn write_pred_block(plane: &mut crate::framebuf::ReconPlane<'_>, x0: i32, y0: i32, w: i32, h: i32, src: &[i32]) {
-    let (wu, hu) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
+fn write_pred_block(
+    plane: &mut crate::framebuf::ReconPlane<'_>,
+    x0: i32,
+    y0: i32,
+    w: i32,
+    h: i32,
+    src: &[i32],
+) {
+    let (wu, hu) = (
+        usize::try_from(w).unwrap_or(0),
+        usize::try_from(h).unwrap_or(0),
+    );
     let Ok(x0u) = usize::try_from(x0) else { return };
     // `ReconPlane::write_row` takes an already-converted `&[u8]` (tile
     // storage cannot hand back a raw, picture-wide `&mut [u8]` the way
@@ -1357,10 +1828,16 @@ fn write_pred_block(plane: &mut crate::framebuf::ReconPlane<'_>, x0: i32, y0: i3
     let mut buf = [0u8; MAX_CTB];
     let wu_clamped = wu.min(MAX_CTB);
     for row in 0..hu {
-        let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else { continue };
+        let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else {
+            continue;
+        };
         let row_start = row.saturating_mul(wu);
-        let Some(src_row) = src.get(row_start..row_start.saturating_add(wu_clamped)) else { continue };
-        let Some(dst_row) = buf.get_mut(..wu_clamped) else { continue };
+        let Some(src_row) = src.get(row_start..row_start.saturating_add(wu_clamped)) else {
+            continue;
+        };
+        let Some(dst_row) = buf.get_mut(..wu_clamped) else {
+            continue;
+        };
         for (d, &s) in dst_row.iter_mut().zip(src_row) {
             *d = u8::try_from(s.clamp(0, 255)).unwrap_or(0);
         }
@@ -1372,7 +1849,15 @@ fn write_pred_block(plane: &mut crate::framebuf::ReconPlane<'_>, x0: i32, y0: i3
 /// A non-skip, non-intra coding unit: `part_mode`, then `prediction_unit()`
 /// per PU (merge, or `ref_idx_l0`/`mvd_coding`/`mvp_l0_flag`), then
 /// `rqt_root_cbf` and either a residual-free write or the transform tree.
-fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, depth: u32) -> Result<()> {
+fn decode_inter_cu(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &mut Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    log2_size: u32,
+    depth: u32,
+) -> Result<()> {
     let size = 1i32 << log2_size;
     let at_min_cb = log2_size == s.shared.log2_min_cb_size;
     let amp_enabled = s.inter()?.amp_enabled;
@@ -1404,64 +1889,154 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
         let pu = part_mode.pu_rect(x0, y0, size, pu_idx);
         s.edges.mark_vert(pu.x, pu.y, pu.h, deblock_grid);
         s.edges.mark_horiz(pu.x, pu.y, pu.w, deblock_grid);
-        let cm = ctx.merge_flag.first_mut().ok_or(Error::InvalidData("merge_flag ctx"))?;
+        let cm = ctx
+            .merge_flag
+            .first_mut()
+            .ok_or(Error::InvalidData("merge_flag ctx"))?;
         let merge_flag = cabac.decode_decision(cm) != 0;
 
-        let info = if merge_flag {
-            let max_num_merge_cand = s.inter()?.max_num_merge_cand;
-            let merge_idx = parse_merge_index(cabac, ctx, max_num_merge_cand)?;
-            resolve_merge_candidate(s, x0, y0, size, pu, pu_idx, part_mode, merge_idx, max_num_merge_cand)?
-        } else {
-            all_merged = false;
-            let is_b = s.inter()?.is_b;
-            let inter_pred_idc = if is_b { parse_inter_pred_idc(cabac, ctx, part_mode, size, depth)? } else { InterPredIdc::L0 };
-
-            let l0 = if inter_pred_idc == InterPredIdc::L1 {
-                None
+        let info =
+            if merge_flag {
+                let max_num_merge_cand = s.inter()?.max_num_merge_cand;
+                let merge_idx = parse_merge_index(cabac, ctx, max_num_merge_cand)?;
+                resolve_merge_candidate(
+                    s,
+                    x0,
+                    y0,
+                    size,
+                    pu,
+                    pu_idx,
+                    part_mode,
+                    merge_idx,
+                    max_num_merge_cand,
+                )?
             } else {
-                let num_ref_idx_l0 = s.inter()?.ref_pics_l0.len();
-                let ref_idx = parse_ref_idx(cabac, ctx, num_ref_idx_l0)?;
-                let mvd = parse_mvd(cabac, ctx)?;
-                let mvp_idx = parse_mvp_idx(cabac, ctx)?;
-                let (cur_poc, target_ref_poc, log2_pml, has_collocated) = {
-                    let inter = s.inter()?;
-                    let target_ref_poc = inter.ref_pics_l0.get(ref_idx).map(|r| r.poc).ok_or(Error::InvalidData("vaco-codec-hevc: ref_idx_l0 out of range"))?;
-                    (inter.cur_poc, target_ref_poc, inter.log2_parallel_merge_level, inter.collocated.is_some())
+                all_merged = false;
+                let is_b = s.inter()?.is_b;
+                let inter_pred_idc = if is_b {
+                    parse_inter_pred_idc(cabac, ctx, part_mode, size, depth)?
+                } else {
+                    InterPredIdc::L0
                 };
-                let temporal = if has_collocated { temporal_candidate(s, pu.x, pu.y, pu.w, pu.h, cur_poc, target_ref_poc, RefList::L0)? } else { None };
-                let cands = motion::derive_amvp_candidates(&s.cu_grid, pu, log2_pml, cur_poc, target_ref_poc, RefList::L0, temporal);
-                let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
-                Some(UniMotion { mv: Mv { x: predictor.x + mvd.x, y: predictor.y + mvd.y }, ref_poc: target_ref_poc })
-            };
 
-            let l1 = if inter_pred_idc == InterPredIdc::L0 {
-                None
-            } else {
-                let (num_ref_idx_l1, mvd_l1_zero) = {
-                    let inter = s.inter()?;
-                    (inter.ref_pics_l1.len(), inter.mvd_l1_zero)
+                let l0 = if inter_pred_idc == InterPredIdc::L1 {
+                    None
+                } else {
+                    let num_ref_idx_l0 = s.inter()?.ref_pics_l0.len();
+                    let ref_idx = parse_ref_idx(cabac, ctx, num_ref_idx_l0)?;
+                    let mvd = parse_mvd(cabac, ctx)?;
+                    let mvp_idx = parse_mvp_idx(cabac, ctx)?;
+                    let (cur_poc, target_ref_poc, log2_pml, has_collocated) = {
+                        let inter = s.inter()?;
+                        let target_ref_poc = inter.ref_pics_l0.get(ref_idx).map(|r| r.poc).ok_or(
+                            Error::InvalidData("vaco-codec-hevc: ref_idx_l0 out of range"),
+                        )?;
+                        (
+                            inter.cur_poc,
+                            target_ref_poc,
+                            inter.log2_parallel_merge_level,
+                            inter.collocated.is_some(),
+                        )
+                    };
+                    let temporal = if has_collocated {
+                        temporal_candidate(
+                            s,
+                            pu.x,
+                            pu.y,
+                            pu.w,
+                            pu.h,
+                            cur_poc,
+                            target_ref_poc,
+                            RefList::L0,
+                        )?
+                    } else {
+                        None
+                    };
+                    let cands = motion::derive_amvp_candidates(
+                        &s.cu_grid,
+                        pu,
+                        log2_pml,
+                        cur_poc,
+                        target_ref_poc,
+                        RefList::L0,
+                        temporal,
+                    );
+                    let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
+                    Some(UniMotion {
+                        mv: Mv {
+                            x: predictor.x + mvd.x,
+                            y: predictor.y + mvd.y,
+                        },
+                        ref_poc: target_ref_poc,
+                    })
                 };
-                let ref_idx = parse_ref_idx(cabac, ctx, num_ref_idx_l1)?;
-                // §7.3.8.6's own presence condition: `mvd_coding(x0, y0, 1)`
-                // is skipped (`MvdL1` inferred `(0, 0)`) exactly when
-                // `mvd_l1_zero_flag` is set *and* this PU is bi-predictive —
-                // an L1-only PU (`inter_pred_idc == PRED_L1`) always reads
-                // its own `mvd_coding`, regardless of `mvd_l1_zero_flag`.
-                let mvd = if mvd_l1_zero && inter_pred_idc == InterPredIdc::Bi { Mv::ZERO } else { parse_mvd(cabac, ctx)? };
-                let mvp_idx = parse_mvp_idx(cabac, ctx)?;
-                let (cur_poc, target_ref_poc, log2_pml, has_collocated) = {
-                    let inter = s.inter()?;
-                    let target_ref_poc = inter.ref_pics_l1.get(ref_idx).map(|r| r.poc).ok_or(Error::InvalidData("vaco-codec-hevc: ref_idx_l1 out of range"))?;
-                    (inter.cur_poc, target_ref_poc, inter.log2_parallel_merge_level, inter.collocated.is_some())
-                };
-                let temporal = if has_collocated { temporal_candidate(s, pu.x, pu.y, pu.w, pu.h, cur_poc, target_ref_poc, RefList::L1)? } else { None };
-                let cands = motion::derive_amvp_candidates(&s.cu_grid, pu, log2_pml, cur_poc, target_ref_poc, RefList::L1, temporal);
-                let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
-                Some(UniMotion { mv: Mv { x: predictor.x + mvd.x, y: predictor.y + mvd.y }, ref_poc: target_ref_poc })
-            };
 
-            MotionInfo { l0, l1 }
-        };
+                let l1 = if inter_pred_idc == InterPredIdc::L0 {
+                    None
+                } else {
+                    let (num_ref_idx_l1, mvd_l1_zero) = {
+                        let inter = s.inter()?;
+                        (inter.ref_pics_l1.len(), inter.mvd_l1_zero)
+                    };
+                    let ref_idx = parse_ref_idx(cabac, ctx, num_ref_idx_l1)?;
+                    // §7.3.8.6's own presence condition: `mvd_coding(x0, y0, 1)`
+                    // is skipped (`MvdL1` inferred `(0, 0)`) exactly when
+                    // `mvd_l1_zero_flag` is set *and* this PU is bi-predictive —
+                    // an L1-only PU (`inter_pred_idc == PRED_L1`) always reads
+                    // its own `mvd_coding`, regardless of `mvd_l1_zero_flag`.
+                    let mvd = if mvd_l1_zero && inter_pred_idc == InterPredIdc::Bi {
+                        Mv::ZERO
+                    } else {
+                        parse_mvd(cabac, ctx)?
+                    };
+                    let mvp_idx = parse_mvp_idx(cabac, ctx)?;
+                    let (cur_poc, target_ref_poc, log2_pml, has_collocated) = {
+                        let inter = s.inter()?;
+                        let target_ref_poc = inter.ref_pics_l1.get(ref_idx).map(|r| r.poc).ok_or(
+                            Error::InvalidData("vaco-codec-hevc: ref_idx_l1 out of range"),
+                        )?;
+                        (
+                            inter.cur_poc,
+                            target_ref_poc,
+                            inter.log2_parallel_merge_level,
+                            inter.collocated.is_some(),
+                        )
+                    };
+                    let temporal = if has_collocated {
+                        temporal_candidate(
+                            s,
+                            pu.x,
+                            pu.y,
+                            pu.w,
+                            pu.h,
+                            cur_poc,
+                            target_ref_poc,
+                            RefList::L1,
+                        )?
+                    } else {
+                        None
+                    };
+                    let cands = motion::derive_amvp_candidates(
+                        &s.cu_grid,
+                        pu,
+                        log2_pml,
+                        cur_poc,
+                        target_ref_poc,
+                        RefList::L1,
+                        temporal,
+                    );
+                    let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
+                    Some(UniMotion {
+                        mv: Mv {
+                            x: predictor.x + mvd.x,
+                            y: predictor.y + mvd.y,
+                        },
+                        ref_poc: target_ref_poc,
+                    })
+                };
+
+                MotionInfo { l0, l1 }
+            };
 
         let blocks_w = usize::try_from((pu.w >> 2).max(1)).unwrap_or(1);
         let blocks_h = usize::try_from((pu.h >> 2).max(1)).unwrap_or(1);
@@ -1473,8 +2048,10 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
         // (§8.5.3.2.3's A1/B1 for a 2-PU split), and `CuGrid::inter_at`
         // gates on `written`, which only `fill` (not `fill_motion` alone)
         // sets.
-        s.cu_grid.fill(bx0, by0, blocks_w, blocks_h, depth_u8, DC_IDX);
-        s.cu_grid.fill_motion(bx0, by0, blocks_w, blocks_h, info, false);
+        s.cu_grid
+            .fill(bx0, by0, blocks_w, blocks_h, depth_u8, DC_IDX);
+        s.cu_grid
+            .fill_motion(bx0, by0, blocks_w, blocks_h, info, false);
         pu_motion.push((pu, info));
     }
 
@@ -1484,7 +2061,10 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
     let rqt_root_cbf = if part_mode == PartMode::TwoNx2N && all_merged {
         true
     } else {
-        let cm = ctx.qt_root_cbf.first_mut().ok_or(Error::InvalidData("qt_root_cbf ctx"))?;
+        let cm = ctx
+            .qt_root_cbf
+            .first_mut()
+            .ok_or(Error::InvalidData("qt_root_cbf ctx"))?;
         cabac.decode_decision(cm) != 0
     };
 
@@ -1492,8 +2072,22 @@ fn decode_inter_cu(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut 
         let pred = build_cu_prediction(s, x0, y0, size, &pu_motion)?;
         let max_depth = s.shared.max_transform_hierarchy_depth_inter;
         let inter_split_flag = u32::from(max_depth == 1 && part_mode != PartMode::TwoNx2N);
-        let quadtree_tu_log2_min = quadtree_tu_log2_min_in_cu(s, log2_size, max_depth, inter_split_flag);
-        transform_tree_inter(cabac, ctx, s, x0, y0, log2_size, 0, inter_split_flag != 0, &pred, quadtree_tu_log2_min, true, true)?;
+        let quadtree_tu_log2_min =
+            quadtree_tu_log2_min_in_cu(s, log2_size, max_depth, inter_split_flag);
+        transform_tree_inter(
+            cabac,
+            ctx,
+            s,
+            x0,
+            y0,
+            log2_size,
+            0,
+            inter_split_flag != 0,
+            &pred,
+            quadtree_tu_log2_min,
+            true,
+            true,
+        )?;
     } else {
         // Same gap `decode_skip_cu` has, and the same fix: no transform
         // tree runs on this path, so nothing else marks this CU's own
@@ -1537,20 +2131,27 @@ fn transform_tree_inter(
     parent_cbf_cb: bool,
     parent_cbf_cr: bool,
 ) -> Result<()> {
-    let split = if (force_split_at_root && trafo_depth == 0) || log2_size > s.shared.log2_max_tb_size {
-        true
-    } else if log2_size == s.shared.log2_min_tb_size || log2_size == quadtree_tu_log2_min {
-        false
-    } else {
-        let ctx_idx = usize::try_from(5u32.saturating_sub(log2_size)).unwrap_or(0);
-        let cm = ctx.trans_subdiv_flag.get_mut(ctx_idx).ok_or(Error::InvalidData("trans_subdiv ctx"))?;
-        cabac.decode_decision(cm) != 0
-    };
+    let split =
+        if (force_split_at_root && trafo_depth == 0) || log2_size > s.shared.log2_max_tb_size {
+            true
+        } else if log2_size == s.shared.log2_min_tb_size || log2_size == quadtree_tu_log2_min {
+            false
+        } else {
+            let ctx_idx = usize::try_from(5u32.saturating_sub(log2_size)).unwrap_or(0);
+            let cm = ctx
+                .trans_subdiv_flag
+                .get_mut(ctx_idx)
+                .ok_or(Error::InvalidData("trans_subdiv ctx"))?;
+            cabac.decode_decision(cm) != 0
+        };
 
     let chroma_splittable = log2_size > 2;
     let cbf_cb = if chroma_splittable {
         if trafo_depth == 0 || parent_cbf_cb {
-            let cm = ctx.qt_cbf.get_mut(5 + trafo_depth.min(4) as usize).ok_or(Error::InvalidData("cbf_cb ctx"))?;
+            let cm = ctx
+                .qt_cbf
+                .get_mut(5 + trafo_depth.min(4) as usize)
+                .ok_or(Error::InvalidData("cbf_cb ctx"))?;
             cabac.decode_decision(cm) != 0
         } else {
             false
@@ -1560,7 +2161,10 @@ fn transform_tree_inter(
     };
     let cbf_cr = if chroma_splittable {
         if trafo_depth == 0 || parent_cbf_cr {
-            let cm = ctx.qt_cbf.get_mut(5 + trafo_depth.min(4) as usize).ok_or(Error::InvalidData("cbf_cr ctx"))?;
+            let cm = ctx
+                .qt_cbf
+                .get_mut(5 + trafo_depth.min(4) as usize)
+                .ok_or(Error::InvalidData("cbf_cr ctx"))?;
             cabac.decode_decision(cm) != 0
         } else {
             false
@@ -1572,7 +2176,20 @@ fn transform_tree_inter(
     if split {
         let half = 1i32 << (log2_size - 1);
         for (dx, dy) in [(0, 0), (half, 0), (0, half), (half, half)] {
-            transform_tree_inter(cabac, ctx, s, x0 + dx, y0 + dy, log2_size - 1, trafo_depth + 1, force_split_at_root, pred, quadtree_tu_log2_min, cbf_cb, cbf_cr)?;
+            transform_tree_inter(
+                cabac,
+                ctx,
+                s,
+                x0 + dx,
+                y0 + dy,
+                log2_size - 1,
+                trafo_depth + 1,
+                force_split_at_root,
+                pred,
+                quadtree_tu_log2_min,
+                cbf_cb,
+                cbf_cr,
+            )?;
         }
         return Ok(());
     }
@@ -1588,17 +2205,33 @@ fn transform_tree_inter(
     // already satisfies HM's OR, so it is unconditionally parsed there.
     let cbf_luma = if trafo_depth != 0 || cbf_cb || cbf_cr {
         let luma_ctx_idx = usize::from(trafo_depth == 0);
-        let cm = ctx.qt_cbf.get_mut(luma_ctx_idx).ok_or(Error::InvalidData("cbf_luma ctx"))?;
+        let cm = ctx
+            .qt_cbf
+            .get_mut(luma_ctx_idx)
+            .ok_or(Error::InvalidData("cbf_luma ctx"))?;
         cabac.decode_decision(cm) != 0
     } else {
         true
     };
 
-    transform_unit_inter(cabac, ctx, s, x0, y0, log2_size, cbf_luma, cbf_cb, cbf_cr, pred)
+    transform_unit_inter(
+        cabac, ctx, s, x0, y0, log2_size, cbf_luma, cbf_cb, cbf_cr, pred,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn transform_unit_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, cbf_luma: bool, cbf_cb: bool, cbf_cr: bool, pred: &CuPrediction) -> Result<()> {
+fn transform_unit_inter(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &mut Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    log2_size: u32,
+    cbf_luma: bool,
+    cbf_cb: bool,
+    cbf_cr: bool,
+    pred: &CuPrediction,
+) -> Result<()> {
     let grid = 1i32 << s.shared.log2_min_cb_size;
     let size = 1i32 << log2_size;
     s.edges.mark_tu_vert(x0, y0, size, grid);
@@ -1619,7 +2252,11 @@ fn transform_unit_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: 
     let blk_idx_is_3 = luma_size_at_min && (x0 & 4) != 0 && (y0 & 4) != 0;
     let chroma_leaf = log2_size > 2 || blk_idx_is_3;
     if chroma_leaf {
-        let (cx0, cy0, clog2) = if log2_size > 2 { (x0 >> 1, y0 >> 1, log2_size - 1) } else { ((x0 - 4).max(0) >> 1, (y0 - 4).max(0) >> 1, 2u32) };
+        let (cx0, cy0, clog2) = if log2_size > 2 {
+            (x0 >> 1, y0 >> 1, log2_size - 1)
+        } else {
+            ((x0 - 4).max(0) >> 1, (y0 - 4).max(0) >> 1, 2u32)
+        };
         if cbf_cb {
             reconstruct_chroma_inter(cabac, ctx, s, cx0, cy0, clog2, true, pred)?;
         } else {
@@ -1646,8 +2283,17 @@ fn pred_slice(buf: &[i32], buf_size: i32, x0: i32, y0: i32, size: usize) -> Vec<
     let mut out = vec![0u16; size * size];
     for row in 0..size {
         for col in 0..size {
-            let (Ok(bx), Ok(by)) = (usize::try_from(x0 + i32::try_from(col).unwrap_or(0)), usize::try_from(y0 + i32::try_from(row).unwrap_or(0))) else { continue };
-            let v = buf.get(by * stride + bx).copied().unwrap_or(0).clamp(0, 255);
+            let (Ok(bx), Ok(by)) = (
+                usize::try_from(x0 + i32::try_from(col).unwrap_or(0)),
+                usize::try_from(y0 + i32::try_from(row).unwrap_or(0)),
+            ) else {
+                continue;
+            };
+            let v = buf
+                .get(by * stride + bx)
+                .copied()
+                .unwrap_or(0)
+                .clamp(0, 255);
             if let Some(slot) = out.get_mut(row * size + col) {
                 *slot = u16::try_from(v).unwrap_or(0);
             }
@@ -1656,7 +2302,16 @@ fn pred_slice(buf: &[i32], buf_size: i32, x0: i32, y0: i32, size: usize) -> Vec<
     out
 }
 
-fn reconstruct_luma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, x0: i32, y0: i32, log2_size: u32, cbf: bool, pred_cu: &CuPrediction) -> Result<()> {
+fn reconstruct_luma_inter(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &mut Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    log2_size: u32,
+    cbf: bool,
+    pred_cu: &CuPrediction,
+) -> Result<()> {
     let size = 1usize << log2_size;
     // `pred_cu`'s own top-left is the CU's own `(x0, y0)`, which this leaf's
     // `(x0, y0)` sit somewhere inside of — recovered by the caller passing
@@ -1674,20 +2329,33 @@ fn reconstruct_luma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s
 
     if cbf {
         if s.shared.transform_skip_enabled && log2_size == 2 {
-            let cm = ctx.transform_skip.first_mut().ok_or(Error::InvalidData("transform_skip ctx"))?;
+            let cm = ctx
+                .transform_skip
+                .first_mut()
+                .ok_or(Error::InvalidData("transform_skip ctx"))?;
             if cabac.decode_decision(cm) != 0 {
-                return Err(Error::Unsupported("vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)"));
+                return Err(Error::Unsupported(
+                    "vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)",
+                ));
             }
         }
         // §7.4.9.11's mode-dependent scan order is an intra-only rule — an
         // inter TU's `scanIdx` is always `0` (diagonal), HM's own
         // `getCoefScanIdx` returning `SCAN_DIAG` whenever `CuPredMode !=
         // MODE_INTRA`.
-        let coeffs = residual::residual_coding(cabac, ctx, log2_size, crate::scan::ScanOrder::Diag, false, s.shared.sign_data_hiding);
+        let coeffs = residual::residual_coding(
+            cabac,
+            ctx,
+            log2_size,
+            crate::scan::ScanOrder::Diag,
+            false,
+            s.shared.sign_data_hiding,
+        );
         let use_dst = false; // §8.6.4.1: DST-VII only for 4x4 *intra* luma.
         let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
         let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
-        let residual = transform::inverse_transform(&dequantised, size, use_dst, s.shared.bit_depth_luma);
+        let residual =
+            transform::inverse_transform(&dequantised, size, use_dst, s.shared.bit_depth_luma);
         transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
     }
     write_block(&mut s.recon.y, x0, y0, size, &pred);
@@ -1701,7 +2369,16 @@ fn reconstruct_luma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s
     Ok(())
 }
 
-fn reconstruct_chroma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank, s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, is_cb: bool, pred_cu: &CuPrediction) -> Result<()> {
+fn reconstruct_chroma_inter(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &mut Ctx<'_>,
+    cx0: i32,
+    cy0: i32,
+    log2_size: u32,
+    is_cb: bool,
+    pred_cu: &CuPrediction,
+) -> Result<()> {
     let size = 1usize << log2_size;
     let (cu_x0, cu_y0) = cu_origin_of(cx0 << 1, cy0 << 1, pred_cu.size);
     let (ccu_x0, ccu_y0) = (cu_x0 >> 1, cu_y0 >> 1);
@@ -1710,31 +2387,66 @@ fn reconstruct_chroma_inter(cabac: &mut CabacDecoder<'_>, ctx: &mut ContextBank,
     let mut pred = pred_slice(src, csize, cx0 - ccu_x0, cy0 - ccu_y0, size);
 
     if s.shared.transform_skip_enabled && log2_size == 2 {
-        let cm = ctx.transform_skip.get_mut(1).ok_or(Error::InvalidData("transform_skip ctx"))?;
+        let cm = ctx
+            .transform_skip
+            .get_mut(1)
+            .ok_or(Error::InvalidData("transform_skip ctx"))?;
         if cabac.decode_decision(cm) != 0 {
-            return Err(Error::Unsupported("vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)"));
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)",
+            ));
         }
     }
     let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-    let qp = transform::chroma_qp(qp_y, if is_cb { s.shared.cb_qp_offset } else { s.shared.cr_qp_offset });
-    let coeffs = residual::residual_coding(cabac, ctx, log2_size, crate::scan::ScanOrder::Diag, true, s.shared.sign_data_hiding);
+    let qp = transform::chroma_qp(
+        qp_y,
+        if is_cb {
+            s.shared.cb_qp_offset
+        } else {
+            s.shared.cr_qp_offset
+        },
+    );
+    let coeffs = residual::residual_coding(
+        cabac,
+        ctx,
+        log2_size,
+        crate::scan::ScanOrder::Diag,
+        true,
+        s.shared.sign_data_hiding,
+    );
     let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
-    let residual = transform::inverse_transform(&dequantised, size, false, s.shared.bit_depth_chroma);
+    let residual =
+        transform::inverse_transform(&dequantised, size, false, s.shared.bit_depth_chroma);
     transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_chroma);
 
-    let plane = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
+    let plane = if is_cb {
+        &mut s.recon.cb
+    } else {
+        &mut s.recon.cr
+    };
     write_block(plane, cx0, cy0, size, &pred);
     Ok(())
 }
 
-fn write_pred_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, is_cb: bool, pred_cu: &CuPrediction) {
+fn write_pred_chroma_only(
+    s: &mut Ctx<'_>,
+    cx0: i32,
+    cy0: i32,
+    log2_size: u32,
+    is_cb: bool,
+    pred_cu: &CuPrediction,
+) {
     let size = 1usize << log2_size;
     let (cu_x0, cu_y0) = cu_origin_of(cx0 << 1, cy0 << 1, pred_cu.size);
     let (ccu_x0, ccu_y0) = (cu_x0 >> 1, cu_y0 >> 1);
     let src = if is_cb { &pred_cu.cb } else { &pred_cu.cr };
     let csize = (pred_cu.size >> 1).max(1);
     let pred = pred_slice(src, csize, cx0 - ccu_x0, cy0 - ccu_y0, size);
-    let plane = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
+    let plane = if is_cb {
+        &mut s.recon.cb
+    } else {
+        &mut s.recon.cr
+    };
     write_block(plane, cx0, cy0, size, &pred);
 }
 
@@ -1756,7 +2468,12 @@ fn cu_origin_of(x: i32, y: i32, cu_size: i32) -> (i32, i32) {
 /// `interSplitFlag` gate is on the *max-depth* value being exactly `1`, not
 /// on `max_transform_hierarchy_depth_inter == 0`, a distinction this
 /// function's caller must get right since the two differ by one).
-fn quadtree_tu_log2_min_in_cu(s: &Ctx<'_>, log2_cb_size: u32, max_depth: u32, extra_split_flag: u32) -> u32 {
+fn quadtree_tu_log2_min_in_cu(
+    s: &Ctx<'_>,
+    log2_cb_size: u32,
+    max_depth: u32,
+    extra_split_flag: u32,
+) -> u32 {
     let denom = max_depth.saturating_sub(1) + extra_split_flag;
     if log2_cb_size < s.shared.log2_min_tb_size + denom {
         s.shared.log2_min_tb_size
@@ -1790,14 +2507,20 @@ fn transform_tree(
         false
     } else {
         let ctx_idx = usize::try_from(5u32.saturating_sub(log2_size)).unwrap_or(0);
-        let cm = ctx.trans_subdiv_flag.get_mut(ctx_idx).ok_or(Error::InvalidData("trans_subdiv ctx"))?;
+        let cm = ctx
+            .trans_subdiv_flag
+            .get_mut(ctx_idx)
+            .ok_or(Error::InvalidData("trans_subdiv ctx"))?;
         cabac.decode_decision(cm) != 0
     };
 
     let chroma_splittable = log2_size > 2;
     let cbf_cb = if chroma_splittable {
         if trafo_depth == 0 || parent_cbf_cb {
-            let cm = ctx.qt_cbf.get_mut(5 + trafo_depth.min(4) as usize).ok_or(Error::InvalidData("cbf_cb ctx"))?;
+            let cm = ctx
+                .qt_cbf
+                .get_mut(5 + trafo_depth.min(4) as usize)
+                .ok_or(Error::InvalidData("cbf_cb ctx"))?;
             cabac.decode_decision(cm) != 0
         } else {
             false
@@ -1807,7 +2530,10 @@ fn transform_tree(
     };
     let cbf_cr = if chroma_splittable {
         if trafo_depth == 0 || parent_cbf_cr {
-            let cm = ctx.qt_cbf.get_mut(5 + trafo_depth.min(4) as usize).ok_or(Error::InvalidData("cbf_cr ctx"))?;
+            let cm = ctx
+                .qt_cbf
+                .get_mut(5 + trafo_depth.min(4) as usize)
+                .ok_or(Error::InvalidData("cbf_cr ctx"))?;
             cabac.decode_decision(cm) != 0
         } else {
             false
@@ -1818,7 +2544,10 @@ fn transform_tree(
 
     if split {
         let half = 1i32 << (log2_size - 1);
-        for (i, (dx, dy)) in [(0, 0), (half, 0), (0, half), (half, half)].into_iter().enumerate() {
+        for (i, (dx, dy)) in [(0, 0), (half, 0), (0, half), (half, half)]
+            .into_iter()
+            .enumerate()
+        {
             transform_tree(
                 cabac,
                 ctx,
@@ -1842,10 +2571,27 @@ fn transform_tree(
 
     // `getCtxQtCbf` for luma: `ctxInc = (trafoDepth == 0) ? 1 : 0`.
     let luma_ctx_idx = usize::from(trafo_depth == 0);
-    let cm = ctx.qt_cbf.get_mut(luma_ctx_idx).ok_or(Error::InvalidData("cbf_luma ctx"))?;
+    let cm = ctx
+        .qt_cbf
+        .get_mut(luma_ctx_idx)
+        .ok_or(Error::InvalidData("cbf_luma ctx"))?;
     let cbf_luma = cabac.decode_decision(cm) != 0;
 
-    transform_unit(cabac, ctx, s, x0, y0, log2_size, blk_idx, cbf_luma, cbf_cb, cbf_cr, pus, luma_modes, chroma_mode)
+    transform_unit(
+        cabac,
+        ctx,
+        s,
+        x0,
+        y0,
+        log2_size,
+        blk_idx,
+        cbf_luma,
+        cbf_cb,
+        cbf_cr,
+        pus,
+        luma_modes,
+        chroma_mode,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1930,32 +2676,62 @@ fn reconstruct_luma(
     cbf: bool,
 ) -> Result<()> {
     let size = 1usize << log2_size;
-    let line = intra_pred::build_reference_line(&s.recon.y, x0, y0, size, s.shared.bit_depth_luma, |nx, ny| {
-        !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx, ny).is_none()
-    });
+    let line = intra_pred::build_reference_line(
+        &s.recon.y,
+        x0,
+        y0,
+        size,
+        s.shared.bit_depth_luma,
+        |nx, ny| !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx, ny).is_none(),
+    );
     let filtered;
     let ref_line = if intra_pred::should_filter(mode, size, true) {
-        filtered = intra_pred::filter_reference_line(&line, size, s.shared.bit_depth_luma, s.shared.strong_intra_smoothing);
+        filtered = intra_pred::filter_reference_line(
+            &line,
+            size,
+            s.shared.bit_depth_luma,
+            s.shared.strong_intra_smoothing,
+        );
         &filtered
     } else {
         &line
     };
     let mut pred = vec![0u16; size * size];
-    intra_pred::predict(mode, ref_line, size, s.shared.bit_depth_luma, true, &mut pred);
+    intra_pred::predict(
+        mode,
+        ref_line,
+        size,
+        s.shared.bit_depth_luma,
+        true,
+        &mut pred,
+    );
 
     if cbf {
         if s.shared.transform_skip_enabled && log2_size == 2 {
-            let cm = ctx.transform_skip.first_mut().ok_or(Error::InvalidData("transform_skip ctx"))?;
+            let cm = ctx
+                .transform_skip
+                .first_mut()
+                .ok_or(Error::InvalidData("transform_skip ctx"))?;
             if cabac.decode_decision(cm) != 0 {
-                return Err(Error::Unsupported("vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)"));
+                return Err(Error::Unsupported(
+                    "vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)",
+                ));
             }
         }
         let order = intra_mode::scan_order_for_mode(mode, log2_size, false);
-        let coeffs: Coeffs = residual::residual_coding(cabac, ctx, log2_size, order, false, s.shared.sign_data_hiding);
+        let coeffs: Coeffs = residual::residual_coding(
+            cabac,
+            ctx,
+            log2_size,
+            order,
+            false,
+            s.shared.sign_data_hiding,
+        );
         let use_dst = log2_size == 2;
         let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
         let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
-        let residual = transform::inverse_transform(&dequantised, size, use_dst, s.shared.bit_depth_luma);
+        let residual =
+            transform::inverse_transform(&dequantised, size, use_dst, s.shared.bit_depth_luma);
         transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
     }
 
@@ -1979,29 +2755,65 @@ fn reconstruct_chroma(
     // `<< 1`: chroma-to-luma coordinate scaling for the 4:2:0 collocated
     // block CuGrid is indexed by (see `cu_origin_of`'s own callers' `cx0 <<
     // 1` precedent above).
-    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.shared.bit_depth_chroma, |nx, ny| {
-        !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none()
-    });
+    let line = intra_pred::build_reference_line(
+        plane,
+        cx0,
+        cy0,
+        size,
+        s.shared.bit_depth_chroma,
+        |nx, ny| !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none(),
+    );
     let mut pred = vec![0u16; size * size];
     // Chroma never smooths its reference samples at 4:2:0 (see the crate
     // doc), so no `should_filter`/`filter_reference_line` call here.
-    intra_pred::predict(mode, &line, size, s.shared.bit_depth_chroma, false, &mut pred);
+    intra_pred::predict(
+        mode,
+        &line,
+        size,
+        s.shared.bit_depth_chroma,
+        false,
+        &mut pred,
+    );
 
     if s.shared.transform_skip_enabled && log2_size == 2 {
-        let cm = ctx.transform_skip.get_mut(1).ok_or(Error::InvalidData("transform_skip ctx"))?;
+        let cm = ctx
+            .transform_skip
+            .get_mut(1)
+            .ok_or(Error::InvalidData("transform_skip ctx"))?;
         if cabac.decode_decision(cm) != 0 {
-            return Err(Error::Unsupported("vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)"));
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)",
+            ));
         }
     }
     let order = intra_mode::scan_order_for_mode(mode, log2_size, true);
     let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-    let qp = transform::chroma_qp(qp_y, if is_cb { s.shared.cb_qp_offset } else { s.shared.cr_qp_offset });
-    let coeffs = residual::residual_coding(cabac, ctx, log2_size, order, true, s.shared.sign_data_hiding);
+    let qp = transform::chroma_qp(
+        qp_y,
+        if is_cb {
+            s.shared.cb_qp_offset
+        } else {
+            s.shared.cr_qp_offset
+        },
+    );
+    let coeffs = residual::residual_coding(
+        cabac,
+        ctx,
+        log2_size,
+        order,
+        true,
+        s.shared.sign_data_hiding,
+    );
     let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
-    let residual = transform::inverse_transform(&dequantised, size, false, s.shared.bit_depth_chroma);
+    let residual =
+        transform::inverse_transform(&dequantised, size, false, s.shared.bit_depth_chroma);
     transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_chroma);
 
-    let plane_mut = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
+    let plane_mut = if is_cb {
+        &mut s.recon.cb
+    } else {
+        &mut s.recon.cr
+    };
     write_block(plane_mut, cx0, cy0, size, &pred);
     Ok(())
 }
@@ -2009,12 +2821,28 @@ fn reconstruct_chroma(
 fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode: u8, is_cb: bool) {
     let size = 1usize << log2_size;
     let plane = if is_cb { &s.recon.cb } else { &s.recon.cr };
-    let line = intra_pred::build_reference_line(plane, cx0, cy0, size, s.shared.bit_depth_chroma, |nx, ny| {
-        !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none()
-    });
+    let line = intra_pred::build_reference_line(
+        plane,
+        cx0,
+        cy0,
+        size,
+        s.shared.bit_depth_chroma,
+        |nx, ny| !s.shared.constrained_intra_pred || s.cu_grid.inter_at(nx << 1, ny << 1).is_none(),
+    );
     let mut pred = vec![0u16; size * size];
-    intra_pred::predict(mode, &line, size, s.shared.bit_depth_chroma, false, &mut pred);
-    let plane_mut = if is_cb { &mut s.recon.cb } else { &mut s.recon.cr };
+    intra_pred::predict(
+        mode,
+        &line,
+        size,
+        s.shared.bit_depth_chroma,
+        false,
+        &mut pred,
+    );
+    let plane_mut = if is_cb {
+        &mut s.recon.cb
+    } else {
+        &mut s.recon.cr
+    };
     write_block(plane_mut, cx0, cy0, size, &pred);
 }
 
@@ -2028,17 +2856,29 @@ fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode
 /// `transform::add_residual_clip` (or are a raw prediction with cbf clear,
 /// itself a weighted average of already-in-range reference samples), so the
 /// `u8` narrowing below never actually clips.
-fn write_block(plane: &mut crate::framebuf::ReconPlane<'_>, x0: i32, y0: i32, size: usize, block: &[u16]) {
+fn write_block(
+    plane: &mut crate::framebuf::ReconPlane<'_>,
+    x0: i32,
+    y0: i32,
+    size: usize,
+    block: &[u16],
+) {
     let Ok(x0u) = usize::try_from(x0) else { return };
     // See `write_pred_block`'s own comment for why this goes through a
     // fixed conversion buffer rather than a raw `row_mut`-style slice.
     let mut buf = [0u8; MAX_CTB];
     let size_clamped = size.min(MAX_CTB);
     for row in 0..size {
-        let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else { continue };
+        let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else {
+            continue;
+        };
         let row_start = row.saturating_mul(size);
-        let Some(src_row) = block.get(row_start..row_start.saturating_add(size_clamped)) else { continue };
-        let Some(dst_row) = buf.get_mut(..size_clamped) else { continue };
+        let Some(src_row) = block.get(row_start..row_start.saturating_add(size_clamped)) else {
+            continue;
+        };
+        let Some(dst_row) = buf.get_mut(..size_clamped) else {
+            continue;
+        };
         for (d, &s) in dst_row.iter_mut().zip(src_row) {
             *d = u8::try_from(s).unwrap_or(0);
         }

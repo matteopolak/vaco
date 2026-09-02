@@ -171,7 +171,9 @@ fn has_h264_video(tracks: &[TrackState]) -> bool {
 pub fn file_type_box(brand: Brand, tracks: &[TrackState]) -> Vec<u8> {
     let s = brand.spec();
     let avc1 = fcc(*b"avc1");
-    if brand_conditions_avc1_on_h264(brand) && has_h264_video(tracks) && !s.compatible.contains(&avc1)
+    if brand_conditions_avc1_on_h264(brand)
+        && has_h264_video(tracks)
+        && !s.compatible.contains(&avc1)
     {
         let mp41 = fcc(*b"mp41");
         let mut compatible = s.compatible.to_vec();

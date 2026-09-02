@@ -91,7 +91,10 @@ impl Filter {
         let Some(ticks) = frame.pts.ticks() else {
             return 0.0;
         };
-        #[allow(clippy::cast_precision_loss, reason = "display-scale timestamp conversion")]
+        #[allow(
+            clippy::cast_precision_loss,
+            reason = "display-scale timestamp conversion"
+        )]
         {
             ticks as f64 * f64::from(frame.time_base.num) / f64::from(frame.time_base.den.max(1))
         }
@@ -100,7 +103,10 @@ impl Filter {
     fn stamp(frame: &Frame, seconds: f64) -> Frame {
         let mut out = frame.clone();
         let tb = out.time_base;
-        #[allow(clippy::cast_possible_truncation, reason = "display-scale timestamp conversion")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "display-scale timestamp conversion"
+        )]
         let ticks = (seconds * f64::from(tb.den.max(1)) / f64::from(tb.num.max(1))).round() as i64;
         out.pts = Timestamp::new(ticks);
         out
@@ -206,7 +212,10 @@ mod tests {
         count += f.step(frame_at(0.0, tb)).len();
         count += f.step(frame_at(0.1, tb)).len();
         count += f.eof().len();
-        assert_eq!(count, 3, "two coincident targets plus one more: 3 outputs from 2 inputs");
+        assert_eq!(
+            count, 3,
+            "two coincident targets plus one more: 3 outputs from 2 inputs"
+        );
     }
 
     #[test]

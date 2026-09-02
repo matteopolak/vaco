@@ -86,7 +86,13 @@ fn decode_all_frames(path: &str) -> Vec<DecodedPlanes> {
         }
         dec.send_packet(Some(&packet)).expect("decodes packet");
         let frame = dec.receive_frame().expect("produces a frame");
-        let FrameData::Video { planes, format, width, height } = &frame.data else {
+        let FrameData::Video {
+            planes,
+            format,
+            width,
+            height,
+        } = &frame.data
+        else {
             panic!("expected a video frame");
         };
         let sample_bytes = 2usize; // every format this test exercises is >8-bit
@@ -144,7 +150,11 @@ fn split_reference(
         let luma = data[offset..offset + luma_len].to_vec();
         let chroma_u = data[offset + luma_len..offset + luma_len + chroma_len].to_vec();
         let chroma_v = data[offset + luma_len + chroma_len..offset + frame_len].to_vec();
-        out.push(DecodedPlanes { y: luma, u: chroma_u, v: chroma_v });
+        out.push(DecodedPlanes {
+            y: luma,
+            u: chroma_u,
+            v: chroma_v,
+        });
         offset += frame_len;
     }
     out
@@ -185,9 +195,18 @@ fn prores_422hq_matches_ffmpeg_per_plane() {
         // channel swap, a scan-table transposition) produces differences in
         // the hundreds or thousands of codes, not a handful from IDCT
         // rounding. See this file's module doc.
-        assert!(ymax <= 8 && ymean < 2.0, "frame {i} Y diverges structurally: max={ymax} mean={ymean}");
-        assert!(umax <= 8 && umean < 2.0, "frame {i} U diverges structurally: max={umax} mean={umean}");
-        assert!(vmax <= 8 && vmean < 2.0, "frame {i} V diverges structurally: max={vmax} mean={vmean}");
+        assert!(
+            ymax <= 8 && ymean < 2.0,
+            "frame {i} Y diverges structurally: max={ymax} mean={ymean}"
+        );
+        assert!(
+            umax <= 8 && umean < 2.0,
+            "frame {i} U diverges structurally: max={umax} mean={umean}"
+        );
+        assert!(
+            vmax <= 8 && vmean < 2.0,
+            "frame {i} V diverges structurally: max={vmax} mean={vmean}"
+        );
     }
 }
 
@@ -204,9 +223,18 @@ fn prores_multislice_wide_frame_matches_ffmpeg_per_plane() {
     let (ymax, ymean) = compare_plane("Y", &got[0].y, &want[0].y);
     let (umax, umean) = compare_plane("U", &got[0].u, &want[0].u);
     let (vmax, vmean) = compare_plane("V", &got[0].v, &want[0].v);
-    assert!(ymax <= 8 && ymean < 2.0, "Y diverges structurally: max={ymax} mean={ymean}");
-    assert!(umax <= 8 && umean < 2.0, "U diverges structurally: max={umax} mean={umean}");
-    assert!(vmax <= 8 && vmean < 2.0, "V diverges structurally: max={vmax} mean={vmean}");
+    assert!(
+        ymax <= 8 && ymean < 2.0,
+        "Y diverges structurally: max={ymax} mean={ymean}"
+    );
+    assert!(
+        umax <= 8 && umean < 2.0,
+        "U diverges structurally: max={umax} mean={umean}"
+    );
+    assert!(
+        vmax <= 8 && vmean < 2.0,
+        "V diverges structurally: max={vmax} mean={vmean}"
+    );
 }
 
 #[test]
@@ -238,7 +266,10 @@ fn prores_4444_alpha_matches_ffmpeg() {
     let plane_len = 64 * 64 * 2;
     let want_alpha = &want[plane_len * 3..plane_len * 4];
     let (max, mean) = compare_plane("alpha", &alpha, want_alpha);
-    assert!(max <= 8 && mean < 2.0, "alpha diverges structurally: max={max} mean={mean}");
+    assert!(
+        max <= 8 && mean < 2.0,
+        "alpha diverges structurally: max={max} mean={mean}"
+    );
 }
 
 #[test]
@@ -252,8 +283,17 @@ fn prores_4444_matches_ffmpeg_per_plane() {
         let (ymax, ymean) = compare_plane(&format!("frame {i} Y"), &g.y, &w.y);
         let (umax, umean) = compare_plane(&format!("frame {i} U"), &g.u, &w.u);
         let (vmax, vmean) = compare_plane(&format!("frame {i} V"), &g.v, &w.v);
-        assert!(ymax <= 8 && ymean < 2.0, "frame {i} Y diverges structurally: max={ymax} mean={ymean}");
-        assert!(umax <= 8 && umean < 2.0, "frame {i} U diverges structurally: max={umax} mean={umean}");
-        assert!(vmax <= 8 && vmean < 2.0, "frame {i} V diverges structurally: max={vmax} mean={vmean}");
+        assert!(
+            ymax <= 8 && ymean < 2.0,
+            "frame {i} Y diverges structurally: max={ymax} mean={ymean}"
+        );
+        assert!(
+            umax <= 8 && umean < 2.0,
+            "frame {i} U diverges structurally: max={umax} mean={umean}"
+        );
+        assert!(
+            vmax <= 8 && vmean < 2.0,
+            "frame {i} V diverges structurally: max={vmax} mean={vmean}"
+        );
     }
 }

@@ -61,7 +61,13 @@ pub(crate) struct Opts {
     pub sar: Rational,
     /// Accepted, but not implemented — see the module doc's `complement=true`
     /// section for why.
-    #[opt(name = "complement", alias = "co", help = "set complement colors", default = false, flags(filtering))]
+    #[opt(
+        name = "complement",
+        alias = "co",
+        help = "set complement colors",
+        default = false,
+        flags(filtering)
+    )]
     pub complement: bool,
 }
 
@@ -69,7 +75,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }

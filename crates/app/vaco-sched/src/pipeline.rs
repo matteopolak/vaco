@@ -576,7 +576,9 @@ impl PipelineSpec {
                 priority: match s.kind {
                     KindSpec::Mux { .. } => 4,
                     KindSpec::Encode(_) => 3,
-                    KindSpec::Filter { .. } | KindSpec::Convert { .. } | KindSpec::ConvertAudio { .. } => 2,
+                    KindSpec::Filter { .. }
+                    | KindSpec::Convert { .. }
+                    | KindSpec::ConvertAudio { .. } => 2,
                     KindSpec::Decode(_) => 1,
                     KindSpec::Demux { .. } => 0,
                 },
@@ -679,7 +681,11 @@ fn build_work(
             pending_eof: None,
             end_pts: vaco_core::Timestamp::NONE,
         }),
-        KindSpec::Convert { dst_format, limits, threads } => Work::Convert(Box::new(CodecWork {
+        KindSpec::Convert {
+            dst_format,
+            limits,
+            threads,
+        } => Work::Convert(Box::new(CodecWork {
             side: ConverterSide::new(dst_format, limits, threads),
             stage: Stage::Feeding,
             last_pts: vaco_core::Timestamp::NONE,

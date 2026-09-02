@@ -291,7 +291,10 @@ mod tests {
             let data = vec![0u8; spec.bytes_per_block as usize * 10];
             let d = build(&spec, Box::new(MemorySource::new(data))).unwrap();
             let s = d.streams().first().unwrap();
-            assert_eq!(s.params.audio.as_ref().unwrap().sample_rate, spec.sample_rate);
+            assert_eq!(
+                s.params.audio.as_ref().unwrap().sample_rate,
+                spec.sample_rate
+            );
             assert_eq!(s.params.codec_id, spec.codec_id);
         }
     }

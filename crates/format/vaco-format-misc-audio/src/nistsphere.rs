@@ -133,7 +133,11 @@ impl NistSphereDemuxer {
         };
 
         io.seek(header_len)?;
-        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, sample_rate.cast_signed()));
+        let mut stream = Stream::new(
+            0,
+            MediaType::Audio,
+            Rational::new(1, sample_rate.cast_signed()),
+        );
         let mut params = vaco_codec_core::CodecParameters::audio();
         params.codec_id = Some(codec_id);
         if let Some(audio) = params.audio.as_mut() {
@@ -220,7 +224,17 @@ mod tests {
         v.resize(32, b' ');
         v.extend_from_slice(&[0u8; 10]);
         let d = NistSphereDemuxer::open(Box::new(MemorySource::new(v))).unwrap();
-        assert_eq!(d.streams().first().unwrap().params.audio.as_ref().unwrap().sample_rate, 8000);
+        assert_eq!(
+            d.streams()
+                .first()
+                .unwrap()
+                .params
+                .audio
+                .as_ref()
+                .unwrap()
+                .sample_rate,
+            8000
+        );
     }
 
     #[test]

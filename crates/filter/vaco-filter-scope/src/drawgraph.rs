@@ -183,7 +183,10 @@ pub const ADESC: FilterDesc = FilterDesc {
 fn parse_fg_hex(text: &str) -> (u8, u8, u8) {
     let hex = text.strip_prefix("0x").or_else(|| text.strip_prefix('#'));
     let Some(hex) = hex else { return (255, 0, 0) };
-    let byte = |i: usize| hex.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok());
+    let byte = |i: usize| {
+        hex.get(i..i + 2)
+            .and_then(|s| u8::from_str_radix(s, 16).ok())
+    };
     let (Some(_a), Some(r), Some(g), Some(b)) = (byte(0), byte(2), byte(4), byte(6)) else {
         return (255, 0, 0);
     };
@@ -200,7 +203,10 @@ fn parse_bg_hex(text: &str) -> (u8, u8, u8) {
             _ => (255, 255, 255),
         };
     };
-    let byte = |i: usize| hex.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok());
+    let byte = |i: usize| {
+        hex.get(i..i + 2)
+            .and_then(|s| u8::from_str_radix(s, 16).ok())
+    };
     let (Some(r), Some(g), Some(b)) = (byte(0), byte(2), byte(4)) else {
         return (255, 255, 255);
     };
@@ -230,7 +236,12 @@ pub(crate) struct Opts {
     pub bg: String,
     #[opt(name = "min", help = "set minimal value", default = -1.0, flags(video, filtering))]
     pub min: f64,
-    #[opt(name = "max", help = "set maximal value", default = 1.0, flags(video, filtering))]
+    #[opt(
+        name = "max",
+        help = "set maximal value",
+        default = 1.0,
+        flags(video, filtering)
+    )]
     pub max: f64,
     #[opt(name = "mode", help = "set graph mode", default = "line".to_owned(), flags(video, filtering))]
     pub mode: String,
@@ -346,7 +357,6 @@ impl Filter {
             next_col: 0,
         }
     }
-
 }
 
 impl FrameFilter for Filter {
@@ -355,7 +365,14 @@ impl FrameFilter for Filter {
             .input_link(0)
             .map_or(Rational::UNDEFINED, LinkFormat::time_base);
         if let Some(mut out) = ctx.output_link(0).cloned() {
-            if let LinkFormat::Video { width, height, time_base, frame_rate, .. } = &mut out {
+            if let LinkFormat::Video {
+                width,
+                height,
+                time_base,
+                frame_rate,
+                ..
+            } = &mut out
+            {
                 *width = self.width;
                 *height = self.height;
                 *time_base = self.out_base;
@@ -406,7 +423,11 @@ impl FrameFilter for Filter {
             let (top, bottom) = match line.last_row {
                 Some(prev) => {
                     let prev = prev as usize;
-                    if prev <= row { (prev, row) } else { (row, prev) }
+                    if prev <= row {
+                        (prev, row)
+                    } else {
+                        (row, prev)
+                    }
                 }
                 None => (row, row),
             };
@@ -418,13 +439,11 @@ impl FrameFilter for Filter {
             line.last_row = Some(row as u32);
         }
 
-        let mut out = ctx.pool().acquire_video(PixFmt::Gbrp, self.width, self.height)?;
+        let mut out = ctx
+            .pool()
+            .acquire_video(PixFmt::Gbrp, self.width, self.height)?;
         // Plane order for `gbrp`: `G, B, R`.
-        for (plane, sel) in [
-            (0usize, 0usize),
-            (1, 2),
-            (2, 1),
-        ] {
+        for (plane, sel) in [(0usize, 0usize), (1, 2), (2, 1)] {
             if let Some(mut dst) = out.plane_mut(plane) {
                 for (y, row) in dst.rows_mut().enumerate() {
                     for (x, px) in row.iter_mut().enumerate() {
@@ -499,21 +518,41 @@ mod tests {
 
     #[test]
     fn creatable_with_defaults() {
-        let req = Instantiate { name: "drawgraph", instance: "drawgraph", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "drawgraph",
+            instance: "drawgraph",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_ok());
-        let req = Instantiate { name: "adrawgraph", instance: "adrawgraph", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "adrawgraph",
+            instance: "adrawgraph",
+            args: None,
+            arguments: &[],
+        };
         assert!(create_audio(&req).is_ok());
     }
 
     #[test]
     fn unimplemented_mode_is_a_clean_error() {
-        let req = Instantiate { name: "drawgraph", instance: "drawgraph", args: Some("mode=bar"), arguments: &[] };
+        let req = Instantiate {
+            name: "drawgraph",
+            instance: "drawgraph",
+            args: Some("mode=bar"),
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 
     #[test]
     fn unimplemented_slide_is_a_clean_error() {
-        let req = Instantiate { name: "drawgraph", instance: "drawgraph", args: Some("slide=picture"), arguments: &[] };
+        let req = Instantiate {
+            name: "drawgraph",
+            instance: "drawgraph",
+            args: Some("slide=picture"),
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 

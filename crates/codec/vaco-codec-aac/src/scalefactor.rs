@@ -121,7 +121,13 @@ pub(crate) fn read_all_groups(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, clippy::cast_possible_wrap, reason = "test code")]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic,
+        clippy::cast_possible_wrap,
+        reason = "test code"
+    )]
     use super::{BandValue, read_all_groups};
     use crate::spectral_tables::SCALEFACTOR_HUFFMAN;
     use vaco_bitstream::{BitReader, BitWriter};

@@ -283,7 +283,10 @@ mod tests {
                 self.known = value == "1";
                 Ok(())
             } else {
-                Err(Error::Option { name: name.to_owned(), detail: "unknown".to_owned() })
+                Err(Error::Option {
+                    name: name.to_owned(),
+                    detail: "unknown".to_owned(),
+                })
             }
         }
     }

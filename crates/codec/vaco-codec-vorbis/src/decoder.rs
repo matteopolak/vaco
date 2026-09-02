@@ -319,7 +319,8 @@ impl VorbisDecoder {
                 // video decoder in this tree sets it; this crate's own
                 // decoder was one of the remaining audio-side exceptions
                 // (`vaco-codec-ac3`/`-aac`/`-mpegaudio`/`-opus` share it).
-                let time_base = Rational::new(1, i32::try_from(ident.sample_rate).unwrap_or(1).max(1));
+                let time_base =
+                    Rational::new(1, i32::try_from(ident.sample_rate).unwrap_or(1).max(1));
                 frame.duration = Timestamp::new(i64::from(out_samples))
                     .to_duration(time_base)
                     .unwrap_or(Duration::ZERO);
@@ -621,11 +622,19 @@ mod tests {
         loop {
             match dec.receive_frame() {
                 Ok(f) => {
-                    let vaco_frame::FrameData::Audio { samples, sample_rate, .. } = f.data else {
+                    let vaco_frame::FrameData::Audio {
+                        samples,
+                        sample_rate,
+                        ..
+                    } = f.data
+                    else {
                         panic!("audio frame");
                     };
                     let expected = vaco_core::Timestamp::new(i64::from(samples))
-                        .to_duration(vaco_core::Rational::new(1, i32::try_from(sample_rate).unwrap()))
+                        .to_duration(vaco_core::Rational::new(
+                            1,
+                            i32::try_from(sample_rate).unwrap(),
+                        ))
                         .unwrap();
                     assert_ne!(expected, vaco_core::Duration::ZERO);
                     assert_eq!(f.duration, expected);

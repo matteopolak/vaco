@@ -18,9 +18,12 @@ use vaco_opts::OptionsExt as _;
 
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
-use crate::text::{composite_simple_text, SimpleTextStyle};
+use crate::text::{SimpleTextStyle, composite_simple_text};
 
-const VIDEO_PAD: &[Pad] = &[Pad { name: "default", media_type: MediaType::Video }];
+const VIDEO_PAD: &[Pad] = &[Pad {
+    name: "default",
+    media_type: MediaType::Video,
+}];
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "subtitles",
@@ -31,7 +34,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "subtitles", help = "Render a subtitle file onto the input video")]
+#[options(
+    name = "subtitles",
+    help = "Render a subtitle file onto the input video"
+)]
 pub(crate) struct Opts {
     #[opt(name = "filename", alias = "f", help = "set the subtitle file to render", default = String::new(), flags(video, filtering))]
     pub filename: String,
@@ -41,7 +47,8 @@ impl Opts {
     fn parse(args: Option<&str>) -> std::result::Result<Self, String> {
         let mut o = Self::default();
         if let Some(text) = args {
-            o.set_from_string(text, "=", ":").map_err(|e| e.to_string())?;
+            o.set_from_string(text, "=", ":")
+                .map_err(|e| e.to_string())?;
         }
         Ok(o)
     }
@@ -60,7 +67,9 @@ fn parse_srt(text: &str) -> Vec<SrtCue> {
         let mut timing = None;
         let mut body_lines: Vec<&str> = Vec::new();
         for line in &mut lines {
-            if let Some((start, end)) = vaco_format_subtitle::time::parse_srt_timing_line(line.trim()) {
+            if let Some((start, end)) =
+                vaco_format_subtitle::time::parse_srt_timing_line(line.trim())
+            {
                 timing = Some((start, end));
                 break;
             }
@@ -72,7 +81,11 @@ fn parse_srt(text: &str) -> Vec<SrtCue> {
             body_lines.push(line);
         }
         let Some((start, end)) = timing else { continue };
-        cues.push(SrtCue { start, end, text: body_lines.join("\n") });
+        cues.push(SrtCue {
+            start,
+            end,
+            text: body_lines.join("\n"),
+        });
     }
     cues
 }
@@ -92,16 +105,24 @@ impl Filter {
         if opts.filename.is_empty() {
             return Err("subtitles: filename is required".to_owned());
         }
-        let bytes = std::fs::read(&opts.filename).map_err(|e| format!("subtitles: could not read `{}`: {e}", opts.filename))?;
+        let bytes = std::fs::read(&opts.filename)
+            .map_err(|e| format!("subtitles: could not read `{}`: {e}", opts.filename))?;
         let (utf8, _) = vaco_format_subtitle::encoding::decode_to_utf8_bytes(&bytes);
         let text = String::from_utf8_lossy(&utf8).into_owned();
-        let ext = std::path::Path::new(&opts.filename).extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase();
+        let ext = std::path::Path::new(&opts.filename)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
         let source = if ext == "ass" || ext == "ssa" {
             Source::Ass(vaco_ass::parse(&text))
         } else {
             Source::Srt(parse_srt(&text))
         };
-        Ok(Self { source, renderer: TextRenderer::new() })
+        Ok(Self {
+            source,
+            renderer: TextRenderer::new(),
+        })
     }
 }
 
@@ -111,15 +132,22 @@ impl FrameFilter for Filter {
             return Ok(FrameOut::One(input));
         };
         let t = input.pts.to_seconds(input.time_base).unwrap_or(0.0);
-        #[allow(clippy::cast_possible_truncation, reason = "microsecond precision from a real playback timestamp fits i64 for any real duration")]
+        #[allow(
+            clippy::cast_possible_truncation,
+            reason = "microsecond precision from a real playback timestamp fits i64 for any real duration"
+        )]
         let dur = Duration::from_micros((t * 1_000_000.0).round() as i64);
         let mut out = input;
         match &self.source {
-            Source::Ass(script) => crate::ass_filter::render_at(script, &mut self.renderer, &mut out, dur)?,
+            Source::Ass(script) => {
+                crate::ass_filter::render_at(script, &mut self.renderer, &mut out, dur)?
+            }
             Source::Srt(cues) => {
                 let style = SimpleTextStyle::for_frame_height(height);
                 for cue in cues {
-                    if cue.start.as_micros() <= dur.as_micros() && dur.as_micros() < cue.end.as_micros() {
+                    if cue.start.as_micros() <= dur.as_micros()
+                        && dur.as_micros() < cue.end.as_micros()
+                    {
                         composite_simple_text(&mut self.renderer, &mut out, &cue.text, &style)?;
                     }
                 }
@@ -146,7 +174,12 @@ mod tests {
 
     #[test]
     fn missing_filename_is_a_clean_error() {
-        let req = Instantiate { name: "subtitles", instance: "subtitles", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "subtitles",
+            instance: "subtitles",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 

@@ -55,7 +55,11 @@ impl Filter {
         #[allow(clippy::cast_lossless, reason = "step is usize, index is u64")]
         let n = self.index.is_multiple_of(self.step as u64);
         self.index = self.index.saturating_add(1);
-        if n { FrameOut::One(frame) } else { FrameOut::None }
+        if n {
+            FrameOut::One(frame)
+        } else {
+            FrameOut::None
+        }
     }
 }
 

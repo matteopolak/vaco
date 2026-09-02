@@ -147,11 +147,8 @@ fn vorbis_round_trips_through_the_sibling_demuxer() {
     // The setup header is opaque codebooks to both crates -- any bytes
     // round-trip identically, which is the property this test checks.
     let setup = vec![0x05u8, b'v', b'o', b'r', b'b', b'i', b's', 0xAB, 0xCD, 0xEF];
-    let extradata = vaco_demux_ogg::codec::pack_xiph_headers(&[
-        ident.clone(),
-        comment.clone(),
-        setup.clone(),
-    ]);
+    let extradata =
+        vaco_demux_ogg::codec::pack_xiph_headers(&[ident.clone(), comment.clone(), setup.clone()]);
 
     let mut params = CodecParameters::new(vaco_core::MediaType::Audio).with_codec(CodecId::Vorbis);
     params.extradata = Some(extradata);

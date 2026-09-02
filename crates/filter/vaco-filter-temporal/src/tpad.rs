@@ -87,7 +87,11 @@ pub(crate) fn parse_color(name: &str) -> Color {
         let b = f32::from(byte(hex.get(4..6).unwrap_or("00")));
         return Color { r, g, b };
     }
-    Color { r: 0.0, g: 0.0, b: 0.0 }
+    Color {
+        r: 0.0,
+        g: 0.0,
+        b: 0.0,
+    }
 }
 
 /// BT.601 studio-range RGB -> `Y'CbCr` (ITU-R BT.601-7 SS2.5.1), 8-bit scale.
@@ -132,7 +136,9 @@ fn solid_frame(pool: &FramePool, like: &Frame, color: Color) -> Option<Frame> {
         if let Some(mut plane) = frame.plane_mut(plane_idx) {
             let (pw, ph) = plane_dims(format, width, height, plane_idx);
             for y_row in 0..ph {
-                let Some(row) = plane.row_mut(y_row) else { continue };
+                let Some(row) = plane.row_mut(y_row) else {
+                    continue;
+                };
                 for x in 0..pw {
                     let start = x.saturating_mul(bytes);
                     match bytes {

@@ -70,7 +70,10 @@ pub const DESC: FilterDesc = FilterDesc {
 };
 
 #[derive(Debug, Clone, vaco_opts::Options)]
-#[options(name = "framerate", help = "Upsamples or downsamples progressive source between specified frame rates.")]
+#[options(
+    name = "framerate",
+    help = "Upsamples or downsamples progressive source between specified frame rates."
+)]
 pub(crate) struct Opts {
     #[opt(name = "fps", help = "required output frames per second rate", default = "50".to_owned(), flags(video, filtering))]
     pub fps: String,
@@ -78,7 +81,12 @@ pub(crate) struct Opts {
     pub interp_start: i64,
     #[opt(name = "interp_end", help = "point to end linear interpolation", default = 255, range = 0..=255, flags(video, filtering))]
     pub interp_end: i64,
-    #[opt(name = "scene", help = "scene change level used to disable interpolation", default = 8.2, flags(video, filtering))]
+    #[opt(
+        name = "scene",
+        help = "scene change level used to disable interpolation",
+        default = 8.2,
+        flags(video, filtering)
+    )]
     pub scene: f64,
 }
 
@@ -118,9 +126,13 @@ pub(crate) struct Filter {
 
 impl Filter {
     pub(crate) fn new(opts: &Opts) -> std::result::Result<Self, String> {
-        let fps = vaco_core::parse::rational(&opts.fps).ok_or_else(|| format!("framerate: bad `fps` `{}`", opts.fps))?;
+        let fps = vaco_core::parse::rational(&opts.fps)
+            .ok_or_else(|| format!("framerate: bad `fps` `{}`", opts.fps))?;
         if fps.num <= 0 || fps.den <= 0 {
-            return Err(format!("framerate: `fps` must be positive, got `{}`", opts.fps));
+            return Err(format!(
+                "framerate: `fps` must be positive, got `{}`",
+                opts.fps
+            ));
         }
         Ok(Self {
             fps,
@@ -153,26 +165,49 @@ impl Filter {
         t.clamp(0.0, 1.0)
     }
 
-    fn blend_frame(pool: &vaco_frame::FramePool, prev: &Frame, next: &Frame, t: f64) -> Option<Frame> {
-        let FrameData::Video { format, width, height, .. } = prev.data else {
+    fn blend_frame(
+        pool: &vaco_frame::FramePool,
+        prev: &Frame,
+        next: &Frame,
+        t: f64,
+    ) -> Option<Frame> {
+        let FrameData::Video {
+            format,
+            width,
+            height,
+            ..
+        } = prev.data
+        else {
             return None;
         };
         let mut out = pool.acquire_video(format, width, height).ok()?;
         for p in 0..format.plane_count() {
             let p8 = common::to_i32(p) as u8;
             let ph = common::to_i32(format.plane_height(height, p8));
-            let (Some(a), Some(b), Some(mut dst)) = (prev.plane(p), next.plane(p), out.plane_mut(p)) else {
+            let (Some(a), Some(b), Some(mut dst)) =
+                (prev.plane(p), next.plane(p), out.plane_mut(p))
+            else {
                 continue;
             };
             for y in 0..ph {
                 let Ok(uy) = usize::try_from(y) else { continue };
-                let (Some(ra), Some(rb)) = (a.row(uy), b.row(uy)) else { continue };
+                let (Some(ra), Some(rb)) = (a.row(uy), b.row(uy)) else {
+                    continue;
+                };
                 let n = ra.len().min(rb.len());
-                let Some(dst_row) = dst.row_mut(uy) else { continue };
+                let Some(dst_row) = dst.row_mut(uy) else {
+                    continue;
+                };
                 for x in 0..n {
-                    let (Some(&av), Some(&bv)) = (ra.get(x), rb.get(x)) else { continue };
+                    let (Some(&av), Some(&bv)) = (ra.get(x), rb.get(x)) else {
+                        continue;
+                    };
                     let blended = f64::from(av).mul_add(1.0 - t, f64::from(bv) * t).round();
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, reason = "convex combination of two u8 values, 0.0..=255.0")]
+                    #[allow(
+                        clippy::cast_possible_truncation,
+                        clippy::cast_sign_loss,
+                        reason = "convex combination of two u8 values, 0.0..=255.0"
+                    )]
                     let byte = blended.clamp(0.0, 255.0) as u8;
                     if let Some(cell) = dst_row.get_mut(x) {
                         *cell = byte;
@@ -201,7 +236,14 @@ impl Filter {
     /// Emit every output slot in `[self.next_out_pts, next.slot)`, blending
     /// (or nearest-picking, across a detected cut) between `held` and
     /// `next`.
-    fn emit_between(&mut self, pool: &vaco_frame::FramePool, held: &Frame, held_slot: i64, next: &Frame, next_slot: i64) -> FrameOut {
+    fn emit_between(
+        &mut self,
+        pool: &vaco_frame::FramePool,
+        held: &Frame,
+        held_slot: i64,
+        next: &Frame,
+        next_slot: i64,
+    ) -> FrameOut {
         let cut = self.is_scene_change(held, next);
         let mut out: SmallVec<[Frame; 4]> = SmallVec::new();
         let mut n = self.next_out_pts;
@@ -226,7 +268,12 @@ impl FrameFilter for Filter {
             self.in_tb = *time_base;
         }
         if let Some(mut out) = ctx.output_link(0).cloned() {
-            if let LinkFormat::Video { time_base, frame_rate, .. } = &mut out {
+            if let LinkFormat::Video {
+                time_base,
+                frame_rate,
+                ..
+            } = &mut out
+            {
                 *time_base = self.out_tb;
                 *frame_rate = self.fps;
             }
@@ -314,7 +361,11 @@ mod tests {
             FrameOut::One(f) => vec![f],
             FrameOut::Many(v) => v.iter().collect(),
         };
-        frames.get(i).and_then(|f| f.plane(0)).and_then(|p| p.row(0)).and_then(|r| r.first().copied())
+        frames
+            .get(i)
+            .and_then(|f| f.plane(0))
+            .and_then(|p| p.row(0))
+            .and_then(|r| r.first().copied())
     }
 
     #[test]
@@ -367,13 +418,23 @@ mod tests {
 
     #[test]
     fn creatable_with_defaults() {
-        let req = Instantiate { name: "framerate", instance: "framerate", args: None, arguments: &[] };
+        let req = Instantiate {
+            name: "framerate",
+            instance: "framerate",
+            args: None,
+            arguments: &[],
+        };
         assert!(create(&req).is_ok());
     }
 
     #[test]
     fn bad_fps_is_a_clean_error() {
-        let req = Instantiate { name: "framerate", instance: "framerate", args: Some("fps=notanumber"), arguments: &[] };
+        let req = Instantiate {
+            name: "framerate",
+            instance: "framerate",
+            args: Some("fps=notanumber"),
+            arguments: &[],
+        };
         assert!(create(&req).is_err());
     }
 }

@@ -502,7 +502,10 @@ impl RawSource for HttpSource {
                 }
                 continue;
             }
-            let want = usize::try_from(until).unwrap_or(usize::MAX).min(buf.len()).max(1);
+            let want = usize::try_from(until)
+                .unwrap_or(usize::MAX)
+                .min(buf.len())
+                .max(1);
             let Some(slice) = buf.get_mut(..want) else {
                 return self.read_raw(buf);
             };
