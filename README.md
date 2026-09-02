@@ -114,16 +114,17 @@ purpose.
 
 ### Conformance
 
-A differential suite runs 709 cases against the reference. 254 currently agree and
-455 diverge. A classified sample put roughly 90% of those divergences at genuine
-rather than version drift — clustering into about 13–14 distinct root causes, since
-the suite exercises each one through many case combinations.
+A differential suite runs 709 cases against the reference. 262 agree and 447 diverge.
 
-They are concentrated in probe metadata and container remux details — `start_time`
-defaulting to 0 rather than N/A, a raw timebase where the reference normalises one,
-an unmapped codec profile — rather than in decoded pixels, which is where the
-byte-exactness above is measured. `planning/CONFORMANCE-FINDINGS.md` has the sample
-and the method for extending it.
+The case count understates the problem: the comparison used to stop at a case's first
+differing line, so one fix could correct a real field and move nothing. Reporting
+every difference instead turns 447 diverging cases into **13,334 field-level
+divergences**, a median of 4 per case. They are concentrated in probe metadata and
+container remux details — a `start_time` defaulting to 0 rather than N/A, a raw
+timebase where the reference normalises one, an unmapped codec profile — rather than
+in decoded pixels, which is where the byte-exactness above is measured.
+
+`planning/CONFORMANCE-FINDINGS.md` has the breakdown and the method for extending it.
 
 ### Option coverage
 
