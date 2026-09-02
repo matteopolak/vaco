@@ -5502,3 +5502,133 @@ probe-metadata cluster: a real, verified fix inside a multi-bug case.
 
 `cargo test`/`cargo clippy --all-targets -D warnings` clean on both
 touched crates (`vaco-mux-mpegts`, `vaco-mux-asf`).
+
+## 62. Continuing finding 60's ranking: `mime_codec_string` and `quarter_sample`/`divx_packed` closed, eight more cases resolved
+
+Working down finding 60's field-name ranking, highest count first, after
+`chroma_location` and DV's `avg_frame_rate`/`time_base` (both closed in
+finding 60 itself).
+
+### `mime_codec_string` (84 cases in the raw ranking)
+
+Re-measured field-by-field rather than trusting the raw count: 67 of the
+84 were genuine value mismatches, the rest were the same compact/xml
+line-cascade artifact finding 60 already named for `chroma_location` (an
+unrelated field differing earlier in a `compact`-writer record drags every
+co-located key, `mime_codec_string` included, into the reported diff even
+when both sides already agree on it — confirmed directly on the ASF/FLV
+h264+aac cases, where both sides report `avc1.64000d`/`mp4a.40.2`
+identically once the shift is accounted for).
+
+Two real gaps, both simply missing arms in `mime_codec_string`'s existing
+per-codec match statement (`crates/app/vaco-probe/src/show.rs`):
+
+- `CodecId::Mpeg4` had no arm — every container-wrapped mpeg4 stream (AVI,
+  MP4/ISOBMFF, Matroska) printed nothing. Measured (`ffmpeg -c:v mpeg4`,
+  three resolutions 176x144–1280x720): `mp4v.20`, invariant — level is
+  always 1 on every reachable native-encoder sample, so whether ffmpeg's
+  own RFC 6381 formula ever emits the spec's fuller three-part
+  `mp4v.<oti>.<level>` string for a different level cannot be measured
+  here and is not guessed at.
+- `CodecId::Mp2` had no arm either. Measured (`ffmpeg -c:a mp2`,
+  identically across raw `.mp2`, MPEG-TS, and MPEG-PS/VOB): `mp4a.40.33`,
+  matching the ISO 14496-3 audioObjectType numbering the file already uses
+  for `Mp3` (34) one row above. `Mp1`/Layer I would be 32 by the same
+  table, but this build's ffmpeg ships no `mp1` *encoder* (decode-only),
+  so it is left unhandled rather than extrapolated.
+
+Verified with a rebuilt vaco-probe against real ffprobe: mpeg4-in-
+Matroska, mp2 raw, and mp2-in-MPEG-PS/VOB all match exactly. Commit
+`699d321`.
+
+### `quarter_sample`/`divx_packed` (64 cases each, the *same* 64 cases both times)
+
+Exactly the "one root cause, two field names" shape the coordinator asked
+the ranking to make visible: checked the identical mpeg4 content in both
+AVI and Matroska first, confirmed the gap is identical in both containers,
+which is what put this in `vaco-parse-mpegvideo` rather than
+`vaco-demux-avi` — a deliberate check, since another agent is active in
+`vaco-demux-avi` this session (confirmed via `git log`/`git status`
+before touching anything, and this fix never does).
+
+Neither field existed anywhere in this codebase before this pass — not on
+`VideoParameters`, not in `vaco-probe`'s field table at all. Added both as
+`Option<bool>` on `VideoParameters` (`crates/signal/vaco-codec-core/src/
+params.rs`), `None` meaning "not this codec," the exact convention
+`nal_length_size` already established for H.264-only fields. Adding the
+fields broke two `VideoParameters` struct literals (`vaco-parse-h264`,
+`vaco-parse-hevc`) that had no `..VideoParameters::default()` spread — the
+identical shape of the `StreamSpec::display_matrix` break earlier this
+session, caught the same way: a full `cargo build --workspace`, not a
+per-crate build, before calling anything done.
+
+Measured directly against real ffmpeg 9.0.1 (`-c:v mpeg4`, three
+resolutions, both AVI and Matroska): `quarter_sample=false` and
+`divx_packed=false` on every sample reachable. `quarter_sample` (VOL
+header's `quarter_pel`, ISO/IEC 14496-2 §6.3.5) is only present in the
+bitstream at all when `video_object_layer_verid != 1`, which every native
+`mpeg4` encode measured here leaves at the implicit `1` — genuinely absent
+from these bitstreams, not merely unread, and parsing it correctly would
+also require the sprite-info fields immediately ahead of it in the VOL
+header, which nothing reachable here exercises or lets be verified
+bit-for-bit. Fixed at the one measured value in `mpeg4.rs`'s
+`refresh_params`, named as a gap the same way this file already named
+Core/Main/Advanced Simple's unmeasured profile numbers. `divx_packed` (a
+DivX/Xvid "packed bitstream" interop hack) is not a VOL-header field at
+all and no reachable encoder produces it; also fixed `false`.
+
+Wired into `vaco-probe` in the same slot and the same `Omit`-when-absent
+shape `is_avc`/`nal_length_size` use for H.264, gated on
+`codec_id == Mpeg4` explicitly so the fields stay absent for every other
+codec even if `VideoParameters` happened to carry a stray value (mirrored
+in a new test, `quarter_sample_and_divx_packed_are_mpeg4_only`, alongside
+the existing H.264-only equivalent).
+
+Verified with a rebuilt vaco-probe against real ffprobe: AVI mpeg4,
+Matroska mpeg4, and DV (confirming the codec gate) all match exactly.
+Commit `7458eff`.
+
+### Measured leverage
+
+Full `vaco-conformance --tier core` re-run after each fix, 709 declared
+cases throughout:
+
+| | agreed | diverged |
+|---|---|---|
+| finding 60's baseline | 262 | 447 |
+| after `chroma_location` + DV `avg_frame_rate`/`time_base` (finding 60) | 266 | 443 |
+| after `mime_codec_string` | 266 | 443 |
+| after `quarter_sample`/`divx_packed` | **274** | **435** |
+
+`mime_codec_string` alone moved no case to agreed (every case it touched
+had other, already-known divergences too — the median-4-bugs-per-case
+shape finding 59 established), but it dropped the field entirely off the
+top-30 ranking, confirmed by direct re-measurement rather than the raw
+count. `quarter_sample`/`divx_packed` produced the largest single
+before/after jump measured in this whole pass — eight cases — because
+they sat immediately next to the now-already-fixed `chroma_location` and
+`mime_codec_string` in the same mpeg4-in-{AVI,Matroska,MP4} cases:
+finding 59's "fixing one bug un-hides the next" pattern, running in
+reverse once enough of a case's real bugs have been cleared.
+
+Twelve cases now fully resolved across finding 60 and this one, from a
+combined 262 agreed at the start of the ranking work to 274 now.
+
+### Not attempted here
+
+The rest of the top-25 (`bit_rate`, `extradata_size`, `start_time`,
+`field_order`, `duration_ts`, `channel_layout`, `nb_frames`, `start_pts`,
+`codec_tag`/`codec_tag_string`, `channels`, ...) is unexamined past a
+first pass confirming `bit_rate` specifically is *not* one root cause —
+a quick per-case breakdown found AVI (missing entirely), ISOBMFF (present
+but a different, unverified value), WAV/AIFF/AU (an apparent mismatch
+that turned out to be this pass's own analysis script conflating
+`FORMAT.bit_rate` with `STREAM.bit_rate` — two different, both-correct
+numbers, not a bug — worth naming so the same mistake is not repeated),
+DV, and several MPEG-TS/PS and `transcode-remux-structural` cases squarely
+in the container-remux cluster another agent owns. Left for whoever picks
+up `bit_rate` next, with that scripting trap named so it costs less time
+twice.
+
+`cargo test`/`cargo clippy --all-targets -D warnings` clean on every
+touched crate; `cargo build --workspace` clean.
