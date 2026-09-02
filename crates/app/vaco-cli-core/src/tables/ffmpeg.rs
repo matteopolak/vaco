@@ -1,224 +1,429 @@
-// GENERATED DATA, hand-checked. See `docs/app/vaco-cli-core.md` for the
-// extraction and probing method that produced it.
-//
-// Names, argument placeholders, scopes and specifier kinds are interface facts
-// about ffmpeg 8.1 (D9 permits reproducing those). The help strings are NOT the
-// reference's; they were written for Vaco, because D9 forbids reproducing help
-// text. `-h` output therefore cannot be byte-identical, by design.
-//
-// `-i` does not appear in `ffmpeg -h full` at all — it is hidden from the
-// grouped help — so it is appended by hand at the end.
-static FFMPEG_OPTIONS: &[OptDesc] = &[
+/// The `vaco` (ffmpeg-equivalent) argv-flag table, as a `CliOptionTable`
+/// derive input rather than a hand-written `&[OptDesc]` literal.
+///
+/// Names, argument placeholders, scopes and specifier kinds are interface
+/// facts about ffmpeg 8.1 (D9 permits reproducing those). The help strings
+/// are NOT the reference's; they were written for Vaco, because D9 forbids
+/// reproducing help text. `-h` output therefore cannot be byte-identical,
+/// by design.
+///
+/// An alias variant (`alias_of = "..."`) inherits whatever it does not
+/// override from its target -- see the derive's own doc for why, and for
+/// the one case (`B`, aliasing itself with `spec = "v"`) where a variant
+/// names itself: that is how a bare `-b` means `-b:v`, per
+/// `ParsedOption::resolved`.
+// Never constructed as a value -- purely a `CliOptionTable` derive input,
+// read for its variant attributes at compile time. The real runtime data
+// is `OPTIONS`, generated below.
+#[allow(dead_code)]
+#[derive(vaco_opts::CliOptionTable)]
+pub(crate) enum FfmpegOptions {
+    #[cli(name = "L", flags(EXIT, GLOBAL), kind = None, help = "print the licence")]
+    L,
+    #[cli(name = "license", alias_of = "L")]
+    License,
+    #[cli(name = "h", argname = "topic", flags(EXIT, GLOBAL, HAS_ARG, OPTIONAL_ARG), kind = Custom, help = "print help on a topic")]
+    H,
+    #[cli(name = "version", flags(EXIT, GLOBAL), kind = None, help = "print the version")]
+    Version,
+    #[cli(name = "muxers", flags(EXIT, GLOBAL), kind = None, help = "list muxers")]
+    Muxers,
+    #[cli(name = "demuxers", flags(EXIT, GLOBAL), kind = None, help = "list demuxers")]
+    Demuxers,
+    #[cli(name = "devices", flags(EXIT, GLOBAL), kind = None, help = "list devices")]
+    Devices,
+    #[cli(name = "decoders", flags(EXIT, GLOBAL), kind = None, help = "list decoders")]
+    Decoders,
+    #[cli(name = "encoders", flags(EXIT, GLOBAL), kind = None, help = "list encoders")]
+    Encoders,
+    #[cli(name = "filters", flags(EXIT, GLOBAL), kind = None, help = "list filters")]
+    Filters,
+    #[cli(name = "pix_fmts", flags(EXIT, GLOBAL), kind = None, help = "list pixel formats")]
+    PixFmts,
+    #[cli(name = "layouts", flags(EXIT, GLOBAL), kind = None, help = "list channel layouts")]
+    Layouts,
+    #[cli(name = "sample_fmts", flags(EXIT, GLOBAL), kind = None, help = "list sample formats")]
+    SampleFmts,
+    #[cli(name = "?", alias_of = "h", flags(EXIT, GLOBAL, EXPERT, HAS_ARG, OPTIONAL_ARG))]
+    Question,
+    #[cli(name = "help", alias_of = "h", flags(EXIT, GLOBAL, EXPERT, HAS_ARG, OPTIONAL_ARG))]
+    Help,
+    #[cli(name = "-help", alias_of = "h", flags(EXIT, GLOBAL, EXPERT, HAS_ARG, OPTIONAL_ARG))]
+    DashHelp,
+    #[cli(name = "buildconf", flags(EXIT, GLOBAL, EXPERT), kind = None, help = "print the build configuration")]
+    Buildconf,
+    #[cli(name = "formats", flags(EXIT, GLOBAL, EXPERT), kind = None, help = "list container formats")]
+    Formats,
+    #[cli(name = "codecs", flags(EXIT, GLOBAL, EXPERT), kind = None, help = "list codecs")]
+    Codecs,
+    #[cli(name = "bsfs", flags(EXIT, GLOBAL, EXPERT), kind = None, help = "list bitstream filters")]
+    Bsfs,
+    #[cli(name = "protocols", flags(EXIT, GLOBAL, EXPERT), kind = None, help = "list protocols")]
+    Protocols,
+    #[cli(name = "dispositions", flags(EXIT, GLOBAL, EXPERT), kind = None, help = "list stream dispositions")]
+    Dispositions,
+    #[cli(name = "colors", flags(EXIT, GLOBAL, EXPERT), kind = None, help = "list named colours")]
+    Colors,
+    #[cli(name = "sources", argname = "device", flags(EXIT, GLOBAL, EXPERT, HAS_ARG, OPTIONAL_ARG), kind = Custom, help = "list a device's input sources")]
+    Sources,
+    #[cli(name = "sinks", argname = "device", flags(EXIT, GLOBAL, EXPERT, HAS_ARG, OPTIONAL_ARG), kind = Custom, help = "list a device's output sinks")]
+    Sinks,
+    #[cli(name = "hwaccels", flags(EXIT, GLOBAL, EXPERT), kind = None, help = "list hardware acceleration methods")]
+    Hwaccels,
+    #[cli(name = "v", alias_of = "loglevel", flags(HAS_ARG, GLOBAL))]
+    V,
+    #[cli(name = "y", flags(GLOBAL), kind = None, help = "overwrite output files without asking")]
+    Y,
+    #[cli(name = "n", flags(GLOBAL), kind = None, help = "refuse to overwrite output files")]
+    N,
+    #[cli(name = "print_graphs", flags(GLOBAL), kind = None, help = "dump the execution graph to stderr")]
+    PrintGraphs,
+    #[cli(name = "print_graphs_file", argname = "filename", flags(HAS_ARG, GLOBAL), kind = Str, help = "write the execution graph to a file")]
+    PrintGraphsFile,
+    #[cli(name = "print_graphs_format", argname = "format", flags(HAS_ARG, GLOBAL), kind = Str, help = "choose the execution graph's writer")]
+    PrintGraphsFormat,
+    #[cli(name = "stats", flags(GLOBAL), kind = None, help = "print a progress report while running")]
+    Stats,
+    #[cli(name = "loglevel", argname = "loglevel", flags(HAS_ARG, GLOBAL, EXPERT), kind = Custom, help = "set the log level")]
+    Loglevel,
+    #[cli(name = "report", flags(GLOBAL, EXPERT), kind = None, help = "write a debug log file for this run")]
+    Report,
+    #[cli(name = "max_alloc", argname = "bytes", flags(HAS_ARG, GLOBAL, EXPERT), kind = Custom, help = "cap a single allocation")]
+    MaxAlloc,
+    #[cli(name = "cpuflags", argname = "flags", flags(HAS_ARG, GLOBAL, EXPERT), kind = Expr, help = "override detected CPU features")]
+    Cpuflags,
+    #[cli(name = "cpucount", argname = "count", flags(HAS_ARG, GLOBAL, EXPERT), kind = Expr, help = "override the detected CPU count")]
+    Cpucount,
+    #[cli(name = "hide_banner", argname = "hide_banner", flags(GLOBAL, EXPERT), kind = None, help = "suppress the version banner")]
+    HideBanner,
+    #[cli(name = "ignore_unknown", flags(GLOBAL, EXPERT), kind = None, help = "drop streams of unknown type")]
+    IgnoreUnknown,
+    #[cli(name = "copy_unknown", flags(GLOBAL, EXPERT), kind = None, help = "copy streams of unknown type")]
+    CopyUnknown,
+    #[cli(name = "recast_media", flags(GLOBAL, EXPERT), kind = None, help = "allow forcing a decoder of another media type")]
+    RecastMedia,
+    #[cli(name = "benchmark", flags(GLOBAL, EXPERT), kind = None, help = "report timing for the whole run")]
+    Benchmark,
+    #[cli(name = "benchmark_all", flags(GLOBAL, EXPERT), kind = None, help = "report timing for every task")]
+    BenchmarkAll,
+    #[cli(name = "progress", argname = "url", flags(HAS_ARG, GLOBAL, EXPERT), kind = Str, help = "write machine-readable progress to a URL")]
+    Progress,
+    #[cli(name = "stdin", flags(GLOBAL, EXPERT), kind = None, help = "enable or disable standard-input interaction")]
+    Stdin,
+    #[cli(name = "timelimit", argname = "limit", flags(HAS_ARG, GLOBAL, EXPERT), kind = Int, help = "abort after this much CPU time")]
+    Timelimit,
+    #[cli(name = "dump", flags(GLOBAL, EXPERT), kind = None, help = "dump every input packet")]
+    Dump,
+    #[cli(name = "hex", flags(GLOBAL, EXPERT), kind = None, help = "include payloads in packet dumps")]
+    Hex,
+    #[cli(name = "frame_drop_threshold", flags(HAS_ARG, GLOBAL, EXPERT), kind = Float, help = "threshold for dropping a late frame")]
+    FrameDropThreshold,
+    #[cli(name = "copyts", flags(GLOBAL, EXPERT), kind = None, help = "do not rebase input timestamps")]
+    Copyts,
+    #[cli(name = "start_at_zero", flags(GLOBAL, EXPERT), kind = None, help = "shift copied timestamps to start at zero")]
+    StartAtZero,
+    #[cli(name = "copytb", argname = "mode", flags(HAS_ARG, GLOBAL, EXPERT), kind = Int, help = "choose the time base when stream copying")]
+    Copytb,
+    #[cli(name = "dts_delta_threshold", argname = "threshold", flags(HAS_ARG, GLOBAL, EXPERT), kind = Float, help = "discontinuity threshold on decode timestamps")]
+    DtsDeltaThreshold,
+    #[cli(name = "dts_error_threshold", argname = "threshold", flags(HAS_ARG, GLOBAL, EXPERT), kind = Float, help = "error threshold on decode timestamps")]
+    DtsErrorThreshold,
+    #[cli(name = "xerror", argname = "error", flags(GLOBAL, EXPERT), kind = None, help = "exit on the first error")]
+    Xerror,
+    #[cli(name = "abort_on", argname = "flags", flags(HAS_ARG, GLOBAL, EXPERT), kind = Expr, help = "conditions that abort the run")]
+    AbortOn,
+    /// An `AVCodecContext` option in the reference, not an entry in
+    /// `ffmpeg.c`'s own table, so it does not appear in `-h full` and was
+    /// never extracted from it. Vaco has no per-codec option store yet, so
+    /// this is global: `-threads N` before or after `-i` both mean "N
+    /// threads for every codec in this run". Per-stream (`-threads:v:0`)
+    /// is not implemented. Default `min(available_parallelism, 4)`, not
+    /// the reference's "auto" (`0`) -- see `crate::cli::default_thread_count`.
+    #[cli(name = "threads", argname = "count", flags(HAS_ARG, GLOBAL), kind = Int, help = "decoding threads per codec (default: min(cores, 4); 1 = single-threaded)")]
+    Threads,
+    #[cli(name = "filter_threads", flags(HAS_ARG, GLOBAL, EXPERT), kind = Str, help = "threads for simple filter graphs")]
+    FilterThreads,
+    #[cli(name = "filter_buffered_frames", flags(HAS_ARG, GLOBAL, EXPERT), kind = Int, help = "frames a filter graph may buffer")]
+    FilterBufferedFrames,
+    #[cli(name = "filter_complex", argname = "graph_description", flags(HAS_ARG, GLOBAL, EXPERT), kind = Custom, help = "define a complex filter graph")]
+    FilterComplex,
+    #[cli(name = "filter_complex_threads", flags(HAS_ARG, GLOBAL, EXPERT), kind = Int, help = "threads for complex filter graphs")]
+    FilterComplexThreads,
+    #[cli(name = "lavfi", alias_of = "filter_complex")]
+    Lavfi,
+    #[cli(name = "filter_complex_script", argname = "filename", flags(HAS_ARG, GLOBAL, EXPERT), kind = Custom, help = "read a complex filter graph from a file")]
+    FilterComplexScript,
+    #[cli(name = "auto_conversion_filters", flags(GLOBAL, EXPERT), kind = None, help = "insert format conversion filters automatically")]
+    AutoConversionFilters,
+    #[cli(name = "stats_period", argname = "time", flags(HAS_ARG, GLOBAL, EXPERT), kind = Custom, help = "how often to refresh progress output")]
+    StatsPeriod,
+    #[cli(name = "debug_ts", flags(GLOBAL, EXPERT), kind = None, help = "trace timestamps")]
+    DebugTs,
+    #[cli(name = "max_error_rate", argname = "maximum error rate", flags(HAS_ARG, GLOBAL, EXPERT), kind = Float, help = "decoding error ratio that fails the run")]
+    MaxErrorRate,
+    #[cli(name = "vstats", flags(GLOBAL, EXPERT), kind = None, help = "write video coding statistics")]
+    Vstats,
+    #[cli(name = "vstats_file", argname = "file", flags(HAS_ARG, GLOBAL, EXPERT), kind = Str, help = "file for video coding statistics")]
+    VstatsFile,
+    #[cli(name = "vstats_version", flags(HAS_ARG, GLOBAL, EXPERT), kind = Int, help = "video statistics format version")]
+    VstatsVersion,
+    #[cli(name = "sdp_file", argname = "file", flags(HAS_ARG, GLOBAL, EXPERT), kind = Custom, help = "write the SDP description to a file")]
+    SdpFile,
+    #[cli(name = "init_hw_device", argname = "args", flags(HAS_ARG, GLOBAL, EXPERT), kind = Custom, help = "create a hardware device")]
+    InitHwDevice,
+    #[cli(name = "filter_hw_device", argname = "device", flags(HAS_ARG, GLOBAL, EXPERT), kind = Custom, help = "hardware device for filtering")]
+    FilterHwDevice,
+    #[cli(name = "adrift_threshold", argname = "threshold", flags(HAS_ARG, GLOBAL, EXPERT), kind = Str, help = "deprecated, has no effect")]
+    AdriftThreshold,
+    #[cli(name = "qphist", flags(GLOBAL, EXPERT), kind = None, help = "deprecated, has no effect")]
+    Qphist,
+    #[cli(name = "vsync", flags(HAS_ARG, GLOBAL, EXPERT), kind = Float, help = "deprecated, use fps_mode")]
+    Vsync,
+    #[cli(name = "f", argname = "fmt", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT), kind = Str, help = "force the container format")]
+    F,
+    #[cli(name = "t", argname = "duration", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT), kind = Duration, help = "stop after this duration")]
+    T,
+    #[cli(name = "to", argname = "time_stop", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT), kind = Duration, help = "stop at this position")]
+    To,
+    #[cli(name = "ss", argname = "time_off", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT), kind = Duration, help = "start at this position")]
+    Ss,
+    #[cli(name = "bitexact", flags(PER_FILE, INPUT, OUTPUT, EXPERT), kind = None, help = "restrict output to bit-exact operations")]
+    Bitexact,
+    #[cli(name = "thread_queue_size", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, EXPERT), kind = Int, help = "packets the demuxer may queue")]
+    ThreadQueueSize,
+    #[cli(name = "sseof", argname = "time_off", flags(HAS_ARG, PER_FILE, INPUT, EXPERT), kind = Duration, help = "start at this position relative to the end")]
+    Sseof,
+    #[cli(name = "seek_timestamp", flags(HAS_ARG, PER_FILE, INPUT, EXPERT), kind = Int, help = "seek by timestamp rather than by position")]
+    SeekTimestamp,
+    #[cli(name = "accurate_seek", flags(PER_FILE, INPUT, EXPERT), kind = None, help = "decode up to the exact seek position")]
+    AccurateSeek,
+    #[cli(name = "isync", argname = "sync ref", flags(HAS_ARG, PER_FILE, INPUT, EXPERT), kind = Int, help = "input whose clock this input follows")]
+    Isync,
+    #[cli(name = "itsoffset", argname = "time_off", flags(HAS_ARG, PER_FILE, INPUT, EXPERT), kind = Duration, help = "shift this input's timestamps")]
+    Itsoffset,
+    #[cli(name = "re", flags(PER_FILE, INPUT, EXPERT), kind = None, help = "read the input at its native rate")]
+    Re,
+    #[cli(name = "readrate", argname = "speed", flags(HAS_ARG, PER_FILE, INPUT, EXPERT), kind = Float, help = "read the input at this multiple of native rate")]
+    Readrate,
+    #[cli(name = "readrate_initial_burst", argname = "seconds", flags(HAS_ARG, PER_FILE, INPUT, EXPERT), kind = Float, help = "read this much before rate limiting starts")]
+    ReadrateInitialBurst,
+    #[cli(name = "readrate_catchup", argname = "speed", flags(HAS_ARG, PER_FILE, INPUT, EXPERT), kind = Float, help = "rate used to catch up after falling behind")]
+    ReadrateCatchup,
+    #[cli(name = "dump_attachment", argname = "filename", flags(HAS_ARG, PER_FILE, INPUT, TAKES_SPEC, EXPERT), kind = Str, help = "write an attachment to a file")]
+    DumpAttachment,
+    #[cli(name = "stream_loop", argname = "loop count", flags(HAS_ARG, PER_FILE, INPUT, EXPERT), kind = Int, help = "repeat the input this many times")]
+    StreamLoop,
+    #[cli(name = "find_stream_info", flags(PER_FILE, INPUT, EXPERT), kind = None, help = "probe the input before opening it")]
+    FindStreamInfo,
+    #[cli(name = "metadata", argname = "key=value", flags(HAS_ARG, PER_FILE, OUTPUT, TAKES_SPEC), kind = Custom, help = "set a metadata entry")]
+    Metadata,
+    #[cli(name = "map", argname = "[-]input_file_id[:stream_specifier][,sync_file_id[:stream_specifier]]", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Custom, help = "select an input stream for the output")]
+    Map,
+    #[cli(name = "map_metadata", argname = "outfile[,metadata]:infile[,metadata]", flags(HAS_ARG, PER_FILE, OUTPUT, TAKES_SPEC, EXPERT), kind = Custom, help = "copy metadata from an input")]
+    MapMetadata,
+    #[cli(name = "map_chapters", argname = "input_file_index", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Int, help = "copy chapters from an input")]
+    MapChapters,
+    #[cli(name = "fs", argname = "limit_size", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Int64, help = "stop once the output reaches this size")]
+    Fs,
+    #[cli(name = "timestamp", argname = "time", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Custom, help = "set the recording timestamp")]
+    Timestamp,
+    #[cli(name = "program", argname = "title=string:st=number...", flags(HAS_ARG, PER_FILE, OUTPUT, TAKES_SPEC, EXPERT), kind = Custom, help = "create a program from the given streams")]
+    Program,
+    #[cli(name = "stream_group", argname = "id=number:st=number...", flags(HAS_ARG, PER_FILE, OUTPUT, TAKES_SPEC, EXPERT), kind = Custom, help = "create a stream group from the given streams")]
+    StreamGroup,
+    #[cli(name = "dframes", alias_of = "frames", spec = "d", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), help = "stop after this many data frames")]
+    Dframes,
+    #[cli(name = "target", argname = "type", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Custom, help = "apply a preset for a standard target")]
+    Target,
+    #[cli(name = "shortest", flags(PER_FILE, OUTPUT, EXPERT), kind = None, help = "stop when the shortest input ends")]
+    Shortest,
+    #[cli(name = "shortest_buf_duration", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Float, help = "buffering allowed while waiting for the shortest input")]
+    ShortestBufDuration,
+    #[cli(name = "qscale", alias_of = "q", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT))]
+    Qscale,
+    #[cli(name = "profile", argname = "profile", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Expr, help = "select the encoder profile")]
+    Profile,
+    #[cli(name = "attach", argname = "filename", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Str, help = "attach a file to the output")]
+    Attach,
+    #[cli(name = "muxdelay", argname = "seconds", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Float, help = "maximum demux-to-decode delay")]
+    Muxdelay,
+    #[cli(name = "muxpreload", argname = "seconds", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Float, help = "initial demux-to-decode delay")]
+    Muxpreload,
+    #[cli(name = "fpre", argname = "filename", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT), kind = Custom, help = "load options from a preset file")]
+    Fpre,
+    #[cli(name = "c", argname = "codec", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM), kind = Str, help = "select the codec, or copy to remux")]
+    C,
+    #[cli(name = "filter", argname = "filter_graph", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM), kind = Custom, help = "apply a filter graph")]
+    Filter,
+    #[cli(name = "codec", alias_of = "c", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, EXPERT))]
+    Codec,
+    #[cli(name = "pre", argname = "preset", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Str, help = "load a named preset")]
+    Pre,
+    #[cli(name = "itsscale", argname = "scale", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT), kind = Float, help = "scale this stream's timestamps")]
+    Itsscale,
+    #[cli(name = "copyinkf", flags(PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = None, help = "copy leading non-keyframes")]
+    Copyinkf,
+    #[cli(name = "copypriorss", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Int, help = "keep frames that precede the start time")]
+    Copypriorss,
+    #[cli(name = "frames", argname = "number", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Int64, help = "stop after this many frames")]
+    Frames,
+    #[cli(name = "tag", argname = "fourcc/tag", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, EXPERT), kind = Str, help = "force the codec tag")]
+    Tag,
+    #[cli(name = "q", argname = "q", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Float, help = "use a fixed quality scale")]
+    Q,
+    #[cli(name = "filter_script", argname = "filename", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Custom, help = "read a filter graph from a file")]
+    FilterScript,
+    #[cli(name = "reinit_filter", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT), kind = Int, help = "rebuild the filter graph when input parameters change")]
+    ReinitFilter,
+    #[cli(name = "drop_changed", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT), kind = Int, help = "drop frames instead of rebuilding the filter graph")]
+    DropChanged,
+    #[cli(name = "discard", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT), kind = Expr, help = "discard packets matching a condition")]
+    Discard,
+    #[cli(name = "disposition", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Expr, help = "set the output stream's disposition")]
+    Disposition,
+    #[cli(name = "bits_per_raw_sample", argname = "number", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Int, help = "declare the sample depth")]
+    BitsPerRawSample,
+    #[cli(name = "stats_enc_pre", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Str, help = "write encoder statistics before encoding")]
+    StatsEncPre,
+    #[cli(name = "stats_enc_post", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Str, help = "write encoder statistics after encoding")]
+    StatsEncPost,
+    #[cli(name = "stats_mux_pre", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Str, help = "write muxer statistics before muxing")]
+    StatsMuxPre,
+    #[cli(name = "stats_enc_pre_fmt", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Str, help = "format of the pre-encode statistics")]
+    StatsEncPreFmt,
+    #[cli(name = "stats_enc_post_fmt", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Str, help = "format of the post-encode statistics")]
+    StatsEncPostFmt,
+    #[cli(name = "stats_mux_pre_fmt", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Str, help = "format of the pre-mux statistics")]
+    StatsMuxPreFmt,
+    #[cli(name = "time_base", argname = "ratio", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Expr, help = "suggest the output stream's time base")]
+    TimeBase,
+    #[cli(name = "enc_time_base", argname = "ratio", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Str, help = "set the encoder's time base")]
+    EncTimeBase,
+    #[cli(name = "bsf", argname = "bitstream_filters", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, EXPERT), kind = Custom, help = "bitstream filters to apply")]
+    Bsf,
+    #[cli(name = "max_muxing_queue_size", argname = "packets", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Int, help = "packets buffered while streams initialise")]
+    MaxMuxingQueueSize,
+    #[cli(name = "muxing_queue_data_threshold", argname = "bytes", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT), kind = Int, help = "bytes buffered before the queue limit applies")]
+    MuxingQueueDataThreshold,
+    #[cli(name = "r", argname = "rate", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, VIDEO), kind = Rate, help = "set the frame rate")]
+    R,
+    #[cli(name = "s", argname = "size", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, VIDEO), kind = Size, help = "set frame size")]
+    S,
+    #[cli(name = "aspect", argname = "aspect", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, VIDEO), kind = Expr, help = "set the display aspect ratio")]
+    Aspect,
+    #[cli(name = "vn", flags(PER_FILE, INPUT, OUTPUT, VIDEO), kind = None, help = "drop video streams")]
+    Vn,
+    #[cli(name = "vcodec", alias_of = "c", spec = "v", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, VIDEO), help = "select the video codec")]
+    Vcodec,
+    #[cli(name = "vf", alias_of = "filter", spec = "v", flags(HAS_ARG, PER_FILE, OUTPUT, VIDEO), help = "apply a video filter graph")]
+    Vf,
+    #[cli(name = "b", alias_of = "b", spec = "v", argname = "bitrate", flags(HAS_ARG, PER_FILE, OUTPUT, VIDEO), kind = Expr, help = "set the video bitrate")]
+    B,
+    #[cli(name = "vframes", alias_of = "frames", spec = "v", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT, VIDEO), help = "stop after this many video frames")]
+    Vframes,
+    #[cli(name = "fpsmax", argname = "rate", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Custom, help = "cap the output frame rate")]
+    Fpsmax,
+    #[cli(name = "pix_fmt", argname = "format", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "set the pixel format")]
+    PixFmt,
+    #[cli(name = "display_rotation", argname = "angle", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT, VIDEO), kind = Float, help = "set the display rotation")]
+    DisplayRotation,
+    #[cli(name = "display_hflip", flags(PER_FILE, INPUT, PER_STREAM, EXPERT, VIDEO), kind = None, help = "flip the display horizontally")]
+    DisplayHflip,
+    #[cli(name = "display_vflip", flags(PER_FILE, INPUT, PER_STREAM, EXPERT, VIDEO), kind = None, help = "flip the display vertically")]
+    DisplayVflip,
+    #[cli(name = "rc_override", argname = "override", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "rate control override for an interval")]
+    RcOverride,
+    #[cli(name = "timecode", argname = "hh:mm:ss[:;.]ff", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT, VIDEO), kind = Str, help = "set the starting timecode")]
+    Timecode,
+    #[cli(name = "pass", argname = "n", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Int, help = "select the encoding pass")]
+    Pass,
+    #[cli(name = "passlogfile", argname = "prefix", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "prefix for the two-pass log")]
+    Passlogfile,
+    #[cli(name = "intra_matrix", argname = "matrix", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "intra quantiser matrix")]
+    IntraMatrix,
+    #[cli(name = "inter_matrix", argname = "matrix", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "inter quantiser matrix")]
+    InterMatrix,
+    #[cli(name = "chroma_intra_matrix", argname = "matrix", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "chroma intra quantiser matrix")]
+    ChromaIntraMatrix,
+    #[cli(name = "vtag", alias_of = "tag", spec = "v", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, EXPERT, VIDEO), help = "force the video codec tag")]
+    Vtag,
+    #[cli(name = "fps_mode", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "how frame rate is reconciled")]
+    FpsMode,
+    #[cli(name = "force_fps", flags(PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = None, help = "do not negotiate the frame rate")]
+    ForceFps,
+    #[cli(name = "streamid", argname = "streamIndex:value", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT, VIDEO), kind = Custom, help = "set an output stream's id")]
+    Streamid,
+    #[cli(name = "force_key_frames", argname = "timestamps", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "force key frames at these positions")]
+    ForceKeyFrames,
+    #[cli(name = "hwaccel", argname = "hwaccel name", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT, VIDEO), kind = Custom, help = "use hardware-accelerated decoding")]
+    Hwaccel,
+    #[cli(name = "hwaccel_device", argname = "devicename", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "device for hardware decoding")]
+    HwaccelDevice,
+    #[cli(name = "hwaccel_output_format", argname = "format", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT, VIDEO), kind = Str, help = "pixel format produced by hardware decoding")]
+    HwaccelOutputFormat,
+    #[cli(name = "autorotate", flags(PER_FILE, INPUT, PER_STREAM, EXPERT, VIDEO), kind = None, help = "apply the input's rotation metadata")]
+    Autorotate,
+    #[cli(name = "autoscale", flags(PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = None, help = "scale automatically at the end of the filter graph")]
+    Autoscale,
+    #[cli(name = "apply_cropping", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT, VIDEO), kind = Expr, help = "apply the input's cropping metadata")]
+    ApplyCropping,
+    #[cli(name = "fix_sub_duration_heartbeat", flags(PER_FILE, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = None, help = "use this stream to split open subtitles")]
+    FixSubDurationHeartbeat,
+    #[cli(name = "vpre", alias_of = "pre", spec = "v", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT, VIDEO), kind = Custom, help = "load a video preset")]
+    Vpre,
+    #[cli(name = "top", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, EXPERT, VIDEO), kind = Int, help = "deprecated, use the setfield filter")]
+    Top,
+    #[cli(name = "aq", alias_of = "q", spec = "a", argname = "quality", flags(HAS_ARG, PER_FILE, OUTPUT, AUDIO), help = "set the audio quality")]
+    Aq,
+    #[cli(name = "ar", argname = "rate", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, AUDIO), kind = Int, help = "set the sample rate")]
+    Ar,
+    #[cli(name = "ac", argname = "channels", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, AUDIO), kind = Int, help = "set the channel count")]
+    Ac,
+    #[cli(name = "an", flags(PER_FILE, INPUT, OUTPUT, AUDIO), kind = None, help = "drop audio streams")]
+    An,
+    #[cli(name = "acodec", alias_of = "c", spec = "a", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, AUDIO), help = "select the audio codec")]
+    Acodec,
+    #[cli(name = "ab", alias_of = "b", spec = "a", flags(HAS_ARG, PER_FILE, OUTPUT, AUDIO), help = "set the audio bitrate")]
+    Ab,
+    #[cli(name = "af", alias_of = "filter", spec = "a", flags(HAS_ARG, PER_FILE, OUTPUT, AUDIO), help = "apply an audio filter graph")]
+    Af,
+    #[cli(name = "aframes", alias_of = "frames", spec = "a", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT, AUDIO), help = "stop after this many audio frames")]
+    Aframes,
+    #[cli(name = "apad", flags(HAS_ARG, PER_FILE, OUTPUT, PER_STREAM, EXPERT, AUDIO), kind = Str, help = "pad the audio with silence")]
+    Apad,
+    #[cli(name = "atag", alias_of = "tag", spec = "a", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT, AUDIO), help = "force the audio codec tag")]
+    Atag,
+    #[cli(name = "sample_fmt", argname = "format", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, EXPERT, AUDIO), kind = Str, help = "set the sample format")]
+    SampleFmt,
+    #[cli(name = "channel_layout", argname = "layout", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, EXPERT, AUDIO), kind = Str, help = "set the channel layout")]
+    ChannelLayout,
+    #[cli(name = "ch_layout", argname = "layout", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, PER_STREAM, EXPERT, AUDIO), kind = Str, help = "set the channel layout")]
+    ChLayout,
+    #[cli(name = "guess_layout_max", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT, AUDIO), kind = Int, help = "channel count up to which the layout is guessed")]
+    GuessLayoutMax,
+    #[cli(name = "apre", alias_of = "pre", spec = "a", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT, AUDIO), kind = Custom, help = "load an audio preset")]
+    Apre,
+    #[cli(name = "sn", flags(PER_FILE, INPUT, OUTPUT, SUBTITLE), kind = None, help = "drop subtitle streams")]
+    Sn,
+    #[cli(name = "scodec", alias_of = "c", spec = "s", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, SUBTITLE), help = "select the subtitle codec")]
+    Scodec,
+    #[cli(name = "stag", alias_of = "tag", spec = "s", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT, SUBTITLE), help = "force the subtitle codec tag")]
+    Stag,
+    #[cli(name = "fix_sub_duration", flags(PER_FILE, INPUT, PER_STREAM, EXPERT, SUBTITLE), kind = None, help = "derive subtitle durations from the next event")]
+    FixSubDuration,
+    #[cli(name = "canvas_size", argname = "size", flags(HAS_ARG, PER_FILE, INPUT, PER_STREAM, EXPERT, SUBTITLE), kind = Str, help = "set the subtitle canvas size")]
+    CanvasSize,
+    #[cli(name = "spre", alias_of = "pre", spec = "s", flags(HAS_ARG, PER_FILE, OUTPUT, EXPERT, SUBTITLE), kind = Custom, help = "load a subtitle preset")]
+    Spre,
+    #[cli(name = "dcodec", alias_of = "c", spec = "d", flags(HAS_ARG, PER_FILE, INPUT, OUTPUT, EXPERT, DATA), help = "select the data codec")]
+    Dcodec,
+    #[cli(name = "dn", flags(PER_FILE, INPUT, OUTPUT, EXPERT, DATA), kind = None, help = "drop data streams")]
+    Dn,
+    /// Does not appear in `ffmpeg -h full` at all -- hidden from the
+    /// grouped help -- so it is declared here by hand rather than lifted
+    /// from an extraction.
+    #[cli(name = "i", argname = "input_file", flags(HAS_ARG, PER_FILE, INPUT, OPENS_INPUT), kind = Str, help = "read from this input URL")]
+    I,
+}
 
-    o("L", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "print the licence"),
-    alias("license", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "print the licence", "L", ""),
-    o("h", Some("topic"), bit::EXIT | bit::GLOBAL | bit::HAS_ARG | bit::OPTIONAL_ARG, ValueKind::Custom, "print help on a topic"),
-    o("version", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "print the version"),
-    o("muxers", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "list muxers"),
-    o("demuxers", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "list demuxers"),
-    o("devices", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "list devices"),
-    o("decoders", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "list decoders"),
-    o("encoders", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "list encoders"),
-    o("filters", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "list filters"),
-    o("pix_fmts", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "list pixel formats"),
-    o("layouts", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "list channel layouts"),
-    o("sample_fmts", None, bit::EXIT | bit::GLOBAL, ValueKind::None, "list sample formats"),
-    alias("?", Some("topic"), bit::EXIT | bit::GLOBAL | bit::EXPERT | bit::HAS_ARG | bit::OPTIONAL_ARG, ValueKind::Custom, "print help on a topic", "h", ""),
-    alias("help", Some("topic"), bit::EXIT | bit::GLOBAL | bit::EXPERT | bit::HAS_ARG | bit::OPTIONAL_ARG, ValueKind::Custom, "print help on a topic", "h", ""),
-    alias("-help", Some("topic"), bit::EXIT | bit::GLOBAL | bit::EXPERT | bit::HAS_ARG | bit::OPTIONAL_ARG, ValueKind::Custom, "print help on a topic", "h", ""),
-    o("buildconf", None, bit::EXIT | bit::GLOBAL | bit::EXPERT, ValueKind::None, "print the build configuration"),
-    o("formats", None, bit::EXIT | bit::GLOBAL | bit::EXPERT, ValueKind::None, "list container formats"),
-    o("codecs", None, bit::EXIT | bit::GLOBAL | bit::EXPERT, ValueKind::None, "list codecs"),
-    o("bsfs", None, bit::EXIT | bit::GLOBAL | bit::EXPERT, ValueKind::None, "list bitstream filters"),
-    o("protocols", None, bit::EXIT | bit::GLOBAL | bit::EXPERT, ValueKind::None, "list protocols"),
-    o("dispositions", None, bit::EXIT | bit::GLOBAL | bit::EXPERT, ValueKind::None, "list stream dispositions"),
-    o("colors", None, bit::EXIT | bit::GLOBAL | bit::EXPERT, ValueKind::None, "list named colours"),
-    o("sources", Some("device"), bit::EXIT | bit::GLOBAL | bit::EXPERT | bit::HAS_ARG | bit::OPTIONAL_ARG, ValueKind::Custom, "list a device's input sources"),
-    o("sinks", Some("device"), bit::EXIT | bit::GLOBAL | bit::EXPERT | bit::HAS_ARG | bit::OPTIONAL_ARG, ValueKind::Custom, "list a device's output sinks"),
-    o("hwaccels", None, bit::EXIT | bit::GLOBAL | bit::EXPERT, ValueKind::None, "list hardware acceleration methods"),
-    alias("v", Some("loglevel"), bit::HAS_ARG | bit::GLOBAL, ValueKind::Custom, "set the log level", "loglevel", ""),
-    o("y", None, bit::GLOBAL, ValueKind::None, "overwrite output files without asking"),
-    o("n", None, bit::GLOBAL, ValueKind::None, "refuse to overwrite output files"),
-    o("print_graphs", None, bit::GLOBAL, ValueKind::None, "dump the execution graph to stderr"),
-    o("print_graphs_file", Some("filename"), bit::HAS_ARG | bit::GLOBAL, ValueKind::Str, "write the execution graph to a file"),
-    o("print_graphs_format", Some("format"), bit::HAS_ARG | bit::GLOBAL, ValueKind::Str, "choose the execution graph's writer"),
-    o("stats", None, bit::GLOBAL, ValueKind::None, "print a progress report while running"),
-    o("loglevel", Some("loglevel"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "set the log level"),
-    o("report", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "write a debug log file for this run"),
-    o("max_alloc", Some("bytes"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "cap a single allocation"),
-    o("cpuflags", Some("flags"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Expr, "override detected CPU features"),
-    o("cpucount", Some("count"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Expr, "override the detected CPU count"),
-    o("hide_banner", Some("hide_banner"), bit::GLOBAL | bit::EXPERT, ValueKind::None, "suppress the version banner"),
-    o("ignore_unknown", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "drop streams of unknown type"),
-    o("copy_unknown", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "copy streams of unknown type"),
-    o("recast_media", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "allow forcing a decoder of another media type"),
-    o("benchmark", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "report timing for the whole run"),
-    o("benchmark_all", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "report timing for every task"),
-    o("progress", Some("url"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Str, "write machine-readable progress to a URL"),
-    o("stdin", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "enable or disable standard-input interaction"),
-    o("timelimit", Some("limit"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Int, "abort after this much CPU time"),
-    o("dump", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "dump every input packet"),
-    o("hex", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "include payloads in packet dumps"),
-    o("frame_drop_threshold", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Float, "threshold for dropping a late frame"),
-    o("copyts", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "do not rebase input timestamps"),
-    o("start_at_zero", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "shift copied timestamps to start at zero"),
-    o("copytb", Some("mode"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Int, "choose the time base when stream copying"),
-    o("dts_delta_threshold", Some("threshold"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Float, "discontinuity threshold on decode timestamps"),
-    o("dts_error_threshold", Some("threshold"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Float, "error threshold on decode timestamps"),
-    o("xerror", Some("error"), bit::GLOBAL | bit::EXPERT, ValueKind::None, "exit on the first error"),
-    o("abort_on", Some("flags"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Expr, "conditions that abort the run"),
-    // `-threads` is an `AVCodecContext` option in the reference, not an entry
-    // in `ffmpeg.c`'s own table, so it does not appear in `-h full` and was
-    // never extracted. Vaco has no per-codec option store yet, so it is a
-    // global here: `-threads N` before or after `-i` both mean "N threads for
-    // every codec in this run", which is how the reference behaves for the
-    // overwhelmingly common case of stating it once. Per-stream
-    // (`-threads:v:0`) is not implemented -- see `docs/app/vaco-cli.md`.
-    //
-    // Default is `min(available_parallelism, 4)`, not the reference's "auto"
-    // (`0`) -- `crate::cli::default_thread_count`'s own doc has the measured
-    // reason a fixed small bound was kept over the core count. `-threads N`
-    // always overrides it in both directions, including `-threads 1` to
-    // force single-threaded.
-    o("threads", Some("count"), bit::HAS_ARG | bit::GLOBAL, ValueKind::Int, "decoding threads per codec (default: min(cores, 4); 1 = single-threaded)"),
-    o("filter_threads", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Str, "threads for simple filter graphs"),
-    o("filter_buffered_frames", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Int, "frames a filter graph may buffer"),
-    o("filter_complex", Some("graph_description"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "define a complex filter graph"),
-    o("filter_complex_threads", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Int, "threads for complex filter graphs"),
-    alias("lavfi", Some("graph_description"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "define a complex filter graph", "filter_complex", ""),
-    o("filter_complex_script", Some("filename"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "read a complex filter graph from a file"),
-    o("auto_conversion_filters", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "insert format conversion filters automatically"),
-    o("stats_period", Some("time"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "how often to refresh progress output"),
-    o("debug_ts", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "trace timestamps"),
-    o("max_error_rate", Some("maximum error rate"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Float, "decoding error ratio that fails the run"),
-    o("vstats", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "write video coding statistics"),
-    o("vstats_file", Some("file"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Str, "file for video coding statistics"),
-    o("vstats_version", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Int, "video statistics format version"),
-    o("sdp_file", Some("file"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "write the SDP description to a file"),
-    o("init_hw_device", Some("args"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "create a hardware device"),
-    o("filter_hw_device", Some("device"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Custom, "hardware device for filtering"),
-    o("adrift_threshold", Some("threshold"), bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Str, "deprecated, has no effect"),
-    o("qphist", None, bit::GLOBAL | bit::EXPERT, ValueKind::None, "deprecated, has no effect"),
-    o("vsync", None, bit::HAS_ARG | bit::GLOBAL | bit::EXPERT, ValueKind::Float, "deprecated, use fps_mode"),
-    o("f", Some("fmt"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT, ValueKind::Str, "force the container format"),
-    o("t", Some("duration"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT, ValueKind::Duration, "stop after this duration"),
-    o("to", Some("time_stop"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT, ValueKind::Duration, "stop at this position"),
-    o("ss", Some("time_off"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT, ValueKind::Duration, "start at this position"),
-    o("bitexact", None, bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::EXPERT, ValueKind::None, "restrict output to bit-exact operations"),
-    o("thread_queue_size", None, bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::EXPERT, ValueKind::Int, "packets the demuxer may queue"),
-    o("sseof", Some("time_off"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::Duration, "start at this position relative to the end"),
-    o("seek_timestamp", None, bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::Int, "seek by timestamp rather than by position"),
-    o("accurate_seek", None, bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::None, "decode up to the exact seek position"),
-    o("isync", Some("sync ref"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::Int, "input whose clock this input follows"),
-    o("itsoffset", Some("time_off"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::Duration, "shift this input's timestamps"),
-    o("re", None, bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::None, "read the input at its native rate"),
-    o("readrate", Some("speed"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::Float, "read the input at this multiple of native rate"),
-    o("readrate_initial_burst", Some("seconds"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::Float, "read this much before rate limiting starts"),
-    o("readrate_catchup", Some("speed"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::Float, "rate used to catch up after falling behind"),
-    o("dump_attachment", Some("filename"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::TAKES_SPEC | bit::EXPERT, ValueKind::Str, "write an attachment to a file"),
-    o("stream_loop", Some("loop count"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::Int, "repeat the input this many times"),
-    o("find_stream_info", None, bit::PER_FILE | bit::INPUT | bit::EXPERT, ValueKind::None, "probe the input before opening it"),
-    o("metadata", Some("key=value"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::TAKES_SPEC, ValueKind::Custom, "set a metadata entry"),
-    o("map", Some("[-]input_file_id[:stream_specifier][,sync_file_id[:stream_specifier]]"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Custom, "select an input stream for the output"),
-    o("map_metadata", Some("outfile[,metadata]:infile[,metadata]"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::TAKES_SPEC | bit::EXPERT, ValueKind::Custom, "copy metadata from an input"),
-    o("map_chapters", Some("input_file_index"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Int, "copy chapters from an input"),
-    o("fs", Some("limit_size"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Int64, "stop once the output reaches this size"),
-    o("timestamp", Some("time"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Custom, "set the recording timestamp"),
-    o("program", Some("title=string:st=number..."), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::TAKES_SPEC | bit::EXPERT, ValueKind::Custom, "create a program from the given streams"),
-    o("stream_group", Some("id=number:st=number..."), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::TAKES_SPEC | bit::EXPERT, ValueKind::Custom, "create a stream group from the given streams"),
-    alias("dframes", Some("number"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Int64, "stop after this many data frames", "frames", "d"),
-    o("target", Some("type"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Custom, "apply a preset for a standard target"),
-    o("shortest", None, bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::None, "stop when the shortest input ends"),
-    o("shortest_buf_duration", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Float, "buffering allowed while waiting for the shortest input"),
-    alias("qscale", Some("q"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Float, "use a fixed quality scale", "q", ""),
-    o("profile", Some("profile"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Expr, "select the encoder profile"),
-    o("attach", Some("filename"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Str, "attach a file to the output"),
-    o("muxdelay", Some("seconds"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Float, "maximum demux-to-decode delay"),
-    o("muxpreload", Some("seconds"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Float, "initial demux-to-decode delay"),
-    o("fpre", Some("filename"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT, ValueKind::Custom, "load options from a preset file"),
-    o("c", Some("codec"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM, ValueKind::Str, "select the codec, or copy to remux"),
-    o("filter", Some("filter_graph"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM, ValueKind::Custom, "apply a filter graph"),
-    alias("codec", Some("codec"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "select the codec, or copy to remux", "c", ""),
-    o("pre", Some("preset"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "load a named preset"),
-    o("itsscale", Some("scale"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Float, "scale this stream's timestamps"),
-    o("copyinkf", None, bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::None, "copy leading non-keyframes"),
-    o("copypriorss", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Int, "keep frames that precede the start time"),
-    o("frames", Some("number"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Int64, "stop after this many frames"),
-    o("tag", Some("fourcc/tag"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "force the codec tag"),
-    o("q", Some("q"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Float, "use a fixed quality scale"),
-    o("filter_script", Some("filename"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Custom, "read a filter graph from a file"),
-    o("reinit_filter", None, bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Int, "rebuild the filter graph when input parameters change"),
-    o("drop_changed", None, bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Int, "drop frames instead of rebuilding the filter graph"),
-    o("discard", None, bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Expr, "discard packets matching a condition"),
-    o("disposition", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Expr, "set the output stream's disposition"),
-    o("bits_per_raw_sample", Some("number"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Int, "declare the sample depth"),
-    o("stats_enc_pre", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "write encoder statistics before encoding"),
-    o("stats_enc_post", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "write encoder statistics after encoding"),
-    o("stats_mux_pre", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "write muxer statistics before muxing"),
-    o("stats_enc_pre_fmt", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "format of the pre-encode statistics"),
-    o("stats_enc_post_fmt", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "format of the post-encode statistics"),
-    o("stats_mux_pre_fmt", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "format of the pre-mux statistics"),
-    o("time_base", Some("ratio"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Expr, "suggest the output stream's time base"),
-    o("enc_time_base", Some("ratio"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Str, "set the encoder's time base"),
-    o("bsf", Some("bitstream_filters"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Custom, "bitstream filters to apply"),
-    o("max_muxing_queue_size", Some("packets"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Int, "packets buffered while streams initialise"),
-    o("muxing_queue_data_threshold", Some("bytes"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT, ValueKind::Int, "bytes buffered before the queue limit applies"),
-    o("r", Some("rate"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::VIDEO, ValueKind::Rate, "set the frame rate"),
-    o("s", Some("size"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::VIDEO, ValueKind::Size, "set frame size"),
-    o("aspect", Some("aspect"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::VIDEO, ValueKind::Expr, "set the display aspect ratio"),
-    o("vn", None, bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::VIDEO, ValueKind::None, "drop video streams"),
-    alias("vcodec", Some("codec"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::VIDEO, ValueKind::Str, "select the video codec", "c", "v"),
-    alias("vf", Some("filter_graph"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::VIDEO, ValueKind::Custom, "apply a video filter graph", "filter", "v"),
-    alias("b", Some("bitrate"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::VIDEO, ValueKind::Expr, "set the video bitrate", "b", "v"),
-    alias("vframes", Some("number"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT | bit::VIDEO, ValueKind::Int64, "stop after this many video frames", "frames", "v"),
-    o("fpsmax", Some("rate"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Custom, "cap the output frame rate"),
-    o("pix_fmt", Some("format"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "set the pixel format"),
-    o("display_rotation", Some("angle"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Float, "set the display rotation"),
-    o("display_hflip", None, bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::None, "flip the display horizontally"),
-    o("display_vflip", None, bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::None, "flip the display vertically"),
-    o("rc_override", Some("override"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "rate control override for an interval"),
-    o("timecode", Some("hh:mm:ss[:;.]ff"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT | bit::VIDEO, ValueKind::Str, "set the starting timecode"),
-    o("pass", Some("n"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Int, "select the encoding pass"),
-    o("passlogfile", Some("prefix"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "prefix for the two-pass log"),
-    o("intra_matrix", Some("matrix"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "intra quantiser matrix"),
-    o("inter_matrix", Some("matrix"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "inter quantiser matrix"),
-    o("chroma_intra_matrix", Some("matrix"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "chroma intra quantiser matrix"),
-    alias("vtag", Some("fourcc/tag"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::EXPERT | bit::VIDEO, ValueKind::Str, "force the video codec tag", "tag", "v"),
-    o("fps_mode", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "how frame rate is reconciled"),
-    o("force_fps", None, bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::None, "do not negotiate the frame rate"),
-    o("streamid", Some("streamIndex:value"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT | bit::VIDEO, ValueKind::Custom, "set an output stream's id"),
-    o("force_key_frames", Some("timestamps"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "force key frames at these positions"),
-    o("hwaccel", Some("hwaccel name"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Custom, "use hardware-accelerated decoding"),
-    o("hwaccel_device", Some("devicename"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "device for hardware decoding"),
-    o("hwaccel_output_format", Some("format"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Str, "pixel format produced by hardware decoding"),
-    o("autorotate", None, bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::None, "apply the input's rotation metadata"),
-    o("autoscale", None, bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::None, "scale automatically at the end of the filter graph"),
-    o("apply_cropping", None, bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Expr, "apply the input's cropping metadata"),
-    o("fix_sub_duration_heartbeat", None, bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::None, "use this stream to split open subtitles"),
-    alias("vpre", Some("preset"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT | bit::VIDEO, ValueKind::Custom, "load a video preset", "pre", "v"),
-    o("top", None, bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::VIDEO, ValueKind::Int, "deprecated, use the setfield filter"),
-    alias("aq", Some("quality"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::AUDIO, ValueKind::Float, "set the audio quality", "q", "a"),
-    o("ar", Some("rate"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::AUDIO, ValueKind::Int, "set the sample rate"),
-    o("ac", Some("channels"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::AUDIO, ValueKind::Int, "set the channel count"),
-    o("an", None, bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::AUDIO, ValueKind::None, "drop audio streams"),
-    alias("acodec", Some("codec"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::AUDIO, ValueKind::Str, "select the audio codec", "c", "a"),
-    alias("ab", Some("bitrate"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::AUDIO, ValueKind::Expr, "set the audio bitrate", "b", "a"),
-    alias("af", Some("filter_graph"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::AUDIO, ValueKind::Custom, "apply an audio filter graph", "filter", "a"),
-    alias("aframes", Some("number"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT | bit::AUDIO, ValueKind::Int64, "stop after this many audio frames", "frames", "a"),
-    o("apad", None, bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::AUDIO, ValueKind::Str, "pad the audio with silence"),
-    alias("atag", Some("fourcc/tag"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT | bit::AUDIO, ValueKind::Str, "force the audio codec tag", "tag", "a"),
-    o("sample_fmt", Some("format"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::AUDIO, ValueKind::Str, "set the sample format"),
-    o("channel_layout", Some("layout"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::AUDIO, ValueKind::Str, "set the channel layout"),
-    o("ch_layout", Some("layout"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::PER_STREAM | bit::EXPERT | bit::AUDIO, ValueKind::Str, "set the channel layout"),
-    o("guess_layout_max", None, bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::AUDIO, ValueKind::Int, "channel count up to which the layout is guessed"),
-    alias("apre", Some("preset"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT | bit::AUDIO, ValueKind::Custom, "load an audio preset", "pre", "a"),
-    o("sn", None, bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::SUBTITLE, ValueKind::None, "drop subtitle streams"),
-    alias("scodec", Some("codec"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::SUBTITLE, ValueKind::Str, "select the subtitle codec", "c", "s"),
-    alias("stag", Some("fourcc/tag"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT | bit::SUBTITLE, ValueKind::Str, "force the subtitle codec tag", "tag", "s"),
-    o("fix_sub_duration", None, bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::SUBTITLE, ValueKind::None, "derive subtitle durations from the next event"),
-    o("canvas_size", Some("size"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::PER_STREAM | bit::EXPERT | bit::SUBTITLE, ValueKind::Str, "set the subtitle canvas size"),
-    alias("spre", Some("preset"), bit::HAS_ARG | bit::PER_FILE | bit::OUTPUT | bit::EXPERT | bit::SUBTITLE, ValueKind::Custom, "load a subtitle preset", "pre", "s"),
-    alias("dcodec", Some("codec"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::EXPERT | bit::DATA, ValueKind::Str, "select the data codec", "c", "d"),
-    o("dn", None, bit::PER_FILE | bit::INPUT | bit::OUTPUT | bit::EXPERT | bit::DATA, ValueKind::None, "drop data streams"),
-    o("i", Some("input_file"), bit::HAS_ARG | bit::PER_FILE | bit::INPUT | bit::OPENS_INPUT, ValueKind::Str, "read from this input URL"),
-];
+pub(crate) static FFMPEG_OPTIONS: &[OptDesc] = FfmpegOptions::OPTIONS;

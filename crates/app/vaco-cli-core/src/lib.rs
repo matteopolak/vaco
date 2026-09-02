@@ -82,6 +82,12 @@
 
 #![forbid(unsafe_code)]
 
+// The derive macro this crate uses for `tables/ffmpeg.rs`/`tables/ffprobe.rs`
+// expands to `::vaco_cli_core::…` paths, matching `vaco_opts`'s own
+// self-reference precedent; this makes those resolve inside this crate too.
+#[allow(unused_extern_crates)]
+extern crate self as vaco_cli_core;
+
 pub mod error;
 pub mod help;
 pub mod lex;

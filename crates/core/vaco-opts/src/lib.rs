@@ -105,6 +105,13 @@ pub use value::{
 pub use vaco_opts_derive::OptEnum;
 /// `#[derive(Options)]` — project a struct's fields into an option schema.
 pub use vaco_opts_derive::Options;
+/// `#[derive(CliOptionTable)]` — turn a fieldless enum into a
+/// `vaco_cli_core::table::OptDesc` argv-flag table. Lives here because this
+/// is where the project's derive-macro infrastructure lives, not because the
+/// result has anything to do with `Options`/`OptFlags` — see
+/// `vaco_cli_core::table::ArgFlags`'s own doc for why the two flag
+/// vocabularies are kept apart.
+pub use vaco_opts_derive::CliOptionTable;
 
 /// Runtime support for macro expansion. Not a stable surface.
 #[doc(hidden)]

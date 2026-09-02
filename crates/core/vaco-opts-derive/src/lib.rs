@@ -1,11 +1,15 @@
 //! Derive macros for `vaco-opts`.
 //!
-//! Two macros:
+//! Three macros:
 //!
 //! * `#[derive(Options)]` — projects a struct into an option schema plus an
 //!   indexed, type-erased accessor.
 //! * `#[derive(OptEnum)]` — turns a fieldless enum into a unit of named
 //!   constants.
+//! * `#[derive(CliOptionTable)]` — turns a fieldless enum into a
+//!   `vaco-cli-core` argv-flag table (`&[OptDesc]`). A different flag
+//!   universe from the two above (see `gen_cli`'s own doc), reusing this
+//!   crate's infrastructure rather than adding a second macro crate for it.
 //!
 //! `opt_flags!` is a `macro_rules!` macro and lives in `vaco-opts` itself.
 //!
@@ -15,6 +19,7 @@
 //! someone actually needs one.
 
 mod attrs;
+mod gen_cli;
 mod gen_enum;
 mod gen_options;
 
@@ -37,6 +42,15 @@ pub fn derive_options(input: TokenStream) -> TokenStream {
 pub fn derive_opt_enum(input: TokenStream) -> TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     gen_enum::expand(&input)
+        .unwrap_or_else(syn::Error::into_compile_error)
+        .into()
+}
+
+/// Turn a fieldless enum into a `vaco_cli_core::table::OptDesc` table.
+#[proc_macro_derive(CliOptionTable, attributes(cli))]
+pub fn derive_cli_option_table(input: TokenStream) -> TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    gen_cli::expand(&input)
         .unwrap_or_else(syn::Error::into_compile_error)
         .into()
 }

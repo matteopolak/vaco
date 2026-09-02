@@ -172,6 +172,14 @@ impl ArgFlags {
     pub const fn bits(self) -> u32 {
         self.0
     }
+
+    /// Const-evaluable `|` -- `BitOr::bitor` cannot be, since a trait method
+    /// is not `const` on stable without `#[const_trait]`, and the generated
+    /// `CliOptionTable` tables below are built in a `const` context.
+    #[must_use]
+    pub const fn union(self, other: Self) -> Self {
+        Self(self.0 | other.0)
+    }
 }
 
 impl core::ops::BitOr for ArgFlags {
@@ -346,42 +354,6 @@ impl OptTable {
             output,
             url,
         }
-    }
-}
-
-const fn o(
-    name: &'static str,
-    argname: Option<&'static str>,
-    flags: u32,
-    kind: ValueKind,
-    help: &'static str,
-) -> OptDesc {
-    OptDesc {
-        name,
-        argname,
-        flags: ArgFlags(flags),
-        kind,
-        help,
-        alias_of: None,
-    }
-}
-
-const fn alias(
-    name: &'static str,
-    argname: Option<&'static str>,
-    flags: u32,
-    kind: ValueKind,
-    help: &'static str,
-    target: &'static str,
-    spec: &'static str,
-) -> OptDesc {
-    OptDesc {
-        name,
-        argname,
-        flags: ArgFlags(flags),
-        kind,
-        help,
-        alias_of: Some((target, spec)),
     }
 }
 
