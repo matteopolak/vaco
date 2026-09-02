@@ -52,7 +52,7 @@ const fn block_of(x: usize) -> usize {
 /// that grid is therefore not an approximation — within this crate's scope
 /// it answers the identical question the old per-pixel array did, at 1/16
 /// the memory and update cost.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Plane {
     width: usize,
     height: usize,
@@ -149,7 +149,7 @@ impl Plane {
 
 /// One decoded picture's reconstruction planes: luma plus two 4:2:0 chroma
 /// planes (this crate's whole scope is 4:2:0 — see the crate doc).
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Picture {
     pub y: Plane,
     pub cb: Plane,
@@ -202,7 +202,7 @@ impl Picture {
 /// tree is walked, `QpY` depends on that coding unit's own `cu_qp_delta`
 /// (if any is coded at all — see `ctu::maybe_parse_cu_qp_delta`), which is
 /// only known once the whole transform tree has been read.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct CuGrid {
     cols: usize,
     rows: usize,
@@ -560,7 +560,7 @@ impl CuGrid {
 /// reconstruction) with that leaf's own top-left corner and size, and do the
 /// grid-alignment check themselves so the caller never has to reason about
 /// it.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct EdgeMarks {
     cols: usize,
     rows: usize,

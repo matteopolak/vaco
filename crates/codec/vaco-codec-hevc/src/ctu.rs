@@ -321,6 +321,58 @@ impl<'p> Ctx<'p> {
         })
     }
 
+    /// Test-only: a second `Ctx` sharing every field this one has except
+    /// `pic` (retargeted at `pic`) and `inter` (dropped -- nothing the
+    /// deblocking-lag experiment `decoder.rs`'s own test module runs
+    /// exercises inter prediction, only `deblock::filter_picture`, which
+    /// never reads `Ctx::inter`). Exists so that experiment can run
+    /// `deblock::filter_picture` twice -- once against the real, pristine
+    /// reconstruction and once against a copy with rows beyond a candidate
+    /// lag corrupted -- over identical coding-unit/edge metadata, without
+    /// duplicating `Ctx::new`'s own SPS/PPS/DPB-derived construction (which
+    /// a test living outside this module could not do anyway: most of
+    /// `Ctx`'s fields are private to `ctu`, by design).
+    #[cfg(test)]
+    pub(crate) fn retarget_pic_for_test<'q>(&self, pic: &'q mut Picture) -> Ctx<'q> {
+        Ctx {
+            pic,
+            cu_grid: self.cu_grid.clone(),
+            log2_ctb_size: self.log2_ctb_size,
+            log2_min_cb_size: self.log2_min_cb_size,
+            log2_min_tb_size: self.log2_min_tb_size,
+            log2_max_tb_size: self.log2_max_tb_size,
+            max_transform_hierarchy_depth_intra: self.max_transform_hierarchy_depth_intra,
+            pic_width: self.pic_width,
+            pic_height: self.pic_height,
+            slice_qp: self.slice_qp,
+            sign_data_hiding: self.sign_data_hiding,
+            strong_intra_smoothing: self.strong_intra_smoothing,
+            transform_skip_enabled: self.transform_skip_enabled,
+            bit_depth_luma: self.bit_depth_luma,
+            bit_depth_chroma: self.bit_depth_chroma,
+            cb_qp_offset: self.cb_qp_offset,
+            cr_qp_offset: self.cr_qp_offset,
+            constrained_intra_pred: self.constrained_intra_pred,
+            cu_qp_delta_enabled: self.cu_qp_delta_enabled,
+            log2_min_cu_qp_delta_size: self.log2_min_cu_qp_delta_size,
+            qp_y_prev: self.qp_y_prev,
+            qg_qp_pred: self.qg_qp_pred,
+            is_cu_qp_delta_coded: self.is_cu_qp_delta_coded,
+            cu_qp_delta_val: self.cu_qp_delta_val,
+            edges: self.edges.clone(),
+            deblocking_disabled: self.deblocking_disabled,
+            beta_offset_div2: self.beta_offset_div2,
+            tc_offset_div2: self.tc_offset_div2,
+            sao_luma: self.sao_luma,
+            sao_chroma: self.sao_chroma,
+            ctbs_x: self.ctbs_x,
+            sao_params: self.sao_params.clone(),
+            is_p_slice: self.is_p_slice,
+            inter: None,
+            max_transform_hierarchy_depth_inter: self.max_transform_hierarchy_depth_inter,
+        }
+    }
+
     /// The P-slice-only parameters, or an error if called on an I-slice
     /// `Ctx` — every call site is itself only reachable when `is_p_slice`,
     /// so this should never actually return `Err`; a clean error rather

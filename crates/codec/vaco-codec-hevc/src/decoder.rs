@@ -95,6 +95,18 @@ pub struct HevcDecoder {
     /// 8) — this decoder only calls it once per slice and resets it on
     /// [`Decoder::flush`].
     poc_state: PocState,
+    /// Test-only: when set, `decode_packet` runs [`run_deblock_lag_probe`]
+    /// against the just-reconstructed (pre-deblock) picture right before
+    /// its own real `deblock::filter_picture` call, then clears this back
+    /// to `None` and leaves [`HevcDecoder::deblock_lag_probe_result`]
+    /// filled in for the test to read after `send_packet` returns. Never
+    /// affects the real decode: the production `deblock::filter_picture`
+    /// call immediately below runs on the untouched `walk` exactly as
+    /// before, the probe works only on throwaway clones.
+    #[cfg(test)]
+    pub(crate) deblock_lag_probe: Option<DeblockLagProbe>,
+    #[cfg(test)]
+    pub(crate) deblock_lag_probe_result: Option<Vec<DeblockLagResult>>,
 }
 
 impl std::fmt::Debug for HevcDecoder {
@@ -114,6 +126,10 @@ impl HevcDecoder {
             dpb: None,
             poc_state: PocState::new(),
             limits,
+            #[cfg(test)]
+            deblock_lag_probe: None,
+            #[cfg(test)]
+            deblock_lag_probe_result: None,
         }
     }
 
@@ -400,6 +416,11 @@ impl HevcDecoder {
             }
         }
 
+        #[cfg(test)]
+        if let Some(probe) = self.deblock_lag_probe.take() {
+            let results = run_deblock_lag_probe(&walk, &probe);
+            self.deblock_lag_probe_result = Some(results);
+        }
         deblock::filter_picture(&mut walk);
         sao::filter_picture(&mut self.budget, &mut walk)?;
 
@@ -841,5 +862,259 @@ impl Decoder for HevcDecoder {
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
         self.parser.set_extradata(extradata)?;
         Ok(())
+    }
+}
+
+// ------------------------------------------------------------- deblock lag
+
+/// Test-only: what CTU row to examine, and which candidate lags (in whole
+/// CTU rows) to test on each side of it. See [`run_deblock_lag_probe`]'s own
+/// doc for the experiment this drives.
+#[cfg(test)]
+#[derive(Debug, Clone)]
+pub(crate) struct DeblockLagProbe {
+    pub target_ctu_row: usize,
+    pub lags: Vec<usize>,
+}
+
+/// Test-only: one candidate lag's two-sided result.
+///
+/// `below_matches`/`above_matches` answer "does the target CTU row's own
+/// deblocked output stay identical once everything `lag` CTU rows further
+/// away (below / above, respectively) is corrupted, while everything within
+/// `lag` rows is left pristine". `false` at `lag == 0` (the immediately
+/// adjacent row corrupted) is the "boundary row moves" half of the two-sided
+/// bound — if that were `true`, the whole experiment would be measuring
+/// nothing, because corrupting the very next row would have to change
+/// *something* for a real edge to exist there at all.
+#[cfg(test)]
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct DeblockLagResult {
+    pub lag: usize,
+    pub below_matches: bool,
+    pub above_matches: bool,
+}
+
+/// Runs the deblocking-lag experiment `PERF-PROGRAMME.md` item B4 needs
+/// before a wavefront schedule can trust any particular row lag for
+/// `deblock::filter_picture`: measured, not argued, per that item's own
+/// stop condition.
+///
+/// `walk` is the just-reconstructed (pre-deblock) picture and its full
+/// per-4x4 metadata (`CuGrid`/`EdgeMarks`), captured by `decode_packet`
+/// immediately before its own real deblocking call. For each candidate
+/// `lag` in `probe.lags`, this clones the raw reconstruction twice more —
+/// once with every sample `lag + 1` or more CTU rows *below*
+/// `probe.target_ctu_row` inverted (`^= 0xFF`, a content-dependent
+/// corruption no coincidental match can survive), once with every sample
+/// `lag + 1` or more CTU rows *above* it inverted — runs
+/// `deblock::filter_picture` on each corrupted clone via
+/// [`Ctx::retarget_pic_for_test`] (identical `CuGrid`/`EdgeMarks`, so
+/// boundary-strength and threshold decisions are exactly what the real
+/// content produces), and compares the target row's own deblocked samples
+/// (all three planes) against a pristine (uncorrupted) reference run.
+///
+/// Corrupting *only* rows strictly further than `lag` away and asking
+/// whether the target's output still matches is the direct measurement of
+/// "how far does this row's own deblocked output reach for its inputs" —
+/// not an argument about the filter's own tap span, an empirical answer
+/// for this exact content's own boundary-strength/threshold decisions.
+#[cfg(test)]
+fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe) -> Vec<DeblockLagResult> {
+    let ctb = 1usize << walk.log2_ctb_size;
+    let target_row_start = probe.target_ctu_row.saturating_mul(ctb);
+    let target_row_end = target_row_start.saturating_add(ctb);
+
+    let mut pristine_pic = walk.pic.clone();
+    {
+        let mut pristine_ctx = walk.retarget_pic_for_test(&mut pristine_pic);
+        deblock::filter_picture(&mut pristine_ctx);
+    }
+    let reference = capture_rows(&pristine_pic, target_row_start, target_row_end);
+
+    probe
+        .lags
+        .iter()
+        .map(|&lag| {
+            let below_first_corrupt_ctu_row = probe.target_ctu_row.saturating_add(1).saturating_add(lag);
+            let mut below_pic = walk.pic.clone();
+            invert_rows_from(&mut below_pic, below_first_corrupt_ctu_row.saturating_mul(ctb));
+            let below_matches = {
+                let mut below_ctx = walk.retarget_pic_for_test(&mut below_pic);
+                deblock::filter_picture(&mut below_ctx);
+                capture_rows(&below_pic, target_row_start, target_row_end) == reference
+            };
+
+            // `above_last_pristine_ctu_row` is the last CTU row (inclusive,
+            // counting down from the target) left uncorrupted; corruption
+            // covers every row strictly above it. Saturates to "corrupt
+            // nothing" once `lag` reaches the picture's own top, which
+            // reads as a vacuous match rather than a panic — the caller
+            // picks a target row with enough rows to spare on both sides
+            // precisely so every lag it asks for is meaningful.
+            let above_first_pristine_ctu_row = probe.target_ctu_row.saturating_sub(lag);
+            let mut above_pic = walk.pic.clone();
+            invert_rows_before(&mut above_pic, above_first_pristine_ctu_row.saturating_mul(ctb));
+            let above_matches = {
+                let mut above_ctx = walk.retarget_pic_for_test(&mut above_pic);
+                deblock::filter_picture(&mut above_ctx);
+                capture_rows(&above_pic, target_row_start, target_row_end) == reference
+            };
+
+            DeblockLagResult { lag, below_matches, above_matches }
+        })
+        .collect()
+}
+
+/// One plane's samples over `[luma_row_start, luma_row_end)`, widened to
+/// `u16` and captured as owned rows — a snapshot cheap enough to hold two or
+/// three of at once, and independent of whichever `Plane` produced it
+/// (`==`-comparable across two entirely separate corrupted clones).
+#[cfg(test)]
+fn capture_rows(pic: &Picture, luma_row_start: usize, luma_row_end: usize) -> (Vec<Vec<u16>>, Vec<Vec<u16>>, Vec<Vec<u16>>) {
+    let capture_plane = |plane: &crate::framebuf::Plane, from: usize, to: usize| -> Vec<Vec<u16>> {
+        let (w, h) = plane.dims();
+        (from..to.min(h)).map(|y| (0..w).map(|x| plane.get(x, y)).collect()).collect()
+    };
+    let (_, ch) = pic.cb.dims();
+    #[allow(clippy::integer_division, reason = "chroma row index = luma row index / the fixed 4:2:0 subsampling factor")]
+    let c_from = (luma_row_start / 2).min(ch);
+    let c_to = luma_row_end.div_ceil(2).min(ch);
+    (
+        capture_plane(&pic.y, luma_row_start, luma_row_end),
+        capture_plane(&pic.cb, c_from, c_to),
+        capture_plane(&pic.cr, c_from, c_to),
+    )
+}
+
+/// Invert every sample (`^= 0xFF`) in every plane of `pic` from luma row
+/// `luma_from` to the bottom of the picture.
+#[cfg(test)]
+fn invert_rows_from(pic: &mut Picture, luma_from: usize) {
+    invert_plane_rows(&mut pic.y, luma_from, usize::MAX);
+    #[allow(clippy::integer_division, reason = "chroma row index = luma row index / the fixed 4:2:0 subsampling factor")]
+    let c_from = luma_from / 2;
+    invert_plane_rows(&mut pic.cb, c_from, usize::MAX);
+    invert_plane_rows(&mut pic.cr, c_from, usize::MAX);
+}
+
+/// Invert every sample in every plane of `pic` from the top of the picture
+/// up to (excluding) luma row `luma_before`.
+#[cfg(test)]
+fn invert_rows_before(pic: &mut Picture, luma_before: usize) {
+    invert_plane_rows(&mut pic.y, 0, luma_before);
+    #[allow(clippy::integer_division, reason = "chroma row index = luma row index / the fixed 4:2:0 subsampling factor")]
+    let c_before = luma_before / 2;
+    invert_plane_rows(&mut pic.cb, 0, c_before);
+    invert_plane_rows(&mut pic.cr, 0, c_before);
+}
+
+#[cfg(test)]
+fn invert_plane_rows(plane: &mut crate::framebuf::Plane, from: usize, to: usize) {
+    let (_, height) = plane.dims();
+    for y in from..to.min(height) {
+        if let Some(row) = plane.row_mut(y) {
+            for b in row.iter_mut() {
+                *b ^= 0xFF;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing, clippy::panic, reason = "test code over fixed scenarios")]
+mod deblock_lag_tests {
+    use super::{DeblockLagProbe, HevcDecoder};
+    use vaco_codec_core::Decoder;
+    use vaco_limits::{Budget, Limits};
+    use vaco_packet::Packet;
+
+    /// `tests/fixtures/deblock_lag_256x320.hevc`: one real `libx265` I-frame
+    /// (`qp=24`, deblocking and SAO both on — `libx265`'s own defaults),
+    /// 256x320 (4x5 CTUs at the default 64-sample CTB size), busy
+    /// `mandelbrot` content chosen so the strong filter (the widest reach,
+    /// `p2`/`q2`) actually triggers rather than being reachable-but-unused.
+    /// Row 2 (of 0..=4) is the target: two CTU rows of real neighbour on
+    /// both sides, so lag 0 and lag 1 are both meaningful in both
+    /// directions.
+    const FIXTURE: &[u8] = include_bytes!("../tests/fixtures/deblock_lag_256x320.hevc");
+
+    /// `PERF-PROGRAMME.md` item B4's own gating question, answered
+    /// empirically rather than argued: [`super::run_deblock_lag_probe`]
+    /// corrupts everything more than `lag` CTU rows away from row 2 (in
+    /// each direction, one experiment at a time) and checks whether row
+    /// 2's own deblocked output still matches a pristine reference.
+    ///
+    /// The two-sided bound: `lag == 0` must **not** match (corrupting the
+    /// immediately adjacent CTU row must move row 2's own output — the
+    /// "boundary row moves" half; a probe that matched here would be
+    /// measuring nothing, because no edge would exist between adjacent
+    /// rows at all), and `lag == 1` **must** match (row 2's own output must
+    /// be fully determined once both immediate neighbours are pristine —
+    /// the "nothing outside the watermark moves" half). Both hold, in both
+    /// directions, on this fixture: deblocking's true dependency extent is
+    /// one CTU row, the same shape as H.264's own one-macroblock-row lag,
+    /// not the whole picture the current two-full-passes implementation
+    /// conservatively assumes.
+    #[test]
+    fn deblocking_depends_on_exactly_one_ctu_row_each_side() {
+        let mut decoder = HevcDecoder::new(Limits::permissive());
+        decoder.deblock_lag_probe = Some(DeblockLagProbe { target_ctu_row: 2, lags: vec![0, 1, 2] });
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, FIXTURE).expect("packet from fixture bytes");
+        decoder.send_packet(Some(&packet)).expect("fixture decodes");
+        decoder.send_packet(None).expect("drain");
+        // Drain every pending frame so nothing about the real decode is
+        // left half-finished, even though the probe itself is what this
+        // test actually checks.
+        while decoder.receive_frame().is_ok() {}
+
+        let results = decoder.deblock_lag_probe_result.take().expect("probe ran during decode_packet");
+        assert_eq!(results.len(), 3, "one result per requested lag: {results:?}");
+
+        let at = |lag: usize| results.iter().find(|r| r.lag == lag).unwrap_or_else(|| panic!("missing lag {lag} in {results:?}"));
+
+        // The "boundary row moves" half: the immediately adjacent CTU row
+        // must matter, in both directions.
+        assert!(!at(0).below_matches, "corrupting the CTU row directly below row 2 must move row 2's own deblocked output: {results:?}");
+        assert!(!at(0).above_matches, "corrupting the CTU row directly above row 2 must move row 2's own deblocked output: {results:?}");
+
+        // The "nothing outside the watermark moves" half: once the
+        // immediate neighbour is pristine, everything further away must be
+        // irrelevant, in both directions.
+        assert!(at(1).below_matches, "row 2's own output must not depend on anything two or more CTU rows below it: {results:?}");
+        assert!(at(1).above_matches, "row 2's own output must not depend on anything two or more CTU rows above it: {results:?}");
+        assert!(at(2).below_matches, "a wider lag than the true extent must still match: {results:?}");
+        assert!(at(2).above_matches, "a wider lag than the true extent must still match: {results:?}");
+    }
+
+    /// The same two-sided bound as
+    /// [`deblocking_depends_on_exactly_one_ctu_row_each_side`], repeated at
+    /// every other interior CTU row this fixture has (rows 1 and 3 of
+    /// 0..=4; rows 0 and 4 are picture edges with no neighbour on one side
+    /// and are not part of the wavefront-lag question). One row proves the
+    /// bound holds *somewhere*; every interior row proves it is not an
+    /// accident of row 2's particular content.
+    #[test]
+    fn deblocking_bound_holds_at_every_interior_row() {
+        for target_ctu_row in [1usize, 3usize] {
+            let mut decoder = HevcDecoder::new(Limits::permissive());
+            decoder.deblock_lag_probe = Some(DeblockLagProbe { target_ctu_row, lags: vec![0, 1] });
+            let mut budget = Budget::new(Limits::permissive());
+            let packet = Packet::from_slice(&mut budget, FIXTURE).expect("packet from fixture bytes");
+            decoder.send_packet(Some(&packet)).expect("fixture decodes");
+            decoder.send_packet(None).expect("drain");
+            while decoder.receive_frame().is_ok() {}
+
+            let results = decoder.deblock_lag_probe_result.take().expect("probe ran during decode_packet");
+            let at = |lag: usize| {
+                results.iter().find(|r| r.lag == lag).unwrap_or_else(|| panic!("missing lag {lag} in {results:?} for row {target_ctu_row}"))
+            };
+
+            assert!(!at(0).below_matches, "row {target_ctu_row}: immediate below neighbour must matter: {results:?}");
+            assert!(!at(0).above_matches, "row {target_ctu_row}: immediate above neighbour must matter: {results:?}");
+            assert!(at(1).below_matches, "row {target_ctu_row}: nothing two rows below should matter: {results:?}");
+            assert!(at(1).above_matches, "row {target_ctu_row}: nothing two rows above should matter: {results:?}");
+        }
     }
 }
