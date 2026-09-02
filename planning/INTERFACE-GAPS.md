@@ -1162,12 +1162,32 @@ field, so every return is a borrowed subslice of at most 93 bytes.
 
 ### What is still open
 
-**The attachment half.** These are *parsers*: they emit `CodecParameters` and
-packet boundaries, not `Frame`s, so there is nothing here to hang a
-`FrameSideData::ClosedCaptions` on. Constructing that variant belongs to
-whatever produces the `Frame` — a decoder — and this workspace has no H.264,
-HEVC or MPEG-2 decoder. The bytes are now available at the exact point such a
-decoder would need them; nothing more can be done from the parser side.
+**The attachment half — landed for MPEG-2, in flight for H.264/HEVC.**
+`vaco-codec-mpeg12` now attaches `FrameSideData::ClosedCaptions` to the
+picture the `user_data()` element belongs to, verified with a full
+`send_packet`/`receive_frame` round trip over a hand-built but spec-shaped
+access unit. `vaco-codec-h264` and `vaco-codec-hevc` did not exist when this
+gap was opened; check `git log`/`git blame` on their `decoder.rs` for
+whether the equivalent SEI-driven attachment has landed rather than trusting
+this paragraph's date.
+
+**A further gap, found while verifying this one: no CLI-reachable output.**
+Attaching the side data to a decoded *video* frame is necessary but not
+sufficient — nothing in this workspace turns that into a subtitle stream a
+user can select. Measured against the reference (`ffmpeg 9.0.1`, black-box,
+2026-09-02): it has the same shape of gap. `ffprobe -show_streams` on an
+MP4/TS built from a real H.264 encode with an injected, byte-verified A/53
+SEI payload shows only the video stream — the reference's own demuxers do
+not expose embedded 608/708 as an ordinary stream either. The one route that
+works is the `lavfi` `movie` source filter's `[out+subcc]` output-label
+suffix (`ffmpeg -f lavfi -i "movie=FILE[out0+subcc]" -map 0:1 -f srt out.srt`),
+which synthesises an `eia_608 (cc_dec)` stream from the video decoder's own
+frame side data — the same architecture already in this workspace, and
+independently confirmed by `ffmpeg-filters(1)`'s `ccrepack` ("Repack CEA-708
+closed captioning side data"), which likewise operates on frame side data,
+not a demuxed stream. Closing this needs an equivalent extraction path in
+`vaco-cli`/`vaco-filter`, not just the decoder attachment — out of scope for
+whichever agent lands the H.264/HEVC half, recorded here so it is not lost.
 
 ### The trap anyone doing the attachment half must know about
 
@@ -1185,9 +1205,17 @@ construction, since frames are reordered before output. Accumulating payloads
 into a buffer as pictures are parsed is the wrong shape and will look like it
 works.
 
-**Blocks:** end-to-end CEA-608/708 decode from a real broadcast file, now only
-on the decoder side. Not blocking `vaco-codec-subtitle-cc`'s own correctness,
-which is verified directly against hand-built and extracted `cc_data` bytes.
+**Blocks:** a CLI-selectable closed-caption output (see above). The
+decode-to-side-data path itself is no longer blocked for MPEG-2, and is
+independently verified correct end to end (2026-09-02) outside the full CLI:
+a real `ffmpeg`-built and `ffmpeg`-decodable H.264/MP4 file with a real,
+byte-verified A/53 SEI payload, run through `vaco_parse_h264`'s SEI/`a53`
+extraction and a direct call into `vaco_codec_h264::H264Decoder`, produces
+the exact same `cc_data` bytes the reference's own `cc_dec` extracts from the
+same file, and `vaco-codec-subtitle-cc`'s `CcDecoder` decodes them to the
+same text (`"HI"`) the reference's `cc_dec` does. Not blocking
+`vaco-codec-subtitle-cc`'s own correctness, which is verified directly
+against hand-built and extracted `cc_data` bytes.
 
 ## 19. `Decoder` has no channel for a codec's out-of-band configuration — CLOSED 2026-08-28
 
