@@ -175,6 +175,11 @@ impl FrameFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts: Opts = common::parse(req.args)?;
+    if opts.preserve != 0 {
+        return Err(
+            "colorlevels: `preserve` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string(),
+        );
+    }
     let set = FormatSet::video_list(common::formats_where(|f| f.is_rgb() && sample::is_addressable(f)));
     Ok(Instance {
         desc: DESC,

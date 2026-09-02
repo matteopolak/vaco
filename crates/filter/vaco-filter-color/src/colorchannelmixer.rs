@@ -214,6 +214,20 @@ impl FrameFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts: Opts = common::parse(req.args)?;
+    if opts.pc != 0 {
+        return Err(
+            "colorchannelmixer: `pc` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string(),
+        );
+    }
+    #[allow(
+        clippy::float_cmp,
+        reason = "exact comparison against this option's own literal parsed default, not a                   numeric-error-margin question"
+    )]
+    if opts.pa != 0.0 {
+        return Err(
+            "colorchannelmixer: `pa` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string(),
+        );
+    }
     let set = FormatSet::video_list(common::formats_where(sample::is_addressable));
     Ok(Instance {
         desc: DESC,
