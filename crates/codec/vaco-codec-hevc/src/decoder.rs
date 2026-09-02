@@ -166,6 +166,13 @@ impl HevcDecoder {
         // `vaco-codec-h264::decoder`'s identical comment for why this
         // concatenates across every SEI NAL rather than assuming one.
         let mut cc_data = Vec::new();
+        // Finding 22b (planning/INTERFACE-GAPS.md): SS D.2.29/D.2.35's
+        // mastering-display and content-light-level SEI messages parse
+        // correctly (`vaco_parse_hevc::sei`, tested) and then reached
+        // nothing at all -- see `vaco-codec-h264::decoder`'s identical
+        // comment; the last one of each type in the access unit wins.
+        let mut mastering_display = None;
+        let mut content_light = None;
         for nal in units(payload, framing) {
             let Some(header) = HevcNalHeader::parse(nal.data) else { continue };
             if !header.is_base_layer() {
@@ -182,6 +189,27 @@ impl HevcDecoder {
                     for msg in &messages {
                         if let Some(triplets) = cc_data_from_sei(&msg.payload) {
                             cc_data.extend_from_slice(triplets);
+                        }
+                        match msg.payload {
+                            vaco_parse_hevc::SeiPayload::MasteringDisplay {
+                                primaries,
+                                white_point,
+                                max_luminance,
+                                min_luminance,
+                            } => {
+                                mastering_display =
+                                    Some(mastering_display_from_sei(primaries, white_point, max_luminance, min_luminance));
+                            }
+                            vaco_parse_hevc::SeiPayload::ContentLightLevel {
+                                max_content_light_level,
+                                max_pic_average_light_level,
+                            } => {
+                                content_light = Some((
+                                    u32::from(max_content_light_level),
+                                    u32::from(max_pic_average_light_level),
+                                ));
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -489,6 +517,8 @@ impl HevcDecoder {
             is_keyframe: header.nal_unit_type.is_irap(),
             closed_captions: cc_data,
             color: sps.color_info(),
+            mastering_display,
+            content_light,
         };
         // `used_as_reference`: every NAL unit type except the
         // "sub-layer-non-reference" ones (`*_N`, §7.4.2.2) can be
@@ -556,6 +586,12 @@ impl HevcDecoder {
             if !meta.closed_captions.is_empty() {
                 let buffer = vaco_pool::Buffer::from_slice(budget, &meta.closed_captions)?;
                 frame.set_side_data(vaco_frame::FrameSideData::ClosedCaptions(buffer));
+            }
+            if let Some(mastering_display) = meta.mastering_display {
+                frame.set_side_data(vaco_frame::FrameSideData::MasteringDisplay(Box::new(mastering_display)));
+            }
+            if let Some((max_cll, max_fall)) = meta.content_light {
+                frame.set_side_data(vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall });
             }
             machine.emit(frame);
         }
@@ -848,6 +884,33 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
 /// `max_alloc_total` failures past 640x480, since it fires on every frame
 /// rather than being bounded by `Dpb` occupancy the way a leaked `Picture`
 /// or `CuGrid` charge at least eventually would be.
+/// §D.2.29's raw `mastering_display_colour_volume()` fields into
+/// `vaco_frame::MasteringDisplay`'s shared shape (finding 22b,
+/// `planning/INTERFACE-GAPS.md`). Identical units and bitstream ordering to
+/// H.264's own SEI message (both specs' Annex D define this syntax and
+/// semantics text identically) -- see `vaco-codec-h264::decoder`'s own
+/// `mastering_display_from_sei` doc for the real-`ffprobe` measurement that
+/// confirms both the `/50000`/`/10000` denominators and the green/blue/red
+/// -> red/green/blue permutation. Duplicated rather than shared (D14.1:
+/// this crate must not depend on `vaco-codec-h264`) -- the function itself
+/// is four lines, and the two crates' `SeiPayload::MasteringDisplay`
+/// variants are distinct types even though their fields agree.
+fn mastering_display_from_sei(
+    primaries_gbr: [(u16, u16); 3],
+    white_point: (u16, u16),
+    max_luminance: u32,
+    min_luminance: u32,
+) -> vaco_frame::MasteringDisplay {
+    let chromaticity = |(x, y): (u16, u16)| [vaco_core::Rational::new(i32::from(x), 50_000), vaco_core::Rational::new(i32::from(y), 50_000)];
+    let [green, blue, red] = primaries_gbr;
+    vaco_frame::MasteringDisplay {
+        primaries: [chromaticity(red), chromaticity(green), chromaticity(blue)],
+        white_point: chromaticity(white_point),
+        max_luminance: vaco_core::Rational::new(i32::try_from(max_luminance).unwrap_or(i32::MAX), 10_000),
+        min_luminance: vaco_core::Rational::new(i32::try_from(min_luminance).unwrap_or(i32::MAX), 10_000),
+    }
+}
+
 fn pic_to_frame(budget: &mut Budget, width: u32, height: u32, pic: &Picture) -> Result<vaco_frame::Frame> {
     let pix_fmt = vaco_pixfmt::PixFmt::from_name("yuv420p")
         .map_err(|_| Error::InvalidData("vaco-codec-hevc: yuv420p pixel format missing"))?;

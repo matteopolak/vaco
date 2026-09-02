@@ -263,6 +263,15 @@ pub(crate) struct PictureMeta {
     /// frame carried `Frame::alloc_video`'s `ColorInfo::default()` instead
     /// of the stream's real one.
     pub color: vaco_color::ColorInfo,
+    /// SS D.2.29's mastering-display-colour-volume SEI, converted and
+    /// permuted into `vaco_frame::MasteringDisplay`'s shared shape, if this
+    /// picture's own access unit carried one — finding 22b
+    /// (`planning/INTERFACE-GAPS.md`), carried here for the identical
+    /// reordering reason as `closed_captions` above.
+    pub mastering_display: Option<vaco_frame::MasteringDisplay>,
+    /// SS D.2.35's content-light-level SEI as `(max_cll, max_fall)`, same
+    /// finding as `mastering_display` above.
+    pub content_light: Option<(u32, u32)>,
 }
 
 /// One picture held in the decoded picture buffer.
@@ -787,6 +796,8 @@ mod tests {
             is_keyframe: false,
             closed_captions: Vec::new(),
             color: vaco_color::ColorInfo::default(),
+            mastering_display: None,
+            content_light: None,
         }
     }
 
