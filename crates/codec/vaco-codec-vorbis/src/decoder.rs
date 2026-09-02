@@ -72,6 +72,16 @@ pub struct VorbisDecoder {
     pending: VecDeque<Frame>,
     imdct: Imdct,
     overlap: Vec<ChannelOverlap>,
+    /// `Error::Eof` once draining starts and `pending` is empty, rather than
+    /// `NeedMoreInput` forever. Before this, `send_packet(None)` was a
+    /// no-op, so `receive_frame` kept answering `NeedMoreInput` after end of
+    /// stream and the scheduler's `ProgressGuard` eventually killed the run
+    /// with `NoProgress` ("progress limit exceeded") instead of a clean
+    /// `Eof` — measured end to end via `vaco -i <vorbis-in-ogg> -f null -`,
+    /// which hit exactly that livelock before this field existed. Same fix
+    /// `vaco-codec-flac`'s decoder already carries (that crate's own
+    /// `draining` field doc names this crate as sharing the bug).
+    draining: bool,
 }
 
 impl VorbisDecoder {
@@ -84,6 +94,7 @@ impl VorbisDecoder {
             pending: VecDeque::new(),
             imdct: Imdct::new(),
             overlap: Vec::new(),
+            draining: false,
         }
     }
 
@@ -396,18 +407,24 @@ fn apply_inverse_coupling(vectors: &mut [Vec<f32>], mag: usize, ang: usize) {
 impl Decoder for VorbisDecoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         let Some(packet) = packet else {
+            self.draining = true;
             return Ok(());
         };
         self.decode_audio_packet(packet.payload())
     }
 
     fn receive_frame(&mut self) -> Result<Frame> {
-        self.pending.pop_front().ok_or(Error::NeedMoreInput)
+        self.pending.pop_front().ok_or(if self.draining {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
     fn flush(&mut self) {
         self.pending.clear();
         self.overlap.clear();
+        self.draining = false;
     }
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
@@ -443,7 +460,12 @@ impl Decoder for VorbisDecoder {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    reason = "test code"
+)]
 mod tests {
     use super::*;
 
@@ -461,6 +483,75 @@ mod tests {
         assert_eq!(split[0], &headers[0][..]);
         assert_eq!(split[1], &headers[1][..]);
         assert_eq!(split[2], &headers[2][..]);
+    }
+
+    /// `send_packet(None)` must switch `receive_frame` from `NeedMoreInput`
+    /// to `Eof` once every buffered frame has drained — the exact contract
+    /// `vaco-sched`'s drain loop polls on to know a decoder is truly done.
+    /// Before `draining` existed, `send_packet(None)` was a no-op and this
+    /// kept answering `NeedMoreInput` forever, which the scheduler's
+    /// `ProgressGuard` eventually reported as `NoProgress`
+    /// ("progress limit exceeded") instead of a clean end of stream —
+    /// reproduced end to end via `vaco -i <vorbis-in-ogg> -f null -`.
+    #[test]
+    fn draining_answers_eof_once_empty_not_need_more_input_forever() {
+        use vaco_codec_core::Encoder as _;
+
+        let mut budget = Budget::new(Limits::permissive());
+        let mut enc = crate::VorbisEncoder::new(Limits::permissive());
+        let n = 4096usize;
+        let mut frame = Frame::alloc_audio(
+            &mut budget,
+            SampleFmt::F32P,
+            vaco_chlayout::ChannelLayout::MONO,
+            n as u32,
+            48_000,
+        )
+        .unwrap();
+        {
+            let mut plane = frame.plane_mut(0).unwrap();
+            let row = plane.row_mut(0).unwrap();
+            for i in 0..n {
+                let s = 0.1_f32 * ((i % 7) as f32 - 3.0);
+                if let Some(dst) = row.get_mut(i * 4..i * 4 + 4) {
+                    dst.copy_from_slice(&s.to_le_bytes());
+                }
+            }
+        }
+        frame.pts = vaco_core::Timestamp::new(0);
+        enc.send_frame(Some(&frame)).unwrap();
+        enc.send_frame(None).unwrap();
+        let mut packets = Vec::new();
+        while let Ok(p) = enc.receive_packet() {
+            packets.push(p);
+        }
+        assert!(!packets.is_empty(), "expected at least one encoded packet");
+
+        let extradata = enc.extradata();
+        let mut dec = VorbisDecoder::new(Limits::permissive());
+        dec.set_extradata(&extradata).unwrap();
+        for p in &packets {
+            dec.send_packet(Some(p)).unwrap();
+        }
+        dec.send_packet(None).unwrap();
+
+        let mut decoded_any = false;
+        loop {
+            match dec.receive_frame() {
+                Ok(_) => decoded_any = true,
+                Err(Error::Eof) => break,
+                Err(Error::NeedMoreInput) => {
+                    panic!("must reach Eof once draining and empty, not NeedMoreInput forever")
+                }
+                Err(e) => panic!("unexpected decode error: {e:?}"),
+            }
+        }
+        assert!(decoded_any, "expected at least one decoded frame");
+        assert!(matches!(dec.receive_frame(), Err(Error::Eof)));
+
+        // flush() resets to the feeding state: NeedMoreInput, not Eof.
+        dec.flush();
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
     }
 
     #[test]
