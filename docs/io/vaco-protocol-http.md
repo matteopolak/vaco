@@ -23,7 +23,7 @@ in place of building an independent `Arc<rustls::crypto::CryptoProvider>`.
 
 **Update (2026-08-28): the crypto provider is `ring`, not
 `rustls-rustcrypto`.** The owner's Gate 1 amendment
-(`planning/00-decisions.md`) permits FFI for TLS; `rustls-rustcrypto` (D14.2's
+ permits FFI for TLS; `rustls-rustcrypto` (D14.2's
 original pure-Rust choice, referenced throughout the rest of this document's
 history) turned out to be pinned at `0.0.2-alpha` with no release since
 2024-04-24 and seven RUSTSEC advisories that could not clear without one,
@@ -311,7 +311,7 @@ for the full assessment); everything else in it is unchanged.
 |---|---|---|---|
 | `ureq` 3.x, features `rustls-no-provider` + `rustls-webpki-roots` (**not** `rustls` — that feature would build ureq its own independent provider) | Pass: no `-sys`, no build script compiling native code. | MIT OR Apache-2.0. | Widely used pure-Rust HTTP client; active. |
 | `rustls` 0.23, `default-features = false`, `features = ["std", "tls12", "ring"]` (declared by `vaco-protocol-tls`, reached here transitively) | Pass — `rustls` itself is pure Rust; the `ring` feature is what pulls the one FFI dependency below into the build, permitted here since 2026-08-28's Gate 1 amendment. | Apache-2.0 OR ISC OR MIT. | The de facto standard Rust TLS library. |
-| `ring` 0.17 (reached via `rustls`'s `ring` feature, requested by `vaco-protocol-tls`) | **FFI, permitted**: compiles C and assembly. Was banned outright before the 2026-08-28 owner amendment to D10 Gate 1 (`planning/00-decisions.md`); `cargo xtask dep-gate` now checks it is reachable only via `vaco-protocol-tls`/`vaco-protocol-http` (the latter by feature unification, not its own declaration — see that gate's source comment). | Apache-2.0 AND ISC. | See `docs/dependencies.md`'s dedicated `ring` entry for the full Gate 3 record (alive, adopted, sound, shallow, vendorable) and why it was chosen over `aws-lc-rs`. |
+| `ring` 0.17 (reached via `rustls`'s `ring` feature, requested by `vaco-protocol-tls`) | **FFI, permitted**: compiles C and assembly. Was banned outright before the 2026-08-28 owner amendment to D10 Gate 1; `cargo xtask dep-gate` now checks it is reachable only via `vaco-protocol-tls`/`vaco-protocol-http` (the latter by feature unification, not its own declaration — see that gate's source comment). | Apache-2.0 AND ISC. | See `docs/dependencies.md`'s dedicated `ring` entry for the full Gate 3 record (alive, adopted, sound, shallow, vendorable) and why it was chosen over `aws-lc-rs`. |
 | `vaco-core`, `vaco-io`, `vaco-limits`, `vaco-opts`, `vaco-protocol-core`, `vaco-protocol-tls`, `vaco-time` | — | — | Workspace crates. |
 
 `webpki-roots` is **not** a direct dependency of this crate either way — this

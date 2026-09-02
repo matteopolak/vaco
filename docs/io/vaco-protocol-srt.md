@@ -71,11 +71,8 @@ differential check.
 - `arq` (PR-10b / #556) — `SendWindow` (retransmission buffer, NAK- and
   RTO-triggered resend) and `ReceiveWindow` (loss detection, in-order
   delivery, TSBPD-ish too-late drop), sans-io via an explicit
-  `on_tick(now_ms)` rather than owning a socket or clock
-  (`planning/INTERFACE-GAPS.md` gap 28's addendum — the standard
-  sans-io answer for a timer-driven protocol, the same shape QUIC
-  implementations use, rather than forcing the worker-thread seam into
-  existence here). Every constant this module needed a number for and
+  `on_tick(now_ms)` rather than owning a socket or clock.
+Every constant this module needed a number for and
   could not get from the draft (RTO, the too-late-drop latency threshold,
   NAK re-announcement policy) is marked `IMPLEMENTATION-DEFINED` at its
   declaration with its own reasoning. **No congestion control or rate
@@ -115,8 +112,7 @@ clock; not yet called from this one — every timestamp in this crate's own
 API is caller-supplied, per its sans-io design), `vaco-hash` (MD5 for the
 rendezvous cookie — an internal, multi-consumer Vaco crate, not a second
 external `md-5` dependency, D11). No crypto crate dependency: `aes`/`ctr`
-ownership is deferred (`planning/INTERFACE-GAPS.md` gap 28's crypto-
-ownership note) rather than claimed directly or hand-rolled.
+ownership is deferred rather than claimed directly or hand-rolled.
 
 ## Testing and what is unverified against a real peer
 

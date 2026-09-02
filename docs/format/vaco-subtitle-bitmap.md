@@ -46,9 +46,7 @@ genuinely different per format, and each is a separate design call:
 
   The real EN 300 743/EN 300 706 structure — `dvbsub::segments`,
   `dvbtxt::teletext` — is implemented anyway, and is real, tested, fuzzed
-  code. It is used by each format's `probe()` (which is *allowed* to be
-  stricter than the reference's own generic-raw probe — detection and
-  demuxing ask different questions, see `planning/AGENT-CONSTRAINTS.md`) and
+  code. It is used by each format's `probe()` and
   is exposed for a future decoder. It is deliberately **not** used for
   packetisation, because doing that would deviate from the measured
   reference behaviour for no benefit this crate could verify.

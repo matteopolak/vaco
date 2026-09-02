@@ -51,7 +51,7 @@ and add a `[[component]]` table to `vaco-component.toml`.
 ## Configuration
 
 Neither filter has an `AVOption` in the reference, so gap 12
-(`planning/INTERFACE-GAPS.md`) does not limit anything here. `text2movsub`
+ does not limit anything here. `text2movsub`
 enforces one measured bound (`u16::MAX` bytes of text) — see its own module
 docs and `CONFORMANCE-FINDINGS.md` finding 31.
 

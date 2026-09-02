@@ -242,9 +242,7 @@ reason as `datascope` — see "The bitmap-font hypothesis" below.
 
 Draws a marker box on the source, a magnified view of the pixels under
 it, and a live per-channel statistics panel. **Shipped this pass, after
-correcting a prior pass's own finding in the open** (recorded in
-`planning/INTERFACE-GAPS.md`'s surrounding history, not silently
-overwritten): the reference refuses any source smaller than `640x480`
+correcting a prior pass's own finding in the open**: the reference refuses any source smaller than `640x480`
 (`"min supported resolution is 640x480"`, undocumented in `-h` and found
 only by trying), and the earlier "the zoom window does not magnify"
 conclusion was measured on an all-black source below that floor. Above
@@ -457,8 +455,7 @@ Same loop as every other filter crate in this project: `ffmpeg -bitexact -f
 lavfi -i <deterministic source> -vf "<filter>=<args>" -f rawvideo -pix_fmt
 <fmt> -` against the reference, cross-checked against this crate's pure
 functions and pinned into unit tests. No `vaco` CLI/muxer exists yet to
-drive an actual `-f framecrc` invocation (`planning/14-cli.md` is still a
-plan document).
+drive an actual `-f framecrc` invocation.
 
 **This row now has a permanent split, not just a temporary one.**
 `histogram`, `waveform`, `thistogram`, `drawgraph`/`adrawgraph` and

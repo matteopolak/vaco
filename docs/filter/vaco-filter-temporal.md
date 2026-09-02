@@ -72,8 +72,7 @@ frame against its own immediately preceding one — unlike the two-*stream*
 `freezedetect` only ever had one output channel worth reporting to a
 caller — the reference writes `lavfi.freezedetect.freeze_start`,
 `.freeze_duration` and `.freeze_end` into the frame's metadata dictionary,
-and until `vaco_frame::Frame` grew one (`planning/INTERFACE-GAPS.md` gap
-11), this filter's `Filter::events()` accessor was the only way to get the
+and until `vaco_frame::Frame` grew one, this filter's `Filter::events()` accessor was the only way to get the
 same information out — real detection, but not the reference's export
 mechanism, and unreachable from anywhere that only sees `Frame`s (`vaco-probe`,
 `metadata`/`select`'s `metadata()` expression function once those exist).

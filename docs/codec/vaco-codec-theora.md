@@ -138,10 +138,7 @@ dimensions.
 
 `vaco-component.toml` registers `DECODER_THEORA` under
 `vaco_codec_core::CodecId::Theora` (already present in `vaco-codec-core`
-before this crate existed), feature `codec-theora`, default build (GREEN —
-Theora was designed from the ground up as royalty-free, derived from the
-donated patent-unencumbered VP3, and is not listed as encumbered in
-`planning/research/07-legal-patents-licensing.md`). `vaco-demux-ogg`'s
+before this crate existed), feature `codec-theora`, default build. `vaco-demux-ogg`'s
 `OggCodec::Theora` branch was updated to attach `CodecId::Theora` to the
 `CodecParameters` it builds — before this crate existed, that branch built
 `CodecParameters::new(MediaType::Video)` with no codec attached at all,

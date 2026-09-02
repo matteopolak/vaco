@@ -118,7 +118,7 @@ out of a wire — the wire records the producer's base, the input port records t
 consumer's.
 
 Muxer-side ordering is *not* reimplemented here, and — since gap 8
-(`planning/INTERFACE-GAPS.md`) closed — no longer partially reimplemented
+ closed — no longer partially reimplemented
 either. `node::MuxWork` used to drive a raw `Box<dyn Muxer>` directly rather
 than going through `vaco_format_core::mux::MuxBuilder`/`MuxWriter`, because
 that wrapper consumes `self` at each phase transition and a step-driven node

@@ -109,8 +109,7 @@ assumed:
 `vaco-codec-core` can add a variant, and it was not in this crate's scope.
 Eleven formats here — MicroDVD, JACOsub, TTML, SubViewer, SubViewer 1.0, PJS,
 RealText, SAMI, VPlayer, MPL2, Spruce STL — had no `CodecId` of their own at
-first, reported rather than worked around (see
-`planning/AGENT-CONSTRAINTS.md`, "Scope"). The owning agent then added
+first, reported rather than worked around. The owning agent then added
 `Jacosub`, `Microdvd`, `Mpl2`, `Pjs`, `Realtext`, `Sami`, `Stl`, `Subviewer`,
 `Subviewer1`, `Ttml`, `Vplayer`, and a generic `Text`, probed independently
 from `ffmpeg -codecs` 8.1 rather than taken from this crate's naming
@@ -129,9 +128,7 @@ produces, so `vaco-probe` prints the reference's own `codec_name` rather than
   `DemuxerDesc` constant (and, if the reference has an encoder, a `CueMux`
   impl plus a `MuxerDesc`), add `pub mod <name>;` to `lib.rs`, add a sample to
   `tests/probe_matrix.rs`'s table, and add a `vaco-component.toml` entry —
-  **only after** the `DEMUXER`/`MUXER` const it names actually compiles (see
-  `planning/AGENT-CONSTRAINTS.md`, "Export your descriptor before writing
-  `vaco-component.toml`").
+  **only after** the `DEMUXER`/`MUXER` const it names actually compiles.
 - **A probe scoring too eagerly**: check `tests/probe_matrix.rs` first; it is
   designed to catch exactly that class of bug across every registered format
   in one run.

@@ -158,8 +158,8 @@ ordinary borrow rules — a writer cannot hold `&mut` to rows above `R` while a
 reader holds `&` to rows below `R` of the same allocation — which is what
 `ProgressPicture`'s bands exist to solve. The cost is that a banded plane
 cannot be handed to the reader as a `&[u8]`, and the reader is the decoder's
-hot loop (`planning/E2E-GAPS.md` §19: `sample_luma_block` 15.87% and
-`predict_chroma_inter` 9.87% of self time).
+hot loop (`sample_luma_block` measured at 15.87% and
+`predict_chroma_inter` at 9.87% of self time).
 
 `reconstruct::RefPlane` is where that lands, and it has two arms:
 

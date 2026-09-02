@@ -8,8 +8,7 @@ child process (issue #347, `C-46`). Registers `libx264` (H.264) and
 
 `vaco` will never carry a software H.264 or HEVC encoder in-tree — x264/x265
 are GPL, and both codecs are patent-encumbered in a way this project has no
-counterparty to clear (`planning/research/07-legal-patents-licensing.md`
-§5.2). This crate is the mitigation the legal register calls "the preferred
+counterparty to clear. This crate is the mitigation the legal register calls "the preferred
 escape hatch": spawn the *user's own* installed `x264`/`x265` binary, pipe
 raw frames to it, read the resulting Annex-B elementary stream back. No GPL
 code and no patent-encumbered implementation ever enters this crate's source,

@@ -116,7 +116,7 @@ column's/row's size — a genuinely mixed-size grid was not measured.
 | `xstack` | `inputs=4`, no `layout`/`grid` | any | **exact** — reference's own `configure` error reproduced |
 
 No `vaco` CLI/muxer exists yet to drive an actual `-f framecrc`
-invocation (`planning/14-cli.md` is still a plan document); comparisons
+invocation; comparisons
 are against the reference's raw pixel output and cross-checked against
 this crate's own tests.
 

@@ -259,9 +259,8 @@ criteria:
 
 None — no feature flags, no options. `DECODER_MP1`/`DECODER_MP2`/`DECODER_MP3`
 are unconditional in the default build (MPEG-1/2 Layer I/II/III are all
-GREEN per `planning/research/07-legal-patents-licensing.md`: Layer II's
-patents expired before Layer III's, and MP3's own programme terminated
-2017-04-23).
+GREEN: Layer II's patents expired before Layer III's, and MP3's own
+programme terminated 2017-04-23).
 
 ## Dependencies
 

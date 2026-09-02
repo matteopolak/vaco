@@ -54,8 +54,7 @@ cycle); this crate's own tests supply a fake.
 
 `ffmetadata` had the mildest version of the same problem, one level further
 in: `vaco_format_core::Muxer` gave a muxer no channel for file-level
-metadata, per-stream metadata or chapters at all. **Closed** (CL-16,
-`planning/INTERFACE-GAPS.md` gap 1): `Muxer::set_metadata` now exists, and
+metadata, per-stream metadata or chapters at all. **Closed**: `Muxer::set_metadata` now exists, and
 `FfmetadataMuxer` overrides it — the override just stores the
 `vaco_format_core::metadata::MuxMetadata` it is handed, and `write_header` is
 what turns it into the actual document via `write`: file tags become global

@@ -127,7 +127,7 @@ config-out-of-band-framed AAC, and MPEG-TS's own AAC convention is ADTS
 (`ffmpeg -i <mpegts-source> -c copy -f avi` refuses at `write_header` with
 "ADTS is only supported with codec tag 0x1610"). `add_stream` refuses AAC
 with empty/absent `extradata` for the same reason finding 19
-(`planning/CONFORMANCE-FINDINGS.md`) named this "silent success": writing the
+ named this "silent success": writing the
 chunk anyway produces a technically-malformed audio stream no real AVI reader
 expects.
 

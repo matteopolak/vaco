@@ -2,8 +2,7 @@
 
 T2/T3 palette video filters — `planning/16-filters.md` §4.2's
 `vaco-filter-palette` row: `palettegen`, `paletteuse`, `elbg`. The crate
-did not exist when claimed (`crates/filter/` and
-`planning/ASSIGNMENTS.md` both checked directly) — the real, unclaimed
+did not exist when claimed — the real, unclaimed
 remainder of #111 (FT-4.11) after `vaco-filter-stack` took
 `hstack`/`vstack`/`xstack` for the same issue.
 

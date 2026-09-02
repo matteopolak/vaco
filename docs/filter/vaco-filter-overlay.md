@@ -314,7 +314,7 @@ the source.
 | `feedback` | — | — | **not implemented — adapter shape exists (gap 24, closed); the loop cannot run (gap 25)** |
 
 No `vaco` CLI/muxer exists yet to drive an actual `-f framecrc`
-invocation (`planning/14-cli.md` is still a plan document); comparisons
+invocation; comparisons
 are against the reference's raw pixel output and cross-checked against
 this crate's own tests.
 

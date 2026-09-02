@@ -12,7 +12,7 @@ also, independently of `tls:` itself, the crate that owns this workspace's
 declaring `rustls`/`ring` itself. See "Who owns `rustls`" below.
 
 **2026-08-28 update**: the crypto provider is `ring`, not `rustls-rustcrypto`.
-The owner's Gate 1 amendment (`planning/00-decisions.md`) permits FFI for TLS
+The owner's Gate 1 amendment permits FFI for TLS
 specifically; `rustls-rustcrypto` (D14.2's original pure-Rust choice) was
 pinned at `0.0.2-alpha` with no release since 2024-04-24 and seven RUSTSEC
 advisories that could not clear without one, failing Gate 3 outright. See

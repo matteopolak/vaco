@@ -12,7 +12,7 @@ scales an `EventPlan` to real frame pixels and drives
 
 Built from the informally-published ASS/SSA format documentation and by
 comparing this crate's own parse against real `.ass` files — no libass
-source was read (clean-room; see `planning/AGENT-CONSTRAINTS.md`).
+source was read.
 
 ## How it works
 

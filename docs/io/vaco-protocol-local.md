@@ -14,7 +14,7 @@ in `vaco-protocol-wrap`.
   whole stream when writing finishes. Write-only.
 
 **`fd:` is not here.** Plan 18 §2.4 originally scoped it into this PR; **D16**
-(`planning/00-decisions.md`) later found that estimate assumed an `unsafe`
+ later found that estimate assumed an `unsafe`
 escape hatch D2 does not grant — turning an integer into an owned file
 descriptor needs `FromRawFd::from_raw_fd`, and nothing proves the integer
 names a descriptor this process actually owns. D16's decision is that `fd:`

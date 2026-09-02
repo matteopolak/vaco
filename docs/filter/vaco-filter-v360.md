@@ -3,8 +3,7 @@
 360-degree video projection conversion (`v360`), converting between
 projections such as equirectangular (a full spherical panorama) and flat
 (a normal rectilinear view) — extracting a normal-looking view from a
-360 video, or the reverse. Crate did not exist before this pass (checked
-`crates/filter/` and `planning/ASSIGNMENTS.md` directly).
+360 video, or the reverse. Crate did not exist before this pass.
 
 ## Scope: two projections of the reference's twenty-five
 

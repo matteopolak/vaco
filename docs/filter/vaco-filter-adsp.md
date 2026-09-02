@@ -63,9 +63,7 @@ just in one crate:**
    re-running the difference equation — a route to the frequency response
    that is genuinely independent of how the coefficients were derived, so a
    sign error or a wrong `Q`/`BW`/`S` mapping shows up as a wrong `-3 dB`
-   point rather than silently agreeing with itself (see
-   `planning/AGENT-CONSTRAINTS.md`'s HEVC IDCT cautionary tale for why that
-   distinction matters). It is a plain `pub fn`, not `#[cfg(test)]`,
+   point rather than silently agreeing with itself. It is a plain `pub fn`, not `#[cfg(test)]`,
    specifically so every downstream crate's *own* tests get the same
    oracle rather than re-deriving one — gating it to this crate's test
    builds would have reproduced the exact unreachability problem the move

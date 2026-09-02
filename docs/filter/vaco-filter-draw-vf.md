@@ -114,7 +114,7 @@ filter:
 | `drawgrid` | `x=15:y=15:w=6:h=6:t=1`, any | `gbrp` | **exact** — backward period confirmed |
 
 No `vaco` CLI/muxer exists yet to drive an actual `-f framecrc` invocation
-(`planning/14-cli.md` is still a plan document); comparisons are against
+; comparisons are against
 the reference's raw pixel output and cross-checked against this crate's
 own unit tests, which pin the same probes.
 

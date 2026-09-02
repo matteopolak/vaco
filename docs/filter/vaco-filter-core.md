@@ -466,7 +466,7 @@ just an unusual arity — and `Graph::configure()` requires
 `Graph::topological_order()`, which hard-rejects any cycle before a
 `Dual`-shaped node's pads would ever be negotiated. That is a scheduler
 and negotiation limitation, not an adapter-shape one, and is a separate,
-open gap (`planning/INTERFACE-GAPS.md` gap 25) — `Dual` exists and is
+open gap — `Dual` exists and is
 tested (`crates/filter/vaco-filter-core/tests/graph.rs`'s
 `dual_*` tests), but `feedback` itself is still not implementable.
 

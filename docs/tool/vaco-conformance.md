@@ -212,7 +212,7 @@ case with the wrong declared geometry fails loudly, not silently — see
 
 `filterexec::REGISTRIES` is the explicit, short list of `FilterRegistry`s
 this tool tries. There is no aggregate registry combining every filter
-crate in the tree yet (see `planning/INTERFACE-GAPS.md`); adding a filter
+crate in the tree yet; adding a filter
 crate to the corpus means adding its registry to that list, a genuine
 reviewable change, not an oversight to fix later.
 
@@ -548,8 +548,7 @@ one line, reviewed like any other code change.
 `tests/conformance/transcode/` (XF-03, issue #211) drives the `transcode`
 tool — `vaco` against `ffmpeg`, not `vaco-probe` against `ffprobe` — and
 became possible only once the CLI resolved muxers through the registry
-instead of always building a null muxer (finding 6 in
-`planning/CONFORMANCE-FINDINGS.md`).
+instead of always building a null muxer.
 
 A transcode case needs a place to write its output that the harness can then
 read back and diff, and `{media}` is read-only. `{output}` (bare, meaning

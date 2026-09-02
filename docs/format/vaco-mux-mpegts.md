@@ -43,7 +43,7 @@ looks like" for both the demuxer and this muxer to agree on (D19).
 2. `write_header` emits a PAT, a PMT and an SDT immediately.
 3. `write_packet`:
    - Refuses a stream's *first* packet outright if it has no PTS at all
-     (finding 19, `planning/CONFORMANCE-FINDINGS.md`) — measured directly
+     — measured directly
      (`ffmpeg -i <avi-source> -c copy -f mpegts` refuses with "first pts and
      dts value must be set" and a nonzero exit; AVI is the concrete source,
      since it has no native per-packet PTS field). Previously this silently
@@ -202,7 +202,7 @@ NIT regardless — see *Deferred* below).
 **`service_name`/`service_provider` are not in that transcript at all** — the
 SDT's service descriptor carries them, but there is no
 `-service_name`/`-service_provider` AVOption to report a default for.
-Measured a different way (finding 17, `planning/CONFORMANCE-FINDINGS.md`):
+Measured a different way:
 probe the SDT bytes `-c copy -f mpegts` actually writes with no metadata
 given at all, and read the service descriptor (tag `0x48`) directly —
 `provider_name="FFmpeg"`, `service_name="Service01"`. `MpegTsMuxOptions::default()`

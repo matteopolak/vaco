@@ -16,7 +16,7 @@ of pixels — raw, RLE, or (XBM) a text array. Each has its own module;
   only. Native decode format for 24bpp is **`bgr24`**, not `rgb24` — the
   file's byte order is kept, not swapped (measured). 32bpp is `bgra`.
   1/4/8bpp are paletted and expand through the palette into `rgb24`, since
-  this crate carries no palette side-data type (see `planning/TECH-DEBT.md`);
+  this crate carries no palette side-data type;
   that path does not round-trip back to a paletted BMP.
 - **PCX** (`src/pcx.rs`): 128-byte header, RLE (top two bits of a byte mark a
   run), planes stored per-scanline (all of R, then all of G, then all of B).

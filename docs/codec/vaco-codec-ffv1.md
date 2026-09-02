@@ -91,8 +91,7 @@ profile); flagged as a follow-up.
 ## How to change it
 
 - The per-sample loop is where D1's profile puts almost all of the
-  encoder's time (see `planning/E2E-GAPS.md`'s D1 entry for the full
-  breakdown): ~40% in `SliceBuf`'s bounds-checked neighbour/sample
+  encoder's time: ~40% in `SliceBuf`'s bounds-checked neighbour/sample
   fetches (`border`/`neighbours`/`get`, all `.get(..).copied().unwrap_or(0)`
   over a flat `Vec<i32>`), ~30% in the range coder itself
   (`put_symbol`/`put_rac`/`renormalize`/the per-context state array), ~8%
@@ -119,9 +118,7 @@ profile); flagged as a follow-up.
   (`slices`/`threads` in a real `ffmpeg -h encoder=ffv1`). Splitting into
   multiple slices is unstarted; it changes the bitstream's slice count
   (an observable, `ffprobe`-visible property), so it needs its own
-  measured commit and a decision about whether it becomes the default
-  (see D17 in `planning/00-decisions.md` and the item's own "behavioural
-  note" in `planning/PERF-PROGRAMME.md`).
+  measured commit and a decision about whether it becomes the default.
 - This crate's own encoder only ever emits the range coder
   (`coder_type = 1`); the reference's default for 8-bit content is
   Golomb-Rice, whose run mode is close to free on flat regions. Adding an

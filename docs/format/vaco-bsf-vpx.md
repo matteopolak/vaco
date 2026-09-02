@@ -69,7 +69,7 @@ Run `cargo xtask gen-registry`.
 ## Configuration
 
 None reachable: `vaco_format_core::mux::BsfProvider::open` has no
-per-instance option string (`planning/INTERFACE-GAPS.md` gap 12).
+per-instance option string.
 
 ## Dependencies
 

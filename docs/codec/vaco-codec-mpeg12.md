@@ -570,7 +570,7 @@ and the round documented just above brings MPEG-1 to the identical state.
 
 ### #356 closed on a replacement bar; #355's own reason for staying open — and its later resolution
 
-A later round proved (`planning/TECH-DEBT.md`'s two IDCT entries) that the
+A later round proved that the
 "framemd5-identical" bar above is not just unmet but **permanently
 unreachable** for this crate without adopting a specific reference
 decoder's own integer IDCT verbatim — measured by black-box bitstream
@@ -709,8 +709,7 @@ project's history. `FrameSideData`/`FrameSideDataKind` are both
 `#[non_exhaustive]` specifically so a new *variant* is additive instead
 — confirmed by building the whole workspace (`cargo check --workspace`)
 both before and after adding one, zero errors either time, not assumed
-from the attribute alone. Added `FrameSideData::Pulldown(u8)` (planning/
-INTERFACE-GAPS.md's gap 29) following the existing `Cropping`/`set_crop`
+from the attribute alone. Added `FrameSideData::Pulldown(u8)` following the existing `Cropping`/`set_crop`
 pattern (`Frame::repeat_pict()`/`Frame::set_repeat_pict()`), carrying an
 *already-combined* field-period count rather than a raw bit — the
 producer has every flag H.262's three-case combination rule needs

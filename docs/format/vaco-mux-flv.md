@@ -57,7 +57,7 @@ for a live/streamed encode, the same limitation real FLV encoders have.
 
 **`width`/`height`/`videodatarate`/`framerate`/`audiodatarate`/
 `audiosamplerate`/`audiosamplesize`/`stereo` are now written too** — finding
-18 (`planning/CONFORMANCE-FINDINGS.md`): `add_stream` used to discard
+18: `add_stream` used to discard
 `CodecParameters` entirely after pulling `extradata` out of it, so
 `onMetaData` had nowhere to forward these from even though the caller's
 stream carried them all along. `OnMetaFields` (captured per-stream, in
@@ -126,7 +126,7 @@ since no such fixture was available to measure.
 
 ### A packet with no PTS is refused
 
-Finding 19 (`planning/CONFORMANCE-FINDINGS.md`), measured directly
+Finding 19, measured directly
 (`ffmpeg -i <avi-source> -c copy -f flv` refuses with "Packet is missing
 PTS" and a nonzero exit; AVI is the concrete source, since it has no native
 per-packet PTS field): `write_packet` used to default a missing `pts` to

@@ -73,7 +73,7 @@ address.
 
 **Why the tests are a real oracle and not a restated formula.** A second
 transcription of the same cookbook sentence cannot disagree with the first —
-that is `vaco-codec-dsp-idct`'s cautionary tale (`planning/AGENT-CONSTRAINTS.md`):
+that is `vaco-codec-dsp-idct`'s cautionary tale:
 both its "independent" checks were wrong the same way because both were the
 same equation read twice. Instead, `Coeffs::response_db` evaluates
 `H(e^{jw}) = (b0 + b1 z^-1 + b2 z^-2) / (1 + a1 z^-1 + a2 z^-2)` directly

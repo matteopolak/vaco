@@ -76,7 +76,7 @@ shared engines back several filters each:
 against `vaco-filter-framesync` (`FrameSyncFilter`, `Synced`), following
 `vaco-filter-video-composite::overlay`'s pattern rather than waiting on
 `vaco-filter-core`'s not-yet-landed `Paired<F>` adapter
-(`planning/INTERFACE-GAPS.md` gap 10).
+.
 
 ## How it works
 

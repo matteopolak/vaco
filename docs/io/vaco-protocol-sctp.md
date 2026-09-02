@@ -32,7 +32,7 @@ reference peer and the fuzz target is green for 24 h") names two things
 unreachable from this environment: no SCTP-speaking reference peer is
 installed here, and this batch has no 24-hour window to run a fuzz target
 in. Both are named rather than silently skipped, per the owner's own
-ruling on replacement bars (`planning/AGENT-CONSTRAINTS.md`, `705779d`):
+ruling on replacement bars:
 demonstrably-not-broken, structurally-correct, deviation-named is the
 bar. The substitute actually built: `association::tests::
 four_way_handshake_reaches_established_on_both_sides` and

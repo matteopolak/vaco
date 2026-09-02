@@ -16,7 +16,7 @@ The dispatch brief for this work (GitHub issue #478, "FT-4.12e") asked for a
 do not invent a crate", `planning/16-filters.md` §4.2's table was checked
 before writing anything, and `vaco-filter-effect` is not a row in it. Almost
 the entire named list already has a home, and, for most of it, is already
-built and committed (`planning/ASSIGNMENTS.md`, checked 2026-08-28):
+built and committed:
 
 | Filters | Actual crate | Status |
 |---|---|---|
@@ -197,8 +197,7 @@ One comparison loop throughout: `ffmpeg -bitexact -f lavfi -i <deterministic
 source> -vf "<filter>=<args>" -f rawvideo -pix_fmt <fmt> -` against the
 reference, cross-checked against this crate's pure functions and pinned
 into unit tests. No `vaco` CLI/muxer exists yet in this tree to drive an
-actual `vaco ... -f framecrc -` invocation (`planning/14-cli.md` is still a
-plan document), so "framecrc comparison" here means the same rawvideo-diff
+actual `vaco ... -f framecrc -` invocation, so "framecrc comparison" here means the same rawvideo-diff
 methodology `vaco-filter-convolve`/`vaco-filter-blur` already established
 for exactly this reason.
 

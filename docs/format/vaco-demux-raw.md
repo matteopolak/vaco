@@ -2,8 +2,7 @@
 
 Layer 4. Raw / headerless elementary-stream demuxers: 47 registrations across
 three families (PCM, raw video, bitstream-with-sync-pattern). `s337m` moved
-to `vaco-format-spdif::S337M_DEMUXER` (see `planning/TECH-DEBT.md`'s
-resolved "`s337m` is registered twice" entry); the `S337M`/`DEMUXER_S337M`
+to `vaco-format-spdif::S337M_DEMUXER`; the `S337M`/`DEMUXER_S337M`
 consts stay in `bitstream.rs`, unregistered. Companion crate:
 `vaco-mux-raw` (the write side, FM-26b).
 
@@ -26,8 +25,7 @@ the file — except `yuv4mpegpipe`, which carries its own text header.
 | `startcode` | Annex-B/MPEG `00 00 01` scanning, used by `bitstream` | helper |
 
 21 + 4 + 1 + 22 = 48, matching FM-26a and `ffmpeg -demuxers`' count for this
-family (research doc §2.8 — 48, not the ~29-item list `planning/18-formats.md`
-§3.4.9 describes; see "What was wrong in the brief" below).
+family.
 
 **Measurement method.** All names, long names, extensions and default option
 values in this crate were captured directly, not transcribed from a plan or
@@ -138,8 +136,8 @@ once, bounded by the caller's `Limits` — see "How to change it" for why.
   `.bin` extension).
 * `StartCode3` formats also score **51**, but only when the byte(s)
   immediately after the first `00 00 01` — the start-code *identifier* —
-  match what that specific format requires. This is the finding-3 fix
-  (`planning/CONFORMANCE-FINDINGS.md`): the first version only checked that a
+  match what that specific format requires. This is the finding-3 fix: the
+  first version only checked that a
   start code was present at offset 0 or 1, which every one of the ten
   `StartCode3` members satisfies on any of the other nine's real content, so
   ties broke alphabetically and `avs2` beat `h264` on an actual H.264
@@ -169,8 +167,7 @@ once, bounded by the caller's `Limits` — see "How to change it" for why.
 
 One format, `s337m`, is deliberately left unregistered here: it now
 resolves to `vaco-format-spdif::S337M_DEMUXER`, a real SMPTE 337M parser,
-rather than this crate's `Framing::FixedBlock` placeholder (see
-`planning/TECH-DEBT.md`). Nothing else in this crate was left unregistered.
+rather than this crate's `Framing::FixedBlock` placeholder. Nothing else in this crate was left unregistered.
 Per-registration status is also recorded in each module's doc comment,
 which is the version to trust if this table and the code ever disagree.
 

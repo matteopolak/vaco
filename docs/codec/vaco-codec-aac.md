@@ -47,8 +47,7 @@ substantial remaining piece, not blocked on anything found this pass. See
 
 AAC is legally **RED**, not merely off-by-default for a portability reason:
 the Via LA AAC pool is active and licenses per **decoder or encoder unit**,
-not per bitstream (`planning/00-decisions.md` D4,
-`planning/research/07-legal-patents-licensing.md` §5.2/§6). AAC *remuxing* —
+not per bitstream. AAC *remuxing* —
 reading a container's AAC track without ever instantiating a decoder — stays
 in the default build and is what `vaco-parse-aac` already delivers; only
 decode (this crate) and encode (unstarted) are gated.

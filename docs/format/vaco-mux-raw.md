@@ -39,8 +39,7 @@ Measured directly, not assumed symmetric:
   have **no muxer at all** in the reference — `ffmpeg -h muxer=mpegvideo`
   etc. name no such muxer.
 * `mpeg1video`/`mpeg2video` **do** exist as muxers, but the reference files
-  them under its legacy/misc muxer set (`planning/research/03-libavformat.md`
-  §3.9), not its raw-elementary-stream one (§3.7, the 40-muxer table this
+  them under its legacy/misc muxer set, not its raw-elementary-stream one (§3.7, the 40-muxer table this
   crate reproduces exactly). They are out of this crate's scope by the same
   measurement that put `aac`/`ac3`/`mp3`/… out of `vaco-demux-raw`'s scope —
   see that crate's docs.

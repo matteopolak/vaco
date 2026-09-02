@@ -12,11 +12,7 @@ carried over from a prior mis-scoped crate (GitHub issue #476's
 `haldclutsrc` landed in this pass, closing the row.
 
 **Left for follow-up, stated honestly**: `.3dl`/`.dat`/`.m3d` file parsing
-for `lut3d`'s `file` option (`.cube` only — two probe attempts at `.3dl`
-both produced `Unexpected EOF` against the reference, see `lut3d.rs`'s
-"Attempted and abandoned" doc section; guessing a third header shape
-risked exactly the "matches one probe, wrong elsewhere" failure mode
-`planning/AGENT-CONSTRAINTS.md` warns about, so it was not shipped);
+for `lut3d`'s `file` option;
 `cubic`/`cosine`/`spline` interpolation for `lut1d` and
 `tetrahedral`/`pyramid`/`prism` for `lut3d`/`haldclut` (each is now a
 named "not implemented" error rather than a silent fall back to linear/

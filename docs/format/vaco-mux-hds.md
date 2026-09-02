@@ -1,8 +1,6 @@
 # `vaco-mux-hds`
 
-Layer 4. FM-57 (shared with `vaco-mux-smoothstreaming`/`vaco-mux-whip` in
-`planning/18-formats.md`; see `planning/TECH-DEBT.md` for each sibling's own
-status). Adobe HTTP Dynamic Streaming (HDS) muxer.
+Layer 4. FM-57. Adobe HTTP Dynamic Streaming (HDS) muxer.
 
 ## What it is
 
@@ -59,8 +57,8 @@ quality levels/one fragment each; `provenance/sources.toml`'s
   1024.0`, a different unit from the `Manifest`'s own decimal-kbit/s
   `bitrate` attribute), `stereo` always `false` regardless of real channel
   count (a measured FLV/AAC convention).
-- **No directory-creation gap here.** Contrast `vaco-mux-smoothstreaming`
-  (`planning/INTERFACE-GAPS.md` gap 27): every file HDS writes sits flat in
+- **No directory-creation gap here.** Contrast `vaco-mux-smoothstreaming`:
+  every file HDS writes sits flat in
   the manifest's own directory — measured directly with a two-quality-level
   reference tree (`stream0.abst`/`stream1.abst`, no per-quality
   subdirectory). Gap 27 does not apply to this crate.

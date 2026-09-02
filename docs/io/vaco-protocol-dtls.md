@@ -9,8 +9,7 @@ A DTLS-over-UDP transport (RFC 6347): the scheme a WHIP/WebRTC-shaped caller
 opens for a datagram stream that needs a DTLS handshake before any
 application data flows. This closes #562 (`PR-12b`), the last piece of #64
 blocked from project start on "no native Rust DTLS stack exists" — the
-2026-08-28 owner amendment to D10's Gate 1 (`planning/00-decisions.md`, "Gate
-1 amendment") permits FFI for transport security specifically, and `openssl`
+2026-08-28 owner amendment to D10's Gate 1 permits FFI for transport security specifically, and `openssl`
 is the only credible DTLS implementation once FFI is on the table (see
 `docs/dependencies.md`'s `openssl` entry for the full assessment against
 `boring`/`wolfssl`).

@@ -821,8 +821,7 @@ name to `triangular_hp` — correct when written, silently stale the moment
 this crate implemented the real curves, because nothing there re-derives
 from the crate it wraps. Fixed in the same pass by delegating instead of
 duplicating; see that file's `dither()` for the exact shape
-(`planning/AGENT-CONSTRAINTS.md`'s "a wrapper swallows what it does not
-forward"). `vaco-filter-audio`'s own module doc still correctly lists
+. `vaco-filter-audio`'s own module doc still correctly lists
 `first_pts` and the timestamp-compensation option group as unforwarded —
 that gap is real, separate, and not touched here, since it is an
 unimplemented feature in a crate this pass does not own, not a wrapper

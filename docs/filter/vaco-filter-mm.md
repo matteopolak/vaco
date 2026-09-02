@@ -10,7 +10,7 @@ why each one.
 ## What it is
 
 Filters from two plan rows sharing one crate through a rename
-(`planning/FILTER-CRATE-DIVERGENCE.md`). Each filter is a module exposing
+. Each filter is a module exposing
 `pub const DESC: FilterDesc` plus a crate-private `create`;
 [`registry::MmRegistry`] dispatches by name.
 

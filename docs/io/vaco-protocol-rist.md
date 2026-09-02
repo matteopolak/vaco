@@ -52,8 +52,7 @@ evidence-class labels:
 TR-06-1's IPR notice claims a patent over §4, 5, 5.1 (excl. 5.1.2), 5.2,
 5.3 and sub-sections, and 5.4 — essentially all of Simple Profile's
 substantive operation — held by Video-Flow Ltd, with an assurance to
-license to any implementer who asks (`planning/00-decisions.md` D4's
-2026-08-28 amendment: a RAND commitment is not absence of encumbrance).
+license to any implementer who asks.
 This crate is not "in the published build" today — no
 `vaco-component.toml` fragment, nothing links it into `vaco-cli` — but
 **the moment it is registered, the fragment must set `encumbered = true`

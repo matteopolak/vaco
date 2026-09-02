@@ -162,7 +162,7 @@ exactly, while an odd-length non-final frame reproduces the one-byte
 drift and the following frame's failure. This crate's demuxer seeks to
 each frame's own table offset before reading it, so it reproduces neither
 the drift nor the cascading failure — a deliberate, documented divergence
-(see `planning/TECH-DEBT.md`), not a bug worth copying.
+, not a bug worth copying.
 
 ### `smk`: frame-size/type tables, and an unresolved packet-payload gap
 
@@ -187,7 +187,7 @@ layout from the frame's own palette chunk all failed to match. Rather
 than reverse-engineer an undocumented decoder-cooperative packing
 convention — a materially different task from measuring container framing
 — this crate emits the raw video-chunk bytes only and reports the gap
-honestly (see `planning/TECH-DEBT.md`).
+honestly.
 
 ---
 

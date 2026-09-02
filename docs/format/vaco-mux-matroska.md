@@ -34,10 +34,7 @@ note.
 `Segment`'s length is not known until every packet has been written.
 Measured against `ffmpeg 8.1` — `-f matroska out.mkv` (a seekable file) vs.
 `-f matroska -` piped into a non-seekable sink, both under
-`-fflags +bitexact` positioned as an **output** option (it must come after
-`-i`; before it, it sets the flag on the input instead, and the muxer keeps
-writing a fresh random `SegmentUID` on every run — the exact trap
-`planning/AGENT-CONSTRAINTS.md` calls out):
+`-fflags +bitexact` positioned as an **output** option:
 
 ```
 $ ffmpeg -f lavfi -i testsrc=... -c:v libx264 -fflags +bitexact -f matroska seek.mkv
@@ -154,8 +151,7 @@ quotes.
 
 `vaco_format_core::Muxer::add_stream` still takes only `CodecParameters` —
 nothing in *that* method carries a file title, a tag list, or a chapter
-table. `Muxer::set_metadata` is the channel added for exactly this (M30,
-`planning/INTERFACE-GAPS.md` gap 1); see *Metadata, chapters, attachments*
+table. `Muxer::set_metadata` is the channel added for exactly this; see *Metadata, chapters, attachments*
 below for how this crate uses it. `Cues` needed no such channel at all
 (every field it carries comes from the packets themselves) and was
 implemented in full from the start — one `CuePoint` per video keyframe,
@@ -174,8 +170,7 @@ reference (see the *Known gaps* item this replaces): every Level-1 element
 lacked the `CRC-32` the reference always writes, and `SeekHead` was left out
 entirely on the theory that building it needed either a second seek-patch
 pass or fixed-width placeholder arithmetic. Measured directly against
-`ffmpeg 8.1` (`ebmldump`-style byte inspection — see
-`planning/CONFORMANCE-FINDINGS.md` finding 15 for the full transcript), the
+`ffmpeg 8.1`, the
 reference does neither.
 
 **`CRC-32` is unconditional.** Every Level-1 element (`SeekHead`, `Info`,
@@ -321,7 +316,7 @@ arbitrary sequence of frame-timing deltas and demux the result with
 `vaco-demux-matroska` — proving agreement with an independently developed
 sibling crate, a stronger check than a fuzz target could give here.
 
-## Metadata, chapters, attachments (CL-16, `planning/INTERFACE-GAPS.md` gap 1)
+## Metadata, chapters, attachments
 
 `Muxer::set_metadata` stores whatever `vaco_format_core::metadata::MuxMetadata`
 it is handed; every field it drives — `Info > Title`, per-track `Name`/

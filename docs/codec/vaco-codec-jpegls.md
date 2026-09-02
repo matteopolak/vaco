@@ -86,10 +86,7 @@ to be 1 or 3) rather than trusting the 8-bit field directly.
 
 `vaco-component.toml` registers `JPEGLS_DECODER`/`JPEGLS_ENCODER` under
 `vaco_codec_core::CodecId::JpegLs` (added to `vaco-codec-core` alongside
-this crate), feature `codec-jpegls`, default build (GREEN — JPEG-LS is not
-listed as encumbered anywhere in `planning/research/07-legal-patents-licensing.md`,
-and the LOCO-I paper itself records that the patent holders agreed to
-royalty-free licensing for use in the standard). `vaco-demux-image2`'s
+this crate), feature `codec-jpegls`, default build. `vaco-demux-image2`'s
 `jpegls_pipe` splitter (`.jls`, non-interleaved-or-line-interleaved framing)
 was updated from `codec = None` to `Some(CodecId::JpegLs)` so a `.jls` file
 actually reaches this decoder — that one-line gap is what kept `.jls` from

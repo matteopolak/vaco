@@ -50,7 +50,7 @@ and add a `[[component]]` table to `vaco-component.toml`.
 ## Configuration
 
 None reachable — see `vaco-bsf-h2645`'s docs for the fuller account of gap 12
-(`planning/INTERFACE-GAPS.md`) and why that does not stop these filters from
+ and why that does not stop these filters from
 being worth registering: the bare-name behaviour this interface limits us to
 is also the measured-correct one.
 

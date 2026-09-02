@@ -229,8 +229,7 @@ registration, `mpegtsraw`, also reads `packet::PCR_HZ` directly for its
 E-AC-3, DTS, TrueHD, VC-1, Mpeg1video/Mpeg2video, Vvc, Cavs, Dirac, Mp1/Mp2
 and HdmvPgsSubtitle among others, and both directions of this table use them:
 `for_codec` (the muxer's question) always did, and `TsCodec::codec_id` (the
-demuxer's question) now does too as of finding 4
-(`planning/CONFORMANCE-FINDINGS.md`) — it used to map eight of the roughly
+demuxer's question) now does too as of finding 4 — it used to map eight of the roughly
 thirty `TsCodec` variants and fall through to `None`, i.e. `codec_name=unknown`
 in `vaco-probe`, for the rest **even where `CodecId` already had a matching
 variant sitting unused**: `mpeg2video`, `mp2`, `ac3`, `truehd` and others were

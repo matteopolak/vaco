@@ -490,10 +490,7 @@ locks in the frame-0 fix) carry the exact numbers.
 
 ## Byte-exact against ffmpeg: what closed the 13.70% drift
 
-*(Added after `planning/E2E-GAPS.md` section 7 measured the registered
-decoder's real output for the first time and found **13.70% of all bytes
-differing** from ffmpeg on the configuration a previous harness had reported
-as "FULL 25/25" -- that harness compared output **file sizes**.)*
+**
 
 The corrected measurement, and the one every claim below is made against:
 per plane, per frame, **byte for byte**, whole sequence, naming the first

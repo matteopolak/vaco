@@ -2,8 +2,7 @@
 
 `planning/16-filters.md` §4.2's `vaco-filter-motion` row: `mestimate`,
 `minterpolate`, `framerate`, `deshake`. The crate did not exist when first
-claimed (no `crates/filter/vaco-filter-motion` directory, no row in
-`planning/ASSIGNMENTS.md`) — genuinely unclaimed T3 long-tail work under
+claimed — genuinely unclaimed T3 long-tail work under
 epic #57 (FT-4.12). Extended later, in the same crate, with `stabdetect`/
 `stabtransform` — this crate's own two-pass stabiliser, matching the same
 row's note that a `vidstabdetect`/`vidstabtransform`-equivalent pair
@@ -77,8 +76,7 @@ The option *names* below (`result`, `shakiness`, `mincontrast`,
 `accuracy`, `stepsize`, `tripod`, `input`, `smoothing`, `optalgo`,
 `maxshift`, `crop`, `invert`, `relative`, `zoom`, `optzoom`, `zoomspeed`,
 `interpol`) are taken from `ffmpeg`'s own published user documentation
-(`ffmpeg-filters.html`, Tier A per `planning/research/07-legal-patents-licensing.md`
-§1.6.1 — published man-page-equivalent text is always open, D7), so a
+, so a
 filtergraph string written against the familiar vocabulary parses. The
 file format and the algorithm behind every option are original.
 

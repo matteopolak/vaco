@@ -56,7 +56,7 @@ other filters are verified against was judged worse than leaving it out.
 * `readeia608`, `readvitc` — need bit-accurate waveform decoding (EIA-608
   line-21 encoding, SMPTE VITC bi-phase marks). Substantial to get right
   and, without a captured real line to decode against, an "oracle that
-  shares your misreading" risk (`planning/AGENT-CONSTRAINTS.md`).
+  shares your misreading" risk.
 * `blockdetect`, `scdet`, `photosensitivity` — each is a multi-frame or
   full-academic-paper algorithm (a block-grid period search over two
   tunable ranges; a scene-cut heuristic combining mean-absolute-frame-

@@ -1,8 +1,6 @@
 # `vaco-mux-smoothstreaming`
 
-Layer 4. FM-57 (shared with `vaco-mux-hds`/`vaco-mux-whip` in
-`planning/18-formats.md`; only this muxer is implemented — see
-`planning/TECH-DEBT.md` for HDS/WHIP's status). Microsoft Smooth Streaming
+Layer 4. FM-57. Microsoft Smooth Streaming
 (MS-SSTR) muxer.
 
 ## What it is
@@ -76,8 +74,8 @@ the manifest's own URL plus a `vaco_format_adaptive::WriteAccess`.
   verifiable on this machine. This crate's bar is structural/self-
   consistency verification against the two measured reference trees.
 - **Creating each `QualityLevels(<bitrate>)/` directory**: not done by this
-  muxer. `vaco_protocol_core::Protocol` has no directory-creation verb
-  (`planning/INTERFACE-GAPS.md` gap 27). A caller driving this muxer against
+  muxer. `vaco_protocol_core::Protocol` has no directory-creation verb.
+  A caller driving this muxer against
   a local `file:` output must pre-create every `QualityLevels(<bitrate>)/`
   directory before the first flush for that bitrate — see
   `tests/roundtrip.rs`.
