@@ -25,6 +25,14 @@
 //! XWD, XBM and SGI all pad rows, and a 64x48 fixture cannot express a
 //! padding bug in any of them.
 
+#![allow(
+    clippy::panic,
+    clippy::expect_used,
+    clippy::disallowed_methods,
+    reason = "a test that cannot set up is a failed test; the untrusted-input \
+rationale for denying these does not apply to fixtures we wrote"
+)]
+
 use vaco_codec_core::Parser as _;
 use vaco_frame::FrameData;
 use vaco_limits::{Budget, Limits};

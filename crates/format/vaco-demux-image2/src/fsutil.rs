@@ -33,15 +33,6 @@ pub fn split_dir_and_name(pattern: &str) -> (PathBuf, &str) {
     }
 }
 
-/// Find the first index in `[start_number, start_number + range - 1]` for
-/// which `dir/pattern.format(index)` exists.
-///
-/// # Errors
-/// An [`Error::Io`] with `ErrorKind::NotFound`, carrying the same message
-/// shape the reference reports (`ffmpeg -start_number 5 -i 'out%03d.png'`
-/// against files starting at `out010.png`, measured):
-/// `"Could find no file or sequence with path '<pattern>' and index in the
-/// range <lo>-<hi>"`.
 /// The lowercase-insensitive extension of a filename, without the dot.
 ///
 /// `std::path::Path::extension` on a pattern like `img_%03d.png` answers the
@@ -54,6 +45,15 @@ pub fn extension_of(name: &str) -> Option<&str> {
     (!ext.is_empty() && !ext.contains('/') && !ext.contains('\\')).then_some(ext)
 }
 
+/// Find the first index in `[start_number, start_number + range - 1]` for
+/// which `dir/pattern.format(index)` exists.
+///
+/// # Errors
+/// An [`Error::Io`] with `ErrorKind::NotFound`, carrying the same message
+/// shape the reference reports (`ffmpeg -start_number 5 -i 'out%03d.png'`
+/// against files starting at `out010.png`, measured):
+/// `"Could find no file or sequence with path '<pattern>' and index in the
+/// range <lo>-<hi>"`.
 pub fn find_sequence_start(
     dir: &Path,
     display_pattern: &str,
