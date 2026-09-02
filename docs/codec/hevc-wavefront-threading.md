@@ -9,19 +9,20 @@ worker, each row starting two CTUs behind the row above it. Controlled by
 `-threads N`, opt-in, default off until proven the way H.264's own row
 threading was (`docs/codec/frame-threading.md`).
 
-**Status: design only, now on its second revision. No production code has
-changed** (a `#[cfg(test)]`-only empirical measurement has — see
-`planning/E2E-GAPS.md` §31). This document was first written per the plan's
-own instruction that "the executing agent writes the design doc first, as
-`docs/codec/frame-threading.md` was written for H.264," then corrected by a
-later pass after finding that its own central technical claim — reusing
+**Status: Stage 1 in progress, single-threaded — `-threads N` does not exist
+yet.** This document was first written per the plan's own instruction that
+"the executing agent writes the design doc first, as `docs/codec/
+frame-threading.md` was written for H.264," then corrected by a later pass
+after finding that its own central technical claim — reusing
 `vaco_codec_core::picture::ProgressPicture` "one level down" — does not
-survive reading that module's actual implementation. See "Correction:
+survive reading that module's actual implementation (see "Correction:
 chaining `ProgressPicture` per row does not give WPP its parallelism"
-below for what changed and why, and "Two honest paths forward" for what
-this means for the item going forward. The reasoning throughout is grounded
-in this crate's (and now also `vaco-codec-core`'s) actual code, cited by
-file and function, not a guess at its shape.
+below). `vaco-codec-core` then gained the per-CTU-tile capability path 1
+actually needs, and `vaco-codec-hevc`'s own `framebuf::Plane` now
+reconstructs through it (row-banded, not yet column-tiled — see "Concrete
+Stage 1 plan" below for exactly what has landed and what has not). The
+reasoning throughout is grounded in this crate's (and `vaco-codec-core`'s)
+actual code, cited by file and function, not a guess at its shape.
 
 ## Why this is not H.264's row-level frame threading, reused
 
@@ -230,41 +231,57 @@ data structure.
 
 **Concrete Stage 1 plan, now that the primitive exists:**
 
-1. `framebuf::Plane` gains a `PictureWriter` (for `y`, `cb`, `cr` each,
-   allocated via `PictureSpec::new(vec![...]).with_bands(ctb, ctb)` on the
-   `y` plane and `with_bands(ctb / 2, ctb / 2)` on `cb`/`cr` for 4:2:0) in
-   place of its own `Vec<u8>` + 4x4 `ready` grid. `Plane::set`/`row_mut`'s
-   callers all write within one CTU at a time already (the coding-tree walk
-   never crosses a CTU boundary for a write), so every *write* call site
-   maps onto exactly one `tile_mut` — this part is mechanical.
-2. Every *read* call site is the real work, and splits into two shapes:
-   reads confined to the CTU currently being written (the common case:
-   intra prediction's own reconstructed samples, MC's own output before
-   deblocking) stay cheap by reading directly from the `BandMut`/tile still
-   held for that CTU; reads that reach into an *already-finished* neighbour
-   (the row above, the CTU to the left, above-right) go through
-   `PictureRef::wait_tile`/`try_tile` instead of a flat index — for Stage 1,
-   single-threaded, this wait never actually blocks (the neighbour is
-   always already published, since decode is still strictly serial), so the
-   cost being measured is purely the extra indirection and lookup, not
-   contention.
+1. ~~`framebuf::Plane` gains a `PictureWriter`... every *write* call site
+   maps onto exactly one `tile_mut`.~~ **Landed** (`ReconPlane`/
+   `ReconPicture`, commit `1ba192d`) — with one correction found in the
+   doing: Stage 1 uses the *row-banded* 1-D API
+   (`band_mut`/`publish_through`/`band_ref`, `PlaneSpec::with_bands` never
+   called) rather than the 2-D per-CTU tile grid this step originally
+   sketched. Column tiling is what Stage 2's real wavefront overlap needs
+   (see the correction earlier in this document — full-width row bands
+   cannot express "row r+1 starts after row r's second CTU"), but Stage 1
+   is still single-threaded, so there is no overlap to enable yet and no
+   reason to pay a cost only Stage 2 needs. Staying row-banded also kept
+   `row_mut` returning one contiguous, full-width slice exactly as
+   `Plane::row_mut` always did (a full-width row never spans more than one
+   row band either way), which is the whole reason B1/B2's row-wise copy
+   loops in `write_pred_block`/`write_block` needed zero changes, only the
+   type they write through.
+2. ~~Every *read* call site... splits into two shapes...~~ **Landed as
+   part of the same commit**, not deferred: `ReconPlane::get`/`is_ready`
+   dispatch on whether the requested row is the one currently being
+   written (`band_ref`, no publish/wait — the row-banded shape of "reading
+   the CTU currently being written") or an earlier, already-published one
+   (`PictureRef::try_rows`). This could not be deferred to its own step:
+   same-CU intra reference-line reads need both cases *today*, correctly,
+   for anything to byte-exact-check at all. What is genuinely still ahead
+   here is moving from `band_ref`/`try_rows` to `tile_ref`/`wait_tile` once
+   Stage 2 needs column granularity — a different primitive call, not a
+   different shape of dispatch.
 3. `CuGrid`/`EdgeMarks`/`sao_params` need the equivalent treatment at their
    own (finer, 4x4 or per-CTU) granularity — smaller, simpler structures
    than a pixel plane, so a hand-rolled tile grid following the same
    own-then-publish shape is likely less code than adapting them to
    `vaco_codec_core::picture`'s pixel-stride-shaped API, but this still
-   needs deciding in the doing, not assumed here.
+   needs deciding in the doing, not assumed here. **Not started.**
 4. Gate exactly as originally planned: byte-exact against every fixture
    this item's brief names, single-threaded, before touching `Stage 2`'s
    actual thread dispatch; ≤1.03x versus the pre-Stage-1 baseline or stop
-   and report the number (D20).
+   and report the number (D20). **Gate cleared** for steps 1-2's own
+   scope: byte-exact against real `libx265` I/P/B-slice content (a fully
+   stock 25-frame GOP, a 40-frame deep hierarchical-B GOP with weighted
+   bi-prediction, 300x500's partial CTU row and column, and both the WPP
+   and non-WPP CABAC paths), plus the existing `tests/oracle.rs`/
+   `tests/flat.rs`; serial cost measured at 0.998x mean / 0.992x median
+   over 10 interleaved, CPU-time-measured rounds (a private-worktree
+   baseline against the working tree, both release builds) — see
+   `planning/E2E-GAPS.md` §34 for the full methodology and per-round
+   numbers. `CuGrid`/`EdgeMarks`/`sao_params` (step 3) have not been
+   measured and are not covered by this gate.
 
-This is not done — this pass built and verified the primitive path 1
-needs and mapped exactly what Stage 1 now requires of it, and stops at that
-checkpoint rather than starting an invasive, multi-file rewrite of a
-byte-exact decoder's hottest data structure without yet having measured
-whether the tile-addressed read path costs more than the plan's own 3%
-serial gate allows. The next pass into this item starts at step 1 above.
+Steps 1 and 2 are done; step 3 (`CuGrid`/`EdgeMarks`/`sao_params`) and
+step 4's own gate for that step's own scope are what the next pass into
+this item starts with.
 
 ## What actually needs to become per-row
 
@@ -473,32 +490,34 @@ proven, not designed.
   in a byte-exact decoder." See "Concrete Stage 1 plan" above for exactly
   what has to be rewritten to find out.
 
-## Why this pass stops here
+## Where this stands
 
 `vaco-codec-hevc` has had concurrent editors for this entire session (see
 `planning/E2E-GAPS.md` §24's own account of a collision during item B1, and
 the `VACO_HEVC_TRACE` debug instrumentation found live in `ctu.rs` during
-B3's work). The restructure this item needs touches `framebuf.rs`, `ctu.rs`,
-`deblock.rs`, `sao.rs` and `decoder.rs` at once — effectively the whole
-crate — for a byte-exact video decoder, at a finer, more invasive
-granularity (per-CTU-tile, not per-CTU-row) than this document originally
-believed, now that path 1 is the confirmed direction.
+B3's work) — the reason each of this item's own increments lands and is
+verified separately rather than as one large, hard-to-bisect drop.
 
-Both prior blockers are resolved: the deblocking-lag proof (one CTU row
-each side, `planning/E2E-GAPS.md` §31), and the mechanism question (this
+All three prior blockers are resolved: the deblocking-lag proof (one CTU
+row each side, `planning/E2E-GAPS.md` §31), the mechanism question (this
 document's own earlier proposal to chain `ProgressPicture` per row did not
 give WPP real parallelism; `vaco-codec-core` now has the per-CTU-tile
-capability that does, `planning/E2E-GAPS.md` §33 and commit `0af678e`).
-What is left is the thing neither of those proofs could stand in for:
-actually rewriting `vaco-codec-hevc`'s hottest data structure onto the new
-primitive and measuring whether the tile-addressed read path clears Stage
-1's own 3% serial gate — "Concrete Stage 1 plan" above names exactly what
-that rewrite touches and in what order. That is a multi-file, invasive
-change to a byte-exact decoder's core representation, landed unverified in
-a crate under active concurrent editing, and is worth its own pass rather
-than folding it into this one on top of a synchronisation primitive that
-was itself only finished this session. This document is what the plan
-itself asks for first; the next pass into this item starts Stage 1's own
-rewrite with a primitive already built, tested, and merged underneath it —
-narrower, better-grounded work than either of the two paths this document
-was choosing between at the start of this pass.
+capability that does, `planning/E2E-GAPS.md` §33 and commit `0af678e`), and
+Stage 1's own first landable piece — `framebuf::Plane` reconstructing
+through a row-banded `PictureWriter` instead of a flat `Vec<u8>`, byte-exact
+across real I/P/B-slice `libx265` content and measured at 0.998x mean
+serial cost, `planning/E2E-GAPS.md` §34 and commit `1ba192d`. "Concrete
+Stage 1 plan" above records the one correction found landing it: Stage 1
+uses the existing row-banded API, not the 2-D per-CTU tile grid this
+document originally sketched for it, since single-threaded Stage 1 has no
+overlap to enable and no reason to pay the tile grid's cost before Stage 2
+actually needs it.
+
+What is left: `CuGrid`/`EdgeMarks`/`sao_params`'s own analogous treatment
+(Stage 1's step 3, not started), then the move from row-banded to
+column-tiled once Stage 2's real thread dispatch needs it, then Stage 2
+itself and its full 1/2/4/8/16-thread verification bar. Each remains its
+own pass, landed and gated separately, for the same reason the item has
+been staged this way throughout: a byte-exact decoder's core representation
+is not something to rewrite in one drop in a crate under active concurrent
+editing.

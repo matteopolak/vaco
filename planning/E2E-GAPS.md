@@ -2668,3 +2668,136 @@ record) rather than masking a second problem — but a red suite for that long
 is exactly the condition under which a real regression stops being visible
 against the noise. Nobody owned these three tests until now; they should
 not go unowned again.
+
+
+## 34. HEVC B4 -- Stage 1's first landable piece: reconstruction through a PictureWriter
+
+Continuing from §33 (the per-CTU-tile publish primitive in `vaco-codec-core`),
+this section lands Stage 1's own first piece: `framebuf::Plane`'s flat
+`Vec<u8>` + whole-picture 4x4 ready-bitmap, used directly by the CTU walk,
+replaced by `vaco-codec-core`'s tile-publish primitive -- still
+single-threaded, still one CTU row at a time in the same order as today,
+gated on byte-exactness and <=1.03x serial regression per the plan's own
+D20 before any thread touches this.
+
+One correction found in the doing, not assumed going in: Stage 1 uses the
+*row-banded* 1-D API (`band_mut`/`publish_through`/`band_ref`,
+`PlaneSpec::with_bands` never called), not the 2-D per-CTU tile grid the
+design doc originally sketched for this step. Column tiling is what Stage
+2's real wavefront overlap needs (full-width row bands cannot express "row
+r+1 starts after row r's second CTU" -- see §32/33's own finding), but
+Stage 1 is still single-threaded, so there is no overlap to enable yet and
+paying that cost now would be measuring the wrong thing. Staying row-banded
+also kept `row_mut` returning one contiguous, full-width slice exactly as
+`Plane::row_mut` always did -- a full-width row never spans more than one
+row band either way -- which is the whole reason B1/B2's row-wise copy
+loops in `write_pred_block`/`write_block` needed zero changes, only the
+type they write through.
+
+`framebuf.rs` gains `ReconPlane`/`ReconPicture`, mirroring `Plane`/
+`Picture`'s own method names exactly (`get`/`set`/`is_ready`/`row_mut`/
+`mark_block_ready`/`mark_row_ready`/`dims`) plus `begin_row`/`begin_ctu_row`
+(publish everything before the new row, reset the per-row ready grid) and
+`finish`/`materialize_into`. Reads to the row currently being written go
+through the still-staged `PictureWriter::band_ref`/`band_mut` (two small,
+additive `vaco-codec-core` commits landed alongside this: `tile_ref`/
+`band_ref`, the immutable counterpart of `tile_mut`/`band_mut` needed to
+read back a same-CTU write without forcing `&mut` everywhere, commit
+`34a35f6`; and `BandMut::into_row_mut`, letting a freshly-re-derived
+`BandMut`'s own row slice outlive it, commit `1ce56b3`); reads to an
+earlier, already-published row go through `PictureRef::try_rows`/
+`PlaneView` instead. This read split -- the thing the design doc's own
+"Concrete Stage 1 plan" listed as a separate step 2 -- landed in the same
+commit rather than being deferred: same-CU intra reference-line reads
+genuinely need both cases today, correctly, or nothing byte-exact-checks at
+all: same-CTU reads happen *while* that CTU's own tile is still open (an
+intra reference line reading an earlier PU's own reconstructed samples
+within the same CU), which `wait_tile`/`try_rows` cannot see (only
+published data), so the still-open-tile fast path is not an optimisation
+added later, it is a correctness requirement from the first working
+version.
+
+`ctu::Ctx` gains a mandatory `recon: &'p mut ReconPicture` field alongside
+the existing `pic: &'p mut Picture`; the twelve `s.pic.{y,cb,cr}` call
+sites that touch reconstruction (`write_pred_block`/`write_block`/
+`build_reference_line`'s own callers) become `s.recon.{y,cb,cr}` -- a
+mechanical rename, since `ReconPlane` mirrors `Plane`'s own method names
+exactly. `decoder.rs` calls `walk.recon.begin_ctu_row(row)` once per CTU
+row in both CABAC paths (the plain for-addr loop and
+`decode_wpp_row_ranges`'s own per-row loop -- both got the call, both
+verified independently, see below), and `walk.recon.finish()` +
+`walk.recon.materialize_into(walk.pic)` once, right after the CTU walk,
+before deblocking runs.
+
+The one-time materialize is why this needs a second type rather than
+`Plane` itself growing a `PictureWriter`: once one of
+`vaco_codec_core::picture`'s bands publishes it is immutable forever (the
+whole point of the mechanism), but deblocking and SAO both need to modify
+pixels the CTU walk already finished. `ReconPicture::materialize_into` is
+the hand-off: copy every published row into a plain, mutable `Picture` once
+the walk is done, which deblocking/SAO/emission/future-picture reference
+reads then keep using exactly as they always have -- zero changes needed in
+`deblock.rs`, `sao.rs`, `mc.rs`, or `decoder.rs`'s own emission blit.
+`Ctx::retarget_pic_for_test` (the deblock-lag probe's own test-only
+machinery from §31) gains a matching `recon` parameter, satisfied by one
+throwaway `ReconPicture` the probe allocates once and reuses across every
+retargeted `Ctx` it builds, since `deblock::filter_picture` never reads
+`Ctx::recon` at all.
+
+Now-dead code removed as a direct, verified consequence: `Plane::is_ready`
+(nothing downstream of materialize ever needs a per-position readiness
+check -- deblocking/SAO/`mc.rs` never called it, only intra prediction did,
+and that now reads `ReconPlane::is_ready` instead) and `ReconPlane::set`
+(`ctu.rs`'s own writes all go through `row_mut`-based helpers, never a bare
+per-pixel `set`).
+
+**Verified byte-exact** via `HevcDecoder::send_packet`/`receive_frame`
+directly (bypassing the `vaco` CLI, whose own unrelated non-monotonic-dts
+bug on B-frame content is flagged separately -- a spawned follow-on task,
+not this crate's own gap), against `ffmpeg`'s raw decode of the same file,
+byte-for-byte, zero mismatches on every one of: a 25-frame fully-stock
+`libx265` GOP (20 B-frames of 25, WPP on by default); a 40-frame deep
+hierarchical-B GOP with weighted bi-prediction
+(`bframes=6:b-adapt=2:weightp=1:weightb=1:keyint=25`, 31 B-frames of 40);
+300x500 (partial CTU row *and* column, `mandelbrot` content, 20 frames);
+and a 320x240 stream with WPP explicitly forced off (`wpp=0`), exercising
+the plain for-addr CABAC path's own `begin_ctu_row` call site instead of
+`decode_wpp_row_ranges`'s. `tests/oracle.rs::dense_content_is_byte_exact`
+and `tests/flat.rs` both still pass.
+
+**Serial cost measured** via a private-worktree baseline (this crate's own
+HEAD immediately before this section's own commit) against the working
+tree, both release builds, decoding a 50-frame 1920x1080 `mandelbrot`
+fixture 8 times per run: 10 interleaved rounds, CPU-seconds via
+`/usr/bin/time -p`'s own `user` field rather than wall-clock -- this
+session's shared machine was under load average 11-15 from concurrent
+agents throughout, and single wall-clock runs of the *same* binary swung as
+wide as 73s vs 24s depending on scheduling alone, while CPU-seconds stayed
+tight, exactly the reason B1's own report picked CPU-seconds as the primary
+number under contention. Per-round ratios (after/before): 1.035, 1.032,
+0.966, 1.044, 0.921, 0.974, 1.065, 0.957, 1.008, 0.976 -- mean 0.998x,
+median 0.992x. No measurable regression; this step clears the plan's own
+D20 <=1.03x gate with room to spare.
+
+`cargo check`/`clippy -p vaco-codec-hevc --lib -- -D warnings`, `cargo
+xtask unsafe-audit` and `cargo xtask patent-gate` are all clean. This
+crate's own `cargo test --lib` (unit tests) could not be run as part of
+this verification: `dpb.rs` had an unrelated, uncommitted, in-progress edit
+from a concurrent agent (a `PictureMeta::closed_captions` field its own
+test literal did not yet set) that failed to compile -- untouched by this
+section, not this pass's to fix mid-edit by someone else.
+`tests/oracle.rs`/`tests/flat.rs` (built as separate binaries against the
+crate's public API, unaffected by `dpb.rs`'s own test-module compile state)
+both passed, and the direct-decoder byte-exactness checks above exercise
+the actual reconstruction path far more thoroughly than the unit suite's
+own scope would anyway.
+
+**Not done in this section**: `CuGrid`/`EdgeMarks`/`sao_params`'s own
+analogous treatment (Stage 1's own step 3), the later move from row-banded
+to column-tiled once Stage 2 needs real per-CTU-column overlap, Stage 2's
+actual thread dispatch, the new `hevc_decode_threaded` fuzz target, and the
+full byte-exact-at-every-thread-count verification matrix. Each remains its
+own pass, per this item's own staging discipline.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.
