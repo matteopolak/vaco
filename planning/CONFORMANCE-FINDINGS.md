@@ -5746,3 +5746,129 @@ this session's own workspace build and the commit landing).
 
 `cargo test`/`cargo clippy -p vaco-parse-mpegvideo -p vaco-format-dv
 --all-targets -D warnings` clean.
+
+## 64. Closing finding 63's sentinel properly: Y4M and MOV/prores read their own real signal, the flip lands, and it catches a second regression (mpeg1/mpeg2) before shipping
+
+Finding 63 diagnosed the `FieldOrder` sentinel bug precisely and declined
+to fix it blind, naming exactly what would need measuring first:
+Y4M's own interlace header and MOV's likely `fiel` atom. This closes it,
+in that order, per the coordinator's explicit instruction.
+
+### Measured first
+
+**Y4M's `I` tag** (`ffmpeg -f yuv4mpegpipe`, `-vf setfield=prog/tff/bff`,
+each re-probed): `Ip` → `progressive`, `It` → `tt`, `Ib` → `bb`. Not read
+at all before this — `vaco-demux-raw`'s own `y4m.rs` module doc already
+listed `I` among the tags "read past but not otherwise interpreted."
+
+**MOV's `fiel` atom** (`ffmpeg -c:v prores`, `-vf setfield=prog/tff/bff`,
+each re-probed *and* the raw `fiel` payload bytes read back out of the
+file with a small script, rather than trusting a recalled byte-value
+table): a two-byte payload, `fieldCount` then `fieldDetail`.
+`fieldCount=1` (`fieldDetail=0x00`) → `progressive`; `fieldCount=2,
+fieldDetail=0x09` → `tb`; `fieldCount=2, fieldDetail=0x0e` → `bt`.
+`fieldDetail`'s other two QuickTime-documented non-swapped values
+(`0x01`, `0x06`) were unreachable from any encoder available — every
+`setfield=tff/bff` encode landed on the swapped pair regardless of
+`-flags +ildct` — so they map to `Unknown`, not a guessed
+`TopFirst`/`BottomFirst`. `vaco-demux-mp4` already declared the `FIEL`
+fourcc in its box table but never read it; `field_order()` mirrors the
+existing `sample_aspect_ratio()` function's `pasp`-lookup shape exactly.
+
+### The flip
+
+`crates/signal/vaco-codec-core/src/params.rs`: `FieldOrder`'s `#[default]`
+is now `Unknown` — a dedicated "not stated" value, never also a real
+assertion, the same shape `ChromaLocation::Unspecified` already has for
+chroma siting. `VideoParameters::fill_from`'s merge condition now tests
+`== FieldOrder::Unknown` instead of `== FieldOrder::Progressive`, so a
+container's genuine `Progressive` (Matroska's own `FlagInterlaced`) is no
+longer indistinguishable from silence.
+
+### A second regression, caught the same way as the first
+
+Re-running the full conformance suite after the flip — not just the four
+combinations already in hand — surfaced a new one: `mpeg2video`/
+`mpeg1video` (`vaco-parse-mpegvideo::mpeg12`) also never set
+`field_order`, and also rode the old default coincidence, this time for
+the conformance suite's own `mpeg2-ps`/`mpeg2-ts`/`mpeg2-ts-with-audio`
+cases (all progressive content). Fixed by reading `sequence_extension()`'s
+`progressive_sequence` bit — already parsed and discarded
+(`let _progressive_sequence = r.get(1);`, sitting right there the whole
+time). Measured: MPEG-1 (no `sequence_extension()` at all) is always
+`progressive`; MPEG-2 is `progressive` when the bit is set, and a real
+`-vf setfield=tff` interlaced sample reports `tt`. Only the
+`progressive_sequence` half is implemented — the actual top/bottom order
+for genuinely interlaced MPEG-2 needs `picture_coding_extension()`'s
+`top_field_first` bit, unparsed here, so that case reports `Unknown`
+rather than a guessed order, mirroring `vaco-parse-h264`'s own accepted
+`frame_mbs_only`-only fidelity for the same field.
+
+This is the same shape as finding 63's own catch, one layer down: the
+first naive fix (mpeg4.rs) was caught before shipping by checking
+Matroska specifically; the sentinel flip itself was caught before
+shipping by checking `prores`/Y4M specifically; and *that* fix was
+caught before shipping by re-running the whole suite rather than
+re-checking only the four already-named cases. Measuring more each time
+kept finding one more thing a narrower check would have missed.
+
+### Re-verified directly against real ffprobe, every combination touched by either pass
+
+| combination | before | after | note |
+|---|---|---|---|
+| mpeg4-in-AVI | `progressive` (wrong) | `unknown` | fixed |
+| mpeg4-in-Matroska | `progressive` | `progressive` | unchanged — the case the naive fix broke |
+| h264-in-Matroska | `progressive` | `progressive` | unchanged — sanity check, shares the merge |
+| hevc-in-Matroska | `progressive` | `progressive` | unchanged — sanity check |
+| `prores`-in-MOV (prog/tff/bff) | `progressive`/`progressive`/`progressive` (2 wrong, coincidence) | `progressive`/`tb`/`bt` | fixed, now via a real signal |
+| Y4M (prog/tff/bff) | `progressive`/`progressive`/`progressive` (2 wrong, coincidence) | `progressive`/`tt`/`bb` | fixed, now via a real signal |
+| DV | `unknown` | `unknown` | unchanged (finding 63) |
+| `ffv1`-in-Matroska | `progressive` | `progressive` | unchanged — Matroska's own override |
+| `rawvideo`-in-AVI | `progressive` (wrong) | `unknown` | bonus fix, was silently wrong, unmeasured before |
+| mpeg1/mpeg2 progressive | `progressive` | `progressive` | preserved (would have regressed) |
+| mpeg2 interlaced | `progressive` (wrong) | `unknown` | honest gap, not measured further |
+
+### Measured leverage
+
+Full `vaco-conformance --tier core` re-run: 274 → 288 agreed, 435 → 421
+diverged — 14 more cases resolved. `field_order` itself drops from
+finding 60's original 71 cases to 8 in the raw log, every one of them
+either the known compact/xml line-cascade artifact or the still-
+deliberately-open mpeg4-in-AVI/ISOBMFF gap (fixing THAT one needs the
+same container-side work finding 63 already scoped: AVI/MP4 have no
+per-container field-order signal of their own to read the way Matroska,
+Y4M and MOV now do — there's simply nothing there yet, unlike the two
+cases this pass closed). No remaining coincidence anywhere in the field.
+
+Twenty-six cases resolved and holding since finding 60 began (262 → 288
+agreed).
+
+### Regression tests
+
+`vaco-codec-core`: `a_container_that_states_progressive_wins_over_a_
+differing_parser`, `a_container_that_states_nothing_takes_the_parsers_
+answer`, `the_default_field_order_is_unknown_not_progressive`,
+`two_containers_that_both_state_nothing_merge_to_unknown` — pinning
+exactly the distinction that was ambiguous before, per the coordinator's
+request. `vaco-demux-raw`: `the_interlace_tag_maps_to_the_measured_
+field_order`. `vaco-demux-mp4`: `field_order_reads_the_measured_fiel_
+payloads`. `vaco-parse-mpegvideo`: `a_non_progressive_sequence_reports_
+unknown_not_a_guessed_order` (the exact bit to flip found by flipping
+every bit in the extension's bytes one at a time and checking which one
+alone changed the parsed answer — not by hand-counting the bitstream
+layout) plus a new assertion on the existing MPEG-1 test.
+
+### Process note
+
+`cargo build --workspace` was attempted before this commit, per the
+process note from finding 62. It currently fails in `vaco-codec-hevc` on
+an unrelated `CuGrid::new` argument-count error from another agent's
+in-progress, uncommitted work there — confirmed unrelated (`git status`/
+`git log` show neither this session nor this commit touched that file;
+the error's own shape has nothing to do with `FieldOrder`/
+`VideoParameters`) by building `vaco-probe`/`vaco-cli` directly, both
+clean.
+
+`cargo test`/`cargo clippy -p vaco-codec-core -p vaco-demux-raw -p
+vaco-demux-mp4 -p vaco-parse-mpegvideo -p vaco-probe --all-targets -D
+warnings` clean.
