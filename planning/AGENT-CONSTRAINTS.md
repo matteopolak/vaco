@@ -2128,3 +2128,34 @@ work had run it and seen exactly what it expected.
 A pathspec commit is still fine in a crate you demonstrably own alone. The
 question to ask first is not "did I stage the right files" but "is anyone else
 editing these files right now" — and in this tree the answer is usually yes.
+
+## `update-ref` without its old-value guard silently orphans your commit
+
+The private-index recipe ends `git update-ref refs/heads/main "$commit"
+"$BASE"`. The **second SHA is not decoration** — it is a compare-and-swap. Drop
+it and the ref move always succeeds, so a concurrent agent that captured its own
+`BASE` before your commit will move `main` to a commit that does not have yours
+as an ancestor. Your commit still exists, reachable only from the reflog; your
+working-tree files vanish with it, because nothing in the tree ever referenced
+them.
+
+This happened twice in one night. Both were recovered — one agent noticed its
+three new doc files had disappeared and rewrote them, and an ALAC fix turned out
+to be byte-identical to a later attempt that landed — so the net loss was zero
+and that is luck, not process.
+
+`update-ref`'s guard fails loudly. Nothing else in the recipe does. So:
+
+```sh
+git update-ref refs/heads/main "$commit" "$BASE" || { echo "HEAD moved; restart from rev-parse"; exit 1; }
+git merge-base --is-ancestor "$commit" refs/heads/main || echo "ORPHANED — your commit is not in main"
+```
+
+**Verify the ancestry immediately after the ref move, not at the end of your
+turn.** A commit whose SHA `git show` still prints looks perfectly healthy; the
+only question that distinguishes landed work from orphaned work is whether
+`main` can reach it. `git log --oneline | head` will not tell you, because your
+commit is not there to be missed.
+
+If the guard fails, start over from `git rev-parse HEAD` and rebuild the blob
+from the *new* `HEAD`. Never retry by re-running `update-ref` without the guard.
