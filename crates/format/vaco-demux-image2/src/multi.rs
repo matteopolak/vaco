@@ -209,6 +209,15 @@ impl Image2Demuxer {
         let mut stream = Stream::new(0, MediaType::Video, time_base_for(options.framerate));
         stream.params.media_type = Some(MediaType::Video);
         stream.params.video = Some(stream_video(options.framerate));
+        // The reference names the codec from the filename here too
+        // (`image2`'s header read, not its probe): nothing else in this path
+        // ever looks at the bytes, so without it a `.tga` opened as `image2`
+        // reached the CLI with no codec at all and failed with "a stream being
+        // transcoded has no known input codec". `None` for an extension this
+        // build has no `CodecId` for, which leaves the stream exactly as
+        // undescribed as it was.
+        stream.params.codec_id = fsutil::extension_of(name)
+            .and_then(vaco_codec_core::image_codec_for_extension);
 
         Ok(Self {
             dir,
@@ -488,16 +497,20 @@ fn open_boxed(src: Box<dyn MediaSource>, parsers: &dyn ParserProvider) -> Result
 fn probe_image2(data: &ProbeData<'_>) -> ProbeScore {
     // The reference selects `image2` almost entirely by filename pattern
     // (`%d` in the path) rather than content, which this crate cannot see
-    // from `ProbeData` alone reliably; fall back to the extension list every
-    // still-image codec this crate knows about shares.
-    if data.extension_matches(&[
-        "png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff", "webp", "ppm", "pgm", "pbm", "pam",
-        "sgi", "dpx", "exr", "qoi",
-    ]) {
-        ProbeScore::EXTENSION
-    } else {
-        ProbeScore::NONE
-    }
+    // from `ProbeData` alone reliably; fall back to the extension list.
+    //
+    // That list used to be written out here by hand, and was missing `tga`
+    // among others — measured, `t.tga` matched no demuxer at all and
+    // `vaco-probe` reported `Invalid data found when processing input` where
+    // `ffprobe` reported `image2`. TGA is one of only a handful of image
+    // formats with no `*_pipe` splitter of its own (the reference has none
+    // either), so `image2` is the *only* thing that can open it. Reading
+    // `vaco-codec-core`'s single list is what stops that gap reopening.
+    //
+    // Scoring [`ProbeScore::EXTENSION`] leaves every `*_pipe` splitter's
+    // content match (`MAGIC` or `MAX`) ahead of this, so `image2` only wins
+    // where nothing recognised the bytes.
+    ProbeScore::from_extension(data, vaco_codec_core::IMAGE_EXTENSIONS)
 }
 
 /// The `image2` demuxer's registry entry. See the module docs for the split
@@ -527,6 +540,52 @@ pub const DEMUXER_IMAGE2: DemuxerDesc = DemuxerDesc {
 mod tests {
     use super::*;
     use std::fs;
+
+    /// TGA has no `*_pipe` splitter in the reference or here, so `image2` is
+    /// the only demuxer that can open one. Its probe used to carry a
+    /// hand-written extension list that omitted `tga` (and `pcx`, `xbm`,
+    /// `xwd`, `jls`), so a `.tga` file matched nothing at all.
+    #[test]
+    fn the_image2_probe_covers_every_declared_image_extension() {
+        for ext in vaco_codec_core::IMAGE_EXTENSIONS {
+            let name = format!("frame.{ext}");
+            let data = ProbeData::new(&[0u8; 32]).with_filename(&name);
+            assert_eq!(
+                (DEMUXER_IMAGE2.probe)(&data),
+                ProbeScore::EXTENSION,
+                "{ext} is declared but does not probe"
+            );
+        }
+        let other = ProbeData::new(&[0u8; 32]).with_filename("movie.mkv");
+        assert!((DEMUXER_IMAGE2.probe)(&other).is_none());
+    }
+
+    /// Nothing else in the `image2` path reads the bytes, so without the
+    /// filename the stream reaches the CLI with no codec and the transcode
+    /// fails with "no known input codec".
+    #[test]
+    fn a_bound_pattern_names_its_codec_from_the_extension() {
+        let dir = std::env::temp_dir().join(format!(
+            "vaco-image2-codec-id-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        for (name, want) in [
+            ("a.tga", Some(vaco_codec_core::CodecId::Targa)),
+            ("a.png", Some(vaco_codec_core::CodecId::Png)),
+            ("a.dpx", None),
+        ] {
+            let path = dir.join(name);
+            fs::write(&path, b"x").unwrap();
+            let d =
+                Image2Demuxer::open_pattern(path.to_str().unwrap(), Image2Options::default())
+                    .unwrap();
+            assert_eq!(d.streams()[0].params.codec_id, want, "{name}");
+        }
+        let _ = fs::remove_dir_all(&dir);
+    }
 
     fn scratch_dir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(

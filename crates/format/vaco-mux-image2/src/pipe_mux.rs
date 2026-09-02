@@ -189,18 +189,20 @@ impl Muxer for RegistryMuxer {
 pub const MUXER_IMAGE2: MuxerDesc = MuxerDesc {
     name: "image2",
     long_name: "image2 sequence",
-    // The reference's list, verbatim and in its order. Claiming an extension is
-    // independent of whether an encoder for it exists; with an empty list every
-    // image extension fell through to a demuxer-only row and the CLI refused an
-    // output path it can in fact write.
-    extensions: &[
-        "bmp", "dpx", "exr", "jls", "jpeg", "jpg", "jxs", "jxl", "ljpg", "pam", "pbm", "pcx",
-        "pfm", "pgm", "pgmyuv", "phm", "png", "ppm", "sgi", "tga", "tif", "tiff", "jp2", "j2c",
-        "j2k", "xwd", "sun", "ras", "rs", "im1", "im8", "im24", "sunras", "vbn", "xbm", "xface",
-        "pix", "y", "avif", "qoi", "hdr", "wbmp",
-    ],
+    // The reference's list, verbatim and in its order — held once, in
+    // `vaco-codec-core`, because the `image2` demuxer's probe and the CLI's
+    // output-codec guess read the same list and had drifted from this copy of
+    // it. Claiming an extension is independent of whether an encoder for it
+    // exists; with an empty list every image extension fell through to a
+    // demuxer-only row and the CLI refused an output path it can in fact write.
+    extensions: vaco_codec_core::IMAGE_EXTENSIONS,
     // Measured: `ffmpeg -h muxer=image2` -> `Default video codec: mjpeg.`
     // (`CodecId::Jpeg` is spelled `mjpeg` in the reference's own listing.)
+    //
+    // This is the *fallback*, not the answer: the reference overrides it from
+    // the output filename's extension, so `out.png` writes PNG and not JPEG.
+    // That override is `vaco_codec_core::image_codec_for_extension`, consulted
+    // by the CLI before this field — see `vaco-cli`'s `default_encoder_for`.
     default_video: Some(vaco_codec_core::CodecId::Jpeg),
     default_audio: None,
     open: |sink: Box<dyn MediaSink>| {

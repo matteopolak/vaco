@@ -366,7 +366,32 @@ fn open(url: &str, force: Option<&str>) -> Result<Input> {
         (*detected.desc, detected.score, size)
     };
 
-    let inner = (desc.open)(opener(url)?, &vaco_registry::Parsers)?;
+    // `NEEDNUMBER` means this descriptor's `open` cannot be reached with a
+    // literally-opened source at all — the URL may be an `img_%03d.png`
+    // pattern — so it gets a placeholder plus `Demuxer::bind_url`, exactly as
+    // `vaco-cli`'s own open does.
+    //
+    // This is not only about patterns. `image2` is the only demuxer that can
+    // open a `.tga` (neither this build nor the reference has a `tga_pipe`),
+    // and the URL is the only place its codec identity is stated — so without
+    // this branch `vaco-probe` reported `0,0,unknown` for a file the CLI read
+    // correctly, and the two binaries disagreed about the same input.
+    let inner = if desc.flags.contains(vaco_format_core::FormatFlags::NEEDNUMBER) {
+        let placeholder: Box<dyn vaco_io::MediaSource> =
+            Box::new(vaco_io::MemorySource::new(Vec::new()));
+        let mut inner = (desc.open)(placeholder, &vaco_registry::Parsers)?;
+        inner.bind_url(url)?;
+        inner
+    } else {
+        let mut inner = (desc.open)(opener(url)?, &vaco_registry::Parsers)?;
+        // Best-effort, as in `vaco-cli`: `Unsupported` just means this demuxer
+        // has nothing to bind.
+        match inner.bind_url(url) {
+            Ok(()) | Err(vaco_core::Error::Unsupported(_)) => {}
+            Err(e) => return Err(e),
+        }
+        inner
+    };
 
     // Run stream discovery before anyone reads `streams()`.
     //

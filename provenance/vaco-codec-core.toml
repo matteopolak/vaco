@@ -3,3 +3,10 @@ name   = "CODECS"
 file   = "crates/signal/vaco-codec-core/src/lib.rs"
 source = "ffmpeg-codecs-probe"
 method = "probed"
+
+[[table]]
+name   = "IMAGE_EXTENSIONS"
+file   = "crates/signal/vaco-codec-core/src/lib.rs"
+source = "ffmpeg-still-image-selection-probe"
+clause = "the image2 muxer's 42 declared extensions, and the codec each one selects for an output filename -- `ffmpeg -i src.png -frames:v 1 out.<ext>` then `ffprobe -show_entries stream=codec_name`, ffmpeg 9.0.1"
+method = "probed"

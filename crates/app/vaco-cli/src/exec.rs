@@ -102,6 +102,7 @@ use vaco_format_core::metadata::MuxMetadata;
 use vaco_format_core::{
     Muxer, Stream, dihedral_transform_from_angle_and_flips, dihedral_transform_from_matrix,
 };
+use vaco_codec_core::CodecId;
 use vaco_pixfmt::PixFmt;
 use vaco_sched::{Driver, Finish, PipelineSpec, SourceBind};
 
@@ -1026,9 +1027,41 @@ fn no_muxer(out: &OutputSpec, name: &str) -> Diagnostic {
 fn default_encoder_for(
     format: &str,
     media: Option<MediaType>,
+    url: &str,
 ) -> Option<&'static vaco_codec_core::EncoderDesc> {
-    let codec = vaco_registry::muxer_by_name(format)?.default_codec(media?)?;
-    vaco_registry::encoder_for(codec)
+    vaco_registry::encoder_for(default_codec_for(format, media, url)?)
+}
+
+/// The codec an output with no `-c` gets: the container's declared default,
+/// unless it is one of the `image2` family, where the *filename* decides.
+///
+/// # Why the filename overrides the container here
+///
+/// `image2` declares exactly one default video codec — `mjpeg`, measured from
+/// `ffmpeg -h muxer=image2` — while claiming 42 extensions. Consulting only
+/// that field made `vaco -i in.png out.png` select the JPEG encoder and fail
+/// with `unsupported: jpeg: only grayscale and ...`, where the reference
+/// writes a PNG. The reference resolves this from the output filename before
+/// falling back to the declared default, and so does this.
+///
+/// `vaco_codec_core::image_codec_for_extension` is the single table that
+/// answers it; `vaco-mux-image2` and `vaco-demux-image2` read the same one.
+fn default_codec_for(format: &str, media: Option<MediaType>, url: &str) -> Option<CodecId> {
+    let desc = vaco_registry::muxer_by_name(format)?;
+    let media = media?;
+    if media == MediaType::Video && desc.matches_name("image2") {
+        let guessed = std::path::Path::new(url)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)
+            .and_then(vaco_codec_core::image_codec_for_extension);
+        // A named extension is an instruction, not a hint: if it names a codec
+        // this build cannot encode, that is the error to report, not a silent
+        // fall back to JPEG.
+        if let Some(codec) = guessed {
+            return Some(codec);
+        }
+    }
+    desc.default_codec(media)
 }
 
 fn check_codecs(
@@ -1073,15 +1106,20 @@ fn check_codecs(
                     ));
                 }
             },
-            None => match default_encoder_for(format, s.media) {
+            None => match default_encoder_for(format, s.media, &out.url) {
                 Some(desc) => chosen_codecs.push(StreamCodec::Encode(desc.name)),
                 None => {
+                    // The reference names the codec it resolved and could not
+                    // encode (`codec jpegxl`), and `none` only when it
+                    // resolved nothing at all.
+                    let codec = default_codec_for(format, s.media, &out.url)
+                        .map_or("none", CodecId::name);
                     return Err(encoder_error(
                         out,
                         s,
                         i,
                         &format!(
-                            "Automatic encoder selection failed Default encoder for format {format} (codec none) is probably disabled. Please choose an encoder manually.",
+                            "Automatic encoder selection failed Default encoder for format {format} (codec {codec}) is probably disabled. Please choose an encoder manually.",
                         ),
                     ));
                 }

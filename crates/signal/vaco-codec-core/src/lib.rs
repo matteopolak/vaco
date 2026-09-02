@@ -1510,6 +1510,80 @@ const CODECS: &[CodecEntry] = &[
     ),
 ];
 
+/// Every filename extension the `image2` family answers to, in the reference's
+/// own order.
+///
+/// **One list, three readers.** `vaco-mux-image2`'s `MUXER_IMAGE2.extensions`,
+/// `vaco-demux-image2`'s `image2` probe and the CLI's output-codec guess all
+/// read this, because the three had to agree and did not: a `.tga` file probed
+/// as nothing at all (the demuxer's own hand-written list omitted it), while
+/// every image extension the muxer *did* claim selected the JPEG encoder,
+/// because the muxer's single `default_video` is `mjpeg` and nothing consulted
+/// the filename. `CodecId` is the only crate all three already depend on, so
+/// this is where the list can live without a new edge.
+///
+/// `Vaco-Spec-Ref: ffmpeg-still-image-selection-probe` — the extension list and
+/// the codec each one selects were measured, not read: for every extension
+/// here, `ffmpeg -i src.png -frames:v 1 out.<ext>` followed by `ffprobe` on the
+/// result, against ffmpeg 9.0.1.
+pub const IMAGE_EXTENSIONS: &[&str] = &[
+    "bmp", "dpx", "exr", "jls", "jpeg", "jpg", "jxs", "jxl", "ljpg", "pam", "pbm", "pcx", "pfm",
+    "pgm", "pgmyuv", "phm", "png", "ppm", "sgi", "tga", "tif", "tiff", "jp2", "j2c", "j2k", "xwd",
+    "sun", "ras", "rs", "im1", "im8", "im24", "sunras", "vbn", "xbm", "xface", "pix", "y", "avif",
+    "qoi", "hdr", "wbmp",
+];
+
+/// The still-image codec a filename extension selects, or `None` when this
+/// build has no [`CodecId`] for the format that extension names.
+///
+/// The reference's `image2` muxer declares one default video codec (`mjpeg`)
+/// and then overrides it from the output filename; this is that override.
+/// Measured per extension — see [`IMAGE_EXTENSIONS`]. An extension listed there
+/// but absent here is one whose codec this build has no identifier for
+/// (`dpx`, `sunrast`, `alias_pix`, `wbmp`, `xface`, `pgmyuv`, `vbn`, `jpegxs`,
+/// `hdr`), which is a truthful `None` rather than a wrong guess.
+///
+/// `gif` and `webp` are not `image2` extensions in the reference (each has its
+/// own muxer) and are deliberately absent.
+#[must_use]
+pub fn image_codec_for_extension(extension: &str) -> Option<CodecId> {
+    // Extensions are matched case-insensitively: a filename is not a CLI
+    // option value, and `OUT.PNG` names a PNG.
+    let mut lowered = [0u8; 8];
+    let bytes = extension.as_bytes();
+    {
+        let slot = lowered.get_mut(..bytes.len())?;
+        for (dst, &src) in slot.iter_mut().zip(bytes) {
+            *dst = src.to_ascii_lowercase();
+        }
+    }
+    let lowered = lowered.get(..bytes.len())?;
+    Some(match lowered {
+        b"bmp" => CodecId::Bmp,
+        b"exr" => CodecId::Exr,
+        b"jls" => CodecId::JpegLs,
+        b"jpeg" | b"jpg" | b"ljpg" => CodecId::Jpeg,
+        b"jxl" => CodecId::JpegXl,
+        b"pam" => CodecId::Pam,
+        b"pbm" => CodecId::Pbm,
+        b"pcx" => CodecId::Pcx,
+        b"pfm" => CodecId::Pfm,
+        b"pgm" => CodecId::Pgm,
+        b"phm" => CodecId::Phm,
+        b"png" => CodecId::Png,
+        b"ppm" => CodecId::Ppm,
+        b"sgi" => CodecId::Sgi,
+        b"tga" => CodecId::Targa,
+        b"tif" | b"tiff" => CodecId::Tiff,
+        b"jp2" | b"j2c" | b"j2k" => CodecId::Jpeg2000,
+        b"xwd" => CodecId::Xwd,
+        b"xbm" => CodecId::Xbm,
+        b"qoi" => CodecId::Qoi,
+        b"avif" => CodecId::Av1,
+        _ => return None,
+    })
+}
+
 impl CodecId {
     fn entry(self) -> Option<&'static CodecEntry> {
         CODECS.iter().find(|e| e.id == self)
@@ -2222,5 +2296,75 @@ impl EncoderDesc {
     #[must_use]
     pub fn build(&self, limits: Limits) -> Box<dyn Encoder> {
         (self.make)(limits)
+    }
+}
+
+#[cfg(test)]
+mod image_extension_tests {
+    use super::{CodecId, IMAGE_EXTENSIONS, image_codec_for_extension};
+
+    /// Every extension that maps to a codec must be one the muxer claims —
+    /// otherwise the CLI would guess a codec for a filename the `image2`
+    /// muxer never gets asked to write.
+    #[test]
+    fn every_mapped_extension_is_in_the_declared_list() {
+        for ext in IMAGE_EXTENSIONS {
+            if image_codec_for_extension(ext).is_some() {
+                assert!(IMAGE_EXTENSIONS.contains(ext), "{ext}");
+            }
+        }
+        assert!(image_codec_for_extension("mp4").is_none());
+        assert!(image_codec_for_extension("").is_none());
+        assert!(image_codec_for_extension("averylongextension").is_none());
+    }
+
+    /// Measured against ffmpeg 9.0.1, one `ffmpeg -i src.png -frames:v 1
+    /// out.<ext>` plus `ffprobe` per row. The `.png`-selects-JPEG bug lived
+    /// exactly in the first row here.
+    #[test]
+    fn the_measured_reference_mapping_holds() {
+        let expected: &[(&str, CodecId)] = &[
+            ("png", CodecId::Png),
+            ("bmp", CodecId::Bmp),
+            ("jls", CodecId::JpegLs),
+            ("jpg", CodecId::Jpeg),
+            ("jpeg", CodecId::Jpeg),
+            ("ljpg", CodecId::Jpeg),
+            ("pam", CodecId::Pam),
+            ("pbm", CodecId::Pbm),
+            ("pcx", CodecId::Pcx),
+            ("pfm", CodecId::Pfm),
+            ("pgm", CodecId::Pgm),
+            ("phm", CodecId::Phm),
+            ("ppm", CodecId::Ppm),
+            ("sgi", CodecId::Sgi),
+            ("tga", CodecId::Targa),
+            ("tif", CodecId::Tiff),
+            ("tiff", CodecId::Tiff),
+            ("xwd", CodecId::Xwd),
+            ("xbm", CodecId::Xbm),
+            ("qoi", CodecId::Qoi),
+            ("exr", CodecId::Exr),
+        ];
+        for &(ext, id) in expected {
+            assert_eq!(image_codec_for_extension(ext), Some(id), "{ext}");
+            assert_eq!(
+                image_codec_for_extension(&ext.to_uppercase()),
+                Some(id),
+                "{ext} uppercased"
+            );
+        }
+    }
+
+    /// Extensions the reference's `image2` muxer claims but that name a codec
+    /// this build has no `CodecId` for. Answering `None` is what keeps the CLI
+    /// from writing the wrong format under a right-looking name.
+    #[test]
+    fn unmapped_extensions_stay_unmapped() {
+        for ext in [
+            "dpx", "sunras", "ras", "pix", "wbmp", "xface", "pgmyuv", "vbn", "jxs",
+        ] {
+            assert!(image_codec_for_extension(ext).is_none(), "{ext}");
+        }
     }
 }

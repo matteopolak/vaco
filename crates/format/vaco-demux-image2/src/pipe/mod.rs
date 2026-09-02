@@ -79,13 +79,31 @@ pub struct PipeSpec {
     pub magic_sets: &'static [&'static [MagicPart]],
 }
 
+/// A signature shorter than this is not, on its own, proof of a format:
+/// `jpeg_pipe`'s `FF D8` is the first two bytes of every JPEG-LS file too, and
+/// scoring both at [`ProbeScore::MAX`] made registration order decide which
+/// won — measured, `ffprobe` reports `jpegls_pipe` for a `.jls` file and this
+/// crate reported `jpeg_pipe`, so the JPEG decoder then failed the stream with
+/// `SOS before SOF` on a perfectly valid SOF55 image.
+const STRONG_MAGIC_BYTES: usize = 4;
+
 fn pipe_probe(spec: &PipeSpec, data: &ProbeData<'_>) -> ProbeScore {
+    let extension_matches = data.extension_matches(spec.extensions);
     for set in spec.magic_sets {
-        if set.iter().all(|&(off, bytes)| data.matches_at(off, bytes)) {
-            return ProbeScore::MAX;
+        if !set.iter().all(|&(off, bytes)| data.matches_at(off, bytes)) {
+            continue;
         }
+        let matched: usize = set.iter().map(|&(_, bytes)| bytes.len()).sum();
+        return if matched >= STRONG_MAGIC_BYTES || extension_matches {
+            ProbeScore::MAX
+        } else {
+            // Still above every extension-only answer, so a piped stream with
+            // no filename at all still selects this format; just below a
+            // longer signature that names one format and one only.
+            ProbeScore::MAGIC
+        };
     }
-    if spec.magic_sets.is_empty() && data.extension_matches(spec.extensions) {
+    if spec.magic_sets.is_empty() && extension_matches {
         return ProbeScore::EXTENSION;
     }
     ProbeScore::NONE
@@ -475,7 +493,9 @@ pipe!(
     framing = JPEG_MARKER,
     codec = Some(CodecId::JpegLs),
     raw_name = "jpegls",
-    magics = &[&[(0, &[0xFF, 0xD8])]]
+    // SOI followed by SOF55 (`FF F7`), the start-of-frame marker that is
+    // JPEG-LS and nothing else. Plain `FF D8` matches every JPEG as well.
+    magics = &[&[(0, &[0xFF, 0xD8, 0xFF, 0xF7])]]
 );
 
 pipe!(
@@ -900,6 +920,34 @@ mod tests {
         let mut d = (DEMUXER_PNG.open)(src, &NoParsers).unwrap();
         assert_eq!(d.streams().len(), 1);
         assert!(d.read_packet().is_ok());
+    }
+
+    /// The first four bytes of a real `ffmpeg`-written `.jls`: SOI, then
+    /// SOF55. `jpeg_pipe` matches its leading `FF D8` too, so this is the
+    /// case that used to hand a JPEG-LS stream to the JPEG decoder.
+    const JPEGLS_HEAD: [u8; 8] = [0xFF, 0xD8, 0xFF, 0xF7, 0x00, 0x11, 0x08, 0x00];
+
+    #[test]
+    fn jpegls_outscores_jpeg_on_a_jpegls_stream() {
+        let data = ProbeData::new(&JPEGLS_HEAD);
+        let jls = (DEMUXER_JPEGLS.probe)(&data);
+        let jpg = (DEMUXER_JPEG.probe)(&data);
+        assert!(jls > jpg, "jpegls {jls:?} must beat jpeg {jpg:?}");
+    }
+
+    #[test]
+    fn jpeg_still_wins_on_a_plain_jpeg_stream() {
+        let jfif = [0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F'];
+        let data = ProbeData::new(&jfif);
+        assert!(!(DEMUXER_JPEG.probe)(&data).is_none());
+        assert!((DEMUXER_JPEGLS.probe)(&data).is_none());
+    }
+
+    #[test]
+    fn a_named_jpeg_file_scores_the_maximum() {
+        let jfif = [0xFFu8, 0xD8, 0xFF, 0xE0, 0x00, 0x10, b'J', b'F'];
+        let data = ProbeData::new(&jfif).with_filename("holiday.jpg");
+        assert_eq!((DEMUXER_JPEG.probe)(&data), ProbeScore::MAX);
     }
 
     #[test]

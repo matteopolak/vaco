@@ -42,6 +42,18 @@ pub fn split_dir_and_name(pattern: &str) -> (PathBuf, &str) {
 /// against files starting at `out010.png`, measured):
 /// `"Could find no file or sequence with path '<pattern>' and index in the
 /// range <lo>-<hi>"`.
+/// The lowercase-insensitive extension of a filename, without the dot.
+///
+/// `std::path::Path::extension` on a pattern like `img_%03d.png` answers the
+/// same thing, but this takes the `&str` the caller already has and keeps the
+/// crate's `wasm32` half free of a `Path` round-trip for a string operation.
+#[must_use]
+pub fn extension_of(name: &str) -> Option<&str> {
+    let dot = name.rfind('.')?;
+    let ext = name.get(dot.checked_add(1)?..)?;
+    (!ext.is_empty() && !ext.contains('/') && !ext.contains('\\')).then_some(ext)
+}
+
 pub fn find_sequence_start(
     dir: &Path,
     display_pattern: &str,
