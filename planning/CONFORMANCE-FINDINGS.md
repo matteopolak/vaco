@@ -5632,3 +5632,117 @@ twice.
 
 `cargo test`/`cargo clippy --all-targets -D warnings` clean on every
 touched crate; `cargo build --workspace` clean.
+
+## 63. `field_order`: DV closed, mpeg4-in-AVI/ISOBMFF traced to a merge-sentinel bug and deliberately left unfixed rather than risk a blind regression
+
+Continuing finding 60's ranking: `field_order` (71 cases) triaged before
+touching anything, per the coordinator's "skip the scattered ones, say
+why" instruction from finding 62.
+
+### Triage
+
+Most of the raw 71 is the by-now-familiar compact/xml line-cascade
+artifact (`chroma_location`, `mime_codec_string` both hit this in
+findings 60/62): both sides already agree on `field_order`, an unrelated
+field differing earlier in the same record drags it into the reported
+diff. The genuine value mismatches (`progressive` vs `unknown`) cluster in
+exactly two places: DV, and mpeg4 wrapped in AVI or MP4/ISOBMFF — mpeg4-
+in-Matroska already reports correctly and is untouched by either finding.
+
+### Root cause, both clusters
+
+`VideoParameters::field_order`'s own `#[default]` is
+`FieldOrder::Progressive` — any codec parser that never explicitly states
+a field order silently reports "progressive" instead of "not stated."
+`vaco-parse-image`'s `jpeg.rs` had already discovered and worked around
+this exact trap for JPEG, independently, with a comment naming it —
+confirmed by reading that file, not rediscovered from scratch.
+
+### DV: fixed
+
+Measured directly (`ffmpeg -c:v dvvideo`, real ffprobe, NTSC and PAL):
+`field_order=unknown`. DV states no interlace flag this crate reads.
+`crates/format/vaco-format-dv/src/demux.rs` builds its `VideoParameters`
+directly, with no separate container/parser merge step to interact with —
+setting `field_order: FieldOrder::Unknown` there is unconditional and
+carries zero interaction risk. Verified against real ffprobe post-fix;
+new assertion on the crate's existing real-fixture test. Commit `7e9fb0e`.
+
+### mpeg4-in-AVI/ISOBMFF: investigated, fixed, verified broken, reverted
+
+The obvious mirror fix — asserting `field_order = FieldOrder::Unknown` in
+`vaco-parse-mpegvideo/src/mpeg4.rs`, the same one line DV needed — was
+written, built, and verified correct against real ffprobe for AVI. It was
+**not** shipped: the same verification pass, run against Matroska before
+declaring done, found it silently broke the currently-*correct*
+`probe-matroska/mpeg4-video` case (`progressive` → wrongly `unknown`).
+
+Root cause: `vaco-format-core::discovery`'s container/parser merge
+(`CodecParameters::fill_from`) tests `field_order == FieldOrder::Progressive`
+to decide whether the container "said nothing yet." That is stated as a
+load-bearing invariant in `discovery.rs`'s own doc comment on `refine`:
+"the container's own metadata wins ... inverting it is how a stream whose
+bitstream header disagrees with its container ends up reported wrongly."
+`vaco-demux-matroska` reads a real `FlagInterlaced`/`FieldOrder` EBML
+element and states a genuine `Progressive` for a non-interlaced track —
+which the merge cannot distinguish from "no information at all," so an
+`mpeg4` parser asserting anything other than `Progressive` gets silently
+discarded in Matroska specifically. This bug has been invisible until now
+only because every codec parser that doesn't explicitly state a field
+order has, until this pass, defaulted to the same value (`Progressive`)
+the merge treats as blank — a coincidence, not a design that worked.
+
+**Considered and rejected**: flipping the sentinel itself (both the
+enum's `#[default]` and the `fill_from` check, treating `Unknown` as
+"unset" — the same shape `ColorInfo`'s `chroma_location` merge already
+gets right with the dedicated `ChromaLocation::Unspecified`, which is
+never also a legitimate real value). This is very likely the *correct*
+long-term fix. It was not shipped tonight because measuring it surfaced
+two more, currently-*passing* combinations riding the exact same
+accidental-default coincidence the mpeg4/DV bug relies on:
+
+```
+ffv1   -c:v ffv1   -f matroska   -> field_order=progressive  (Matroska's own override; unaffected by the flip)
+prores -c:v prores -f mov        -> field_order=progressive  (neither prores.rs nor the MOV demuxer reads anything; matches ONLY by default coincidence)
+        -f yuv4mpegpipe          -> field_order=progressive  (Y4M's own header states interlace mode; this crate's y4m demux does not read it; matches ONLY by coincidence)
+```
+
+`prores`-in-MOV and Y4M are not in the conformance suite at all, so
+nothing would have caught either regression — flipping the sentinel on
+the strength of the DV/mpeg4 evidence alone would have been exactly the
+"a constant that happens to match is not a measured value" mistake this
+whole ranking effort has been built to avoid repeating. `rawvideo`-in-AVI
+was also checked and is the mirror case: real ffprobe already says
+`unknown` there today, which the *current*, unfixed default gets wrong
+right now, unmeasured by anything — the flip would have fixed it as a
+side effect, which is suggestive but not sufficient grounds to ship an
+otherwise-unverified change touching every codec/container pair in the
+tree.
+
+Reverted the `mpeg4.rs` line; left a comment at the exact spot naming the
+mechanism, the two currently-passing combinations that block a blind
+fix, and what the real fix looks like, so whoever picks this up next
+starts from the diagnosis rather than from zero. Commit `7e9fb0e`.
+
+### Measured leverage
+
+Full `vaco-conformance --tier core` re-run: 274 agreed / 435 diverged,
+unchanged at the case level (DV's own case carries other, already-known
+divergences too — the DV audio-stream/timecode gaps task_3913a016 already
+flagged). Direct re-check of `field_order` specifically: DV's share drops
+to the same agree-but-cascade-shifted pattern already established as
+harmless for `chroma_location`/`mime_codec_string`; AVI/ISOBMFF mpeg4
+confirmed unchanged (still the known, now precisely-diagnosed gap);
+Matroska mpeg4 confirmed unchanged (still correct — the regression that
+was caught and did not ship).
+
+### Process note
+
+Ran `cargo build --workspace` before this commit, not only before
+declaring the work done, per the coordinator's note on finding 62's
+`quarter_sample`/`divx_packed` commit (which briefly broke `vaco-parse-
+h264`/`vaco-parse-hevc` for another agent building concurrently, between
+this session's own workspace build and the commit landing).
+
+`cargo test`/`cargo clippy -p vaco-parse-mpegvideo -p vaco-format-dv
+--all-targets -D warnings` clean.
