@@ -31,9 +31,10 @@
 use vaco_bitstream::{BitReader, annexb};
 use vaco_codec_core::{Caps, Decoder};
 use vaco_core::{Error, Result};
-use vaco_frame::{Frame, FrameFlags};
+use vaco_frame::{Frame, FrameFlags, FrameSideData};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
+use vaco_parse_mpegvideo::a53::cc_data_after_identifier;
 use vaco_pixfmt::PixFmt;
 
 use crate::block::Mpeg2Idct;
@@ -48,6 +49,10 @@ const EXTENSION_START: u8 = 0xB5;
 const GROUP_START: u8 = 0xB8;
 const PICTURE_START: u8 = 0x00;
 const SEQUENCE_END: u8 = 0xB7;
+/// `user_data_start_code` (ITU-T H.262 Table 6-1) — where an ATSC A/53
+/// caption `user_data()` element rides. See `vaco_parse_mpegvideo::a53`'s
+/// module doc for the structure.
+const USER_DATA_START: u8 = 0xB2;
 
 const EXT_SEQUENCE: u32 = 1;
 const EXT_QUANT_MATRIX: u32 = 3;
@@ -113,7 +118,14 @@ impl Mpeg12Decoder {
         self.unsupported_pictures
     }
 
-    fn begin_picture(&mut self, hdr: PictureHeader, pce: PictureCodingExtension, pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
+    fn begin_picture(
+        &mut self,
+        hdr: PictureHeader,
+        pce: PictureCodingExtension,
+        pts: vaco_core::Timestamp,
+        duration: vaco_core::Duration,
+        closed_captions: Vec<u8>,
+    ) -> Result<()> {
         let Some(seq) = self.seq.clone() else {
             return Err(Error::InvalidData("mpeg12: picture before any sequence_header"));
         };
@@ -176,6 +188,7 @@ impl Mpeg12Decoder {
             recent: self.recent.clone(),
             mpeg1: seq.ext.is_none(),
             chroma_format,
+            closed_captions,
         });
         Ok(())
     }
@@ -188,7 +201,12 @@ impl Mpeg12Decoder {
             ap.header.coding_type,
             headers::PictureType::I | headers::PictureType::P
         );
-        let frame = ap.frame;
+        let mut frame = ap.frame;
+        if !ap.closed_captions.is_empty()
+            && let Ok(buffer) = vaco_pool::Buffer::from_slice(&mut self.budget, &ap.closed_captions)
+        {
+            frame.set_side_data(FrameSideData::ClosedCaptions(buffer));
+        }
         if is_reference {
             if let Some(held) = self.held.take() {
                 self.machine.emit(held);
@@ -204,6 +222,13 @@ impl Mpeg12Decoder {
     fn decode_access_unit(&mut self, data: &[u8], pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
         let mut pos = 0usize;
         let mut pending_picture: Option<(PictureHeader, Option<PictureCodingExtension>)> = None;
+        // ATSC A/53 closed captions (interface gap 18's attachment half —
+        // extraction itself is `vaco_parse_mpegvideo::a53`, already
+        // landed). Concatenated across every `user_data()` element seen
+        // since the last picture began, in stream order, and drained into
+        // that picture at its first slice — see `ActivePicture::closed_captions`'s
+        // doc for why it must land on *this* picture rather than accumulate.
+        let mut pending_cc: Vec<u8> = Vec::new();
         while let Some(sc) = annexb::find_start_code(data, pos) {
             let Some(&code) = data.get(sc + 3) else {
                 break;
@@ -250,6 +275,11 @@ impl Mpeg12Decoder {
                     }
                 }
                 GROUP_START | SEQUENCE_END => {}
+                USER_DATA_START => {
+                    if let Some(triplets) = cc_data_after_identifier(body) {
+                        pending_cc.extend_from_slice(triplets);
+                    }
+                }
                 PICTURE_START => {
                     // A new picture_header means the previous picture's
                     // slice data has ended. A well-formed access unit
@@ -271,7 +301,7 @@ impl Mpeg12Decoder {
                         let pce = pce_opt.unwrap_or_else(|| {
                             PictureCodingExtension::mpeg1_default(hdr.forward_f_code, hdr.backward_f_code)
                         });
-                        self.begin_picture(hdr, pce, pts, duration)?;
+                        self.begin_picture(hdr, pce, pts, duration, std::mem::take(&mut pending_cc))?;
                     }
                     let seq = self.seq.clone();
                     if let (Some(ap), Some(seq)) = (self.current.as_mut(), seq) {
@@ -402,6 +432,7 @@ impl Decoder for Mpeg12Decoder {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
 
@@ -468,7 +499,7 @@ mod tests {
             ..PictureCodingExtension::mpeg1_default(0, 0)
         };
         assert!(
-            dec.begin_picture(hdr, pce, vaco_core::Timestamp::default(), vaco_core::Duration::default())
+            dec.begin_picture(hdr, pce, vaco_core::Timestamp::default(), vaco_core::Duration::default(), Vec::new())
                 .is_ok()
         );
         let ap = dec.current.as_ref();
@@ -505,7 +536,7 @@ mod tests {
             ..PictureCodingExtension::mpeg1_default(0, 0)
         };
         assert!(
-            dec.begin_picture(hdr, pce, vaco_core::Timestamp::default(), vaco_core::Duration::default())
+            dec.begin_picture(hdr, pce, vaco_core::Timestamp::default(), vaco_core::Duration::default(), Vec::new())
                 .is_ok()
         );
         let ap = dec.current.as_ref();
@@ -513,6 +544,111 @@ mod tests {
         if let Some(ap) = ap {
             assert!(ap.frame.flags.contains(FrameFlags::TOP_FIELD_FIRST));
         }
+    }
+
+    /// Minimal MSB-first bit packer, just enough to hand-build the fixed
+    /// fields `decode_access_unit` reads — not a general bitstream writer.
+    struct BitPacker {
+        buf: Vec<u8>,
+        cur: u8,
+        nbits: u8,
+    }
+
+    impl BitPacker {
+        fn new() -> Self {
+            Self { buf: Vec::new(), cur: 0, nbits: 0 }
+        }
+
+        fn push(&mut self, value: u32, width: u32) {
+            for i in (0..width).rev() {
+                self.cur = (self.cur << 1) | ((value >> i) & 1) as u8;
+                self.nbits += 1;
+                if self.nbits == 8 {
+                    self.buf.push(self.cur);
+                    self.cur = 0;
+                    self.nbits = 0;
+                }
+            }
+        }
+
+        fn finish(mut self) -> Vec<u8> {
+            if self.nbits > 0 {
+                self.cur <<= 8 - self.nbits;
+                self.buf.push(self.cur);
+            }
+            self.buf
+        }
+    }
+
+    /// A whole real-shaped access unit — `sequence_header()`,
+    /// `picture_header()`, a picture-level A/53 `user_data()` carrying two
+    /// caption triplets, and one (garbage, never fully decoded) slice —
+    /// exercises the same path `USER_DATA_START` wires up in
+    /// `decode_access_unit`: extraction is `vaco_parse_mpegvideo::a53`'s
+    /// own job (covered there against a real broadcast capture), this
+    /// test is only checking that this crate attaches what it returns to
+    /// the picture that follows it, as `FrameSideData::ClosedCaptions`.
+    #[test]
+    fn picture_user_data_caption_reaches_the_decoded_frame() {
+        let mut seq_bits = BitPacker::new();
+        seq_bits.push(16, 12); // horizontal_size_value
+        seq_bits.push(16, 12); // vertical_size_value
+        seq_bits.push(1, 4); // aspect_ratio_information
+        seq_bits.push(1, 4); // frame_rate_code
+        seq_bits.push(0, 18); // bit_rate_value
+        seq_bits.push(1, 1); // marker_bit
+        seq_bits.push(0, 10); // vbv_buffer_size_value
+        seq_bits.push(0, 1); // constrained_parameters_flag
+        seq_bits.push(0, 1); // load_intra_quantiser_matrix
+        seq_bits.push(0, 1); // load_non_intra_quantiser_matrix
+        let seq_body = seq_bits.finish();
+
+        let mut pic_bits = BitPacker::new();
+        pic_bits.push(0, 10); // temporal_reference
+        pic_bits.push(1, 3); // picture_coding_type == I
+        pic_bits.push(0, 16); // vbv_delay
+        let pic_body = pic_bits.finish();
+
+        // ATSC A/53 `user_data()`: GA94 identifier, MPEG_cc_data type,
+        // two arbitrary triplets — the extraction side already has its
+        // own real-capture-derived tests, so these bytes only need to be
+        // well-formed enough to round-trip through this crate's wiring.
+        let triplets: [u8; 6] = [0xFC, 0x41, 0x42, 0xFC, 0x43, 0x44];
+        let mut user_data = Vec::new();
+        user_data.extend_from_slice(&0x4741_3934u32.to_be_bytes()); // 'GA94'
+        user_data.push(0x03); // MPEG_cc_data()
+        user_data.push(0x40 | 2); // process_cc_data_flag=1, cc_count=2
+        user_data.push(0xFF); // em_data
+        user_data.extend_from_slice(&triplets);
+        user_data.push(0xFF); // marker_bits
+
+        let mut data = Vec::new();
+        data.extend_from_slice(&[0, 0, 1, SEQUENCE_HEADER]);
+        data.extend_from_slice(&seq_body);
+        data.extend_from_slice(&[0, 0, 1, PICTURE_START]);
+        data.extend_from_slice(&pic_body);
+        data.extend_from_slice(&[0, 0, 1, USER_DATA_START]);
+        data.extend_from_slice(&user_data);
+        data.extend_from_slice(&[0, 0, 1, 0x01]); // slice_start_code(1)
+        data.extend_from_slice(&[0x00, 0x00]); // slice payload, never fully decoded
+
+        let mut budget = Budget::new(Limits::strict());
+        let Ok(packet) = vaco_packet::Packet::from_slice(&mut budget, &data) else {
+            panic!("well-formed test payload must build a packet");
+        };
+        let mut dec = Mpeg12Decoder::new(Limits::strict());
+        dec.send_packet(Some(&packet)).expect("send_packet");
+        // The I-picture is held for reordering (see the module docs); drain
+        // to force it out.
+        dec.send_packet(None).expect("drain");
+        let frame = dec.receive_frame().expect("one frame out of one I-picture");
+        let side = frame
+            .side_data(vaco_frame::FrameSideDataKind::ClosedCaptions)
+            .expect("ClosedCaptions side data must be attached");
+        let FrameSideData::ClosedCaptions(buffer) = side else {
+            panic!("wrong side-data variant");
+        };
+        assert_eq!(buffer.as_slice(), &triplets);
     }
 
     #[test]

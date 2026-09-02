@@ -205,6 +205,12 @@ pub(crate) struct ActivePicture {
     /// §6.2.2.3 `chroma_format` (Table 6-5), always 4:2:0 for an MPEG-1
     /// sequence (no `sequence_extension()` to carry any other value).
     pub chroma_format: ChromaFormat,
+    /// Raw `cc_data` triplet bytes from this picture's own ATSC A/53
+    /// caption `user_data()` (§6.2.2.2.2), if any — empty for the ordinary
+    /// case. See `crate::decoder`'s `USER_DATA_START` handling and
+    /// `vaco_parse_mpegvideo::a53`'s module doc for why this must be
+    /// attached to *this* picture rather than accumulated across pictures.
+    pub closed_captions: Vec<u8>,
 }
 
 fn quantiser_scale(q_scale_type: bool, code: u8) -> u16 {
@@ -1163,6 +1169,7 @@ mod skipped_macroblock_tests {
             recent: None,
             mpeg1: false,
             chroma_format: ChromaFormat::Yuv420,
+            closed_captions: Vec::new(),
         };
         let Ok(mut idct) = vaco_codec_dsp_idct::mpeg2::idct8x8_f32() else {
             return;

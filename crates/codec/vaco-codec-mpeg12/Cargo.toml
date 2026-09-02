@@ -17,6 +17,8 @@ vaco-codec-dsp-idct = { path = "../../signal/vaco-codec-dsp-idct" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-frame = { path = "../../model/vaco-frame" }
+vaco-pool = { path = "../../model/vaco-pool" }
+vaco-parse-mpegvideo = { path = "../vaco-parse-mpegvideo" }
 
 [dev-dependencies]
 proptest.workspace = true

@@ -2413,7 +2413,9 @@ dependencies = [
  "vaco-frame",
  "vaco-limits",
  "vaco-packet",
+ "vaco-parse-mpegvideo",
  "vaco-pixfmt",
+ "vaco-pool",
 ]
 
 [[package]]
