@@ -124,6 +124,14 @@ impl Opts {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
         }
+        #[allow(
+            clippy::float_cmp,
+            reason = "exact comparison against this option's own literal parsed \
+                      default, not a numeric-error-margin question"
+        )]
+        if o.dropout_transition != 2.0 {
+            return Err("amix: `dropout_transition` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 
