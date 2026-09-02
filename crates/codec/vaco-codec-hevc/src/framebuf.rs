@@ -244,7 +244,7 @@ struct CuGridShared {
 /// `self.shared`/`self.current` explicitly.
 #[derive(Debug, Clone)]
 pub(crate) struct CuGrid {
-    shared: CuGridShared,
+    shared: std::sync::Arc<CuGridShared>,
     /// The row band [`CuGrid::fill`] and friends currently write into;
     /// every earlier band already lives in `shared.published`.
     current_band: usize,
@@ -372,7 +372,7 @@ impl CuGrid {
         let n_bands = total_rows.div_ceil(band_rows).max(1);
         let current = CuGridBand::new(budget, cols, band_rows, has_l1)?;
         Ok(Self {
-            shared: CuGridShared { cols, band_rows, n_bands, has_l1, published: crate::wavefront::RowPublish::new(n_bands) },
+            shared: std::sync::Arc::new(CuGridShared { cols, band_rows, n_bands, has_l1, published: crate::wavefront::RowPublish::new(n_bands) }),
             current_band: 0,
             current: Some(current),
         })
@@ -380,14 +380,14 @@ impl CuGrid {
 
     /// The row band containing 4x4-block row `by`.
     #[allow(clippy::integer_division, reason = "row band index = block row / the fixed CTB row-band height")]
-    const fn band_of(&self, by: usize) -> usize {
+    fn band_of(&self, by: usize) -> usize {
         by / self.shared.band_rows
     }
 
     /// `by`'s own row within whichever band [`CuGrid::band_of`] says it
     /// belongs to.
     #[allow(clippy::integer_division, reason = "same fixed CTB row-band height as band_of, its own remainder")]
-    const fn local_of(&self, by: usize) -> usize {
+    fn local_of(&self, by: usize) -> usize {
         by % self.shared.band_rows
     }
 
@@ -816,7 +816,7 @@ struct EdgeMarksShared {
 
 #[derive(Debug, Clone)]
 pub(crate) struct EdgeMarks {
-    shared: EdgeMarksShared,
+    shared: std::sync::Arc<EdgeMarksShared>,
     /// The row band [`EdgeMarks::mark_vert`] and friends currently write
     /// into; every earlier band already lives in `shared.published`.
     current_band: usize,
@@ -864,7 +864,7 @@ impl EdgeMarks {
         let n_bands = total_rows.div_ceil(band_rows).max(1);
         let band_len = cols.saturating_mul(band_rows);
         Self {
-            shared: EdgeMarksShared {
+            shared: std::sync::Arc::new(EdgeMarksShared {
                 cols,
                 band_rows,
                 n_bands,
@@ -872,7 +872,7 @@ impl EdgeMarks {
                 // this struct's own doc for why this is `RowPublish` rather
                 // than a plain, amortised-growth `Vec`.
                 published: crate::wavefront::RowPublish::new(n_bands),
-            },
+            }),
             current_band: 0,
             current: EdgeBand::new(band_len),
         }
@@ -880,14 +880,14 @@ impl EdgeMarks {
 
     /// The row band containing 4x4-block row `by`.
     #[allow(clippy::integer_division, reason = "row band index = block row / the fixed CTB row-band height")]
-    const fn band_of(&self, by: usize) -> usize {
+    fn band_of(&self, by: usize) -> usize {
         by / self.shared.band_rows
     }
 
     /// `by`'s own row within whichever band [`EdgeMarks::band_of`] says it
     /// belongs to.
     #[allow(clippy::integer_division, reason = "same fixed CTB row-band height as band_of, its own remainder")]
-    const fn local_of(&self, by: usize) -> usize {
+    fn local_of(&self, by: usize) -> usize {
         by % self.shared.band_rows
     }
 
@@ -1300,7 +1300,7 @@ struct ReconPlaneShared {
 /// (geometry plus the `RowPublish` board) versus `current` (this plane's
 /// own in-progress tile, owned outright, no shared writer behind it).
 pub(crate) struct ReconPlane {
-    shared: ReconPlaneShared,
+    shared: std::sync::Arc<ReconPlaneShared>,
     /// The CTU tile most recently opened for writes via
     /// [`ReconPlane::begin_ctu`] — every tile strictly before it in raster
     /// CTU order (a full row above, or an earlier column of this same row)
@@ -1360,7 +1360,7 @@ impl ReconPlane {
         let ready = vec![false; ready_dim.saturating_mul(ready_dim)];
         let (w0, h0) = Self::tile_dims(width, height, ctb_size, 0, 0);
         Ok(Self {
-            shared: ReconPlaneShared {
+            shared: std::sync::Arc::new(ReconPlaneShared {
                 width,
                 height,
                 ctb_size,
@@ -1368,7 +1368,7 @@ impl ReconPlane {
                 n_col_bands,
                 ready_dim,
                 published: crate::wavefront::RowPublish::new(n_row_bands.saturating_mul(n_col_bands)),
-            },
+            }),
             current_row: 0,
             current_col: 0,
             current_published: false,
@@ -1379,14 +1379,14 @@ impl ReconPlane {
 
     /// The CTU tile containing luma-grid pixel `(x, y)`.
     #[allow(clippy::integer_division, reason = "tile index = pixel coordinate / the fixed CTB tile size")]
-    const fn tile_of(&self, x: usize, y: usize) -> (usize, usize) {
+    fn tile_of(&self, x: usize, y: usize) -> (usize, usize) {
         (y / self.shared.ctb_size, x / self.shared.ctb_size)
     }
 
     /// `(x, y)`'s own position within whichever tile [`ReconPlane::tile_of`]
     /// says it belongs to.
     #[allow(clippy::integer_division, reason = "same fixed CTB tile size as tile_of, its own remainder")]
-    const fn local_of(&self, x: usize, y: usize) -> (usize, usize) {
+    fn local_of(&self, x: usize, y: usize) -> (usize, usize) {
         (x % self.shared.ctb_size, y % self.shared.ctb_size)
     }
 

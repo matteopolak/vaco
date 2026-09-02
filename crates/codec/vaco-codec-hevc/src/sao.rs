@@ -137,7 +137,7 @@ struct SaoParamsGridShared {
 
 #[derive(Debug, Clone)]
 pub(crate) struct SaoParamsGrid {
-    shared: SaoParamsGridShared,
+    shared: std::sync::Arc<SaoParamsGridShared>,
     /// The CTU row [`SaoParamsGrid::set`] currently writes into; every
     /// earlier row already lives in `shared.published`.
     current_band: usize,
@@ -152,7 +152,7 @@ impl SaoParamsGrid {
         let n_bands = usize::try_from(ctbs_y).unwrap_or(0).max(1);
         let current: Vec<CtuSao> = budget.alloc(ctbs_x)?;
         Ok(Self {
-            shared: SaoParamsGridShared { ctbs_x, n_bands, published: crate::wavefront::RowPublish::new(n_bands) },
+            shared: std::sync::Arc::new(SaoParamsGridShared { ctbs_x, n_bands, published: crate::wavefront::RowPublish::new(n_bands) }),
             current_band: 0,
             current: Some(current),
         })
