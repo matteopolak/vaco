@@ -20,6 +20,8 @@ vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-codec-simple-audio = { path = "../../codec/vaco-codec-simple-audio" }
 
 [lints]
 workspace = true

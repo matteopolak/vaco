@@ -71,6 +71,15 @@ extensions = "pvf"
 
 [[component]]
 kind       = "demuxer"
+name       = "qoa"
+long_name  = "QOA (Quite OK Audio)"
+feature    = "demux-qoa"
+ctor       = "vaco_format_misc_audio::qoa::DEMUXER"
+extensions = "qoa"
+mime_types = "audio/x-qoa"
+
+[[component]]
+kind       = "demuxer"
 name       = "g723_1"
 long_name  = "raw G.723.1"
 feature    = "demux-g723-1"

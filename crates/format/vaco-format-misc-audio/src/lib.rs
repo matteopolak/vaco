@@ -13,6 +13,7 @@ pub mod block;
 pub mod g723;
 pub mod nistsphere;
 pub mod pvf;
+pub mod qoa;
 pub mod rawcodec;
 pub mod sbc;
 pub mod tta;
