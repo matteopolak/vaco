@@ -2241,3 +2241,61 @@ scratch would be wasted work.
 `vaco-codec-h264`, the AAC/transform crates, the filter crates,
 `vaco-conformance` and the fuzz harnesses were not touched — outside this
 item's lane.
+
+## 30. HEVC B4 — wavefront threading design doc, implementation not attempted
+
+`PERF-PROGRAMME.md`'s B4 (WPP wavefront threading, the largest remaining
+item in the whole programme — HEVC decode is 26.5x behind default-threaded
+ffmpeg because it has no threading of any kind) got a design pass, not an
+implementation. `docs/codec/hevc-wavefront-threading.md` is the deliverable,
+per the plan's own "the executing agent writes the design doc first."
+
+Two findings worth carrying forward without re-deriving them:
+
+1. **WPP is not H.264's row-level frame threading reused.** That mechanism
+   (§21/`docs/codec/frame-threading.md`) is one writer publishing rows of
+   picture *N* so picture *N + 1*'s task can read ahead — cross-picture
+   pipeline parallelism at row granularity. WPP needs several concurrent
+   writers of the *same* picture, each also reading its immediate
+   neighbour's still-in-progress rows. `vaco_codec_core::threading::
+   SliceThreadedDecoder`'s `split_bands_mut` looks closer but its own doc
+   says publication happens only after every job joins — which serialises
+   exactly the row-to-row overlap WPP exists to capture. The reusable part
+   (D19) is the `OnceLock`-band-publish pattern
+   `vaco_codec_core::picture::ProgressPicture` already proves out, applied
+   one CTU row at a time instead of one picture at a time — not a new
+   primitive, but not literally `FrameRunner` either. This needed reading
+   `vaco-codec-core::{threading,picture}` and confirming `vaco-codec-vp9`
+   is the only current `SliceThreadedDecoder` user (independent tile
+   columns, no cross-tile read — a different problem WPP's cross-row
+   dependency does not fit).
+2. **Deblocking is the open question that gates Stage 1, not a detail to
+   fill in during Stage 2.** `deblock::filter_picture` runs two full
+   *picture-wide* passes today (every vertical edge, then every horizontal
+   edge), by its own documented reasoning that horizontal filtering must
+   see vertical filtering's output — a materially different shape from
+   H.264's single interleaved pass with a proven one-macroblock-row lag.
+   Intra prediction and merge/AMVP spatial candidates were confirmed (by
+   reading `intra_pred::build_reference_line` and the existing CTB-row-
+   boundary MPM rule) to reach exactly one row up and no further; deblocking
+   has no equivalent proof yet and needs one against HM 18.0's own
+   `TComLoopFilter.cpp` before Stage 1's per-row picture representation can
+   be trusted at all.
+
+**No code changed.** `framebuf.rs`/`ctu.rs`/`deblock.rs`/`sao.rs`/
+`decoder.rs` would all need to move at once for even the serial (Stage 1)
+restructure, in a crate under active concurrent editing all session (§24's
+own collision during B1, and the `VACO_HEVC_TRACE` instrumentation found
+live in `ctu.rs` during B3) — landing an unverified partial rewrite of a
+byte-exact decoder's core picture representation under those conditions was
+judged a worse outcome than a complete, cited design document naming
+exactly what the next pass needs to resolve first. This is the ninth
+negative-shaped result on record in spirit, if not in diff: reasoned
+through, not measured backwards, and reported before code rather than
+after — the plan itself sizes this item XL (3-4 weeks) and sanctions
+stopping at a staged gate as a complete outcome.
+
+`vaco-codec-h264`, the AAC/transform crates, the filter crates,
+`vaco-conformance`, `vaco-codec-core` and the fuzz harnesses were not
+touched — outside this item's lane, and (for `vaco-codec-core`) this pass's
+own conclusion is that no change there is needed regardless.
