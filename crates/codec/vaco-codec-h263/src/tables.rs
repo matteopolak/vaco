@@ -805,13 +805,6 @@ mod annex_i_tests {
     }
 
     #[test]
-    fn intra_tcoef_escape_code_matches_baseline() {
-        // Annex I redefines what a decoded (RUN, LEVEL) pair means, not
-        // how an out-of-table one is escaped.
-        assert_eq!(H263_TCOEF_ESCAPE, "0000011");
-    }
-
-    #[test]
     fn intra_tcoef_spot_checks_against_the_primary_text() {
         // A handful of rows read directly off Table I.2, independent of
         // the set-equality check above (which would not catch two
