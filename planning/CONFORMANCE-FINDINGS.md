@@ -4896,3 +4896,111 @@ adjacent profile mapping, `vaco-demux-dv`, `vaco-demux-ogg`/`vaco-codec-flac`,
 none of which this pass touched, and several of which may already be
 mid-edit by another agent tonight — check `git status`/`git log` for the
 specific file before starting any of them.
+
+## 58. Three of finding 57's five prioritized root causes fixed and verified; two named precisely instead of guessed at
+
+Finding 57 named five root causes from the 40-case sample for a first
+fixing pass, in priority order (start_time defaults, ASF timebase, FLV
+`avg_frame_rate`, mpeg2/mpeg4 profile mapping, DV SAR). Three close here.
+Every fix below was verified two ways: a rebuilt `vaco-probe` against a
+real fixture and real `ffmpeg 9.0.1` directly (not by reading a diff), and
+the specific `vaco-conformance` case re-run.
+
+**ASF timebase — closed.** Every ASF stream used to report its own native
+100 ns tick (`time_base=1/10000000` for video, `1/sample_rate` for audio)
+instead of ffmpeg's normalised `1/1000` for every stream regardless of
+media type — measured directly on both streams of a real
+`libx264`+`aac`-in-ASF fixture. Fixed in `vaco-demux-asf` by using one
+`TIME_BASE_MS` everywhere. Side effect, not separately intended: the audio
+stream's `start_pts`/`start_time` moved from `2514`/`0.057007` (a
+sample-rate rounding artifact of the old base) to `57`/`0.057000`, byte for
+byte with the reference.
+
+**ASF start_time (video stream) — investigated, not fixed.** On that same
+fixture, the *video* stream's own `start_pts` still reads its own
+first-packet timestamp (`0`) where `ffprobe` reports `57` — the same value
+the audio stream gets, on *both* streams uniformly, which is not what
+either stream's own packets actually carry. A direct hypothesis (derive it
+from File Properties' Preroll) was implemented, run against the real
+fixture, and produced a worse, obviously-wrong answer (`3.1s`, traced to
+this crate's own unit-test literal for an unrelated preroll-subtraction
+test) — reverted immediately rather than shipped once the real number came
+back wrong. Left open, named precisely.
+
+**mpeg2video/mpeg4 profile mapping — closed for the one measurable
+mpeg4 case, closed for mpeg2video.** `vaco-parse-mpegvideo::mpeg12` passed
+the whole `profile_and_level_indication` byte (profile and level packed
+together, ITU-T H.262 table 8-3) as the numeric profile value, so a real
+Main/level-8 fixture (`0x48`) printed `profile=72`; `profile_name` already
+shifted correctly for the *name*, only the printed number was wrong. One
+line fixed it. `mpeg4.rs` had the same shape; only Simple Profile
+(`0x01` → ffprobe's `0`) is fixed, since `ffmpeg`'s native `mpeg4` encoder
+exposes no `-profile:v` to measure Core/Main/Advanced Simple against —
+those keep the old, imprecise raw-byte value rather than a guessed number.
+
+**A second, larger mpeg4 gap, found investigating the first.**
+MP4/Matroska carry MPEG-4 Part 2's header as extradata, never in a packet
+— `Mpeg4Parser` never implemented `Parser::set_extradata` at all, so its
+default no-op silently dropped every container-wrapped `mpeg4` stream's
+profile/level/width/height (measured: `profile=unknown`, `level=-99` where
+the reference reports `0`/`1` from the identical bytes). Fixed by reusing
+the crate's own in-band header scanner on the extradata directly — MPEG-4
+Part 2's MP4/Matroska convention is the raw VOL/VOS bytes verbatim, not a
+length-prefixed array the way H.264's `avcC` is.
+
+**DV sample aspect ratio — closed for 4:3.** `vaco-format-dv` never set
+`sample_aspect_ratio` at all. Measured directly against real `ffmpeg` on
+both systems: NTSC (720×480) is `8:9`, PAL (720×576) is `16:15`. Only the
+4:3 case is filled in; 16:9 needs a VAUX subcode this crate does not parse
+yet, so it is left rather than guessed from a recalled standard value.
+
+**FLV `avg_frame_rate` — not fixed; narrowed with two negative results
+worth keeping.** The garbage value (`2147483647/2000000000`, an `i32`
+saturation signature) traces to `picture_rate()`'s `video.frame_rate`
+input, sourced from H.264 SPS VUI timing (`time_scale`/`num_units_in_tick`)
+reached through the `avcC`-style config-record path FLV's own extradata
+handling uses. Two things this crate's SPS/VUI parser and the shared
+`avcC`-parsing path do **not** explain it: (1) the *exact same* SPS bytes,
+extracted byte for byte from the FLV file's own `AVCDecoderConfiguration
+Record` and re-fed through the parser's *other* (Annex-B) code path,
+decode correctly — profile, level and frame rate all match `ffprobe`
+exactly; (2) MP4, which uses the identical `avcC`-parsing code, was
+**not** a valid cross-check here, because MP4's own `avg_frame_rate` comes
+from `stts`, never from VUI timing at all — a bug isolated to the
+avcC-fed VUI path specifically could hide behind MP4 passing for a reason
+that has nothing to do with it. The exact site (something in `vaco-demux-
+flv`'s or the shared `avcC`-record parsing's handling of *this specific*
+container-fed path, despite the underlying bytes and the Annex-B path
+both being proven correct) was not found in the time this pass had.
+Recorded so the next attempt starts from these two eliminated hypotheses,
+not from zero.
+
+**A pattern worth naming for whoever picks up items 3 and the sample's
+remaining ~10 root causes**: fixing the sampled divergence in a
+multi-field, `exact-bytes`-compared probe dump routinely un-hides a
+*second*, previously-invisible one sitting at the next byte offset, none
+of which this pass introduced or attempted:
+
+- Fixing ASF's timebase left the video-stream `start_time` gap exposed
+  (documented above).
+- Fixing mpeg4's profile revealed a missing `mime_codec_string` field
+  (`"mp4v.20"`) on the same streams, in both MP4 and Matroska.
+- Fixing mpeg2video's profile revealed `coded_width`/`coded_height`:
+  the reference reports `0`/`0` for this MPEG-TS/MPEG-PS fixture where
+  vaco reports the real `320`/`240` — unexplained, not investigated, and
+  notable because it is the *reference* printing the surprising value here,
+  not vaco.
+- Fixing DV's SAR revealed a missing `chroma_location` (`ffprobe` says
+  `topleft` for DV; vaco reports nothing).
+
+None of the four re-run cases above therefore flip from diverged to
+agreed despite each targeted field now matching the reference exactly,
+confirmed independently of the case-level compare. "The field this pass
+measured now matches, verified directly" is the correct claim for a
+single-cluster fix inside a multi-bug case; "moved to agreed" is not a
+fair bar until every co-located bug in that same case closes.
+
+`cargo test`/`cargo clippy --all-targets -D warnings` clean on all three
+touched crates (`vaco-demux-asf`, `vaco-parse-mpegvideo`, `vaco-format-dv`),
+each with a new or updated regression test tied to a real, measured
+fixture rather than a synthetic one.
