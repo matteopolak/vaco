@@ -230,7 +230,7 @@ impl Parser for FlacParser {
 /// Find the bare 34-byte `STREAMINFO` payload inside `extradata`, whatever
 /// convention wraps it -- this project's canonical `"fLaC" + metadata
 /// block(s)` shape, or a metadata block with no `"fLaC"` prefix (a bare
-/// dfLa-style FullBox body with its own 4-byte header stripped down to just
+/// dfLa-style `FullBox` body with its own 4-byte header stripped down to just
 /// the block, which is all `vaco-demux-mp4`'s own `ConfigFlavour::Dfla` arm
 /// promises). Returns `None` when neither pattern is found, so the caller
 /// can fall back to treating the whole input as an already-bare block.
@@ -313,7 +313,7 @@ mod tests {
     /// with its own 4-byte header) must describe the stream correctly, not
     /// just the bare fixture -- regression for the bug the module doc names:
     /// a naive fixed-offset read over this shape reported channels=1,
-    /// bits_per_raw_sample=1 for a real 2-channel 16-bit file.
+    /// `bits_per_raw_sample=1` for a real 2-channel 16-bit file.
     #[test]
     fn a_flac_prefixed_metadata_block_describes_the_stream_correctly() {
         let mut wrapped = b"fLaC".to_vec();
