@@ -948,3 +948,64 @@ attempted in this section on that basis: naming this precisely, before
 touching any of the four structures a second time, is judged worth its
 own separately-landed pass, the same call this document made before step
 1 began coding.
+
+### A fourth finding, before touching `recon`: `PictureWriter` itself is single-writer, not yet multi-worker
+
+Before writing the four `current` splits the coordinator's own message
+named, checking whether `recon`'s underlying primitive
+(`vaco_codec_core::picture::PictureWriter`) already supports what the
+other three need built by hand. It does not, and the gap is worth naming
+precisely rather than discovered mid-implementation.
+
+`PictureWriter::tile_mut`/`publish_tile` (and `band_mut`/`publish_through`)
+all take `&mut self`. `BandMut<'a>`, the handle they return, borrows
+directly from that `&mut self` call (`data: &'a mut [u8]`) — so only one
+caller can hold a tile checked out at a time, from any one `PictureWriter`
+instance, full stop; Rust's own borrow checker enforces it, nothing to
+verify empirically. `split_bands_mut` (checked next, since its own name
+sounded like the answer) hands out genuinely disjoint `&mut` ranges to
+concurrent jobs, but its own doc says why it does not fit: "publication
+stays with the owning thread after the jobs join, because it is the
+writer that knows the order" — a fork-join shape (every worker writes its
+own disjoint range, then the *one* thread that still owns `PictureWriter`
+publishes everything once they all rejoin), not the incremental,
+overlapping publish WPP needs (row *r*'s worker publishing its own CTU 1
+while row *r + 1*'s worker is already running and waiting on exactly
+that). This is the same shape this document's own design pass already
+ruled out `SliceThreadedDecoder` for, for the identical reason, before
+step 1 started — the same conclusion applies one level down, to the
+primitive `SliceThreadedDecoder` itself is built on.
+
+Interestingly, `publish_through`'s own doc line uses the phrase "a 2-D
+grid multiple workers fill concurrently" when explaining why it refuses a
+column-banded plane — language that assumes concurrent workers as a
+premise, without `PictureWriter` itself yet offering a way for them to
+each independently call `tile_mut`. Read charitably, this is intent
+recorded ahead of the mechanism, not a promise already kept: the
+`&mut self` requirement means the only architecture available today has
+worker threads compute a finished tile's *bytes* independently (in their
+own owned buffers, no `PictureWriter` access needed for that part) and
+hand them back to whichever single thread still holds `&mut PictureWriter`
+to insert via `tile_mut`+`publish_tile` — a coordinator-mediated design,
+not workers writing the picture directly. That can still give WPP real
+overlap (the expensive CABAC/prediction/transform work happens on N
+threads; the coordinator's own insert-and-publish call is comparatively
+cheap, closer to a `memcpy`), but it is a specific dispatch shape step 4
+has not yet chosen, not something today's `PictureWriter` API rules out
+by accident or already provides by design.
+
+**This does not block the four `current` splits below.** `EdgeMarks`/
+`CuGrid`/`SaoParamsGrid` depend only on this crate's own `RowPublish`,
+which already supports genuine multi-writer incremental publish (proven
+in `wavefront.rs`'s own concurrent test) — their splits are complete,
+real fixes. `ReconPlane`'s own split (pulling `current_row`/
+`current_col`/`current_published`/`ready` into a per-row-owned value,
+matching the other three's shape) is still worth doing for the same
+reason the other three's was: it is useful regardless of which dispatch
+shape step 4 picks, and leaving `PictureWriter` access inside a
+soon-to-be-shared struct would be exactly the "current embedded in the
+shared struct" mistake step 1 made for the other three. But it should not
+be read as making `recon` dispatch-ready on its own — the coordinator-
+mediated question above is real, separate, unresolved work that belongs
+to step 4, named here so it is found by reading rather than by writing
+dispatch code against an assumption that turns out to be wrong.
