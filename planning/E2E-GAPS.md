@@ -2020,3 +2020,99 @@ touched, per this item's brief. `vaco-core`'s `parse.rs` picked up one
 unrelated one-line clippy fix (`ae4836d`) needed to keep the crate clean
 under the D22 toolchain switch's newly-enabled nightly lints; unrelated
 to Error or this item's performance work.
+
+
+## 28. A1 — H.264 partition-level motion compensation, a real but partial win
+
+**Item.** `planning/PERF-PROGRAMME.md` A1: predict a whole motion
+partition's luma samples in one call instead of `sample_luma_block`'s own
+per-4x4-block shape. New `crate::reconstruct::partition_rects` (decomposes
+a macroblock's 4x4 motion grid into maximal same-motion rectangles),
+`sample_luma_partition` and `crate::interp::luma_qpel_partition`.
+`sample_luma_block`/`luma_qpel_sample` kept, unused by the hot path, as
+the scalar oracle three new differential test families check bit-for-bit
+against.
+
+**Measured content shape, h264_4k.mp4** (counted directly, not assumed):
+of 2,531,907 partition rectangles across 75 frames, 89.2% (2,259,127) were
+a whole 16x16 macroblock — the case this item optimises hardest.
+
+**Two real performance bugs found during this item's own measurement,
+neither visible from reading the code, both fixed before landing:**
+
+1. Computing all three of `H`/`V`/`J` (clause 8.4.2.2.1's half-pel planes)
+   unconditionally, regardless of which the partition's actual
+   `(frac_x, frac_y)` needs, measured *slower* end to end than the
+   per-4x4 path it was meant to replace — despite issuing far fewer
+   `fetch` calls (441 vs. 1,296 for a 16x16 partition). The common
+   one-axis-only positions (9 of 15 non-integer positions) need only one
+   of the three; the other two planes' own zero-initialisation and fill
+   passes cost more than the fetch-count win recovered. Fixed by
+   branching into one of six self-contained `(need_h, need_v, need_j)`
+   cases, each declaring only the arrays its own case reads.
+2. `p0.map(|b| b[oy][ox])` inside the per-pixel combine loop, with
+   `p0: Option<[[u8; 16]; 16]>` (`Copy`): calling `.map()` on a `Copy`
+   `Option` by value copies the whole 256+-byte array into the closure on
+   every one of a partition's `w * h` iterations to read one byte.
+   `sample_luma_block`'s own identical pattern used a 16-byte array and
+   never showed up as a cost; A1's own 16x-larger buffer turned it into
+   one. Fixed with `.as_ref()`.
+
+Both were only found because the measurement protocol interleaves
+before/after pairs rather than comparing single runs — a lesson this
+programme's own §2 already states and this item is a fresh, concrete
+instance of.
+
+**Result, after both fixes** (h264_4k.mp4, dist profile, private
+target-dir, `/usr/bin/time -l`, interleaved before/after, alternating
+start order, load average 6-13):
+
+| | -threads 1 (9 rounds) | -threads 4 (4 rounds) |
+|---|---|---|
+| median CPU-seconds ratio | 0.94 (~6% faster) | ~0.92 (~8% faster) |
+| rounds faster | 8/9 | 4/4 |
+| best single round | 0.895 | 0.838 |
+
+**This is a real, reproducible win — not a wash, not a regression — but
+it does not clear this item's own stated stop condition** (median ratio
+<= 0.85, i.e. >= 1.18x, on >= 8/10 rounds) **or reach its realistic
+ceiling (1.40x).** Quoted here as the plan asks, met or not: not met.
+Landed anyway per D20 (a smaller-than-hoped real win is still a win, and
+"if it does not win, revert" does not apply to a result that does win) —
+the item is not reverted, chroma is simply not attempted on top of it.
+
+**Chroma not attempted.** The item's own stop condition gates chroma work
+on the luma kernel clearing the ratio bar, which it did not; §7's
+recorded negative results #5 (a chroma in-bounds fast path regressed
+3.4%) and #6 (merging Cb/Cr into one pass regressed 2.4%) make chroma the
+more failure-prone half of this item to attempt without that gate
+cleared. Left for a future pass, ideally starting from a disassembly
+check of why the luma kernel's own measured win (6-8%) sits so far under
+its ceiling (1.40x) despite the fetch-count reduction being real and
+measured correctly (89.2% of partitions are 16x16, exactly the shape that
+reduces fetches 1,296 -> 441) — candidates not yet checked: whether LLVM
+is actually eliminating the bounds checks `#[allow(clippy::indexing_slicing)]`
+only silences the *lint* for, not the *codegen*, on the six-way branch's
+own array accesses, and whether the six-way branch itself defeats
+inlining the caller expected.
+
+**Byte-exactness.** h264_4k.mp4, big.mkv (1500 frames), bpyramid_1080p.mp4,
+and A0's two CAVLC fixtures (baseline profile, Main `-coder 0`) — 20/20
+(fixture x thread count in {1,2,4,8}) identical against `ffmpeg`. This
+also re-confirms §26's own P_8x8 finding is fixed on `main` (`2a2b11d`):
+all four of the fixtures §26 reported as blocked on it now match `ffmpeg`
+directly again. big.mkv repeated 12 times across all four thread counts,
+all identical (the shared-pool race detector). `h264_decode`: 108,993
+executions in 60s, no crash, no artifact. `h264_decode_threaded`
+(asserts 1-thread and N-thread output identical): 29,972 executions in
+90s, no crash, no artifact.
+
+`vaco-codec-hevc`, the AAC/transform crates, the filter crates,
+`vaco-conformance`, `vaco-codec-vp9` and the fuzz harnesses were not
+touched — outside this item's lane. `mb.rs` was shared with a concurrent
+agent's own `B_8x8` `top_bottom` fix mid-flight (staged, not yet
+committed) while this item's own single-line `MvInfo::for_test_l0` test
+helper landed in the same file — committed through a private index built
+from `HEAD` plus only this item's own hunk, per
+`planning/AGENT-CONSTRAINTS.md`'s "when you genuinely share a file"
+recipe, so the concurrent fix's own eventual commit is unaffected.
