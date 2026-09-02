@@ -424,7 +424,16 @@ proptest! {
         w in 1..=i32::MAX.cast_unsigned(), h in 1..=i32::MAX.cast_unsigned(),
         us in (i64::MIN + 1)..=i64::MAX,
         rgba in any::<(u8, u8, u8, u8)>(),
-        num in any::<i32>(), den in any::<i32>(),
+        // `den` is bounded by `parse::rational`'s own approximation limit.
+        // It evaluates `n/d` as an expression and then reaches for
+        // `approximate(value, 1_000_000)`, so a denominator past that bound
+        // cannot come back — the best ratio under the limit is a different
+        // number, by construction rather than by defect. ffmpeg's own
+        // `av_parse_ratio` bounds `av_d2q` the same way. Generating past it
+        // asserts a property the function never claimed: proptest found
+        // -1/1001012, where the returned -1/1000001 misses the tolerance's
+        // absolute 1e-9 term by 1.1e-12.
+        num in any::<i32>(), den in -1_000_000i32..=1_000_000,
         bytes in prop::collection::vec(any::<u8>(), 0..24),
         b in any::<bool>(),
     ) {
