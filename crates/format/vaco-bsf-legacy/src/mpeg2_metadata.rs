@@ -16,11 +16,9 @@
 //! # Configuration
 //!
 //! [`vaco_format_core::mux::BsfProvider::open`] has no per-instance option
-//! string (`planning/INTERFACE-GAPS.md` gap 12 — see this crate's top-level
-//! docs for why it is not closed here), so every option above is permanently
-//! unreachable, not merely unimplemented. No numeric option is read here, so
-//! `CONFORMANCE-FINDINGS.md` finding 31 (unenforced option ranges) has
-//! nothing to apply to.
+//! string, so every option above is permanently unreachable, not merely
+//! unimplemented. No numeric option is read here, so unenforced option-range
+//! checks have nothing to apply to either.
 
 use std::collections::VecDeque;
 

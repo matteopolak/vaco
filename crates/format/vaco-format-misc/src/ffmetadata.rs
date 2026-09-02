@@ -1,57 +1,43 @@
 //! `ffmetadata`: the reference's own `;FFMETADATA1` metadata interchange
-//! text format — **demuxer only**. The muxer already exists, registered as
-//! `vaco_mux_stream::MUXER_FFMETADATA`; writing a second one here would
-//! collide with it, so this module reads what that one (or the reference)
-//! writes.
+//! text format — **demuxer only**; the muxer is
+//! `vaco_mux_stream::MUXER_FFMETADATA`.
 //!
 //! # Grammar
 //!
-//! `Vaco-Spec-Ref ffmpeg-formats-doc` (the "Metadata" chapter of
-//! `ffmpeg-formats.html`) states the shape; the escaping rule and every
-//! numeric constant below were independently confirmed against `ffmpeg`/
-//! `ffprobe` 8.1 rather than taken on faith:
+//! `Vaco-Spec-Ref ffmpeg-formats-doc` ("Metadata") states the shape; the
+//! escaping rule and every constant below were confirmed against 8.1:
 //!
-//! * A line consists of everything up to an **unescaped** newline — a `\`
-//!   immediately followed by a real newline byte continues the value onto
-//!   the next physical line rather than ending it.
-//! * A line whose first byte is `;` or `#` is a comment and is dropped
-//!   whole, including the conventional `;FFMETADATA1` line itself: measured,
-//!   `;FFMETADATA2`, `;anything` and no header line at all all parse
-//!   identically once a caller forces the format. Auto-detection is
-//!   stricter — see [`probe`].
-//! * `[STREAM]` and `[CHAPTER]` (case-sensitive, exactly those brackets)
-//!   open a section; every following line belongs to it until the next
-//!   section line or end of file.
-//! * A non-comment, non-section line with no unescaped `=` is ignored.
-//!   Otherwise it splits at the **first** unescaped `=` into a key and a
-//!   value; neither side is trimmed (`title = x` round-trips as key
-//!   `"title "`, confirmed).
+//! * A line runs to the first **unescaped** newline: a `\` immediately
+//!   before a real newline byte continues the value onto the next line.
+//! * A line whose first byte is `;` or `#` is a comment, dropped whole —
+//!   including `;FFMETADATA1` itself: `;FFMETADATA2`, `;anything` and no
+//!   header line at all parse identically once a caller forces the format.
+//!   Auto-detection is stricter; see [`probe`].
+//! * `[STREAM]` and `[CHAPTER]` (case-sensitive) open a section; following
+//!   lines belong to it until the next section line or end of file.
+//! * A non-comment, non-section line with no unescaped `=` is ignored;
+//!   otherwise it splits at the **first** unescaped `=`. Neither side is
+//!   trimmed (`title = x` round-trips as key `"title "`, confirmed).
 //! * `=`, `;`, `#`, `\` and a literal newline are escaped with a leading
 //!   `\` on write. On read, `\` removes the *next* character's special
-//!   meaning unconditionally — including a character with no special
-//!   meaning at all, and including end-of-string, where a lone trailing `\`
-//!   is simply dropped (measured, matching this project's own
-//!   `vaco_core::escape` convention for "trailing backslash is accepted, not
-//!   an error" — but reimplemented locally rather than reused, because that
-//!   module's grammar also treats `'` as a quote character and ffmetadata's
-//!   does not: an apostrophe in a title must stay a literal apostrophe).
-//! * Inside `[CHAPTER]`, three keys are consumed as fields rather than
-//!   stored as tags: `TIMEBASE=num/den` (defaulting to `1/1000000000`,
-//!   nanoseconds, when absent) and `START=`/`END=` (both required to
-//!   produce a chapter; `END < START` is rejected, matching the reference's
-//!   own refusal to open such a file).
+//!   meaning unconditionally — including a character with none, and
+//!   including end-of-string, where a lone trailing `\` is dropped rather
+//!   than erroring. Escaping is reimplemented here rather than reusing
+//!   `vaco_core::escape`, whose grammar also treats `'` as a quote
+//!   character; in ffmetadata an apostrophe in a title stays literal.
+//! * Inside `[CHAPTER]`, three keys become fields rather than tags:
+//!   `TIMEBASE=num/den` (default `1/1000000000`, nanoseconds) and
+//!   `START=`/`END=`, both required to produce a chapter. `END < START` is
+//!   rejected, matching the reference's refusal to open such a file.
 //!
-//! # What is not reproduced
-//!
-//! `[STREAM]` sections are read as per-stream tags but are not surfaced as
-//! phantom [`vaco_format_core::Stream`]s the way the reference's own
-//! `ffmetadata` demuxer does (it reports each as a zero-information `data`
-//! stream at a fixed `1/90000` time base, sized from the *last chapter's end
-//! time* — measured, and specific enough to this one demuxer's internal
-//! bookkeeping that reproducing it did not seem worth the coupling between
-//! chapters and streams it would introduce here). `-map_metadata`/
-//! `-map_chapters`, the documented use of this format, need only
-//! [`Demuxer::metadata`] and [`Demuxer::chapters`], both of which are exact.
+//! `[STREAM]` sections are read as per-stream tags but not surfaced as
+//! phantom [`vaco_format_core::Stream`]s the way the reference does (it
+//! reports each as a zero-information `data` stream at a fixed `1/90000`
+//! time base, sized from the *last chapter's end time* — measured, and
+//! specific enough to that demuxer's bookkeeping that reproducing it was
+//! not worth coupling chapters to streams here). `-map_metadata`/
+//! `-map_chapters` need only [`Demuxer::metadata`] and
+//! [`Demuxer::chapters`], both exact.
 
 use vaco_core::{Error, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;

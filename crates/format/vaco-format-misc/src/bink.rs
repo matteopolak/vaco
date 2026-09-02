@@ -4,93 +4,40 @@
 //! video chunk per physical frame.
 //!
 //! `Vaco-Spec-Ref multimedia-wiki-bink-container` gives the header, frame
-//! index and per-frame chunk layout below; it is the current, maintained
-//! form of Mike Melanson's original `bink-format.txt`, which the page
-//! itself says is superseded.
-//!
-//! # Layout
-//!
-//! ```text
-//! header (44 bytes fixed, plus 12 bytes per audio track)
-//!    0   3   signature: "BIK" (Bink 1) or "KB2" (Bink 2)
-//!    3   1   codec revision byte
-//!    4   4   file size, not including these first 8 bytes
-//!    8   4   frame count
-//!   12   4   largest frame size in bytes
-//!   16   4   frame count again
-//!   20   4   width (<= 32767)
-//!   24   4   height (<= 32767)
-//!   28   4   fps numerator
-//!   32   4   fps denominator
-//!   36   4   video flags
-//!   40   4   audio track count N
-//!   44  4*N  per track: unknown:u16, channels:u16 ("not authoritative")
-//!   ..  4*N  per track: sample_rate:u16, flags:u16 (bit 13 stereo,
-//!            authoritative over the channel count above; bit 12 selects
-//!            the Bink Audio algorithm)
-//!   ..  4*N  per track: audio track id
-//!
-//! frame index table: frame_count + 1 entries, 4 bytes each
-//!    absolute byte offset of that frame; bit 0 set means the frame is a
-//!    keyframe and must be masked off to get the real offset. The last
-//!    entry equals the file size, so a frame's length is always
-//!    `table[i + 1] - (table[i] & !1)`.
-//!
-//! frame, once per table entry except the last
-//!    for each audio track, in header order:
-//!       4   length of what follows in this sub-chunk (0 = track silent
-//!           this frame)
-//!       4   number of samples in the packet
-//!    length-4   Bink Audio packet
-//!    remainder-of-frame   Bink Video packet
-//! ```
+//! index and per-frame chunk layout in full (it supersedes Mike Melanson's
+//! `bink-format.txt`). Three framing rules matter here: a frame-index
+//! entry's bit 0 marks a keyframe and must be masked off to get the real
+//! offset; the table's last entry equals the file size, so a frame's length
+//! is always `table[i + 1] - (table[i] & !1)`; and a track's stereo bit
+//! (flags bit 13) is authoritative over the header's own channel count.
 //!
 //! # Measured against the reference (`ffmpeg`/`ffprobe` 8.1)
 //!
-//! No encoder exists, so the fixture was hand-built from the layout above
-//! and checked with `ffmpeg -i FIXTURE -c copy -f framemd5 -` — a
-//! stream-copy pipeline, which (unlike `ffprobe -show_packets`) does not
-//! need `binkaudio`/`binkvideo` to successfully decode a frame, only to be
-//! found by name; the packaged garbage payload this crate's fixtures carry
-//! is never valid Bink Audio/Video and does not need to be.
+//! No encoder exists, so the fixture was hand-built from that layout and
+//! checked with `ffmpeg -i FIXTURE -c copy -f framemd5 -`: a stream-copy
+//! pipeline needs `binkaudio`/`binkvideo` only to be found by name.
 //!
-//! * `probe_score` is **100**, magic alone (`ffmpeg -v debug`'s own "probed
-//!   with score=100" line), independent of extension.
-//! * A per-track audio sub-chunk's reported packet **is** the declared
-//!   length field's worth of bytes (the 4-byte sample count plus the
-//!   compressed data) — the length field's own value already excludes
-//!   itself, so no adjustment is needed to go from "value in the file" to
-//!   "packet size reported".
+//! * `probe_score` is **100**, magic alone, independent of extension.
+//! * A per-track audio sub-chunk's packet **is** the declared length field's
+//!   worth of bytes (the 4-byte sample count plus compressed data): the
+//!   length value already excludes itself, so no adjustment is needed.
 //! * An **odd-length frame confuses the reference**: it reads that frame's
-//!   video chunk one byte short of `table[i+1] - (table[i] & !1) -
-//!   audio_bytes_consumed`, and — because it reads sequentially rather than
-//!   re-seeking to the next table offset — every frame after an odd one
-//!   inherits the one-byte drift, which cascades into "audio size in
-//!   header (…) > size of packet left" and a hard demux error a frame or
-//!   two later. Confirmed by comparing an all-even-length fixture (no
-//!   drift, exact formula) against one with a single odd-length frame (the
-//!   drift starts exactly there). This demuxer seeks to each frame's own
-//!   table offset before reading it, so it neither reproduces the drift
-//!   nor the cascading failure — a real, deliberate divergence from the
-//!   reference on this one malformed-input shape, on the view that a
-//!   frame-table format that hands out absolute offsets for exactly this
-//!   purpose should use them, and that a real encoder's output is not
-//!   expected to contain an odd-length frame in the first place. See
-//!   `planning/TECH-DEBT.md`.
-//! * Audio packet `pts` did not track the packaged "number of samples"
-//!   field 1:1 on the one fixture checked (declared 4, `ffprobe` reported
-//!   a `pts` delta of 2) — plausibly because the reference derives audio
-//!   timing from decoding the packet rather than from the container field
-//!   once a real Bink Audio decoder is attached, which this demuxer cannot
-//!   reproduce without decoding. This demuxer uses the declared sample
-//!   count directly, which is what the container actually states; flagged
-//!   as unverified beyond that one (inconclusive) measurement.
-//!
-//! # `CodecId`
+//!   video chunk one byte short and, because it reads sequentially rather
+//!   than re-seeking to the next table offset, every later frame inherits
+//!   the drift, cascading into "audio size in header (…) > size of packet
+//!   left" a frame or two on. Confirmed against an all-even fixture (exact)
+//!   versus one with a single odd frame (drift starts exactly there). This
+//!   demuxer seeks to each frame's own table offset and reproduces neither —
+//!   a deliberate divergence on this malformed-input shape, on the view that
+//!   a format handing out absolute offsets should use them.
+//! * Audio `pts` did not track the packaged sample-count field 1:1 on the
+//!   one fixture checked (declared 4, `ffprobe` reported a delta of 2),
+//!   plausibly because the reference derives audio timing from decoding once
+//!   a real decoder is attached. This demuxer uses the declared count, which
+//!   is what the container states; unverified beyond that measurement.
 //!
 //! The video stream is `Bink`; each audio track is `BinkAudioDct` or
-//! `BinkAudioRdft`, chosen per track from the flags word's bit 12 (see
-//! the layout table above).
+//! `BinkAudioRdft`, chosen from the flags word's bit 12.
 
 use std::collections::VecDeque;
 

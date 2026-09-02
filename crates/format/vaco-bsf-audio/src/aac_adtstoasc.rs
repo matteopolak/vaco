@@ -1,30 +1,20 @@
 //! `aac_adtstoasc`: strip ADTS framing from raw AAC and synthesise the
 //! `AudioSpecificConfig` extradata a bare-stream consumer (MP4, an `esds`
-//! box) needs instead.
-//!
-//! The priority filter of issue #352 (B-04) — "it is the one a real
-//! MP4-from-TS remux needs", since MPEG-TS carries AAC as ADTS and MP4
-//! wants an `esds`/`AudioSpecificConfig` up front, exactly the
-//! `extract_extradata`-shaped gap `planning/CONFORMANCE-FINDINGS.md` finding
-//! 26 named for H.264/HEVC but for AAC.
+//! box) needs instead. MPEG-TS carries AAC as ADTS and MP4 wants an
+//! `esds`/`AudioSpecificConfig` up front, so a remux between them needs it.
 //!
 //! # Specification
 //!
 //! ISO/IEC 13818-7 Annex B (`provenance/sources.toml`'s `iso-13818-7`) for
 //! `adts_fixed_header()`/`adts_variable_header()`; ISO/IEC 14496-3 §1.6.2.1
-//! for `AudioSpecificConfig()`. Both are short, unambiguous bit layouts —
-//! this is a specification-driven implementation, not a black-box guess —
-//! and every field used here was cross-checked against a real encode.
+//! for `AudioSpecificConfig()`. Every field was cross-checked against a
+//! real encode.
 //!
 //! # What is measured, not assumed
 //!
-//! `ffmpeg -c:a aac -f adts` on a synthetic sine wave, then
-//! `-bsf:a aac_adtstoasc` compared against an `esds` box from an equivalent
-//! MP4 remux, properly parsed as nested MPEG-4 descriptors (tag, then a
-//! multi-byte length varint, not a fixed offset — getting that wrong once
-//! during measurement produced a value 8 off from the real one, which is
-//! its own lesson in why the length is a varint and not a byte count to
-//! skip past by eye):
+//! `ffmpeg -c:a aac -f adts` on a sine wave, then `-bsf:a aac_adtstoasc`
+//! compared against an `esds` box from an equivalent MP4 remux (parsed as
+//! nested MPEG-4 descriptors: tag, then a multi-byte length varint):
 //!
 //! * ADTS header: `fixed(7 bytes, protection_absent=1)`. `profile=1`
 //!   (`audioObjectType = profile + 1 = 2`, AAC-LC), `sampling_frequency_index=4`
@@ -32,24 +22,22 @@
 //! * `AudioSpecificConfig` really written: `12 08` — `0b00010_0100_0001_000`,
 //!   i.e. `audioObjectType(5) | samplingFrequencyIndex(4) | channelConfiguration(4)`
 //!   then three zero bits (`frameLengthFlag`, `dependsOnCoreCoder`,
-//!   `extensionFlag`, all `0`) — 16 bits, 2 bytes, exactly reproducing the
-//!   measured value from the ADTS fields above with no extra encoding step.
+//!   `extensionFlag`) — 16 bits, exactly reproducing the measured value from
+//!   the ADTS fields above with no extra encoding step.
 //! * Packet payload: ADTS's own 7-byte header stripped from every packet
 //!   (`265` bytes in `-> 258`), and the new extradata attached to the
-//!   **first** packet only (`PacketSideData::NewExtradata`, the same
-//!   mechanism `vaco-bsf-generic::extract_extradata` uses) — later packets
+//!   **first** packet only (`PacketSideData::NewExtradata`) — later packets
 //!   with an unchanged ADTS header carry no side data.
 //!
 //! # What this does not cover
 //!
 //! `number_of_raw_data_blocks_in_frame != 0` — more than one AAC frame
-//! packed behind one ADTS header, with a `crc_check` per block when
-//! `protection_absent == 0`. Every real encoder measured here writes `0`
-//! blocks; this filter refuses (`Error::Unsupported`) rather than guess at
-//! the multi-block layout with nothing to check it against. Likewise
-//! `sampling_frequency_index == 15` (an escape value ADTS's own fixed header
-//! has no room to carry an explicit frequency for) is refused rather than
-//! silently mis-encoded.
+//! behind one ADTS header, with a `crc_check` per block when
+//! `protection_absent == 0`. Every encoder measured here writes `0` blocks;
+//! this filter refuses (`Error::Unsupported`) rather than guess at the
+//! multi-block layout with nothing to check it against. Likewise
+//! `sampling_frequency_index == 15` (an escape value ADTS's fixed header has
+//! no room to carry an explicit frequency for) is refused.
 
 use std::collections::VecDeque;
 

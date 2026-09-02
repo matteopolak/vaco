@@ -1,37 +1,8 @@
 //! The container framework: what a demuxer and muxer are, plus the probing,
-//! timestamp, seeking and interleaving models they share.
-//!
-//! Depends on `vaco-codec-core` for [`CodecParameters`] (D14.1), but never on a
-//! concrete codec: bitstream parsers arrive through the injected
-//! [`ParserProvider`], so no format crate depends on a codec crate.
-//!
-//! # What is in here
-//!
-//! | Module | Contents |
-//! |---|---|
-//! | [`probe`] | [`ProbeData`], [`ProbeScore`] and the score-based detection engine |
-//! | [`options`] | [`FormatOptions`] — the generic format-level option table |
-//! | [`flags`] | [`FormatFlags`] — what a container declares it can do |
-//! | [`time`] | wraparound, timestamp generation and repair, duration estimation |
-//! | [`seek`] | [`SeekTarget`], [`PacketIndex`] and the two generic strategies |
-//! | [`discovery`] | [`Discovery`] — the bounded, replayable stream-discovery pass |
-//! | [`interleave`] | [`InterleaveQueue`] and the muxer-side timestamp chain |
-//! | [`metadata`] | [`MuxMetadata`] — file/stream tags, chapters, attachments for a muxer |
-//! | [`mux`] | [`MuxBuilder`]/[`MuxWriter`] — the muxer state machine |
-//! | [`vacoraw`] | a worked-example container that drives every one of the above |
-//!
-//! # The one idea worth reading first
-//!
-//! **The core does not own the demuxer.** [`Demuxer`] is a self-contained
-//! object: it holds its own I/O, reads its own packets, performs its own seeks.
-//! Everything generic in this crate is therefore a *library the demuxer calls*
-//! or a *wrapper the caller composes*, never a driver that reaches into it.
-//!
-//! That is the opposite of the arrangement `planning/18-formats.md` §1.2
-//! sketched, where a `DemuxCtx` owns the I/O and the demuxer is a set of
-//! callbacks. It follows from the frozen trait, and it turns out to be the
-//! better shape: [`Discovery`] can be applied or not applied, tested against a
-//! mock, and stacked, without any demuxer knowing it exists.
+//! timestamp, seeking and interleaving models they share. Depends on
+//! `vaco-codec-core` for [`CodecParameters`] (D14.1) but never a concrete
+//! codec — parsers arrive through the injected [`ParserProvider`]. See
+//! [`Demuxer`] for the core design idea.
 //!
 //! ```
 //! use vaco_codec_core::{CodecId, CodecParameters};
@@ -352,6 +323,13 @@ pub trait ParserProvider: Send + Sync {
 }
 
 /// Read packets out of a container.
+///
+/// **The core does not own the demuxer.** A `Demuxer` is a self-contained
+/// object: it holds its own I/O, reads its own packets, performs its own
+/// seeks. Everything generic in this crate is therefore a *library the
+/// demuxer calls* or a *wrapper the caller composes* ([`Discovery`], for
+/// instance, can be applied or not, tested against a mock, and stacked),
+/// never a driver that reaches into it.
 pub trait Demuxer: Send {
     fn streams(&self) -> &[Stream];
 
@@ -384,7 +362,7 @@ pub trait Demuxer: Send {
     }
 
     /// Rebind this demuxer to a caller's [`Limits`] and [`FormatOptions`],
-    /// after construction (gap 4, `planning/INTERFACE-GAPS.md`).
+    /// after construction.
     ///
     /// **Why this exists instead of a parameter on [`DemuxerDesc::open`].**
     /// `open` is a bare `fn` pointer, and every one of the ~90 registered
@@ -521,7 +499,7 @@ impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
 }
 
 /// What [`Muxer::add_stream_with`] knows about a stream beyond
-/// [`CodecParameters`] (gap 9, `planning/INTERFACE-GAPS.md`).
+/// [`CodecParameters`].
 ///
 /// Deliberately minimal: only `time_base` is populated today, because only
 /// `time_base` has a caller and a measured need (`framecrc`'s `#tb`, see
@@ -565,7 +543,7 @@ pub trait Muxer: Send {
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32>;
 
     /// [`Muxer::add_stream`], plus whatever [`StreamSpec`] carries beyond
-    /// [`CodecParameters`] (gap 9, `planning/INTERFACE-GAPS.md`).
+    /// [`CodecParameters`].
     ///
     /// # Why this exists
     ///
@@ -580,8 +558,7 @@ pub trait Muxer: Send {
     /// match the reference only for freshly encoded raw/PCM media, and is
     /// simply wrong for stream copy, where the reference keeps the *input's*
     /// base (measured: `1/12800` for one MP4, `1/90000` for one MPEG-TS,
-    /// against a naive `1/frame_rate` of `1/25` and `1/50`; see
-    /// `CONFORMANCE-FINDINGS.md` 32).
+    /// against a naive `1/frame_rate` of `1/25` and `1/50`).
     ///
     /// # Why a new method rather than widening `add_stream`
     ///
@@ -729,8 +706,7 @@ pub trait Muxer: Send {
         Ok(())
     }
 
-    /// Accept file- and stream-level metadata: tags, chapters, attachments
-    /// (gap 1, `planning/INTERFACE-GAPS.md`).
+    /// Accept file- and stream-level metadata: tags, chapters, attachments.
     ///
     /// Called once by [`mux::MuxBuilder::open`], after [`Muxer::init`] and
     /// after stream time bases are read, but before [`Muxer::write_header`]
@@ -758,10 +734,10 @@ pub trait Muxer: Send {
     /// The reference suppresses anything that encodes a library build or a
     /// wall clock under `-bitexact` — `vaco-mux-hash`'s `#software` line is
     /// one of them (measured, `ffmpeg 8.1`: `#software: Lavf62.12.100`
-    /// appears only *without* `-bitexact`; see `CONFORMANCE-FINDINGS.md` 32).
-    /// Nothing reached a `Muxer` to say so before this: [`FormatOptions`] is
-    /// known to [`mux::MuxBuilder`] but never handed to the muxer itself, the
-    /// same shape gap 1 closed for [`metadata::MuxMetadata`].
+    /// appears only *without* `-bitexact`). Nothing reached a `Muxer` to say
+    /// so before this: [`FormatOptions`] is known to [`mux::MuxBuilder`] but
+    /// never handed to the muxer itself, the same gap closed for
+    /// [`metadata::MuxMetadata`] via [`Muxer::set_metadata`].
     ///
     /// Called once by [`mux::MuxBuilder::open`], at the same point as
     /// [`Muxer::set_metadata`] — after stream time bases are read, before
@@ -778,9 +754,9 @@ pub trait Muxer: Send {
         let _ = bitexact;
     }
 
-    /// Set one muxer-private option by name (gap 5, `planning/INTERFACE-GAPS.md`)
-    /// — the seam for a per-container knob like `-movflags` that has no home
-    /// in the generic [`FormatOptions`] table.
+    /// Set one muxer-private option by name — the seam for a per-container
+    /// knob like `-movflags` that has no home in the generic
+    /// [`FormatOptions`] table.
     ///
     /// Mirrors [`vaco_opts::OptionsExt::set_str`]'s name/value-string
     /// contract on purpose: a caller that already knows how to drive an
@@ -819,69 +795,33 @@ pub trait Muxer: Send {
     /// Rebind this muxer to the URL it is writing to, for a container whose
     /// real output is a sequence of files rather than one continuous stream
     /// — one file per frame (`image2`), one file per segment
-    /// (`segment`/`stream_segment`, the HLS/DASH family), the boundaries
-    /// `webm_chunk`'s own `chunk_boundaries()` accessor currently works
-    /// around.
+    /// (`segment`/`stream_segment`, the HLS/DASH family).
     ///
-    /// **Why this exists instead of a parameter on [`MuxerDesc::open`].**
-    /// `open` is a bare `fn` pointer roughly 90 registered muxers already
-    /// implement at a fixed `Box<dyn MediaSink>` signature, so widening it
-    /// would touch every one of them for the handful that need this.
+    /// Exists instead of a parameter on [`MuxerDesc::open`] because `open` is
+    /// a bare `fn` pointer roughly 90 registered muxers already implement at
+    /// a fixed `Box<dyn MediaSink>` signature; widening it would touch every
+    /// one for the handful that need this.
     ///
-    /// A caller may call this once, immediately after `open` returns and
-    /// before [`Muxer::add_stream`]/[`Muxer::write_header`], so a muxer
-    /// whose real unit of output is a sequence of files can re-derive its
-    /// own state from the URL — typically by replacing itself outright
-    /// (`*self = Self::for_pattern(url, ..)?`), the same shape
-    /// [`Demuxer::bind_url`] uses on the read side and for the same reason:
-    /// the caller passes a throwaway placeholder sink to `open` (a pattern
-    /// like `out_%03d.png` is not itself an openable destination) and this
-    /// method does the real work once the real URL is known.
+    /// Call once, immediately after `open` and before
+    /// [`Muxer::add_stream`]/[`Muxer::write_header`], so a muxer whose real
+    /// unit of output is a sequence of files can re-derive its state from the
+    /// URL — typically by replacing itself outright
+    /// (`*self = Self::for_pattern(url, ..)?`). Mirrors [`Demuxer::bind_url`]
+    /// on the read side: the caller passes a throwaway placeholder sink to
+    /// `open` (a pattern like `out_%03d.png` is not itself an openable
+    /// destination) and this method does the real work once the real URL is
+    /// known. The default returns [`Error::Unsupported`], matching every
+    /// muxer's behaviour before this method existed.
     ///
-    /// The default returns [`Error::Unsupported`], matching every muxer's
-    /// actual behaviour before this method existed: none of them could ever
-    /// see their own destination URL, so refusing is not a behaviour
-    /// change, only an explicit answer instead of a capability with nowhere
-    /// to express itself.
-    ///
-    /// # The same seam also serves a *negotiating* muxer, not just a segmenting one
-    ///
-    /// Every `Muxer` today is opened as `fn(Box<dyn MediaSink>) ->
-    /// Result<Box<dyn Muxer>>` — a pre-connected byte sink, which assumes
-    /// the destination already exists as something byte-oriented. A
-    /// protocol like WHIP (`vaco-mux-whip`, #619) breaks that assumption
-    /// completely: an HTTP `POST` carrying an SDP offer, an SDP answer, an
-    /// ICE connectivity check and a DTLS handshake all have to happen
-    /// *before* there is anything resembling a byte sink at all. That
-    /// muxer needs no new trait method and no `MuxerDesc.open` signature
-    /// change — it is [`FormatFlags::NOFILE`] (matching real `ffmpeg`'s own
-    /// declaration for `whip`, measured directly: the reference's generic
-    /// layer never attempts to open a WHIP destination as a file or
-    /// protocol sink at all) plus this method plus [`Muxer::init`], used
-    /// for a purpose this doc did not originally name:
-    ///
-    /// 1. `open` ignores its `Box<dyn MediaSink>` entirely (as every
-    ///    `NOFILE` muxer already does — nothing reads it).
-    /// 2. `bind_url` stores the destination URL. No network I/O yet: unlike
-    ///    the segmenting case above, this muxer has nothing to re-derive
-    ///    its state from *yet*, because the streams it will publish are not
-    ///    declared until [`Muxer::add_stream`] runs, which — like
-    ///    [`Demuxer::bind_url`] — happens *after* this call.
-    /// 3. [`Muxer::init`] — called once every stream is known and before
-    ///    the header, i.e. exactly early enough to build an SDP offer from
-    ///    real codec parameters — performs the whole negotiation and
-    ///    leaves the muxer holding a live, encrypted transport. From
-    ///    [`Muxer::write_header`] onward it behaves like any other muxer.
-    ///
-    /// A caller reaches this exactly the way it reaches the segmenting
-    /// case: no special-casing by muxer name, only a flag check.
-    /// `vaco-cli`'s `open_output` generalises its existing "call `bind_url`,
-    /// skip the real protocol sink" branch (previously [`FormatFlags::NEEDNUMBER`]
-    /// only) to also try `bind_url` for `NOFILE`, treating the default
-    /// [`Error::Unsupported`] above as "this muxer has no use for its URL"
-    /// — which is silently true for `null`/`mkvtimestamp_v2` and every other
-    /// `NOFILE` muxer that existed before this paragraph was written, so
-    /// nothing about their behaviour changes.
+    /// The same seam also serves a *negotiating* muxer such as WHIP, where
+    /// the destination is not a byte sink at all until an SDP/ICE/DTLS
+    /// handshake completes: it declares [`FormatFlags::NOFILE`], has `open`
+    /// ignore its sink, uses `bind_url` to store the destination with no I/O
+    /// yet, and performs the handshake in [`Muxer::init`] once every stream
+    /// is known — leaving a live transport in place before the header.
+    /// `vaco-cli`'s `open_output` tries `bind_url` for `NOFILE` the same way
+    /// it already did for [`FormatFlags::NEEDNUMBER`], treating the default
+    /// [`Error::Unsupported`] as "this muxer has no use for its URL".
     ///
     /// # Errors
     /// [`Error::Unsupported`] when this muxer writes to the sink it was
@@ -1041,8 +981,7 @@ impl MuxerDesc {
         self.name == name || self.name.split(',').any(|n| n == name)
     }
 
-    /// This muxer's [`FormatFlags`], read without keeping the instance
-    /// (gap 6, `planning/INTERFACE-GAPS.md`).
+    /// This muxer's [`FormatFlags`], read without keeping the instance.
     ///
     /// **Why this is a method and not a `flags` field to match
     /// [`DemuxerDesc::flags`].** A field is the right shape and was the

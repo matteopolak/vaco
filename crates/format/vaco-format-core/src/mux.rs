@@ -3,21 +3,17 @@
 //! [`crate::interleave`] holds M1–M5 — the timestamp chain and the interleave
 //! queue. This module holds everything that decides *when* those run: the
 //! init/header/packet/trailer ordering (M8–M11), the checks that ordering makes
-//! possible (M12–M17, M21–M22), and the bitstream-filter-in-muxer stage M6
-//! (plan 18 §1.10).
+//! possible (M12–M17, M21–M22), and the bitstream-filter-in-muxer stage M6.
+//! The full M1–M30 rule table, and the spec clause behind each one, is on
+//! [`MuxBuilder`].
 //!
 //! # Why there is a wrapper type at all
 //!
-//! Before this module, [`crate::Muxer`]'s doc comments described the ordering —
-//! "all streams must be added before `write_header`", "packets must arrive in
-//! interleaved order" — and nothing checked any of it. Every implementation
-//! re-derived the same four booleans, or forgot to. `VacoRawMuxer` carries
-//! `header_written` and `trailer_written` and four hand-written guards; five
-//! more containers landing in one wave means five more copies of those guards,
-//! written five different ways, each with its own error string.
-//!
-//! [`MuxBuilder`] and [`MuxWriter`] make the ordering a property of the *type*
-//! rather than of the caller's discipline:
+//! [`crate::Muxer`]'s own doc comments describe the ordering — streams before
+//! `write_header`, packets in interleaved order — but nothing checked it, and
+//! every implementation re-derived the same guard booleans by hand, or forgot
+//! to. [`MuxBuilder`] and [`MuxWriter`] make the ordering a property of the
+//! *type* instead of the caller's discipline:
 //!
 //! ```text
 //!   MuxBuilder ── add_stream ──▶ MuxBuilder
@@ -30,74 +26,9 @@
 //!
 //! `MuxBuilder` has no `write_packet`. `MuxWriter` has no `add_stream`. `open`
 //! and `finish` **consume** the value they transition from, so there is no
-//! second header and no second trailer — not "an error at run time", but no
-//! spelling that compiles.
-//!
-//! # Why this shape and not the other two
-//!
-//! *Runtime checks on the trait* is what we had. A check that the caller can
-//! skip is not a state machine; it is documentation with a panic in it. And
-//! because the guard lives in each muxer, a muxer that forgets it is
-//! indistinguishable from one that does not need it.
-//!
-//! *A phantom typestate* — `Mux<Building>` / `Mux<Writing>` — gives the same
-//! guarantee, and puts a type parameter in the signature of every function that
-//! touches a muxer. A caller that must hold "either phase" in one struct field
-//! then needs an enum over both instantiations anyway, so the parameter buys
-//! nothing that consuming transitions do not.
-//!
-//! *Changing the `Muxer` trait itself* — `fn write_header(self) -> Writer` —
-//! is the version that would make the guarantee unavoidable for implementors
-//! too. It is also the one thing that could not be done: **five container
-//! crates are being written against this trait right now**, in parallel, and a
-//! trait change lands underneath all five at once. Every addition here is a
-//! defaulted method or a new type, so an implementation written against
-//! yesterday's trait still compiles today. The wrapper gives *callers* the
-//! guarantee without asking implementors for anything, and a muxer that wants
-//! to keep its own internal guards may — `VacoRawMuxer` does, and the two agree.
-//!
-//! The cost is honest and worth stating: an implementor can still be driven
-//! directly through `dyn Muxer` and get the old, unpoliced behaviour. The
-//! wrapper is the supported path, not the only one.
-//!
-//! # The rules, and where they come from
-//!
-//! `planning/18-formats.md` §8.2 names FW-08 as "M1–M28", and §1.7.7 defines
-//! **M1–M7** and nothing else; §7.1 repeats the "M1–M28" span. M8 upward do not
-//! exist in the plan under any spelling. Rather than guess at twenty-one rules
-//! somebody else wrote down, the numbering below is *ours*, and each row cites
-//! the plan section that motivates it. Anything that turns out to be a
-//! renumbering of a real list should be renumbered, not re-derived.
-//!
-//! | # | Rule | Source |
-//! |---|---|---|
-//! | M1–M4 | rescale · `output_ts_offset` · `avoid_negative_ts` · monotonicity | §1.7.7, [`crate::interleave::MuxTimestamps`] |
-//! | M5 | the interleave queue | §1.9, [`crate::interleave::InterleaveQueue`] |
-//! | M6 | the bitstream-filter chain | §1.10, [`BsfChain`] |
-//! | M7 | `Muxer::write_packet` | §1.7.7 |
-//! | M8 | streams may only be added before the header | §1.3; type-enforced |
-//! | M9 | the header is written exactly once | §1.3; type-enforced |
-//! | M10 | packets only between header and trailer | §1.3; type-enforced |
-//! | M11 | the trailer runs once, after the queue is drained | §1.3, §1.9 N4 |
-//! | M12 | `init` runs before the header and may rewrite time bases | §1.3 |
-//! | M13 | zero streams needs `NOSTREAMS` | §1.1 flags |
-//! | M14 | `max_streams` caps the mux side too | §1.11 #36 |
-//! | M15 | the container is asked whether it can carry the codec | §1.3 `query_codec` |
-//! | M16 | `GLOBALHEADER` without extradata asks for `extract_extradata` | §1.10 B5 |
-//! | M17 | an `EXPERIMENTAL` container needs `-strict experimental` | §1.11 #27 |
-//! | M18 | `NOTIMESTAMPS` clears both fields and the queue accepts it | §1.7 R27 |
-//! | M19 | `+flush_packets` / `flush_packets=1` flushes after every packet | §1.11 #5, #23 |
-//! | M20 | a flush marker only reaches a muxer declaring `ALLOW_FLUSH` | §1.3 |
-//! | M21 | a packet naming an undeclared stream is refused | §1.9 |
-//! | M22 | a packet on a stream already ended is refused | §1.9 N4 |
-//! | M23 | the resolved shift and policy are reported | §1.7 R25 |
-//! | M24 | `bitexact` suppresses `start_time_realtime` | §1.11 #13 |
-//! | M25 | `metadata_header_padding` is surfaced to the muxer | §1.11 #24 |
-//! | M26 | packet and byte counts are recorded for the caller's stats | plan 14 |
-//! | M27 | ending a stream lets the rest drain | §1.9 N4 |
-//! | M28 | aborting writes no trailer, and says so | §1.3 |
-//! | M29 | muxer-private options (`-movflags`) are applied before `init` | gap 5, `planning/INTERFACE-GAPS.md` |
-//! | M30 | metadata reaches the muxer after `init`, before the header | gap 1, `planning/INTERFACE-GAPS.md` |
+//! second header and no second trailer — no spelling that compiles, rather
+//! than an error at run time. See [`MuxWriter`] for why this shape was chosen
+//! over a typestate parameter or a trait change.
 
 use std::sync::Arc;
 
@@ -349,6 +280,41 @@ struct StreamState {
 ///
 /// Has no `write_packet`, by construction. [`MuxBuilder::open`] consumes it and
 /// returns the only type that has one.
+///
+/// # The M1–M30 rules, and where each comes from
+///
+/// M1–M7 live in [`crate::interleave`]; M8 onward are enforced here, by type
+/// where noted. Each row cites the spec clause that motivates it:
+///
+/// | # | Rule | Source |
+/// |---|---|---|
+/// | M1–M4 | rescale · `output_ts_offset` · `avoid_negative_ts` · monotonicity | §1.7.7, [`crate::interleave::MuxTimestamps`] |
+/// | M5 | the interleave queue | §1.9, [`crate::interleave::InterleaveQueue`] |
+/// | M6 | the bitstream-filter chain | §1.10, [`BsfChain`] |
+/// | M7 | `Muxer::write_packet` | §1.7.7 |
+/// | M8 | streams may only be added before the header | §1.3; type-enforced |
+/// | M9 | the header is written exactly once | §1.3; type-enforced |
+/// | M10 | packets only between header and trailer | §1.3; type-enforced |
+/// | M11 | the trailer runs once, after the queue is drained | §1.3, §1.9 N4 |
+/// | M12 | `init` runs before the header and may rewrite time bases | §1.3 |
+/// | M13 | zero streams needs `NOSTREAMS` | §1.1 flags |
+/// | M14 | `max_streams` caps the mux side too | §1.11 #36 |
+/// | M15 | the container is asked whether it can carry the codec | §1.3 `query_codec` |
+/// | M16 | `GLOBALHEADER` without extradata asks for `extract_extradata` | §1.10 B5 |
+/// | M17 | an `EXPERIMENTAL` container needs `-strict experimental` | §1.11 #27 |
+/// | M18 | `NOTIMESTAMPS` clears both fields and the queue accepts it | §1.7 R27 |
+/// | M19 | `+flush_packets` / `flush_packets=1` flushes after every packet | §1.11 #5, #23 |
+/// | M20 | a flush marker only reaches a muxer declaring `ALLOW_FLUSH` | §1.3 |
+/// | M21 | a packet naming an undeclared stream is refused | §1.9 |
+/// | M22 | a packet on a stream already ended is refused | §1.9 N4 |
+/// | M23 | the resolved shift and policy are reported | §1.7 R25 |
+/// | M24 | `bitexact` suppresses `start_time_realtime` | §1.11 #13 |
+/// | M25 | `metadata_header_padding` is surfaced to the muxer | §1.11 #24 |
+/// | M26 | packet and byte counts are recorded for the caller's stats | not spec-mandated |
+/// | M27 | ending a stream lets the rest drain | §1.9 N4 |
+/// | M28 | aborting writes no trailer, and says so | §1.3 |
+/// | M29 | muxer-private options (`-movflags`) are applied before `init` | this crate's own interface fix |
+/// | M30 | metadata reaches the muxer after `init`, before the header | this crate's own interface fix |
 pub struct MuxBuilder {
     muxer: Box<dyn Muxer>,
     opts: FormatOptions,
@@ -482,14 +448,14 @@ impl MuxBuilder {
                 });
             }
         }
-        // Gap 9: hand the input time base down through `add_stream_with`,
-        // not just the plain `add_stream`. Every existing `Muxer` still gets
-        // exactly the call it always did — the default `add_stream_with`
-        // forwards straight to `add_stream`, ignoring `spec` — so this is
-        // additive; only a muxer that overrides `add_stream_with` (today:
+        // Hand the input time base down through `add_stream_with`, not just
+        // the plain `add_stream`. Every existing `Muxer` still gets exactly
+        // the call it always did — the default `add_stream_with` forwards
+        // straight to `add_stream`, ignoring `spec` — so this is additive;
+        // only a muxer that overrides `add_stream_with` (today:
         // `vaco-mux-hash`'s `framecrc`/`framemd5`/`framehash`, which print a
         // `#tb` line and cannot answer it correctly from `CodecParameters`
-        // alone — see `CONFORMANCE-FINDINGS.md` 32) sees a different value.
+        // alone) sees a different value.
         let spec = StreamSpec {
             time_base: Some(input_time_base),
         };
@@ -640,6 +606,21 @@ impl MuxBuilder {
 ///
 /// Has no `add_stream`, by construction. [`MuxWriter::finish`] consumes it, so
 /// the trailer cannot be written twice and no packet can follow it.
+///
+/// # Why a wrapper, not a typestate parameter or a trait change
+///
+/// A runtime check on the `Muxer` trait is what preceded this: skippable, and
+/// indistinguishable from a muxer that never needed the guard. A phantom
+/// typestate (`Mux<Building>` / `Mux<Writing>`) gives the same guarantee but
+/// puts a type parameter on every function that touches a muxer, and a caller
+/// holding "either phase" in one field ends up needing an enum over both
+/// instantiations anyway. Changing `Muxer` itself so `write_header` consumes
+/// `self` would make the guarantee unavoidable for implementors too, but five
+/// container crates are being written against this trait in parallel, and a
+/// trait change would land underneath all of them at once — every addition
+/// here is instead a defaulted method or a new type, so a muxer written
+/// against yesterday's trait still compiles today. The cost: an implementor
+/// can still be driven through `dyn Muxer` directly and skip the wrapper.
 pub struct MuxWriter {
     muxer: Box<dyn Muxer>,
     opts: FormatOptions,

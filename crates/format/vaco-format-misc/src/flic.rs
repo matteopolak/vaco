@@ -1,69 +1,43 @@
-//! Autodesk Animator FLIC (`.fli`/`.flc`), the palette-animation format that
-//! predates every game-video codec in this crate by close to a decade.
+//! Autodesk Animator FLIC (`.fli`/`.flc`), a palette-animation format.
 //!
-//! `Vaco-Spec-Ref compuphase-flic-doc` gives the header, frame and chunk
-//! layout below (the format's canonical public writeup, since Autodesk never
-//! published one itself).
-//!
-//! # Layout
-//!
-//! A 128-byte file header, then a flat sequence of 16-byte-headed frame
-//! chunks, each containing its own sub-chunks:
+//! `Vaco-Spec-Ref compuphase-flic-doc` gives the layout below (Autodesk
+//! never published one). A 128-byte header, then 16-byte-headed frames:
 //!
 //! ```text
 //! file header (128 bytes)
-//!    4   2   type        0xAF11 FLI, 0xAF12 FLC, 0xAF44 (non-8-bit)
-//!    6   2   frames
-//!    8   2   width
-//!   10   2   height
-//!   12   2   depth
-//!   16   4   speed       FLI: ticks of 1/70 s; FLC/0xAF44: milliseconds
+//!    4 type (0xAF11 FLI, 0xAF12 FLC, 0xAF44 non-8-bit) | 6 frames
+//!    8 width | 10 height | 12 depth
+//!   16 speed -- FLI: ticks of 1/70 s; FLC/0xAF44: milliseconds
 //!
 //! frame, repeated
-//!    0   4   size        this frame's bytes, header included
-//!    4   2   type        0xF1FA
-//!    6   2   chunk_count
-//!    8   2   delay
-//!   16   …   `chunk_count` sub-chunks (size:u32, type:u16, payload — not
-//!            interpreted by this module)
+//!    0 size (bytes, header included) | 4 type (0xF1FA) | 6 chunk_count
+//!    8 delay | 16 sub-chunks (size:u32, type:u16, payload — uninterpreted)
 //! ```
 //!
-//! # Measured against the reference (`ffprobe` 8.1)
-//!
-//! No encoder exists for this format either, so every fixture here is
-//! hand-built from the layout above. Findings, from comparing hand-built
-//! files against what `ffprobe` reports:
+//! # Measured against `ffprobe` 8.1 (hand-built fixtures; no encoder exists)
 //!
 //! * `probe_score` is **99**, magic alone, for all three `type` values
 //!   above; `0xAF30`/`0xAF31` (documented compression variants) and anything
 //!   else are rejected outright rather than scored lower.
-//! * A packet is one whole frame chunk — header and every sub-chunk,
-//!   unmodified — never the sub-chunks split apart. `size` is trusted for
-//!   framing; the file header's own `frames` count is not — a header
-//!   claiming 100 frames over a file that physically holds three still
-//!   yields exactly three packets, and `nb_frames` is not printed at all.
-//! * Only **frame index 0** is a keyframe, regardless of which chunk type
-//!   it uses. A `BLACK` frame (id 13, no image data at all) at index 0
-//!   still reports `flags=K`, and a `BYTE_RUN` frame (id 15, a full
-//!   from-scratch image) at index 1 does not. Keyframe-ness is therefore
-//!   purely positional here, not a property of the chunk type — confirmed by
-//!   swapping which chunk type sits at index 0 and watching the flag follow
-//!   the position.
+//! * A packet is one whole frame chunk, sub-chunks never split apart.
+//!   `size` is trusted for framing; the header's own `frames` count is not —
+//!   a header claiming 100 frames over a file physically holding three still
+//!   yields three packets, and `nb_frames` is not printed at all.
+//! * Only **frame index 0** is a keyframe, regardless of chunk type. A
+//!   `BLACK` frame (id 13, no image data) at index 0 still reports
+//!   `flags=K`; a `BYTE_RUN` frame (id 15, a full from-scratch image) at
+//!   index 1 does not. Keyframe-ness is purely positional, confirmed by
+//!   swapping which type sits at index 0 and watching the flag follow.
 //! * `extradata` is the **entire 128-byte file header**, verbatim.
 //! * `r_frame_rate` is `70/speed` for `type == 0xAF11` and `1000/speed`
-//!   otherwise, **reduced** — `speed=66` measures as `500/33`, not the
-//!   unreduced `1000/66`; both formulas were checked independently
-//!   (`speed=7` on FLI gives `10/1`), not assumed from one and applied to
-//!   the other. `avg_frame_rate` stays `0/0`, the same `ivf` quirk this
-//!   crate's other constant-frame-rate format shows (and `roq`, in the same
-//!   crate, does not — see its own module doc).
+//!   otherwise, **reduced** — `speed=66` measures as `500/33`, not `1000/66`;
+//!   both formulas were checked independently (`speed=7` on FLI gives
+//!   `10/1`). `avg_frame_rate` stays `0/0`, the same quirk `ivf` shows and
+//!   `roq` does not.
 //!
-//! # What is not implemented
-//!
-//! * The `PREFIX_TYPE` (`0xF100`) top-level chunk, used only by the
-//!   still-image "CEL" sibling format, is not handled — this module expects
-//!   every top-level chunk after the file header to be a `0xF1FA` frame, and
-//!   returns [`vaco_core::Error::InvalidData`] on anything else.
+//! The `PREFIX_TYPE` (`0xF100`) chunk, used only by the still-image "CEL"
+//! sibling format, is not handled: every top-level chunk after the file
+//! header must be a `0xF1FA` frame, else [`vaco_core::Error::InvalidData`].
 
 use vaco_core::{Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;

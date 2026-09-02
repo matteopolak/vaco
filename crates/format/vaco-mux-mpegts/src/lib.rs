@@ -1,22 +1,13 @@
 //! The MPEG-TS muxer (ISO/IEC 13818-1): PAT/PMT/SDT, PES packetisation, PCR
 //! insertion, per-PID continuity counters, and Blu-ray M2TS wrapping.
 //!
-//! FM-25, issue #576.
-//!
-//! # Layout
-//!
-//! | Module | Contents |
-//! |---|---|
-//! | [`tsw`] | the 188-byte transport packet, adaptation field, PCR, continuity counters, M2TS wrapping |
-//! | [`pes`] | PES header encoding and the 33-bit PTS/DTS field |
-//! | [`options`] | `-mpegts_*` flags and defaults, measured against `ffmpeg -h muxer=mpegts` |
-//! | [`mux`] | [`mux::MpegTsMuxer`], the [`vaco_format_core::Muxer`] implementation that ties the above together |
-//!
-//! PAT/PMT/SDT section *writers* live in `vaco-format-mpegts-tables`
-//! (`write_pat`/`write_pmt`/`write_sdt`), alongside that crate's existing
-//! PSI readers — one definition of what a PAT looks like, shared by both
-//! directions (D19), rather than a second model of the same three tables
-//! built inside this crate.
+//! [`tsw`] builds the 188-byte transport packet, adaptation field, PCR and
+//! continuity counters; [`pes`] encodes the PES header and 33-bit PTS/DTS;
+//! [`options`] holds `-mpegts_*` flags measured against `ffmpeg -h
+//! muxer=mpegts`; [`mux::MpegTsMuxer`] ties them together as the
+//! [`vaco_format_core::Muxer`] implementation. PAT/PMT/SDT section *writers*
+//! live in `vaco-format-mpegts-tables`, next to that crate's PSI readers —
+//! one definition of a PAT, shared by both directions.
 //!
 //! ```
 //! use vaco_codec_core::{CodecId, CodecParameters};

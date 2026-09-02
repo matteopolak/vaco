@@ -10,8 +10,8 @@
 //! (`framecrc` agreement against the unfiltered stream).
 //!
 //! [`vaco_format_core::mux::BsfProvider::open`] has no per-instance option
-//! string (`planning/INTERFACE-GAPS.md` gap 12), so this crate can only ever
-//! construct the bare-name (`gain=0`) behaviour, which is measured identity.
+//! string, so this crate can only ever construct the bare-name (`gain=0`)
+//! behaviour, which is measured identity.
 
 use std::collections::VecDeque;
 

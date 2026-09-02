@@ -513,36 +513,27 @@ impl MuxTimestamps {
             //
             // `TimestampFixer`'s own R19b (crate::time) already derives a real
             // DTS for every packet once its reorder window has seen `delay + 1`
-            // arrivals, and *correctly* leaves the first `delay` packets at
-            // `None` — its own doc calls this "the window filling, not an
-            // error", measured to match the reference's own `ffprobe` output
-            // (`dts = N/A, N/A, 0, 40, 80, …` for `pts = 0, 160, 80, 40, 120,
-            // …`). Those `None`s used to reach here and get `dts = pts`
-            // unconditionally, which is wrong for exactly this window: PTS is
-            // a *display* time, already shifted forward by the reorder delay
-            // relative to decode order, so pts=160 for the second packet
-            // becomes a DTS the *third* packet's real, smaller DTS (0) then
-            // violates — "non-monotonic dts: this container requires strictly
-            // increasing timestamps" on a real B-frame streamcopy to a strict
-            // container (`vaco-mux-mp4`) even though the source demuxer's own
-            // timestamps were correct throughout (`planning/E2E-GAPS.md` #5,
-            // reproduced against a real `ffmpeg`-encoded `-bf 2` H.264/Matroska
-            // file; `mkv -> mkv` and `mkv -> null` never hit this because
-            // neither requires strictly increasing DTS).
+            // arrivals, and correctly leaves the first `delay` packets at
+            // `None` (matches the reference's own `ffprobe` output: `dts =
+            // N/A, N/A, 0, 40, 80, …` for `pts = 0, 160, 80, 40, 120, …`).
+            // Those leading `None`s cannot simply become `dts = pts`: PTS is a
+            // *display* time, already shifted forward by the reorder delay
+            // relative to decode order, so the second packet's `pts = 160`
+            // would exceed the third packet's real, smaller DTS (`0`) —
+            // "non-monotonic dts" on a strict container (`vaco-mux-mp4`) even
+            // though the source timestamps were correct throughout.
             //
-            // The fix needs no lookahead: `delay` is a static per-stream fact
+            // No lookahead is needed: `delay` is a static per-stream fact
             // (`has_b_frames`, threaded in by `set_reorder_delay`) and this
             // packet already carries its own `duration`, so decode order can
             // be reconstructed directly — `dts = (decode_index - delay) *
             // duration`, which is negative for exactly the leading `delay`
             // packets and lands on the real, demuxer-supplied DTS the moment
-            // `decode_index == delay` (unaffected here, since by then `dts`
-            // is no longer `None`). Measured against the reference's own
-            // remux of the same file: `ffmpeg`'s `mp4` output assigns this
+            // `decode_index == delay`. Measured against the reference's own
+            // remux of the same file, `ffmpeg`'s `mp4` output assigns this
             // exact shape (`dts = -1280, -640, 0, 640, …` for a two-frame
-            // delay at a 640-tick step) — this does not have to match those
-            // values exactly (D6/the owner's byte-exactness ruling), only
-            // avoid the structural defect, and it does.
+            // delay at a 640-tick step) — matching that shape, not those exact
+            // values (D6 requires only the latter), is the bar here.
             let delay = stream_idx
                 .and_then(|i| self.reorder_delay.get(i))
                 .copied()
@@ -868,7 +859,7 @@ mod tests {
         assert!(m.apply(&mut p, tb, tb).is_err());
     }
 
-    /// R19c (E2E-GAPS #5): a reordering stream's leading `delay` packets
+    /// R19c: a reordering stream's leading `delay` packets
     /// reach `apply` with `dts = None` by design (`TimestampFixer`'s R19b
     /// leaves them that way rather than guess) — this is the fix that
     /// `pts` is not a valid stand-in for that window, because it produces a

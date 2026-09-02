@@ -14,9 +14,8 @@
 //!
 //! # Why a wrapper rather than a core-driven loop
 //!
-//! `planning/18-formats.md` §1.6 assumes a `DemuxContext` that owns the demuxer
-//! and can therefore run this loop over it. The frozen [`Demuxer`] trait has no
-//! such context — a demuxer owns its own I/O — so the composition has to go the
+//! The frozen [`Demuxer`] trait has no shared context that could run this loop
+//! over it — a demuxer owns its own I/O — so the composition has to go the
 //! other way. That turns out to be the better shape: `Discovery<D>` is itself a
 //! `Demuxer`, so it can be applied or not applied, tested against a mock, and
 //! stacked under whatever else a caller wants, without any demuxer knowing it
@@ -264,15 +263,12 @@ impl<D: Demuxer> Discovery<D> {
             return Ok(&self.report);
         }
         self.ran = true;
-        // Gap 4 (`planning/INTERFACE-GAPS.md`): `DemuxerDesc::open` had no
-        // seam for `Limits` or `FormatOptions`, so every demuxer invented its
-        // own defaults. `Demuxer::reconfigure` is the seam that reaches an
-        // already-constructed demuxer instead; calling it here means wrapping
-        // a demuxer in `Discovery` is enough to hand over the real budget and
-        // the real option set before anything is read through this wrapper. A
-        // demuxer that predates the method ignores the call, exactly as it
-        // ignored `with_limits`/the caller's `FormatOptions` before this
-        // existed.
+        // `DemuxerDesc::open` has no seam for `Limits` or `FormatOptions`, so
+        // `Demuxer::reconfigure` is the seam that reaches an already-constructed
+        // demuxer instead; calling it here means wrapping a demuxer in
+        // `Discovery` is enough to hand over the real budget and option set
+        // before anything is read through this wrapper. A demuxer that
+        // predates the method simply ignores the call.
         self.inner.reconfigure(&self.limits, &self.opts)?;
         let mut guard = ProgressGuard::new();
         let packet_cap = u64::try_from(self.opts.max_probe_packets)
@@ -385,24 +381,14 @@ impl<D: Demuxer> Discovery<D> {
             // extradata-synthesis rule needs nothing but the payload bytes
             // and the codec id, see [`synthesize_extradata`].
             synthesize_extradata(stream, pkt.payload());
-            // `self.fixer` was built once, in `Discovery::new`, from whatever
-            // `has_b_frames` the container's own initial track parsing knew —
-            // for Matroska (and any container that does not state a numeric
-            // reorder depth up front), that is `0`, before a single packet's
-            // bitstream has been read. `refine` above is what can *change*
-            // it (a parser reading a real SPS/VUI), and until this call
-            // `self.fixer` never learned: it kept applying R19 (dts = pts
-            // unconditionally) to a stream that, by the time this same
-            // packet's `fix` call below runs, `stream.params` already knows
-            // reorders — the same "wrapper snapshots derived state and never
-            // sees a later change" shape `Discovery`'s own `start_time`
-            // handling was already found to have. Concretely, this is what
-            // made a B-frame stream's stream-copy to a strict container fail
-            // with "non-monotonic dts" even after `set_reorder_delay`
-            // existed on the mux side (`planning/E2E-GAPS.md` #5): `fix`
-            // handed out a real, wrong, non-monotonic DTS (`dts = pts`) on
-            // *this* side before the mux side ever saw a `None` to backfill
-            // correctly.
+            // `self.fixer` was built once, from whatever `has_b_frames` the
+            // container's initial track parsing knew (`0` for Matroska and
+            // similar containers that state no numeric reorder depth up
+            // front). `refine` above can change that once a parser reads a
+            // real SPS/VUI, so the fixer's delay/reorder state must be
+            // refreshed here too, or it keeps handing out `dts = pts` for a
+            // stream that actually reorders, producing a non-monotonic DTS
+            // downstream.
             let delay = stream.params.video.as_ref().map_or(0, |v| v.has_b_frames);
             let reorders = stream
                 .params
@@ -828,41 +814,32 @@ fn refine(stream: &mut Stream, driver: &mut ParserDriver<Box<dyn Parser>>, paylo
     }
 }
 
-/// CONFORMANCE-FINDINGS 26's read half: fill in `extradata` for a stream
-/// whose container carries no out-of-band configuration record — AVI,
-/// MPEG-TS, raw Annex B — by pulling H.264/HEVC parameter sets back out of
-/// the packets discovery is already reading.
+/// Fill in `extradata` for a stream whose container carries no out-of-band
+/// configuration record — AVI, MPEG-TS, raw Annex B — by pulling H.264/HEVC
+/// parameter sets back out of the packets discovery is already reading.
 ///
 /// Mirrors the reference's own mechanism: `avformat_find_stream_info` runs
 /// its `extract_extradata` bitstream filter over the probe window and stores
 /// whatever it collects. The assembly rule — which units count as parameter
 /// sets, and how their bytes are laid out — lives in
 /// [`vaco_format_nalu::extradata`], the one place D19 allows it; this
-/// function only decides *when* to call it, which is the read side's own
-/// question and not part of the shared rule.
+/// function only decides *when* to call it.
 ///
 /// # Why here, and why on the raw payload rather than through the parser
 ///
 /// `Discovery` already holds exactly the bytes a container-supplied parser
 /// never gets to see whole in MP4/Matroska (there the SPS lives in `avcC`,
 /// not in a packet) but sees in full here, because AVI/MPEG-TS/raw Annex B
-/// carry every parameter set in-band. Reaching into `vaco-parse-h264`'s or
-/// `vaco-parse-hevc`'s private state to ask what SPS/PPS it already parsed
-/// would be a second way to get the same bytes this function already has in
-/// hand, and would need `Parser` widened to expose them (a rejected
-/// alternative — see `vaco_format_nalu::extradata`'s module docs). Layering
-/// also rules out reaching for `vaco-bsf-generic`'s filter directly: D14.1
-/// keeps a `vaco-format-*` crate off `vaco-parse-*`, and going through it
-/// would mean either a new `BsfProvider` seam (an interface change, recorded
-/// in `planning/INTERFACE-GAPS.md` if ever taken) or depending on a crate two
-/// hops removed from what this needs — a `Vec<&[u8]>` in, a `Vec<u8>` out.
+/// carry every parameter set in-band. Reaching into a codec parser's private
+/// state to ask what SPS/PPS it already parsed would need `Parser` widened to
+/// expose them — a rejected alternative, see `vaco_format_nalu::extradata`'s
+/// module docs. D14.1 also rules out reaching for `vaco-bsf-generic`'s filter
+/// directly, since that would need either a new seam or a crate two hops
+/// removed from what this needs — a `Vec<&[u8]>` in, a `Vec<u8>` out.
 ///
-/// Called from [`Discovery::absorb`] rather than from [`refine`], and
-/// unconditionally on whether a `Parser` was actually built for the stream:
-/// a `--no-default-features` build with no H.264/HEVC parser compiled in
-/// still has every byte this needs, and still gets the same `-show_streams`
-/// answer, because the rule only touches `vaco-format-nalu` and never asks a
-/// codec crate for anything.
+/// Called unconditionally, whether or not a `Parser` was actually built for
+/// the stream: a `--no-default-features` build with no H.264/HEVC parser
+/// compiled in still has every byte this needs.
 ///
 /// # Why only once
 ///
@@ -870,10 +847,9 @@ fn refine(stream: &mut Stream, driver: &mut ParserDriver<Box<dyn Parser>>, paylo
 /// `extradata` — checked first, so an MP4/Matroska stream is never touched.
 /// Absent that, this fires only while `extradata` is still empty: the first
 /// packet in the probe window carrying a parameter set sets it, and later
-/// packets are left alone. A file whose SPS/PPS change mid-stream (rare, and
-/// not exercised by any of finding 26's measured containers) keeps whatever
-/// the first keyframe stated, which is what `-show_streams` reports for
-/// every container this was checked against.
+/// packets are left alone. A file whose SPS/PPS change mid-stream (rare)
+/// keeps whatever the first keyframe stated, which is what `-show_streams`
+/// reports for every container this was checked against.
 fn synthesize_extradata(stream: &mut Stream, payload: &[u8]) {
     if stream
         .params
@@ -1213,9 +1189,9 @@ mod tests {
     /// reference's `ff_compute_frame_duration` divides by `ticks_per_frame`.
     ///
     /// The mock's default video codec is H.264, measured to report a *tick*
-    /// rate double the picture rate (issue #632 part 1). 20/1 here stands in
-    /// for that tick rate; the true picture rate is 10 fps, so the filled
-    /// duration must be 100ms — not the 50ms a naive `1/rate` produces.
+    /// rate double the picture rate. 20/1 here stands in for that tick rate;
+    /// the true picture rate is 10 fps, so the filled duration must be
+    /// 100ms — not the 50ms a naive `1/rate` produces.
     #[test]
     fn r21_divides_the_tick_rate_by_ticks_per_frame() {
         let mut inner = MockDemuxer::new(1, MediaType::Video).with_packets(1);
@@ -1621,8 +1597,6 @@ mod tests {
         assert_eq!(d.streams().len(), 1);
     }
 
-    // ------------------------------------------ CONFORMANCE-FINDINGS 26, read half
-
     /// A demuxer that hands out a fixed payload on every packet, instead of
     /// [`MockDemuxer`]'s content-free `[0u8; 8]` — needed here because the
     /// thing under test reads the bytes, not just their length.
@@ -1651,10 +1625,9 @@ mod tests {
         }
     }
 
-    /// H.264 SPS/PPS measured in `planning/CONFORMANCE-FINDINGS.md` finding
-    /// 26 (the `a.avi` example), Annex-B framed with a four-byte start code
-    /// on both units — the framing AVI's own in-band stream actually uses,
-    /// distinct from the *output* convention finding 26 documents.
+    /// H.264 SPS/PPS from a real `a.avi` capture, Annex-B framed with a
+    /// four-byte start code on both units — the framing AVI's own in-band
+    /// stream actually uses, distinct from the demuxer's *output* convention.
     fn h264_annexb_sps_pps_slice() -> Vec<u8> {
         let sps = [
             0x67, 0x64, 0x00, 0x0a, 0xac, 0xd9, 0x44, 0x26, 0xc0, 0x44, 0x00, 0x00, 0x03, 0x00,

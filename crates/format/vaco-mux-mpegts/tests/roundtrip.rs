@@ -193,8 +193,7 @@ fn m2ts_mode_still_demuxes_once_the_four_byte_prefix_is_known() {
     assert!(demux.is_ok(), "M2TS output should still open as mpegts");
 }
 
-/// Finding 17 (`planning/CONFORMANCE-FINDINGS.md`): the reference's SDT
-/// service descriptor carries `provider_name="FFmpeg"`/
+/// The reference's SDT service descriptor carries `provider_name="FFmpeg"`/
 /// `service_name="Service01"` with no `-service_name`/`-service_provider`
 /// flag given at all — measured, not documented in `-h muxer=mpegts` (which
 /// has no such option). `MpegTsMuxOptions::default()` must reproduce that,

@@ -1,117 +1,44 @@
-//! RAD Game Tools Smacker (`.smk`) — the older sibling of Bink, with a fixed
+//! RAD Game Tools Smacker (`.smk`) — the older sibling of Bink: a fixed
 //! 104-byte header, three side tables (per-frame size, per-frame content
-//! flags, packed Huffman trees) read up front, then a flat run of frame
-//! data with no further offsets: each frame's own (masked) size in the
-//! table is what tells a reader where the next one starts.
+//! flags, packed Huffman trees) read up front, then a flat run of frame data
+//! with no further offsets — each frame's own masked `FrameSizes` entry
+//! tells a reader where the next starts.
 //!
-//! `Vaco-Spec-Ref multimedia-wiki-smacker` is the format's public
-//! specification and gives every field and chunk layout below in full,
-//! including the parts (Huffman tree bit-packing, block-type decoding) this
-//! demuxer never needs, since none of it is required to find frame and
-//! chunk boundaries.
-//!
-//! # Layout
-//!
-//! ```text
-//! header (104 bytes)
-//!    0   4   signature: "SMK2" or "SMK4"
-//!    4   4   width
-//!    8   4   height
-//!   12   4   frame count (logical; see below)
-//!   16   4   frame rate (i32; see the formula below)
-//!   20   4   flags (bit 0: file has an extra "ring" frame not counted above)
-//!   24  28   AudioSize[7]: largest unpacked buffer per track, informational
-//!   52   4   TreesSize: bytes of packed Huffman tree data that follows the
-//!            two tables below
-//!   56  16   MMap_Size, MClr_Size, Full_Size, Type_Size: decoder table
-//!            allocation hints, informational
-//!   72  28   AudioRate[7]: one 32-bit descriptor per track (bit 31
-//!            compressed, bit 30 present, bit 29 16-bit, bit 28 stereo,
-//!            bits 23-0 sample rate)
-//!  100   4   unused
-//!
-//! FrameSizes: one u32 per physical frame (frame count, plus one more if
-//!   the ring-frame flag is set). Bit 0 set means a keyframe; bit 1 is
-//!   reserved. Both must be masked off to get the real byte length — the
-//!   masked value is also the frame's exact physical size on disk.
-//!
-//! FrameTypes: one byte per physical frame. Bit 0: a palette chunk opens
-//!   the frame. Bits 1-7: audio data for tracks 0-6 respectively follows,
-//!   in track order, after the palette chunk if any.
-//!
-//! HuffmanTrees: TreesSize raw bytes, opaque to this demuxer.
-//!
-//! frame, once per FrameSizes/FrameTypes entry
-//!    [ palette chunk, if FrameTypes bit 0 ]
-//!       1   Length: total palette chunk bytes, including this byte,
-//!           divided by 4
-//!    (Length*4)-1   palette change blocks (not decoded here)
-//!    [ one chunk per active audio track, low bit to high ]
-//!       4   Length: bytes of this chunk including this field
-//!       4   UnpackedLength, only if that track's AudioRate bit 31 is set
-//!    Length-4(-4)   audio data
-//!    remainder-of-frame   video chunk
-//! ```
+//! `Vaco-Spec-Ref multimedia-wiki-smacker` is the public specification and
+//! gives every field and chunk layout in full, including the Huffman tree
+//! bit-packing and block-type decoding this demuxer never needs to find
+//! frame and chunk boundaries.
 //!
 //! # Measured against the reference (`ffmpeg`/`ffprobe` 8.1)
 //!
-//! No encoder exists. `ffprobe -show_streams`/`-show_packets` need the
-//! `smackvid` decoder to open even to report container-level facts, and it
-//! refuses to open over a fixture with anything less than a fully valid
-//! packed Huffman tree — building one by hand (per the spec's own "typical
-//! tree initialization" bit-packing algorithm) got the decoder to open, but
-//! its own audio/video packet *payload* turned out to package more than
-//! this demuxer can derive from the public file-format spec alone (see
-//! below), so the working measurement tool for this format was `ffmpeg -i
-//! FIXTURE -c copy -f framemd5 -`, a stream-copy path that only needs the
-//! codec to be *found*, not opened.
+//! No encoder exists, and `-show_streams`/`-show_packets` need the `smackvid`
+//! decoder, which refuses to open without a valid packed Huffman tree. The
+//! working tool was `ffmpeg -i FIXTURE -c copy -f framemd5 -`.
 //!
-//! * `probe_score` is **100** (`ffmpeg -v debug`'s "Format smk probed
-//!   with... score=100"), magic alone.
+//! * `probe_score` is **100**, magic alone.
 //! * `extradata` is **not** just the `HuffmanTrees` bytes: measured at 26
-//!   bytes against a 10-byte `TreesSize`, which is exactly `4×u32` (16
-//!   bytes: `MMap_Size, MClr_Size, Full_Size, Type_Size`, in that order)
-//!   followed by the tree bytes. This demuxer reproduces that concatenation
-//!   exactly.
-//! * An audio chunk's reported packet is its **data only** — the 4-byte
-//!   `Length` field (and the `UnpackedLength` field, when present) are
-//!   stripped, unlike Bink's equivalent chunk, which keeps its own
-//!   4-byte sample-count field in the packet. The two formats are
-//!   documented in the same paragraph on the wiki and still differ here;
-//!   checked independently rather than assumed identical.
-//! * Audio `time_base` measured as `1/(sample_rate × bytes_per_sample)`,
-//!   **not** `1/sample_rate` — a 4-byte payload at 22050 Hz 16-bit mono
-//!   produced `duration=4` at `tb=1/44100`, not `duration=2` at
-//!   `tb=1/22050` (both describe the same 90.7 µs, so this is a choice of
-//!   tick granularity, not a different number). Reproduced for the 16-bit
-//!   mono case measured; the multiplier for stereo is applied by analogy
-//!   (bytes per channel-interleaved frame) and has not been independently
-//!   checked against a stereo fixture.
-//! * The reference's **video packet is not the raw video chunk**: an
-//!   otherwise-empty frame (a 4-byte palette chunk, nothing else) still
-//!   produced a 769-byte video packet, and adding 8 real video-chunk bytes
-//!   made it 777 — consistently `769 + n`. `769 = 1 + 256×3` strongly
-//!   suggests a one-byte flag plus a synthesised 256-entry RGB palette
-//!   table prepended ahead of the real video bytes, but three independent
-//!   byte-layout guesses (flag value, prefix vs. suffix, an all-zero vs. a
-//!   partially-set palette) were checked against the measured MD5 hash and
-//!   all failed to reproduce it. Pinning the exact construction would mean
-//!   probing well past "container framing" into a specific, undocumented
-//!   internal packet convention, which was judged not worth further
-//!   iteration (see `planning/TECH-DEBT.md`). **This demuxer's video
-//!   packets are the raw video-chunk bytes only** — a real, measured,
-//!   unresolved divergence from the reference's packet `size`/hash for
-//!   video specifically, not a guess presented as fact.
+//!   bytes against a 10-byte `TreesSize` — exactly `MMap_Size, MClr_Size,
+//!   Full_Size, Type_Size` (4×u32, in that order) then the tree bytes.
+//! * An audio chunk's packet is its **data only**; the 4-byte `Length` and
+//!   the `UnpackedLength` field, when present, are stripped. Bink's
+//!   equivalent keeps its own 4-byte sample-count field — documented in the
+//!   same wiki paragraph and still different, so this was checked.
+//! * Audio `time_base` is `1/(sample_rate × bytes_per_sample)`, **not**
+//!   `1/sample_rate`: a 4-byte payload at 22050 Hz 16-bit mono gave
+//!   `duration=4` at `tb=1/44100`, not `duration=2` at `tb=1/22050` (the
+//!   same interval, so it is a tick-granularity choice). The stereo
+//!   multiplier is applied by analogy and unverified.
+//! * **This demuxer's video packets are the raw video-chunk bytes only**, a
+//!   measured, unresolved divergence. The reference prepends something: an
+//!   otherwise-empty frame still gave a 769-byte video packet, and 8 real
+//!   video bytes made it 777 — consistently `769 + n`. `769 = 1 + 256×3`
+//!   suggests a flag byte plus a synthesised 256-entry RGB palette, but
+//!   three byte-layout guesses all failed to reproduce the measured MD5.
 //!
-//! # `CodecId`
-//!
-//! The video stream is always `Smacker`. Each audio track's `AudioRate`
-//! entry states whether its bytes are Smacker's own compressed audio
-//! (`SmackAudio`) or raw, uncompressed PCM in disguise — measured against
-//! the reference on both settings: an uncompressed track reports
-//! `pcm_s16le`/`pcm_u8` (by the same bit-depth flag this module already
-//! reads), never `smackaudio`.
-//!
+//! The video stream is always `Smacker`; each audio track's `AudioRate` entry
+//! says whether its bytes are `SmackAudio` or raw PCM (uncompressed tracks
+//! report `pcm_s16le`/`pcm_u8`, never `smackaudio`).
+
 use std::collections::VecDeque;
 
 use vaco_chlayout::ChannelLayout;

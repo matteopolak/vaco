@@ -6,9 +6,7 @@
 //! [`crate::mux::MuxBuilder::add_stream`] carries only [`CodecParameters`], so
 //! before this module there was no channel at all for anything Matroska's
 //! `Tags`/`Chapters`/`Attachments`, MP4's `udta▸meta▸ilst`/`chpl`, or a plain
-//! `ffmetadata` file needed to write. `vaco-mux-matroska`, `vaco-mux-mp4` and
-//! `vaco-mux-stream` each reported the same absence independently — see
-//! `planning/INTERFACE-GAPS.md` gap 1.
+//! `ffmetadata` file needed to write.
 //!
 //! # How it works
 //!
@@ -21,12 +19,10 @@
 //! a title or a chapter table has to be known by for any container that
 //! writes it into its own header structure.
 //!
-//! [`crate::Muxer::set_metadata`]'s default implementation does nothing, so
-//! every muxer written before this module existed keeps compiling and keeps
-//! behaving exactly as before: it already dropped this information because
-//! there was nowhere to put it, and the default drops it the same way. A
-//! muxer that wants to write metadata overrides the method; nothing else about
-//! it needs to change.
+//! [`crate::Muxer::set_metadata`]'s default implementation does nothing, so a
+//! muxer written before this module existed keeps behaving exactly as
+//! before. A muxer that wants to write metadata overrides the method;
+//! nothing else about it needs to change.
 //!
 //! # How to change it
 //!
@@ -100,8 +96,7 @@ pub struct MuxMetadata {
     /// distinguish the two, which matches [`Self::stream_tags`]'s own
     /// inability to distinguish "no tags" from "not stated" either.
     ///
-    /// This is the channel `crate::StreamSpec`'s own doc named as missing
-    /// (`planning/INTERFACE-GAPS.md` gap 9's leftover): `add_stream`/
+    /// This is the channel `crate::StreamSpec` cannot carry: `add_stream`/
     /// `add_stream_with` run before every `-disposition` occurrence for a
     /// stream is necessarily known (a later specifier can still match an
     /// already-added stream), so disposition cannot ride on `StreamSpec`

@@ -5,8 +5,8 @@
 //! `ffmpeg -h bsf=pcm_rechunk` declares three options: `nb_out_samples`
 //! (default `1024`), `pad` (default `true`), `frame_rate` (default `0/1`,
 //! meaning unused). [`vaco_format_core::mux::BsfProvider::open`] has no
-//! per-instance option string (`planning/INTERFACE-GAPS.md` gap 12), so this
-//! crate can only ever build the bare-name, default-option behaviour —
+//! per-instance option string, so this crate can only ever build the
+//! bare-name, default-option behaviour —
 //! `1024`-sample chunks, zero-padded.
 //!
 //! Measured directly: a 2205-sample mono `pcm_s16le` stream (0.05 s at

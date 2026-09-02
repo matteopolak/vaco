@@ -17,10 +17,8 @@
 //! Header layout corroborated across three independent community
 //! references (`Vaco-Spec-Ref vag-format-doc`): the `PlayStation`
 //! Reverse-Engineering wiki, the Just Solve the File Format Problem wiki,
-//! and fmjsoft's format collection all agree field-for-field. This crate's
-//! own fixture was hand-built from that agreement, not copied from any one
-//! of them, and measured against `ffprobe` to confirm the reference reads
-//! it the same way.
+//! and fmjsoft's format collection agree field-for-field. The fixture was
+//! hand-built from that agreement, not copied from any one of them.
 //!
 //! # Packet granularity
 //!
@@ -28,15 +26,6 @@
 //! `-show_packets` entries, `size=16` each, `pts`/`dts` advancing by 28
 //! (one block's samples) every packet. This module reproduces that
 //! directly with its own loop rather than going through `BlockDemuxer`.
-//!
-//! Finding this here surfaced that `BlockDemuxer` itself batched several
-//! blocks into one oversized packet for `adx` and every `rawcodec.rs`
-//! entry — a real, pre-existing divergence from the reference, since fixed
-//! (see `block.rs`'s module doc for the full per-format measurement and
-//! `planning/TECH-DEBT.md` for the record). `pvf`/`nistsphere`'s raw-PCM
-//! tail remains an open, unmeasured approximation for a different reason
-//! (the reference's batching there depends on sample rate in a way that
-//! was not pinned down) — also recorded in `planning/TECH-DEBT.md`.
 //!
 //! # What is not read
 //!
@@ -47,9 +36,8 @@
 //! # Missing `CodecId`
 //!
 //! The reference names this codec `adpcm_psx` (`ADPCM Playstation`).
-//! `vaco-codec-core` has no variant for it yet; see `planning/
-//! INTERFACE-GAPS.md` gap 21. This stream's `codec_id` is `None` until
-//! that lands, same as every format in `vaco-format-misc`.
+//! `vaco-codec-core` has no variant for it yet, so this stream's `codec_id`
+//! is `None` until that lands, same as every format in `vaco-format-misc`.
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::CodecParameters;

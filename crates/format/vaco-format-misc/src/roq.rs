@@ -2,75 +2,41 @@
 //! Return to Castle Wolfenstein and (originally) The 11th Hour.
 //!
 //! `Vaco-Spec-Ref idroq-format-doc` (Dr. Tim Ferguson's reverse-engineered
-//! description, the format's only public technical writeup — id Software
-//! never published one) gives the chunk framing this module needs. It does
-//! **not** give the video codec's own bitstream, which this demuxer never
-//! reads.
-//!
-//! # Layout
+//! description, the only public writeup) gives the chunk framing, but not
+//! the video bitstream, which this demuxer never reads.
 //!
 //! Eight magic bytes, then a flat sequence of chunks:
 //!
 //! ```text
-//!   0  2   chunk id
-//!   2  4   payload length (the signature chunk uses 0xFFFFFFFF here and has
-//!          no payload; its "argument" carries the frame rate instead)
-//!   6  2   chunk argument, meaning depends on the id
-//!   8  …   payload
+//!   0  2  chunk id | 2  4  payload length | 6  2  argument | 8  …  payload
 //! ```
 //!
-//! Chunk ids this module recognises: `0x1084` signature, `0x1001` `RoQ_INFO`
-//! (width/height), `0x1002` `RoQ_QUAD_CODEBOOK`, `0x1011` `RoQ_QUAD_VQ`,
-//! `0x1020`/`0x1021` `RoQ_SOUND_MONO`/`RoQ_SOUND_STEREO`. Anything else
-//! (`RoQ_JPEG`, `RoQ_HANG`, `RoQ_PACKET`, or a chunk id nobody has documented)
-//! is treated the same as `RoQ_QUAD_CODEBOOK` — accumulated, never
-//! interpreted — which is the same "unknown chunk, keep the framing lenient"
-//! stance the rest of this family takes.
+//! The signature chunk puts `0xFFFFFFFF` in the length field and has no
+//! payload; its argument carries the frame rate instead. Recognised ids:
+//! `0x1084` signature, `0x1001` `RoQ_INFO` (width/height),
+//! `0x1002` `RoQ_QUAD_CODEBOOK`, `0x1011` `RoQ_QUAD_VQ`, `0x1020`/`0x1021`
+//! sound mono/stereo. Anything else is accumulated, never interpreted.
 //!
-//! # Packetisation, measured against the reference (`ffprobe` 8.1)
+//! # Packetisation, measured against `ffprobe` 8.1
 //!
-//! No official encoder exists to produce a real `.roq` file, so every
-//! fixture here is **hand-built from the chunk grammar above** and then
-//! fed to `ffprobe` to observe how the reference actually splits it into
-//! streams and packets — a black-box measurement of chunk *framing*, not of
-//! the video/audio bitstream, which this module never decodes.
+//! No encoder exists to produce a real `.roq`, so every fixture is
+//! hand-built from the grammar above — chunk *framing* only.
 //!
-//! * A video packet is the concatenation of every whole chunk (its header
-//!   plus payload, unmodified) collected since the last flush, up to and
-//!   including a `RoQ_QUAD_VQ` chunk. `RoQ_QUAD_CODEBOOK` immediately
-//!   followed by `RoQ_QUAD_VQ` therefore becomes **one** packet, not two —
-//!   confirmed by comparing chunk offsets against reported packet
-//!   `size`/`pos`.
-//! * A `RoQ_SOUND_MONO`/`RoQ_SOUND_STEREO` chunk becomes its **own** audio
-//!   packet (again, whole chunk bytes, unmodified) **only when nothing is
-//!   currently accumulating for the video packet.** Ordering a sound chunk
-//!   between a codebook and its VQ chunk — legal by the chunk grammar, just
-//!   not the order id Software's own encoder writes — makes it vanish into
-//!   the *video* packet's bytes instead and no audio stream is created at
-//!   all. Measured by building the same three-chunk group both ways: sound
-//!   first (audio stream present, two packets per group) and sound between
-//!   codebook and VQ (no audio stream, one 30-byte video packet per group
-//!   where the sound-first ordering gives a 12-byte audio packet plus an
-//!   18-byte video one). This is exactly the shape plan 18's probing traps
-//!   describe — the frame's byte order deciding which object a value lands
-//!   on — just at the chunk level instead of the option-parsing level.
-//! * Audio's sample rate is a fixed **22050 Hz**, stated nowhere in the
-//!   chunk and only recoverable by asking the reference.
-//! * The video stream's `r_frame_rate` and `avg_frame_rate` both come out
-//!   as the signature chunk's argument over 1 — unlike `ivf`, which leaves
-//!   `avg_frame_rate` at `0/0`. Two containers in the same family disagree
-//!   here, so this was not assumed from the other one.
-//! * Every audio packet reports `flags=K`; every video packet in the
-//!   synthetic fixtures reports no flags at all. The video side is reported
-//!   as measured rather than as a general codec fact, since the fixture's
-//!   `RoQ_QUAD_VQ` payload is not a real encoded frame and this module has
-//!   no way to ask the reference to encode one.
-//!
-//! # What is not implemented
-//!
-//! Nothing left in this file: both streams now carry a [`CodecId`]
-//! (`Roq` video, `RoqDpcm` audio), so `-show_streams` names them the same
-//! as the reference.
+//! * A video packet is every whole chunk (header plus payload, unmodified)
+//!   collected since the last flush, up to and including a `RoQ_QUAD_VQ`, so
+//!   a codebook immediately followed by a VQ chunk is **one** packet, not
+//!   two — confirmed against reported `size`/`pos`.
+//! * A sound chunk becomes its **own** audio packet only when nothing is
+//!   currently accumulating for the video packet. Ordering it between a
+//!   codebook and its VQ chunk — legal by the grammar, just not what id's
+//!   encoder writes — makes it vanish into the *video* packet and creates
+//!   no audio stream at all: sound-first gives a 12-byte audio packet plus
+//!   an 18-byte video one, sound-between gives one 30-byte video packet.
+//! * `r_frame_rate` and `avg_frame_rate` are both the signature chunk's
+//!   argument over 1 — unlike `ivf`, which leaves `avg_frame_rate` at `0/0`.
+//! * Every audio packet reports `flags=K`; video packets in the synthetic
+//!   fixtures report none. The video side is measured, not a general codec
+//!   fact — the fixture's VQ payload is not a real encoded frame.
 
 use std::collections::VecDeque;
 

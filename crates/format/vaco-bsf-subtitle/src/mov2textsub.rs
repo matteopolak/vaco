@@ -29,10 +29,7 @@
 //!
 //! # Configuration
 //!
-//! `ffmpeg -h bsf=mov2textsub` declares no options and no codec restriction,
-//! so there is nothing gap 12 (`planning/INTERFACE-GAPS.md`) could be
-//! blocking here, and no numeric option for `CONFORMANCE-FINDINGS.md` finding
-//! 31 to apply to.
+//! `ffmpeg -h bsf=mov2textsub` declares no options and no codec restriction.
 
 use std::collections::VecDeque;
 

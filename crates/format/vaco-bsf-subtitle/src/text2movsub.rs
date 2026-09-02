@@ -18,16 +18,14 @@
 //! one of 65536 bytes is refused outright (`ffmpeg` reports "Invalid data
 //! found when processing input" and produces no output packet at all — not a
 //! truncation, not a wraparound). This filter reproduces the refusal rather
-//! than silently truncating, which is exactly
-//! `CONFORMANCE-FINDINGS.md` finding 31's point: the reference's own range
-//! (`0..=65535` here, since there is no `-h bsf=` option table for a filter
-//! with no `AVOption`s to state it) is the bound this filter must enforce
-//! too, not an incidental implementation detail to skip.
+//! than silently truncating: the reference's own range (`0..=65535` here,
+//! since there is no `-h bsf=` option table for a filter with no
+//! `AVOption`s to state it) is the bound this filter must enforce too, not
+//! an incidental implementation detail to skip.
 //!
 //! # Configuration
 //!
 //! `ffmpeg -h bsf=text2movsub` declares no options and no codec restriction.
-//! Gap 12 (`planning/INTERFACE-GAPS.md`) has nothing to block here.
 
 use std::collections::VecDeque;
 

@@ -29,9 +29,8 @@
 //!   complete 24-byte chunks in the probed prefix whose command byte's low 6
 //!   bits equal `0x09` — measured by holding chunk count fixed at values
 //!   from 20 to 1000 and watching the score track it 1:1 up to 80, land on
-//!   85 at 90, and stay at 85 through 1000. This is a genuinely weak
-//!   content test (a file of all-zero bytes loses to an unrelated format's
-//!   probe entirely), which fits a format with no magic at all.
+//!   85 at 90, and stay at 85 through 1000. A genuinely weak content test,
+//!   which fits a format with no magic at all.
 //! * `width`/`height` are the fixed CD+G screen size, `300×216`, stated
 //!   nowhere in the stream.
 //! * `r_frame_rate` and `avg_frame_rate` both come out as `300/1`.

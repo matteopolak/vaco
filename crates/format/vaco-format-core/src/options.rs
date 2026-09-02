@@ -11,9 +11,8 @@
 //! Not from a plan and not from memory: from `ffmpeg -h full`'s
 //! `AVFormatContext AVOptions` block on the pinned reference (8.1), read as
 //! black-box observed behaviour of a shipped binary, which is exactly what D6
-//! and D7 permit. Three consequences worth recording, because
-//! `planning/18-formats.md` §1.11 states otherwise and was written from an
-//! older survey:
+//! and D7 permit. Three consequences worth recording, since an older survey
+//! got them wrong:
 //!
 //! * `fflags` has **twelve** constants, not fourteen. There is no `nonblock`
 //!   and no `shortest`. `flush_packets`, `bitexact` and `autobsf` are
@@ -471,11 +470,11 @@ pub const PROBE_BUF_MAX: usize = 1 << 20;
 
 /// The built-in `duration_probesize`, used when the option is left at zero.
 ///
-/// `planning/18-formats.md` R15 marks the reference's value VERIFY-T4 and
-/// guesses "around 250 kB". We have not measured it, so this is **our** choice
-/// and is recorded as such rather than presented as a reproduction: 250 KiB is
-/// large enough to hold the tail index of any container we ship and small
-/// enough that the estimate costs one read.
+/// The reference's own value is unverified — a rough "around 250 kB". We have
+/// not measured it either, so this is **our** choice, recorded as such rather
+/// than presented as a reproduction: 250 KiB is large enough to hold the tail
+/// index of any container we ship and small enough that the estimate costs
+/// one read.
 pub const DEFAULT_DURATION_PROBESIZE: u64 = 250 * 1024;
 
 impl FormatOptions {

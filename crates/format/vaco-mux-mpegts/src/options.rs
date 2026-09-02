@@ -133,8 +133,7 @@ impl Default for MpegTsMuxOptions {
             original_network_id: 0xFF01,
             service_id: 1,
             service_type: ServiceType::default(),
-            // Finding 17 (`planning/CONFORMANCE-FINDINGS.md`): measured, not
-            // an AVOption default — see this struct's doc comment.
+            // Measured, not an AVOption default — see this struct's doc comment.
             service_name: String::from("Service01"),
             service_provider: String::from("FFmpeg"),
             pmt_start_pid: 0x1000,

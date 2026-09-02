@@ -11,9 +11,9 @@
 //! # `target_packet_bytes`: measured per format, not assumed
 //!
 //! `BlockDemuxer::new` takes the packet size to emit as an explicit,
-//! required argument rather than picking one itself — this used to be a
-//! single hardcoded `4096`-byte constant, which was **wrong**: measuring
-//! every consumer against `ffprobe`/`ffmpeg` 8.1 found the reference emits
+//! required argument rather than picking one itself: no single constant is
+//! correct. Measuring every consumer against `ffprobe`/`ffmpeg` 8.1 found
+//! the reference emits
 //! **one packet per block** for `adx`, `gsm` and `g729` (`18`/`33`/`10`
 //! bytes respectively — confirmed directly against `-show_packets` on real
 //! and hand-built fixtures), and a *different*, format-specific fixed byte
@@ -23,8 +23,7 @@
 //! single formula (`g722` and `g726` share the same 1:2 byte:frame ratio
 //! and a fixed 8000/16000 Hz rate, yet batch into different byte counts),
 //! so each is a directly measured, hardcoded constant on its own
-//! `RawCodecSpec`/call site — see `planning/TECH-DEBT.md` for the
-//! measurement log and why an underlying formula was not chased further.
+//! `RawCodecSpec`/call site.
 //!
 //! `nistsphere` and `pvf` still pass [`DEFAULT_TARGET_PACKET_BYTES`]
 //! (`4096`), which is **not** measured against the reference: their raw-PCM
@@ -33,9 +32,8 @@
 //! points (roughly 64 ms of audio at low rates, rounded to a nearby power
 //! of two, with an unexplained early transition somewhere between 16 kHz
 //! and 32 kHz that broke every closed-form guess tried) but never reduced
-//! to one clean rule — see `planning/TECH-DEBT.md`. Reproducing it would
-//! mean guessing at un-pinned behaviour, which is worse than an honestly
-//! approximate constant.
+//! to one clean rule. Reproducing it would mean guessing at un-pinned
+//! behaviour, which is worse than an honestly approximate constant.
 
 use vaco_core::{Duration, Error, Result, Timestamp};
 use vaco_format_core::seek::{SeekFlags, SeekTarget};
@@ -114,6 +112,15 @@ impl BlockDemuxer {
     #[must_use]
     pub fn streams(&self) -> &[Stream] {
         std::slice::from_ref(&self.stream)
+    }
+
+    /// The block index the next [`Self::read_packet`] will start from.
+    /// Exposed for a caller layered on top (e.g. `xa`'s own `dwOutSize`
+    /// packet-count gate) that needs to re-derive its own block-based state
+    /// after a seek lands here.
+    #[must_use]
+    pub fn block_index(&self) -> u64 {
+        self.blocks_emitted
     }
 
     #[must_use]

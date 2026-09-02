@@ -1,68 +1,43 @@
 //! IVF, the raw-frame container `libvpx`/`libaom` test tools use for VP8, VP9
-//! and AV1 bitstreams.
-//!
-//! # Layout
-//!
-//! A 32-byte header, little-endian throughout, then one 12-byte frame header
-//! plus payload per frame:
+//! and AV1 bitstreams. Little-endian throughout.
 //!
 //! ```text
-//! header
-//!   0   4   "DKIF"
-//!   4   2   version (0)
-//!   6   2   header_len (bytes; normally 32)
-//!   8   4   codec fourcc ("VP80", "VP90", "AV01")
-//!  12   2   width
-//!  14   2   height
-//!  16   4   frame_rate (rate)
-//!  20   4   time_scale (scale); fps = rate/scale
-//!  24   4   frame_count
-//!  28   4   unused
+//! header (32 bytes)
+//!   0 "DKIF" | 4 version(0) | 6 header_len | 8 fourcc "VP80"/"VP90"/"AV01"
+//!  12 width  | 14 height    | 16 frame_rate(rate) | 20 time_scale(scale)
+//!  24 frame_count | 28 unused                       -- fps = rate/scale
 //!
 //! frame, repeated
-//!   0   4   size of the payload that follows
-//!   4   8   presentation timestamp, in scale/rate ticks
-//!  12   …   payload
+//!   0 payload size | 4 pts, in scale/rate ticks (8 bytes) | 12 payload
 //! ```
 //!
-//! Fixture: `ffmpeg -c:v libvpx -f ivf`, `-c:v libvpx-vp9 -f ivf` and `-c:v
-//! libsvtav1 -f ivf` (all three round-trip through the reference and were
-//! byte-inspected to confirm this layout).
+//! Fixtures: `ffmpeg -c:v libvpx -f ivf`, `-c:v libvpx-vp9 -f ivf`,
+//! `-c:v libsvtav1 -f ivf`.
 //!
 //! # Measured against the reference (`ffmpeg`/`ffprobe` 8.1)
 //!
-//! * `probe_score` is **98**, not 100 — confirmed identical whether the
-//!   extension is `.ivf`, absent, or wrong, and identical again when piped, so
-//!   the score comes from the magic alone.
-//! * `r_frame_rate` is exactly `rate/scale` from the header; `avg_frame_rate`
-//!   stays `0/0` even though `frame_count` and a constant frame rate would let
-//!   it be computed. Reproduced directly rather than derived.
-//! * `duration_ts`/`nb_frames` come straight from the header's `frame_count`
-//!   field, not from counting frames actually present.
-//! * Only the codec's own keyframe bit decides `flags=K` in `-show_packets`;
-//!   a 25-frame all-intra VP8/VP9/AV1 clip still shows `K` on frame 0 alone
-//!   once real inter prediction is in use, so this module reads that bit
-//!   directly rather than assuming every IVF frame is a keyframe.
+//! * `probe_score` is **98**, not 100 — identical whether the extension is
+//!   `.ivf`, absent or wrong, and identical piped, so it is the magic alone.
+//! * `r_frame_rate` is exactly `rate/scale`; `avg_frame_rate` stays `0/0`
+//!   even though `frame_count` and a constant rate would allow computing it.
+//! * `duration_ts`/`nb_frames` come from the header's `frame_count` field,
+//!   not from counting the frames actually present.
+//! * Only the codec's own keyframe bit decides `flags=K`: a 25-frame
+//!   all-intra clip still shows `K` on frame 0 alone once real inter
+//!   prediction is in use, so this module reads that bit rather than
+//!   assuming every IVF frame is a keyframe. Per codec:
+//!   `Vaco-Spec-Ref rfc-6386` §9.1, a VP8 frame's first byte's low bit is
+//!   `frame_type` (0 = key); `Vaco-Spec-Ref vp9-bitstream-spec-v0.6` §6.2, a
+//!   VP9 `uncompressed_header` is a 2-bit `frame_marker`, two profile bits
+//!   (plus one more when profile is 3), a `show_existing_frame` bit, then —
+//!   only when that bit is 0 — a `frame_type` bit; `Vaco-Spec-Ref
+//!   aom-av1-spec` §5.3.1, an AV1 temporal unit is scanned for an OBU of
+//!   type 1 (`OBU_SEQUENCE_HEADER`), a presence test rather than a full
+//!   header parse, and a heuristic for that reason.
 //!
-//! # Keyframe detection
-//!
-//! `Vaco-Spec-Ref rfc-6386` §9.1: a VP8 frame's first byte's low bit is
-//! `frame_type` (0 = key frame). `Vaco-Spec-Ref vp9-bitstream-spec-v0.6` §6.2:
-//! a VP9 frame's `uncompressed_header` starts with a 2-bit `frame_marker`,
-//! two profile bits (plus one more when profile is 3), a `show_existing_frame`
-//! bit, and then — only when that bit is 0 — a `frame_type` bit. `Vaco-Spec-Ref
-//! aom-av1-spec` §5.3.1: an AV1 temporal unit is scanned for an OBU of type 1
-//! (`OBU_SEQUENCE_HEADER`), which every encoder observed emits once per
-//! keyframe access unit and never for an inter frame — a presence test, not a
-//! full frame-header parse, and documented as a heuristic for exactly that
-//! reason.
-//!
-//! # What is not implemented
-//!
-//! `video.format` (pixel format) is left unset: it lives in the codec's own
-//! sequence/frame header, and reading it means either a bitstream parser this
-//! demuxer does not reach for or duplicating one. `vaco-probe` will print
-//! `pix_fmt=unknown` where the reference names one.
+//! `video.format` is left unset: the pixel format lives in the codec's own
+//! sequence header, so `vaco-probe` prints `pix_fmt=unknown` where the
+//! reference names one.
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};

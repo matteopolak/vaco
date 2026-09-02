@@ -451,15 +451,14 @@ impl Muxer for MpegTsMuxer {
         };
         let _ = stream_type;
 
-        // Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured
-        // directly (`ffmpeg -i <avi-with-no-pts> -c copy -f mpegts`) —
+        // Measured directly (`ffmpeg -i <avi-with-no-pts> -c copy -f mpegts`) —
         // the reference refuses with "first pts and dts value must be set"
         // and a nonzero exit rather than silently reusing the previous
         // packet's clock. A source with no native per-packet timestamp
         // field (AVI's `dwSampleSize`-derived timing has no PTS/CTS offset
         // to give) produces exactly this on its first packet per stream;
         // writing an MPEG-TS PES header with a fabricated PTS/DTS instead of
-        // refusing is the "silent success" shape finding 6 already named.
+        // refusing would be a silent-success bug.
         if is_first_for_stream && packet.pts.ticks().is_none() {
             return Err(Error::InvalidData(
                 "mpegts: first pts and dts value must be set",
@@ -769,10 +768,10 @@ mod tests {
         assert!(bytes.windows(4).any(|w| w == [0, 0, 0, 1]));
     }
 
-    /// Issue #636, the other two named causes: the reference's default
-    /// mux-delay shift on PCR/PTS/DTS, and `data_alignment_indicator` always
-    /// cleared. Measured against `ffmpeg -bitexact -c copy -f mpegts`; see
-    /// [`MUX_DELAY_TICKS`] and [`PesHeaderOut::data_alignment`]'s docs.
+    /// The reference's default mux-delay shift on PCR/PTS/DTS, and
+    /// `data_alignment_indicator` always cleared. Measured against
+    /// `ffmpeg -bitexact -c copy -f mpegts`; see [`MUX_DELAY_TICKS`] and
+    /// [`PesHeaderOut::data_alignment`]'s docs.
     #[test]
     fn pcr_and_pts_dts_carry_the_reference_mux_delay_and_no_data_alignment_bit() {
         let sink = SharedDynBuf::new();
@@ -826,12 +825,11 @@ mod tests {
         assert!(found_pes, "expected to find the video PES header");
     }
 
-    /// Issue #636: the reference prepends a fixed Access Unit Delimiter to
-    /// every H.264 access unit written into MPEG-TS, even when the source
-    /// sample carries no AUD at all (see [`H264_AUD_NAL`]'s doc for the
-    /// measurement). `maybe_convert` alone (no BSF, no `avcC`) is enough to
-    /// exercise this — the AUD insertion does not depend on the SPS/PPS
-    /// splice path.
+    /// The reference prepends a fixed Access Unit Delimiter to every H.264
+    /// access unit written into MPEG-TS, even when the source sample carries
+    /// no AUD at all (see [`H264_AUD_NAL`]'s doc for the measurement).
+    /// `maybe_convert` alone (no BSF, no `avcC`) is enough to exercise this —
+    /// the AUD insertion does not depend on the SPS/PPS splice path.
     #[test]
     fn an_h264_access_unit_gets_the_reference_aud_prepended() {
         let sink = SharedDynBuf::new();
@@ -865,10 +863,10 @@ mod tests {
         );
     }
 
-    /// The other half of #636's AUD fix: a source that already carries its
-    /// own AUD (e.g. re-muxing an MPEG-TS whose elementary stream already has
-    /// one per access unit — measured directly, see [`H264_AUD_NAL`]'s doc)
-    /// must not get a second one spliced in front of it.
+    /// A source that already carries its own AUD (e.g. re-muxing an
+    /// MPEG-TS whose elementary stream already has one per access unit —
+    /// measured directly, see [`H264_AUD_NAL`]'s doc) must not get a second
+    /// one spliced in front of it.
     #[test]
     fn an_h264_access_unit_that_already_has_an_aud_is_not_given_a_second_one() {
         let sink = SharedDynBuf::new();
@@ -986,11 +984,10 @@ mod tests {
         );
     }
 
-    /// Finding 19 (`planning/CONFORMANCE-FINDINGS.md`): measured directly
-    /// against the reference (`ffmpeg -i <no-pts-source> -c copy -f
-    /// mpegts`, which refuses with "first pts and dts value must be set"
-    /// and a nonzero exit) — a stream's first packet with no PTS at all
-    /// (the shape an AVI source produces, since AVI has no native
+    /// Measured directly against the reference (`ffmpeg -i <no-pts-source>
+    /// -c copy -f mpegts`, which refuses with "first pts and dts value must
+    /// be set" and a nonzero exit) — a stream's first packet with no PTS at
+    /// all (the shape an AVI source produces, since AVI has no native
     /// per-packet PTS field) must be refused, not silently muxed with a
     /// fabricated clock value reused from the previous packet.
     #[test]

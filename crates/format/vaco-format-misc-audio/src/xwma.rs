@@ -1,99 +1,42 @@
 //! Microsoft xWMA (`.xwma`): a RIFF container around raw WMA frames, used by
-//! `XAudio2`. A thin wrapper — the container's whole job is naming a codec
-//! that already has a `CodecId` and framing its data, not describing one of
-//! its own.
-//!
-//! # Layout, measured against hand-built fixtures and `ffprobe`/`ffmpeg` 8.1
+//! `XAudio2`. It names a codec that already has a `CodecId` and frames its
+//! data; it describes none of its own. Everything below was measured against
+//! hand-built fixtures and `ffprobe`/`ffmpeg` 8.1.
 //!
 //! ```text
 //! "RIFF"  file_size:le32  "XWMA"
-//! chunk*                          -- id:[u8;4] size:le32 data[size] pad?
-//!   "fmt "  WAVEFORMATEX (18 bytes: wFormatTag, nChannels, nSamplesPerSec,
-//!           nAvgBytesPerSec, nBlockAlign, wBitsPerSample, cbSize) plus
-//!           cbSize bytes of codec-specific extra data
-//!   "dpds"  le32[]                -- present in every real file, see below
+//! chunk*                        -- id:[u8;4] size:le32 data[size] pad?
+//!   "fmt "  WAVEFORMATEX (wFormatTag, nChannels, nSamplesPerSec,
+//!           nAvgBytesPerSec, nBlockAlign, wBitsPerSample, cbSize) + cbSize
+//!   "dpds"  le32[]              -- in every real file; unused here
 //!   "data"  raw WMA frame bytes
 //! ```
 //!
-//! `WAVEFORMATEX`'s field layout is the public Win32 API struct (not an
-//! `FFmpeg` artifact); the xWMA-specific chunk set (`fmt `/`dpds`/`data`) is
-//! documented on `MultimediaWiki` (`Vaco-Spec-Ref multimedia-wiki-xwma`) and
-//! corroborated by Microsoft's own RIFF/XAudio2 reference
-//! (`Vaco-Spec-Ref microsoft-riff-xaudio2`).
+//! Chunk set documented on `MultimediaWiki`
+//! (`Vaco-Spec-Ref multimedia-wiki-xwma`), corroborated by Microsoft's
+//! RIFF/XAudio2 reference (`Vaco-Spec-Ref microsoft-riff-xaudio2`).
 //!
-//! # Two surprises the reference's framing had, neither guessable from the
-//! chunk names alone
+//! **`dpds` does not drive packetisation**, though `MultimediaWiki` calls
+//! it a cumulative per-frame offset table. Packets are
+//! `nBlockAlign`-aligned reads of `data`, final short block included: a
+//! `dpds` declaring `100/150/120/90` still gave one packet over all 460
+//! bytes (`nBlockAlign` 2230); `nBlockAlign = 100` over 350 bytes gave
+//! `100/100/100/50`.
 //!
-//! **`dpds` is not what splits the data into packets.** It looks like a
-//! per-packet byte-offset table (a cumulative `le32` per encoded WMA
-//! frame), and `MultimediaWiki` describes it that way, but measuring against
-//! `ffprobe` shows the reference ignores it for packetisation: a `dpds`
-//! table declaring four packets of `100/150/120/90` bytes still produces
-//! **one** `-show_packets` entry covering the whole 460-byte `data` chunk,
-//! because that data chunk is shorter than the `fmt` chunk's own
-//! `nBlockAlign` (2230 in that fixture) — i.e. packets are `nBlockAlign`-
-//! aligned reads of `data`, exactly like a generic PCM/ADPCM WAV, with the
-//! final short block still emitted. A second fixture with `nBlockAlign =
-//! 100` over 350 bytes of `data` confirmed it: four packets of
-//! `100/100/100/50` bytes, matching block alignment exactly and
-//! contradicting the `dpds`-declared `100/150/120/90` split. This module
-//! therefore parses `dpds` only far enough to skip over it and does not use
-//! it for anything.
+//! **`WMAv2` with `cbSize == 0` still gets 6 bytes of extradata**:
+//! `extradata_size=6`, `extradata_hash=MD5:1833e47c…`, matching
+//! `00 00 00 00 1F 00` and no other candidate. `wFormatTag = 0x0160`
+//! (`WMAv1`) produces none. A `fmt` with its own `cbSize` bytes passes
+//! through unmodified (not independently measured).
 //!
-//! **A `WMAv2` stream with no extra data in its `fmt` chunk gets a fixed
-//! 6-byte extradata synthesised by the reference anyway.** Measured via
-//! `ffprobe -show_data_hash md5 -show_entries stream=extradata_size` and
-//! confirmed byte-exact by hashing candidates: `extradata_size=6`,
-//! `extradata_hash=MD5:1833e47c…`, which matches `00 00 00 00 1F 00`
-//! exactly and no other candidate. The same test with `wFormatTag =
-//! 0x0160` (`WMAv1`) produces no extradata at all — this synthesis is `WMAv2`-
-//! specific. This module reproduces it: when the `fmt` chunk's `cbSize` is
-//! zero and `wFormatTag` selects `Wmav2`, `codec_parameters.extradata` is
-//! set to `[0x00, 0x00, 0x00, 0x00, 0x1F, 0x00]`. A `fmt` chunk that *does*
-//! carry `cbSize` bytes of its own is passed through unmodified — not
-//! independently measured, since building a fixture with genuine WMA
-//! codec-private data was out of scope for framing work.
-//!
-//! # Packet timing
-//!
-//! Per-packet duration in samples is `floor(packet_bytes * nSamplesPerSec /
-//! nAvgBytesPerSec)` — confirmed exactly on both fixtures above (a full
-//! 100-byte block at 8000 Hz / 1000 B/s reports `duration=800`; the whole
-//! 460-byte read at 44100 Hz / 8000 B/s reports `duration=2535`, i.e.
-//! `floor(460*44100/8000)`). `pts`/`dts` accumulate that per-packet sample
-//! count.
-//!
-//! # A `dpds`-dependent `duration_ts` quirk, since pinned down and reproduced
-//!
-//! The per-packet duration formula above holds whether or not a `dpds`
-//! chunk is present. The **stream-level** `duration_ts`/`duration` do not:
-//! on a 350-byte `data` chunk at 8000 Hz / 1000 B/s with no `dpds` chunk,
-//! the reference reports `duration_ts=2800` (`350*8000/1000`, the same
-//! formula as the packet level, applied to the whole chunk). Add *any*
-//! `dpds` chunk and the number changes completely and does not scale with
-//! the `dpds` chunk's own size or content — first measured as an
-//! unexplained fixed `175` and treated as an open question.
-//!
-//! Sweeping `channels`/`bits_per_sample`/`data_len` independently (with a
-//! `dpds` chunk always present) pinned the actual rule exactly:
-//! `duration_ts = data_len / (channels * bytes_per_sample)`, where
-//! `bytes_per_sample = wBitsPerSample / 8`, all from the `fmt` chunk —
-//! confirmed across mono/stereo, 8-bit/16-bit, and both `wmav1`/`wmav2`.
-//! In other words: when a `dpds` chunk exists, the reference computes
-//! `duration_ts` as though the compressed `data` bytes were already
-//! decoded PCM at the container's own declared channel count and bit
-//! depth — never decoding anything, just reusing the PCM frame-size
-//! arithmetic a raw-PCM container would use. This module reproduces that
-//! exactly: `duration_ts`/`duration` switch to this formula whenever a
-//! `dpds` chunk was seen while scanning, and fall back to the byte-rate
-//! formula otherwise.
-//!
-//! # `codec_id` mapping
-//!
-//! `wFormatTag` `0x0160`/`0x0161`/`0x0162` map to the existing
-//! `CodecId::Wmav1`/`Wmav2`/`Wmapro` — no `vaco-codec-core` gap here, unlike
-//! most of this crate's other new formats this session. Any other
-//! `wFormatTag` leaves `codec_id: None`.
+//! **A `dpds` chunk switches `duration_ts` to PCM arithmetic.** Per-packet
+//! duration is always `floor(packet_bytes * nSamplesPerSec /
+//! nAvgBytesPerSec)`, and stream `duration_ts` uses that over the whole
+//! chunk when `dpds` is absent (350 bytes at 8000 Hz / 1000 B/s -> `2800`);
+//! with any `dpds` present it becomes `data_len / (channels *
+//! wBitsPerSample / 8)`, confirmed across mono/stereo, 8/16-bit, `wmav1`
+//! and `wmav2`. `wFormatTag` `0x0160`/`0x0161`/`0x0162` map to
+//! `CodecId::Wmav1`/`Wmav2`/`Wmapro`; any other tag leaves `codec_id: None`.
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{CodecId, CodecParameters};
