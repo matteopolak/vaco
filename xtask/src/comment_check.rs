@@ -202,15 +202,24 @@ fn issue_ref(line: &str) -> Option<&str> {
     None
 }
 
+/// Collects every `.rs` file `git` tracks under `dir`, filtered against
+/// [`crate::tracked_files`] for the same reason [`crate::rust_files`] is:
+/// this is a ratchet gate (see this module's own doc), and an untracked,
+/// in-progress scratch file sharing this tree with a concurrent agent could
+/// otherwise push the count over [`BASELINE`] and fail the build over
+/// comments nobody has committed.
 fn collect(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
+    let known = crate::tracked_files();
     for e in entries.flatten() {
         let p = e.path();
         if p.is_dir() {
             collect(&p, out);
-        } else if p.extension().is_some_and(|x| x == "rs") {
+        } else if p.extension().is_some_and(|x| x == "rs")
+            && known.as_ref().is_none_or(|k| k.contains(&p))
+        {
             out.push(p);
         }
     }

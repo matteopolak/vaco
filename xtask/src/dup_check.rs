@@ -553,39 +553,32 @@ pub fn run(_check: bool) -> Task {
 
     for (_layer, name, path) in crates() {
         let src = path.join("src");
-        let mut stack = vec![src];
-        while let Some(dir) = stack.pop() {
-            let Ok(entries) = std::fs::read_dir(&dir) else {
+        // `crate::rust_files` filters against `crate::tracked_files` -- an
+        // untracked, in-progress scratch crate sharing this tree with a
+        // concurrent agent would otherwise read as a genuine cross-crate
+        // duplicate of whatever names it happens to reuse (or invent), and
+        // fail this gate for everyone over content nobody has committed.
+        // This used to be its own inline `read_dir` stack walk with no such
+        // filter, the same gap `crate::provenance`'s scan had.
+        for p in crate::rust_files(&src) {
+            let Ok(text) = std::fs::read_to_string(&p) else {
                 continue;
             };
-            for e in entries.flatten() {
-                let p = e.path();
-                if p.is_dir() {
-                    stack.push(p);
-                    continue;
-                }
-                if p.extension().and_then(|x| x.to_str()) != Some("rs") {
-                    continue;
-                }
-                let Ok(text) = std::fs::read_to_string(&p) else {
-                    continue;
-                };
-                for line in text.lines() {
-                    // Leading whitespace allowed on purpose: a `bitflags!` body
-                    // is indented, and that is where the one known duplicate
-                    // hid from the first manual pass.
-                    let t = line.trim_start();
-                    for kw in ["pub struct ", "pub enum "] {
-                        if let Some(rest) = t.strip_prefix(kw) {
-                            let ident: String = rest
-                                .chars()
-                                .take_while(|c| c.is_alphanumeric() || *c == '_')
-                                .collect();
-                            if ident.chars().next().is_some_and(char::is_uppercase) {
-                                let e = seen.entry(ident).or_default();
-                                if !e.contains(&name) {
-                                    e.push(name.clone());
-                                }
+            for line in text.lines() {
+                // Leading whitespace allowed on purpose: a `bitflags!` body
+                // is indented, and that is where the one known duplicate
+                // hid from the first manual pass.
+                let t = line.trim_start();
+                for kw in ["pub struct ", "pub enum "] {
+                    if let Some(rest) = t.strip_prefix(kw) {
+                        let ident: String = rest
+                            .chars()
+                            .take_while(|c| c.is_alphanumeric() || *c == '_')
+                            .collect();
+                        if ident.chars().next().is_some_and(char::is_uppercase) {
+                            let e = seen.entry(ident).or_default();
+                            if !e.contains(&name) {
+                                e.push(name.clone());
                             }
                         }
                     }

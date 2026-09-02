@@ -44,10 +44,20 @@ fn is_test_path(p: &std::path::Path) -> bool {
     })
 }
 
-/// Every `.rs` file under `dir`, with its text.
+/// Every `.rs` file `git` tracks under `dir`, with its text.
+///
+/// Filtered against [`crate::tracked_files`] for the same reason
+/// `crate::rust_files` is: an untracked, in-progress scratch crate in this
+/// shared tree would otherwise read as real, unused public API and inflate
+/// this report with findings about code nobody has committed. This scan
+/// only ever reports (see this module's own doc), so the untracked case is
+/// lower-stakes than the gates `crate::rust_files` guards -- but a report
+/// nobody can trust because it is full of a concurrent agent's scratch work
+/// is a report nobody reads, so it gets the same treatment.
 fn rust_files(dir: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
+    let known = crate::tracked_files();
     while let Some(d) = stack.pop() {
         let Ok(entries) = std::fs::read_dir(&d) else {
             continue;
@@ -57,6 +67,7 @@ fn rust_files(dir: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
             if p.is_dir() {
                 stack.push(p);
             } else if p.extension().and_then(|x| x.to_str()) == Some("rs")
+                && known.as_ref().is_none_or(|k| k.contains(&p))
                 && let Ok(t) = std::fs::read_to_string(&p)
             {
                 out.push((p, t));
