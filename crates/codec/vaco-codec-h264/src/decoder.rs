@@ -595,6 +595,13 @@ impl H264Decoder {
         let dimensions = sps.dimensions();
         let crop_unit = sps.crop_unit();
         let crop = sps.crop.unwrap_or_default();
+        // Same "extract now, `sps` cannot survive to `build_frame`" reason
+        // as `dimensions`/`crop_unit`/`crop` above. §E.2.1: an absent VUI
+        // (or an absent colour_description inside it) infers `Unspecified`
+        // -- `Sps::color_info` already encodes that, so a stream with no
+        // VUI at all still produces a defined, correct `ColorInfo` rather
+        // than skipping the assignment.
+        let color = sps.color_info();
 
         // Clause 8.2.4.2's default reference-picture list construction,
         // then clause 8.2.4.3's `ref_pic_list_modification()` -- both as
@@ -1005,6 +1012,7 @@ impl H264Decoder {
                 duration: pkt.duration,
                 is_idr: info.is_idr,
                 closed_captions: cc_data,
+                color,
             },
             limits: self.limits.clone(),
             pools: self.pools.clone(),

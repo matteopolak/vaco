@@ -275,3 +275,59 @@ fn flush_does_not_panic_and_leaves_the_decoder_usable() {
     d.send_packet(None).unwrap();
     assert!(d.receive_frame().is_ok());
 }
+
+/// Finding 22a (`planning/INTERFACE-GAPS.md`): the VUI already reached
+/// `CodecParameters::color` via `vaco_parse_h264::params`, which is what
+/// `vaco-probe -show_streams` reads, but nothing wrote `Frame::color`, so
+/// `-vf showinfo`-style tooling downstream of a real decode saw the
+/// *default* `ColorInfo` on every H.264 frame regardless of what the
+/// stream actually signalled.
+///
+/// `fixtures/vui_bt709.264` is real `ffmpeg 9.0.1`/`libx264` output
+/// (`-x264-params colorprim=bt709:transfer=bt709:colormatrix=bt709:
+/// fullrange=off`), captured once and embedded (D7/plan 13 §1b). Measured
+/// against the same file with real `ffprobe`: `color_range=tv
+/// color_space=bt709 color_transfer=bt709 color_primaries=bt709` — the
+/// exact four values this test asserts on the decoded `Frame`, not just
+/// "the box is present".
+#[test]
+fn a_real_bt709_stream_stamps_its_measured_colour_onto_the_decoded_frame() {
+    let mut d = decoder();
+    let (extradata, slice) = split_extradata_and_first_slice(include_bytes!("fixtures/vui_bt709.264"));
+    d.set_extradata(&extradata).unwrap();
+    let pkt = packet(&slice);
+    d.send_packet(Some(&pkt)).unwrap();
+    d.send_packet(None).unwrap();
+    let frame = d.receive_frame().unwrap();
+    assert_eq!(frame.color.primaries, vaco_color::ColorPrimaries::Bt709);
+    assert_eq!(frame.color.transfer, vaco_color::TransferCharacteristic::Bt709);
+    assert_eq!(frame.color.matrix, vaco_color::MatrixCoefficients::Bt709);
+    assert_eq!(frame.color.range, vaco_color::ColorRange::Limited);
+}
+
+/// The regression case on the other side of the fix above: a stream with
+/// no VUI at all (`cabac_i_only.264`, real `ffmpeg`-measured
+/// `color_range=unknown color_space=unknown color_transfer=unknown
+/// color_primaries=unknown`) must still land on §E.2.1's inference
+/// rule — `Unspecified` primaries/transfer/matrix/range, *not*
+/// `ChromaLocation::Unspecified`: `Sps::color_info`'s own doc records that
+/// an absent `chroma_loc_info_present_flag` infers type 0 (left) per
+/// §7.4.2.1.1, which is a real, spec-mandated value rather than "nothing
+/// was signalled" — so this is deliberately not `ColorInfo::default()`,
+/// caught by first writing that assertion and having it fail exactly this
+/// way.
+#[test]
+fn a_stream_with_no_vui_still_decodes_to_the_unspecified_default() {
+    let mut d = decoder();
+    let (extradata, slice) = split_extradata_and_first_slice(include_bytes!("fixtures/cabac_i_only.264"));
+    d.set_extradata(&extradata).unwrap();
+    let pkt = packet(&slice);
+    d.send_packet(Some(&pkt)).unwrap();
+    d.send_packet(None).unwrap();
+    let frame = d.receive_frame().unwrap();
+    assert_eq!(frame.color.primaries, vaco_color::ColorPrimaries::Unspecified);
+    assert_eq!(frame.color.transfer, vaco_color::TransferCharacteristic::Unspecified);
+    assert_eq!(frame.color.matrix, vaco_color::MatrixCoefficients::Unspecified);
+    assert_eq!(frame.color.range, vaco_color::ColorRange::Unspecified);
+    assert_eq!(frame.color.chroma_location, vaco_color::ChromaLocation::Left);
+}

@@ -82,6 +82,16 @@ pub(crate) struct FrameGeometry {
     /// `vaco_parse_h264::a53`'s module doc for why getting this wrong
     /// fails silently rather than loudly.
     pub(crate) closed_captions: Vec<u8>,
+    /// `Sps::color_info()` at decode time, stamped onto this picture's
+    /// `Frame::color` in [`build_frame`] — finding 22a
+    /// (`planning/INTERFACE-GAPS.md`): the VUI already reaches
+    /// `CodecParameters::color` via `vaco_parse_h264::params`, which is
+    /// what `vaco-probe -show_streams` reads, but nothing wrote
+    /// `Frame::color`, so a decoded frame carried the *default* `ColorInfo`
+    /// while probe reported the real one on the same file. `Frame::alloc_video`
+    /// leaves `color` as `ColorInfo::default()`, so skipping this field is
+    /// indistinguishable from an unspecified stream rather than an error.
+    pub(crate) color: vaco_color::ColorInfo,
 }
 
 /// One picture's reconstruction, deblocking and crop.
@@ -466,6 +476,7 @@ pub(crate) fn build_frame(
 
     frame.pts = geometry.pts;
     frame.duration = geometry.duration;
+    frame.color = geometry.color;
     if !geometry.closed_captions.is_empty() {
         let buffer = vaco_pool::Buffer::from_slice(budget, &geometry.closed_captions)?;
         frame.set_side_data(FrameSideData::ClosedCaptions(buffer));
