@@ -1004,9 +1004,19 @@ mod tests {
         writer.finish().unwrap();
 
         let bytes = mirror.take();
+        // SPS and PPS each open with the reference's 4-byte Annex B start
+        // code, but the IDR spliced in right after them gets a 3-byte one —
+        // measured directly against real ffmpeg 8.1's own `h264_mp4toannexb`
+        // output (see `h264_mp4toannexb::splice_before_first_idr`'s doc) and
+        // no longer a uniform 4-byte prefix on all three NALs the way this
+        // test originally assumed, before that fix landed.
         let mut expected = Vec::new();
-        for u in [&sps[..], &pps[..], &idr[..]] {
-            expected.extend_from_slice(&[0, 0, 0, 1]);
+        for (start_code, u) in [
+            (&[0, 0, 0, 1][..], &sps[..]),
+            (&[0, 0, 0, 1][..], &pps[..]),
+            (&[0, 0, 1][..], &idr[..]),
+        ] {
+            expected.extend_from_slice(start_code);
             expected.extend_from_slice(u);
         }
         // Small enough to land in one PES packet's payload with no 188-byte
