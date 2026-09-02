@@ -2081,3 +2081,50 @@ Resolving the drift properly means either re-deriving the `ffmpeg-*-probe`
 provenance records against 9.0.1 and updating the `OBSERVED (8.1)` comments,
 or installing 8.1 alongside and pointing the gate at it. That is an owner
 decision, not an agent's.
+
+## The private-index recipe is now the DEFAULT for shared crates, not the fallback
+
+Documenting the pathspec hazard did not stop it. After it was written up, it
+happened twice more, in both directions, inside one hour:
+
+- `502c8b0` (a B-slice CABAC fix) **swept in** another agent's hunk; repaired
+  by `64abf35`.
+- `4d75fe4` (a partition-MC perf commit) **silently reverted** that same
+  B-slice fix; repaired by `d57b9a2`.
+
+Four collisions total this session, one of which broke the build and one of
+which quietly undid a correctness fix that had already been verified against
+JM and nine stock clips. The second is the dangerous shape: nothing failed, no
+test went red, and the regression was found only because the original author
+happened to re-verify.
+
+**So the rule changes.** In any crate another agent may be editing —
+`vaco-codec-h264`, `vaco-codec-hevc`, `vaco-codec-vp8`/`vp9`, the muxers,
+`vaco-format-core`, `vaco-cli` and anything else with concurrent work — do
+**not** use `git commit -F <msg> -- <paths>`. That form re-stages the working
+tree's current content for those paths, so it takes whatever anyone else has
+in flight there.
+
+Use the private-index recipe instead, capturing `BASE` **once**:
+
+    BASE=$(git rev-parse HEAD)
+    export GIT_INDEX_FILE=$(mktemp)
+    git read-tree "$BASE"
+    git update-index --add -- <your files>
+    TREE=$(git write-tree)
+    NEW=$(git commit-tree "$TREE" -p "$BASE" -F <msgfile>)
+    git update-ref refs/heads/main "$NEW" "$BASE"
+    unset GIT_INDEX_FILE
+
+`update-ref` with the expected old value fails rather than clobbering if
+someone else committed meanwhile, which is the property the pathspec form
+lacks entirely.
+
+**And verify by content, every time**: `git show <sha> -- <file>` and *read the
+hunks*. `git diff HEAD~1 HEAD --name-only` reports the filenames you expect
+while foreign hunks hide inside them — every agent that swept someone else's
+work had run it and seen exactly what it expected.
+
+A pathspec commit is still fine in a crate you demonstrably own alone. The
+question to ask first is not "did I stage the right files" but "is anyone else
+editing these files right now" — and in this tree the answer is usually yes.
