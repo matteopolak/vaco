@@ -54,6 +54,7 @@ vaco-codec-av1 = { path = "../crates/codec/vaco-codec-av1", optional = true }
 vaco-codec-cabac = { path = "../crates/signal/vaco-codec-cabac", optional = true }
 vaco-codec-cbs = { path = "../crates/signal/vaco-codec-cbs", optional = true }
 vaco-codec-core = { path = "../crates/signal/vaco-codec-core", optional = true }
+vaco-codec-dsp-dwt = { path = "../crates/signal/vaco-codec-dsp-dwt", optional = true }
 vaco-codec-dsp-idct = { path = "../crates/signal/vaco-codec-dsp-idct", optional = true }
 vaco-codec-dsp-intrapred = { path = "../crates/signal/vaco-codec-dsp-intrapred", optional = true }
 vaco-codec-dsp-lpc = { path = "../crates/signal/vaco-codec-dsp-lpc", optional = true }
@@ -246,6 +247,7 @@ default = [
     "codec-av1",
     "codec-cabac",
     "codec-core",
+    "codec-dsp-dwt",
     "codec-dsp-idct",
     "codec-dsp-intrapred",
     "codec-dsp-lpc",
@@ -427,6 +429,7 @@ codec-ac3 = ["dep:vaco-codec-ac3"]
 codec-av1 = ["dep:vaco-codec-av1", "dep:vaco-codec-core", "dep:vaco-limits", "dep:vaco-packet"]
 codec-cabac = ["dep:vaco-codec-cabac"]
 codec-core = ["dep:vaco-codec-core", "dep:vaco-core", "dep:vaco-limits"]
+codec-dsp-dwt = ["dep:vaco-codec-dsp-dwt", "dep:vaco-limits"]
 codec-dsp-idct = ["dep:vaco-codec-dsp-idct"]
 codec-dsp-intrapred = ["dep:vaco-codec-dsp-intrapred"]
 codec-dsp-lpc = ["dep:vaco-codec-dsp-lpc"]
@@ -1004,6 +1007,14 @@ test = false
 doc = false
 bench = false
 required-features = ["demux-raw"]
+
+[[bin]]
+name = "dsp_dwt"
+path = "fuzz_targets/dsp_dwt.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-dsp-dwt"]
 
 [[bin]]
 name = "dsp_idct"

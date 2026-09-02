@@ -1337,3 +1337,10 @@ kind     = "blackbox"
 title    = "Observed ffmpeg 9.0.1 -c copy -f matroska refusal on a source whose first video packet has no pts (an AVI or ASF source): \"Can't write packet with unknown timestamp\", exit 22 -- the Matroska counterpart to the already-recorded mpegts/flv \"first pts and dts value must be set\"/\"Packet is missing PTS\" refusals (CONFORMANCE-FINDINGS 19), extending the same first-packet-only rule to vaco-mux-matroska"
 acquired = "2026-09-01"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "dirac-specification-2.2.3"
+kind     = "spec"
+title    = "The Dirac Specification, version 2.2.3 (BBC Research & Development, 23 September 2008) -- an openly published, royalty-free video codec specification, and the direct ancestor of SMPTE ST 2042-1 (VC-2), which uses the same seven-filter wavelet family and the same wavelet_index numbering. crates/signal/vaco-codec-dsp-dwt/src/vc2.rs's seven LiftStep tables (taps, offsets, shifts) and its 2D interleave/synthesis structure are transcribed from this document's SS15.6.1-15.6.3, not from any reference decoder's source (D6/D7). One transcription uncertainty is recorded in that module and in the closing comment on issue #261: Table 15.6 (the \"Fidelity\" filter, wavelet_index 5) rendered with both of its lifting steps numbered \"1.\" in the fetched PDF, so the step order implemented (Type 3 before Type 2) is this crate's best reading, not a confirmed transcription."
+acquired = "2026-08-31"
+where    = "formally published specification PDF (BBC Research & Development)"

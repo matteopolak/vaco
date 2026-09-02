@@ -2126,6 +2126,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-codec-dsp-dwt"
+version = "0.1.0"
+dependencies = [
+ "proptest",
+ "vaco-core",
+ "vaco-limits",
+]
+
+[[package]]
 name = "vaco-codec-dsp-fmtconvert"
 version = "0.1.0"
 dependencies = [
