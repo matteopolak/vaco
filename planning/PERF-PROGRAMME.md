@@ -225,6 +225,15 @@ becomes `k` times faster, the whole is `1 / (1 − s + s/k)` faster. "Realistic"
 is the author's estimate of `k`; "ceiling" is the best case the profile
 allows (all scaffolding gone, arithmetic left).
 
+**This section's own item prose describes the state of things when each item
+was written, not now.** Several items below have landed since (A0, A1, C1,
+D1's profile stage — each carries a `**Status:**` line where it has). Read
+those lines before starting anything; do not infer "unstarted" from the
+absence of a status line elsewhere in this document, and do not infer it
+from any older summary claiming nothing here has been implemented — that
+claim aged out within about a day of heavy parallel work and nobody updated
+it.
+
 ### Track A — H.264 decode (`vaco-codec-h264`, `vaco-codec-dsp-mc`)
 
 All A items touch `reconstruct.rs`, `deblock.rs`, `mb.rs` or `frame_task.rs`;
@@ -259,6 +268,11 @@ coordinate before starting A0.
 - **Stop.** If peak RSS does not fall below 1 GiB at 1 thread on the 4K
   fixture, the cache is being fed by something this item did not find —
   stop, re-run `vmmap` per region size, and report which sizes remain.
+
+**Status: landed** (`6312d9e`, `7fbef08`, `ba10a40`) — 13-14x lower peak RSS
+at 1 thread, verified; see `planning/E2E-GAPS.md` §26. This document's own
+prose elsewhere still describes A0 as unstarted; that prose is stale, not
+this line — see the note at the top of §3.
 
 #### A1 — partition-level motion compensation (luma and chroma)
 
@@ -310,6 +324,11 @@ coordinate before starting A0.
   4K fixture at `-threads 1`: if the median ratio is not ≤ 0.85 (≥ 1.18x
   end to end) with ≥ 8/10 rounds, the design is not reaching the optimiser
   and the item stops for a disassembly check before any chroma work begins.
+
+**Status: landed, partial win, stop condition not met** (`4d75fe4`,
+`ecf93f5`, `3e3a271`) — measured ~6-8%, below the stated 1.18x/0.85-ratio
+bar; kept per the honest-partial-result convention (D20), documented in
+full in `planning/E2E-GAPS.md` §28. Chroma work was not started.
 
 #### A2 — deblocking: per-macroblock edge record, slice-based gather/scatter
 
@@ -655,6 +674,9 @@ B2 could be one agent's first fortnight.
   cases to `oracle.rs`, and report the discrepancy rather than widening the
   tolerance.
 
+**Status: landed** — AAC decode moved 217x behind ffmpeg to 2-5x; see
+`planning/E2E-GAPS.md` §23 for the full before/after.
+
 #### C2 — AAC per-frame allocation and window caching
 
 - **Evidence (data).** `kbd_window::<2048>` 1.76% and `::<256>` 0.31% of
@@ -710,6 +732,12 @@ the video tracks are done. A profile is the first step if it is ever picked up.
 - **Stop.** If the profile puts more than half the time in the range coder's
   own arithmetic (as opposed to per-sample scaffolding around it), the
   per-sample item stops and only the coder/slice items proceed.
+
+**Status: profile stage landed, one fix landed, work continuing** (profile
++ `.ok_or_else` fix: `3bf2732`; D21/D22 inlining/cold-path/branch-hint
+follow-up: `a2e6706`) — see `planning/E2E-GAPS.md` §25 and §27. As of this
+writing another agent has further uncommitted work in this crate; the
+per-sample/Rice-coder/slice items below this one are not yet started.
 
 #### D2 — `vaco-scale`: default threading and the fused-kernel gap
 
