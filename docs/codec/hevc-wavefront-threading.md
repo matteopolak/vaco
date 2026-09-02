@@ -695,12 +695,23 @@ without pricing it. Landing order proposed, each its own commit, each
 gated on byte-exactness at `-threads 1` (a no-op check until dispatch
 itself is threaded) before the next begins:
 
-1. `Vec<OnceLock<Band>>`-based cross-thread-safe versions of `EdgeMarks`/
-   `CuGrid`/`SaoParamsGrid` (three commits or one, contributor's choice),
-   API-compatible with every existing call site, still driven by one
-   worker at `-threads 1`.
-2. The CABAC context-bank handoff as its own `Vec<OnceLock<ContextBank>>`,
-   replacing `saved_ctx`, still single-threaded.
+1a. **Done** (commit `8ba1ea5`, `planning/E2E-GAPS.md` §41): `EdgeMarks`
+    onto `RowPublish<T>` (commit `b5c8916` -- the generic primitive itself,
+    landed and tested in isolation one commit earlier), API-compatible
+    with every existing call site, still driven by one worker at
+    `-threads 1`. Chosen first because it was already the first of the
+    three row-banded for the same reason in Stage 1 step 3 (`planning/
+    E2E-GAPS.md` §36).
+1b. `SaoParamsGrid` onto `RowPublish<T>` next — its granularity is already
+    one `CtuSao` per row band (no block-within-a-band remainder the way
+    `EdgeMarks`/`CuGrid` both have), the same reason §38 called it
+    "simpler than either prior piece" for Stage 1 step 3.
+1c. `CuGrid` onto `RowPublish<T>` last of the three — the largest, with
+    nine heterogeneous arrays and its own `Budget` accounting
+    (`CuGrid::budget_bytes`) to keep self-consistent through the change.
+2. The CABAC context-bank handoff as its own `RowPublish<ContextBank>`
+   (`ContextBank` is already `Copy`, so this reuses the same primitive,
+   not a new one), replacing `saved_ctx`, still single-threaded.
 3. `Ctx`'s own split into shared (`Arc` or plain `&`, since the slice
    lives at least as long as the row loop) and per-row-exclusive parts,
    mechanically threading the new shape through `ctu.rs`/`deblock.rs`/
