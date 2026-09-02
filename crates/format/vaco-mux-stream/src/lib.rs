@@ -1,5 +1,5 @@
 //! The meta-muxers (and one meta-demuxer): `concat`, `ffmetadata`, `segment`,
-//! `stream_segment`, `tee`, `fifo` (FM-33, issue #590).
+//! `stream_segment`, `tee`, `fifo`.
 //!
 //! # What ties these together
 //!
@@ -10,8 +10,8 @@
 //! front of one inner muxer) or is a **virtual concatenation** of other
 //! containers' output (`concat`). `ffmetadata` is the odd one out — a flat
 //! key/value text format with no inner anything — and it lives here rather
-//! than in `vaco-mux-utility` because issue #590 (FM-33) groups it with the
-//! other meta-formats, not because it shares their shape.
+//! than in `vaco-mux-utility` because it is grouped with the other
+//! meta-formats, not because it shares their shape.
 //!
 //! # `concat` is a demuxer, not a muxer
 //!

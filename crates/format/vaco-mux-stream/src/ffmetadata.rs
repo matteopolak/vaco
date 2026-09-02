@@ -363,8 +363,8 @@ use vaco_packet::Packet;
 /// # How metadata reaches the document
 ///
 /// [`vaco_format_core::mux::MuxBuilder::open`] calls [`Muxer::set_metadata`]
-/// once, after `init` and stream time bases but before [`Muxer::write_header`]
-/// (M30, `planning/INTERFACE-GAPS.md` gap 1). This muxer's override just
+/// once, after `init` and stream time bases but before [`Muxer::write_header`].
+/// This muxer's override just
 /// stores the [`MuxMetadata`] it is handed; [`Muxer::write_header`] is what
 /// turns it into the actual `;FFMETADATA1` document via [`write`] — file tags
 /// as global lines, [`MuxMetadata::stream_tags`] as `[STREAM]` blocks in
@@ -669,10 +669,10 @@ mod tests {
 
         #[test]
         fn accepts_any_stream_and_writes_one_stream_block_per_added_stream() {
-            // Was pinned as "writes only header and encoder" — the emptiness
-            // `planning/AGENT-CONSTRAINTS.md` warns against asserting, since
+            // Was pinned as "writes only header and encoder" — an empty-output
+            // assertion that no longer holds, since
             // `[STREAM]` blocks are exactly what `set_metadata`/`write_header`
-            // (CL-16, gap 1) now write once a stream exists. Assert the
+            // now write once a stream exists. Assert the
             // mapping instead: one `[STREAM]` per `add_stream` call, in
             // order, still empty of keys when `set_metadata` is never called
             // (every pre-existing caller).

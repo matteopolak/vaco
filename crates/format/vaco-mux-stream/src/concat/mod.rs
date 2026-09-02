@@ -1,4 +1,4 @@
-//! `concat`: a **demuxer**, not a muxer (issue #590 assumed the latter).
+//! `concat`: a **demuxer**, not a muxer.
 //!
 //! # Measured
 //!
@@ -415,9 +415,9 @@ impl Demuxer for ConcatDemuxer {
 /// Cheap content sniff: any script that parses as at least one `file` entry
 /// under the strictest (`safe`) reading. Deliberately does not try to open
 /// any referenced file — detection must stay strict without touching the
-/// filesystem, matching the demux/detect split `planning/AGENT-CONSTRAINTS.md`
-/// documents (`vaco-demux-raw`'s AV1 lesson): a demuxer's own leniency must
-/// never leak into what claims a file.
+/// filesystem, matching the demux/detect split `vaco-demux-raw`'s AV1
+/// lesson established: a demuxer's own leniency must never leak into
+/// what claims a file.
 fn probe_concat(data: &ProbeData<'_>) -> ProbeScore {
     let Ok(text) = core::str::from_utf8(data.buf) else {
         return ProbeScore::NONE;

@@ -218,8 +218,8 @@ impl Muxer for TeeMuxer {
 
     /// [`Muxer::add_stream`], plus [`StreamSpec`] — forwarded per slot rather
     /// than dropped, which is the exact "tee... has the same obligation"
-    /// case `Muxer::add_stream_with`'s own doc comment names (gap 9,
-    /// `planning/INTERFACE-GAPS.md`). Before this override, every tee output
+    /// case `Muxer::add_stream_with`'s own doc comment names. Before this
+    /// override, every tee output
     /// silently lost a stream-copy time base a slot's own muxer (a
     /// `FrameHashMuxer`, say) would otherwise have used.
     fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
@@ -604,8 +604,7 @@ mod tests {
         }
     }
 
-    /// The consequential case named in `planning/TECH-DEBT.md`'s wrapper
-    /// audit: without `TeeMuxer::set_metadata`/`set_bitexact` forwarding,
+    /// Without `TeeMuxer::set_metadata`/`set_bitexact` forwarding,
     /// `-metadata` and `-bitexact` are silently dropped for every tee'd
     /// output, which is wrong output produced quietly rather than a loud
     /// failure. Reverting either override — replacing its body with `Ok(())`

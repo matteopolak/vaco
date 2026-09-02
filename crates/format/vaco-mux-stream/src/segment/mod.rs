@@ -157,8 +157,8 @@ pub struct SegmentMuxer {
     options: SegmentOptions,
     factory: SegmentFactory,
     /// Each declared stream's [`CodecParameters`] plus the [`StreamSpec`] it
-    /// was declared with (gap 9, `planning/INTERFACE-GAPS.md`) — replayed
-    /// into every new segment's inner muxer in [`Self::open_next_segment`],
+    /// was declared with — replayed into every new segment's inner muxer
+    /// in [`Self::open_next_segment`],
     /// since each segment is its own fresh [`Muxer`] that never itself saw
     /// the original [`Muxer::add_stream_with`] call.
     stream_params: Vec<(CodecParameters, StreamSpec)>,
@@ -369,8 +369,8 @@ impl Muxer for SegmentMuxer {
 
     /// [`Muxer::add_stream`], plus [`StreamSpec`] — captured and replayed
     /// into every future segment's own `add_stream_with` in
-    /// [`Self::open_next_segment`] (gap 9, `planning/INTERFACE-GAPS.md`).
-    /// Before this override, a stream-copy time base was dropped for every
+    /// [`Self::open_next_segment`]. Before this override, a stream-copy
+    /// time base was dropped for every
     /// segment this muxer ever opened, not just the first.
     fn add_stream_with(&mut self, params: &CodecParameters, spec: &StreamSpec) -> Result<u32> {
         let idx = self.stream_params.len() as u32;
@@ -740,8 +740,7 @@ mod tests {
         }
     }
 
-    /// The clearer-cut case named in `planning/TECH-DEBT.md`'s wrapper
-    /// audit: `SegmentMuxer` had no stored field for metadata or bitexact at
+    /// `SegmentMuxer` had no stored field for metadata or bitexact at
     /// all, so a future fix could not even replay a call that was never
     /// captured. This checks the capture actually reaches every segment
     /// opened *after* the call, not only the one open at the time.
