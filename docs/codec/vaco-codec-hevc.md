@@ -1269,6 +1269,42 @@ instead) and have been removed; if a future SAO change needs single-sample
 random access again, re-add them rather than reaching back to `get`/`set`
 in a loop that could be row-wise instead.
 
+## `Plane` stores `u8` (`PERF-PROGRAMME.md` B2), landed
+
+`Plane::data` is `Vec<u8>`, not `Vec<u16>`, for a crate whose whole scope
+is 8-bit (`check_scope` refuses anything else). Availability
+(`Plane::is_ready`) is tracked on a `(width/4) x (height/4)` grid — every
+write this crate makes is at least a 4x4 transform block, and
+`pic_width`/`pic_height_in_luma_samples` are themselves always CTB-grid-
+aligned, so a 4x4 grid answers "has this pixel's block been written" as
+exactly as the old per-pixel bitmap did, at 1/16 the memory.
+`Plane::get`/`set` kept their `u16` call signature (thin wrappers over the
+real `u8` storage) specifically so `deblock.rs`/`intra_pred.rs`/`mc.rs`
+needed no changes; only `Plane::row`/`row_mut`/`clone_samples` (B1)
+changed element type, which let `decoder::blit` collapse to a plain
+`copy_from_slice` (both sides are `u8` now) and let `ctu::write_block`
+(intra reconstruction, previously untouched by B1) move to the same
+row-wise shape as `write_pred_block`. See `planning/E2E-GAPS.md` §29 for
+the measured numbers (a 1.00–1.13x bonus on top of this item's own
+correctness-only stop condition) and why an I-only stress fixture could
+not be produced cleanly in that pass's environment.
+
+**B3 (PU-level separable motion compensation) was attempted twice on top
+of this and reverted both times** — see `planning/E2E-GAPS.md` §29 for the
+full account. Building an edge-replicated source block once per PU (either
+via `vaco-codec-dsp-mc`'s `edge::extend_edges`, or a hand-rolled `i32`
+clamp matching `clamped_sample`'s own shape) measured flat-to-negative
+under clean load both times, losing the large majority of interleaved
+rounds — `clamped_sample`'s original per-tap clamp was apparently already
+cheap and cache-friendly enough that building it into a buffer first only
+added a write-then-read pass without removing any bounds check
+(`tap_sum_row`/`tap_sum_col` still index the extended buffer once per tap,
+exactly as many times as `clamped_sample` was called before). `mc.rs` is
+therefore unchanged from B1/B2's own state; a future attempt at B3 should
+read §29's "why, on reflection" before trying another block-extension
+design, since two of that shape are now ruled out with real numbers behind
+them.
+
 ## Specification
 
 `itu-t-h265-202108` (ITU-T Rec. H.265 (08/2021)) and

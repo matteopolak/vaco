@@ -2116,3 +2116,128 @@ helper landed in the same file — committed through a private index built
 from `HEAD` plus only this item's own hunk, per
 `planning/AGENT-CONSTRAINTS.md`'s "when you genuinely share a file"
 recipe, so the concurrent fix's own eventual commit is unaffected.
+
+## 29. HEVC B2 landed (1.00–1.13x bonus), B3 attempted twice and reverted
+
+Continuing the HEVC lane after B1 (§24): `PERF-PROGRAMME.md`'s B2 (`Plane`
+to `u8` storage) then B3 (PU-level separable motion compensation), in that
+order, re-measured on the pinned nightly (`nightly-2026-08-07`, D22 — every
+number in §24 was stable-1.97.1 and is not comparable to what follows).
+
+### B2 — landed, `perf(codec-hevc): B2` (commit `695bffa`)
+
+`framebuf::Plane` stored `u16` for a crate whose whole scope is 8-bit and
+tracked availability with a per-pixel `ready: Vec<bool>` queried only at
+4x4-transform-block granularity. `Plane::data` is now `Vec<u8>`; `ready` is
+a `(width/4) x (height/4)` grid filled by a new `Plane::mark_block_ready`
+(one definition, D19 — `Plane::set`/`Plane::mark_row_ready` both build on
+it), exact rather than approximate within this crate's scope for the same
+reason `framebuf`'s own module doc already gives for the per-pixel version:
+every write is at least a 4x4 TB, and `pic_width`/`pic_height_in_luma_
+samples` are themselves always CTB-grid-aligned, so there is no partial
+block at a plane's own edge. `Plane::get`/`set` kept their `u16` signatures
+(thin wrappers, per the plan) so `deblock.rs`/`intra_pred.rs`/`mc.rs` needed
+no changes at all; `Plane::row`/`row_mut`/`clone_samples` (B1) became `u8`
+to match the real storage, which let two of B1's own row-wise copies drop
+their narrowing conversion entirely (`decoder::blit` is now a plain
+`copy_from_slice`) — plus one per-sample write loop B1's own profile pass
+never named separately (`ctu::write_block`, intra reconstruction), found
+and converted to the same row-wise shape while already touching every
+`Plane` write path.
+
+Measured (private release binaries, HEAD before the change as baseline,
+interleaved 10-round A/B/ffmpeg, CPU-seconds primary, load average 6–11):
+
+| fixture | baseline cpu | candidate cpu | speedup | wins (of 10) |
+|---|---:|---:|---:|---:|
+| 640x480 | 0.347s | 0.345s | 1.00x | 7/10 |
+| 1280x720 | 1.222s | 1.085s | 1.13x | 7/10 |
+| 1920x1080 | 2.233s | 2.030s | 1.10x | 10/10 |
+| 3840x2160 | 5.071s | 4.719s | 1.08x | 6/10 |
+
+This item's own stop condition is correctness-only (its ceiling was always
+"can legitimately measure ~1.0x on its own" — it exists to make B3
+writeable), so 1.00–1.13x is a bonus. Byte-exact on all eleven B1 fixtures
+plus `hevc_{sd,720p,1080p,4k}.mp4`; the plan's own suggested I-only
+fixture (`--tu-intra-depth 4`) hit an unrelated, pre-existing CABAC desync
+identical on baseline and candidate (flagged separately, not fixed, out of
+this item's scope) — every fixture actually used already carries
+substantial intra content at every listed resolution including 300x500's
+CTB-row-boundary case.
+
+### B3 — attempted twice, reverted, no commit
+
+**Evidence going in**: `predict_block_intermediate` alone measured 26.76%
+of decode; inside it, `Plane::index` + `clamp` measured 16% against 0.28%
+for the tap multiply-accumulate itself (§0's own summary of the baseline's
+innermost-frame pass). The plan's own prescription: stop calling
+`clamped_sample` (a per-filter-tap-per-sample clamp-and-fetch) and instead
+build the source block a PU's own tap footprint needs once per PU, then
+index into it.
+
+**Attempt 1**: `mc::extend_block`, built once per branch (full-pel,
+horizontal-only, vertical-only, two-pass) via
+`vaco_codec_dsp_mc::edge::extend_edges` — a generic, already-tested,
+`i64`-coordinate border-replication utility this crate did not previously
+depend on. `tap_sum_row`/`tap_sum_col` then read the extended buffer by
+plain index, and the two-pass case's own intermediate `i32` buffer moved
+from a per-PU heap `vec![0i32; ...]` (named directly in the plan's own
+evidence) to a fixed `[i32; MAX_TMP]` stack array sized to this crate's own
+`CtbSizeY` ceiling. Byte-exact on all eleven B1 fixtures plus
+`hevc_{sd,720p,1080p,4k}.mp4`, and every `mc::tests` oracle
+(`out_of_bounds_reads_clamp_to_the_edge_sample`,
+`integer_motion_is_a_plain_copy`, `chroma_filter_stays_within_the_valid_
+sample_range`) passed unchanged. Measured **flat-to-negative**: 0.98–1.03x
+across the four fixtures under a first, heavily-loaded run (load average
+20–64, discounted) and confirmed flat-to-negative again under a clean
+re-run (load average 5–8): 0.976x, 1.002x, 0.991x, 0.986x, with the
+candidate losing 32 of 40 interleaved rounds.
+
+**Attempt 2**: suspecting `extend_edges`'s own `i64`/`unsigned_abs`
+per-pixel clamp was the drag, `extend_block` was rewritten by hand with
+the plain `i32` clamp `clamped_sample` itself always used (same shape,
+called once per row instead of once per tap), removing the
+`vaco-codec-dsp-mc` dependency entirely. Still byte-exact on all eleven
+fixtures. Measured **consistently negative** under the same clean load
+(5.75–5.9): 0.948x, 0.945x, 0.951x, 0.913x — every fixture slower than
+before B3, every one by more than attempt 1, with the candidate losing 32
+of 40 rounds again.
+
+**Why, on reflection**: `clamped_sample`'s own per-tap clamp was already a
+branchless `i32` min/max the compiler could inline directly into
+`tap_sum_horizontal`/`tap_sum_vertical`'s tap loop, and — because
+neighbouring output samples' tap windows overlap heavily — its repeated
+reads of the same handful of nearby plane samples across a whole PU stay
+hot in L1 regardless of how many times they are nominally re-fetched.
+Building an extended block first does not remove a bounds check per tap
+(`tap_sum_row`/`tap_sum_col` still index the extended buffer with a checked
+`.get()`, once per tap, exactly as many times as before); it adds a whole
+extra write-then-read pass over memory that was already effectively free,
+for a clamp that was already cheap. The named "16%" was real, but it was
+apparently the *shape* of many small, non-vectorised, iterator-driven
+per-tap operations rather than the clamp arithmetic specifically — a
+different fix (batching/vectorising the tap sum itself, or fusing extend
+and tap-sum into one pass that never materialises an intermediate buffer)
+might still find it; two attempts at "read a block, not a tap" did not.
+
+**Reverted**: `git checkout -- crates/codec/vaco-codec-hevc/src/framebuf.rs
+crates/codec/vaco-codec-hevc/src/mc.rs` (the `vaco-codec-dsp-mc` dependency
+was added then removed within the same uncommitted working tree, so
+`Cargo.toml` never actually diverged from `HEAD`) — `git status` and `git
+diff` against `HEAD` both confirm the crate is byte-identical to before
+this item started. No commit exists for B3; this section is the entire
+record of the attempt, per `AGENT-CONSTRAINTS.md`/D20's "restructured,
+measured, no faster, reverted" being a complete and valuable result.
+
+**For whoever picks up B3 next**: rule out the "many small operations"
+theory before trying another buffer-extension design. A worthwhile next
+probe is an innermost-frame profile of one of the two reverted attempts
+(kept in this session's own history if needed) to see whether time moved
+*into* `extend_block` roughly where it left `clamped_sample`, or whether
+something else entirely grew. Both reverted implementations, and the exact
+measured numbers above, are the starting evidence — re-deriving them from
+scratch would be wasted work.
+
+`vaco-codec-h264`, the AAC/transform crates, the filter crates,
+`vaco-conformance` and the fuzz harnesses were not touched — outside this
+item's lane.
