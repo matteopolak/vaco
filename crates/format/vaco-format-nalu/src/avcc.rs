@@ -259,6 +259,28 @@ pub fn build_hevc_hvcc(vps: &[&[u8]], sps: &[&[u8]], pps: &[&[u8]]) -> Option<Ve
     Some(out)
 }
 
+/// The NAL length prefix width a configuration record declares, or `None`
+/// when `extradata` is not a record at all — empty, or Annex-B.
+///
+/// ISO/IEC 14496-15 puts `lengthSizeMinusOne` inside the record itself
+/// (§5.3.3.1.2 byte 4 for `avcC`, §8.3.3.1.2 byte 21 for `hvcC`), which
+/// makes the record the only thing that can answer this. A caller that
+/// stores the width separately — `VideoParameters::nal_length_size`, which
+/// is what every muxer here reads to decide whether to convert — must derive
+/// it from here rather than assert it, or the two can disagree.
+#[must_use]
+pub fn record_nal_length_size(kind: HeaderKind, extradata: &[u8]) -> Option<u8> {
+    if extradata.first() != Some(&1) {
+        return None;
+    }
+    let at = match kind {
+        HeaderKind::H264 => 4,
+        HeaderKind::H265 => 21,
+        HeaderKind::H266 => return None,
+    };
+    extradata.get(at).map(|b| (b & 0x03) + 1)
+}
+
 /// What a container that stores **length-prefixed** NAL units (MP4's `avc1`/
 /// `hev1`, Matroska's `V_MPEG4/ISO/AVC` and `V_MPEGH/ISO/HEVC`) must do with
 /// an `extradata` buffer that may have arrived in either form.
@@ -497,6 +519,19 @@ mod tests {
     /// Empty, and Annex-B with nothing a record can be built from, are both
     /// "no answer" — never an empty record, which is the box a real
     /// `ffprobe` refuses.
+    /// The width the record itself declares — the only place it exists, and
+    /// what `VideoParameters::nal_length_size` must be derived from rather
+    /// than asserted beside.
+    #[test]
+    fn a_records_own_length_size_is_read_back_from_it() {
+        assert_eq!(record_nal_length_size(HeaderKind::H264, &EXPECTED), Some(4));
+        let hvcc = build_hevc_hvcc(&[&HEVC_VPS], &[&HEVC_SPS], &[&HEVC_PPS]).unwrap();
+        assert_eq!(record_nal_length_size(HeaderKind::H265, &hvcc), Some(4));
+        // Annex-B and empty declare nothing.
+        assert_eq!(record_nal_length_size(HeaderKind::H264, &[0, 0, 0, 1, 0x67]), None);
+        assert_eq!(record_nal_length_size(HeaderKind::H264, &[]), None);
+    }
+
     #[test]
     fn nothing_to_build_from_answers_none() {
         assert!(length_prefixed_config(HeaderKind::H264, &[]).is_none());

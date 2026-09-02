@@ -1064,6 +1064,53 @@ fn default_codec_for(format: &str, media: Option<MediaType>, url: &str) -> Optio
     desc.default_codec(media)
 }
 
+/// The [`vaco_codec_core::CodecParameters`] an **encoded** output stream is
+/// described by.
+///
+/// [`vaco_codec_core::CodecParameters::with_codec`] keeps everything the input declared,
+/// which is exactly right for `-c copy` and wrong here. Two of those fields
+/// describe the input's *coded form*, and an encoder's output is not it:
+///
+/// * `extradata` is the input stream's own configuration record, and
+///   `with_codec` only drops it when the codec id changes — so re-encoding
+///   H.264 to H.264 wrote the *input file's* `avcC` into the output
+///   container. Measured: a 1920x1080 source scaled to 1280x600 produced an
+///   `avcC` byte-identical to the input's, advertising 1920x1080 and the
+///   input's parameter sets over the encoder's own.
+/// * `video.nal_length_size` is the input *container's* NAL framing.
+///   Inherited `Some(4)` from an MP4 source is what made
+///   `-c:v libx264 out.ts` and `out.h264` run `h264_mp4toannexb` over an
+///   Annex-B elementary stream: `00 00 00 01` read as a one-byte NAL, and
+///   the output decoded as `profile=unknown width=0 height=0`.
+///
+/// Both are cleared here and repopulated from the encoder itself, which is
+/// the only thing that knows.
+fn encoded_params(
+    input: &vaco_codec_core::CodecParameters,
+    id: vaco_codec_core::CodecId,
+) -> vaco_codec_core::CodecParameters {
+    let mut out = input.clone().with_codec(id);
+    out.extradata = None;
+    if let Some(v) = out.video.as_mut() {
+        v.nal_length_size = None;
+    }
+    out
+}
+
+/// The NAL length prefix width an encoder's packets carry, read off the
+/// configuration record that encoder supplied.
+///
+/// ISO/IEC 14496-15 puts `lengthSizeMinusOne` inside the record, so this
+/// derives rather than asserts — `vaco_format_nalu::record_nal_length_size`
+/// is the one place that layout is known. No encoder here supplies a record
+/// today: they all emit Annex-B elementary streams, which is `None`, which
+/// is what the containers that want Annex-B (MPEG-TS, ASF, raw) read to
+/// leave the stream alone.
+fn declared_nal_length_size(id: vaco_codec_core::CodecId, extradata: Option<&[u8]>) -> Option<u8> {
+    let kind = vaco_format_nalu::header_kind_for(id)?;
+    vaco_format_nalu::record_nal_length_size(kind, extradata?)
+}
+
 fn check_codecs(
     cli: &Cli,
     out: &OutputSpec,
@@ -2171,7 +2218,7 @@ pub fn run_pipeline(
                             let packets = spec
                                 .add_encoder(frames, encoder, time_base)
                                 .map_err(|e| internal_from("could not attach an encoder", &e))?;
-                            let mut out_params = p.with_codec(encoder_desc.id);
+                            let mut out_params = encoded_params(&p, encoder_desc.id);
                             if let Some(fmt) = out_video_format
                                 && let Some(v) = out_params.video.as_mut()
                             {
@@ -2192,8 +2239,16 @@ pub fn run_pipeline(
                             {
                                 a.layout = Some(layout);
                             }
-                            if let Some(edata) = encoder_extradata {
-                                out_params.extradata = Some(edata);
+                            out_params.extradata = encoder_extradata;
+                            // `nal_length_size` is not asserted beside the
+                            // record, it is read out of it — see
+                            // `encoded_params`.
+                            let nal_length_size = declared_nal_length_size(
+                                encoder_desc.id,
+                                out_params.extradata.as_deref(),
+                            );
+                            if let Some(v) = out_params.video.as_mut() {
+                                v.nal_length_size = nal_length_size;
                             }
                             (packets, out_params, name.to_owned())
                         }
@@ -2230,7 +2285,7 @@ pub fn run_pipeline(
                         .map_err(|e| internal_from("could not attach an encoder", &e))?;
                     (
                         packets,
-                        p.with_codec(encoder_desc.id),
+                        encoded_params(&p, encoder_desc.id),
                         name.to_owned(),
                         format!("complex:{index}"),
                     )

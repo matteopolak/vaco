@@ -43,6 +43,10 @@ vaco-sched = { path = "../../app/vaco-sched" }
 vaco-registry = { path = "../../registry/vaco-registry" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
+# `record_nal_length_size`: `lengthSizeMinusOne` lives inside the encoder's
+# own configuration record, and this crate derives it there rather than
+# asserting a second copy beside it.
+vaco-format-nalu = { path = "../../format/vaco-format-nalu" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-packet = { path = "../../model/vaco-packet" }
 # CL-21/#222: `-fps_mode`'s `vfr`/`cfr` nodes are plain `vaco-filter-core`
