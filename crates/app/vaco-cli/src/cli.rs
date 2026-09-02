@@ -351,8 +351,34 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
 /// # Errors
 /// [`Diagnostic`] naming the option, once any occurrence of one is found.
 fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
-    const GLOBAL: &[&str] = &["frame_drop_threshold"];
-    const PER_FILE: &[&str] = &["hwaccel"];
+    // Overwrite policy and seek/trim (CLI-option audit, first batch): `-n`
+    // silently not refusing to overwrite is a real data-loss gap. `-y` is
+    // deliberately NOT refused here even though nothing reads it either --
+    // this build always overwrites unconditionally (no prompt exists at
+    // all), which is exactly what `-y` itself asks for, so accepting and
+    // ignoring it produces no divergence from its own request. Refusing it
+    // would only break every script that passes `-y` defensively (the
+    // common convention, to avoid a prompt that cannot occur here) for no
+    // correctness gain -- unlike `-n`, whose whole point is silently not
+    // honoured.
+    // `-ss`/`-t`/`-to`/`-sseof`/`-itsoffset`/`-itsscale`/`-seek_timestamp`/
+    // `-accurate_seek` being silently ignored means every invocation
+    // processes the whole input regardless of what any of them say --
+    // including, potentially, past measurements: checked against
+    // `planning/PERF-BASELINE.md` and `scripts/`, neither uses any of these,
+    // so no recorded ratio is affected.
+    const GLOBAL: &[&str] = &["frame_drop_threshold", "n"];
+    const PER_FILE: &[&str] = &[
+        "hwaccel",
+        "ss",
+        "t",
+        "to",
+        "sseof",
+        "itsoffset",
+        "itsscale",
+        "seek_timestamp",
+        "accurate_seek",
+    ];
 
     for &name in GLOBAL {
         if line.last_global(name).is_some() {
