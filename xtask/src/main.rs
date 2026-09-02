@@ -11,6 +11,7 @@ use std::process::Command;
 mod comment_check;
 mod coverage;
 mod dead_code;
+mod decoder_coverage;
 mod deps;
 mod docs;
 mod dup_check;
@@ -52,6 +53,7 @@ fn main() {
         "check-message" => check_message(args.get(1).map(String::as_str)),
         "owner-gate" => owner_gate::run(check),
         "reachability-check" => reachability_check::run(check),
+        "decoder-coverage" => decoder_coverage::run(check),
         "option-consumption-check" => option_consumption::run(check),
         "gen-registry" => registry::run(check),
         "similarity-scan" => similarity::run(&args[1..]),
@@ -72,6 +74,9 @@ fn main() {
             eprintln!("  dup-check       one definition per concept (D19)");
             eprintln!(
                 "  reachability-check  a component that exists and cannot be reached from the CLI"
+            );
+            eprintln!(
+                "  decoder-coverage  every registered decoder has a decode case or a reviewed reason it does not"
             );
             eprintln!("  comment-check   comments stay short and self-contained");
             eprintln!("  provenance-check  every large constant table names its source (D15)");
