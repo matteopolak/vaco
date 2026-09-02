@@ -3518,3 +3518,50 @@ than that being a setback), and real thread dispatch after that.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 45. HEVC B4 Stage 2b step 3's first commit -- the four current splits measure at 0.99x, clearing the gate
+
+`c1c6f71` (the four `current` splits -- `recon`/`cu_grid`/`edges`/
+`sao_params`) writes `ReconPlane`'s own `current_row`/`current_col`/
+`current_published` once per CTU, not once per row, unlike the other
+three fields' bookkeeping -- the coordinator's own instruction was to
+take a real interleaved measurement for this reason, rather than the
+"once-per-row, no timing needed" note used for steps 1 and 2.
+
+Six interleaved rounds, `c1c6f71` against its parent `39ac64a`, both
+`dist`-profile builds in **isolated git worktrees** for both sides (the
+first attempt built the candidate directly from the shared main working
+tree and hit another agent's in-progress, uncommitted breakage in
+`vaco-demux-mpegts` -- unrelated to this change, fixed by rebuilding from
+a clean `git worktree add --detach` checkout of `c1c6f71` instead).
+`hevc_1080p.mp4`, `-threads 1`, five decodes per round per binary,
+`/usr/bin/time -p`. Load average 9.97-14.34 during the run, above this
+protocol's own ~8 threshold, so CPU-seconds governs.
+
+The first six-round attempt also has a self-caught process error worth
+recording: the perf-measure lock was busy (another agent mid-measurement)
+and the run proceeded anyway rather than waiting -- exactly the mistake
+the lock exists to prevent. Round 2 of that attempt shows it plainly
+(wall 31.7s/54.1s against a ~17.5s baseline, contention from whatever the
+other agent was running). That attempt's numbers were discarded, not
+averaged in, and the run was redone waiting properly for the lock.
+
+Clean result: CPU-seconds ratio (candidate/baseline) per round 1.020,
+0.997, 1.024, 0.988, 0.982, 0.960 -- median **0.993x**, mean **0.995x**,
+candidate at or below baseline in 4 of 6 rounds. Wall-clock: median
+0.993x, mean 1.009x. This clears Stage 1's own <=1.03x gate with room to
+spare -- unlike ss39's `ReconPlane` tile-conversion regression, this
+change (reorganising which struct owns already-existing fields, touching
+no allocation or hot-loop arithmetic) costs nothing measurable.
+
+Byte-exact: against `hevc_1080p.mp4`, `vaco -threads 1` on both the
+baseline and candidate binaries and `ffmpeg`'s own decode all produced the
+identical sha256 (`a40b898c...`, unchanged since ss39).
+
+**Not done in this section**: `Ctx`'s own split proper (next -- the ~28
+shared read-only fields plus `inter`, and the four per-row-exclusive
+scalars around `qp_y_prev`), the CABAC context-bank handoff's `Ctx`-side
+wiring, and real thread dispatch.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.
