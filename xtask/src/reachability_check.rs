@@ -62,6 +62,20 @@
 //!   catches "the registry doesn't know this descriptor exists"; this rule
 //!   catches "the registry knows about it, and it is still dead" — a
 //!   consistent registry is not the same claim as a reachable one.
+//! - **H** [`check_reference_names`] — a *third* independent way to ship a
+//!   dead-but-consistent component: registered, listed, reachable by rule G,
+//!   and still unusable because a real user would never type its name.
+//!   `vaco-codec-jpeg` was registered as `jpeg` and reachable by every rule
+//!   above — `ffmpeg -decoders`/`-encoders` (measured against the installed
+//!   9.0.1, `xtask/data/reference-formats.txt`) has no decoder or encoder
+//!   literally named `jpeg` at all, only `mjpeg`, so `-c:v mjpeg` — the name
+//!   every real ffmpeg file or user actually uses — could not select it.
+//!   `vaco-codec-subtitle-teletext` was `teletext` where the reference's own
+//!   codec table (probed with `ffmpeg -h decoder=<name>`, which distinguishes
+//!   a name FFmpeg recognises but cannot build from one it does not know at
+//!   all) calls it `dvb_teletext`. Both fixed; [`ALLOW_NAME_MISMATCH`] is
+//!   where a checked survivor goes, with which of those two measured
+//!   outcomes justifies it.
 //!
 //! # Allowlists
 //!
@@ -1148,13 +1162,218 @@ fn check_encoder_reachable(rows: &[Row], variant_to_name: &Map<String, String>) 
     )
 }
 
+// ------------------------------------------------------------------ rule H
+
+/// One `[section]`'s bare names from `xtask/data/reference-formats.txt`,
+/// comma-joined alias families split the same way [`Row::names`] are — the
+/// reference's own multi-name rows (`"matroska,webm"`, `"mov,mp4,m4a,3gp,
+/// 3g2,mj2"`) are one line each in that file, matching its own `-demuxers`/
+/// `-muxers` output verbatim.
+fn reference_section(text: &str, section: &str) -> Set<String> {
+    let marker = format!("[{section}]\n");
+    let Some(start) = text.find(&marker) else {
+        return Set::new();
+    };
+    let body = &text[start + marker.len()..];
+    let end = body.find("\n[").unwrap_or(body.len());
+    let mut out = Set::new();
+    for line in body[..end].lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        for tok in line.split(',') {
+            let tok = tok.trim();
+            if !tok.is_empty() {
+                out.insert(tok.to_owned());
+            }
+        }
+    }
+    out
+}
+
+/// A registered name absent from the reference's own measured name list
+/// (`xtask/data/reference-formats.txt`), and why keeping it is deliberate
+/// rather than an oversight — the `jpeg`/`mjpeg` and `teletext`/
+/// `dvb_teletext` shape (both fixed, not listed here) generalised into a
+/// gate that cannot un-catch itself.
+///
+/// Two genuinely different reasons show up below, and the distinction
+/// matters for whoever next re-measures this list against a different
+/// reference build:
+///
+/// - **Correctly named, absent from this specific binary.** `ffmpeg -h
+///   decoder=X`/`-h encoder=X` answers "known to FFmpeg, but no
+///   decoders/encoders for it are available" for a name FFmpeg's own codec
+///   table recognises but this build cannot construct (an optional library
+///   — libjxl, libwebp's encoder, libzvbi — not compiled in), distinct from
+///   "is not recognized by FFmpeg" for a name that is simply wrong (the
+///   `teletext`/`dvb_teletext` case this rule exists to catch). Filters,
+///   bitstream filters and protocols have no equivalent distinguishing
+///   message, so a missing name there is corroborated instead by public,
+///   freely-reusable FFmpeg documentation (D7 Tier A: CLI names and their
+///   documented semantics) naming the same string, or left an open question
+///   when neither source resolves it.
+/// - **Genuinely different implementation, on purpose.** `vaco-filter-motion`
+///   built its own `stabdetect`/`stabtransform` because the reference's
+///   `vidstabdetect`/`vidstabtransform` need `libvidstab` (GPL, D3), and no
+///   reference binary anywhere to probe carries it — not merely absent from
+///   this build. `vaco-codec-vp8`/`vp9`'s encoders are native, not the
+///   reference's `libvpx`-wrapped ones; there is no bare `vp8`/`vp9` encoder
+///   name in the reference to collide with, so naming them after the codec
+///   is not a fabricated name so much as the natural one.
+const ALLOW_NAME_MISMATCH: &[(&str, &str)] = &[
+    (
+        "vp8",
+        "encoder: the reference has no native VP8 encoder at all, only \
+         `libvpx` (measured: `ffmpeg -c:v vp8 -f null -` succeeds, resolving \
+         through the codec name to `libvpx` — the same mechanism `-h \
+         encoder=vp8` demonstrates). vaco-codec-vp8's encoder is a genuinely \
+         different, native (non-libvpx) implementation; there is no bare \
+         `vp8` encoder name in the reference for this to be confused with.",
+    ),
+    (
+        "vp9",
+        "encoder: same as `vp8` above — the reference's only VP9 encoder is \
+         `libvpx-vp9`; vaco-codec-vp9's is native.",
+    ),
+    (
+        "webp",
+        "encoder: `ffmpeg -h encoder=webp` reports 'known to FFmpeg, but no \
+         encoders for it are available' — the right name, absent from this \
+         build (needs a library this environment's ffmpeg was not compiled \
+         with), not a wrong one.",
+    ),
+    (
+        "qoa",
+        "encoder: `ffmpeg -h encoder=qoa` reports 'known to FFmpeg, but no \
+         encoders for it are available' — right name, no encoder built into \
+         this reference binary.",
+    ),
+    (
+        "v210x",
+        "encoder: `ffmpeg -h encoder=v210x` reports 'known to FFmpeg, but no \
+         encoders for it are available' — right name, no encoder built into \
+         this reference binary.",
+    ),
+    (
+        "jpegxl",
+        "decoder: `ffmpeg -h decoder=jpegxl` reports 'known to FFmpeg, but \
+         no decoders for it are available' — right name, this build lacks \
+         libjxl.",
+    ),
+    (
+        "dvb_teletext",
+        "decoder: `ffmpeg -h decoder=dvb_teletext` reports 'known to \
+         FFmpeg, but no decoders for it are available' — right name (this \
+         rule's own motivating fix, renamed from the wrong `teletext`), no \
+         decoder built into this reference binary (needs libzvbi).",
+    ),
+    (
+        "ttml",
+        "decoder: `ffmpeg -h decoder=ttml` reports 'known to FFmpeg, but no \
+         decoders for it are available' — right name, no decoder built into \
+         this reference binary. demuxer: `vaco-subtitle-text`'s own fragment \
+         already documents this one as spec-only with no reference \
+         counterpart at all (not merely absent from this build) — TTML is \
+         muxed by the reference but never demuxed from a standalone file.",
+    ),
+    (
+        "dash",
+        "demuxer: the reference's own muxer list has `dash`, and DASH is a \
+         well-documented, unambiguous format name (MPEG-DASH); most likely \
+         gated on `libxml2`, not present in this build's configure flags, \
+         the same shape as the codecs above but without an `-h demuxer=` \
+         message to confirm it directly — recorded as the same class rather \
+         than guessed at further.",
+    ),
+    (
+        "imf",
+        "demuxer: IMF (Interoperable Master Format) is a well-documented, \
+         unambiguous professional-media format name with the same likely \
+         `libxml2` gating as `dash` above, and the same lack of a \
+         confirming `-h demuxer=` message.",
+    ),
+    (
+        "ass",
+        "filter: a well-documented real FFmpeg filter name (needs libass); \
+         `-h filter=` gives no 'known but disabled' signal the way codecs \
+         do, so this rests on public documentation (D7 Tier A) rather than \
+         a direct measurement against this build.",
+    ),
+    (
+        "subtitles",
+        "filter: same as `ass` above — needs libass.",
+    ),
+    (
+        "drawtext",
+        "filter: a well-documented real FFmpeg filter name needing \
+         libfreetype; same lack of an `-h filter=` disabled-vs-unknown \
+         signal as `ass` above.",
+    ),
+    (
+        "stabdetect",
+        "filter: `vaco-filter-motion`'s own module doc (see `stabdetect.rs`) \
+         already records the reason — `vidstabdetect` needs GPL `libvidstab`, \
+         which this project will not link (D3), and no reference binary \
+         anywhere to probe carries it either, so this is an independent \
+         equivalent under its own name, not claiming `.trf` file \
+         compatibility.",
+    ),
+    (
+        "stabtransform",
+        "filter: paired with `stabdetect` above; same reason.",
+    ),
+];
+
+fn check_reference_names(rows: &[Row]) -> Result<Vec<String>, String> {
+    let path = repo_root().join("xtask/data/reference-formats.txt");
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+
+    const KIND_TO_SECTION: &[(&str, &str)] = &[
+        ("decoder", "decoders"),
+        ("encoder", "encoders"),
+        ("demuxer", "demuxers"),
+        ("muxer", "muxers"),
+        ("filter", "filters"),
+        ("bitstream_filter", "bitstream_filters"),
+        ("protocol", "protocols"),
+    ];
+
+    let mut violations = Vec::new();
+    for &(kind, section) in KIND_TO_SECTION {
+        let ref_names = reference_section(&text, section);
+        for row in rows.iter().filter(|r| r.kind == kind) {
+            for name in &row.names {
+                if ref_names.contains(name) || ALLOW_NAME_MISMATCH.iter().any(|(n, _)| n == name) {
+                    continue;
+                }
+                violations.push(format!(
+                    "  {}::{name} ({kind}) — xtask/data/reference-formats.txt's \
+                     [{section}] section has no `{name}`. Either this is the wrong \
+                     name (for a decoder/encoder, measure `ffmpeg -h {kind}={name}`: \
+                     \"is not recognized\" means genuinely wrong and should be \
+                     fixed, matching every user's real ffmpeg vocabulary; \"known to \
+                     FFmpeg, but no {kind}s available\" means the name is right and \
+                     this build simply lacks the implementation) or the divergence \
+                     is deliberate and belongs in ALLOW_NAME_MISMATCH with a \
+                     measured reason.",
+                    row.krate,
+                ));
+            }
+        }
+    }
+    violations.sort();
+    Ok(violations)
+}
+
 // ------------------------------------------------------------------- driver
 
 pub fn run(_check: bool) -> Task {
     let rows = all_rows()?;
     let variant_to_name = codec_name_table()?;
 
-    let sections: [(&str, Vec<String>); 8] = [
+    let sections: [(&str, Vec<String>); 9] = [
         (
             "A. crate with no fragment and no in-workspace caller",
             check_orphan_crates()?,
@@ -1184,6 +1403,10 @@ pub fn run(_check: bool) -> Task {
             "G2. encoder's codec accepted by no muxer",
             check_encoder_reachable(&rows, &variant_to_name),
         ),
+        (
+            "H. registered name absent from the reference's own measured names",
+            check_reference_names(&rows)?,
+        ),
     ];
 
     let total: usize = sections.iter().map(|(_, v)| v.len()).sum();
@@ -1206,7 +1429,8 @@ pub fn run(_check: bool) -> Task {
         + ALLOW_MUXER_ONLY.len()
         + ALLOW_UNREGISTERED_DESCRIPTOR.len()
         + ALLOW_UNDEMUXABLE_DECODER.len()
-        + ALLOW_UNMUXABLE_ENCODER.len();
+        + ALLOW_UNMUXABLE_ENCODER.len()
+        + ALLOW_NAME_MISMATCH.len();
     println!(
         "reachability-check: clean — {} components across {} fragments checked \
          by {} rules, {allowlisted} deliberate gap(s) on record",
@@ -1277,6 +1501,33 @@ mod tests {
         assert_eq!(table.get("Jpeg").map(String::as_str), Some("mjpeg"));
         assert_eq!(table.get("AacLatm").map(String::as_str), Some("aac_latm"));
         assert!(table.len() > 50, "expected dozens of codecs, got {}", table.len());
+    }
+
+    #[test]
+    fn every_name_mismatch_allowlist_row_has_a_real_reason() {
+        for (name, why) in ALLOW_NAME_MISMATCH {
+            assert!(why.len() > 20, "{name} needs a real reason, got {why:?}");
+        }
+    }
+
+    #[test]
+    fn reference_section_splits_comma_joined_alias_families() {
+        let text = "[demuxers]\nmatroska,webm\nmov,mp4,m4a\n\n[muxers]\nmov\n";
+        let demux = reference_section(text, "demuxers");
+        assert!(demux.contains("matroska"));
+        assert!(demux.contains("webm"));
+        assert!(demux.contains("mov"));
+        assert!(demux.contains("m4a"));
+        assert!(!demux.contains("mov,mp4,m4a"), "must split, not keep the joined line");
+        let mux = reference_section(text, "muxers");
+        assert_eq!(mux, std::iter::once("mov".to_owned()).collect());
+    }
+
+    #[test]
+    fn reference_section_ignores_comments_and_stops_at_the_next_section() {
+        let text = "[decoders]\n# a comment\nh264\n\n[encoders]\naac\n";
+        let dec = reference_section(text, "decoders");
+        assert_eq!(dec, std::iter::once("h264".to_owned()).collect());
     }
 
     #[test]
