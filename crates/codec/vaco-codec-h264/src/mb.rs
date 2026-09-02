@@ -2363,22 +2363,6 @@ impl MvInfo {
         self.mv[1]
     }
 
-    /// A synthetic list-0-only `MvInfo` for `crate::reconstruct`'s own
-    /// `partition_rects` tests (`planning/PERF-PROGRAMME.md` item A1) --
-    /// this module's own fields are private outside it, so a test in a
-    /// different module needs a constructor rather than a struct literal.
-    #[cfg(test)]
-    pub(crate) fn for_test_l0(mv: (i16, i16)) -> Self {
-        Self {
-            mb_available: true,
-            pred: Some(PartPred::L0),
-            ref_idx: [0, -1],
-            mvd: [(0, 0), (0, 0)],
-            mv: [mv, (0, 0)],
-            direct_or_skip: false,
-        }
-    }
-
     /// Whether this block's own prediction reads list 0 / list 1 --
     /// `crate::reconstruct`'s own dispatch between an `L0`-only, `L1`-only
     /// and `Bi` block, matching [`PartPred::reads_l0`]/`reads_l1`'s own
