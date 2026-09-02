@@ -68,9 +68,6 @@ cargo build --release -p vaco-cli --features vaco-registry/patent-encumbered-h26
 ## Examples
 
 ```
-# Transcode to FFV1 in Matroska
-vaco -i input.mp4 -c:v ffv1 output.mkv
-
 # Remux without re-encoding
 vaco -i input.mkv -c copy output.mp4
 
@@ -205,9 +202,17 @@ documents under `docs/codec/` carry the exact clause-level scope.
 | Theora | intra only | — | Keyframes only |
 | VC-1 / WMV3 | intra only | — | Simple/Main, progressive I-frames. Patent-gated |
 | H.261 / H.263 | yes | — | Baseline |
-| ProRes | yes | — | Decode only by decision; SMPTE RDD 36 |
-| FFV1 | yes | yes | RFC 9043 |
+| ProRes | yes | — | Decode only by decision; SMPTE RDD 36. Within ±4 of ffmpeg on 3% of 10-bit samples, an IDCT rounding difference |
+| FFV1 | **no** | **no** | Decodes and encodes only against itself — see below |
 | Raw / uncompressed | yes | yes | rawvideo, v210, r10k, y41p and friends |
+
+FFV1 is the sharpest example of why this page reports measurements rather than
+status. Its encoder and decoder round-trip losslessly *against each other*, and the
+crate's test suite is exactly that round-trip, so it passed. Measured against ffmpeg
+it fails in both directions: an ffmpeg-written FFV1 file decodes to wrong pixels here
+(differing on 99.6% of bytes, from the first byte, on a lossless codec), and ffmpeg
+reads our FFV1 output as wrong pixels too. It is registered, so a build will still
+accept it. Treat it as broken until that row says otherwise.
 
 ### Audio
 
