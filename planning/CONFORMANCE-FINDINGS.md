@@ -4793,7 +4793,7 @@ coordinator's own definitions:
 | 32 | `probe-mpegts/mpeg2-ps/section=streams,writer=compact` | same `profile=72` vs `4` cluster as #30 | Real |
 | 33 | `probe-mpegts/mpeg2-ps/section=both,writer=json` | same cluster | Real |
 | 34 | `transcode-remux-bitexact/v-mp4/output=mpegts` | 1 byte differs at offset 1348, identical total size (14664) | Real |
-| 35 | `transcode-remux-bitexact/v-mov/output=asf` | 1 byte differs at offset 16 (early ASF header field) | Real |
+| 35 | `transcode-remux-bitexact/v-mov/output=asf` | 1 byte differs at offset 16 (early ASF header field) — **understated; see finding 61: the real gap is at least four separate missing/wrong ASF header structures, not one byte** | Real |
 | 36 | `transcode-remux-bitexact/v-mkv/output=mpegts` | same offset-1348, same-size pattern as #34 | Real |
 | 37 | `transcode-remux-bitexact/v-ts/output=matroska` | byte 51 differs, sizes differ (8175 vs 8096) — consistent with finding 56's own `FORMAT.duration: 1.08 vs 1.00` | Real |
 | 38 | `transcode-remux-bitexact/av-mov/output=matroska` | byte 51 differs, sizes close (17642 vs 17613) — same Matroska Duration-encoding family as #37 | Real |
@@ -5328,3 +5328,177 @@ that):
 
 `cargo test`/`cargo clippy -p vaco-parse-mpegvideo -p vaco-format-dv
 --all-targets -D warnings` clean; `cargo build --workspace` clean.
+
+## 61. Container/remux cluster continued: MPEG-TS PCR cadence closed (4 cases), a second confirmed D7 wall recorded, finding 57's case 35 corrected to its true (larger) scope, and one real fix landed inside it
+
+Continuing the container-remux cluster finding 57 assigned (PCM
+packetisation already closed last pass). Three things this pass, plus one
+correction to the record itself.
+
+### MPEG-TS PCR cadence — closed, four cases retired
+
+The `h264_mp4toannexb` start-code fix (previous commit) deliberately left
+a second divergence out: `v-mp4`/`v-mkv` → MPEG-TS remuxes still differed
+one adaptation field later, where the reference carries a PCR and vaco's
+equivalent packet has every adaptation-field flag cleared. Root cause
+traced to `vaco-mux-mpegts::mux::MpegTsMuxer::write_packet`'s PCR "due"
+check: a plain `elapsed_since_last_pcr >= period_ms`, evaluated once per
+PCR-PID packet — which can only fire on whichever frame boundary is the
+*first* to reach or exceed the period, rounding cadence *up* to a multiple
+of the frame interval.
+
+Measured directly (`ffmpeg -bitexact -c copy -f mpegts` on single-video-
+stream fixtures at 15/24/25/30 fps, extracting every PCR's 33-bit base
+field and its deltas): the reference's actual auto-PCR cadence locks to
+*the largest whole multiple of the video frame interval that does not
+exceed 100 ms* — 66.67 ms at 15 fps, 83.33 ms at 24 fps, 80 ms at 25 fps,
+exactly 100 ms at 30 fps (all four deltas dead flat across the whole
+fixture, confirming a fixed rule rather than jitter). vaco's old check, at
+25 fps, instead produced a flat 120 ms cadence — a real bug (undershooting
+its own configured ceiling's *intent*), not merely "coarser but still
+spec-legal" as the crate's docs previously framed it.
+
+Fixed with a one-frame look-ahead: track the PCR PID's own previous-packet
+clock (`last_pcr_track_clock`, distinct from `last_pcr_clock`, which only
+moves on an actual insertion) and ask "would waiting for the *next* packet
+on this PID push us past the period?" — `elapsed_since_last_pcr +
+gap_since_previous_packet > period_ms` — instead of "has the period
+already elapsed?". For constant-frame-rate content this reproduces the
+measured rule exactly (verified: re-running the same four fps probes
+against the fixed binary now matches the reference's cadence and PCR
+packet indices exactly, byte for byte, at all four rates). Still a
+measured, black-box-derived rule (D7: no source read), and it degrades to
+the old flat-ceiling behaviour when a PID's packets are sparse or
+irregular relative to the period, so it does not regress any
+already-passing case.
+
+`crates/format/vaco-mux-mpegts/src/mux.rs`'s `DEFAULT_PCR_PERIOD_MS` doc
+and `options.rs`'s `pcr_period_ms` doc are updated with the measurement;
+the crate's own top-of-file "what is/isn't byte-identical" note is
+corrected too (it previously claimed the PCR due-check was "this crate's
+own reasonable reading," which stopped being true the moment the check
+started reproducing a measured reference cadence).
+
+**Verified two ways.** Direct: `cmp` on `v-mp4 -c copy -f mpegts` shows the
+output now byte-identical to a real `ffmpeg -bitexact` run (14,664 bytes
+either side, matching PCR insertion points at packets 3/28/32/38/40/46/50/
+55/59/65/67/72/77, all 80 ms apart). Suite: re-running
+`vaco-conformance run --tier core` with only this fix reverted
+(`git stash push` on the two touched files, rebuild, run, `stash pop`,
+rebuild) versus with it applied gives a clean before/after on the exact
+same binary otherwise: **262 agreed / 447 diverged → 266 agreed / 443
+diverged**, a net four cases retired, at least two identified precisely
+(`transcode-remux-bitexact/v-mp4/output=mpegts` and
+`.../v-mkv/output=mpegts`, both now `exact-bytes`-identical to the
+reference). These are binary `exact-bytes` comparisons, which finding
+59's line-diff instrumentation does not decompose into multiple field
+hits the way a text `ffprobe` dump does — so "field-level divergences
+retired" is not a meaningful sub-count here; the four whole cases moving
+from diverged to agreed is the real, measured result.
+
+Audio+video sources sharing the same fixed PCR PID
+(`av-mp4/av-mov/av-mkv/av-ts/av-flv` → `output=mpegts`) still diverge —
+expected, since they additionally hit the MPEG-TS interleaving wall below,
+which this fix does nothing for.
+
+### A second confirmed D7 wall: MPEG-TS does not interleave A/V by a rule this crate can derive
+
+Finding 57 listed "MPEG-TS does not interleave A/V packets by timestamp"
+as an open root cause (case 31, `probe-mpegts/mpeg2-ts-with-audio/
+section=packets`). Investigated last pass with two strategies — a
+DTS-sorted single queue (the status quo) and a per-stream interleave
+buffer with a "drain the earliest-deadline stream" policy — and reverted
+the second after it got measurably closer but still diverged once: the
+reference emits a numerically *later* audio packet before a numerically
+*earlier* video one, which rules out a pure timestamp sort as the actual
+rule. Re-confirmed unchanged this pass (`probe-mpegts/mpeg2-ts-with-audio/
+section=packets,writer=default,input=file` diverges identically before
+and after every fix in this finding — same packet, same swap).
+
+This is being named here as a **distinct category from an unfixed bug**,
+per the coordinator's request, alongside the demux ordering issue tracked
+under #632: a rule that cannot be derived from black-box observation
+(every hypothesis this crate can test against the reference's *output*
+still leaves at least one fixture where the reference's actual choice
+isn't predicted by it) is not "nobody got to it yet" — it is a wall D7
+puts up on purpose. Conflating the two miscategorizes effort spent
+correctly declining to guess as effort not yet spent, which would send
+the next person here expecting a normal bug-fixing pass rather than a
+research problem with a hard ceiling (short of relaxing D7 itself, which
+is not this pass's call to make).
+
+### Finding 57's case 35 corrected: the ASF gap is four separate structural holes, not "1 byte differs at offset 16"
+
+Finding 57 recorded case 35 (`transcode-remux-bitexact/v-mov/output=asf`)
+as "1 byte differs at offset 16 (early ASF header field)" — technically
+the first byte `exact-bytes` stops at (offset 16 is the Header Object's
+own total-size field, which necessarily differs the moment anything below
+it differs), but that phrasing describes the *symptom* of the comparator,
+not the size of the gap, and would triage as a one-byte polish item to
+whoever picked it up next. Measured directly (byte-for-byte object
+parsing of `vaco`'s vs a real `ffmpeg -bitexact`'s ASF output on the same
+source): vaco was missing entire header objects, and still is one fix
+later. The real scope, named precisely rather than left as "1 byte":
+
+1. **Codec List Object — missing entirely. Fixed this pass** (see below):
+   vaco wrote 3 header objects (File Properties, Header Extension, Stream
+   Properties), the reference writes 5 (those three plus Codec List and
+   Extended Content Description). vaco's Codec List Object is now present
+   and byte-for-byte identical to the reference's.
+2. **Header Extension Object — missing a nested sub-object.** The
+   reference's Header Extension carries a nested Metadata Object (GUID
+   `C5F8CBEA-5BAF-4877-8467-AA8C44FA4CCA`) with two entries,
+   `AspectRatioX`/`AspectRatioY`; vaco's Header Extension Object has empty
+   extension data (46 bytes) where the reference's is 156. Not attempted
+   this pass — new sub-object plumbing, not a fix to what's already there.
+3. **Stream Properties Object — wrong codec identifier and no extradata.**
+   vaco's video Type-Specific Data names the codec with the ASCII text
+   `H264`; the reference uses the FourCC `avc1` in the same field, and
+   appends the stream's actual SPS/PPS bytes after the fixed-size header —
+   vaco appends nothing (129 vs 175 bytes for this fixture). Not attempted
+   this pass — needs the codec-parameters extradata threaded into this
+   object's builder, plus resolving which of `H264`/`avc1` (or both,
+   codec-dependent) the reference actually uses in general, not just on
+   this one fixture.
+4. **Extended Content Description Object — still entirely missing**, as
+   finding 57's own cluster analysis already scoped: needs
+   `Muxer::set_metadata` plumbing this crate does not have, and is
+   genuinely source-metadata-dependent content, not a fixed structure to
+   reproduce once.
+5. **The Data Object itself is ~33% larger than the reference's** (12,850
+   vs 9,650 bytes on the same fixture) — a packetisation-efficiency gap
+   downstream of the header, not investigated this pass, and not
+   necessarily connected to 1–4 above.
+
+None of 2–5 closes this pass; case 35 stays diverged. Recorded here so the
+next attempt starts from five named, measured holes instead of the
+one-byte impression the original entry left.
+
+### Codec List Object — fixed and verified
+
+`AsfMuxer` now accumulates one Codec List entry per declared stream
+(`Type`, `CodecName` from `codec_id.name()` in UTF-16LE, `CodecInformation`
+from the stream's `codec_tag` when present, falling back to
+`codec::video_fourcc` for video) and writes them behind a
+`Reserved1` GUID measured directly off a real ffmpeg-produced file (no
+network access to check it against the ASF spec PDF's own transcription).
+`write_header`'s object order is corrected to File Properties → Header
+Extension → Stream Properties(×N) → Codec List, matching the reference's
+relative order (Extended Content Description would come last; not
+implemented, per #4 above).
+
+Verified: the emitted Codec List Object is byte-for-byte identical to the
+reference's on a real fixture; a real `ffprobe` reads the muxed file
+without complaint; decoded output round-trips byte-identical to source.
+`cargo test`/`cargo clippy -p vaco-mux-asf --all-targets -D warnings`
+clean, including the crate's existing 2 unit + 8 integration tests and one
+doctest, none of which needed changes.
+
+**Case 35 does not flip to agreed** — items 2, 3 and 5 above are still
+open, and `exact-bytes` fails on the first of them regardless of how
+correct the Codec List Object now is. This is the same "field now matches,
+case does not move to agreed" shape finding 58 named for the
+probe-metadata cluster: a real, verified fix inside a multi-bug case.
+
+`cargo test`/`cargo clippy --all-targets -D warnings` clean on both
+touched crates (`vaco-mux-mpegts`, `vaco-mux-asf`).
