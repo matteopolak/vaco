@@ -1174,6 +1174,7 @@ fn a_converter_turns_gray8_into_the_encoders_declared_format() {
             vaco_pixfmt::PixFmt::Rgb24,
             TB,
             Limits::permissive(),
+            0,
         )
         .unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
@@ -1325,7 +1326,7 @@ fn a_converter_is_a_cheap_passthrough_when_formats_already_agree() {
         .add_decoder(tap, Box::new(GrayDecoder::new(0)))
         .unwrap();
     let converted = spec
-        .add_converter(frames, vaco_pixfmt::PixFmt::Gray8, TB, Limits::permissive())
+        .add_converter(frames, vaco_pixfmt::PixFmt::Gray8, TB, Limits::permissive(), 0)
         .unwrap();
     let encoded = spec
         .add_encoder(converted, Box::new(MockEncoder::new(0)), TB)

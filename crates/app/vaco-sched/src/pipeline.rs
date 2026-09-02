@@ -679,8 +679,8 @@ fn build_work(
             pending_eof: None,
             end_pts: vaco_core::Timestamp::NONE,
         }),
-        KindSpec::Convert { dst_format, limits } => Work::Convert(Box::new(CodecWork {
-            side: ConverterSide::new(dst_format, limits),
+        KindSpec::Convert { dst_format, limits, threads } => Work::Convert(Box::new(CodecWork {
+            side: ConverterSide::new(dst_format, limits, threads),
             stage: Stage::Feeding,
             last_pts: vaco_core::Timestamp::NONE,
             stashed: None,

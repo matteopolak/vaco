@@ -430,7 +430,7 @@ fn packets_reach_the_sink_and_are_counted() {
         .map(|o| crate::exec::resolve_output(&cli, o, &files, &[], &mut used_complex).unwrap())
         .collect();
     let report =
-        crate::exec::run_pipeline(inputs, &outputs, &files, &cli.complex_filters, true, 1)
+        crate::exec::run_pipeline(inputs, &outputs, &files, &cli.complex_filters, true, 1, 1)
             .unwrap();
 
     let tally = &report.tallies[0];

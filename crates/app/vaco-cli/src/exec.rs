@@ -1261,6 +1261,7 @@ pub fn run_pipeline(
     complex_filters: &[String],
     auto_conversion_filters: bool,
     threads: usize,
+    filter_threads: usize,
 ) -> Result<RunSpec, Diagnostic> {
     if outputs.iter().all(|o| o.dropped) {
         // Nothing to write anywhere, so there is nothing to read either. The
@@ -1625,7 +1626,13 @@ pub fn run_pipeline(
                                 let frames = match target {
                                     Some(t) if Some(t) != source_format => {
                                         out_video_format = Some(t);
-                                        spec.add_converter(frames, t, time_base, limits.clone())
+                                        spec.add_converter(
+                                            frames,
+                                            t,
+                                            time_base,
+                                            limits.clone(),
+                                            i32::try_from(filter_threads).unwrap_or(i32::MAX),
+                                        )
                                             .map_err(|e| {
                                                 internal_from(
                                                     "could not attach a format converter",

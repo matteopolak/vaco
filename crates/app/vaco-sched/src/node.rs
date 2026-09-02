@@ -404,6 +404,12 @@ impl Side for EncoderSide {
 pub(crate) struct ConverterSide {
     dst_format: PixFmt,
     limits: Limits,
+    /// D2 (`planning/PERF-PROGRAMME.md` track D): `-filter_threads`,
+    /// resolved by the CLI and threaded down through
+    /// `PipelineSpec::add_converter` -- `vaco-scale`'s own library default
+    /// stays serial (`ScaleOptions::default()`'s `threads: 0`); only the
+    /// CLI-driven construction site changes, per that item's own framing.
+    threads: i32,
     scaler: Option<Scaler>,
     budget: Budget,
     pending: Option<Frame>,
@@ -419,11 +425,12 @@ impl std::fmt::Debug for ConverterSide {
 }
 
 impl ConverterSide {
-    pub(crate) fn new(dst_format: PixFmt, limits: Limits) -> Self {
+    pub(crate) fn new(dst_format: PixFmt, limits: Limits, threads: i32) -> Self {
         Self {
             dst_format,
             budget: Budget::new(limits.clone()),
             limits,
+            threads,
             scaler: None,
             pending: None,
             eof: false,
@@ -463,7 +470,10 @@ impl ConverterSide {
             let s = Scaler::with_limits(
                 &src_spec,
                 &dst_spec,
-                &ScaleOptions::default(),
+                &ScaleOptions {
+                    threads: self.threads,
+                    ..ScaleOptions::default()
+                },
                 self.limits.clone(),
             )?;
             self.scaler.insert(s)

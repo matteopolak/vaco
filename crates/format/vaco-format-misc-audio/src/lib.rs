@@ -18,4 +18,5 @@ pub mod sbc;
 pub mod tta;
 pub mod vag;
 pub mod wavpack;
+pub mod xa;
 pub mod xwma;

@@ -142,6 +142,14 @@ pub struct Cli {
     /// reference's own wording for that value rather than its "auto"
     /// behaviour, since nothing here auto-detects.
     pub threads: Option<usize>,
+    /// `-filter_threads N` (D2, `planning/PERF-PROGRAMME.md` track D). `None`
+    /// when unstated, which resolves to [`default_thread_count`] via
+    /// [`Cli::filter_thread_count`] -- reusing `-threads`' own small-fixed-
+    /// count reasoning rather than the reference's raw-core-count "auto",
+    /// for the same determinism reason. Declared `ValueKind::Str` in the
+    /// option table (matching the reference's own declaration for it), so
+    /// this is parsed with [`leading_int`] rather than [`ParsedOption::number`].
+    pub filter_threads: Option<usize>,
 }
 
 impl Cli {
@@ -159,6 +167,19 @@ impl Cli {
     #[must_use]
     pub fn thread_count(&self) -> usize {
         self.threads.unwrap_or_else(default_thread_count)
+    }
+
+    /// The filter/scale thread count a run actually uses: `-filter_threads
+    /// N` if stated, else [`default_thread_count`] (D2) -- see
+    /// [`Cli::filter_threads`]'s own doc for why this is the same default
+    /// derivation `-threads` uses rather than the reference's raw core
+    /// count. `vaco_scale::ScaleOptions::threads` (and every other consumer
+    /// this reaches) treats `0` and `1` identically as "run on the calling
+    /// thread", so there is no separate "0 means one" special case to make
+    /// here the way [`Cli::thread_count`] has for decode.
+    #[must_use]
+    pub fn filter_thread_count(&self) -> usize {
+        self.filter_threads.unwrap_or_else(default_thread_count)
     }
 }
 
@@ -254,6 +275,17 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
             .transpose()?
             .flatten()
             .map(|n| if n < 1.0 { 1 } else { n as usize }),
+        // `filter_threads` is declared `ValueKind::Str` in the option table
+        // (matching the reference's own declaration), so `ParsedOption::
+        // number` -- gated to `Int`/`Int64`/`Float`/`Expr` -- always returns
+        // `Ok(None)` for it; `leading_int` (the reference's own lenient
+        // `strtol`-style parse for a numeric-looking string option) is the
+        // right tool here, not a `split_error` on the first non-digit.
+        filter_threads: line
+            .last_global("filter_threads")
+            .map(value_str)
+            .transpose()?
+            .map(|s| leading_int(&s).max(0) as usize),
         ..Cli::default()
     };
 

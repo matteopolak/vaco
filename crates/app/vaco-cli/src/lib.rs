@@ -331,6 +331,7 @@ where
         &cli.complex_filters,
         auto_conversion_filters,
         cli.thread_count(),
+        cli.filter_thread_count(),
     )?;
 
     // `Stream mapping:` is the reference's own wording and layout, and it is

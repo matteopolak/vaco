@@ -153,6 +153,9 @@ pub(crate) enum KindSpec {
     Convert {
         dst_format: PixFmt,
         limits: Limits,
+        /// D2: `vaco_scale::ScaleOptions::threads` for the [`crate::node::ConverterSide`]
+        /// this builds.
+        threads: i32,
     },
     ConvertAudio {
         dst_format: SampleFmt,
@@ -491,6 +494,11 @@ impl PipelineSpec {
     /// wiring, and it needs no width or height up front — the node reads the
     /// frame's own dimensions and rebuilds its plan if they change.
     ///
+    /// `threads` is `vaco_scale::ScaleOptions::threads` for the
+    /// [`vaco_scale::Scaler`] this converter builds (D2,
+    /// `planning/PERF-PROGRAMME.md` track D) -- `0`/`1` both mean "run on
+    /// the caller's thread", matching that crate's own convention.
+    ///
     /// # Errors
     ///
     /// [`Error::InvalidData`] if the tap does not exist.
@@ -500,11 +508,12 @@ impl PipelineSpec {
         dst_format: PixFmt,
         time_base: Rational,
         limits: Limits,
+        threads: i32,
     ) -> Result<FrameTap> {
         self.out_of(from.into())?;
         let id = self.push(NodeSpec {
             label: format!("convert {}:{} -> {}", from.node, from.port, dst_format.name()),
-            kind: KindSpec::Convert { dst_format, limits },
+            kind: KindSpec::Convert { dst_format, limits, threads },
             inputs: vec![(from.into(), time_base)],
             outputs: vec![(Flow::Frames, time_base)],
         });

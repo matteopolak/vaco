@@ -176,6 +176,14 @@ extensions = "vag"
 
 [[component]]
 kind       = "demuxer"
+name       = "xa"
+long_name  = "Maxis XA"
+feature    = "demux-xa"
+ctor       = "vaco_format_misc_audio::xa::DEMUXER"
+extensions = "xa"
+
+[[component]]
+kind       = "demuxer"
 name       = "xwma"
 long_name  = "Microsoft xWMA"
 feature    = "demux-xwma"
