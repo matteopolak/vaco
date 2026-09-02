@@ -38,6 +38,20 @@ A codec whose `CodecParameters.extradata` is set gets a sequence-header tag
 written at timestamp `0`, immediately after `onMetaData` and before any real
 frame — the order every FLV reader relies on.
 
+A stream whose record is not known yet is the exception, and it is not
+hypothetical: an H.264/HEVC encoder keeps its parameter sets in its packets,
+so this crate's `check_bitstream` asks for `extract_extradata` and the answer
+arrives with the first packet, after `write_header` has run. `write_packet`
+writes that stream's sequence header then — still at timestamp `0`, still
+ahead of its own first frame.
+
+Either way the bytes go through `vaco_format_nalu::length_prefixed_config`
+first, which returns the `AVCDecoderConfigurationRecord` to write *and*
+whether every tag still needs `annexb_to_length_prefixed`. `AVCVIDEOPACKET`
+carries length-prefixed NAL units, so a stream that arrived Annex-B needs
+both; deciding them separately is what put `00 00 01 67 ...` in the sequence
+header of a `-c copy` from MPEG-TS.
+
 ### `onMetaData` and the two things that get patched
 
 `onMetaData` is written at `write_header` time with `duration` and

@@ -131,6 +131,18 @@ container's packaging convention for the same codec is a bitstream-filter
 problem, not a muxer one, and is out of scope here as it would be in the
 reference too.
 
+**`V_MPEG4/ISO/AVC` and `V_MPEGH/ISO/HEVC` are the other exception**, and for
+the opposite reason: their `CodecPrivate` is the ISO/IEC 14496-15 record and
+their frames are length-prefixed, but an H.264/HEVC stream reaching this
+crate from an encoder, or copied from MPEG-TS, AVI or raw Annex B, has its
+parameter sets in band and no record at all. `flush_header_bytes` hands both
+codecs' extradata to `vaco_format_nalu::length_prefixed_config`, which
+returns the `avcC`/`hvcC` to write *and* whether `write_block` must reframe
+every frame — one call, both halves, so the two cannot be decided apart.
+This container declares no `GLOBALHEADER`, so unlike MP4 it also has to ask
+for `extract_extradata` from its own `check_bitstream`; without that, an
+encoded HEVC stream was refused outright at header flush.
+
 **`V_VP8`/`V_VP9` are the measured exception, and `codec::never_carries_
 extradata_str` gates the write site on it.** VP8/VP9 are self-contained
 bitstreams that no real encoder or `WebM` muxer ever gives a `CodecPrivate`

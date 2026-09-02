@@ -187,6 +187,29 @@ Audio: AAC (`esds`/`mp4a`), Opus (`dOps`/`Opus`), FLAC (`dfLa`/`fLaC`), MP3
 `docs/format/vaco-format-isom.md`'s *Writers* section for why that boundary
 exists (D14.1).
 
+### H.264/HEVC: the record and the sample framing are one decision
+
+`avc1`/`hev1` samples are length-prefixed (ISO/IEC 14496-15 §5.3.3), and the
+`avcC`/`hvcC` beside them states the prefix width. An H.264 or HEVC stream
+does not always arrive that way: an encoder emits an Annex-B elementary
+stream, and so does a `-c copy` from MPEG-TS, AVI or raw Annex B.
+
+`mux::resolve_nal_config` asks `vaco_format_nalu::length_prefixed_config`
+once per track and gets *both* halves back — the record to store, and
+whether `write_packet` must still run `annexb_to_length_prefixed` over every
+sample. It is one call returning both deliberately: writing one form's
+record beside the other form's samples is exactly what this crate did for
+months, and nothing in the file says the two disagree. ffmpeg only complains
+about half of it (`Invalid NAL unit size (268435456 > 41745)` when the
+record is real and the samples are not); when the *record* is the wrong one
+it silently falls back to parsing the samples as Annex-B, so the file reads
+cleanly and is still malformed for anything else.
+
+The discriminator is `configurationVersion`: a real record opens with `1`,
+an Annex-B buffer with a start code, whose first byte is `0`. That test
+lives in `vaco-format-nalu` and nowhere else, so this crate, `vaco-mux-
+matroska` and `vaco-mux-flv` cannot disagree about it.
+
 ### Brand variants
 
 Not specified anywhere reachable — measured, `ffmpeg 8.1`,

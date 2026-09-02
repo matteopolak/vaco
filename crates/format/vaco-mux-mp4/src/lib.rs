@@ -27,10 +27,12 @@
 //! Video: H.264 (`avcC`), HEVC (`hvcC`), AV1 (`av1C`), VP8/VP9 (`vpcC`), MJPEG.
 //! Audio: AAC (`esds`), Opus (`dOps`), FLAC (`dfLa`), MP3 (no config box, per
 //! convention). `CodecParameters::extradata` is used **verbatim** as the
-//! decoder configuration record for every one of these — this crate never
-//! parses a bitstream to build one (D14.1): a caller whose stream has none
-//! gets `check_bitstream`'s `extract_extradata` request, same as any other
-//! `GLOBALHEADER` container.
+//! decoder configuration record for every one of these except H.264 and
+//! HEVC, where an Annex-B-shaped buffer is first rewritten into a real
+//! `avcC`/`hvcC` (`mux::resolve_nal_config`, which also decides whether the
+//! samples need reframing — the two are one decision). A caller whose stream
+//! has no extradata at all gets `check_bitstream`'s `extract_extradata`
+//! request, same as any other `GLOBALHEADER` container.
 //!
 //! Progressive muxing: full sample tables (`stsd`/`stts`/`ctts`/`stsc`/
 //! `stsz`/`stco`|`co64`/`stss`), chunked interleave, trailer rewrite,
