@@ -6063,3 +6063,52 @@ this change. Cleared with `git reset -q HEAD -- README.md` (index-only,
 confirmed the working tree was untouched before and after) rather than
 committing it or guessing whether it was stale. The check caught exactly
 what it was added to catch.
+
+## 67. Parked and closed before switching to the conformance-harness priority: mpeg1/mpeg2's `coded_width`/`coded_height`/`has_b_frames` are fixed reference constants, not derived from content
+
+Closed out the mpeg2-ts/ps cluster findings 65/66 already opened, since
+the coordinator's next priority (a decode/sample comparison layer for the
+conformance suite) outranked continuing the field-name ranking, and this
+was quick to finish rather than leave half-done.
+
+Measured against real ffmpeg 9.0.1 across four containers (raw `.m2v`,
+Matroska, MPEG-PS, MPEG-TS) and two profiles (Simple, which forbids
+B-pictures entirely, and Main): `coded_width`/`coded_height` are `0`
+unconditionally and `has_b_frames` is `1` unconditionally -- confirmed via
+`ffprobe -show_frames` that the Main-profile sample actually contains
+zero `B` `pict_type` pictures, so `has_b_frames=1` is not derived from
+this stream's real content either. Both are a fixed report from the
+reference's own probe path for this codec.
+
+Caught the interaction before shipping, the same way finding 63's
+`FieldOrder` regression was caught: finding 65's `sample_aspect_ratio`
+computation reads `coded_width`/`coded_height`, and zeroing those two
+fields would have silently broken every mpeg1/mpeg2 SAR computation.
+Switched that one call site to the real `width`/`height` this crate
+already computes, confirmed real ffmpeg's own SAR values only make sense
+computed from the real coded size, and verified `sample_aspect_ratio`
+still correct post-fix.
+
+Verified with a rebuilt vaco-probe against real ffprobe on two fixtures.
+Full `vaco-conformance --tier core` re-run: 288 agreed / 421 diverged,
+unchanged at the case level -- the three `mpeg2-ps`/`mpeg2-ts`/
+`mpeg2-ts-with-audio` case-groups' last remaining divergence is
+`mime_codec_string` (the MP2-in-MPEG-PS cluster already flagged as
+task_54ecd51f, not touched here). Direct re-measurement confirms
+`coded_width`/`coded_height`/`has_b_frames` now agree on both sides for
+all three. Commit `f4fe4d4`.
+
+`cargo test`/`cargo clippy --all-targets -D warnings` clean; `cargo build
+--workspace` clean.
+
+Ranking work pauses here. Switching to the conformance-harness priority
+the coordinator raised: the suite currently compares only probe metadata
+and remux structure, never decoded pixels/samples, so a completely broken
+decoder (measured tonight: FFV1 wrong on 99.6% of bytes, MP3/AAC offset
+by ~1300/~1180 samples, AC-3 wrong on 99.5% of samples, nine of thirteen
+image formats reporting `0x0`/`pix_fmt=unknown`) stayed green through
+every one of 709 cases. Not fixing those codecs (other agents are); the
+task is declaring decode/sample-comparison cases against the existing
+`Compare::RawExact`/`RawTolerant` machinery, driven off the generated
+codec registry, and deciding what to do with the four still-stub compare
+modes (`ContainerStructure`, `FrameHash`, `CrossDecode`, `ThreeWay`).
