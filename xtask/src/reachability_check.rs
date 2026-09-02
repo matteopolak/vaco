@@ -2156,13 +2156,266 @@ fn check_unconsumed_options() -> Result<Vec<String>, String> {
     Ok(violations)
 }
 
+// ------------------------------------------------------------------ rule K
+
+/// Every `vaco-bsf-*` filter this tree has, and why nothing's `check_bitstream`
+/// requests it automatically.
+///
+/// Found by the bitstream-filter reachability sweep the `aac_adtstoasc`
+/// incident (a real, correct filter fixing a live conformance failure once
+/// requested — see `crates/format/vaco-mux-matroska/src/mux.rs`) motivated: if
+/// one filter could sit complete and orphaned, the odds it was the only one
+/// were poor. It was not the only one, but most of the rest turned out to
+/// belong here rather than needing the same fix — this is where that
+/// distinction is written down so it does not have to be re-derived.
+///
+/// Three real shapes hide behind "not requested by any muxer's
+/// `check_bitstream`", and only the first is a bug:
+///
+/// - **Orphaned.** Exists, correct, requested by nothing, and something in
+///   this tree needs it. `aac_adtstoasc` was this; fixed, not listed here.
+/// - **Measured manual-only.** Every `*_metadata` rewriter (`h264_metadata`,
+///   `hevc_metadata`, `av1_metadata`, `vp9_metadata`, `mpeg2_metadata`,
+///   `prores_metadata`, `opus_metadata`) is an *identity transform* by
+///   default in real ffmpeg — every option defaults to "leave the bitstream
+///   alone" (each filter's own module doc measures this directly) — and this
+///   tree cannot even pass per-instance bsf options yet
+///   (`planning/INTERFACE-GAPS.md` gap 12), so auto-inserting one today would
+///   do nothing every single call. `vaco-bsf-generic`'s debug/utility family
+///   (`chomp`, `dump_extra`, `filter_units`, `showinfo`, `setts`, `null`,
+///   `remove_extra`, `trace_headers`, `noise`) is the same shape real ffmpeg
+///   ships them as: inspection and stream-editing tools a person reaches for
+///   by name, never something a muxer would ask for on its own behalf.
+///   `pcm_rechunk` is real ffmpeg's own manual re-slicer, not a muxer
+///   requirement — the one place this tree needed fixed-size PCM chunking
+///   (MP4's 1024-sample grouping) was solved directly in the demuxer instead.
+///   `vp9_superframe`/`vp9_superframe_split` were *tested* as an orphaned bug
+///   exactly like `aac_adtstoasc` and reverted: measured directly against
+///   real ffmpeg 9.0.1 (`vp9_altref_invisible_frames.ivf`, remuxed through a
+///   real MP4 and on into Matroska with `-c copy`, 10 of 125 packets
+///   confirmed carrying a genuine superframe index), packet sizes come out
+///   identical on both sides — no split happens, because a VP9 decoder reads
+///   the superframe index itself regardless of what the container did to
+///   deliver the bytes. `av1_frame_split`/`av1_frame_merge` are the AV1
+///   analogue, measured the same way in their own module docs against real
+///   ffmpeg's `-bsf:v` directly (not against an in-tree muxer, since none in
+///   this tree currently produces or consumes multi-frame-per-packet AV1).
+/// - **Blocked on a bigger gap.** `text2movsub`/`mov2textsub` wrap and unwrap
+///   MP4's `mov_text` sample format, but no muxer or demuxer in this tree
+///   supports an MP4 subtitle track at all yet — there is no container-level
+///   feature for either direction of this filter to hook into, automatic or
+///   manual, until that lands.
+///
+/// None of the second or third group has a *manual* path either: this tree
+/// has no `-bsf` CLI flag (unlike real ffmpeg's `-bsf:v`/`-bsf:a`/`-bsf:s`) —
+/// only `-bsfs`/`-h bsf=<name>` listing/introspection exist. A filter
+/// recorded here as "manual-only" is therefore unreachable in the shipped
+/// binary today exactly like an orphaned one would be; the distinction this
+/// rule tracks is *intent* (should something request this, automatically or
+/// by a CLI flag that does not exist yet) so the next person does not have to
+/// re-derive it, not present-day reachability, which rule K already tests
+/// directly.
+const ALLOW_MANUAL_ONLY_BSF: &[(&str, &str)] = &[
+    (
+        "opus_metadata",
+        "identity transform by default (own module doc, measured against \
+         real ffmpeg); this tree cannot pass per-instance bsf options yet \
+         (INTERFACE-GAPS.md gap 12), so there is nothing for an automatic \
+         insertion to do.",
+    ),
+    (
+        "av1_metadata",
+        "same reasoning as opus_metadata above: identity by default, gap 12 \
+         blocks any option ever reaching it.",
+    ),
+    (
+        "h264_metadata",
+        "same reasoning as opus_metadata above: identity by default, gap 12 \
+         blocks any option ever reaching it.",
+    ),
+    (
+        "hevc_metadata",
+        "same reasoning as opus_metadata above: identity by default, gap 12 \
+         blocks any option ever reaching it.",
+    ),
+    (
+        "mpeg2_metadata",
+        "same reasoning as opus_metadata above: identity by default, gap 12 \
+         blocks any option ever reaching it.",
+    ),
+    (
+        "prores_metadata",
+        "same reasoning as opus_metadata above: identity by default, gap 12 \
+         blocks any option ever reaching it.",
+    ),
+    (
+        "vp9_metadata",
+        "same reasoning as opus_metadata above: identity by default, gap 12 \
+         blocks any option ever reaching it.",
+    ),
+    (
+        "pcm_rechunk",
+        "real ffmpeg's own manual re-slicer, not something a muxer requires; \
+         the one in-tree need for fixed-size PCM chunking (MP4's 1024-sample \
+         grouping) was solved directly in the demuxer, not through this bsf.",
+    ),
+    (
+        "chomp",
+        "vaco-bsf-generic's debug/utility family, the same shape real ffmpeg \
+         ships them as: a person reaches for these by name, no muxer ever \
+         asks for one on its own behalf.",
+    ),
+    ("dump_extra", "same reasoning as chomp above."),
+    ("filter_units", "same reasoning as chomp above."),
+    ("showinfo", "same reasoning as chomp above."),
+    ("setts", "same reasoning as chomp above."),
+    ("null", "same reasoning as chomp above."),
+    ("remove_extra", "same reasoning as chomp above."),
+    ("trace_headers", "same reasoning as chomp above."),
+    ("noise", "same reasoning as chomp above."),
+    (
+        "vp9_superframe",
+        "tested as an orphaned bug and reverted: measured directly against \
+         real ffmpeg 9.0.1 (vp9_altref_invisible_frames.ivf through a real \
+         MP4 and on into Matroska with `-c copy`, 10 of 125 packets confirmed \
+         carrying a genuine superframe index) shows identical packet sizes on \
+         both sides -- no merge happens either. See \
+         crates/format/vaco-mux-matroska/src/mux.rs's check_bitstream doc.",
+    ),
+    (
+        "vp9_superframe_split",
+        "tested as an orphaned bug and reverted; see vp9_superframe's entry \
+         above for the measurement (both filters share it, split and merge \
+         being inverses).",
+    ),
+    (
+        "av1_frame_split",
+        "measured manual-only in its own module doc, against real ffmpeg's \
+         `-bsf:v` directly rather than any in-tree muxer -- no muxer or \
+         demuxer in this tree currently produces or consumes \
+         multi-frame-per-packet AV1 for an automatic insertion to fix.",
+    ),
+    (
+        "av1_frame_merge",
+        "same reasoning as av1_frame_split above (its own module doc measures \
+         the inverse direction the same way).",
+    ),
+    (
+        "text2movsub",
+        "blocked on a bigger gap, not manual-only by choice: no muxer or \
+         demuxer in this tree supports an MP4 subtitle track at all yet, so \
+         there is no container-level feature for this filter to wrap output \
+         for, automatic or manual, until one exists.",
+    ),
+    (
+        "mov2textsub",
+        "same gap as text2movsub above (the unwrap direction of the same \
+         missing MP4-subtitle-track support).",
+    ),
+];
+
+/// A `BitstreamAction::Insert { name: "..." }` (or a `match` arm feeding one)
+/// anywhere in this tree's source is a real request for that filter by name —
+/// this collects every string literal that appears within such a call's own
+/// braces, which is a deliberate over-approximation for a `match`-typed name
+/// (`raw.rs`'s own `check_bitstream` picks `h264_mp4toannexb` or
+/// `hevc_mp4toannexb` depending on `codec_id`; both literals sit inside the
+/// same `Insert { ... }` span and both are real, reachable requests, just not
+/// on the same call).
+fn requested_bsf_names(text: &str) -> Set<String> {
+    let mut out = Set::new();
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while let Some(rel) = text[i..].find("BitstreamAction::Insert") {
+        let start = i + rel;
+        let Some(brace_rel) = text[start..].find('{') else {
+            break;
+        };
+        let brace = start + brace_rel;
+        let mut depth = 0i32;
+        let mut end = brace;
+        for (k, &b) in bytes.iter().enumerate().skip(brace) {
+            match b {
+                b'{' => depth += 1,
+                b'}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = k;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        if let Some(span) = text.get(brace..=end) {
+            let mut rest = span;
+            while let Some(q1) = rest.find('"') {
+                let Some(q2) = rest[q1 + 1..].find('"') else {
+                    break;
+                };
+                out.insert(rest[q1 + 1..q1 + 1 + q2].to_owned());
+                rest = &rest[q1 + 1 + q2 + 1..];
+            }
+        }
+        i = end.max(start + 1);
+    }
+    out
+}
+
+/// A registered `bitstream_filter` component whose `name` no
+/// `BitstreamAction::Insert` anywhere in this tree ever requests, and is not
+/// in [`ALLOW_MANUAL_ONLY_BSF`] with a reason on record.
+///
+/// This is `check_bsf_chaining`'s (rule C) question asked one layer further
+/// on: rule C asks whether `Bsfs::open` can construct a filter *by name*
+/// (registry consistency); this asks whether anything in the tree ever
+/// *supplies* that name to open it (reachability). Neither implies the
+/// other — `aac_adtstoasc` passed rule C the whole time.
+fn check_bsf_reachable(rows: &[Row]) -> Result<Vec<String>, String> {
+    let mut requested: Set<String> = Set::new();
+    for (_area, _name, path) in crates() {
+        for file in rust_files(&path.join("src")) {
+            let Ok(text) = std::fs::read_to_string(&file) else {
+                continue;
+            };
+            let masked = mask_test_code(&text);
+            requested.extend(requested_bsf_names(&masked));
+        }
+    }
+
+    let mut violations = Vec::new();
+    for r in rows.iter().filter(|r| r.kind == "bitstream_filter") {
+        for name in &r.names {
+            if requested.contains(name) {
+                continue;
+            }
+            if ALLOW_MANUAL_ONLY_BSF.iter().any(|(n, _)| n == name) {
+                continue;
+            }
+            violations.push(format!(
+                "  {name} ({}) is a registered bitstream_filter component that \
+                 no `BitstreamAction::Insert` anywhere in this tree ever \
+                 requests, and it is not in ALLOW_MANUAL_ONLY_BSF with a \
+                 reason on record. Either wire it into some muxer's \
+                 `check_bitstream` (the aac_adtstoasc shape), or add it to \
+                 ALLOW_MANUAL_ONLY_BSF explaining why nothing should — \
+                 measured against real ffmpeg first, the way vp9_superframe's \
+                 own entry there had to be corrected after the fact.",
+                r.krate
+            ));
+        }
+    }
+    violations.sort();
+    Ok(violations)
+}
+
 // ------------------------------------------------------------------- driver
 
 pub fn run(_check: bool) -> Task {
     let rows = all_rows()?;
     let variant_to_name = codec_name_table()?;
 
-    let sections: [(&str, Vec<String>); 11] = [
+    let sections: [(&str, Vec<String>); 12] = [
         (
             "A. crate with no fragment and no in-workspace caller",
             check_orphan_crates()?,
@@ -2204,6 +2457,10 @@ pub fn run(_check: bool) -> Task {
             "J. demuxer-producible codec with no registered decoder",
             check_decoder_exists_for_produced_codecs(&rows, &variant_to_name),
         ),
+        (
+            "K. registered bitstream filter no BitstreamAction::Insert ever requests",
+            check_bsf_reachable(&rows)?,
+        ),
     ];
 
     let total: usize = sections.iter().map(|(_, v)| v.len()).sum();
@@ -2228,7 +2485,8 @@ pub fn run(_check: bool) -> Task {
         + ALLOW_UNDEMUXABLE_DECODER.len()
         + ALLOW_UNMUXABLE_ENCODER.len()
         + ALLOW_NAME_MISMATCH.len()
-        + ALLOW_UNCONSUMED_OPTION.len();
+        + ALLOW_UNCONSUMED_OPTION.len()
+        + ALLOW_MANUAL_ONLY_BSF.len();
     println!(
         "reachability-check: clean — {} components across {} fragments checked \
          by {} rules, {allowlisted} deliberate gap(s) on record",
@@ -2438,6 +2696,63 @@ mod tests {
         assert!(
             violations.is_empty(),
             "rule I found unconsumed options with no allowlist entry:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn every_manual_only_bsf_allowlist_row_has_a_real_reason() {
+        for (name, why) in ALLOW_MANUAL_ONLY_BSF {
+            assert!(why.len() > 20, "{name} needs a real reason, got {why:?}");
+        }
+    }
+
+    #[test]
+    fn manual_only_bsf_allowlist_has_no_duplicate_names() {
+        let mut names: Vec<&str> = ALLOW_MANUAL_ONLY_BSF.iter().map(|(n, _)| *n).collect();
+        let before = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(before, names.len(), "a duplicate name hides its sibling's reason");
+    }
+
+    #[test]
+    fn requested_bsf_names_finds_a_simple_request() {
+        let text = "Ok(BitstreamAction::Insert {\n    name: \"aac_adtstoasc\",\n})\n";
+        let names = requested_bsf_names(text);
+        assert!(names.contains("aac_adtstoasc"));
+    }
+
+    #[test]
+    fn requested_bsf_names_finds_every_literal_in_a_match_arm() {
+        // raw.rs/asf/mux.rs/mpegts/mux.rs's own shape: the requested name
+        // depends on `codec_id`, so both literals sit inside one `Insert {
+        // ... }` span. Over-approximating (both count as "requested") is the
+        // right call here, not a bug in the scan -- see this function's own
+        // doc.
+        let text = "Ok(BitstreamAction::Insert {\n    name: match params.codec_id {\n        Some(CodecId::Hevc) => \"hevc_mp4toannexb\",\n        _ => \"h264_mp4toannexb\",\n    },\n})\n";
+        let names = requested_bsf_names(text);
+        assert!(names.contains("hevc_mp4toannexb"));
+        assert!(names.contains("h264_mp4toannexb"));
+    }
+
+    #[test]
+    fn requested_bsf_names_ignores_a_bare_mention_outside_any_insert_braces() {
+        let text = "// aac_adtstoasc used to be unrequested\n";
+        assert!(requested_bsf_names(text).is_empty());
+    }
+
+    #[test]
+    fn check_bsf_reachable_is_clean_against_the_real_tree() {
+        let rows = all_rows().expect("fragments parse");
+        let violations = check_bsf_reachable(&rows).expect("scan runs");
+        // Same shape as check_unconsumed_options_is_clean_against_the_real_tree
+        // above: not a specific count, just clean against today's
+        // ALLOW_MANUAL_ONLY_BSF.
+        assert!(
+            violations.is_empty(),
+            "rule K found a registered bitstream filter with no requester and \
+             no allowlist entry:\n{}",
             violations.join("\n")
         );
     }
