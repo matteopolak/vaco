@@ -1439,7 +1439,34 @@ fn decode_sub_mb_pred_cavlc(
             // that function's own comment on the same pass, and
             // `resolve_c`'s doc for clause 6.4.11.7's "not yet decoded"
             // rule, which is positional and lives there.
-            let top_bottom = num_sub == 2 && code == 1;
+            //
+            // The top/bottom-vs-left/right test itself is *not* the same
+            // constant across P and B: Table 7-14 (P) numbers its two
+            // `num_sub == 2` rows `1 = P_L0_8x4` (top/bottom), `2 =
+            // P_L0_4x8` (left/right), but Table 7-15 (B) numbers its three
+            // *pairs* `4/5`, `6/7`, `8/9` (L0/L1/Bi), each pair's *even*
+            // code the `_8x4` (top/bottom) row and its *odd* code the
+            // `_4x8` (left/right) one -- `code == 1` is `P_L0_8x4` alone
+            // and silently false for every B code, which mapped every
+            // `B_L*_8x4` sub-macroblock to a left/right split instead of
+            // its real top/bottom one (`B_L*_4x8` still came out right,
+            // since "not top/bottom" is the same fallback either way).
+            // That flips which of a quadrant's own two sub-partitions is
+            // `A`/`B`'s own later neighbour for clause 8.4.1.3's mv
+            // prediction and clause 9.3.3.1.1.7's `mvd` context sum, so a
+            // `B_L*_8x4` sub-macroblock decoded a wrong `ctxIdxInc` (and
+            // thus a wrong `mvd` value) for its own second sub-partition
+            // onward -- a CABAC-engine desync only `_8x4` (not `_4x8`)
+            // sub-macroblocks in a B slice's own `B_8x8` can trigger,
+            // exactly the shape CANL4_SVA_B and HCAFR1_HHI's own B_8x8
+            // macroblocks hit and stock `libx264` B-frame output (which
+            // this crate's own two-population check never exercises with
+            // a `B_8x8` sub-macroblock smaller than 8x8 at all) does not.
+            let top_bottom = match num_sub {
+                2 if is_b => code % 2 == 0,
+                2 => code == 1,
+                _ => false,
+            };
             let sub_positions: [(u32, u32); 4] = match num_sub {
                 1 => [(x0, y0); 4],
                 2 if top_bottom => [(x0, y0), (x0, y1), (x0, y0), (x0, y1)],
@@ -4906,7 +4933,26 @@ fn decode_sub_mb_pred_cabac(
             // `classify_sub_mb_type` collapses for the CAVLC bit-
             // consumption path -- `code` is read back here instead of
             // trusting `num_sub` alone.
-            let top_bottom = num_sub == 2 && code == 1;
+            //
+            // The top/bottom-vs-left/right test itself is *not* the same
+            // constant across P and B -- see `decode_sub_mb_pred_cavlc`'s
+            // own identical comment for the full account (Table 7-14's `1
+            // = P_L0_8x4` vs Table 7-15's three even/odd `_8x4`/`_4x8`
+            // pairs, `4/5`, `6/7`, `8/9`): `code == 1` alone is `P_L0_8x4`
+            // only and silently false for every B code, mapping every
+            // `B_L*_8x4` sub-macroblock to `B_L*_4x8`'s own left/right
+            // split -- CANL4_SVA_B and HCAFR1_HHI's own "CABAC engine
+            // reported malformed input" failure, not a pixel drift, is
+            // this: a wrong `A`/`B` neighbour for the sub-macroblock's own
+            // second sub-partition means a wrong clause 9.3.3.1.1.7
+            // `mvd` context sum, and this crate's own two-population check
+            // never exercises `B_8x8` with a sub-partition smaller than
+            // 8x8 at all against stock `libx264` output.
+            let top_bottom = match num_sub {
+                2 if is_b => code % 2 == 0,
+                2 => code == 1,
+                _ => false,
+            };
             let sub_positions: [(u32, u32); 4] = match num_sub {
                 1 => [(x0, y0); 4],
                 2 if top_bottom => [(x0, y0), (x0, y1), (x0, y0), (x0, y1)],
