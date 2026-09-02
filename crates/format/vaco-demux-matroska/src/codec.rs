@@ -31,6 +31,7 @@
 
 use vaco_codec_core::CodecId;
 use vaco_core::MediaType;
+use vaco_sampfmt::SampleFmt;
 
 /// What a Matroska `CodecID` resolves to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -230,6 +231,73 @@ pub fn map(codec_id: &str) -> Option<Mapping> {
     }
 }
 
+/// Refine `A_PCM/*`'s generic [`CodecId::Pcm`] into the exact
+/// `CodecId::Pcm*` variant a decoder can actually be found for, from the
+/// `CodecID` string's family (`INT/LIT`, `INT/BIG`, `FLOAT/IEEE`) and the
+/// `Audio.BitDepth` element -- `CodecID` alone states signedness and
+/// endianness but never depth, and `BitDepth` alone states depth but not
+/// endianness, so neither is sufficient on its own.
+///
+/// [`CodecId::Pcm`] itself has no registered decoder anywhere in this tree
+/// (only a `PcmFormat` fallback `vaco-codec-pcm::resolve` documents as
+/// unreachable in practice) -- so every real `A_PCM/*` track was landing on
+/// a `CodecId` selection had never actually been able to decode, reported
+/// `codec_name=pcm`/`sample_fmt=unknown` in `-show_streams`, and failed
+/// outright ("this build has no decoder for the input codec") the moment
+/// anything tried to decode it, which the reference's own `pcm_s16le`/
+/// `sample_fmt=s16` never does.
+///
+/// Measured against real `ffmpeg -c:a pcm_*` Matroska fixtures at every
+/// depth it will actually encode there (8/16/24/32-bit int, 32/64-bit
+/// float): 8-bit is always unsigned regardless of the `INT/LIT`/`INT/BIG`
+/// family (there is no endianness to state at one byte -- ffmpeg tags it
+/// `INT/LIT` regardless), every other `INT` depth is signed, and
+/// `FLOAT/IEEE` never appears as big-endian (`ffmpeg` refuses to write one
+/// to Matroska at all: "Invalid argument").
+///
+/// `None` for anything this cannot place confidently -- an unexpected bit
+/// depth, or a `CodecID` outside the three known families -- leaving the
+/// caller's existing generic [`CodecId::Pcm`] in place. That is a clean
+/// refusal at decode time rather than a guess at wire format: better to
+/// report "no decoder for this codec" than to hand a decoder the wrong
+/// sample width or endianness.
+#[must_use]
+pub fn resolve_pcm(codec_id: &str, bit_depth: Option<u8>) -> Option<CodecId> {
+    if codec_id.starts_with("A_PCM/INT/") && bit_depth == Some(8) {
+        return Some(CodecId::PcmU8);
+    }
+    match (codec_id, bit_depth) {
+        ("A_PCM/INT/LIT", Some(16)) => Some(CodecId::PcmS16le),
+        ("A_PCM/INT/BIG", Some(16)) => Some(CodecId::PcmS16be),
+        ("A_PCM/INT/LIT", Some(24)) => Some(CodecId::PcmS24le),
+        ("A_PCM/INT/BIG", Some(24)) => Some(CodecId::PcmS24be),
+        ("A_PCM/INT/LIT", Some(32)) => Some(CodecId::PcmS32le),
+        ("A_PCM/INT/BIG", Some(32)) => Some(CodecId::PcmS32be),
+        ("A_PCM/FLOAT/IEEE", Some(32)) => Some(CodecId::PcmF32le),
+        ("A_PCM/FLOAT/IEEE", Some(64)) => Some(CodecId::PcmF64le),
+        _ => None,
+    }
+}
+
+/// The decoded sample format [`resolve_pcm`]'s result decodes to, matching
+/// `vaco-codec-pcm::table::PCM_FORMATS`'s `decoded` column for the same
+/// `CodecId` -- duplicated rather than depended on (D14.1: a demux crate
+/// does not reach into a codec crate for this), and only for the nine
+/// variants `resolve_pcm` can actually return.
+#[must_use]
+pub const fn pcm_format(id: CodecId) -> Option<SampleFmt> {
+    match id {
+        CodecId::PcmU8 => Some(SampleFmt::U8),
+        CodecId::PcmS16le | CodecId::PcmS16be => Some(SampleFmt::S16),
+        CodecId::PcmS24le | CodecId::PcmS24be | CodecId::PcmS32le | CodecId::PcmS32be => {
+            Some(SampleFmt::S32)
+        }
+        CodecId::PcmF32le => Some(SampleFmt::F32),
+        CodecId::PcmF64le => Some(SampleFmt::F64),
+        _ => None,
+    }
+}
+
 /// Whether this codec's `CodecPrivate` is the codec's extradata verbatim.
 ///
 /// True for everything we map today: `V_MPEG4/ISO/AVC` stores an
@@ -367,5 +435,67 @@ mod tests {
             };
             assert_eq!(m.media, expected, "{name}");
         }
+    }
+
+    /// Every depth `ffmpeg`'s own Matroska muxer will actually write,
+    /// measured directly (see `resolve_pcm`'s own doc). Regression for a
+    /// real bug: before this table existed, every `A_PCM/*` track resolved
+    /// to the generic `CodecId::Pcm`, which has no decoder anywhere in this
+    /// tree -- `vaco -i pcm.mka -f s16le out.raw` failed outright with
+    /// "this build has no decoder for the input codec", something the
+    /// reference never does for real PCM.
+    #[test]
+    fn resolve_pcm_matches_every_measured_depth() {
+        let cases = [
+            ("A_PCM/INT/LIT", 8, CodecId::PcmU8),
+            ("A_PCM/INT/BIG", 8, CodecId::PcmU8), // no endianness at one byte
+            ("A_PCM/INT/LIT", 16, CodecId::PcmS16le),
+            ("A_PCM/INT/BIG", 16, CodecId::PcmS16be),
+            ("A_PCM/INT/LIT", 24, CodecId::PcmS24le),
+            ("A_PCM/INT/BIG", 24, CodecId::PcmS24be),
+            ("A_PCM/INT/LIT", 32, CodecId::PcmS32le),
+            ("A_PCM/INT/BIG", 32, CodecId::PcmS32be),
+            ("A_PCM/FLOAT/IEEE", 32, CodecId::PcmF32le),
+            ("A_PCM/FLOAT/IEEE", 64, CodecId::PcmF64le),
+        ];
+        for (id, depth, want) in cases {
+            assert_eq!(resolve_pcm(id, Some(depth)), Some(want), "{id} at {depth}-bit");
+        }
+    }
+
+    #[test]
+    fn resolve_pcm_refuses_rather_than_guesses() {
+        // No BitDepth at all: cannot place a width, must not guess one.
+        assert_eq!(resolve_pcm("A_PCM/INT/LIT", None), None);
+        // A depth this crate has never measured a real encoder produce.
+        assert_eq!(resolve_pcm("A_PCM/INT/LIT", Some(12)), None);
+        // `FLOAT/IEEE` big-endian: never observed, per the module doc --
+        // there is no `CodecID` spelling for it to even reach this function
+        // with, so a caller asking anyway must not get a wrong-endian guess.
+        assert_eq!(resolve_pcm("A_PCM/FLOAT/IEEE", Some(16)), None);
+        // Outside the three known families entirely.
+        assert_eq!(resolve_pcm("A_PCM/UNKNOWN", Some(16)), None);
+    }
+
+    #[test]
+    fn pcm_format_matches_the_codec_pcm_table() {
+        let cases = [
+            (CodecId::PcmU8, SampleFmt::U8),
+            (CodecId::PcmS16le, SampleFmt::S16),
+            (CodecId::PcmS16be, SampleFmt::S16),
+            (CodecId::PcmS24le, SampleFmt::S32),
+            (CodecId::PcmS24be, SampleFmt::S32),
+            (CodecId::PcmS32le, SampleFmt::S32),
+            (CodecId::PcmS32be, SampleFmt::S32),
+            (CodecId::PcmF32le, SampleFmt::F32),
+            (CodecId::PcmF64le, SampleFmt::F64),
+        ];
+        for (id, want) in cases {
+            assert_eq!(pcm_format(id), Some(want), "{id:?}");
+        }
+        // The generic id `resolve_pcm` never returns, and anything this
+        // module was not asked to place, must not claim a format either.
+        assert_eq!(pcm_format(CodecId::Pcm), None);
+        assert_eq!(pcm_format(CodecId::Aac), None);
     }
 }

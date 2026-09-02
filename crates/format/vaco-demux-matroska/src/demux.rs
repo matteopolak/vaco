@@ -24,7 +24,7 @@
 use std::collections::VecDeque;
 
 use vaco_chlayout::ChannelLayout;
-use vaco_codec_core::{AudioParameters, CodecParameters, FieldOrder, VideoParameters};
+use vaco_codec_core::{AudioParameters, CodecId, CodecParameters, FieldOrder, VideoParameters};
 use vaco_color::{
     ChromaLocation, ColorPrimaries, ColorRange, MatrixCoefficients, TransferCharacteristic,
 };
@@ -789,8 +789,25 @@ impl MatroskaDemuxer {
         }
         let mut sample_rate = 0u32;
         if media == MediaType::Audio {
-            let a = audio.map_or_else(AudioParameters::default, |d| self.parse_audio(d));
+            let mut a = audio.map_or_else(AudioParameters::default, |d| self.parse_audio(d));
             sample_rate = a.sample_rate;
+            // `CodecID` alone cannot name a PCM track's exact wire format --
+            // it states signedness/endianness but never depth -- so `map`
+            // above left `codec_id` at the generic `CodecId::Pcm`, which has
+            // no decoder anywhere in this tree. Refine it now that
+            // `Audio.BitDepth` has been read, and state the sample format
+            // that follows from the refined id -- `sample_fmt` in
+            // `-show_streams` reads `AudioParameters::format` directly and
+            // has no `CodecId`-driven fallback of its own. See
+            // `codec::resolve_pcm`'s own doc for what was actually measured
+            // and why `None` leaves the generic id in place rather than
+            // guessing.
+            if params.codec_id == Some(CodecId::Pcm)
+                && let Some(refined) = codec::resolve_pcm(&codec_id, a.bits_per_coded_sample)
+            {
+                params.codec_id = Some(refined);
+                a.format = codec::pcm_format(refined);
+            }
             params.audio = Some(a);
         }
 

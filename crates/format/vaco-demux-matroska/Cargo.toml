@@ -20,6 +20,7 @@ vaco-codec-core = { path = "../../signal/vaco-codec-core" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-chlayout = { path = "../../model/vaco-chlayout" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 vaco-color = { path = "../../model/vaco-color" }
 miniz_oxide.workspace = true
 
