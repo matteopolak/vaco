@@ -5872,3 +5872,110 @@ clean.
 `cargo test`/`cargo clippy -p vaco-codec-core -p vaco-demux-raw -p
 vaco-demux-mp4 -p vaco-parse-mpegvideo -p vaco-probe --all-targets -D
 warnings` clean.
+
+## 65. `sample_aspect_ratio`/`display_aspect_ratio` on mpeg2video-in-TS/PS: the table was always a display ratio, both call sites treated it as a sample one
+
+Continuing finding 60's ranking, preferring a clustered item over the
+higher-count but scattered `bit_rate`: five fields sat at the identical
+35-case count (`coded_width`, `coded_height`, `has_b_frames`,
+`sample_aspect_ratio`, `display_aspect_ratio`). Triaged all five before
+touching anything; four were the by-now-familiar compact/xml line-cascade
+artifact, but `sample_aspect_ratio`/`display_aspect_ratio` on
+`probe-mpegts/mpeg2-ps`/`mpeg2-ts`/`mpeg2-ts-with-audio` were genuine.
+
+### Root cause
+
+`vaco-parse-mpegvideo::mpeg12::aspect_ratio()`'s own doc comment already
+stated what `aspect_ratio_information`'s codes mean (ITU-T H.262 Table
+6-3: 1 = square samples, 2 = 4:3, 3 = 16:9, 4 = 2.21:1) -- a **display**
+aspect ratio, not a sample one. Both call sites (`mpeg12.rs`'s own
+`codec_parameters()`, and `mpeg4.rs`'s `super::mpeg12::aspect_ratio(vol.
+aspect_ratio_information)`) assigned that raw table value straight into
+`sample_aspect_ratio` anyway. This only ever looked right for code 1 (the
+common case, and most content this crate could produce), and was wrong
+for 2-4: a real 320x240 stream coded with `aspect_ratio_information=2`
+(DAR 4:3, and a 320x240 frame is already 4:3-shaped) reported
+`sample_aspect_ratio=4:3` where the reference reports `1:1` -- and the
+already-wrong SAR then fed `display_aspect_ratio`'s own computation,
+compounding into a nonsensical `16:9`.
+
+### Measured, for both standards separately
+
+`ffmpeg -c:v mpeg2video`/`-c:v mpeg4`, several resolution/`-aspect`
+combinations:
+
+```
+720x480 @ DAR 4:3   -> SAR 8:9
+720x480 @ DAR 16:9  -> SAR 32:27
+640x360 @ DAR 16:9  -> SAR 1:1   (already 16:9-shaped, so no correction needed)
+```
+
+`sample_aspect_ratio = display_ratio * coded_height / coded_width`,
+matching every case tried, identically for MPEG-2 and MPEG-4 Part 2 --
+checked separately rather than assumed, since the two standards'
+`aspect_ratio_information`/`aspect_ratio_info` fields sit in otherwise
+different bitstream syntax, so sharing this table's *meaning* was not
+safe to take for granted going in. Code 1 stays a direct assignment: it
+already *is* the sample ratio, and running it through the conversion
+would silently invent a wrong, non-square answer for a frame the spec
+states is exactly square.
+
+### Fix
+
+Added `sample_aspect_ratio(code, coded_width, coded_height)` next to the
+unchanged `aspect_ratio(code)` (correct as it stands -- the bug was only
+in how the two call sites used its return value) and switched both call
+sites to it.
+
+Verified with a rebuilt vaco-probe against real ffprobe on six fixtures
+(the original 320x240 case, 720x480 at both DAR 4:3 and 16:9 for both
+codecs, and 640x360 native-16:9 mpeg2video) -- all six match exactly.
+Also re-checked mpeg4-in-Matroska (SAR 1:1, DAR 11:9, a 352x288 fixture)
+to confirm the already-correct code-1 path is untouched.
+
+New regression test `sample_aspect_ratio_converts_display_codes_through_
+the_coded_size`. `cargo test`/`cargo clippy --all-targets -D warnings`
+clean; `cargo build --workspace` clean (the `vaco-codec-hevc` breakage
+from finding 64 has since resolved).
+
+### Measured leverage
+
+Full `vaco-conformance --tier core` re-run: 288 agreed / 421 diverged,
+unchanged at the case level -- each affected case still carries other,
+unrelated divergences (`coded_width`/`coded_height` reported as `0` by
+the reference for mpeg2video-in-MPEG-TS/PS, and `has_b_frames`, neither
+investigated here). Direct re-measurement confirms `sample_aspect_ratio`/
+`display_aspect_ratio` now agree on both sides for every affected case;
+the remaining mentions in the raw log are the cascade artifact, not a
+residual divergence.
+
+### A process incident, caught and corrected the same evening
+
+A follow-up commit (`75a7b4c`) exists because the commit above
+(`e773256`) briefly, accidentally included unrelated changes to
+`CLAUDE.md` and `README.md`: `git add` was scoped to the two mpegvideo
+files actually touched here, but the subsequent bare `git commit`
+committed the *entire* shared index, which at that moment also held
+someone else's staged-but-uncommitted edit to those two files, made from
+a working copy that predated `4c3d676` ("docs(readme): re-measure
+conformance, and say where the big number is inflated"). The result
+reverted README.md's conformance numbers back to a stale 262 agreed/447
+diverged and deleted two current, deliberate CLAUDE.md paragraphs about
+diagnosing someone else's build failure and using a private worktree for
+long refactors.
+
+`75a7b4c` restores both files to exactly their `4c3d676` content and
+touches nothing else -- specifically not the further, apparently-
+unfinished edit to README.md's CLI-options-count table that was (and
+still is) sitting unstaged in the working tree, which stays exactly as
+it was for whoever is mid-edit to commit when ready. Caught immediately
+by inspecting `git show --stat` on the just-made commit rather than
+trusting that a scoped `git add` implies a scoped `git commit` -- it does
+not, on a shared index. Recorded here as the same category of lesson the
+private-index recipe already documents for `TECH-DEBT.md`/`sources.toml`,
+just triggered by a plain (non-private-index) commit this time: `git add
+<files>` narrows what you stage; it does not narrow what an unqualified
+`git commit` ships if the shared index already held something else.
+Going forward: check `git status`/`git diff --cached --name-only`
+immediately before every commit in this tree, not just immediately
+before `git add`.
