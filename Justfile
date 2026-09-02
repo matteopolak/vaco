@@ -56,8 +56,14 @@ clippy:
     cargo clippy --workspace --all-targets --locked {{TD}} -- -D warnings
 
 # Every gate CI runs, in the order CI runs them.
+# dead-code/option-consumption-check/vlc-scan are REPORTS, not gates (see each
+# recipe above) — they always exit 0, so they never fail this list, but they
+# were never even being run, which is a milder version of the same problem
+# comment-check's own module doc describes: nobody was reading them either.
+# Listed last so a real failure earlier still shows first.
 ci: fmt-check clippy check-all test-all licence licence-report-check layer-check dep-gate unsafe-audit \
-    wasm-check time-gate patent-gate owner-gate dup-check reachability-check provenance-check docs-check fuzz-check
+    wasm-check time-gate patent-gate owner-gate dup-check reachability-check provenance-check comment-check \
+    docs-check fuzz-check dead-code option-consumption-check vlc-scan
 
 # ------------------------------------------------------- policy gates (D3/D10)
 
@@ -277,6 +283,24 @@ reachability-check:
 # and to shrink as codecs, muxers and filters land.
 dead-code:
     cargo xtask dead-code
+
+# ffmpeg CLI option names this workspace's own dispatch table never reaches
+# from any parser. A REPORT, not a gate — see dead-code above for why.
+option-consumption-check:
+    cargo xtask option-consumption-check
+
+# VLC table sanity, tier 1 of 3 (prefix-free only — not a correctness proof;
+# see AGENT-CONSTRAINTS.md). A REPORT, not a gate: it can only warn, never
+# confirm a table is right.
+vlc-scan:
+    cargo xtask vlc-scan
+
+# Comments stay short and local: no citing a planning document (renumbered
+# twice already) or an issue number (says who asked, not what the code does),
+# no 40+ line run without a split. A ratchet, not a hard zero — see
+# xtask/src/comment_check.rs's module doc for why and how BASELINE moves.
+comment-check:
+    cargo xtask comment-check
 
 # Cargo.lock moved only by dependency EDGES, never by packages (plan 19 §3.3).
 # Safe to run mid-wave: concurrent agents reconcile the lock against whatever

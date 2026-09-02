@@ -1,4 +1,31 @@
 //! Keep comments short and local.
+//!
+//! # Why this is a ratchet, not a pass/fail count
+//!
+//! This gate existed for a while before anything ran it: it is a real,
+//! exit-1 check, but it was wired into neither `just ci` nor
+//! `.github/workflows/ci.yml`'s policy job, so nobody could ever have seen it
+//! fail. By the time that was noticed, 1232 violations had accumulated —
+//! almost entirely comments citing a planning document or an issue number,
+//! the two things this codebase's own writing habits reach for constantly.
+//! Wiring the gate in at a hard zero would turn the very next commit red for
+//! a backlog that predates it, which is a tree-wide decision nobody made on
+//! purpose.
+//!
+//! [`BASELINE`] is that number, pinned once, committed like any other source
+//! constant. The gate fails only when the current count *exceeds* it — a new
+//! violation is caught the moment it lands, and the 1232 that already exist
+//! are grandfathered, not blessed. Cleaning any of them up is a strict
+//! improvement: lower [`BASELINE`] by the same amount in the same commit,
+//! and the ratchet has moved forward and cannot move back on its own. The
+//! count prints on every run, success or failure, so the direction of
+//! travel is never hidden behind a bare pass.
+//!
+//! A ratchet whose baseline creeps upward is an allowlist with extra steps.
+//! The only legitimate reason to raise [`BASELINE`] is that the count above
+//! it is wrong — recounted after a rename, a moved directory, a change to
+//! what this file itself scans — never "there are more violations now and
+//! that is fine."
 
 use crate::{Task, repo_root};
 use std::path::Path;
@@ -14,6 +41,11 @@ const CROSS_REFS: &[&str] = &[
     "TECH-DEBT",
     "planning/",
 ];
+
+/// The violation count as of the commit that added this ratchet, measured by
+/// this same scan. Fix a violation and lower this number in the same commit;
+/// never raise it to make a new one disappear — see the module doc above.
+const BASELINE: usize = 1232;
 
 pub fn run(_check: bool) -> Task {
     let root = repo_root();
@@ -79,12 +111,20 @@ pub fn run(_check: bool) -> Task {
         }
     }
 
-    if findings.is_empty() {
-        println!("comment-check: OK ({} files)", files.len());
+    let count = findings.len();
+    if count <= BASELINE {
+        println!(
+            "comment-check: {count} problem(s), at or under the baseline ({BASELINE}) — {} \
+             file(s) scanned",
+            files.len()
+        );
         return Ok(());
     }
     let shown = findings.len().min(40);
-    let mut msg = format!("{} comment problem(s):\n", findings.len());
+    let mut msg = format!(
+        "{count} comment problem(s), {} over the baseline ({BASELINE}):\n",
+        count - BASELINE
+    );
     for f in findings.iter().take(shown) {
         msg.push_str("  ");
         msg.push_str(f);
@@ -93,6 +133,12 @@ pub fn run(_check: bool) -> Task {
     if findings.len() > shown {
         msg.push_str(&format!("  … and {} more\n", findings.len() - shown));
     }
+    msg.push_str(&format!(
+        "\nBASELINE in xtask/src/comment_check.rs is {BASELINE}; the scan just found {count}. \
+         Either fix a violation above (and lower BASELINE by the same amount in the same \
+         commit) or leave BASELINE where it is and fix the new one you just added — never \
+         raise BASELINE to make this pass. It exists to let the count only go down.\n"
+    ));
     Err(msg)
 }
 

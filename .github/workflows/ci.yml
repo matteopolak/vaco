@@ -54,12 +54,25 @@ jobs:
       # came from, and every commit touching implementation code carries its
       # provenance trailers. Needs full history for the trailer half.
       - run: cargo xtask provenance-check
+      # Comments stay short and local (no citing a planning doc that gets
+      # renumbered, no citing an issue number instead of saying what the code
+      # does, no 40+ line run). A ratchet against xtask/src/comment_check.rs's
+      # own BASELINE, not a hard zero — this gate found a 1200+ backlog the
+      # moment it was first run, precisely because it was wired into neither
+      # this workflow nor `just ci` until now, so nothing had ever run it.
+      - run: cargo xtask comment-check
       # Generated files are current.
       - run: cargo xtask gen-registry --check
       - run: cargo xtask gen-docs-index --check
       - run: cargo xtask gen-pixfmt --check
       - run: cargo xtask gen-fuzz --check
       - run: cargo xtask gen-coverage --check
+      # REPORTS, not gates — always exit 0 (see each xtask module's own doc),
+      # so they cannot fail this job, but they were never even being run
+      # anywhere, which is the same failure to look at milder wallpaper.
+      - run: cargo xtask dead-code
+      - run: cargo xtask option-consumption-check
+      - run: cargo xtask vlc-scan
       # `fuzz/` is its own workspace (F1-F9), so it is built by neither
       # `check-all` nor the clippy job below — a target can rot against a
       # correct API change and nothing else here would notice. Install
