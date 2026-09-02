@@ -81,6 +81,12 @@ impl Opts {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
         }
+        if o.bayer_scale != 2 {
+            return Err("paletteuse: `bayer_scale` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.diff_mode != "0" {
+            return Err("paletteuse: `diff_mode` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }

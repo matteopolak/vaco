@@ -66,6 +66,18 @@ impl Opts {
             o.set_from_string(text, "=", ":")
                 .map_err(|e| e.to_string())?;
         }
+        if o.nb_steps != 1 {
+            return Err("elbg: `nb_steps` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.seed != -1 {
+            return Err("elbg: `seed` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.pal8 {
+            return Err("elbg: `pal8` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
+        if o.use_alpha {
+            return Err("elbg: `use_alpha` is parsed but not applied by this crate; refusing rather than silently ignoring it".to_string());
+        }
         Ok(o)
     }
 }
