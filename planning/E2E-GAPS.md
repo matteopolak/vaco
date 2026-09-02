@@ -3565,3 +3565,64 @@ wiring, and real thread dispatch.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 46. HEVC B4 Stage 2b step 3b: `Ctx`'s split proper -- measures at 0.99x, step 3 complete
+
+`2d4d4a8` moves the ~28 SPS/PPS/slice-header-derived scalars, `is_p_slice`,
+`inter`, and `pic` into a new `CtxShared<'p>` type -- everything constant
+for the whole slice, grouped so a future `Arc` can pull it out whole once
+real dispatch needs it. `Ctx` keeps `recon`/`cu_grid`/`edges`/`sao_params`
+(each already split internally by step 3a) and the four per-row-exclusive
+scalars around `qp_y_prev` directly, plus `shared: CtxShared<'p>`.
+
+**What changed**: a pure field-path reorganisation -- every value is
+exactly what it was, addressed through one more nested field
+(`self.shared.X` instead of `self.X`) the compiler resolves to the same
+offset. No function signature in `ctu.rs`/`deblock.rs`/`sao.rs` changed.
+Two constructors updated (`Ctx::new`, `retarget_pic_for_test`); every
+other call site was driven by the compiler's own "no field X" errors
+rather than a blind find/replace. Three genuine name collisions surfaced
+this way and were fixed before they became silent bugs: `Sps`/
+`SliceHeader` (from `vaco_parse_hevc`) share several field names with
+`CtxShared` by construction (`bit_depth_luma`, `log2_min_cb_size`,
+`beta_offset_div2`, etc. -- `CtxShared`'s own fields were originally
+derived from exactly these); `RefPic`'s own `pic` field collided with
+`Ctx`'s `pic`; and one `0..ctbs_x` range expression's second `.` matched
+the same substitution pattern. All three caught by the crate refusing to
+compile until fixed -- the compiler's own exhaustiveness is what makes
+this refactor safe to do by pattern substitution at all.
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (73 unit + 6 integration
+tests, unchanged) and `cargo clippy -p vaco-codec-hevc --lib --tests -- -D
+warnings` both clean; `cargo xtask unsafe-audit` clean. Against
+`hevc_1080p.mp4`: `vaco -threads 1` before, after, and `ffmpeg`'s own
+decode all produced the identical sha256 (unchanged since ss39). The
+300x500 partial-CTU-column fixture still matched on the frames its own
+unrelated remux issue does not corrupt.
+
+**Serial cost, measured rather than argued from structure**: this reaches
+the actual per-CTU/per-block hot path (every CU/PU/TU parse reads several
+`CtxShared` fields), so per the coordinator's own instruction it got a
+real interleaved measurement rather than a structural exemption, the same
+as ss45's `ReconPlane` split. Six clean rounds, isolated worktrees for
+`f11a9ce` (baseline) and `2d4d4a8` (candidate), `hevc_1080p.mp4`,
+`-threads 1`, five decodes per round per binary. Load average 11.89-13.01,
+so CPU-seconds governs: per-round ratio 1.026, 0.977, 0.968, 0.988, 0.994,
+0.987 -- median **0.987x**, mean **0.990x**, candidate at or below
+baseline in 5 of 6 rounds. Clears the gate with room to spare, consistent
+with the structural expectation (no allocation, synchronisation, or
+indirection added) but not merely assumed from it.
+
+**Stage 2b step 3 is now complete**: 3a (the four `current` splits, ss45)
+and 3b (this section) both landed and measured clean. What remains:
+step 2's own `Ctx`-side wiring is already done (the CABAC handoff itself
+moved to `RowPublish` in ss44, before `Ctx` even needed touching for it),
+so the only steps left are pulling `CtxShared` out from behind a real
+`Arc`, a matching per-row-exclusive type each worker would own
+independently, and step 4's actual `std::thread::spawn` dispatch against
+the full verification bar (byte-exact at 1/2/4/8/16 threads, the
+`hevc_decode_threaded` fuzz target, repeated race-detector-fixture runs,
+a same-session speedup ratio against `ffmpeg`) -- none of it started.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.

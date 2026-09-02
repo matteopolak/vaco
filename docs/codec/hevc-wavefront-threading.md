@@ -739,15 +739,19 @@ itself is threaded) before the next begins:
      interleaved measurement rather than a bookkeeping-only note — CPU-
      seconds median 0.993x, mean 0.995x, clearing the gate with room to
      spare.
-   - **3b not started**: `Ctx`'s own split proper — the ~28 shared
-     read-only fields plus `inter`, and the four per-row-exclusive scalars
-     around `qp_y_prev`, mechanically threading the already-separated
-     `shared`/`current` pieces from 3a through `ctu.rs`/`deblock.rs`/
-     `sao.rs`'s existing call sites. `pic` needs dropping from the per-row
-     task's own state (needed by the still-serial deblock/SAO pass, not by
-     per-row reconstruction — see the `pic` correction below), and
-     `retarget_pic_for_test` is a second call site needing the same
-     update.
+   - **3b done** (commit `2d4d4a8`, `planning/E2E-GAPS.md` §46): `Ctx`'s
+     own split proper — the ~28 shared read-only fields, `is_p_slice`,
+     `inter`, and `pic` (needed by the still-serial deblock/SAO pass, not
+     by per-row reconstruction — see the `pic` correction below) moved
+     into a new `CtxShared<'p>` nested inside `Ctx` alongside the four
+     per-row-exclusive scalars around `qp_y_prev` and the already-split
+     `recon`/`cu_grid`/`edges`/`sao_params`. A field-path reorganisation
+     only — no function signatures changed; pulling `CtxShared` out from
+     behind a real `Arc` (two genuinely separate types instead of two
+     nested fields of one) is step 4's own work. Measured despite being
+     "just" a reorganisation, since it reaches the actual per-CTU/per-block
+     hot path: CPU-seconds median 0.987x, mean 0.990x, clearing the gate.
+     **Step 3 as a whole (3a + 3b) is complete.**
 4. Only then, real `std::thread::spawn` dispatch over the row loop, reusing
    `vaco_codec_core::threading`'s `Pool`/`Queue`/`Condvar`/`ReplyGuard`
    shape (row index in place of that module's frame index, `Result<()>`
