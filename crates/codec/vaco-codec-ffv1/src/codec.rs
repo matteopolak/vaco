@@ -18,15 +18,11 @@
 //!   each slice's byte range (§4.9.1), cross-checked pixel-exact against a
 //!   real 4-slice `ffmpeg` file (range-coder mode).
 //! - **Coder**: the encoder always emits `coder_type = 1` (range coder,
-//!   default table), cross-checked pixel-exact against a real
-//!   `ffmpeg -coder range_def` encode. `coder_type = 0` (Golomb-Rice,
-//!   `ffmpeg`'s own default) parses but has a known, unresolved decode bug:
-//!   against a real default-coder file, output diverges from the first
-//!   sample in a pattern consistent with `rice.rs`'s `RunState` never
-//!   correctly extending a run, even after the byte-level Sentinel handoff
-//!   position was confirmed by exhaustive search not to be the cause.
-//!   `coder_type = 2` (custom transition table) is untested — no fixture
-//!   reaches it.
+//!   default table); decode covers that and `coder_type = 0` (Golomb-Rice,
+//!   `ffmpeg`'s own default), both cross-checked pixel-exact against real
+//!   `ffmpeg` encodes. `coder_type = 2` (custom transition table) is
+//!   untested — no fixture reaches it, and `ffmpeg -coder range_tab` does not
+//!   reach this crate at all today (its extradata never arrives).
 //! - **Bit depth**: 8 only.
 //! - **Color**: `Yuv420p`/`Yuv422p`/`Yuv444p` (`colorspace_type` 0) and
 //!   `Gbrp` (`colorspace_type` 1, via the JPEG 2000 RCT). No alpha plane.
@@ -745,6 +741,13 @@ pub(crate) fn encode_frame(config: &Ffv1Config, frame: &vaco_frame::Frame) -> Re
         )?;
     }
 
+    // RFC 9043 §3.8.1.1.1: a range-coded Slice's bytestream terminates with a
+    // Sentinel symbol (state 129) whose value is discarded. ffmpeg's decoder
+    // reads it and then checks where the slice's bytes ended; without it, our
+    // streams left it one byte short and it rejected 42 of 50 frames with
+    // "bytestream end mismatching by 1" -- the 8 it accepted being the ones
+    // where that extra get_rac happened not to need a refill.
+    enc.write_terminator(&params.state_transition);
     let content = enc.finish();
     // slice_size excludes the footer's own bytes (see locate_slices's docs).
     let footer_bytes = SliceFooter::write(content.len() as u32);

@@ -47,6 +47,20 @@ title    = "Exact ffmpeg commands used to produce this crate's real-file cross-c
 acquired = "2026-08-27"
 where    = "Local measurement, not a document. Fixture 1 (yuv420_*, default coder): `ffmpeg -f lavfi -i \"testsrc=size=176x144:rate=5:duration=1\" -pix_fmt yuv420p -c:v ffv1 out.mkv`. Fixture 2 (yuv420_range_*, range coder): `ffmpeg -f lavfi -i \"testsrc=size=64x64:rate=5:duration=1\" -pix_fmt yuv420p -coder range_def -c:v ffv1 out.mkv`. Both were pulled apart by a hand-written Matroska EBML walk (Segment/Tracks/TrackEntry/CodecPrivate/Cluster/SimpleBlock — never ffmpeg's own demuxer or decoder) into the raw Configuration Record and per-frame coded bytes; ffmpeg's own raw-YUV decode of the same source (`ffmpeg -i out.mkv -f rawvideo -pix_fmt yuv420p ref.raw`) supplied the pixel-exact reference used by tests/roundtrip.rs's real-ffmpeg cross-checks."
 
+[[source]]
+id       = "ffv1-blackbox-rice160"
+kind     = "blackbox"
+title    = "ffmpeg 9.0.1 Golomb-Rice FFV1 fixture (160x120, three frames, only the first a keyframe) and the pixel reference it is checked against"
+acquired = "2026-09-02"
+where    = "Local measurement, not a document. `ffmpeg -f lavfi -i \"testsrc2=size=160x120:rate=25:duration=0.12\" -pix_fmt yuv420p -c:v ffv1 -coder rice out.mkv` (ffmpeg 9.0.1); pulled apart by the same hand-written Matroska EBML walk as ffv1-blackbox-fixtures into tests/fixtures/rice160_extradata.bin and rice160_frame{0,1,2}.bin. tests/fixtures/rice160.raw is ffmpeg's own decode of that file (`ffmpeg -i out.mkv -f rawvideo -pix_fmt yuv420p`), confirmed byte-identical to the unencoded testsrc2 output first, so the reference side is known sound. The stream's Parameters carry intra = 0 and ec = 1: only frame 0 is a keyframe, so frames 1-2 exercise Golomb VLC context state persisting across frames, which no single-frame fixture can."
+
+[[source]]
+id       = "ffv1-blackbox-closed-mode-length"
+kind     = "blackbox"
+title    = "A range-coded FFV1 region's decoder must finish exactly one byte past its coded length; ffmpeg rejects a slice that ends level with it"
+acquired = "2026-09-02"
+where    = "Local measurement, not a document: a from-RFC-9043 range decoder written outside this tree was run over every slice of frame 0 of `ffmpeg -c:v ffv1 -coder range_def` output and over its Configuration Record, reporting bytes consumed against each region's own coded length. Every region came out at length + 1 once the Sentinel symbol (state 129) had been read -- i.e. ffmpeg terminates in RFC 9043 Sec 3.8.1.1.1's Closed mode, the decoder taking the byte past the end as zero. This crate's encoder emitted the Open-mode length instead, and `ffmpeg -i` rejected 42 of 50 frames with \"bytestream end mismatching by 1\" (the 8 it accepted being the ones whose final get_rac happened not to need a refill). Pinned by rangecoder.rs's finish_produces_the_closed_mode_length_ffmpeg_requires test, which needs no ffmpeg binary."
+
 # This crate's other tables (RiceState/RunState initial-value constants, the
 # quantized-gradient sign/scale bookkeeping in quant.rs) are either under the
 # 32-element provenance threshold or this crate's own original bookkeeping

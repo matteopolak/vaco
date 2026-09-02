@@ -8,12 +8,11 @@
 //!
 //! `ffmpeg -c:v ffv1`'s own default (`-coder` defaults to `rice`, measured via
 //! `ffmpeg -h encoder=ffv1`, recorded as a `blackbox` provenance entry) uses
-//! this mode, so a decoder that only understood the range-coder mode could
-//! never pass the real-`ffmpeg`-stream cross-check the crate's brief asks
-//! for. This crate's own encoder emits `coder_type = 1` (range coder)
-//! exclusively — simpler, and it reuses the range-coder machinery the
-//! Configuration Record needs regardless — so there is no round-trip need for
-//! a Golomb-Rice *encoder* here. See the crate's top-level docs.
+//! this mode, so a decoder that only understood the range-coder mode could not
+//! read most FFV1 in the wild. This crate's own encoder emits `coder_type = 1`
+//! (range coder) exclusively — simpler, and it reuses the range-coder
+//! machinery the Configuration Record needs regardless — so there is no need
+//! for a Golomb-Rice *encoder* here. See the crate's top-level docs.
 
 use vaco_bitstream::BitReader;
 

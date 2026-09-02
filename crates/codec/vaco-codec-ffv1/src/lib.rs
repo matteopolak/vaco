@@ -23,8 +23,8 @@
 //! Version 3 only; 8-bit; `Yuv420p`/`Yuv422p`/`Yuv444p` and `Gbrp` (via the
 //! JPEG 2000 RCT). The encoder always uses the range coder and writes one
 //! slice; decode also covers Golomb-Rice-coded and multi-slice files. See
-//! [`codec`]'s module docs for the measurements behind those claims and the
-//! one known, unresolved Golomb-Rice decode bug. Add a pixel format by
+//! [`codec`]'s module docs for the measurements behind those claims. Add a
+//! pixel format by
 //! extending `codec::mapping_for`/`format_for`; a higher bit depth needs
 //! `slice.rs`'s `wrap_diff`/`wrap_sample` plus 16-bit-capable reads/writes
 //! in `codec.rs`.

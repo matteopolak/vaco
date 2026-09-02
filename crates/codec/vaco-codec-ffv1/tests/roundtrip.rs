@@ -263,24 +263,26 @@ proptest::proptest! {
 
 // --------------------------------------------------------------- real ffmpeg
 //
-// Two real `ffmpeg 8.1` fixtures, captured once and pulled apart by hand (a
-// small Matroska EBML walk, not ffmpeg itself — see this file's top docs):
+// The tests below, not the round trips above, are this crate's evidence that
+// it agrees with the *format*. A round trip only shows the encoder and decoder
+// agree with each other, which they did for months while both disagreed with
+// FFV1: `decodes_real_ffmpeg_golomb_rice_stream_pixel_exact` was `#[ignore]`d
+// as a known bug that the whole rest of this file could not see.
 //
-// - `yuv420_range_*` / `yuv420_range.raw`: `ffmpeg -f lavfi -i
-//   "testsrc=size=64x64:rate=5:duration=1" -pix_fmt yuv420p -coder range_def
-//   -c:v ffv1 out.mkv` — `coder_type = 1`, and (measured, not requested) a
-//   2x2 slice grid despite the frame being nowhere near RFC 9043 §5's
-//   multi-slice threshold. Decodes pixel-exact: this is this crate's
-//   strongest real-file evidence, covering multi-slice geometry, the
-//   backward `slice_size` walk, and Cb/Cr's shared adaptive context (see
-//   `PlaneStates`'s docs) all at once.
-// - `yuv420_*` / `yuv420.raw`: the same source at 176x144, `ffmpeg`'s
-//   *default* coder — `coder_type = 0` (confirmed via `ffmpeg -h
-//   encoder=ffv1`'s `-coder` default of `rice`). Parses without error but
-//   decodes wrong from the first sample; see `codec`'s module docs for what
-//   this ruled out (byte/bit-level Sentinel-handoff misalignment) and what
-//   is suspected instead (a `RunState` bug). Kept and `#[ignore]`d rather
-//   than deleted, so the gap stays visible instead of silently dropped.
+// Every fixture was captured by running the `ffmpeg` binary as a black box and
+// pulling the result apart by hand (a small Matroska EBML walk, never ffmpeg's
+// own demuxer or decoder) into a Configuration Record, per-frame coded bytes,
+// and ffmpeg's own raw YUV420p decode of the same file. Commands are recorded
+// in `provenance/vaco-codec-ffv1.toml`; nothing here needs an `ffmpeg` binary
+// at run time.
+//
+// - `rice160_*` / `rice160.raw`: 160x120, `-coder rice`, three consecutive
+//   frames of which only the first is a keyframe (ffmpeg 9.0.1).
+// - `yuv420_*` / `yuv420.raw`: 176x144, ffmpeg's default coder, frame 0
+//   (ffmpeg 8.1).
+// - `yuv420_range_*` / `yuv420_range.raw`: 64x64, `-coder range_def`, a 2x2
+//   slice grid despite the frame being nowhere near RFC 9043 §5's
+//   multi-slice threshold (ffmpeg 8.1).
 
 const RANGE_EXTRADATA: &[u8] = include_bytes!("fixtures/yuv420_range_extradata.bin");
 const RANGE_FRAME0: &[u8] = include_bytes!("fixtures/yuv420_range_frame0.bin");
@@ -311,9 +313,46 @@ const GOLOMB_RAW: &[u8] = include_bytes!("fixtures/yuv420.raw");
 const GOLOMB_W: u32 = 176;
 const GOLOMB_H: u32 = 144;
 
+const RICE160_EXTRADATA: &[u8] = include_bytes!("fixtures/rice160_extradata.bin");
+const RICE160_FRAMES: [&[u8]; 3] = [
+    include_bytes!("fixtures/rice160_frame0.bin"),
+    include_bytes!("fixtures/rice160_frame1.bin"),
+    include_bytes!("fixtures/rice160_frame2.bin"),
+];
+const RICE160_RAW: &[u8] = include_bytes!("fixtures/rice160.raw");
+const RICE160_W: u32 = 160;
+const RICE160_H: u32 = 120;
+
+/// The crate's primary conformance evidence for `coder_type = 0` — the coder a
+/// plain `ffmpeg -c:v ffv1` actually writes.
+///
+/// Three consecutive frames, not one: the fixture's `intra` is 0, so only
+/// frame 0 carries `keyframe = 1` and frames 1-2 require the Golomb VLC
+/// contexts to keep adapting from where the previous frame left them. A
+/// single-frame test passes with that wrong either way.
+#[test]
+fn decodes_real_ffmpeg_multi_frame_golomb_rice_stream_pixel_exact() {
+    let mut dec = Ffv1Decoder::new(Limits::permissive());
+    dec.set_extradata(RICE160_EXTRADATA).expect("set_extradata");
+    dec.prime_video(RICE160_W, RICE160_H);
+
+    let frame_len = (RICE160_W as usize) * (RICE160_H as usize) * 3 / 2;
+    for (i, coded) in RICE160_FRAMES.iter().enumerate() {
+        let mut budget = Budget::new(Limits::permissive());
+        let pkt = Packet::from_slice(&mut budget, coded).expect("packet");
+        dec.send(Some(&pkt)).expect("send frame");
+        let frame = dec.receive().expect("receive frame");
+        assert_eq!(
+            frame_bytes(&frame),
+            &RICE160_RAW[i * frame_len..(i + 1) * frame_len],
+            "frame {i}"
+        );
+    }
+}
+
 /// The Golomb-Rice (`coder_type = 0`) twin of the range-coder cross-check
-/// above, and the one that matters most in practice: `coder_type = 0` is what
-/// a plain `ffmpeg -c:v ffv1` writes.
+/// above, at a second geometry (176x144, a 2x2 slice grid whose slices are odd
+/// in neither axis) and from a different `ffmpeg` build than the fixture above.
 #[test]
 fn decodes_real_ffmpeg_golomb_rice_stream_pixel_exact() {
     let mut dec = Ffv1Decoder::new(Limits::permissive());

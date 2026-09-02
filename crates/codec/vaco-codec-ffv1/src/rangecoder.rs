@@ -363,11 +363,9 @@ impl RangeEncoder {
     }
 
     /// Write the Sentinel-mode terminator symbol (state 129). Its value is
-    /// discarded by the decoder, so any bit works; `false` costs nothing extra.
-    #[allow(
-        dead_code,
-        reason = "kept for API symmetry with RangeDecoder::read_terminator; this crate's own encoder never emits Sentinel mode today, so only the round-trip test in this module calls it"
-    )]
+    /// discarded by the decoder, and RFC 9043 §3.8.1.1.1 says a Closed-mode
+    /// reader sees it "uncorrupted and of value 0", so `false` is the value to
+    /// write.
     pub(crate) fn write_terminator(&mut self, table: &StateTransition) {
         let mut state = TERMINATOR_STATE;
         self.put_rac(&mut state, table, false);
@@ -429,22 +427,44 @@ impl RangeEncoder {
         }
     }
 
-    /// Flush pending state and return the encoded bytes.
+    /// Flush pending state and return the encoded bytes, terminated in Closed
+    /// mode (RFC 9043 §3.8.1.1.1).
     ///
-    /// Two more `shift_low` calls commit `cache` and the final partial byte,
-    /// the standard range-encoder flush.
+    /// Two steps, and the first is what makes the second safe.
+    ///
+    /// The encoder's interval is `[low, low + range)` and any value in it
+    /// decodes identically, so instead of emitting `low` itself this rounds it
+    /// **up** to the next whole byte boundary. That is always still inside the
+    /// interval: `renormalize` leaves `range >= 0x100`, and rounding up moves
+    /// `low` by at most 255. The final byte of the emitted value is then zero
+    /// by construction.
+    ///
+    /// Three `shift_low` calls then drain it: the first flushes whatever was
+    /// already cached (resolving any carry the round-up just created), and the
+    /// other two drain the two bytes of a 16-bit-wide `low` (mirroring
+    /// [`RangeDecoder`]'s 16-bit `L_i`). Two calls leaves the *second* byte of
+    /// `low` in `cache`, never written out, and loses a pending `0xFF` run.
+    ///
+    /// The last of those three bytes is the zero the round-up produced, so
+    /// dropping it costs nothing: a decoder reads past the end of a Closed-mode
+    /// bytestream as zero and reconstructs the same value. RFC 9043 calls this
+    /// "generally one byte shorter than the Open mode", and `ffmpeg` requires
+    /// exactly it -- measured, every region of a real `ffmpeg` FFV1 file (each
+    /// slice of a `-coder range_def` frame, and the Configuration Record)
+    /// leaves its decoder exactly one byte past the region's coded length,
+    /// and ffmpeg rejects a slice that ends level with it: "bytestream end
+    /// mismatching by 1", which is what this crate's Open-length output was.
+    ///
+    /// Emitting `low` and simply truncating a byte is *not* the same thing and
+    /// does not work: that byte is only expendable once the value has been
+    /// rounded so it is zero.
     #[must_use]
     pub(crate) fn finish(mut self) -> Vec<u8> {
-        // Three calls, not two: the first flushes whatever was already
-        // cached (with any pending carry resolved), and the other two drain
-        // the two remaining bytes of a 16-bit-wide `low` (mirroring
-        // `RangeDecoder`'s 16-bit `L_i`). Two calls leaves the *second* byte
-        // of `low` sitting in `cache`, never written out — found by tracing
-        // a 20-bit round trip byte-by-byte until encode and decode disagreed
-        // exactly at the point that trailing byte would have been read.
+        self.low = (self.low + 0xFF) & !0xFFu64;
         for _ in 0..3 {
             self.shift_low();
         }
+        self.out.pop();
         self.out
     }
 }
@@ -593,6 +613,46 @@ mod tests {
         let mut dec_states = fresh_states();
         for &v in &values {
             assert_eq!(dec.get_symbol(&mut dec_states, &table, true), v);
+        }
+    }
+
+    /// The Closed-mode length contract [`RangeEncoder::finish`] exists to
+    /// satisfy: a decoder that reads every symbol back out of a finished
+    /// bytestream ends up exactly **one byte past** its end, having taken that
+    /// last byte as the implicit zero. One byte fewer and the stream is
+    /// unreadable; one more and `ffmpeg` rejects the slice outright
+    /// ("bytestream end mismatching by 1"), which is what this crate's encoder
+    /// used to produce for every frame it wrote.
+    ///
+    /// Checked over a range of symbol counts because the flush's own carry and
+    /// `0xFF`-run handling only fires for some tails.
+    #[test]
+    fn finish_produces_the_closed_mode_length_ffmpeg_requires() {
+        let table = StateTransition::default_table();
+        for count in 1..200usize {
+            let values: Vec<i32> = (0..count)
+                .map(|i| ((i as u32).wrapping_mul(2_654_435_761_u32).cast_signed()) % 400)
+                .collect();
+
+            let mut enc = RangeEncoder::new();
+            let mut enc_states = fresh_states();
+            for &v in &values {
+                enc.put_symbol(&mut enc_states, &table, v, true);
+            }
+            enc.write_terminator(&table);
+            let bytes = enc.finish();
+
+            let mut dec = RangeDecoder::new(&bytes);
+            let mut dec_states = fresh_states();
+            for &v in &values {
+                assert_eq!(dec.get_symbol(&mut dec_states, &table, true), v, "n={count}");
+            }
+            let end = dec.read_terminator(&table);
+            assert_eq!(
+                end,
+                bytes.len(),
+                "n={count}: decoder must finish one byte past a Closed-mode stream"
+            );
         }
     }
 
