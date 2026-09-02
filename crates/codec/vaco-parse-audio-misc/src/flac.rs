@@ -196,9 +196,21 @@ impl Parser for FlacParser {
         self.params.as_ref()
     }
 
-    /// Read a `STREAMINFO` block: bare 34 bytes, as MP4's `dfLa` box and
-    /// Matroska's `CodecPrivate` both carry it (the FLAC-in-ISOBMFF mapping
-    /// states `dfLa` is the metadata blocks verbatim, `STREAMINFO` first).
+    /// Read a `STREAMINFO` block.
+    ///
+    /// This project's own canonical `CodecParameters::extradata` shape for a
+    /// FLAC stream is `"fLaC" +` one or more metadata blocks, header
+    /// included (`FlacEncoder::extradata`'s own convention; Matroska's
+    /// `A_FLAC` `CodecPrivate` matches it) -- **not** the bare 34 bytes this
+    /// method's doc used to claim MP4's `dfLa` and Matroska both hand over
+    /// verbatim. Measured against a real `ffmpeg -c:a flac -f mp4` file: a
+    /// naive `data.get(..34)` over the un-wrapped shape reads across the
+    /// wrapper into the middle of the real block, reporting `channels=1`,
+    /// `bits_per_raw_sample=1` for an actual 48 kHz stereo 16-bit stream.
+    /// [`locate_streaminfo`] finds the real 34 bytes regardless of which
+    /// shape wraps them (or accepts them already bare, which nothing in
+    /// this tree currently produces but which costs nothing to keep
+    /// accepting).
     ///
     /// # Errors
     ///
@@ -207,11 +219,44 @@ impl Parser for FlacParser {
         if extradata.is_empty() {
             return Ok(());
         }
-        let info = StreamInfo::parse(extradata)?;
+        let body = locate_streaminfo(extradata).unwrap_or(extradata);
+        let info = StreamInfo::parse(body)?;
         self.params = Some(info.to_codec_parameters());
         self.info = Some(info);
         Ok(())
     }
+}
+
+/// Find the bare 34-byte `STREAMINFO` payload inside `extradata`, whatever
+/// convention wraps it -- this project's canonical `"fLaC" + metadata
+/// block(s)` shape, or a metadata block with no `"fLaC"` prefix (a bare
+/// dfLa-style FullBox body with its own 4-byte header stripped down to just
+/// the block, which is all `vaco-demux-mp4`'s own `ConfigFlavour::Dfla` arm
+/// promises). Returns `None` when neither pattern is found, so the caller
+/// can fall back to treating the whole input as an already-bare block.
+///
+/// Deliberately re-implemented rather than depending on
+/// `vaco-codec-flac::streaminfo::find_streaminfo_block` for it: the same
+/// precedent `vaco-mux-mp4::entry::flac_streaminfo_metadata_block` already
+/// set for this exact shape, one layer over. Unlike that scanning function,
+/// this one only looks at a fixed starting position (after an optional
+/// `"fLaC"` prefix) rather than scanning every byte offset, because every
+/// known caller either supplies the canonical shape or nothing recognisable
+/// at all -- there is no format here whose block genuinely starts mid-buffer.
+fn locate_streaminfo(extradata: &[u8]) -> Option<&[u8]> {
+    let rest = extradata.strip_prefix(b"fLaC").unwrap_or(extradata);
+    let header = rest.get(..4)?;
+    let [b0, b1, b2, b3] = header else {
+        return None;
+    };
+    if b0 & 0x7F != 0 {
+        return None; // not a STREAMINFO block header (type must be 0)
+    }
+    let len = (u32::from(*b1) << 16) | (u32::from(*b2) << 8) | u32::from(*b3);
+    if len != u32::try_from(LEN).unwrap_or(u32::MAX) {
+        return None;
+    }
+    rest.get(4..4 + LEN)
 }
 
 #[cfg(test)]
@@ -262,6 +307,55 @@ mod tests {
         assert_eq!(audio.sample_rate, 44_100);
         assert_eq!(audio.bits_per_raw_sample, Some(16));
         assert_eq!(audio.format, Some(vaco_sampfmt::SampleFmt::S16));
+    }
+
+    /// The real, project-wide canonical shape (`"fLaC" +` a metadata block
+    /// with its own 4-byte header) must describe the stream correctly, not
+    /// just the bare fixture -- regression for the bug the module doc names:
+    /// a naive fixed-offset read over this shape reported channels=1,
+    /// bits_per_raw_sample=1 for a real 2-channel 16-bit file.
+    #[test]
+    fn a_flac_prefixed_metadata_block_describes_the_stream_correctly() {
+        let mut wrapped = b"fLaC".to_vec();
+        wrapped.push(0x80); // last-block flag set, type 0 (STREAMINFO)
+        wrapped.extend_from_slice(&[0x00, 0x00, 0x22]); // length 34
+        wrapped.extend_from_slice(&fixture());
+        let mut parser = FlacParser::new(Limits::strict());
+        parser.set_extradata(&wrapped).expect("valid block");
+        let audio = parser
+            .parameters()
+            .expect("described")
+            .audio
+            .clone()
+            .expect("audio parameters");
+        assert_eq!(audio.sample_rate, 44_100);
+        assert_eq!(
+            audio.layout.map(|l| l.channels),
+            Some(2),
+            "must not read as mono"
+        );
+        assert_eq!(audio.bits_per_raw_sample, Some(16));
+    }
+
+    /// `vaco-demux-mp4`'s `ConfigFlavour::Dfla` arm strips `dfLa`'s own
+    /// full-box version+flags and replaces them with `"fLaC"`, so its
+    /// block-header-plus-payload bytes come straight after the magic with
+    /// no full-box header of their own in between -- the same shape as the
+    /// test above, restated with the exact bytes that arm produces.
+    #[test]
+    fn locate_streaminfo_finds_the_block_after_the_magic() {
+        let mut wrapped = b"fLaC".to_vec();
+        wrapped.push(0x80);
+        wrapped.extend_from_slice(&[0x00, 0x00, 0x22]);
+        wrapped.extend_from_slice(&fixture());
+        assert_eq!(locate_streaminfo(&wrapped), Some(fixture().as_slice()));
+    }
+
+    #[test]
+    fn locate_streaminfo_falls_back_to_none_for_a_bare_block() {
+        // The bare shape has no header for this function to find; the
+        // caller's `unwrap_or(extradata)` fallback is what handles it.
+        assert_eq!(locate_streaminfo(&fixture()), None);
     }
 
     #[test]

@@ -756,4 +756,60 @@ mod tests {
             "frame_length must read as 4096, not corrupted to 0 by an un-stripped version+flags prefix: {extradata:02x?}"
         );
     }
+
+    /// A real `stsd` box captured from `ffmpeg -c:a flac -f mp4` (one
+    /// `fLaC` sample entry: `channelcount=2`, `samplesize=16`,
+    /// `samplerate=48000`, a `dfLa` full box whose `STREAMINFO` states
+    /// `sample_rate=48000`, `channels=2`, `bits_per_sample=16`, plus a
+    /// `btrt`). Regression for a real, measured bug: `codec_parameters`
+    /// used to hand `vaco-parse-audio-misc::flac::FlacParser` `dfLa`'s own
+    /// un-converted 42-byte full-box payload, which that parser's naive
+    /// fixed-offset read misreads as `channels=1`, `bits_per_raw_sample=1`.
+    #[test]
+    fn flac_stsd_extradata_is_flac_prefixed_not_the_full_box_header() {
+        fn from_hex(s: &str) -> Vec<u8> {
+            (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+        }
+        let real_flac_entry = from_hex("0000006a664c6143000000000000000100000000000000000002001000000000bb8000000000003264664c6100000000800000221000100000034f00048e0bb802f00000bb809e36f85f3d9494c75a2ac524efaf9ebd0000001462747274000000000001f4000001a840");
+        let payload = {
+            let mut p = vec![0u8, 0, 0, 0]; // stsd version+flags
+            p.extend_from_slice(&1u32.to_be_bytes()); // entry_count
+            p.extend_from_slice(&real_flac_entry);
+            p
+        };
+        let mut real_flac_stsd = u32::try_from(payload.len() + 8).unwrap().to_be_bytes().to_vec();
+        real_flac_stsd.extend_from_slice(b"stsd");
+        real_flac_stsd.extend_from_slice(&payload);
+
+        let track = TrackSpec {
+            handler: *b"soun",
+            timescale: 48000,
+            media_duration: 48000,
+            stbl: StblSpec {
+                stsd_box: Some(real_flac_stsd),
+                stts: vec![(1, 48000)],
+                stsc: vec![(1, 1, 1)],
+                stsz: vec![100],
+                stco: vec![u32::try_from(MDAT_PAYLOAD).unwrap()],
+                has_stss: false,
+                ..StblSpec::default()
+            },
+            ..TrackSpec::default()
+        };
+        let data = fixture(48000, 48000, &[track], &[0u8; 100]);
+        let demux = open(data);
+        let stream = demux.streams().first().expect("one stream");
+        let extradata = stream.params.extradata.as_ref().expect("flac extradata must be present");
+        assert!(
+            extradata.starts_with(b"fLaC"),
+            "must carry this project's canonical fLaC-prefixed shape, not dfLa's own full-box header: {extradata:02x?}"
+        );
+        // `vaco-parse-audio-misc::flac::tests::a_flac_prefixed_metadata_block_
+        // describes_the_stream_correctly` covers that this exact shape --
+        // "fLaC" then a metadata-block header then STREAMINFO -- is read
+        // back as channels=2/bits_per_raw_sample=16, not the channels=1/
+        // bits_per_raw_sample=1 a real `ParserProvider` used to report over
+        // dfLa's un-converted full-box payload. Not re-asserted here:
+        // `vaco-demux-mp4` cannot depend on a `vaco-parse-*` crate (D14.1).
+    }
 }

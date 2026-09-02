@@ -139,6 +139,35 @@ pub(crate) fn codec_parameters(
                 // exiting 0 having produced about 2.5% of the audio.
                 params.extradata = config.data.get(4..).map(<[u8]>::to_vec);
             }
+            ConfigFlavour::Dfla => {
+                // `dfLa` is a full box (the FLAC-in-ISOBMFF mapping's
+                // `FLACSpecificBox extends FullBox('dfLa', 0, 0)`): its
+                // payload is 4 bytes of version+flags, then one or more
+                // FLAC metadata blocks verbatim, `STREAMINFO` first. This
+                // project's own canonical `extradata` shape for FLAC is
+                // `"fLaC" +` those same metadata blocks (`FlacEncoder::
+                // extradata`'s convention; Matroska's `A_FLAC`
+                // `CodecPrivate` matches it) -- so this replaces the box's
+                // own version+flags with that magic rather than keeping
+                // them, the same "container-specific header out,
+                // project-wide magic in" shape `ConfigFlavour::Dops` uses
+                // above. Measured end to end: without this,
+                // `vaco-parse-audio-misc::flac::FlacParser` -- reached
+                // generically through `ParserProvider` -- read straight
+                // into the version+flags and the metadata block's own
+                // header as if they were `STREAMINFO` data, reporting
+                // `channels=1`, `bits_per_raw_sample=1` for a real 48 kHz
+                // stereo 16-bit file, and `vaco -c:a copy` of the same file
+                // back to `.mp4` failed outright ("FLAC extradata is not a
+                // recognised STREAMINFO shape") because the corrupted
+                // extradata did not even round-trip through this crate's
+                // own mux side.
+                if let Some(blocks) = config.data.get(4..) {
+                    let mut extradata = b"fLaC".to_vec();
+                    extradata.extend_from_slice(blocks);
+                    params.extradata = Some(extradata);
+                }
+            }
             ConfigFlavour::Dops => {
                 // `dOps` is not "`OpusHead` minus its magic and version
                 // byte" (a claim `vaco-format-isom::writer::dops`'s doc
