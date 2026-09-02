@@ -143,6 +143,24 @@ impl DvDemuxer {
             } else {
                 PixFmt::Yuv411p
             }),
+            // DV's pixels are never square: the format samples at a fixed
+            // 720 luma columns regardless of the picture's true 4:3 shape,
+            // so every 4:3 DV stream needs a non-square SAR to display
+            // correctly, and it is a fixed, standard value, not something
+            // this crate could compute from the frame it has already
+            // parsed. Measured directly (`ffmpeg -c:v dvvideo`, real
+            // `ffprobe`): 720x480 (NTSC) reports `sample_aspect_ratio=8:9`;
+            // 720x576 (PAL) reports `16:15`. Only the 4:3 case is filled
+            // in -- DV's widescreen flag lives in a VAUX subcode pack this
+            // crate does not read yet (16:9 NTSC/PAL are `32:27`/`64:45`
+            // per the DV standard, but that is recalled, not measured
+            // against a real 16:9 fixture the way the two rows above are,
+            // so it is named here rather than guessed into the table).
+            sample_aspect_ratio: if profile.is_pal {
+                Rational::new(16, 15)
+            } else {
+                Rational::new(8, 9)
+            },
             ..VideoParameters::default()
         };
         let mut vparams = CodecParameters::new(MediaType::Video).with_codec(CodecId::Dvvideo);

@@ -67,6 +67,32 @@ pub const fn profile_name(profile_and_level_indication: u8) -> Option<&'static s
     })
 }
 
+/// `Profile::new`'s numeric value: the reference's own small per-codec
+/// profile enum, not the raw `profile_and_level_indication` byte -- the same
+/// "value is not the same as its own field" shape `vaco-parse-mpegvideo::
+/// mpeg12`'s `profile_and_level_indication` needed splitting for, just with
+/// a lookup instead of a bit shift, since MPEG-4 Part 2's byte does not
+/// split cleanly into a profile nibble and a level nibble the way MPEG-2's
+/// does (§V.3's table lists profile/level together per range, with gaps).
+///
+/// Only the Simple Profile row is filled in, because it is the only one
+/// this crate can currently measure against a real encode: `ffmpeg`'s
+/// native `mpeg4` encoder does not expose `-profile:v` (`ffmpeg -h
+/// encoder=mpeg4` lists no such option), so Core/Main/Advanced Simple have
+/// no reachable fixture to confirm a value against without a different
+/// encoder this crate does not have access to. Measured: a plain `ffmpeg
+/// -c:v mpeg4` encode's `profile_and_level_indication` is `0x01`, and real
+/// `ffprobe` reports `profile=0`, not `1`. Every other named profile falls
+/// back to the raw byte for now -- a known-imprecise value, but no more
+/// imprecise than it was before this fix, and not guessed from an
+/// unmeasured recollection of the reference's enum.
+const fn profile_value(profile_and_level_indication: u8) -> i32 {
+    match profile_and_level_indication {
+        0x01..=0x03 | 0x08 => 0,
+        other => other as i32,
+    }
+}
+
 /// `VisualObjectSequence`'s one field this crate reads.
 #[derive(Debug, Clone, Copy)]
 struct VisualObjectSequence {
@@ -254,8 +280,8 @@ impl Mpeg4Parser {
         let mut params = CodecParameters::video().with_codec(CodecId::Mpeg4);
         if let Some(byte) = self.profile_and_level_indication {
             params.profile = Some(match profile_name(byte) {
-                Some(name) => Profile::new(i32::from(byte), name),
-                None => Profile::new(i32::from(byte), ""),
+                Some(name) => Profile::new(profile_value(byte), name),
+                None => Profile::new(profile_value(byte), ""),
             });
             params.level = Some(Level(i32::from(byte & 0x0F)));
         }
@@ -354,6 +380,22 @@ impl vaco_codec_core::Parser for Mpeg4Parser {
     fn parameters(&self) -> Option<&CodecParameters> {
         self.params.as_ref()
     }
+
+    /// MP4/Matroska's own convention for MPEG-4 Part 2 config data is the
+    /// raw `VisualObjectSequence`/`VideoObjectLayer` header bytes verbatim
+    /// (unlike H.264's length-prefixed `avcC` array) -- the same bytes
+    /// [`Self::absorb_headers`] already scans out of an in-band elementary
+    /// stream, so this crate reuses it rather than adding a second reader.
+    /// Before this, `Parser::set_extradata`'s default no-op left every
+    /// MP4/Matroska `mpeg4` stream reporting no profile/level/width/height
+    /// at all -- measured on a real `-c:v mpeg4 -f matroska` fixture:
+    /// `profile=unknown`, `level=-99`, where the reference reports
+    /// `profile=0`/`level=1` from the identical bytes, which arrive in this
+    /// container only as extradata, never in a packet.
+    fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        self.absorb_headers(extradata);
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -383,10 +425,29 @@ mod tests {
         let params = p.params.expect("headers were seen");
         assert_eq!(params.codec_id, Some(CodecId::Mpeg4));
         assert_eq!(params.profile.map(|pr| pr.name), Some("Simple Profile"));
+        // `ffprobe` reports `profile=0` for Simple Profile, not `1`
+        // (`profile_and_level_indication` read as a plain byte) -- see
+        // `profile_value`'s own doc comment for what is and is not measured.
+        assert_eq!(params.profile.map(|pr| pr.value), Some(0));
         assert_eq!(params.level, Some(Level(1)));
         let v = params.video.expect("video params");
         assert_eq!((v.width, v.height), (176, 144));
         assert_eq!(v.format, PixFmt::from_name("yuv420p").ok());
+    }
+
+    /// MP4/Matroska carry these same header bytes only as extradata, never
+    /// in a packet -- `Parser::set_extradata`'s default no-op used to leave
+    /// every container-wrapped `mpeg4` stream reporting nothing at all.
+    /// Same fixture as the in-band test above, fed the other way in.
+    #[test]
+    fn set_extradata_reaches_the_same_params_as_in_band_headers() {
+        let mut p = Mpeg4Parser::new(Limits::strict());
+        vaco_codec_core::Parser::set_extradata(&mut p, &REAL_HEADERS).expect("set_extradata");
+        let params = p.params.expect("extradata alone produced params");
+        assert_eq!(params.profile.map(|pr| pr.name), Some("Simple Profile"));
+        assert_eq!(params.level, Some(Level(1)));
+        let v = params.video.expect("video params");
+        assert_eq!((v.width, v.height), (176, 144));
     }
 
     #[test]

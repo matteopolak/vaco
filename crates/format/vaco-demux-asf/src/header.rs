@@ -164,12 +164,10 @@ pub(crate) fn parse_stream_properties(
         if !wfx.extra.is_empty() {
             params.extradata = Some(core::mem::take(&mut wfx.extra));
         }
-        let tb = if wfx.samples_per_sec > 0 {
-            Rational::new(1, i32::try_from(wfx.samples_per_sec).unwrap_or(1))
-        } else {
-            crate::demux::TIME_BASE_100NS
-        };
-        (MediaType::Audio, params, tb)
+        // Not `1/sample_rate`: measured against `ffmpeg 9.0.1`, whose own
+        // ASF demuxer reports `time_base=1/1000` for an audio stream too
+        // (see `crate::demux`'s own module doc for the full measurement).
+        (MediaType::Audio, params, crate::demux::TIME_BASE_MS)
     } else if stream_type == well_known::VIDEO_MEDIA {
         // [ASF] §9.2: EncodedImageWidth:u32, EncodedImageHeight:u32,
         // ReservedFlags:u8, FormatDataSize:u16, then the BITMAPINFOHEADER
@@ -200,7 +198,7 @@ pub(crate) fn parse_stream_properties(
                 params.extradata = Some(buf);
             }
         }
-        (MediaType::Video, params, crate::demux::TIME_BASE_100NS)
+        (MediaType::Video, params, crate::demux::TIME_BASE_MS)
     } else {
         // A stream type this crate does not decode payload structure for
         // (Command, JFIF, Degradable JPEG, File Transfer, Binary, or a
@@ -214,7 +212,7 @@ pub(crate) fn parse_stream_properties(
         (
             MediaType::Data,
             CodecParameters::new(MediaType::Data),
-            crate::demux::TIME_BASE_100NS,
+            crate::demux::TIME_BASE_MS,
         )
     };
 

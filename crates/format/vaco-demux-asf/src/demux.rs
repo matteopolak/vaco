@@ -5,9 +5,12 @@
 //!
 //! Every payload that carries Replicated Data states a Presentation Time in
 //! milliseconds ([\[ASF\] §5.2.3.1](vaco_format_asf)); this crate rescales
-//! that into each stream's own [`vaco_format_core::Stream::time_base`] (a
-//! stream's sample rate for audio, [`TIME_BASE_100NS`] for everything else,
-//! matching the container's own 100-nanosecond tick). A payload with no
+//! that into each stream's own [`vaco_format_core::Stream::time_base`], which
+//! is [`TIME_BASE_MS`] for every stream regardless of media type -- measured
+//! against `ffmpeg 9.0.1`, whose `-show_streams` reports `time_base=1/1000`
+//! on both the video and the audio stream of a real `libx264`+`aac`-in-ASF
+//! fixture, not a sample-rate-derived base for audio or the container's own
+//! 100-nanosecond `File Properties` tick for video. A payload with no
 //! Replicated Data at all (legal, per spec, when Replicated Data Length is
 //! `0`) carries no timestamp; this crate falls back to a running per-stream
 //! tick counter for that rare case, the same "count objects, do not guess a
@@ -43,16 +46,10 @@ use crate::header::{self, Encryption};
 use crate::index;
 use crate::packet::{ParsedPayload, parse_packet};
 
-/// ASF has no native tick unit smaller than 100 nanoseconds
-/// (`Creation Date`, `Play Duration`, a Simple Index's time interval are all
-/// stated in it), so it is the fallback time base for any stream whose own
-/// media type does not imply a better one (audio uses its sample rate; video
-/// and everything else uses this).
-pub(crate) const TIME_BASE_100NS: Rational = Rational::new(1, 10_000_000);
-
-/// Milliseconds, the unit every payload's Presentation Time and Send Time
-/// are stated in.
-const TIME_BASE_MS: Rational = Rational::new(1, 1000);
+/// Milliseconds: the unit every payload's Presentation Time and Send Time
+/// are stated in, and (see this module's own doc comment) every stream's
+/// `time_base`, regardless of media type.
+pub(crate) const TIME_BASE_MS: Rational = Rational::new(1, 1000);
 
 /// This container's declared capabilities.
 ///
@@ -949,8 +946,11 @@ mod tests {
 
         let p1 = demux.read_packet().unwrap();
         assert_eq!(p1.payload(), b"BBBB");
-        // 500ms at an 8000Hz time base is 4000 ticks.
-        assert_eq!(p1.pts.ticks(), Some(4000));
+        // 500ms at this crate's uniform 1/1000 time base (see `crate::demux`'s
+        // own module doc: every ASF stream uses it, not a sample-rate-derived
+        // one, matching `ffmpeg`'s own measured `-show_streams` output) is
+        // exactly 500 ticks.
+        assert_eq!(p1.pts.ticks(), Some(500));
 
         assert!(matches!(demux.read_packet(), Err(Error::Eof)));
         // Sticky.
@@ -987,11 +987,11 @@ mod tests {
         // Raw Send Time 3100ms minus 3100ms preroll lands exactly on 0.
         let p0 = demux.read_packet().unwrap();
         assert_eq!(p0.pts.ticks(), Some(0));
-        // Raw Send Time 3600ms minus preroll is 500ms, i.e. 4000 ticks at
-        // this stream's 8000Hz time base -- same as the no-preroll test
-        // above, confirming the subtraction and not just a lucky zero.
+        // Raw Send Time 3600ms minus preroll is 500ms, i.e. 500 ticks at
+        // this crate's uniform 1/1000 time base -- same as the no-preroll
+        // test above, confirming the subtraction and not just a lucky zero.
         let p1 = demux.read_packet().unwrap();
-        assert_eq!(p1.pts.ticks(), Some(4000));
+        assert_eq!(p1.pts.ticks(), Some(500));
     }
 
     #[test]

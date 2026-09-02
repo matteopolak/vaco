@@ -49,6 +49,11 @@ fn a_real_ntsc_sample_reports_the_measured_dimensions_and_frame_rate() {
             den: 1_001
         }
     );
+    // Measured (`ffmpeg -c:v dvvideo` at 720x480, real `ffprobe`):
+    // `sample_aspect_ratio=8:9`. DV's luma is always sampled at a fixed
+    // 720 columns regardless of the picture's true 4:3 shape, so this is
+    // not derivable from width/height alone.
+    assert_eq!(vp.sample_aspect_ratio, vaco_core::Rational { num: 8, den: 9 });
 }
 
 #[test]

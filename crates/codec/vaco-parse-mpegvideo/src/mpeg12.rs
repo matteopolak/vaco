@@ -266,11 +266,22 @@ impl Sequence {
         };
         let mut params = CodecParameters::video().with_codec(codec);
         if let Some(ext) = self.ext {
+            // `profile_and_level_indication` packs *both* fields into one
+            // byte (profile in the top 4 bits, level in the bottom 4, per
+            // ITU-T H.262 table 8-3) -- `Profile::new`'s numeric value must
+            // be the profile alone, not the combined byte. Measured against
+            // a real Main-profile/level-8 encode (`0x48`): `ffprobe`
+            // reports `profile=4`, not `profile=72` (`0x48` read as a plain
+            // decimal byte) -- the bug this fixes, caught by the conformance
+            // sweep, not a unit test, since `profile_names_match_the_probed_
+            // reference` below only ever checked the *name*, which
+            // `profile_name` already shifts correctly on its own.
+            let profile_code = i32::from(ext.profile_and_level_indication >> 4);
             params.profile = Some(match profile_name(ext.profile_and_level_indication) {
-                Some(name) => Profile::new(i32::from(ext.profile_and_level_indication), name),
+                Some(name) => Profile::new(profile_code, name),
                 // Matches `vaco-probe`'s numeric fallback for an unnamed
                 // profile: an empty name prints the raw value either way.
-                None => Profile::new(i32::from(ext.profile_and_level_indication), ""),
+                None => Profile::new(profile_code, ""),
             });
             // The level is the same byte's low nibble, and — measured
             // against four `-level:v` values on a real encode — the
@@ -515,6 +526,11 @@ mod tests {
         let params = p.params.unwrap();
         assert_eq!(params.codec_id, Some(CodecId::Mpeg2video));
         assert_eq!(params.profile.map(|pr| pr.name), Some("Main"));
+        // `ffprobe` reports `profile=4` (the profile alone) for this real
+        // `-profile:v 4 -level:v 8` fixture, not `72` (`0x48`, profile and
+        // level packed into one byte and read as a plain decimal number) --
+        // caught by the conformance sweep, not this test, until now.
+        assert_eq!(params.profile.map(|pr| pr.value), Some(4));
         assert_eq!(params.level, Some(Level(8)));
         let v = params.video.unwrap();
         assert_eq!((v.width, v.height), (176, 144));
