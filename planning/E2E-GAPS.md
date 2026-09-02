@@ -3761,3 +3761,58 @@ and real thread dispatch (step 4's own remaining work).
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 49. HEVC B4 Stage 2b: `EdgeMarksShared`/`CuGridShared`/`SaoParamsGridShared`/`ReconPlaneShared` behind `Arc` -- clears the gate with little margin, likely `ReconPlane`'s own cost
+
+Commit `6295561` extends `CtxShared`'s own `Arc`-wrap (ss48) to the four
+remaining `*Shared` types, so a per-worker `Ctx` could eventually hold a
+cheap `Arc::clone` of each published board instead of owning it by value.
+Verified safe before wrapping (not assumed): grepped for any
+`self.shared.<field> = `/`.push`/`.fill`/`.insert` across `framebuf.rs`
+and `sao.rs` -- none exist; every field of all four types is set once at
+construction, and `RowPublish::publish` already takes `&self` by design,
+so nothing ever needed `&mut self.shared` on any of the four. One
+mechanical fallout: `EdgeMarks`/`CuGrid`'s `band_of`/`local_of` and
+`ReconPlane`'s `tile_of`/`local_of` were `const fn` -- `Arc<T>`'s `Deref`
+is not `const`, so all four were demoted to plain `fn` (nothing depended
+on the const-ness).
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (73 unit + 6 integration
+tests, unchanged) and `cargo clippy -p vaco-codec-hevc --lib --tests -- -D
+warnings` both clean; `cargo xtask unsafe-audit` clean. Against
+`hevc_1080p.mp4`: `vaco -threads 1` before, after, and `ffmpeg`'s own
+decode all produced the identical sha256 (unchanged since ss39). The
+300x500 partial-CTU-column fixture still matched.
+
+**Serial cost -- a real, small, consistent cost this time, not noise**.
+First attempt: one round showed a severe outlier (candidate wall 63.1s
+against a 15-17s norm elsewhere in the same run) -- discarded, redone.
+Clean redo: six rounds, isolated worktrees for `48ab450` (baseline) and
+`6295561` (candidate), `hevc_1080p.mp4`, `-threads 1`, five decodes per
+round per binary, all twelve wall/CPU samples landing in a tight
+15.5-16.9s band (no outliers this time). Load average 8.98-14.02.
+Per-round CPU-seconds ratio: 1.028, 0.969, 1.036, 1.027, 1.022, 1.051 --
+median **1.027x**, mean **1.022x**, candidate cheaper in only 1 of 6
+rounds. This **clears Stage 1's own <=1.03x gate, but with far less
+margin than any prior step in this item** -- the direction is consistent
+(5 of 6 rounds regressed, not a coin-flip spread around 1.0), so this
+reads as a real, if small, cost rather than measurement noise around
+zero. Structurally plausible: unlike ss46's plain nested-struct field
+reorganisation (which resolves to the same compiled offset the field
+already had), `Arc<T>::deref` is a genuine pointer follow, paid on every
+read through it -- and of the four types wrapped here, only
+`ReconPlaneShared`'s own fields (`ctb_size` via `tile_of`/`local_of`) are
+touched on the actual per-pixel path; `EdgeMarksShared`/`CuGridShared`/
+`SaoParamsGridShared`'s own reads stay at the once-per-row frequency ss41-
+43 already established costs nothing measurable. `ReconPlaneShared`'s own
+indirection is the more likely source of this section's own small cost,
+though the four were not measured separately to isolate it, given the
+result already clears the gate as bundled.
+
+**Not done in this section**: isolating which of the four Arc-wraps
+actually costs the ~2-3%, giving each worker its own owned `current`
+value alongside a cloned `Arc<XShared>` (the actual per-worker `Ctx`
+shape step 4 needs), and real thread dispatch itself.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.

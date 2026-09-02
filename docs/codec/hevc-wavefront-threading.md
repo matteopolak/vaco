@@ -764,6 +764,20 @@ mutate `pic`, and `Arc<T>` cannot hand back `&mut T` short of
 shared struct is preferred over relying on it). Measured: CPU-seconds
 median 0.993x, mean 1.000x — essentially neutral, clearing the gate.
 
+The remaining four structure-carrying `*Shared` types followed the same
+way (commit `6295561`, `planning/E2E-GAPS.md` §49): `EdgeMarksShared`/
+`CuGridShared`/`SaoParamsGridShared`/`ReconPlaneShared` all behind `Arc`
+now too, verified safe the same way (no field ever reassigned after
+construction, `RowPublish::publish` already `&self`-based). **This one
+clears the gate with real margin lost, not merely a smaller one**:
+CPU-seconds median 1.027x, mean 1.022x, five of six rounds regressed —
+still under 1.03x, but a genuine, consistent cost this time rather than
+noise, plausibly `Arc<T>::deref`'s own pointer indirection on
+`ReconPlaneShared`'s per-pixel-path fields specifically (the other three
+stay at the once-per-row frequency already shown to cost nothing). Not
+isolated per-type, since the bundled result already clears the gate — a
+question for whoever next has reason to look closely at this margin.
+
 4. Only then, real `std::thread::spawn` dispatch over the row loop, reusing
    `vaco_codec_core::threading`'s `Pool`/`Queue`/`Condvar`/`ReplyGuard`
    shape (row index in place of that module's frame index, `Result<()>`
