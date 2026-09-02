@@ -35,22 +35,30 @@ use crate::weight::RefWeights;
 /// Stage 2b step 3b (`docs/codec/hevc-wavefront-threading.md`): everything
 /// in `Ctx` that is constant for the whole slice and safe to share
 /// read-only across every row worker once real dispatch exists — every
-/// SPS/PPS/slice-header-derived scalar and flag, `inter` (reference lists
-/// and merge/AMVP/TMVP slice-level parameters, never written after
-/// construction), and `pic` (needed by the still-serial, whole-picture
-/// deblock/SAO pass that runs once every row joins, not by the per-row
-/// reconstruction task itself — see that document's own correction on
-/// this point). Grouping these here, still passed around inside one `Ctx`
-/// for now (step 4's real dispatch is what actually pulls this out behind
-/// an `Arc`), is what makes that eventual pull mechanical: every read
-/// already goes through `self.shared`/`walk.shared` explicitly rather than
-/// a flat field on `Ctx` itself.
+/// SPS/PPS/slice-header-derived scalar and flag, and `inter` (reference
+/// lists and merge/AMVP/TMVP slice-level parameters, never written after
+/// construction). Now actually `Arc`-shared (step 3b's own follow-up,
+/// `docs/codec/hevc-wavefront-threading.md`'s "don't share the writer"
+/// resolution): every field here is read-only after [`Ctx::new`]/
+/// [`Ctx::retarget_pic_for_test`] construct it, so `Arc<CtxShared<'p>>`
+/// needs no lock at all — cloning the `Arc` is the whole cost of handing a
+/// row worker its own reference.
+///
+/// `pic` deliberately does **not** live here, even though it is equally
+/// constant-for-the-slice in the sense of "never reassigned": deblocking
+/// and SAO mutate the `Picture` it points at (`&mut s.pic.y`, throughout
+/// `deblock.rs`/`sao.rs`), and `Arc<T>` can only ever hand back `&T` short
+/// of `Arc::get_mut`'s own "only if nothing else holds a clone right now"
+/// condition — a runtime invariant this crate would rather not depend on
+/// when a static one (never put a `&mut` behind an `Arc` in the first
+/// place) is available for free. `pic` stays a direct field of [`Ctx`]
+/// itself instead, exactly where the still-serial deblock/SAO pass that is
+/// its only real reader already finds it.
 #[allow(
     clippy::struct_excessive_bools,
     reason = "each bool is an independent SPS/PPS/slice-header flag this walk needs, not a state machine in disguise"
 )]
 pub(crate) struct CtxShared<'p> {
-    pub pic: &'p mut Picture,
     pub log2_ctb_size: u32,
     pub log2_min_cb_size: u32,
     pub log2_min_tb_size: u32,
@@ -126,7 +134,13 @@ pub(crate) struct CtxShared<'p> {
 /// decision until the thing that needs it exists, rather than guessing its
 /// shape ahead of time.
 pub(crate) struct Ctx<'p> {
-    pub shared: CtxShared<'p>,
+    pub shared: std::sync::Arc<CtxShared<'p>>,
+    /// The finished-picture buffer deblocking/SAO/emission (and every
+    /// future picture's own reference reads) use — mutated in place by
+    /// both, so it stays a direct field here rather than inside `shared`;
+    /// see that type's own doc for why. Set once at construction, like
+    /// every field of `Ctx`, but never behind the `Arc`.
+    pub pic: &'p mut Picture,
     /// The CTU walk's own in-progress reconstruction buffer — see
     /// `crate::framebuf`'s "Stage 1" section doc for why this is a
     /// separate type from `pic` (which stays the finished-picture shape
@@ -322,8 +336,7 @@ impl<'p> Ctx<'p> {
         let ctbs_y = u32::try_from(height).unwrap_or(0).div_ceil(ctb_size).max(1);
         let sao_params = crate::sao::SaoParamsGrid::new(budget, ctbs_x, ctbs_y)?;
         Ok(Self {
-            shared: CtxShared {
-                pic,
+            shared: std::sync::Arc::new(CtxShared {
                 pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
                 pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
                 log2_ctb_size,
@@ -351,7 +364,8 @@ impl<'p> Ctx<'p> {
                 is_p_slice,
                 inter,
                 max_transform_hierarchy_depth_inter: sps.max_transform_hierarchy_depth_inter,
-            },
+            }),
+            pic,
             qp_y_prev: slice_qp,
             qg_qp_pred: slice_qp,
             is_cu_qp_delta_coded: false,
@@ -377,8 +391,7 @@ impl<'p> Ctx<'p> {
     #[cfg(test)]
     pub(crate) fn retarget_pic_for_test<'q>(&self, pic: &'q mut Picture, recon: &'q mut ReconPicture) -> Ctx<'q> {
         Ctx {
-            shared: CtxShared {
-                pic,
+            shared: std::sync::Arc::new(CtxShared {
                 log2_ctb_size: self.shared.log2_ctb_size,
                 log2_min_cb_size: self.shared.log2_min_cb_size,
                 log2_min_tb_size: self.shared.log2_min_tb_size,
@@ -406,7 +419,8 @@ impl<'p> Ctx<'p> {
                 is_p_slice: self.shared.is_p_slice,
                 inter: None,
                 max_transform_hierarchy_depth_inter: self.shared.max_transform_hierarchy_depth_inter,
-            },
+            }),
+            pic,
             // `deblock::filter_picture`, the only thing this retargeted
             // copy ever runs, never reads `Ctx::recon` -- the caller passes
             // a throwaway one purely to satisfy the field.

@@ -407,7 +407,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
     let grid = 1i32 << s.shared.log2_min_cb_size;
     let chroma_grid = grid.max(16);
 
-    let (width, height) = s.shared.pic.y.dims();
+    let (width, height) = s.pic.y.dims();
     let (width, height) = (i32::try_from(width).unwrap_or(0), i32::try_from(height).unwrap_or(0));
 
     // Vertical edges: luma at every `grid` column, chroma at every
@@ -422,7 +422,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     let qp = qp_avg(s, Dir::Vert, x, y);
                     let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
                     let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
-                    filter_luma_group(&mut s.shared.pic.y, Dir::Vert, x, y, tc, beta, s.shared.bit_depth_luma);
+                    filter_luma_group(&mut s.pic.y, Dir::Vert, x, y, tc, beta, s.shared.bit_depth_luma);
                 }
             }
             y += 4;
@@ -444,8 +444,8 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                 let cy0 = y >> 1;
                 let rows = (grid >> 1).max(1);
                 for i in 0..rows {
-                    filter_chroma_line(&mut s.shared.pic.cb, Dir::Vert, cx, cy0 + i, cb_tc, s.shared.bit_depth_chroma);
-                    filter_chroma_line(&mut s.shared.pic.cr, Dir::Vert, cx, cy0 + i, cr_tc, s.shared.bit_depth_chroma);
+                    filter_chroma_line(&mut s.pic.cb, Dir::Vert, cx, cy0 + i, cb_tc, s.shared.bit_depth_chroma);
+                    filter_chroma_line(&mut s.pic.cr, Dir::Vert, cx, cy0 + i, cr_tc, s.shared.bit_depth_chroma);
                 }
             }
             y += grid;
@@ -464,7 +464,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     let qp = qp_avg(s, Dir::Horiz, x, y);
                     let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
                     let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
-                    filter_luma_group(&mut s.shared.pic.y, Dir::Horiz, y, x, tc, beta, s.shared.bit_depth_luma);
+                    filter_luma_group(&mut s.pic.y, Dir::Horiz, y, x, tc, beta, s.shared.bit_depth_luma);
                 }
             }
             x += 4;
@@ -483,8 +483,8 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                 let cx0 = x >> 1;
                 let cols = (grid >> 1).max(1);
                 for i in 0..cols {
-                    filter_chroma_line(&mut s.shared.pic.cb, Dir::Horiz, cy, cx0 + i, cb_tc, s.shared.bit_depth_chroma);
-                    filter_chroma_line(&mut s.shared.pic.cr, Dir::Horiz, cy, cx0 + i, cr_tc, s.shared.bit_depth_chroma);
+                    filter_chroma_line(&mut s.pic.cb, Dir::Horiz, cy, cx0 + i, cb_tc, s.shared.bit_depth_chroma);
+                    filter_chroma_line(&mut s.pic.cr, Dir::Horiz, cy, cx0 + i, cr_tc, s.shared.bit_depth_chroma);
                 }
             }
             x += grid;

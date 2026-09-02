@@ -487,7 +487,7 @@ impl HevcDecoder {
         // see `framebuf::ReconPlane`'s own module doc for why this is a
         // one-time copy rather than `recon` itself growing into `pic`.
         walk.recon.finish()?;
-        walk.recon.materialize_into(walk.shared.pic);
+        walk.recon.materialize_into(walk.pic);
         walk.edges.finish()?;
         walk.cu_grid.finish()?;
         walk.sao_params.finish()?;
@@ -1079,7 +1079,7 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
         return Vec::new();
     };
 
-    let mut pristine_pic = walk.shared.pic.clone();
+    let mut pristine_pic = walk.pic.clone();
     {
         let mut pristine_ctx = walk.retarget_pic_for_test(&mut pristine_pic, &mut throwaway_recon);
         deblock::filter_picture(&mut pristine_ctx);
@@ -1091,7 +1091,7 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
         .iter()
         .map(|&lag| {
             let below_first_corrupt_ctu_row = probe.target_ctu_row.saturating_add(1).saturating_add(lag);
-            let mut below_pic = walk.shared.pic.clone();
+            let mut below_pic = walk.pic.clone();
             invert_rows_from(&mut below_pic, below_first_corrupt_ctu_row.saturating_mul(ctb));
             let below_matches = {
                 let mut below_ctx = walk.retarget_pic_for_test(&mut below_pic, &mut throwaway_recon);
@@ -1107,7 +1107,7 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
             // picks a target row with enough rows to spare on both sides
             // precisely so every lag it asks for is meaningful.
             let above_first_pristine_ctu_row = probe.target_ctu_row.saturating_sub(lag);
-            let mut above_pic = walk.shared.pic.clone();
+            let mut above_pic = walk.pic.clone();
             invert_rows_before(&mut above_pic, above_first_pristine_ctu_row.saturating_mul(ctb));
             let above_matches = {
                 let mut above_ctx = walk.retarget_pic_for_test(&mut above_pic, &mut throwaway_recon);

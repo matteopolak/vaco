@@ -570,9 +570,9 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
     let ctb_size = 1i32 << s.shared.log2_ctb_size;
     let ctbs_x = s.shared.ctbs_x;
 
-    let snap_y = Snapshot::capture(budget, &s.shared.pic.y)?;
-    let snap_cb = Snapshot::capture(budget, &s.shared.pic.cb)?;
-    let snap_cr = Snapshot::capture(budget, &s.shared.pic.cr)?;
+    let snap_y = Snapshot::capture(budget, &s.pic.y)?;
+    let snap_cb = Snapshot::capture(budget, &s.pic.cb)?;
+    let snap_cr = Snapshot::capture(budget, &s.pic.cr)?;
 
     for addr in 0..s.sao_params.len() {
         let addr = u32::try_from(addr).unwrap_or(0);
@@ -586,11 +586,11 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
         if width <= 0 || height <= 0 {
             continue;
         }
-        offset_block(&mut s.shared.pic.y, &snap_y, params.y, x0, y0, width, height, s.shared.bit_depth_luma);
+        offset_block(&mut s.pic.y, &snap_y, params.y, x0, y0, width, height, s.shared.bit_depth_luma);
 
         let (cx0, cy0, cw, ch) = (x0 >> 1, y0 >> 1, (width + 1) >> 1, (height + 1) >> 1);
-        offset_block(&mut s.shared.pic.cb, &snap_cb, params.cb, cx0, cy0, cw, ch, s.shared.bit_depth_chroma);
-        offset_block(&mut s.shared.pic.cr, &snap_cr, params.cr, cx0, cy0, cw, ch, s.shared.bit_depth_chroma);
+        offset_block(&mut s.pic.cb, &snap_cb, params.cb, cx0, cy0, cw, ch, s.shared.bit_depth_chroma);
+        offset_block(&mut s.pic.cr, &snap_cr, params.cr, cx0, cy0, cw, ch, s.shared.bit_depth_chroma);
     }
     // The three snapshots are pure working state for the loop just above —
     // give their charge back before they drop, rather than letting it ride
