@@ -314,6 +314,20 @@ impl Sequence {
         }
     }
 
+    /// The `extradata` this crate reports (assembled in `absorb_headers`,
+    /// not here -- this method has no access to the raw bytes) is the raw
+    /// `sequence_header()`/`sequence_extension()` bytes, verbatim. Measured
+    /// directly (`ffmpeg -c:v mpeg2video -f mpegts`/`-f mpeg`, real
+    /// `ffprobe`, a headerless container with no out-of-band configuration
+    /// record of its own): `extradata_size=22`, matching exactly
+    /// `sequence_header()` (12 bytes: the `00 00 01 B3` start code plus its
+    /// fixed fields) followed immediately by `sequence_extension()` (10
+    /// bytes: `00 00 01 B5` plus its own fixed fields), stopping at the
+    /// `group_start_code` that follows in the fixture measured. Not
+    /// synthesised through `vaco-format-core::discovery`'s existing
+    /// `synthesize_extradata` -- that mechanism is NAL-unit shaped
+    /// (H.264/HEVC parameter sets, keyed on `vaco_format_nalu::header_kind_
+    /// for`), and MPEG-1/2 video has no NAL units at all to hand it.
     fn codec_parameters(&self) -> CodecParameters {
         let codec = if self.ext.is_some() {
             CodecId::Mpeg2video
@@ -429,6 +443,21 @@ impl Mpeg12Parser {
     /// `prefix` — the bytes of an access unit before its picture start code.
     fn absorb_headers(&mut self, prefix: &[u8]) {
         let mut pos = 0usize;
+        // The raw `sequence_header()` plus any `B5`-prefixed extension(s)
+        // immediately following it, captured verbatim -- see
+        // `codec_parameters`'s own comment for why and what it is measured
+        // against. `header_start` opens the span at the first
+        // `SEQUENCE_HEADER` start code seen in this call; `header_end`
+        // tracks how far the *contiguous* header+extensions block reaches,
+        // stopping at the first start code that is neither (a
+        // `GROUP_START`/`PICTURE_START` in every real stream this parses).
+        let mut header_start: Option<usize> = None;
+        let mut header_end = 0usize;
+        // Whether the *previous* start code processed was part of the
+        // header/extensions block currently being captured -- a new start
+        // code ends that block at its own position, whatever it turns out
+        // to be (another header/extension code re-extends it below).
+        let mut in_header_span = false;
         while let Some(i) = annexb::find_start_code(prefix, pos) {
             let Some(&code) = prefix.get(i.saturating_add(3)) else {
                 break;
@@ -436,8 +465,13 @@ impl Mpeg12Parser {
             let Some(body) = prefix.get(i.saturating_add(4)..) else {
                 break;
             };
+            if in_header_span {
+                header_end = i;
+            }
             if code == SEQUENCE_HEADER {
                 self.seq = Some(sequence_header(body));
+                header_start = Some(i);
+                in_header_span = true;
             } else if code == EXTENSION_START {
                 let mut r = BitReader::new(body);
                 let ext_id = r.get(4);
@@ -446,16 +480,26 @@ impl Mpeg12Parser {
                 {
                     seq.ext = Some(sequence_extension(&mut r));
                 }
+                // Stays whatever it already was: an extension right after
+                // the sequence header extends the span, one anywhere else
+                // does not open one.
+            } else {
+                in_header_span = false;
             }
             pos = i.saturating_add(4);
         }
+        if in_header_span {
+            header_end = prefix.len();
+        }
         if let Some(seq) = self.seq {
-            let found = seq.codec_parameters();
+            let mut found = seq.codec_parameters();
+            found.media_type = Some(MediaType::Video);
+            if let Some(start) = header_start {
+                found.extradata = prefix.get(start..header_end).map(<[u8]>::to_vec);
+            }
             if let Some(existing) = &mut self.params {
                 existing.fill_from(&found);
             } else {
-                let mut found = found;
-                found.media_type = Some(MediaType::Video);
                 self.params = Some(found);
             }
         }
@@ -633,6 +677,12 @@ mod tests {
         // content, matching this real fixture's own `progressive_sequence`
         // bit): `field_order=progressive`.
         assert_eq!(v.field_order, FieldOrder::Progressive);
+        // The raw `sequence_header()` + `sequence_extension()` bytes,
+        // verbatim, stopping at the `group_start_code` (`0x000001B8`) that
+        // follows in this fixture -- see `codec_parameters`'s own comment
+        // for the real-file measurement this mirrors (22 bytes there; this
+        // synthetic fixture's own extension is shorter, 21).
+        assert_eq!(params.extradata.as_deref(), Some(&REAL_SEQ_PREFIX[..21]));
     }
 
     #[test]
@@ -650,6 +700,14 @@ mod tests {
         // `progressive_sequence` bit from at all.
         let v = params.video.unwrap();
         assert_eq!(v.field_order, FieldOrder::Progressive);
+        // Measured (`ffmpeg -c:v mpeg1video`, real ffprobe): `extradata_
+        // size=12`, exactly the bare `sequence_header()` with no extension
+        // to extend it -- the loop runs off the end of `prefix` with the
+        // span still open, so this also exercises the "no further start
+        // code at all" tail case `codec_parameters`'s own comment does not
+        // cover (the real fixture measured there always has a following
+        // `group_start_code`).
+        assert_eq!(params.extradata.as_deref(), Some(&REAL_SEQ_PREFIX[..12]));
     }
 
     /// A `progressive_sequence=0` sequence extension: real ffmpeg reports a
