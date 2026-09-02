@@ -199,6 +199,26 @@ fn read_element_header(r: &mut BitReader<'_>, bit_depth: u8, frame_length: u32, 
     } else {
         frame_length
     };
+    // A real element always carries at least one sample -- `send_packet(None)`
+    // is how draining is signalled (see `AlacDecoder`'s own `draining`
+    // field), never a packet with an empty element, so `num_samples == 0`
+    // means something upstream is wrong, not that this frame is legitimately
+    // silent-and-empty. Measured concretely: `vaco-demux-mp4` handing over
+    // an `alac` full box's un-stripped 4-byte version+flags prefix in place
+    // of the real `ALACSpecificConfig` made `frame_length` read as `0`, and
+    // every packet whose `partialFrame` bit relied on that cookie value
+    // (i.e. every full-length packet in the file) decoded as a valid-
+    // looking, silently empty frame -- 21 of 22 frames in one real fixture,
+    // with the CLI exiting 0 having produced about 2.5% of the audio. This
+    // turns that whole class of "technically a valid frame, semantically
+    // nothing" outcome into a loud, immediate decode error at the one place
+    // every such packet passes through, independent of which upstream bug
+    // produces it.
+    if num_samples == 0 {
+        return Err(Error::InvalidData(
+            "alac: element declares zero samples -- likely a corrupt cookie (frame_length) or packet header, not a legitimately empty frame",
+        ));
+    }
     let chan_bits = u32::from(bit_depth).wrapping_sub(bytes_shifted * 8).wrapping_add(extra_chanbits);
     Ok(ElementHeader {
         num_samples,
@@ -868,6 +888,42 @@ mod tests {
             let got = i16::from_le_bytes(row[i * 2..i * 2 + 2].try_into().unwrap());
             assert_eq!(got, s, "sample {i}");
         }
+    }
+
+    /// A non-partial element (`partialFrame = 0`) with a zero `frame_length`
+    /// (the cookie-derived sample count for exactly this case) must be a
+    /// loud decode error, not a silent zero-sample frame that lets the CLI
+    /// exit 0 having decoded nothing. Regression for the real bug: `vaco-
+    /// demux-mp4` handed over an `alac` full box's un-stripped 4-byte
+    /// version+flags prefix as if it were the `ALACSpecificConfig` itself,
+    /// so `frame_length` read as `0` -- every full-length packet in a real
+    /// `ffmpeg`-produced `.m4a` (21 of 22 frames) decoded as a "valid",
+    /// silently empty frame, and only the file's one genuinely
+    /// `partialFrame`-tagged (explicit-count) packet, its short final
+    /// frame, carried any audio at all: about 2.5% of the file, `vaco`
+    /// exiting 0. Fixed at the extraction site (`vaco-demux-mp4`'s
+    /// `codec_parameters`) and, independently, here: whatever upstream
+    /// mistake produces a zero-sample non-partial element, `decode` itself
+    /// must refuse it rather than silently accept it as legitimate.
+    #[test]
+    fn zero_frame_length_on_a_non_partial_element_is_a_loud_error_not_zero_samples() {
+        let mut b = Budget::new(Limits::permissive());
+        let mut w = BitWriter::with_capacity(&mut b, 64).unwrap();
+        w.put(3, ID_SCE);
+        w.put(4, 0); // instance tag
+        w.put(12, 0); // unused
+        w.put(4, 0); // partialFrame=0, bytesShifted=0, escape=0 -- relies on frame_length
+        w.put(8, 0); // mixBits
+        w.put(8, 0); // mixRes
+        w.put(8, 0); // modeU=0, denShiftU=0
+        w.put(8, 0); // pbFactorU=0, numU=0
+        let bytes = w.finish();
+
+        let mut b2 = Budget::new(Limits::permissive());
+        // frame_length = 0: exactly what a mis-extracted cookie handed to
+        // `set_extradata` would produce.
+        let result = decode(&bytes, 44100, 16, 0, Some(ChannelLayout::MONO), &mut b2);
+        assert!(matches!(result, Err(Error::InvalidData(_))), "expected InvalidData, got {result:?}");
     }
 }
 

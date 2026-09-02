@@ -4,8 +4,8 @@ use std::collections::VecDeque;
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::Encoder;
-use vaco_core::{Error, Result};
-use vaco_frame::Frame;
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
+use vaco_frame::{Frame, FrameData};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
 use vaco_sampfmt::SampleFmt;
@@ -107,6 +107,27 @@ impl Encoder for AlacEncoder {
         let bytes = frame_codec::encode(frame, &mut budget)?;
         let mut packet = Packet::from_slice(&mut budget, &bytes)?;
         packet.pts = frame.pts;
+        // Real, not left at its `Duration::ZERO` default: `vaco-mux-mp4`'s
+        // `stts` table derives every sample's duration but the *last* one
+        // from the gap to the next sample's `dts`, which does not exist for
+        // a track's final packet -- it falls back to whatever duration the
+        // most recent packet stated, and this encoder never stated one at
+        // all. Measured end to end: `vaco -i mono.wav -c:a alac out.m4a`
+        // wrote a valid-looking file whose last `stts` run was `(1, 0)`
+        // (should be the final frame's real sample count) and whose
+        // `mdhd`/`mvhd` duration undercounted the file by exactly that many
+        // samples -- `ffmpeg`'s own decode of that file silently dropped
+        // the last frame, decoding 21 of 22. `Frame::duration` is not a
+        // substitute: it is `Duration::ZERO` by default and nothing
+        // upstream of this encoder is guaranteed to have set it, so this
+        // computes the real value from what this encoder already knows
+        // (`num_samples`, `sample_rate`) rather than trusting a field nothing
+        // populates.
+        let FrameData::Audio { samples, sample_rate, .. } = &frame.data else {
+            return Err(Error::Unsupported("alac: encoder needs an audio frame"));
+        };
+        let time_base = Rational::new(1, i32::try_from(*sample_rate).unwrap_or(1).max(1));
+        packet.duration = Timestamp::new(i64::from(*samples)).to_duration(time_base).unwrap_or(Duration::ZERO);
         // Every packet is independently decodable: the adaptive Golomb-Rice
         // state (`rice.rs`) and the predictor's transmitted coefficients
         // both reset per packet — there is no cross-packet state — matching
@@ -236,5 +257,35 @@ mod tests {
             .map(|c| i32::from(i16::from_le_bytes(c.try_into().unwrap())))
             .collect();
         assert_eq!(got, samples);
+    }
+
+    /// A real, measured bug: this encoder never set `Packet::duration`, which
+    /// `vaco-mux-mp4`'s `stts` table needs for exactly the *last* sample in a
+    /// track (every earlier sample's duration is inferred from the gap to
+    /// the next sample's `dts` instead) -- see `send_frame`'s own doc for
+    /// the full chain. `vaco -i mono.wav -c:a alac out.m4a` wrote a file
+    /// whose last `stts` run was `(1, 0)` and whose declared track duration
+    /// undercounted the source by exactly the last frame's sample count;
+    /// `ffmpeg`'s own decode of that file silently dropped the last frame,
+    /// decoding 21 of 22. A round-number sample rate (1000 Hz, 500 samples)
+    /// makes the expected duration an exact microsecond count with no
+    /// rounding ambiguity to paper over a wrong computation.
+    #[test]
+    fn send_frame_sets_a_real_nonzero_packet_duration() {
+        let mut budget = Budget::new(Limits::permissive());
+        let mut frame = Frame::alloc_audio(&mut budget, SampleFmt::S16P, ChannelLayout::MONO, 500, 1000).unwrap();
+        {
+            let mut plane = frame.plane_mut(0).unwrap();
+            let row = plane.row_mut(0).unwrap();
+            row.fill(0);
+        }
+        let mut enc = AlacEncoder::new(Limits::permissive());
+        enc.send_frame(Some(&frame)).unwrap();
+        let packet = enc.receive_packet().unwrap();
+        assert_eq!(
+            packet.duration,
+            vaco_core::Duration::from_micros(500_000),
+            "500 samples at 1000 Hz must be exactly 500ms, not the Duration::ZERO default"
+        );
     }
 }
