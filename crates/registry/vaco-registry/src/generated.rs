@@ -3696,6 +3696,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-subtitle-teletext")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "dvb_teletext",
+        long_name: Some("Teletext (EN 300 706)"),
+        krate: "vaco-codec-subtitle-teletext",
+        feature: Some("codec-subtitle-teletext"),
+        media: Some("subtitle"),
+        codec: Some("dvb_teletext"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-subtitle-bitmap")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -4405,18 +4417,6 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-image-simple"),
         media: Some("video"),
         codec: Some("targa"),
-        extensions: &[],
-        mime_types: &[],
-    },
-    #[cfg(feature = "codec-subtitle-teletext")]
-    crate::Component {
-        kind: crate::Kind::Decoder,
-        name: "teletext",
-        long_name: Some("Teletext (EN 300 706)"),
-        krate: "vaco-codec-subtitle-teletext",
-        feature: Some("codec-subtitle-teletext"),
-        media: Some("subtitle"),
-        codec: Some("dvb_teletext"),
         extensions: &[],
         mime_types: &[],
     },
@@ -10896,6 +10896,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_subtitle_cc::registry::CC_DECODER,
     #[cfg(feature = "codec-simple-audio")]
     &::vaco_codec_simple_audio::COMFORTNOISE_DECODER,
+    #[cfg(feature = "codec-subtitle-teletext")]
+    &::vaco_codec_subtitle_teletext::TELETEXT_DECODER,
     #[cfg(feature = "codec-subtitle-bitmap")]
     &::vaco_codec_subtitle_bitmap::decoder::DVBSUB_DECODER,
     #[cfg(feature = "codec-subtitle-bitmap")]
@@ -11014,8 +11016,6 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_subtitle_text::registry::SUBRIP_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::TGA_DECODER,
-    #[cfg(feature = "codec-subtitle-teletext")]
-    &::vaco_codec_subtitle_teletext::TELETEXT_DECODER,
     #[cfg(feature = "codec-subtitle-text")]
     &::vaco_codec_subtitle_text::registry::TEXT_DECODER,
     #[cfg(feature = "codec-theora")]
