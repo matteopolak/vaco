@@ -182,6 +182,7 @@ mod residual;
 mod sao;
 mod scan;
 mod transform;
+mod wavefront;
 mod weight;
 
 pub use decoder::HevcDecoder;
