@@ -565,18 +565,37 @@ this same move (§36's finding again: nothing about them needs per-sample
 mid-row visibility), so this gate applies to `ReconPlane` alone, not to
 redoing all four structures.
 
-**Consequently, Stage 2's thread dispatch has not started.** Per D20,
-neither the row-banded nor the tile-banded representation is sacred; the
-open question this leaves is whether the tile-addressed read path can be
-made cheaper (a real profile, not yet taken, is the obvious next step —
-this is exactly the "genuinely unmeasured... is it fast enough once wired
-into the hottest data structure" question the "Concrete Stage 1 plan"
-section named before this piece was built), whether a larger round count
-changes the verdict, or whether the ~4-5% is accepted as the price of the
-capability Stage 2 needs. None of those is decided in this document; it
-records the measurement so the next pass does not have to re-derive it.
-Stage 2 itself and its full 1/2/4/8/16-thread verification bar remain
-after that question is settled, for the same reason the item has been
-staged this way throughout: a byte-exact decoder's core representation is
-not something to rewrite in one drop in a crate under active concurrent
-editing.
+**The gate is conditionally waived, not silently ignored.** The
+<=1.03x line was written for Stage 1's row-banded pieces, where the
+representation change bought nothing on its own -- a 5%-slower
+`EdgeMarks` would have been pure loss, so refusing it was correct. The
+tile move is different in kind: it is the prerequisite for the only thing
+that closes HEVC's real gap (7.7x behind serial ffmpeg, 26.5x behind
+default-threaded ffmpeg at 4K, essentially all of the second number being
+the absence of any HEVC threading). Paying ~4.7% serial to unlock Stage
+2's 3-4x threaded ceiling is judged, by the coordinator, a good trade;
+applying a gate written for a no-upside restructure to a load-bearing
+prerequisite would follow the rule against its own purpose. So `3ac859f`
+stays, and Stage 2b proceeds without reverting or re-optimising it first.
+
+**The condition, so this waiver cannot become permanent by default: if
+Stage 2b does not deliver a genuine multi-thread speedup, the tile
+representation has bought nothing and must be reverted along with it.**
+Whoever evaluates Stage 2b's own verification bar (byte-exact at
+1/2/4/8/16 threads, the determinism fuzz target, the race-detector
+fixture, speedup measured as a same-session ratio against `ffmpeg` at
+matching thread counts) is the one who checks this condition -- a Stage
+2b that lands but does not actually speed decoding up is not a partial
+win with a 4.7% tax attached, it is grounds to undo this piece too. Do
+not spend time optimising the 4.7% itself before then: it is bookkeeping
+in `begin_ctu`/`publish_ctu` plus the `single_column` branch, it will
+look different once real concurrent access patterns replace today's
+single-threaded walk, and optimising against the serial-only shape now
+risks being thrown away. Revisit it after Stage 2b lands, with a profile,
+if it is still worth revisiting at all.
+
+Stage 2 itself and its full 1/2/4/8/16-thread verification bar are what
+remain, for the same reason the item has been staged this way throughout:
+a byte-exact decoder's core representation is not something to rewrite in
+one drop in a crate under active concurrent editing. See
+`planning/E2E-GAPS.md` for each increment's own record as it lands.
