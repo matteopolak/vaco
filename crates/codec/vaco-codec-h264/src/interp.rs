@@ -165,6 +165,307 @@ pub(crate) fn luma_qpel_sample<F: Fn(i32, i32) -> u8>(
     }
 }
 
+/// [`luma_qpel_partition`]'s own horizontal six-tap pass, unrounded and
+/// unclipped -- shared by [`fill_h_plane`] (round and clip this same sum)
+/// and [`fill_j_plane`] (a second six-tap pass down these raw sums,
+/// clause 8.4.2.2.1's own two-pass derivation for the `j` position).
+/// `raw_h[r][ox]` is the sum at window row `r` (picture row `y + r - 2`),
+/// output column `ox`.
+#[allow(
+    clippy::indexing_slicing,
+    clippy::needless_range_loop,
+    reason = "r/ox are loop variables over 0..h+5/0..w, both bounded by the fixed 21/16-wide arrays this module declares them against"
+)]
+fn fill_raw_h(window: &[[u8; 21]; 21], w: usize, h: usize, raw_h: &mut [[i32; 16]; 21]) {
+    for r in 0..h + 5 {
+        for ox in 0..w {
+            raw_h[r][ox] = tap6(
+                i32::from(window[r][ox]),
+                i32::from(window[r][ox + 1]),
+                i32::from(window[r][ox + 2]),
+                i32::from(window[r][ox + 3]),
+                i32::from(window[r][ox + 4]),
+                i32::from(window[r][ox + 5]),
+            );
+        }
+    }
+}
+
+/// `H[r][ox]`: the clipped horizontal half-pel sample (position `b`) at
+/// output row `r` and column `ox` -- `0..=h` rather than `0..h` because
+/// the `g`/`p`/`r` positions average against the *next* row's own `H`.
+#[allow(clippy::indexing_slicing, clippy::needless_range_loop, reason = "see fill_raw_h's own identical reason")]
+fn fill_h_plane(raw_h: &[[i32; 16]; 21], w: usize, h: usize, h_plane: &mut [[u8; 16]; 17]) {
+    for r in 0..=h {
+        for ox in 0..w {
+            h_plane[r][ox] = clip_u8(round_half(raw_h[r + 2][ox]));
+        }
+    }
+}
+
+/// `V[oy][c]`: the clipped vertical half-pel sample (position `h`) at
+/// output row `oy` and column `c` -- `0..=w` for the same reason `H`
+/// above needs one extra row, one column short of the partition's own
+/// right edge.
+#[allow(clippy::indexing_slicing, clippy::needless_range_loop, reason = "see fill_raw_h's own identical reason")]
+fn fill_v_plane(window: &[[u8; 21]; 21], w: usize, h: usize, v_plane: &mut [[u8; 17]; 16]) {
+    for oy in 0..h {
+        for c in 0..=w {
+            v_plane[oy][c] = clip_u8(round_half(tap6(
+                i32::from(window[oy][c + 2]),
+                i32::from(window[oy + 1][c + 2]),
+                i32::from(window[oy + 2][c + 2]),
+                i32::from(window[oy + 3][c + 2]),
+                i32::from(window[oy + 4][c + 2]),
+                i32::from(window[oy + 5][c + 2]),
+            )));
+        }
+    }
+}
+
+/// `J[oy][ox]`: both axes half-pel -- position `j`'s own two-pass
+/// derivation, a second six-tap filter down the raw horizontal sums,
+/// rounded and clipped exactly once.
+#[allow(clippy::indexing_slicing, clippy::needless_range_loop, reason = "see fill_raw_h's own identical reason")]
+fn fill_j_plane(raw_h: &[[i32; 16]; 21], w: usize, h: usize, j_plane: &mut [[u8; 16]; 16]) {
+    for oy in 0..h {
+        for ox in 0..w {
+            j_plane[oy][ox] = clip_u8(round_quarter_pass(tap6(
+                raw_h[oy][ox],
+                raw_h[oy + 1][ox],
+                raw_h[oy + 2][ox],
+                raw_h[oy + 3][ox],
+                raw_h[oy + 4][ox],
+                raw_h[oy + 5][ox],
+            )));
+        }
+    }
+}
+
+/// Clause 8.4.2.2.1's luma quarter-sample interpolation for a whole
+/// partition (up to 16x16, an H.264 macroblock's own maximum) at once,
+/// instead of [`luma_qpel_sample`]'s one-output-pixel-at-a-time shape.
+///
+/// `planning/PERF-PROGRAMME.md` item A1: [`luma_qpel_sample`] is correct
+/// but each call independently re-fetches and re-filters its own 9x9
+/// neighbourhood through `fetch`, and every pixel in the same partition
+/// shares almost all of that neighbourhood with its neighbours -- a 16x16
+/// partition predicted 4x4-at-a-time (as [`crate::reconstruct`] used to)
+/// issues 16 x 81 = 1,296 `fetch` calls and 16 independent six-tap filter
+/// passes for 256 output samples that need only (16 + 5) x (16 + 5) = 441
+/// source samples between them. This function fetches that whole window
+/// once, then builds *only* the horizontal-half-pel (`H`), vertical-half-pel
+/// (`V`) and both-axes-half-pel (`J`) planes clause 8.4.2.2.1 actually needs
+/// for `frac_x`/`frac_y` (a single motion vector's fractional part, shared
+/// by the whole partition) -- see the six-way match in this function's own
+/// body -- before combining them per output pixel, the same arithmetic
+/// [`luma_qpel_sample`] performs, factored so the shared work is shared.
+/// [`luma_qpel_sample`] is kept, unused by
+/// [`crate::reconstruct::reconstruct_inter_mb`]'s own hot path, as the
+/// scalar oracle this function's own tests check bit-for-bit.
+///
+/// Computing all three planes unconditionally, tried first, measured
+/// *slower* end to end despite issuing far fewer `fetch` calls than the
+/// per-4x4 path: the common one-axis-only positions (`b`/`h`/`a`/`c`/`d`/`n`,
+/// most real sub-pel motion) need only one of the three, and the other two
+/// planes' own zero-initialisation and fill passes cost more than the
+/// fetch-count win recovered. Branching by need is not an optimisation on
+/// top of the design, it *is* the design this item's own ceiling estimate
+/// assumed.
+///
+/// `out[0..h][0..w]` is written; any cell outside that is left as it was.
+/// `w`/`h` greater than 16 silently clip to 16, since no real H.264
+/// partition is ever larger than one macroblock's own 16x16.
+///
+/// `x`/`y` name the partition's own top-left **full-pel** picture position
+/// (a caller's own motion vector integer part already folded in, exactly
+/// as [`luma_qpel_sample`]'s `x`/`y` do for one pixel).
+#[allow(
+    clippy::indexing_slicing,
+    clippy::needless_range_loop,
+    clippy::cast_possible_wrap,
+    clippy::too_many_lines,
+    reason = "every index below is a loop variable bounded by `w`/`h` (<= 16, clamped at entry) or a small constant offset from one -- provably in range for the fixed-size 21/17/16-wide arrays declared in this function, not bitstream-derived; `w`/`h` are both bounded by 16 well inside i32's range. Length: one branch per (need_h, need_v, need_j) combination (see this function's own doc), each self-contained so a branch that does not need a plane never declares -- and never zero-initialises -- it; splitting further would just re-hide the six combinations this match already makes explicit"
+)]
+pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
+    fetch: F,
+    x: i32,
+    y: i32,
+    w: usize,
+    h: usize,
+    frac_x: u32,
+    frac_y: u32,
+    out: &mut [[u8; 16]; 16],
+) {
+    let w = w.min(16);
+    let h = h.min(16);
+    if w == 0 || h == 0 {
+        return;
+    }
+
+    // One fetch per window position -- `w + 5` columns (two taps left,
+    // three right of the six-tap window) by `h + 5` rows -- gathered once
+    // for the whole partition. Every later pass reads this array, never
+    // `fetch` again.
+    let mut window = [[0u8; 21]; 21];
+    for r in 0..h + 5 {
+        let py = y + r as i32 - 2;
+        for c in 0..w + 5 {
+            window[r][c] = fetch(x + c as i32 - 2, py);
+        }
+    }
+
+    if frac_x == 0 && frac_y == 0 {
+        for oy in 0..h {
+            for ox in 0..w {
+                out[oy][ox] = window[oy + 2][ox + 2];
+            }
+        }
+        return;
+    }
+
+    // `frac_x`/`frac_y` are the same for every pixel this call predicts
+    // (one motion vector per partition), so which of `H`/`V`/`J` clause
+    // 8.4.2.2.1's own quarter-pel table reads for this position is decided
+    // once here, not once per pixel -- and the branch below on
+    // `(need_h, need_v, need_j)` means a position that needs only one of
+    // the three never even *declares* the other two, paying no
+    // zero-initialisation for a plane it will never read. An earlier
+    // version of this function computed all three unconditionally and,
+    // despite issuing far fewer `fetch` calls than
+    // `sample_luma_block`'s own per-4x4 path, measured *slower* end to
+    // end on `h264_4k.mp4` -- the wasted `H`/`V`/`J` passes (the common
+    // one-axis-only positions `b`/`h`/`a`/`c`/`d`/`n` need only one of
+    // the three) cost more than the fetch-count win recovered.
+    let need_h = frac_x != 0 && frac_y != 2;
+    let need_v = frac_y != 0 && frac_x != 2;
+    let need_j = (frac_x == 2 && frac_y != 0) || (frac_y == 2 && frac_x != 0);
+
+    match (need_h, need_v, need_j) {
+        (true, false, false) => {
+            // b, a, c.
+            let mut raw_h = [[0i32; 16]; 21];
+            fill_raw_h(&window, w, h, &mut raw_h);
+            let mut h_plane = [[0u8; 16]; 17];
+            fill_h_plane(&raw_h, w, h, &mut h_plane);
+            for oy in 0..h {
+                for ox in 0..w {
+                    let hh0 = i32::from(h_plane[oy][ox]);
+                    out[oy][ox] = match frac_x {
+                        2 => clip_u8(hh0),
+                        1 => clip_u8(avg(i32::from(window[oy + 2][ox + 2]), hh0)),
+                        _ => clip_u8(avg(hh0, i32::from(window[oy + 2][ox + 3]))),
+                    };
+                }
+            }
+        }
+        (false, true, false) => {
+            // h, d, n.
+            let mut v_plane = [[0u8; 17]; 16];
+            fill_v_plane(&window, w, h, &mut v_plane);
+            for oy in 0..h {
+                for ox in 0..w {
+                    let vv0 = i32::from(v_plane[oy][ox]);
+                    out[oy][ox] = match frac_y {
+                        2 => clip_u8(vv0),
+                        1 => clip_u8(avg(i32::from(window[oy + 2][ox + 2]), vv0)),
+                        _ => clip_u8(avg(vv0, i32::from(window[oy + 3][ox + 2]))),
+                    };
+                }
+            }
+        }
+        (false, false, true) => {
+            // j (frac_x == 2 && frac_y == 2 is the only member).
+            let mut raw_h = [[0i32; 16]; 21];
+            fill_raw_h(&window, w, h, &mut raw_h);
+            let mut j_plane = [[0u8; 16]; 16];
+            fill_j_plane(&raw_h, w, h, &mut j_plane);
+            for oy in 0..h {
+                for ox in 0..w {
+                    out[oy][ox] = clip_u8(i32::from(j_plane[oy][ox]));
+                }
+            }
+        }
+        (true, true, false) => {
+            // e, g, p, r.
+            let mut raw_h = [[0i32; 16]; 21];
+            fill_raw_h(&window, w, h, &mut raw_h);
+            let mut h_plane = [[0u8; 16]; 17];
+            fill_h_plane(&raw_h, w, h, &mut h_plane);
+            let mut v_plane = [[0u8; 17]; 16];
+            fill_v_plane(&window, w, h, &mut v_plane);
+            for oy in 0..h {
+                for ox in 0..w {
+                    let hh0 = i32::from(h_plane[oy][ox]);
+                    let hh1 = i32::from(h_plane[oy + 1][ox]);
+                    let vv0 = i32::from(v_plane[oy][ox]);
+                    let vv1 = i32::from(v_plane[oy][ox + 1]);
+                    out[oy][ox] = match (frac_x, frac_y) {
+                        (1, 1) => clip_u8(avg(hh0, vv0)),
+                        (3, 1) => clip_u8(avg(hh0, vv1)),
+                        (1, 3) => clip_u8(avg(vv0, hh1)),
+                        _ => clip_u8(avg(vv1, hh1)),
+                    };
+                }
+            }
+        }
+        (true, false, true) => {
+            // f, q.
+            let mut raw_h = [[0i32; 16]; 21];
+            fill_raw_h(&window, w, h, &mut raw_h);
+            let mut h_plane = [[0u8; 16]; 17];
+            fill_h_plane(&raw_h, w, h, &mut h_plane);
+            let mut j_plane = [[0u8; 16]; 16];
+            fill_j_plane(&raw_h, w, h, &mut j_plane);
+            for oy in 0..h {
+                for ox in 0..w {
+                    let jj = i32::from(j_plane[oy][ox]);
+                    out[oy][ox] = if frac_y == 1 {
+                        clip_u8(avg(i32::from(h_plane[oy][ox]), jj))
+                    } else {
+                        clip_u8(avg(jj, i32::from(h_plane[oy + 1][ox])))
+                    };
+                }
+            }
+        }
+        (false, true, true) => {
+            // i, k.
+            let mut raw_h = [[0i32; 16]; 21];
+            fill_raw_h(&window, w, h, &mut raw_h);
+            let mut v_plane = [[0u8; 17]; 16];
+            fill_v_plane(&window, w, h, &mut v_plane);
+            let mut j_plane = [[0u8; 16]; 16];
+            fill_j_plane(&raw_h, w, h, &mut j_plane);
+            for oy in 0..h {
+                for ox in 0..w {
+                    let jj = i32::from(j_plane[oy][ox]);
+                    out[oy][ox] = if frac_x == 1 {
+                        clip_u8(avg(i32::from(v_plane[oy][ox]), jj))
+                    } else {
+                        clip_u8(avg(jj, i32::from(v_plane[oy][ox + 1])))
+                    };
+                }
+            }
+        }
+        // Unreachable: `need_h`/`need_v`/`need_j`'s own derivation covers
+        // every `(frac_x, frac_y)` pair except `(0, 0)` (handled above)
+        // with exactly one of the six arms above (`(true, true, true)`
+        // cannot happen: `need_j`'s two clauses each require either
+        // `frac_x == 2` or `frac_y == 2`, and `need_v`/`need_h`
+        // respectively forbid exactly that) -- both kept as a safe
+        // fallback rather than `unreachable!()`, matching this module's
+        // own `unwrap_used`/`panic`-denied policy, since the match still
+        // has to be exhaustive.
+        (false, false, false) | (true, true, true) => {
+            for oy in 0..h {
+                for ox in 0..w {
+                    out[oy][ox] = window[oy + 2][ox + 2];
+                }
+            }
+        }
+    }
+}
+
 /// Clause 8.4.2.2.2, eq. (8-206)..(8-214): one interpolated chroma sample
 /// at chroma picture position `(x, y)` displaced by the chroma motion
 /// vector `(mv_x, mv_y)` -- `ChromaArrayType == 1` (frame macroblocks,
@@ -202,7 +503,14 @@ pub(crate) fn chroma_mc_sample<F: Fn(i32, i32) -> u8>(fetch: F, x: i32, y: i32, 
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, clippy::integer_division, reason = "test code")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::integer_division,
+    clippy::indexing_slicing,
+    clippy::cast_possible_wrap,
+    clippy::needless_range_loop,
+    reason = "test code -- w/h/ox/oy loop bounds throughout this module's own A1 differential tests are always <= 16, well inside i32's range"
+)]
 mod tests {
     use super::*;
 
@@ -350,5 +658,86 @@ mod tests {
         let fetch = |x: i32, _y: i32| if x <= -1 { 0u8 } else { 255u8 };
         let got = chroma_mc_sample(fetch, 0, 0, -1, 0);
         assert!(got > 200, "got={got}, expected close to the x=0 sample (255)");
+    }
+
+    /// The whole point of `planning/PERF-PROGRAMME.md` item A1: predicting
+    /// a partition in one [`luma_qpel_partition`] call must produce
+    /// *exactly* the same samples as [`luma_qpel_sample`] called once per
+    /// pixel -- checked directly, bit for bit, rather than argued from the
+    /// derivation, at every fractional position, several partition shapes
+    /// a real (or merged, see `crate::reconstruct::partition_rects`)
+    /// H.264 partition can take, and both an interior position and one
+    /// close enough to a fetch's own "picture edge" that a real caller's
+    /// clamped `fetch` would return repeated border samples -- the in/out-
+    /// of-picture case this module's own doc for A1 promises is checked,
+    /// not just the interior one every other test here already exercises.
+    #[test]
+    fn partition_matches_the_per_pixel_oracle_at_every_fractional_position_and_shape() {
+        // A source with both structure (so different rows/columns are not
+        // accidentally identical, which would hide a transposed index) and
+        // sharp transitions (so the six-tap filter's own overshoot/clip
+        // behaviour is exercised the same way
+        // `quarter_pel_averages_the_clipped_half_pel_sample_not_the_raw_overshoot`
+        // above checks for the single-pixel oracle).
+        let fetch = |x: i32, y: i32| -> u8 {
+            let (x, y) = (x.rem_euclid(64), y.rem_euclid(64));
+            let v = (x * 7 + y * 13 + (x * y) % 5) % 256;
+            u8::try_from(v).unwrap_or(0)
+        };
+        for &(w, h) in &[(4usize, 4usize), (8, 4), (4, 8), (8, 8), (16, 8), (8, 16), (16, 16), (12, 4), (4, 12)] {
+            for fx in 0..4u32 {
+                for fy in 0..4u32 {
+                    // Two anchors: comfortably interior, and close enough to
+                    // this synthetic plane's own wraparound that a real
+                    // decoder's edge-clamped fetch would be exercised on
+                    // the corresponding real picture (this `fetch` itself
+                    // never needs clamping, since `rem_euclid` makes it
+                    // total over all of `i32` -- what matters here is that
+                    // both anchors drive the *same* six-tap reach math a
+                    // clamped fetch would).
+                    for &(ax, ay) in &[(20i32, 20i32), (0, 0), (-3, -3)] {
+                        let mut got = [[0u8; 16]; 16];
+                        luma_qpel_partition(fetch, ax, ay, w, h, fx, fy, &mut got);
+                        for oy in 0..h {
+                            for ox in 0..w {
+                                let want = luma_qpel_sample(fetch, ax + ox as i32, ay + oy as i32, fx, fy);
+                                assert_eq!(
+                                    got[oy][ox], want,
+                                    "w={w} h={h} fx={fx} fy={fy} anchor=({ax},{ay}) ox={ox} oy={oy}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn partition_full_pel_is_a_pure_copy_of_the_window() {
+        let fetch = |x: i32, y: i32| u8::try_from((x + y * 9).rem_euclid(256)).unwrap();
+        let mut got = [[0u8; 16]; 16];
+        luma_qpel_partition(fetch, 5, 7, 16, 16, 0, 0, &mut got);
+        for oy in 0..16 {
+            for ox in 0..16 {
+                assert_eq!(got[oy][ox], fetch(5 + ox as i32, 7 + oy as i32));
+            }
+        }
+    }
+
+    #[test]
+    fn partition_flat_plane_interpolates_to_itself_everywhere() {
+        let fetch = |_x: i32, _y: i32| 77u8;
+        for fx in 0..4u32 {
+            for fy in 0..4u32 {
+                let mut got = [[0u8; 16]; 16];
+                luma_qpel_partition(fetch, 0, 0, 16, 16, fx, fy, &mut got);
+                for row in &got[..16] {
+                    for &v in &row[..16] {
+                        assert_eq!(v, 77, "fx={fx} fy={fy}");
+                    }
+                }
+            }
+        }
     }
 }

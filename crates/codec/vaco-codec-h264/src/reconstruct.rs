@@ -70,7 +70,7 @@ use crate::intra::{
     Neighbours4, Neighbours8, Neighbours16, NeighboursChroma, predict_intra4x4, predict_intra8x8,
     predict_intra16x16, predict_intra_chroma,
 };
-use crate::mb::{MbResidual, MbSummary, blk_xy};
+use crate::mb::{MbResidual, MbSummary, MvInfo, blk_xy};
 use crate::scan::{build_luma_ac_block, inverse_scan_chroma_dc, inverse_scan_luma_8x8, inverse_scan_luma_dc};
 
 /// Clause 8.5.1/8.5.2, `Intra_16x16` luma only: predict, then add clause
@@ -844,6 +844,175 @@ fn sample_luma_block(
     clippy::cast_sign_loss,
     clippy::cast_possible_truncation,
     clippy::many_single_char_names,
+    reason = "mirrors sample_luma_block's own identical allow; w/h are always <= 16 (clamped inside crate::interp::luma_qpel_partition)"
+)]
+/// [`sample_luma_block`]'s own whole-partition counterpart
+/// (`planning/PERF-PROGRAMME.md` item A1): one list's raw luma qpel
+/// prediction for a partition up to 16x16, fetched and filtered once
+/// through [`crate::interp::luma_qpel_partition`] rather than once per
+/// 4x4 block. `x`/`y` are the partition's own picture-relative top-left
+/// corner; `w`/`h` its size, always a multiple of 4 not exceeding 16 for
+/// any real H.264 partition or merged group of same-motion partitions
+/// (see [`partition_rects`]).
+fn sample_luma_partition(
+    plane: RefPlane<'_>,
+    ref_width: u32,
+    ref_height: u32,
+    x: u32,
+    y: u32,
+    w: usize,
+    h: usize,
+    mv: (i16, i16),
+    scratch: &mut ReadScratch,
+) -> [[u8; 16]; 16] {
+    let (mvx, mvy) = (i32::from(mv.0), i32::from(mv.1));
+    let (int_dx, frac_x) = (mvx >> 2, (mvx & 3) as u32);
+    let (int_dy, frac_y) = (mvy >> 2, (mvy & 3) as u32);
+    let x0 = x as i32 + int_dx;
+    let y0 = y as i32 + int_dy;
+    let mut out = [[0u8; 16]; 16];
+    // Clause 8.4.2.2.1's six-tap filter reads two samples above/left of the
+    // partition and three below/right of its last one -- a
+    // `(w + 5) x (h + 5)` region at `(x0 - 2, y0 - 2)`, generalising
+    // [`sample_luma_block`]'s fixed 9x9 the same way the partition itself
+    // generalises a fixed 4x4 block.
+    let (rx0, ry0) = (x0 - 2, y0 - 2);
+    let plane = match plane {
+        RefPlane::Flat(data) => data,
+        RefPlane::Banded(view) => {
+            let Ok(b) = view.block(rx0, ry0, (w + 5) as u32, (h + 5) as u32, &mut scratch.block) else {
+                // Only reachable if a caller reconstructed a macroblock row
+                // before waiting for the rows its motion vectors reach.
+                scratch.failed = true;
+                return out;
+            };
+            let (data, stride) = (b.data, b.stride);
+            let fetch = |ax: i32, ay: i32| -> u8 {
+                let (rx, ry) = ((ax - rx0).max(0) as usize, (ay - ry0).max(0) as usize);
+                data.get(ry * stride + rx).copied().unwrap_or(0)
+            };
+            crate::interp::luma_qpel_partition(fetch, x0, y0, w, h, frac_x, frac_y, &mut out);
+            return out;
+        }
+    };
+    let safe = !plane.is_empty()
+        && x0 - 2 >= 0
+        && x0 + w as i32 + 2 < ref_width as i32
+        && y0 - 2 >= 0
+        && y0 + h as i32 + 2 < ref_height as i32;
+    let fetch_clamped = |ax: i32, ay: i32| -> u8 {
+        if plane.is_empty() {
+            return 0;
+        }
+        let cx = ax.clamp(0, ref_width as i32 - 1) as u32;
+        let cy = ay.clamp(0, ref_height as i32 - 1) as u32;
+        plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
+    };
+    let fetch_fast = |ax: i32, ay: i32| -> u8 {
+        let cx = ax as u32;
+        let cy = ay as u32;
+        plane.get((cy * ref_width + cx) as usize).copied().unwrap_or(0)
+    };
+    if safe {
+        crate::interp::luma_qpel_partition(fetch_fast, x0, y0, w, h, frac_x, frac_y, &mut out);
+    } else {
+        crate::interp::luma_qpel_partition(fetch_clamped, x0, y0, w, h, frac_x, frac_y, &mut out);
+    }
+    out
+}
+
+/// One maximal rectangle of a macroblock's own 4x4 motion grid
+/// (`MbSummary::mv_blocks`) sharing exactly one [`MvInfo`] -- the group
+/// [`sample_luma_partition`] predicts in a single call. Coordinates are in
+/// 4x4-block units within the macroblock (`0..4`).
+#[derive(Clone, Copy)]
+struct PartitionRect {
+    bx: u8,
+    by: u8,
+    bw: u8,
+    bh: u8,
+    info: MvInfo,
+}
+
+#[allow(
+    clippy::indexing_slicing,
+    clippy::cast_possible_truncation,
+    reason = "bx/by/bw/bh are all loop variables over 0..4, provably in range for the fixed 4x4 grids here"
+)]
+/// Decompose a macroblock's own 16-entry 4x4 motion grid into the maximal
+/// axis-aligned rectangles of identical motion (`planning/PERF-PROGRAMME.md`
+/// item A1) -- the partition (or merged group of adjacent same-motion
+/// partitions) [`sample_luma_partition`] predicts as one call instead of
+/// [`sample_luma_block`]'s own one-call-per-4x4-block shape.
+///
+/// This is correct regardless of whether two *merged* cells were really one
+/// syntax-level partition or two adjacent ones that happen to carry
+/// identical `ref_idx`/`mv` on both lists: clause 8.4's own prediction
+/// value at any position depends only on that position's resolved motion,
+/// never on which partition the bitstream said it belonged to, so
+/// predicting a larger uniform region in one call reproduces the per-4x4
+/// oracle bit for bit (checked directly, not merely argued, by this
+/// module's own `partition_rects_matches_the_per_4x4_oracle` test family).
+///
+/// A real H.264 sub-macroblock partitioning is always already a tiling of
+/// this grid into rectangles (16x16, 16x8, 8x16, 8x8 and 8x8's own
+/// 8x8/8x4/4x8/4x4 sub-partitions), so the greedy "grow right, then grow
+/// down" scan below recovers the true partition boundaries exactly -- it is
+/// not a general maximal-rectangle solver, which this grid never needs.
+fn partition_rects(mv_blocks: &[MvInfo; 16]) -> ([PartitionRect; 16], usize) {
+    let key = |i: &MvInfo| {
+        (
+            i.reads_l0(),
+            i.reads_l1(),
+            i.ref_idx_l0(),
+            i.ref_idx_l1(),
+            i.mv_l0(),
+            i.mv_l1(),
+        )
+    };
+    let at = |bx: u32, by: u32| mv_blocks[(by * 4 + bx) as usize];
+    let mut done = [[false; 4]; 4];
+    let mut rects = [PartitionRect { bx: 0, by: 0, bw: 0, bh: 0, info: MvInfo::default() }; 16];
+    let mut n = 0usize;
+    for by in 0..4u32 {
+        for bx in 0..4u32 {
+            if done[by as usize][bx as usize] {
+                continue;
+            }
+            let k0 = key(&at(bx, by));
+            let mut bw = 1u32;
+            while bx + bw < 4 && !done[by as usize][(bx + bw) as usize] && key(&at(bx + bw, by)) == k0 {
+                bw += 1;
+            }
+            let mut bh = 1u32;
+            'grow_down: while by + bh < 4 {
+                for dx in 0..bw {
+                    if done[(by + bh) as usize][(bx + dx) as usize] || key(&at(bx + dx, by + bh)) != k0 {
+                        break 'grow_down;
+                    }
+                }
+                bh += 1;
+            }
+            for dy in 0..bh {
+                for dx in 0..bw {
+                    done[(by + dy) as usize][(bx + dx) as usize] = true;
+                }
+            }
+            if let Some(slot) = rects.get_mut(n) {
+                *slot = PartitionRect { bx: bx as u8, by: by as u8, bw: bw as u8, bh: bh as u8, info: at(bx, by) };
+            }
+            n += 1;
+        }
+    }
+    (rects, n)
+}
+
+#[allow(
+    clippy::indexing_slicing,
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::many_single_char_names,
     reason = "blk/i/j are fixed 0..4 or 0..16 loop bounds; mv/pixel arithmetic is checked at the fetch closure's own clamp; x/y/c/d/r mirror clause 8.5's own variable names"
 )]
 fn reconstruct_inter_mb(
@@ -859,13 +1028,23 @@ fn reconstruct_inter_mb(
     let empty = RefPlane::Flat(&[]);
     // Motion compensation is unaffected by `transform_size_8x8_flag` --
     // clause 8.4's own prediction-sample derivation never reads it, only
-    // the residual (clause 7.3.5.3.3) does -- so every 4x4 block's own
-    // predicted samples are always computed the same way, one quadrant's
-    // worth (four 4x4 blocks) gathered into `pred8` before either residual
-    // path below reads from it.
-    let fetch_pred_4x4 = |x: u32, y: u32, blk: u32, scratch: &mut ReadScratch| -> [[u8; 4]; 4] {
-        let (bx, by) = blk_xy(blk);
-        let info = mb.mv_blocks[(by * 4 + bx) as usize];
+    // the residual (clause 7.3.5.3.3) does -- so prediction runs exactly
+    // once for the whole macroblock, over the maximal same-motion
+    // rectangles `partition_rects` finds in `mb.mv_blocks`
+    // (`planning/PERF-PROGRAMME.md` item A1), before either residual path
+    // below reads from the assembled `pred_mb`. This replaces the
+    // one-call-per-4x4-block shape `sample_luma_block`
+    // (`fetch_pred_4x4`, kept for the differential tests) used before: a
+    // real 16x16 partition used to cost sixteen independent 9x9
+    // re-fetches for 256 outputs needing only 441 source samples between
+    // them.
+    let (rects, n) = partition_rects(&mb.mv_blocks);
+    let mut pred_mb = [[0u8; 16]; 16];
+    for rect in rects.iter().take(n) {
+        let info = rect.info;
+        let (w, h) = (usize::from(rect.bw) * 4, usize::from(rect.bh) * 4);
+        let x = mb.mb_x * 16 + u32::from(rect.bx) * 4;
+        let y = mb.mb_y * 16 + u32::from(rect.by) * 4;
         let ref_idx0 = info.ref_idx_l0().max(0) as usize;
         let ref_idx1 = info.ref_idx_l1().max(0) as usize;
         // Clause 8.4.2.3: both the single-list weighting and the
@@ -874,46 +1053,44 @@ fn reconstruct_inter_mb(
         // single-list block) are known -- never before, since which
         // weight entry applies depends on `ref_idx`, not on the list
         // membership alone.
-        let p0 = info
-            .reads_l0()
-            .then(|| sample_luma_block(ref_list0.get(ref_idx0).map_or(empty, |r| r.luma), ref_width, ref_height, x, y, info.mv_l0(), scratch));
-        let p1 = info
-            .reads_l1()
-            .then(|| sample_luma_block(ref_list1.get(ref_idx1).map_or(empty, |r| r.luma), ref_width, ref_height, x, y, info.mv_l1(), scratch));
-        let mut pred = [[0u8; 4]; 4];
-        for i in 0..4usize {
-            for j in 0..4usize {
-                let a = p0.map(|b| b[i][j]);
-                let b = p1.map(|b| b[i][j]);
-                pred[i][j] = match (a, b) {
+        let p0 = info.reads_l0().then(|| {
+            sample_luma_partition(ref_list0.get(ref_idx0).map_or(empty, |r| r.luma), ref_width, ref_height, x, y, w, h, info.mv_l0(), scratch)
+        });
+        let p1 = info.reads_l1().then(|| {
+            sample_luma_partition(ref_list1.get(ref_idx1).map_or(empty, |r| r.luma), ref_width, ref_height, x, y, w, h, info.mv_l1(), scratch)
+        });
+        let (row0, col0) = (usize::from(rect.by) * 4, usize::from(rect.bx) * 4);
+        for oy in 0..h {
+            for ox in 0..w {
+                // `.as_ref()` first: `p0`/`p1` are `Option<[[u8; 16]; 16]>`
+                // (`Copy`, since `[u8; 16]` is), so `.map()` called directly
+                // on them by value copies the whole 256-byte array into the
+                // closure on *every* one of this loop's `w * h` iterations
+                // (up to 256 per merged partition) just to read one byte out
+                // of it -- measured as the dominant cost of an earlier
+                // version of this function, large enough on its own to
+                // erase this item's entire fetch-count win.
+                let a = p0.as_ref().map(|b| b[oy][ox]);
+                let b = p1.as_ref().map(|b| b[oy][ox]);
+                let v = match (a, b) {
                     (Some(a), Some(b)) => weights.combine(ref_idx0, ref_idx1, a, b),
                     (Some(a), None) => weights.single(0, ref_idx0, a),
                     (None, Some(b)) => weights.single(1, ref_idx1, b),
                     (None, None) => 0,
                 };
+                if let Some(dst) = pred_mb.get_mut(row0 + oy).and_then(|r| r.get_mut(col0 + ox)) {
+                    *dst = v;
+                }
             }
         }
-        pred
-    };
+    }
 
     if mb.transform_8x8 {
         for i8x8 in 0..4u32 {
             let (qx, qy) = (i8x8 & 1, i8x8 >> 1);
             let x = mb.mb_x * 16 + qx * 8;
             let y = mb.mb_y * 16 + qy * 8;
-            let mut pred8 = [[0u8; 8]; 8];
-            for i4x4 in 0..4u32 {
-                let (sbx, sby) = blk_xy(i4x4);
-                let blk = i8x8 * 4 + i4x4;
-                let sub = fetch_pred_4x4(x + sbx * 4, y + sby * 4, blk, scratch);
-                for (i, row) in sub.iter().enumerate() {
-                    for (j, &v) in row.iter().enumerate() {
-                        if let Some(dst) = pred8.get_mut(sby as usize * 4 + i).and_then(|r| r.get_mut(sbx as usize * 4 + j)) {
-                            *dst = v;
-                        }
-                    }
-                }
-            }
+            let (row0, col0) = (qy as usize * 8, qx as usize * 8);
             let ac = mb.residual.luma8x8.get(i8x8 as usize).and_then(Option::as_ref);
             let c = inverse_scan_luma_8x8(ac);
             let d = dequant_8x8(&c, mb.qpy);
@@ -921,7 +1098,7 @@ fn reconstruct_inter_mb(
             let mut block = [[0u8; 8]; 8];
             for (i, row) in block.iter_mut().enumerate() {
                 for (j, v) in row.iter_mut().enumerate() {
-                    let sum = i32::from(pred8[i][j]) + r.get(i * 8 + j).copied().unwrap_or(0);
+                    let sum = i32::from(pred_mb[row0 + i][col0 + j]) + r.get(i * 8 + j).copied().unwrap_or(0);
                     *v = sum.clamp(0, 255) as u8;
                 }
             }
@@ -934,7 +1111,7 @@ fn reconstruct_inter_mb(
         let (bx, by) = blk_xy(blk);
         let x = mb.mb_x * 16 + bx * 4;
         let y = mb.mb_y * 16 + by * 4;
-        let pred = fetch_pred_4x4(x, y, blk, scratch);
+        let (row0, col0) = (by as usize * 4, bx as usize * 4);
 
         let ac = mb
             .residual
@@ -948,7 +1125,7 @@ fn reconstruct_inter_mb(
         let mut block = [[0u8; 4]; 4];
         for (i, row) in block.iter_mut().enumerate() {
             for (j, v) in row.iter_mut().enumerate() {
-                let sum = i32::from(pred[i][j]) + r.get(i * 4 + j).copied().unwrap_or(0);
+                let sum = i32::from(pred_mb[row0 + i][col0 + j]) + r.get(i * 4 + j).copied().unwrap_or(0);
                 *v = sum.clamp(0, 255) as u8;
             }
         }
@@ -1290,14 +1467,16 @@ pub(crate) struct ReadScratch {
 }
 
 impl ReadScratch {
-    /// Scratch for the largest region clause 8.4.2.2 reads: luma's 9x9
-    /// six-tap footprint, rounded up.
+    /// Scratch for the largest region clause 8.4.2.2 reads: a whole 16x16
+    /// partition's own six-tap footprint (`planning/PERF-PROGRAMME.md`
+    /// item A1) -- `(16 + 5) x (16 + 5)`, up from the 16x16 this held back
+    /// when every partition was predicted 4x4 at a time.
     ///
     /// # Errors
     ///
     /// [`vaco_core::Error::LimitExceeded`] when the budget refuses.
     pub(crate) fn new(budget: &mut Budget) -> vaco_core::Result<Self> {
-        Ok(Self { block: BlockScratch::new(budget, 16, 16)?, failed: false })
+        Ok(Self { block: BlockScratch::new(budget, 21, 21)?, failed: false })
     }
 
     /// Turn a raised failure flag into an error, and clear it.
@@ -3331,5 +3510,115 @@ mod tests {
         }
         assert_eq!(failed, 0, "every frame must decode without a hard error");
         assert_eq!(mismatch, [0, 0, 0], "byte-exact against ffmpeg -skip_loop_filter all, every plane");
+    }
+
+    /// [`sample_luma_partition`] against [`sample_luma_block`], the
+    /// wrapper-level oracle -- `planning/PERF-PROGRAMME.md` item A1.
+    /// `crate::interp`'s own
+    /// `partition_matches_the_per_pixel_oracle_at_every_fractional_position_and_shape`
+    /// already checks the pure interpolation math; this checks the layer
+    /// above it that `crate::interp`'s test cannot reach: [`RefPlane`]
+    /// dispatch, the `safe`/`clamped` fetch choice, and their own bounds
+    /// arithmetic, generalised from a fixed 4x4 block to an arbitrary
+    /// partition size.
+    #[test]
+    fn sample_luma_partition_matches_sample_luma_block_for_every_shape_and_edge_case() {
+        use vaco_limits::{Budget, Limits};
+        let ref_width = 24u32;
+        let ref_height = 24u32;
+        let mut plane = vec![0u8; (ref_width * ref_height) as usize];
+        for (i, v) in plane.iter_mut().enumerate() {
+            *v = u8::try_from((i * 37 + (i / 5) * 11) % 256).unwrap_or(0);
+        }
+        let mut budget = Budget::new(Limits::default());
+        let mut scratch = ReadScratch::new(&mut budget).unwrap();
+
+        // `(x, y)` combined with a partition's own `w`/`h` and `mv` decide
+        // whether the fast (fully in-bounds) or clamped fetch path runs
+        // inside `sample_luma_block`/`sample_luma_partition` alike --
+        // covering both, plus a motion vector large enough to reach past
+        // every edge on at least one shape below.
+        for &(x, y) in &[(4u32, 4u32), (0, 0), (18, 18)] {
+            for &(w, h) in &[(4usize, 4usize), (8, 8), (16, 16), (8, 16), (16, 8)] {
+                for &mv in &[(0i16, 0i16), (3, 1), (-5, 6), (9, -9)] {
+                    // Oracle: one `sample_luma_block` call per 4x4 sub-block
+                    // of the partition, gathered into the same `[[u8;16];16]`
+                    // shape `sample_luma_partition` returns.
+                    let mut want = [[0u8; 16]; 16];
+                    for sby in (0..h).step_by(4) {
+                        for sbx in (0..w).step_by(4) {
+                            let block = sample_luma_block(
+                                RefPlane::Flat(&plane),
+                                ref_width,
+                                ref_height,
+                                x + sbx as u32,
+                                y + sby as u32,
+                                mv,
+                                &mut scratch,
+                            );
+                            for i in 0..4 {
+                                for j in 0..4 {
+                                    want[sby + i][sbx + j] = block[i][j];
+                                }
+                            }
+                        }
+                    }
+                    let got = sample_luma_partition(RefPlane::Flat(&plane), ref_width, ref_height, x, y, w, h, mv, &mut scratch);
+                    for oy in 0..h {
+                        for ox in 0..w {
+                            assert_eq!(
+                                got[oy][ox], want[oy][ox],
+                                "x={x} y={y} w={w} h={h} mv={mv:?} ox={ox} oy={oy}"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// [`partition_rects`]'s own decomposition, checked directly against
+    /// hand-built motion grids for the shapes `planning/PERF-PROGRAMME.md`
+    /// item A1 names: a whole-macroblock 16x16 partition, a 16x8 top/bottom
+    /// split, and a `P_8x8` macroblock whose four quadrants carry four
+    /// different motion vectors (so no merge across quadrant boundaries is
+    /// possible, exercising the "sixteen separate rectangles" end of the
+    /// range as well as the "one" end).
+    #[test]
+    fn partition_rects_recovers_known_shapes() {
+        let mv_at = |mvx: i16, mvy: i16| MvInfo::for_test_l0((mvx, mvy));
+
+        // One 16x16 partition: every 4x4 cell shares one motion vector.
+        let uniform = [mv_at(4, -2); 16];
+        let (rects, n) = partition_rects(&uniform);
+        assert_eq!(n, 1, "a uniform grid must merge into exactly one rectangle");
+        assert_eq!((rects[0].bx, rects[0].by, rects[0].bw, rects[0].bh), (0, 0, 4, 4));
+
+        // 16x8: top two 4x4 rows share one vector, bottom two share another.
+        let mut split = [MvInfo::default(); 16];
+        for by in 0..4u32 {
+            for bx in 0..4u32 {
+                split[(by * 4 + bx) as usize] = if by < 2 { mv_at(1, 1) } else { mv_at(-3, 2) };
+            }
+        }
+        let (rects, n) = partition_rects(&split);
+        assert_eq!(n, 2, "top/bottom 16x8 split must recover exactly two rectangles");
+        let mut shapes: Vec<(u8, u8, u8, u8)> = rects[..n].iter().map(|r| (r.bx, r.by, r.bw, r.bh)).collect();
+        shapes.sort_unstable();
+        assert_eq!(shapes, vec![(0, 0, 4, 2), (0, 2, 4, 2)]);
+
+        // Four P_8x8 quadrants, four different vectors: no merge possible.
+        let mut quads = [MvInfo::default(); 16];
+        for by in 0..4u32 {
+            for bx in 0..4u32 {
+                let q = (by / 2) * 2 + (bx / 2);
+                quads[(by * 4 + bx) as usize] = mv_at(i16::try_from(q).unwrap(), 0);
+            }
+        }
+        let (rects, n) = partition_rects(&quads);
+        assert_eq!(n, 4, "four differently-moving quadrants must not merge");
+        let mut shapes: Vec<(u8, u8, u8, u8)> = rects[..n].iter().map(|r| (r.bx, r.by, r.bw, r.bh)).collect();
+        shapes.sort_unstable();
+        assert_eq!(shapes, vec![(0, 0, 2, 2), (0, 2, 2, 2), (2, 0, 2, 2), (2, 2, 2, 2)]);
     }
 }
