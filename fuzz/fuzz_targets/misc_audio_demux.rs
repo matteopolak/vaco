@@ -1,10 +1,10 @@
-//! Whole-file demux over arbitrary bytes, for all twenty-two `DemuxerDesc`s
+//! Whole-file demux over arbitrary bytes, for all twenty-three `DemuxerDesc`s
 //! this crate registers, tried against the same input in one run.
 //!
 //! Every format here either has a distinct fixed-offset signature (`wv`,
-//! `tta`, `adx`, `#!AMR\n`, `NIST_1A\n`, `PVF1\n`, `VAGp`, `RIFF`…`XWMA`) or
-//! none at all (the headerless ITU/3GPP/Bluetooth codecs, `amrnb`/`amrwb`),
-//! so trying all twenty-two `open`s against one input cannot make one
+//! `tta`, `adx`, `#!AMR\n`, `NIST_1A\n`, `PVF1\n`, `VAGp`, `XA`, `RIFF`…`XWMA`)
+//! or none at all (the headerless ITU/3GPP/Bluetooth codecs,
+//! `amrnb`/`amrwb`), so trying all twenty-three `open`s against one input cannot make one
 //! format's parser see bytes another format produced — each either rejects
 //! the input at its own header check or, for the headerless ones, treats
 //! the whole input as its own raw stream independently.
@@ -38,7 +38,7 @@ use vaco_format_core::discovery::NoParsers;
 use vaco_format_core::{Demuxer, DemuxerDesc};
 use vaco_io::MediaSource;
 
-use vaco_format_misc_audio::{adx, amr, g723, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xwma};
+use vaco_format_misc_audio::{adx, amr, g723, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xa, xwma};
 
 const MAX_PACKETS: u32 = 50_000;
 
@@ -98,6 +98,7 @@ fuzz_target!(|data: &[u8]| {
         &rawcodec::DEMUXER_APTX,
         &rawcodec::DEMUXER_APTX_HD,
         &vag::DEMUXER,
+        &xa::DEMUXER,
         &xwma::DEMUXER,
     ] {
         check(desc, data);

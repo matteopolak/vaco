@@ -54,7 +54,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn every_fixture_matches_the_measured_reference_row() {
-    use vaco_format_misc_audio::{adx, g723, rawcodec, sbc, tta, vag, wavpack, xwma};
+    use vaco_format_misc_audio::{adx, g723, rawcodec, sbc, tta, vag, wavpack, xa, xwma};
 
     let rows = [
         Row {
@@ -144,6 +144,19 @@ fn every_fixture_matches_the_measured_reference_row() {
             channels: 1,
             reference_duration_us: Some(12_698),
             reference_packet_sizes: Some(&[16; 10]),
+        },
+        Row {
+            file: "xa.xa",
+            desc: xa::DEMUXER,
+            sample_rate: 22_050,
+            channels: 2,
+            // dwOutSize in this fixture equals exactly 5 blocks' worth of
+            // decompressed PCM bytes, so packet count and duration agree
+            // here; xa's own module doc and unit tests cover the case
+            // where the reference's dwOutSize-derived packet count and its
+            // file-length-derived duration disagree.
+            reference_duration_us: Some(6_349),
+            reference_packet_sizes: Some(&[30; 5]),
         },
         Row {
             file: "xwma.xwma",
@@ -240,7 +253,7 @@ fn every_fixture_matches_the_measured_reference_row() {
 /// The probe for every registered demuxer must not claim a plain text file.
 #[test]
 fn no_probe_claims_prose() {
-    use vaco_format_misc_audio::{adx, amr, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xwma};
+    use vaco_format_misc_audio::{adx, amr, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xa, xwma};
 
     let text = ProbeData::new(b"The quick brown fox jumps over the lazy dog. Not media.");
     let probes: &[fn(&ProbeData<'_>) -> vaco_format_core::probe::ProbeScore] = &[
@@ -262,6 +275,7 @@ fn no_probe_claims_prose() {
         rawcodec::probe_aptx,
         rawcodec::probe_aptx_hd,
         vag::probe,
+        xa::probe,
         xwma::probe,
     ];
     for p in probes {
