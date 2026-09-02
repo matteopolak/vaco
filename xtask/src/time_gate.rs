@@ -1,71 +1,46 @@
 //! The OS clock is reached through `vaco-time` and nowhere else (D18).
 //!
-//! # The hole this closes
+//! [`crate::wasm`] answers "does this crate compile for wasm32?", which is
+//! weaker than it sounds: `std::time::Instant::now()` **compiles** for
+//! `wasm32-unknown-unknown` and then panics when called, so a crate can pass
+//! `wasm-check` and still be unusable on the target it just passed for. Found
+//! by reading, not by a gate — `vaco-protocol-file`'s `follow` read and
+//! `vaco-conformance` both built deadlines with `std::time::Instant` and both
+//! passed `wasm-check` every time it ran.
 //!
-//! [`crate::wasm`] answers "does this crate compile for wasm32?", and that is a
-//! weaker question than it sounds. `std::time::Instant::now()` **compiles**
-//! for `wasm32-unknown-unknown` and then panics when called, so a crate can
-//! pass `wasm-check` and still be unusable on the target it just passed for.
-//! A compile gate cannot see a runtime panic.
-//!
-//! Found by reading, not by a gate: `vaco-protocol-file`'s `follow` read built
-//! its deadline with `std::time::Instant`, and `vaco-conformance` still does.
-//! Both passed `wasm-check` every time it has run.
-//!
-//! # What counts as OS coupling, and what does not
-//!
-//! `Duration` is **not** flagged. It is arithmetic over two integers with no
-//! syscall behind it, `vaco_time` re-exports `core::time::Duration`, and the
-//! two spellings name the same type — flagging it would be noise that trains
-//! people to ignore the gate.
-//!
-//! The flagged set is the part that talks to the operating system: reading a
+//! `Duration` is **not** flagged — it is arithmetic over two integers with no
+//! syscall behind it, and `vaco_time` re-exports `core::time::Duration`. The
+//! flagged set is the part that talks to the operating system: reading a
 //! clock, and blocking or spawning a thread.
 //!
-//! # The type is on the list, and there is a line-level escape hatch
+//! `SystemTime` the *type* is inert (only `::now()` panics), so flagging it
+//! over-reports, but it stays on the list: the finding that motivated this
+//! gate was a type in a **trait's data model** — `DirEntry.modified` was
+//! `Option<SystemTime>`, obliging every implementer of `Protocol` to produce
+//! an OS type on a target that cannot make one. No `cfg` reaches into an
+//! interface, so catching that is worth some noise. The noise is paid for
+//! with a line-level escape hatch instead of a looser rule: a trailing or
+//! preceding `// time-gate: <reason>` permits one use and leaves the reason
+//! in the source — for converting a value the OS already gave you, not for
+//! `now()`.
 //!
-//! Strictly, `SystemTime::now()` is what panics; `SystemTime` the *type* is
-//! inert, and a value handed to you by `fs::Metadata::modified()` costs
-//! nothing to convert. So flagging the type over-reports.
+//! Code `cfg`'d out of wasm is not a finding, since the gate's premise
+//! ("compiles for wasm32 and panics when called") is false for it.
+//! `vaco-sched`'s threaded driver is the worked example: `run_threaded`
+//! calls `std::thread::spawn`, and D18 asks for parallelism to be optional
+//! *at the API level* — the same `Driver::run` compiles and works on wasm,
+//! reporting one thread — so the threaded implementation is correctly
+//! compiled out and reporting it would mean undoing that. Before reporting a
+//! line, the gate walks up to the enclosing item and checks the attribute
+//! block above it — a text scan that sees the common shape (an attribute
+//! directly above a top-level `fn`, `impl` or `mod`), with the
+//! `// time-gate:` hatch covering the rest.
 //!
-//! It stays on the list anyway, because the finding that motivated this gate
-//! was a type in a **trait's data model** — `DirEntry.modified` was
-//! `Option<SystemTime>`, which obliged every implementer of `Protocol` to
-//! produce an OS type on a target that cannot make one. No `cfg` reaches into
-//! an interface. Catching that is worth some noise.
-//!
-//! The noise is paid for with a line-level escape hatch rather than by
-//! loosening the rule: a trailing `// time-gate: <reason>` on the line, or a
-//! `// time-gate: <reason>` on the line above, permits one use and leaves the
-//! reason in the source. Same shape as the unsafe audit's exemptions. Use it
-//! for converting a value the OS already gave you; do not use it for `now()`.
-//!
-//! # Code that is `cfg`'d out of wasm is not a finding
-//!
-//! The gate's whole premise is "this compiles for wasm32 and panics when
-//! called". That premise is **false** for an item behind
-//! `#[cfg(not(target_family = \"wasm\"))]` — it does not compile for wasm at
-//! all, so it cannot panic there.
-//!
-//! `vaco-sched`'s threaded driver is the worked example and the reason this
-//! exists: `run_threaded` calls `std::thread::spawn`, and that is exactly
-//! right. D18 asks for parallelism to be optional *at the API level*, which it
-//! is — the same `Driver::run` compiles and works on wasm, reporting one
-//! thread — and the threaded implementation is then correctly compiled out.
-//! Reporting it would be telling the author to undo the thing D18 asked for.
-//!
-//! So before reporting a line, the gate walks up to the item that encloses it
-//! and checks the attribute block above that item. It is a text scan, so it
-//! sees the common shape (an attribute directly above a top-level `fn`, `impl`
-//! or `mod`) and not an arbitrary one; the `// time-gate:` hatch covers the
-//! rest.
-//!
-//! # Why an allowlist of crates rather than of lines
-//!
-//! Same reasoning as [`crate::wasm`]'s `NATIVE_ONLY`, and the entries overlap
-//! for the same reason: a crate whose whole job is to run the reference binary
-//! and diff its output is native by nature, and pretending otherwise would put
-//! a suppression on every line instead of one honest note in one place.
+//! The allowlist is of crates, not lines — same reasoning as
+//! [`crate::wasm`]'s `NATIVE_ONLY`, and the entries overlap: a crate whose
+//! whole job is to run the reference binary and diff its output is native by
+//! nature, and pretending otherwise would put a suppression on every line
+//! instead of one honest note in one place.
 
 use crate::{Task, crates};
 

@@ -1,58 +1,35 @@
 //! Generate `fuzz/Cargo.toml` from front-matter in the fuzz target files.
 //!
-//! # Why this is generated
+//! Hand-editing it meant touching three separate regions per target —
+//! `[dependencies]`, `[features]` (twice), and a new `[[bin]]` block — with
+//! every agent in the project editing it and none of them owning it. That
+//! produced real damage in one wave: a substring replace on `core = []` that
+//! also matched `codec-core`/`protocol-core`/`format-core`/`cli-core`; a
+//! `default` line overwritten between one agent's read and its write;
+//! `cli-core` and `conformance` silently dropped from `default`, leaving
+//! three crates' fuzz targets unrunnable until someone noticed.
 //!
-//! `fuzz/Cargo.toml` was the last hand-edited shared file, and it had the worst
-//! contention profile of any of them: adding one target meant editing *three*
-//! separate regions — `[dependencies]`, `[features]` (twice, once for the
-//! feature and once to append to `default`), and a new `[[bin]]` block. Every
-//! agent in the project edits it, and none of them owns it.
-//!
-//! Three separate failures came out of that in one wave:
-//!
-//! - An agent patched `core = []` with a substring replace, which also matched
-//!   `codec-core`, `protocol-core`, `format-core` and `cli-core`. It caught the
-//!   damage itself, but nothing would have caught it for anyone else.
-//! - The `default` line changed between one agent's read and its write.
-//! - `cli-core` and `conformance` ended up missing from `default` entirely, so
-//!   `cargo fuzz run cli_specifier` failed with "requires the features" —
-//!   three crates' targets unrunnable, from lost edits nobody noticed.
-//!
-//! # Why the target file is the fragment
-//!
-//! The registry and the docs index take their fragments from per-crate files.
-//! Fuzzing does not need a new file at all: `fuzz/fuzz_targets/<name>.rs`
-//! already exists, and it already has exactly one author — the agent that owns
-//! the crate under test. Putting the declaration in the target's own header
-//! means the thing an agent writes and the thing it declares are the same file,
-//! so there is nothing left to contend for.
-//!
-//! Each target declares its crate in its module docs:
+//! Each target now declares its crate in its own module docs instead of a
+//! separate fragment file:
 //!
 //! ```text
 //! //! fuzz-crate: vaco-core
 //! ```
 //!
 //! Everything else — the path dependency, the feature name, the `[[bin]]`
-//! block, and `default` — is derived. `default` lists every feature, so a
-//! target can never again be silently unrunnable with the plain `cargo fuzz
-//! run <target>` invocation.
+//! block, and `default` — is derived, so a target can never again be
+//! silently unrunnable with a plain `cargo fuzz run <target>`.
 //!
-//! # Why every path dependency is optional
-//!
-//! A single crate with a syntax error used to fail every fuzz target in the
-//! tree, because every path dependency was unconditional: building any one
-//! target's default feature set meant building all of them. In a tree with
-//! several agents writing crates at once, one transiently-broken crate is the
-//! normal state, not an edge case.
-//!
-//! Each dependency is now `optional = true`, and each feature enables exactly
-//! the dependencies the targets that need it actually reference (`dep:`
-//! syntax). `default` still lists every feature — `cargo fuzz run <target>`
-//! with no flags keeps working when the tree is healthy — but
-//! `cargo fuzz run <target> --no-default-features --features <feature>` now
-//! builds only that target's own crate and whatever it references, which is
-//! what isolates a healthy target from a sibling crate that does not compile.
+//! Every path dependency is `optional = true`, gated behind its own feature
+//! (`dep:` syntax), because a single crate with a syntax error used to fail
+//! every fuzz target in the tree — building any one target's default
+//! feature set meant building all of them, and in a tree with several
+//! agents writing crates at once a transiently-broken crate is the normal
+//! state. `default` still lists every feature so the plain invocation keeps
+//! working when the tree is healthy, but
+//! `cargo fuzz run <target> --no-default-features --features <feature>`
+//! builds only that target's own crate, isolating it from a sibling that
+//! does not compile.
 
 use crate::{Map, Set, Task, crates, repo_root};
 

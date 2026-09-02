@@ -1,50 +1,27 @@
 //! Every third-party media crate is reachable from exactly one Vaco crate (D11).
 //!
-//! # What the rule is actually protecting
+//! Bit-identical output against the reference is a project requirement, and an
+//! external crate was written to satisfy its own correctness criteria rather
+//! than ours — it may round differently, handle an edge case differently, or
+//! simply produce different-but-valid output. So every external codec,
+//! container or signal-processing crate is **provisional**. Swapping a backend
+//! must mean rewriting one crate's internals and nothing else, which only
+//! holds if exactly one crate can reach the dependency — a second caller
+//! turns a contained replacement into a migration.
 //!
-//! Bit-identical output against the reference is a project requirement (D6), and
-//! an external crate was written to satisfy its own correctness criteria rather
-//! than ours. It may round differently, handle an edge case differently, or
-//! simply produce different-but-valid output. So every external codec, container
-//! or signal-processing crate is **provisional**: useful now, possibly wrong for
-//! us later.
+//! There is a list rather than "every external dependency" because the
+//! unfiltered rule is measurably wrong: `bitflags` (10 crates), `smallvec`
+//! (6), `thiserror` (6), `tracing` (2) and `parking_lot` (2) all have more
+//! than one owner today, and none of them is what D11 guards — a `bitflags`
+//! in ten crates is a language convenience with no bearing on output
+//! fidelity. Failing on those would make the gate cry wolf on its first run.
+//! So [`MEDIA`] names only the crates whose *output* we could disagree with;
+//! adding a row is part of adopting one.
 //!
-//! D11's answer is that swapping a backend must mean rewriting one crate's
-//! internals and nothing else. That only holds if exactly one crate can reach
-//! the dependency — a second caller turns a contained replacement into a
-//! migration.
-//!
-//! # Why there is a list rather than "every external dependency"
-//!
-//! Because the unfiltered rule is wrong, and measurably so. Five external
-//! crates in this workspace have more than one owner today:
-//!
-//! ```text
-//! bitflags     10 crates
-//! smallvec      6
-//! thiserror     6
-//! tracing       2
-//! parking_lot   2
-//! ```
-//!
-//! None of them is what D11 guards. A `bitflags` in ten crates is a language
-//! convenience with no bearing on output fidelity; there is no "swap the
-//! bitflags backend" migration to contain. Failing on those would make the gate
-//! fire ten times on its first run for reasons nobody can act on, and a gate
-//! that cries wolf is one people learn to suppress — the same reasoning that
-//! keeps `encumbered` separate from `default = false` in [`crate::patent_gate`].
-//!
-//! So [`MEDIA`] names the crates whose *output* we could disagree with. Adding a
-//! row is part of adopting one, and the D10 review that admits a media crate is
-//! the moment to add it.
-//!
-//! # What this cannot see
-//!
-//! It reads `[dependencies]` tables, so it catches a second *declared* owner. It
-//! cannot see a crate re-exporting an external type through its own public API,
-//! which is D11's other half ("no external type appears in its public API — not
-//! in a signature, not in an error variant, not in a re-export"). That still
-//! needs a person, and the wrapping crate's own review is where it happens.
+//! What this cannot see: it reads `[dependencies]` tables, so it catches a
+//! second *declared* owner, but not a crate re-exporting an external type
+//! through its own public API (D11's other half — no external type in a
+//! signature, error variant, or re-export). That still needs a person.
 
 use std::collections::BTreeMap;
 

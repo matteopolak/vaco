@@ -1,6 +1,6 @@
-//! The CI similarity scan (QA-08, plan 13 §6.4): winnowing fingerprints, so a
-//! PR that reproduces text from a corpus its author must never read from can
-//! be caught mechanically instead of trusted to the honour system alone.
+//! The CI similarity scan: winnowing fingerprints, so a PR that reproduces
+//! text from a corpus its author must never read from can be caught
+//! mechanically instead of trusted to the honour system alone.
 //!
 //! # Algorithm
 //!
@@ -37,7 +37,7 @@
 //!
 //! # What this is, and what it deliberately is not
 //!
-//! The production design (plan 13 §6.4) indexes a real local checkout of
+//! The production design indexes a real local checkout of
 //! FFmpeg/x264/x265/libvpx/dav1d/GStreamer/VLC, once, on an isolated CI
 //! runner that no developer machine ever touches. Building or fetching that
 //! corpus is out of scope here — this environment has no isolated runner and
@@ -47,28 +47,26 @@
 //! hatch so a real CI job can point it at a real checkout later: `cargo
 //! xtask similarity-scan --against /path/to/corpus`. Run with no `--against`,
 //! it reports that plainly rather than either failing or silently doing
-//! nothing — the same convention `--check` gates use for "this needs
-//! something that is not available yet".
+//! nothing.
 //!
-//! One more deliberate simplification: the plan calls for canonicalising
-//! integer literals "except those in declared constant tables" so a
-//! spec-mandated table transcribed independently by two implementations does
-//! not read as copying. This module canonicalises every numeric literal
-//! uniformly instead — cross-referencing `provenance/*.toml` table entries
-//! from inside a generic two-corpus text-similarity tool would tie this
-//! module to this repository's own provenance schema, which is exactly the
-//! kind of coupling a CI job callable against an arbitrary corpus directory
-//! should not have. The practical effect is a slightly higher false-positive
-//! rate on numeric-table-heavy files, which is the direction to err in: the
-//! plan's own §6.4 already treats a constant-table hit as "allowlisted by
-//! the provenance record", i.e. reviewed and dismissed, not silently passed.
+//! One more deliberate simplification: rather than canonicalising integer
+//! literals "except those in declared constant tables" (so a spec-mandated
+//! table transcribed independently by two implementations does not read as
+//! copying), this module canonicalises every numeric literal uniformly —
+//! cross-referencing `provenance/*.toml` table entries from inside a
+//! generic two-corpus text-similarity tool would tie this module to this
+//! repository's own provenance schema, coupling a CI job that should be
+//! callable against an arbitrary corpus directory. The practical effect is
+//! a slightly higher false-positive rate on numeric-table-heavy files,
+//! which is the direction to err in: a constant-table hit is allowlisted by
+//! the provenance record, i.e. reviewed and dismissed, not silently passed.
 
 use crate::{Map, Task};
 use std::path::{Path, PathBuf};
 
-/// Tokens per k-gram (plan 13 §6.4).
+/// Tokens per k-gram.
 pub const K: usize = 40;
-/// Window width for winnowing (plan 13 §6.4).
+/// Window width for winnowing.
 pub const W: usize = 20;
 /// Guaranteed detection threshold, in tokens: any shared run of at least this
 /// many tokens produces at least one shared fingerprint.

@@ -2,8 +2,7 @@
 //!
 //! # Why this exists
 //!
-//! `fuzz/` is its own cargo workspace (deliberately, per F1-F9 in
-//! `planning/11-foundations.md`), which means it is built by **neither**
+//! `fuzz/` is its own cargo workspace (deliberately), which means it is built by **neither**
 //! `cargo test --workspace` nor `cargo clippy --workspace --all-targets` — the
 //! two gates everything else in this project runs through. A target can rot
 //! against an ordinary, correct API change in the crate it exercises and

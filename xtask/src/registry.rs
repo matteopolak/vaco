@@ -1,12 +1,11 @@
 //! Assemble `vaco-registry` from per-crate `vaco-component.toml` fragments.
 //!
-//! Registration is generated rather than hand-edited because the registry would
-//! otherwise be a file every one of ~120 crates must touch — the single worst
-//! contention point in a shared working tree (plan 19 §3.4). A crate declares
-//! what it provides; this walks the tree and emits the table.
-//!
-//! Linker-section registration (`inventory`, `linkme`) would also solve the
-//! contention, but both rely on `unsafe` and link tricks, which D2 rules out.
+//! Registration is generated rather than hand-edited because the registry
+//! would otherwise be a file every one of ~120 crates must touch — the
+//! single worst contention point in a shared working tree. A crate declares
+//! what it provides; this walks the tree and emits the table. Linker-section
+//! registration (`inventory`, `linkme`) would also solve the contention, but
+//! both rely on `unsafe` and link tricks, which D2 rules out.
 //!
 //! # What it emits
 //!
@@ -17,29 +16,25 @@
 //! 2. A delimited region at the end of `Cargo.toml` holding the optional path
 //!    dependency on each component crate and the `[features]` table.
 //!
-//! The manifest half matters more than it looks. Without it, registering a
-//! component would still require a hand edit to a file shared by every
-//! component author — the contention plan 19 §3.4 exists to remove, moved one
-//! file along. Generating a **delimited region** rather than the whole manifest
-//! keeps the hand-written half (package metadata, the always-on `-core`
-//! dependencies, lints) reviewable and out of the generator's way, and the
-//! generator only ever rewrites between its own markers.
+//! Generating a **delimited region** rather than the whole manifest keeps the
+//! hand-written half (package metadata, the always-on `-core` dependencies,
+//! lints) reviewable and out of the generator's way, and the generator only
+//! ever rewrites between its own markers.
 //!
 //! A generated path dependency that names a directory which does not exist
-//! fails manifest parsing for the entire workspace (plan 19, the trap that has
-//! blocked every agent five times). That cannot happen here by construction:
-//! fragments are discovered by walking crate directories, so every crate named
-//! in the output was found on disk a moment earlier.
+//! fails manifest parsing for the entire workspace. That cannot happen here
+//! by construction: fragments are discovered by walking crate directories,
+//! so every crate named in the output was found on disk a moment earlier.
 //!
 //! # Why a hand-written TOML reader
 //!
 //! `xtask` is dependency-free by design — it gates the build, so it must
-//! compile before anything else and must not be able to violate the policies it
-//! enforces. The fragment schema is frozen in plan 19 §3.4 and is a flat list of
-//! `key = "string"` pairs under `[[component]]` headers, which is a small enough
-//! language to read exactly rather than approximately. [`toml`] below is that
-//! reader; it rejects what it does not understand instead of guessing, so a
-//! malformed fragment is a named error rather than a silently missing component.
+//! compile before anything else and must not be able to violate the policies
+//! it enforces. The fragment schema is a flat list of `key = "string"` pairs
+//! under `[[component]]` headers, small enough to read exactly rather than
+//! approximately. [`toml`] below is that reader; it rejects what it does not
+//! understand instead of guessing, so a malformed fragment is a named error
+//! rather than a silently missing component.
 
 use std::path::Path;
 

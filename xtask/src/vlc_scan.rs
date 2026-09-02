@@ -8,50 +8,43 @@
 //! -checked (prefix-free, exact code lengths), and still had real errors: 7
 //! of 15 `TOTAL_ZEROS_4X4` rows conflicted outright, and — worse — several
 //! `COEFF_TOKEN_NC2` rows and over half of `RUN_BEFORE`'s highest-risk row
-//! were *wrong but still prefix-free*, so the same self-consistency check
-//! that caught the first class of error was silent on the second. That is
-//! the three-tier finding `AGENT-CONSTRAINTS.md` now records: prefix-freedom
-//! is the weakest tier, prefix-freedom plus exact code lengths is stronger
-//! but still not sufficient, and only line-by-line comparison against
-//! primary spec text is sufficient. This scan runs the *weakest* tier,
-//! deliberately: it is cheap (a pairwise comparison over already-loaded
-//! static data, no I/O, sub-second across every table target below) and it
-//! is what caught H.264's first class of error, so it is worth running
-//! everywhere those tables exist. It is not a substitute for the primary
-//! -text pass H.264's own tables were re-verified against, and this module's
-//! own report says so on every line, not just once at the top.
+//! were *wrong but still prefix-free*, so the self-consistency check that
+//! caught the first class of error was silent on the second. Prefix-freedom
+//! is the weakest of three verification tiers; prefix-freedom plus exact
+//! code lengths is stronger but still not sufficient; only line-by-line
+//! comparison against primary spec text is. This scan runs the *weakest*
+//! tier deliberately — cheap (a pairwise comparison over already-loaded
+//! static data, sub-second) and worth running everywhere these tables
+//! exist — but is not a substitute for the primary-text pass H.264's own
+//! tables were re-verified against, and this module's report says so on
+//! every line, not just once at the top.
 //!
 //! `vaco-codec-vlc::is_prefix_free` already implements the same algorithm,
-//! but `xtask` is deliberately dependency-free (see this crate's own module
-//! doc: "this binary gates the build, so it must compile before anything
-//! else and must not itself be able to violate the policies it enforces") —
-//! depending on a workspace crate here would mean a transient compile break
-//! in that crate (not rare in a shared tree with several concurrent writers)
-//! takes every gate down with it. The ~15-line algorithm below is
-//! deliberately re-derived, not copy-pasted, so it stands on its own.
+//! but `xtask` is deliberately dependency-free — this binary gates the
+//! build, so it must compile before anything else and must not itself be
+//! able to violate the policies it enforces. Depending on a workspace crate
+//! here would mean a transient compile break in that crate (not rare in a
+//! shared tree with several concurrent writers) takes every gate down with
+//! it. The ~15-line algorithm below is re-derived, not copy-pasted.
 //!
 //! # What this scan covers, and what it structurally cannot
 //!
-//! Only tables shaped as a flat `(bit-string, ...)` collection — the classic
-//! Huffman/VLC shape this project already builds a dedicated crate for.
-//! VP8's and VP9's coefficient/mode tables are **not** in scope: they are
-//! binary-tree traversal tables (`&[i8]` branch-index arrays) and
-//! probability tables, not independently-transcribed bit-strings that could
-//! collide with each other — "prefix conflict" is not a meaningful property
-//! of a tree encoded that way. AC-3 has no VLC tables at all (mantissa
-//! decoding is fixed-width grouped-radix, not variable-length — see
-//! `vaco-codec-vlc`'s own module doc, which found this first). Both are
-//! recorded as "not applicable" below rather than silently skipped, so a
-//! reader can tell "not applicable" from "not yet scanned."
+//! Only tables shaped as a flat `(bit-string, ...)` collection. VP8's and
+//! VP9's coefficient/mode tables are **not** in scope: they are binary-tree
+//! traversal tables (`&[i8]` branch-index arrays) and probability tables,
+//! not independently-transcribed bit-strings that could collide with each
+//! other — "prefix conflict" is not a meaningful property of a tree encoded
+//! that way. AC-3 has no VLC tables at all (mantissa decoding is
+//! fixed-width grouped-radix, not variable-length). Both are recorded as
+//! "not applicable" below rather than silently skipped.
 //!
 //! # Ownership
 //!
 //! This module only ever *reads* the crates it scans. Where a target crate
 //! has a live writer (checked via `git status --porcelain` immediately
-//! before this module's own targets list was finalised — see the report
-//! this command prints, which names exactly which crates were live at scan
-//! time), any finding is reported and left for that crate's owner; nothing
-//! here ever edits another crate's table file.
+//! before this module's own targets list was finalised), any finding is
+//! reported and left for that crate's owner; nothing here ever edits
+//! another crate's table file.
 
 use crate::{Task, repo_root};
 

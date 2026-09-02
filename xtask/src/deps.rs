@@ -1,48 +1,32 @@
 //! D10 Gate 1: pure Rust, zero FFI in the media core.
 //!
-//! # The 2026-08-28 owner amendment
+//! FFI is banned everywhere in the tree by default, with one scoped exception:
+//! peripheral subsystems that carry no media semantics (transport security —
+//! TLS/DTLS) may use it. Every codec, container, muxer, bitstream filter,
+//! signal-processing and filter-graph crate, plus the CLI, stays absolute, and
+//! `dav1d`, `libaom`, `libvpx`, `x264`, `x265`, `openh264` and `libopus`
+//! bindings are banned outright regardless of the exception.
 //!
-//! Gate 1 used to be an unconditional ban. The owner has since scoped it
-//! (`planning/00-decisions.md`, "Gate 1 amendment (2026-08-28, owner)"): FFI
-//! is now permitted for peripheral subsystems that carry no media semantics —
-//! transport security (TLS/DTLS) named explicitly — while remaining absolute
-//! for every codec, container, muxer, bitstream filter, signal-processing and
-//! filter-graph crate, and the CLI. `dav1d`, `libaom`, `libvpx`, `x264`,
-//! `x265`, `openh264` and `libopus` bindings remain banned outright regardless
-//! of this amendment.
+//! [`Banned::permitted_via`] enforces the scoping structurally: an empty list
+//! means "never, anywhere", the default. A non-empty list names the *exact*
+//! Vaco crates allowed to be the reason a banned dependency appears in the
+//! build graph — reachable from anywhere else, it is still a violation.
 //!
-//! [`Banned::permitted_via`] is how that scoping is enforced structurally
-//! rather than by trust: an empty list means "never, anywhere in the tree",
-//! which is the default and covers every entry this gate has always covered.
-//! A non-empty list names the *exact* Vaco crates allowed to be the reason a
-//! banned dependency appears in the build graph — reachable from anywhere
-//! else, it is still a Gate 1 violation.
+//! This does not read `Cargo.lock`: it records a package's **optional**
+//! dependencies whether or not the enabling feature is active, so grepping it
+//! reports violations for builds that never compile the dependency at all.
+//! False positives train people to ignore the gate, so this queries the
+//! *resolved build graph* instead — the property Gate 1 actually cares about.
 //!
-//! # Why this does not read `Cargo.lock`
-//!
-//! `Cargo.lock` records a package's **optional** dependencies whether or not the
-//! enabling feature is active. Grepping it for `ring` reports a violation for a
-//! build that never compiles `ring` at all — which is exactly what happened on
-//! the first check of this workspace (plan 19 §11).
-//!
-//! False positives are worse than no gate, because they train people to ignore
-//! it. So this queries the *resolved build graph* instead, and additionally
-//! checks the property Gate 1 actually cares about: whether anything in the tree
-//! links or compiles foreign code.
-//!
-//! # How the scoping check works
-//!
-//! For a banned dependency that is actually present in the graph and does
-//! name permitted crates, `cargo tree -i <name>@<version> -e normal,build`
-//! prints the *inverted* dependency tree: the banned package at the root, and
-//! everything that (transitively) depends on it as descendants. Walking that
-//! tree and stopping at the first `vaco-*` crate on each branch gives the set
-//! of workspace crates that actually declare (directly or through third-party
-//! intermediates) the risky dependency — further `vaco-*` ancestors above
-//! that point are just ordinary callers of a safe wrapper API (D11's whole
-//! point), not independent reachers of the FFI, so they are deliberately not
-//! collected. Each such reacher must be in `permitted_via`, or the check
-//! fails naming it.
+//! For a banned dependency that is present and does name permitted crates,
+//! `cargo tree -i <name>@<version> -e normal,build` prints the *inverted*
+//! dependency tree: the banned package at the root, everything that
+//! transitively depends on it as descendants. Walking each branch and
+//! stopping at the first `vaco-*` crate gives the set of workspace crates
+//! that actually declare the risky dependency — further `vaco-*` ancestors
+//! above that point are just callers of a safe wrapper API, not independent
+//! reachers of the FFI, so they are deliberately not collected. Each reacher
+//! must be in `permitted_via`, or the check fails naming it.
 
 use std::collections::BTreeSet;
 use std::process::Command;

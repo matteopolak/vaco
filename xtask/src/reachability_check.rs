@@ -1,61 +1,32 @@
 //! Components that exist, compile, pass their own tests, and cannot be
 //! reached from the CLI.
 //!
-//! # Why this exists
-//!
 //! This project has shipped that shape of bug roughly eight times: an H.264
 //! decoder callable only from `#[cfg(test)]` code, `vaco-codec-opus` fully
 //! implemented and depended on by nothing, FLAC misdetected as CDG because no
 //! FLAC demuxer was ever registered, a bitstream-filter family left out of the
-//! hand-assembled dispatch list, and more. Each was found by accident, while
+//! hand-assembled dispatch list, and more — each found by accident while
 //! chasing something else. This is the mechanical sweep instead.
-//!
-//! Five independent rules, each checked against a **real regression this
-//! session found**, recorded in each rule's own doc below rather than a
-//! synthetic break-then-fix: `vaco-codec-opus` (rules A and E — see
-//! [`ALLOW_ORPHAN_CRATE`]'s entry for it, which is not a false positive to
-//! silence but a real, measured finding this gate surfaced: the decoder is
-//! wrong for stereo content, so it stays unregistered on purpose rather than
-//! wired in), `vaco-format-audio-simple`'s missing `flac` demuxer (rule D,
-//! fixed — a real demuxer now exists), and a temporarily-broken
-//! `bsf_descs()`/non-default feature (rules B and C, reverted after
-//! confirming the gate fires — see the report for the exact commands run).
 //!
 //! # What it cannot do
 //!
-//! Bullet five of the brief this gate answers to is "public API reachable
-//! only from `#[cfg(test)]`" — the H.264 case, named as the hardest to detect
-//! soundly. It is not attempted directly here, and that is a deliberate
-//! omission, not an oversight:
+//! "Public API reachable only from `#[cfg(test)]`" — the H.264 case — is not
+//! attempted directly: a sound version needs a whole-program call graph
+//! (what actually calls a given `pub fn`, through trait objects and
+//! re-exports) that this dependency-free binary cannot build, and false
+//! positives from trait dispatch would train people to silence a hard gate.
 //!
-//! A sound version would need a whole-program call graph (what actually calls
-//! a given `pub fn`, through trait objects and re-exports) that nothing in
-//! this dependency-free binary can build, and [`crate::dead_code`] already
-//! documents why its own name-based approximation of that question is a
-//! *report*, not a gate — false positives from trait dispatch and re-exports
-//! are common enough that failing the build on them would train people to
-//! silence it.
-//!
-//! What this file has instead is [`check_unregistered_descriptors`], which
-//! catches the specific shape the H.264 incident actually had: a fully-built,
-//! `pub` descriptor constant (`DecoderDesc`/`EncoderDesc`/`DemuxerDesc`/
-//! `MuxerDesc`/`ParserDesc`/`FilterDesc`/`ProtocolDesc`) that no
-//! `vaco-component.toml` fragment's `ctor` names. That is sound — it does not
-//! guess about call graphs, it just asks "does the one document that grants
-//! CLI reachability mention this const by its exact path?" — and it is
-//! exactly what would have caught the H.264 decoder: a real `DecoderDesc` sat
-//! in the crate the whole time, unregistered. It fired on exactly that shape
-//! this session — `vaco-codec-opus::DECODER_OPUS`, real and complete for mono
-//! audio — before this file's own allowlist existed to explain why it stays
-//! that way (see [`ALLOW_ORPHAN_CRATE`]).
-//!
-//! What it still cannot catch: a decode/demux/etc. implementation exposed
-//! only as a bare function or method with **no descriptor constant at all** —
-//! reachable from a unit test that constructs the type directly, never from
-//! any registry path, and with nothing shaped like a `DecoderDesc` for this
-//! check to notice is missing. That case needs a person reading the crate,
-//! same as it always has. Said plainly rather than shipping a gate that
-//! implies otherwise.
+//! [`check_unregistered_descriptors`] catches the specific shape the H.264
+//! incident had instead: a fully-built, `pub` descriptor constant
+//! (`DecoderDesc`/`EncoderDesc`/`DemuxerDesc`/`MuxerDesc`/`ParserDesc`/
+//! `FilterDesc`/`ProtocolDesc`) that no `vaco-component.toml` fragment's
+//! `ctor` names. It fired on exactly that shape this session —
+//! `vaco-codec-opus::DECODER_OPUS`, real and complete for mono audio, kept
+//! unregistered on purpose because the decoder is wrong for stereo content
+//! (see [`ALLOW_ORPHAN_CRATE`]). What it still cannot catch: an
+//! implementation exposed only as a bare function with **no descriptor
+//! constant at all**, reachable only from a test that constructs the type
+//! directly. That case still needs a person reading the crate.
 //!
 //! # The other four rules
 //!
@@ -63,27 +34,24 @@
 //!   crate with no `vaco-component.toml` of its own and no other in-workspace
 //!   crate depending on it. The `vaco-codec-opus` case, generalised.
 //! - **B** [`check_nondefault_features`] — every component feature that opts
-//!   out of `default` (D4 patent gating, or a wasm-portability opt-out) must
+//!   out of `default` (patent gating, or a wasm-portability opt-out) must
 //!   actually compile in isolation, or it can never be constructed in *any*
 //!   build configuration, deliberate opt-out or not.
 //! - **C** [`check_bsf_chaining`] — `vaco-registry`'s hand-assembled
-//!   `bsf_descs()` (bitstream filters have no typed table yet, see its own
-//!   doc) must chain every `vaco-bsf-*` crate that registers a
+//!   `bsf_descs()` must chain every `vaco-bsf-*` crate that registers a
 //!   `bitstream_filter` component. The original `bsf_descs()` bug,
 //!   generalised so a ninth `vaco-bsf-*` crate cannot repeat it silently.
 //! - **D** [`check_muxer_only`] — a muxer with no demuxer of the same name is
 //!   either legitimately write-only (a hash sink, a segmenter, a streaming
-//!   wrapper — ffmpeg has no demuxer for these either) or it is the FLAC
-//!   case: a real container with nothing on the read side. Every write-only
-//!   name needs a row in [`ALLOW_MUXER_ONLY`] saying which.
+//!   wrapper) or it is the FLAC case: a real container with nothing on the
+//!   read side. Every write-only name needs a row in [`ALLOW_MUXER_ONLY`]
+//!   saying which.
 //!
 //! # Allowlists
 //!
 //! Same discipline as [`crate::dup_check`]'s `DISTINCT` and
 //! [`crate::owner_gate`]'s `MEDIA`: every entry is a claim, in writing, about
-//! why a specific gap is deliberate rather than a bug. A gate everyone
-//! silences is worse than no gate — the reason is what stops the allowlist
-//! from becoming the place real findings go to hide.
+//! why a specific gap is deliberate rather than a bug.
 
 use std::process::Command;
 
