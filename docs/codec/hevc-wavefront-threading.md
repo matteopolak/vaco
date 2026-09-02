@@ -259,11 +259,40 @@ data structure.
    Stage 2 needs column granularity — a different primitive call, not a
    different shape of dispatch.
 3. `CuGrid`/`EdgeMarks`/`sao_params` need the equivalent treatment at their
-   own (finer, 4x4 or per-CTU) granularity — smaller, simpler structures
-   than a pixel plane, so a hand-rolled tile grid following the same
-   own-then-publish shape is likely less code than adapting them to
-   `vaco_codec_core::picture`'s pixel-stride-shaped API, but this still
-   needs deciding in the doing, not assumed here. **Not started.**
+   own (finer, 4x4 or per-CTU) granularity. **In progress: `EdgeMarks`
+   landed, `CuGrid`/`sao_params` not started.**
+
+   The "deciding in the doing" this bullet used to defer resolved simpler
+   than expected, and in a way that applies to all three structures, not
+   just `EdgeMarks`: unlike `ReconPlane`, nothing ever needs *partial,
+   sub-row* visibility into one of these three structures' still-being-
+   written row. Every same-row read targets an already-decoded (hence
+   already-written) earlier position in z-scan/raster order, and every
+   cross-row read targets a neighbour row that WPP's own 2-CTU CABAC-
+   context lag (and the 1-CTU-row deblock lag this doc's own "How far up
+   does a row actually reach?" section measured) guarantees is *already
+   fully finished* by the time anything reads it — never a row still being
+   filled by another thread. `ReconPlane` needed `vaco_codec_core::picture`
+   specifically because deblocking and intra reference-line reads need to
+   see a row still in progress, sample by sample; these three structures
+   never do, so a coarser once-per-row-band freeze is enough, and a small
+   hand-rolled "current owned/mutable band, `Vec` of frozen `published`
+   bands" type (mirroring `ReconPlane`'s own `current`/`try_rows` split,
+   sized in blocks rather than pixels) is simpler than routing four bools'
+   worth of per-4x4-block flags through a pixel-plane-shaped API built for
+   byte samples. `EdgeMarks` (`crates/codec/vaco-codec-hevc/src/framebuf.rs`)
+   is the first of the three built this way: `EdgeBand` bundles its four
+   `Vec<bool>` grids per CTU row, `EdgeMarks::begin_row`/`finish` mirror
+   `ReconPlane::begin_row`/`finish` exactly (including advancing
+   `current_band` one past the last real band on `finish`, for the same
+   reason — a stale, freshly-emptied `current` must not still answer reads
+   for the row `finish` just moved into `published`), and every
+   `mark_*`/`*_at` method keeps its exact existing signature, so every call
+   site in `ctu.rs`/`deblock.rs` needed zero changes beyond `EdgeMarks::new`
+   gaining a `ctb_size` parameter. `CuGrid` and `sao_params` are next, in
+   that order (per the standing increasing-complexity/lowest-risk-first
+   staging) — `CuGrid`'s nine heterogeneous typed arrays are the largest
+   remaining piece of step 3.
 4. Gate exactly as originally planned: byte-exact against every fixture
    this item's brief names, single-threaded, before touching `Stage 2`'s
    actual thread dispatch; ≤1.03x versus the pre-Stage-1 baseline or stop
@@ -279,9 +308,9 @@ data structure.
    numbers. `CuGrid`/`EdgeMarks`/`sao_params` (step 3) have not been
    measured and are not covered by this gate.
 
-Steps 1 and 2 are done; step 3 (`CuGrid`/`EdgeMarks`/`sao_params`) and
-step 4's own gate for that step's own scope are what the next pass into
-this item starts with.
+Steps 1 and 2 are done; step 3 (`EdgeMarks` landed, `CuGrid`/`sao_params`
+still ahead) and step 4's own gate for that step's own scope are what the
+next pass into this item starts with.
 
 ## What actually needs to become per-row
 
@@ -513,8 +542,9 @@ document originally sketched for it, since single-threaded Stage 1 has no
 overlap to enable and no reason to pay the tile grid's cost before Stage 2
 actually needs it.
 
-What is left: `CuGrid`/`EdgeMarks`/`sao_params`'s own analogous treatment
-(Stage 1's step 3, not started), then the move from row-banded to
+What is left: `CuGrid`/`sao_params`'s own analogous treatment (Stage 1's
+step 3, `EdgeMarks` already landed this way — see "Concrete Stage 1 plan"
+above), then the move from row-banded to
 column-tiled once Stage 2's real thread dispatch needs it, then Stage 2
 itself and its full 1/2/4/8/16-thread verification bar. Each remains its
 own pass, landed and gated separately, for the same reason the item has

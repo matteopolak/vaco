@@ -2801,3 +2801,104 @@ own pass, per this item's own staging discipline.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 36. HEVC B4 -- Stage 1 step 3, first piece: `EdgeMarks` row-banded the same way `ReconPlane` is
+
+§34 landed Stage 1's first two steps (`framebuf::Plane`'s reconstruction
+storage through a row-banded `PictureWriter`). Its own "Not done in this
+section" list named step 3 next: `CuGrid`/`EdgeMarks`/`sao_params` need the
+"same treatment." This section is the first of that step's three pieces,
+`EdgeMarks`, landed and gated on its own.
+
+**The key finding, which applies to all three remaining structures, not
+just this one**: unlike `ReconPlane`, nothing ever needs *partial, sub-row*
+visibility into `EdgeMarks`', `CuGrid`'s or `sao_params`' still-being-
+written row. A same-row read always targets an already-decoded (hence
+already-written) earlier position in z-scan/raster order; a cross-row read
+always targets an earlier CTU row, and WPP's own 2-CTU CABAC-context lag
+and the 1-CTU-row deblock lag (§31) both guarantee that row is *already
+fully finished*, never one still being filled by another thread.
+`ReconPlane` needed `vaco_codec_core::picture`'s per-CTU-tile publish
+specifically because deblocking and intra reference-line reads need to see
+a row still in progress, sample by sample; these three structures never
+do. A coarser once-per-CTU-row freeze is enough, so a small hand-rolled
+"current owned/mutable band, `Vec` of frozen `published` bands" type
+(mirroring `ReconPlane`'s own `current`/`try_rows` split, sized in 4x4
+blocks rather than pixels) is simpler than routing four bools' worth of
+per-block flags through a pixel-plane-shaped API built for byte samples.
+Building this on `vaco_codec_core::picture` itself was considered and
+rejected for this reason: that primitive's per-tile publish machinery would
+be solving a problem this data does not have.
+
+**What changed** (`crates/codec/vaco-codec-hevc/src/framebuf.rs`):
+`EdgeMarks` is now `{ cols, band_rows, n_bands, current_band, current:
+EdgeBand, published: Vec<EdgeBand> }`, where `EdgeBand` bundles the same
+four `Vec<bool>` grids (`vert`/`horiz`/`tu_vert`/`tu_horiz`) the flat
+version had. `EdgeMarks::new` gained a `ctb_size` parameter (the same
+quantity `ReconPlane::new`'s own caller already passes) to size
+`band_rows`. `begin_row`/`finish` mirror `ReconPlane::begin_row`/`finish`
+exactly, including the one subtlety that cost a bug during development:
+`finish` must advance `current_band` one *past* the last real band index
+(`n_bands`, not `n_bands - 1`), not merely freeze the last band and leave
+`current_band` pointing at it -- otherwise a read after `finish` would
+still take the `Equal` branch against the fresh, empty `EdgeBand` `finish`
+left behind in `current`, rather than the `Less` branch that finds the real
+data `finish` just moved into `published`. Every `mark_vert`/`mark_horiz`/
+`mark_tu_vert`/`mark_tu_horiz`/`vert_at`/`horiz_at`/`tu_vert_at`/
+`tu_horiz_at` method kept its exact existing signature, so every call site
+in `ctu.rs` and `deblock.rs` needed zero changes beyond `EdgeMarks::new`'s
+new argument and two new `walk.edges.begin_row(...)`/`walk.edges.finish()`
+calls in `decoder.rs`, placed right alongside the existing
+`walk.recon.begin_ctu_row(...)`/`walk.recon.finish()` calls that already
+mark the same CTU-row boundaries.
+
+**Byte-exactness**: a private-worktree baseline (this crate's own HEAD
+immediately before this section's own commit, with the concurrently-landing
+but unrelated `dpb.rs`/`Cargo.toml`/`Cargo.lock` WIP from another agent
+copied in unchanged on both sides so the comparison isolates only this
+change) against the working tree, both built as a throwaway `dump_multirow`
+example decoding `tests/fixtures/deblock_lag_256x320.hevc` (256x320, 4x5
+CTUs at 64x64 -- multiple full CTU rows plus the row-band boundary itself),
+`qp32_64x64.hevc` and `flat_gray_64x64.hevc` (both single-CTU-row,
+exercising the `n_bands == 1` edge case) -- every decoded plane, byte for
+byte, identical between before and after (`diff -rq` reported no
+differences). `tests/oracle.rs::dense_content_is_byte_exact` and
+`tests/flat.rs` both still pass unchanged.
+
+**Serial cost**: the checked-in fixtures are too small (one frame each) to
+measure meaningfully at process-level granularity, so `dump_multirow` was
+extended to decode the same fixture in a repeated loop within one process
+(4000 iterations of the 256x320 fixture) to amortise away process-start
+noise, release builds, CPU-seconds via `/usr/bin/time -p`'s `user` field
+(same reasoning as §34: this session's shared machine stays under
+concurrent-agent load throughout). Three completed interleaved rounds
+before/after landing due to a time budget cutoff on a fourth: ratios
+1.008x, 1.045x, 0.925x, mean 0.993x -- no measurable regression, consistent
+with §34's own 0.998x finding on the larger `ReconPlane` change. This is a
+lighter verification than §34's ten-round sweep (three rounds, one fixture
+size, rather than ten rounds against a 1920x1080 50-frame clip); the
+structural argument above (the change replaces one bounds-check-and-index
+with an equivalent bounds-check-plus-one-branch-and-index, no new
+allocation or copy on any hot path) is the primary basis for expecting no
+regression, and the measurement corroborates it rather than standing alone.
+
+`cargo check`/`clippy -p vaco-codec-hevc --lib -- -D warnings` clean.
+`cargo test --lib` (unit tests) still could not be run: `dpb.rs` carries
+the same unrelated, uncommitted, in-progress `PictureMeta::closed_captions`
+edit from a concurrent agent §34 already noted, still not landed as of this
+section -- untouched by this section, not this pass's to fix mid-edit by
+someone else. `tests/oracle.rs`/`tests/flat.rs` (separate binaries, built
+against the crate's public API, unaffected by `dpb.rs`'s own test-module
+compile state) both passed.
+
+**Not done in this section**: `CuGrid`/`sao_params`'s own analogous
+treatment (the rest of Stage 1's step 3), the later move from row-banded to
+column-tiled once Stage 2 needs real per-CTU-column overlap, Stage 2's
+actual thread dispatch, the new `hevc_decode_threaded` fuzz target, and the
+full byte-exact-at-every-thread-count verification matrix. Each remains its
+own pass, per this item's own staging discipline. `docs/codec/
+hevc-wavefront-threading.md`'s "Concrete Stage 1 plan" section is updated
+to match.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.

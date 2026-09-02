@@ -551,42 +551,159 @@ impl CuGrid {
 /// reconstruction) with that leaf's own top-left corner and size, and do the
 /// grid-alignment check themselves so the caller never has to reason about
 /// it.
+///
+/// PERF-PROGRAMME.md item B4, Stage 1 step 3: row-banded the same way
+/// [`ReconPlane`] is, and for the same reason (see that struct's own module
+/// doc) — Stage 2's wavefront needs a later CTU row's own edge marks
+/// writable while an earlier row's are still being read by deblocking. Every
+/// mark/read call is, by construction, either within the one row band
+/// currently being written (a CU/TU footprint never crosses a CTU
+/// boundary, and CTU rows and edge-mark row bands are the same height) or
+/// into an *already-finished* earlier row band — never a row band still
+/// being written by someone else — so unlike [`ReconPlane`]'s per-CTU-tile
+/// publish, a coarser once-per-row freeze is enough here: no caller ever
+/// needs partial, sub-row visibility into a row still in progress. That
+/// means this can stay a small, hand-rolled "current owned/mutable band,
+/// finished bands frozen into `published`" split rather than going through
+/// `vaco_codec_core::picture` itself — that primitive's per-tile publish
+/// machinery would be solving a problem this data does not have. Stage 2's
+/// real thread dispatch is what will need to make `published` shareable
+/// across threads (a `Vec<OnceLock<EdgeBand>>` or similar); Stage 1 stays
+/// single-threaded, so a plain `Vec<EdgeBand>` already proves the shape and
+/// its cost.
 #[derive(Debug, Clone)]
 pub(crate) struct EdgeMarks {
     cols: usize,
-    rows: usize,
+    /// 4x4-block rows per CTU row band — the same quantity
+    /// [`ReconPlane::band_h`] tracks in luma samples, here in block units.
+    band_rows: usize,
+    /// Total row bands in the picture — [`EdgeMarks::finish`] advances
+    /// `current_band` past this so every read routes to `published`
+    /// afterward, the same trick [`ReconPlane::finish`] uses.
+    n_bands: usize,
+    /// The row band [`EdgeMarks::mark_vert`] and friends currently write
+    /// into; every earlier band already lives in `published`.
+    current_band: usize,
+    current: EdgeBand,
+    /// Every row band strictly before `current_band`, frozen the moment
+    /// [`EdgeMarks::begin_row`]/[`EdgeMarks::finish`] moved past it — the
+    /// read side ([`EdgeMarks::vert_at`] and friends) for any row not in
+    /// `current`.
+    published: Vec<EdgeBand>,
+}
+
+/// One CTU row band's own share of [`EdgeMarks`]'s four boolean grids —
+/// broken out as its own type purely so `current`/each `published` entry is
+/// one value to move, rather than four parallel `Vec`s that would need to
+/// travel together by convention.
+#[derive(Debug, Clone)]
+struct EdgeBand {
     vert: Vec<bool>,
     horiz: Vec<bool>,
-    /// The subset of `vert`/`horiz` that is *also* a transform-block edge
-    /// (as opposed to a prediction-unit-only boundary interior to one,
-    /// unsplit transform unit — see `ctu::decode_inter_cu`'s own
+    /// The subset of `vert` that is *also* a transform-block edge (as
+    /// opposed to a prediction-unit-only boundary interior to one, unsplit
+    /// transform unit — see `ctu::decode_inter_cu`'s own
     /// [`EdgeMarks::mark_vert`]/[`EdgeMarks::mark_horiz`] calls for where
     /// that PU-only case comes from). `crate::deblock`'s §8.7.2.4 `bS == 1`
-    /// derivation needs this distinction: its non-zero-coefficient condition
-    /// applies only "when the edge is also a transform block edge" — a
-    /// PU-only edge never qualifies, regardless of what either side's
-    /// (necessarily larger, unsplit) transform block coded.
+    /// derivation needs this distinction: its non-zero-coefficient
+    /// condition applies only "when the edge is also a transform block
+    /// edge" — a PU-only edge never qualifies, regardless of what either
+    /// side's (necessarily larger, unsplit) transform block coded.
     tu_vert: Vec<bool>,
     tu_horiz: Vec<bool>,
 }
 
+impl EdgeBand {
+    fn new(len: usize) -> Self {
+        Self { vert: vec![false; len], horiz: vec![false; len], tu_vert: vec![false; len], tu_horiz: vec![false; len] }
+    }
+}
+
 impl EdgeMarks {
-    /// One `bool` per 4x4 luma block, in each of the two directions — not
-    /// `Budget`-tracked, matching this module's own [`Plane::ready`]/
-    /// [`CuGrid`]'s own `written` precedent for boolean occupancy grids.
+    /// One `bool` per 4x4 luma block, in each of the two directions, per
+    /// row band — not `Budget`-tracked, matching this module's own
+    /// [`Plane::ready`]/[`CuGrid`]'s own `written` precedent for boolean
+    /// occupancy grids. `ctb_size` (in luma samples) sets the row-band
+    /// height, the same quantity [`ReconPlane::new`]'s own caller passes.
     #[must_use]
-    pub(crate) fn new(luma_width: usize, luma_height: usize) -> Self {
+    pub(crate) fn new(luma_width: usize, luma_height: usize, ctb_size: usize) -> Self {
         let cols = luma_width.div_ceil(4).max(1);
-        let rows = luma_height.div_ceil(4).max(1);
-        let len = cols.saturating_mul(rows);
-        Self { cols, rows, vert: vec![false; len], horiz: vec![false; len], tu_vert: vec![false; len], tu_horiz: vec![false; len] }
+        let total_rows = luma_height.div_ceil(4).max(1);
+        let band_rows = ctb_size.max(1).div_ceil(4).max(1);
+        let n_bands = total_rows.div_ceil(band_rows).max(1);
+        let band_len = cols.saturating_mul(band_rows);
+        Self {
+            cols,
+            band_rows,
+            n_bands,
+            current_band: 0,
+            current: EdgeBand::new(band_len),
+            // Not `Vec::with_capacity` (disallowed workspace-wide — every
+            // reservation goes through `Budget::alloc` instead): `published`
+            // grows by exactly one `EdgeBand` per `begin_row`/`finish` call,
+            // never resized in bulk, so amortised `push` growth is the
+            // right shape rather than a single upfront reservation this
+            // struct's boolean grids (like `Plane::ready`/`CuGrid::written`
+            // before it) are already exempt from tracking anyway.
+            published: Vec::new(),
+        }
     }
 
-    fn index(&self, bx: usize, by: usize) -> Option<usize> {
-        if bx >= self.cols || by >= self.rows {
+    /// The row band containing 4x4-block row `by`.
+    #[allow(clippy::integer_division, reason = "row band index = block row / the fixed CTB row-band height")]
+    const fn band_of(&self, by: usize) -> usize {
+        by / self.band_rows
+    }
+
+    /// `by`'s own row within whichever band [`EdgeMarks::band_of`] says it
+    /// belongs to.
+    #[allow(clippy::integer_division, reason = "same fixed CTB row-band height as band_of, its own remainder")]
+    const fn local_of(&self, by: usize) -> usize {
+        by % self.band_rows
+    }
+
+    fn index_in(&self, bx: usize, local_by: usize) -> Option<usize> {
+        if bx >= self.cols || local_by >= self.band_rows {
             return None;
         }
-        Some(by * self.cols + bx)
+        Some(local_by * self.cols + bx)
+    }
+
+    /// Advance to CTU row `row_band`: freeze every row band strictly before
+    /// it into `published` and reset `current` for the new one — the
+    /// same-shaped counterpart of [`ReconPlane::begin_row`], called from the
+    /// same call sites right alongside it. Idempotent for a `row_band`
+    /// already current, including once, harmlessly, for row `0`.
+    ///
+    /// # Errors
+    /// [`vaco_core::Error`] if `row_band` goes backward.
+    pub(crate) fn begin_row(&mut self, row_band: usize) -> Result<()> {
+        if row_band < self.current_band {
+            return Err(Error::InvalidData("vaco-codec-hevc: edge marks rows must advance in order"));
+        }
+        let band_len = self.cols.saturating_mul(self.band_rows);
+        while self.published.len() < row_band {
+            self.published.push(std::mem::replace(&mut self.current, EdgeBand::new(band_len)));
+        }
+        self.current_band = row_band;
+        Ok(())
+    }
+
+    /// Freeze the last row band once the whole CTU walk is done, and
+    /// advance `current_band` one past the last real band — mirroring
+    /// [`ReconPlane::finish`] exactly, and for the same reason: every read
+    /// after this point must route to `published` (the `Equal` branch in
+    /// [`EdgeMarks::vert_at`] and friends would otherwise still match the
+    /// last row band and see the fresh, empty `current` this leaves
+    /// behind, not the data [`EdgeMarks::finish`] just moved out of it).
+    /// Called once, right alongside [`ReconPlane::finish`], before
+    /// deblocking or SAO ever read an [`EdgeMarks`] query.
+    pub(crate) fn finish(&mut self) {
+        let band_len = self.cols.saturating_mul(self.band_rows);
+        while self.published.len() < self.n_bands {
+            self.published.push(std::mem::replace(&mut self.current, EdgeBand::new(band_len)));
+        }
+        self.current_band = self.n_bands;
     }
 
     /// Record a vertical edge (a left-side transform/CU boundary) at `x0`
@@ -601,10 +718,14 @@ impl EdgeMarks {
         }
         let Ok(bx) = usize::try_from(x0 >> 2) else { return };
         let Ok(by0) = usize::try_from(y0 >> 2) else { return };
+        if self.band_of(by0) != self.current_band {
+            return;
+        }
+        let local_by0 = self.local_of(by0);
         let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
-        for by in by0..by0.saturating_add(blocks) {
-            if let Some(i) = self.index(bx, by)
-                && let Some(slot) = self.vert.get_mut(i)
+        for local_by in local_by0..local_by0.saturating_add(blocks) {
+            if let Some(i) = self.index_in(bx, local_by)
+                && let Some(slot) = self.current.vert.get_mut(i)
             {
                 *slot = true;
             }
@@ -619,10 +740,14 @@ impl EdgeMarks {
         }
         let Ok(by) = usize::try_from(y0 >> 2) else { return };
         let Ok(bx0) = usize::try_from(x0 >> 2) else { return };
+        if self.band_of(by) != self.current_band {
+            return;
+        }
+        let local_by = self.local_of(by);
         let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
         for bx in bx0..bx0.saturating_add(blocks) {
-            if let Some(i) = self.index(bx, by)
-                && let Some(slot) = self.horiz.get_mut(i)
+            if let Some(i) = self.index_in(bx, local_by)
+                && let Some(slot) = self.current.horiz.get_mut(i)
             {
                 *slot = true;
             }
@@ -634,7 +759,14 @@ impl EdgeMarks {
     #[must_use]
     pub(crate) fn vert_at(&self, x: i32, y: i32) -> bool {
         let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
-        self.index(block_of(x), block_of(y)).and_then(|i| self.vert.get(i)).copied().unwrap_or(false)
+        let (bx, by) = (block_of(x), block_of(y));
+        let local_by = self.local_of(by);
+        let Some(i) = self.index_in(bx, local_by) else { return false };
+        match self.band_of(by).cmp(&self.current_band) {
+            std::cmp::Ordering::Equal => self.current.vert.get(i).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self.published.get(self.band_of(by)).and_then(|b| b.vert.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Greater => false,
+        }
     }
 
     /// Whether a horizontal edge was marked at luma pixel row `y`, for the
@@ -642,7 +774,14 @@ impl EdgeMarks {
     #[must_use]
     pub(crate) fn horiz_at(&self, x: i32, y: i32) -> bool {
         let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
-        self.index(block_of(x), block_of(y)).and_then(|i| self.horiz.get(i)).copied().unwrap_or(false)
+        let (bx, by) = (block_of(x), block_of(y));
+        let local_by = self.local_of(by);
+        let Some(i) = self.index_in(bx, local_by) else { return false };
+        match self.band_of(by).cmp(&self.current_band) {
+            std::cmp::Ordering::Equal => self.current.horiz.get(i).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self.published.get(self.band_of(by)).and_then(|b| b.horiz.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Greater => false,
+        }
     }
 
     /// [`EdgeMarks::mark_vert`], plus also recording that this specific
@@ -657,10 +796,14 @@ impl EdgeMarks {
         }
         let Ok(bx) = usize::try_from(x0 >> 2) else { return };
         let Ok(by0) = usize::try_from(y0 >> 2) else { return };
+        if self.band_of(by0) != self.current_band {
+            return;
+        }
+        let local_by0 = self.local_of(by0);
         let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
-        for by in by0..by0.saturating_add(blocks) {
-            if let Some(i) = self.index(bx, by)
-                && let Some(slot) = self.tu_vert.get_mut(i)
+        for local_by in local_by0..local_by0.saturating_add(blocks) {
+            if let Some(i) = self.index_in(bx, local_by)
+                && let Some(slot) = self.current.tu_vert.get_mut(i)
             {
                 *slot = true;
             }
@@ -675,10 +818,14 @@ impl EdgeMarks {
         }
         let Ok(by) = usize::try_from(y0 >> 2) else { return };
         let Ok(bx0) = usize::try_from(x0 >> 2) else { return };
+        if self.band_of(by) != self.current_band {
+            return;
+        }
+        let local_by = self.local_of(by);
         let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
         for bx in bx0..bx0.saturating_add(blocks) {
-            if let Some(i) = self.index(bx, by)
-                && let Some(slot) = self.tu_horiz.get_mut(i)
+            if let Some(i) = self.index_in(bx, local_by)
+                && let Some(slot) = self.current.tu_horiz.get_mut(i)
             {
                 *slot = true;
             }
@@ -690,7 +837,14 @@ impl EdgeMarks {
     #[must_use]
     pub(crate) fn tu_vert_at(&self, x: i32, y: i32) -> bool {
         let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
-        self.index(block_of(x), block_of(y)).and_then(|i| self.tu_vert.get(i)).copied().unwrap_or(false)
+        let (bx, by) = (block_of(x), block_of(y));
+        let local_by = self.local_of(by);
+        let Some(i) = self.index_in(bx, local_by) else { return false };
+        match self.band_of(by).cmp(&self.current_band) {
+            std::cmp::Ordering::Equal => self.current.tu_vert.get(i).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self.published.get(self.band_of(by)).and_then(|b| b.tu_vert.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Greater => false,
+        }
     }
 
     /// Whether the horizontal edge at `(x, y)` (as addressed by
@@ -698,9 +852,17 @@ impl EdgeMarks {
     #[must_use]
     pub(crate) fn tu_horiz_at(&self, x: i32, y: i32) -> bool {
         let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else { return false };
-        self.index(block_of(x), block_of(y)).and_then(|i| self.tu_horiz.get(i)).copied().unwrap_or(false)
+        let (bx, by) = (block_of(x), block_of(y));
+        let local_by = self.local_of(by);
+        let Some(i) = self.index_in(bx, local_by) else { return false };
+        match self.band_of(by).cmp(&self.current_band) {
+            std::cmp::Ordering::Equal => self.current.tu_horiz.get(i).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self.published.get(self.band_of(by)).and_then(|b| b.tu_horiz.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Greater => false,
+        }
     }
 }
+
 
 impl Plane {
     /// The plane's own dimensions — [`crate::deblock`]'s picture-wide pass

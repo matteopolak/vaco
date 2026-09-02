@@ -311,7 +311,7 @@ impl<'p> Ctx<'p> {
             qg_qp_pred: slice_qp,
             is_cu_qp_delta_coded: false,
             cu_qp_delta_val: 0,
-            edges: EdgeMarks::new(width, height),
+            edges: EdgeMarks::new(width, height, usize::try_from(ctb_size).unwrap_or(1).max(1)),
             deblocking_disabled,
             beta_offset_div2,
             tc_offset_div2,

@@ -433,6 +433,7 @@ impl HevcDecoder {
                 let row = addr.checked_div(ctbs_x).unwrap_or(0);
                 if col == 0 {
                     walk.recon.begin_ctu_row(usize::try_from(row).unwrap_or(0))?;
+                    walk.edges.begin_row(usize::try_from(row).unwrap_or(0))?;
                 }
                 let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
                 let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
@@ -454,6 +455,7 @@ impl HevcDecoder {
         // one-time copy rather than `recon` itself growing into `pic`.
         walk.recon.finish()?;
         walk.recon.materialize_into(walk.pic);
+        walk.edges.finish();
 
         #[cfg(test)]
         if let Some(probe) = self.deblock_lag_probe.take() {
@@ -733,6 +735,7 @@ fn decode_wpp_row_ranges(
         // resetting here.
         walk.qp_y_prev = walk.slice_qp;
         walk.recon.begin_ctu_row(row_idx)?;
+        walk.edges.begin_row(row_idx)?;
         let mut ctx = if row_idx > 0 && ctbs_x >= 2 {
             saved_ctx.unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
         } else {
