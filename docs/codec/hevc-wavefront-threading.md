@@ -134,24 +134,32 @@ by measuring:
   reads as absent rather than stale — which is *not* the same as reading a
   not-yet-final value, and is exactly the distinction a wavefront's lag
   bound has to get right (see "must be refused, not tolerated" below).
-- **Deblocking is the one that is not "one row," and needs first-principles
-  re-derivation, not an assumption**: `deblock::filter_picture`'s own
-  comment says it runs "every vertical edge first (both planes), then every
-  horizontal edge (both planes) — matching `TComLoopFilter::loopFilterPic`'s
-  own two full, separate passes, since horizontal filtering must see
-  vertical filtering's own output." That is a *global* two-pass ordering
-  today (all vertical edges, picture-wide, before any horizontal edge,
-  picture-wide), not a per-row lag the way H.264's single interleaved pass
-  is. HEVC's strong filter reaches `p2`/`q2` (three samples each side of an
-  edge), which bounds *how far* a horizontal edge at a CTU-row boundary can
-  move samples into the row above or below, but it does **not** by itself
-  prove that row `r`'s horizontal-edge pass is independent of row `r + 2`'s
-  vertical-edge pass the way H.264's own one-macroblock-row lag was proven
-  independent — that proof does not exist yet for this codec and has to be
-  built the same way `frame-threading.md`'s was, against HM's own
-  `TComLoopFilter.cpp`, before any row-lagged deblock schedule can be
-  trusted. Until it exists, treat deblocking as the item's critical path,
-  not a detail to fill in later.
+- **Deblocking's row-lag is now measured, not assumed: one CTU row each
+  side, the same shape as H.264's own one-macroblock-row lag.**
+  `deblock::filter_picture`'s own comment says it runs "every vertical edge
+  first (both planes), then every horizontal edge (both planes) — matching
+  `TComLoopFilter::loopFilterPic`'s own two full, separate passes, since
+  horizontal filtering must see vertical filtering's own output" — a
+  *global* two-pass ordering that reads as if it could reach arbitrarily
+  far. It doesn't. `decoder.rs`'s `deblock_lag_tests` module (added to pin
+  this down) corrupts every sample more than `lag` CTU rows away from a
+  target row, one direction at a time, re-runs `deblock::filter_picture`,
+  and diffs the target row's own output against a pristine reference,
+  across CTU rows 1, 2 and 3 of a 4x5-CTU `libx265` fixture
+  (`tests/fixtures/deblock_lag_256x320.hevc`). At every interior row, in
+  both directions: `lag = 0` does **not** match (the immediately adjacent
+  CTU row's own pixels do move the target row's output — the filter is not
+  vacuous) and `lag = 1` **does** match (nothing two or more CTU rows away
+  moves it). Cross-checked against clause 8.7.2 itself: boundary-strength
+  decisions are derived once from already-decoded CU/edge data before
+  either pass runs (not recomputed mid-pass from filtered samples), and
+  per-edge sample modification reaches at most three samples (`p2..p0`/
+  `q0..q2`) across an 8-sample-grid edge — nothing in the two-pass
+  structure gives that reach a way to propagate past one adjacent CTU row.
+  This clears Stage 1's deblocking question: a row-wavefront schedule can
+  treat deblocking the same as intra/merge-AMVP above — each row waits on
+  its own CTU row plus one neighbour on each side — without needing a
+  separate whole-picture post-pass.
 - **SAO** already reads a picture-wide `Snapshot` of the *post-deblock*
   picture (`sao::Snapshot::capture`, `filter_picture`) specifically so a
   CTU's own edge-offset computation never reads a neighbour this same pass
@@ -215,15 +223,14 @@ proven, not designed.
 
 ## What is not yet known, and has to be answered before Stage 1 is written
 
-- **The exact row-lag bound for deblocking's two-pass (vertical-then-
-  horizontal) structure.** This is the one piece of the "how far up" section
-  above that is a re-derivation, not a citation of existing code, and it
-  gates whether deblocking can be made row-wavefront-safe at all without a
-  wider change to `deblock.rs`'s own two-full-passes shape. Do this the way
-  `frame-threading.md`'s own three boundary conditions were pinned: against
-  HM 18.0's `TComLoopFilter.cpp` (Tier A, BSD-3-Clause — already this
-  crate's own clean-room precedent), not by assumption, and write the proof
-  down before trusting a schedule built on it.
+- ~~The exact row-lag bound for deblocking's two-pass (vertical-then-
+  horizontal) structure.~~ **Resolved**: one CTU row each side, measured
+  empirically and cross-checked against clause 8.7.2 — see "How far up does
+  a row actually reach?" above and `decoder.rs`'s `deblock_lag_tests`
+  module (`deblocking_depends_on_exactly_one_ctu_row_each_side`,
+  `deblocking_bound_holds_at_every_interior_row`). Stage 1 can proceed on a
+  row-wavefront deblocking schedule; it does not need a whole-picture
+  post-pass.
 - **Whether representing `CuGrid`/`EdgeMarks`/`sao_params` as per-row bands
   is cheaper hand-rolled (each is a handful of small arrays indexed at 4x4
   or CTU granularity, not a pixel plane) than forcing them through
@@ -245,13 +252,14 @@ proven, not designed.
 the `VACO_HEVC_TRACE` debug instrumentation found live in `ctu.rs` during
 B3's work). The restructure this item needs touches `framebuf.rs`, `ctu.rs`,
 `deblock.rs`, `sao.rs` and `decoder.rs` at once — effectively the whole
-crate — for a byte-exact video decoder, gated on a deblocking-lag proof that
-does not exist yet. Landing a partial version of that restructure, unverified
-at every one of the seven required fixture sizes and five thread counts,
-into a crate under active concurrent editing is a materially different risk
-than any of B1-B3's changes, each of which was one function's own data
-shape, byte-exact-checked within the same session it was written. This
-document is what the plan itself asks for first; the restructure it
-describes is sized in the plan as XL (3-4 weeks) for a reason, and starting
-it without the deblocking-lag proof above would be building on a foundation
-this pass could not itself verify.
+crate — for a byte-exact video decoder. The deblocking-lag proof that used
+to gate even starting this (see above — now measured at one CTU row each
+side, `planning/E2E-GAPS.md` §31) is no longer the blocker; Stage 1's own
+serial restructure and its ≤1.03x gate are. Landing a partial version of
+that restructure, unverified at every one of the seven required fixture
+sizes and five thread counts, into a crate under active concurrent editing
+is a materially different risk than any of B1-B3's changes, each of which
+was one function's own data shape, byte-exact-checked within the same
+session it was written. This document is what the plan itself asks for
+first; the restructure it describes is sized in the plan as XL (3-4 weeks)
+for a reason, and Stage 1 is the next thing this lane builds.

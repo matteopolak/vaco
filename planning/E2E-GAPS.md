@@ -2299,3 +2299,73 @@ stopping at a staged gate as a complete outcome.
 `vaco-conformance`, `vaco-codec-core` and the fuzz harnesses were not
 touched — outside this item's lane, and (for `vaco-codec-core`) this pass's
 own conclusion is that no change there is needed regardless.
+
+
+## 31. HEVC B4 — deblocking's row-lag measured: one CTU row each side
+
+§30 named the deblocking two-pass structure as the open question gating
+B4's Stage 1 (`docs/codec/hevc-wavefront-threading.md`'s "How far up does a
+row actually reach?"): does `deblock::filter_picture`'s "every vertical
+edge picture-wide, then every horizontal edge picture-wide" shape mean a
+row's deblocked output depends on the whole picture, the way the two full
+passes read on their face, or only on its near neighbours the way H.264's
+own row-threading precedent found for its filters?
+
+Answered empirically this pass, the way the coordinating brief asked for it
+(a measurement, not an argument): `crates/codec/vaco-codec-hevc/src/
+decoder.rs` gained a `#[cfg(test)]`-only `deblock_lag_tests` module. Its
+`run_deblock_lag_probe` corrupts (XORs `0xFF` into) every sample more than
+`lag` CTU rows away from a target row, one direction at a time — leaving
+`CuGrid`/`EdgeMarks`/boundary-strength decisions untouched, since those are
+already fully derived from CU/edge data before either deblocking pass runs
+— re-runs `deblock::filter_picture` on the corrupted clone via a new
+`Ctx::retarget_pic_for_test` (`ctu.rs`), and diffs the target row's own
+output against a pristine reference. `framebuf.rs`'s `Plane`/`Picture`/
+`CuGrid`/`EdgeMarks` gained `Clone` (test-only) to make two independent
+`Picture`s from one decode comparable. The fixture
+(`tests/fixtures/deblock_lag_256x320.hevc`) is one real `libx265` I-frame,
+`qp=24`, 256x320 = 4x5 CTUs at the default 64-sample CTB, deblocking and SAO
+both on, `mandelbrot` content chosen so the strong filter's widest reach
+(`p2`/`q2`) actually triggers.
+
+Result, swept over `lag ∈ {0, 1, 2}` at CTU rows 1, 2 and 3 (rows 0 and 4
+are picture edges with only one neighbour and aren't part of the
+question), in both directions: `lag = 0` does not match (the immediately
+adjacent CTU row's own pixels do move the target row's own output — the
+probe is not vacuous) and `lag = 1` does match (nothing two or more CTU
+rows away moves it). The bound holds identically at every interior row
+this fixture has, both directions, both tests
+(`deblocking_depends_on_exactly_one_ctu_row_each_side`,
+`deblocking_bound_holds_at_every_interior_row`). Cross-checked against
+clause 8.7.2 itself rather than taken on the test's word alone: boundary
+strength is derived once, before either pass runs, from already-decoded CU
+and edge data — the two-pass ordering never re-derives it from
+partially-filtered samples — and per-edge sample modification reaches at
+most three samples (`p2..p0`/`q0..q2`) across an 8-sample-grid edge, which
+gives the two-pass structure no mechanism to propagate reach past one
+adjacent CTU row even though it runs picture-wide.
+
+HEVC's deblocking dependency extent is the same shape as H.264's own
+one-macroblock-row lag, not the whole picture the current implementation's
+two full passes conservatively assume. `docs/codec/hevc-wavefront-
+threading.md` is updated in place (not re-derived from scratch) to record
+this: the "How far up does a row actually reach?" section now states the
+measured bound instead of flagging it as open, and "What is not yet known"
+marks the deblocking-lag question resolved. This clears B4's Stage 1 gate
+— the serial per-row restructure can schedule deblocking as part of the
+wavefront (each row waiting on its own CTU row plus one neighbour on each
+side) instead of needing a separate whole-picture post-pass — but Stage 1
+itself (the per-row `Picture`/`CuGrid`/`EdgeMarks`/`sao_params`
+representation, gated at ≤1.03x serial) is not built by this pass; this
+section is the measurement it was blocked on, landed on its own rather than
+bundled with a larger, harder-to-verify change.
+
+`cargo test -p vaco-codec-hevc` (63 unit tests + `tests/flat.rs` +
+`tests/oracle.rs`, including both new tests) and `cargo clippy -p
+vaco-codec-hevc --all-targets -- -D warnings` are both clean. Everything
+added is `#[cfg(test)]`-gated; nothing in this section changes the release
+binary's behavior or its byte-exactness bar.
+
+`vaco-codec-h264`, the AAC/transform crates, the filter crates,
+`vaco-conformance`, `vaco-codec-core` and the fuzz harnesses were not
+touched — outside this item's lane.
