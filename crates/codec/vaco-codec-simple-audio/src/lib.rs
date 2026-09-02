@@ -41,7 +41,7 @@ use vaco_codec_core::{
     Accept, AsDecoder, AsEncoder, Caps, CodecId, Decoder, DecoderDesc, Encoder, EncoderDesc,
     Machine, SendReceive, Validated,
 };
-use vaco_core::{Error, MediaType, Result};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_frame::{Frame, FrameData, FrameFlags};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -287,6 +287,20 @@ impl SendReceive for QoaEncoder {
                     let wire = qoa::encode(&mut budget, &mut self.states, channels.max(1), *sample_rate, chunk)?;
                     let mut packet = Packet::from_slice(&mut budget, &wire)?;
                     packet.pts = frame.pts;
+                    // Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/
+                    // `vaco-codec-vorbis`/`vaco-codec-pcm`/`vaco-codec-adpcm`'s
+                    // encoders. This one is the closest shape to FLAC/ALAC's
+                    // own -- one `Frame` can split into several QOA sub-
+                    // frame packets (`SUBFRAMES`), and the last chunk is
+                    // often shorter than `take`'s cap -- so, like those two,
+                    // duration must come from the chunk this iteration
+                    // actually encoded (`take`, already the real remaining-
+                    // sample count via `saturating_sub`), never a fixed
+                    // per-packet constant.
+                    let time_base = Rational::new(1, i32::try_from(*sample_rate).unwrap_or(1).max(1));
+                    packet.duration = Timestamp::new(i64::try_from(take).unwrap_or(0))
+                        .to_duration(time_base)
+                        .unwrap_or(Duration::ZERO);
                     self.machine.emit(packet);
                     start += take.max(1);
                 }
@@ -417,6 +431,17 @@ impl SendReceive for ComfortNoiseEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &wire)?;
                 packet.pts = frame.pts;
+                // Same bug class as this crate's own `QoaEncoder` above.
+                // One `Frame` is exactly one SID packet here (mono-only,
+                // enforced above), so `samples.len()` is already the whole
+                // frame's sample count.
+                let FrameData::Audio { sample_rate, .. } = &frame.data else {
+                    return Err(Error::InvalidData("comfortnoise: expected an audio frame"));
+                };
+                let time_base = Rational::new(1, i32::try_from(*sample_rate).unwrap_or(1).max(1));
+                packet.duration = Timestamp::new(i64::try_from(samples.len()).unwrap_or(0))
+                    .to_duration(time_base)
+                    .unwrap_or(Duration::ZERO);
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -575,6 +600,42 @@ mod tests {
         assert!(packets >= 3, "expected at least 3 QOA frames, got {packets}");
     }
 
+    /// Same bug class as `vaco-codec-flac`/`vaco-codec-alac`'s encoders,
+    /// same shape: `QoaEncoder` splits one `Frame` into several packets
+    /// (the test above), and the *last* one is short -- exactly where a
+    /// fixed per-packet duration constant would have been wrong, and
+    /// where FLAC/ALAC's own undercount hid. Every packet's duration must
+    /// sum to the whole frame's real sample count, with the last packet
+    /// short by precisely the total's remainder, not padded or truncated
+    /// to a round number.
+    #[test]
+    fn every_qoa_packet_duration_sums_to_the_input_including_a_short_last_one() {
+        let mut enc = QoaEncoder::new(Limits::permissive());
+        let one_frame = qoa::MAX_SLICES_PER_FRAME * qoa::SLICE_SAMPLES;
+        let total_samples = one_frame * 2 + 10; // two full QOA frames + a short third
+        let big = tone(total_samples);
+        enc.send(Some(&frame_of(&big, 1, 8_000))).unwrap();
+
+        let mut durations = Vec::new();
+        loop {
+            match enc.receive() {
+                Ok(p) => durations.push(p.duration),
+                Err(Error::NeedMoreInput | Error::OutputPending) => break,
+                Err(e) => panic!("unexpected: {e:?}"),
+            }
+        }
+        assert_eq!(durations.len(), 3, "two full QOA frames plus one short one");
+        for d in &durations {
+            assert_ne!(*d, Duration::ZERO, "every packet must carry a real duration");
+        }
+        let time_base = Rational::new(1, 8_000);
+        let full = Timestamp::new(i64::try_from(one_frame).unwrap())
+            .to_duration(time_base)
+            .unwrap();
+        let last = Timestamp::new(10).to_duration(time_base).unwrap();
+        assert_eq!(durations, vec![full, full, last]);
+    }
+
     #[test]
     fn comfortnoise_send_receive_produces_the_configured_frame_length() {
         let mut enc = ComfortNoiseEncoder::new(Limits::permissive());
@@ -586,6 +647,21 @@ mod tests {
         let (decoded, channels) = interleaved_owned(&frame).unwrap();
         assert_eq!(channels, 1);
         assert_eq!(decoded.len(), ComfortNoiseConfig::default().frame_samples as usize);
+    }
+
+    /// Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/
+    /// `vaco-codec-vorbis`/`vaco-codec-pcm`/`vaco-codec-adpcm`'s encoders.
+    /// `ComfortNoiseEncoder` is 1:1 (one frame, one SID packet), so this
+    /// only needs to check the duration is real and matches the frame's
+    /// own sample count -- no separate short-final-packet shape applies.
+    #[test]
+    fn comfortnoise_send_frame_sets_a_real_nonzero_packet_duration() {
+        let mut enc = ComfortNoiseEncoder::new(Limits::permissive());
+        enc.send(Some(&frame_of(&tone(400), 1, 8_000))).unwrap();
+        let pkt = enc.receive().unwrap();
+        let expected = Timestamp::new(400).to_duration(Rational::new(1, 8_000)).unwrap();
+        assert_ne!(expected, Duration::ZERO);
+        assert_eq!(pkt.duration, expected);
     }
 
     #[test]

@@ -80,7 +80,7 @@ use vaco_codec_core::{
     Accept, AsDecoder, AsEncoder, Caps, CodecId, Decoder, DecoderDesc, Encoder, EncoderDesc,
     Machine, SendReceive, Validated,
 };
-use vaco_core::{Error, MediaType, Result};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_frame::{Frame, FrameData, FrameFlags};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -185,6 +185,34 @@ fn frame_samples_owned(frame: &Frame) -> Result<(Vec<i16>, u32)> {
     };
     let plane = planes.first().ok_or(Error::InvalidData("adpcm: no plane 0"))?;
     Ok((bytes_to_i16_samples(plane.data.as_slice()), layout.channels))
+}
+
+/// Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/`vaco-codec-vorbis`/
+/// `vaco-codec-pcm`'s encoders: every ADPCM encoder in this crate is a 1:1
+/// wrapper (one input `Frame` becomes exactly one `Packet`, no internal
+/// block buffering) that set `Packet::pts` but never `Packet::duration`,
+/// which a container deriving a track's total length from summed packet
+/// durations (MP4's `stts`, Ogg's granule position) silently undercounts
+/// by. `total_i16_samples`/`channels` come from the same
+/// [`frame_samples_owned`] call every encoder already makes; `sample_rate`
+/// is read from the frame's own [`FrameData::Audio`] rather than trusted
+/// from `frame.duration`, because nothing upstream of a raw-PCM source
+/// reliably sets that field either (a related, separate gap).
+#[allow(
+    clippy::integer_division,
+    reason = "interleaved sample count divided by channel count is an exact floor division \
+              by construction (every caller already deinterleaves evenly), same as \
+              frame_from_samples above"
+)]
+fn frame_pcm_duration(frame: &Frame, total_i16_samples: usize, channels: u32) -> Duration {
+    let FrameData::Audio { sample_rate, .. } = &frame.data else {
+        return Duration::ZERO;
+    };
+    let per_channel = u32::try_from(total_i16_samples).unwrap_or(0) / channels.max(1);
+    let time_base = Rational::new(1, i32::try_from(*sample_rate).unwrap_or(1).max(1));
+    Timestamp::new(i64::from(per_channel))
+        .to_duration(time_base)
+        .unwrap_or(Duration::ZERO)
 }
 
 macro_rules! adpcm_config {
@@ -311,6 +339,7 @@ impl SendReceive for AdpcmImaWavEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &wire)?;
                 packet.pts = frame.pts;
+                packet.duration = frame_pcm_duration(frame, samples.len(), channels);
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -426,6 +455,7 @@ impl SendReceive for AdpcmImaQtEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &wire)?;
                 packet.pts = frame.pts;
+                packet.duration = frame_pcm_duration(frame, samples.len(), channels);
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -541,6 +571,7 @@ impl SendReceive for AdpcmMsEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &wire)?;
                 packet.pts = frame.pts;
+                packet.duration = frame_pcm_duration(frame, samples.len(), channels);
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -679,6 +710,7 @@ impl SendReceive for AdpcmSwfEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &wire)?;
                 packet.pts = frame.pts;
+                packet.duration = frame_pcm_duration(frame, samples.len(), channels);
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -1049,6 +1081,30 @@ mod tests {
         let frame = dec.receive().unwrap();
         let (decoded, _) = frame_samples_owned(&frame).unwrap();
         assert_eq!(decoded.len(), samples.len());
+    }
+
+    /// Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/
+    /// `vaco-codec-vorbis`/`vaco-codec-pcm`'s encoders: `send` set
+    /// `packet.pts` but never `packet.duration`, which a container that
+    /// derives a track's total length from summed packet durations (MP4's
+    /// `stts`, Ogg's granule position) silently undercounts by. All four
+    /// real ADPCM encoders in this crate share `frame_pcm_duration`, so one
+    /// representative check (IMA-WAV) covers the shared helper; the other
+    /// three (IMA-QT, MS, SWF) call the identical function the identical
+    /// way.
+    #[test]
+    fn ima_wav_send_frame_sets_a_real_nonzero_packet_duration() {
+        let samples = tone(41);
+        let mut enc = AdpcmImaWavEncoder::new(Limits::permissive());
+        enc.send(Some(&frame_of(&samples, 1))).unwrap();
+        let pkt = enc.receive().unwrap();
+
+        // 41 samples at 8000 Hz (frame_of's fixed rate).
+        let expected = vaco_core::Timestamp::new(41)
+            .to_duration(vaco_core::Rational::new(1, 8_000))
+            .unwrap();
+        assert_ne!(expected, Duration::ZERO);
+        assert_eq!(pkt.duration, expected);
     }
 
     #[test]

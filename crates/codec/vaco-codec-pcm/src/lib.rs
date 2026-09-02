@@ -72,7 +72,7 @@ use vaco_codec_core::{
     Accept, AsDecoder, AsEncoder, Caps, CodecId, Decoder, DecoderDesc, Encoder, EncoderDesc,
     Machine, SendReceive, Validated,
 };
-use vaco_core::{Error, MediaType, Result};
+use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_frame::{Frame, FrameData, FrameFlags};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
@@ -354,7 +354,12 @@ impl SendReceive for PcmEncoder {
                     return Ok(());
                 };
                 let FrameData::Audio {
-                    format, planes, layout, ..
+                    format,
+                    planes,
+                    layout,
+                    sample_rate,
+                    samples,
+                    ..
                 } = &frame.data
                 else {
                     return Err(Error::InvalidData("pcm: expected an audio frame"));
@@ -375,6 +380,23 @@ impl SendReceive for PcmEncoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &wire)?;
                 packet.pts = frame.pts;
+                // Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/
+                // `vaco-codec-vorbis`: unlike those, this encoder is 1:1
+                // (one input `Frame` is exactly one `Packet`, no internal
+                // block buffering), so there is no separate short-final-
+                // packet case, but the container-level symptom is
+                // identical -- a container that derives a track's total
+                // duration from summed `Packet::duration` (MP4's `stts`,
+                // Ogg's granule position) silently undercounts by every
+                // packet's real length when this stays at the `Duration`
+                // default. Computed from the frame's own `samples`/
+                // `sample_rate` rather than trusted from `frame.duration`,
+                // because raw PCM's own decode side does not set that
+                // field either (a related, separate gap).
+                let time_base = Rational::new(1, i32::try_from(*sample_rate).unwrap_or(1).max(1));
+                packet.duration = Timestamp::new(i64::from(*samples))
+                    .to_duration(time_base)
+                    .unwrap_or(Duration::ZERO);
                 self.machine.emit(packet);
                 Ok(())
             }
@@ -805,6 +827,39 @@ mod tests {
         enc.send(Some(&frame)).expect("send frame");
         let packet = enc.receive().expect("packet");
         assert_eq!(packet.payload(), wire.as_slice());
+    }
+
+    /// Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/
+    /// `vaco-codec-vorbis`'s encoders: `PcmEncoder::send` set `packet.pts`
+    /// but never `packet.duration`, which a container deriving a track's
+    /// total length from summed packet durations (MP4's `stts`, Ogg's
+    /// granule position) silently undercounts by. Every `PcmEncoder` is a
+    /// 1:1 wrapper -- exactly one packet per input frame, no internal
+    /// buffering -- so unlike the block-coder cases there is no separate
+    /// short-final-packet shape here: the fix must simply compute a real,
+    /// non-zero duration from the frame's own sample count and rate on
+    /// every call, not only sometimes.
+    #[test]
+    fn send_frame_sets_a_real_nonzero_packet_duration() {
+        let wire = make_wire_i16(&[0, 100, -100, 32767, -32768, 12345, -12345]);
+        let mut budget = Budget::new(Limits::permissive());
+        let pkt = Packet::from_slice(&mut budget, &wire).expect("packet");
+
+        let mut dec = PcmDecoder::new(Limits::permissive(), CodecId::PcmS16le)
+            .with_audio_params(8_000, ChannelLayout::MONO);
+        dec.send(Some(&pkt)).expect("send");
+        let frame = dec.receive().expect("frame");
+
+        let mut enc = PcmEncoder::new(Limits::permissive(), CodecId::PcmS16le);
+        enc.send(Some(&frame)).expect("send frame");
+        let packet = enc.receive().expect("packet");
+
+        // 7 samples at 8000 Hz.
+        let expected = vaco_core::Timestamp::new(7)
+            .to_duration(vaco_core::Rational::new(1, 8_000))
+            .expect("duration");
+        assert_ne!(expected, vaco_core::Duration::ZERO);
+        assert_eq!(packet.duration, expected);
     }
 
     #[test]
