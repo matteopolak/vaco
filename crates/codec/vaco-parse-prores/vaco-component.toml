@@ -1,0 +1,14 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Reads `frame_header()` syntax only (RDD 36 §5.1.1) — the same GREEN,
+# decode-only scope note `crates/codec/vaco-codec-prores/vaco-component.toml`
+# already carries for the decoder this parser does not depend on.
+
+[[component]]
+kind      = "parser"
+name      = "prores"
+long_name = "Apple ProRes (frame header only)"
+feature   = "parse-prores"
+ctor      = "vaco_parse_prores::PARSER"
+media     = "video"
+codec     = "prores"

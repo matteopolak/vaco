@@ -5630,6 +5630,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "parse-prores")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "prores",
+        long_name: Some("Apple ProRes (frame header only)"),
+        krate: "vaco-parse-prores",
+        feature: Some("parse-prores"),
+        media: Some("video"),
+        codec: Some("prores"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "parse-image")]
     crate::Component {
         kind: crate::Kind::Parser,
@@ -11224,6 +11236,8 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     &::vaco_parse_opus::PARSER,
     #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_PNG,
+    #[cfg(feature = "parse-prores")]
+    &::vaco_parse_prores::PARSER,
     #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_TIFF,
     #[cfg(feature = "parse-audio-misc")]
