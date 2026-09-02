@@ -234,7 +234,7 @@ fn build_one_list(combined: &[i64], num_ref_idx_active_minus1: u32, modification
 /// [`Dpb::store`] calls before the one that finally outputs it, so they have
 /// to be remembered rather than read off "the current packet" at emission
 /// time the way this crate's I-slice-only history could get away with.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct PictureMeta {
     pub pts: vaco_core::Timestamp,
     pub duration: vaco_core::Duration,
@@ -247,6 +247,13 @@ pub(crate) struct PictureMeta {
     pub out_height: u32,
     /// Mirrors `vaco_frame::FrameFlags::KEY` — set for an IRAP picture.
     pub is_keyframe: bool,
+    /// Raw `cc_data` triplet bytes from this access unit's own ATSC A/53
+    /// caption SEI, if any — empty for the ordinary case. Carried here for
+    /// the same reason `pts`/`duration` are: the picture that decoded it
+    /// can be several `Dpb::store` calls before the one that outputs it,
+    /// and reordering must not separate the caption bytes from their own
+    /// picture (see `vaco_parse_hevc::a53`'s module doc).
+    pub closed_captions: Vec<u8>,
 }
 
 /// One picture held in the decoded picture buffer.
@@ -498,7 +505,7 @@ impl Dpb {
     /// actual output frame.
     #[must_use]
     pub(crate) fn output_meta(&self, poc: i64) -> Option<PictureMeta> {
-        self.entries.iter().find(|e| e.poc == poc).map(|e| e.meta)
+        self.entries.iter().find(|e| e.poc == poc).map(|e| e.meta.clone())
     }
 
     /// Physically drop every entry that is neither needed for output nor
@@ -763,7 +770,14 @@ mod tests {
     }
 
     fn tiny_meta() -> PictureMeta {
-        PictureMeta { pts: vaco_core::Timestamp::NONE, duration: vaco_core::Duration::ZERO, out_width: 4, out_height: 4, is_keyframe: false }
+        PictureMeta {
+            pts: vaco_core::Timestamp::NONE,
+            duration: vaco_core::Duration::ZERO,
+            out_width: 4,
+            out_height: 4,
+            is_keyframe: false,
+            closed_captions: Vec::new(),
+        }
     }
 
     // ---- §8.3.2 short-term derivation ----
