@@ -54,10 +54,27 @@ fn video(number: u64, w: u64, h: u64, default: bool) -> Vec<u8> {
     track(number, 1, "V_VP8", &synth::element(el::VIDEO, &v), default)
 }
 
+/// `OpusHead`, mono, `pre_skip` 312, input rate 48000 -- the same 19 bytes
+/// `vaco-mux-matroska`'s own `opus_params()` test fixture uses (measured
+/// against `ffmpeg -c:a libopus`, reused rather than re-measured, D19).
+/// `A_OPUS` is one of `vaco_mux_matroska::codec::requires_extradata_str`'s
+/// entries (fixed 2026-09-01, `4ec43cc`): a track with no real `CodecPrivate`
+/// is refused at `write_trailer`/flush rather than silently muxed, so a
+/// fixture with none is not a stream-copy source any more -- this crate's
+/// tracks previously had none and were only ever exercised before that fix
+/// landed.
+const OPUS_HEAD: &[u8] = &[
+    b'O', b'p', b'u', b's', b'H', b'e', b'a', b'd', 0x01, 0x01, 0x38, 0x01, 0x80, 0xBB, 0x00, 0x00,
+    0x00, 0x00, 0x00,
+];
+
 fn audio(number: u64, channels: u64, default: bool) -> Vec<u8> {
     let mut a = synth::float(el::SAMPLINGFREQUENCY, 48_000.0);
     a.extend_from_slice(&synth::uint(el::CHANNELS, channels));
-    track(number, 2, "A_OPUS", &synth::element(el::AUDIO, &a), default)
+    let inner = synth::element(el::AUDIO, &a);
+    let mut body = inner;
+    body.extend_from_slice(&synth::element(el::CODECPRIVATE, OPUS_HEAD));
+    track(number, 2, "A_OPUS", &body, default)
 }
 
 fn block(track_number: u8, ts: i16, payload: &[u8]) -> Vec<u8> {
@@ -429,9 +446,17 @@ fn packets_reach_the_sink_and_are_counted() {
         .iter()
         .map(|o| crate::exec::resolve_output(&cli, o, &files, &[], &mut used_complex).unwrap())
         .collect();
-    let report =
-        crate::exec::run_pipeline(inputs, &outputs, &files, &cli.complex_filters, true, 1, 1)
-            .unwrap();
+    let report = crate::exec::run_pipeline(
+        inputs,
+        &outputs,
+        &files,
+        &cli.complex_filters,
+        true,
+        1,
+        1,
+        crate::overwrite::OverwritePolicy::Always,
+    )
+    .unwrap();
 
     let tally = &report.tallies[0];
     assert!(tally.header_written && tally.trailer_written);
