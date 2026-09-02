@@ -6112,3 +6112,161 @@ task is declaring decode/sample-comparison cases against the existing
 `Compare::RawExact`/`RawTolerant` machinery, driven off the generated
 codec registry, and deciding what to do with the four still-stub compare
 modes (`ContainerStructure`, `FrameHash`, `CrossDecode`, `ThreeWay`).
+
+## 68. A per-decoder pixel/sample census: 62 of 89 registered decoders now compared against the reference's own decode, 39 diverge
+
+The conformance-harness priority from finding 67's close: build the
+measurement layer, don't fix codecs. Four parts.
+
+### The four stub `Compare` modes: deleted, not implemented
+
+`ContainerStructure`/C2, `FrameHash`/C3, `CrossDecode`/C8 and
+`ThreeWay`/C9 had zero manifests anywhere declaring them and no backing
+machinery (a container walker, a frame-digest pipeline, an
+interoperability matrix, the native/external/reference lattice) -- each
+is a separate, large subsystem, clearly out of scope for a task that
+builds a pixel/sample comparison layer out of the already-implemented
+`RawExact`/`RawTolerant`. Implementing all four properly was not a
+same-session option; leaving them as unreachable stubs was explicitly
+ruled out ("a declared mode that silently skips is an instrument that
+reports success it never checked"). Deleted the four `Compare` variants,
+their `mode_name()`/`from_manifest()` arms, and the dispatch catch-all in
+`compare/mod.rs`, updated that module's own doc table and
+`docs/tool/vaco-conformance.md`'s mode table to match, and left a pointer
+back to plan 13 section 1.2 (where the full design stays recorded) so
+re-adding the variant is trivial once someone actually builds the
+machinery it needs. `cargo test`/`clippy --all-targets -D warnings`
+clean. Commit `b1f6af2`.
+
+### The timing question, decided deliberately
+
+Comparing whole decoded streams with no delay/priming-sample alignment
+step. An alignment step would have to already know the delay to remove
+it -- circular for a bug that is precisely "we don't know/handle the
+delay" -- and would hide the exact defect this suite exists to catch.
+Every lossy-audio case in `decode-audio-lossy.toml` fails today because
+of this choice; that is documented in the manifest itself, not left to
+be rediscovered.
+
+### The coverage mechanism: `cargo xtask decoder-coverage`
+
+Driven off the same `vaco-component.toml` fragments `gen-registry`
+already reads (one source of truth, not a hand-maintained list) rather
+than the compiled `DECODERS` table, so it does not need every
+patent-encumbered feature turned on to see the full registered surface.
+A decoder counts as covered when some `tests/conformance/**/*.toml`
+manifest tags a `[[media]]` entry `"decoder:<name>"` (a direct substring
+scan, not a second manifest parser -- see the module's own doc for why);
+anything neither covered nor in the new `NOT_YET_COVERED` allowlist fails
+the gate, the same shape as `owner_gate`'s `MEDIA` and
+`option_name_gate`'s `KNOWN_GAPS`. `NOT_YET_COVERED` also fails on a
+*stale* entry (a decoder now covered, or a name no fragment registers any
+more), so the allowlist cannot silently rot in either direction.
+`xtask/src/decoder_coverage.rs`, wired into `main.rs` as
+`decoder-coverage`; not yet wired into CI's own task list (that is a
+one-line follow-up, flagged separately rather than done unreviewed here).
+
+Current state: **89 registered decoders, 62 with a decode case, 27
+deferred with a measured reason** (12 subtitle decoders whose output is
+text or a bitmap overlay, not a pixel/sample stream this harness's modes
+compare directly; 15 with no local, network-free fixture path found this
+pass -- `mp1`/`qoa` have no ffmpeg encoder in this build, `comfortnoise`'s
+encoder is an RFC 3389 generator with no reference content to compare
+against, `webp`/`jpegxl`/`theora`/`vc1`/`v210x` have no encoder in this
+ffmpeg 9.0.1 build, `wrapped_avframe` is an internal passthrough
+pseudo-codec no file format stores, and `r10k`/`r210`/`v210`/`y41p`/
+`bitpacked`/`avui` hit reference-side or fixture-side blockers a
+same-day pass could not resolve -- see the allowlist's own entries for
+the exact reproduction of each).
+
+### 26 manifests, 62 decode cases, grouped by shared decode target
+
+`tests/conformance/transcode/decode-*.toml`, local lavfi-generated
+fixtures (`tier = "core"`, no network, no corpus). `RawExact` for
+lossless codecs (PCM, ADPCM -- decode is a deterministic table walk, the
+lossy step is entirely on the encode side -- FLAC, ALAC, FFV1, VP8, the
+sixteen lossless still-image formats, rawvideo); `RawTolerant` for lossy
+transform codecs (mp2/mp3/ac3/aac/vorbis, ProRes, MJPEG), each tolerance
+recorded with what was actually measured, not fitted to force a pass.
+
+Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a
+full-feature `vaco` build (`--features
+vaco-registry/patent-encumbered-{aac,h264,hevc,vc1}-decode`):
+
+**23 agree** -- a working baseline, not incidental: all 15 plain-container
+PCM formats plus FLAC/ALAC, 5 of 8 raw-PCM variants (`s8`, `u16le`,
+`u16be`, `u32le`, `u32be`), VP8, and -- notably -- **H.264 and HEVC are
+byte-exact** at 4:2:0 (the chroma format these decoders currently
+support; a wider chroma format is correctly refused, tracked separately
+as #419).
+
+**39 diverge.** Three are the coordinator's own already-assigned defects,
+cross-checked here and consistent with the original measurement: FFV1
+(99.42% of bytes differ here vs. 99.6% originally -- same order, same
+codec, independent fixture), the five lossy-audio codecs in
+`decode-audio-lossy.toml` (AC-3 98.46% of bytes differ / AAC and Vorbis
+both show a length mismatch consistent with an untrimmed delay/priming
+region), and MJPEG/the image-format group (blocked before any pixel
+comparison by a newly-identified demux-layer gap, below). The other 36
+are **new findings this pass surfaced**, not previously on anyone's list:
+
+- **`vaco-demux-image2` never stamps a timestamp on the frame(s) it
+  demuxes**, and the transcode pipeline refuses to filter any packet
+  without one -- this blocks all sixteen still-image decoders identically
+  (`decode-image-*.toml`) before any pixel is ever compared. This may be a
+  contributing cause of the previously-known "9 of 13 image formats report
+  `0x0`/`pix_fmt=unknown`" defect, or a second, independent gap; not
+  determined here. Not fixed (format/demux code, out of scope for this
+  pass) -- recorded for whoever owns `vaco-demux-image2`.
+- **Three of four default-built ADPCM decoders are registered and
+  unreachable**: `adpcm_ima_wav`, `adpcm_ms` and `adpcm_ima_qt` each
+  refuse with "a stream being transcoded has no known input codec" --
+  demuxed, never mapped to the registered decoder (CLAUDE.md's
+  "implemented is not reachable", a new instance of it). `adpcm_swf`
+  decodes but is 22 bytes short of the reference.
+- **`h263` and `h261` hit the identical "no known input codec" gap** from
+  AVI.
+- **`mpeg1video` and `mpeg2video` each decoded a fraction of the
+  fixture and exited 0** -- 18432 bytes against the reference's 115200,
+  and 9216 against 23040 respectively. This is the exact "decoded 2.5% of
+  a file and exited 0" shape CLAUDE.md names as the reason this whole
+  layer exists.
+- **`rawvideo` itself** (the plain uncompressed codec) refuses a valid
+  `-f rawvideo -pix_fmt yuv420p -s 64x48` input the reference reads
+  without complaint.
+- **`vp9` and `gif`** both refuse with "frame sent to a source does not
+  match the link's negotiated format" -- a pixel-format-negotiation defect
+  distinct from vp8 (byte-exact on the same libvpx family, same fixture
+  shape).
+- **`pcm_vidc`**: 53.97% of decoded bytes differ, max_abs=188 -- large
+  enough to be a wrong table/formula, not rounding.
+- **`pcm_u24le`/`pcm_u24be`**: both 86 bytes short of the reference
+  (88114 vs. 88200) -- the only two of eight raw-PCM variants that do not
+  simply agree.
+- **ProRes**: 5.71% of raw bytes differ, but the fixture is
+  yuv444p12le (16-bit little-endian samples) and the divergence pattern
+  (`00 01` vs `ff 00` at consecutive bytes) is a one-count sample
+  difference straddling a little-endian byte boundary, not a large error
+  -- the same shape the coordinator's own ProRes calibration already
+  flagged as fine. **`raw-tolerant`'s current byte-granularity cannot
+  actually absorb this**: a genuine 1-count difference in a multi-byte
+  sample can produce a byte-level delta up to 255 depending which byte it
+  lands on, so no `max_abs` short of 255 passes it and no `max_abs` near
+  255 would still catch a real defect. This is a limitation of comparing
+  multi-byte samples at the byte level, not a codec defect -- worth a
+  sample-width-aware tolerance mode in `compare::raw` at some point, not
+  chased here.
+
+### Totals, kept separate as asked
+
+Pre-existing probe/structural suite: **unchanged, 709 cases, 288 agreed /
+421 diverged** (verified identical to finding 67's own number -- this
+pass added cases, it did not touch that surface).
+
+New decode/pixel-sample layer: **62 cases, 23 agreed / 39 diverged.**
+
+Combined `--tier core` run: **771 cases, 311 agreed / 460 diverged.**
+
+`cargo build --workspace`, `cargo test -p vaco-conformance -p xtask`,
+`cargo clippy -p vaco-conformance -p xtask --all-targets -D warnings` all
+clean.
