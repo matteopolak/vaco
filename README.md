@@ -116,15 +116,15 @@ Measured across both binaries:
 | | `vaco` | `vaco-probe` |
 |---|---:|---:|
 | Options in the table | 172 | 65 |
-| Implemented | 62 | 57 |
-| Refused by name | 107 | 8 |
+| Implemented | 66 | 57 |
+| Refused by name | 103 | 8 |
 | Accepted as a deliberate no-op | 3 | 0 |
 
 Roughly two in five are implemented. An option that isn't exits with an error naming
 it, which is the point: until recently they were accepted and silently ignored, so
-`-n` did not protect an existing file, `-ss`/`-t`/`-to` processed the whole input,
-`-frames:v 2` gave byte-identical output to omitting it, and `-shortest` did not
-truncate. Those now refuse rather than lie.
+`-frames:v 2` gave byte-identical output to omitting it and `-shortest` did not
+truncate. Those now refuse rather than lie. `-y`/`-n` and `-ss`/`-t`/`-to` were in
+that category too and are now implemented.
 
 The three no-ops are `-qphist`, `-top` and `-stdin`, which ffmpeg also ignores or
 which already describe what this build does.
