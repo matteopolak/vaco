@@ -116,6 +116,39 @@ pub fn carries_config_record(compression: Compression) -> bool {
     matches!(&id.as_bytes(), b"avc1" | b"AVC1" | b"hvc1" | b"hev1")
 }
 
+/// Whether bytes after `BITMAPINFOHEADER` in this codec's `strf` are its own
+/// extradata — a superset of [`carries_config_record`]'s ISOBMFF-style
+/// configuration record.
+///
+/// Measured directly, not assumed: a real `FMP4`-tagged AVI file's `strf`
+/// carries 46 trailing bytes there (the MPEG-4 Part 2 VOL header), matching
+/// real ffmpeg's own reported `extradata_size` for the identical file
+/// exactly. [`carries_config_record`] alone does not cover this — it was
+/// written for `avc1`/`hvc1`'s ISOBMFF sample-entry convention specifically,
+/// and MPEG-4/MS-MPEG4 do not use that convention, so a `strf`-level check
+/// gated on it alone silently dropped a real, present configuration record
+/// for every `FourCC` in this family. `H264`/`HEVC` and their Annex-B
+/// aliases are deliberately *not* included here, unlike
+/// [`carries_config_record`]'s own doc might suggest by omission: no real
+/// fixture in this crate's reach has ever produced trailing `strf` bytes for
+/// one (a real `libx264`-encoded, `H264`-tagged AVI file's own `strf` was
+/// measured at exactly `BITMAPINFOHEADER`'s 40 bytes, nothing more), so
+/// widening this to match any `FourCC` blindly would be an unmeasured guess
+/// for that family rather than a fix for a confirmed gap.
+#[must_use]
+pub fn carries_strf_extradata(compression: Compression) -> bool {
+    if carries_config_record(compression) {
+        return true;
+    }
+    let Compression::FourCc(id) = compression else {
+        return false;
+    };
+    matches!(
+        &id.as_bytes(),
+        b"FMP4" | b"XVID" | b"DIVX" | b"DX50" | b"mp4v" | b"MP42" | b"MP43" | b"DIV3"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -166,6 +199,33 @@ mod tests {
         assert!(!carries_config_record(fourcc(*b"X264")));
         assert!(!carries_config_record(fourcc(*b"HEVC")));
         assert!(!carries_config_record(Compression::Rgb));
+    }
+
+    #[test]
+    fn mpeg4_family_fourccs_carry_strf_extradata() {
+        for cc in [
+            *b"FMP4", *b"XVID", *b"DIVX", *b"DX50", *b"mp4v", *b"MP42", *b"MP43", *b"DIV3",
+        ] {
+            assert!(
+                carries_strf_extradata(fourcc(cc)),
+                "{:?}",
+                core::str::from_utf8(&cc)
+            );
+        }
+    }
+
+    #[test]
+    fn carries_strf_extradata_is_a_superset_of_carries_config_record() {
+        assert!(carries_strf_extradata(fourcc(*b"avc1")));
+        assert!(carries_strf_extradata(fourcc(*b"hvc1")));
+    }
+
+    #[test]
+    fn h264_and_hevc_annexb_aliases_do_not_carry_strf_extradata() {
+        assert!(!carries_strf_extradata(fourcc(*b"H264")));
+        assert!(!carries_strf_extradata(fourcc(*b"X264")));
+        assert!(!carries_strf_extradata(fourcc(*b"HEVC")));
+        assert!(!carries_strf_extradata(Compression::Rgb));
     }
 
     #[test]
@@ -233,7 +293,11 @@ mod tests {
             };
             let c = fourcc(bytes);
             let name = codec_name(c);
-            assert!(name.is_some(), "{:?} has no spelling", core::str::from_utf8(cc));
+            assert!(
+                name.is_some(),
+                "{:?} has no spelling",
+                core::str::from_utf8(cc)
+            );
             let expected_none = NO_VARIANT.iter().any(|n| n.as_slice() == cc);
             assert_eq!(
                 codec_id(c).is_none(),

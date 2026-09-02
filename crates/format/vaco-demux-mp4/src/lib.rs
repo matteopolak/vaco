@@ -781,9 +781,8 @@ impl Mp4Demuxer {
                 // implemented, named in the crate doc's *Deferred* section.
                 return None;
             }
-            let senc = vaco_format_isom::cenc::SampleEncryption::parse(
-                table.sample_encryption.as_ref()?,
-            )?;
+            let senc =
+                vaco_format_isom::cenc::SampleEncryption::parse(table.sample_encryption.as_ref()?)?;
             Some(read::Decryptor {
                 key,
                 iv_size: te.per_sample_iv_size,
@@ -1220,13 +1219,10 @@ impl Mp4Demuxer {
                     )
                 {
                     self.budget.release(data.len() as u64);
-                    if let Ok(pssh) =
-                        vaco_format_isom::cenc::Pssh::parse(&reassemble(span, &data))
+                    if let Ok(pssh) = vaco_format_isom::cenc::Pssh::parse(&reassemble(span, &data))
                     {
-                        self.metadata.push((
-                            "encryption_system_id".to_owned(),
-                            hex16(&pssh.system_id),
-                        ));
+                        self.metadata
+                            .push(("encryption_system_id".to_owned(), hex16(&pssh.system_id)));
                     }
                 }
                 continue;
@@ -1667,79 +1663,102 @@ impl Mp4Demuxer {
     }
 
     fn next_packet(&mut self) -> Result<Packet> {
-        if self.eof {
-            return Err(Error::Eof);
-        }
-        for slot in 0..self.readers.len() {
-            self.ensure_head(slot)?;
-        }
-        let Some(slot) = self.pick() else {
-            self.eof = true;
-            return Err(Error::Eof);
-        };
-        let (sample, stream_index, time_base, audio, decrypt) = {
-            let Some(reader) = self.readers.get_mut(slot) else {
+        loop {
+            if self.eof {
+                return Err(Error::Eof);
+            }
+            for slot in 0..self.readers.len() {
+                self.ensure_head(slot)?;
+            }
+            let Some(slot) = self.pick() else {
                 self.eof = true;
                 return Err(Error::Eof);
             };
-            let Some(sample) = reader.queue.pop_front() else {
-                self.eof = true;
-                return Err(Error::Eof);
+            let (sample, stream_index, time_base, audio, decrypt) = {
+                let Some(reader) = self.readers.get_mut(slot) else {
+                    self.eof = true;
+                    return Err(Error::Eof);
+                };
+                let Some(sample) = reader.queue.pop_front() else {
+                    self.eof = true;
+                    return Err(Error::Eof);
+                };
+                (
+                    sample,
+                    reader.stream_index,
+                    reader.time_base,
+                    reader.audio,
+                    reader.decrypt.clone(),
+                )
             };
-            (
-                sample,
-                reader.stream_index,
-                reader.time_base,
-                reader.audio,
-                reader.decrypt.clone(),
-            )
-        };
-        let mut pkt = self.payload(sample.offset, sample.size)?;
-        if let Some(dec) = &decrypt
-            && !dec.decrypt(sample.index, pkt.payload_mut())
-        {
-            return Err(Error::Unsupported(
-                "mp4: cenc: no per-sample IV available for this sample (senc lacks a record, \
+            // A zero-duration sample never reaches a caller through real
+            // ffmpeg 9.0.1's own MP4 demuxer — measured directly: a real
+            // `mov_text` file's trailing "clear the subtitle" sample (`stts`
+            // declares its own delta `0`, a standard trailing entry many
+            // `mov_text` writers, including ffmpeg's own, append after the
+            // last real cue) is invisible to `ffprobe -show_packets` on the
+            // reference, though it is *not* a zero-*size* sample — its
+            // `stsz` entry is a real 2 bytes (mov_text's own big-endian
+            // `u16` zero-length-string encoding), so a size-based check
+            // would have missed it entirely. Gated on duration alone,
+            // matching exactly what was measured; a zero-duration sample
+            // elsewhere in a track (not trailing, not subtitle) was not
+            // constructed or tested, so this is not a claim that every such
+            // sample is always dropped by the reference, only that this one
+            // measured shape is. Skipped here, not filtered out when the
+            // sample table is first read, so every other consumer of that
+            // table (seeking, duration accounting) is unaffected — only the
+            // packet stream a caller actually reads from changes.
+            if sample.duration == 0 {
+                continue;
+            }
+            let mut pkt = self.payload(sample.offset, sample.size)?;
+            if let Some(dec) = &decrypt
+                && !dec.decrypt(sample.index, pkt.payload_mut())
+            {
+                return Err(Error::Unsupported(
+                    "mp4: cenc: no per-sample IV available for this sample (senc lacks a record, \
                  or carries a subsample table this crate does not decrypt)",
-            ));
+                ));
+            }
+            pkt.stream_index = stream_index;
+            // `i64::MIN` is the "no timeline" marker a cover image carries.
+            pkt.pts = if sample.pts == i64::MIN {
+                Timestamp::NONE
+            } else {
+                Timestamp::new(sample.pts)
+            };
+            pkt.dts = if sample.dts == i64::MIN {
+                Timestamp::NONE
+            } else {
+                Timestamp::new(sample.dts)
+            };
+            pkt.pos = Some(sample.offset);
+            pkt.duration = Timestamp::new(i64::from(sample.duration))
+                .to_duration(time_base)
+                .unwrap_or(Duration::ZERO);
+            pkt.flags = PacketFlags::empty();
+            if sample.key {
+                pkt.flags |= PacketFlags::KEY;
+            }
+            if sample.discard {
+                pkt.flags |= PacketFlags::DISCARD;
+            }
+            if audio && sample.skip > 0 {
+                pkt.side_data.push(PacketSideData::SkipSamples {
+                    start: sample.skip,
+                    end: 0,
+                    // D17: measured 0 on every MP4 file tried so far — an
+                    // `elst`-derived leading skip carries no reason of its own.
+                    skip_reason: 0,
+                    discard_reason: 0,
+                });
+            }
+            if sample.key {
+                self.index.add(IndexEntry::keyframe(sample.offset, pkt.dts));
+            }
+            return Ok(pkt);
         }
-        pkt.stream_index = stream_index;
-        // `i64::MIN` is the "no timeline" marker a cover image carries.
-        pkt.pts = if sample.pts == i64::MIN {
-            Timestamp::NONE
-        } else {
-            Timestamp::new(sample.pts)
-        };
-        pkt.dts = if sample.dts == i64::MIN {
-            Timestamp::NONE
-        } else {
-            Timestamp::new(sample.dts)
-        };
-        pkt.pos = Some(sample.offset);
-        pkt.duration = Timestamp::new(i64::from(sample.duration))
-            .to_duration(time_base)
-            .unwrap_or(Duration::ZERO);
-        pkt.flags = PacketFlags::empty();
-        if sample.key {
-            pkt.flags |= PacketFlags::KEY;
-        }
-        if sample.discard {
-            pkt.flags |= PacketFlags::DISCARD;
-        }
-        if audio && sample.skip > 0 {
-            pkt.side_data.push(PacketSideData::SkipSamples {
-                start: sample.skip,
-                end: 0,
-                // D17: measured 0 on every MP4 file tried so far — an
-                // `elst`-derived leading skip carries no reason of its own.
-                skip_reason: 0,
-                discard_reason: 0,
-            });
-        }
-        if sample.key {
-            self.index.add(IndexEntry::keyframe(sample.offset, pkt.dts));
-        }
-        Ok(pkt)
     }
 
     // ---------------------------------------------------------------- seeking

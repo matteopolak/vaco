@@ -48,6 +48,31 @@
 //! — measured: `vp9_superframe` applied directly to a stream with no
 //! alt-ref frames at all was byte-identical to its input, so a lone visible
 //! frame must never grow a size-1 superframe wrapper around itself.
+//!
+//! # A packet that is already a complete superframe is never re-grouped
+//!
+//! `is_shown_now` reads only the first few bits of a packet's payload — the
+//! *first constituent frame's* header, if the payload happens to already be
+//! a complete superframe (SPS/ISOBMFF's VP9 binding requires this shape: an
+//! alt-ref packed with the visible frame that follows it into one sample).
+//! An alt-ref's own header reads `show_frame = 0`, the same value a genuine
+//! lone hidden frame gives — so, uncorrected, this filter could not tell
+//! "a real hidden frame, buffer it" from "an already-complete superframe
+//! whose first half merely happens to be hidden", and buffered the latter
+//! for a merge with whatever packet followed it, corrupting two independent,
+//! already-correct samples into one.
+//!
+//! Found and fixed by measurement, not inspection: real ffmpeg 9.0.1's own
+//! `vp9_superframe` applied to `-c copy`'d real MP4/ISOBMFF VP9 content
+//! (already one-sample-per-temporal-unit, 10 of 125 packets confirmed
+//! carrying a genuine superframe index) is byte-identical to the unfiltered
+//! input — every packet already complete, nothing left to merge. This
+//! crate's filter, before this fix, merged 9 of those 10 pairs with an
+//! unrelated neighbour instead. The fix reuses
+//! [`crate::superframe_split::superframe_sizes`] (D19: one definition) to
+//! ask "is this payload already a complete superframe" *before* reading any
+//! frame-header bits at all; only a payload that is not already one gets the
+//! `show_frame`/`show_existing_frame` read this module's own docs describe.
 
 use std::collections::VecDeque;
 
@@ -81,7 +106,17 @@ fn build(params: &CodecParameters) -> Result<Box<dyn BitstreamFilter>> {
 /// "displayed now": flushing immediately on unparseable input is the
 /// conservative choice, since the alternative is buffering forever on
 /// garbage.
+///
+/// A payload that is already a complete superframe (see the module docs'
+/// own "never re-grouped" section) is also "displayed now" for this
+/// function's purposes: it is a self-contained unit exactly like a shown
+/// frame is, and reading its first constituent frame's own header bits
+/// below would see that frame's `show_frame`, not a fact about the payload
+/// as a whole.
 fn is_shown_now(payload: &[u8]) -> bool {
+    if crate::superframe_split::superframe_sizes(payload).is_some() {
+        return true;
+    }
     let mut r = BitReader::new(payload);
     let frame_marker = r.get(2);
     let profile_low = r.get(1);
@@ -144,7 +179,11 @@ impl Superframe {
                 }
                 combined.push(marker);
 
-                let Some(first_meta) = self.pending.first().map(|f| (f.stream_index, f.pts, f.dts, f.duration, f.pos, f.flags)) else {
+                let Some(first_meta) = self
+                    .pending
+                    .first()
+                    .map(|f| (f.stream_index, f.pts, f.dts, f.duration, f.pos, f.flags))
+                else {
                     return Ok(());
                 };
                 let (stream_index, pts, dts, duration, pos, flags) = first_meta;
@@ -220,7 +259,10 @@ mod tests {
         let shown = frame(true, 4);
         let mut filt = (DESC.build)(&vp9_params()).unwrap();
         filt.send_packet(Some(&pkt(&hidden))).unwrap();
-        assert!(filt.receive_packet().is_err(), "must not flush while hidden");
+        assert!(
+            filt.receive_packet().is_err(),
+            "must not flush while hidden"
+        );
         filt.send_packet(Some(&pkt(&shown))).unwrap();
         let out = filt.receive_packet().unwrap();
 
@@ -270,5 +312,46 @@ mod tests {
     #[test]
     fn falsified_a_bad_frame_marker_is_treated_as_shown_not_hidden() {
         assert!(is_shown_now(&[0x00, 0x00]));
+    }
+
+    /// A packet that is already a complete superframe -- the ISOBMFF/MP4
+    /// shape, an alt-ref packed with the visible frame that follows it into
+    /// one sample -- has `show_frame = 0` on its own first constituent
+    /// frame's header, the same value a genuine lone hidden frame gives.
+    /// Before the fix this module's own doc records, `is_shown_now` read
+    /// only those first few bits and treated the whole already-complete
+    /// packet as hidden, buffering it for a merge with whatever packet
+    /// followed -- corrupting two independent, already-correct samples into
+    /// one. Measured against real ffmpeg 9.0.1 directly: real MP4-sourced
+    /// VP9 content this shaped is byte-identical through `vp9_superframe`,
+    /// because there is nothing left to merge.
+    fn already_complete_superframe(hidden: &[u8], shown: &[u8]) -> Vec<u8> {
+        let marker = 0xC0 | ((2 - 1) << 3) | (2 - 1); // magbytes=2, nframes=2
+        let mut buf = Vec::new();
+        buf.extend_from_slice(hidden);
+        buf.extend_from_slice(shown);
+        buf.push(marker);
+        buf.extend_from_slice(&(hidden.len() as u16).to_le_bytes());
+        buf.extend_from_slice(&(shown.len() as u16).to_le_bytes());
+        buf.push(marker);
+        buf
+    }
+
+    #[test]
+    fn an_already_complete_superframe_reads_as_shown_now() {
+        let already = already_complete_superframe(&frame(false, 30), &frame(true, 4));
+        assert!(is_shown_now(&already));
+    }
+
+    #[test]
+    fn an_already_complete_superframe_is_never_merged_with_the_next_packet() {
+        let already = already_complete_superframe(&frame(false, 30), &frame(true, 4));
+        let next = frame(true, 6);
+        let mut filt = (DESC.build)(&vp9_params()).unwrap();
+        filt.send_packet(Some(&pkt(&already))).unwrap();
+        // Flushed immediately, on its own -- not buffered waiting for `next`.
+        assert_eq!(filt.receive_packet().unwrap().payload(), already.as_slice());
+        filt.send_packet(Some(&pkt(&next))).unwrap();
+        assert_eq!(filt.receive_packet().unwrap().payload(), next.as_slice());
     }
 }

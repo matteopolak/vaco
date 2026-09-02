@@ -314,13 +314,21 @@ fn parse_strf(
                 params.codec_tag = Some(id.as_bytes());
             }
             // Mirrors the audio branch below and `vaco-demux-mp4`'s own
-            // `avcC`/`hvcC` handling: an `avc1`/`hvc1`-tagged `strf` carries a
-            // configuration record after `BITMAPINFOHEADER`, and handing it to
-            // `stream.params.extradata` is what lets the codec parser (reached
-            // through `ParserProvider`, once a packet arrives) fill in
-            // profile/level/pix_fmt/nal_length_size — this crate never parses
-            // the record itself.
-            if video_tags::carries_config_record(compression) {
+            // `avcC`/`hvcC` handling: an ISOBMFF-style `avc1`/`hvc1`-tagged
+            // `strf` carries a configuration record after
+            // `BITMAPINFOHEADER`, and the MPEG-4 Part 2/MS-MPEG4 family
+            // carries its own VOL-style header the same way (measured: a
+            // real `FMP4`-tagged AVI file's `strf` has 46 trailing bytes
+            // there, matching real ffmpeg's own reported `extradata_size`
+            // for the identical file exactly — this crate's own
+            // `carries_config_record`-only gate silently dropped them,
+            // since MPEG-4 does not use the ISOBMFF configuration-record
+            // convention that check was written for). Handing it to
+            // `stream.params.extradata` is what lets the codec parser
+            // (reached through `ParserProvider`, once a packet arrives) fill
+            // in profile/level/pix_fmt/nal_length_size — this crate never
+            // parses the record itself.
+            if video_tags::carries_strf_extradata(compression) {
                 let extra = payload.get(BitmapInfoHeader::LEN..).unwrap_or(&[]);
                 if !extra.is_empty() {
                     let mut buf = budget.alloc::<u8>(extra.len())?;
@@ -502,6 +510,32 @@ mod tests {
         assert!(tb.is_none());
         let params = params.unwrap();
         assert_eq!(params.extradata.as_deref(), Some(&avcc[..]));
+    }
+
+    #[test]
+    fn fmp4_strf_captures_the_trailing_vol_header_as_extradata() {
+        // The bug this test exists to catch: a real `FMP4`-tagged AVI
+        // file's `strf` carries its VOL header here (measured: 46 bytes,
+        // matching real ffmpeg's own `extradata_size` on the identical
+        // file exactly), and `carries_config_record` alone -- written for
+        // `avc1`/`hvc1`'s ISOBMFF convention -- does not cover it, so this
+        // was silently dropped before `carries_strf_extradata` existed.
+        let vol = [0x00, 0x00, 0x01, 0xB0, 0x01, 0x00, 0x00, 0x01, 0xB5];
+        let bih = bih_bytes(*b"FMP4", &vol);
+        let mut budget = Budget::new(vaco_limits::Limits::permissive());
+        let (params, tb) = parse_strf(*b"vids", &bih, &mut budget).unwrap();
+        assert!(tb.is_none());
+        let params = params.unwrap();
+        assert_eq!(params.extradata.as_deref(), Some(&vol[..]));
+    }
+
+    #[test]
+    fn xvid_strf_also_captures_extradata_same_family_as_fmp4() {
+        let vol = [0xAA, 0xBB, 0xCC];
+        let bih = bih_bytes(*b"XVID", &vol);
+        let mut budget = Budget::new(vaco_limits::Limits::permissive());
+        let (params, _tb) = parse_strf(*b"vids", &bih, &mut budget).unwrap();
+        assert_eq!(params.unwrap().extradata.as_deref(), Some(&vol[..]));
     }
 
     #[test]

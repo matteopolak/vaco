@@ -352,3 +352,96 @@ fn compressed_audio_dts_advances_by_the_real_chunk_duration_not_one_tick() {
     // `1/44100` time_base, is 1024 ticks -- not 1.
     assert_eq!(audio_dts, vec![Some(0), Some(1024)]);
 }
+
+/// A minimal, single-video-stream AVI file whose `strf` carries no
+/// configuration record at all (measured: real ffmpeg's own `-f avi -c:v
+/// mpeg4` writer does this) and whose first keyframe repeats a VOL header
+/// in-band instead, the same shape a real MPEG-4 Part 2 encoder produces.
+/// `vol_header` is everything up to (not including) the group-of-pictures
+/// or picture start code; `rest` is the bytes that follow it in the same
+/// chunk (a GOP header and/or picture data — this fixture does not need
+/// either to be well-formed MPEG-4, only present).
+fn build_avi_mpeg4(vol_header: &[u8], marker: &[u8; 4], rest: &[u8]) -> Vec<u8> {
+    let strl_v = list(b"strl", &{
+        let mut c = chunk(b"strh", &strh(b"vids", 1, 10, 1, 0));
+        c.extend_from_slice(&chunk(b"strf", &strf_video()));
+        c
+    });
+    let mut hdrl_children = chunk(b"avih", &avih(1, 1));
+    hdrl_children.extend_from_slice(&strl_v);
+    let hdrl = list(b"hdrl", &hdrl_children);
+
+    let mut v0_payload = vol_header.to_vec();
+    v0_payload.extend_from_slice(marker);
+    v0_payload.extend_from_slice(rest);
+    let v0 = chunk(b"00dc", &v0_payload);
+    let movi = list(b"movi", &v0);
+
+    let size = (v0.len() - 8 - usize::from(v0.len() % 2 == 1)) as u32;
+    let mut idx1_payload = Vec::new();
+    idx1_payload.extend_from_slice(b"00dc");
+    idx1_payload.extend_from_slice(&0x10u32.to_le_bytes()); // AVIIF_KEYFRAME
+    idx1_payload.extend_from_slice(&4u32.to_le_bytes()); // right after "movi"
+    idx1_payload.extend_from_slice(&size.to_le_bytes());
+    let idx1 = chunk(b"idx1", &idx1_payload);
+
+    let mut body = b"AVI ".to_vec();
+    body.extend_from_slice(&hdrl);
+    body.extend_from_slice(&movi);
+    body.extend_from_slice(&idx1);
+
+    let mut file = b"RIFF".to_vec();
+    file.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    file.extend_from_slice(&body);
+    file
+}
+
+/// The bug this fixture exists to catch: real ffmpeg's own MPEG-4 Part 2 AVI
+/// writer puts no configuration record in `strf` at all, and every keyframe
+/// repeats the VOL header in-band instead — measured against a real
+/// `ffmpeg -c:v mpeg4 -f avi` file, whose `strf` was exactly
+/// `BITMAPINFOHEADER`'s 40 bytes (no trailing bytes) and whose first
+/// keyframe's own 46 leading bytes matched real ffmpeg's own reported
+/// `extradata_size` on that file exactly. Before the fix that peeks ahead
+/// for this, a stream demuxed this way reported no extradata at all even
+/// though the file plainly carries one.
+#[test]
+fn fmp4_with_no_strf_record_gets_extradata_from_the_first_keyframes_vol_header() {
+    let vol = [0x00, 0x00, 0x01, 0xB0, 0x01, 0x00, 0x00, 0x01, 0xB5, 0x09];
+    let demux = open(build_avi_mpeg4(
+        &vol,
+        &[0x00, 0x00, 0x01, 0xB6],
+        &[0x10, 0xC1, 0x23],
+    ));
+    let streams = demux.streams();
+    assert_eq!(streams.len(), 1);
+    assert_eq!(streams[0].params.extradata.as_deref(), Some(&vol[..]));
+}
+
+/// The group-of-pictures start code (`00 00 01 B3`), when present, marks
+/// the end of the repeated VOL header just as reliably as the picture start
+/// code does — measured directly on the real fixture above, whose own
+/// keyframe carries both, in that order.
+#[test]
+fn a_gop_header_between_the_vol_header_and_the_picture_also_ends_extradata() {
+    let vol = [0x00, 0x00, 0x01, 0xB0, 0x01, 0x00, 0x00, 0x01, 0xB5, 0x09];
+    let gop_then_picture = [0x00, 0x10, 0x07, 0x00, 0x00, 0x01, 0xB6, 0x10];
+    let demux = open(build_avi_mpeg4(
+        &vol,
+        &[0x00, 0x00, 0x01, 0xB3],
+        &gop_then_picture,
+    ));
+    let streams = demux.streams();
+    assert_eq!(streams[0].params.extradata.as_deref(), Some(&vol[..]));
+}
+
+/// A keyframe with no group-of-pictures or picture start code at all (a
+/// pathological/truncated fixture) leaves extradata unset rather than
+/// guessing — there is nothing here that marks where a VOL header would
+/// end.
+#[test]
+fn no_marker_at_all_leaves_extradata_unset() {
+    let demux = open(build_avi_mpeg4(&[0xAA; 20], &[0xBB; 4], &[]));
+    let streams = demux.streams();
+    assert_eq!(streams[0].params.extradata, None);
+}

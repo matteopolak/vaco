@@ -60,7 +60,9 @@ fn build(params: &CodecParameters) -> Result<Box<dyn BitstreamFilter>> {
         Some(CodecId::Vp9) => Ok(Box::new(MappedFilter::new(SuperframeSplit {
             budget: Budget::new(Limits::permissive()),
         }))),
-        _ => Err(vaco_core::Error::Unsupported("vp9_superframe_split: vp9 only")),
+        _ => Err(vaco_core::Error::Unsupported(
+            "vp9_superframe_split: vp9 only",
+        )),
     }
 }
 
@@ -70,7 +72,13 @@ struct SuperframeSplit {
 
 /// The constituent frame sizes a superframe index declares, or `None` if
 /// `payload` does not end in one — see the module docs for the byte layout.
-fn superframe_sizes(payload: &[u8]) -> Option<Vec<usize>> {
+///
+/// `pub(crate)`, not private: [`crate::superframe`] (the merge filter) needs
+/// this exact same "is this packet already a complete superframe" test —
+/// see that module's own `is_shown_now` doc for why reusing it, rather than
+/// reading only a frame header's first few bits, is what fixed a real
+/// corruption bug there. One definition, per D19.
+pub(crate) fn superframe_sizes(payload: &[u8]) -> Option<Vec<usize>> {
     let &marker = payload.last()?;
     if marker & 0xE0 != 0xC0 {
         return None;

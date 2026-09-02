@@ -18,7 +18,33 @@
 //! AUD-already-present, a non-16-multiple crop dimension, explicit
 //! `-level 5.1` with forced `bt709` colour description, and a longer
 //! B-frame-bearing clip: `-bsf:v hevc_metadata` with no option string
-//! reproduced every one of them **byte for byte**.
+//! reproduced every one of those five **byte for byte**.
+//!
+//! # That claim does not generalise — corrected, not just the code left alone
+//!
+//! Once `-bsf` made this filter reachable at all (before that, nothing in
+//! this tree ever called it — see the bsf reachability sweep), a sixth,
+//! independently-generated real encode falsified the "byte for byte"
+//! claim above as a *general* statement about `ffmpeg 9.0.1`'s
+//! `hevc_metadata`, though it remains true of the original five fixtures.
+//! Measured: a fresh `libx265` `testsrc` clip (`-tag:v hvc1`, five access
+//! units, sizes 2100/472/151/88/201 bytes) run through real ffmpeg's own
+//! `-bsf:v hevc_metadata` with no option string kept every packet's exact
+//! byte *size* unchanged but changed the CRC32 of **all five**, including
+//! ones that carry no parameter set at all — so this is not confined to a
+//! VPS/SPS rewrite; something about the filter's default pass reserialises
+//! (or re-frames) the whole Annex-B stream, at least for this input, not
+//! only when a field value actually needs to change. What exactly changes
+//! byte-for-byte was not characterised further (`planning/INTERFACE-GAPS.md`
+//! gap 12's own tracking issue, not reproduced here) — the important fact
+//! for this doc to state plainly is that "measured byte-identical" was a
+//! claim about five specific fixtures, not a property of the reference
+//! filter in general, and a caller should not read it as one. This crate's
+//! own implementation below remains a true no-op regardless (see the next
+//! section for why: there is no HEVC CBS write path to make it do anything
+//! else), so it silently does not reproduce whatever real ffmpeg's default
+//! pass does here — a known, narrower gap than "wrong output", recorded
+//! rather than fixed blind.
 //!
 //! # Why this crate does not also carry the CBS write path
 //!

@@ -294,6 +294,40 @@ impl AviDemuxer {
             io.seek(resume)?;
         }
 
+        // Some MPEG-4 Part 2/MS-MPEG4 encoders (measured: real ffmpeg's own
+        // `-f avi -c:v mpeg4` writer) put no configuration record in `strf`
+        // at all -- unlike `avc1`/`hvc1` and unlike other real-world AVI
+        // muxers for this same codec family (Xvid/DivX's own tools
+        // routinely do write one there, which `hdrl::carries_strf_extradata`
+        // now covers) -- and rely entirely on every keyframe repeating its
+        // VOL header in-band instead. Real ffmpeg's own probe extracts that
+        // repeated header as `extradata` by scanning the bitstream; nothing
+        // in `strf` gives a reader here the same fact, so a stream left
+        // without this peek reports no extradata at all even though the
+        // file plainly carries one (measured: 46 bytes, matching real
+        // ffmpeg's own `extradata_size` on the identical file exactly).
+        // Seekable-only, the same gate the `idx1`/`OpenDML` peeks above use:
+        // non-seekable input already loses that free lunch, exactly as
+        // those peeks would.
+        if io.seekability() != Seekability::None {
+            for (i, st) in streams.iter_mut().enumerate() {
+                let needs_it = st.params.codec_id == Some(vaco_codec_core::CodecId::Mpeg4)
+                    && st.params.extradata.as_ref().is_none_or(Vec::is_empty);
+                if !needs_it {
+                    continue;
+                }
+                if let Some(extra) =
+                    peek_mpeg4_vol_header(&mut io, movi_children_start, movi_end, i, &mut budget)
+                {
+                    st.params.extradata = Some(extra);
+                }
+                // `io`'s position is restored by `peek_mpeg4_vol_header`
+                // itself on every return path, so sequential reading below
+                // still resumes at `movi_children_start` regardless of
+                // whether this stream needed (or found) anything.
+            }
+        }
+
         let duration = duration_from_main(&main, &state);
 
         Ok(Self {
@@ -449,7 +483,11 @@ impl AviDemuxer {
             // the reference never claims to have -- and a muxer downstream
             // that refuses to write a packet with no pts (mpegts, Matroska)
             // then silently accepts what should be a hard error.
-            pkt.pts = if media_type == Some(MediaType::Video) { Timestamp::NONE } else { ts };
+            pkt.pts = if media_type == Some(MediaType::Video) {
+                Timestamp::NONE
+            } else {
+                ts
+            };
             pkt.dts = ts;
             pkt.pos = Some(pos);
             pkt.duration = Timestamp::new(dur_ticks)
@@ -552,6 +590,86 @@ fn peek_idx1(
             .saturating_add(8)
             .saturating_add(size)
             .saturating_add(size % 2);
+    }
+    let _ = io.seek(resume);
+    None
+}
+
+/// Scan forward from `resume` for the first `movi` chunk belonging to
+/// `target_stream_idx`, and return the leading bytes of its payload up to
+/// (not including) the first MPEG-4 Part 2 group-of-pictures (`00 00 01 B3`)
+/// or picture (`00 00 01 B6`) start code, whichever comes first — the VOL
+/// header real ffmpeg's own probe extracts as `extradata` for a stream whose
+/// `strf` carries none. `None` if no such marker turns up within the scanned
+/// window, or on any parse/IO failure; `io`'s position is always restored to
+/// `resume` before returning, on every path, so a caller need not repeat
+/// that itself.
+///
+/// Bounded the same two ways [`peek_idx1`] is: at most 256 top-level `movi`
+/// children examined (comfortably past any plausible amount of other
+/// streams' interleaved chunks before this stream's first one), and the
+/// payload read for a matching chunk is capped at 4 KiB — orders of
+/// magnitude more than a real VOL header has ever measured at, and small
+/// enough that a malformed file with no start code at all cannot turn this
+/// into an unbounded read.
+fn peek_mpeg4_vol_header(
+    io: &mut IoContext,
+    resume: u64,
+    movi_end: u64,
+    target_stream_idx: usize,
+    budget: &mut Budget,
+) -> Option<Vec<u8>> {
+    const HEADER_CAP: usize = 4096;
+    let mut pos = resume;
+    for _ in 0..256 {
+        if pos >= movi_end {
+            break;
+        }
+        io.seek(pos).ok()?;
+        let id = io.tag().ok()?;
+        let size = u64::from(io.rl32().ok()?);
+        if id == riff_ids::LIST.as_bytes() {
+            let list_type = io.tag().ok()?;
+            if list_type == avi_ids::REC_.as_bytes() {
+                // A grouping wrapper with no payload of its own — descend
+                // into its first child as an ordinary chunk, the same way
+                // `read_one`'s own sequential walk does.
+                pos = pos.saturating_add(12);
+                continue;
+            }
+            pos = pos
+                .saturating_add(8)
+                .saturating_add(size)
+                .saturating_add(size % 2);
+            continue;
+        }
+        let Some((stream_idx, _kind)) = index::parse_chunk_tag(id) else {
+            pos = pos
+                .saturating_add(8)
+                .saturating_add(size)
+                .saturating_add(size % 2);
+            continue;
+        };
+        if usize::try_from(stream_idx).ok() != Some(target_stream_idx) {
+            pos = pos
+                .saturating_add(8)
+                .saturating_add(size)
+                .saturating_add(size % 2);
+            continue;
+        }
+        let want = usize::try_from(size).unwrap_or(usize::MAX).min(HEADER_CAP);
+        let mut buf = budget.alloc::<u8>(want).ok()?;
+        io.read_exact(&mut buf).ok()?;
+        let _ = io.seek(resume);
+        let gop = buf.windows(4).position(|w| w == [0x00, 0x00, 0x01, 0xB3]);
+        let vop = buf.windows(4).position(|w| w == [0x00, 0x00, 0x01, 0xB6]);
+        let cut = match (gop, vop) {
+            (Some(g), Some(v)) => g.min(v),
+            (Some(g), None) => g,
+            (None, Some(v)) => v,
+            (None, None) => return None,
+        };
+        return (cut > 0).then(|| buf.get(..cut).unwrap_or(&[]).to_vec());
     }
     let _ = io.seek(resume);
     None

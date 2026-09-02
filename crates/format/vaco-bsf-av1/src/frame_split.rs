@@ -24,6 +24,24 @@
 //!   are the bare FRAME OBUs unchanged. All five packets carried the
 //!   **input packet's own `pts`/`dts`**, unmodified — none were renumbered.
 //!
+//! # A temporal delimiter between two frames rides with the *later* one
+//!
+//! The measurement above only ever put non-frame OBUs *before* the first
+//! frame in a temporal unit. A fresh two-pass SVT-AV1 encode with several
+//! frames packed into one IVF entry (`ffmpeg 9.0.1`, `-bsf:v
+//! av1_frame_split -f framecrc`, compared against the unfiltered `-f
+//! framecrc` baseline byte-for-byte, not just by packet count) showed a
+//! packet shaped `FRAME, TD, FRAME` — a temporal delimiter *between* two
+//! frame-opening units, not only before the first — splits into `FRAME`
+//! then `TD, FRAME`: the delimiter rides with the frame that *follows* it,
+//! the same "a TD marks the start of what comes next" reading the leading
+//! case already used, just not yet applied to a delimiter appearing
+//! mid-packet. An earlier version of this filter cut the group boundary at
+//! the next frame-opening unit's own offset regardless of what came right
+//! before it, which put that TD in the *previous* packet instead — a real
+//! divergence found only once `-bsf` made this filter reachable at all
+//! (before that, nothing in this tree ever called it).
+//!
 //! `OBU_TILE_GROUP` continues the frame unit its preceding `OBU_FRAME_HEADER`
 //! opened, per the AV1 spec's frame/tile-group pairing (§7.4) — not
 //! independently measured (no fixture in this crate's test corpus splits a
@@ -62,8 +80,8 @@ use vaco_codec_core::{BitstreamFilter, CodecId, CodecParameters};
 use vaco_core::{Error, Result};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
-use vaco_parse_av1::obu::{self, ObuType};
 use vaco_parse_av1::Av1Framing;
+use vaco_parse_av1::obu::{self, ObuType};
 
 /// The registry descriptor. `ctor` target for `vaco-component.toml`.
 pub const DESC: BsfDesc = BsfDesc {
@@ -98,7 +116,10 @@ impl PacketMap for FrameSplit {
         let units = obu::units(payload, Av1Framing::ObuStream);
 
         let consumed: usize = units.iter().map(|u| u.total_len).sum();
-        let frame_units = units.iter().filter(|u| opens_frame_unit(u.header.obu_type)).count();
+        let frame_units = units
+            .iter()
+            .filter(|u| opens_frame_unit(u.header.obu_type))
+            .count();
         if consumed != payload.len() || frame_units <= 1 {
             // Nothing to split: either the payload did not parse cleanly
             // (pass through rather than risk losing bytes), or there is at
@@ -112,16 +133,36 @@ impl PacketMap for FrameSplit {
         // group is first. Only the *second and later* frame-opening unit
         // starts a fresh group — the first one just marks that a group is
         // now open.
+        //
+        // A non-frame OBU (a temporal delimiter, most commonly) that
+        // appears *between* two frame-opening units belongs with the group
+        // that follows it, not the one before it: it marks the start of the
+        // next temporal unit, the same reason a *leading* one rides with
+        // the first group. Found by measurement against real ffmpeg 9.0.1
+        // (a fresh two-pass SVT-AV1 encode with several frames per IVF
+        // entry): a packet shaped `FRAME, TD, FRAME` splits into `FRAME`
+        // and `TD+FRAME`, not `FRAME+TD` and a bare `FRAME` — the naive
+        // "cut exactly at the next frame-opening unit's own offset" reading
+        // this loop used before dropped that TD from the packet it belongs
+        // to, matching neither the reference's byte count nor its content.
+        // `pending_prefix` tracks the offset of the first such in-between
+        // non-frame unit since the last group closed, so the cut can move
+        // back to it instead of to the frame unit's own offset.
         let mut group_start = 0usize;
         let mut seen_first_frame_unit = false;
+        let mut pending_prefix: Option<usize> = None;
         for unit in &units {
             if opens_frame_unit(unit.header.obu_type) {
                 if seen_first_frame_unit {
-                    let group = payload.get(group_start..unit.offset).unwrap_or(&[]);
+                    let cut = pending_prefix.unwrap_or(unit.offset);
+                    let group = payload.get(group_start..cut).unwrap_or(&[]);
                     out.push_back(clone_with_payload(p, group, &mut self.budget)?);
-                    group_start = unit.offset;
+                    group_start = cut;
+                    pending_prefix = None;
                 }
                 seen_first_frame_unit = true;
+            } else if seen_first_frame_unit && pending_prefix.is_none() {
+                pending_prefix = Some(unit.offset);
             }
         }
         let last = payload.get(group_start..).unwrap_or(&[]);
@@ -180,7 +221,10 @@ mod tests {
         f.send_packet(Some(&annexb_pkt(&buf))).unwrap();
         let out = f.receive_packet().unwrap();
         assert_eq!(out.payload(), buf.as_slice());
-        assert!(f.receive_packet().is_err(), "must be exactly one output packet");
+        assert!(
+            f.receive_packet().is_err(),
+            "must be exactly one output packet"
+        );
     }
 
     /// The measured shape: `TD, FRAME, FRAME, FRAME` — the TD rides with the
@@ -249,6 +293,36 @@ mod tests {
         let mut filt = (DESC.build)(&av1_params()).unwrap();
         filt.send_packet(Some(&annexb_pkt(&buf))).unwrap();
         assert_eq!(filt.receive_packet().unwrap().payload(), buf.as_slice());
+    }
+
+    /// Measured against real ffmpeg 9.0.1: a temporal delimiter *between*
+    /// two frame-opening units belongs with the group that follows it, not
+    /// the one before it -- a fresh SVT-AV1 encode with several frames
+    /// packed into one IVF entry split as `FRAME` then `TD+FRAME`, not
+    /// `FRAME+TD` then a bare `FRAME`. This is the real-world shape of the
+    /// bug this fixture reproduces: the fix moved the cut point back to the
+    /// TD's own offset instead of the following FRAME's.
+    #[test]
+    fn a_mid_stream_td_rides_with_the_group_that_follows_it() {
+        let f1 = obu(6, &[0x01]);
+        let td = obu(2, &[]);
+        let f2 = obu(6, &[0x02, 0x03]);
+        let mut buf = f1.clone();
+        buf.extend(&td);
+        buf.extend(&f2);
+
+        let mut filt = (DESC.build)(&av1_params()).unwrap();
+        filt.send_packet(Some(&annexb_pkt(&buf))).unwrap();
+
+        let p0 = filt.receive_packet().unwrap();
+        assert_eq!(p0.payload(), f1.as_slice());
+
+        let p1 = filt.receive_packet().unwrap();
+        let mut expected1 = td.clone();
+        expected1.extend(&f2);
+        assert_eq!(p1.payload(), expected1.as_slice());
+
+        assert!(filt.receive_packet().is_err());
     }
 
     /// Falsifies the "always split, TD gets its own packet" naive reading:

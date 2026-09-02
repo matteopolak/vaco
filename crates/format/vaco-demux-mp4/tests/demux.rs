@@ -618,10 +618,8 @@ mod tests {
     fn a_colr_box_sets_the_video_color_info() {
         use vaco_color::{ColorPrimaries, ColorRange, MatrixCoefficients, TransferCharacteristic};
 
-        let colr = vaco_format_isom::build::bx(
-            b"colr",
-            &[b'n', b'c', b'l', b'x', 0, 1, 0, 1, 0, 1, 0x80],
-        );
+        let colr =
+            vaco_format_isom::build::bx(b"colr", &[b'n', b'c', b'l', b'x', 0, 1, 0, 1, 0, 1, 0x80]);
         let mut track = simple_track(1, 1, 4, 1024);
         track.stbl.stsd_box = Some(common::avc1_stsd_with_extension(&colr));
         let demux = open(fixture(1000, 0, &[track], &[0u8; 4]));
@@ -714,14 +712,22 @@ mod tests {
     fn alac_stsd_extradata_is_the_bare_config_not_the_full_box_header() {
         let real_alac_stsd = {
             fn from_hex(s: &str) -> Vec<u8> {
-                (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+                (0..s.len())
+                    .step_by(2)
+                    .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                    .collect()
             }
             // The bytes captured this way are the `stsd` box's own payload
             // (version+flags, entry_count, then the entries) -- everything
             // after its 8-byte box header, which `StblSpec::stsd_box`
             // expects to be present, so it is added back here.
-            let payload = from_hex("000000000000000100000048616c6163000000000000000100000000000000000001001000000000ac44000000000024616c616300000000000010000010280a0e01000000002004000ac4400000ac44");
-            let mut boxed = u32::try_from(payload.len() + 8).unwrap().to_be_bytes().to_vec();
+            let payload = from_hex(
+                "000000000000000100000048616c6163000000000000000100000000000000000001001000000000ac44000000000024616c616300000000000010000010280a0e01000000002004000ac4400000ac44",
+            );
+            let mut boxed = u32::try_from(payload.len() + 8)
+                .unwrap()
+                .to_be_bytes()
+                .to_vec();
             boxed.extend_from_slice(b"stsd");
             boxed.extend_from_slice(&payload);
             boxed
@@ -744,7 +750,11 @@ mod tests {
         let data = fixture(44100, 4096, &[track], &[0u8; 100]);
         let demux = open(data);
         let stream = demux.streams().first().expect("one stream");
-        let extradata = stream.params.extradata.as_ref().expect("alac extradata must be present");
+        let extradata = stream
+            .params
+            .extradata
+            .as_ref()
+            .expect("alac extradata must be present");
         assert_eq!(
             extradata.len(),
             24,
@@ -768,16 +778,24 @@ mod tests {
     #[test]
     fn flac_stsd_extradata_is_flac_prefixed_not_the_full_box_header() {
         fn from_hex(s: &str) -> Vec<u8> {
-            (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+            (0..s.len())
+                .step_by(2)
+                .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+                .collect()
         }
-        let real_flac_entry = from_hex("0000006a664c6143000000000000000100000000000000000002001000000000bb8000000000003264664c6100000000800000221000100000034f00048e0bb802f00000bb809e36f85f3d9494c75a2ac524efaf9ebd0000001462747274000000000001f4000001a840");
+        let real_flac_entry = from_hex(
+            "0000006a664c6143000000000000000100000000000000000002001000000000bb8000000000003264664c6100000000800000221000100000034f00048e0bb802f00000bb809e36f85f3d9494c75a2ac524efaf9ebd0000001462747274000000000001f4000001a840",
+        );
         let payload = {
             let mut p = vec![0u8, 0, 0, 0]; // stsd version+flags
             p.extend_from_slice(&1u32.to_be_bytes()); // entry_count
             p.extend_from_slice(&real_flac_entry);
             p
         };
-        let mut real_flac_stsd = u32::try_from(payload.len() + 8).unwrap().to_be_bytes().to_vec();
+        let mut real_flac_stsd = u32::try_from(payload.len() + 8)
+            .unwrap()
+            .to_be_bytes()
+            .to_vec();
         real_flac_stsd.extend_from_slice(b"stsd");
         real_flac_stsd.extend_from_slice(&payload);
 
@@ -799,7 +817,11 @@ mod tests {
         let data = fixture(48000, 48000, &[track], &[0u8; 100]);
         let demux = open(data);
         let stream = demux.streams().first().expect("one stream");
-        let extradata = stream.params.extradata.as_ref().expect("flac extradata must be present");
+        let extradata = stream
+            .params
+            .extradata
+            .as_ref()
+            .expect("flac extradata must be present");
         assert!(
             extradata.starts_with(b"fLaC"),
             "must carry this project's canonical fLaC-prefixed shape, not dfLa's own full-box header: {extradata:02x?}"
@@ -811,5 +833,68 @@ mod tests {
         // bits_per_raw_sample=1 a real `ParserProvider` used to report over
         // dfLa's un-converted full-box payload. Not re-asserted here:
         // `vaco-demux-mp4` cannot depend on a `vaco-parse-*` crate (D14.1).
+    }
+
+    /// A trailing zero-size sample -- the standard "clear the subtitle"
+    /// entry many `mov_text` writers (including real ffmpeg's own) append
+    /// after the last real cue, carrying no payload and no reason to be
+    /// handed to a caller as a packet -- is not one.
+    ///
+    /// Regression for a real, measured bug: real ffmpeg 9.0.1's own MP4
+    /// demuxer never surfaces a sample this shaped at all (`ffprobe
+    /// -show_packets` on a real `-c:s mov_text` file reports only the two
+    /// real cues), but this crate's own `next_packet` handed every `stsz`
+    /// entry straight to the caller regardless of size, so `vaco-probe`
+    /// reported a third, phantom zero-duration/zero-length packet a real
+    /// player never sees.
+    #[test]
+    fn a_zero_size_trailing_sample_is_never_handed_to_the_caller() {
+        let sample1 = {
+            let mut s = 11u16.to_be_bytes().to_vec();
+            s.extend_from_slice(b"Hello world");
+            s
+        };
+        let sample2 = {
+            let mut s = 11u16.to_be_bytes().to_vec();
+            s.extend_from_slice(b"Second line");
+            s
+        };
+        // The trailing sample is *not* zero-size: `00 00` is mov_text's
+        // own big-endian `u16` zero-length-string encoding, a real 2-byte
+        // sample -- the same shape measured on a real ffmpeg-produced file.
+        // A fix keyed on size instead of duration would miss this entirely.
+        let trailing = [0x00u8, 0x00];
+        let mut media = sample1.clone();
+        media.extend_from_slice(&sample2);
+        media.extend_from_slice(&trailing);
+
+        let track = TrackSpec {
+            handler: *b"text",
+            timescale: 1000,
+            media_duration: 2000,
+            stbl: StblSpec {
+                stts: vec![(1, 1000), (1, 1000), (1, 0)],
+                stsc: vec![(1, 3, 1)],
+                stsz: vec![
+                    sample1.len() as u32,
+                    sample2.len() as u32,
+                    trailing.len() as u32,
+                ],
+                stco: vec![u32::try_from(MDAT_PAYLOAD).unwrap()],
+                has_stss: false,
+                ..StblSpec::default()
+            },
+            ..TrackSpec::default()
+        };
+        let data = fixture(1000, 2000, &[track], &media);
+        let mut demux = open(data);
+        let packets = drain(&mut demux);
+        assert_eq!(
+            packets.len(),
+            2,
+            "the trailing zero-size sample must not become a third packet: {packets:?}"
+        );
+        assert_eq!(packets[0].4, sample1.len());
+        assert_eq!(packets[1].4, sample2.len());
     }
 }
