@@ -32,3 +32,9 @@ commit = "8f3afd3c"
 cited  = "VSF TR-06-1:2020"
 id     = "vsf-tr-06-1-2020"
 reason = "The author wrote the document's printed title instead of its registered id. `vsf-tr-06-1-2020` is declared in provenance/sources.toml and is the same document; only the citation's form was wrong, exactly as in the 3f927f9d row above. Recorded here rather than by rewriting history, which this shared tree cannot do."
+
+[[correction]]
+commit = "4892996dc29741b88c2e5341eecf60fc2caafff2"
+cited  = "none -- measured directly against real ffmpeg 9.0.1: ffprobe -show_packets skip_samples/discard_padding on libmp3lame files at 16/22.05/24/32/44.1/48 kHz and on -c:a aac MP4 files at 22.05/32/44.1/48 kHz mono and stereo, and full-decode PCM sample counts for AAC, MP3, FLAC and ALAC against the same builds. ISO/IEC 14496-12 §8.6.6 (elst) and §8.6.1.2 (stts) name the boxes read; the trim values are the reference's, measured."
+id     = "ffprobe-gapless-trim-probe"
+reason = "The author described the measurement longhand behind a literal `none`, following other commits in the log that do the same, instead of naming a registered id. The measurement is real and is now declared as ffprobe-gapless-trim-probe in provenance/sources.toml, added in the same change; only the citation's form was wrong. HEAD had already moved on before provenance-check was run, so the commit could not be amended."
