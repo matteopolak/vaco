@@ -65,39 +65,62 @@ const NOT_YET_COVERED: &[(&str, &str)] = &[
     ("text", "text subtitle output; not a pixel/sample stream"),
     ("ttml", "text subtitle output; not a pixel/sample stream"),
     ("webvtt", "text subtitle output; not a pixel/sample stream"),
-    // No local, network-free fixture path found this pass.
+    // No local, network-free fixture path found this pass. r10k, r210,
+    // v210, y41p and avui were in this list until 2026-09-02's second
+    // pass found each a real fixture via MOV instead of a bare rawvideo
+    // dump (see the coordinator's own steer: a missing-encoder or
+    // demux-blocker deferral is a fixture problem worth attacking, not a
+    // fundamental one) -- they are covered now; see
+    // decode-video-r10k-r210.toml, decode-video-v210.toml,
+    // decode-video-y41p.toml and decode-video-avui.toml.
     ("mp1", "ffmpeg 9.0.1 has no mp1 encoder (`-encoders` confirms mp2/mp2fixed only)"),
-    ("qoa", "ffmpeg 9.0.1 demuxes qoa but has no encoder for it (`-encoders` confirms)"),
+    (
+        "qoa",
+        "ffmpeg 9.0.1 demuxes qoa but has no encoder for it (`-encoders` confirms); the \
+         fuzz/corpus/qoa_decode seeds checked 2026-09-02 all carry fuzzer-mutated headers \
+         (sample_rate up to 16777215, channels up to 255) with no genuine content to compare \
+         against a reference decode",
+    ),
     (
         "comfortnoise",
         "ffmpeg's comfortnoise encoder is an RFC 3389 generator, not a content transcode -- \
-         there is no reference content to decode and compare",
+         there is no reference content to decode and compare; the \
+         fuzz/corpus/comfortnoise_parse seeds are bare, headerless payloads for the fuzz \
+         target's own entry point, not files any container demuxer recognises",
     ),
-    ("webp", "this ffmpeg 9.0.1 build has no webp encoder (`-encoders` confirms)"),
-    ("jpegxl", "this ffmpeg 9.0.1 build has no jpegxl encoder (`-encoders` confirms)"),
-    ("theora", "this ffmpeg 9.0.1 build has no theora encoder (`-encoders` confirms)"),
-    ("vc1", "ffmpeg has no vc1/wmv3 encoder (proprietary; `-encoders` confirms decode-only)"),
-    ("v210x", "ffmpeg has no v210x encoder (`-encoders` confirms decode-only)"),
-    ("wrapped_avframe", "internal AVFrame passthrough pseudo-codec; no file format stores it"),
     (
-        "r10k",
-        "ffmpeg's own rawvideo demuxer rejects a freshly-muxed r10k elementary stream \
-         (\"packet too small\") before either decoder is reached; needs more investigation \
-         than a fixture recipe can paper over",
+        "webp",
+        "this ffmpeg 9.0.1 build has no webp encoder (`-encoders` confirms); checked all 41 \
+         fuzz/corpus/webp_decode seeds over 200 bytes on 2026-09-02 as an alternate fixture \
+         source and every one is a fuzzer-mutated file the reference's own decoder also \
+         rejects (\"Decoding error: Invalid data found\") -- not usable as a case comparing \
+         against a working reference decode",
     ),
-    ("r210", "blocked on the same rawvideo-demux sizing issue as r10k"),
-    ("v210", "blocked on the same rawvideo-demux sizing issue as r10k"),
-    ("y41p", "blocked on the same rawvideo-demux sizing issue as r10k"),
+    ("jpegxl", "this ffmpeg 9.0.1 build has neither a jpegxl encoder nor decoder (`-decoders`/`-encoders` confirm) -- no oracle to compare against at all"),
+    (
+        "theora",
+        "this ffmpeg 9.0.1 build has no theora encoder (`-encoders` confirms); \
+         fuzz/corpus/theora_decode holds bare per-packet payloads for the fuzz target's own \
+         entry point (checked 2026-09-02), not a file any Ogg-aware demuxer opens",
+    ),
+    (
+        "vc1",
+        "ffmpeg has no vc1/wmv3 encoder (proprietary; `-encoders` confirms decode-only); \
+         fuzz/corpus/vc1_decode holds bare per-frame payloads for the fuzz target's own entry \
+         point (checked 2026-09-02), not a file any container demuxer opens",
+    ),
+    ("v210x", "ffmpeg has no v210x encoder (`-encoders` confirms decode-only)"),
+    (
+        "wrapped_avframe",
+        "internal AVFrame passthrough pseudo-codec; checked 2026-09-02 that no muxer (mov, \
+         nut, rawvideo, avi) accepts a codec tag for it either -- no file format stores it",
+    ),
     (
         "bitpacked",
-        "the reference decoder itself rejects a round-tripped fixture at the tested \
-         pix_fmt/geometry (\"Invalid data found when processing input\"); needs more \
-         investigation than a fixture recipe can paper over",
-    ),
-    (
-        "avui",
-        "ffmpeg's avui encoder only accepts 720x486/720x576 and needs -strict experimental; \
-         deferred for a follow-up pass rather than a same-day fixture",
+        "checked 2026-09-02 against mov as well as rawvideo: mov's own muxer refuses \
+         (\"Could not find tag for codec bitpacked\") and the rawvideo round trip the \
+         reference decoder itself rejects (\"Invalid data found when processing input\") -- \
+         no container this pass tried stores it",
     ),
 ];
 
