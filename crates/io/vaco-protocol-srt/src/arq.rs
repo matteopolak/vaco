@@ -1,8 +1,8 @@
 //! The ARQ (retransmission) engine: a send-side retransmission buffer and
 //! a receive-side loss-detector/reorder-buffer/TSBPD-ish delivery gate.
 //!
-//! **Sans-io, via an explicit `on_tick`** — `planning/INTERFACE-GAPS.md`
-//! gap 28's addendum: `on_packet`-shaped methods handle network input,
+//! **Sans-io, via an explicit `on_tick`**: `on_packet`-shaped methods handle
+//! network input,
 //! `on_tick(now_ms)` is called by a driver on its own cadence for
 //! timer-driven work (RTO retransmission, delivery-deadline drops, NAK
 //! re-announcement). Neither type here owns a socket or reads a clock.
@@ -26,10 +26,8 @@
 //!
 //! Every constant below is therefore marked `IMPLEMENTATION-DEFINED` at
 //! its declaration, with its own reasoning, rather than left to look like
-//! a spec value — this project has previously carried a plausible-looking
-//! constant for nine rounds because nobody recorded whether it was
-//! measured or guessed (`planning/TECH-DEBT.md`, the MPEG-1 escape-level
-//! sentinel search).
+//! a spec value — an unmarked guess is easy to later mistake for a
+//! verified one.
 //!
 //! **No `LiveCC`/`FileCC` congestion control is implemented, and still is
 //! not** — `draft` §5.1/§5.2 name them but do not give either algorithm in
@@ -37,8 +35,8 @@
 //! exactly the kind of unverifiable-looking-verified constant this
 //! module's own docs just warned about.
 //!
-//! **[`SendWindow`] can, since issue #656, still be given a plain
-//! token-bucket byte-rate ceiling** ([`SendWindow::with_rate_limit`], built
+//! **[`SendWindow`] can still be given a plain token-bucket byte-rate
+//! ceiling** ([`SendWindow::with_rate_limit`], built
 //! on [`crate::pacing::Pacer`]) — deliberately not presented as either
 //! named algorithm, just the bare "do not inject data faster than this
 //! many bytes/sec" property every real deployment over a real,
@@ -82,9 +80,9 @@ struct InFlight {
     last_sent_at_ms: u64,
 }
 
-/// Counters [`SendWindow`] reports, for the statistics surface (#557).
-/// Every field here is this crate's own bookkeeping, not a value read from
-/// or compared against a real peer.
+/// Counters [`SendWindow`] reports, for the statistics surface. Every
+/// field here is this crate's own bookkeeping, not a value read from or
+/// compared against a real peer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct SendStats {
     pub packets_sent: u64,
@@ -98,7 +96,7 @@ pub struct SendWindow {
     buffer: BTreeMap<u32, InFlight>,
     stats: SendStats,
     /// `None` (the default, via `new`) is exactly the old unthrottled
-    /// behaviour. `Some` once `with_rate_limit` attaches a ceiling (#656).
+    /// behaviour. `Some` once `with_rate_limit` attaches a ceiling.
     pacer: Option<Pacer>,
 }
 
@@ -118,8 +116,8 @@ impl SendWindow {
     /// `now_ms`. Not `LiveCC`/`FileCC` (module docs) — a plain token
     /// bucket, present so a caller driving a real, capacity-limited link
     /// has *something* to stop it self-inducing loss by sending faster
-    /// than the link can carry (issue #656), which `SendWindow::new`
-    /// alone gives no way to express.
+    /// than the link can carry, which `SendWindow::new` alone gives no way
+    /// to express.
     #[must_use]
     pub fn with_rate_limit(mut self, bytes_per_sec: u64, now_ms: u64) -> Self {
         self.pacer = Some(Pacer::new(bytes_per_sec, now_ms));
@@ -135,7 +133,7 @@ impl SendWindow {
     /// Whether a *new* data packet of `bytes` may be sent right now under
     /// the attached rate limiter, consuming that budget immediately if so
     /// — always `true` when no limiter is attached, so a caller that never
-    /// opts in sees no behaviour change from before #656.
+    /// opts in sees no behaviour change from the unthrottled default.
     ///
     /// This gates *new* sends only, deliberately: [`Self::on_nak`] and
     /// [`Self::on_tick`]'s RTO path are retransmissions of data already
@@ -243,9 +241,9 @@ pub struct ReceiveTick {
     pub renak: Vec<u32>,
 }
 
-/// Counters [`ReceiveWindow`] reports, for the statistics surface (#557).
-/// Every field here is this crate's own bookkeeping, not a value read from
-/// or compared against a real peer.
+/// Counters [`ReceiveWindow`] reports, for the statistics surface. Every
+/// field here is this crate's own bookkeeping, not a value read from or
+/// compared against a real peer.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReceiveStats {
     pub packets_delivered: u64,
@@ -363,8 +361,8 @@ mod tests {
         assert_eq!(w.in_flight_count(), 2); // 2 and 3 remain
     }
 
-    /// Issue #656: `SendWindow::new` alone must stay exactly as unthrottled
-    /// as it was before rate limiting existed.
+    /// `SendWindow::new` alone must stay exactly as unthrottled as it was
+    /// before rate limiting existed.
     #[test]
     fn send_window_is_unthrottled_without_with_rate_limit() {
         let mut w = SendWindow::new(SendConfig::default());
@@ -373,11 +371,11 @@ mod tests {
         assert!(w.send_permitted(1_000_000, 1_000_000_000));
     }
 
-    /// Issue #656: once a limit is attached, `send_permitted` gates new
-    /// sends to the configured ceiling — this is the property
-    /// `tests/lossy_link.rs` cannot exercise (its own doc names why: a
-    /// simulated lossy-but-instant link never models a shared,
-    /// capacity-limited one a sender's own rate could overwhelm).
+    /// Once a limit is attached, `send_permitted` gates new sends to the
+    /// configured ceiling — this is the property `tests/lossy_link.rs`
+    /// cannot exercise (its own doc names why: a simulated lossy-but-instant
+    /// link never models a shared, capacity-limited one a sender's own rate
+    /// could overwhelm).
     #[test]
     fn send_window_with_a_rate_limit_gates_new_sends_to_the_ceiling() {
         let mut w = SendWindow::new(SendConfig::default()).with_rate_limit(1000, 0);

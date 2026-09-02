@@ -5,51 +5,9 @@
 //!
 //! **This module parses and serializes every field, including the wrapped
 //! key blob, but does not unwrap it.** The actual AES key-unwrap needs the
-//! cipher, and which crate owns `aes`/`ctr` is a deferred D11 question
-//! (`planning/INTERFACE-GAPS.md`, gap 28's crypto-ownership note) —
-//! `#555`'s own scope is the message shape, not the cipher.
-//!
-//! # Layout (`draft` §3.2.2, Figure 10)
-//!
-//! ```text
-//! |S|  V  |   PT  |              Sign             |   Resv1   | KK|
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                              KEKI                             |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |     Cipher    |      Auth     |       SE      |     Resv2     |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |             Resv3             |     SLen/4    |     KLen/4    |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                              Salt                             |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                          Wrapped Key                          |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! ```
-//!
-//! First word, draft-derived widths and values: `S` 1 bit (`0`), `V`
-//! (version) 3 bits (`1`), `PT` (packet type) 4 bits (`2`, "`KMmsg`"),
-//! `1+3+4 = 8`; `Sign` 16 bits (`0x2029`, a fixed magic identifying this as
-//! an SRT KM message); `Resv1` 6 bits (`0`), `KK` 2 bits, `6+2 = 8`;
-//! `8+16+8 = 32`. `KK` reuses the data-packet encryption-key encoding
-//! (`crate::packet::KeyFlag`, minus its `11b`/"control packets only" case,
-//! which here instead means "both the even and odd key are present" —
-//! [`KeyFlags::Both`]).
-//!
-//! Second word: `KEKI` (Key Encrypting Key Index), 32 bits.
-//!
-//! Third word: `Cipher` 8 bits (`0..2`, draft-derived — this crate does not
-//! interpret the value, only frames it), `Auth` 8 bits (`0`), `SE`
-//! (Stream Encapsulation) 8 bits (`2`), `Resv2` 8 bits (`0`).
-//!
-//! Fourth word: `Resv3` 16 bits (`0`), `SLen/4` 8 bits (salt length divided
-//! by 4 — draft-derived value `4`, i.e. a 16-byte salt), `KLen/4` 8 bits
-//! (wrapped key length divided by 4 — draft-derived values `{4,6,8}`, i.e.
-//! 16/24/32-byte AES-128/192/256 keys).
-//!
-//! Then `Salt` (`SLen` bytes) and `Wrapped Key` (the rest of the message —
-//! an RFC 3394 AES-key-wrap blob: an 8-byte integrity check value plus one
-//! or two `KLen`-byte session keys, decomposed by whichever later package
-//! does the actual unwrap, not here).
+//! cipher, and which crate owns `aes`/`ctr` is a deferred question — this
+//! module's scope is the message shape, not the cipher. See [`KmMessage`]
+//! for the wire layout.
 
 use vaco_protocol_core::{ProtocolError, Result};
 
@@ -103,7 +61,46 @@ impl KeyFlags {
     }
 }
 
-/// The KM message, wrapped key left opaque (see module docs).
+/// The KM message, wrapped key left opaque — `draft` §3.2.2, Figure 10:
+///
+/// ```text
+/// |S|  V  |   PT  |              Sign             |   Resv1   | KK|
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                              KEKI                             |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |     Cipher    |      Auth     |       SE      |     Resv2     |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |             Resv3             |     SLen/4    |     KLen/4    |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                              Salt                             |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                          Wrapped Key                          |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+///
+/// First word, draft-derived widths and values: `S` 1 bit (`0`), `V`
+/// (version) 3 bits (`1`), `PT` (packet type) 4 bits (`2`, "`KMmsg`"),
+/// `1+3+4 = 8`; `Sign` 16 bits (`0x2029`, a fixed magic identifying this as
+/// an SRT KM message); `Resv1` 6 bits (`0`), `KK` 2 bits, `6+2 = 8`;
+/// `8+16+8 = 32`. `KK` reuses the data-packet encryption-key encoding
+/// (`crate::packet::KeyFlag`, minus its `11b`/"control packets only" case,
+/// which here instead means "both the even and odd key are present" —
+/// [`KeyFlags::Both`]).
+///
+/// Second word: `KEKI` (Key Encrypting Key Index), 32 bits. Third word:
+/// `Cipher` 8 bits (`0..2`, draft-derived — this crate does not
+/// interpret the value, only frames it), `Auth` 8 bits (`0`), `SE`
+/// (Stream Encapsulation) 8 bits (`2`), `Resv2` 8 bits (`0`).
+///
+/// Fourth word: `Resv3` 16 bits (`0`), `SLen/4` 8 bits (salt length divided
+/// by 4 — draft-derived value `4`, i.e. a 16-byte salt), `KLen/4` 8 bits
+/// (wrapped key length divided by 4 — draft-derived values `{4,6,8}`, i.e.
+/// 16/24/32-byte AES-128/192/256 keys).
+///
+/// Then `Salt` (`SLen` bytes) and `Wrapped Key` (the rest of the message —
+/// an RFC 3394 AES-key-wrap blob: an 8-byte integrity check value plus one
+/// or two `KLen`-byte session keys, decomposed by whichever later package
+/// does the actual unwrap, not here).
 #[derive(Debug, Clone)]
 pub struct KmMessage {
     pub version: u8,
@@ -114,7 +111,8 @@ pub struct KmMessage {
     pub stream_encapsulation: u8,
     /// Salt, `SLen` bytes (a multiple of 4, per `SLen/4`).
     pub salt: Vec<u8>,
-    /// ICV + one or two session keys, undecomposed — see module docs.
+    /// ICV + one or two session keys, undecomposed — see this struct's own
+    /// docs.
     pub wrapped_key: Vec<u8>,
 }
 

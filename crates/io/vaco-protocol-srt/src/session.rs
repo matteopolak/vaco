@@ -2,14 +2,12 @@
 //! summarised (not verbatim ASCII-diagrammed the way `packet.rs`/
 //! `handshake.rs` are) from the fetched IETF datatracker rendering.
 //!
-//! **Sans-io, per `#555`'s own scope** (mirroring `vaco-protocol-rtmp`'s
-//! PR-09a and the plan's description of `srt-protocol`): nothing here owns
-//! a socket or a clock. [`CallerHandshake`]/[`ListenerHandshake`]/
-//! [`RendezvousHandshake`] take "a packet arrived" as input and a caller-
-//! supplied timestamp, and return "send these bytes" / "connected" /
-//! "rejected" as output — a later package (once `planning/INTERFACE-GAPS.md`
-//! gap 28's worker-thread seam is built) drives one of these against a real
-//! socket.
+//! **Sans-io**: nothing here owns a socket or a clock.
+//! [`CallerHandshake`]/[`ListenerHandshake`]/[`RendezvousHandshake`] take "a
+//! packet arrived" as input and a caller-supplied timestamp, and return
+//! "send these bytes" / "connected" / "rejected" as output — a later
+//! package drives one of these against a real socket, once the
+//! worker-thread seam is built.
 //!
 //! # Evidence class of what follows
 //!
@@ -118,10 +116,10 @@ fn hs_extensions_for_request(_params: &HandshakeParams, include_kmreq: bool) -> 
         ext_type: SRT_CMD_HSREQ,
         contents: hsreq.serialize(),
     }));
-    // KMREQ's actual key-material payload is #556/crypto-ownership's job
-    // (see `crate::km`'s module docs); `include_kmreq` is accepted here so
-    // the call sites read correctly once that lands, and is unused until
-    // then rather than half-implemented.
+    // KMREQ's actual key-material payload is deferred (see `crate::km`'s
+    // module docs); `include_kmreq` is accepted here so the call sites read
+    // correctly once that lands, and is unused until then rather than
+    // half-implemented.
     let _ = include_kmreq;
     out
 }

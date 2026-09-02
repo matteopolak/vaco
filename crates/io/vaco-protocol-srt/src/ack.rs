@@ -1,70 +1,11 @@
 //! The ACK and NAK control packets' Control Information Fields —
-//! `draft-sharabayko-srt-01` §3.2.4 and §3.2.5, quoted from the fetched
-//! IETF datatracker rendering (`packet.rs`'s own module docs already cover
-//! the base control frame both of these sit on top of, including that
-//! `Acknowledgement Number`/`Reserved` occupies the base frame's own
-//! `subtype_or_reserved`/`type_specific` slot — that field is a separate
-//! per-ACK-message counter for `ACKACK` correlation, distinct from the
-//! `Last Acknowledged Packet Sequence Number` inside the CIF below).
-//!
-//! # ACK CIF (`draft` §3.2.4, Figure 13), draft-derived layout
-//!
-//! ```text
-//! |            Last Acknowledged Packet Sequence Number           |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                              RTT                              |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                          RTT Variance                         |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                     Available Buffer Size                     |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                     Packets Receiving Rate                    |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                     Estimated Link Capacity                   |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                         Receiving Rate                        |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! ```
-//!
-//! Seven 32-bit words, 28 bytes — the *shape* is draft-derived. **The
-//! values this crate computes for RTT/RTTVar/the three rate fields are
-//! not** — the fetched draft text states this figure's field layout but
-//! not a formula for any of these (no smoothing constant, no sampling
-//! window). `AckStats::placeholder` returns all-zero, documented as
-//! IMPLEMENTATION-DEFINED-AND-UNIMPLEMENTED rather than a guessed
-//! formula: a wrong field *layout* is a wire-compatibility bug a peer
-//! would reject; a wrong but plausible-looking *smoothing constant* is
-//! the kind of thing this project has been burned by before (a formula
-//! that matched at one measured point and was read as authoritative for
-//! nine rounds) — zero is at least honestly not a real measurement,
-//! where a plausible fake number would invite exactly that mistake.
-//!
-//! `draft` §3.2.4 also names Light ACK ("every 64 packets", a
-//! recommendation, draft-derived) and Small ACK, for higher data rates,
-//! without giving either's own CIF shape in the fetched text — not
-//! implemented here; every ACK this module builds is a Full ACK.
-//!
-//! # NAK CIF (`draft` §3.2.5, Figure 14), draft-derived layout
-//!
-//! ```text
-//! |0|                 Lost packet sequence number                 |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |1|         Range of lost packets from sequence number          |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |0|                    Up to sequence number                    |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! ```
-//!
-//! **Range compression (the second/third lines above) is not implemented
-//! here.** The fetched text does not state how a decoder tells the
-//! second word of a range apart from an unrelated single-loss entry
-//! immediately following it other than "the first word's own top bit was
-//! 1", which this module cannot independently confirm without a
-//! reference to test against — getting a *compression* optimisation
-//! wrong would silently corrupt the loss list a peer acts on, for zero
-//! functional benefit over the always-safe alternative. Every NAK this
-//! module builds names each lost sequence number as its own single-entry
-//! word (top bit `0`) — complete and correct, just not maximally compact.
+//! `draft-sharabayko-srt-01` §3.2.4 and §3.2.5. `packet.rs`'s own module
+//! docs cover the base control frame both sit on top of, including that
+//! `Acknowledgement Number`/`Reserved` reuses the base frame's own
+//! `subtype_or_reserved`/`type_specific` slot — a separate per-ACK-message
+//! counter for `ACKACK` correlation, distinct from the
+//! `Last Acknowledged Packet Sequence Number` inside the CIF below. See
+//! [`AckCif`] and [`parse_nak_cif`] for each CIF's own layout.
 
 use vaco_protocol_core::{ProtocolError, Result};
 
@@ -85,7 +26,7 @@ pub const LIGHT_ACK_EVERY_N_PACKETS: u32 = 64;
 /// draft-derived.
 pub const FULL_ACK_INTERVAL_MS: u64 = 10;
 
-/// The stats half of an ACK CIF. See module docs: the field *shape* is
+/// The stats half of an ACK CIF. See [`AckCif`]: the field *shape* is
 /// draft-derived, the values are not (no formula is given), so every
 /// producer in this crate uses [`AckStats::placeholder`] rather than a
 /// hand-tuned guess.
@@ -100,7 +41,7 @@ pub struct AckStats {
 }
 
 impl AckStats {
-    /// All-zero — see module docs for why this is not a guessed formula.
+    /// All-zero — see [`AckCif`] for why this is not a guessed formula.
     #[must_use]
     pub const fn placeholder() -> Self {
         Self {
@@ -114,7 +55,38 @@ impl AckStats {
     }
 }
 
-/// A Full ACK CIF.
+/// A Full ACK CIF (`draft` §3.2.4, Figure 13), draft-derived layout:
+///
+/// ```text
+/// |            Last Acknowledged Packet Sequence Number           |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                              RTT                              |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                          RTT Variance                         |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                     Available Buffer Size                     |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                     Packets Receiving Rate                    |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                     Estimated Link Capacity                   |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                         Receiving Rate                        |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+///
+/// Seven 32-bit words, 28 bytes — the *shape* is draft-derived. **The
+/// values this crate computes for RTT/RTTVar/the three rate fields are
+/// not** — the draft states the layout but no formula for any of these
+/// (no smoothing constant, no sampling window). [`AckStats::placeholder`]
+/// returns all-zero rather than a guessed formula: a wrong *layout* is a
+/// wire-compatibility bug a peer would reject, while a wrong but
+/// plausible-looking *smoothing constant* would look verified when it is
+/// not — zero stays honest about what was never measured.
+///
+/// `draft` §3.2.4 also names Light ACK ("every 64 packets") and Small ACK,
+/// for higher data rates, without giving either's own CIF shape in the
+/// fetched text — not implemented here; every ACK this module builds is a
+/// Full ACK.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AckCif {
     pub last_ack_seq_no: u32,
@@ -157,7 +129,26 @@ impl AckCif {
     }
 }
 
-/// A NAK CIF: single-entry loss list only (see module docs).
+/// A NAK CIF (`draft` §3.2.5, Figure 14), draft-derived layout:
+///
+/// ```text
+/// |0|                 Lost packet sequence number                 |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |1|         Range of lost packets from sequence number          |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |0|                    Up to sequence number                    |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+///
+/// **Range compression (the second/third lines above) is not implemented
+/// here.** The draft does not state how a decoder tells the second word
+/// of a range apart from an unrelated single-loss entry other than "the
+/// first word's own top bit was 1", unconfirmable without a reference to
+/// test against — getting a *compression* optimisation wrong would
+/// silently corrupt the loss list a peer acts on, for zero benefit over
+/// the always-safe alternative. This function names each lost sequence
+/// number as its own single-entry word (top bit `0`): single-entry loss
+/// list only.
 ///
 /// # Errors
 /// [`ProtocolError::Malformed`] if `data`'s length is not a whole number
@@ -165,9 +156,9 @@ impl AckCif {
 /// (a peer using the real reference's own range compression must still be
 /// readable) by treating its own word as one more single-loss entry and
 /// the word after it as another — safe because both words still name real
-/// sequence numbers, even though the range's true, wider meaning is lost;
-/// see module docs for why this crate does not attempt the compressed
-/// encoding itself on write.
+/// sequence numbers, even though the range's true, wider meaning is lost
+/// (see above for why this crate does not attempt the compressed encoding
+/// itself on write).
 pub fn parse_nak_cif(data: &[u8]) -> Result<Vec<u32>> {
     if !data.len().is_multiple_of(4) {
         return Err(malformed("NAK CIF length is not a multiple of 4 bytes"));

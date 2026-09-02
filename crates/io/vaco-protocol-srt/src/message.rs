@@ -1,5 +1,4 @@
-//! The two transmission modes and message reassembly — issue #557's
-//! substantive half.
+//! The two transmission modes and message reassembly.
 //!
 //! # `TransmissionMode`: what the `STREAM` flag actually distinguishes
 //!
@@ -13,20 +12,17 @@
 //! [`crate::arq::ReceiveWindow`] already delivers one (in strictly
 //! increasing sequence order, concatenated). When `STREAM` is **clear**
 //! (the default this module assumes absent other information — SRT's
-//! "live" mode is the more common one for the contribution use case
-//! `planning/18-formats.md` §2.7 names), the connection is
-//! message-oriented: each application-level send is one message,
-//! reassembled from one or more data packets via the [`PacketPosition`]
-//! flag (`packet.rs`, already draft-derived) and `DataPacket::msg_no`,
-//! and delivered to the application as one complete unit — not
-//! byte-by-byte.
+//! "live" mode is the more common one for real-time contribution use
+//! cases), the connection is message-oriented: each application-level send
+//! is one message, reassembled from one or more data packets via the
+//! [`PacketPosition`] flag (`packet.rs`, already draft-derived) and
+//! `DataPacket::msg_no`, delivered as one complete unit, not byte-by-byte.
 //!
-//! **This reading is not independently confirmable without a reference
-//! peer** (the same ceiling named throughout this crate) — it follows
+//! **Not independently confirmable without a reference peer** — it follows
 //! from the flag's own name and from message mode being the only shape
-//! that gives `PacketPosition`/`msg_no` (both already-parsed, draft-derived
-//! fields) a reason to exist at all, since a pure byte stream would not
-//! need them. Stated as an inference, not re-labeled draft-derived.
+//! that gives `PacketPosition`/`msg_no` a reason to exist at all, since a
+//! pure byte stream would not need them. Stated as an inference, not
+//! re-labeled draft-derived.
 //!
 //! # Message reassembly, sans-io
 //!

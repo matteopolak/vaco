@@ -1,4 +1,4 @@
-//! The option surface — issue #557, scoped deliberately narrow.
+//! The option surface, scoped deliberately narrow.
 //!
 //! **This is not an attempt to reconstruct `ffmpeg -h protocol=srt`'s own
 //! option table.** There is no `libsrt`-carrying `ffmpeg` build on this
@@ -16,12 +16,12 @@
 //! from the peer's own `HSREQ`/`HSRSP`, but a caller building the local
 //! side's own handshake needs to state which mode it wants),
 //! [`crate::arq::ReceiveConfig::latency_ms`], [`crate::arq::SendConfig::rto_ms`],
-//! and, since issue #656, an optional
-//! [`crate::pacing::Pacer`] ceiling (`rate_limit_bytes_per_sec`). Nothing
-//! else — a `streamid` or `passphrase` field would be pure surface with
-//! nothing behind it, since `SRT_CMD_SID`'s raw bytes are already
-//! parseable via `handshake::Extension`/`parse_extensions` (#555) but
-//! nothing in this crate interprets its contents as an application-facing
+//! and an optional [`crate::pacing::Pacer`] ceiling
+//! (`rate_limit_bytes_per_sec`). Nothing else — a `streamid` or
+//! `passphrase` field would be pure surface with nothing behind it, since
+//! `SRT_CMD_SID`'s raw bytes are already parseable via
+//! `handshake::Extension`/`parse_extensions` but nothing in this crate
+//! interprets its contents as an application-facing
 //! option yet, and `passphrase`/key-derivation waits on the same
 //! crypto-ownership question `km.rs`'s docs name. `rate_limit_bytes_per_sec`
 //! is `None` by default — matching real SRT's own unbounded-unless-asked
@@ -41,9 +41,9 @@ pub struct SrtOptions {
     pub latency_ms: u64,
     pub rto_ms: u64,
     /// A plain token-bucket byte-rate ceiling for [`crate::arq::SendWindow`]
-    /// (issue #656) — `None` means unthrottled, `arq::SendWindow::new`'s
-    /// own default. Not `LiveCC`/`FileCC`; see `pacing.rs`'s module docs
-    /// for what this is and is not.
+    /// — `None` means unthrottled, `arq::SendWindow::new`'s own default.
+    /// Not `LiveCC`/`FileCC`; see `pacing.rs`'s module docs for what this
+    /// is and is not.
     pub rate_limit_bytes_per_sec: Option<u64>,
 }
 
@@ -51,8 +51,7 @@ impl SrtOptions {
     /// [`TransmissionMode::Message`] (matching this module's own reading of
     /// `STREAM`'s absence as the default, see `message.rs`), this crate's
     /// `IMPLEMENTATION-DEFINED` latency/RTO defaults (`arq.rs`), and no
-    /// rate limit (unthrottled, the behaviour this crate always had before
-    /// #656).
+    /// rate limit (unthrottled, the behaviour this crate always had).
     #[must_use]
     pub const fn new() -> Self {
         Self {

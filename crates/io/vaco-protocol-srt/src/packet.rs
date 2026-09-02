@@ -1,86 +1,8 @@
 //! The SRT common packet header, and the data/control packet framings that
-//! sit on top of it — `draft-sharabayko-srt-01` §3 ("Packet Structure"),
-//! quoted from the fetched IETF datatracker rendering of that section.
-//!
-//! # Common header (`draft` §3, Figure 2)
-//!
-//! ```text
-//!  0                   1                   2                   3
-//!  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
-//! +-+-+-+-+-+-+-+-+-+-+-+-+- SRT Header +-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |F|        (Field meaning depends on the packet type)           |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |          (Field meaning depends on the packet type)           |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                           Timestamp                           |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                     Destination Socket ID                     |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                        Packet Contents                        |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! ```
-//!
-//! `F`: "The data packet has this flag set to '0'. The control packet has
-//! this flag set to '1'." Every parse in this module reads that one bit
-//! first and dispatches on it — nothing else in the header is fixed-shape
-//! across both packet kinds.
-//!
-//! # Data packet (`draft` §3.1, Figure 3)
-//!
-//! ```text
-//! |0|                    Packet Sequence Number                   |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |P P|O|K K|R|                   Message Number                  |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                           Timestamp                           |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                     Destination Socket ID                     |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                              Data                             |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! ```
-//!
-//! Field widths, second word: `PP` 2 bits (packet position: `10` first,
-//! `00` middle, `01` last, `11` a single-packet message), `O` 1 bit (order:
-//! deliver in order when set), `KK` 2 bits (encryption key: `00`
-//! unencrypted, `01` even key, `10` odd key — `11` is reserved for control
-//! packets, per the same field's control-packet meaning below), `R` 1 bit
-//! (retransmitted), `Message Number` 26 bits. `2+1+2+1+26 = 32`.
-//!
-//! # Control packet (`draft` §3.2, Figure 4)
-//!
-//! ```text
-//! |1|         Control Type        |            Subtype            |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                   Type-specific Information                   |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                           Timestamp                           |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                     Destination Socket ID                     |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                   Control Information Field                   |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! ```
-//!
-//! `Control Type` is 15 bits, `Subtype` 16 bits (`1+15+16 = 32`). Per-type
-//! packets reuse "Subtype" and "Type-specific Information" for their own
-//! named fields — ACK's word 1 is its own Acknowledgement Number, `DropReq`'s
-//! is a Message Number, `PeerError`'s is an Error Code — this module keeps
-//! the two raw (`subtype_or_reserved`, `type_specific`) and leaves that
-//! reinterpretation to [`crate::handshake`] and whichever later package
-//! adds ACK/NAK; this package only needs every control packet to parse and
-//! re-serialize without loss, not to act on all of them (`#557`/`#556`'s
-//! job, not this one's).
-//!
-//! Control Type values (`draft` Table 1, all draft-derived):
-//!
-//! | Value | Type | | Value | Type |
-//! |---|---|---|---|---|
-//! | `0x0000` | Handshake | | `0x0005` | Shutdown |
-//! | `0x0001` | KeepAlive | | `0x0006` | AckAck |
-//! | `0x0002` | Ack | | `0x0007` | DropReq |
-//! | `0x0003` | Nak | | `0x0008` | PeerError |
-//! | `0x0004` | CongestionWarning | | `0x7FFF` | UserDefined |
+//! sit on top of it — `draft-sharabayko-srt-01` §3 ("Packet Structure").
+//! See [`is_control_packet`] for the common header's `F` flag,
+//! [`DataPacket`] for the data packet layout, and [`ControlPacket`] /
+//! [`ControlType`] for the control packet layout and type table.
 
 use vaco_limits::Budget;
 use vaco_protocol_core::{ProtocolError, Result};
@@ -94,15 +16,43 @@ pub(crate) fn malformed(detail: &'static str) -> ProtocolError {
     }
 }
 
-/// The one bit that decides everything else about how a packet parses.
+/// The one bit that decides everything else about how a packet parses —
+/// `draft` §3, Figure 2's `F` field, draft-derived:
 ///
-/// Draft-derived: `draft` §3, Figure 2's `F` field.
+/// ```text
+///  0                   1                   2                   3
+///  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
+/// +-+-+-+-+-+-+-+-+-+-+-+-+- SRT Header +-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |F|        (Field meaning depends on the packet type)           |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |          (Field meaning depends on the packet type)           |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                           Timestamp                           |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                     Destination Socket ID                     |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                        Packet Contents                        |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+///
+/// `F`: "The data packet has this flag set to '0'. The control packet has
+/// this flag set to '1'." Every parse in this module reads that one bit
+/// first and dispatches on it — nothing else in the header is fixed-shape
+/// across both packet kinds.
 #[must_use]
 pub fn is_control_packet(first_word: u32) -> bool {
     first_word & 0x8000_0000 != 0
 }
 
-/// `draft` Table 1 — draft-derived.
+/// `draft` Table 1 — draft-derived:
+///
+/// | Value | Type | | Value | Type |
+/// |---|---|---|---|---|
+/// | `0x0000` | Handshake | | `0x0005` | Shutdown |
+/// | `0x0001` | KeepAlive | | `0x0006` | AckAck |
+/// | `0x0002` | Ack | | `0x0007` | DropReq |
+/// | `0x0003` | Nak | | `0x0008` | PeerError |
+/// | `0x0004` | CongestionWarning | | `0x7FFF` | UserDefined |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ControlType {
@@ -222,12 +172,32 @@ impl KeyFlag {
     }
 }
 
-/// One data packet, header fields plus payload — `draft` §3.1.
+/// One data packet, header fields plus payload — `draft` §3.1, Figure 3:
+///
+/// ```text
+/// |0|                    Packet Sequence Number                   |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |P P|O|K K|R|                   Message Number                  |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                           Timestamp                           |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                     Destination Socket ID                     |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                              Data                             |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+///
+/// Field widths, second word: `PP` 2 bits (packet position: `10` first,
+/// `00` middle, `01` last, `11` a single-packet message), `O` 1 bit (order:
+/// deliver in order when set), `KK` 2 bits (encryption key: `00`
+/// unencrypted, `01` even key, `10` odd key — `11` is reserved for control
+/// packets), `R` 1 bit (retransmitted), `Message Number` 26 bits.
+/// `2+1+2+1+26 = 32`.
 #[derive(Debug, Clone)]
 pub struct DataPacket {
     /// 31 bits wide on the wire; stored widened. Wraps per `draft`'s own
-    /// sequence-number arithmetic (not implemented here — #556's ARQ owns
-    /// wraparound comparison).
+    /// sequence-number arithmetic (not implemented here — `arq`'s
+    /// [`crate::arq::ReceiveWindow`] owns wraparound comparison).
     pub seq_no: u32,
     pub position: PacketPosition,
     pub in_order: bool,

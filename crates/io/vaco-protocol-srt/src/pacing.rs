@@ -1,5 +1,5 @@
 //! A token-bucket pacer capping outgoing bytes/sec to a caller-configured
-//! ceiling (issue #656).
+//! ceiling.
 //!
 //! **Not `LiveCC`/`FileCC`, and not claimed to be.** `draft-sharabayko-srt-01`
 //! §5.1/§5.2 name SRT's own congestion-control algorithms but, checked
@@ -15,10 +15,9 @@
 //! capacity-limited link needs regardless of which named algorithm (if
 //! any) sits on top of it — something that stops a sender from injecting
 //! data faster than a configured ceiling and self-inducing loss purely
-//! from link saturation (`planning/INTERFACE-GAPS.md` gap 28's own
-//! framing: this crate is sans-io, so nothing here owns a socket or a
-//! clock; a caller supplies `now_ms` the same way it drives
-//! [`crate::arq::SendWindow::on_tick`]).
+//! from link saturation. This crate is sans-io, so nothing here owns a
+//! socket or a clock; a caller supplies `now_ms` the same way it drives
+//! [`crate::arq::SendWindow::on_tick`].
 //!
 //! [`Pacer`] is deliberately not wired into [`crate::arq::SendWindow`]
 //! automatically — a caller that never asks for a limit

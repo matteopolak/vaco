@@ -1,67 +1,13 @@
 //! The Handshake control packet's Control Information Field (CIF), and its
 //! HSREQ/HSRSP extension blocks — `draft-sharabayko-srt-01` §3.2.1 and
-//! §3.2.1.1, quoted from the fetched IETF datatracker rendering.
-//!
-//! # Fixed CIF (`draft` §3.2.1, Figure 5), 48 bytes before any extension
-//!
-//! ```text
-//! |                            Version                            |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |        Encryption Field       |        Extension Field        |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                 Initial Packet Sequence Number                |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                 Maximum Transmission Unit Size                |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                    Maximum Flow Window Size                   |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                         Handshake Type                        |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                         SRT Socket ID                         |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                           SYN Cookie                          |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                        Peer IP Address                        |  (128 bits)
-//! +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
-//! |         Extension Type        |        Extension Length       |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                       Extension Contents                      |
-//! +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
-//! ```
+//! §3.2.1.1. See [`HandshakeCif`] for the fixed CIF layout,
+//! [`HandshakeType`] for the Handshake Type encoding, and [`HsReqBody`]
+//! for the HSREQ/HSRSP extension.
 //!
 //! `Extension Length` is "the length of the Extension Contents field in
 //! four-byte blocks" — every extension body is therefore a multiple of 4
 //! bytes by construction, checked in [`parse_extensions`] rather than
 //! assumed.
-//!
-//! # Handshake Type (`draft` Table 4) — draft-derived
-//!
-//! | Value | Meaning |
-//! |---|---|
-//! | `0x00000000` | WAVEAHAND (rendezvous induction) |
-//! | `0x00000001` | INDUCTION |
-//! | `0xFFFFFFFD` | DONE |
-//! | `0xFFFFFFFE` | AGREEMENT |
-//! | `0xFFFFFFFF` | CONCLUSION |
-//! | `1000..=1015` | a rejection reason (`draft` Table 7) sent *as* the
-//! Handshake Type field of a otherwise-CONCLUSION-shaped response |
-//!
-//! # HSREQ/HSRSP extension (`draft` §3.2.1.1.1, Figure 6)
-//!
-//! ```text
-//! |                          SRT Version                          |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |                           SRT Flags                           |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! |      Receiver TSBPD Delay     |       Sender TSBPD Delay      |
-//! +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//! ```
-//!
-//! 12 bytes = 3 four-byte blocks, matching `SRT_CMD_HSREQ`/`SRT_CMD_HSRSP`'s
-//! own `Extension Length` of 3. `SRT Flags` bit values, `draft` Table 6:
-//! `TSBPDSND 0x01`, `TSBPDRCV 0x02`, `CRYPT 0x04`, `TLPKTDROP 0x08`,
-//! `PERIODICNAK 0x10`, `REXMITFLG 0x20`, `STREAM 0x40`, `PACKET_FILTER
-//! 0x80`.
 
 use vaco_protocol_core::{ProtocolError, Result};
 
@@ -153,7 +99,18 @@ impl RejectReason {
 }
 
 /// A Handshake CIF's `Handshake Type` field, covering both the five named
-/// states and the rejection-reason encoding.
+/// states and the rejection-reason encoding (`draft` Table 4,
+/// draft-derived):
+///
+/// | Value | Meaning |
+/// |---|---|
+/// | `0x00000000` | WAVEAHAND (rendezvous induction) |
+/// | `0x00000001` | INDUCTION |
+/// | `0xFFFFFFFD` | DONE |
+/// | `0xFFFFFFFE` | AGREEMENT |
+/// | `0xFFFFFFFF` | CONCLUSION |
+/// | `1000..=1015` | a rejection reason (`draft` Table 7) sent *as* the
+/// Handshake Type field of a otherwise-CONCLUSION-shaped response |
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HandshakeType {
     WaveAHand,
@@ -261,7 +218,33 @@ pub mod srt_flags {
     pub const PACKET_FILTER: u32 = 0x0000_0080;
 }
 
-/// The fixed 48-byte body of a Handshake CIF, before any extensions.
+/// The fixed 48-byte body of a Handshake CIF, before any extensions
+/// (`draft` §3.2.1, Figure 5):
+///
+/// ```text
+/// |                            Version                            |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |        Encryption Field       |        Extension Field        |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                 Initial Packet Sequence Number                |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                 Maximum Transmission Unit Size                |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                    Maximum Flow Window Size                   |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                         Handshake Type                        |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                         SRT Socket ID                         |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                           SYN Cookie                          |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                        Peer IP Address                        |  (128 bits)
+/// +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+/// |         Extension Type        |        Extension Length       |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                       Extension Contents                      |
+/// +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
+/// ```
 #[derive(Debug, Clone, Copy)]
 pub struct HandshakeCif {
     pub version: u32,
@@ -392,7 +375,22 @@ pub fn serialize_extension(ext: &Extension) -> Vec<u8> {
     out
 }
 
-/// The HSREQ/HSRSP extension body — `draft` §3.2.1.1.1, Figure 6.
+/// The HSREQ/HSRSP extension body — `draft` §3.2.1.1.1, Figure 6:
+///
+/// ```text
+/// |                          SRT Version                          |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |                           SRT Flags                           |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// |      Receiver TSBPD Delay     |       Sender TSBPD Delay      |
+/// +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+/// ```
+///
+/// 12 bytes = 3 four-byte blocks, matching `SRT_CMD_HSREQ`/`SRT_CMD_HSRSP`'s
+/// own `Extension Length` of 3. `SRT Flags` bit values, `draft` Table 6:
+/// `TSBPDSND 0x01`, `TSBPDRCV 0x02`, `CRYPT 0x04`, `TLPKTDROP 0x08`,
+/// `PERIODICNAK 0x10`, `REXMITFLG 0x20`, `STREAM 0x40`, `PACKET_FILTER
+/// 0x80`.
 #[derive(Debug, Clone, Copy)]
 pub struct HsReqBody {
     pub srt_version: u32,
