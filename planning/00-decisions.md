@@ -1524,3 +1524,78 @@ It does **not** license divergence in decoded output. Byte-exactness against
 ffmpeg on stock encoder input is the hardest-won property in this repository
 and is not a simplification target. Nor does it relax `#![forbid(unsafe_code)]`
 (D2), the clean room, patent gating, or MIT-only licensing.
+
+## D24 — Delete tests that cannot fail, and comments that say what the code says (2026-09-01, owner)
+
+The owner's ruling, verbatim:
+
+> also trim down on useless tests - they just eat up compile time and run time
+> for tests. for example, i saw a test that just asserted a string was included
+> in some source file (useless). remove other tests that dont test real
+> functionality or over-test things. we want to catch regressions - if something
+> isnt going to realistically break, then delete the test
+>
+> and trim down on excessive documentation -- theres way too much. comments are
+> too verbose, the docs/ are too verbose and too low-level. comments should be
+> brief and explain somethign. that isnt obvious (otherwise, code should always
+> be self-documenting)
+
+### The measured position
+
+    Rust source        677,924 lines
+    comment lines      147,905      -- 21.8% of the codebase
+    docs/               55,041 lines
+    planning/           55,863 lines
+    #[test]              8,725
+    comment-check        1,618 violations
+
+### Tests
+
+The purpose of a test is to **catch a regression**. If a change that would break
+it is not a change anyone would plausibly make, the test costs compile time and
+run time and buys nothing.
+
+Delete:
+- tests asserting that a string appears in a source file, or that a comment or
+  doc says something;
+- tests restating a constant back to itself;
+- tests that exercise a path already covered exhaustively by a property test or
+  a differential test against ffmpeg;
+- near-duplicate cases differing only in an argument that changes nothing about
+  which branch runs.
+
+Keep, and do not let anyone trim:
+- differential tests against ffmpeg, JM, HM, `libvpx` or the `alac` crate — the
+  external oracles are what catch the bugs that matter here, and self-consistent
+  code agreeing only with itself has been the defect of the day, repeatedly;
+- property and round-trip tests over a domain;
+- regression tests pinning a specific defect, **with the defect named**;
+- fuzz targets and their seeds.
+
+The rule of thumb: a test earns its place if you can name the bug it would
+catch. If naming it is hard, delete it.
+
+### Comments and documentation
+
+Comments explain what is **not obvious**: why a constant has that value, which
+clause a rule comes from, what a measurement showed, why an approach that looks
+better was rejected. Code that needs a comment to say *what* it does should be
+rewritten instead.
+
+Keep public API documentation — rustdoc on public items, usage examples, the
+short "what is this crate" header. Those are read by people who are not reading
+the source.
+
+Cut: narration of the next line, restatements of a function's own name,
+tutorial-length module headers, and `docs/` pages that walk through
+implementation detail a reader can get from the code. `docs/` should say what a
+component is, how it fits, and how to change it safely — not re-describe it line
+by line.
+
+Note `comment-check` already reports 1,618 violations, largely comments citing
+`planning/` paths that go stale on renumbering. Those are the easy first pass.
+
+### Applies going forward
+
+Every agent brief carries this from now on. Write the comment you would want to
+find in six months, and not one line more.
