@@ -20,3 +20,9 @@ commit = "3f927f9dcdcaddb1903261f0f7e09d1234309b17"
 cited  = "ffprobe -bitexact -show_entries stream=profile on H.264/AAC/VP9/AV1"
 id     = "ffprobe-codec-identity-probe"
 reason = "The author wrote the probe out longhand instead of naming its registered id. The measurement is real and is exactly what ffprobe-codec-identity-probe covers; only the citation's form was wrong. Caught after the commit was pushed and built on."
+
+[[correction]]
+commit = "9a35fcc5207029619af606bb7ec0bf16b4fa3ca5"
+cited  = "qoa-specification-1.0, file header and frame layout"
+id     = "qoa-specification-1.0"
+reason = "The trailer put a comma directly after the id with no space (`qoa-specification-1.0, file header and frame layout`), and the checker takes everything up to the first whitespace as the id token — so the token it extracted was `qoa-specification-1.0,`, comma included, which does not match the registered id. The source itself (qoa-specification-1.0) is registered in provenance/sources.toml and was correct; only the trailer's punctuation was wrong. Caught by provenance-check after the commit was pushed."
