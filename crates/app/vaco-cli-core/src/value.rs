@@ -20,7 +20,7 @@
 //!
 //! | Route | Options |
 //! |---|---|
-//! | implemented as an `AVOption` rather than a table option | `cpucount`, `cpuflags`, `abort_on`, `profile`, `discard`, `disposition`, `apply_cropping` |
+//! | the *reference* parses it as an `AVOption` rather than a table option (a fact about ffmpeg 8.1's own grammar routing, not a claim about which of these `vaco` has implemented -- several are still refused, see `vaco-cli`'s `refuse_unimplemented_options`) | `cpucount`, `cpuflags`, `abort_on`, `profile`, `discard`, `disposition`, `apply_cropping` |
 //! | the ratio grammar | `aspect`, `time_base` |
 //! | a codec option reached by name | `b`, `ab`, and every component option (`-crf`, …) |
 //!
