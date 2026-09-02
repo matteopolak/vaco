@@ -1025,3 +1025,28 @@ be read as making `recon` dispatch-ready on its own — the coordinator-
 mediated question above is real, separate, unresolved work that belongs
 to step 4, named here so it is found by reading rather than by writing
 dispatch code against an assumption that turns out to be wrong.
+
+**Resolved.** The coordinator's own answer: don't share the writer at
+all. No worker should hold a `PictureWriter` to the whole picture — apply
+the same owned-`current`/`RowPublish`-`published` shape the other three
+structures already prove, so nothing ever needs `&mut self` on a
+structure two workers share, and the constraint above never binds. Two
+reasons this is right rather than merely convenient: a published tile is
+immutable forever, which is exactly what lets a reader on row `r + 1`
+trust what it sees from row `r` without a lock — handing multiple
+workers mutable access to one writer would break precisely that
+invariant; and the one operation that genuinely needs whole-picture
+mutable access (deblock/SAO modifying already-reconstructed pixels) is
+already outside the concurrent region, resolved in Stage 1 by
+`materialize_into`'s one-time hand-off to a plain `Picture` before the
+loop filters run. `ReconPlane` rebuilt on this shape in commit `13c3d80`
+(`planning/E2E-GAPS.md` §47): `TileBuffer`, a plain owned `Vec<u8>` with
+no shared writer behind it, replaces every `PictureWriter`/`PictureRef`
+call; `vaco_codec_core::picture` is no longer a dependency of this type at
+all. Measured (this touches the actual per-pixel hot path): CPU-seconds
+median 0.951x, mean 0.966x — clears the gate with a genuine improvement,
+not merely no regression, plausible given the guard-row padding and
+`vaco_codec_core::picture`'s own bookkeeping this removed. The "worker
+genuinely needs to read another worker's unpublished data" case that
+would have meant the wavefront dependency is wider than the measured
+one-CTU-row lag did not arise while building this.

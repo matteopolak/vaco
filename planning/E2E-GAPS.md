@@ -3626,3 +3626,85 @@ a same-session speedup ratio against `ffmpeg`) -- none of it started.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 47. HEVC B4 Stage 2b: `ReconPlane` rebuilt on owned buffer + `RowPublish` -- don't share the writer
+
+The coordinator's own answer to the open question `planning/E2E-GAPS.md`
+(via `docs/codec/hevc-wavefront-threading.md`'s "`PictureWriter` is
+single-writer today" finding) left unresolved: don't share the writer at
+all. `PictureWriter::tile_mut`/`publish_tile` both require `&mut self`,
+fine for one worker checking out tiles in sequence but no shape for N
+workers each wanting a different tile concurrently -- Rust's own borrow
+checker forbids two live `&mut` borrows of the same `PictureWriter`
+regardless of which tiles they would touch. `ReconPlane` (commit
+`13c3d80`) is rebuilt on the shape already proven three times in step 1
+(`EdgeMarks`/`CuGrid`/`SaoParamsGrid`, ss41-43): `current` owned outright
+by whoever is filling it, `published` the `RowPublish` board everyone
+reads.
+
+**What changed**: `TileBuffer` (new, private) is a plain `Vec<u8>` tile
+buffer with no shared writer behind it -- nothing for two workers to race
+over or borrow-check against. `current` is now one owned `TileBuffer`
+instead of a checked-out `PictureWriter` band; `begin_ctu` allocates a
+fresh one sized to that tile's real dimensions (`ctb_size` square except
+at the picture's right/bottom edge); the walk writes into it with
+ordinary indexing; `publish_ctu` hands it to `shared.published:
+RowPublish<TileBuffer>` (indexed by raster CTU address) via
+`std::mem::take` -- a move, not a lock. The `single_column` special case
+`vaco_codec_core::picture`'s own tile API forced (`publish_tile`/
+`wait_tile` refuse a single-column plane by name) is gone entirely --
+`RowPublish` has no such restriction, so every picture width now uses the
+same code path. This removes `ReconPlane`'s whole dependency on
+`vaco_codec_core::picture` (all now-unused imports dropped) and one
+genuinely dead method (`dims()`, only ever needed by the old
+`materialize_into`'s tile-clamping logic `TileBuffer`'s own per-tile w/h
+makes unnecessary).
+
+**Budget accounting**: one upfront `Budget::charge` per plane at
+construction (matching `ProgressPicture::allocate`'s own single charge at
+this point), not `Budget::alloc`, since nothing needs bytes yet -- each
+tile's own `Vec<u8>` is allocated in `begin_ctu` as the walk reaches it,
+the same incremental-charge shape `CuGrid`'s own doc already explains.
+Never released, matching `ReconPicture`'s existing (imperfect, pre-
+existing, out of this pass's scope) charge lifetime exactly. Charges
+strictly less than the old row-banded single-column path could (no
+guard-row padding this design has no use for), never more -- no fixture
+that passed `Budget`'s caps before can fail them now.
+
+**No call site outside `framebuf.rs` changed**: `ctu.rs`'s
+`write_pred_block`/`write_block` and `intra_pred::build_reference_line`
+only ever used `write_row`/`mark_row_ready`/`get`/`is_ready`, all
+preserved with identical signatures.
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (73 unit + 6 integration
+tests, unchanged) and `cargo clippy -p vaco-codec-hevc --lib --tests -- -D
+warnings` both clean with zero warnings (no dead code, no unused
+imports). `cargo xtask unsafe-audit` clean. Against `hevc_1080p.mp4`:
+`vaco -threads 1` before, after, and `ffmpeg`'s own decode all produced
+the identical sha256 (unchanged since ss39). The 300x500
+partial-CTU-column fixture (a genuine partial-edge-tile exercise both
+directions) still matched. `tests/flat.rs`'s 64x64 fixture (exactly one
+CTU square, `n_row_bands == n_col_bands == 1`) exercises the now-unified,
+formerly-`single_column`-special-cased path directly.
+
+**Serial cost, on the actual per-pixel hot path -- the most performance-
+sensitive change in this whole item**: first attempt showed two wildly
+contaminated rounds (baseline wall 37.1s/29.5s against a ~17s norm,
+another process's load spiking specifically during those windows) --
+discarded rather than kept despite the contamination happening to favour
+the expected direction, and redone. Clean result: six rounds, isolated
+worktrees for `9eef547` (baseline) and `13c3d80` (candidate),
+`hevc_1080p.mp4`, `-threads 1`, five decodes per round per binary. Load
+average 13.57-14.31, so CPU-seconds governs: per-round ratio 0.941, 0.957,
+0.989, 1.030, 0.945, 0.933 -- median **0.951x**, mean **0.966x**, candidate
+at or below baseline in 5 of 6 rounds. Clears the gate with a genuine,
+not merely noise-shaped, improvement -- plausible given the removed
+guard-row padding and `vaco_codec_core::picture`'s own bookkeeping traded
+for a plain owned `Vec<u8>` and this crate's simpler `RowPublish`.
+
+**Not done in this section**: `Arc`-wrapping `CtxShared`, a per-worker-
+owned per-row-exclusive `Ctx`, and real thread dispatch (step 4) --
+step 4's own remaining work.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.
