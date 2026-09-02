@@ -2041,3 +2041,43 @@ What actually works, in order of preference:
 Note the index is shared too, so `git add` then a bare `git commit` is not a
 fix — it merely moves the race one step earlier. There is no command that makes
 concurrent edits to the same file safe. Only ownership does.
+
+## The oracle is ffmpeg 9.0.1; the written record says 8.1
+
+`provenance/sources.toml` records the `ffmpeg-*-probe` sources as "observed
+output of ... **ffmpeg 8.1**", and `vaco-conformance`'s normalisation rules
+carry `OBSERVED (ffmpeg 8.1)` comments justifying specific behaviours. The
+binary actually installed — and used by every agent and every measurement in
+this session — is:
+
+    /opt/homebrew/bin/ffmpeg -> ../Cellar/ffmpeg/9.0.1_1/bin/ffmpeg
+    ffmpeg version 9.0.1
+
+So the written provenance and the live oracle disagree by a major version.
+This surfaced when an agent's fresh `mvhd.timescale` measurement contradicted
+an existing in-tree citation to 8.1, and it correctly declined to "fix" the
+code against a number the pinned gate might not agree with.
+
+**Which claims this does and does not touch:**
+
+- **Decode byte-exactness is unaffected.** A conformant H.264/HEVC/VP8 decoder
+  produces bit-identical output by specification; that is the whole premise of
+  those standards, and it does not vary by decoder version. Every "byte-exact
+  against ffmpeg" result recorded today stands.
+- **Probe, mux, remux and format-metadata comparisons are version-sensitive.**
+  Field naming, default muxer behaviour, timescale choices and `-show_*`
+  output all move between major versions. Any such comparison recorded against
+  "ffmpeg" without a version is ambiguous, and any that cites 8.1 while having
+  been measured on 9.0.1 is simply wrong about its own provenance.
+
+**The rule from here**: state the ffmpeg version alongside every
+format-level differential result — `ffmpeg -version | head -1` costs nothing —
+and do not change code to match a measurement whose oracle version differs
+from the one the gate pins. An agent that cannot resolve which version is
+authoritative should say so and leave the code alone, which is what happened
+here and was the right call.
+
+Resolving the drift properly means either re-deriving the `ffmpeg-*-probe`
+provenance records against 9.0.1 and updating the `OBSERVED (8.1)` comments,
+or installing 8.1 alongside and pointing the gate at it. That is an owner
+decision, not an agent's.
