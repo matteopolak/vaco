@@ -21,6 +21,7 @@ smallvec.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+vaco-pool = { path = "../../model/vaco-pool" }
 
 [lints]
 workspace = true

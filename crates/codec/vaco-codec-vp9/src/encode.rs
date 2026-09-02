@@ -749,6 +749,33 @@ fn frame_dims(frame: &Frame) -> Result<(u32, u32)> {
     }
 }
 
+/// MP4's `vpcC` (`VPCodecConfigurationRecord`, the `WebM` Project's ISOBMFF
+/// binding for VP8/VP9) for this encoder's fixed output shape.
+///
+/// A real record, not a placeholder: `accepted_pix_fmts` above is always
+/// exactly `Yuv420p`, so profile/bit-depth/chroma-subsampling are known at
+/// construction, before a single frame is sent -- exactly what
+/// `Encoder::extradata`'s own doc requires ("meaningful... before the
+/// first `send_frame` call, at the point `Muxer::add_stream` needs the
+/// answer"). Layout measured against a real `ffmpeg -c:v libvpx-vp9 -f
+/// mp4` fixture's own `vpcC` payload
+/// (`vaco-parse-vpx::vpcc::VpCodecConfigurationRecord`'s own module doc
+/// has the full hex dump this mirrors): `01 00 00 00` (`FullBox`
+/// version=1/flags=0) `00` (profile 0 -- this encoder's own 8-bit 4:2:0
+/// output) `00` (level: unset/not computed, no rate-control-derived level
+/// exists here to report) `82` (bitDepth=8, chromaSubsampling=1 i.e.
+/// 4:2:0, fullRange=0, packed per the `WebM` Project's own bitfield layout)
+/// `02 02 02` (colourPrimaries/transferCharacteristics/matrixCoefficients
+/// = 2, "unspecified", since this encoder carries no colour metadata of
+/// its own) `00 00` (codecIntializationDataSize, always 0 -- VP8/VP9
+/// never populate it).
+///
+/// Deliberately not shared with `vaco-parse-vpx::vpcc` (which only
+/// implements the read side today): duplicating twelve fixed bytes is
+/// cheaper and safer right now than adding a write-side function to a
+/// crate under another agent's active fixed-offset-read sweep.
+const VPCC_RECORD: [u8; 12] = [1, 0, 0, 0, 0, 0, 0x82, 2, 2, 2, 0, 0];
+
 impl Encoder for Vp9Encoder {
     fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
         match self.machine.accept(frame.is_none())? {
@@ -792,6 +819,10 @@ impl Encoder for Vp9Encoder {
 
     fn accepted_pix_fmts(&self) -> &'static [PixFmt] {
         &[PixFmt::Yuv420p]
+    }
+
+    fn extradata(&self) -> Option<Vec<u8>> {
+        Some(VPCC_RECORD.to_vec())
     }
 }
 
@@ -1009,5 +1040,26 @@ mod tests {
         enc.send_frame(Some(&second)).expect("send");
         let p1 = enc.receive_packet().expect("packet");
         assert_eq!(p1.duration, vaco_core::Duration::from_micros(16_683));
+    }
+
+    /// The bug this closes: `Vp9Encoder` had no `extradata()` override at
+    /// all, so `vaco-mux-mp4`'s `vpcC` box was built from an empty
+    /// `CodecParameters::extradata` -- a syntactically present but
+    /// zero-length `VPCodecConfigurationRecord`, which `ffmpeg` refused
+    /// outright ("Empty VP Codec Configuration box") the moment the
+    /// `extract_extradata`-forced-on-every-codec bug (fixed separately in
+    /// `vaco-format-core::mux::global_header_action`) stopped masking it
+    /// with an earlier, unrelated error. `accepted_pix_fmts` is always
+    /// `Yuv420p`, so the whole record is knowable before the first frame,
+    /// matching `Encoder::extradata`'s own contract.
+    #[test]
+    fn extradata_is_a_real_twelve_byte_vpcc_record_before_any_frame_is_sent() {
+        let enc = Vp9Encoder::new(Limits::permissive());
+        let extradata = enc.extradata().expect("vp9 must supply a vpcC record");
+        assert_eq!(extradata.len(), 12, "FullBox header + 8 fixed vpcC fields");
+        assert_eq!(&extradata[..4], &[1, 0, 0, 0], "version=1, flags=0");
+        assert_eq!(extradata[4], 0, "profile 0");
+        assert_eq!(extradata[6], 0x82, "bitDepth=8, chromaSubsampling=1 (4:2:0), fullRange=0");
+        assert_eq!(&extradata[10..12], &[0, 0], "codecIntializationDataSize");
     }
 }

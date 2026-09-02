@@ -91,7 +91,7 @@ mod rbsp;
 mod scan;
 
 pub use convert::{annexb_to_length_prefixed, length_prefixed_to_annexb};
-pub use extradata::{assemble_extradata, is_parameter_set, parameter_sets};
+pub use extradata::{assemble_extradata, header_kind_for, is_parameter_set, parameter_sets};
 pub use framing::{Framing, LengthSize, Nal, NalUnits, units};
 pub use header::{HeaderKind, NalHeader};
 pub use rbsp::{RbspBuf, escape_into};

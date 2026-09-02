@@ -1398,6 +1398,21 @@ impl std::fmt::Debug for Vp8Encoder {
 /// `[0.1, 128.0]` default `qscale` span.
 const DEFAULT_CONSTANT_QSCALE: f64 = 6.0;
 
+/// MP4's `vpcC` (`VPCodecConfigurationRecord`, the `WebM` Project's ISOBMFF
+/// binding for VP8/VP9) for this encoder's fixed output shape.
+///
+/// See `vaco-codec-vp9::encode::VPCC_RECORD`'s own doc for the full field
+/// derivation and the real `ffmpeg -c:v libvpx-vp9 -f mp4` fixture this
+/// layout was measured against -- VP8 shares the identical record shape
+/// (`accepted_pix_fmts` below is the same fixed `Yuv420p`, so profile 0 /
+/// 8-bit / 4:2:0 / unspecified colour applies unchanged). `ffmpeg`'s own
+/// `mp4` muxer refuses to carry VP8 at all (`Could not find tag for codec
+/// vp8 in stream #0, codec not currently supported in container`,
+/// measured against `ffmpeg 9.0.1`), so there is no equivalent real VP8
+/// fixture to measure independently; the VP9 one is the best available
+/// evidence for the shared record shape.
+const VPCC_RECORD: [u8; 12] = [1, 0, 0, 0, 0, 0, 0x82, 2, 2, 2, 0, 0];
+
 impl Vp8Encoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
@@ -1469,6 +1484,10 @@ impl Encoder for Vp8Encoder {
 
     fn accepted_pix_fmts(&self) -> &'static [PixFmt] {
         &[PixFmt::Yuv420p]
+    }
+
+    fn extradata(&self) -> Option<Vec<u8>> {
+        Some(VPCC_RECORD.to_vec())
     }
 
     /// The channel the module doc above was written waiting for: `"b"` (the
@@ -1670,6 +1689,25 @@ mod tests {
         enc.send_frame(Some(&second)).expect("send");
         let p1 = enc.receive_packet().expect("packet");
         assert_eq!(p1.duration, vaco_core::Duration::from_micros(16_683));
+    }
+
+    /// The bug this closes: `Vp8Encoder` had no `extradata()` override at
+    /// all, so `vaco-mux-mp4`'s `vpcC` box was built from an empty
+    /// `CodecParameters::extradata` -- a syntactically present but
+    /// zero-length `VPCodecConfigurationRecord`, which a real decoder
+    /// (measured on `Vp9Encoder`'s side against `ffmpeg`: "Empty VP Codec
+    /// Configuration box") refuses outright. `accepted_pix_fmts` is always
+    /// `Yuv420p`, so the whole record is knowable before the first frame,
+    /// matching `Encoder::extradata`'s own contract.
+    #[test]
+    fn extradata_is_a_real_twelve_byte_vpcc_record_before_any_frame_is_sent() {
+        let enc = Vp8Encoder::new(Limits::permissive());
+        let extradata = enc.extradata().expect("vp8 must supply a vpcC record");
+        assert_eq!(extradata.len(), 12, "FullBox header + 8 fixed vpcC fields");
+        assert_eq!(&extradata[..4], &[1, 0, 0, 0], "version=1, flags=0");
+        assert_eq!(extradata[4], 0, "profile 0");
+        assert_eq!(extradata[6], 0x82, "bitDepth=8, chromaSubsampling=1 (4:2:0), fullRange=0");
+        assert_eq!(&extradata[10..12], &[0, 0], "codecIntializationDataSize");
     }
 
     #[test]

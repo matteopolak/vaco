@@ -357,7 +357,7 @@ impl Muxer for MovMuxer {
         if let Some(t) = idx.and_then(|i| self.tracks.get_mut(i)) {
             t.bsf_decided = true;
         }
-        Ok(global_header_action(self.flags(), params))
+        Ok(global_header_action(self.flags(), params, pkt))
     }
 
     fn set_metadata(&mut self, metadata: &MuxMetadata) -> Result<()> {

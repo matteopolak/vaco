@@ -64,7 +64,7 @@
 use std::collections::VecDeque;
 
 use vaco_bsf_core::{BsfDesc, MappedFilter, PacketMap};
-use vaco_codec_core::{BitstreamFilter, CodecId, CodecParameters};
+use vaco_codec_core::{BitstreamFilter, CodecParameters};
 use vaco_core::{Error, Result};
 use vaco_format_nalu::{Framing, HeaderKind, LengthSize};
 use vaco_limits::{Budget, Limits};
@@ -82,15 +82,14 @@ fn build(params: &CodecParameters) -> Result<Box<dyn BitstreamFilter>> {
     let codec = params
         .codec_id
         .ok_or(Error::Unsupported("extract_extradata: stream has no codec id"))?;
-    let header_kind = match codec {
-        CodecId::H264 => HeaderKind::H264,
-        CodecId::Hevc => HeaderKind::H265,
-        _ => {
-            return Err(Error::Unsupported(
-                "extract_extradata: this build only extracts h264 and hevc parameter sets",
-            ));
-        }
-    };
+    // The one definition of "which codecs does this filter cover"
+    // (`vaco_format_nalu::header_kind_for`) -- see that function's own doc
+    // for the real bug a second copy of this match caused elsewhere
+    // (`vaco-format-core::mux::global_header_action` asking for this filter
+    // on codecs it cannot help).
+    let header_kind = vaco_format_nalu::header_kind_for(codec).ok_or(Error::Unsupported(
+        "extract_extradata: this build only extracts h264 and hevc parameter sets",
+    ))?;
     // AVI/MPEG-TS-sourced streams are Annex B (`nal_length_size` absent or
     // zero); an MP4-sourced stream driven through this filter directly (a
     // caller re-running extraction after some other reframing) would be
@@ -149,7 +148,7 @@ impl PacketMap for ExtractExtradata {
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
-    use vaco_codec_core::VideoParameters;
+    use vaco_codec_core::{CodecId, VideoParameters};
 
     fn h264_params() -> CodecParameters {
         CodecParameters::video().with_codec(CodecId::H264)

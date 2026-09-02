@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use vaco_codec_core::{BitstreamFilter, CodecId, CodecParameters};
 use vaco_core::{Error, Result, TimeBase};
-use vaco_packet::Packet;
+use vaco_packet::{Packet, PacketSideData};
 
 use crate::flags::FormatFlags;
 use crate::interleave::{InterleaveQueue, MuxTimestamps};
@@ -300,7 +300,7 @@ struct StreamState {
 /// | M13 | zero streams needs `NOSTREAMS` | §1.1 flags |
 /// | M14 | `max_streams` caps the mux side too | §1.11 #36 |
 /// | M15 | the container is asked whether it can carry the codec | §1.3 `query_codec` |
-/// | M16 | `GLOBALHEADER` without extradata asks for `extract_extradata` | §1.10 B5 |
+/// | M16 | `GLOBALHEADER` without extradata, on a codec `extract_extradata` covers and no packet-supplied one, asks for it | §1.10 B5 |
 /// | M17 | an `EXPERIMENTAL` container needs `-strict experimental` | §1.11 #27 |
 /// | M18 | `NOTIMESTAMPS` clears both fields and the queue accepts it | §1.7 R27 |
 /// | M19 | `+flush_packets` / `flush_packets=1` flushes after every packet | §1.11 #5, #23 |
@@ -969,14 +969,56 @@ impl MuxWriter {
 /// such container, so it is written once here rather than in each of them.
 /// A muxer calls this from its own `check_bitstream` when it has no more
 /// specific opinion.
+///
+/// Two things this used to get wrong, both real, both measured end to end
+/// (`vaco -i in.mkv -c:v ffv1 out.mp4` and friends), neither of them a
+/// theoretical edge case:
+///
+/// 1. **Every codec looked the same.** The old check was "is extradata
+///    missing", full stop — it asked for `extract_extradata` for *any*
+///    `GLOBALHEADER` stream with empty extradata, but that filter only
+///    ever implements H.264/HEVC
+///    ([`vaco_format_nalu::header_kind_for`], the one place this
+///    workspace answers "which codecs have in-band parameter sets this
+///    filter can pull extradata from"). Every other video codec —
+///    FFV1, VP8, VP9, `ProRes`, MPEG-2, every image codec — failed
+///    outright: `check_bitstream` asked for a filter that then refused
+///    to build itself for that codec, before a single packet reached
+///    `write_packet`. Now gated on `header_kind_for` returning `Some`.
+/// 2. **A packet that already carries its own extradata was asked to fetch
+///    one anyway.** Several encoders (`vaco-codec-ffv1` among them) attach
+///    [`PacketSideData::NewExtradata`] to a packet directly — no bitstream
+///    filter involved — because their real configuration record is only
+///    known once the first frame has been encoded, too late for the
+///    static [`CodecParameters`] a pipeline builds before encoding starts.
+///    A muxer's own `write_packet` (`adopt_new_extradata` in
+///    `vaco-mux-mp4`, the mechanism this filter's own output was designed
+///    to feed) already knows how to pick that up — `check_bitstream`
+///    just needs to not ask for a redundant (and, per point 1, often
+///    unsupported) filter when the packet already has what is needed.
 #[must_use]
-pub fn global_header_action(flags: FormatFlags, params: &CodecParameters) -> BitstreamAction {
-    if flags.wants_global_header() && params.extradata.as_ref().is_none_or(Vec::is_empty) {
-        BitstreamAction::Insert {
+pub fn global_header_action(
+    flags: FormatFlags,
+    params: &CodecParameters,
+    pkt: &Packet,
+) -> BitstreamAction {
+    if !flags.wants_global_header() {
+        return BitstreamAction::Keep;
+    }
+    if params.extradata.as_ref().is_some_and(|e| !e.is_empty()) {
+        return BitstreamAction::Keep;
+    }
+    if pkt.side_data.iter().any(|sd| match sd {
+        PacketSideData::NewExtradata(buf) => !buf.is_empty(),
+        _ => false,
+    }) {
+        return BitstreamAction::Keep;
+    }
+    match params.codec_id.and_then(vaco_format_nalu::header_kind_for) {
+        Some(_) => BitstreamAction::Insert {
             name: "extract_extradata",
-        }
-    } else {
-        BitstreamAction::Keep
+        },
+        None => BitstreamAction::Keep,
     }
 }
 
@@ -1523,19 +1565,86 @@ mod tests {
     fn global_header_asks_for_extradata_only_when_it_is_missing() {
         let mut p = video();
         assert_eq!(
-            global_header_action(FormatFlags::GLOBALHEADER, &p),
+            global_header_action(FormatFlags::GLOBALHEADER, &p, &pkt(0, 0)),
             BitstreamAction::Insert {
                 name: "extract_extradata"
             }
         );
         p.extradata = Some(vec![1, 2, 3]);
         assert_eq!(
-            global_header_action(FormatFlags::GLOBALHEADER, &p),
+            global_header_action(FormatFlags::GLOBALHEADER, &p, &pkt(0, 0)),
             BitstreamAction::Keep
         );
         assert_eq!(
-            global_header_action(FormatFlags::empty(), &video()),
+            global_header_action(FormatFlags::empty(), &video(), &pkt(0, 0)),
             BitstreamAction::Keep
+        );
+    }
+
+    /// The real bug: this used to ask every `GLOBALHEADER` codec with empty
+    /// extradata for `extract_extradata`, but that filter only ever
+    /// implements H.264/HEVC (`vaco_format_nalu::header_kind_for`) --
+    /// asking for it on FFV1/VP8/VP9/etc. made the whole pipeline fail
+    /// outright the moment the muxer tried to actually build the filter.
+    /// A codec this filter cannot help must answer `Keep`, not `Insert`,
+    /// even with no extradata at all.
+    #[test]
+    fn global_header_never_asks_for_extradata_on_a_codec_the_filter_does_not_cover() {
+        let ffv1 = CodecParameters::video().with_codec(CodecId::Ffv1);
+        assert_eq!(
+            global_header_action(FormatFlags::GLOBALHEADER, &ffv1, &pkt(0, 0)),
+            BitstreamAction::Keep,
+            "FFV1 has no in-band parameter sets extract_extradata can pull from"
+        );
+    }
+
+    /// The other real bug: an encoder (`vaco-codec-ffv1` among them) can
+    /// attach `PacketSideData::NewExtradata` to a packet directly, with no
+    /// bitstream filter involved, because its real configuration record is
+    /// only known once the first frame is encoded -- too late for the
+    /// static `CodecParameters` a pipeline builds before encoding starts.
+    /// A muxer's own `write_packet` already knows how to adopt that side
+    /// data; asking for a redundant (and, for a non-H.264/HEVC codec,
+    /// unsupported) filter on top of it is exactly the failure this session
+    /// measured end to end (`vaco -i in.mkv -c:v ffv1 out.mp4`).
+    #[test]
+    fn global_header_does_not_ask_when_the_packet_already_carries_new_extradata() {
+        let ffv1 = CodecParameters::video().with_codec(CodecId::Ffv1);
+        let mut p = pkt(0, 0);
+        p.side_data.push(PacketSideData::NewExtradata(
+            vaco_pool::Buffer::alloc(&mut Budget::new(Limits::strict()), 4)
+                .unwrap(),
+        ));
+        assert_eq!(
+            global_header_action(FormatFlags::GLOBALHEADER, &ffv1, &p),
+            BitstreamAction::Keep
+        );
+        // And an H.264 stream with a packet-supplied extradata does not
+        // need the filter either, even though it is the one codec that
+        // could ask for it.
+        assert_eq!(
+            global_header_action(FormatFlags::GLOBALHEADER, &video(), &p),
+            BitstreamAction::Keep
+        );
+    }
+
+    /// The defensive half of the fix above: an *empty* `NewExtradata`
+    /// buffer is not "the packet already supplied it" -- it is
+    /// indistinguishable from nothing having run yet, and treating it as
+    /// sufficient would silently strand an H.264/HEVC stream with no
+    /// extradata at all, forever, since `check_bitstream` never asks
+    /// again once a stream is marked decided.
+    #[test]
+    fn global_header_ignores_an_empty_new_extradata_side_data() {
+        let mut p = pkt(0, 0);
+        p.side_data.push(PacketSideData::NewExtradata(
+            vaco_pool::Buffer::alloc(&mut Budget::new(Limits::strict()), 0).unwrap(),
+        ));
+        assert_eq!(
+            global_header_action(FormatFlags::GLOBALHEADER, &video(), &p),
+            BitstreamAction::Insert {
+                name: "extract_extradata"
+            }
         );
     }
 

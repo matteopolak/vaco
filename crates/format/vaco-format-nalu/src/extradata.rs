@@ -59,6 +59,41 @@
 //!    to reach into a parser's private state or widen `Parser` to expose it.
 
 use crate::{Framing, HeaderKind, NalHeader, units};
+use vaco_codec_core::CodecId;
+
+/// Which [`HeaderKind`] framing `codec`'s bitstream uses for in-band
+/// parameter sets, if any.
+///
+/// The single definition D19 requires for a question three call sites used
+/// to each answer with their own copy of the same two-armed match:
+/// [`crate::extradata`]'s own assembly rule already had exactly one home for
+/// "how are H.264/HEVC parameter sets laid out"; this is the same discipline
+/// applied to "which codecs *have* parameter sets laid out this way at all".
+/// A real bug shipped from the missing third copy: `vaco-format-core::mux`'s
+/// `global_header_action` (M16) asked for `extract_extradata` — the write
+/// side named just below — for *every* codec with empty extradata in a
+/// `GLOBALHEADER` container, not only the two this module and
+/// `vaco-bsf-generic::extract_extradata` actually implement. `vaco -i
+/// in.mkv -c:v ffv1 out.mp4` (and every non-H.264/HEVC video codec into
+/// MP4) failed outright: `check_bitstream` asked for a filter that then
+/// refused to build itself for that codec, well before `write_packet` ever
+/// ran. `None` here is what lets a caller tell "this codec cannot supply
+/// extradata this way" apart from "this codec's stream happens to have
+/// none yet" — the distinction `global_header_action` was missing.
+///
+/// VVC is deliberately absent from the two codecs this maps, for the same
+/// reason [`is_parameter_set`] always answers `false` for
+/// [`HeaderKind::H266`]: this workspace has no NAL-level VVC parser, so
+/// nothing downstream of a `Some` answer here could actually assemble
+/// anything from it.
+#[must_use]
+pub const fn header_kind_for(codec: CodecId) -> Option<HeaderKind> {
+    match codec {
+        CodecId::H264 => Some(HeaderKind::H264),
+        CodecId::Hevc => Some(HeaderKind::H265),
+        _ => None,
+    }
+}
 
 /// Whether `nal_unit_type` is a parameter set worth collecting into
 /// extradata, for the codec `kind` names.
@@ -130,6 +165,31 @@ mod tests {
         0x00, 0x00, 0x03, 0x00, 0xc8, 0x3c, 0x48, 0x96, 0x58,
     ];
     const PPS: [u8; 6] = [0x68, 0xeb, 0xe3, 0xcb, 0x22, 0xc0];
+
+    /// The real bug this function's own doc names: every codec that is not
+    /// H.264/HEVC must answer `None`, not just "whatever `_ =>` happened to
+    /// be convenient" -- `vaco-format-core::mux::global_header_action`
+    /// trusted this exact distinction to stop asking for `extract_extradata`
+    /// on a codec that filter cannot help (FFV1, VP8, VP9, `ProRes`, MPEG-2,
+    /// every image codec), and the bug this closes was a `None` case
+    /// nothing checked.
+    #[test]
+    fn only_h264_and_hevc_have_a_header_kind() {
+        assert_eq!(header_kind_for(CodecId::H264), Some(HeaderKind::H264));
+        assert_eq!(header_kind_for(CodecId::Hevc), Some(HeaderKind::H265));
+        for codec in [
+            CodecId::Ffv1,
+            CodecId::Vp8,
+            CodecId::Vp9,
+            CodecId::Av1,
+            CodecId::Prores,
+            CodecId::Mpeg2video,
+            CodecId::Png,
+            CodecId::Mp3,
+        ] {
+            assert_eq!(header_kind_for(codec), None, "{codec:?} must not claim a HeaderKind");
+        }
+    }
 
     /// The reference-measured 37-byte example from the module docs.
     #[test]

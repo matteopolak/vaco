@@ -862,10 +862,8 @@ fn synthesize_extradata(stream: &mut Stream, payload: &[u8]) {
     let Some(id) = stream.params.codec_id else {
         return;
     };
-    let header_kind = match id {
-        CodecId::H264 => vaco_format_nalu::HeaderKind::H264,
-        CodecId::Hevc => vaco_format_nalu::HeaderKind::H265,
-        _ => return,
+    let Some(header_kind) = vaco_format_nalu::header_kind_for(id) else {
+        return;
     };
     // Mirrors `vaco-bsf-generic`'s own framing choice: `nal_length_size`
     // absent or `Some(0)` (no configuration record) means Annex B, anything
