@@ -3292,13 +3292,23 @@ just file count). The other four `image2`-reachable encoders
 (`mjpeg`/`bmp`/`ppm`/`qoi`) still write 5/5 files after this change — no
 regression swept in.
 
-**An unrelated, pre-existing finding surfaced while isolating this, named
-rather than chased**: comparing `vaco`'s own decode of the H.264 source
-against real `ffmpeg`'s decode of the identical file (both to raw RGB24, no
-`image2` involved at all) disagrees at byte 51 of frame 1 — a `vaco-codec-h264`
-decoder-vs-reference difference, not a `vaco-codec-png`/`vaco-codec-tiff`
-encoder difference (confirmed by checking `vaco`'s png/tiff output against
-`vaco`'s *own* decode of the same source, which matches exactly, all 5
-frames). Not investigated further here — out of scope for the image2
-sequencing bug, and plausibly already tracked under this tree's existing
-H.264 conformance work.
+**An unrelated finding surfaced while isolating this, named rather than
+chased at the time — since run to ground and corrected here.** Comparing
+`vaco`'s own decode of the H.264 source against real `ffmpeg`'s decode of
+the identical file (both to raw RGB24, no `image2` involved) disagreed at
+byte 51 of frame 1. That was first attributed to `vaco-codec-h264` itself;
+it was not. The coordinator asked for it to be run down as a priority given
+how much of tonight touched the H.264 decoder — full account in
+`planning/CONFORMANCE-FINDINGS.md` #56, but the short version: decoding to
+`yuv420p` (the decoder's own native output) instead of `rgb24` is
+byte-identical to real `ffmpeg`, at 1/2/4 threads, on both this
+no-VUI source and a second source with explicit BT.709 VUI tags — the
+decoder is not implicated at all. The `rgb24` difference is entirely the
+downstream `yuv420p -> rgb24` chroma-upsampling step in `vaco-scale`, code
+last touched 2026-08-22, eleven days before tonight's session — already
+measured and correctly graded **Equivalent** (not Exact, not Divergent) in
+`docs/signal/vaco-scale.md` §3 (`yuv420p -> rgb24, bt709 tv→pc`: 7831/36864
+bytes differ, max error 1), with the separately-measured `yuv444p -> rgb24`
+path (no chroma subsampling) independently confirming the 3×3 colour-matrix
+arithmetic itself is Exact. Not a bug, not a regression, not related to
+`image2`, PNG, TIFF, or H.264 decode.

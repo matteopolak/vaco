@@ -4615,3 +4615,94 @@ pattern but not read in the same depth as the crates above — none showed
 a declared-length-vs-container question shaped differently from what is
 already tabulated, but that is a lighter check than the rest of this
 survey and is disclosed as such rather than implied to be as thorough.
+
+## 56. The "H.264 decoder disagrees with ffmpeg at byte 51" alarm was a misdiagnosis — decode is byte-exact; the real, already-documented divergence is one layer downstream in `vaco-scale`'s chroma upsampling
+
+Raised as the most serious open item of the session: while verifying an
+unrelated `image2`/PNG/TIFF encoder fix, `vaco -i in.mp4 -c:v rawvideo
+-pix_fmt rgb24 out.rgb` on a real, stock `libx264` file was found to differ
+from real `ffmpeg 9.0.1`'s own `-f rawvideo -pix_fmt rgb24` output at byte
+51 of frame 1, and was reported as "vaco's H.264 decoder disagreeing with
+ffmpeg." Given how many tonight's commits touched `vaco-codec-h264` (VUI
+colour stamping, A/53 caption attachment, mastering-display/CLL SEI
+attachment) and this project's stated byte-exactness bar, the coordinator
+asked for this to be run down before anything else, in a specific order:
+establish whether it is a regression, characterise what diverges, determine
+which side is wrong, and check whether the fixture is ordinary.
+
+**Finding: the original report was wrong about *where* the divergence is.**
+Decoding the identical source to `yuv420p` — the decoder's own native
+output, one step earlier than `rgb24` — is **byte-identical** to real
+`ffmpeg`'s own `yuv420p` decode. Checked three ways: at `-threads 1`, `2`
+and `4` (ruling out a frame-threading race); on the original no-VUI source
+and, separately, on a second source built with `-x264-params
+colorprim=bt709:transfer=bt709:colormatrix=bt709:fullrange=off` (ruling out
+the VUI-colour-inference path specifically, since that is exactly what
+tonight's `62f7bfa` changed); and by re-running the `rgb24` conversion
+twice to confirm the output is deterministic, not a race. All identical.
+**`vaco-codec-h264` is not implicated by this fixture at all.**
+
+**Where the divergence actually is.** It appears only after the
+`yuv420p -> rgb24` conversion, entirely inside `vaco-scale`. Characterised
+directly: every differing byte's delta is exactly `+1` (vaco one higher,
+never lower, never larger) — 6384 of 46080 bytes across a 5-frame,
+64×48 clip (≈13.9%), landing on the R and G channels of specific
+`(Y, Cb, Cr)` triples, reproducibly (the same input triple always produces
+the same one-off result), not growing or spreading frame to frame, and not
+correlated with chroma-transition edges (it recurs identically across eight
+consecutive columns of one flat colour-bar region). Manually computing the
+textbook floating-point BT.601/BT.709 conversion for one such triple
+(`Y=210, Cb=16, Cr=146`: R≈254.66, G≈255.17) shows vaco's rounded/clamped
+answer (255, 255) is the mathematically nearer one; real `ffmpeg`'s (254,
+254) is off by one from the continuous-math result — consistent with
+`libswscale`'s well-known lower-precision integer table for this
+conversion, not with vaco computing something wrong.
+
+**Not a regression, and already known.** `crates/signal/vaco-scale/src/{colour,fast}.rs`
+were last touched by `d4c376a` (2026-08-22, the crate's original
+implementation) — eleven days before tonight's session, and nothing
+tonight touched `vaco-scale` at all, so this cannot be fallout from the
+H.264 VUI/caption/SEI/threading work named in the ask. More than that: it
+is not a new finding. `docs/signal/vaco-scale.md` §3's own fidelity table
+(measured against `ffmpeg 8.1` on a 128×96 structure-plus-noise image, long
+before tonight) already carries this exact row:
+
+| Conversion | Differing | Max err | Grade |
+|---|---:|---:|:--|
+| `yuv444p -> rgb24`, bt709 tv→pc | 0 / 36864 | 0 | **Exact** |
+| `yuv420p -> rgb24`, bt709 tv→pc | 7831 / 36864 | **1** | Equivalent |
+
+The `yuv444p` row (no chroma subsampling) is measured **Exact** — proof the
+3×3 colour-matrix arithmetic itself is byte-identical to the reference. The
+`yuv420p` row (chroma subsampling present) is measured **Equivalent**, not
+Exact, with the identical signature this investigation independently found:
+differing-byte count in the same ballpark (7831/36864 ≈ 21% there, 6384/46080
+≈ 14% here — same order, different test image), max error exactly 1. D11's
+own taxonomy defines Equivalent as a legitimate, accepted grade distinct
+from both Exact and Divergent; this is the chroma-upsampling interpolation
+step producing a value one code unit away from `libswscale`'s own default
+upsampler at some pixels, a common and unsurprising class of disagreement
+between two independent bilinear-family implementations, not a defect.
+
+**The fixture was ordinary** — plain `ffmpeg -f lavfi -i testsrc ... -c:v
+libx264 -pix_fmt yuv420p`, no unusual flags — which is exactly what the
+already-published fidelity table would predict: this grade was never
+conditioned on exotic content.
+
+**Conclusion, stated plainly since the original alarm was raised in these
+terms**: no H.264 decoder regression exists, tonight or otherwise, on this
+fixture. The one real gap the investigation surfaces is documentation
+hygiene, not code: nothing pointed from "a raw RGB decode differs from
+ffmpeg" back to this already-measured, already-graded table, so the same
+misdiagnosis is one `cmp` away from happening again to the next person who
+checks pixel output through `-pix_fmt rgb24` instead of the codec's native
+format. Recorded here, and cross-referenced from `planning/E2E-GAPS.md` #40
+where the original misdiagnosis was written down, so the correction is
+findable from both sides.
+
+**Not investigated further, and not needed for this conclusion**: whether
+vaco's specific chroma-upsampling filter could be changed to match
+`libswscale`'s own rounding one-for-one and move this row from Equivalent
+to Exact. That is a real, bounded, separate task (touching only
+`vaco-scale`, nothing codec-side) — worth doing for its own sake, not
+because anything here calls it urgent.
