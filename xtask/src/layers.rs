@@ -46,8 +46,26 @@ pub fn run() -> Task {
         let manifest =
             std::fs::read_to_string(path.join("Cargo.toml")).map_err(|e| format!("{name}: {e}"))?;
         let mut deps = Set::new();
+        // Only `[dependencies]` (and its target-specific variants) creates a
+        // layering edge. `[dev-dependencies]` never ships in the built
+        // artifact, so a lower-layer crate's test suite reaching a
+        // higher-layer tool — e.g. vaco-filter-subtitle differential-testing
+        // against vaco-conformance — is not a cycle in anything that gets
+        // linked, the same reasoning reachability_check's path_deps() already
+        // applies by scanning `[dependencies]` only.
+        let mut in_deps = false;
         for line in manifest.lines() {
             let line = line.trim();
+            if line.starts_with('[') {
+                in_deps = line == "[dependencies]"
+                    || (line.ends_with(".dependencies]")
+                        && !line.contains("dev-dependencies")
+                        && !line.contains("build-dependencies"));
+                continue;
+            }
+            if !in_deps {
+                continue;
+            }
             if let Some(dep) = line.split(&[' ', '=', '.'][..]).next()
                 && dep.starts_with("vaco-")
                 && layer.contains_key(dep)
