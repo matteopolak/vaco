@@ -17,9 +17,9 @@ use crate::rice::{RiceState, RunState};
 /// Shared by every per-sample `states.get_mut(ctx).ok_or_else(..)` in this
 /// module (D19: one definition, not three copies of the same message).
 ///
-/// `#[cold]` is the stable substitute for the unstable `unlikely` hint (D21,
-/// `planning/00-decisions.md`): it tells LLVM this call's edge is the
-/// improbable one and to lay the block out of line, and `#[inline(never)]`
+/// `#[cold]` is the stable substitute for the unstable `unlikely` hint (D21):
+/// it tells LLVM this call's edge is the improbable one and to lay the block
+/// out of line, and `#[inline(never)]`
 /// keeps that call from being re-inlined back into the per-sample loop it was
 /// moved out of. `ctx` is always in range in practice -- `context_count`
 /// bounds it by construction -- so this only ever runs for a corrupt
@@ -57,8 +57,8 @@ impl SliceBuf {
         })
     }
 
-    // `#[inline]` measured as not enough here (see D21, planning/00-decisions.md):
-    // a profile of `transcode_h264_to_ffv1_1080p` (samply, outermost
+    // `#[inline]` measured as not enough here (D21): a profile of
+    // `transcode_h264_to_ffv1_1080p` (samply, outermost
     // physically-emitted frame) charged `SliceBuf::neighbours` 17.54% of
     // in-lib self time on its own -- i.e. it was compiled as a real
     // out-of-line function and called, not folded into `encode_plane_range`.
@@ -412,9 +412,9 @@ pub(crate) fn decode_plane_range(
         for x in 0..w {
             let (l, t, tl, tr, ll, tt) = buf.neighbours(x, y);
             let (ctx, flip) = compute_context(qts, l, t, tl, tr, ll, tt);
-            // Lazy on purpose: profiled on a 1080p/125-frame transcode
-            // (planning/PERF-PROGRAMME.md D1) at ~10% of the *encoder's*
-            // self-time going to `core::ptr::drop_glue::<vaco_core::error::Error>`
+            // Lazy on purpose: profiled on a 1080p/125-frame transcode (D1)
+            // at ~10% of the *encoder's* self-time going to
+            // `core::ptr::drop_glue::<vaco_core::error::Error>`
             // for the encode-side twin of this call. `Error` is not
             // trivially-droppable (it has a `String`-carrying variant), so an
             // eager `.ok_or(Error::InvalidData(..))` builds and immediately
@@ -466,8 +466,8 @@ pub(crate) fn encode_plane_range(
                 diff = -diff;
             }
             // Lazy on purpose -- see the matching comment in
-            // `decode_plane_range`: measured (planning/PERF-PROGRAMME.md D1)
-            // at ~10% of this encoder's self-time on a real 1080p transcode.
+            // `decode_plane_range`: measured (D1) at ~10% of this encoder's
+            // self-time on a real 1080p transcode.
             #[allow(
                 clippy::unnecessary_lazy_evaluations,
                 reason = "measured: eager .ok_or() here left a real (non-eliminated) drop_glue::<Error> call in the per-sample loop -- see decode_plane_range's comment"

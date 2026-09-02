@@ -3,8 +3,6 @@
 //! `VP8X`-wrapped files (alpha, animation, metadata chunks) this crate does
 //! not yet handle natively (C-19).
 //!
-//! # What it is
-//!
 //! [`codec::decode`] translates WebP bytes (still or animated) to
 //! [`vaco_frame::Frame`]s — natively for a bare `VP8L` file, via
 //! `image-webp` for everything `VP8X`-wrapped. [`codec::encode`] goes the
@@ -14,25 +12,18 @@
 //! encoder instead. [`WebpDecoder`]/[`WebpEncoder`] wrap those in the
 //! `vaco_codec_core::SendReceive` protocol every codec in this tree shares.
 //!
-//! # How it works
-//!
 //! A packet is the whole file. An animated WebP can yield several frames
 //! from one packet — `image_webp::WebPDecoder` composites dispose/blend
 //! onto the canvas itself, unlike GIF/APNG — hence [`Caps::SUBFRAMES`] on
-//! decode. Encode has no animation path at all (neither native nor via
-//! `image-webp`), so it runs one frame in, one packet out, the same shape
-//! as `vaco-codec-qoi`.
+//! decode. Encode has no animation path at all, so it runs one frame in,
+//! one packet out.
 //!
-//! # How to change it
-//!
-//! [`vp8l`] is the native lossless bitstream (decode and encode); its own
-//! module doc says exactly what this crate's encoder emits and why that is
-//! still fully valid. [`codec`] is the byte-level glue: RIFF sniffing,
-//! `Frame`-to-ARGB packing, and the lossy path through `vaco-codec-vp8` +
-//! `vaco-scale`. A pixel-format-coverage gap belongs in
-//! [`codec::frame_to_argb`]'s match; `VP8X` features (alpha via a separate
-//! chunk, animation, ICCP/EXIF) going native is future work, not required
-//! by C-19.
+//! [`vp8l`] is the native lossless bitstream (decode and encode). [`codec`]
+//! is the byte-level glue: RIFF sniffing, `Frame`-to-ARGB packing, and the
+//! lossy path through `vaco-codec-vp8` + `vaco-scale`. A pixel-format
+//! coverage gap belongs in [`codec::frame_to_argb`]'s match; `VP8X`
+//! features (alpha via a separate chunk, animation, ICCP/EXIF) going
+//! native is future work, not required by C-19.
 //!
 //! # Dependencies
 //!
@@ -228,7 +219,6 @@ fn make_encoder(limits: Limits) -> Box<dyn vaco_codec_core::Encoder> {
     Box::new(WebpEncoder::new(limits))
 }
 
-/// Registered as this crate's `decoder` fragment (plan 19 §3.4).
 pub static WEBP_DECODER: vaco_codec_core::DecoderDesc = vaco_codec_core::DecoderDesc {
     name: "webp",
     long_name: "WebP",
@@ -239,7 +229,6 @@ pub static WEBP_DECODER: vaco_codec_core::DecoderDesc = vaco_codec_core::Decoder
     make: make_decoder,
 };
 
-/// Registered as this crate's `encoder` fragment (plan 19 §3.4).
 pub static WEBP_ENCODER: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
     name: "webp",
     long_name: "WebP (lossless by default; -lossless 0 for VP8 lossy)",

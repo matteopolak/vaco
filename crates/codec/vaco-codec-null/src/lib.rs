@@ -1,50 +1,25 @@
 //! The reference's `vnull`/`anull` null encoders.
 //!
-//! # What it is
-//!
-//! `vnull` ("Null video codec") and `anull` ("Null audio codec") are the
-//! reference's dummy encoders: every frame sent in is discarded and no
-//! packet is ever produced. They exist so a pipeline can be built and run
-//! end to end — timing, muxer wiring, `-f null -` style throughput
-//! measurement — without a real codec doing any work. Per the roadmap (plan
-//! 20 §1.9, "C-47 merged in") this pair is encode-only: there is nothing to
-//! decode, so this crate registers no [`vaco_codec_core::DecoderDesc`] at
-//! all, matching the "0 dec / 2 enc" accounting issue #281 inherited from
-//! C-47.
-//!
-//! # How it works
+//! `vnull` ("Null video codec") and `anull` ("Null audio codec") discard
+//! every frame sent in and never produce a packet, so a pipeline can be
+//! built and run end to end — timing, muxer wiring, `-f null -` throughput
+//! measurement — without a real codec doing any work. Encode-only: there is
+//! nothing to decode, so this crate registers no
+//! [`vaco_codec_core::DecoderDesc`].
 //!
 //! [`NullEncoder`] is the one implementation both `-c:v vnull` and
-//! `-c:a anull` share (the reference's own two dummy encoders differ only in
-//! media type and name, never in behaviour). It follows the same
-//! `SendReceive`-over-`Machine` shape every codec in this tree uses, but its
-//! `send` never calls [`vaco_codec_core::machine::Machine::emit`] on the
-//! `Accept::Input` branch — it just accepts and discards. That is not a
-//! special case the protocol has to be told about: `vaco_codec_core::mock`'s
-//! own `Step::Skip` ("produce nothing at all: a header-only packet") is the
-//! identical shape already exercised by that module's property tests, so a
-//! codec that *always* skips is on already-proven ground.
-//! [`vaco_codec_core::Validated`] wraps it exactly as it wraps every other
-//! encoder in this tree.
+//! `-c:a anull` share (the reference's two dummy encoders differ only in
+//! media type and name). It follows the same `SendReceive`-over-`Machine`
+//! shape every codec in this tree uses, except `send` never calls
+//! [`vaco_codec_core::machine::Machine::emit`] on the `Accept::Input`
+//! branch — it just accepts and discards, the same shape
+//! `vaco_codec_core::mock`'s `Step::Skip` already exercises in that
+//! module's property tests. [`vaco_codec_core::Validated`] wraps it like
+//! every other encoder here.
 //!
-//! # How to change it
-//!
-//! There is nothing to extend here: the whole behavioural contract is "eat
-//! input, never emit, answer `NeedMoreInput` until drained and `Eof` after".
-//! If a future need requires `vnull`/`anull` to report anything (byte counts,
-//! say), it is still one [`NullEncoder`] with an added counter, not two.
-//!
-//! # Configuration
-//!
-//! None. `Limits` is accepted at construction, per every `DecoderDesc`/
-//! `EncoderDesc::make` signature in this tree, but a codec that allocates
-//! nothing has nothing to bound.
-//!
-//! # Dependencies
-//!
-//! `vaco-codec-core` (the protocol), `vaco-frame`/`vaco-packet` (the input/
-//! output types, both used only as opaque values), `vaco-limits` (the
-//! `make` signature).
+//! No configuration: `Limits` is accepted at construction (every
+//! `EncoderDesc::make` signature takes one) but nothing here allocates, so
+//! nothing needs bounding.
 
 #![forbid(unsafe_code)]
 
@@ -123,9 +98,9 @@ fn make_anull_encoder(_limits: Limits) -> Box<dyn Encoder> {
     Box::new(AsEncoder(Validated::new(NullEncoder::new())))
 }
 
-/// Registered as this crate's `encoder` fragment (plan 19 §3.4). Reference
-/// `name`/`long_name` measured from `vaco_codec_core::CodecId::Vnull`'s own
-/// registry entry ("Null video codec").
+/// Reference `name`/`long_name` measured from
+/// `vaco_codec_core::CodecId::Vnull`'s own registry entry ("Null video
+/// codec").
 pub static VNULL_ENCODER: EncoderDesc = EncoderDesc {
     name: "vnull",
     long_name: "Null video codec",
@@ -136,9 +111,9 @@ pub static VNULL_ENCODER: EncoderDesc = EncoderDesc {
     make: make_vnull_encoder,
 };
 
-/// Registered as this crate's `encoder` fragment (plan 19 §3.4). Reference
-/// `name`/`long_name` measured from `vaco_codec_core::CodecId::Anull`'s own
-/// registry entry ("Null audio codec").
+/// Reference `name`/`long_name` measured from
+/// `vaco_codec_core::CodecId::Anull`'s own registry entry ("Null audio
+/// codec").
 pub static ANULL_ENCODER: EncoderDesc = EncoderDesc {
     name: "anull",
     long_name: "Null audio codec",

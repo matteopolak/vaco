@@ -2,117 +2,41 @@
 //!
 //! [RFC 9043]: https://www.rfc-editor.org/rfc/rfc9043
 //!
-//! # What it is
-//!
 //! FFV1 is an intra-only lossless video codec: a range coder or Golomb-Rice
 //! bit coder (`coder_type`), a median predictor plus a quantized-gradient
-//! context model shared by both, and (from version 3 on) an out-of-band
-//! Configuration Record that states color space, bit depth, and quantization
-//! tables once for the whole stream rather than per frame.
+//! context model, and (from version 3 on) an out-of-band Configuration
+//! Record stating color space, bit depth, and quantization tables once for
+//! the whole stream.
 //!
-//! # How it works
+//! [`rangecoder`] is the binary range coder (§3.8.1); [`rice`] is
+//! Golomb-Rice decode (§3.8.2, decode-only — the encoder always uses the
+//! range coder); [`quant`] holds the Quantization Table Sets, median
+//! predictor and context computation (§3.4-§3.6); [`params`]/[`crc`] cover
+//! the stream-wide `Parameters` (§4.2) and Configuration Record CRC
+//! (§4.3.2/§4.9.3); [`slice`] is `SliceHeader`/`SliceContent`/`SliceFooter`
+//! (§4.5-§4.9) and the per-plane loop; [`codec`] frames it all into whole
+//! frames, wrapped as [`Ffv1Decoder`]/[`Ffv1Encoder`] in this tree's
+//! `SendReceive` protocol.
 //!
-//! - [`rangecoder`]: the byte-oriented binary range coder (RFC 9043 §3.8.1)
-//!   and its `get_symbol`/`put_symbol` nonbinary layer. Correctness here is
-//!   load-bearing for everything else — see that module's own round-trip
-//!   tests, which the crate's implementation history relied on catching two
-//!   real encoder bugs before anything was built on top.
-//! - [`rice`]: Golomb-Rice decode (§3.8.2) — **decode-only**, because this
-//!   crate's own encoder never emits it (see that module's docs for why:
-//!   `ffmpeg -c:v ffv1`'s own default *is* Golomb-Rice, so decode needs it to
-//!   read real files, but this crate's encoder is simpler sticking to one
-//!   coder throughout).
-//! - [`quant`]: Quantization Table Sets, the median predictor, and the
-//!   per-sample context computation (§3.4-§3.6).
-//! - [`params`]: `Parameters` (§4.2) — the stream-wide configuration.
-//! - [`crc`]: the Configuration Record's CRC (§4.3.2/§4.9.3).
-//! - [`slice`]: `SliceHeader`/`SliceContent`/`SliceFooter` (§4.5-§4.9) and the
-//!   per-plane decode/encode loop built on the border rules of §3.1-§3.2.
-//! - [`codec`]: framing everything above into whole frames — the
-//!   Configuration Record, the per-frame `keyframe` bit, and the glue between
-//!   [`vaco_frame::Frame`]'s planes and FFV1's Y/Cb/Cr-or-JPEG-2000-RCT
-//!   sample domain (§3.7). [`codec::Ffv1Config`]/[`codec::decode_frame`]/
-//!   [`codec::encode_frame`] are the pure functions; [`Ffv1Decoder`]/
-//!   [`Ffv1Encoder`] wrap them in the `SendReceive` protocol every codec in
-//!   this tree shares.
+//! # Coverage
 //!
-//! # Coverage — what this pass reaches and what it does not
-//!
-//! - **Version**: 3 only (matches `ffmpeg -c:v ffv1`'s own default, verified
-//!   by encoding a real test clip and inspecting its Matroska `CodecPrivate`
-//!   — see `provenance/vaco-codec-ffv1.toml`'s `blackbox` entries). Versions
-//!   0/1/2 are not implemented.
-//! - **Slicing**: this crate's own encoder writes one slice; decode covers
-//!   multiple, via `codec::locate_slices`'s backward walk over
-//!   `SliceFooter.slice_size` (RFC 9043 §4.9.1's own stated purpose for that
-//!   field) — measured necessary directly, since even a 64x64 `ffmpeg`
-//!   encode defaults to a 2x2 slice grid. Cross-checked pixel-exact against
-//!   a real 4-slice file. `Caps::SLICE_THREADS`/frame-internal parallelism
-//!   are not attempted (a possible follow-up).
-//! - **Coder**: this crate's encoder always emits `coder_type = 1` (range
-//!   coder, default state transition table), cross-checked pixel-exact
-//!   against a real `ffmpeg -coder range_def` encode. `coder_type = 0`
-//!   (Golomb-Rice — `ffmpeg -c:v ffv1`'s own *default*) parses without error
-//!   but has a known, unresolved decode bug (see `codec`'s module docs for
-//!   what was ruled out); `2` (custom transition table) is untested.
-//! - **Bit depth**: 8-bit only. FFV1 supports up to 16-bit; that is out of
-//!   scope here.
-//! - **Pixel formats**: `Yuv420p`, `Yuv422p`, `Yuv444p` (`colorspace_type` 0,
-//!   YCbCr) and `Gbrp` (`colorspace_type` 1, via the JPEG 2000 Reversible
-//!   Color Transform). No alpha/extra plane.
-//!
-//! # How to change it
-//!
-//! Add a pixel format by extending `codec::mapping_for`/`format_for` — the
-//! slice-content loop itself does not know about pixel formats at all, only
-//! plane counts and subsampling factors, so a new 8-bit YCbCr subsampling is
-//! usually a one-line addition. A higher bit depth needs `slice.rs`'s
-//! `wrap_diff`/`wrap_sample` (already parameterized by `bits`) plus wiring a
-//! 16-bit-capable `vaco_frame` plane read/write in `codec.rs`'s
-//! `read_pixels`/`write_pixels`, which currently hard-code `u8`.
+//! Version 3 only; 8-bit; `Yuv420p`/`Yuv422p`/`Yuv444p` and `Gbrp` (via the
+//! JPEG 2000 RCT). The encoder always uses the range coder and writes one
+//! slice; decode also covers Golomb-Rice-coded and multi-slice files. See
+//! [`codec`]'s module docs for the measurements behind those claims and the
+//! one known, unresolved Golomb-Rice decode bug. Add a pixel format by
+//! extending `codec::mapping_for`/`format_for`; a higher bit depth needs
+//! `slice.rs`'s `wrap_diff`/`wrap_sample` plus 16-bit-capable reads/writes
+//! in `codec.rs`.
 //!
 //! # Configuration
 //!
-//! [`vaco_limits::Limits`] bounds every allocation this crate makes from
-//! attacker-controlled bitstream fields (frame dimensions, quantization
-//! table sizes, slice counts) the same way every other decoder in this tree
-//! is bounded.
-//!
-//! `Ffv1Decoder::set_extradata` takes the plain "container's Configuration
-//! Record bytes, nothing else" contract every other codec in this tree uses —
-//! [`codec::Ffv1Config::from_extradata`] never needed width/height, only the
-//! quantization tables and colour signalling the Configuration Record itself
-//! carries. Width and height are a separate problem: RFC 9043 §4 says
-//! `frame_pixel_width`/`frame_pixel_height` "MUST be provided by external
-//! means" — FFV1's own bitstream (Configuration Record included) never states
-//! them at all. [`Ffv1Decoder`] gets them from
-//! [`vaco_codec_core::Decoder::prime_video`], the generic channel the CLI's
-//! decode wiring calls with the container's reported dimensions before the
-//! first packet, the same way `Encoder::prime_audio` tells an audio encoder
-//! its stream shape ahead of time.
-//!
-//! This used to be a private extradata envelope instead —
-//! `[width: u32 BE][height: u32 BE][the RFC Configuration Record]` — built by
-//! nothing but this crate's own tests, because `set_extradata` was the only
-//! channel a generically-registered `Box<dyn Decoder>` had at all before
-//! `prime_video` existed. That meant the generic CLI decode path, which hands
-//! a decoder the container's *plain* extradata, could never configure this
-//! one: `-c:v copy` was the only path that had ever exercised the crate,
-//! because it never calls `set_extradata` at all (`planning/E2E-GAPS.md` #2's
-//! video-side gap). [`Ffv1Encoder`] already attached the plain RFC
-//! Configuration Record (not that envelope) as
-//! `PacketSideDataKind::NewExtradata` on its first packet — that is what a
-//! real container's own track metadata (Matroska's `PixelWidth`/
-//! `PixelHeight`, an MP4 visual sample entry) carries width/height alongside,
-//! so this crate now matches that shape on the decode side too.
-//!
-//! # Dependencies
-//!
-//! `vaco-bitstream` (the raw bit reader Golomb-Rice decode uses),
-//! `vaco-codec-core` (the `SendReceive` protocol), `vaco-frame`/`vaco-pixfmt`/
-//! `vaco-pool` (the decoded picture), `vaco-packet` (encoded bytes and
-//! extradata side data), `vaco-limits` (allocation bounds). No external
-//! crate — every byte format here is implemented directly from RFC 9043.
+//! [`vaco_limits::Limits`] bounds every allocation from attacker-controlled
+//! bitstream fields. RFC 9043 §4 says width/height "MUST be provided by
+//! external means", so [`Ffv1Decoder`] takes them via
+//! [`vaco_codec_core::Decoder::prime_video`] rather than `set_extradata`;
+//! [`Ffv1Encoder`] mirrors this by attaching the Configuration Record as
+//! `PacketSideDataKind::NewExtradata` on its first packet.
 
 #![forbid(unsafe_code)]
 // D22: nightly is pinned (`rust-toolchain.toml`) specifically so D21's
@@ -418,7 +342,6 @@ fn make_encoder(limits: Limits) -> Box<dyn vaco_codec_core::Encoder> {
     )))
 }
 
-/// Registered as this crate's `decoder` fragment (plan 19 §3.4).
 pub static FFV1_DECODER: vaco_codec_core::DecoderDesc = vaco_codec_core::DecoderDesc {
     name: "ffv1",
     long_name: "FFmpeg video codec #1",
@@ -429,7 +352,6 @@ pub static FFV1_DECODER: vaco_codec_core::DecoderDesc = vaco_codec_core::Decoder
     make: make_decoder,
 };
 
-/// Registered as this crate's `encoder` fragment (plan 19 §3.4).
 pub static FFV1_ENCODER: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
     name: "ffv1",
     long_name: "FFmpeg video codec #1",

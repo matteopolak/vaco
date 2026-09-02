@@ -2,49 +2,39 @@
 //! Table 9-5 (`coeff_token`), Tables 9-7/9-8/9-9 (`total_zeros`) and Table
 //! 9-10 (`run_before`), ITU-T H.264 (ISO/IEC 14496-10) clause 9.2.
 //!
-//! # Redone from primary spec text (this crate's own second dispatch)
+//! # Verified against primary spec text
 //!
-//! The first pass here was transcribed from recollection, and an exhaustive
-//! pairwise prefix-conflict self-consistency check
+//! An exhaustive pairwise prefix-conflict self-consistency check
 //! (`cavlc.rs::tests::every_coeff_token_table_is_prefix_free_and_matches_its_own_length`,
-//! `tests::run_before_tables_are_prefix_free`) found real conflicts in 7 of
-//! `TOTAL_ZEROS_4X4`'s 15 rows plus several `COEFF_TOKEN_NC2`/`NC4`/
-//! `CHROMA_DC_420` rows — the general form of the same day's MPEG-2
-//! `CODED_BLOCK_PATTERN` finding. That check, kept permanently below, is
-//! necessary but was not sufficient on its own: cross-checking every table
-//! entry-by-entry against `provenance/vaco-codec-h264.toml`'s registered
-//! primary source (a fetched copy of the original ISO/IEC 14496-10 : 2002
-//! draft text, D7) found *additional* wrong entries that had happened to
-//! still be prefix-free — `COEFF_TOKEN_NC2`'s `TotalCoeff` 3/4/16 rows and
-//! `RUN_BEFORE`'s `zerosLeft > 6` row (over half its values) chief among
-//! them. All are corrected now, checked against that source line by line,
-//! not merely re-run against themselves.
+//! `tests::run_before_tables_are_prefix_free`) is necessary but not
+//! sufficient on its own: cross-checking every table entry-by-entry against
+//! a fetched copy of the original ISO/IEC 14496-10 : 2002 draft text found
+//! wrong entries that had happened to still be prefix-free —
+//! `COEFF_TOKEN_NC2`'s `TotalCoeff` 3/4/16 rows and `RUN_BEFORE`'s
+//! `zerosLeft > 6` row (over half its values) chief among them, alongside 7
+//! of `TOTAL_ZEROS_4X4`'s 15 rows and several `COEFF_TOKEN_NC2`/`NC4`/
+//! `CHROMA_DC_420` rows the self-consistency check alone had caught. All
+//! are corrected now, checked line by line against that source.
 //!
-//! **What is verified against that primary source**: `COEFF_TOKEN_NC0`/
-//! `NC2`/`NC4`/`CHROMA_DC_420`, `TOTAL_ZEROS_4X4`/`CHROMA_DC_420`, and
-//! `RUN_BEFORE` — all pass the pairwise check with zero exclusions.
+//! **Verified**: `COEFF_TOKEN_NC0`/`NC2`/`NC4`/`CHROMA_DC_420`,
+//! `TOTAL_ZEROS_4X4`/`CHROMA_DC_420`, and `RUN_BEFORE` — all pass the
+//! pairwise check with zero exclusions.
 //!
-//! **What is not**: `COEFF_TOKEN_CHROMA_DC_422` and
+//! **Not verified**: `COEFF_TOKEN_CHROMA_DC_422` and
 //! `TOTAL_ZEROS_CHROMA_DC_422` (the 4:2:2 chroma-DC columns, `nC == -2`).
-//! The fetched primary source is the *original* 2002 baseline text, which
-//! predates 4:2:2 chroma-DC support — a later amendment's addition — so
-//! there is no Table 9-9b in it to check against. Both remain the original,
-//! self-consistency-only transcription; `TOTAL_ZEROS_CHROMA_DC_422`'s two
-//! rows that fail even that weaker check are still excluded at runtime
-//! (`cavlc.rs`), and `COEFF_TOKEN_CHROMA_DC_422` — which happens to pass
-//! self-consistency — should be read as no more trustworthy than that,
-//! given how many of this file's now-corrected rows also once did.
+//! The fetched primary source is the original 2002 baseline text, which
+//! predates 4:2:2 chroma-DC support, so there is no Table 9-9b in it to
+//! check against. Both remain self-consistency-only transcriptions;
+//! `TOTAL_ZEROS_CHROMA_DC_422`'s two rows that fail even that weaker check
+//! are excluded at runtime (`cavlc.rs`), and `COEFF_TOKEN_CHROMA_DC_422`
+//! should be read as no more trustworthy, given how many of this file's
+//! now-corrected rows also once passed self-consistency.
 //!
-//! Fetching a *second*, independent primary source (beyond the one
-//! self-consistency-driven correction pass above) to cross-check the
-//! now-corrected tables against, per the standing instruction, was
-//! attempted and only partly achieved: a full second full-text edition
-//! could not be retrieved in this environment (direct downloads from
-//! `itu.int`'s own PDF gateway were rejected outright by its edge/WAF, and
-//! a second host's copy exceeded the fetch tool's size limit), so the
-//! correction above rests on one fetched primary source rather than two
-//! independently cross-checked ones. Recorded as a real limitation, not
-//! elided.
+//! A second, independent primary source could not be retrieved in this
+//! environment (direct downloads from `itu.int`'s PDF gateway were
+//! rejected by its edge/WAF, and a second host's copy exceeded the fetch
+//! tool's size limit), so the correction above rests on one fetched
+//! primary source rather than two independently cross-checked ones.
 //!
 //! Each entry is `(bit_length, code)`, `code` being the bits as written in
 //! the standard, MSB-first, read as an unsigned integer of `bit_length` bits.

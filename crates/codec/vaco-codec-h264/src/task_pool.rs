@@ -1,49 +1,41 @@
-//! Picture-shaped scratch reused across frame tasks (`planning/PERF-PROGRAMME.md`
-//! item A0).
+//! Picture-shaped scratch reused across frame tasks.
 //!
-//! Every picture used to allocate and free, afresh: its
+//! Every picture used to allocate and free, afresh, its
 //! [`crate::mb::MbSummary`] array (1,888 bytes each, 32,400 of them at 4K --
 //! 59 MiB), its working reconstruction buffer
 //! ([`crate::reconstruct::PictureReconstructor`], another ~12 MiB), and its
 //! cropped output [`Frame`]'s own sample storage (~12 MiB more). None of
 //! that is retained state -- a decoded picture's *pixels* end up in the
 //! output `Frame` or a DPB entry, never in these -- so freeing it is
-//! correct, but freeing and immediately reallocating the same size on the
-//! very next picture is pure churn. Measured on a 4K clip: the live set is
-//! ~150 MiB but peak RSS reached 3.87 GiB at 75 frames, because the
-//! allocator caches freed buffers of these sizes rather than returning them
-//! to the OS (`vmmap`'s `MALLOC_LARGE (empty)`), and a chunk of that cache
-//! ends up swapped once it outgrows physical memory.
+//! correct, but reallocating the same size on the very next picture is
+//! pure churn. Measured on a 4K clip: the live set is ~150 MiB but peak RSS
+//! reached 3.87 GiB at 75 frames, because the allocator caches freed
+//! buffers of these sizes rather than returning them to the OS (`vmmap`'s
+//! `MALLOC_LARGE (empty)`), and a chunk of that cache ends up swapped once
+//! it outgrows physical memory.
 //!
 //! [`TaskBufferPools`] is the fix: three small free lists, one per shape,
 //! shared (via `Arc`) between the decoder's serial half and every
 //! [`crate::frame_task::H264FrameTask`] it dispatches. A resolution switch
 //! clears a free list rather than trying to reuse mis-sized buffers -- the
 //! same rule [`vaco_frame::FramePool`] and `vaco_pool::BufferPool` already
-//! use, which is why the output frame goes through that type directly
-//! rather than a fourth bespoke mechanism (D19).
+//! use, which is why the output frame goes through that type directly.
 //!
 //! # Budgeting
 //!
 //! The decoder's own aggregate budget (`H264Decoder::budget`) charges and
-//! releases one lump sum per in-flight task -- `task_charge` at
-//! `decoder.rs`'s dispatch site -- computed from *lengths*, not from
-//! whether the bytes behind them came from the allocator or a free list.
-//! That accounting is already correct for pooled buffers with no change: it
-//! charges "this many bytes are part of a picture in flight" and releases
-//! them when that picture is collected, which is true whether the storage
-//! was just `malloc`'d or just came off a free list.
+//! releases one lump sum per in-flight task, computed from *lengths*, not
+//! from whether the bytes came from the allocator or a free list -- that
+//! accounting needs no change for pooled buffers.
 //!
 //! What pooling changes is the *task-local* `Budget` each
 //! [`crate::frame_task::H264FrameTask::run`] creates for its own
 //! `max_alloc_single`/`max_frame_bytes` checks. A fresh allocation goes
 //! through `Budget::alloc` as before; a pooled reuse calls
 //! [`vaco_limits::Budget::charge`] for the same byte count instead --
-//! checked and committed exactly like a real allocation, just without
-//! asking the system allocator for memory it already holds. Never
+//! checked and committed exactly like a real allocation. Never
 //! `Vec::with_capacity`/`reserve` (denied workspace-wide): every `Vec` here
-//! either comes straight off a free list or grows the ordinary way, by
-//! `push`.
+//! either comes straight off a free list or grows by `push`.
 
 use std::sync::{Arc, Mutex, PoisonError};
 

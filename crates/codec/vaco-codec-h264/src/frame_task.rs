@@ -1,58 +1,43 @@
-//! [`H264FrameTask`] — the parallel half of the decoder, and the only place
-//! reference *samples* are read.
+//! [`H264FrameTask`] — the parallel half of the decoder, and the only place reference *samples* are read.
 //!
 //! # The split, and why it falls here
 //!
-//! [`crate::decoder::H264Decoder::split_packet`] is the serial half: it parses
-//! the access unit, runs CABAC over the slice, builds the reference lists,
-//! applies clause 8.2.5's reference-picture marking and decides every output
-//! ordering question. All of that is mutable decoder state and stays on one
-//! thread, exactly as `vaco_codec_core::threading`'s module doc argues it
-//! should.
+//! [`crate::decoder::H264Decoder::split_packet`] is the serial half: it parses the access unit, runs CABAC
+//! over the slice, builds the reference lists, applies clause 8.2.5's reference-picture marking and decides
+//! every output ordering question -- mutable decoder state, kept on one thread.
 //!
-//! This is everything after that: clause 8.4/8.5 reconstruction, clause 8.7
-//! deblocking, and the crop into a [`Frame`]. Two facts make it the right
-//! seam:
-//!
-//! * **It is where the time goes.** The profile in `planning/E2E-GAPS.md` §19
-//!   puts `reconstruct_picture` + `sample_luma_block` + the two deblocking
-//!   passes at roughly 55% of self time before the long tail, against about 9%
-//!   for `decode_slice_cabac` and `residual_block_cabac` together.
-//! * **It is the only half that needs reference pixels.** Entropy decoding
-//!   needs the co-located picture's *motion field*, which is metadata the
-//!   serial half already holds the moment that picture's slice was decoded —
-//!   never its samples. So the serial half can run arbitrarily far ahead of
-//!   the pixels, and the dependency graph this task waits on is exactly the
-//!   reference-picture graph and nothing else.
+//! This task is everything after that: clause 8.4/8.5 reconstruction, clause 8.7 deblocking, and the crop
+//! into a [`Frame`]. It is where the time goes -- a profile puts `reconstruct_picture` +
+//! `sample_luma_block` + the two deblocking passes at roughly 55% of self time before the long tail,
+//! against about 9% for `decode_slice_cabac` and `residual_block_cabac` together -- and it is the only half
+//! that needs reference *pixels*: entropy decoding needs only the co-located picture's motion field, which
+//! the serial half already holds the moment that picture's slice was decoded. So the serial half can run
+//! arbitrarily far ahead of the pixels, and the dependency graph this task waits on is exactly the
+//! reference-picture graph.
 //!
 //! # How the waiting works, without `unsafe`
 //!
-//! Each reference is a [`PictureRef`]: a shared handle to a picture that may
-//! still be in production. [`TaskCtx::wait_rows`] blocks until the rows are
-//! published and hands back a borrow of them. Publication moves a band *out* of
-//! the writer and into an `OnceLock`, so a reader cannot observe a partially
-//! written one — the compiler, not a convention, is what rules out the race.
+//! Each reference is a [`PictureRef`]: a shared handle to a picture that may still be in production.
+//! [`TaskCtx::wait_rows`] blocks until the rows are published and hands back a borrow of them. Publication
+//! moves a band *out* of the writer and into an `OnceLock`, so a reader cannot observe a partially written
+//! one -- the compiler rules out the race.
 //!
 //! # Granularity: rows, and what bounds the wait
 //!
-//! Reconstruction and clause 8.7's filter are interleaved a macroblock row at a
-//! time ([`crate::reconstruct::PictureReconstructor`]), the filter one row
-//! behind, so a row of this picture becomes *final* while the picture is still
-//! being produced. [`RowPublisher`] copies each band into the DPB entry and
-//! publishes it the moment every row it holds is final, and the next picture
-//! starts predicting from it there rather than waiting for the whole thing.
+//! Reconstruction and clause 8.7's filter are interleaved a macroblock row at a time
+//! ([`crate::reconstruct::PictureReconstructor`]), the filter one row behind, so a row becomes *final*
+//! while the picture is still being produced. [`RowPublisher`] copies each band into the DPB entry and
+//! publishes it the moment every row it holds is final, so the next picture can predict from it there
+//! rather than waiting for the whole picture.
 //!
-//! The wait is derived, not guessed. Before reconstructing macroblock row `my`,
-//! [`crate::reconstruct::row_reference_reach`] walks that row's own motion
-//! vectors and reports, per reference and per plane, the deepest row clause
-//! 8.4.2.2's filters will actually read — `y + (mv_y >> 2) + 6` for luma's
-//! six-tap, `cy + (mv_y >> 3) + 2` for chroma's bilinear. A reference the row
-//! does not predict from is not waited on at all. Reading past what was waited
-//! for is refused by `PlaneView::block` rather than served, so a bound that was
-//! ever too small would be an error and never wrong pixels.
-//!
-//! At `-threads 1` none of this runs: the DPB entry is one band, the whole
-//! picture is waited for once, and the planes are read as plain slices.
+//! The wait is derived, not guessed: before reconstructing macroblock row `my`,
+//! [`crate::reconstruct::row_reference_reach`] walks that row's motion vectors and reports, per reference
+//! and per plane, the deepest row clause 8.4.2.2's filters will actually read -- `y + (mv_y >> 2) + 6` for
+//! luma's six-tap, `cy + (mv_y >> 3) + 2` for chroma's bilinear. A reference the row does not predict from
+//! is not waited on, and reading past what was waited for is refused by `PlaneView::block` rather than
+//! served, so a bound that was ever too small would be an error and never wrong pixels. At `-threads 1`
+//! none of this runs: the DPB entry is one band, the whole picture is waited for once, and the planes are
+//! read as plain slices.
 
 use vaco_codec_core::picture::{PictureRef, PictureWriter};
 use vaco_codec_core::{FrameTask, TaskCtx};
@@ -137,9 +122,9 @@ pub(crate) struct H264FrameTask {
     pub(crate) limits: Limits,
     /// The decoder's own free lists for this task's working reconstruction
     /// buffer, its `macroblocks` array and its output frame's storage —
-    /// see `crate::task_pool`'s own doc (`planning/PERF-PROGRAMME.md` item
-    /// A0). Cloning is a cheap `Arc` bump; every dispatched task shares the
-    /// same pools as the decoder that made it.
+    /// see `crate::task_pool`'s own doc. Cloning is a cheap `Arc` bump;
+    /// every dispatched task shares the same pools as the decoder that
+    /// made it.
     pub(crate) pools: TaskBufferPools,
 }
 

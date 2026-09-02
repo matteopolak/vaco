@@ -1,16 +1,12 @@
 //! PNG and APNG, wrapping the `png` crate (D11).
 //!
-//! # What it is
-//!
-//! PNG's own [`codec::decode`]/[`codec::encode`] translate bytes to and from
+//! [`codec::decode`]/[`codec::encode`] translate bytes to and from
 //! [`vaco_frame::Frame`], covering plain PNG (any of the four colour types
 //! `EXPAND` leaves standing, at 8 or 16 bits) and APNG (`acTL`/`fcTL`/`fdAT`),
 //! compositing each animation frame onto a shared canvas per its dispose and
-//! blend operations the same way the reference decoder's pipeline does (plan
-//! 15 §4.10). [`PngDecoder`]/[`PngEncoder`] wrap those pure functions in the
+//! blend operations the same way the reference decoder's pipeline does.
+//! [`PngDecoder`]/[`PngEncoder`] wrap those pure functions in the
 //! `vaco_codec_core::SendReceive` protocol every codec in this tree shares.
-//!
-//! # How it works
 //!
 //! A packet is the whole file; APNG can yield several frames from one
 //! packet, so both wrappers declare [`Caps::SUBFRAMES`] and queue every
@@ -19,16 +15,11 @@
 //! `send(None)`, at which point every buffered frame becomes one PNG (one
 //! frame) or one APNG (more than one).
 //!
-//! # How to change it
-//!
 //! [`codec`] is the only module that knows the `png` crate's types — no
 //! `png::` type appears in this crate's public API, which is the D11
 //! boundary. A colour-metadata mapping gap (an arbitrary `gAMA`/`cHRM` pair
 //! with no H.273 code point) or a coverage gap belongs in
-//! [`codec::map_color_info`] or [`codec::decode`] respectively; the
-//! `SendReceive` wrappers here should not need to change for either.
-//!
-//! # Configuration
+//! [`codec::map_color_info`] or [`codec::decode`] respectively.
 //!
 //! [`vaco_limits::Limits`] bounds every allocation this crate makes; see
 //! [`codec::decode`]'s own docs for where it does and does not currently

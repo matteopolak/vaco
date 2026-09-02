@@ -2,6 +2,33 @@
 //! into a [`vaco_codec_core::Decoder`]: I-picture header, then every
 //! macroblock's `CBPCY`/`ACPRED`, then every block's DC/AC decode, dequant,
 //! inverse transform, and reconstruction (SS8.1).
+//!
+//! # What is cut
+//!
+//! - Only High Rate Intra/Inter (SS11.8.6/11.8.7) of the eight AC coding
+//!   sets is transcribed; the other six (SS11.8.1-11.8.5) are large VLC
+//!   tables this pass did not verify to this project's tier-3 standard. A
+//!   picture selecting an untranscribed set returns
+//!   [`vaco_core::Error::Unsupported`] rather than guessing.
+//! - `OVERLAP == 1` is refused: SS8.1.3.10 couples the final `+128`
+//!   DC-offset step to overlap filtering (SS8.5.1) as one reconstruction
+//!   rule, not two independent filters, so the offset cannot be applied
+//!   without also implementing the filter. `OVERLAP == 0` (this crate's
+//!   real fixture) needs no smoothing and is fully implemented.
+//! - In-loop deblocking (SS8.6) is not implemented; `LOOPFILTER == 1` is
+//!   refused for the same reason as `OVERLAP` — a real, measured pixel
+//!   effect this crate cannot silently omit.
+//! - `MULTIRES`/`RESPIC != 0` (Annex B down/up-sampling) is refused; only
+//!   full-resolution (`RESPIC == 0`) frames decode.
+//! - `VOPDQUANT` (per-macroblock quantizer variation) never appears in
+//!   Table 27's I/BI Simple/Main macroblock syntax, so `MQUANT` is constant
+//!   (`== PQUANT`) for the whole picture by construction, not omission —
+//!   `RANGERED`, non-implicit `QUANTIZER`, and per-macroblock `HALFQP`
+//!   combinations do not arise.
+//! - P, B, BI pictures, interlace, and Advanced profile are all refused.
+//!
+//! Every refusal above is a real `Error::Unsupported` return, never a wrong
+//! decode.
 
 use std::collections::VecDeque;
 
@@ -605,10 +632,9 @@ fn make(limits: Limits) -> Box<dyn Decoder> {
 ///
 /// `caps: Caps::PATENT_ENCUMBERED` plus `vaco-component.toml`'s
 /// `encumbered = true` / `default = false` pair (D4/D4.1) — VC-1 is
-/// Microsoft/MPEG-LA-pool patent-encumbered and was, before this crate,
-/// entirely absent from `planning/research/07-legal-patents-licensing.md`.
-/// No ruling on this project's own exposure has been made; this mirrors
-/// `vaco-codec-h264`'s gate exactly, pending one.
+/// Microsoft/MPEG-LA-pool patent-encumbered, with no ruling yet on this
+/// project's own exposure; this mirrors `vaco-codec-h264`'s gate exactly,
+/// pending one.
 pub const DECODER_VC1: ::vaco_codec_core::DecoderDesc = ::vaco_codec_core::DecoderDesc {
     name: "vc1",
     long_name: "SMPTE VC-1 (Simple/Main profile, progressive I-frame only)",

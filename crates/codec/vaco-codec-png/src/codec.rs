@@ -97,7 +97,7 @@ fn map_matrix(mc: u8) -> MatrixCoefficients {
 /// 1/2.2 (PNG's overwhelmingly common non-sRGB value) maps to
 /// [`TransferCharacteristic::Gamma22`]. Anything else is left
 /// [`Default::default`] (`Unspecified`): an arbitrary `gAMA`/`cHRM` pair has
-/// no H.273 code point to land on, which is a known gap (plan 15 §4A.2).
+/// no H.273 code point to land on.
 fn map_color_info(info: &png::Info<'_>) -> ColorInfo {
     if let Some(cicp) = &info.coding_independent_code_points {
         return ColorInfo {
@@ -241,7 +241,7 @@ fn to_rgba8(color: png::ColorType, depth: png::BitDepth, width: u32, height: u32
 ///
 /// A non-animated PNG (no `acTL`) always yields exactly one [`Frame`] in its
 /// own native pixel format. An APNG composites each subframe onto a shared
-/// canvas per its `fcTL` dispose/blend operations (plan 15 §4.10) and yields
+/// canvas per its `fcTL` dispose/blend operations and yields
 /// one 8-bit RGBA [`Frame`] per output frame — compositing collapses bit
 /// depth to 8, a documented simplification (see the crate's module docs).
 ///

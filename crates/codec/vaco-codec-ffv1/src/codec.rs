@@ -10,35 +10,28 @@
 //!
 //! - **Version**: 3 only, matching `ffmpeg -c:v ffv1`'s own default (measured
 //!   via `ffmpeg -h encoder=ffv1` and a real encode's Matroska `CodecPrivate`
-//!   size — see the crate's top-level docs for the blackbox provenance entry).
-//! - **Slicing**: this crate's own encoder writes exactly one slice.
-//!   *Decode*, however, had to cover more than one: measured directly, even a
-//!   64x64 `ffmpeg` encode — nowhere near RFC 9043 §5's 101376-pixel
-//!   multi-slice threshold — defaults to a 2x2 slice grid. [`locate_slices`]
-//!   walks `SliceFooter.slice_size` backward from the end of the packet to
-//!   find each slice's independent byte range (RFC 9043 §4.9.1's own stated
-//!   purpose for that field), and this is cross-checked pixel-exact against
-//!   a real 4-slice `ffmpeg` file (range-coder mode — see the `coder_type`
-//!   note below).
-//! - **Coder**: this crate's own encoder always emits `coder_type = 1`
-//!   (range coder, default table), and decoding that back is cross-checked
-//!   pixel-exact against a real `ffmpeg -coder range_def` encode (multi-slice,
-//!   Y/Cb/Cr all exact). `coder_type = 0` (Golomb-Rice) — `ffmpeg -c:v
-//!   ffv1`'s own *default* — parses without erroring but has a known,
-//!   unresolved decode bug: cross-checked against a real default-coder
-//!   `ffmpeg` file, output diverges from the very first sample in a pattern
-//!   consistent with the run-mode prefix in `rice.rs`'s `RunState` never
-//!   correctly extending a run (every context-0 sample falls through to the
-//!   terminating-value decode instead), even once the byte-level Sentinel
-//!   handoff position was confirmed by exhaustive search not to be the
-//!   cause. Documented here rather than silently left — `coder_type = 2`
-//!   (custom state transition table) is untested for the same reason no
-//!   fixture reaches it.
+//!   size).
+//! - **Slicing**: the encoder writes exactly one slice. Decode covers more:
+//!   even a 64x64 `ffmpeg` encode — nowhere near RFC 9043 §5's 101376-pixel
+//!   multi-slice threshold — defaults to a 2x2 grid. [`locate_slices`] walks
+//!   `SliceFooter.slice_size` backward from the end of the packet to find
+//!   each slice's byte range (§4.9.1), cross-checked pixel-exact against a
+//!   real 4-slice `ffmpeg` file (range-coder mode).
+//! - **Coder**: the encoder always emits `coder_type = 1` (range coder,
+//!   default table), cross-checked pixel-exact against a real
+//!   `ffmpeg -coder range_def` encode. `coder_type = 0` (Golomb-Rice,
+//!   `ffmpeg`'s own default) parses but has a known, unresolved decode bug:
+//!   against a real default-coder file, output diverges from the first
+//!   sample in a pattern consistent with `rice.rs`'s `RunState` never
+//!   correctly extending a run, even after the byte-level Sentinel handoff
+//!   position was confirmed by exhaustive search not to be the cause.
+//!   `coder_type = 2` (custom transition table) is untested — no fixture
+//!   reaches it.
 //! - **Bit depth**: 8 only.
-//! - **Color**: `Yuv420p`/`Yuv422p`/`Yuv444p` (`colorspace_type` 0) and `Gbrp`
-//!   (`colorspace_type` 1, via the JPEG 2000 RCT). No alpha plane. Own-encoder
-//!   round trip is cross-checked for all four; the real-`ffmpeg` cross-check
-//!   fixture is `Yuv420p` only.
+//! - **Color**: `Yuv420p`/`Yuv422p`/`Yuv444p` (`colorspace_type` 0) and
+//!   `Gbrp` (`colorspace_type` 1, via the JPEG 2000 RCT). No alpha plane.
+//!   Own-encoder round trip is cross-checked for all four; the real-`ffmpeg`
+//!   cross-check fixture is `Yuv420p` only.
 
 use vaco_core::{Error, Result};
 use vaco_limits::Budget;
