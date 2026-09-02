@@ -1,0 +1,26 @@
+# Sources for vaco-codec-adpcm. IMA_STEP_TABLE and SWF_INDEX_TABLE_5BIT are
+# the only two constant tables in this crate at or above the 32-element
+# provenance threshold; see tables.rs's own module doc for the rest of the
+# crate's tables (MS_ADAPT_*, the smaller SWF_INDEX_TABLE_*) and why they
+# carry no row here.
+
+[[source]]
+id       = "ima-adpcm-recommended-practices-1992"
+kind     = "spec"
+title    = "Interactive Multimedia Association, Digital Audio Focus and Technical Working Groups, \"Recommended Practices for Enhancing Digital Audio Compatibility in Multimedia Systems\", Revision 3.00 (IMA Compatibility Project Proceedings, Vol. 2 No. 2, October 1992) -- the original IMA/DVI ADPCM reference algorithm and its 89-entry step-size table plus 16-entry index-delta table, corroborated field-for-field (including the same 89-entry step table verbatim) by MultimediaWiki's independent \"IMA ADPCM\" writeup"
+acquired = "2026-09-02"
+where    = "https://wiki.multimedia.cx/index.php/IMA_ADPCM ; http://www.cs.columbia.edu/~hgs/audio/dvi/IMA_ADPCM.pdf"
+
+[[table]]
+name   = "IMA_STEP_TABLE"
+file   = "crates/codec/vaco-codec-adpcm/src/tables.rs"
+source = "ima-adpcm-recommended-practices-1992"
+clause = "The 89-entry ImaAdpcmStepTable"
+method = "transcribed"
+
+[[table]]
+name   = "SWF_INDEX_TABLE_5BIT"
+file   = "crates/codec/vaco-codec-adpcm/src/tables.rs"
+source = "adobe-swf-19"
+clause = "\"SoundStreamBlock\" ADPCM data, 5-bit code width index-delta table"
+method = "transcribed"
