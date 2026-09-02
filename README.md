@@ -4,15 +4,23 @@ A reimplementation of ffmpeg's command-line tools in Rust, written from publishe
 specifications rather than from FFmpeg's source.
 
 `vaco` transcodes, `vaco-probe` inspects. They use the same option names as `ffmpeg`
-and `ffprobe`, print the same shapes of output, and are tested by comparing their
-bytes against the real thing. Many of those options are not implemented yet — see
-[Option coverage](#option-coverage) — and the ones that aren't now fail with a
-named error rather than being accepted and ignored.
+and `ffprobe` and print the same shapes of output. Many of those options are not
+implemented yet — see [Option coverage](#option-coverage) — and most of the ones that
+aren't fail with a named error rather than being accepted and ignored.
 
-This is not a drop-in replacement, and it is not close to one yet. About a third of
-the container formats are implemented, video decoding runs several times slower than
-FFmpeg, and a number of codecs decode only intra frames. The tables below say exactly
-what works. If you need to get a job done today, use FFmpeg.
+This is not a drop-in replacement, and it is not close to one yet. It demuxes about
+half the containers ffmpeg does and muxes about two thirds, but registers only 17% as
+many decoders; video decoding runs roughly 7–17x slower; several codecs decode only
+intra frames; and a few that are registered and advertised are currently **wrong**,
+including FFV1 and AC-3. H.264 *encode* writes malformed files. The tables below say
+which, with the measurements.
+
+Read those tables rather than the component counts. Everything in them was checked by
+decoding real files and comparing output against ffmpeg — which is how the broken ones
+were found, and it is worth knowing that the automated suite would not have caught
+them: none of its 709 cases compares a decoded pixel.
+
+If you need to get a job done today, use FFmpeg.
 
 ## Why this exists
 
