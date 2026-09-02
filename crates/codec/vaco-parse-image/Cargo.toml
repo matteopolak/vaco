@@ -1,6 +1,6 @@
 [package]
 name = "vaco-parse-image"
-description = "PNG/JPEG/GIF/BMP/TIFF/WebP header parsing (no decode)."
+description = "Still-image header parsing: dimensions and pixel format, no decode."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -187,11 +187,40 @@ Full per-format framing strategy, in `pipe/mod.rs`'s registration order:
 | `xpm_pipe` | `CArrayText` | No encoder; same C-array grammar as `xbm`, unverified for XPM specifically |
 | `xwd_pipe` | `Xwd` (X11 `XWDFileHeader`, 25 BE `u32` fields) | Measured |
 
-`CodecId` (`vaco-codec-core`) has variants for only six of the 37: `png`,
-`jpeg` (used for `jpeg_pipe`/reported as `mjpeg`), `gif`, `bmp`, `tiff`,
-`webp`. The other 31 carry `codec_id = None` and the reference's exact name
-as `raw_codec_name` stream metadata — `vaco-demux-raw`'s own documented
-convention for the identical gap.
+`CodecId` (`vaco-codec-core`) has variants for 18 of the 37: `bmp`, `gif`,
+`jpeg` (used for `jpeg_pipe`/reported as `mjpeg`), `jpegls`, `pam`, `pbm`,
+`pcx`, `pfm`, `pgm`, `phm`, `png`, `ppm`, `qoi`, `sgi`, `tiff`, `webp`, `xbm`,
+`xwd`. The other 19 carry `codec_id = None` and the reference's exact name as
+`raw_codec_name` stream metadata — `vaco-demux-raw`'s own documented convention
+for the identical gap.
+
+### Probe scoring: a two-byte magic is not proof
+
+`pipe_probe` awards `ProbeScore::MAX` to a content signature of four bytes or
+more, and to a shorter one only when the filename's extension agrees;
+otherwise a short signature scores `ProbeScore::MAGIC` (90), still ahead of
+every extension-only answer.
+
+This is not decoration. `jpeg_pipe`'s signature is `FF D8`, which is also the
+first two bytes of every JPEG-LS file. Both scored `MAX`, so registration order
+decided: a `.jls` file selected `jpeg_pipe` (measured, against `ffprobe`'s
+`jpegls_pipe`) and the JPEG decoder then failed it with `SOS before SOF`.
+`jpegls_pipe` now matches `FF D8 FF F7` — SOI followed by SOF55, which is
+JPEG-LS and nothing else.
+
+### The `image2` probe reads one shared extension list
+
+`image2`'s probe used to carry a hand-written sixteen-extension list, which
+omitted `tga` among others. TGA has no `*_pipe` splitter here or in the
+reference, so `image2` is the only demuxer that can open one, and `t.tga`
+matched nothing at all: `vaco-probe` answered `Invalid data found when
+processing input` where `ffprobe` answered `image2`.
+
+Both the probe and `Image2Demuxer::open_pattern`'s `codec_id` now read
+`vaco_codec_core::IMAGE_EXTENSIONS` / `image_codec_for_extension`, the same
+table `vaco-mux-image2`'s `MUXER_IMAGE2.extensions` and `vaco-cli`'s
+output-codec guess read. Naming the codec from the URL is the only thing that
+can: nothing on the `image2` path inspects the bytes.
 
 ## How to add a splitter
 
