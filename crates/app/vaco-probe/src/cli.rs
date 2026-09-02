@@ -181,8 +181,28 @@ impl Default for Options {
 /// `-analyze_frames` with neither of those set was still silently accepted
 /// before this list existed, and a second, narrower name here is simpler
 /// than special-casing it out.
+///
+/// `c`/`codec` ("force a decoder") is the same [`crate::FRAMES_UNSUPPORTED`]
+/// gap one option earlier: this crate has no decoder at all in this build
+/// (D5/D14.4 -- v0.2's roadmap item), so there is nothing for a forced
+/// decoder name to override. Verified by running the real binary, not by
+/// reading this list: `vaco-probe -c h264_foo -show_streams ...` exited 0
+/// and produced normal output before this row existed, exactly as if `-c`
+/// had not been typed. `cpucount` ("override the detected CPU count") has
+/// the identical shape for a different reason: this binary spawns no
+/// threads of its own (`main.rs` reads argv, calls into the library, writes
+/// the result -- see its own doc) and depends on no decoder whose thread
+/// pool sizing `cpucount` could affect, so there is no CPU-count-driven
+/// behaviour anywhere in this build for the option to change. Both found
+/// during `cargo xtask reachability-check`'s cross-scanner audit, which
+/// this list's own two additions and `option_consumption`'s fix (it had
+/// been letting `vaco-cli`'s own source vouch for `vaco-probe`'s
+/// `-v`/`-loglevel`, which this crate genuinely does implement, correctly,
+/// via `vaco_cli_core::loglevel::wants_banner`) are both part of.
 const UNIMPLEMENTED: &[&str] = &[
     "analyze_frames",
+    "c",
+    "cpucount",
     "cpuflags",
     "find_stream_info",
     "max_alloc",
@@ -563,6 +583,38 @@ mod tests {
             vec!["--", "-show_format"],
         ] {
             let _ = parse(&args);
+        }
+    }
+
+    /// Regression for `cargo xtask reachability-check`'s cross-scanner
+    /// audit / `option_consumption`: `-c`/`-codec` and `-cpucount` parsed
+    /// and were silently accepted with no effect (verified against the real
+    /// binary before this list named them: exit 0, normal output, exactly
+    /// as if the flag had not been typed). Both now refuse.
+    #[test]
+    fn force_decoder_and_cpucount_are_refused_not_silently_ignored() {
+        // `parse` itself still succeeds (matching every other name in
+        // `UNIMPLEMENTED` -- the reference prints its banner before
+        // reporting this kind of error, so parsing has to finish first);
+        // `Options::unimplemented` is what `execute` checks to fail loudly.
+        assert_eq!(p(&["-c", "h264_foo", "a.mp4"]).unimplemented, Some("c"));
+        assert_eq!(p(&["-codec", "h264_foo", "a.mp4"]).unimplemented, Some("c"));
+        assert_eq!(p(&["-cpucount", "1", "a.mp4"]).unimplemented, Some("cpucount"));
+    }
+
+    /// Every name in `UNIMPLEMENTED` must produce its own message from
+    /// [`crate::unimplemented_option_message`], not the generic fallback --
+    /// the two are two independent lists that must be kept in sync by hand,
+    /// and nothing else in this crate checked that until this test.
+    #[test]
+    fn every_unimplemented_name_has_its_own_message() {
+        let generic = crate::unimplemented_option_message("not-a-real-option-name");
+        for name in UNIMPLEMENTED {
+            assert_ne!(
+                crate::unimplemented_option_message(name),
+                generic,
+                "{name} falls through to the generic message -- add it to                  unimplemented_option_message's own match in lib.rs"
+            );
         }
     }
 }

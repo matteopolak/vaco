@@ -119,6 +119,8 @@ pub const FRAMES_UNSUPPORTED: &str = "-show_frames/-count_frames need a decoder;
 pub fn unimplemented_option_message(name: &str) -> &'static str {
     match name {
         "analyze_frames" => "-analyze_frames is accepted by this build's option table but not implemented yet.",
+        "c" => "-c/-codec is accepted by this build's option table but not implemented yet: this build has no decoder at all (D5/D14.4), so there is nothing for a forced decoder name to override.",
+        "cpucount" => "-cpucount is accepted by this build's option table but not implemented yet: this binary spawns no threads and depends on no decoder whose thread pool sizing it could affect.",
         "cpuflags" => "-cpuflags is accepted by this build's option table but not implemented yet.",
         "find_stream_info" => "-find_stream_info is accepted by this build's option table but not implemented yet.",
         "max_alloc" => "-max_alloc is accepted by this build's option table but not implemented yet.",
