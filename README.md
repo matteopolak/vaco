@@ -125,8 +125,14 @@ and report one offset, with no breakdown at all.
 
 They concentrate in probe metadata and container remux details — a `start_time`
 defaulting to 0 rather than N/A, a raw timebase where the reference normalises one, an
-unmapped codec profile — rather than in decoded pixels, which is where the
-byte-exactness above is measured.
+unmapped codec profile.
+
+Read that number with its limit in mind: **none of the 709 cases compares a decoded
+pixel or audio sample.** The suite checks what the tools report and how containers are
+written, so a codec can be entirely broken and every case stays green — which is
+exactly what FFV1 did. The per-codec rows below come from decoding files and comparing
+output against ffmpeg by hand; they are the more honest signal, and they are why
+several rows say "no".
 
 `planning/CONFORMANCE-FINDINGS.md` has the breakdown and the method for extending it.
 
