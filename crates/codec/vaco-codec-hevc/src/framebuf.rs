@@ -963,6 +963,24 @@ impl Plane {
 // needs `with_bands`, at which point `row_mut`'s own single-row-at-a-time
 // shape stops being expressible and every caller moves to `wait_tile`-
 // mediated reads instead (see the design doc).
+//
+// A subtlety every "current owned/mutable band, earlier bands published
+// read-only" type in this module shares, worth stating once rather than
+// re-discovering per type: on `finish`, the *last* band must still be
+// frozen into the published side, and whatever plays the role of `current`
+// afterward must stop being reachable by a read for that last band's own
+// index — not merely have its old, real contents moved out. `ReconPlane`
+// does this by advancing `current` to `n_row_bands` (one past the last
+// valid index) once `finish` publishes through the end; `EdgeMarks` and any
+// later type built the same way (`CuGrid`, `sao_params` — see
+// `docs/codec/hevc-wavefront-threading.md`'s "Concrete Stage 1 plan", step
+// 3) need the identical move in their own `finish`. Skipping it is a silent
+// bug, not a loud one: a read for the last band after `finish` still finds
+// a same-shaped, in-range answer — the freshly emptied `current` left
+// behind — so nothing panics or errors, it is simply wrong (every value
+// read back as the type's own "unwritten" default). This is why the shape
+// is "advance one past the end", not "leave `current` pointing at the last
+// band once it is frozen".
 
 use vaco_codec_core::picture::{PictureRef, PictureSpec, PictureWriter, PlaneSpec, ProgressPicture};
 
@@ -1064,7 +1082,10 @@ impl ReconPlane {
 
     /// Publish every remaining row band — the walk is done; deblocking and
     /// SAO read the materialized flat [`Picture`] instead of this one from
-    /// here on.
+    /// here on. Advances `current` one past the last valid row band, not
+    /// merely to it — see this module's own "Stage 1" section doc for why
+    /// that distinction matters to every type built this way, not just this
+    /// one.
     ///
     /// # Errors
     /// [`vaco_core::Error`] if publishing fails.
