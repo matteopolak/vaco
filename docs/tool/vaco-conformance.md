@@ -118,20 +118,24 @@ a regression test for it.
 |---|---|---|---|
 | C0 | `exact-bytes` | **implemented** | every probe writer, deterministic remuxes, listing commands, exit codes |
 | C1 | `exact-bytes-normalised` | **implemented** | C0 with a declared normalisation chain |
-| C2 | `container-structure` | seam | remuxes where byte equality is unattainable but structure is meaningful |
-| C3 | `frame-hash` | seam | decoder conformance at scale |
-| C4 | `raw-exact` | **implemented, for the `filter` tool** (see "The `filter` tool" below); still a seam for decoders | any decoder we claim is bit-exact, and every filter's pixel output |
-| C5 | `raw-tolerant` | seam | codecs whose *spec* defines conformance as a bounded error |
+| C4 | `raw-exact` | **implemented** (`compare::raw::compare`) | decoders we claim are bit-exact (lossless codecs), and every filter's pixel output |
+| C5 | `raw-tolerant` | **implemented** (`compare::raw::compare_tolerant`) | codecs whose *spec* defines conformance as a bounded error |
 | C6 | `structured-diff` | **implemented** (`default` writer) | the metadata surface where a few divergences are expected |
 | C7 | `behavioural` | **implemented** | malformed input, unsupported paths, the differential fuzzer |
-| C8 | `cross-decode` | seam | encoders and muxers, via interoperability |
-| C9 | `three-way` | seam | native / external / reference lattice (D11) |
-| C10 | `quality-band` | **seam, by design** | lossy encoders |
+| C10 | `quality-band` | seam — the metrics are not written | lossy encoders |
 
-**An unimplemented mode skips; it never passes.** That distinction is why the
-seams are typed rather than left as `todo!()`. A suite declaring C4 today shows
-up as "not implemented" in the run summary, and the tier skip budget makes that
-visible instead of silently green.
+C2 `container-structure`, C3 `frame-hash`, C8 `cross-decode` and C9
+`three-way` are not modes in this crate. They were typed seams with no
+manifest ever declaring them and no backing machinery (a container walker, a
+frame-digest pipeline, an interoperability matrix, the native/external/
+reference lattice) — removed rather than left unreachable. The design stays
+recorded in plan 13 §1.2 for whoever builds that machinery to re-add the mode
+alongside it.
+
+**An unimplemented mode skips; it never passes.** That distinction is why C10
+stays typed rather than left as `todo!()`. A suite declaring `quality-band`
+today shows up as "not implemented" in the run summary, and the tier skip
+budget makes that visible instead of silently green.
 
 **C10 is a seam on purpose.** Byte comparison applies to every operation whose
 output is fully determined by its input and its declared options; quality

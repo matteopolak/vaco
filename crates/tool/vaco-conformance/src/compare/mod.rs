@@ -16,7 +16,13 @@
 //! | C6 `structured-diff` | implemented ([`structured`]) |
 //! | C7 `behavioural` | implemented (outcome class only) |
 //! | C10 `quality-band` | **seam only** ([`quality`]) — the metrics are not written |
-//! | C2, C3, C8, C9 | seams; they need machinery from crates that do not exist yet |
+//!
+//! C2 `container-structure`, C3 `frame-hash`, C8 `cross-decode` and C9
+//! `three-way` are not modes in this enum. They were typed seams with no
+//! manifest ever declaring them and no machinery (a container walker, a
+//! frame-digest pipeline, an interoperability matrix, the native/external/
+//! reference lattice) to back them; the full design stays recorded in plan 13
+//! §1.2 for whoever builds that machinery to re-add the mode alongside it.
 //!
 //! An unimplemented mode returns [`Verdict::Skipped`] with
 //! [`SkipReason::ModeUnimplemented`], never a false pass. That distinction is
@@ -37,7 +43,7 @@ pub mod structured;
 
 use std::fmt;
 
-use crate::case::{Capture, Case, Compare, FailureKind, SkipReason, Verdict};
+use crate::case::{Capture, Case, Compare, FailureKind, Verdict};
 use crate::divergence::Allowlist;
 use crate::run::Observation;
 
@@ -205,12 +211,6 @@ pub fn evaluate(case: &Case, pair: &Pair<'_>, allow: &Allowlist) -> Verdict {
         Compare::QualityBand { band } => quality::compare(case, pair, band),
         Compare::RawExact => raw::compare(case, pair),
         Compare::RawTolerant { tolerance, .. } => raw::compare_tolerant(case, pair, tolerance),
-        Compare::ContainerStructure { .. }
-        | Compare::FrameHash { .. }
-        | Compare::CrossDecode { .. }
-        | Compare::ThreeWay { .. } => {
-            Verdict::Skipped(SkipReason::ModeUnimplemented(case.compare.mode_name()))
-        }
     }
 }
 
@@ -262,7 +262,7 @@ pub fn wants(captures: &[Capture], c: Capture) -> bool {
 )]
 mod tests {
     use super::{Pair, evaluate, outcome_class};
-    use crate::case::{Capture, Case, CaseId, Compare, Tier, Tool, Verdict};
+    use crate::case::{Capture, Case, CaseId, Compare, QualityBand, Tier, Tool, Verdict};
     use crate::divergence::Allowlist;
     use crate::normalise::Chain;
     use crate::run::Observation;
@@ -358,9 +358,16 @@ mod tests {
     fn unimplemented_modes_skip_rather_than_pass() {
         // `raw-exact` moved out of this list once `filterexec`/`raw::compare`
         // implemented it (see `compare::raw`'s own tests for its coverage
-        // now) — `frame-hash` is still a genuine seam.
-        let c = case(Compare::FrameHash {
-            variant: "framecrc".to_owned(),
+        // now) — `quality-band` with no metric this build registers is still
+        // a genuine seam, reached through the same top-level dispatch.
+        let c = case(Compare::QualityBand {
+            band: Box::new(QualityBand {
+                metric: "vmaf".to_owned(),
+                delta_q: 0.0,
+                delta_size: 0.0,
+                delta_time: 0.0,
+                justification: "test".to_owned(),
+            }),
         });
         let a = obs("x", Some(0));
         let b = obs("y", Some(0));

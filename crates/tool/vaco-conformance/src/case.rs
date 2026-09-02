@@ -191,7 +191,12 @@ pub struct QualityBand {
     pub justification: String,
 }
 
-/// The ten comparison modes (plan 13 §1.2, §1.10, §1.11.2).
+/// The six implemented comparison modes (plan 13 §1.2, §1.10, §1.11.2).
+///
+/// C2 `container-structure`, C3 `frame-hash`, C8 `cross-decode` and C9
+/// `three-way` are deliberately absent: no manifest ever declared them and
+/// the machinery they need does not exist, so they were removed rather than
+/// kept as unreachable stubs. The design stays recorded in plan 13 §1.2.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Compare {
     /// C0 — full byte equality after no normalisation.
@@ -204,16 +209,6 @@ pub enum Compare {
     ExactBytesNormalised {
         /// What is compared.
         captures: Vec<Capture>,
-    },
-    /// C2 — our own container walker's tree, compared node by node.
-    ContainerStructure {
-        /// Which walker to use, e.g. `isobmff`.
-        walker: String,
-    },
-    /// C3 — per-frame digests of decoded output.
-    FrameHash {
-        /// `pipe-hash` (C3a, preferred) or `framecrc`/`framemd5` (C3b).
-        variant: String,
     },
     /// C4 — full byte equality of the decoded raw stream.
     RawExact,
@@ -231,16 +226,6 @@ pub enum Compare {
     },
     /// C7 — outcome class only: exit code, accept/reject, error category.
     Behavioural,
-    /// C8 — the interoperability matrix.
-    CrossDecode {
-        /// Which of `x1`..`x4` to run.
-        legs: Vec<String>,
-    },
-    /// C9 — native / external / reference lattice (D11).
-    ThreeWay {
-        /// The pairwise comparison applied within the lattice.
-        inner: Box<Compare>,
-    },
     /// C10 — encoder quality band. Bitstreams are not compared at all.
     QualityBand {
         /// The declared band.
@@ -255,14 +240,10 @@ impl Compare {
         match self {
             Self::ExactBytes { .. } => "exact-bytes",
             Self::ExactBytesNormalised { .. } => "exact-bytes-normalised",
-            Self::ContainerStructure { .. } => "container-structure",
-            Self::FrameHash { .. } => "frame-hash",
             Self::RawExact => "raw-exact",
             Self::RawTolerant { .. } => "raw-tolerant",
             Self::StructuredDiff { .. } => "structured-diff",
             Self::Behavioural => "behavioural",
-            Self::CrossDecode { .. } => "cross-decode",
-            Self::ThreeWay { .. } => "three-way",
             Self::QualityBand { .. } => "quality-band",
         }
     }
@@ -296,20 +277,6 @@ impl Compare {
             }),
             "exact-bytes-normalised" => Ok(Self::ExactBytesNormalised {
                 captures: captures()?,
-            }),
-            "container-structure" => Ok(Self::ContainerStructure {
-                walker: t
-                    .get("walker")
-                    .and_then(Value::as_str)
-                    .ok_or("container-structure needs a `walker`")?
-                    .to_owned(),
-            }),
-            "frame-hash" => Ok(Self::FrameHash {
-                variant: t
-                    .get("variant")
-                    .and_then(Value::as_str)
-                    .unwrap_or("pipe-hash")
-                    .to_owned(),
             }),
             "raw-exact" => Ok(Self::RawExact),
             "raw-tolerant" => {
@@ -355,25 +322,6 @@ impl Compare {
                     .to_owned(),
             }),
             "behavioural" => Ok(Self::Behavioural),
-            "cross-decode" => Ok(Self::CrossDecode {
-                legs: t
-                    .get("legs")
-                    .and_then(Value::as_str_array)
-                    .unwrap_or_else(|| vec!["x1".into(), "x2".into(), "x3".into(), "x4".into()]),
-            }),
-            "three-way" => {
-                let mut inner_table = t.clone();
-                let inner_mode = t
-                    .get("inner")
-                    .and_then(Value::as_str)
-                    .ok_or("three-way needs an `inner` mode")?
-                    .to_owned();
-                inner_table.insert("mode".to_owned(), Value::String(inner_mode));
-                inner_table.remove("inner");
-                Ok(Self::ThreeWay {
-                    inner: Box::new(Self::from_manifest(&inner_table)?),
-                })
-            }
             "quality-band" => {
                 let band = t
                     .get("band")
@@ -720,15 +668,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn three_way_wraps_its_inner_mode() {
-        let c =
-            compare_of("[compare]\nmode = \"three-way\"\ninner = \"raw-exact\"\n").expect("parses");
-        match c {
-            Compare::ThreeWay { inner } => assert_eq!(inner.mode_name(), "raw-exact"),
-            other => panic!("wrong mode: {}", other.mode_name()),
-        }
-    }
 
     #[test]
     fn quality_band_needs_a_justification() {
