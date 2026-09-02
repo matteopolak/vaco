@@ -137,6 +137,13 @@ impl Scaler {
         let effective_src: &Frame = if special::float_info(real_src_spec.format).is_some() {
             src_proxy = special::float_frame_to_proxy(src, &mut self.budget)?;
             &src_proxy
+        } else if let Some(polarity) = mono_polarity(real_src_spec.format) {
+            // A 1-bit raster is not a `gray8` plane, however alike the two
+            // look to `plan_spec`. Without this the plan read each packed byte
+            // as one grey sample and every PBM/XBM decode came out as its own
+            // bitmap bytes reinterpreted as pixels.
+            src_proxy = special::unpack_mono(src, &mut self.budget, polarity)?;
+            &src_proxy
         } else {
             src
         };
@@ -273,12 +280,18 @@ fn spec_of(frame: &Frame) -> Result<ImageSpec> {
 
 /// Whether this crate can read `fmt`.
 ///
-/// True for the eight float formats even though `geometry` refuses them —
-/// see [`supports_output`]'s note; `monowhite`/`monoblack` are not included
-/// here, since `special` only ever produces them, never reads them.
+/// True for `monowhite`/`monoblack` and the eight float formats even though
+/// `geometry` refuses all ten — see [`supports_output`]'s note.
+///
+/// The two monochrome formats used to be excluded here, on the grounds that
+/// `special` only ever produced them. That stopped being true once the
+/// still-image decoders started emitting them, and the exclusion was how a
+/// 1-bit raster reached `geometry` to be read a byte per pixel.
 #[must_use]
 pub fn supports_input(fmt: vaco_pixfmt::PixFmt) -> bool {
-    special::float_info(fmt).is_some() || crate::geometry::supports_input(fmt)
+    mono_polarity(fmt).is_some()
+        || special::float_info(fmt).is_some()
+        || crate::geometry::supports_input(fmt)
 }
 
 /// Whether this crate can write `fmt`.

@@ -153,6 +153,78 @@ pub(crate) fn pack_mono(gray: &Frame, dst: &mut Frame, polarity: MonoPolarity) -
     Ok(())
 }
 
+/// Unpack a `monowhite`/`monoblack` frame's bit-packed plane into a fresh
+/// `gray8` frame — the read-side inverse of [`pack_mono`], MSB-first within
+/// each byte.
+///
+/// **Why this exists now.** `special` used to only ever *write* these two
+/// formats, so a monochrome source was left to `geometry`, which reads a
+/// plane as one byte per pixel. Feeding it a 1-bit raster made every eight
+/// pixels come back as one packed byte reinterpreted as a grey level: a PBM
+/// or XBM decoded through the CLI produced its own header bytes as pixels.
+/// The still-image decoders (`vaco-codec-pnm`'s PBM, `vaco-codec-image-simple`'s
+/// XBM, PAM's `BLACKANDWHITE`) all emit these formats, so the assumption that
+/// nothing produces them was simply out of date.
+///
+/// The polarity is [`pack_mono`]'s, inverted: a set bit is the dark sample
+/// under [`MonoPolarity::White`]. Measured against the reference — an
+/// `ffmpeg`-written `P4` whose first raster byte is `0xC3` decodes to
+/// `00 00 ff ff ff ff 00 00`.
+///
+/// # Errors
+/// [`Error::InvalidData`] if `src` is not video or has no plane 0;
+/// [`Error::LimitExceeded`] if the `gray8` proxy exceeds `budget`.
+pub(crate) fn unpack_mono(src: &Frame, budget: &mut Budget, polarity: MonoPolarity) -> Result<Frame> {
+    let FrameData::Video {
+        width,
+        height,
+        planes,
+        ..
+    } = &src.data
+    else {
+        return Err(Error::InvalidData("mono unpack: source is not video"));
+    };
+    let (width, height) = (*width, *height);
+    let src_plane = planes
+        .first()
+        .ok_or(Error::InvalidData("mono unpack: source has no plane"))?;
+    let src_stride = src_plane.stride;
+    let src_buf = src_plane.data.as_slice();
+
+    let mut out = Frame::alloc_video(budget, PixFmt::Gray8, width, height)?;
+    let FrameData::Video {
+        planes: out_planes, ..
+    } = &mut out.data
+    else {
+        return Err(Error::InvalidData("mono unpack: proxy is not video"));
+    };
+    let out_plane = out_planes
+        .first_mut()
+        .ok_or(Error::InvalidData("mono unpack: proxy has no plane"))?;
+    let out_stride = out_plane.stride;
+    let out_buf = out_plane.data.make_mut();
+
+    for y in 0..height as usize {
+        let src_row = y.saturating_mul(src_stride);
+        let out_row = y.saturating_mul(out_stride);
+        for x in 0..width as usize {
+            let byte = src_buf
+                .get(src_row.saturating_add(x >> 3))
+                .copied()
+                .unwrap_or(0);
+            let set = byte & (0x80u8 >> (x % 8)) != 0;
+            let dark = match polarity {
+                MonoPolarity::White => set,
+                MonoPolarity::Black => !set,
+            };
+            if let Some(slot) = out_buf.get_mut(out_row.saturating_add(x)) {
+                *slot = if dark { 0 } else { 0xFF };
+            }
+        }
+    }
+    Ok(out)
+}
+
 // ------------------------------------------------------------------ float
 
 /// Which IEEE-754 width a float pixel format's samples use.
@@ -551,6 +623,7 @@ pub(crate) fn proxy_to_float_frame(proxy: &Frame, dst: &mut Frame) -> Result<()>
 )]
 mod tests {
     use super::*;
+    use vaco_limits::Limits;
 
     #[test]
     fn f16_round_trips_every_representable_value_from_the_float_scale() {
@@ -617,6 +690,66 @@ mod tests {
             unreachable!()
         };
         assert_eq!(wp[0].data.as_slice()[0], !bp[0].data.as_slice()[0]);
+    }
+
+    /// A real `ffmpeg`-written `P4`'s first raster byte, and the grey samples
+    /// `ffmpeg -i src.pbm -f rawvideo -pix_fmt gray` produces from it.
+    #[test]
+    fn unpack_mono_matches_the_reference_grey_samples() {
+        let mut budget = Budget::new(Limits::permissive());
+        let mut src = Frame::alloc_video(&mut budget, PixFmt::MonoWhite, 8, 1).unwrap();
+        {
+            let FrameData::Video { planes, .. } = &mut src.data else {
+                panic!("not video")
+            };
+            planes[0].data.make_mut()[0] = 0xC3;
+        }
+        let out = unpack_mono(&src, &mut budget, MonoPolarity::White).unwrap();
+        let FrameData::Video { planes, .. } = &out.data else {
+            panic!("not video")
+        };
+        assert_eq!(
+            planes[0].data.as_slice()[..8],
+            [0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF, 0x00, 0x00]
+        );
+
+        let black = unpack_mono(&src, &mut budget, MonoPolarity::Black).unwrap();
+        let FrameData::Video { planes, .. } = &black.data else {
+            panic!("not video")
+        };
+        assert_eq!(
+            planes[0].data.as_slice()[..8],
+            [0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF]
+        );
+    }
+
+    /// A width that is not a byte multiple leaves padding bits in the last
+    /// byte; unpacking must stop at the declared width, not the byte edge.
+    #[test]
+    fn unpack_mono_stops_at_the_declared_width() {
+        let mut budget = Budget::new(Limits::permissive());
+        let mut src = Frame::alloc_video(&mut budget, PixFmt::MonoWhite, 13, 2).unwrap();
+        let stride = {
+            let FrameData::Video { planes, .. } = &mut src.data else {
+                panic!("not video")
+            };
+            let stride = planes[0].stride;
+            let buf = planes[0].data.make_mut();
+            buf[0] = 0xFF;
+            buf[1] = 0xFF;
+            buf[stride] = 0x00;
+            buf[stride + 1] = 0x00;
+            stride
+        };
+        let _ = stride;
+        let out = unpack_mono(&src, &mut budget, MonoPolarity::White).unwrap();
+        let FrameData::Video { planes, .. } = &out.data else {
+            panic!("not video")
+        };
+        let out_stride = planes[0].stride;
+        let buf = planes[0].data.as_slice();
+        assert!(buf[..13].iter().all(|&v| v == 0));
+        assert!(buf[out_stride..out_stride + 13].iter().all(|&v| v == 0xFF));
     }
 
     #[test]
