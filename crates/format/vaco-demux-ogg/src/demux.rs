@@ -711,6 +711,20 @@ fn describe(codec: OggCodec, bos: &[u8]) -> (MediaType, Rational, CodecParameter
                 // Same answer as Opus above and for the same reason: both
                 // decode to ffmpeg's internal float-planar representation.
                 format: Some(SampleFmt::F32P),
+                // A Vorbis stream's very first packet decodes at pts
+                // `-(blocksize_1 / 2)` — `GranuleTimeline`'s pre-first-packet
+                // cursor, see `granule::GranuleMapping::Vorbis` — because the
+                // first output block has no prior block to overlap-add
+                // against. Measured against the reference (`ffmpeg -c:a
+                // vorbis`, `-show_packets` and `-show_streams` on the same
+                // file): the first packet's own `pts` is negative there too,
+                // but `start_pts`/`start_time` are still `0`/`0.000000`, the
+                // same trick `initial_padding` already exists for Opus's real
+                // `pre_skip` (`vaco-format-core::discovery::finish` computes
+                // `start_pts = first_pts + initial_padding`). Using the same
+                // constant here rather than a fresh one keeps this exactly
+                // self-cancelling regardless of the file's block size.
+                initial_padding: ident.map_or(0, |v| v.blocksize_1 >> 1),
                 ..AudioParameters::default()
             });
             let tb = safe_rational(1, rate);
@@ -1024,5 +1038,48 @@ mod tests {
             params.audio.as_ref().unwrap().format,
             Some(SampleFmt::F32P)
         );
+    }
+
+    /// A minimal, valid-enough Vorbis identification packet — same shape as
+    /// `vaco-mux-ogg/tests/roundtrip.rs`'s `vorbis_ident` helper.
+    fn vorbis_bos(channels: u8, sample_rate: u32, blocksize_exp: u8) -> Vec<u8> {
+        let mut h = vec![0x01];
+        h.extend_from_slice(b"vorbis");
+        h.extend_from_slice(&0u32.to_le_bytes());
+        h.push(channels);
+        h.extend_from_slice(&sample_rate.to_le_bytes());
+        h.extend_from_slice(&0u32.to_le_bytes());
+        h.extend_from_slice(&0u32.to_le_bytes());
+        h.extend_from_slice(&0u32.to_le_bytes());
+        h.push(blocksize_exp | (blocksize_exp << 4)); // blocksize_0 == blocksize_1
+        h.push(0x01);
+        h
+    }
+
+    /// `initial_padding` is `blocksize_1 / 2` samples — the size of the
+    /// look-ahead the first packet's `pts` is negative by (see
+    /// `granule::GranuleMapping::Vorbis`). Measured against the reference
+    /// (`ffmpeg -c:a vorbis`, `-strict -2`): the first packet's own `pts` is
+    /// `-1024` at `blocksize_1 = 2048`, yet `-show_streams` reports
+    /// `start_pts=0` — matched by `vaco-format-core::discovery::finish`'s
+    /// `first_pts + initial_padding` exactly when the two agree in
+    /// magnitude, which this asserts for three different block sizes so the
+    /// constant is not accidentally pinned to the one file it was measured
+    /// on.
+    #[test]
+    fn vorbis_initial_padding_is_half_blocksize_1() {
+        for exp in [8_u8, 10, 11] {
+            let (_, _, params) = describe(OggCodec::Vorbis, &vorbis_bos(2, 44_100, exp));
+            let audio = params.audio.as_ref().unwrap();
+            assert_eq!(audio.initial_padding, (1_u32 << exp) >> 1, "exponent {exp}");
+        }
+    }
+
+    /// No identification header parses (too short) -> no padding is guessed,
+    /// same policy as `sample_rate` falling back to 0 a few lines up.
+    #[test]
+    fn vorbis_initial_padding_is_zero_without_a_parsed_header() {
+        let (_, _, params) = describe(OggCodec::Vorbis, &[]);
+        assert_eq!(params.audio.as_ref().unwrap().initial_padding, 0);
     }
 }
