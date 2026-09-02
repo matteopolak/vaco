@@ -542,12 +542,41 @@ document originally sketched for it, since single-threaded Stage 1 has no
 overlap to enable and no reason to pay the tile grid's cost before Stage 2
 actually needs it.
 
-What is left: `CuGrid`/`sao_params`'s own analogous treatment (Stage 1's
-step 3, `EdgeMarks` already landed this way — see "Concrete Stage 1 plan"
-above), then the move from row-banded to
-column-tiled once Stage 2's real thread dispatch needs it, then Stage 2
-itself and its full 1/2/4/8/16-thread verification bar. Each remains its
-own pass, landed and gated separately, for the same reason the item has
-been staged this way throughout: a byte-exact decoder's core representation
-is not something to rewrite in one drop in a crate under active concurrent
+Stage 1 step 3 is also done: `EdgeMarks`, `CuGrid` and `sao_params` all
+carry the row-banded current/published split (`planning/E2E-GAPS.md`
+§§36-38, commits landing "row-band EdgeMarks"/"row-band CuGrid"/"row-band
+sao_params"). That closed out row-banded Stage 1 in full, still
+single-threaded, still gated at <=1.03x, with room to spare on every
+piece measured.
+
+The next piece — `ReconPlane`'s own move from row-banded to the 2-D
+per-CTU tile grid this document's "Concrete Stage 1 plan" describes,
+needed because deblocking and intra reference-line reads must see a row
+still in progress, sample by sample, which `EdgeMarks`/`CuGrid`/
+`sao_params` never need (`planning/E2E-GAPS.md` §36's own finding) —
+landed (`planning/E2E-GAPS.md` §39, commit `3ac859f`), byte-exact, but
+**missed this stage's own gate**: six clean interleaved rounds (after an
+earlier, disk-exhaustion-confounded attempt was correctly discarded
+rather than trusted) measured CPU-seconds at median 1.047x, mean 1.041x
+against the previous commit — above the <=1.03x line, with the
+per-round spread (0.965x-1.115x) still wide enough that the exact number
+is not yet tightly bound. `CuGrid`/`EdgeMarks`/`sao_params` do not need
+this same move (§36's finding again: nothing about them needs per-sample
+mid-row visibility), so this gate applies to `ReconPlane` alone, not to
+redoing all four structures.
+
+**Consequently, Stage 2's thread dispatch has not started.** Per D20,
+neither the row-banded nor the tile-banded representation is sacred; the
+open question this leaves is whether the tile-addressed read path can be
+made cheaper (a real profile, not yet taken, is the obvious next step —
+this is exactly the "genuinely unmeasured... is it fast enough once wired
+into the hottest data structure" question the "Concrete Stage 1 plan"
+section named before this piece was built), whether a larger round count
+changes the verdict, or whether the ~4-5% is accepted as the price of the
+capability Stage 2 needs. None of those is decided in this document; it
+records the measurement so the next pass does not have to re-derive it.
+Stage 2 itself and its full 1/2/4/8/16-thread verification bar remain
+after that question is settled, for the same reason the item has been
+staged this way throughout: a byte-exact decoder's core representation is
+not something to rewrite in one drop in a crate under active concurrent
 editing.

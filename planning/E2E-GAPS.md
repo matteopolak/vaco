@@ -3118,3 +3118,97 @@ item's own brief.
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the
 filter crates, `vaco-conformance` and the fuzz harnesses were not
 touched.
+
+## 39. HEVC B4 -- ReconPlane moves to per-CTU tile bands; the row-banded-to-tiled move measures at 1.04-1.05x, missing Stage 1's own <=1.03x gate
+
+§38 closed Stage 1 step 3 with every structure row-banded. Per the design
+doc's own "Where this stands," the next piece is "the move from row-banded
+to column-tiled once Stage 2's real thread dispatch needs it" -- real WPP
+overlap needs a worker to own and publish one CTU at a time, not a whole
+row, so this is a necessary step before Stage 2, not a premature one.
+This section lands that move for `ReconPlane` (commit `3ac859f`) and
+reports its serial cost honestly, including a false start.
+
+**What changed** (`crates/codec/vaco-codec-hevc/src/{ctu,decoder,framebuf}.rs`):
+`ReconPlane` moved from `band_mut`/`publish_through`/`try_rows` (one band
+per CTU row, full picture width) to the 2-D grid `PlaneSpec::with_bands`/
+`tile_mut`/`publish_tile`/`try_tile`/`tile_ref` (`vaco-codec-core` commit
+`0af678e`). `decoder.rs`'s two CTU walks (the plain raster walk and
+`decode_wpp_row_ranges`) call `ReconPlane::begin_ctu`/`publish_ctu` once
+per CTU instead of `begin_ctu_row`/implicit publish once per row.
+`write_pred_block`/`write_block` in `ctu.rs` were reworked because tile
+storage cannot hand back a raw picture-wide `&mut [u8]` the way a row band
+could.
+
+**Found along the way**: `PictureWriter::publish_tile` refuses a
+single-column plane by name -- any picture no wider than one CTU, which
+includes two of this crate's own four fixtures (`flat_gray_64x64.hevc`,
+`qp32_64x64.hevc`, both 64x64 = one CTB wide). `ReconPlane` now tracks
+`single_column` at construction (`n_col_bands <= 1`) and falls back to the
+row-only `band_mut`/`band_ref`/`try_rows`/`publish_through` API in that
+case. This would otherwise have been a mysterious runtime failure the
+first time a <=1-CTU-wide picture reached the tiled path.
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (63 unit tests including
+the deblock-lag probe, plus `color`/`flat`/`hdr`/`oracle` integration
+tests, 70 total) and `cargo clippy -p vaco-codec-hevc --lib --tests -- -D
+warnings` both clean. Directly against the standard corpus fixture
+(`hevc_1080p.mp4`, 1920x1080, 125 frames): `vaco -threads 1` before this
+commit, after this commit, and `ffmpeg`'s own decode all produce the
+identical sha256 (`a40b898c...`). A fresh 300x500 `libx265` I/P/B fixture
+(300 is not a CTB multiple at the default 64-sample CTB, so both a partial
+last column and real inter prediction cross a tile boundary) matched
+ffmpeg byte-for-byte on the three frames a pre-existing, unrelated `vaco`
+CLI non-monotonic-dts bug on remuxed raw HEVC (flagged separately, not
+this section's to fix) did not corrupt.
+
+**Serial cost -- measured twice, the first attempt discarded.** The first
+attempt (2 of a planned 6 interleaved rounds) coincided with the host
+running out of disk space entirely (this session's shared scratchpad had
+accumulated several agents' full release-build target dirs); the two
+ratios it produced (1.142x, 1.048x) were reported but explicitly not
+trusted, per this project's own precedent that a confounded measurement is
+not a measurement. Disk was freed (five agents' worktrees removed, ~20GB
+recovered from an idle `fuzz/target`), and the full six interleaved
+rounds were re-run clean: two `dist`-profile builds (this commit and its
+immediate parent, `ff9148c`) in private `--target-dir`s, alternating
+start order, five decodes of `hevc_1080p.mp4` at `-threads 1` per
+round-per-binary under one `/usr/bin/time -p`, wall-clock and user+sys
+CPU-seconds both recorded. Load average during the run was 9.4-21.3
+(1/5/15-minute), above this protocol's own ~8 threshold, so CPU-seconds
+is the number that governs, per the same reasoning §34's own report gave.
+
+Per-round CPU-seconds ratio (candidate/baseline): 1.005, 1.115, 1.057,
+0.965, 1.066, 1.037 -- median **1.047x**, mean **1.041x**, candidate
+cheaper in only 1 of 6 rounds. Wall-clock: median 1.019x, mean 1.025x
+(lower than CPU-seconds, consistent with wall being noisier in both
+directions under load rather than genuinely cheaper). Byte-exactness
+holds; **this misses Stage 1's own <=1.03x gate** on the number the
+protocol says governs under load (CPU-seconds), and is borderline even on
+wall-clock's own noisier mean.
+
+Per the plan's own explicit rule ("if this costs more than 3% serially...
+stop and report that number") and D20 ("restructured, measured, no
+faster, reverted" is a complete and valuable result on its own), this is
+reported as a miss rather than rounded down to a pass. Six rounds on
+~4s-per-decode content is a real but not enormous sample (the per-round
+spread, 0.965-1.115, is wide relative to the 1.03 threshold it is being
+judged against); the honest reading is "measurably slower, most likely
+past the gate, not yet enough rounds to bound the number tightly." What
+this section does not attempt: profiling *why* the tiled path costs more
+(the design doc's own next step once a gate is missed), a larger round
+count to narrow the confidence interval, or a decision on
+revert-vs-optimize-vs-accept -- named as open questions for whoever picks
+this up next, not resolved here.
+
+**Not done in this section**: `CuGrid`/`EdgeMarks`/`sao_params`'s own
+analogous tile move (only `ReconPlane` needs per-sample cross-CTU
+visibility the way deblocking/intra do; §36 already found the other three
+never need it, so their own move, if any, is a separate question), Stage
+2's actual thread dispatch (explicitly not started, since threading an
+unlanded, unmeasured representation change is two unknowns at once), the
+new `hevc_decode_threaded` fuzz target, and the full
+byte-exact-at-every-thread-count verification matrix.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.
