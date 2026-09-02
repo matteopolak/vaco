@@ -49,6 +49,27 @@ const KINDS: &[&str] = &["spec", "rfc", "paper", "blackbox", "original"];
 /// Provenance kinds that must be backed by a `Vaco-Spec-Ref`.
 const CITED: &[&str] = &["spec", "rfc", "paper"];
 
+/// Commit-trailer problems already on record in `provenance/baseline..HEAD`,
+/// as this scan counts them: pinned once, not moved to make a new one
+/// disappear.
+///
+/// Moving `provenance/baseline` itself forward was the other way to make this
+/// gate pass and the wrong one: `baseline` says the machine-checked trail
+/// STARTS at that commit, so pushing it past these violations would
+/// retroactively declare them to have been fine. They were not. This number
+/// does the opposite: it keeps every one of them countable and visible while
+/// blocking a new one from landing today. It needs no history rewrite,
+/// because it is a pure count comparison, not a claim about which commits are
+/// compliant.
+///
+/// Fix one (add the trailer a commit is missing, or correct one already
+/// there — which for a *landed* commit means recording it in
+/// `provenance/corrections.toml`, not editing history) and lower this number
+/// by the same amount in the same commit. Raising it to let a new violation
+/// through is exactly the allowlist-with-extra-steps shape this exists to
+/// prevent — never do that.
+const TRAILER_VIOLATION_BASELINE: usize = 35;
+
 /// How a table's numbers reached the file.
 ///
 /// `kind` on the source says what the document is; `method` on the table says
@@ -72,10 +93,43 @@ pub fn run(check: bool) -> crate::Task {
 
     findings.extend(resolve(&root)?);
     findings.extend(tables(&root)?);
-    findings.extend(trailers(&root)?);
+
+    // Trailer findings are ratcheted, not gated at zero — see
+    // TRAILER_VIOLATION_BASELINE's own doc for why. Kept separate from
+    // `findings` above (resolve/tables) so a table or source-declaration
+    // problem still fails immediately regardless of the trailer count: only
+    // the trailer backlog is grandfathered.
+    let trailer_findings = trailers(&root)?;
+    let trailer_count = trailer_findings.len();
+    if trailer_count > TRAILER_VIOLATION_BASELINE {
+        let over = trailer_count - TRAILER_VIOLATION_BASELINE;
+        let mut msg = format!(
+            "{trailer_count} commit-trailer problem(s), {over} over the baseline \
+             ({TRAILER_VIOLATION_BASELINE}):\n"
+        );
+        for f in &trailer_findings {
+            msg.push_str("  ");
+            msg.push_str(f);
+            msg.push('\n');
+        }
+        msg.push_str(&format!(
+            "\nTRAILER_VIOLATION_BASELINE in xtask/src/provenance.rs is \
+             {TRAILER_VIOLATION_BASELINE}; the scan just found {trailer_count}. Add the \
+             trailer a commit above is missing, or fix one that is wrong (via \
+             provenance/corrections.toml for a commit already on main), and lower \
+             TRAILER_VIOLATION_BASELINE by the same amount in the same change — or leave \
+             TRAILER_VIOLATION_BASELINE where it is and fix the new commit you just added \
+             instead. Never raise TRAILER_VIOLATION_BASELINE to make this pass: it exists \
+             to let the count only go down."
+        ));
+        findings.push(msg);
+    }
 
     if findings.is_empty() {
-        println!("provenance-check: OK");
+        println!(
+            "provenance-check: OK ({trailer_count} commit-trailer problem(s) on record, at \
+             or under the baseline of {TRAILER_VIOLATION_BASELINE})"
+        );
         return Ok(());
     }
     if check {
@@ -648,8 +702,11 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
             if !sources.contains(id) {
                 findings.push(format!(
                     "{short}: `Vaco-Spec-Ref: {r}` starts with `{id}`, which no \
-                     `[[source]]` in provenance/ declares — a citation to a document \
-                     we never recorded acquiring proves nothing"
+                     `[[source]]` in provenance/ declares. A `Vaco-Spec-Ref:` must start \
+                     with an id declared by a `[[source]]` in some provenance/*.toml — \
+                     declaring the source there is usually the right fix, not removing \
+                     the citation: a citation to a document nobody recorded acquiring \
+                     proves nothing, which is the whole point of the trail."
                 ));
             }
         }
@@ -665,7 +722,12 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
         let kinds = values(body, "Vaco-Provenance");
         if kinds.is_empty() {
             findings.push(format!(
-                "{short}: touches implementation code and has no `Vaco-Provenance:` trailer"
+                "{short}: touches implementation code and has no `Vaco-Provenance:` \
+                 trailer. The reference-transaction hook already warns about exactly this \
+                 the moment a commit-tree commit lands (commit-tree bypasses \
+                 prepare-commit-msg, so the trailer must be typed by hand) — if this fires \
+                 anyway, the trailer line did not start at column 0 with the literal text \
+                 `Vaco-Provenance:`, which is all either mechanism checks for presence."
             ));
             continue;
         }
@@ -674,7 +736,10 @@ fn trailers(root: &Path) -> Result<Vec<String>, String> {
             let base = kind.split(':').next().unwrap_or(kind);
             if base != "cleanroom-doc" && !KINDS.contains(&base) {
                 findings.push(format!(
-                    "{short}: `Vaco-Provenance: {kind}` is not one of {} | cleanroom-doc:<path>",
+                    "{short}: `Vaco-Provenance: {kind}` is not one of the six legal \
+                     values — {} | cleanroom-doc:<path>. Measuring against the pinned \
+                     ffmpeg binary (a diff run, an ffprobe reading, a round-trip check) is \
+                     `blackbox`, not free text describing the measurement.",
                     KINDS.join(" | ")
                 ));
             }
@@ -736,7 +801,10 @@ pub fn check_message(root: &Path, body: &str, touches_code: bool) -> Result<(), 
         let kinds = values(body, "Vaco-Provenance");
         if kinds.is_empty() {
             findings.push(
-                "touches implementation code and has no `Vaco-Provenance:` trailer".to_owned(),
+                "touches implementation code and has no `Vaco-Provenance:` trailer. Type \
+                 it by hand — commit-tree bypasses prepare-commit-msg, this hook is what \
+                 runs instead."
+                    .to_owned(),
             );
         }
         let mut wants_citation = false;
@@ -744,7 +812,10 @@ pub fn check_message(root: &Path, body: &str, touches_code: bool) -> Result<(), 
             let base = kind.split(':').next().unwrap_or(kind);
             if base != "cleanroom-doc" && !KINDS.contains(&base) {
                 findings.push(format!(
-                    "`Vaco-Provenance: {kind}` is not one of {} | cleanroom-doc:<path>",
+                    "`Vaco-Provenance: {kind}` is not one of the six legal values — {} | \
+                     cleanroom-doc:<path>. Measuring against the pinned ffmpeg binary (a \
+                     diff run, an ffprobe reading, a round-trip check) is `blackbox`, not \
+                     free text describing the measurement.",
                     KINDS.join(" | ")
                 ));
             }
@@ -759,7 +830,10 @@ pub fn check_message(root: &Path, body: &str, touches_code: bool) -> Result<(), 
             if !sources.contains(id) {
                 findings.push(format!(
                     "`Vaco-Spec-Ref: {r}` starts with `{id}`, which no `[[source]]` in \
-                     provenance/ declares. Known ids: {}",
+                     provenance/ declares. A Vaco-Spec-Ref must start with an id declared \
+                     by a `[[source]]` in some provenance/*.toml — declaring the source \
+                     there is usually the right fix, not removing the citation. Known \
+                     ids: {}",
                     {
                         let mut v: Vec<&str> = sources.iter().map(String::as_str).collect();
                         v.sort_unstable();
