@@ -131,7 +131,7 @@ use vaco_format_ebml::{
     id_bytes, patch_known_size, vint_unknown, write_element, write_float, write_int, write_string,
     write_uint,
 };
-use vaco_format_nalu::{Framing, HeaderKind, NalHeader, build_h264_avcc, units};
+use vaco_format_nalu::HeaderKind;
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_limits::Budget;
 use vaco_packet::{Packet, PacketSideData};
@@ -216,27 +216,20 @@ fn with_crc32(body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// Rebuild an `avcC` Configuration Record from the SPS/PPS units already
-/// sitting in an Annex-B-shaped `extradata` buffer — see
-/// `flush_header_bytes`'s own doc for why one arrives that way and what
-/// this closes. `None` when the buffer holds no SPS at all (a
-/// [`vaco_format_nalu::build_h264_avcc`] contract, propagated rather than
-/// worked around: a record with no profile/level to state is not one this
-/// function can repair by guessing).
-fn derive_avcc(annexb_extradata: &[u8]) -> Option<Vec<u8>> {
-    let mut sps = Vec::new();
-    let mut pps = Vec::new();
-    for nal in units(annexb_extradata, Framing::AnnexB) {
-        let Some(header) = NalHeader::parse(HeaderKind::H264, nal.data) else {
-            continue;
-        };
-        match header.nal_unit_type {
-            7 => sps.push(nal.data),
-            8 => pps.push(nal.data),
-            _ => {}
-        }
+/// The NAL header layout a Matroska `CodecID` implies, for the two whose
+/// frames RFC 9559 stores length-prefixed with an ISO/IEC 14496-15
+/// configuration record in `CodecPrivate`.
+///
+/// `None` for every other `CodecID`, including `V_MPEGISO/VVC`-shaped ones
+/// this crate does not map at all — the same "this codec has no NAL-level
+/// parameter sets to work with" answer `vaco_format_nalu::header_kind_for`
+/// gives on the `CodecId` side.
+const fn nal_header_kind(codec_id_str: &str) -> Option<HeaderKind> {
+    match codec_id_str.as_bytes() {
+        b"V_MPEG4/ISO/AVC" => Some(HeaderKind::H264),
+        b"V_MPEGH/ISO/HEVC" => Some(HeaderKind::H265),
+        _ => None,
     }
-    build_h264_avcc(&sps, &pps)
 }
 
 /// A container profile: what differs between `matroska` and `webm` beyond
@@ -316,13 +309,17 @@ struct TrackOut {
     /// Video only. `Video::Colour`'s source, when it maps to one this crate
     /// has actually measured a reference value for (CONFORMANCE-FINDINGS 49).
     chroma_location: vaco_color::ChromaLocation,
-    /// Set once, in `flush_header_bytes`, only for `V_MPEG4/ISO/AVC` whose
-    /// `extradata` arrived Annex-B-shaped (MPEG-TS/AVI/raw Annex B carry
-    /// H.264 in-band, with no out-of-band record at all) and was rewritten
-    /// into a real `avcC`. `V_MPEG4/ISO/AVC` packets are length-prefixed by
-    /// RFC 9559's own convention (the same one MP4's `avc1` sample entry
-    /// uses), so a source whose packets are still Annex-B needs the same
-    /// per-packet reframing `write_block` applies when this is `true`.
+    /// Set once, in `flush_header_bytes`, for a `V_MPEG4/ISO/AVC` or
+    /// `V_MPEGH/ISO/HEVC` track whose `extradata` arrived Annex-B-shaped —
+    /// an encoder's own output, or a copy from MPEG-TS/AVI/raw Annex B,
+    /// none of which carry an out-of-band record — and was rewritten into a
+    /// real `avcC`/`hvcC`. Both `CodecID`s take length-prefixed frames by
+    /// RFC 9559's own convention (the same one MP4's `avc1`/`hev1` sample
+    /// entries use), so those packets need the per-packet reframing
+    /// `write_block` applies when this is `true`.
+    ///
+    /// It is set by the same `length_prefixed_config` call that produced the
+    /// record, never independently: the two are one decision.
     needs_avc_repack: bool,
     /// Set once `check_bitstream` has answered for this track, the same
     /// guard `vaco-mux-mp4`'s own `check_bitstream` uses and for the
@@ -1023,19 +1020,23 @@ impl MatroskaMuxer {
         // `extradata` starting with `0x01` (`configurationVersion`), never
         // `0x00` (Annex-B's own start code), so this never touches it.
         for t in &mut self.tracks {
-            if t.codec_id == "V_MPEG4/ISO/AVC"
-                && t.extradata.as_deref().is_some_and(|e| e.first() == Some(&0))
-                && let Some(avcc) = derive_avcc(t.extradata.as_deref().unwrap_or_default())
-            {
-                t.extradata = Some(avcc);
-                t.needs_avc_repack = true;
-            }
+            let Some(kind) = nal_header_kind(t.codec_id) else {
+                continue;
+            };
+            let Some(config) = vaco_format_nalu::length_prefixed_config(
+                kind,
+                t.extradata.as_deref().unwrap_or_default(),
+            ) else {
+                continue;
+            };
+            t.extradata = Some(config.record);
+            t.needs_avc_repack = config.repack;
         }
         for t in &self.tracks {
             if codec::requires_extradata_str(t.codec_id)
-                && t.extradata
-                    .as_deref()
-                    .is_none_or(|e| e.is_empty() || (t.codec_id == "V_MPEG4/ISO/AVC" && e.first() == Some(&0)))
+                && t.extradata.as_deref().is_none_or(|e| {
+                    e.is_empty() || (nal_header_kind(t.codec_id).is_some() && e.first() == Some(&0))
+                })
             {
                 return Err(Error::Unsupported(
                     "matroska: this codec needs an out-of-band configuration record and none \
@@ -1326,6 +1327,24 @@ impl Muxer for MatroskaMuxer {
         {
             return Ok(BitstreamAction::Insert {
                 name: "aac_adtstoasc",
+            });
+        }
+        // H.264/HEVC with no record at all. MP4 gets this for free from
+        // `global_header_action`, because it declares `GLOBALHEADER`;
+        // Matroska does not declare it (`flags` below is empty) and so has
+        // to ask outright, or `flush_header_bytes` refuses the file. That is
+        // exactly what a `-c:v libx264 out.mkv` used to do for HEVC and what
+        // it silently wrote the *input* file's record for with H.264: an
+        // encoder's packets carry the parameter sets in band and nothing
+        // else was pulling them out.
+        if params.extradata.as_ref().is_none_or(Vec::is_empty)
+            && params
+                .codec_id
+                .and_then(vaco_format_nalu::header_kind_for)
+                .is_some()
+        {
+            return Ok(BitstreamAction::Insert {
+                name: "extract_extradata",
             });
         }
         Ok(BitstreamAction::Keep)
@@ -1638,6 +1657,96 @@ mod tests {
             p.flags = PacketFlags::KEY;
         }
         p
+    }
+
+    /// A real `libx265` VPS/SPS/PPS trio (the bytes
+    /// `vaco-format-nalu`'s own `hvcC` test measured against ffmpeg 9.0.1).
+    const HEVC_VPS: [u8; 24] = [
+        0x40, 0x01, 0x0c, 0x01, 0xff, 0xff, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00,
+        0x03, 0x00, 0x00, 0x03, 0x00, 0x3c, 0x95, 0x98, 0x09,
+    ];
+    const HEVC_SPS: [u8; 42] = [
+        0x42, 0x01, 0x01, 0x01, 0x60, 0x00, 0x00, 0x03, 0x00, 0x90, 0x00, 0x00, 0x03, 0x00, 0x00,
+        0x03, 0x00, 0x3c, 0xa0, 0x0a, 0x08, 0x0f, 0x16, 0x59, 0x59, 0xa4, 0x93, 0x2b, 0xc0, 0x5a,
+        0x02, 0x00, 0x00, 0x03, 0x00, 0x02, 0x00, 0x00, 0x03, 0x00, 0x32, 0x10,
+    ];
+    const HEVC_PPS: [u8; 7] = [0x44, 0x01, 0xc1, 0x72, 0xb4, 0x62, 0x40];
+
+    fn annexb(units: &[&[u8]]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for u in units {
+            out.extend_from_slice(&[0, 0, 0, 1]);
+            out.extend_from_slice(u);
+        }
+        out
+    }
+
+    fn length_prefixed(units: &[&[u8]]) -> Vec<u8> {
+        let mut out = Vec::new();
+        for u in units {
+            out.extend_from_slice(&(u.len() as u32).to_be_bytes());
+            out.extend_from_slice(u);
+        }
+        out
+    }
+
+    fn contains(haystack: &[u8], needle: &[u8]) -> bool {
+        !needle.is_empty() && haystack.windows(needle.len()).any(|w| w == needle)
+    }
+
+    /// `V_MPEGH/ISO/HEVC` used to have neither half of `V_MPEG4/ISO/AVC`'s
+    /// Annex-B handling: `vaco -c:v libx265 out.mkv` refused the file
+    /// outright ("this codec needs an out-of-band configuration record"),
+    /// because nothing derived an `hvcC` from the in-band parameter sets and
+    /// nothing reframed the packets to match it.
+    #[test]
+    fn an_annexb_hevc_track_gets_an_hvcc_and_length_prefixed_frames() {
+        let mut p = CodecParameters::video().with_codec(CodecId::Hevc);
+        p.video = Some(VideoParameters {
+            width: 320,
+            height: 240,
+            frame_rate: Rational::new(25, 1),
+            ..VideoParameters::default()
+        });
+        p.extradata = Some(annexb(&[&HEVC_VPS, &HEVC_SPS, &HEVC_PPS]));
+
+        // No trailing zero byte: Annex-B's own `trailing_zero_8bits` are not
+        // part of the NAL unit, and a scanner that kept them would be wrong.
+        let slice = [0x26u8, 0x01, 0xaf, 0x1c];
+        let sample = annexb(&[&HEVC_VPS, &HEVC_SPS, &HEVC_PPS, &slice]);
+        let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::permissive());
+        let mut packet = Packet::from_slice(&mut budget, &sample).unwrap();
+        packet.pts = Timestamp::new(0);
+        packet.dts = Timestamp::new(0);
+        packet.flags = PacketFlags::KEY;
+
+        let s = MemorySink::new();
+        let buf = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&p).unwrap();
+        packet.stream_index = idx;
+        mux.write_header().unwrap();
+        mux.write_packet(&packet).unwrap();
+        mux.write_trailer().unwrap();
+        let out = buf.snapshot();
+
+        let record =
+            vaco_format_nalu::build_hevc_hvcc(&[&HEVC_VPS], &[&HEVC_SPS], &[&HEVC_PPS]).unwrap();
+        assert!(
+            contains(&out, &record),
+            "CodecPrivate must be the hvcC derived from the in-band parameter sets"
+        );
+        assert!(
+            contains(
+                &out,
+                &length_prefixed(&[&HEVC_VPS, &HEVC_SPS, &HEVC_PPS, &slice])
+            ),
+            "the frame must be written length-prefixed"
+        );
+        assert!(
+            !contains(&out, &sample),
+            "and its Annex-B form must not survive anywhere in the file"
+        );
     }
 
     #[test]
