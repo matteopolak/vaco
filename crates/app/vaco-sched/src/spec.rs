@@ -41,7 +41,7 @@ use vaco_codec_core::{CodecParameters, Decoder, Encoder};
 use vaco_core::{Error, Rational, Result, TimeBase};
 use vaco_filter_core::{Graph, NodeId};
 use vaco_format_core::metadata::MuxMetadata;
-use vaco_format_core::mux::{BsfProvider, MuxBuilder};
+use vaco_format_core::mux::{BsfProvider, MuxBuilder, UserBsf};
 use vaco_format_core::options::FormatOptions;
 use vaco_format_core::{Demuxer, Muxer};
 use vaco_limits::Limits;
@@ -444,6 +444,44 @@ impl PipelineSpec {
         Ok(())
     }
 
+    /// `-bsf`/`-bsf:v`/`-bsf:a`/`-bsf:s` for one already-mapped stream
+    /// (`stream_index` is the value [`PipelineSpec::map`]/
+    /// [`PipelineSpec::map_with_matrix`] returned for it).
+    ///
+    /// Unlike [`PipelineSpec::set_output_bsfs`] this does not need the
+    /// take/replace dance those `with_*`-consuming `MuxBuilder` methods use:
+    /// [`vaco_format_core::mux::MuxBuilder::set_user_bsf`] takes `&mut self`,
+    /// because by the time a caller knows which stream to attach a chain to
+    /// (right after `map` hands back its index) there is no ownership left
+    /// to hand back and forth for.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidData`] if `output` does not name an output, if its
+    /// muxer has already been opened by [`PipelineSpec::build`], or if
+    /// `stream_index` does not name a stream already declared on it.
+    /// [`Error::Unsupported`] if any entry in `chain` carries per-instance
+    /// options (gap 12; see [`vaco_format_core::mux::MuxBuilder::
+    /// set_user_bsf`]'s own doc).
+    pub fn set_output_stream_bsf(
+        &mut self,
+        output: OutputRef,
+        stream_index: u32,
+        chain: Vec<UserBsf>,
+    ) -> Result<()> {
+        let node = self
+            .nodes
+            .get_mut(output.0 as usize)
+            .ok_or(Error::InvalidData("no such output"))?;
+        let KindSpec::Mux { builder, .. } = &mut node.kind else {
+            return Err(Error::InvalidData("that handle is not an output"));
+        };
+        let b = builder.as_mut().ok_or(Error::InvalidData(
+            "the output's muxer has already been opened",
+        ))?;
+        b.set_user_bsf(stream_index, chain)
+    }
+
     /// Attach a decoder to a packet producer. Frames come out in the producer's
     /// time base.
     ///
@@ -512,8 +550,17 @@ impl PipelineSpec {
     ) -> Result<FrameTap> {
         self.out_of(from.into())?;
         let id = self.push(NodeSpec {
-            label: format!("convert {}:{} -> {}", from.node, from.port, dst_format.name()),
-            kind: KindSpec::Convert { dst_format, limits, threads },
+            label: format!(
+                "convert {}:{} -> {}",
+                from.node,
+                from.port,
+                dst_format.name()
+            ),
+            kind: KindSpec::Convert {
+                dst_format,
+                limits,
+                threads,
+            },
             inputs: vec![(from.into(), time_base)],
             outputs: vec![(Flow::Frames, time_base)],
         });

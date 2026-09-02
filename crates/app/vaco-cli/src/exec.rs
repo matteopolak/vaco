@@ -99,7 +99,9 @@ use vaco_expr::Bindings;
 use vaco_filter_core::LinkFormat;
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::metadata::MuxMetadata;
-use vaco_format_core::{Muxer, Stream, dihedral_transform_from_angle_and_flips, dihedral_transform_from_matrix};
+use vaco_format_core::{
+    Muxer, Stream, dihedral_transform_from_angle_and_flips, dihedral_transform_from_matrix,
+};
 use vaco_pixfmt::PixFmt;
 use vaco_sched::{Driver, Finish, PipelineSpec, SourceBind};
 
@@ -150,6 +152,16 @@ pub struct OutStream {
     /// stream, copied or encoded alike, since a copy never reaches the
     /// per-stream [`Self::graph_opts`] path a transcode does.
     pub output_matrix: Option<[i32; 9]>,
+    /// `-bsf`/`-bsf:v`/`-bsf:a`/`-bsf:s` for this stream, already resolved
+    /// against the registry (a typo is refused here, not deep inside a
+    /// running mux) and validated to carry no per-instance options (gap 12).
+    /// [`bsf_options_of`] is where this is decided; [`run_pipeline`] hands it
+    /// to [`vaco_sched::spec::PipelineSpec::set_output_stream_bsf`] right
+    /// after `map_with_matrix` returns the real stream index this needs.
+    /// Empty for a stream that names no `-bsf` at all — the common case,
+    /// and indistinguishable from "not yet resolved" only before this field
+    /// is set, never after.
+    pub bsf: Vec<vaco_format_core::mux::UserBsf>,
 }
 
 /// What `-c` resolved to for one output stream: pass packets
@@ -260,7 +272,9 @@ fn stream_opt<'a>(
     name: &str,
 ) -> Result<Option<&'a vaco_cli_core::ParsedOption>, Diagnostic> {
     match group {
-        Some(g) => g.stream_option(name, ctx, stream).map_err(|e| crate::cli::split_error(&e)),
+        Some(g) => g
+            .stream_option(name, ctx, stream)
+            .map_err(|e| crate::cli::split_error(&e)),
         None => Ok(None),
     }
 }
@@ -306,10 +320,12 @@ fn effective_matrix(
             .transpose()?
             .flatten()
             .unwrap_or(0.0);
-        return Ok(
-            dihedral_transform_from_angle_and_flips(degrees, hflip_opt.is_some(), vflip_opt.is_some())
-                .map(vaco_format_core::DisplayTransform::to_matrix),
-        );
+        return Ok(dihedral_transform_from_angle_and_flips(
+            degrees,
+            hflip_opt.is_some(),
+            vflip_opt.is_some(),
+        )
+        .map(vaco_format_core::DisplayTransform::to_matrix));
     }
     Ok(input
         .streams
@@ -440,7 +456,14 @@ pub fn resolve_output(
     used_complex: &mut HashSet<usize>,
 ) -> Result<ResolvedOutput, Diagnostic> {
     let format = muxer_for(out)?;
-    let selection = select::resolve(files, &out.maps, out.blocked, &|_| true, complex, used_complex)?;
+    let selection = select::resolve(
+        files,
+        &out.maps,
+        out.blocked,
+        &|_| true,
+        complex,
+        used_complex,
+    )?;
 
     let mut streams: Vec<OutStream> = selection
         .picks
@@ -471,6 +494,9 @@ pub fn resolve_output(
             // loop, so it cannot be decided any earlier than `graph_opts`
             // itself is.
             output_matrix: None,
+            // Placeholder until `bsf_options_of` below decides it, same
+            // reason as `codec_options` above.
+            bsf: Vec::new(),
         })
         .collect();
 
@@ -555,6 +581,11 @@ pub fn resolve_output(
     let codec_opts = codec_options_of(cli, out, &streams)?;
     for (s, o) in streams.iter_mut().zip(codec_opts) {
         s.codec_options = o;
+    }
+
+    let bsf_chains = bsf_options_of(cli, out, &streams)?;
+    for (s, b) in streams.iter_mut().zip(bsf_chains) {
+        s.bsf = b;
     }
 
     let metadata = metadata_of(cli, out, &streams)?;
@@ -665,11 +696,12 @@ fn metadata_of(
         let filename = std::path::Path::new(path)
             .file_name()
             .map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned());
-        meta.attachments.push(vaco_format_core::metadata::MuxAttachment {
-            filename,
-            data,
-            ..vaco_format_core::metadata::MuxAttachment::default()
-        });
+        meta.attachments
+            .push(vaco_format_core::metadata::MuxAttachment {
+                filename,
+                data,
+                ..vaco_format_core::metadata::MuxAttachment::default()
+            });
     }
 
     // `-metadata:s:t:N mimetype=…` — the reference's own way of naming an
@@ -714,7 +746,9 @@ fn metadata_of(
             *slot = eval_disposition(&raw).map_err(|e| {
                 Diagnostic::new(
                     AvError::EINVAL,
-                    vec![format!("Error parsing option 'disposition' with value '{raw}': {e}")],
+                    vec![format!(
+                        "Error parsing option 'disposition' with value '{raw}': {e}"
+                    )],
                 )
             })?;
         }
@@ -736,7 +770,9 @@ fn metadata_of(
         let mut program = parse_program(&raw).map_err(|e| {
             Diagnostic::new(
                 AvError::EINVAL,
-                vec![format!("Error parsing option 'program' with value '{raw}': {e}")],
+                vec![format!(
+                    "Error parsing option 'program' with value '{raw}': {e}"
+                )],
             )
         })?;
         program.id = i64::try_from(programs.len()).unwrap_or(i64::MAX);
@@ -764,9 +800,13 @@ fn metadata_of(
 /// The expression compiler's own message, naming what did not parse.
 fn eval_disposition(raw: &str) -> Result<Disposition, String> {
     let names: Vec<&str> = Disposition::ALL.iter().map(|&(_, n)| n).collect();
-    let vars: Vec<f64> = Disposition::ALL.iter().map(|&(f, _)| f64::from(f.bits())).collect();
-    let expr = vaco_cli_core::value::Expression::compile_with("disposition", raw, &Bindings::new(&names))
-        .map_err(|e| e.to_string())?;
+    let vars: Vec<f64> = Disposition::ALL
+        .iter()
+        .map(|&(f, _)| f64::from(f.bits()))
+        .collect();
+    let expr =
+        vaco_cli_core::value::Expression::compile_with("disposition", raw, &Bindings::new(&names))
+            .map_err(|e| e.to_string())?;
     let bits = expr.eval(&vars);
     Ok(Disposition::from_bits_truncate(bits.round() as i64 as u32))
 }
@@ -793,13 +833,20 @@ fn parse_program(raw: &str) -> Result<vaco_format_core::Program, String> {
             .split_once('=')
             .ok_or_else(|| format!("expected key=value, got '{field}'"))?;
         match key {
-            "title" => program.metadata.push(("title".to_owned(), value.to_owned())),
+            "title" => program
+                .metadata
+                .push(("title".to_owned(), value.to_owned())),
             "program_num" => {
-                program.program_num =
-                    Some(value.parse::<i64>().map_err(|_| format!("invalid program_num '{value}'"))?);
+                program.program_num = Some(
+                    value
+                        .parse::<i64>()
+                        .map_err(|_| format!("invalid program_num '{value}'"))?,
+                );
             }
             "st" => {
-                let idx: u32 = value.parse().map_err(|_| format!("invalid stream index '{value}'"))?;
+                let idx: u32 = value
+                    .parse()
+                    .map_err(|_| format!("invalid stream index '{value}'"))?;
                 program.stream_indices.push(idx);
             }
             other => return Err(format!("unrecognized program field '{other}'")),
@@ -1110,7 +1157,12 @@ fn force_key_frames_of(
             Ok(Some(opt)) => {
                 let raw = value_str(opt)?;
                 Some(crate::force_key_frames::parse(&raw).map_err(|e| {
-                    Diagnostic::new(AvError::EINVAL, vec![format!("Error parsing option 'force_key_frames' with value '{raw}': {e}")])
+                    Diagnostic::new(
+                        AvError::EINVAL,
+                        vec![format!(
+                            "Error parsing option 'force_key_frames' with value '{raw}': {e}"
+                        )],
+                    )
                 })?)
             }
             _ => None,
@@ -1178,7 +1230,12 @@ fn codec_options_of(
         }
         if let Ok(Some(opt)) = group.stream_option("q", &ctx, idx) {
             let raw = value_str(opt)?;
-            let q = vaco_cli_core::value::parse_number("q", &raw, vaco_cli_core::value::NumberLimits::float()).map_err(|e| {
+            let q = vaco_cli_core::value::parse_number(
+                "q",
+                &raw,
+                vaco_cli_core::value::NumberLimits::float(),
+            )
+            .map_err(|e| {
                 Diagnostic::new(
                     AvError::EINVAL,
                     vec![format!("Error parsing option 'q' with value '{raw}': {e}")],
@@ -1219,6 +1276,134 @@ pub(crate) const PRIVATE_ENCODER_OPTIONS: &[&str] = &[
     "coder",
     "slices",
 ];
+
+/// `-bsf`/`-bsf:v`/`-bsf:a`/`-bsf:s` for every stream in `streams` — the
+/// bitstream-filter reachability sweep's systemic finding closed: 21
+/// registered, working, tested filters existed with no way for any user to
+/// invoke them (`-bsf` itself was already in the option table, per
+/// `vaco-cli-core/src/tables/ffmpeg.rs`, and already parsed with full
+/// stream-specifier support by [`OptionGroup::stream_option`] — the same
+/// machinery [`codec_options_of`]'s `-b`/`-q` use above — but nothing ever
+/// called it).
+///
+/// Each stream's value is a comma-separated chain,
+/// `name[=opt=val[:opt=val...]]` per entry — the reference's own grammar
+/// (`ffmpeg -h bsf=<name>`'s own examples read this way, e.g.
+/// `h264_metadata=aud=insert`). A name is resolved against the registry
+/// immediately, here, rather than deferred to mux time: `-bsf:v
+/// nosuchfilter` gets refused before a single byte is written, the same
+/// "Bitstream filter not found" shape the reference reports at option-parse
+/// time (measured, `ffmpeg 9.0.1`), not a runtime surprise deep inside a
+/// pipeline that has already opened its output file.
+///
+/// # Per-instance options are refused, not silently dropped
+///
+/// [`vaco_format_core::mux::BsfProvider::open`] has no per-instance option
+/// string (`planning/INTERFACE-GAPS.md` gap 12) — the same gap that keeps
+/// every `*_metadata` bitstream filter an identity transform today (see the
+/// bsf reachability sweep's own findings). A chain entry that names one is
+/// refused here, by name, rather than opened bare as if the option had never
+/// been given: silently ignoring `-bsf:v h264_metadata=aud=insert` would
+/// write a file the option's own presence promised would have AUD NAL units
+/// inserted and does not, which is a wrong-output bug wearing a
+/// not-yet-implemented costume. Closing gap 12 itself — giving
+/// `BsfProvider::open` an option string every `vaco-bsf-*` crate's `build`
+/// can read — is a separate, non-trivial change to that trait and every one
+/// of its eight implementors; out of scope here.
+///
+/// # Errors
+///
+/// A [`Diagnostic`] for an unknown filter name, a malformed `opt=val`
+/// entry, a filter given options this build cannot pass through yet, or
+/// non-UTF-8 option text.
+fn bsf_options_of(
+    cli: &Cli,
+    out: &OutputSpec,
+    streams: &[OutStream],
+) -> Result<Vec<Vec<vaco_format_core::mux::UserBsf>>, Diagnostic> {
+    let view: Vec<StreamInfo> = streams
+        .iter()
+        .enumerate()
+        .map(|(i, s)| StreamInfo {
+            index: i as u32,
+            media_type: s.media,
+            codec_known: true,
+            ..StreamInfo::default()
+        })
+        .collect();
+    let ctx = MatchCtx::streams(&view);
+    let Some(group) = cli.output_group(out.index) else {
+        return Ok(vec![Vec::new(); streams.len()]);
+    };
+
+    let mut out_chains = Vec::new();
+    for i in 0..streams.len() {
+        let idx = i as u32;
+        let chain = if let Ok(Some(opt)) = group.stream_option("bsf", &ctx, idx) {
+            let raw = value_str(opt)?;
+            parse_bsf_chain(&raw)?
+        } else {
+            Vec::new()
+        };
+        out_chains.push(chain);
+    }
+    Ok(out_chains)
+}
+
+/// One `-bsf`/`-bsf:v`/`-bsf:a`/`-bsf:s` value: `name[=opt=val[:opt=val...]]`,
+/// comma-separated between chain entries. See [`bsf_options_of`]'s own doc
+/// for the grammar's source and for why a non-empty option list is refused
+/// rather than dropped.
+///
+/// # Errors
+/// A [`Diagnostic`] for an unknown filter name, a malformed `opt=val` entry,
+/// or any options at all (gap 12).
+fn parse_bsf_chain(raw: &str) -> Result<Vec<vaco_format_core::mux::UserBsf>, Diagnostic> {
+    let mut out = Vec::new();
+    for entry in raw.split(',') {
+        if entry.is_empty() {
+            continue;
+        }
+        let (name, opts_str) = entry
+            .split_once('=')
+            .map_or((entry, None), |(n, o)| (n, Some(o)));
+        let canonical = vaco_registry::bsf_canonical_name(name).ok_or_else(|| {
+            Diagnostic::new(
+                AvError::EINVAL,
+                vec![format!(
+                    "Error parsing bitstream filter sequence '{raw}': Bitstream filter '{name}' not found"
+                )],
+            )
+        })?;
+        let mut options = Vec::new();
+        if let Some(opts_str) = opts_str {
+            for kv in opts_str.split(':') {
+                let Some((k, v)) = kv.split_once('=') else {
+                    return Err(Diagnostic::new(
+                        AvError::EINVAL,
+                        vec![format!(
+                            "Error parsing bitstream filter sequence '{raw}': bitstream filter '{name}': malformed option '{kv}' (want key=value)"
+                        )],
+                    ));
+                };
+                options.push((k.to_owned(), v.to_owned()));
+            }
+        }
+        if !options.is_empty() {
+            return Err(Diagnostic::new(
+                AvError::EINVAL,
+                vec![format!(
+                    "Error parsing bitstream filter sequence '{raw}': bitstream filter '{name}' was given options, but this build cannot pass per-instance options to a bitstream filter yet -- use '{name}' with no options"
+                )],
+            ));
+        }
+        out.push(vaco_format_core::mux::UserBsf {
+            name: canonical,
+            options,
+        });
+    }
+    Ok(out)
+}
 
 /// CL-20: `-vf`/`-af`/`-filter`, `-s`, `-aspect`, `-pix_fmt` for every stream
 /// in `streams` — resolved against the output's own stream list, the same
@@ -1278,10 +1463,7 @@ fn graph_options_of(
                 if let Ok(Some(o)) = g.stream_option("s", &ctx, idx) {
                     let raw = value_str(o)?;
                     let (w, h) = vaco_core::parse::image_size(&raw).ok_or_else(|| {
-                        Diagnostic::new(
-                            AvError::EINVAL,
-                            vec![format!("Invalid size '{raw}'")],
-                        )
+                        Diagnostic::new(AvError::EINVAL, vec![format!("Invalid size '{raw}'")])
                     })?;
                     opts.size = Some((w, h));
                 }
@@ -1296,9 +1478,10 @@ fn graph_options_of(
                 // reference's own video-only scope.
                 if let Ok(Some(o)) = g.stream_option("fps_mode", &ctx, idx) {
                     let raw = value_str(o)?;
-                    opts.fps_mode = Some(crate::fps_mode::FpsMode::parse(&raw).map_err(|e| {
-                        Diagnostic::new(AvError::EINVAL, vec![e])
-                    })?);
+                    opts.fps_mode = Some(
+                        crate::fps_mode::FpsMode::parse(&raw)
+                            .map_err(|e| Diagnostic::new(AvError::EINVAL, vec![e]))?,
+                    );
                 }
                 opts.rotate = resolve_rotate(cli, files, s.source)?;
             }
@@ -1308,10 +1491,10 @@ fn graph_options_of(
             // above.
             if let Ok(Some(o)) = g.stream_option("enc_time_base", &ctx, idx) {
                 let raw = value_str(o)?;
-                opts.enc_time_base =
-                    Some(crate::enc_time_base::EncTimeBase::parse(&raw).map_err(|e| {
-                        Diagnostic::new(AvError::EINVAL, vec![e])
-                    })?);
+                opts.enc_time_base = Some(
+                    crate::enc_time_base::EncTimeBase::parse(&raw)
+                        .map_err(|e| Diagnostic::new(AvError::EINVAL, vec![e]))?,
+                );
             }
             if s.media == Some(MediaType::Audio) {
                 if let Ok(Some(o)) = g.stream_option("ar", &ctx, idx) {
@@ -1667,7 +1850,9 @@ pub fn run_pipeline(
                                 // `prime_video`'s FFV1 case just above.
                                 decoder.prime_audio(
                                     a.sample_rate,
-                                    a.layout.clone().unwrap_or(vaco_chlayout::ChannelLayout::unspecified(0)),
+                                    a.layout
+                                        .clone()
+                                        .unwrap_or(vaco_chlayout::ChannelLayout::unspecified(0)),
                                 );
                             }
                             if let Some(extradata) = p.extradata.as_deref() {
@@ -1804,12 +1989,9 @@ pub fn run_pipeline(
                                             limits.clone(),
                                             i32::try_from(filter_threads).unwrap_or(i32::MAX),
                                         )
-                                            .map_err(|e| {
-                                                internal_from(
-                                                    "could not attach a format converter",
-                                                    &e,
-                                                )
-                                            })?
+                                        .map_err(|e| {
+                                            internal_from("could not attach a format converter", &e)
+                                        })?
                                     }
                                     _ => frames,
                                 };
@@ -1930,7 +2112,9 @@ pub fn run_pipeline(
                                     if let Some(fmt) = out_video_format {
                                         video.format = Some(fmt);
                                     }
-                                    crate::fps_mode::insert(&mut spec, frames, time_base, &video, mode)?
+                                    crate::fps_mode::insert(
+                                        &mut spec, frames, time_base, &video, mode,
+                                    )?
                                 }
                             } else {
                                 frames
@@ -2014,8 +2198,21 @@ pub fn run_pipeline(
                     )
                 }
             };
-            spec.map_with_matrix(packet_tap, oref, &out_params, s.output_matrix)
+            let mux_stream_index = spec
+                .map_with_matrix(packet_tap, oref, &out_params, s.output_matrix)
                 .map_err(|e| internal_from("the muxer refused a stream", &e))?;
+            // `-bsf`/`-bsf:v`/`-bsf:a`/`-bsf:s`: seeded ahead of whatever the
+            // muxer's own `check_bitstream` still asks for (M6) — see
+            // `vaco_format_core::mux::MuxWriter::decide_bitstream`'s own doc
+            // for why that composes rather than fights, measured against
+            // real ffmpeg. Only called when there is something to attach:
+            // `set_output_stream_bsf` on an empty chain would be a harmless
+            // no-op, but every other mapped stream in this same loop skips
+            // it, so an empty stream does too rather than looking special.
+            if !s.bsf.is_empty() {
+                spec.set_output_stream_bsf(oref, mux_stream_index, s.bsf.clone())
+                    .map_err(|e| internal_from("the muxer refused a bitstream filter", &e))?;
+            }
             report.mapping.push(format!(
                 "  Stream #{mapping_source} -> #{}:{i} ({label})",
                 out.index
@@ -2351,7 +2548,10 @@ mod tests {
         let (cli, _) = out_of(&["-i", "in.mp4", "-f", "null", "-"]);
         let files = [input_with_matrix(Some(MEASURED_PLUS_90_MATRIX))];
         let got = resolve_rotate(&cli, &files, StreamPick::demuxed(0, 0)).unwrap();
-        assert_eq!(got, Some(vaco_format_core::DisplayTransform::TransposeCclock));
+        assert_eq!(
+            got,
+            Some(vaco_format_core::DisplayTransform::TransposeCclock)
+        );
     }
 
     #[test]
@@ -2381,7 +2581,10 @@ mod tests {
         ]);
         let files = [input_with_matrix(Some(MEASURED_PLUS_90_MATRIX))];
         let got = resolve_rotate(&cli, &files, StreamPick::demuxed(0, 0)).unwrap();
-        assert_eq!(got, Some(vaco_format_core::DisplayTransform::TransposeClockFlip));
+        assert_eq!(
+            got,
+            Some(vaco_format_core::DisplayTransform::TransposeClockFlip)
+        );
     }
 
     #[test]
@@ -2485,10 +2688,14 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
-        output_matrix: None,
+            output_matrix: None,
+            bsf: Vec::new(),
         }];
         let meta = metadata_of(&c, &o, &streams).unwrap();
-        assert!(meta.disposition_for_stream(0).contains(Disposition::DEFAULT));
+        assert!(
+            meta.disposition_for_stream(0)
+                .contains(Disposition::DEFAULT)
+        );
         assert!(meta.disposition_for_stream(0).contains(Disposition::FORCED));
         assert_eq!(meta.programs.len(), 1);
         let program = meta.programs.first().unwrap();
@@ -2515,10 +2722,8 @@ mod tests {
     /// (`vaco-mux-image2`) is what `run_pipeline` ends up writing through.
     #[test]
     fn f_image2_pattern_output_binds_instead_of_creating_a_literal_file() {
-        let dir = std::env::temp_dir().join(format!(
-            "vaco-cli-exec-test-image2-{}",
-            std::process::id()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("vaco-cli-exec-test-image2-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let pattern = dir.join("out%03d.png");
@@ -2663,7 +2868,8 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
-        output_matrix: None,
+            output_matrix: None,
+            bsf: Vec::new(),
         };
         let audio = OutStream {
             media: Some(MediaType::Audio),
@@ -2695,7 +2901,8 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
-        output_matrix: None,
+            output_matrix: None,
+            bsf: Vec::new(),
         };
         let e = check_codecs(&c, &o, "null", &[s]).unwrap_err();
         assert_eq!(
@@ -2718,7 +2925,8 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
-        output_matrix: None,
+            output_matrix: None,
+            bsf: Vec::new(),
         };
         assert!(check_codecs(&c, &o, "null", std::slice::from_ref(&s)).is_ok());
 
@@ -2773,7 +2981,8 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
-        output_matrix: None,
+            output_matrix: None,
+            bsf: Vec::new(),
         };
         let resolved = check_codecs(&c, &o, "null", &[s]).unwrap();
         assert_eq!(resolved, vec![StreamCodec::Encode("qoi")]);
@@ -2794,12 +3003,164 @@ mod tests {
             graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
             force_key_frames: None,
             codec_options: Vec::new(),
-        output_matrix: None,
+            output_matrix: None,
+            bsf: Vec::new(),
         }];
         let opts = codec_options_of(&c, &o, &streams).unwrap();
+        assert_eq!(opts, vec![vec![("pred".to_owned(), "paeth".to_owned())]]);
+    }
+
+    #[test]
+    fn bsf_options_of_resolves_a_bare_filter_by_name() {
+        let (c, o) = out_of(&[
+            "-i",
+            "a.mp4",
+            "-c",
+            "copy",
+            "-bsf:v",
+            "h264_mp4toannexb",
+            "-f",
+            "mpegts",
+            "-",
+        ]);
+        let streams = vec![OutStream {
+            source: StreamPick::demuxed(0, 0),
+            media: Some(MediaType::Video),
+            codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
+            codec_options: Vec::new(),
+            output_matrix: None,
+            bsf: Vec::new(),
+        }];
+        let chains = bsf_options_of(&c, &o, &streams).unwrap();
         assert_eq!(
-            opts,
-            vec![vec![("pred".to_owned(), "paeth".to_owned())]]
+            chains,
+            vec![vec![vaco_format_core::mux::UserBsf {
+                name: "h264_mp4toannexb",
+                options: Vec::new(),
+            }]]
+        );
+    }
+
+    #[test]
+    fn bsf_options_of_parses_a_comma_separated_chain() {
+        let (c, o) = out_of(&[
+            "-i",
+            "a.mp4",
+            "-c",
+            "copy",
+            "-bsf:v",
+            "h264_mp4toannexb,dump_extra",
+            "-f",
+            "mpegts",
+            "-",
+        ]);
+        let streams = vec![OutStream {
+            source: StreamPick::demuxed(0, 0),
+            media: Some(MediaType::Video),
+            codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
+            codec_options: Vec::new(),
+            output_matrix: None,
+            bsf: Vec::new(),
+        }];
+        let chains = bsf_options_of(&c, &o, &streams).unwrap();
+        assert_eq!(
+            chains.first().unwrap().iter().map(|b| b.name).collect::<Vec<_>>(),
+            vec!["h264_mp4toannexb", "dump_extra"]
+        );
+    }
+
+    #[test]
+    fn bsf_options_of_refuses_an_unknown_filter_name() {
+        let (c, o) = out_of(&[
+            "-i",
+            "a.mp4",
+            "-c",
+            "copy",
+            "-bsf:v",
+            "nosuchfilterxyz",
+            "-f",
+            "mpegts",
+            "-",
+        ]);
+        let streams = vec![OutStream {
+            source: StreamPick::demuxed(0, 0),
+            media: Some(MediaType::Video),
+            codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
+            codec_options: Vec::new(),
+            output_matrix: None,
+            bsf: Vec::new(),
+        }];
+        assert!(bsf_options_of(&c, &o, &streams).is_err());
+    }
+
+    #[test]
+    fn bsf_options_of_refuses_a_filter_given_options() {
+        // Gap 12: `BsfProvider::open` has nowhere to put them, so this is
+        // refused by name rather than silently opened bare.
+        let (c, o) = out_of(&[
+            "-i",
+            "a.mp4",
+            "-c",
+            "copy",
+            "-bsf:v",
+            "h264_metadata=aud=insert",
+            "-f",
+            "mpegts",
+            "-",
+        ]);
+        let streams = vec![OutStream {
+            source: StreamPick::demuxed(0, 0),
+            media: Some(MediaType::Video),
+            codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
+            codec_options: Vec::new(),
+            output_matrix: None,
+            bsf: Vec::new(),
+        }];
+        assert!(bsf_options_of(&c, &o, &streams).is_err());
+    }
+
+    #[test]
+    fn last_match_wins_for_bsf_too() {
+        // Same rule `last_match_wins_across_per_stream_codec_options` proves
+        // for `-c:a`: `-bsf:v:0 <x> -bsf:v <y>` gives stream v:0 `y`.
+        let (c, o) = out_of(&[
+            "-i",
+            "a.mp4",
+            "-c",
+            "copy",
+            "-bsf:v:0",
+            "dump_extra",
+            "-bsf:v",
+            "h264_mp4toannexb",
+            "-f",
+            "mpegts",
+            "-",
+        ]);
+        let streams = vec![OutStream {
+            source: StreamPick::demuxed(0, 0),
+            media: Some(MediaType::Video),
+            codec: StreamCodec::Copy,
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
+            codec_options: Vec::new(),
+            output_matrix: None,
+            bsf: Vec::new(),
+        }];
+        let chains = bsf_options_of(&c, &o, &streams).unwrap();
+        assert_eq!(
+            chains,
+            vec![vec![vaco_format_core::mux::UserBsf {
+                name: "h264_mp4toannexb",
+                options: Vec::new(),
+            }]]
         );
     }
 
@@ -2817,7 +3178,8 @@ mod tests {
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
                 force_key_frames: None,
                 codec_options: Vec::new(),
-            output_matrix: None,
+                output_matrix: None,
+                bsf: Vec::new(),
             },
             OutStream {
                 source: StreamPick::demuxed(0, 1),
@@ -2826,7 +3188,8 @@ mod tests {
                 graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
                 force_key_frames: None,
                 codec_options: Vec::new(),
-            output_matrix: None,
+                output_matrix: None,
+                bsf: Vec::new(),
             },
         ];
         assert!(check_codecs(&c, &o, "null", &streams).is_ok());

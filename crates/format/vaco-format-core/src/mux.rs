@@ -85,6 +85,24 @@ pub enum BitstreamAction {
     Insert { name: &'static str },
 }
 
+/// One user-requested filter from `-bsf`/`-bsf:v`/`-bsf:a`/`-bsf:s`: a name
+/// already resolved against the registry's own `'static` copy (so a typo is
+/// refused at CLI-option time, not deep inside a running mux — see
+/// `vaco_registry::bsf_canonical_name`, the only intended way to build one of
+/// these outside this crate's own tests), plus whatever `name=opt=val:...`
+/// options the user gave it.
+///
+/// `options` is carried rather than dropped so [`MuxBuilder::set_user_bsf`]
+/// can refuse a filter it cannot actually configure by name, rather than
+/// silently opening it bare: [`BsfProvider::open`] has no per-instance option
+/// string yet (`planning/INTERFACE-GAPS.md` gap 12), so any non-empty
+/// `options` here is unreachable today by construction, not by omission.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UserBsf {
+    pub name: &'static str,
+    pub options: Vec<(String, String)>,
+}
+
 /// Supplies bitstream filters to a muxer without the muxer naming a codec crate.
 ///
 /// The mux-side mirror of [`crate::ParserProvider`], and the same seam for the
@@ -274,6 +292,12 @@ struct StreamState {
     ended: bool,
     packets: u64,
     bsf: BsfChain,
+    /// `-bsf`/`-bsf:v`/`-bsf:a`/`-bsf:s`, resolved and validated at CLI-option
+    /// time (`MuxBuilder::set_user_bsf`). Seeded into the chain ahead of
+    /// whatever the muxer's own `check_bitstream` still asks for — see
+    /// `MuxWriter::decide_bitstream`'s own doc for why that order, not the
+    /// reverse, is the one that composes rather than fights.
+    user_bsf: Vec<UserBsf>,
 }
 
 /// Phase one: declare streams (M8).
@@ -389,6 +413,40 @@ impl MuxBuilder {
         self
     }
 
+    /// `-bsf`/`-bsf:v`/`-bsf:a`/`-bsf:s` for one stream, already resolved and
+    /// validated by the caller (`vaco_registry::bsf_canonical_name` for the
+    /// name, gap 12 for why `options` must already be empty).
+    ///
+    /// A plain `&mut self` method, not the `with_*` consuming style
+    /// [`MuxBuilder::with_bsfs`]/[`MuxBuilder::with_metadata`] use: those run
+    /// once, before any stream exists; this runs once *per stream*, right
+    /// after [`MuxBuilder::add_stream`] hands the caller the index it needs,
+    /// so there is no ownership to hand back and forth for.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidData`] if `stream_index` names no declared stream.
+    /// [`Error::Unsupported`] if any entry carries per-instance options —
+    /// [`BsfProvider::open`] has nowhere to put them (gap 12); refusing here,
+    /// not just at the CLI layer that already validates this, is what keeps
+    /// a future second caller of this method from silently shipping a file
+    /// whose requested option was dropped on the floor.
+    pub fn set_user_bsf(&mut self, stream_index: u32, chain: Vec<UserBsf>) -> Result<()> {
+        for bsf in &chain {
+            if !bsf.options.is_empty() {
+                return Err(Error::Unsupported(
+                    "this build cannot pass per-instance options to a bitstream filter yet",
+                ));
+            }
+        }
+        let st = usize::try_from(stream_index)
+            .ok()
+            .and_then(|i| self.streams.get_mut(i))
+            .ok_or(Error::InvalidData("set_user_bsf: no such stream"))?;
+        st.user_bsf = chain;
+        Ok(())
+    }
+
     /// The container's flags.
     #[must_use]
     pub const fn flags(&self) -> FormatFlags {
@@ -499,6 +557,7 @@ impl MuxBuilder {
             ended: false,
             packets: 0,
             bsf: BsfChain::default(),
+            user_bsf: Vec::new(),
         });
         Ok(index)
     }
@@ -922,49 +981,85 @@ impl MuxWriter {
     }
 
     /// B1–B3: ask once per stream, chain up to [`MAX_BSF_DEPTH`], then cache.
+    ///
+    /// A `-bsf`/`-bsf:v`/`-bsf:a`/`-bsf:s` chain (`StreamState::user_bsf`) is
+    /// seeded first, ahead of whatever the muxer's own `check_bitstream`
+    /// still asks for — composing with the automatic stage rather than
+    /// replacing it. Measured directly against real ffmpeg 9.0.1, not
+    /// assumed: an explicit `-bsf:v null` on an MP4 -> MPEG-TS `-c copy`
+    /// (which needs the automatic `h264_mp4toannexb` conversion) produces
+    /// output byte-identical to the same remux with no `-bsf:v` at all —
+    /// both run, in that order. And when the user's own chain already names
+    /// the exact filter the muxer would also have asked for
+    /// (`-bsf:v h264_mp4toannexb` on that same remux), the reference does
+    /// not double-apply it: output is again byte-identical to the
+    /// automatic-only case. The `names[..user_count].contains` check below
+    /// is that measurement, not a guess — a name the user already added is
+    /// treated as already satisfied, not as a second instance and not as
+    /// the "muxer asked for the same filter twice" bug the *other* duplicate
+    /// check below still catches (a muxer whose own automatic loop repeats a
+    /// name it added itself really is looping, not composing).
     fn decide_bitstream(&mut self, idx: usize, pkt: &Packet) -> Result<()> {
         if self.streams.get(idx).is_some_and(|s| s.bsf.is_decided()) {
             return Ok(());
         }
-        // B1 — `-fflags -autobsf` disables the stage entirely.
-        if !self.opts.fflags.contains(FFlags::AUTOBSF) {
-            if let Some(st) = self.streams.get_mut(idx) {
-                st.bsf.decided = true;
-            }
-            return Ok(());
-        }
-        let params = match self.streams.get(idx) {
-            Some(st) => st.params.clone(),
+        let (params, user_bsf) = match self.streams.get(idx) {
+            Some(st) => (st.params.clone(), st.user_bsf.clone()),
             None => return Err(Error::InvalidData("packet names an undeclared stream")),
         };
+
         let mut filters: Vec<Box<dyn BitstreamFilter>> = Vec::new();
         let mut names: Vec<&'static str> = Vec::new();
-        for _ in 0..MAX_BSF_DEPTH {
-            let action = self.muxer.check_bitstream(&params, pkt)?;
-            let BitstreamAction::Insert { name } = action else {
-                break;
-            };
-            // A muxer asking for the same filter twice is a loop, not a chain.
-            if names.contains(&name) {
+        for bsf in &user_bsf {
+            if names.contains(&bsf.name) {
                 return Err(Error::InvalidData(
-                    "muxer asked for the same bitstream filter twice",
+                    "the same bitstream filter was requested twice",
                 ));
             }
-            filters.push(self.bsfs.open(name, &params)?);
-            names.push(name);
-            // B2 asks again "on the filter's output". We cannot see that output
-            // without running the filter, and running it here would consume the
-            // packet before the queue had ordered it, so the muxer is re-asked
-            // against the same parameters. The duplicate-name check below is
-            // what stops that from looping: a muxer that would answer `Insert`
-            // forever answers with the same name forever.
+            filters.push(self.bsfs.open(bsf.name, &params)?);
+            names.push(bsf.name);
         }
-        if names.len() >= MAX_BSF_DEPTH {
-            // Still asking after four is a muxer that will never say Keep.
-            if self.muxer.check_bitstream(&params, pkt)? != BitstreamAction::Keep {
-                return Err(Error::InvalidData(
-                    "bitstream filter chain did not terminate within the depth limit",
-                ));
+        let user_count = names.len();
+
+        // B1 — `-fflags -autobsf` disables the *automatic* stage only; a
+        // user's own `-bsf` chain, seeded above, is unaffected — the same
+        // way the reference's automatic insertion and its `-bsf` option are
+        // independent knobs.
+        if self.opts.fflags.contains(FFlags::AUTOBSF) {
+            for _ in 0..MAX_BSF_DEPTH.saturating_sub(user_count) {
+                let action = self.muxer.check_bitstream(&params, pkt)?;
+                let BitstreamAction::Insert { name } = action else {
+                    break;
+                };
+                if names.get(..user_count).unwrap_or(&[]).contains(&name) {
+                    // Already satisfied by the user's own chain — see this
+                    // function's own doc for the measurement. Re-ask rather
+                    // than stop outright: B2's "ask again on the filter's
+                    // output" contract still holds, in case a real chain
+                    // needs a second, different filter after this one.
+                    continue;
+                }
+                if names.get(user_count..).unwrap_or(&[]).contains(&name) {
+                    return Err(Error::InvalidData(
+                        "muxer asked for the same bitstream filter twice",
+                    ));
+                }
+                filters.push(self.bsfs.open(name, &params)?);
+                names.push(name);
+                // B2 asks again "on the filter's output". We cannot see that output
+                // without running the filter, and running it here would consume the
+                // packet before the queue had ordered it, so the muxer is re-asked
+                // against the same parameters. The duplicate-name check above is
+                // what stops that from looping: a muxer that would answer `Insert`
+                // forever answers with the same name forever.
+            }
+            if names.len() >= MAX_BSF_DEPTH {
+                // Still asking after four total is a muxer that will never say Keep.
+                if self.muxer.check_bitstream(&params, pkt)? != BitstreamAction::Keep {
+                    return Err(Error::InvalidData(
+                        "bitstream filter chain did not terminate within the depth limit",
+                    ));
+                }
             }
         }
         if let Some(slot) = self.report.bitstream_filters.get_mut(idx) {
@@ -1510,6 +1605,115 @@ mod tests {
     }
 
     #[test]
+    fn a_user_requested_filter_satisfies_the_same_automatic_request() {
+        // Measured against real ffmpeg 9.0.1 (see `decide_bitstream`'s own
+        // doc): a user's own `-bsf:v h264_mp4toannexb` on a remux that also
+        // needs it automatically produces output byte-identical to the
+        // automatic-only case -- satisfied once, not applied twice.
+        let opts = FormatOptions::default();
+        let rec = Recorder {
+            bsf_asks: vec![BitstreamAction::Insert {
+                name: "extract_extradata",
+            }],
+            ..Recorder::default()
+        };
+        let mut b = MuxBuilder::new(Box::new(rec), &opts).with_bsfs(Arc::new(PassThroughProvider));
+        let idx = b.add_stream(&video(), tb()).unwrap();
+        b.set_user_bsf(
+            idx,
+            vec![UserBsf {
+                name: "extract_extradata",
+                options: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let mut w = b.open().unwrap();
+        w.write_packet(pkt(0, 0)).unwrap();
+        let r = w.finish().unwrap();
+        assert_eq!(r.bitstream_filters[0], vec!["extract_extradata"]);
+    }
+
+    #[test]
+    fn a_user_requested_filter_still_applies_with_autobsf_off() {
+        // `-fflags -autobsf` disables only the automatic stage; an explicit
+        // `-bsf` is a different knob and stays in effect.
+        let mut opts = FormatOptions::default();
+        opts.fflags.remove(FFlags::AUTOBSF);
+        let rec = Recorder {
+            // If this were honoured it would prove the automatic stage ran;
+            // it must not be, so any effect seen below is the user's own
+            // chain and nothing else.
+            bsf_asks: vec![BitstreamAction::Insert {
+                name: "extract_extradata",
+            }],
+            ..Recorder::default()
+        };
+        let mut b = MuxBuilder::new(Box::new(rec), &opts).with_bsfs(Arc::new(PassThroughProvider));
+        let idx = b.add_stream(&video(), tb()).unwrap();
+        b.set_user_bsf(
+            idx,
+            vec![UserBsf {
+                name: "passthrough",
+                options: Vec::new(),
+            }],
+        )
+        .unwrap();
+        let mut w = b.open().unwrap();
+        w.write_packet(pkt(0, 0)).unwrap();
+        let r = w.finish().unwrap();
+        assert_eq!(r.bitstream_filters[0], vec!["passthrough"]);
+    }
+
+    #[test]
+    fn set_user_bsf_refuses_per_instance_options() {
+        // Gap 12: `BsfProvider::open` has nowhere to put them.
+        let opts = FormatOptions::default();
+        let mut b = MuxBuilder::new(Box::new(Recorder::default()), &opts);
+        let idx = b.add_stream(&video(), tb()).unwrap();
+        let err = b
+            .set_user_bsf(
+                idx,
+                vec![UserBsf {
+                    name: "x",
+                    options: vec![("k".to_owned(), "v".to_owned())],
+                }],
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::Unsupported(_)));
+    }
+
+    #[test]
+    fn set_user_bsf_refuses_an_undeclared_stream() {
+        let opts = FormatOptions::default();
+        let mut b = MuxBuilder::new(Box::new(Recorder::default()), &opts);
+        assert!(b.set_user_bsf(0, Vec::new()).is_err());
+    }
+
+    #[test]
+    fn the_same_user_filter_twice_is_refused() {
+        let opts = FormatOptions::default();
+        let mut b = MuxBuilder::new(Box::new(Recorder::default()), &opts)
+            .with_bsfs(Arc::new(PassThroughProvider));
+        let idx = b.add_stream(&video(), tb()).unwrap();
+        b.set_user_bsf(
+            idx,
+            vec![
+                UserBsf {
+                    name: "passthrough",
+                    options: Vec::new(),
+                },
+                UserBsf {
+                    name: "passthrough",
+                    options: Vec::new(),
+                },
+            ],
+        )
+        .unwrap();
+        let mut w = b.open().unwrap();
+        assert!(w.write_packet(pkt(0, 0)).is_err());
+    }
+
+    #[test]
     fn an_inserted_filter_sits_between_the_queue_and_the_muxer() {
         let opts = FormatOptions::default();
         let log = Arc::new(Mutex::new(Vec::new()));
@@ -1637,8 +1841,7 @@ mod tests {
         let ffv1 = CodecParameters::video().with_codec(CodecId::Ffv1);
         let mut p = pkt(0, 0);
         p.side_data.push(PacketSideData::NewExtradata(
-            vaco_pool::Buffer::alloc(&mut Budget::new(Limits::strict()), 4)
-                .unwrap(),
+            vaco_pool::Buffer::alloc(&mut Budget::new(Limits::strict()), 4).unwrap(),
         ));
         assert_eq!(
             global_header_action(FormatFlags::GLOBALHEADER, &ffv1, &p),

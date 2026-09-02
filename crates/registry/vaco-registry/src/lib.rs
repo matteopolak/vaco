@@ -65,11 +65,11 @@ use vaco_format_core::{DemuxerDesc, MuxerDesc, ParserProvider, ProbeData};
 use vaco_limits::Limits;
 use vaco_protocol_core::{ProtocolDesc, ProtocolRegistry};
 
+use generated::FILTER_REGISTRIES;
 pub use generated::{
     COMPONENTS, DECODERS, DEMUXERS, ENCODERS, ENCUMBERED_ALL, ENCUMBERED_ENABLED, FILTERS, MUXERS,
     PARSERS, PROTOCOLS,
 };
-use generated::FILTER_REGISTRIES;
 
 /// What a component is. The vocabulary is frozen in plan 19 §3.4.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -570,10 +570,40 @@ impl BsfProvider for Bsfs {
     }
 }
 
+/// Resolve a user-typed bitstream-filter name (`-bsf`/`-bsf:v`/`-bsf:a`/
+/// `-bsf:s`) to the registry's own canonical, `'static` copy of it.
+///
+/// The only intended way to build a [`vaco_format_core::mux::UserBsf`]
+/// outside this crate's own tests: `MuxBuilder::set_user_bsf` takes a
+/// `&'static str` name (the same type [`BitstreamAction::Insert`]'s own
+/// muxer-side requests carry), and a name typed on a command line is a
+/// runtime `String` with no `'static` lifetime of its own. Resolving it
+/// against [`bsf_descs`] here, once, at CLI-option time, both produces that
+/// `'static str` (a field of a `Copy` descriptor already sitting in `'static`
+/// data, not a leak) and refuses an unknown name immediately — the same
+/// "Bitstream filter not found" shape the reference reports at option-parse
+/// time, not deep inside a running mux.
+#[must_use]
+pub fn bsf_canonical_name(name: &str) -> Option<&'static str> {
+    bsf_descs().find(|d| d.name == name).map(|d| d.name)
+}
+
 #[cfg(test)]
 #[allow(clippy::panic, reason = "test code")]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bsf_canonical_name_resolves_every_registered_filter() {
+        for d in bsf_descs() {
+            assert_eq!(bsf_canonical_name(d.name), Some(d.name));
+        }
+    }
+
+    #[test]
+    fn bsf_canonical_name_refuses_an_unknown_name() {
+        assert_eq!(bsf_canonical_name("nosuchfilterxyz"), None);
+    }
 
     #[test]
     fn bsfs_opens_every_registered_filter_by_name() {
@@ -740,7 +770,11 @@ mod tests {
     #[test]
     fn every_registered_encoder_is_a_component_too() {
         for e in encoders() {
-            assert!(component(Kind::Encoder, e.name).is_some(), "encoder {}", e.name);
+            assert!(
+                component(Kind::Encoder, e.name).is_some(),
+                "encoder {}",
+                e.name
+            );
         }
     }
 
