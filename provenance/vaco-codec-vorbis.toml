@@ -4,11 +4,12 @@
 #
 # Vorbis's codebooks, floor curves, residue partitions and mode/mapping tables
 # are all derived from the bitstream itself at decode time rather than fixed
-# constant arrays, so this crate has no `[[table]]` rows — `floor1_inverse_dB_table`
-# (256 f32 entries, spec section 10.1) is the one exception, transcribed
-# directly in `crates/codec/vaco-codec-vorbis/src/floor1_table.rs` with its own
-# `Vaco-Spec-Ref` citation rather than a row here, since it is a single flat
-# array rather than a family of tables worth cross-referencing from a shared file.
+# constant arrays, so `FLOOR1_INVERSE_DB_TABLE` (256 f32 entries, spec
+# section 10.1, in `crates/codec/vaco-codec-vorbis/src/floor1_table.rs`) is
+# the only `[[table]]` row this crate needs. A prior pass judged the
+# in-code `Vaco-Spec-Ref` doc comment on the array itself sufficient and
+# skipped the row below; `cargo xtask provenance-check` does not special-
+# case that, so the row is required after all.
 
 [[source]]
 id       = "vorbis-i"
@@ -49,3 +50,10 @@ kind     = "blackbox"
 title    = "ffmpeg 8.1's native Vorbis encoder/decoder, used to calibrate this crate's IMDCT scale and to determine which setup-header configurations (residue type, channel coupling) it actually emits"
 acquired = "2026-08-28"
 where    = "the reference binary (ffmpeg 8.1) installed on the development machine, driven via crates/codec/vaco-codec-vorbis/tests/ffmpeg_differential.rs"
+
+[[table]]
+name   = "FLOOR1_INVERSE_DB_TABLE"
+file   = "crates/codec/vaco-codec-vorbis/src/floor1_table.rs"
+source = "vorbis-i"
+clause = "Section 10.1, floor1_inverse_dB_table"
+method = "transcribed"
