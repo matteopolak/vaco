@@ -143,18 +143,21 @@ impl TeletextDecoder {
             1..=24 => {
                 page.fill_body_row(address.packet, packet.payload);
             }
-            25..=28 => validate_enhancement_packet(packet.payload),
+            26 => crate::x26::apply(page, packet.payload),
+            25 | 27 | 28 => validate_enhancement_packet(packet.payload),
             _ => {} // 29-31: magazine/service data, never page content
         }
     }
 }
 
-/// X/25 to X/28: decode (to detect corruption) without acting on the
-/// enhancement semantics — Level 1.5's G0/G2 re-designation and X/26
-/// composite characters are this crate's stated gap (see the crate's
-/// top-level docs). Hamming 24/18 is still run over every triplet so a
-/// malformed enhancement packet cannot be misread as body text, per this
-/// project's own guidance to reject cleanly rather than guess.
+/// X/25, X/27 and X/28: decode (to detect corruption) without acting on the
+/// enhancement semantics — X/25 (reserved), X/27 (page linking) and X/28
+/// (G0/G2 re-designation, side panels) are this crate's stated Level 1.5
+/// gap (see the crate's top-level docs); X/26 (composite characters) is
+/// handled separately by [`crate::x26`]. Hamming 24/18 is still run over
+/// every triplet so a malformed enhancement packet cannot be misread as
+/// body text, per this project's own guidance to reject cleanly rather
+/// than guess.
 fn validate_enhancement_packet(payload: &[u8]) {
     let Some(triplets) = payload.get(1..) else {
         return;

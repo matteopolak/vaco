@@ -129,6 +129,13 @@ pub struct Page {
     /// Hamming 8/4 double-bit errors in the header's address/control/subcode
     /// bytes, folded the same way.
     pub corrupt_hamming: u32,
+    /// Packet X/26's Active Position (§12.3.2): row 0-24, column 0-39,
+    /// carried across a magazine's own enhancement packets. Tracked here
+    /// rather than in [`crate::decoder::TeletextDecoder`] because it is
+    /// per-page state, reset by every new X/0 header the same way `rows`
+    /// is.
+    pub(crate) x26_row: usize,
+    pub(crate) x26_col: usize,
 }
 
 impl Page {
@@ -141,11 +148,31 @@ impl Page {
             rows: [[Cell::default(); 40]; 25],
             corrupt_parity: 0,
             corrupt_hamming: 0,
+            x26_row: 0,
+            x26_col: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn blank_for_test(magazine: u8) -> Self {
+        Self::blank(magazine)
     }
 
     fn row_mut(&mut self, row: usize) -> Option<&mut Row> {
         self.rows.get_mut(row)
+    }
+
+    /// Overwrite one cell's glyph in place: packet X/26's composite
+    /// characters (§12.3) writing over Level 1 page content
+    /// `fill_body_row`/`fill_row` already placed. An out-of-range `row`/
+    /// `col` is silently ignored — the same "reject cleanly" rule this
+    /// crate applies to every other malformed-addressing case, since `row`/
+    /// `col` here come from a Hamming-corrected but otherwise
+    /// attacker-controlled triplet.
+    pub(crate) fn overwrite_glyph(&mut self, row: usize, col: usize, glyph: Glyph) {
+        if let Some(cell) = self.row_mut(row).and_then(|r| r.get_mut(col)) {
+            cell.glyph = glyph;
+        }
     }
 
     /// Parse a page header packet (X/0): `payload` is the 40 bytes
@@ -282,7 +309,7 @@ impl Page {
                     separated: mosaic_separated,
                 }
             } else {
-                Glyph::Text(latin_g0(code))
+                Glyph::Text(latin_g0(code, self.control.national_option))
             };
 
             if let Some(cell) = self.row_mut(row).and_then(|r| r.get_mut(col)) {
@@ -438,11 +465,5 @@ mod tests {
         page.fill_body_row(1, &[0x41]);
         assert_eq!(page.corrupt_parity, 1);
         assert_eq!(page.rows[1][0].glyph, Glyph::Corrupt);
-    }
-
-    impl Page {
-        fn blank_for_test(magazine: u8) -> Self {
-            Self::blank(magazine)
-        }
     }
 }

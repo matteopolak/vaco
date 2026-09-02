@@ -1365,6 +1365,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["pict", "pct"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-qoa")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "qoa",
+        long_name: Some("QOA (Quite OK Audio)"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-qoa"),
+        media: None,
+        codec: None,
+        extensions: &["qoa"],
+        mime_types: &["audio/x-qoa"],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -2048,6 +2060,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         codec: None,
         extensions: &["wv"],
         mime_types: &["audio/x-wavpack"],
+    },
+    #[cfg(feature = "demux-xa")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "xa",
+        long_name: Some("Maxis XA"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-xa"),
+        media: None,
+        codec: None,
+        extensions: &["xa"],
+        mime_types: &[],
     },
     #[cfg(feature = "demux-image2")]
     crate::Component {
@@ -4321,6 +4345,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("codec-image-simple"),
         media: Some("video"),
         codec: Some("targa"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-subtitle-teletext")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "teletext",
+        long_name: Some("Teletext (EN 300 706)"),
+        krate: "vaco-codec-subtitle-teletext",
+        feature: Some("codec-subtitle-teletext"),
+        media: Some("subtitle"),
+        codec: Some("dvb_teletext"),
         extensions: &[],
         mime_types: &[],
     },
@@ -10016,6 +10052,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_format_misc_audio::pvf::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_QDRAW,
+    #[cfg(feature = "demux-qoa")]
+    &::vaco_format_misc_audio::qoa::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_QOI,
     #[cfg(feature = "demux-raw")]
@@ -10130,6 +10168,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_subtitle_text::webvtt::DEMUXER,
     #[cfg(feature = "demux-wv")]
     &::vaco_format_misc_audio::wavpack::DEMUXER,
+    #[cfg(feature = "demux-xa")]
+    &::vaco_format_misc_audio::xa::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_XBM,
     #[cfg(feature = "demux-image2")]
@@ -10504,6 +10544,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_image_simple::SGI_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::TGA_DECODER,
+    #[cfg(feature = "codec-subtitle-teletext")]
+    &::vaco_codec_subtitle_teletext::TELETEXT_DECODER,
     #[cfg(feature = "codec-theora")]
     &::vaco_codec_theora::DECODER_THEORA,
     #[cfg(feature = "codec-tiff")]

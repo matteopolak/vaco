@@ -148,3 +148,82 @@ fn fixture_3_hamming_correction_survives_a_bit_flip() {
     assert_eq!(events[0].page.page_number, 0x37);
     assert_eq!(events[0].page.corrupt_hamming, 0);
 }
+
+/// Encode one Hamming 24/18 triplet (address/mode/data, EN 300 706 §8.3's
+/// own algebraic equations — the same construction `hamming::decode24`'s
+/// unit tests are checked against) for packet X/26's enhancement data.
+fn encode_triplet(address: u8, mode: u8, data: u8) -> [u8; 3] {
+    let mut bits = [0u8; 18];
+    for i in 0..6 {
+        bits[i] = (address >> i) & 1;
+    }
+    for i in 0..5 {
+        bits[6 + i] = (mode >> i) & 1;
+    }
+    for i in 0..7 {
+        bits[11 + i] = (data >> i) & 1;
+    }
+    let get = |positions: &[usize]| -> u32 { positions.iter().fold(0u32, |acc, &p| acc ^ u32::from(bits[p])) };
+    let p1 = 1 ^ get(&[0, 1, 3, 4, 6, 8, 10, 11, 13, 15, 17]);
+    let p2 = 1 ^ get(&[0, 2, 3, 5, 6, 9, 10, 12, 13, 16, 17]);
+    let p3 = 1 ^ get(&[1, 2, 3, 7, 8, 9, 10, 14, 15, 16, 17]);
+    let p4 = 1 ^ get(&[4, 5, 6, 7, 8, 9, 10]);
+    let p5 = 1 ^ get(&[11, 12, 13, 14, 15, 16, 17]);
+
+    let mut raw = 0u32;
+    raw |= p1 & 1;
+    raw |= (p2 & 1) << 1;
+    raw |= u32::from(bits[0]) << 2;
+    raw |= (p3 & 1) << 3;
+    raw |= u32::from(bits[1]) << 4;
+    raw |= u32::from(bits[2]) << 5;
+    raw |= u32::from(bits[3]) << 6;
+    raw |= (p4 & 1) << 7;
+    for (i, &d) in bits.iter().enumerate().skip(4).take(7) {
+        raw |= u32::from(d) << (8 + (i - 4));
+    }
+    raw |= (p5 & 1) << 15;
+    for (i, &d) in bits.iter().enumerate().skip(11) {
+        raw |= u32::from(d) << (16 + (i - 11));
+    }
+    let p6 = 1 ^ (0..23).fold(0u32, |acc, n| acc ^ ((raw >> n) & 1));
+    raw |= (p6 & 1) << 23;
+    [(raw & 0xFF) as u8, ((raw >> 8) & 0xFF) as u8, ((raw >> 16) & 0xFF) as u8]
+}
+
+/// Fixture 4: a Level 1.5 page — a plain body row overwritten by packet
+/// X/26 with a composed accented character (§12.3.4's diacritical-mark
+/// column modes), run through the full [`TeletextDecoder`] state machine
+/// (packet routing, magazine addressing, Hamming 24/18) rather than
+/// [`crate::x26::apply`] in isolation, which is what the crate's own
+/// `x26::tests` module exercises. A reserved-mode filler triplet (Table
+/// 27's `00100`) precedes the real triplets, standing in for the
+/// unused-triplet padding a real encoder sends to fill all thirteen slots.
+#[test]
+fn fixture_4_x26_composite_diacritic() {
+    let mut decoder = TeletextDecoder::new();
+    decoder.push(&data_unit(4, 0, &header_control_bytes(0, 4))); // page 400
+
+    let row1: Vec<u8> = "CAFE".bytes().map(parity_byte).collect();
+    decoder.push(&data_unit(4, 1, &row1));
+
+    // Packet X/26: a reserved-mode filler triplet (address 7, mode 00100 —
+    // no text-visible effect, see Table 27), then Set Active Position to
+    // row 1, column 3 (address 41, mode 00100), then compose an acute
+    // accent (mark 2) over 'E' (0x45) at that column — overwriting the
+    // plain 'E' fixture_1/2's plain rows never exercise.
+    let mut body = vec![0u8]; // designation code byte, unused here
+    body.extend_from_slice(&encode_triplet(7, 0b00100, 0)); // reserved: no-op
+    body.extend_from_slice(&encode_triplet(41, 0b00100, 3)); // set active position
+    body.extend_from_slice(&encode_triplet(3, 0b10010, 0x45)); // acute + 'E'
+    while body.len() < 40 {
+        body.push(hamming_byte(0));
+    }
+    decoder.push(&data_unit(4, 26, &body));
+
+    let events = decoder.push(&data_unit(4, 0, &header_control_bytes(0, 4)));
+    assert_eq!(events.len(), 1);
+    let page = &events[0].page;
+    assert_eq!(page_text(&page.rows, 1, 0, 2), "CA");
+    assert_eq!(page.rows[1][3].glyph, Glyph::Text('\u{C9}')); // É
+}

@@ -1,0 +1,18 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# One decoder: EN 300 706 Teletext (DVB `dvb_teletext`). Reachable from a
+# `vaco-subtitle-bitmap::dvbtxt` demuxer packet (or the equivalent PES
+# elementary-stream bytes) through `vaco-registry`'s normal decoder lookup.
+# Named "teletext" — this crate's own choice, not the reference's: the
+# reference's teletext decode lives behind `--enable-libzvbi`, absent from
+# both `ffmpeg` and `ffmpeg-full` in this project's build environment, so
+# its actual decoder name could not be measured (see `src/registry.rs`).
+
+[[component]]
+kind      = "decoder"
+name      = "teletext"
+long_name = "Teletext (EN 300 706)"
+feature   = "codec-subtitle-teletext"
+ctor      = "vaco_codec_subtitle_teletext::TELETEXT_DECODER"
+media     = "subtitle"
+codec     = "dvb_teletext"

@@ -457,7 +457,7 @@ codec-qoi = ["dep:vaco-codec-qoi", "dep:vaco-frame", "dep:vaco-limits", "dep:vac
 codec-simple-audio = ["dep:vaco-codec-simple-audio", "dep:vaco-limits"]
 codec-subtitle-bitmap = ["dep:vaco-codec-subtitle-bitmap", "dep:vaco-format-subtitle-bitmap", "dep:vaco-limits", "dep:vaco-subtitle-bitmap"]
 codec-subtitle-cc = ["dep:vaco-codec-subtitle-cc"]
-codec-subtitle-teletext = ["dep:vaco-codec-subtitle-teletext"]
+codec-subtitle-teletext = ["dep:vaco-codec-core", "dep:vaco-codec-subtitle-teletext", "dep:vaco-core", "dep:vaco-limits", "dep:vaco-packet"]
 codec-subtitle-text = ["dep:vaco-codec-subtitle-text"]
 codec-theora = ["dep:vaco-codec-core", "dep:vaco-codec-theora", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-packet", "dep:vaco-pixfmt"]
 codec-tiff = ["dep:vaco-codec-tiff", "dep:vaco-frame", "dep:vaco-limits", "dep:vaco-pixfmt"]
@@ -2387,6 +2387,14 @@ required-features = ["codec-subtitle-teletext"]
 [[bin]]
 name = "teletext_packet_parse"
 path = "fuzz_targets/teletext_packet_parse.rs"
+test = false
+doc = false
+bench = false
+required-features = ["codec-subtitle-teletext"]
+
+[[bin]]
+name = "teletext_subtitle_decode"
+path = "fuzz_targets/teletext_subtitle_decode.rs"
 test = false
 doc = false
 bench = false
