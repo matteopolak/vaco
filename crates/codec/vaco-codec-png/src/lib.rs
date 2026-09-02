@@ -9,11 +9,29 @@
 //! `vaco_codec_core::SendReceive` protocol every codec in this tree shares.
 //!
 //! A packet is the whole file; APNG can yield several frames from one
-//! packet, so both wrappers declare [`Caps::SUBFRAMES`] and queue every
-//! decoded frame with one `Machine::emit_all` call. Encoding runs the other
-//! way: frames are buffered ([`Caps::DELAY`]) until the caller drains with
-//! `send(None)`, at which point every buffered frame becomes one PNG (one
-//! frame) or one APNG (more than one).
+//! packet, so [`PngDecoder`] declares [`Caps::SUBFRAMES`] and queues every
+//! decoded frame with one `Machine::emit_all` call.
+//!
+//! [`PngEncoder`] is stateless and one-frame-in-one-packet-out
+//! ([`Caps::empty`]), matching the reference's own `png` `AVCodec` (measured:
+//! `ffmpeg -c:v png` has no multi-frame buffering at all — APNG is a
+//! *different* encoder there, `apng`, reached only through its own muxer). It
+//! used to buffer every frame ([`Caps::DELAY`]) and emit one packet — a PNG
+//! for one buffered frame, an APNG for more than one — at `send(None)`. That
+//! was wrong for the only muxer this codec is ever reachable through today:
+//! `image2` writes one *file* per `write_packet` call, so a run over N frames
+//! silently produced a single `out_1.png` file holding an APNG with all N
+//! frames inside it, and files 2..N were never created — `image2` is not a
+//! whole-clip-in-one-file format the way a real `.apng` output would be, and
+//! this crate had no way to tell which one it was being asked for (measured:
+//! `vaco -i in.mp4 -c:v png out_%d.png` on a 5-frame source wrote exactly one
+//! file, an APNG holding all 5 frames, as `out_1.png`). `codec::encode`
+//! itself is unchanged and still encodes an APNG from a multi-frame slice —
+//! that capability is not deleted, just no longer invoked by the registered
+//! encoder, since nothing in this tree's registry maps an `apng` codec
+//! identity or a genuine single-file `apng`/multi-page-TIFF muxer to it. A
+//! real `apng` codec + muxer pair, wired up the way the reference keeps them
+//! separate, is future work, not something this fix scopes in.
 //!
 //! [`codec`] is the only module that knows the `png` crate's types — no
 //! `png::` type appears in this crate's public API, which is the D11
@@ -112,13 +130,15 @@ impl SendReceive for PngDecoder {
     }
 }
 
-/// A [`SendReceive`] encoder over [`Frame`]/[`Packet`]: every frame sent
-/// before a drain becomes one PNG (one frame) or one APNG (more than one).
+/// A [`SendReceive`] encoder over [`Frame`]/[`Packet`]: every frame becomes
+/// its own one-frame PNG, immediately, matching the reference `png` encoder
+/// (see this module's own doc comment for why this crate no longer batches
+/// frames into one packet the way it did before this codec's only reachable
+/// muxer, `image2`, turned out to need exactly the opposite).
 #[derive(Debug)]
 pub struct PngEncoder {
     machine: Machine<Packet>,
     limits: Limits,
-    pending: Vec<Frame>,
     options: EncodeOptions,
 }
 
@@ -127,9 +147,8 @@ impl PngEncoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
         Self {
-            machine: Machine::new(Caps::DELAY),
+            machine: Machine::new(Caps::empty()),
             limits,
-            pending: Vec::new(),
             options: EncodeOptions::default(),
         }
     }
@@ -169,18 +188,6 @@ impl SendReceive for PngEncoder {
     fn send(&mut self, input: Option<&Frame>) -> Result<()> {
         match self.machine.accept(input.is_none())? {
             Accept::Drain => {
-                let mut budget = Budget::new(self.limits.clone());
-                let bytes = codec::encode(&self.pending, &mut budget, &self.options)?;
-                let mut packet = Packet::from_slice(&mut budget, &bytes)?;
-                packet.pts = self.pending.first().map_or(vaco_core::Timestamp::NONE, |f| f.pts);
-                // Same bug class as `vaco-codec-gif`'s encoder, same fix:
-                // this crate emits the whole animated PNG (APNG) as one
-                // packet at drain, so its real duration is the sum of
-                // every pending frame's own per-frame delay, never a
-                // single frame's value or left at the `Duration` default.
-                packet.duration = vaco_core::Duration(self.pending.iter().map(|f| f.duration.0).sum());
-                self.pending.clear();
-                self.machine.emit(packet);
                 self.machine.finish();
                 Ok(())
             }
@@ -188,7 +195,20 @@ impl SendReceive for PngEncoder {
                 let Some(frame) = input else {
                     return Ok(());
                 };
-                self.pending.push(frame.clone());
+                let mut budget = Budget::new(self.limits.clone());
+                let bytes = codec::encode(
+                    std::slice::from_ref(frame),
+                    &mut budget,
+                    &self.options,
+                )?;
+                let mut packet = Packet::from_slice(&mut budget, &bytes)?;
+                // One frame in, one PNG file out, immediately -- not the
+                // batch-at-drain shape this used to have (see this module's
+                // own doc comment). `codec::encode`'s multi-frame/APNG arm is
+                // simply never exercised by a one-frame slice.
+                packet.pts = frame.pts;
+                packet.duration = frame.duration;
+                self.machine.emit(packet);
                 Ok(())
             }
         }
@@ -199,7 +219,6 @@ impl SendReceive for PngEncoder {
     }
 
     fn flush(&mut self) {
-        self.pending.clear();
         self.machine.flush();
     }
 
@@ -272,13 +291,15 @@ pub static PNG_DECODER: vaco_codec_core::DecoderDesc = vaco_codec_core::DecoderD
     make: make_decoder,
 };
 
-/// Registered as this crate's `encoder` fragment (plan 19 §3.4).
+/// Registered as this crate's `encoder` fragment (plan 19 §3.4). No caps:
+/// one frame in, one PNG file out, immediately -- see [`PngEncoder`]'s own
+/// doc comment for why this is no longer `Caps::DELAY`.
 pub static PNG_ENCODER: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
     name: "png",
     long_name: "PNG (Portable Network Graphics) image",
     id: vaco_codec_core::CodecId::Png,
     media_type: vaco_core::MediaType::Video,
-    caps: Caps::DELAY,
+    caps: Caps::empty(),
     supported_rates: &[],
     make: make_encoder,
 };
@@ -381,12 +402,16 @@ mod tests {
 
     #[test]
     fn send_receive_protocol_shape() {
+        // One frame in, one packet out immediately -- not
+        // `Error::NeedMoreInput` until a drain, which is what this used to
+        // require before the image2-sequencing fix (see this module's own
+        // doc comment): `PngEncoder` no longer buffers at all.
         let frame = checker_frame(3, 3, PixFmt::Rgb24);
         let mut enc = PngEncoder::new(Limits::permissive());
         enc.send(Some(&frame)).expect("send frame");
+        let packet = enc.receive().expect("receive packet immediately, no drain needed");
         assert!(matches!(enc.receive(), Err(Error::NeedMoreInput)));
         enc.send(None).expect("begin drain");
-        let packet = enc.receive().expect("receive packet");
         assert!(matches!(enc.receive(), Err(Error::Eof)));
 
         let mut dec = PngDecoder::new(Limits::permissive());
@@ -398,25 +423,38 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::Eof)));
     }
 
-    /// Same bug class as `vaco-codec-gif`'s encoder, same fix: this crate
-    /// emits every pending frame (an APNG's frames included) as one packet
-    /// at drain, so the real duration is the sum of every frame's own
-    /// `duration`, not a single frame's value or the `Duration` default.
-    /// Checked with two *different* delays, not one fixed value, so a
-    /// constant-per-frame implementation could not pass by accident.
+    /// The image2-sequencing bug's own regression test at this crate's
+    /// level: `PngEncoder` used to buffer every frame sent before a drain
+    /// and emit them as a *single* packet (one PNG for one frame, one APNG
+    /// for more than one) -- correct for a real single-file APNG output,
+    /// wrong for `image2`, this codec's only reachable muxer today, which
+    /// calls `write_packet` once per output *file* and got exactly one file
+    /// for an N-frame run. Sending N frames without an intervening drain
+    /// must now yield N separate one-frame-PNG packets, each carrying its
+    /// own frame's timestamp/duration, not one packet holding all of them.
     #[test]
-    fn drain_packet_duration_is_the_sum_of_every_pending_frames_delay() {
-        let delays_micros = [100_000i64, 250_000];
+    fn n_frames_without_a_drain_yield_n_separate_single_frame_packets() {
+        let delays_micros = [100_000i64, 250_000, 40_000];
         let mut enc = PngEncoder::new(Limits::permissive());
-        for &d in &delays_micros {
+        let mut packets = Vec::new();
+        for (i, &d) in delays_micros.iter().enumerate() {
             let mut frame = checker_frame(3, 3, PixFmt::Rgb24);
             frame.duration = vaco_core::Duration(d);
+            frame.pts = vaco_core::Timestamp::new(i64::try_from(i).expect("test index fits i64"));
             enc.send(Some(&frame)).expect("send frame");
+            packets.push(enc.receive().expect("receive this frame's own packet"));
         }
-        enc.send(None).expect("begin drain");
-        let packet = enc.receive().expect("receive packet");
-        assert_eq!(packet.duration, vaco_core::Duration(delays_micros.iter().sum()));
-        assert_ne!(packet.duration, vaco_core::Duration::ZERO);
+        assert_eq!(packets.len(), delays_micros.len());
+        for (packet, &d) in packets.iter().zip(&delays_micros) {
+            assert_eq!(packet.duration, vaco_core::Duration(d));
+            // Each packet decodes back to exactly one frame: none of them is
+            // an APNG holding the others too.
+            let mut dec = PngDecoder::new(Limits::permissive());
+            dec.send(Some(packet)).expect("send packet");
+            dec.receive().expect("receive the one frame");
+            dec.send(None).expect("begin drain");
+            assert!(matches!(dec.receive(), Err(Error::Eof)), "packet held more than one frame");
+        }
     }
 
     /// One frame through, `send(None)` to drain, take the packet.

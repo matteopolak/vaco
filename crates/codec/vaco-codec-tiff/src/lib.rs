@@ -11,10 +11,24 @@
 //! # How it works
 //!
 //! A packet is the whole file; a TIFF can carry several pages (IFDs), so a
-//! packet may yield several frames from one `send`, hence
-//! [`Caps::SUBFRAMES`]. Encode buffers frames until drain
-//! ([`Caps::DELAY`]) and writes one page per frame into a single (possibly
-//! multi-page) TIFF.
+//! packet may yield several frames from one `send`, hence [`Caps::SUBFRAMES`]
+//! on the *decode* side.
+//!
+//! [`TiffEncoder`] is stateless and one-frame-in-one-packet-out
+//! ([`Caps::empty`]), matching the reference's own `tiff` `AVCodec` (no
+//! multi-page batching there either). It used to buffer every frame
+//! ([`Caps::DELAY`]) and write them all as pages of one multi-page TIFF at
+//! `send(None)` — the same bug, and the same fix, as
+//! `vaco-codec-png`'s `PngEncoder` (see that crate's module doc for the full
+//! story and the real-file repro): this codec's only reachable muxer is
+//! `image2`, which calls `write_packet` once per output *file*, so an N-frame
+//! run produced one `out_1.tif` file holding all N pages and files 2..N were
+//! never created. `codec::encode` itself is unchanged and still writes a
+//! multi-page TIFF from a multi-frame slice; that capability is simply not
+//! invoked by the registered encoder today, since nothing in this tree's
+//! registry gives a genuine single-file multi-page-TIFF output its own codec
+//! identity or muxer, the way the reference keeps `png` and `apng` (and, in
+//! spirit, a would-be multi-page `tiff`) separate.
 //!
 //! # How to change it
 //!
@@ -109,13 +123,13 @@ impl SendReceive for TiffDecoder {
     }
 }
 
-/// A [`SendReceive`] encoder over [`Frame`]/[`Packet`]: every frame sent
-/// before a drain becomes one page of a single TIFF.
+/// A [`SendReceive`] encoder over [`Frame`]/[`Packet`]: every frame becomes
+/// its own one-page TIFF, immediately (see this module's own doc comment for
+/// why this crate no longer batches frames into one multi-page file).
 #[derive(Debug)]
 pub struct TiffEncoder {
     machine: Machine<Packet>,
     limits: Limits,
-    pending: Vec<Frame>,
     options: EncodeOptions,
 }
 
@@ -124,9 +138,8 @@ impl TiffEncoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
         Self {
-            machine: Machine::new(Caps::DELAY),
+            machine: Machine::new(Caps::empty()),
             limits,
-            pending: Vec::new(),
             options: EncodeOptions::default(),
         }
     }
@@ -163,23 +176,6 @@ impl SendReceive for TiffEncoder {
     fn send(&mut self, input: Option<&Frame>) -> Result<()> {
         match self.machine.accept(input.is_none())? {
             Accept::Drain => {
-                let bytes = codec::encode(&self.pending, &self.options)?;
-                let mut budget = Budget::new(self.limits.clone());
-                let mut packet = Packet::from_slice(&mut budget, &bytes)?;
-                packet.pts = self.pending.first().map_or(vaco_core::Timestamp::NONE, |f| f.pts);
-                // Same bug class and same fix as `vaco-codec-gif`/
-                // `vaco-codec-png`'s encoders: this crate emits every
-                // pending page as one packet at drain, so the real
-                // duration is the sum of every page's own `duration`, not
-                // left at the default. This crate's own decoder does not
-                // set `frame.duration` today (no per-page timing tag in
-                // this implementation), so this is currently a no-op in
-                // practice for TIFF-sourced pages, but it stops being one
-                // the moment a producer upstream (a filter, a re-encode
-                // from an animated source) does carry a real duration.
-                packet.duration = vaco_core::Duration(self.pending.iter().map(|f| f.duration.0).sum());
-                self.pending.clear();
-                self.machine.emit(packet);
                 self.machine.finish();
                 Ok(())
             }
@@ -187,7 +183,16 @@ impl SendReceive for TiffEncoder {
                 let Some(frame) = input else {
                     return Ok(());
                 };
-                self.pending.push(frame.clone());
+                let bytes = codec::encode(std::slice::from_ref(frame), &self.options)?;
+                let mut budget = Budget::new(self.limits.clone());
+                let mut packet = Packet::from_slice(&mut budget, &bytes)?;
+                // One frame in, one single-page TIFF file out, immediately --
+                // not the batch-at-drain shape this used to have (see this
+                // module's own doc comment). `codec::encode`'s multi-page
+                // arm is simply never exercised by a one-frame slice.
+                packet.pts = frame.pts;
+                packet.duration = frame.duration;
+                self.machine.emit(packet);
                 Ok(())
             }
         }
@@ -198,7 +203,6 @@ impl SendReceive for TiffEncoder {
     }
 
     fn flush(&mut self) {
-        self.pending.clear();
         self.machine.flush();
     }
 
@@ -253,13 +257,15 @@ pub static TIFF_DECODER: vaco_codec_core::DecoderDesc = vaco_codec_core::Decoder
     make: make_decoder,
 };
 
-/// Registered as this crate's `encoder` fragment (plan 19 §3.4).
+/// Registered as this crate's `encoder` fragment (plan 19 §3.4). No caps:
+/// one frame in, one TIFF file out, immediately -- see [`TiffEncoder`]'s own
+/// doc comment for why this is no longer `Caps::DELAY`.
 pub static TIFF_ENCODER: vaco_codec_core::EncoderDesc = vaco_codec_core::EncoderDesc {
     name: "tiff",
     long_name: "TIFF image",
     id: vaco_codec_core::CodecId::Tiff,
     media_type: vaco_core::MediaType::Video,
-    caps: Caps::DELAY,
+    caps: Caps::empty(),
     supported_rates: &[],
     make: make_encoder,
 };
@@ -348,12 +354,15 @@ mod tests {
 
     #[test]
     fn send_receive_protocol_shape() {
+        // One frame in, one packet out immediately -- see this crate's
+        // module doc comment (the image2-sequencing fix): `TiffEncoder` no
+        // longer buffers pages until a drain.
         let frame = checker_frame(3, 3, PixFmt::Rgb24);
         let mut enc = TiffEncoder::new(Limits::permissive());
         enc.send(Some(&frame)).expect("send frame");
+        let packet = enc.receive().expect("receive packet immediately, no drain needed");
         assert!(matches!(enc.receive(), Err(Error::NeedMoreInput)));
         enc.send(None).expect("begin drain");
-        let packet = enc.receive().expect("receive packet");
         assert!(matches!(enc.receive(), Err(Error::Eof)));
 
         let mut dec = TiffDecoder::new(Limits::permissive());
@@ -368,23 +377,33 @@ mod tests {
         assert!(matches!(dec.receive(), Err(Error::Eof)));
     }
 
-    /// Same bug class and fix as `vaco-codec-gif`/`vaco-codec-png`'s
-    /// encoders: this crate emits every pending page as one packet at
-    /// drain, so the real duration is the sum of every page's own
-    /// `duration`, not left at the default.
+    /// The image2-sequencing bug's own regression test at this crate's
+    /// level (same bug and same fix as `vaco-codec-png`'s `PngEncoder`, see
+    /// that crate's module doc): `TiffEncoder` used to buffer every frame
+    /// sent before a drain and write them all as pages of *one* multi-page
+    /// TIFF -- correct for a genuine multi-page file, wrong for `image2`,
+    /// this codec's only reachable muxer today, which calls `write_packet`
+    /// once per output *file* and got exactly one file for an N-frame run.
+    /// Sending N frames without an intervening drain must now yield N
+    /// separate one-page-TIFF packets, each with its own frame's duration.
     #[test]
-    fn drain_packet_duration_is_the_sum_of_every_pending_pages_duration() {
-        let durations_micros = [100_000i64, 250_000];
+    fn n_frames_without_a_drain_yield_n_separate_single_page_packets() {
+        let durations_micros = [100_000i64, 250_000, 40_000];
         let mut enc = TiffEncoder::new(Limits::permissive());
+        let mut packets = Vec::new();
         for &d in &durations_micros {
             let mut frame = checker_frame(3, 3, PixFmt::Rgb24);
             frame.duration = vaco_core::Duration(d);
             enc.send(Some(&frame)).expect("send frame");
+            packets.push(enc.receive().expect("receive this frame's own packet"));
         }
-        enc.send(None).expect("begin drain");
-        let packet = enc.receive().expect("receive packet");
-        assert_eq!(packet.duration, vaco_core::Duration(durations_micros.iter().sum()));
-        assert_ne!(packet.duration, vaco_core::Duration::ZERO);
+        assert_eq!(packets.len(), durations_micros.len());
+        for (packet, &d) in packets.iter().zip(&durations_micros) {
+            assert_eq!(packet.duration, vaco_core::Duration(d));
+            let mut budget = Budget::new(Limits::permissive());
+            let pages = codec::decode(packet.payload(), &mut budget).expect("decode");
+            assert_eq!(pages.len(), 1, "packet held more than one page");
+        }
     }
 
     /// Every `-compression_algo` value must round-trip through decode

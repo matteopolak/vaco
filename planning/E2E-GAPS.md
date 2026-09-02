@@ -3212,3 +3212,93 @@ byte-exact-at-every-thread-count verification matrix.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 40. `-c:v png`/`-c:v tiff` through `image2` wrote only the first of N frames — the two encoders' own `Caps::DELAY` batching, not the `%0Nd` pattern code
+
+Flagged by another agent while fixing an unrelated pixel-format-negotiation
+crash, as a distinct, pre-existing bug reproducible even with that fix in
+place: `vaco -i in.mp4 -c:v png out_%d.png` on a 5-frame source wrote
+`out_1.png` and nothing else, exit 0. Verified by counting real output files
+and comparing decoded pixels against real `ffmpeg 9.0.1`'s own `out_%d.png`,
+not by exit status (`ffmpeg` wrote `out_1.png`..`out_5.png`; `vaco` wrote one
+file; `vaco`'s own progress line already said `frame= 1`).
+
+**Not a recurrence of the `%0Nd` pad-width bug.** That earlier bug was in
+filename-pattern *expansion*
+(`vaco_demux_image2::pattern::SequencePattern`) — the shared code every
+`image2` codec's file naming runs through. This one is not there: a
+dedicated `vaco-mux-image2` unit test
+(`pipe_mux::tests::open_then_bind_url_writes_one_real_file_per_frame`)
+already proves two packets in produce two correctly numbered files out.
+The question the coordinator asked — "does one codec sequence correctly,
+and is the difference the answer" — is exactly what pinned it: sweeping
+every `image2`-reachable encoder against the same 5-frame source (`mjpeg`,
+`bmp`, `ppm`, `qoi` all wrote 5 files; only `png` and `tiff` wrote 1) showed
+the pattern-expansion code was never the suspect, because it is shared by
+all six and only two failed.
+
+**Root cause**: `vaco-codec-png::PngEncoder` and `vaco-codec-tiff::TiffEncoder`
+both declared `Caps::DELAY` and buffered every `Frame` sent into a
+`pending: Vec<Frame>`, emitting it as a *single* packet only at
+`send(None)` — one PNG for one buffered frame, one APNG (`acTL`/`fcTL`/
+`fdAT`) for more than one; one page for one TIFF frame, one multi-page TIFF
+for more than one. Confirmed directly: `out_1.png` from the 5-frame run was
+10842 bytes and, chunk-dumped, carried `IHDR, acTL, fcTL, IDAT, fcTL, fdAT,
+fcTL, fdAT, fcTL, fdAT, fcTL, fdAT, IEND` — a real 5-frame APNG, every input
+frame present, just not as five files. That behaviour is correct for a
+genuine single-file animated-PNG or multi-page-TIFF *output* — but
+`image2`, the only muxer either codec's extension (`png`/`tiff`) maps to in
+this registry, calls `Muxer::write_packet` once per output *file*
+(`vaco-mux-image2::writer::Image2MuxWriter::write_frame`, one `fs::write`
+per call), so batching produced exactly one packet for the whole run no
+matter how many frames it saw. The reference's own `png`/`tiff` `AVCodec`s
+have no such buffering at all — APNG is a *different* encoder name there
+(`apng`), reached only through its own muxer, which this registry does not
+have (`grep -rn apng crates/registry` and the `CodecId` enum: nothing).
+Every real invocation that reaches either codec today goes through `image2`,
+so the batching path was not "wrong sometimes" — it was wrong for 100% of
+currently-reachable uses.
+
+**Fix**: `crates/codec/vaco-codec-png/src/lib.rs` and
+`crates/codec/vaco-codec-tiff/src/lib.rs` — dropped `pending`, changed
+`Caps::DELAY` to `Caps::empty()` on both the `SendReceive::caps` (via
+`Machine::new`) and the registered `EncoderDesc`, and rewrote `send` to
+encode and emit one packet immediately per frame
+(`codec::encode(std::slice::from_ref(frame), ...)`), mirroring
+`vaco-codec-qoi`'s already-correct one-in-one-out shape exactly. `pts`/
+`duration` now come straight from the frame instead of
+`pending.first()`/`pending.iter().sum()`. `codec::encode`'s pure,
+multi-frame-capable APNG/multi-page-TIFF logic is untouched — it is simply
+never invoked by the registered `SendReceive` wrapper with more than a
+one-frame slice any more, since nothing in this registry gives real
+single-file APNG or multi-page-TIFF output its own codec identity or
+muxer the way the reference keeps `png` and `apng` separate. Building that
+pairing (a real `apng`/`CodecId::Apng` codec plus a single-file muxer, and
+the multi-page-TIFF equivalent) is real, legitimate future work — flagged,
+not attempted here, since it is additive and independent of this fix.
+
+**Verified**: `cargo test`/`cargo clippy --all-targets -- -D warnings` clean
+on both crates, including each crate's own new regression test
+(`n_frames_without_a_drain_yield_n_separate_single_frame_packets` /
+`..._single_page_packets`, replacing the old sum-of-durations drain tests
+that no longer apply once nothing is summed). End to end, rebuilt release
+`vaco`, real 5-frame H.264 source: `-c:v png out_%d.png` and `-c:v tiff
+out_%d.tif` each now write 5 files; `ffprobe` confirms every PNG file's own
+`codec_name` is `png` (not `apng` — no longer multi-frame); every PNG and
+TIFF file, decoded through real `ffmpeg`, is byte-for-byte identical to
+`vaco`'s own direct `rawvideo` decode of that same frame index, for all 5
+indices, in order (rules out truncation, duplication and reordering, not
+just file count). The other four `image2`-reachable encoders
+(`mjpeg`/`bmp`/`ppm`/`qoi`) still write 5/5 files after this change — no
+regression swept in.
+
+**An unrelated, pre-existing finding surfaced while isolating this, named
+rather than chased**: comparing `vaco`'s own decode of the H.264 source
+against real `ffmpeg`'s decode of the identical file (both to raw RGB24, no
+`image2` involved at all) disagrees at byte 51 of frame 1 — a `vaco-codec-h264`
+decoder-vs-reference difference, not a `vaco-codec-png`/`vaco-codec-tiff`
+encoder difference (confirmed by checking `vaco`'s png/tiff output against
+`vaco`'s *own* decode of the same source, which matches exactly, all 5
+frames). Not investigated further here — out of scope for the image2
+sequencing bug, and plausibly already tracked under this tree's existing
+H.264 conformance work.
