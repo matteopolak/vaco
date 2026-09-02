@@ -1,3 +1,13 @@
+# Source declared locally rather than in the shared provenance/sources.toml
+# (a multi-writer hotspot) -- same pattern provenance/vaco-codec-vorbis.toml
+# already uses.
+[[source]]
+id       = "smpte-st421-2013"
+kind     = "spec"
+title    = "SMPTE ST 421:2013, \"VC-1 Compressed Video Bitstream Format and Decoding Process\""
+acquired = "2026-08-29"
+where    = "https://pub.smpte.org/latest/st421/st0421-2013.pdf"
+
 [[table]]
 name   = "PQINDEX_TO_PQUANT"
 file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
@@ -18,85 +28,94 @@ method = "transcribed"
 # its own printed value (1811, 13). Re-checked line by line against the
 # source table before the fix, not just re-typed.
 
-[[table]]
-name   = "DC_LOW_LUMA"
-file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
-source = "smpte-st421-2013"
-clause = "SS11.7.1, Table 173 (Low-motion Luma DC Differential VLC table)"
-method = "transcribed"
+# DC_LOW_LUMA/DC_LOW_CHROMA/DC_HIGH_LUMA/DC_HIGH_CHROMA (SS11.7.1 Table 173,
+# SS11.7.1 Table 174, SS11.7.2 Table 175, SS11.7.2 Table 176 respectively --
+# all 120-entry Luma/Color-difference DC differential VLC tables, well over
+# the 32-element threshold) carry no `[[table]]` row here. They are declared
+# through the `dc_table!` macro (`tables.rs`), and `cargo xtask
+# provenance-check`'s source scanner only recognises a literal `static`/
+# `const NAME: [T; N] = [ … ];` header in the file's own text -- a macro
+# invocation site (`dc_table!(DC_LOW_LUMA, [...], ...)`) never contains that
+# literal pattern, so these four are structurally invisible to it regardless
+# of how a row here names them. A row was carried for all four until this
+# pass, and the check correctly flagged it as stale (no matching (file,
+# name) pair) rather than silently trusting it. Removed rather than left as
+# a record the tool can never re-verify; the crate's own module doc comment
+# at the top of `tables.rs` still states the source (SMPTE ST 421:2013,
+# fetched from pub.smpte.org, read cell-by-cell) for all four.
 
 [[table]]
-name   = "DC_LOW_CHROMA"
-file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
-source = "smpte-st421-2013"
-clause = "SS11.7.1, Table 174 (Low-motion Color-difference DC Differential VLC table)"
-method = "transcribed"
-
-[[table]]
-name   = "DC_HIGH_LUMA"
-file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
-source = "smpte-st421-2013"
-clause = "SS11.7.2, Table 175 (High-motion Luma DC Differential VLC table)"
-method = "transcribed"
-
-[[table]]
-name   = "DC_HIGH_CHROMA"
-file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
-source = "smpte-st421-2013"
-clause = "SS11.7.2, Table 176 (High-motion Color-difference DC Differential VLC table)"
-method = "transcribed"
-
-[[table]]
-name   = "HIGH_RATE_INTRA_CODE, HIGH_RATE_INTRA_RUN_LEVEL, HIGH_RATE_INTRA_NOT_LAST_DELTA_LEVEL_BY_RUN, HIGH_RATE_INTRA_LAST_DELTA_LEVEL_BY_RUN, HIGH_RATE_INTRA_NOT_LAST_DELTA_RUN_BY_LEVEL, HIGH_RATE_INTRA_LAST_DELTA_RUN_BY_LEVEL"
+name   = "HIGH_RATE_INTRA_CODE"
 file   = "crates/codec/vaco-codec-vc1/src/tables_ac_data.rs"
 source = "smpte-st421-2013"
-clause = "SS11.8.6, Table 219-225 (High Rate Intra AC coding set: VLC table, indexed run/level, and four escape-mode delta tables)"
+clause = "SS11.8.6, Table 219 (High Rate Intra AC coding set VLC table)"
 method = "derived"
 
-# method = "derived", not "transcribed": these six tables were extracted
-# programmatically from the PDF's own table cells by a script (not
-# hand-retyped), then cross-checked by an automated prefix-free +
-# entry-count-matches-the-spec's-own-stated-index-range test
+[[table]]
+name   = "HIGH_RATE_INTRA_RUN_LEVEL"
+file   = "crates/codec/vaco-codec-vc1/src/tables_ac_data.rs"
+source = "smpte-st421-2013"
+clause = "SS11.8.6, Table 220 (High Rate Intra AC coding set, indexed run/level)"
+method = "derived"
+
+[[table]]
+name   = "HIGH_RATE_INTRA_NOT_LAST_DELTA_RUN_BY_LEVEL"
+file   = "crates/codec/vaco-codec-vc1/src/tables_ac_data.rs"
+source = "smpte-st421-2013"
+clause = "SS11.8.6, Table 219-225 (High Rate Intra AC coding set, escape-mode 2 NotLastDeltaRunTable, indexed by level - 1)"
+method = "derived"
+
+# The other three High Rate Intra escape-mode delta tables
+# (NOT_LAST_DELTA_LEVEL_BY_RUN: 15, LAST_DELTA_LEVEL_BY_RUN: 17,
+# LAST_DELTA_RUN_BY_LEVEL: 4 elements) are below the 32-element threshold
+# and carry no row of their own, same convention as every other small
+# table in this crate.
+#
+# method = "derived", not "transcribed", for every table in this AC coding
+# set: these were extracted programmatically from the PDF's own table
+# cells by a script (not hand-retyped), then cross-checked by an automated
+# prefix-free + entry-count-matches-the-spec's-own-stated-index-range test
 # (tables.rs::tests::ac_coding_sets_are_prefix_free_and_run_level_covers_escape_range)
 # before being used. This is the mitigation this project's own
 # "how confident should a transcribed table be" lesson calls for on a
-# table this large (340+ numeric entries): removing the hand-transcription
-# step rather than merely checking its output.
+# table this large (340+ numeric entries across the set): removing the
+# hand-transcription step rather than merely checking its output.
 
 [[table]]
-name   = "HIGH_RATE_INTER_CODE, HIGH_RATE_INTER_RUN_LEVEL, HIGH_RATE_INTER_NOT_LAST_DELTA_LEVEL_BY_RUN, HIGH_RATE_INTER_LAST_DELTA_LEVEL_BY_RUN, HIGH_RATE_INTER_NOT_LAST_DELTA_RUN_BY_LEVEL, HIGH_RATE_INTER_LAST_DELTA_RUN_BY_LEVEL"
+name   = "HIGH_RATE_INTER_CODE"
 file   = "crates/codec/vaco-codec-vc1/src/tables_ac_data.rs"
 source = "smpte-st421-2013"
-clause = "SS11.8.7, Table 226-232 (High Rate Inter AC coding set: VLC table, indexed run/level, and four escape-mode delta tables)"
+clause = "SS11.8.7, Table 226 (High Rate Inter AC coding set VLC table)"
 method = "derived"
 
 [[table]]
-name   = "ESCMODE"
-file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+name   = "HIGH_RATE_INTER_RUN_LEVEL"
+file   = "crates/codec/vaco-codec-vc1/src/tables_ac_data.rs"
 source = "smpte-st421-2013"
-clause = "SS7.1.4.7, Table 58 (AC escape decoding mode code-table)"
-method = "transcribed"
+clause = "SS11.8.7, Table 227 (High Rate Inter AC coding set, indexed run/level)"
+method = "derived"
 
 [[table]]
-name   = "ESCLVLSZ_CONSERVATIVE"
-file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
+name   = "HIGH_RATE_INTER_NOT_LAST_DELTA_RUN_BY_LEVEL"
+file   = "crates/codec/vaco-codec-vc1/src/tables_ac_data.rs"
 source = "smpte-st421-2013"
-clause = "SS7.1.4.10, Table 59 (Escape Mode 3 level codeword size, conservative)"
-method = "transcribed"
+clause = "SS11.8.7, Table 226-232 (High Rate Inter AC coding set, escape-mode 2 NotLastDeltaRunTable, indexed by level - 1)"
+method = "derived"
 
-[[table]]
-name   = "ESCLVLSZ_EFFICIENT"
-file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
-source = "smpte-st421-2013"
-clause = "SS7.1.4.10, Table 60 (Escape Mode 3 level codeword size, efficient)"
-method = "transcribed"
+# The other three High Rate Inter escape-mode delta tables
+# (NOT_LAST_DELTA_LEVEL_BY_RUN: 25, LAST_DELTA_LEVEL_BY_RUN: 31,
+# LAST_DELTA_RUN_BY_LEVEL: 4 elements) are below the 32-element threshold,
+# same as their Intra counterparts above.
 
-[[table]]
-name   = "escrunsz_to_run_bits"
-file   = "crates/codec/vaco-codec-vc1/src/tables.rs"
-source = "smpte-st421-2013"
-clause = "SS7.1.4.11, Table 61 (Escape Mode 3 run codeword size code-table)"
-method = "transcribed"
+# ESCMODE ([VlcEntry; 3]), ESCLVLSZ_CONSERVATIVE ([VlcEntry; 11]),
+# ESCLVLSZ_EFFICIENT ([VlcEntry; 7]) and escrunsz_to_run_bits (now a
+# `const fn` over a 4-arm match, not an array at all) are all below the
+# 32-element threshold or are no longer a table in the schema's sense.
+# Rows for all four were carried until this pass and are removed rather
+# than left pointing at something the checker can never match again; the
+# clause citations (SS7.1.4.7 Table 58, SS7.1.4.10 Tables 59/60,
+# SS7.1.4.11 Table 61) are preserved in each item's own doc comment in
+# `tables.rs`.
 
 [[table]]
 name   = "NORMAL_SCAN"
@@ -126,23 +145,20 @@ source = "smpte-st421-2013"
 clause = "SS11.9.1, Table 235 (Intra Vertical Scan)"
 method = "derived"
 
-[[table]]
-name   = "T8, C8, inverse_transform_8x8"
-file   = "crates/codec/vaco-codec-vc1/src/transform.rs"
-source = "smpte-st421-2013"
-clause = "Annex A.1 (Figure 157: 1-D 8-point inverse transform matrix; Figure 159: definition of inverse transform)"
-method = "transcribed"
-
-[[table]]
-name   = "SequenceInfo (STRUCT_C field layout)"
-file   = "crates/codec/vaco-codec-vc1/src/header.rs"
-source = "smpte-st421-2013"
-clause = "Annex J.2, Table 263 (Sequence Header Data Structure STRUCT_C for Simple and Main Profiles) plus Annex L Table 265 (Sequence Layer Data Structure, for the STRUCT_A/B/C word-endianness convention)"
-method = "transcribed"
-
-# Verified bit-for-bit against a real RCV file's own bytes before any
-# decoder code was written (three of STRUCT_C's five reserved-bit
-# constants -- Reserved4==1, Reserved5==0, Reserved6==1 -- all matched
-# on the first attempt, which is the strongest evidence a byte-layout
-# derivation from a spec table alone can get without a second decoder to
-# compare against).
+# `transform.rs`'s T8 ([[i32; 8]; 8], 8 top-level rows) and C8 ([i32; 8]) are
+# both below the 32-element threshold as the checker counts top-level
+# bracketed elements (T8 is a matrix, not a flat 64-element array), and
+# `inverse_transform_8x8` is a function, not a table. A combined row for
+# all three was carried until this pass; removed as stale rather than left
+# unmatchable. Annex A.1 (Figure 157/159) is still cited in `transform.rs`'s
+# own doc comment.
+#
+# `header.rs`'s `SequenceInfo`/`STRUCT_C` byte layout (Annex J.2 Table 263,
+# Annex L Table 265) is a bitfield struct layout, not a `static`/`const`
+# array, so it was never the kind of "table" this schema's automated check
+# can track -- the row carried for it until this pass could never pass a
+# re-verification and is removed for the same reason as the others above.
+# The clean-room fact it recorded remains true and is kept as a comment in
+# `header.rs` itself: three of STRUCT_C's five reserved-bit constants
+# (Reserved4==1, Reserved5==0, Reserved6==1) were verified bit-for-bit
+# against a real RCV file's own bytes before any decoder code was written.
