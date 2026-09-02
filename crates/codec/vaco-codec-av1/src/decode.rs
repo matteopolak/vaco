@@ -256,12 +256,34 @@ impl Av1Decoder {
     fn decode_temporal_unit(&mut self, data: &[u8], pts: vaco_core::Timestamp, duration: vaco_core::Duration) -> Result<()> {
         let unit_list = units(data, Av1Framing::ObuStream);
         let mut pending_header: Option<FrameHeader> = None;
+        // Finding 22b (planning/INTERFACE-GAPS.md): `vaco_parse_av1::metadata`
+        // parses `metadata_hdr_mdcv()`/`metadata_hdr_cll()` (§5.8.3/§5.8.4)
+        // correctly and nothing in this crate ever read either. A METADATA
+        // OBU precedes the FRAME/TILE_GROUP OBU it describes within the same
+        // temporal unit (§7.4), so -- like `pending_header` above -- these
+        // are scoped to one `decode_temporal_unit` call, not carried across
+        // packets; the last one of each type before an emitted frame wins.
+        let mut pending_mastering_display = None;
+        let mut pending_content_light = None;
         for unit in &unit_list {
             let payload = unit.payload(data);
             match unit.header.obu_type {
                 t if t == ObuType::SEQUENCE_HEADER => {
                     let sh = SequenceHeader::parse(payload, &mut self.budget)?;
                     self.seq = Some(sh);
+                }
+                t if t == ObuType::METADATA => {
+                    if let Ok(m) = vaco_parse_av1::metadata::parse(payload, &mut self.budget) {
+                        match m {
+                            vaco_parse_av1::Metadata::HdrMdcv(mdcv) => {
+                                pending_mastering_display = Some(mastering_display_from_mdcv(mdcv));
+                            }
+                            vaco_parse_av1::Metadata::HdrCll(cll) => {
+                                pending_content_light = Some((u32::from(cll.max_cll), u32::from(cll.max_fall)));
+                            }
+                            _ => {}
+                        }
+                    }
                 }
                 t if t == ObuType::FRAME_HEADER => {
                     let Some(seq) = self.seq.clone() else {
@@ -289,6 +311,12 @@ impl Av1Decoder {
                     let mut frame = frame;
                     frame.pts = pts;
                     frame.duration = duration;
+                    if let Some(mastering_display) = pending_mastering_display {
+                        frame.set_side_data(vaco_frame::FrameSideData::MasteringDisplay(Box::new(mastering_display)));
+                    }
+                    if let Some((max_cll, max_fall)) = pending_content_light {
+                        frame.set_side_data(vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall });
+                    }
                     if fh.show_frame {
                         self.machine.emit(frame);
                     }
@@ -304,6 +332,12 @@ impl Av1Decoder {
                     let mut frame = frame;
                     frame.pts = pts;
                     frame.duration = duration;
+                    if let Some(mastering_display) = pending_mastering_display {
+                        frame.set_side_data(vaco_frame::FrameSideData::MasteringDisplay(Box::new(mastering_display)));
+                    }
+                    if let Some((max_cll, max_fall)) = pending_content_light {
+                        frame.set_side_data(vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall });
+                    }
                     if fh.show_frame {
                         self.machine.emit(frame);
                     }
@@ -353,6 +387,46 @@ pub static AV1_DECODER: DecoderDesc = DecoderDesc {
     supported_rates: &[],
     make: |limits| Box::new(Av1Decoder::new(limits)),
 };
+
+/// §5.8.4's raw `metadata_hdr_mdcv()` fields into
+/// `vaco_frame::MasteringDisplay`'s shared shape (finding 22b,
+/// `planning/INTERFACE-GAPS.md`).
+///
+/// AV1's own fixed-point encodings are **different from H.264/HEVC's**
+/// decimal-unit SEI message, despite `vaco_parse_av1::metadata::HdrMdcv`'s
+/// own doc citing HEVC for the semantics -- confirmed black-box (D7:
+/// AV1 spec text read, not `libaom`/`dav1d` source) by round-tripping known
+/// chromaticity/luminance values through real `libsvtav1`
+/// (`--mastering-display`) and reading them back with real
+/// `ffprobe -show_frames`:
+/// - **Chromaticity** (`primary_chromaticity`/`white_point_chromaticity`):
+///   0.16 fixed point, `/65536` -- measured `0.708 -> red_x=46399/65536`
+///   (`0.708 * 65536 = 46399.49`).
+/// - **`luminance_max`**: 24.8 fixed point, `/256` -- measured
+///   `1000 cd/m² -> max_luminance=256000/256` exactly.
+/// - **`luminance_min`**: 18.14 fixed point, `/16384` -- measured
+///   `0.005 cd/m² -> min_luminance=82/16384` (`0.005 * 16384 = 81.92`).
+///
+/// **Not** H.264/HEVC's green/blue/red bitstream order, despite
+/// `vaco_parse_av1::metadata::HdrMdcv`'s own doc citing HEVC for the
+/// semantics -- `primary_chromaticity[0]`/`[1]`/`[2]` is already red,
+/// green, blue, confirmed by the same round trip as the unit measurement
+/// above: the SVT-AV1 CLI's `G(0.170,...)B(0.131,...)R(0.708,...)` input
+/// landed at `primary_chromaticity[1]`/`[2]`/`[0]` respectively -- i.e.
+/// index 0 held the `R(...)` value, not `G(...)` -- so no permutation
+/// happens here, unlike the H.264/HEVC sibling function of this name.
+/// Caught by writing the green/blue/red permutation first (the doc's own
+/// claim) and having this exact test fail with primaries visibly rotated
+/// one slot before correcting it.
+fn mastering_display_from_mdcv(mdcv: vaco_parse_av1::metadata::HdrMdcv) -> vaco_frame::MasteringDisplay {
+    let chromaticity = |(x, y): (u16, u16)| [vaco_core::Rational::new(i32::from(x), 65_536), vaco_core::Rational::new(i32::from(y), 65_536)];
+    vaco_frame::MasteringDisplay {
+        primaries: mdcv.primary_chromaticity.map(chromaticity),
+        white_point: chromaticity(mdcv.white_point_chromaticity),
+        max_luminance: vaco_core::Rational::new(i32::try_from(mdcv.luminance_max).unwrap_or(i32::MAX), 256),
+        min_luminance: vaco_core::Rational::new(i32::try_from(mdcv.luminance_min).unwrap_or(i32::MAX), 16_384),
+    }
+}
 
 fn decode_frame(seq: &SequenceHeader, fh: &FrameHeader, tile_group_payload: &[u8], budget: &mut Budget) -> Result<Frame> {
     let mi_cols = 2 * ((fh.size.coded_width + 7) >> 3);

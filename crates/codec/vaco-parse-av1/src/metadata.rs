@@ -33,6 +33,17 @@ pub struct HdrCll {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct HdrMdcv {
     /// `primary_chromaticity_x/y[0..3]`, each a 0.16 fixed-point fraction.
+    ///
+    /// Index order is **red, green, blue** — *not* H.264/HEVC's own
+    /// green/blue/red order for the semantically identical SEI message,
+    /// despite this OBU's derivation being defined in terms of HEVC's.
+    /// Measured black-box (D7): round-tripping known chromaticity values
+    /// through real `libsvtav1` (`--mastering-display=G(...)B(...)R(...)`)
+    /// and reading them back with real `ffprobe -show_frames` on the
+    /// resulting bitstream shows `primary_chromaticity[0]` landing on the
+    /// `R(...)` input, not `G(...)` — see `vaco-codec-av1::decode`'s
+    /// `mastering_display_from_mdcv`, which got this wrong on first
+    /// attempt by assuming the HEVC order applied here too.
     pub primary_chromaticity: [(u16, u16); 3],
     pub white_point_chromaticity: (u16, u16),
     /// 24.8 fixed-point candela/m².
