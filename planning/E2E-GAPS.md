@@ -3312,3 +3312,63 @@ bytes differ, max error 1), with the separately-measured `yuv444p -> rgb24`
 path (no chroma subsampling) independently confirming the 3×3 colour-matrix
 arithmetic itself is Exact. Not a bug, not a regression, not related to
 `image2`, PNG, TIFF, or H.264 decode.
+
+## 41. HEVC B4 Stage 2b step 1: `EdgeMarks` moves onto `RowPublish`, closing its own latent data race
+
+The coordinator's own accepted plan after §39's regression waiver: land
+Stage 2b's four named prerequisites one at a time, byte-exact and
+separately verified, in the order `EdgeMarks` -> `SaoParamsGrid` ->
+`CuGrid` -> the CABAC context-bank handoff and `Ctx`'s split -> real
+dispatch. This section is the first: `EdgeMarks` -- already the first of
+the three row-banded structures Stage 1 step 3 converted (§36), for the
+same "simplest, do it first" reasoning -- moves its `published` side from
+a plain `Vec<EdgeBand>` to `crate::wavefront::RowPublish<EdgeBand>`
+(`crate::wavefront::RowPublish`, commit `b5c8916` -- see docs/codec/hevc-wavefront-threading.md for that primitive's own design and test coverage).
+
+**What changed**: `published: Vec<EdgeBand>` became `published:
+crate::wavefront::RowPublish<EdgeBand>`, constructed once at `EdgeMarks::
+new` with the already-known `n_bands`. `begin_row`/`finish` now advance
+`current_band` one row at a time, publishing into the fixed-size board at
+that index instead of pushing; `finish`'s signature changed to
+`Result<()>` (mirroring `ReconPlane::finish`, already `Result`-returning),
+its one call site in `decoder.rs` updated with `?`. Every read call site
+(`vert_at`/`horiz_at`/`tu_vert_at`/`tu_horiz_at`) needed no changes at all
+-- `RowPublish::get` returns `Option<&T>`, the exact shape `Vec::get`
+already had, so `published.get(row).and_then(|b| b.field.get(i))` compiles
+unchanged. `current` itself is untouched: still a private, single-writer
+field, still correct today for the same reason it always was (one worker).
+`mark_vert`/`mark_horiz`/`mark_tu_vert`/`mark_tu_horiz` -- the actual
+per-CTU hot path -- are byte-for-byte the same code as before this commit;
+only the once-per-CTU-row bookkeeping changed.
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (72 unit tests, up from
+63, plus 6 integration tests across `color`/`flat`/`hdr`/`oracle`) and
+`cargo clippy -p vaco-codec-hevc --lib --tests -- -D warnings` both clean.
+Directly against `hevc_1080p.mp4` (1920x1080, 125 frames, real deblocking
+-- the actual consumer of every `EdgeMarks` read this touches): `vaco
+-threads 1` before this change, after this change, and `ffmpeg`'s own
+decode all produced the identical sha256
+(`a40b898c...`, unchanged from §39's own measurement). The 300x500
+partial-CTU-column `libx265` fixture (mandelbrot content, real inter
+prediction and a non-CTB-multiple last column) still matched ffmpeg
+byte-for-byte on the frames its own unrelated non-monotonic-dts remux
+issue does not corrupt.
+
+**Serial cost**: no fresh interleaved timing run. `mark_vert`/`mark_horiz`
+etc. (the per-CTU-per-4x4-block hot path) are unchanged; only
+`begin_row`/`finish` (called `n_bands` times per picture -- single or low
+double digits even at 4K) moved from a `Vec::push` to an `OnceLock::set`.
+The structural argument -- this cannot plausibly move the needle, since it
+touches a call frequency four to five orders of magnitude below the actual
+hot path `ReconPlane`'s own per-CTU tile move (§39) changed -- is the
+primary basis for that call, the same shape of argument (not standing
+alone, but not requiring its own full protocol run either) §36 already
+made for a comparably small change to the same structure.
+
+**Not done in this section**: `SaoParamsGrid` and `CuGrid`'s own analogous
+move (next, in that order, per the design doc), the CABAC context-bank
+handoff primitive, `Ctx`'s split, and real thread dispatch. Each remains
+its own pass, landed and gated separately.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.
