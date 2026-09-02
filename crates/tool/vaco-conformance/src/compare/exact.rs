@@ -29,7 +29,7 @@
 //! comparison.
 
 use crate::case::{Capture, Case, Verdict};
-use crate::compare::{DiffReport, Pair, wants};
+use crate::compare::{DiffReport, FieldDiff, Pair, wants};
 
 /// Compare the declared captures byte for byte.
 #[must_use]
@@ -67,6 +67,17 @@ pub fn compare(case: &Case, pair: &Pair<'_>, captures: &[Capture]) -> Verdict {
                 ours.len(),
                 theirs.len()
             ),
+            // Every differing line, not just the first: `exact-bytes`'s own
+            // byte comparison above still decides pass/fail (this report is
+            // reached only once that has already found *a* difference), but
+            // stopping the *report* at the first byte hid every further
+            // divergence in the same case behind it -- a missing field
+            // shifts every following line, so the true count of what a fix
+            // needs to move was invisible until the first one was already
+            // fixed and run again. `line_diffs` is a real (LCS) line-level
+            // diff, not a positional zip, so one inserted/removed line does
+            // not cascade into reporting every line after it as changed too.
+            fields: line_diffs(&ours, &theirs),
             excerpt: excerpt(&ours, &theirs, at),
             ..DiffReport::default()
         });
@@ -141,6 +152,152 @@ pub fn first_difference(a: &[u8], b: &[u8]) -> usize {
         .unwrap_or_else(|| a.len().min(b.len()))
 }
 
+/// Every line one side has that the other does not, or has differently — a
+/// real (LCS) alignment, not a zip of the two line lists by position.
+///
+/// A positional zip breaks the moment one side has an extra or a missing
+/// line: everything after it lines up one position off, and a single
+/// removed field would be reported as every subsequent line "changing" even
+/// though most of them did not. Aligning on the longest common subsequence
+/// first means an insertion or deletion is reported as exactly that one
+/// line, and everything the two sides do share in order is recognised as
+/// shared, however far apart the one real difference pushes it.
+///
+/// Ordering is deterministic (the LCS of two fixed inputs is not unique in
+/// general, but this table's backtrack always prefers "diagonal" — both
+/// lines equal — over either single-sided step, which is what makes running
+/// it twice on the same two inputs produce the same alignment both times,
+/// the property a diffable, stable report needs).
+///
+/// `O(n*m)` in line count. Every case this runs against is one command's
+/// `-show_streams`/`-show_format` output — at most a few hundred lines —
+/// not a corpus-scale text, so the quadratic table is the right tool, not a
+/// reason to reach for a `diff` crate D10 has not reviewed.
+#[must_use]
+pub fn line_diffs(ours: &[u8], theirs: &[u8]) -> Vec<FieldDiff> {
+    let a: Vec<&str> = std::str::from_utf8(ours)
+        .map(|s| s.lines().collect())
+        .unwrap_or_default();
+    let b: Vec<&str> = std::str::from_utf8(theirs)
+        .map(|s| s.lines().collect())
+        .unwrap_or_default();
+    let (n, m) = (a.len(), b.len());
+
+    // `lcs[i][j]` = length of the LCS of `a[i..]` and `b[j..]`.
+    let mut lcs = vec![vec![0u32; m + 1]; n + 1];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            let Some(row) = lcs.get(i + 1) else { continue };
+            let diag = row.get(j + 1).copied().unwrap_or(0);
+            let Some(cur_row) = lcs.get_mut(i) else { continue };
+            if a.get(i) == b.get(j) {
+                if let Some(slot) = cur_row.get_mut(j) {
+                    *slot = diag.saturating_add(1);
+                }
+            } else {
+                let up = cur_row.get(j + 1).copied().unwrap_or(0);
+                let Some(down_row) = lcs.get(i + 1) else { continue };
+                let down = down_row.get(j).copied().unwrap_or(0);
+                if let Some(slot) = lcs.get_mut(i).and_then(|r| r.get_mut(j)) {
+                    *slot = up.max(down);
+                }
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    let (mut i, mut j) = (0usize, 0usize);
+    // 1-based, matching `line_col`'s convention -- these numbers are meant
+    // to be read next to a text editor's own line numbers.
+    let (mut ours_line, mut theirs_line) = (1usize, 1usize);
+    while i < n && j < m {
+        if a.get(i) == b.get(j) {
+            i += 1;
+            j += 1;
+            ours_line += 1;
+            theirs_line += 1;
+            continue;
+        }
+        let here = lcs.get(i).and_then(|r| r.get(j)).copied().unwrap_or(0);
+        let skip_a = lcs.get(i + 1).and_then(|r| r.get(j)).copied().unwrap_or(0);
+        let skip_b = lcs.get(i).and_then(|r| r.get(j + 1)).copied().unwrap_or(0);
+        if skip_a == here && skip_a >= skip_b {
+            out.push(FieldDiff {
+                section: None,
+                field: format!("line {ours_line}"),
+                ours: a.get(i).unwrap_or(&"").to_string(),
+                theirs: "<absent>".to_owned(),
+            });
+            i += 1;
+            ours_line += 1;
+        } else {
+            out.push(FieldDiff {
+                section: None,
+                field: format!("line {theirs_line}"),
+                ours: "<absent>".to_owned(),
+                theirs: b.get(j).unwrap_or(&"").to_string(),
+            });
+            j += 1;
+            theirs_line += 1;
+        }
+    }
+    for line in a.get(i..).unwrap_or_default() {
+        out.push(FieldDiff {
+            section: None,
+            field: format!("line {ours_line}"),
+            ours: (*line).to_string(),
+            theirs: "<absent>".to_owned(),
+        });
+        ours_line += 1;
+    }
+    for line in b.get(j..).unwrap_or_default() {
+        out.push(FieldDiff {
+            section: None,
+            field: format!("line {theirs_line}"),
+            ours: "<absent>".to_owned(),
+            theirs: (*line).to_string(),
+        });
+        theirs_line += 1;
+    }
+    merge_adjacent_replacements(out)
+}
+
+/// Fold an adjacent (delete, insert) or (insert, delete) pair produced at
+/// the same point in the walk above into one "changed" entry with both real
+/// values, rather than two entries that each show one side as `<absent>`.
+/// A real edit at one line reads as a single line changing, not as a line
+/// vanishing right next to an unrelated one appearing — the same line
+/// number recurring with opposite `<absent>` sides is exactly a replacement
+/// in disguise.
+fn merge_adjacent_replacements(diffs: Vec<FieldDiff>) -> Vec<FieldDiff> {
+    let mut out: Vec<FieldDiff> = Vec::new();
+    let mut pending: Option<FieldDiff> = None;
+    for d in diffs {
+        let Some(prev) = pending.take() else {
+            pending = Some(d);
+            continue;
+        };
+        let prev_is_delete = prev.theirs == "<absent>";
+        let prev_is_insert = prev.ours == "<absent>";
+        let merges = (prev_is_delete && d.ours == "<absent>" && d.theirs != "<absent>")
+            || (prev_is_insert && d.theirs == "<absent>" && d.ours != "<absent>");
+        if merges {
+            out.push(if prev_is_delete {
+                FieldDiff { theirs: d.theirs, ..prev }
+            } else {
+                FieldDiff { ours: d.ours, ..prev }
+            });
+        } else {
+            out.push(prev);
+            pending = Some(d);
+        }
+    }
+    if let Some(last) = pending {
+        out.push(last);
+    }
+    out
+}
+
 /// 1-based line and column of `offset`.
 #[must_use]
 #[expect(
@@ -181,7 +338,7 @@ pub fn excerpt(ours: &[u8], theirs: &[u8], at: usize) -> String {
     reason = "a failing assertion in a test is a failing test"
 )]
 mod tests {
-    use super::{first_difference, line_col};
+    use super::{first_difference, line_col, line_diffs};
     use crate::case::{Capture, Compare, Verdict};
     use crate::compare::Pair;
     use crate::compare::tests::{case, obs};
@@ -198,6 +355,62 @@ mod tests {
         assert_eq!(line_col(b"a\nbb\nccc", 0), (1, 1));
         assert_eq!(line_col(b"a\nbb\nccc", 2), (2, 1));
         assert_eq!(line_col(b"a\nbb\nccc", 6), (3, 2));
+    }
+
+    /// A missing/inserted line must not cascade into reporting every line
+    /// after it as "changed" -- the exact failure mode a positional zip has
+    /// and an LCS alignment does not.
+    #[test]
+    fn one_inserted_line_reports_as_exactly_one_line_not_a_cascade() {
+        let ours = b"a=1\nb=2\nd=4\n";
+        let theirs = b"a=1\nb=2\nc=3\nd=4\n";
+        let diffs = line_diffs(ours, theirs);
+        assert_eq!(diffs.len(), 1, "{diffs:?}");
+        let Some(d) = diffs.first() else {
+            panic!("expected exactly one diff, got {diffs:?}")
+        };
+        assert!(d.theirs.contains("c=3"), "{diffs:?}");
+        assert_eq!(d.ours, "<absent>");
+    }
+
+    #[test]
+    fn one_removed_line_reports_as_exactly_one_line() {
+        let ours = b"a=1\nb=2\nc=3\nd=4\n";
+        let theirs = b"a=1\nb=2\nd=4\n";
+        let diffs = line_diffs(ours, theirs);
+        assert_eq!(diffs.len(), 1, "{diffs:?}");
+        let Some(d) = diffs.first() else {
+            panic!("expected exactly one diff, got {diffs:?}")
+        };
+        assert!(d.ours.contains("c=3"), "{diffs:?}");
+        assert_eq!(d.theirs, "<absent>");
+    }
+
+    #[test]
+    fn a_changed_line_reports_both_values_not_an_insert_plus_a_delete() {
+        let ours = b"a=1\nb=2\nc=3\n";
+        let theirs = b"a=1\nb=9\nc=3\n";
+        let diffs = line_diffs(ours, theirs);
+        assert_eq!(diffs.len(), 1, "{diffs:?}");
+        let Some(d) = diffs.first() else {
+            panic!("expected exactly one diff, got {diffs:?}")
+        };
+        assert_eq!(d.ours, "b=2");
+        assert_eq!(d.theirs, "b=9");
+    }
+
+    #[test]
+    fn identical_lines_report_no_diffs() {
+        assert!(line_diffs(b"a=1\nb=2\n", b"a=1\nb=2\n").is_empty());
+    }
+
+    #[test]
+    fn running_the_same_two_inputs_twice_produces_the_same_alignment() {
+        let ours = b"a=1\nx=9\nb=2\ny=9\nc=3\n";
+        let theirs = b"a=1\nb=2\nc=3\n";
+        let first = line_diffs(ours, theirs);
+        let second = line_diffs(ours, theirs);
+        assert_eq!(first, second);
     }
 
     #[test]
