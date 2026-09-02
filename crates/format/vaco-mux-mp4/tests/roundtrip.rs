@@ -553,13 +553,20 @@ fn a_short_final_audio_packet_duration_is_not_lost() {
     // real frame length. Every packet states its own real duration, exactly
     // as `AlacEncoder::send_frame` now does.
     let full = 4096i64;
+    #[expect(
+        clippy::integer_division,
+        reason = "an exact microsecond duration for a real sample count at a real sample rate -- truncation here is the same rounding a real muxer's own duration bookkeeping already does, not a mistake"
+    )]
+    let full_duration_micros = full * 1_000_000 / 44_100;
     for i in 0..3i64 {
         let mut p = packet(idx, i * full, true, &[0xAB, 0xCD, 0xEF]);
-        p.duration = Duration::from_micros(full * 1_000_000 / 44_100);
+        p.duration = Duration::from_micros(full_duration_micros);
         mux.write_packet(&p).unwrap();
     }
+    #[expect(clippy::integer_division, reason = "same reasoning as full_duration_micros above")]
+    let last_duration_micros = 2184 * 1_000_000 / 44_100;
     let mut last = packet(idx, 3 * full, true, &[0x12, 0x34]);
-    last.duration = Duration::from_micros(2184 * 1_000_000 / 44_100);
+    last.duration = Duration::from_micros(last_duration_micros);
     mux.write_packet(&last).unwrap();
     mux.write_trailer().unwrap();
 
