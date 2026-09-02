@@ -3473,3 +3473,48 @@ the design doc.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 44. HEVC B4 Stage 2b step 2: the CABAC context-bank handoff moves onto `RowPublish`
+
+Second of the four steps in `docs/codec/hevc-wavefront-threading.md`'s
+landing order (step 1 -- §§41-43). `decode_wpp_row_ranges`'s own §9.3.2.3
+context handoff -- row *r + 1* inherits row *r*'s own `ContextBank` as it
+stood right after CTU column 1 finished -- moves from `saved_ctx:
+Option<ContextBank>` (a plain local variable carried between one thread's
+own loop iterations) to `crate::wavefront::RowPublish<ContextBank>`
+(commit `f589ed4`), the smallest of the four `RowPublish` uses so far
+since `ContextBank` is `Copy` -- a bare value, not a `Vec`-backed band.
+
+**What changed**: the board is sized once, `row_ranges.len()`, before the
+row loop starts. `col == 1`'s own publish became `ctx_handoff.
+publish(row_idx, ctx)?` (`ctx` stays usable afterward -- `Copy` means
+publishing copies it in, not moves it out). Each row's own start reads
+`ctx_handoff.get(row_idx - 1)` instead of the local `saved_ctx`, with the
+identical fallback shape the original code had (fresh `new_context_bank`
+only for `row_idx == 0` or `ctbs_x < 2`, exactly the cases the outer `if`
+already excluded from reading `saved_ctx` at all -- every other row's own
+predecessor is guaranteed already published, since row order is
+unchanged).
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (73 unit tests, unchanged
+-- `RowPublish`'s own primitive tests, from commit `b5c8916`, already
+cover this usage shape) and `cargo clippy -p vaco-codec-hevc --lib
+--tests -- -D warnings` both clean; `cargo xtask unsafe-audit` clean.
+Against `hevc_1080p.mp4` (WPP on by default in this `libx265` encode, so
+every row boundary this commit touches actually runs): `vaco -threads 1`
+before, after, and `ffmpeg`'s own decode all produced the identical
+sha256 (`a40b898c...`, unchanged since §39). The 300x500
+partial-CTU-column fixture still matched ffmpeg on the frames its own
+unrelated remux issue does not corrupt.
+
+**Serial cost**: no fresh interleaved timing run -- the publish/read pair
+happens `n_bands` times per picture, at each row's own column-1 boundary
+and row start, not per CTU. `ctu::decode_ctu`'s own call, and everything
+it does per CTU, is byte-for-byte unchanged.
+
+**Not done in this section**: `Ctx`'s own split (next -- the widest-
+surface step, expected to possibly split into more than one commit rather
+than that being a setback), and real thread dispatch after that.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.

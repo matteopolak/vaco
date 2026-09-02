@@ -719,9 +719,10 @@ itself is threaded) before the next begins:
     stated on its own" section's latent data race for all three on the
     `published` side. `current` staying a private, single-writer field on
     each remains correct only because steps 2-4 below have not started.
-2. The CABAC context-bank handoff as its own `RowPublish<ContextBank>`
-   (`ContextBank` is already `Copy`, so this reuses the same primitive,
-   not a new one), replacing `saved_ctx`, still single-threaded.
+2. **Done** (commit `f589ed4`, `planning/E2E-GAPS.md` §44): the CABAC
+   context-bank handoff as its own `RowPublish<ContextBank>` (`ContextBank`
+   already `Copy`, so this reused the existing primitive, not a new one),
+   replacing `saved_ctx`, still single-threaded.
 3. `Ctx`'s own split into shared (`Arc` or plain `&`, since the slice
    lives at least as long as the row loop) and per-row-exclusive parts,
    mechanically threading the new shape through `ctu.rs`/`deblock.rs`/
