@@ -748,8 +748,15 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(d.read_packet().unwrap().payload(), b"A");
-        assert_eq!(d.read_packet().unwrap().payload(), b"B");
+        // A glob is a timeline the caller asked for, exactly like a sequence:
+        // packets counted in ticks, `start_time` left for discovery.
+        assert!(d.streams().first().unwrap().start_time_underived());
+        let a = d.read_packet().unwrap();
+        assert_eq!(a.payload(), b"A");
+        assert_eq!(a.pts.ticks(), Some(0));
+        let b = d.read_packet().unwrap();
+        assert_eq!(b.payload(), b"B");
+        assert_eq!(b.pts.ticks(), Some(1));
         assert!(matches!(d.read_packet(), Err(Error::Eof)));
 
         let _ = fs::remove_dir_all(&dir);
