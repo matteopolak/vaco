@@ -218,12 +218,12 @@ accept it. Treat it as broken until that row says otherwise.
 
 | Codec | Decode | Encode | Notes |
 |---|---|---|---|
-| AAC-LC | yes | — | Patent-gated |
-| MP1 / MP2 / MP3 | yes | — | Layer I/II/III |
-| AC-3 | yes | — | Known accuracy defect, see `planning/TECH-DEBT.md`. E-AC-3 non-default |
-| Vorbis | yes | yes | Encode is one fixed low-complexity configuration |
-| FLAC | yes | yes | |
-| ALAC | yes | yes | |
+| AAC-LC | partly | — | Patent-gated. Output is offset ~1181 samples against ffmpeg (encoder delay not trimmed), with a real residual after aligning |
+| MP1 / MP2 / MP3 | partly | — | Layer I/II/III decode, but output is offset ~1303 samples against ffmpeg (encoder delay not trimmed) with a smaller residual on top |
+| AC-3 | **no** | — | Known accuracy defect: 99.5% of samples differ from ffmpeg, mean error 6806 of 32768, and it is not a time offset. E-AC-3 non-default |
+| Vorbis | yes | yes | Within 1 LSB of ffmpeg. Encode is one fixed low-complexity configuration |
+| FLAC | yes | yes | Byte-identical to ffmpeg |
+| ALAC | yes | yes | Byte-identical to ffmpeg |
 | Opus | not registered | — | Implemented but has unresolved correctness gaps, so it is deliberately not wired up |
 | PCM | yes | yes | The whole `pcm_*` family |
 | ADPCM | yes | — | IMA-WAV, IMA-QT, MS, SWF. No G.722 or G.726 |
