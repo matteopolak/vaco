@@ -599,3 +599,131 @@ remain, for the same reason the item has been staged this way throughout:
 a byte-exact decoder's core representation is not something to rewrite in
 one drop in a crate under active concurrent editing. See
 `planning/E2E-GAPS.md` for each increment's own record as it lands.
+
+## Stage 2b's concrete prerequisites, found by reading the code this stage actually touches
+
+Before writing worker-thread dispatch, three gaps had to be found by
+reading `Ctx`, `decode_wpp_row_ranges` and `EdgeMarks`/`CuGrid`/
+`SaoParamsGrid` directly, since none of the three is named precisely
+enough in this document's earlier "Stage 2" sketch to start from as-is.
+Recording them here rather than in a change that also carries new
+thread-dispatch code: this is the design pass Stage 2b needs, and this
+crate's own history (commit `0c33b86`, and every one of §§34/36-39 in
+`planning/E2E-GAPS.md`) is that a design pass and its own first
+implementation slice land as separate, separately-verified commits.
+
+**1. `Ctx` is one 36-field struct, shared as `&mut` across an entire
+slice's CTU walk today, and it does not sort cleanly into "per-row" vs
+"shared" by inspection.** `pic: &'p mut Picture` and
+`recon: &'p mut ReconPicture` are the two fields every CTU write touches;
+`cu_grid: CuGrid`, `edges: EdgeMarks`, `sao_params: SaoParamsGrid` are
+owned by value and already row-banded; `qp_y_prev`/`qg_qp_pred`/
+`is_cu_qp_delta_coded`/`cu_qp_delta_val` are genuinely per-row-exclusive
+scratch (reset at each row's own start today, in `decode_wpp_row_ranges`);
+the remaining ~28 fields (SPS/PPS-derived constants, slice-header flags,
+inter-slice reference-list parameters) are read-only for the whole slice
+and safe to share by `&` or a cheap `Copy`/`Arc` once the mutable fields
+are pulled out. `Ctx` is referenced in four modules (`ctu.rs`, `decoder.rs`,
+`deblock.rs`, `sao.rs`), so a split has to preserve every existing call
+site's field access, not just compile at the definition. This is exactly
+the shape of refactor this crate's own commit history shows landing
+successfully only in small, single-purpose steps (one field or one struct
+at a time) — attempting the whole split in the same commit as thread
+dispatch is the "two unknowns at once" this item was already warned
+against, now inside a single change instead of across two stages.
+
+**2. WPP's own entropy coding is already row-independent — the hard part
+is the two things that are not.** `decode_wpp_row_ranges` already gives
+each row its own `CabacDecoder` over its own `row_ebsp` slice (the
+`entry_point_offsets` NAL structure HEVC's own bitstream syntax provides
+for exactly this reason); nothing about parsing bits, symbol by symbol,
+needs cross-row coordination. Two things do:
+   - **The CABAC context-bank handoff.** Row *r + 1* needs row *r*'s own
+     `ContextBank` snapshot as it stood right after row *r*'s second CTU
+     (`saved_ctx` in the current serial loop) — a genuine producer/consumer
+     dependency, currently a plain local variable carried between loop
+     iterations on one thread. A threaded version needs this as a
+     real cross-thread handoff: one slot per row boundary
+     (`Vec<OnceLock<ContextBank>>`, sized `ctbs_y - 1`, `ContextBank` being
+     `Copy` already makes the value cheap to move once) that row *r*'s
+     worker writes once its own CTU 1 finishes and row *r + 1*'s worker
+     blocks on before starting CTU 0. This is a small, well-bounded
+     primitive — closer to `vaco_codec_core::picture::ProgressPicture`'s
+     `OnceLock`-per-unit shape than to anything novel.
+   - **Cross-row sample/mode/edge reads.** Intra reference lines and
+     merge/AMVP spatial candidates reach exactly one CTU row up (confirmed
+     by reading `intra_pred::build_reference_line` and the CTB-row-boundary
+     MPM rule, both already cited in this document's "How far up does a
+     row actually reach?" section); deblocking reaches one CTU row up and
+     down (§31's own measured bound). `ReconPlane` already has the
+     cross-thread-safe primitive for this (`PlaneSpec::with_bands`'s
+     per-CTU-tile `OnceLock` publish, landed in `3ac859f`) — the reason
+     that piece was built first, ahead of thread dispatch, even though its
+     own serial cost missed Stage 1's gate.
+
+**3. `EdgeMarks`, `CuGrid` and `SaoParamsGrid` are not thread-safe today,
+and nothing before this pass named that as a Stage 2 blocker.** All three
+are `{ current: Band, published: Vec<Band>, current_band: usize, ... }`,
+with `begin_row`/`finish` mutating `current`/`current_band` directly and
+no synchronisation of any kind (`planning/E2E-GAPS.md` §36 explicitly
+chose this shape *because* Stage 1 is single-threaded and a coarser
+once-per-row freeze was cheaper than routing through
+`vaco_codec_core::picture`'s per-tile machinery). That reasoning was
+correct for Stage 1 and stops being correct the moment two threads
+touch the same `CuGrid` concurrently: worker *r*'s `begin_row`/`fill`
+calls and worker *r - 1*'s still-finishing writes into what was `current`
+when *r - 1* called its own `finish` are a data race in the literal Rust
+sense (`&mut` access to `current`/`published` from two threads with no
+`Sync` boundary between them) if the three types are shared as-is.
+The fix is mechanical and small — the same `Vec<OnceLock<Band>>` shape
+proposed for the CABAC context handoff above, one slot per row, written
+once by the row that finishes it and read by every later row that needs
+it — but it is three types' worth of real code (`EdgeMarks`, `CuGrid`,
+`SaoParamsGrid`), each with its own existing single-threaded test
+coverage that has to keep passing unchanged at `-threads 1`, and it has
+to land and be verified byte-exact *before* any worker thread is spawned,
+not discovered by a data-race sanitiser after.
+
+**Sizing implication.** The plan's own XL (3-4 weeks) estimate for B4 as a
+whole already accounted for "architectural: the picture, `CuGrid`,
+`EdgeMarks` and SAO parameter storage all become per-row" as a real cost;
+what this pass adds is that "per-row" alone (Stage 1, already done) is not
+"thread-safe per-row" (this gap), and `Ctx`'s own split is a second,
+separate mechanical cost the earlier sketch named in one sentence
+("`Ctx` splits into per-row state and shared read-only slice state")
+without pricing it. Landing order proposed, each its own commit, each
+gated on byte-exactness at `-threads 1` (a no-op check until dispatch
+itself is threaded) before the next begins:
+
+1. `Vec<OnceLock<Band>>`-based cross-thread-safe versions of `EdgeMarks`/
+   `CuGrid`/`SaoParamsGrid` (three commits or one, contributor's choice),
+   API-compatible with every existing call site, still driven by one
+   worker at `-threads 1`.
+2. The CABAC context-bank handoff as its own `Vec<OnceLock<ContextBank>>`,
+   replacing `saved_ctx`, still single-threaded.
+3. `Ctx`'s own split into shared (`Arc` or plain `&`, since the slice
+   lives at least as long as the row loop) and per-row-exclusive parts,
+   mechanically threading the new shape through `ctu.rs`/`deblock.rs`/
+   `sao.rs`'s existing call sites, still single-threaded — this is the
+   step most likely to need its own byte-exact re-verification pass, since
+   it touches the widest surface.
+4. Only then, real `std::thread::spawn` dispatch over the row loop, reusing
+   `vaco_codec_core::threading`'s `Pool`/`Queue`/`Condvar`/`ReplyGuard`
+   shape (row index in place of that module's frame index, `Result<()>`
+   in place of `Result<Frame>`) — gated on the full bar named throughout
+   this document: byte-exact at 1/2/4/8/16 threads, the
+   `hevc_decode_threaded` fuzz target, repeated runs on a race-detector
+   fixture, and a same-session speedup ratio against `ffmpeg` at matching
+   thread counts, default staying `-threads 1` until every one of those
+   passes.
+
+None of the four steps above is implemented in this pass. Writing threaded
+dispatch code before naming the two thread-safety gaps precisely (the
+data-structure race and the context handoff) risked either silently
+racing (never caught by these tests, since none of this crate's fixtures
+were built to trip a Rust data race, only content correctness) or being
+built once and rebuilt once the gap was found mid-implementation — this
+document exists so the next pass starts on step 1 with the map already
+drawn, per this item's own repeated practice of a cited design pass ahead
+of a change this load-bearing, rather than discovering the shape of the
+problem inside an in-progress rewrite of a byte-exact decoder's core loop.
