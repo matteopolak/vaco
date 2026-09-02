@@ -50,8 +50,43 @@
 //! collapses to one dispatch key. `CliOptionTable` itself already refuses to
 //! generate a chain longer than one hop, so following `alias_of` exactly
 //! once always reaches the real key.
+//!
+//! # Two blind spots found and fixed by reading `reachability_check`'s own
+//! # cross-scanner audit against this module
+//!
+//! Both are the same two shapes rule I found in itself, in a different
+//! scanner: **test code counted as real dispatch**, and **scope wide
+//! enough to let an unrelated binary vouch for a key it never handles**.
+//!
+//! [`masked_source`] blanks every `#[cfg(test)]`-guarded item before the
+//! search runs — reusing [`crate::dead_code::strip_cfg_test`] rather than
+//! re-deriving it, since a dispatch key mentioned only inside a test
+//! (`assert_eq!(parse(&["-foo", ...])..., ...)`) is not proof any real
+//! `match`/`if` arm in `cli.rs`/`exec.rs` handles it.
+//!
+//! The two binaries' own dispatch sources are now kept separate rather
+//! than concatenated into one shared haystack: an `ffmpeg` dispatch key
+//! that happens to appear as a string literal somewhere in `vaco-probe`
+//! (which never dispatches on an `ffmpeg` option at all) used to clear it
+//! as "consumed," and the same in the other direction for `ffprobe` keys
+//! against `vaco-cli`'s source. `vaco-cli-core` (shared by both binaries)
+//! stays out of both: its `ParsedOption`/`resolved()` helpers take a
+//! `name: &str` from the caller rather than matching a literal themselves,
+//! so it is infrastructure for either binary's dispatch, not a dispatch
+//! site of its own — read directly to confirm, not assumed from its being
+//! "shared code."
+//!
+//! Both were live for `ffprobe` specifically: before this fix, `vaco-probe`'s
+//! table reported zero unconsumed options in this tree, which was false —
+//! `c`/`codec`'s dispatch key, `cpucount`, and `loglevel`/`v`'s dispatch key
+//! were all cleared only because the literal `"c"`/`"cpucount"`/`"loglevel"`
+//! happened to appear somewhere in `vaco-cli`'s own source, which never
+//! dispatches on any ffprobe option. `ffmpeg`'s own count did not change —
+//! nothing there was hidden by either gap in this tree today — which is
+//! itself the point: a scope bug does not announce itself by changing every
+//! number, only the ones it happens to touch.
 
-use crate::{Set, Task, repo_root};
+use crate::{Set, Task, dead_code::strip_cfg_test, repo_root};
 use std::path::{Path, PathBuf};
 
 /// One `#[cli(...)]` attribute's `name` and (if present) `alias_of`.
@@ -196,6 +231,29 @@ fn read_dir_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// One binary's own dispatch source, concatenated, with every
+/// `#[cfg(test)]`-guarded item blanked out first.
+///
+/// Without this, a dispatch key that appears only inside a test --
+/// `assert_eq!(parse(&["-foo", "1"])..., ...)`, say -- reads as "matched
+/// somewhere in vaco-cli" when no real `match`/`if` arm in `exec.rs` or
+/// `cli.rs` handles it at all. Rule I (`reachability_check`) found the
+/// identical shape hiding real, unfixed findings in
+/// `vaco-format-core::FormatOptions` before it started masking test code
+/// the same way; this check had the same gap, unnoticed until this
+/// cross-scanner audit went looking for it specifically.
+fn masked_source(dir: &Path) -> String {
+    let mut files = Vec::new();
+    read_dir_rs(dir, &mut files);
+    let mut src = String::new();
+    for f in &files {
+        let text = std::fs::read_to_string(f).unwrap_or_default();
+        src.push_str(&strip_cfg_test(&text));
+        src.push('\n');
+    }
+    src
+}
+
 /// One table's unconsumed dispatch keys, plus every alias name that shares
 /// each key (for a report a human can act on without re-deriving aliases).
 fn unconsumed(table_path: &Path, dispatch_src: &str, refused: &Set<String>) -> Vec<String> {
@@ -257,23 +315,25 @@ pub fn run(_check: bool) -> Task {
         .map_err(|e| format!("{}: {e}", probe_cli_rs_path.display()))?;
     let ffprobe_refused = refused_names(&probe_cli_rs, "const UNIMPLEMENTED: &[&str] = &[");
 
-    let mut dispatch_files = Vec::new();
-    read_dir_rs(&root.join("crates/app/vaco-cli/src"), &mut dispatch_files);
-    read_dir_rs(&root.join("crates/app/vaco-probe/src"), &mut dispatch_files);
-    let mut dispatch_src = String::new();
-    for f in &dispatch_files {
-        dispatch_src.push_str(&std::fs::read_to_string(f).unwrap_or_default());
-        dispatch_src.push('\n');
-    }
+    // Each binary's own `src/` only, not the two concatenated: an ffmpeg
+    // dispatch key that happens to appear as a string literal somewhere in
+    // vaco-probe (which never dispatches on it) must not clear it, and
+    // vice versa. vaco-cli-core (shared by both) is deliberately excluded
+    // from either source: its `ParsedOption`/`resolved()` helpers take
+    // `name: &str` from the caller rather than matching a literal
+    // themselves, so it is infrastructure, not a dispatch site, for either
+    // binary's own options -- verified by reading it, not assumed.
+    let cli_src = masked_source(&root.join("crates/app/vaco-cli/src"));
+    let probe_src = masked_source(&root.join("crates/app/vaco-probe/src"));
 
     let ffmpeg = unconsumed(
         &root.join("crates/app/vaco-cli-core/src/tables/ffmpeg.rs"),
-        &dispatch_src,
+        &cli_src,
         &ffmpeg_refused,
     );
     let ffprobe = unconsumed(
         &root.join("crates/app/vaco-cli-core/src/tables/ffprobe.rs"),
-        &dispatch_src,
+        &probe_src,
         &ffprobe_refused,
     );
 
@@ -421,5 +481,70 @@ Dead,
         std::fs::remove_dir_all(&dir).ok();
 
         assert_eq!(out, vec!["    dead".to_string()]);
+    }
+
+    /// Regression for the test-masking gap: a dispatch key mentioned only
+    /// inside `#[cfg(test)]` must not count as real dispatch, the same
+    /// shape rule I's own audit found in `vaco-format-core`.
+    #[test]
+    fn unconsumed_does_not_count_a_key_mentioned_only_in_a_test() {
+        let dir = std::env::temp_dir().join(format!(
+            "xtask-option-consumption-testmask-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        let table = dir.join("table.rs");
+        std::fs::write(
+            &table,
+            r#"
+#[cli(name = "onlyintest", flags(HAS_ARG), kind = Str, help = "never really dispatched")]
+OnlyInTest,
+"#,
+        )
+        .expect("write fixture table");
+
+        let real_source = r#"
+fn dispatch(name: &str) {
+    if name == "unrelated" {}
+}
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn checks_onlyintest_parses() {
+        assert!(parse(&["-onlyintest", "1"]).is_ok());
+        let _ = "onlyintest";
+    }
+}
+"#;
+        let masked = strip_cfg_test(real_source);
+        let out = unconsumed(&table, &masked, &Set::new());
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert_eq!(out, vec!["    onlyintest".to_string()]);
+    }
+
+    #[test]
+    fn masked_source_blanks_cfg_test_before_concatenating() {
+        let dir = std::env::temp_dir().join(format!(
+            "xtask-option-consumption-maskedsrc-{}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("create temp dir");
+        std::fs::write(
+            dir.join("a.rs"),
+            r#"fn real() { let _ = "kept"; }
+#[cfg(test)]
+mod tests {
+    fn t() { let _ = "onlyintest"; }
+}
+"#,
+        )
+        .expect("write fixture");
+
+        let src = masked_source(&dir);
+        std::fs::remove_dir_all(&dir).ok();
+
+        assert!(src.contains("kept"));
+        assert!(!src.contains("onlyintest"));
     }
 }
