@@ -600,6 +600,96 @@ a byte-exact decoder's core representation is not something to rewrite in
 one drop in a crate under active concurrent editing. See
 `planning/E2E-GAPS.md` for each increment's own record as it lands.
 
+## Correction: §36's "already fully finished" only holds for a serial walker — `CuGrid`/`SaoParamsGrid` need the tile-grid move too
+
+Found while actually trying to write the worker-thread dispatch this
+document has deferred since Stage 1 — the same discipline as the
+`ProgressPicture` correction above: read the real implementation before
+building on top of what an earlier pass concluded, rather than trusting a
+summary of it.
+
+§36 (`planning/E2E-GAPS.md`) reasoned: "a cross-row read always targets an
+earlier CTU row, and WPP's own 2-CTU CABAC-context lag ... guarantee[s]
+that row is *already fully finished*, never one still being filled by
+another thread" — and concluded from this that `EdgeMarks`/`CuGrid`/
+`SaoParamsGrid` could stay row-banded (one `current` covering a whole CTU
+row, published only when `begin_row`/`finish` moves past it), unlike
+`ReconPlane`, which needed per-CTU-tile publish for deblocking's and intra
+prediction's own sub-row reads.
+
+That conclusion is correct for Stage 1, where it was verified, and wrong
+the moment real concurrent dispatch exists — because it conflates two
+different guarantees:
+
+- **What the bitstream actually guarantees** (a WPP-compliant encoder's own
+  constraint): row `r`'s CTU `c` never needs anything from row `r - 1`
+  beyond CTU `c + 1` — a *specific, local* CTU, not the row's own
+  completion.
+- **What §36's reasoning actually relied on**: that the referenced row is
+  *entirely done* by the time it is read — true for Stage 1's single
+  serial walker (raster order makes every earlier row complete by
+  construction), false for genuine concurrent WPP, where row `r`'s worker
+  may still be two or three CTUs into row `r` while row `r + 1`'s worker
+  already needs row `r`'s CTU `c + 1`.
+
+`CuGrid`'s and `SaoParamsGrid`'s own `begin_row`/`finish` (`framebuf.rs`,
+`sao.rs`) publish `current` **only** when `begin_row` advances past it or
+`finish` runs — never per-CTU within a row. Under real dispatch, any read
+of row `r`'s `CuGrid`/`SaoParamsGrid` data from row `r + 1` — a merge/AMVP
+spatial candidate, a constrained-intra-pred neighbour-availability check,
+an SAO left/above merge — would therefore have to wait for row `r`'s
+*entire* row band to publish, not just the one CTU actually needed. Since
+essentially every CTU queries at least one of these (spatial candidates on
+every inter PU, SAO merge on every CTU with SAO enabled), this collapses
+adjacent-row overlap to near zero for real content — the same "dressed up
+in wavefront-shaped machinery, but actually serial" failure mode the
+`ProgressPicture` correction above already named for a different type,
+now found in two more.
+
+`EdgeMarks` is not affected: it is written during the CTU walk but read
+only by the post-picture, fully-serial deblock pass (never by another
+row's own worker mid-walk), so its whole-row publish granularity stays
+correct regardless of dispatch.
+
+**What this means for scope**: `CuGrid` and `SaoParamsGrid` need the same
+per-CTU-tile publish move `ReconPlane` already has (`planning/E2E-GAPS.md`
+§39, commit `3ac859f`) before real dispatch can deliver actual overlap
+between adjacent rows, not just before/after correctness. The `RowPublish`
+primitive itself does not need to change for this — `CuGrid`'s and
+`SaoParamsGrid`'s own `current`/`published` split needs to publish at CTU-
+column granularity within a row (mirroring `ReconPlane::begin_ctu`/
+`publish_ctu`) instead of once per whole row. This was not visible until
+dispatch was actually attempted, which is exactly why this document keeps
+naming corrections here rather than assuming an earlier pass's conclusion
+still holds once the next stage changes what depends on it.
+
+**Also needed, not previously named**: `RowPublish::get` is non-blocking
+(`None` if not yet published) by design, correct for Stage 1's serial
+walker (a well-formed bitstream never legitimately hits the not-yet-
+published case there) but insufficient for real concurrent dispatch, where
+a row-`r + 1` worker reaching for row `r`'s CTU `c + 1` *before* it exists
+is the expected, common case, not a malformed-stream signal — it must
+block until the value appears (or the producer failed), not read a
+placeholder. `vaco_codec_core::picture::PictureRef::wait_tile` already
+solves exactly this (`Mutex`-guarded `Condvar`, an atomic fast path, a
+`failed` flag that wakes every waiter with an error rather than hanging)
+for the cross-picture case; `RowPublish<T>` needs the same shape added
+directly (`wait(&self, index) -> Result<&T>`), reusing the pattern rather
+than inventing a new one.
+
+**Not yet resolved**: whether to extend `CuGrid`/`SaoParamsGrid` to tile
+granularity and build genuine per-CTU WPP overlap (this document's own
+"path 1," now with most of its previously-unknown cost visible: the
+`RowPublish` blocking-wait addition is small and the pattern to copy
+already exists; the `CuGrid`/`SaoParamsGrid` tile-granularity move is a
+bounded repeat of `3ac859f`'s own shape, not a new design), or to fall
+back to the smaller two-stage reconstruction/deblock+SAO pipeline named in
+"Two honest paths forward" above (capped at roughly 2x, needs none of
+this). This is the same plan-level fork that section already declined to
+resolve unilaterally, now sharper: the coordinator's own byte-exact-at-
+1/2/4/8-thread bar is not satisfiable by the 2x-capped alternative, which
+argues for path 1, but the choice is recorded here rather than assumed.
+
 ## Stage 2b's concrete prerequisites, found by reading the code this stage actually touches
 
 Before writing worker-thread dispatch, three gaps had to be found by
