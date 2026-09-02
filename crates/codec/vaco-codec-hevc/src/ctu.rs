@@ -1289,19 +1289,35 @@ fn write_inter_cu_no_residual(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32, pus:
 /// per row from [`crate::framebuf::Plane::row_mut`], a tight per-sample
 /// clamp-and-convert loop over that slice (no per-sample `Option`), then one
 /// [`crate::framebuf::Plane::mark_row_ready`] call for the whole row.
+/// This crate's own largest coding-tree size (§7.4.3.2.1's `CtbLog2SizeY`
+/// never exceeds 6) — the fixed conversion-buffer size `write_pred_block`/
+/// `write_block` both need since `ReconPlane::write_row` takes an
+/// already-converted `&[u8]` rather than handing back a raw, writable
+/// slice the way `Plane::row_mut` used to.
+const MAX_CTB: usize = 64;
+
 fn write_pred_block(plane: &mut crate::framebuf::ReconPlane, x0: i32, y0: i32, w: i32, h: i32, src: &[i32]) {
     let (wu, hu) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
     let Ok(x0u) = usize::try_from(x0) else { return };
+    // `ReconPlane::write_row` takes an already-converted `&[u8]` (tile
+    // storage cannot hand back a raw, picture-wide `&mut [u8]` the way
+    // `Plane::row_mut` could — see that method's own doc), so the i32-to-u8
+    // clamp happens into this fixed, stack-allocated buffer first. `MAX_CTB`
+    // (module-level, shared with `write_block`) is this crate's own largest
+    // coding-tree size (§7.4.3.2.1's `CtbLog2SizeY` never exceeds 6), so no
+    // real `wu` ever exceeds it.
+    let mut buf = [0u8; MAX_CTB];
+    let wu_clamped = wu.min(MAX_CTB);
     for row in 0..hu {
         let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else { continue };
         let row_start = row.saturating_mul(wu);
-        let Some(src_row) = src.get(row_start..row_start.saturating_add(wu)) else { continue };
-        if let Some(dst_row) = plane.row_mut(py).and_then(|r| r.get_mut(x0u..x0u.saturating_add(wu))) {
-            for (d, &s) in dst_row.iter_mut().zip(src_row) {
-                *d = u8::try_from(s.clamp(0, 255)).unwrap_or(0);
-            }
+        let Some(src_row) = src.get(row_start..row_start.saturating_add(wu_clamped)) else { continue };
+        let Some(dst_row) = buf.get_mut(..wu_clamped) else { continue };
+        for (d, &s) in dst_row.iter_mut().zip(src_row) {
+            *d = u8::try_from(s.clamp(0, 255)).unwrap_or(0);
         }
-        plane.mark_row_ready(py, x0u, wu);
+        plane.write_row(x0u, py, dst_row);
+        plane.mark_row_ready(py, x0u, wu_clamped);
     }
 }
 
@@ -1966,15 +1982,19 @@ fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode
 /// `u8` narrowing below never actually clips.
 fn write_block(plane: &mut crate::framebuf::ReconPlane, x0: i32, y0: i32, size: usize, block: &[u16]) {
     let Ok(x0u) = usize::try_from(x0) else { return };
+    // See `write_pred_block`'s own comment for why this goes through a
+    // fixed conversion buffer rather than a raw `row_mut`-style slice.
+    let mut buf = [0u8; MAX_CTB];
+    let size_clamped = size.min(MAX_CTB);
     for row in 0..size {
         let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(row).unwrap_or(0))) else { continue };
         let row_start = row.saturating_mul(size);
-        let Some(src_row) = block.get(row_start..row_start.saturating_add(size)) else { continue };
-        if let Some(dst_row) = plane.row_mut(py).and_then(|r| r.get_mut(x0u..x0u.saturating_add(size))) {
-            for (d, &s) in dst_row.iter_mut().zip(src_row) {
-                *d = u8::try_from(s).unwrap_or(0);
-            }
+        let Some(src_row) = block.get(row_start..row_start.saturating_add(size_clamped)) else { continue };
+        let Some(dst_row) = buf.get_mut(..size_clamped) else { continue };
+        for (d, &s) in dst_row.iter_mut().zip(src_row) {
+            *d = u8::try_from(s).unwrap_or(0);
         }
-        plane.mark_row_ready(py, x0u, size);
+        plane.write_row(x0u, py, dst_row);
+        plane.mark_row_ready(py, x0u, size_clamped);
     }
 }

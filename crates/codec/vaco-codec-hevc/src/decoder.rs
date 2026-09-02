@@ -459,15 +459,18 @@ impl HevcDecoder {
             for addr in 0..total_ctbs {
                 let col = addr.checked_rem(ctbs_x).unwrap_or(0);
                 let row = addr.checked_div(ctbs_x).unwrap_or(0);
+                let row_us = usize::try_from(row).unwrap_or(0);
+                let col_us = usize::try_from(col).unwrap_or(0);
                 if col == 0 {
-                    walk.recon.begin_ctu_row(usize::try_from(row).unwrap_or(0))?;
-                    walk.edges.begin_row(usize::try_from(row).unwrap_or(0))?;
-                    walk.cu_grid.begin_row(&mut self.budget, usize::try_from(row).unwrap_or(0))?;
-                    walk.sao_params.begin_row(&mut self.budget, usize::try_from(row).unwrap_or(0))?;
+                    walk.edges.begin_row(row_us)?;
+                    walk.cu_grid.begin_row(&mut self.budget, row_us)?;
+                    walk.sao_params.begin_row(&mut self.budget, row_us)?;
                 }
+                walk.recon.begin_ctu(row_us, col_us)?;
                 let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
                 let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
                 ctu::decode_ctu(&mut cabac, &mut ctx, &mut walk, cx, cy, addr)?;
+                walk.recon.publish_ctu(row_us, col_us)?;
                 let end = cabac.decode_terminate();
                 if cabac.malformed() {
                     return Err(Error::InvalidData("vaco-codec-hevc: CABAC decode ran past the slice segment data"));
@@ -777,7 +780,6 @@ fn decode_wpp_row_ranges(
         // that function's own QG-reset comment), so nothing else needs
         // resetting here.
         walk.qp_y_prev = walk.slice_qp;
-        walk.recon.begin_ctu_row(row_idx)?;
         walk.edges.begin_row(row_idx)?;
         walk.cu_grid.begin_row(budget, row_idx)?;
         walk.sao_params.begin_row(budget, row_idx)?;
@@ -790,10 +792,13 @@ fn decode_wpp_row_ranges(
         let row_u32 = u32::try_from(row_idx).unwrap_or(0);
         let mut stop = false;
         for col in 0..ctbs_x {
+            let col_us = usize::try_from(col).unwrap_or(0);
+            walk.recon.begin_ctu(row_idx, col_us)?;
             let addr = row_u32.saturating_mul(ctbs_x).saturating_add(col);
             let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
             let cy = i32::try_from(row_idx).unwrap_or(0) * ctb_size_i;
             ctu::decode_ctu(&mut cabac, &mut ctx, walk, cx, cy, addr)?;
+            walk.recon.publish_ctu(row_idx, col_us)?;
 
             // §9.3.2.3: the context state is stored once a row's own second
             // CTU (column index 1) has finished, for the row below to load —
