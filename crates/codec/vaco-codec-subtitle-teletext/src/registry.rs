@@ -163,15 +163,27 @@ fn make(_limits: Limits) -> Box<dyn vaco_codec_core::Decoder> {
     )))
 }
 
-/// Registered as this crate's `teletext` decoder fragment
-/// (`vaco-component.toml`). Named for this crate's own choice, not measured
-/// against the reference: the reference's teletext decode lives behind
-/// `--enable-libzvbi`, which neither `ffmpeg` nor `ffmpeg-full` enables in
-/// this project's build environment, so `ffmpeg -decoders`' actual name for
-/// it (believed to be `libzvbi_teletextdec`) could not be measured per this
-/// project's own D17 rule against guessing reference behaviour.
+/// Registered as this crate's `dvb_teletext` decoder fragment
+/// (`vaco-component.toml`), matching `CodecId::DvbTeletext::name()`.
+///
+/// A prior pass named this `"teletext"`, believing `ffmpeg -decoders`'
+/// actual decoder-implementation name (behind `--enable-libzvbi`, absent
+/// from this project's build environment) was unmeasurable and unsafe to
+/// guess — reasonable, given D17, but incomplete: `ffmpeg -h decoder=<name>`
+/// distinguishes a name FFmpeg's codec table recognises but cannot build
+/// (`"Codec 'X' is known to FFmpeg, but no decoders for it are available"`)
+/// from one it does not know at all (`"Codec 'X' is not recognized by
+/// FFmpeg"`), and does not require the feature to actually be built to give
+/// that answer. Measured: `dvb_teletext` is known; `teletext` and the
+/// guessed `libzvbi_teletextdec` are both unrecognised. `dvb_teletext` is
+/// therefore the real, measured codec-level name real `ffmpeg` resolves a
+/// decoder through (the same mechanism `-c:v vp8` uses to reach `libvpx`
+/// with no encoder literally named `vp8`) — cheaper to reach than the
+/// literal decoder-implementation name and just as real a target. Found by
+/// `cargo xtask reachability-check`'s rule H (registered name vs. the
+/// reference's own measured name).
 pub static TELETEXT_DECODER: DecoderDesc = DecoderDesc {
-    name: "teletext",
+    name: "dvb_teletext",
     long_name: "Teletext (EN 300 706)",
     id: CodecId::DvbTeletext,
     media_type: MediaType::Subtitle,
