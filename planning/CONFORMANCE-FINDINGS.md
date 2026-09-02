@@ -6270,3 +6270,72 @@ Combined `--tier core` run: **771 cases, 311 agreed / 460 diverged.**
 `cargo build --workspace`, `cargo test -p vaco-conformance -p xtask`,
 `cargo clippy -p vaco-conformance -p xtask --all-targets -D warnings` all
 clean.
+
+### Addendum (same day): attacking the "no local fixture path" deferrals, per the coordinator's steer
+
+Split the 27 deferred decoders by cause before touching any of them, per
+the coordinator's own distinction: 12 subtitle decoders are not
+pixel/sample comparable at all (fundamental, left alone); the other 15
+were deferred on a missing ffmpeg encoder or a demux-side blocker, which
+is a fixture problem, not a fundamental one, and worth attacking first
+because an untested codec is where the next FFV1 hides.
+
+**Five moved from deferred to covered.** `r10k`, `r210`, `v210`, `y41p`
+and `avui` were blocked because the reference's *own* rawvideo demuxer
+rejected a bare elementary-stream dump of each ("packet too small" for
+r10k/r210, similarly for the others). All five are real pixel formats
+QuickTime/MOV natively carries — muxing each in MOV instead of dumping
+raw bytes sidesteps the demuxer-sizing problem entirely; the reference
+decodes every one of the five cleanly from MOV. Declared as new decode
+cases (`decode-video-r10k-r210.toml`, `decode-video-v210.toml`,
+`decode-video-y41p.toml`, `decode-video-avui.toml`) and measured against
+this machine's ffmpeg 9.0.1 and the same full-feature `vaco` build:
+
+**All five diverge**, every one with the identical "a stream being
+transcoded has no known input codec" error MOV already produced for
+`adpcm_ima_wav`/`adpcm_ms`/`adpcm_ima_qt` in `decode-audio-adpcm.toml`.
+This is the *same* reachability defect class, not five new ones — five
+more registered, default-buildable decoders demuxed from a container
+they should be reachable from and never mapped to their own decoder.
+
+**Ten stayed deferred, but the reason for four of them is now sharper**
+after actually checking the alternate fixture source the coordinator
+named (`fuzz/seeds`/`fuzz/corpus`), rather than assuming a missing
+encoder was the whole story:
+
+- `qoa`: every candidate in `fuzz/corpus/qoa_decode` carries a
+  fuzzer-mutated header (`sample_rate` up to 16777215, `channels` up to
+  255) — garbage inputs a fuzz target is supposed to reject cleanly, not
+  content a reference decode is meaningful to compare against.
+- `webp`: checked all 41 `fuzz/corpus/webp_decode` seeds over 200 bytes.
+  Every one is a file the reference's *own* decoder also refuses
+  ("Decoding error: Invalid data found") — fuzzer-mutated, not a usable
+  fixture.
+- `theora`, `vc1`: their fuzz corpora hold bare per-packet/per-frame
+  payloads for the fuzz target's own entry point (post-demux already),
+  not a file any real container demuxer opens — there is no way to turn
+  one into an `-i`-able fixture without hand-building an Ogg or ASF
+  wrapper from scratch, which is real work, not a five-minute
+  alternate-source swap.
+- `jpegxl`: sharper finding, not just "no encoder" — this ffmpeg 9.0.1
+  build has **neither an encoder nor a decoder** for it. There is no
+  oracle to differ against at all, encoder problem or not.
+- `bitpacked`, `wrapped_avframe`: re-checked against `mov` as well as
+  `rawvideo` this time (the coordinator's own "a different container"
+  suggestion) — `mov`'s muxer explicitly refuses a codec tag for
+  `bitpacked` ("Could not find tag for codec bitpacked"), and no muxer
+  tried accepts `wrapped_avframe` either. Neither is a demuxer-sizing
+  quirk like r10k's; nothing stores these outside this codebase's own
+  internal pixel-format representation.
+- `mp1`, `comfortnoise`, `v210x` unchanged: no ffmpeg encoder (`mp1`,
+  `v210x`), or (`comfortnoise`) no reference *content* to compare against
+  regardless of fixture format.
+
+`cargo xtask decoder-coverage`: **89 registered decoders, 67 with a
+decode case, 22 deferred with a reviewed reason** (was 62/27). Combined
+`--tier core` run: **776 cases, 311 agreed / 465 diverged** — the five
+new cases all diverged, so the agreed count is unchanged from the first
+pass and every new case is counted honestly, not padded.
+
+`cargo build --workspace`, `cargo test -p xtask`, `cargo clippy -p xtask
+--all-targets -D warnings` clean.
