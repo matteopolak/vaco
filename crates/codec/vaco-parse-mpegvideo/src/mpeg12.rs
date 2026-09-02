@@ -163,6 +163,59 @@ pub const fn aspect_ratio(code: u8) -> Rational {
     }
 }
 
+/// The **sample** (pixel) aspect ratio an `aspect_ratio_information` code
+/// implies, given the coded picture size -- what `ffprobe` actually prints
+/// as `sample_aspect_ratio`, unlike [`aspect_ratio`] above.
+///
+/// Table 6-3's codes 2-4 state a *display* aspect ratio, not a sample one.
+/// Measured directly (`ffmpeg -c:v mpeg2video`, real `ffprobe`, several
+/// resolution/`-aspect` combinations, matched exactly): `sample_aspect_ratio
+/// = display_ratio * coded_height / coded_width` --
+///
+/// ```text
+/// 720x480 @ DAR 4:3   -> SAR 8:9
+/// 720x480 @ DAR 16:9  -> SAR 32:27
+/// 640x360 @ DAR 16:9  -> SAR 1:1
+/// ```
+///
+/// Code 1 ("1.0000", square samples) states the sample ratio directly and
+/// is deliberately not run through that conversion: applying it to a
+/// non-4:3-shaped frame would silently invent a wrong, non-square answer
+/// for exactly the case the spec states is square. Verified identical for
+/// MPEG-4 Part 2's own `aspect_ratio_info`, which shares this table and
+/// this same display-not-sample convention (also measured on real
+/// `ffmpeg -c:v mpeg4` fixtures at the same resolutions, not assumed from
+/// the two standards' otherwise-different bitstream syntax -- the two
+/// standards' `aspect_ratio_info`/`aspect_ratio_information` fields turned
+/// out to mean the same thing here, which was not a safe assumption going
+/// in).
+///
+/// Before this existed, both `vaco-parse-mpegvideo::mpeg12` and `::mpeg4`
+/// assigned [`aspect_ratio`]'s raw table value straight into
+/// `sample_aspect_ratio`, which happened to be right only for code 1 (the
+/// common case, most content this crate could produce) and wrong for
+/// everything else -- e.g. a real 320x240 `-aspect_ratio_information=2`
+/// (DAR 4:3) stream reported `sample_aspect_ratio=4:3` where the reference
+/// reports `1:1`, and `display_aspect_ratio` (itself derived from
+/// `sample_aspect_ratio`) then compounded the error into `16:9`.
+#[must_use]
+pub fn sample_aspect_ratio(code: u8, coded_width: u32, coded_height: u32) -> Rational {
+    if code == 1 {
+        return Rational::new(1, 1);
+    }
+    let display = aspect_ratio(code);
+    if display.den == 0 || coded_width == 0 || coded_height == 0 {
+        return Rational::ZERO;
+    }
+    let height = i32::try_from(coded_height).unwrap_or(i32::MAX);
+    let width = i32::try_from(coded_width).unwrap_or(i32::MAX);
+    Rational::new(
+        display.num.saturating_mul(height),
+        display.den.saturating_mul(width),
+    )
+    .reduced()
+}
+
 /// The [`PixFmt`] a `chroma_format`, Table 6-8, denotes. MPEG-1 has no such
 /// field and is always 4:2:0.
 #[must_use]
@@ -296,7 +349,8 @@ impl Sequence {
             v.height = self.full_height();
             v.coded_width = v.width;
             v.coded_height = v.height;
-            v.sample_aspect_ratio = aspect_ratio(self.aspect_ratio_information);
+            v.sample_aspect_ratio =
+                sample_aspect_ratio(self.aspect_ratio_information, v.coded_width, v.coded_height);
             v.frame_rate = self.frame_rate();
             v.format = pixel_format(self.ext.map_or(1, |e| e.chroma_format));
             // MPEG-1/2 video has no bitstream field for chroma sample
@@ -651,6 +705,35 @@ mod tests {
         assert_eq!(frame_rate(1), Rational::new(24_000, 1_001));
         assert_eq!(frame_rate(0), Rational::ZERO);
         assert_eq!(frame_rate(9), Rational::ZERO);
+    }
+
+    /// Measured directly against real `ffmpeg`/`ffprobe` 9.0.1: codes 2-4
+    /// state a *display* aspect ratio and need converting through the coded
+    /// picture size to get the sample ratio `ffprobe` actually prints; code
+    /// 1 is the sample ratio already and must not go through that
+    /// conversion (which would silently invent a wrong, non-square answer
+    /// for a non-4:3-shaped frame). This is the bug finding 65 found: both
+    /// `mpeg12` and `mpeg4` used to assign `aspect_ratio()`'s raw table
+    /// value straight into `sample_aspect_ratio`, which only ever looked
+    /// right for code 1.
+    #[test]
+    fn sample_aspect_ratio_converts_display_codes_through_the_coded_size() {
+        // Code 1: direct, regardless of shape.
+        assert_eq!(sample_aspect_ratio(1, 720, 480), Rational::new(1, 1));
+        // 720x480 @ DAR 4:3 -> SAR 8:9.
+        assert_eq!(sample_aspect_ratio(2, 720, 480), Rational::new(8, 9));
+        // 720x480 @ DAR 16:9 -> SAR 32:27.
+        assert_eq!(sample_aspect_ratio(3, 720, 480), Rational::new(32, 27));
+        // 640x360 (already 16:9-shaped) @ DAR 16:9 -> SAR 1:1.
+        assert_eq!(sample_aspect_ratio(3, 640, 360), Rational::new(1, 1));
+        // 320x240 (already 4:3-shaped) @ DAR 4:3 -> SAR 1:1 -- the exact
+        // case that used to report `4:3` and cascade into a `16:9` display
+        // ratio.
+        assert_eq!(sample_aspect_ratio(2, 320, 240), Rational::new(1, 1));
+        // No dimensions to convert through, or a reserved/unset code: 0/1,
+        // not a division by zero.
+        assert_eq!(sample_aspect_ratio(2, 0, 0), Rational::ZERO);
+        assert_eq!(sample_aspect_ratio(0, 720, 480), Rational::ZERO);
     }
 
     /// `REAL_SEQ_PREFIX` (a real sequence header) followed by two hand-built

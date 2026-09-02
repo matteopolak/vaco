@@ -293,7 +293,11 @@ impl Mpeg4Parser {
                 v.coded_width = w;
                 v.coded_height = h;
             }
-            v.sample_aspect_ratio = super::mpeg12::aspect_ratio(vol.aspect_ratio_information);
+            v.sample_aspect_ratio = super::mpeg12::sample_aspect_ratio(
+                vol.aspect_ratio_information,
+                v.coded_width,
+                v.coded_height,
+            );
             v.format = pixel_format(None);
             // Same measured default as MPEG-1/2 (see `mpeg12.rs`'s own
             // comment): MPEG-4 Part 2 has no chroma-siting field either, and

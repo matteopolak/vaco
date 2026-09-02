@@ -114,21 +114,15 @@ purpose.
 
 ### Conformance
 
-A differential suite runs 709 cases against the reference. 288 agree and 421 diverge.
+A differential suite runs 709 cases against the reference. 262 agree and 447 diverge.
 
-The case count understates the problem and the divergence count overstates it. The
-comparison used to stop at a case's first differing line, so a real fix could move
-nothing visible; reporting every differing line instead turns those 421 cases into
-**13,004 field-level divergences**. Those are not 13,004 independent defects. The
-median diverging case has 3, while the mean is 39 — pulled there by the 84 cases that
-print one line per packet, where a single wrong timestamp formula surfaces as several
-hundred changed lines. A further 79 cases compare whole container files byte for byte
-and report one offset, with no breakdown at all.
-
-They concentrate in probe metadata and container remux details — a `start_time`
-defaulting to 0 rather than N/A, a raw timebase where the reference normalises one, an
-unmapped codec profile — rather than in decoded pixels, which is where the
-byte-exactness above is measured.
+The case count understates the problem: the comparison used to stop at a case's first
+differing line, so one fix could correct a real field and move nothing. Reporting
+every difference instead turns 447 diverging cases into **13,334 field-level
+divergences**, a median of 4 per case. They are concentrated in probe metadata and
+container remux details — a `start_time` defaulting to 0 rather than N/A, a raw
+timebase where the reference normalises one, an unmapped codec profile — rather than
+in decoded pixels, which is where the byte-exactness above is measured.
 
 `planning/CONFORMANCE-FINDINGS.md` has the breakdown and the method for extending it.
 
