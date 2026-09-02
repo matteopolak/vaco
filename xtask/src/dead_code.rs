@@ -69,7 +69,12 @@ fn rust_files(dir: &std::path::Path) -> Vec<(std::path::PathBuf, String)> {
 /// Strip `#[cfg(test)]`-guarded modules, crudely: from the attribute to the
 /// matching brace at the same depth. Good enough to stop a unit test counting
 /// as production use, which is the whole question.
-fn strip_cfg_test(text: &str) -> String {
+///
+/// `pub(crate)`, not private: [`crate::option_consumption`] reuses this
+/// rather than re-deriving it, after the same gap (test code silently
+/// counting as production dispatch) turned up there during rule I's
+/// cross-scanner audit of this file's own two blind spots.
+pub(crate) fn strip_cfg_test(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(i) = rest.find("#[cfg(test)]") {
@@ -100,6 +105,38 @@ fn strip_cfg_test(text: &str) -> String {
     }
     out.push_str(rest);
     out
+}
+
+/// How many times `id` occurs in `text` as a whole identifier — not merely
+/// as a substring of a longer one.
+///
+/// A plain `text.matches(id).count()` (this scan's first version) counts
+/// `resolve` inside `resolve_pcm`, `unresolved`, or a string/comment that
+/// happens to contain the letters, as "used" — a false negative for dead
+/// code, and a worse one than the false positives this module's own doc
+/// already warns about (trait dispatch, re-exports, macro-built names): a
+/// false positive here is silence about something that might be fine, a
+/// false negative is `dead-code` not reporting an item its whole reason for
+/// existing is to report. Found during rule I's cross-scanner audit of the
+/// two blind spots that fooled it (test code counted as real usage, and
+/// scope wide enough to let an unrelated symbol vouch for a dead one) — this
+/// is the second shape in a different gate, not the same bug repeated.
+fn identifier_occurrences(text: &str, id: &str) -> usize {
+    let is_ident_char = |c: char| c.is_alphanumeric() || c == '_';
+    let bytes = text.as_bytes();
+    let mut count = 0;
+    let mut i = 0;
+    while let Some(rel) = text.get(i..).and_then(|s| s.find(id)) {
+        let start = i + rel;
+        let end = start + id.len();
+        let before_ok = start == 0 || !is_ident_char(bytes[start - 1] as char);
+        let after_ok = end >= bytes.len() || !is_ident_char(bytes[end] as char);
+        if before_ok && after_ok {
+            count += 1;
+        }
+        i = start + 1;
+    }
+    count
 }
 
 pub fn run(_check: bool) -> Task {
@@ -161,7 +198,7 @@ pub fn run(_check: bool) -> Task {
         // Used anywhere in production code other than its own definition line?
         let mut used = false;
         for (crate_name, text) in &prod {
-            let hits = text.matches(id.as_str()).count();
+            let hits = identifier_occurrences(text, id.as_str());
             let threshold = usize::from(crate_name == owner); // its own definition
             if hits > threshold {
                 used = true;
@@ -169,7 +206,7 @@ pub fn run(_check: bool) -> Task {
             }
         }
         if !used {
-            if test_text.contains(id.as_str()) {
+            if identifier_occurrences(&test_text, id.as_str()) > 0 {
                 findings.push((owner.clone(), id.clone()));
             } else {
                 orphans.push((owner.clone(), id.clone()));
@@ -237,4 +274,37 @@ fn report_orphans(orphans: &[(String, String)]) {
         println!("    {id}");
     }
     println!();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn identifier_occurrences_requires_a_word_boundary() {
+        // `resolve` must not count inside `resolve_pcm` or `unresolved` —
+        // the false-negative this scan's first version had.
+        assert_eq!(identifier_occurrences("resolve_pcm(x)", "resolve"), 0);
+        assert_eq!(identifier_occurrences("unresolved", "resolve"), 0);
+        assert_eq!(identifier_occurrences("let y = resolve(x);", "resolve"), 1);
+        assert_eq!(
+            identifier_occurrences("resolve(a); resolve(b);", "resolve"),
+            2
+        );
+    }
+
+    #[test]
+    fn identifier_occurrences_finds_a_leading_or_trailing_match() {
+        assert_eq!(identifier_occurrences("resolve", "resolve"), 1);
+        assert_eq!(identifier_occurrences("(resolve)", "resolve"), 1);
+    }
+
+    #[test]
+    fn strip_cfg_test_removes_a_test_module_body() {
+        let text = "fn a() {}\n#[cfg(test)]\nmod tests {\n    fn b() {}\n}\nfn c() {}\n";
+        let stripped = strip_cfg_test(text);
+        assert!(stripped.contains("fn a()"));
+        assert!(stripped.contains("fn c()"));
+        assert!(!stripped.contains("fn b()"));
+    }
 }
