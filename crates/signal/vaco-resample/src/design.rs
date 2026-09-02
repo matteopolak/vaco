@@ -1,38 +1,29 @@
 //! Polyphase filter design: windows, the anti-alias factor, and the bank.
+//! The design was recovered, not guessed.
 //!
-//! # The design was recovered, not guessed
-//!
-//! For `48 kHz → 96 kHz` the reduced ratio is `1/2`, so the bank has exactly two
-//! phases and a single impulse reads both of them off directly. Doing that in
-//! `f64` gives 32 taps of phase 1 to full precision, and phase 0 comes back as
-//! an *exact* unit impulse — which by itself pins the cutoff, because only
-//! `factor = 1` makes `sinc` vanish at every non-zero integer.
-//!
-//! Fitting the remaining 32 numbers gives, to 5e-11 (the precision the probe was
-//! recorded at):
+//! For `48 kHz → 96 kHz` the reduced ratio is `1/2`: the bank has exactly two
+//! phases, phase 0 comes back as an *exact* unit impulse (only `factor = 1`
+//! makes `sinc` vanish at every non-zero integer), and fitting the remaining
+//! 32 taps of phase 1 to full `f64` precision gives, to 5e-11:
 //!
 //! ```text
 //! h[φ][j] = w( t / (T/2) ) · factor · sinc( factor · t ),   t = j − (T/2 − 1) − φ/P
 //! ```
 //!
-//! with `w` a Kaiser window at `β = 9`. Repeating the experiment downsampling
-//! (`48 → 32 kHz`, ratio `2/3`) supplies the two pieces the upsampling case
-//! cannot see:
+//! with `w` a Kaiser window at `β = 9`. Repeating the fit while downsampling
+//! (`48 → 32 kHz`, ratio `2/3`) supplies two pieces upsampling can't show:
+//! `factor = min(1, (out/in) · cutoff)`, not `cutoff · min(1, out/in)` — at
+//! `48 → 96` the latter gives 0.97 and phase 0 stops being an impulse, and
+//! `cutoff=0.5` at `48 → 96` confirms it by producing byte-identical output
+//! to the default (both clamp to 1); and the tap count grows as the filter
+//! stretches, `T' = ceil(T / factor)` rounded up to even with the window
+//! spanning the full `T'` (measured support of a downsampled impulse is 49.5
+//! input samples for `T = 32, factor = 0.6467`, i.e. `T/factor`).
 //!
-//! * **`factor = min(1, (out/in) · cutoff)` with `cutoff` defaulting to 0.97.**
-//!   Not `cutoff · min(1, out/in)`: at `48 → 96` that would be 0.97 and phase 0
-//!   would not be an impulse. Confirmed by `cutoff=0.5` at `48 → 96` producing
-//!   byte-identical output to the default, because both clamp to 1.
-//! * **The tap count grows as the filter stretches**: `T' = ceil(T / factor)`
-//!   rounded up to even, with the window still spanning the full `T'`. The
-//!   measured support of a downsampled impulse is 49.5 input samples for
-//!   `T = 32, factor = 0.6467`, which is `T/factor`.
-//!
-//! And one thing that is **not** there: there is no per-phase normalisation. The
-//! whole bank is scaled by `1 / Σ_j h[0][j]`, which is why phase 1 of the `1:2`
-//! bank sums to `0.9999891346` rather than to 1. Plan 17 §B.5.2 prescribes
-//! per-phase normalisation; the reference does not do it, and doing it would
-//! change every coefficient.
+//! One thing that is **not** there: per-phase normalisation. The whole bank
+//! is scaled by `1 / Σ_j h[0][j]`, so phase 1 of the `1:2` bank sums to
+//! `0.9999891346` rather than to 1 — the reference does not normalise
+//! per-phase, and doing so would change every coefficient.
 //!
 //! # Accuracy of the reconstruction
 //!
@@ -45,8 +36,8 @@
 //!
 //! The downsampling residual is a shape difference of about 4e-6 in the tap
 //! weights that neither the tap count, the window span nor the `f32`/`f64`
-//! rounding of `cutoff` accounts for. It is well inside plan 17 §B.14.3's
-//! declared ≥ 100 dB fallback and is recorded rather than papered over.
+//! rounding of `cutoff` accounts for — well inside the ≥ 100 dB fallback this
+//! crate targets, and recorded rather than papered over.
 
 #![allow(
     clippy::integer_division,

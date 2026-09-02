@@ -3,31 +3,24 @@
 //! # Exact-rational phase arithmetic
 //!
 //! `44100 → 48000` is `147/160`. The position of output `k` is `k·q/p` input
-//! samples, and it is carried as an integer pair — never a float accumulator.
+//! samples, carried as an integer pair (`frac += q % p; idx += q / p`, with a
+//! carry into `idx` when `frac >= p`) — never a float accumulator. This cannot
+//! drift over any stream length; a single-precision float accumulator loses a
+//! sample after roughly `2^24` outputs (about five minutes at 48 kHz), a real
+//! reported class of bug in naive resamplers.
 //!
-//! ```text
-//! frac += q % p;  idx += q / p;
-//! if frac >= p { frac -= p; idx += 1; }
-//! ```
-//!
-//! This cannot drift over any stream length. A single-precision float
-//! accumulator loses a sample after roughly `2^24` outputs — about five minutes
-//! at 48 kHz — which is a real reported class of bug in naive resamplers.
-//!
-//! When the reduced denominator `p` is at most [`MAX_EXACT_PHASES`] the bank has
-//! exactly `p` phases, so `phase(k) = (k·q) mod p` is not just drift-free but
-//! *exact*: there is no phase quantisation error at all. Above that the bank
-//! falls back to `2^phase_shift` phases and the phase index is the floor of the
-//! exact fraction — still no accumulator, still no drift, just a bounded
-//! quantisation of the sub-sample offset.
+//! When the reduced denominator `p` is at most [`MAX_EXACT_PHASES`] the bank
+//! has exactly `p` phases, so `phase(k) = (k·q) mod p` is not just drift-free
+//! but *exact*. Above that the bank falls back to `2^phase_shift` phases and
+//! the phase index is the floor of the exact fraction — still no accumulator,
+//! still no drift, just a bounded quantisation of the sub-sample offset.
 //!
 //! # Edge handling is mirroring, not zero-priming
 //!
-//! Plan 17 §B.5.4 prescribes prepending and appending `centre` zeros. The
-//! reference does something better and it is directly observable: feed constant
-//! `1.0` and the output is flat `1.0` from the very first sample, with no
-//! fade-in. Probing with impulses at input 0, 1, 2 and 5 identifies the rule
-//! exactly, and the two ends are **not** symmetric:
+//! The reference does not prepend/append zeros: feed constant `1.0` and the
+//! output is flat `1.0` from the very first sample, with no fade-in. Probing
+//! with impulses at input 0, 1, 2 and 5 identifies the rule exactly, and the
+//! two ends are **not** symmetric:
 //!
 //! ```text
 //! head:  x[-k]      = x[k]          whole-sample mirror about 0

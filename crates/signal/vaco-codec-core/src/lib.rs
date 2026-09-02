@@ -300,17 +300,13 @@ pub enum CodecId {
 
     // The game-video/game-audio repertoire `vaco-format-misc`'s `roq`,
     // `flic`, `cdg`, `bink` and `smk` demuxers need to name a stream's codec
-    // at all (gap 21, `planning/INTERFACE-GAPS.md`): every one of them
-    // carried `codec_id: None`, so `-show_streams` printed
-    // `codec_name=unknown` where the reference names a real codec. Names,
-    // long names and properties probed from `ffmpeg -codecs`/`-decoders`,
-    // 8.1, and for `Roq`/`RoqDpcm` cross-checked against a real file
-    // (`ffmpeg -f lavfi ... -c:v roqvideo -c:a roq_dpcm -f roq`) round-tripped
-    // through `ffprobe`. `BinkAudioDct`/`BinkAudioRdft` are two variants, not
-    // one: the reference reports them as two entirely distinct
-    // `codec_name`s with no shared alias, so one `CodecId` could not print
-    // the right name for both, unlike `AacLatm`'s reason for being separate
-    // from `Aac` in the first place.
+    // at all: every one of them carried `codec_id: None`, so `-show_streams`
+    // printed `codec_name=unknown` where the reference names a real codec.
+    // Names, long names and properties probed from `ffmpeg -codecs`/`-decoders`,
+    // 8.1. `BinkAudioDct`/`BinkAudioRdft` are two variants, not one: the
+    // reference reports them as two entirely distinct `codec_name`s with no
+    // shared alias, so one `CodecId` could not print the right name for
+    // both, unlike `AacLatm`'s reason for being separate from `Aac`.
     Roq,
     RoqDpcm,
     Flic,
@@ -321,15 +317,13 @@ pub enum CodecId {
     Smacker,
     SmackAudio,
 
-    // ------------------------------------------- C-01/C-02/C-03 (#279-#281)
-    //
     // The remainder of the standardised ADPCM subset and the raw/uncompressed
-    // video family those issues need a `CodecId` for. `AdpcmG726` already
-    // existed but `adpcm_g726le` is a *distinct* codec in the reference (its
-    // own `-decoders`/`-encoders` row, "G.726 ADPCM little-endian (codec
-    // adpcm_g726le)" — a different bit-packing of the same state machine, not
-    // an alias), and `adpcm_ima_qt` had no variant at all. Names and long
-    // names probed from `ffmpeg -codecs`/`-decoders`/`-encoders`, 8.1.
+    // video family. `AdpcmG726` already existed but `adpcm_g726le` is a
+    // *distinct* codec in the reference (its own `-decoders`/`-encoders` row,
+    // "G.726 ADPCM little-endian (codec adpcm_g726le)" — a different
+    // bit-packing of the same state machine, not an alias), and
+    // `adpcm_ima_qt` had no variant at all. Names and long names probed from
+    // `ffmpeg -codecs`/`-decoders`/`-encoders`, 8.1.
     AdpcmG726le,
     AdpcmImaQt,
     /// `v210`. `AV_CODEC_ID_V210` in the reference; SMPTE 292M/424M 10-bit
@@ -354,8 +348,6 @@ pub enum CodecId {
     /// `anull`, `vnull`'s audio counterpart.
     Anull,
 
-    // ------------------------------------------- C-11/C-12 (#289/#290)
-    //
     // OpenEXR and JPEG XL each need a `CodecId` of their own: neither had a
     // variant, unlike PNG/GIF/TIFF/WebP which already did. Names and long
     // names measured from `ffmpeg -codecs`, 8.1: `exr`/"OpenEXR image" and
@@ -1386,7 +1378,6 @@ const CODECS: &[CodecEntry] = &[
         A,
         CodecProperties::LOSSY.union(CodecProperties::INTRA_ONLY),
     ),
-    // ---------------------------------------------- C-01/C-02/C-03 (#279-#281)
     entry(
         CodecId::AdpcmG726le,
         "adpcm_g726le",
@@ -1705,7 +1696,7 @@ pub trait Decoder: Send {
     /// — so the generic CLI decode path, which hands a decoder the
     /// container's plain extradata, could never configure it, and only
     /// `-c:v copy` (which never calls this at all) had ever exercised the
-    /// crate (`planning/E2E-GAPS.md` #2's video-side wiring gap).
+    /// crate.
     ///
     /// The default does nothing, correct for every decoder whose bitstream
     /// states its own geometry (which is nearly all of them). Calling it
@@ -1841,7 +1832,7 @@ pub trait Encoder: Send {
     /// stream, which is correct but was previously undetectable by a caller
     /// ahead of time — there was nothing to ask before calling `send_frame`
     /// and parsing the failure, the same gap the pixel-format version closed
-    /// for video (E2E-GAPS 3).
+    /// for video.
     #[must_use]
     fn accepted_sample_fmts(&self) -> &'static [vaco_sampfmt::SampleFmt] {
         &[]
@@ -1892,9 +1883,7 @@ pub trait Encoder: Send {
     /// that information was only ever known after the first `send_frame`
     /// call — too late for `add_stream`, already past — which is why a real
     /// `-c:a flac` output written by this build could not be decoded by
-    /// anything else: the container carried no `STREAMINFO` at all
-    /// (`planning/E2E-GAPS.md` #2, the negotiation gap one layer under the
-    /// `CodecID`-mapping fix).
+    /// anything else: the container carried no `STREAMINFO` at all.
     fn prime_audio(
         &mut self,
         sample_rate: u32,
@@ -1986,71 +1975,43 @@ pub trait Parser: Send {
         Ok(())
     }
 
-    /// How long one **already-framed** packet lasts, in seconds, when that is a
-    /// fact about the codec rather than about the container.
+    /// How long one **already-framed** packet lasts, in seconds — a fact about
+    /// the codec, not the container. `packet` is one whole access unit (a
+    /// Matroska block frame, an MP4 sample, a PES payload — the same slice
+    /// [`Parser::parse`] would be given). `None` means "this codec does not
+    /// state a packet duration", the default and the right answer for every
+    /// video codec in v0.1.
     ///
-    /// `packet` is one whole access unit — a Matroska block frame, an MP4
-    /// sample, a PES payload — the same slice [`Parser::parse`] would be given.
-    /// `None` means "this codec does not state a packet duration", which is the
-    /// default and the right answer for every video codec in v0.1.
+    /// This lives on `Parser`, not the demuxer, because the fact is a *codec*
+    /// fact and the layering (D14.1) forbids a demuxer from naming a codec
+    /// crate — Matroska writes no `DefaultDuration`/`BlockDuration` for Opus,
+    /// yet the reference reports 20 ms per packet by reading Opus's own TOC
+    /// byte, and [`ParserProvider`](../../vaco_format_core/trait.ParserProvider.html)
+    /// is the only seam a demuxer has onto codec code.
     ///
-    /// # Why this is on `Parser` at all
+    /// Seconds as a `Rational`, not samples or ticks: **exact** — the
+    /// consumer's own truncation into the stream time base (measured three
+    /// ways, `vaco_format_core::time::quantise_duration`) makes a pre-rounded
+    /// input off by a tick, e.g. a 2.5 ms Opus packet on Matroska's 1 ms base
+    /// prints `2` from seconds but `3` if truncated from microseconds first.
+    /// **No second lookup** — "samples" needs a rate, and the only rate a
+    /// caller has is the container's, wrong for Opus (always 48 kHz,
+    /// regardless of `input_sample_rate`) and for SBR AAC (extension rate
+    /// reported, core rate counted); dividing inside the parser, which knows
+    /// both halves, makes those equal `Rational`s. **No new concept** —
+    /// [`Rational`] is already this workspace's exact ratio, so D19 holds by
+    /// construction.
     ///
-    /// Because the fact is a *codec* fact and the layering (D14.1) forbids a
-    /// demuxer from naming a codec crate. Matroska writes no `DefaultDuration`
-    /// for an Opus track and no `BlockDuration` on its blocks — the element is
-    /// absent from the file, not misread — and the reference nonetheless
-    /// reports 20 ms per packet, because it reads Opus's own TOC byte. The only
-    /// seam a demuxer has onto codec code is
-    /// [`ParserProvider`](../../vaco_format_core/trait.ParserProvider.html),
-    /// which hands back a `dyn Parser`. So either the answer arrives through
-    /// this trait or it does not arrive at all.
-    ///
-    /// # Why seconds, and why a `Rational`
-    ///
-    /// Three constraints, and this is the only shape that meets all three.
-    ///
-    /// * **It must be exact.** The consumer converts into the stream's time
-    ///   base and the reference *truncates* that conversion (measured three
-    ///   ways — see `vaco_format_core::time::quantise_duration`), so an input
-    ///   that has already been rounded gives the wrong answer half a tick of
-    ///   the time. A 2.5 ms Opus packet on Matroska's 1 ms base is exactly the
-    ///   case: the reference prints `2`, and anything that reaches the
-    ///   truncation as microseconds prints `3`.
-    /// * **It must not need a second lookup.** "Samples" alone would make the
-    ///   caller supply a rate, and the rate a caller has is the one the
-    ///   *container* reports — which is wrong for both codecs here. Opus always
-    ///   runs at 48 kHz whatever `input_sample_rate` says, and an SBR AAC
-    ///   stream reports the *extension* rate while its frames are counted at
-    ///   the core rate. Dividing inside the parser, which knows both halves,
-    ///   removes the trap: 1024 core samples at 22050 Hz and 2048 output
-    ///   samples at 44100 Hz are the same `Rational`, so SBR stops being a
-    ///   special case anywhere else.
-    /// * **It must not add a concept.** [`Rational`] is already this
-    ///   workspace's exact ratio — it is what a `TimeBase` and a frame rate
-    ///   are — so nothing new is defined and D19 is satisfied by construction.
-    ///
-    /// A rejected alternative, for the record: a `fn(&[u8]) -> Option<u64>`
-    /// field on [`ParserDesc`] would be inspectable without constructing a
-    /// parser, but AAC's answer lives in an `AudioSpecificConfig` the parser
-    /// was handed by [`Parser::set_extradata`], so a free function cannot
-    /// produce it. A second rejected alternative: returning ticks of a
-    /// caller-supplied time base would put the truncation rule — a
-    /// reference-matching decision — inside every parser instead of in one
+    /// Rejected: a `fn(&[u8]) -> Option<u64>` field on [`ParserDesc`], since
+    /// AAC's answer lives in an `AudioSpecificConfig` only visible after
+    /// [`Parser::set_extradata`]; and ticks of a caller-supplied time base,
+    /// which would push the truncation rule into every parser instead of one
     /// place.
     ///
-    /// # Contract
-    ///
-    /// * `&self`, deliberately: this is a question, not a step. It must be
-    ///   callable once per packet on the read path without advancing any
-    ///   state, without allocating, and without the caller having fed the same
-    ///   bytes to [`Parser::parse`] first.
-    /// * A malformed packet is `None`, never an error and never a panic. The
-    ///   caller is a demuxer filling in a field the container left blank; a
-    ///   packet it cannot measure is one it reports without a duration, which
-    ///   is what the container said in the first place.
-    /// * The value is a duration, so it is non-negative and finite. A
-    ///   zero-valued or non-finite `Rational` is treated as `None` downstream.
+    /// Contract: `&self`, callable once per packet on the read path without
+    /// advancing state, allocating, or requiring a prior [`Parser::parse`]
+    /// call. A malformed packet is `None`, never an error or panic. The value
+    /// is non-negative and finite; zero or non-finite is `None` downstream.
     fn packet_duration(&self, packet: &[u8]) -> Option<Rational> {
         let _ = packet;
         None
@@ -2098,13 +2059,13 @@ pub trait BitstreamFilter: Send {
     /// [`vaco_core::Error::NeedMoreInput`] or [`vaco_core::Error::Eof`].
     fn receive_packet(&mut self) -> Result<Packet>;
 
-    /// Set one filter-private option by name (gap 12, `planning/INTERFACE-GAPS.md`)
-    /// — the seam for `-bsf:v filtername=opt=value`'s right-hand side, which
+    /// Set one filter-private option by name — the seam for
+    /// `-bsf:v filtername=opt=value`'s right-hand side, which
     /// [`vaco_format_core::mux::BsfProvider::open`]'s `(name, params)`
     /// signature has nowhere to carry.
     ///
     /// Mirrors `vaco_format_core::Muxer::set_option`'s name/value-string
-    /// contract (gap 5) for the identical reason: a construction-time-only
+    /// contract for the identical reason: a construction-time-only
     /// entry point cannot grow a parameter without touching every one of its
     /// ~90/~20 callers, so the door is a method opened after construction
     /// instead. A caller applies every option before the first

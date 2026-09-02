@@ -4,18 +4,6 @@
 //!
 //! # Scope of this crate, and what stays in the caller
 //!
-//! This crate started scalar and correctness-first, deliberately shaped
-//! around **edges and blocks rather than per-pixel callbacks** precisely so
-//! a later masked-lane-select SIMD kernel (the technique #127 names) could
-//! slot in behind [`filter_luma_line`]/[`filter_chroma_line`]'s own call
-//! sites without changing the interface a caller programs against. That
-//! shape paid off: `#619` added the primitive it was waiting on
-//! (`vaco-simd::ops::select_i16`) and [`batch`] is that kernel, built
-//! against the scalar functions as its own proptest oracle rather than
-//! replacing them. `filter_luma_line`/`filter_chroma_line` stay exactly as
-//! they were -- both the correctness reference and the tail handler for a
-//! batch that is not a multiple of the native vector width.
-//!
 //! This crate computes **one edge's filtered samples given the samples and
 //! QPs on both sides**. It does not:
 //!
@@ -35,14 +23,13 @@
 //!
 //! # Vectorised batch entry point
 //!
-//! `#619` closed the blocker this doc used to record: `vaco-simd` now has
-//! masked-lane select at `i16` width (`ops::select_i16`), and [`batch`]
-//! builds the vectorised kernel behind it -- [`batch::filter_luma_edge`]/
-//! [`batch::filter_chroma_edge`] batch every line along one edge (16 for
-//! luma, 8 for 4:2:0 chroma) rather than one line at a time, which is what
-//! it takes to fill a vector register. See that module's own doc for the
-//! technique (compute both `bS==4`/`bS<4` candidates, select per lane) and
-//! for why this crate now depends on `vaco-simd`. [`filter_luma_line`]/
+//! [`batch`] builds a vectorised kernel around [`filter_luma_line`]/
+//! [`filter_chroma_line`] using `vaco-simd`'s masked-lane select at `i16`
+//! width -- [`batch::filter_luma_edge`]/[`batch::filter_chroma_edge`] batch
+//! every line along one edge (16 for luma, 8 for 4:2:0 chroma) rather than
+//! one line at a time, which is what it takes to fill a vector register.
+//! See that module's own doc for the technique (compute both `bS==4`/
+//! `bS<4` candidates, select per lane). [`filter_luma_line`]/
 //! [`filter_chroma_line`] remain the scalar reference every batched result
 //! is checked against, and the tail of any batch not a multiple of the
 //! native vector width still falls back to them directly.

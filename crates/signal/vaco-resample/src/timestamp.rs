@@ -1,66 +1,43 @@
 //! Timestamp compensation: soft, hard, the `async` convenience, `first_pts`
-//! and the manual API.
-//!
-//! # What the reference's four knobs measure
-//!
-//! Probed against `FFmpeg` 9.0.1 through the `aresample` filter, feeding a
+//! and the manual API. Probed against `FFmpeg` 9.0.1 through the `aresample`
+//! filter, feeding a
 //! filter-graph-injected pts anomaly (`asetpts`) into a raw source and
 //! reading the actual sample count back out (never the reference's source —
-//! only its binary output, per D6/D7). The full commands and byte counts are
-//! recorded in `docs/signal/vaco-resample.md` §"Timestamp compensation,
-//! measured". The short version:
+//! only its binary output, per D6/D7). Full commands and byte counts are in
+//! `docs/signal/vaco-resample.md` §"Timestamp compensation, measured":
 //!
-//! * **`min_comp`** (seconds) is the master switch. Its default is `FLT_MAX`,
-//!   and with it untouched **no compensation of either kind ever fires**,
-//!   confirmed by feeding a full one-second pts jump through plain
-//!   `aresample=48000` and reading back exactly the original sample count.
-//!   Below `min_comp`, drift is ignored outright.
-//! * **`min_hard_comp`** (seconds) is the hard threshold, and the boundary is
-//!   exact and exclusive: a 4800-sample (0.100000 s) jump at the default
-//!   `min_hard_comp=0.1` produces zero extra samples; 4801 samples
-//!   (0.100021 s) produces *exactly* 4801 extra samples, inserted as a single
-//!   step. A full one-second jump inserts exactly 48000 samples. Hard
-//!   compensation is a one-shot, exact fill or trim, not a gradual process.
-//! * **Soft compensation reacts to continuous drift, not a one-off jump.** A
-//!   pts track scaled by `1.0004` (a simulated ~0.04% clock skew) against
-//!   `min_comp=0:max_soft_comp=1000:comp_duration=1:min_hard_comp=999`
-//!   produced 59 extra samples over 5 seconds — real, gradually-inserted
-//!   correction — while the same one-shot step-jump scenario that drives hard
-//!   compensation produced no measurable change under a soft-only
-//!   configuration (`min_hard_comp=999`, i.e. hard disabled): soft
-//!   compensation is the reference's answer to a source clock that runs at
-//!   very slightly the wrong rate, not to a discontinuity.
-//! * **`async`** resolves to the other three. `async=1` reproduces hard-only
-//!   behaviour with the default `min_hard_comp` (measured identical sample
-//!   counts to the explicit-hard cases above). `async=1000` reproduces the
-//!   continuous-drift soft-correction behaviour. The resolution rule that
-//!   fits every measurement: `async != 0` sets `min_comp = 0` (arm the master
-//!   switch) and sets `max_soft_comp = async` only when `|async| > 1`
-//!   (`async == 1` stays hard-only, matching the legacy `-async 1`
-//!   "fill/trim only" description); `min_hard_comp` is left at whatever it
-//!   was, since `async` never touched it in any measurement.
-//! * **`first_pts`** sets the assumed pts of the first input sample. Left
-//!   unset, a stream whose first real pts is nonzero (e.g. a container start
-//!   offset) is *not* treated as drift — probed by holding a constant
-//!   `+48000`-sample pts offset from the very first frame and confirming zero
-//!   inserted samples under `async=1`. Explicitly setting `first_pts` to a
-//!   value that *disagrees* with the real first pts (`first_pts=0` against a
-//!   real start of 48000) reliably reproduces the drift and triggers the
-//!   expected hard correction (48000 samples inserted) — confirming
-//!   `first_pts` is the assumed baseline the first observed pts is compared
-//!   against, not merely a label applied to the output.
+//! * **`min_comp`** (seconds), the master switch: default `FLT_MAX`, so with
+//!   it untouched no compensation ever fires (a full one-second pts jump
+//!   through plain `aresample=48000` reads back the exact original count).
+//! * **`min_hard_comp`** (seconds), the hard threshold, exact and exclusive:
+//!   a 4800-sample (0.1 s) jump at the default `0.1` produces zero extra
+//!   samples; 4801 samples produces *exactly* 4801, inserted as one step — a
+//!   one-shot exact fill or trim, not a gradual process.
+//! * **Soft compensation** reacts to continuous drift, not a jump: a pts
+//!   track scaled by `1.0004` (~0.04% clock skew) produced 59 gradually
+//!   inserted extra samples over 5 seconds, while the same one-shot jump
+//!   produced no change under a soft-only configuration.
+//! * **`async`** resolves to the other three: `async=1` is hard-only at the
+//!   default `min_hard_comp`; `async=1000` is continuous soft correction. The
+//!   rule fitting every measurement: `async != 0` sets `min_comp = 0`, and
+//!   `max_soft_comp = async` only when `|async| > 1` (`async == 1` stays
+//!   hard-only); `min_hard_comp` is untouched by `async` in any measurement.
+//! * **`first_pts`** sets the assumed pts of the first input sample. Unset, a
+//!   nonzero first real pts (e.g. a container start offset) is *not* treated
+//!   as drift; explicitly setting it to a value that disagrees with the real
+//!   first pts reliably reproduces the drift and triggers hard correction —
+//!   it is the baseline the first observed pts is compared against, not a
+//!   label applied to the output.
 //!
 //! # What is ours, not measured
 //!
-//! The reference does not expose *how* a soft correction reshapes the
-//! sample stream — only its aggregate effect on the sample count, which is
-//! all `swr_set_compensation`'s public contract promises. The actual
-//! stretch here ([`linear_resample`]) is a plain linear-interpolation resize
-//! of the affected span: original DSP, not a transcription of anything. Per
-//! the owner's byte-exactness ruling, that is a legitimate divergence as
-//! long as it stays small and unstructured, which it does by construction —
-//! it only ever touches spans bounded by [`MAX_COMPENSATION_SAMPLES`], a tiny
-//! fraction of any real stream.
+//! The reference exposes only a soft correction's aggregate effect on sample
+//! count, not how it reshapes the stream. The actual stretch here
+//! ([`linear_resample`]) is a plain linear-interpolation resize of the
+//! affected span — original DSP, a legitimate divergence under the owner's
+//! byte-exactness ruling as long as it stays small and unstructured, which it
+//! does by construction: it only touches spans bounded by
+//! [`MAX_COMPENSATION_SAMPLES`], a tiny fraction of any real stream.
 
 #![allow(
     clippy::integer_division,

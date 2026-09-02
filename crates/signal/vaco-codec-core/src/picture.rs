@@ -1,61 +1,43 @@
 //! Frame threading without `unsafe`: guard-padded row bands published through
 //! `OnceLock`.
 //!
-//! # The problem
-//!
 //! Frame threading needs "frame N+1 may proceed once frame N has produced row
-//! R". The conventional solution is one contiguous picture buffer, a raw
-//! pointer and an atomic row counter, with readers racing ahead of the writer
-//! into the same allocation. We cannot write that (D2), and ordinary borrow
-//! rules cannot express "this allocation is `&mut` above row R and `&` below
-//! it, and R moves over time".
+//! R", but the conventional answer — one contiguous buffer, a raw pointer and
+//! an atomic row counter — needs `unsafe` (D2), and ordinary borrow rules
+//! cannot express "`&mut` above row R and `&` below it, with R moving over
+//! time".
 //!
-//! # The solution: ownership transfer at band granularity
-//!
-//! A plane is allocated as a sequence of **bands**, each a block of `band_h`
-//! rows preceded by `guard` rows of context copied from the band above. The
-//! writer owns a band exclusively while filling it, then *moves* it into an
-//! [`OnceLock`], which is exactly where it stops being mutable and starts being
-//! shared. `OnceLock::set` is a release store and `OnceLock::get` is an acquire
-//! load, so no lock is needed on the fast path and no type in this module can
-//! observe a partially written band.
+//! A plane is instead a sequence of **bands**, each a block of `band_h` rows
+//! preceded by `guard` rows of context copied from the band above. The writer
+//! owns a band exclusively while filling it, then *moves* it into a
+//! [`OnceLock`] — exactly where it stops being mutable and starts being
+//! shared. `OnceLock::set` is a release store and `OnceLock::get` an acquire
+//! load, so no lock is needed on the fast path and no partially written band
+//! is ever observable:
 //!
 //! ```text
-//!   writer                                  reader
-//!   ------                                  ------
-//!   band_mut(k)   exclusive &mut [u8]
-//!   ...fill...
-//!   publish_through(k):
-//!       copy guard rows from band k-1
-//!       bands[k].set(band)   ── release ──►  bands[k].get()  ── acquire
-//!       ready.store(rows)                    ready.load() / wait_rows()
+//! band_mut(k) -> exclusive &mut [u8], ...fill...
+//! publish_through(k): copy guard rows from band k-1, bands[k].set(band)
+//!   (release) ──► reader: bands[k].get() (acquire), ready.load()/wait_rows()
 //! ```
 //!
 //! [`PictureWriter`] is neither `Sync` nor `Clone`: exactly one frame task
-//! holds it. [`PictureRef`] is cheap to clone and `Send + Sync`: it is what a
-//! task holds for each of its reference pictures. The compiler, not a
-//! convention, is what proves the absence of a data race.
+//! holds it. [`PictureRef`] is cheap to clone and `Send + Sync`, held by tasks
+//! for their reference pictures. The compiler proves the absence of a data
+//! race, not a convention.
 //!
-//! # Deviations from plan 15 §1.8.2, and why
-//!
-//! * The primitives live here rather than in `vaco-frame`. `vaco-frame` is a
-//!   layer-1 crate owned by someone else and is still frozen; a decoder-only
-//!   concept is also a better fit for the codec framework than for the frame
-//!   model. Moving it later is a re-export.
-//! * A band carries a *top* guard only, not a top and a bottom one. A bottom
-//!   guard would have to be filled from the band below, which is written after
-//!   the band above has already been published and become immutable — so it
-//!   could never be filled. Reads that extend below a band's last row are
-//!   served by the *next* band's top guard, which contains exactly those rows,
-//!   and fall back to the copy path when they extend further.
-//! * `ready` therefore advances to the last row of the published band rather
-//!   than lagging by `guard`. The caller already adds its filter reach when it
-//!   decides which row to wait for, and there is no unwritable padding to
-//!   protect.
-//! * [`PlaneView::block`] returns a `Result`. The copy path needs scratch
-//!   space, and a scratch buffer too small for the request has to be reported
-//!   rather than silently truncated. Codecs size the scratch once, from their
-//!   largest block, so it never fires in practice.
+//! Notable choices: these primitives live here rather than in `vaco-frame` (a
+//! frozen layer-1 crate owned elsewhere, and a decoder-only concept fits the
+//! codec framework better anyway — moving it later is a re-export). A band
+//! carries a *top* guard only: a bottom guard would need rows from the band
+//! below, which is written after the band above is already immutable, so it
+//! could never be filled — reads past a band's last row are served by the
+//! *next* band's top guard instead. `ready` therefore advances to the last row
+//! of the published band rather than lagging by `guard`; the caller adds its
+//! own filter reach when deciding which row to wait for. [`PlaneView::block`]
+//! returns a `Result` because the copy path needs scratch space and an
+//! undersized buffer must be reported, not silently truncated — codecs size
+//! scratch from their largest block, so this never fires in practice.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock, PoisonError};
