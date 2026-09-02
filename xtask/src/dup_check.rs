@@ -461,6 +461,36 @@ const DISTINCT: &[(&str, &str)] = &[
          `Dialogue:` line's `Text` field. vaco-demux-mxf: one KLV \
          structural-metadata item. No shared concept.",
     ),
+    (
+        "CompressionAlgo",
+        "vaco-codec-exr: OpenEXR's own scheme set (None/Rle/Zip1/Zip16). \
+         vaco-codec-tiff: TIFF's own scheme set (Raw/Lzw/Deflate/Packbits). \
+         Each is the named-constant list one image container's spec defines; \
+         the two containers do not agree on what compression means, so there \
+         is no shared enum to factor out, only a shared English word for \
+         'how this codec's -compression option is spelled'.",
+    ),
+    (
+        "EncodeOptions",
+        "vaco-codec-exr, vaco-codec-jpeg, vaco-codec-png, vaco-codec-tiff: \
+         each image codec's own encoder knob struct (EXR: compression only. \
+         PNG: pred + compression_level. TIFF: compression_algo. JPEG: its \
+         own quality/subsampling set). Every still-image codec in this \
+         workspace needs exactly one struct like this, and by design none of \
+         them share a field — the name is the generic role \
+         (\"this crate's -opts for encode\"), not a type being duplicated.",
+    ),
+    (
+        "EndBound",
+        "vaco-cli: what `-t`/`-to` resolved an input group's trim to \
+         (AfterSeek(duration) vs Absolute(duration)) — feeds seek_trim. \
+         vaco-probe: what `-read_intervals` resolved one interval's end to \
+         (a Time(Bound) or a packet count) — feeds intervals::ReadInterval. \
+         Different CLI features (trimming encode input vs bounding a probe \
+         read) in different binaries, coincidentally sharing the natural \
+         name for \"where a range stops\"; neither crate depends on the \
+         other's type.",
+    ),
 ];
 
 /// Known duplicates that are *not* yet resolved, with the plan.
