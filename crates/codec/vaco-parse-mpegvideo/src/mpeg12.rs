@@ -361,10 +361,27 @@ impl Sequence {
         if let Some(v) = params.video.as_mut() {
             v.width = self.full_width();
             v.height = self.full_height();
-            v.coded_width = v.width;
-            v.coded_height = v.height;
+            // Measured directly against real ffmpeg 9.0.1 (`-c:v mpeg2video`/
+            // `-c:v mpeg1video`, four containers -- raw `.m2v`, Matroska,
+            // MPEG-PS, MPEG-TS -- and both Simple and Main profile):
+            // `coded_width`/`coded_height` are unconditionally `0`,
+            // regardless of the real coded size, which is still what
+            // `sample_aspect_ratio` below is computed from (this is purely
+            // a reporting gap in the reference's own probe path for this
+            // codec, not evidence the real coded size is unused elsewhere --
+            // measured `sample_aspect_ratio` values only make sense computed
+            // from the *real* dimensions). `has_b_frames` is the same shape:
+            // unconditionally `1` on every sample checked, including a
+            // Simple-profile stream (which forbids B-pictures entirely) and
+            // a Main-profile stream with none actually coded (`ffprobe
+            // -show_frames` confirms zero `B` `pict_type`s) -- a fixed
+            // decoder-capability report, not something derived from this
+            // stream's actual content, so it is set the same way here.
+            v.coded_width = 0;
+            v.coded_height = 0;
+            v.has_b_frames = 1;
             v.sample_aspect_ratio =
-                sample_aspect_ratio(self.aspect_ratio_information, v.coded_width, v.coded_height);
+                sample_aspect_ratio(self.aspect_ratio_information, v.width, v.height);
             v.frame_rate = self.frame_rate();
             v.format = pixel_format(self.ext.map_or(1, |e| e.chroma_format));
             // MPEG-1/2 video has no bitstream field for chroma sample
@@ -683,6 +700,13 @@ mod tests {
         // for the real-file measurement this mirrors (22 bytes there; this
         // synthetic fixture's own extension is shorter, 21).
         assert_eq!(params.extradata.as_deref(), Some(&REAL_SEQ_PREFIX[..21]));
+        // Measured (`ffmpeg -c:v mpeg2video`, real ffprobe, four
+        // containers, both Simple and Main profile): `coded_width`/
+        // `coded_height` are unconditionally `0` and `has_b_frames` is
+        // unconditionally `1`, none of them derived from this stream's
+        // actual content -- see `codec_parameters`'s own comment.
+        assert_eq!((v.coded_width, v.coded_height), (0, 0));
+        assert_eq!(v.has_b_frames, 1);
     }
 
     #[test]
