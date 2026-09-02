@@ -57,7 +57,7 @@ const CROSS_REFS: &[&str] = &[
 /// The violation count as of the commit that added this ratchet, measured by
 /// this same scan. Fix a violation and lower this number in the same commit;
 /// never raise it to make a new one disappear — see the module doc above.
-const BASELINE: usize = 1212;
+const BASELINE: usize = 1195;
 
 pub fn run(_check: bool) -> Task {
     let root = repo_root();
@@ -158,8 +158,23 @@ pub fn run(_check: bool) -> Task {
 ///
 /// Four or more digits are not issue numbers in this repository — they are
 /// byte counts, sample rates and specification clause numbers.
+///
+/// Also not an issue number: the reference's own stream-index notation --
+/// `Stream #0:0`, `[vost#0:0]`, `[out#0/matroska ...]`, `[in#0]` -- pinned
+/// verbatim in this crate's own regression comments as *measured output*,
+/// not a pointer to a ticket. Distinguished from a real citation by shape,
+/// not by an allowlist of strings: a `#` glued directly onto a preceding
+/// word character (`vost#0`, `in#0`, `out#0` -- no space, no punctuation
+/// between them) is always this crate's own log-tag prefix, never how a
+/// citation is written anywhere in this tree (every real one seen here is
+/// `#123` preceded by whitespace, `/`, `(`, or the start of the comment).
+/// Likewise a digit run immediately followed by `:<digit>` (a second
+/// stream index, `#0:0`) or by `/<letter>` (a container name, `#0/mp4`) is
+/// the reference's own colon/slash-separated notation, not a citation --
+/// no real issue reference in this tree is ever followed by either shape.
 fn issue_ref(line: &str) -> Option<&str> {
     let mut rest = line;
+    let mut consumed = 0usize;
     while let Some(at) = rest.find('#') {
         let after = rest.get(at + 1..)?;
         let digits: &str = after
@@ -167,8 +182,21 @@ fn issue_ref(line: &str) -> Option<&str> {
             .next()
             .unwrap_or_default();
         if (1..=3).contains(&digits.len()) {
-            return Some(digits);
+            let hash_pos = consumed + at;
+            let glued_to_a_word = line
+                .get(..hash_pos)
+                .and_then(|s| s.chars().next_back())
+                .is_some_and(|c| c.is_ascii_alphanumeric());
+            let tail = after.get(digits.len()..).unwrap_or_default();
+            let stream_pair = tail.starts_with(':')
+                && tail[1..].starts_with(|c: char| c.is_ascii_digit());
+            let stream_name = tail.starts_with('/')
+                && tail[1..].starts_with(|c: char| c.is_ascii_alphabetic());
+            if !glued_to_a_word && !stream_pair && !stream_name {
+                return Some(digits);
+            }
         }
+        consumed += at + 1;
         rest = after;
     }
     None
@@ -203,5 +231,27 @@ mod tests {
     #[test]
     fn a_four_digit_hash_is_not_an_issue() {
         assert_eq!(issue_ref("// pattern #1234"), None);
+    }
+
+    /// Regression for the false positives found auditing `vaco-cli`'s own
+    /// comments: the reference's stream-index notation reads exactly like a
+    /// short issue number by digit count alone, and must not be flagged.
+    #[test]
+    fn the_references_own_stream_notation_is_not_an_issue_reference() {
+        assert_eq!(issue_ref("/// `Stream #0:0 -> #0:0 (copy)`, one per output"), None);
+        assert_eq!(issue_ref("/// [vost#0:0] Streamcopy requested for output"), None);
+        assert_eq!(issue_ref("/// [out#0/matroska @ 0x…] Error opening output"), None);
+        assert_eq!(issue_ref("/// [in#0] -to value smaller than -ss; aborting."), None);
+        assert_eq!(issue_ref("/// [out#0/null] video:7KiB audio:16KiB"), None);
+    }
+
+    /// A real citation preceded by `/`, `(`, or nothing at all (start of
+    /// comment) must still be caught -- only a `#` glued directly onto a
+    /// preceding word character is the reference's own notation.
+    #[test]
+    fn a_real_citation_next_to_punctuation_is_still_found() {
+        assert_eq!(issue_ref("// CL-21/#222: `-fps_mode` carries bit::VIDEO"), Some("222"));
+        assert_eq!(issue_ref("// (WHIP, `vaco-mux-whip`, #619) still need"), Some("619"));
+        assert_eq!(issue_ref("//#7 at the very start of the comment"), Some("7"));
     }
 }
