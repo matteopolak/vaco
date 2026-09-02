@@ -256,3 +256,99 @@ fn byte_seek_resyncs_to_a_chunk_boundary() {
     let pkt = demux.read_packet().expect("packet after byte seek");
     assert!(pkt.stream_index == 0 || pkt.stream_index == 1);
 }
+
+/// `strf` for a compressed/VBR audio format: same 16-byte `WAVEFORMATEX`
+/// shape [`strf_audio`] uses, but a sample rate that differs from the
+/// stream's own `dwScale`/`dwRate` clock — exactly the shape a real
+/// `ffmpeg`-muxed AAC-in-AVI stream has (measured: `dwScale=256,
+/// dwRate=11025`, i.e. `strh`'s own clock ticks every `256/11025` s, while
+/// `nSamplesPerSec=44100` is the format's real rate). The format tag itself
+/// (`1`, `WAVE_FORMAT_PCM`) does not matter to the bug this covers — see
+/// `hdrl::parse_strf`'s audio arm, which derives `time_base_hint` from
+/// `nSamplesPerSec` alone — so it is left at the same value [`strf_audio`]
+/// uses rather than reaching for a real AAC tag this test does not need.
+fn strf_compressed_audio(samples_per_sec: u32) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.extend_from_slice(&1u16.to_le_bytes()); // WAVE_FORMAT_PCM (tag irrelevant here)
+    out.extend_from_slice(&1u16.to_le_bytes()); // mono
+    out.extend_from_slice(&samples_per_sec.to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes()); // avg bytes/sec, unused by this test
+    out.extend_from_slice(&0u16.to_le_bytes()); // block align: 0 for a VBR format
+    out.extend_from_slice(&0u16.to_le_bytes()); // bits per sample: unstated for VBR
+    out
+}
+
+/// One video stream (`dwSampleSize == 0`, one chunk is one frame, `strh`'s
+/// clock and `time_base` agree) and one *compressed* audio stream
+/// (`dwSampleSize == 0` too, but `strh`'s clock — `dwScale=256,
+/// dwRate=11025` — is coarser than `time_base` — `1/44100`, from `strf`'s
+/// own `nSamplesPerSec`). Three video chunks, two audio chunks, no `idx1`
+/// (this test reads sequentially only).
+fn build_avi_with_compressed_audio() -> Vec<u8> {
+    let strl_v = list(b"strl", &{
+        let mut c = chunk(b"strh", &strh(b"vids", 1, 10, 3, 0));
+        c.extend_from_slice(&chunk(b"strf", &strf_video()));
+        c
+    });
+    let strl_a = list(b"strl", &{
+        // `dwScale=256, dwRate=11025` -- ffmpeg's own real `av-src.avi`
+        // (`-c:a aac`) strh for this exact case, measured directly by
+        // walking its RIFF chunks rather than assumed.
+        let mut c = chunk(b"strh", &strh(b"auds", 256, 11025, 2, 0));
+        c.extend_from_slice(&chunk(b"strf", &strf_compressed_audio(44100)));
+        c
+    });
+    let mut hdrl_children = chunk(b"avih", &avih(2, 3));
+    hdrl_children.extend_from_slice(&strl_v);
+    hdrl_children.extend_from_slice(&strl_a);
+    let hdrl = list(b"hdrl", &hdrl_children);
+
+    let v0 = chunk(b"00dc", &[0xAA; 10]);
+    let a0 = chunk(b"01wb", &[0u8; 32]);
+    let v1 = chunk(b"00dc", &[0xBB; 8]);
+    let a1 = chunk(b"01wb", &[0u8; 28]);
+    let v2 = chunk(b"00dc", &[0xCC; 6]);
+    let mut movi_children = Vec::new();
+    for data in [&v0, &a0, &v1, &a1, &v2] {
+        movi_children.extend_from_slice(data);
+    }
+    let movi = list(b"movi", &movi_children);
+
+    let mut body = b"AVI ".to_vec();
+    body.extend_from_slice(&hdrl);
+    body.extend_from_slice(&movi);
+
+    let mut file = b"RIFF".to_vec();
+    file.extend_from_slice(&(body.len() as u32).to_le_bytes());
+    file.extend_from_slice(&body);
+    file
+}
+
+/// The bug this covers, reproduced directly: before
+/// `hdrl::StreamBuild::native_ticks_per_chunk` existed, `sample_size == 0`
+/// always advanced `dts` by exactly one tick per chunk — right for video,
+/// where `strh`'s own clock and the declared `time_base` are the same
+/// value by construction, and silently wrong for this compressed-audio
+/// shape, where they are not: `dts` advanced by `1` per chunk (`0, 1`) in a
+/// `1/44100` `time_base` instead of by `1024` (`0, 1024`), a difference
+/// invisible until something downstream needed real inter-packet spacing —
+/// exactly what `transcode-remux-bitexact/av-avi/output=asf` hit,
+/// rescaling this stream's collapsed dts values into a coarser shared
+/// clock and finding two consecutive audio packets landing on the same
+/// tick ("non-monotonic dts").
+#[test]
+fn compressed_audio_dts_advances_by_the_real_chunk_duration_not_one_tick() {
+    let mut demux = open(build_avi_with_compressed_audio());
+    let mut audio_dts = Vec::new();
+    loop {
+        match demux.read_packet() {
+            Ok(p) if p.stream_index == 1 => audio_dts.push(p.dts.ticks()),
+            Ok(_) => {}
+            Err(vaco_core::Error::Eof) => break,
+            Err(e) => panic!("unexpected error: {e:?}"),
+        }
+    }
+    // 256/11025 s of audio, expressed in the stream's own declared
+    // `1/44100` time_base, is 1024 ticks -- not 1.
+    assert_eq!(audio_dts, vec![Some(0), Some(1024)]);
+}

@@ -16,7 +16,7 @@
 
 use vaco_bitstream::ByteReader;
 use vaco_codec_core::CodecParameters;
-use vaco_core::{Error, MediaType, Rational, Result};
+use vaco_core::{Error, MediaType, Rational, Result, Rounding, Timestamp};
 use vaco_format_riff::bitmapinfo::BitmapInfoHeader;
 use vaco_format_riff::chunk::{ChunkIter, ids as riff_ids};
 use vaco_format_riff::wave::WaveFormatEx;
@@ -148,6 +148,9 @@ pub(crate) struct StreamBuild {
     /// only when the source can seek — resolving it means seeking to every
     /// `ix##` chunk it names.
     pub super_index: Option<Vec<u8>>,
+    /// One `sample_size == 0` chunk's duration, in `stream.time_base` ticks —
+    /// see [`crate::demux`]'s clock for why this is not always `1`.
+    pub native_ticks_per_chunk: i64,
 }
 
 /// The `avih` fields [`crate::demux::AviDemuxer::open_with_limits`] needs,
@@ -239,6 +242,24 @@ pub(crate) fn parse_strl(payload: &[u8], index: u32, budget: &mut Budget) -> Res
         return Err(Error::InvalidData("avi: stream has an unusable time base"));
     }
 
+    // `strh`'s own `dwScale`/`dwRate` is AVI's *chunk* clock: `strh.time_base()`
+    // is how long one `sample_size == 0` chunk lasts, in seconds, whatever
+    // `time_base` above ends up being. The two agree for video — nothing
+    // above overrides `strh.time_base()` there, so this rescale is `1` by
+    // construction — but audio's `time_base` was just overridden to the
+    // format's own true sample rate, finer than `strh.time_base()` in every
+    // real encode measured for this crate (`dwScale=256, dwRate=11025` —
+    // `256/11025` seconds, i.e. exactly 1024 ticks of a `1/44100` `time_base`
+    // — for one AAC frame in `av-src.avi`). Rounded rather than propagated
+    // as a `Rational`, since [`crate::demux::AviDemuxer`]'s clock counts
+    // whole ticks and every real encoder's own `dwScale`/`dwRate` divides
+    // its format's sample rate evenly.
+    let native_ticks_per_chunk = Timestamp::new(1)
+        .rescale(strh.time_base(), time_base, Rounding::NearestAwayFromZero)
+        .ticks()
+        .unwrap_or(1)
+        .max(1);
+
     // Measured: `ffprobe 8.1 -show_streams` prints `id=N/A` for every stream
     // in an AVI file. Unlike an MP4 track id or an MPEG-TS PID, there is no
     // container-level identifier independent of stream order here, so
@@ -262,6 +283,7 @@ pub(crate) fn parse_strl(payload: &[u8], index: u32, budget: &mut Budget) -> Res
         sample_size: strh.sample_size,
         start: strh.start,
         super_index,
+        native_ticks_per_chunk,
     })
 }
 

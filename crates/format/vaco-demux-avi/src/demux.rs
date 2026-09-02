@@ -99,6 +99,10 @@ struct StreamState {
     start: i64,
     chunks: u64,
     bytes: u64,
+    /// One `sample_size == 0` chunk's duration, in this stream's own
+    /// `time_base` ticks — see [`crate::hdrl::StreamBuild::native_ticks_per_chunk`]'s
+    /// doc for why this is not always `1`.
+    native_ticks_per_chunk: i64,
 }
 
 /// The AVI demuxer.
@@ -209,6 +213,7 @@ impl AviDemuxer {
                             start: i64::from(build.start),
                             chunks: 0,
                             bytes: 0,
+                            native_ticks_per_chunk: build.native_ticks_per_chunk,
                         });
                         streams.push(build.stream);
                     }
@@ -396,9 +401,19 @@ impl AviDemuxer {
                 continue;
             };
             let (ticks, dur_ticks) = if st.sample_size == 0 {
-                let t = i64::try_from(st.chunks).unwrap_or(i64::MAX);
+                // One AVI "chunk" is one tick of `strh`'s own `dwScale`/
+                // `dwRate` clock, not necessarily one tick of `time_base`:
+                // video's `time_base` never diverges from that clock (one
+                // chunk is one frame, `native_ticks_per_chunk == 1`), but
+                // audio's `time_base` is overridden to the format's true
+                // sample rate, finer than the chunk clock in every
+                // compressed-audio AVI measured for this crate — see
+                // `hdrl::StreamBuild::native_ticks_per_chunk`'s own doc.
+                let t = i64::try_from(st.chunks)
+                    .unwrap_or(i64::MAX)
+                    .saturating_mul(st.native_ticks_per_chunk);
                 st.chunks = st.chunks.saturating_add(1);
-                (t, 1)
+                (t, st.native_ticks_per_chunk)
             } else {
                 let denom = u64::from(st.sample_size);
                 // `dwSampleSize` is a byte count, not a ratio a float would
@@ -562,6 +577,7 @@ fn build_resolved(
             time_base: s.time_base,
             sample_size: st.sample_size,
             start: u32::try_from(st.start.max(0)).unwrap_or(0),
+            native_ticks_per_chunk: st.native_ticks_per_chunk,
         })
         .collect();
     index::build_from_idx1(entries, base, movi_fourcc_pos, &views, opts)

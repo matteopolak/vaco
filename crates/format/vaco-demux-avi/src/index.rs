@@ -57,6 +57,12 @@ pub(crate) struct ClockView {
     pub time_base: vaco_core::Rational,
     pub sample_size: u32,
     pub start: u32,
+    /// One `sample_size == 0` chunk's duration, in `time_base` ticks — see
+    /// [`crate::hdrl::StreamBuild::native_ticks_per_chunk`]'s own doc. The
+    /// same clock `crate::demux`'s own sequential read uses, so index-based
+    /// seeking lands on the same timestamps a sequential read would report
+    /// for the same chunk.
+    pub native_ticks_per_chunk: i64,
 }
 
 /// `AVIIF_KEYFRAME`.
@@ -247,7 +253,9 @@ pub(crate) fn build_from_idx1(
 
         let no_time = entry.flags & AVIIF_NO_TIME != 0;
         let ticks = if build.sample_size == 0 {
-            i64::try_from(clock.chunks).unwrap_or(i64::MAX)
+            i64::try_from(clock.chunks)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(build.native_ticks_per_chunk)
         } else {
             // As in `crate::demux`: `dwSampleSize` divides a byte count into
             // an exact sample count, not a ratio a float would approximate.

@@ -297,29 +297,70 @@ impl Demuxer for WavDemuxer {
 /// `WAVE_FORMAT_IEEE_FLOAT` tag for float): the common case every reader
 /// handles. Wider integer PCM would need `WAVEFORMATEXTENSIBLE` to name its
 /// sub-format unambiguously, which this muxer does not yet emit — see
-/// `docs/format/vaco-format-audio-simple.md`.
+/// `docs/format/vaco-format-audio-simple.md`. One compressed codec is also
+/// written undecoded — see [`MuxStream::extradata`] and `add_stream`'s own
+/// doc for why AAC needed its own path rather than reusing PCM's checks.
 #[derive(Debug)]
 pub struct WavMuxer {
     out: IoWriter,
     stream: Option<MuxStream>,
     header_written: bool,
     data_bytes: u64,
+    /// Where `data`'s own four-byte size field landed, so `write_trailer`
+    /// can patch it regardless of how long the `fmt ` chunk (and an
+    /// optional `fact` chunk ahead of it) turned out to be — a fixed offset
+    /// only worked while every `fmt ` chunk this muxer wrote was the same
+    /// 16-byte, `fact`-free shape.
+    data_size_pos: u64,
+    /// `Some(position)` of a `fact` chunk's `dwSampleLength` field, for a
+    /// compressed stream only — PCM's own sample count is fully implied by
+    /// `data_bytes`/`block_align`, which is exactly why the reference does
+    /// not write a `fact` chunk for it either (OBSERVED, `ffmpeg 9.0.1`).
+    fact_size_pos: Option<u64>,
+    /// The furthest `pts + duration` (in samples — this muxer's own
+    /// declared `stream_time_base`) seen on the compressed stream, tracked
+    /// because a compressed codec's total sample count cannot be derived
+    /// from `data_bytes` the way PCM's can (a coded AAC frame's byte size
+    /// is not a fixed function of its sample count). Written to the `fact`
+    /// chunk `write_trailer` patches in.
+    sample_extent: i64,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct MuxStream {
     sample_rate: u32,
     channels: u16,
     bits_per_sample: u16,
     /// `wFormatTag`: 1 `WAVE_FORMAT_PCM`, 3 `WAVE_FORMAT_IEEE_FLOAT`,
-    /// 6 `WAVE_FORMAT_ALAW`, 7 `WAVE_FORMAT_MULAW`.
+    /// 6 `WAVE_FORMAT_ALAW`, 7 `WAVE_FORMAT_MULAW`, 0x00FF `WAVE_FORMAT_AAC`.
     ///
     /// Derived from the codec. It used to be `if is_float { 3 } else { 1 }`,
     /// and A-law decodes to `s16` — so A-law data went out tagged as 16-bit
     /// linear PCM, two bytes per sample over one-byte samples, and the
     /// reference could not read back what we wrote.
     format_tag: u16,
-    bytes_per_frame: u32,
+    /// `nBlockAlign`. PCM: real bytes per interleaved frame
+    /// (`channels * bytes_per_sample`), exact by construction. AAC: a
+    /// nominal `768 * channels` — see `add_stream`'s doc for where that
+    /// number came from, since it is not derivable from anything else a
+    /// stream-copy has on hand.
+    block_align: u32,
+    /// `nAvgBytesPerSec`. PCM: `sample_rate * block_align`, exact. AAC: the
+    /// container's own declared `bit_rate / 8` — the only real byte-rate
+    /// figure a compressed, undecoded stream has, and the one field here
+    /// that legitimately varies encode to encode rather than following a
+    /// fixed formula.
+    avg_bytes_per_sec: u32,
+    /// The out-of-band configuration record's raw bytes, copied verbatim
+    /// into `cbSize`/the extended `fmt ` chunk tail — empty for every PCM
+    /// tag, which is what distinguishes the two `write_header`/
+    /// `write_trailer` shapes below (a real `WAVEFORMATEX` never carries
+    /// one; only the compressed path does). Non-empty only for AAC today:
+    /// `add_stream` copies `CodecParameters::extradata` straight through,
+    /// unmodified, the same `AudioSpecificConfig` the MP4 `esds` box that
+    /// carried it already held — OBSERVED, `ffmpeg 9.0.1`'s own AAC-in-WAV
+    /// `-c copy` output carries the identical bytes.
+    extradata: Vec<u8>,
 }
 
 impl WavMuxer {
@@ -331,6 +372,9 @@ impl WavMuxer {
             stream: None,
             header_written: false,
             data_bytes: 0,
+            data_size_pos: 0,
+            fact_size_pos: None,
+            sample_extent: 0,
         })
     }
 }
@@ -344,6 +388,62 @@ impl Muxer for WavMuxer {
             .audio
             .as_ref()
             .ok_or(Error::InvalidData("wav: not an audio stream"))?;
+        let codec = params
+            .codec_id
+            .ok_or(Error::Unsupported("wav: the codec must be known"))?;
+        let channels = audio.layout.as_ref().map_or(1, |l| l.channels).max(1) as u16;
+        let sample_rate = audio.sample_rate.max(1);
+
+        // AAC copied through undecoded — RIFF/WAVE's compressed-audio
+        // convention, not this muxer's PCM path. Checked ahead of the
+        // planar-format and "PCM-shaped" refusals just below because
+        // neither applies to it: both guard PCM's own byte layout (a fixed
+        // function of sample count, channels and bit depth), and a
+        // compressed AAC frame does not have one — `format.is_planar()`
+        // describes what *decoding* this stream would produce, not
+        // anything about the bytes actually being copied, so refusing on
+        // it here was refusing a real `ffmpeg 9.0.1`-accepted `-c copy`
+        // for a property that was never true of the bytes on the wire.
+        if codec == vaco_codec_core::CodecId::Aac {
+            let extradata = params
+                .extradata
+                .clone()
+                .filter(|e| !e.is_empty())
+                .ok_or(Error::Unsupported(
+                    "wav: this AAC stream has no AudioSpecificConfig to copy \
+                     (needs one from the source container, or a decode)",
+                ))?;
+            // `nBlockAlign`: measured against two real `ffmpeg 9.0.1`
+            // AAC-in-MP4 -> WAV encodes at different channel counts and bit
+            // rates (mono/70 kb/s, stereo/192 kb/s) — both produced exactly
+            // `768 * channels`, unrelated to either the real (and,
+            // per-frame, variable) coded size or the bit rate. Not derived
+            // from anything a stream-copy has on hand, because nothing
+            // available states it: no frame has been decoded, so no real
+            // per-packet sample count is known before the fact, and RIFF's
+            // own convention for a compressed tag does not require
+            // `nBlockAlign` to be exact the way it must be for PCM.
+            let block_align = 768u32.saturating_mul(u32::from(channels));
+            #[allow(
+                clippy::integer_division,
+                reason = "bits to bytes is an exact unit change, and the floor this truncates \
+                          towards is the measured behaviour: a real 191223 bps AAC encode's own \
+                          WAV output states 23902, not 23903"
+            )]
+            let avg_bytes_per_sec =
+                u32::try_from(params.bit_rate.unwrap_or(0) / 8).unwrap_or(u32::MAX);
+            self.stream = Some(MuxStream {
+                sample_rate,
+                channels,
+                bits_per_sample: 16, // nominal; WAVE_FORMAT_AAC states no real bit depth.
+                format_tag: vaco_format_riff::wave::WAVE_FORMAT_AAC,
+                block_align,
+                avg_bytes_per_sec,
+                extradata,
+            });
+            return Ok(0);
+        }
+
         let format = audio
             .format
             .ok_or(Error::Unsupported("wav: sample format must be known"))?;
@@ -354,14 +454,12 @@ impl Muxer for WavMuxer {
         }
         // The coded width, not the decoded format's: `pcm_s24le` decodes to
         // `s32` and would be written as 32-bit.
-        let codec = params
-            .codec_id
-            .ok_or(Error::Unsupported("wav: the codec must be known"))?;
         let coded_bits = pcm::coded_bits(codec)
             .ok_or(Error::Unsupported("wav: only PCM-shaped codecs are supported"))?;
-        let channels = audio.layout.as_ref().map_or(1, |l| l.channels).max(1) as u16;
+        let block_align =
+            u32::from(channels).saturating_mul(u32::from(coded_bits.div_ceil(8)));
         self.stream = Some(MuxStream {
-            sample_rate: audio.sample_rate.max(1),
+            sample_rate,
             channels,
             bits_per_sample: u16::from(coded_bits),
             format_tag: match codec {
@@ -370,8 +468,9 @@ impl Muxer for WavMuxer {
                 _ if pcm::is_float(codec) => 3,
                 _ => 1,
             },
-            bytes_per_frame: u32::from(channels)
-                .saturating_mul(u32::from(coded_bits.div_ceil(8))),
+            block_align,
+            avg_bytes_per_sec: sample_rate.saturating_mul(block_align),
+            extradata: Vec::new(),
         });
         Ok(0)
     }
@@ -379,23 +478,56 @@ impl Muxer for WavMuxer {
     fn write_header(&mut self) -> Result<()> {
         let s = self
             .stream
+            .clone()
             .ok_or(Error::InvalidData("wav: no stream added"))?;
+        let compressed = !s.extradata.is_empty();
         self.out.write(&ids::RIFF.as_bytes())?;
         self.out.wl32(0)?; // patched in write_trailer
         self.out.write(&ids::WAVE.as_bytes())?;
 
         self.out.write(&ids::FMT.as_bytes())?;
-        self.out.wl32(16)?;
-        let tag: u16 = s.format_tag;
-        self.out.wl16(tag)?;
+        // 16 bytes: plain `WAVEFORMATEX`, no `cbSize` at all — the shape
+        // every PCM reader expects and the reference itself writes for PCM.
+        // 18 + extradata: `cbSize` present and non-zero, `WAVEFORMATEX`'s
+        // own documented way to carry a codec-specific tail.
+        // OBSERVED, `ffmpeg 9.0.1`: an odd `extradata` length (AAC's own
+        // `AudioSpecificConfig` commonly is — 5 bytes for LC/44.1 kHz/mono)
+        // gets one zero pad byte, and the declared `fmt ` chunk size counts
+        // it — 18 + 5 rounds up to 24, not RIFF's usual convention of
+        // padding *between* chunks without it counting toward either
+        // chunk's own declared size. Reproduced exactly rather than
+        // following the general RIFF rule, since this is what the
+        // reference's own bytes state.
+        let fmt_payload_len = if compressed { 18 + s.extradata.len() } else { 16 };
+        let fmt_len = fmt_payload_len + fmt_payload_len % 2;
+        self.out.wl32(u32::try_from(fmt_len).unwrap_or(u32::MAX))?;
+        self.out.wl16(s.format_tag)?;
         self.out.wl16(s.channels)?;
         self.out.wl32(s.sample_rate)?;
-        let byte_rate = s.sample_rate.saturating_mul(s.bytes_per_frame);
-        self.out.wl32(byte_rate)?;
-        self.out.wl16(s.bytes_per_frame as u16)?;
+        self.out.wl32(s.avg_bytes_per_sec)?;
+        self.out
+            .wl16(u16::try_from(s.block_align).unwrap_or(u16::MAX))?;
         self.out.wl16(s.bits_per_sample)?;
+        if compressed {
+            self.out
+                .wl16(u16::try_from(s.extradata.len()).unwrap_or(u16::MAX))?;
+            self.out.write(&s.extradata)?;
+            if s.extradata.len() % 2 == 1 {
+                self.out.write(&[0])?;
+            }
+
+            // `fact`: required for any non-PCM `wFormatTag` — OBSERVED,
+            // `ffmpeg 9.0.1` writes one for AAC-in-WAV and does not for
+            // PCM. `dwSampleLength` is patched in `write_trailer`, once
+            // every packet's extent has been seen.
+            self.out.write(&ids::FACT.as_bytes())?;
+            self.out.wl32(4)?;
+            self.fact_size_pos = Some(self.out.pos());
+            self.out.wl32(0)?; // patched in write_trailer
+        }
 
         self.out.write(&ids::DATA.as_bytes())?;
+        self.data_size_pos = self.out.pos();
         self.out.wl32(0)?; // patched in write_trailer
         self.header_written = true;
         Ok(())
@@ -409,6 +541,17 @@ impl Muxer for WavMuxer {
         self.data_bytes = self
             .data_bytes
             .saturating_add(packet.payload().len() as u64);
+        // Only meaningful for the compressed path's `fact` chunk — PCM's
+        // sample count is `data_bytes / block_align`, needing nothing
+        // tracked per packet.
+        if self.fact_size_pos.is_some()
+            && let Some(s) = &self.stream
+            && let Some(pts) = packet.pts.ticks()
+        {
+            let base = Rational::new(1, s.sample_rate.cast_signed());
+            let end = pts.saturating_add(packet.duration.to_ticks(base).unwrap_or(0));
+            self.sample_extent = self.sample_extent.max(end);
+        }
         Ok(())
     }
 
@@ -417,6 +560,7 @@ impl Muxer for WavMuxer {
             return None;
         }
         self.stream
+            .as_ref()
             .map(|s| Rational::new(1, s.sample_rate.cast_signed()))
     }
 
@@ -431,12 +575,30 @@ impl Muxer for WavMuxer {
             // divergence rather than a silent one.
             return self.out.flush();
         }
-        let riff_size = 4 + (8 + 16) + (8 + self.data_bytes);
+        // RIFF's ordinary padding rule, unlike `fmt `'s (see `write_header`):
+        // an odd-length `data` chunk gets one trailing zero byte that counts
+        // toward the file's overall size but *not* toward `data`'s own
+        // declared size — OBSERVED, `ffmpeg 9.0.1`'s `data` size field
+        // states the true (odd) byte count while the file itself is one
+        // byte longer than that count would otherwise imply.
+        if self.data_bytes % 2 == 1 {
+            self.out.write(&[0])?;
+        }
         let end = self.out.pos();
+        // The actual end position minus the 8-byte `RIFF`/size header is
+        // `riff_size` by RIFF's own definition, for any chunk layout this
+        // muxer ever writes — simpler, and more robust to a new chunk
+        // appearing later, than a formula that has to be kept in sync with
+        // every chunk this function writes.
         self.out.seek(4)?;
         self.out
-            .wl32(u32::try_from(riff_size).unwrap_or(u32::MAX))?;
-        self.out.seek(4 + 4 + 4 + 8 + 16 + 4)?;
+            .wl32(u32::try_from(end.saturating_sub(8)).unwrap_or(u32::MAX))?;
+        if let Some(pos) = self.fact_size_pos {
+            self.out.seek(pos)?;
+            self.out
+                .wl32(u32::try_from(self.sample_extent.max(0)).unwrap_or(u32::MAX))?;
+        }
+        self.out.seek(self.data_size_pos)?;
         self.out
             .wl32(u32::try_from(self.data_bytes).unwrap_or(u32::MAX))?;
         self.out.seek(end)?;

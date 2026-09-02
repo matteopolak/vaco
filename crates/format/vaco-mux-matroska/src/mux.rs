@@ -124,13 +124,16 @@ use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Disposition, Error, MediaType, Rational, Result};
 use vaco_demux_matroska::ebml::schema as el;
 use vaco_format_core::metadata::MuxMetadata;
+use vaco_format_core::mux::BitstreamAction;
 use vaco_format_core::options::{FFlags, FormatOptions};
 use vaco_format_core::{FormatFlags, Muxer, MuxerDesc};
 use vaco_format_ebml::{
     id_bytes, patch_known_size, vint_unknown, write_element, write_float, write_int, write_string,
     write_uint,
 };
+use vaco_format_nalu::{Framing, HeaderKind, NalHeader, build_h264_avcc, units};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
+use vaco_limits::Budget;
 use vaco_packet::{Packet, PacketSideData};
 
 use crate::block;
@@ -213,6 +216,29 @@ fn with_crc32(body: &[u8]) -> Vec<u8> {
     out
 }
 
+/// Rebuild an `avcC` Configuration Record from the SPS/PPS units already
+/// sitting in an Annex-B-shaped `extradata` buffer — see
+/// `flush_header_bytes`'s own doc for why one arrives that way and what
+/// this closes. `None` when the buffer holds no SPS at all (a
+/// [`vaco_format_nalu::build_h264_avcc`] contract, propagated rather than
+/// worked around: a record with no profile/level to state is not one this
+/// function can repair by guessing).
+fn derive_avcc(annexb_extradata: &[u8]) -> Option<Vec<u8>> {
+    let mut sps = Vec::new();
+    let mut pps = Vec::new();
+    for nal in units(annexb_extradata, Framing::AnnexB) {
+        let Some(header) = NalHeader::parse(HeaderKind::H264, nal.data) else {
+            continue;
+        };
+        match header.nal_unit_type {
+            7 => sps.push(nal.data),
+            8 => pps.push(nal.data),
+            _ => {}
+        }
+    }
+    build_h264_avcc(&sps, &pps)
+}
+
 /// A container profile: what differs between `matroska` and `webm` beyond
 /// the element tree, which both share in full.
 #[derive(Debug, Clone, Copy)]
@@ -290,6 +316,21 @@ struct TrackOut {
     /// Video only. `Video::Colour`'s source, when it maps to one this crate
     /// has actually measured a reference value for (CONFORMANCE-FINDINGS 49).
     chroma_location: vaco_color::ChromaLocation,
+    /// Set once, in `flush_header_bytes`, only for `V_MPEG4/ISO/AVC` whose
+    /// `extradata` arrived Annex-B-shaped (MPEG-TS/AVI/raw Annex B carry
+    /// H.264 in-band, with no out-of-band record at all) and was rewritten
+    /// into a real `avcC`. `V_MPEG4/ISO/AVC` packets are length-prefixed by
+    /// RFC 9559's own convention (the same one MP4's `avc1` sample entry
+    /// uses), so a source whose packets are still Annex-B needs the same
+    /// per-packet reframing `write_block` applies when this is `true`.
+    needs_avc_repack: bool,
+    /// Set once `check_bitstream` has answered for this track, the same
+    /// guard `vaco-mux-mp4`'s own `check_bitstream` uses and for the
+    /// identical reason: nothing about a stream's declared
+    /// [`CodecParameters`] changes between `decide_bitstream`'s re-asks, so
+    /// the filter request would not change either, and answering `Insert`
+    /// with the same name twice is refused outright.
+    bsf_decided: bool,
 }
 
 /// `FileMimeType`. Not in `vaco-demux-matroska::ebml::schema` (that crate has
@@ -959,16 +1000,42 @@ impl MatroskaMuxer {
     /// # Errors
     /// [`Error::Unsupported`] naming a track whose codec needs an
     /// out-of-band Configuration Record (`codec::requires_extradata_str`)
-    /// and still has none at this point — the point after which Matroska has
-    /// no mechanism left to supply one (see that function's own docs).
-    /// Refusing here is what turns the FFV1 bug this module's docs describe
-    /// into a loud error instead of a silently corrupt file for any codec
-    /// that still cannot answer, rather than fixing FFV1 alone and leaving
-    /// the same silent failure for the next one.
+    /// and still has none at this point (or, for `V_MPEG4/ISO/AVC`, still
+    /// only an Annex-B one an `avcC` could not be derived from) — the point
+    /// after which Matroska has no mechanism left to supply one (see that
+    /// function's own docs). Refusing here is what turns the FFV1 bug this
+    /// module's docs describe into a loud error instead of a silently
+    /// corrupt file for any codec that still cannot answer, rather than
+    /// fixing FFV1 alone and leaving the same silent failure for the next
+    /// one.
     fn flush_header_bytes(&mut self) -> Result<()> {
+        // MPEG-TS/AVI/raw Annex B carry H.264 in-band and no out-of-band
+        // record at all, so `vaco_format_core::discovery`'s own
+        // `synthesize_extradata` fills `extradata` in from the packets it
+        // already read — in Annex-B's own shape (start-code-prefixed SPS
+        // then PPS), which is right for `-show_streams`'s `extradata_size`
+        // but not what `V_MPEG4/ISO/AVC`'s `CodecPrivate` needs: RFC 9559
+        // states the identical `avcC` (ISO/IEC 14496-15 §5.3.3.1.2) MP4's
+        // own `avc1` sample entry does. `derive_avcc` rebuilds one from the
+        // SPS/PPS already sitting in that Annex-B buffer — there is nothing
+        // to read from a packet that is not already here. A source that
+        // already carried a real `avcC` (MP4, MOV, Matroska, FLV) has an
+        // `extradata` starting with `0x01` (`configurationVersion`), never
+        // `0x00` (Annex-B's own start code), so this never touches it.
+        for t in &mut self.tracks {
+            if t.codec_id == "V_MPEG4/ISO/AVC"
+                && t.extradata.as_deref().is_some_and(|e| e.first() == Some(&0))
+                && let Some(avcc) = derive_avcc(t.extradata.as_deref().unwrap_or_default())
+            {
+                t.extradata = Some(avcc);
+                t.needs_avc_repack = true;
+            }
+        }
         for t in &self.tracks {
             if codec::requires_extradata_str(t.codec_id)
-                && t.extradata.as_ref().is_none_or(Vec::is_empty)
+                && t.extradata
+                    .as_deref()
+                    .is_none_or(|e| e.is_empty() || (t.codec_id == "V_MPEG4/ISO/AVC" && e.first() == Some(&0)))
             {
                 return Err(Error::Unsupported(
                     "matroska: this codec needs an out-of-band configuration record and none \
@@ -1147,6 +1214,31 @@ impl MatroskaMuxer {
             .map(|ns| i64::try_from(ns / 1_000_000).unwrap_or(i64::MAX));
         let needs_duration = duration_ticks.is_some() && duration_ticks != default_duration_ticks;
 
+        // The framing half of `flush_header_bytes`'s `avcC` synthesis: a
+        // track whose extradata arrived Annex-B-shaped has Annex-B-shaped
+        // packets too (the same source), and `V_MPEG4/ISO/AVC` needs
+        // length-prefixed samples the same way MP4's `avc1` does. Built
+        // fresh per packet rather than cached, since a packet is only ever
+        // written once.
+        let repacked = if track.needs_avc_repack {
+            let mut out = Vec::new();
+            let mut budget = Budget::new(vaco_limits::Limits::permissive());
+            // Propagated, not swallowed: a packet this cannot reframe is not
+            // one this muxer should write half-converted or empty — see
+            // `flush_header_bytes`'s own doc for why this path exists at
+            // all.
+            vaco_format_nalu::annexb_to_length_prefixed(
+                packet.payload(),
+                vaco_format_nalu::LengthSize::FOUR,
+                &mut out,
+                &mut budget,
+            )?;
+            Some(out)
+        } else {
+            None
+        };
+        let payload = repacked.as_deref().unwrap_or_else(|| packet.payload());
+
         // Reordering alone does **not** call for a `BlockGroup`. It reads like
         // it should — `SimpleBlock` cannot carry a `ReferenceBlock`, and a
         // B-frame plainly references other frames — but Matroska has no notion
@@ -1166,12 +1258,12 @@ impl MatroskaMuxer {
             block::block_group(
                 track.number,
                 rel_ts,
-                packet.payload(),
+                payload,
                 duration_ticks.map(|d| u64::try_from(d).unwrap_or(0)),
                 None,
             )?
         } else {
-            block::simple_block(track.number, rel_ts, is_key, packet.payload())?
+            block::simple_block(track.number, rel_ts, is_key, payload)?
         };
         cluster.body.extend_from_slice(&block_bytes);
 
@@ -1186,6 +1278,43 @@ impl MatroskaMuxer {
 impl Muxer for MatroskaMuxer {
     fn flags(&self) -> FormatFlags {
         FormatFlags::empty()
+    }
+
+    /// MPEG-TS carries AAC as ADTS; `A_AAC`'s own `CodecPrivate` needs an
+    /// `AudioSpecificConfig` (§4.3.5 of the reference's own Matroska/`A_AAC`
+    /// mapping, the same one MP4's `esds` uses), and its packets need to be
+    /// raw AAC, not ADTS-framed, the same way `V_MPEG4/ISO/AVC`'s packets
+    /// need length-prefixing rather than Annex-B (see `flush_header_bytes`'s
+    /// own doc for that half). `aac_adtstoasc` already exists and already
+    /// does both — strips the 7-byte ADTS header from every packet and
+    /// attaches the derived `AudioSpecificConfig` as
+    /// [`vaco_packet::PacketSideData::NewExtradata`] on the first one — it
+    /// simply had no caller requesting it for this container. Its output
+    /// reaches `track.extradata` through [`Self::adopt_new_extradata`],
+    /// already called from [`Muxer::write_packet`] for exactly this reason
+    /// (FFV1's identical "encoder attaches extradata after the fact" case).
+    ///
+    /// Guarded by `bsf_decided` the same way `vaco-mux-mp4`'s own
+    /// `check_bitstream` guards its `extract_extradata` request: nothing
+    /// about a stream's declared [`CodecParameters`] changes between
+    /// `decide_bitstream`'s re-asks, so re-requesting the same filter would
+    /// be refused outright rather than silently ignored.
+    fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
+        let idx = usize::try_from(pkt.stream_index).ok();
+        if idx.and_then(|i| self.tracks.get(i)).is_some_and(|t| t.bsf_decided) {
+            return Ok(BitstreamAction::Keep);
+        }
+        if let Some(t) = idx.and_then(|i| self.tracks.get_mut(i)) {
+            t.bsf_decided = true;
+        }
+        if params.codec_id == Some(CodecId::Aac)
+            && params.extradata.as_ref().is_none_or(Vec::is_empty)
+        {
+            return Ok(BitstreamAction::Insert {
+                name: "aac_adtstoasc",
+            });
+        }
+        Ok(BitstreamAction::Keep)
     }
 
     fn add_stream(&mut self, params: &CodecParameters) -> Result<u32> {
@@ -1239,6 +1368,8 @@ impl Muxer for MatroskaMuxer {
             extradata: params.extradata.clone(),
             field_order: vaco_codec_core::FieldOrder::default(),
             chroma_location: vaco_color::ChromaLocation::default(),
+            needs_avc_repack: false,
+            bsf_decided: false,
         };
         if is_video {
             let v = params.video.as_ref().ok_or(Error::Unsupported(
@@ -2129,6 +2260,8 @@ mod tests {
             field_order: vaco_codec_core::FieldOrder::Progressive,
             chroma_location: vaco_color::ChromaLocation::Unspecified,
             extradata: None,
+            needs_avc_repack: false,
+            bsf_decided: false,
         };
         let bytes = MatroskaMuxer::track_entry_bytes(&track, name, "und", disposition);
         let needle = write_uint(el::FLAGDEFAULT, 0);

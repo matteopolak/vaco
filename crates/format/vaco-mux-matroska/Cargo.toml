@@ -29,6 +29,11 @@ vaco-format-ebml = { path = "../vaco-format-ebml" }
 # same pattern vaco-mux-ogg uses for vaco-demux-ogg's page/CRC definitions.
 # See docs/format/vaco-mux-matroska.md.
 vaco-demux-matroska = { path = "../vaco-demux-matroska" }
+# Annex-B <-> length-prefixed H.264 framing and `avcC` synthesis (D19, D14.1):
+# a source whose container carries H.264 in-band (MPEG-TS, AVI, raw Annex B)
+# has no out-of-band configuration record, and `V_MPEG4/ISO/AVC`'s own
+# `CodecPrivate` needs one anyway. See `flush_header_bytes`'s own doc.
+vaco-format-nalu = { path = "../vaco-format-nalu" }
 
 [dev-dependencies]
 proptest = { workspace = true }
