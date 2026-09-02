@@ -1299,6 +1299,20 @@ impl Muxer for MatroskaMuxer {
     /// about a stream's declared [`CodecParameters`] changes between
     /// `decide_bitstream`'s re-asks, so re-requesting the same filter would
     /// be refused outright rather than silently ignored.
+    ///
+    /// `vp9_superframe_split` was checked here too, on the same "found
+    /// orphaned, wired in" hypothesis that fixed `A_AAC` above, and reverted:
+    /// measured directly rather than assumed, real ffmpeg 9.0.1's own MP4 ->
+    /// Matroska `-c copy` of a source with genuine superframe-marked packets
+    /// (`vp9_altref_invisible_frames.ivf`, 10 of 125 packets carrying a real
+    /// superframe index, confirmed by decoding the index byte, not just the
+    /// fixture's name) leaves every packet's size unchanged end to end — no
+    /// split happens. So this filter is legitimately manual-only, matching
+    /// `vaco-bsf-vpx::superframe_split`'s own module doc position, not an
+    /// unwired auto-insert: a real VP9 decoder parses the superframe index
+    /// itself regardless of the container carrying it as one opaque sample,
+    /// and Matroska's `invisible`/lacing block support is an alternative
+    /// *representation* of the same content, never a requirement.
     fn check_bitstream(&mut self, params: &CodecParameters, pkt: &Packet) -> Result<BitstreamAction> {
         let idx = usize::try_from(pkt.stream_index).ok();
         if idx.and_then(|i| self.tracks.get(i)).is_some_and(|t| t.bsf_decided) {
@@ -2342,5 +2356,58 @@ mod tests {
                 .all(|w| w != vaco_format_ebml::id_bytes(el::CHAPTERS).as_slice()),
             "no Chapters element without set_metadata"
         );
+    }
+
+    fn aac_params_no_extradata() -> CodecParameters {
+        let mut p = CodecParameters::audio().with_codec(CodecId::Aac);
+        p.audio = Some(AudioParameters {
+            sample_rate: 44100,
+            ..AudioParameters::default()
+        });
+        p
+    }
+
+    // Unit-level proof for the bitstream-filter reachability sweep that
+    // found `aac_adtstoasc` (fixed alongside the MPEG-TS -> Matroska
+    // conformance failure) unrequested by anything: without this,
+    // `check_bitstream` answering `Keep` for AAC would ship a still-ADTS-
+    // framed `A_AAC` track no decoder can parse, rather than erroring — the
+    // same "worse than a refusal" shape M6's whole mechanism exists to
+    // avoid. The sweep also considered `vp9_superframe_split` on the same
+    // hypothesis and rejected it after measuring real ffmpeg 9.0.1's own
+    // MP4 -> Matroska copy of genuine superframe-marked VP9 packets: see
+    // `check_bitstream`'s own doc for why that one is legitimately
+    // manual-only, not a second orphan.
+
+    #[test]
+    fn aac_with_no_extradata_asks_for_adtstoasc() {
+        let s = MemorySink::new();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let params = aac_params_no_extradata();
+        let idx = mux.add_stream(&params).unwrap();
+        let action = mux.check_bitstream(&params, &pkt(idx, 0, true)).unwrap();
+        assert!(matches!(
+            action,
+            BitstreamAction::Insert {
+                name: "aac_adtstoasc"
+            }
+        ));
+    }
+
+    #[test]
+    fn check_bitstream_is_only_asked_once_per_track() {
+        let s = MemorySink::new();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let params = aac_params_no_extradata();
+        let idx = mux.add_stream(&params).unwrap();
+        let first = mux.check_bitstream(&params, &pkt(idx, 0, true)).unwrap();
+        assert!(matches!(first, BitstreamAction::Insert { .. }));
+        // A second ask for the same track must answer `Keep` -- the
+        // `bsf_decided` guard `vaco-mux-mp4`'s own `check_bitstream` doc
+        // explains: nothing about `params` changes between re-asks, so a
+        // stateless answer would request the same filter forever, which
+        // `MuxWriter` refuses outright as a duplicate request.
+        let second = mux.check_bitstream(&params, &pkt(idx, 1, false)).unwrap();
+        assert!(matches!(second, BitstreamAction::Keep));
     }
 }
