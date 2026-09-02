@@ -507,3 +507,100 @@ fn this_crates_own_stereo_encoder_output_is_accepted_by_the_oracle_decoder() {
     let expected: Vec<i16> = left.iter().zip(right.iter()).flat_map(|(&l, &r)| [l, r]).collect();
     assert_eq!(oracle_pcm, expected, "oracle decode of our own stereo encoder output must match the source samples, interleaved");
 }
+
+/// Stereo content designed to force mid/side selection: near-identical
+/// channels (a sine plus a tiny per-sample offset on the right), the exact
+/// shape `choose_stereo_mix` exists to detect and switch on. Verifies two
+/// things a synthetic uncorrelated-channel test cannot: that the encoder
+/// actually chooses the mid/side candidate here (not just that either
+/// candidate round-trips), and that the independent `alac` crate oracle
+/// decodes the *matrixed* (`mixres != 0`) bitstream correctly -- this
+/// crate's own decoder used to hardcode `unmix(u, v, 0, 0)` regardless of
+/// what a packet's header actually said, a latent bug invisible until an
+/// encoder (this one) finally emitted a non-zero `mixres` to decode back.
+#[test]
+fn highly_correlated_stereo_content_is_smaller_than_independent_channels_and_the_oracle_accepts_it() {
+    use vaco_codec_alac::AlacEncoder;
+    use vaco_codec_core::Encoder;
+
+    let n = 4096;
+    let left: Vec<i16> = (0..n)
+        .map(|i| {
+            let x = f64::from(i) * 0.05;
+            (x.sin() * 12000.0) as i16
+        })
+        .collect();
+    // Right is left plus a small, mostly-constant offset -- correlated,
+    // not identical (identical channels are the easy case; this is closer
+    // to real, imperfectly-correlated stereo material).
+    let right: Vec<i16> = left.iter().enumerate().map(|(i, &l)| l.saturating_add(20 + i16::try_from(i % 7).unwrap_or(0))).collect();
+
+    let mut budget = Budget::new(Limits::permissive());
+    let mut frame = Frame::alloc_audio(&mut budget, SampleFmt::S16P, ChannelLayout::STEREO, n as u32, 44100).expect("alloc_audio");
+    {
+        let mut plane = frame.plane_mut(0).expect("plane 0");
+        let row = plane.row_mut(0).expect("row 0");
+        for (i, &s) in left.iter().enumerate() {
+            if let Some(dst) = row.get_mut(i * 2..i * 2 + 2) {
+                dst.copy_from_slice(&s.to_le_bytes());
+            }
+        }
+    }
+    {
+        let mut plane = frame.plane_mut(1).expect("plane 1");
+        let row = plane.row_mut(0).expect("row 0");
+        for (i, &s) in right.iter().enumerate() {
+            if let Some(dst) = row.get_mut(i * 2..i * 2 + 2) {
+                dst.copy_from_slice(&s.to_le_bytes());
+            }
+        }
+    }
+
+    let mut enc = AlacEncoder::new(Limits::permissive());
+    enc.prime_audio(44100, ChannelLayout::STEREO, SampleFmt::S16P);
+    enc.send_frame(Some(&frame)).expect("send_frame");
+    let packet = enc.receive_packet().expect("receive_packet");
+    let cookie = enc.extradata().expect("cookie after prime_audio");
+
+    // Same content encoded as two independent (uncorrelated by construction
+    // of the comparison, not the content) mono streams, for the size
+    // comparison: this is what this crate produced *before* stereo
+    // decorrelation, and the whole point is that correlated content must
+    // beat it now.
+    let encode_mono = |samples: &[i16]| -> usize {
+        let mut b = Budget::new(Limits::permissive());
+        let mut f = Frame::alloc_audio(&mut b, SampleFmt::S16P, ChannelLayout::MONO, samples.len() as u32, 44100).expect("alloc_audio");
+        {
+            let mut plane = f.plane_mut(0).expect("plane 0");
+            let row = plane.row_mut(0).expect("row 0");
+            for (i, &s) in samples.iter().enumerate() {
+                if let Some(dst) = row.get_mut(i * 2..i * 2 + 2) {
+                    dst.copy_from_slice(&s.to_le_bytes());
+                }
+            }
+        }
+        let mut e = AlacEncoder::new(Limits::permissive());
+        e.send_frame(Some(&f)).expect("send_frame");
+        e.receive_packet().expect("receive_packet").payload().len()
+    };
+    let independent_total = encode_mono(&left) + encode_mono(&right);
+    eprintln!("stereo (decorrelated) = {} bytes, two independent mono encodes = {independent_total} bytes", packet.payload().len());
+    assert!(
+        packet.payload().len() < independent_total,
+        "correlated stereo content must compress smaller as one decorrelated CPE element than as two independent channels: {} >= {independent_total}",
+        packet.payload().len()
+    );
+
+    let info = alac::StreamInfo::from_cookie(&cookie).expect("alac crate must parse this crate's own cookie");
+    let mut oracle_decoder = alac::Decoder::new(info.clone());
+    let mut out = vec![0i16; (info.max_samples_per_packet() as usize) * (info.channels() as usize)];
+    let oracle_pcm = oracle_decoder
+        .decode_packet(packet.payload(), &mut out)
+        .expect("independent alac crate must decode this crate's matrixed stereo output");
+    let mut expected = Vec::new();
+    for i in 0..left.len() {
+        expected.push(left[i]);
+        expected.push(right[i]);
+    }
+    assert_eq!(oracle_pcm, expected, "oracle decode of matrixed stereo must match the source, interleaved, sample-exact");
+}

@@ -142,6 +142,33 @@ fn unmix(u: i32, v: i32, mixbits: u32, mixres: i32) -> (i32, i32) {
     }
 }
 
+/// `mix16`: the write-side mirror of [`unmix`], deriving `(u, v)` from real
+/// `(left, right)` samples. Algebraically inverted from `unmix`'s own two
+/// equations (`l = u + v - ((mixres * v) >> mixbits)`, then `r = l - v`):
+/// solving for `v` gives `v = l - r` directly (exact, no rounding -- this
+/// *is* the difference channel), and substituting back gives
+/// `u = r + ((mixres * v) >> mixbits)`. Plugging these back into `unmix`
+/// cancels the shifted-product term exactly regardless of which way it
+/// rounds, since both directions compute it from the identical `v` --
+/// verified by `tests::mix_round_trips_through_unmix_for_a_grid_of_l_r_mixres_pairs`,
+/// which round-trips a grid of `(l, r, mixbits, mixres)` combinations
+/// through both functions.
+///
+/// `mixres == 0` is `unmix`'s own pass-through special case, not this
+/// general formula evaluated at `mixres == 0` (which would compute
+/// something else entirely, `u = r, v = l - r`) -- see [`choose_stereo_mix`]
+/// for why a real encoder chooses between exactly this pass-through and one
+/// non-zero `(mixbits, mixres)` pair per frame, not a wider search.
+fn mix16(l: i32, r: i32, mixbits: u32, mixres: i32) -> (i32, i32) {
+    if mixres == 0 {
+        (l, r)
+    } else {
+        let v = l.wrapping_sub(r);
+        let u = r.wrapping_add((mixres.wrapping_mul(v)) >> mixbits);
+        (u, v)
+    }
+}
+
 /// Read one element's compressed-frame header fields shared by `ID_SCE`
 /// (`extra_chanbits = 0`) and `ID_CPE` (`extra_chanbits = 1`, per
 /// `ALACDecoder::Decode`'s own `+ 1` on the stereo `chanBits` derivation).
@@ -254,7 +281,7 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
     let mut r = BitReader::new(bytes);
     let tag = r.get(3);
 
-    let (channels, samples_u, samples_v, num_samples) = match tag {
+    let (channels, samples_u, samples_v, num_samples, mix_bits, mix_res) = match tag {
         ID_SCE | ID_LFE => {
             let hdr = read_element_header(&mut r, bit_depth, frame_length, 0)?;
             let n = hdr.num_samples as usize;
@@ -268,7 +295,11 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
                 // A mono element still carries mixBits/mixRes (expected
                 // zero, per ALACDecoder.cpp's own SCE case) even though
                 // there is nothing to mix -- skipping these here would
-                // desync every field that follows.
+                // desync every field that follows. A real encoder has
+                // nothing to mix for one channel, so unlike `ID_CPE`
+                // these are read and discarded rather than threaded
+                // anywhere -- there is no second channel for them to mean
+                // anything about.
                 let _mix_bits = r.get(8);
                 let _mix_res = r.get(8);
                 let (mb, pb, kb) = ag_defaults();
@@ -279,7 +310,7 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
                 let mut coefs = ch.coefs;
                 predict_channel(&residuals, &mut coefs, ch.order, ch.mode, hdr.chan_bits, ch.den_shift, budget)?
             };
-            (1u8, u, Vec::new(), hdr.num_samples)
+            (1u8, u, Vec::new(), hdr.num_samples, 0u32, 0i32)
         }
         ID_CPE => {
             let hdr = read_element_header(&mut r, bit_depth, frame_length, 1)?;
@@ -297,6 +328,12 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
                 // using `hdr.chan_bits` here desynced every sample after
                 // the first, measured end to end as `ffmpeg`'s "invalid
                 // element channel count" on a real stereo encode.
+                //
+                // No mixBits/mixRes field exists in escape mode at all --
+                // `u`/`v` below are already literally left/right, so the
+                // final `unmix` call must treat this as pass-through
+                // (`mixres = 0`) regardless of anything a non-escape
+                // sibling packet in the same stream might have used.
                 let verbatim_bits = u32::from(bit_depth).min(32);
                 let mut u = budget.alloc::<i32>(n)?;
                 let mut v = budget.alloc::<i32>(n)?;
@@ -310,10 +347,20 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
                         *s = b;
                     }
                 }
-                (2u8, u, v, hdr.num_samples)
+                (2u8, u, v, hdr.num_samples, 0u32, 0i32)
             } else {
-                let _mix_bits = r.get(8);
-                let _mix_res = r.get(8);
+                let mix_bits = r.get(8);
+                // Sign-extended from the wire's 8-bit two's-complement
+                // field, the same `get(n) as uN -> cast_signed()` pattern
+                // `read_channel_params` already uses for the 16-bit
+                // coefficients just below -- a real encoder's `mixres` is
+                // a genuine signed weight (this crate's own encoder now
+                // writes `1`, but the field is not unsigned in general;
+                // ffmpeg's own ALAC muxer measured non-zero values here on
+                // real stereo content).
+                #[expect(clippy::cast_possible_truncation, reason = "r.get(8) is masked to 8 bits already")]
+                let mix_res_raw = r.get(8) as u8;
+                let mix_res = i32::from(mix_res_raw.cast_signed());
                 let (mb, pb, kb) = ag_defaults();
                 let chu = read_channel_params(&mut r);
                 let chv = read_channel_params(&mut r);
@@ -327,7 +374,7 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
                 let res_v = dyn_decomp(&params_v, &mut r, n, hdr.chan_bits);
                 let mut coefs_v = chv.coefs;
                 let v = predict_channel(&res_v, &mut coefs_v, chv.order, chv.mode, hdr.chan_bits, chv.den_shift, budget)?;
-                (2u8, u, v, hdr.num_samples)
+                (2u8, u, v, hdr.num_samples, mix_bits, mix_res)
             }
         }
         ID_END => return Err(Error::InvalidData("alac: packet has no audio elements")),
@@ -360,11 +407,15 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
             }
         }
     } else {
-        // `mixbits`/`mixres` are read but always the real header's own
-        // values -- this crate's own encoder always writes 0/0
-        // (conventional stereo), and decode above already parsed
-        // whatever the real packet declared. Since `predict_channel`
-        // already reconstructed U and V, only the final unmix is left.
+        // `mix_bits`/`mix_res` are the real header's own values now
+        // (previously hardcoded to `0, 0` here regardless of what the
+        // packet declared -- a real, if previously invisible, bug: this
+        // crate's own encoder never wrote anything else before the
+        // stereo-decorrelation work that made this matter, but a real
+        // ffmpeg-produced ALAC file using mid/side stereo would have
+        // decoded with the wrong channel values, silently, the whole
+        // time). `predict_channel` already reconstructed U and V; only
+        // the final unmix is left.
         if let Some((left_plane, right_plane)) = planes.split_first_mut().map(|(l, rest)| (l, rest.first_mut())) {
             let l_stride = left_plane.stride;
             let l_row = left_plane.data.make_mut();
@@ -373,7 +424,7 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
             for i in 0..num_samples as usize {
                 let u = samples_u.get(i).copied().unwrap_or(0);
                 let v = samples_v.get(i).copied().unwrap_or(0);
-                let (l, rr) = unmix(u, v, 0, 0);
+                let (l, rr) = unmix(u, v, mix_bits, mix_res);
                 write_sample(&mut left_buf, i, l);
                 write_sample(&mut right_buf, i, rr);
             }
@@ -403,6 +454,86 @@ pub(crate) fn decode(bytes: &[u8], sample_rate: u32, bit_depth: u8, frame_length
 /// noted rather than done under this pass's time budget.
 const fn ag_defaults() -> (u32, u32, u32) {
     (crate::rice::MB0, crate::rice::PB0, crate::rice::KB0)
+}
+
+/// One candidate `(mixbits, mixres)` a stereo encode may choose, plus the
+/// `(u, v)` channel pair [`mix16`] derives from the real `(left, right)`
+/// samples under it.
+struct StereoCandidate {
+    mixbits: u32,
+    mixres: i32,
+    u: Vec<i32>,
+    v: Vec<i32>,
+}
+
+/// The exact bit cost [`dyn_comp`] would spend on `samples` alone (a fresh,
+/// zero-seeded [`pc_block`] pass plus the adaptive-Rice coder), measured by
+/// actually running both into a scratch [`BitWriter`] and discarding the
+/// bits -- not a proxy like "sum of absolute residuals", because a proxy
+/// can rank two candidates differently than the Rice coder actually would
+/// (its cost is not linear in residual magnitude near the adaptive mean's
+/// escape threshold). The cost this exists to compare is real bits, so it
+/// is measured as real bits.
+fn channel_bit_cost(samples: &[i32], order: usize, chan_bits: u32, budget: &mut Budget) -> Result<u64> {
+    let mut coefs = vec![0i32; order];
+    let residuals = pc_block(samples, &mut coefs, order, chan_bits, DENSHIFT);
+    let (mb, pb, kb) = ag_defaults();
+    let params = AgParams::new(mb, pb, kb);
+    let capacity_hint = samples.len().saturating_mul(4).saturating_add(64);
+    let mut scratch = BitWriter::with_capacity(budget, capacity_hint)?;
+    dyn_comp(&params, &mut scratch, &residuals, chan_bits);
+    Ok(scratch.bit_len())
+}
+
+/// Chooses this frame's stereo transform: conventional pass-through
+/// (`mixbits = mixres = 0`, `u = left, v = right`) versus true mid/side
+/// (`mixbits = 1, mixres = 1`, per [`mix16`]'s own doc for the derivation),
+/// by actually encoding both and keeping whichever is smaller.
+///
+/// This compares exactly those two candidates, not a continuous search
+/// across every `(mixbits, mixres)` pair the format allows (real ALAC
+/// encoders typically estimate an optimal `mixres` directly from the
+/// channels' cross-correlation rather than search at all). Two candidates
+/// still capture the dominant, measured effect: highly-correlated stereo
+/// content (two similar or identical channels) compresses far better as
+/// mid/side, since the side channel `l - r` collapses toward zero, while
+/// already-decorrelated content (independent channels, hard-panned
+/// mixes) has nothing to gain and a finer per-frame weight search would
+/// only chase a smaller second-order effect this crate's own encoder does
+/// not otherwise rate-distortion-optimize for (see [`PREDICTOR_ORDER`]'s
+/// doc on the same scope decision for the predictor order/denshift).
+fn choose_stereo_mix(samp_l: &[i32], samp_r: &[i32], order: usize, chan_bits: u32, budget: &mut Budget) -> Result<StereoCandidate> {
+    let pass_through = StereoCandidate {
+        mixbits: 0,
+        mixres: 0,
+        u: samp_l.to_vec(),
+        v: samp_r.to_vec(),
+    };
+    let n = samp_l.len();
+    let mut mid_u = vec![0i32; n];
+    let mut mid_v = vec![0i32; n];
+    for i in 0..n {
+        let l = samp_l.get(i).copied().unwrap_or(0);
+        let r = samp_r.get(i).copied().unwrap_or(0);
+        let (u, v) = mix16(l, r, 1, 1);
+        if let Some(slot) = mid_u.get_mut(i) {
+            *slot = u;
+        }
+        if let Some(slot) = mid_v.get_mut(i) {
+            *slot = v;
+        }
+    }
+    let mid_side = StereoCandidate {
+        mixbits: 1,
+        mixres: 1,
+        u: mid_u,
+        v: mid_v,
+    };
+
+    let pass_through_bits = channel_bit_cost(&pass_through.u, order, chan_bits, budget)?.saturating_add(channel_bit_cost(&pass_through.v, order, chan_bits, budget)?);
+    let mid_side_bits = channel_bit_cost(&mid_side.u, order, chan_bits, budget)?.saturating_add(channel_bit_cost(&mid_side.v, order, chan_bits, budget)?);
+
+    Ok(if mid_side_bits < pass_through_bits { mid_side } else { pass_through })
 }
 
 /// The nominal predictor order this encoder always writes, before either
@@ -555,23 +686,6 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
         return Ok(w.finish());
     }
 
-    w.put(3, ID_CPE);
-    w.put(4, 0);
-    w.put(12, 0);
-    w.put(4, 1 << 3); // partialFrame=1, bytesShifted=0, escape=0
-    w.put(32, num_samples);
-    w.put(8, 0); // mixBits
-    w.put(8, 0); // mixRes = 0: conventional stereo, u = left, v = right
-    w.put(8, mode_denshift_byte);
-    w.put(8, pbfactor_order_byte);
-    for _ in 0..order {
-        w.put(16, 0);
-    }
-    w.put(8, mode_denshift_byte);
-    w.put(8, pbfactor_order_byte);
-    for _ in 0..order {
-        w.put(16, 0);
-    }
     // Deliberately `bit_depth + 1`, *not* `bit_depth`: `ID_CPE`'s
     // `extra_chanbits = 1` headroom is for this predictor path's mid/side
     // sum arithmetic (`decode`'s own `read_element_header` always adds it
@@ -581,14 +695,38 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
     let Some(plane1) = plane1.as_ref() else {
         return Err(Error::Unsupported("alac: encoder needs plane 1 for stereo"));
     };
-    let samp_u: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(&plane0, i, bytes)).collect();
-    let samp_v: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(plane1, i, bytes)).collect();
+    let samp_l: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(&plane0, i, bytes)).collect();
+    let samp_r: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(plane1, i, bytes)).collect();
+    // Chosen once, up front, because `mixBits`/`mixRes` are part of the
+    // element header written *before* either channel's coefficients or
+    // residuals -- see `choose_stereo_mix`'s own doc for what the two
+    // candidates are and why only two.
+    let chosen = choose_stereo_mix(&samp_l, &samp_r, order, chan_bits, budget)?;
+
+    w.put(3, ID_CPE);
+    w.put(4, 0);
+    w.put(12, 0);
+    w.put(4, 1 << 3); // partialFrame=1, bytesShifted=0, escape=0
+    w.put(32, num_samples);
+    w.put(8, chosen.mixbits);
+    #[expect(clippy::cast_sign_loss, reason = "mixres is a small signed value (0 or ±1 here); the 8-bit field is a byte-wise two's-complement slot per the reference, matching decode's own i32 round-trip through the same width")]
+    w.put(8, chosen.mixres as u32);
+    w.put(8, mode_denshift_byte);
+    w.put(8, pbfactor_order_byte);
+    for _ in 0..order {
+        w.put(16, 0);
+    }
+    w.put(8, mode_denshift_byte);
+    w.put(8, pbfactor_order_byte);
+    for _ in 0..order {
+        w.put(16, 0);
+    }
     let mut coefs_u = vec![0i32; order];
-    let residuals_u = pc_block(&samp_u, &mut coefs_u, order, chan_bits, DENSHIFT);
+    let residuals_u = pc_block(&chosen.u, &mut coefs_u, order, chan_bits, DENSHIFT);
     let params_u = AgParams::new(mb, pb, kb);
     dyn_comp(&params_u, &mut w, &residuals_u, chan_bits);
     let mut coefs_v = vec![0i32; order];
-    let residuals_v = pc_block(&samp_v, &mut coefs_v, order, chan_bits, DENSHIFT);
+    let residuals_v = pc_block(&chosen.v, &mut coefs_v, order, chan_bits, DENSHIFT);
     let params_v = AgParams::new(mb, pb, kb);
     dyn_comp(&params_v, &mut w, &residuals_v, chan_bits);
     w.put(3, ID_END);
@@ -604,6 +742,22 @@ mod tests {
 
     fn budget() -> Budget {
         Budget::new(Limits::permissive())
+    }
+
+    #[test]
+    fn mix_round_trips_through_unmix_for_a_grid_of_l_r_mixres_pairs() {
+        let samples: [i32; 7] = [0, 1, -1, 32767, -32768, 12345, -6789];
+        for &l in &samples {
+            for &r in &samples {
+                for mixbits in [0u32, 1, 2, 4] {
+                    for mixres in [0i32, 1, -1, 2, -2, 4, -4] {
+                        let (u, v) = mix16(l, r, mixbits, mixres);
+                        let (l2, r2) = unmix(u, v, mixbits, mixres);
+                        assert_eq!((l2, r2), (l, r), "l={l} r={r} mixbits={mixbits} mixres={mixres}");
+                    }
+                }
+            }
+        }
     }
 
     fn mono_frame(samples: &[i16]) -> Frame {
