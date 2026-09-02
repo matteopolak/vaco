@@ -779,3 +779,26 @@ the proposed landing order, only its size: step 1 is priced closer to
 `Vec` in `OnceLock`." Named here rather than silently fixed, because
 under-pricing step 1 was exactly the kind of mistake a design pass exists
 to catch before it costs an implementation attempt instead of a paragraph.
+
+### Hazard, stated on its own: three latent data races already exist in the source
+
+`EdgeMarks`, `CuGrid` and `SaoParamsGrid` each hold one mutable `current`
+slot shared by the whole struct. That is not a design choice with a
+tradeoff attached; it is safe **only** because exactly one worker ever
+calls `begin_row`/`mark_*`/`fill`/`finish` on a given instance today, an
+invariant enforced by nothing in the type system and nothing in the code
+around it — just the fact that `decoder.rs`'s CTU walk happens to be
+single-threaded so far. If a second worker ever wrote through the same
+`Ctx`'s `edges`/`cu_grid`/`sao_params` concurrently — by a route other
+than the staged Stage 2b dispatch this document describes, e.g. a future
+refactor that parallelises something else and reaches for these fields
+without reading this document first — the result is a genuine, silent
+`&mut`/`&mut` (or `&mut`/`&`) data race on `current`, not a theoretical
+one. `#![forbid(unsafe_code)]` does not protect against this: the race is
+expressible in ordinary safe Rust today only because nothing currently
+hands out a second `&mut Ctx` (or a second `&mut EdgeMarks` etc.) to a
+second thread; the moment something does, on purpose or by accident, nothing
+stops it at compile time. This is recorded here as a hazard in its own
+right, independent of Stage 2b's own schedule: the fix (`RowPublish<T>`,
+landed) is available now, but the three structures are not moved onto it
+yet, so the latent race persists until each is.
