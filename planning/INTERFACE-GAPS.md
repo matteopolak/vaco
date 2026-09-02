@@ -1496,6 +1496,19 @@ gap has ever named.
 `xwma` needed no new variant: its `wFormatTag` maps onto the existing
 `Wmav1`/`Wmav2`/`Wmapro`.
 
+### An eleventh needed variant, found implementing `vaco-format-misc-audio`'s `xa` (2026-09-02)
+
+Same gap, same crate, a later pass at #620: Maxis XA's codec is
+`adpcm_ea_maxis_xa` (`ADPCM Electronic Arts Maxis CDROM XA` — confirmed via
+`ffmpeg -codecs`/a real `ffprobe` run over a hand-built fixture,
+`Vaco-Spec-Ref vaco-format-misc-audio-xa-fixtures-probe`), and `CodecId`
+has no variant for it. `vaco-format-misc-audio`'s `xa.rs` stream carries
+`codec_id: None` until it lands, same policy as `vag` above.
+
+| Format | `ffprobe` `codec_name` | Proposed variant |
+|---|---|---|
+| xa | `adpcm_ea_maxis_xa` | `AdpcmEaMaxisXa` |
+
 ### Status, 2026-08-28 — the original five demuxers wired and measured
 
 `vaco-format-misc` (`roq.rs`, `flic.rs`, `cdg.rs`, `bink.rs`, `smk.rs`) now
