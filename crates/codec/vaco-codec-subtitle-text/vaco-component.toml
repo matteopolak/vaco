@@ -1,0 +1,70 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# Seven decoders, six codecs: `ssa` and `ass` share this crate's ASS-chunk
+# decode (see src/registry.rs's module docs for why `CodecId::Ssa` needs its
+# own registration despite that). No encoders — this crate is decode-only,
+# same reasoning `vaco-codec-subtitle-bitmap`'s own fragment states for
+# itself.
+
+[[component]]
+kind      = "decoder"
+name      = "subrip"
+long_name = "SubRip subtitle"
+feature   = "codec-subtitle-text"
+ctor      = "vaco_codec_subtitle_text::registry::SUBRIP_DECODER"
+media     = "subtitle"
+codec     = "subrip"
+
+[[component]]
+kind      = "decoder"
+name      = "ass"
+long_name = "ASS (Advanced SubStation Alpha) subtitle"
+feature   = "codec-subtitle-text"
+ctor      = "vaco_codec_subtitle_text::registry::ASS_DECODER"
+media     = "subtitle"
+codec     = "ass"
+
+[[component]]
+kind      = "decoder"
+name      = "ssa"
+long_name = "ASS (Advanced SubStation Alpha) subtitle"
+feature   = "codec-subtitle-text"
+ctor      = "vaco_codec_subtitle_text::registry::SSA_DECODER"
+media     = "subtitle"
+codec     = "ssa"
+
+[[component]]
+kind      = "decoder"
+name      = "webvtt"
+long_name = "WebVTT subtitle"
+feature   = "codec-subtitle-text"
+ctor      = "vaco_codec_subtitle_text::registry::WEBVTT_DECODER"
+media     = "subtitle"
+codec     = "webvtt"
+
+[[component]]
+kind      = "decoder"
+name      = "mov_text"
+long_name = "3GPP Timed Text subtitle"
+feature   = "codec-subtitle-text"
+ctor      = "vaco_codec_subtitle_text::registry::MOVTEXT_DECODER"
+media     = "subtitle"
+codec     = "mov_text"
+
+[[component]]
+kind      = "decoder"
+name      = "text"
+long_name = "Raw text subtitle"
+feature   = "codec-subtitle-text"
+ctor      = "vaco_codec_subtitle_text::registry::TEXT_DECODER"
+media     = "subtitle"
+codec     = "text"
+
+[[component]]
+kind      = "decoder"
+name      = "ttml"
+long_name = "TTML subtitle"
+feature   = "codec-subtitle-text"
+ctor      = "vaco_codec_subtitle_text::registry::TTML_DECODER"
+media     = "subtitle"
+codec     = "ttml"

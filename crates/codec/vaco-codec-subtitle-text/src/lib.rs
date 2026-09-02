@@ -27,16 +27,15 @@
 //! | [`ass`] | dialogue chunk | the shared output language, plus [`ass::parse_chunk`] |
 //! | [`ttml`] | TTML `<p>` content | **no reference decoder exists** — spec-derived, see below |
 //!
-//! # Not a `Decoder` implementation, deliberately
+//! # Reachable from `vaco-registry`
 //!
-//! `vaco_frame::FrameData::Subtitle` and `SubtitleContent::{Text, Ass}` exist
-//! and fit these formats exactly — `SubtitleContent::Ass` is the natural
-//! target for everything this crate emits. This crate does **not** implement
-//! `vaco_codec_core::Decoder` against them anyway, because at the time it was
-//! written that variant was uncommitted work in another agent's tree, and a
-//! crate at `HEAD` that calls into it would not build for anyone else.
-//! Wiring is a small, mechanical follow-up: each `to_ass` here returns the
-//! `String` that `SubtitleRect::ass(0, 0, 0, 0, false, …)` wants.
+//! [`registry::TextSubtitleDecoder`] is the `vaco_codec_core::Decoder` face
+//! over [`decode`], registered under seven names (`subrip`, `ass`, `ssa`,
+//! `webvtt`, `mov_text`, `text`, `ttml` — `ssa` and `ass` share this
+//! crate's ASS-chunk decode, since the reference's own `ssa` decoder is
+//! documented as "(codec ass)"). Every one emits `SubtitleContent::Ass`,
+//! matching the measured reference behaviour described above. See
+//! [`registry`]'s own module docs for `Caps` and timing.
 //!
 //! # Verification status, per format
 //!
@@ -70,6 +69,7 @@
 
 pub mod ass;
 pub mod movtext;
+pub mod registry;
 pub mod srt;
 pub mod text;
 pub mod ttml;
