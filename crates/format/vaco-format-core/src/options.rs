@@ -36,7 +36,8 @@
 //! | [`crate::time`] | `fflags`, `correct_ts_overflow`, `duration_probesize`, `skip_estimate_duration_from_pts`, `use_wallclock_as_timestamps` |
 //! | [`crate::seek`] | `seek2any`, `indexmem`, `fflags` (`ignidx`, `fastseek`) |
 //! | [`crate::interleave`] | `max_interleave_delta`, `audio_preload`, `chunk_duration`, `chunk_size`, `avoid_negative_ts`, `output_ts_offset` |
-//! | carried, consumed elsewhere | `avioflags`, `packetsize`, `cryptokey`, `rtbufsize`, `fdebug`, `max_delay`, `start_time_realtime`, `err_detect`, `flush_packets`, `metadata_header_padding`, `strict`, `dump_separator`, `protocol_whitelist`, `protocol_blacklist` |
+//! | carried, consumed elsewhere | `avioflags`, `packetsize`, `cryptokey`, `fdebug`, `start_time_realtime`, `flush_packets`, `metadata_header_padding`, `strict`, `dump_separator`, `protocol_whitelist`, `protocol_blacklist` |
+//! | parsed, refused if non-default (rule I; see [`FormatOptions::validate`]) | `rtbufsize`, `max_delay`, `err_detect` |
 
 use vaco_core::Duration;
 use vaco_opts::{Binary, ConstDesc, Options, opt_flags};
@@ -453,8 +454,16 @@ pub struct FormatOptions {
     /// Depth cap on nested demuxer opens: concat lists, HLS variant playlists,
     /// DASH periods, `tee`.
     ///
-    /// **Ours, not the reference's.** It is a security bound and it is enforced
-    /// here rather than per format so that no nested demuxer can forget it.
+    /// **Ours, not the reference's.** Meant as a security bound enforced here
+    /// rather than per format so that no nested demuxer can forget it -- but
+    /// nothing in this tree actually reads this field today. The real depth
+    /// cap for the one nested-open path that exists so far,
+    /// `vaco-format-adaptive::RemoteAccess`/`WriteAccess`'s own
+    /// `recursion_limit` (an unrelated field of the same name, forwarded into
+    /// `vaco_protocol_core::ProtocolEnv`), is a separate, hardcoded constant
+    /// this field does not feed. [`FormatOptions::validate`] refuses a
+    /// non-default value rather than continuing to claim the enforcement
+    /// this doc used to (found by `cargo xtask reachability-check`'s rule I).
     #[opt(name = "recursion_limit", help = "maximum depth of nested demuxer opens",
           default = 10, range = 0..=1000, flags(decoding))]
     pub recursion_limit: i32,
@@ -543,6 +552,50 @@ impl FormatOptions {
                 detail: "+noparse requires +nofillin".to_owned(),
             });
         }
+        // `rtbufsize`/`max_delay`/`err_detect`: this doc's own table used to
+        // list these as "carried, consumed elsewhere" -- measured: zero
+        // `.rtbufsize`/`.max_delay`/`.err_detect` reads anywhere under
+        // `crates/` outside this file. Found by `cargo xtask
+        // reachability-check`'s rule I; refusing a non-default value rather
+        // than continuing to advertise a knob that does nothing.
+        if self.rtbufsize != 3_041_280 {
+            return Err(vaco_core::Error::Option {
+                name: "rtbufsize".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.max_delay != -1 {
+            return Err(vaco_core::Error::Option {
+                name: "max_delay".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        if self.err_detect != ErrDetectFlags::CRCCHECK {
+            return Err(vaco_core::Error::Option {
+                name: "err_detect".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
+        // `recursion_limit` (default 10): ours, not the reference's, meant as
+        // a security bound on nested demuxer opens (concat lists, HLS variant
+        // playlists, DASH periods, `tee`) enforced here so no nested demuxer
+        // can forget it. But nothing does: the one nested-open path that
+        // exists today, `vaco-format-adaptive::RemoteAccess`/`WriteAccess`,
+        // has its own hardcoded `recursion_limit` forwarded into
+        // `vaco_protocol_core::ProtocolEnv`, a separate value this field does
+        // not feed (measured: zero `.recursion_limit` reads on this type
+        // anywhere under `crates/`). Same reasoning as the three fields
+        // above.
+        if self.recursion_limit != 10 {
+            return Err(vaco_core::Error::Option {
+                name: "recursion_limit".to_owned(),
+                detail: "parsed but not consumed by any demuxer, muxer or I/O layer in this build; \
+                         refusing rather than silently ignoring it".to_owned(),
+            });
+        }
         Ok(())
     }
 }
@@ -580,6 +633,34 @@ mod tests {
         assert_eq!(o.err_detect, ErrDetectFlags::CRCCHECK);
         assert!(o.correct_ts_overflow);
         assert!(!o.seek2any);
+    }
+
+    /// `rtbufsize`/`max_delay`/`err_detect`/`recursion_limit` parse but
+    /// nothing in this tree's demuxers, muxers or I/O layer reads any of
+    /// them yet -- this doc's own table and the `recursion_limit` field doc
+    /// used to claim otherwise. `validate` refuses a non-default value
+    /// instead of silently dropping it. Regression for `cargo xtask
+    /// reachability-check`'s rule I.
+    #[test]
+    fn validate_refuses_four_unconsumed_generic_options() {
+        let base = FormatOptions::default();
+        assert!(base.validate().is_ok());
+
+        let mut o = base.clone();
+        o.rtbufsize = 1;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.max_delay = 0;
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.err_detect = ErrDetectFlags::empty();
+        assert!(o.validate().is_err());
+
+        let mut o = base.clone();
+        o.recursion_limit = 5;
+        assert!(o.validate().is_err());
     }
 
     #[test]
