@@ -241,12 +241,22 @@ static OBJECT_TYPE_TABLE: &[(u8, Option<CodecId>)] = &[
     // Measured: every `mp4a` + `esds` AAC entry this crate has seen carries
     // object type `0x40`.
     (0x40, Some(CodecId::Aac)), // Audio ISO/IEC 14496-3 (AAC)
-    (0x60, None),               // Visual ISO/IEC 13818-2 Simple Profile
-    (0x61, None),               // Visual ISO/IEC 13818-2 Main Profile
-    (0x62, None),               // Visual ISO/IEC 13818-2 SNR Profile
-    (0x63, None),               // Visual ISO/IEC 13818-2 Spatial Profile
-    (0x64, None),               // Visual ISO/IEC 13818-2 High Profile
-    (0x65, None),               // Visual ISO/IEC 13818-2 422 Profile
+    // MPEG-2 Video, undifferentiated by profile the way 0x6A (MPEG-1 Video)
+    // is below: this workspace's `CodecId` has one MPEG-2 video variant, not
+    // one per profile, and `ffmpeg`'s own `mov` muxer bears that out — `-c:v
+    // mpeg2video -f mp4` always writes `mp4v` + `esds` with object type
+    // `0x61` (Main Profile) regardless of the actual profile the stream
+    // encodes, never a profile-specific tag. Measured 2026-09-02. Previously
+    // all five of these were `None`, so a real `ffmpeg`-produced MPEG-2-in-
+    // MP4 file demuxed as `codec_name=unknown` and could not be transcoded
+    // at all — the same "registered but wrong" class as the `mp4v` FourCC
+    // itself being unmapped.
+    (0x60, Some(CodecId::Mpeg2video)), // Visual ISO/IEC 13818-2 Simple Profile
+    (0x61, Some(CodecId::Mpeg2video)), // Visual ISO/IEC 13818-2 Main Profile
+    (0x62, Some(CodecId::Mpeg2video)), // Visual ISO/IEC 13818-2 SNR Profile
+    (0x63, Some(CodecId::Mpeg2video)), // Visual ISO/IEC 13818-2 Spatial Profile
+    (0x64, Some(CodecId::Mpeg2video)), // Visual ISO/IEC 13818-2 High Profile
+    (0x65, Some(CodecId::Mpeg2video)), // Visual ISO/IEC 13818-2 422 Profile
     (0x66, Some(CodecId::Aac)), // Audio ISO/IEC 13818-7 Main Profile
     (0x67, Some(CodecId::Aac)), // Audio ISO/IEC 13818-7 LowComplexity Profile
     (0x68, Some(CodecId::Aac)), // Audio ISO/IEC 13818-7 Scaleable Sampling Rate
@@ -353,6 +363,42 @@ mod tests {
         assert_eq!(d.avg_bitrate, 69_655);
         assert_eq!(d.decoder_specific, Some(&[0x12u8, 0x08][..]));
         assert_eq!(d.codec(), Some(CodecId::Aac));
+    }
+
+    /// Object type `0x61` (MPEG-2 Visual, Main Profile) is what real
+    /// `ffmpeg` (9.0.1, measured 2026-09-02) actually writes for `-c:v
+    /// mpeg2video -f mp4`: `mp4v` + `esds` with this exact object type,
+    /// regardless of profile. Before this table had an entry for `0x60`-
+    /// `0x65`, this decoded to `None` and the demuxed stream reported
+    /// `codec_name=unknown`, refusing to transcode at all.
+    #[test]
+    fn an_mpeg2_esds_with_ffmpegs_main_profile_object_type_resolves() {
+        let dsi = descriptor(TAG_DECODER_SPECIFIC, &[0xAA, 0xBB]);
+        let mut dcd = vec![0x61, 0x11];
+        dcd.extend_from_slice(&[0, 0, 0]); // bufferSizeDB
+        dcd.extend_from_slice(&0u32.to_be_bytes());
+        dcd.extend_from_slice(&200_000u32.to_be_bytes());
+        dcd.extend_from_slice(&dsi);
+        let mut es = vec![0x00, 0x01, 0x00];
+        es.extend_from_slice(&descriptor(TAG_DECODER_CONFIG, &dcd));
+        let raw = fullbx(b"esds", 0, 0, &descriptor(TAG_ES, &es));
+        let d = EsDescriptor::parse(&first_box(&raw).full().unwrap()).unwrap();
+        assert_eq!(d.object_type, 0x61);
+        assert_eq!(d.stream_type, stream_type::VISUAL);
+        assert_eq!(d.codec(), Some(CodecId::Mpeg2video));
+    }
+
+    /// Every MPEG-2 Visual profile object type names the same `CodecId` —
+    /// this workspace has one MPEG-2 video decoder, not one per profile.
+    #[test]
+    fn every_mpeg2_visual_profile_object_type_maps_to_mpeg2video() {
+        for oti in [0x60, 0x61, 0x62, 0x63, 0x64, 0x65] {
+            assert_eq!(
+                object_type_codec(oti),
+                Some(CodecId::Mpeg2video),
+                "object type {oti:#04x} should resolve to Mpeg2video"
+            );
+        }
     }
 
     #[test]
