@@ -5004,3 +5004,96 @@ fair bar until every co-located bug in that same case closes.
 touched crates (`vaco-demux-asf`, `vaco-parse-mpegvideo`, `vaco-format-dv`),
 each with a new or updated regression test tied to a real, measured
 fixture rather than a synthetic one.
+
+## 59. 455 diverging cases was a floor, not a count: fixing the instrument found 13,334 field-level divergences behind 447 of them
+
+Finding 58's own closing observation, generalized: fixing the field a case
+was sampled for routinely un-hid a second, previously-invisible divergence
+sitting right after it in the same `exact-bytes` stdout, because
+`compare::exact`'s report stopped at the first differing byte. That made
+the regression sweep's headline number (finding 56/57: 254 agreed / 455
+diverged) a lower bound on how much was actually wrong, not a count of it,
+and made "a case moved to agreed" a poor way to measure a fix — a real fix
+can move a case from one hidden bug straight into a second one with zero
+visible change in pass/fail.
+
+**The fix, kept narrowly scoped to reporting.** `exact-bytes` is still the
+pass/fail check — any byte difference still fails the case; nothing here
+weakens that. `compare::exact::compare` now also runs a real line-level
+diff (`line_diffs`, LCS-aligned, not a positional zip — a zip would report
+every line after one insertion or deletion as "changed" even though only
+one line actually differs) and attaches every non-matching line to the
+report as a `FieldDiff`, alongside the pre-existing byte-offset summary and
+excerpt. The alignment is deterministic (ties always resolve toward "both
+lines equal" over either single-sided step), so the same two inputs
+produce the same diff on every run — the property a report needs to be
+diffable across two runs of the suite.
+
+**The true totals, re-running after rebuilding.** 709 cases: **262 agreed,
+447 diverged** (was 254/455 before this session's three
+root-cause fixes in finding 58; 8 cases fully resolved, which contradicts
+what finding 58 itself claimed for the four specific cases it hand-checked
+— that check was real but was never a claim about the *other* 451 cases).
+
+The number this whole exercise was for: **13,334 individual field-level
+line divergences across those 447 diverging cases** (plus 4 more from the
+separate, pre-existing `structured-diff` mode, used by a small number of
+`transcode-remux-structural` cases). Distribution, not a flat 13,334/447:
+
+- Median **4** hidden divergences per diverging case — a typical probe
+  case has a handful of real, distinct field problems once you can see past
+  the first one.
+- Mean **~37**, pulled far above the median by `section=packets` cases,
+  which print one line *per packet* — a single systematic bug (a wrong
+  per-packet timestamp or duration, the exact shape finding 58's mpeg2-ps
+  and DV findings below are) shows up as hundreds of "changed" lines, not
+  hundreds of independent defects. The worst: `probe-asf/h264-and-aac/
+  section=packets,writer=flat` at 1187 lines, `probe-mpegts/mpeg2-ps/
+  section=packets` at 726 and 604 across two writers, `probe-ogg/
+  flac-audio/section=packets` at 539 across four writers.
+- **90 of the 447** diverging cases are transcode `output-file` (binary
+  container bytes) comparisons, which this change does not break down
+  further — they still report one byte offset, same as before. Named
+  explicitly rather than folded silently into "0 field diffs found," which
+  would misreport them as agreeing on everything but one byte.
+
+**What the four cases finding 58 already flagged were really hiding**,
+now visible instead of inferred:
+
+- `probe-matroska/mpeg4-video` (json): 4 real fields past the one already
+  named — `mime_codec_string` (`"mp4v.20"`), `chroma_location`,
+  `quarter_sample`, `divx_packed`, all present on the reference and absent
+  from vaco.
+- `probe-mpegts/mpeg2-ps` (compact): far more than "a byte differs" —
+  `coded_width`/`coded_height` (already named in finding 58),
+  `has_b_frames`, `sample_aspect_ratio`/`display_aspect_ratio` swapped
+  from what the reference reports, `color_range`, `chroma_location`, `id`,
+  `r_frame_rate`, `duration_ts`/`duration`, `extradata_size`, an entire
+  missing `side_data` block (`CPB properties`), and on the audio stream:
+  `mime_codec_string`, and **`sample_fmt` itself** — vaco reports `fltp`
+  where the reference reports `s16p` for the same MP2 stream, a real,
+  substantive parameter-level bug, not a cosmetic one. This one case alone
+  is a small cluster of real gaps in `vaco-demux-mpegps`/`vaco-parse-
+  mpegaudio`'s MP2-in-MPEG-PS handling, not a single item.
+- `probe-dv/dv-ntsc` (xml): past the already-fixed `sample_aspect_ratio`
+  and the already-known missing `chroma_location`, the diff surfaces
+  `avg_frame_rate`/`time_base` disagreeing outright — the reference
+  reports `60000/1`/`1/60000` where vaco reports the frame rate
+  `30000/1001`/`1001/30000`, consistent with DV's own field-vs-frame
+  distinction (NTSC DV is field-based; `avg_frame_rate` may need the field
+  rate, not the frame rate) — and a missing `bit_rate`. Not investigated
+  further here; flagged precisely for whoever picks up DV next.
+- `probe-asf/h264-and-aac` (xml): confirms finding 58's own open item
+  (`FORMAT`/video-`STREAM` `start_time` still `0` where the reference
+  reports `57` on every field, `format.start_time` included) and surfaces
+  one more: a missing `creation_time` tag (`"1970-01-01T00:00:00.000000Z"`)
+  on the `FORMAT` section.
+
+**Not attempted here**: fixing any of the newly-visible field gaps above —
+this pass was about repairing the instrument and reporting the true
+totals it then measured, not about grinding further on individual cases.
+`cargo test`/`cargo clippy -p vaco-conformance --all-targets -D warnings`
+clean, with new tests pinning the no-cascade property (one inserted or
+removed line must report as exactly one line, not every line after it),
+the delete+insert merge into a single before/after entry, and run-to-run
+determinism of the alignment.
