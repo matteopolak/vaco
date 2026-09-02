@@ -55,15 +55,17 @@ fn read_header(r: &mut Reader<'_>) -> Result<Header> {
 }
 
 fn plane_for_channel(channels: u32, z: u32) -> usize {
-    // The reference decodes 3-channel files to `gbrp` (plane order G, B, R)
-    // and single-channel files to `gray8`.
+    // The reference decodes 3-channel files to `gbrp` (plane order G, B, R),
+    // 4-channel files to `gbrap` (the same three plus alpha in plane 3), and
+    // single-channel files to `gray8`.
     if channels == 1 {
         0
     } else {
         match z {
             0 => 2, // red -> plane 2
             1 => 0, // green -> plane 0
-            _ => 1, // blue -> plane 1
+            2 => 1, // blue -> plane 1
+            _ => 3, // alpha -> plane 3
         }
     }
 }
@@ -99,13 +101,26 @@ fn rle_decode_scanline(data: &[u8], out: &mut [u8]) -> Result<()> {
     Ok(())
 }
 
-/// The pixel format a channel count denotes. Measured: the reference decodes
-/// a 3-channel SGI to `gbrp` and a single-channel one to `gray8`.
+/// The pixel format a channel count denotes. Measured against the reference:
+/// one channel is `gray8`, three are `gbrp`, four are `gbrap`.
+///
+/// Two channels is the one shape not measured — neither `ffmpeg`'s SGI encoder
+/// nor any fixture here produces one — so it takes the three-channel branch
+/// rather than inventing a mapping.
 const fn pixel_format(channels: u32) -> PixFmt {
-    if channels == 1 {
-        PixFmt::Gray8
-    } else {
-        PixFmt::Gbrp
+    match channels {
+        1 => PixFmt::Gray8,
+        4 => PixFmt::Gbrap,
+        _ => PixFmt::Gbrp,
+    }
+}
+
+/// How many of the file's channels the chosen [`pixel_format`] has room for.
+const fn used_channels(channels: u32) -> u32 {
+    match channels {
+        1 => 1,
+        4 => 4,
+        _ => 3,
     }
 }
 
@@ -122,8 +137,8 @@ pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
     ))
 }
 
-/// Decode an SGI image into `gray8` (one channel) or `gbrp` (three or more,
-/// extra channels dropped).
+/// Decode an SGI image into `gray8` (one channel), `gbrp` (two or three) or
+/// `gbrap` (four).
 ///
 /// # Errors
 /// [`Error::Unsupported`] for 16-bit channels, [`Error::InvalidData`] for a
@@ -133,7 +148,7 @@ pub fn decode(data: &[u8], budget: &mut Budget) -> Result<Frame> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r)?;
     let format = pixel_format(header.channels);
-    let used_channels = if header.channels == 1 { 1 } else { 3 };
+    let used_channels = used_channels(header.channels);
 
     let mut frame = Frame::alloc_video(budget, format, header.width, header.height)?;
 

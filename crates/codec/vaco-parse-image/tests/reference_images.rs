@@ -47,6 +47,18 @@ struct Case {
 
 fn cases() -> Vec<Case> {
     let mut out = Vec::new();
+    // A four-channel SGI with a real alpha ramp, not a constant one: the
+    // decoder used to drop the fourth channel and report `gbrp`, which an
+    // opaque fixture cannot tell from correct.
+    out.push(Case {
+        stem: "sgia_13x7",
+        ext: "sgi",
+        width: 13,
+        height: 7,
+        format: PixFmt::Gbrap,
+        parse: vaco_codec_image_simple::parameters_sgi,
+        decode: vaco_codec_image_simple::decode_sgi,
+    });
     for (w, h, size) in [(13u32, 7u32, "13x7"), (33, 5, "33x5")] {
         let rows: &[(&str, PixFmt, ParseFn, DecodeFn)] = &[
             (
