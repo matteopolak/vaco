@@ -2442,3 +2442,94 @@ correction, reached by reading `vaco-codec-core` source, not new decoder
 behavior. `vaco-codec-h264`, the AAC/transform crates, the filter crates,
 `vaco-conformance`, `vaco-codec-core` itself and the fuzz harnesses were
 not touched.
+
+
+## 33. HEVC B4 -- the per-CTU-tile publish primitive, built in vaco-codec-core
+
+The coordinator reviewed §32's correction (chaining `ProgressPicture` per
+CTU row does not give WPP real parallelism) and chose explicitly between
+the two paths it laid out: build the genuine per-CTU-tile publish
+capability (path 1), not the smaller ~2x reconstruction/deblock+SAO
+pipeline (path 2) -- HEVC has no threading of any kind today and is the
+single largest gap on the whole performance board (26.5x behind
+default-threaded ffmpeg), and path 2's own ceiling would not clear this
+item's 1/2/4/8/16-thread verification bar regardless of how well it were
+built.
+
+`crates/signal/vaco-codec-core/src/picture.rs` (commit `0af678e`) gained
+the missing axis, generalising rather than duplicating the existing
+mechanism (D19/D23): `PlaneSpec::with_bands(band_w, band_h)` splits a
+plane into a 2-D grid of tiles instead of one column of full-width row
+bands, each tile independently owned-while-filling then moved into a
+`OnceLock` the identical way a row band already was.
+`PictureWriter::tile_mut`/`publish_tile` and `PictureRef::wait_tile`/
+`wait_tile_for`/`try_tile`/`ready_cols` are the tile-addressed
+counterparts of the existing row-addressed methods; `band_h`/`guard` moved
+from `PictureSpec` (one value shared by every plane) to `PlaneSpec` (one
+value per plane), since HEVC's own luma/chroma CTBs are different absolute
+sizes in 4:2:0, not just different plane dimensions.
+`PictureSpec::with_band_height`/`with_guard`/`single_band` still take one
+value each and apply it to every plane already added, reproducing their
+old picture-wide meaning exactly for a caller that never calls
+`with_bands` -- confirmed byte-for-byte by all 15 pre-existing
+`picture.rs` tests passing unchanged, plus `vaco-codec-h264`/`vp8`/`vp9`'s
+full suites (their own call sites needed zero changes).
+
+What does not generalise, found while building it rather than assumed
+going in: `PlaneView::row`/`block` promise one contiguous borrow per row,
+which cannot survive a plane whose rows are split across independently-
+allocated column tiles -- there is no single slice to hand back without a
+copy, so `PlaneView::block` now refuses a column-banded plane outright
+rather than silently serving only the first column's bytes, and
+column-banded planes read through `BlockRef`-per-tile instead. This is
+not a gap in the implementation; it is a direct consequence of the same
+aliasing rule the whole module exists to route around (`&mut` a writer
+still holds over any part of a shared allocation cannot coexist with any
+other thread's `&` into that allocation without `unsafe`) -- which is why
+tiles are separate heap allocations moved by ownership transfer, not
+slices of one shared buffer, and it is also why HEVC's own
+`framebuf::Plane::row`/`row_mut` (one contiguous full-width slice, the
+exact shape B1/B2 tuned every hot copy loop around) cannot survive the
+move to tile storage unchanged either. `docs/codec/
+hevc-wavefront-threading.md` records the concrete consequence: Stage 1 is
+not "swap `Plane`'s internal `Vec<u8>` for something tile-shaped behind
+the same API" (B2's own template) but "give up the contiguous-row
+read/write API at every call site that uses it, in favour of a
+tile-addressed one" -- a larger, more invasive change than B2 was, and the
+doc now lays out the concrete four-step plan for it (`Plane` gains a
+`PictureWriter` per component plane; writes map onto `tile_mut`
+mechanically; reads split into "still-open CTU, cheap" and "finished
+neighbour, through `wait_tile`/`try_tile`"; `CuGrid`/`EdgeMarks`/
+`sao_params` need the analogous treatment at their own granularity).
+
+11 new tests in `vaco-codec-core/tests/picture.rs` (26 total) cover the
+tile axis: independent per-column publish/read, out-of-order-publish and
+wrong-axis-API refusal (`publish_through` on a tiled plane,
+`publish_tile` on a row-banded one, `PlaneView::block` on a tiled one),
+a reader that wakes only for the specific tile it waited on, a dropped
+writer failing tile waiters the same way it fails row waiters,
+independently-sized luma/chroma tiles in one picture, and the load-bearing
+proof: `a_later_row_starts_before_an_earlier_row_finishes_its_whole_width`,
+where a "row 1" reader proceeds past its own first tile while a "row 0"
+writer still has three-quarters of its own row left to publish -- the
+schedule no row-banded plane can express at any band height, and the
+concrete reason §32's original premise was wrong. Repeated 15/15 clean on
+the concurrent tests specifically (no flakiness observed at this scale);
+`cargo clippy -p vaco-codec-core --all-targets -- -D warnings` and `cargo
+xtask unsafe-audit` both clean.
+
+**Not done in this section**: HEVC's own integration (rewriting
+`framebuf.rs`/`ctu.rs`/`deblock.rs`/`sao.rs`/`decoder.rs` onto the new
+primitive, Stage 1's serial byte-exactness and ≤1.03x gate, Stage 2's
+actual thread dispatch, the new `hevc_decode_threaded` fuzz target, and
+the full byte-exact-at-every-thread-count verification matrix). That
+remains real, unstarted work, sized larger than the plan's original XL
+(3-4 weeks) estimate now that the read-side consequence above is known --
+this section is the primitive that work depends on, landed and verified
+on its own rather than bundled with an unverified rewrite of a byte-exact
+decoder's hottest data structure in the same pass.
+
+`vaco-codec-hevc`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched beyond
+verifying `vaco-codec-h264`/`vp8`/`vp9` still pass against the modified
+`vaco-codec-core`.

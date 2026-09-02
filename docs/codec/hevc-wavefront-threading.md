@@ -179,6 +179,93 @@ answer to that question before writing Stage 1 code either way, the same
 way the deblocking-lag question needed answering before this document could
 be trusted at all.
 
+**Decided: path 1.** HEVC has no threading of any kind today (26.5x behind
+default-threaded `ffmpeg`, most of that spread attributable to threading
+alone) and path 2 caps near 2x regardless of thread count — building it
+would not clear the item's own 1/2/4/8/16-thread verification bar, so it
+would be a different, smaller feature built instead of this one, not a step
+toward it. `vaco-codec-core::picture` gained the per-CTU-tile publish
+capability path 1 needs
+(`crates/signal/vaco-codec-core/src/picture.rs`, commit `0af678e`):
+`PlaneSpec::with_bands(band_w, band_h)` splits a plane into a 2-D grid of
+independently publish-and-wait-able tiles instead of one column of
+full-width row bands, using the identical own-while-filling-then-move-into-
+`OnceLock` discipline the row axis already had —
+`PictureWriter::tile_mut`/`publish_tile` and `PictureRef::wait_tile`/
+`wait_tile_for`/`try_tile`/`ready_cols` are the tile-addressed counterparts
+of `band_mut`/`publish_through`/`wait_rows`/`wait_rows_for`/`try_rows`/
+`ready_rows`. `PictureSpec::new` without `PlaneSpec::with_bands` reproduces
+every existing row-banded caller's behaviour exactly, byte for byte — all
+15 pre-existing `picture.rs` tests plus `vaco-codec-h264`/`vp8`/`vp9`'s full
+suites pass unchanged, and 11 new tests (26 total) cover the tile axis
+itself, including one that proves the actual point directly: a "row 1"
+worker reading through `wait_tile_for` can proceed past its own first tile
+while a "row 0" writer still has three-quarters of its own row left to
+publish — the schedule a row-banded plane cannot express at any band
+height, and the reason this document's earlier premise (chaining
+`ProgressPicture` per row) was wrong.
+
+**What this does not yet solve, found while building it — the read-side
+split.** `vaco_codec_core::picture::PlaneView::row`/`block` promise one
+contiguous borrow per row; that promise cannot survive a plane whose rows
+are split across independently-allocated column tiles, so column-banded
+planes read through `BlockRef`-per-tile instead, and `PlaneView::block`
+itself now refuses a column-banded plane outright (see the crate's own
+module doc for why: a `&mut` a writer thread still holds over anything, even
+a disjoint sub-region of a shared allocation, cannot coexist with any other
+thread's `&` into that same allocation under Rust's aliasing rules without
+`unsafe` — this is not a design preference, it is why `Band`/tiles are
+separate heap allocations moved by ownership transfer rather than slices of
+one shared buffer). This has a direct, unavoidable consequence for HEVC's
+own `framebuf::Plane`: `Plane::row`/`row_mut` currently return one
+contiguous full-width slice — the exact shape B1/B2 tuned every hot copy
+loop in `ctu.rs`/`deblock.rs`/`sao.rs`/`decoder.rs` around — and that shape
+cannot survive the move to tile storage either, for the identical reason.
+Stage 1 is therefore not "swap `Plane`'s internal `Vec<u8>` for something
+tile-shaped behind the same `get`/`set`/`row`/`row_mut` API" (B2's own
+template): it is "give up the contiguous-row read/write API at every call
+site that currently uses it, in favour of a tile-addressed one," which is a
+larger, more invasive change than B2 was, in the crate's single hottest
+data structure.
+
+**Concrete Stage 1 plan, now that the primitive exists:**
+
+1. `framebuf::Plane` gains a `PictureWriter` (for `y`, `cb`, `cr` each,
+   allocated via `PictureSpec::new(vec![...]).with_bands(ctb, ctb)` on the
+   `y` plane and `with_bands(ctb / 2, ctb / 2)` on `cb`/`cr` for 4:2:0) in
+   place of its own `Vec<u8>` + 4x4 `ready` grid. `Plane::set`/`row_mut`'s
+   callers all write within one CTU at a time already (the coding-tree walk
+   never crosses a CTU boundary for a write), so every *write* call site
+   maps onto exactly one `tile_mut` — this part is mechanical.
+2. Every *read* call site is the real work, and splits into two shapes:
+   reads confined to the CTU currently being written (the common case:
+   intra prediction's own reconstructed samples, MC's own output before
+   deblocking) stay cheap by reading directly from the `BandMut`/tile still
+   held for that CTU; reads that reach into an *already-finished* neighbour
+   (the row above, the CTU to the left, above-right) go through
+   `PictureRef::wait_tile`/`try_tile` instead of a flat index — for Stage 1,
+   single-threaded, this wait never actually blocks (the neighbour is
+   always already published, since decode is still strictly serial), so the
+   cost being measured is purely the extra indirection and lookup, not
+   contention.
+3. `CuGrid`/`EdgeMarks`/`sao_params` need the equivalent treatment at their
+   own (finer, 4x4 or per-CTU) granularity — smaller, simpler structures
+   than a pixel plane, so a hand-rolled tile grid following the same
+   own-then-publish shape is likely less code than adapting them to
+   `vaco_codec_core::picture`'s pixel-stride-shaped API, but this still
+   needs deciding in the doing, not assumed here.
+4. Gate exactly as originally planned: byte-exact against every fixture
+   this item's brief names, single-threaded, before touching `Stage 2`'s
+   actual thread dispatch; ≤1.03x versus the pre-Stage-1 baseline or stop
+   and report the number (D20).
+
+This is not done — this pass built and verified the primitive path 1
+needs and mapped exactly what Stage 1 now requires of it, and stops at that
+checkpoint rather than starting an invasive, multi-file rewrite of a
+byte-exact decoder's hottest data structure without yet having measured
+whether the tile-addressed read path costs more than the plan's own 3%
+serial gate allows. The next pass into this item starts at step 1 above.
+
 ## What actually needs to become per-row
 
 `ctu::Ctx` (`crates/codec/vaco-codec-hevc/src/ctu.rs`) is the single
@@ -368,16 +455,23 @@ proven, not designed.
   in `vaco-codec-core`."
 - ~~Whether `vaco-codec-core::picture` needs any new capability at all, or
   whether "one `ProgressPicture` per CTU row" as sketched above is
-  sufficient — this pass believes the latter~~ **Corrected, not just
-  resolved**: chaining one `ProgressPicture` per CTU row is not sufficient
-  — see the correction above, reached by reading `picture.rs`'s actual
-  `band_of`/`publish_through`/`ready` implementation rather than trusting
-  its module doc's cross-picture framing to generalise. Which of the two
-  paths in "Two honest paths forward" to take (build the new per-CTU-tile
-  capability, in or out of this crate, vs. build the smaller two-stage
-  pipeline that needs nothing new) is now the open decision, and it is a
-  plan-level scoping call, not a fact this crate's own code can settle by
-  itself the way the deblocking-lag question was.
+  sufficient~~ **Resolved, and built**: it needed a new capability —
+  `PlaneSpec::with_bands`, `PictureWriter::tile_mut`/`publish_tile`,
+  `PictureRef::wait_tile`/`wait_tile_for`/`try_tile`/`ready_cols`
+  (`vaco-codec-core` commit `0af678e`) — and it now exists, additively,
+  with every pre-existing row-banded caller (`vaco-codec-h264`/`vp8`/`vp9`)
+  unaffected. Path 1 was chosen over path 2 (see "Two honest paths
+  forward" above): HEVC has no threading at all today and path 2's ~2x
+  ceiling would not clear this item's own thread-count verification bar.
+- **Whether the tile-addressed read path — every `ctu.rs`/`deblock.rs`/
+  `sao.rs` call site that currently reads a contiguous full-width `Plane`
+  row and now has to determine which tile a coordinate falls in and look it
+  up, sometimes across a not-yet-guaranteed-published neighbour — costs
+  more than Stage 1's own 3% serial gate.** This is genuinely unmeasured:
+  building the primitive answered "can this exist at all in safe Rust"
+  (yes), not "is it fast enough once wired into the hottest data structure
+  in a byte-exact decoder." See "Concrete Stage 1 plan" above for exactly
+  what has to be rewritten to find out.
 
 ## Why this pass stops here
 
@@ -386,26 +480,25 @@ proven, not designed.
 the `VACO_HEVC_TRACE` debug instrumentation found live in `ctu.rs` during
 B3's work). The restructure this item needs touches `framebuf.rs`, `ctu.rs`,
 `deblock.rs`, `sao.rs` and `decoder.rs` at once — effectively the whole
-crate — for a byte-exact video decoder, and (per the correction above) at a
-finer, more invasive granularity (per-CTU-tile, not per-CTU-row) than this
-document previously believed, if path 1 (true WPP) is the one taken.
+crate — for a byte-exact video decoder, at a finer, more invasive
+granularity (per-CTU-tile, not per-CTU-row) than this document originally
+believed, now that path 1 is the confirmed direction.
 
-The deblocking-lag proof that used to gate even starting this is resolved
-(one CTU row each side, `planning/E2E-GAPS.md` §31) and is no longer a
-blocker either way. What replaced it as the actual blocker is the
-correction above: this pass discovered, by reading `vaco_codec_core::
-picture`'s implementation rather than assuming its cross-picture framing
-generalised, that the mechanism this document previously proposed reusing
-does not give WPP real parallelism at all. Writing Stage 1 against that
-premise would have meant restructuring `framebuf.rs`/`ctu.rs`/`deblock.rs`/
-`sao.rs`/`decoder.rs` — unverified, in a crate under active concurrent
-editing — around a mechanism that, once threaded in Stage 2, could not have
-delivered the scaling the item's own 1/2/4/8/16-thread verification bar
-requires. Finding that out empirically now, before any of that restructure
-is written, instead of after Stage 2 fails to scale, is the same discipline
-this document's own deblocking-lag section used a measurement to answer
-rather than an assumption. This document is what the plan itself asks for
-first; it now says the item is more expensive than previously scoped (path
-1) or is not quite the item as named (path 2), and picking between those is
-a decision for whoever owns the plan, not a default this pass takes for
-itself.
+Both prior blockers are resolved: the deblocking-lag proof (one CTU row
+each side, `planning/E2E-GAPS.md` §31), and the mechanism question (this
+document's own earlier proposal to chain `ProgressPicture` per row did not
+give WPP real parallelism; `vaco-codec-core` now has the per-CTU-tile
+capability that does, `planning/E2E-GAPS.md` §33 and commit `0af678e`).
+What is left is the thing neither of those proofs could stand in for:
+actually rewriting `vaco-codec-hevc`'s hottest data structure onto the new
+primitive and measuring whether the tile-addressed read path clears Stage
+1's own 3% serial gate — "Concrete Stage 1 plan" above names exactly what
+that rewrite touches and in what order. That is a multi-file, invasive
+change to a byte-exact decoder's core representation, landed unverified in
+a crate under active concurrent editing, and is worth its own pass rather
+than folding it into this one on top of a synchronisation primitive that
+was itself only finished this session. This document is what the plan
+itself asks for first; the next pass into this item starts Stage 1's own
+rewrite with a primitive already built, tested, and merged underneath it —
+narrower, better-grounded work than either of the two paths this document
+was choosing between at the start of this pass.
