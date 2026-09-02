@@ -52,7 +52,9 @@ use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_parse_h264::slice::{RefPicListModification, RefPicMarking};
-use vaco_parse_h264::{H264NalHeader, H264Parser, NalUnitType, SliceHeader, SliceKind};
+use vaco_parse_h264::{
+    H264NalHeader, H264Parser, NalUnitType, SliceHeader, SliceKind, cc_data_from_sei, sei,
+};
 use vaco_pixfmt::PixFmt;
 use vaco_pool::ALIGN;
 
@@ -472,15 +474,36 @@ impl H264Decoder {
         // treats them.
         let mut slice_nal: Option<&[u8]> = None;
         let mut slice_count = 0u32;
+        // ATSC A/53 closed captions (interface gap 18's attachment half —
+        // extraction itself is `vaco_parse_h264::a53`, already landed).
+        // Concatenated across every SEI NAL in this access unit, in NAL
+        // order: a stream at the 9600 bit/s CEA-708 allocation almost
+        // always fits one `cc_data()` per picture, but nothing requires
+        // that. `sps: None` because `cc_data_from_sei` never reaches
+        // `pic_timing`, the one payload type that needs it.
+        let mut cc_data = Vec::new();
         for nal in vaco_format_nalu::units(payload, framing) {
             let Some(header) = H264NalHeader::parse(nal.data) else {
                 continue;
             };
-            if matches!(header.nal_unit_type, NalUnitType::IdrSlice | NalUnitType::NonIdrSlice) {
-                slice_count += 1;
-                if slice_nal.is_none() {
-                    slice_nal = Some(nal.data);
+            match header.nal_unit_type {
+                NalUnitType::IdrSlice | NalUnitType::NonIdrSlice => {
+                    slice_count += 1;
+                    if slice_nal.is_none() {
+                        slice_nal = Some(nal.data);
+                    }
                 }
+                NalUnitType::Sei => {
+                    self.rbsp.fill(nal.data, &mut self.budget)?;
+                    if let Ok(messages) = sei::parse(self.rbsp.as_slice(), None, &mut self.budget) {
+                        for msg in &messages {
+                            if let Some(triplets) = cc_data_from_sei(&msg.payload) {
+                                cc_data.extend_from_slice(triplets);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
         if slice_count > 1 {
@@ -981,6 +1004,7 @@ impl H264Decoder {
                 pts: pkt.pts,
                 duration: pkt.duration,
                 is_idr: info.is_idr,
+                closed_captions: cc_data,
             },
             limits: self.limits.clone(),
             pools: self.pools.clone(),

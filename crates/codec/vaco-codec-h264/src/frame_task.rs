@@ -42,7 +42,7 @@
 use vaco_codec_core::picture::{PictureRef, PictureWriter};
 use vaco_codec_core::{FrameTask, TaskCtx};
 use vaco_core::{Error, Result};
-use vaco_frame::{Frame, FrameFlags};
+use vaco_frame::{Frame, FrameFlags, FrameSideData};
 use vaco_limits::{Budget, Limits};
 use vaco_pixfmt::PixFmt;
 
@@ -65,7 +65,7 @@ pub(crate) struct DeblockParams {
 
 /// What [`crate::decoder::build_frame`] needs to crop the coded picture down to
 /// the SPS's displayed size and stamp the container's timing on it.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(crate) struct FrameGeometry {
     pub(crate) dimensions: Option<(u32, u32)>,
     pub(crate) crop_unit: (u32, u32),
@@ -73,6 +73,15 @@ pub(crate) struct FrameGeometry {
     pub(crate) pts: vaco_core::Timestamp,
     pub(crate) duration: vaco_core::Duration,
     pub(crate) is_idr: bool,
+    /// Raw `cc_data` triplet bytes from this access unit's own
+    /// `user_data_registered_itu_t_t35` SEI (ATSC A/53), if any — empty for
+    /// the ordinary case of a picture with no caption SEI. Attached to
+    /// *this* picture's `Frame` in [`build_frame`], not accumulated
+    /// elsewhere, so the decoder's own POC reordering carries it from
+    /// decode order into presentation order for free — see
+    /// `vaco_parse_h264::a53`'s module doc for why getting this wrong
+    /// fails silently rather than loudly.
+    pub(crate) closed_captions: Vec<u8>,
 }
 
 /// One picture's reconstruction, deblocking and crop.
@@ -457,5 +466,9 @@ pub(crate) fn build_frame(
 
     frame.pts = geometry.pts;
     frame.duration = geometry.duration;
+    if !geometry.closed_captions.is_empty() {
+        let buffer = vaco_pool::Buffer::from_slice(budget, &geometry.closed_captions)?;
+        frame.set_side_data(FrameSideData::ClosedCaptions(buffer));
+    }
     Ok(frame)
 }
