@@ -133,6 +133,38 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          than the registry, so it inherits that crate's wall.",
     ),
     (
+        "vaco-protocol-rist",
+        "depends on vaco-protocol-dtls (NATIVE_ONLY above, openssl) for PSK/DTLS \
+         session establishment (TR-06-2 section 6), and vaco-protocol-dtls in \
+         turn depends on vaco-protocol-socket (NATIVE_ONLY above, socket2) for \
+         the real UDP socket a DTLS handshake runs over. Measured: cargo build \
+         --target wasm32-unknown-unknown fails inside socket2 itself (E0583 \
+         'file not found for module `sys`', reached via vaco-protocol-dtls's \
+         normal — not dev — dependency on vaco-protocol-socket), the same wall \
+         one level removed, same shape as vaco-demux-rtsp's entry above. A wasm \
+         build would reach RIST's encrypted profile through the browser's own \
+         WebRTC/DataChannel APIs, not a wasm build of this crate.",
+    ),
+    (
+        "vaco-corpus",
+        "depends on vaco-protocol-http (NATIVE_ONLY above: ureq + rustls, a \
+         socket-and-TLS stack) to fetch content-addressed corpus entries over \
+         HTTP. Measured: cargo build --target wasm32-unknown-unknown fails on \
+         getrandom's own compile_error! reached through rustls's `ring` \
+         provider, the same wall vaco-protocol-http's own entry above already \
+         documents, one level removed. A wasm build has no use for fetching a \
+         local conformance corpus in the first place.",
+    ),
+    (
+        "vaco-conformance",
+        "depends on vaco-corpus (NATIVE_ONLY above) for corpus fetching, which \
+         inherits vaco-protocol-http's getrandom/ring wall — and independently, \
+         this crate's whole job is spawning the pinned reference binary and \
+         diffing its output (see its NATIVE_ONLY entry in xtask/src/time_gate.rs), \
+         which cannot exist on a target with no processes at all. Not a wasm \
+         build candidate under either reason.",
+    ),
+    (
         "vaco-hw-vulkan",
         "depends on ash's default `loaded` feature, which dlopens the system \
          Vulkan loader via libloading. Measured directly: cargo check --target \

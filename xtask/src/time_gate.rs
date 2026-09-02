@@ -101,6 +101,61 @@ const NATIVE_ONLY: &[(&str, &str)] = &[
          same differential-harness-shaped use `vaco-protocol-tls` is exempt \
          for above.",
     ),
+    (
+        "vaco-codec-exec",
+        "this crate's whole job is shelling out to an external encoder/decoder \
+         binary via std::process::Command; the two std::thread::spawn calls in \
+         its (non-test) process.rs drain that child's stdout/stderr pipes into \
+         channels while the caller writes/reads the coded stream. A process \
+         with pipes to drain is not something wasm32-unknown-unknown has at \
+         all, so this is production code with no portability question, not a \
+         driver the caller could supply instead — the same reasoning as \
+         vaco-conformance above, one layer closer to the codec boundary.",
+    ),
+    (
+        "vaco-mux-whip",
+        "already NATIVE_ONLY for wasm-check: dials a real TcpStream for the \
+         WHIP HTTP exchange and depends on vaco-protocol-dtls (openssl) for \
+         the DTLS handshake SRTP keys are derived from. The two \
+         std::thread::spawn calls flagged here are both in this crate's own \
+         #[cfg(test)] suite, hand-building a loopback HTTP server to drive the \
+         request() function under test — the same differential-harness-shaped \
+         use vaco-protocol-tls and vaco-protocol-dtls are exempt for above, \
+         not production code running on a target this crate already cannot \
+         build for.",
+    ),
+    (
+        "vaco-protocol-ice",
+        "production code here takes `socket: &std::net::UdpSocket` directly \
+         (see the STUN/connectivity-check functions in lib.rs) — a real OS \
+         socket handed in by the caller, not an optional abstraction, so this \
+         crate cannot run anywhere wasm32-unknown-unknown's stub std::net \
+         would matter. wasm-check does not currently catch this (a &UdpSocket \
+         parameter type compiles even where sockets do not work, the same \
+         'compiles and panics when called' gap this gate's own module doc \
+         opens with), so this crate is also being added to NATIVE_ONLY in \
+         xtask/src/wasm.rs in the same change. The two std::thread::spawn \
+         calls this gate does see are both in #[cfg(test)] — hand-built UDP \
+         loopback test peers for STUN/ICE connectivity checks — a \
+         differential-harness-shaped use, not the reason this crate is listed.",
+    ),
+    (
+        "vaco-fuzz-support",
+        "fuzz-only scaffolding: this crate's own Cargo.toml documents that it \
+         is never depended on by vaco, vaco-probe or vaco-play, only by \
+         fuzz/fuzz_targets. Guard's whole purpose is a wall-clock deadline for \
+         one fuzz iteration (see guard.rs's module doc), so it necessarily \
+         reads Instant/spawns a thread for the same differential-harness \
+         reason vaco-conformance is exempt above — a libFuzzer binary already \
+         does not run on wasm32-unknown-unknown, so gating this crate's clock \
+         use through vaco-time would add a layer of indirection with nothing \
+         on the other side of it. The flagged std::thread::sleep is in \
+         #[cfg(test)] (a deliberate delay to make a budget-exceeded test \
+         fail); the crate's production Guard also reads std::time::Instant \
+         via a `use std::time::{Duration, Instant}` import this gate's \
+         substring match on the bare path does not currently catch — noted \
+         here so the reason travels with the crate regardless.",
+    ),
 ];
 
 /// Whether the item enclosing `line` is compiled out of wasm.
