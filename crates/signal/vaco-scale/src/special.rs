@@ -623,6 +623,7 @@ pub(crate) fn proxy_to_float_frame(proxy: &Frame, dst: &mut Frame) -> Result<()>
     clippy::unwrap_used,
     clippy::float_cmp,
     clippy::indexing_slicing,
+    clippy::panic,
     reason = "test code checking exact round trips"
 )]
 mod tests {

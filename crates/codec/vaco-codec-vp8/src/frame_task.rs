@@ -145,7 +145,7 @@ impl FrameTask for Vp8FrameTask {
             for col in 0..mb_cols {
                 match parsed.get(row * mb_cols + col) {
                     Some(ParsedMb::Intra(p)) => {
-                        apply_intra(&mut y, &mut u, &mut v, mb_cols, col, row, p)
+                        apply_intra(&mut y, &mut u, &mut v, mb_cols, col, row, p);
                     }
                     Some(ParsedMb::Inter(p)) => {
                         apply_inter(

@@ -986,7 +986,7 @@ fn group_select(caps: Caps) {
                 black_box(&a),
                 black_box(&b),
                 black_box(&mut x),
-            )
+            );
         },
         || {
             probes::composed_select_native(
@@ -1005,7 +1005,7 @@ fn group_select(caps: Caps) {
                 black_box(&a),
                 black_box(&b),
                 black_box(&mut x),
-            )
+            );
         },
         || {
             probes::composed_select_bitwise(
@@ -1056,7 +1056,7 @@ fn group_select(caps: Caps) {
                 black_box(&a16),
                 black_box(&b16),
                 black_box(&mut x16),
-            )
+            );
         },
         || {
             probes::composed_select_native_i16(
@@ -1098,7 +1098,7 @@ fn group_select(caps: Caps) {
                 black_box(&a32),
                 black_box(&b32),
                 black_box(&mut x32),
-            )
+            );
         },
         || {
             probes::composed_select_native_i32(

@@ -536,7 +536,7 @@ pub const DEMUXER_IMAGE2: DemuxerDesc = DemuxerDesc {
 };
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test code")]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
     use std::fs;

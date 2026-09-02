@@ -229,7 +229,7 @@ impl SwfDemuxer {
             TAG_DEFINE_VIDEO_STREAM => self.on_define_video_stream(&payload)?,
             TAG_VIDEO_FRAME => self.on_video_frame(&payload)?,
             TAG_SOUND_STREAM_HEAD | TAG_SOUND_STREAM_HEAD2 => {
-                self.on_sound_stream_head(&payload)?
+                self.on_sound_stream_head(&payload)?;
             }
             TAG_SOUND_STREAM_BLOCK => self.on_sound_stream_block(&payload)?,
             _ => {}

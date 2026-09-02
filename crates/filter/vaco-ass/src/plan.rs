@@ -223,15 +223,15 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
         "shad" | "xshad" | "yshad" => cursor.cur.shadow = parse_num(a).unwrap_or(cursor.cur.shadow),
         "blur" | "be" => cursor.cur.blur = parse_num(a).unwrap_or(cursor.cur.blur),
         "c" | "1c" => {
-            cursor.cur.primary = crate::color::parse_color(a).unwrap_or(cursor.cur.primary)
+            cursor.cur.primary = crate::color::parse_color(a).unwrap_or(cursor.cur.primary);
         }
         // Secondary colour affects karaoke's unsung portion only, not implemented.
         "3c" => {
             cursor.cur.outline_colour =
-                crate::color::parse_color(a).unwrap_or(cursor.cur.outline_colour)
+                crate::color::parse_color(a).unwrap_or(cursor.cur.outline_colour);
         }
         "4c" => {
-            cursor.cur.back_colour = crate::color::parse_color(a).unwrap_or(cursor.cur.back_colour)
+            cursor.cur.back_colour = crate::color::parse_color(a).unwrap_or(cursor.cur.back_colour);
         }
         "alpha" => {
             if let Some(av) = crate::color::parse_alpha_only(a) {

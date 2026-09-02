@@ -97,7 +97,11 @@ delegate!(
 );
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used, reason = "test code over fixed fixtures")]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    reason = "test code over fixed fixtures"
+)]
 mod tests {
     use super::*;
     use vaco_codec_core::CodecId;

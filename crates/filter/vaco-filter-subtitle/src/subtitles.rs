@@ -140,7 +140,7 @@ impl FrameFilter for Filter {
         let mut out = input;
         match &self.source {
             Source::Ass(script) => {
-                crate::ass_filter::render_at(script, &mut self.renderer, &mut out, dur)?
+                crate::ass_filter::render_at(script, &mut self.renderer, &mut out, dur)?;
             }
             Source::Srt(cues) => {
                 let style = SimpleTextStyle::for_frame_height(height);

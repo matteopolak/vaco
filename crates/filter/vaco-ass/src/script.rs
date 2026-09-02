@@ -132,7 +132,7 @@ fn parse_info_line(line: &str, info: &mut ScriptInfo) {
         "PlayResY" => info.play_res_y = value.parse().unwrap_or(info.play_res_y),
         "WrapStyle" => info.wrap_style = value.parse().unwrap_or(info.wrap_style),
         "ScaledBorderAndShadow" => {
-            info.scaled_border_and_shadow = value.eq_ignore_ascii_case("yes")
+            info.scaled_border_and_shadow = value.eq_ignore_ascii_case("yes");
         }
         _ => {}
     }

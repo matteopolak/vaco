@@ -1153,9 +1153,10 @@ fn check_codecs(
                     ));
                 }
             },
-            None => match default_encoder_for(format, s.media, &out.url) {
-                Some(desc) => chosen_codecs.push(StreamCodec::Encode(desc.name)),
-                None => {
+            None => {
+                if let Some(desc) = default_encoder_for(format, s.media, &out.url) {
+                    chosen_codecs.push(StreamCodec::Encode(desc.name));
+                } else {
                     // The reference names the codec it resolved and could not
                     // encode (`codec jpegxl`), and `none` only when it
                     // resolved nothing at all.
@@ -1170,7 +1171,7 @@ fn check_codecs(
                         ),
                     ));
                 }
-            },
+            }
         }
     }
     Ok(chosen_codecs)
