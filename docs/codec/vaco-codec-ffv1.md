@@ -7,17 +7,25 @@ Golomb-Rice bitstream layers, per-plane/per-channel context modelling, the
 median predictor, and the Configuration Record that carries everything a
 Configuration Record's own "external means" clause requires (frame
 geometry, quantization tables, the state-transition delta). Decode handles
-both `coder_type` values (range coder and Golomb-Rice); this crate's own
-encoder only ever emits the range coder (`version = 3`), one slice per
-frame, matching the shape `codec.rs`'s `encode_frame` builds.
+all three `coder_type` values (Golomb-Rice, range coder with the default
+state transition table, and range coder with a custom one) across
+`Yuv420p`/`Yuv422p`/`Yuv444p`/`Gray8`/`Gbrp`; this crate's own encoder only
+ever emits the range coder with the default table (`version = 3`), one slice
+per frame, matching the shape `codec.rs`'s `encode_frame` builds.
 
 ## How it works
 
 ### The per-sample loop
 
-Both directions walk every plane in raster order (`slice.rs`:
-`encode_plane_range` / `decode_plane_range` / `decode_plane_golomb`). Per
-sample: fetch six border-aware neighbours (`SliceBuf::neighbours` /
+Both directions walk one `Line` at a time (`slice.rs`: `encode_line_range` /
+`decode_line_range` / `decode_line_golomb`), with `codec::line_order`
+deciding the `(plane, y)` sequence for the whole slice — Plane-then-row for
+`colorspace_type == 0`, **row-then-Plane** for the JPEG 2000 RCT, whose
+Lines interleave across planes (RFC 9043 §3.7.2, §4.7). One function
+answers that question for the encoder and the decoder, so the two cannot
+drift apart; they did, and every real `-pix_fmt gbrp` file decoded wrong
+while the crate's own `Gbrp` round trip passed. Per sample: fetch six
+border-aware neighbours (`SliceBuf::neighbours` /
 `border`, RFC 9043 §3.1-§3.2), quantize the five gradients into a context
 index (`quant::compute_context`, §3.5), predict with the median of three
 (`quant::median_predictor`, §3.3), then code the wrapped difference through
@@ -104,7 +112,7 @@ profile); flagged as a follow-up.
   interior pixel) is the largest remaining lever and was **not**
   attempted under D1's profile stage by design — see the plan.
 - `.ok_or(Error::X)` inside any of the three per-pixel loops
-  (`encode_plane_range`, `decode_plane_range`, `decode_plane_golomb`)
+  (`encode_line_range`, `decode_line_range`, `decode_line_golomb`)
   must stay `.ok_or_else(|| Error::X)`: `vaco_core::Error` carries a
   `String` variant elsewhere in the enum, so it is not trivially
   droppable, and an eager `.ok_or` measurably left a real
@@ -120,11 +128,37 @@ profile); flagged as a follow-up.
   (an observable, `ffprobe`-visible property), so it needs its own
   measured commit and a decision about whether it becomes the default.
 - This crate's own encoder only ever emits the range coder
-  (`coder_type = 1`); the reference's default for 8-bit content is
+  (`coder_type = 1`) with the default state transition table; the
+  reference's default for 8-bit content is
   Golomb-Rice, whose run mode is close to free on flat regions. Adding an
   encoder-side Rice coder (decode-side support already exists in
   `rice.rs`) is a separate, unstarted item — see `planning/PERF-PROGRAMME.md`
   D1's "Change" list.
+
+## What the tests actually prove
+
+`tests/roundtrip.rs` holds two kinds of test and only one of them is
+evidence about *FFV1*.
+
+The round trips (`round_trips_*`, `proptest_round_trips_yuv420p`) run this
+crate's encoder into this crate's decoder. They catch a decoder that cannot
+read what the encoder writes, and nothing else. Three separate bugs shipped
+underneath a green suite of them, each one a case of the encoder and the
+decoder sharing a wrong reading of the spec: Golomb-Rice run mode, the
+Sentinel/Closed-mode slice length, and the RCT Line interleave.
+
+The `decodes_real_ffmpeg_*` tests are the conformance evidence. Each decodes
+a committed `ffmpeg`-produced fixture from `tests/fixtures/` and compares
+every sample against `ffmpeg`'s own raw decode of the same file, which was
+itself confirmed byte-identical to the unencoded source before being
+committed. They cover `coder_type` 0/1/2, single- and multi-slice geometry,
+a three-frame stream in which only the first frame is a keyframe, RGB via
+the RCT under both coders, and gray. `provenance/vaco-codec-ffv1.toml`
+records the exact `ffmpeg` command behind each one.
+
+**When you add a format, a coder, or a colorspace, add a fixture.** A new
+round-trip case costs compile time and proves nothing a reference decoder
+would agree with.
 
 ## Configuration
 
