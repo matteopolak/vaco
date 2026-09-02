@@ -133,6 +133,11 @@ The old-value argument is a compare-and-swap; without it you can silently orphan
 someone else's commit. An orphaned commit looks perfectly healthy — `git show`
 prints it — so the ancestry check is the only thing that catches it.
 
+The `reference-transaction` hook now refuses any move of `main` off its own
+history, so this fails loudly rather than silently. If you hit it, rebuild on the
+new tip; don't reach for the `VACO_ALLOW_NONFF=1` override, which exists for the
+planned history rewrite.
+
 Before editing a crate, check `git log` for it and `git blame` for
 "Not Committed Yet". Prefer crates nobody is in. If the code already does what you
 came to do, stop and pick something else.

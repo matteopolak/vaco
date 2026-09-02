@@ -1,0 +1,61 @@
+#!/bin/sh
+# Refuse a non-fast-forward move of refs/heads/main.
+#
+# The private-index recipe ends with `git update-ref refs/heads/main "$commit"
+# "$BASE"`, whose second argument is a compare-and-swap. Drop it and the move
+# always succeeds, so a concurrent agent's commits stop being reachable — they
+# survive only in the reflog, and their working-tree files go with them. That
+# happened twice in one night despite being documented, which is why this is
+# now enforced rather than described.
+#
+# Note git reports an all-zero old value when the caller supplied no expected
+# value, which is exactly the unguarded case. So the pre-update tip is read
+# here rather than trusted from the transaction.
+#
+# Fails open: if either end cannot be resolved, the update is allowed. This
+# catches main provably moving off its own history, nothing more.
+#
+# For a deliberate rewrite (the planned history pass):
+#   VACO_ALLOW_NONFF=1 git update-ref ...
+
+[ "$1" = "prepared" ] || exit 0
+[ -n "$VACO_ALLOW_NONFF" ] && exit 0
+
+zero=0000000000000000000000000000000000000000
+status=0
+
+while read -r old new ref; do
+    [ "$ref" = "refs/heads/main" ] || continue
+
+    # Deleting main is not this hook's concern.
+    [ "$new" = "$zero" ] && continue
+
+    # An all-zero old means no compare-and-swap was supplied; the real
+    # pre-update tip is whatever main points at right now.
+    if [ "$old" = "$zero" ]; then
+        old=$(git rev-parse --verify --quiet refs/heads/main) || continue
+        [ -n "$old" ] || continue
+    fi
+
+    git rev-parse --verify --quiet "$old^{commit}" >/dev/null 2>&1 || continue
+    git rev-parse --verify --quiet "$new^{commit}" >/dev/null 2>&1 || continue
+
+    if git merge-base --is-ancestor "$old" "$new" 2>/dev/null; then
+        continue
+    fi
+
+    echo "refusing to move main off its own history:" >&2
+    echo "  old $old" >&2
+    echo "  new $new" >&2
+    echo "This discards every commit reachable from old but not new." >&2
+    echo "Three commits were lost this way tonight." >&2
+    echo "" >&2
+    echo "Use the compare-and-swap form:" >&2
+    echo "  git update-ref refs/heads/main \"\$commit\" \"\$BASE\"" >&2
+    echo "which fails loudly when HEAD moved, so you can rebuild on the new tip." >&2
+    echo "" >&2
+    echo "For a deliberate rewrite: VACO_ALLOW_NONFF=1" >&2
+    status=1
+done
+
+exit $status
