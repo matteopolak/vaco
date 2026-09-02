@@ -494,16 +494,19 @@ fn a_pmt_with_a_broken_crc_is_ignored_silently() {
 }
 
 #[test]
-fn a_stream_whose_codec_has_no_codec_id_is_still_reported() {
+fn a_stream_whose_codec_has_no_specific_codec_id_still_reports_bin_data() {
     let mut w = TsWriter::new();
     w.section(PAT_PID, &pat(&[(1, PMT_PID)]));
     // 0x06 with *no* descriptor is "private PES data" (Table 2-34): the PMT
-    // genuinely says nothing more, so `codec_id` staying `None` is permanent,
-    // not a gap this build might close — unlike 0x81 (ATSC AC-3), which this
-    // test used to name and which `CodecId` has since grown a variant for.
-    // Per `planning/AGENT-CONSTRAINTS.md` "never pin the absence of something
-    // the project is building", so this pins a mapping that cannot ever
-    // become wrong by the table getting more complete.
+    // genuinely says nothing more specific than "this is data" — but that
+    // *is* enough to say something, and the reference does: measured against
+    // real `ffprobe`, this exact shape (stream_type 0x06, zero-length
+    // descriptor loop) reports `codec_name=bin_data`, not `unknown`. This
+    // test used to assert `codec_id` stays permanently `None` here, per
+    // `planning/AGENT-CONSTRAINTS.md`'s "never pin the absence of something
+    // the project is building" — which was the right instinct pointed at the
+    // wrong absence: `CodecId::BinData` was a real gap the project could and
+    // did close, not a permanent one like `TsCodec::Unknown`'s.
     w.section(
         PMT_PID,
         &pmt(1, 0, 0x1FFF, &[(0x06, AUDIO_PID, Vec::new())]),
@@ -523,7 +526,7 @@ fn a_stream_whose_codec_has_no_codec_id_is_still_reported() {
     assert_eq!(d.streams().len(), 1);
     let s = &d.streams()[0];
     assert_eq!(s.media_type(), Some(vaco_core::MediaType::Data));
-    assert_eq!(s.params.codec_id, None);
+    assert_eq!(s.params.codec_id, Some(vaco_codec_core::CodecId::BinData));
     // Used to also assert `s.metadata_get("ts_codec") == Some("bin_data")`:
     // issue #635 found that field was never printed by the reference in any
     // form, and `Stream::metadata` is exactly what `vaco-probe` prints as a

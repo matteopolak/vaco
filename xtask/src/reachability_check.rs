@@ -1396,6 +1396,15 @@ const ALLOW_UNDECODABLE_PRODUCED: &[(&str, &str)] = &[
          for it.",
     ),
     (
+        "bin_data",
+        "MediaType::Data: the reference's own pseudo-codec for a stream \
+         it has been told nothing about beyond 'this is data' (MPEG-TS \
+         stream_type 0x05/0x06 with no descriptor) -- checked directly, \
+         `ffmpeg -h decoder=bin_data` reports 'known to FFmpeg, but no \
+         decoders for it are available'. Same MediaType::Data reasoning \
+         as `scte_35` above, not a gap this build is behind on.",
+    ),
+    (
         "vvc",
         "T3-07 (open epic, issue #452): VVC decode is not implemented \
          anywhere in this tree yet.",

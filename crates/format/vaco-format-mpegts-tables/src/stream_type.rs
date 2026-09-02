@@ -35,10 +35,17 @@
 //! until then: a transport stream carries SCTE-35 splice messages, timed ID3
 //! and SMPTE 336M KLV as elementary streams of their own.
 //!
-//! Two variants remain `None` deliberately. `PrivateData` is `stream_type`
-//! 0x06 with no descriptor saying what it holds, and `Unknown` is a type this
-//! build does not recognise — in both cases the PMT declared nothing more, so
-//! there is nothing to map and saying so is the accurate answer.
+//! One variant remains `None` deliberately: `Unknown`, a `stream_type` this
+//! build does not recognise at all, where the PMT declared nothing whatsoever
+//! and the reference itself reports `codec_type=unknown`. `PrivateData` used
+//! to sit alongside it — `stream_type` 0x05/0x06 with no descriptor saying
+//! what it holds — but that case *is* the reference's own `bin_data`
+//! pseudo-codec, measured directly: a hand-built PMT entry with a
+//! zero-length descriptor loop reports `codec_name=bin_data`
+//! `codec_type=data`, not `unknown`. Collapsing it onto `None` alongside
+//! genuinely unrecognised types was the same shape of loss finding 4
+//! described for the eight variants below — the PMT said "this is data" and
+//! that fact was being discarded.
 //!
 //! The `(decoders: …)`/`(encoders: …)` suffix `ffmpeg -codecs` appends to
 //! `dvb_subtitle`'s long name is not part of `codec_long_name` — the same
@@ -214,8 +221,8 @@ impl TsCodec {
     /// because `vaco-codec-core` — owned by another agent — has no matching
     /// variant. Their exact names and long names, probed from `ffmpeg
     /// -codecs` (8.1) rather than recalled, are reported in this crate's
-    /// docs for whoever adds them. [`Self::Unknown`] and [`Self::PrivateData`]
-    /// are correctly `None` regardless: neither one names a real codec.
+    /// docs for whoever adds them. [`Self::Unknown`] stays correctly `None`:
+    /// it names no codec at all, real or generic.
     #[must_use]
     pub const fn codec_id(self) -> Option<CodecId> {
         match self {
@@ -249,11 +256,18 @@ impl TsCodec {
             Self::Scte35 => Some(CodecId::Scte35),
             Self::TimedId3 => Some(CodecId::TimedId3),
             Self::Klv => Some(CodecId::Klv),
-            // `PrivateData` is `stream_type` 0x06 with no descriptor that says
-            // what it is — the PMT genuinely declared nothing more, so there is
-            // nothing to map. `Unknown` is the same statement for a type this
-            // build does not recognise. Both stay `None` on purpose.
-            Self::Unknown | Self::PrivateData => None,
+            // `stream_type` 0x05/0x06 with no descriptor that says what it
+            // is — the PMT genuinely declared nothing more than "data" — is
+            // exactly what the reference's own `bin_data` pseudo-codec names.
+            // Measured: `ffprobe` on a hand-built PMT entry, stream_type
+            // 0x06, zero-length descriptor loop, reports `codec_name=bin_data`
+            // `codec_type=data`, not `unknown`.
+            Self::PrivateData => Some(CodecId::BinData),
+            // `Unknown` is a `stream_type` this build does not recognise at
+            // all — the PMT declared nothing whatsoever, not even "data" —
+            // and stays `None` on purpose: measured, the reference reports
+            // `codec_type=unknown` for one of these, not `data`.
+            Self::Unknown => None,
         }
     }
 
@@ -569,12 +583,16 @@ mod tests {
         );
     }
 
+    /// Measured against real `ffprobe`: a hand-built PMT entry for
+    /// `stream_type` 0x06 with a zero-length descriptor loop reports
+    /// `codec_name=bin_data`, `codec_type=data` — not `unknown`, the two
+    /// values [`TsCodec::codec_id`] returned for this case before the fix.
     #[test]
     fn an_unidentifiable_private_stream_is_still_a_stream() {
         let r = resolve(0x06, &[]);
         assert_eq!(r.codec, TsCodec::PrivateData);
         assert_eq!(r.codec.media_type(), MediaType::Data);
-        assert_eq!(r.codec.codec_id(), None);
+        assert_eq!(r.codec.codec_id(), Some(CodecId::BinData));
     }
 
     #[test]

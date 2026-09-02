@@ -13,6 +13,7 @@
 //!   disagree with the sample entry's, and is otherwise left for the bitstream
 //!   parser to supply.
 
+use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{AudioParameters, CodecParameters, FieldOrder, VideoParameters};
 use vaco_color::{ColorPrimaries, MatrixCoefficients, TransferCharacteristic};
 use vaco_core::{MediaType, Rational, Timestamp};
@@ -227,6 +228,28 @@ pub(crate) fn codec_parameters(
     } else if let Some(a) = entry.audio {
         params.audio = Some(AudioParameters {
             sample_rate: a.rate_hz(),
+            // The container's own declared channel count -- measured
+            // absent entirely before this fix, for every audio codec that
+            // reaches this branch, not just PCM: `channel_count` sits right
+            // there in the fixed `AudioSampleEntry` header this crate
+            // already parses, and nothing ever read it into
+            // `CodecParameters`. Harmless where a downstream parser later
+            // refines a compressed codec's own layout from its real config
+            // (AAC's `AudioSpecificConfig`, say) -- this is the same
+            // "container's own stated fact, subject to a more specific
+            // source overriding it" treatment `sample_rate` right above
+            // already gets. It is the *only* source for an uncompressed
+            // `ipcm`/`fpcm`/`sowt`/`lpcm`/... track, which never reaches a
+            // decoder or parser at all: measured, a real `ipcm` (`pcm_s16le`)
+            // `.mp4` reported `channels=0` before this fix despite the file's
+            // own sample entry stating `channelcount=1` in the same fixed
+            // header `sample_rate` is already read from.
+            layout: (a.channel_count > 0)
+                .then(|| ChannelLayout::unspecified(u32::from(a.channel_count))),
+            // `sample_fmt` in `-show_streams`: absent anywhere else for a PCM
+            // track (see `stsd::pcm_decoded_format`'s doc), so read it here
+            // from the same `codec_id` this struct is already carrying.
+            format: params.codec_id.and_then(stsd::pcm_decoded_format),
             // The container's stored depth, which is `bits_per_coded_sample`
             // and not `bits_per_raw_sample`. Filing it as the latter made an
             // AAC track report 16 where the reference reports N/A.

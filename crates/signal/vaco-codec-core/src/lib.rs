@@ -232,6 +232,18 @@ pub enum CodecId {
     Scte35,
     TimedId3,
     Klv,
+    /// `bin_data`, the reference's own pseudo-codec for a stream it has been
+    /// told nothing about beyond "this is data" — MPEG-TS `stream_type` 0x05
+    /// or 0x06 with no descriptor, `TsCodec::PrivateData`'s counterpart here.
+    /// Not a decoder in the usual sense (`ffmpeg -codecs`: `..D...  bin_data
+    /// binary data`, decode-only, no encoder), added for the same reason as
+    /// the eight names above it: leaving `PrivateData` mapped to `None` made
+    /// `vaco-probe` print `codec_name=unknown` for a stream the PMT had
+    /// already named as data, where the reference prints `bin_data`.
+    /// `TsCodec::Unknown` — a `stream_type` this table does not recognise at
+    /// all — stays `None`; there the PMT states nothing to map, and the
+    /// reference agrees (`codec_type=unknown`, not `data`).
+    BinData,
     // The Flash repertoire. `vaco-demux-flv`'s legacy codec table mapped two of
     // about ten ids, so a Sorenson Spark stream — what `-c:v flv1` produces and
     // therefore the most ordinary FLV there is — printed `codec_name=unknown`.
@@ -1100,6 +1112,13 @@ const CODECS: &[CodecEntry] = &[
         CodecId::Klv,
         "klv",
         "SMPTE 336M Key-Length-Value (KLV) metadata",
+        D,
+        CodecProperties::empty(),
+    ),
+    entry(
+        CodecId::BinData,
+        "bin_data",
+        "binary data",
         D,
         CodecProperties::empty(),
     ),

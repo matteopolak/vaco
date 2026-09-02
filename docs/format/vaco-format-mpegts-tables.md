@@ -256,6 +256,19 @@ reference's output, because `codec_name` is a printed field. The eight
 variants above are the honestly-remaining piece of it; the rest was this
 function not using what `vaco-codec-core` already had.
 
+**`PrivateData` used to sit in the "correctly `None`" camp alongside
+`Unknown`**, on the reasoning that `stream_type` 0x05/0x06 with no descriptor
+means the PMT stated nothing to map. Measured against real `ffprobe` (a
+hand-built PMT entry, stream_type 0x06, zero-length descriptor loop): the
+reference reports `codec_name=bin_data`, `codec_type=data`, not `unknown` —
+its own pseudo-codec for exactly this "PMT said nothing more than 'data'"
+case, decode-less both there and here (`ffmpeg -h decoder=bin_data`: "known to
+FFmpeg, but no decoders for it are available"). `vaco-codec-core` gained
+`CodecId::BinData` for it; `Unknown` — a `stream_type` this build does not
+recognise at all, where the PMT states nothing whatsoever — correctly stays
+`None`, since the reference reports `codec_type=unknown` for that case, not
+`data`.
+
 ---
 
 ## Testing

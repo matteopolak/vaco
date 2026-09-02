@@ -489,6 +489,55 @@ each getting its own dedicated fourcc instead (`m2v1`, `ac-3`, `ec-3`, `dtsc`,
 writes its own fourcc directly, and every ProRes tier reports
 `codec_name=prores`, distinguished only by `codec_tag_string`.
 
+### 9. `ipcm`/`fpcm` (ISO/IEC 23003-5), and why `sample_fmt` needed a second fix
+
+Found by the container sweep that followed finding 8 above: `ffprobe` reads
+`pcm_s16le` MP4 tracks written by a modern `ffmpeg` (9.0.1) as `codec_tag_string
+=ipcm`, not `sowt`. `ipcm` (integer) and `fpcm` (float) are ISO/IEC 23003-5's
+own uncompressed-PCM sample entries, a *different* scheme from every QuickTime
+flavour in finding 8 — neither fourcc had a row anywhere in this crate before
+this fix, so `codec_name` printed `unknown` and the track did not decode at
+all (0 bytes out against the reference's 88200 for a 1-second 44.1 kHz mono
+fixture).
+
+Measured 2026-09-02 the same way as finding 8 (`ffmpeg -c:a pcm_s16le|
+pcm_s16be|pcm_f32le -f mp4`, `ffprobe` plus raw sample-entry bytes):
+`sample_size`/`enda` play no part here at all. The entry carries its own
+`pcmC` ("PCM Configuration Box") extension instead — a `FullBox` (version 0,
+flags 0) followed by two more bytes, `format_flags` (bit 0: `1` little-endian,
+`0` big-endian) and `PCM_sample_size` (an 8-bit true bit depth). `pcm_s16le`
+wrote `01 10`, `pcm_s16be` wrote `00 10`, `pcm_f32le` wrote `01 20`. This is
+*not* the same box `lpcm`'s own version-2 body uses despite the similar name
+— `lpcm` has no `pcmC` at all, and `ipcm`/`fpcm` have no version-2 body.
+`SampleEntry::resolve_ambiguous` reads it through `find_pcmc`; the classic
+`AudioSampleEntry.samplesize` field alongside it is, once again, a fixed `16`
+placeholder regardless of the real width — the same shape finding 8 already
+documented for `in24`/`in32`/`fl32`/`fl64`.
+
+**The second, separate defect this sweep found:** `codec_tag_string=ipcm`
+already matched the reference with `codec_name` still wrong, and fixing
+`codec_name` alone was not the end of it. `channels` read `0` against the
+reference's `1` — a gap in `vaco-demux-mp4::track::codec_parameters`, not this
+crate: nothing there ever read `AudioSampleEntry::channel_count` into
+`AudioParameters::layout`, for *any* codec, not just PCM. And `sample_fmt`
+read `unknown` against the reference's `s16` — nothing anywhere in this crate
+or `vaco-demux-mp4` ever populated `AudioParameters::format` for an MP4 PCM
+track, because PCM has no bitstream header for
+`vaco_format_core::discovery`'s generic parser-refinement pass to read (that
+pass is what makes `sample_fmt` correct for AAC without either crate doing
+anything special for it). `stsd::pcm_decoded_format` closes this — one
+`CodecId::Pcm*` to `SampleFmt` row per variant an MP4/MOV entry can actually
+produce, duplicated from `vaco-codec-pcm::table::PCM_FORMATS`'s `decoded`
+column rather than depended on (D14.1: a format crate does not name a codec
+crate — `vaco-demux-matroska::codec::pcm_format` and
+`vaco-demux-raw::pcm::PCM_FORMATS` each already carry their own copy of the
+same table for the same reason).
+
+Verified end to end, not just probed: `vaco -i t.mp4 -map 0:a:0 -f s16le
+out.raw` on the `pcm_s16le` fixture above produced output byte-identical to
+`ffmpeg`'s own decode of the same file (88200 bytes both sides), and the same
+held for a `pcm_f32le` fixture and a 2-channel `pcm_s16le` fixture.
+
 ---
 
 ## How to change it

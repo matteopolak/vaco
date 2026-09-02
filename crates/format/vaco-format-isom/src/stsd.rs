@@ -23,6 +23,7 @@
 
 use vaco_codec_core::CodecId;
 use vaco_core::{MediaType, Rational, Result};
+use vaco_sampfmt::SampleFmt;
 
 use crate::boxes::{BoxIter, IsoBox};
 use crate::fixed::fp16u;
@@ -434,6 +435,16 @@ impl<'a> SampleEntry<'a> {
             // width from `sample_size`, byte order from `enda` (defaulting to
             // big-endian, native, absent one).
             b"NONE" => signed_pcm(audio.sample_size, self.little_endian()),
+            // ISO/IEC 23003-5's own uncompressed-PCM sample entries — a
+            // *different* scheme from every QuickTime flavour above, and
+            // measured separately: `enda`/`sample_size` do not apply here at
+            // all, only the entry's own `pcmC` box does (see
+            // `find_pcmc`'s doc for the byte-level measurement, `pcm_s16le`
+            // vs `pcm_s16be` vs `pcm_f32le`).
+            b"ipcm" => find_pcmc(self.extension_boxes())
+                .and_then(|(little, bits)| signed_pcm(bits, little)),
+            b"fpcm" => find_pcmc(self.extension_boxes())
+                .and_then(|(little, bits)| float_pcm(bits, little)),
             _ => None,
         }
     }
@@ -471,6 +482,65 @@ fn find_enda(iter: BoxIter<'_>) -> Option<bool> {
     let enda = iter.flatten().find(|b| b.kind() == boxes::ENDA)?;
     let v = enda.payload.first_chunk::<2>()?;
     Some(u16::from_be_bytes(*v) != 0)
+}
+
+/// An `ipcm`/`fpcm` entry's own `pcmC` (ISO/IEC 23003-5 "PCM Configuration
+/// Box") body: `(little_endian, bits_per_sample)`.
+///
+/// Measured directly (`ffmpeg 9.0.1`, one `.mp4` per PCM flavour, comparing
+/// `pcm_s16le` against `pcm_s16be` against `pcm_f32le`'s raw sample-entry
+/// bytes): the body is a `FullBox` (version + 3-byte flags, both `0`) then
+/// two more bytes, `format_flags` and `PCM_sample_size` — *not* the
+/// `formatFlags`/`constBitsPerChannel` pair `lpcm`'s own version-2 body
+/// uses, a different box entirely despite the similar name. `format_flags`
+/// bit 0 is little-endian: `pcm_s16le` writes `0x01`, `pcm_s16be` writes
+/// `0x00`, both with `PCM_sample_size = 0x10`; `pcm_f32le` writes `0x01`
+/// with `PCM_sample_size = 0x20`. The fixed `AudioSampleEntry.samplesize`
+/// field alongside it is a placeholder `16` in every case measured,
+/// regardless of the true width — `PCM_sample_size` here is the only
+/// trustworthy source for it, the same shape `lpcm`'s own
+/// `constBitsPerChannel` already is for its own version-2 body.
+fn find_pcmc(iter: BoxIter<'_>) -> Option<(bool, u16)> {
+    let pcmc = iter.flatten().find(|b| b.kind() == boxes::PCMC)?;
+    let body = pcmc.payload.get(4..)?;
+    let &[format_flags, sample_size] = body.first_chunk::<2>()?;
+    Some((format_flags & 0x1 != 0, u16::from(sample_size)))
+}
+
+/// The decoded [`SampleFmt`] one of this crate's own `CodecId::Pcm*` results
+/// carries, for the `sample_fmt` field `vaco-probe` reports.
+///
+/// `AudioParameters::format` is never populated anywhere else for an MP4/MOV
+/// PCM track — nothing here runs the packet through an actual decoder just to
+/// probe it, and PCM has no bitstream header for
+/// [`vaco_format_core::discovery`]'s generic parser-refinement pass to read
+/// either. Measured: an `ipcm` (`pcm_s16le`) track reported `codec_name`
+/// correctly once [`SampleEntry::resolve_ambiguous`] above existed, but still
+/// printed `sample_fmt=unknown` where the reference prints `s16`.
+///
+/// Duplicated from `vaco-codec-pcm::table::PCM_FORMATS`'s `decoded` column
+/// rather than depended on — D14.1 keeps a format crate from naming a codec
+/// crate, the same reason `vaco-demux-matroska::codec::pcm_format` and
+/// `vaco-demux-raw::pcm::PCM_FORMATS` each carry their own copy already.
+/// Covers only the variants [`SampleEntry::codec`] can actually produce for
+/// an MP4/MOV entry; anything else (including the ambiguous, decoder-less
+/// generic [`CodecId::Pcm`] `sample_entry_codec`'s fallback table can still
+/// return) is `None`, matching the reference's own `sample_fmt=unknown` for a
+/// codec it cannot resolve a format for either.
+#[must_use]
+pub fn pcm_decoded_format(id: CodecId) -> Option<SampleFmt> {
+    match id {
+        CodecId::PcmS8 | CodecId::PcmU8 => Some(SampleFmt::U8),
+        CodecId::PcmS16le | CodecId::PcmS16be | CodecId::PcmAlaw | CodecId::PcmMulaw => {
+            Some(SampleFmt::S16)
+        }
+        CodecId::PcmS24le | CodecId::PcmS24be | CodecId::PcmS32le | CodecId::PcmS32be => {
+            Some(SampleFmt::S32)
+        }
+        CodecId::PcmF32le | CodecId::PcmF32be => Some(SampleFmt::F32),
+        CodecId::PcmF64le | CodecId::PcmF64be => Some(SampleFmt::F64),
+        _ => None,
+    }
 }
 
 /// Signed integer PCM for a measured bit width, `None` for anything this
@@ -828,9 +898,8 @@ pub fn sample_entry_codec(format: FourCc) -> Option<CodecId> {
         // function doc): a width- and byte-order-blind "it is some flavour
         // of PCM" guess, safe because [`CodecId::Pcm`] exists for exactly
         // this case.
-        b"sowt" | b"twos" | b"lpcm" | b"in24" | b"in32" | b"fl32" | b"fl64" | b"NONE" => {
-            Some(CodecId::Pcm)
-        }
+        b"sowt" | b"twos" | b"lpcm" | b"in24" | b"in32" | b"fl32" | b"fl64" | b"NONE"
+        | b"ipcm" | b"fpcm" => Some(CodecId::Pcm),
         // MPEG-4 timed text. Measured: the *same* SubRip content muxed into MP4
         // prints `codec_name=mov_text`, not `subrip` — the reference treats the
         // two carriages as different codecs, so this is not `CodecId::SubRip`.
@@ -1136,6 +1205,11 @@ mod tests {
             sample_entry_codec(FourCc::new(b"alaw")),
             Some(CodecId::PcmAlaw)
         );
+        // `ipcm`/`fpcm` (ISO/IEC 23003-5) have no width/endianness in the
+        // bare fourcc either — same generic-`Pcm` treatment as `sowt` above,
+        // used only when no `pcmC` box is available to disambiguate.
+        assert_eq!(sample_entry_codec(FourCc::new(b"ipcm")), Some(CodecId::Pcm));
+        assert_eq!(sample_entry_codec(FourCc::new(b"fpcm")), Some(CodecId::Pcm));
         // `raw ` is deliberately absent: context-free it is ambiguous between
         // `pcm_u8` and `rawvideo`, so a fourcc-only guess is not made.
         assert_eq!(sample_entry_codec(FourCc::new(b"raw ")), None);
@@ -1247,6 +1321,112 @@ mod tests {
                 c.enda
             );
         }
+    }
+
+    /// A `pcmC` (ISO/IEC 23003-5 "PCM Configuration Box") extension: a
+    /// `FullBox` header (version 0, flags 0) then `format_flags` (bit 0
+    /// little-endian) and `PCM_sample_size`, the byte layout measured in
+    /// [`find_pcmc`]'s doc by diffing `pcm_s16le`/`pcm_s16be`/`pcm_f32le`
+    /// `.mp4` fixtures from real `ffmpeg`.
+    fn pcmc_ext(little: bool, bits: u8) -> Vec<u8> {
+        let mut body = vec![0u8; 4];
+        body.push(u8::from(little));
+        body.push(bits);
+        bx(b"pcmC", &body)
+    }
+
+    /// `ipcm`/`fpcm` (ISO/IEC 23003-5) resolve entirely from their own
+    /// `pcmC` box, not from `sample_size`/`enda` the way every QuickTime PCM
+    /// flavour above does — measured 2026-09-02 against real `ffmpeg pcm_s16le`/
+    /// `pcm_s16be`/`pcm_f32le` `.mp4` fixtures. Found by the coordinator's own
+    /// container sweep: `codec_tag_string=ipcm` read correctly while
+    /// `codec_name` stayed `unknown`, because neither fourcc had a row here at
+    /// all before this fix, and a real `pcm_s16le` MP4 track then decoded to 0
+    /// bytes against the reference's 88200.
+    #[test]
+    fn ipcm_and_fpcm_resolve_from_their_own_pcmc_box() {
+        struct Case {
+            fourcc: [u8; 4],
+            little: bool,
+            bits: u8,
+            want: CodecId,
+        }
+        let cases = [
+            Case {
+                fourcc: *b"ipcm",
+                little: true,
+                bits: 16,
+                want: CodecId::PcmS16le,
+            },
+            Case {
+                fourcc: *b"ipcm",
+                little: false,
+                bits: 16,
+                want: CodecId::PcmS16be,
+            },
+            Case {
+                fourcc: *b"fpcm",
+                little: true,
+                bits: 32,
+                want: CodecId::PcmF32le,
+            },
+        ];
+        for c in cases {
+            let ext = pcmc_ext(c.little, c.bits);
+            // `sample_size` in the fixed header is a `16` placeholder here
+            // too, exactly like `in24`/`in32`/`fl32`/`fl64` above — `pcmC`'s
+            // own `PCM_sample_size` is the only field this reads for width.
+            let raw = pcm_audio_entry(c.fourcc, 16, &ext);
+            let e = SampleEntry::parse(&first_box(&raw), boxes::SOUN);
+            assert_eq!(
+                e.codec(),
+                Some(c.want),
+                "fourcc {:?} little {} bits {}",
+                FourCc::new(&c.fourcc),
+                c.little,
+                c.bits
+            );
+        }
+    }
+
+    /// An `ipcm` entry with no `pcmC` box at all cannot be disambiguated —
+    /// there is no default byte order or width ISO/IEC 23003-5 states for a
+    /// missing configuration box, unlike QTFF's own documented big-endian
+    /// default for `NONE`. `resolve_ambiguous` refuses, and `codec()` falls
+    /// back to the generic, decoder-less [`CodecId::Pcm`] `sample_entry_codec`
+    /// still carries for this fourcc — a clean "wrong width/order is worse
+    /// than no decoder" refusal, not a guess, matching this crate's existing
+    /// convention for every other PCM shape it cannot place confidently.
+    #[test]
+    fn ipcm_with_no_pcmc_box_falls_back_to_the_generic_id() {
+        let raw = pcm_audio_entry(*b"ipcm", 16, &[]);
+        let e = SampleEntry::parse(&first_box(&raw), boxes::SOUN);
+        assert_eq!(e.codec(), Some(CodecId::Pcm));
+    }
+
+    /// `pcm_decoded_format` is what makes `sample_fmt` correct in
+    /// `-show_streams` for an MP4 PCM track — measured alongside the
+    /// `codec_name` fix above: `codec_name=pcm_s16le` was already right once
+    /// `ipcm` had a codec row, but `sample_fmt` stayed `unknown` because
+    /// nothing in this crate or `vaco-demux-mp4` ever read `AudioParameters
+    /// ::format` for PCM. One row per variant an MP4/MOV entry can actually
+    /// produce; the ambiguous generic `CodecId::Pcm` stays `None`, same as
+    /// the reference's own behaviour for a codec it cannot resolve a format
+    /// for.
+    #[test]
+    fn pcm_decoded_format_covers_every_mp4_reachable_pcm_variant() {
+        assert_eq!(pcm_decoded_format(CodecId::PcmS16le), Some(SampleFmt::S16));
+        assert_eq!(pcm_decoded_format(CodecId::PcmS16be), Some(SampleFmt::S16));
+        assert_eq!(pcm_decoded_format(CodecId::PcmS8), Some(SampleFmt::U8));
+        assert_eq!(pcm_decoded_format(CodecId::PcmU8), Some(SampleFmt::U8));
+        assert_eq!(pcm_decoded_format(CodecId::PcmS24le), Some(SampleFmt::S32));
+        assert_eq!(pcm_decoded_format(CodecId::PcmS32be), Some(SampleFmt::S32));
+        assert_eq!(pcm_decoded_format(CodecId::PcmF32le), Some(SampleFmt::F32));
+        assert_eq!(pcm_decoded_format(CodecId::PcmF64be), Some(SampleFmt::F64));
+        assert_eq!(pcm_decoded_format(CodecId::PcmAlaw), Some(SampleFmt::S16));
+        assert_eq!(pcm_decoded_format(CodecId::PcmMulaw), Some(SampleFmt::S16));
+        assert_eq!(pcm_decoded_format(CodecId::Pcm), None);
+        assert_eq!(pcm_decoded_format(CodecId::Aac), None);
     }
 
     #[test]

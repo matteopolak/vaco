@@ -15,6 +15,7 @@ vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-bitstream = { path = "../../core/vaco-bitstream" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 
 [dev-dependencies]
 divan.workspace = true

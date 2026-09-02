@@ -253,7 +253,7 @@ accept it. Treat it as broken until that row says otherwise.
 | FLAC | yes | yes | Byte-identical to ffmpeg |
 | ALAC | yes | yes | Byte-identical to ffmpeg |
 | Opus | not registered | — | Implemented but has unresolved correctness gaps, so it is deliberately not wired up |
-| PCM | yes | yes | The whole `pcm_*` family, but the MP4 `ipcm` tag is not mapped, so PCM in MP4 probes as `unknown` and will not decode |
+| PCM | yes | yes | The whole `pcm_*` family |
 | ADPCM | yes | — | IMA-WAV, IMA-QT, MS, SWF. No G.722 or G.726 |
 | QOA, comfort noise | yes | yes | DFPWM is implemented but deliberately not registered |
 

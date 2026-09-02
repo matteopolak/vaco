@@ -174,6 +174,14 @@ pub mod boxes {
         // sample entries whose fourcc does not fix a byte order on its own
         // (`in24`, `in32`, `fl32`, `fl64`). See `stsd.rs`'s module docs.
         ENDA = b"enda",
+        // ISO/IEC 23003-5's PCM Configuration Box, inside an `ipcm`
+        // (integer) or `fpcm` (float) sample entry: `format_flags` (bit 0
+        // little-endian) and the real bit depth — the fixed
+        // `AudioSampleEntry.samplesize` field is a placeholder for both
+        // fourccs (measured `16` regardless of the true width, the same
+        // shape `lpcm`'s own version-2 body already works around). See
+        // `stsd.rs`'s `resolve_ambiguous`.
+        PCMC = b"pcmC",
 
         // Metadata.
         ILST = b"ilst", KEYS = b"keys", CHPL = b"chpl", DATA = b"data", MEAN = b"mean",
