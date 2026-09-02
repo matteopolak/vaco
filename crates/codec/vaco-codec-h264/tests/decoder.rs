@@ -331,3 +331,90 @@ fn a_stream_with_no_vui_still_decodes_to_the_unspecified_default() {
     assert_eq!(frame.color.range, vaco_color::ColorRange::Unspecified);
     assert_eq!(frame.color.chroma_location, vaco_color::ChromaLocation::Left);
 }
+
+/// [`split_extradata_and_first_slice`]'s sibling for an access unit whose
+/// SEI messages matter: SPS/PPS still go to `extradata`, but every other
+/// NAL up to and including the first primary-coded-slice NAL (SEI
+/// included) is kept together in one packet, matching how a real demuxer
+/// hands a whole access unit to `send_packet` in one call rather than
+/// splitting SEI out the way [`split_extradata_and_first_slice`]'s
+/// slice-only fixtures need it kept separate for.
+fn split_extradata_and_first_access_unit(data: &[u8]) -> (Vec<u8>, Vec<u8>) {
+    let mut extradata = Vec::new();
+    let mut access_unit = Vec::new();
+    for nal in annexb::nal_units(data) {
+        match nal.first().map(|b| b & 0x1F) {
+            Some(7 | 8) => {
+                extradata.extend_from_slice(&[0, 0, 0, 1]);
+                extradata.extend_from_slice(nal);
+            }
+            Some(1 | 5) => {
+                access_unit.extend_from_slice(&[0, 0, 0, 1]);
+                access_unit.extend_from_slice(nal);
+                return (extradata, access_unit);
+            }
+            _ => {
+                access_unit.extend_from_slice(&[0, 0, 0, 1]);
+                access_unit.extend_from_slice(nal);
+            }
+        }
+    }
+    panic!("fixture has no slice NAL");
+}
+
+/// Finding 22b (`planning/INTERFACE-GAPS.md`): `vaco_parse_h264::sei`
+/// parses `MasteringDisplay`/`ContentLightLevel` correctly, and nothing in
+/// this crate ever read either — so `FrameSideData::MasteringDisplay`/
+/// `ContentLightLevel` (real types in `vaco-frame`, with a working
+/// consumer in `vaco-filter-mm`'s `sidedata` filter) had zero producers.
+///
+/// `fixtures/hdr10_mastering_display.264` is real `ffmpeg 9.0.1`/`libx264`
+/// output (`-x264-params mastering-display=G(13250,34500)B(7500,3000)
+/// R(34000,16000)WP(15635,16450)L(10000000,1):cll=1000,400`), captured
+/// once and embedded. Measured with real `ffprobe`'s own `-show_frames`
+/// `[SIDE_DATA]` block on the same file: `red_x=34000/50000
+/// red_y=16000/50000 green_x=13250/50000 green_y=34500/50000
+/// blue_x=7500/50000 blue_y=3000/50000 white_point_x=15635/50000
+/// white_point_y=16450/50000 min_luminance=1/10000
+/// max_luminance=10000000/10000` and `max_content=1000 max_average=400` —
+/// the exact values this test asserts on the decoded `Frame`'s side data,
+/// not just "the SEI is present".
+#[test]
+fn a_real_hdr10_stream_attaches_the_measured_mastering_display_and_cll() {
+    let mut d = decoder();
+    let (extradata, access_unit) =
+        split_extradata_and_first_access_unit(include_bytes!("fixtures/hdr10_mastering_display.264"));
+    d.set_extradata(&extradata).unwrap();
+    let mut budget = Budget::new(Limits::default());
+    let pkt = Packet::from_slice(&mut budget, &access_unit).unwrap();
+    d.send_packet(Some(&pkt)).unwrap();
+    d.send_packet(None).unwrap();
+    let frame = d.receive_frame().unwrap();
+
+    let Some(mastering) = frame.side_data.iter().find_map(|sd| match sd {
+        vaco_frame::FrameSideData::MasteringDisplay(m) => Some(m.as_ref()),
+        _ => None,
+    }) else {
+        panic!("frame should carry MasteringDisplay side data");
+    };
+    // red, green, blue — see `vaco_frame::MasteringDisplay`'s own doc for
+    // why this is not the bitstream's green/blue/red order.
+    assert_eq!(mastering.primaries[0][0], vaco_core::Rational::new(34_000, 50_000), "red_x");
+    assert_eq!(mastering.primaries[0][1], vaco_core::Rational::new(16_000, 50_000), "red_y");
+    assert_eq!(mastering.primaries[1][0], vaco_core::Rational::new(13_250, 50_000), "green_x");
+    assert_eq!(mastering.primaries[1][1], vaco_core::Rational::new(34_500, 50_000), "green_y");
+    assert_eq!(mastering.primaries[2][0], vaco_core::Rational::new(7_500, 50_000), "blue_x");
+    assert_eq!(mastering.primaries[2][1], vaco_core::Rational::new(3_000, 50_000), "blue_y");
+    assert_eq!(mastering.white_point[0], vaco_core::Rational::new(15_635, 50_000), "white_point_x");
+    assert_eq!(mastering.white_point[1], vaco_core::Rational::new(16_450, 50_000), "white_point_y");
+    assert_eq!(mastering.min_luminance, vaco_core::Rational::new(1, 10_000), "min_luminance");
+    assert_eq!(mastering.max_luminance, vaco_core::Rational::new(10_000_000, 10_000), "max_luminance");
+
+    let Some(cll) = frame.side_data.iter().find_map(|sd| match sd {
+        vaco_frame::FrameSideData::ContentLightLevel { max_cll, max_fall } => Some((*max_cll, *max_fall)),
+        _ => None,
+    }) else {
+        panic!("frame should carry ContentLightLevel side data");
+    };
+    assert_eq!(cll, (1000, 400));
+}

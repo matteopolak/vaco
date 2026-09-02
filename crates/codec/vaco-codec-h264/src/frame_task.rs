@@ -92,6 +92,15 @@ pub(crate) struct FrameGeometry {
     /// leaves `color` as `ColorInfo::default()`, so skipping this field is
     /// indistinguishable from an unspecified stream rather than an error.
     pub(crate) color: vaco_color::ColorInfo,
+    /// §D.1.29's mastering-display-colour-volume SEI, converted and
+    /// permuted into `vaco_frame::MasteringDisplay`'s shared shape, if this
+    /// access unit's SEI carried one — finding 22b
+    /// (`planning/INTERFACE-GAPS.md`): parsed correctly by
+    /// `vaco_parse_h264::sei` and then read by nothing in this crate.
+    pub(crate) mastering_display: Option<vaco_frame::MasteringDisplay>,
+    /// §D.1.31's content-light-level SEI as `(max_cll, max_fall)`, same
+    /// finding as `mastering_display` above.
+    pub(crate) content_light: Option<(u32, u32)>,
 }
 
 /// One picture's reconstruction, deblocking and crop.
@@ -480,6 +489,12 @@ pub(crate) fn build_frame(
     if !geometry.closed_captions.is_empty() {
         let buffer = vaco_pool::Buffer::from_slice(budget, &geometry.closed_captions)?;
         frame.set_side_data(FrameSideData::ClosedCaptions(buffer));
+    }
+    if let Some(mastering_display) = geometry.mastering_display {
+        frame.set_side_data(FrameSideData::MasteringDisplay(Box::new(mastering_display)));
+    }
+    if let Some((max_cll, max_fall)) = geometry.content_light {
+        frame.set_side_data(FrameSideData::ContentLightLevel { max_cll, max_fall });
     }
     Ok(frame)
 }

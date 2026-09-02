@@ -150,6 +150,41 @@ fn output_frame_bytes(dimensions: Option<(u32, u32)>, fallback: u64) -> u64 {
         .map_or(fallback, |layout| layout.total as u64)
 }
 
+/// §D.1.29's raw `mastering_display_colour_volume()` fields into
+/// `vaco_frame::MasteringDisplay`'s shared shape (finding 22b,
+/// `planning/INTERFACE-GAPS.md`).
+///
+/// Two conversions, both measured against real `ffprobe -show_frames` on an
+/// HDR10 fixture rather than assumed:
+/// - **Units.** `display_primaries_x/y`/`white_point_x/y` are in 0.00002
+///   units (§D.1.29's own text) -- `/50000`, not `/100000` or a bare
+///   integer. `max_display_mastering_luminance`/`min_display_mastering_luminance`
+///   are in 0.0001 cd/m² -- `/10000`. Measured: the reference's own
+///   `red_x=34000/50000`/`max_luminance=10000000/10000` on a fixture encoded
+///   with raw values 34000 and 10000000 confirms both denominators exactly;
+///   getting either wrong by a factor of two zeros is the classic failure
+///   this side data invites.
+/// - **Order.** `primaries[0]`/`[1]`/`[2]` in the bitstream are green, blue,
+///   red (§D.1.29's own semantics text) but [`vaco_frame::MasteringDisplay`]
+///   documents red/green/blue (matching the reference's own struct layout,
+///   confirmed by the same fixture's `red_x` printing before `green_x`) --
+///   permuted here, not copied positionally.
+fn mastering_display_from_sei(
+    primaries_gbr: [(u16, u16); 3],
+    white_point: (u16, u16),
+    max_luminance: u32,
+    min_luminance: u32,
+) -> vaco_frame::MasteringDisplay {
+    let chromaticity = |(x, y): (u16, u16)| [vaco_core::Rational::new(i32::from(x), 50_000), vaco_core::Rational::new(i32::from(y), 50_000)];
+    let [green, blue, red] = primaries_gbr;
+    vaco_frame::MasteringDisplay {
+        primaries: [chromaticity(red), chromaticity(green), chromaticity(blue)],
+        white_point: chromaticity(white_point),
+        max_luminance: vaco_core::Rational::new(i32::try_from(max_luminance).unwrap_or(i32::MAX), 10_000),
+        min_luminance: vaco_core::Rational::new(i32::try_from(min_luminance).unwrap_or(i32::MAX), 10_000),
+    }
+}
+
 /// Rows per band of a row-published DPB entry.
 ///
 /// The tension is entirely between publication *latency* and the guard rows'
@@ -482,6 +517,15 @@ impl H264Decoder {
         // that. `sps: None` because `cc_data_from_sei` never reaches
         // `pic_timing`, the one payload type that needs it.
         let mut cc_data = Vec::new();
+        // Finding 22b (planning/INTERFACE-GAPS.md): §D.1.29/§D.1.31's
+        // mastering-display and content-light-level SEI messages parse
+        // correctly (`vaco_parse_h264::sei`, tested) and then reached
+        // nothing at all -- not even `vaco-probe`, which has no field for
+        // either. The last one of each type in the access unit wins, same
+        // as `cc_data`'s own "last SEI of a repeated type" convention has
+        // no stated rule either way but a real stream never repeats these.
+        let mut mastering_display = None;
+        let mut content_light = None;
         for nal in vaco_format_nalu::units(payload, framing) {
             let Some(header) = H264NalHeader::parse(nal.data) else {
                 continue;
@@ -499,6 +543,27 @@ impl H264Decoder {
                         for msg in &messages {
                             if let Some(triplets) = cc_data_from_sei(&msg.payload) {
                                 cc_data.extend_from_slice(triplets);
+                            }
+                            match msg.payload {
+                                vaco_parse_h264::SeiPayload::MasteringDisplay {
+                                    primaries,
+                                    white_point,
+                                    max_luminance,
+                                    min_luminance,
+                                } => {
+                                    mastering_display =
+                                        Some(mastering_display_from_sei(primaries, white_point, max_luminance, min_luminance));
+                                }
+                                vaco_parse_h264::SeiPayload::ContentLightLevel {
+                                    max_content_light_level,
+                                    max_pic_average_light_level,
+                                } => {
+                                    content_light = Some((
+                                        u32::from(max_content_light_level),
+                                        u32::from(max_pic_average_light_level),
+                                    ));
+                                }
+                                _ => {}
                             }
                         }
                     }
@@ -1013,6 +1078,8 @@ impl H264Decoder {
                 is_idr: info.is_idr,
                 closed_captions: cc_data,
                 color,
+                mastering_display,
+                content_light,
             },
             limits: self.limits.clone(),
             pools: self.pools.clone(),
