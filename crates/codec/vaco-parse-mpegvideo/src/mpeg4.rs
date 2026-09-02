@@ -25,6 +25,7 @@
 
 use vaco_bitstream::{BitReader, annexb};
 use vaco_codec_core::{CodecId, CodecParameters, Level, Profile};
+use vaco_color::ChromaLocation;
 use vaco_core::{MediaType, Result};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
@@ -294,6 +295,11 @@ impl Mpeg4Parser {
             }
             v.sample_aspect_ratio = super::mpeg12::aspect_ratio(vol.aspect_ratio_information);
             v.format = pixel_format(None);
+            // Same measured default as MPEG-1/2 (see `mpeg12.rs`'s own
+            // comment): MPEG-4 Part 2 has no chroma-siting field either, and
+            // real `ffmpeg -c:v mpeg4` reports `chroma_location=left`
+            // unconditionally.
+            v.color.chroma_location = ChromaLocation::Left;
         }
         if let Some(existing) = &mut self.params {
             existing.fill_from(&params);

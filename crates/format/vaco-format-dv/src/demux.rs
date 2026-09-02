@@ -32,6 +32,7 @@
 use std::collections::VecDeque;
 
 use vaco_codec_core::{AudioParameters, CodecId, CodecParameters, VideoParameters};
+use vaco_color::{ChromaLocation, ColorInfo};
 use vaco_pixfmt::PixFmt;
 use vaco_sampfmt::SampleFmt;
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
@@ -56,6 +57,13 @@ pub const FLAGS: FormatFlags = FormatFlags::GENERIC_INDEX.union(FormatFlags::FIX
 /// module docs.
 const DEFAULT_AUDIO_SAMPLE_RATE: u32 = 48_000;
 const DEFAULT_AUDIO_CHANNELS: u16 = 2;
+
+/// DV's own fixed tick rate for the video stream's `time_base`, measured
+/// directly against real `ffprobe` on both NTSC and PAL DV -- see the
+/// constructor's comment on `video_stream` for the measurement itself. Named
+/// rather than inlined because [`DvDemuxer::ticks_per_frame`] and
+/// [`DvDemuxer::seek`] both need the same value the constructor used.
+const DV_TIME_BASE_DEN: i32 = 60_000;
 
 /// The DV demuxer.
 pub struct DvDemuxer {
@@ -161,19 +169,40 @@ impl DvDemuxer {
             } else {
                 Rational::new(8, 9)
             },
+            // Measured directly (`ffmpeg -c:v dvvideo`, real `ffprobe`) on
+            // both NTSC (yuv411p) and PAL (yuv420p) DV: `chroma_location=
+            // topleft` in both cases. This is DV's own siting convention,
+            // distinct from the MPEG-1/2/4 family's unconditional `left`
+            // (see `vaco-parse-mpegvideo`'s `mpeg12.rs`/`mpeg4.rs`) -- two
+            // different codecs, two different fixed conventions, not one
+            // shared default.
+            color: ColorInfo {
+                chroma_location: ChromaLocation::TopLeft,
+                ..ColorInfo::default()
+            },
             ..VideoParameters::default()
         };
         let mut vparams = CodecParameters::new(MediaType::Video).with_codec(CodecId::Dvvideo);
         vparams.video = Some(video);
-        // Per-frame time base: one tick per frame is exact for both 30000/1001
-        // and 25 fps, unlike a fixed 90 kHz base which cannot represent
-        // 30000/1001 exactly.
-        let time_base = Rational {
-            num: profile.frame_rate.den,
-            den: profile.frame_rate.num,
-        };
+        // Measured directly (`ffmpeg -c:v dvvideo`, real `ffprobe`), on both
+        // a 2-frame NTSC fixture and a 150-frame/5s one, and separately on a
+        // 1s PAL clip: `time_base=1/60000` and `avg_frame_rate=60000/1` for
+        // *both* systems, unconditionally -- not derived from the file's
+        // real frame count or duration (the 150-frame NTSC clip still reports
+        // exactly `60000/1`, not something closer to `30000/1001`), and not
+        // `50/1` for 25 fps PAL either. This is DV's own fixed tick rate, the
+        // same for every profile this crate detects, and it is why
+        // `DV_TIME_BASE_DEN` divides evenly by both `30000/1001` (2002
+        // ticks/frame) and `25/1` (2400 ticks/frame) -- that was the point of
+        // choosing it, not a coincidence.
+        //
+        // `r_frame_rate` is unaffected: it keeps falling back to
+        // `video.frame_rate` (the true `30000/1001`/`25/1` rate) exactly as
+        // measured.
+        let time_base = Rational::new(1, DV_TIME_BASE_DEN);
         let mut video_stream = Stream::new(0, MediaType::Video, time_base);
         video_stream.params = vparams;
+        video_stream.avg_frame_rate = Rational::new(DV_TIME_BASE_DEN, 1);
         if let Some(n) = total_frames {
             video_stream.frame_count = Some(n);
         }
@@ -230,6 +259,22 @@ impl DvDemuxer {
         Duration::from_micros(1_000_000i64 * i64::from(rate.den) / i64::from(rate.num))
     }
 
+    /// How many `1/DV_TIME_BASE_DEN` ticks one frame spans: `2002` for NTSC
+    /// (`60000 * 1001 / 30000`), `2400` for PAL (`60000 * 1 / 25`). Both of
+    /// the profiles this crate detects divide evenly -- see
+    /// [`DV_TIME_BASE_DEN`]'s doc comment.
+    #[allow(
+        clippy::integer_division,
+        reason = "exact tick arithmetic: both supported profiles divide evenly"
+    )]
+    fn ticks_per_frame(&self) -> u64 {
+        let rate = self.profile.frame_rate;
+        if rate.num == 0 {
+            return 0;
+        }
+        (i64::from(DV_TIME_BASE_DEN) * i64::from(rate.den) / i64::from(rate.num)).cast_unsigned()
+    }
+
     fn read_frame(&mut self) -> Result<()> {
         let available = self.io.peek(self.profile.frame_size)?.len();
         if available == 0 {
@@ -245,7 +290,11 @@ impl DvDemuxer {
         self.io.read_exact(&mut buf)?;
         let mut pkt = Packet::from_slice(&mut self.budget, &buf)?;
         pkt.stream_index = 0;
-        pkt.pts = Timestamp::new(self.frame_index.cast_signed());
+        pkt.pts = Timestamp::new(
+            self.frame_index
+                .saturating_mul(self.ticks_per_frame())
+                .cast_signed(),
+        );
         pkt.dts = pkt.pts;
         pkt.duration = self.frame_duration();
         pkt.flags |= PacketFlags::KEY; // DV is all-intra: every frame is a keyframe
@@ -289,11 +338,21 @@ impl Demuxer for DvDemuxer {
             return Err(Error::NotSeekable);
         }
         let frame_size = self.profile.frame_size as u64;
+        let ticks_per_frame = self.ticks_per_frame().max(1);
         let frame = match target {
             SeekTarget::Byte(pos) => pos / frame_size,
             SeekTarget::Timestamp { ts, .. } => {
                 let ticks = ts.ticks().unwrap_or(0);
-                if ticks < 0 { 0 } else { ticks.cast_unsigned() }
+                // `ts` is in the stream's own `time_base`
+                // (`1/DV_TIME_BASE_DEN`, not one-tick-per-frame any more --
+                // see the constructor's comment), so this recovers the frame
+                // index the same way `read_frame` derived the timestamp from
+                // it in the first place.
+                if ticks < 0 {
+                    0
+                } else {
+                    ticks.cast_unsigned() / ticks_per_frame
+                }
             }
             SeekTarget::Frame { frame, .. } => frame,
         };

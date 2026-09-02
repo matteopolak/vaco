@@ -53,6 +53,7 @@
 
 use vaco_bitstream::{BitReader, annexb};
 use vaco_codec_core::{CodecId, CodecParameters, Level, Profile};
+use vaco_color::ChromaLocation;
 use vaco_core::{MediaType, Rational, Result};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
@@ -296,6 +297,15 @@ impl Sequence {
             v.sample_aspect_ratio = aspect_ratio(self.aspect_ratio_information);
             v.frame_rate = self.frame_rate();
             v.format = pixel_format(self.ext.map_or(1, |e| e.chroma_format));
+            // MPEG-1/2 video has no bitstream field for chroma sample
+            // siting at all (unlike H.264's VUI `chroma_sample_loc_type`) --
+            // measured directly (`ffmpeg -c:v mpeg2video`/`-c:v mpeg1video`,
+            // real `ffprobe`): `chroma_location=left` unconditionally, not
+            // `unspecified`. Conformance-sweep finding: this field was the
+            // single highest-leverage divergence across the whole suite
+            // (105 of 447 diverging cases), and every mpeg1/mpeg2 case in
+            // it was missing exactly this.
+            v.color.chroma_location = ChromaLocation::Left;
         }
         params
     }

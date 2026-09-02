@@ -81,6 +81,39 @@ fn a_real_ntsc_sample_yields_two_whole_frame_video_packets() {
 }
 
 #[test]
+fn a_real_ntsc_sample_reports_the_measured_time_base_and_avg_frame_rate() {
+    // Measured directly against real `ffprobe` (a 2-frame fixture, a
+    // 150-frame/5s NTSC clip, and a 1s PAL clip): `time_base=1/60000` and
+    // `avg_frame_rate=60000/1` for DV video, unconditionally -- not derived
+    // from this file's own frame count or duration, and not `50/1` for PAL.
+    // `r_frame_rate` is untouched: it keeps reporting the true `30000/1001`.
+    let mut demux = open(include_bytes!("fixtures/ntsc_sample.dv")).expect("open");
+    let video = demux
+        .streams()
+        .iter()
+        .find(|s| s.params.media_type == Some(MediaType::Video))
+        .expect("a video stream");
+    assert_eq!(
+        video.time_base,
+        vaco_core::Rational { num: 1, den: 60_000 }
+    );
+    assert_eq!(
+        video.avg_frame_rate,
+        vaco_core::Rational {
+            num: 60_000,
+            den: 1
+        }
+    );
+    // 2002 ticks/frame at 1/60000 for 30000/1001 fps: the first packet
+    // starts at pts=0, the second at pts=2002, matching the real per-frame
+    // duration rather than the old one-tick-per-frame scheme.
+    let first = demux.read_packet().expect("first packet");
+    assert_eq!(first.pts.ticks(), Some(0));
+    let second = demux.read_packet().expect("second packet");
+    assert_eq!(second.pts.ticks(), Some(2_002));
+}
+
+#[test]
 fn a_double_rate_dvcpro50_sample_is_refused_rather_than_misframed() {
     let result = open(include_bytes!("fixtures/dvcpro50_sample.dv"));
     assert!(
