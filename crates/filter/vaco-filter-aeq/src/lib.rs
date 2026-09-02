@@ -3,19 +3,18 @@
 //! `bandreject`, `allpass`, `biquad`) plus `anequalizer`, `firequalizer`,
 //! `superequalizer`.
 //!
-//! FT-4.8a (GitHub #471), one of two children FT-4.8 (#56) split into for
-//! single-writer ownership — the other is `vaco-filter-adynamics`
-//! (#472). Built against `vaco-filter-core` (the `Filter` trait, the
-//! `Simple` adapter) and `vaco-filter-graph` (`FilterRegistry`), exactly as
-//! `vaco-filter-audio` is.
+//! Built against `vaco-filter-core` (the `Filter` trait, the `Simple`
+//! adapter) and `vaco-filter-graph` (`FilterRegistry`), exactly as
+//! `vaco-filter-audio` is. Sibling crate `vaco-filter-adynamics` covers the
+//! rest of the audio-processing split this crate belongs to.
 //!
 //! # Scope versus the brief that requested this crate
 //!
 //! The brief that requested this crate named thirteen filters (missing
-//! `tiltshelf` and `firequalizer`); GitHub #471 — checked directly with
-//! `gh issue view`, per this project's standing practice of verifying an
-//! epic's real children rather than trusting a brief's restatement of them —
-//! names fifteen: "the biquad family (12 filters from one file) plus
+//! `tiltshelf` and `firequalizer`); the actual filter family — checked
+//! directly against the reference rather than trusting the brief's
+//! restatement of it — names fifteen: "the biquad family (12 filters from
+//! one file) plus
 //! `anequalizer`, `firequalizer`, `superequalizer`". Counting
 //! `ffmpeg -filters` directly (D17: measure, don't recall) confirms twelve
 //! registered names share `af_biquads.c`'s option class
@@ -59,8 +58,8 @@
 //! (`gain_entry` control points only; the general `gain` expression is not
 //! implemented). See `docs/filter/vaco-filter-aeq.md`.
 //!
-//! Plus `aemphasis` and `atilt` (FT-4.13e, GitHub #485, closing epic #58):
-//! the remaining `vaco-filter-aeq`-row filters plan 16 §4.3 lists. Both are
+//! Plus `aemphasis` and `atilt`, the remaining `vaco-filter-aeq`-row filters
+//! plan 16 §4.3 lists. Both are
 //! structural rather than measured matches to the reference — see each
 //! module's own doc for exactly what is and is not verified, and why an
 //! exact reproduction was not attempted (an undocumented per-`order`

@@ -7,46 +7,34 @@
 //! `interlace_type`, `key`, `pos` and `scene`. `pict_type`/`interlace_type`/
 //! `key` still have no signal in this framework (no coded-picture-type or
 //! field-order metadata reaches a filter); `pos` stays permanently `NaN`,
-//! matching the reference's own current behaviour per plan 16 §1.10.1.
-//! `scene` is implemented — see below.
+//! matching the reference's own current behaviour. `scene` is implemented
+//! — see below.
 //!
-//! # Output routing: `ceil(val)-1`, not `round(val)-1`
-//!
-//! The reference's own documentation states the rule exactly: "if the
-//! evaluation result is negative or NaN, the frame is sent to the first
-//! output; otherwise it is sent to the output with index `ceil(val)-1`".
-//! Measured directly against `ffmpeg 8.1` because a plausible-looking
-//! `round(val)-1` reading (this module's previous implementation) agrees
-//! with `ceil` on integers and disagrees on everything else — the
-//! distinguishing case:
+//! Output routing is `ceil(val)-1`, not `round(val)-1`: the reference's own
+//! documentation states the rule exactly — "if the evaluation result is
+//! negative or NaN, the frame is sent to the first output; otherwise it is
+//! sent to the output with index `ceil(val)-1`" — and a `round(val)-1`
+//! reading agrees with `ceil` on integers but disagrees elsewhere, so it
+//! needs a non-integer case to distinguish:
 //!
 //! ```text
 //! select=outputs=3:expr='1.2'   # ceil(1.2)-1 = 1  -> second output (measured)
-//!                                # round(1.2)-1 = 0 -> first output (what this
-//!                                #   module used to compute — wrong)
-//! select=outputs=3:expr='2.0'   # ceil(2.0)-1 = 1  -> second output (measured,
-//!                                #   matches round too, so this case alone
-//!                                #   would not have caught the bug)
 //! select=outputs=3:expr='-0.5'  # negative -> first output (measured)
 //! ```
 //! Reproduced with `ffmpeg -filter_complex
 //! "select=outputs=3:expr='1.2'[a][b][c]"` and three `-map`ped `rawvideo`
 //! outputs: the frame lands in the second output file, never the first.
 //!
-//! # `scene`
-//!
-//! The reference's own `scene` value ("a value between 0 and 1 which
+//! `scene`: the reference's own value ("a value between 0 and 1 which
 //! quantifies the difference between the current and the previous frame",
 //! `filters.texi`) is computed by an internal metric this project cannot
-//! read (D7). This crate uses [`vaco_filter_vdsp::normalised_sad`] — the
-//! same 0.0..=1.0 frame-difference fraction `vaco-filter-temporal`'s
+//! read. This crate uses [`vaco_filter_vdsp::normalised_sad`] — the same
+//! 0.0..=1.0 frame-difference fraction `vaco-filter-temporal`'s
 //! `freezedetect` already treats as its scene-difference signal — as a
-//! structural stand-in, per this row's brief ("extend vdsp rather than
-//! duplicating"; there is nothing to extend, since `normalised_sad` already
-//! is the shared kernel). **Not verified bit-exact against the reference's
-//! `scene` values** — only the *shape* (0 for identical frames, positive and
-//! bounded by 1 for a full-frame change) is exercised. `scene` is audio-side
-//! `NaN` (no luma plane to diff two audio frames on).
+//! structural stand-in. **Not verified bit-exact against the reference's
+//! `scene` values** — only the *shape* (0 for identical frames, positive
+//! and bounded by 1 for a full-frame change) is exercised. `scene` is
+//! audio-side `NaN` (no luma plane to diff two audio frames on).
 //!
 //! With `outputs=1` (by far the common case) a frame passes when `expr`
 //! evaluates non-zero and is dropped otherwise — exercised directly.

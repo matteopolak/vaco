@@ -1,47 +1,34 @@
 //! `entropy` — graylevel histogram entropy per plane.
 //!
-//! `ffmpeg -h filter=entropy`: one video pad in, one out. One option, `mode`
-//! (`normal`/`diff`, default `normal`).
+//! One video pad in, one out. One option, `mode` (`normal`/`diff`, default
+//! `normal`).
 //!
-//! # Metadata export and formula, measured against `ffmpeg 8.1`
+//! # Formula, measured against `ffmpeg 8.1`
 //!
 //! ```text
-//! $ ffprobe -show_frames -f lavfi -i "color=black:s=16x16,format=gray,geq=lum='X+Y*16':cb=128:cr=128,entropy"
 //! lavfi.entropy.entropy.normal.Y="8.000000" lavfi.entropy.normalized_entropy.normal.Y="1.000000"
 //! ```
 //!
-//! `mode=normal`: the plain Shannon entropy of the 256-bucket sample
-//! histogram, treated as a probability distribution — `p_i = count_i /
-//! total`, `entropy = -sum(p_i * log2(p_i))` for `p_i > 0`. A 16x16 plane
-//! holding every value `0..=255`... this crate's fixture instead holds every
-//! value `0..=255` is 256 samples exactly once each (a 16x16 plane), so every
-//! `p_i = 1/256` and `entropy = -log2(1/256) = log2(256) = 8` exactly —
-//! matched bit for bit. `normalized_entropy` is `entropy / 8.0`
-//! (`log2(256)`, the maximum possible entropy of an 8-bit histogram) —
-//! confirmed on three further points (a flat plane: `0/8=0`; a two-level
-//! 50/50 split: `1/8=0.125`; a skewed three-level histogram: measured
-//! `0.515895/8=0.064487` exactly), not the alternative hypothesis of
-//! dividing by `log2(number of distinct values actually present)` (which the
-//! skewed fixture — three distinct values, `log2(3)=1.585` — would rule out,
-//! since `0.515895/1.585 = 0.3255`, not the measured `0.064487`).
+//! `mode=normal`: plain Shannon entropy of the 256-bucket sample histogram
+//! as a probability distribution — `p_i = count_i/total`,
+//! `entropy = -sum(p_i*log2(p_i))` for `p_i>0`. A 16x16 plane holding every
+//! value `0..=255` exactly once gives every `p_i=1/256`, so
+//! `entropy=log2(256)=8` exactly. `normalized_entropy` is `entropy/8.0`
+//! (`log2(256)`, the max possible for an 8-bit histogram) — confirmed on a
+//! flat plane (`0/8=0`), a 50/50 split (`1/8=0.125`), and a skewed
+//! three-level histogram (`0.515895/8=0.064487`), which also rules out
+//! dividing by `log2(distinct values present)` instead (`log2(3)=1.585`
+//! would give `0.3255`, not the measured `0.064487`).
 //!
-//! `mode=diff`: identical formula, but over `delta_i = |hist_i - hist_(i-1)|`
-//! for `i` in `1..256` (`hist_0` has no predecessor and is not counted) in
-//! place of `hist_i`, still normalised by the same `total` sample count (not
-//! `sum(delta)`) — confirmed by feeding a three-level skewed histogram
-//! (`90`/`9`/`1` at values `0`/`1`/`99`) where the two candidate
-//! normalisations disagree: `sum(delta)=92` would give `entropy=0.631636`,
-//! `total=100` (the measured normalisation) gives `0.691776`, matching the
-//! reference exactly.
+//! `mode=diff` uses `delta_i = |hist_i - hist_(i-1)|` for `i` in `1..256` in
+//! place of `hist_i`, still normalised by the same `total` sample count, not
+//! `sum(delta)` — confirmed on a skewed histogram (`90`/`9`/`1` at values
+//! `0`/`1`/`99`) where the two normalisations disagree: `sum(delta)=92`
+//! would give `0.631636`, `total=100` (the measured rule) gives `0.691776`,
+//! matching the reference.
 //!
-//! # Distinguishing input built for this filter
-//!
-//! A flat plane forces every histogram bucket but one to be empty, which
-//! cannot distinguish "divide by `total`" from "divide by `sum(delta)`" (both
-//! degenerate to the same trivial case). The three-level skewed fixture
-//! above is what separates them, and separately, its `diff`-mode value being
-//! non-trivially different from its `normal`-mode value on the *same* input
-//! rules out an implementation that silently ignores `mode`.
+//! A flat plane alone can't separate `/total` from `/sum(delta)` (both
+//! degenerate to the same case) — the skewed fixture above is what does.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};

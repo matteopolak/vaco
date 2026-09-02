@@ -21,8 +21,7 @@
 //!
 //! # Not measured/implemented
 //!
-//! The free-form `layout=` string (`planning/16-filters.md`'s own "shared
-//! layout parser" dependency — a small expression language for
+//! The free-form `layout=` string (a small expression language for
 //! per-input `x_y` position strings referencing other inputs' `w`/`h`) is
 //! **not implemented**; `create` rejects it with a clean error. `fill`
 //! (the colour for grid cells with no matching input) is not implemented

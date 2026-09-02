@@ -22,33 +22,22 @@
 //! segment with key `lavfi.black_start` and to the first frame after the
 //! black segment ends with key `lavfi.black_end`. The value is the frame's
 //! timestamp. This metadata is added regardless of the minimum duration
-//! specified."* (`man ffmpeg-filters`, quoted verbatim) — so, unlike
-//! `black_min_duration` gating the **log line**, the tags fire on *every*
-//! black/non-black transition. Confirmed against `ffprobe -show_frames` at
-//! 5 fps (`black_start` on frame 0, `black_end` on frame 5, `t=1.0s`, for a
-//! 1s-black-then-1s-white stream) and at a deliberately irregular 3 fps,
-//! where `black_end` prints `"1.000001"` rather than `"1"` — a
-//! floating-point pts-to-seconds rounding artefact of the *reference's*
-//! internal arithmetic on that specific timestamp, not reproduced bit-for-
-//! bit by this crate's own hand-built test fixtures (a synthetic
-//! `Rational::new(1,3)`/`pts=3` frame rounds to exactly `1.0` in `f64`
-//! regardless of multiplication order, so it does not reproduce the
-//! artefact) — the seconds-conversion formula itself
-//! ([`seconds`]) is the same one `freezedetect` uses and is exercised
-//! below by a fixture chosen for a different, unambiguous purpose instead.
+//! specified."* (`man ffmpeg-filters`) — so, unlike `black_min_duration`
+//! gating the log line, the tags fire on every black/non-black transition.
+//! Confirmed against `ffprobe -show_frames` at 5 fps (`black_start` on
+//! frame 0, `black_end` on frame 5, `t=1.0s`, for a 1s-black-then-1s-white
+//! stream). The seconds-conversion formula ([`seconds`]) is the same one
+//! `freezedetect` uses.
 //!
-//! # Distinguishing input built for this filter
+//! # Distinguishing input
 //!
-//! A black run whose last black frame and whose breaking frame are *not*
-//! evenly spaced (`pts` 0,1,2 then a gap to `pts` 10, rather than 3) is what
-//! tells "the tag carries the *breaking* frame's own pts" apart from a
-//! wrong-neighbour hypothesis ("the tag carries the *last black frame's*
-//! pts") — the same two hypotheses `freezedetect`'s `freeze_end` had to be
-//! told apart from (`planning/AGENT-CONSTRAINTS.md`), and indistinguishable
-//! at even spacing for the same reason. The reference's own documentation
-//! already says which one it is ("the first frame *after* the black segment
-//! ends"), so this test is a regression guard against reintroducing the
-//! wrong-neighbour bug, not a blind measurement.
+//! A black run whose last black frame and breaking frame are not evenly
+//! spaced (`pts` 0,1,2 then a gap to `pts` 10, rather than 3) tells "the tag
+//! carries the breaking frame's own pts" apart from "the tag carries the
+//! last black frame's pts" — indistinguishable at even spacing. The
+//! reference's own docs say which one it is ("the first frame *after* the
+//! black segment ends"), so this is a regression guard, not a blind
+//! measurement.
 
 use vaco_core::{MediaType, Rational, Result, Timestamp};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -228,17 +217,12 @@ mod tests {
     }
 
     /// Distinguishing input: an irregular gap between the last black frame
-    /// (pts 2) and the frame that breaks the run (pts 10, not 3) is what
-    /// tells "the tag carries the *breaking* frame's own pts" apart from a
-    /// wrong-neighbour hypothesis ("the tag carries the *last black
-    /// frame's* pts") — the two agree whenever frames are evenly spaced, so
-    /// `planning/AGENT-CONSTRAINTS.md`'s `freezedetect`/`tblend` caution is
-    /// applied here the same way `freezedetect`'s own test applies it: pick
-    /// an input where the two hypotheses print different numbers. The
-    /// reference's own documentation already says which one it is ("the
-    /// first frame after the black segment ends"), so this test also
-    /// guards against a future refactor reintroducing the wrong-neighbour
-    /// bug, not just against getting it wrong the first time.
+    /// (pts 2) and the frame that breaks the run (pts 10, not 3) tells "the
+    /// tag carries the breaking frame's own pts" apart from "the tag
+    /// carries the last black frame's pts" — the two agree whenever frames
+    /// are evenly spaced. The reference's docs say which one it is ("the
+    /// first frame after the black segment ends"), so this is a regression
+    /// guard against reintroducing the wrong-neighbour bug.
     #[test]
     fn black_end_uses_the_breaking_frame_not_the_last_black_one() {
         let tb = Rational::new(1, 1);

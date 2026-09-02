@@ -15,9 +15,8 @@
 //! this is a thin [`FrameSyncFilter`] over [`FsInput::dual`]'s roles: input 0
 //! (`default`) drives, input 1 (`structure`) is sampled and may be absent
 //! before its first frame. `vaco-filter-core` has no `Simple`-shaped
-//! adapter for a two-input filter yet (`planning/INTERFACE-GAPS.md` gap
-//! 10's `Paired<F>` is proposed but not landed), so this follows `overlay`'s
-//! own pattern directly rather than waiting on it.
+//! adapter for a two-input filter yet, so this follows `overlay`'s own
+//! pattern directly rather than waiting on one.
 //!
 //! # Measured: the structuring element is a support mask, not additive
 //!

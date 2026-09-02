@@ -22,8 +22,7 @@
 //! # output: frame 1 -> pts=25 nb_samples=15  (the [20,40) frame cut to [25,40))
 //! #         frame 2 -> pts=40 nb_samples=5   (the [40,60) frame cut to [40,45))
 //! ```
-//! This is the plumbing risk plan 13 §1b and the brief call out by name: a
-//! frame straddling the boundary is neither wholly kept nor wholly dropped
+//! A frame straddling the boundary is neither wholly kept nor wholly dropped
 //! for audio — it is cut. `trim` (video) has no equivalent, because a video
 //! frame is a single instant with no width to cut.
 //!

@@ -1,12 +1,11 @@
-//! T1 audio filters: `aresample`, `aformat`, `volume`, `amix`, `amerge`,
+//! Audio filters: `aresample`, `aformat`, `volume`, `amix`, `amerge`,
 //! `channelmap`, `channelsplit`, `join`, `pan`, `asetnsamples`, `asetrate`.
-//! Plus `amultiply` and `adecorrelate` (FT-4.13e, GitHub #485): the two
-//! `vaco-filter-amix`-row filters plan 16 §4.3 lists that this crate had not
-//! registered yet — see each module's own doc for what is measured
-//! (`amultiply`, bit-exact) versus structural (`adecorrelate`, which cannot
-//! be measured at all; see its doc for why).
+//! Plus `amultiply` and `adecorrelate`, the two `vaco-filter-amix`-row
+//! filters plan 16 §4.3 lists — see each module's own doc for what is
+//! measured (`amultiply`, bit-exact) versus structural (`adecorrelate`,
+//! which cannot be measured at all; see its doc for why).
 //!
-//! FT-4.2 (GitHub #466). Built against `vaco-filter-core` (the `Filter` trait,
+//! Built against `vaco-filter-core` (the `Filter` trait,
 //! the `Simple`/`AudioFilter`/`Sourced` adapters and format negotiation) and
 //! `vaco-filter-graph` (the [`FilterRegistry`](vaco_filter_graph::FilterRegistry)
 //! trait a DSL builder uses to turn a parsed `name=args` into an

@@ -1,5 +1,5 @@
-//! `vaco-filter-key` — the keying/masking family of
-//! `planning/16-filters.md` §4.2's crate table.
+//! `vaco-filter-key` — the keying/masking family, plan 16 §4.2's crate
+//! table.
 //!
 //! # Scope, honestly stated
 //!

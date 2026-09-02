@@ -3,9 +3,8 @@
 //!
 //! `ffmpeg -h filter=sendcmd` documents `commands`/`c` and `filename`/`f`.
 //! The command grammar itself is only in `filters.texi`'s "Commands
-//! syntax" subsection (public documentation, not the reference's source —
-//! within D7's clean-room bound), fetched and quoted here because `-h`
-//! does not show it. Its BNF, verbatim:
+//! syntax" subsection, quoted here because `-h` does not show it. Its BNF,
+//! verbatim:
 //!
 //! ```text
 //! COMMAND_FLAG  ::= "enter" | "leave"
@@ -22,30 +21,22 @@
 //! running to end of line. This module implements the parser and the
 //! per-frame enter/leave edge detection in full — [`Filter::fired`] (test
 //! only) records every command this instance's script would have sent, in
-//! order, exactly reproducing the worked examples from `filters.texi`
-//! (`5.0-10.0 [enter] drawtext reinit '...' , [leave] drawtext reinit '';`
-//! `15.0-20.0 [enter] hue s 0, [enter] drawtext ..., [leave] hue s 1,
-//! [leave] drawtext ...;` `25 [enter] hue s exp(25-t)`).
+//! order, exactly reproducing `filters.texi`'s worked examples.
 //!
 //! # What is not implemented, and cannot be from inside a leaf filter
 //!
 //! `TARGET` names *another* filter instance in the same graph (the
-//! reference's own examples: `sendcmd='4.0 atempo tempo 1.5',atempo`). This
-//! project's `vaco_filter_core::Filter::command` trait method exists and is
-//! exactly the right shape to receive such a command — but nothing between
-//! here and there can *address* it: a filter only ever sees its own
-//! `FilterContext`, which exposes its own links, not a handle to
-//! `vaco_filter_core::sched::Graph` or a way to look another node up by
-//! label and call `command` on it. That capability does not exist anywhere
-//! in `vaco-filter-core` today (checked: `Graph` has no public "send this
-//! node a command" method), so it is not a gap this crate's single-writer
-//! scope can close — it needs a `vaco-filter-core` change. This filter
-//! therefore parses the full script, tracks time, and correctly identifies
-//! *which* commands would fire *when* (exercised directly against the
-//! reference's own examples), but does not deliver them anywhere. Every
-//! frame passes through unchanged, exactly as if the filter were absent,
-//! which is a safe default for a driver that cannot do its job yet: no
-//! output is corrupted by a `sendcmd` that silently does nothing.
+//! reference's own examples: `sendcmd='4.0 atempo tempo 1.5',atempo`).
+//! `vaco_filter_core::Filter::command` exists and is the right shape to
+//! receive such a command, but nothing between here and there can address
+//! it: a filter only sees its own `FilterContext`, not a handle to look
+//! another node up by label and call `command` on it. `Graph` has no
+//! public "send this node a command" method today, so this needs a
+//! `vaco-filter-core` change, not something a leaf filter can close on its
+//! own. This filter parses the full script, tracks time, and correctly
+//! identifies which commands would fire when, but does not deliver them
+//! anywhere — every frame passes through unchanged, a safe default for a
+//! driver that cannot do its job yet.
 
 use vaco_core::{MediaType, Result};
 use vaco_expr::{Bindings, Expr};

@@ -6,13 +6,7 @@
 //! family this crate started with (`crossfeed`, `stereotools`,
 //! `stereowiden`, `extrastereo`, `earwax`, `haas`, `axcorrelate`).
 //!
-//! FT-4.13d (GitHub #484). This crate is `planning/16-filters.md` §4.3's
-//! `vaco-filter-aeffects` row; it was originally built (FT-4.13b, GitHub
-//! #482) under the name `vaco-filter-achannel`, which named only the
-//! channel/mixing subset it had at the time. Renamed to match the plan's
-//! row per `planning/FILTER-CRATE-DIVERGENCE.md` as part of landing this
-//! work package, in a commit kept separate from the new filters so the move
-//! is reviewable on its own. Built against `vaco-filter-core` (the `Filter`
+//! Built against `vaco-filter-core` (the `Filter`
 //! trait, the `Simple` adapter) and `vaco-filter-graph` (`FilterRegistry`),
 //! exactly as `vaco-filter-audio`, `vaco-filter-aeq` and
 //! `vaco-filter-adynamics` are — `axcorrelate` additionally uses

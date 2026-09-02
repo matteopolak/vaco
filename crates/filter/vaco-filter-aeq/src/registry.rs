@@ -10,10 +10,10 @@ use crate::common;
 /// them. Fifteen: the twelve biquad-family filters from `af_biquads.c`
 /// (`equalizer`, `bass`, `lowshelf`, `treble`, `highshelf`, `tiltshelf`,
 /// `highpass`, `lowpass`, `bandpass`, `bandreject`, `allpass`, `biquad`) plus
-/// `anequalizer`, `firequalizer`, `superequalizer` — GitHub #471's actual
-/// scope, which is thirteen names wider than this work package's brief
-/// (missing `tiltshelf` and `firequalizer`); see
-/// `docs/filter/vaco-filter-aeq.md` for the reconciliation.
+/// `anequalizer`, `firequalizer`, `superequalizer` — wider than this work
+/// package's original brief, which was missing `tiltshelf` and
+/// `firequalizer`; see `docs/filter/vaco-filter-aeq.md` for the
+/// reconciliation.
 const NAMES: &[&str] = &[
     "aemphasis",
     "allpass",

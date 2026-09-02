@@ -40,8 +40,8 @@ pub struct AlphaMask {
 impl AlphaMask {
     /// An all-zero mask of the given size, allocated through `budget` — the
     /// size comes from shaped text (attacker-controlled string length times
-    /// font size), so this is exactly the allocation the "allocate after the
-    /// limits" rule (`planning/AGENT-CONSTRAINTS.md`) is about.
+    /// font size), so the budget check must run before the allocation, not
+    /// after.
     ///
     /// # Errors
     /// [`vaco_core::Error::LimitExceeded`] if `w * h` exceeds the budget.

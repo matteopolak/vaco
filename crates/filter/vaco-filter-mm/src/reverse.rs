@@ -1,14 +1,12 @@
 //! `reverse`/`areverse` — reverse a stream's frame order.
 //!
 //! `ffmpeg -h filter=reverse` documents no options at all, matching this
-//! implementation. The reference's own warning is the module's whole
-//! design constraint: "this filter requires memory to buffer the entire
-//! clip, so trimming is suggested" — it deliberately does not bound itself,
-//! which is why this crate's Budget defence (below) matters here more than
-//! almost anywhere else in the row.
+//! implementation. The reference's own warning — "this filter requires
+//! memory to buffer the entire clip, so trimming is suggested" — is why
+//! this crate's Budget defence (below) matters here more than almost
+//! anywhere else in the row.
 //!
-//! # Measured against the reference (ffmpeg 8.1): content reverses, the
-//! timeline does not
+//! # Content reverses; the timeline does not
 //!
 //! Built with `-f lavfi -i "color=size=4x4:rate=5:duration=10,format=gray"
 //! -vf "trim=end_frame=5,setpts=PTS-STARTPTS,geq=lum='N*10',<reverse or
@@ -20,40 +18,26 @@
 //! reverse:  mean 40, 30, 20, 10, 0   pts 0, 1, 2, 3, 4
 //! ```
 //!
-//! The **content** order flips; the **pts sequence** does not — output
-//! position `k` keeps the pts (and, in this implementation, the `duration`
-//! and `time_base`) that position `k` had in the original stream, and
-//! receives the *pixel/sample data* from original position `N-1-k`. This
-//! crate's own falsifying test for "does this filter actually reverse
-//! anything, or did it just no-op" is `reverse,reverse` composing to the
-//! identity — checked directly below, since two independent-looking
-//! implementations of "reverse" (e.g. one that reverses content, one that
-//! also reverses timestamps) would both look plausible from one direction
-//! and only one of them is idempotent under repetition.
+//! Content order flips; the pts sequence does not — output position `k`
+//! keeps the pts (and `duration`/`time_base`) that position `k` had in the
+//! original stream, and receives the pixel/sample data from original
+//! position `N-1-k`. `reverse,reverse` composing to the identity is this
+//! crate's falsifying test: an implementation that also reversed timestamps
+//! would look plausible from one direction but would not be idempotent.
+//! Non-uniform frame spacing was not measured; this implementation keeps
+//! position `k`'s own timing metadata as the simplest reading consistent
+//! with the above.
 //!
-//! Not measured: the reference's exact rule for **non-uniform** frame
-//! spacing (variable frame duration). This implementation's "keep position
-//! `k`'s own timing metadata" rule is the simplest reading consistent with
-//! the uniform-spacing measurement above; a stream with irregular
-//! durations was not built to distinguish it from other readings (e.g.
-//! "reverse the duration sequence too").
-//!
-//! # Allocation: the one filter in this row that is *supposed* to buffer
-//! everything
+//! # Allocation: this filter is supposed to buffer everything
 //!
 //! Every frame is retained until end of stream, by design — there is no
-//! `size` option to bound the window the way `loop` has one. This crate's
-//! response is the same mechanism as `loop`/`aloop`: each retained frame is
-//! charged against a [`vaco_limits::Budget`] by its real plane bytes (never
-//! a size computed from an option, since there is no such option here to
-//! compute one from). Once the budget is exhausted, **the filter stops
-//! admitting further frames into the buffer** rather than erroring or
-//! panicking — later frames are silently dropped from the reversed output,
-//! which is the explicit clamp for a filter whose entire contract is
-//! "buffer the whole clip" and therefore has no smaller correct behaviour
-//! to fall back to. The reference's own documentation already tells a
-//! caller to bound this with `trim`; this is the backstop for when they do
-//! not.
+//! `size` option to bound the window the way `loop` has one. Each retained
+//! frame is charged against a [`vaco_limits::Budget`] by its real plane
+//! bytes, the same mechanism `loop`/`aloop` use. Once the budget is
+//! exhausted, the filter stops admitting further frames into the buffer
+//! rather than erroring — later frames are silently dropped from the
+//! reversed output. The reference's own docs already tell a caller to
+//! bound this with `trim`; this is the backstop for when they do not.
 
 use std::collections::VecDeque;
 

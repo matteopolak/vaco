@@ -195,8 +195,7 @@ pub struct FilterContext<'a> {
     pool: &'a FramePool,
     /// Every node's public identity, for [`FilterContext::graph_nodes`] and
     /// resolving [`context::LinkView`]'s `PadRef`s from
-    /// [`FilterContext::graph_links`] (gap 22,
-    /// `planning/INTERFACE-GAPS.md`).
+    /// [`FilterContext::graph_links`].
     graph_nodes: &'a [context::NodeView],
     /// Set when a pushed frame did not match its link's negotiated format.
     format_mismatch: bool,

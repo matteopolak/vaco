@@ -1,5 +1,4 @@
-//! `drawtext` — burn text into every video frame (plan 16 SS6.2, GitHub
-//! #473 / FT-4.10, the filter #462 exists to unblock).
+//! `drawtext` — burn text into every video frame (plan 16 SS6.2).
 //!
 //! # Compatibility surface implemented
 //!

@@ -1,10 +1,8 @@
 //! Shared `lavfi.<filter>.<key>` value formatting.
 //!
 //! Three distinct formatting rules are in play across this crate's filters,
-//! each measured against `ffmpeg 8.1` rather than assumed to be "the same as
-//! `freezedetect`'s" (`planning/AGENT-CONSTRAINTS.md`'s caution that a
-//! formula fitting one filter is not evidence for the next one, taken to
-//! heart):
+//! each measured against `ffmpeg 8.1` individually rather than assumed to
+//! generalise from `freezedetect`'s rule:
 //!
 //! * [`fixed6`] — plain `%f` (six decimal digits, **not** trimmed):
 //!   `psnr`'s `mse`/`psnr` values, `identity`, `msad`. Measured:

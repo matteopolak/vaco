@@ -391,10 +391,10 @@ mod tests {
     /// expected but the numbers should be indistinguishable at 8-bit
     /// sample precision.
     ///
-    /// Deliberately not a flat or single-axis field (see
-    /// AGENT-CONSTRAINTS.md's "a source that cannot separate two rules
-    /// validates neither"): a flat field makes every patch distance zero on
-    /// both paths regardless of a border-clamping mistake, so this uses a
+    /// Deliberately not a flat or single-axis field: a source that cannot
+    /// separate two rules validates neither, and a flat field makes every
+    /// patch distance zero on both paths regardless of a border-clamping
+    /// mistake — so this uses a
     /// two-axis ramp-plus-checker pattern with real edge content, and a
     /// patch/research radius pair that pushes real patches past the plane's
     /// own border on every side.

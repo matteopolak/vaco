@@ -3,23 +3,15 @@
 //! row. `rotate` (arbitrary-angle rotation with interpolation) is explicitly
 //! out of scope per this crate's brief and is not registered here.
 //!
-//! # Naming versus GitHub epic #54's real children
+//! # Crate boundary: why `scale` lives here
 //!
-//! This crate's brief named it `vaco-filter-video-geometry` before epic
-//! #54's actual three child issues were checked. They turned out to name a
-//! *different* split: **#464** (`vaco-filter-crop`) wants exactly `crop`,
-//! `pad`, `transpose`, `hflip`, `vflip` — everything in this crate except
-//! `scale` — and **#463** (`vaco-filter-scale`) wants `scale` bundled with
-//! `format`/`noformat`/`setsar`/`setdar`/`setparams` instead, which live in
-//! the sibling `vaco-filter-video-format` crate. Given the brief's explicit
-//! licence to keep a different split when one is obviously right ("if a
-//! different split is obviously right, take it and say so"), `scale` stays
-//! here: it is a video-geometry operation by every naming convention this
-//! project otherwise uses, and moving it into the metadata-filter crate
-//! would be the more surprising choice for a future reader, even though it
-//! means this crate's five non-`scale` filters are a one-to-one match for
-//! issue #464 under a different crate name. See this crate's closing report
-//! (or `docs/filter/vaco-filter-video-geometry.md`) for the full
+//! `crop`/`pad`/`transpose`/`hflip`/`vflip` and `scale` could equally be
+//! split with `scale` bundled alongside `format`/`noformat`/`setsar`/
+//! `setdar`/`setparams` in the sibling `vaco-filter-video-format` crate
+//! instead. `scale` stays here: it is a video-geometry operation by every
+//! naming convention this project otherwise uses, and moving it into the
+//! metadata-filter crate would be the more surprising choice for a future
+//! reader. See `docs/filter/vaco-filter-video-geometry.md` for the full
 //! reconciliation.
 //!
 //! # Shape

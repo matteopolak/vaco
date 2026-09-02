@@ -1,87 +1,43 @@
 //! `metadata`/`ametadata` — read, write and filter the per-frame metadata
-//! dictionary (`Frame::metadata`, interface gap 11, closed by
-//! `vaco-filter-temporal`'s `freezedetect` and `vaco-filter-analysis`'s
-//! measurement filters). This crate is the first *consumer*: it lets a
-//! filtergraph route on, add, change, remove or surface the tags those
-//! filters attach.
-//!
-//! # Measured against the reference (ffmpeg 8.1)
-//!
-//! `ffmpeg -h filter=metadata` documents `mode` (`select`/`add`/`modify`/
-//! `delete`/`print`, default `select`), `key`, `value`, `function`
-//! (`same_str`/`starts_with`/`less`/`equal`/`greater`/`expr`/`ends_with`,
-//! default `same_str`), `expr`, `file` and `direct`.
-//!
-//! Every mode's edge case below was run against the reference rather than
-//! inferred from the option help text, because the option help text
-//! under-specifies several of them:
-//!
-//! - **`select`/`add`/`modify` reject construction outright when `key` is
-//!   unset.** `ffmpeg -vf metadata=mode=select` fails filtergraph init with
-//!   `Metadata key must be set` — not a permissive "match everything". This
-//!   crate returns a construction `Err` for the same case, matching the
-//!   reference's own initialization-time behaviour rather than picking a
-//!   silent default.
-//! - **`select` with `key` set and no `value`** passes every frame carrying
-//!   that key, regardless of its value.
-//! - **`select` with `key` and `value` both set** compares through
-//!   `function`, default `same_str` (string equality).
-//! - **`add` on an already-present key is a no-op** — the existing value
-//!   survives untouched. Confirmed with `add:key=foo:value=bar` twice in a
-//!   row with different values; the frame keeps `bar`.
-//! - **`modify` on an absent key is a no-op**, not an add. Confirmed: no
-//!   metadata appears afterward.
-//! - **`delete` with `key` and `value` only removes the key when the
-//!   current value compares true against `value`** (through the same
-//!   `function` machinery as `select` — the option's own text, "the
-//!   function to use when comparing metadata value and `value`", does not
-//!   scope itself to one mode, and this is the only reading that gives it a
-//!   use in `delete` at all). A mismatched `value` leaves the key alone,
-//!   confirmed directly.
-//! - **`delete` with no `key` removes every metadata entry** on the frame,
-//!   confirmed with two keys present and both gone afterward.
-//! - **`print` with nothing to report emits nothing at all** — not even the
-//!   `frame:`/`pts:`/`pts_time:` header line. Confirmed both for a frame
-//!   with no metadata at all and for `key` set to a name the frame does not
-//!   carry.
-//! - **`print`'s header line is column-padded, not space-separated**:
-//!   `frame:{n:<5}pts:{pts:<8}pts_time:{t}` reproduces
-//!   `frame:0    pts:0       pts_time:0` (`n=0`) and
-//!   `frame:10   pts:10      pts_time:10` (`n=10`) exactly — the padding
-//!   widths are fixed (5 and 8), not aligned to the widest value seen. Each
-//!   metadata line beneath it is `key=value` in insertion order, one per
-//!   line, confirmed with two keys present in an add-then-print chain.
-//! - **`pts_time` uses the same trimmed six-decimal format as
-//!   `freezedetect`'s `lavfi.freezedetect.*` tags** (`0` prints bare,
-//!   `0.5` stays `0.5`, `0.333333` keeps all six digits) — measured at
-//!   `rate=3` (a non-terminating fraction) and `rate=2` (terminates early).
-//!
-//! # What is not reproduced: the reference's log sink
-//!
-//! `print` with no `file` option writes to the reference's own log at
-//! `AV_LOG_INFO`. This project has no equivalent log sink wired into the
-//! filter framework yet (grepped: no filter crate depends on `log` or
-//! `tracing`), so with `file` unset this filter still *performs* the print
-//! — computing the same lines, in the same format documented above — but
-//! only records them for [`Filter::printed`], a test-only accessor, rather
-//! than emitting them anywhere externally. `file` set to a real path (or the
-//! literal `"-"` for standard output) writes the lines for real, since that
-//! path in the reference is a plain file write. `direct` is parsed and
-//! accepted but has nothing to reduce buffering for here — this filter does
-//! one `write_all` per print, never buffers across frames — so it is a
-//! documented no-op.
-//!
-//! # `expr` function
-//!
+//! dictionary (`Frame::metadata`), the first crate to *consume* it: it lets
+//! a filtergraph route on, add, change, remove or surface tags that
+//! filters like `freezedetect` attach. Measured against the reference
+//! (ffmpeg 8.1): `ffmpeg -h filter=metadata` documents `mode`
+//! (`select`/`add`/`modify`/`delete`/`print`, default `select`), `key`,
+//! `value`, `function` (`same_str`/`starts_with`/`less`/`equal`/`greater`/
+//! `expr`/`ends_with`, default `same_str`), `expr`, `file` and `direct`.
+//! Edge cases below were run against the reference, which under-specifies
+//! them in its own help text:
+//! - `select`/`add`/`modify` reject construction when `key` is unset
+//!   (`Metadata key must be set`), not a permissive "match everything".
+//! - `select` with `key` and no `value` passes every frame carrying that
+//!   key; with both set, it compares through `function` (default `same_str`).
+//! - `add` on an already-present key is a no-op; `modify` on an absent one
+//!   is a no-op too, not an add.
+//! - `delete` with `key` and `value` only removes it when the current value
+//!   compares true against `value` through the same `function` machinery
+//!   as `select`; `delete` with no `key` removes every entry.
+//! - `print` with nothing to report emits nothing, not even the header
+//!   line, which is column-padded, not space-separated —
+//!   `frame:{n:<5}pts:{pts:<8}pts_time:{t}` — with fixed widths (5 and 8);
+//!   each line beneath it is `key=value` in insertion order. `pts_time`
+//!   uses the same trimmed six-decimal format as `freezedetect`'s
+//!   `lavfi.freezedetect.*` tags.
+//! What is not reproduced is the reference's log sink: `print` with no
+//! `file` writes to the reference's own log, but this project has no log
+//! sink wired in yet, so with `file` unset this filter still computes the
+//! same lines but only records them for [`Filter::printed`], a test-only
+//! accessor. `file` set to a real path (or `"-"`) writes the lines for
+//! real; `direct` is a documented no-op since this filter never buffers
+//! across frames anyway.
 //! `function=expr` evaluates `expr` per frame through `vaco-expr`, with
-//! `VALUE1`/`FRAMEVAL` bound to the frame's metadata value under `key`
-//! (parsed as a float; `NaN` if absent or unparseable) and
-//! `VALUE2`/`USERVAL` bound to the `value` option (parsed the same way). A
-//! non-zero result matches, mirroring `vaco-expr`'s own "NaN is truthy"
-//! reproduction of the reference (see that crate's doc) — not independently
-//! verified against `metadata=function=expr` specifically, since doing so
-//! would need a frame with a numeric-looking metadata value, which no
-//! producer in this project writes today.
+//! `VALUE1`/`FRAMEVAL` bound to the frame's metadata value under `key` (a
+//! float, `NaN` if absent or unparseable) and `VALUE2`/`USERVAL` bound to
+//! `value` the same way. A non-zero result matches, mirroring `vaco-expr`'s
+//! "NaN is truthy" reproduction of the reference — not independently
+//! verified against `metadata=function=expr` specifically, since that needs
+//! a frame with a numeric-looking metadata value, which no producer here
+//! writes today.
 
 use std::fmt::Write as _;
 use std::io::Write as _;

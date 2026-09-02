@@ -1,72 +1,43 @@
-//! `ssim` — Structural Similarity Index between two video streams.
+//! `ssim` — Structural Similarity Index between two video streams. Same pad
+//! shape as `psnr`, no framesync surface.
 //!
-//! `ffmpeg -h filter=ssim`: same pad shape as `psnr` (`main`/`reference` in,
-//! `default` out), no framesync surface (measured, same finding as
-//! [`crate::psnr`]'s doc).
-//!
-//! # Implemented from the published paper (D7, clean room)
+//! # Implemented from the published paper
 //!
 //! Z. Wang, A. C. Bovik, H. R. Sheikh and E. P. Simoncelli, "Image Quality
 //! Assessment: From Error Visibility to Structural Similarity", *IEEE
 //! Transactions on Image Processing*, vol. 13, no. 4, pp. 600-612, April
-//! 2004. The paper specifies an 11x11 circularly-symmetric Gaussian
-//! weighting function (`sigma = 1.5`, normalised to unit sum), the local
-//! statistics `mu_x, mu_y, sigma_x^2, sigma_y^2, sigma_xy` computed under
-//! that window at every pixel, and the per-window index
+//! 2004: an 11x11 circularly-symmetric Gaussian window (`sigma=1.5`, unit
+//! sum), local statistics `mu_x, mu_y, sigma_x^2, sigma_y^2, sigma_xy` per
+//! pixel, and the per-window index
 //!
 //! ```text
 //! SSIM(x,y) = ((2*mu_x*mu_y + C1) * (2*sigma_xy + C2))
 //!           / ((mu_x^2 + mu_y^2 + C1) * (sigma_x^2 + sigma_y^2 + C2))
 //! ```
 //!
-//! with `C1 = (K1*L)^2`, `C2 = (K2*L)^2`, `K1 = 0.01`, `K2 = 0.03`, `L = 255`
-//! for 8-bit samples — the paper's own defaults, and (see below) the exact
-//! constants the reference measurably uses too. The frame-level index is the
-//! mean of the per-window map (the paper's "Mean SSIM", MSSIM).
+//! with `C1=(K1*L)^2`, `C2=(K2*L)^2`, `K1=0.01`, `K2=0.03`, `L=255` — the
+//! paper's own defaults. Frame-level index is the mean of the per-window
+//! map ("Mean SSIM"); window stride 1, no padding.
 //!
-//! # Not byte-exact, measured honestly — even in the degenerate case
+//! # Not byte-exact, even in the degenerate case
 //!
-//! The zero-variance case looked at first like a clean closed-form oracle:
-//! for two *flat* (constant-valued) planes, every window has
-//! `sigma_x=sigma_y=sigma_xy=0` regardless of window size or shape, so the
-//! formula collapses to `(2*mu_x*mu_y+C1)/(mu_x^2+mu_y^2+C1)` —
-//! independent of the windowing algorithm entirely. Computed precisely
-//! (not estimated): `128` vs `110`, `C1=(0.01*255)^2=6.5025`,
-//! `C2=(0.03*255)^2=58.5225` gives `(2*128*110+6.5025)/(128^2+110^2+6.5025)
-//! = 28166.5025/28490.5025 = 0.988628` and `dB=-10*log10(1-0.988628) =
-//! 19.441551` — which is what this module's implementation actually
-//! produces, and what its tests assert.
+//! Two flat planes force `sigma_x=sigma_y=sigma_xy=0` everywhere, so the
+//! formula collapses to `(2*mu_x*mu_y+C1)/(mu_x^2+mu_y^2+C1)` regardless of
+//! windowing. For `128` vs `110`: `(2*128*110+6.5025)/(128^2+110^2+6.5025)
+//! = 0.988628`, `dB=19.441551` — what this implementation produces.
 //!
 //! **`ffmpeg 8.1` measures `0.988625`/`19.440596` on that exact input** — a
-//! ~3e-6 discrepancy that a first, sloppier hand-check missed (rounding two
-//! six-digit numbers by eye and calling them equal; re-deriving the fraction
-//! exactly caught it). Since the formula is forced to this value for *any*
-//! zero-variance windowing, the reference is not evaluating the textbook
-//! floating-point Gaussian-window formula unmodified even in this
-//! degenerate case — most plausibly a fixed-point/quantised Gaussian kernel
-//! (unreadable under D7; not guessed at here). **Conclusion, stated
-//! plainly: this crate's `ssim` values are *not* byte-exact against the
-//! reference, on any input, including the flat-field one.** What is
-//! verified is that this implementation matches the published paper's
-//! formula exactly (closed form, independently computed) — see
-//! `docs/filter/vaco-filter-analysis.md` for this measurement recorded
-//! alongside the reference's actual number.
+//! ~3e-6 discrepancy, forced because the formula collapses to this value
+//! for *any* zero-variance windowing: the reference is not evaluating the
+//! textbook floating-point Gaussian window unmodified even here (most
+//! plausibly a fixed-point/quantised kernel). `ssim` is therefore not
+//! byte-exact against the reference on any input; what's verified is that
+//! it matches the published formula exactly. Full numbers:
+//! `docs/filter/vaco-filter-analysis.md`.
 //!
-//! Non-degenerate (real-variance) content inherits the same caveat, for the
-//! same underlying reason, on top of the windowing (block size, stride,
-//! boundary handling) the published paper leaves open and D7 forbids
-//! reading from source. This crate uses the paper's own 11x11 Gaussian
-//! sliding window (stride 1, no padding — a window only where it fits
-//! fully).
-//!
-//! # Averaging: sample-count-weighted, like `psnr`
-//!
-//! `ssim.All` is measured to average per-component SSIM weighted by sample
-//! count, exactly like `psnr`'s `mse_avg` and unlike `identity`/`msad`'s
-//! `_avg` fields — see [`crate::fmt::weighted_average`]'s doc for the
-//! measurement (run on `ssim` specifically: yuv420p asymmetric input gives
-//! `ssim.Y=0.333334, U=1, V=1`, `All=0.555556`, which is the sample-weighted
-//! formula and not the plain mean `0.777778`).
+//! `ssim.All` averages per-component SSIM weighted by sample count, like
+//! `psnr`'s `mse_avg` and unlike `identity`/`msad` — see
+//! [`crate::fmt::weighted_average`].
 
 use smallvec::SmallVec;
 use vaco_core::{MediaType, Result};

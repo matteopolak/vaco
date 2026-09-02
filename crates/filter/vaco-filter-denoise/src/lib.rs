@@ -1,7 +1,6 @@
-//! T4 video denoise filters (FT-4.6b, GitHub #469): `hqdn3d`, `atadenoise`,
-//! `removegrain`, `nlmeans`, `owdenoise`, `dctdnoiz`, `fftdnoiz`,
-//! `vaguedenoiser`. `bm3d` is named in the brief's group but is not
-//! implemented here — see [`bm3d`]'s doc for why.
+//! Video denoise filters: `hqdn3d`, `atadenoise`, `removegrain`, `nlmeans`,
+//! `owdenoise`, `dctdnoiz`, `fftdnoiz`, `vaguedenoiser`. `bm3d` is named in
+//! the same family but is not implemented here — see [`bm3d`]'s doc for why.
 //!
 //! # Membership, checked against the reference rather than assumed
 //!

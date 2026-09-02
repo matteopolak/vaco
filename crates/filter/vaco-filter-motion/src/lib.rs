@@ -1,8 +1,5 @@
-//! T3 motion video filters — `planning/16-filters.md` §4.2's
-//! `vaco-filter-motion` row: `mestimate`, `minterpolate`, `framerate`,
-//! `deshake`. Crate did not exist (checked `crates/filter/` directly, and
-//! `planning/ASSIGNMENTS.md` had no row for it) — genuinely unclaimed T3
-//! long-tail work under #57 (FT-4.12)'s remaining children.
+//! Motion video filters: `mestimate`, `minterpolate`, `framerate`,
+//! `deshake`.
 //!
 //! # What is implemented, and what is not
 //!

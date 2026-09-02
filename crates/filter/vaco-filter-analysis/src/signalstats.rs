@@ -1,124 +1,44 @@
-//! `signalstats` — per-frame pixel-value statistics.
+//! `signalstats` — per-frame pixel-value statistics. One video pad in, one
+//! out, plus `stat`/`out`/`color` options for highlighting features this
+//! crate does not implement.
 //!
-//! `ffmpeg -h filter=signalstats`: one video pad in, one out, several `stat`/
-//! `out`/`color` options for the highlighting features this crate does not
-//! implement (see below).
+//! # Scope
 //!
-//! # Scope, stated honestly
-//!
-//! The reference exports 29 keys (`man ffmpeg-filters`'s `signalstats`
-//! entry, quoted here as the documented interface fact D7 allows): five
-//! numbers per plane (`MIN`, `LOW`, `AVG`, `HIGH`, `MAX`) for `Y`, `U`, `V`,
-//! five more for saturation and two for hue, three temporal `DIF` fields and
-//! three `BITDEPTH` fields. This module implements the fifteen `MIN`/`LOW`/
-//! `AVG`/`HIGH`/`MAX` fields across `Y`/`U`/`V` — the ones the brief calls
-//! out as hand-computable and the ones every other measurement filter in
-//! this crate would want to cross-check against — and **not**:
-//!
-//! * `SAT*`/`HUE*` — need an RGB<->HSV-style saturation/hue definition over
-//!   YUV samples that was not pinned down in the time available; rather than
-//!   guess at a formula and risk exactly the "false confirmation" this
-//!   crate's brief warns about, it is left out.
-//! * `*DIF` — temporal (needs the previous frame held as state); in scope
-//!   for a future extension of this filter, not implemented now.
-//! * `*BITDEPTH` — measured to be `1` for a perfectly constant plane and `8`
-//!   for a full-range gradient, which rules out the naive `ceil(log2(distinct
-//!   values))` reading (that gives `0`, not `1`, for a constant plane) and
-//!   was not pinned down further in the time available.
+//! The reference exports 28 default keys (`man ffmpeg-filters`): `MIN`,
+//! `LOW`, `AVG`, `HIGH`, `MAX` per plane for `Y`/`U`/`V`, five for
+//! saturation, two for hue, three temporal `DIF` fields, three `BITDEPTH`
+//! fields. This module implements all but `TOUT`/`VREP`/`BRNG`, which are
+//! `stat=`/`out=` option *values*, not keys emitted unconditionally, and
+//! need a per-pixel classification pass not measured here.
 //!
 //! # Percentile rule, measured against `ffmpeg 8.1`
 //!
-//! ```text
-//! $ ffprobe -of json -show_frames -f lavfi \
-//!     -i "color=black:s=10x10,format=yuv420p,geq=lum='(Y*10+X)':cb=128:cr=128,signalstats"
-//! YMIN=0 YLOW=9 YAVG=49.5 YHIGH=89 YMAX=99
-//! ```
+//! `YMIN=0 YLOW=9 YAVG=49.5 YHIGH=89 YMAX=99` (a 10x10 plane holding every
+//! value `0..=99` once). `YLOW`/`YHIGH` are the smallest `v` whose
+//! cumulative count (`# samples <= v`) is `>= total*0.1`/`0.9`
+//! respectively; `YAVG` is the plain mean, formatted with
+//! [`crate::fmt::g6`] (`"49.5"`, not `"49.500000"`). A skewed fixture
+//! separates this cumulative-count rule from the naive "10th/90th value
+//! after sorting", which the uniform case above can't rule out alone.
 //!
-//! A 10x10 plane with every value `0..=99` exactly once. `YLOW=9`: the
-//! *smallest* value `v` whose cumulative count (`# samples <= v`) is `>=
-//! total*0.1` (`10`) — `cumulative(9) = 10` (values `0..=9`), satisfying
-//! `>= 10` at the smallest `v` that does. `YHIGH=89`: smallest `v` with
-//! cumulative count `>= total*0.9` (`90`) — `cumulative(89) = 90`. `YAVG`
-//! is the plain mean (`4950/100 = 49.5`), formatted with [`crate::fmt::g6`]
-//! (`"49.5"`, not `"49.500000"`).
+//! # `SAT*`, `HUE*`, `*DIF`, `*BITDEPTH`
 //!
-//! This rule is confirmed only at a total that divides evenly by 10; a
-//! non-round total's rounding behaviour (floor vs ceiling of `total*0.1`)
-//! is not separately measured and is applied here as `>= (total as
-//! f64 * 0.1).ceil() as u64`... actually implemented as a direct real
-//! comparison against `total_samples as f64 * 0.1`, which agrees with the
-//! measured integer case and is the natural generalisation.
-//!
-//! # Distinguishing input built for this filter
-//!
-//! The brief asks for "YMIN/YMAX/YAVG hand-computable"; a plane holding
-//! every value `0..=99` exactly once distinguishes a percentile-based
-//! `YLOW`/`YHIGH` from the naive alternative "10th/90th value after
-//! sorting" (which would give `9`/`89` too, coincidentally, for a uniform
-//! distribution — so a second check with a *skewed* distribution, several
-//! values repeated near the extremes, is included below to catch a
-//! sorted-index off-by-one that this uniform case cannot).
-//!
-//! # 2026-08-23 addition: `SAT*`, `HUE*`, `*DIF`, `*BITDEPTH`
-//!
-//! Fourteen more keys, measured against `ffmpeg 8.1` rather than guessed:
-//!
-//! * `SAT{MIN,LOW,AVG,HIGH,MAX}` — the same percentile machinery as
-//!   `Y{MIN,LOW,AVG,HIGH,MAX}` above, over a per-pixel saturation value
-//!   `floor(sqrt((U-128)^2 + (V-128)^2))`. Confirmed on three solid colours
-//!   (`color=red`/`blue`/`green` under `format=yuv420p`): red (`U=90,
-//!   V=240`) measures `SATMAX=118`, matching `floor(sqrt(38^2+112^2)) =
-//!   floor(118.27) = 118` exactly; green (`U=91,V=81`) measures `SATMAX=59`,
-//!   matching `floor(sqrt(37^2+47^2)) = floor(59.82) = 59` — the green
-//!   fixture is what pins **floor**, not round (`round(59.82)` would be
-//!   `60`, and red/blue's own values happen to floor and round identically).
-//! * `HUE{MED,AVG}` — a per-pixel hue value
-//!   `floor((atan2(U-128, V-128) in degrees + 180) mod 360)`, degrees.
-//!   Confirmed on the same three solid colours: red measures `161`, matching
-//!   `floor((atan2(-38,112)*180/pi + 180) mod 360) = floor(161.259) = 161`;
-//!   blue and green pin the `atan2(u_dev, v_dev)` argument order and the
-//!   `+180` offset (both `atan2(v_dev,u_dev)` and no offset were checked and
-//!   ruled out — neither matches any of the three colours). **`HUEMED`
-//!   equals `HUEAVG` on every fixture measured here** (all three are
-//!   perfectly flat colour fields, where every formulation of "average" and
-//!   "median" coincide); this crate computes `HUEAVG` as the plain mean of
-//!   the per-pixel hue values and `HUEMED` as the same cumulative-count
-//!   50th-percentile rule `YLOW`/`YHIGH` use at 10%/90%, which is a
-//!   reasonable generalisation but is **not independently confirmed** on any
-//!   fixture where the two would actually differ — no such measurement was
-//!   made in the time available.
-//! * `{Y,U,V}DIF` — mean absolute per-sample difference against the
-//!   *previous* frame (`0` on the first frame, or after any frame whose
-//!   plane geometry does not match — there is nothing to compare against).
-//!   Confirmed: a two-frame sequence where exactly half of `Y`'s samples
-//!   change by exactly `20` between frames measures `YDIF=10` — the mean of
-//!   `20` over half the samples and `0` over the other half — ruling out a
-//!   "mean over only the changed samples" alternative (which would give
-//!   `20`). Formatted with [`crate::fmt::g6`], like every other field in
-//!   this module.
+//! * `SAT{MIN,LOW,AVG,HIGH,MAX}` — same percentile machinery as `Y*` above,
+//!   over `floor(sqrt((U-128)^2 + (V-128)^2))`; green (`U=91,V=81`) measures
+//!   `SATMAX=59` = `floor(59.82)`, pinning **floor**, not round.
+//! * `HUE{MED,AVG}` — `floor((atan2(U-128,V-128) in degrees + 180) mod
+//!   360)`; argument order and `+180` offset are the only combination
+//!   matching red/blue/green (`161`/`279`/`38`). `HUEMED` reuses the
+//!   `LOW`/`HIGH` cumulative-count rule at 50% — not independently
+//!   confirmed, since every fixture is a flat field where median and
+//!   average coincide.
+//! * `{Y,U,V}DIF` — mean absolute difference against the previous frame
+//!   (`0` before the first); measured to average over every sample, not
+//!   just the changed ones.
 //! * `{Y,U,V}BITDEPTH` — `popcount` of the bitwise OR of every distinct
-//!   sample value present in the plane. Confirmed on a flat plane at value
-//!   `100` (`0b110_0100`, three set bits) measuring `YBITDEPTH=3`, and on a
-//!   two-level plane holding `100` and `120` (`0b110_0100 | 0b111_1000 =
-//!   0b111_1100`, five set bits) measuring `YBITDEPTH=5` — the two-level
-//!   fixture is what rules out "popcount of a single representative value"
-//!   as a hypothesis (it would still give a wrong, single-value-dependent
-//!   answer even by coincidence on the flat case). **Corrects a claim in
-//!   this crate's own initial scoping**: `docs/filter/vaco-filter-analysis.md`
-//!   originally reported "`BITDEPTH` measured `1` for a constant plane",
-//!   generalising from a single fixture that happened to use the value
-//!   `128` (`0b1000_0000`, exactly one set bit) — true for that value, not
-//!   for "a constant plane" in general, as this crate's own `100`-valued
-//!   flat-plane fixture now demonstrates. Formatted as a plain `to_string()`
-//!   integer, not [`crate::fmt::g6`] (measured: `"3"`, not `"3.00000"`).
-//!
-//! **Still not implemented**: `TOUT`/`VREP`/`BRNG` (the `stat=`/`out=`
-//! option's temporal-outlier / vertical-line-repetition / broadcast-range
-//! *detection* features) — these are not part of the default metadata
-//! export at all (`man ffmpeg-filters` documents them as values of the
-//! `stat`/`out` options, not as keys `signalstats` emits unconditionally),
-//! and implementing them means a per-pixel classification pass this crate
-//! has not measured. Left for a follow-up, honestly, rather than guessed.
+//!   value present, plain integer. A flat plane at `100` gives `3`; a
+//!   two-level `{100,120}` plane gives `5`, ruling out popcount of a single
+//!   representative sample.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};

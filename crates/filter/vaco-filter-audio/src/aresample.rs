@@ -182,15 +182,8 @@ impl Opts {
 
     fn dither(&self) -> DitherMethod {
         // Delegate to `vaco-resample`'s own parser rather than re-listing its
-        // option names here. This used to hardcode its own copy of the
-        // mapping, aliasing every noise-shaping name to `triangular_hp` —
-        // correct when written, but it silently kept doing that after
-        // `vaco-resample` implemented all seven curves for real, because
-        // nothing here re-derives from the crate it wraps. Found while
-        // implementing #519: a delegating wrapper that copies a mapping
-        // instead of forwarding to it is exactly the shape
-        // `planning/AGENT-CONSTRAINTS.md` calls out as "a wrapper swallows
-        // what it does not forward".
+        // option names here: a hardcoded copy of the mapping would silently
+        // stop matching once `vaco-resample` changed its own curve set.
         match DitherMethod::from_name(self.dither_method.as_str()) {
             Ok(m) => m,
             Err(_) => DitherMethod::None,

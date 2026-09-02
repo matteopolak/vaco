@@ -1,73 +1,43 @@
-//! `loop`/`aloop` — replay a window of the stream after it ends.
+//! `loop`/`aloop` — replay a window of the stream after it ends. This is a
+//! *suffix* looper, not an in-place one. `ffmpeg -h filter=loop` documents
+//! `loop` (`-1..INT_MAX`, default `0`), `size` (`0..32767` frames, default
+//! `0`), `start` (`-1..I64_MAX` frames, default `0`) and `time` (a
+//! duration, used only when `start=-1`). `aloop` is the same shape in
+//! samples: `size` is `0..INT_MAX`.
 //!
-//! # Measured against the reference (ffmpeg 8.1): this is a *suffix*
-//! looper, not an in-place one
+//! Measured against `ffmpeg 8.1` (`trim=end_frame=5,setpts=PTS-STARTPTS,
+//! loop=loop=<N>:size=<S>:start=<T>` on a 5-frame `testsrc`), output frame
+//! count on a 5-frame input (pts `0..4`):
 //!
-//! `ffmpeg -h filter=loop` documents `loop` (`-1..INT_MAX`, default `0`),
-//! `size` (`0..32767` frames, default `0`), `start` (`-1..I64_MAX` frames,
-//! default `0`) and `time` (a duration, used only when `start=-1`). `aloop`
-//! is the same shape in samples: `size` is `0..INT_MAX`.
-//!
-//! The name invites the wrong mental model — that `loop=N` plays the whole
-//! clip `N+1` times, or that it loops the `[start, start+size)` window *in
-//! place* of the frames it covers. Neither is measured behaviour. Built and
-//! confirmed with `ffmpeg -f lavfi -i "color=size=4x4:rate=5:duration=10"
-//! -vf "trim=end_frame=5,setpts=PTS-STARTPTS,loop=loop=<N>:size=<S>:start=<T>,showinfo"`:
-//!
-//! | Args | Output frame count (input trimmed to exactly 5, pts `0..4`) |
+//! | Args | Frames out |
 //! |---|---|
-//! | `loop=0:size=5:start=0` | 5 — identical to no filter at all |
+//! | `loop=0:size=5:start=0` | 5 — no-op |
 //! | `loop=1:size=5:start=0` | 10 |
 //! | `loop=2:size=5:start=0` | 15 |
 //! | `loop=1:size=2:start=0` | 7 |
 //! | `loop=1:size=2:start=1` | 7 |
-//! | `loop=3:size=1:start=0` | 8, with pts `0..7` |
+//! | `loop=3:size=1:start=0` | 8, pts `0..7` |
 //!
-//! Reading these together: **the entire input stream is always passed
-//! through unchanged first**, and *then* the `[start, start+size)` window
-//! (captured while it streamed past, not seeked back to) is appended after
-//! it, `loop` more times — `size` extra frames per replay, regardless of
-//! `start`'s value, and the replayed frames' PTS **continues the original
-//! stream's arithmetic progression** (frame 5 in the `loop=3:size=1` row
-//! gets pts `5`, not a PTS derived from the window frame's own original
-//! pts). `loop=0` is a true no-op — measured identical to no filter present
-//! — and `loop=-1` never stops appending, which is the one case this
-//! module's `flush` legitimately never returns empty for; the reference's
-//! own "loop the first frame forever" idiom
-//! (`loop=loop=-1:size=1:start=0` on a one-frame input) is just this rule
-//! applied to a stream whose "play through once" phase is a single frame.
+//! The whole input always passes through unchanged first, then the
+//! `[start, start+size)` window (captured while it streamed past, not
+//! seeked back to) is appended after it `loop` more times — `size` extra
+//! frames per replay regardless of `start`, with replayed PTS continuing
+//! the original progression rather than restarting from the window
+//! frame's own PTS. `loop=-1` never stops appending, the one case `flush`
+//! never legitimately returns empty for.
 //!
-//! # Allocation: the window is bounded by [`vaco_limits::Budget`], not just
-//! by `size`'s declared range
+//! Allocation is bounded by [`vaco_limits::Budget`], not just by `size`:
+//! `size`'s declared range doesn't bound memory by itself — a 32767-frame
+//! window at 7680x4320 4:4:4 16-bit is multiple gigabytes, and `aloop`'s
+//! range doesn't bound sample count at all. Every retained window frame is
+//! charged by its actual plane bytes; if a charge fails, the window stops
+//! growing early rather than erroring.
 //!
-//! `size`'s reference-documented range (`0..32767` frames for `loop`,
-//! `0..INT_MAX` *samples* for `aloop`) is itself the conformance answer for
-//! range validation (CONFORMANCE-FINDINGS 31) and is applied as an
-//! `#[opt(range = ..)]` bound. But a frame count alone does not bound
-//! memory: a `loop` window of 32767 frames at 7680x4320 4:4:4 16-bit is
-//! multiple gigabytes, and `aloop`'s own declared range does not bound
-//! sample count at all. So every frame this filter retains for the window
-//! is charged against a [`vaco_limits::Budget`] (`Limits::permissive`, the
-//! same default `vaco-filter-audio::aresample` uses for its own per-instance
-//! meter) by its actual plane bytes — real, already-allocated frame data,
-//! not a size computed from the option before any frame exists, which is
-//! the specific pattern that produced `cellauto`'s 83 GB allocation. If a
-//! charge fails, the window simply **stops growing early** rather than
-//! erroring or panicking; the filter then loops whatever fraction of the
-//! requested window it could afford. This is the explicit clamp: it never
-//! rejects construction (the reference does not either), it silently caps
-//! actual memory instead.
-//!
-//! # `aloop`'s `size`/`start`: frame-granularity, not sample-exact
-//!
-//! `atrim` cuts a straddling frame at the exact sample it needs to. This
-//! filter does not: a frame is included in the window once the running
-//! sample count reaches `start`, and the window stops admitting whole
-//! frames once its own accumulated sample count reaches `size` — so the
-//! window's true sample span can overshoot `size` by up to one frame's
-//! worth, and `start` is rounded down to whichever frame boundary contains
-//! it. Not measured against the reference's own sample-exact behaviour;
-//! recorded here rather than silently approximated.
+//! `aloop`'s `size`/`start` are frame-granular, not sample-exact: a frame
+//! joins the window once the running sample count reaches `start`, and the
+//! window stops admitting frames once its own count reaches `size` — so the
+//! true span can overshoot `size` by up to one frame (not measured against
+//! the reference's sample-exact behaviour).
 
 use std::collections::VecDeque;
 

@@ -1,82 +1,43 @@
-//! Six small 1-in-1-out filters from plan 16 §4.4 that share this crate's
-//! `Simple<FrameFilter>` shape closely enough to live in one file:
-//! `cue`/`acue`, `realtime`/`arealtime`, `latency`/`alatency`,
-//! `bench`/`abench`, `perms`/`aperms`, `sidedata`/`asidedata`.
+//! Six small 1-in-1-out filters that share this crate's `Simple<FrameFilter>`
+//! shape closely enough to live in one file.
+//! **`cue`/`acue`** delays until a wall-clock timestamp: `cue` (a Unix
+//! microsecond timestamp, default `0`), `preroll` (seconds), `buffer`
+//! (seconds). Passes `preroll` seconds immediately, then buffers up to
+//! `buffer` seconds waiting for `cue` before releasing everything; `cue=0`
+//! is in the past for any real clock, so it is a true no-op. Buffered
+//! frames are charged against a [`vaco_limits::Budget`]; once exhausted,
+//! the cue is treated as already reached rather than growing the buffer.
+//! **`realtime`/`arealtime`** paces output to wall-clock time: `limit`
+//! (seconds, default `2`), `speed` (default `1.0`). Sleeps to keep output
+//! pace matching input timestamps; a gap longer than `limit` resets the
+//! timer instead of sleeping to catch up. Only the wall-clock moment each
+//! frame is forwarded changes — content and timestamps never do.
+//! **`latency`/`alatency`** is an honest no-op: the reference reports the
+//! previous filter's own buffering latency, measured by its internal
+//! scheduler. This framework has no per-link latency instrumentation a
+//! leaf filter can read, so it passes every frame through unchanged rather
+//! than fabricating a number.
+//! **`bench`/`abench`** is measured via the metadata dictionary:
+//! `action=start` stamps `lavfi.bench.start_time` via
+//! [`vaco_frame::Frame::set_metadata`] and forwards; `action=stop` reads it
+//! back and reports elapsed time plus a running average/max/min. As with
+//! `metadata`'s `print` mode, there is no log sink here yet, so the
+//! statistics are kept on a test-only accessor.
 //!
-//! # `cue`/`acue` — delay until a wall-clock timestamp
+//! **`perms`/`aperms`** is an architecture mismatch, not an oversight: the
+//! reference sets output frames read-only/writable/toggled, "mainly aimed
+//! at developers to test direct path". This project's `Frame` has no such
+//! bit — ownership is the mechanism that makes one unnecessary — so options
+//! are parsed and validated but every frame passes through unchanged.
 //!
-//! `ffmpeg -h filter=cue`: `cue` (a Unix microsecond timestamp, default
-//! `0`), `preroll` (seconds, default `0`), `buffer` (seconds, default `0`).
-//! `filters.texi`: pass `preroll` seconds of content immediately, then
-//! buffer up to `buffer` seconds while waiting for wall-clock time `cue` to
-//! arrive, then release the buffer and everything after. `cue=0` (the
-//! default) is in the past for any real clock, so it is a true no-op —
-//! that is the only path this module's tests exercise deterministically;
-//! a non-zero `cue` depends on real wall-clock time and is not covered by
-//! a fast unit test. Buffered frames are charged against a
-//! [`vaco_limits::Budget`], same defence as `loop`/`reverse`; once
-//! exhausted, the cue is treated as already reached rather than growing
-//! the buffer further — a filter whose whole job is delaying output
-//! releasing it *early* under memory pressure is the conservative failure
-//! direction (data still flows) rather than the unconservative one
-//! (dropping frames).
-//!
-//! # `realtime`/`arealtime` — pace output to wall-clock time
-//!
-//! `ffmpeg -h filter=realtime`: `limit` (seconds, default `2`), `speed`
-//! (default `1.0`). Sleeps to keep output pace matching input timestamps;
-//! a gap longer than `limit` is treated as a discontinuity (timer resets,
-//! no sleep) rather than a real-time debt to catch up on — `filters.texi`'s
-//! own wording. Frame content and timestamps are never altered, only the
-//! wall-clock moment each frame is forwarded.
-//!
-//! # `latency`/`alatency` — an honest no-op
-//!
-//! `filters.texi`: reports the *previous* filter's own buffering latency in
-//! frames/samples, measured by the reference's internal scheduler. This
-//! framework has no per-link latency instrumentation a leaf filter can read
-//! (the cooperative scheduler in `vaco-filter-core` tracks readiness, not
-//! per-filter buffering depth), so there is nothing for this filter to
-//! report. It passes every frame through unchanged rather than fabricating
-//! a number — an honest gap, not a silent wrong answer.
-//!
-//! # `bench`/`abench` — measured via the metadata dictionary
-//!
-//! `filters.texi`: `action=start` stamps `lavfi.bench.start_time` (wall
-//! clock) via [`vaco_frame::Frame::set_metadata`] and forwards; `action=stop`
-//! reads that key back, computes the elapsed time, and reports it plus a
-//! running average/max/min. Reachable now that the metadata dictionary
-//! exists (interface gap 11) — this filter and `metadata`/`ametadata` are
-//! this crate's two consumers of it. As with `metadata`'s `print` mode,
-//! there is no log sink in this project yet, so the computed statistics are
-//! kept on a test-only accessor rather than emitted anywhere.
-//!
-//! # `perms`/`aperms` — an architecture mismatch, not an oversight
-//!
-//! `filters.texi`: sets output frames read-only, writable, toggled or
-//! randomly one or the other, "mainly aimed at developers to test direct
-//! path". This project's `Frame` has no read-only/writable bit at all —
-//! ownership *is* the mechanism `NEEDS_WRITABLE` exists to avoid needing
-//! (see `vaco-filter-core::adapt`'s own doc on this exact point). There is
-//! nothing for any `mode` value to set. Options (`mode`, `seed`) are parsed
-//! and validated so a filtergraph string using this filter does not fail to
-//! parse, and every frame passes through unchanged.
-//!
-//! # `sidedata`/`asidedata` — restricted to the side data this project models
-//!
-//! `ffmpeg -h filter=sidedata` lists 28 reference `AVFrameSideDataType`
-//! values as 30 named constants (two reference pairs — `S12M_TIMECOD`/
-//! `S12M_TIMECODE` and `DETECTION_BOUNDING_BOXES`/`DETECTION_BBOXES` —
-//! each sharing one integer, the reference's own alias, not a mistake
-//! here). `type` (`SIDEDATA_TYPE_CONSTS`) parses every one of those 30
-//! names, but this project's [`vaco_frame::FrameSideDataKind`] models six
-//! kinds total, only four of which have a reference-side-data counterpart:
-//! `DISPLAYMATRIX`/`A53_CC`/`MASTERING_DISPLAY_METADATA`/
-//! `CONTENT_LIGHT_LEVEL` (see `mapped_kind`). A `type` outside those four
-//! parses fine (matching the reference's own `-h` output) but always fails
-//! to `select` and is a no-op under `delete`, since this project never
-//! attaches side data of any other kind — the same "name every reference
-//! constant, not just the implemented ones" precedent `fillborders` set.
+//! **`sidedata`/`asidedata`** is restricted to the side data this project
+//! models: the reference names 30 `AVFrameSideDataType` constants (two
+//! pairs alias the same integer). `type` parses all 30, but
+//! [`vaco_frame::FrameSideDataKind`] models six kinds, four with a
+//! reference counterpart: `DISPLAYMATRIX`/`A53_CC`/
+//! `MASTERING_DISPLAY_METADATA`/`CONTENT_LIGHT_LEVEL` (see `mapped_kind`).
+//! Any other `type` parses fine but always fails `select` and is a no-op
+//! under `delete`.
 
 use std::time::Duration as StdDuration;
 

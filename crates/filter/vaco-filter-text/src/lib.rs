@@ -1,5 +1,5 @@
 //! `TextRenderer`: the one text-shaping-and-rasterisation path every filter
-//! that draws glyphs sits on (plan 16 SS6.1, GitHub #462 / FT-3.5).
+//! that draws glyphs sits on (plan 16 SS6.1).
 //!
 //! # The stack
 //!
@@ -12,19 +12,17 @@
 //!
 //! All four are pulled in through the single `cosmic-text` dependency
 //! (already reviewed and declared in the workspace manifest's "text shaping
-//! and fonts" section) rather than named directly — this is exactly the
-//! `planning/16-filters.md` SS6.1 table's own "(via cosmic-text)" annotation,
-//! not a different design. No `FreeType` dependency exists anywhere in this
-//! crate's tree, so the FTL attribution obligation never arises (see that
-//! plan section's own note).
+//! and fonts" section) rather than named directly. No `FreeType` dependency
+//! exists anywhere in this crate's tree, so the FTL attribution obligation
+//! never arises.
 //!
 //! # What is here versus what `cosmic-text` already does
 //!
 //! `cosmic_text::Buffer` already shapes and lays out; `SwashCache` already
 //! rasterises and caches glyph images by `(font, glyph, size, subpixel
-//! position)` — that cache-by-`CacheKey` behaviour *is* the "glyph cache"
-//! `planning/16-filters.md`'s `TextRenderer` sketch names, not something this
-//! crate reimplements. What this crate adds:
+//! position)` — that cache-by-`CacheKey` behaviour *is* the glyph cache this
+//! crate's `TextRenderer` needs, not something reimplemented here. What
+//! this crate adds:
 //!
 //! - [`alias`]: the generic-family fallback table fontconfig would otherwise
 //!   provide, plus embedded-font loading (Matroska attachments) and

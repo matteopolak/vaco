@@ -9,9 +9,8 @@
 //! defaults to the identity (one output per input, in declaration order).
 //!
 //! No `framesync`: `-h filter=streamselect` shows neither `eof_action` nor
-//! `shortest`/`repeatlast`/`ts_sync_mode`, so per `AGENT-CONSTRAINTS.md`
-//! this stays off it — each output is simple lockstep passthrough of
-//! whichever single input it currently names.
+//! `shortest`/`repeatlast`/`ts_sync_mode` — each output is simple lockstep
+//! passthrough of whichever single input it currently names.
 //!
 //! # Runtime `map`
 //!

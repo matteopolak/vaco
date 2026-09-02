@@ -19,8 +19,7 @@
 //! No `framesync` here: `-h filter=interleave` shows neither `eof_action`
 //! nor `shortest`/`repeatlast`/`ts_sync_mode` — `duration` is this filter's
 //! own, differently-shaped answer to the same question `framesync` answers
-//! elsewhere, so `AGENT-CONSTRAINTS.md`'s "two inputs does not mean
-//! framesync" applies here even at N inputs.
+//! elsewhere, and that holds even at N inputs, not just two.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::negotiate::{FormatSet, NodeFormats, Tie};

@@ -20,9 +20,7 @@
 //! non-trivial output, both different from doing nothing at all. So the
 //! reference substitutes its own built-in defaults whenever an argument is
 //! `0` (or omitted) — the printed `AVOption` default of `0` is a sentinel
-//! meaning "unset", not a literal strength of zero (this project's
-//! `planning/AGENT-CONSTRAINTS.md` "a name in the reference is not a
-//! specification" note, encountered again here).
+//! meaning "unset", not a literal strength of zero.
 //!
 //! Recovering the reference's exact substituted constants would mean either
 //! reading its source (closed by D7) or a much larger black-box bisection

@@ -17,8 +17,7 @@
 //! crate's own doc comment for its copy makes the same call. This module
 //! is a deliberate byte-for-byte fork of `vaco-filter-blur::common`'s
 //! non-`box_pass` half, from when both filter families shared one crate
-//! before the plan's own crate boundary (`planning/16-filters.md` §4.2)
-//! split them apart.
+//! before the crate boundary split them apart.
 
 use vaco_core::{Error, Result};
 use vaco_frame::Frame;

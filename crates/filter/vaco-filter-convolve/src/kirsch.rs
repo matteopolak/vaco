@@ -22,8 +22,8 @@
 //! extra `5` in place of a `-3`, caught by [`MASKS`]'s doc: every true
 //! rotation of the base mask sums to `0`, and that one summed to `8`).
 //! `400/5` happened to equal the measured `80` too, which is exactly the
-//! trap `AGENT-CONSTRAINTS.md` warns about — a wrong model and a wrong
-//! divisor cancelling into a number that looks confirmed. Caught by
+//! trap of a wrong model and a wrong divisor cancelling into a number that
+//! looks confirmed. Caught by
 //! regenerating the eight masks programmatically (cyclic shift of the
 //! perimeter, see [`MASKS`]) instead of by hand, and rejecting any
 //! candidate whose coefficients do not sum to zero.
@@ -35,9 +35,8 @@
 //! `docs/filter/vaco-filter-blur.md` for the arithmetic). Rather than ship
 //! a border rule known to be wrong, this implementation uses clamp-to-edge
 //! (the least surprising choice, and correct for the interior) and
-//! documents the border as **unverified against the reference**, per
-//! `AGENT-CONSTRAINTS.md`'s standing instruction to report coverage
-//! honestly rather than imply more than was checked.
+//! documents the border as **unverified against the reference** rather
+//! than implying more than was checked.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};

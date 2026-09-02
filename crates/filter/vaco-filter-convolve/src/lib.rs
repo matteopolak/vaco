@@ -1,15 +1,10 @@
 //! T2/T3 convolution and morphology video filters.
 //!
-//! Split out of `vaco-filter-blur` (GitHub issue #468/FT-4.6a) after the
-//! orchestrator corrected the crate boundary against the authoritative
-//! table in `planning/16-filters.md` §4.2: `vaco-filter-blur` owns
-//! `unsharp, cas, avgblur, gblur, dblur, varblur, yaepblur, guided,
-//! boxblur, smartblur, sab`, and this crate — `vaco-filter-convolve` —
-//! owns `convolution, morpho, erosion, dilation, inflate, deflate, median,
-//! sobel, prewitt, roberts, scharr, kirsch, edgedetect, blurdetect,
-//! convolve, deconvolve, corr, xcorrelate`. The brief that spawned the
-//! original crate had merged the two families; the code did not move
-//! because it was wrong, only because it was filed under the wrong name.
+//! Split out of `vaco-filter-blur`, which owns `unsharp, cas, avgblur,
+//! gblur, dblur, varblur, yaepblur, guided, boxblur, smartblur, sab`. This
+//! crate — `vaco-filter-convolve` — owns `convolution, morpho, erosion,
+//! dilation, inflate, deflate, median, sobel, prewitt, roberts, scharr,
+//! kirsch, edgedetect, blurdetect, convolve, deconvolve, corr, xcorrelate`.
 //!
 //! Built against `vaco-filter-core` (the `FrameFilter` trait, the `Simple`
 //! adapter), exactly as `vaco-filter-blur` is, and now also against
@@ -52,15 +47,14 @@
 //! # Left for a follow-up (out of this brief's time budget)
 //!
 //! `edgedetect`, `blurdetect`, `convolve`, `deconvolve`, `corr`,
-//! `xcorrelate` — six more filters `planning/16-filters.md` §4.2 counts in
-//! this crate. `edgedetect`'s own hysteresis/edge-tracing stage was
-//! measured to behave in a way a plain Sobel-plus-double-threshold model
-//! does not reproduce (see the crate's report for the probe); `convolve`/
-//! `deconvolve`/`corr`/`xcorrelate` are frequency-domain, two-video-stream
-//! operations that want `vaco-tx` matched carefully to the reference's
-//! exact windowing and normalisation, and `blurdetect` is a
-//! wavelet-decomposition-based metric — none were reached in the time this
-//! pass had. None of them block the twelve filters that did land.
+//! `xcorrelate` — six more filters this crate owns but does not yet
+//! implement. `edgedetect`'s own hysteresis/edge-tracing stage was measured
+//! to behave in a way a plain Sobel-plus-double-threshold model does not
+//! reproduce; `convolve`/`deconvolve`/`corr`/`xcorrelate` are
+//! frequency-domain, two-video-stream operations that want `vaco-tx`
+//! matched carefully to the reference's exact windowing and normalisation;
+//! `blurdetect` is a wavelet-decomposition-based metric. None of them block
+//! the twelve filters that did land.
 
 #![forbid(unsafe_code)]
 #![allow(

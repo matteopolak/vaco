@@ -91,8 +91,7 @@ impl NodeLinks {
     }
 }
 
-/// One node's public identity — gap 22
-/// (`planning/INTERFACE-GAPS.md`)'s read-only graph introspection, and
+/// One node's public identity, for read-only graph introspection —
 /// deliberately *only* identity: no formats, no scheduler bookkeeping
 /// (`parked_at`/`self_driven`/`last_run` on the scheduler's own `Node` are
 /// exactly the kind of "depends on scheduling order" state a filter must
@@ -110,8 +109,9 @@ pub struct NodeView {
     pub filter_name: &'static str,
 }
 
-/// One link's observable state — gap 22's other half. Everything here is
-/// already computed for the deadlock diagnostic and `graphmonitor`'s own
+/// One link's observable state, for the same read-only graph introspection.
+/// Everything here is already computed for the deadlock diagnostic and
+/// `graphmonitor`'s own
 /// counters ([`LinkStats`]'s doc names both); this is that data, reachable
 /// for *any* link in the graph rather than only the current node's own.
 ///
@@ -168,10 +168,8 @@ impl<'a> FilterContext<'a> {
     }
 
     /// A read-only snapshot of every link in the graph, not just this
-    /// node's own pads — gap 22
-    /// (`planning/INTERFACE-GAPS.md`), built for `graphmonitor`/
-    /// `agraphmonitor`, which need to draw the *whole* graph's queue state
-    /// as a live diagram.
+    /// node's own pads. Built for `graphmonitor`/`agraphmonitor`, which need
+    /// to draw the *whole* graph's queue state as a live diagram.
     ///
     /// Deliberately the narrowest thing that serves them, checked against
     /// what a general graph accessor would additionally allow and

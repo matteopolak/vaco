@@ -1,69 +1,43 @@
 //! `psnr` — peak signal-to-noise ratio between two video streams.
 //!
-//! `ffmpeg -h filter=psnr`: `Inputs: #0: main (video) #1: reference
-//! (video)`, `Outputs: #0: default (video)`, one option (`stats_file`, not
-//! implemented — this crate has no file I/O surface and the metadata export
-//! is the part interface gap 11 exists for).
-//!
-//! # Not `vaco-filter-framesync`
-//!
-//! `ffmpeg -h filter=psnr` carries **no** `eof_action`/`shortest`/
-//! `repeatlast`/`ts_sync_mode` section — contrast `ffmpeg -h
-//! filter=alphamerge`, which has the full framesync surface verbatim. `psnr`
-//! measures identically to `framepack`
-//! (`vaco_filter_core::adapt::Paired`'s own doc): two inputs, strict
-//! lockstep, no independent per-input timeline. So this filter is a
-//! [`vaco_filter_core::adapt::PairedFilter`], not a
-//! `vaco_filter_framesync::FrameSyncFilter`, and needed no change to either
-//! crate. The same measurement applies to `ssim`, `identity` and `msad` in
-//! this crate — checked individually, not assumed to generalise from this
-//! one.
+//! Two inputs (`main`, `reference`), one option (`stats_file`, not
+//! implemented — no file I/O surface; metadata export is the only channel).
+//! Paired via [`vaco_filter_core::adapt::Paired`], not framesync:
+//! `ffmpeg -h filter=psnr` carries no `eof_action`/`shortest`/`repeatlast`/
+//! `ts_sync_mode` section (contrast `alphamerge`, which has the full
+//! framesync surface) — strict lockstep, no independent per-input timeline.
+//! Same measurement applies to `ssim`, `identity` and `msad` in this crate.
 //!
 //! # Metadata export, measured against `ffmpeg 8.1`
 //!
 //! ```text
-//! $ ffprobe -of json -show_frames -f lavfi \
-//!     -i "color=gray@1.0:s=16x16,format=gray[a];color=0x6E6E6E:s=16x16,format=gray[b];[a][b]psnr"
-//! "tags": {
-//!     "lavfi.psnr.mse_avg":  "324.000000",
-//!     "lavfi.psnr.mse.y":    "324.000000",
-//!     "lavfi.psnr.psnr.y":   "23.025354",
-//!     "lavfi.psnr.psnr_avg": "23.025354"
-//! }
+//! "lavfi.psnr.mse_avg":  "324.000000",
+//! "lavfi.psnr.mse.y":    "324.000000",
+//! "lavfi.psnr.psnr.y":   "23.025354",
+//! "lavfi.psnr.psnr_avg": "23.025354"
 //! ```
 //!
 //! * Key order: `mse_avg` first, then `mse.<c>`/`psnr.<c>` interleaved per
-//!   component in **ascending plane order** (`y`,`u`,`v` for planar YUV;
-//!   `r`,`g`,`b` for `gbrp` — measured on both, see [`crate::video::component_labels`]),
-//!   then `psnr_avg` last.
-//! * `mse.<c>` is the mean squared error of that component, `%f` (six
-//!   decimals, never trimmed — [`crate::fmt::fixed6`]).
-//! * `psnr.<c>` is `10 * log10(MAX^2 / mse)` where `MAX = 255` for 8-bit
-//!   samples, or the literal string `"inf"` when `mse == 0` — measured: a
-//!   self-identical pair prints `psnr.y: "inf"`, not a very large finite
-//!   number.
-//! * `mse_avg` is the **sample-count-weighted** average of the per-component
-//!   MSEs, not a plain mean — measured by feeding an asymmetric yuv420p
-//!   input (luma differs, chroma does not) and finding `mse_avg` matches
-//!   `(mse_y*n_y + mse_u*n_u + mse_v*n_v) / (n_y+n_u+n_v)` exactly
-//!   (`21675.0` for `mse_y=32512.5` over 256 luma samples and `mse_u=mse_v=0`
-//!   over 64 chroma samples each) and does **not** match the plain mean
-//!   (`10837.5`). `psnr_avg` is then `10*log10(255^2/mse_avg)` — i.e. it is
-//!   *not* an average of the per-component PSNRs either; it is recomputed
-//!   from `mse_avg`. See [`crate::fmt::weighted_average`]'s doc for the same
-//!   measurement, shared with `ssim`.
+//!   component in ascending plane order (`y,u,v` / `r,g,b` — see
+//!   [`crate::video::component_labels`]), then `psnr_avg` last.
+//! * `mse.<c>` is `%f`, six decimals, never trimmed ([`crate::fmt::fixed6`]).
+//! * `psnr.<c>` is `10*log10(MAX^2/mse)`, `MAX=255`, or the literal `"inf"`
+//!   when `mse==0` (a self-identical pair prints `"inf"`, not a large finite
+//!   number).
+//! * `mse_avg` is the sample-count-weighted average of the per-component
+//!   MSEs, not a plain mean: an asymmetric yuv420p input (luma differs,
+//!   chroma does not) gives `mse_avg=21675.0`, matching
+//!   `(mse_y*n_y+mse_u*n_u+mse_v*n_v)/(n_y+n_u+n_v)` and not the plain mean
+//!   (`10837.5`). `psnr_avg` is then `10*log10(255^2/mse_avg)`, not an
+//!   average of the per-component PSNRs. Shared measurement:
+//!   [`crate::fmt::weighted_average`].
 //!
-//! # Distinguishing input built for this filter
+//! # Distinguishing input
 //!
-//! A flat pair (every pixel the same two values, `a` vs `b`) has a
-//! **closed-form** PSNR: `MSE = (a-b)^2` exactly (no averaging error to get
-//! wrong), so `10*log10(255^2/(a-b)^2)` is checked bit-for-bit against this
-//! filter's output — this is what rules out an off-by-one in the MAX
-//! constant (255 vs 256, the exact class of error
-//! `planning/AGENT-CONSTRAINTS.md` flags for `tblend`) and rules out
-//! confusing `log` (natural) with `log10`. The self-identical case alone
-//! cannot catch either bug, since `0/0`-style MSE is `0` regardless of which
-//! constant or logarithm base is used.
+//! A flat pair has closed-form PSNR (`MSE=(a-b)^2` exactly), checked
+//! bit-for-bit — this is what rules out an off-by-one in `MAX` (255 vs 256)
+//! and confusing natural log with `log10`. The self-identical case alone
+//! cannot catch either, since `0/0`-style MSE is `0` regardless.
 
 use smallvec::SmallVec;
 use vaco_core::{MediaType, Result};

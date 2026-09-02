@@ -1,74 +1,43 @@
 //! `cropdetect` — accumulate the smallest crop rectangle that has always
 //! contained every non-black pixel seen so far (`mode=black` only).
 //!
-//! `ffmpeg -h filter=cropdetect`: one video pad in, one out. `limit`
-//! (threshold below which a luma sample counts as black, default
-//! `0.0941176` &#8776; `24/255`), `round` (output width/height must be a
-//! multiple of this, default `16`), `skip` (initial frames not evaluated,
-//! default `2`), `reset_count`/`reset` (recompute from scratch after this
-//! many frames, `0` = never, default `0`), `mode` (`black`/`mvedges`,
-//! default `black`).
-//!
-//! # Scope: `mode=black` only
+//! One video pad in, one out. `limit` (black threshold, default
+//! `0.0941176` ≈ `24/255`), `round` (output size must be a multiple of
+//! this, default `16`), `skip` (initial frames not evaluated, default `2`),
+//! `reset_count`/`reset` (recompute from scratch after this many frames,
+//! `0` = never), `mode` (`black`/`mvedges`, default `black`).
 //!
 //! `mvedges` needs motion vectors, which are not a `vaco_frame::FrameSideData`
-//! variant this workspace has (the same gap `codecview` hits — recorded in
-//! `planning/INTERFACE-GAPS.md`). This module implements `mode=black` only;
-//! `mode=mvedges` falls back to `mode=black`'s own scan rather than silently
-//! doing nothing, since a wrong-but-labelled-honestly crop is still useful
-//! and a `create`-time refusal would take down graphs that only *set* the
-//! option without needing it to matter.
+//! variant this workspace has; this module implements `mode=black` only,
+//! and `mode=mvedges` falls back to the same scan rather than doing nothing.
 //!
 //! # Metadata export, measured against `ffmpeg 8.1`
 //!
 //! ```text
-//! $ ffprobe -show_frames -f lavfi -i \
-//!     "color=black:s=64x64,geq=lum='if(between(X,16,47)*between(Y,16,47),255,0)',cropdetect"
 //! # first two frames (skip=2 default): no tags at all
 //! # frame index 2 onward:
 //! lavfi.cropdetect.x1=16 x2=47 y1=16 y2=47 w=32 h=32 x=16 y=16 limit=0.094118
 //! ```
 //!
-//! `x1`/`x2`/`y1`/`y2` are the **raw**, unrounded bounding edges of every
-//! above-threshold sample seen since the last reset (a *running union*
-//! across frames — confirmed by `man ffmpeg-filters`'s own wording for
-//! `reset_count`: "0 indicates never reset, and returns the largest area
-//! encountered during playback"). `w`/`h`/`x`/`y` are `round`-adjusted:
-//! `w`/`h` are the raw width/height floored to the nearest multiple of
-//! `round`, and `x`/`y` re-centre that shrunk box inside the raw one —
-//! measured on a box whose raw bounds are *not* round-aligned (`x1=10,
-//! x2=53` &#8594; raw width `44`; `round=16` &#8594; `w=32`, `x = 10 +
-//! (44-32)/2 = 16`). The first `skip` frames (default `2`) carry no tags at
-//! all and do not contribute to the running union either — confirmed by
-//! measurement showing frames `0`/`1` bare and frame `2` already reporting
-//! the full box a single static frame would produce (not a partially-grown
-//! one), which only holds if the skipped frames were never merged in.
+//! `x1`/`x2`/`y1`/`y2` are the raw, unrounded bounding edges of every
+//! above-threshold sample seen since the last reset — a running union across
+//! frames (`man ffmpeg-filters`'s `reset_count`: "0 indicates never reset,
+//! and returns the largest area encountered during playback"). `w`/`h`/`x`/`y`
+//! are `round`-adjusted: `w`/`h` floor the raw width/height to the nearest
+//! multiple of `round`, and `x`/`y` re-centre that shrunk box inside the raw
+//! one — measured on a non-round-aligned box (`x1=10, x2=53` → raw width
+//! `44`; `round=16` → `w=32`, `x = 10 + (44-32)/2 = 16`). The first `skip`
+//! frames (default `2`) carry no tags and don't contribute to the union.
 //!
-//! **Not confirmed: `round` for values other than the default (a power of
-//! two).** A sweep of `round` from `1` to `44` against a fixed, deliberately
-//! non-round-aligned raw box (`44x54`) found the floor-and-centre rule above
-//! holds for every power-of-two `round` tried (`2, 4, 8, 16, 32`) and for
-//! several others (`5, 10, 11, 12, 14, 20, 44`), but **not** for `3, 6, 7, 9,
-//! 13, 15` — e.g. `round=9` on that box measures `w=36` (matching
-//! floor-to-multiple) but `h=36` (floor-to-multiple predicts `54`, the raw
-//! height unchanged, since `54` is already a multiple of `9`). No consistent
-//! alternative formula was found in the time available (a chroma-halved
-//! variant fit some of the mismatches and broke matches the plain formula
-//! already had). This crate implements plain floor-and-centre for every
-//! `round`, which is byte-exact at the default and at every power-of-two
-//! tried, and is a documented, un-fixed divergence from the reference for at
-//! least the six `round` values above — recorded here rather than guessed
-//! away, per this crate's own falsification discipline.
+//! **Known divergence: `round` at `3, 6, 7, 9, 13, 15` does not match the
+//! reference** (e.g. `round=9` on a `44x54` box measures `w=36,h=36`; plain
+//! floor-and-centre predicts `h=54`). No consistent alternative formula was
+//! found, so this crate ships plain floor-and-centre for every `round` and
+//! documents the divergence rather than guessing further.
 //!
-//! # Distinguishing input built for this filter
-//!
-//! A rectangle placed with a margin on every side and **not** aligned to
-//! `round`'s default grid (so an off-by-one in any bound, or a rounding rule
-//! that silently no-ops, is individually visible) — the same shape `bbox`'s
-//! own distinguishing input uses, extended with a second frame carrying a
-//! *smaller* rectangle to confirm the box is a running union (the reported
-//! box must stay at the first, larger rectangle) rather than the current
-//! frame's own bounds.
+//! Tests use a rectangle with a margin on every side, not aligned to
+//! `round`'s grid, extended with a second, smaller rectangle in a later
+//! frame to confirm the box is the running union, not the current frame's.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -231,9 +200,8 @@ impl FrameFilter for Filter {
 
 pub(crate) fn create(req: &Instantiate<'_>) -> Instance {
     // Reference-documented ranges (`ffmpeg -h filter=cropdetect`), clamped
-    // here rather than trusted — planning/CONFORMANCE-FINDINGS.md finding 31
-    // is exactly this class of bug: an unclamped numeric option read that
-    // the reference's own parser would have refused.
+    // here rather than trusted: an unclamped numeric option read would
+    // accept values the reference's own parser refuses.
     let limit_fraction = f64_opt(req, "limit", 24.0 / 255.0).clamp(0.0, 65535.0);
     // Measured convention: a value `<= 1.0` is already a fraction of full
     // scale; anything above is a raw 8-bit sample value (`man

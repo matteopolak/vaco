@@ -663,8 +663,7 @@ impl<F: FanoutFilter> Filter for Fanout<F> {
 
 /// A filter with a fixed, small number of inputs *and* outputs, consuming
 /// one frame from every input in lockstep and producing one frame for every
-/// output each time — `feedback`'s shape (`VV->VV`), and gap 24
-/// (`planning/INTERFACE-GAPS.md`) closed for the adapter half of it.
+/// output each time — `feedback`'s shape (`VV->VV`).
 ///
 /// # Why this did not exist already
 ///
@@ -687,12 +686,11 @@ impl<F: FanoutFilter> Filter for Fanout<F> {
 /// a single frame flows — checked directly against this crate's own
 /// scheduler, not assumed. Wiring `feedback` with this adapter over a real
 /// feedback link therefore still fails, at `configure`, independent of
-/// anything this adapter does correctly. That is a second, separate,
-/// larger capability (cyclic graph negotiation) this pass does not
-/// attempt — see `planning/INTERFACE-GAPS.md`'s new entry for it. This
-/// adapter closes the "no *N*-in-*M*-out shape exists" half of gap 24 and
-/// is usable today by any filter with fixed, non-cyclic multi-in/multi-out
-/// wiring; it does not by itself make `feedback` runnable.
+/// anything this adapter does correctly. Cyclic graph negotiation is a
+/// second, separate, larger capability this pass does not attempt. This
+/// adapter closes the "no *N*-in-*M*-out shape exists" gap and is usable
+/// today by any filter with fixed, non-cyclic multi-in/multi-out wiring;
+/// it does not by itself make `feedback` runnable.
 pub trait DualFilter: Send {
     /// How many inputs this filter has. `2` is `feedback`'s own arity and
     /// the default; a filter with a construction-time count may override

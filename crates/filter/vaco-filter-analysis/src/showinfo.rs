@@ -1,16 +1,11 @@
-//! `showinfo` — print per-frame diagnostics at info log level.
-//!
-//! Reported (interface gap 13, `planning/INTERFACE-GAPS.md`) as needing a
-//! console-log-only side channel: `showinfo` writes **no** frame metadata,
-//! measured directly against `ffmpeg 8.1` (`ffprobe -show_frames` through
-//! it emits no `"tags"` block at all) — its entire output is two log lines
-//! per frame. [`vaco_frame::FrameSideData::Log`] is that channel, closed
-//! alongside this filter as its first real consumer.
+//! `showinfo` — print per-frame diagnostics at info log level. Writes no
+//! frame metadata (measured: `ffprobe -show_frames` emits no `"tags"`
+//! block) — its entire output is two log lines per frame, carried by
+//! [`vaco_frame::FrameSideData::Log`].
 //!
 //! # Measured line format
 //!
-//! Against a `4x2` `yuv420p` frame from `ffmpeg 8.1`'s own `color`/`testsrc`
-//! lavfi sources (`-vf showinfo`, `-loglevel info`), byte for byte:
+//! Against a `4x2` `yuv420p` frame (`ffmpeg 8.1`, `-vf showinfo`):
 //!
 //! ```text
 //! n:   0 pts:      0 pts_time:0       duration:      1 duration_time:1
@@ -20,63 +15,29 @@
 //! color_range:unknown color_space:unknown color_primaries:unknown color_trc:unknown
 //! ```
 //!
-//! (wrapped here for width; the reference emits `n:` through `stdev:` as one
-//! line and the four `color_*` fields as a second).
+//! (wrapped here for width; the reference emits `n:`..`stdev:` as one line
+//! and the four `color_*` fields as a second.)
 //!
-//! Field by field, each independently measured:
-//!
-//! * `n` — `%4d`, this filter's own per-instance frame counter starting at 0.
-//! * `pts`/`duration` — `%7d`, right-aligned, the raw tick count.
-//! * `pts_time`/`duration_time` — `%-7s`, left-aligned, [`crate::fmt::trimmed_time`]
-//!   (`freezedetect`'s six-decimals-trailing-zeros-trimmed rule) applied to
-//!   `ticks * time_base`.
-//! * `fmt` — [`vaco_pixfmt::PixFmt::name`].
-//! * `cl` — chroma location (`ffmpeg -vf setparams=chroma_location=left`
-//!   confirms the field, since `-vf setrange=` does *not* move it — `cl` is
-//!   chroma siting, not colour range, despite the abbreviation).
-//! * `sar` — `Rational`'s own `num/den` `Display`.
-//! * `s` — `{width}x{height}`.
-//! * `i` — `P` progressive, `T`/`B` top/bottom-field-first interlaced
-//!   (`T` confirmed via `tinterlace`; `B` inferred by symmetry, not
-//!   independently probed).
-//! * `iskey` — `0`/`1` from [`vaco_frame::FrameFlags::KEY`].
-//! * `type` — always `I` here: this workspace has no decoder that attaches
-//!   a picture type to a `Frame` (D5), and every source/filter-generated
-//!   frame this workspace can produce is exactly what the reference itself
-//!   reports as `I` for the same reason (measured on `color`, `testsrc` and
-//!   `nullsrc`, all of which are `type:I` regardless of content or
-//!   `iskey`). Not reachable for a real P/B decode until a decoder exists.
-//! * `checksum`/`plane_checksum` — Adler-32, **`(a=0, b=0)` seeded**, not
-//!   the RFC 1950 default — the same seed `planning/AGENT-CONSTRAINTS.md`
-//!   already recorded for `framecrc`/`framehash`, confirmed independently
-//!   here by reproducing `1ACA051C`/`[0B640288 010E00B4 02D001E0]` from the
-//!   raw plane bytes. Computed over each plane's *logical* bytes
-//!   ([`vaco_frame::PlaneRef::row_bytes`]-trimmed rows concatenated), never
-//!   stride padding.
-//! * `mean`/`stdev` — per-plane sample mean (rounded to the nearest
-//!   integer) and **population** standard deviation (divide by `n`, not
-//!   `n-1` — confirmed against a non-uniform fixture where the two formulas
-//!   disagree and only the population one matched), one decimal place.
+//! * `n` `%4d` counter from 0; `pts`/`duration` `%7d` raw ticks;
+//!   `pts_time`/`duration_time` `%-7s` via [`crate::fmt::trimmed_time`].
+//! * `fmt` — [`vaco_pixfmt::PixFmt::name`]. `cl` — chroma location, not
+//!   colour range despite the abbreviation (`chroma_location=` moves it,
+//!   `setrange=` does not). `sar`/`s` — `num/den` / `{width}x{height}`.
+//! * `i` — `P`/`T`/`B` (progressive/top/bottom-field-first). `iskey` —
+//!   [`vaco_frame::FrameFlags::KEY`]. `type` is always `I`: no decoder here
+//!   attaches a picture type, and every graph-only source agrees.
+//! * `checksum`/`plane_checksum` — Adler-32, `(a=0, b=0)` seeded (not the
+//!   RFC 1950 default), over each plane's logical bytes
+//!   ([`vaco_frame::PlaneRef::row_bytes`]-trimmed), never stride padding.
+//! * `mean`/`stdev` — per-plane mean (rounded) and population standard
+//!   deviation (`/n`, not `/n-1`), one decimal.
 //! * `color_range`/`color_space`/`color_primaries`/`color_trc` — the second
-//!   line, straight from [`vaco_color::ColorRange::name`],
-//!   [`vaco_color::MatrixCoefficients::name`],
-//!   [`vaco_color::ColorPrimaries::name`], [`vaco_color::TransferCharacteristic::name`]
-//!   (all four already implement exactly this naming for `ffprobe`'s own
-//!   `-show_streams` fields).
+//!   line, from the matching `vaco_color` types' own `name()`.
 //!
-//! # Scope
-//!
-//! `mean`/`stdev`/`checksum` are measured and implemented for 8-bit-per-
-//! component formats only (every fixture probed was `yuv420p`). A 16-bit
-//! format would need the reference's own sample-vs-byte convention checked
-//! before extending this — not assumed here.
-//!
-//! `config in`/`config out time_base`/`frame_rate` — the two lines the
-//! reference prints once at graph configuration, not per frame — are not
-//! reproduced: they describe the *link*, not the frame, and this
-//! workspace's filter model has no per-frame hook that runs before the
-//! first frame arrives with that information available in the same place a
-//! per-`Frame` side-data write would fit.
+//! Implemented for 8-bit-per-component formats only. `config in`/`config
+//! out` (printed once at graph configuration, not per frame) aren't
+//! reproduced: they describe the link, not the frame, and this workspace's
+//! filter model has no hook that runs before the first frame.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};

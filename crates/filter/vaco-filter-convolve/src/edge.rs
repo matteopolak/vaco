@@ -121,11 +121,11 @@
 //! discoverable behavioural rule. Chasing that further would mean
 //! reverse-engineering one specific reference binary's accelerated code
 //! path rather than measuring a rule a clean-room reimplementation should
-//! match -- the opposite of what pinning `reflect-101` above was. Per
-//! `AGENT-CONSTRAINTS.md`: fitting a formula that matches most points,
-//! when the evidence already shows no formula of the documented inputs
-//! can match all of them, is the mistake this note exists to avoid
-//! repeating. `scharr` stays out of the conformance corpus until this
+//! match -- the opposite of what pinning `reflect-101` above was. Fitting a
+//! formula that matches most points, when the evidence already shows no
+//! formula of the documented inputs can match all of them, is the mistake
+//! this note exists to avoid repeating. `scharr` stays out of the
+//! conformance corpus until this
 //! either turns out to have a real rule after all, or is reclassified as
 //! a permanent ceiling with a `downgrade_reason`.
 
