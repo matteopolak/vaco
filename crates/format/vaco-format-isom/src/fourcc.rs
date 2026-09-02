@@ -151,7 +151,24 @@ pub mod boxes {
         // not be caught by that and is the actual risk this leaves open.
         CHNL = b"chnl", SRAT = b"srat", CHAN = b"chan", GLBL = b"glbl", SINF = b"sinf",
         SCHM = b"schm", SCHI = b"schi", TENC = b"tenc", DVCC = b"dvcC", DVVC = b"dvvC",
-        DVWC = b"dvwC", CLLI = b"clli", MDCV = b"mdcv", SMDM = b"SmDm", COLL = b"CoLL",
+        DVWC = b"dvwC",
+        // `MDCV`/`CLLI` (the ISOBMFF-amendment names) and `SMDM`/`COLL` (the
+        // older WebM-derived pair some AV1/VP9 muxers use instead):
+        // recognised, but no reader in this tree parses their contents --
+        // finding 22b (`planning/INTERFACE-GAPS.md`). Left unparsed
+        // deliberately rather than guessed at: a real fixture to verify the
+        // byte layout against was attempted and could not be produced --
+        // real `ffmpeg 9.0.1`'s own `mov` muxer wrote neither box for any
+        // combination tried (HEVC in-band-SEI `-c:v copy` remux, HEVC direct
+        // encode, AV1 direct encode via `libsvtav1`'s own `--mastering-
+        // display`/`--content-light`), even though `ffprobe -show_frames`
+        // confirmed the same files' *frame* side data was present and
+        // correct throughout. D19: a parser written against recalled spec
+        // text with no real output to check it against is exactly the
+        // "wrong by a factor of 10000" risk this side data invites, not a
+        // gap this catalogue entry should paper over with an unverified
+        // guess.
+        CLLI = b"clli", MDCV = b"mdcv", SMDM = b"SmDm", COLL = b"CoLL",
         CCST = b"ccst",
         // `QuickTime`'s endian atom — inside `wave`, alongside `frma`, for the
         // sample entries whose fourcc does not fix a byte order on its own
