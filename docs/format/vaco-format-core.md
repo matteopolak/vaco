@@ -646,396 +646,125 @@ whole purpose.
 
 ---
 
-## One approved change to a frozen interface
-
-`Muxer::stream_time_base(&self, u32) -> Option<Rational>`, defaulting to `None`,
-was **added after the freeze with the orchestrator's approval**.
-
-`add_stream` takes only `&CodecParameters`, and the muxer — not the caller —
-decides what the container can express: MP4 wants the media timescale, MPEG-TS
-is fixed at 1/90000, Matroska derives one from `TimestampScale`. But step M1 of
-the muxer-side chain rescales every packet *into* that base, so a caller holding
-a `dyn Muxer` that cannot ask what it is could not use the interface correctly
-at all. That is not drive-by churn; it is a signature that does not work, which
-is the one thing the freeze is not there to protect.
-
-The default returns `None` — "assume `TIME_BASE_Q`" — so no implementation
-breaks and a muxer with no opinion need not invent one. `VacoRawMuxer`
-implements it, and the round-trip fixtures now ask the muxer for the base rather
-than assuming it, which is what a real caller has to do.
-
-## The 2026-08-22 widening: `duration_ts`, the frame-rate pair, side data
-
-Three things `ffprobe` prints had no home on `Stream`, so all three demuxers
-kept them in private side tables reachable only through inherent methods on
-their concrete types — and `DemuxerDesc::open` returns `Box<dyn Demuxer>`, so
-`vaco-probe` could not reach any of them. `vaco-demux-mp4`'s author called it
-"now blocking". The fix is on `Stream`; the interesting part is *which* of the
-three became a field and which did not.
-
-### `duration_ts` replaces `duration`, rather than joining it
-
-`Stream::duration` was an `Option<Duration>` — microseconds. A media timescale
-does not survive that: 25 500 ticks at 1/12800 is 1 992 187.5 µs, and the
-reference prints `duration_ts=25500`.
-
-Adding `duration_ts` *beside* `duration` would have put one concept in two
-fields, which D19 exists to stop, and left every writer free to set one and not
-the other. So the field is now
-
-```rust
-pub duration_ts: Option<i64>,          // ticks of `time_base`, stored
-pub fn duration(&self) -> Option<Duration>   // microseconds, derived
-```
-
-The lossy view is the derived one. `set_duration_ts` refuses a negative tick
-count rather than clamping it: no container states a negative length, so one
-means the arithmetic that produced it was wrong, and `None` keeps that visible
-as `N/A` instead of printing a confident `0`.
-
-### The frame rates are a pair because they genuinely differ
-
-`r_frame_rate` and `avg_frame_rate` both used to be answered by
-`params.video.frame_rate`, which is one field, so the two could not diverge —
-and they do. A 1/600-timescale MP4 whose `stts` holds mostly 60-tick deltas
-with a few 20-tick ones reports `r_frame_rate=10/1` and `avg_frame_rate=300/29`
-on the same track. `params.video.frame_rate` is still set, because parsers and
-filters want *a* rate; the two printed fields are now their own.
-
-Both are plain `Rational`, not `Option<Rational>`: the reference prints `0/0`
-for a stream with no rate — including every audio stream — never `N/A`, so
-there is no third state to model.
-
-### The display matrix is side data, and that is a deliberate refusal
-
-It would have been one line shorter as `display_matrix: Option<[i32; 9]>`. It
-is a `Vec<StreamSideData>` instead, for reasons written out in the [`sidedata`]
-module docs: the reference prints a *list* whose length varies, the eight other
-members plan 18 §1.1 names would each want their own mostly-`None` field, and
-the matrix means the same thing whether it arrived in an ISOBMFF `tkhd`, a
-Matroska `Projection` or an H.264 SEI.
-
-`StreamSideData` is deliberately **not** `#[non_exhaustive]`. Everything that
-consumes it is in this workspace, and `non_exhaustive` would force a catch-all
-arm into `vaco-probe`'s printer — turning "a new side-data kind is unprinted"
-from a compile error into a silently missing `[SIDE_DATA]` block.
-
-`display_rotation` is measured, not derived from first principles. It
-normalises each *column* to unit length before taking the angle, and the file
-that proves it is `[65536, 66000, 0, 0, 65536, 0, …]`: the reference reports
-`-35`, where the obvious `-atan2(b, a)` predicts `-45`. A corpus of pure
-rotations cannot tell the two rules apart.
-
-### `Program` gained four MPEG-TS fields
-
-`program_num`, `pmt_pid`, `pcr_pid`, `pmt_version`. `vaco-demux-mpegts` was
-putting the last three in `Program::metadata`, where they printed as
-`TAG:pmt_pid=…` — the right values in the wrong section.
-
-`pmt_version` is on the struct and is **not printed**. Plan 18 §1.1 and the
-brief that asked for it both say `-show_programs` prints it; measured with
-`-of flat -show_optional_fields always -show_programs` on `ffprobe 8.1`, the
-section is `program_id`, `program_num`, `nb_streams`, `pmt_pid`, `pcr_pid` and
-the tags, and nothing else. The field stays because a demuxer needs it to
-notice a PMT change, not because anything prints it.
-
-### The new shared rule in `Discovery::finish`
-
-**A stream the pass never saw a timestamp for takes the container's start time
-and duration**, each rescaled into its own time base.
-
-This is a container-wide rule wearing a per-stream disguise, and it was
-measured on Matroska because Matroska is where it shows:
-
-| file | subtitle `start_pts` | subtitle `duration_ts` |
-|---|---|---|
-| `sub.mkv` — subtitle only; container start `N/A`, duration 2.000 | `N/A` | **2000** |
-| `as.mkv` — opus + subtitle; container start 0, duration 2.008 | 0 | **2008** |
-| `as2.mkv` — as above, but the subtitle's last event ends at 1.0 s | 0 | **2008** |
-| `live_as.mkv` — as above, muxed to a pipe so there is no `Duration` element | 0 | `N/A` |
-
-`as2.mkv` rules out the stream's own extent — the value ignores where the
-subtitle stops. `live_as.mkv` rules out a packet scan — remove the container's
-statement and the field goes with it. And the per-track `DURATION` *tag* is not
-the source either: `as2.mkv`'s says 1.0 s where the printed field says 2.008.
-
-It is here and not in `vaco-demux-matroska` because it needs the container
-duration and the whole stream list, neither of which one track knows, and
-because a demuxer that filled it locally would disable the shared rule for
-every caller that does run discovery — the hazard plan 18's composition
-amendment records.
-
-**It does not fire on today's corpus**, and that is worth stating plainly. Our
-discovery loop runs until every stream has *two DTS deltas*, so it always sees
-the subtitle packet and sets `start_time` from it; the reference's loop stops as
-soon as every stream's codec parameters are complete, which for a file of
-subrip and Opus is before it reads anything at all. That difference is the
-whole of the remaining `sub.mkv` divergence — see `docs/app/vaco-probe.md` — and
-narrowing the stop condition to match is a much larger change than this one,
-with `start_time` for every delay-coded audio stream riding on it.
-
-## The 2026-08-23 wave: four interface gaps closed, one substituted
-
-`planning/INTERFACE-GAPS.md` recorded six gaps found independently by agents
-building containers against this crate. Four of them (1, 4, 5, 6) were this
-wave's; two (2, `Muxer` being single-sink, and 3, `write_packet` taking packets
-where `uncodedframecrc` wants frames) are shape changes and stay open — see that
-file's own record for why.
-
-**None of the four required editing an implementor.** `cargo check --workspace
---all-targets --offline` was run after all four landed; every muxer, demuxer,
-`vaco-sched`, `vaco-cli` and `vaco-probe` still compiled unmodified. (One
-unrelated crate, `vaco-protocol-socket`, failed in the same run with missing
-files and missing dependencies — a concurrent agent's in-progress work, nothing
-to do with `Muxer`/`Demuxer`; the failure is confined to that crate alone.)
-
-### Gap 1 — a metadata channel for `Muxer`
-
-[`metadata::MuxMetadata`] bundles file tags, chapters (reusing [`Chapter`]
-verbatim, so a demuxed chapter list needs no conversion to remux), attachments
-(the new [`metadata::MuxAttachment`]), and per-stream tags indexed by declared
-position. [`Muxer::set_metadata`] is a new defaulted trait method — the default
-does nothing, which is exactly what every muxer already did before this
-existed, since there was no channel to drop anything from. [`mux::MuxBuilder::
-with_metadata`] queues a bundle; `MuxBuilder::open` calls `set_metadata` once,
-after `init` and after stream time bases are read but before the header (M30) —
-the same point M12 settles anything else that depends on the whole stream set.
-
-`vaco-mux-matroska`, `vaco-mux-mp4` and `vaco-mux-stream`'s `ffmetadata` can now
-override `set_metadata` to actually write `Tags`/`Chapters`/`Attachments`,
-`udta▸meta▸ilst`/`chpl`, and a real `;FFMETADATA1` body respectively — that
-work is theirs, in a later wave; this wave only opens the door.
-
-### Gaps 4 and 5 — `open` sees neither `Limits` nor options
-
-**Not closed as specified**, and that is a finding, not an evasion. Both gaps
-proposed widening `DemuxerDesc::open`/`MuxerDesc::open`'s signature. Checked
-directly: `open` is a bare `fn` pointer, and every one of the ~90 registered
-descriptors already supplies its own free function coercing to today's exact
-signature. A function item only coerces to a function-pointer type with a
-*matching* parameter list — there is no version of `fn(A, B) -> R` that also
-accepts `fn(A, B, C) -> R` — so widening it requires editing every one of those
-functions, not merely the descriptor literals that reference them. That is the
-edit this wave forbids, so it was not made.
-
-The substitute: [`Demuxer::reconfigure(&mut self, limits: &Limits, opts:
-&FormatOptions)`][Demuxer::reconfigure] and [`Muxer::set_option(&mut self, name:
-&str, value: &str)`][Muxer::set_option], both defaulted, both callable
-*after* `(desc.open)(..)` returns instead of *during* the call. `Discovery::run`
-now calls `reconfigure` once before reading anything, so wrapping a demuxer in
-`Discovery` is enough to reach it; a fuzz target driving `open` directly can and
-should call it too. `MuxBuilder::open` calls `set_option` for every pair queued
-through the new `with_private_options`, before `init` runs (M29) — the seam
-`vaco-mux-mp4`'s `MovMuxer::with_options`/`movflags` needs, mirroring
-`vaco_opts::OptionsExt::set_str`'s name/value-string contract on purpose so no
-second option-passing convention is needed.
-
-**What this does not fix**, honestly: neither method can bound or configure
-work `open` already did before returning — a header or index a container reads
-eagerly, or an `init` decision `set_option` did not exist in time to influence
-had the caller not queued it beforehand. `vacoraw::VacoRawDemuxer::open`'s
-`Budget::new(Limits::permissive())` is exactly that case, and it is unchanged.
-Closing that half needs the `open`-signature change these methods stand in for,
-and that is only possible in a wave that edits every implementor at once —
-which is what gap 6 below explains further.
-
-### Gap 6 — `MuxerDesc` has no `flags` field, and cannot get one for free
-
-**Also not closed as specified**, for the same class of reason. `DemuxerDesc`
-has `flags: FormatFlags`; the brief proposed the same field on `MuxerDesc`.
-Checked two ways before concluding it is not additive:
-
-* Every one of the ~90 registered `MuxerDesc` constants lists every current
-  field with no `..base` update syntax (grepped, confirmed) — Rust requires a
-  struct literal with no base expression to name every field, so any new field,
-  regardless of type or a "sensible" default, must be added at every one of
-  those call sites.
-* Default field values (`x: T = default`, RFC 3681) would remove that
-  requirement. Checked directly against this workspace's pinned `rustc 1.97.1`:
-  still `error[E0658]`, gated behind `#![feature(default_field_values)]`, not
-  reachable on the stable toolchain this project pins.
-
-The substitute is [`MuxerDesc::probe_flags`][MuxerDesc::probe_flags] — a method,
-not a field. It does exactly what `vaco-cli`'s `exec::open_output` already did
-by hand (construct against a throwaway [`vacoraw::MemorySink`], read `.flags()`,
-keep the answer), except written once, here, instead of once per caller. It
-does not remove `exec::open_output`'s double construction of a real output — a
-non-`NOFILE` format is still opened again against its real sink — it removes
-the *duplication of the probing logic itself*. Landing the field for real needs
-a wave that touches every `MuxerDesc` literal at once, the same wave
-`DemuxerDesc.flags` itself must have needed, before any implementor existed to
-edit.
-
-### `INTERFACE-GAPS.md` corrections
-
-Its "Sequencing" note claimed 1, 4, 5 and 6 "can land together behind
-default-implemented trait methods and a new struct field, so existing muxers
-and demuxers keep compiling." Gap 1 is exactly that. Gaps 4, 5 and 6 are not:
-they involve either a function-pointer field's signature or a plain field on a
-struct every implementor constructs by literal, and neither is addable without
-touching every one of those literals — confirmed against the actual `rustc`
-this workspace pins, not assumed. The substitutes above are the closest
-additive answer to each; `planning/INTERFACE-GAPS.md` records the same finding
-next to each gap's original entry, per this wave's brief ("leaving the entries
-and their reasoning, since the record of *why* an interface changed is worth
-more than the entry").
-
-## The 2026-08-27 addition: gap 9's `add_stream_with`, and `set_bitexact`
-
-Issue #634 / `CONFORMANCE-FINDINGS.md` 32 raised gap 9's priority: `#tb` in
-`vaco-mux-hash`'s `framecrc`/`framemd5`/`framehash` was silently wrong for
-every stream-copy output, because [`Muxer::add_stream`] genuinely has no
-channel for anything beyond [`CodecParameters`] — the muxer's own doc
-comment already said so honestly; the fix supplies the channel gap 9
-proposed rather than working around the absence again.
-
-### `StreamSpec` and `Muxer::add_stream_with`
-
-[`StreamSpec`] is a new, deliberately minimal struct — today, only
-`time_base: Option<Rational>`. [`Muxer::add_stream_with(&mut self, params,
-spec)`][Muxer::add_stream_with] is a new defaulted trait method that
-forwards straight to `add_stream`, so **none of the ~57 existing
-implementors changed** — the same additive shape gap 1's `set_metadata` used.
-Only `vaco-mux-hash`'s `FrameHashMuxer` overrides it so far, to prefer the
-supplied time base over its own `CodecParameters`-only guess.
-
-**The `Box<dyn Muxer>` trap, from `AGENT-CONSTRAINTS.md`, applies here by
-construction and was checked, not assumed:** `impl<M: Muxer + ?Sized> Muxer
-for Box<M>` forwards `add_stream_with` explicitly rather than inheriting the
-default — the default would call `add_stream` on the box itself, discarding
-`spec` for *every* boxed muxer regardless of what the concrete type
-underneath overrides, silently and without a compile error. `vaco-cli`'s
-`TallyingMuxer` (which wraps every real muxer the CLI opens) has the same
-obligation for the same reason, and was checked and fixed the same way — a
-wrapper is exactly as much a "boxed muxer" as `Box` itself is.
-
-**`MuxBuilder::add_stream` is the one caller, and already had the value.**
-It has taken an `input_time_base: TimeBase` parameter since before this
-change (M1's rescale needs it regardless of `Muxer::add_stream_with`'s
-existence) — the missing piece was purely that it never reached the
-`Muxer` the builder wraps. It now builds a `StreamSpec` from that same
-parameter and calls `add_stream_with` instead of `add_stream`; every
-existing caller's behavior is unchanged because the default forwards
-identically.
-
-### `Muxer::set_bitexact`
-
-A second, smaller gap surfaced while closing the first: `vaco-mux-hash`'s
-`#software` line needed to know whether `-bitexact` was requested, and
-nothing reached a `Muxer` to say so — `FormatOptions` was already known to
-`MuxBuilder` (it is `self.opts`) but never handed to the muxer itself, same
-shape as gap 1 before `set_metadata` existed. [`Muxer::set_bitexact(&mut
-self, bitexact: bool)`][Muxer::set_bitexact] is a third new defaulted
-method (default: no-op), called by `MuxBuilder::open` from
-`self.opts.fflags.contains(FFlags::BITEXACT)` at the same point as
-`set_metadata`. `vaco-cli`'s top-level `-bitexact` is folded into
-`FormatOptions::fflags` by `vaco-cli::cli::format_options_of` (previously a
-parsed-but-silently-dropped flag — `-fflags +bitexact` given directly
-already worked, since `fflags` is a literal `FormatOptions` schema field);
-`TallyingMuxer` forwards this one too, for the same reason as
-`add_stream_with`.
-
-### Verification
-
-`long.mp4`/`long.ts`-shaped fixtures (H.264 via libx264, muxed to MP4 and
-MPEG-TS) were compared against the installed `ffmpeg 8.1` with `-c copy
--f framecrc`, in both `-bitexact` and plain modes. Every header line
-(`#extradata`/`#software`/`#tb`/`#media_type`/…) now matches byte-for-byte
-on both containers in both modes; a B-frame-free remux matches **every**
-line of the output, header and packets both. `crc`/`md5`/`hash`/
-`streamhash` were re-diffed against the same fixtures and remain
-byte-identical (no regression). See `docs/format/vaco-mux-hash.md`'s "What
-issue #634's fix does and does not close" for the two separate,
-pre-existing divergences (a B-frame reorder-delay DTS/PTS offset, and an
-MPEG-TS timestamp-origin/side-data gap) found during this verification and
-deliberately left open — neither is a fact this crate's header or this
-trait's signature carries.
-
-## The 2026-08-28 addition: `bind_url`, closing gaps 2 and 7
-
-Issue #649 gave gaps 2 and 7 a concrete, measurable symptom: `-f image2`
-failed on a `%d`-pattern both ways — write side wrote a file literally named
-`out_%03d.png`, read side refused `img_%03d.png` outright with "No such file
-or directory" — because `DemuxerDesc::open`/`MuxerDesc::open` receive one
-already-open source/sink and no filename at all, and `vaco-demux-image2`'s
-`Image2Demuxer::open_pattern`/`vaco-mux-image2`'s `Image2MuxWriter` (which
-already resolve/write patterns against the filesystem correctly) had no way
-to be reached with the real destination.
-
-### Why not a parameter on `open`
-
-Same root cause gaps 4/5/9 already found and the same conclusion: `open` is
-a bare `fn` pointer roughly 90 registered demuxers/muxers already implement
-at a fixed one-source/one-sink signature. A function item only coerces to a
-function-pointer type with a matching parameter list, so widening either
-signature would mean editing every one of those functions, not just the
-descriptor literals naming them — the edit every prior wave in this file
-has declined for the same reason.
-
-### `Demuxer::bind_url` / `Muxer::bind_url`
-
-Two new defaulted trait methods (default: `Err(Unsupported)`), one per
-trait, both named the same for the same reason: a caller invokes either
-once, immediately after `open` returns and before reading/writing anything,
-with the URL string it already resolved to reach that descriptor — no new
-`MediaSource::path()`/`MediaSink::path()` accessor needed, and no second
-`MediaSource` a caller has to open itself. A demuxer/muxer that opts in
-typically replaces its own state outright
-(`*self = Self::open_pattern(url, ..)?`), which is exactly what a format
-whose primary `open` call could never have succeeded with a literal source
-needs: the caller passes a throwaway placeholder (an empty
-`vaco_io::MemorySource`, a `vacoraw::MemorySink`) to `open`, and `bind_url`
-does the real work.
-
-**The `Box<dyn Muxer>`/`Box<dyn Demuxer>` trap applies again, by
-construction, and was checked the same way gap 9's was:** both `impl
-Muxer for Box<M>` and `impl Demuxer for Box<D>` forward the new method
-explicitly. `vaco-cli`'s `TallyingMuxer` has the same obligation and was
-fixed the same way, in its own crate.
-
-### `vaco-demux-image2`/`vaco-mux-image2`: real implementors, not just callers
-
-Both crates' registry entries now start in their old degenerate shape
-(unchanged for a caller that never calls `bind_url`, so this is additive for
-them too) and become the real thing on the first `bind_url` call:
-`RegistryDemuxer::Single(SingleSourceDemuxer)` → `Pattern(Image2Demuxer)`,
-`RegistryMuxer::Sink(Image2SinkMuxer)` → `Pattern(PatternWriterMuxer)`
-wrapping `Image2MuxWriter`. Both refuse a second `bind_url` call
-(`Unsupported`) rather than silently re-resolving against a possibly
-different URL.
-
-`DEMUXER_IMAGE2.flags` gained `FormatFlags::NEEDNUMBER` — declared since
-this crate's foundations wave but never read by anything — as the signal a
-caller checks **before** attempting to open the literal pattern string as a
-file at all. `Muxer::flags()` reports the same flag on the write side,
-read through `MuxerDesc::probe_flags()` (gap 6) since `MuxerDesc` itself
-still carries no flags field.
-
-### `vaco-cli` wiring
-
-`input::open` checks `desc.flags.contains(NEEDNUMBER)` before its usual
-`opener(url)?`: if set, it hands `(desc.open)` an empty placeholder source
-and calls `bind_url(url)?` directly, propagating any error (a `NEEDNUMBER`
-format has nothing else to fall back to); otherwise it opens the real
-source as before and calls `bind_url(url)` best-effort, swallowing only
-`Unsupported` — the shape a future VobSub implementation (gap 7's other
-named case: a `.sub` sidecar next to a normally-opened `.idx`) needs with no
-further CLI change. `exec::open_output` extends its existing
-`probe_flags`-style throwaway-sink construction (already there for
-`NOFILE`) with the mirror check: a `NEEDNUMBER` muxer keeps the
-throwaway-sink-backed probe instance and calls `bind_url` on it instead of
-ever calling `crate::output::create` on the literal pattern string.
-
-### Verification
-
-Against the installed ffmpeg 8.1, isolating the container-level fix from
-the separate encoder-selection gap `-i in.mp4 -f image2 out-%03d.png`
-currently hits (`Unknown encoder 'png'`, #652's territory): `vaco -f image2
--i in_%03d.png -c copy -f image2 out_%03d.png` on a 3-file PNG sequence
-produces `cmp`-identical files, and `ffmpeg -f rawvideo -pix_fmt rgb24 -i
-'…_%03d.png' -f rawvideo - | md5` matches on both sequences. The read side
-alone (`-f image2 -i in_%03d.png -c copy -f rawvideo out.bin`) matches
-`cat in_001.png in_002.png in_003.png` byte-for-byte.
+## Trait extensions since the freeze
+
+Several additive, defaulted trait methods were added after `Demuxer`/`Muxer`
+froze, each closing a gap found by an implementor crate. All are backward
+compatible — a defaulted no-op means no existing implementor needed to
+change, verified each time with a full `cargo check --workspace
+--all-targets`.
+
+- **`Muxer::stream_time_base(&self, u32) -> Option<Rational>`** (default
+  `None`, meaning `TIME_BASE_Q`). `add_stream` takes only
+  `&CodecParameters`, and the muxer — not the caller — decides the
+  container's time base (MP4: media timescale, MPEG-TS: fixed 1/90000,
+  Matroska: derived from `TimestampScale`). The muxer-side rescale chain
+  (step M1) needs to ask what that base is, so a caller holding a bare `dyn
+  Muxer` needed a way to find out.
+
+- **`Muxer::set_metadata`** (default: no-op) plus [`metadata::MuxMetadata`]
+  — file tags, chapters (reusing [`Chapter`] verbatim), attachments, and
+  per-stream tags. `MuxBuilder::open` calls it once, after stream time
+  bases are known but before the header is written.
+
+- **`Demuxer::reconfigure(&mut self, &Limits, &FormatOptions)`** and
+  **`Muxer::set_option(&mut self, name: &str, value: &str)`** (both
+  defaulted). `open` is a bare `fn` pointer that ~90 registered descriptors
+  already coerce to at one fixed signature, so widening it would mean
+  editing every implementor, not just the descriptor literals naming them
+  — these two methods are the additive substitute, callable *after* `open`
+  returns. `Discovery::run` calls `reconfigure` before reading anything;
+  `MuxBuilder::open` calls `set_option` for every queued private option
+  before `init`. Neither can influence anything a container reads eagerly
+  *inside* `open` itself — closing that needs the `open`-signature change
+  a whole-workspace wave would take (see *Signature gaps* below).
+
+- **`MuxerDesc::probe_flags()`** — a method, not a field, because every one
+  of the ~90 `MuxerDesc` literals lists every field with no `..base`
+  syntax, so a new field can't be added without touching all of them
+  (Rust's default-field-values RFC is not on this project's pinned stable
+  toolchain). It does what callers used to do by hand: construct against a
+  throwaway sink, read `.flags()`, keep the answer.
+
+- **`Muxer::add_stream_with(&mut self, params, spec: &StreamSpec)`**
+  (default: forwards to `add_stream`, dropping `spec`) and **`StreamSpec`**
+  (currently just `time_base: Option<Rational>`) — lets a stream-copy
+  muxer (`vaco-mux-hash`'s `#tb` line, for one) see the caller's actual
+  time base instead of guessing from `CodecParameters` alone.
+  **`impl Muxer for Box<dyn Muxer>` overrides this explicitly** rather than
+  inheriting the default: the default would silently discard `spec` for
+  every boxed muxer regardless of what the concrete type underneath does.
+  Any wrapper around a `dyn Muxer` (`vaco-cli`'s `TallyingMuxer`) has the
+  same obligation.
+
+- **`Muxer::set_bitexact(&mut self, bool)`** (default: no-op) — same shape
+  as `set_metadata`, called by `MuxBuilder::open` from
+  `FormatOptions::fflags`'s `BITEXACT` bit, for muxers that need to know
+  `-bitexact` was requested.
+
+- **`Demuxer::bind_url`/`Muxer::bind_url(&mut self, url: &str)`** (both
+  defaulted to `Err(Unsupported)`) — for formats whose real work depends
+  on the URL string itself, not just an opened source/sink (`image2`'s
+  `%d`-pattern sequences). A caller opens against a throwaway placeholder,
+  then calls `bind_url` once with the real URL; a typical implementation
+  replaces its own state outright. `vaco-demux-image2`/`vaco-mux-image2`
+  are the real implementors: they start in a degenerate single-file shape
+  and become pattern-aware on the first `bind_url` call, gated by
+  `FormatFlags::NEEDNUMBER` so a caller knows to route through `bind_url`
+  instead of opening the literal pattern as a file. Both boxed trait impls
+  forward this explicitly, for the same `Box` reason `add_stream_with`
+  does.
+
+## `Stream` field additions
+
+- **`duration_ts: Option<i64>`** (raw ticks of `time_base`) replaced
+  `duration: Option<Duration>` as the stored field; `duration()` is now a
+  derived microsecond view. A media timescale doesn't survive lossy
+  microsecond storage (25,500 ticks at 1/12800 is 1,992,187.5 µs, but the
+  reference prints `duration_ts=25500`). `set_duration_ts` rejects a
+  negative tick count rather than clamping it — no container states a
+  negative length, so a negative value means the arithmetic that produced
+  it was wrong, and `None` keeps that visible as `N/A`.
+
+- **`r_frame_rate`/`avg_frame_rate`** are separate, plain `Rational` fields
+  (not `Option`, since the reference prints `0/0` for a rateless stream
+  rather than `N/A`) because they genuinely diverge — a 1/600-timescale
+  MP4 with mostly-60-tick `stts` deltas and a few 20-tick ones reports
+  `10/1` and `300/29` on the same track. `params.video.frame_rate` still
+  exists for parsers/filters that want *a* rate.
+
+- **The display matrix** lives in `Vec<StreamSideData>`, not a dedicated
+  field: the reference prints a variable-length list, several other
+  side-data kinds would each want their own mostly-`None` field, and the
+  matrix means the same thing whether it came from ISOBMFF `tkhd`,
+  Matroska `Projection` or an H.264 SEI. `StreamSideData` is deliberately
+  not `#[non_exhaustive]`, so a new kind is a compile error in
+  `vaco-probe`'s printer rather than a silently missing `[SIDE_DATA]`
+  block. `display_rotation` normalises each *matrix column* to unit length
+  before taking the angle — measured, not derived: `[65536, 66000, 0, 0,
+  65536, 0, …]` reports `-35` in the reference, where the obvious
+  `-atan2(b, a)` predicts `-45`.
+
+- **`Program`** gained `program_num`/`pmt_pid`/`pcr_pid`/`pmt_version` as
+  real fields instead of `Program::metadata` tags (which printed as
+  `TAG:pmt_pid=…`, in the wrong section). `pmt_version` is not printed by
+  `vaco-probe` — the reference doesn't print it either — but a demuxer
+  needs the field to notice a PMT change.
+
+- **`Discovery::finish`**: a stream discovery never saw a timestamp for
+  takes the container's start time and duration, rescaled into its own
+  time base. Measured on Matroska: a subtitle-only file gets its duration
+  from the container even though the last subtitle event ends earlier, and
+  the value disappears entirely on a pipe with no `Duration` element — so
+  it comes from the container's own statement, not a packet scan or the
+  track's `DURATION` tag (which can disagree with it). Lives in
+  `Discovery`, not per-demuxer, because it needs the whole stream list and
+  because a demuxer that filled it locally would disable the shared rule
+  for other callers. It does not currently fire on this project's own
+  corpus: this crate's discovery loop runs until every stream has two DTS
+  deltas (always seeing the subtitle packet), while the reference's stops
+  once every stream's codec parameters are complete — see
+  `docs/app/vaco-probe.md` for that divergence.
 
 ## Signature gaps
 
@@ -1043,7 +772,7 @@ Interfaces are frozen (plan 19 §6), so these are **reported, not changed**. In
 descending order of how much they cost.
 
 1. **`DemuxerDesc::open` takes no options and no limits — partially closed.**
-   See *The 2026-08-23 wave* above: [`Demuxer::reconfigure`] reaches an
+   See *Trait extensions since the freeze* above: [`Demuxer::reconfigure`] reaches an
    already-constructed demuxer with the caller's `Limits`/`FormatOptions`, which
    is enough for anything `Discovery` or a fuzz target does after `open`
    returns. It is *not* enough for what a demuxer allocates *during* `open`
@@ -1065,7 +794,7 @@ descending order of how much they cost.
    `-ss` precision will want the range.
 5. **`Stream` is missing two of the five fields** the plan specifies.
    `duration_ts`, the `avg_frame_rate`/`r_frame_rate` pair and stream side data
-   are now present — see *The 2026-08-22 widening* below. Still absent, and
+   are now present — see *`Stream` field additions* above. Still absent, and
    still nothing asks for them: `pts_wrap_bits` (the demuxer holds the
    `WrapState` instead), a container-level `sample_aspect_ratio` override,
    `discard`, and `attached_pic` (the `ATTACHED_PIC` disposition plus a normal
@@ -1107,7 +836,7 @@ descending order of how much they cost.
 
 * **193 tests**: 150 unit, 23 named integration cases (14 `roundtrip.rs`, 9
   `mux_session.rs`), 19 property tests, 1 doctest. The unit count includes the
-  gap-closure tests added in *The 2026-08-23 wave*: for each of `Muxer::
+  gap-closure tests added when the trait extensions above landed: for each of `Muxer::
   set_metadata`, `Muxer::set_option` and `Demuxer::reconfigure`, one test
   pinning the default's harmless behaviour and one pinning an override's real
   one, plus coverage of `MuxerDesc::probe_flags` and `MuxMetadata` itself.
