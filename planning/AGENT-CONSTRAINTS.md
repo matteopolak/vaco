@@ -344,6 +344,16 @@ cargo clippy -p <crate> --all-targets --locked -- -D warnings
 cargo xtask dup-check                  # sub-second; catches name collisions early
 ```
 
+**A crate's own tests passing is not the same claim as "nothing downstream
+broke."** `4ec43cc` tightened `vaco-mux-matroska`'s Opus requirement,
+updated that crate's own fixture, ran clean — and left `vaco-cli`'s
+separate integration fixture red for 9.5 hours (`planning/E2E-GAPS.md`
+#35), because nobody ran the one test suite that actually exercises
+Matroska/Ogg/MP4 container behaviour together. If your change alters a
+*requirement* a container enforces (not just an internal refactor),
+`cargo test -p vaco-cli` costs about 0.1s and is the cheapest real check
+that anything hand-synthesizing a fixture for that container still passes.
+
 The orchestrator runs the full gate sweep (`layer-check`, `wasm-check`,
 `time-gate`, `patent-gate`, `owner-gate`, `unsafe-audit`, `dep-gate`, and the
 four `--check` generators) at the wave boundary. **Do not run them all
