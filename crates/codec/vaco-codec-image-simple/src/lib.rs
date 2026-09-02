@@ -22,11 +22,11 @@ mod xbm;
 mod xwd;
 
 pub use bmp::{decode as decode_bmp, encode as encode_bmp};
-pub use pcx::{decode as decode_pcx, encode as encode_pcx};
-pub use sgi::{decode as decode_sgi, encode as encode_sgi};
-pub use tga::{decode as decode_tga, encode as encode_tga};
-pub use xbm::{decode as decode_xbm, encode as encode_xbm};
-pub use xwd::{decode as decode_xwd, encode as encode_xwd};
+pub use pcx::{decode as decode_pcx, encode as encode_pcx, parameters as parameters_pcx};
+pub use sgi::{decode as decode_sgi, encode as encode_sgi, parameters as parameters_sgi};
+pub use tga::{decode as decode_tga, encode as encode_tga, parameters as parameters_tga};
+pub use xbm::{decode as decode_xbm, encode as encode_xbm, parameters as parameters_xbm};
+pub use xwd::{decode as decode_xwd, encode as encode_xwd, parameters as parameters_xwd};
 
 use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
 use vaco_core::Result;
@@ -34,6 +34,34 @@ use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 use vaco_pixfmt::PixFmt;
+
+/// The stream description a header read yields, in the one shape every
+/// `parameters_*` function in this crate returns.
+///
+/// **Why the decoders answer this at all.** A demuxer names the codec; the
+/// width, height and pixel format live only in the image's own header, and
+/// something has to read that header before a frame is decoded or
+/// `vaco-probe` reports zeros. Deriving it here — from the same
+/// `read_header` the decoder itself calls, and the same pixel-format choice
+/// it makes — is what keeps the reported format and the produced frame from
+/// disagreeing. A second header reader in the parser layer is exactly the
+/// two-lists-that-must-match shape that has gone wrong here before.
+pub(crate) fn video_parameters(
+    codec: vaco_codec_core::CodecId,
+    width: u32,
+    height: u32,
+    format: PixFmt,
+) -> vaco_codec_core::CodecParameters {
+    let mut params = vaco_codec_core::CodecParameters::video().with_codec(codec);
+    if let Some(v) = params.video.as_mut() {
+        v.width = width;
+        v.height = height;
+        v.coded_width = width;
+        v.coded_height = height;
+        v.format = Some(format);
+    }
+    params
+}
 
 type DecodeFn = fn(&[u8], &mut Budget) -> Result<Frame>;
 type EncodeFn = fn(&Frame) -> Result<Vec<u8>>;

@@ -19,9 +19,41 @@ mod netpbm;
 mod pam;
 mod reader;
 
-pub use floatmap::{decode_pfm, decode_phm, encode_pfm, encode_phm};
-pub use netpbm::{decode_pbm, decode_pgm, decode_ppm, encode_pbm, encode_pgm, encode_ppm};
-pub use pam::{decode as decode_pam, encode as encode_pam};
+pub use floatmap::{
+    decode_pfm, decode_phm, encode_pfm, encode_phm, parameters_pfm, parameters_phm,
+};
+pub use netpbm::{
+    decode_pbm, decode_pgm, decode_ppm, encode_pbm, encode_pgm, encode_ppm, parameters_pbm,
+    parameters_pgm, parameters_ppm,
+};
+pub use pam::{decode as decode_pam, encode as encode_pam, parameters as parameters_pam};
+
+/// The stream description a header read yields, in the one shape every
+/// `parameters_*` function in this crate returns.
+///
+/// **Why the decoder answers this.** The demuxer names the codec; width,
+/// height and pixel format are stated only in the image's own header, and
+/// `vaco-probe` reports zeros until something reads it. Deriving it from the
+/// same `read_header` and the same pixel-format choice [`decode_pgm`] and
+/// friends make is what stops the reported format and the produced frame from
+/// disagreeing — a second header reader in the parser layer is exactly the
+/// two-lists-that-must-match shape that has gone wrong here before.
+pub(crate) fn video_parameters(
+    codec: vaco_codec_core::CodecId,
+    width: u32,
+    height: u32,
+    format: vaco_pixfmt::PixFmt,
+) -> vaco_codec_core::CodecParameters {
+    let mut params = vaco_codec_core::CodecParameters::video().with_codec(codec);
+    if let Some(v) = params.video.as_mut() {
+        v.width = width;
+        v.height = height;
+        v.coded_width = width;
+        v.coded_height = height;
+        v.format = Some(format);
+    }
+    params
+}
 
 use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
 use vaco_core::Result;

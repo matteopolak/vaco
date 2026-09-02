@@ -99,6 +99,29 @@ fn rle_decode_scanline(data: &[u8], out: &mut [u8]) -> Result<()> {
     Ok(())
 }
 
+/// The pixel format a channel count denotes. Measured: the reference decodes
+/// a 3-channel SGI to `gbrp` and a single-channel one to `gray8`.
+const fn pixel_format(channels: u32) -> PixFmt {
+    if channels == 1 {
+        PixFmt::Gray8
+    } else {
+        PixFmt::Gbrp
+    }
+}
+
+/// The stream description SGI's own 512-byte header states, without decoding
+/// a pixel. See [`crate::video_parameters`].
+#[must_use]
+pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let header = read_header(&mut Reader::new(data)).ok()?;
+    Some(crate::video_parameters(
+        vaco_codec_core::CodecId::Sgi,
+        header.width,
+        header.height,
+        pixel_format(header.channels),
+    ))
+}
+
 /// Decode an SGI image into `gray8` (one channel) or `gbrp` (three or more,
 /// extra channels dropped).
 ///
@@ -109,11 +132,7 @@ fn rle_decode_scanline(data: &[u8], out: &mut [u8]) -> Result<()> {
 pub fn decode(data: &[u8], budget: &mut Budget) -> Result<Frame> {
     let mut r = Reader::new(data);
     let header = read_header(&mut r)?;
-    let format = if header.channels == 1 {
-        PixFmt::Gray8
-    } else {
-        PixFmt::Gbrp
-    };
+    let format = pixel_format(header.channels);
     let used_channels = if header.channels == 1 { 1 } else { 3 };
 
     let mut frame = Frame::alloc_video(budget, format, header.width, header.height)?;

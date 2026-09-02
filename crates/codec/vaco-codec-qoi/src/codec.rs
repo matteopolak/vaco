@@ -77,15 +77,16 @@ fn read_pixel(buf: &[u8], offset: usize, n: usize) -> Result<&[u8]> {
         .ok_or(Error::InvalidData("qoi: pixel read out of bounds"))
 }
 
-/// Decode a whole QOI image into an RGB24 or RGBA frame, chosen by the
-/// header's declared channel count — never by anything observed in the pixel
-/// data, per the "derive from the codec" rule.
-///
-/// # Errors
-/// [`Error::InvalidData`] for a malformed header or truncated chunk stream,
-/// [`Error::LimitExceeded`] if the declared dimensions exceed `budget`.
-pub fn decode(data: &[u8], budget: &mut Budget) -> Result<vaco_frame::Frame> {
-    let mut r = Reader::new(data);
+/// Everything a QOI header states: a 4-byte magic, two big-endian `u32`
+/// dimensions, a channel count and a colorspace byte.
+struct Header {
+    width: u32,
+    height: u32,
+    format: PixFmt,
+    channel_bytes: usize,
+}
+
+fn read_header(r: &mut Reader<'_>) -> Result<Header> {
     let magic = r.bytes(4)?;
     if magic != MAGIC {
         return Err(Error::InvalidData("qoi: bad magic"));
@@ -98,11 +99,53 @@ pub fn decode(data: &[u8], budget: &mut Budget) -> Result<vaco_frame::Frame> {
     if width == 0 || height == 0 {
         return Err(Error::InvalidData("qoi: zero-sized image"));
     }
-    let (format, out_bpp): (PixFmt, usize) = match channels {
+    let (format, channel_bytes) = match channels {
         3 => (PixFmt::Rgb24, 3),
         4 => (PixFmt::Rgba, 4),
         _ => return Err(Error::InvalidData("qoi: channels must be 3 or 4")),
     };
+    Ok(Header {
+        width,
+        height,
+        format,
+        channel_bytes,
+    })
+}
+
+/// The stream description a QOI header states, without decoding a pixel.
+///
+/// Reads the same header [`decode`] does, so the pixel format reported here
+/// and the one the frame carries cannot drift apart.
+#[must_use]
+pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let header = read_header(&mut Reader::new(data)).ok()?;
+    let mut params =
+        vaco_codec_core::CodecParameters::video().with_codec(vaco_codec_core::CodecId::Qoi);
+    if let Some(v) = params.video.as_mut() {
+        v.width = header.width;
+        v.height = header.height;
+        v.coded_width = header.width;
+        v.coded_height = header.height;
+        v.format = Some(header.format);
+    }
+    Some(params)
+}
+
+/// Decode a whole QOI image into an RGB24 or RGBA frame, chosen by the
+/// header's declared channel count — never by anything observed in the pixel
+/// data, per the "derive from the codec" rule.
+///
+/// # Errors
+/// [`Error::InvalidData`] for a malformed header or truncated chunk stream,
+/// [`Error::LimitExceeded`] if the declared dimensions exceed `budget`.
+pub fn decode(data: &[u8], budget: &mut Budget) -> Result<vaco_frame::Frame> {
+    let mut r = Reader::new(data);
+    let Header {
+        width,
+        height,
+        format,
+        channel_bytes: out_bpp,
+    } = read_header(&mut r)?;
 
     let mut frame = vaco_frame::Frame::alloc_video(budget, format, width, height)?;
     let vaco_frame::FrameData::Video { planes, .. } = &mut frame.data else {
@@ -177,7 +220,7 @@ pub fn decode(data: &[u8], budget: &mut Budget) -> Result<vaco_frame::Frame> {
                     }
                 }
             }
-            let out = if channels == 4 {
+            let out = if out_bpp == 4 {
                 prev.as_slice()
             } else {
                 prev.get(0..3).unwrap_or(&[])

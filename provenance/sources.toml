@@ -1393,3 +1393,10 @@ kind     = "blackbox"
 title    = "Observed output, exit codes and file contents of `ffmpeg -y`/`-n`/neither against an existing output file (with stdin redirected from /dev/null and from a real pty), and of `ffmpeg -ss`/`-t`/`-to` against WAV and synthetic H.264 (libx264, forced keyframes) fixtures, including `-ss` past the end of input, `-t` longer than the remaining stream, `-to` before `-ss`, and `-ss` landing between two keyframes with and without `-copyts`, ffmpeg 9.0.1. Backs `vaco-cli`'s `overwrite` and `seek_trim` modules."
 acquired = "2026-09-02"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-still-image-selection-probe"
+kind     = "blackbox"
+title    = "Observed reference behaviour for still-image files, ffmpeg/ffprobe 9.0.1, over fixtures written as `ffmpeg -f lavfi -i testsrc2=size=WxH -frames:v 1 -pix_fmt rgb24 src.png` then `ffmpeg -i src.png -frames:v 1 out.<ext>` at 64x48, 33x5 and 13x7 plus grayscale and RGBA sources. Three measurements: (1) `ffprobe -show_entries format=format_name` for each file, giving which demuxer the reference selects per format -- `jpegls_pipe` rather than `jpeg_pipe` for a `.jls` whose first four bytes are `FF D8 FF F7` (SOI + SOF55), and `image2` for `.tga`, which has no `*_pipe` splitter in either implementation; (2) `ffprobe -show_entries stream=width,height,pix_fmt` per format, giving the pixel format each still-image codec reports (pcx rgb24, sgi gbrp, ppm rgb24, pgm gray, qoi rgb24, xbm monow, xwd rgb24, jls rgb24, tga bgr24); (3) the codec `ffmpeg -i src.png out.<ext>` selects for each of the image2 muxer's 42 declared extensions, read back with `ffprobe -show_entries stream=codec_name` -- the filename-driven override of image2's single `mjpeg` default. Also the grey samples `ffmpeg -i src.pbm -f rawvideo -pix_fmt gray` produces from a P4 raster byte, fixing monowhite's bit polarity. Never read: only produced bytes and reported fields, per D6/D17."
+acquired = "2026-09-02"
+where    = "the reference binary installed on the development machine"

@@ -1,4 +1,4 @@
-//! PNG/JPEG/GIF/BMP/TIFF/WebP header parsing — **no decode**.
+//! Still-image header parsing — **no decode**.
 //!
 //! Closes P-08 (#278).
 //!
@@ -12,6 +12,7 @@
 //! | [`bmp`] | `BITMAPFILEHEADER` + `BITMAPINFOHEADER`'s leading fields |
 //! | [`tiff`] | The byte-order header + IFD 0's baseline tags |
 //! | [`webp`] | RIFF/`WEBP`: `VP8 ` (lossy), `VP8L` (lossless), `VP8X` (extended) |
+//! | [`still`] | PCX, TGA, SGI, XWD, XBM, QOI, PBM/PGM/PPM/PAM/PFM/PHM and JPEG-LS, each forwarding to its own decoder crate's header reader |
 //! | [`parser`] | [`parser::ImageParser`], the shared "whole file is one image" `Parser` wrapper every format above plugs into |
 //!
 //! # Parsing is not decoding
@@ -22,7 +23,7 @@
 //!
 //! # Framing: the whole file is one image
 //!
-//! None of the six formats need boundary-finding the way a video elementary
+//! None of these formats need boundary-finding the way a video elementary
 //! stream does: `vaco-demux-image2` already hands this crate one whole file
 //! as one packet, whether through `image2`'s pattern match or one of its 37
 //! `*_pipe` splitters. See [`parser`]'s module doc for the full argument,
@@ -56,6 +57,7 @@ pub mod gif;
 pub mod jpeg;
 pub mod parser;
 pub mod png;
+pub mod still;
 pub mod tiff;
 pub mod webp;
 
@@ -66,7 +68,7 @@ pub use parser::ImageParser;
 pub use vaco_codec_core::CodecParameters;
 
 /// The registry descriptor for the PNG parser. `vaco-component.toml` names
-/// each of these six consts, `cargo xtask gen-registry` puts them in
+/// each of these consts, `cargo xtask gen-registry` puts them in
 /// `vaco_registry::PARSERS`, and a demuxer reaches one through
 /// `ParserProvider` without ever naming this crate (D14.1).
 pub const PARSER_PNG: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
@@ -120,4 +122,121 @@ pub const PARSER_WEBP: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::Parser
     codecs: &[::vaco_codec_core::CodecId::Webp],
     media_type: ::vaco_core::MediaType::Video,
     make: |limits| ::std::boxed::Box::new(ImageParser::<webp::Webp>::new(limits)),
+};
+
+/// The registry descriptor for the PC Paintbrush PCX image parser. See [`PARSER_PNG`].
+pub const PARSER_PCX: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "pcx",
+    long_name: "PC Paintbrush PCX image",
+    codecs: &[::vaco_codec_core::CodecId::Pcx],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Pcx>::new(limits)),
+};
+
+/// The registry descriptor for the Truevision Targa image parser. See [`PARSER_PNG`].
+pub const PARSER_TARGA: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "targa",
+    long_name: "Truevision Targa image",
+    codecs: &[::vaco_codec_core::CodecId::Targa],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Targa>::new(limits)),
+};
+
+/// The registry descriptor for the SGI image parser. See [`PARSER_PNG`].
+pub const PARSER_SGI: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "sgi",
+    long_name: "SGI image",
+    codecs: &[::vaco_codec_core::CodecId::Sgi],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Sgi>::new(limits)),
+};
+
+/// The registry descriptor for the XWD (X Window Dump) image parser. See [`PARSER_PNG`].
+pub const PARSER_XWD: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "xwd",
+    long_name: "XWD (X Window Dump) image",
+    codecs: &[::vaco_codec_core::CodecId::Xwd],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Xwd>::new(limits)),
+};
+
+/// The registry descriptor for the XBM (X BitMap) image parser. See [`PARSER_PNG`].
+pub const PARSER_XBM: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "xbm",
+    long_name: "XBM (X BitMap) image",
+    codecs: &[::vaco_codec_core::CodecId::Xbm],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Xbm>::new(limits)),
+};
+
+/// The registry descriptor for the QOI (Quite OK Image) parser. See [`PARSER_PNG`].
+pub const PARSER_QOI: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "qoi",
+    long_name: "QOI (Quite OK Image)",
+    codecs: &[::vaco_codec_core::CodecId::Qoi],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Qoi>::new(limits)),
+};
+
+/// The registry descriptor for the PBM (Portable BitMap) image parser. See [`PARSER_PNG`].
+pub const PARSER_PBM: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "pbm",
+    long_name: "PBM (Portable BitMap) image",
+    codecs: &[::vaco_codec_core::CodecId::Pbm],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Pbm>::new(limits)),
+};
+
+/// The registry descriptor for the PGM (Portable GrayMap) image parser. See [`PARSER_PNG`].
+pub const PARSER_PGM: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "pgm",
+    long_name: "PGM (Portable GrayMap) image",
+    codecs: &[::vaco_codec_core::CodecId::Pgm],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Pgm>::new(limits)),
+};
+
+/// The registry descriptor for the PPM (Portable PixelMap) image parser. See [`PARSER_PNG`].
+pub const PARSER_PPM: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "ppm",
+    long_name: "PPM (Portable PixelMap) image",
+    codecs: &[::vaco_codec_core::CodecId::Ppm],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Ppm>::new(limits)),
+};
+
+/// The registry descriptor for the PAM (Portable AnyMap) image parser. See [`PARSER_PNG`].
+pub const PARSER_PAM: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "pam",
+    long_name: "PAM (Portable AnyMap) image",
+    codecs: &[::vaco_codec_core::CodecId::Pam],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Pam>::new(limits)),
+};
+
+/// The registry descriptor for the PFM (Portable FloatMap) image parser. See [`PARSER_PNG`].
+pub const PARSER_PFM: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "pfm",
+    long_name: "PFM (Portable FloatMap) image",
+    codecs: &[::vaco_codec_core::CodecId::Pfm],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Pfm>::new(limits)),
+};
+
+/// The registry descriptor for the PHM (Portable HalfMap) image parser. See [`PARSER_PNG`].
+pub const PARSER_PHM: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "phm",
+    long_name: "PHM (Portable HalfMap) image",
+    codecs: &[::vaco_codec_core::CodecId::Phm],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Phm>::new(limits)),
+};
+
+/// The registry descriptor for the JPEG-LS parser. See [`PARSER_PNG`].
+pub const PARSER_JPEGLS: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "jpegls",
+    long_name: "JPEG-LS",
+    codecs: &[::vaco_codec_core::CodecId::JpegLs],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::JpegLs>::new(limits)),
 };

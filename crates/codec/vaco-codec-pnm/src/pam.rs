@@ -120,6 +120,20 @@ fn pixfmt_for(tuple: Tuple, maxval: u32) -> (PixFmt, usize, usize) {
     }
 }
 
+/// The stream description a PAM header states, without decoding a pixel. See
+/// [`crate::video_parameters`].
+#[must_use]
+pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let header = read_header(&mut Reader::new(data)).ok()?;
+    let (format, _, _) = pixfmt_for(header.tuple, header.maxval);
+    Some(crate::video_parameters(
+        vaco_codec_core::CodecId::Pam,
+        header.width,
+        header.height,
+        format,
+    ))
+}
+
 /// Decode a PAM image.
 ///
 /// # Errors

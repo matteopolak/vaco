@@ -81,6 +81,29 @@ fn dest_row(file_row: u32, height: u32, top_to_bottom: bool) -> u32 {
     }
 }
 
+/// The pixel format a depth denotes. `read_header` has already rejected every
+/// depth but 24, 32 and 8 by the time either caller reaches this.
+const fn pixel_format(pixel_depth: u8) -> PixFmt {
+    match pixel_depth {
+        24 => PixFmt::Bgr24,
+        32 => PixFmt::Bgra,
+        _ => PixFmt::Gray8,
+    }
+}
+
+/// The stream description TGA's own 18-byte header states, without decoding a
+/// pixel. See [`crate::video_parameters`].
+#[must_use]
+pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let header = read_header(&mut Reader::new(data)).ok()?;
+    Some(crate::video_parameters(
+        vaco_codec_core::CodecId::Targa,
+        header.width,
+        header.height,
+        pixel_format(header.pixel_depth),
+    ))
+}
+
 /// Decode a TGA image into `bgr24`, `bgra`, or `gray8`.
 ///
 /// # Errors
@@ -93,11 +116,7 @@ pub fn decode(data: &[u8], budget: &mut Budget) -> Result<Frame> {
     r.bytes(usize::from(header.id_length))?;
 
     let pixel_bytes = usize::from(header.pixel_depth >> 3);
-    let format = match header.pixel_depth {
-        24 => PixFmt::Bgr24,
-        32 => PixFmt::Bgra,
-        _ => PixFmt::Gray8,
-    };
+    let format = pixel_format(header.pixel_depth);
 
     let mut frame = Frame::alloc_video(budget, format, header.width, header.height)?;
     let FrameData::Video { planes, .. } = &mut frame.data else {

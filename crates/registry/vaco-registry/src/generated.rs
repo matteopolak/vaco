@@ -5549,6 +5549,18 @@ pub static COMPONENTS: &[crate::Component] = &[
     #[cfg(feature = "parse-image")]
     crate::Component {
         kind: crate::Kind::Parser,
+        name: "jpegls",
+        long_name: Some("JPEG-LS"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("jpegls"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
         name: "mjpeg",
         long_name: Some("Motion JPEG"),
         krate: "vaco-parse-image",
@@ -5621,12 +5633,96 @@ pub static COMPONENTS: &[crate::Component] = &[
     #[cfg(feature = "parse-image")]
     crate::Component {
         kind: crate::Kind::Parser,
+        name: "pam",
+        long_name: Some("PAM (Portable AnyMap) image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("pam"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "pbm",
+        long_name: Some("PBM (Portable BitMap) image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("pbm"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "pcx",
+        long_name: Some("PC Paintbrush PCX image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("pcx"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "pfm",
+        long_name: Some("PFM (Portable FloatMap) image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("pfm"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "pgm",
+        long_name: Some("PGM (Portable GrayMap) image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("pgm"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "phm",
+        long_name: Some("PHM (Portable HalfMap) image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("phm"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
         name: "png",
         long_name: Some("PNG (Portable Network Graphics) image"),
         krate: "vaco-parse-image",
         feature: Some("parse-image"),
         media: Some("video"),
         codec: Some("png"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "ppm",
+        long_name: Some("PPM (Portable PixelMap) image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("ppm"),
         extensions: &[],
         mime_types: &[],
     },
@@ -5639,6 +5735,42 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("parse-prores"),
         media: Some("video"),
         codec: Some("prores"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "qoi",
+        long_name: Some("QOI (Quite OK Image)"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("qoi"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "sgi",
+        long_name: Some("SGI image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("sgi"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "targa",
+        long_name: Some("Truevision Targa image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("targa"),
         extensions: &[],
         mime_types: &[],
     },
@@ -5699,6 +5831,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         feature: Some("parse-image"),
         media: Some("video"),
         codec: Some("webp"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "xbm",
+        long_name: Some("XBM (X BitMap) image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("xbm"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "xwd",
+        long_name: Some("XWD (X Window Dump) image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("xwd"),
         extensions: &[],
         mime_types: &[],
     },
@@ -11234,6 +11390,8 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     #[cfg(feature = "parse-hevc")]
     &::vaco_parse_hevc::PARSER,
     #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_JPEGLS,
+    #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_JPEG,
     #[cfg(feature = "parse-mpegaudio")]
     &::vaco_parse_mpegaudio::PARSER_MPEGAUDIO,
@@ -11246,9 +11404,29 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     #[cfg(feature = "parse-opus")]
     &::vaco_parse_opus::PARSER,
     #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_PAM,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_PBM,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_PCX,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_PFM,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_PGM,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_PHM,
+    #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_PNG,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_PPM,
     #[cfg(feature = "parse-prores")]
     &::vaco_parse_prores::PARSER,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_QOI,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_SGI,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_TARGA,
     #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_TIFF,
     #[cfg(feature = "parse-audio-misc")]
@@ -11259,6 +11437,10 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     &::vaco_parse_vpx::PARSER_VP9,
     #[cfg(feature = "parse-image")]
     &::vaco_parse_image::PARSER_WEBP,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_XBM,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_XWD,
 ];
 
 /// Descriptors of every enabled `filter` implementation.

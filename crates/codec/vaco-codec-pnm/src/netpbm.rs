@@ -219,6 +219,41 @@ fn decode_gray_or_rgb(data: &[u8], budget: &mut Budget, kind: Kind) -> Result<Fr
     Ok(frame)
 }
 
+/// The stream description a PBM header states, without decoding a pixel. See
+/// [`crate::video_parameters`].
+#[must_use]
+pub fn parameters_pbm(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let (_, width, height, _) = read_header(&mut Reader::new(data), Kind::Bitmap).ok()?;
+    Some(crate::video_parameters(
+        vaco_codec_core::CodecId::Pbm,
+        width,
+        height,
+        PixFmt::MonoWhite,
+    ))
+}
+
+fn parameters_gray_or_rgb(
+    data: &[u8],
+    kind: Kind,
+    codec: vaco_codec_core::CodecId,
+) -> Option<vaco_codec_core::CodecParameters> {
+    let (_, width, height, maxval) = read_header(&mut Reader::new(data), kind).ok()?;
+    let (format, _) = sample_format(maxval, kind).ok()?;
+    Some(crate::video_parameters(codec, width, height, format))
+}
+
+/// The stream description a PGM header states, without decoding a pixel.
+#[must_use]
+pub fn parameters_pgm(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    parameters_gray_or_rgb(data, Kind::Graymap, vaco_codec_core::CodecId::Pgm)
+}
+
+/// The stream description a PPM header states, without decoding a pixel.
+#[must_use]
+pub fn parameters_ppm(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    parameters_gray_or_rgb(data, Kind::Pixmap, vaco_codec_core::CodecId::Ppm)
+}
+
 /// Decode a PGM (`P2`/`P5`) image into `gray8` or `gray16be`, chosen by the
 /// header's `maxval`.
 ///

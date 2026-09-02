@@ -20,9 +20,22 @@ vaco-packet = { path = "../../model/vaco-packet" }
 # header `vaco-parse-vpx` already reads (RFC 6386 §9.1) — reused rather than
 # re-implemented (D19).
 vaco-parse-vpx = { path = "../vaco-parse-vpx" }
+# PCX/TGA/SGI/XWD/XBM, QOI, the NetPBM family and JPEG-LS each state their
+# dimensions and pixel format in a header their own decoder crate already
+# reads. `src/still.rs` forwards to those readers rather than keeping a second
+# copy of each format's pixel-format table here; `layers.toml` permits the
+# same-layer edge, and the alternative is two tables that must agree for the
+# probe output and the decoded frame to match.
+vaco-codec-image-simple = { path = "../vaco-codec-image-simple" }
+vaco-codec-pnm = { path = "../vaco-codec-pnm" }
+vaco-codec-qoi = { path = "../vaco-codec-qoi" }
+vaco-codec-jpegls = { path = "../vaco-codec-jpegls" }
 
 [dev-dependencies]
 proptest.workspace = true
+# `tests/reference_images.rs` decodes each committed `ffmpeg`-written fixture
+# and compares the frame's planes against `ffmpeg`'s own raw output.
+vaco-frame = { path = "../../model/vaco-frame" }
 
 [lints]
 workspace = true

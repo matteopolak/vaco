@@ -76,6 +76,22 @@ fn rle_decode_line(r: &mut Reader<'_>, n: usize) -> Result<Vec<u8>> {
     Ok(out)
 }
 
+/// The stream description PCX's own header states, without decoding a pixel.
+///
+/// `None` for anything [`decode`] itself would refuse — the two read the same
+/// header through the same [`read_header`], so a file this describes is a
+/// file that decodes.
+#[must_use]
+pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let header = read_header(&mut Reader::new(data)).ok()?;
+    Some(crate::video_parameters(
+        vaco_codec_core::CodecId::Pcx,
+        header.width,
+        header.height,
+        PixFmt::Rgb24,
+    ))
+}
+
 /// Decode a truecolor (3-plane, 8-bit) PCX image into `rgb24`.
 ///
 /// # Errors

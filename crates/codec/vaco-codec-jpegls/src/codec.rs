@@ -397,6 +397,53 @@ fn comp_state_mut(comps: &mut [CompState], comp: usize) -> Result<&mut CompState
         .ok_or(Error::InvalidData("jpegls: component index out of range"))
 }
 
+/// The pixel format a JPEG-LS frame header's component count denotes: one
+/// component is `gray8`, three are `rgb24`. Shared with [`decode`] so the
+/// reported format is the one the frame actually carries.
+const fn pixel_format(num_components: u8) -> PixFmt {
+    if num_components == 1 {
+        PixFmt::Gray8
+    } else {
+        PixFmt::Rgb24
+    }
+}
+
+/// The stream description a JPEG-LS `SOF55` states, without decoding a pixel.
+///
+/// Walks the marker segments the same way [`decode`] does, stopping at the
+/// frame header rather than the scan.
+#[must_use]
+pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let (soi_code, soi_pos) = marker::find_marker(data, 0).ok()?;
+    if soi_code != marker::SOI {
+        return None;
+    }
+    let mut pos = soi_pos + 2;
+    let fh = loop {
+        let (code, marker_pos) = marker::find_marker(data, pos).ok()?;
+        let seg_pos = marker_pos + 2;
+        if code == marker::SOF55 {
+            break marker::parse_sof55(data, seg_pos).ok()?.0;
+        } else if code == marker::SOS || code == marker::EOI || code == marker::SOI {
+            return None;
+        }
+        pos = marker::skip_segment(data, seg_pos).ok()?;
+    };
+    if fh.precision != 8 || fh.width == 0 || fh.height == 0 {
+        return None;
+    }
+    let mut params =
+        vaco_codec_core::CodecParameters::video().with_codec(vaco_codec_core::CodecId::JpegLs);
+    if let Some(v) = params.video.as_mut() {
+        v.width = u32::from(fh.width);
+        v.height = u32::from(fh.height);
+        v.coded_width = v.width;
+        v.coded_height = v.height;
+        v.format = Some(pixel_format(fh.num_components));
+    }
+    Some(params)
+}
+
 /// Decode one whole JPEG-LS image.
 ///
 /// # Errors
@@ -460,11 +507,8 @@ pub fn decode(data: &[u8], budget: &mut Budget) -> Result<Frame> {
     }
 
     let nf = usize::from(fh.num_components);
-    let (format, bpp) = if nf == 1 {
-        (PixFmt::Gray8, 1usize)
-    } else {
-        (PixFmt::Rgb24, 3usize)
-    };
+    let format = pixel_format(fh.num_components);
+    let bpp = if nf == 1 { 1usize } else { 3usize };
     let mut frame = Frame::alloc_video(budget, format, u32::from(fh.width), u32::from(fh.height))?;
     let FrameData::Video { planes, .. } = &mut frame.data else {
         return Err(Error::InvalidData("jpegls: expected a video frame"));

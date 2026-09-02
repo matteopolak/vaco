@@ -1,8 +1,8 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
-# Six components from one crate, one per still-image format, following the
+# One component per still-image format, following the
 # `vaco-parse-aac`/`vaco-parse-vpx` "two-or-more parsers, one crate" shape.
-# Every one of the six is the same `ImageParser<H>` wrapper (`src/parser.rs`)
+# Every one is the same `ImageParser<H>` wrapper (`src/parser.rs`)
 # parameterised by that format's `ImageHeader` reader.
 
 [[component]]
@@ -58,3 +58,120 @@ feature   = "parse-image"
 ctor      = "vaco_parse_image::PARSER_WEBP"
 media     = "video"
 codec     = "webp"
+
+[[component]]
+kind      = "parser"
+name      = "pcx"
+long_name = "PC Paintbrush PCX image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_PCX"
+media     = "video"
+codec     = "pcx"
+
+[[component]]
+kind      = "parser"
+name      = "targa"
+long_name = "Truevision Targa image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_TARGA"
+media     = "video"
+codec     = "targa"
+
+[[component]]
+kind      = "parser"
+name      = "sgi"
+long_name = "SGI image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_SGI"
+media     = "video"
+codec     = "sgi"
+
+[[component]]
+kind      = "parser"
+name      = "xwd"
+long_name = "XWD (X Window Dump) image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_XWD"
+media     = "video"
+codec     = "xwd"
+
+[[component]]
+kind      = "parser"
+name      = "xbm"
+long_name = "XBM (X BitMap) image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_XBM"
+media     = "video"
+codec     = "xbm"
+
+[[component]]
+kind      = "parser"
+name      = "qoi"
+long_name = "QOI (Quite OK Image)"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_QOI"
+media     = "video"
+codec     = "qoi"
+
+[[component]]
+kind      = "parser"
+name      = "pbm"
+long_name = "PBM (Portable BitMap) image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_PBM"
+media     = "video"
+codec     = "pbm"
+
+[[component]]
+kind      = "parser"
+name      = "pgm"
+long_name = "PGM (Portable GrayMap) image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_PGM"
+media     = "video"
+codec     = "pgm"
+
+[[component]]
+kind      = "parser"
+name      = "ppm"
+long_name = "PPM (Portable PixelMap) image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_PPM"
+media     = "video"
+codec     = "ppm"
+
+[[component]]
+kind      = "parser"
+name      = "pam"
+long_name = "PAM (Portable AnyMap) image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_PAM"
+media     = "video"
+codec     = "pam"
+
+[[component]]
+kind      = "parser"
+name      = "pfm"
+long_name = "PFM (Portable FloatMap) image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_PFM"
+media     = "video"
+codec     = "pfm"
+
+[[component]]
+kind      = "parser"
+name      = "phm"
+long_name = "PHM (Portable HalfMap) image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_PHM"
+media     = "video"
+codec     = "phm"
+
+[[component]]
+kind      = "parser"
+name      = "jpegls"
+long_name = "JPEG-LS"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_JPEGLS"
+media     = "video"
+codec     = "jpegls"

@@ -35,8 +35,15 @@ fn pixfmt_for(sample: Sample, color: bool, little_endian: bool) -> PixFmt {
     }
 }
 
-fn decode_generic(data: &[u8], budget: &mut Budget, sample: Sample) -> Result<Frame> {
-    let mut r = Reader::new(data);
+/// Everything the `Pf`/`PF`/`Ph`/`PH` header states.
+struct Header {
+    width: u32,
+    height: u32,
+    color: bool,
+    little_endian: bool,
+}
+
+fn read_header(r: &mut Reader<'_>, sample: Sample) -> Result<Header> {
     let magic = r.bytes(2)?;
     let (want_sample, color) = match magic {
         b"Pf" => (Sample::F32, false),
@@ -63,8 +70,51 @@ fn decode_generic(data: &[u8], budget: &mut Budget, sample: Sample) -> Result<Fr
         return Err(Error::InvalidData("pfm/phm: scale must be non-zero"));
     }
     r.single_whitespace()?;
+    Ok(Header {
+        width,
+        height,
+        color,
+        little_endian: scale < 0.0,
+    })
+}
 
-    let format = pixfmt_for(sample, color, scale < 0.0);
+fn parameters_generic(
+    data: &[u8],
+    sample: Sample,
+    codec: vaco_codec_core::CodecId,
+) -> Option<vaco_codec_core::CodecParameters> {
+    let header = read_header(&mut Reader::new(data), sample).ok()?;
+    Some(crate::video_parameters(
+        codec,
+        header.width,
+        header.height,
+        pixfmt_for(sample, header.color, header.little_endian),
+    ))
+}
+
+/// The stream description a PFM header states, without decoding a pixel. See
+/// [`crate::video_parameters`].
+#[must_use]
+pub fn parameters_pfm(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    parameters_generic(data, Sample::F32, vaco_codec_core::CodecId::Pfm)
+}
+
+/// The stream description a PHM header states, without decoding a pixel.
+#[must_use]
+pub fn parameters_phm(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    parameters_generic(data, Sample::F16, vaco_codec_core::CodecId::Phm)
+}
+
+fn decode_generic(data: &[u8], budget: &mut Budget, sample: Sample) -> Result<Frame> {
+    let mut r = Reader::new(data);
+    let Header {
+        width,
+        height,
+        color,
+        little_endian,
+    } = read_header(&mut r, sample)?;
+
+    let format = pixfmt_for(sample, color, little_endian);
     let sample_bytes = if sample == Sample::F32 { 4 } else { 2 };
     let channels = if color { 3 } else { 1 };
     let row_len = (width as usize)

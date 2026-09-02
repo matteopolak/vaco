@@ -44,7 +44,7 @@
 mod codec;
 mod reader;
 
-pub use codec::{decode, encode};
+pub use codec::{decode, encode, parameters};
 
 use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
 use vaco_core::Result;

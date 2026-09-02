@@ -36,6 +36,30 @@ fn row_bytes_for_bits(width: u32) -> usize {
     (width as usize).div_ceil(8)
 }
 
+/// The `_width`/`_height` defines, which are all XBM states about its raster.
+fn read_dimensions(text: &str) -> Result<(u32, u32)> {
+    let width = find_number_after(text, "_width").ok_or(Error::InvalidData("xbm: no _width"))?;
+    let height = find_number_after(text, "_height").ok_or(Error::InvalidData("xbm: no _height"))?;
+    if width == 0 || height == 0 {
+        return Err(Error::InvalidData("xbm: zero-sized image"));
+    }
+    Ok((width, height))
+}
+
+/// The stream description XBM's own defines state, without decoding a pixel.
+/// See [`crate::video_parameters`].
+#[must_use]
+pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let text = std::str::from_utf8(data).ok()?;
+    let (width, height) = read_dimensions(text).ok()?;
+    Some(crate::video_parameters(
+        vaco_codec_core::CodecId::Xbm,
+        width,
+        height,
+        PixFmt::MonoWhite,
+    ))
+}
+
 /// Decode an XBM image into [`PixFmt::MonoWhite`].
 ///
 /// # Errors
@@ -44,11 +68,7 @@ fn row_bytes_for_bits(width: u32) -> usize {
 /// [`Error::LimitExceeded`] if the declared dimensions exceed `budget`.
 pub fn decode(data: &[u8], budget: &mut Budget) -> Result<Frame> {
     let text = std::str::from_utf8(data).map_err(|_| Error::InvalidData("xbm: not valid text"))?;
-    let width = find_number_after(text, "_width").ok_or(Error::InvalidData("xbm: no _width"))?;
-    let height = find_number_after(text, "_height").ok_or(Error::InvalidData("xbm: no _height"))?;
-    if width == 0 || height == 0 {
-        return Err(Error::InvalidData("xbm: zero-sized image"));
-    }
+    let (width, height) = read_dimensions(text)?;
     let row_bytes = row_bytes_for_bits(width);
     let needed = row_bytes.saturating_mul(height as usize);
 

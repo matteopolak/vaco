@@ -69,6 +69,19 @@ fn read_header(r: &mut Reader<'_>) -> Result<Header> {
     })
 }
 
+/// The stream description XWD's own `XWDFileHeader` states, without decoding
+/// a pixel. See [`crate::video_parameters`].
+#[must_use]
+pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let header = read_header(&mut Reader::new(data)).ok()?;
+    Some(crate::video_parameters(
+        vaco_codec_core::CodecId::Xwd,
+        header.width,
+        header.height,
+        PixFmt::Rgb24,
+    ))
+}
+
 /// Decode an XWD image into `rgb24`.
 ///
 /// # Errors
