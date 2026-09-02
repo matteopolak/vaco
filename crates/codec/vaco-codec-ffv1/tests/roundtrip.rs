@@ -204,6 +204,30 @@ fn round_trips_multiple_frames_in_one_session() {
     }
 }
 
+/// Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`'s encoders:
+/// `send` used to never set `Packet::duration`, which a container deriving
+/// a track's total length from summed packet durations (Matroska/AVI/NUT,
+/// the containers FFV1 actually reaches) silently undercounts by. Checked
+/// with two *different* per-frame durations, not one fixed value, so a
+/// constant-per-frame implementation could not pass by accident.
+#[test]
+fn send_propagates_the_input_frames_real_duration() {
+    let mut enc = Ffv1Encoder::new(Limits::permissive());
+
+    let mut first = make_frame(PixFmt::Yuv420p, 12, 10);
+    first.duration = vaco_core::Duration::from_micros(33_367);
+    enc.send(Some(&first)).expect("send");
+    let p0 = enc.receive().expect("receive");
+    assert_eq!(p0.duration, vaco_core::Duration::from_micros(33_367));
+    assert_ne!(p0.duration, vaco_core::Duration::ZERO);
+
+    let mut second = make_frame(PixFmt::Yuv420p, 12, 10);
+    second.duration = vaco_core::Duration::from_micros(16_683);
+    enc.send(Some(&second)).expect("send");
+    let p1 = enc.receive().expect("receive");
+    assert_eq!(p1.duration, vaco_core::Duration::from_micros(16_683));
+}
+
 // ------------------------------------------------------------------ proptest
 
 proptest::proptest! {

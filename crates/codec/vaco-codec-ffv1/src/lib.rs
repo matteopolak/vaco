@@ -244,6 +244,14 @@ impl SendReceive for Ffv1Encoder {
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &body)?;
                 packet.pts = frame.pts;
+                // Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`'s
+                // encoders: never set `Packet::duration`. Propagated from
+                // the input `Frame` for consistency with every other video
+                // encoder in this tree -- a container deriving a track's
+                // total length from summed packet durations (Matroska/AVI/
+                // NUT, the containers FFV1 actually reaches) was silently
+                // undercounting it.
+                packet.duration = frame.duration;
                 packet.flags |= vaco_packet::PacketFlags::KEY;
                 if !self.sent_extradata {
                     // Plain RFC 9043 Configuration Record — deliberately
