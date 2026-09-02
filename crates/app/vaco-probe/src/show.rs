@@ -395,6 +395,25 @@ fn stream_value(
                 Val::Absent
             }
         }
+        // MPEG-4 Part 2's own pair, gated the same way `is_avc`/
+        // `nal_length_size` are gated on H.264 above: `quarter_sample`/
+        // `divx_packed` are `VideoParameters` fields no other codec's
+        // parser ever sets, but the explicit `codec_id` check keeps the
+        // *rendering* rule stated once, matching the file's existing
+        // convention rather than relying on every parser to leave the
+        // field `None`.
+        "quarter_sample" | "divx_packed" => Val::opt_s(
+            video
+                .filter(|_| p.codec_id == Some(CodecId::Mpeg4))
+                .and_then(|v| {
+                    if field.name == "quarter_sample" {
+                        v.quarter_sample
+                    } else {
+                        v.divx_packed
+                    }
+                })
+                .map(|b| if b { "true" } else { "false" }.to_owned()),
+        ),
         "sample_fmt" => Val::opt_s(
             audio
                 .and_then(|a| a.format)
@@ -1176,6 +1195,73 @@ mod tests {
         };
         assert!(matches!(render("is_avc"), Val::Absent));
         assert!(matches!(render("nal_length_size"), Val::Absent));
+    }
+
+    /// `quarter_sample`/`divx_packed` are MPEG-4 Part 2's own pair, gated
+    /// on `codec_id` the same way `is_avc`/`nal_length_size` are gated on
+    /// H.264 just above -- present and rendered as `"true"`/`"false"` for
+    /// `Mpeg4`, absent for every other codec even when the underlying
+    /// `VideoParameters` fields happen to be populated.
+    #[test]
+    fn quarter_sample_and_divx_packed_are_mpeg4_only() {
+        fn field(name: &str) -> Field {
+            crate::fields::STREAM
+                .iter()
+                .find(|f| f.name == name)
+                .copied()
+                .expect("in the table")
+        }
+        let stream = Stream::new(0, MediaType::Video, vaco_core::Rational::new(1, 1000));
+        let render = |codec: CodecId, quarter: Option<bool>, packed: Option<bool>, name: &str| {
+            let mut p = CodecParameters::video().with_codec(codec);
+            if let Some(v) = p.video.as_mut() {
+                v.quarter_sample = quarter;
+                v.divx_packed = packed;
+            }
+            stream_value(
+                &field(name),
+                &stream,
+                &p,
+                Some(MediaType::Video),
+                Counts::NONE,
+                false,
+            )
+        };
+        let text = |v: Val| match v {
+            Val::S(s) => Some(s),
+            _ => None,
+        };
+        assert_eq!(
+            text(render(
+                CodecId::Mpeg4,
+                Some(false),
+                Some(false),
+                "quarter_sample"
+            ))
+            .as_deref(),
+            Some("false")
+        );
+        assert_eq!(
+            text(render(
+                CodecId::Mpeg4,
+                Some(false),
+                Some(false),
+                "divx_packed"
+            ))
+            .as_deref(),
+            Some("false")
+        );
+        // Another codec, fields populated anyway: still absent.
+        assert!(matches!(
+            render(CodecId::H264, Some(false), Some(false), "quarter_sample"),
+            Val::Absent
+        ));
+        assert!(matches!(
+            render(CodecId::H264, Some(false), Some(false), "divx_packed"),
+            Val::Absent
+        ));
+        assert_eq!(field("quarter_sample").absent, crate::fields::Absent::Omit);
+        assert_eq!(field("divx_packed").absent, crate::fields::Absent::Omit);
     }
 
     /// `ts_id`/`ts_packetsize` read back

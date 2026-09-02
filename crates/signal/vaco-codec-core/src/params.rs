@@ -67,6 +67,15 @@ pub struct VideoParameters {
     /// `is_avc=false nal_length_size=0`. `None` means the question does not
     /// apply to the codec, and nothing is printed.
     pub nal_length_size: Option<u8>,
+    /// MPEG-4 Part 2's `quarter_sample` (VOL header's `quarter_pel`, ISO/IEC
+    /// 14496-2 §6.3.5): whether the stream uses quarter-pixel motion
+    /// compensation. `None` means the question does not apply to the codec,
+    /// the same convention [`Self::nal_length_size`] already uses for H.264.
+    pub quarter_sample: Option<bool>,
+    /// MPEG-4 Part 2's "packed bitstream" convention (a DivX/Xvid interop
+    /// hack: an empty placeholder frame precedes each real B-frame). `None`
+    /// means the question does not apply to the codec.
+    pub divx_packed: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -377,6 +386,12 @@ impl VideoParameters {
         }
         if self.nal_length_size.is_none() {
             self.nal_length_size = other.nal_length_size;
+        }
+        if self.quarter_sample.is_none() {
+            self.quarter_sample = other.quarter_sample;
+        }
+        if self.divx_packed.is_none() {
+            self.divx_packed = other.divx_packed;
         }
         // Per-property, not whole-struct. A container often states *some* of
         // the colour description and leaves the rest — MP4's `colr` box carries

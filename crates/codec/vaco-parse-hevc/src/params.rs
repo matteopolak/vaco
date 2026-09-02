@@ -340,6 +340,9 @@ pub fn codec_parameters(sps: &Sps) -> CodecParameters {
         // probed on an MP4 whose `hvcC` declares a four-byte length prefix.
         // Leaving this `None` is what keeps `vaco-probe` from printing them.
         nal_length_size: None,
+        // `quarter_sample`/`divx_packed` are MPEG-4 Part 2 concepts; `None`
+        // for every other codec, HEVC included.
+        ..VideoParameters::default()
     };
 
     let mut params = CodecParameters::video().with_codec(CodecId::Hevc);

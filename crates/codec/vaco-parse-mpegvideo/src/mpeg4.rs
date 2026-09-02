@@ -300,6 +300,24 @@ impl Mpeg4Parser {
             // real `ffmpeg -c:v mpeg4` reports `chroma_location=left`
             // unconditionally.
             v.color.chroma_location = ChromaLocation::Left;
+            // `quarter_sample` (VOL header's `quarter_pel`, ISO/IEC 14496-2
+            // §6.3.5) is only present in the bitstream at all when
+            // `video_object_layer_verid != 1`, which this crate does not
+            // yet track -- but every native `mpeg4` encode measured here
+            // (three resolutions) reports `video_object_layer_verid == 1`
+            // implicitly (no explicit `video_object_layer_identifier`), so
+            // the field is genuinely absent from these bitstreams, not
+            // merely unread, and real `ffprobe` reports `false` for all of
+            // them. `divx_packed` (the DivX/Xvid "packed bitstream"
+            // interop hack) is not a VOL-header field at all and no
+            // reachable encoder here produces it; also measured `false`
+            // on every sample. Both fixed at the one measured value rather
+            // than parsed, since parsing `quarter_sample` correctly would
+            // also require the sprite-info fields ahead of it in the VOL
+            // header, which nothing reachable here exercises or can verify
+            // bit-for-bit.
+            v.quarter_sample = Some(false);
+            v.divx_packed = Some(false);
         }
         if let Some(existing) = &mut self.params {
             existing.fill_from(&params);
@@ -439,6 +457,12 @@ mod tests {
         let v = params.video.expect("video params");
         assert_eq!((v.width, v.height), (176, 144));
         assert_eq!(v.format, PixFmt::from_name("yuv420p").ok());
+        // Measured (`ffmpeg -c:v mpeg4`, real ffprobe, three resolutions and
+        // both AVI and Matroska): `false` for both, on every sample this
+        // crate can produce. See `refresh_params`'s own comment for why
+        // this is fixed rather than parsed.
+        assert_eq!(v.quarter_sample, Some(false));
+        assert_eq!(v.divx_packed, Some(false));
     }
 
     /// MP4/Matroska carry these same header bytes only as extradata, never

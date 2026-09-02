@@ -369,6 +369,9 @@ pub fn codec_parameters(sps: &Sps) -> CodecParameters {
         // length size; a stream that never gets one is a byte stream, which is
         // what `nal_length_size=0` means.
         nal_length_size: Some(0),
+        // `quarter_sample`/`divx_packed` are MPEG-4 Part 2 concepts (see
+        // `VideoParameters`'s own doc); `None` for every other codec.
+        ..VideoParameters::default()
     };
 
     let mut params = CodecParameters::video().with_codec(CodecId::H264);

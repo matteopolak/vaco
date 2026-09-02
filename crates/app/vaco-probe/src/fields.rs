@@ -219,6 +219,12 @@ pub static STREAM: &[Field] = &[
     v("nal_length_size", Str, Omit),
     v("view_ids_available", Str, Omit),
     v("view_pos_available", Str, Omit),
+    // MPEG-4 Part 2's own pair, same `Omit` shape and the same slot as
+    // `is_avc`/`nal_length_size` above (measured position: real ffprobe
+    // prints them right after `field_order`, before `id`, on an mpeg4
+    // stream).
+    v("quarter_sample", Str, Omit),
+    v("divx_packed", Str, Omit),
     a("sample_fmt", Str, Word("unknown")),
     a("sample_rate", Str, Never),
     a("channels", Int, Never),
