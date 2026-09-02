@@ -46,7 +46,49 @@ before scoring (`mp3_compare.py`, scratch script, not committed).
 |---|---|---|
 | I | none (no MP1 encoder available: neither `ffmpeg`'s build here nor any other tool on this machine can produce one) | Not verified against real audio. Header parsing, bit allocation (4-bit index, direct `nb = bal+1` dequant) and the synthesis filterbank are exercised by unit tests only (`layer1.rs`, `synthesis.rs`), plus the shared filterbank's correctness is established transitively by Layer II's real-file results below (same `Synthesis::synth_block` code, unmodified). |
 | II | 32000/44100/48000 Hz × mono/stereo (6 fixtures) | **Matches closely.** RMS error 1.2–10.7, cross-correlation 1.0000 at zero sample shift once a real bug (below) was fixed. Not bit-exact (float vs. fixed-point, plus the four MPEG-1 bit-allocation tables are used but the low-sample-rate table and intensity stereo are not — see gaps below), but close enough that the remaining error is plausibly rounding, not a structural mistake. |
-| III | 12 fixtures: mono/stereo/independent-stereo/VBR, 32000/44100/48000 Hz, 64k–320k and VBR q2, 220 Hz–15000 Hz tones and a two-tone mix | **Matches closely, one real bug found and fixed this pass.** Correlation 0.975–0.997 across every fixture, RMS 113–441. Before this pass a 440 Hz tone reached only ~0.94–0.98 correlation depending on rate/bitrate and a 6000 Hz tone or a 64 kbit/s 32000 Hz fixture reached ~0.01–0.18 (near-zero — the two failed for genuinely different reasons, exactly as a "positive-but-poor" vs. "near-zero" correlation split predicts: block-type distribution across every fixture was checked first and ruled out short blocks as the cause, since it's ~1.3% short in every fixture regardless of content or bitrate). Root cause: `region0_end`/`region1_end` (the Huffman-table-selection boundaries within a granule's "big values") were computed as `sfb[region_count[0]]`/`sfb[region_count[0]+region_count[1]]` directly, when `region_count[0]`/`[1]` each hold *one less than* the actual scalefactor-band count for that region (`Vaco-Spec-Ref: iso-11172-3`, corroborated independently against a technical description of the format) — the correct index is `sfb[region_count[0]+1]`/`sfb[region_count[0]+region_count[1]+2]`. A signal concentrated in the first couple of bands (a low tone) barely reaches the misclassified boundary; content occupying more of the spectrum (a higher tone, or anything past the first two regions) gets Huffman-decoded there with the wrong table, which looks like plausible garbage rather than a bitstream desync. Still not bit-exact, and short blocks / intensity stereo remain unimplemented (see "Known gaps") — closed on correlation, not on completeness. |
+| III | 12 fixtures: mono/stereo/independent-stereo/VBR, 32000/44100/48000 Hz, 64k–320k and VBR q2, 220 Hz–15000 Hz tones and a two-tone mix | **Matches closely, one real bug found and fixed this pass.** Correlation 0.975–0.997 across every fixture, RMS 113–441. Before this pass a 440 Hz tone reached only ~0.94–0.98 correlation depending on rate/bitrate and a 6000 Hz tone or a 64 kbit/s 32000 Hz fixture reached ~0.01–0.18 (near-zero — the two failed for genuinely different reasons, exactly as a "positive-but-poor" vs. "near-zero" correlation split predicts: block-type distribution across every fixture was checked first and ruled out short blocks as the cause, since it's ~1.3% short in every fixture regardless of content or bitrate). Root cause: `region0_end`/`region1_end` (the Huffman-table-selection boundaries within a granule's "big values") were computed as `sfb[region_count[0]]`/`sfb[region_count[0]+region_count[1]]` directly, when `region_count[0]`/`[1]` each hold *one less than* the actual scalefactor-band count for that region (`Vaco-Spec-Ref: iso-11172-3`, corroborated independently against a technical description of the format) — the correct index is `sfb[region_count[0]+1]`/`sfb[region_count[0]+region_count[1]+2]`. A signal concentrated in the first couple of bands (a low tone) barely reaches the misclassified boundary; content occupying more of the spectrum (a higher tone, or anything past the first two regions) gets Huffman-decoded there with the wrong table, which looks like plausible garbage rather than a bitstream desync. Still not bit-exact, and short blocks / intensity stereo remain unimplemented (see "Known gaps") — closed on correlation, not on completeness. **A second real bug was found and fixed in a later pass**: the MPEG-1 long scalefactor-band tables were one boundary short, silently zeroing every spectral line above 16.03 kHz at 44100/48000 Hz — see the dedicated section below for the measurement. |
+
+### The MPEG-1 long scalefactor-band tables were one boundary short
+
+Measured against `ffmpeg 9.0.1` on full-band pink noise, decoding to
+`-f s16le` and comparing power spectra with an 8192-point Blackman window:
+
+| band | ffmpeg | before | after |
+|---|---|---|---|
+| 1–4 kHz | 102.4 dB | 102.4 | 102.5 |
+| 14–16 kHz | 94.2 dB | 94.2 | 94.0 |
+| 16–17 kHz | 93.5 dB | **71.3** | 93.6 |
+| 17–19 kHz | 93.3 dB | **23.4** | 93.2 |
+| 19–21 kHz | 91.1 dB | **23.4** | 91.3 |
+
+Everything above 16.03 kHz was 70 dB down on the reference at both 44100 and
+48000 Hz. `SFB_LONG_32000`/`_44100`/`_48000` held 22 boundaries where the
+low-sample-rate tables beside them hold 23 — the final `576` was missing, so
+requantisation's `sfb.windows(2)` had no window for the last band and every
+spectral line in it stayed zero. The Huffman decode had read those lines
+correctly all along (instrumented: it fills to line ~487 of 576); they were
+discarded one step later.
+
+The symptom read as a fixed-frequency lowpass rather than a table error,
+because the 21st boundary sits at 16005 Hz at 44100 Hz and 16000 Hz at
+48000 Hz — the tables are designed around frequency, so two different line
+indices land at the same place. 32000 Hz was affected too (its 21st boundary
+is 550 of 576, 15278 Hz) but carries little there. The low-sample-rate rates
+were unaffected in practice: their last band is above anything a real
+encoder codes at 16/22.05/24 kHz.
+
+Whole-file effect, `-f s16le` against the reference, mono pink noise at
+128 kbit/s (mean absolute sample error out of 32768):
+
+| rate | before | after |
+|---|---|---|
+| 32000 | 37.3 | 37.9 |
+| 44100 | 343.0 | 46.0 |
+| 48000 | 350.3 | 47.5 |
+
+`every_long_sfb_table_reaches_the_last_spectral_line` and
+`requantisation_covers_every_band_the_table_declares` (`layer3.rs`) hold both
+halves of the invariant; both fail if either half is reverted.
 
 ### MPEG-2 low-sample-rate Layer III (issue #364) — landed; MPEG-2.5 explicitly gated off
 

@@ -36,6 +36,17 @@ use crate::synthesis::Synthesis;
 use crate::tables::{ALIAS_CI, PRETAB, SCALEFAC_COMPRESS};
 
 const LINES: usize = 576;
+
+/// Scalefactor bands requantisation walks, which must be at least the most
+/// any long table declares.
+///
+/// 22, not 21: the last band carries no transmitted scalefactor (only 21 are
+/// sent, so its `scalefac`/`pretab` lookups fall off the end and read 0, which
+/// is what the standard specifies for it) but its lines are coded like any
+/// other. Stopping at 21 left every line above the 21st boundary at zero —
+/// measured against ffmpeg 9.0.1 as a 70 dB hole above 16.03 kHz at 44.1 and
+/// 48 kHz. See `tables.rs` above `SFB_LONG_32000`.
+const REQUANT_BANDS: usize = 22;
 const SUBBANDS: usize = 32;
 const LINES_PER_SUBBAND: usize = 18;
 const GRANULES: usize = 2;
@@ -364,7 +375,7 @@ fn decode_granule(
     // for the same role, unchanged from before. `subblock_gain` is omitted
     // (only applies to `block_type == 2`, which returns early above).
     let gain_term = 2f64.powf(0.25 * (f64::from(g.global_gain) - 210.0));
-    for (band, win) in sfb.windows(2).enumerate().take(21) {
+    for (band, win) in sfb.windows(2).enumerate().take(REQUANT_BANDS) {
         let &[lo, hi] = win else { continue };
         let scale_exp = -0.5
             * (if g.scalefac_scale { 2.0 } else { 1.0 })
@@ -658,6 +669,59 @@ fn sfb_long_for(sample_rate_hz: u32) -> &'static [u16] {
         11025 => &SFB_LONG_11025,
         12000 => &SFB_LONG_12000,
         _ => &SFB_LONG_44100,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+mod sfb_table_tests {
+    use super::*;
+
+    /// Every long scalefactor-band table must partition all 576 spectral
+    /// lines, because requantisation walks it with `windows(2)` and a line
+    /// no window covers is silently left at zero.
+    ///
+    /// This is the invariant the MPEG-1 tables violated: they stopped at
+    /// their 21st boundary (418 at 44.1 kHz, 384 at 48 kHz, 550 at 32 kHz),
+    /// so every line above it decoded to silence. Measured against
+    /// ffmpeg 9.0.1, that was a 70 dB hole above 16.03 kHz on full-band
+    /// content at 44.1 and 48 kHz.
+    #[test]
+    fn every_long_sfb_table_reaches_the_last_spectral_line() {
+        for rate in [8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000] {
+            let sfb = sfb_long_for(rate);
+            assert_eq!(
+                sfb.first().copied(),
+                Some(0),
+                "{rate} Hz: the table must start at line 0"
+            );
+            assert_eq!(
+                sfb.last().copied(),
+                Some(LINES as u16),
+                "{rate} Hz: the table must end at line {LINES}, or requantisation drops the top \
+                 band and everything above it decodes to silence"
+            );
+            assert!(
+                sfb.windows(2).all(|w| w[0] < w[1]),
+                "{rate} Hz: boundaries must strictly increase"
+            );
+        }
+    }
+
+    /// The requantisation loop's `take()` must not cut the table short —
+    /// the other half of the same bug, and the half a table-only check
+    /// would miss.
+    #[test]
+    fn requantisation_covers_every_band_the_table_declares() {
+        for rate in [16000, 22050, 24000, 32000, 44100, 48000] {
+            let sfb = sfb_long_for(rate);
+            let bands = sfb.len() - 1;
+            assert!(
+                bands <= REQUANT_BANDS,
+                "{rate} Hz: the table declares {bands} bands but requantisation walks only \
+                 {REQUANT_BANDS}"
+            );
+        }
     }
 }
 

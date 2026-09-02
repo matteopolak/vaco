@@ -76,17 +76,33 @@ pub(crate) const SYNTHESIS_WINDOW: [f32; 512] = [
     3.0518e-05, 3.0518e-05, 1.5259e-05, 1.5259e-05, 1.5259e-05, 1.5259e-05, 1.5259e-05, 1.5259e-05,
 ];
 // Scalefactor-band boundary tables, machine-generated from ISO/IEC 11172-3
-// Annex B Table 3-B.8 (long: 22 boundaries / 21 bands; short: 13 boundaries /
+// Annex B Table 3-B.8 (long: 23 boundaries / 22 bands; short: 13 boundaries /
 // 12 bands, one window) and ISO/IEC 13818-3 Annex B Table B.2 for the
 // low-sample-rate rates.
+//
+// The MPEG-1 long tables' final `576` was missing until it was measured back
+// in: the generated rows stopped at the *21st* boundary, so the last band
+// (418..576 at 44.1 kHz, 384..576 at 48 kHz, 550..576 at 32 kHz) had no
+// window in requantisation's `sfb.windows(2)` and every spectral line in it
+// stayed zero. Measured against ffmpeg 9.0.1 on full-band pink noise: our
+// output was 70 dB down on the reference's above 16.03 kHz at both 44.1 and
+// 48 kHz — the frequency each table's 21st boundary happens to sit at, which
+// is why the symptom looked like a fixed-Hz lowpass rather than a table
+// error. The low-sample-rate tables below always had their `576` and were
+// unaffected in practice, their last band being above anything a real
+// encoder codes at those rates.
+//
+// Only 21 scalefactors are transmitted for a long block, so the last band's
+// `scalefac`/`pretab` lookups fall off the end of their tables and read 0 —
+// which is what the standard specifies for it, not an accident of indexing.
 
-pub(crate) const SFB_LONG_32000: [u16; 22] = [0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 54, 66, 82, 102, 126, 156, 194, 240, 296, 364, 448, 550];
+pub(crate) const SFB_LONG_32000: [u16; 23] = [0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 54, 66, 82, 102, 126, 156, 194, 240, 296, 364, 448, 550, 576];
 #[allow(dead_code, reason = "reserved for the short-block decode path, not yet implemented")]
 pub(crate) const SFB_SHORT_32000: [u16; 13] = [0, 4, 8, 12, 16, 22, 30, 42, 58, 78, 104, 138, 180];
-pub(crate) const SFB_LONG_44100: [u16; 22] = [0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 52, 62, 74, 90, 110, 134, 162, 196, 238, 288, 342, 418];
+pub(crate) const SFB_LONG_44100: [u16; 23] = [0, 4, 8, 12, 16, 20, 24, 30, 36, 44, 52, 62, 74, 90, 110, 134, 162, 196, 238, 288, 342, 418, 576];
 #[allow(dead_code, reason = "reserved for the short-block decode path, not yet implemented")]
 pub(crate) const SFB_SHORT_44100: [u16; 13] = [0, 4, 8, 12, 16, 22, 30, 40, 52, 66, 84, 106, 136];
-pub(crate) const SFB_LONG_48000: [u16; 22] = [0, 4, 8, 12, 16, 20, 24, 30, 36, 42, 50, 60, 72, 88, 106, 128, 156, 190, 230, 276, 330, 384];
+pub(crate) const SFB_LONG_48000: [u16; 23] = [0, 4, 8, 12, 16, 20, 24, 30, 36, 42, 50, 60, 72, 88, 106, 128, 156, 190, 230, 276, 330, 384, 576];
 #[allow(dead_code, reason = "reserved for the short-block decode path, not yet implemented")]
 pub(crate) const SFB_SHORT_48000: [u16; 13] = [0, 4, 8, 12, 16, 22, 28, 38, 50, 64, 80, 100, 126];
 // `SFB_LONG_16000`/`22050`/`24000` are the MPEG-2 low-sample-rate long
