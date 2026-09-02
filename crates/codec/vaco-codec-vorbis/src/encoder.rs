@@ -28,7 +28,7 @@
 //! `Vaco-Spec-Ref: vorbis-i sections 4.2, 4.3 and 7.2`
 
 use vaco_codec_core::{Accept, Caps, Encoder, Machine};
-use vaco_core::{Error, Result};
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_frame::{Frame, FrameData};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::{Packet, PacketFlags};
@@ -298,6 +298,29 @@ impl VorbisEncoder {
                 base.saturating_add(i64::from(self.windows_emitted) * i64::try_from(HOP).unwrap_or(i64::MAX))
             })
             .map_or(vaco_core::Timestamp::NONE, vaco_core::Timestamp::new);
+        // Same bug class as `vaco-codec-flac`/`vaco-codec-alac`'s encoders,
+        // measured worse here: this was never set at all, and
+        // `vaco-mux-ogg::Writer::write_packet` sums exactly this field into
+        // each stream's granule position (`st.granule_cursor =
+        // st.granule_cursor.saturating_add(duration_ticks)`), which is
+        // Ogg's *only* authoritative duration/seek marker. Leaving it at
+        // the `Duration` default did not just undercount the last packet
+        // the way MP4's `stts` did -- it froze the granule position at
+        // zero for the *entire* file. Measured: `vaco -i mono.wav -c:a
+        // vorbis out.ogg` produced a file `ffprobe` reported as
+        // `duration=N/A` for, and decoding it through `ffmpeg` logged
+        // "timestamp discontinuity" and "non monotonically increasing
+        // dts". Every emitted window is exactly `HOP` samples of new
+        // decoder output, including the silence-padded tail windows
+        // `emit_final` emits (Vorbis trims padding via the container's
+        // truncated last granule position, not a short final packet the
+        // way FLAC/ALAC's block coders do), so unlike those two this
+        // encoder's per-packet duration is uniform -- no separate
+        // short-final-block case to get right.
+        let time_base = Rational::new(1, i32::try_from(state.sample_rate).unwrap_or(1).max(1));
+        packet.duration = Timestamp::new(i64::try_from(HOP).unwrap_or(0))
+            .to_duration(time_base)
+            .unwrap_or(Duration::ZERO);
         self.windows_emitted = self.windows_emitted.wrapping_add(1);
         self.machine.emit(packet);
         Ok(())
@@ -589,6 +612,49 @@ mod tests {
             pts_values[1].ticks(),
             Some(1000 + i64::try_from(HOP).unwrap())
         );
+    }
+
+    /// The `Packet::duration` twin of the `pts` regression above, and the
+    /// more severe one: `vaco-mux-ogg::Writer::write_packet` sums exactly
+    /// this field into the stream's granule position, Ogg's only
+    /// authoritative duration/seek marker, so leaving it unset did not
+    /// merely lose a timestamp on one packet -- it froze every page's
+    /// granule position at zero for the whole file (`ffprobe` reported
+    /// `duration=N/A`, and `ffmpeg`'s own decode logged a timestamp
+    /// discontinuity), reproduced end to end via `vaco -i mono.wav -c:a
+    /// vorbis out.ogg`. Every window is exactly `HOP` samples of new
+    /// decoder output including the silence-padded tail `emit_final`
+    /// emits, so unlike `vaco-codec-flac`/`vaco-codec-alac` there is no
+    /// separate short-final-block shape to check here: every packet's
+    /// duration must be the same non-zero `HOP`-samples-at-48kHz value.
+    #[test]
+    fn every_packet_carries_a_real_nonzero_duration() {
+        let mut budget = Budget::new(Limits::permissive());
+        let mut enc = VorbisEncoder::new(Limits::permissive());
+        let samples = vec![0.1f32; BLOCK_SIZE * 3];
+        let frame = mono_f32p_frame(&mut budget, &samples, 1000);
+        enc.send_frame(Some(&frame)).unwrap();
+        enc.send_frame(None).unwrap();
+
+        let expected = Timestamp::new(i64::try_from(HOP).unwrap())
+            .to_duration(Rational::new(1, 48_000))
+            .unwrap();
+        assert_ne!(expected, Duration::ZERO);
+
+        let mut durations = Vec::new();
+        while let Ok(p) = enc.receive_packet() {
+            durations.push(p.duration);
+        }
+        assert!(
+            !durations.is_empty(),
+            "expected at least one packet from three full windows plus the flush tail"
+        );
+        for d in durations {
+            assert_eq!(
+                d, expected,
+                "every Vorbis packet is exactly HOP samples of new decoder output, tail included"
+            );
+        }
     }
 
     /// `Encoder::prime_audio` seeding `state` early must not bypass
