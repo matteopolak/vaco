@@ -407,7 +407,7 @@ mod fallback {
 
     /// Empty on this target: there is nothing to configure for a protocol
     /// that cannot open anything.
-    #[derive(Debug, Clone, PartialEq, Default, Options)]
+    #[derive(Debug, Clone, PartialEq, Options)]
     #[options(name = "unix", help = "Unix domain socket (unavailable on this platform)")]
     pub struct UnixOptions {}
 
