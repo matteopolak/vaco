@@ -438,6 +438,5 @@ mod tests {
     #[test]
     fn max_page_len_matches_the_worst_case_arithmetic() {
         assert_eq!(MAX_PAGE_LEN, 27 + 255 + 255 * 255);
-        assert_eq!(MAX_PAGE_LEN, 65_307);
     }
 }
