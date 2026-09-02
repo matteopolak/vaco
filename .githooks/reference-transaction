@@ -1,61 +1,88 @@
 #!/bin/sh
-# Refuse a non-fast-forward move of refs/heads/main.
+# Two things at the one point `commit-tree` cannot bypass: a ref update.
 #
-# The private-index recipe ends with `git update-ref refs/heads/main "$commit"
-# "$BASE"`, whose second argument is a compare-and-swap. Drop it and the move
-# always succeeds, so a concurrent agent's commits stop being reachable — they
-# survive only in the reflog, and their working-tree files go with them. That
-# happened twice in one night despite being documented, which is why this is
-# now enforced rather than described.
+#   1. Refuse a non-fast-forward move of refs/heads/main.  (blocking)
+#   2. Warn when a commit touching implementation code lacks its clean-room
+#      provenance trailers.                                 (warning only)
 #
-# Note git reports an all-zero old value when the caller supplied no expected
-# value, which is exactly the unguarded case. So the pre-update tip is read
-# here rather than trusted from the transaction.
+# On (1): the private-index recipe ends with `git update-ref refs/heads/main
+# "$commit" "$BASE"`, whose second argument is a compare-and-swap. Drop it and
+# the move always succeeds, so a concurrent agent's commits stop being
+# reachable — they survive only in the reflog, and their working-tree files go
+# with them. That happened thirteen times in one night while merely documented,
+# which is why it is now enforced. Note git reports an all-zero old value when
+# the caller supplied none, which is exactly the unguarded case, so the real
+# tip is read here rather than trusted from the transaction.
 #
-# Fails open: if either end cannot be resolved, the update is allowed. This
-# catches main provably moving off its own history, nothing more.
+# On (2): `prepare-commit-msg` writes those trailers, and `commit-tree` does
+# not run hooks, so every private-index commit misses them unless the author
+# types them. This warns rather than refuses on purpose — a missing trailer is
+# fixable later in the planned history pass, whereas a refused commit can
+# deadlock an agent that retries in a loop.
 #
-# For a deliberate rewrite (the planned history pass):
-#   VACO_ALLOW_NONFF=1 git update-ref ...
+# Fails open throughout: anything unresolvable is allowed.
+#
+# For a deliberate rewrite: VACO_ALLOW_NONFF=1
 
 [ "$1" = "prepared" ] || exit 0
-[ -n "$VACO_ALLOW_NONFF" ] && exit 0
 
 zero=0000000000000000000000000000000000000000
+txn=$(cat)
 status=0
 
-while read -r old new ref; do
+# 1. Fast-forward enforcement.
+if [ -z "$VACO_ALLOW_NONFF" ]; then
+    echo "$txn" | while read -r old new ref; do
+        [ "$ref" = "refs/heads/main" ] || continue
+        [ "$new" = "$zero" ] && continue
+
+        if [ "$old" = "$zero" ]; then
+            old=$(git rev-parse --verify --quiet refs/heads/main) || continue
+            [ -n "$old" ] || continue
+        fi
+
+        git rev-parse --verify --quiet "$old^{commit}" >/dev/null 2>&1 || continue
+        git rev-parse --verify --quiet "$new^{commit}" >/dev/null 2>&1 || continue
+        git merge-base --is-ancestor "$old" "$new" 2>/dev/null && continue
+
+        echo "refusing to move main off its own history:" >&2
+        echo "  old $old" >&2
+        echo "  new $new" >&2
+        echo "This discards every commit reachable from old but not new." >&2
+        echo "Thirteen commits were lost this way in one night." >&2
+        echo "" >&2
+        echo "Use the compare-and-swap form:" >&2
+        echo "  git update-ref refs/heads/main \"\$commit\" \"\$BASE\"" >&2
+        echo "which fails loudly when HEAD moved, so you can rebuild on it." >&2
+        echo "" >&2
+        echo "For a deliberate rewrite: VACO_ALLOW_NONFF=1" >&2
+        exit 1
+    done || status=1
+fi
+
+[ "$status" -eq 0 ] || exit "$status"
+
+# 2. Provenance trailer warning. Never fails the transaction.
+echo "$txn" | while read -r old new ref; do
     [ "$ref" = "refs/heads/main" ] || continue
-
-    # Deleting main is not this hook's concern.
     [ "$new" = "$zero" ] && continue
-
-    # An all-zero old means no compare-and-swap was supplied; the real
-    # pre-update tip is whatever main points at right now.
-    if [ "$old" = "$zero" ]; then
-        old=$(git rev-parse --verify --quiet refs/heads/main) || continue
-        [ -n "$old" ] || continue
-    fi
-
+    [ "$old" = "$zero" ] && continue
     git rev-parse --verify --quiet "$old^{commit}" >/dev/null 2>&1 || continue
     git rev-parse --verify --quiet "$new^{commit}" >/dev/null 2>&1 || continue
 
-    if git merge-base --is-ancestor "$old" "$new" 2>/dev/null; then
-        continue
-    fi
+    for c in $(git rev-list "$old..$new" 2>/dev/null); do
+        git diff-tree --no-commit-id --name-only -r "$c" 2>/dev/null |
+            grep -q '^crates/\(codec\|format\|filter\|signal\)/' || continue
+        git log -1 --format='%B' "$c" | grep -q '^Vaco-Provenance:' && continue
 
-    echo "refusing to move main off its own history:" >&2
-    echo "  old $old" >&2
-    echo "  new $new" >&2
-    echo "This discards every commit reachable from old but not new." >&2
-    echo "Three commits were lost this way tonight." >&2
-    echo "" >&2
-    echo "Use the compare-and-swap form:" >&2
-    echo "  git update-ref refs/heads/main \"\$commit\" \"\$BASE\"" >&2
-    echo "which fails loudly when HEAD moved, so you can rebuild on the new tip." >&2
-    echo "" >&2
-    echo "For a deliberate rewrite: VACO_ALLOW_NONFF=1" >&2
-    status=1
+        short=$(git rev-parse --short "$c")
+        echo "warning: $short touches implementation code with no Vaco-Provenance trailer." >&2
+        echo "  commit-tree skips prepare-commit-msg, so these must be typed by hand:" >&2
+        echo "    Vaco-Provenance: spec | rfc | paper | blackbox | original | cleanroom-doc:<path>" >&2
+        echo "    Vaco-Spec-Ref: <id declared in provenance/*.toml> <clause>" >&2
+        echo "    Vaco-Clean-Room: yes" >&2
+        echo "  Measuring against the ffmpeg binary is 'blackbox'." >&2
+    done
 done
 
-exit $status
+exit 0
