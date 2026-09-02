@@ -1,0 +1,43 @@
+# Decode conformance: gbrpf32le still-image decoders sharing a `gbrpf32le`
+# decode target. Each of these formats is lossless by design (a palette or
+# direct-sample dump, no transform quantisation) -- `raw-exact`.
+#
+# Every image decode case in this file currently hits the same block, so
+# it is stated once here rather than sixteen times: `vaco` refuses each
+# fixture with "this container needs timestamps and the packet has none"
+# -- `vaco-demux-image2` does not stamp a timestamp on the frame(s) it
+# demuxes, and the transcode pipeline's filtering stage refuses any packet
+# that arrives without one. This is a demux-layer gap, not (necessarily)
+# the whole story behind the previously-known "9 of 13 image formats report
+# 0x0, pix_fmt=unknown" probe defect, but it blocks every one of these
+# codecs identically and is worth naming precisely rather than re-deriving
+# per file. Not fixed here (out of the codec crates named off-limits for
+# this pass, and this is format/demux code besides) -- recorded for
+# whoever owns vaco-demux-image2.
+
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build.
+
+schema = 1
+suite  = "decode-image-gbrpf32le"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "exr"
+source   = "generated://exr.exr"
+tags     = ["decoder:exr"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-frames:v", "1", "-update", "1", "-c:v", "exr", "-f", "image2"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "gbrpf32le", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

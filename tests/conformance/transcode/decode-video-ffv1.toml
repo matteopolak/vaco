@@ -1,0 +1,34 @@
+# Decode conformance: FFV1, the one lossless video codec registered by
+# default. `raw-exact` is the only defensible bar for a codec whose entire
+# design point is bit-exact reconstruction.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build: KNOWN, already-assigned divergence -- 99.42% of decoded bytes
+# differ from the reference (max_abs=218, rms=84.03), consistent with the
+# coordinator's own measurement of 99.6% wrong from byte 0. Declared here
+# (not skipped) so this suite catches a regression or a fix the same way it
+# caught the original break; not chased in this pass.
+
+schema = 1
+suite  = "decode-video-ffv1"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "ffv1"
+source   = "generated://ffv1.mkv"
+tags     = ["decoder:ffv1"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-c:v", "ffv1", "-f", "matroska"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

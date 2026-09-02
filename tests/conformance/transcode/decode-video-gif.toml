@@ -1,0 +1,34 @@
+# Decode conformance: GIF. Own file: this fixture's native reconstruction
+# format is `bgra` (GIF's palette expands with an alpha channel), unlike the
+# other lossless-image manifests in this directory. `raw-exact` because GIF
+# is a lossless indexed-palette format.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build: KNOWN DIVERGENCE, newly observed here -- `vaco` refuses with
+# "frame sent to a source does not match the link's negotiated format",
+# the same pixel-format-negotiation error family as decode-video-vp9.toml.
+# Not chased here.
+
+schema = 1
+suite  = "decode-video-gif"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "gif"
+source   = "generated://gif.gif"
+tags     = ["decoder:gif"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-frames:v", "1", "-update", "1", "-c:v", "gif", "-f", "gif"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "bgra", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

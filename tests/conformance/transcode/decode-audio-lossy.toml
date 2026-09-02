@@ -1,0 +1,86 @@
+# Decode conformance: the five registered lossy audio decoders. `mp2`
+# requires `patent-encumbered-aac-decode` is NOT needed here (mp2/mp3/ac3
+# ship default); `aac` needs `--features patent-encumbered-aac-decode` and
+# skips honestly (per D4) when that feature is off.
+#
+# # The timing question, decided deliberately (plan priority task, #68)
+#
+# This compares whole decoded streams with no delay/priming-sample
+# alignment. An encoder-delay trim would hide the exact defect this suite
+# exists to catch (MP3/AAC's untrimmed encoder delay, ~1303/~1181 samples
+# per the coordinator's own measurement) behind a normalisation step that
+# has to already know the delay to remove it -- circular for a bug that is
+# precisely "we don't know/handle the delay". `raw-tolerant` with no
+# alignment step reports the true divergence; that is the choice, made
+# knowingly, not a byproduct of not having built alignment.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build -- every one of the five currently diverges from the
+# reference decode of the identical fixture:
+#   - mp2: 26.64% of bytes differ, max_abs=255, rms=19.47
+#   - mp3: 4.72% of bytes differ, max_abs=255, rms=22.58
+#   - ac3: 98.46% of bytes differ, max_abs=255, rms=155.37 (KNOWN, already
+#     assigned -- coordinator's own measurement: mean error 6806/32768, not
+#     a time offset)
+#   - aac: length mismatch, 90112 bytes decoded against the reference's
+#     88200 (KNOWN, already assigned -- untrimmed encoder delay)
+#   - vorbis: length mismatch, 180224 bytes decoded against the reference's
+#     176640 -- newly observed here, same *family* of defect (an untrimmed
+#     priming region) as the AAC delay bug, not chased further
+# `max_abs=255`/large rms at the byte level is consistent with the known
+# defects above, not with a small quantization difference (contrast
+# decode-video-prores.toml, where a real lossy-but-correct codec's
+# divergence is measured in single digits). tolerance.max_abs is set to 4 --
+# a genuinely correct decoder's own floating-point-to-s16 rounding budget,
+# not fitted to any of the five observed failures above.
+
+schema = 1
+suite  = "decode-audio-lossy"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "mp2"
+source   = "generated://mp2.mp2"
+tags     = ["decoder:mp2"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "mp2", "-f", "mp2"]
+
+[[media]]
+id       = "mp3"
+source   = "generated://mp3.mp3"
+tags     = ["decoder:mp3"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "libmp3lame", "-f", "mp3"]
+
+[[media]]
+id       = "ac3"
+source   = "generated://ac3.ac3"
+tags     = ["decoder:ac3"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "ac3", "-f", "ac3"]
+
+[[media]]
+id       = "aac"
+source   = "generated://aac.mp4"
+tags     = ["decoder:aac"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "aac", "-f", "mp4"]
+
+[[media]]
+id       = "vorbis"
+source   = "generated://vorbis.ogg"
+tags     = ["decoder:vorbis"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-ac", "2", "-strict", "experimental", "-c:a", "vorbis", "-f", "ogg"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "s16le", "-"] },
+]
+
+[compare]
+mode          = "raw-tolerant"
+justification = "s16 rounding budget for a correct lossy-audio decoder census against a float reference path (plan priority task #68); every one of the five currently exceeds it by one to two orders of magnitude -- see this file's own header for the per-codec measurement, none of it fitted to pass."
+timeout       = "20s"
+
+[compare.tolerance]
+max_abs = 4.0

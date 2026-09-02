@@ -1,0 +1,33 @@
+# Decode conformance: `pcm_u16le`, a headerless raw-PCM variant that needs an
+# explicit input format on both sides (no container header names the sample
+# format). Differential against the reference's own decode of the identical
+# fixture (D6). PCM decode is a direct reinterpretation with no coefficient
+# freedom, so `raw-exact` is the right bar the same way it is for the
+# plain-container PCM formats in decode-audio-pcm-lossless.toml.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build: expected fail: none observed -- decode was EXACT (88200 bytes).
+
+schema = 1
+suite  = "decode-audio-pcm-u16le"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "pcm-u16le"
+source   = "generated://pcm-u16le.bin"
+tags     = ["decoder:pcm_u16le"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_u16le", "-f", "u16le"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-f", "u16le", "-ar", "44100", "-ac", "1", "-i", "{media}", "-f", "s16le", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

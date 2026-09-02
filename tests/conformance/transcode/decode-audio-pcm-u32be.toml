@@ -1,0 +1,33 @@
+# Decode conformance: `pcm_u32be`, a headerless raw-PCM variant that needs an
+# explicit input format on both sides (no container header names the sample
+# format). Differential against the reference's own decode of the identical
+# fixture (D6). PCM decode is a direct reinterpretation with no coefficient
+# freedom, so `raw-exact` is the right bar the same way it is for the
+# plain-container PCM formats in decode-audio-pcm-lossless.toml.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build: expected fail: none observed -- decode was EXACT (176400 bytes).
+
+schema = 1
+suite  = "decode-audio-pcm-u32be"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "pcm-u32be"
+source   = "generated://pcm-u32be.bin"
+tags     = ["decoder:pcm_u32be"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_u32be", "-f", "u32be"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-f", "u32be", "-ar", "44100", "-ac", "1", "-i", "{media}", "-f", "s16le", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

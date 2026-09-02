@@ -1,0 +1,58 @@
+# Decode conformance: the four registered ADPCM decoders. ADPCM decode is a
+# deterministic table walk from the bitstream (the lossy step is entirely on
+# the encode side), so a correct decoder must reproduce the reference's
+# decode byte for byte -- `raw-exact` is the right bar, same reasoning as the
+# PCM manifests in this directory.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build:
+#   - adpcm_ima_wav, adpcm_ms, adpcm_ima_qt: KNOWN DIVERGENCE -- `vaco`
+#     refuses each with "a stream being transcoded has no known input
+#     codec": the container is demuxed but never mapped to the registered
+#     decoder. Three of four default-built ADPCM decoders are registered and
+#     unreachable (CLAUDE.md's "implemented is not reachable"). Not chased
+#     here -- recorded for the owning demux/dispatch crate.
+#   - adpcm_swf: KNOWN DIVERGENCE -- length mismatch, 90090 bytes decoded
+#     against the reference's 90112.
+
+schema = 1
+suite  = "decode-audio-adpcm"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "adpcm-ima-wav"
+source   = "generated://adpcm-ima-wav.wav"
+tags     = ["decoder:adpcm_ima_wav"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "adpcm_ima_wav", "-f", "wav"]
+
+[[media]]
+id       = "adpcm-ms"
+source   = "generated://adpcm-ms.wav"
+tags     = ["decoder:adpcm_ms"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "adpcm_ms", "-f", "wav"]
+
+[[media]]
+id       = "adpcm-swf"
+source   = "generated://adpcm-swf.flv"
+tags     = ["decoder:adpcm_swf"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "adpcm_swf", "-f", "flv"]
+
+[[media]]
+id       = "adpcm-ima-qt"
+source   = "generated://adpcm-ima-qt.mov"
+tags     = ["decoder:adpcm_ima_qt"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "adpcm_ima_qt", "-f", "mov"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "s16le", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

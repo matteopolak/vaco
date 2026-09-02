@@ -1,0 +1,33 @@
+# Decode conformance: `pcm_vidc`, a headerless raw-PCM variant that needs an
+# explicit input format on both sides (no container header names the sample
+# format). Differential against the reference's own decode of the identical
+# fixture (D6). PCM decode is a direct reinterpretation with no coefficient
+# freedom, so `raw-exact` is the right bar the same way it is for the
+# plain-container PCM formats in decode-audio-pcm-lossless.toml.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build: KNOWN DIVERGENCE (2026-09-02): 53.97% of decoded bytes differ from the reference, max_abs=188 of 255 -- large enough to be a wrong table/formula, not rounding. Recorded for the owning crate (vaco-codec-pcm); not chased here.
+
+schema = 1
+suite  = "decode-audio-pcm-vidc"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "pcm-vidc"
+source   = "generated://pcm-vidc.bin"
+tags     = ["decoder:pcm_vidc"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_vidc", "-f", "vidc"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-f", "vidc", "-ar", "44100", "-ac", "1", "-i", "{media}", "-f", "s16le", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

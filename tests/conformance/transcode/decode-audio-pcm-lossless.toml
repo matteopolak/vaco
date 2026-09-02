@@ -1,0 +1,118 @@
+# Decode conformance: PCM sample formats and the two lossless audio codecs
+# whose own encode round-trips cleanly in a plain container (RFC/spec: PCM
+# decode is a direct reinterpretation, no coefficient freedom; FLAC and ALAC
+# are lossless by design). Differential against the reference's own decode
+# of the identical fixture (D6), same methodology as h264-jvt-conformance.toml.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build: all fifteen decode byte-for-byte identical to the reference's
+# own decode of the same fixture (`EXACT`, not merely non-crashing) -- these
+# are a working baseline, not an expected-red set.
+
+schema = 1
+suite  = "decode-audio-pcm-lossless"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "pcm-s16le"
+source   = "generated://pcm-s16le.wav"
+tags     = ["decoder:pcm_s16le"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_s16le", "-f", "wav"]
+
+[[media]]
+id       = "pcm-s16be"
+source   = "generated://pcm-s16be.aiff"
+tags     = ["decoder:pcm_s16be"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_s16be", "-f", "aiff"]
+
+[[media]]
+id       = "pcm-s24le"
+source   = "generated://pcm-s24le.wav"
+tags     = ["decoder:pcm_s24le"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_s24le", "-f", "wav"]
+
+[[media]]
+id       = "pcm-s24be"
+source   = "generated://pcm-s24be.aiff"
+tags     = ["decoder:pcm_s24be"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_s24be", "-f", "aiff"]
+
+[[media]]
+id       = "pcm-s32le"
+source   = "generated://pcm-s32le.wav"
+tags     = ["decoder:pcm_s32le"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_s32le", "-f", "wav"]
+
+[[media]]
+id       = "pcm-s32be"
+source   = "generated://pcm-s32be.aiff"
+tags     = ["decoder:pcm_s32be"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_s32be", "-f", "aiff"]
+
+[[media]]
+id       = "pcm-u8"
+source   = "generated://pcm-u8.wav"
+tags     = ["decoder:pcm_u8"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_u8", "-f", "wav"]
+
+[[media]]
+id       = "pcm-f32le"
+source   = "generated://pcm-f32le.wav"
+tags     = ["decoder:pcm_f32le"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_f32le", "-f", "wav"]
+
+[[media]]
+id       = "pcm-f32be"
+source   = "generated://pcm-f32be.aiff"
+tags     = ["decoder:pcm_f32be"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_f32be", "-f", "aiff"]
+
+[[media]]
+id       = "pcm-f64le"
+source   = "generated://pcm-f64le.wav"
+tags     = ["decoder:pcm_f64le"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_f64le", "-f", "wav"]
+
+[[media]]
+id       = "pcm-f64be"
+source   = "generated://pcm-f64be.aiff"
+tags     = ["decoder:pcm_f64be"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_f64be", "-f", "aiff"]
+
+[[media]]
+id       = "pcm-alaw"
+source   = "generated://pcm-alaw.wav"
+tags     = ["decoder:pcm_alaw"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_alaw", "-f", "wav"]
+
+[[media]]
+id       = "pcm-mulaw"
+source   = "generated://pcm-mulaw.wav"
+tags     = ["decoder:pcm_mulaw"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_mulaw", "-f", "wav"]
+
+[[media]]
+id       = "flac"
+source   = "generated://flac.flac"
+tags     = ["decoder:flac"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "flac", "-f", "flac"]
+
+[[media]]
+id       = "alac"
+source   = "generated://alac.mov"
+tags     = ["decoder:alac"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "alac", "-f", "mov"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "s16le", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

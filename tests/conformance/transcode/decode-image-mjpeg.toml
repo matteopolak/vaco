@@ -1,0 +1,52 @@
+# Decode conformance: MJPEG (baseline JPEG), the one lossy still-image
+# codec in this batch. JPEG's IDCT has historically allowed small
+# implementation-defined rounding differences -- `raw-tolerant`, not
+# `raw-exact`, unlike its lossless siblings in the other decode-image-*.toml
+# files.
+#
+# Every image decode case in this file currently hits the same block, so
+# it is stated once here rather than sixteen times: `vaco` refuses each
+# fixture with "this container needs timestamps and the packet has none"
+# -- `vaco-demux-image2` does not stamp a timestamp on the frame(s) it
+# demuxes, and the transcode pipeline's filtering stage refuses any packet
+# that arrives without one. This is a demux-layer gap, not (necessarily)
+# the whole story behind the previously-known "9 of 13 image formats report
+# 0x0, pix_fmt=unknown" probe defect, but it blocks every one of these
+# codecs identically and is worth naming precisely rather than re-deriving
+# per file. Not fixed here (out of the codec crates named off-limits for
+# this pass, and this is format/demux code besides) -- recorded for
+# whoever owns vaco-demux-image2.
+
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build: blocked by the demux-timestamp gap above before any pixel
+# comparison happens. tolerance.max_abs = 2 is the small, conventional IDCT
+# rounding budget (matching this project's own `scharr` filter ruling in
+# AGENT-CONSTRAINTS.md for "small and unstructured" byte noise); it is not
+# fitted to this codec's actual output, since none was produced to fit to.
+
+schema = 1
+suite  = "decode-image-mjpeg"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "mjpeg"
+source   = "generated://mjpeg.jpg"
+tags     = ["decoder:mjpeg"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-frames:v", "1", "-update", "1", "-c:v", "mjpeg", "-f", "image2"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "yuvj444p", "-"] },
+]
+
+[compare]
+mode          = "raw-tolerant"
+justification = "conventional small IDCT rounding budget for baseline JPEG (see this project's own scharr filter ruling in AGENT-CONSTRAINTS.md for the same 'small and unstructured byte noise' standard); not fitted to an actual measurement because the demux-timestamp gap this file's own header names blocks the decode entirely as of 2026-09-02."
+timeout       = "20s"
+
+[compare.tolerance]
+max_abs = 2.0

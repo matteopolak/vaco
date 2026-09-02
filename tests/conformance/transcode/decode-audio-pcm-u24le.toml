@@ -1,0 +1,33 @@
+# Decode conformance: `pcm_u24le`, a headerless raw-PCM variant that needs an
+# explicit input format on both sides (no container header names the sample
+# format). Differential against the reference's own decode of the identical
+# fixture (D6). PCM decode is a direct reinterpretation with no coefficient
+# freedom, so `raw-exact` is the right bar the same way it is for the
+# plain-container PCM formats in decode-audio-pcm-lossless.toml.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build: KNOWN DIVERGENCE (2026-09-02): ours produced 88114 bytes against the reference's 88200 -- a length mismatch, not a rounding difference. Not chased further here; recorded for the owning crate (vaco-codec-pcm).
+
+schema = 1
+suite  = "decode-audio-pcm-u24le"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "pcm-u24le"
+source   = "generated://pcm-u24le.bin"
+tags     = ["decoder:pcm_u24le"]
+generate = ["-f", "lavfi", "-i", "sine=frequency=440:duration=1", "-c:a", "pcm_u24le", "-f", "u24le"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-f", "u24le", "-ar", "44100", "-ac", "1", "-i", "{media}", "-f", "s16le", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

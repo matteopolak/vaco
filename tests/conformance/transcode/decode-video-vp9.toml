@@ -1,0 +1,35 @@
+# Decode conformance: VP9. Own file because this fixture's own native
+# reconstruction format is `gbrp` (libvpx-vp9's default profile for this
+# source), not `yuv420p` like the sibling codecs in
+# decode-video-dct-yuv420p.toml -- the decode axis argv is shared across
+# every media entry in a file, so a differing target needs its own file.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build: KNOWN DIVERGENCE, newly observed here -- `vaco` refuses with
+# "frame sent to a source does not match the link's negotiated format",
+# a pixel-format-negotiation defect distinct from vp8's (vp8 is EXACT on the
+# same libvpx family, see decode-video-dct-yuv420p.toml). Not chased here.
+
+schema = 1
+suite  = "decode-video-vp9"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "vp9"
+source   = "generated://vp9.ivf"
+tags     = ["decoder:vp9"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-c:v", "libvpx-vp9", "-f", "ivf"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "gbrp", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"

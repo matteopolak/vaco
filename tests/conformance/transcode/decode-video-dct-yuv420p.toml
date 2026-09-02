@@ -1,0 +1,66 @@
+# Decode conformance: five block-transform video decoders sharing a plain
+# yuv420p decode target -- mpeg1video/mpeg2video/h263/h261 (ITU/MPEG DCT
+# codecs) and vp8 (libvpx, also yuv420p by default on this fixture).
+# `raw-exact` because `vp8`'s own measurement below shows it is achievable
+# for this codec family in this codebase, not merely aspirational.
+#
+# Measured 2026-09-02 against this machine's ffmpeg 9.0.1 and a full-feature
+# `vaco` build:
+#   - vp8: EXACT (23040 bytes, byte for byte) -- a working baseline.
+#   - mpeg1video: KNOWN DIVERGENCE -- length mismatch, 18432 bytes decoded
+#     against the reference's 115200 (decoded roughly a sixth of the
+#     frames). A real "decoded a fraction of the file and exited 0" defect
+#     in the sense CLAUDE.md warns about; not chased here.
+#   - mpeg2video: KNOWN DIVERGENCE -- same shape, 9216 bytes against the
+#     reference's 23040 (again a fraction of the expected output).
+#   - h263, h261: KNOWN DIVERGENCE -- `vaco` refuses both with "a stream
+#     being transcoded has no known input codec": registered decoders,
+#     unreachable from the AVI demux path. Not chased here.
+
+schema = 1
+suite  = "decode-video-dct-yuv420p"
+tool   = "transcode"
+tier   = "core"
+owner  = "@correctness-owner"
+
+[[media]]
+id       = "mpeg1video"
+source   = "generated://mpeg1video.mpeg"
+tags     = ["decoder:mpeg1video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=25:duration=1", "-c:v", "mpeg1video", "-f", "mpeg"]
+
+[[media]]
+id       = "mpeg2video"
+source   = "generated://mpeg2video.mpeg"
+tags     = ["decoder:mpeg2video"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-c:v", "mpeg2video", "-f", "mpeg"]
+
+[[media]]
+id       = "h263"
+source   = "generated://h263.avi"
+tags     = ["decoder:h263"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=176x144:rate=5:duration=1", "-c:v", "h263", "-f", "avi"]
+
+[[media]]
+id       = "h261"
+source   = "generated://h261.avi"
+tags     = ["decoder:h261"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=176x144:rate=5:duration=1", "-c:v", "h261", "-f", "avi"]
+
+[[media]]
+id       = "vp8"
+source   = "generated://vp8.ivf"
+tags     = ["decoder:vp8"]
+generate = ["-f", "lavfi", "-i", "testsrc=size=64x48:rate=5:duration=1", "-c:v", "libvpx", "-f", "ivf"]
+
+
+[[axis]]
+name   = "decode"
+values = [
+  { id = "decode", argv = ["-i", "{media}", "-f", "rawvideo", "-pix_fmt", "yuv420p", "-"] },
+]
+
+[compare]
+mode    = "raw-exact"
+capture = ["stdout", "exit-code"]
+timeout = "20s"
