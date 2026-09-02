@@ -843,18 +843,29 @@ restructuring a byte-exact decoder's core state.
 
 **Categorization** (field names as declared):
 
-- **Not needed by the walk at all.** `pic: &'p mut Picture` has zero read
-  or write sites in `ctu.rs` (`grep -c '\.pic\.' ctu.rs` is `0`) —
-  everything the CTU walk touches goes through `recon` instead, since
-  §34's own `ReconPicture` conversion moved every reconstruction write off
-  `pic`. `pic` is read in exactly two places, both *after* the walk
-  finishes on the same `Ctx`: `decoder.rs`'s own `recon.materialize_into
-  (walk.pic)` call, and the deblock-lag probe's `walk.pic.clone()` (test
-  only). A row worker's own task therefore does not need `pic` at all —
-  it belongs entirely to the sequential stage, the same "owns all mutable
-  state, runs on the caller's thread" role `vaco_codec_core::threading`'s
-  own module doc describes for frame-threading's header stage, applied
-  one level down to WPP's own row loop.
+- **Not needed by the per-CTU reconstruction task, but not simply
+  droppable either — corrected after an incomplete first pass.** `pic:
+  &'p mut Picture` has zero read or write sites in `ctu.rs` (`grep -c
+  '\.pic\.' ctu.rs` is `0`) — every reconstruction write during the CTU
+  walk goes through `recon` instead, since §34's own `ReconPicture`
+  conversion moved it off `pic`. The first version of this section read
+  that and concluded `pic` "belongs entirely to the sequential stage" —
+  wrong, caught by checking `deblock.rs`/`sao.rs` as well rather than
+  stopping at `ctu.rs`: `deblock::filter_picture`/`sao::filter_picture`
+  read and write `s.pic.{y,cb,cr}` extensively (every actual pixel
+  filtered goes through it), and `decoder.rs` calls both, `&mut walk`,
+  right after the CTU walk and `materialize_into` finish — the *same*
+  `Ctx` instance, not a different one. `pic` is genuinely needed, just
+  not by the part that splits into row workers: the accurate statement is
+  that a **per-row reconstruction task** does not need `pic` (it stays
+  out of whatever gets passed into each row worker), while the
+  **whole-picture deblock/SAO pass that currently runs once, serially,
+  after every row joins** still does, exactly as today, until *that*
+  pass is itself made row-lagged (named as future work in "Proposed
+  staging" above, not this step's own scope). This is a distinction
+  step 3 has to preserve, not a reason to remove the field: `pic` moves
+  into whatever struct represents the post-join, still-serial phase,
+  separate from the per-row task struct, rather than disappearing.
 - **Genuinely shared, read-only for the whole slice.** The ~28 SPS/PPS/
   slice-header-derived scalars and flags (`log2_ctb_size` through
   `max_transform_hierarchy_depth_inter`, `is_p_slice`, `ctbs_x`, the
