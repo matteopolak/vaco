@@ -113,20 +113,35 @@ pub(crate) struct CtuSao {
 /// that document names for `EdgeMarks`/`CuGrid` applied here too — a
 /// plain `Vec<Vec<CtuSao>>` is safe only because exactly one worker calls
 /// `begin_row`/`set`/`finish` today.
+///
+/// Step 3's first commit splits `shared` (geometry plus `published`) into
+/// its own type, [`SaoParamsGridShared`], separate from `current`/
+/// `current_band` — the same move `EdgeMarks` made, for the same reason
+/// (`docs/codec/hevc-wavefront-threading.md`'s "step 1 closed only half of
+/// each race"): `RowPublish` alone fixed reads; a future `Arc` around
+/// `SaoParamsGridShared` alone, with no `current` inside it, is what makes
+/// the write side shareable. `SaoParamsGrid` still bundles both today
+/// (single-threaded), but every method already routes through
+/// `self.shared`/`self.current` explicitly.
 #[derive(Debug, Clone)]
-pub(crate) struct SaoParamsGrid {
+struct SaoParamsGridShared {
     ctbs_x: usize,
     /// Total row bands (CTU rows) in the picture.
     n_bands: usize,
-    /// The CTU row [`SaoParamsGrid::set`] currently writes into; every
-    /// earlier row already lives in `published`.
-    current_band: usize,
-    current: Option<Vec<CtuSao>>,
     /// Every CTU row strictly before `current_band`, published the moment
     /// [`SaoParamsGrid::begin_row`]/[`SaoParamsGrid::finish`] moved past
     /// it — the read side ([`SaoParamsGrid::get`]) for any row not in
     /// `current`.
     published: crate::wavefront::RowPublish<Vec<CtuSao>>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct SaoParamsGrid {
+    shared: SaoParamsGridShared,
+    /// The CTU row [`SaoParamsGrid::set`] currently writes into; every
+    /// earlier row already lives in `shared.published`.
+    current_band: usize,
+    current: Option<Vec<CtuSao>>,
 }
 
 impl SaoParamsGrid {
@@ -137,11 +152,9 @@ impl SaoParamsGrid {
         let n_bands = usize::try_from(ctbs_y).unwrap_or(0).max(1);
         let current: Vec<CtuSao> = budget.alloc(ctbs_x)?;
         Ok(Self {
-            ctbs_x,
-            n_bands,
+            shared: SaoParamsGridShared { ctbs_x, n_bands, published: crate::wavefront::RowPublish::new(n_bands) },
             current_band: 0,
             current: Some(current),
-            published: crate::wavefront::RowPublish::new(n_bands),
         })
     }
 
@@ -151,7 +164,7 @@ impl SaoParamsGrid {
     /// `Vec<CtuSao>` this replaces.
     #[must_use]
     pub(crate) fn len(&self) -> usize {
-        self.ctbs_x.saturating_mul(self.n_bands)
+        self.shared.ctbs_x.saturating_mul(self.shared.n_bands)
     }
 
     /// Advance to CTU row `row`: publish `current` and allocate a fresh
@@ -173,9 +186,9 @@ impl SaoParamsGrid {
         }
         while self.current_band < row {
             if let Some(band) = self.current.take() {
-                self.published.publish(self.current_band, band)?;
+                self.shared.published.publish(self.current_band, band)?;
             }
-            self.current = Some(budget.alloc(self.ctbs_x)?);
+            self.current = Some(budget.alloc(self.shared.ctbs_x)?);
             self.current_band = self.current_band.saturating_add(1);
         }
         Ok(())
@@ -193,12 +206,12 @@ impl SaoParamsGrid {
     /// [`vaco_core::Error`], unreachable in practice for the same reason
     /// [`SaoParamsGrid::begin_row`]'s own `Errors` section gives.
     pub(crate) fn finish(&mut self) -> Result<()> {
-        while self.current_band < self.n_bands {
+        while self.current_band < self.shared.n_bands {
             let Some(band) = self.current.take() else { break };
-            self.published.publish(self.current_band, band)?;
+            self.shared.published.publish(self.current_band, band)?;
             self.current_band = self.current_band.saturating_add(1);
         }
-        self.current_band = self.n_bands;
+        self.current_band = self.shared.n_bands;
         Ok(())
     }
 
@@ -212,7 +225,7 @@ impl SaoParamsGrid {
     /// within that row.
     #[allow(clippy::integer_division, reason = "row/col = raster address / the fixed CTU row width, its own remainder")]
     fn row_col(&self, addr: usize) -> (usize, usize) {
-        let ctbs_x = self.ctbs_x.max(1);
+        let ctbs_x = self.shared.ctbs_x.max(1);
         (addr / ctbs_x, addr % ctbs_x)
     }
 
@@ -222,7 +235,7 @@ impl SaoParamsGrid {
         let (row, col) = self.row_col(addr);
         let band = match row.cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.as_ref(),
-            std::cmp::Ordering::Less => self.published.get(row),
+            std::cmp::Ordering::Less => self.shared.published.get(row),
             std::cmp::Ordering::Greater => None,
         };
         band.and_then(|b| b.get(col)).copied().unwrap_or_default()
@@ -254,11 +267,10 @@ impl SaoParamsGrid {
     pub(crate) fn budget_bytes(&self) -> u64 {
         let size = u64::try_from(std::mem::size_of::<CtuSao>()).unwrap_or(u64::MAX);
         let band_bytes = |b: &Vec<CtuSao>| u64::try_from(b.len()).unwrap_or(u64::MAX).saturating_mul(size);
-        let published: u64 = self.published.iter().map(band_bytes).fold(0u64, u64::saturating_add);
+        let published: u64 = self.shared.published.iter().map(band_bytes).fold(0u64, u64::saturating_add);
         published.saturating_add(self.current.as_ref().map_or(0, band_bytes))
     }
 }
-
 /// `sgn`, HM `TComRom.h` — used identically for every edge-offset sign
 /// comparison.
 fn sgn(v: i32) -> i32 {

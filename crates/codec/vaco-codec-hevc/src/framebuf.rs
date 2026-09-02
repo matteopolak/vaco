@@ -212,7 +212,7 @@ impl Picture {
 /// heterogeneous arrays plus its own `Budget` accounting to keep
 /// self-consistent through the change).
 #[derive(Debug, Clone)]
-pub(crate) struct CuGrid {
+struct CuGridShared {
     cols: usize,
     /// 4x4-block rows per CTU row band — see [`EdgeMarks::band_rows`]'s own
     /// doc for the identical quantity there.
@@ -226,8 +226,27 @@ pub(crate) struct CuGrid {
     /// [`CuGrid::new`] originally sized the whole grid's. See
     /// [`CuGrid::new`]'s own doc for why this gating exists at all.
     has_l1: bool,
+    /// Every row band strictly before `current_band`, published the moment
+    /// [`CuGrid::begin_row`]/[`CuGrid::finish`] moved past it. See
+    /// [`CuGrid`]'s own doc for why this is [`crate::wavefront::RowPublish`]
+    /// rather than a plain `Vec`.
+    published: crate::wavefront::RowPublish<CuGridBand>,
+}
+
+/// Step 3's first commit splits `shared` (geometry, `has_l1`, and
+/// `published`) into its own type, [`CuGridShared`], separate from
+/// `current`/`current_band` — the same move `EdgeMarks`/`SaoParamsGrid`
+/// made, for the same reason (`docs/codec/hevc-wavefront-threading.md`'s
+/// "step 1 closed only half of each race"): a future `Arc` around
+/// `CuGridShared` alone, with no `current` inside it, is what makes the
+/// write side shareable. `CuGrid` still bundles both today
+/// (single-threaded), but every method already routes through
+/// `self.shared`/`self.current` explicitly.
+#[derive(Debug, Clone)]
+pub(crate) struct CuGrid {
+    shared: CuGridShared,
     /// The row band [`CuGrid::fill`] and friends currently write into;
-    /// every earlier band already lives in `published`.
+    /// every earlier band already lives in `shared.published`.
     current_band: usize,
     /// `Some` at every point in this grid's lifetime except between
     /// [`CuGrid::finish`] and drop, where it stays `None` — `finish` takes
@@ -235,11 +254,6 @@ pub(crate) struct CuGrid {
     /// [`CuGrid::begin_row`] does, since nothing writes to a `CuGrid` again
     /// once the walk that owns it is done with it.
     current: Option<CuGridBand>,
-    /// Every row band strictly before `current_band`, published the moment
-    /// [`CuGrid::begin_row`]/[`CuGrid::finish`] moved past it. See this
-    /// struct's own doc for why this is [`crate::wavefront::RowPublish`]
-    /// rather than a plain `Vec`.
-    published: crate::wavefront::RowPublish<CuGridBand>,
 }
 
 /// One CTU row band's own share of [`CuGrid`]'s nine per-4x4-block arrays —
@@ -358,27 +372,23 @@ impl CuGrid {
         let n_bands = total_rows.div_ceil(band_rows).max(1);
         let current = CuGridBand::new(budget, cols, band_rows, has_l1)?;
         Ok(Self {
-            cols,
-            band_rows,
-            n_bands,
-            has_l1,
+            shared: CuGridShared { cols, band_rows, n_bands, has_l1, published: crate::wavefront::RowPublish::new(n_bands) },
             current_band: 0,
             current: Some(current),
-            published: crate::wavefront::RowPublish::new(n_bands),
         })
     }
 
     /// The row band containing 4x4-block row `by`.
     #[allow(clippy::integer_division, reason = "row band index = block row / the fixed CTB row-band height")]
     const fn band_of(&self, by: usize) -> usize {
-        by / self.band_rows
+        by / self.shared.band_rows
     }
 
     /// `by`'s own row within whichever band [`CuGrid::band_of`] says it
     /// belongs to.
     #[allow(clippy::integer_division, reason = "same fixed CTB row-band height as band_of, its own remainder")]
     const fn local_of(&self, by: usize) -> usize {
-        by % self.band_rows
+        by % self.shared.band_rows
     }
 
     /// The band that block row `by` currently lives in — `current` if it is
@@ -387,7 +397,7 @@ impl CuGrid {
     fn band_for(&self, by: usize) -> Option<&CuGridBand> {
         match self.band_of(by).cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.as_ref(),
-            std::cmp::Ordering::Less => self.published.get(self.band_of(by)),
+            std::cmp::Ordering::Less => self.shared.published.get(self.band_of(by)),
             std::cmp::Ordering::Greater => None,
         }
     }
@@ -422,9 +432,9 @@ impl CuGrid {
         }
         while self.current_band < row_band {
             if let Some(band) = self.current.take() {
-                self.published.publish(self.current_band, band)?;
+                self.shared.published.publish(self.current_band, band)?;
             }
-            self.current = Some(CuGridBand::new(budget, self.cols, self.band_rows, self.has_l1)?);
+            self.current = Some(CuGridBand::new(budget, self.shared.cols, self.shared.band_rows, self.shared.has_l1)?);
             self.current_band = self.current_band.saturating_add(1);
         }
         Ok(())
@@ -442,20 +452,20 @@ impl CuGrid {
     /// [`vaco_core::Error`], unreachable in practice for the same reason
     /// [`CuGrid::begin_row`]'s own `Errors` section gives.
     pub(crate) fn finish(&mut self) -> Result<()> {
-        while self.current_band < self.n_bands {
+        while self.current_band < self.shared.n_bands {
             let Some(band) = self.current.take() else { break };
-            self.published.publish(self.current_band, band)?;
+            self.shared.published.publish(self.current_band, band)?;
             self.current_band = self.current_band.saturating_add(1);
         }
-        self.current_band = self.n_bands;
+        self.current_band = self.shared.n_bands;
         Ok(())
     }
 
     /// Paint one coding unit's whole footprint (in 4-sample blocks) with its
     /// final quadtree depth and, for intra, its luma mode.
     pub(crate) fn fill(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, depth: u8, mode: u8) {
-        let cols = self.cols;
-        let band_rows = self.band_rows;
+        let cols = self.shared.cols;
+        let band_rows = self.shared.band_rows;
         let local_by0 = self.local_of(by0);
         let Some(band) = self.current_band_mut(by0) else { return };
         for local_by in local_by0..local_by0.saturating_add(blocks_h) {
@@ -486,7 +496,7 @@ impl CuGrid {
         };
         let (bx, by) = (block_of(px), block_of(py));
         let band = self.band_for(by)?;
-        let i = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by))?;
+        let i = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by))?;
         if !band.written.get(i).copied().unwrap_or(false) {
             return None;
         }
@@ -505,7 +515,7 @@ impl CuGrid {
         let Some(band) = self.band_for(by) else {
             return DC_IDX;
         };
-        let Some(i) = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by)) else {
+        let Some(i) = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by)) else {
             return DC_IDX;
         };
         if !band.written.get(i).copied().unwrap_or(false) {
@@ -519,8 +529,8 @@ impl CuGrid {
     /// transform tree has been walked (see this struct's own doc for why
     /// that timing differs from [`CuGrid::fill`]'s).
     pub(crate) fn fill_qp(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, qp: i8) {
-        let cols = self.cols;
-        let band_rows = self.band_rows;
+        let cols = self.shared.cols;
+        let band_rows = self.shared.band_rows;
         let local_by0 = self.local_of(by0);
         let Some(band) = self.current_band_mut(by0) else { return };
         for local_by in local_by0..local_by0.saturating_add(blocks_h) {
@@ -550,7 +560,7 @@ impl CuGrid {
         };
         let (bx, by) = (block_of(px), block_of(py));
         let band = self.band_for(by)?;
-        let i = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by))?;
+        let i = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by))?;
         if !band.qp_written.get(i).copied().unwrap_or(false) {
             return None;
         }
@@ -567,8 +577,8 @@ impl CuGrid {
     pub(crate) fn fill_motion(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, info: crate::motion::MotionInfo, is_skip: bool) {
         let l0 = info.l0.map(|u| (i16::try_from(u.mv.x).unwrap_or(0), i16::try_from(u.mv.y).unwrap_or(0), u.ref_poc));
         let l1 = info.l1.map(|u| (i16::try_from(u.mv.x).unwrap_or(0), i16::try_from(u.mv.y).unwrap_or(0), u.ref_poc));
-        let cols = self.cols;
-        let band_rows = self.band_rows;
+        let cols = self.shared.cols;
+        let band_rows = self.shared.band_rows;
         let local_by0 = self.local_of(by0);
         let Some(band) = self.current_band_mut(by0) else { return };
         for local_by in local_by0..local_by0.saturating_add(blocks_h) {
@@ -621,7 +631,7 @@ impl CuGrid {
         };
         let (bx, by) = (block_of(px), block_of(py));
         let band = self.band_for(by)?;
-        let i = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by))?;
+        let i = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by))?;
         if !band.written.get(i).copied().unwrap_or(false) {
             return None;
         }
@@ -653,7 +663,7 @@ impl CuGrid {
         let Some(band) = self.band_for(by) else {
             return false;
         };
-        let Some(i) = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by)) else {
+        let Some(i) = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by)) else {
             return false;
         };
         if !band.written.get(i).copied().unwrap_or(false) {
@@ -667,8 +677,8 @@ impl CuGrid {
     /// called once per leaf from `ctu::reconstruct_luma_inter`, mirroring
     /// [`CuGrid::fill_motion`]'s own per-leaf timing.
     pub(crate) fn fill_cbf_luma(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize, cbf: bool) {
-        let cols = self.cols;
-        let band_rows = self.band_rows;
+        let cols = self.shared.cols;
+        let band_rows = self.shared.band_rows;
         let local_by0 = self.local_of(by0);
         let Some(band) = self.current_band_mut(by0) else { return };
         for local_by in local_by0..local_by0.saturating_add(blocks_h) {
@@ -695,7 +705,7 @@ impl CuGrid {
         let Some(band) = self.band_for(by) else {
             return false;
         };
-        let Some(i) = cu_index_in(self.cols, self.band_rows, bx, self.local_of(by)) else {
+        let Some(i) = cu_index_in(self.shared.cols, self.shared.band_rows, bx, self.local_of(by)) else {
             return false;
         };
         band.cbf_luma.get(i).copied().unwrap_or(false)
@@ -729,7 +739,7 @@ impl CuGrid {
     /// still fit under the ceiling by coincidence.
     #[must_use]
     pub(crate) fn budget_bytes(&self) -> u64 {
-        let published: u64 = self.published.iter().map(CuGridBand::budget_bytes).fold(0u64, u64::saturating_add);
+        let published: u64 = self.shared.published.iter().map(CuGridBand::budget_bytes).fold(0u64, u64::saturating_add);
         published.saturating_add(self.current.as_ref().map_or(0, CuGridBand::budget_bytes))
     }
 }
@@ -770,14 +780,24 @@ impl CuGrid {
 /// `published` is [`crate::wavefront::RowPublish`] (not a plain `Vec`):
 /// `docs/codec/hevc-wavefront-threading.md`'s "Stage 2b's concrete
 /// prerequisites" section found that a plain `Vec<EdgeBand>` is *not*
-/// `Sync`-safe the moment Stage 2 has more than one row worker in flight —
-/// `current` stays a private, single-writer field exactly as before (still
-/// correct: only ever one worker builds one row today), but the
-/// once-published side is now the same fixed-size, write-once-per-slot
-/// primitive `RowPublish` proves in isolation, so a future `Arc`-shared
-/// handle can hand it to other threads with no further change here.
+/// `Sync`-safe the moment Stage 2 has more than one row worker in flight.
+///
+/// Stage 2b step 3's first commit goes one step further: `shared` (the
+/// geometry plus `published`) is now its own type, [`EdgeMarksShared`],
+/// separate from `current`/`current_band`. `RowPublish` alone fixed the
+/// *read* side (`docs/codec/hevc-wavefront-threading.md`'s own "step 1
+/// closed only half of each race"); this split is what makes the *write*
+/// side expressible for real dispatch: `EdgeMarksShared` is what a future
+/// `Arc` wraps and hands to every row worker (no `current` inside it to
+/// race over), while `current`/`current_band` become the per-row-owned
+/// value each worker keeps to itself — that move is `Ctx`'s own split
+/// (step 3's second commit), not this one. For now, `EdgeMarks` still
+/// bundles both — Stage 1/2b step 2 are still single-threaded, so there is
+/// exactly one owner of the whole thing either way — but every method
+/// below already routes through `self.shared`/`self.current` explicitly,
+/// so splitting them across two owners later is a move, not a rewrite.
 #[derive(Debug, Clone)]
-pub(crate) struct EdgeMarks {
+struct EdgeMarksShared {
     cols: usize,
     /// 4x4-block rows per CTU row band — the same quantity
     /// [`ReconPlane::band_h`] tracks in luma samples, here in block units.
@@ -786,16 +806,21 @@ pub(crate) struct EdgeMarks {
     /// `current_band` past this so every read routes to `published`
     /// afterward, the same trick [`ReconPlane::finish`] uses.
     n_bands: usize,
-    /// The row band [`EdgeMarks::mark_vert`] and friends currently write
-    /// into; every earlier band already lives in `published`.
-    current_band: usize,
-    current: EdgeBand,
     /// Every row band strictly before `current_band`, published the moment
     /// [`EdgeMarks::begin_row`]/[`EdgeMarks::finish`] moved past it — the
     /// read side ([`EdgeMarks::vert_at`] and friends) for any row not in
-    /// `current`. See this struct's own doc for why this is
+    /// `current`. See [`EdgeMarks`]'s own doc for why this is
     /// [`crate::wavefront::RowPublish`] rather than a plain `Vec`.
     published: crate::wavefront::RowPublish<EdgeBand>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) struct EdgeMarks {
+    shared: EdgeMarksShared,
+    /// The row band [`EdgeMarks::mark_vert`] and friends currently write
+    /// into; every earlier band already lives in `shared.published`.
+    current_band: usize,
+    current: EdgeBand,
 }
 
 /// One CTU row band's own share of [`EdgeMarks`]'s four boolean grids —
@@ -839,36 +864,38 @@ impl EdgeMarks {
         let n_bands = total_rows.div_ceil(band_rows).max(1);
         let band_len = cols.saturating_mul(band_rows);
         Self {
-            cols,
-            band_rows,
-            n_bands,
+            shared: EdgeMarksShared {
+                cols,
+                band_rows,
+                n_bands,
+                // Fixed-size at construction, one slot per row band — see
+                // this struct's own doc for why this is `RowPublish` rather
+                // than a plain, amortised-growth `Vec`.
+                published: crate::wavefront::RowPublish::new(n_bands),
+            },
             current_band: 0,
             current: EdgeBand::new(band_len),
-            // Fixed-size at construction, one slot per row band — see this
-            // struct's own doc for why this is `RowPublish` rather than a
-            // plain, amortised-growth `Vec`.
-            published: crate::wavefront::RowPublish::new(n_bands),
         }
     }
 
     /// The row band containing 4x4-block row `by`.
     #[allow(clippy::integer_division, reason = "row band index = block row / the fixed CTB row-band height")]
     const fn band_of(&self, by: usize) -> usize {
-        by / self.band_rows
+        by / self.shared.band_rows
     }
 
     /// `by`'s own row within whichever band [`EdgeMarks::band_of`] says it
     /// belongs to.
     #[allow(clippy::integer_division, reason = "same fixed CTB row-band height as band_of, its own remainder")]
     const fn local_of(&self, by: usize) -> usize {
-        by % self.band_rows
+        by % self.shared.band_rows
     }
 
     fn index_in(&self, bx: usize, local_by: usize) -> Option<usize> {
-        if bx >= self.cols || local_by >= self.band_rows {
+        if bx >= self.shared.cols || local_by >= self.shared.band_rows {
             return None;
         }
-        Some(local_by * self.cols + bx)
+        Some(local_by * self.shared.cols + bx)
     }
 
     /// Advance to CTU row `row_band`: publish every row band strictly
@@ -886,10 +913,10 @@ impl EdgeMarks {
         if row_band < self.current_band {
             return Err(Error::InvalidData("vaco-codec-hevc: edge marks rows must advance in order"));
         }
-        let band_len = self.cols.saturating_mul(self.band_rows);
+        let band_len = self.shared.cols.saturating_mul(self.shared.band_rows);
         while self.current_band < row_band {
             let finished = std::mem::replace(&mut self.current, EdgeBand::new(band_len));
-            self.published.publish(self.current_band, finished)?;
+            self.shared.published.publish(self.current_band, finished)?;
             self.current_band = self.current_band.saturating_add(1);
         }
         Ok(())
@@ -909,10 +936,10 @@ impl EdgeMarks {
     /// [`vaco_core::Error`], unreachable in practice for the same reason
     /// [`EdgeMarks::begin_row`]'s own `Errors` section gives.
     pub(crate) fn finish(&mut self) -> Result<()> {
-        let band_len = self.cols.saturating_mul(self.band_rows);
-        while self.current_band < self.n_bands {
+        let band_len = self.shared.cols.saturating_mul(self.shared.band_rows);
+        while self.current_band < self.shared.n_bands {
             let finished = std::mem::replace(&mut self.current, EdgeBand::new(band_len));
-            self.published.publish(self.current_band, finished)?;
+            self.shared.published.publish(self.current_band, finished)?;
             self.current_band = self.current_band.saturating_add(1);
         }
         Ok(())
@@ -976,7 +1003,7 @@ impl EdgeMarks {
         let Some(i) = self.index_in(bx, local_by) else { return false };
         match self.band_of(by).cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.vert.get(i).copied().unwrap_or(false),
-            std::cmp::Ordering::Less => self.published.get(self.band_of(by)).and_then(|b| b.vert.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self.shared.published.get(self.band_of(by)).and_then(|b| b.vert.get(i)).copied().unwrap_or(false),
             std::cmp::Ordering::Greater => false,
         }
     }
@@ -991,7 +1018,7 @@ impl EdgeMarks {
         let Some(i) = self.index_in(bx, local_by) else { return false };
         match self.band_of(by).cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.horiz.get(i).copied().unwrap_or(false),
-            std::cmp::Ordering::Less => self.published.get(self.band_of(by)).and_then(|b| b.horiz.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self.shared.published.get(self.band_of(by)).and_then(|b| b.horiz.get(i)).copied().unwrap_or(false),
             std::cmp::Ordering::Greater => false,
         }
     }
@@ -1054,7 +1081,7 @@ impl EdgeMarks {
         let Some(i) = self.index_in(bx, local_by) else { return false };
         match self.band_of(by).cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.tu_vert.get(i).copied().unwrap_or(false),
-            std::cmp::Ordering::Less => self.published.get(self.band_of(by)).and_then(|b| b.tu_vert.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self.shared.published.get(self.band_of(by)).and_then(|b| b.tu_vert.get(i)).copied().unwrap_or(false),
             std::cmp::Ordering::Greater => false,
         }
     }
@@ -1069,12 +1096,11 @@ impl EdgeMarks {
         let Some(i) = self.index_in(bx, local_by) else { return false };
         match self.band_of(by).cmp(&self.current_band) {
             std::cmp::Ordering::Equal => self.current.tu_horiz.get(i).copied().unwrap_or(false),
-            std::cmp::Ordering::Less => self.published.get(self.band_of(by)).and_then(|b| b.tu_horiz.get(i)).copied().unwrap_or(false),
+            std::cmp::Ordering::Less => self.shared.published.get(self.band_of(by)).and_then(|b| b.tu_horiz.get(i)).copied().unwrap_or(false),
             std::cmp::Ordering::Greater => false,
         }
     }
 }
-
 impl Plane {
     /// The plane's own dimensions — [`crate::deblock`]'s picture-wide pass
     /// needs to know how far to scan without reaching into private fields.
@@ -1226,7 +1252,7 @@ use vaco_codec_core::picture::{PictureRef, PictureSpec, PictureWriter, PlaneSpec
 /// every read/write path already are tile-shaped, so adding threads later
 /// changes who calls `begin_ctu`/`publish_ctu` and what a cross-tile read
 /// waits on, not the shape of the data itself.
-pub(crate) struct ReconPlane {
+struct ReconPlaneShared {
     writer: PictureWriter,
     reader: PictureRef,
     width: usize,
@@ -1248,6 +1274,30 @@ pub(crate) struct ReconPlane {
     /// row-only `publish_through`/`band_ref`/`try_rows` this case needs —
     /// exactly equivalent when there is only one column per row anyway.
     single_column: bool,
+    /// The fixed dimension of the per-tile `ready` grid (`ReconPlane`'s own
+    /// `current` side) — derived once from `ctb_size`, constant for the
+    /// picture's whole lifetime even though `ready`'s own *contents* reset
+    /// every tile.
+    ready_dim: usize,
+}
+
+/// Step 3's first commit splits `shared` (the `PictureWriter`/`PictureRef`
+/// handles plus geometry) into its own type, [`ReconPlaneShared`], separate
+/// from the per-tile-in-progress fields below — the same move `EdgeMarks`/
+/// `CuGrid`/`SaoParamsGrid` made (`docs/codec/hevc-wavefront-threading.md`'s
+/// "step 1 closed only half of each race"), extended here to the fourth
+/// structure. Unlike those three, this split alone does not make `recon`
+/// dispatch-ready: see that document's own "`PictureWriter` is single-writer
+/// today" finding — `tile_mut`/`publish_tile` still require `&mut self`, so
+/// real concurrent writers need a dispatch shape step 4 has not chosen yet,
+/// not merely this reorganisation. This commit still does it, for the same
+/// reason as the other three: leaving per-tile scratch embedded in a
+/// soon-to-be-shared struct would be the exact mistake step 1 made, and
+/// every method already routing through `self.shared`/`self.current_row`
+/// etc. explicitly is what makes `Ctx`'s own split (step 3's second commit)
+/// mechanical rather than a second design pass.
+pub(crate) struct ReconPlane {
+    shared: ReconPlaneShared,
     /// The CTU tile most recently opened for writes via
     /// [`ReconPlane::begin_ctu`] — every tile strictly before it in raster
     /// CTU order (a full row above, or an earlier column of this same row)
@@ -1264,7 +1314,6 @@ pub(crate) struct ReconPlane {
     /// most `ctb_size` square, so this is far smaller than Stage 1's own
     /// whole-row-band `ready` grid was. Same reasoning as `Plane::ready`
     /// above, re-derived fresh per tile instead of per row band.
-    ready_dim: usize,
     ready: Vec<bool>,
 }
 
@@ -1284,18 +1333,10 @@ impl ReconPlane {
         let ready_dim = ctb_size.div_ceil(4).max(1);
         let ready = vec![false; ready_dim.saturating_mul(ready_dim)];
         Ok(Self {
-            writer,
-            reader,
-            width,
-            height,
-            ctb_size,
-            n_row_bands,
-            n_col_bands,
-            single_column,
+            shared: ReconPlaneShared { writer, reader, width, height, ctb_size, n_row_bands, n_col_bands, single_column, ready_dim },
             current_row: 0,
             current_col: 0,
             current_published: false,
-            ready_dim,
             ready,
         })
     }
@@ -1303,21 +1344,21 @@ impl ReconPlane {
     /// The CTU tile containing luma-grid pixel `(x, y)`.
     #[allow(clippy::integer_division, reason = "tile index = pixel coordinate / the fixed CTB tile size")]
     const fn tile_of(&self, x: usize, y: usize) -> (usize, usize) {
-        (y / self.ctb_size, x / self.ctb_size)
+        (y / self.shared.ctb_size, x / self.shared.ctb_size)
     }
 
     /// `(x, y)`'s own position within whichever tile [`ReconPlane::tile_of`]
     /// says it belongs to.
     #[allow(clippy::integer_division, reason = "same fixed CTB tile size as tile_of, its own remainder")]
     const fn local_of(&self, x: usize, y: usize) -> (usize, usize) {
-        (x % self.ctb_size, y % self.ctb_size)
+        (x % self.shared.ctb_size, y % self.shared.ctb_size)
     }
 
     fn ready_index(&self, bx: usize, by: usize) -> Option<usize> {
-        if bx >= self.ready_dim || by >= self.ready_dim {
+        if bx >= self.shared.ready_dim || by >= self.shared.ready_dim {
             return None;
         }
-        Some(by * self.ready_dim + bx)
+        Some(by * self.shared.ready_dim + bx)
     }
 
     /// Open CTU `(row, col)` for writes: reset the per-tile ready grid and
@@ -1338,7 +1379,7 @@ impl ReconPlane {
             // next row — the two raster-order successors of a published
             // tile.
             (row == self.current_row && col == self.current_col.saturating_add(1))
-                || (row == self.current_row.saturating_add(1) && col == 0 && self.current_row.saturating_add(1) < self.n_row_bands)
+                || (row == self.current_row.saturating_add(1) && col == 0 && self.current_row.saturating_add(1) < self.shared.n_row_bands)
         } else {
             false
         };
@@ -1364,10 +1405,10 @@ impl ReconPlane {
         if (row, col) != (self.current_row, self.current_col) {
             return Err(Error::InvalidData("vaco-codec-hevc: recon plane publish targeted a CTU that is not open"));
         }
-        if self.single_column {
-            self.writer.publish_through(0, row)?;
+        if self.shared.single_column {
+            self.shared.writer.publish_through(0, row)?;
         } else {
-            self.writer.publish_tile(0, row, col)?;
+            self.shared.writer.publish_tile(0, row, col)?;
         }
         self.current_published = true;
         Ok(())
@@ -1385,23 +1426,23 @@ impl ReconPlane {
     /// # Errors
     /// [`vaco_core::Error`] if publishing fails.
     pub(crate) fn finish(&mut self) -> Result<()> {
-        if self.single_column {
-            if self.n_row_bands > 0 {
-                self.writer.publish_through(0, self.n_row_bands - 1)?;
+        if self.shared.single_column {
+            if self.shared.n_row_bands > 0 {
+                self.shared.writer.publish_through(0, self.shared.n_row_bands - 1)?;
             }
         } else {
-            for row in self.current_row..self.n_row_bands {
+            for row in self.current_row..self.shared.n_row_bands {
                 let col_start = if row == self.current_row {
                     if self.current_published { self.current_col.saturating_add(1) } else { self.current_col }
                 } else {
                     0
                 };
-                for col in col_start..self.n_col_bands {
-                    self.writer.publish_tile(0, row, col)?;
+                for col in col_start..self.shared.n_col_bands {
+                    self.shared.writer.publish_tile(0, row, col)?;
                 }
             }
         }
-        self.current_row = self.n_row_bands;
+        self.current_row = self.shared.n_row_bands;
         self.current_col = 0;
         self.current_published = true;
         Ok(())
@@ -1409,7 +1450,7 @@ impl ReconPlane {
 
     #[must_use]
     pub(crate) fn dims(&self) -> (usize, usize) {
-        (self.width, self.height)
+        (self.shared.width, self.shared.height)
     }
 
     /// Whether `(row, col)` is strictly before the tile currently open, in
@@ -1432,7 +1473,7 @@ impl ReconPlane {
         let (Ok(x), Ok(y)) = (usize::try_from(x), usize::try_from(y)) else {
             return false;
         };
-        if x >= self.width || y >= self.height {
+        if x >= self.shared.width || y >= self.shared.height {
             return false;
         }
         let (row, col) = self.tile_of(x, y);
@@ -1451,23 +1492,23 @@ impl ReconPlane {
     /// still-staged current tile or an already-published one owns it.
     #[must_use]
     pub(crate) fn get(&self, x: usize, y: usize) -> u16 {
-        if x >= self.width || y >= self.height {
+        if x >= self.shared.width || y >= self.shared.height {
             return 0;
         }
         let (row, col) = self.tile_of(x, y);
         let (lx, ly) = self.local_of(x, y);
         if self.is_current(row, col) {
-            let block = if self.single_column { self.writer.band_ref(0, row) } else { self.writer.tile_ref(0, row, col) };
+            let block = if self.shared.single_column { self.shared.writer.band_ref(0, row) } else { self.shared.writer.tile_ref(0, row, col) };
             let Some(blk) = block else { return 0 };
             let idx = ly.checked_mul(blk.stride).and_then(|s| s.checked_add(lx));
             return idx.and_then(|i| blk.data.get(i)).copied().map_or(0, u16::from);
         }
         if self.is_published(row, col) {
-            if self.single_column {
+            if self.shared.single_column {
                 let yu = u32::try_from(y).unwrap_or(0);
-                return self.reader.try_rows(0, yu).and_then(|view| view.row(yu)).and_then(|r| r.get(x)).copied().map_or(0, u16::from);
+                return self.shared.reader.try_rows(0, yu).and_then(|view| view.row(yu)).and_then(|r| r.get(x)).copied().map_or(0, u16::from);
             }
-            let Some(blk) = self.reader.try_tile(0, row, col) else { return 0 };
+            let Some(blk) = self.shared.reader.try_tile(0, row, col) else { return 0 };
             let idx = ly.checked_mul(blk.stride).and_then(|s| s.checked_add(lx));
             return idx.and_then(|i| blk.data.get(i)).copied().map_or(0, u16::from);
         }
@@ -1479,7 +1520,7 @@ impl ReconPlane {
     /// (either already fully ready, by construction, or not this tile's
     /// own write to make at all).
     pub(crate) fn mark_block_ready(&mut self, x0: usize, y0: usize, w: usize, h: usize) {
-        if w == 0 || h == 0 || x0 >= self.width || y0 >= self.height {
+        if w == 0 || h == 0 || x0 >= self.shared.width || y0 >= self.shared.height {
             return;
         }
         let (row, col) = self.tile_of(x0, y0);
@@ -1487,8 +1528,8 @@ impl ReconPlane {
             return;
         }
         let (lx0, ly0) = self.local_of(x0, y0);
-        let lx1 = lx0.saturating_add(w).saturating_sub(1).min(self.ctb_size.saturating_sub(1));
-        let ly1 = ly0.saturating_add(h).saturating_sub(1).min(self.ctb_size.saturating_sub(1));
+        let lx1 = lx0.saturating_add(w).saturating_sub(1).min(self.shared.ctb_size.saturating_sub(1));
+        let ly1 = ly0.saturating_add(h).saturating_sub(1).min(self.shared.ctb_size.saturating_sub(1));
         let (bx0, by0, bx1, by1) = (block_of(lx0), block_of(ly0), block_of(lx1), block_of(ly1));
         for by in by0..=by1 {
             for bx in bx0..=bx1 {
@@ -1519,7 +1560,7 @@ impl ReconPlane {
     /// silently does nothing otherwise, matching this module's own
     /// "malformed input degrades, never panics" convention.
     pub(crate) fn write_row(&mut self, x0: usize, y0: usize, src: &[u8]) {
-        if y0 >= self.height || src.is_empty() {
+        if y0 >= self.shared.height || src.is_empty() {
             return;
         }
         let (row, col) = self.tile_of(x0, y0);
@@ -1528,7 +1569,7 @@ impl ReconPlane {
         }
         let (lx0, ly0) = self.local_of(x0, y0);
         let Ok(ly0_u32) = u32::try_from(ly0) else { return };
-        let band = if self.single_column { self.writer.band_mut(0, row) } else { self.writer.tile_mut(0, row, col) };
+        let band = if self.shared.single_column { self.shared.writer.band_mut(0, row) } else { self.shared.writer.tile_mut(0, row, col) };
         let Ok(mut band) = band else { return };
         let Some(dst) = band.row_mut(ly0_u32).and_then(|r| r.get_mut(lx0..lx0.saturating_add(src.len()))) else { return };
         dst.copy_from_slice(src);
@@ -1543,13 +1584,13 @@ impl ReconPlane {
     /// throughout.
     fn materialize_into(&self, dst: &mut Plane) {
         let (w, h) = self.dims();
-        if self.single_column {
+        if self.shared.single_column {
             // One CTU per row: `try_rows`/`PlaneView::row` already returns
             // the whole (picture-width) row directly, so there is no tile
             // geometry to re-derive here at all.
             for y in 0..h {
                 let yu = u32::try_from(y).unwrap_or(0);
-                let Some(row) = self.reader.try_rows(0, yu).and_then(|view| view.row(yu)) else { continue };
+                let Some(row) = self.shared.reader.try_rows(0, yu).and_then(|view| view.row(yu)) else { continue };
                 if let Some(dst_row) = dst.row_mut(y) {
                     let n = dst_row.len().min(row.len()).min(w);
                     if let (Some(d), Some(s)) = (dst_row.get_mut(..n), row.get(..n)) {
@@ -1560,13 +1601,13 @@ impl ReconPlane {
             }
             return;
         }
-        for row in 0..self.n_row_bands {
-            for col in 0..self.n_col_bands {
-                let Some(blk) = self.reader.try_tile(0, row, col) else { continue };
-                let x0 = col.saturating_mul(self.ctb_size);
-                let y0 = row.saturating_mul(self.ctb_size);
-                let tile_w = self.ctb_size.min(w.saturating_sub(x0));
-                let tile_h = self.ctb_size.min(h.saturating_sub(y0));
+        for row in 0..self.shared.n_row_bands {
+            for col in 0..self.shared.n_col_bands {
+                let Some(blk) = self.shared.reader.try_tile(0, row, col) else { continue };
+                let x0 = col.saturating_mul(self.shared.ctb_size);
+                let y0 = row.saturating_mul(self.shared.ctb_size);
+                let tile_w = self.shared.ctb_size.min(w.saturating_sub(x0));
+                let tile_h = self.shared.ctb_size.min(h.saturating_sub(y0));
                 for ly in 0..tile_h {
                     let Some(src_row) = blk.data.get(ly.saturating_mul(blk.stride)..).and_then(|r| r.get(..tile_w)) else { continue };
                     let y = y0.saturating_add(ly);
