@@ -1,6 +1,6 @@
 //! Macroblock-layer syntax, CAVLC and CABAC, clause 7.3.5 / 7.4.5 — started
-//! for a real bit-exact-consumption measurement (#419's original goal for
-//! this module), then extended for #420's CABAC reconstruction, and now
+//! for a real bit-exact-consumption measurement, then extended for
+//! CABAC reconstruction, and now
 //! extended again so [`decode_slice_cavlc`] reconstructs too, not merely
 //! consumes: it returns the same [`SliceStats`]/[`MbSummary`] shape
 //! [`decode_slice_cabac`] does — real `mb_type` classification, clause
@@ -76,9 +76,9 @@
 //!   [`decode_slice_cabac`]. They were gated for one round, deliberately:
 //!   every I and P frame of a real `libx264 -bf 2 -refs 1` IBBP stream
 //!   matched plain `ffmpeg` byte for byte and every B frame carried a
-//!   small residual (max per-sample delta 3-5 over 1-2% of samples), which
-//!   `planning/AGENT-CONSTRAINTS.md`'s "registered-but-wrong is worse than
-//!   absent" rule makes a refusal, not a caveat. The residual turned out
+//!   small residual (max per-sample delta 3-5 over 1-2% of samples) —
+//!   registered-but-wrong is worse than absent, so that made this a
+//!   refusal, not a caveat. The residual turned out
 //!   to be a clause 8.7.2.1 `bS` input ([`MvInfo::ref_idx_l1`]), with two
 //!   `ctxIdxInc` defects behind it ([`MvInfo::direct_or_skip`] and
 //!   [`decode_mb_type_intra_suffix_tail`]); `decode_slice_cabac`'s own
@@ -392,7 +392,7 @@ const fn nc_from_neighbours(left: Option<u8>, above: Option<u8>) -> i32 {
 /// One macroblock's decoded residual coefficients, captured rather than
 /// discarded (clause 7.3.5.3.3's `residual_block_cabac` used to be called
 /// purely for its bit consumption, its return value thrown away with `let
-/// _ = ...` -- #420 needs the actual values, [`crate::reconstruct`] is
+/// _ = ...` -- reconstruction needs the actual values, [`crate::reconstruct`] is
 /// where they get turned into samples). Every block is still in per-block
 /// forward scan order, exactly as [`residual_block_cabac`] produced it --
 /// clause 8.5.4's inverse zig-zag scan is deliberately not applied here,
@@ -683,8 +683,8 @@ pub fn decode_slice_cavlc(
 /// empty one every call.
 ///
 /// `crate::decoder::H264Decoder` is the only caller with a recycled
-/// `Vec<MbSummary>` to hand in (`planning/PERF-PROGRAMME.md` item A0):
-/// `MbSummary` is 1,888 bytes and a 4K picture has 32,400 of them, so
+/// `Vec<MbSummary>` to hand in: `MbSummary` is 1,888 bytes and a 4K
+/// picture has 32,400 of them, so
 /// building this array from empty via `push` on every single picture is a
 /// 59 MiB allocate-and-free the allocator ends up caching rather than
 /// freeing, which is most of what pushed a 4K decode's RSS past 3.8 GiB.
@@ -1650,7 +1650,7 @@ fn decode_residual_cavlc(
 }
 
 // ============================================================================
-// CABAC macroblock layer (#419's CABAC half, #418).
+// CABAC macroblock layer.
 //
 // Scope within this section, narrower than the CAVLC side above: **I and P
 // slices only**. B-slice `mb_type`'s CABAC bin string (Table 9-27) is a
@@ -1854,8 +1854,7 @@ fn decode_residual_cavlc(
 // independent bin-by-bin oracle for address 0's residual decode was not
 // completed this round -- the CBF_CHROMA_AC bug was found first, by
 // inspection, while merely transcribing the table constants the oracle
-// would have needed. Reported honestly rather than claimed; see
-// `planning/TECH-DEBT.md` for the full handoff.
+// would have needed. Reported honestly rather than claimed.
 //
 // FOLLOW-UP round: closed the structural gap that let CBF_CHROMA_AC's
 // duplication slip through in the first place. Per-table verification
@@ -2122,8 +2121,8 @@ fn decode_residual_cavlc(
 // never built. `decoder.rs`'s own module doc and `docs/codec/
 // vaco-codec-h264.md`'s "What is not implemented" section both say so
 // explicitly -- "Prediction, motion compensation, transform and
-// reconstruction, deblocking, DPB/reference management, ... -- #420
-// onward" -- and the code matches the doc:
+// reconstruction, deblocking, DPB/reference management, ... not yet
+// built" -- and the code matches the doc:
 // `H264Decoder::receive_frame` unconditionally returns
 // `Error::NeedMoreInput`, and `send_packet` returns `Error::Unsupported`
 // for any slice beyond parameter-set/entropy-mode resolution, naming
@@ -2134,8 +2133,8 @@ fn decode_residual_cavlc(
 // low-level integer transform primitives (`idct4x4`/`idct8x8`/
 // `luma_dc_hadamard4x4`/etc.), but nothing in `vaco-codec-h264` calls
 // them, and there is no intra-prediction, motion-compensation, or
-// deblocking code anywhere in this crate. #420 is a separate,
-// not-yet-started dispatch, not a bug in #418/#419's own scope.
+// deblocking code anywhere in this crate. Reconstruction is a separate,
+// not-yet-started dispatch, not a bug in the entropy layer's own scope.
 //
 // The half of the comparison that *is* available stayed available: `ffmpeg`
 // run purely as a black box (decode to raw YUV, read the output file) is
@@ -2145,12 +2144,12 @@ fn decode_residual_cavlc(
 // decoder's own frame" to put next to it. Building one -- even a
 // minimal, intra-only, I-slice-only reconstruction sufficient for these
 // specific corpora -- means implementing real prediction and transform
-// application from the primary text, which is #420's own scope, a
+// application from the primary text, which is reconstruction's own scope, a
 // multi-round undertaking in its own right, not something to start
 // unilaterally mid-round on the strength of one dispatch's instruction.
 // Flagged and stopped, per the same standard the coordinator set for
 // ffmpeg-source instrumentation: this is a scope decision for whoever
-// owns #420's sequencing, not one to make by starting the work and
+// owns reconstruction's sequencing, not one to make by starting the work and
 // presenting it as already decided.
 //
 // Verified clauses 7.3.2.10 and 9.3.4.6 directly, as asked, rather than
@@ -2364,8 +2363,8 @@ impl MvInfo {
     }
 
     /// A synthetic list-0-only `MvInfo` for `crate::reconstruct`'s own
-    /// `partition_rects` tests (`planning/PERF-PROGRAMME.md` item A1) --
-    /// this module's own fields are private outside it, so a test in a
+    /// `partition_rects` tests -- this module's own fields are private
+    /// outside it, so a test in a
     /// different module needs a constructor rather than a struct literal.
     #[cfg(test)]
     pub(crate) fn for_test_l0(mv: (i16, i16)) -> Self {
@@ -2438,8 +2437,8 @@ struct CabacGrids {
     /// charged -- these grids are local to one [`decode_slice_cabac`] call
     /// (never returned to the caller), so [`Self::release`] gives every
     /// one of those bytes back once this slice is fully decoded, instead
-    /// of letting them sit in `committed` forever the way #421 found the
-    /// DPB's own per-picture charges doing.
+    /// of letting them sit in `committed` forever the way the DPB's own
+    /// per-picture charges were once found doing.
     charged_bytes: u64,
     mb_info: Vec<CabacMbInfo>,
     cbf_luma: Vec<Option<bool>>,
@@ -2547,8 +2546,8 @@ impl CabacGrids {
     /// (they are never read again after `decode_slice_cabac` returns).
     /// See the struct's own [`Self::charged_bytes`] doc for why this
     /// exists at all: nothing about `Vec`'s own `Drop` tells `Budget`
-    /// anything, so skipping this call would reproduce #421's leak one
-    /// level up from the DPB.
+    /// anything, so skipping this call would reproduce, one level up from
+    /// the DPB, a leak already found and fixed there once.
     fn release(&self, budget: &mut Budget) {
         budget.release(self.charged_bytes);
     }
@@ -3463,8 +3462,8 @@ pub(crate) fn decode_slice_cabac_into(
     // byte-exact. It was added when every I and P frame of a real
     // `libx264 -bf 2 -refs 1` IBBP stream matched plain `ffmpeg` byte for
     // byte and every B frame did not (max per-sample delta 3-5 over 1-2%
-    // of samples), on `planning/AGENT-CONSTRAINTS.md`'s
-    // "registered-but-wrong is worse than absent" rule. That residual was
+    // of samples) -- registered-but-wrong is worse than absent. That
+    // residual was
     // a `deblock::boundary_strength` input, not a prediction or residual
     // error at all -- see `MvInfo::ref_idx_l1` -- and two `ctxIdxInc`
     // defects (`MvInfo::direct_or_skip`,
@@ -3744,7 +3743,7 @@ pub(crate) fn decode_slice_cabac_into(
     // its own charge here (see `CabacGrids::release`'s own doc) is what
     // keeps a picture's transient neighbour-derivation state from adding
     // permanently to `committed` on every single slice decoded, the way
-    // #421 found the DPB's per-picture charges doing one level up.
+    // the DPB's per-picture charges were once found doing one level up.
     grids.release(budget);
     Ok(stats)
 }

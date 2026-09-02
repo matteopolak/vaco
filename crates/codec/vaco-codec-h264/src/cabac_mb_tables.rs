@@ -5,9 +5,9 @@
 //! from. Every value here is transcribed row-by-row from
 //! `provenance/vaco-codec-h264.toml`'s `iso-iec-14496-10-2002-draft`
 //! (the same source `cavlc_tables.rs` and `cabac_residual.rs` were checked
-//! against), not from recollection — this file did not exist before #419's
-//! CABAC macroblock-layer work, so there is no earlier, less-verified pass
-//! to compare against the way those two files describe.
+//! against), not from recollection — this file did not exist before the
+//! CABAC macroblock-layer work landed, so there is no earlier,
+//! less-verified pass to compare against the way those two files describe.
 //!
 //! # Layout convention
 //!

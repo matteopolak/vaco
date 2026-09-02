@@ -1,4 +1,4 @@
-//! T3-01g (#420)'s own scope: pure intra prediction sample-generation
+//! Pure intra prediction sample-generation
 //! functions, following the exact split `dequant.rs` established -- primary-
 //! text equations as standalone, independently testable functions, not
 //! wired into `mb.rs`'s macroblock loop for the general multi-macroblock
@@ -661,8 +661,8 @@ pub(crate) struct Neighbours8 {
 /// `.get(i)` widened to `i32` with a `0` fallback -- every call site below
 /// has `i` provably in range (fixed 16- or 8-element arrays, loop bounds
 /// checked by hand against clause 8.3.2.2.1's own filter shape), but
-/// `clippy::indexing_slicing` (denied crate-wide, `AGENT-CONSTRAINTS.md`)
-/// wants a real fallback regardless of that invariant.
+/// `clippy::indexing_slicing` (denied crate-wide) wants a real fallback
+/// regardless of that invariant.
 fn at(arr: &[i32], i: usize) -> i32 {
     arr.get(i).copied().unwrap_or(0)
 }

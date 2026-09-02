@@ -246,8 +246,8 @@ fn fill_j_plane(raw_h: &[[i32; 16]; 21], w: usize, h: usize, j_plane: &mut [[u8;
 /// partition (up to 16x16, an H.264 macroblock's own maximum) at once,
 /// instead of [`luma_qpel_sample`]'s one-output-pixel-at-a-time shape.
 ///
-/// `planning/PERF-PROGRAMME.md` item A1: [`luma_qpel_sample`] is correct
-/// but each call independently re-fetches and re-filters its own 9x9
+/// [`luma_qpel_sample`] is correct but each call independently re-fetches
+/// and re-filters its own 9x9
 /// neighbourhood through `fetch`, and every pixel in the same partition
 /// shares almost all of that neighbourhood with its neighbours -- a 16x16
 /// partition predicted 4x4-at-a-time (as [`crate::reconstruct`] used to)
@@ -660,8 +660,8 @@ mod tests {
         assert!(got > 200, "got={got}, expected close to the x=0 sample (255)");
     }
 
-    /// The whole point of `planning/PERF-PROGRAMME.md` item A1: predicting
-    /// a partition in one [`luma_qpel_partition`] call must produce
+    /// The whole point of batching: predicting a partition in one
+    /// [`luma_qpel_partition`] call must produce
     /// *exactly* the same samples as [`luma_qpel_sample`] called once per
     /// pixel -- checked directly, bit for bit, rather than argued from the
     /// derivation, at every fractional position, several partition shapes

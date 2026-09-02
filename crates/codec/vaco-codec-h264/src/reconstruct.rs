@@ -1,4 +1,4 @@
-//! #420's own seam: composing [`crate::intra`]'s prediction,
+//! The reconstruction seam: composing [`crate::intra`]'s prediction,
 //! [`crate::dequant`]'s scaling, [`crate::scan`]'s inverse zig-zag, and
 //! [`vaco_codec_dsp_idct::h264`]'s transforms into actual reconstructed
 //! luma samples, macroblock by macroblock, across a whole picture --
@@ -23,7 +23,7 @@
 //! cross-macroblock neighbour propagation between two `Intra_16x16`
 //! macroblocks (`cabac_intra_oracle_noise.264`, `_testsrc.264`,
 //! `_multi.264`), and, against a fair (undeblocked) reference,
-//! `cabac_i_only.264` (#418's own corpus) too.
+//! `cabac_i_only.264` too.
 //!
 //! [`crate::deblock::deblock_picture_luma`] now applies a real clause 8.7
 //! deblocking filter (scalar, luma-only, all-intra `bS` derivation --
@@ -180,7 +180,7 @@ impl PictureBuffer {
     /// [`Self::decoded_4x4`]/[`Self::chroma_decoded`] are working
     /// bookkeeping that never outlives this one function's own call (they
     /// are not fields of [`ReconstructedPicture`]), so leaving them
-    /// un-budgeted does not reproduce #421's leak: nothing here persists
+    /// un-budgeted does not reproduce the DPB's own past leak: nothing here persists
     /// past a single `reconstruct_picture` call the way an un-released
     /// budget charge would.
     fn new(mbs_wide: u32, mbs_high: u32, budget: &mut Budget) -> vaco_core::Result<Self> {
@@ -846,9 +846,8 @@ fn sample_luma_block(
     clippy::many_single_char_names,
     reason = "mirrors sample_luma_block's own identical allow; w/h are always <= 16 (clamped inside crate::interp::luma_qpel_partition)"
 )]
-/// [`sample_luma_block`]'s own whole-partition counterpart
-/// (`planning/PERF-PROGRAMME.md` item A1): one list's raw luma qpel
-/// prediction for a partition up to 16x16, fetched and filtered once
+/// [`sample_luma_block`]'s own whole-partition counterpart: one list's raw
+/// luma qpel prediction for a partition up to 16x16, fetched and filtered once
 /// through [`crate::interp::luma_qpel_partition`] rather than once per
 /// 4x4 block. `x`/`y` are the partition's own picture-relative top-left
 /// corner; `w`/`h` its size, always a multiple of 4 not exceeding 16 for
@@ -940,8 +939,8 @@ struct PartitionRect {
     reason = "bx/by/bw/bh are all loop variables over 0..4, provably in range for the fixed 4x4 grids here"
 )]
 /// Decompose a macroblock's own 16-entry 4x4 motion grid into the maximal
-/// axis-aligned rectangles of identical motion (`planning/PERF-PROGRAMME.md`
-/// item A1) -- the partition (or merged group of adjacent same-motion
+/// axis-aligned rectangles of identical motion -- the partition (or merged
+/// group of adjacent same-motion
 /// partitions) [`sample_luma_partition`] predicts as one call instead of
 /// [`sample_luma_block`]'s own one-call-per-4x4-block shape.
 ///
@@ -1030,9 +1029,8 @@ fn reconstruct_inter_mb(
     // clause 8.4's own prediction-sample derivation never reads it, only
     // the residual (clause 7.3.5.3.3) does -- so prediction runs exactly
     // once for the whole macroblock, over the maximal same-motion
-    // rectangles `partition_rects` finds in `mb.mv_blocks`
-    // (`planning/PERF-PROGRAMME.md` item A1), before either residual path
-    // below reads from the assembled `pred_mb`. This replaces the
+    // rectangles `partition_rects` finds in `mb.mv_blocks`, before either
+    // residual path below reads from the assembled `pred_mb`. This replaces the
     // one-call-per-4x4-block shape `sample_luma_block`
     // (`fetch_pred_4x4`, kept for the differential tests) used before: a
     // real 16x16 partition used to cost sixteen independent 9x9
@@ -1468,8 +1466,8 @@ pub(crate) struct ReadScratch {
 
 impl ReadScratch {
     /// Scratch for the largest region clause 8.4.2.2 reads: a whole 16x16
-    /// partition's own six-tap footprint (`planning/PERF-PROGRAMME.md`
-    /// item A1) -- `(16 + 5) x (16 + 5)`, up from the 16x16 this held back
+    /// partition's own six-tap footprint -- `(16 + 5) x (16 + 5)`, up from
+    /// the 16x16 this held back
     /// when every partition was predicted 4x4 at a time.
     ///
     /// # Errors
@@ -2673,7 +2671,7 @@ mod tests {
         }
     }
 
-    /// `cabac_i_only.264`: #418's own corpus, all `Intra_4x4`, 25
+    /// `cabac_i_only.264`: all `Intra_4x4`, 25
     /// independent IDR pictures -- **not** encoded with deblocking
     /// disabled (`disable_deblocking_filter_idc == 0` on every slice,
     /// confirmed structurally, not assumed), and this crate implements no
@@ -3031,8 +3029,7 @@ mod tests {
     /// `predict_chroma_inter`, the chroma residual add) gets the same
     /// real-corpus, per-plane measurement discipline the luma path
     /// already has, rather than shipping on the strength of unit tests
-    /// alone -- see `AGENT-CONSTRAINTS.md`'s "measuring one plane is not
-    /// measuring the output".
+    /// alone -- measuring one plane is not measuring the output.
     pub(super) fn decode_ip_stream_yuv(data: &[u8]) -> Vec<Result<ReconstructedPicture, String>> {
         use vaco_bitstream::{BitReader, annexb};
         use vaco_codec_cabac::CabacDecoder;
@@ -3288,8 +3285,7 @@ mod tests {
     /// per `RefPicList0` position and this assertion passes byte-exact on
     /// all 25 frames, all three planes.
     ///
-    /// Third instance of the shape `docs/codec/vaco-codec-h264.md` and
-    /// `planning/E2E-GAPS.md` already record: **a harness that measures
+    /// Another instance of a recurring shape: **a harness that measures
     /// the wrong thing outlives every hypothesis you form about the code
     /// it is measuring.** Worth checking a failing internal-API test
     /// against the same fixture through the public decoder before
@@ -3452,8 +3448,8 @@ mod tests {
     /// own chroma measurement -- Y, U and V compared *separately* against
     /// the same reference `.yuv` (already full 4:2:0 per
     /// `frame_stride`'s own `2 * 32 * 32` chroma term, unused for chroma
-    /// until now), per `AGENT-CONSTRAINTS.md`'s "two chroma defects hid
-    /// behind correct luma" lesson.
+    /// until now): two chroma defects have hidden behind correct luma
+    /// before.
     #[test]
     fn cabac_ip_simple_chroma_matches_ffmpeg_per_plane() {
         let data: &[u8] = include_bytes!("../tests/fixtures/cabac_ip_simple.264");
@@ -3513,8 +3509,7 @@ mod tests {
     }
 
     /// [`sample_luma_partition`] against [`sample_luma_block`], the
-    /// wrapper-level oracle -- `planning/PERF-PROGRAMME.md` item A1.
-    /// `crate::interp`'s own
+    /// wrapper-level oracle. `crate::interp`'s own
     /// `partition_matches_the_per_pixel_oracle_at_every_fractional_position_and_shape`
     /// already checks the pure interpolation math; this checks the layer
     /// above it that `crate::interp`'s test cannot reach: [`RefPlane`]
@@ -3578,8 +3573,8 @@ mod tests {
     }
 
     /// [`partition_rects`]'s own decomposition, checked directly against
-    /// hand-built motion grids for the shapes `planning/PERF-PROGRAMME.md`
-    /// item A1 names: a whole-macroblock 16x16 partition, a 16x8 top/bottom
+    /// hand-built motion grids for the key shapes: a whole-macroblock
+    /// 16x16 partition, a 16x8 top/bottom
     /// split, and a `P_8x8` macroblock whose four quadrants carry four
     /// different motion vectors (so no merge across quadrant boundaries is
     /// possible, exercising the "sixteen separate rectangles" end of the

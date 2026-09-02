@@ -2,12 +2,12 @@
 //!
 //! [`residual_block_cavlc`] is the entropy-layer half of `residual_block()`:
 //! given `nC` (derived by the caller from neighbouring blocks' `TotalCoeff` —
-//! a macroblock-layer concern, #419) and `max_num_coeff` (the block's own
+//! a macroblock-layer concern) and `max_num_coeff` (the block's own
 //! size), it returns the block's coefficients in scan order with their signs
 //! applied and every zero run expanded, having consumed exactly the bits the
 //! syntax table declares. It does not know what a macroblock is, which block
 //! category it was called for, or how to place its output into a transform
-//! block — that composition is #419's job, same separation
+//! block — that composition is the macroblock layer's job, same separation
 //! `vaco-codec-msac` draws around VP8/VP9's bool decoders.
 
 use vaco_bitstream::BitReader;

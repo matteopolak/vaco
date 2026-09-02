@@ -21,10 +21,10 @@
 //! every other macroblock-layer syntax element's context tables are not
 //! transcribed here. Two independent reasons, not one: first, their
 //! `ctxIdxInc` genuinely needs `condTermFlagA`/`condTermFlagB` from
-//! neighbouring macroblocks — state #419 (the macroblock layer) produces,
+//! neighbouring macroblocks — state the macroblock layer produces,
 //! not this crate; second, their initialisation tables belong with the
 //! neighbour-derivation logic that will consume them, so splitting the two
-//! across separate, independently-landed commits (this one and #419's) risks
+//! across separate, independently-landed commits risks
 //! exactly the kind of drift a table and its only caller landing together
 //! avoids. `coded_block_flag` itself is the same shape — its own
 //! `ctxIdxInc` needs the *above* and *left* block's own `coded_block_flag`,
@@ -35,7 +35,7 @@
 //! First transcribed from recollection in a network-isolated clean-room
 //! environment (D7), with the same weaker-than-ideal confidence
 //! `cavlc_tables.rs` describes at more length. Re-verified while building
-//! the CABAC macroblock layer (#419), against the same primary source
+//! the CABAC macroblock layer, against the same primary source
 //! (`provenance/vaco-codec-h264.toml`'s `iso-iec-14496-10-2002-draft`) that
 //! source's CAVLC tables were checked against — and that check found the
 //! *first* pass here was not merely imprecise but structurally wrong: it
@@ -167,7 +167,7 @@ pub enum ContextCategory {
 /// use a fourth, fixed table) — the "four context-table sets" a real
 /// `libx264 -coder cabac` stream actually exercises. The original values
 /// did not match *any* of these four tables at *any* offset checked against
-/// the primary text; found while building the CABAC macroblock layer (#419)
+/// the primary text; found while building the CABAC macroblock layer,
 /// needed to reach a real bit-exact measurement at all. Every `(m, n)` pair
 /// below is transcribed directly from that source's Tables 9-19/9-20/9-21,
 /// not from recollection.

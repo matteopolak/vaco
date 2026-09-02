@@ -1,4 +1,4 @@
-//! T3-01j (#424)'s own scope, narrowed to what it actually is once the
+//! This module's scope, narrowed to what it actually is once the
 //! transform math is subtracted out: `vaco-codec-dsp-idct::h264` already
 //! has `idct4x4`, `luma_dc_hadamard4x4`, `chroma_dc_hadamard2x2` (and the
 //! 8x8/4:2:2 variants this crate's Main-profile, 4:2:0-only scope never
@@ -18,9 +18,9 @@
 //! these functions take as input, the `dcY`-to-`luma4x4BlkIdx` assignment
 //! (clause 8.5.2's Figure 8-6) for `Intra_16x16` macroblocks, and intra
 //! prediction itself (`predL`/`predC`, clause 8.5.1's own `Clip1(pred +
-//! r)` reconstruction step) -- all `#420`'s scope, not this one's. This
-//! module is the seam between the entropy layer (already landed, #418/
-//! #419) and reconstruction (#420 onward): pure functions from a decoded
+//! r)` reconstruction step) -- all reconstruction's scope, not this one's.
+//! This module is the seam between the entropy layer (already landed)
+//! and reconstruction: pure functions from a decoded
 //! coefficient array and a QP to a scaled array ready for the existing
 //! transform primitives, each one a direct transcription of one clause's
 //! equations, each independently testable without any of the three
