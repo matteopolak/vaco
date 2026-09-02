@@ -34,6 +34,7 @@ use vaco_limits::Limits;
 use vaco_packet::Packet;
 
 pub mod caps;
+pub mod gapless;
 pub mod machine;
 pub mod mock;
 pub mod params;
@@ -2253,9 +2254,20 @@ impl DecoderDesc {
     }
 
     /// Build an instance bounded by `limits`.
+    ///
+    /// An audio decoder is wrapped in [`gapless::GaplessDecoder`], which is
+    /// what makes `PacketSideData::SkipSamples` — the encoder-delay trim an
+    /// MP4 `elst`, a Matroska `CodecDelay` or a LAME tag states — apply to
+    /// every audio codec instead of only the one that remembered to read it.
+    /// See that module for why the trim lives here and not in each decoder.
     #[must_use]
     pub fn build(&self, limits: Limits) -> Box<dyn Decoder> {
-        (self.make)(limits)
+        let decoder = (self.make)(limits.clone());
+        if matches!(self.media_type, MediaType::Audio) {
+            Box::new(gapless::GaplessDecoder::new(decoder, limits))
+        } else {
+            decoder
+        }
     }
 }
 

@@ -734,7 +734,7 @@ impl Mp4Demuxer {
         }
 
         // The edit list.
-        let (edit_shift, trim_point, start_pts) = self.edit_shift(trak, table);
+        let (edit_shift, trim_point, start_pts, trim_end) = self.edit_shift(trak, table);
         let duration_ts = self.duration_ticks(trak, limit);
 
         let mut stream = track::shell(index, trak, media_type);
@@ -832,6 +832,27 @@ impl Mp4Demuxer {
             dts_shift: table.dts_shift(),
             edit_shift,
             trim_point,
+            trim_end,
+            // Only for a codec whose decoder emits a fixed number of samples
+            // per packet no matter what the container says. ALAC's final
+            // frame is genuinely short — its own frame header carries the
+            // count — so a short final `stts` there is the truth, not
+            // padding, and trimming to it deleted 1912 real samples from
+            // every `ffmpeg -c:a alac` file before this guard existed.
+            // `fixed_frame_size` is the predicate; the *value* still comes
+            // from `stts`, so a 960-sample AAC profile trims by 960 rather
+            // than by the table's 1024.
+            frame_samples: if media_type == MediaType::Audio
+                && stream
+                    .params
+                    .codec_id
+                    .and_then(vaco_codec_core::CodecId::fixed_frame_size)
+                    .is_some()
+            {
+                common_delta(table)
+            } else {
+                0
+            },
             source,
             entries: Vec::new(),
             queue: VecDeque::new(),
@@ -899,15 +920,15 @@ impl Mp4Demuxer {
     /// by patching one file's `elst.media_time` to 0, 512, 1024 and 2048: the
     /// first three all produced `dts = -1024` and only the fourth followed the
     /// edit, and 1024 is that track's minimum raw presentation time.
-    fn edit_shift(&self, trak: &Track<'_>, table: &SampleTable<'_>) -> (i64, i64, i64) {
+    fn edit_shift(&self, trak: &Track<'_>, table: &SampleTable<'_>) -> (i64, i64, i64, i64) {
         let track_id = trak.header.track_id;
         if self.mp4.ignore_editlist {
             let first = self.first_presentation(table, track_id).unwrap_or(0);
-            return (0, i64::MIN, first);
+            return (0, i64::MIN, first, i64::MAX);
         }
         let Some(edits) = trak.edits.as_ref().filter(|e| !e.entries.is_empty()) else {
             let first = self.first_presentation(table, track_id).unwrap_or(0);
-            return (0, i64::MIN, first);
+            return (0, i64::MIN, first, i64::MAX);
         };
         let empty = vaco_format_isom::edit::rescale_movie_to_media(
             i64::try_from(edits.empty_offset_movie()).unwrap_or(i64::MAX),
@@ -918,7 +939,21 @@ impl Mp4Demuxer {
         let min_pts = self.min_presentation(table, track_id).unwrap_or(0);
         let base = media_time.max(min_pts);
         let shift = empty.saturating_sub(base);
-        (shift, empty, empty)
+        // The far end of the presented window, in the same shifted coordinate
+        // `trim_point` is in. A `played_duration_movie` of 0 means every
+        // non-empty edit said "to the end of the media" (§8.6.6.1), so
+        // nothing is trimmed off the tail.
+        let played = vaco_format_isom::edit::rescale_movie_to_media(
+            i64::try_from(edits.played_duration_movie()).unwrap_or(i64::MAX),
+            self.movie_timescale,
+            trak.media.timescale,
+        );
+        let trim_end = if played > 0 {
+            empty.saturating_add(played)
+        } else {
+            i64::MAX
+        };
+        (shift, empty, empty, trim_end)
     }
 
     /// Presentation time of the first sample, in raw media ticks.
@@ -1435,6 +1470,7 @@ impl Mp4Demuxer {
                     key: true,
                     discard: false,
                     skip: 0,
+                    skip_end: 0,
                     index: 0,
                 });
                 if let Source::AttachedPic { emitted, .. } = &mut reader.source {
@@ -1744,10 +1780,10 @@ impl Mp4Demuxer {
             if sample.discard {
                 pkt.flags |= PacketFlags::DISCARD;
             }
-            if audio && sample.skip > 0 {
+            if audio && (sample.skip > 0 || sample.skip_end > 0) {
                 pkt.side_data.push(PacketSideData::SkipSamples {
                     start: sample.skip,
-                    end: 0,
+                    end: sample.skip_end,
                     // D17: measured 0 on every MP4 file tried so far — an
                     // `elst`-derived leading skip carries no reason of its own.
                     skip_reason: 0,
@@ -2296,6 +2332,8 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
         dts_shift: 0,
         edit_shift: 0,
         trim_point: i64::MIN,
+        trim_end: i64::MAX,
+        frame_samples: 0,
         source: Source::AttachedPic {
             offset: cover.offset,
             size: cover.size,

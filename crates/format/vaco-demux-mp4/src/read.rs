@@ -98,6 +98,11 @@ pub(crate) struct Pending {
     /// Leading samples to trim, in time-base ticks — which for an MP4 audio
     /// track are samples, because its time base is `1 / sample_rate`.
     pub skip: u32,
+    /// Trailing samples to trim, same units: `ffprobe`'s `discard_padding`.
+    /// Measured as 256/512/888/956 on `ffmpeg -c:a aac` files at
+    /// 48/32/44.1/22.05 kHz, and it lands on the final sample only. See
+    /// [`Reader::push`] for the two container statements it comes from.
+    pub skip_end: u32,
     /// This sample's 0-based index within its track's `stbl` — what
     /// [`Decryptor::iv`] indexes `senc`'s per-sample IV records by. Not the
     /// same number as a decode order under a `ctts`; it is a table position,
@@ -207,6 +212,22 @@ pub(crate) struct Reader {
     pub edit_shift: i64,
     /// Where the presented timeline starts; samples before it are trimmed.
     pub trim_point: i64,
+    /// Where the presented timeline ends; the part of a sample past it is
+    /// trimmed. `i64::MAX` when the edit list states no end (no `elst`, or a
+    /// `segment_duration` of 0, which §8.6.6.1 defines as "to the end of the
+    /// media").
+    pub trim_end: i64,
+    /// Samples one packet of this track decodes to, taken as the track's most
+    /// common `stts` delta — for audio, whose MP4 time base is
+    /// `1 / sample_rate`, a duration in ticks *is* a sample count.
+    ///
+    /// Read from the file rather than from a per-codec frame-size table on
+    /// purpose: AAC alone is 1024 or 960 samples depending on the profile,
+    /// and doubles again under SBR, so a table would over-trim the variants
+    /// it guessed wrong. `stts` states the answer the file itself uses. Zero
+    /// for video, and for a fragmented track with no sample table to survey,
+    /// which disables the trailing trim rather than guessing.
+    pub frame_samples: u32,
     pub source: Source,
     pub entries: Vec<FragEntry>,
     pub queue: VecDeque<Pending>,
@@ -291,6 +312,30 @@ impl Reader {
         } else {
             0
         };
+        // The tail the decoder produces but the file never presents.
+        //
+        // Two container statements say this, and one expression covers both.
+        // A sample's *declared* `stts` duration can be shorter than the
+        // frame it decodes to — that is where `ffmpeg -c:a aac` puts its
+        // trailing encoder padding, measured as a final `stts` delta of 768
+        // against 1024-sample frames on a 48 kHz file, matching `ffprobe`'s
+        // `discard_padding=256`. Separately, an `elst` can end before the
+        // media does. So the presented end is the earlier of "what this
+        // sample declares" and "where the edit list stops", and the trim is
+        // everything the decoder emits past it.
+        let skip_end = if self.audio && self.frame_samples > duration {
+            let decoded_end = pts_out.saturating_add(i64::from(self.frame_samples));
+            let presented_end = end.min(self.trim_end);
+            decoded_end.saturating_sub(presented_end).clamp(
+                0,
+                i64::from(self.frame_samples).saturating_sub(i64::from(skip)),
+            ) as u32
+        } else if self.audio {
+            end.saturating_sub(self.trim_end)
+                .clamp(0, i64::from(duration).saturating_sub(i64::from(skip))) as u32
+        } else {
+            0
+        };
         self.queue.push_back(Pending {
             offset,
             size,
@@ -300,6 +345,7 @@ impl Reader {
             key,
             discard,
             skip,
+            skip_end,
             index,
         });
     }
@@ -528,6 +574,8 @@ mod tests {
             dts_shift: 0,
             edit_shift: -1024,
             trim_point: 0,
+            trim_end: i64::MAX,
+            frame_samples: 0,
             source: Source::Table {
                 slot: 0,
                 next: 0,
