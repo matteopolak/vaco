@@ -47,7 +47,7 @@ use vaco_core::{Error, Result};
 /// A fixed-size, one-shot-per-slot publish board: `n` row bands, each
 /// writable exactly once and freely, repeatedly readable by any number of
 /// threads afterward with no further synchronisation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct RowPublish<T> {
     slots: Vec<OnceLock<T>>,
 }
@@ -102,6 +102,14 @@ impl<T> RowPublish<T> {
     #[must_use]
     pub(crate) fn all_published(&self) -> bool {
         self.slots.iter().all(|s| s.get().is_some())
+    }
+
+    /// Every published row's value, in row order, skipping any slot not yet
+    /// published — the summation shape `SaoParamsGrid::budget_bytes` needs
+    /// over whatever has actually been charged so far (a plain `Vec`'s own
+    /// `iter()` never had gaps to skip; `RowPublish`'s can, mid-decode).
+    pub(crate) fn iter(&self) -> impl Iterator<Item = &T> {
+        self.slots.iter().filter_map(OnceLock::get)
     }
 }
 
@@ -222,6 +230,42 @@ mod tests {
         for row in 0..ROWS {
             assert_eq!(board.get(row), Some(&(row * row)));
         }
+    }
+
+    #[test]
+    fn iter_yields_only_published_rows_in_order_skipping_gaps() {
+        let board = RowPublish::new(5);
+        board.publish(3, 30u32).expect("row 3 publishes");
+        board.publish(1, 10u32).expect("row 1 publishes");
+        // Rows 0, 2 and 4 are never published -- `iter` must skip them
+        // rather than yielding a default, since `SaoParamsGrid::
+        // budget_bytes`'s own sum must reflect exactly what has been
+        // charged so far, mid-decode, not a full picture's worth.
+        let seen: Vec<u32> = board.iter().copied().collect();
+        assert_eq!(seen, vec![10, 30]);
+    }
+
+    #[test]
+    fn cloning_preserves_published_rows_and_gaps() {
+        // `EdgeMarks`/`CuGrid`/`SaoParamsGrid` all derive `Clone` (the
+        // deblock-lag probe's own test machinery, `planning/E2E-GAPS.md`
+        // ss34, needs two independent instances from one decode) -- pinning
+        // that `RowPublish` itself clones correctly, rather than
+        // discovering it the first time one of those three is wired onto
+        // it and its own `#[derive(Clone)]` silently stops compiling or
+        // silently resets.
+        let board = RowPublish::new(3);
+        board.publish(0, 1u32).expect("row 0 publishes");
+        board.publish(2, 3u32).expect("row 2 publishes");
+        let cloned = board.clone();
+        assert_eq!(cloned.get(0), Some(&1));
+        assert_eq!(cloned.get(1), None);
+        assert_eq!(cloned.get(2), Some(&3));
+        // And the clone is independent -- publishing into the original
+        // after cloning must not appear in the clone.
+        board.publish(1, 2u32).expect("row 1 publishes after the clone was taken");
+        assert_eq!(board.get(1), Some(&2));
+        assert_eq!(cloned.get(1), None);
     }
 
     #[test]

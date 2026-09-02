@@ -490,7 +490,7 @@ impl HevcDecoder {
         walk.recon.materialize_into(walk.pic);
         walk.edges.finish()?;
         walk.cu_grid.finish();
-        walk.sao_params.finish();
+        walk.sao_params.finish()?;
 
         #[cfg(test)]
         if let Some(probe) = self.deblock_lag_probe.take() {
