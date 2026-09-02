@@ -154,6 +154,21 @@ Commit small and often. Land a compiling partial state rather than holding a
 broken tree; gate the feature off if it isn't ready. "Not ready to enable" and
 "not ready to commit" are different things.
 
+**A build failure in a crate you did not touch is probably not yours.** Someone is
+mid-edit: a call site written before the function it calls. Diagnose before you
+react — `git status --porcelain -- <that crate>` shows whether it is dirty, and
+building that crate at `HEAD` in a private worktree shows whether the failure is
+committed. Uncommitted and not yours means wait or build around it; it usually
+clears in minutes. Never "fix" it by reverting someone's file, and never conclude
+a failure is pre-existing by stashing — if your own change is already committed,
+stashing leaves it in place and proves nothing. Bisect instead.
+
+**Do a long refactor in a private worktree.** A multi-file change that leaves the
+tree non-compiling for an hour blocks every other agent's verification. Edit,
+build and verify in the worktree, then apply the finished change to the shared
+tree and commit it immediately, so the shared tree only ever sees compiling
+states. Small edits are fine in place.
+
 ## Commits
 
 Conventional messages with a bracketed scope: `fix(demux-mp4): ...`. Never a bare
