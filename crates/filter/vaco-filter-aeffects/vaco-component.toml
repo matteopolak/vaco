@@ -168,3 +168,8 @@ name = "virtualbass"
 long_name = "Audio Virtual Bass"
 ctor = "vaco_filter_aeffects::virtualbass::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-aeffects"
+ctor = "vaco_filter_aeffects::AeffectsRegistry"

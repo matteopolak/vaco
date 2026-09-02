@@ -23,3 +23,8 @@ name = "xstack"
 long_name = "Stack video inputs into custom layout."
 ctor = "vaco_filter_stack::xstack::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-stack"
+ctor = "vaco_filter_stack::StackRegistry"

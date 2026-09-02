@@ -99,3 +99,8 @@ name = "volume"
 long_name = "Change input volume"
 ctor = "vaco_filter_audio::volume::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-audio"
+ctor = "vaco_filter_audio::AudioRegistry"

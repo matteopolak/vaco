@@ -11,3 +11,8 @@ name = "drawtext"
 long_name = "Draw text on top of video frames."
 ctor = "vaco_filter_text::drawtext::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-text"
+ctor = "vaco_filter_text::TextRegistry"

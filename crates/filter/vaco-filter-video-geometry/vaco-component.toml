@@ -48,3 +48,8 @@ name = "vflip"
 long_name = "Vertically flip the input video"
 ctor = "vaco_filter_video_geometry::flip::vflip::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-video-geometry"
+ctor = "vaco_filter_video_geometry::GeometryRegistry"

@@ -144,3 +144,8 @@ name = "volumedetect"
 long_name = "Detect audio volume"
 ctor = "vaco_filter_adynamics::volumedetect::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-adynamics"
+ctor = "vaco_filter_adynamics::DynamicsRegistry"

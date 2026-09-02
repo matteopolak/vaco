@@ -125,3 +125,8 @@ name = "treble"
 long_name = "Boost or cut upper frequencies"
 ctor = "vaco_filter_aeq::treble::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-aeq"
+ctor = "vaco_filter_aeq::EqRegistry"

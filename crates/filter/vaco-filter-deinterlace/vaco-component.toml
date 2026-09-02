@@ -152,3 +152,8 @@ name = "phase"
 long_name = "Phase shift fields."
 ctor = "vaco_filter_deinterlace::phase::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-deinterlace"
+ctor = "vaco_filter_deinterlace::DeinterlaceRegistry"

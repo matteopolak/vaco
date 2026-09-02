@@ -17,3 +17,8 @@ name = "subtitles"
 long_name = "Render a subtitle file onto the input video."
 ctor = "vaco_filter_subtitle::subtitles::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-subtitle"
+ctor = "vaco_filter_subtitle::SubtitleRegistry"

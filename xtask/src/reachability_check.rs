@@ -46,6 +46,11 @@
 //!   wrapper) or it is the FLAC case: a real container with nothing on the
 //!   read side. Every write-only name needs a row in [`ALLOW_MUXER_ONLY`]
 //!   saying which.
+//! - **F** [`check_filter_dispatch`] — a crate's `filter` and
+//!   `filter_dispatch` components must appear together. The v360/#497 case:
+//!   registered (so `-filters` lists it) with no dispatch path (so `-vf`
+//!   cannot build it) is the same bug as the reverse, a `FilterRegistry`
+//!   nothing points at.
 //!
 //! # Allowlists
 //!
@@ -179,34 +184,6 @@ const ALLOW_ORPHAN_CRATE: &[(&str, &str)] = &[
          verifying no existing ad-hoc language handling in any of them would \
          regress is more than a registry-reachability pass should take on \
          without owning those crates. Left for a dedicated follow-up.",
-    ),
-    (
-        "vaco-codec-subtitle-cc",
-        "CEA-608/708 decode. Its own module doc names two closing conditions \
-         this crate is *not*: nothing upstream extracts `cc_data` from a \
-         compressed stream yet (an H.264/HEVC/MPEG-2 parser change, not this \
-         crate's), and wiring `vaco_codec_core::Decoder` is named explicit, \
-         disclosed follow-up work, not attempted here to avoid landing a \
-         `vaco-component.toml` fragment hastily in a shared tree (a bad \
-         fragment breaks `gen-registry` for every agent, per \
-         `planning/AGENT-CONSTRAINTS.md`).",
-    ),
-    (
-        "vaco-codec-subtitle-teletext",
-        "EBU/ETSI Teletext decode. Its own module doc section \
-         '# No registry-to-decoder path — by design, not oversight' explains \
-         that `vaco_frame::FrameData` had no `Subtitle` variant when this was \
-         written, and a fragment naming a `kind = \"decoder\"` ctor here \
-         would either lie about what it produces or fail the registry's own \
-         descriptor-resolution check.",
-    ),
-    (
-        "vaco-codec-subtitle-text",
-        "Text subtitle markup decode (SubRip/ASS/WebVTT/mov_text/TTML). Its \
-         own module doc section '# Not a `Decoder` implementation, \
-         deliberately' says wiring is 'a small, mechanical follow-up' not \
-         done here because `vaco_frame::FrameData::Subtitle` was uncommitted \
-         work in another agent's tree at the time it was written.",
     ),
     (
         "vaco-protocol-rtp",
@@ -853,12 +830,62 @@ fn check_unregistered_descriptors(rows: &[Row]) -> Vec<String> {
     violations
 }
 
+// ------------------------------------------------------------------ rule F
+
+/// A `filter` component and a `filter_dispatch` component from the same
+/// crate are two different, hand-written facts about the same filter family
+/// (`-filters`/`-h filter=<name>` metadata versus the `FilterRegistry` impl
+/// that actually builds one), so a fragment can state one without the
+/// other. Either direction reproduces GitHub #497's shape: `v360` was
+/// registered (listed, described) but had no dispatch path at all, so
+/// `-filters` advertised it and `-vf v360=...` said "Unknown filter".
+///
+/// Once both facts come from the same fragment file this is a two-line
+/// check rather than a person reading `vaco-cli/src/filterreg.rs` by hand.
+fn check_filter_dispatch(rows: &[Row]) -> Vec<String> {
+    let filter_crates: Set<&str> = rows
+        .iter()
+        .filter(|r| r.kind == "filter")
+        .map(|r| r.krate.as_str())
+        .collect();
+    let dispatch_crates: Set<&str> = rows
+        .iter()
+        .filter(|r| r.kind == "filter_dispatch")
+        .map(|r| r.krate.as_str())
+        .collect();
+
+    let mut violations = Vec::new();
+    for krate in &filter_crates {
+        if !dispatch_crates.contains(krate) {
+            violations.push(format!(
+                "  {krate} registers a `filter` component but no \
+                 `filter_dispatch` one — its filters appear in `-filters` but \
+                 `Filters::create` (`vaco-registry`) can never build them, the \
+                 v360/#497 shape exactly. Add `[[component]] kind = \
+                 \"filter_dispatch\"` naming {krate}'s `FilterRegistry` impl."
+            ));
+        }
+    }
+    for krate in &dispatch_crates {
+        if !filter_crates.contains(krate) {
+            violations.push(format!(
+                "  {krate} registers a `filter_dispatch` component but no \
+                 `filter` component — a `FilterRegistry` nothing in \
+                 `-filters` ever points at. Remove the dead registration, or \
+                 add the `filter` components it dispatches."
+            ));
+        }
+    }
+    violations.sort();
+    violations
+}
+
 // ------------------------------------------------------------------- driver
 
 pub fn run(_check: bool) -> Task {
     let rows = all_rows()?;
 
-    let sections: [(&str, Vec<String>); 5] = [
+    let sections: [(&str, Vec<String>); 6] = [
         (
             "A. crate with no fragment and no in-workspace caller",
             check_orphan_crates()?,
@@ -875,6 +902,10 @@ pub fn run(_check: bool) -> Task {
         (
             "E. descriptor built but never registered",
             check_unregistered_descriptors(&rows),
+        ),
+        (
+            "F. filter and filter_dispatch components disagree",
+            check_filter_dispatch(&rows),
         ),
     ];
 
@@ -899,7 +930,7 @@ pub fn run(_check: bool) -> Task {
         + ALLOW_UNREGISTERED_DESCRIPTOR.len();
     println!(
         "reachability-check: clean — {} components across {} fragments checked \
-         by 5 rules, {allowlisted} deliberate gap(s) on record",
+         by 6 rules, {allowlisted} deliberate gap(s) on record",
         rows.len(),
         crates()
             .iter()

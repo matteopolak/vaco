@@ -115,3 +115,8 @@ name = "zoneplate"
 long_name = "Generate zone-plate"
 ctor = "vaco_filter_source::zoneplate::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-source"
+ctor = "vaco_filter_source::GeneratorRegistry"

@@ -66,3 +66,8 @@ name = "vaguedenoiser"
 long_name = "Apply a Wavelet based Denoiser."
 ctor = "vaco_filter_denoise::vaguedenoiser::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-denoise"
+ctor = "vaco_filter_denoise::DenoiseRegistry"

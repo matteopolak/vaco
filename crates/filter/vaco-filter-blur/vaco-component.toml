@@ -69,3 +69,8 @@ name = "yaepblur"
 long_name = "Yet another edge preserving blur filter"
 ctor = "vaco_filter_blur::yaepblur::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-blur"
+ctor = "vaco_filter_blur::BlurRegistry"

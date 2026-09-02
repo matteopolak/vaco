@@ -51,3 +51,8 @@ name = "hilbert"
 long_name = "Generate a Hilbert transform FIR coefficients"
 ctor = "vaco_filter_asource::hilbert::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-asource"
+ctor = "vaco_filter_asource::AsourceRegistry"

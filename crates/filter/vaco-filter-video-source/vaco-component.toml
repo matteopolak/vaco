@@ -21,3 +21,8 @@ name = "pal75bars"
 long_name = "generate PAL 75% color bars"
 ctor = "vaco_filter_video_source::bars::pal75::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-video-source"
+ctor = "vaco_filter_video_source::SourceRegistry"

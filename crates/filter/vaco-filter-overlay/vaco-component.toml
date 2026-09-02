@@ -52,3 +52,8 @@ name = "remap"
 long_name = "Remap pixels."
 ctor = "vaco_filter_overlay::remap::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-overlay"
+ctor = "vaco_filter_overlay::OverlayRegistry"

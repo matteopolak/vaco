@@ -35,3 +35,8 @@ name = "haldclutsrc"
 long_name = "Provide an identity Hald CLUT"
 ctor = "vaco_filter_lut::haldclutsrc::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-lut"
+ctor = "vaco_filter_lut::LutRegistry"

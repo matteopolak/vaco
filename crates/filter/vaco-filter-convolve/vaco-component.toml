@@ -89,3 +89,8 @@ name = "sobel"
 long_name = "Apply sobel operator"
 ctor = "vaco_filter_convolve::sobel::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-convolve"
+ctor = "vaco_filter_convolve::ConvolveRegistry"

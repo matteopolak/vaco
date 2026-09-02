@@ -20,3 +20,8 @@ name = "drawgrid"
 long_name = "Draw a colored grid on the input video."
 ctor = "vaco_filter_draw_vf::drawgrid::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-draw-vf"
+ctor = "vaco_filter_draw_vf::DrawVfRegistry"

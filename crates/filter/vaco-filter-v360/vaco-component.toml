@@ -10,3 +10,8 @@ name = "v360"
 long_name = "Convert 360 projection of video (equirectangular and flat/rectilinear only)."
 ctor = "vaco_filter_v360::v360::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-v360"
+ctor = "vaco_filter_v360::V360Registry"

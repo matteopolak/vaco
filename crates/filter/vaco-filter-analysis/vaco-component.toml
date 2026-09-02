@@ -97,3 +97,8 @@ name = "ssim"
 long_name = "Calculate the SSIM between two video streams."
 ctor = "vaco_filter_analysis::ssim::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-analysis"
+ctor = "vaco_filter_analysis::registry::AnalysisRegistry"

@@ -47,3 +47,8 @@ name = "vignette"
 long_name = "Make or reverse a vignette effect"
 ctor = "vaco_filter_artistic::vignette::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-artistic"
+ctor = "vaco_filter_artistic::ArtisticRegistry"

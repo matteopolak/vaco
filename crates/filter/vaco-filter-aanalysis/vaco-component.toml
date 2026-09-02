@@ -87,3 +87,8 @@ name = "replaygain"
 long_name = "ReplayGain scanner"
 ctor = "vaco_filter_aanalysis::replaygain::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-aanalysis"
+ctor = "vaco_filter_aanalysis::AmeasureRegistry"

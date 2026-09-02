@@ -89,3 +89,8 @@ name = "limitdiff"
 long_name = "Apply filtering with limiting difference"
 ctor = "vaco_filter_color::limitdiff::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-color"
+ctor = "vaco_filter_color::ColorRegistry"

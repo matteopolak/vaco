@@ -46,7 +46,8 @@
 //!
 //! # Dependencies
 //!
-//! The five `-core` crates that define the descriptor types, plus one optional
+//! The five `-core` crates that define the descriptor types, `vaco-filter-graph`
+//! for the `FilterRegistry` trait [`Filters`] implements, plus one optional
 //! path dependency per component crate.
 
 #![forbid(unsafe_code)]
@@ -58,6 +59,7 @@ use vaco_codec_core::{
 };
 use vaco_core::{Error, MediaType, Result};
 use vaco_filter_core::FilterDesc;
+use vaco_filter_graph::registry::{FilterRegistry, Instance, Instantiate};
 use vaco_format_core::mux::BsfProvider;
 use vaco_format_core::{DemuxerDesc, MuxerDesc, ParserProvider, ProbeData};
 use vaco_limits::Limits;
@@ -67,6 +69,7 @@ pub use generated::{
     COMPONENTS, DECODERS, DEMUXERS, ENCODERS, ENCUMBERED_ALL, ENCUMBERED_ENABLED, FILTERS, MUXERS,
     PARSERS, PROTOCOLS,
 };
+use generated::FILTER_REGISTRIES;
 
 /// What a component is. The vocabulary is frozen in plan 19 §3.4.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
@@ -78,6 +81,7 @@ pub enum Kind {
     Encoder,
     Parser,
     Filter,
+    FilterDispatch,
     Protocol,
     BitstreamFilter,
 }
@@ -91,6 +95,7 @@ pub const KIND_NAMES: &[(Kind, &str)] = &[
     (Kind::Encoder, "encoder"),
     (Kind::Parser, "parser"),
     (Kind::Filter, "filter"),
+    (Kind::FilterDispatch, "filter_dispatch"),
     (Kind::Protocol, "protocol"),
     (Kind::BitstreamFilter, "bitstream_filter"),
 ];
@@ -136,6 +141,7 @@ impl Kind {
                 | Self::Encoder
                 | Self::Parser
                 | Self::Filter
+                | Self::FilterDispatch
                 | Self::Protocol
         )
     }
@@ -384,6 +390,41 @@ pub fn filter_by_name(name: &str) -> Option<&'static FilterDesc> {
     FILTERS.iter().copied().find(|f| f.name == name)
 }
 
+/// The [`FilterRegistry`] every real `-vf`/`-af`/`-filter_complex`/
+/// `-print_graphs` invocation resolves a filter name through.
+///
+/// Generated from the same fragments as [`FILTERS`], so "listed in
+/// `-filters`" and "buildable by name" are one fact instead of two that have
+/// to be kept in sync by hand — `vaco-cli` used to hand-maintain a second
+/// list of every filter crate's registry (`filterreg.rs`'s own
+/// `CliFilterRegistry::REGISTRIES`) and it drifted: `vaco-filter-v360` was
+/// registered and listed but had no entry in that list, so `-filters`
+/// advertised `v360` and `-vf v360=...` reported "Unknown filter" (GitHub
+/// #497). `decoder_for`/`encoder_for` never had this seam because
+/// `DecoderDesc`/`EncoderDesc` carry their own `make` function pointer;
+/// `FilterDesc` does not (it stays inspectable-without-constructing — see
+/// the crate doc), so this type is the filter side's equivalent: the
+/// generated `FILTER_REGISTRIES` table plus the linear search
+/// `decoder_for`/`encoder_for` don't need, since a filter is looked up by a
+/// name a fragment does not otherwise index.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Filters;
+
+impl FilterRegistry for Filters {
+    fn names(&self) -> Vec<&str> {
+        FILTER_REGISTRIES.iter().flat_map(|r| r.names()).collect()
+    }
+
+    fn create(&self, req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
+        for r in FILTER_REGISTRIES {
+            if r.names().contains(&req.name) {
+                return r.create(req);
+            }
+        }
+        Err(format!("Unknown filter '{}'", req.name))
+    }
+}
+
 /// Every enabled protocol descriptor.
 #[must_use]
 pub fn protocols() -> &'static [&'static ProtocolDesc] {
@@ -565,6 +606,25 @@ mod tests {
                 "{} is registered but Bsfs cannot open it",
                 c.name
             );
+        }
+    }
+
+    /// Rule F's runtime half: `xtask reachability-check` already asserts
+    /// every `filter` component's crate has a `filter_dispatch` one (a
+    /// static check over the fragments); this asserts the two generated
+    /// tables that produces actually agree at the individual filter-name
+    /// level, the same shape `every_bsf_component_row_has_a_reachable_filter`
+    /// checks for bitstream filters.
+    #[test]
+    fn every_filter_component_row_is_reachable_through_filters() {
+        let registry = Filters;
+        for c in components_of_kind(Kind::Filter) {
+            for alias in c.name.split(',') {
+                assert!(
+                    registry.contains(alias),
+                    "{alias} is registered but Filters cannot dispatch it"
+                );
+            }
         }
     }
 

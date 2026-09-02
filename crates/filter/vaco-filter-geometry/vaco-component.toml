@@ -131,3 +131,8 @@ name = "untile"
 long_name = "Untile a frame into a sequence of frames"
 ctor = "vaco_filter_geometry::untile::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-geometry"
+ctor = "vaco_filter_geometry::T2GeometryRegistry"

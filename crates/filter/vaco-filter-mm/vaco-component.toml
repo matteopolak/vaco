@@ -329,3 +329,8 @@ name = "asendcmd"
 long_name = "Send commands to filters"
 ctor = "vaco_filter_mm::sendcmd::audio::DESC"
 media = "audio"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-mm"
+ctor = "vaco_filter_mm::MmRegistry"

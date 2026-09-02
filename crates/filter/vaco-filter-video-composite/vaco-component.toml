@@ -21,3 +21,8 @@ name = "rotate"
 long_name = "Rotate the input image"
 ctor = "vaco_filter_video_composite::rotate::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-video-composite"
+ctor = "vaco_filter_video_composite::CompositeRegistry"

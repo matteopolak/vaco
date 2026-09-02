@@ -46,7 +46,14 @@ const MANIFEST_END: &str = "# END GENERATED";
 
 // ---------------------------------------------------------------- the schema
 
-/// The `kind` vocabulary, frozen in plan 19 §3.4.
+/// The `kind` vocabulary. Plan 19 §3.4 froze the original seven; growing it
+/// needs a real descriptor type in the trait layer first (see [`Kind::desc_ty`]).
+///
+/// `filter_dispatch` is the one addition since: one row per filter crate,
+/// `ctor` naming its `FilterRegistry` impl rather than a per-filter
+/// descriptor, so `vaco-registry` can dispatch `-vf`/`-af`/`-filter_complex`
+/// itself instead of `vaco-cli` hand-maintaining a second list that has to
+/// agree with this one (GitHub #497 was exactly that drift).
 ///
 /// The second column is the descriptor type a `ctor` of that kind must name.
 /// `None` means the trait layer has no descriptor type for the kind yet, so the
@@ -59,6 +66,7 @@ const KINDS: &[(&str, Option<Kind>)] = &[
     ("encoder", Some(Kind::Encoder)),
     ("parser", Some(Kind::Parser)),
     ("filter", Some(Kind::Filter)),
+    ("filter_dispatch", Some(Kind::FilterDispatch)),
     ("protocol", Some(Kind::Protocol)),
     ("bitstream_filter", None),
 ];
@@ -72,6 +80,7 @@ enum Kind {
     Encoder,
     Parser,
     Filter,
+    FilterDispatch,
     Protocol,
 }
 
@@ -85,6 +94,7 @@ impl Kind {
             Self::Encoder => "::vaco_codec_core::EncoderDesc",
             Self::Parser => "::vaco_codec_core::ParserDesc",
             Self::Filter => "::vaco_filter_core::FilterDesc",
+            Self::FilterDispatch => "(dyn ::vaco_filter_graph::registry::FilterRegistry + Sync)",
             Self::Protocol => "::vaco_protocol_core::ProtocolDesc",
         }
     }
@@ -98,6 +108,7 @@ impl Kind {
             Self::Encoder => "ENCODERS",
             Self::Parser => "PARSERS",
             Self::Filter => "FILTERS",
+            Self::FilterDispatch => "FILTER_REGISTRIES",
             Self::Protocol => "PROTOCOLS",
         }
     }

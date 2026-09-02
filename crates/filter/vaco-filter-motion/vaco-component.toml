@@ -30,3 +30,8 @@ name = "stabtransform"
 long_name = "Video stabilization/deshaking (pass 2 of 2; vaco's own transform-file format, not .trf-compatible)."
 ctor = "vaco_filter_motion::stabtransform::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-motion"
+ctor = "vaco_filter_motion::MotionRegistry"

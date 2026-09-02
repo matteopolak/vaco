@@ -63,3 +63,8 @@ name = "setsar"
 long_name = "Set the pixel sample aspect ratio"
 ctor = "vaco_filter_video_format::setsar::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-video-format"
+ctor = "vaco_filter_video_format::FormatRegistry"

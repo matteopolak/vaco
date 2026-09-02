@@ -81,3 +81,8 @@ name = "threshold"
 long_name = "Threshold first video stream using other video streams"
 ctor = "vaco_filter_key::threshold::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-key"
+ctor = "vaco_filter_key::KeyRegistry"

@@ -85,3 +85,8 @@ name = "vectorscope"
 long_name = "Video vectorscope."
 ctor = "vaco_filter_scope::vectorscope::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-scope"
+ctor = "vaco_filter_scope::ScopeRegistry"

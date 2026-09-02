@@ -24,3 +24,8 @@ name = "elbg"
 long_name = "Apply posterize effect, using the ELBG algorithm."
 ctor = "vaco_filter_palette::elbg::DESC"
 media = "video"
+
+[[component]]
+kind = "filter_dispatch"
+name = "vaco-filter-palette"
+ctor = "vaco_filter_palette::PaletteRegistry"
