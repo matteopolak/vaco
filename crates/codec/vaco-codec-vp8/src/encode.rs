@@ -1434,6 +1434,21 @@ impl Encoder for Vp8Encoder {
                 let mut packet_budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut packet_budget, &bytes)?;
                 packet.pts = frame.pts;
+                // Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/
+                // `vaco-codec-vorbis`/`vaco-codec-pcm`/`vaco-codec-adpcm`/
+                // `vaco-codec-simple-audio`'s encoders, on the video side:
+                // this never set `Packet::duration`, and MP4's `stts`
+                // derives a track's last sample's length only from it.
+                // Unlike the audio encoders above, video's natural
+                // duration already lives on the input `Frame` itself --
+                // every real decoder in this tree (h264/hevc/av1/vp8/vp9/
+                // mpeg12/h263) sets `frame.duration` from the source's own
+                // per-frame timing, and every audio/video filter already
+                // propagates it unchanged (`out.duration = input.duration`)
+                // -- so propagating it here, rather than assuming a
+                // constant `1/fps`, is also the only way to survive
+                // variable frame-rate input correctly.
+                packet.duration = frame.duration;
                 if is_key {
                     packet.flags = PacketFlags::KEY;
                 }
@@ -1628,6 +1643,33 @@ mod tests {
             let cmse = plane_mse(&src, &decoded[0], plane);
             assert!(cmse < 900.0, "chroma plane {plane} MSE too high for a working intra encoder: {cmse}");
         }
+    }
+
+    /// Same bug class as `vaco-codec-flac`/`vaco-codec-alac`/
+    /// `vaco-codec-vorbis`/`vaco-codec-pcm`/`vaco-codec-adpcm`/
+    /// `vaco-codec-simple-audio`'s encoders, on the video side: `send_frame`
+    /// set `packet.pts` but never `packet.duration`, which a container
+    /// deriving a track's total length from summed packet durations (MP4's
+    /// `stts`) silently undercounts by. Checked with two *different*
+    /// per-frame durations, not one fixed value, because the fix is a
+    /// propagation (`packet.duration = frame.duration`) and a constant
+    /// `1/fps` assumption would have passed a same-duration-every-frame
+    /// test while still being wrong for variable frame-rate input.
+    #[test]
+    fn send_frame_propagates_the_input_frames_real_duration() {
+        let mut enc = Vp8Encoder::new(Limits::permissive());
+        let mut first = textured_frame(64, 48, 0);
+        first.duration = vaco_core::Duration::from_micros(33_367); // ~29.97 fps
+        enc.send_frame(Some(&first)).expect("send");
+        let p0 = enc.receive_packet().expect("packet");
+        assert_eq!(p0.duration, vaco_core::Duration::from_micros(33_367));
+        assert_ne!(p0.duration, vaco_core::Duration::ZERO);
+
+        let mut second = textured_frame(64, 48, 4);
+        second.duration = vaco_core::Duration::from_micros(16_683); // a shorter, different frame
+        enc.send_frame(Some(&second)).expect("send");
+        let p1 = enc.receive_packet().expect("packet");
+        assert_eq!(p1.duration, vaco_core::Duration::from_micros(16_683));
     }
 
     #[test]

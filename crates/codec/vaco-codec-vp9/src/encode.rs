@@ -762,6 +762,19 @@ impl Encoder for Vp9Encoder {
                 let bytes = encode_keyframe(&mut budget, frame)?;
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = frame.pts;
+                // Same bug class as `vaco-codec-vp8`'s encoder, and the
+                // audio encoders before it (`vaco-codec-flac`/`-alac`/
+                // `-vorbis`/`-pcm`/`-adpcm`/`-simple-audio`): this never
+                // set `Packet::duration`, and MP4's `stts` derives a
+                // track's last sample's length only from it. Propagated
+                // from the input `Frame` rather than assumed from a
+                // constant `1/fps`, matching every real decoder in this
+                // tree (h264/hevc/av1/vp8/vp9/mpeg12/h263 all set
+                // `frame.duration` from the source's own per-frame
+                // timing) and every filter (`out.duration =
+                // input.duration`) -- the only way to also survive
+                // variable frame-rate input correctly.
+                packet.duration = frame.duration;
                 packet.flags = PacketFlags::KEY;
                 self.machine.emit(packet);
                 Ok(())
@@ -969,5 +982,32 @@ mod tests {
         assert!(matches!(enc.receive_packet(), Err(CoreError::NeedMoreInput)));
         enc.send_frame(None).expect("drain");
         assert!(matches!(enc.receive_packet(), Err(CoreError::Eof)));
+    }
+
+    /// Same bug class as `vaco-codec-vp8`'s encoder, and the audio encoders
+    /// before it: `send_frame` set `packet.pts` but never `packet.duration`,
+    /// which a container deriving a track's total length from summed
+    /// packet durations (MP4's `stts`) silently undercounts by. Checked
+    /// with two different per-frame durations, not one fixed value: the
+    /// fix is a propagation (`packet.duration = frame.duration`), and a
+    /// constant `1/fps` assumption would have passed a same-duration-
+    /// every-frame test while still being wrong for variable frame rate.
+    #[test]
+    fn send_frame_propagates_the_input_frames_real_duration() {
+        let mut budget = Budget::new(Limits::permissive());
+        let mut enc = Vp9Encoder::new(Limits::permissive());
+
+        let mut first = make_test_frame(&mut budget, 64, 64);
+        first.duration = vaco_core::Duration::from_micros(33_367);
+        enc.send_frame(Some(&first)).expect("send");
+        let p0 = enc.receive_packet().expect("packet");
+        assert_eq!(p0.duration, vaco_core::Duration::from_micros(33_367));
+        assert_ne!(p0.duration, vaco_core::Duration::ZERO);
+
+        let mut second = make_test_frame(&mut budget, 64, 64);
+        second.duration = vaco_core::Duration::from_micros(16_683);
+        enc.send_frame(Some(&second)).expect("send");
+        let p1 = enc.receive_packet().expect("packet");
+        assert_eq!(p1.duration, vaco_core::Duration::from_micros(16_683));
     }
 }
