@@ -1,4 +1,4 @@
-//! `-print_graphs`/`-print_graphs_file`/`-print_graphs_format` (CL-27, #230).
+//! `-print_graphs`/`-print_graphs_file`/`-print_graphs_format` (CL-27).
 //!
 //! # Reference basis
 //!
@@ -31,8 +31,8 @@
 //!   with nothing behind it.
 //! - **`-vf`/`-af`'s implicit per-stream graphs.** The reference dumps those
 //!   too (each gets its own `[GRAPH]`); this only dumps `-filter_complex`/
-//!   `-lavfi` occurrences, which is what `#230`'s own investigation and this
-//!   module's test fixtures exercise. A simple-graph dump is not implemented.
+//!   `-lavfi` occurrences, which is what this module's own investigation and
+//!   test fixtures exercise. A simple-graph dump is not implemented.
 //! - **`name`/`id`.** The reference's `name` is an internal
 //!   `"Graph <filtergraph-index>.<subgraph-index>"` label and `id` a
 //!   matching internal string; this reports `"Graph <index>"` /

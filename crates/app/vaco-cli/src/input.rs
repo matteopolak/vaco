@@ -42,7 +42,7 @@ pub struct InputFile {
     pub demuxer: Box<dyn Demuxer>,
     pub desc: DemuxerDesc,
     /// The transport's own byte length, when it can report one — a pipe
-    /// cannot. #641's `Input #0` dump computes `bitrate:` from this and the
+    /// cannot. The `Input #0` dump computes `bitrate:` from this and the
     /// container's duration, the same way `vaco-probe`'s `-show_format` does
     /// for the same field. Only known on the probed-open path: `-f <name>`
     /// skips the peek this is read from, so a forced format reports `None`

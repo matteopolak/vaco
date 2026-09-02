@@ -61,8 +61,8 @@ fn video(number: u64, w: u64, h: u64, default: bool) -> Vec<u8> {
 /// tracks previously had none and were only ever exercised before that fix
 /// landed. `vaco_format_fixtures::opus::HEAD_MONO` is the shared, measured
 /// `OpusHead` every container test suite in this tree now uses for exactly
-/// this (`planning/E2E-GAPS.md` #35 -- a hand-copy of this same fixture is
-/// what went stale for 9.5 hours the first time).
+/// this -- a hand-copy of this same fixture is what went stale for 9.5
+/// hours the first time.
 fn audio(number: u64, channels: u64, default: bool) -> Vec<u8> {
     let mut a = synth::float(el::SAMPLINGFREQUENCY, 48_000.0);
     a.extend_from_slice(&synth::uint(el::CHANNELS, channels));
@@ -181,12 +181,11 @@ fn no_arguments_exits_one() {
 
 #[test]
 fn an_input_with_no_output_exits_one() {
-    // OBSERVED: `ffmpeg -i multi.mkv` prints the `Input #0` dump (#641), then
-    // this exact line, and exits 1. A nonexistent file used to stand in here
-    // — harmless only because the "no output" check ran *before* any input
-    // was opened, which was itself the gap #641 reports: the reference opens
-    // and dumps the input first. Now that the order matches, this needs an
-    // input that actually opens.
+    // OBSERVED: `ffmpeg -i multi.mkv` prints the `Input #0` dump, then this
+    // exact line, and exits 1. A nonexistent file used to stand in here —
+    // harmless only because the "no output" check ran *before* any input was
+    // opened, and the reference opens and dumps the input first. Now that the
+    // order matches, this needs an input that actually opens.
     let f = fixture(&four_track_file());
     let r = go(&["-i", &f.path]);
     assert_eq!(r.code.code(), 1, "{}", r.message());
@@ -359,9 +358,8 @@ fn an_output_this_build_can_read_but_not_write_says_so() {
 #[test]
 fn an_output_format_nothing_claims_keeps_the_reference_wording() {
     // OBSERVED: exit 234, and this exact line modulo the log pointer. It is
-    // no longer the *first* line of output — #641's `Input #0` dump now
-    // precedes it here too, since the input opens fine before output
-    // resolution fails.
+    // no longer the *first* line of output — the `Input #0` dump now precedes
+    // it here too, since the input opens fine before output resolution fails.
     let f = fixture(&four_track_file());
     let r = go(&["-i", &f.path, "-c", "copy", "-f", "nosuchformat", "-"]);
     assert_eq!(r.code.code(), 234);
@@ -386,10 +384,9 @@ fn an_output_with_no_c_copy_now_reaches_a_real_decode_attempt() {
     // a blanket refusal that would also have covered the video track for no
     // real reason.
     //
-    // This is registry-driven rather than pinned, per
-    // `planning/AGENT-CONSTRAINTS.md`'s "never pin the absence of something
-    // the project is building": the day an Opus decoder lands, this stops
-    // asserting anything rather than asserting something false.
+    // Registry-driven rather than pinned, so it never pins the absence of
+    // something the project is building: the day an Opus decoder lands, this
+    // stops asserting anything rather than asserting something false.
     if vaco_registry::decoder_for(vaco_codec_core::CodecId::Opus).is_some() {
         return;
     }
@@ -551,7 +548,7 @@ fn monotonic_video_streamcopies_end_to_end() {
 /// This is what makes `exec::muxer_for` reaching the registry an observable
 /// fact rather than an implementation detail: before this pass, `-f matroska
 /// out.mkv` exited 0, printed a plausible summary and `out.mkv` did not
-/// exist (`planning/CONFORMANCE-FINDINGS.md` #6). A test that only checks the
+/// exist. A test that only checks the
 /// exit code and the stderr text cannot tell that apart from a real remux —
 /// only opening the file the run claims to have written can.
 #[test]

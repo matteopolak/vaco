@@ -1,4 +1,4 @@
-//! CL-17 (#208)'s `-report`/`FFREPORT`: mirror everything this run writes to
+//! CL-17's `-report`/`FFREPORT`: mirror everything this run writes to
 //! stderr into a log file, plus the header line the reference always writes
 //! first.
 //!

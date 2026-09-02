@@ -1,4 +1,4 @@
-//! `-enc_time_base` (CL-21, #222): the encoder's own time base.
+//! `-enc_time_base` (CL-21): the encoder's own time base.
 //!
 //! # Measured against the reference, and where its own `-h full` disagrees
 //! # with its actual behaviour

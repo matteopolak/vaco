@@ -16,7 +16,7 @@
 //! constant. The gate fails only when the current count *exceeds* it — a new
 //! violation is caught the moment it lands, and the 1232 that already exist
 //! are grandfathered, not blessed. Cleaning any of them up is a strict
-//! improvement: lower [`BASELINE`] by the same amount in the same commit,
+//! improvement: re-pin [`BASELINE`] to the new count in the same commit,
 //! and the ratchet has moved forward and cannot move back on its own. The
 //! count prints on every run, success or failure, so the direction of
 //! travel is never hidden behind a bare pass.
@@ -54,10 +54,12 @@ const CROSS_REFS: &[&str] = &[
     "planning/",
 ];
 
-/// The violation count as of the commit that added this ratchet, measured by
-/// this same scan. Fix a violation and lower this number in the same commit;
-/// never raise it to make a new one disappear — see the module doc above.
-const BASELINE: usize = 1195;
+/// The violation count as of the last commit to move this ratchet, measured
+/// by this same scan. Fix violations and re-pin this to the new count in the
+/// same commit — subtracting how many you fixed is wrong whenever the count
+/// was already above the baseline, which is when anyone is looking. Never
+/// raise it to make a new violation disappear — see the module doc above.
+const BASELINE: usize = 1180;
 
 pub fn run(_check: bool) -> Task {
     let root = repo_root();
@@ -172,6 +174,13 @@ pub fn run(_check: bool) -> Task {
 /// stream index, `#0:0`) or by `/<letter>` (a container name, `#0/mp4`) is
 /// the reference's own colon/slash-separated notation, not a citation --
 /// no real issue reference in this tree is ever followed by either shape.
+///
+/// And a run that is numerically **zero** is never a citation either:
+/// issue numbering starts at 1, so `#0` is always something else. All 26
+/// occurrences in this tree are the reference's own index notation in a
+/// shape the rules above do not reach (`Input #0, from …`, `Outputs: #0:
+/// default`, `Slave muxer #0 failed`), a hex colour (`#00ff00`), a hex
+/// stream id (`#0x10`) or a group specifier (`g:#0`).
 fn issue_ref(line: &str) -> Option<&str> {
     let mut rest = line;
     let mut consumed = 0usize;
@@ -181,7 +190,7 @@ fn issue_ref(line: &str) -> Option<&str> {
             .split(|c: char| !c.is_ascii_digit())
             .next()
             .unwrap_or_default();
-        if (1..=3).contains(&digits.len()) {
+        if (1..=3).contains(&digits.len()) && digits.bytes().any(|b| b != b'0') {
             let hash_pos = consumed + at;
             let glued_to_a_word = line
                 .get(..hash_pos)
@@ -264,6 +273,18 @@ mod tests {
             None
         );
         assert_eq!(issue_ref("/// [out#0/null] video:7KiB audio:16KiB"), None);
+    }
+
+    /// `#0` is not an issue number in any repository -- numbering starts at
+    /// 1 -- so the reference's index notation is safe in every shape,
+    /// including the ones the punctuation rules above do not reach.
+    #[test]
+    fn a_zero_is_never_an_issue_reference() {
+        assert_eq!(issue_ref("//! `Input #0, from 'f.mp4':` — the dump"), None);
+        assert_eq!(issue_ref("//! `Outputs: #0: default (video)`"), None);
+        assert_eq!(issue_ref("//! measured: `<font color=\"#00ff00\">`"), None);
+        assert_eq!(issue_ref("//! stream specifiers: `#0x10`, `g:#0`"), None);
+        assert_eq!(issue_ref("// `Input #0` dump, see #641"), Some("641"));
     }
 
     /// A real citation preceded by `/`, `(`, or nothing at all (start of

@@ -1,4 +1,4 @@
-//! CL-17 (#208)'s `frame= fps= … speed= elapsed=` line, gated by `-stats`.
+//! CL-17's `frame= fps= … speed= elapsed=` line, gated by `-stats`.
 //!
 //! # Scope
 //!

@@ -1,4 +1,4 @@
-//! CL-17 (#208)'s `-progress <url>`: the same run data `crate::stats`
+//! CL-17's `-progress <url>`: the same run data `crate::stats`
 //! reports for `-stats`, reshaped into `key=value` lines and written to a
 //! file/pipe/URL instead of a human-readable line on stderr.
 //!

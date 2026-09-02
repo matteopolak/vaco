@@ -1,6 +1,6 @@
 //! `Input #0, from '…':`/`Output #0, to '…':` — the container dump the
-//! reference prints before it does anything else (#641), plus the `Output`
-//! side's own header (part of CL-17/#208's stderr surface).
+//! reference prints before it does anything else, plus the `Output`
+//! side's own header (part of CL-17's stderr surface).
 //!
 //! # Why this exists
 //!

@@ -1,4 +1,4 @@
-//! CL-22 (#223): `-force_key_frames`'s four syntaxes, and the per-frame
+//! CL-22: `-force_key_frames`'s four syntaxes, and the per-frame
 //! decision each one makes — plan 14 §6.5.
 //!
 //! # What this module is, and what it is not wired to

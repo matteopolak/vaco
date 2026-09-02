@@ -104,7 +104,7 @@ pub struct SimpleGraphOptions {
     /// [`build`] rather than here, so an unrecognised name is a build-time
     /// error with the stream in scope rather than a silently-dropped option.
     pub sample_fmt: Option<String>,
-    /// `-fps_mode` (CL-21/#222), already parsed. Video-only, and resolved
+    /// `-fps_mode` (CL-21), already parsed. Video-only, and resolved
     /// against `crate::exec::run_pipeline`'s `frames` tap directly
     /// (`crate::fps_mode::insert`), not through this module's own
     /// text-based `-vf` chain — see that module's doc for why. Lives on this
@@ -112,7 +112,7 @@ pub struct SimpleGraphOptions {
     /// every per-stream option through the same `stream_option` call this
     /// one needs.
     pub fps_mode: Option<crate::fps_mode::FpsMode>,
-    /// `-enc_time_base` (CL-21/#222), already parsed. Same rationale as
+    /// `-enc_time_base` (CL-21), already parsed. Same rationale as
     /// [`SimpleGraphOptions::fps_mode`] for why it lives here.
     pub enc_time_base: Option<crate::enc_time_base::EncTimeBase>,
     /// The rotation/flip [`vaco_format_core::sidedata::DisplayTransform`]

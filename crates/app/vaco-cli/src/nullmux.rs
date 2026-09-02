@@ -228,8 +228,8 @@ fn open_null(_sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
 /// # Why counting here rather than trusting the container's own byte count
 ///
 /// `vaco-sched`'s mux node does now drive a
-/// [`vaco_format_core::mux::MuxWriter`] (gap 8, `planning/INTERFACE-GAPS.md`,
-/// closed), so `vaco_format_core::mux::MuxReport` exists for every run — but
+/// [`vaco_format_core::mux::MuxWriter`], so
+/// `vaco_format_core::mux::MuxReport` exists for every run — but
 /// it is returned from `MuxWriter::finish`, deep inside the pipeline, and
 /// `vaco-sched` does not thread a per-output report back out to its caller.
 /// Adding that channel is a `vaco-sched` API change this crate did not need:

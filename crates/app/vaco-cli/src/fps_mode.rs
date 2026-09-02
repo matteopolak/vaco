@@ -1,4 +1,4 @@
-//! `-fps_mode` (CL-21, #222): `passthrough`/`cfr`/`vfr`/`auto`.
+//! `-fps_mode` (CL-21): `passthrough`/`cfr`/`vfr`/`auto`.
 //!
 //! # The value set is four, not five
 //!
@@ -62,9 +62,9 @@
 //! is not a parameter either [`vaco_filter_video_format::fps::Filter`] or
 //! [`VfrDedup`] takes. Accepting the option and silently not consuming it
 //! would repeat exactly the defect `-ar` had before this codebase's own
-//! `refuse_unimplemented_options` existed (`planning/AGENT-CONSTRAINTS.md`'s
-//! standing rule: silently wrong is worse than refusing) — better to keep
-//! refusing it than to accept a number that changes nothing.
+//! `refuse_unimplemented_options` existed — silently wrong is worse than
+//! refusing, so this keeps refusing it rather than accepting a number that
+//! changes nothing.
 
 use vaco_codec_core::VideoParameters;
 use vaco_core::{MediaType, Rational, Result, Timestamp};

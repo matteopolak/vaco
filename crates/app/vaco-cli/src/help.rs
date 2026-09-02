@@ -407,8 +407,8 @@ mod tests {
     fn filter_and_bsf_describe_what_is_registered_and_reject_the_rest() {
         // This named `scale` as its example of an unknown filter, and `scale`
         // was registered the same day. Ninth test in this project to fail *on
-        // success*; the rule and the registry-driven pattern are in
-        // `planning/AGENT-CONSTRAINTS.md`.
+        // success*, which is why the assertions below ask the registry what it
+        // holds instead of naming a name.
         assert_eq!(
             text(Some("filter")),
             "No filter name specified.\n\nExiting with exit code 0\n"
