@@ -124,7 +124,7 @@ pub(crate) struct CtuSao {
 /// (single-threaded), but every method already routes through
 /// `self.shared`/`self.current` explicitly.
 #[derive(Debug, Clone)]
-struct SaoParamsGridShared {
+pub(crate) struct SaoParamsGridShared {
     ctbs_x: usize,
     /// Total row bands (CTU rows) in the picture.
     n_bands: usize,
@@ -136,26 +136,32 @@ struct SaoParamsGridShared {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct SaoParamsGrid {
-    shared: std::sync::Arc<SaoParamsGridShared>,
+pub(crate) struct SaoParamsGrid<'a> {
+    shared: &'a SaoParamsGridShared,
     /// The CTU row [`SaoParamsGrid::set`] currently writes into; every
     /// earlier row already lives in `shared.published`.
     current_band: usize,
     current: Option<Vec<CtuSao>>,
 }
 
-impl SaoParamsGrid {
-    /// # Errors
-    /// [`vaco_core::Error`] if the first row's allocation exceeds `budget`.
-    pub(crate) fn new(budget: &mut Budget, ctbs_x: u32, ctbs_y: u32) -> Result<Self> {
+impl SaoParamsGridShared {
+    /// Owned by the caller (`decoder.rs`), borrowed by [`SaoParamsGrid`] --
+    /// see `framebuf::EdgeMarksShared::new`'s own doc for why a borrow, not
+    /// an `Arc`.
+    #[must_use]
+    pub(crate) fn new(ctbs_x: u32, ctbs_y: u32) -> Self {
         let ctbs_x = usize::try_from(ctbs_x).unwrap_or(0).max(1);
         let n_bands = usize::try_from(ctbs_y).unwrap_or(0).max(1);
-        let current: Vec<CtuSao> = budget.alloc(ctbs_x)?;
-        Ok(Self {
-            shared: std::sync::Arc::new(SaoParamsGridShared { ctbs_x, n_bands, published: crate::wavefront::RowPublish::new(n_bands) }),
-            current_band: 0,
-            current: Some(current),
-        })
+        Self { ctbs_x, n_bands, published: crate::wavefront::RowPublish::new(n_bands) }
+    }
+}
+
+impl<'a> SaoParamsGrid<'a> {
+    /// # Errors
+    /// [`vaco_core::Error`] if the first row's allocation exceeds `budget`.
+    pub(crate) fn new(budget: &mut Budget, shared: &'a SaoParamsGridShared) -> Result<Self> {
+        let current: Vec<CtuSao> = budget.alloc(shared.ctbs_x)?;
+        Ok(Self { shared, current_band: 0, current: Some(current) })
     }
 
     /// Total addressable CTUs (`ctbs_x * ctbs_y`) — every raster address
@@ -352,7 +358,7 @@ pub(crate) fn parse_ctu_sao(
     ctbs_x: u32,
     sao_luma: bool,
     sao_chroma: bool,
-    prev: &SaoParamsGrid,
+    prev: &SaoParamsGrid<'_>,
 ) -> Result<CtuSao> {
     let ctu_x = addr.checked_rem(ctbs_x).unwrap_or(0);
     let ctu_y = addr.checked_div(ctbs_x).unwrap_or(0);

@@ -57,7 +57,7 @@ fn iz(x: usize) -> i32 {
 /// `constrained_intra_pred_flag` is 0 (the ordinary availability check is
 /// the whole story), and a real neighbour-mode lookup otherwise.
 pub(crate) fn build_reference_line(
-    plane: &ReconPlane,
+    plane: &ReconPlane<'_>,
     x0: i32,
     y0: i32,
     size: usize,
@@ -99,7 +99,7 @@ fn set_at<T: Copy>(v: &mut [T], idx: usize, value: T) {
     }
 }
 
-fn sample(plane: &ReconPlane, x: i32, y: i32, is_intra_neighbor: &impl Fn(i32, i32) -> bool) -> (bool, u16) {
+fn sample(plane: &ReconPlane<'_>, x: i32, y: i32, is_intra_neighbor: &impl Fn(i32, i32) -> bool) -> (bool, u16) {
     if plane.is_ready(x, y) && is_intra_neighbor(x, y) {
         let (Ok(ux), Ok(uy)) = (usize::try_from(x), usize::try_from(y)) else {
             return (false, 0);

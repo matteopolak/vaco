@@ -20,8 +20,6 @@ use vaco_codec_cabac::{CabacDecoder, ContextModel};
 use vaco_core::{Error, Result};
 use vaco_parse_hevc::{Pps, Sps};
 
-use vaco_limits::Budget;
-
 use crate::cabac_ctx::ContextBank;
 use crate::framebuf::{CuGrid, EdgeMarks, Picture, Plane, ReconPicture};
 use crate::intra_mode::{self, DC_IDX, DM_CHROMA_IDX};
@@ -134,7 +132,7 @@ pub(crate) struct CtxShared<'p> {
 /// decision until the thing that needs it exists, rather than guessing its
 /// shape ahead of time.
 pub(crate) struct Ctx<'p> {
-    pub shared: std::sync::Arc<CtxShared<'p>>,
+    pub shared: &'p CtxShared<'p>,
     /// The finished-picture buffer deblocking/SAO/emission (and every
     /// future picture's own reference reads) use — mutated in place by
     /// both, so it stays a direct field here rather than inside `shared`;
@@ -145,8 +143,8 @@ pub(crate) struct Ctx<'p> {
     /// `crate::framebuf`'s "Stage 1" section doc for why this is a
     /// separate type from `pic` (which stays the finished-picture shape
     /// deblocking/SAO/emission already know).
-    pub recon: &'p mut ReconPicture,
-    pub cu_grid: CuGrid,
+    pub recon: &'p mut ReconPicture<'p>,
+    pub cu_grid: CuGrid<'p>,
     /// §8.6.1's `qPY_PREV`: the last coding unit's finalised `QpY` in
     /// decoding order, or `SliceQpY` at the very start of the slice and (via
     /// `decoder::decode_wpp_rows`'s own reset) at the start of each CTB row
@@ -168,14 +166,14 @@ pub(crate) struct Ctx<'p> {
     /// Per-4x4-block transform/CU boundary flags, populated as
     /// [`transform_unit`] reconstructs each luma leaf — the input
     /// [`crate::deblock`]'s post-picture filtering pass reads.
-    pub edges: EdgeMarks,
+    pub edges: EdgeMarks<'p>,
     /// Every CTU's resolved SAO parameters so far, indexed by raster
     /// address — filled in by [`decode_ctu`] as each CTU's `sao()` is
     /// parsed, read back by a merge at a later address and by
     /// [`crate::sao::filter_picture`] once the whole picture is decoded.
     /// Row-banded (PERF-PROGRAMME.md item B4, Stage 1 step 3's third
     /// piece) — see [`crate::sao::SaoParamsGrid`]'s own doc.
-    pub sao_params: crate::sao::SaoParamsGrid,
+    pub sao_params: crate::sao::SaoParamsGrid<'p>,
 }
 
 /// One entry of `RefPicList0`, as seen by the CTU walk: its own POC (for
@@ -307,16 +305,17 @@ impl<'p> InterSliceParams<'p> {
     }
 }
 
-impl<'p> Ctx<'p> {
+impl<'p> CtxShared<'p> {
     /// Re-derives the handful of walk-specific limits from an SPS/PPS pair
     /// the caller ([`crate::decoder`]) has already checked are within this
-    /// crate's stated scope.
+    /// crate's stated scope. Built by the caller as its own local, living
+    /// in the same stack frame as the `EdgeMarksShared`/`CuGridShared`/
+    /// `SaoParamsGridShared`/`ReconPictureShared` values [`Ctx::new`]'s own
+    /// `edges`/`cu_grid`/`sao_params`/`recon` borrow from — see this
+    /// module's own "don't share the writer" resolution for why every one
+    /// of these `*Shared` types is now a plain borrow rather than an `Arc`.
     #[allow(clippy::too_many_arguments, reason = "one call site (decoder.rs), grouping into a sub-struct would not aid clarity")]
     pub(crate) fn new(
-        budget: &mut Budget,
-        pic: &'p mut Picture,
-        recon: &'p mut ReconPicture,
-        cu_grid: CuGrid,
         sps: &Sps,
         pps: &Pps,
         slice_qp: i32,
@@ -326,55 +325,72 @@ impl<'p> Ctx<'p> {
         sao_luma: bool,
         sao_chroma: bool,
         inter: Option<InterSliceParams<'p>>,
-    ) -> Result<Self> {
+    ) -> Self {
         let is_p_slice = inter.is_some();
         let log2_ctb_size = u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size);
         let width = usize::try_from(sps.pic_width_in_luma_samples).unwrap_or(0);
-        let height = usize::try_from(sps.pic_height_in_luma_samples).unwrap_or(0);
         let ctb_size = 1u32 << log2_ctb_size;
         let ctbs_x = u32::try_from(width).unwrap_or(0).div_ceil(ctb_size).max(1);
-        let ctbs_y = u32::try_from(height).unwrap_or(0).div_ceil(ctb_size).max(1);
-        let sao_params = crate::sao::SaoParamsGrid::new(budget, ctbs_x, ctbs_y)?;
-        Ok(Self {
-            shared: std::sync::Arc::new(CtxShared {
-                pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
-                pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
-                log2_ctb_size,
-                log2_min_cb_size: u32::from(sps.log2_min_cb_size),
-                log2_min_tb_size: u32::from(sps.log2_min_tb_size),
-                log2_max_tb_size: u32::from(sps.log2_min_tb_size) + u32::from(sps.log2_diff_max_min_tb_size),
-                max_transform_hierarchy_depth_intra: sps.max_transform_hierarchy_depth_intra,
-                slice_qp,
-                sign_data_hiding: pps.sign_data_hiding_enabled,
-                strong_intra_smoothing: sps.strong_intra_smoothing_enabled,
-                transform_skip_enabled: pps.transform_skip_enabled,
-                bit_depth_luma: u32::from(sps.bit_depth_luma),
-                bit_depth_chroma: u32::from(sps.bit_depth_chroma),
-                cb_qp_offset: pps.cb_qp_offset,
-                cr_qp_offset: pps.cr_qp_offset,
-                constrained_intra_pred: pps.constrained_intra_pred,
-                cu_qp_delta_enabled: pps.cu_qp_delta_enabled,
-                log2_min_cu_qp_delta_size: log2_ctb_size.saturating_sub(pps.diff_cu_qp_delta_depth),
-                deblocking_disabled,
-                beta_offset_div2,
-                tc_offset_div2,
-                sao_luma,
-                sao_chroma,
-                ctbs_x,
-                is_p_slice,
-                inter,
-                max_transform_hierarchy_depth_inter: sps.max_transform_hierarchy_depth_inter,
-            }),
+        Self {
+            pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
+            pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
+            log2_ctb_size,
+            log2_min_cb_size: u32::from(sps.log2_min_cb_size),
+            log2_min_tb_size: u32::from(sps.log2_min_tb_size),
+            log2_max_tb_size: u32::from(sps.log2_min_tb_size) + u32::from(sps.log2_diff_max_min_tb_size),
+            max_transform_hierarchy_depth_intra: sps.max_transform_hierarchy_depth_intra,
+            slice_qp,
+            sign_data_hiding: pps.sign_data_hiding_enabled,
+            strong_intra_smoothing: sps.strong_intra_smoothing_enabled,
+            transform_skip_enabled: pps.transform_skip_enabled,
+            bit_depth_luma: u32::from(sps.bit_depth_luma),
+            bit_depth_chroma: u32::from(sps.bit_depth_chroma),
+            cb_qp_offset: pps.cb_qp_offset,
+            cr_qp_offset: pps.cr_qp_offset,
+            constrained_intra_pred: pps.constrained_intra_pred,
+            cu_qp_delta_enabled: pps.cu_qp_delta_enabled,
+            log2_min_cu_qp_delta_size: log2_ctb_size.saturating_sub(pps.diff_cu_qp_delta_depth),
+            deblocking_disabled,
+            beta_offset_div2,
+            tc_offset_div2,
+            sao_luma,
+            sao_chroma,
+            ctbs_x,
+            is_p_slice,
+            inter,
+            max_transform_hierarchy_depth_inter: sps.max_transform_hierarchy_depth_inter,
+        }
+    }
+}
+
+impl<'p> Ctx<'p> {
+    /// Assembles the walk's own per-row-exclusive state (`pic`, `recon`,
+    /// `cu_grid`, `edges`, `sao_params`, all already constructed by the
+    /// caller against their own `*Shared` boards) together with `shared`,
+    /// borrowed from the caller's own local. No allocation happens here any
+    /// more -- every one of `recon`/`cu_grid`/`edges`/`sao_params` is
+    /// already built by the time this runs.
+    pub(crate) fn new(
+        shared: &'p CtxShared<'p>,
+        pic: &'p mut Picture,
+        recon: &'p mut ReconPicture<'p>,
+        cu_grid: CuGrid<'p>,
+        edges: EdgeMarks<'p>,
+        sao_params: crate::sao::SaoParamsGrid<'p>,
+    ) -> Self {
+        let slice_qp = shared.slice_qp;
+        Self {
+            shared,
             pic,
             qp_y_prev: slice_qp,
             qg_qp_pred: slice_qp,
             is_cu_qp_delta_coded: false,
             cu_qp_delta_val: 0,
-            edges: EdgeMarks::new(width, height, usize::try_from(ctb_size).unwrap_or(1).max(1)),
+            edges,
             sao_params,
             recon,
             cu_grid,
-        })
+        }
     }
 
     /// Test-only: a second `Ctx` sharing every field this one has except
@@ -389,37 +405,19 @@ impl<'p> Ctx<'p> {
     /// a test living outside this module could not do anyway: most of
     /// `Ctx`'s fields are private to `ctu`, by design).
     #[cfg(test)]
-    pub(crate) fn retarget_pic_for_test<'q>(&self, pic: &'q mut Picture, recon: &'q mut ReconPicture) -> Ctx<'q> {
+    pub(crate) fn retarget_pic_for_test<'q>(&self, pic: &'q mut Picture, recon: &'q mut ReconPicture<'q>) -> Ctx<'q>
+    where
+        'p: 'q,
+    {
+        // `shared` is reborrowed rather than rebuilt: every field of
+        // `CtxShared` is either `Copy` or, for `inter`, unread by
+        // `deblock::filter_picture` (the only thing this retargeted copy
+        // ever runs) -- so there is no need to zero it out the way the
+        // pre-borrowed-reference version did, and `'p: 'q` lets the
+        // reference itself (covariant in its lifetime, since it holds no
+        // `&'p mut` fields) simply narrow from `'p` to `'q`.
         Ctx {
-            shared: std::sync::Arc::new(CtxShared {
-                log2_ctb_size: self.shared.log2_ctb_size,
-                log2_min_cb_size: self.shared.log2_min_cb_size,
-                log2_min_tb_size: self.shared.log2_min_tb_size,
-                log2_max_tb_size: self.shared.log2_max_tb_size,
-                max_transform_hierarchy_depth_intra: self.shared.max_transform_hierarchy_depth_intra,
-                pic_width: self.shared.pic_width,
-                pic_height: self.shared.pic_height,
-                slice_qp: self.shared.slice_qp,
-                sign_data_hiding: self.shared.sign_data_hiding,
-                strong_intra_smoothing: self.shared.strong_intra_smoothing,
-                transform_skip_enabled: self.shared.transform_skip_enabled,
-                bit_depth_luma: self.shared.bit_depth_luma,
-                bit_depth_chroma: self.shared.bit_depth_chroma,
-                cb_qp_offset: self.shared.cb_qp_offset,
-                cr_qp_offset: self.shared.cr_qp_offset,
-                constrained_intra_pred: self.shared.constrained_intra_pred,
-                cu_qp_delta_enabled: self.shared.cu_qp_delta_enabled,
-                log2_min_cu_qp_delta_size: self.shared.log2_min_cu_qp_delta_size,
-                deblocking_disabled: self.shared.deblocking_disabled,
-                beta_offset_div2: self.shared.beta_offset_div2,
-                tc_offset_div2: self.shared.tc_offset_div2,
-                sao_luma: self.shared.sao_luma,
-                sao_chroma: self.shared.sao_chroma,
-                ctbs_x: self.shared.ctbs_x,
-                is_p_slice: self.shared.is_p_slice,
-                inter: None,
-                max_transform_hierarchy_depth_inter: self.shared.max_transform_hierarchy_depth_inter,
-            }),
+            shared: self.shared,
             pic,
             // `deblock::filter_picture`, the only thing this retargeted
             // copy ever runs, never reads `Ctx::recon` -- the caller passes
@@ -1346,7 +1344,7 @@ fn write_inter_cu_no_residual(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32, pus:
 /// slice the way `Plane::row_mut` used to.
 const MAX_CTB: usize = 64;
 
-fn write_pred_block(plane: &mut crate::framebuf::ReconPlane, x0: i32, y0: i32, w: i32, h: i32, src: &[i32]) {
+fn write_pred_block(plane: &mut crate::framebuf::ReconPlane<'_>, x0: i32, y0: i32, w: i32, h: i32, src: &[i32]) {
     let (wu, hu) = (usize::try_from(w).unwrap_or(0), usize::try_from(h).unwrap_or(0));
     let Ok(x0u) = usize::try_from(x0) else { return };
     // `ReconPlane::write_row` takes an already-converted `&[u8]` (tile
@@ -2030,7 +2028,7 @@ fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode
 /// `transform::add_residual_clip` (or are a raw prediction with cbf clear,
 /// itself a weighted average of already-in-range reference samples), so the
 /// `u8` narrowing below never actually clips.
-fn write_block(plane: &mut crate::framebuf::ReconPlane, x0: i32, y0: i32, size: usize, block: &[u16]) {
+fn write_block(plane: &mut crate::framebuf::ReconPlane<'_>, x0: i32, y0: i32, size: usize, block: &[u16]) {
     let Ok(x0u) = usize::try_from(x0) else { return };
     // See `write_pred_block`'s own comment for why this goes through a
     // fixed conversion buffer rather than a raw `row_mut`-style slice.

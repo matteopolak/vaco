@@ -212,7 +212,7 @@ impl Picture {
 /// heterogeneous arrays plus its own `Budget` accounting to keep
 /// self-consistent through the change).
 #[derive(Debug, Clone)]
-struct CuGridShared {
+pub(crate) struct CuGridShared {
     cols: usize,
     /// 4x4-block rows per CTU row band — see [`EdgeMarks::band_rows`]'s own
     /// doc for the identical quantity there.
@@ -243,8 +243,8 @@ struct CuGridShared {
 /// (single-threaded), but every method already routes through
 /// `self.shared`/`self.current` explicitly.
 #[derive(Debug, Clone)]
-pub(crate) struct CuGrid {
-    shared: std::sync::Arc<CuGridShared>,
+pub(crate) struct CuGrid<'a> {
+    shared: &'a CuGridShared,
     /// The row band [`CuGrid::fill`] and friends currently write into;
     /// every earlier band already lives in `shared.published`.
     current_band: usize,
@@ -333,7 +333,7 @@ fn cu_index_in(cols: usize, band_rows: usize, bx: usize, local_by: usize) -> Opt
     Some(local_by * cols + bx)
 }
 
-impl CuGrid {
+impl CuGridShared {
     /// `has_l1` is `InterSliceParams::is_b` (`false` for an I or P slice's own
     /// grid) — a P/I slice's own `l1` arrays are charged at length `0`
     /// (`fill_motion`/`inter_at` degrade to "never populated" automatically:
@@ -350,32 +350,39 @@ impl CuGrid {
     /// moment this gating did.
     ///
     /// `ctb_size` (in luma samples) sets the row-band height, the same
-    /// quantity [`ReconPlane::new`]/[`EdgeMarks::new`]'s own caller already
-    /// passes. Only the first band is allocated here; [`CuGrid::begin_row`]
+    /// quantity [`ReconPlaneShared::new`]/[`EdgeMarksShared::new`]'s own
+    /// caller already passes. Owned by the caller (`decoder.rs`), borrowed
+    /// by [`CuGrid`] — see [`EdgeMarksShared::new`]'s own doc for why a
+    /// borrow, not an `Arc`.
+    #[must_use]
+    pub(crate) fn new(luma_width: usize, luma_height: usize, has_l1: bool, ctb_size: usize) -> Self {
+        let cols = luma_width.div_ceil(4).max(1);
+        let total_rows = luma_height.div_ceil(4).max(1);
+        let band_rows = ctb_size.max(1).div_ceil(4).max(1);
+        let n_bands = total_rows.div_ceil(band_rows).max(1);
+        Self { cols, band_rows, n_bands, has_l1, published: crate::wavefront::RowPublish::new(n_bands) }
+    }
+}
+
+impl<'a> CuGrid<'a> {
+    /// Only the first band is allocated here; [`CuGrid::begin_row`]
     /// allocates each later one as the walk reaches it, so a picture whose
     /// full grid would exceed `budget` fails when the CTU walk actually
     /// reaches the row that pushes it over, not necessarily at this call —
     /// the same incremental-charge shape [`EdgeMarks`] already has for its
     /// (untracked) bands, extended here to the arrays that are
     /// `Budget`-tracked. The running total charged is unaffected: the sum
-    /// across every band ends up the same handful of bytes [`CuGrid::new`]
-    /// used to charge in one call (plus, at most, one row band's worth of
-    /// rounding from the last, possibly-short band — see
-    /// [`EdgeMarks::new`]'s own identical rounding).
+    /// across every band ends up the same handful of bytes
+    /// [`CuGridShared::new`]'s own caller used to charge in one call (plus,
+    /// at most, one row band's worth of rounding from the last,
+    /// possibly-short band — see [`EdgeMarksShared::new`]'s own identical
+    /// rounding).
     ///
     /// # Errors
     /// [`vaco_core::Error`] if the first band's allocation exceeds `budget`.
-    pub(crate) fn new(budget: &mut Budget, luma_width: usize, luma_height: usize, has_l1: bool, ctb_size: usize) -> Result<Self> {
-        let cols = luma_width.div_ceil(4).max(1);
-        let total_rows = luma_height.div_ceil(4).max(1);
-        let band_rows = ctb_size.max(1).div_ceil(4).max(1);
-        let n_bands = total_rows.div_ceil(band_rows).max(1);
-        let current = CuGridBand::new(budget, cols, band_rows, has_l1)?;
-        Ok(Self {
-            shared: std::sync::Arc::new(CuGridShared { cols, band_rows, n_bands, has_l1, published: crate::wavefront::RowPublish::new(n_bands) }),
-            current_band: 0,
-            current: Some(current),
-        })
+    pub(crate) fn new(budget: &mut Budget, shared: &'a CuGridShared) -> Result<Self> {
+        let current = CuGridBand::new(budget, shared.cols, shared.band_rows, shared.has_l1)?;
+        Ok(Self { shared, current_band: 0, current: Some(current) })
     }
 
     /// The row band containing 4x4-block row `by`.
@@ -797,7 +804,7 @@ impl CuGrid {
 /// below already routes through `self.shared`/`self.current` explicitly,
 /// so splitting them across two owners later is a move, not a rewrite.
 #[derive(Debug, Clone)]
-struct EdgeMarksShared {
+pub(crate) struct EdgeMarksShared {
     cols: usize,
     /// 4x4-block rows per CTU row band — the same quantity
     /// [`ReconPlane::band_h`] tracks in luma samples, here in block units.
@@ -815,8 +822,8 @@ struct EdgeMarksShared {
 }
 
 #[derive(Debug, Clone)]
-pub(crate) struct EdgeMarks {
-    shared: std::sync::Arc<EdgeMarksShared>,
+pub(crate) struct EdgeMarks<'a> {
+    shared: &'a EdgeMarksShared,
     /// The row band [`EdgeMarks::mark_vert`] and friends currently write
     /// into; every earlier band already lives in `shared.published`.
     current_band: usize,
@@ -850,32 +857,47 @@ impl EdgeBand {
     }
 }
 
-impl EdgeMarks {
+impl EdgeMarksShared {
     /// One `bool` per 4x4 luma block, in each of the two directions, per
     /// row band — not `Budget`-tracked, matching this module's own
     /// [`Plane::ready`]/[`CuGrid`]'s own `written` precedent for boolean
     /// occupancy grids. `ctb_size` (in luma samples) sets the row-band
     /// height, the same quantity [`ReconPlane::new`]'s own caller passes.
+    ///
+    /// Owned by the caller (`decoder.rs`, for the same lifetime as `Ctx`
+    /// itself), not by [`EdgeMarks`] — `std::thread::scope`'s own shape
+    /// (`docs/codec/hevc-wavefront-threading.md`'s "don't share the
+    /// writer, don't `Arc` what does not outlive its caller" resolution):
+    /// every row worker's own task will end inside the same bounded
+    /// `decode_picture` call this value lives in, so a borrow reaches
+    /// every worker for free, with neither reference counting nor the
+    /// pointer indirection `Arc<T>::deref` costs on the read path.
     #[must_use]
     pub(crate) fn new(luma_width: usize, luma_height: usize, ctb_size: usize) -> Self {
         let cols = luma_width.div_ceil(4).max(1);
         let total_rows = luma_height.div_ceil(4).max(1);
         let band_rows = ctb_size.max(1).div_ceil(4).max(1);
         let n_bands = total_rows.div_ceil(band_rows).max(1);
-        let band_len = cols.saturating_mul(band_rows);
         Self {
-            shared: std::sync::Arc::new(EdgeMarksShared {
-                cols,
-                band_rows,
-                n_bands,
-                // Fixed-size at construction, one slot per row band — see
-                // this struct's own doc for why this is `RowPublish` rather
-                // than a plain, amortised-growth `Vec`.
-                published: crate::wavefront::RowPublish::new(n_bands),
-            }),
-            current_band: 0,
-            current: EdgeBand::new(band_len),
+            cols,
+            band_rows,
+            n_bands,
+            // Fixed-size at construction, one slot per row band — see this
+            // struct's own doc for why this is `RowPublish` rather than a
+            // plain, amortised-growth `Vec`.
+            published: crate::wavefront::RowPublish::new(n_bands),
         }
+    }
+}
+
+impl<'a> EdgeMarks<'a> {
+    /// Borrows `shared` (see [`EdgeMarksShared::new`]'s own doc for why a
+    /// borrow, not an `Arc`) and allocates this worker's own first
+    /// `current` band.
+    #[must_use]
+    pub(crate) fn new(shared: &'a EdgeMarksShared) -> Self {
+        let band_len = shared.cols.saturating_mul(shared.band_rows);
+        Self { shared, current_band: 0, current: EdgeBand::new(band_len) }
     }
 
     /// The row band containing 4x4-block row `by`.
@@ -1278,7 +1300,7 @@ impl TileBuffer {
 
 /// The CTU walk's own in-progress reconstruction buffer for one component
 /// plane — see this module's own "Stage 1/2" section doc above.
-struct ReconPlaneShared {
+pub(crate) struct ReconPlaneShared {
     width: usize,
     height: usize,
     ctb_size: usize,
@@ -1296,46 +1318,7 @@ struct ReconPlaneShared {
     published: crate::wavefront::RowPublish<TileBuffer>,
 }
 
-/// See this module's own "Stage 1/2" section doc above for `shared`
-/// (geometry plus the `RowPublish` board) versus `current` (this plane's
-/// own in-progress tile, owned outright, no shared writer behind it).
-pub(crate) struct ReconPlane {
-    shared: std::sync::Arc<ReconPlaneShared>,
-    /// The CTU tile most recently opened for writes via
-    /// [`ReconPlane::begin_ctu`] — every tile strictly before it in raster
-    /// CTU order (a full row above, or an earlier column of this same row)
-    /// is either already published or, for [`ReconPlane::finish`]'s own
-    /// "picture ended early" case, about to be. `current_published` tracks
-    /// whether *this* tile itself has been [`ReconPlane::publish_ctu`]-ed
-    /// yet, since a read can arrive between `begin_ctu` and `publish_ctu`
-    /// (same-CTU reference-line/reconstruction reads) as well as after.
-    current_row: usize,
-    current_col: usize,
-    current_published: bool,
-    current: TileBuffer,
-    /// Per-4x4-block "has this block been written yet", scoped to the
-    /// current tile only and reset whenever it advances — a tile is at
-    /// most `ctb_size` square, so this is far smaller than Stage 1's own
-    /// whole-row-band `ready` grid was. Same reasoning as `Plane::ready`
-    /// above, re-derived fresh per tile instead of per row band.
-    ready: Vec<bool>,
-}
-impl ReconPlane {
-    /// `(row, col)`'s own real pixel dimensions — `ctb_size` square except
-    /// at the picture's right/bottom edge, where the last row/column of
-    /// tiles is whatever remains.
-    fn tile_dims(width: usize, height: usize, ctb_size: usize, row: usize, col: usize) -> (usize, usize) {
-        let w = ctb_size.min(width.saturating_sub(col.saturating_mul(ctb_size)));
-        let h = ctb_size.min(height.saturating_sub(row.saturating_mul(ctb_size)));
-        (w, h)
-    }
-
-    /// `(row, col)`'s own raster CTU address — the index [`RowPublish`]
-    /// addresses it by.
-    fn tile_addr(&self, row: usize, col: usize) -> usize {
-        row.saturating_mul(self.shared.n_col_bands).saturating_add(col)
-    }
-
+impl ReconPlaneShared {
     /// # Errors
     /// [`vaco_core::Error`] if the allocation exceeds `budget`.
     pub(crate) fn new(budget: &mut Budget, width: usize, height: usize, ctb_size: usize) -> Result<Self> {
@@ -1357,24 +1340,70 @@ impl ReconPlane {
         // design has no use for and never allocates), never more.
         budget.charge(u64::try_from(width.saturating_mul(height)).unwrap_or(u64::MAX))?;
         let ready_dim = ctb_size.div_ceil(4).max(1);
-        let ready = vec![false; ready_dim.saturating_mul(ready_dim)];
-        let (w0, h0) = Self::tile_dims(width, height, ctb_size, 0, 0);
         Ok(Self {
-            shared: std::sync::Arc::new(ReconPlaneShared {
-                width,
-                height,
-                ctb_size,
-                n_row_bands,
-                n_col_bands,
-                ready_dim,
-                published: crate::wavefront::RowPublish::new(n_row_bands.saturating_mul(n_col_bands)),
-            }),
+            width,
+            height,
+            ctb_size,
+            n_row_bands,
+            n_col_bands,
+            ready_dim,
+            published: crate::wavefront::RowPublish::new(n_row_bands.saturating_mul(n_col_bands)),
+        })
+    }
+}
+
+/// See this module's own "Stage 1/2" section doc above for `shared`
+/// (geometry plus the `RowPublish` board) versus `current` (this plane's
+/// own in-progress tile, owned outright, no shared writer behind it).
+pub(crate) struct ReconPlane<'a> {
+    shared: &'a ReconPlaneShared,
+    /// The CTU tile most recently opened for writes via
+    /// [`ReconPlane::begin_ctu`] — every tile strictly before it in raster
+    /// CTU order (a full row above, or an earlier column of this same row)
+    /// is either already published or, for [`ReconPlane::finish`]'s own
+    /// "picture ended early" case, about to be. `current_published` tracks
+    /// whether *this* tile itself has been [`ReconPlane::publish_ctu`]-ed
+    /// yet, since a read can arrive between `begin_ctu` and `publish_ctu`
+    /// (same-CTU reference-line/reconstruction reads) as well as after.
+    current_row: usize,
+    current_col: usize,
+    current_published: bool,
+    current: TileBuffer,
+    /// Per-4x4-block "has this block been written yet", scoped to the
+    /// current tile only and reset whenever it advances — a tile is at
+    /// most `ctb_size` square, so this is far smaller than Stage 1's own
+    /// whole-row-band `ready` grid was. Same reasoning as `Plane::ready`
+    /// above, re-derived fresh per tile instead of per row band.
+    ready: Vec<bool>,
+}
+impl<'a> ReconPlane<'a> {
+    /// `(row, col)`'s own real pixel dimensions — `ctb_size` square except
+    /// at the picture's right/bottom edge, where the last row/column of
+    /// tiles is whatever remains.
+    fn tile_dims(width: usize, height: usize, ctb_size: usize, row: usize, col: usize) -> (usize, usize) {
+        let w = ctb_size.min(width.saturating_sub(col.saturating_mul(ctb_size)));
+        let h = ctb_size.min(height.saturating_sub(row.saturating_mul(ctb_size)));
+        (w, h)
+    }
+
+    /// `(row, col)`'s own raster CTU address — the index [`RowPublish`]
+    /// addresses it by.
+    fn tile_addr(&self, row: usize, col: usize) -> usize {
+        row.saturating_mul(self.shared.n_col_bands).saturating_add(col)
+    }
+
+    pub(crate) fn new(shared: &'a ReconPlaneShared) -> Self {
+        let ready_dim = shared.ready_dim;
+        let ready = vec![false; ready_dim.saturating_mul(ready_dim)];
+        let (w0, h0) = Self::tile_dims(shared.width, shared.height, shared.ctb_size, 0, 0);
+        Self {
+            shared,
             current_row: 0,
             current_col: 0,
             current_published: false,
             current: TileBuffer::zeroed(w0, h0),
             ready,
-        })
+        }
     }
 
     /// The CTU tile containing luma-grid pixel `(x, y)`.
@@ -1624,16 +1653,20 @@ impl ReconPlane {
     }
 }
 
-/// One decoding picture's three reconstruction planes, as the CTU walk sees
-/// them — see [`ReconPlane`]'s own doc for why this is a separate type from
-/// [`Picture`] rather than [`Picture`] itself.
-pub(crate) struct ReconPicture {
-    pub y: ReconPlane,
-    pub cb: ReconPlane,
-    pub cr: ReconPlane,
+/// The three planes' own [`ReconPlaneShared`] geometry-plus-`RowPublish`
+/// boards, owned by whichever stack frame outlives the [`ReconPicture`]
+/// that borrows from it (`decoder.rs`'s own `decode_packet`, today) — kept
+/// as a separate type from [`ReconPicture`] itself for the same reason
+/// `EdgeMarksShared`/`CuGridShared`/`SaoParamsGridShared` are separate from
+/// their own borrowing wrappers: a struct cannot own a value and hold a
+/// `&'a` reference to that same value within itself.
+pub(crate) struct ReconPictureShared {
+    pub y: ReconPlaneShared,
+    pub cb: ReconPlaneShared,
+    pub cr: ReconPlaneShared,
 }
 
-impl ReconPicture {
+impl ReconPictureShared {
     /// `ctb_size` is the *luma* CTB size; chroma's own tile size is half
     /// that (rounded up), matching this crate's 4:2:0-only scope exactly
     /// the way [`Picture::new`]'s own `cw`/`ch` halving already does. Luma
@@ -1648,10 +1681,29 @@ impl ReconPicture {
         let ch = luma_height.div_ceil(2);
         let cctb = ctb_size.div_ceil(2).max(1);
         Ok(Self {
-            y: ReconPlane::new(budget, luma_width, luma_height, ctb_size)?,
-            cb: ReconPlane::new(budget, cw, ch, cctb)?,
-            cr: ReconPlane::new(budget, cw, ch, cctb)?,
+            y: ReconPlaneShared::new(budget, luma_width, luma_height, ctb_size)?,
+            cb: ReconPlaneShared::new(budget, cw, ch, cctb)?,
+            cr: ReconPlaneShared::new(budget, cw, ch, cctb)?,
         })
+    }
+}
+
+/// One decoding picture's three reconstruction planes, as the CTU walk sees
+/// them — see [`ReconPlane`]'s own doc for why this is a separate type from
+/// [`Picture`] rather than [`Picture`] itself.
+pub(crate) struct ReconPicture<'a> {
+    pub y: ReconPlane<'a>,
+    pub cb: ReconPlane<'a>,
+    pub cr: ReconPlane<'a>,
+}
+
+impl<'a> ReconPicture<'a> {
+    pub(crate) fn new(shared: &'a ReconPictureShared) -> Self {
+        Self {
+            y: ReconPlane::new(&shared.y),
+            cb: ReconPlane::new(&shared.cb),
+            cr: ReconPlane::new(&shared.cr),
+        }
     }
 
     /// [`ReconPlane::begin_ctu`], across all three planes at once — the

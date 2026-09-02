@@ -286,8 +286,24 @@ impl HevcDecoder {
         let ctb_size = usize::try_from(1u32 << (u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size)))
             .unwrap_or(1)
             .max(1);
-        let mut recon = crate::framebuf::ReconPicture::new(&mut self.budget, width, height, ctb_size)?;
-        let cu_grid = CuGrid::new(&mut self.budget, width, height, hdr.kind == SliceKind::B, ctb_size)?;
+        let ctb_size_u32 = u32::try_from(ctb_size).unwrap_or(1).max(1);
+        let ctbs_x = u32::try_from(width).unwrap_or(0).div_ceil(ctb_size_u32).max(1);
+        let ctbs_y = u32::try_from(height).unwrap_or(0).div_ceil(ctb_size_u32).max(1);
+        // Stage 2b's "try `std::thread::scope`" resolution
+        // (`docs/codec/hevc-wavefront-threading.md`): every one of these
+        // five `*Shared` boards is now a plain local, owned by this same
+        // stack frame for exactly as long as `walk`/`recon`/`cu_grid`/
+        // `edges`/`sao_params` (which all borrow from one) are alive below
+        // — no `Arc`, no reference counting, matching `std::thread::scope`'s
+        // own borrowing shape ahead of step 4's real dispatch.
+        let recon_shared = crate::framebuf::ReconPictureShared::new(&mut self.budget, width, height, ctb_size)?;
+        let mut recon = crate::framebuf::ReconPicture::new(&recon_shared);
+        let cu_grid_shared = crate::framebuf::CuGridShared::new(width, height, hdr.kind == SliceKind::B, ctb_size);
+        let cu_grid = CuGrid::new(&mut self.budget, &cu_grid_shared)?;
+        let edges_shared = crate::framebuf::EdgeMarksShared::new(width, height, ctb_size);
+        let edges = crate::framebuf::EdgeMarks::new(&edges_shared);
+        let sao_params_shared = sao::SaoParamsGridShared::new(ctbs_x, ctbs_y);
+        let sao_params = sao::SaoParamsGrid::new(&mut self.budget, &sao_params_shared)?;
 
         // ITU-T H.265 §8.3.1: this picture's own picture order count, and
         // (§8.1) whether it is the one IRAP in its sequence that clears
@@ -405,11 +421,7 @@ impl HevcDecoder {
             })
         };
 
-        let mut walk = Ctx::new(
-            &mut self.budget,
-            &mut pic,
-            &mut recon,
-            cu_grid,
+        let ctx_shared = crate::ctu::CtxShared::new(
             &sps,
             &pps,
             slice_qp,
@@ -419,16 +431,11 @@ impl HevcDecoder {
             hdr.sao_luma,
             hdr.sao_chroma,
             inter,
-        )?;
+        );
+        let mut walk = Ctx::new(&ctx_shared, &mut pic, &mut recon, cu_grid, edges, sao_params);
 
         let qp_i8 = i8::try_from(slice_qp.clamp(0, 51)).unwrap_or(0);
-
-        let ctb_size = 1u32 << walk.shared.log2_ctb_size;
-        let pic_width_u32 = u32::try_from(walk.shared.pic_width).unwrap_or(0);
-        let pic_height_u32 = u32::try_from(walk.shared.pic_height).unwrap_or(0);
-        let ctbs_x = pic_width_u32.div_ceil(ctb_size).max(1);
-        let ctbs_y = pic_height_u32.div_ceil(ctb_size).max(1);
-        let ctb_size_i = i32::try_from(ctb_size).unwrap_or(0);
+        let ctb_size_i = i32::try_from(ctb_size_u32).unwrap_or(0);
 
         if pps.entropy_coding_sync_enabled {
             // §7.4.7.1's entry-point offsets are byte counts over the *coded*
@@ -1065,22 +1072,33 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
     let ctb = 1usize << walk.shared.log2_ctb_size;
     let target_row_start = probe.target_ctu_row.saturating_mul(ctb);
     let target_row_end = target_row_start.saturating_add(ctb);
-
-    // `deblock::filter_picture` never reads `Ctx::recon` -- this exists
-    // purely to satisfy the field, reused (re-borrowed, never aliased: each
-    // retarget-then-filter-then-capture below finishes before the next one
-    // starts) across every retargeted `Ctx` this probe builds.
     let (width, height) = (usize::try_from(walk.shared.pic_width).unwrap_or(0), usize::try_from(walk.shared.pic_height).unwrap_or(0));
-    let Ok(mut throwaway_recon) = crate::framebuf::ReconPicture::new(budget, width, height, ctb) else {
-        // Allocation failure here means the probe cannot run at all; an
-        // empty result reads as "missing lag N" in the test's own
-        // assertions, which is a loud, specific failure rather than a
-        // panic in probe machinery that is not itself under test.
-        return Vec::new();
-    };
 
+    // `deblock::filter_picture` never reads `Ctx::recon` -- every retarget
+    // below builds its own throwaway `ReconPictureShared`/`ReconPicture`
+    // pair, each scoped to its own nested block, purely to satisfy the
+    // field. A single one reused across every retarget (the pre-borrowed-
+    // reference shape this replaces) no longer works: `Ctx`'s own `recon`
+    // field is `&'p mut ReconPicture<'p>`, so `retarget_pic_for_test`'s
+    // returned `Ctx<'q>` needs `'q` to equal both the mutable borrow's own
+    // duration *and* the `RowPublish` board's lifetime at once (`&mut T`
+    // is invariant in `T`) -- reusing one throwaway across three retargets
+    // would force that single `'q` out to the whole probe's own scope,
+    // exactly the long-lived-overlapping-borrow shape the borrow checker
+    // correctly refuses. A fresh throwaway per retarget, scoped tightly to
+    // its own block, costs a few small never-read allocations in a
+    // `#[cfg(test)]`-only path -- immaterial next to the correctness this
+    // buys back.
     let mut pristine_pic = walk.pic.clone();
     {
+        let Ok(recon_shared) = crate::framebuf::ReconPictureShared::new(budget, width, height, ctb) else {
+            // Allocation failure here means the probe cannot run at all; an
+            // empty result reads as "missing lag N" in the test's own
+            // assertions, which is a loud, specific failure rather than a
+            // panic in probe machinery that is not itself under test.
+            return Vec::new();
+        };
+        let mut throwaway_recon = crate::framebuf::ReconPicture::new(&recon_shared);
         let mut pristine_ctx = walk.retarget_pic_for_test(&mut pristine_pic, &mut throwaway_recon);
         deblock::filter_picture(&mut pristine_ctx);
     }
@@ -1093,11 +1111,12 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
             let below_first_corrupt_ctu_row = probe.target_ctu_row.saturating_add(1).saturating_add(lag);
             let mut below_pic = walk.pic.clone();
             invert_rows_from(&mut below_pic, below_first_corrupt_ctu_row.saturating_mul(ctb));
-            let below_matches = {
+            let below_matches = crate::framebuf::ReconPictureShared::new(budget, width, height, ctb).is_ok_and(|recon_shared| {
+                let mut throwaway_recon = crate::framebuf::ReconPicture::new(&recon_shared);
                 let mut below_ctx = walk.retarget_pic_for_test(&mut below_pic, &mut throwaway_recon);
                 deblock::filter_picture(&mut below_ctx);
                 capture_rows(&below_pic, target_row_start, target_row_end) == reference
-            };
+            });
 
             // `above_last_pristine_ctu_row` is the last CTU row (inclusive,
             // counting down from the target) left uncorrupted; corruption
@@ -1109,11 +1128,12 @@ fn run_deblock_lag_probe(walk: &Ctx<'_>, probe: &DeblockLagProbe, budget: &mut B
             let above_first_pristine_ctu_row = probe.target_ctu_row.saturating_sub(lag);
             let mut above_pic = walk.pic.clone();
             invert_rows_before(&mut above_pic, above_first_pristine_ctu_row.saturating_mul(ctb));
-            let above_matches = {
+            let above_matches = crate::framebuf::ReconPictureShared::new(budget, width, height, ctb).is_ok_and(|recon_shared| {
+                let mut throwaway_recon = crate::framebuf::ReconPicture::new(&recon_shared);
                 let mut above_ctx = walk.retarget_pic_for_test(&mut above_pic, &mut throwaway_recon);
                 deblock::filter_picture(&mut above_ctx);
                 capture_rows(&above_pic, target_row_start, target_row_end) == reference
-            };
+            });
 
             DeblockLagResult { lag, below_matches, above_matches }
         })
