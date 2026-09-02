@@ -107,6 +107,9 @@ pub(crate) struct MockDemuxer {
     next: u64,
     first_pts: i64,
     duration: Option<Duration>,
+    /// AVI/ASF video's own shape: every packet states a `dts`, none states a
+    /// `pts` at all (see `vaco-demux-avi`/`vaco-demux-asf`'s module docs).
+    no_pts: bool,
     budget: Budget,
 }
 
@@ -140,6 +143,7 @@ impl MockDemuxer {
             next: 0,
             first_pts: 0,
             duration: None,
+            no_pts: false,
             budget: Budget::new(Limits::permissive()),
         }
     }
@@ -164,6 +168,14 @@ impl MockDemuxer {
 
     pub(crate) const fn with_first_pts(mut self, pts: i64) -> Self {
         self.first_pts = pts;
+        self
+    }
+
+    /// Every packet states `dts` only, `pts` never -- AVI/ASF video's own
+    /// shape (neither format's demuxer states a video presentation time
+    /// distinct from decode order).
+    pub(crate) const fn without_pts(mut self) -> Self {
+        self.no_pts = true;
         self
     }
 
@@ -217,7 +229,11 @@ impl Demuxer for MockDemuxer {
         let mut p = Packet::from_slice(&mut self.budget, &[0u8; 8])?;
         p.stream_index = 0;
         p.dts = Timestamp::new(i * 100);
-        p.pts = Timestamp::new(self.first_pts + i * 100);
+        p.pts = if self.no_pts {
+            Timestamp::NONE
+        } else {
+            Timestamp::new(self.first_pts + i * 100)
+        };
         p.flags = PacketFlags::KEY;
         Ok(p)
     }

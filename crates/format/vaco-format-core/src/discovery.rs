@@ -112,6 +112,15 @@ pub struct DiscoveryReport {
 #[derive(Debug, Clone, Default)]
 struct StreamState {
     first_pts: Timestamp,
+    /// The earliest `dts` seen, tracked the same way as `first_pts` and used
+    /// only as `start_time`'s fallback when a stream's demuxer genuinely
+    /// never states a `pts` (AVI and ASF video: measured, `ffprobe -show_packets`
+    /// reports `pts=N/A` on every one, `dts` only — see `vaco-demux-avi`'s and
+    /// `vaco-demux-asf`'s own module docs). `ffprobe -show_format`'s own
+    /// `start_time` on the identical files is `0.000000`, not `N/A`, so the
+    /// reference does not simply propagate the packet-level absence up to
+    /// `start_time` the way leaving `first_pts` alone here would.
+    first_dts: Timestamp,
     last_end: Timestamp,
     packets: u64,
     /// Distinct DTS deltas seen, for the frame-rate estimate.
@@ -435,6 +444,15 @@ impl<D: Demuxer> Discovery<D> {
         {
             st.first_pts = pkt.pts;
         }
+        if pkt.dts.is_some()
+            && (st.first_dts.is_none()
+                || pkt
+                    .dts
+                    .compare(time_base, st.first_dts, time_base)
+                    .is_some_and(core::cmp::Ordering::is_lt))
+        {
+            st.first_dts = pkt.dts;
+        }
         if let Some(p) = pkt.pts.ticks() {
             let end_us = Timestamp::new(p)
                 .to_duration(time_base)
@@ -499,7 +517,17 @@ impl<D: Demuxer> Discovery<D> {
                         )
                     })
                     .unwrap_or(0);
-                stream.start_time = st.first_pts.offset(pad_ticks);
+                // `first_pts`, falling back to `first_dts` when a stream's
+                // demuxer genuinely never states a pts (see `first_dts`'s
+                // own doc comment) -- measured, the reference's `start_time`
+                // does the same rather than propagating the packet-level
+                // absence.
+                let base = if st.first_pts.is_some() {
+                    st.first_pts
+                } else {
+                    st.first_dts
+                };
+                stream.start_time = base.offset(pad_ticks);
             }
             if stream.frame_count.is_none() && st.packets > 0 {
                 // Only meaningful once the whole file has been read; the loop
@@ -1257,6 +1285,26 @@ mod tests {
         let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
         d.run(&NoParsers).unwrap();
         assert_eq!(d.streams().first().unwrap().start_time.ticks(), Some(3753));
+        assert!(d.report().start_time.is_some());
+    }
+
+    /// AVI/ASF video's own shape: no packet ever states a `pts` (see
+    /// `vaco-demux-avi`/`vaco-demux-asf`'s module docs and `first_dts`'s own
+    /// doc comment on `StreamState`), only `dts`. `start_time` still comes
+    /// out `Some` -- measured against `ffprobe 9.0.1`, whose own
+    /// `-show_format` reports `start_time=0.000000` on real fixtures of
+    /// exactly this shape, not `N/A`, even though `-show_packets` on the
+    /// same file reports `pts=N/A` on every packet. Falling back to
+    /// `first_pts` alone (which this crate did before this test) makes
+    /// `start_time` `None` for every AVI/ASF video stream there is.
+    #[test]
+    fn start_time_falls_back_to_first_dts_when_no_packet_ever_states_a_pts() {
+        let inner = MockDemuxer::new(1, MediaType::Video)
+            .with_packets(6)
+            .without_pts();
+        let mut d = Discovery::new(inner, FormatFlags::empty(), &opts());
+        d.run(&NoParsers).unwrap();
+        assert_eq!(d.streams().first().unwrap().start_time.ticks(), Some(0));
         assert!(d.report().start_time.is_some());
     }
 
