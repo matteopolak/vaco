@@ -3372,3 +3372,49 @@ its own pass, landed and gated separately.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 42. HEVC B4 Stage 2b step 1b: `SaoParamsGrid` moves onto `RowPublish`
+
+Second of the three structures in §41's own landing order. `SaoParamsGrid`
+(commit `7829795`) moves its `published: Vec<Vec<CtuSao>>` to
+`crate::wavefront::RowPublish<Vec<CtuSao>>`, closing the same latent race
+`EdgeMarks` closed in §41: `current` (a `Budget`-tracked
+`Option<Vec<CtuSao>>`) is untouched, still private to the one worker that
+owns it today.
+
+**What changed**: `begin_row`/`finish` advance `current_band` one row at a
+time, publishing at that index instead of pushing; `finish` now returns
+`Result<()>` (matching `ReconPlane`/`EdgeMarks`), its one call site in
+`decoder.rs` updated with `?`. `get()` needed zero changes -- `RowPublish::
+get` returns exactly the `Option<&Vec<CtuSao>>` type `self.current.
+as_ref()` already produced, so the existing three-way `match` against
+`current_band` compiles unchanged. `budget_bytes()` needed one genuinely
+new thing: `RowPublish::iter()`, added to `wavefront.rs` with its own
+test, yielding only published rows in order and skipping any gap -- a
+plain `Vec`'s `iter()` never had gaps to skip, since it only ever held
+what had already been pushed; `RowPublish`'s fixed-size board can have
+unpublished slots mid-decode, and `budget_bytes()` must sum exactly what
+has been charged so far, not a full picture's worth.
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (73 unit tests, up from
+72) and `cargo clippy -p vaco-codec-hevc --lib --tests -- -D warnings`
+both clean; `cargo xtask unsafe-audit` clean. Against `hevc_1080p.mp4`
+(SAO genuinely enabled by default in this `libx265` encode, so this is
+the first of the three RowPublish conversions SAO's own read path
+actually exercises end to end): `vaco -threads 1` before, after, and
+`ffmpeg`'s own decode all produced the identical sha256 (unchanged from
+§§39/41). The 300x500 partial-CTU-column fixture still matched ffmpeg on
+the frames its own unrelated remux issue does not corrupt.
+
+**Serial cost**: no fresh interleaved timing run, same reasoning as §41 --
+`get()`/`set()` (the actual per-CTU hot path) are byte-for-byte unchanged;
+only `begin_row`/`finish` (`n_bands` calls per picture) moved from
+`Vec::push` to `RowPublish::publish`.
+
+**Not done in this section**: `CuGrid`'s own analogous move (next, and
+last of the three -- nine heterogeneous arrays plus its own `Budget`
+accounting to keep self-consistent through the change), the CABAC
+context-bank handoff primitive, `Ctx`'s split, and real thread dispatch.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.

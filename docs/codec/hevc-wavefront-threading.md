@@ -702,10 +702,14 @@ itself is threaded) before the next begins:
     `-threads 1`. Chosen first because it was already the first of the
     three row-banded for the same reason in Stage 1 step 3 (`planning/
     E2E-GAPS.md` §36).
-1b. `SaoParamsGrid` onto `RowPublish<T>` next — its granularity is already
-    one `CtuSao` per row band (no block-within-a-band remainder the way
+1b. **Done** (commit `7829795`, `planning/E2E-GAPS.md` §42):
+    `SaoParamsGrid` onto `RowPublish<T>` — its granularity is already one
+    `CtuSao` per row band (no block-within-a-band remainder the way
     `EdgeMarks`/`CuGrid` both have), the same reason §38 called it
-    "simpler than either prior piece" for Stage 1 step 3.
+    "simpler than either prior piece" for Stage 1 step 3. Needed one
+    genuine addition to the primitive itself, `RowPublish::iter()`
+    (skips not-yet-published slots — a plain `Vec`'s own `iter()` never
+    had gaps to skip), for `budget_bytes`'s own summation.
 1c. `CuGrid` onto `RowPublish<T>` last of the three — the largest, with
     nine heterogeneous arrays and its own `Budget` accounting
     (`CuGrid::budget_bytes`) to keep self-consistent through the change.
