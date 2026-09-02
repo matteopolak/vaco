@@ -778,15 +778,48 @@ stay at the once-per-row frequency already shown to cost nothing). Not
 isolated per-type, since the bundled result already clears the gate — a
 question for whoever next has reason to look closely at this margin.
 
-4. Only then, real `std::thread::spawn` dispatch over the row loop, reusing
-   `vaco_codec_core::threading`'s `Pool`/`Queue`/`Condvar`/`ReplyGuard`
-   shape (row index in place of that module's frame index, `Result<()>`
-   in place of `Result<Frame>`) — gated on the full bar named throughout
-   this document: byte-exact at 1/2/4/8/16 threads, the
+**`Arc` retired** (commit `9cbd1dd`, `planning/E2E-GAPS.md` §50): rather
+than isolate which Arc-wrap cost the ~2.7%, every `Arc<XShared>` (all
+five types now, `CtxShared` included) was replaced with a plain borrowed
+`&'a XShared`, since a picture decode is a bounded operation that fits
+`std::thread::scope` exactly — every future row worker starts and
+finishes inside one `decode_packet` call, so a scoped thread can borrow
+`&XShared` directly from the stack frame that owns it, no reference
+counting and no `Arc::deref` indirection on the read path. Each
+`*Shared` value is now a plain local in `decode_packet`'s own stack
+frame; `ReconPicture` gained a sibling `ReconPictureShared` (owning its
+three planes' own `ReconPlaneShared` boards) to avoid becoming
+self-referential. A three-way interleaved measurement (pre-`Arc`
+baseline `2d4d4a8`, the `Arc` version `6295561`, this borrowed-reference
+version `9cbd1dd`) found the scoped-reference form **faster than both**:
+CPU-seconds median 0.972x against the pre-`Arc` baseline and 0.978x
+against the `Arc` version, winning 7 of 10 rounds each way — recovering
+ss49's lost margin and then some, not merely breaking even. `Arc` is no
+longer used anywhere in this item's own code. Step 4's per-worker `Ctx`
+shape follows directly from this: borrowed shared state (`&CtxShared`,
+`&ReconPlaneShared`, etc.) plus a small owned `current`/row-position
+bundle per worker, not a bundle of `Arc` clones.
+
+4. Only then, real dispatch over the row loop — gated on the full bar
+   named throughout this document: byte-exact at 1/2/4/8/16 threads, the
    `hevc_decode_threaded` fuzz target, repeated runs on a race-detector
    fixture, and a same-session speedup ratio against `ffmpeg` at matching
    thread counts, default staying `-threads 1` until every one of those
-   passes.
+   passes. **Not yet reconciled, flagged here rather than decided
+   mid-implementation**: `vaco_codec_core::threading`'s `Pool` (the
+   H.264-precedent `Pool`/`Queue`/`Condvar`/`ReplyGuard` shape this step
+   was originally scoped to reuse) dispatches via `std::thread::spawn`
+   with `'static`-bound `move` closures (`threading.rs:575`), which
+   cannot directly capture the borrowed `&'a XShared` references §"`Arc`
+   retired" above settled on — `thread::spawn` needs owned/`'static`
+   data, `thread::scope` needs the dispatch call itself to be the scope
+   body. Step 4 needs one of: reshape row dispatch around
+   `std::thread::scope` directly instead of reusing `Pool` as-is, adapt
+   `Pool` to accept scoped closures, or fall back to `Arc` just for
+   whatever crosses the `Pool`'s own `'static` boundary while everything
+   else inside one worker's row stays borrowed. Whichever it is, it
+   should be measured against the other two the same way this section's
+   own three-way comparison was, not assumed.
 
 None of the four steps above is implemented in this pass. Writing threaded
 dispatch code before naming the two thread-safety gaps precisely (the

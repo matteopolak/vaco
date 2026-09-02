@@ -3816,3 +3816,109 @@ shape step 4 needs), and real thread dispatch itself.
 
 `vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
 crates, `vaco-conformance` and the fuzz harnesses were not touched.
+
+## 50. HEVC B4 Stage 2b: `Arc<XShared>` replaced with `std::thread::scope`-shaped `&'a XShared` -- recovers ss49's cost and then some
+
+ss49's own regression (median 1.027x) was accepted as a bundled result
+without isolating which of the four Arc-wraps caused it, since the
+bundle already cleared the gate. Rather than isolate one type and Arc
+the rest, the question raised instead: why is an `Arc` here at all. A
+picture decode is a bounded operation -- every future row worker starts
+and finishes inside one `decode_packet` call -- which is exactly what
+`std::thread::scope` (stable since 1.63, no `unsafe`) is for. Scoped
+threads can borrow `&XShared` directly from the stack frame that owns
+it, with no reference counting and no `Arc::deref` pointer-chase on the
+read path.
+
+Commit `9cbd1dd` replaces every `Arc<XShared>` (all five types now:
+`EdgeMarksShared`, `CuGridShared`, `SaoParamsGridShared`,
+`ReconPlaneShared`, and `CtxShared`, which ss48 had already wrapped) with
+a plain `&'a XShared` borrow. Each type's construction splits into
+`XShared::new(...)` (the owned board, still budget-charged where
+applicable) and `X::new(shared: &'a XShared, ...)` (the borrowing
+wrapper) -- already `EdgeMarks`/`CuGrid`/`SaoParamsGrid`'s own shape from
+ss47; `ReconPlane`/`ReconPicture` needed the same split plus a new
+`ReconPictureShared` (owning the three `ReconPlaneShared` boards, since
+`ReconPicture` cannot own and borrow its own planes' boards in the same
+struct without becoming self-referential), and `CtxShared`'s own
+construction moved out of `Ctx::new` into `CtxShared::new`, called by
+`decoder.rs` before `Ctx::new` so the value outlives the `Ctx` that
+borrows it. All five `*Shared` values are now plain locals in
+`decode_packet`'s own stack frame, owned for exactly as long as `walk`
+(and everything it borrows) is alive.
+
+One test-only wrinkle, not anticipated going in: `Ctx`'s `recon` field is
+`&'p mut ReconPicture<'p>`, which couples the mutable borrow's own
+duration to the `RowPublish` board's lifetime (`&mut T` is invariant in
+`T`). `retarget_pic_for_test` (the deblock-lag-probe helper) used to
+reuse one throwaway `ReconPicture` across three retargets; with the
+borrowed-reference shape that would force the single unified lifetime
+out to the whole probe's own scope -- exactly the long-lived-overlapping-
+borrow shape the borrow checker correctly refuses, surfacing as borrow
+errors at the *call sites*, not at the type definition. Fixed by
+building a fresh, tightly-scoped throwaway `ReconPictureShared`/
+`ReconPicture` per retarget instead -- a few small never-read allocations
+in a `#[cfg(test)]`-only path, immaterial next to the correctness bought
+back.
+
+**Byte-exact**: `cargo test -p vaco-codec-hevc` (73 unit + 6 integration
+tests, unchanged counts, all passing); `cargo clippy -p vaco-codec-hevc
+--lib --tests -- -D warnings` clean; `cargo xtask unsafe-audit` clean.
+Against `hevc_1080p.mp4`: identical sha256 to every prior section
+(`a40b898c...5096`). The 300x500 partial-CTU-column fixture's first 3
+frames still matched.
+
+**Serial cost -- a three-way comparison, not just before/after**: per the
+open condition from ss49 ("if it recovers the 2.7%, take the threading
+and the margin back; if not, `Arc` at 1.027x is a fine fallback"), all
+three points were measured in one interleaved run rather than two
+separate before/after pairs: pre-`Arc` baseline (`2d4d4a8`), the full
+`Arc` version (`6295561`), and this section's scoped/borrowed-reference
+version (`9cbd1dd`). Isolated worktrees, `hevc_1080p.mp4`, `-threads 1`,
+10 rounds (the protocol's own stated minimum for an A/B), rotating start
+order across all three binaries each round, 2 decodes per round per
+binary. Load average 22.9-23.8 during the run -- well above the ~8
+threshold past which the protocol says to trust CPU-seconds over
+wall-clock, and wall-clock did swing wildly here (single rounds from
+7.4s to 26.1s on the same binary) while CPU-seconds stayed in a tight
+7.36-8.44s band throughout, so CPU-seconds is the number trusted below.
+
+Per-round CPU-seconds ratios:
+
+- `arc/baseline`: `[1.040, 1.026, 0.996, 1.006, 1.066, 1.082, 0.913,
+  0.911, 0.947, 1.003]` -- median **1.004x**, mean **0.999x**, arc
+  cheaper in 4 of 10 rounds. Under today's much heavier background load
+  this reads as statistically indistinguishable from parity, not a clean
+  reproduction of ss49's own 1.027x -- the direction from ss49 (a small
+  Arc-deref cost) is not contradicted, but this run alone would not have
+  detected it.
+- `scoped/baseline`: `[1.007, 1.022, 0.968, 0.989, 1.009, 0.944, 0.920,
+  0.934, 0.977, 0.963]` -- median **0.972x**, mean **0.973x**, scoped
+  cheaper in 7 of 10 rounds. The scoped version is not merely back to
+  parity with the pre-`Arc` baseline -- it measures **faster** than it,
+  by close to the 2.7% ss49 lost.
+- `scoped/arc`: `[0.968, 0.996, 0.972, 0.983, 0.947, 0.872, 1.008, 1.025,
+  1.031, 0.960]` -- median **0.978x**, mean **0.976x**, scoped cheaper in
+  7 of 10 rounds. Consistent with `scoped/baseline`: the scoped version
+  beats the `Arc` version it replaces by roughly the same margin.
+
+**Conclusion**: scoped threads recover ss49's regression and then some --
+this is the "recovers the 2.7%, take the threading and the margin back"
+outcome the condition asked for, not the fallback. `Arc<XShared>` is
+retired; every one of the five `*Shared` types is now a plain borrowed
+reference, matching `std::thread::scope`'s own intended shape ahead of
+step 4's real dispatch. Step 4's own per-worker `Ctx` shape follows
+directly: borrowed shared state (`&CtxShared`, `&ReconPlaneShared`, etc.)
+plus a small owned `current`/row-position bundle per worker, not a
+bundle of `Arc` clones.
+
+**Not done in this section**: real thread dispatch itself (step 4), and
+reconciling why this run's own `arc/baseline` ratio (1.004x) reads
+closer to parity than ss49's recorded 1.027x -- plausibly today's far
+heavier concurrent load (22.9-23.8 vs ss49's 8.98-14.02) diluting a real
+but small effect, not investigated further since the practical question
+(does the scoped-reference form beat the `Arc` form) already has a clear
+answer independent of that discrepancy.
+
+`vaco-codec-core`, `vaco-codec-h264`, the AAC/transform crates, the filter
+crates, `vaco-conformance` and the fuzz harnesses were not touched.
