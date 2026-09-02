@@ -249,9 +249,26 @@ pub fn build_bank(budget: &mut Budget, spec: &FilterSpec) -> Result<FilterBank> 
         return Err(Error::InvalidData("resampling axis of length zero"));
     }
     let ratio = src_len as f64 / dst_len as f64;
-    let xscale = if ratio > 1.0 { 1.0 / ratio } else { 1.0 };
-    // `Area`'s support is the destination footprint, which is what `xscale`
-    // already expresses, so it needs no special casing here.
+    // Stretching a kernel's support by `1/xscale` on downscale is correct
+    // band-limiting for every *smooth* kernel here, `Area`'s own box
+    // included (its support is deliberately the destination footprint, so
+    // it needs no special casing) -- but `Point` is not a band-limiting
+    // kernel at all, it is a hard nearest-sample pick, and stretching its
+    // already-minimal 0.5 support on downscale widens its window to cover
+    // two source samples instead of one. Both then land inside `eval`'s
+    // scaled `(-0.5, 0.5)` box and get equal weight 1.0, quantising to a
+    // 50/50 blend rather than a single tap -- measured: an 8-wide ramp
+    // downscaled 2:1 produced an average of samples 0 and 1 for output 0
+    // instead of ffmpeg's own verified `2*d+1` nearest-sample rule. `Point`
+    // keeps `xscale = 1` unconditionally so its support and its per-tap
+    // `eval` distance below are never stretched by the decimation ratio.
+    let xscale = if matches!(spec.kernel, Kernel::Point) {
+        1.0
+    } else if ratio > 1.0 {
+        1.0 / ratio
+    } else {
+        1.0
+    };
     let max_taps = spec.max_taps.clamp(1, 1024);
     let raw_radius = spec.kernel.support() / xscale;
     // Narrow the kernel rather than let the tap count explode. Two-stage
@@ -476,6 +493,20 @@ fn quantise(acc: &mut [f64], coeffs: &mut [i32], d: usize, taps: usize) {
     let mut best = (0usize, -1.0f64);
     for (i, (slot, &w)) in row.iter_mut().zip(acc.iter()).enumerate() {
         let n = w * inv;
+        // Tried truncating `d * (1 << shift) + 0.5` toward zero (a plain C
+        // `(int)` cast) instead of rounding, on the hypothesis that the
+        // reference's own coefficient quantisation uses that convention and
+        // that it would explain the scattered +-1 divergence measured below
+        // on `Bicubic`/`Lanczos` (both have negative-lobe taps; `Point`/
+        // `Bilinear`/`Area` never do and already match the reference
+        // exactly). Measured against `ffmpeg 8.1` on a real 80x60 downscale:
+        // it made `Bicubic` worse (1184 -> 3063 differing bytes of 360000)
+        // and `Lanczos` only marginally better (1656 -> 1610), so the
+        // hypothesis is not confirmed and this keeps plain rounding, the
+        // better-measured of the two. See `docs/signal/vaco-scale.md`
+        // section 3 for the standing, already-documented divergence this
+        // leaves on those two kernels (recorded there before this change,
+        // not introduced by it).
         let q = (n * f64::from(COEFF_ONE)).round();
         let q = if q.is_finite() {
             q.clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32
@@ -564,6 +595,21 @@ mod tests {
                     b.taps
                 );
             }
+        }
+    }
+
+    #[test]
+    fn point_kernel_picks_a_single_nearest_sample_on_downscale() {
+        // Coordinator-verified reference: ffmpeg's `flags=neighbor` on a 2:1
+        // downscale takes source pixel 2*d+1 -- an 8-wide ramp
+        // 10,20,...,80 becomes 20,40,60,80.
+        let b = bank(Kernel::Point, 8, 4);
+        for d in 0..4 {
+            let row = b.row(d).expect("row");
+            assert_eq!(row.iter().filter(|&&w| w != 0).count(), 1, "row {d}: {row:?} is not a single tap");
+            let (tap_idx, _) = row.iter().enumerate().find(|&(_, &w)| w != 0).expect("one nonzero tap");
+            let picked = b.offsets[d] as usize + tap_idx;
+            assert_eq!(picked, 2 * d + 1, "row {d} picked source index {picked}, want {}", 2 * d + 1);
         }
     }
 

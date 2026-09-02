@@ -111,6 +111,12 @@ pub(crate) struct Filter {
     /// [`Filter::filter_frame`] needs to know whether a format conversion
     /// (as opposed to a pure resize) is required.
     out_format: Option<PixFmt>,
+    /// Built once in [`create`] from whichever of `flags`/`param0`/`param1`/
+    /// `in_range`/`out_range` the user actually gave — see [`create`]'s own
+    /// doc for why this filter no longer always hands
+    /// [`vaco_scale::ScaleOptions::default`] to the scaler regardless of
+    /// what was asked for.
+    scale_opts: ScaleOptions,
 }
 
 impl Filter {
@@ -294,7 +300,7 @@ impl FrameFilter for Filter {
         let mut out = ctx.pool().acquire_video(out_format, out_w, out_h)?;
         let src_spec = ImageSpec::new(format, width, height).with_color(input.color);
         let dst_spec = ImageSpec::new(out_format, out_w, out_h).with_color(input.color);
-        let mut scaler = Scaler::new(&src_spec, &dst_spec, &ScaleOptions::default())?;
+        let mut scaler = Scaler::new(&src_spec, &dst_spec, &self.scale_opts)?;
         scaler.scale_frame(&input, &mut out)?;
         out.pts = input.pts;
         out.time_base = input.time_base;
@@ -325,6 +331,98 @@ fn parse_size(text: &str) -> std::result::Result<(Axis, Axis), String> {
     Ok((parse_axis(Some(w))?, parse_axis(Some(h))?))
 }
 
+/// Names this filter neither implements nor refuses today would otherwise be
+/// silently accepted and ignored — `ensure_known_options`
+/// (`registry.rs`) only refuses a name the reference does not document *at
+/// all* under `scale`, and every one of these is real, documented ffmpeg
+/// `scale` syntax. Refusing them by name, matching what an undocumented name
+/// like `sws_flags` already gets, is this project's own stated preference
+/// over silently producing something the caller did not ask for.
+const NOT_IMPLEMENTED: &[&str] = &[
+    "interl",
+    "in_color_matrix",
+    "out_color_matrix",
+    "in_chroma_loc",
+    "out_chroma_loc",
+    "in_primaries",
+    "out_primaries",
+    "in_transfer",
+    "out_transfer",
+    "in_v_chr_pos",
+    "in_h_chr_pos",
+    "out_v_chr_pos",
+    "out_h_chr_pos",
+    "force_original_aspect_ratio",
+    "force_divisible_by",
+    "reset_sar",
+    "eval",
+];
+
+/// `in_range`/`out_range`'s own accepted spellings, the same convention
+/// `vaco-filter-video-format::setrange`'s `Mode::parse` already uses for the
+/// general-purpose `setrange`/`setparams` filters. Unlike that filter's own
+/// three-way `Auto`/`Unspecified`/`Limited`/`Full`, [`ScaleOptions`]'s own
+/// `src_range_full`/`dst_range_full` are plain "force full, or don't"
+/// booleans — there is no way to represent "force limited" distinctly from
+/// "leave whatever the frame signals alone" with the fields this crate
+/// exposes today, so an explicit `limited`/`tv`/`mpeg` request collapses to
+/// the same "don't force full" value `auto` already gets. That is a real,
+/// stated gap (matches every practical case except overriding an
+/// already-full-range source, e.g. `yuvj420p`, back down to limited) rather
+/// than a silent one.
+fn parse_range_full(name: &str, s: &str) -> std::result::Result<bool, String> {
+    match s {
+        "-1" | "auto" | "0" | "unspecified" | "unknown" | "1" | "limited" | "tv" | "mpeg" => {
+            Ok(false)
+        }
+        "2" | "full" | "pc" | "jpeg" => Ok(true),
+        other => Err(format!("scale: bad `{name}` `{other}`")),
+    }
+}
+
+/// Builds the [`ScaleOptions`] [`Filter::filter_frame`] hands to
+/// [`vaco_scale::Scaler`] from whichever of `flags`/`param0`/`param1`/
+/// `in_range`/`out_range` the caller gave — see this module's own "Measured"
+/// doc sections for the dimension-side options, none of which this function
+/// touches.
+///
+/// # Errors
+/// The first unimplemented option name actually supplied (see
+/// [`NOT_IMPLEMENTED`]), or a `flags`/`in_range`/`out_range` value this
+/// crate's own parsers do not recognise.
+fn parse_scale_opts(req: &Instantiate<'_>) -> std::result::Result<ScaleOptions, String> {
+    for &name in NOT_IMPLEMENTED {
+        if req.named(name).is_some() {
+            return Err(format!(
+                "scale: option `{name}` is not implemented (refused by name rather than silently ignored)"
+            ));
+        }
+    }
+    let mut opts = ScaleOptions::default();
+    if let Some(flags) = req.named("flags") {
+        opts.parse(&format!("sws_flags={flags}")).map_err(|e| e.to_string())?;
+    }
+    if let Some(p0) = req.named("param0") {
+        let v: f64 = p0
+            .parse()
+            .map_err(|_| format!("scale: bad `param0` `{p0}`"))?;
+        opts.param0 = v;
+    }
+    if let Some(p1) = req.named("param1") {
+        let v: f64 = p1
+            .parse()
+            .map_err(|_| format!("scale: bad `param1` `{p1}`"))?;
+        opts.param1 = v;
+    }
+    if let Some(v) = req.named("in_range") {
+        opts.src_range_full = parse_range_full("in_range", &v)?;
+    }
+    if let Some(v) = req.named("out_range") {
+        opts.dst_range_full = parse_range_full("out_range", &v)?;
+    }
+    Ok(opts)
+}
+
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let (w_axis, h_axis) = if let Some(size) = req.named("size").or_else(|| req.named("s")) {
         parse_size(&size)?
@@ -345,6 +443,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
             parse_axis(h_text.as_deref())?,
         )
     };
+    let scale_opts = parse_scale_opts(req)?;
     Ok(Instance {
         desc: DESC,
         formats: NodeFormats::passthrough(1, 1, MediaType::Video, req.instance),
@@ -353,6 +452,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
             h: h_axis,
             out_wh: (0, 0),
             out_format: None,
+            scale_opts,
         })),
     })
 }
@@ -368,6 +468,7 @@ mod tests {
             h: parse_axis(h).unwrap(),
             out_wh: (0, 0),
             out_format: None,
+            scale_opts: ScaleOptions::default(),
         }
     }
 
@@ -438,6 +539,83 @@ mod tests {
             arguments: &arguments,
         };
         assert!(create(&req).is_ok());
+    }
+
+    fn create_str(src: &str) -> std::result::Result<Instance, String> {
+        let ast = vaco_filter_graph::parse(src).unwrap();
+        let spec = ast.chains.first().and_then(|c| c.filters.first()).unwrap();
+        let arguments = spec.arguments().unwrap();
+        let req = Instantiate {
+            name: &spec.name,
+            instance: &spec.name,
+            args: spec.args.as_deref(),
+            arguments: &arguments,
+        };
+        create(&req)
+    }
+
+    fn scale_opts_for(src: &str) -> std::result::Result<ScaleOptions, String> {
+        let ast = vaco_filter_graph::parse(src).unwrap();
+        let spec = ast.chains.first().and_then(|c| c.filters.first()).unwrap();
+        let arguments = spec.arguments().unwrap();
+        let req = Instantiate {
+            name: &spec.name,
+            instance: &spec.name,
+            args: spec.args.as_deref(),
+            arguments: &arguments,
+        };
+        parse_scale_opts(&req)
+    }
+
+    /// The exact bug the coordinator reported: `flags=neighbor` used to be
+    /// silently accepted and ignored (`ScaleOptions::default()` always went
+    /// to the scaler regardless), so every `flags=` value produced the same
+    /// output. It must now actually select [`vaco_scale::filter::Kernel::Point`].
+    #[test]
+    fn flags_neighbor_selects_the_point_kernel() {
+        let opts = scale_opts_for("scale=w=80:h=60:flags=neighbor").unwrap();
+        assert_eq!(opts.luma_kernel(), vaco_scale::filter::Kernel::Point);
+    }
+
+    #[test]
+    fn flags_lanczos_selects_the_lanczos_kernel() {
+        let opts = scale_opts_for("scale=w=80:h=60:flags=lanczos").unwrap();
+        assert!(matches!(
+            opts.luma_kernel(),
+            vaco_scale::filter::Kernel::Lanczos { .. }
+        ));
+    }
+
+    #[test]
+    fn param0_and_param1_reach_scale_options() {
+        let opts = scale_opts_for("scale=w=80:h=60:param0=1:param1=-2.5").unwrap();
+        assert_eq!(
+            opts.luma_kernel(),
+            vaco_scale::filter::Kernel::Bicubic { b: 1.0, c: -2.5 }
+        );
+    }
+
+    #[test]
+    fn in_range_full_forces_source_full_range() {
+        let opts = scale_opts_for("scale=w=80:h=60:in_range=full").unwrap();
+        assert!(opts.src_range_full);
+        let opts = scale_opts_for("scale=w=80:h=60").unwrap();
+        assert!(!opts.src_range_full);
+    }
+
+    /// A documented `scale` option this crate does not implement must be
+    /// refused by name, matching what an undocumented name like `sws_flags`
+    /// already gets — not silently accepted and ignored, which is the
+    /// defect class this whole change removes.
+    #[test]
+    fn unimplemented_options_are_refused_by_name() {
+        for opt in NOT_IMPLEMENTED {
+            let src = format!("scale=w=80:h=60:{opt}=1");
+            let result = create_str(&src);
+            assert!(result.is_err(), "{opt} should be refused");
+            let err = result.unwrap_err();
+            assert!(err.contains(opt), "{err} should name {opt}");
+        }
     }
 
     #[test]

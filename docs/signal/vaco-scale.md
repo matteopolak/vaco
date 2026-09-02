@@ -103,6 +103,7 @@ stated bound; **Divergent** = differs in ways we cannot justify.
 | `gray -> rgb24` | 0 / 36864 | 0 | ∞ | 0 | **Exact** |
 | `yuv420p10le -> yuv420p`, dither off | 0 / 18432 | 0 | ∞ | 0 | **Exact** |
 | `yuv420p` 2× down, bilinear | 0 / 4608 | 0 | ∞ | 0 | **Exact** |
+| `yuv420p` 2× down, `Point` (nearest-neighbour) | 0 / 4608 | 0 | ∞ | 0 | **Exact** ‡ |
 | `yuv420p` 2× up, bilinear | 0 / 18432 | 0 | ∞ | 0 | **Exact** |
 | `yuv420p` 2× down, area | 0 / 4608 | 0 | ∞ | 0 | **Exact** |
 | `yuv420p -> rgb24`, bt709 tv→pc | 7831 / 36864 | **1** | 54.9 | 7059 | Equivalent |
@@ -118,6 +119,19 @@ stated bound; **Divergent** = differs in ways we cannot justify.
 
 † All 282 raw differences on that row are the reference's own clipping defect
 (§5.1); zero are ours. The harness counts them separately.
+
+‡ `Point`'s own filter bank used to widen its support by the same `1/xscale`
+stretch every band-limiting kernel here needs on downscale, which is
+correct for `Bilinear`/`Bicubic`/`Lanczos`/`Gaussian` (and `Area`, whose
+support *is* meant to track the decimation ratio) but wrong for a hard
+nearest-sample pick: on a 2:1 downscale it made two adjacent source samples
+land inside the stretched box at equal weight, quantising to a 50/50 blend
+of both rather than one exact tap — measured directly against ffmpeg's own
+documented `2*d+1` nearest-sample rule on an 8-wide ramp. `Point` now keeps
+`xscale = 1` unconditionally (`filter.rs::build_bank`), and this row (never
+tested against the reference before, since the filter driving `scale`'s own
+`flags=` never reached `Point` until that plumbing bug was also fixed — see
+`docs/filter/vaco-filter-video-geometry.md`) is the direct confirmation.
 
 "Interior" excludes a four-sample border of plane 0. Two rows that look
 Divergent are **identical everywhere except the edge**, which is a far more

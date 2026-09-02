@@ -16,8 +16,12 @@ opt_flags! {
     /// legacy scaler algorithm and modifier flags
     #[unit = "sws_flags"]
     pub struct SwsFlags: u64 {
-        /// nearest neighbour
-        const POINT         = 1 << 4 => "point";
+        /// nearest neighbour. ffmpeg's real AVOption name for `SWS_POINT` is
+        /// `neighbor`, not `point` -- this constant's own Rust identifier
+        /// predates that check and stayed `POINT`, but the *string* name a
+        /// `sws_flags=`/`flags=` value is parsed against must match the
+        /// reference verbatim (D1/D9), so the string is `neighbor`.
+        const POINT         = 1 << 4 => "neighbor";
         /// bilinear
         const BILINEAR      = 1 << 0 => "bilinear";
         /// bicubic

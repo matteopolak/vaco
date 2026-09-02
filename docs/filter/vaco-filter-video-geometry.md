@@ -49,6 +49,22 @@ actual resampling to [`vaco_scale::Scaler`](../../crates/signal/vaco-scale/src/l
 It does not change pixel format — chain `format=` afterward for
 resize-and-convert.
 
+`flags`/`param0`/`param1`/`in_range`/`out_range` are parsed in `create`
+(`parse_scale_opts`) into a real `vaco_scale::ScaleOptions` handed to the
+scaler — previously `ScaleOptions::default()` went to the scaler
+regardless of what the caller asked for, so every `flags=` value produced
+identical output. Every other documented `scale` option this crate does
+not act on (`interl`, `in_color_matrix`, `out_color_matrix`,
+`in_chroma_loc`, `out_chroma_loc`, `in_primaries`, `out_primaries`,
+`in_transfer`, `out_transfer`, `in_v_chr_pos`, `in_h_chr_pos`,
+`out_v_chr_pos`, `out_h_chr_pos`, `force_original_aspect_ratio`,
+`force_divisible_by`, `reset_sar`, `eval`) is now refused by name if the
+caller actually supplies it (`NOT_IMPLEMENTED` in `scale.rs`), matching
+what an undocumented name like `sws_flags=` already got from
+`registry.rs`'s own `ensure_known_options` — silently accepting and
+ignoring a real, documented option was the one failure mode never chosen
+elsewhere in this project, and `scale` had it for these six.
+
 ### `pad`'s fill goes through `vaco-scale`, not hand-written colour math
 
 `fill::solid_frame` builds a small RGB24 tile of the requested colour and
@@ -75,6 +91,10 @@ doc for the measurement; the summary is in the table below.
 | `scale` | both `w`/`h` resolve to `-1`/`-2` | Falls back to the input size unchanged (no anchor to compute from). |
 | `scale` | any resize | `sar_new = sar_old * (in_w*out_h)/(in_h*out_w)`, unconditionally — DAR is always preserved, not just for `-1`/`-2`. |
 | `scale` | absurd size (`w=h=99999999`) | Refused by `vaco_frame::FramePool`'s default 1 GiB live-byte budget before any allocation is attempted (`tests::an_outrageous_size_is_refused_by_the_frame_pool_not_attempted`). |
+| `scale` | `flags=neighbor`, real 2:1 downscale | Byte-**exact** against `ffmpeg 8.1` (was: silently ignored, same output as every other `flags=` value). `neighbor` is ffmpeg's own name for `SWS_POINT` — not `point`, which `vaco-scale`'s own `SwsFlags` used to spell it as; fixed to match the reference verbatim. |
+| `scale` | `flags=bilinear`, real 2:1 downscale | Byte-**exact** against `ffmpeg 8.1`. |
+| `scale` | `flags=bicubic`/`flags=lanczos`, real 2:1 downscale | **Not** byte-exact: 1184/360000 and 1656/360000 bytes differ (all by exactly ±1), scattered, no edge concentration — the same standing, already-measured-and-documented divergence `docs/signal/vaco-scale.md` section 3 records for these two kernels (coefficient quantisation and boundary-rule differences from the reference, not a different algorithm). Tried making the coefficient quantisation truncate-toward-zero (`(int)(x+0.5)`, the reference's own documented style) instead of round-to-nearest: measured worse for `bicubic` (1184 -> 3063 differing bytes) and only marginally better for `lanczos` (1656 -> 1610), so not adopted — this is a deliberately kept, measured divergence, not an unexamined one. |
+| `scale` | an option `scale` documents but does not implement (e.g. `in_color_matrix=bt709`) | Refused by name (`scale: option 'in_color_matrix' is not implemented...`) — previously silently accepted and ignored. |
 | `crop` | `x`/`w` on a 4:2:0 format | Both **floored** to the nearest multiple of 2, independently, *before* cropping — not rounded, not rejected. Verified with a `geq`-tagged image; see `crop.rs`'s doc for the exact bytes. |
 | `crop` | default `x`/`y` | `(in_w-out_w)/2` / `(in_h-out_h)/2` — auto-centred, not `0`. |
 | `pad` | default `color` | Limited-range black (`Y=16, Cb=Cr=128`) for YUV destinations, `(0,0,0)` for RGB — not `Y=0`. |
