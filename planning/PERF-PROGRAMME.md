@@ -493,6 +493,27 @@ full in `planning/E2E-GAPS.md` §28. Chroma work was not started.
 One agent at a time in this crate, in the order B1 → B2 → B3 → B4. B1 and
 B2 could be one agent's first fortnight.
 
+**B4 is parked as of 2026-09-02 — coordinator decision, not a technical
+blocker.** A sweep of what the README advertises, measured against the ffmpeg
+binary, found FFV1 decoding to wrong pixels on 99.6% of bytes (a lossless
+codec) and encoding files ffmpeg misreads; H.264 encode writing Annex-B into
+MP4/Matroska, so every encoded file is malformed; MP3 and AAC offset by an
+untrimmed encoder delay; AC-3 wrong on 99.5% of samples; nine of thirteen
+image formats reporting `0x0, pix_fmt=unknown`; PCM in MP4 undecodable; and
+pipe input broken. Three to four weeks making an *already byte-exact* HEVC
+decoder faster is the wrong trade against that — "performance only matters
+when the output is useful".
+
+Picking it back up is cheap: the design correction in
+`docs/codec/hevc-wavefront-threading.md` records that `CuGrid` and
+`SaoParamsGrid` publish only at whole-row granularity, which caps adjacent-row
+overlap at near zero under real dispatch, and that `RowPublish` needs a
+blocking `wait` modelled on `PictureRef::wait_tile`. Both were unknown before
+and are the substance of what B4 costs. `Pool`/`FrameRunner` was ruled out
+deliberately — its `'static` bound is session-lifetime and does not compose
+with `std::thread::scope`'s lexical join — so dispatch belongs local to the
+crate.
+
 #### B1 — data movement: row-wise copies everywhere a sample is moved one at a time
 
 - **Evidence (data).** `write_inter_cu_no_residual` 9.32% (per-sample
