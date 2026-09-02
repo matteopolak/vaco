@@ -61,6 +61,27 @@ title    = "A range-coded FFV1 region's decoder must finish exactly one byte pas
 acquired = "2026-09-02"
 where    = "Local measurement, not a document: a from-RFC-9043 range decoder written outside this tree was run over every slice of frame 0 of `ffmpeg -c:v ffv1 -coder range_def` output and over its Configuration Record, reporting bytes consumed against each region's own coded length. Every region came out at length + 1 once the Sentinel symbol (state 129) had been read -- i.e. ffmpeg terminates in RFC 9043 Sec 3.8.1.1.1's Closed mode, the decoder taking the byte past the end as zero. This crate's encoder emitted the Open-mode length instead, and `ffmpeg -i` rejected 42 of 50 frames with \"bytestream end mismatching by 1\" (the 8 it accepted being the ones whose final get_rac happened not to need a refill). Pinned by rangecoder.rs's finish_produces_the_closed_mode_length_ffmpeg_requires test, which needs no ffmpeg binary."
 
+[[source]]
+id       = "ffv1-blackbox-rct-interleave"
+kind     = "blackbox"
+title    = "JPEG 2000 RCT Line interleave, and the one Golomb-Rice run_index all three interleaved planes share"
+acquired = "2026-09-02"
+where    = "Local measurement, not a document. `ffmpeg -f lavfi -i \"testsrc2=size=96x64:rate=25:duration=0.04\" -pix_fmt gbrp -c:v ffv1 [-coder rice | -coder range_def]` (ffmpeg 9.0.1), decoded by a from-RFC-9043 decoder written outside this tree and compared sample-by-sample against ffmpeg's own raw gbrp decode. RFC 9043 Sec 4.7 already specifies the row-then-Plane Line order for colorspace_type 1; what it does not specify is what becomes of Sec 3.8.2.2.1's \"run_index is reset to zero for each Plane and Slice\" once there is no per-plane boundary to reset at. Measured on frame 0 of the -coder rice file: one run_index shared by all three planes for the whole slice decodes every one of 57,600 samples correctly; one per plane leaves 57,165 wrong; one per quantization-table-set index (Y alone, Cb and Cr together, which is how the VLC context states are grouped) leaves 56,363. The shared model is therefore inference from measurement, not from the RFC. Fixtures: tests/fixtures/gbrp_{rice,range}_*."
+
+[[source]]
+id       = "ffv1-blackbox-custom-transition-table-scope"
+kind     = "blackbox"
+title    = "state_transition_delta shares Parameters' own state array, and the custom table it builds applies to Slices only, not to the rest of the Configuration Record"
+acquired = "2026-09-02"
+where    = "Local measurement, not a document: the 190-byte Configuration Record of `ffmpeg -f lavfi -i \"testsrc2=size=96x64:rate=25:duration=0.04\" -pix_fmt yuv420p -c:v ffv1 -coder range_tab out.mkv` (ffmpeg 9.0.1) was parsed four ways with a from-RFC range decoder. Giving the 255 state_transition_delta symbols their own fresh state array reads bits_per_raw_sample = 1, log2_v_chroma_subsample = 1, extra_plane = 1 and quant_table_set_count = 0 out of a plain 8-bit yuv420p 2x2-slice stream; sharing Parameters' array reads all of them correctly. Continuing into the QuantizationTableSets with the custom table then gives context_counts of 23,624,738 and 10,393,918,178 (RFC 9043 Sec 4.1.2 caps them at 32,768) and runs the decoder 77 bytes past the record, while the default table gives 666 and 7563 -- the same pair every other coder's record from the same source produces -- and ends exactly one byte past it, matching ffv1-blackbox-closed-mode-length. Fixture: tests/fixtures/rangetab_*."
+
+[[source]]
+id       = "ffv1-blackbox-gray"
+kind     = "blackbox"
+title    = "A gray FFV1 stream is colorspace_type 0 with chroma_planes 0 and both subsampling fields 0 -- indistinguishable from Yuv444p without chroma_planes"
+acquired = "2026-09-02"
+where    = "Local measurement, not a document: `ffmpeg -f lavfi -i \"testsrc2=size=96x64:rate=25:duration=0.04\" -pix_fmt gray -c:v ffv1 out.mkv` (ffmpeg 9.0.1). Its Configuration Record carries colorspace_type = 0, chroma_planes = 0, log2_h_chroma_subsample = log2_v_chroma_subsample = 0. This crate's format mapping keyed only on (colorspace_type, log2_h, log2_v), so every gray file decoded as Yuv444p -- at exactly the right output size, with two planes of whatever the frame allocator left behind. Fixture: tests/fixtures/gray_*."
+
 # This crate's other tables (RiceState/RunState initial-value constants, the
 # quantized-gradient sign/scale bookkeeping in quant.rs) are either under the
 # 32-element provenance threshold or this crate's own original bookkeeping

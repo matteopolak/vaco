@@ -366,3 +366,80 @@ fn decodes_real_ffmpeg_golomb_rice_stream_pixel_exact() {
     let frame_bytes_len = (GOLOMB_W as usize) * (GOLOMB_H as usize) * 3 / 2; // yuv420p
     assert_eq!(frame_bytes(&frame), &GOLOMB_RAW[..frame_bytes_len]);
 }
+
+/// Decode one frame of a committed `ffmpeg`-produced fixture and compare every
+/// sample against `ffmpeg`'s own raw decode of the same file.
+fn assert_fixture_decodes_exact(extradata: &[u8], coded: &[u8], raw: &[u8], w: u32, h: u32) {
+    let mut dec = Ffv1Decoder::new(Limits::permissive());
+    dec.set_extradata(extradata).expect("set_extradata");
+    dec.prime_video(w, h);
+    let mut budget = Budget::new(Limits::permissive());
+    let pkt = Packet::from_slice(&mut budget, coded).expect("packet");
+    dec.send(Some(&pkt)).expect("send frame");
+    let frame = dec.receive().expect("receive frame");
+    assert_eq!(frame_bytes(&frame), raw);
+}
+
+/// `colorspace_type = 1` (RGB via the JPEG 2000 RCT) under both coders.
+///
+/// RCT content interleaves Lines across planes (RFC 9043 §3.7.2) instead of
+/// coding one plane at a time; this crate coded it plane-at-a-time in *both*
+/// directions, so `round_trips_gbrp_various_sizes` above passed while every
+/// real `ffmpeg -pix_fmt gbrp` file decoded wrong from the first pixel.
+#[test]
+fn decodes_real_ffmpeg_gbrp_rct_range_coder_pixel_exact() {
+    assert_fixture_decodes_exact(
+        include_bytes!("fixtures/gbrp_range_extradata.bin"),
+        include_bytes!("fixtures/gbrp_range_frame0.bin"),
+        include_bytes!("fixtures/gbrp_range.raw"),
+        96,
+        64,
+    );
+}
+
+/// The Golomb-Rice twin of the test above, which additionally pins the one
+/// thing the line interleave changes about run mode: with no per-plane
+/// boundary to reset at, all three planes share one `run_index` for the whole
+/// slice (see `codec::run_state_count`).
+#[test]
+fn decodes_real_ffmpeg_gbrp_rct_golomb_rice_pixel_exact() {
+    assert_fixture_decodes_exact(
+        include_bytes!("fixtures/gbrp_rice_extradata.bin"),
+        include_bytes!("fixtures/gbrp_rice_frame0.bin"),
+        include_bytes!("fixtures/gbrp_rice.raw"),
+        96,
+        64,
+    );
+}
+
+/// `chroma_planes = 0`. Indistinguishable from `Yuv444p` on
+/// `colorspace_type`/subsampling alone, which is exactly how every gray FFV1
+/// file used to decode as 4:4:4 at precisely the right output size.
+#[test]
+fn decodes_real_ffmpeg_gray_pixel_exact() {
+    assert_fixture_decodes_exact(
+        include_bytes!("fixtures/gray_extradata.bin"),
+        include_bytes!("fixtures/gray_frame0.bin"),
+        include_bytes!("fixtures/gray.raw"),
+        96,
+        64,
+    );
+}
+
+/// `coder_type = 2` — a custom range-coder state transition table.
+///
+/// The delta shares `Parameters`' own state array, and the custom table it
+/// builds applies to `Slice` coding only, never to the rest of the
+/// Configuration Record. Getting either wrong made this stream unreadable
+/// rather than merely wrong: `set_extradata` failed and the CLI reported
+/// "decoder has no configuration".
+#[test]
+fn decodes_real_ffmpeg_custom_state_transition_table_pixel_exact() {
+    assert_fixture_decodes_exact(
+        include_bytes!("fixtures/rangetab_extradata.bin"),
+        include_bytes!("fixtures/rangetab_frame0.bin"),
+        include_bytes!("fixtures/rangetab.raw"),
+        96,
+        64,
+    );
+}

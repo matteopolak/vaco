@@ -20,9 +20,10 @@
 //!
 //! # Coverage
 //!
-//! Version 3 only; 8-bit; `Yuv420p`/`Yuv422p`/`Yuv444p` and `Gbrp` (via the
-//! JPEG 2000 RCT). The encoder always uses the range coder and writes one
-//! slice; decode also covers Golomb-Rice-coded and multi-slice files. See
+//! Version 3 only; 8-bit; `Yuv420p`/`Yuv422p`/`Yuv444p`, `Gray8`, and `Gbrp`
+//! (via the JPEG 2000 RCT). The encoder always uses the range coder with the
+//! default state transition table and writes one slice; decode also covers
+//! Golomb-Rice-coded, custom-table and multi-slice files. See
 //! [`codec`]'s module docs for the measurements behind those claims. Add a
 //! pixel format by
 //! extending `codec::mapping_for`/`format_for`; a higher bit depth needs

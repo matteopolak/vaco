@@ -18,16 +18,16 @@
 //!   each slice's byte range (§4.9.1), cross-checked pixel-exact against a
 //!   real 4-slice `ffmpeg` file (range-coder mode).
 //! - **Coder**: the encoder always emits `coder_type = 1` (range coder,
-//!   default table); decode covers that and `coder_type = 0` (Golomb-Rice,
-//!   `ffmpeg`'s own default), both cross-checked pixel-exact against real
-//!   `ffmpeg` encodes. `coder_type = 2` (custom transition table) is
-//!   untested — no fixture reaches it, and `ffmpeg -coder range_tab` does not
-//!   reach this crate at all today (its extradata never arrives).
+//!   default table); decode covers all three of `coder_type` 0 (Golomb-Rice,
+//!   `ffmpeg`'s own default), 1, and 2 (custom state transition table), each
+//!   cross-checked pixel-exact against a real `ffmpeg` encode.
 //! - **Bit depth**: 8 only.
-//! - **Color**: `Yuv420p`/`Yuv422p`/`Yuv444p` (`colorspace_type` 0) and
-//!   `Gbrp` (`colorspace_type` 1, via the JPEG 2000 RCT). No alpha plane.
-//!   Own-encoder round trip is cross-checked for all four; the real-`ffmpeg`
-//!   cross-check fixture is `Yuv420p` only.
+//! - **Color**: `Yuv420p`/`Yuv422p`/`Yuv444p` and `Gray8` (`colorspace_type`
+//!   0, the last with `chroma_planes = 0`) and `Gbrp` (`colorspace_type` 1,
+//!   via the JPEG 2000 RCT, whose Lines interleave across planes — see
+//!   [`line_order`]). No alpha plane. Every one of the five has a real
+//!   `ffmpeg` decode fixture except `Yuv422p`, which has only the own-encoder
+//!   round trip.
 
 use vaco_core::{Error, Result};
 use vaco_limits::Budget;
@@ -36,9 +36,10 @@ use vaco_pixfmt::PixFmt;
 use crate::crc::{crc32_ffv1, crc32_ffv1_parity};
 use crate::params::{CoderType, ColorSpace, Parameters};
 use crate::rangecoder::{RangeDecoder, RangeEncoder};
+use crate::rice::RunState;
 use crate::slice::{
-    PlaneStates, SliceBuf, SliceFooter, SliceHeader, decode_plane_golomb, decode_plane_range,
-    encode_plane_range, quant_index_for_plane,
+    PlaneStates, SliceBuf, SliceFooter, SliceHeader, decode_line_golomb, decode_line_range,
+    encode_line_range, quant_index_for_plane,
 };
 
 /// This crate's per-format configuration: how a [`PixFmt`] maps onto FFV1's
@@ -46,29 +47,31 @@ use crate::slice::{
 #[derive(Debug, Clone, Copy)]
 struct FormatMapping {
     colorspace: ColorSpace,
+    chroma_planes: bool,
     log2_h: u32,
     log2_v: u32,
 }
 
 fn mapping_for(format: PixFmt) -> Result<FormatMapping> {
+    let ycbcr = |chroma_planes, log2_h, log2_v| {
+        Ok(FormatMapping {
+            colorspace: ColorSpace::YCbCr,
+            chroma_planes,
+            log2_h,
+            log2_v,
+        })
+    };
     match format {
-        PixFmt::Yuv420p => Ok(FormatMapping {
-            colorspace: ColorSpace::YCbCr,
-            log2_h: 1,
-            log2_v: 1,
-        }),
-        PixFmt::Yuv422p => Ok(FormatMapping {
-            colorspace: ColorSpace::YCbCr,
-            log2_h: 1,
-            log2_v: 0,
-        }),
-        PixFmt::Yuv444p => Ok(FormatMapping {
-            colorspace: ColorSpace::YCbCr,
-            log2_h: 0,
-            log2_v: 0,
-        }),
+        PixFmt::Yuv420p => ycbcr(true, 1, 1),
+        PixFmt::Yuv422p => ycbcr(true, 1, 0),
+        PixFmt::Yuv444p => ycbcr(true, 0, 0),
+        // Single-plane luma: `chroma_planes = 0`, RFC 9043 §4.2.6. The
+        // subsampling fields are meaningless without chroma planes and a real
+        // `ffmpeg -pix_fmt gray` encode writes 0 for both.
+        PixFmt::Gray8 => ycbcr(false, 0, 0),
         PixFmt::Gbrp => Ok(FormatMapping {
             colorspace: ColorSpace::JpegRct,
+            chroma_planes: true,
             log2_h: 0,
             log2_v: 0,
         }),
@@ -78,12 +81,24 @@ fn mapping_for(format: PixFmt) -> Result<FormatMapping> {
     }
 }
 
-fn format_for(colorspace: ColorSpace, log2_h: u32, log2_v: u32) -> Result<PixFmt> {
-    match (colorspace, log2_h, log2_v) {
-        (ColorSpace::YCbCr, 1, 1) => Ok(PixFmt::Yuv420p),
-        (ColorSpace::YCbCr, 1, 0) => Ok(PixFmt::Yuv422p),
-        (ColorSpace::YCbCr, 0, 0) => Ok(PixFmt::Yuv444p),
-        (ColorSpace::JpegRct, 0, 0) => Ok(PixFmt::Gbrp),
+/// The inverse of [`mapping_for`]. `chroma_planes` is load-bearing and was
+/// once missing here: a real `ffmpeg -pix_fmt gray` stream signals
+/// `colorspace_type = 0`, `chroma_planes = 0`, `log2_h = log2_v = 0`, which
+/// without that field is indistinguishable from `Yuv444p` — so every gray
+/// FFV1 file decoded as 4:4:4 with two planes of whatever the frame allocator
+/// left behind, at exactly the right output size.
+fn format_for(
+    colorspace: ColorSpace,
+    chroma_planes: bool,
+    log2_h: u32,
+    log2_v: u32,
+) -> Result<PixFmt> {
+    match (colorspace, chroma_planes, log2_h, log2_v) {
+        (ColorSpace::YCbCr, true, 1, 1) => Ok(PixFmt::Yuv420p),
+        (ColorSpace::YCbCr, true, 1, 0) => Ok(PixFmt::Yuv422p),
+        (ColorSpace::YCbCr, true, 0, 0) => Ok(PixFmt::Yuv444p),
+        (ColorSpace::YCbCr, false, _, _) => Ok(PixFmt::Gray8),
+        (ColorSpace::JpegRct, true, 0, 0) => Ok(PixFmt::Gbrp),
         _ => Err(Error::Unsupported(
             "ffv1: colorspace/subsampling combination not covered by this crate",
         )),
@@ -97,6 +112,7 @@ pub(crate) const SUPPORTED_PIX_FMTS: &[PixFmt] = &[
     PixFmt::Yuv444p,
     PixFmt::Yuv422p,
     PixFmt::Gbrp,
+    PixFmt::Gray8,
 ];
 
 /// Build the Configuration Record (RFC 9043 §4.3): `Parameters()`, no
@@ -160,8 +176,13 @@ impl Ffv1Config {
     /// [`Error::Unsupported`] for any other format.
     pub(crate) fn for_encode(format: PixFmt) -> Result<Self> {
         let mapping = mapping_for(format)?;
-        let params =
-            Parameters::own_encoder(mapping.colorspace, 8, true, mapping.log2_h, mapping.log2_v);
+        let params = Parameters::own_encoder(
+            mapping.colorspace,
+            8,
+            mapping.chroma_planes,
+            mapping.log2_h,
+            mapping.log2_v,
+        );
         Ok(Self { params, format })
     }
 
@@ -185,6 +206,7 @@ impl Ffv1Config {
         }
         let format = format_for(
             params.colorspace,
+            params.chroma_planes,
             params.log2_h_chroma_subsample,
             params.log2_v_chroma_subsample,
         )?;
@@ -481,10 +503,17 @@ pub(crate) fn decode_frame(
         let mut scratch = PlaneStates::fresh(quant_index_count);
         let plane_states = contexts.slot(i, quant_index_count, &mut scratch);
 
-        let planes: Vec<SliceBuf> = match params.coder_type {
-            CoderType::RangeDefault | CoderType::RangeCustom => (0..plane_count)
-                .map(|p| {
-                    let (pw, ph) = plane_dims(p, slice_w, slice_h, params);
+        let coded_bits = coded_bits(params);
+        let mut planes: Vec<SliceBuf> = Vec::new();
+        for p in 0..plane_count {
+            let (pw, ph) = plane_dims(p, slice_w, slice_h, params);
+            planes.push(SliceBuf::alloc(budget, pw, ph)?);
+        }
+        let order = line_order(params, &planes);
+
+        match params.coder_type {
+            CoderType::RangeDefault | CoderType::RangeCustom => {
+                for &(p, y) in &order {
                     let qts = quant_table_for_plane(params, &header, p, quant_index_count)?;
                     let slot = quant_index_for_plane(p, params.chroma_planes, params.version)
                         .min(quant_index_count.saturating_sub(1));
@@ -492,19 +521,20 @@ pub(crate) fn decode_frame(
                         .range
                         .get_mut(slot)
                         .ok_or(Error::InvalidData("ffv1: plane index"))?;
-                    let coded_bits = coded_bits(params);
-                    decode_plane_range(
+                    let buf = planes
+                        .get_mut(p)
+                        .ok_or(Error::InvalidData("ffv1: plane index"))?;
+                    decode_line_range(
                         &mut dec,
                         &params.state_transition,
                         qts,
                         states,
                         coded_bits,
-                        pw,
-                        ph,
-                        budget,
-                    )
-                })
-                .collect::<Result<_>>()?,
+                        buf,
+                        y,
+                    )?;
+                }
+            }
             CoderType::GolombRice => {
                 // RFC 9043 §3.8.1.1.1: the switch from the range-coded
                 // SliceHeader to Golomb-coded content is Sentinel mode —
@@ -514,27 +544,85 @@ pub(crate) fn decode_frame(
                 // locate_slices). See rangecoder.rs's module docs.
                 let start = dec.read_terminator(&params.state_transition);
                 let mut r = vaco_bitstream::BitReader::new(region.get(start..).unwrap_or(&[]));
-                (0..plane_count)
-                    .map(|p| {
-                        let (pw, ph) = plane_dims(p, slice_w, slice_h, params);
-                        let qts = quant_table_for_plane(params, &header, p, quant_index_count)?;
-                        let slot = quant_index_for_plane(p, params.chroma_planes, params.version)
-                            .min(quant_index_count.saturating_sub(1));
-                        let states = plane_states
-                            .rice
-                            .get_mut(slot)
-                            .ok_or(Error::InvalidData("ffv1: plane index"))?;
-                        let coded_bits = coded_bits(params);
-                        decode_plane_golomb(&mut r, qts, states, coded_bits, pw, ph, budget)
-                    })
-                    .collect::<Result<_>>()?
+                // "run_index is reset to zero for each Plane and Slice"
+                // (RFC 9043 §3.8.2.2.1) — but only when Lines are ordered
+                // plane-major. With the JPEG 2000 RCT's line interleave there
+                // is no per-plane boundary to reset at, and measured against a
+                // real `ffmpeg -pix_fmt gbrp -c:v ffv1` file the three planes
+                // share one `run_index` for the whole slice: one shared state
+                // decodes the frame exactly, one per plane leaves 57,165 of
+                // 57,600 samples wrong, and one per quant-table-set slot (Y
+                // alone, Cb and Cr together) 56,363. The RFC does not say
+                // which, so this is inference from that measurement.
+                let mut runs = vec![RunState::new(); run_state_count(params, plane_count)];
+                for &(p, y) in &order {
+                    let qts = quant_table_for_plane(params, &header, p, quant_index_count)?;
+                    let slot = quant_index_for_plane(p, params.chroma_planes, params.version)
+                        .min(quant_index_count.saturating_sub(1));
+                    let states = plane_states
+                        .rice
+                        .get_mut(slot)
+                        .ok_or(Error::InvalidData("ffv1: plane index"))?;
+                    let buf = planes
+                        .get_mut(p)
+                        .ok_or(Error::InvalidData("ffv1: plane index"))?;
+                    let run = runs
+                        .get_mut(run_state_index(params, p))
+                        .ok_or(Error::InvalidData("ffv1: plane index"))?;
+                    decode_line_golomb(&mut r, qts, states, run, coded_bits, buf, y)?;
+                }
             }
-        };
+        }
 
         store_planes(&mut frame, &planes, params, slice_x, slice_y)?;
     }
 
     Ok(frame)
+}
+
+/// The `(plane, y)` order of `Line` elements within one `SliceContent`
+/// (RFC 9043 §4.7).
+///
+/// For `colorspace_type == 0` that is Plane then row; for `colorspace_type == 1`
+/// it is **row then Plane** — the JPEG 2000 RCT interleave (§3.7.2: "the
+/// horizontal Lines are interleaved... Y(1,1) Y(2,1) Cb(1,1) Cb(2,1) Cr(1,1)
+/// Cr(2,1) Y(1,2) ..."). This crate coded RGB content plane-at-a-time in both
+/// directions, so its encoder and decoder agreed with each other and neither
+/// agreed with the format; a `Gbrp` round trip through this crate passed while
+/// every `ffmpeg -pix_fmt gbrp` file decoded wrong.
+fn line_order(params: &Parameters, planes: &[SliceBuf]) -> Vec<(usize, usize)> {
+    let heights: Vec<usize> = planes.iter().map(|b| b.h).collect();
+    let n = heights.len();
+    if params.colorspace == ColorSpace::JpegRct {
+        // RCT planes are never subsampled, so every plane has the same height.
+        let h = heights.first().copied().unwrap_or(0);
+        (0..h).flat_map(|y| (0..n).map(move |p| (p, y))).collect()
+    } else {
+        (0..n)
+            .flat_map(|p| {
+                let h = heights.get(p).copied().unwrap_or(0);
+                (0..h).map(move |y| (p, y))
+            })
+            .collect()
+    }
+}
+
+/// How many independent Golomb-Rice [`RunState`]s a slice needs, and which one
+/// plane `p` uses — see the comment at the call site in [`decode_frame`].
+const fn run_state_count(params: &Parameters, plane_count: usize) -> usize {
+    if matches!(params.colorspace, ColorSpace::JpegRct) {
+        1
+    } else {
+        plane_count
+    }
+}
+
+const fn run_state_index(params: &Parameters, p: usize) -> usize {
+    if matches!(params.colorspace, ColorSpace::JpegRct) {
+        0
+    } else {
+        p
+    }
 }
 
 fn coded_bits(params: &Parameters) -> u32 {
@@ -693,7 +781,6 @@ pub(crate) fn encode_frame(config: &Ffv1Config, frame: &vaco_frame::Frame) -> Re
     }
     let (width, height) = (*width, *height);
 
-    let plane_count = if params.chroma_planes { 3 } else { 1 };
     let mut budget = Budget::new(vaco_limits::Limits::permissive());
     let planes = load_planes(frame, params, width, height, &mut budget)?;
 
@@ -709,7 +796,10 @@ pub(crate) fn encode_frame(config: &Ffv1Config, frame: &vaco_frame::Frame) -> Re
     // Indexed by quant-table-set-index slot, not by plane — see
     // PlaneStates's docs (Cb/Cr share slot 1 and its adapting context array).
     let mut plane_states = PlaneStates::fresh(quant_index_count.max(1));
-    for p in 0..plane_count {
+    let coded_bits = coded_bits(params);
+    // Same Line ordering rule as the decoder — Plane-then-row, or row-then-Plane
+    // for the JPEG 2000 RCT. See `line_order`.
+    for (p, y) in line_order(params, &planes) {
         let slot = quant_index_for_plane(p, params.chroma_planes, params.version)
             .min(quant_index_count.saturating_sub(1));
         let qidx = header.quant_table_set_index.get(slot).copied().unwrap_or(0);
@@ -723,21 +813,17 @@ pub(crate) fn encode_frame(config: &Ffv1Config, frame: &vaco_frame::Frame) -> Re
             .range
             .get_mut(slot)
             .ok_or(Error::InvalidData("ffv1: plane index"))?;
-        let coded_bits = if params.colorspace == ColorSpace::JpegRct {
-            params.bits_per_raw_sample + 1
-        } else {
-            params.bits_per_raw_sample
-        };
         let buf = planes
             .get(p)
             .ok_or(Error::InvalidData("ffv1: plane index"))?;
-        encode_plane_range(
+        encode_line_range(
             &mut enc,
             &params.state_transition,
             qts,
             states,
             coded_bits,
             buf,
+            y,
         )?;
     }
 

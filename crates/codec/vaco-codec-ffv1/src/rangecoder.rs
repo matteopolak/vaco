@@ -479,14 +479,24 @@ impl Default for RangeEncoder {
 /// `Parameters()`) when `coder_type > 1`. Never fails on its own — every
 /// `i32` is a valid delta — so unlike the rest of this crate's bitstream
 /// parsers, there is no `Result` to thread through.
+///
+/// `states` is `Parameters`' own state array, shared with every other field
+/// around it — the delta loop sits inside `Parameters()` (Figure 28) and
+/// `Parameters` "has its own initial states, all set to 128", one array for
+/// the whole structure. Giving the delta a private array instead desynchronises
+/// everything after it: measured against a real `ffmpeg -coder range_tab`
+/// Configuration Record, that read `bits_per_raw_sample = 1`,
+/// `log2_v_chroma_subsample = 1`, `extra_plane = 1` and
+/// `quant_table_set_count = 0` out of a plain 8-bit yuv420p 2x2-slice stream;
+/// sharing the array reads all of them correctly.
 pub(crate) fn read_state_transition_delta(
     dec: &mut RangeDecoder<'_>,
+    states: &mut SymbolStates,
     table: &StateTransition,
 ) -> [i32; 255] {
-    let mut states = fresh_states();
     let mut delta = [0i32; 255];
     for slot in &mut delta {
-        *slot = dec.get_symbol(&mut states, table, true);
+        *slot = dec.get_symbol(states, table, true);
     }
     delta
 }
@@ -495,12 +505,12 @@ pub(crate) fn read_state_transition_delta(
 /// crate's own encoder never sets `coder_type > 1` (see `params.rs`).
 pub(crate) fn write_state_transition_delta(
     enc: &mut RangeEncoder,
+    states: &mut SymbolStates,
     table: &StateTransition,
     delta: &[i32; 255],
 ) {
-    let mut states = fresh_states();
     for v in delta {
-        enc.put_symbol(&mut states, table, *v, true);
+        enc.put_symbol(states, table, *v, true);
     }
 }
 

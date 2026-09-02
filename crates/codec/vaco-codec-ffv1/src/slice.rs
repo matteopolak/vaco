@@ -388,27 +388,30 @@ fn wrap_sample(v: i32, bits: u32) -> i32 {
     v.rem_euclid(1i32 << bits)
 }
 
-/// Decode one plane's `w x h` samples using the range coder (`coder_type`
-/// 1 or 2), RFC 9043 §3.8.1.2/§4.7-§4.8.
+/// Decode one `Line( p, y )` (RFC 9043 §4.8) with the range coder
+/// (`coder_type` 1 or 2), §3.8.1.2.
+///
+/// A Line, not a whole plane: `colorspace_type == 1` interleaves Lines across
+/// planes (§3.7.2, §4.7) rather than coding one plane at a time, so the
+/// caller drives the order — see `codec::line_order`.
 #[allow(
     clippy::many_single_char_names,
-    reason = "l/t name the RFC's own neighbour labels (Figure 3); w/h are plane dimensions"
+    reason = "l/t name the RFC's own neighbour labels (Figure 3)"
 )]
-pub(crate) fn decode_plane_range(
+pub(crate) fn decode_line_range(
     dec: &mut RangeDecoder<'_>,
     table: &StateTransition,
     qts: &QuantTableSet,
     states: &mut Vec<SymbolStates>,
     bits_per_raw_sample: u32,
-    w: usize,
-    h: usize,
-    budget: &mut Budget,
-) -> Result<SliceBuf> {
-    let mut buf = SliceBuf::alloc(budget, w, h)?;
+    buf: &mut SliceBuf,
+    y: usize,
+) -> Result<()> {
     if states.len() < qts.context_count {
         states.resize(qts.context_count, fresh_states());
     }
-    for y in 0..h {
+    let w = buf.w;
+    {
         for x in 0..w {
             let (l, t, tl, tr, ll, tt) = buf.neighbours(x, y);
             let (ctx, flip) = compute_context(qts, l, t, tl, tr, ll, tt);
@@ -436,26 +439,28 @@ pub(crate) fn decode_plane_range(
             buf.set(x, y, sample);
         }
     }
-    Ok(buf)
+    Ok(())
 }
 
-/// Encode one plane's `w x h` samples using the range coder.
+/// Encode one `Line( p, y )` with the range coder — see
+/// [`decode_line_range`] on why this is a Line and not a plane.
 #[allow(
     clippy::many_single_char_names,
     reason = "l/t name the RFC's own neighbour labels (Figure 3)"
 )]
-pub(crate) fn encode_plane_range(
+pub(crate) fn encode_line_range(
     enc: &mut RangeEncoder,
     table: &StateTransition,
     qts: &QuantTableSet,
     states: &mut Vec<SymbolStates>,
     bits_per_raw_sample: u32,
     src: &SliceBuf,
+    y: usize,
 ) -> Result<()> {
     if states.len() < qts.context_count {
         states.resize(qts.context_count, fresh_states());
     }
-    for y in 0..src.h {
+    {
         for x in 0..src.w {
             let (l, t, tl, tr, ll, tt) = src.neighbours(x, y);
             let (ctx, flip) = compute_context(qts, l, t, tl, tr, ll, tt);
@@ -479,30 +484,28 @@ pub(crate) fn encode_plane_range(
     Ok(())
 }
 
-/// Decode one plane's `w x h` samples using Golomb-Rice mode (`coder_type ==
-/// 0`), RFC 9043 §3.8.2. Decode-only — see `rice.rs`'s module docs.
+/// Decode one `Line( p, y )` in Golomb-Rice mode (`coder_type == 0`), RFC 9043
+/// §3.8.2. Decode-only — see `rice.rs`'s module docs. `run` is the *plane*'s
+/// run state (`run_index` survives the line; `run_mode`/`run_count` do not);
+/// see [`decode_line_range`] on why this is a Line and not a plane.
 #[allow(
     clippy::many_single_char_names,
-    reason = "l/t/tl/tr/ll/tt name the RFC's own neighbour labels (Figure 3); r/w/h are the bit reader and plane dimensions"
+    reason = "l/t/tl/tr/ll/tt name the RFC's own neighbour labels (Figure 3)"
 )]
-pub(crate) fn decode_plane_golomb(
+pub(crate) fn decode_line_golomb(
     r: &mut BitReader<'_>,
     qts: &QuantTableSet,
     rice_states: &mut Vec<RiceState>,
+    run: &mut RunState,
     bits_per_raw_sample: u32,
-    w: usize,
-    h: usize,
-    budget: &mut Budget,
-) -> Result<SliceBuf> {
-    let mut buf = SliceBuf::alloc(budget, w, h)?;
+    buf: &mut SliceBuf,
+    y: usize,
+) -> Result<()> {
     if rice_states.len() < qts.context_count {
         rice_states.resize(qts.context_count, RiceState::fresh());
     }
-    // "run_index is reset to zero for each Plane and Slice" — one RunState
-    // per plane decode, scoped to this call; its run_mode/run_count are
-    // per Line and cleared by begin_line (see RunState's docs).
-    let mut run = RunState::new();
-    for y in 0..h {
+    let w = buf.w;
+    {
         run.begin_line();
         for x in 0..w {
             let (l, t, tl, tr, ll, tt) = buf.neighbours(x, y);
@@ -537,7 +540,7 @@ pub(crate) fn decode_plane_golomb(
             buf.set(x, y, wrap_sample(pred + diff, bits_per_raw_sample));
         }
     }
-    Ok(buf)
+    Ok(())
 }
 
 /// Per-slice adaptive state, reset fresh on every keyframe (RFC 9043
@@ -619,23 +622,19 @@ mod tests {
 
         let mut enc = RangeEncoder::new();
         let mut enc_states = Vec::new();
-        encode_plane_range(&mut enc, &table, &qts, &mut enc_states, 8, &src).expect("encode");
+        for y in 0..src.h {
+            encode_line_range(&mut enc, &table, &qts, &mut enc_states, 8, &src, y).expect("encode");
+        }
         let bytes = enc.finish();
 
         let mut dec = RangeDecoder::new(&bytes);
         let mut dec_states = Vec::new();
         let mut budget = Budget::new(Limits::permissive());
-        let decoded = decode_plane_range(
-            &mut dec,
-            &table,
-            &qts,
-            &mut dec_states,
-            8,
-            src.w,
-            src.h,
-            &mut budget,
-        )
-        .expect("decode");
+        let mut decoded = SliceBuf::alloc(&mut budget, src.w, src.h).expect("alloc");
+        for y in 0..src.h {
+            decode_line_range(&mut dec, &table, &qts, &mut dec_states, 8, &mut decoded, y)
+                .expect("decode");
+        }
 
         for y in 0..src.h {
             for x in 0..src.w {

@@ -160,8 +160,16 @@ impl Parameters {
 
         let coder_type_raw = dec.get_symbol(&mut states, &bootstrap, false) as u32;
         let coder_type = CoderType::from_u32(coder_type_raw)?;
+        // The custom table applies to `Slice` coding only, never to the rest
+        // of the Configuration Record: measured against a real
+        // `ffmpeg -coder range_tab` record, reading the QuantizationTableSets
+        // that follow with the custom table gives context_counts of 23,624,738
+        // and 10,393,918,178 (RFC 9043 §4.1.2 caps them at 32,768) and runs the
+        // decoder 77 bytes past the record, while reading them with the default
+        // table gives 666 and 7563 — the same pair every other coder's record
+        // from the same source produces — and ends exactly one byte past it.
         let state_transition = if coder_type_raw > 1 {
-            let delta = read_state_transition_delta(dec, &bootstrap);
+            let delta = read_state_transition_delta(dec, &mut states, &bootstrap);
             StateTransition::with_delta(&delta)
         } else {
             StateTransition::default_table()
@@ -196,7 +204,7 @@ impl Parameters {
 
         let mut quant_tables = Vec::new();
         for _ in 0..quant_table_set_count {
-            quant_tables.push(QuantTableSet::parse(dec, &state_transition)?);
+            quant_tables.push(QuantTableSet::parse(dec, &bootstrap)?);
         }
 
         let mut initial_states: Vec<Option<Vec<[u8; CONTEXT_SIZE]>>> =
@@ -285,8 +293,9 @@ impl Parameters {
         if self.coder_type == CoderType::RangeCustom {
             // This crate's own encoder never picks RangeCustom, but keep the
             // write side complete: all-zero delta (the table used is the
-            // default one either way).
-            write_state_transition_delta(enc, &bootstrap, &[0i32; 255]);
+            // default one either way). Shares `states` with the rest of
+            // `Parameters`, mirroring `parse`.
+            write_state_transition_delta(enc, &mut states, &bootstrap, &[0i32; 255]);
         }
         enc.put_symbol(
             &mut states,
@@ -338,7 +347,8 @@ impl Parameters {
             );
         }
         for qts in &self.quant_tables {
-            qts.write(enc, &self.state_transition)?;
+            // Default table, not `self.state_transition` — see `parse`.
+            qts.write(enc, &bootstrap)?;
         }
         if self.version >= 3 {
             for maybe_states in &self.initial_states {
