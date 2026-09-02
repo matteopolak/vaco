@@ -937,27 +937,34 @@ impl MpegTsDemuxer {
             flags |= PacketFlags::CORRUPT;
         }
 
-        // The reference runs the ADTS parser over the PES payload and emits
-        // one packet per AAC frame; a PES here routinely carries more than
-        // one (measured: thirteen 1024-sample frames in one PES on a 1 s
-        // 44.1 kHz encode), and emitting the whole payload as one packet
-        // — what this used to do unconditionally — was the *ordering*
-        // divergence issue #632 named: every packet after the first
-        // multi-frame audio PES is either the wrong packet or in the wrong
-        // position, so no later field comparison against the reference was
-        // comparing like against like. Splitting only for AAC-in-ADTS, since
-        // that is the one payload shape this crate can self-delimit without
-        // reaching for a bitstream parser (D14.1: a format crate does not
-        // depend on a codec crate) — everything else keeps today's
-        // one-packet-per-PES behaviour, unchanged.
-        let is_aac = self
+        // The reference runs a frame parser over the PES payload and emits
+        // one packet per audio frame; a PES here routinely carries more than
+        // one (measured: thirteen 1024-sample AAC frames in one PES on a 1 s
+        // 44.1 kHz encode; two 1152-sample MP2 frames in one PES on a
+        // real `ffmpeg -c:a mp2` mux — case 31 of `planning/CONFORMANCE-
+        // FINDINGS.md` finding 57, which reported *ordering* wrong first
+        // (fixed separately) and, once that was fixed, this exact
+        // undercount: 23 emitted packets against the reference's 46, each
+        // one exactly twice the reference's own `size`). Emitting the whole
+        // payload as one packet — what this used to do unconditionally for
+        // every audio codec — was the *ordering* divergence issue #632
+        // named for AAC, and the same shape of bug for MP1/2/3: every packet
+        // after the first multi-frame audio PES is either the wrong packet
+        // or in the wrong position, so no later field comparison against
+        // the reference was comparing like against like. Splitting only for
+        // AAC-in-ADTS and MPEG-1/2 Audio (Layer I/II/III), since those are
+        // the payload shapes this crate can self-delimit without reaching
+        // for a bitstream parser (D14.1: a format crate does not depend on
+        // a codec crate) — everything else keeps today's one-packet-per-PES
+        // behaviour, unchanged.
+        let codec_id = self
             .streams
             .get(stream_index as usize)
-            .is_some_and(|s| s.params.codec_id == Some(CodecId::Aac));
-        let frames = if is_aac {
-            split_adts(payload)
-        } else {
-            Vec::new()
+            .and_then(|s| s.params.codec_id);
+        let frames = match codec_id {
+            Some(CodecId::Aac) => split_adts(payload),
+            Some(CodecId::Mp1 | CodecId::Mp2 | CodecId::Mp3) => split_mpegaudio(payload),
+            _ => Vec::new(),
         };
 
         // Measured against `ffprobe 8.1`: every packet demuxed from MPEG-TS
@@ -1356,10 +1363,13 @@ const ADTS_SAMPLE_RATES: [u32; 13] = [
     7_350,
 ];
 
-/// One ADTS frame found in a PES payload: its byte span and the sample count
-/// it represents, needed to place the *next* frame's timestamp.
+/// One audio frame found in a PES payload (ADTS/AAC or MPEG-1/2 Audio): its
+/// byte span and the sample count it represents, needed to place the *next*
+/// frame's timestamp. Shared by [`split_adts`] and [`split_mpegaudio`]
+/// rather than one struct per codec, since both callers (and the frame loop
+/// in `MpegTsDemuxer::handle_pes`) only ever need these four facts.
 #[derive(Debug, Clone, Copy)]
-struct AdtsFrame {
+struct SplitFrame {
     offset: usize,
     len: usize,
     samples: u32,
@@ -1372,7 +1382,7 @@ struct AdtsFrame {
 /// length shorter than the header that carries it — so a caller can fall
 /// back to treating the payload as opaque rather than misreading LATM or
 /// corrupt data as ADTS.
-fn parse_adts_header(buf: &[u8]) -> Option<AdtsFrame> {
+fn parse_adts_header(buf: &[u8]) -> Option<SplitFrame> {
     let &[b0, b1, b2, b3, b4, b5, b6, ..] = buf else {
         return None;
     };
@@ -1391,7 +1401,7 @@ fn parse_adts_header(buf: &[u8]) -> Option<AdtsFrame> {
     // `number_of_raw_data_blocks_in_frame`: 0 means one 1024-sample block:
     // the value in the header is *blocks minus one*.
     let raw_blocks = u32::from(b6 & 0x03);
-    Some(AdtsFrame {
+    Some(SplitFrame {
         offset: 0,
         len: frame_len,
         samples: 1024u32.saturating_mul(raw_blocks.saturating_add(1)),
@@ -1404,7 +1414,7 @@ fn parse_adts_header(buf: &[u8]) -> Option<AdtsFrame> {
 /// padded or truncated — the frames found up to that point are still real
 /// frames and are worth keeping; an empty result tells the caller this was
 /// not ADTS at all, or not enough of it to find even one frame.
-fn split_adts(payload: &[u8]) -> Vec<AdtsFrame> {
+fn split_adts(payload: &[u8]) -> Vec<SplitFrame> {
     let mut out = Vec::new();
     let mut pos = 0usize;
     while pos < payload.len() {
@@ -1419,6 +1429,219 @@ fn split_adts(payload: &[u8]) -> Vec<AdtsFrame> {
         out.push(frame);
     }
     out
+}
+
+/// ISO/IEC 11172-3 Table 3.14 (MPEG-1) / ISO/IEC 13818-3 Table 3.14.3.b (MPEG-2/2.5)
+/// — the bitrate table `[mpeg_version_is_1][layer_is_1]` selects, in kbit/s. A
+/// `0` entry is "free format" (no fixed length, refused: nothing here can
+/// self-delimit that) and index 15 is reserved.
+const MPEGAUDIO_BITRATE_KBPS: [[[u16; 16]; 2]; 2] = [
+    // MPEG-2/2.5
+    [
+        // Layer II/III
+        [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160, 0],
+        // Layer I
+        [0, 32, 48, 56, 64, 80, 96, 112, 128, 144, 160, 176, 192, 224, 256, 0],
+    ],
+    // MPEG-1
+    [
+        // Layer II
+        [0, 32, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 384, 0],
+        // Layer I
+        [0, 32, 64, 96, 128, 160, 192, 224, 256, 288, 320, 352, 384, 416, 448, 0],
+    ],
+];
+/// MPEG-1 Layer III's bitrate table is its own row, distinct from Layer II's
+/// (the only version/layer combination where the two differ) — ISO/IEC
+/// 11172-3 Table 3.14.
+const MPEGAUDIO_BITRATE_KBPS_MPEG1_LAYER3: [u16; 16] =
+    [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0];
+
+/// ISO/IEC 11172-3 §2.4.2.3 `sampling_frequency` — `[mpeg_version_id]`,
+/// `sampling_frequency_index` 3 ("reserved") absent so the lookup simply
+/// fails for it. MPEG-2.5 (`version_id == 0`) is an unofficial, later
+/// extension (ISO/IEC 13818-3 does not cover it) but its sample rates —
+/// exactly half of MPEG-2's — are universally implemented and are what a
+/// real `ffmpeg`-produced low-bitrate stream actually uses.
+const MPEGAUDIO_SAMPLE_RATES: [[u32; 3]; 3] = [
+    [11_025, 12_000, 8_000],  // MPEG-2.5, version_id 0
+    [22_050, 24_000, 16_000], // MPEG-2, version_id 2
+    [44_100, 48_000, 32_000], // MPEG-1, version_id 3
+];
+
+/// Samples per frame — ISO/IEC 11172-3/13818-3 §2.4.1.3: 384 for Layer I,
+/// 1152 for Layer II always and for Layer III under MPEG-1, 576 for Layer
+/// III under MPEG-2/2.5 (the halved granule count that version introduced).
+const fn mpegaudio_samples_per_frame(layer: u8, mpeg1: bool) -> u32 {
+    match layer {
+        3 => 384,
+        2 => 1152,
+        _ if mpeg1 => 1152,
+        _ => 576,
+    }
+}
+
+/// Parse one MPEG-1/2/2.5 Audio (Layer I/II/III) frame header at the front
+/// of `buf` (`Vaco-Spec-Ref: iso-11172-3`/`iso-13818-3`, §2.4.1.3/§2.4.2.3).
+/// `None` for a bad sync word, a reserved/free-format bitrate or a reserved
+/// sample-rate index, or a frame shorter than its own 4-byte header — the
+/// same "not plausibly this format" refusal [`parse_adts_header`] makes,
+/// for the same reason.
+#[allow(
+    clippy::integer_division,
+    reason = "the frame-length formula (ISO/IEC 11172-3 §2.4.3.1) truncates by definition -- \
+              a real frame's length is an integer number of bytes/slots, not the exact \
+              bitrate/sample-rate ratio, and `sample_rate` is checked non-zero via the table \
+              lookup just above (a zero entry never appears in `MPEGAUDIO_SAMPLE_RATES`)"
+)]
+fn parse_mpegaudio_header(buf: &[u8]) -> Option<SplitFrame> {
+    let &[b0, b1, b2, _b3, ..] = buf else {
+        return None;
+    };
+    // 11-bit sync: byte 0 all ones, byte 1's top three bits all ones.
+    if b0 != 0xFF || (b1 & 0xE0) != 0xE0 {
+        return None;
+    }
+    let version_id = (b1 >> 3) & 0x03; // 0=2.5, 1=reserved, 2=MPEG-2, 3=MPEG-1
+    if version_id == 1 {
+        return None;
+    }
+    let layer = (b1 >> 1) & 0x03; // 0=reserved, 1=III, 2=II, 3=I
+    if layer == 0 {
+        return None;
+    }
+    let mpeg1 = version_id == 3;
+    let bitrate_index = usize::from((b2 >> 4) & 0x0F);
+    let kbps = if mpeg1 && layer == 1 {
+        *MPEGAUDIO_BITRATE_KBPS_MPEG1_LAYER3.get(bitrate_index)?
+    } else {
+        *MPEGAUDIO_BITRATE_KBPS
+            .get(usize::from(mpeg1))?
+            .get(usize::from(layer == 3))?
+            .get(bitrate_index)?
+    };
+    if kbps == 0 {
+        return None; // free format or a reserved index — not self-delimiting.
+    }
+    let sample_rate_index = usize::from((b2 >> 2) & 0x03);
+    // `version_id`'s own bit pattern is 0/2/3 (1 is reserved and already
+    // refused above), not 0/1/2 — remapped here rather than sizing the table
+    // to the sparse raw value, since a fourth, permanently-empty row would
+    // read as a real gap in the format instead of an indexing convenience.
+    let version_row = match version_id {
+        0 => 0,
+        2 => 1,
+        _ => 2,
+    };
+    let sample_rate = *MPEGAUDIO_SAMPLE_RATES
+        .get(version_row)?
+        .get(sample_rate_index)?;
+    let padding = u32::from((b2 >> 1) & 0x01);
+    let bitrate_bps = u32::from(kbps).saturating_mul(1000);
+    // ISO/IEC 11172-3 §2.4.3.1: Layer I frames are 4-byte slots; Layer
+    // II/III are 1-byte slots — the padding slot's own size differs
+    // accordingly, which is exactly the `* 4` Layer I's formula carries.
+    // Multiply before dividing: measured against a real `ffmpeg -c:a mp2`
+    // frame (384 kbps/44.1 kHz -> 1253 or 1254 bytes with/without padding)
+    // — dividing `bitrate_bps / sample_rate` first, as ISO/IEC 11172-3's own
+    // formula reads left to right, truncates to 8 before the `* 144` ever
+    // runs and answers 1152, not 1253. The bytes-per-second ratio is not an
+    // integer for almost any real bitrate/sample-rate pair, so the
+    // truncation point is not a rounding nicety here — it is the difference
+    // between a length real files actually have and one that is merely
+    // close.
+    let frame_len = if layer == 3 {
+        (bitrate_bps.saturating_mul(12) / sample_rate).saturating_add(padding) * 4
+    } else {
+        (bitrate_bps.saturating_mul(144) / sample_rate).saturating_add(padding)
+    };
+    let frame_len = usize::try_from(frame_len).ok()?;
+    if frame_len < 4 || frame_len > buf.len() {
+        return None;
+    }
+    Some(SplitFrame {
+        offset: 0,
+        len: frame_len,
+        samples: mpegaudio_samples_per_frame(layer, mpeg1),
+        sample_rate,
+    })
+}
+
+/// Every MPEG-1/2/2.5 Audio frame in `payload`, in order — the Layer I/II/III
+/// analogue of [`split_adts`]; see that function's doc for why splitting
+/// stops rather than errors at the first byte range that does not parse.
+fn split_mpegaudio(payload: &[u8]) -> Vec<SplitFrame> {
+    let mut out = Vec::new();
+    let mut pos = 0usize;
+    while pos < payload.len() {
+        let Some(rest) = payload.get(pos..) else {
+            break;
+        };
+        let Some(mut frame) = parse_mpegaudio_header(rest) else {
+            break;
+        };
+        frame.offset = pos;
+        pos = pos.saturating_add(frame.len);
+        out.push(frame);
+    }
+    out
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
+mod mpegaudio_split_tests {
+    use super::{parse_mpegaudio_header, split_mpegaudio};
+
+    /// The real header bytes this fix was measured against: a `pcm`-adjacent
+    /// bug, not a hypothetical one — `ffmpeg -f lavfi -i "sine=..." -c:a mp2
+    /// -f mpegts` demuxed with `-map 0:a:0 -c copy -f data` to isolate the
+    /// bare MP2 elementary stream, whose first four bytes are exactly this.
+    /// `ffprobe` on the same bytes reports `sample_rate=44100 bit_rate=384000`
+    /// and a 1253/1254-byte frame (padding alternates) — this is
+    /// MPEG-1 Audio Layer II, not Layer III, and the frame length this
+    /// function computes must match that measurement exactly, not the 1152
+    /// bytes a naive (divide-before-multiply) reading of the spec's own
+    /// formula gives.
+    const REAL_MP2_HEADER: [u8; 4] = [0xFF, 0xFD, 0xE0, 0xC4];
+
+    #[test]
+    fn a_real_mp2_header_decodes_to_the_measured_frame_length() {
+        let mut buf = REAL_MP2_HEADER.to_vec();
+        buf.resize(1254, 0);
+        let frame = parse_mpegaudio_header(&buf).unwrap();
+        assert_eq!(frame.sample_rate, 44_100);
+        assert_eq!(frame.samples, 1152, "Layer II is always 1152 samples/frame");
+        // `padding` is bit 1 of byte 2 (0xC4 = 0b1100_0100 -> bit1 = 0): no
+        // padding slot, so this frame is the shorter of the two real sizes.
+        assert_eq!(frame.len, 1253);
+    }
+
+    #[test]
+    fn split_mpegaudio_finds_two_back_to_back_real_frames() {
+        let mut one = REAL_MP2_HEADER.to_vec();
+        one.resize(1253, 0xAA);
+        let mut payload = one.clone();
+        payload.extend_from_slice(&one);
+        let frames = split_mpegaudio(&payload);
+        assert_eq!(frames.len(), 2, "one real PES from this fixture carries two frames");
+        assert_eq!(frames[0].offset, 0);
+        assert_eq!(frames[1].offset, 1253);
+    }
+
+    #[test]
+    fn a_bad_sync_word_is_not_mistaken_for_mpegaudio() {
+        assert!(parse_mpegaudio_header(&[0x00, 0x00, 0x00, 0x00]).is_none());
+    }
+
+    #[test]
+    fn a_free_format_bitrate_index_is_refused_not_guessed() {
+        // Same header with the bitrate nibble zeroed (free format): this
+        // crate cannot self-delimit a free-format frame, so it must refuse
+        // rather than emit a frame of length zero.
+        let mut header = REAL_MP2_HEADER;
+        header[2] &= 0x0F;
+        assert!(parse_mpegaudio_header(&header).is_none());
+    }
 }
 
 /// The continuity check's three outcomes.

@@ -840,6 +840,12 @@ impl Mp4Demuxer {
             finished: external,
             blocked: external,
             encrypted: cenc.is_some() && decryptor.is_none(),
+            raw_pcm: media_type == MediaType::Audio
+                && decryptor.is_none()
+                && stream
+                    .params
+                    .codec_id
+                    .is_some_and(|id| id.name().starts_with("pcm_")),
             decrypt: decryptor,
         };
         if self.fragmented {
@@ -2282,6 +2288,7 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
         finished: false,
         blocked: false,
         encrypted: false,
+        raw_pcm: false,
         decrypt: None,
     };
     (stream, reader)

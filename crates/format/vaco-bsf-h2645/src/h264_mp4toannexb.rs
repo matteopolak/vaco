@@ -14,17 +14,20 @@
 //! as Annex B (`0`/absent), is a pass-through: run directly on an
 //! already-Annex-B stream, output was byte-identical to input.
 //!
-//! **Not reproduced**: the reference writes the NAL unit immediately
-//! following an insertion with a 3-byte Annex B start code where every other
-//! unit — including that same slot when nothing was inserted before it —
-//! gets 4. Measured on both keyframes for H.264, and confirmed *absent* on
-//! the HEVC sibling filter under the identical experiment (every unit there
-//! gets 4 regardless of position), so it is not a general framing rule. Unit
-//! boundaries, content, and order all match; only this one cosmetic
-//! start-code width does not. `vaco_format_nalu::convert`'s own docs made the
-//! same call for the same reason ("four is what every producer writes ...
-//! and the difference is not worth a knob"); this filter follows that
-//! established precedent rather than reopening it.
+//! **The one place this filter departs from `vaco_format_nalu::convert`'s
+//! "four is what every producer writes" default**: the reference writes the
+//! NAL unit immediately following a parameter-set insertion with a 3-byte
+//! Annex B start code where every other unit — including that same slot
+//! when nothing was inserted before it — gets 4. Measured on both keyframes
+//! for H.264, and confirmed *absent* on the HEVC sibling filter under the
+//! identical experiment (every unit there gets 4 regardless of position),
+//! so it is not a general framing rule — [`splice_before_first_idr`] special-
+//! cases only its own insertion point, and every other NAL this filter
+//! converts (via `length_prefixed_to_annexb`) keeps the shared 4-byte
+//! convention. Originally left unreproduced as "not worth a knob" before a
+//! real byte-exact `-c copy` remux comparison made it a genuine, measured
+//! divergence (`planning/CONFORMANCE-FINDINGS.md` finding 57, cases 34/36/39)
+//! rather than a cosmetic one worth discounting.
 
 use std::collections::VecDeque;
 
@@ -153,7 +156,17 @@ fn splice_before_first_idr(annexb: &[u8], param_sets: &[u8]) -> Vec<u8> {
         let mut out = Vec::new();
         out.extend_from_slice(annexb.get(..sc_start).unwrap_or(annexb));
         out.extend_from_slice(param_sets);
-        out.extend_from_slice(&[0, 0, 0, 1]);
+        // Three bytes, not four, here specifically — see this module's own
+        // doc comment ("Not reproduced", now reproduced): measured against
+        // `ffmpeg 9.0.1` on a real `-c copy` MP4->MPEG-TS remux, the one NAL
+        // unit immediately following a parameter-set splice gets a 3-byte
+        // Annex B start code where every other unit (including this same
+        // IDR slot when nothing was spliced ahead of it, and every unit
+        // `length_prefixed_to_annexb` converts on its own) gets 4. Confirmed
+        // absent on the HEVC sibling filter under the identical experiment,
+        // so this is not a general Annex-B convention this crate should
+        // apply anywhere else — narrowly, only right after this splice.
+        out.extend_from_slice(&[0, 0, 1]);
         out.extend_from_slice(nal.data);
         out.extend_from_slice(annexb.get(nal.end()..).unwrap_or(&[]));
         return out;
@@ -218,7 +231,9 @@ mod tests {
         expected.extend_from_slice(&sps);
         expected.extend_from_slice(&[0, 0, 0, 1]);
         expected.extend_from_slice(&pps);
-        expected.extend_from_slice(&[0, 0, 0, 1]);
+        // 3 bytes, not 4: the IDR immediately follows the parameter-set
+        // splice — see `splice_before_first_idr`'s own comment.
+        expected.extend_from_slice(&[0, 0, 1]);
         expected.extend_from_slice(&idr);
         assert_eq!(out.payload(), expected.as_slice());
     }
@@ -241,7 +256,8 @@ mod tests {
         expected.extend_from_slice(&sps);
         expected.extend_from_slice(&[0, 0, 0, 1]);
         expected.extend_from_slice(&pps);
-        expected.extend_from_slice(&[0, 0, 0, 1]);
+        // 3 bytes, not 4: same reason as the previous test.
+        expected.extend_from_slice(&[0, 0, 1]);
         expected.extend_from_slice(&idr);
         assert_eq!(out.payload(), expected.as_slice());
     }
@@ -315,25 +331,13 @@ mod tests {
             .unwrap();
         let ours = f.receive_packet().unwrap().payload().to_vec();
 
-        // The disclosed divergence: the reference writes a 3-byte start code
-        // immediately before the spliced-in IDR slice; this filter always
-        // writes 4 (see the module docs). Locate that one start code in the
-        // reference bytes with the crate's own NAL scanner (rather than a
-        // hand-computed offset, which would just be a second, fragile
-        // implementation of the same arithmetic) and widen it to 4 bytes,
-        // then compare exactly — the only legitimate difference left.
-        let idr = units(&reference, Framing::AnnexB)
-            .find(|n| NalHeader::parse(HeaderKind::H264, n.data).is_some_and(|h| h.nal_unit_type == IDR_SLICE))
-            .unwrap();
-        let sc_start = idr.offset - usize::from(idr.start_code_len);
-        let mut widened = reference[..sc_start].to_vec();
-        widened.extend(std::iter::repeat_n(0u8, 4usize.saturating_sub(usize::from(idr.start_code_len))));
-        widened.extend_from_slice(&reference[sc_start..]);
-
+        // No widening needed any more: `splice_before_first_idr` now writes
+        // the same 3-byte start code the reference does immediately before
+        // the spliced-in IDR slice, so this is a plain byte-exact
+        // comparison against real `ffmpeg`'s own output.
         assert_eq!(
-            ours, widened,
-            "differs from ffmpeg 8.1's own h264_mp4toannexb output by more than the disclosed start-code width"
+            ours, reference,
+            "differs from ffmpeg 8.1's own h264_mp4toannexb output"
         );
     }
-
 }

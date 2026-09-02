@@ -36,6 +36,24 @@ pub(crate) const BATCH_MAX: u32 = 128 * 1024;
 /// Samples taken from one track fragment per refill.
 pub(crate) const FRAG_BATCH: u32 = 16 * 1024;
 
+/// The most consecutive raw-PCM samples this crate ever coalesces into one
+/// emitted packet, when [`Reader::raw_pcm`] is set.
+///
+/// Measured against `ffmpeg 9.0.1`, not assumed: a MOV/ISOBMFF `stsz` table
+/// for `pcm_s16le`/`pcm_u8`/`pcm_f32le` audio states one entry **per sample
+/// frame** (2/1/4 bytes respectively for those three), and this crate used to
+/// emit one packet per entry — 52,920 packets for a 1.2 s, 44.1 kHz mono
+/// clip, where the reference emits 52. Varying channel count and sample
+/// format (mono/stereo, 8/16/32-bit) while holding duration fixed shows the
+/// reference's packet boundary is a constant **sample count**, not a byte or
+/// chunk-table target: `duration` is `1024` in every case, while `size`
+/// scales with `channels * bytes_per_sample` (1024, 1024×2, 1024×4 bytes for
+/// mono-u8, stereo-s16le and mono-f32le respectively) — and it does not
+/// follow the source file's own `stsc` grouping either (a fixture whose
+/// `stsc` groups 2048 samples per physical chunk still comes back as
+/// 1024-sample packets, split in two). `1024` is that constant.
+pub(crate) const PCM_GROUP_SAMPLES: u32 = 1024;
+
 /// Hard ceiling on the samples one track will ever be walked for.
 ///
 /// The real bound is the file size — see [`sample_limit`] — and this is the
@@ -222,6 +240,18 @@ pub(crate) struct Reader {
     /// `senc` were both found at track-build time: every sample read from
     /// this track is decrypted in place before being handed back.
     pub decrypt: Option<Decryptor>,
+    /// This track's codec name starts with `pcm_` and it is not
+    /// `Common Encryption`-protected (grouping would break
+    /// [`Decryptor::decrypt`]'s one-`senc`-record-per-table-sample indexing,
+    /// and raw PCM inside CENC is not a real case this crate has seen to
+    /// justify complicating that seam for).
+    ///
+    /// [`refill_table`] coalesces up to [`PCM_GROUP_SAMPLES`] consecutive,
+    /// file-contiguous table entries into one packet when this is set —
+    /// see that constant's own doc for why, and its module-level "why
+    /// samples are produced in batches" doc for why entries are read in
+    /// batches at all.
+    pub raw_pcm: bool,
 }
 
 impl Reader {
@@ -309,23 +339,73 @@ pub(crate) fn refill_table(
         .take(want as usize)
         .collect();
     let got = samples.len();
-    for s in &samples {
-        let s = *s;
-        last = s.index;
-        // A sample that does not fit inside the source is not readable. Plan 18
-        // §3.1.10: they are dropped, and `nb_frames` still reports the table's
-        // count.
-        let fits = source_size.is_none_or(|n| s.offset.saturating_add(u64::from(s.size)) <= n);
-        if fits {
+    if reader.raw_pcm {
+        // Coalesce runs of contiguous table entries into one packet each,
+        // up to `PCM_GROUP_SAMPLES` — see `Reader::raw_pcm`'s doc for why.
+        // A run breaks early on a file-offset discontinuity (a chunk
+        // boundary against an interleaved track's own bytes) or a sample
+        // that does not fit the source, exactly like the ungrouped path
+        // below, just applied to a run instead of one entry at a time.
+        let mut i = 0usize;
+        while let Some(&first) = samples.get(i) {
+            last = first.index;
+            let first_fits =
+                source_size.is_none_or(|n| first.offset.saturating_add(u64::from(first.size)) <= n);
+            if !first_fits {
+                i += 1;
+                continue;
+            }
+            let mut count = 1u32;
+            let mut bytes = first.size;
+            let mut duration = first.duration;
+            let mut end = first.offset.saturating_add(u64::from(first.size));
+            let mut j = i + 1;
+            while count < PCM_GROUP_SAMPLES {
+                let Some(&s) = samples.get(j) else { break };
+                if s.offset != end {
+                    break;
+                }
+                let sample_fits = source_size.is_none_or(|n| end.saturating_add(u64::from(s.size)) <= n);
+                if !sample_fits {
+                    break;
+                }
+                end = end.saturating_add(u64::from(s.size));
+                bytes = bytes.saturating_add(s.size);
+                duration = duration.saturating_add(s.duration);
+                count += 1;
+                last = s.index;
+                j += 1;
+            }
             reader.push(
-                s.offset,
-                s.size,
-                s.dts,
-                s.cts_offset,
-                s.duration,
-                s.is_sync,
-                s.index,
+                first.offset,
+                bytes,
+                first.dts,
+                first.cts_offset,
+                duration,
+                first.is_sync,
+                first.index,
             );
+            i = j;
+        }
+    } else {
+        for s in &samples {
+            let s = *s;
+            last = s.index;
+            // A sample that does not fit inside the source is not readable. Plan 18
+            // §3.1.10: they are dropped, and `nb_frames` still reports the table's
+            // count.
+            let fits = source_size.is_none_or(|n| s.offset.saturating_add(u64::from(s.size)) <= n);
+            if fits {
+                reader.push(
+                    s.offset,
+                    s.size,
+                    s.dts,
+                    s.cts_offset,
+                    s.duration,
+                    s.is_sync,
+                    s.index,
+                );
+            }
         }
     }
     // A cursor that yielded less than a full batch has run out: the table
@@ -459,6 +539,7 @@ mod tests {
             finished: false,
             blocked: false,
             encrypted: false,
+            raw_pcm: false,
             decrypt: None,
         }
     }
