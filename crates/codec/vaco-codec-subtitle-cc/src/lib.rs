@@ -11,31 +11,23 @@
 //! `cc_data()` is defined by CEA-708 Table 2). [`CcDecoder`] is the entry
 //! point that demultiplexes a `cc_data` byte slice into both.
 //!
-//! # One gap this crate does not close, and one that closed mid-session
+//! # Reachable from `vaco-registry`, one real gap left
 //!
-//! 1. Nothing in this workspace yet extracts `cc_data` from a compressed
-//!    stream (H.264 `user_data_registered_itu_t_t35` SEI, HEVC's equivalent,
-//!    or MPEG-2 picture user data) and attaches it as
-//!    `vaco_frame::FrameSideData::ClosedCaptions`. That population work
-//!    belongs to the H.264/HEVC/MPEG-2 parsers, not here. Until it lands,
-//!    this crate is reachable only by constructing `cc_data` bytes directly
-//!    (as `tests/fixtures.rs` does), not from a real compressed file through
-//!    this workspace's pipeline.
-//! 2. `vaco_frame::FrameData::Subtitle` (interface gap 17) landed during
-//!    this crate's own development and names this crate directly as one of
-//!    the three decoders it expects to be wired to. This crate is *not*
-//!    wired to it: doing so means implementing `Decoder`'s send/receive
-//!    state machine, registering a `vaco-component.toml` fragment, and
-//!    deciding what a "packet" means for a format whose real input is a
-//!    per-frame side-data buffer rather than a bitstream to demux — real
-//!    design work, not a rename, and riskier to do hastily in a shared tree
-//!    than to leave for a follow-up (`gen-registry` breaks every other
-//!    agent's build on a bad fragment). [`Event::Cea608`]/[`Event::Cea708`]
-//!    already carry exactly what `SubtitleContent::Text` wants
-//!    (`Screen::text()`), so the wiring itself should be small once
-//!    undertaken.
+//! [`registry::CcSubtitleDecoder`] is the `vaco_codec_core::Decoder` face
+//! over [`CcDecoder`], registered as `cc_dec` (the reference's own name,
+//! measured — see that module's docs) for `CodecId::Eia608`. What is
+//! *not* closed: nothing in this workspace yet extracts `cc_data` from a
+//! compressed stream (H.264 `user_data_registered_itu_t_t35` SEI, HEVC's
+//! equivalent, or MPEG-2 picture user data) and attaches it as
+//! `vaco_frame::FrameSideData::ClosedCaptions`, or turns that side data into
+//! a packet this decoder receives. That population work belongs to the
+//! H.264/HEVC/MPEG-2 parsers, not here. Until it lands, this decoder is
+//! reachable from the registry (`vaco -decoders` lists `cc_dec`) but not
+//! from any real compressed file through this workspace's pipeline — only
+//! by constructing `cc_data` bytes directly, as `tests/fixtures.rs` and
+//! [`registry`]'s own tests do.
 //!
-//! Gap 1 is why the public API takes raw `cc_data` bytes — exactly what
+//! This is why the public API takes raw `cc_data` bytes — exactly what
 //! `FrameSideData::ClosedCaptions`'s buffer holds today, and what ffmpeg's
 //! own `A53_CC` side data holds — rather than reaching into a `Frame`
 //! itself. That keeps this crate correct the moment a producer exists
@@ -62,6 +54,7 @@
 //! | [`event`] | shared output types: [`Screen`], [`Row`], [`Cell`], [`Style`], [`Color`] |
 //! | [`cea608`] | line-21 field/channel demux, pop-on/roll-up/paint-on, PAC styling |
 //! | [`cea708`] | DTVCC packet assembly, service blocks, window and pen commands |
+//! | [`registry`] | the `vaco_codec_core::Decoder` face registered as `cc_dec` |
 //! | [`srt`] | rendering an [`Event`] to SRT-like text, for fixture verification |
 
 #![forbid(unsafe_code)]
@@ -69,12 +62,14 @@
 pub mod cea608;
 pub mod cea708;
 pub mod event;
+pub mod registry;
 pub mod srt;
 pub mod triplet;
 
 pub use cea608::Cea608Decoder;
 pub use cea708::Cea708Decoder;
 pub use event::{Cell, Color, Row, Screen, Style};
+pub use registry::CC_DECODER;
 pub use triplet::{CcType, Triplet};
 
 /// Demultiplexes a `cc_data` byte slice into CEA-608 and CEA-708 decode, one

@@ -1,0 +1,15 @@
+# Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
+#
+# One decoder, `cc_dec` (the reference's own name — measured, see
+# src/registry.rs's module docs), covering both CEA-608 and CEA-708 under
+# this workspace's single CodecId::Eia608. No encoder: this crate is
+# decode-only.
+
+[[component]]
+kind      = "decoder"
+name      = "cc_dec"
+long_name = "Closed Captions (EIA-608 / CEA-708)"
+feature   = "codec-subtitle-cc"
+ctor      = "vaco_codec_subtitle_cc::registry::CC_DECODER"
+media     = "subtitle"
+codec     = "eia_608"

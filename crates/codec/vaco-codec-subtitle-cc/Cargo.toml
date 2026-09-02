@@ -9,6 +9,11 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+vaco-core = { path = "../../core/vaco-core" }
+vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-frame = { path = "../../model/vaco-frame" }
+vaco-packet = { path = "../../model/vaco-packet" }
+vaco-limits = { path = "../../core/vaco-limits" }
 
 [lints]
 workspace = true
