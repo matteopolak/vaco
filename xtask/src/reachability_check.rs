@@ -1075,12 +1075,18 @@ fn transitive_crate_closure(krate: &str, all: &[(String, String, std::path::Path
 /// before scanning it: this is a textual scan, not a parser, and the one
 /// false hit found writing this rule (`vaco-format-core`'s own module doc,
 /// `//! let idx = mux.add_stream(&CodecParameters::video().with_codec(
-/// CodecId::H264))?;`) was exactly a doc example, not code that runs. This
-/// does not attempt to also skip `#[cfg(test)]` bodies — a codec mentioned
-/// only inside a test helper is a false pass this rule can still miss, but
-/// every instance found writing it names a codec with real production
-/// support elsewhere too, so it costs nothing measured today; a person
-/// reading a specific report is still the backstop
+/// CodecId::H264))?;`) was exactly a doc example, not code that runs.
+///
+/// [`mask_test_code`] also runs before scanning, added after rule I's own
+/// audit found the same gap costing real findings elsewhere: a codec
+/// mentioned only inside a `#[cfg(test)]` helper is a false pass a scan
+/// without this would count as "a demuxer produces it" when nothing outside
+/// a test does. Re-running with masking in place found no new violation in
+/// this tree today — the original claim ("every instance found writing it
+/// names a codec with real production support elsewhere too") still holds —
+/// but the fix stays rather than reverting it, since a scan that only
+/// happens to be right today is not the same claim as one that is right by
+/// construction. A person reading a specific report is still the backstop
 /// [`ALLOW_UNDEMUXABLE_DECODER`]/[`ALLOW_UNMUXABLE_ENCODER`] exist for.
 fn codecs_referenced_in(crate_names: &Set<String>, variant_to_name: &Map<String, String>) -> Set<String> {
     let all = crates();
@@ -1096,6 +1102,7 @@ fn codecs_referenced_in(crate_names: &Set<String>, variant_to_name: &Map<String,
             let Ok(text) = std::fs::read_to_string(&file) else {
                 continue;
             };
+            let text = mask_test_code(&text);
             for line in text.lines() {
                 if line.trim_start().starts_with("//") {
                     continue;
@@ -1970,19 +1977,24 @@ struct CrateSrc {
 /// Blank out (space- and newline-preserving, so byte offsets do not move)
 /// every `#[cfg(test)]`/`#[test]`-guarded item in `text`.
 ///
-/// `rtbufsize`, `max_delay` and `err_detect` (`vaco-format-core::
-/// FormatOptions`) each have exactly one `.field` occurrence in their own
-/// crate outside their own declaration, and every one of them is
-/// `assert_eq!(o.field, <parsed value>)` inside `#[cfg(test)] mod tests` —
-/// a test that a string parses into the right field value, not a claim
-/// anything downstream reads it. Left unmasked, this rule would count that
-/// as consumption and miss exactly the shape of bug it exists to catch:
-/// nothing outside the option-parsing layer itself ever looks at the
-/// field. Found while first running rule I against the real tree, not
-/// designed in ahead of time; all three still need fixing separately (see
-/// `vaco-format-core/src/options.rs`'s own tracking, since this rule's
-/// scan does not (yet) re-run to confirm — masking test code only stops
-/// future instances of this exact shape from hiding again).
+/// Shared by two different scans that both learned this the hard way.
+/// [`check_unconsumed_options`] (rule I) first needed it because
+/// `vaco-format-core::FormatOptions`'s `rtbufsize`/`max_delay`/`err_detect`
+/// each had exactly one `.field` occurrence in their own crate outside
+/// their own declaration, and every one was `assert_eq!(o.field, <parsed
+/// value>)` inside `#[cfg(test)] mod tests` — a test that a string parses
+/// into the right field value, not a claim anything downstream reads it.
+/// Left unmasked, that scan counted it as consumption and missed exactly
+/// the shape of bug it exists to catch: nothing outside the
+/// option-parsing layer itself ever looked at the field (since fixed —
+/// see `vaco-format-core/src/options.rs`). [`codecs_referenced_in`] (rule
+/// G) uses it for the identical reason, one call site over: a `CodecId`
+/// named only inside a test helper is not proof any real demuxer/muxer
+/// constructs it. Re-running rule G with masking in place found nothing
+/// new in this tree today, but the fix stays — a scan that happens to be
+/// right today by luck is not the same claim as one that is right by
+/// construction, and the next crate to add a test-only `CodecId` mention
+/// should not get to repeat rule I's original mistake.
 fn mask_test_code(text: &str) -> String {
     let mut out: Vec<u8> = text.as_bytes().to_vec();
     for guard in ["#[cfg(test)]", "#[test]"] {
