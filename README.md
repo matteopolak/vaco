@@ -253,8 +253,18 @@ and TIFF decode identically to ffmpeg.
 
 ### Subtitles
 
-SubRip, ASS/SSA, WebVTT, 3GPP timed text, TTML, DVB bitmap, DVD/VobSub, PGS/HDMV,
-CEA-608 and CEA-708 closed captions, and EBU Teletext.
+Decode only, and read-only in practice. SubRip, ASS/SSA, WebVTT, 3GPP timed text,
+TTML, DVB bitmap, DVD/VobSub, PGS/HDMV, CEA-608 and CEA-708 closed captions, and EBU
+Teletext all parse, and `vaco-probe` identifies them the same way `ffprobe` does.
+
+There are no subtitle **encoders** at all, and every container muxer refuses a
+subtitle stream — MP4, MOV, Matroska, WebM and MPEG-TS all decline `-c copy` of a
+SubRip track. The one path that works is SubRip in, SubRip out. So subtitles can be
+inspected but not carried through a transcode or a remux.
+
+Those refusals are deliberate rather than broken: each one names the codec and the
+container instead of writing a track that would be wrong. It is still a hard limit,
+not a rough edge.
 
 ### Filters
 
