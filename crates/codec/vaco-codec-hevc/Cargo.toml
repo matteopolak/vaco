@@ -21,6 +21,7 @@ vaco-format-nalu = { path = "../../format/vaco-format-nalu" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-packet = { path = "../../model/vaco-packet" }
 vaco-frame = { path = "../../model/vaco-frame" }
+vaco-color = { path = "../../model/vaco-color" }
 vaco-pool = { path = "../../model/vaco-pool" }
 
 [dev-dependencies]

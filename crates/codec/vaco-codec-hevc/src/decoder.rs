@@ -486,6 +486,7 @@ impl HevcDecoder {
             out_height: out_dims.1,
             is_keyframe: header.nal_unit_type.is_irap(),
             closed_captions: cc_data,
+            color: sps.color_info(),
         };
         // `used_as_reference`: every NAL unit type except the
         // "sub-layer-non-reference" ones (`*_N`, §7.4.2.2) can be
@@ -546,6 +547,7 @@ impl HevcDecoder {
             let mut frame = pic_to_frame(budget, meta.out_width, meta.out_height, pic)?;
             frame.pts = meta.pts;
             frame.duration = meta.duration;
+            frame.color = meta.color;
             if meta.is_keyframe {
                 frame.flags |= vaco_frame::FrameFlags::KEY;
             }

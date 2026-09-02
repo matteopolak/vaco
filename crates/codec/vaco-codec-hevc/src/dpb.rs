@@ -254,6 +254,15 @@ pub(crate) struct PictureMeta {
     /// and reordering must not separate the caption bytes from their own
     /// picture (see `vaco_parse_hevc::a53`'s module doc).
     pub closed_captions: Vec<u8>,
+    /// `Sps::color_info()` *as it was when this picture was decoded* --
+    /// carried here for the identical reordering reason as `out_width`/
+    /// `out_height` above, not re-read from whatever `Sps` is active at
+    /// output time. Finding 22a (`planning/INTERFACE-GAPS.md`):
+    /// `CodecParameters::color` already reached `vaco-probe -show_streams`
+    /// from the VUI, but nothing wrote `Frame::color`, so a decoded HEVC
+    /// frame carried `Frame::alloc_video`'s `ColorInfo::default()` instead
+    /// of the stream's real one.
+    pub color: vaco_color::ColorInfo,
 }
 
 /// One picture held in the decoded picture buffer.
@@ -777,6 +786,7 @@ mod tests {
             out_height: 4,
             is_keyframe: false,
             closed_captions: Vec::new(),
+            color: vaco_color::ColorInfo::default(),
         }
     }
 
