@@ -362,11 +362,11 @@ fn stream_value(
         // width and `is_avc` is "that width is non-zero"; measured, the same
         // content in MP4 reports `true`/`4` and in MPEG-TS reports `false`/`0`.
         //
-        // Gated on `codec_id == H264` explicitly (#654), not merely on
+        // Gated on `codec_id == H264` explicitly, not merely on
         // `nal_length_size.is_some()`: HEVC's `hvcC` populates the same
         // `VideoParameters.nal_length_size` field so `vaco-mux-raw`/
         // `vaco-mux-mpegts` can decide whether a copied HEVC stream needs
-        // Annex-B conversion (#647) — but `is_avc`/`nal_length_size` are AVC-
+        // Annex-B conversion — but `is_avc`/`nal_length_size` are AVC-
         // only options (`ffmpeg -h decoder=hevc` has neither), and measured
         // directly (`ffprobe -bitexact -show_streams` on an `hvc1`/MP4 HEVC
         // stream) the reference prints neither field for HEVC. AV1 and every
@@ -420,7 +420,7 @@ fn stream_value(
         ),
         "bits_per_sample" => Val::opt_i(audio.map(|_| i64::from(bits_per_sample(p.codec_id)))),
         "initial_padding" => Val::opt_i(audio.map(|a| i64::from(a.initial_padding))),
-        // Issue #635: `vaco-demux-mpegts` is the one demuxer that sets these
+        // `vaco-demux-mpegts` is the one demuxer that sets these
         // two, via `Stream::metadata` — see `stream`'s `tags` call below for
         // the other half (they must not *also* print as `TAG:`). Absent on
         // every other container, since nothing else sets the key, which is
@@ -1119,9 +1119,9 @@ mod tests {
         assert_eq!(field("nal_length_size").absent, crate::fields::Absent::Omit);
     }
 
-    /// Issue #654: fixing #647 (populating HEVC's `nal_length_size` from
-    /// `hvcC` so the raw/MPEG-TS muxers can Annex-B-convert a copied HEVC
-    /// stream) had the side effect of also making `vaco-probe` print
+    /// Fixing HEVC's `nal_length_size` population from `hvcC` (so the
+    /// raw/MPEG-TS muxers can Annex-B-convert a copied HEVC stream) had
+    /// the side effect of also making `vaco-probe` print
     /// `is_avc`/`nal_length_size` for HEVC, which the reference never does —
     /// measured directly (`ffprobe -bitexact -show_streams` on an `hvc1`/MP4
     /// HEVC stream has neither field; `ffmpeg -h decoder=hevc` has no such
@@ -1156,15 +1156,14 @@ mod tests {
         assert!(matches!(render("nal_length_size"), Val::Absent));
     }
 
-    /// Issue #635 and its correction: `ts_id`/`ts_packetsize` read back
+    /// `ts_id`/`ts_packetsize` read back
     /// through `Stream::metadata` — the one channel `vaco-demux-mpegts` has
     /// to hand them to this crate — as *strings*, not integers. Absent (not
     /// `"0"`) when the key is missing, same `Omit` policy as
     /// `nal_length_size` above, so a non-TS container prints neither field
     /// at all. `Str`, not `Int`: `ffprobe -of flat`/`-of json` quote both
     /// values (`ts_id="1"`) despite the digits, found by a differential run
-    /// against the reference (`planning/CONFORMANCE-FINDINGS.md` finding 55)
-    /// on a plain, unmutated MPEG-TS file.
+    /// against the reference on a plain, unmutated MPEG-TS file.
     #[test]
     fn ts_id_and_ts_packetsize_come_from_stream_metadata() {
         let field = crate::fields::STREAM
@@ -1218,7 +1217,7 @@ mod tests {
         );
     }
 
-    /// The other half of #635: `ts_id`/`ts_packetsize` must not *also* appear
+    /// The other half of the fix: `ts_id`/`ts_packetsize` must not *also* appear
     /// as `TAG:` lines — they are dedicated fields, read by the arms tested
     /// above, not user-visible container metadata. A real tag (`language`,
     /// say) must still come through untouched.

@@ -225,7 +225,7 @@ pub static STREAM: &[Field] = &[
     a("channel_layout", Str, Word("unknown")),
     a("bits_per_sample", Int, Never),
     a("initial_padding", Int, Never),
-    // Issue #635: `[STREAM]`-scoped, not per-media — measured on an MPEG-TS
+    // `[STREAM]`-scoped, not per-media — measured on an MPEG-TS
     // file's video *and* audio streams, both `ts_id=1 ts_packetsize=188`.
     // `Scope::Always` (`f`, not `v`/`a`) puts them after both the video- and
     // audio-only blocks above, which is where they land on every stream

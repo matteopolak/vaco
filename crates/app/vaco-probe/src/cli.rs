@@ -334,7 +334,7 @@ pub fn parse<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<Options, CliError>
 
     // The banner is suppressed by `-hide_banner` *and*, independently, by any
     // `-v`/`-loglevel` below `info` — `ffprobe -v error -show_streams` prints
-    // no version line at all, and ours did (CONFORMANCE-FINDINGS 34). ORed in
+    // no version line at all, and ours did. ORed in
     // rather than assigned, so `-nohide_banner` keeps meaning what it means.
     if !vaco_cli_core::loglevel::wants_banner(argv) {
         o.hide_banner = true;
