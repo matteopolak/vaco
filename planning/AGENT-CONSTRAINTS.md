@@ -2159,3 +2159,46 @@ commit is not there to be missed.
 
 If the guard fails, start over from `git rev-parse HEAD` and rebuild the blob
 from the *new* `HEAD`. Never retry by re-running `update-ref` without the guard.
+
+## `checkout`/`restore`/`reset --hard` destroy other agents' uncommitted work
+
+The index-only reset that ends the private-index recipe is safe:
+
+```sh
+git reset -q HEAD -- <paths>      # index only; working tree untouched
+```
+
+These are not, and in a shared tree they are destructive to people who are not
+you:
+
+```sh
+git checkout -- <paths>           # overwrites the working tree
+git restore <paths>               # same
+git reset --hard                  # same, tree-wide
+git stash                         # removes everyone's edits, not just yours
+```
+
+They overwrite tracked files with `HEAD`'s content. Every other agent's
+uncommitted edits to those paths are gone, with no reflog entry, because the
+content was never committed — there is nothing to recover from.
+
+This happened. An agent restoring its own crate wiped a Teletext decoder's
+in-progress `charset.rs`, `decoder.rs`, `lib.rs`, `page.rs` and `Cargo.toml`
+back to the committed baseline. **Untracked files survived** — `registry.rs`,
+`x26.rs` and `vaco-component.toml` were newly added and therefore invisible to
+`checkout` — which is the tell: if a revert leaves a crate's new files but
+resets its modified ones, someone ran a working-tree restore over you. The
+rebuild cost hours, and part of the recovered content (an ETSI national-option
+character table) had to be transcribed again from the primary PDF because the
+lost version could no longer be trusted.
+
+So: **never run a working-tree-modifying git command over a path you do not
+own.** To discard your own change to a file you own, scope it to exactly that
+file and check first that `git status` shows no one else's work in it. If you
+need a clean tree to build against, build from a private worktree or a fresh
+clone in your scratchpad instead of resetting the shared one.
+
+The general rule this is an instance of: in a shared tree, the only safe writes
+are ones that add. `commit-tree` adds. `update-ref` with its old-value guard
+adds or fails. Anything that restores, resets or stashes subtracts, and what it
+subtracts belongs to someone else.
