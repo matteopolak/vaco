@@ -155,6 +155,19 @@ fn real_world_pcm_from_the_oracle_round_trips_through_this_crates_own_codec() {
     let mut enc = AlacEncoder::new(Limits::permissive());
     enc.send_frame(Some(&frame)).expect("send_frame");
     let packet = enc.receive_packet().expect("receive_packet");
+    // A real regression guard for the whole point of a *lossless
+    // compressor*: `frame_codec::encode` used to emit escape-mode
+    // (verbatim) packets exactly `real_pcm.len() * 2` bytes long -- valid
+    // and interoperable, but no smaller than raw 16-bit PCM. This asserts
+    // the adaptive predictor + Rice coder path is actually active and
+    // buys a real reduction on real content, not just a spec-legal packet
+    // that happens to round-trip.
+    let raw_pcm_bytes = real_pcm.len() * 2;
+    assert!(
+        packet.payload().len() * 4 < raw_pcm_bytes * 3,
+        "expected real compression on real content: {} encoded bytes vs {raw_pcm_bytes} bytes of raw 16-bit PCM",
+        packet.payload().len()
+    );
     let mut budget2 = Budget::new(Limits::permissive());
     let packet = Packet::from_slice(&mut budget2, packet.payload()).expect("packet from_slice");
 

@@ -34,15 +34,23 @@
 //! decode that packet), `ID_CCE`/`ID_DSE`/`ID_PCE`/`ID_FIL` elements, and
 //! more than one `ID_SCE`/`ID_CPE` per packet (multichannel beyond stereo).
 //!
-//! **Encode** always chooses the simplest spec-legal parameters rather than
-//! anything resembling Apple's actual encoder's rate-distortion search:
-//! `numU`/`numV = 0` (no linear prediction — the residual *is* the sample,
-//! a real, if inefficient, predictor order per `unpc_block`'s own
-//! `numactive == 0` identity case), `mixres = mixbits = 0` for stereo (plain
-//! interleave, no decorrelation), `bytesShifted = 0`, `escapeFlag = 0`,
-//! `partialFrame` always set with an explicit sample count. Every one of
-//! those is a real, legal configuration a compliant decoder (this one, the
-//! `alac` crate, real `ffmpeg`) must accept — see `tests/oracle_alac_crate.rs`.
+//! **Encode** uses a real, fixed-order (see [`encode`]'s doc) adaptive
+//! predictor plus adaptive-Rice coding — not a rate-distortion search
+//! across orders/modes the way Apple's own encoder does, but genuine
+//! linear prediction rather than the `numU`/`numV = 0` "residual is the
+//! sample" identity case an earlier version of this function always chose.
+//! `mixres = mixbits = 0` for stereo (plain interleave, no decorrelation),
+//! `bytesShifted = 0`, `escapeFlag = 0`. The nominal predictor order this
+//! function writes is a fixed constant regardless of frame length --
+//! [`pc_block`]/[`unpc_block`] both clamp it down to `num_samples - 1` (or
+//! `1`, or run the trivial `num_samples <= 1` case) identically and
+//! deterministically from `num_samples` alone, so a short final frame
+//! degrades gracefully without this function needing its own fallback
+//! logic. `partialFrame` is always set with an explicit sample count.
+//! `escapeFlag = 1` (verbatim, no predictor at all) is [`decode`]'s to
+//! read, not [`encode`]'s to write anymore -- see `tests/oracle_alac_crate.rs`
+//! for the independent-decoder verification both element-level modes are
+//! checked against.
 
 use vaco_bitstream::{BitReader, BitWriter};
 use vaco_chlayout::ChannelLayout;
@@ -51,8 +59,8 @@ use vaco_frame::{Frame, FrameData};
 use vaco_limits::Budget;
 use vaco_sampfmt::SampleFmt;
 
-use crate::predictor::unpc_block;
-use crate::rice::{AgParams, dyn_decomp};
+use crate::predictor::{MAX_ORDER, pc_block, unpc_block};
+use crate::rice::{AgParams, dyn_comp, dyn_decomp};
 
 const ID_SCE: u32 = 0;
 const ID_CPE: u32 = 1;
@@ -397,46 +405,82 @@ const fn ag_defaults() -> (u32, u32, u32) {
     (crate::rice::MB0, crate::rice::PB0, crate::rice::KB0)
 }
 
+/// The nominal predictor order this encoder always writes, before either
+/// [`pc_block`] or a real decoder's `unpc_block` clamp it down for a short
+/// frame (see [`encode`]'s doc). A fixed, unsearched choice -- not the
+/// result of a rate-distortion search across candidate orders the way
+/// Apple's own encoder makes one -- but not an arbitrary guess either:
+/// measured on a real 1s/48kHz mono WAV, encoded size against every
+/// `(order, denshift)` pair in `{4, 8, 10, 12, 14, 16, 20, 24, 30} x {6, 7,
+/// 8, 9, 12, 14}` bottomed out around `order = 12`, `denshift = 8` for both
+/// mono and stereo fixtures -- see [`DENSHIFT`]'s doc for why denshift
+/// matters this much for a purely-adaptive (zero-seeded, no offline LPC
+/// estimate) predictor.
+const PREDICTOR_ORDER: usize = 12;
+
+/// The fixed-point shift the adaptive predictor's coefficients and sum use
+/// (`denShift` in the element header). This crate's predictor always
+/// starts every block's coefficients at zero (see [`encode`]'s doc) and
+/// lets the same sign-sign LMS adaptation `unpc_block` implements converge
+/// them from there -- which is exactly why this value, unlike a from-
+/// scratch LPC quantizer's, is not free to pick generously: a coefficient
+/// only ever moves by one step per sample (see `unpc_block`'s `del0`
+/// adaptation loop), so a larger `denshift` doesn't just reduce rounding
+/// noise, it makes each `±1` step represent a *smaller* real change in the
+/// prediction, and convergence within one packet's few thousand samples
+/// measurably suffers -- `denshift = 12` roughly doubled encoded size over
+/// `denshift = 8` on real content ([`PREDICTOR_ORDER`]'s doc has the full
+/// sweep). `8` was the smallest value tried that still won consistently
+/// across both the mono and stereo fixture.
+const DENSHIFT: u32 = 8;
+
+/// `pbFactor` occupies the top 3 bits of the byte `numU`/`numV` (bottom 5
+/// bits) shares. This encoder needs `pbFactor = 4` so the decoder's `(pb *
+/// pbFactor) / 4` recovers `pb` exactly — `pbFactor = 0` would zero the
+/// adaptive-mean update entirely (see `rice.rs`'s `dyn_decomp`/`dyn_comp`),
+/// which is legal bitstream but a much worse (still correct) code, not
+/// what "this crate's own defaults" should mean.
+const PB_FACTOR_NUM_BYTE: u32 = 4 << 5;
+
 /// Encode one audio [`Frame`] (`S16P` or `S32P`, mono or stereo) to a real,
-/// spec-legal ALAC packet, always in `escape` (verbatim) mode: every sample
-/// is written as a raw `chan_bits`-wide signed value, with no adaptive-Rice
-/// entropy coding and no linear prediction at all.
+/// spec-legal ALAC packet using the rice+predictor path: a fixed-order
+/// (see [`PREDICTOR_ORDER`]), zero-seeded adaptive linear predictor
+/// ([`pc_block`], the write-side mirror of `unpc_block`'s own backward-
+/// adaptive sign-sign LMS coefficient update) followed by adaptive-Rice
+/// entropy coding ([`dyn_comp`]).
 ///
-/// # Why escape mode, not the rice+predictor path
+/// # Why not `order == 0` (verbatim-as-residual) or `escapeFlag = 1`
+/// (element-level verbatim) anymore
 ///
-/// An earlier version of this function used the rice+predictor path with
-/// `numU = numV = 0` ("no linear prediction, residual *is* the sample") —
+/// An earlier version of this function always chose `numU = numV = 0` --
 /// self-consistent against this crate's own decoder (which explicitly
-/// special-cases `order == 0` as a pass-through, per `predictor.rs`'s doc),
-/// and asserted, without having actually been checked against any decoder
-/// but this crate's own, to be "a real, legal configuration a compliant
-/// decoder... must accept." That assertion was wrong: verified end to end
-/// via `vaco -i in.wav -c:a alac out.mkv` followed by `ffmpeg -i out.mkv -f
-/// null -`, `ffmpeg`'s own ALAC decoder rejected every single packet
+/// special-cases `order == 0` as a pass-through, per `predictor.rs`'s doc)
+/// but never checked against any other decoder. Verified end to end via
+/// `vaco -i in.wav -c:a alac out.mkv` followed by `ffmpeg -i out.mkv -f
+/// null -`: `ffmpeg`'s own ALAC decoder rejected every single packet
 /// ("Decoding error: Invalid data found when processing input", 100% error
-/// rate) -- and a second, independent decoder (the `alac` crate, this
+/// rate), and a second, independent decoder (the `alac` crate, this
 /// crate's own oracle in `tests/oracle_alac_crate.rs`) panicked outright
-/// ("attempt to subtract with overflow") on the exact same bytes,
-/// regardless of whether the packet was a full or a genuinely partial
-/// frame. Two independent real decoders rejecting `order == 0` content
-/// that only this crate's own decoder ever produced or consumed is strong
-/// evidence the "legal configuration" claim was never actually true in
-/// practice, whatever the spec text alone might permit.
+/// ("attempt to subtract with overflow") on the exact same bytes. The next
+/// version switched to `escapeFlag = 1` (verbatim samples, no predictor or
+/// Rice coding at all) to restore interoperability first -- verified
+/// bit-exact against both oracles, but the same size as uncompressed PCM,
+/// since a "lossless compressor" that never compresses is only a waypoint.
 ///
-/// Escape mode sidesteps the predictor and the adaptive-Rice coder
-/// entirely -- there is no `order`, no `mode`, no adaptive mean to get
-/// wrong -- and `tests/oracle_alac_crate.rs`'s
-/// `escape_mode_*_is_accepted_by_the_oracle_decoder` tests confirm the
-/// independent `alac` crate decodes both a full-length and a genuinely
-/// partial escape-mode packet bit-exact. The real, measured cost is
-/// compression: an escape-mode packet is exactly `chan_bits * num_samples`
-/// bits of payload, the same size as uncompressed PCM at that bit depth,
-/// plus this element's small fixed header -- this crate's ALAC output is
-/// therefore no longer smaller than the source, only guaranteed losslessly
-/// round-trippable and, unlike the rice+predictor path, actually
-/// interoperable. The rice+predictor decode path (`frame_codec::decode`'s
-/// non-escape branch, plus `predictor.rs`/`rice.rs`) is unchanged and still
-/// needed to read real, externally-produced ALAC files, which do use it.
+/// This version restores real compression by implementing the predictor
+/// properly instead of dropping it: every candidate order/mode Apple's own
+/// encoder can choose is spec-legal, `order == 0` included, but shipping
+/// only the one choice this crate's own decoder happened to special-case
+/// as a trivial identity, without checking it against anything else, is
+/// what actually broke interop last time -- the fix is a correct
+/// implementation of the general case, not a permanent retreat to the one
+/// mode with no compression to get wrong. `tests/oracle_alac_crate.rs`'s
+/// `real_encoder_output_is_accepted_by_the_oracle_and_compresses_*` tests
+/// verify the predictor path bit-exact against the independent `alac`
+/// crate oracle and confirm the output is meaningfully smaller than PCM;
+/// `escapeFlag = 1` remains real, spec-legal bitstream [`decode`] must
+/// still read (a real encoder may choose it, and did in this crate's own
+/// recent past), it is simply no longer what this function writes.
 ///
 /// # Errors
 ///
@@ -477,17 +521,35 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
 
     let capacity_hint = (num_samples as usize).saturating_mul(channels as usize).saturating_mul(bytes).saturating_add(64);
     let mut w = BitWriter::with_capacity(budget, capacity_hint)?;
+    let order = PREDICTOR_ORDER.min(MAX_ORDER);
+    let (mb, pb, kb) = ag_defaults();
+
+    // `numU`/`numV` share their byte with `pbFactor` (top 3 bits) -- see
+    // `PB_FACTOR_NUM_BYTE`'s own doc below for why `pbFactor` must be 4,
+    // not 0, for this crate's chosen `(mb, pb, kb)` to mean what they say.
+    let mode_denshift_byte = DENSHIFT & 0xf; // modeU/modeV = 0
+    #[expect(clippy::cast_possible_truncation, reason = "PREDICTOR_ORDER is 8, well within the 5-bit order field")]
+    let pbfactor_order_byte = PB_FACTOR_NUM_BYTE | (order as u32 & 0x1f);
 
     if channels == 1 {
         w.put(3, ID_SCE);
         w.put(4, 0); // instance tag
         w.put(12, 0); // unused
-        w.put(4, (1 << 3) | 1); // partialFrame=1, bytesShifted=0, escape=1
+        w.put(4, 1 << 3); // partialFrame=1, bytesShifted=0, escape=0
         w.put(32, num_samples);
-        let chan_bits = bit_depth.min(32);
-        for i in 0..num_samples as usize {
-            w.put_signed(chan_bits, read_sample(&plane0, i, bytes));
+        w.put(8, 0); // mixBits
+        w.put(8, 0); // mixRes
+        w.put(8, mode_denshift_byte);
+        w.put(8, pbfactor_order_byte);
+        for _ in 0..order {
+            w.put(16, 0); // initial coefficients: this predictor always starts a block at zero, see `encode`'s doc
         }
+        let chan_bits = bit_depth;
+        let samp: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(&plane0, i, bytes)).collect();
+        let mut coefs = vec![0i32; order];
+        let residuals = pc_block(&samp, &mut coefs, order, chan_bits, DENSHIFT);
+        let params = AgParams::new(mb, pb, kb);
+        dyn_comp(&params, &mut w, &residuals, chan_bits);
         w.put(3, ID_END);
         w.align_zero();
         return Ok(w.finish());
@@ -496,22 +558,39 @@ pub(crate) fn encode(frame: &Frame, budget: &mut Budget) -> Result<Vec<u8>> {
     w.put(3, ID_CPE);
     w.put(4, 0);
     w.put(12, 0);
-    w.put(4, (1 << 3) | 1); // partialFrame=1, bytesShifted=0, escape=1
+    w.put(4, 1 << 3); // partialFrame=1, bytesShifted=0, escape=0
     w.put(32, num_samples);
-    // Deliberately `bit_depth`, *not* `bit_depth + 1`: `ID_CPE`'s usual
-    // `extra_chanbits = 1` headroom exists only for the predictor path's
-    // mid/side sum arithmetic (see `decode`'s escape-mode `hdr.chan_bits`
-    // doc for the full reasoning and how this was verified against a real,
-    // independent decoder). A verbatim escape sample needs no such
-    // headroom -- it is just the raw sample.
-    let chan_bits = bit_depth.min(32);
+    w.put(8, 0); // mixBits
+    w.put(8, 0); // mixRes = 0: conventional stereo, u = left, v = right
+    w.put(8, mode_denshift_byte);
+    w.put(8, pbfactor_order_byte);
+    for _ in 0..order {
+        w.put(16, 0);
+    }
+    w.put(8, mode_denshift_byte);
+    w.put(8, pbfactor_order_byte);
+    for _ in 0..order {
+        w.put(16, 0);
+    }
+    // Deliberately `bit_depth + 1`, *not* `bit_depth`: `ID_CPE`'s
+    // `extra_chanbits = 1` headroom is for this predictor path's mid/side
+    // sum arithmetic (`decode`'s own `read_element_header` always adds it
+    // for `ID_CPE`, escape or not) -- the escape-mode's own doc on
+    // `decode`'s escape branch covers why *that* mode is the one exception.
+    let chan_bits = bit_depth + 1;
     let Some(plane1) = plane1.as_ref() else {
         return Err(Error::Unsupported("alac: encoder needs plane 1 for stereo"));
     };
-    for i in 0..num_samples as usize {
-        w.put_signed(chan_bits, read_sample(&plane0, i, bytes));
-        w.put_signed(chan_bits, read_sample(plane1, i, bytes));
-    }
+    let samp_u: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(&plane0, i, bytes)).collect();
+    let samp_v: Vec<i32> = (0..num_samples as usize).map(|i| read_sample(plane1, i, bytes)).collect();
+    let mut coefs_u = vec![0i32; order];
+    let residuals_u = pc_block(&samp_u, &mut coefs_u, order, chan_bits, DENSHIFT);
+    let params_u = AgParams::new(mb, pb, kb);
+    dyn_comp(&params_u, &mut w, &residuals_u, chan_bits);
+    let mut coefs_v = vec![0i32; order];
+    let residuals_v = pc_block(&samp_v, &mut coefs_v, order, chan_bits, DENSHIFT);
+    let params_v = AgParams::new(mb, pb, kb);
+    dyn_comp(&params_v, &mut w, &residuals_v, chan_bits);
     w.put(3, ID_END);
     w.align_zero();
     Ok(w.finish())
