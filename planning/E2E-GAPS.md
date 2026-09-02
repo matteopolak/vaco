@@ -2605,3 +2605,66 @@ argument on `scale` itself with the CLI rewriting auto-generated
 `-s`-derived filter text only (leaving a user's own literal `-vf` text
 alone, matching how `-sws_flags` only reaches auto-inserted converters
 today, never a user's explicit filter instance).
+
+## 35. `vaco-cli`'s test suite was red for ~9.5 hours; root cause was a stale fixture, not the codec fix that exposed it
+
+Investigated on the coordinator's request after three `vaco-cli` integration
+tests started failing: `an_actual_muxer_writes_bytes_a_prober_can_read_back`,
+`metadata_options_reach_a_real_remuxed_file`,
+`attach_writes_a_real_attachment_a_muxer_can_write_and_a_prober_reads_back`.
+All three streamcopy a synthetic four-track Matroska fixture
+(`crates/app/vaco-cli/src/tests.rs::four_track_file`) and failed identically:
+`matroska: this codec needs an out-of-band configuration record and none was
+produced`.
+
+**The hypothesis handed down was wrong, and worth recording why.** The
+working theory was the recent `vpcC` full-box double-wrap fix (`39fe643`) or
+the `dfLa` header-stripping fix (`afe8be7`) — both real bugs in the same
+"who strips the ISOBMFF full-box header" family — had leaked a stricter
+requirement into Matroska's VP8/VP9 handling as collateral damage. Checked
+against real `ffmpeg 9.0.1` directly rather than against this project's own
+code (`ffmpeg -c:v libvpx`/`libvpx-vp9 -f webm`, then `ffprobe`): neither VP8
+nor VP9 carries any `CodecPrivate`/extradata in a real WebM file, and
+`ffmpeg -c copy` round-trips both from WebM to Matroska with zero complaint.
+`vaco-mux-matroska::codec::requires_extradata_str` agrees — `V_VP8`/`V_VP9`
+are not in its list at all. The video tracks were never the problem.
+
+**The actual cause**: `four_track_file`'s two `A_OPUS` audio tracks had no
+`CodecPrivate` at all, and `A_OPUS` *is* one of `requires_extradata_str`'s
+entries — correctly, since a real Opus stream is unplayable without its
+`OpusHead`. That check was added by `4ec43cc`
+("defer Tracks until every stream's real config record lands", 2026-09-01
+17:44:44 -0400), a legitimate fix for a real FFV1 bug: `vaco-mux-matroska`
+used to write `Tracks`/`CodecPrivate` before an encoder could attach a
+config record discovered only at first-frame time, so a track could silently
+ship the *previous* stream's leftover configuration record. That commit's
+own message says it updated `vaco-mux-matroska`'s **own** `opus_params()`
+test fixture to carry a real 19-byte `OpusHead` for exactly this reason —
+but `vaco-cli`'s separate, hand-synthesized integration fixture in a
+different crate was never touched, and had been relying on the exact gap
+`4ec43cc` closed. This is the "(a) the tests encode the old broken
+behaviour" case from the coordinator's own hypothesis list, not "(b)"
+or "(c)": Matroska's real convention was already right, and so was the
+fix; a sibling fixture just hadn't caught up.
+
+**Fix**: added the same measured 19-byte `OpusHead` (mono, `pre_skip` 312,
+input rate 48000 — the same bytes `vaco-mux-matroska`'s own fixture uses,
+reused rather than re-measured, D19) as real `CodecPrivate` on
+`four_track_file`'s two `A_OPUS` tracks in `crates/app/vaco-cli/src/tests.rs`.
+All 219 `vaco-cli` tests pass now (`cargo test -p vaco-cli`).
+
+**How long it was red, and what landed on top of it**: `4ec43cc` landed
+2026-09-01 17:44:44 -0400 (2026-09-01 21:44:44 UTC); this fix lands
+2026-09-02, roughly **9.5 hours** later. In that window, 124 commits landed
+workspace-wide, 7 of them touching `crates/app/vaco-cli` directly (so
+plausibly ran `cargo test -p vaco-cli` themselves and either did not notice
+these three failures or judged them pre-existing and unrelated, which for
+five of the seven was almost certainly correct — the sixth and seventh were
+this session's own `923c58b`/`9fe9679`, made with the same read): `f89a3ff`,
+`e5b4865`, `9fe9679`, `923c58b`, `ca8bc1b`, `f9759e5`, `ff52a00`. No evidence
+any of them regressed further because of the red suite — the failure
+message named the actual cause plainly (an unsupported/missing config
+record) rather than masking a second problem — but a red suite for that long
+is exactly the condition under which a real regression stops being visible
+against the noise. Nobody owned these three tests until now; they should
+not go unowned again.
