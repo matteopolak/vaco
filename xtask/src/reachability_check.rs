@@ -95,6 +95,19 @@
 //!   doc for the two shapes of false result each of the other two scopes
 //!   produced in this tree before crate scope replaced them, both found by
 //!   reading rather than by the scan.
+//! - **J** [`check_decoder_exists_for_produced_codecs`] — rule G asks, for
+//!   every registered decoder, whether some demuxer can produce its
+//!   `CodecId`; this asks the question the other way round: for every
+//!   `CodecId` some demuxer in the tree *can* produce, does a registered
+//!   decoder handle it? Neither implies the other. It caught
+//!   `vaco-demux-matroska` resolving an `A_PCM/*` track to the generic
+//!   `CodecId::Pcm` — a real, spellable variant with no registered decoder
+//!   anywhere, only its concrete `PcmS16le`/`PcmF64le`/etc. siblings have
+//!   one — consistent with every rule above and unusable on a real file.
+//!   Fixed by making the demuxer resolve to a concrete variant instead;
+//!   [`ALLOW_UNDECODABLE_PRODUCED`] is where a codec goes when nothing in
+//!   this tree decodes it yet, not where a fixable demuxer-resolution gap
+//!   goes to hide.
 //!
 //! # Allowlists
 //!
@@ -1169,6 +1182,438 @@ fn check_codec_reachable(
     violations
 }
 
+/// Registered as producible but genuinely not decodable yet -- a real gap,
+/// declared so it is discovered here rather than by a user with a real
+/// file. Every entry needs a reason a later reader can check, the same
+/// discipline `dup-check`'s `DISTINCT` and `owner-gate`'s `MEDIA` apply.
+///
+/// **Not** the place for a codec a demuxer's own resolution could still
+/// pick a concrete, decodable variant for and currently does not (the
+/// `CodecId::Pcm` shape before this rule's own fix) -- that is a bug in
+/// the demuxer, and an allowlist entry here would turn this rule from a
+/// gate into a rubber stamp over it.
+const ALLOW_UNDECODABLE_PRODUCED: &[(&str, &str)] = &[
+    (
+        "pcm",
+        "vaco-demux-matroska::codec::resolve_pcm's own deliberate fallback \
+         for a BitDepth this project has not measured a real ffmpeg \
+         encoder produce (only 8/16/24/32-bit int and 32/64-bit float \
+         resolve to a concrete, decodable CodecId::Pcm*); refusing to \
+         guess a wire format for an unmeasured depth is the point, not a \
+         gap to close by resolving further.",
+    ),
+    (
+        "opus",
+        "vaco-codec-opus is a real, complete decoder deliberately left \
+         unregistered -- see rule A's own ALLOW_ORPHAN_CRATE entry for the \
+         measurement: mono decodes correctly (RMS ratio 1.006 against \
+         ffmpeg), stereo decodes at ~2x the reference amplitude \
+         (CeltOnly's stereo reconstruction). D19: registering a component \
+         that produces wrong output is worse than leaving it unreachable.",
+    ),
+    (
+        "av1",
+        "vaco-codec-av1's own module doc states the scope directly: intra \
+         frames only. Inter prediction, deblocking/CDEF/superres/loop \
+         restoration application, film grain, frame threading and DPB are \
+         all named 'out of scope, left for later work' -- registering it \
+         as a general decoder would silently produce pre-in-loop-filter, \
+         inter-frame-rejecting output for virtually every real AV1 file.",
+    ),
+    (
+        "anull",
+        "vaco-codec-null's own fragment comment: 'vnull/anull are \
+         encode-only per the roadmap's 0 dec / 2 enc accounting (plan 20 \
+         §1.9, C-47 merged into issue #281) -- there is nothing to decode'.",
+    ),
+    (
+        "vnull",
+        "Same fragment, same reason as `anull` above -- the video half of \
+         the same deliberate encode-only pair.",
+    ),
+    (
+        "dfpwm",
+        "vaco-codec-simple-audio's own `dfpwm` module doc records a real \
+         measurement: the only public DFPWM1a write-up available does not \
+         reproduce ffmpeg 8.1's actual decode of a real .dfpwm stream. \
+         `DfpwmDecoder` exists only to refuse loudly with that finding \
+         rather than emit audio nothing else agrees with (D6/D19).",
+    ),
+    (
+        "eac3",
+        "vaco-codec-ac3::eac3's own module doc: reachable only behind the \
+         non-default `patent-unverified-eac3-decode` feature. D9's legal \
+         register: E-AC-3's last-patent-expiry claim rests on a single \
+         hedged secondary source, unconfirmed by counsel -- not shipped in \
+         the default build regardless of implementation completeness.",
+    ),
+    (
+        "adpcm_g722",
+        "vaco-codec-adpcm's own fragment comment: 'the standardised ADPCM \
+         subset (issue #280, C-02): 4 of the 7 codecs named' are \
+         implemented (ima_wav/ima_qt/ms/swf). G.722/G.726/G.726LE are \
+         different, incompatible ADPCM algorithms, not a variant this \
+         crate's existing decoders could be pointed at instead.",
+    ),
+    (
+        "adpcm_g726",
+        "Same issue #280/C-02 scope as `adpcm_g722` above.",
+    ),
+    (
+        "adpcm_g726le",
+        "Same issue #280/C-02 scope as `adpcm_g722` above.",
+    ),
+    (
+        "aac_latm",
+        "vaco-codec-aac's own fragment comment says the plain `aac` \
+         decoder is 'registered even though vaco-codec-aac does not yet \
+         decode a single [frame]' (patent-encumbered-aac-decode, epic \
+         #53). LATM/LOAS re-frames the identical raw_data_block AAC \
+         payload `vaco-parse-aac::PARSER_LATM` already extracts, so there \
+         is nothing for a second, LATM-specific decoder to do that the \
+         still-incomplete plain AAC decoder does not already need to do \
+         first.",
+    ),
+    (
+        "mpeg4",
+        "MPEG-4 Part 2 (ISO/IEC 14496-2) pixel decode has no crate at all \
+         in this tree yet -- `vaco-parse-mpegvideo::mpeg4` only extracts \
+         VOL/VOP header fields, unlike its MPEG-1/2 sibling which has a \
+         real decoder in vaco-codec-mpeg12. Tracked by the open D-22/T2-02 \
+         shared-MPEG-family-decoder epics.",
+    ),
+    (
+        "truehd",
+        "T5-01 (issue #453, ~120pw at a 2.5x clean-room multiplier): TrueHD/MLP \
+         is one of the ~15 high-value spec-less formats the two-team \
+         clean-room programme covers. No crate in this tree decodes it yet.",
+    ),
+    (
+        "wavpack",
+        "Same T5-01/#453 programme as `truehd` above; no crate decodes it yet.",
+    ),
+    (
+        "tta",
+        "Same T5-01/#453 programme as `truehd` above; no crate decodes it yet.",
+    ),
+    (
+        "dts",
+        "T3-06 (open epic): DTS core decode is not implemented anywhere in \
+         this tree yet. Also named in T5-01/#453's spec-less list. \
+         vaco-demux-matroska (and any other container carrying DTS) \
+         reports the stream honestly -- codec_id, sample_rate, channels -- \
+         and leaves sample_fmt as `unknown` rather than a decoded-format \
+         guess with nothing behind it (D9's registered-but-wrong-is-worse-\
+         than-absent rule).",
+    ),
+    (
+        "binkaudio_dct",
+        "Bink is named in T5-01/#453's spec-less-format list; no crate in \
+         this tree decodes any part of it (vaco-format-misc::bink only \
+         demuxes the container).",
+    ),
+    (
+        "binkaudio_rdft",
+        "Same Bink/#453 scope as `binkaudio_dct` above.",
+    ),
+    (
+        "binkvideo",
+        "Same Bink/#453 scope as `binkaudio_dct` above.",
+    ),
+    (
+        "smackaudio",
+        "Smacker is named in T5-01/#453's spec-less-format list; no crate \
+         in this tree decodes any part of it (vaco-format-misc::smk only \
+         demuxes the container).",
+    ),
+    (
+        "smackvideo",
+        "Same Smacker/#453 scope as `smackaudio` above.",
+    ),
+    (
+        "wmav1",
+        "WMA v1/v2 is named in T5-01/#453's spec-less-format list; no \
+         crate in this tree decodes it yet.",
+    ),
+    (
+        "wmav2",
+        "Same WMA/#453 scope as `wmav1` above.",
+    ),
+    (
+        "wmapro",
+        "Same WMA/#453 scope as `wmav1` above, for the WMA Professional \
+         variant.",
+    ),
+    (
+        "huffyuv",
+        "HuffYUV/FFVHuff is named in T5-01/#453's spec-less-format list; \
+         no crate in this tree decodes it yet (vaco-format-riff only names \
+         the FourCC).",
+    ),
+    (
+        "jacosub",
+        "vaco-codec-subtitle-text is a real, deliberately unregistered \
+         decoder crate -- see rule A's own ALLOW_ORPHAN_CRATE entry: its \
+         own module doc says wiring is 'a small, mechanical follow-up' not \
+         done because `vaco_frame::FrameData::Subtitle` was uncommitted \
+         work in another agent's tree when it was written. Covers every \
+         plain-text subtitle format `vaco-subtitle-text` demuxes: this \
+         entry and the nine below it are one gap, not ten.",
+    ),
+    ("microdvd", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    ("mpl2", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    ("pjs", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    ("realtext", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    ("sami", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    ("stl", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    ("subviewer", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    ("subviewer1", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    ("vplayer", "Same vaco-codec-subtitle-text scope as `jacosub` above."),
+    (
+        "scte_35",
+        "MediaType::Data: SCTE-35 splice cues are opaque metadata carried \
+         through packets, not decoded into frames -- the reference itself \
+         has no decoder named `scte_35` either (checked against \
+         xtask/data/reference-formats.txt). Structurally decoder-less, \
+         not an implementation gap.",
+    ),
+    (
+        "timed_id3",
+        "Same MediaType::Data reasoning as `scte_35` above: timed ID3 is \
+         metadata read directly, and the reference has no decoder for it.",
+    ),
+    (
+        "klv",
+        "Same MediaType::Data reasoning as `scte_35` above: SMPTE 336M \
+         KLV is metadata read directly, and the reference has no decoder \
+         for it.",
+    ),
+    (
+        "vvc",
+        "T3-07 (open epic, issue #452): VVC decode is not implemented \
+         anywhere in this tree yet.",
+    ),
+    (
+        "avs2",
+        "No crate in this tree decodes AVS2 yet; only the CodecId variant \
+         and container-level mapping exist (finding 4, vaco-demux-matroska).",
+    ),
+    (
+        "avs3",
+        "Same scope as `avs2` above, for AVS3.",
+    ),
+    (
+        "cavs",
+        "Same scope as `avs2` above, for the earlier Chinese AVS \
+         (CodecId::Cavs) generation.",
+    ),
+    (
+        "dirac",
+        "T2-11 (open epic): Dirac/VC-2 decode is not implemented anywhere \
+         in this tree yet.",
+    ),
+    (
+        "evc",
+        "No crate in this tree decodes MPEG-5 EVC yet; not yet scoped as \
+         its own tracked epic.",
+    ),
+    (
+        "jpeg2000",
+        "T2-07 (open epic): JPEG 2000 decode is not implemented anywhere \
+         in this tree yet.",
+    ),
+    (
+        "dvvideo",
+        "T2-06 (open epic): DV decode is not implemented anywhere in this \
+         tree yet (vaco-format-dv only demuxes the container/profile).",
+    ),
+    (
+        "dnxhd",
+        "T2-09c (open epic): DNxHD/VC-3 decode is not implemented anywhere \
+         in this tree yet.",
+    ),
+    (
+        "msmpeg4v3",
+        "Tracked by the open D-22 shared-MPEG-family-decoder epic \
+         (H.261/H.263/MPEG-1/2/4/MSMPEG4/WMV1/2/FLV1/RV10/20); no crate \
+         decodes MSMPEG4v3 specifically yet.",
+    ),
+    (
+        "flv1",
+        "Same D-22 shared-MPEG-family-decoder scope as `msmpeg4v3` above.",
+    ),
+    (
+        "vp6",
+        "No crate in this tree decodes VP6 (Sorenson/On2) yet; not yet \
+         scoped as its own tracked epic.",
+    ),
+    ("vp6a", "Same scope as `vp6` above, for the alpha-channel variant."),
+    ("vp6f", "Same scope as `vp6` above, for the Flash variant."),
+    (
+        "flashsv",
+        "No crate in this tree decodes Flash Screen Video yet; not yet \
+         scoped as its own tracked epic.",
+    ),
+    ("flashsv2", "Same scope as `flashsv` above, for version 2."),
+    (
+        "flic",
+        "No crate in this tree decodes Autodesk FLIC/FLC yet \
+         (vaco-format-misc::flic only demuxes the container).",
+    ),
+    (
+        "cdgraphics",
+        "No crate in this tree decodes CD+Graphics yet \
+         (vaco-format-misc::cdg only demuxes the container).",
+    ),
+    (
+        "roq",
+        "No crate in this tree decodes id RoQ video yet \
+         (vaco-format-misc::roq only demuxes the container).",
+    ),
+    ("roq_dpcm", "Same scope as `roq` above, for its DPCM audio half."),
+    (
+        "cljr",
+        "No crate in this tree decodes Cirrus Logic AccuPak yet; not yet \
+         scoped as its own tracked epic.",
+    ),
+    (
+        "nellymoser",
+        "No crate in this tree decodes Nellymoser ASAO yet \
+         (vaco-demux-flv only names the FourCC).",
+    ),
+    (
+        "gsm",
+        "No crate in this tree decodes GSM 06.10 yet; only \
+         vaco-format-rtp's RTP depacketiser names the CodecId.",
+    ),
+    ("gsm_ms", "Same scope as `gsm` above, for the Microsoft framing variant."),
+    (
+        "amr_nb",
+        "No crate in this tree decodes AMR-NB yet; only container-level \
+         detection (vaco-format-misc-audio) and RTP depacketisation name \
+         the CodecId.",
+    ),
+    ("amr_wb", "Same scope as `amr_nb` above, for AMR-WB."),
+    (
+        "ilbc",
+        "No crate in this tree decodes iLBC yet; only vaco-format-rtp's \
+         RTP depacketiser names the CodecId.",
+    ),
+    (
+        "qcelp",
+        "No crate in this tree decodes QCELP yet; only vaco-format-rtp's \
+         RTP depacketiser names the CodecId.",
+    ),
+    (
+        "g723_1",
+        "No crate in this tree decodes G.723.1 yet \
+         (vaco-format-misc-audio only demuxes the container).",
+    ),
+    (
+        "g728",
+        "No crate in this tree decodes G.728 yet; only container-level \
+         detection and RTP depacketisation name the CodecId.",
+    ),
+    (
+        "g729",
+        "No crate in this tree decodes G.729 yet; only container-level \
+         detection and RTP depacketisation name the CodecId.",
+    ),
+    (
+        "speex",
+        "No crate in this tree decodes Speex yet (vaco-demux-ogg/\
+         vaco-mux-ogg and vaco-format-rtp only name the CodecId).",
+    ),
+    (
+        "sbc",
+        "No crate in this tree decodes Bluetooth SBC yet \
+         (vaco-format-misc-audio only demuxes the container).",
+    ),
+    (
+        "aptx",
+        "No crate in this tree decodes aptX yet \
+         (vaco-format-misc-audio only demuxes the container).",
+    ),
+    ("aptx_hd", "Same scope as `aptx` above, for aptX HD."),
+    (
+        "adpcm_adx",
+        "No crate in this tree decodes CRI ADX ADPCM yet \
+         (vaco-format-misc-audio only demuxes the container) -- a \
+         genuinely different algorithm from the four ADPCM variants \
+         vaco-codec-adpcm implements, not a resolvable-elsewhere gap.",
+    ),
+];
+
+/// Every `CodecId` some demuxer in the tree can construct, checked against
+/// the registered decoder table -- rule G1 asks "is there a demuxer for
+/// this decoder's codec?"; this asks it the other way round: "is there a
+/// decoder for what this demuxer can produce?" Neither implies the other —
+/// a registry can be entirely self-consistent by G1's measure and still
+/// contain a demuxer whose own output nothing can decode.
+///
+/// The PCM incident's exact shape: `vaco-demux-matroska` could resolve an
+/// `A_PCM/*` track to the generic `CodecId::Pcm` -- a real, spellable
+/// variant with no registered decoder anywhere in this tree, only its 21
+/// concrete `PcmS16le`/`PcmF64le`/etc. siblings have one -- consistent with
+/// every rule above, and completely unusable: `vaco -i pcm.mka -f s16le
+/// out.raw` failed outright with "this build has no decoder for the input
+/// codec". Nothing at registration time asked this question; the gap
+/// surfaced only at runtime, on a real file.
+///
+/// A codec this finds needs one of two responses, and they are not
+/// interchangeable:
+/// - **The demuxer's own resolution could pick a concrete, decodable
+///   variant and currently does not** — fix the demuxer. This is what the
+///   `CodecId::Pcm` case actually was, and [`ALLOW_UNDECODABLE_PRODUCED`]
+///   must never be used to paper over it.
+/// - **Nothing in this tree decodes the concrete codec yet** — a real,
+///   declared gap. Add a row to `ALLOW_UNDECODABLE_PRODUCED` naming why,
+///   the same discipline `dup-check`'s `DISTINCT` and `owner-gate`'s
+///   `MEDIA` already apply.
+fn check_decoder_exists_for_produced_codecs(
+    rows: &[Row],
+    variant_to_name: &Map<String, String>,
+) -> Vec<String> {
+    let all = crates();
+    let demuxer_crates: Set<String> = rows
+        .iter()
+        .filter(|r| r.kind == "demuxer")
+        .map(|r| r.krate.clone())
+        .collect();
+
+    let mut universe: Set<String> = Set::new();
+    for krate in &demuxer_crates {
+        universe.extend(transitive_crate_closure(krate, &all));
+    }
+    let producible = codecs_referenced_in(&universe, variant_to_name);
+
+    let decodable: Set<String> = rows
+        .iter()
+        .filter(|r| r.kind == "decoder")
+        .filter_map(|r| r.codec.clone())
+        .collect();
+
+    let mut violations = Vec::new();
+    for codec in &producible {
+        if decodable.contains(codec)
+            || ALLOW_UNDECODABLE_PRODUCED.iter().any(|(n, _)| *n == codec.as_str())
+        {
+            continue;
+        }
+        violations.push(format!(
+            "  `{codec}` is a `CodecId` some demuxer in the tree can construct, \
+             but no registered decoder anywhere handles it — the PCM \
+             incident's shape. Either the demuxer's own resolution should \
+             pick a concrete, decodable variant instead of a generic \
+             fallback, or this is a genuine gap that needs a row in \
+             ALLOW_UNDECODABLE_PRODUCED naming why `{codec}` is not \
+             decodable yet.",
+        ));
+    }
+    violations.sort();
+    violations
+}
+
 fn check_decoder_reachable(rows: &[Row], variant_to_name: &Map<String, String>) -> Vec<String> {
     check_codec_reachable(
         rows,
@@ -1687,7 +2132,7 @@ pub fn run(_check: bool) -> Task {
     let rows = all_rows()?;
     let variant_to_name = codec_name_table()?;
 
-    let sections: [(&str, Vec<String>); 10] = [
+    let sections: [(&str, Vec<String>); 11] = [
         (
             "A. crate with no fragment and no in-workspace caller",
             check_orphan_crates()?,
@@ -1724,6 +2169,10 @@ pub fn run(_check: bool) -> Task {
         (
             "I. declared #[opt(...)] field never read in its own file",
             check_unconsumed_options()?,
+        ),
+        (
+            "J. demuxer-producible codec with no registered decoder",
+            check_decoder_exists_for_produced_codecs(&rows, &variant_to_name),
         ),
     ];
 
@@ -1807,6 +2256,48 @@ mod tests {
         for (name, why) in ALLOW_UNMUXABLE_ENCODER {
             assert!(why.len() > 20, "{name} needs a real reason, got {why:?}");
         }
+    }
+
+    #[test]
+    fn every_undecodable_produced_allowlist_row_has_a_real_reason() {
+        for (name, why) in ALLOW_UNDECODABLE_PRODUCED {
+            assert!(why.len() > 20, "{name} needs a real reason, got {why:?}");
+        }
+    }
+
+    #[test]
+    fn undecodable_produced_allowlist_has_no_duplicate_codec_names() {
+        let mut names: Vec<&str> = ALLOW_UNDECODABLE_PRODUCED.iter().map(|(n, _)| *n).collect();
+        let before = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            before,
+            "a duplicate row hides which entry a reader should trust"
+        );
+    }
+
+    /// Rule J itself, run against the real tree: every `CodecId` some
+    /// demuxer in the workspace can construct must either have a
+    /// registered decoder or a named row in `ALLOW_UNDECODABLE_PRODUCED`.
+    /// This is what would have caught the `CodecId::Pcm` incident before a
+    /// user hit it on a real file, and it is the rule's own regression
+    /// test: a codec someone wires into a demuxer later without a decoder
+    /// (or without declaring the gap) fails this, not just `cargo xtask
+    /// reachability-check` run by hand.
+    #[test]
+    fn check_decoder_exists_for_produced_codecs_is_clean_against_the_real_tree() {
+        let rows = all_rows().expect("rows parse against the real tree");
+        let variant_to_name =
+            codec_name_table().expect("vaco-codec-core's CODECS table parses");
+        let violations = check_decoder_exists_for_produced_codecs(&rows, &variant_to_name);
+        assert!(
+            violations.is_empty(),
+            "rule J found {} undeclared undecodable-produced codec(s):\n{}",
+            violations.len(),
+            violations.join("\n")
+        );
     }
 
     /// The regression this rule exists to catch: `CodecId::Jpeg`'s real name
