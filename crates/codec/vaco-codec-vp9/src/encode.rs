@@ -776,6 +776,56 @@ fn frame_dims(frame: &Frame) -> Result<(u32, u32)> {
 /// crate under another agent's active fixed-offset-read sweep.
 const VPCC_RECORD: [u8; 12] = [1, 0, 0, 0, 0, 0, 0x82, 2, 2, 2, 0, 0];
 
+/// VP9's own disambiguation rule for a coded frame whose *last byte*
+/// happens to satisfy the superframe marker bit pattern (top 3 bits ==
+/// `0b110` -- `crate::superframe::try_split`'s own `marker & 0xE0 ==
+/// 0xC0` check, the read side of the identical rule). A compliant
+/// decoder (real libvpx among them) always treats such a byte as the
+/// start of a superframe index, whether or not the encoder meant one --
+/// nothing else in the stream says "no, that byte was really the last
+/// byte of frame data". An encoder that never checks this produces a
+/// bitstream indistinguishable, to every other decoder, from one with a
+/// corrupt superframe index.
+///
+/// Measured, not assumed: a real `ffmpeg`/libvpx decode of this
+/// encoder's own output failed on exactly the frames whose last byte
+/// collided this way ("Invalid value at `superframe_marker`: bitstream
+/// ended"), identically whether muxed to MP4 or `WebM` -- a per-frame,
+/// data-dependent bug (3 of 25 frames on one real fixture), not a
+/// container-side or header/config one: an isolated single-frame IVF
+/// built from exactly one colliding frame reproduced the failure with
+/// no container involved at all, and a byte-for-byte spec-correct
+/// one-subframe superframe index (`superframe_marker`,
+/// `bytes_per_framesize_minus_1`, `frames_in_superframe_minus_1 = 0`,
+/// the size, the repeated marker -- verified to round-trip through this
+/// crate's own `crate::superframe::split` at every `bytes_per_framesize`
+/// width from 1 to 4) still did not satisfy real libvpx, which kept
+/// reporting the identical parse failure on the wrapped bytes. What
+/// libvpx actually needed, confirmed the same way (an isolated
+/// single-frame IVF, this time hand-edited byte for byte): the
+/// colliding byte simply not be the last byte at all. Appending one
+/// `0x00` -- content the decoder never has a syntax element left to
+/// read once the compressed tile data ends, and so never inspects --
+/// resolved it cleanly, on every one of the three colliding frames and
+/// the full 25-frame fixture together. This crate's own decoder
+/// tolerates the same trailing byte for the same reason:
+/// `crate::superframe::try_split` requires the *last* byte to carry the
+/// marker, so a single `0x00` pad makes it correctly answer "not a
+/// superframe" and fall through to decoding the whole (padded) buffer
+/// as one frame, same as before.
+///
+/// Left an open question after this fix: *why* a real, correctly-shaped
+/// superframe index was rejected. Timeboxed rather than chased further
+/// once the simpler, verified fix was in hand -- see this session's
+/// writeup for the measurements above, in case whoever looks at
+/// multi-frame superframes here next needs them.
+fn disambiguate_superframe_marker(mut bytes: Vec<u8>) -> Vec<u8> {
+    if bytes.last().is_some_and(|&last| last & 0xE0 == 0xC0) {
+        bytes.push(0);
+    }
+    bytes
+}
+
 impl Encoder for Vp9Encoder {
     fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
         match self.machine.accept(frame.is_none())? {
@@ -786,7 +836,7 @@ impl Encoder for Vp9Encoder {
             Accept::Input => {
                 let Some(frame) = frame else { return Ok(()) };
                 let mut budget = Budget::new(self.limits.clone());
-                let bytes = encode_keyframe(&mut budget, frame)?;
+                let bytes = disambiguate_superframe_marker(encode_keyframe(&mut budget, frame)?);
                 let mut packet = Packet::from_slice(&mut budget, &bytes)?;
                 packet.pts = frame.pts;
                 // Same bug class as `vaco-codec-vp8`'s encoder, and the
@@ -1061,5 +1111,36 @@ mod tests {
         assert_eq!(extradata[4], 0, "profile 0");
         assert_eq!(extradata[6], 0x82, "bitDepth=8, chromaSubsampling=1 (4:2:0), fullRange=0");
         assert_eq!(&extradata[10..12], &[0, 0], "codecIntializationDataSize");
+    }
+
+    /// The real bug: a coded frame's last byte happens, by construction
+    /// here, to match the superframe marker pattern
+    /// (`crate::superframe::try_split`'s own `marker & 0xE0 == 0xC0`).
+    /// Measured against real ffmpeg/libvpx: exactly this shape of frame,
+    /// left unwrapped, fails to decode ("Invalid value at
+    /// `superframe_marker`: bitstream ended"), and -- the more surprising
+    /// measurement, see the function's own doc -- a spec-correct
+    /// superframe index does not fix it either; a single `0x00` byte
+    /// does. Untouched frames (the common case) must come back
+    /// byte-for-byte identical; a colliding one must grow by exactly one
+    /// byte, and `crate::superframe::try_split` must not mistake the
+    /// padded result for a real superframe (the padding byte does not
+    /// itself match the marker pattern).
+    #[test]
+    fn a_frame_ending_in_the_superframe_marker_pattern_gets_one_byte_of_padding() {
+        let plain = vec![0x11u8, 0x22, 0x33];
+        assert_eq!(disambiguate_superframe_marker(plain.clone()), plain, "no collision, no change");
+
+        let mut colliding = plain.clone();
+        colliding.push(0xC4); // 0b110_00_100: matches the marker pattern
+        let padded = disambiguate_superframe_marker(colliding.clone());
+        assert_eq!(padded.len(), colliding.len() + 1);
+        assert_eq!(padded.last(), Some(&0));
+        assert_eq!(&padded[..colliding.len()], colliding.as_slice(), "original bytes untouched, just padded");
+        assert_eq!(
+            crate::superframe::split(&padded),
+            vec![padded.as_slice()],
+            "the padded buffer must not be mistaken for a real superframe index"
+        );
     }
 }
