@@ -76,6 +76,25 @@
 //!   all) calls it `dvb_teletext`. Both fixed; [`ALLOW_NAME_MISMATCH`] is
 //!   where a checked survivor goes, with which of those two measured
 //!   outcomes justifies it.
+//! - **I** [`check_unconsumed_options`] — a fourth independent way to ship a
+//!   dead-but-consistent component: registered, listed, reachable by rule G,
+//!   correctly named by rule H, and still lying to the user about one of its
+//!   own knobs. The CLI's own option audit (`vaco-cli`/`vaco-cli-core`,
+//!   another agent's lane) found 108 of 237 top-level flags parsed and then
+//!   never read; this rule is the same defect one level down, on every
+//!   `#[opt(...)]` field a component crate declares. It caught
+//!   `vaco-filter-deinterlace::kerndeint`'s `map`, `vaco-filter-artistic::
+//!   vignette`'s `dither` (whose declared default did not even match the
+//!   code's own unconditional behaviour), `vaco-format-core::
+//!   FormatOptions`'s ten generic fields and `vaco-demux-rtsp::
+//!   RtspOptions`'s `user_agent`, among others — each fixed by either
+//!   implementing the field or making a non-default value refuse by name,
+//!   on the same "silently ignoring it is the worst outcome" rule the CLI
+//!   audit used. Scoped to one *crate* at a time — not one file, and not the
+//!   whole workspace — deliberately: see [`check_unconsumed_options`]'s own
+//!   doc for the two shapes of false result each of the other two scopes
+//!   produced in this tree before crate scope replaced them, both found by
+//!   reading rather than by the scan.
 //!
 //! # Allowlists
 //!
@@ -1377,13 +1396,298 @@ fn check_reference_names(rows: &[Row]) -> Result<Vec<String>, String> {
     Ok(violations)
 }
 
+// ------------------------------------------------------------------ rule I
+
+/// Every `#[opt(...)]` attribute span (byte range, inclusive of both
+/// brackets) in `text`, found by brace/paren balancing from `#[opt(` —
+/// the same technique [`function_body`] and rule G/H's scanners already
+/// use in this file, not a Rust parser.
+fn opt_attr_spans(text: &str) -> Vec<(usize, usize)> {
+    let bytes = text.as_bytes();
+    let mut spans = Vec::new();
+    let mut i = 0;
+    while let Some(rel) = text.get(i..).and_then(|s| s.find("#[opt(")) {
+        let start = i + rel;
+        let mut depth = 0i32;
+        let mut started = false;
+        let mut j = start;
+        while j < bytes.len() {
+            match bytes[j] {
+                b'(' => {
+                    depth += 1;
+                    started = true;
+                }
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if started && depth == 0 {
+                break;
+            }
+            j += 1;
+        }
+        // advance to the attribute's closing `]`, if present nearby.
+        let close = text[j..].find(']').map_or(j, |k| j + k);
+        spans.push((start, close));
+        i = close + 1;
+    }
+    spans
+}
+
+/// The field name an `#[opt(...)]` attribute at `attr_end` (its closing
+/// `]`, from [`opt_attr_spans`]) applies to: the identifier before the
+/// first `:` on the next non-blank, non-attribute, non-doc-comment line.
+fn field_after_opt_attr(text: &str, attr_end: usize) -> Option<String> {
+    let rest = &text[attr_end + 1..];
+    for line in rest.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with("///") || t.starts_with("//") {
+            continue;
+        }
+        let t = t.strip_prefix("pub(crate)").unwrap_or(t);
+        let t = t.strip_prefix("pub(super)").unwrap_or(t);
+        let t = t.strip_prefix("pub").unwrap_or(t);
+        let t = t.trim_start();
+        let ident_end = t.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))?;
+        if t[ident_end..].trim_start().starts_with(':') {
+            return Some(t[..ident_end].to_owned());
+        }
+        return None;
+    }
+    None
+}
+
+/// `field` counts as read when `.field` appears anywhere in `text` outside
+/// `exclude_start..exclude_end` (the attribute plus its own declaration
+/// line) — a plain textual scan, the same shape rule G/H's
+/// `codecs_referenced_in` already uses. [`check_unconsumed_options`] calls
+/// this with `text` set to one whole crate's concatenated source, not one
+/// file, and its own doc explains why: two `#[derive(Options)]` structs
+/// sharing a field name can still make a genuinely dead field read as
+/// "used" by a same-named field's real use, but that has only been observed
+/// between *unrelated crates* (`RtspOptions::user_agent` versus
+/// `vaco-protocol-http`/`vaco-protocol-icecast`'s own `user_agent` fields;
+/// `FormatOptions::recursion_limit` versus `RemoteAccess::recursion_limit`)
+/// in this tree, which crate scope already excludes — not within one crate,
+/// which is what would defeat this specific choice of scope.
+fn opt_field_is_read_elsewhere(text: &str, field: &str, exclude_start: usize, exclude_end: usize) -> bool {
+    let pattern = format!(".{field}");
+    let mut search_from = 0usize;
+    while let Some(rel) = text[search_from..].find(&pattern) {
+        let pos = search_from + rel;
+        let after = pos + pattern.len();
+        let boundary_ok = text[after..]
+            .chars()
+            .next()
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        if boundary_ok && !(exclude_start <= pos && pos < exclude_end) {
+            return true;
+        }
+        search_from = pos + 1;
+    }
+    false
+}
+
+/// `(field, file suffix, why)` for a field this gate would otherwise flag,
+/// kept out of the report with a reason on file.
+///
+/// Empty today. The two shapes a reason here can take: a field this scan's
+/// same-file scope cannot see is genuinely read (a same-name collision with
+/// another struct in the same file, the kind this module's own doc
+/// describes finding in `kerndeint`'s `map` and `misc.rs`'s `PermsOpts` —
+/// both fixed, so neither needs an entry any more), or a field a future
+/// pass finds and cannot fix in the same commit. The second shape is *not*
+/// the discipline every other allowlist in this file holds to — those
+/// record a deliberate, permanent divergence; an entry of this shape is an
+/// open debt, named so the class stops growing while it is worked down, not
+/// a claim that leaving it is fine.
+const ALLOW_UNCONSUMED_OPTION: &[(&str, &str, &str)] = &[(
+    "listen_timeout",
+    "vaco-demux-rtsp/src/options.rs",
+    "server-mode-only per the reference (\"imply flag listen\"); this crate is a \
+     client only, so the field is accepted for interface parity, not silently \
+     misapplied -- the field's own doc comment states this in full, the same \
+     declared-gap shape as an `ALLOW_MUXER_ONLY`/`ALLOW_NAME_MISMATCH` row, not an \
+     undisclosed one this rule exists to catch.",
+)];
+
+/// One crate's `src/` tree: every `.rs` file's path (repo-relative) and
+/// text, concatenated once so a field's "is it read anywhere in this
+/// crate" question is one substring scan rather than one per file pair.
+struct CrateSrc {
+    /// `(repo-relative path, file text, that file's start offset in
+    /// `joined`)`, in the order [`rust_files`] returns.
+    files: Vec<(String, String, usize)>,
+    /// Every file's text concatenated in order, each preceded by a `\n` so
+    /// no field name can straddle a file boundary and false-positive.
+    joined: String,
+}
+
+/// Blank out (space- and newline-preserving, so byte offsets do not move)
+/// every `#[cfg(test)]`/`#[test]`-guarded item in `text`.
+///
+/// `rtbufsize`, `max_delay` and `err_detect` (`vaco-format-core::
+/// FormatOptions`) each have exactly one `.field` occurrence in their own
+/// crate outside their own declaration, and every one of them is
+/// `assert_eq!(o.field, <parsed value>)` inside `#[cfg(test)] mod tests` —
+/// a test that a string parses into the right field value, not a claim
+/// anything downstream reads it. Left unmasked, this rule would count that
+/// as consumption and miss exactly the shape of bug it exists to catch:
+/// nothing outside the option-parsing layer itself ever looks at the
+/// field. Found while first running rule I against the real tree, not
+/// designed in ahead of time; all three still need fixing separately (see
+/// `vaco-format-core/src/options.rs`'s own tracking, since this rule's
+/// scan does not (yet) re-run to confirm — masking test code only stops
+/// future instances of this exact shape from hiding again).
+fn mask_test_code(text: &str) -> String {
+    let mut out: Vec<u8> = text.as_bytes().to_vec();
+    for guard in ["#[cfg(test)]", "#[test]"] {
+        let mut i = 0;
+        while let Some(rel) = std::str::from_utf8(&out[i..]).ok().and_then(|s| s.find(guard)) {
+            let start = i + rel;
+            let Some(brace_rel) = std::str::from_utf8(&out[start..]).ok().and_then(|s| s.find('{')) else {
+                i = start + guard.len();
+                continue;
+            };
+            let brace = start + brace_rel;
+            let mut depth = 0i32;
+            let mut end = brace;
+            for (k, &b) in out.iter().enumerate().skip(brace) {
+                match b {
+                    b'{' => depth += 1,
+                    b'}' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            end = k;
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            for b in &mut out[start..=end] {
+                if *b != b'\n' {
+                    *b = b' ';
+                }
+            }
+            i = end + 1;
+        }
+    }
+    String::from_utf8(out).unwrap_or_else(|_| text.to_owned())
+}
+
+fn crate_src(src: &std::path::Path) -> CrateSrc {
+    let mut files = Vec::new();
+    let mut joined = String::new();
+    for file in rust_files(src) {
+        let Ok(text) = std::fs::read_to_string(&file) else {
+            continue;
+        };
+        let rel = file
+            .strip_prefix(repo_root())
+            .unwrap_or(&file)
+            .to_string_lossy()
+            .into_owned();
+        joined.push('\n');
+        let offset = joined.len();
+        joined.push_str(&mask_test_code(&text));
+        files.push((rel, text, offset));
+    }
+    CrateSrc { files, joined }
+}
+
+/// A registered component crate's own `#[opt(...)]` fields, checked against
+/// every file in the *same crate* — not just the field's own file, and not
+/// the whole workspace.
+///
+/// Same-file-only was tried first and over-fired: `vaco-format-core`'s
+/// `FormatOptions` and `vaco-demux-rtsp`'s `RtspOptions` both declare their
+/// fields in one `options.rs` and are read from sibling files in the same
+/// crate (`interleave.rs`, `mux.rs`, `discovery.rs`, `time.rs`) — the
+/// ordinary shape for a config struct with a dedicated declaration module,
+/// not a bug. Workspace-wide was tried and tried to correct that, and
+/// silently broke in the other direction: an unrelated crate's *own*
+/// `user_agent` or `recursion_limit` field (`vaco-protocol-http`,
+/// `vaco-protocol-icecast`, `vaco-format-adaptive::RemoteAccess` all have
+/// one) reads as "used" for `RtspOptions::user_agent` and
+/// `FormatOptions::recursion_limit`, which are not the same field and were
+/// not actually read anywhere — a real bug in each case (see
+/// `vaco-demux-rtsp/src/options.rs` and `vaco-format-core/src/options.rs`'s
+/// own fix commits), hidden by a coincidental name match one layer further
+/// away than same-file scope reaches. Crate scope is the middle ground:
+/// wide enough to see a config struct's own consumers in sibling files,
+/// narrow enough that an unrelated crate's same-named field cannot vouch
+/// for this one.
+///
+/// This does not make same-crate, different-*file* collisions impossible in
+/// principle — the same risk [`opt_field_is_read_elsewhere`]'s doc names for
+/// same-file structs could in theory recur across two files in one crate —
+/// but no instance of it has been found in this tree, unlike the two shapes
+/// above, both of which were.
+fn check_unconsumed_options() -> Result<Vec<String>, String> {
+    let mut violations = Vec::new();
+    for base in ["crates/filter", "crates/codec", "crates/format"] {
+        let root = repo_root().join(base);
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for crate_dir in entries.flatten() {
+            let src = crate_dir.path().join("src");
+            if !src.is_dir() {
+                continue;
+            }
+            let krate = crate_src(&src);
+            for (rel, text, base_offset) in &krate.files {
+                if !text.contains("#[opt(") {
+                    continue;
+                }
+                for (start, end) in opt_attr_spans(text) {
+                    let Some(field) = field_after_opt_attr(text, end) else {
+                        continue;
+                    };
+                    // Exclude the attribute itself and the field's own
+                    // declaration line from the "read elsewhere" search —
+                    // otherwise every field would trivially read as used by
+                    // its own `#[opt(name = "...")]`/`pub field: T,`, this
+                    // time as offsets into the whole-crate `joined` text.
+                    let decl_line_end =
+                        text[end..].find(',').map_or(text.len(), |k| end + k + 1);
+                    let excl_start = base_offset + start;
+                    let excl_end = base_offset + decl_line_end;
+                    if opt_field_is_read_elsewhere(&krate.joined, &field, excl_start, excl_end) {
+                        continue;
+                    }
+                    if ALLOW_UNCONSUMED_OPTION
+                        .iter()
+                        .any(|(f, fl, _)| *f == field && rel.ends_with(fl))
+                    {
+                        continue;
+                    }
+                    violations.push(format!(
+                        "  {rel}: field `{field}` is declared with `#[opt(...)]` but never \
+                         read anywhere in this crate — parsing it has no effect on output. \
+                         This is the CLI's `-filter_threads` shape of bug, one level down: \
+                         implement it, make a non-default value refuse by name (`cargo xtask \
+                         reachability-check`'s rule I is what caught the \
+                         `vaco-filter-deinterlace`/`vaco-format-core`/`vaco-demux-rtsp` batch \
+                         this way), or add it to ALLOW_UNCONSUMED_OPTION with a reason if an \
+                         unrelated crate's same-named field is the only reason this looked \
+                         used."
+                    ));
+                }
+            }
+        }
+    }
+    violations.sort();
+    Ok(violations)
+}
+
 // ------------------------------------------------------------------- driver
 
 pub fn run(_check: bool) -> Task {
     let rows = all_rows()?;
     let variant_to_name = codec_name_table()?;
 
-    let sections: [(&str, Vec<String>); 9] = [
+    let sections: [(&str, Vec<String>); 10] = [
         (
             "A. crate with no fragment and no in-workspace caller",
             check_orphan_crates()?,
@@ -1417,6 +1721,10 @@ pub fn run(_check: bool) -> Task {
             "H. registered name absent from the reference's own measured names",
             check_reference_names(&rows)?,
         ),
+        (
+            "I. declared #[opt(...)] field never read in its own file",
+            check_unconsumed_options()?,
+        ),
     ];
 
     let total: usize = sections.iter().map(|(_, v)| v.len()).sum();
@@ -1440,7 +1748,8 @@ pub fn run(_check: bool) -> Task {
         + ALLOW_UNREGISTERED_DESCRIPTOR.len()
         + ALLOW_UNDEMUXABLE_DECODER.len()
         + ALLOW_UNMUXABLE_ENCODER.len()
-        + ALLOW_NAME_MISMATCH.len();
+        + ALLOW_NAME_MISMATCH.len()
+        + ALLOW_UNCONSUMED_OPTION.len();
     println!(
         "reachability-check: clean — {} components across {} fragments checked \
          by {} rules, {allowlisted} deliberate gap(s) on record",
@@ -1553,5 +1862,62 @@ mod tests {
         let body = function_body(text, "fn f()").expect("found");
         assert!(body.contains("g();"));
         assert!(!body.contains("fn h"));
+    }
+
+    #[test]
+    fn every_unconsumed_option_allowlist_row_has_a_real_reason() {
+        for (field, _file, why) in ALLOW_UNCONSUMED_OPTION {
+            assert!(why.len() > 15, "{field} needs a real reason, got {why:?}");
+        }
+    }
+
+    #[test]
+    fn opt_attr_spans_finds_one_multi_line_attribute() {
+        let text = "#[opt(name = \"w\", help = \"width\",\n      default = 0, range = 0..=8192)]\npub width: i32,\n";
+        let spans = opt_attr_spans(text);
+        assert_eq!(spans.len(), 1);
+        let (start, end) = spans[0];
+        assert!(text[start..end].starts_with("#[opt("));
+    }
+
+    #[test]
+    fn field_after_opt_attr_skips_pub_and_finds_the_identifier() {
+        let text = "#[opt(name = \"w\")]\npub width: i32,\n";
+        let end = opt_attr_spans(text)[0].1;
+        assert_eq!(field_after_opt_attr(text, end).as_deref(), Some("width"));
+    }
+
+    #[test]
+    fn opt_field_is_read_elsewhere_requires_a_word_boundary() {
+        // `.thresh` must not match inside `.threshold` — a same-prefix field
+        // in the same file is exactly the false-positive this check must not
+        // produce (the mirror image of the collision false negative rule I's
+        // own doc names).
+        let text = "let x = opts.threshold;\n";
+        assert!(!opt_field_is_read_elsewhere(text, "thresh", 0, 0));
+        let text2 = "let x = opts.thresh;\n";
+        assert!(opt_field_is_read_elsewhere(text2, "thresh", 0, 0));
+    }
+
+    #[test]
+    fn opt_field_is_read_elsewhere_excludes_its_own_declaration() {
+        let text = "#[opt(name = \"x\", default = 0)]\npub thresh: i32,\n";
+        let (start, end) = opt_attr_spans(text)[0];
+        let decl_end = text[end..].find(',').map_or(text.len(), |k| end + k + 1);
+        assert!(!opt_field_is_read_elsewhere(text, "thresh", start, decl_end));
+    }
+
+    #[test]
+    fn check_unconsumed_options_is_clean_against_the_real_tree() {
+        let violations = check_unconsumed_options().expect("scan runs");
+        // Not asserting a specific count here (it would make this test
+        // fragile against every future fix), just that the scan runs clean
+        // against the real tree with today's ALLOW_UNCONSUMED_OPTION, the
+        // same shape every other rule's test in this module uses.
+        assert!(
+            violations.is_empty(),
+            "rule I found unconsumed options with no allowlist entry:\n{}",
+            violations.join("\n")
+        );
     }
 }
