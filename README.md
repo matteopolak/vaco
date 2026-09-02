@@ -12,13 +12,13 @@ This is not a drop-in replacement, and it is not close to one yet. It demuxes ab
 half the containers ffmpeg does and muxes about two thirds, but registers only 17% as
 many decoders; video decoding runs roughly 7–17x slower; several codecs decode only
 intra frames; and a few that are registered and advertised are currently **wrong**,
-including FFV1 and AC-3. H.264 *encode* writes malformed files. The tables below say
-which, with the measurements.
+AC-3 worst among them. The tables below say which, with the measurements.
 
 Read those tables rather than the component counts. Everything in them was checked by
 decoding real files and comparing output against ffmpeg — which is how the broken ones
-were found, and it is worth knowing that the automated suite would not have caught
-them: none of its 709 cases compares a decoded pixel.
+were found. The suite now has a decode tier that does the same for 67 of the 89
+registered decoders; until recently none of its cases compared a decoded pixel, which
+is how a completely broken FFV1 sat behind a green run.
 
 If you need to get a job done today, use FFmpeg.
 
@@ -77,6 +77,9 @@ cargo build --release -p vaco-cli --features vaco-registry/patent-encumbered-h26
 ## Examples
 
 ```
+# Transcode to FFV1 in Matroska
+vaco -i input.mp4 -c:v ffv1 output.mkv
+
 # Remux without re-encoding
 vaco -i input.mkv -c copy output.mp4
 
@@ -96,12 +99,6 @@ A default build has no H.264 or HEVC decoder, so an example reading a typical `.
 needs the patent-encumbered feature line above. `vaco -codecs` tells you what the
 build you have can actually open.
 
-One caveat on that second example, which re-encodes: **H.264 encode output is
-currently malformed.** The `libx264` path emits Annex-B start codes and nothing
-converts them to the length-prefixed form MP4 and Matroska require, while the `avcC`
-still advertises `nal_length_size=4`. ffmpeg recovers the frames but reports an error
-on every access unit. Remuxing with `-c copy` is unaffected and produces clean files,
-as does HEVC encode. Prefer `-c copy`, or `-c:v libx265`, until that row changes.
 
 ## Compared to FFmpeg
 
@@ -221,7 +218,7 @@ documents under `docs/codec/` carry the exact clause-level scope.
 
 | Codec | Decode | Encode | Notes |
 |---|---|---|---|
-| H.264 / AVC | yes | **malformed output** | Decode is patent-gated. Encode spawns your own `x264` binary, but writes Annex-B into MP4/Matroska where a length prefix is required |
+| H.264 / AVC | yes | via x264 | Decode is patent-gated. Encode spawns your own `x264` binary |
 | H.265 / HEVC | yes | via x265 | I-, P- and B-slices; no tiles or range extensions. Decode is patent-gated. Encode spawns your own `x265` binary |
 | MPEG-1 / MPEG-2 | yes | — | |
 | VP8 | yes | — | RFC 6386 |
@@ -231,29 +228,28 @@ documents under `docs/codec/` carry the exact clause-level scope.
 | VC-1 / WMV3 | intra only | — | Simple/Main, progressive I-frames. Patent-gated |
 | H.261 / H.263 | yes | — | Baseline |
 | ProRes | yes | — | Decode only by decision; SMPTE RDD 36. Within ±4 of ffmpeg on 3% of 10-bit samples, an IDCT rounding difference |
-| FFV1 | **no** | **no** | Decodes and encodes only against itself — see below |
+| FFV1 | yes | yes | Byte-exact against ffmpeg both ways, all four coders, RFC 9043 |
 | Raw / uncompressed | yes | yes | rawvideo, v210, r10k, y41p and friends |
 
 FFV1 is the sharpest example of why this page reports measurements rather than
-status. Its encoder and decoder round-trip losslessly *against each other*, and the
-crate's test suite is exactly that round-trip, so it passed. Measured against ffmpeg
-it fails in both directions: an ffmpeg-written FFV1 file decodes to wrong pixels here
-(differing on 99.6% of bytes, from the first byte, on a lossless codec), and ffmpeg
-reads our FFV1 output as wrong pixels too. It is registered, so a build will still
-accept it. Treat it as broken until that row says otherwise.
+status. Its encoder and decoder round-tripped losslessly *against each other* while
+both disagreed with the format, and the crate's test suite was exactly that round
+trip — so it passed while an ffmpeg-written file decoded to wrong pixels on 99.6% of
+bytes. It is byte-exact both ways now, and its tests lead with real ffmpeg fixtures
+instead. A self-round-trip proves the two halves agree, which is not the claim.
 
 ### Audio
 
 | Codec | Decode | Encode | Notes |
 |---|---|---|---|
-| AAC-LC | partly | — | Patent-gated. Output is offset ~1181 samples against ffmpeg (encoder delay not trimmed), with a real residual after aligning |
-| MP1 / MP2 / MP3 | partly | — | Layer I/II/III decode, but output is offset ~1303 samples against ffmpeg (encoder delay not trimmed) with a smaller residual on top |
+| AAC-LC | partly | — | Patent-gated. Alignment and length now exact; a broadband residual remains at 32/44.1/48 kHz (byte-exact in steady state at 22.05 kHz) |
+| MP1 / MP2 / MP3 | partly | — | Layer I/II/III. Alignment and length exact; ~4% of samples still differ, concentrated in the first and last frames |
 | AC-3 | **no** | — | Known accuracy defect: 99.5% of samples differ from ffmpeg, mean error 6806 of 32768, and it is not a time offset. E-AC-3 non-default |
 | Vorbis | yes | yes | Within 1 LSB of ffmpeg. Encode is one fixed low-complexity configuration |
 | FLAC | yes | yes | Byte-identical to ffmpeg |
 | ALAC | yes | yes | Byte-identical to ffmpeg |
 | Opus | not registered | — | Implemented but has unresolved correctness gaps, so it is deliberately not wired up |
-| PCM | yes | yes | The whole `pcm_*` family |
+| PCM | yes | yes | The whole `pcm_*` family, including ISO/IEC 23003-5 `ipcm`/`fpcm` in MP4 |
 | ADPCM | yes | — | IMA-WAV, IMA-QT, MS, SWF. No G.722 or G.726 |
 | QOA, comfort noise | yes | yes | DFPWM is implemented but deliberately not registered |
 
@@ -262,16 +258,14 @@ accept it. Treat it as broken until that row says otherwise.
 BMP, GIF, JPEG, JPEG-LS, JPEG XL (decode only), OpenEXR, PCX, PNG and APNG, PNM,
 QOI, SGI, TGA, TIFF, WebP, XBM, XWD.
 
-Registered is doing a lot of work in that list. Probing an ffmpeg-written still,
-`vaco-probe` reports the correct size and pixel format for PNG, BMP, TIFF and GIF, and
-reports `0x0` with `pix_fmt=unknown` for PCX, SGI, PNM, QOI, XBM, XWD and JPEG-LS —
-nine of thirteen formats never populate stream parameters at all, and TGA fails to
-probe outright. The decode follows the metadata down: a colour P6 PPM comes back as
-grey, each pixel carrying the luma of the colour it should have been.
+All thirteen now report the same size and pixel format as `ffprobe` and decode to the
+same pixels. Nine reported `0x0` with `pix_fmt=unknown` until recently and TGA would
+not probe at all: `ImageHeader` was implemented for only six formats, so every other
+still got `None` and nothing could fill the parameters in. A colour P6 PPM decoded to
+grey as a result, each pixel carrying the luma of the colour it should have been.
 
-Writing a still has its own bug: an output named `.png` selects the JPEG encoder
-rather than PNG, so image output needs an explicit `-c:v`. With one given, PNG, BMP
-and TIFF decode identically to ffmpeg.
+Known gaps: EXR has no reachable decoder, JPEG-LS decode fails on some sizes, GIF
+decodes one frame where ffmpeg emits four, and the JPEG *encoder* is greyscale-only.
 
 ### Subtitles
 
@@ -300,13 +294,12 @@ their documentation. `docs/filter/` has the per-crate breakdowns.
 
 Spot-checked against ffmpeg on a decoded VP9 source: `crop`, `hflip`, `vflip`,
 `transpose`, `pad` and `format` are byte-identical, and `pad`'s `color` is honoured.
-`scale` is byte-identical when the size does not change, and diverges on any real
-resize — partly because **its `flags` option is accepted and ignored**: `neighbor`,
-`bilinear`, `bicubic` and `lanczos` all produce the same bytes, as does `in_range`.
-`sws_flags` refuses by name, which is the behaviour the other two should have. For
-reference, ffmpeg's `flags=neighbor` at 2:1 samples the source at `(2x+1, 2y+1)`; our
-output matches none of the four pixel offsets, so it is a different algorithm rather
-than a shifted one.
+`scale` now honours `flags`, `param0`, `param1`, `in_range` and `out_range` — until
+recently it read none of them, so every `flags=` value produced identical bytes. At
+2:1 it is byte-exact for `neighbor` and `bilinear`; `bicubic` and `lanczos` differ on
+about 0.4% of bytes, all by ±1, from a coefficient-quantisation difference recorded in
+`planning/17-scale-resample-tx.md`. Options it does not implement refuse by name
+rather than being ignored.
 
 ## Patent-encumbered codecs
 
