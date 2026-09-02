@@ -832,6 +832,20 @@ right, independent of Stage 2b's own schedule: the fix (`RowPublish<T>`,
 landed) is available now, but the three structures are not moved onto it
 yet, so the latent race persists until each is.
 
+**Update, after step 1 landed: step 1 closed only half of each race, not
+the whole thing.** `EdgeMarks`/`CuGrid`/`SaoParamsGrid` moving their
+`published` side onto `RowPublish` (`planning/E2E-GAPS.md` §§41-43) fixed
+the *read* side — a `Vec` two threads could tear is gone. It did not
+touch `current`, which is still one mutable field on the same struct
+instance every row's `Ctx` would share. Four workers cannot each own "the
+row I am writing" through one shared field regardless of how safe
+`published` is. This is not a shortfall in step 1 — publishing was what
+it set out to fix, and it fixed it — but stating "`EdgeMarks` is on
+`RowPublish` now" without this line invites the reasonable but wrong
+conclusion that the structure is thread-ready. It is not, until each of
+`recon`/`cu_grid`/`edges`/`sao_params` also gets `current` pulled into a
+per-row-owned value — the first of step 3's two commits, below.
+
 ### Step 3's concrete field categorization, and a gap step 1 did not close
 
 Reading `Ctx`'s 36 fields (`ctu.rs`) and every module that touches them
