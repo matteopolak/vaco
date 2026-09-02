@@ -393,6 +393,41 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
         // acceleration path exists at all yet, same reason `-hwaccel`
         // itself is already refused above.
         "init_hw_device",
+        // Fifth batch: the single most severe item found in the whole
+        // audit. Silently ignoring `-filter_complex_script` means the user
+        // hands us an entire filtergraph in a file and we process the
+        // input with NO filtering at all, then exit 0 having written a
+        // plausible-looking output -- the same silent-wrong-output shape
+        // as the truncated-ALAC-decode defect. Refused ahead of every
+        // other item below, including the rest of this same priority
+        // group.
+        "filter_complex_script",
+        // Sixth batch: rest of triage group 1 (changes output / robustness
+        // gap), plus `max_alloc` moved here from group 2 -- it is not a
+        // diagnostic, it is a safety bound for untrusted input (the same
+        // concern `vaco-limits` exists for), and silently not honouring a
+        // requested cap is a robustness gap, not a missing convenience.
+        // The rest govern what happens when something goes wrong
+        // (`abort_on`, `xerror`, `timelimit`, `ignore_unknown`,
+        // `copy_unknown`, `recast_media`) or otherwise change output bytes.
+        "max_alloc",
+        "dts_delta_threshold",
+        "dts_error_threshold",
+        "sdp_file",
+        "abort_on",
+        "xerror",
+        "timelimit",
+        "ignore_unknown",
+        "copy_unknown",
+        "recast_media",
+        // Seventh batch: rest of triage group 2 (diagnostics/tuning-only)
+        // and group 4 (structural, hwaccel-adjacent).
+        "filter_buffered_frames",
+        "filter_complex_threads",
+        "filter_hw_device",
+        // Missed in the seventh batch: same diagnostics/compat-only
+        // reasoning as the rest of group 2.
+        "cpuflags",
     ];
     const PER_FILE: &[&str] = &[
         "hwaccel",
@@ -446,6 +481,29 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
         // path exists, same reason as the `-hwaccel` refusal above).
         "hwaccel_device",
         "hwaccel_output_format",
+        // Fifth batch: `-filter_script`'s per-file twin of
+        // `-filter_complex_script` above -- same silent-no-filtering defect.
+        "filter_script",
+        // Sixth batch: rest of triage group 1 (per-file/per-stream half).
+        "isync",
+        "readrate",
+        "readrate_initial_burst",
+        "readrate_catchup",
+        "reinit_filter",
+        "drop_changed",
+        "fpre",
+        "pre",
+        "bits_per_raw_sample",
+        "stream_group",
+        "streamid",
+        "dump_attachment",
+        "apad",
+        "guess_layout_max",
+        "fix_sub_duration_heartbeat",
+        "find_stream_info",
+        // Seventh batch: rest of triage group 2 (per-file half).
+        "max_muxing_queue_size",
+        "muxing_queue_data_threshold",
     ];
 
     for &name in GLOBAL {
