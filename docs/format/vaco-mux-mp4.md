@@ -131,6 +131,36 @@ the regression test — it sets an explicit one-second `Duration` on the last
 of three packets and checks the demuxed `duration_ts` lands on `30` (one
 second at this track's 30-timescale), not `1_000_000`.
 
+### A packet with no duration still needs one on disk
+
+Neither `stts.sample_delta` nor `trun.sample_duration` has an "unknown"
+encoding: a zero there means a zero-length sample, not a missing value. A
+`-c copy` remux out of a demuxer that reports no `Packet::duration` is the
+ordinary case, so both paths derive one.
+
+* **Progressive.** `TrackState::stts_runs` takes every delta from the DTS
+  gap to the next sample. The last sample has no next one, so it uses
+  `last_duration_hint` (the last packet that stated a duration) and, when no
+  packet ever did, repeats the previous delta.
+* **Fragmented.** `fragmented::resolve_durations` runs over each track's
+  buffered samples at flush time, filling a zero duration in from the next
+  buffered sample's DTS, and the last sample of a fragment from the previous
+  delta — fragments are flushed *before* the packet that triggered the
+  boundary is buffered, so the next fragment's first DTS is not available
+  there.
+
+Both fallbacks are what the reference was measured to do: `ffmpeg -f lavfi -i
+testsrc=size=64x48:rate=30:duration=0.666 -c:v libx264` writes `stts =
+[(20, 512)]` with `mdhd.duration = 10240`, never `[(19, 512), (1, 0)]` with
+`mdhd.duration = 9728`.
+
+Writing the literal zero instead cost the last sample of every progressive
+file and *every* sample of every fragmented one, because `vaco-demux-mp4`
+skipped zero-duration samples outright — twelve `tests/roundtrip.rs` cases
+and one in `vaco-mux-dash` had never passed. The demuxer's skip is now
+`MediaType::Subtitle`-only (see `docs/format/vaco-demux-mp4.md`), so the two
+halves no longer have to agree for a file to survive the trip.
+
 ### What is simplified
 
 * **One `tfra` entry per track per fragment**, pointing at that fragment's

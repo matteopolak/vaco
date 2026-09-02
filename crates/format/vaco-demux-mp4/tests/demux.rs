@@ -897,4 +897,45 @@ mod tests {
         assert_eq!(packets[0].4, sample1.len());
         assert_eq!(packets[1].4, sample2.len());
     }
+
+    /// The other half of the rule above: the skip is for `mov_text`'s
+    /// trailing cue-clear sample, **not** for any sample whose `stts` delta
+    /// happens to be zero.
+    ///
+    /// Measured on a 20-sample video track whose final `stts` run is
+    /// `(1, 0)` — the shape this repository's own MP4 muxer wrote for the
+    /// last sample of every progressive file until the same commit as this
+    /// test: `ffprobe -count_packets` on the reference reports all 20, and a
+    /// duration-only skip reported 19, silently deleting the last frame of
+    /// every such file. Twelve `vaco-mux-mp4` round-trip tests and one
+    /// `vaco-mux-dash` one had never passed because of it.
+    #[test]
+    fn a_trailing_zero_duration_video_sample_is_still_a_packet() {
+        const SAMPLE_SIZE: u32 = 4;
+        const COUNT: u32 = 6;
+        let media = vec![0xAB; (COUNT * SAMPLE_SIZE) as usize];
+        let track = TrackSpec {
+            handler: *b"vide",
+            timescale: 30,
+            media_duration: u64::from((COUNT - 1) * 100),
+            stbl: StblSpec {
+                stts: vec![(COUNT - 1, 100), (1, 0)],
+                stsc: vec![(1, COUNT, 1)],
+                stsz: vec![SAMPLE_SIZE; COUNT as usize],
+                stco: vec![u32::try_from(MDAT_PAYLOAD).unwrap()],
+                has_stss: false,
+                ..StblSpec::default()
+            },
+            ..TrackSpec::default()
+        };
+        let data = fixture(1000, (COUNT - 1) * 100, &[track], &media);
+        let mut demux = open(data);
+        let packets = drain(&mut demux);
+        assert_eq!(
+            packets.len(),
+            COUNT as usize,
+            "a zero final stts delta must not delete the last frame: {packets:?}"
+        );
+        assert_eq!(packets[COUNT as usize - 1].2, i64::from((COUNT - 1) * 100));
+    }
 }

@@ -1407,3 +1407,10 @@ kind     = "blackbox"
 title    = "Observed `ffprobe -show_packets` skip_samples/discard_padding and full-decode PCM sample counts for gapless audio, ffmpeg 9.0.1: libmp3lame MP3 at 16/22.05/24/32/44.1/48 kHz (skip_samples=1105 at every rate, discard_padding per file), `-c:a aac` in MP4 at 22.05/32/44.1/48 kHz mono and stereo (skip_samples=1024; discard_padding 956/512/888/256), `-f adts` AAC (no trim side data at all), and ALAC/FLAC (none), each cross-checked against `-f s16le` output length"
 acquired = "2026-09-02"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-mp4-sample-duration-probe"
+kind     = "blackbox"
+title    = "ffmpeg/ffprobe 9.0.1, measured as black boxes, on how the last sample of an MP4 track gets a duration. (1) `ffmpeg -f lavfi -i testsrc=size=64x48:rate=30:duration=0.666 -c:v libx264 -pix_fmt yuv420p` writes `stts = [(20, 512)]` with `mdhd.timescale = 15360, duration = 10240` -- twenty equal deltas, no trailing `(1, 0)` run, and a media duration that includes the last sample. A single-frame run (`-frames:v 1`) likewise writes `stts = [(1, 512)]`, `mdhd.duration = 512`. So the reference muxer states a real duration for the final sample rather than zero. (2) In the read direction, on a file hand-built with `stts = [(19, 100), (1, 0)]` at timescale 30 (twenty 9-byte samples, one chunk), `ffprobe -count_packets -show_entries stream=nb_read_packets` reports 20, and `ffprobe -show_entries packet=dts,duration` reports the twentieth packet as `dts=1900,duration=100` -- the reference demuxer surfaces a zero-`stts`-delta video sample and substitutes the previous delta for its duration, rather than dropping it. Boxes read by walking the files directly; no ffmpeg source was consulted."
+acquired = "2026-09-02"
+where    = "the reference binary installed on the development machine"

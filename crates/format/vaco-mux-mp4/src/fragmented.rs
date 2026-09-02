@@ -64,7 +64,13 @@ const FLAGS_SYNC: u32 = 2 << 24;
 #[derive(Debug, Clone)]
 struct PendingSample {
     payload: Vec<u8>,
+    /// The packet's own stated duration, or zero when it stated none.
+    /// [`resolve_durations`] fills a zero in from the next sample's DTS
+    /// before the `trun` is built; nothing downstream of that sees a zero.
     duration: u32,
+    /// This sample's DTS in its track's timescale, kept only so a missing
+    /// duration can be recovered from the next sample's.
+    dts: i64,
     cts: i32,
     is_sync: bool,
 }
@@ -298,9 +304,42 @@ pub fn buffer_sample(
     pending.samples.push(PendingSample {
         payload,
         duration,
+        dts,
         cts,
         is_sync,
     });
+}
+
+/// Fill in the duration of every buffered sample that did not state one.
+///
+/// A packet whose `duration` is unknown is the ordinary case for a `-c copy`
+/// remux out of a demuxer that reports none, and `trun.sample_duration` has
+/// no "unknown" encoding: a zero there means a zero-length sample, which
+/// makes the fragment's — and so the track's, and the presentation's —
+/// duration zero. Every sample but the last has a next sample whose DTS
+/// states the answer exactly; the last one has to repeat the previous delta,
+/// the same fallback [`crate::track::TrackState::stts_runs`] uses and the
+/// same one the reference muxer was measured to use.
+///
+/// Applied per fragment, so the last sample of a fragment is estimated even
+/// though the next fragment's first sample would state it — fragments are
+/// flushed *before* the packet that triggered the boundary is buffered, so
+/// that DTS is not available here.
+fn resolve_durations(samples: &mut [PendingSample]) {
+    let mut previous = 0u32;
+    for i in 0..samples.len() {
+        let next_dts = samples.get(i.saturating_add(1)).map(|s| s.dts);
+        let Some(this) = samples.get_mut(i) else {
+            continue;
+        };
+        if this.duration == 0 {
+            this.duration = match next_dts {
+                Some(next) => u32::try_from(next.saturating_sub(this.dts).max(0)).unwrap_or(0),
+                None => previous,
+            };
+        }
+        previous = this.duration;
+    }
 }
 
 /// Whether anything is currently buffered, across every track.
@@ -334,6 +373,9 @@ pub fn flush_fragment(
 ) -> Result<()> {
     if !has_pending(state) {
         return Ok(());
+    }
+    for pending in &mut state.pending {
+        resolve_durations(&mut pending.samples);
     }
     state.sequence_number = state.sequence_number.saturating_add(1);
     let flags = opts.effective_flags();

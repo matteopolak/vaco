@@ -197,6 +197,28 @@ A sample whose presented time ends at or before the edit start is emitted with
 are samples because its time base is `1/sample_rate`. Both are byte-visible in
 `-show_packets` and both are reproduced exactly on `prog.mp4` and `delay.mp4`.
 
+#### Zero-duration samples — a subtitle rule, not a general one
+
+A sample whose `stts` delta is `0` is dropped from the packet stream **only on
+a subtitle track**. That is the trailing "clear the subtitle" entry many
+`mov_text` writers append after the last real cue: measured on a real
+`-c:s mov_text` file, `ffprobe -show_packets` on the reference never surfaces
+it, and it is not a zero-*size* sample either (its `stsz` entry is a real 2
+bytes, `mov_text`'s big-endian `u16` zero-length string), so a size-based rule
+would miss it.
+
+Gating on duration alone was measured **wrong** everywhere else. On a video
+track whose final `stts` run is `(1, 0)` — the shape this repository's own MP4
+muxer wrote for the last sample of every progressive file until that muxer was
+fixed — `ffprobe -count_packets` reports all 20 samples, substituting a
+`duration=100` for the declared `0`; the unconditional skip reported 19 and
+silently deleted the last frame. Regression:
+`tests/demux.rs::a_trailing_zero_duration_video_sample_is_still_a_packet`
+beside the `mov_text` one it mirrors.
+
+The skip happens in `next_packet`, not when the sample table is first read, so
+seeking and duration accounting still see every table entry.
+
 #### `r_frame_rate` and `avg_frame_rate`
 
 > `r_frame_rate = timescale / most common stts delta`,

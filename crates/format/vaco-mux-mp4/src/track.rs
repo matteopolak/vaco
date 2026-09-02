@@ -45,10 +45,13 @@ pub struct TrackState {
     pub params: CodecParameters,
     pub samples: Vec<SampleRecord>,
     pub chunks: Vec<ChunkRecord>,
-    /// Duration of the last sample, carried forward when a packet's own
-    /// duration is unknown — `stts`'s final run needs *a* value, and
-    /// repeating the previous delta is what every writer this crate could
-    /// probe does when a demuxer's last packet gives none.
+    /// Duration of the last sample, taken from the last packet that stated
+    /// one. Zero when no packet ever did, in which case [`Self::stts_runs`]
+    /// repeats the previous DTS delta instead — `stts`'s final run needs *a*
+    /// value, and repeating the previous delta is what every writer this
+    /// crate could probe does when a demuxer's last packet gives none
+    /// (measured: `ffmpeg -f lavfi -i testsrc=rate=30:duration=0.666` writes
+    /// `stts = [(20, 512)]`, not `[(19, 512), (1, 0)]`).
     pub last_duration_hint: u32,
     /// Set the first time [`crate::mux::MovMuxer::check_bitstream`] answers
     /// `Insert` for this track, so the second ask in the same chain-building
@@ -152,7 +155,15 @@ impl TrackState {
                 u32::try_from(b.dts.saturating_sub(a.dts).max(0)).unwrap_or(0)
             })
             .collect();
-        deltas.push(self.last_duration_hint);
+        // A trailing zero is not a duration, it is a missing one: it makes
+        // the track's `mdhd` duration one frame short and, read back, leaves
+        // the last sample with nothing to present. Fall back to the previous
+        // delta, which is what the reference muxer writes.
+        let last = match self.last_duration_hint {
+            0 => deltas.last().copied().unwrap_or(0),
+            hint => hint,
+        };
+        deltas.push(last);
         compress_runs(&deltas)
     }
 
@@ -315,6 +326,31 @@ mod tests {
             cts_offset: cts,
             is_sync: sync,
         });
+    }
+
+    /// With no packet duration to carry forward, the final `stts` delta is
+    /// the previous one, never zero. A trailing `(1, 0)` run made `mdhd`
+    /// duration one frame short and cost the last sample of every
+    /// progressive file this crate wrote; `ffmpeg` was measured writing
+    /// `[(20, 512)]` for the same 20-frame input, not `[(19, 512), (1, 0)]`.
+    #[test]
+    fn a_last_sample_with_no_stated_duration_repeats_the_previous_delta() {
+        let mut t = TrackState::new(1, 1000, entry(), params());
+        push(&mut t, 0, 10, 0, 0, true);
+        push(&mut t, 10, 10, 100, 0, false);
+        push(&mut t, 20, 10, 200, 0, false);
+        assert_eq!(t.last_duration_hint, 0);
+        assert_eq!(t.stts_runs(), vec![(3, 100)]);
+        assert_eq!(t.media_duration(), 300);
+    }
+
+    /// A single sample with nothing to repeat has no previous delta to fall
+    /// back to, and must not invent one.
+    #[test]
+    fn a_lone_sample_with_no_stated_duration_stays_zero() {
+        let mut t = TrackState::new(1, 1000, entry(), params());
+        push(&mut t, 0, 10, 0, 0, true);
+        assert_eq!(t.stts_runs(), vec![(1, 0)]);
     }
 
     #[test]

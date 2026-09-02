@@ -828,7 +828,7 @@ impl Mp4Demuxer {
         let mut reader = Reader {
             stream_index: index,
             time_base: stream.time_base,
-            audio: media_type == MediaType::Audio,
+            media_type,
             dts_shift: table.dts_shift(),
             edit_shift,
             trim_point,
@@ -1710,7 +1710,7 @@ impl Mp4Demuxer {
                 self.eof = true;
                 return Err(Error::Eof);
             };
-            let (sample, stream_index, time_base, audio, decrypt) = {
+            let (sample, stream_index, time_base, audio, subtitle, decrypt) = {
                 let Some(reader) = self.readers.get_mut(slot) else {
                     self.eof = true;
                     return Err(Error::Eof);
@@ -1723,29 +1723,34 @@ impl Mp4Demuxer {
                     sample,
                     reader.stream_index,
                     reader.time_base,
-                    reader.audio,
+                    reader.is_audio(),
+                    matches!(reader.media_type, MediaType::Subtitle),
                     reader.decrypt.clone(),
                 )
             };
-            // A zero-duration sample never reaches a caller through real
-            // ffmpeg 9.0.1's own MP4 demuxer — measured directly: a real
-            // `mov_text` file's trailing "clear the subtitle" sample (`stts`
-            // declares its own delta `0`, a standard trailing entry many
-            // `mov_text` writers, including ffmpeg's own, append after the
-            // last real cue) is invisible to `ffprobe -show_packets` on the
-            // reference, though it is *not* a zero-*size* sample — its
-            // `stsz` entry is a real 2 bytes (mov_text's own big-endian
-            // `u16` zero-length-string encoding), so a size-based check
-            // would have missed it entirely. Gated on duration alone,
-            // matching exactly what was measured; a zero-duration sample
-            // elsewhere in a track (not trailing, not subtitle) was not
-            // constructed or tested, so this is not a claim that every such
-            // sample is always dropped by the reference, only that this one
-            // measured shape is. Skipped here, not filtered out when the
-            // sample table is first read, so every other consumer of that
-            // table (seeking, duration accounting) is unaffected — only the
-            // packet stream a caller actually reads from changes.
-            if sample.duration == 0 {
+            // A zero-duration *subtitle* sample never reaches a caller
+            // through real ffmpeg 9.0.1's own MP4 demuxer — measured
+            // directly: a real `mov_text` file's trailing "clear the
+            // subtitle" sample (`stts` declares its own delta `0`, a
+            // standard trailing entry many `mov_text` writers, including
+            // ffmpeg's own, append after the last real cue) is invisible to
+            // `ffprobe -show_packets` on the reference, though it is *not* a
+            // zero-*size* sample — its `stsz` entry is a real 2 bytes
+            // (mov_text's own big-endian `u16` zero-length-string encoding),
+            // so a size-based check would have missed it entirely.
+            //
+            // Gated on the media type as well as the duration, because
+            // duration alone was measured **wrong** on video: a file whose
+            // final `stts` run is `(1, 0)` — the shape this repository's own
+            // MP4 muxer wrote for the last sample of every progressive file
+            // until this commit — has that sample reported by `ffprobe
+            // -count_packets` (20 of 20, with `duration=100` substituted for
+            // the declared 0), while this crate silently dropped the last
+            // frame of every such track. Skipped here, not filtered out when
+            // the sample table is first read, so every other consumer of
+            // that table (seeking, duration accounting) is unaffected — only
+            // the packet stream a caller actually reads from changes.
+            if subtitle && sample.duration == 0 {
                 continue;
             }
             let mut pkt = self.payload(sample.offset, sample.size)?;
@@ -2328,7 +2333,7 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
     let reader = Reader {
         stream_index: index,
         time_base: ATTACHED_PIC_TIME_BASE,
-        audio: false,
+        media_type: vaco_core::MediaType::Video,
         dts_shift: 0,
         edit_shift: 0,
         trim_point: i64::MIN,

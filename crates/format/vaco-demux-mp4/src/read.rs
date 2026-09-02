@@ -25,7 +25,7 @@
 
 use std::collections::VecDeque;
 
-use vaco_core::Rational;
+use vaco_core::{MediaType, Rational};
 use vaco_format_isom::frag::{TrackExtends, TrackFragment};
 use vaco_format_isom::stbl::{Sample, SampleTable};
 
@@ -198,13 +198,17 @@ pub(crate) enum Source {
 #[derive(Debug)]
 #[allow(
     clippy::struct_excessive_bools,
-    reason = "each names an independent axis a real file can combine — audio-ness, exhaustion, \
-              permanent refusal, encryption — not a state machine with excluded combinations"
+    reason = "each names an independent axis a real file can combine — exhaustion, permanent \
+              refusal, encryption — not a state machine with excluded combinations"
 )]
 pub(crate) struct Reader {
     pub stream_index: u32,
     pub time_base: Rational,
-    pub audio: bool,
+    /// The track's media type. Kept whole rather than as an `audio` flag so
+    /// the one policy that is neither "audio" nor "not audio" — the trailing
+    /// zero-duration `mov_text` sample `Mp4Demuxer::next_packet` skips — can
+    /// name the type it was measured on instead of a second, parallel bool.
+    pub media_type: MediaType,
     /// `min(0, min(ctts))`, or `cslg`. Applied to DTS only — a D17 deviation
     /// reproduced from the reference; see `vaco-format-isom`'s doc file.
     pub dts_shift: i64,
@@ -276,6 +280,12 @@ pub(crate) struct Reader {
 }
 
 impl Reader {
+    /// Whether this track's samples are audio, which is what the `elst`
+    /// trims are expressed against.
+    pub(crate) const fn is_audio(&self) -> bool {
+        matches!(self.media_type, MediaType::Audio)
+    }
+
     /// The next sample, without consuming it.
     pub(crate) fn head(&self) -> Option<&Pending> {
         self.queue.front()
@@ -305,7 +315,7 @@ impl Reader {
             .saturating_add(self.edit_shift);
         let end = pts_out.saturating_add(i64::from(duration));
         let discard = end <= self.trim_point && duration > 0;
-        let skip = if self.audio {
+        let skip = if self.is_audio() {
             self.trim_point
                 .saturating_sub(pts_out)
                 .clamp(0, i64::from(duration)) as u32
@@ -323,14 +333,14 @@ impl Reader {
         // media does. So the presented end is the earlier of "what this
         // sample declares" and "where the edit list stops", and the trim is
         // everything the decoder emits past it.
-        let skip_end = if self.audio && self.frame_samples > duration {
+        let skip_end = if self.is_audio() && self.frame_samples > duration {
             let decoded_end = pts_out.saturating_add(i64::from(self.frame_samples));
             let presented_end = end.min(self.trim_end);
             decoded_end.saturating_sub(presented_end).clamp(
                 0,
                 i64::from(self.frame_samples).saturating_sub(i64::from(skip)),
             ) as u32
-        } else if self.audio {
+        } else if self.is_audio() {
             end.saturating_sub(self.trim_end)
                 .clamp(0, i64::from(duration).saturating_sub(i64::from(skip))) as u32
         } else {
@@ -571,7 +581,7 @@ mod tests {
         Reader {
             stream_index: 0,
             time_base: Rational::new(1, 1000),
-            audio: true,
+            media_type: MediaType::Audio,
             dts_shift: 0,
             edit_shift: -1024,
             trim_point: 0,
@@ -618,7 +628,7 @@ mod tests {
     #[test]
     fn a_video_sample_is_never_given_a_sample_trim() {
         let mut r = reader();
-        r.audio = false;
+        r.media_type = MediaType::Video;
         r.push(0, 4, 0, 0, 1024, true, 0);
         let p = r.queue.front().copied().unwrap();
         assert!(p.discard);
