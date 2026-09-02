@@ -86,6 +86,10 @@ vaco -filters
 vaco -formats
 ```
 
+A default build has no H.264 or HEVC decoder, so an example reading a typical `.mp4`
+needs the patent-encumbered feature line above. `vaco -codecs` tells you what the
+build you have can actually open.
+
 ## Compared to FFmpeg
 
 Component counts, against `ffmpeg` 9.0.1 on the same machine. FFmpeg's numbers come
@@ -94,12 +98,12 @@ generated registry tables.
 
 | | vaco | FFmpeg 9.0.1 |
 |---|---:|---:|
-| Demuxers (format names) | 141 | 359 |
-| Muxers (format names) | 111 | 183 |
-| Decoders | 88 | 527 |
+| Demuxers | 175 | 365 |
+| Muxers | 118 | 184 |
+| Decoders | 89 | 527 |
 | Encoders | 65 | 190 |
 | Filters | 327 | 481 |
-| Protocols | 27 | 67 |
+| Protocols | 27 | 41 |
 
 Two caveats on that table. The decoder and encoder counts include the
 patent-encumbered ones, which a default build leaves out. And a large share of the
@@ -169,12 +173,12 @@ documents under `docs/codec/` carry the exact clause-level scope.
 
 | Codec | Decode | Encode | Notes |
 |---|---|---|---|
-| H.264 / AVC | yes | — | Patent-gated |
-| H.265 / HEVC | yes | — | I-, P- and B-slices; no tiles or range extensions. Patent-gated |
+| H.264 / AVC | yes | via x264 | Decode is patent-gated. Encode spawns your own `x264` binary |
+| H.265 / HEVC | yes | via x265 | I-, P- and B-slices; no tiles or range extensions. Decode is patent-gated. Encode spawns your own `x265` binary |
 | MPEG-1 / MPEG-2 | yes | — | |
 | VP8 | yes | — | RFC 6386 |
-| VP9 | intra only | — | Key frames only |
-| AV1 | intra only | — | |
+| VP9 | yes | — | Inter prediction, compound reference, profiles 1-3 |
+| AV1 | not registered | — | Implemented but not wired into the registry, so no build reaches it |
 | Theora | intra only | — | Keyframes only |
 | VC-1 / WMV3 | intra only | — | Simple/Main, progressive I-frames. Patent-gated |
 | H.261 / H.263 | yes | — | Baseline |
@@ -194,8 +198,8 @@ documents under `docs/codec/` carry the exact clause-level scope.
 | ALAC | yes | yes | |
 | Opus | not registered | — | Implemented but has unresolved correctness gaps, so it is deliberately not wired up |
 | PCM | yes | yes | The whole `pcm_*` family |
-| ADPCM | yes | — | G.722, G.726, MS, SWF, IMA-WAV, IMA-QT |
-| QOA, DFPWM, comfort noise | yes | partial | |
+| ADPCM | yes | — | IMA-WAV, IMA-QT, MS, SWF. No G.722 or G.726 |
+| QOA, comfort noise | yes | yes | DFPWM is implemented but deliberately not registered |
 
 ### Images
 
