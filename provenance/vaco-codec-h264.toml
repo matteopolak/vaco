@@ -51,3 +51,24 @@ method = "transcribed"
 # RUN_BEFORE are all below this project's 32-element provenance threshold
 # individually, so they carry no row of their own here — same convention
 # vaco-codec-jpeg.toml documents for HUFFVAL's twelve-entry arrays.
+
+[[table]]
+name   = "ZIGZAG_8X8"
+file   = "crates/codec/vaco-codec-h264/src/scan.rs"
+source = "jm-reference-software"
+clause = "JM 19.1 macroblock.h::SNGL_SCAN8x8, coordinate-swapped (column, row) -> (row, column); this crate's primary text (iso-iec-14496-10-2002-draft) predates the 8x8 transform"
+method = "derived"
+
+[[table]]
+name   = "POS2CTX_MAP8X8"
+file   = "crates/codec/vaco-codec-h264/src/cabac_residual.rs"
+source = "jm-reference-software"
+clause = "JM 19.1 cabac.c::pos2ctx_map8x8 -- ctxBlockCat 5's significant_coeff_flag ctxIdxInc remap (Table 9-43's own 8x8 row), frame-coded only"
+method = "transcribed"
+
+[[table]]
+name   = "POS2CTX_LAST8X8"
+file   = "crates/codec/vaco-codec-h264/src/cabac_residual.rs"
+source = "jm-reference-software"
+clause = "JM 19.1 cabac.c::pos2ctx_last8x8 -- ctxBlockCat 5's last_significant_coeff_flag ctxIdxInc remap, frame-coded only"
+method = "transcribed"
