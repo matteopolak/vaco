@@ -367,7 +367,33 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
     // including, potentially, past measurements: checked against
     // `planning/PERF-BASELINE.md` and `scripts/`, neither uses any of these,
     // so no recorded ratio is affected.
-    const GLOBAL: &[&str] = &["frame_drop_threshold", "n"];
+    // CLI-option audit, second batch: everything below changes output bytes
+    // or silently drops a requested behaviour if ignored (coordinator's own
+    // triage, priority 1) -- as opposed to the third batch (below), which
+    // only loses diagnostics.
+    const GLOBAL: &[&str] = &[
+        "frame_drop_threshold",
+        "n",
+        "copyts",
+        "start_at_zero",
+        "copytb",
+        // Third batch: diagnostics-only (triage group 2) -- ignoring these
+        // never changes an output byte, only whether a requested report
+        // ever appears. Still a lie to accept silently, just a cheaper one.
+        "benchmark",
+        "benchmark_all",
+        "dump",
+        "hex",
+        "debug_ts",
+        "vstats",
+        "vstats_file",
+        "vstats_version",
+        "stats_period",
+        // Fourth batch: structural absence (triage group 4) -- no hardware
+        // acceleration path exists at all yet, same reason `-hwaccel`
+        // itself is already refused above.
+        "init_hw_device",
+    ];
     const PER_FILE: &[&str] = &[
         "hwaccel",
         "ss",
@@ -378,6 +404,48 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
         "itsscale",
         "seek_timestamp",
         "accurate_seek",
+        "stream_loop",
+        "r",
+        "re",
+        "fpsmax",
+        "force_fps",
+        "apply_cropping",
+        "autoscale",
+        "display_rotation",
+        "display_hflip",
+        "display_vflip",
+        "muxdelay",
+        "muxpreload",
+        "time_base",
+        "timecode",
+        "tag",
+        "discard",
+        "copyinkf",
+        "copypriorss",
+        "intra_matrix",
+        "inter_matrix",
+        "chroma_intra_matrix",
+        "profile",
+        "target",
+        "channel_layout",
+        "ch_layout",
+        "fix_sub_duration",
+        "canvas_size",
+        "fs",
+        "pass",
+        "passlogfile",
+        "rc_override",
+        // Third batch (group 2, diagnostics-only).
+        "stats_enc_pre",
+        "stats_enc_post",
+        "stats_mux_pre",
+        "stats_enc_pre_fmt",
+        "stats_enc_post_fmt",
+        "stats_mux_pre_fmt",
+        // Fourth batch (group 4, structural -- no hardware acceleration
+        // path exists, same reason as the `-hwaccel` refusal above).
+        "hwaccel_device",
+        "hwaccel_output_format",
     ];
 
     for &name in GLOBAL {
