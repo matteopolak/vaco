@@ -87,6 +87,13 @@ A default build has no H.264 or HEVC decoder, so an example reading a typical `.
 needs the patent-encumbered feature line above. `vaco -codecs` tells you what the
 build you have can actually open.
 
+One caveat on that second example, which re-encodes: **H.264 encode output is
+currently malformed.** The `libx264` path emits Annex-B start codes and nothing
+converts them to the length-prefixed form MP4 and Matroska require, while the `avcC`
+still advertises `nal_length_size=4`. ffmpeg recovers the frames but reports an error
+on every access unit. Remuxing with `-c copy` is unaffected and produces clean files,
+as does HEVC encode. Prefer `-c copy`, or `-c:v libx265`, until that row changes.
+
 ## Compared to FFmpeg
 
 Component counts, against `ffmpeg` 9.0.1 on the same machine. Both columns are counted
@@ -199,7 +206,7 @@ documents under `docs/codec/` carry the exact clause-level scope.
 
 | Codec | Decode | Encode | Notes |
 |---|---|---|---|
-| H.264 / AVC | yes | via x264 | Decode is patent-gated. Encode spawns your own `x264` binary |
+| H.264 / AVC | yes | **malformed output** | Decode is patent-gated. Encode spawns your own `x264` binary, but writes Annex-B into MP4/Matroska where a length prefix is required |
 | H.265 / HEVC | yes | via x265 | I-, P- and B-slices; no tiles or range extensions. Decode is patent-gated. Encode spawns your own `x265` binary |
 | MPEG-1 / MPEG-2 | yes | — | |
 | VP8 | yes | — | RFC 6386 |
