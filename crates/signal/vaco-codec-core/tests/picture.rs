@@ -577,3 +577,40 @@ fn a_later_row_starts_before_an_earlier_row_finishes_its_whole_width() {
     );
 }
 
+// --- `band_ref`/`tile_ref`: reading a still-staged band without `&mut` ---
+
+#[test]
+fn band_ref_reads_back_a_still_staged_row_band() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, _r) = ProgressPicture::allocate(&spec(32, 48, 16, 4), 0, &mut budget).unwrap();
+    // The staged buffer exists (zero-filled) from allocation on -- `band_ref`
+    // is a plain read of whatever is there, not a "has anyone written here"
+    // signal (that is what `PictureRef::ready_rows`/`try_rows` are for, and
+    // they only ever answer for *published* bands).
+    assert_eq!(w.band_ref(0, 0).unwrap().data[0], 0, "unwritten, but present and zero");
+    fill(&mut w, 0);
+    let seen = w.band_ref(0, 0).expect("band 0 is staged, not yet published");
+    assert_eq!(seen.data[0], 0, "row 0's own fill value");
+    assert_eq!(seen.data[seen.stride], 1, "row 1's own fill value");
+    // Reading it back does not consume or otherwise disturb it: the normal
+    // exclusive path still works afterward.
+    w.publish_through(0, 0).unwrap();
+    assert!(
+        w.band_ref(0, 0).is_none(),
+        "band_ref only ever sees the staged copy, not the published one"
+    );
+}
+
+#[test]
+fn tile_ref_reads_back_a_still_staged_tile() {
+    let mut budget = Budget::new(Limits::permissive());
+    let (mut w, _r) = ProgressPicture::allocate(&tiled_spec(48, 16, 16, 16), 0, &mut budget).unwrap();
+    assert_eq!(w.tile_ref(0, 0, 1).unwrap().data[0], 0, "unwritten, but present and zero");
+    let v = fill_tile(&mut w, 0, 1);
+    let seen = w.tile_ref(0, 0, 1).expect("tile (0, 1) is staged, not yet published");
+    assert_eq!(seen.data[0], v);
+    w.publish_tile(0, 0, 0).unwrap();
+    w.publish_tile(0, 0, 1).unwrap();
+    assert!(w.tile_ref(0, 0, 1).is_none(), "published now, not staged");
+}
+

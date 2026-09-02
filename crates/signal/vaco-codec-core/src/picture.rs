@@ -756,6 +756,44 @@ impl PictureWriter {
         })
     }
 
+    /// Read-only access to band `k` of `plane` while it is still staged (not
+    /// yet published) — [`PictureWriter::tile_ref`]'s row-only special case.
+    ///
+    /// `None` if the plane or band does not exist, or if the band has
+    /// already been published (at which point [`PictureRef::try_rows`]/
+    /// [`PictureRef::try_tile`] are the way to read it, not this).
+    #[must_use]
+    pub fn band_ref(&self, plane: usize, k: usize) -> Option<BlockRef<'_>> {
+        self.tile_ref(plane, k, 0)
+    }
+
+    /// Read-only access to the tile at `(row_band, col_band)` of `plane`
+    /// while it is still staged (not yet published) — the immutable
+    /// counterpart of [`PictureWriter::tile_mut`], for a caller that needs
+    /// to read back what it has already written to a tile it has not
+    /// finished yet (same-CTU intra reference samples, say) without forcing
+    /// every read-only call site to also require `&mut`. One
+    /// implementation underneath `tile_mut`/`tile_ref` either (D19/D23):
+    /// both index the same `staging` slot, one exclusively, one shared.
+    ///
+    /// `None` if the plane or tile does not exist, or if it has already
+    /// been published.
+    #[must_use]
+    pub fn tile_ref(&self, plane: usize, row_band: usize, col_band: usize) -> Option<BlockRef<'_>> {
+        let geom = self.picture.plane(plane).ok()?;
+        let flat = geom.flat(row_band, col_band)?;
+        let guard = geom.guard;
+        let own_stride = geom.stride_for(row_band, col_band);
+        let pw = self.planes.get(plane)?;
+        let band = pw.staging.get(flat)?.as_ref()?;
+        let skip = (guard as usize).checked_mul(own_stride)?;
+        let data = band.rows.get(skip..)?;
+        Some(BlockRef {
+            data,
+            stride: own_stride,
+        })
+    }
+
     /// Publish every band of `plane` through row band `k`, then advertise the
     /// rows they contain and wake anyone waiting for them.
     ///
