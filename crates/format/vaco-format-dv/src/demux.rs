@@ -382,6 +382,14 @@ impl Demuxer for DvDemuxer {
             self.frame_duration().0.saturating_mul(n.cast_signed()),
         ))
     }
+
+    fn duration_exact(&self) -> Option<vaco_core::ExactDuration> {
+        let ticks = self.total_frames?.checked_mul(self.ticks_per_frame())?;
+        vaco_core::ExactDuration::from_ticks(
+            i64::try_from(ticks).ok()?,
+            Rational::new(1, DV_TIME_BASE_DEN),
+        )
+    }
 }
 
 #[cfg(test)]
@@ -393,6 +401,7 @@ impl Demuxer for DvDemuxer {
 )]
 mod codec_identity_tests {
     use vaco_codec_core::CodecId;
+    use vaco_format_core::Demuxer;
     use vaco_pixfmt::PixFmt;
     use vaco_sampfmt::SampleFmt;
 
@@ -441,5 +450,24 @@ mod codec_identity_tests {
                 Some(SampleFmt::S16)
             );
         }
+    }
+
+    #[test]
+    fn aggregate_duration_keeps_ntsc_frame_clock_exact() {
+        let mut demux = DvDemuxer::open(Box::new(vaco_io::MemorySource::new(frame(false))))
+            .expect("open NTSC frame");
+
+        assert_eq!(demux.streams()[0].frame_count, Some(1));
+        assert_eq!(
+            demux
+                .duration_exact()
+                .map(vaco_core::ExactDuration::as_ratio),
+            Some((1_001, 30_000))
+        );
+        assert_eq!(
+            demux.read_packet().expect("one video packet").pts.ticks(),
+            Some(0)
+        );
+        assert!(matches!(demux.read_packet(), Err(vaco_core::Error::Eof)));
     }
 }
