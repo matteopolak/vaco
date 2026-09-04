@@ -96,13 +96,17 @@ jobs:
       SCCACHE_GHA_ENABLED: "false"
     steps:
       - uses: actions/checkout@v4
+      # D9: cargo-deny alone is NOT sufficient for LICENCES — crates.io metadata
+      # lies (the x264 and x265 crates declare MIT while linking GPL), so
+      # `dep-gate` in the policy job is the structural defence there.
+      #
+      # `advisories` is checked here rather than by `rustsec/audit-check`, which
+      # reads its ignore list from `.cargo/audit.toml` and so could not see
+      # deny.toml's. Keeping both meant two ignore lists that had to agree, and
+      # they did not: audit-check ran with an empty list and failed this job on
+      # `paste` from the day it was added. One tool, one list.
       - uses: EmbarkStudios/cargo-deny-action@v2
-        with: { command: check licenses bans sources }
-      # D9: cargo-deny alone is NOT sufficient — crates.io metadata lies (the
-      # x264 and x265 crates declare MIT while linking GPL). The dep-gate job
-      # above is the structural defence; this catches the rest.
-      - uses: rustsec/audit-check@v2
-        with: { token: "${{ secrets.GITHUB_TOKEN }}" }
+        with: { command: check licenses bans sources advisories }
 
   build:
     name: build and test
