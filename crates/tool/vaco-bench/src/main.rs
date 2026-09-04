@@ -7,7 +7,7 @@ use std::process::ExitCode;
 
 use vaco_bench::{
     BenchError, ChildBatchMode, FilterBenchConfig, MeasurementBackend, apply_baseline,
-    filter_cases, regressions, run_filter_child_batch, run_filter_suite, write_jsonl,
+    filter_cases, regressions, run_filter_child_batch, run_filter_suite, write_jsonl, write_report,
 };
 
 fn main() -> ExitCode {
@@ -32,6 +32,7 @@ fn run(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
         }
         Some(command) if command == "__filter-batch" => run_filter_child(args),
         Some(command) if command == "filter" => run_filter(args),
+        Some(command) if command == "report" => run_report(args),
         Some(command) if command == "--help" || command == "-h" => {
             reject_extra(args)?;
             print_usage();
@@ -44,6 +45,74 @@ fn run(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
         ))),
         None => Err(CliError::Usage(usage().to_owned())),
     }
+}
+
+#[derive(Debug)]
+struct ReportArgs {
+    input: PathBuf,
+    output: PathBuf,
+    generated_unix_ms: Option<i64>,
+    fail_under: f64,
+}
+
+fn run_report(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
+    let parsed = parse_report_args(args)?;
+    let generated_unix_ms = match parsed.generated_unix_ms {
+        Some(timestamp) => timestamp,
+        None => std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|error| BenchError::Clock(error.to_string()))?
+            .as_millis()
+            .try_into()
+            .map_err(|_| BenchError::Clock("timestamp exceeds i64".to_owned()))?,
+    };
+    write_report(
+        &parsed.input,
+        &parsed.output,
+        generated_unix_ms,
+        parsed.fail_under,
+    )?;
+    println!("wrote benchmark report {}", parsed.output.display());
+    Ok(ExitCode::SUCCESS)
+}
+
+fn parse_report_args(args: impl Iterator<Item = OsString>) -> Result<ReportArgs, CliError> {
+    let mut input = None;
+    let mut output = None;
+    let mut generated_unix_ms = None;
+    let mut fail_under = 0.95;
+    let mut args = args;
+    while let Some(flag) = args.next() {
+        match flag.to_str() {
+            Some("--input") => input = Some(path_value(&mut args, "--input")?),
+            Some("--output") => output = Some(path_value(&mut args, "--output")?),
+            Some("--generated-unix-ms") => {
+                generated_unix_ms = Some(i64_value(&mut args, "--generated-unix-ms")?);
+            }
+            Some("--fail-under") => {
+                fail_under = f64_value(&mut args, "--fail-under")?;
+                if !fail_under.is_finite() || fail_under <= 0.0 {
+                    return Err(CliError::Usage(
+                        "--fail-under must be a finite positive ratio".to_owned(),
+                    ));
+                }
+            }
+            Some("--help" | "-h") => return Err(CliError::Usage(report_usage().to_owned())),
+            _ => {
+                return Err(CliError::Usage(format!(
+                    "unknown report option {}\n\n{}",
+                    PathBuf::from(flag).display(),
+                    report_usage()
+                )));
+            }
+        }
+    }
+    Ok(ReportArgs {
+        input: input.ok_or_else(|| CliError::Usage("--input is required".to_owned()))?,
+        output: output.ok_or_else(|| CliError::Usage("--output is required".to_owned()))?,
+        generated_unix_ms,
+        fail_under,
+    })
 }
 
 fn run_filter_child(mut args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
@@ -231,6 +300,17 @@ fn u64_value(
         .ok_or_else(|| CliError::Usage(format!("{flag} requires a non-negative integer")))
 }
 
+fn i64_value(
+    args: &mut impl Iterator<Item = OsString>,
+    flag: &'static str,
+) -> Result<i64, CliError> {
+    let value = next_value(args, flag)?;
+    value
+        .to_str()
+        .and_then(|text| text.parse().ok())
+        .ok_or_else(|| CliError::Usage(format!("{flag} requires an integer")))
+}
+
 fn f64_value(
     args: &mut impl Iterator<Item = OsString>,
     flag: &'static str,
@@ -267,11 +347,15 @@ fn print_usage() {
 }
 
 fn usage() -> &'static str {
-    "usage: vaco-bench list\n       vaco-bench filter [options]"
+    "usage: vaco-bench list\n       vaco-bench filter [options]\n       vaco-bench report [options]"
 }
 
 fn filter_usage() -> &'static str {
     "usage: vaco-bench filter [--backend instant|auto|perf-stat] [--warmup N] [--samples N] [--target-sample-ns N] [--max-iterations N] [--json PATH] [--baseline PATH] [--fail-under R]"
+}
+
+fn report_usage() -> &'static str {
+    "usage: vaco-bench report --input JSONL --output HTML [--generated-unix-ms N] [--fail-under R]"
 }
 
 #[derive(Debug)]

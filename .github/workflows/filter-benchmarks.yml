@@ -8,6 +8,7 @@ on:
       - "crates/tool/vaco-bench/**"
       - ".github/workflows/filter-benchmarks.yml"
       - "Justfile"
+      - "docs/tool/vaco-bench*.md"
   workflow_dispatch:
   schedule:
     - cron: "37 5 * * *"
@@ -104,7 +105,20 @@ jobs:
           destination="$store/results/filter/$VACO_BENCH_MACHINE/$month"
           mkdir -p "$destination"
           cp filter-bench.jsonl "$destination/${GITHUB_SHA}.jsonl"
-          git -C "$store" add "results/filter/$VACO_BENCH_MACHINE/$month/${GITHUB_SHA}.jsonl"
+          history="$scratch/history.jsonl"
+          git -C "$store" ls-files "results/filter/$VACO_BENCH_MACHINE" \
+            | sort \
+            | while read -r path; do cat "$store/$path"; done \
+            > "$history"
+          cat filter-bench.jsonl >> "$history"
+          report="reports/filter/$VACO_BENCH_MACHINE/index.html"
+          mkdir -p "$(dirname "$store/$report")"
+          CARGO_INCREMENTAL=0 cargo run --release -p vaco-bench --locked -- \
+            report --input "$history" --output "$store/$report" \
+            --generated-unix-ms "$(date -u +%s%3N)" --fail-under 0.95
+          git -C "$store" add \
+            "results/filter/$VACO_BENCH_MACHINE/$month/${GITHUB_SHA}.jsonl" \
+            "$report"
           if git -C "$store" diff --cached --quiet; then
             exit 0
           fi

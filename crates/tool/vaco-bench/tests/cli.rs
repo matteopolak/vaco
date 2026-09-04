@@ -189,3 +189,47 @@ fn missing_baseline_is_a_successful_incomparable_first_run() {
     let stdout = String::from_utf8(output.stdout).expect("UTF-8 output");
     assert!(stdout.contains("matched=0"));
 }
+
+#[test]
+fn report_uses_the_same_trailing_history_for_a_latest_row() {
+    let input = temp_path("report-history");
+    let output = input.with_extension("html");
+    std::fs::write(
+        &input,
+        concat!(
+            "{\"schema\":1,\"suite\":\"filter\",\"benchmark\":\"scale\",\"scope\":\"instantiate\",\"outcome\":\"created\",\"backend\":\"instant\",\"unit\":\"ns\",\"samples\":11,\"iterations\":1,\"raw_median\":100,\"raw_mad\":1,\"raw_min\":99,\"raw_p95\":101,\"control_median\":null,\"control_mad\":null,\"control_min\":null,\"control_p95\":null,\"median\":100,\"mad\":1,\"min\":99,\"p95\":101,\"baseline_ratio\":null,\"machine\":\"runner-a\",\"os\":\"linux\",\"arch\":\"x86_64\",\"cpu\":\"test cpu\",\"rustc\":\"rustc test\",\"profile\":\"release\",\"git_sha\":\"first\",\"measured_unix_ms\":1,\"load_average_1m\":null}\n",
+            "{\"schema\":1,\"suite\":\"filter\",\"benchmark\":\"scale\",\"scope\":\"instantiate\",\"outcome\":\"created\",\"backend\":\"instant\",\"unit\":\"ns\",\"samples\":11,\"iterations\":1,\"raw_median\":200,\"raw_mad\":2,\"raw_min\":198,\"raw_p95\":202,\"control_median\":null,\"control_mad\":null,\"control_min\":null,\"control_p95\":null,\"median\":200,\"mad\":2,\"min\":198,\"p95\":202,\"baseline_ratio\":null,\"machine\":\"runner-a\",\"os\":\"linux\",\"arch\":\"x86_64\",\"cpu\":\"test cpu\",\"rustc\":\"rustc test\",\"profile\":\"release\",\"git_sha\":\"second\",\"measured_unix_ms\":2,\"load_average_1m\":null}\n"
+        ),
+    )
+    .expect("write report fixture");
+
+    let command_output = command()
+        .args([
+            "report",
+            "--input",
+            input.to_str().expect("UTF-8 input path"),
+            "--output",
+            output.to_str().expect("UTF-8 output path"),
+            "--generated-unix-ms",
+            "1700000000123",
+            "--fail-under",
+            "0.95",
+        ])
+        .output()
+        .expect("run report command");
+
+    assert!(
+        command_output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&command_output.stderr)
+    );
+    let html = std::fs::read_to_string(&output).expect("read report output");
+    assert!(html.contains("2023-11-14T22:13:20.123Z"));
+    assert!(html.contains("<td>scale</td>"));
+    assert!(html.contains("100.000 ns"));
+    assert!(html.contains("0.5000"));
+    assert!(html.contains("<td class=\"regression\">regression</td>"));
+
+    std::fs::remove_file(input).expect("remove report fixture");
+    std::fs::remove_file(output).expect("remove report output");
+}

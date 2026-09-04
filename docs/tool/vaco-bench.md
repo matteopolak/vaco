@@ -77,6 +77,15 @@ When history contains more than one matching row, the baseline is the median of
 the seven most recent measurements by its recorded Unix timestamp. A noisy
 single run therefore cannot silently replace the comparison point.
 
+`vaco-bench report` turns combined JSONL history into a self-contained static
+HTML table. It retains only the newest row for each complete identity and asks
+the same trailing-seven matcher for that row's baseline; it does not implement
+its own comparison rule. The table carries the current summary, baseline,
+ratio, status, source commit, and full fingerprint. An explicit
+`--generated-unix-ms` makes output reproducible for branch commits. See the
+[results-store report](vaco-bench-results.md) for the branch layout and
+extension rules.
+
 ```sh
 cargo bench -p vaco-bench --bench filters
 
@@ -86,6 +95,10 @@ VACO_TARGET_DIR=/private/tmp/vaco-bench-target VACO_JOBS=2 \
 VACO_TARGET_DIR=/private/tmp/vaco-bench-target VACO_JOBS=2 \
   just bench-filter-compare /private/tmp/filter-bench.jsonl \
   --json /private/tmp/filter-bench-next.jsonl
+
+VACO_TARGET_DIR=/private/tmp/vaco-bench-target VACO_JOBS=2 \
+  just bench-report /private/tmp/filter-history.jsonl /private/tmp/filter-report.html \
+  --generated-unix-ms 1700000000123
 
 # Linux with a permitted PMU and perf installed; substantially slower.
 VACO_TARGET_DIR=/private/tmp/vaco-bench-target VACO_JOBS=2 \
@@ -107,9 +120,11 @@ from `-filters`.
 - A daily or manually dispatched job assembles prior JSONL from the orphan
   `bench-results` branch, runs 11 samples, compares matching identities at D8's
   recorded 5% threshold, uploads the result for 90 days, and commits the new
-  file under `results/filter/<machine>/<yyyy-mm>/<git-sha>.jsonl`. A run that
+  file under `results/filter/<machine>/<yyyy-mm>/<git-sha>.jsonl` together with
+  `reports/filter/<machine>/index.html`. The report is generated from the
+  branch history plus that new file and is staged in the same commit. A run that
   crosses the threshold remains available as an artifact but is not promoted
-  into the rolling baseline.
+  into the rolling baseline or report.
 
 Both jobs are advisory because GitHub-hosted runners are shared and timing noise
 can exceed small code changes. The comparison still identifies algorithmic
@@ -127,6 +142,10 @@ If the measurement scope changes, give it a new `scope` string rather than
 silently comparing old and new numbers. If fingerprint fields change, bump the
 JSONL schema and retain the old parser until stored history has aged out.
 
+Do not write report-specific matching code. Extend the shared stored-row parser
+and trailing-baseline helper, then adapt the resulting classified rows to HTML.
+The report deliberately has no charting package, JavaScript, or remote assets.
+
 ## Configuration
 
 `filter` accepts `--backend instant|auto|perf-stat`, `--warmup`, `--samples`,
@@ -137,6 +156,10 @@ batches raise the calibration target to at least 20 ms. `VACO_BENCH_MACHINE`
 overrides the machine label used by CI; the CPU and toolchain still have to
 match independently. `VACO_BENCH_PERF` overrides the `perf` executable on
 Linux, for example when the matching kernel-tools binary is not on `PATH`.
+
+`report` accepts `--input`, `--output`, optional `--generated-unix-ms`, and
+`--fail-under` (default `0.95`). Its input is combined schema-1 filter JSONL;
+it fails closed on malformed or foreign rows instead of silently dropping them.
 
 ## Dependencies
 

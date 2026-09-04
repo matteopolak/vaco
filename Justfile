@@ -204,6 +204,12 @@ bench-filter-compare baseline *ARGS:
     CARGO_INCREMENTAL=0 cargo run --release -p vaco-bench --locked {{TD}} -- filter \
       --baseline "{{baseline}}" --fail-under 0.95 {{ARGS}}
 
+# Render the latest comparable result for every JSONL identity as an offline
+# report. Pass --generated-unix-ms when reproducible output is required.
+bench-report input output *ARGS:
+    CARGO_INCREMENTAL=0 cargo run --release -p vaco-bench --locked {{TD}} -- report \
+      --input "{{input}}" --output "{{output}}" {{ARGS}}
+
 # Verify every SIMD kernel against its scalar reference (plan 12 §5).
 checkasm:
     cargo run --release -p vaco-checkasm {{TD}}

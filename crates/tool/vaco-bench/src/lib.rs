@@ -2,6 +2,7 @@
 //! Registry-complete benchmark measurement and comparison.
 
 mod perf_stat;
+mod report;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -246,7 +247,7 @@ fn validate_child_batch(iterations: usize, expected: &str) -> Result<(), BenchEr
     Ok(())
 }
 
-/// Distribution summary in nanoseconds per construction.
+/// Distribution summary in the row's declared physical unit per construction.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Statistics {
     /// Median sample.
@@ -648,6 +649,33 @@ pub fn write_jsonl(path: &Path, results: &[BenchResult]) -> Result<(), BenchErro
     writer.flush().map_err(BenchError::Io)
 }
 
+/// Render the newest row for every comparable benchmark identity as static HTML.
+///
+/// # Errors
+///
+/// Returns [`BenchError::Io`] for inaccessible files and
+/// [`BenchError::InvalidBaseline`] when the input contains a foreign or malformed
+/// JSONL row.
+pub fn write_report(
+    input: &Path,
+    output: &Path,
+    generated_unix_ms: i64,
+    fail_under: f64,
+) -> Result<(), BenchError> {
+    if !fail_under.is_finite() || fail_under <= 0.0 {
+        return Err(BenchError::InvalidConfig(
+            "report regression threshold must be a finite positive ratio",
+        ));
+    }
+    let rows = load_stored_rows(input)?;
+    let entries = report_entries(rows, fail_under);
+    let html = report::render_html(generated_unix_ms, &entries);
+    let file = File::create(output).map_err(BenchError::Io)?;
+    let mut writer = BufWriter::new(file);
+    writer.write_all(html.as_bytes()).map_err(BenchError::Io)?;
+    writer.flush().map_err(BenchError::Io)
+}
+
 fn json_line(row: &BenchResult) -> String {
     let control_median = row.control_stats.map(|stats| stats.median);
     let control_mad = row.control_stats.map(|stats| stats.mad);
@@ -757,6 +785,16 @@ struct Baseline {
     measurements: BTreeMap<Identity, Vec<(i64, f64)>>,
 }
 
+#[derive(Debug, Clone)]
+struct StoredRow {
+    identity: Identity,
+    samples: usize,
+    iterations: usize,
+    stats: Statistics,
+    git_sha: String,
+    measured_unix_ms: i64,
+}
+
 /// Attach trailing-median ratios from like-for-like JSONL history.
 ///
 /// A missing path is a first run and attaches zero rows rather than failing.
@@ -775,15 +813,7 @@ pub fn apply_baseline(results: &mut [BenchResult], path: &Path) -> Result<usize,
         let Some(history) = baseline.measurements.get_mut(&key) else {
             continue;
         };
-        history.sort_by_key(|(timestamp, _)| *timestamp);
-        let mut trailing: Vec<_> = history
-            .iter()
-            .rev()
-            .take(TRAILING_BASELINES)
-            .map(|(_, median)| *median)
-            .collect();
-        trailing.sort_by(f64::total_cmp);
-        let Some(previous) = sample_median(&trailing) else {
+        let Some(previous) = trailing_baseline(history) else {
             continue;
         };
         if row.stats.median > 0.0 {
@@ -806,13 +836,31 @@ fn load_baseline(path: &Path) -> Result<Option<Baseline>, BenchError> {
         if line.trim().is_empty() {
             continue;
         }
-        let row = baseline_row(&line).ok_or_else(|| BenchError::InvalidBaseline(line.clone()))?;
-        baseline.measurements.entry(row.0).or_default().push(row.1);
+        let row = stored_row(&line).ok_or_else(|| BenchError::InvalidBaseline(line.clone()))?;
+        baseline
+            .measurements
+            .entry(row.identity)
+            .or_default()
+            .push((row.measured_unix_ms, row.stats.median));
     }
     Ok(Some(baseline))
 }
 
-fn baseline_row(line: &str) -> Option<(Identity, (i64, f64))> {
+fn load_stored_rows(path: &Path) -> Result<Vec<StoredRow>, BenchError> {
+    let file = File::open(path).map_err(BenchError::Io)?;
+    let mut rows = Vec::new();
+    for line in BufReader::new(file).lines() {
+        let line = line.map_err(BenchError::Io)?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        let row = stored_row(&line).ok_or_else(|| BenchError::InvalidBaseline(line.clone()))?;
+        rows.push(row);
+    }
+    Ok(rows)
+}
+
+fn stored_row(line: &str) -> Option<StoredRow> {
     if integer_field(line, "schema")? != 1 || string_field(line, "suite")? != "filter" {
         return None;
     }
@@ -829,9 +877,109 @@ fn baseline_row(line: &str) -> Option<(Identity, (i64, f64))> {
         rustc: string_field(line, "rustc")?,
         profile: string_field(line, "profile")?,
     };
-    let timestamp = integer_field(line, "measured_unix_ms")?;
-    let median = number_field(line, "median")?;
-    Some((identity, (timestamp, median)))
+    let stats = Statistics {
+        median: number_field(line, "median")?,
+        mad: number_field(line, "mad")?,
+        min: number_field(line, "min")?,
+        p95: number_field(line, "p95")?,
+    };
+    if ![stats.median, stats.mad, stats.min, stats.p95]
+        .into_iter()
+        .all(f64::is_finite)
+    {
+        return None;
+    }
+    Some(StoredRow {
+        identity,
+        samples: usize::try_from(integer_field(line, "samples")?).ok()?,
+        iterations: usize::try_from(integer_field(line, "iterations")?).ok()?,
+        stats,
+        git_sha: string_field(line, "git_sha")?,
+        measured_unix_ms: integer_field(line, "measured_unix_ms")?,
+    })
+}
+
+fn trailing_baseline(history: &mut [(i64, f64)]) -> Option<f64> {
+    history.sort_by_key(|(timestamp, _)| *timestamp);
+    let mut trailing: Vec<_> = history
+        .iter()
+        .rev()
+        .take(TRAILING_BASELINES)
+        .map(|(_, median)| *median)
+        .collect();
+    trailing.sort_by(f64::total_cmp);
+    sample_median(&trailing)
+}
+
+fn report_entries(rows: Vec<StoredRow>, fail_under: f64) -> Vec<report::ReportEntry> {
+    let mut histories: BTreeMap<Identity, Vec<StoredRow>> = BTreeMap::new();
+    for row in rows {
+        histories.entry(row.identity.clone()).or_default().push(row);
+    }
+
+    let mut entries = Vec::new();
+    for (_, mut history) in histories {
+        history.sort_by(|left, right| {
+            (
+                left.measured_unix_ms,
+                &left.git_sha,
+                left.stats.median.to_bits(),
+                left.stats.mad.to_bits(),
+                left.stats.min.to_bits(),
+                left.stats.p95.to_bits(),
+            )
+                .cmp(&(
+                    right.measured_unix_ms,
+                    &right.git_sha,
+                    right.stats.median.to_bits(),
+                    right.stats.mad.to_bits(),
+                    right.stats.min.to_bits(),
+                    right.stats.p95.to_bits(),
+                ))
+        });
+        let Some(current) = history.pop() else {
+            continue;
+        };
+        let mut previous = history
+            .iter()
+            .map(|row| (row.measured_unix_ms, row.stats.median))
+            .collect::<Vec<_>>();
+        let baseline_median = trailing_baseline(&mut previous);
+        let baseline_ratio = baseline_median.and_then(|baseline| {
+            (current.stats.median > 0.0).then_some(baseline / current.stats.median)
+        });
+        let status = match baseline_ratio {
+            Some(ratio) if ratio < fail_under => report::ReportStatus::Regression,
+            Some(_) => report::ReportStatus::Comparable,
+            None => report::ReportStatus::Incomparable,
+        };
+        let identity = current.identity;
+        entries.push(report::ReportEntry {
+            benchmark: identity.benchmark,
+            scope: identity.scope,
+            outcome: identity.outcome,
+            backend: identity.backend,
+            unit: identity.unit,
+            machine: identity.machine,
+            os: identity.os,
+            arch: identity.arch,
+            cpu: identity.cpu,
+            rustc: identity.rustc,
+            profile: identity.profile,
+            git_sha: current.git_sha,
+            measured_unix_ms: current.measured_unix_ms,
+            samples: current.samples,
+            iterations: current.iterations,
+            median: current.stats.median,
+            mad: current.stats.mad,
+            min: current.stats.min,
+            p95: current.stats.p95,
+            baseline_median,
+            baseline_ratio,
+            status,
+        });
+    }
+    entries
 }
 
 fn string_field(line: &str, name: &str) -> Option<String> {
