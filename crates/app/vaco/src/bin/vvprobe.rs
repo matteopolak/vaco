@@ -13,8 +13,8 @@ const INSTALLED_BANNER: &str = concat!(
 );
 const LEGACY_VERSION: &str = concat!("vaco-probe version ", env!("CARGO_PKG_VERSION"));
 const INSTALLED_VERSION: &str = concat!("vvprobe version ", env!("CARGO_PKG_VERSION"));
-const LEGACY_LICENSE: &str = "vaco-probe is licensed under MIT OR Apache-2.0.";
-const INSTALLED_LICENSE: &str = "vvprobe is licensed under MIT OR Apache-2.0.";
+const LEGACY_LICENSE: &str = "vaco-probe is licensed under GPL-3.0-or-later.";
+const INSTALLED_LICENSE: &str = "vvprobe is licensed under GPL-3.0-or-later.";
 const LEGACY_USAGE: &str = "usage: vaco-probe [OPTIONS] INPUT_FILE";
 const INSTALLED_USAGE: &str = "usage: vvprobe [OPTIONS] INPUT_FILE";
 

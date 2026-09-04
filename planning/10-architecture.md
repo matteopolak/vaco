@@ -168,7 +168,7 @@ Two distinct problems, not to be conflated:
 ### Tools
 
 `vaco-conformance` (the differential harness), `vaco-checkasm` (kernel verification and cycle benchmarking —
-our clean-room equivalent of checkasm, whose FFmpeg implementation is GPL and therefore unusable),
+our clean-room equivalent of checkasm, whose FFmpeg implementation cannot be consulted),
 `vaco-corpus` (fixture fetching and minimisation).
 
 ---

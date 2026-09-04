@@ -2538,8 +2538,8 @@ PGO profile hash, and the reproducibility verification result.
 | `aarch64-pc-windows-msvc` | `.zip`, Authenticode-signed |
 | container | `ghcr.io/vaco/vaco`, multi-arch, cosign-signed, SBOM-attested |
 
-Each archive contains `vaco`, `vaco-probe`, `vaco-play`, `THIRD_PARTY.md`, `LICENSE-MIT`,
-`LICENSE-APACHE`, `build-info.json`, `vaco.cdx.json`, and the shell completions and man pages we generate
+Each archive contains `vaco`, `vaco-probe`, `vaco-play`, `THIRD_PARTY_LICENSES.html`, `LICENSE`,
+`LICENSES/Apache-2.0.txt`, `build-info.json`, `vaco.cdx.json`, and the shell completions and man pages we generate
 from our own option tables (never from FFmpeg's docs — research 07 §1.5a).
 
 D10 Gate 1 (pure Rust, no FFI) makes this matrix dramatically easier than it would otherwise be: with no

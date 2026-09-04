@@ -271,7 +271,7 @@ command model, but compatibility is incomplete across codecs, formats,
 filters, protocols, options, and output details. Patent-gated APIs are opt-in.
 
 FFmpeg is a mature, broader C ecosystem; its effective licence depends on the
-configured LGPL/GPL components. Vaco is MIT OR Apache-2.0 and does not read
+configured LGPL/GPL components. Vaco is GPL-3.0-or-later and does not read
 FFmpeg source: it uses published specifications and black-box reference-binary
 checks. Same-session CPU-work comparisons show mixed performance, with codec
 paths still behind; Vaco is not yet a performance-sensitive production
@@ -332,8 +332,8 @@ def main() -> int:
         "const INSTALLED_BANNER: &str = concat!(\"vvmpeg version \", env!(\"CARGO_PKG_VERSION\"), \" Copyright (c) 2026 the Vaco authors\");\n"
         "const LEGACY_VERSION: &str = concat!(\"vaco version \", env!(\"CARGO_PKG_VERSION\"));\n"
         "const INSTALLED_VERSION: &str = concat!(\"vvmpeg version \", env!(\"CARGO_PKG_VERSION\"));\n"
-        "const LEGACY_LICENSE: &str = \"vaco is licensed under MIT OR Apache-2.0.\";\n"
-        "const INSTALLED_LICENSE: &str = \"vvmpeg is licensed under MIT OR Apache-2.0.\";\n"
+        "const LEGACY_LICENSE: &str = \"vaco is licensed under GPL-3.0-or-later.\";\n"
+        "const INSTALLED_LICENSE: &str = \"vvmpeg is licensed under GPL-3.0-or-later.\";\n"
         "const LEGACY_USAGE: &str = \"usage: vaco [options] -i <input> ... [options] <output> ...\";\n"
         "const INSTALLED_USAGE: &str = \"usage: vvmpeg [options] -i <input> ... [options] <output> ...\";\n\n"
         "fn branding() -> [(&'static [u8], &'static [u8]); 4] {\n"
@@ -356,8 +356,8 @@ def main() -> int:
         "const INSTALLED_BANNER: &str = concat!(\"vvprobe version \", env!(\"CARGO_PKG_VERSION\"), \" Copyright (c) 2026 the Vaco authors\");\n"
         "const LEGACY_VERSION: &str = concat!(\"vaco-probe version \", env!(\"CARGO_PKG_VERSION\"));\n"
         "const INSTALLED_VERSION: &str = concat!(\"vvprobe version \", env!(\"CARGO_PKG_VERSION\"));\n"
-        "const LEGACY_LICENSE: &str = \"vaco-probe is licensed under MIT OR Apache-2.0.\";\n"
-        "const INSTALLED_LICENSE: &str = \"vvprobe is licensed under MIT OR Apache-2.0.\";\n"
+        "const LEGACY_LICENSE: &str = \"vaco-probe is licensed under GPL-3.0-or-later.\";\n"
+        "const INSTALLED_LICENSE: &str = \"vvprobe is licensed under GPL-3.0-or-later.\";\n"
         "const LEGACY_USAGE: &str = \"usage: vaco-probe [OPTIONS] INPUT_FILE\";\n"
         "const INSTALLED_USAGE: &str = \"usage: vvprobe [OPTIONS] INPUT_FILE\";\n\n"
         "fn branding() -> [(&'static [u8], &'static [u8]); 4] {\n"
@@ -391,6 +391,8 @@ def main() -> int:
     subprocess.run(
         [
             "rustfmt",
+            "--edition",
+            "2024",
             output / "src/lib.rs",
             output / "src/bin/vvmpeg.rs",
             output / "src/bin/vvprobe.rs",

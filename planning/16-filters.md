@@ -1,7 +1,7 @@
 # 16 — The Filter Subsystem
 
 Plan for `vaco-filter-*`: the libavfilter-equivalent layer. Conforms to `planning/00-decisions.md`
-(D1 Rust-native API, D2 `forbid(unsafe_code)`, D3 MIT/Apache-only deps, D7 clean-room) and to the
+(D1 Rust-native API, D2 `forbid(unsafe_code)`, D3 permissive-only dependencies, D7 clean-room) and to the
 layering in `planning/10-architecture.md` §3 layer 5. Primary source: `planning/research/04-libavfilter.md`.
 Dependency verdicts: `planning/research/09-dependency-licence-register.md`.
 

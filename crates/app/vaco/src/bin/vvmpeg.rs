@@ -12,8 +12,8 @@ const INSTALLED_BANNER: &str = concat!(
 );
 const LEGACY_VERSION: &str = concat!("vaco version ", env!("CARGO_PKG_VERSION"));
 const INSTALLED_VERSION: &str = concat!("vvmpeg version ", env!("CARGO_PKG_VERSION"));
-const LEGACY_LICENSE: &str = "vaco is licensed under MIT OR Apache-2.0.";
-const INSTALLED_LICENSE: &str = "vvmpeg is licensed under MIT OR Apache-2.0.";
+const LEGACY_LICENSE: &str = "vaco is licensed under GPL-3.0-or-later.";
+const INSTALLED_LICENSE: &str = "vvmpeg is licensed under GPL-3.0-or-later.";
 const LEGACY_USAGE: &str = "usage: vaco [options] -i <input> ... [options] <output> ...";
 const INSTALLED_USAGE: &str = "usage: vvmpeg [options] -i <input> ... [options] <output> ...";
 

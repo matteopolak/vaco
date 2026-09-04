@@ -105,7 +105,7 @@ pub fn render<W: Write>(w: &mut W, name: &str, value: Option<&OsStr>) -> Result<
                 writeln!(w, "vaco version {VERSION}")?;
             }
             "L" | "license" => {
-                writeln!(w, "vaco is licensed under MIT OR Apache-2.0.")?;
+                writeln!(w, "vaco is licensed under GPL-3.0-or-later.")?;
             }
             "buildconf" => {
                 writeln!(w, "  configuration:")?;

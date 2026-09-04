@@ -27,9 +27,12 @@ A C shim is explicitly out of scope for v1 and must not constrain core design.
   specific kernel provably cannot reach parity safely, escalate it as a decision
   rather than silently reaching for unsafe.
 
-## D3 — Licensing: MIT OR Apache-2.0 (dual)
-- Our code is dual-licensed MIT OR Apache-2.0 (Rust ecosystem norm; Apache-2.0
-  supplies an explicit contributor patent grant that MIT lacks).
+## D3 — Licensing: GPL-3.0-or-later
+- Vaco-owned code is GPL-3.0-or-later. Workspace packages inherit this SPDX
+  expression from the root manifest; `LICENSE` contains the complete terms.
+- Third-party components retain their own licenses and attribution. Their texts
+  live under `LICENSES/` and in `THIRD_PARTY_LICENSES.html`; neither relicenses
+  Vaco.
 - Dependency policy enforced in CI via `cargo-deny`:
   - ALLOW: MIT, MIT-0, Apache-2.0, Apache-2.0 WITH LLVM-exception, BSD-2-Clause,
     BSD-3-Clause, BSD-3-Clause-Clear, ISC, Zlib, 0BSD, Unicode-3.0, CC0-1.0.
@@ -41,8 +44,8 @@ A C shim is explicitly out of scope for v1 and must not constrain core design.
   - `AND`-joined and per-file-composite licences (ring, aws-lc-rs, brotli, speex-sys)
     require a manual review entry before adoption, never a bare allowlist pass.
 - `cargo-about` generates a THIRD-PARTY notices file per release build.
-- GPL-encumbered functionality may exist as separate opt-in crates that we never
-  ship in our binaries and never place in the default feature set.
+- Copyleft third-party components remain outside the default dependency graph;
+  this dependency policy is independent of Vaco's own GPL-3.0-or-later license.
 
 ## D4 — Patent posture: royalty-free default, opt-in for the rest
 Rewriting in Rust changes patent exposure by exactly zero. Therefore:
@@ -423,7 +426,7 @@ magnitude less than alternatives" — rather than spread across our kernels.
 | Gate | Result |
 |---|---|
 | **1 — pure Rust, zero FFI** | **Pass.** Zero dependencies at all; no `-sys`, no build-script native compilation. |
-| **2 — licence** | **Pass.** Apache-2.0 OR MIT — an exact match for our own dual licence. |
+| **2 — licence** | **Pass.** Apache-2.0 OR MIT — compatible with Vaco's GPL-3.0-or-later distribution. |
 | **3 — trusted & maintained** | **Pass.** Linebender (Raph Levien). v0.7.0 released 11–12 Aug 2026; v1.0 targeted early September 2026; API described as stable for nearly a year with no breaking changes planned for 1.0. 417 stars, 311 commits, active development in the open. Zero dependencies means the shallowest possible tree. Small enough to fork and maintain if it were ever abandoned. |
 
 MSRV is Rust 1.89.

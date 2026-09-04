@@ -44,7 +44,7 @@ implementation. See [`research/`](research/):
 
 1. **Rust-native, no C ABI.** Idiomatic crates plus three binaries. CLI-compatible with ffmpeg; not ABI-compatible.
 2. **`#![forbid(unsafe_code)]` everywhere except `vaco-hw-*`.** Runtime SIMD dispatch is safe via `fearless_simd`'s capability tokens.
-3. **MIT OR Apache-2.0**, with dependencies gated on pure-Rust (zero FFI), permissive licence, and active maintenance.
+3. **GPL-3.0-or-later**, with dependencies gated on pure-Rust (zero FFI), permissive licence, and active maintenance.
 4. **Byte-identical output against reference ffmpeg** where determinism exists; quality-band comparison where it does not (lossy encode never matches).
 5. **Royalty-free default build.** Patent-encumbered encoders exist in-tree behind named feature flags and never ship.
 6. **Hardware acceleration ships by default** — it is how users get H.264 and HEVC from a binary containing no software implementation of either.

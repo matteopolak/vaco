@@ -699,7 +699,7 @@ fn version_listing<W: Write>(w: &mut W, which: Listing) -> Result<()> {
             writeln!(w, "vaco-probe version {VERSION}")?;
         }
         Listing::License => {
-            writeln!(w, "vaco-probe is licensed under MIT OR Apache-2.0.")?;
+            writeln!(w, "vaco-probe is licensed under GPL-3.0-or-later.")?;
         }
         Listing::BuildConf => {
             writeln!(w, "configuration:")?;

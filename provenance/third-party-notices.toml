@@ -71,12 +71,11 @@ crates    = ["vaco-codec-alac"]
 name      = "Apple Lossless Audio Codec (ALAC) reference implementation"
 copyright = "Copyright (c) Apple Inc."
 license   = "Apache-2.0"
-# Apache-2.0's text is invariant across projects; reuse our own
-# already-vendored copy rather than duplicating ~200 lines here or in
-# LICENSES/. Confirmed identical against
+# Apache-2.0's text is invariant across projects; keep the third-party copy in
+# LICENSES/ rather than duplicating ~200 lines here. Confirmed identical against
 # https://raw.githubusercontent.com/macosforge/alac/master/LICENSE
 # (2026-08-28) before any of the referenced source was read.
-license_text_file = "LICENSE-APACHE"
+license_text_file = "LICENSES/Apache-2.0.txt"
 note = """
 vaco-codec-alac's adaptive Golomb-Rice coder, dynamic predictor and stereo
 mixing (rice.rs, predictor.rs, frame_codec.rs) are a from-scratch Rust

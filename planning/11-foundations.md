@@ -46,7 +46,7 @@ exclude  = ["fuzz"]                        # fuzz/ is its own workspace — see 
 [workspace.package]
 version      = "0.1.0"
 edition      = "2024"
-license      = "MIT OR Apache-2.0"
+license      = "GPL-3.0-or-later"
 repository   = "https://github.com/vaco-media/vaco"
 authors      = ["The Vaco Authors"]
 rust-version = "1.94"                      # informational only; rust-toolchain.toml is authoritative
@@ -1539,7 +1539,7 @@ Gate assessment (D10), recorded per D12:
 | Gate | Result |
 |---|---|
 | **1 — pure Rust, zero FFI** | Pass. Zero required dependencies (only an optional `libm` for `no_std`, which we do not enable). No `-sys`, no `links`, no native `build.rs`. |
-| **2 — licence** | Pass. Apache-2.0 OR MIT — an exact match for our own. |
+| **2 — licence** | Pass. Apache-2.0 OR MIT — compatible with our GPL-3.0-or-later distribution. |
 | **3 — trusted & maintained** | Pass. Linebender (Raph Levien). v0.7.0 released 11–12 Aug 2026, v1.0 targeted early September 2026, API stable for ~a year with no breaking changes planned for 1.0. Zero dependencies ⇒ the shallowest possible tree. ~12 direct dependents. Small enough to fork. MSRV 1.89, edition 2024. |
 
 The unsafe tension (D10, §3.4) applies and is stated plainly: **`fearless_simd` contains `unsafe`

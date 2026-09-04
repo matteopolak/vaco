@@ -257,8 +257,9 @@ reference becomes too slow to run in a test. Below that the direct definition is
 the stronger oracle, because it *is* the definition rather than a second
 implementation that could share a mistake.
 
-**Gate 1** pass — pure Rust, no FFI. **Gate 2** pass — MIT OR Apache-2.0, matching
-our own. **Gate 3** pass — widely adopted, actively maintained, shallow tree.
+**Gate 1** pass — pure Rust, no FFI. **Gate 2** pass — MIT OR Apache-2.0,
+compatible with Vaco's GPL-3.0-or-later distribution. **Gate 3** pass — widely
+adopted, actively maintained, shallow tree.
 
 **Unsafe.** It uses `unsafe` internally for SIMD. D10 says to weigh that rather
 than veto it, and here it is moot: a dev-dependency never enters a shipped

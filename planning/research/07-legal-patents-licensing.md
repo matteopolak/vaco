@@ -1,7 +1,7 @@
 # 07 — Legal, Patent & Licensing Risk Register
 
 **Project:** `vaco` — clean-room Rust reimplementation of `ffmpeg` / `ffprobe` / `ffplay`
-**Target licence of deliverable:** MIT (see §4.2 — recommendation is to change this to `MIT OR Apache-2.0`)
+**Target licence of deliverable:** GPL-3.0-or-later (D3; this research's original licensing recommendation is superseded)
 **Goal:** the project distributes its own binaries.
 **Reference tree:** `~/repos/FFmpeg` @ `564f92cce23ae95399476617b8a1dc357f002a47` (2026-08-18, `RELEASE` = `8.0.git`)
 **Document date:** 2026-08-21
@@ -30,7 +30,7 @@ membership is not exhaustive — unpooled holders exist for every major codec.
 | 2 | Do we need a formal two-team dirty/clean split? | **No, not for everything.** Spec-first is sufficient for the ~90% of formats with a public spec. Reserve the two-team protocol for reverse-engineered formats with no spec (§1.7). |
 | 3 | Does rewriting in Rust reduce patent exposure? | **No. Zero. None.** Patents cover methods, not source code. (§2.6) |
 | 4 | Can we ship binaries? | Yes — for a **restricted default codec set**. Not for HEVC/VVC/AAC-family/DTS/Dolby-modern. (§5) |
-| 5 | MIT-only or `MIT OR Apache-2.0`? | **`MIT OR Apache-2.0`.** Firm recommendation. (§4.2) |
+| 5 | Project licence? | **`GPL-3.0-or-later`.** Current decision D3 supersedes this research's original recommendation. (§4.2) |
 
 **The single most important finding:** the reason FFmpeg does not ship binaries is *primarily* patents, and a
 clean-room Rust rewrite does **nothing** about that. Our distributable-binary problem is a **codec selection
@@ -431,7 +431,7 @@ tables:
 
 ```rust
 // SPDX-FileCopyrightText: 2026 The vaco authors
-// SPDX-License-Identifier: MIT OR Apache-2.0
+// SPDX-License-Identifier: GPL-3.0-or-later
 ```
 
 **(e) Contributor register.** A private record of who is dirty for which module, with dates. Keep it; it is the
@@ -865,7 +865,7 @@ Three separate projects, three different mark holders, one consistent outcome. T
 
 ---
 
-## 4. Licence compatibility for an MIT (→ MIT OR Apache-2.0) deliverable
+## 4. Licence compatibility for a GPL-3.0-or-later deliverable
 
 ### 4.0 The trap that will bite us first
 
@@ -890,7 +890,7 @@ theoretical concern — it is the single most likely way we ship a GPL binary by
 ### 4.1 Crate assessment
 
 Licences below were queried directly from the crates.io API on **2026-08-21** (latest published version).
-✅ = usable in the default MIT/Apache-2.0 binary. ⚠️ = usable with a condition. 🔴 = not in the default build.
+✅ = usable in the default GPL-3.0-or-later binary. ⚠️ = usable with a condition. 🔴 = not in the default build.
 
 #### AV1
 
@@ -919,7 +919,7 @@ the fastest AV1 decoder in existence and BSD-2 is unproblematic.
 
 | Crate | SPDX | Verdict |
 |---|---|---|
-| **`symphonia`** v0.6.1 (+ all `symphonia-*` bundles) | **`MPL-2.0`** | ⚠️ **Important.** See §4.2.1. Usable in an MIT binary, but MPL-2.0 is **file-level copyleft**: modifications to Symphonia's *files* must be published under MPL-2.0. It does not infect our files. |
+| **`symphonia`** v0.6.1 (+ all `symphonia-*` bundles) | **`MPL-2.0`** | ⚠️ **Important.** See §4.2.1. MPL-2.0 is file-level copyleft: modifications to Symphonia's *files* must be published under MPL-2.0. It does not change the license of unrelated Vaco files. |
 | `mp4parse` v0.17.0 (Mozilla) | **`MPL-2.0`** | ⚠️ Same analysis |
 | `av-format` v0.7.1, `av-codec` v0.3.1, `av-data` v0.4.4 (rust-av) | `MIT` | ✅ Ideal licence fit; maturity is the question, not licensing |
 | `matroska` v0.30.1 | `MIT/Apache-2.0` | ✅ |
@@ -1001,63 +1001,21 @@ attribution clause and the whole C font stack. It is **more work** than binding 
 modest (libass/ISC is fine) but the build-simplicity benefit is large. **If schedule pressure bites, binding
 libass is legally acceptable** — just discharge the FTL attribution.
 
-### 4.2 MIT-only or `MIT OR Apache-2.0`? — **Firm recommendation: `MIT OR Apache-2.0`**
+### 4.2 Current project license: GPL-3.0-or-later
 
-**Recommend: dual-license the project `MIT OR Apache-2.0`, the Rust ecosystem standard.** Change this now, before
-there are external contributors, because relicensing later requires every copyright holder's consent.
+This research originally recommended a dual MIT/Apache license. That proposal is
+superseded by D3: Vaco-owned code and workspace packages are now
+`GPL-3.0-or-later`. The root `LICENSE` is the authoritative license text; third-party
+dependency and reference-material licenses remain recorded separately.
 
-**What Apache-2.0's patent grant actually does.** Section 3:
-
-> "Each Contributor hereby grants to You a perpetual, worldwide, non-exclusive, no-charge, royalty-free,
-> **irrevocable** (except as stated in this section) **patent license** to make, have made, use, offer to sell,
-> sell, import, and otherwise transfer the Work, where such license applies **only to those patent claims
-> licensable by such Contributor** that are necessarily infringed by their Contribution(s) alone or by combination
-> of their Contribution(s) with the Work..."
->
-> "**If You institute patent litigation** against any entity ... alleging that the Work or a Contribution
-> incorporated within the Work constitutes direct or contributory patent infringement, **then any patent licenses
-> granted to You under this License for that Work shall terminate** as of the date such litigation is filed."
-> <https://www.apache.org/licenses/LICENSE-2.0>
-
-**What that buys us — and be clear-eyed, it is less than people think:**
-
-| ✅ It DOES | ❌ It does NOT |
-|---|---|
-| Bind **our contributors**: if a contributor's employer holds a patent reading on their contribution, they cannot later assert it against our users | Grant anything from **third parties**. Dolby, Via LA, Access Advance, Sisvel are not contributors and are wholly unaffected. |
-| Give downstream users an **express** patent licence rather than relying on an implied one. MIT grants copyright rights and says **nothing** about patents; whether it carries an implied patent licence is unsettled. | Do anything about **codec-essential patents**, which was 100% of our actual patent exposure when this was written — **no longer true, see the note below** (§2) |
-| Provide **defensive termination** — a patent aggressor who sues over our work loses their own licence to it. A modest but real deterrent. | Protect us from a contributor who *isn't* the patent holder (e.g. an employee contributing without authority) |
-| Include an explicit **NOTICE** and trademark-disclaimer regime (§4, §6) | Substitute for a CLA if we ever need broader assurances |
-
-**So: Apache-2.0's patent grant is genuinely useful and genuinely does not solve our patent problem.**
-Say this plainly to anyone who suggests it does.
-
-**Why dual rather than Apache-only:**
-1. **Ecosystem norm.** Rust itself is `MIT OR Apache-2.0`; the Rust API Guidelines recommend it
-   (<https://rust-lang.github.io/api-guidelines/necessities.html>). Deviating creates friction for every downstream
-   consumer.
-2. **GPLv2 compatibility.** **Apache-2.0 is incompatible with GPLv2** (the patent-termination and indemnity terms
-   are "further restrictions"). FFmpeg's own `LICENSE.md` records exactly this problem for VMAF, mbedTLS and
-   OpenCORE. If we were Apache-only, **no GPLv2-only project could use us** — which would exclude a large slice of
-   the existing FFmpeg-consuming world. Offering MIT as an alternative preserves GPLv2 compatibility.
-3. **Maximum downstream freedom** at zero cost to us — the user picks whichever arm suits them.
-4. Several dependencies we want (`winit`, `cpal`, `claxon`) are **Apache-2.0 only**, so we cannot in practice
-   promise a pure-MIT dependency closure anyway.
-
-**Cost of the change:** essentially nil today (no external contributors yet). Add `LICENSE-MIT` and
-`LICENSE-APACHE`, set `license = "MIT OR Apache-2.0"` in every `Cargo.toml`, add the SPDX header to every file,
-and use the standard Rust README boilerplate including the contribution clause:
-
-> Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you,
-> as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
-
-#### 4.2.1 MPL-2.0 (symphonia, mp4parse, libsrt) — can we ship it in an MIT binary? **Yes.**
+#### 4.2.1 MPL-2.0 (symphonia, mp4parse, libsrt) — can we ship it in a GPL-3.0-or-later binary?
 
 MPL-2.0 is **file-level (weak) copyleft**:
 - §3.2 permits distributing the Larger Work (our binary) **under our own terms**, provided the MPL-covered
   **files'** source remains available under MPL-2.0.
 - §3.3 explicitly permits combining with other licences and distributing the executable under the other licence.
-- The obligation is: **if we modify a Symphonia file, we publish that modified file under MPL-2.0.** Our own new
-  files are unaffected. Our binary can be distributed under MIT/Apache-2.0 terms.
+- The obligation is: **if we modify a Symphonia file, we publish that modified file under MPL-2.0.** Vaco's own
+  files remain GPL-3.0-or-later. The current dependency policy still excludes MPL-2.0 from the default graph.
 - MPL-2.0 also carries a **patent grant** (§2.1(b)) and defensive termination (§5.2), similar in spirit to Apache.
 
 **Practical policy:** MPL-2.0 dependencies are **allowed** but flagged in `deny.toml` as `warn`, must be recorded
@@ -1218,11 +1176,11 @@ people get them wrong.
 
 | Scenario | GPL status of our binary | OK? |
 |---|---|---|
-| We ship `vaco` compiled with `--features gpl` (statically linking libx264) | **The distributed binary is GPL-2.0+.** Our MIT/Apache source is GPL-compatible so this is *lawful* — but the binary we hand out is now GPL and we must offer corresponding source for the whole work. | ⚠️ Lawful but **not our MIT deliverable**. Do not do this for the default release. |
+| We ship `vaco` compiled with `--features gpl` (statically linking libx264) | The distributed binary must satisfy GPLv3 terms because Vaco is GPL-3.0-or-later; confirm that the upstream GPL-2.0-or-later election is GPLv3-compatible before distribution. | ⚠️ The patent and default-dependency policies still prohibit this release shape. |
 | A *user* builds `vaco --features gpl` themselves | The user's binary is GPL. **The user is the distributor**, and if they don't redistribute, GPL obligations never trigger at all (GPL restricts distribution, not use). | ✅ **Yes — this is the model.** |
-| We ship an MIT binary that `dlopen()`s a GPL plugin the user installed separately | Contested. FSF says a plugin with intimate coupling forms a combined work; the counter-view under *Altai* is that the boundary matters. **Genuinely unsettled — no US appellate decision.** | ⚠️ **Do not rely on this as our primary architecture.** |
-| We ship an MIT binary that `fork()`/`exec()`s a separate GPL process, communicating over pipes/CLI | Strongest position. Separate programs at arm's length communicating over a documented protocol are an "aggregate", not a combined work — this is the mechanism the FSF itself has always accepted. | ✅ **Yes — preferred escape hatch.** |
-| We ship an MIT binary + separately ship a GPL binary in the same tarball | Mere aggregation on a distribution medium. Each keeps its own licence. | ✅ Yes, but confusing for users; prefer separate packages |
+| We ship a GPL-3.0-or-later binary that `dlopen()`s a GPL plugin the user installed separately | Contested. FSF says a plugin with intimate coupling forms a combined work; the counter-view under *Altai* is that the boundary matters. **Genuinely unsettled — no US appellate decision.** | ⚠️ **Do not rely on this as our primary architecture.** |
+| We ship a GPL-3.0-or-later binary that `fork()`/`exec()`s a separate GPL process, communicating over pipes/CLI | Separate programs at arm's length communicating over a documented protocol are an "aggregate", not a combined work. | ✅ Preferred for the patent and clean-room boundary. |
+| We ship a GPL-3.0-or-later binary + separately ship a GPL binary in the same tarball | Mere aggregation on a distribution medium. Each keeps its own licence. | ✅ Yes, but confusing for users; prefer separate packages |
 
 #### Recommended mechanics
 
@@ -1232,8 +1190,8 @@ people get them wrong.
 ```
 vaco-workspace/
 ├── vaco/                  # the binary. Default features = permissive only.
-├── vaco-core/             # MIT OR Apache-2.0. No GPL deps, ever.
-├── vaco-codecs/           # MIT OR Apache-2.0 permissive codecs
+├── vaco-core/             # GPL-3.0-or-later. No copyleft third-party deps in the default graph.
+├── vaco-codecs/           # GPL-3.0-or-later Vaco codecs
 ├── contrib/               # SEPARATE workspace, SEPARATE repo, NOT published to crates.io
 │   ├── vaco-x264/         # GPL-2.0+ crate. Its own deny.toml. Its own release process.
 │   └── vaco-x265/         # GPL-2.0+
@@ -1265,7 +1223,7 @@ The performance cost of a pipe is small relative to encoding cost. **Strongly re
 encoder, so we never create a licensable unit (§2.1). **The licence escape hatch and the patent escape hatch are
 the same mechanism** — this is the key architectural insight of this document.
 
-**4. Does it keep our distributed binary MIT-clean? Yes**, provided:
+**4. Does it keep the default distributed binary within its dependency policy? Yes**, provided:
 - ✅ the release build is produced from the default feature set, in CI, with `cargo deny` passing;
 - ✅ the release artefacts are byte-reproducible from a tagged commit (publish the build recipe + SBOM);
 - ✅ no GPL crate appears anywhere in the release `Cargo.lock`;
@@ -1280,7 +1238,7 @@ the same mechanism** — this is the key architectural insight of this document.
 
 ### 5.1 (a) Default distributable build — "vaco"
 
-Licence: **MIT OR Apache-2.0**. Patent posture: expired, royalty-free, or hardware-delegated only.
+Licence: **GPL-3.0-or-later**. Patent posture: expired, royalty-free, or hardware-delegated only.
 This is what we compile in CI and publish on the releases page for every platform.
 
 **Video decode:** H.261 · H.263 · MPEG-1 · MPEG-2 (H.262) · MPEG-4 Part 2 · **AV1** (dav1d) · VP8 · VP9† ·
@@ -1302,7 +1260,7 @@ MPEG-PS · MPEG-TS† · ASF/WMV (demux only)† · HLS · DASH · raw ES
 
 **Protocols:** file · pipe · http/https (rustls) · tcp/udp · rtp/rtsp · srt (MPL) · rist · s3-style via feature
 
-**Filters, scaling, colour, resampling, muxing, the CLI, ffprobe, ffplay** — all our own code, all MIT/Apache.
+**Filters, scaling, colour, resampling, muxing, the CLI, ffprobe, ffplay** — all Vaco-owned code, GPL-3.0-or-later.
 
 **Hardware acceleration for encumbered codecs** (§2.4) — VideoToolbox, VA-API, D3D11VA/MF, NVDEC/NVENC, AMF,
 MediaCodec. **This is how users get H.264/HEVC in the default build**: we ship the plumbing, their hardware ships
@@ -1340,7 +1298,7 @@ most valuable piece of documentation the project can write, and it is the thing 
 
 | Component | Reason |
 |---|---|
-| **Anything linking FFmpeg/libav** (`ffmpeg-sys-next`, `ffmpeg-next`, `rusty_ffmpeg`) | Destroys both the clean-room premise and the MIT deliverable |
+| **Anything linking FFmpeg/libav** (`ffmpeg-sys-next`, `ffmpeg-next`, `rusty_ffmpeg`) | Destroys the clean-room premise and violates the default dependency policy |
 | **fdk-aac in a distributed binary** | Unredistributable |
 | **A software HEVC/VVC encoder or decoder in a binary we distribute** | 🔴 Multi-pool, active, injunction-seeking holders. No mitigation exists short of paying three pools. |
 | **DRM: Widevine, PlayReady, FairPlay, AACS/BD+, CSS** | Licensing + **DMCA § 1201 anti-circumvention** (and EU Copyright Directive Art. 6). A whole separate legal regime. |
@@ -1393,7 +1351,7 @@ not**.
 
 | # | Action | Owner | When |
 |---|---|---|---|
-| 1 | Change project licence to `MIT OR Apache-2.0`; add `LICENSE-MIT`, `LICENSE-APACHE`, SPDX headers, README boilerplate | eng lead | **Before the first external contributor** |
+| 1 | License Vaco-owned code as `GPL-3.0-or-later`; add the root `LICENSE`, SPDX metadata, README boilerplate, and preserve third-party notices | eng lead | **Completed** |
 | 2 | Adopt the DCO + `Vaco-Provenance` trailer; add the PR template checklist (§1.6.3b) | eng lead | Week 1 |
 | 3 | Land `deny.toml` (§4.3) + the five CI jobs; make them blocking | eng | Week 1 |
 | 4 | Create `provenance/`, `THIRD_PARTY.md`, `NOTICE` | eng | Week 1 |

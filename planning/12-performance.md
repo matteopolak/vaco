@@ -1390,8 +1390,8 @@ If, after the priority 1–4 work in §8 lands, S1 shows H.264 decode below **0.
 
 ## 5. `vaco-checkasm`
 
-FFmpeg's `checkasm` is GPL and therefore unusable to us (D3), and its shared-lineage upstream core is
-likewise off limits. We build our own from the behavioural description in research §08 §1f — what it
+FFmpeg's `checkasm` source and its shared-lineage upstream core are off limits under the clean-room
+rule. We build our own from the behavioural description in research §08 §1f — what it
 does, not how it does it. It is our clean-room equivalent, and it is the mechanism that makes
 architecture §7.3's rule ("a kernel without a scalar reference and a differential test is not
 merged") enforceable rather than aspirational.

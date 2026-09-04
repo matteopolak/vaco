@@ -103,7 +103,7 @@ contains one library import example checked by the facade's documentation test,
 one command example per installed binary, and a short factual comparison with
 FFmpeg: Vaco's clean-room safe-Rust core, the mature and broader C ecosystem it
 is compared against, incomplete compatibility, mixed measured performance with
-codec paths still behind, MIT OR Apache-2.0 versus FFmpeg's configuration-
+codec paths still behind, GPL-3.0-or-later versus FFmpeg's configuration-
 dependent LGPL/GPL licensing, and experimental status. It makes no performance
 or compatibility promise beyond those bounds.
 

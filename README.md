@@ -332,7 +332,8 @@ records and measured results, including the performance baseline this README quo
 
 ## License
 
-MIT or Apache-2.0, at your option. See `LICENSE-MIT` and `LICENSE-APACHE`.
+Vaco is licensed under `GPL-3.0-or-later`; the complete terms are in
+[`LICENSE`](LICENSE).
 
-Third-party licenses for permissively-licensed reference material consulted during
-development are recorded under `LICENSES/`.
+`LICENSES/` and `THIRD_PARTY_LICENSES.html` contain attribution and license text
+for third-party material. They do not license Vaco itself.

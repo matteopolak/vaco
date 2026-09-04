@@ -52,7 +52,7 @@ command model, but compatibility is incomplete across codecs, formats,
 filters, protocols, options, and output details. Patent-gated APIs are opt-in.
 
 FFmpeg is a mature, broader C ecosystem; its effective licence depends on the
-configured LGPL/GPL components. Vaco is MIT OR Apache-2.0 and does not read
+configured LGPL/GPL components. Vaco is GPL-3.0-or-later and does not read
 FFmpeg source: it uses published specifications and black-box reference-binary
 checks. Same-session CPU-work comparisons show mixed performance, with codec
 paths still behind; Vaco is not yet a performance-sensitive production

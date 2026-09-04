@@ -12,7 +12,7 @@
 
 Vetting of candidate Rust crates and C libraries against Vaco's policy (see `planning/00-decisions.md` D3).
 
-**Policy recap.** Our code is MIT OR Apache-2.0. Dependencies are ALLOWED under MIT, MIT-0, Apache-2.0,
+**Policy recap.** Vaco-owned code is GPL-3.0-or-later. Dependencies are ALLOWED under MIT, MIT-0, Apache-2.0,
 BSD-2-Clause, BSD-3-Clause, BSD-3-Clause-Clear, ISC, Zlib, 0BSD, CC0-1.0, Unicode-3.0.
 DENIED: GPL-*, LGPL-*, AGPL-*, **MPL-2.0**, CDDL, SSPL, EPL, WTFPL, proprietary, unresolved.
 Additionally, because we are writing pure safe Rust, any `*-sys` / FFI crate is **out of the default build**
@@ -214,7 +214,7 @@ expression = "MIT AND ISC AND OpenSSL"
 ```
 
 `cargo-about` generates `THIRD_PARTY.md` per release. A `reuse`/SPDX lint enforces per-file
-`SPDX-License-Identifier: MIT OR Apache-2.0` headers across our own sources.
+`SPDX-License-Identifier: GPL-3.0-or-later` headers across our own sources.
 
 ## 11. Conclusions that shape the architecture
 

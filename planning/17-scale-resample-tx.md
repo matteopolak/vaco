@@ -3857,7 +3857,7 @@ determine its shape. Every codec DSP crate (`vaco-codec-dsp-*`) uses the same mo
 tier-cascade ergonomics right here saves the same argument thirty times.
 
 **`vaco-checkasm`.** Architecture §3 names it as our clean-room equivalent of a tool whose upstream
-implementation is GPL and therefore unusable. Its requirements are set by these crates: randomised
+implementation cannot be consulted under the clean-room rule. Its requirements are set by these crates: randomised
 and edge-case input generation per kernel signature, differential comparison against a scalar
 reference, cycle-accurate benchmarking with a nop baseline subtracted, and CLI filtering by
 kernel-name pattern. Building it in phase 0 rather than alongside the first crate is the single

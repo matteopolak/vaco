@@ -436,9 +436,9 @@ mpeghdec, cuda_nvcc and libsmbclient — mirroring FFmpeg's own opt-in model wit
 non-default `gpl-*`/`nonfree-*` Cargo feature families. Default-enable only BSD/MIT/Apache/ISC
 material plus per-OS system hwaccel paths.
 
-## 5. License Risk Table (permissive/MIT redistributable build)
+## 5. License Risk Table (default GPL-3.0-or-later redistributable build)
 
-Legend: **BLOCKS** = cannot be included in a default MIT-redistributable Rust build; **OK** = permissive/compatible, safe to depend on; **OK-SYSTEM** = proprietary but a system/OS-provided framework (no redistribution of the lib itself, only linking — still not a "clean" dependency for a portable crate, treat as platform-conditional).
+Legend: **BLOCKS** = cannot be included in Vaco's default GPL-3.0-or-later Rust build; **OK** = permissive/compatible, safe to depend on; **OK-SYSTEM** = proprietary but a system/OS-provided framework (no redistribution of the lib itself, only linking — still not a "clean" dependency for a portable crate, treat as platform-conditional).
 
 | Component | License | Blocks MIT build? | Permissive alternative |
 |---|---|---|---|
@@ -474,4 +474,4 @@ Legend: **BLOCKS** = cannot be included in a default MIT-redistributable Rust bu
 | FATE core framework, checkasm, tiny_psnr/tiny_ssim | FFmpeg project (LGPL/BSD-style, non-GPL) | OK as *test infrastructure design reference* (clean-room: reimplement logic, don't copy code) | n/a |
 | FATE tests exercising GPL codecs (e.g. any `fate-h264-*` conformance test run through a GPL x264/x265 encode path, or `libcdio` tests) | inherits GPL from the external tool under test | Only the *test*, not the framework, is encumbered — irrelevant to a clean-room Rust reimplementation since no FFmpeg test code would be reused anyway | n/a |
 
-**Overall implication for the Rust project:** a strictly-MIT-redistributable default build must exclude x264/x265/xvid/xavs/xavs2/davs2/vidstab/rubberband/frei0r/dvdnav/dvdread/avisynth/decklink/fdk-aac/mpeghdec/cuda_nvcc/libsmbclient equivalents from the default feature set (treat as opt-in, clearly labeled non-default "gpl"/"nonfree" Cargo feature families, mirroring FFmpeg's own `--enable-gpl`/`--enable-nonfree` opt-in model), and should default-enable only BSD/MIT/Apache/ISC-licensed codec/protocol bindings (dav1d, aom, svt-av1, rav1e, vpx, opus, webp, theora, vorbis, speex, vmaf, etc.) plus system-framework hwaccel paths gated per-OS.
+**Overall implication for the Rust project:** Vaco's GPL-3.0-or-later license does not replace the default dependency, patent, and redistribution policy. The default build excludes x264/x265/xvid/xavs/xavs2/davs2/vidstab/rubberband/frei0r/dvdnav/dvdread/avisynth/decklink/fdk-aac/mpeghdec/cuda_nvcc/libsmbclient equivalents; it uses the permissively licensed codec/protocol bindings and system-framework hardware paths approved by D3/D4.
