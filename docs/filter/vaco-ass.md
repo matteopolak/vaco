@@ -28,7 +28,7 @@ Four stages, one module each:
   three modules share.
 
 `plan::plan_event` implements the *static* tag set in full: `\b \i \u
-\s \fn \fs \fscx \fscy \fsp \frz \fr \bord \xbord \ybord \shad \xshad
+\s \fn \fs \fscx \fscy \fsp \frx \fry \frz \fr \bord \xbord \ybord \shad \xshad
 \yshad \blur \be \c \1c \2c \3c \4c \alpha \1a \2a \3a \4a \an \a \pos
 \org \clip \r`. A second group is recognised but not animated — applied
 as a coarse, static approximation rather than a silent drop:
@@ -37,10 +37,10 @@ its start point as a static `\pos`; `\fad`/`\fade` are parsed and
 ignored (full opacity for the whole event); `\k`/`\kf`/`\ko`/`\K`
 karaoke tags are parsed and ignored (no highlight sweep); `\p<n>`
 vector drawing suppresses its own text run rather than leaking raw
-drawing syntax; `\frx`/`\fry`/`\fax`/`\fay` (3-D rotation/shear) are
-parsed and ignored. `\frz`/`\fr` carries the 2-D counterclockwise angle
-on each run and `\org` carries the optional line rotation origin;
-`vaco-filter-subtitle` applies both when it rasterises the plan. See
+drawing syntax; `\fax`/`\fay` shear is parsed and ignored. `\frx`/`\fry`/
+`\frz`/`\fr` carry static X/Y/Z angles on each run and `\org` carries the
+optional line rotation origin; `vaco-filter-subtitle` projects them when
+it rasterises the plan. See
 `plan.rs`'s own doc for the full, current list — it is the authority,
 not this file.
 
@@ -50,8 +50,8 @@ not this file.
   [`plan::ResolvedStyle`]/[`plan::TextRun`] if it needs a new field on
   the plan.
 - Rotation geometry belongs in `vaco-filter-subtitle`; this crate keeps
-  `\frz` and `\org` in script coordinates so the renderer can scale the
-  pivot exactly once.
+  `\frx`/`\fry`/`\frz` and `\org` in script coordinates so the renderer
+  can scale the pivot and camera distance exactly once.
 - Animating a tag currently applied statically (`\t`, `\move`, `\fad`):
   `EventPlan` would need a time-varying representation instead of a
   single resolved value — a renderer-shape change, not a one-line fix.
@@ -68,7 +68,7 @@ flags, env vars or constants gate its behaviour.
 ## Dependencies
 
 In actual use: only `vaco-core` (`Rgba` for colour, `Duration` for
-timing). The `\frz` direction and `\org` semantics follow Aegisub's
+timing). The three rotation directions and `\org` semantics follow Aegisub's
 published ASS override-tag documentation and were cross-checked against
 ffmpeg-full 9.0.1 with libass 0.17.5 as a black box. `Cargo.toml` also
 declares `vaco-limits`, `vaco-color`, `vaco-pixfmt`, `vaco-frame`,

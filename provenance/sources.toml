@@ -42,6 +42,13 @@ acquired = "2026-09-04"
 where    = "local ffmpeg-full 9.0.1 binary; fixtures in crates/filter/vaco-filter-subtitle/tests/data"
 
 [[source]]
+id       = "ffmpeg-ass-3d-probe"
+kind     = "blackbox"
+title    = "ffmpeg-full 9.0.1/libass 0.17.5 ASS filter black-box pixel probes on 320x240 Arial TILT fixtures: unrotated crop 64:30:128:104; centered \\frx60 crop 64:16:128:112; centered \\fry60 crop 32:30:142:104; moving only \\org Y from 120 to 180 under \\frx60 gives 56:10:132:150; the shifted-origin shrink calibrates the 312.5 script-pixel perspective distance"
+acquired = "2026-09-04"
+where    = "local ffmpeg-full 9.0.1 binary; fixtures in crates/filter/vaco-filter-subtitle/tests/data"
+
+[[source]]
 id       = "linux-perf-event-open"
 kind     = "spec"
 title    = "Linux perf_event_open(2) manual page and perf_event UAPI"

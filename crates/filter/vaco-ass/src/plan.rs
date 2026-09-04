@@ -7,7 +7,7 @@
 //!
 //! # Static tags only (stage (a), GitHub #487 / FT-5.2)
 //!
-//! Implemented: `\b \i \u \s \fn \fs \fscx \fscy \fsp \frz \fr \bord
+//! Implemented: `\b \i \u \s \fn \fs \fscx \fscy \fsp \frx \fry \frz \fr \bord
 //! \xbord \ybord \shad \xshad \yshad \blur \be \c \1c \2c \3c \4c \alpha
 //! \1a \2a \3a \4a \an \a \pos \org \clip \r`.
 //!
@@ -22,9 +22,9 @@
 //! `\kf`/`\ko`/`\K` (karaoke) are parsed and ignored — no highlight sweep.
 //! `\p<n>` (vector drawing) suppresses its own text run entirely rather
 //! than showing raw drawing-command syntax as literal text, since drawing
-//! it is out of scope this pass. `\frx`/`\fry`/`\fax`/`\fay` (3-D rotation/
-//! shear) are parsed and ignored. `\frz`/`\fr` carries the 2-D Z-axis
-//! angle on each run, and `\org` carries its optional line origin for the
+//! it is out of scope this pass. `\fax`/`\fay` (shear) are parsed and
+//! ignored. `\frx`/`\fry`/`\frz`/`\fr` carry static 3-D Euler angles on
+//! each run, and `\org` carries their optional line origin for the
 //! downstream subtitle renderer.
 //!
 //! Every one of these is a real, named gap — not a silent guess.
@@ -53,6 +53,10 @@ pub struct ResolvedStyle {
     pub scale_x: f64,
     pub scale_y: f64,
     pub spacing: f64,
+    /// X-axis rotation in degrees (`\frx`).
+    pub angle_x: f64,
+    /// Y-axis rotation in degrees (`\fry`).
+    pub angle_y: f64,
     /// Z-axis rotation in degrees (`\frz`/`\fr`).
     pub angle_z: f64,
     pub border_style: i32,
@@ -77,6 +81,8 @@ impl ResolvedStyle {
             scale_x: s.scale_x,
             scale_y: s.scale_y,
             spacing: s.spacing,
+            angle_x: 0.0,
+            angle_y: 0.0,
             angle_z: s.angle,
             border_style: s.border_style,
             outline: s.outline,
@@ -221,6 +227,8 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
         "fscx" => cursor.cur.scale_x = parse_num(a).unwrap_or(cursor.cur.scale_x),
         "fscy" => cursor.cur.scale_y = parse_num(a).unwrap_or(cursor.cur.scale_y),
         "fsp" => cursor.cur.spacing = parse_num(a).unwrap_or(cursor.cur.spacing),
+        "frx" => cursor.cur.angle_x = parse_num(a).unwrap_or(cursor.cur.angle_x),
+        "fry" => cursor.cur.angle_y = parse_num(a).unwrap_or(cursor.cur.angle_y),
         "frz" | "fr" => cursor.cur.angle_z = parse_num(a).unwrap_or(cursor.cur.angle_z),
         "bord" => {
             let v = parse_num(a).unwrap_or(cursor.cur.outline);
@@ -401,6 +409,19 @@ mod tests {
         let (script, event) = one_event(r"{\org(120,210)}x");
         let plan = plan_event(&script, &event);
         assert_eq!(plan.origin, Some((120.0, 210.0)));
+    }
+
+    #[test]
+    fn frx_and_fry_are_resolved_and_reset() {
+        let (script, event) = one_event(r"{\frx30\fry-45\fr15}tilt{\r}flat");
+        let plan = plan_event(&script, &event);
+
+        assert_eq!(plan.runs[0].style.angle_x, 30.0);
+        assert_eq!(plan.runs[0].style.angle_y, -45.0);
+        assert_eq!(plan.runs[0].style.angle_z, 15.0);
+        assert_eq!(plan.runs[1].style.angle_x, 0.0);
+        assert_eq!(plan.runs[1].style.angle_y, 0.0);
+        assert_eq!(plan.runs[1].style.angle_z, 0.0);
     }
 
     #[test]

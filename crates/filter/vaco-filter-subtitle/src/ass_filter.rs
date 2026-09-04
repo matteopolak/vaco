@@ -24,7 +24,7 @@
 //! `\clip`'s rectangle is applied by zeroing mask coverage outside it
 //! after rasterisation. `BorderStyle=3` (opaque box) is not implemented —
 //! every event renders as outline+shadow (`BorderStyle=1`) regardless.
-//! `\frz`/`\fr` rotates that mask counterclockwise around `\org`, or the
+//! `\frx`/`\fry`/`\frz`/`\fr` project that mask around `\org`, or the
 //! line's aligned position when no explicit rotation origin is present.
 
 use vaco_core::{Duration, Error, MediaType, Result};
@@ -41,6 +41,11 @@ const VIDEO_PAD: &[Pad] = &[Pad {
     name: "default",
     media_type: MediaType::Video,
 }];
+
+/// ASS's renderer-compatible camera distance in script pixels. It scales
+/// with the script-to-frame Y ratio before projection.
+const ASS_CAMERA_DISTANCE: f64 = 312.5;
+const NEAR_PLANE_EPSILON: f64 = 1e-9;
 
 pub const DESC: FilterDesc = FilterDesc {
     name: "ass",
@@ -169,17 +174,26 @@ pub fn render_at(
         let origin = (ox.round() as i32, oy.round() as i32);
 
         let mut base_mask = renderer.rasterise(&layout, origin)?;
-        if style.angle_z.is_finite() && style.angle_z.rem_euclid(360.0).abs() > f64::EPSILON {
+        let angles = (style.angle_x, style.angle_y, style.angle_z);
+        if [angles.0, angles.1, angles.2]
+            .iter()
+            .all(|angle| angle.is_finite())
+            && [angles.0, angles.1, angles.2]
+                .iter()
+                .any(|angle| angle.rem_euclid(360.0).abs() > f64::EPSILON)
+        {
             let rotation_origin = plan
                 .origin
                 .map(|(x, y)| (x * scale_x, y * scale_y))
                 .filter(|(x, y)| x.is_finite() && y.is_finite())
                 .unwrap_or((target_x, target_y));
-            base_mask = rotate_mask(
+            base_mask = project_mask(
                 &base_mask,
                 renderer.budget_mut(),
                 rotation_origin,
-                style.angle_z,
+                angles,
+                ASS_CAMERA_DISTANCE * scale_y,
+                (width, height),
             )?;
         }
         if let Some(clip) = plan.clip {
@@ -270,73 +284,177 @@ fn apply_clip(
     }
 }
 
-/// Rotate coverage around a frame-space pivot. ASS's positive Z rotation
-/// is counterclockwise on screen, whose Y axis points down, so the forward
-/// transform negates the usual mathematical Y term. Sampling applies the
-/// inverse transform at destination pixel centres to avoid holes.
+/// The homography induced by rotating ASS's text plane in X→Y→Z order,
+/// then projecting it from a pinhole camera. Depth grows into the screen;
+/// screen Y grows downward.
+#[derive(Debug, Clone, Copy)]
+struct ProjectiveTransform {
+    pivot: (f64, f64),
+    focal: f64,
+    map_xx: f64,
+    map_xy: f64,
+    map_yx: f64,
+    map_yy: f64,
+    depth_x: f64,
+    depth_y: f64,
+}
+
+impl ProjectiveTransform {
+    fn new(pivot: (f64, f64), angles: (f64, f64, f64), focal: f64) -> Option<Self> {
+        if !pivot.0.is_finite()
+            || !pivot.1.is_finite()
+            || !focal.is_finite()
+            || focal <= NEAR_PLANE_EPSILON
+            || !angles.0.is_finite()
+            || !angles.1.is_finite()
+            || !angles.2.is_finite()
+        {
+            return None;
+        }
+        let (sin_x, cos_x) = angles.0.rem_euclid(360.0).to_radians().sin_cos();
+        let (sin_y, cos_y) = angles.1.rem_euclid(360.0).to_radians().sin_cos();
+        let (sin_z, cos_z) = angles.2.rem_euclid(360.0).to_radians().sin_cos();
+        Some(Self {
+            pivot,
+            focal,
+            map_xx: cos_z * cos_y,
+            map_xy: cos_z * sin_y * sin_x + sin_z * cos_x,
+            map_yx: -sin_z * cos_y,
+            map_yy: -sin_z * sin_y * sin_x + cos_z * cos_x,
+            depth_x: sin_y,
+            depth_y: -cos_y * sin_x,
+        })
+    }
+
+    fn denominator(self, x: f64, y: f64) -> f64 {
+        let relative_x = x - self.pivot.0;
+        let relative_y = y - self.pivot.1;
+        self.focal + self.depth_x * relative_x + self.depth_y * relative_y
+    }
+
+    fn project(self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let relative_x = x - self.pivot.0;
+        let relative_y = y - self.pivot.1;
+        let denominator = self.denominator(x, y);
+        if !denominator.is_finite() || denominator <= NEAR_PLANE_EPSILON {
+            return None;
+        }
+        let scale = self.focal / denominator;
+        let projected_x =
+            self.pivot.0 + scale * (self.map_xx * relative_x + self.map_xy * relative_y);
+        let projected_y =
+            self.pivot.1 + scale * (self.map_yx * relative_x + self.map_yy * relative_y);
+        (projected_x.is_finite() && projected_y.is_finite()).then_some((projected_x, projected_y))
+    }
+
+    fn unproject(self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let projected_x = x - self.pivot.0;
+        let projected_y = y - self.pivot.1;
+        let row_1_x = projected_x * self.depth_x - self.focal * self.map_xx;
+        let row_1_y = projected_x * self.depth_y - self.focal * self.map_xy;
+        let row_2_x = projected_y * self.depth_x - self.focal * self.map_yx;
+        let row_2_y = projected_y * self.depth_y - self.focal * self.map_yy;
+        let rhs_1 = -projected_x * self.focal;
+        let rhs_2 = -projected_y * self.focal;
+        let determinant = row_1_x * row_2_y - row_1_y * row_2_x;
+        if !determinant.is_finite() || determinant.abs() <= NEAR_PLANE_EPSILON {
+            return None;
+        }
+        let relative_x = (rhs_1 * row_2_y - row_1_y * rhs_2) / determinant;
+        let relative_y = (row_1_x * rhs_2 - rhs_1 * row_2_x) / determinant;
+        let source = (self.pivot.0 + relative_x, self.pivot.1 + relative_y);
+        (source.0.is_finite()
+            && source.1.is_finite()
+            && self.denominator(source.0, source.1) > NEAR_PLANE_EPSILON)
+            .then_some(source)
+    }
+}
+
+/// Project coverage around a frame-space pivot. Ordinary output bounds
+/// come from the four transformed corners. If the source straddles the
+/// camera plane, its projection is unbounded, so only the visible frame is
+/// sampled. Both paths allocate through the renderer's budget.
 #[allow(
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
     reason = "finite transformed bounds are clamped to i32 and interpolated coverage is clamped to u8"
 )]
-fn rotate_mask(
+fn project_mask(
     source: &vaco_filter_text::AlphaMask,
     budget: &mut vaco_limits::Budget,
     pivot: (f64, f64),
-    angle_degrees: f64,
+    angles: (f64, f64, f64),
+    focal: f64,
+    frame_size: (u32, u32),
 ) -> Result<vaco_filter_text::AlphaMask> {
-    if source.w == 0
-        || source.h == 0
-        || !angle_degrees.is_finite()
-        || !pivot.0.is_finite()
-        || !pivot.1.is_finite()
+    if source.w == 0 || source.h == 0 {
+        return Ok(source.clone());
+    }
+    if [angles.0, angles.1, angles.2]
+        .iter()
+        .all(|angle| angle.rem_euclid(360.0).abs() <= f64::EPSILON)
     {
         return Ok(source.clone());
     }
-    let angle = angle_degrees.rem_euclid(360.0);
-    if angle.abs() <= f64::EPSILON {
+    let Some(transform) = ProjectiveTransform::new(pivot, angles, focal) else {
         return Ok(source.clone());
-    }
-    let radians = angle.to_radians();
-    let (sin, cos) = radians.sin_cos();
+    };
     let left = f64::from(source.x);
     let top = f64::from(source.y);
     let right = left + f64::from(source.w);
     let bottom = top + f64::from(source.h);
-    let mut min_x = f64::INFINITY;
-    let mut min_y = f64::INFINITY;
-    let mut max_x = f64::NEG_INFINITY;
-    let mut max_y = f64::NEG_INFINITY;
-    for (x, y) in [(left, top), (right, top), (left, bottom), (right, bottom)] {
-        let dx = x - pivot.0;
-        let dy = y - pivot.1;
-        let rotated_x = pivot.0 + cos * dx + sin * dy;
-        let rotated_y = pivot.1 - sin * dx + cos * dy;
-        min_x = min_x.min(rotated_x);
-        min_y = min_y.min(rotated_y);
-        max_x = max_x.max(rotated_x);
-        max_y = max_y.max(rotated_y);
+    let corners = [(left, top), (right, top), (left, bottom), (right, bottom)];
+    let denominators = corners.map(|(x, y)| transform.denominator(x, y));
+    let has_front = denominators.iter().any(|&value| value > NEAR_PLANE_EPSILON);
+    let has_back = denominators
+        .iter()
+        .any(|&value| value <= NEAR_PLANE_EPSILON);
+    if !has_front {
+        return vaco_filter_text::AlphaMask::blank(budget, 0, 0, 0, 0);
     }
 
-    let clamp_i32 = |value: f64| value.clamp(f64::from(i32::MIN), f64::from(i32::MAX));
-    let out_x = clamp_i32(min_x.floor()) as i32;
-    let out_y = clamp_i32(min_y.floor()) as i32;
-    let out_right = clamp_i32(max_x.ceil()) as i32;
-    let out_bottom = clamp_i32(max_y.ceil()) as i32;
+    let (out_x, out_y, out_right, out_bottom) = if has_back {
+        (
+            0,
+            0,
+            i32::try_from(frame_size.0).unwrap_or(i32::MAX),
+            i32::try_from(frame_size.1).unwrap_or(i32::MAX),
+        )
+    } else {
+        let mut min_x = f64::INFINITY;
+        let mut min_y = f64::INFINITY;
+        let mut max_x = f64::NEG_INFINITY;
+        let mut max_y = f64::NEG_INFINITY;
+        for (x, y) in corners {
+            let Some((projected_x, projected_y)) = transform.project(x, y) else {
+                continue;
+            };
+            min_x = min_x.min(projected_x);
+            min_y = min_y.min(projected_y);
+            max_x = max_x.max(projected_x);
+            max_y = max_y.max(projected_y);
+        }
+        let clamp_i32 = |value: f64| value.clamp(f64::from(i32::MIN), f64::from(i32::MAX));
+        (
+            clamp_i32(min_x.floor()) as i32,
+            clamp_i32(min_y.floor()) as i32,
+            clamp_i32(max_x.ceil()) as i32,
+            clamp_i32(max_y.ceil()) as i32,
+        )
+    };
     let out_w = u32::try_from(i64::from(out_right) - i64::from(out_x)).unwrap_or(u32::MAX);
     let out_h = u32::try_from(i64::from(out_bottom) - i64::from(out_y)).unwrap_or(u32::MAX);
-    let mut rotated = vaco_filter_text::AlphaMask::blank(budget, out_x, out_y, out_w, out_h)?;
+    let mut projected = vaco_filter_text::AlphaMask::blank(budget, out_x, out_y, out_w, out_h)?;
 
     for row in 0..out_h {
         for col in 0..out_w {
             let dest_x = f64::from(out_x) + f64::from(col) + 0.5;
             let dest_y = f64::from(out_y) + f64::from(row) + 0.5;
-            let dx = dest_x - pivot.0;
-            let dy = dest_y - pivot.1;
-            let source_x = pivot.0 + cos * dx - sin * dy;
-            let source_y = pivot.1 + sin * dx + cos * dy;
+            let Some((source_x, source_y)) = transform.unproject(dest_x, dest_y) else {
+                continue;
+            };
             let coverage = sample_mask_bilinear(source, source_x, source_y);
-            if let Some(slot) = rotated
+            if let Some(slot) = projected
                 .coverage
                 .get_mut(row as usize * out_w as usize + col as usize)
             {
@@ -344,7 +462,7 @@ fn rotate_mask(
             }
         }
     }
-    Ok(rotated)
+    Ok(projected)
 }
 
 #[allow(
@@ -512,10 +630,98 @@ mod tests {
         let mut mask = vaco_filter_text::AlphaMask::blank(&mut budget, 4, 4, 5, 5).unwrap();
         mask.coverage[8] = 255;
 
-        let rotated = rotate_mask(&mask, &mut budget, (6.5, 6.5), 90.0).unwrap();
+        let rotated = project_mask(
+            &mask,
+            &mut budget,
+            (6.5, 6.5),
+            (0.0, 0.0, 90.0),
+            ASS_CAMERA_DISTANCE,
+            (20, 20),
+        )
+        .unwrap();
 
         assert_eq!(rotated.coverage_at(5, 5), 255);
         assert_eq!(rotated.coverage_at(7, 5), 0);
+    }
+
+    #[test]
+    fn positive_x_and_y_rotation_follow_ass_depth_directions() {
+        let x_rotation = ProjectiveTransform::new((10.0, 10.0), (60.0, 0.0, 0.0), 100.0)
+            .expect("finite rotation");
+        let top = x_rotation.project(10.0, 0.0).expect("visible point");
+        let bottom = x_rotation.project(10.0, 20.0).expect("visible point");
+        assert!(top.1 > 5.0 && top.1 < 10.0, "top moves into the screen");
+        assert!(
+            bottom.1 > 15.0,
+            "bottom moves out of the screen toward the viewer"
+        );
+
+        let y_rotation = ProjectiveTransform::new((10.0, 10.0), (0.0, 60.0, 0.0), 100.0)
+            .expect("finite rotation");
+        let left = y_rotation.project(0.0, 10.0).expect("visible point");
+        let right = y_rotation.project(20.0, 10.0).expect("visible point");
+        assert!(left.0 < 5.0, "left moves out toward the viewer");
+        assert!(
+            right.0 > 10.0 && right.0 < 15.0,
+            "right moves into the screen"
+        );
+    }
+
+    #[test]
+    fn combined_projection_inverse_recovers_the_source_point() {
+        let transform = ProjectiveTransform::new((23.0, 17.0), (31.0, -22.0, 47.0), 312.5)
+            .expect("finite rotation");
+        let projected = transform.project(41.0, 29.0).expect("visible point");
+        let restored = transform
+            .unproject(projected.0, projected.1)
+            .expect("invertible point");
+
+        assert!((restored.0 - 41.0).abs() < 1e-9);
+        assert!((restored.1 - 29.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn z_only_projection_preserves_counterclockwise_rotation() {
+        let transform =
+            ProjectiveTransform::new((6.0, 6.0), (0.0, 0.0, 90.0), 312.5).expect("finite rotation");
+        let projected = transform.project(8.0, 6.0).expect("visible point");
+
+        assert!((projected.0 - 6.0).abs() < 1e-9);
+        assert!((projected.1 - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn camera_plane_crossing_uses_frame_bounded_output() {
+        use vaco_limits::{Budget, Limits};
+
+        let mut budget = Budget::new(Limits::default());
+        let source = vaco_filter_text::AlphaMask::blank(&mut budget, 0, 0, 40, 20).unwrap();
+        let projected = project_mask(
+            &source,
+            &mut budget,
+            (20.0, 10.0),
+            (0.0, 90.0, 0.0),
+            10.0,
+            (320, 240),
+        )
+        .unwrap();
+
+        assert_eq!((projected.x, projected.y), (0, 0));
+        assert_eq!((projected.w, projected.h), (320, 240));
+
+        let mut tiny_budget = Budget::new(Limits::tiny());
+        let tiny_source =
+            vaco_filter_text::AlphaMask::blank(&mut tiny_budget, 0, 0, 40, 20).unwrap();
+        let error = project_mask(
+            &tiny_source,
+            &mut tiny_budget,
+            (20.0, 10.0),
+            (0.0, 90.0, 0.0),
+            10.0,
+            (320, 240),
+        )
+        .unwrap_err();
+        assert!(matches!(error, vaco_core::Error::LimitExceeded { .. }));
     }
 
     #[test]
@@ -543,5 +749,46 @@ mod tests {
         // crop from (144,54) to (84,114): exactly 60 px left and down.
         assert_eq!(shifted.0.saturating_add(60), centered.0);
         assert_eq!(shifted.1, centered.1.saturating_add(60));
+    }
+
+    #[test]
+    fn frx60_real_render_matches_reference_foreshortening() {
+        let base = render_bounds(include_str!("../tests/data/fr3d-base.ass"));
+        let tilted = render_bounds(include_str!("../tests/data/frx60.ass"));
+
+        // Reference crops: base=64:30:128:104, frx60=64:16:128:112.
+        assert!(tilted.2.abs_diff(base.2) <= 4);
+        assert!(tilted.3.saturating_mul(2).abs_diff(base.3) <= 8);
+        assert!((2 * tilted.1 + tilted.3).abs_diff(240) <= 8);
+    }
+
+    #[test]
+    fn fry60_real_render_matches_reference_foreshortening() {
+        let base = render_bounds(include_str!("../tests/data/fr3d-base.ass"));
+        let tilted = render_bounds(include_str!("../tests/data/fry60.ass"));
+
+        // Reference crops: base=64:30:128:104, fry60=32:30:142:104.
+        assert!(
+            tilted.2.saturating_mul(2).abs_diff(base.2) <= 8,
+            "base={base:?}, tilted={tilted:?}"
+        );
+        assert!(
+            tilted.3.abs_diff(base.3) <= 8,
+            "base={base:?}, tilted={tilted:?}"
+        );
+        assert!((2 * tilted.0 + tilted.2).abs_diff(316) <= 8);
+    }
+
+    #[test]
+    fn frx_shifted_origin_matches_reference_perspective() {
+        let centered = render_bounds(include_str!("../tests/data/frx60.ass"));
+        let shifted = render_bounds(include_str!("../tests/data/frx60-org.ass"));
+
+        // Moving only org Y 120 -> 180 changes the reference crop from
+        // 64:16:128:112 to 56:10:132:150.
+        assert!(shifted.2 < centered.2);
+        assert!(shifted.3 < centered.3);
+        assert!((2 * shifted.0 + shifted.2).abs_diff(320) <= 8);
+        assert!(shifted.1.abs_diff(centered.1.saturating_add(38)) <= 8);
     }
 }
