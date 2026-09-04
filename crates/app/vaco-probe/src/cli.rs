@@ -318,8 +318,8 @@ pub fn parse<S: AsRef<std::ffi::OsStr>>(argv: &[S]) -> Result<Options, CliError>
                         })?,
                     );
             }
-            // Last wins. Observed: `-read_intervals '%+#2' -read_intervals
-            // '%+#1'` reads one packet, not three and not two.
+            // Last wins. Two successive packet-count intervals requesting two
+            // and then one packet read one packet, not three or two.
             "read_intervals" => {
                 let v = value(opt, "read_intervals")?;
                 // The value in the message is the raw spec, as the reference's

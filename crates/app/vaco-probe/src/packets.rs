@@ -1,13 +1,11 @@
 //! The packet read loop: `-show_packets`, `-count_packets`, `-select_streams`
 //! and `-read_intervals`, all of which are the same pass over the file.
 //!
-//! # What it is
-//!
 //! One function, [`read`], that walks the demuxer once and does three things at
 //! the same time — emits `[PACKET]` sections, counts packets per stream, and
 //! stops where `-read_intervals` says to. They are one pass because the
 //! reference makes them one pass, and the observable consequence is that
-//! `-count_packets -read_intervals '%+#3'` reports **3**, not the file's total.
+//! a three-packet interval reports **3**, not the file's total.
 //!
 //! # How it works
 //!
@@ -21,14 +19,11 @@
 //!                           -> Stop: this packet is DROPPED, next interval
 //! ```
 //!
-//! The dropped packet is the part that is not obvious and is measured:
-//! `-read_intervals '%+#1,%+#1'` on a two-stream MP4 prints the packets at file
-//! offsets 48 and **7675**, skipping the one at 5219. See [`crate::intervals`].
+//! The dropped packet is measured: two consecutive one-packet intervals on a
+//! two-stream MP4 print offsets 48 and **7675**, skipping 5219. See
+//! [`crate::intervals`].
 //!
-//! # Bounding the work (D6)
-//!
-//! Two bounds, and they answer different questions.
-//!
+//! Two bounds answer different questions:
 //! * `-read_intervals` is the **user's** bound. It is the reason a packet dump
 //!   on a two-hour file is usable at all.
 //! * A [`Budget`] is the **safety** bound. One unit of fuel per packet, so a
@@ -38,17 +33,10 @@
 //!   `Limits::tiny()` (2¹⁶) so a hostile input is bounded in milliseconds
 //!   rather than minutes.
 //!
-//! Note what does *not* need a bound: a read error. The reference stops the
-//! whole read on any `av_read_frame` failure, so a corrupt file terminates by
-//! the same path a well-formed one does.
-//!
-//! # How to change it
-//!
-//! The three measured rules — one dropped packet per interval boundary,
-//! counting only selected packets, and counting only what was shown — are
-//! pinned in this module's own tests, and the field-level output is pinned in
-//! `tests/packets.rs` against captured reference bytes. A change to any of
-//! them needs a new `ffprobe` run in the commit.
+//! A read error needs no separate fuel bound because it terminates the pass.
+//! Tests pin the three measured rules: one dropped packet per interval
+//! boundary, counting only selected packets, and counting only shown packets.
+//! `tests/packets.rs` pins field output against captured reference bytes.
 
 use std::io::Write;
 
@@ -196,10 +184,8 @@ fn stream_of(streams: &[Stream], index: u32) -> Option<&Stream> {
 /// like an approximation nothing could pin down. It is not — two probes settle
 /// it. On a five-second file with one video keyframe at 0:
 ///
-/// ```text
-/// -read_intervals '2%+#6'                     -> video 0.000000, audio -0.023220
-/// -read_intervals '2%+#3' -select_streams a   -> audio 1.996916
-/// ```
+/// Starting at 2 seconds without selection yields video 0.000000 and audio
+/// -0.023220; selecting audio yields audio 1.996916.
 ///
 /// Without a selection everything rewinds to the video keyframe at 0, audio
 /// included. Narrow the selection to audio and the audio lands at ~2 s instead.
@@ -371,8 +357,8 @@ mod tests {
 
     #[test]
     fn an_interval_boundary_drops_exactly_one_packet() {
-        // The measured `%+#1,%+#1` rule. Packets are (v0, v40, a0, v80, a20);
-        // the first interval shows v0, the second must show a0 — v40 is eaten.
+        // Measured with two one-packet intervals. Packets are (v0, v40, a0,
+        // v80, a20); the first shows v0 and the second a0, so v40 is eaten.
         let two = [
             ReadInterval {
                 start: None,
@@ -390,9 +376,9 @@ mod tests {
 
     #[test]
     fn select_streams_bounds_the_count_as_well_as_the_output() {
-        // `-select_streams v -read_intervals '%+#1,%+#1'` skips the second
-        // *video* packet, not the second packet. Counting follows the same
-        // rule: an unselected packet is never counted.
+        // With video selected, two one-packet intervals skip the second video
+        // packet rather than the second packet. Unselected packets are not
+        // counted.
         let two = [
             ReadInterval {
                 start: None,

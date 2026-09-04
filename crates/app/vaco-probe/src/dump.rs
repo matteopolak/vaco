@@ -1,49 +1,25 @@
 //! `-show_data`, `-data_dump_format` and `-show_data_hash`: the packet payload
 //! as text.
 //!
-//! # What it is
-//!
 //! Three options that add a field to `[PACKET]`. `data` is the payload rendered
 //! as an `xxd` hexdump or as base64; `data_hash` is `NAME:hex`. Both are plain
 //! strings to every writer, which is why the `json` output carries the newlines
 //! as `\n` escapes rather than as structure.
 //!
-//! # How it works
-//!
 //! [`xxd`] and [`base64`] build the string; [`HashAlg`] names an algorithm and
-//! [`vaco_hash::HashAlgo::labelled_digest`] runs it. Nothing here touches the section machinery —
-//! `show::packet` decides *whether* to call it and in what order.
+//! [`vaco_hash::HashAlgo::labelled_digest`] runs it. `show::packet` decides when
+//! to call them and in what order.
 //!
 //! # Provenance
 //!
-//! Every rule below is a run of `ffprobe` 8.1 (Homebrew, arm64 macOS) against a
-//! rawvideo file of exactly `n` bytes, which is the cheapest way to control a
-//! packet's length precisely:
+//! Measured with `ffprobe` 8.1 on rawvideo packets of 1, 2, 3, 4, 5, 15, 16,
+//! 17, 31, 32, and 33 bytes, covering every partial-group boundary:
 //!
-//! ```sh
-//! python3 -c 'open("rawN.gray","wb").write(bytes(range(N)))'
-//! ffprobe -v quiet -of json -show_packets -show_data \
-//!         -f rawvideo -video_size Nx1 -pixel_format gray rawN.gray
-//! ```
-//!
-//! Run for n ∈ {1,2,3,4,5,15,16,17,31,32,33}, which pins the partial-line
-//! padding at every position within a group and at both group boundaries.
-//!
-//! What that established:
-//!
-//! * The value **begins with a newline** and every line ends with one, so the
-//!   default writer prints `data=` and then an apparently blank line before the
-//!   next field. That blank line is the value's own trailing `\n` plus the
-//!   writer's.
-//! * The ASCII column starts at byte 51 of the line, always. A full line is
-//!   `"%08x: "` (10) + eight `"%04x "` groups (40) + one separator space.
-//! * A missing byte contributes two spaces, so the group separator survives.
-//! * `-data_dump_format base64` replaces the whole thing with the payload
-//!   wrapped at **80 base64 characters** per line. The 17-byte file does not
-//!   show that; the 5 171-byte packet does.
-//! * An unknown dump format is an error: `Unknown data dump format with name
-//!   'hex'`, exit 1.
-//! * `data` is emitted **before** `data_hash` when both are asked for.
+//! - The value begins and ends with a newline.
+//! - The ASCII column starts at byte 51; missing bytes contribute two spaces.
+//! - Base64 wraps at 80 characters per line.
+//! - An unknown format reports an error and exits 1.
+//! - `data` precedes `data_hash` when both are requested.
 
 use core::fmt::Write as _;
 

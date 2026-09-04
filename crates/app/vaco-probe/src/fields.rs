@@ -1,60 +1,26 @@
 //! The per-field tables: which fields, in which order, spelled how, and
 //! **integer or string**.
 //!
-//! This is the module the whole crate exists to get right. `vaco-textformat`
-//! decides how a field is *rendered*; nothing in it decides which fields there
-//! are, what order they come in, or whether a given field goes through
+//! `vaco-textformat` decides how a field is rendered; this module decides which
+//! fields exist, their order, and whether each value goes through
 //! [`TextFormat::int`](vaco_textformat::TextFormat::int) or
-//! [`TextFormat::str`](vaco_textformat::TextFormat::str). There is no rule to
-//! derive that from — `channels` is an integer and `sample_rate` is a string,
-//! next to each other, both holding a plain number — so it is a table, and the
-//! table was **measured**, never inferred.
+//! [`TextFormat::str`](vaco_textformat::TextFormat::str). The distinction cannot
+//! be inferred: `channels` is an integer while `sample_rate` is a string.
 //!
 //! # Provenance
 //!
-//! Every row below was read off `ffprobe` 8.1 (Homebrew, arm64 macOS) under
-//! `LC_ALL=C`, and each column has its own experiment:
-//!
-//! * **Order** — the order fields appear in `-of flat -show_optional_fields
-//!   always`, which prints every field including the unavailable ones, so no
-//!   field can hide.
-//! * **Integer versus string** — cross-checked between two writers that spell
-//!   the distinction differently, and which would have to be wrong in the same
-//!   way to agree: `json` quotes strings and not integers, `flat` quotes
-//!   strings and not integers. They agree on every row. Plan 13 §1b's rule is
-//!   that the layer between you and the answer has opinions; two layers with
-//!   different opinions agreeing is the cheapest way to buy confidence here.
-//! * **The placeholder for an absent value** — `N/A` is *not* universal. The
-//!   colour fields print `unknown`, `chroma_location` prints `unspecified`, and
-//!   `level` prints the integer `-99`. Each was obtained by finding an input
-//!   that genuinely lacks the value rather than by assuming.
-//!
-//! The commands, so the table can be re-derived when the pinned reference moves:
-//!
-//! ```sh
-//! ffmpeg -f lavfi -i testsrc2=size=320x240:rate=25:duration=2 \
-//!        -f lavfi -i sine=frequency=440:duration=2 \
-//!        -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest av.mp4
-//! ffmpeg -f lavfi -i testsrc2=size=32x24:rate=5:duration=0.4 -pix_fmt gray raw.yuv
-//!
-//! ffprobe -v quiet -of flat -show_optional_fields always -show_streams av.mp4
-//! ffprobe -v quiet -of json                             -show_streams av.mp4
-//! ffprobe -v quiet -of flat -show_optional_fields always \
-//!         -f rawvideo -video_size 32x24 -pixel_format gray -show_streams raw.yuv
-//! ```
-//!
-//! The third one is the interesting one: raw video has no aspect ratio, no
-//! colour description, no level and no stream id, so it is the input that
-//! reveals every placeholder at once.
+//! Every row was measured from `ffprobe` 8.1 under `LC_ALL=C`. Flat output with
+//! optional fields forced on establishes order; flat and JSON independently
+//! establish integer-versus-string types. A raw gray-video input exposes all
+//! absent-value spellings at once: colour fields use `unknown`,
+//! `chroma_location` uses `unspecified`, and `level` uses integer `-99` rather
+//! than the otherwise common `N/A`.
 //!
 //! # How to change it
 //!
-//! Do not, without a reference run to back it. `tests/reference.rs` holds
-//! captured `ffprobe` bytes; a change that does not move those bytes did not
-//! change behaviour, and one that does move them needs the invocation recorded
-//! beside the new bytes. `tests/fields.rs` additionally asserts that what the
-//! emitters emit is exactly this table, in this order — so adding a field here
-//! without emitting it, or emitting one that is not here, fails.
+//! Re-measure before changing a row. `tests/reference.rs` stores captured bytes
+//! with their invocation, while `tests/fields.rs` checks that emitters follow
+//! this table exactly and in order.
 
 /// How a field reaches the writer.
 ///
@@ -290,7 +256,7 @@ pub static FORMAT: &[Field] = &[
 ///
 /// ```sh
 /// ffprobe -v quiet -of flat -show_optional_fields always -show_packets \
-///         -read_intervals '%+#3' av.mp4
+///         -read_intervals '%+#N' av.mp4  # with N = 3
 /// ```
 ///
 /// across MP4, Matroska and MPEG-TS: the same eleven fields in the same order

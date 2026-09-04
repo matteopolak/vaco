@@ -24,9 +24,8 @@ use crate::fields::{self, Field, Scope};
 /// `nb_read_packets` and `nb_read_frames` are the only two stream fields that
 /// cannot be answered from the header — they are the result of having read the
 /// file, and they are **bounded by `-read_intervals` and `-select_streams`**.
-/// Measured: `-count_packets -read_intervals '%+#3'` on a two-stream MP4
-/// reports `nb_read_packets` of 2 and 1, not 50 and 88, so the counter counts
-/// what was *shown*, not what exists.
+/// Measured on a three-packet interval over a two-stream MP4: the counts are 2
+/// and 1, not 50 and 88, so the counter tracks what was shown, not what exists.
 #[derive(Clone, Copy, Default, Debug)]
 pub struct Counts {
     pub read_packets: Option<u64>,
@@ -163,8 +162,8 @@ pub fn stream<W: Write>(
     e.tf().close()
 }
 
-/// `s.metadata` minus the keys `stream_value` already surfaced as their own
-/// `[STREAM]` fields (`ts_id`, `ts_packetsize` — issue #635).
+/// `s.metadata` minus keys already surfaced as dedicated `[STREAM]` fields
+/// (`ts_id` and `ts_packetsize`).
 ///
 /// `Stream::metadata` is the one channel this crate has for a demuxer to hand
 /// back an out-of-band fact, and `vaco-demux-mpegts` uses it for two purposes
@@ -260,8 +259,7 @@ fn stream_fields<W: Write>(
         // `id=0x1` from MP4 and `id=N/A` from Matroska, and Matroska's
         // `TrackNumber` is every bit as real an identifier — the reference
         // simply does not print it. Suppressing it here rather than leaving
-        // `Stream::id` unset keeps `-map 0:#1` working on Matroska, which is
-        // the other thing the field is for.
+        // `Stream::id` unset preserves Matroska stream-id mapping.
         if field.name == "id" && !show_ids {
             val = Val::Absent;
         }

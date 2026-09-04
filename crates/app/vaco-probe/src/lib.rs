@@ -1,29 +1,15 @@
 //! The `ffprobe`-equivalent: open a container, describe it, print nothing else.
 //!
-//! # What it is
-//!
 //! `vaco-probe` turns an argument vector and a media file into bytes on a
-//! stream. It is the v0.1 acceptance surface (D5), and the acceptance criterion
-//! is **byte identity** with the reference (D6) — not "equivalent information",
-//! not "structurally the same JSON". A trailing space is a failure.
+//! stream. Observable output is checked for byte identity with the reference,
+//! not merely equivalent information.
 //!
 //! # How it works
 //!
-//! Four crates do most of the work, and this one is the wiring plus one table:
-//!
-//! | Crate | Owns |
-//! |---|---|
-//! | `vaco-cli-core` | the option table, the specifier grammar, the scope model |
-//! | `vaco-registry` | which demuxers exist |
-//! | `vaco-format-core` | probing, and the [`Demuxer`](vaco_format_core::Demuxer) trait |
-//! | `vaco-textformat` | the six writers, and every number that reaches them |
-//!
-//! What is left, and what this crate is really *for*, is
-//! [`fields`] — **which** fields, in **what order**, with **what spelling**,
-//! and **integer or string**. Nothing else decides that, nothing derives it,
-//! and it was measured rather than reasoned about. Read [`fields`] first.
-//!
-//! The run is:
+//! `vaco-cli-core` owns option parsing, `vaco-registry` selects demuxers,
+//! `vaco-format-core` probes and reads containers, and `vaco-textformat` owns the
+//! six writers. This crate wires them together and owns [`fields`]: which fields
+//! appear, in what order, with what spelling and type.
 //!
 //! ```text
 //! argv ──▶ [cli]      the option set                          (vaco-cli-core)
@@ -37,38 +23,14 @@
 //! ```
 //!
 //! [`packets`] is one pass because the reference makes it one pass, and the
-//! observable consequence is that `-count_packets -read_intervals '%+#3'`
-//! reports 3 rather than the file's total.
+//! observable consequence is that a three-packet interval limits the count to
+//! three rather than the file total.
 //!
-//! # A correction worth stating plainly
-//!
-//! **`ffprobe file.mp4`, with no other options, prints nothing on stdout.**
-//! Everything it shows — the version banner, the build configuration, the
-//! `Input #0, mov,mp4,m4a,3gp,3g2,mj2, from 'file.mp4':` block — goes to
-//! *stderr*, from the logging layer, not from the section writers. Verified:
-//!
-//! ```sh
-//! ffprobe av.mp4 2>/dev/null | wc -c   # 0
-//! ```
-//!
-//! So the stdout acceptance target is `-show_streams` / `-show_format` and
-//! their relatives, which is what this crate implements byte-identically. The
-//! stderr banner is a *different* target, and half of it — `ffprobe version
-//! 8.1`, the Homebrew configure line, `libavutil 60. 26.100` — is `FFmpeg`'s
-//! identity, which we must not print. [`banner`] emits Vaco's own, in the same
-//! shape. See `docs/app/vaco-probe.md`.
-//!
-//! # How to change it
-//!
-//! A change to observable output needs a reference run in the commit. The
-//! captured bytes live in `tests/reference.rs` with the invocation that
-//! produced each one; `tests/fields.rs` asserts the emitters follow
-//! [`fields`]'s tables in order. Neither will let a field move quietly.
-//!
-//! # Configuration
-//!
-//! No environment variables and no config files. Everything is an option, and
-//! every option is in `vaco_cli_core::table::ffprobe()`.
+//! Measured: `ffprobe file.mp4` writes no stdout without a `-show_*` option; its
+//! banner and input summary are stderr logging. [`banner`] emits Vaco's own
+//! identity in that shape. Reference captures and commands live in
+//! `tests/reference.rs`; configuration is entirely through the option table in
+//! `vaco_cli_core::table::ffprobe()`. See `docs/app/vaco-probe.md`.
 
 #![forbid(unsafe_code)]
 
