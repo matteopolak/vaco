@@ -1,66 +1,37 @@
 //! `-read_intervals`: the user's bound on a packet dump.
 //!
-//! # What it is
+//! # Grammar and execution
 //!
 //! A packet dump is unbounded by construction — `-show_packets` on a two-hour
 //! file emits one section per packet. `-read_intervals` is the option that
-//! bounds it, and D6's "a hostile file must terminate" rests on it as much as
-//! any user's convenience does. The grammar, from plan 14 §5.3:
+//! bounds it for both resource control and user convenience.
 //!
 //! ```ebnf
 //! INTERVALS ::= INTERVAL ( ',' INTERVAL )*
 //! INTERVAL  ::= [ START | '+' START_OFFSET ] [ '%' [ END | '+' END_OFFSET | '#' COUNT ] ]
 //! ```
 //!
-//! # How it works
-//!
 //! [`parse`] turns the text into [`ReadInterval`]s; [`Cursor`] applies one at a
-//! time to a packet stream. The two are deliberately separate — the parser is
-//! pure and property-tested, the cursor is a small state machine over
-//! timestamps, and neither needs the other to be tested.
+//! time to selected packets. The parser is pure and property-tested; the cursor
+//! is a small timestamp state machine.
 //!
 //! # Provenance
 //!
-//! Measured against `ffprobe` 8.1 (Homebrew, arm64 macOS) under `LC_ALL=C`, on
-//! a 2 s H.264+AAC MP4 built by
+//! Measurements against `ffprobe` 8.1 under `LC_ALL=C` used a two-second
+//! H.264-plus-AAC MP4 and established behavior not derivable from the grammar:
+//! packet counts include selected packets only; count syntax is legal only
+//! after `%+` and never as a start; a negative count warns and yields an empty
+//! interval with exit status zero; relative ends use the position actually
+//! found; the last repeated option wins; and empty intervals are errors.
 //!
-//! ```sh
-//! ffmpeg -f lavfi -i testsrc2=size=320x240:rate=25:duration=2 \
-//!        -f lavfi -i sine=frequency=440:duration=2 \
-//!        -c:v libx264 -pix_fmt yuv420p -c:a aac -shortest av.mp4
-//! ```
-//!
-//! and read back with
-//!
-//! ```sh
-//! ffprobe -v error -of csv=p=0:nk=1 -show_entries packet=pos \
-//!         -show_packets -select_streams v -read_intervals '<spec>' av.mp4
-//! ```
-//!
-//! What that run established, none of which is derivable from the grammar:
-//!
-//! | Spec | Observed | Rule |
-//! |---|---|---|
-//! | `%+#5` | 5 packets | `#N` counts *selected* packets only |
-//! | `%+#1,%+#1` | packets 1 and **3** | each interval eats one extra packet on the way out |
-//! | `%#5` | rejected | `#` is legal only directly after `%+` |
-//! | `#5` | rejected | `#` is never a *start* |
-//! | `%+#-1` | 0 packets, **exit 0** | a bad count is a warning and an empty interval, not an error |
-//! | `1%+0.04` on a file whose only keyframe is at 0 | end is 0.04, not 1.04 | the offset end is measured from the position actually **found** |
-//! | `-read_intervals a -read_intervals b` | `b` | last wins |
-//! | `,%+#2` / `%+#2,` | rejected | an empty interval is an error, so no trailing comma |
-//!
-//! The one that costs a naive implementation is the second: after an interval
-//! ends, the packet that ended it has already been consumed and is **not**
-//! shown by the next interval.
+//! Ending an interval consumes but does not show the packet that crossed its
+//! bound. Consequently, two consecutive one-packet intervals show the first
+//! and third selected packets, not the first two.
 //!
 //! # How to change it
 //!
-//! Every rule above is a reference run, and a change to any of them needs a new
-//! one in the commit. The parse results are pinned by this module's own tests;
-//! the `%+#1,%+#1` rule is pinned twice — once in [`Cursor`]'s tests and once
-//! end-to-end in `packets`'s — because it is the rule most likely to be
-//! "simplified" away.
+//! Re-measure changed semantics against the reference. Parsing is pinned here;
+//! packet-consumption behavior is also covered end-to-end in `packets`.
 
 use core::fmt;
 
@@ -309,7 +280,7 @@ pub enum Admission {
     /// Show it, and count it.
     Show,
     /// The interval is over. This packet is **consumed and not shown** — the
-    /// measured `%+#1,%+#1` behaviour.
+    /// measured behavior for consecutive one-packet intervals.
     Stop,
 }
 
@@ -317,8 +288,8 @@ pub enum Admission {
 ///
 /// Only *selected* packets reach [`Cursor::admit`]; a packet filtered out by
 /// `-select_streams` never counts toward `#N` and never establishes the origin
-/// of a relative end. Measured: `-select_streams v -read_intervals '%+#1,%+#1'`
-/// skips the second **video** packet, not the second packet.
+/// of a relative end. Consecutive one-packet video intervals skip the second
+/// selected video packet, not merely the second input packet.
 #[derive(Clone, Copy, Debug)]
 pub struct Cursor {
     end: Option<EndBound>,
@@ -418,7 +389,8 @@ mod tests {
 
     #[test]
     fn hash_is_only_legal_after_percent_plus() {
-        // Observed: `#5` and `+#5` are start errors, `%#5` is an end error.
+        // Bare and plus-prefixed counts are start errors; a bare count after
+        // percent is an end error.
         assert_eq!(parse("#5"), Err(IntervalError::Start("#5".to_owned())));
         assert_eq!(parse("+#5"), Err(IntervalError::Start("#5".to_owned())));
         assert_eq!(parse("%#5"), Err(IntervalError::End("#5".to_owned())));
@@ -485,9 +457,8 @@ mod tests {
 
     #[test]
     fn an_interval_eats_the_packet_that_ends_it() {
-        // The measured `%+#1,%+#1` rule: the second interval starts *after*
-        // the packet that stopped the first. `Admission::Stop` is what carries
-        // that — the caller must not re-offer the packet.
+        // The second interval starts after the packet that stopped the first.
+        // `Admission::Stop` tells the caller not to re-offer that packet.
         let mut c = Cursor::new(ReadInterval {
             start: None,
             end: Some(EndBound::Packets(1)),
