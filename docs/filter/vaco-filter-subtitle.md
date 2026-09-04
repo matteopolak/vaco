@@ -26,7 +26,11 @@ construction, not a stream.
   distance, scaled to the frame. Its inverse-mapped mask is bounded to
   the projected corners before allocation; a camera-plane crossing uses
   the frame as its finite sampling bound. It is then clipped and
-  composited through the same path as unrotated text.
+  composited through the same path as unrotated text. `render_at` supplies
+  its frame timestamp to `vaco-ass`, so supported style and X/Y/Z rotation
+  tags nested in `\t(...)` interpolate before layout and projection. The
+  plan holds only the resolved state for that instant rather than an
+  unbounded animation list.
 - [`subtitles`](../../crates/filter/vaco-filter-subtitle/src/subtitles.rs) dispatches on file extension: `.ass`/`.ssa` gets the
   full `ass_filter` path; everything else falls back to a simpler
   "layout and draw" path — currently implemented for **SRT only**
@@ -53,10 +57,9 @@ construction, not a stream.
   format-agnostic once you have plain cue text and timing.
 - `BorderStyle=3`: `ass_filter.rs`'s composite step would need an
   opaque-box path alongside its current outline+shadow one.
-- Animation interpolation, karaoke and `\p` drawings remain separate
-  #488 work. They need time/run/path data that the current static
-  `EventPlan` does not carry; do not approximate them in the projective
-  mask helper.
+- Motion/fade/animated-clip line state, karaoke and `\p` drawings remain
+  separate #488 work. Keep them outside the projective mask helper;
+  transform interpolation belongs in `vaco-ass`'s point-in-time planner.
 
 ## Configuration
 
@@ -77,3 +80,6 @@ distance and checked crops were calibrated with ffmpeg-full 9.0.1/libass
 `64:30:128:104` unrotated, `64:16:128:112` under `\frx60`, and
 `32:30:142:104` under `\fry60`; moving only `\org`'s Y from 120 to 180
 changes the X-rotated crop to `56:10:132:150`.
+The exact transform-animation fixture changes its visible bounds from
+`88x31` at 0.5 seconds to `76x76` at the 2.0-second midpoint and `31x88`
+at 3.5 seconds.

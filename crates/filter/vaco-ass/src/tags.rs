@@ -76,8 +76,9 @@ fn tokenize_tags(inner: &str) -> Vec<Item> {
     while let Some(start) = rest.find('\\') {
         rest = &rest[start + 1..];
         let name_len = rest
-            .find(|c: char| !c.is_ascii_alphabetic())
-            .unwrap_or(rest.len());
+            .char_indices()
+            .find(|(index, c)| !(c.is_ascii_alphabetic() || *index == 0 && c.is_ascii_digit()))
+            .map_or(rest.len(), |(index, _)| index);
         let name: String = rest[..name_len].to_ascii_lowercase();
         rest = &rest[name_len..];
         if name.is_empty() {
@@ -178,6 +179,20 @@ mod tests {
                     arg: Some("100,200".to_owned())
                 },
                 Item::Text("x".to_owned())
+            ]
+        );
+    }
+
+    #[test]
+    fn numeric_colour_tag_name_is_kept_whole() {
+        assert_eq!(
+            tokenize(r"{\1c&H0000FF&}x"),
+            vec![
+                Item::Tag {
+                    name: "1c".to_owned(),
+                    arg: Some("&H0000FF&".to_owned()),
+                },
+                Item::Text("x".to_owned()),
             ]
         );
     }

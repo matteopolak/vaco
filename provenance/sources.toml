@@ -49,6 +49,13 @@ acquired = "2026-09-04"
 where    = "local ffmpeg-full 9.0.1 binary; fixtures in crates/filter/vaco-filter-subtitle/tests/data"
 
 [[source]]
+id       = "ffmpeg-ass-transform-probe"
+kind     = "blackbox"
+title    = "ffmpeg-full 9.0.1/libass 0.17.5 ASS filter black-box time-point probes on the committed 320x240 Arial 48 TILT fixture: \\t(1000,3000,\\frz90) has visible bounds 88:31:116:104 before the interval at 0.5 seconds, 76:76:118:78 at the 2.0-second midpoint, and 31:88:144:76 after the interval at 3.5 seconds"
+acquired = "2026-09-04"
+where    = "local ffmpeg-full 9.0.1 binary; fixture crates/filter/vaco-filter-subtitle/tests/data/t-frz90.ass"
+
+[[source]]
 id       = "linux-perf-event-open"
 kind     = "spec"
 title    = "Linux perf_event_open(2) manual page and perf_event UAPI"

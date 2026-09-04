@@ -10,10 +10,10 @@
 //! `EventPlan` to a real frame and drives `vaco_filter_text::TextRenderer`.
 //!
 //! [`script::parse`] covers stage (a)'s parsing half: `[Script Info]`,
-//! `[V4+ Styles]`/`[V4 Styles]`, `[Events]`. [`plan::plan_event`] covers its
-//! tag-interpretation half, the static tag set. See that module's own doc
-//! for exactly which tags stage (b) still leaves as "recognised but not
-//! animated" and why each one is a stated gap rather than a silent drop.
+//! `[V4+ Styles]`/`[V4 Styles]`, `[Events]`. [`plan::plan_event_at`] covers its
+//! tag-interpretation half, including point-in-time style transforms. See that
+//! module's own doc for exactly which tags stage (b) still leaves static or
+//! ignored and why each one is a stated gap rather than a silent drop.
 //!
 //! No libass source was read to build this — ISC is Tier A and open to
 //! read (`planning/AGENT-CONSTRAINTS.md`'s "clean-room rule is about
@@ -28,6 +28,6 @@ pub mod script;
 pub mod style;
 pub mod tags;
 
-pub use plan::{EventPlan, ResolvedStyle, TextRun, plan_event};
+pub use plan::{EventPlan, ResolvedStyle, TextRun, plan_event, plan_event_at};
 pub use script::{Event, Script, ScriptInfo, parse};
 pub use style::Style;

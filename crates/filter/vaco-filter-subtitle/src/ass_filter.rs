@@ -128,7 +128,7 @@ pub fn render_at(
     let color_info = frame.color;
 
     for event in &events {
-        let plan = vaco_ass::plan_event(script, event);
+        let plan = vaco_ass::plan_event_at(script, event, t);
         let Some(first) = plan.runs.first() else {
             continue;
         };
@@ -548,7 +548,7 @@ mod tests {
         found.then(|| (min_x, min_y, max_x - min_x + 1, max_y - min_y + 1))
     }
 
-    fn render_bounds(script: &str) -> (u32, u32, u32, u32) {
+    fn render_bounds_at(script: &str, time: Duration) -> (u32, u32, u32, u32) {
         use vaco_frame::FramePool;
         use vaco_pixfmt::PixFmt;
 
@@ -562,8 +562,12 @@ mod tests {
         )
         .unwrap();
         let mut renderer = TextRenderer::new();
-        render_at(&script, &mut renderer, &mut frame, Duration::ZERO).unwrap();
+        render_at(&script, &mut renderer, &mut frame, time).unwrap();
         visible_bounds(&frame).expect("the rotated text must be visible")
+    }
+
+    fn render_bounds(script: &str) -> (u32, u32, u32, u32) {
+        render_bounds_at(script, Duration::ZERO)
     }
 
     #[test]
@@ -738,6 +742,25 @@ mod tests {
         assert!((2 * x + w).abs_diff(318) <= 16, "horizontal centre drifted");
         assert!((2 * y + h).abs_diff(258) <= 24, "vertical centre drifted");
         assert!(h > w.saturating_mul(3), "rotation must make the line tall");
+    }
+
+    #[test]
+    fn t_frz90_real_render_changes_at_reference_time_points() {
+        let script = include_str!("../tests/data/t-frz90.ass");
+        let before = render_bounds_at(script, Duration::from_micros(500_000));
+        let midpoint = render_bounds_at(script, Duration::from_micros(2_000_000));
+        let after = render_bounds_at(script, Duration::from_micros(3_500_000));
+
+        // ffmpeg-full 9.0.1 + libass 0.17.5 black-box bounds for this
+        // exact fixture are 88x31, 76x76 and 31x88 respectively.
+        assert!(before.2 > before.3.saturating_mul(2), "before={before:?}");
+        assert!(
+            midpoint.2.abs_diff(midpoint.3) <= 12,
+            "midpoint={midpoint:?}"
+        );
+        assert!(after.3 > after.2.saturating_mul(2), "after={after:?}");
+        assert!((2 * midpoint.0 + midpoint.2).abs_diff(320) <= 24);
+        assert!((2 * midpoint.1 + midpoint.3).abs_diff(240) <= 24);
     }
 
     #[test]

@@ -5,18 +5,20 @@
 //! frame pixels and calls `vaco_filter_text::TextRenderer`; nothing here
 //! touches a pixel.
 //!
-//! # Static tags only (stage (a), GitHub #487 / FT-5.2)
+//! # Static tags and style transforms (GitHub #487 / #488)
 //!
 //! Implemented: `\b \i \u \s \fn \fs \fscx \fscy \fsp \frx \fry \frz \fr \bord
 //! \xbord \ybord \shad \xshad \yshad \blur \be \c \1c \2c \3c \4c \alpha
 //! \1a \2a \3a \4a \an \a \pos \org \clip \r`.
 //!
+//! `\t(...)` evaluates its supported numeric and colour style tags at a
+//! requested event-relative time. The four standard timing/acceleration forms
+//! are supported; nested transforms and line-level tags inside a transform are
+//! ignored so evaluation remains non-recursive and cannot change placement.
+//!
 //! # Recognised but not animated (stage (b), GitHub #488 / FT-5.3)
 //!
-//! `\t(...)` — the override tags in its **last** argument are applied
-//! immediately and statically (the interpolation *target*, not an
-//! animation), which is a coarse but visible approximation, not a silent
-//! drop. `\move(x1,y1,x2,y2[,t1,t2])` uses `(x1, y1)` as a static `\pos`,
+//! `\move(x1,y1,x2,y2[,t1,t2])` uses `(x1, y1)` as a static `\pos`,
 //! ignoring the motion. `\fad`/`\fade` are parsed and ignored — the event
 //! renders at full opacity for its whole span rather than fading. `\k`/
 //! `\kf`/`\ko`/`\K` (karaoke) are parsed and ignored — no highlight sweep.
@@ -29,7 +31,7 @@
 //!
 //! Every one of these is a real, named gap — not a silent guess.
 
-use vaco_core::Rgba;
+use vaco_core::{Duration, Rgba};
 
 use crate::script::{Event, Script};
 use crate::style::Style;
@@ -125,12 +127,31 @@ struct Cursor<'a> {
     pos: Option<(f64, f64)>,
     origin: Option<(f64, f64)>,
     clip: Option<(f64, f64, f64, f64)>,
+    elapsed_ms: f64,
+    duration_ms: f64,
 }
 
-/// Interpret `event` against `script`'s styles into a drawable plan.
+/// Interpret `event` at its start time against `script`'s styles.
+///
+/// This compatibility entry point resolves transforms to their initial state.
+/// Renderers with a frame timestamp should call [`plan_event_at`].
 #[must_use]
 pub fn plan_event(script: &Script, event: &Event) -> EventPlan {
+    plan_event_at(script, event, event.start)
+}
+
+/// Interpret `event` against `script`'s styles at absolute timestamp `now`.
+///
+/// ASS transform times are relative to the event start. Times before or after
+/// a transform interval clamp to its start or target style respectively.
+#[must_use]
+pub fn plan_event_at(script: &Script, event: &Event, now: Duration) -> EventPlan {
     let base = script.style(&event.style);
+    let elapsed_micros = now.as_micros().saturating_sub(event.start.as_micros());
+    let duration_micros = event
+        .end
+        .as_micros()
+        .saturating_sub(event.start.as_micros());
     let mut cursor = Cursor {
         script,
         cur: ResolvedStyle::from_style(&base),
@@ -138,6 +159,8 @@ pub fn plan_event(script: &Script, event: &Event) -> EventPlan {
         pos: None,
         origin: None,
         clip: None,
+        elapsed_ms: elapsed_micros as f64 / 1_000.0,
+        duration_ms: duration_micros.max(0) as f64 / 1_000.0,
         base,
     };
     let mut runs = Vec::new();
@@ -309,15 +332,7 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
             *drawing_depth = level;
         }
         "t" => {
-            // Apply the last comma-separated argument's own tags
-            // immediately and statically — see the module doc.
-            if let Some(inner) = a.rsplit(',').next() {
-                for item in tokenize(&format!("{{{inner}}}")) {
-                    if let Item::Tag { name, arg } = item {
-                        apply_tag(cursor, &name, arg.as_deref(), drawing_depth);
-                    }
-                }
-            }
+            apply_transform(cursor, a);
         }
         // `\fad`/`\fade` (parsed, not applied) and `\k`/`\kf`/`\ko` (karaoke
         // timing, not applied) fall through to the wildcard arm below.
@@ -330,6 +345,195 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
             cursor.cur = ResolvedStyle::from_style(&target);
         }
         _ => {}
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TransformTiming {
+    start_ms: f64,
+    end_ms: f64,
+    acceleration: f64,
+}
+
+fn apply_transform(cursor: &mut Cursor<'_>, argument: &str) {
+    let Some(modifier_start) = argument.find('\\') else {
+        return;
+    };
+    let (timing_text, modifiers) = argument.split_at(modifier_start);
+    let Some(timing) = parse_transform_timing(timing_text, cursor.duration_ms) else {
+        return;
+    };
+    let Some(progress) = transform_progress(timing, cursor.elapsed_ms) else {
+        return;
+    };
+
+    let start = cursor.cur.clone();
+    let mut target = start.clone();
+    for item in tokenize(&format!("{{{modifiers}}}")) {
+        if let Item::Tag { name, arg } = item {
+            apply_transform_style_tag(&mut target, &name, arg.as_deref());
+        }
+    }
+    cursor.cur = interpolate_style(&start, &target, progress);
+}
+
+fn parse_transform_timing(text: &str, duration_ms: f64) -> Option<TransformTiming> {
+    let text = text.trim().trim_end_matches(',').trim();
+    let mut numbers = [0.0; 3];
+    let mut count = 0usize;
+    if !text.is_empty() {
+        for number in text.split(',') {
+            let slot = numbers.get_mut(count)?;
+            *slot = parse_num(number)?;
+            count += 1;
+        }
+    }
+    let timing = match count {
+        0 => TransformTiming {
+            start_ms: 0.0,
+            end_ms: duration_ms,
+            acceleration: 1.0,
+        },
+        1 => TransformTiming {
+            start_ms: 0.0,
+            end_ms: duration_ms,
+            acceleration: numbers[0],
+        },
+        2 => TransformTiming {
+            start_ms: numbers[0],
+            end_ms: numbers[1],
+            acceleration: 1.0,
+        },
+        3 => TransformTiming {
+            start_ms: numbers[0],
+            end_ms: numbers[1],
+            acceleration: numbers[2],
+        },
+        _ => return None,
+    };
+    [timing.start_ms, timing.end_ms, timing.acceleration]
+        .iter()
+        .all(|value| value.is_finite())
+        .then_some(timing)
+}
+
+fn transform_progress(timing: TransformTiming, elapsed_ms: f64) -> Option<f64> {
+    if timing.acceleration <= 0.0 || !elapsed_ms.is_finite() {
+        return None;
+    }
+    let linear = if timing.end_ms <= timing.start_ms {
+        if elapsed_ms >= timing.end_ms {
+            1.0
+        } else {
+            0.0
+        }
+    } else {
+        ((elapsed_ms - timing.start_ms) / (timing.end_ms - timing.start_ms)).clamp(0.0, 1.0)
+    };
+    let accelerated = linear.powf(timing.acceleration);
+    accelerated.is_finite().then_some(accelerated)
+}
+
+fn apply_transform_style_tag(style: &mut ResolvedStyle, name: &str, arg: Option<&str>) {
+    let a = arg.unwrap_or("");
+    match name {
+        "fs" => {
+            if let Some(relative) = a.strip_prefix('+') {
+                style.fontsize += parse_num(relative).unwrap_or(0.0);
+            } else if let Some(relative) = a.strip_prefix('-') {
+                style.fontsize -= parse_num(relative).unwrap_or(0.0);
+            } else if let Some(value) = parse_num(a) {
+                style.fontsize = value;
+            }
+        }
+        "fscx" => style.scale_x = parse_num(a).unwrap_or(style.scale_x),
+        "fscy" => style.scale_y = parse_num(a).unwrap_or(style.scale_y),
+        "fsp" => style.spacing = parse_num(a).unwrap_or(style.spacing),
+        "frx" => style.angle_x = parse_num(a).unwrap_or(style.angle_x),
+        "fry" => style.angle_y = parse_num(a).unwrap_or(style.angle_y),
+        "frz" | "fr" => style.angle_z = parse_num(a).unwrap_or(style.angle_z),
+        "bord" | "xbord" | "ybord" => {
+            style.outline = parse_num(a).unwrap_or(style.outline);
+        }
+        "shad" | "xshad" | "yshad" => {
+            style.shadow = parse_num(a).unwrap_or(style.shadow);
+        }
+        "blur" | "be" => style.blur = parse_num(a).unwrap_or(style.blur),
+        "c" | "1c" => style.primary = crate::color::parse_color(a).unwrap_or(style.primary),
+        "3c" => {
+            style.outline_colour = crate::color::parse_color(a).unwrap_or(style.outline_colour);
+        }
+        "4c" => style.back_colour = crate::color::parse_color(a).unwrap_or(style.back_colour),
+        "alpha" => {
+            if let Some(alpha) = crate::color::parse_alpha_only(a) {
+                style.primary.a = alpha;
+                style.outline_colour.a = alpha;
+                style.back_colour.a = alpha;
+            }
+        }
+        "1a" => {
+            if let Some(alpha) = crate::color::parse_alpha_only(a) {
+                style.primary.a = alpha;
+            }
+        }
+        "3a" => {
+            if let Some(alpha) = crate::color::parse_alpha_only(a) {
+                style.outline_colour.a = alpha;
+            }
+        }
+        "4a" => {
+            if let Some(alpha) = crate::color::parse_alpha_only(a) {
+                style.back_colour.a = alpha;
+            }
+        }
+        // Nested transforms and line-level tags deliberately cannot recurse
+        // or mutate placement, clipping, drawing mode, or reset state.
+        _ => {}
+    }
+}
+
+fn interpolate_style(
+    start: &ResolvedStyle,
+    target: &ResolvedStyle,
+    progress: f64,
+) -> ResolvedStyle {
+    let mut result = start.clone();
+    result.fontsize = interpolate_number(start.fontsize, target.fontsize, progress);
+    result.scale_x = interpolate_number(start.scale_x, target.scale_x, progress);
+    result.scale_y = interpolate_number(start.scale_y, target.scale_y, progress);
+    result.spacing = interpolate_number(start.spacing, target.spacing, progress);
+    result.angle_x = interpolate_number(start.angle_x, target.angle_x, progress);
+    result.angle_y = interpolate_number(start.angle_y, target.angle_y, progress);
+    result.angle_z = interpolate_number(start.angle_z, target.angle_z, progress);
+    result.outline = interpolate_number(start.outline, target.outline, progress);
+    result.shadow = interpolate_number(start.shadow, target.shadow, progress);
+    result.blur = interpolate_number(start.blur, target.blur, progress);
+    result.primary = interpolate_colour(start.primary, target.primary, progress);
+    result.outline_colour =
+        interpolate_colour(start.outline_colour, target.outline_colour, progress);
+    result.back_colour = interpolate_colour(start.back_colour, target.back_colour, progress);
+    result
+}
+
+fn interpolate_number(start: f64, target: f64, progress: f64) -> f64 {
+    if start.is_finite() && target.is_finite() {
+        start + (target - start) * progress
+    } else {
+        start
+    }
+}
+
+fn interpolate_colour(start: Rgba, target: Rgba, progress: f64) -> Rgba {
+    let channel = |start: u8, target: u8| {
+        interpolate_number(f64::from(start), f64::from(target), progress)
+            .round()
+            .clamp(0.0, 255.0) as u8
+    };
+    Rgba {
+        r: channel(start.r, target.r),
+        g: channel(start.g, target.g),
+        b: channel(start.b, target.b),
+        a: channel(start.a, target.a),
     }
 }
 
@@ -369,6 +573,7 @@ const fn legacy_alignment(v: i32) -> Option<i32> {
 mod tests {
     use super::*;
     use crate::script::parse;
+    use vaco_core::Duration;
 
     fn one_event(text: &str) -> (Script, Event) {
         let doc = format!(
@@ -461,10 +666,113 @@ mod tests {
     }
 
     #[test]
-    fn t_tag_applies_its_nested_tags_statically() {
-        let (script, event) = one_event(r"{\t(0,500,\fscx150)}x");
+    fn t_tag_four_legal_forms_interpolate_at_event_time() {
+        let cases = [
+            (r"{\frz0\t(\frz100)}x", 2_500_000, 50.0),
+            (r"{\frz0\t(2,\frz100)}x", 2_500_000, 25.0),
+            (r"{\frz0\t(1000,3000,\frz100)}x", 2_000_000, 50.0),
+            (r"{\frz0\t(1000,3000,2,\frz100)}x", 2_000_000, 25.0),
+        ];
+        for (text, time_micros, expected) in cases {
+            let (script, event) = one_event(text);
+            let plan = plan_event_at(&script, &event, Duration::from_micros(time_micros));
+            assert_eq!(plan.runs[0].style.angle_z, expected, "{text}");
+        }
+    }
+
+    #[test]
+    fn t_tag_clamps_time_and_steps_across_zero_duration() {
+        let (script, event) = one_event(r"{\frz0\t(1000,3000,\frz100)}x");
+        let before = plan_event_at(&script, &event, Duration::from_micros(500_000));
+        let after = plan_event_at(&script, &event, Duration::from_micros(4_000_000));
+        assert_eq!(before.runs[0].style.angle_z, 0.0);
+        assert_eq!(after.runs[0].style.angle_z, 100.0);
+
+        let (script, event) = one_event(r"{\frz0\t(1000,1000,\frz100)}x");
+        let before = plan_event_at(&script, &event, Duration::from_micros(999_000));
+        let at_end = plan_event_at(&script, &event, Duration::from_micros(1_000_000));
+        assert_eq!(before.runs[0].style.angle_z, 0.0);
+        assert_eq!(at_end.runs[0].style.angle_z, 100.0);
+    }
+
+    #[test]
+    fn t_tag_invalid_acceleration_keeps_the_snapshot() {
+        for acceleration in ["0", "-1", "NaN"] {
+            let text = format!(r"{{\frz10\t(0,5000,{acceleration},\frz100)}}x");
+            let (script, event) = one_event(&text);
+            let plan = plan_event_at(&script, &event, Duration::from_micros(2_500_000));
+            assert_eq!(plan.runs[0].style.angle_z, 10.0, "{acceleration}");
+        }
+    }
+
+    #[test]
+    fn t_tag_interpolates_supported_numeric_and_colour_fields() {
+        let (script, event) = one_event(
+            r"{\t(0,5000,\fs40\fscx200\fscy50\fsp10\frx20\fry40\frz60\bord6\shad10\blur4\1c&H0000FF&\3c&H00FF00&\4c&HFF0000&\alpha&H80&)}x",
+        );
+        let plan = plan_event_at(&script, &event, Duration::from_micros(2_500_000));
+        let style = &plan.runs[0].style;
+
+        assert_eq!(style.fontsize, 30.0);
+        assert_eq!(
+            (style.scale_x, style.scale_y, style.spacing),
+            (150.0, 75.0, 5.0)
+        );
+        assert_eq!(
+            (style.angle_x, style.angle_y, style.angle_z),
+            (10.0, 20.0, 30.0)
+        );
+        assert_eq!((style.outline, style.shadow, style.blur), (4.0, 6.0, 2.0));
+        assert_eq!(
+            style.primary,
+            Rgba {
+                r: 255,
+                g: 128,
+                b: 128,
+                a: 191
+            }
+        );
+        assert_eq!(
+            style.outline_colour,
+            Rgba {
+                r: 0,
+                g: 128,
+                b: 0,
+                a: 191
+            }
+        );
+        assert_eq!(
+            style.back_colour,
+            Rgba {
+                r: 0,
+                g: 0,
+                b: 128,
+                a: 191
+            }
+        );
+    }
+
+    #[test]
+    fn t_tag_preserves_nested_commas_but_not_line_level_changes() {
+        let (script, event) = one_event(r"{\frz0\t(0,5000,\clip(0,0,100,50)\frz100)}x");
+        let plan = plan_event_at(&script, &event, Duration::from_micros(2_500_000));
+        assert_eq!(plan.runs[0].style.angle_z, 50.0);
+        assert_eq!(plan.clip, None);
+    }
+
+    #[test]
+    fn t_tag_does_not_recurse_and_reset_starts_a_clean_run() {
+        let (script, event) = one_event(r"{\frz0\t(0,5000,\frz100\t(0,5000,\frz200))}spin{\r}flat");
+        let plan = plan_event_at(&script, &event, Duration::from_micros(2_500_000));
+        assert_eq!(plan.runs[0].style.angle_z, 50.0);
+        assert_eq!(plan.runs[1].style.angle_z, 0.0);
+    }
+
+    #[test]
+    fn plan_event_compatibility_wrapper_uses_the_event_start() {
+        let (script, event) = one_event(r"{\frz0\t(0,5000,\frz100)}x");
         let plan = plan_event(&script, &event);
-        assert_eq!(plan.runs[0].style.scale_x, 150.0);
+        assert_eq!(plan.runs[0].style.angle_z, 0.0);
     }
 
     #[test]
