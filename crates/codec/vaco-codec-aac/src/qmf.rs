@@ -1,108 +1,33 @@
 //! The SBR QMF analysis and synthesis filterbanks (ISO/IEC 14496-3 subpart
 //! 4 Sec 4.6.18.4, Figures 4.42/4.43, Table 4.A.89's prototype filter).
 //!
-//! # Why this lives in `vaco-codec-aac` and not `vaco-tx` or a new crate
+//! # Ownership
 //!
-//! `vaco-tx`'s own doc states its scope explicitly: "this crate is the
-//! transform, and nothing else: it contains no codec knowledge, no windows
-//! and no I/O." This filterbank fails that test on two counts at once --
-//! it is built around one specific, named, 640-tap prototype filter
-//! (Table 4.A.89, not a parametrised family), and its folding structure
-//! (Figures 4.42/4.43) is SBR-specific, not a general transform. The
-//! precedent this session already set twice -- `vaco-codec-vlc` held up
-//! unchanged for AAC's own codebooks, `vaco-codec-dsp-sinewin` needed a
-//! real extension for KBD -- pointed the other way here: this needed a new
-//! home, not an existing one stretched to fit.
+//! This is an AAC-specific filterbank, not a general transform: it fixes the
+//! 640-tap prototype from Table 4.A.89 and the SBR folding structure from
+//! Figures 4.42 and 4.43. It remains local while AAC is its only consumer;
+//! extract it if another codec needs the same subband-domain API.
 //!
-//! It is not a new top-level crate either, at least not yet. The only
-//! consumer today is this crate's own SBR decode; Parametric Stereo (#447)
-//! will be the second, since PS operates directly on this same QMF
-//! bank's subband domain -- but #447 is explicitly out of scope for this
-//! pass, and extracting a shared crate before a second real consumer
-//! exists would be speculative scope, not the "one shape per module"
-//! discipline D-01 actually argues for. Extract this module verbatim into
-//! its own crate the day #447 needs to depend on it without depending on
-//! all of `vaco-codec-aac`.
+//! # Prototype table
 //!
-//! # The prototype filter table: transcribed at half length, mirrored
+//! Table 4.A.89 is symmetric, so [`C_HALF`] transcribes indices `0..=320`
+//! and [`coeff`] mirrors the rest. Extracted text gave conflicting signs at
+//! indices 384 and 512 versus their mirror partners 256 and 128; symmetry and
+//! the surrounding monotonic values independently select the positive forms.
 //!
-//! Table 4.A.89's 640 coefficients are exactly symmetric, `c[i] ==
-//! c[640-i]` for every `i` in `1..=639` (a direct consequence of the
-//! filter's own construction as a symmetric FIR window) -- so only indices
-//! `0..=320` (321 values) are transcribed below; `coeff` derives the
-//! rest by mirroring. That mirror rule was not just a transcription
-//! shortcut: cross-checking the *directly* extracted text for the full
-//! 640-entry table (before this module chose to mirror instead) found
-//! exactly two indices, 384 and 512, whose printed sign disagreed with
-//! their mirror partners (256 and 128) despite every other pair of the
-//! 320 matching exactly -- and the surrounding values' own smooth,
-//! monotonic trend on both sides sided unambiguously with the *positive*
-//! reading at all four points. A real PDF-extraction sign flip, the same
-//! failure shape as the LongStart/LongStop boundary fractions this
-//! crate's own `reconstruct.rs` already flagged as unverifiable-from-text
-//! -- except here the mirror construction itself is the independent check
-//! that caught it, not a fixture run after the fact.
+//! # Algorithm and verification
 //!
-//! # The algorithm, directly from the flowcharts
+//! Analysis keeps 320 samples of state and maps 32 time-domain samples to 32
+//! complex subbands. Synthesis keeps 1,280 samples and maps 64 complex
+//! subbands to 64 real samples; this 32-in/64-out asymmetry performs SBR's
+//! sample-rate doubling. Both use direct modulation-matrix sums rather than
+//! an FFT-accelerated form.
 //!
-//! Both banks keep a persistent shift-register state (`AnalysisBank`'s
-//! 320-sample `x`, `SynthesisBank`'s 1280-sample `v`) across calls, one
-//! call per QMF timeslot. Analysis consumes 32 real time-domain samples
-//! and produces 32 complex subband samples; synthesis consumes 64 complex
-//! subband samples (32 from the core decode, up to 32 more from HF
-//! generation) and produces 64 real time-domain samples -- the doubling
-//! that gives SBR its sample-rate-doubling property is exactly this
-//! 32-in/64-out asymmetry, not a separate resampling step anywhere else
-//! in the pipeline.
-//!
-//! Implemented as a direct `O(N^2)` sum over the modulation matrix (32x64
-//! for analysis, 64x128 for synthesis) rather than an FFT-accelerated
-//! form, matching this workspace's established correctness-first
-//! reference-implementation convention for exactly this situation --
-//! `vaco_tx::reference::imdct` takes the identical approach and is used
-//! in this crate's own production decode path, not just as a test oracle.
-//!
-//! # Verification status: no defect found, and the search for one is worth reading
-//!
-//! [`AnalysisBank`] paired with [`DownsampledSynthesisBank`] (Sec
-//! 4.6.18.4.3 -- the specification's own same-rate inverse of the analysis
-//! bank, used here as the round-trip half of this module's correctness
-//! tests rather than the rate-doubling [`SynthesisBank`], which is not
-//! specified to invert a zero-padded analysis output) round-trips a
-//! single impulse to a clean, single, unity-gain delayed impulse at
-//! exactly 289 samples with no other energy anywhere else in the output
-//! (see `GROUP_DELAY` in this module's own tests) -- as clean a
-//! confirmation as a filterbank gets. Tones across 200 Hz-10 kHz, two
-//! widely-separated tones summed together, and white noise all
-//! reconstruct at correlation > 0.99 at that same 289-sample delay.
-//!
-//! **That clean result followed a real false alarm, worth recording
-//! because of what it cost and what resolved it.** A first verification
-//! pass searched a wide but arbitrarily-placed lag window (500-700
-//! samples) for both tones and noise: every tone correlated above 0.99
-//! at lag 593 within that window, while white noise correlated under 0.1
-//! everywhere in it. That split -- every individual frequency correct,
-//! their combination wrong -- reads exactly like a genuine phase or
-//! cross-band defect, and was reported as one. It was not: a sustained
-//! tone's correlation against a lagged copy of itself is periodic in the
-//! lag (a tone has no way to distinguish a true delay from a delay off
-//! by a whole number of its own periods), so "593" was one alias among
-//! many equally-plausible candidates, and the window that search
-//! happened to cover simply did not include the real delay. **The
-//! impulse-response test is what actually pinned the delay down
-//! unambiguously** -- an impulse has no period to alias against, so its
-//! single output peak names the system's true delay directly, without a
-//! correlation coefficient or a search window standing in the way. Once
-//! every other test in this module targets that delay instead of
-//! guessing a window, the "defect" disappears. Kept here rather than
-//! quietly dropped: the lesson generalises past this one module —
-//! correlating a periodic test signal against itself over an
-//! arbitrarily-chosen lag range can manufacture a false negative that
-//! looks exactly like a real bug, and an impulse or a broadband signal
-//! is the check that does not have that failure mode.
-//!
-//! See `docs/codec/vaco-codec-aac.md` for how both the original finding
-//! and its correction are reported at the issue level.
+//! [`AnalysisBank`] plus [`DownsampledSynthesisBank`] round-trips an impulse
+//! to one unity-gain impulse after exactly 289 samples, with no other output
+//! energy. Tones from 200 Hz to 10 kHz, two separated tones, and white noise
+//! all exceed 0.99 correlation at that delay. The impulse establishes delay
+//! without the periodic-lag ambiguity of a tone-only correlation search.
 
 #![allow(
     clippy::integer_division,

@@ -2,9 +2,8 @@
 //!
 //! # What this decoder can and cannot do today
 //!
-//! It resolves configuration (T3-03a / #443), fully parses
-//! `raw_data_block()`'s syntax (T3-03b / #444), and reconstructs PCM
-//! (T3-03c / #445): inverse quantisation, perceptual noise substitution,
+//! It resolves configuration, fully parses `raw_data_block()` syntax, and
+//! reconstructs PCM through inverse quantisation, perceptual noise substitution,
 //! joint stereo (M/S and intensity), TNS application, and the
 //! IMDCT/windowing/overlap-add filterbank — see `crate::reconstruct` for
 //! the pipeline and `docs/codec/vaco-codec-aac.md` for the measured
@@ -20,9 +19,8 @@
 //! window-transition boundary arithmetic follows the standard,
 //! widely-implemented convention rather than a clean primary-text
 //! citation (see `crate::reconstruct::build_window`'s doc). Real
-//! ffmpeg-encoded fixtures use KBD windows (`window_shape == 1`), which
-//! `vaco-codec-dsp-sinewin` now implements (extended past its original
-//! sine-only scope — see that crate's own doc).
+//! ffmpeg-encoded fixtures use KBD windows (`window_shape == 1`), provided by
+//! `vaco-codec-dsp-sinewin`.
 
 use std::collections::VecDeque;
 
@@ -60,9 +58,8 @@ pub struct AacDecoder {
     /// known until then for every path except an already-resolved
     /// `AudioSpecificConfig`.
     overlap: Vec<OverlapState>,
-    /// The long/short IMDCT plans (C1: `vaco-tx`'s `Plan`, not the O(n²)
-    /// `reference::imdct` production used to call). Built lazily on first
-    /// use — `AacDecoder::new` is infallible (its `make` signature in
+    /// The long and short `vaco-tx` IMDCT plans. Built lazily on first use —
+    /// `AacDecoder::new` is infallible (its `make` signature in
     /// `DecoderDesc` cannot report an error), while `Plan::new` returns a
     /// `Result` in general, even though AAC's two fixed lengths (2048, 256)
     /// never actually fail it.
@@ -165,19 +162,9 @@ fn reorder_to_output_channel_order(channels: &mut Vec<Vec<f32>>, channel_configu
 impl Decoder for AacDecoder {
     fn send_packet(&mut self, packet: Option<&Packet>) -> Result<()> {
         let Some(packet) = packet else {
-            // Draining at EOF: nothing is buffered across packets (each
-            // frame is independently decodable once its overlap-add state
-            // exists), so there is nothing further to flush out here --
-            // but `Error::Eof` is `receive_frame`'s signal to give
-            // (`Decoder::send_packet`'s own doc: the only documented error
-            // from *this* method is `OutputPending`), not `send_packet`'s.
-            // Returning it directly here used to propagate straight through
-            // `CodecWork::advance`'s `self.side.send(None)?` as a fatal
-            // pipeline error instead of a graceful finish -- measured
-            // against a real AAC file transcoded end to end through the
-            // CLI: `vaco -i av.mp4 -vn -c:a pcm_s16le out.wav` decoded every
-            // frame correctly and then failed the whole run with "Error
-            // while filtering: end of stream" instead of completing.
+            // Frames do not buffer across packets, so draining only marks the
+            // state. `receive_frame`, not `send_packet`, reports final EOF once
+            // the pending queue is empty.
             self.draining = true;
             return Ok(());
         };
@@ -462,13 +449,8 @@ mod tests {
         );
     }
 
-    /// E2E-GAPS #5-adjacent: found while verifying `-c:a pcm_s16le` on a real
-    /// AAC input end to end through the CLI, which failed downstream with
-    /// "this container needs timestamps and the packet has none" even
-    /// though decode itself was correct -- this decoder never copied the
-    /// triggering packet's `pts` onto its output frame. One packet always
-    /// decodes to exactly one frame here (no cross-packet reorder delay,
-    /// per this impl's own drain comment), so the mapping is exact.
+    /// One packet produces one frame without reordering, so the decoded
+    /// frame preserves that packet's PTS exactly.
     #[test]
     fn the_decoded_frames_pts_is_the_packets_pts() {
         let mut dec = AacDecoder::new(Limits::permissive());
@@ -481,10 +463,7 @@ mod tests {
         assert_eq!(frame.pts, vaco_core::Timestamp::new(1234));
     }
 
-    /// The decode-side mirror of this session's audio-decoder duration
-    /// audit (`vaco-codec-pcm`/`-adpcm`/`-simple-audio`/`-vorbis`/`-ac3`):
-    /// `samples`/`sample_rate` were already in scope where `frame.pts`
-    /// gets set, but `frame.duration` was never set.
+    /// Decoded duration is derived from the emitted sample count and rate.
     #[test]
     fn the_decoded_frames_duration_is_real_and_nonzero() {
         let mut dec = AacDecoder::new(Limits::permissive());
