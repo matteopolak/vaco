@@ -34,7 +34,10 @@ JOBS="${ICOUNT_JOBS:-2}"
 # process that stops every other agent.
 require_disk() {
     local need_gb="$1" avail
-    avail=$(df -g / | awk 'NR==2 {print $4}')
+    # -k, not -g: BSD df spells gibibytes -g and GNU df does not have that flag
+    # at all, so the -g form silently yields an empty field and refuses every
+    # build on Linux.
+    avail=$(df -k / | awk 'NR==2 {print int($4/1048576)}')
     if [ "${avail:-0}" -lt "$need_gb" ]; then
         echo "refusing: ${avail}GiB free on /, need ${need_gb}GiB. Free space first." >&2
         exit 1
