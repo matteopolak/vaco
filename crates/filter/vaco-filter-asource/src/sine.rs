@@ -77,7 +77,7 @@ use vaco_sampfmt::SampleFmt;
 
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
-const UNLIMITED: VDuration = VDuration(0);
+const UNLIMITED: VDuration = VDuration::from_micros(0);
 
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "sine", help = "generate sine wave audio signal")]
@@ -205,7 +205,7 @@ impl SourceFilter for Source {
         }
         frame.pts = Timestamp::new(i64::try_from(self.produced).unwrap_or(0));
         frame.time_base = Rational::new(1, i32::try_from(self.sample_rate.max(1)).unwrap_or(1));
-        frame.duration = vaco_core::Duration(i64::from(want));
+        frame.set_duration_ticks(i64::from(want));
         self.produced = self.produced.saturating_add(u64::from(want));
         Ok(Some(frame))
     }
@@ -222,7 +222,7 @@ impl SourceFilter for Source {
 pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, String> {
     let opts = Opts::parse(req.args)?;
     let sample_rate = u32::try_from(opts.sample_rate.max(1)).unwrap_or(44100);
-    let total_samples = if opts.duration.0 <= 0 {
+    let total_samples = if opts.duration.as_micros() <= 0 {
         None
     } else {
         Some(

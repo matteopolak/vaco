@@ -157,7 +157,7 @@ impl SourceFilter for Source {
         }
         frame.pts = Timestamp::new(i64::try_from(self.next).unwrap_or(0));
         frame.time_base = Rational::new(1, i32::try_from(self.sample_rate.max(1)).unwrap_or(1));
-        frame.duration = vaco_core::Duration(i64::from(want));
+        frame.set_duration_ticks(i64::from(want));
         self.next = self.next.saturating_add(u64::from(want));
         Ok(Some(frame))
     }

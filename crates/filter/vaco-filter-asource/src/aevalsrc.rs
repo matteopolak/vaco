@@ -36,7 +36,7 @@ use vaco_sampfmt::SampleFmt;
 
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
-const UNLIMITED: VDuration = VDuration(-1);
+const UNLIMITED: VDuration = VDuration::from_micros(-1);
 
 #[derive(Debug, Clone, vaco_opts::Options)]
 #[options(name = "aevalsrc", help = "generate audio from an expression")]
@@ -143,7 +143,7 @@ impl SourceFilter for Source {
         }
         frame.pts = Timestamp::new(i64::try_from(self.produced).unwrap_or(0));
         frame.time_base = Rational::new(1, i32::try_from(self.sample_rate.max(1)).unwrap_or(1));
-        frame.duration = vaco_core::Duration(i64::from(want));
+        frame.set_duration_ticks(i64::from(want));
         self.produced = self.produced.saturating_add(u64::from(want));
         Ok(Some(frame))
     }
@@ -188,7 +188,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
         vaco_chlayout::ChannelLayout::from_name(&opts.channel_layout)
             .ok_or_else(|| format!("aevalsrc: bad channel_layout `{}`", opts.channel_layout))?
     };
-    let total_samples = if opts.duration.0 < 0 {
+    let total_samples = if opts.duration.as_micros() < 0 {
         None
     } else {
         Some(
