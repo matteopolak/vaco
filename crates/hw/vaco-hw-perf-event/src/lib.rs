@@ -73,7 +73,7 @@ impl CpuCycles {
     ///
     /// # Errors
     ///
-    /// Returns [`CounterError::UnsupportedTarget`] off Linux x86_64/aarch64,
+    /// Returns [`CounterError::UnsupportedTarget`] off Linux `x86_64`/`aarch64`,
     /// or [`CounterError::Open`] when Linux refuses the event.
     #[cfg(all(
         target_os = "linux",
@@ -287,7 +287,7 @@ mod linux {
                 source: std::io::Error::last_os_error(),
             });
         }
-        if bytes != size_of::<PerfRead>() as isize {
+        if usize::try_from(bytes).ok() != Some(size_of::<PerfRead>()) {
             return Err(CounterError::ShortRead(bytes));
         }
         if count.time_running == 0 {
