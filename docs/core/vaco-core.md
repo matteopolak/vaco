@@ -90,6 +90,14 @@ not timestamps.
 `compare(self_base, other, other_base)` orders two timestamps in different bases by cross-multiplying
 in `i128`. It does not convert either side, so no rounding decision is hidden inside the answer.
 
+### Duration units at API boundaries
+
+Use `Duration::from_micros` and `as_micros` when a parser, option, or external
+interface explicitly uses microseconds. Avoid the tuple constructor and raw
+field access: they hide the unit and tie callers to the storage representation.
+Native stream counts belong with their `TimeBase`; `ExactDuration::from_ticks`
+retains their rational seconds value without a microsecond intermediate.
+
 ### `Dict`
 
 A `Vec<(Box<str>, Box<str>)>` with a linear scan. Media metadata dictionaries have single-digit entry

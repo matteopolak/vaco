@@ -251,24 +251,36 @@ fn video_rate_abbreviations_are_exact() {
 fn duration_grammar() {
     assert_eq!(
         parse::duration("12:34:56.789"),
-        Some(Duration(45_296_789_000))
+        Some(Duration::from_micros(45_296_789_000))
     );
-    assert_eq!(parse::duration("-1:02.5"), Some(Duration(-62_500_000)));
-    assert_eq!(parse::duration("1234.5"), Some(Duration(1_234_500_000)));
-    assert_eq!(parse::duration("5ms"), Some(Duration(5_000)));
-    assert_eq!(parse::duration("2s"), Some(Duration(2_000_000)));
-    assert_eq!(parse::duration("7us"), Some(Duration(7)));
-    assert_eq!(parse::duration("  3  "), Some(Duration(3_000_000)));
+    assert_eq!(
+        parse::duration("-1:02.5"),
+        Some(Duration::from_micros(-62_500_000))
+    );
+    assert_eq!(
+        parse::duration("1234.5"),
+        Some(Duration::from_micros(1_234_500_000))
+    );
+    assert_eq!(parse::duration("5ms"), Some(Duration::from_micros(5_000)));
+    assert_eq!(
+        parse::duration("2s"),
+        Some(Duration::from_micros(2_000_000))
+    );
+    assert_eq!(parse::duration("7us"), Some(Duration::from_micros(7)));
+    assert_eq!(
+        parse::duration("  3  "),
+        Some(Duration::from_micros(3_000_000))
+    );
     // Exact decimal scaling: 0.1 s is 100000 us, not 99999.
-    assert_eq!(parse::duration("0.1"), Some(Duration(100_000)));
-    assert_eq!(parse::duration("0.000001"), Some(Duration(1)));
-    assert_eq!(parse::duration("0.0000001"), Some(Duration(0)));
+    assert_eq!(parse::duration("0.1"), Some(Duration::from_micros(100_000)));
+    assert_eq!(parse::duration("0.000001"), Some(Duration::from_micros(1)));
+    assert_eq!(parse::duration("0.0000001"), Some(Duration::from_micros(0)));
     assert_eq!(parse::duration(""), None);
     assert_eq!(parse::duration("1:2:3:4"), None);
     assert_eq!(parse::duration("::"), None);
     assert_eq!(parse::duration("abc"), None);
     assert_eq!(
-        parse::format_duration_clock(Duration(45_296_789_000)),
+        parse::format_duration_clock(Duration::from_micros(45_296_789_000)),
         "12:34:56.789000"
     );
 }
@@ -439,7 +451,7 @@ proptest! {
     ) {
         prop_assert_eq!(parse::image_size(&parse::format_image_size(w, h)), Some((w, h)));
 
-        let d = Duration(us);
+        let d = Duration::from_micros(us);
         prop_assert_eq!(parse::duration(&parse::format_duration(d)), Some(d));
 
         let c = Rgba::new(rgba.0, rgba.1, rgba.2, rgba.3);
@@ -474,10 +486,10 @@ proptest! {
     /// and format without panicking.
     #[test]
     fn duration_extremes(us in prop::sample::select(vec![i64::MIN, i64::MIN + 1, -1, 0, 1, i64::MAX])) {
-        let s = parse::format_duration(Duration(us));
+        let s = parse::format_duration(Duration::from_micros(us));
         let back = parse::duration(&s);
-        prop_assert!(back == Some(Duration(us)) || us == i64::MIN);
-        let _ = parse::format_duration_clock(Duration(us));
+        prop_assert!(back == Some(Duration::from_micros(us)) || us == i64::MIN);
+        let _ = parse::format_duration_clock(Duration::from_micros(us));
     }
 
     /// No input string panics any parser.

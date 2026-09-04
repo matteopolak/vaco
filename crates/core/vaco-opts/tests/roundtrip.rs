@@ -183,7 +183,7 @@ fn arb_all_kinds() -> impl Strategy<Value = AllKinds> {
             samplefmt,
             chlayout,
             rate: VideoRate(Rational::new(vn, vd)),
-            dur: Duration(dur),
+            dur: Duration::from_micros(dur),
             colour: Rgba::new(cr, cg, cb, ca),
             method,
             arr,
@@ -316,8 +316,8 @@ proptest! {
     /// whole `i64` microsecond range round-trips exactly.
     #[test]
     fn duration_round_trips_exactly(us in any::<i64>()) {
-        let text = parse::format_duration(Duration(us));
-        prop_assert_eq!(parse::duration(&text).unwrap(), Duration(us));
+        let text = parse::format_duration(Duration::from_micros(us));
+        prop_assert_eq!(parse::duration(&text).unwrap(), Duration::from_micros(us));
     }
 
     #[test]

@@ -423,7 +423,7 @@ pub fn duration(s: &str) -> Option<Duration> {
     };
 
     let us = if neg { -us } else { us };
-    i64::try_from(us).ok().map(Duration)
+    i64::try_from(us).ok().map(Duration::from_micros)
 }
 
 /// Parse a bare seconds column (`"56.789"`) into microseconds.
@@ -476,7 +476,7 @@ fn scaled_us(s: &str, unit_us: i128) -> Option<i128> {
     reason = "div_euclid/rem_euclid against the constant 10^6, splitting seconds from microseconds"
 )]
 pub fn format_duration(d: Duration) -> String {
-    let n = i128::from(d.0);
+    let n = i128::from(d.as_micros());
     let neg = n < 0;
     let a = n.abs();
     let secs = a.div_euclid(US_PER_S);
@@ -496,7 +496,7 @@ pub fn format_duration(d: Duration) -> String {
     reason = "h, m and s are hours, minutes and seconds"
 )]
 pub fn format_duration_clock(d: Duration) -> String {
-    let n = i128::from(d.0);
+    let n = i128::from(d.as_micros());
     let neg = n < 0;
     let a = n.abs();
     let total_secs = a.div_euclid(US_PER_S);

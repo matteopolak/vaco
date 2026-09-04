@@ -138,25 +138,46 @@ fn rational_and_video_rate() {
 
 #[test]
 fn duration_base() {
-    assert_eq!(parse::duration("1").unwrap(), Duration(1_000_000));
-    assert_eq!(parse::duration("1.5").unwrap(), Duration(1_500_000));
-    assert_eq!(parse::duration("-1.5").unwrap(), Duration(-1_500_000));
-    assert_eq!(parse::duration("5ms").unwrap(), Duration(5_000));
-    assert_eq!(parse::duration("5us").unwrap(), Duration(5));
-    assert_eq!(parse::duration("2s").unwrap(), Duration(2_000_000));
-    assert_eq!(parse::duration("1:02").unwrap(), Duration(62_000_000));
+    assert_eq!(
+        parse::duration("1").unwrap(),
+        Duration::from_micros(1_000_000)
+    );
+    assert_eq!(
+        parse::duration("1.5").unwrap(),
+        Duration::from_micros(1_500_000)
+    );
+    assert_eq!(
+        parse::duration("-1.5").unwrap(),
+        Duration::from_micros(-1_500_000)
+    );
+    assert_eq!(
+        parse::duration("5ms").unwrap(),
+        Duration::from_micros(5_000)
+    );
+    assert_eq!(parse::duration("5us").unwrap(), Duration::from_micros(5));
+    assert_eq!(
+        parse::duration("2s").unwrap(),
+        Duration::from_micros(2_000_000)
+    );
+    assert_eq!(
+        parse::duration("1:02").unwrap(),
+        Duration::from_micros(62_000_000)
+    );
     assert_eq!(
         parse::duration("12:34:56").unwrap(),
-        Duration(45_296_000_000)
+        Duration::from_micros(45_296_000_000)
     );
-    assert_eq!(parse::duration("-1:02.5").unwrap(), Duration(-62_500_000));
+    assert_eq!(
+        parse::duration("-1:02.5").unwrap(),
+        Duration::from_micros(-62_500_000)
+    );
     assert!(parse::duration("").is_none());
     assert!(parse::duration("abc").is_none());
     assert!(parse::duration("1:2:3:4").is_none());
     // The fraction is parsed exactly, not through f64.
     assert_eq!(
         parse::duration("9223372036854.775807").unwrap(),
-        Duration(i64::MAX)
+        Duration::from_micros(i64::MAX)
     );
 }
 
