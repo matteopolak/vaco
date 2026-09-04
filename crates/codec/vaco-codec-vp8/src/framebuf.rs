@@ -11,7 +11,7 @@
 //! [`crate::decode`], which is where the pool/budget-backed allocation this
 //! project requires actually happens for the emitted frame.
 //!
-//! # Reference slots hold handles, not bytes (issue #301)
+//! # Reference slots hold handles, not bytes
 //!
 //! [`RefFrames`] used to own a `Picture` outright per slot, so
 //! `RefFrames::update`'s "copy to golden/altref" rule (RFC 6386 §9.7/§9.8)
@@ -142,8 +142,8 @@ impl Picture {
 ///
 /// The encoder builds every reference synchronously on one thread (there is
 /// no worker to hand a still-producing picture to), so it has no use for
-/// [`RefFrames`]'s handle-based, issue-#301 design below — this is the
-/// pre-#301 shape, kept for exactly the caller that never needed to change.
+/// [`RefFrames`]'s handle-based design below. Owned pictures are the simpler
+/// fit for this synchronous caller.
 #[derive(Debug, Clone, Default)]
 pub struct EncRefFrames {
     pub last: Option<Picture>,

@@ -1,4 +1,4 @@
-//! [`Vp8FrameTask`] — the parallel half of frame threading (issue #301).
+//! [`Vp8FrameTask`] — the parallel half of frame threading.
 //!
 //! # Why VP8 threads at picture granularity, not row granularity
 //!
@@ -14,8 +14,7 @@
 //! decode, [`crate::decode::split_frame`]'s doc has the full argument) gets
 //! the real, measured win at a fraction of the design and review cost a
 //! row-banded rewrite of every predictor and the loop filter would have
-//! carried — see this crate's own top-level module doc for why that rewrite
-//! was explicitly not attempted the first time this issue was picked up.
+//! carried; the crate-level docs record the selected threading boundary.
 //!
 //! Each reference is therefore published as a single band
 //! (`PictureSpec::single_band`) and a task waits for the *whole* picture
@@ -70,7 +69,7 @@ impl MaterializedRefs {
 }
 
 /// One frame's reconstruction and loop filter — the parallel half of frame
-/// threading (issue #301). `Send + 'static` by construction: every field is
+/// threading. `Send + 'static` by construction: every field is
 /// owned data, so there is nothing borrowed from decoder state to leak
 /// across the thread boundary.
 #[derive(Debug)]

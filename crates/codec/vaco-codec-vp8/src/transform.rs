@@ -176,12 +176,10 @@ pub fn add_residue(predictor: u8, residue: i32) -> u8 {
     u8::try_from((i32::from(predictor) + residue).clamp(0, 255)).unwrap_or(0)
 }
 
-/// The forward DCT, `libvpx`'s `vp8_short_fdct4x4_c` (`vp8/encoder/dct.c`,
-/// BSD-licensed, Tier A per `planning/AGENT-CONSTRAINTS.md`'s clean-room
-/// section) — the mathematical partner [`inverse_dct`] needs, since RFC 6386
-/// specifies only the decoder side (see `crate::encode`'s module doc). Raster
-/// order in and out, spatial residue in, unquantised frequency coefficients
-/// out.
+/// The forward DCT from BSD-licensed libvpx's `vp8_short_fdct4x4_c`, the
+/// mathematical partner [`inverse_dct`] needs because RFC 6386 specifies only
+/// the decoder side. Raster order in and out, spatial residue in, unquantised
+/// frequency coefficients out.
 #[must_use]
 pub fn forward_dct(residue: &[i32; 16]) -> [i32; 16] {
     let mut rows = [[0i32; 4]; 4];
@@ -252,11 +250,9 @@ pub fn forward_wht(dcs: &[i32; 16]) -> [i32; 16] {
 /// times `step`), returning the level. `step <= 0` (never legitimate, but
 /// callers pass a per-macroblock table looked up by index) quantises to
 /// zero rather than dividing by zero. A plain nearest-integer quantiser —
-/// simpler than `libvpx`'s zero-bin/zbin-boost run-length scheme, and not
-/// meant to match it: `AGENT-CONSTRAINTS.md`'s owner ruling is explicit that
-/// byte-exactness against the reference encoder is not the bar, and this
-/// crate's dequantiser (this module, above) only ever multiplies a level
-/// back out, so any rounding rule that inverts it is a valid encoder.
+/// simpler than libvpx's zero-bin/zbin-boost run-length scheme. Encoded bytes
+/// need not match another encoder; this crate's dequantiser only multiplies a
+/// level back out, so any rounding rule that inverts it is valid.
 #[must_use]
 #[allow(
     clippy::integer_division,
@@ -389,12 +385,9 @@ mod tests {
     /// A literal, flat-indexed transcription of `libvpx`'s
     /// `vp8_short_fdct4x4_c`/`vp8_short_walsh4x4_c`, kept only as a
     /// differential oracle for [`forward_dct`]/[`forward_wht`]'s
-    /// transpose-based restructuring: two implementations shaped
-    /// differently enough (raw index arithmetic vs. matrix
-    /// transpose-around-a-shared-pass) that a transcription slip in either
-    /// one is very unlikely to agree with the other by accident, unlike two
-    /// verbatim copies of the same code (`AGENT-CONSTRAINTS.md`'s "an oracle
-    /// you wrote shares your misreading").
+    /// transpose-based restructuring. Raw index arithmetic and
+    /// transpose-around-a-shared-pass are shaped differently enough that a
+    /// transcription slip is unlikely to agree accidentally.
     #[allow(
         clippy::indexing_slicing,
         reason = "test-only literal port, mirroring the C source's own indexing"
