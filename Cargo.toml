@@ -133,6 +133,7 @@ sha1   = "0.10"
 sha2   = "0.10"
 md-5   = "0.10"
 crc    = "3"
+crypto-bigint = { version = "0.7.5", default-features = false, features = ["subtle", "zeroize"] }
 
 # --- networking and TLS. D14.2 originally required a PURE-RUST provider (both
 #     `ring` and `aws-lc-rs` compile C and assembly, which failed D10 Gate 1 at
