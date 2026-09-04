@@ -828,11 +828,10 @@ impl Mp4Demuxer {
         let compressor = entry.and_then(|e| e.visual.as_ref().and_then(|v| v.compressor()));
         stream.metadata = track::track_metadata(trak, vendor, compressor);
 
-        // Common Encryption (ISO/IEC 23001-7): report the scheme and key id,
-        // do not decrypt. `codec_name` already reads as the *original* codec
-        // via `SampleEntry::effective_format`, which is `vaco-format-isom`'s
-        // job and not repeated here; this is the part that is this crate's —
-        // deciding that the track cannot actually be read and saying why.
+        // Common Encryption (ISO/IEC 23001-7): report the scheme and key id.
+        // `codec_name` already reads as the *original* codec via
+        // `SampleEntry::effective_format`, which is `vaco-format-isom`'s job
+        // and not repeated here.
         let cenc = entry
             .and_then(vaco_format_isom::stsd::SampleEntry::cenc)
             .filter(|c| !c.is_empty());
@@ -849,29 +848,38 @@ impl Mp4Demuxer {
                     .push(("encryption_key_id".to_owned(), hex16(&te.default_kid)));
             }
         }
-        // Decrypt, given a caller-supplied key and a real `senc` — see
-        // `Mp4Options::decryption_key`'s doc comment. Fragmented sources are
-        // excluded: this crate's own `senc`/`saiz`/`saio` placement (and
-        // this decoder's) is `stbl`-only, matching `vaco-mux-mp4`'s own
-        // write-side scope cut.
-        let decryptor = cenc.as_ref().filter(|_| !self.fragmented).and_then(|c| {
-            let key = self.mp4.decryption_key?;
-            let te = c.track_encryption?;
-            if te.per_sample_iv_size == 0 {
-                // `constant_iv` (every sample shares one IV): not
-                // implemented, named in the crate doc's *Deferred* section.
-                return None;
-            }
-            let senc =
-                vaco_format_isom::cenc::SampleEncryption::parse(table.sample_encryption.as_ref()?)?;
-            read::Decryptor::parse(
-                key,
-                senc.records,
-                senc.sample_count,
-                te.per_sample_iv_size,
-                senc.has_subsamples,
-            )
-        });
+        // Decrypt literal `cenc`, given a caller-supplied key and a real
+        // `senc` — see `Mp4Options::decryption_key`'s doc comment. The other
+        // scheme types use CBC or patterned protection and must not enter
+        // this AES-CTR path. Fragmented sources are excluded: this crate's
+        // own `senc`/`saiz`/`saio` placement (and this decoder's) is
+        // `stbl`-only, matching `vaco-mux-mp4`'s own write-side scope cut.
+        let decryptor = cenc
+            .as_ref()
+            .filter(|c| {
+                c.scheme
+                    .is_some_and(|s| s.scheme_type == FourCc::new(b"cenc"))
+            })
+            .filter(|_| !self.fragmented)
+            .and_then(|c| {
+                let key = self.mp4.decryption_key?;
+                let te = c.track_encryption?;
+                if te.per_sample_iv_size == 0 {
+                    // `constant_iv` (every sample shares one IV): not
+                    // implemented, named in the crate doc's *Deferred* section.
+                    return None;
+                }
+                let senc = vaco_format_isom::cenc::SampleEncryption::parse(
+                    table.sample_encryption.as_ref()?,
+                )?;
+                read::Decryptor::parse(
+                    key,
+                    senc.records,
+                    senc.sample_count,
+                    te.per_sample_iv_size,
+                    senc.has_subsamples,
+                )
+            });
 
         let (r_rate, avg_rate) = self.frame_rate_estimate(trak, table, &totals, limit);
         if media_type == MediaType::Video {

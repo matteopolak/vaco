@@ -639,9 +639,9 @@ real decryption for a protected, **non-fragmented** track: `SampleEntry::tenc`'s
 IV records, not only its shape — `vaco_format_isom::cenc::SampleEncryption::iv`)
 give every sample's real IV, and `read::Decryptor::decrypt` applies
 full-sample AES-128-CTR (`vaco-crypto`) in place before the packet is handed
-back. Without a key — or for a fragmented track, or a `senc` with a
-subsample table, or `per_sample_iv_size == 0` (`constant_iv`, not
-implemented) — the old refusal still applies:
+back. Without a key — or for a fragmented track, or
+`per_sample_iv_size == 0` (`constant_iv`, not implemented) — the old refusal
+still applies:
 `reader.encrypted` and `reader.decrypt` are mutually exclusive, and
 `ensure_head` refuses with `Error::Unsupported` exactly when the latter is
 `None`.
@@ -669,6 +669,16 @@ for byte, all 10 video and 20 audio packets; the same key through
 to the clear file's, which is the cross-check that the *file* is what the
 test says it is.
 
+Only an exact `schm.scheme_type == "cenc"` enters that AES-CTR path.
+`cens` requires patterned CTR, while `cbc1` and `cbcs` require CBC; all three
+remain reported by `encryption_scheme` and refused even when the caller gives
+a key. This gate is deliberate: the old path checked only that *some* CENC
+scheme, `tenc`, key and `senc` existed, so changing a real ffmpeg-encrypted
+fixture's `schm` from `cenc` to `cbcs` still returned a packet after applying
+the wrong cipher. `tests/cenc_ffmpeg.rs` now makes that single-box change and
+checks both the `cbcs` metadata value and the named `Error::Unsupported`
+refusal.
+
 **Reachability, measured and not yet fixed:** `vaco -decryption_key <hex>
 -i enc.mp4` answers `Unrecognized option 'decryption_key'`. There is no
 demuxer private-option plumbing at all — `DemuxerDesc::open` takes no
@@ -682,10 +692,11 @@ tables) that belongs to all ~90 demuxers, not to this crate.
 **Not implemented, named explicitly**: the reference's `-decryption_keys`
 (per-`KID` dictionary — one key for every protected track is what
 `decryption_key` alone already means), `cbcs`/`cens`/`cbc1` (pattern and
-CBC schemes: `schm` is reported, the track refused), `constant_iv`
-(`per_sample_iv_size == 0`), and a fragmented file's `senc`/`pssh` (both
-live beside `moof`, a location this crate's fragment scan does not
-currently collect). Reporting is deliberately *more* than the reference:
+CBC schemes: `schm` is reported, the track refused), their constant-IV mode
+(`per_sample_iv_size == 0`; ISO/IEC 23001-7 prohibits constant IVs with
+counter mode), and a fragmented file's `senc` beside `moof`. Top-level
+fragmented-file `pssh` is collected. Reporting is deliberately *more* than
+the reference:
 `ffprobe 9.0.1` prints no encryption field at all for a `cenc` file, and
 `ffmpeg -i` without a key decodes the ciphertext into garbage without
 complaint; this crate tags the stream (`encryption_scheme`,

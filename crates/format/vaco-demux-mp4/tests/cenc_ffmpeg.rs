@@ -162,3 +162,81 @@ fn ffmpeg_cenc_aes_ctr_subsample_and_full_sample_decrypt_to_the_clear_packets() 
         );
     }
 }
+
+#[test]
+fn a_key_does_not_send_cbcs_through_the_cenc_ctr_decryptor() {
+    if Command::new("ffmpeg").arg("-version").output().is_err() {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("vaco-cbcs-gate-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let enc = dir.join("enc.mp4");
+    let Some(enc_s) = enc.to_str() else {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    };
+
+    let encoded = ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=64x48:rate=25",
+        "-t",
+        "0.2",
+        "-c:v",
+        "libx264",
+        "-encryption_scheme",
+        "cenc-aes-ctr",
+        "-encryption_key",
+        KEY_HEX,
+        "-encryption_kid",
+        KID_HEX,
+        enc_s,
+    ]);
+    if encoded.is_none() {
+        eprintln!("skipping: this ffmpeg cannot write cenc-aes-ctr with libx264");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let mut bytes = std::fs::read(&enc).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    // Keep ffmpeg's real encrypted sample tables and change only `schm`'s
+    // scheme_type. That is enough to prove the demuxer selects its crypto by
+    // the declared scheme rather than by the mere presence of a key + `senc`.
+    let schm = bytes
+        .windows(4)
+        .position(|window| window == b"schm")
+        .expect("encrypted fixture has a schm box");
+    let scheme = schm + 8;
+    assert_eq!(&bytes[scheme..scheme + 4], b"cenc");
+    bytes[scheme..scheme + 4].copy_from_slice(b"cbcs");
+
+    let mut key = [0u8; 16];
+    for (i, byte) in key.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&KEY_HEX[2 * i..2 * i + 2], 16).unwrap();
+    }
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    let mut demux = Mp4Demuxer::open(
+        src,
+        &NoParsers,
+        &FormatOptions::default(),
+        Mp4Options {
+            decryption_key: Some(key),
+            ..Mp4Options::default()
+        },
+    )
+    .unwrap();
+    assert!(
+        demux.streams()[0]
+            .metadata
+            .iter()
+            .any(|(k, v)| k == "encryption_scheme" && v == "cbcs")
+    );
+    let err = demux
+        .read_packet()
+        .expect_err("cbcs must not be decrypted by the AES-CTR path");
+    assert!(matches!(err, vaco_core::Error::Unsupported(_)));
+    assert!(err.to_string().contains("cbcs"), "{err}");
+}
