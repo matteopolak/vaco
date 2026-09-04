@@ -1,6 +1,8 @@
 //! Mantissa VLC read and dequantisation, driven by the `bap` array
 //! [`crate::bitalloc`] computed. ATSC A/52:2012 §7.3.
 
+use std::collections::VecDeque;
+
 use vaco_bitstream::BitReader;
 
 use crate::tables::{Quant, quant_for_bap};
@@ -36,40 +38,49 @@ fn dequant_grouped(level: u32, levels: u16) -> f32 {
     (2.0 * level as f32 - (levels - 1.0)) / levels
 }
 
-/// Carries a straddling group's not-yet-consumed mantissas across calls to
-/// [`decode`]. §7.3.5: "If the number of mantissas in an exponent set does
-/// not fill an integral number of groups, the groups are shared across
-/// exponent sets. The next exponent set in the block continues filling the
-/// partial groups" — grouping for bap 1/2/4 is a property of the *block's*
-/// linear mantissa stream, not of any one channel's mantissa count, so a
-/// channel whose bap-1/2/4 bin count is not a multiple of 3 (or 2, for
-/// bap=4) hands its last group's unused slots to whichever channel is
-/// decoded next in the same block. One instance must be created per block
-/// and threaded through every [`decode`] call in that block's own
-/// processing order (fbw channels, then LFE — coupling-channel mantissas
-/// are not read at all yet, a separate, disclosed gap); dropping it between
-/// calls, or creating a fresh one per channel, desyncs every mantissa read
-/// after the first channel whose count does not land on a group boundary.
+/// Carries the not-yet-consumed mantissas of each partially-filled group
+/// across calls to [`decode`]. §7.3.5: bap 1, 2 and 4 are packed into
+/// **separate** group streams — "combining 3 level words and 5 level words
+/// into separate groups representing triplets of mantissas, and 11 level
+/// words into groups representing pairs" — so a block carries three
+/// independent partial groups at once, not one. A bin whose `bap` is 6 must
+/// read its own 5-bit mantissa even while a bap-1 triplet is still half
+/// consumed; §7.3.1's own wording is "groups occur at the position of the
+/// first mantissa contained in the group. Nothing is unpacked from the bit
+/// stream for the subsequent mantissas *in the group*" — in that group, not
+/// at the next bin whatever its bap.
+///
+/// Groups are also shared *across* exponent sets: "If the number of
+/// mantissas in an exponent set does not fill an integral number of groups,
+/// the groups are shared across exponent sets. The next exponent set in the
+/// block continues filling the partial groups." So one instance must be
+/// created per block and threaded through every [`decode`] call in that
+/// block's own processing order (fbw channels, then LFE).
 ///
 /// Holds dequantised-but-unscaled values (each bin still applies its own
-/// exponent's scale on consumption), in the order they will be assigned to
-/// bins, so callers ready to receive the very next value are always at the
-/// front — `next()` pops from there.
+/// exponent's scale on consumption).
 #[derive(Debug, Default)]
-pub struct PendingGroup(std::collections::VecDeque<f32>);
+pub struct PendingGroup {
+    /// bap=1 (3-level triplets), bap=2 (5-level triplets), bap=4 (11-level
+    /// pairs), in that order.
+    queues: [std::collections::VecDeque<f32>; 3],
+}
+
+/// Index into [`PendingGroup::queues`] for a grouped `bap`, or `None` when
+/// this `bap` is not grouped.
+const fn group_slot(bap: u8) -> Option<usize> {
+    match bap {
+        1 => Some(0),
+        2 => Some(1),
+        4 => Some(2),
+        _ => None,
+    }
+}
 
 impl PendingGroup {
     #[must_use]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    fn next(&mut self) -> Option<f32> {
-        self.0.pop_front()
-    }
-
-    fn extend(&mut self, values: impl IntoIterator<Item = f32>) {
-        self.0.extend(values);
     }
 }
 
@@ -93,7 +104,9 @@ pub fn decode(
         let exp = exps.get(i).copied().unwrap_or(24);
         let scale = 2f32.powi(-i32::from(exp));
 
-        if let Some(v) = pending.next() {
+        if let Some(slot) = group_slot(b)
+            && let Some(v) = pending.queues.get_mut(slot).and_then(VecDeque::pop_front)
+        {
             out.push(v * scale);
             continue;
         }
@@ -123,7 +136,11 @@ pub fn decode(
                 // queue for whichever bins are decoded next, in that order.
                 let mut digits = decompose_group(code, levels, per_group).into_iter();
                 let first = digits.next().unwrap_or(0);
-                pending.extend(digits.map(|lvl| dequant_grouped(lvl, levels)));
+                if let Some(slot) = group_slot(b)
+                    && let Some(q) = pending.queues.get_mut(slot)
+                {
+                    q.extend(digits.map(|lvl| dequant_grouped(lvl, levels)));
+                }
                 dequant_grouped(first, levels)
             }
         };

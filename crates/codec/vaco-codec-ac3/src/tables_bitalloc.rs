@@ -1,15 +1,19 @@
 //! Bit-allocation model constants, transcribed from ATSC A/52:2012 §7.2.3
 //! ("Bit Allocation Tables"), Tables 7.6 through 7.16.
 //!
-//! Every table here was extracted programmatically from the specification
-//! PDF's text layer (`pdftotext -layout`), not hand-copied — a small parser
-//! walked each table's rows and the result was cross-checked internally
-//! (e.g. `MASKTAB`'s band boundaries against `BNDTAB`/`BNDSZ`'s cumulative
-//! starts) before being pasted in as a literal array. This replaces an
-//! earlier version of this file that reconstructed these values from the
-//! algorithm's *structure* without access to the primary text; that version
-//! is why `provenance/vaco-codec-ac3.toml`'s `BNDSZ` row still exists but
-//! now reads `method = "transcribed"` rather than `"derived"`.
+//! Every table here has been re-checked value-by-value against the
+//! specification PDF's text layer: `BNDSZ` (Table 7.12), `MASKTAB` (7.13,
+//! all 253 entries), `LATAB` (7.14, all 256), `HTH` (7.15, all three
+//! `fscod` rows x 50 bands), `BAPTAB` (7.16, all 64) and the six small
+//! parameter tables 7.6-7.11 all match exactly, with zero differences.
+//! The quantizer value tables 7.21/7.23 (`BAP3_VALUES`/`BAP5_VALUES`) match
+//! their spec tables too.
+//!
+//! This matters because the crate previously named these constants its
+//! dominant source of decode error. They were not: the error was in
+//! `crate::mantissa`'s group handling and `crate::imdct`'s sign and output
+//! scaling. Do not re-derive these tables on the theory that they are
+//! suspect.
 
 /// `bndtab[]`/`bndsz[]`, Table 7.12: the 50 fixed masking-band boundaries.
 /// `bndtab[band]` is each band's first mantissa bin; `bndsz[band]` is its

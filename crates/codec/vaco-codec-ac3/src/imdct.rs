@@ -1,23 +1,25 @@
 //! IMDCT and the window/overlap-add that turns 256 frequency coefficients
-//! into 256 new time-domain samples per channel per block.
+//! into 256 new time-domain samples per channel per block. ATSC A/52:2012
+//! §7.9.4.1.
 //!
-//! # What is exact and what is approximate
+//! # The window is the spec's, not an approximation
 //!
-//! The IMDCT itself is the standard Princen-Bradley transform every
-//! TDAC-based codec (MP3, AAC, Vorbis, AC-3) shares — general signal-
-//! processing mathematics, not something specific to any one codec's
-//! specification or reference implementation, so this is implemented
-//! directly from the transform's definition and is exact. It runs as a
-//! direct O(N^2) sum rather than a fast butterfly: correct is the priority
-//! here, and a fast transform is a follow-up, not a correctness question.
+//! An earlier version of this module called its Kaiser-Bessel-derived
+//! (alpha=5) window "a close approximation of AC-3's actual window, but not
+//! the same table", and named it this crate's largest source of decode
+//! error. Both claims are wrong, and measurably so: A/52 Table 7.33's 256
+//! stated coefficients agree with this KBD(alpha=5) construction to a
+//! maximum absolute difference of 5.0e-6, which is exactly the rounding
+//! error of the table's own five decimal places. The table is the
+//! approximation; computing the window is the exact form. Substituting
+//! Table 7.33's rounded values would move decoded output *away* from
+//! `ffmpeg`'s, not toward it.
 //!
-//! The **window** is not: AC-3's specific 256-tap window is a spec-stated
-//! table (ATSC A/52:2018 §7.5.3), unavailable in this environment, and is
-//! approximated here with a Kaiser-Bessel-derived (KBD, alpha=5) window —
-//! documented in the audio-codec literature as a close approximation of
-//! AC-3's actual window, but not the same table. This is the single largest
-//! source of measured decode error this crate reports; see the crate root
-//! docs and this crate's conformance test's measured error table.
+//! The IMDCT runs as a direct O(N^2) sum rather than the spec's
+//! IFFT-with-twiddles factorisation; the two are numerically equivalent
+//! (see [`imdct`] on the sign convention, which is not equivalent and did
+//! have to be taken from the spec). A fast transform is a follow-up, not a
+//! correctness question.
 
 use std::f64::consts::PI;
 
@@ -78,12 +80,24 @@ pub fn kbd_window(n: usize, alpha: f64) -> Vec<f32> {
     window
 }
 
-/// The alpha AC-3's window is most often approximated with in the absence of
-/// the spec's own table.
+/// AC-3's window is KBD with this alpha — see the module docs for the
+/// measured agreement with A/52 Table 7.33.
 pub const AC3_KBD_ALPHA: f64 = 5.0;
 
-/// Inverse MDCT: `n` input coefficients to `2*n` output samples.
-/// `y[i] = sum_k X[k] * cos((pi/n) * (i + 0.5 + n/2) * (k + 0.5))`.
+/// Inverse MDCT: `n` input coefficients to `2*n` output samples, in ATSC
+/// A/52:2012 §7.9.4.1's own sign convention:
+///
+/// `x[i] = -sum_k X[k] * cos((pi/n) * (i + 0.5 + n/2) * (k + 0.5))`
+///
+/// The leading minus is not a free convention. §7.9.4.1 defines the
+/// transform as a pre-twiddle / IFFT / post-twiddle / de-interleave chain
+/// whose twiddles are `xcos1[k] = -cos(2*pi*(8k+1)/(8N))` and
+/// `xsin1[k] = -sin(...)` — both negated — and whose step-5 de-interleaving
+/// negates four of its eight output terms. Evaluating that chain literally
+/// for `N = 512` reproduces exactly `-1` times the textbook Princen-Bradley
+/// sum above (checked numerically against the spec's own equations, and
+/// end-to-end against `ffmpeg`'s decode; getting it wrong inverts every
+/// output sample).
 #[must_use]
 pub fn imdct(coeffs: &[f32]) -> Vec<f32> {
     let n = coeffs.len();
@@ -98,7 +112,7 @@ pub fn imdct(coeffs: &[f32]) -> Vec<f32> {
             let phase = (PI / n_f) * (i as f64 + 0.5 + n_f / 2.0) * (k as f64 + 0.5);
             acc += f64::from(x) * phase.cos();
         }
-        *slot = acc as f32;
+        *slot = -acc as f32;
     }
     out
 }
@@ -120,6 +134,11 @@ impl OverlapState {
 
     /// Feed one block's 256 coefficients (long transform, no block switch),
     /// returning 256 new time-domain output samples.
+    ///
+    /// §7.9.4.1 step 6: `pcm[n] = 2 * (x[n] + delay[n])`. The factor of two
+    /// is the spec's own — "the factor of 2 scaling undoes headroom scaling
+    /// performed in the encoder" — not a normalisation choice, and dropping
+    /// it makes every decoded sample exactly half amplitude.
     #[must_use]
     #[allow(
         clippy::integer_division,
@@ -140,7 +159,7 @@ impl OverlapState {
             let prev = self.tail.get(i).copied().unwrap_or(0.0);
             let cur = windowed.get(i).copied().unwrap_or(0.0);
             if let Some(slot) = out.get_mut(i) {
-                *slot = prev + cur;
+                *slot = 2.0 * (prev + cur);
             }
         }
         self.tail = windowed

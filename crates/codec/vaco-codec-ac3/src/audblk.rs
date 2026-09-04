@@ -345,8 +345,11 @@ pub fn decode(r: &mut BitReader<'_>, state: &mut BlockState) -> DecodedBlock {
 
     let skiple = r.get_bit() != 0;
     if skiple {
+        // §5.4.3: `skipfld` is `skipl x 8` bits — `skipl` counts *bytes*,
+        // not bits. Skipping `skipl` bits leaves the mantissa reader short
+        // by `7 * skipl` bits for the rest of the block.
         let skipl = r.get(9);
-        r.skip(skipl);
+        r.skip_long(u64::from(skipl) * 8);
     }
 
     // -- bit allocation + mantissas -----------------------------------
