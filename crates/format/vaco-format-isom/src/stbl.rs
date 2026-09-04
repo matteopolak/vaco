@@ -992,6 +992,11 @@ pub struct SampleTable<'a> {
     pub sample_aux_sizes: Option<IsoBox<'a>>,
     /// `saio` — where each sample's aux info starts (§8.7.9).
     pub sample_aux_offsets: Option<IsoBox<'a>>,
+    /// `sgpd` sample-group descriptions, retained raw so grouping-specific
+    /// code can pair them with [`Self::sample_to_groups`].
+    pub sample_group_descriptions: Vec<IsoBox<'a>>,
+    /// `sbgp` sample-to-group run tables, retained raw in file order.
+    pub sample_to_groups: Vec<IsoBox<'a>>,
 }
 
 impl<'a> SampleTable<'a> {
@@ -1011,6 +1016,8 @@ impl<'a> SampleTable<'a> {
             sample_encryption: None,
             sample_aux_sizes: None,
             sample_aux_offsets: None,
+            sample_group_descriptions: Vec::new(),
+            sample_to_groups: Vec::new(),
         }
     }
 
@@ -1039,6 +1046,8 @@ impl<'a> SampleTable<'a> {
             sample_encryption: None,
             sample_aux_sizes: None,
             sample_aux_offsets: None,
+            sample_group_descriptions: Vec::new(),
+            sample_to_groups: Vec::new(),
         };
         for child in stbl.children() {
             let child = child?;
@@ -1064,6 +1073,26 @@ impl<'a> SampleTable<'a> {
                 boxes::SENC => me.sample_encryption = Some(child),
                 boxes::SAIZ => me.sample_aux_sizes = Some(child),
                 boxes::SAIO => me.sample_aux_offsets = Some(child),
+                boxes::SGPD => {
+                    if me.sample_group_descriptions.len() >= crate::cenc::MAX_SAMPLE_GROUP_BOXES {
+                        return Err(Error::LimitExceeded {
+                            limit: "isom stbl sgpd boxes",
+                            requested: me.sample_group_descriptions.len() as u64 + 1,
+                            cap: crate::cenc::MAX_SAMPLE_GROUP_BOXES as u64,
+                        });
+                    }
+                    me.sample_group_descriptions.push(child);
+                }
+                boxes::SBGP => {
+                    if me.sample_to_groups.len() >= crate::cenc::MAX_SAMPLE_GROUP_BOXES {
+                        return Err(Error::LimitExceeded {
+                            limit: "isom stbl sbgp boxes",
+                            requested: me.sample_to_groups.len() as u64 + 1,
+                            cap: crate::cenc::MAX_SAMPLE_GROUP_BOXES as u64,
+                        });
+                    }
+                    me.sample_to_groups.push(child);
+                }
                 _ => {}
             }
         }

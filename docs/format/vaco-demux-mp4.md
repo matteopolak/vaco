@@ -653,10 +653,9 @@ real decryption for a protected track: `SampleEntry::tenc`'s
 real IV, and `read::Decryptor::decrypt` applies full-sample AES-128-CTR
 (`vaco-crypto`) in place before the packet is handed back. Without a key, or
 with `per_sample_iv_size == 0` (`constant_iv`, not implemented), refusal still
-applies:
-`reader.encrypted` and `reader.decrypt` are mutually exclusive, and
-`ensure_head` refuses with `Error::Unsupported` exactly when the latter is
-`None`.
+applies: `reader.encryption_error` and `reader.decrypt` are mutually exclusive,
+and `ensure_head` returns that named `Error::Unsupported` before packet bytes
+are read.
 
 This is not merely self-consistent with this crate's own muxer: a file
 `vaco-mux-mp4` wrote with `-encryption_scheme cenc-aes-ctr` was decrypted by
@@ -743,11 +742,37 @@ This proves the identifier value selects the key in both container layouts,
 not merely that a dictionary-shaped string reached an existing single-key
 path.
 
-**Not implemented, named explicitly**: `seig` sample-group key rotation;
-`cbcs`/`cens`/`cbc1` (pattern and CBC schemes: `schm` is reported, the track
-refused); and their constant-IV mode
-(`per_sample_iv_size == 0`; ISO/IEC 23001-7 prohibits constant IVs with
-counter mode). Top-level fragmented-file `pssh` is collected. Reporting is
+**2026-09-04: version-1 `seig` key rotation.** ISO/IEC 23001-7 §6 associates
+each protected sample with either `tenc.default_KID` or the KID in its mapped
+`CencSampleEncryptionInformationGroupEntry`. The box layer retains
+`sgpd(seig)` descriptions and compact `sbgp` runs from both `stbl` and `traf`;
+the decryptor resolves a key and IV size for every `senc` record before it can
+return ciphertext. Track-level descriptions use ordinary 1-based indices;
+fragment-local descriptions use ISO/IEC 14496-12 §8.9.4's indices beginning at
+`0x10001`. A fragment refill and a seek both replace the active mapping through
+the same path.
+
+The integration fixture encodes AAC once, then asks ffmpeg 9.0.1 to encrypt two
+layout-identical copies under different KID/key pairs. The progressive case
+keeps the first key's ciphertext for ten samples and substitutes the second
+key's ciphertext for ten, with a two-run `sbgp`. The fragmented case alternates
+the two real encrypted `moof`/`mdat` pairs and adds a fragment-local
+`sgpd`/`sbgp` mapping to the second-key fragments. Before assembly,
+`ffmpeg -decryption_keys` decrypts each single-key source to the clear file's
+exact 20-packet `framemd5` in both layouts. Vaco then decrypts the combined
+two-key files: packet count, PTS, DTS, sizes and payloads match the clear demux,
+including a backward seek into a second-key fragment.
+
+This slice deliberately supports the deployed version-1 `sgpd` grammar only.
+Version-0/2 descriptions, duplicate or malformed maps, out-of-range indices,
+missing mapped keys, clear `seig` overrides, pattern fields and constant-IV
+entries all produce named refusals. `cens`, `cbc1` and `cbcs` likewise remain
+scheme-named refusals even when keys exist, so none can enter the literal
+`cenc` AES-CTR path.
+
+**Not implemented, named explicitly**: `cbcs`/`cens`/`cbc1` decryption and
+their applicable constant-IV/pattern modes; version-0/2 `sgpd(seig)` and clear
+sample groups. Top-level fragmented-file `pssh` is collected. Reporting is
 deliberately *more* than
 the reference:
 `ffprobe 9.0.1` prints no encryption field at all for a `cenc` file, and

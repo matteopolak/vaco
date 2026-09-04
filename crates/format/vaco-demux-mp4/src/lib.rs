@@ -843,39 +843,47 @@ impl Mp4Demuxer {
                     .push(("encryption_key_id".to_owned(), hex16(&te.default_kid)));
             }
         }
-        // Decrypt literal `cenc`, given a caller-supplied key and a real
-        // `senc` — see `Mp4Options::decryption_keys`'s doc comment. The other
-        // scheme types use CBC or patterned protection and must not enter
-        // this AES-CTR path. A fragmented track keeps only the validated key
-        // and IV size here; refill replaces its records from each `traf`.
-        let decryptor = cenc
-            .as_ref()
-            .filter(|c| {
-                c.scheme
-                    .is_some_and(|s| s.scheme_type == FourCc::new(b"cenc"))
-            })
-            .and_then(|c| {
-                let te = c.track_encryption?;
-                let key = self.mp4.key_for(&te.default_kid)?;
-                if te.per_sample_iv_size == 0 {
-                    // `constant_iv` (every sample shares one IV): not
-                    // implemented, named in the crate doc's *Deferred* section.
-                    return None;
-                }
-                if self.fragmented {
-                    return read::Decryptor::fragmented(key, te.per_sample_iv_size);
-                }
-                let senc = vaco_format_isom::cenc::SampleEncryption::parse(
-                    table.sample_encryption.as_ref()?,
-                )?;
-                read::Decryptor::parse(
-                    key,
-                    senc.records,
-                    senc.sample_count,
-                    te.per_sample_iv_size,
-                    senc.has_subsamples,
-                )
-            });
+        // Only literal `cenc` reaches AES-CTR. A version-1 `sgpd(seig)` plus
+        // `sbgp` may replace the key and IV size sample by sample; progressive
+        // tracks resolve it here, while fragmented tracks retain track-level
+        // descriptions and resolve each `traf` during refill.
+        let (decryptor, encryption_error) = match cenc.as_ref() {
+            None => (None, None),
+            Some(cenc) => match cenc.scheme.map(|scheme| scheme.scheme_type.as_bytes()) {
+                Some(kind) if kind == *b"cenc" => match cenc.track_encryption {
+                    None => (None, Some("mp4: cenc track is missing its tenc parameters")),
+                    Some(defaults) => {
+                        let result = if self.fragmented {
+                            read::Decryptor::fragmented(
+                                &self.mp4,
+                                defaults,
+                                &table.sample_group_descriptions,
+                            )
+                        } else {
+                            read::Decryptor::progressive(&self.mp4, defaults, table)
+                        };
+                        match result {
+                            Ok(decryptor) => (Some(decryptor), None),
+                            Err(error) => (None, Some(error)),
+                        }
+                    }
+                },
+                Some(kind) if kind == *b"cens" => (
+                    None,
+                    Some("mp4: cens pattern-CTR decryption is not implemented"),
+                ),
+                Some(kind) if kind == *b"cbc1" => (
+                    None,
+                    Some("mp4: cbc1 AES-CBC decryption is not implemented"),
+                ),
+                Some(kind) if kind == *b"cbcs" => (
+                    None,
+                    Some("mp4: cbcs pattern-CBC decryption is not implemented"),
+                ),
+                Some(_) => (None, Some("mp4: unknown Common Encryption scheme")),
+                None => (None, Some("mp4: protected sample entry has no schm scheme")),
+            },
+        };
 
         let (r_rate, avg_rate) = self.frame_rate_estimate(trak, table, &totals, limit);
         if media_type == MediaType::Video {
@@ -945,7 +953,7 @@ impl Mp4Demuxer {
             batch: read::BATCH_MIN,
             finished: external,
             blocked: external,
-            encrypted: cenc.is_some() && decryptor.is_none(),
+            encryption_error,
             raw_pcm: media_type == MediaType::Audio
                 && decryptor.is_none()
                 && stream
@@ -1509,14 +1517,10 @@ impl Mp4Demuxer {
             let Some(reader) = self.readers.get(slot) else {
                 return Ok(());
             };
-            // Reported, not decoded (see `Reader::encrypted`): a clear refusal
+            // Reported, not decoded (see `Reader::encryption_error`): a clear refusal
             // rather than either silence or the encrypted bytes themselves.
-            if reader.encrypted {
-                return Err(Error::Unsupported(
-                    "mp4: track is protected by Common Encryption (cenc/cbcs); \
-                     decryption is not implemented — see the stream's \
-                     encryption_scheme/encryption_key_id tags",
-                ));
+            if let Some(reason) = reader.encryption_error {
+                return Err(Error::Unsupported(reason));
             }
             if reader.finished || !reader.queue.is_empty() {
                 return Ok(());
@@ -2524,7 +2528,7 @@ fn cover_stream(index: u32, cover: meta::CoverArt) -> (Stream, Reader) {
         batch: 1,
         finished: false,
         blocked: false,
-        encrypted: false,
+        encryption_error: None,
         raw_pcm: false,
         decrypt: None,
     };

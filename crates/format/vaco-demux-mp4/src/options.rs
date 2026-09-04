@@ -50,8 +50,8 @@ pub struct Mp4Options {
     /// `-decryption_keys` — AES-128 keys selected by `tenc.default_KID`.
     ///
     /// Later entries replace earlier entries with the same KID, matching a
-    /// dictionary's last-write-wins behavior. This does not implement `seig`
-    /// sample-group key rotation; every sample still uses its track default.
+    /// dictionary's last-write-wins behavior. A deployed version-1
+    /// `sgpd(seig)` sample group can select a different entry per sample.
     pub decryption_keys: Vec<DecryptionKey>,
 }
 
@@ -68,13 +68,22 @@ impl Mp4Options {
     /// Select a media key for a track's `tenc.default_KID`.
     #[must_use]
     pub fn key_for(&self, kid: &[u8; 16]) -> Option<[u8; 16]> {
-        self.decryption_keys
-            .iter()
-            .rev()
-            .find(|entry| &entry.kid == kid)
-            .map(|entry| entry.key)
-            .or(self.decryption_key)
+        select_key(&self.decryption_keys, self.decryption_key, kid)
     }
+}
+
+/// The one key-selection rule used both while a track is built and when a
+/// fragment-local `seig` description changes KID.
+pub(crate) fn select_key(
+    keys: &[DecryptionKey],
+    fallback: Option<[u8; 16]>,
+    kid: &[u8; 16],
+) -> Option<[u8; 16]> {
+    keys.iter()
+        .rev()
+        .find(|entry| &entry.kid == kid)
+        .map(|entry| entry.key)
+        .or(fallback)
 }
 
 impl Default for Mp4Options {

@@ -23,7 +23,7 @@ play next.
 | `edit` | `elst` and the presentation ↔ media timeline |
 | `frag` | `mvex`/`trex`, `moof ▸ traf ▸ tfhd/tfdt/trun`, `sidx`, `mfra ▸ tfra` |
 | `stsd` | sample entries, configuration boxes, the four-character-code tables |
-| `cenc` | Common Encryption (ISO/IEC 23001-7): `pssh`, `schm`/`tenc`, `saiz`/`saio`, `senc` — reports the scheme and key id, decrypts nothing |
+| `cenc` | Common Encryption (ISO/IEC 23001-7): `pssh`, `schm`/`tenc`, `saiz`/`saio`, `senc`, and bounded `sgpd(seig)`/`sbgp` sample groups — structural parsing only |
 | `heif` | HEIF/AVIF item boxes and derived-image descriptors, including exact `clap` clean-aperture geometry |
 | `esds` | the MPEG-4 descriptor tree and the object type indications |
 | `fixed` | 16.16 / 8.8 / 2.30 fixed point and the 3×3 display matrix |
@@ -379,6 +379,17 @@ both independently and comparing. `pssh` and `tenc` version 1's
 file (`ffmpeg`'s encoder does not emit a `pssh` on its own) and are transcribed
 directly from ISO/IEC 23001-7 instead — noted as such in the module doc
 comment, not presented as measured.
+
+`SampleTable` and `TrackFragment` retain every raw `sgpd`/`sbgp` pair because
+their meaning is selected by `grouping_type`. For Common Encryption,
+`cenc::SeigDescriptions` parses the deployed version-1 `sgpd(seig)` entry
+grammar and `cenc::SampleToSeig` keeps version-0/1 `sbgp` runs as bounded
+cumulative ends. It does not expand a run table into one allocation per sample.
+Version-0/2 `sgpd`, parameterized mappings, malformed lengths and excessive
+counts are errors; the MP4 demuxer turns those into named refusals rather than
+choosing an uncertain key. To extend this, add the version semantics in
+`cenc.rs` and keep the selection policy in `vaco-demux-mp4` rather than teaching
+the structural layer about caller keys.
 
 Also measured, and recorded in `vaco-demux-mp4`'s doc file rather than here
 because it is about demuxing policy, not box shape: `ffprobe 8.1` surfaces

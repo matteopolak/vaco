@@ -130,7 +130,7 @@ fn item_reader(index: u32, extents: Vec<(u64, u64)>) -> Reader {
         batch: 1,
         finished: false,
         blocked: false,
-        encrypted: false,
+        encryption_error: None,
         raw_pcm: false,
         decrypt: None,
     }

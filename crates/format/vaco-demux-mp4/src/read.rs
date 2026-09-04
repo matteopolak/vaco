@@ -26,8 +26,14 @@
 use std::collections::VecDeque;
 
 use vaco_core::{MediaType, Rational};
+use vaco_format_isom::IsoBox;
+use vaco_format_isom::cenc::{
+    SampleEncryption, SampleToSeig, SeigDescriptions, TrackEncryption, sample_grouping_type,
+};
 use vaco_format_isom::frag::{TrackExtends, TrackFragment};
 use vaco_format_isom::stbl::{Sample, SampleTable};
+
+use crate::options::{DecryptionKey, Mp4Options, select_key};
 
 /// Smallest refill batch, in samples.
 pub(crate) const BATCH_MIN: u32 = 4096;
@@ -113,6 +119,7 @@ pub(crate) struct Pending {
 /// block, and its subsample table (empty for full-sample encryption).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SencSample {
+    pub key: [u8; 16],
     pub counter: [u8; 16],
     /// `(BytesOfClearData, BytesOfProtectedData)` pairs, in order.
     pub subsamples: Vec<(u16, u32)>,
@@ -137,75 +144,63 @@ const MAX_SUBSAMPLES: u16 = 4096;
 /// payload was read.
 #[derive(Debug, Clone)]
 pub(crate) struct Decryptor {
-    pub key: [u8; 16],
-    iv_size: u8,
+    fallback_key: Option<[u8; 16]>,
+    keys: Vec<DecryptionKey>,
+    defaults: TrackEncryption,
+    track_descriptions: Option<SeigDescriptions>,
     pub samples: Vec<SencSample>,
 }
 
 impl Decryptor {
-    /// Retain the validated track key and IV size until the first fragment's
-    /// `senc` is available during refill.
-    pub(crate) const fn fragmented(key: [u8; 16], iv_size: u8) -> Option<Self> {
-        if !matches!(iv_size, 8 | 16) {
-            return None;
-        }
-        Some(Self {
-            key,
-            iv_size,
+    /// Retain the key dictionary, track defaults and any track-level `seig`
+    /// descriptions until each fragment supplies its own mapping and `senc`.
+    pub(crate) fn fragmented(
+        options: &Mp4Options,
+        defaults: TrackEncryption,
+        descriptions: &[IsoBox<'_>],
+    ) -> Result<Self, &'static str> {
+        let track_descriptions = unique_descriptions(descriptions)?;
+        validate_parameters(&defaults, false)?;
+        Ok(Self {
+            fallback_key: options.decryption_key,
+            keys: options.decryption_keys.clone(),
+            defaults,
+            track_descriptions,
             samples: Vec::new(),
         })
     }
 
-    /// Resolve `senc`'s per-sample records (ISO/IEC 23001-7 §7.2): `iv_size`
-    /// bytes of IV, then — when the box's flags say so — a 16-bit
-    /// `subsample_count` and that many `(u16 clear, u32 protected)` pairs.
-    /// `None` when the records run out before `sample_count` samples have
-    /// been read, so a truncated table refuses rather than decrypting the
-    /// samples it does cover and handing back ciphertext for the rest.
-    pub(crate) fn parse(
-        key: [u8; 16],
-        records: &[u8],
-        sample_count: u32,
-        iv_size: u8,
-        has_subsamples: bool,
-    ) -> Option<Self> {
-        if !matches!(iv_size, 8 | 16) {
-            return None;
+    /// Build the complete progressive-track sample state from its `stbl`.
+    pub(crate) fn progressive(
+        options: &Mp4Options,
+        defaults: TrackEncryption,
+        table: &SampleTable<'_>,
+    ) -> Result<Self, &'static str> {
+        let track_descriptions = unique_descriptions(&table.sample_group_descriptions)?;
+        let mapping = unique_mapping(&table.sample_to_groups)?;
+        let senc = table
+            .sample_encryption
+            .as_ref()
+            .and_then(SampleEncryption::parse)
+            .ok_or("mp4: cenc track is missing or has a truncated senc sample-encryption box")?;
+        if senc.sample_count != table.sample_count() {
+            return Err("mp4: cenc senc sample count does not match the sample table");
         }
-        let mut r = vaco_bitstream::ByteReader::new(records);
-        let mut samples = Vec::new();
-        for _ in 0..sample_count {
-            let iv = r.bytes(usize::from(iv_size));
-            let mut counter = [0u8; 16];
-            let n = iv.len().min(16);
-            if let (Some(dst), Some(src)) = (counter.get_mut(..n), iv.get(..n)) {
-                dst.copy_from_slice(src);
-            }
-            let mut subsamples = Vec::new();
-            if has_subsamples {
-                let count = r.be16();
-                if count > MAX_SUBSAMPLES {
-                    return None;
-                }
-                for _ in 0..count {
-                    let clear = r.be16();
-                    let protected = r.be32();
-                    subsamples.push((clear, protected));
-                }
-            }
-            if r.overrun() {
-                return None;
-            }
-            samples.push(SencSample {
-                counter,
-                subsamples,
-            });
+        if mapping
+            .as_ref()
+            .is_some_and(|mapping| mapping.sample_count() != senc.sample_count)
+        {
+            return Err("mp4: cenc seig sbgp sample count does not match the sample table");
         }
-        Some(Self {
-            key,
-            iv_size,
-            samples,
-        })
+        let mut me = Self {
+            fallback_key: options.decryption_key,
+            keys: options.decryption_keys.clone(),
+            defaults,
+            track_descriptions,
+            samples: Vec::new(),
+        };
+        me.samples = me.parse_records(&senc, mapping.as_ref(), None, false)?;
+        Ok(me)
     }
 
     /// Replace the active records with this `traf`'s `senc` table.
@@ -227,16 +222,95 @@ impl Decryptor {
         if senc.sample_count != sample_count {
             return Err("mp4: cenc: fragmented traf senc sample count does not match trun");
         }
-        let next = Self::parse(
-            self.key,
-            senc.records,
-            sample_count,
-            self.iv_size,
-            senc.has_subsamples,
-        )
-        .ok_or("mp4: cenc: fragmented traf has truncated senc sample records")?;
-        *self = next;
+        let fragment_descriptions = unique_descriptions(&traf.sample_group_descriptions)?;
+        let mapping = unique_mapping(&traf.sample_to_groups)?;
+        if mapping
+            .as_ref()
+            .is_some_and(|mapping| mapping.sample_count() != sample_count)
+        {
+            return Err("mp4: cenc seig fragment sbgp sample count does not match trun");
+        }
+        self.samples = self.parse_records(
+            &senc,
+            mapping.as_ref(),
+            fragment_descriptions.as_ref(),
+            true,
+        )?;
         Ok(())
+    }
+
+    fn parse_records(
+        &self,
+        senc: &SampleEncryption<'_>,
+        mapping: Option<&SampleToSeig>,
+        fragment_descriptions: Option<&SeigDescriptions>,
+        fragmented: bool,
+    ) -> Result<Vec<SencSample>, &'static str> {
+        let mut r = vaco_bitstream::ByteReader::new(senc.records);
+        let mut samples = Vec::new();
+        for sample in 0..senc.sample_count {
+            let group_index = mapping.map_or(0, |mapping| mapping.index_for(sample).unwrap_or(0));
+            let parameters = self.parameters(group_index, fragment_descriptions, fragmented)?;
+            validate_parameters(&parameters, group_index != 0)?;
+            let key = select_key(&self.keys, self.fallback_key, &parameters.default_kid).ok_or(
+                if group_index == 0 {
+                    "mp4: cenc default KID has no supplied decryption key"
+                } else {
+                    "mp4: cenc seig KID has no supplied decryption key"
+                },
+            )?;
+            let iv = r.bytes(usize::from(parameters.per_sample_iv_size));
+            let mut counter = [0u8; 16];
+            let n = iv.len().min(16);
+            if let (Some(dst), Some(src)) = (counter.get_mut(..n), iv.get(..n)) {
+                dst.copy_from_slice(src);
+            }
+            let mut subsamples = Vec::new();
+            if senc.has_subsamples {
+                let count = r.be16();
+                if count > MAX_SUBSAMPLES {
+                    return Err("mp4: cenc senc subsample count exceeds the supported limit");
+                }
+                for _ in 0..count {
+                    subsamples.push((r.be16(), r.be32()));
+                }
+            }
+            if r.overrun() {
+                return Err("mp4: cenc senc sample records are truncated");
+            }
+            samples.push(SencSample {
+                key,
+                counter,
+                subsamples,
+            });
+        }
+        Ok(samples)
+    }
+
+    fn parameters(
+        &self,
+        index: u32,
+        fragment_descriptions: Option<&SeigDescriptions>,
+        fragmented: bool,
+    ) -> Result<TrackEncryption, &'static str> {
+        if index == 0 {
+            return Ok(self.defaults);
+        }
+        if index == 0x1_0000 {
+            return Err("mp4: cenc seig group-description index 0x10000 is invalid");
+        }
+        if index >= 0x1_0001 {
+            if !fragmented {
+                return Err("mp4: cenc progressive sbgp uses a fragment-local seig index");
+            }
+            return fragment_descriptions
+                .and_then(|descriptions| descriptions.get(index - 0x1_0000))
+                .ok_or("mp4: cenc fragment sbgp references a missing seig description");
+        }
+        self.track_descriptions
+            .as_ref()
+            .and_then(|descriptions| descriptions.get(index))
+            .ok_or("mp4: cenc sbgp references a missing track-level seig description")
     }
 
     /// Decrypt `payload` in place for sample `index`. `false` when `senc`
@@ -258,7 +332,7 @@ impl Decryptor {
             return false;
         };
         if sample.subsamples.is_empty() {
-            vaco_crypto::ctr_apply_aes128(&self.key, &sample.counter, payload);
+            vaco_crypto::ctr_apply_aes128(&sample.key, &sample.counter, payload);
             return true;
         }
         let mut ranges = Vec::new();
@@ -281,7 +355,7 @@ impl Decryptor {
                 protected.extend_from_slice(part);
             }
         }
-        vaco_crypto::ctr_apply_aes128(&self.key, &sample.counter, &mut protected);
+        vaco_crypto::ctr_apply_aes128(&sample.key, &sample.counter, &mut protected);
         let mut taken = 0usize;
         for r in &ranges {
             let n = r.len();
@@ -295,6 +369,68 @@ impl Decryptor {
         }
         true
     }
+}
+
+fn unique_descriptions(boxes: &[IsoBox<'_>]) -> Result<Option<SeigDescriptions>, &'static str> {
+    let mut matching = boxes.iter().filter(|group| {
+        sample_grouping_type(group).is_some_and(|kind| kind.as_bytes() == *b"seig")
+    });
+    let Some(group) = matching.next() else {
+        return Ok(None);
+    };
+    if matching.next().is_some() {
+        return Err("mp4: cenc has duplicate sgpd(seig) description boxes");
+    }
+    SeigDescriptions::parse(group)
+        .map(Some)
+        .map_err(|_| "mp4: cenc sgpd(seig) is malformed or not supported (requires version 1)")
+}
+
+fn unique_mapping(boxes: &[IsoBox<'_>]) -> Result<Option<SampleToSeig>, &'static str> {
+    let mut matching = boxes.iter().filter(|group| {
+        sample_grouping_type(group).is_some_and(|kind| kind.as_bytes() == *b"seig")
+    });
+    let Some(group) = matching.next() else {
+        return Ok(None);
+    };
+    if matching.next().is_some() {
+        return Err("mp4: cenc has duplicate sbgp(seig) mapping boxes");
+    }
+    SampleToSeig::parse(group)
+        .map(Some)
+        .map_err(|_| "mp4: cenc sbgp(seig) is malformed or not supported (requires version 0/1)")
+}
+
+fn validate_parameters(parameters: &TrackEncryption, from_seig: bool) -> Result<(), &'static str> {
+    if !parameters.is_protected {
+        return Err(if from_seig {
+            "mp4: cenc clear seig sample groups are not supported"
+        } else {
+            "mp4: cenc tenc marks the track as unprotected"
+        });
+    }
+    if parameters.crypt_byte_block != 0 || parameters.skip_byte_block != 0 {
+        return Err(if from_seig {
+            "mp4: cenc seig pattern encryption is not supported"
+        } else {
+            "mp4: cenc tenc pattern encryption is not supported"
+        });
+    }
+    if parameters.per_sample_iv_size == 0 {
+        return Err(if from_seig {
+            "mp4: cenc seig constant IV is not supported"
+        } else {
+            "mp4: cenc tenc constant IV is not supported"
+        });
+    }
+    if !matches!(parameters.per_sample_iv_size, 8 | 16) {
+        return Err(if from_seig {
+            "mp4: cenc seig per-sample IV size is not supported"
+        } else {
+            "mp4: cenc tenc per-sample IV size is not supported"
+        });
+    }
+    Ok(())
 }
 
 /// One track fragment belonging to one track, located but not yet resolved.
@@ -391,9 +527,9 @@ pub(crate) struct Reader {
     /// refusal with it. Found by the `dem_mp4` fuzz target, as "a seek produced
     /// a packet a straight read never did".
     pub blocked: bool,
-    /// `sinf ▸ schm`/`sinf ▸ schi ▸ tenc` named a Common Encryption scheme
-    /// **and** [`Reader::decrypt`] could not be built for it — no usable key,
-    /// an unsupported scheme, or an unsupported IV form.
+    /// Why `sinf ▸ schm`/`sinf ▸ schi ▸ tenc` could not produce
+    /// [`Reader::decrypt`] — no usable key, an unsupported scheme/grouping, or
+    /// malformed auxiliary data.
     ///
     /// Deliberately **not** folded into `blocked`: a blocked track silently
     /// produces no packets forever, which is right for an unreachable `dref`
@@ -404,8 +540,8 @@ pub(crate) struct Reader {
     /// requested, once — for every track, so a mixed encrypted/clear file
     /// fails predictably rather than only once the encrypted track's turn in
     /// the interleave happens to come up.
-    pub encrypted: bool,
-    /// Set instead of [`Reader::encrypted`] when a usable key exists. For a
+    pub encryption_error: Option<&'static str>,
+    /// Set instead of [`Reader::encryption_error`] when usable keys exist. For a
     /// progressive track this holds its sample-table `senc`; for a fragmented
     /// track refill replaces it from the current `traf` before queuing samples.
     pub decrypt: Option<Decryptor>,
@@ -737,7 +873,7 @@ mod tests {
             batch: BATCH_MIN,
             finished: false,
             blocked: false,
-            encrypted: false,
+            encryption_error: None,
             raw_pcm: false,
             decrypt: None,
         }

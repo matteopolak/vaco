@@ -1,5 +1,5 @@
 //! Common Encryption (ISO/IEC 23001-7): `pssh`, `schm`/`tenc`, `saiz`/`saio`,
-//! `senc`.
+//! `senc`, and `sgpd(seig)`/`sbgp` sample groups.
 //!
 //! **This module reports encryption; it does not decrypt anything.** That is a
 //! deliberate scope boundary a demuxer built on it should keep: surface the
@@ -22,7 +22,7 @@
 //! `default_skip_byte_block` were not seen in that file and are transcribed
 //! directly from the spec instead.
 
-use vaco_core::Result;
+use vaco_core::{Error, Result};
 
 use crate::boxes::IsoBox;
 use crate::fourcc::{FourCc, boxes};
@@ -114,6 +114,226 @@ impl TrackEncryption {
             default_kid,
             constant_iv,
         })
+    }
+}
+
+/// Maximum `seig` descriptions retained from one `sgpd` box.
+pub const MAX_SEIG_DESCRIPTIONS: u32 = 256;
+
+/// Maximum run count retained from one `sbgp` box.
+pub const MAX_SAMPLE_GROUP_RUNS: u32 = 1 << 20;
+
+/// Maximum `sgpd` or `sbgp` boxes retained from one container.
+pub const MAX_SAMPLE_GROUP_BOXES: usize = 256;
+
+/// The `grouping_type` at the start of an `sgpd` or `sbgp` full-box body.
+#[must_use]
+pub fn sample_grouping_type(group: &IsoBox<'_>) -> Option<FourCc> {
+    let body = group.full().ok()?.body;
+    Some(FourCc(body.get(..4)?.try_into().ok()?))
+}
+
+/// A deployed version-1 `sgpd` whose entries are Common Encryption `seig`
+/// descriptions (ISO/IEC 23001-7 §6).
+///
+/// Version 1 is intentionally the only accepted grammar here. Version 0 has
+/// no entry lengths, while version 2's implicit default-selection semantics
+/// are outside the demuxer's current key-rotation slice; callers must refuse
+/// those versions rather than guessing at sample keys.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SeigDescriptions {
+    /// Descriptions in their 1-based `sgpd` index order.
+    pub entries: Vec<TrackEncryption>,
+}
+
+impl SeigDescriptions {
+    /// Parse a version-1 `sgpd(seig)`.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for another `sgpd` version and
+    /// [`Error::InvalidData`] for malformed lengths, fields or excessive
+    /// entry counts.
+    pub fn parse(sgpd: &IsoBox<'_>) -> Result<Self> {
+        let full = sgpd.full()?;
+        if full.version != 1 {
+            return Err(Error::Unsupported(
+                "isom: only version-1 sgpd(seig) descriptions are supported",
+            ));
+        }
+        let mut r = full.reader();
+        if r.bytes(4) != b"seig" {
+            return Err(Error::InvalidData("isom: sgpd grouping type is not seig"));
+        }
+        let default_length = r.be32();
+        let count = r.be32();
+        r.check()
+            .map_err(|_| Error::InvalidData("isom: truncated sgpd(seig) header"))?;
+        if count > MAX_SEIG_DESCRIPTIONS {
+            return Err(Error::LimitExceeded {
+                limit: "isom sgpd(seig) entries",
+                requested: u64::from(count),
+                cap: u64::from(MAX_SEIG_DESCRIPTIONS),
+            });
+        }
+        let mut entries = Vec::new();
+        for _ in 0..count {
+            let length = if default_length == 0 {
+                r.be32()
+            } else {
+                default_length
+            };
+            let length = usize::try_from(length)
+                .map_err(|_| Error::InvalidData("isom: sgpd(seig) entry length overflow"))?;
+            let mut entry = r.sub(length);
+            let _reserved = entry.u8();
+            let pattern = entry.u8();
+            let is_protected = entry.u8();
+            let per_sample_iv_size = entry.u8();
+            let default_kid: [u8; 16] = entry
+                .bytes(16)
+                .try_into()
+                .map_err(|_| Error::InvalidData("isom: truncated sgpd(seig) KID"))?;
+            if is_protected > 1 {
+                return Err(Error::InvalidData(
+                    "isom: reserved sgpd(seig) isProtected value",
+                ));
+            }
+            if !matches!(per_sample_iv_size, 0 | 8 | 16) {
+                return Err(Error::InvalidData(
+                    "isom: invalid sgpd(seig) per-sample IV size",
+                ));
+            }
+            let constant_iv = if is_protected == 1 && per_sample_iv_size == 0 {
+                let size = entry.u8();
+                if !matches!(size, 8 | 16) {
+                    return Err(Error::InvalidData(
+                        "isom: invalid sgpd(seig) constant IV size",
+                    ));
+                }
+                let size = usize::from(size);
+                let iv = entry.bytes(size);
+                let mut padded = [0u8; 16];
+                let dst = padded.get_mut(..size).ok_or(Error::InvalidData(
+                    "isom: invalid sgpd(seig) constant IV size",
+                ))?;
+                if iv.len() != dst.len() {
+                    return Err(Error::InvalidData("isom: truncated sgpd(seig) constant IV"));
+                }
+                dst.copy_from_slice(iv);
+                Some(padded)
+            } else {
+                None
+            };
+            entry
+                .check()
+                .map_err(|_| Error::InvalidData("isom: truncated sgpd(seig) entry"))?;
+            entries.push(TrackEncryption {
+                crypt_byte_block: pattern >> 4,
+                skip_byte_block: pattern & 0x0f,
+                is_protected: is_protected == 1,
+                per_sample_iv_size,
+                default_kid,
+                constant_iv,
+            });
+        }
+        r.check()
+            .map_err(|_| Error::InvalidData("isom: truncated sgpd(seig) entries"))?;
+        Ok(Self { entries })
+    }
+
+    /// Resolve a 1-based group-description index.
+    #[must_use]
+    pub fn get(&self, index: u32) -> Option<TrackEncryption> {
+        usize::try_from(index.checked_sub(1)?)
+            .ok()
+            .and_then(|index| self.entries.get(index))
+            .copied()
+    }
+}
+
+/// One run from a Common Encryption `sbgp(seig)`, stored by its exclusive
+/// cumulative sample end so lookup stays logarithmic without expanding to a
+/// sample-sized vector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct SampleGroupRun {
+    end: u32,
+    index: u32,
+}
+
+/// A version-0 or version-1 `sbgp(seig)` sample-to-description mapping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SampleToSeig {
+    runs: Vec<SampleGroupRun>,
+    sample_count: u32,
+}
+
+impl SampleToSeig {
+    /// Parse an `sbgp(seig)` with no nonzero grouping-type parameter.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Unsupported`] for another version or a nonzero version-1
+    /// parameter, and [`Error::InvalidData`] for malformed or excessive runs.
+    pub fn parse(sbgp: &IsoBox<'_>) -> Result<Self> {
+        let full = sbgp.full()?;
+        if full.version > 1 {
+            return Err(Error::Unsupported(
+                "isom: only version-0/1 sbgp(seig) mappings are supported",
+            ));
+        }
+        let mut r = full.reader();
+        if r.bytes(4) != b"seig" {
+            return Err(Error::InvalidData("isom: sbgp grouping type is not seig"));
+        }
+        if full.version == 1 && r.be32() != 0 {
+            return Err(Error::Unsupported(
+                "isom: parameterized sbgp(seig) mappings are not supported",
+            ));
+        }
+        let count = r.be32();
+        r.check()
+            .map_err(|_| Error::InvalidData("isom: truncated sbgp(seig) header"))?;
+        if count > MAX_SAMPLE_GROUP_RUNS {
+            return Err(Error::LimitExceeded {
+                limit: "isom sbgp(seig) runs",
+                requested: u64::from(count),
+                cap: u64::from(MAX_SAMPLE_GROUP_RUNS),
+            });
+        }
+        let mut runs = Vec::new();
+        let mut sample_count = 0u32;
+        for _ in 0..count {
+            let samples = r.be32();
+            let index = r.be32();
+            if samples == 0 {
+                return Err(Error::InvalidData("isom: zero-length sbgp(seig) run"));
+            }
+            sample_count = sample_count
+                .checked_add(samples)
+                .ok_or(Error::InvalidData("isom: sbgp(seig) sample count overflow"))?;
+            runs.push(SampleGroupRun {
+                end: sample_count,
+                index,
+            });
+        }
+        r.check()
+            .map_err(|_| Error::InvalidData("isom: truncated sbgp(seig) runs"))?;
+        Ok(Self { runs, sample_count })
+    }
+
+    /// Number of samples covered by the run table.
+    #[must_use]
+    pub const fn sample_count(&self) -> u32 {
+        self.sample_count
+    }
+
+    /// Description index for zero-based `sample`, including `0` for the track
+    /// default and fragment-local values starting at `0x10001`.
+    #[must_use]
+    pub fn index_for(&self, sample: u32) -> Option<u32> {
+        let run = self.runs.partition_point(|run| run.end <= sample);
+        self.runs.get(run).map(|run| run.index)
     }
 }
 
@@ -420,6 +640,73 @@ mod tests {
         let t = TrackEncryption::parse(&b).unwrap();
         assert_eq!((t.crypt_byte_block, t.skip_byte_block), (1, 9));
         assert_eq!(t.constant_iv, Some([0xCDu8; 16]));
+    }
+
+    #[test]
+    fn version_one_seig_and_version_zero_sbgp_resolve_the_exact_runs() {
+        let mut sgpd = vec![1, 0, 0, 0];
+        sgpd.extend_from_slice(b"seig");
+        sgpd.extend_from_slice(&20u32.to_be_bytes());
+        sgpd.extend_from_slice(&2u32.to_be_bytes());
+        for (kid, iv_size) in [(0x11, 8), (0x22, 16)] {
+            sgpd.extend_from_slice(&[0, 0, 1, iv_size]);
+            sgpd.extend_from_slice(&[kid; 16]);
+        }
+        let descriptions = SeigDescriptions::parse(&bx(*b"sgpd", &sgpd)).unwrap();
+        assert_eq!(descriptions.get(1).unwrap().default_kid, [0x11; 16]);
+        assert_eq!(descriptions.get(2).unwrap().per_sample_iv_size, 16);
+        assert!(descriptions.get(0).is_none());
+        assert!(descriptions.get(3).is_none());
+
+        let mut sbgp = vec![0, 0, 0, 0];
+        sbgp.extend_from_slice(b"seig");
+        sbgp.extend_from_slice(&3u32.to_be_bytes());
+        for (count, index) in [(2u32, 0u32), (3, 1), (1, 0x1_0001)] {
+            sbgp.extend_from_slice(&count.to_be_bytes());
+            sbgp.extend_from_slice(&index.to_be_bytes());
+        }
+        let mapping = SampleToSeig::parse(&bx(*b"sbgp", &sbgp)).unwrap();
+        assert_eq!(mapping.sample_count(), 6);
+        assert_eq!(
+            (0..7).map(|i| mapping.index_for(i)).collect::<Vec<_>>(),
+            vec![
+                Some(0),
+                Some(0),
+                Some(1),
+                Some(1),
+                Some(1),
+                Some(0x1_0001),
+                None
+            ]
+        );
+    }
+
+    #[test]
+    fn unsupported_or_truncated_seig_tables_are_refused() {
+        for version in [0, 2] {
+            let mut body = vec![version, 0, 0, 0];
+            body.extend_from_slice(b"seig");
+            assert!(matches!(
+                SeigDescriptions::parse(&bx(*b"sgpd", &body)),
+                Err(Error::Unsupported(_))
+            ));
+        }
+
+        let mut truncated = vec![1, 0, 0, 0];
+        truncated.extend_from_slice(b"seig");
+        truncated.extend_from_slice(&20u32.to_be_bytes());
+        truncated.extend_from_slice(&1u32.to_be_bytes());
+        truncated.extend_from_slice(&[0, 0, 1, 8, 0]);
+        assert!(SeigDescriptions::parse(&bx(*b"sgpd", &truncated)).is_err());
+
+        let mut parameterized = vec![1, 0, 0, 0];
+        parameterized.extend_from_slice(b"seig");
+        parameterized.extend_from_slice(&1u32.to_be_bytes());
+        parameterized.extend_from_slice(&0u32.to_be_bytes());
+        assert!(matches!(
+            SampleToSeig::parse(&bx(*b"sbgp", &parameterized)),
+            Err(Error::Unsupported(_))
+        ));
     }
 
     /// `senc` bytes from the same file: `sample_count=10`, subsamples present.

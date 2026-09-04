@@ -340,6 +340,10 @@ pub struct TrackFragment<'a> {
     pub runs: Vec<TrackRun<'a>>,
     /// Fragment-local Common Encryption records, when a `senc` child exists.
     pub sample_encryption: Option<IsoBox<'a>>,
+    /// Fragment-local `sgpd` sample-group descriptions, retained raw.
+    pub sample_group_descriptions: Vec<IsoBox<'a>>,
+    /// Fragment-local `sbgp` sample-to-group maps, retained raw.
+    pub sample_to_groups: Vec<IsoBox<'a>>,
 }
 
 impl<'a> TrackFragment<'a> {
@@ -353,6 +357,8 @@ impl<'a> TrackFragment<'a> {
         let mut base_media_decode_time = None;
         let mut runs = Vec::new();
         let mut sample_encryption = None;
+        let mut sample_group_descriptions = Vec::new();
+        let mut sample_to_groups = Vec::new();
         for child in traf.children() {
             let child = child?;
             match child.kind() {
@@ -373,6 +379,26 @@ impl<'a> TrackFragment<'a> {
                     runs.push(TrackRun::parse(&child.full()?)?);
                 }
                 boxes::SENC if sample_encryption.is_none() => sample_encryption = Some(child),
+                boxes::SGPD => {
+                    if sample_group_descriptions.len() >= crate::cenc::MAX_SAMPLE_GROUP_BOXES {
+                        return Err(Error::LimitExceeded {
+                            limit: "isom traf sgpd boxes",
+                            requested: sample_group_descriptions.len() as u64 + 1,
+                            cap: crate::cenc::MAX_SAMPLE_GROUP_BOXES as u64,
+                        });
+                    }
+                    sample_group_descriptions.push(child);
+                }
+                boxes::SBGP => {
+                    if sample_to_groups.len() >= crate::cenc::MAX_SAMPLE_GROUP_BOXES {
+                        return Err(Error::LimitExceeded {
+                            limit: "isom traf sbgp boxes",
+                            requested: sample_to_groups.len() as u64 + 1,
+                            cap: crate::cenc::MAX_SAMPLE_GROUP_BOXES as u64,
+                        });
+                    }
+                    sample_to_groups.push(child);
+                }
                 _ => {}
             }
         }
@@ -381,6 +407,8 @@ impl<'a> TrackFragment<'a> {
             base_media_decode_time,
             runs,
             sample_encryption,
+            sample_group_descriptions,
+            sample_to_groups,
         })
     }
 
