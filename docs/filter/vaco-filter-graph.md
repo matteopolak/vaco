@@ -455,9 +455,11 @@ Interfaces are frozen (plan 19 §6), so these are **reported, not changed**.
 * **The `/`-prefixed option name that loads a value from a file**
   (`drawtext=/text=/path/to/file.txt`). Plan 16 §2.3 puts it in `vaco-opts` at
   argument-parse time, not in the graph parser, and that is the right place.
-* **Commands (`sendcmd`, `zmq`).** `Graph::send_command`, timed delivery and
-  target matching belong with whoever owns the run loop; the instance names
-  they target are produced here and exposed on `NodeInfo`.
+* **Command-script integration (`sendcmd`, `zmq`).** Runtime target matching and
+  timed delivery now live on `vaco_filter_core::Graph`, which owns the run loop
+  and the instance labels this builder supplies. This crate still does not
+  parse command scripts; `sendcmd`/`asendcmd` are leaf filters, and `zmq` is
+  excluded by the dependency policy.
 
 ---
 

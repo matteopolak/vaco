@@ -1,9 +1,10 @@
 //! What a filter can see and do during one `activate` call.
 //!
 //! [`FilterContext`](crate::FilterContext) is the *only* thing a filter is
-//! handed. It reaches link state and nothing else — never another filter's
-//! private state — which is the invariant the reference maintains by convention
-//! and that the arena split makes structural here.
+//! handed. It reaches link state plus an append-only command request channel,
+//! never another filter's private state. The scheduler consumes requests only
+//! after the current activation returns, so the arena split keeps that boundary
+//! structural rather than conventional.
 //!
 //! # The frame-flow contract
 //!
@@ -30,7 +31,7 @@ use vaco_core::{Result, Timestamp};
 use vaco_frame::{Frame, FramePool};
 
 use crate::link::{Link, LinkArena, LinkId, LinkStats, PadRef, Status};
-use crate::{FilterContext, LinkFormat, MediaType, NodeId};
+use crate::{CommandFlags, CommandRequest, FilterContext, LinkFormat, MediaType, NodeId};
 
 /// Which link each of a node's pads is attached to.
 ///
@@ -155,12 +156,14 @@ impl<'a> FilterContext<'a> {
         node: &'a NodeLinks,
         pool: &'a FramePool,
         graph_nodes: &'a [NodeView],
+        commands: Option<&'a mut Vec<CommandRequest>>,
     ) -> Self {
         Self {
             links,
             node,
             pool,
             graph_nodes,
+            commands,
             format_mismatch: false,
             push_after_close: false,
             dropped_by_backpressure: false,
@@ -196,6 +199,39 @@ impl<'a> FilterContext<'a> {
     #[must_use]
     pub fn graph_nodes(&self) -> &[NodeView] {
         self.graph_nodes
+    }
+
+    /// Ask the graph to dispatch a command after this activation completes.
+    ///
+    /// This is the narrow action channel used by `sendcmd`/`asendcmd`: a leaf
+    /// can name a target but never obtains another filter's private state. The
+    /// graph resolves the target and invokes it only after the current filter
+    /// has returned, preserving the scheduler's split-borrow boundary.
+    ///
+    /// # Errors
+    ///
+    /// [`vaco_core::Error::InvalidData`] when called from `configure`, where no
+    /// runtime command queue exists. Target and command errors are returned by
+    /// the enclosing [`crate::Graph::run_once`] call after activation.
+    pub fn send_command(
+        &mut self,
+        target: &str,
+        name: &str,
+        arg: &str,
+        flags: CommandFlags,
+    ) -> Result<()> {
+        let Some(commands) = self.commands.as_mut() else {
+            return Err(vaco_core::Error::InvalidData(
+                "runtime commands are unavailable during filter configuration",
+            ));
+        };
+        commands.push(CommandRequest {
+            target: target.to_owned(),
+            name: name.to_owned(),
+            arg: arg.to_owned(),
+            flags,
+        });
+        Ok(())
     }
 
     pub(crate) const fn saw_format_mismatch(&self) -> bool {

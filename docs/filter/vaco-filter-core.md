@@ -559,6 +559,56 @@ not fit, leave it alone" outcome plan 16 flags as an acceptable answer, not a
 shortfall: a witness that stops passing its own tests to prove a point is
 worse than a slightly redundant adapter.
 
+## Runtime commands
+
+`Filter::process_command` is the receiving boundary. Its default enforces
+`FAST`, calls the source-compatible `Filter::command` hook, and returns
+`CommandReply::Ok`; timeline-capable adapters implement `enable`, and filters
+with query-like commands override `process_command` to return
+`CommandReply::Text`. For option-backed filters, the common setter is
+`vaco_opts::OptionsExt::process_command`: it resolves aliases, requires the
+option's `RUNTIME` flag, parses with that option's declared type and range, and
+mutates the same options object used at construction. Keeping that generic
+operation in `vaco-opts` avoids making the scheduler depend on every filter's
+private option type.
+
+`Graph::send_command(target, name, value, flags)` supplies target dispatch.
+`target` accepts `all`, a descriptor name such as `volume` (all instances in
+graph order), or an exact instance label such as `volume@boost`.
+`CommandFlags::ONE` stops after the first match. `CommandFlags::FAST` asks the
+filter's additive `command_flags` hook whether the command is suitable for a
+latency-sensitive caller; the compatible default is fast because every command
+that existed when the hook was added was a bounded in-process mutation. A
+future command that blocks on I/O or performs expensive rebuilding must
+override the hook and omit `FAST` for that command.
+Immediate dispatch returns accepted filters' replies in graph order. If several
+filters match, one rejection does not hide another filter's success; an error
+is returned only when every match rejects the command.
+
+An in-graph command source uses `FilterContext::send_command`. The context
+records an owned request; after the source's `activate` returns and its mutable
+borrow is gone, the scheduler resolves and dispatches the request through the
+same `Graph::send_command` path. This keeps target rules in one place and lets
+`sendcmd` act before its triggering frame reaches a downstream target without
+giving one filter direct access to another filter's state.
+
+`Graph::queue_command` resolves the same target set when called and stores one
+event per matched node. It requires both a `Timestamp` and its `TimeBase`—there
+is deliberately no ambient timestamp unit—and orders events by exact rational
+comparison, retaining insertion order for equal times. The scheduler delivers
+each event immediately before the target's first activation whose frame on
+input pad zero has `pts >= at`. An absent frame timestamp does not fire a timed
+command. A rejected queued command is removed and returned to the caller of
+`run_once`/`run`, so retry is explicit rather than an accidental loop.
+
+To add a mutation command, implement `Filter::command` on the concrete filter
+or its adapter. Prefer `OptionsExt::process_command` when the command is a
+runtime option and translate its `OptError` to `vaco_core::Error::Option`;
+override `Filter::process_command` only when a successful command returns text.
+Mark genuinely slow commands through `command_flags`. Target matching and
+timeline ordering stay in `Graph`; leaf filters must not duplicate either list
+or rule.
+
 ---
 
 ## How to change it
@@ -605,6 +655,8 @@ parameters:
 | `Graph::with_pool` | per graph | a fresh `FramePool` | Share one pool across a pipeline so frames recycle through one free list |
 | `AutoConvert` | per configure | `All` | `None` is `-noauto_conversion_filters` |
 | `timeline::TIMELINE_VARS` | compile time | `t n w h pos` | What an `enable=` expression may name |
+| `CommandFlags::ONE` | per command | off | Deliver only to the first matching node |
+| `CommandFlags::FAST` | per command | off | Refuse a command the filter marks as slow |
 
 Constants chosen here rather than taken from the reference, each recorded as a
 choice rather than presented as reproduction:
@@ -670,7 +722,7 @@ once per frame, and putting the two in one table invites the wrong conclusion.
 
 ## Testing
 
-* **99 tests**: 59 unit, 28 named integration cases, 11 property tests, 1
+* **117 tests**: 62 unit, 43 named integration cases, 11 property tests, 1
   doctest — plus five compile-time assertions pinning the loss tier order.
 * **`tests/graph.rs` is the proof.** Real graphs, driven to completion, one rule
   pinned each: frame conservation at every stream length, N:M in both directions,
@@ -834,10 +886,6 @@ descending order of what they cost.
 8. **`FilterDesc` has no `PadSpec::Dynamic`.** Pad counts are fixed by the
    `&'static [Pad]` slices, so `amix=inputs=N` and `split=N` cannot realise their
    pads. `FilterFlags::DYNAMIC_INPUTS` exists and nothing can act on it.
-9. **`Filter::command` takes `(&str, &str)` and returns `Result<()>`.** The plan
-    wants flags (`ONE`, `FAST`) and a `CommandReply::Text` for commands that
-    answer. `ebur128`'s metadata query has nowhere to go.
-
 ## Wanted from other crates
 
 * **`vaco-pixfmt`: a `reference_rank(PixFmt) -> u16` column.** The reference's
@@ -874,10 +922,6 @@ descending order of what they cost.
 * **`MediaOpener`** (plan 16 §4.4), which `vaco-filter-movie` needs. Nothing in
   this crate exercises it, and a trait with no implementor and no test is a
   guess.
-* **Queued and targeted commands.** `Filter::command` is implemented and the
-  `enable` command works through it; `Graph::send_command`, timed delivery and
-  target matching belong with the graph, which knows instance tags.
-
 ---
 
 ## Dependencies

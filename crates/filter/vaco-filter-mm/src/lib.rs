@@ -17,9 +17,8 @@
 //! scope), `cmdsocket`/`acmdsocket` (need a real listening socket, outside a
 //! filter's normal scope), `aeval` (the reference's own docs call it slow
 //! and recommend a dedicated filter instead). `sendcmd`/`asendcmd` parse the
-//! command grammar and track enter/leave edges in full but cannot dispatch
-//! a parsed command to another named filter instance; see `sendcmd`'s
-//! module doc for why.
+//! command grammar, track enter/leave edges and dispatch fired commands through
+//! `vaco-filter-core`'s deferred `FilterContext` request channel.
 //! Two filters carry noteworthy bugs found while building this crate: see
 //! `select`'s module doc for a routing formula that disagreed with the
 //! reference, and `streamselect`'s for a fuzzing-found allocation bug.

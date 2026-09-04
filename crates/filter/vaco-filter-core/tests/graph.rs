@@ -30,9 +30,9 @@ use vaco_filter_core::negotiate::{
     ConverterFactory, ConverterSpec, FormatSet, NodeFormats, Property, loss,
 };
 use vaco_filter_core::{
-    Activity, Dual, DualFilter, Fanout, FanoutFilter, Filter, FilterContext, FilterDesc,
-    FilterFlags, FrameFilter, FrameOut, Graph, GraphStatus, LinkFormat, LinkView, NodeId, NodeView,
-    Pad, Paired, PairedFilter, Simple, Violation,
+    Activity, Command, CommandFlags, CommandReply, Dual, DualFilter, Fanout, FanoutFilter, Filter,
+    FilterContext, FilterDesc, FilterFlags, FrameFilter, FrameOut, Graph, GraphStatus, LinkFormat,
+    LinkView, NodeId, NodeView, Pad, Paired, PairedFilter, Simple, Violation,
 };
 use vaco_pixfmt::PixFmt;
 use vaco_sampfmt::SampleFmt;
@@ -1741,5 +1741,295 @@ fn a_filter_can_read_every_nodes_label_and_every_links_state() -> Result<()> {
         .find(|l| l.src.node == src)
         .expect("the source's own outbound link must be visible");
     assert_eq!(source_link.dst.node, node);
+    Ok(())
+}
+
+// ----------------------------------------------------------- filter commands
+
+#[derive(Debug)]
+struct CommandProbe {
+    events: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    fast: bool,
+}
+
+#[derive(Debug)]
+struct ReplyProbe;
+
+impl Filter for ReplyProbe {
+    fn activate(&mut self, _ctx: &mut FilterContext<'_>) -> Result<Activity> {
+        Ok(Activity::Blocked)
+    }
+
+    fn process_command(&mut self, command: &Command<'_>) -> Result<CommandReply> {
+        Ok(CommandReply::Text(format!(
+            "{}={}",
+            command.name, command.arg
+        )))
+    }
+}
+
+impl Filter for CommandProbe {
+    fn activate(&mut self, ctx: &mut FilterContext<'_>) -> Result<Activity> {
+        if let Some(frame) = ctx.take_input(0) {
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("frame:{}", frame.pts));
+            ctx.push_output(0, frame)?;
+            return Ok(Activity::Progressed);
+        }
+        if ctx.input_at_eof(0) {
+            ctx.close_output(0);
+            return Ok(Activity::Eof);
+        }
+        ctx.request_input(0);
+        Ok(Activity::NeedInput)
+    }
+
+    fn command_flags(&self, _name: &str) -> CommandFlags {
+        if self.fast {
+            CommandFlags::FAST
+        } else {
+            CommandFlags::empty()
+        }
+    }
+
+    fn command(&mut self, name: &str, value: &str) -> Result<()> {
+        if name == "reject" {
+            return Err(Error::Option {
+                name: name.to_owned(),
+                detail: "rejected by probe".to_owned(),
+            });
+        }
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("command:{name}={value}"));
+        Ok(())
+    }
+}
+
+const COMMAND_DESC: FilterDesc = FilterDesc {
+    name: "volume",
+    description: "test: records commands and frames",
+    inputs: VIDEO_PAD,
+    outputs: VIDEO_PAD,
+    flags: FilterFlags::empty(),
+};
+
+fn command_node(
+    graph: &mut Graph,
+    label: &str,
+    events: &std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    fast: bool,
+) -> NodeId {
+    graph.add(
+        COMMAND_DESC,
+        NodeFormats::passthrough(1, 1, MediaType::Video, label),
+        Box::new(CommandProbe {
+            events: std::sync::Arc::clone(events),
+            fast,
+        }),
+    )
+}
+
+#[test]
+fn immediate_commands_match_filter_names_and_exact_instance_labels() -> Result<()> {
+    let first = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let second = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut graph = Graph::new();
+    command_node(&mut graph, "volume@first", &first, true);
+    command_node(&mut graph, "volume@second", &second, true);
+
+    assert_eq!(
+        graph
+            .send_command("volume", "gain", "2", CommandFlags::empty())?
+            .len(),
+        2
+    );
+    assert_eq!(
+        graph
+            .send_command("volume@second", "gain", "3", CommandFlags::empty())?
+            .len(),
+        1
+    );
+    assert_eq!(
+        graph
+            .send_command("all", "gain", "4", CommandFlags::empty())?
+            .len(),
+        2
+    );
+    assert_eq!(
+        first.lock().unwrap().as_slice(),
+        ["command:gain=2", "command:gain=4"],
+        "a filter-name target reaches every instance"
+    );
+    assert_eq!(
+        second.lock().unwrap().as_slice(),
+        ["command:gain=2", "command:gain=3", "command:gain=4"],
+        "an instance target reaches only the exact label"
+    );
+    Ok(())
+}
+
+#[test]
+fn immediate_dispatch_returns_a_filters_text_reply() -> Result<()> {
+    let mut graph = Graph::new();
+    graph.add(
+        COMMAND_DESC,
+        NodeFormats::passthrough(1, 1, MediaType::Video, "volume@query"),
+        Box::new(ReplyProbe),
+    );
+    assert_eq!(
+        graph.send_command("volume@query", "status", "now", CommandFlags::empty())?,
+        [CommandReply::Text("status=now".to_owned())]
+    );
+    Ok(())
+}
+
+#[test]
+fn one_and_fast_flags_are_enforced_by_dispatch() -> Result<()> {
+    let first = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let second = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let slow = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut graph = Graph::new();
+    command_node(&mut graph, "volume@first", &first, true);
+    command_node(&mut graph, "volume@second", &second, true);
+    command_node(&mut graph, "volume@slow", &slow, false);
+
+    assert_eq!(
+        graph
+            .send_command("volume", "gain", "4", CommandFlags::ONE)?
+            .len(),
+        1
+    );
+    assert_eq!(first.lock().unwrap().as_slice(), ["command:gain=4"]);
+    assert!(second.lock().unwrap().is_empty());
+    assert!(slow.lock().unwrap().is_empty());
+
+    let err = graph
+        .send_command("volume@slow", "gain", "5", CommandFlags::FAST)
+        .expect_err("FAST must refuse a command the filter marks slow");
+    assert!(matches!(err, Error::Unsupported(_)));
+    assert!(slow.lock().unwrap().is_empty());
+    Ok(())
+}
+
+#[test]
+fn command_target_must_match_a_filter() {
+    let mut graph = Graph::new();
+    let err = graph
+        .send_command("missing", "gain", "2", CommandFlags::empty())
+        .expect_err("a typo must not disappear as a successful no-op");
+    match err {
+        Error::Option { name, detail } => {
+            assert_eq!(name, "target");
+            assert!(detail.contains("missing"));
+        }
+        other => panic!("expected target option error, got {other:?}"),
+    }
+}
+
+#[test]
+fn queued_commands_fire_before_the_first_frame_at_or_after_their_time() -> Result<()> {
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut graph = Graph::new();
+    let src = graph.add_source(
+        "in",
+        MediaType::Video,
+        video_source_formats("in", PixFmt::Gray8),
+    );
+    let node = command_node(&mut graph, "volume@timed", &events, true);
+    let sink = graph.add_sink("out", MediaType::Video, any_video_sink("out"));
+    graph.connect(src, 0, node, 0)?;
+    graph.connect(node, 0, sink, 0)?;
+    let base = Rational::new(1, 25);
+    graph.set_source_format(src, gray_link(16, 16, base))?;
+    graph.configure()?;
+
+    // Queue out of timestamp order. Dispatch must still be chronological, and
+    // the two commands at tick 5 must retain insertion order.
+    assert_eq!(
+        graph.queue_command(
+            Timestamp::new(7),
+            base,
+            "volume@timed",
+            "gain",
+            "7",
+            CommandFlags::empty(),
+        )?,
+        1
+    );
+    graph.queue_command(
+        Timestamp::new(5),
+        base,
+        "volume@timed",
+        "gain",
+        "5a",
+        CommandFlags::empty(),
+    )?;
+    graph.queue_command(
+        Timestamp::new(5),
+        base,
+        "volume@timed",
+        "gain",
+        "5b",
+        CommandFlags::empty(),
+    )?;
+
+    for pts in [4, 5, 7] {
+        graph.send(src, gray_frame(16, 16, pts, 0))?;
+        graph.run()?;
+        while graph.recv(sink).is_ok() {}
+    }
+
+    assert_eq!(
+        events.lock().unwrap().as_slice(),
+        [
+            "frame:4",
+            "command:gain=5a",
+            "command:gain=5b",
+            "frame:5",
+            "command:gain=7",
+            "frame:7",
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn a_rejected_queued_command_is_reported_once_and_does_not_stall_the_frame() -> Result<()> {
+    let events = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+    let mut graph = Graph::new();
+    let src = graph.add_source(
+        "in",
+        MediaType::Video,
+        video_source_formats("in", PixFmt::Gray8),
+    );
+    let node = command_node(&mut graph, "volume@reject", &events, true);
+    let sink = graph.add_sink("out", MediaType::Video, any_video_sink("out"));
+    graph.connect(src, 0, node, 0)?;
+    graph.connect(node, 0, sink, 0)?;
+    let base = Rational::new(1, 25);
+    graph.set_source_format(src, gray_link(16, 16, base))?;
+    graph.configure()?;
+    graph.queue_command(
+        Timestamp::new(0),
+        base,
+        "volume@reject",
+        "reject",
+        "value",
+        CommandFlags::empty(),
+    )?;
+    graph.send(src, gray_frame(16, 16, 0, 0))?;
+
+    assert!(matches!(graph.run(), Err(Error::Option { .. })));
+    assert_eq!(graph.queued_command_count(), 0, "a rejection is consumed");
+    graph.run()?;
+    assert_eq!(events.lock().unwrap().as_slice(), ["frame:0"]);
+    assert!(
+        graph.recv(sink).is_ok(),
+        "the due frame still runs on retry"
+    );
     Ok(())
 }

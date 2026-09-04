@@ -22,9 +22,10 @@
 //! the [`Graph`]; the driver borrows one field of each. Ordinary disjoint-field
 //! borrowing — no `RefCell`, no `Rc`, no `unsafe`.
 
+use std::cmp::Ordering;
 use std::collections::VecDeque;
 
-use vaco_core::{Error, MediaType, Result, Timestamp};
+use vaco_core::{Error, MediaType, Result, TimeBase, Timestamp};
 use vaco_frame::{Frame, FramePool};
 
 use crate::context::NodeLinks;
@@ -35,7 +36,10 @@ use crate::negotiate::{
     AutoConvert, Conflict, ConverterFactory, ConverterSpec, NegotiationPlan, NoConversion,
     NodeFormats, negotiate,
 };
-use crate::{Activity, Filter, FilterContext, FilterDesc, LinkFormat};
+use crate::{
+    Activity, Command, CommandFlags, CommandReply, CommandRequest, Filter, FilterContext,
+    FilterDesc, LinkFormat,
+};
 
 /// How many steps [`Graph::run`] takes before giving up.
 ///
@@ -76,6 +80,16 @@ struct Node {
     self_driven: bool,
     /// Step number at which this node last ran, for FIFO tie-breaking.
     last_run: u64,
+}
+
+#[derive(Debug)]
+struct QueuedCommand {
+    at: Timestamp,
+    time_base: TimeBase,
+    node: NodeId,
+    name: String,
+    value: String,
+    flags: CommandFlags,
 }
 
 impl std::fmt::Debug for Node {
@@ -219,6 +233,8 @@ pub struct Graph {
     budget: u64,
     violations: Vec<Violation>,
     last_conflict: Option<Conflict>,
+    /// Per-node commands ordered by timestamp, then insertion order.
+    commands: VecDeque<QueuedCommand>,
     /// Every node's public identity, kept in step with `nodes` as they are
     /// added (never removed) — gap 22's read side, handed to every
     /// `FilterContext` so a filter can resolve another node's `NodeId`
@@ -247,6 +263,7 @@ impl Graph {
             budget: DEFAULT_STEP_BUDGET,
             violations: Vec::new(),
             last_conflict: None,
+            commands: VecDeque::new(),
             node_labels: Vec::new(),
         }
     }
@@ -423,6 +440,194 @@ impl Graph {
     #[must_use]
     pub fn node_count(&self) -> usize {
         self.nodes.len()
+    }
+
+    // -------------------------------------------------------------- commands
+
+    /// Deliver a runtime command to matching filter instances now.
+    ///
+    /// `target` is `all`, a registered filter name, or an exact instance
+    /// label such as `volume@boost`. Filter-name and `all` targets visit nodes
+    /// in graph order. [`CommandFlags::ONE`] limits that visit to the first
+    /// match.
+    ///
+    /// The returned replies are in graph order, one per filter that accepted
+    /// the command.
+    /// When several filters match, rejection by one does not hide acceptance
+    /// by another; an error is returned only when every matching filter rejects
+    /// it.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::Option`] naming `target` when no filter matches, or the first
+    /// command error when every match rejects the command.
+    pub fn send_command(
+        &mut self,
+        target: &str,
+        name: &str,
+        value: &str,
+        flags: CommandFlags,
+    ) -> Result<Vec<CommandReply>> {
+        let targets = self.command_targets(target, flags)?;
+        let mut replies = Vec::new();
+        let mut first_error = None;
+        for node in targets {
+            match self.send_command_to(node, name, value, flags) {
+                Ok(reply) => replies.push(reply),
+                Err(error) if first_error.is_none() => first_error = Some(error),
+                Err(_) => {}
+            }
+        }
+        if replies.is_empty() {
+            Err(first_error.unwrap_or(Error::Unsupported("filter rejected the runtime command")))
+        } else {
+            Ok(replies)
+        }
+    }
+
+    /// Queue a command for delivery on each matching filter's timeline.
+    ///
+    /// Delivery occurs immediately before the first activation whose frame on
+    /// input pad zero has a presentation timestamp greater than or equal to
+    /// `at`. An explicit time base is required because [`Timestamp`] never has
+    /// an ambient unit. Commands are ordered by timestamp and retain insertion
+    /// order when their timestamps are equal.
+    ///
+    /// The returned count is the number of target instances queued.
+    ///
+    /// # Errors
+    ///
+    /// [`Error::InvalidData`] when the timestamp or its time base is unusable,
+    /// or [`Error::Option`] when no filter matches `target`.
+    pub fn queue_command(
+        &mut self,
+        at: Timestamp,
+        time_base: TimeBase,
+        target: &str,
+        name: &str,
+        value: &str,
+        flags: CommandFlags,
+    ) -> Result<usize> {
+        if at.compare(time_base, at, time_base).is_none() {
+            return Err(Error::InvalidData(
+                "queued command needs a finite timestamp and time base",
+            ));
+        }
+        let targets = self.command_targets(target, flags)?;
+        let count = targets.len();
+        for node in targets {
+            let command = QueuedCommand {
+                at,
+                time_base,
+                node,
+                name: name.to_owned(),
+                value: value.to_owned(),
+                flags,
+            };
+            let position = self.commands.iter().position(|queued| {
+                at.compare(time_base, queued.at, queued.time_base) == Some(Ordering::Less)
+            });
+            if let Some(position) = position {
+                self.commands.insert(position, command);
+            } else {
+                self.commands.push_back(command);
+            }
+        }
+        Ok(count)
+    }
+
+    /// Commands still waiting for their target frame.
+    #[must_use]
+    pub fn queued_command_count(&self) -> usize {
+        self.commands.len()
+    }
+
+    fn command_targets(&self, target: &str, flags: CommandFlags) -> Result<Vec<NodeId>> {
+        let mut targets = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            if node.kind != Kind::Filter {
+                continue;
+            }
+            if target == "all" || target == node.desc.name || target == node.label {
+                targets.push(NodeId(index as u32));
+                if flags.contains(CommandFlags::ONE) {
+                    break;
+                }
+            }
+        }
+        if targets.is_empty() {
+            return Err(Error::Option {
+                name: "target".to_owned(),
+                detail: format!("no filter matches `{target}`"),
+            });
+        }
+        Ok(targets)
+    }
+
+    fn send_command_to(
+        &mut self,
+        id: NodeId,
+        name: &str,
+        value: &str,
+        flags: CommandFlags,
+    ) -> Result<CommandReply> {
+        let Some(node) = self.nodes.get_mut(id.0 as usize) else {
+            return Err(Error::InvalidData("unknown filter node"));
+        };
+        let Some(filter) = node.filter.as_mut() else {
+            return Err(Error::InvalidData("node is not a filter"));
+        };
+        let reply = filter.process_command(&Command {
+            name,
+            arg: value,
+            flags,
+        })?;
+        node.parked_at = None;
+        Ok(reply)
+    }
+
+    fn deliver_due_commands(&mut self, id: NodeId) -> Result<()> {
+        loop {
+            let position = self
+                .commands
+                .iter()
+                .position(|command| command.node == id && self.command_is_due(command));
+            let Some(position) = position else {
+                return Ok(());
+            };
+            let Some(command) = self.commands.remove(position) else {
+                return Ok(());
+            };
+            let _ = self.send_command_to(id, &command.name, &command.value, command.flags)?;
+        }
+    }
+
+    fn dispatch_command_requests(&mut self, requests: Vec<CommandRequest>) -> Result<()> {
+        for request in requests {
+            let _ =
+                self.send_command(&request.target, &request.name, &request.arg, request.flags)?;
+        }
+        Ok(())
+    }
+
+    fn command_is_due(&self, command: &QueuedCommand) -> bool {
+        let Some(node) = self.nodes.get(command.node.0 as usize) else {
+            return false;
+        };
+        let Some(frame) = node
+            .links
+            .input(0)
+            .and_then(|link| self.links.get(link))
+            .and_then(Link::peek)
+        else {
+            return false;
+        };
+        matches!(
+            frame
+                .pts
+                .compare(frame.time_base, command.at, command.time_base),
+            Some(Ordering::Equal | Ordering::Greater)
+        )
     }
 
     // ------------------------------------------------------------ configure
@@ -602,7 +807,7 @@ impl Graph {
                 continue;
             };
             let mut ctx =
-                FilterContext::new(&mut self.links, &links, &self.pool, &self.node_labels);
+                FilterContext::new(&mut self.links, &links, &self.pool, &self.node_labels, None);
             let result = filter.configure(&mut ctx);
             if let Some(node) = self.nodes.get_mut(idx) {
                 node.filter = Some(filter);
@@ -855,6 +1060,7 @@ impl Graph {
         let Some(id) = self.pick() else {
             return Ok(Progress::Quiescent);
         };
+        self.deliver_due_commands(id)?;
         self.step = self.step.saturating_add(1);
         let step = self.step;
         let Some(node) = self.nodes.get_mut(id.0 as usize) else {
@@ -874,7 +1080,14 @@ impl Graph {
         };
         let links = node.links.clone();
         let before = self.links.epoch_sum();
-        let mut ctx = FilterContext::new(&mut self.links, &links, &self.pool, &self.node_labels);
+        let mut command_requests = Vec::new();
+        let mut ctx = FilterContext::new(
+            &mut self.links,
+            &links,
+            &self.pool,
+            &self.node_labels,
+            Some(&mut command_requests),
+        );
         let outcome = filter.activate(&mut ctx);
         let pushed_bad_format = ctx.saw_format_mismatch();
         let pushed_after_close = ctx.saw_push_after_close();
@@ -893,7 +1106,10 @@ impl Graph {
         }
         let after = self.links.epoch_sum();
         match outcome {
-            Ok(activity) => self.apply(id, activity, before != after),
+            Ok(activity) => {
+                self.apply(id, activity, before != after);
+                self.dispatch_command_requests(command_requests)?;
+            }
             Err(e) => {
                 self.fail_node(id);
                 return Err(e);

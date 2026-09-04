@@ -35,7 +35,7 @@ in the filter's own module doc; this table is the index, not the evidence.
 | `segment`/`asegment` | Structural | The "opposite of concat" reading, not independently measured against the reference's own timestamp handling. |
 | `interleave`/`ainterleave` | Structural | Merge-by-timestamp measured; `duration`'s three end conditions are a structural reading of the option names. |
 | `streamselect`/`astreamselect` | Partial | `map` routing and the runtime `map` command both measured/implemented; duplicate `map` entries (fan-out) are a known, documented gap. |
-| `sendcmd`/`asendcmd` | Parses only | Grammar and enter/leave edge detection measured exact against every `filters.texi` worked example; command **dispatch** to another node is impossible from a leaf filter today (see below) — every frame passes through unchanged. |
+| `sendcmd`/`asendcmd` | Yes | Grammar and enter/leave edge detection measured against every `filters.texi` worked example; fired commands dispatch through the graph to filter-name or exact instance targets before the triggering frame reaches that target. |
 | `cue`/`acue` | Partial | `cue=0` (the default) is a measured, deterministic no-op; a non-zero cue depends on real wall-clock time, not covered by a fast test. |
 | `realtime`/`arealtime` | Structural | Implements the documented pacing/discontinuity rule; not measured against the reference's own wall-clock precision. |
 | `latency`/`alatency` | Honest no-op | No per-link latency instrumentation exists in this framework for a leaf filter to read. |
@@ -253,21 +253,22 @@ used to be reversed, and `streamselect=inputs=999999999` requested an 8 GB
 entries (two outputs reading one input) are a known, documented gap: only
 the first to run in a given step gets that input's next frame.
 
-### `sendcmd`/`asendcmd` — parses and tracks, cannot dispatch (`sendcmd.rs`)
+### `sendcmd`/`asendcmd` — parse, track and dispatch (`sendcmd.rs`)
 
 The command-script grammar is only in `filters.texi`, not `-h` output;
 fetched from the public documentation and implemented in full — interval
 start/end, `,`-separated commands, `[enter+leave]` flags (default
 `[enter]`), `#` comments, and the `expr` flag's expression evaluation.
 Every one of `filters.texi`'s own worked examples is reproduced verbatim
-as a test, including the three-interval commented-file example. What
-cannot be implemented from inside a leaf filter: `TARGET` names *another*
-filter instance in the graph, and nothing reachable from a filter's own
-`FilterContext` can address a different node by label and call
-`Filter::command` on it — `vaco_filter_core::sched::Graph` has no such
-public method today. So every frame passes straight through unchanged;
-the filter correctly identifies which commands would fire when
-(`Filter::fired`, test-only) without delivering them anywhere.
+as a test, including the three-interval commented-file example. A fired
+command goes through `FilterContext::send_command`; the scheduler waits for
+the current activation to return, resolves `TARGET` by filter name or exact
+instance label, and then calls the target's `Filter::process_command`. This
+preserves the split-borrow rule—a leaf never receives another filter's private
+state—while ensuring the command lands before the triggering frame can activate
+the downstream target. The end-to-end test wires `source -> sendcmd -> target ->
+sink` and observes the target command on the frame at the interval boundary.
+`Filter::fired` remains test-only evidence for parser and edge ordering.
 
 ### `cue`/`acue`, `realtime`/`arealtime`, `latency`/`alatency`, `bench`/`abench`, `perms`/`aperms`, `sidedata`/`asidedata` (`misc.rs`)
 

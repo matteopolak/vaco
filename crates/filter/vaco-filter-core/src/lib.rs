@@ -126,6 +126,45 @@ pub enum Activity {
     Eof,
 }
 
+bitflags::bitflags! {
+    /// Controls how a graph-level runtime command is delivered.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct CommandFlags: u8 {
+        /// Stop after the first matching filter instance.
+        const ONE  = 1 << 0;
+        /// Refuse a command the filter has not declared safe for a fast path.
+        const FAST = 1 << 1;
+    }
+}
+
+/// One runtime command after graph-level target resolution.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Command<'a> {
+    /// The command or runtime-option name.
+    pub name: &'a str,
+    /// The argument passed to the command.
+    pub arg: &'a str,
+    /// Delivery constraints supplied by the caller.
+    pub flags: CommandFlags,
+}
+
+/// A runtime command's response.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CommandReply {
+    /// The command completed without a response body.
+    Ok,
+    /// Text returned by a query-like command.
+    Text(String),
+}
+
+#[derive(Debug)]
+pub(crate) struct CommandRequest {
+    pub target: String,
+    pub name: String,
+    pub arg: String,
+    pub flags: CommandFlags,
+}
+
 /// A filter instance.
 ///
 /// Most filters never implement this directly — the adapters in this crate
@@ -170,6 +209,40 @@ pub trait Filter: Send {
     /// a post-state indistinguishable from a freshly configured filter.
     fn flush(&mut self) {}
 
+    /// Classify a runtime command before it is dispatched.
+    ///
+    /// Existing commands are short in-process mutations, so the compatible
+    /// default is [`CommandFlags::FAST`]. A filter that performs blocking I/O
+    /// or expensive rebuilding overrides this and returns an empty set for
+    /// that command.
+    fn command_flags(&self, name: &str) -> CommandFlags {
+        let _ = name;
+        CommandFlags::FAST
+    }
+
+    /// Process a graph-level runtime command and optionally return text.
+    ///
+    /// The default preserves existing [`Filter::command`] implementations and
+    /// enforces [`CommandFlags::FAST`] through [`Filter::command_flags`]. A
+    /// query-like filter overrides this method to return
+    /// [`CommandReply::Text`].
+    ///
+    /// # Errors
+    ///
+    /// [`vaco_core::Error::Unsupported`] when `FAST` was requested for a slow
+    /// command, or anything returned by [`Filter::command`].
+    fn process_command(&mut self, command: &Command<'_>) -> Result<CommandReply> {
+        if command.flags.contains(CommandFlags::FAST)
+            && !self
+                .command_flags(command.name)
+                .contains(CommandFlags::FAST)
+        {
+            return Err(vaco_core::Error::Unsupported("filter command is not fast"));
+        }
+        self.command(command.name, command.arg)?;
+        Ok(CommandReply::Ok)
+    }
+
     /// Handle a runtime command (`sendcmd`, `zmq`, or the timeline).
     ///
     /// # Errors
@@ -187,7 +260,8 @@ pub trait Filter: Send {
 /// See the [`context`] module for the frame-flow contract these methods
 /// implement, and for the additional accessors — `peek_input`,
 /// `take_input_status`, `input_link`, `output_link`, `set_output_link`,
-/// `close_output_at`, `pool` — that a filter beyond the simplest shape needs.
+/// `close_output_at`, `pool`, `send_command` — that a filter beyond the
+/// simplest shape needs.
 #[derive(Debug)]
 pub struct FilterContext<'a> {
     links: &'a mut LinkArena,
@@ -197,6 +271,8 @@ pub struct FilterContext<'a> {
     /// resolving [`context::LinkView`]'s `PadRef`s from
     /// [`FilterContext::graph_links`].
     graph_nodes: &'a [context::NodeView],
+    /// Requests emitted by an in-graph command source during `activate`.
+    commands: Option<&'a mut Vec<CommandRequest>>,
     /// Set when a pushed frame did not match its link's negotiated format.
     format_mismatch: bool,
     /// Set when a push landed on an already-closed pad.

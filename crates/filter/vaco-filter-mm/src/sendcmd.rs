@@ -1,5 +1,4 @@
-//! `sendcmd`/`asendcmd` — parse and drive a command script; **cannot
-//! dispatch it**.
+//! `sendcmd`/`asendcmd` — parse and drive a command script.
 //!
 //! `ffmpeg -h filter=sendcmd` documents `commands`/`c` and `filename`/`f`.
 //! The command grammar itself is only in `filters.texi`'s "Commands
@@ -19,30 +18,18 @@
 //! (`enter`, the default when `FLAGS` is omitted) or out of (`leave`)
 //! `[START, END)` — `END` defaults to unbounded. `#` starts a comment
 //! running to end of line. This module implements the parser and the
-//! per-frame enter/leave edge detection in full — [`Filter::fired`] (test
-//! only) records every command this instance's script would have sent, in
-//! order, exactly reproducing `filters.texi`'s worked examples.
-//!
-//! # What is not implemented, and cannot be from inside a leaf filter
-//!
-//! `TARGET` names *another* filter instance in the same graph (the
-//! reference's own examples: `sendcmd='4.0 atempo tempo 1.5',atempo`).
-//! `vaco_filter_core::Filter::command` exists and is the right shape to
-//! receive such a command, but nothing between here and there can address
-//! it: a filter only sees its own `FilterContext`, not a handle to look
-//! another node up by label and call `command` on it. `Graph` has no
-//! public "send this node a command" method today, so this needs a
-//! `vaco-filter-core` change, not something a leaf filter can close on its
-//! own. This filter parses the full script, tracks time, and correctly
-//! identifies which commands would fire when, but does not deliver them
-//! anywhere — every frame passes through unchanged, a safe default for a
-//! driver that cannot do its job yet.
+//! per-frame enter/leave edge detection in full. Fired commands enter the
+//! graph through [`FilterContext::send_command`], which defers target lookup
+//! until this activation returns; a leaf filter never reaches another
+//! filter's private state. [`Filter::fired`] (test only) also records them in
+//! order so the parser and edge detector remain independently testable against
+//! `filters.texi`'s worked examples.
 
 use vaco_core::{MediaType, Result};
 use vaco_expr::{Bindings, Expr};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_filter_core::negotiate::NodeFormats;
-use vaco_filter_core::{FilterContext, FilterDesc, FilterFlags, Pad};
+use vaco_filter_core::{CommandFlags, FilterContext, FilterDesc, FilterFlags, Pad};
 use vaco_frame::Frame;
 use vaco_opts::OptionsExt as _;
 
@@ -311,10 +298,14 @@ impl Filter {
 }
 
 impl FrameFilter for Filter {
-    fn filter_frame(&mut self, _ctx: &mut FilterContext<'_>, frame: Frame) -> Result<FrameOut> {
+    fn filter_frame(&mut self, ctx: &mut FilterContext<'_>, frame: Frame) -> Result<FrameOut> {
         let t = frame.pts.to_seconds(frame.time_base).unwrap_or(f64::NAN);
         let pts = frame.pts.ticks().map_or(f64::NAN, |v| v as f64);
+        let already_fired = self.fired.len();
         self.step(t, pts);
+        for (target, command, arg) in self.fired.iter().skip(already_fired) {
+            ctx.send_command(target, command, arg, CommandFlags::empty())?;
+        }
         Ok(FrameOut::One(frame))
     }
 }
@@ -388,7 +379,7 @@ pub mod audio {
 mod tests {
     use super::*;
     use vaco_filter_core::mock::{gray_frame, gray_link, video_source_formats};
-    use vaco_filter_core::{Graph, GraphStatus};
+    use vaco_filter_core::{Activity, Filter as CoreFilter, Graph, GraphStatus};
 
     #[test]
     fn parses_the_reference_s_atempo_example() {
@@ -531,5 +522,91 @@ mod tests {
             }
         }
         assert_eq!(pts, vec![0, 1, 2]);
+    }
+
+    #[derive(Debug)]
+    struct CommandTarget {
+        seen: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    }
+
+    impl CoreFilter for CommandTarget {
+        fn activate(&mut self, ctx: &mut FilterContext<'_>) -> Result<vaco_filter_core::Activity> {
+            if let Some(frame) = ctx.take_input(0) {
+                self.seen
+                    .lock()
+                    .unwrap()
+                    .push(format!("frame:{}", frame.pts));
+                ctx.push_output(0, frame)?;
+                return Ok(Activity::Progressed);
+            }
+            if ctx.input_at_eof(0) {
+                ctx.close_output(0);
+                return Ok(Activity::Eof);
+            }
+            ctx.request_input(0);
+            Ok(Activity::NeedInput)
+        }
+
+        fn command(&mut self, name: &str, value: &str) -> Result<()> {
+            self.seen.lock().unwrap().push(format!("{name}={value}"));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_fired_command_reaches_its_target_before_that_frame() {
+        const TARGET_DESC: FilterDesc = FilterDesc {
+            name: "target",
+            description: "test command target",
+            inputs: VIDEO_PAD,
+            outputs: VIDEO_PAD,
+            flags: FilterFlags::empty(),
+        };
+        let req = Instantiate {
+            name: "sendcmd",
+            instance: "sendcmd",
+            args: Some("commands=1 target@chosen gain 2"),
+            arguments: &[],
+        };
+        let instance = video::create(&req).unwrap();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let mut graph = Graph::new();
+        let src = graph.add_source(
+            "in",
+            MediaType::Video,
+            video_source_formats("in", vaco_pixfmt::PixFmt::Gray8),
+        );
+        let sendcmd = graph.add(instance.desc, instance.formats, instance.filter);
+        let target = graph.add(
+            TARGET_DESC,
+            NodeFormats::passthrough(1, 1, MediaType::Video, "target@chosen"),
+            Box::new(CommandTarget {
+                seen: std::sync::Arc::clone(&seen),
+            }),
+        );
+        let sink = graph.add_sink(
+            "out",
+            MediaType::Video,
+            vaco_filter_core::mock::any_video_sink("out"),
+        );
+        graph.connect(src, 0, sendcmd, 0).unwrap();
+        graph.connect(sendcmd, 0, target, 0).unwrap();
+        graph.connect(target, 0, sink, 0).unwrap();
+        let tb = vaco_core::Rational::new(1, 25);
+        graph.set_source_format(src, gray_link(1, 1, tb)).unwrap();
+        graph.configure().unwrap();
+        graph.send(src, gray_frame(1, 1, 25, 5)).unwrap();
+
+        loop {
+            match graph.run().unwrap() {
+                GraphStatus::HasOutput(_) => {
+                    while graph.recv(sink).is_ok() {}
+                    break;
+                }
+                GraphStatus::NeedInput(_) => {}
+                other => panic!("unexpected graph status: {other:?}"),
+            }
+        }
+        assert_eq!(seen.lock().unwrap().as_slice(), ["gain=2", "frame:25"]);
     }
 }
