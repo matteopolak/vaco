@@ -1,0 +1,36 @@
+[package]
+name = "vaco-hw-perf-event"
+description = "Linux perf_event_open CPU-cycle counter with a narrow safe API for local benchmark tooling."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+# D13 permits audited OS-API calls only in the `vaco-hw-*` family. Keep this
+# copy aligned with the other hardware crates: every lint except the
+# workspace-wide `unsafe_code = forbid` remains active.
+[lints.rust]
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+rust_2018_idioms = { level = "warn", priority = -1 }
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+integer_division = "deny"
+undocumented_unsafe_blocks = "deny"
+disallowed_methods = "deny"
+module_name_repetitions = "allow"
+similar_names = "allow"
+cast_possible_truncation = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+too_many_lines = "allow"
+
+[package.metadata.vaco]
+layer = 9

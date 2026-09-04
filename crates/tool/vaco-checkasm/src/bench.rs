@@ -18,6 +18,74 @@ use crate::Kernel;
 
 const MAX_SAMPLES: usize = 512;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Metric {
+    backend: &'static str,
+    unit: &'static str,
+}
+
+impl Metric {
+    const INSTANT_NANOS: Self = Self {
+        backend: "instant",
+        unit: "ns",
+    };
+    const PERF_EVENT_CYCLES: Self = Self {
+        backend: "perf-event",
+        unit: "cycles",
+    };
+}
+
+#[derive(Debug)]
+struct MeasurementError(String);
+
+impl fmt::Display for MeasurementError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
+}
+
+trait Measurement {
+    fn metric(&self) -> Metric;
+    fn measure(&mut self, work: &mut dyn FnMut()) -> Result<f64, MeasurementError>;
+}
+
+struct InstantMeasurement;
+
+impl Measurement for InstantMeasurement {
+    fn metric(&self) -> Metric {
+        Metric::INSTANT_NANOS
+    }
+
+    fn measure(&mut self, work: &mut dyn FnMut()) -> Result<f64, MeasurementError> {
+        let start = Instant::now();
+        work();
+        Ok(duration_ns(start.elapsed()))
+    }
+}
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+struct PerfEventMeasurement(vaco_hw_perf_event::CpuCycles);
+
+#[cfg(all(
+    target_os = "linux",
+    any(target_arch = "x86_64", target_arch = "aarch64")
+))]
+impl Measurement for PerfEventMeasurement {
+    fn metric(&self) -> Metric {
+        Metric::PERF_EVENT_CYCLES
+    }
+
+    fn measure(&mut self, work: &mut dyn FnMut()) -> Result<f64, MeasurementError> {
+        self.0
+            .measure(work)
+            .map(|(_, cycles)| cycles as f64)
+            .map_err(|error| MeasurementError(error.to_string()))
+    }
+}
+
 /// Cache condition applied before each benchmarked call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum CacheState {
@@ -168,6 +236,44 @@ pub fn benchmark<K>(config: &BenchConfig) -> Result<Vec<BenchResult>, BenchError
 where
     K: Kernel,
 {
+    let mut measurement = preferred_measurement();
+    match benchmark_with_measurement::<K>(config, measurement.as_mut()) {
+        Ok(results) => Ok(results),
+        Err(BenchError::Measurement(error))
+            if measurement.metric() == Metric::PERF_EVENT_CYCLES =>
+        {
+            eprintln!(
+                "vaco-checkasm: perf-event measurement failed ({error}); falling back to instant/ns"
+            );
+            let mut fallback = InstantMeasurement;
+            benchmark_with_measurement::<K>(config, &mut fallback)
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn preferred_measurement() -> Box<dyn Measurement> {
+    #[cfg(all(
+        target_os = "linux",
+        any(target_arch = "x86_64", target_arch = "aarch64")
+    ))]
+    match vaco_hw_perf_event::CpuCycles::open_for_current_thread() {
+        Ok(counter) => return Box::new(PerfEventMeasurement(counter)),
+        Err(error) => {
+            eprintln!("vaco-checkasm: perf-event unavailable ({error}); falling back to instant/ns")
+        }
+    }
+
+    Box::new(InstantMeasurement)
+}
+
+fn benchmark_with_measurement<K>(
+    config: &BenchConfig,
+    measurement: &mut dyn Measurement,
+) -> Result<Vec<BenchResult>, BenchError>
+where
+    K: Kernel,
+{
     let case = K::benchmark_case().ok_or(BenchError::EmptyCorpus(K::NAME))?;
     let mut results = Vec::new();
     for &cache_state in &config.cache_states {
@@ -177,6 +283,7 @@ where
             cache_state,
             "scalar",
             K::scalar,
+            measurement,
         )?);
         results.push(measure_variant::<K>(
             &case,
@@ -184,6 +291,7 @@ where
             cache_state,
             "vector",
             K::vector,
+            measurement,
         )?);
     }
     add_reference_ratios(&mut results);
@@ -196,6 +304,7 @@ fn measure_variant<K>(
     cache_state: CacheState,
     variant: &'static str,
     call: fn(&K::Case) -> Vec<K::Lane>,
+    measurement: &mut dyn Measurement,
 ) -> Result<BenchResult, BenchError>
 where
     K: Kernel,
@@ -220,9 +329,19 @@ where
         cache_state,
         &mut cold,
         config.min_samples,
+        measurement,
     );
+    let nop_samples = nop_samples?;
     let nop = summarize(&nop_samples).ok_or(BenchError::NoSamples)?;
-    let raw_samples = collect_samples(case, call, iterations, cache_state, &mut cold, config);
+    let raw_samples = collect_samples(
+        case,
+        call,
+        iterations,
+        cache_state,
+        &mut cold,
+        config,
+        measurement,
+    )?;
     let raw = summarize(&raw_samples).ok_or(BenchError::NoSamples)?;
     let corrected_samples: Vec<f64> = raw_samples
         .iter()
@@ -234,8 +353,8 @@ where
         kernel: K::NAME,
         variant,
         cache_state,
-        backend: "instant",
-        unit: "ns",
+        backend: measurement.metric().backend,
+        unit: measurement.metric().unit,
         iterations,
         nop_iterations,
         samples: raw_samples.len(),
@@ -286,13 +405,21 @@ fn collect_nop_samples<C, L>(
     cache_state: CacheState,
     cold: &mut [u8],
     count: usize,
-) -> Vec<f64> {
+    measurement: &mut dyn Measurement,
+) -> Result<Vec<f64>, BenchError> {
     let mut samples = Vec::new();
     for _ in 0..count.max(1) {
-        let elapsed = measure_batch(case, nop::<C, L>, iterations, cache_state, cold);
-        samples.push(duration_ns(elapsed) / iterations as f64);
+        let value = measure_batch_with_measurement(
+            case,
+            nop::<C, L>,
+            iterations,
+            cache_state,
+            cold,
+            measurement,
+        )?;
+        samples.push(value / iterations as f64);
     }
-    samples
+    Ok(samples)
 }
 
 fn nop<C, L>(case: &C) -> Vec<L> {
@@ -307,22 +434,42 @@ fn collect_samples<C, L>(
     cache_state: CacheState,
     cold: &mut [u8],
     config: &BenchConfig,
-) -> Vec<f64> {
+    measurement: &mut dyn Measurement,
+) -> Result<Vec<f64>, BenchError> {
     let start = Instant::now();
     let mut samples = Vec::new();
     loop {
-        let elapsed = measure_batch(case, call, iterations, cache_state, cold);
-        samples.push(duration_ns(elapsed) / iterations as f64);
+        let value =
+            measure_batch_with_measurement(case, call, iterations, cache_state, cold, measurement)?;
+        samples.push(value / iterations as f64);
         if samples.len() < config.min_samples.max(1) {
             continue;
         }
         let stable = summarize(&samples)
             .is_some_and(|stats| stats.median > 0.0 && stats.mad / stats.median <= 0.01);
         if stable || start.elapsed() >= config.budget || samples.len() >= MAX_SAMPLES {
-            break;
+            return Ok(samples);
         }
     }
-    samples
+}
+
+fn measure_batch_with_measurement<C, L>(
+    case: &C,
+    call: fn(&C) -> Vec<L>,
+    iterations: usize,
+    cache_state: CacheState,
+    cold: &mut [u8],
+    measurement: &mut dyn Measurement,
+) -> Result<f64, BenchError> {
+    prepare_cache(cache_state, cold);
+    let mut work = || {
+        for _ in 0..iterations {
+            black_box(call(black_box(case)));
+        }
+    };
+    measurement
+        .measure(&mut work)
+        .map_err(|error| BenchError::Measurement(error.to_string()))
 }
 
 fn measure_batch<C, L>(
@@ -525,6 +672,8 @@ pub enum BenchError {
     EmptyCorpus(&'static str),
     /// A timing path unexpectedly produced no samples.
     NoSamples,
+    /// The selected measurement backend could not produce a direct sample.
+    Measurement(String),
     /// JSONL I/O failed.
     Io(std::io::Error),
     /// A baseline line did not carry the required identity and median fields.
@@ -538,6 +687,7 @@ impl fmt::Display for BenchError {
                 write!(formatter, "kernel {kernel} has no benchmark cases")
             }
             Self::NoSamples => formatter.write_str("benchmark produced no samples"),
+            Self::Measurement(error) => write!(formatter, "benchmark measurement failed: {error}"),
             Self::Io(error) => write!(formatter, "benchmark I/O failed: {error}"),
             Self::InvalidBaseline(line) => {
                 write!(formatter, "invalid benchmark JSONL line: {line}")
@@ -547,3 +697,118 @@ impl fmt::Display for BenchError {
 }
 
 impl std::error::Error for BenchError {}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::float_cmp,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unwrap_used,
+    reason = "a failing assertion in a test is a failing test"
+)]
+mod tests {
+    use std::time::Duration;
+
+    use super::{
+        BenchConfig, CacheState, Measurement, MeasurementError, Metric, apply_baseline,
+        benchmark_with_measurement,
+    };
+    use crate::Kernel;
+
+    #[derive(Debug, Clone, Copy)]
+    struct TestKernel;
+
+    impl Kernel for TestKernel {
+        const NAME: &'static str = "bench::test";
+        type Case = u8;
+        type Lane = u8;
+
+        fn cases() -> Vec<Self::Case> {
+            vec![1]
+        }
+
+        fn scalar(case: &Self::Case) -> Vec<Self::Lane> {
+            vec![*case]
+        }
+
+        fn vector(case: &Self::Case) -> Vec<Self::Lane> {
+            vec![*case]
+        }
+    }
+
+    struct ScriptedMeasurement {
+        metric: Metric,
+        samples: Vec<f64>,
+    }
+
+    impl Measurement for ScriptedMeasurement {
+        fn metric(&self) -> Metric {
+            self.metric
+        }
+
+        fn measure(&mut self, work: &mut dyn FnMut()) -> Result<f64, MeasurementError> {
+            work();
+            Ok(self.samples.remove(0))
+        }
+    }
+
+    #[test]
+    fn injected_cycles_backend_keeps_kernel_and_nop_identity_together() {
+        let config = BenchConfig {
+            min_samples: 1,
+            budget: Duration::ZERO,
+            cache_states: vec![CacheState::Hot],
+            warmup_calls: 0,
+            cold_bytes: 0,
+            target_sample_time: Duration::ZERO,
+        };
+        let mut measurement = ScriptedMeasurement {
+            metric: Metric::PERF_EVENT_CYCLES,
+            samples: vec![10.0, 20.0, 10.0, 20.0],
+        };
+
+        let results = benchmark_with_measurement::<TestKernel>(&config, &mut measurement)
+            .expect("scripted measurement succeeds");
+
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|row| row.backend == "perf-event"));
+        assert!(results.iter().all(|row| row.unit == "cycles"));
+        assert!(results.iter().all(|row| row.nop.median == 10.0));
+        assert!(results.iter().all(|row| row.raw.median == 20.0));
+    }
+
+    #[test]
+    fn baseline_requires_the_complete_backend_and_unit_identity() {
+        let config = BenchConfig {
+            min_samples: 1,
+            budget: Duration::ZERO,
+            cache_states: vec![CacheState::Hot],
+            warmup_calls: 0,
+            cold_bytes: 0,
+            target_sample_time: Duration::ZERO,
+        };
+        let mut measurement = ScriptedMeasurement {
+            metric: Metric::PERF_EVENT_CYCLES,
+            samples: vec![10.0, 20.0, 10.0, 20.0],
+        };
+        let mut results = benchmark_with_measurement::<TestKernel>(&config, &mut measurement)
+            .expect("scripted measurement succeeds");
+        let path = std::env::temp_dir().join(format!(
+            "vaco-checkasm-metric-identity-{}.jsonl",
+            std::process::id()
+        ));
+        super::write_jsonl(&path, &results).expect("write baseline");
+
+        let mismatched = std::fs::read_to_string(&path)
+            .expect("read baseline")
+            .replace("\"backend\":\"perf-event\"", "\"backend\":\"instant\"")
+            .replace("\"unit\":\"cycles\"", "\"unit\":\"ns\"");
+        std::fs::write(&path, mismatched).expect("write mismatched baseline");
+        let baseline = super::load_baseline(&path).expect("read mismatched baseline");
+        std::fs::remove_file(path).expect("remove baseline");
+
+        apply_baseline(&mut results, &baseline);
+        assert!(results.iter().all(|row| row.baseline_ratio.is_none()));
+    }
+}

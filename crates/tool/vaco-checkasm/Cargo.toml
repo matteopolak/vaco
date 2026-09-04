@@ -40,6 +40,9 @@ vaco-codec-dsp-lpc = { path = "../../signal/vaco-codec-dsp-lpc" }
 vaco-codec-dsp-idct = { path = "../../signal/vaco-codec-dsp-idct" }
 vaco-codec-dsp-intrapred = { path = "../../signal/vaco-codec-dsp-intrapred" }
 
+[target.'cfg(all(target_os = "linux", any(target_arch = "x86_64", target_arch = "aarch64")))'.dependencies]
+vaco-hw-perf-event = { path = "../../hw/vaco-hw-perf-event" }
+
 [lints]
 workspace = true
 

@@ -14,6 +14,13 @@
 # ---------------------------------------------------------------- standards
 
 [[source]]
+id       = "linux-perf-event-open"
+kind     = "spec"
+title    = "Linux perf_event_open(2) manual page and perf_event UAPI"
+acquired = "2026-09-04"
+where    = "https://man7.org/linux/man-pages/man2/perf_event_open.2.html"
+
+[[source]]
 id       = "itu-t-h264-202108"
 kind     = "spec"
 title    = "ITU-T Rec. H.264 (08/2021), Advanced video coding for generic audiovisual services"

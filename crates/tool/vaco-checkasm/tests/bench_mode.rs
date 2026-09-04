@@ -49,7 +49,7 @@ fn statistics_include_median_mad_min_and_p95() {
 }
 
 #[test]
-fn instant_backend_reports_nanos_nop_and_both_cache_states() {
+fn benchmark_reports_one_honest_metric_nop_and_both_cache_states() {
     let config = BenchConfig {
         min_samples: 3,
         budget: Duration::from_millis(100),
@@ -62,8 +62,10 @@ fn instant_backend_reports_nanos_nop_and_both_cache_states() {
     let results = benchmark::<SumKernel>(&config).expect("synthetic benchmark runs");
 
     assert_eq!(results.len(), 4);
-    assert!(results.iter().all(|result| result.backend == "instant"));
-    assert!(results.iter().all(|result| result.unit == "ns"));
+    assert!(results.iter().all(|result| {
+        (result.backend == "instant" && result.unit == "ns")
+            || (result.backend == "perf-event" && result.unit == "cycles")
+    }));
     assert!(results.iter().all(|result| result.samples >= 3));
     assert!(results.iter().all(|result| result.iterations > 0));
     assert!(results.iter().all(|result| result.nop_iterations > 0));

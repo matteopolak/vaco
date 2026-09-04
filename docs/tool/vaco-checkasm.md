@@ -49,9 +49,18 @@ mid-range values will pass while its tail and saturation handling are broken
 ### Benchmark mode
 
 `vaco-checkasm bench` measures the scalar and runtime-dispatched adapters for
-each selected kernel. On platforms without a PMU backend, including macOS, it
-uses `std::time::Instant` and emits `backend = "instant"`, `unit = "ns"`.
-There is deliberately no conversion from time to synthetic cycles.
+each selected kernel. On Linux `x86_64` and `aarch64`, it first opens one
+persistent, per-thread `perf_event_open` `CPU_CYCLES` counter and emits
+`backend = "perf-event"`, `unit = "cycles"` only when every sample is a direct
+unmultiplexed PMU count. The counter is reset/enabled before each call batch
+and disabled/read after it; those operations are outside the measured closure.
+
+If Linux denies PMU access, the event is unsupported, a pinned counter cannot
+run, an ioctl/read fails, or `time_enabled != time_running` reports
+multiplexing, bench mode writes a warning and reruns with `std::time::Instant`.
+macOS and other targets use that same explicit `backend = "instant"`,
+`unit = "ns"` fallback. There is deliberately no conversion from time to
+synthetic cycles and no scaling of multiplexed values.
 
 Each variant is warmed up, then calibrated so one timed batch lasts at least
 20 microseconds. The no-op has the same `fn(&Case) -> Vec<Lane>` signature and
@@ -91,11 +100,10 @@ median: values above one are faster and `--fail-under 0.95` allows at most a 5%
 slowdown. `reference_ratio` is scalar median divided by the current variant's
 median for the same cache state.
 
-Linux's in-process `perf_event_open` backend remains unimplemented. The
-external [`scripts/perf-hwcycles.py`](../instruction-count-benchmarking.md)
-collects real hardware cycles for whole Vaco and ffmpeg processes, but cannot
-attribute a count to one checkasm adapter. Do not relabel its process totals or
-the portable nanosecond fallback as per-kernel cycles.
+The external [`scripts/perf-hwcycles.py`](../instruction-count-benchmarking.md)
+still collects whole-process counts for Vaco and ffmpeg. It measures a
+different scope from checkasm's per-adapter rows, so neither its process totals
+nor an `Instant` fallback may be relabelled as per-kernel cycles.
 
 ### Why cross-tier coverage is per-machine, not per-run
 
@@ -156,6 +164,8 @@ There are no environment variables or feature flags.
 
 ## Dependencies
 
-The benchmark backend uses only the Rust standard library. The harness also
-depends on `vaco-core`, `vaco-simd` (the `KernelSet`/`Caps`/`Tier` vocabulary), and,
+The portable backend uses the Rust standard library. Linux direct-cycle support
+uses the internal `vaco-hw-perf-event` OS-binding crate; its only unsafe surface
+is the audited Linux UAPI boundary. The harness also depends on `vaco-core`,
+`vaco-simd` (the `KernelSet`/`Caps`/`Tier` vocabulary), and,
 for the wired-in example only, `vaco-scale`, `vaco-color`, `vaco-pixfmt`.

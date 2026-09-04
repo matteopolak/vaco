@@ -38,7 +38,10 @@ fn bench_cli_measures_a_real_kernel_and_writes_jsonl() {
     );
     let stdout = String::from_utf8_lossy(&output.stdout);
     assert!(stdout.contains("vaco-simd::ops::select_u8"));
-    assert!(stdout.contains("backend=instant unit=ns"));
+    assert!(
+        stdout.contains("backend=instant unit=ns")
+            || stdout.contains("backend=perf-event unit=cycles")
+    );
 
     let jsonl = std::fs::read_to_string(&path).expect("read benchmark JSONL");
     std::fs::remove_file(path).expect("remove benchmark JSONL");
@@ -51,5 +54,8 @@ fn bench_cli_measures_a_real_kernel_and_writes_jsonl() {
     assert!(jsonl.contains("\"nop_median\":"));
     assert!(jsonl.contains("\"nop_iterations\":"));
     assert!(jsonl.contains("\"cache\":\"hot\""));
-    assert!(jsonl.contains("\"unit\":\"ns\""));
+    assert!(
+        jsonl.contains("\"backend\":\"instant\",\"unit\":\"ns\"")
+            || jsonl.contains("\"backend\":\"perf-event\",\"unit\":\"cycles\"")
+    );
 }
