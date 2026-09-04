@@ -87,6 +87,7 @@ pub mod report;
 pub mod seek_trim;
 pub mod select;
 pub mod stats;
+pub mod tilegrid;
 
 use std::ffi::OsStr;
 use std::io::Write;
@@ -241,13 +242,28 @@ where
         ]));
     }
 
-    let files: Vec<select::InputStreams> = inputs.iter().map(exec::describe).collect();
+    let mut files: Vec<select::InputStreams> = inputs.iter().map(exec::describe).collect();
+
+    // A HEIF/AVIF primary tile grid is composed for a bare `-i` (see
+    // `tilegrid`): its graph is appended after the user's own
+    // `-filter_complex` texts, so the user's catalog indices are untouched,
+    // and the video auto-pick selects its labelled pad. Any `-map` or
+    // `-filter_complex` at all leaves composition to the user.
+    let mut complex_filters = cli.complex_filters.clone();
+    if complex_filters.is_empty() && cli.outputs.iter().all(|o| o.maps.is_empty()) {
+        for grid in tilegrid::synthesize(&inputs) {
+            if let Some(f) = files.get_mut(grid.file) {
+                f.tile_grid = Some(complex_filters.len());
+                complex_filters.push(grid.text);
+            }
+        }
+    }
 
     // CL-25: parse every `-filter_complex`/`-lavfi` occurrence far enough to
     // list its labelled output pads, before any real decode happens — see
     // `complexgraph::catalog`'s own docs for why that is safe and why the
     // same texts are parsed again for real inside `exec::run_pipeline`.
-    let complex_catalog = complexgraph::catalog(&cli.complex_filters).map_err(|e| {
+    let complex_catalog = complexgraph::catalog(&complex_filters).map_err(|e| {
         Diagnostic::new(
             AvError::EINVAL,
             vec![format!("Error configuring filter graph: {e}")],
@@ -344,7 +360,7 @@ where
         inputs,
         &outputs,
         &files,
-        &cli.complex_filters,
+        &complex_filters,
         auto_conversion_filters,
         cli.thread_count(),
         cli.filter_thread_count(),

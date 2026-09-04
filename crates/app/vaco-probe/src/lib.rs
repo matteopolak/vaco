@@ -569,6 +569,9 @@ impl<'a, O: Write> Writer<'a, O> {
         }
         if opts.show.stream_groups {
             emit.tf().open(SectionId::STREAM_GROUPS)?;
+            for g in input.demuxer.stream_groups() {
+                show::stream_group(&mut emit, g, &streams, show_ids, &count_of)?;
+            }
             emit.tf().close()?;
         }
         if opts.show.streams {
@@ -593,7 +596,7 @@ impl<'a, O: Write> Writer<'a, O> {
                 probe_score: input.probe_score,
                 size: input.size,
                 nb_programs: input.demuxer.programs().len(),
-                nb_stream_groups: 0,
+                nb_stream_groups: input.demuxer.stream_groups().len(),
             };
             // Through `Discovery`, deliberately. It applies R14 — when a
             // container-level duration and per-stream durations disagree the

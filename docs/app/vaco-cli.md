@@ -165,8 +165,29 @@ argv ─▶ [cli]      split, validate, bind          (vaco-cli-core, cli.rs)
 | `force_key_frames` | CL-22: the four `-force_key_frames` syntaxes and the per-frame evaluator — parsed and validated, not yet wired to a live encode (see the module's own doc for the real seam that is missing) |
 | `progress` | CL-17: `-progress <url>`'s `key=value` block |
 | `report` | CL-17: `-report`/`FFREPORT`'s log file and stderr tee |
+| `seek_trim` | CLI-option audit: input-side `-ss`/`-t`/`-to`, applied by seeking/bounding the opened `Demuxer` |
+| `output_trim` | CLI-option audit, follow-up: output-side `-t`/`-to`, applied by trimming what reaches the opened `Muxer` |
 
 ### Stream selection — the measured rule
+
+**A HEIF/AVIF tile grid comes first (2026-09-03).** For a bare `-i` (no
+`-map`, no `-filter_complex`) on an input whose demuxer reports a primary
+`TileGrid` stream group, the video pick is the *composed* grid, not a tile
+— measured: `ffmpeg -i grid.avif -f rawvideo` writes one 128×128 frame for
+a 2×2 grid of 64×64 tiles, byte-identical to the tile decodes placed at the
+group's `tile_*_offset`s. `tilegrid::synthesize` appends the graph a user
+would otherwise write (`[0:0][0:1][0:2][0:3]xstack=inputs=4:grid=2x2,
+crop=W:H:0:0[vaco_tilegrid_0_0]`) to the invocation's `-filter_complex`
+list, after the user's own texts so their catalog indices stand, and
+`select::auto_pick` returns that labelled pad for video. Verified through
+the binary on a JPEG-tile HEIF: the output equals the composition of this
+project's own tile decodes byte for byte. Two limits, both the existing
+complex-graph ones (CL-25), not new: a per-stream filter *after* the
+composite (`-pix_fmt`, `-vf`, and therefore the auto-conversion a PNG
+encoder needs from `yuvj420p`) is refused with "a further filtergraph on a
+complex filtergraph output is not supported yet", so write rawvideo or an
+encoder that takes the tiles' own pixel format; and `-map 0:g:0` (the
+reference's group specifier) is not parsed — map the tile streams by hand.
 
 Plan 14 §6.2 states the video rule as "the stream with the greatest
 `width × height`". **That is wrong on its own.** Measured against ffmpeg 8.1:
@@ -640,45 +661,93 @@ non-terminal stdin, prompting for real only on an actual terminal.
 Verified against a real pty for the interactive path and `/dev/null` for
 the non-interactive one, both landing on exit 0 with no hang.
 
-**`-ss`/`-t`/`-to`** (`seek_trim.rs`): wraps the opened `Demuxer` — `-ss`
-issues one `SeekFlags::BACKWARD` seek at construction against a reference
-stream (first video, else first audio, else stream `0`); `-t`/`-to`
-become a single absolute end-of-file microsecond bound checked on every
-`read_packet`, past which it returns `Eof`. Every other `Demuxer` method
-is forwarded to the inner demuxer explicitly — their trait defaults are
-empty/`Unsupported`, and not forwarding them would silently drop real
-chapters, metadata, programs or duration. Deliberately **fast
-(keyframe-boundary) seeking only**, not frame-accurate
-`-accurate_seek`-equivalent trimming, and **input-side option placement
-only** (`cli.rs` has no parse path for an output-side occurrence of these
-names at all). `-to` before `-ss` is rejected earlier, at option-binding
-time (`cli.rs`'s new `validate_bounds`), matching the reference's own
-input-opening-time failure (`[in#0] -to value smaller than -ss;
-aborting.`, exit 234) rather than anything in `seek_trim` itself. `-ss`
-past the end of input and `-t` longer than the remaining stream need no
-special handling: `read_packet` reaches the inner demuxer's own real
-`Eof` first either way. Landing between two keyframes matches the
-reference's own default (`-noaccurate_seek`) BACKWARD-equivalent
-behaviour, confirmed with `-copyts` against a synthetic H.264 fixture
-with keyframes 5s apart — both land on the earlier keyframe, not the
-requested point. One measured, documented gap: the end bound checks
-`pts`, not `dts`; on a stream with no B-frames the two agree, but on a
-reordered stream this can admit a few extra or fewer trailing frames than
-the reference's own apparently `dts`-sensitive cutoff. Left as measured
-rather than chased further — every other duration in this crate is
-already keyed on `pts`, and the discrepancy is a handful of frames at a
-GOP boundary, not a wrong bound.
+**`-ss`/`-t`/`-to`, input-side** (`seek_trim.rs`): wraps the opened
+`Demuxer` — `-ss` issues one `SeekFlags::BACKWARD` seek at construction
+against a reference stream (first video, else first audio, else stream
+`0`); `-t`/`-to` become a single absolute end-of-file microsecond bound
+checked on every `read_packet`, past which it returns `Eof`. Every other
+`Demuxer` method is forwarded to the inner demuxer explicitly — their
+trait defaults are empty/`Unsupported`, and not forwarding them would
+silently drop real chapters, metadata, programs or duration. Deliberately
+**fast (keyframe-boundary) seeking only**, not frame-accurate
+`-accurate_seek`-equivalent trimming. `-to` before `-ss` is rejected
+earlier, at option-binding time (`cli.rs`'s `validate_bounds`), matching
+the reference's own input-opening-time failure (`[in#0] -to value smaller
+than -ss; aborting.`, exit 234) rather than anything in `seek_trim`
+itself. `-ss` past the end of input and `-t` longer than the remaining
+stream need no special handling: `read_packet` reaches the inner
+demuxer's own real `Eof` first either way. Landing between two keyframes
+matches the reference's own default (`-noaccurate_seek`)
+BACKWARD-equivalent behaviour, confirmed with `-copyts` against a
+synthetic H.264 fixture with keyframes 5s apart — both land on the
+earlier keyframe, not the requested point. One measured, documented gap:
+the end bound checks `pts`, not `dts`; on a stream with no B-frames the
+two agree, but on a reordered stream this can admit a few extra or fewer
+trailing frames than the reference's own apparently `dts`-sensitive
+cutoff. Left as measured rather than chased further — every other
+duration in this crate is already keyed on `pts`, and the discrepancy is
+a handful of frames at a GOP boundary, not a wrong bound.
 
-**What was verified**: `cargo test -p vaco-cli`/`cargo clippy -p vaco-cli
---all-targets -- -D warnings` clean (228 tests, including `seek_trim`'s
-and `overwrite`'s own `#[cfg(test)]` modules). A real `vaco` binary,
-built and run against a real WAV fixture and a synthetic H.264 fixture
-(`libx264`, forced keyframes 5s apart), reproduced every edge case above
-byte-for-byte against real `ffmpeg 9.0.1` output where the feature's own
-scope claims agreement (`-ss`/`-t` bounds, `-to`-before-`-ss` refusal and
-exit code, `-ss`-past-EOF, `-t`-longer-than-remaining, `-y`/`-n`/neither
-overwrite outcomes and exit codes) and named the one place it does not
-(the `pts`/`dts` trailing-frame gap above).
+**`-t`/`-to`, output-side** (`output_trim.rs`, added after the input-side
+pass above shipped): the input-side write above originally claimed
+"input-side option placement only... `cli.rs` has no parse path for an
+output-side occurrence of these names at all" — true of the *reading*,
+but the option table has always declared `-t`/`-to` `INPUT, OUTPUT`, and
+`vaco-cli-core`'s own split correctly bound an output-positioned
+occurrence into the output's own `OptionGroup`. Nothing ever read it from
+there, and it was not in `refuse_unimplemented_options` either, so `vaco
+-i in.mp4 -t 10 out.mp4` parsed, ran, exited 0, and wrote the *whole*
+file — a second, narrower instance of the exact silent-no-op shape the
+first CLI-option audit above found for `-y`/`-n`/input-side `-ss`/`-t`/
+`-to`. Fixed the same way: `OutputSpec::end`/`ResolvedOutput::end` carry
+the parsed bound (`cli::end_bound_of`/`cli::validate_bounds`, shared
+verbatim with the input side — `-t` still wins over `-to`, and `-to <= 0`
+still aborts at option-binding time, `[out#N] -to value smaller than
+-ss; aborting.`, even though there is no output `-ss` to name), and
+`crate::exec::run_pipeline` wraps each output's muxer in
+`output_trim::OutputTrim` — *inside* `TallyingMuxer`, so a trimmed packet
+is never tallied or counted toward the summary's byte total. Unlike
+`seek_trim::SeekTrim`, there is no single reference stream: every
+stream's packets are dropped once *their own* presentation time reaches
+the bound, independently. The one real subtlety: `Muxer::stream_time_base`
+is `None` for `-f null` (and for any muxer with no timescale opinion), but
+`vaco_format_core::mux::MuxBuilder` still rescales packets for such a
+muxer, into the *input* stream's own base — `OutputTrim` captures that
+same fallback via `StreamSpec::time_base` at `add_stream_with` time
+(mirroring `MuxBuilder`'s own `stream_time_base().or(input_time_base)
+.unwrap_or(TIME_BASE_Q)` chain) rather than reading only
+`Muxer::stream_time_base`, which would have silently stopped trimming for
+every `-f null` output — the single most common target in this crate's
+own test suite. **No output-side `-ss`**: the reference's own output `-ss`
+decodes and discards up to the timestamp rather than seeking, a
+materially different and unimplemented feature — refused explicitly
+(`refuse_unimplemented_options`, output-positioned only; the input-side
+`-ss` is untouched) rather than left to silently do nothing the way
+`-t`/`-to` did before this pass.
+
+**What was verified**: `cargo test -p vaco-cli` clean, including
+`seek_trim`'s, `overwrite`'s and `output_trim`'s own `#[cfg(test)]`
+modules, plus new end-to-end tests in `tests.rs` (`output_side_t_stops_
+writing_early`, `output_side_t_wins_over_to`, `output_side_to_at_or_
+below_zero_aborts`, `output_side_invalid_t_reports_output_wording`,
+`output_side_ss_is_refused_not_silently_ignored`, and a control test
+pinning that input-side `-ss` still works). A real `vaco` binary, built
+and run against a real WAV fixture and a synthetic H.264 fixture
+(`libx264`, forced keyframes 5s apart), reproduced every input-side edge
+case above byte-for-byte against real `ffmpeg 9.0.1` output where the
+feature's own scope claims agreement (`-ss`/`-t` bounds, `-to`-before-
+`-ss` refusal and exit code, `-ss`-past-EOF, `-t`-longer-than-remaining,
+`-y`/`-n`/neither overwrite outcomes and exit codes) and named the one
+place it does not (the `pts`/`dts` trailing-frame gap above). The
+output-side pass was cross-checked against real `ffmpeg 9.0.1` on a real
+encoded A/V fixture (25 fps video, 44100 Hz audio, both streams present):
+matching frame counts and `ffprobe`-reported duration for `-t 3`
+input-positioned vs. output-positioned (`77`/`131` packets, `3.08s`),
+`-t` longer than the source (whole file, unchanged), `-t` combined with
+input-side `-ss`, and two outputs from the same input each with their own
+`-t` (`ffmpeg -i in.mp4 -t 2 out1.mp4 -t 4 out2.mp4` gives `2.08s`/
+`4.08s` — independent per output, which this crate's own `run_pipeline`
+already opens one `OutputTrim` per output to match).
 
 ## How to change it
 

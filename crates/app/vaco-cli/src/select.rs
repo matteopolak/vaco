@@ -117,6 +117,11 @@ pub struct InputStreams {
     /// grammar's view of a stream (see this module's own doc), and no
     /// specifier ever matches on a display matrix.
     pub display_matrix: Vec<Option<[i32; 9]>>,
+    /// The complex-graph catalog index of this file's synthesised primary
+    /// tile-grid composition (`crate::tilegrid`), when it has one. Video
+    /// auto-selection picks it over any single stream — measured: the
+    /// reference writes the composed grid, not tile 0, for a bare `-i`.
+    pub tile_grid: Option<usize>,
 }
 
 impl InputStreams {
@@ -293,6 +298,11 @@ fn score(s: &StreamInfo, channels: u32) -> u64 {
 /// well as within one.
 #[must_use]
 pub fn auto_pick(files: &[InputStreams], media: MediaType) -> Option<StreamPick> {
+    if media == MediaType::Video
+        && let Some(grid) = files.iter().find_map(|f| f.tile_grid)
+    {
+        return Some(StreamPick::Complex(grid));
+    }
     let mut best: Option<(u64, StreamPick)> = None;
     for (fi, file) in files.iter().enumerate() {
         for (si, s) in file.streams.iter().enumerate() {
@@ -353,8 +363,17 @@ pub fn resolve(
     used_complex: &mut HashSet<usize>,
 ) -> Result<Selection, Diagnostic> {
     if maps.is_empty() {
+        let picks = auto_select(files, blocked, supports);
+        // A synthesised tile-grid pick consumes its labelled pad exactly as
+        // a `-map [label]` would, so rule 4's "every label used once" check
+        // sees it.
+        for p in &picks {
+            if let StreamPick::Complex(i) = p {
+                used_complex.insert(*i);
+            }
+        }
         return Ok(Selection {
-            picks: auto_select(files, blocked, supports),
+            picks,
             dropped: false,
         });
     }
@@ -567,6 +586,7 @@ mod tests {
             programs: Vec::new(),
             channels,
             display_matrix,
+            tile_grid: None,
         }
     }
 

@@ -8,7 +8,9 @@ use std::io::Write;
 
 use vaco_codec_core::{CodecId, CodecParameters, Level, Profile};
 use vaco_core::{MediaType, Rational, Result};
-use vaco_format_core::{Chapter, Program, Stream, StreamSideData, display_rotation};
+use vaco_format_core::{
+    Chapter, Program, Stream, StreamGroup, StreamGroupKind, StreamSideData, display_rotation,
+};
 use vaco_packet::{Packet, PacketFlags, PacketSideData};
 use vaco_textformat::num;
 use vaco_textformat::sections::SectionId;
@@ -1041,6 +1043,83 @@ pub fn program<W: Write>(
             stream_fields(e, s, show_ids, counts(s.index))?;
             disposition(e, SectionId::PROGRAM_STREAM_DISPOSITION, s.disposition)?;
             tags(e, SectionId::PROGRAM_STREAM_TAGS, &s.metadata)?;
+            e.tf().close()?;
+        }
+    }
+    e.tf().close()?;
+    e.tf().close()
+}
+
+/// One `[STREAM_GROUP]` section.
+///
+/// Field order and names **measured** with `ffprobe 9.0.1 -show_stream_groups
+/// -of flat` on a HEIF `grid` file: `index`, `id`, `nb_streams`, `type`, then
+/// one `[COMPONENT]` (`nb_tiles`, `coded_width`, `coded_height`,
+/// `horizontal_offset`, `vertical_offset`, `width`, `height`) holding one
+/// `[SUBCOMPONENT]` per tile (`stream_index`, `tile_horizontal_offset`,
+/// `tile_vertical_offset`), then the disposition, the tags and the member
+/// streams in full.
+///
+/// # Errors
+/// Propagates the sink's I/O error.
+pub fn stream_group<W: Write>(
+    e: &mut Emit<'_, W>,
+    g: &StreamGroup,
+    streams: &[Stream],
+    show_ids: bool,
+    counts: &dyn Fn(u32) -> Counts,
+) -> Result<()> {
+    let members = g
+        .stream_indices
+        .iter()
+        .filter(|i| streams.iter().any(|s| s.index == **i))
+        .count();
+    e.tf().open(SectionId::STREAM_GROUP)?;
+    e.int("index", i64::from(g.index.0))?;
+    if show_ids {
+        e.str("id", &num::id(g.id))?;
+    }
+    e.int("nb_streams", i64::try_from(members).unwrap_or(i64::MAX))?;
+    match &g.kind {
+        StreamGroupKind::TileGrid(grid) => {
+            e.str("type", "Tile Grid")?;
+            e.tf().open(SectionId::STREAM_GROUP_COMPONENTS)?;
+            e.tf().open(SectionId::STREAM_GROUP_COMPONENT)?;
+            e.int(
+                "nb_tiles",
+                i64::try_from(g.stream_indices.len()).unwrap_or(i64::MAX),
+            )?;
+            e.int("coded_width", i64::from(grid.coded_width))?;
+            e.int("coded_height", i64::from(grid.coded_height))?;
+            e.int("horizontal_offset", i64::from(grid.horizontal_offset))?;
+            e.int("vertical_offset", i64::from(grid.vertical_offset))?;
+            e.int("width", i64::from(grid.output_width))?;
+            e.int("height", i64::from(grid.output_height))?;
+            e.tf().open(SectionId::SUBCOMPONENTS)?;
+            for (index, (h, v)) in g.stream_indices.iter().zip(&grid.tile_offsets) {
+                e.tf().open(SectionId::SUBCOMPONENT)?;
+                e.int("stream_index", i64::from(*index))?;
+                e.int("tile_horizontal_offset", i64::from(*h))?;
+                e.int("tile_vertical_offset", i64::from(*v))?;
+                e.tf().close()?;
+            }
+            e.tf().close()?;
+            e.tf().close()?;
+            e.tf().close()?;
+        }
+        // `StreamGroupKind` is `#[non_exhaustive]`; a kind this printer does
+        // not know is named rather than dropped.
+        _ => e.str("type", "Unknown")?,
+    }
+    disposition(e, SectionId::STREAM_GROUP_DISPOSITION, g.disposition)?;
+    tags(e, SectionId::STREAM_GROUP_TAGS, &g.metadata)?;
+    e.tf().open(SectionId::STREAM_GROUP_STREAMS)?;
+    for index in &g.stream_indices {
+        if let Some(s) = streams.iter().find(|s| s.index == *index) {
+            e.tf().open(SectionId::STREAM_GROUP_STREAM)?;
+            stream_fields(e, s, show_ids, counts(s.index))?;
+            disposition(e, SectionId::STREAM_GROUP_STREAM_DISPOSITION, s.disposition)?;
+            tags(e, SectionId::STREAM_GROUP_STREAM_TAGS, &s.metadata)?;
             e.tf().close()?;
         }
     }

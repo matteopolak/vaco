@@ -63,7 +63,7 @@
 //! at a GOP boundary, not a wrong bound.
 
 use vaco_core::{Duration, Error, MediaType, Result, Timestamp};
-use vaco_format_core::{Chapter, Demuxer, Program, SeekFlags, SeekTarget, Stream};
+use vaco_format_core::{Chapter, Demuxer, Program, SeekFlags, SeekTarget, Stream, StreamGroup};
 use vaco_limits::Limits;
 use vaco_packet::Packet;
 
@@ -185,6 +185,10 @@ impl Demuxer for SeekTrim {
 
     fn metadata(&self) -> &[(String, String)] {
         self.inner.metadata()
+    }
+
+    fn stream_groups(&self) -> &[StreamGroup] {
+        self.inner.stream_groups()
     }
 
     fn read_packet(&mut self) -> Result<Packet> {

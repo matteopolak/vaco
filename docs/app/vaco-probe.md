@@ -964,7 +964,14 @@ Named, not silently missing.
   — the headers are byte-identical; the rows need an "every variant" iterator
   that `vaco-pixfmt`, `vaco-sampfmt` and `vaco-chlayout` do not expose. Writing
   a local list here would duplicate a generated table and start drifting from it.
-* **`-show_stream_groups`** — no container in this build produces one.
+* ~~**`-show_stream_groups`**~~ — printed since 2026-09-03: `vaco-demux-mp4`
+  produces a `Tile Grid` group for a HEIF/AVIF `grid` item, and
+  `show::stream_group` prints it in the reference's field order (measured
+  with `ffprobe 9.0.1 -show_stream_groups -of flat`: `index`, `id`,
+  `nb_streams`, `type`, one `component` with `nb_tiles`/`coded_*`/
+  `*_offset`/`width`/`height` and per-tile `subcomponent`s, then
+  disposition, tags and the member streams). `nb_stream_groups` in
+  `[FORMAT]` counts them. No other kind exists yet.
 * **`-show_log` / `-analyze_frames`** — parsed and carried, not acted on.
 * **`-show_data_hash murmur3` and the four RIPEMD variants** — refused by name
   with `Unsupported`, because no pure-Rust crate for them is pre-declared and

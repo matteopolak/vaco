@@ -250,6 +250,7 @@ pub fn describe(input: &InputFile) -> InputStreams {
             .collect(),
         channels: streams.iter().map(channels_of).collect(),
         display_matrix: streams.iter().map(display_matrix_of).collect(),
+        tile_grid: None,
     }
 }
 
