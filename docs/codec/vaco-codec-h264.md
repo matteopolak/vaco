@@ -452,6 +452,21 @@ engine, at the exact state reached after genuinely decoding the picture's
 last macroblock, returns the terminating bit at the same position both
 `vaco-codec-h264` and JM compute — not a desync.
 
+`DeblockCtx` caches the vertical and horizontal `bS` grids once per
+macroblock. Luma, Cb and Cr all consume that same luma-derived result, so
+the two chroma passes no longer repeat the residual and motion-state walk.
+On a 125-frame 1920x1080 default-`libx264` fixture, 12 interleaved
+single-thread rounds measured candidate/baseline medians of `0.96454x`
+wall time and `0.96434x` CPU time; same-session candidate/`ffmpeg` medians
+were `8.53254x` wall and `8.47069x` CPU. A 1 ms native sample profile moved
+`boundary_strength` from 396/3016 self samples (13.13%) to 167/2878
+(5.80%). Raw retired-instruction and cycle totals were unavailable: the
+headless Xcode CPU Counters template exposes sampled bottleneck categories,
+not hardware totals, and the Linux Cachegrind container was unavailable in
+that session. Both default-B and all-P 125-frame fixtures remained byte
+exact against `ffmpeg` at 1, 2, 4 and 8 threads, including the full
+388,800,000-byte output count per run.
+
 A second, real bug turned up while wiring the general `bS` case:
 `MbSummary::residual.luma_ac` is indexed by `luma4x4BlkIdx` (clause 6.4.3's
 z-scan order, matching `residual_luma()` and `crate::mb::blk_xy`), but
@@ -660,6 +675,13 @@ against JM's; defect 3 by dumping `bS` on an IDR picture, where no value
 below 3 is reachable, and seeing a 2.
 
 ## How to change it
+
+`deblock.rs` owns both the clause 8.7.2.1 `boundary_strength` oracle and
+`BoundaryStrengthGrid`, its per-picture cache. Any change to edge indexing
+must keep the direct-vs-cached mapping test and full decoder output oracle;
+4:2:0 chroma uses luma edge indices 0 and 2, with each strength covering two
+chroma samples. `frame_task.rs` constructs one `DeblockCtx` and uses it for
+all three planes, which is what makes cross-plane caching useful.
 
 `cavlc_tables.rs` holds every CAVLC constant; `cavlc.rs` is the only module
 that decodes against them (and the only place a `TotalCoeff` exclusion is

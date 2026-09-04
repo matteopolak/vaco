@@ -79,11 +79,10 @@
 //! 8 have a corresponding chroma sample column/row at all for 4:2:0 (chroma
 //! is exactly half width/height), and each of luma's four per-4-row/column
 //! `bS` groups along one edge covers exactly two chroma samples at that
-//! edge. [`deblock_picture_chroma`] recomputes `bS` at luma granularity
-//! internally (cheap -- it is a handful of integer comparisons, not a
-//! table lookup) rather than threading luma's own per-edge `bS` array
-//! through the call boundary, which would otherwise make the two functions'
-//! argument lists mirror each other for no reader-visible benefit.
+//! edge. [`DeblockCtx`] derives both boundary-strength grids once per
+//! macroblock and reuses them for luma, Cb and Cr; the row scheduler already
+//! owns one context for all three planes, so no extra call-boundary state is
+//! needed.
 use vaco_codec_dsp_deblock::{EdgeThresholds, batch};
 use vaco_simd::Caps;
 
@@ -277,6 +276,23 @@ struct MbGrid<'a> {
     by_addr: Vec<Option<&'a MbSummary>>,
 }
 
+#[derive(Clone, Copy, Default)]
+struct MbBoundaryStrengths {
+    vertical: [[u8; 4]; 4],
+    horizontal: [[u8; 4]; 4],
+}
+
+/// Clause 8.7.2.1's two 4x4 boundary-strength grids for every macroblock.
+///
+/// Luma, Cb and Cr derive strength from the same luma blocks. Building the
+/// grids once keeps those three filter passes from independently walking the
+/// same residual and motion state.
+struct BoundaryStrengthGrid {
+    mbs_wide: u32,
+    mbs_high: u32,
+    by_addr: Vec<MbBoundaryStrengths>,
+}
+
 impl<'a> MbGrid<'a> {
     fn new(macroblocks: &'a [MbSummary], mbs_wide: u32, mbs_high: u32) -> Self {
         let n = usize::try_from(mbs_wide.saturating_mul(mbs_high)).unwrap_or(0);
@@ -452,6 +468,7 @@ pub(crate) fn deblock_picture_chroma(
 pub(crate) struct DeblockCtx<'a> {
     caps: Caps,
     grid: MbGrid<'a>,
+    strengths: BoundaryStrengthGrid,
     mbs_wide: u32,
     /// One entry per slice of this picture, indexed by `MbSummary::slice_id`.
     ///
@@ -528,6 +545,91 @@ fn pocs_for<'s>(slices: &'s [SliceDeblock], mb: &MbSummary) -> (&'s [i32], &'s [
     slice_of(slices, mb).map_or((&[][..], &[][..]), |s| (&s.ref_list0_poc, &s.ref_list1_poc))
 }
 
+impl BoundaryStrengthGrid {
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "edge and along are fixed loops over 0..4 for 4-element arrays"
+    )]
+    fn new(grid: &MbGrid<'_>, slices: &[SliceDeblock]) -> Self {
+        let n = usize::try_from(grid.mbs_wide.saturating_mul(grid.mbs_high)).unwrap_or(0);
+        let mut by_addr = vec![MbBoundaryStrengths::default(); n];
+        for my in 0..grid.mbs_high {
+            for mx in 0..grid.mbs_wide {
+                let Some(q_mb) = grid.at(mx, my) else {
+                    continue;
+                };
+                if !filter_enabled(slices, q_mb) {
+                    continue;
+                }
+                let idx = (my.saturating_mul(grid.mbs_wide).saturating_add(mx)) as usize;
+                let Some(out) = by_addr.get_mut(idx) else {
+                    continue;
+                };
+                for edge in 0..4usize {
+                    let local = edge as u32 * 4;
+                    // Chroma has edges only at luma offsets 0 and 8. Luma
+                    // additionally visits 4 and 12 unless this is an 8x8
+                    // transform macroblock.
+                    if !filters_luma_edge(q_mb, local) && edge != 0 && edge != 2 {
+                        continue;
+                    }
+
+                    let vertical_p = if edge == 0 {
+                        grid.at(mx.saturating_sub(1), my)
+                            .filter(|p_mb| mx != 0 && filters_across(slices, q_mb, p_mb))
+                    } else {
+                        Some(q_mb)
+                    };
+                    if let Some(p_mb) = vertical_p {
+                        for along in 0..4usize {
+                            let p_blk = if edge == 0 {
+                                along * 4 + 3
+                            } else {
+                                along * 4 + edge - 1
+                            };
+                            let q_blk = along * 4 + edge;
+                            out.vertical[edge][along] =
+                                boundary_strength(edge == 0, p_mb, p_blk, q_mb, q_blk, slices);
+                        }
+                    }
+
+                    let horizontal_p = if edge == 0 {
+                        grid.at(mx, my.saturating_sub(1))
+                            .filter(|p_mb| my != 0 && filters_across(slices, q_mb, p_mb))
+                    } else {
+                        Some(q_mb)
+                    };
+                    if let Some(p_mb) = horizontal_p {
+                        for along in 0..4usize {
+                            let p_blk = if edge == 0 {
+                                12 + along
+                            } else {
+                                (edge - 1) * 4 + along
+                            };
+                            let q_blk = edge * 4 + along;
+                            out.horizontal[edge][along] =
+                                boundary_strength(edge == 0, p_mb, p_blk, q_mb, q_blk, slices);
+                        }
+                    }
+                }
+            }
+        }
+        Self {
+            mbs_wide: grid.mbs_wide,
+            mbs_high: grid.mbs_high,
+            by_addr,
+        }
+    }
+
+    fn at(&self, mx: u32, my: u32) -> Option<&MbBoundaryStrengths> {
+        if mx >= self.mbs_wide || my >= self.mbs_high {
+            return None;
+        }
+        self.by_addr
+            .get((my.saturating_mul(self.mbs_wide).saturating_add(mx)) as usize)
+    }
+}
+
 impl<'a> DeblockCtx<'a> {
     /// Build the per-picture state. `slice_alpha_c0_offset_div2`/
     /// `slice_beta_offset_div2` are the slice header fields verbatim; clause
@@ -538,12 +640,35 @@ impl<'a> DeblockCtx<'a> {
         mbs_high: u32,
         slices: &'a [SliceDeblock],
     ) -> Self {
+        let grid = MbGrid::new(macroblocks, mbs_wide, mbs_high);
+        let strengths = BoundaryStrengthGrid::new(&grid, slices);
         Self {
             caps: Caps::detect(),
-            grid: MbGrid::new(macroblocks, mbs_wide, mbs_high),
+            grid,
+            strengths,
             mbs_wide,
             slices,
         }
+    }
+
+    #[cfg(test)]
+    fn vertical_bs(&self, mx: u32, my: u32, edge: usize, along: usize) -> u8 {
+        self.strengths
+            .at(mx, my)
+            .and_then(|s| s.vertical.get(edge))
+            .and_then(|e| e.get(along))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    #[cfg(test)]
+    fn horizontal_bs(&self, mx: u32, my: u32, edge: usize, along: usize) -> u8 {
+        self.strengths
+            .at(mx, my)
+            .and_then(|s| s.horizontal.get(edge))
+            .and_then(|e| e.get(along))
+            .copied()
+            .unwrap_or(0)
     }
 
     /// Filter macroblock row `my` of the luma plane, in the exact edge order
@@ -556,9 +681,10 @@ impl<'a> DeblockCtx<'a> {
     /// That overhang is why a row is only final once the *next* row has been
     /// filtered.
     #[allow(
+        clippy::indexing_slicing,
         clippy::integer_division,
-        reason = "every division below is by the constant 4 (4x4 luma block granularity) over a loop \
-                  variable bounded 0..16 -- exact by construction, never a bitstream-derived value"
+        reason = "strength-grid indices come from fixed edge/group loops over 0..4; every division \
+                  below is by the constant 4 over a loop variable bounded 0..16"
     )]
     pub(crate) fn luma_mb_row(&self, luma: &mut [u8], my: u32) {
         let caps = self.caps;
@@ -578,6 +704,9 @@ impl<'a> DeblockCtx<'a> {
 
         for mx in 0..mbs_wide {
             let Some(here) = grid.at(mx, my) else {
+                continue;
+            };
+            let Some(strengths) = self.strengths.at(mx, my) else {
                 continue;
             };
             if !filter_enabled(slices, here) {
@@ -605,11 +734,10 @@ impl<'a> DeblockCtx<'a> {
                     continue;
                 }
                 let mb_edge = local == 0;
-                let (p_mb, qp_p) = if mb_edge {
-                    #[allow(clippy::unwrap_used, reason = "mx > 0 here, checked above")]
-                    (grid.at(mx - 1, my).unwrap(), grid.qpy(mx - 1, my))
+                let qp_p = if mb_edge {
+                    grid.qpy(mx - 1, my)
                 } else {
-                    (here, qp_here)
+                    qp_here
                 };
                 let edge = EdgeThresholds::derive(qp_p, qp_here, filter_offset_a, filter_offset_b);
                 let x = mx * 16 + local;
@@ -632,24 +760,7 @@ impl<'a> DeblockCtx<'a> {
                 let mut q2a = [0u8; 16];
                 let mut q3a = [0u8; 16];
                 let mut bsa = [0u8; 16];
-                // `boundary_strength` is a pure function of `(mb_edge, p_blk,
-                // q_blk)` here, and all four rows of one `blk_row` group
-                // share the same `p_blk`/`q_blk` (both are `blk_row`-derived,
-                // not `row`-derived) -- clause 8.7.2.1 defines one `bS` per
-                // 4x4 luma block, not per pixel row. Calling it once per
-                // group of 4 instead of once per row (4x fewer calls) does
-                // not change a single `bS` value; it only stops recomputing
-                // the one this loop already knows.
-                let mut bs_by_blk_row = [0u8; 4];
-                for (blk_row, slot) in bs_by_blk_row.iter_mut().enumerate() {
-                    let q_blk = blk_row * 4 + (local / 4) as usize;
-                    let p_blk = if mb_edge {
-                        blk_row * 4 + 3
-                    } else {
-                        blk_row * 4 + (local / 4 - 1) as usize
-                    };
-                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, slices);
-                }
+                let bs_by_blk_row = strengths.vertical[(local / 4) as usize];
                 for row in 0..16u32 {
                     let y = my * 16 + row;
                     let ri = row as usize;
@@ -716,11 +827,10 @@ impl<'a> DeblockCtx<'a> {
                     continue;
                 }
                 let mb_edge = local == 0;
-                let (p_mb, qp_p) = if mb_edge {
-                    #[allow(clippy::unwrap_used, reason = "my > 0 here, checked above")]
-                    (grid.at(mx, my - 1).unwrap(), grid.qpy(mx, my - 1))
+                let qp_p = if mb_edge {
+                    grid.qpy(mx, my - 1)
                 } else {
-                    (here, qp_here)
+                    qp_here
                 };
                 let edge = EdgeThresholds::derive(qp_p, qp_here, filter_offset_a, filter_offset_b);
                 let y = my * 16 + local;
@@ -737,18 +847,7 @@ impl<'a> DeblockCtx<'a> {
                 let mut q2a = [0u8; 16];
                 let mut q3a = [0u8; 16];
                 let mut bsa = [0u8; 16];
-                // Same 4x reduction as the vertical pass above: one `bS`
-                // per `blk_col` group of 4 columns, not per column.
-                let mut bs_by_blk_col = [0u8; 4];
-                for (blk_col, slot) in bs_by_blk_col.iter_mut().enumerate() {
-                    let q_blk = (local / 4) as usize * 4 + blk_col;
-                    let p_blk = if mb_edge {
-                        12 + blk_col
-                    } else {
-                        (local / 4 - 1) as usize * 4 + blk_col
-                    };
-                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, slices);
-                }
+                let bs_by_blk_col = strengths.horizontal[(local / 4) as usize];
                 for col in 0..16u32 {
                     let x = mx * 16 + col;
                     let ci = col as usize;
@@ -805,9 +904,10 @@ impl<'a> DeblockCtx<'a> {
     /// my * 8 + 7`: chroma's filter modifies `p0`/`q0` and nothing else, so the
     /// overhang into the row above is a single row rather than luma's three.
     #[allow(
+        clippy::indexing_slicing,
         clippy::integer_division,
-        reason = "every division below is by the constant 2 or 4 (chroma-to-luma 4x4 block granularity) \
-                  over a loop variable bounded 0..8 -- exact by construction, never a bitstream-derived value"
+        reason = "strength-grid indices come from fixed edge/group loops over 0..4; every division \
+                  below is by the constant 2 or 4 over a loop variable bounded 0..8"
     )]
     pub(crate) fn chroma_mb_row(&self, chroma: &mut [u8], chroma_qp_offset: i32, my: u32) {
         let caps = self.caps;
@@ -833,6 +933,9 @@ impl<'a> DeblockCtx<'a> {
             let Some(here) = grid.at(mx, my) else {
                 continue;
             };
+            let Some(strengths) = self.strengths.at(mx, my) else {
+                continue;
+            };
             if !filter_enabled(slices, here) {
                 continue;
             }
@@ -854,12 +957,7 @@ impl<'a> DeblockCtx<'a> {
                     continue;
                 }
                 let mb_edge = c_local == 0;
-                let (p_mb, qp_p) = if mb_edge {
-                    #[allow(clippy::unwrap_used, reason = "mx > 0 here, checked above")]
-                    (grid.at(mx - 1, my).unwrap(), qpc(mx - 1, my))
-                } else {
-                    (here, qp_here)
-                };
+                let qp_p = if mb_edge { qpc(mx - 1, my) } else { qp_here };
                 let edge = EdgeThresholds::derive(qp_p, qp_here, filter_offset_a, filter_offset_b);
                 let x = mx * 8 + c_local;
 
@@ -871,23 +969,7 @@ impl<'a> DeblockCtx<'a> {
                 let mut q0a = [0u8; 8];
                 let mut q1a = [0u8; 8];
                 let mut bsa = [0u8; 8];
-                // Same memoisation as luma: two chroma rows per `blk_row`
-                // share one luma-derived `bS` (see the comment on
-                // `blk_row` below), so compute it once per group of 2
-                // instead of once per row.
-                let mut bs_by_blk_row = [0u8; 4];
-                for (blk_row, slot) in bs_by_blk_row.iter_mut().enumerate() {
-                    // Luma row group this chroma row's bS borrows: chroma
-                    // row `row` is luma row `2*row`, whose own 4-row group
-                    // is `(2*row) / 4 == row / 2`.
-                    let q_blk = blk_row * 4 + (luma_local / 4) as usize;
-                    let p_blk = if mb_edge {
-                        blk_row * 4 + 3
-                    } else {
-                        blk_row * 4 + (luma_local / 4 - 1) as usize
-                    };
-                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, slices);
-                }
+                let bs_by_blk_row = strengths.vertical[(luma_local / 4) as usize];
                 for row in 0..8u32 {
                     let y = my * 8 + row;
                     let ri = row as usize;
@@ -929,12 +1011,7 @@ impl<'a> DeblockCtx<'a> {
                     continue;
                 }
                 let mb_edge = c_local == 0;
-                let (p_mb, qp_p) = if mb_edge {
-                    #[allow(clippy::unwrap_used, reason = "my > 0 here, checked above")]
-                    (grid.at(mx, my - 1).unwrap(), qpc(mx, my - 1))
-                } else {
-                    (here, qp_here)
-                };
+                let qp_p = if mb_edge { qpc(mx, my - 1) } else { qp_here };
                 let edge = EdgeThresholds::derive(qp_p, qp_here, filter_offset_a, filter_offset_b);
                 let y = my * 8 + c_local;
 
@@ -943,18 +1020,7 @@ impl<'a> DeblockCtx<'a> {
                 let mut q0a = [0u8; 8];
                 let mut q1a = [0u8; 8];
                 let mut bsa = [0u8; 8];
-                // Same memoisation as the vertical chroma pass above: one
-                // `bS` per `blk_col` group of 2 columns.
-                let mut bs_by_blk_col = [0u8; 4];
-                for (blk_col, slot) in bs_by_blk_col.iter_mut().enumerate() {
-                    let q_blk = (luma_local / 4) as usize * 4 + blk_col;
-                    let p_blk = if mb_edge {
-                        12 + blk_col
-                    } else {
-                        (luma_local / 4 - 1) as usize * 4 + blk_col
-                    };
-                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, slices);
-                }
+                let bs_by_blk_col = strengths.horizontal[(luma_local / 4) as usize];
                 for col in 0..8u32 {
                     let x = mx * 8 + col;
                     let ci = col as usize;
@@ -1026,6 +1092,83 @@ mod tests {
         (0..mbs_high)
             .flat_map(|y| (0..mbs_wide).map(move |x| intra_mb(x, y)))
             .collect()
+    }
+
+    fn inter_mb(mb_x: u32, mb_y: u32) -> MbSummary {
+        let mv_blocks = core::array::from_fn(|i| {
+            let (bx, by) = (i as u32 % 4, i as u32 / 4);
+            let (gx, gy) = (mb_x * 4 + bx, mb_y * 4 + by);
+            let mvx = ((gx / 2 % 2) * 8) as i16;
+            let mvy = ((gy / 2 % 2) * 8) as i16;
+            MvInfo::for_test_l0((mvx, mvy))
+        });
+        MbSummary {
+            mb_x,
+            mb_y,
+            skipped: false,
+            is_ipcm: false,
+            is_intra4x4: false,
+            is_intra8x8: false,
+            is_intra16x16: false,
+            intra16x16_pred_mode: 0,
+            transform_8x8: false,
+            intra_chroma_pred_mode: 0,
+            qpy: 32,
+            residual: MbResidual::default(),
+            mv_blocks,
+            slice_id: 0,
+        }
+    }
+
+    #[test]
+    fn cached_boundary_strengths_match_direct_derivation() {
+        let (mbs_wide, mbs_high) = (3u32, 3u32);
+        let mbs: Vec<_> = (0..mbs_high)
+            .flat_map(|my| (0..mbs_wide).map(move |mx| inter_mb(mx, my)))
+            .collect();
+        let slices = [SliceDeblock {
+            ref_list0_poc: vec![7],
+            ..SliceDeblock::default()
+        }];
+        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, &slices);
+        let mut saw = [false; 2];
+
+        for my in 0..mbs_high {
+            for mx in 0..mbs_wide {
+                let q_mb = ctx.grid.at(mx, my).unwrap();
+                for edge in 0..4usize {
+                    for along in 0..4usize {
+                        if edge != 0 || mx != 0 {
+                            let (p_mb, p_blk) = if edge == 0 {
+                                (ctx.grid.at(mx - 1, my).unwrap(), along * 4 + 3)
+                            } else {
+                                (q_mb, along * 4 + edge - 1)
+                            };
+                            let q_blk = along * 4 + edge;
+                            let expected =
+                                boundary_strength(edge == 0, p_mb, p_blk, q_mb, q_blk, &slices);
+                            assert_eq!(ctx.vertical_bs(mx, my, edge, along), expected);
+                            saw[usize::from(expected != 0)] = true;
+                        }
+
+                        if edge != 0 || my != 0 {
+                            let (p_mb, p_blk) = if edge == 0 {
+                                (ctx.grid.at(mx, my - 1).unwrap(), 12 + along)
+                            } else {
+                                (q_mb, (edge - 1) * 4 + along)
+                            };
+                            let q_blk = edge * 4 + along;
+                            let expected =
+                                boundary_strength(edge == 0, p_mb, p_blk, q_mb, q_blk, &slices);
+                            assert_eq!(ctx.horizontal_bs(mx, my, edge, along), expected);
+                            saw[usize::from(expected != 0)] = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        assert_eq!(saw, [true, true], "the mapping test needs both bS outcomes");
     }
 
     /// A plane that varies enough for filtering to move bytes, by less than
