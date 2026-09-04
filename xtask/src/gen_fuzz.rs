@@ -191,6 +191,13 @@ fn render(
          # enter a shipped artifact's dependency graph, which is what the D2 unsafe\n\
          # audit checks.\n\
          #\n\
+         # Keep `fuzz/Cargo.lock` complete and committed. `cargo fuzz` has no\n\
+         # `--locked` flag, so any crate missing from the lock resolves to the\n\
+         # newest release at build time; `tinyvec` was missing, resolved to a\n\
+         # 1.13.0 that does not compile without `std`, and turned every seed in\n\
+         # the regression replay into a phantom crash. The replay script now\n\
+         # checks the lock with `cargo metadata --locked` before it builds.\n\
+         #\n\
          # Every path dependency below is `optional = true`, gated behind the\n\
          # feature named after the crate that declares it. `default` enables every\n\
          # feature, so a plain `cargo fuzz run <target>` still builds everything —\n\

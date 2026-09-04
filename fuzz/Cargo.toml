@@ -14,6 +14,13 @@
 # enter a shipped artifact's dependency graph, which is what the D2 unsafe
 # audit checks.
 #
+# Keep `fuzz/Cargo.lock` complete and committed. `cargo fuzz` has no
+# `--locked` flag, so any crate missing from the lock resolves to the
+# newest release at build time; `tinyvec` was missing, resolved to a
+# 1.13.0 that does not compile without `std`, and turned every seed in
+# the regression replay into a phantom crash. The replay script now
+# checks the lock with `cargo metadata --locked` before it builds.
+#
 # Every path dependency below is `optional = true`, gated behind the
 # feature named after the crate that declares it. `default` enables every
 # feature, so a plain `cargo fuzz run <target>` still builds everything —
@@ -502,7 +509,7 @@ filter-denoise = ["dep:vaco-filter-denoise", "dep:vaco-filter-graph"]
 filter-draw-vf = ["dep:vaco-expr", "dep:vaco-filter-draw-vf", "dep:vaco-filter-graph"]
 filter-framesync = ["dep:vaco-core", "dep:vaco-filter-framesync", "dep:vaco-frame"]
 filter-geometry = ["dep:vaco-core", "dep:vaco-filter-geometry", "dep:vaco-filter-graph"]
-filter-graph = ["dep:vaco-filter-graph"]
+filter-graph = ["dep:vaco-core", "dep:vaco-filter-core", "dep:vaco-filter-graph", "dep:vaco-pixfmt"]
 filter-key = ["dep:vaco-core", "dep:vaco-filter-graph", "dep:vaco-filter-key"]
 filter-lut = ["dep:vaco-filter-graph", "dep:vaco-filter-lut"]
 filter-mm = ["dep:vaco-filter-graph", "dep:vaco-filter-mm", "dep:vaco-limits"]
@@ -1451,6 +1458,14 @@ required-features = ["codec-golomb"]
 [[bin]]
 name = "graph_build"
 path = "fuzz_targets/graph_build.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-graph"]
+
+[[bin]]
+name = "graph_hostile"
+path = "fuzz_targets/graph_hostile.rs"
 test = false
 doc = false
 bench = false

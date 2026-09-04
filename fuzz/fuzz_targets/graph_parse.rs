@@ -30,8 +30,14 @@ fuzz_target!(|data: &[u8]| {
     if src.len() > 64 * 1024 {
         return;
     }
-    let Ok(ast) = parse(src) else {
-        return;
+    let ast = match parse(src) {
+        Ok(ast) => ast,
+        Err(e) => {
+            // The caret renderer slices the source at offsets the scanner
+            // recorded; a bad offset is only reachable on this path.
+            let _ = e.render(src);
+            return;
+        }
     };
     assert!(!ast.chains.is_empty(), "a parse that succeeded has no chains");
     for chain in &ast.chains {

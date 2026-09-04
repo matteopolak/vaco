@@ -25,8 +25,14 @@ fuzz_target!(|data: &[u8]| {
         return;
     }
     let registry = MockRegistry::new();
-    let Ok(built) = parse_and_build(src, &registry) else {
-        return;
+    let built = match parse_and_build(src, &registry) {
+        Ok(built) => built,
+        Err(e) => {
+            // Build errors carry spans copied from the AST; rendering them is
+            // the only consumer of those offsets.
+            let _ = e.render(src);
+            return;
+        }
     };
 
     let node_count = built.graph.node_count();
