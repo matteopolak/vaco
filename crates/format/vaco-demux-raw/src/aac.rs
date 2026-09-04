@@ -240,7 +240,9 @@ pub const DEMUXER: DemuxerDesc = DemuxerDesc {
     mime_types: &[],
     flags: FormatFlags::GENERIC_INDEX,
     probe,
-    open: |src, _parsers: &dyn ParserProvider| Ok(Box::new(AacDemuxer::open(src)?) as Box<dyn Demuxer>),
+    open: |src, _parsers: &dyn ParserProvider| {
+        Ok(Box::new(AacDemuxer::open(src)?) as Box<dyn Demuxer>)
+    },
 };
 
 #[cfg(test)]
@@ -290,10 +292,7 @@ mod tests {
     #[test]
     fn probe_rejects_plain_prose() {
         let text = "The quick brown fox jumps over the lazy dog, repeatedly, at length.";
-        assert_eq!(
-            probe(&ProbeData::new(text.as_bytes())),
-            ProbeScore::NONE
-        );
+        assert_eq!(probe(&ProbeData::new(text.as_bytes())), ProbeScore::NONE);
     }
 
     #[test]

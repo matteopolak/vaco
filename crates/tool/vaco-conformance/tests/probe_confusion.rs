@@ -346,7 +346,9 @@ fn is_aliased(label: &str, ours: &str, theirs: &str) -> bool {
 }
 
 fn is_known_divergence(label: &str, no_ext: bool) -> bool {
-    KNOWN_DIVERGENCES.iter().any(|&(l, n)| l == label && n == no_ext)
+    KNOWN_DIVERGENCES
+        .iter()
+        .any(|&(l, n)| l == label && n == no_ext)
 }
 
 struct Row {
@@ -400,7 +402,10 @@ fn probe_choice_matches_the_reference_across_the_format_sweep() {
             continue;
         }
         if !fixture.exists() {
-            println!("{}: SKIPPED — ffmpeg exited 0 but wrote nothing", case.label);
+            println!(
+                "{}: SKIPPED — ffmpeg exited 0 but wrote nothing",
+                case.label
+            );
             continue;
         }
 
@@ -471,13 +476,14 @@ fn probe_choice_matches_the_reference_across_the_format_sweep() {
             r.entity,
             r.ours,
             r.theirs,
-            r.ours_packets
-                .map_or("N/A".to_owned(), |n| n.to_string()),
-            r.theirs_packets
-                .map_or("N/A".to_owned(), |n| n.to_string()),
+            r.ours_packets.map_or("N/A".to_owned(), |n| n.to_string()),
+            r.theirs_packets.map_or("N/A".to_owned(), |n| n.to_string()),
         );
     }
-    assert!(!rows.is_empty(), "the sweep produced no comparable cases at all");
+    assert!(
+        !rows.is_empty(),
+        "the sweep produced no comparable cases at all"
+    );
 
     assert!(
         unexplained.is_empty(),

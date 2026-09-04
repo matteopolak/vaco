@@ -467,7 +467,10 @@ fn build_window(sequence: WindowSequence, this_shape: bool, prev_shape: bool) ->
 // placement have to meet at the same two samples, or the transitions stop
 // cancelling their time-domain alias. These fail the build if an edit moves
 // one without the other.
-const _: () = assert!(SHORT_START == 448, "LongStop's short segment is w[448..576]");
+const _: () = assert!(
+    SHORT_START == 448,
+    "LongStop's short segment is w[448..576]"
+);
 const _: () = assert!(
     LONG_LEN - SHORT_START == 1600,
     "LongStart's short segment is w[1472..1600]"
