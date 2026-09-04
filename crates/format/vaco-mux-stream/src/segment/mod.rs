@@ -178,6 +178,15 @@ pub struct SegmentMuxer {
     segment_base: HashMap<u32, i64>,
     records: Vec<SegmentRecord>,
     current_start_seconds: f64,
+    /// The latest `pts + duration` seen on any stream, in seconds —
+    /// [`Muxer::write_trailer`] has no next packet to measure the final
+    /// segment's span against (every mid-stream cut uses the *next*
+    /// segment's first reference-stream packet instead), so this is what it
+    /// falls back to. Measured against `ffmpeg -f segment`: a final segment
+    /// of one 0.1s frame gets `#EXTINF:0.100000,`, matching the file's own
+    /// content duration, never the literal `0.000000` this field used to
+    /// leave in place.
+    last_seen_end_seconds: f64,
     list_sink: Option<Box<dyn MediaSink>>,
     /// Captured from [`Muxer::set_metadata`] and replayed onto every new
     /// segment's inner muxer. Before this field existed there was nowhere to
@@ -235,6 +244,7 @@ impl SegmentMuxer {
             segment_base: HashMap::new(),
             records: Vec::new(),
             current_start_seconds: 0.0,
+            last_seen_end_seconds: 0.0,
             list_sink: None,
             metadata: MuxMetadata::default(),
             bitexact: false,
@@ -392,6 +402,10 @@ impl Muxer for SegmentMuxer {
         // per-stream time base lookup (there is nowhere to look one up:
         // `CodecParameters` does not carry one at all; only a `Stream`,
         // which this muxer never receives, does).
+        if let Some(us) = packet.pts.ticks() {
+            let end_seconds = vaco_core::Duration(us).as_secs_f64() + packet.duration.as_secs_f64();
+            self.last_seen_end_seconds = self.last_seen_end_seconds.max(end_seconds);
+        }
         let is_reference = Some(packet.stream_index) == self.reference_stream;
         if is_reference {
             let cut = self
@@ -418,7 +432,11 @@ impl Muxer for SegmentMuxer {
     }
 
     fn write_trailer(&mut self) -> Result<()> {
-        self.close_current(0.0)?;
+        // No next segment's first packet exists to measure the final span
+        // against, so fall back to the latest `pts + duration` this muxer has
+        // observed on any stream — see `last_seen_end_seconds`'s own doc.
+        let elapsed = (self.last_seen_end_seconds - self.current_start_seconds).max(0.0);
+        self.close_current(elapsed)?;
         if self.list_sink.is_some() {
             let rendered = self.rendered_list(true);
             if let Some(sink) = &mut self.list_sink {
@@ -694,6 +712,49 @@ mod tests {
         seg.write_trailer().unwrap();
         // Segment 1: 0. Segment 2 starts at 2500ms, so 2500->0, 3000->500.
         assert_eq!(*pts_seen.lock().unwrap(), vec![0, 0, 500_000]);
+    }
+
+    /// `write_trailer` has no next segment's first packet to measure the
+    /// final span against, and used to hardcode `0.0` — `#EXTINF:0.000000,`
+    /// on the last entry of every M3U8 list, and `end == start` in the CSV
+    /// listing, regardless of how much content the last segment actually
+    /// held. Measured against `ffmpeg -f segment -segment_list`: a final
+    /// segment's own listed duration is its real content span (`pts + last
+    /// packet's duration - segment start`), e.g. a lone trailing 0.1s frame
+    /// gets `#EXTINF:0.100000,`, never `0.000000`.
+    #[test]
+    fn write_trailer_gives_the_final_segment_its_real_duration_not_zero() {
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let mut seg = SegmentMuxer::new(
+            "out%d.raw",
+            SegmentOptions {
+                segment_time: Duration(2_000_000),
+                ..SegmentOptions::default()
+            },
+            counting_factory(opened.clone()),
+        );
+        seg.add_stream(&params(MediaType::Video)).unwrap();
+        seg.write_header().unwrap();
+        // Segment 1: key at 0ms. Segment 2 starts at the 2500ms key (cut),
+        // and its last packet is 3000ms with a stated 500ms duration, so the
+        // real span of segment 2 is 2500..3500, i.e. 1.0 second.
+        for (ms, key, dur_ms) in [(0, true, 0), (2500, true, 0), (3000, false, 500)] {
+            let mut p = packet(0, ms, key);
+            p.duration = Duration::from_micros(dur_ms * 1000);
+            seg.write_packet(&p).unwrap();
+        }
+        seg.write_trailer().unwrap();
+        assert_eq!(seg.records.len(), 2);
+        assert!(
+            (seg.records[0].duration - 2.5).abs() < 1e-9,
+            "segment 1: {:?}",
+            seg.records[0].duration
+        );
+        assert!(
+            (seg.records[1].duration - 1.0).abs() < 1e-9,
+            "segment 2's final duration must reflect its real content span, not 0.0: {:?}",
+            seg.records[1].duration
+        );
     }
 
     #[test]
