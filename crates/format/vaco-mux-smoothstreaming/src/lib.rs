@@ -381,7 +381,7 @@ impl Muxer for SmoothStreamingMuxer {
                     u64::try_from(video.frame_rate.den),
                 ) {
                     (Ok(num), Ok(den)) if num > 0 => {
-                        TICKS_PER_SECOND.saturating_mul(den) / num
+                        TICKS_PER_SECOND.saturating_mul(den).checked_div(num).unwrap_or(0)
                     }
                     _ => 0,
                 };
