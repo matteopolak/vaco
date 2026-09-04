@@ -30,6 +30,7 @@ use vaco_format_mpegaudio::{ChannelMode, MpegAudioHeader, Version};
 use vaco_frame::Frame;
 use vaco_limits::Budget;
 use vaco_sampfmt::SampleFmt;
+use vaco_tx::{Direction, Plan, Tx, TxFlags, TxKind};
 
 use crate::huffman::{decode_big_value, decode_count1};
 use crate::synthesis::Synthesis;
@@ -64,14 +65,31 @@ pub(crate) struct Layer3State {
     /// Raw main-data bytes, oldest first; `send_packet` appends this frame's
     /// slot and decode reads backward from the end via `main_data_begin`.
     reservoir: Vec<u8>,
+    /// The one IMDCT size Layer III ever needs: every `block_type` (0/1/2/3)
+    /// feeds 18 spectral lines into the same fixed 36-point transform (see
+    /// this module's own doc on the short-block gap — `block_type == 2`'s
+    /// coefficients are zeroed upstream, not transformed at a different
+    /// size), so one cached [`Tx`] built once per stream and reused for
+    /// every subband/granule/channel/packet replaces
+    /// `vaco_tx::reference::imdct`'s O(n²) direct evaluation, the same swap
+    /// `273d60fb` made for AAC. See `windowed_imdct`.
+    imdct: Tx<f64>,
 }
 
+/// `block_type` never changes Layer III's IMDCT length (always 36, see
+/// [`Layer3State::imdct`]'s doc), so this is the one plan the whole crate
+/// needs.
+const IMDCT_LEN: usize = 36;
+
 impl Layer3State {
-    pub(crate) fn new(channels: usize) -> Self {
-        Self {
+    pub(crate) fn new(channels: usize) -> Result<Self> {
+        let plan = Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, IMDCT_LEN, 1.0, TxFlags::FULL_IMDCT)
+            .map_err(|_| Error::Unsupported("mpegaudio: failed to build the Layer III IMDCT plan"))?;
+        Ok(Self {
             overlap: vec![[[0.0; LINES_PER_SUBBAND]; SUBBANDS]; channels.max(1)],
             reservoir: Vec::new(),
-        }
+            imdct: Tx::new(plan),
+        })
     }
 }
 
@@ -438,8 +456,9 @@ fn apply_alias_reduction(xr: &mut [f32; LINES]) {
 /// The windowed IMDCT for one subband's 18 spectral lines: `Vaco-Spec-Ref:
 /// iso-11172-3` §2.4.3.4.9.3, one of four window shapes selected by
 /// `block_type` applied to the raw 36-sample IMDCT output.
-fn windowed_imdct(coeffs: &[f64; 18], block_type: u8) -> [f32; 36] {
-    let raw = vaco_tx::reference::imdct(coeffs);
+fn windowed_imdct(imdct: &mut Tx<f64>, coeffs: &[f64; 18], block_type: u8) -> [f32; 36] {
+    let mut raw = [0.0f64; IMDCT_LEN];
+    imdct.execute(&mut raw, coeffs);
     let mut out = [0.0f32; 36];
     for (i, slot) in out.iter_mut().enumerate() {
         let w = window_value(block_type, i);
@@ -603,7 +622,7 @@ pub(crate) fn decode(
                 for (k, c) in coeffs.iter_mut().enumerate() {
                     *c = f64::from(xr.get(sb * LINES_PER_SUBBAND + k).copied().unwrap_or(0.0));
                 }
-                let windowed = windowed_imdct(&coeffs, block_type);
+                let windowed = windowed_imdct(&mut state.imdct, &coeffs, block_type);
                 let prev_overlap: [f32; LINES_PER_SUBBAND] = state
                     .overlap
                     .get(ch)
@@ -742,6 +761,13 @@ mod sfb_table_tests {
 mod imdct_tests {
     use super::*;
 
+    fn test_imdct() -> Tx<f64> {
+        Tx::new(
+            Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, IMDCT_LEN, 1.0, TxFlags::FULL_IMDCT)
+                .unwrap(),
+        )
+    }
+
     /// Feed the same constant spectral coefficient through several
     /// consecutive long-block IMDCT + overlap-add steps for one subband, at
     /// zero frequency (a DC-like input). After the first (transient) block,
@@ -754,8 +780,9 @@ mod imdct_tests {
         let coeffs = [1.0f64; 18];
         let mut overlap = [0.0f32; LINES_PER_SUBBAND];
         let mut blocks = Vec::new();
+        let mut imdct = test_imdct();
         for _ in 0..6 {
-            let windowed = windowed_imdct(&coeffs, 0);
+            let windowed = windowed_imdct(&mut imdct, &coeffs, 0);
             let mut out = [0.0f32; LINES_PER_SUBBAND];
             for k in 0..LINES_PER_SUBBAND {
                 out[k] = windowed[k] + overlap[k];
@@ -772,6 +799,48 @@ mod imdct_tests {
                 last[k],
                 prev[k]
             );
+        }
+    }
+
+    /// `windowed_imdct` used to call `vaco_tx::reference::imdct` (an O(n^2)
+    /// direct sum documented "verification only") directly on the
+    /// production decode path — see GH-659. This reproduces the pre-fix
+    /// computation by hand from that same reference oracle and checks it
+    /// against the `Plan`/`Tx`-based production path byte-for-byte-close,
+    /// for every window shape and several non-trivial coefficient vectors,
+    /// so the performance swap's correctness does not rest solely on
+    /// `vaco-tx`'s own generic, codec-agnostic oracle coverage.
+    #[test]
+    fn fast_path_matches_the_old_reference_imdct_computation_for_every_window() {
+        let vectors: [[f64; 18]; 4] = [
+            [1.0; 18],
+            std::array::from_fn(|i| if i == 0 { 1.0 } else { 0.0 }),
+            std::array::from_fn(|i| if i % 2 == 0 { 1.0 } else { -1.0 }),
+            std::array::from_fn(|i| ((i as f64) * 0.37).sin() * 1200.0),
+        ];
+        let mut imdct = test_imdct();
+        for block_type in [0u8, 1, 2, 3] {
+            for coeffs in &vectors {
+                let fast = windowed_imdct(&mut imdct, coeffs, block_type);
+
+                let raw_ref = vaco_tx::reference::imdct(coeffs);
+                let mut slow = [0.0f32; 36];
+                for (i, slot) in slow.iter_mut().enumerate() {
+                    let w = window_value(block_type, i);
+                    *slot = (raw_ref.get(i).copied().unwrap_or(0.0) * w) as f32;
+                }
+
+                for k in 0..36 {
+                    let diff = (fast[k] - slow[k]).abs();
+                    let scale = slow[k].abs().max(1.0);
+                    assert!(
+                        diff / scale < 1e-5,
+                        "block_type {block_type} sample {k}: fast={} slow={} diff={diff}",
+                        fast[k],
+                        slow[k]
+                    );
+                }
+            }
         }
     }
 }
@@ -802,6 +871,10 @@ mod frequency_placement_tests {
         let mut synth = Synthesis::new();
         let mut overlap = [[0.0f32; LINES_PER_SUBBAND]; SUBBANDS];
         let mut pcm = Vec::new();
+        let mut imdct = Tx::new(
+            Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, IMDCT_LEN, 1.0, TxFlags::FULL_IMDCT)
+                .unwrap(),
+        );
         for _ in 0..40 {
             let mut xr = [0.0f32; LINES];
             xr[line] = 1000.0;
@@ -811,7 +884,7 @@ mod frequency_placement_tests {
                 for (k, c) in coeffs.iter_mut().enumerate() {
                     *c = f64::from(xr[sb * LINES_PER_SUBBAND + k]);
                 }
-                let windowed = windowed_imdct(&coeffs, 0);
+                let windowed = windowed_imdct(&mut imdct, &coeffs, 0);
                 for k in 0..LINES_PER_SUBBAND {
                     let mut value = windowed[k] + overlap[sb][k];
                     if sb % 2 == 1 && k % 2 == 1 {

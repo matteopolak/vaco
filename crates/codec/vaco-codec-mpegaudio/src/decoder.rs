@@ -89,9 +89,13 @@ impl Decoder for MpegAudioDecoder {
             }
             Layer::III => {
                 self.synth_for(channels);
+                if self.layer3.is_none() {
+                    self.layer3 = Some(Layer3State::new(channels)?);
+                }
                 let state = self
                     .layer3
-                    .get_or_insert_with(|| Layer3State::new(channels));
+                    .as_mut()
+                    .ok_or(Error::Unsupported("mpegaudio: missing layer3 state"))?;
                 crate::layer3::decode(header, body, state, &mut self.synth, &mut budget)?
             }
         };

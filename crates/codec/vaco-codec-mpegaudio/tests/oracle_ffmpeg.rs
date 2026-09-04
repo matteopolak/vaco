@@ -104,7 +104,7 @@ fn decode_file(path: &std::path::Path) -> (Vec<i16>, u32) {
                         panic!("expected an audio frame");
                     };
                     channels = layout.channels.max(1);
-                    let mut planes = Vec::with_capacity(channels as usize);
+                    let mut planes = Vec::new();
                     for ch in 0..channels as usize {
                         planes.push(frame.plane(ch).expect("plane"));
                     }
@@ -114,8 +114,7 @@ fn decode_file(path: &std::path::Path) -> (Vec<i16>, u32) {
                             let off = i * 4;
                             let f = row
                                 .get(off..off + 4)
-                                .map(|b| f32::from_le_bytes(b.try_into().unwrap()))
-                                .unwrap_or(0.0);
+                                .map_or(0.0, |b| f32::from_le_bytes(b.try_into().unwrap()));
                             let clamped = f.clamp(-1.0, 1.0);
                             out.push((clamped * f32::from(i16::MAX)) as i16);
                         }
@@ -260,7 +259,7 @@ fn layer3_stereo_decodes_a_real_ffmpeg_stream_closely() {
     let (whole_corr, _) = correlation_and_rms(&decoded, &reference);
     assert!(whole_corr > 0.9, "whole-file correlation too low: {whole_corr}");
 
-    let nframes = reference.len() / MP3_FRAME_INTERLEAVED;
+    let nframes = reference.len().div_euclid(MP3_FRAME_INTERLEAVED);
     assert!(nframes > 4, "fixture too short to exclude 2 edge frames on each side");
     let lo = 2 * MP3_FRAME_INTERLEAVED;
     let hi = (nframes - 2) * MP3_FRAME_INTERLEAVED;
@@ -269,5 +268,50 @@ fn layer3_stereo_decodes_a_real_ffmpeg_stream_closely() {
     assert!(
         mid_rms < 10.0,
         "middle-frame RMS error too high (out of 32768 full scale): {mid_rms}"
+    );
+}
+
+/// GH-659 regression guard: `mp3_stereo` above is a smooth multitone and
+/// almost never exercises a real short block. This fixture alternates loud
+/// noise bursts with near-silence (`aevalsrc`, 8 Hz square-gated noise over
+/// a quiet 311 Hz tone) specifically to make a real `libmp3lame` encoder
+/// switch block types, so that GH-659's fast-IMDCT swap
+/// (`vaco_tx::reference::imdct` -> a cached `vaco_tx::Plan`/`Tx`) is
+/// checked on the exact kind of content that let two AAC short-block
+/// defects go undetected under `273d60fb` (that swap was verified only on
+/// sine fixtures). Measured per-frame (mono, 1152 samples/frame) correlation
+/// against this fixture confirms it: most of the 28 frames sit above 0.999
+/// (quiet or steady-noise segments, long blocks) while frames landing on a
+/// burst edge (5, 9, 10, 15, 20, 24, 27) drop as low as 0.05-0.67, entirely
+/// explained by the pre-existing, separately documented "short blocks
+/// decode to silence" gap, not a new defect.
+///
+/// Before/after evidence for the IMDCT swap itself: decoding this exact
+/// fixture through a worktree built at the pre-swap commit and through the
+/// post-swap tree produced byte-identical PCM (0 differing bytes across
+/// 64512 bytes / 32256 samples) -- the swap is a pure performance change
+/// here, so this test's bound need only guard against a *future*
+/// regression, not restate that comparison.
+#[test]
+fn layer3_transient_bursts_decode_a_real_ffmpeg_stream_without_new_divergence() {
+    let (decoded, channels) = decode_file(&fixture_path("mp3_transient_bursts.mp3"));
+    let reference = s16le(&std::fs::read(fixture_path("mp3_transient_bursts_ref.raw")).unwrap());
+    assert_eq!(channels, 1, "fixture is mono (aevalsrc defaults to one channel)");
+    assert_eq!(
+        decoded.len(),
+        reference.len(),
+        "sample count mismatch (ours={}, ffmpeg={})",
+        decoded.len(),
+        reference.len()
+    );
+
+    let (whole_corr, whole_rms) = correlation_and_rms(&decoded, &reference);
+    assert!(
+        whole_corr > 0.75,
+        "whole-file correlation regressed below the measured 0.8024: {whole_corr}"
+    );
+    assert!(
+        whole_rms < 4500.0,
+        "whole-file RMS error regressed above the measured ~4261 (out of 32768 full scale): {whole_rms}"
     );
 }
