@@ -17,40 +17,35 @@
 //!   `provenance/vaco-codec-alac.toml` and `cookie.rs`'s pinned regression
 //!   test). [`decoder::AlacDecoder::set_extradata`] uses this to learn a
 //!   real stream's sample rate and channel layout.
-//! - [`frame_codec`] is the actual packet bitstream: an adaptive linear
-//!   predictor ([`predictor`]) plus adaptive Rice-style entropy coding
-//!   ([`rice`]), with a reversible mid/side stereo transform. **This part is
-//!   this crate's own original design, not Apple's ALAC bitstream** — see
-//!   `predictor.rs`'s doc comment for the clean-room reasoning: there is no
-//!   bitstream-syntax specification for ALAC's prediction/entropy stage
-//!   independent of Apple's reference source, and this crate deliberately
-//!   does not read that source (nor the `alac` dev-dependency's source) to
-//!   recover it, in order to keep the clean-room boundary this crate exists
-//!   to demonstrate.
+//! - [`frame_codec`] is the actual packet bitstream: Apple's real adaptive
+//!   linear predictor ([`predictor`]) plus adaptive Rice-style entropy
+//!   coding ([`rice`]), with a reversible mid/side stereo transform. An
+//!   earlier version of this module was a self-invented sign-sign LMS
+//!   design that could only decode its own encoder's output; `predictor.rs`'s
+//!   doc comment has the full history and the from-scratch translation of
+//!   Apple's reference source (`codec/dp_dec.c`'s `unpc_block`, Apache
+//!   License 2.0, confirmed outside this project's D7/D15 FFmpeg/libav
+//!   clean-room rule) that replaced it.
 //!
-//! **Consequence, stated plainly**: this decoder can read the container
-//! metadata of a real Apple/`ffmpeg`-produced ALAC file correctly (sample
-//! rate, channel count/layout, bit depth), but cannot decode that file's
-//! actual audio *payload* — its packet bytes are framed differently. Nor can
-//! a real ALAC decoder (`QuickTime`, `ffmpeg`, the `alac` crate) read a packet
-//! this crate's encoder produces. What *is* real is that this crate's own
-//! encoder and decoder agree with each other exactly, losslessly, which is
-//! what every test in `frame_codec.rs` and the crate root checks.
+//! **Consequence, stated plainly**: this decoder reads both the container
+//! metadata *and* the compressed audio payload of a real Apple/
+//! `ffmpeg`-produced ALAC file correctly, and a real ALAC decoder (the
+//! `alac` crate, used here only as a dev-dependency oracle — never read as
+//! source) reads this crate's own encoder output correctly in turn.
+//! `tests/oracle_alac_crate.rs` checks both directions bit-for-bit against
+//! real `ffmpeg`-produced cookie/packet bytes:
+//! `this_crates_own_decoder_reads_a_real_ffmpeg_alac_packet_bit_for_bit` and
+//! `this_crates_own_encoder_output_is_accepted_by_the_oracle_decoder`.
 //!
 //! # How to change it
 //!
-//! Extending real interop would mean replacing [`frame_codec`]'s bitstream
-//! with one read from a primary ALAC specification — Apple's reference
-//! source under `codec/` is Apache-2.0 and is explicitly *not* off limits
-//! for that (only reading it as a coding reference while keeping the `alac`
-//! *crate* an untouched oracle is the constraint this crate was built
-//! under); it was not read this session specifically to keep both the
-//! `alac` crate and Apple's C reference untouched, so a from-scratch
-//! bit-level reconstruction here would have been guesswork dressed up as
-//! measurement. A future pass that reads Apple's reference source (not the
-//! `alac` crate's) as the specification, then swaps `frame_codec`'s
-//! internals while keeping its `Decoder`/`Encoder` wrapper and
-//! `set_extradata` unchanged, is the natural next step.
+//! [`frame_codec`]'s escape-mode (verbatim) framing predates the real
+//! predictor and is still this crate's own choice where the reference
+//! offers more than one legal encoding (e.g. exact escape-mode trigger
+//! thresholds) — `frame_codec.rs`'s own doc says which parts are which.
+//! Real interop is the invariant to preserve: any change here should keep
+//! `tests/oracle_alac_crate.rs` passing against the `alac` crate, not just
+//! this crate's own round-trip tests.
 //!
 //! # Configuration
 //!
@@ -70,8 +65,6 @@
 //!
 //! # What did not land
 //!
-//! - Real bitstream compatibility with Apple/`ffmpeg`-produced ALAC audio
-//!   payloads (see above).
 //! - More than 2 channels: the packet header caps at [`MAX_CHANNELS`]
 //!   (stereo), and the cookie's `ALACChannelLayoutInfo` tags for 3.0B/4.0B/
 //!   5.0D/5.1D/6.1/7.1B are recognised structurally (`cookie.rs`) but have no
