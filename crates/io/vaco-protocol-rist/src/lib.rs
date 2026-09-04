@@ -1,20 +1,20 @@
 //! RIST (Reliable Internet Stream Transport) Simple and Main Profile,
 //! native, from VSF `TR-06-1:2020` and `TR-06-2:2022`.
 //!
-//! # What this package is (PR-11a / #558, PR-11b / #559)
+//! # What this package is
 //!
-//! Simple Profile (#558): RTP/RTCP framing (reused from `vaco-rtp`, not
+//! Simple Profile: RTP/RTCP framing (reused from `vaco-rtp`, not
 //! reimplemented — see `docs/model/vaco-rtp.md` for why RTP/RTCP moved to
 //! layer 1), the RIST-specific RTCP messages Simple Profile adds on top
 //! (bitmask/range retransmission requests, the optional RTT-echo
 //! message), retransmitted-packet matching, and the receiver's
 //! two-section reorder/retransmission buffer.
 //!
-//! Main Profile (#559): GRE tunnelling ([`gre`], [`keepalive`]) and
+//! Main Profile: GRE tunnelling ([`gre`], [`keepalive`]) and
 //! Pre-Shared Key encryption ([`psk`]). §6's DTLS/certificate path was
 //! **named blocked and deferred to PR-12** — the same T4-tiered native
-//! DTLS gap that also blocked WHIP (#619); `rustls` has no DTLS. PR-12b
-//! (`vaco-protocol-dtls`, #562) landed 2026-08-28 with a real `openssl`-backed
+//! DTLS gap that also blocked WHIP; `rustls` has no DTLS. The
+//! `vaco-protocol-dtls` integration landed 2026-08-28 with a real `openssl`-backed
 //! DTLS 1.2 handshake, interop-verified against `ffmpeg 8.1`, which
 //! unblocks both — see [`dtls`] for this package's half: §6.1's session
 //! establishment, §6.2's mandatory cipher-suite check, and §6.3's
@@ -25,7 +25,7 @@
 //! exponentiation, its own multi-message challenge/response, its own
 //! session-key derivation) — genuinely comparable in size to the
 //! AES-ownership question, not a wiring detail, so it is **filed
-//! separately as #657** rather than built here. This is a legitimate
+//! separately** rather than built here. This is a legitimate
 //! split, not a shortcut: §7 itself states PSK's intrinsic
 //! authentication (knowledge of the passphrase) "may be sufficient for
 //! some applications", naming Annex D as an *additional* level on top.
@@ -34,18 +34,17 @@
 //! not yet a [`vaco_protocol_core::Protocol`] — no `rist:` registry
 //! entry, no socket.
 //!
-//! Bonding and the statistics surface (#560): §5.4/§5.5's multi-link
+//! Bonding and the statistics surface: §5.4/§5.5's multi-link
 //! replication and combining ([`bonding`]) and this crate's own
 //! statistics surface ([`stats`]) — neither profile names a required
 //! statistics API, so [`stats`] is this crate's own choice of what to
-//! expose, not a spec-mandated shape. #560's own interop-matrix clause is
-//! **named unreachable up front, before implementation, the same way
-//! #557-#559 named their own reference-peer requirements unreachable**:
+//! expose, not a spec-mandated shape. The profiles' interop-matrix requirement
+//! is **unreachable because no reference peer is available**:
 //! there is no `librist` build on this machine (see "No reference
 //! implementation" below), so no cross-implementation matrix can be run.
 //! The replacement bar actually built against instead: *a bonded
 //! two-link session survives the loss of either link with no
-//! delivered-packet loss* — #560's own Acceptance Criterion, exercised
+//! delivered-packet loss* — the profile's acceptance criterion, exercised
 //! directly by [`bonding`]'s own tests.
 //!
 //! # No reference implementation on this machine
@@ -76,8 +75,8 @@
 //! ("IPR") over §4, 5, 5.1 (excl. 5.1.2), 5.2, 5.3 and sub-sections, and
 //! 5.4 — essentially all of Simple Profile's substantive operation — held
 //! by Video-Flow Ltd, with an assurance to license to any implementer who
-//! asks. That is not absence of encumbrance (`planning/00-decisions.md`
-//! D4's 2026-08-28 amendment). This crate is not "in the published build"
+//! asks. That does not imply absence of encumbrance. This crate is not "in the
+//! published build"
 //! today in D4's sense — it has no `vaco-component.toml` fragment and
 //! nothing links it into `vaco-cli` — but **the moment it is registered,
 //! the fragment must set `encumbered = true` behind
@@ -108,26 +107,26 @@
 //!   buffer, 70 ms reorder section) are **informative, not normative** —
 //!   marked `IMPLEMENTATION-DEFINED` at the point of declaration rather
 //!   than presented as required values.
-//! - [`gre`] (#559) — the GRE-over-UDP tunnel header (`TR-06-2` §5.1
+//! - [`gre`] — the GRE-over-UDP tunnel header (`TR-06-2` §5.1
 //!   `Fig. 1/2`, RFC 8086/2890's `C`/`K`/`S` flags plus the `H`/`RV` bits
 //!   RIST carves out of `Reserved0`), the VSF Packet Header (§5.2
 //!   `Fig. 3`), and Reduced Overhead Mode's own header (§5.3.2 `Fig. 5`).
 //!   Full Datagram Mode's IP-packet payload and the JSON Keep-Alive
 //!   payload are both carried as opaque bytes deliberately — see the
 //!   module's own docs for why.
-//! - [`keepalive`] (#559) — the Keep-Alive message (§5.6.3/§5.6.4
+//! - [`keepalive`] — the Keep-Alive message (§5.6.3/§5.6.4
 //!   `Fig. 8`): the 48-bit MAC address and the thirteen named capability
 //!   flags (including `D`/`T`, which the spec overloads onto the same
 //!   message to mean Disconnect/Reconnect — §5.6.5/§5.6.6). The JSON
 //!   payload itself is opaque bytes, not parsed (see the module docs).
-//! - [`psk`] (#559) — §7.1-7.4's Pre-Shared Key encryption: key
+//! - [`psk`] — §7.1-7.4's Pre-Shared Key encryption: key
 //!   derivation (§7.3's PBKDF2-HMAC-SHA256, 1024 iterations, the nonce as
 //!   salt — built on `vaco-crypto`, checked against `TR-06-2` Annex B's
 //!   own worked example there) and the IV construction (§7.2: the
 //!   sequence number as the counter block's high 4 bytes). §7.4's
 //!   passphrase-rotation policy and §7.6's Future Nonce Announcement are
 //!   not built — see the module's own docs on why.
-//! - [`bonding`] (#560) — §5.4 (Simple Profile: bonding across raw
+//! - [`bonding`] — §5.4 (Simple Profile: bonding across raw
 //!   network connections) and §5.5 (Main Profile: tunnel-level
 //!   multi-path over GRE paths) are one mechanism at this crate's level
 //!   of abstraction, not two: [`bonding::BondedReceiver`] is a thin
@@ -137,7 +136,7 @@
 //!   [`buffer::ReceiveBuffer`]'s existing sequence-number keying with no
 //!   new logic, per §5.4's own requirement that replicated copies "shall
 //!   have the same RTP sequence number and timestamp".
-//! - [`stats`] (#560) — a small statistics surface, not a spec-mandated
+//! - [`stats`] — a small statistics surface, not a spec-mandated
 //!   one. Counters are labelled **independently-computed**
 //!   ([`stats::SessionStats::total_accounted_for`], checked in its own
 //!   test against a total the test itself derives separately) versus
@@ -148,7 +147,7 @@
 //!
 //! # What is not verified
 //!
-//! No interop — see above, and #560's interop-matrix clause specifically:
+//! No interop — see above, and the profiles' interop-matrix requirement:
 //! no `librist` build exists on this machine, so it is named unreachable
 //! rather than attempted, with the Acceptance Criterion itself (bonded
 //! two-link survival) built and tested as the replacement bar instead.
@@ -162,7 +161,7 @@
 //! per-suite disable requirement needs an OpenSSL cipher-list knob
 //! `vaco-protocol-dtls` does not expose yet (that crate is not owned by
 //! this package; flagged as a follow-up rather than reached into). Annex D
-//! (EAP-SHA256-SRP6a) remains filed separately as #657, not attempted here.
+//! (EAP-SHA256-SRP6a) remains unimplemented in this package.
 //!
 //! # Configuration
 //!
