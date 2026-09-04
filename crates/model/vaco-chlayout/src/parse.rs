@@ -1,15 +1,8 @@
-//! The layout description grammar.
+//! Parses the `-ch_layout` spellings accepted by [`layout`]. Input can come
+//! from a command line or container metadata; the chlayout fuzz target covers
+//! its no-panic requirement.
 //!
-//! # What it is
-//!
-//! One function, [`layout`], accepting every spelling `-ch_layout` accepts. It
-//! is reachable from a command line and from container metadata, so it takes
-//! untrusted input and must never panic; `fuzz/fuzz_targets/chlayout_parse.rs`
-//! is the target that proves it.
-//!
-//! # The grammar
-//!
-//! Six alternatives, tried in this order:
+//! Alternatives are tried in this order:
 //!
 //! | form | example | result |
 //! |---|---|---|
@@ -20,69 +13,19 @@
 //! | native mask | `0x3f`, `63`, `077` | native |
 //! | channel list | `FL+FR`, `FL@Left+FR` | native, custom or ambisonic |
 //!
-//! Everything below is a **D17 note**: the reference's behaviour on the edges of
-//! this grammar is not what a specification would prescribe, and it is what
-//! decides whether a real command line is accepted. All of it was established by
-//! probing `FFmpeg` 8.1 (see `docs/model/vaco-chlayout.md` for the transcripts),
-//! and none of it should be "tidied up".
+//! Compatibility edges were measured against `FFmpeg` 8.1; transcripts are in
+//! `docs/model/vaco-chlayout.md`. Preserve them even where they differ from a
+//! conventional grammar:
 //!
-//! ## D17: whitespace is accepted in three places and nowhere else
+//! - Number parsing accepts leading whitespace and `+`, but not trailing
+//!   whitespace. Counts use base 10 (`010c` is ten); masks and `USR`/`AMBI`
+//!   suffixes use base 0 (`010` is the LFE mask and `USR010` is `BC`). Negative
+//!   masks fail, while `0xffffffffffffffff` describes 64 channels.
+//! - One trailing `+` is ignored; every other empty list element fails.
+//! - Labels truncate to 15 bytes; an empty label is absent. Labels keep an
+//!   otherwise representable layout custom, except on ambisonic ACN components.
 //!
-//! The count and mask forms go through C `strtol`/`strtoull`, which skip leading
-//! whitespace and accept a leading `+`. So `" 63"`, `"+63"` and `"+6C"` parse and
-//! `"63 "` does not. A standard layout name is matched exactly, so `" 5.1"` and
-//! `"5.1 "` are both rejected. Individual channel names in a list *are* trimmed
-//! at both ends, so `"FL +FR"` and `"FL+ FR"` are `stereo` while `"F L"` is an
-//! error.
-//!
-//! ## D17: a negative number is rejected, a huge one is not
-//!
-//! `-1` and `-0x3f` are rejected, but `0xffffffffffffffff` is accepted as a
-//! 64-channel layout — so the mask is read as unsigned, with the sign rejected
-//! separately rather than by the numeric type. A mask of `0` is an error.
-//!
-//! ## D17: `c` is base 10, the mask is base 0
-//!
-//! `010c` is *ten* channels and `08c` is eight, because the count forms use base
-//! 10; but `010` on its own is the mask `8` — `LFE` — because the mask form uses
-//! base 0 and reads the leading zero as octal. `0x4c` is therefore not "4c in
-//! hex" but the mask `0x4c`, since the base-10 count parse stops at `x` and
-//! falls through.
-//!
-//! ## D17: one trailing `+` is ignored, any other empty element is an error
-//!
-//! `FL+` is one channel and `FL+FR+` is two, but `FL++FR`, `FL+FR++` and `+FL`
-//! are all errors. The parser consumes an element, then stops if nothing is
-//! left — so exactly one dangling separator at the end is invisible.
-//!
-//! ## D17: `USR<n>` and `AMBI<n>` take a base-0 number
-//!
-//! `USR0x10` is `TBC` and `USR010` is `BC`, because the number after the prefix
-//! is parsed with base 0. `USR018` is an *error*: base 0 reads `01` as octal and
-//! then chokes on the `8`. Whitespace after the prefix is skipped, so `USR 18`
-//! works; a sign is not accepted, so `USR-1` does not. The ranges are
-//! `USR0..=USR2147483647` and `AMBI0..=AMBI1023`.
-//!
-//! ## D17: per-channel labels are truncated at 15 bytes
-//!
-//! `FL@0123456789abcdef` silently becomes `FL@0123456789abcde`. An *empty* label
-//! (`FL@`) is the same as no label at all, so `FL@+FR` is plain `stereo`.
-//!
-//! ## D17: a label is what keeps a layout custom
-//!
-//! `FL+FR` is `stereo`, but `FL@Left+FR@Right` stays a two-entry custom map and
-//! describes as `2 channels (FL@Left+FR@Right)` — the label has nowhere to live
-//! in a bitmask, so its presence blocks the collapse. The same is true of the
-//! collapse to unspecified: `UNK+UNK` is `2 channels` while `UNK@x+UNK` is
-//! `2 channels (UNK@x+UNK)`.
-//!
-//! The collapse to *ambisonic* is the exception. A label on an ACN component is
-//! discarded, so `AMBI0@z+AMBI1+AMBI2+AMBI3` is plain `ambisonic 1`; labels on
-//! the non-diegetic extras survive, so `ambisonic 1+FL@x+FR` is
-//! `ambisonic 1+2 channels (FL@x+FR)`.
-//!
-//! See [`Label`] for the 15-byte truncation and the one place it is not
-//! byte-exact.
+//! [`Label`] owns the truncation behavior.
 
 use crate::{Channel, ChannelEntry, ChannelLayout, ChannelOrder, Label};
 
