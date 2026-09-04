@@ -17,8 +17,8 @@
 //!
 //! What each bullet below covers, in the order support for it landed —
 //! several were genuinely **not** in scope for a while and refused by name
-//! ([`vaco_core::Error::Unsupported`]) before their own pass added them; a
-//! few (tiles; anything but 8-bit 4:2:0) remain refused today:
+//! ([`vaco_core::Error::Unsupported`]) before their own pass added them.
+//! The last bullet is what remains refused today:
 //!
 //! - **P-slices are implemented and no longer refused.**
 //!   `prediction_unit()` syntax (skip/merge/AMVP), merge/AMVP candidate
@@ -108,14 +108,21 @@
 //!   (default CRF rate control, which implies this), at multiple
 //!   resolutions and CRFs, alongside deblocking/SAO/WPP all at their own
 //!   defaults too.
-//! - **Chroma QP offset lists, `I_PCM`, `transform_skip` actually taken,
-//!   custom scaling lists, and every SPS range-extension flag.** Each is
-//!   refused the moment the bitstream actually uses it, not merely when the
-//!   syntax element exists — a PPS that declares
-//!   `transform_skip_enabled_flag` but never sets the per-block flag
-//!   decodes fine.
-//! - **Bit depths other than 8, chroma formats other than 4:2:0,
-//!   monochrome.** Refused at the SPS.
+//! - **Refused by name today**, each with its own
+//!   [`vaco_core::Error::Unsupported`] string: bit depths other than 8,
+//!   chroma formats other than 4:2:0, `separate_colour_plane_flag`,
+//!   `I_PCM`, tiles, `transquant_bypass`, chroma QP offset lists, custom
+//!   scaling lists, every SPS/PPS range-extension and screen-content-coding
+//!   flag, long-term reference pictures, dependent slice segments, and more
+//!   than one slice segment per picture. The SPS/PPS ones are refused at
+//!   `check_scope`; the rest the moment the bitstream actually uses the
+//!   feature, so a PPS that declares a flag it never exercises decodes
+//!   fine.
+//!
+//! `docs/codec/vaco-codec-hevc.md`'s "The JCT-VC `HEVC_v1` subset,
+//! measured" section is the standing record of what this list costs on real
+//! conformance bitstreams: 25 of 46 byte-exact against `ffmpeg`'s own
+//! decode, 13 refused by name, 8 wrong.
 //!
 //! # Reuse, not reimplementation
 //!

@@ -273,6 +273,87 @@ cargo +nightly fuzz run hevc_decode --no-default-features --features codec-hevc 
 sequence decodes with the same per-plane agreement as the in-crate fixture
 — see "Registration" below for the measured command and result.
 
+## The JCT-VC `HEVC_v1` subset, measured (46 streams)
+
+Every "byte-exact" claim above is against `libx265` output. That is a real
+reference and a narrow one. Read back out of the encodes themselves
+(`ffmpeg 9.0.1`'s `libx265`, no `-x265-params`), a stock invocation writes
+`amp_enabled_flag = 0`, `max_transform_hierarchy_depth_inter = 0`,
+`max_transform_hierarchy_depth_intra = 0`, `cabac_init_present_flag = 0`,
+`scaling_list_enabled_flag = 0`, `pcm_enabled_flag = 0` and
+`transquant_bypass_enabled_flag = 0`, and leaves `--rect` off. So no fixture
+built that way contains a non-`PART_2Nx2N` inter CU, a transform tree deeper
+than one split, an 8x4/4x8 prediction unit, a scaling list, an I_PCM block or
+a lossless CU. The 46-stream JCT-VC subset in `vaco-corpus`'s
+`vaco-media.lock` (`jctvc` section) contains all of them.
+
+Measured 2026-09-03 on `ffmpeg 9.0.1`, feeding each stream's raw Annex-B
+access units straight to `HevcDecoder` and comparing every byte of every
+plane against `ffmpeg -i <stream>.bin -f rawvideo -pix_fmt yuv420p`:
+
+| result | streams | before the RQT/merge fixes |
+| --- | ---: | ---: |
+| byte-exact on every frame | **25** | 2 |
+| refused by name (`Unsupported`) | 13 | 13 |
+| CABAC desync mid-stream | 3 | 24 |
+| wrong pixels | 3 | 6 |
+| wrong frame count | 2 | 1 |
+
+Byte-exact: `amvp-a`, `amvp-b`, `cip-a`, `cip-b`, `entp-c`, `filler-a`,
+`ipred-c`, `merge-a`..`merge-e`, `mvedge-a`, `picsize-d`, `pmerge-a`,
+`pmerge-b`, `poc-a`, `ps-b`, `rplm-a` (300 frames), `rps-a`, `rqt-a`,
+`sao-a`, `sao-g`, `struct-a`, `tscl-a`.
+
+Still wrong, and what is known about each:
+
+- `initqp-a-sony-1` — desyncs after 47 of 60 frames. Carries 60 PPSs, one
+  per picture, with varying `init_qp_minus26`; every other stream in the
+  subset has exactly one.
+- `slpplp-a-vidyo-2`, `vpsid-a-vidyo-2` — the same 33-picture P-only
+  content, both desyncing after 7 frames. One VPS/SPS/PPS each, so not a
+  parameter-set-switching problem; not yet root-caused.
+- `amp-a-samsung-7` (2560x1600), `confwin-a-sony-1` (conformance-window
+  crop), `mvclip-a-qualcomm-3` — right frame count, wrong pixels.
+- `nooutprior-a-qualcomm-1` (50 frames vs 40), `nut-a-ericsson-5` (36 vs
+  34) — `no_output_of_prior_pics_flag` / NAL-type-driven DPB flushing.
+
+Refused by name, not mis-decoded: `I_PCM` (`ipcm-a`..`ipcm-e`), more than
+one slice segment per picture (`dblk-d`..`dblk-g`, `hrd-a`, `slices-a`),
+custom scaling lists (`slist-c`, `vpsspspps-a`).
+
+### Why the `jctvc-conformance` suite measures less than this
+
+`tests/conformance/transcode/hevc-jctvc-conformance.toml` wraps each raw
+bitstream in MP4 with the reference's own `-fflags +genpts -i <stream> -c
+copy -f mp4`, because `vaco`'s raw-elementary-stream demux assigns no packet
+timestamps (the manifest header says so). That wrap is **not lossless**:
+running the manifest's exact command and then decoding both the wrap and the
+original with `ffmpeg 9.0.1` itself, **35 of the 46 wraps decode to a
+different number of frames than the bitstream they came from** — `rqt-a`
+2 -> 1, `poc-a` 5 -> 2, `rplm-a` 300 -> 95, and `cip-a-panasonic-3` to zero
+frames. `-f nut`, `-f matroska` and `-f mpegts` were tried and are no
+better (35, 46 and 46 lossy respectively; the last two refuse the copy
+outright). So a case that agrees there agrees on a *subset* of its stream,
+sometimes an empty one, and this table -- taken from the bitstreams directly
+-- is the number to trust.
+
+The suite itself does not read green: with the fixes above,
+
+```sh
+VACO_BIN_VACO=<your build> VACO_CORPUS_NETWORK=1 \
+  vaco-conformance run --suite jctvc-conformance --tier full
+# 46 cases: 4 agreed, 0 allowed, 42 diverged, 0 failed, 0 skipped
+```
+
+Of those 42, 13 are the honest `Unsupported` refusals above and 23 exit
+183: **21 of them never reach a pixel comparison at all**, dying in
+`vaco-format-core::time::check_monotonic` ("non-monotonic dts") because the
+pictures the wrap dropped leave `dpb`'s bumping emitting POCs out of order,
+and 2 are the real CABAC desyncs. Only 6 cases get as far as comparing
+bytes. What does hide the result is the tier: the suite is `tier = "full"`,
+so CI's `--tier core` job never selects it, and nothing in CI reports these
+42.
+
 ## Registration
 
 Registering this decoder needed two more real bugs closed first, both
