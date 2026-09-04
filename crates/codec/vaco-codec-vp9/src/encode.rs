@@ -1,95 +1,31 @@
-//! VP9 encode (issues #329/C-33a and #330/C-33b): a real, spec-conformant
-//! all-intra key-frame bitstream writer with real partition-size decision,
-//! real intra mode decision, and real (lossless) residual coding.
+//! VP9 encode: an all-intra key-frame bitstream writer with content-adaptive
+//! partition and intra-mode decisions and lossless residual coding.
 //!
-//! # What #329 shipped and what #330 changes
+//! The partition search uses per-pixel mean-corrected variance at 64/32/16;
+//! it never descends below 8x8. Intra mode uses SATD over all ten §8.5.1 modes
+//! on the coding block's top-left 4x4, using reconstructed above/left edges.
+//! This is a heuristic rather than full RDO: simulating each candidate's
+//! cascade over a larger block would be more expensive, while locally coherent
+//! content makes the 4x4 cost a useful proxy.
 //!
-//! #329 (C-33a) landed the bitstream plumbing — every syntax element is
-//! written by *computing* the same context [`crate::decode`] computes and
-//! *choosing* the bit that context implies, not by hand-assembling a byte
-//! string that happens to decode — but every choice was fixed: largest
-//! partition down to a hardcoded `BLOCK_8X8`, `DC_PRED` for luma and
-//! chroma, `skip = 1` always (no residual at all, and the source pixels
-//! were never even read).
+//! Residual coding predicts each 4x4 unit, forward-transforms its residual,
+//! reconstructs it into the encoder picture, then sets the block `skip` bit
+//! only when every unit is zero. The fixed lossless strategy (`base_q_idx = 0`,
+//! `tx_mode = ONLY_4X4`) makes the Walsh-Hadamard transform exact; the encoder
+//! and decoder share context/table machinery so syntax decisions cannot diverge.
+//! [`vaco_codec_dsp_idct::vp9::forward_wht4x4`] supplies the forward transform
+//! because VP9 specifies only the inverse; see its docs for derivation and
+//! verification.
 //!
-//! #330 (C-33b) replaces all three fixed choices with real ones, at exactly
-//! the call sites #329's own module doc named:
+//! # Scope
 //!
-//! - **Partition**: `should_split` — a per-pixel mean-corrected-variance
-//!   heuristic (via `vaco_codec_dsp_mecmp::variance`) against a fixed
-//!   threshold, checked at 64/32/16 (never below 8x8, which stays out of
-//!   scope — see "What stays out of scope" below).
-//! - **Intra mode**: `choose_mode` — SATD (`vaco_codec_dsp_mecmp::satd`)
-//!   over all ten §8.5.1 modes, evaluated at the coding block's own
-//!   top-left 4x4 transform unit using the real, already-reconstructed
-//!   above/left edges. This is a heuristic, not full RDO: VP9's transform
-//!   granularity is always 4x4 here (`tx_mode = ONLY_4X4`, matching #329),
-//!   so a mode signalled once per coding block is actually applied via up
-//!   to 256 cascading 4x4 predictions (each depending on the previous
-//!   one's own reconstruction) — evaluating the true cost would mean
-//!   simulating that whole cascade once per candidate mode. Evaluating
-//!   only the top-left 4x4, where a real decoder's own reconstruction
-//!   already lives, is far cheaper and, since VP9 content is usually
-//!   locally coherent, a reasonable proxy for the whole block's cost.
-//! - **Residual**: real per-4x4 reconstruction (prediction, forward
-//!   transform, real coefficient token coding) replaces "no residual at
-//!   all" — see "How residual coding works" below.
+//! The writer emits one all-intra key frame at a time, for 4:2:0 8-bit input
+//! whose dimensions are exact multiples of 64. It supports only `NONE`/`SPLIT`
+//! partition decisions and no lossy quantization, rate control, or inter frames.
+//! `vaco-codec-dsp-ratecontrol` is reserved for a future lossy mode.
 //!
-//! Because every neighbour is no longer forced `skip = true`/`DC_PRED`,
-//! the skip-context and y-mode-context lookups that #329 could shortcut to
-//! a constant now read the real per-block state (`EncCtx`'s own `mi_grid`/
-//! `mi_at`) the same way [`crate::decode`]'s own context lookups do.
-//!
-//! # How residual coding works
-//!
-//! This encoder stays **lossless** (`base_q_idx = 0`, as #329 already
-//! wrote): `dc_q`/`ac_q(qindex = 0)` are both exactly 4, which is what
-//! makes VP9's Walsh-Hadamard transform an exact (not merely
-//! rate-distortion-tuned) round trip — decoding this crate's own output
-//! must reproduce the source pixels *exactly*, not "close enough", which
-//! is a far more exacting and easier-to-verify correctness bar than a
-//! quantised, lossy pipeline would be. [`vaco_codec_dsp_idct::vp9::forward_wht4x4`]
-//! is the forward transform this needs (added there since the VP9 bitstream
-//! specification only defines the *inverse* WHT — see its own doc for how
-//! it was derived and verified); `crate::tokens`'s `encode_tokens` is the
-//! write-side counterpart of `decode_tokens`, sharing its context/
-//! Pareto-table machinery so the two directions cannot silently diverge.
-//!
-//! Per coding block: every plane's every 4x4 transform unit is predicted
-//! (real cascading intra prediction, reading already-reconstructed
-//! neighbour samples exactly as `crate::decode::predict_block` does),
-//! subtracted from the source to get a residual, forward-transformed, and
-//! reconstructed back into this encoder's own picture buffer — *before*
-//! the block-level `skip` bit is decided, since reconstruction is
-//! identical either way when every transform unit's residual is truly
-//! zero (which is exactly the condition `skip = true` requires). Once
-//! every plane's every 4x4 is known, `skip` is set `true` only if none of
-//! them had a single nonzero coefficient; otherwise every one is coded
-//! (some individually all-zero, at the cost of one `more_coefs = false`
-//! bit each — normal VP9 behaviour, not a bug).
-//!
-//! Lossless still means every leaf's transform size is fixed at 4x4
-//! (`tx_mode = ONLY_4X4` — VP9 has no lossless 8x8+ transform), so a real
-//! partition decision changes *how many blocks share one signalled mode*,
-//! not the transform granularity itself.
-//!
-//! # What stays out of scope
-//!
-//! - **Sub-8x8 partitions** (`BLOCK_4X4`/`4X8`/`8X4`, and `PARTITION_HORZ`/
-//!   `VERT` at any size): the partition tree here only ever chooses
-//!   `NONE` or `SPLIT`, same as #329. Adding rectangular splits and
-//!   per-4x4 sub-block modes is a real, separate increment, not folded in
-//!   here.
-//! - **Lossy coding** (a real quantiser, RD-optimal quantisation, rate
-//!   control): `base_q_idx` stays `0`. `vaco-codec-dsp-ratecontrol` exists
-//!   for when this encoder gains one; nothing here calls into it yet.
-//! - **Inter frames**: still all-intra, one key frame at a time, as #329
-//!   left it.
-//!
-//! # Known limitation carried over from #329: frame dimensions must be
-//! exact multiples of 64
-//!
-//! Unchanged from #329 — see [`encode_keyframe`]'s doc.
+//! A partition decision changes how many blocks share one signalled mode, not
+//! transform granularity: every leaf remains 4x4 in lossless VP9.
 
 use vaco_codec_core::machine::{Accept, Machine};
 use vaco_codec_core::{Caps, Encoder, EncoderDesc};
@@ -312,8 +248,8 @@ impl<'a> Source<'a> {
 /// A per-pixel mean-corrected-variance cutoff for the partition search
 /// below: a block whose source content varies more than this, on average
 /// per pixel, is considered worth splitting. Not derived from any
-/// rate-distortion measurement — a reasonable heuristic per #330's own
-/// scope, not RDO. `vaco_codec_dsp_mecmp::variance`'s result scales with
+/// rate-distortion measurement — a bounded heuristic, not RDO.
+/// `vaco_codec_dsp_mecmp::variance`'s result scales with
 /// block area (it is literally `area * per-pixel variance`, see that
 /// function's own doc), so dividing by area before comparing is what makes
 /// one constant meaningful across the 64/32/16 sizes this is checked at.
@@ -325,7 +261,7 @@ const VARIANCE_SPLIT_THRESHOLD_PER_PIXEL: u32 = 128;
 /// reference of the same size is exactly the source block's own variance.
 const ZERO_BLOCK: [u8; 4096] = [0u8; 4096];
 
-/// Real partition-size decision (issue #330): should the block at `(r, c)`
+/// Partition-size decision: should the block at `(r, c)`
 /// of size `bsize` (interior superblock-aligned, per the module's
 /// multiples-of-64 requirement) split into four quadrants of half the
 /// size? See [`VARIANCE_SPLIT_THRESHOLD_PER_PIXEL`]'s doc for what "should"
@@ -420,7 +356,7 @@ fn assemble_edges(
     (above_row, left_col)
 }
 
-/// Real intra mode decision (issue #330): SATD over all ten §8.5.1 modes,
+/// Intra mode decision: SATD over all ten §8.5.1 modes,
 /// evaluated at plane `plane`'s top-left 4x4 unit of the coding block at
 /// `(r, c)`/`bsize` — see the module doc's "Intra mode" bullet for why the
 /// top-left 4x4 stands in for the whole (possibly much larger) block.
@@ -495,9 +431,9 @@ struct PendingUnit {
     tokens: [i32; 16],
 }
 
-/// Encode one coding block (issue #330): real mode decision
-/// ([`choose_mode`]), real per-4x4 cascading intra reconstruction, and a
-/// real `skip` decision, replacing #329's fixed `DC_PRED`/`skip = 1`. See
+/// Encode one coding block: mode decision ([`choose_mode`]), real per-4x4
+/// cascading intra reconstruction, and a `skip` decision replacing fixed
+/// `DC_PRED`/`skip = 1`. See
 /// the module doc's "How residual coding works" for the two-pass shape
 /// (reconstruct everything first, decide `skip`, then either write real
 /// tokens or write none).
@@ -696,7 +632,7 @@ fn encode_leaf(
 }
 
 /// Write one partition recursion level: real content-adaptive `NONE`
-/// (via [`should_split`]) vs `SPLIT` (issue #330), never below `BLOCK_8X8`
+/// (via [`should_split`]) vs `SPLIT`, never below `BLOCK_8X8`
 /// — see the module doc for scope.
 fn encode_partition(
     be: &mut Be,
@@ -775,10 +711,10 @@ fn encode_partition(
 /// inter-only tables (`inter_mode_probs`, `y_mode_probs` — note: the
 /// *adaptive* one, not `kf_y_mode_probs` — `partition_probs`, `mv_probs`,
 /// ...) are read at all, matching `parse_compressed_header`'s own
-/// `if !frame_is_intra` gate. Unchanged from #329: `coef_probs` stays at
-/// its defaults (matching [`EntropyContext::default`], which is what
-/// [`encode_keyframe`] hands [`tokens::encode_tokens`]) since #330's own
-/// real coefficient coding still has no reason to forward-update them.
+/// `if !frame_is_intra` gate. `coef_probs` stays at its defaults (matching
+/// [`EntropyContext::default`], which is what [`encode_keyframe`] hands
+/// [`tokens::encode_tokens`]) because this fixed strategy does not
+/// forward-update them.
 fn encode_compressed_header() -> Vec<u8> {
     let mut be = Be::new();
     be.write_bool(128, false); // mandatory leading marker, §9.2.1.
@@ -867,10 +803,8 @@ fn calc_max_log2_tile_cols(sb64_cols: usize) -> u32 {
     max_log2.saturating_sub(1)
 }
 
-/// Encode one all-intra VP9 key frame from `frame`'s actual pixel content
-/// (issue #330 — #329's `encode_keyframe` took only `width`/`height` and
-/// never read a pixel) — see the module doc for exactly what "encode"
-/// means here.
+/// Encode one all-intra VP9 key frame from `frame`'s actual pixel content;
+/// see the module doc for exactly what "encode" means here.
 ///
 /// # Errors
 /// [`Error::Unsupported`] if `width`/`height` are zero, not exact
@@ -1032,11 +966,6 @@ const VPCC_RECORD: [u8; 12] = [1, 0, 0, 0, 0, 0, 0x82, 2, 2, 2, 0, 0];
 /// superframe" and fall through to decoding the whole (padded) buffer
 /// as one frame, same as before.
 ///
-/// Left an open question after this fix: *why* a real, correctly-shaped
-/// superframe index was rejected. Timeboxed rather than chased further
-/// once the simpler, verified fix was in hand -- see this session's
-/// writeup for the measurements above, in case whoever looks at
-/// multi-frame superframes here next needs them.
 fn disambiguate_superframe_marker(mut bytes: Vec<u8>) -> Vec<u8> {
     if bytes.last().is_some_and(|&last| last & 0xE0 == 0xC0) {
         bytes.push(0);
