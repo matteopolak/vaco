@@ -31,7 +31,7 @@
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{CodecId, CodecParameters};
-use vaco_core::{Error, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Error, ExactDuration, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
 use vaco_format_core::{
     Demuxer, DemuxerDesc, FormatFlags, ParserProvider, SeekFlags, SeekTarget, Stream,
@@ -224,6 +224,10 @@ impl Demuxer for TtaDemuxer {
             i64::try_from(micros).unwrap_or(i64::MAX),
         ))
     }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.stream.duration_exact()
+    }
 }
 
 #[cfg(test)]
@@ -271,6 +275,17 @@ mod tests {
         assert_eq!(pkt.payload(), payload.as_slice());
         assert_eq!(pkt.pts.ticks(), Some(0));
         assert!(matches!(d.read_packet(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn aggregate_duration_keeps_the_native_sample_clock_exact() {
+        let data = build_file(44_100, 2, 46_080, &[0xABu8; 100]);
+        let d = TtaDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
+
+        assert_eq!(
+            d.duration_exact().map(vaco_core::ExactDuration::as_ratio),
+            Some((256, 245))
+        );
     }
 
     #[test]
