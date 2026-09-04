@@ -831,11 +831,29 @@ writes a couple of packets at `-t 0` rather than zero, an edge-case
 quirk left as an accepted divergence following this project's own
 precedent for such cases.
 
+### MP4 `-decryption_key`
+
+An input-scoped `-decryption_key` accepts exactly 32 hexadecimal digits and
+passes the resulting AES-128 key to the already-selected MP4/MOV demuxer. The
+format registry remains the source of truth for selection: the CLI compares
+the selected descriptor with `vaco_demux_mp4::DEMUXER` and uses MP4's typed
+constructor only when non-default options are required. A key on another
+format or on an output is an error, as is a fractional byte or non-hex digit.
+
+This is one deliberately narrow private demuxer option, not a second generic
+option system. Adding another still requires either another typed, fully tested
+route or the general descriptor option-schema work described below. The CENC
+integration test uses `ffmpeg` as a black-box writer/oracle, streams both the
+clear file and the keyed encrypted file through the real CLI to `framemd5`, and
+compares all 20 packet `(duration, size, MD5)` values exactly. Full line parity
+is outside this slice because the existing MP4 edit-list convention shifts the
+first AAC DTS by 1024 ticks relative to the reference.
+
 ## How to change it
 
-* **Adding an option** starts in `vaco-cli-core`'s table, not here. This crate
-  binds what that table already knows about; an option absent from the table is
-  invisible to `split`.
+* **Adding a command option** starts in `vaco-cli-core`'s table. A component-
+  private option instead needs an entry in `cli::Oracle`'s small reflected
+  lists and a complete consumer in this crate; otherwise `split` refuses it.
 * **Changing observable output needs a reference run in the commit.** Every
   wording and every exit code in `src/exit.rs`, `src/select.rs` and `src/exec.rs`
   carries an `OBSERVED` comment naming the invocation it came from. Probe with
@@ -935,11 +953,16 @@ reads), `vaco-limits`, `vaco-core`. `vaco-pixfmt`, `vaco-sampfmt` and
 `vaco-chlayout` (CL-04, second wave) back `-pix_fmts`, `-sample_fmts` and
 `-layouts` respectively — all three are layer-1 model crates, so this is a
 downward dependency like every other one above, not a new kind of edge.
-`vaco-expr` (CL-22) backs `-force_key_frames expr:…`, sharing the same
+`vaco-demux-mp4` supplies the typed constructor for the input-scoped
+`-decryption_key` exception described above. `vaco-expr` (CL-22) backs
+`-force_key_frames expr:…`, sharing the same
 `AVExpr`-shaped grammar every other expression option in the workspace uses
 rather than a second implementation.
 
-Dev only: `proptest`, `tempfile`, `vaco-demux-matroska`.
+Dev only: `proptest`, `tempfile`, `vaco-demux-matroska`,
+`vaco-format-fixtures`, and `vaco-format-isom`. The CENC integration test also
+uses an installed `ffmpeg` binary as a black-box fixture writer and oracle,
+skipping when it is unavailable.
 
 ## Reported upstream
 

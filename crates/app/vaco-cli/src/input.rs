@@ -79,6 +79,8 @@ pub struct OpenRequest<'a> {
     /// `Discovery::run` is what actually reaches
     /// [`vaco_format_core::Demuxer::reconfigure`] with it (gap 4).
     pub format_opts: Option<&'a FormatOptions>,
+    /// MP4 Common Encryption key supplied by input-scoped `-decryption_key`.
+    pub decryption_key: Option<[u8; 16]>,
 }
 
 /// Open, probe and wrap one input.
@@ -118,6 +120,13 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
         *probe.detect(&mut io, Some(url), None)?.desc
     };
 
+    if req.decryption_key.is_some() && desc.name != vaco_demux_mp4::DEMUXER.name {
+        return Err(Error::Option {
+            name: "decryption_key".to_owned(),
+            detail: format!("not supported by the {} demuxer", desc.name),
+        });
+    }
+
     let inner = if desc
         .flags
         .contains(vaco_format_core::FormatFlags::NEEDNUMBER)
@@ -133,7 +142,19 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
         inner.bind_url(url)?;
         inner
     } else {
-        let mut inner = (desc.open)(opener(url)?, &vaco_registry::Parsers)?;
+        let mut inner: Box<dyn Demuxer> = if let Some(key) = req.decryption_key {
+            Box::new(vaco_demux_mp4::Mp4Demuxer::open(
+                opener(url)?,
+                &vaco_registry::Parsers,
+                format_opts,
+                vaco_demux_mp4::Mp4Options {
+                    decryption_key: Some(key),
+                    ..vaco_demux_mp4::Mp4Options::default()
+                },
+            )?)
+        } else {
+            (desc.open)(opener(url)?, &vaco_registry::Parsers)?
+        };
         // Best-effort for a format whose primary source opened fine but that
         // still wants its own URL for something extra (a `.sub` sidecar next
         // to a normally-opened `.idx`, say): `Unsupported` just means this
@@ -251,6 +272,23 @@ mod tests {
             // Some platforms surface a directory read as invalid data instead;
             // either way it must not be a success.
             other => assert!(matches!(other, Error::InvalidData(_)), "{other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_decryption_key_is_refused_for_a_non_mp4_demuxer() {
+        let req = OpenRequest {
+            force_format: Some("matroska"),
+            decryption_key: Some([0x11; 16]),
+            ..OpenRequest::default()
+        };
+        let error = open(0, "/etc/hosts", &req).unwrap_err();
+        match error {
+            Error::Option { name, detail } => {
+                assert_eq!(name, "decryption_key");
+                assert!(detail.contains("matroska"), "{detail}");
+            }
+            other => panic!("{other:?}"),
         }
     }
 

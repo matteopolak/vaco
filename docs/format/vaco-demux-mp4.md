@@ -705,15 +705,25 @@ into clear and `cenc-aes-ctr` files with
 All packet stream indices, PTS, DTS, sizes and payload bytes matched after
 decryption, both through EOF and after a backward seek into the middle.
 
-**Reachability, measured and not yet fixed:** `vaco -decryption_key <hex>
--i enc.mp4` answers `Unrecognized option 'decryption_key'`. There is no
-demuxer private-option plumbing at all — `DemuxerDesc::open` takes no
-options and `open_boxed` passes `Mp4Options::default()`, so *every*
-`Mp4Options` field (`-ignore_editlist`, `-use_tfdt`, …) is library-only
-today. Decryption is therefore complete at the library boundary and
-unreachable from the binary; making demuxer options reachable is one
-cross-cutting change (`vaco-format-core` descriptor, registry, CLI option
-tables) that belongs to all ~90 demuxers, not to this crate.
+**2026-09-04: binary reachability.** Input-scoped `vaco -decryption_key
+<32 hex digits> -i enc.mp4` now reaches the same typed `Mp4Options` path.
+The registry still chooses the demuxer; only when that chosen descriptor is
+MP4/MOV does the CLI use `Mp4Demuxer::open` with the supplied key. A malformed
+key, output-scoped key, or key attached to another demuxer is refused instead
+of silently ignored. This is intentionally narrower than general demuxer
+private-option plumbing: every other `Mp4Options` field (`-ignore_editlist`,
+`-use_tfdt`, …) remains library-only.
+
+Measured against `ffmpeg 9.0.1`, which wrote clear and `cenc-aes-ctr` AAC
+stream copies from one encoding: both binaries' `framemd5` output covered 20
+packets. Each binary's clear and keyed-encrypted `framemd5` output was
+byte-identical, and Vaco's 20 `(duration, size, MD5)` packet tuples matched the
+reference exactly. The full lines deliberately are not compared across
+binaries: the existing edit-list convention shifts Vaco's first AAC DTS from
+`-1024` to `0`, which is independent of encryption. The integration test
+invokes the public CLI entry point and names real output files, so the key must
+traverse argument grouping, probing, MP4 open, packet decryption, stream copy,
+and the hash muxer.
 
 **Not implemented, named explicitly**: the reference's `-decryption_keys`
 (per-`KID` dictionary — one key for every protected track is what

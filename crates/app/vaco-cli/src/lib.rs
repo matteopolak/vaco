@@ -187,6 +187,7 @@ where
             whitelist: white.as_deref(),
             blacklist: black.as_deref(),
             format_opts: Some(&spec.format_opts),
+            decryption_key: spec.decryption_key,
         };
         let mut opened = input::open(spec.index, &spec.url, &req).map_err(|e| {
             let av = AvError::of(&e);
