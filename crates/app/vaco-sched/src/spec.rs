@@ -169,9 +169,7 @@ pub(crate) enum KindSpec {
     Mux {
         /// Declares streams; consumed into a
         /// [`vaco_format_core::mux::MuxWriter`] at [`PipelineSpec::build`]
-        /// (M8/M9 — `MuxBuilder` enforces the ordering that used to live in
-        /// this crate's own `MuxWork`, gap 8 in
-        /// `planning/INTERFACE-GAPS.md`).
+        /// (M8/M9); `MuxBuilder` owns that ordering rather than `MuxWork`.
         ///
         /// `Option` purely for the ownership dance of `MuxBuilder`'s
         /// consuming `with_*` methods: [`PipelineSpec::set_output_metadata`]
@@ -364,8 +362,7 @@ impl PipelineSpec {
     /// caller preference, and `MuxBuilder` is what now owns asking. Every
     /// stream [`PipelineSpec::map`] adds against the returned [`OutputRef`]
     /// goes through [`MuxBuilder::add_stream`], so the codec-compatibility
-    /// check (M15, `query_codec`) runs before this crate's own `MuxWork` ever
-    /// sees the stream — gap 8 in `planning/INTERFACE-GAPS.md`.
+    /// check (M15, `query_codec`) runs before `MuxWork` sees the stream.
     pub fn add_output_with(&mut self, muxer: Box<dyn Muxer>, options: &FormatOptions) -> OutputRef {
         let builder = MuxBuilder::new(muxer, options);
         let label = format!("output {}", self.nodes.len());
@@ -385,16 +382,9 @@ impl PipelineSpec {
     /// [`Muxer::set_metadata`] at [`MuxBuilder::open`] (M30) — after every
     /// stream is declared and time bases are settled, but before the header.
     ///
-    /// This is the ordering half of gap 8 (`planning/INTERFACE-GAPS.md`): the
-    /// CLI used to call `set_metadata` on the muxer directly, before
-    /// `PipelineSpec::map` had declared a single stream, because there was no
-    /// later point at which it could still reach the muxer. `vaco-mux-mp4`
-    /// and `vaco-mux-matroska` both resolve per-stream metadata lazily, at
-    /// `write_header` time, to survive exactly that ordering — see gap 8a's
-    /// history. Calling this before [`PipelineSpec::build`] restores the
-    /// ordering `Muxer::set_metadata`'s own doc comment describes; the lazy
-    /// resolution in those two crates is no longer required by this path, but
-    /// changing them is out of this crate's scope.
+    /// Call this before [`PipelineSpec::build`]. The builder retains the
+    /// metadata until every stream exists and applies it before writing the
+    /// header, matching [`Muxer::set_metadata`]'s contract.
     ///
     /// # Errors
     ///
@@ -418,8 +408,7 @@ impl PipelineSpec {
     /// Supply the bitstream filters M6 may need
     /// ([`vaco_format_core::mux::BsfChain`]/[`BsfProvider`]), so a stream the
     /// muxer's `check_bitstream` flags is actually converted instead of being
-    /// written unfiltered — the second face of gap 8
-    /// (`planning/INTERFACE-GAPS.md`).
+    /// written unfiltered.
     ///
     /// Without a call to this, an output's M6 stage runs against
     /// [`vaco_format_core::mux::NoBsfs`], which errs if any muxer ever asks
@@ -533,9 +522,8 @@ impl PipelineSpec {
     /// frame's own dimensions and rebuilds its plan if they change.
     ///
     /// `threads` is `vaco_scale::ScaleOptions::threads` for the
-    /// [`vaco_scale::Scaler`] this converter builds (D2,
-    /// `planning/PERF-PROGRAMME.md` track D) -- `0`/`1` both mean "run on
-    /// the caller's thread", matching that crate's own convention.
+    /// [`vaco_scale::Scaler`] this converter builds; `0` and `1` both mean
+    /// "run on the caller's thread", matching that crate's convention.
     ///
     /// # Errors
     ///
@@ -573,8 +561,8 @@ impl PipelineSpec {
     /// The audio twin of [`add_converter`](Self::add_converter), for the same
     /// reason: a decoder's real output format and an encoder's
     /// [`Encoder::accepted_sample_fmts`] can disagree — decoding AAC's planar
-    /// float into `pcm_s16le` (packed s16) is the motivating case,
-    /// `planning/E2E-GAPS.md` #3 — and nothing sat between them.
+    /// float into `pcm_s16le` (packed s16) is the motivating case — and nothing
+    /// sits between them without this node.
     /// `vaco-resample::convert` does the conversion; this is only the wiring.
     /// Channel layout and sample rate are unchanged by this node — see
     /// [`crate::node::AudioConverterSide`]'s docs for why remixing/resampling

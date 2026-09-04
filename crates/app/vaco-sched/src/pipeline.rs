@@ -722,15 +722,10 @@ fn build_work(
             builder,
             stream_of_port,
         } => {
-            // `MuxBuilder::open` runs M12 (`init`, then each stream's time
-            // base is re-read once `init` has had its say), M30 (metadata,
-            // gap 1) and M9 (the header) in that order — the same three
-            // steps this arm used to hand-roll against a raw `dyn Muxer`,
-            // which is gap 8 in `planning/INTERFACE-GAPS.md`: it is also why
-            // `set_metadata` used to run before any stream existed, and why
-            // M6 (bitstream filters) and M15 (`query_codec`) were never
-            // reached from this crate at all. `builder` is `None` only if
-            // this node's output was already consumed, which
+            // `MuxBuilder::open` runs M12 (`init`, then re-read time bases),
+            // M30 (metadata), and M9 (the header) in that order. It also owns
+            // M6 bitstream filtering and M15 codec compatibility. `builder`
+            // is `None` only after this node's output was consumed, which
             // `PipelineSpec::build` never does twice.
             let writer = builder
                 .ok_or(Error::InvalidData(

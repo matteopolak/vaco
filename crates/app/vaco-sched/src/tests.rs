@@ -77,9 +77,8 @@ struct MuxLog {
     packets: Vec<(u32, Option<i64>, Option<i64>)>,
     /// File-level tags [`Muxer::set_metadata`] was called with.
     metadata_tags: Vec<(String, String)>,
-    /// `(streams declared, header already written)` at the moment
-    /// `set_metadata` ran, or `None` if it was never called — the ordering
-    /// gap 8 (`planning/INTERFACE-GAPS.md`) is about.
+    /// `(streams declared, header already written)` when `set_metadata` ran,
+    /// or `None` if it was never called.
     metadata_snapshot: Option<(usize, bool)>,
 }
 
@@ -332,11 +331,9 @@ fn stream_copy_moves_every_packet() {
     assert!(log.packets.windows(2).all(|w| w[0].2 < w[1].2));
 }
 
-/// Gap 8 (`planning/INTERFACE-GAPS.md`): `MuxWork` used to drive a raw
-/// `dyn Muxer`, so the CLI's `set_metadata` call landed before
-/// `PipelineSpec::map` had declared a single stream. `PipelineSpec::build`
-/// now goes through `MuxBuilder::open`, which calls `set_metadata` at M30 —
-/// after every stream and its time base are settled, but before the header.
+/// `PipelineSpec::build` goes through `MuxBuilder::open`, which calls
+/// `set_metadata` after every stream and time base are settled but before the
+/// header.
 /// `RecordingMuxer::set_metadata` records both timing facts and the tags
 /// themselves, so this test fails if either the ordering regresses or the
 /// call is silently dropped.

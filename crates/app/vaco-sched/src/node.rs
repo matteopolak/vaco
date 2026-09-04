@@ -408,11 +408,9 @@ impl Side for EncoderSide {
 pub(crate) struct ConverterSide {
     dst_format: PixFmt,
     limits: Limits,
-    /// D2 (`planning/PERF-PROGRAMME.md` track D): `-filter_threads`,
-    /// resolved by the CLI and threaded down through
-    /// `PipelineSpec::add_converter` -- `vaco-scale`'s own library default
-    /// stays serial (`ScaleOptions::default()`'s `threads: 0`); only the
-    /// CLI-driven construction site changes, per that item's own framing.
+    /// `-filter_threads`, resolved by the CLI and passed through
+    /// `PipelineSpec::add_converter`. The `vaco-scale` library default remains
+    /// serial (`ScaleOptions::default()` uses `threads: 0`).
     threads: i32,
     scaler: Option<Scaler>,
     budget: Budget,
@@ -982,17 +980,9 @@ pub(crate) fn link_time_base(format: &LinkFormat) -> Rational {
 
 /// A muxer already past its header, mid-file.
 ///
-/// The ordering rules — M1 to M11, the interleave queue, the bitstream-filter
-/// stage — are `vaco-format-core`'s, not this crate's:
-/// [`vaco_format_core::mux::MuxWriter`] already implements and tests all of
-/// them, and a second implementation of packet ordering was exactly the kind
-/// of duplication D19 exists to prevent. This struct used to be that second
-/// implementation — driving a raw `dyn Muxer` through hand-rolled `init`,
-/// header, interleave-queue and trailer bookkeeping — which is gap 8 in
-/// `planning/INTERFACE-GAPS.md`: it is also why `set_metadata` had to be
-/// called before any stream existed, and why the bitstream-filter stage
-/// (M6) and the codec-compatibility check (M15) were never reached at all.
-/// [`crate::spec::PipelineSpec::build`] now calls
+/// The ordering rules, interleave queue, and bitstream-filter stage belong to
+/// [`vaco_format_core::mux::MuxWriter`], avoiding a second packet-ordering
+/// implementation here. [`crate::spec::PipelineSpec::build`] calls
 /// [`vaco_format_core::mux::MuxBuilder::open`] instead, so by the time a
 /// `MuxWork` exists the header is already written and every stream already
 /// passed `query_codec`; this struct's only job is feeding packets to the

@@ -1,9 +1,7 @@
 //! Two drivers, one state machine.
 //!
-//! [`Pipeline`] is a step function. A driver is whatever calls it. That is the
-//! whole of D18's "parallelism optional at the API level, not merely
-//! feature-gated at the call site": this file contains the only threading in
-//! the crate, and a caller that writes
+//! [`Pipeline`] is a step function; a driver is whatever calls it. This file
+//! contains the crate's only threading, and a caller can write:
 //!
 //! ```no_run
 //! # use vaco_sched::{Driver, Pipeline, PipelineSpec};
@@ -12,61 +10,25 @@
 //! # let _ = finish; Ok(()) }
 //! ```
 //!
-//! compiles and runs unchanged on `wasm32-unknown-unknown`, where
+//! The same code runs on `wasm32-unknown-unknown`, where
 //! [`Driver::threads`] reports `1` and the loop is the serial one. There is no
 //! `#[cfg]` in the caller and no second API to learn.
 //!
 //! # Why `std::thread` and not `rayon`
 //!
-//! Three reasons, in order of weight.
+//! Pipeline jobs are coarse units selected by the planner, not a divisible
+//! iteration space. Keeping them out of `rayon` also preserves the invariant
+//! that data-parallel workers never perform queue operations and keeps the core
+//! portable without a native-only dependency. An async runtime adds no value
+//! for this CPU-bound graph with little waiting.
 //!
-//! 1. Plan 14 §7.1 reserves `rayon` for data parallelism *inside* a stage and
-//!    states the invariant that no `rayon` closure performs a queue operation.
-//!    A pipeline stage in a `rayon` worker is the deadlock its own
-//!    documentation warns about. That invariant is easiest to keep by not
-//!    having the dependency here at all.
-//! 2. `rayon` on `wasm32-unknown-unknown` is a `NATIVE_ONLY` problem, and D18's
-//!    allowlist default exists precisely so that OS coupling does not spread.
-//!    Keeping it out of this crate keeps the core portable by construction
-//!    rather than by exemption.
-//! 3. There is no work-stealing to do. The jobs in one wave are a handful of
-//!    coarse, long-running units chosen by the planner, not a divisible
-//!    iteration space.
-//!
-//! And emphatically not an async runtime: the workload is CPU-bound with under
-//! ten stages and almost no waiting, so an executor would multiplex something
-//! we do not have while colouring every trait in the tree. D10 makes any such
-//! adoption a reviewed decision, and the single-threaded requirement that
-//! motivates the whole design is satisfied by a step function anyway.
-//!
-//! # A measurement that came out backwards
-//!
-//! The first threaded driver opened a `std::thread::scope` per wave and spawned
-//! one thread per job. It is the simplest correct design and it has no channel
-//! in it at all, which made the no-deadlock argument a sentence. Measured on a
-//! 200-packet transcode it was **45x to 60x slower than serial** — 300us
-//! against 14-19ms — and it stayed slower at every job grain the bench could
-//! reach. The arithmetic is not subtle in hindsight: a wave is a handful of
-//! microseconds of work and a thread spawn is tens of microseconds, and a
-//! 200-packet transcode is roughly 800 jobs, so the driver spent its whole life
-//! in `clone3`.
-//!
-//! That is plan 12's PF-0.x pattern for the fifth time on this project, and the
-//! reason `benches/pipeline.rs` exists. The replacement below spawns `n`
-//! workers **once per run** and hands each wave's jobs to them over
-//! `std::sync::mpsc`, which is in `std` and therefore not a dependency
-//! adoption. The blocking that buys back is confined to this file: a worker
-//! blocks waiting for a job and the driver blocks waiting for results, and
-//! neither ever waits on a queue, a lock, or another worker.
-//!
-//! # Why it still cannot deadlock
-//!
-//! The wave protocol is: dispatch exactly `k` jobs, then receive exactly `k`
-//! messages. Every dispatched job produces exactly one message — `Done` from
-//! the normal path, or `Lost` from a drop guard if the job panics while
-//! unwinding — so the count can never come up short and the driver can never
-//! wait for a message nobody will send. Workers never talk to each other and
-//! never touch a wire.
+//! Spawning a thread per wave measured **45x to 60x slower than serial** on a
+//! 200-packet transcode: 14–19 ms rather than 300 µs. Workers are therefore
+//! spawned once per run and receive each wave through `std::sync::mpsc`.
+//! The driver dispatches exactly `k` jobs and receives exactly `k` messages;
+//! normal completion sends `Done`, while a panic drop guard sends `Lost`.
+//! Workers never communicate with each other or touch a wire, so the driver
+//! cannot wait for a result that no dispatched job will send.
 
 #[cfg(not(target_family = "wasm"))]
 use std::sync::mpsc;
