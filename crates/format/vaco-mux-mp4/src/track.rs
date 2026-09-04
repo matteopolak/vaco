@@ -212,7 +212,7 @@ impl TrackState {
     /// to non-negative), *not* `-dts` of that sample.
     ///
     /// The reference derives `media_time` from the encoder's original,
-    /// possibly-negative `dts` (measured, CONFORMANCE-FINDINGS 49: an AAC
+    /// possibly-negative `dts` (measured: an AAC
     /// track with `pts == dts` throughout, so every `cts_offset` is `0`,
     /// still gets a nonzero `media_time` when its own first `dts` is
     /// negative — a fact `cts_offset` alone cannot see). This crate cannot
@@ -240,7 +240,7 @@ impl TrackState {
     /// and `cts_offset` is non-negative there, which is every case this
     /// crate can currently observe (see that method's docs on why the
     /// upstream `dts` normalization makes this the effective default).
-    /// Measured (CONFORMANCE-FINDINGS 49): a reordered video track's
+    /// Measured: a reordered video track's
     /// `elst.segment_duration`/`tkhd`/`mvhd` state its **full**, un-adjusted
     /// duration — the reorder delay is not lost time, only reordered time —
     /// while the reference's own encoder-priming audio case (not
@@ -419,7 +419,7 @@ mod tests {
     /// A reordered video track: `dts` starts negative (decode-ahead delay)
     /// but the first sample's `pts` is still `0`, so nothing is actually
     /// missing from what gets presented — `media_time` is nonzero but
-    /// `presented_duration` keeps the full span (CONFORMANCE-FINDINGS 49).
+    /// `presented_duration` keeps the full span.
     #[test]
     fn reordering_sets_media_time_without_shrinking_the_presented_duration() {
         let mut t = TrackState::new(1, 12800, entry(), params());
@@ -440,7 +440,7 @@ mod tests {
     /// where the reference would state `1024`. This is
     /// `TrackState::media_time`'s documented pipeline-normalization gap,
     /// demonstrated directly rather than only asserted in prose
-    /// (CONFORMANCE-FINDINGS 49): the real pipeline never actually hands
+    /// : the real pipeline never actually hands
     /// this crate a negative `dts` (something upstream already normalizes it
     /// to `0` first), so `media_time` degrades to this rather than doing
     /// worse than it does.

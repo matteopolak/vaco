@@ -8,22 +8,6 @@
 //! about *when* to write what: accumulating samples into tables, choosing chunk
 //! boundaries, deciding a fragment boundary, and driving the two-pass rewrite
 //! `faststart` needs.
-//!
-//! # What is in here
-//!
-//! | Module | Contents |
-//! |---|---|
-//! | [`options`] | [`options::MovFlags`], [`options::MuxOptions`], the brand list |
-//! | [`entry`] | `CodecParameters` → `stsd` sample entry bytes |
-//! | [`track`] | per-track sample accumulation and table compression |
-//! | [`meta`] | `udta`/`meta`/`ilst`, chapters, cover art, `tref` |
-//! | [`brand`] | `ftyp` brand tables per container profile, and the registry descriptors |
-//! | [`progressive`] | non-fragmented `write_header`/`write_packet`/`write_trailer`, incl. faststart |
-//! | [`fragmented`] | `moof`/`mdat` fragment emission and the `movflags` fragmentation policy |
-//! | [`mux`] | [`mux::MovMuxer`]: the `Muxer` impl that dispatches to the two above |
-//!
-//! # What is supported
-//!
 //! Video: H.264 (`avcC`), HEVC (`hvcC`), AV1 (`av1C`), VP8/VP9 (`vpcC`), MJPEG.
 //! Audio: AAC (`esds`), Opus (`dOps`), FLAC (`dfLa`), MP3 (no config box, per
 //! convention). `CodecParameters::extradata` is used **verbatim** as the
@@ -44,14 +28,10 @@
 //! chapters plus the `tref ▸ chap` reference, and the brand/compatible-brand
 //! lists for `mp4`, `mov`, `ipod`, `ismv`, `f4v`, `psp`, `3gp`, `3g2` and
 //! `avif`.
-//!
-//! # What is deferred
-//!
 //! Common Encryption (`pssh`/`saiz`/`saio`/`senc`/`tenc`) is not implemented;
 //! a caller asking for it gets [`vaco_core::Error::Unsupported`]. PCM and
 //! AC-3/E-AC-3 have no sample-entry mapping yet. See
-//! `docs/format/vaco-mux-mp4.md` for the complete list and the issue each
-//! item is tracked under.
+//! `docs/format/vaco-mux-mp4.md` for the complete list.
 
 #![forbid(unsafe_code)]
 

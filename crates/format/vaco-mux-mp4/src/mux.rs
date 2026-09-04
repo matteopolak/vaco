@@ -210,7 +210,7 @@ impl Muxer for MovMuxer {
         // measured on `ffmpeg -c copy -f mp4` across a video-only reordered
         // stream, a video-only non-reordered one, a raw H.264 elementary
         // stream, and a video+audio file: `mvhd.timescale` is `1000` in every
-        // one, never the video track's own (CONFORMANCE-FINDINGS 49; a
+        // one, never the video track's own (a
         // 12800Hz video track timescale stays `1000` at the movie level).
         // Audio-only is the one case that gets the track's own timescale
         // instead (measured: an audio-only AAC/48000 file's `mvhd.timescale`
@@ -414,9 +414,9 @@ impl Muxer for MovMuxer {
     /// crate overrode the trait's no-op default, so `-fflags +bitexact` on
     /// the output never actually reached it — the same "an API with no
     /// caller is invisible to every test you will write" shape
-    /// `planning/AGENT-CONSTRAINTS.md` warns about, found the same way it
+    /// warns about, found by
     /// says to find it: running the command a user would run and comparing
-    /// against the reference (CONFORMANCE-FINDINGS 49).
+    /// against the reference.
     fn set_bitexact(&mut self, bitexact: bool) {
         self.opts.bitexact = bitexact;
     }
@@ -670,8 +670,7 @@ impl MovMuxer {
     ///
     /// Whatever [`entry::build`] returns for the updated parameters —
     /// propagated rather than discarded, since a `let _ =` here would be
-    /// exactly the "the failure was discarded rather than reported" mistake
-    /// `planning/AGENT-CONSTRAINTS.md` warns about for this exact seam.
+    /// exactly the failure that this seam must report.
     fn adopt_new_extradata(&mut self, idx: usize, packet: &Packet) -> Result<()> {
         let Some(new_extradata) = packet.side_data.iter().find_map(|sd| match sd {
             PacketSideData::NewExtradata(buf) => Some(buf.as_slice().to_vec()),
@@ -712,7 +711,7 @@ impl MovMuxer {
         // reference's own bitexact output — and an *explicit*
         // `-metadata title=...` still comes through under bitexact, so this
         // is specifically the auto-populated tool tag, not metadata in
-        // general (CONFORMANCE-FINDINGS 49).
+        // general.
         for (key, value) in &self.metadata.tags {
             if self.opts.bitexact && key.eq_ignore_ascii_case("encoder") {
                 continue;

@@ -68,7 +68,7 @@ pub fn parse_iso639(s: &str) -> Option<Language> {
 /// measured on `ffmpeg -c copy -f mp4` across four inputs, including a raw
 /// H.264 elementary stream with no metadata of its own at all: every one
 /// gets the shell, with an 8-byte, childless `ilst` when there is nothing to
-/// put in it (CONFORMANCE-FINDINGS 49). `None` only when even the shell would
+/// put in it. `None` only when even the shell would
 /// be pointless — never true for the progressive path, which always calls
 /// this, but kept so a future caller with no shell to write is not forced to
 /// invent one.

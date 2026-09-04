@@ -202,7 +202,7 @@ fn build_video(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
     // reference does. Measured on `ffmpeg -c copy -f mp4` across three inputs:
     // a 1:1 source, a raw H.264 stream with no container SAR at all, and a
     // 16:11 source. All three got a `pasp`, carrying `1/1`, `1/1` and `16/11`
-    // respectively (CONFORMANCE-FINDINGS 36).
+    // respectively.
     if v.sample_aspect_ratio.is_defined() && !v.sample_aspect_ratio.is_zero() {
         extensions.extend_from_slice(&writer::pasp(
             u32::try_from(v.sample_aspect_ratio.num).unwrap_or(1),
@@ -332,7 +332,7 @@ fn build_audio(params: &CodecParameters, codec: CodecId, extradata: &[u8]) -> Re
         .unwrap_or(1)
         .max(1);
     // The container's *stored* sample size, not the codec's: measured (see
-    // `planning/AGENT-CONSTRAINTS.md`), a compressed codec's MP4 sample entry
+    // source measurements, a compressed codec's MP4 sample entry
     // states 16 regardless of what the bitstream actually carries.
     let sample_size: u16 = 16;
     let rate_int = u16::try_from(a.sample_rate.min(0xFFFF)).unwrap_or(0xFFFF);

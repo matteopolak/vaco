@@ -4,8 +4,7 @@
 //! ISO/IEC 14496-12 defines the box; it does not define which brands a given
 //! tool writes for `-f ipod`/`-f psp`/etc. Those are measured — `ffmpeg 8.1`,
 //! `-fflags +bitexact` **before** the input so it lands on the muxer and not
-//! the demuxer (the position trap `planning/AGENT-CONSTRAINTS.md` warns
-//! about) — and reproduced exactly. `docs/format/vaco-mux-mp4.md` lists the
+//! the demuxer — and reproduced exactly. `docs/format/vaco-mux-mp4.md` lists the
 //! commands.
 //!
 //! | Profile | Command | `major_brand` | `minor_version` | `compatible_brands` |

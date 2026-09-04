@@ -1,8 +1,5 @@
 //! Fragmented muxing: `moof`/`traf`/`tfhd`/`tfdt`/`trun`, the `movflags`
 //! fragmentation policy, `mfra`, and a buffered `sidx` for `dash`/`cmaf`.
-//!
-//! # Fragment boundaries
-//!
 //! Checked on every packet, in this order, any one of which starts a new
 //! fragment before the packet that triggered it is buffered into the next
 //! one:
@@ -17,9 +14,6 @@
 //! A file with none of these set still fragments — once, at [`finish`] — so
 //! `empty_moov` alone produces one giant final fragment rather than a file
 //! with no samples at all.
-//!
-//! # Byte addressing
-//!
 //! `default_base_moof` (and `dash`/`cmaf`, which imply it) sets
 //! `tfhd.default-base-is-moof` and gives `trun.data_offset` relative to the
 //! start of the enclosing `moof`, so nothing here depends on the fragment's
@@ -33,9 +27,6 @@
 //! only on the first `traf` and relying on the "end of the previous track
 //! fragment's data" carry-over §8.8.7.1 also allows: stating it every time is
 //! one shape to compute instead of two.
-//!
-//! # What is simplified
-//!
 //! One `mfra ▸ tfra` entry is written per track **per fragment**, pointing at
 //! that fragment's first sample when it is a sync sample — correct whenever a
 //! fragment starts on one (always true under `frag_keyframe`, and for a

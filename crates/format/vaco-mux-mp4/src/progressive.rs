@@ -1,8 +1,4 @@
-//! Non-fragmented muxing: `ftyp`/`mdat`/`moov`, chunked interleave, the
-//! trailer rewrite, and `-movflags faststart`.
-//!
-//! # Layout, and why there is no relocation in the common case
-//!
+//! Non-fragmented `ftyp`/`mdat`/`moov` muxing and `-movflags faststart`.
 //! By default (no `faststart`) `mdat` is written **immediately after `ftyp`**,
 //! directly to the sink, and every sample's absolute file offset is therefore
 //! known the instant it is written — nothing is ever shifted. `moov` is built
@@ -20,10 +16,8 @@
 //! `largesize`) — the placeholder's 8 bytes plus the small header's 8 bytes
 //! being exactly the 16 the extended form needs, so nothing already written
 //! after it ever has to move. Measured against `ffmpeg -c copy -f mp4`
-//! (CONFORMANCE-FINDINGS 49): a 6242-byte payload gets the small, 32-bit
+//! : a 6242-byte payload gets the small, 32-bit
 //! form; this crate wrote the extended form unconditionally before this fix.
-//!
-//! # `faststart`
 //!
 //! Putting `moov` *before* `mdat` needs `mdat`'s bytes to already exist when
 //! `moov`'s chunk offsets are computed, and this crate's sink
@@ -341,7 +335,7 @@ fn build_moov(
     // `presented_duration`, not `media_duration`: the reference's `mvhd`
     // duration excludes the initial reorder-delay lead-in an edit list skips
     // over, the same adjustment `build_trak`'s `tkhd` duration makes
-    // (CONFORMANCE-FINDINGS 49).
+    // from source measurements.
     let movie_duration = tracks
         .iter()
         .map(|t| rescale(t.presented_duration(), t.timescale, movie_timescale))
@@ -470,7 +464,7 @@ fn build_trak(
 /// H.264 elementary stream with no container edit-list concept of its own —
 /// and every track in every one of them gets exactly one `elst` entry, `0`
 /// `media_time` included, so this is not conditioned on reordering being
-/// present at all (CONFORMANCE-FINDINGS 49). `rate` is always `1.0`
+/// present at all. `rate` is always `1.0`
 /// (`0x0001_0000`, 16.16 fixed) — no measurement has produced anything else.
 fn build_edts(track: &TrackState, movie_timescale: u32) -> Vec<u8> {
     let media_time = track.media_time();
@@ -502,7 +496,7 @@ fn build_stbl(
     // the specification and load-bearing for byte-identity; measured on
     // `ffmpeg -c copy -f mp4`, the reference writes
     // `stsd stts stss ctts stsc stsz stco` and we had these two the other way
-    // round (CONFORMANCE-FINDINGS 36).
+    // round.
     if let Some(syncs) = track.stss_list() {
         body.extend_from_slice(&writer::stss(&syncs));
     }
@@ -544,7 +538,7 @@ fn build_stbl(
 /// (used when the source declared none at all) needs the total payload size
 /// and the track's own duration, neither of which exists until every sample
 /// has been written. Measured, written unconditionally for both video and
-/// audio (CONFORMANCE-FINDINGS 49): `bufferSizeDB` is always `0`,
+/// audio: `bufferSizeDB` is always `0`,
 /// `maxBitrate == avgBitrate`.
 fn with_btrt(track: &TrackState) -> Vec<u8> {
     let (max_bitrate, avg_bitrate) = track_bitrate(track);
