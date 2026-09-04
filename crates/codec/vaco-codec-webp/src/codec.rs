@@ -96,7 +96,7 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         let mut frame = frame_from_packed(budget, format, width, height, bpp as usize, &buf)?;
         // WebP's ANMF frame duration is in milliseconds.
         frame.time_base = vaco_core::Rational::new(1, 1000);
-        frame.duration = vaco_core::Duration(i64::from(delay_ms));
+        frame.set_duration_ticks(i64::from(delay_ms));
         out.push(frame);
         if out.len() as u32 >= decoder.num_frames() {
             break;

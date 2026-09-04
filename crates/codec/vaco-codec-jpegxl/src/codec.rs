@@ -98,7 +98,7 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
                 i32::try_from(den).unwrap_or(1),
                 i32::try_from(num).unwrap_or(1),
             );
-            frame.duration = vaco_core::Duration(i64::from(render.duration()));
+            frame.set_duration_ticks(i64::from(render.duration()));
         }
         frame.flags = FrameFlags::KEY;
         out.push(frame);

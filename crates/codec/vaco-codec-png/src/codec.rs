@@ -397,7 +397,7 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         // fraction's numerator of ticks in that fraction's own time base.
         let den = if rf.delay_den == 0 { 100 } else { rf.delay_den };
         frame.time_base = vaco_core::Rational::new(1, i32::from(den));
-        frame.duration = vaco_core::Duration(i64::from(rf.delay_num));
+        frame.set_duration_ticks(i64::from(rf.delay_num));
         frame.flags = FrameFlags::KEY;
         out.push(frame);
 
@@ -583,7 +583,7 @@ pub fn encode(frames: &[Frame], _budget: &mut Budget, options: &EncodeOptions) -
 /// `Frame::duration`/`Frame::time_base` as a `(numerator, denominator)` pair
 /// of `u16`s clamped to APNG's `fcTL` field widths.
 fn frame_delay(frame: &Frame) -> (u16, u16) {
-    let num = frame.duration.0.clamp(0, i64::from(u16::MAX)) as u16;
+    let num = frame.duration_ticks().clamp(0, i64::from(u16::MAX)) as u16;
     let den = frame.time_base.den.clamp(1, i32::from(u16::MAX)) as u16;
     (num, den)
 }

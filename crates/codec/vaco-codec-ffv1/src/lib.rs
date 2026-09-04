@@ -467,7 +467,7 @@ mod tests {
         let mut enc = Ffv1Encoder::new(Limits::permissive());
         enc.send(Some(&frame)).expect("send frame");
         let mut packet = enc.receive().expect("receive packet");
-        packet.duration = vaco_core::Duration(1234);
+        packet.duration = vaco_core::Duration::from_micros(1234);
 
         let record = match packet.side_data(PacketSideDataKind::NewExtradata) {
             Some(PacketSideData::NewExtradata(buf)) => buf.as_slice().to_vec(),
@@ -478,7 +478,7 @@ mod tests {
         dec.prime_video(8, 8);
         dec.send(Some(&packet)).expect("send packet");
         let decoded = dec.receive().expect("receive frame");
-        assert_eq!(decoded.duration, vaco_core::Duration(1234));
+        assert_eq!(decoded.duration, vaco_core::Duration::from_micros(1234));
     }
 
     #[test]

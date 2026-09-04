@@ -395,13 +395,13 @@ mod tests {
         let mut packets = Vec::new();
         for &d in &durations_micros {
             let mut frame = checker_frame(3, 3, PixFmt::Rgb24);
-            frame.duration = vaco_core::Duration(d);
+            frame.duration = vaco_core::Duration::from_micros(d);
             enc.send(Some(&frame)).expect("send frame");
             packets.push(enc.receive().expect("receive this frame's own packet"));
         }
         assert_eq!(packets.len(), durations_micros.len());
         for (packet, &d) in packets.iter().zip(&durations_micros) {
-            assert_eq!(packet.duration, vaco_core::Duration(d));
+            assert_eq!(packet.duration, vaco_core::Duration::from_micros(d));
             let mut budget = Budget::new(Limits::permissive());
             let pages = codec::decode(packet.payload(), &mut budget).expect("decode");
             assert_eq!(pages.len(), 1, "packet held more than one page");

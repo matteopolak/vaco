@@ -143,7 +143,7 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         }
         // GIF delay is in hundredths of a second.
         out_frame.time_base = vaco_core::Rational::new(1, 100);
-        out_frame.duration = vaco_core::Duration(i64::from(delay));
+        out_frame.set_duration_ticks(i64::from(delay));
         out_frame.flags = FrameFlags::KEY;
         out.push(out_frame);
 
@@ -232,7 +232,7 @@ fn delay_hundredths(frame: &Frame) -> u16 {
     if frame.time_base.den <= 0 {
         return 0;
     }
-    let hundredths = frame.duration.0 * 100 / i64::from(frame.time_base.den);
+    let hundredths = frame.duration_ticks() * 100 / i64::from(frame.time_base.den);
     hundredths.clamp(0, i64::from(u16::MAX)) as u16
 }
 

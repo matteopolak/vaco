@@ -440,14 +440,14 @@ mod tests {
         let mut packets = Vec::new();
         for (i, &d) in delays_micros.iter().enumerate() {
             let mut frame = checker_frame(3, 3, PixFmt::Rgb24);
-            frame.duration = vaco_core::Duration(d);
+            frame.duration = vaco_core::Duration::from_micros(d);
             frame.pts = vaco_core::Timestamp::new(i64::try_from(i).expect("test index fits i64"));
             enc.send(Some(&frame)).expect("send frame");
             packets.push(enc.receive().expect("receive this frame's own packet"));
         }
         assert_eq!(packets.len(), delays_micros.len());
         for (packet, &d) in packets.iter().zip(&delays_micros) {
-            assert_eq!(packet.duration, vaco_core::Duration(d));
+            assert_eq!(packet.duration, vaco_core::Duration::from_micros(d));
             // Each packet decodes back to exactly one frame: none of them is
             // an APNG holding the others too.
             let mut dec = PngDecoder::new(Limits::permissive());
