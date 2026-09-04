@@ -390,6 +390,11 @@ pub struct AdpcmImaQtDecoder {
     machine: Machine<Frame>,
     limits: Limits,
     cfg: ImaQtConfig,
+    /// Per-channel predictor/step state, carried across `send` calls. See
+    /// `ima::decode_qt_block`'s doc for why this must persist across
+    /// packets rather than reset from every chunk's own (lossy, 9-bit)
+    /// header predictor.
+    state: Option<Vec<ima::ImaState>>,
 }
 impl AdpcmImaQtDecoder {
     #[must_use]
@@ -398,6 +403,7 @@ impl AdpcmImaQtDecoder {
             machine: Machine::new(Caps::empty()),
             limits,
             cfg: ImaQtConfig::default(),
+            state: None,
         }
     }
     #[must_use]
@@ -430,7 +436,11 @@ impl SendReceive for AdpcmImaQtDecoder {
             }
             Accept::Input => {
                 let Some(pkt) = input else { return Ok(()) };
-                let samples = ima::decode_qt_block(pkt.payload(), self.cfg.layout.channels)?;
+                let samples = ima::decode_qt_block(
+                    pkt.payload(),
+                    self.cfg.layout.channels,
+                    &mut self.state,
+                )?;
                 let frame = frame_from_samples(
                     &self.limits,
                     &samples,
@@ -448,6 +458,7 @@ impl SendReceive for AdpcmImaQtDecoder {
     }
     fn flush(&mut self) {
         self.machine.flush();
+        self.state = None;
     }
 }
 

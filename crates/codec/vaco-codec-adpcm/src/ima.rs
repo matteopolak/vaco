@@ -257,6 +257,35 @@ pub(crate) const QT_SAMPLES_PER_CHUNK: usize = 64;
 /// Decode one or more `ima4` chunk-sets (`channels` chunks per set) into
 /// interleaved samples.
 ///
+/// `running` is this track's per-channel predictor/step state, carried
+/// across calls. `None` (only ever true before the very first chunk) seeds
+/// state from that first chunk's own header; every chunk after that
+/// continues the running state and **ignores its own header's predictor/
+/// index bits**.
+///
+/// This is not an approximation: a real `ima4` chunk header only has 9 bits
+/// of predictor precision (`0xFF80` masks off the low 7), so a decoder that
+/// re-seeds from every chunk's header — as an earlier version of this
+/// function did — throws away up to 7 bits of the running predictor's
+/// precision at every chunk boundary. Measured against a real
+/// `ffmpeg -c:a adpcm_ima_qt` mono file: re-seeding from every header
+/// diverged from `ffmpeg`'s own decode at the very first sample past chunk
+/// 0 (a constant, chunk-wide additive bias — e.g. off by exactly 114 on one
+/// real fixture — consistent with a quantised-vs-exact predictor, not a
+/// framing desync), while carrying the running state and using the header
+/// only to seed the first chunk reproduces `ffmpeg`'s decode bit-for-bit
+/// across all 104 chunks of that same file. The header's own predictor
+/// field is therefore redundant past the first chunk — real encoders write
+/// it as a quantised snapshot of state a decoder already has, not as an
+/// authoritative reset — which also matches why encoders can write `0` for
+/// every subsequent chunk's predictor field with no loss: nothing decodes
+/// it. `index`, unlike `predictor`, is not bit-truncated in the header (all
+/// 7 bits are used, enough for the full `0..=88` range), so seeding it from
+/// every chunk's header would not have been *observably* wrong on this
+/// fixture — but doing so anyway would silently diverge from the running
+/// value the moment a real encoder's header and continued state disagree,
+/// so this function does not do that either.
+///
 /// # Errors
 /// [`Error::InvalidData`] if `data`'s length is not a whole number of
 /// `channels`-chunk sets.
@@ -264,7 +293,11 @@ pub(crate) const QT_SAMPLES_PER_CHUNK: usize = 64;
     clippy::integer_division,
     reason = "chunk-set count is an exact division once the is_multiple_of check above holds"
 )]
-pub(crate) fn decode_qt_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
+pub(crate) fn decode_qt_block(
+    data: &[u8],
+    channels: u32,
+    running: &mut Option<Vec<ImaState>>,
+) -> Result<Vec<i16>> {
     let channels = channels.max(1) as usize;
     let set_bytes = QT_CHUNK_BYTES.saturating_mul(channels);
     if set_bytes == 0 || !data.len().is_multiple_of(set_bytes) {
@@ -273,6 +306,18 @@ pub(crate) fn decode_qt_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
         ));
     }
     let sets = data.len() / set_bytes;
+    // Chunk 0's header is trusted only the moment `states` is freshly
+    // (re)created — either nothing has been decoded on this track yet, or
+    // the channel count just changed underneath it — since a fresh state
+    // has no real continuation value to prefer over the header. Once state
+    // exists for the right channel count, it always wins over any later
+    // chunk's own (lossy, 9-bit) header predictor; see this function's own
+    // doc for the measurement establishing that.
+    let just_created = !matches!(running, Some(s) if s.len() == channels);
+    let states = match running {
+        Some(s) if s.len() == channels => s,
+        _ => running.insert(vec![ImaState::new(0, 0); channels]),
+    };
     let mut per_channel: Vec<Vec<i16>> = vec![Vec::new(); channels];
     for s in 0..sets {
         for c in 0..channels {
@@ -283,10 +328,17 @@ pub(crate) fn decode_qt_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
             let &[hi, lo, ref body @ ..] = chunk else {
                 return Err(Error::InvalidData("adpcm_ima_qt: truncated chunk"));
             };
-            let header = u16::from_be_bytes([hi, lo]);
-            let predictor = (header & 0xFF80).cast_signed();
-            let index = i32::from(header & 0x007F);
-            let mut state = ImaState::new(i32::from(predictor), index);
+            let state = states
+                .get_mut(c)
+                .ok_or(Error::InvalidData("adpcm_ima_qt: channel"))?;
+            if s == 0 && just_created {
+                // Only the very first chunk this track has ever decoded
+                // trusts the header (nothing precedes it to continue from).
+                let header = u16::from_be_bytes([hi, lo]);
+                let predictor = (header & 0xFF80).cast_signed();
+                let index = i32::from(header & 0x007F);
+                *state = ImaState::new(i32::from(predictor), index);
+            }
             let out = per_channel
                 .get_mut(c)
                 .ok_or(Error::InvalidData("adpcm_ima_qt: channel"))?;
@@ -303,6 +355,19 @@ pub(crate) fn decode_qt_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
 /// samples per channel per set (the final set is padded by repeating the
 /// last real sample, same as [`encode_wav_block`]).
 ///
+/// Per-channel predictor/step state is carried continuously across every
+/// chunk in this call, mirroring [`decode_qt_block`]'s own state model: a
+/// decoder trusts only the first chunk's header and continues state
+/// thereafter, so encoding each chunk from a freshly re-estimated state (as
+/// an earlier version of this function did) would silently desync from what
+/// such a decoder actually plays back past chunk 0, even though both halves
+/// of this crate's own self-round-trip would still agree (each side made the
+/// same wrong assumption) — exactly the failure mode this crate's own
+/// `CLAUDE.md` warns a self-round-trip test cannot catch. Every chunk's
+/// header is still written as a real (quantised) snapshot of that running
+/// state, matching how real encoders behave, even though nothing this
+/// crate's own decoder does past chunk 0 depends on it.
+///
 /// # Errors
 /// [`Error::InvalidData`] if `samples.len()` is not a multiple of `channels`.
 #[allow(
@@ -316,19 +381,30 @@ pub(crate) fn encode_qt_block(samples: &[i16], channels: u32) -> Result<Vec<u8>>
         return Ok(Vec::new());
     };
     let sets = len.div_ceil(QT_SAMPLES_PER_CHUNK).max(1);
+    let mut states: Vec<ImaState> = per_channel
+        .iter()
+        .map(|ch| {
+            let first = ch.first().copied().unwrap_or(0);
+            let index = estimate_initial_index(ch) & 0x7F;
+            let header_predictor = (first.cast_unsigned() & 0xFF80).cast_signed();
+            ImaState::new(i32::from(header_predictor), index)
+        })
+        .collect();
     let mut out = Vec::new();
     for s in 0..sets {
-        for ch in &per_channel {
-            let Some(&first) = ch.get(s * QT_SAMPLES_PER_CHUNK).or_else(|| ch.last()) else {
-                continue;
-            };
-            let window_start = s * QT_SAMPLES_PER_CHUNK;
-            let window = ch.get(window_start..).unwrap_or(&[]);
-            let index = estimate_initial_index(window) & 0x7F;
-            let header_predictor = (first.cast_unsigned() & 0xFF80).cast_signed();
-            let mut state = ImaState::new(i32::from(header_predictor), index);
-            let index_bits = u16::try_from(index).unwrap_or(0) & 0x7F;
-            let header = (header_predictor.cast_unsigned() & 0xFF80) | index_bits;
+        for (c, ch) in per_channel.iter().enumerate() {
+            let state = states
+                .get_mut(c)
+                .ok_or(Error::InvalidData("adpcm_ima_qt: channel"))?;
+            let predictor_i16 = i16::try_from(
+                state
+                    .predictor
+                    .clamp(i32::from(i16::MIN), i32::from(i16::MAX)),
+            )
+            .unwrap_or(0);
+            let predictor_bits = predictor_i16.cast_unsigned() & 0xFF80;
+            let index_bits = u16::try_from(state.index).unwrap_or(0) & 0x7F;
+            let header = predictor_bits | index_bits;
             out.extend_from_slice(&header.to_be_bytes());
             let mut body = [0u8; 32];
             for k in 0..QT_SAMPLES_PER_CHUNK {
@@ -438,7 +514,7 @@ mod tests {
         let samples = tone(QT_SAMPLES_PER_CHUNK * 2 + 5);
         let block = encode_qt_block(&samples, 1).unwrap();
         assert_eq!(block.len() % QT_CHUNK_BYTES, 0);
-        let decoded = decode_qt_block(&block, 1).unwrap();
+        let decoded = decode_qt_block(&block, 1, &mut None).unwrap();
         assert_eq!(decoded.len() % QT_SAMPLES_PER_CHUNK, 0);
         for (a, b) in samples.iter().zip(decoded.iter()) {
             assert!((i32::from(*a) - i32::from(*b)).abs() < 2000, "{a} vs {b}");
