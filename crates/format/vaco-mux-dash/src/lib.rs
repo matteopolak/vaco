@@ -185,10 +185,38 @@ struct RepresentationState {
     current: Option<CurrentSegment>,
     written: VecDeque<WrittenSegment>,
     last_dts_us: Option<u64>,
+    /// The most recent *non-zero* packet duration on this representation, in
+    /// microseconds. `finish_segment`'s `end_us` used to be `last_dts_us`
+    /// alone — the span *to* the last packet's own timestamp, not *through*
+    /// it — so every segment's `mediaPresentationDuration` contribution came
+    /// up one packet short, worst on a single-packet segment where it made
+    /// the segment's own contribution zero before the `.max(1)` floor. A
+    /// packet that states no duration leaves this at whatever the last one
+    /// that did left it, mirroring `vaco-mux-avi`'s
+    /// `last_video_duration_ticks` and `vaco-mux-hls`'s
+    /// `last_ref_duration_us`.
+    last_duration_us: u64,
 }
 
 impl RepresentationState {
     fn new(stream_index: u32, params: CodecParameters) -> Self {
+        // Seeded from the stream's own declared frame rate, not an invented
+        // constant, so a source whose packets never state a duration at all
+        // (an ordinary `-c copy` remux out of a demuxer that reports none)
+        // still gets a real `end_us` for its very first segment. Audio has
+        // no samples-per-frame field to derive one from, so it starts at 0
+        // and picks up the first packet that states a real duration, same
+        // as every sibling fix in this sweep.
+        let last_duration_us = params
+            .video
+            .as_ref()
+            .filter(|v| v.frame_rate.num > 0 && v.frame_rate.den > 0)
+            .and_then(|v| {
+                let num = u64::try_from(v.frame_rate.num).ok()?;
+                let den = u64::try_from(v.frame_rate.den).ok()?;
+                (num > 0).then(|| 1_000_000u64.saturating_mul(den) / num)
+            })
+            .unwrap_or(0);
         Self {
             id: stream_index.to_string(),
             stream_index,
@@ -198,6 +226,7 @@ impl RepresentationState {
             current: None,
             written: VecDeque::new(),
             last_dts_us: None,
+            last_duration_us,
         }
     }
 
@@ -311,7 +340,9 @@ impl DashMuxer {
             .zip(cur.time_base)
             .and_then(|(t, tb)| Timestamp::new(t).to_duration(tb))
             .map_or(0, |d| d.as_micros().max(0) as u64);
-        let end_us = rep.last_dts_us.unwrap_or(start_us);
+        let end_us = rep
+            .last_dts_us
+            .map_or(start_us, |last| last.saturating_add(rep.last_duration_us));
         let duration_us = end_us.saturating_sub(start_us).max(1);
         cur.muxer.write_trailer()?;
         rep.written.push_back(WrittenSegment {
@@ -557,6 +588,10 @@ impl Muxer for DashMuxer {
         {
             let us = us.as_micros().max(0) as u64;
             rep.last_dts_us = Some(rep.last_dts_us.map_or(us, |prev| prev.max(us)));
+        }
+        let packet_duration_us = packet.duration.as_micros().max(0) as u64;
+        if packet_duration_us > 0 {
+            rep.last_duration_us = packet_duration_us;
         }
         Ok(())
     }

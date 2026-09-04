@@ -169,3 +169,59 @@ fn six_seconds_of_video_produces_two_second_segments_readable_back() {
         "every written frame must be recoverable from the segment files"
     );
 }
+
+/// `mediaPresentationDuration` must cover the last segment's real content
+/// span, not merely "the timestamp of the last packet". No packet here
+/// states a `duration` (the ordinary `-c copy` case out of a demuxer that
+/// reports none), so `finish_segment`'s `end_us` used to be `last_dts_us`
+/// alone, leaving every segment — and so the reported total — one whole
+/// frame short of the real length.
+#[test]
+fn media_presentation_duration_covers_the_last_frames_own_span() {
+    // 10 fps for 6 seconds = 60 frames, declared frame rate matching the
+    // real packet spacing exactly, so the frame-rate-derived fallback this
+    // sweep added reconstructs the true content span exactly: 6.0s, not 5.9s
+    // (one 100ms frame short).
+    const FPS: i64 = 10;
+    const SECONDS: i64 = 6;
+    const STEP_TICKS: i64 = 9_000; // 1/10 s at a 90kHz clock.
+    let dir = tempfile::tempdir().unwrap();
+    let mpd_url = dir.path().join("stream.mpd").to_str().unwrap().to_owned();
+
+    let mut params = h264_params();
+    params.video.as_mut().unwrap().frame_rate = vaco_core::Rational::new(10, 1);
+
+    let mut mux = DashMuxer::new(
+        mpd_url.clone(),
+        Some(WriteAccess::unrestricted(registry())),
+        Box::new(TestSegmentMuxers),
+        DashMuxOptions {
+            seg_duration: 2.0,
+            ..DashMuxOptions::new()
+        },
+    );
+    let video = mux.add_stream(&params).expect("add_stream");
+    mux.init().expect("init");
+    mux.write_header().expect("write_header");
+
+    let mut budget = Budget::new(Limits::permissive());
+    for i in 0..(FPS * SECONDS) {
+        let mut pkt = Packet::from_slice(&mut budget, &[0xAB; 64]).expect("alloc");
+        pkt.stream_index = video;
+        pkt.pts = Timestamp::new(i * STEP_TICKS);
+        pkt.dts = pkt.pts;
+        if i % 20 == 0 {
+            pkt.flags |= PacketFlags::KEY;
+        }
+        mux.write_packet(&pkt).expect("write_packet");
+    }
+    mux.write_trailer().expect("write_trailer");
+    drop(mux);
+
+    let mpd_text = std::fs::read_to_string(&mpd_url).unwrap();
+    assert!(
+        mpd_text.contains("mediaPresentationDuration=\"PT6S\""),
+        "six seconds of 10fps content with no stated packet durations must \
+         report a full PT6S, not one frame (100ms) short:\n{mpd_text}"
+    );
+}
