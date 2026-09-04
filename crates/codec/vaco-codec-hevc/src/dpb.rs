@@ -258,6 +258,17 @@ pub(crate) struct PictureMeta {
     /// by then.
     pub out_width: u32,
     pub out_height: u32,
+    /// The conformance window's top-left luma sample
+    /// (`Sps::crop_origin`), carried for the same reordering reason as
+    /// `out_width`/`out_height`. The output frame is `out_width` x
+    /// `out_height` read from *here*, not from `(0, 0)`.
+    pub crop_x: u32,
+    pub crop_y: u32,
+    /// The same point in chroma samples — `conf_win_left_offset` and
+    /// `conf_win_top_offset` verbatim, since those are already in chroma
+    /// units.
+    pub crop_cx: u32,
+    pub crop_cy: u32,
     /// Mirrors `vaco_frame::FrameFlags::KEY` — set for an IRAP picture.
     pub is_keyframe: bool,
     /// Raw `cc_data` triplet bytes from this access unit's own ATSC A/53
@@ -894,6 +905,10 @@ mod tests {
             pts: vaco_core::Timestamp::NONE,
             duration: vaco_core::Duration::ZERO,
             out_width: 4,
+            crop_x: 0,
+            crop_y: 0,
+            crop_cx: 0,
+            crop_cy: 0,
             out_height: 4,
             is_keyframe: false,
             closed_captions: Vec::new(),

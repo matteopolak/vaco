@@ -606,6 +606,7 @@ impl HevcDecoder {
             ))
         };
 
+        let crop = sps.crop_origin();
         let out_dims = sps.dimensions().unwrap_or((
             sps.pic_width_in_luma_samples,
             sps.pic_height_in_luma_samples,
@@ -615,6 +616,10 @@ impl HevcDecoder {
             duration: pkt.duration,
             out_width: out_dims.0,
             out_height: out_dims.1,
+            crop_x: crop.0.0,
+            crop_y: crop.0.1,
+            crop_cx: crop.1.0,
+            crop_cy: crop.1.1,
             is_keyframe: header.nal_unit_type.is_irap(),
             closed_captions: cc_data,
             color: sps.color_info(),
@@ -710,7 +715,14 @@ impl HevcDecoder {
             else {
                 continue;
             };
-            let mut frame = pic_to_frame(budget, meta.out_width, meta.out_height, pic)?;
+            let mut frame = pic_to_frame(
+                budget,
+                meta.out_width,
+                meta.out_height,
+                (meta.crop_x as usize, meta.crop_y as usize),
+                (meta.crop_cx as usize, meta.crop_cy as usize),
+                pic,
+            )?;
             frame.pts = meta.pts;
             frame.duration = meta.duration;
             frame.color = meta.color;
@@ -1115,16 +1127,18 @@ fn pic_to_frame(
     budget: &mut Budget,
     width: u32,
     height: u32,
+    origin: (usize, usize),
+    chroma_origin: (usize, usize),
     pic: &Picture,
 ) -> Result<vaco_frame::Frame> {
     let pix_fmt = vaco_pixfmt::PixFmt::from_name("yuv420p")
         .map_err(|_| Error::InvalidData("vaco-codec-hevc: yuv420p pixel format missing"))?;
     let before = budget.committed();
     let mut frame = vaco_frame::Frame::alloc_video(budget, pix_fmt, width, height)?;
-    blit(&pic.y, &mut frame, 0, width as usize, height as usize);
+    blit(&pic.y, &mut frame, 0, width as usize, height as usize, origin);
     let (cw, ch) = (width.div_ceil(2) as usize, height.div_ceil(2) as usize);
-    blit(&pic.cb, &mut frame, 1, cw, ch);
-    blit(&pic.cr, &mut frame, 2, cw, ch);
+    blit(&pic.cb, &mut frame, 1, cw, ch, chroma_origin);
+    blit(&pic.cr, &mut frame, 2, cw, ch, chroma_origin);
     let frame_bytes = budget.committed().saturating_sub(before);
     budget.release(frame_bytes);
     Ok(frame)
@@ -1143,16 +1157,19 @@ fn blit(
     plane_index: usize,
     width: usize,
     height: usize,
+    origin: (usize, usize),
 ) {
     let Some(mut dst) = frame.plane_mut(plane_index) else {
         return;
     };
+    let (ox, oy) = origin;
     for y in 0..height.min(dst.rows()) {
         let Some(row) = dst.row_mut(y) else { continue };
         let len = width.min(row.len());
-        let (Some(dst_row), Some(src_row)) =
-            (row.get_mut(..len), src.row(y).and_then(|r| r.get(..len)))
-        else {
+        let (Some(dst_row), Some(src_row)) = (
+            row.get_mut(..len),
+            src.row(y + oy).and_then(|r| r.get(ox..ox + len)),
+        ) else {
             continue;
         };
         dst_row.copy_from_slice(src_row);

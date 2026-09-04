@@ -640,6 +640,37 @@ impl Sps {
     /// `apply_defdispwin` option is set — which is off by default. The offsets
     /// are still parsed and available at
     /// [`VuiParameters::default_display_window`] for a caller that wants them.
+    /// The conformance window's top-left **luma** sample, §7.4.3.2 —
+    /// `SubWidthC * conf_win_left_offset` and
+    /// `SubHeightC * conf_win_top_offset`. `(0, 0)` when the SPS declares no
+    /// window.
+    ///
+    /// This is the origin [`Sps::dimensions`]'s width and height are
+    /// measured *from*; cropping to that size from `(0, 0)` instead is
+    /// wrong on every sample whenever the left or top offset is non-zero.
+    /// Measured on `CONFWIN_A_SONY_1` (416x240 coded, 412x236 displayed,
+    /// one chroma unit of offset on all four sides): every plane of every
+    /// one of its 60 frames differed from the reference's decode, and every
+    /// sampled point matched exactly under a (2, 2) shift.
+    /// Returns the luma origin and, second, the same point in **chroma**
+    /// samples — which is `conf_win_left_offset`/`conf_win_top_offset`
+    /// themselves, since the window's offsets are already in chroma units
+    /// and the luma origin is that times `SubWidthC`/`SubHeightC`.
+    #[must_use]
+    pub fn crop_origin(&self) -> ((u32, u32), (u32, u32)) {
+        let Some(win) = self.conformance_window else {
+            return ((0, 0), (0, 0));
+        };
+        let c = self.chroma_array_type();
+        (
+            (
+                win.left.saturating_mul(c.sub_width_c()),
+                win.top.saturating_mul(c.sub_height_c()),
+            ),
+            (win.left, win.top),
+        )
+    }
+
     #[must_use]
     pub fn dimensions(&self) -> Option<(u32, u32)> {
         let (cw, ch) = (self.coded_width(), self.coded_height());
