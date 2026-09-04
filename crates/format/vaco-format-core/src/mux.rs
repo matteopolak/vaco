@@ -95,8 +95,7 @@ pub enum BitstreamAction {
 /// `options` is carried rather than dropped so [`MuxBuilder::set_user_bsf`]
 /// can refuse a filter it cannot actually configure by name, rather than
 /// silently opening it bare: [`BsfProvider::open`] has no per-instance option
-/// string yet (`planning/INTERFACE-GAPS.md` gap 12), so any non-empty
-/// `options` here is unreachable today by construction, not by omission.
+/// channel, so non-empty `options` are refused rather than silently discarded.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct UserBsf {
     pub name: &'static str,
@@ -322,18 +321,18 @@ struct StreamState {
 /// | M11 | the trailer runs once, after the queue is drained | §1.3, §1.9 N4 |
 /// | M12 | `init` runs before the header and may rewrite time bases | §1.3 |
 /// | M13 | zero streams needs `NOSTREAMS` | §1.1 flags |
-/// | M14 | `max_streams` caps the mux side too | §1.11 #36 |
+/// | M14 | `max_streams` caps the mux side too | §1.11 limits |
 /// | M15 | the container is asked whether it can carry the codec | §1.3 `query_codec` |
 /// | M16 | `GLOBALHEADER` without extradata, on a codec `extract_extradata` covers and no packet-supplied one, asks for it | §1.10 B5 |
-/// | M17 | an `EXPERIMENTAL` container needs `-strict experimental` | §1.11 #27 |
+/// | M17 | an `EXPERIMENTAL` container needs `-strict experimental` | §1.11 strictness |
 /// | M18 | `NOTIMESTAMPS` clears both fields and the queue accepts it | §1.7 R27 |
-/// | M19 | `+flush_packets` / `flush_packets=1` flushes after every packet | §1.11 #5, #23 |
+/// | M19 | `+flush_packets` / `flush_packets=1` flushes after every packet | §1.11 flushing |
 /// | M20 | a flush marker only reaches a muxer declaring `ALLOW_FLUSH` | §1.3 |
 /// | M21 | a packet naming an undeclared stream is refused | §1.9 |
 /// | M22 | a packet on a stream already ended is refused | §1.9 N4 |
 /// | M23 | the resolved shift and policy are reported | §1.7 R25 |
-/// | M24 | `bitexact` suppresses `start_time_realtime` | §1.11 #13 |
-/// | M25 | `metadata_header_padding` is surfaced to the muxer | §1.11 #24 |
+/// | M24 | `bitexact` suppresses `start_time_realtime` | §1.11 bitexact output |
+/// | M25 | `metadata_header_padding` is surfaced to the muxer | §1.11 metadata padding |
 /// | M26 | packet and byte counts are recorded for the caller's stats | not spec-mandated |
 /// | M27 | ending a stream lets the rest drain | §1.9 N4 |
 /// | M28 | aborting writes no trailer, and says so | §1.3 |

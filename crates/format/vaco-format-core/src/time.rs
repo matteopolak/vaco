@@ -12,8 +12,7 @@
 //! > output-base normalisation, `-fps_mode` and encoder time bases.
 //!
 //! The format layer never applies a user-specified offset. The CLI layer never
-//! touches wraparound. Rules are numbered as `planning/18-formats.md` §1.7
-//! numbers them so the two documents compose by citation.
+//! touches wraparound.
 //!
 //! # Exactness
 //!
@@ -706,8 +705,8 @@ pub fn duration_from_rate(rate: Rational) -> Option<Duration> {
 ///
 /// # Why truncation, and why the argument must be exact
 ///
-/// The reference truncates towards zero. Measured three independent ways, each
-/// on a file whose container states no duration of its own:
+/// The reference truncates towards zero. Measurements on files whose containers
+/// state no duration of their own gave:
 ///
 /// | input | exact ticks | reference | nearest would give |
 /// |---|---:|---:|---:|
@@ -715,27 +714,18 @@ pub fn duration_from_rate(rate: Rational) -> Option<Duration> {
 /// | 960 samples @48 kHz, base 7/10000 | 28.571 | **28** | 29 |
 /// | 1024 samples @44.1 kHz, base 1/90000 (MPEG-TS) | 2089.79 | **2089** | 2090 |
 ///
-/// The first two are a Matroska `TimecodeScale` patched to 3 ms and to 0.7 ms;
-/// the third is an ordinary `-f mpegts` file, so this is not a Matroska rule.
-///
-/// Truncation is why the input may not arrive pre-rounded. A 2.5 ms Opus packet
-/// is exactly half a Matroska tick: from `120/48000` this yields 2, which is
-/// what the reference prints, and from a microsecond-rounded 2500 it would
-/// yield 3. Half of a tick's worth of error changes the answer whenever the
-/// exact value lands just below an integer, which is most of the time for a
-/// 1024-sample frame against a 1 ms base.
+/// The first two use Matroska `TimecodeScale` values of 3 ms and 0.7 ms; the
+/// third is MPEG-TS, so this is not container-specific. Exact input matters: a
+/// 2.5 ms Opus packet yields 2 ticks from `120/48000`, as the reference reports,
+/// but 3 ticks if its duration is first rounded to 2500 µs.
 ///
 /// # The one place the packet model still loses
 ///
-/// [`Packet::duration`](vaco_packet::Packet::duration) is microseconds, so the
-/// tick count is stored as its microsecond equivalent and recovered by the
-/// printer's round-to-nearest. That round trip is **exact for any time base
-/// whose tick is longer than 2 µs**, which is every container base in the
-/// corpus — 1/1000, 1/44100, 1/48000, 1/90000, 1/1000000. It is *not* exact for
-/// a base finer than that, such as the 1/28224000 a raw ADTS stream reports:
-/// 655360 ticks stores as 23220 µs and reads back as 655361. No demuxer in the
-/// tree produces such a base; closing it needs a tick-valued `Packet::duration`
-/// and is recorded in `docs/format/vaco-format-core.md`.
+/// [`Packet::duration`](vaco_packet::Packet::duration) stores microseconds, so
+/// conversion is exact when a tick exceeds 2 µs, including every container base
+/// in the corpus. At 1/28224000, 655360 ticks become 23220 µs and recover as
+/// 655361. No demuxer produces that base; exact support requires a tick-valued
+/// packet duration (see `docs/format/vaco-format-core.md`).
 #[must_use]
 pub fn quantise_duration(seconds: Rational, time_base: TimeBase) -> Option<Duration> {
     if !seconds.is_defined() || seconds.is_infinite() || seconds.num <= 0 || seconds.den <= 0 {
@@ -902,10 +892,8 @@ pub fn estimate_duration(inputs: &DurationInputs, opts: &FormatOptions) -> Durat
 /// The container-level `start_time` (R12).
 ///
 /// The **minimum** over the streams that have one, in [`TIME_BASE_Q`], skipping
-/// streams the caller marks as excluded. `planning/18-formats.md` marks the
-/// min-versus-max choice VERIFY-T2; we have not measured it and this
-/// implements the plan's stated rule, which is recorded in the docs file as
-/// unverified rather than presented as reproduction.
+/// streams the caller marks as excluded. Reference parity for the minimum-versus-
+/// maximum choice remains unverified and is recorded as such in the format docs.
 ///
 /// The excluded set is the caller's because the reasons are container facts:
 /// attached pictures have no timeline position, and a stream with no codec
@@ -1093,15 +1081,11 @@ mod tests {
     /// `set_stream_delay` can be called again, after packets have already
     /// been fed, and the *new* delay governs every packet from that call on.
     ///
-    /// This is the exact mechanism `Discovery`'s own fix for E2E-GAPS #5
-    /// depends on: `Discovery::new` builds its `TimestampFixer` from
-    /// whatever `has_b_frames` the container's initial track parsing knew
-    /// (`0`, for a format like Matroska that states no numeric reorder
-    /// depth), and only a parser reading a real SPS/VUI can refine it —
-    /// which happens later, per packet, inside `Discovery::absorb`. If
-    /// `set_stream_delay` only took effect at construction, refining it
-    /// mid-stream would be silently ignored and every B-frame stream would
-    /// still take R19 (`dts = pts`) forever.
+    /// `Discovery::new` initially knows only the container's `has_b_frames`
+    /// value, which is zero for formats such as Matroska that state no numeric
+    /// reorder depth. A parser can refine that value later from an SPS/VUI
+    /// inside `Discovery::absorb`; applying the update immediately prevents
+    /// B-frame streams from remaining on R19 (`dts = pts`).
     #[test]
     fn set_stream_delay_takes_effect_immediately_even_mid_stream() {
         let opts = FormatOptions::default();
