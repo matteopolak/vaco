@@ -705,31 +705,88 @@ verbatim with the input side — `-t` still wins over `-to`, and `-to <= 0`
 still aborts at option-binding time, `[out#N] -to value smaller than
 -ss; aborting.`, even though there is no output `-ss` to name), and
 `crate::exec::run_pipeline` wraps each output's muxer in
-`output_trim::OutputTrim` — *inside* `TallyingMuxer`, so a trimmed packet
-is never tallied or counted toward the summary's byte total. Unlike
-`seek_trim::SeekTrim`, there is no single reference stream: every
-stream's packets are dropped once *their own* presentation time reaches
-the bound, independently. The one real subtlety: `Muxer::stream_time_base`
-is `None` for `-f null` (and for any muxer with no timescale opinion), but
-`vaco_format_core::mux::MuxBuilder` still rescales packets for such a
-muxer, into the *input* stream's own base — `OutputTrim` captures that
-same fallback via `StreamSpec::time_base` at `add_stream_with` time
-(mirroring `MuxBuilder`'s own `stream_time_base().or(input_time_base)
-.unwrap_or(TIME_BASE_Q)` chain) rather than reading only
-`Muxer::stream_time_base`, which would have silently stopped trimming for
-every `-f null` output — the single most common target in this crate's
-own test suite. **No output-side `-ss`**: the reference's own output `-ss`
-decodes and discards up to the timestamp rather than seeking, a
-materially different and unimplemented feature — refused explicitly
+`output_trim::OutputTrim` — *outside* `TallyingMuxer` (not inside: see
+below), so a trimmed packet is never tallied or counted toward the
+summary's byte total. Unlike `seek_trim::SeekTrim`, there is no single
+reference stream: every stream's packets are dropped once *their own*
+presentation time reaches the bound, independently.
+
+Three bugs surfaced only by measuring the actual output, not by reading
+the plumbing, all fixed in the same pass and each with its own regression
+test in `output_trim.rs`'s `#[cfg(test)]` module (see that module's own
+doc for the full account):
+
+- **A dropped packet must end the stream, not skip one packet.** A
+  B-frame-reordered stream hands `Muxer::write_packet` a high-`pts`
+  packet slightly *before* one or two lower-`pts` packets that still
+  decode after it. Dropping purely on each packet's own `pts` therefore
+  drops an *interior* packet while still forwarding later ones, handing
+  `vaco-mux-mp4` a `dts` sequence with a hole in it — measured to corrupt
+  its sample table badly enough that `ffprobe -count_frames` reported
+  *two fewer* frames than were actually forwarded, silently losing two
+  genuinely valid trailing packets along with the one that should have
+  been dropped. `OutputTrim` now drops the *rest* of a stream once it
+  drops one packet, guaranteeing every stream it forwards is a
+  contiguous prefix — trading a couple of trailing B-frames worth of
+  leniency (the reference's own `dts`-based cutoff, the same accepted
+  divergence already documented for `seek_trim`) for never handing the
+  muxer a sequence it cannot represent.
+- **The bound is anchored to each stream's first packet, not to literal
+  zero.** An upstream `-ss` does not rewrite surviving packets' `pts`/
+  `dts` down to zero — `MuxTimestamps::apply`'s own offset only fires for
+  a *negative* first timestamp, and a forward seek never produces one. A
+  zero-anchored bound therefore cut `-ss 2 -t 3` off after one second of
+  content, not three (measured: `duration=1.000000` before this fix,
+  `3.08` on the reference for the same invocation). `OutputTrim` now
+  measures each stream's own bound from that stream's own first observed
+  packet.
+- **A trimming muxer cannot advertise `NOTIMESTAMPS`.** `-f null`'s own
+  muxer declares `FormatFlags::NOTIMESTAMPS`, which makes
+  `MuxTimestamps::apply` (M18) clear both `pts` and `dts` on every packet
+  *before* `Muxer::write_packet` is ever called — the wipe happens
+  upstream of anything a `Muxer`-level wrapper can see. Confirmed by
+  instrumenting `write_packet` directly: both fields `None` on every
+  packet, against a demuxer that unconditionally sets `pts`. `-f null` is
+  this crate's own test suite's default output, so this was not a corner
+  case — it silently disabled trimming for the single most common target
+  in this file's own tests, including the one written for this feature
+  (`output_side_t_stops_writing_early`, which is what caught it).
+  `OutputTrim::flags` now masks `NOTIMESTAMPS` off the wrapped muxer's
+  own answer, since `MuxWriter::new` reads `flags()` exactly once on the
+  outermost `Muxer` before any packet flows — the real muxer never reads
+  `pts`/`dts` for anything of its own, so leaving them populated costs it
+  nothing. Scoped as narrowly as `OutputTrim` itself: `OutputTrim::wrap`
+  returns the muxer unwrapped whenever an output has no `-t`/`-to` at
+  all, so no output's `NOTIMESTAMPS` behaviour changes unless that output
+  specifically asked to be trimmed. A source with genuinely no timestamps
+  that also asks for `-t` on the same output is not a combination this
+  fix can serve either way — a named gap, not a silent one.
+
+The first bug above is also why `OutputTrim` wraps *outside*
+`TallyingMuxer` rather than inside (the first version of this fix, which
+this document briefly described): `OutputTrim::write_packet` always
+returns `Ok(())` whether it forwarded the packet or silently dropped it —
+it has no way to tell a wrapping counter which one happened. Putting the
+tally on the inside meant `TallyingMuxer::write_packet` still counted
+every trimmed packet, since all it knows is "the call below me returned
+`Ok`", not "a byte was actually written" — caught the same way, by
+`output_side_t_stops_writing_early` asserting the tally itself rather
+than only the file `ffprobe` reads back.
+
+**No output-side `-ss`**: the reference's own output `-ss` decodes and
+discards up to the timestamp rather than seeking, a materially different
+and unimplemented feature — refused explicitly
 (`refuse_unimplemented_options`, output-positioned only; the input-side
 `-ss` is untouched) rather than left to silently do nothing the way
 `-t`/`-to` did before this pass.
 
-**What was verified**: `cargo test -p vaco-cli` clean, including
-`seek_trim`'s, `overwrite`'s and `output_trim`'s own `#[cfg(test)]`
-modules, plus new end-to-end tests in `tests.rs` (`output_side_t_stops_
-writing_early`, `output_side_t_wins_over_to`, `output_side_to_at_or_
-below_zero_aborts`, `output_side_invalid_t_reports_output_wording`,
+**What was verified**: `cargo test -p vaco-cli` clean (256 tests),
+including `seek_trim`'s, `overwrite`'s and `output_trim`'s own
+`#[cfg(test)]` modules — the latter now covering all three bugs above,
+each with a regression test that fails without its fix — plus new
+end-to-end tests in `tests.rs` (`output_side_t_stops_writing_early`,
+`output_side_t_wins_over_to`, `output_side_to_at_or_below_zero_aborts`,
+`output_side_invalid_t_reports_output_wording`,
 `output_side_ss_is_refused_not_silently_ignored`, and a control test
 pinning that input-side `-ss` still works). A real `vaco` binary, built
 and run against a real WAV fixture and a synthetic H.264 fixture
@@ -738,16 +795,32 @@ case above byte-for-byte against real `ffmpeg 9.0.1` output where the
 feature's own scope claims agreement (`-ss`/`-t` bounds, `-to`-before-
 `-ss` refusal and exit code, `-ss`-past-EOF, `-t`-longer-than-remaining,
 `-y`/`-n`/neither overwrite outcomes and exit codes) and named the one
-place it does not (the `pts`/`dts` trailing-frame gap above). The
-output-side pass was cross-checked against real `ffmpeg 9.0.1` on a real
-encoded A/V fixture (25 fps video, 44100 Hz audio, both streams present):
-matching frame counts and `ffprobe`-reported duration for `-t 3`
-input-positioned vs. output-positioned (`77`/`131` packets, `3.08s`),
-`-t` longer than the source (whole file, unchanged), `-t` combined with
-input-side `-ss`, and two outputs from the same input each with their own
-`-t` (`ffmpeg -i in.mp4 -t 2 out1.mp4 -t 4 out2.mp4` gives `2.08s`/
-`4.08s` — independent per output, which this crate's own `run_pipeline`
-already opens one `OutputTrim` per output to match).
+place it does not (the `pts`/`dts` trailing-frame gap above).
+
+The output-side pass was cross-checked against real `ffmpeg 9.0.1` on a
+real encoded A/V fixture (25 fps video, 44100 Hz audio, both streams
+present), after all three bugs above were found and fixed:
+`-t 3` gives `75`/`130` packets (video/audio) against the reference's
+`77`/`130` — the same accepted `pts`-vs-`dts` trailing-frame divergence
+`seek_trim` already documents, now consistent between input- and
+output-positioned `-t` on this crate's own side too; `-t` longer than the
+source reproduces the whole file exactly (`250`/`250` packets, matching
+the reference bit for bit); `-t` combined with input-side `-ss` (`-ss 2
+-t 3`) now gives the same `75`-packet result as plain `-t 3` with no
+`-ss` — this is the exact invocation the anchor-to-first-packet bug
+broke, previously giving only `25` packets (`duration=1.0`) instead of
+`75` (`duration=3.0`); two outputs from the same input each with their
+own `-t` land on `2.0s`/`4.0s` independently (reference: `2.08s`/`4.08s`)
+— this crate's own `run_pipeline` opens one `OutputTrim` per output, so
+neither shares state with the other; and `-t 3 -c copy -f null -`
+(previously a complete no-op, per the `NOTIMESTAMPS` bug above) now
+gives `75` packets too, matching the plain-file-output measurement
+exactly. `-t 0` produces a valid, near-empty file (no frames survive the
+bound) rather than an error, matching the reference's own "successful,
+intentional" framing for a zero-length request; the reference itself
+writes a couple of packets at `-t 0` rather than zero, an edge-case
+quirk left as an accepted divergence following this project's own
+precedent for such cases.
 
 ## How to change it
 

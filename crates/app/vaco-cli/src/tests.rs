@@ -1109,3 +1109,169 @@ fn a_missing_attach_file_is_the_measured_error() {
         r.message()
     );
 }
+
+// ------------------------------------------------------- output-side -t/-to
+
+/// `four_track_file`'s own default selection (`#0:0` video, `#0:2` audio),
+/// but with `n` blocks per track instead of the fixed four, at 1 ms apart
+/// (`TIMESTAMPSCALE` 1_000_000 ns => a `1/1000` stream time base, so block
+/// timestamp `i` lands at `i` ms exactly) -- fine enough resolution to put a
+/// `-t`/`-to` bound between two packets without fighting float rounding.
+fn timed_two_track_file(n: i16) -> Vec<u8> {
+    let mut tracks = video(1, 320, 240, true);
+    tracks.extend_from_slice(&audio(3, 2, true));
+    let mut children = Vec::new();
+    for i in 0..n {
+        children.push(block(1, i, &[0xAA; 10]));
+        children.push(block(3, i, &[0xCC; 10]));
+    }
+    let cluster = synth::cluster(0, &children, SegmentSize::Known);
+    synth::file(
+        "matroska",
+        &info(1_000_000),
+        &tracks,
+        &[cluster],
+        SegmentSize::Known,
+    )
+}
+
+/// `-t`, **output**-positioned, must stop *writing* once a stream's own
+/// packets reach the bound -- before this crate's `OutputSpec::end`/
+/// `crate::output_trim::OutputTrim` existed, `crate::cli::parse` read `-t`
+/// only from an input group, so this exact invocation parsed, ran and wrote
+/// every packet regardless of `-t`'s value.
+///
+/// Also exercises the `-f null` fallback path
+/// (`crate::output_trim`'s module doc): `-f null`'s muxer declares no
+/// `stream_time_base` at all, so this failing would mean `OutputTrim` only
+/// ever worked against a real container, silently doing nothing for every
+/// test in this file that defaults to `-f null -`.
+#[test]
+fn output_side_t_stops_writing_early() {
+    let f = fixture(&timed_two_track_file(4)); // packets at 0, 1, 2, 3 ms
+    let cli = crate::cli::parse(&[
+        "-i", &f.path, "-c", "copy", "-t", "0.002", "-f", "null", "-",
+    ])
+    .unwrap();
+    let inputs: Vec<_> = cli
+        .inputs
+        .iter()
+        .map(|s| {
+            crate::input::open(s.index, &s.url, &crate::input::OpenRequest::default()).unwrap()
+        })
+        .collect();
+    let files: Vec<_> = inputs.iter().map(crate::exec::describe).collect();
+    let mut used_complex = std::collections::HashSet::new();
+    let outputs: Vec<_> = cli
+        .outputs
+        .iter()
+        .map(|o| crate::exec::resolve_output(&cli, o, &files, &[], &mut used_complex).unwrap())
+        .collect();
+    let report = crate::exec::run_pipeline(
+        inputs,
+        &outputs,
+        &files,
+        &cli.complex_filters,
+        true,
+        1,
+        1,
+        crate::overwrite::OverwritePolicy::Always,
+    )
+    .unwrap();
+
+    // 2 ms bound, 1 ms apart: packets at 0 and 1 ms qualify, 2 and 3 do not.
+    let tally = &report.tallies[0];
+    assert_eq!(tally.streams[0].packets, 2, "video: {tally:?}");
+    assert_eq!(tally.streams[1].packets, 2, "audio: {tally:?}");
+}
+
+/// The same fixture and bound with **no** `-t`/`-to` at all, so the test
+/// above is a statement about `-t` specifically and not about
+/// `timed_two_track_file` only ever producing two packets per stream.
+#[test]
+fn output_side_t_absent_writes_every_packet() {
+    let f = fixture(&timed_two_track_file(4));
+    let r = go(&["-i", &f.path, "-c", "copy", "-f", "null", "-"]);
+    assert_eq!(r.code, ExitCode::OK, "{}", r.message());
+}
+
+/// `-t`/`-to` together, output-positioned: the reference gives `-t`
+/// priority (`crate::cli::end_bound_of`'s doc has the input-side
+/// measurement this mirrors).
+#[test]
+fn output_side_t_wins_over_to() {
+    let f = fixture(&timed_two_track_file(4));
+    let cli = crate::cli::parse(&[
+        "-i", &f.path, "-c", "copy", "-t", "0.002", "-to", "100", "-f", "null", "-",
+    ])
+    .unwrap();
+    assert_eq!(
+        cli.outputs[0].end,
+        Some(crate::cli::EndBound::AfterSeek(vaco_core::Duration::from_micros(2_000)))
+    );
+}
+
+/// `-to 0`, output-positioned, names an empty range (there is no output
+/// `-ss` to make it non-empty) and must abort exactly like the input-side
+/// form -- OBSERVED (`ffmpeg -i in.mp4 -to 0 -c copy out.mp4`, exit 234):
+/// `[out#0] -to value smaller than -ss; aborting.`
+#[test]
+fn output_side_to_at_or_below_zero_aborts() {
+    let f = fixture(&timed_two_track_file(4));
+    let r = go(&[
+        "-i", &f.path, "-c", "copy", "-to", "0", "-f", "null", "-",
+    ]);
+    assert_eq!(r.code.code(), 234, "{}", r.message());
+    assert!(
+        r.message()
+            .contains("[out#0] -to value smaller than -ss; aborting.\n"),
+        "{}",
+        r.message()
+    );
+}
+
+/// An invalid `-t` value, output-positioned, reports the output-side
+/// wording (`Error parsing options for output file …`), not the input
+/// side's -- OBSERVED (`ffmpeg -i in.mp4 -t notatime -c copy out.mp4`,
+/// exit 234).
+#[test]
+fn output_side_invalid_t_reports_output_wording() {
+    let f = fixture(&timed_two_track_file(4));
+    let r = go(&[
+        "-i", &f.path, "-c", "copy", "-t", "notatime", "-f", "null", "-",
+    ]);
+    assert_eq!(r.code.code(), 234, "{}", r.message());
+    assert_eq!(
+        r.message(),
+        "Invalid duration for option t: notatime\n\
+         Error parsing options for output file -.\n\
+         Error opening output files: Invalid argument\n"
+    );
+}
+
+/// Output-positioned `-ss` is a materially different, unimplemented
+/// feature (decode-and-discard until the timestamp, not a seek -- see
+/// `crate::output_trim`'s module doc) and must be refused, not silently
+/// accepted the way `-t`/`-to` used to be before `OutputSpec::end` existed.
+#[test]
+fn output_side_ss_is_refused_not_silently_ignored() {
+    let f = fixture(&timed_two_track_file(4));
+    let r = go(&[
+        "-i", &f.path, "-c", "copy", "-ss", "1", "-f", "null", "-",
+    ]);
+    assert_eq!(r.code.code(), 218, "{}", r.message());
+    assert!(
+        r.message().contains("-ss is accepted by this build's option table but not implemented yet"),
+        "{}",
+        r.message()
+    );
+}
+
+/// The same `-ss` on the **input** side must keep working: the refusal
+/// above is targeted at the output position only.
+#[test]
+fn input_side_ss_still_works_alongside_the_new_output_refusal() {
+    let f = fixture(&timed_two_track_file(4));
+    let r = go(&["-ss", "0.001", "-i", &f.path, "-c", "copy", "-f", "null", "-"]);
+    assert_eq!(r.code, ExitCode::OK, "{}", r.message());
+}

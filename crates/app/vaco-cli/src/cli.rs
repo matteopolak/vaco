@@ -124,6 +124,17 @@ pub struct OutputSpec {
     /// attachment. `exec::metadata_of` reads the file and matches
     /// `-metadata:s:t:N mimetype=…` against its position in this list.
     pub attach: Vec<String>,
+    /// `-t`/`-to` on this output: stop **writing** once a packet's own
+    /// presentation time (in the muxer's chosen time base) reaches this
+    /// bound. Unlike [`InputSpec::end`], there is no output-side `-ss` to be
+    /// relative to — the reference's output-side `-ss` is a materially
+    /// different feature (decode-and-discard until the timestamp, not a seek)
+    /// that nothing here implements, and is refused explicitly rather than
+    /// silently accepted (see `refuse_unimplemented_options`) — so
+    /// [`EndBound::AfterSeek`] and [`EndBound::Absolute`] mean the same thing
+    /// here: a bound measured from the output's own start. See
+    /// [`crate::output_trim`].
+    pub end: Option<EndBound>,
 }
 
 /// A whole invocation, bound.
@@ -322,9 +333,9 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
 
     for g in line.of_kind(GroupKind::Input) {
         let url = url_of(g)?;
-        let seek = duration_of(g, "ss")?;
-        let end = end_bound_of(g)?;
-        validate_bounds(g.index, seek, end, &url)?;
+        let seek = duration_of(g, "ss", "input")?;
+        let end = end_bound_of(g, "input")?;
+        validate_bounds(g.index, seek, end, &url, "input")?;
         cli.inputs.push(InputSpec {
             index: g.index,
             url,
@@ -338,9 +349,12 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
     }
 
     for g in line.of_kind(GroupKind::Output) {
+        let url = url_of(g)?;
+        let end = end_bound_of(g, "output")?;
+        validate_bounds(g.index, None, end, &url, "output")?;
         cli.outputs.push(OutputSpec {
             index: g.index,
-            url: url_of(g)?,
+            url,
             format: last_value(g, "f")?,
             maps: maps_of(g)?,
             blocked: Suppressed {
@@ -353,6 +367,7 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
             map_chapters: last_value(g, "map_chapters")?.as_deref().map(leading_int),
             map_metadata: last_value(g, "map_metadata")?.as_deref().map(leading_int),
             attach: attach_of(g)?,
+            end,
         });
     }
 
@@ -403,6 +418,21 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
     // past measurements: checked against `planning/PERF-BASELINE.md` and
     // `scripts/`, neither uses any of these, so no recorded ratio is
     // affected.
+    //
+    // `-t`/`-to`, **output**-positioned, were a second, narrower instance of
+    // the same silent-no-op shape: the option table has always declared them
+    // `INPUT, OUTPUT` and `crate::cli::parse` split them into the right
+    // `OptionGroup` either way, but the binding loop above only ever read an
+    // *input* group's occurrence -- `vaco -i in.mp4 -t 10 out.mp4` parsed,
+    // ran and exited 0 with the whole file written, never erroring the way
+    // this list would for a genuinely unimplemented option. Fixed by giving
+    // `OutputSpec` its own `end` ([`OutputSpec::end`]), read the same way
+    // just above, and enforced by wrapping each output's muxer in
+    // `crate::output_trim::OutputTrim`. Output-positioned `-ss` is the
+    // opposite fix: the reference's own output-side `-ss` decodes and
+    // discards up to the timestamp rather than seeking, which is a
+    // materially different, unimplemented feature -- refused just below
+    // rather than left to silently do nothing the way `-t`/`-to` used to.
     // CLI-option audit, second batch: everything below changes output bytes
     // or silently drops a requested behaviour if ignored (coordinator's own
     // triage, priority 1) -- as opposed to the third batch (below), which
@@ -576,6 +606,15 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
             }
         }
     }
+    // `-ss`, output-positioned only: see this function's own doc for why
+    // this is a targeted refusal rather than an addition to `PER_FILE`
+    // above, which would also (wrongly) refuse the already-implemented
+    // input-side `-ss`.
+    for g in line.of_kind(GroupKind::Output) {
+        if g.last("ss").is_some() {
+            return Err(unimplemented_option("ss"));
+        }
+    }
     Ok(())
 }
 
@@ -604,10 +643,12 @@ fn url_of(g: &OptionGroup) -> Result<String, Diagnostic> {
     })
 }
 
-/// `-ss`/`-t`/`-to` (CLI-option audit): parse one input group's occurrence of
+/// `-ss`/`-t`/`-to` (CLI-option audit): parse one group's occurrence of
 /// `name`, under the reference's own duration grammar
 /// ([`vaco_core::parse::duration`], the same parser `-force_key_frames`
-/// already uses).
+/// already uses). `what` is `"input"` or `"output"`, matching whichever side
+/// of the file `g` binds to -- it only ever affects the wording of a parse
+/// error, never the grammar itself.
 ///
 /// # Errors
 /// OBSERVED (`ffmpeg -ss notatime -i in.wav -f null -`, exit 234):
@@ -616,67 +657,90 @@ fn url_of(g: &OptionGroup) -> Result<String, Diagnostic> {
 /// Error parsing options for input file in.wav.
 /// Error opening input files: Invalid argument
 /// ```
-fn duration_of(g: &OptionGroup, name: &str) -> Result<Option<vaco_core::Duration>, Diagnostic> {
+/// and, output-positioned (`ffmpeg -i in.mp4 -t notatime -c copy bad.mp4`,
+/// exit 234):
+/// ```text
+/// Invalid duration for option t: notatime
+/// Error parsing options for output file bad.mp4.
+/// Error opening output files: Invalid argument
+/// ```
+fn duration_of(
+    g: &OptionGroup,
+    name: &str,
+    what: &str,
+) -> Result<Option<vaco_core::Duration>, Diagnostic> {
     let Some(raw) = last_value(g, name)? else {
         return Ok(None);
     };
     vaco_core::parse::duration(&raw)
         .map(Some)
-        .ok_or_else(|| invalid_duration(name, &raw, &g.url.to_string_lossy()))
+        .ok_or_else(|| invalid_duration(name, &raw, &g.url.to_string_lossy(), what))
 }
 
-fn invalid_duration(name: &str, value: &str, url: &str) -> Diagnostic {
+fn invalid_duration(name: &str, value: &str, url: &str, what: &str) -> Diagnostic {
     Diagnostic::new(
         AvError::EINVAL,
         vec![
             format!("Invalid duration for option {name}: {value}"),
-            format!("Error parsing options for input file {url}."),
-            format!("Error opening input files: {}", AvError::EINVAL.text),
+            format!("Error parsing options for {what} file {url}."),
+            format!("Error opening {what} files: {}", AvError::EINVAL.text),
         ],
     )
 }
 
 /// `-t`/`-to` together: the reference gives `-t` priority when both are on
-/// the same input group. Measured against a 10 s fixture: `-ss 2 -t 3
-/// -to 100 -f null -` reports `time=00:00:03.00` regardless of `-to`'s own
-/// value, and `-ss 2 -to 5` alone reports `time=00:00:03.00` too (`5 - 2`,
-/// confirming `-to` is measured from the file's own start, not from `-ss`).
-fn end_bound_of(g: &OptionGroup) -> Result<Option<EndBound>, Diagnostic> {
-    if let Some(d) = duration_of(g, "t")? {
+/// the same group. Measured against a 10 s fixture, input-positioned:
+/// `-ss 2 -t 3 -to 100 -f null -` reports `time=00:00:03.00` regardless of
+/// `-to`'s own value, and `-ss 2 -to 5` alone reports `time=00:00:03.00` too
+/// (`5 - 2`, confirming `-to` is measured from the file's own start, not
+/// from `-ss`). Output-positioned, the same priority holds with no `-ss` to
+/// be relative to: `ffmpeg -i in.mp4 -t 3 -to 100 -c copy out.mp4` and
+/// `ffmpeg -i in.mp4 -t 3 -c copy out.mp4` both report `duration=3.08`.
+fn end_bound_of(g: &OptionGroup, what: &str) -> Result<Option<EndBound>, Diagnostic> {
+    if let Some(d) = duration_of(g, "t", what)? {
         return Ok(Some(EndBound::AfterSeek(d)));
     }
-    Ok(duration_of(g, "to")?.map(EndBound::Absolute))
+    Ok(duration_of(g, "to", what)?.map(EndBound::Absolute))
 }
 
 /// `-to` is absolute from the file's own start (see [`end_bound_of`]), so a
-/// value at or before `-ss` (default 0 with no `-ss`) names an empty or
-/// backwards range. OBSERVED (`ffmpeg -ss 5 -to 5 -i in.wav -f null -`,
-/// exit 234 -- and the same at `-to` values below `-ss` too, including with
-/// no `-ss` at all and `-to 0`):
+/// value at or before `-ss` (default 0 with no `-ss`, and always 0 on the
+/// output side -- there is no output `-ss`) names an empty or backwards
+/// range. OBSERVED, input-positioned (`ffmpeg -ss 5 -to 5 -i in.wav -f null
+/// -`, exit 234 -- and the same at `-to` values below `-ss` too, including
+/// with no `-ss` at all and `-to 0`):
 /// ```text
 /// [in#0] -to value smaller than -ss; aborting.
 /// Error opening input file in.wav.
 /// Error opening input files: Invalid argument
 /// ```
+/// and OBSERVED, output-positioned (`ffmpeg -i in.mp4 -to 0 -c copy out.mp4`,
+/// exit 234 -- the reference reuses its input-side wording verbatim, `-ss`
+/// mention included, even though there is no output `-ss` to name):
+/// ```text
+/// [out#0] -to value smaller than -ss; aborting.
+/// Error opening output file out.mp4.
+/// Error opening output files: Invalid argument
+/// ```
 /// `-t` (`EndBound::AfterSeek`) cannot trigger this: it is a duration added
-/// to `-ss`, never a point that can fall before it.
+/// to `-ss` (or to 0, output-side), never a point that can fall before it.
 fn validate_bounds(
     index: u32,
     seek: Option<vaco_core::Duration>,
     end: Option<EndBound>,
     url: &str,
+    what: &str,
 ) -> Result<(), Diagnostic> {
     let Some(EndBound::Absolute(to)) = end else {
         return Ok(());
     };
     let start = seek.unwrap_or(vaco_core::Duration(0));
     if to <= start {
+        let tag = if what == "input" { "in" } else { "out" };
         return Err(Diagnostic::opening(
             AvError::EINVAL,
-            vec![format!(
-                "[in#{index}] -to value smaller than -ss; aborting."
-            )],
-            "input",
+            vec![format!("[{tag}#{index}] -to value smaller than -ss; aborting.")],
+            what,
             url,
         ));
     }

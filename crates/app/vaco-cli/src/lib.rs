@@ -80,6 +80,7 @@ pub mod input;
 pub mod listing;
 pub mod nullmux;
 pub mod output;
+pub mod output_trim;
 pub mod overwrite;
 pub mod print_graphs;
 pub mod progress;

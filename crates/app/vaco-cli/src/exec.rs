@@ -206,6 +206,10 @@ pub struct ResolvedOutput {
     /// (`-avoid_negative_ts`, `-max_interleave_delta`, …), fed to
     /// [`vaco_sched::spec::PipelineSpec::add_output_with`] in [`run_pipeline`].
     pub format_opts: vaco_format_core::FormatOptions,
+    /// `-t`/`-to` on this output ([`crate::cli::OutputSpec::end`]), carried
+    /// through so [`run_pipeline`] can wrap this output's muxer in
+    /// [`crate::output_trim::OutputTrim`].
+    pub end: Option<crate::cli::EndBound>,
 }
 
 /// Everything a completed run reports.
@@ -516,6 +520,7 @@ pub fn resolve_output(
             map_chapters: out.map_chapters,
             map_metadata: out.map_metadata,
             format_opts: out.format_opts.clone(),
+            end: out.end,
         });
     }
 
@@ -603,6 +608,7 @@ pub fn resolve_output(
         map_chapters: out.map_chapters,
         map_metadata: out.map_metadata,
         format_opts: out.format_opts.clone(),
+        end: out.end,
     })
 }
 
@@ -1803,7 +1809,21 @@ pub fn run_pipeline(
     let mut sinks: Vec<(Sink, Option<Arc<AtomicU64>>)> = Vec::new();
     for out in outputs.iter().filter(|o| !o.dropped) {
         let (inner, high_water) = open_output(out, overwrite)?;
-        let muxer: Box<dyn Muxer> = Box::new(TallyingMuxer::new(inner, out.sink.clone()));
+        // `-t`/`-to`, output-positioned (`OutputSpec::end`): wrapped
+        // *outside* `TallyingMuxer`, not inside. `OutputTrim::write_packet`
+        // always returns `Ok(())` whether it forwarded the packet or
+        // silently dropped it -- it has no way to tell a wrapping counter
+        // which one happened. Putting it outside means a dropped packet
+        // never reaches `TallyingMuxer::write_packet` at all, so it is
+        // never tallied or counted toward the summary line's byte total
+        // either; putting it inside (the first version of this fix) let
+        // every trimmed packet still increment the tally, since `Tallying
+        // Muxer` only knows "the call below me returned `Ok`", not "a byte
+        // was actually written" -- caught by `output_side_t_stops_writing_
+        // early` (`crate::tests`), which asserts the tally itself, not just
+        // the file `ffprobe` reads back.
+        let tallying: Box<dyn Muxer> = Box::new(TallyingMuxer::new(inner, out.sink.clone()));
+        let muxer: Box<dyn Muxer> = crate::output_trim::OutputTrim::wrap(tallying, out.end);
 
         // `add_output_with`, not the plain `add_output`: the container's
         // flags still come from the muxer itself — `MuxBuilder::new` reads
@@ -2856,6 +2876,7 @@ mod tests {
             map_chapters: None,
             map_metadata: None,
             format_opts: vaco_format_core::FormatOptions::default(),
+            end: None,
         };
         let (mut muxer, high_water) =
             open_output(&out, crate::overwrite::OverwritePolicy::Always).unwrap();
@@ -3329,6 +3350,7 @@ mod tests {
             map_chapters: None,
             map_metadata: None,
             format_opts: vaco_format_core::FormatOptions::default(),
+            end: None,
         };
         let t = OutputTally {
             streams: vec![
@@ -3375,6 +3397,7 @@ mod tests {
             map_chapters: None,
             map_metadata: None,
             format_opts: vaco_format_core::FormatOptions::default(),
+            end: None,
         };
         let t = OutputTally {
             streams: vec![
