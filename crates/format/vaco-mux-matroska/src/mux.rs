@@ -1,124 +1,35 @@
 //! [`MatroskaMuxer`]: the shared implementation behind the `matroska` and
 //! `webm` registrations.
 //!
-//! # Metadata, chapters and attachments (M30, gap 1)
+//! # Metadata, chapters and attachments
 //!
-//! [`Muxer::set_metadata`] stores the [`MuxMetadata`] it is handed; the
-//! actual `Tags`/`Chapters`/`Attachments` elements are built in
-//! [`MatroskaMuxer::write_header`], right after `Tracks` — matching the
-//! element order measured against `ffmpeg 8.1` (`Info`, `Tracks`,
-//! `Chapters`, `Attachments`, `Tags`, then the first `Cluster`).
+//! [`Muxer::set_metadata`] stores [`MuxMetadata`]; `write_header` emits
+//! `Info`, `Tracks`, `Chapters`, `Attachments`, and `Tags` in that measured
+//! order before the first `Cluster`. File and stream titles map to `Title`
+//! and `TrackEntry::Name`; stream language maps to `TrackEntry::Language`.
+//! Remaining keys become uppercase `SimpleTag` names with file- or
+//! track-level `Targets`.
 //!
-//! Three keys route to a dedicated element instead of a `SimpleTag`, each
-//! measured directly (`ebmldump`-style byte inspection of `ffmpeg -metadata
-//! title=... -metadata:s:v:0 language=eng -metadata:s:v:0 title=...`):
+//! Chapter timestamps use RFC 9559 nanoseconds independently of
+//! `TimestampScale`; missing positive IDs use 1-based chapter positions.
+//! Attachment fields map directly to `AttachedFile`, while `FileUID` is
+//! derived deterministically from position and filename for reproducible
+//! output. Unlike the reference, `webm` writes supplied attachments instead
+//! of silently discarding caller data.
 //!
-//! * A file-level `title` tag becomes `Info > Title`, not a `Tags` entry.
-//! * A per-stream `title` tag becomes that `TrackEntry`'s `Name` (`0x536E`).
-//! * A per-stream `language` tag becomes that `TrackEntry`'s `Language`,
-//!   replacing the `"und"` default — [`crate::codec`] and the rest of this
-//!   file are otherwise unaware any language was ever stated.
+//! # `CRC-32` and `SeekHead`
 //!
-//! Every other tag becomes a `SimpleTag` inside a `Tag`: one `Tag` with an
-//! empty `Targets` for file-level tags, one `Tag` per stream that has any
-//! left over with `Targets > TagTrackUID` naming it. `TagName` is the
-//! caller's key **uppercased** — measured: `-metadata artist=X` writes
-//! `TagName=ARTIST`, not `TagName=artist`. This crate does not reproduce the
-//! reference's own auto `ENCODER`/`DURATION` `SimpleTag`s (those stamp the
-//! reference's own build identity and a duration this trait cannot see
-//! ahead of time; `Info > WritingApp` already carries this crate's own
-//! identity).
-//!
-//! Chapters map [`vaco_core::Chapter`] fields directly: `ChapterUID` is the
-//! chapter's `id` when positive (matching the reference, which — for a
-//! `[CHAPTER]` script with no explicit `id` — numbers chapters `1, 2, ...` in
-//! order) or the chapter's 1-based position otherwise; `ChapterTimeStart`/
-//! `ChapterTimeEnd` are the timestamps rescaled to nanoseconds (RFC 9559's
-//! unit for these two fields, independent of `TimestampScale`); a `title` key
-//! in the chapter's own metadata becomes `ChapterDisplay > ChapString`, and a
-//! `language` key becomes `ChapLanguage` (default `"und"`).
-//!
-//! Attachments map [`vaco_format_core::MuxAttachment`] directly onto
-//! `AttachedFile`: `filename` → `FileName`, `mime_type` → `FileMimeType`,
-//! `description` → `FileDescription` (omitted when empty), `data` →
-//! `FileData`. `FileUID` has no caller-supplied source (`MuxAttachment` has
-//! no UID field) and is derived deterministically from the attachment's
-//! position and filename rather than drawn from a clock or an RNG — neither
-//! is reachable from `wasm32` and a random `FileUID` would make output
-//! non-reproducible under `-fflags +bitexact`, which is exactly the failure
-//! mode this crate's own module docs already record for `DateUTC`. `webm`
-//! measured as rejecting attachments outright (the reference silently drops
-//! the input stream); this crate does not special-case that — `webm` has no
-//! attachment allow-list the way `codec::webm_allows_video` does for tracks,
-//! so an attachment handed to a `webm` output is written anyway rather than
-//! silently dropped, which is the more honest failure (a reader ignores an
-//! element it does not expect; a silent drop looks like the caller's data
-//! vanished).
-//!
-//! `Cues` needs no such channel — every field it carries comes from the
-//! packets themselves — so it was already implemented in full.
-//!
-//! # `CRC-32` and `SeekHead` (CONFORMANCE-FINDINGS 15)
-//!
-//! Both measured directly against `ffmpeg 8.1`, `-bitexact`, on
-//! `ebmldump`-style byte inspection of a real muxed file (see
-//! `docs/format/vaco-mux-matroska.md`) — this is what closes the byte gap
-//! that made every Matroska output in the byte-identical conformance suite
-//! diverge, not a stylistic addition.
-//!
-//! **`CRC-32`.** Every Level-1 element (`SeekHead`, `Info`, `Tracks`,
+//! Every Level-1 element (`SeekHead`, `Info`, `Tracks`,
 //! `Chapters`, `Attachments`, `Tags`, `Cluster`, `Cues`) opens with a
-//! `CRC-32` element (RFC 8794 §11.3.2) as its first child: standard CRC-32
-//! (IEEE, `vaco_hash::crc32` — D11's single owner of the `crc` crate, no
-//! second table here), little-endian, over the element's own payload
-//! excluding the `CRC-32` element itself. [`with_crc32`] is the one place
-//! that wrapping happens; every `*_bytes` builder in this file routes its
-//! body through it before handing it to `write_element`. Written
-//! unconditionally in this crate, which matches the reference's own default:
-//! `ffmpeg -h muxer=matroska` lists `-write_crc32 <boolean> ... (default
-//! true)`, a real `AVOption` this crate has no channel to turn off (`Muxer`
-//! carries no per-muxer option surface) — moot in practice, since `true` is
-//! also what every measurement in this file was taken against, and
-//! `-bitexact` does not touch it either.
+//! `CRC-32` element per RFC 8794 §11.3.2. [`with_crc32`] computes standard
+//! IEEE CRC-32 over the remaining payload and stores it little-endian. It is
+//! unconditional because `Muxer` exposes no per-muxer `write_crc32` option.
 //!
-//! **`SeekHead`.** The crate's own former objection — that building it
-//! needs "either a second seek-patch pass or fixed-width placeholder
-//! arithmetic" — turned out to describe a harder problem than the reference
-//! actually solves. It reserves a **fixed** budget
-//! ([`SEEKHEAD_RESERVED_BYTES`], measured at 161 bytes and stable across a
-//! 3-, 4-, 5- and 6-entry `SeekHead`, a 3 KB file and a 300 KB one — i.e.
-//! independent of how many entries there are or how wide their
-//! `SeekPosition` values encode), writes whatever real `Seek` entries it
-//! already knows, and pads the remainder of that fixed budget with a `Void`
-//! element whose own size field is always the full eight-octet VINT width
-//! (measured on every sample: `Void`'s header is always 9 bytes, `0xEC` plus
-//! an 8-octet size), which is what lets the same reserved span be patched
-//! later without moving anything after it. [`seekhead_and_void`] builds this
-//! reserved region and both write sites — [`MatroskaMuxer::write_header`]'s
-//! initial commit and [`MatroskaMuxer::write_trailer`]'s later patch — call
-//! it, so the padding math lives in exactly one place. `patch_known_size`
-//! (already in `vaco-format-ebml`) is the same seek-and-overwrite primitive
-//! `Segment`'s own size field already used; nothing new needed adding there.
-//!
-//! `Info`, `Tracks`, `Chapters` and `Attachments` (whichever of the last two
-//! exist) get a `Seek` entry immediately, at `write_header` time, because
-//! their absolute positions are fully determined the moment their bodies are
-//! built — they sit back-to-back right after the fixed reservation, in the
-//! order this crate already writes them. `Cues` cannot: its content and
-//! position are only known after every `Cluster` has been written, at
-//! `write_trailer` time. So, measured on a **seekable** sink: the reference
-//! seeks back to the start of the reservation and rewrites it — same 161-byte
-//! span, recomputed from scratch with the `Cues` entry added — once `Cues`'
-//! position is known. On a **non-seekable** sink (a pipe: `ffmpeg -f
-//! matroska -` into a plain redirect, which disables seeking at the
-//! `pipe:` protocol layer regardless of what the receiving fd could
-//! technically do) it cannot go back, so it commits to the final `SeekHead`
-//! at `write_header` time with whatever it already knows — and, measured
-//! directly, **omits `Cues` entirely** rather than writing an unindexed one:
-//! there is no `Cues` element anywhere in the piped output, not merely a
-//! missing `Seek` entry for it. This crate reproduces exactly that asymmetry
-//! rather than writing `Cues` unconditionally and only varying whether it is
-//! indexed.
+//! [`SEEKHEAD_RESERVED_BYTES`] is a measured fixed 161-byte reservation;
+//! [`seekhead_and_void`] pads unused space with a `Void` whose size uses an
+//! eight-octet VINT. A seekable sink patches the same span with the eventual
+//! `Cues` position. A non-seekable sink cannot patch it and omits `Cues`,
+//! matching measured pipe output. See `docs/format/vaco-mux-matroska.md`.
 
 use vaco_codec_core::{CodecId, CodecParameters};
 use vaco_core::{Disposition, Error, MediaType, Rational, Result};
@@ -304,10 +215,10 @@ struct TrackOut {
     channels: u64,
     bit_depth: Option<u64>,
     extradata: Option<Vec<u8>>,
-    /// Video only. `Video::FlagInterlaced`'s source (CONFORMANCE-FINDINGS 49).
+    /// Video-only source for `Video::FlagInterlaced`.
     field_order: vaco_codec_core::FieldOrder,
     /// Video only. `Video::Colour`'s source, when it maps to one this crate
-    /// has actually measured a reference value for (CONFORMANCE-FINDINGS 49).
+    /// has a measured reference value for.
     chroma_location: vaco_color::ChromaLocation,
     /// Set once, in `flush_header_bytes`, for a `V_MPEG4/ISO/AVC` or
     /// `V_MPEGH/ISO/HEVC` track whose `extradata` arrived Annex-B-shaped —
@@ -456,9 +367,8 @@ pub struct MatroskaMuxer {
     /// know where each chunk begins in the single stream this trait can
     /// write to (see that module's docs for why it needs to).
     cluster_starts: Vec<u64>,
-    /// Set by [`Muxer::set_metadata`], read by [`MatroskaMuxer::write_header`]
-    /// (M30, gap 1). Empty for every caller that never calls
-    /// `MuxBuilder::with_metadata`, which is every pre-existing call site.
+    /// Set by [`Muxer::set_metadata`] and read by
+    /// [`MatroskaMuxer::write_header`]. Empty when metadata is not supplied.
     metadata: MuxMetadata,
     /// `(target element ID, position relative to the Segment's data start)`
     /// for every `Seek` entry written into the `SeekHead` reservation at
@@ -479,7 +389,7 @@ pub struct MatroskaMuxer {
     /// for [`MatroskaMuxer::date_utc_ns`]; kept here too because
     /// [`MatroskaMuxer::tags_bytes`] needs the same fact to drop the
     /// auto-populated `encoder` file tag the same way `DateUTC` is dropped
-    /// (CONFORMANCE-FINDINGS 49).
+    /// under bitexact output.
     bitexact: bool,
     /// Absolute byte offset of `Info`'s own element ID, once written — `None`
     /// when the sink is not seekable, since `Duration` (and so `Info`'s
@@ -601,10 +511,9 @@ impl MatroskaMuxer {
             .map(|(_, v)| v.as_str())
     }
 
-    /// `Info`. `duration_ticks` is `None` on a non-seekable sink — measured
-    /// directly on a pipe (CONFORMANCE-FINDINGS 49), the reference omits
-    /// `Duration` entirely there, the same asymmetry this crate already
-    /// reproduces for `Cues` (see the module docs) — and, on a seekable one,
+    /// `Info`. `duration_ticks` is `None` on a non-seekable sink, where
+    /// measured reference output omits `Duration` just as it omits `Cues`.
+    /// On a seekable sink it is
     /// `Some(0)` the first time this runs (`write_header`, before any packet
     /// exists, so the real total is not known yet) and
     /// `Some(self.max_end_ticks)` the second (`write_trailer`, once it is).
@@ -641,8 +550,7 @@ impl MatroskaMuxer {
     /// [`Muxer::add_stream`] (a caller driving the muxer directly through
     /// `dyn Muxer`, as `vaco-cli`'s scheduler does, has no way to guarantee
     /// that order — see `docs/format/vaco-mux-matroska.md`).
-    /// Child order matches the reference exactly (measured on both a
-    /// reordered-video and a video+audio file, CONFORMANCE-FINDINGS 49):
+    /// Child order is measured on reordered-video and video-plus-audio files:
     /// `TrackNumber TrackUID FlagLacing Language [disposition flags] CodecID
     /// TrackType DefaultDuration Video MaxBlockAdditionID Void CodecPrivate`
     /// for a video track, the same minus the four video-only fields for
@@ -743,7 +651,7 @@ impl MatroskaMuxer {
             // `MaxBlockAdditionID` then a 2-byte `Void` — measured
             // unconditional on every video track sampled, always `0` and
             // always exactly 2 bytes of padding, and absent from every audio
-            // track sampled alongside one (CONFORMANCE-FINDINGS 49). The
+            // track sampled alongside one. The
             // `Void`'s size field is the full 8-octet VINT width, not the
             // shortest one — measured, and the same convention this crate's
             // own `SeekHead` padding already uses (see [`VOID_HEADER_BYTES`]).
@@ -852,7 +760,7 @@ impl MatroskaMuxer {
         // output. A *per-track* `encoder` tag (e.g. `Lavc62.28.100
         // libx264`, the codec that made that stream's data) is a different
         // fact and is not suppressed — measured present in the reference's
-        // own bitexact output right alongside it (CONFORMANCE-FINDINGS 49).
+        // own bitexact output right alongside it.
         let file_tags: Vec<(String, String)> = self
             .metadata
             .tags
@@ -1139,18 +1047,9 @@ impl MatroskaMuxer {
     /// (`header_flushed`). Split out of [`Muxer::write_packet`] so that
     /// method can buffer instead when it is not.
     fn write_block(&mut self, idx: usize, packet: &Packet) -> Result<()> {
-        // CONFORMANCE-FINDINGS 19: measured directly (`ffmpeg -i
-        // <asf-with-no-video-pts> -c copy -f matroska`) — the reference
-        // refuses with "Can't write packet with unknown timestamp" rather
-        // than silently reusing the previous clock or writing `pts=0`. A
-        // source whose demuxer genuinely leaves a video packet's pts unset
-        // (AVI, ASF — neither carries a native per-packet presentation
-        // time distinct from decode order) produces exactly this on its
-        // first packet per track. Mirrors the identical, already-fixed
-        // check in `vaco-mux-mpegts` (first packet per stream only,
-        // matching the reference's own behaviour on this muxer) rather
-        // than `vaco-mux-flv`'s (every packet — that muxer's own message
-        // carries no "first" qualifier).
+        // Measured with an ASF stream lacking video PTS: the reference refuses
+        // the first packet instead of reusing a clock or writing `pts=0`.
+        // Later packets retain the fallback below.
         let is_first_for_track = matches!(self.wrote_first_block.get(idx), Some(false));
         if is_first_for_track && packet.pts.ticks().is_none() {
             return Err(Error::InvalidData("matroska: first pts value must be set"));
@@ -1160,8 +1059,8 @@ impl MatroskaMuxer {
         }
 
         let ts = packet.pts.ticks().unwrap_or(0);
-        // Matroska has no decode timestamp of its own (CONFORMANCE-FINDINGS
-        // 37) — `dts` is read only to fall back to it when `pts` is absent.
+        // Matroska has no decode timestamp field; `dts` is read only as a
+        // fallback when `pts` is absent.
         let _dts = packet.dts.ticks().unwrap_or(ts);
         let is_key = packet.is_key();
 
@@ -1253,14 +1152,11 @@ impl MatroskaMuxer {
         // time and decode order is file order, so there is nothing for a
         // `ReferenceBlock` to state that the format does not already imply.
         //
-        // Measured on `ffmpeg -c copy -f matroska`, remuxing reordered H.264
-        // (and again with AAC alongside it): **every** block is a
-        // `SimpleBlock` — 125 of them in the first cluster, zero
-        // `BlockGroup`s. We wrote 94 `BlockGroup`s and 31 `SimpleBlock`s for
-        // the same input, which cost 1697 bytes across two clusters and, worse,
-        // dropped the keyframe flag on every frame it wrapped, since a
-        // `BlockGroup` states keyframe-ness only by the *absence* of a
-        // `ReferenceBlock` (CONFORMANCE-FINDINGS 37).
+        // A measured reordered H.264 remux, with and without AAC, used 125
+        // `SimpleBlock`s and no `BlockGroup`s in its first cluster. A
+        // `BlockGroup` states keyframe status only through the absence of a
+        // `ReferenceBlock`, so adding one merely for reordering loses that
+        // information.
         let block_bytes = if needs_duration {
             block::block_group(
                 track.number,
@@ -1663,10 +1559,8 @@ mod tests {
         // real `OpusHead` here, not fixture noise — see
         // `matroska_refuses_to_finalize_a_track_that_needs_extradata_and_has_none`
         // for the case this constructor deliberately does not cover.
-        // `vaco_format_fixtures::opus::HEAD_MONO` is the shared copy every
-        // container test suite in this tree uses now (planning/E2E-GAPS.md
-        // #35 -- this crate's own local copy is what other crates' fixtures
-        // drifted from before this consolidation).
+        // `vaco_format_fixtures::opus::HEAD_MONO` is the canonical shared
+        // copy used by container tests.
         p.extradata = Some(vaco_format_fixtures::opus::HEAD_MONO.to_vec());
         p
     }
@@ -1984,11 +1878,8 @@ mod tests {
         );
     }
 
-    /// CONFORMANCE-FINDINGS 19: a track's first packet with no pts at all is
-    /// refused, not silently written as `pts=0` — measured against `ffmpeg
-    /// 9.0.1`, which refuses an ASF/AVI-sourced video stream's first packet
-    /// (neither format's demuxer states a video pts) with "Can't write
-    /// packet with unknown timestamp" on `-c copy -f matroska`.
+    /// A track's first packet without PTS is refused instead of being written
+    /// at zero, matching measured ASF/AVI stream-copy behavior.
     #[test]
     fn a_first_packet_with_no_pts_is_refused_not_written_as_zero() {
         let s = MemorySink::new();
@@ -2003,8 +1894,7 @@ mod tests {
 
     /// The second and later packets of a track are not held to the same
     /// rule — only the reference's own "first" wording is matched. A
-    /// missing `pts` past the first packet falls back to `dts` (or `0`)
-    /// exactly as before this change.
+    /// missing `pts` past the first packet falls back to `dts` or zero.
     #[test]
     fn a_later_packet_with_no_pts_falls_back_rather_than_being_refused() {
         let s = MemorySink::new();
