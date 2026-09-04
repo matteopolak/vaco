@@ -1307,6 +1307,20 @@ mod tests {
                 .with_audio_params(ChannelLayout::default_for(channels).unwrap());
             enc.send(Some(&frame)).unwrap();
             let packet = enc.receive().unwrap();
+            // SWF v19's fixed 4-bit packet is 2051 bytes mono or 4101 bytes
+            // stereo after rounding the packed header/codes up to bytes.
+            let expected_packet_bytes = match channels {
+                1 => 2051,
+                2 => 4101,
+                _ => unreachable!("test only covers mono/stereo"),
+            };
+            assert_eq!(packet.payload().len(), expected_packet_bytes);
+            assert_eq!(packet.duration, frame.duration);
+            let padded =
+                swf::decode_block(packet.payload(), channels, swf::SAMPLES_PER_PACKET).unwrap();
+            let expected_samples = usize::try_from(swf::SAMPLES_PER_PACKET).unwrap()
+                * usize::try_from(channels).unwrap();
+            assert_eq!(padded.len(), expected_samples);
             let mut dec = AdpcmSwfDecoder::new(Limits::permissive())
                 .with_audio_params(sample_rate, ChannelLayout::default_for(channels).unwrap());
             dec.send(Some(&packet)).unwrap();

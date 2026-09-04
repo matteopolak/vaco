@@ -193,17 +193,34 @@ pub(crate) fn decode_block(data: &[u8], channels: u32, sample_count: u32) -> Res
 /// always at 4-bit codes (the IMA-equivalent width, a reasonable default —
 /// a real encoder chooses per-block width to trade quality for size).
 ///
+/// SWF fixes every packet at [`SAMPLES_PER_PACKET`] samples per channel.
+/// Short input is padded by repeating each channel's final sample; callers
+/// retain the original count in the packet duration. A single packet cannot
+/// represent more than that fixed count.
+///
 /// # Errors
-/// [`Error::InvalidData`] if there are no samples.
+/// [`Error::InvalidData`] if there are no samples or if the input exceeds one
+/// fixed-size packet.
 pub(crate) fn encode_block(samples: &[i16], channels: u32) -> Result<Vec<u8>> {
     let channels = channels.max(1);
-    let per_channel = crate::ima::deinterleave(samples, channels as usize)?;
-    let Some(len) = per_channel.first().map(Vec::len) else {
+    let mut per_channel = crate::ima::deinterleave(samples, channels as usize)?;
+    let Some(input_len) = per_channel.first().map(Vec::len) else {
         return Err(Error::InvalidData("adpcm_swf: no samples"));
     };
-    if len == 0 {
+    if input_len == 0 {
         return Err(Error::InvalidData("adpcm_swf: no samples"));
     }
+    let packet_len = usize::try_from(SAMPLES_PER_PACKET).unwrap_or(usize::MAX);
+    if input_len > packet_len {
+        return Err(Error::InvalidData(
+            "adpcm_swf: more samples than one packet can represent",
+        ));
+    }
+    for channel in &mut per_channel {
+        let last = channel.last().copied().unwrap_or(0);
+        channel.resize(packet_len, last);
+    }
+    let len = packet_len;
     let bits = 4u32;
     let mut w = BitWriter::default();
     w.write(bits - 2, 2);
@@ -296,6 +313,17 @@ mod tests {
         assert!(matches!(
             decode_block(&[0], 1, 100),
             Err(Error::UnexpectedEof)
+        ));
+    }
+
+    #[test]
+    fn oversized_block_is_rejected_instead_of_emitting_invalid_wire() {
+        let samples = vec![0i16; SAMPLES_PER_PACKET as usize + 1];
+        assert!(matches!(
+            encode_block(&samples, 1),
+            Err(Error::InvalidData(
+                "adpcm_swf: more samples than one packet can represent"
+            ))
         ));
     }
 }

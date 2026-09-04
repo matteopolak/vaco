@@ -39,7 +39,10 @@ The published SWF `ADPCMPACKET` record has one initial sample plus exactly
 per channel. When a caller supplies a non-zero `Packet::duration`, the
 decoder converts it to an explicit count; this preserves a shorter final
 event-sound block whose container-level `SoundSampleCount` trims the encoded
-packet.
+packet. The encoder emits that same fixed-size packet for every input up to
+4096 samples per channel, repeating each channel's final sample as deterministic
+padding while retaining the real count in `Packet::duration`; larger frames
+are rejected because this one-frame/one-packet API does not split them.
 
 ## Bugs found and fixed
 
@@ -47,7 +50,7 @@ packet.
 first real-fixture regression test for these four codecs; before it, each
 had only a self-round-trip test — this crate's own encoder feeding this
 crate's own decoder, which cannot catch either side sharing the same wrong
-assumption. It found three real bugs, all now fixed:
+assumption. It found four real bugs, all now fixed:
 
 - **`adpcm_ima_qt` discarded 7 bits of predictor precision at every chunk
   boundary.** `decode_qt_block` re-derived the running predictor/step index
@@ -84,6 +87,13 @@ assumption. It found three real bugs, all now fixed:
   the decoder now emits the required 4,096 samples when no explicit packet
   duration is present. A non-zero duration remains authoritative for a
   caller-provided partial count.
+
+- **`adpcm_swf` encoded non-conformant partial packets.** The encoder used to
+  stop after the input's final sample, even though SWF v19 fixes every packet
+  at 4,096 samples per channel. It now pads short input by repeating each
+  channel's final sample, keeps the original sample count in the packet
+  duration, and rejects input too large for one packet rather than emitting a
+  variable-length block.
 
 ## Known gaps
 
