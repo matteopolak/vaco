@@ -17,6 +17,9 @@
 //! ([`crate::keepalive`]) is carried as opaque bytes -- no JSON crate is a
 //! D10/D11 decision this module does not make on its own.
 
+use core::fmt;
+
+use crate::eap::{AuthenticationLimits, EapError, EapolPacket};
 use vaco_core::{Error, Result};
 
 fn malformed(detail: &'static str) -> Error {
@@ -48,6 +51,98 @@ fn u32_at(buf: &[u8], at: usize) -> Result<u32> {
 pub const VSF_ETHERTYPE: u16 = 0xCCE0;
 /// Full Datagram Mode's GRE `Protocol Type` (§5.3.1): plain IPv4.
 pub const PROTOCOL_TYPE_IP: u16 = 0x0800;
+/// Annex D authentication traffic's cleartext GRE `Protocol Type`.
+pub const PROTOCOL_TYPE_EAPOL: u16 = 0x888E;
+
+/// A cleartext Annex D EAPOL packet carried directly after a GRE header.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthenticationFrame {
+    /// GRE metadata, including any caller-supplied sequence number.
+    pub header: GreHeader,
+    /// Typed and bounded EAPOL payload.
+    pub packet: EapolPacket,
+}
+
+impl AuthenticationFrame {
+    /// Creates an unencrypted Annex D frame for the 2022-compatible GRE revision.
+    #[must_use]
+    pub const fn new(packet: EapolPacket, sequence_number: Option<u32>) -> Self {
+        Self {
+            header: GreHeader {
+                checksum: None,
+                key_or_nonce: None,
+                sequence_number,
+                h: false,
+                rv: RistVersion::V2022,
+                protocol_type: PROTOCOL_TYPE_EAPOL,
+            },
+            packet,
+        }
+    }
+
+    /// Parses a GRE frame only when it is Annex D's unencrypted `0x888E` form.
+    pub fn parse(
+        data: &[u8],
+        limits: AuthenticationLimits,
+    ) -> core::result::Result<Self, AuthenticationFrameError> {
+        let (header, offset) =
+            GreHeader::parse(data).map_err(|_| AuthenticationFrameError::InvalidGre)?;
+        if header.protocol_type != PROTOCOL_TYPE_EAPOL {
+            return Err(AuthenticationFrameError::WrongProtocolType);
+        }
+        if header.key_or_nonce.is_some() || header.h {
+            return Err(AuthenticationFrameError::EncryptedAuthentication);
+        }
+        let payload = data
+            .get(offset..)
+            .ok_or(AuthenticationFrameError::InvalidGre)?;
+        let packet = EapolPacket::parse(payload, limits).map_err(AuthenticationFrameError::Eap)?;
+        Ok(Self { header, packet })
+    }
+
+    /// Serializes the GRE header followed by the untouched cleartext EAPOL bytes.
+    pub fn serialize(&self) -> core::result::Result<Vec<u8>, AuthenticationFrameError> {
+        if self.header.protocol_type != PROTOCOL_TYPE_EAPOL {
+            return Err(AuthenticationFrameError::WrongProtocolType);
+        }
+        if self.header.key_or_nonce.is_some() || self.header.h {
+            return Err(AuthenticationFrameError::EncryptedAuthentication);
+        }
+        let payload = self
+            .packet
+            .serialize()
+            .map_err(AuthenticationFrameError::Eap)?;
+        let mut out = self.header.serialize();
+        out.extend_from_slice(&payload);
+        Ok(out)
+    }
+}
+
+/// Why a GRE datagram could not be used as Annex D authentication traffic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthenticationFrameError {
+    /// The GRE header is malformed.
+    InvalidGre,
+    /// The GRE protocol type is not Annex D's `0x888E`.
+    WrongProtocolType,
+    /// Authentication was incorrectly marked as PSK-encrypted.
+    EncryptedAuthentication,
+    /// The nested EAPOL/EAP packet is invalid.
+    Eap(EapError),
+}
+
+impl fmt::Display for AuthenticationFrameError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidGre => f.write_str("invalid GRE authentication header"),
+            Self::WrongProtocolType => f.write_str("GRE packet is not Annex D EAPOL"),
+            Self::EncryptedAuthentication => f.write_str("Annex D EAPOL must remain cleartext"),
+            Self::Eap(error) => write!(f, "{error}"),
+        }
+    }
+}
+
+impl std::error::Error for AuthenticationFrameError {}
 
 /// §5.1's `RV` field (`Reserved0` bits 10-12): which `TR-06-2` revision's
 /// packet format a sender is using.

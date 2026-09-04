@@ -3,7 +3,7 @@
 ## What it is
 
 `vaco-protocol-rist` will implement the optional PSK authentication method from
-VSF TR-06-2:2022 Annex D. It is a sans-I/O, mutually authenticated
+VSF TR-06-2:2024 Annex D. It is a sans-I/O, mutually authenticated
 SHA256-SRP6a exchange carried as cleartext EAPOL inside GRE Protocol Type
 `0x888E`; it produces an independent 32-byte session key `K` and gates media
 until authentication succeeds.
@@ -40,6 +40,11 @@ can supply entropy without leaking dependency types into the API.
 `SystemSecretSource` is available only on non-wasm targets. Passwords, private
 exponents, shared secrets, and session keys are zeroized when dropped.
 Validator comparisons use constant-time equality.
+
+The 2023 revision corrected both the 2022 Annex D.2 M1 formula and incorrectly
+calculated D.9 example values; the 2024 publication carries those corrections.
+The implementation therefore follows the corrected 2024 text rather than
+reproducing the obsolete 2022 output named by the original issue.
 
 ## Group policy and arithmetic
 
@@ -194,12 +199,12 @@ generated documentation index will describe the new authentication flow,
 configuration, limits, dependency, and remaining interop boundary.
 
 The implementation is derived only from the already-declared official source
-`vsf-tr-06-2-2022`, specifically Annex D.1-D.6 and D.9. Commits touching the
+`vsf-tr-06-2-2024`, specifically Annex D.1-D.6 and D.9. Commits touching the
 protocol crate carry:
 
 ```text
 Vaco-Provenance: spec
-Vaco-Spec-Ref: vsf-tr-06-2-2022 Annex D
+Vaco-Spec-Ref: vsf-tr-06-2-2024 Annex D
 Vaco-Clean-Room: yes
 ```
 

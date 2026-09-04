@@ -9,13 +9,18 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+crypto-bigint.workspace = true
 vaco-core = { path = "../../core/vaco-core" }
 vaco-crypto = { path = "../../core/vaco-crypto" }
+vaco-hash = { path = "../../core/vaco-hash" }
 vaco-limits = { path = "../../core/vaco-limits" }
 vaco-protocol-core = { path = "../../io/vaco-protocol-core" }
 vaco-protocol-dtls = { path = "../../io/vaco-protocol-dtls" }
 vaco-rtp = { path = "../../model/vaco-rtp" }
 vaco-time = { path = "../../core/vaco-time" }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+crypto-bigint = { workspace = true, features = ["getrandom"] }
 
 [dev-dependencies]
 proptest.workspace = true

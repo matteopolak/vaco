@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking. This repository explicitly requires work in the shared main checkout for this task; do not create a worktree or dispatch reviewer/test subagents.
 
-**Goal:** Add bounded, mutually authenticated Annex D EAP SHA256-SRP6a sessions to `vaco-protocol-rist`, carried in cleartext GRE Protocol Type `0x888E`.
+**Goal:** Add bounded, mutually authenticated TR-06-2:2024 Annex D EAP SHA256-SRP6a sessions to `vaco-protocol-rist`, carried in cleartext GRE Protocol Type `0x888E`. The 2024 source is intentional: VSF corrected the 2022 M1 formula and D.9 values in 2023.
 
 **Architecture:** A typed EAPOL codec and GRE adapter feed separate sans-I/O client/server state machines. A private `crypto-bigint` adapter performs constant-time fixed-width SRP arithmetic for the one allowlisted 2048-bit group, while injected entropy, zeroized secrets, cached retransmissions, and explicit data gating make security-sensitive state visible in the API.
 
@@ -217,7 +217,7 @@ Create a scoped `commit-tree` commit with the exact trailers:
 feat(protocol-rist): add Annex D SRP authentication
 
 Vaco-Provenance: spec
-Vaco-Spec-Ref: vsf-tr-06-2-2022 Annex D
+Vaco-Spec-Ref: vsf-tr-06-2-2024 Annex D
 Vaco-Clean-Room: yes
 ```
 

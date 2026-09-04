@@ -181,11 +181,13 @@
 pub mod bonding;
 pub mod buffer;
 pub mod dtls;
+pub mod eap;
 pub mod gre;
 pub mod keepalive;
 pub mod psk;
 pub mod retransmit;
 pub mod rtcp;
+pub mod srp;
 pub mod stats;
 
 pub use vaco_protocol_core::{ProtocolError, Result};
