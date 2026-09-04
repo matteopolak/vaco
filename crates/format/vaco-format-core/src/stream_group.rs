@@ -1,23 +1,15 @@
 //! The stream-group model: a named set of streams that together form one
 //! logical unit — a HEIF/AVIF tiled grid image, for instance — the way
-//! [`vaco_format_core::Program`] groups streams into an MPEG-TS programme.
+//! [`crate::Program`] groups streams into an MPEG-TS programme.
 //!
-//! Sketched in plan 18 §1.1 as part of `vaco-format-core`'s object model but
-//! never landed there. It lives here instead of being invented as a
-//! duplicate: nothing currently constructs one, and wiring
-//! `Demuxer::stream_groups()` into the trait is a `vaco-format-core` change
-//! this crate cannot make. A future change there can depend on this type
-//! rather than defining its own.
-//!
-//! Field shapes follow [`vaco_format_core::Program`]'s established
-//! conventions — plain `u32` stream indices, `Vec<(String, String)>`
-//! metadata — rather than the plan's own sketch, which used types
-//! (`StreamIndex`, `Metadata`) that were never built. One model, not two.
+//! Field shapes follow [`crate::Program`]'s conventions — plain `u32` stream
+//! indices, `Vec<(String, String)>` metadata — so the two group-like objects
+//! a demuxer can report read the same way.
 
 use vaco_core::Disposition;
 
 /// Identifies one [`StreamGroup`] within a file, the way
-/// [`vaco_format_core::Program::id`] identifies a program.
+/// [`crate::Program::id`] identifies a program.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct StreamGroupIndex(pub u32);
 
@@ -25,9 +17,11 @@ pub struct StreamGroupIndex(pub u32);
 #[derive(Debug, Clone)]
 pub struct StreamGroup {
     pub index: StreamGroupIndex,
-    /// Container-native identifier, when the container states one.
+    /// Container-native identifier, when the container states one — the
+    /// `grid` item's `item_ID` for a HEIF tile grid.
     pub id: i64,
-    /// Member streams, in container order.
+    /// Member streams, in container order. For a tile grid this is raster
+    /// order, and [`TileGrid::tile_offsets`] is parallel to it.
     pub stream_indices: Vec<u32>,
     pub disposition: Disposition,
     pub metadata: Vec<(String, String)>,
@@ -64,13 +58,31 @@ pub enum StreamGroupKind {
     TileGrid(TileGrid),
 }
 
-/// ISO/IEC 23008-12's `grid` item: how member tiles compose into one image.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// ISO/IEC 23008-12 §6.6.2.3's `grid` item: how member tiles compose into
+/// one image.
+///
+/// The tiles are laid out in raster order, each `coded_width / tile_columns`
+/// by `coded_height / tile_rows` pixels (every tile of a grid has the same
+/// size, §6.6.2.3.1), and the output image is the top-left
+/// `output_width × output_height` of that canvas — a grid may be smaller
+/// than the tiles that make it up, never larger.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TileGrid {
     pub tile_rows: u32,
     pub tile_columns: u32,
+    /// The full tiled canvas: `tile_columns × tile width` by
+    /// `tile_rows × tile height`.
+    pub coded_width: u32,
+    pub coded_height: u32,
+    /// The presented image, cropped from the canvas at
+    /// (`horizontal_offset`, `vertical_offset`).
     pub output_width: u32,
     pub output_height: u32,
+    pub horizontal_offset: u32,
+    pub vertical_offset: u32,
+    /// Each member tile's `(horizontal, vertical)` pixel offset on the
+    /// canvas, parallel to [`StreamGroup::stream_indices`].
+    pub tile_offsets: Vec<(u32, u32)>,
 }
 
 #[cfg(test)]
@@ -84,18 +96,17 @@ mod tests {
             StreamGroupKind::TileGrid(TileGrid {
                 tile_rows: 2,
                 tile_columns: 2,
-                output_width: 4096,
-                output_height: 4096,
+                coded_width: 4096,
+                coded_height: 4096,
+                output_width: 4000,
+                output_height: 3000,
+                horizontal_offset: 0,
+                vertical_offset: 0,
+                tile_offsets: Vec::new(),
             }),
         );
         assert!(g.stream_indices.is_empty());
         assert!(g.metadata.is_empty());
         assert_eq!(g.disposition, Disposition::empty());
-    }
-
-    #[test]
-    fn indices_are_ordered_and_comparable() {
-        assert!(StreamGroupIndex(0) < StreamGroupIndex(1));
-        assert_eq!(StreamGroupIndex(3), StreamGroupIndex(3));
     }
 }

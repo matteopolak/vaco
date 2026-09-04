@@ -45,7 +45,7 @@ use vaco_packet::Packet;
 use crate::flags::FormatFlags;
 use crate::options::FormatOptions;
 use crate::time::{DurationInputs, TimestampFixer, container_start_time};
-use crate::{Chapter, Demuxer, ParserProvider, Program, Stream};
+use crate::{Chapter, Demuxer, ParserProvider, Program, Stream, StreamGroup};
 
 /// Why the discovery loop stopped.
 ///
@@ -931,6 +931,10 @@ impl<D: Demuxer> Demuxer for Discovery<D> {
 
     fn metadata(&self) -> &[(String, String)] {
         self.inner.metadata()
+    }
+
+    fn stream_groups(&self) -> &[StreamGroup] {
+        self.inner.stream_groups()
     }
 
     /// Replay what discovery consumed, then delegate — applying the timestamp

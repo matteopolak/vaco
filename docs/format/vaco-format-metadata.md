@@ -13,7 +13,7 @@ file.
 |---|---|
 | `keys` | `&str` constants for the generic metadata keys `-metadata` accepts: `title`, `artist`, `album`, `album_artist`, `date`, `track`, `disc`, `genre`, `comment`, `composer`, `copyright`, `encoder`, `description`, `performer`, `publisher`, `language`. Measured with `ffprobe 8.1`, not exhaustive — add to it when a real need appears. |
 | `conv` | `ConvEntry`/`MetadataConv`: a `(generic, native)` table, plus `to_native`/`to_generic`/`map_key`/`convert`. An unmapped key passes through unchanged, matching the reference. |
-| `stream_group` | `StreamGroup`/`StreamGroupIndex`/`StreamGroupKind`/`TileGrid` — a named set of streams forming one logical unit, e.g. a HEIF/AVIF tiled grid image. |
+| `stream_group` | re-export of `vaco_format_core::stream_group` (`StreamGroup`/`StreamGroupIndex`/`StreamGroupKind`/`TileGrid`) — a named set of streams forming one logical unit, e.g. a HEIF/AVIF tiled grid image. |
 
 ### What is deliberately not here
 
@@ -23,14 +23,13 @@ already returns the real ones through `Demuxer::programs`/`chapters`, so a
 second type here would be exactly the D19 mistake this project keeps a page
 of postmortems about.
 
-`StreamGroup` has no such prior definition: plan 18 §1.1 sketched one but it
-never landed in `vaco-format-core`. It lives here using that crate's actual
-field conventions (`u32` stream indices, `Vec<(String, String)>` metadata) —
-not the plan's own sketch, which used types (`StreamIndex`, `Metadata`) that
-were never built. **Nothing constructs one yet and `Demuxer` has no
-`stream_groups()` method** — wiring that in is a `vaco-format-core` change,
-out of this crate's ownership. A HEIF/AVIF `grid` item is the obvious first
-producer.
+`StreamGroup` took the same path on 2026-09-03: it started here (plan 18
+§1.1 sketched it, nothing in `vaco-format-core` had it) and moved to
+`vaco_format_core::stream_group` the day `Demuxer::stream_groups()` joined
+the trait, with `vaco-demux-mp4`'s HEIF/AVIF `grid` item as its first
+producer. This crate re-exports it — `vaco_format_metadata::stream_group`
+and the root-level `StreamGroup`/`StreamGroupIndex`/`StreamGroupKind`/
+`TileGrid` names still resolve — so nothing that imported it here moves.
 
 ### Each container ships its own `MetadataConv` table
 

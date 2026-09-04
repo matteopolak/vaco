@@ -56,6 +56,7 @@ pub mod options;
 pub mod probe;
 pub mod seek;
 pub mod sidedata;
+pub mod stream_group;
 pub mod time;
 pub mod vacoraw;
 
@@ -78,6 +79,7 @@ pub use sidedata::{
     DisplayTransform, StreamSideData, dihedral_transform_from_angle_and_flips,
     dihedral_transform_from_matrix, display_rotation, is_identity_matrix,
 };
+pub use stream_group::{StreamGroup, StreamGroupIndex, StreamGroupKind, TileGrid};
 pub use time::{DurationEstimate, DurationSource, TimestampFixer, WrapState};
 
 /// Which of the two things an absent [`Stream::start_time`] means.
@@ -405,6 +407,13 @@ pub trait Demuxer: Send {
         &[]
     }
 
+    /// Groups of streams that together form one logical unit — a HEIF/AVIF
+    /// tile grid's tiles, say. Empty for every container that has no such
+    /// notion, which is nearly all of them.
+    fn stream_groups(&self) -> &[StreamGroup] {
+        &[]
+    }
+
     /// Read the next packet in storage order.
     ///
     /// # Errors
@@ -536,6 +545,9 @@ impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
     }
     fn metadata(&self) -> &[(String, String)] {
         (**self).metadata()
+    }
+    fn stream_groups(&self) -> &[StreamGroup] {
+        (**self).stream_groups()
     }
     fn read_packet(&mut self) -> Result<Packet> {
         (**self).read_packet()

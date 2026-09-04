@@ -7,7 +7,7 @@
 //! |---|---|
 //! | [`keys`] | The canonical generic metadata key names, e.g. `"title"`, `"artist"` |
 //! | [`conv`] | [`conv::MetadataConv`] — one container's key-name table — and the driver that applies one |
-//! | [`stream_group`] | [`stream_group::StreamGroup`] / [`stream_group::StreamGroupKind`] |
+//! | [`stream_group`] | re-export of [`vaco_format_core::stream_group`] |
 //!
 //! # What is *not* in here
 //!
@@ -17,13 +17,9 @@
 //! crate re-exports both rather than defining a second, incompatible
 //! `Program`/`Chapter` under a different name; see D19.
 //!
-//! `StreamGroup` has no such prior definition — it was sketched in the plan
-//! (plan 18 §1.1) but never landed in `vaco-format-core`, and nothing there
-//! reads one yet. It lives here so a container that wants to report a HEIF
-//! `grid` tile set, for instance, has a type to build; wiring
-//! `Demuxer::stream_groups()` into the trait itself is a `vaco-format-core`
-//! change this crate cannot make, since that crate is not this work's to
-//! edit. Recorded, not worked around.
+//! `StreamGroup` is the same story now: it started here, and moved to
+//! [`vaco_format_core::stream_group`] the day `Demuxer::stream_groups()`
+//! joined the trait. The re-export keeps this crate's path working.
 //!
 //! # Every container ships its own table; the driver is shared
 //!
@@ -39,8 +35,10 @@
 
 pub mod conv;
 pub mod keys;
-pub mod stream_group;
+
+pub use vaco_format_core::stream_group;
 
 pub use conv::{ConvEntry, Direction, MetadataConv};
-pub use stream_group::{StreamGroup, StreamGroupIndex, StreamGroupKind, TileGrid};
-pub use vaco_format_core::{Chapter, Program};
+pub use vaco_format_core::{
+    Chapter, Program, StreamGroup, StreamGroupIndex, StreamGroupKind, TileGrid,
+};
