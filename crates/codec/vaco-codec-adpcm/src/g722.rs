@@ -2,41 +2,21 @@
 //! input sample pair at the reference's 64 kbit/s mode (6-bit low sub-band
 //! code in the low bits, 2-bit high sub-band code in the top two).
 //!
-//! No `provenance/sources.toml` entry names ITU-T G.722 today, so no
-//! `Vaco-Spec-Ref` is attached.
-//!
-//! # This is the lowest-confidence codec in this crate — read before trusting it
+//! # Not a conforming G.722 implementation
 //!
 //! The real G.722 splits the input into two sub-bands with a 24-tap FIR
 //! quadrature mirror filter (ITU-T G.722 Table 1a/1b) and separately ADPCM-
 //! codes each band with its own two-pole/six-zero adaptive predictor (the
-//! same "g72x" shape [`crate::g726`] documents *not* implementing exactly).
-//! Reproducing the QMF's 24 published taps from memory without a primary
-//! text to check them against is exactly the kind of table this project's
-//! own conventions warn against shipping unverified (`planning/AGENT-
-//! CONSTRAINTS.md`'s "three tiers" section), so this module does not attempt
-//! it. What it implements instead is a **reversible two-point Haar/lifting
-//! transform** (`high = x0 - x1; low = x1 + (high >> 1)`, the same
-//! integer-reversible split JPEG2000's 5/3 wavelet uses) as a stand-in
-//! sub-band split, followed by [`crate::g726`]'s same adaptive-delta coder on
-//! each band at 6 bits (low) / 2 bits (high). It is **not** the ITU-T QMF and
-//! is not expected to interoperate with the reference `adpcm_g722` codec —
-//! it decodes its own encoder's output correctly and produces genuinely
-//! sub-band-compressed audio.
+//! same "g72x" shape [`crate::g726`] also lacks). This module instead uses a
+//! reversible two-point Haar/lifting split (`high = x0 - x1; low = x1 +
+//! (high >> 1)`) followed by an adaptive-delta coder at 6 bits low/2 bits high.
+//! It round-trips its own data but cannot interoperate with real G.722.
 //!
-//! # Not wired up as the `adpcm_g722` codec — and deliberately never was
-//!
-//! A caller pointing a decoder built from this module at a real G.722
-//! bitstream gets a value for every sample and no error — which is strictly
-//! worse than an absent decoder, because nothing tells them it failed. The
-//! repository owner's ruling (`planning/AGENT-CONSTRAINTS.md`, "byte-
-//! exactness is a check, not the bar") permits small, unstructured
-//! deviation, not a structurally different transform answering to the same
-//! name. So `AdpcmG722Decoder`/`AdpcmG722Encoder` in `crate::lib` always
-//! return `Error::Unsupported` and are **not** registered in
-//! `vaco-component.toml` — `-c:a g722` will not resolve to this code. The
-//! functions below stay, still exercised by their own round-trip tests, for
-//! whoever implements the real QMF/predictor next.
+//! `AdpcmG722Decoder` and `AdpcmG722Encoder` therefore always return
+//! `Error::Unsupported` and are absent from `vaco-component.toml`. Refusing by
+//! name prevents this plausible-looking but structurally wrong output from
+//! being mistaken for G.722. These helpers remain only for replacing with the
+//! real QMF and predictor.
 
 #![allow(
     dead_code,

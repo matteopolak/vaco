@@ -1,50 +1,20 @@
-//! The standardised ADPCM subset (C-02): G.722, G.726/le, MS,
-//! SWF, IMA-WAV and IMA-QT — 7 codec identities. **5 of 7 are real,
-//! registered decoders and encoders; G.722 and G.726/G.726le are not** — see
-//! "What is not covered" below before assuming otherwise.
+//! Standardised ADPCM families: G.722, G.726/le, MS, SWF, IMA-WAV and IMA-QT.
+//! Five of seven codec identities have registered decoders and encoders;
+//! G.722 and G.726/G.726le deliberately do not.
 //!
-//! # What it is
+//! Each family owns its predictor, block framing, and bit packing in a small
+//! module; this file provides `SendReceive` wrappers and registrations. [`ima`]
+//! covers both IMA-WAV and IMA-QT, which share a nibble codec but use different
+//! container framing.
 //!
-//! Unlike PCM's single shared table (`vaco-codec-pcm`), these families are
-//! genuinely different algorithms — different adaptive predictors, different
-//! block framing, different bit-packing — so this crate is six small modules
-//! ([`ima`], [`ms`], [`swf`], [`g726`], [`g722`]) each owning one family's
-//! pure decode/encode functions, plus the `SendReceive` wrappers and
-//! registrations in this file. `ima` covers both `adpcm_ima_wav` and
-//! `adpcm_ima_qt` (same nibble codec, different container framing).
+//! Registered families use a `Machine`-backed `SendReceive` and treat one
+//! packet as one codec block. Callers choosing packet boundaries must preserve
+//! block alignment because state does not carry across a send.
 //!
-//! # How it works
-//!
-//! Every registered family follows the same `Machine`-backed `SendReceive`
-//! shape `vaco-codec-pcm`/`vaco-codec-qoi` use, treating one packet as one
-//! block — a real container typically does too, but a caller free to choose
-//! its own packetisation should keep block boundaries aligned with codec
-//! boundaries, since state does not carry across a `send` call.
-//!
-//! Like `vaco-codec-pcm`, none of these codecs' bitstreams self-describe a
-//! sample rate or channel count (a block self-describes its own *codec*
-//! state — predictor, step index — but never the *container* facts). See
-//! [`parse_audio_extradata`], copied from `vaco-codec-pcm`'s identical
-//! mechanism (no shared crate exists yet for this small a helper; duplicated
-//! rather than introducing a dependency for five lines).
-//!
-//! # How to change it
-//!
-//! A new *standardised* ADPCM variant gets its own module here, following
-//! whichever existing family's shape is closest (a block-header family looks
-//! like [`ima`]/[`ms`]). The ~30 game-specific ADPCM variants the roadmap
-//! explicitly excludes (plan 15 §4.9) do not belong in this crate — they are
-//! T4/T5 per that plan's own triage. Implementing the *real* ITU-T G.722/
-//! G.726 predictors is exactly this shape of task; [`g722`]/[`g726`]'s
-//! module docs say precisely what is missing.
-//!
-//! # Configuration
-//!
-//! [`vaco_limits::Limits`] bounds decode allocation. Sample rate/channel
-//! layout default to [`DEFAULT_SAMPLE_RATE`]/mono, until overridden the same
-//! way `vaco-codec-pcm` allows.
-//!
-//! # What is not covered, and why
+//! Bitstreams do not self-describe sample rate or channel count;
+//! [`parse_audio_extradata`] supplies those container facts. Limits bound every
+//! decode allocation, and configuration defaults to
+//! [`DEFAULT_SAMPLE_RATE`]/mono.
 //!
 //! **`adpcm_g722` and `adpcm_g726`/`adpcm_g726le` are not registered.**
 //! [`g722`] and [`g726`] contain a *structurally different* transform from
@@ -54,17 +24,12 @@
 //! docs for exactly what and why. Both round-trip correctly through their
 //! own encoder, but neither can decode a real G.722/G.726 bitstream from
 //! another encoder, and would hand back plausible-looking wrong samples with
-//! no error if wired up as if they worked. The repository owner's ruling
-//! (the repository's byte-exactness ruling, "byte-exactness is a check, not the
-//! bar") permits small, unstructured deviation from a reference implementation
-//! — not a different transform answering to the same codec name — so
+//! no error if registered. A structurally different transform must not answer
+//! to the codec's name, so
 //! `AdpcmG722Decoder`/`AdpcmG722Encoder`/`AdpcmG726Decoder`/`AdpcmG726Encoder`
 //! in this file always return [`vaco_core::Error::Unsupported`] and carry no
-//! `DecoderDesc`/`EncoderDesc` at all: there is nothing to be careful not to
-//! register. IMA-WAV/IMA-QT/MS-ADPCM/SWF **are** real implementations of the
-//! published algorithm and framing for each, at ordinary confidence for a
-//! spec-first, unverified-against-a-real-file implementation — see the
-//! closing comment on #280 for the full accounting.
+//! `DecoderDesc`/`EncoderDesc`. IMA-WAV/IMA-QT/MS-ADPCM/SWF implement their
+//! published algorithms and framing but remain unverified against real files.
 
 #![forbid(unsafe_code)]
 
@@ -822,11 +787,9 @@ impl SendReceive for AdpcmSwfEncoder {
 // different transform from ITU-T G.726 (see that module's doc) — it
 // round-trips through its own encoder but cannot decode a real G.726
 // bitstream, and would hand a caller plausible-looking wrong samples with no
-// error if wired up as if it worked. The repository owner's ruling
-// (`planning/AGENT-CONSTRAINTS.md`, "byte-exactness is a check, not the
-// bar") permits small, unstructured deviation — rounding noise — but not a
-// different transform wearing the codec's name. So these two wrappers exist
-// only to refuse loudly and are deliberately **not** registered in
+// error if wired up as if it worked. A structurally different transform must
+// not wear the codec's name. These wrappers exist only to refuse loudly and
+// are deliberately **not** registered in
 // `vaco-component.toml`; `crate::g726`'s functions and their own
 // self-consistency tests stay, for whoever implements the real two-pole/
 // six-zero predictor next.

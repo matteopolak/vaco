@@ -1,44 +1,24 @@
 //! ITU-T G.726 ADPCM (`adpcm_g726`, `adpcm_g726le`) — mono, continuous
 //! (no per-block header; state carries across the whole stream).
 //!
-//! No `provenance/sources.toml` entry names ITU-T G.726 today, so no
-//! `Vaco-Spec-Ref` is attached.
-//!
-//! # A deliberately simplified predictor — read before trusting this module's output
+//! # Not a conforming G.726 implementation
 //!
 //! The real G.726 uses a full two-pole/six-zero adaptive predictor with a
 //! log-domain scale-factor combining a fast and a slow adaptation path (the
-//! "g72x" block diagram) — a substantial, easy-to-get-subtly-wrong piece of
-//! DSP. What is implemented here instead is the same *shape* of
-//! adaptive-delta coder [`crate::ima::ImaState`]/[`crate::swf`] use — a
-//! single IMA-style step size adapted by a per-code multiplier, at G.726's
-//! own code widths (`bits_per_sample`: 2/3/4/5, i.e. 16/24/32/40 kbit/s,
-//! defaulting to 4-bit/32 kbit/s, the common case). It **round-trips through
-//! its own encoder correctly** and produces genuinely compressed ADPCM audio,
-//! but it is **not** the ITU-T two-pole/six-zero predictor and is not
-//! expected to be bit-exact against the reference `adpcm_g726` decoder on
-//! real-world G.726 bitstreams from other encoders. Flagged plainly here and
-//! in this crate's closing report rather than either skipping G.726 entirely
-//! or overclaiming precision it does not have.
+//! "g72x" block diagram). This module instead uses a single IMA-style step
+//! size with a per-code multiplier at 2/3/4/5 bits per sample (16/24/32/40
+//! kbit/s, defaulting to 4-bit/32 kbit/s). It round-trips its own data but is
+//! not the ITU-T predictor and cannot decode interoperable G.726 streams.
 //!
 //! `adpcm_g726le`'s only difference from `adpcm_g726` is which end of each
 //! byte the first code of a group lands in (the reference calls the `le`
 //! variant "right-justified"); [`pack_codes`]/[`unpack_codes`] implement both
 //! orderings behind `left_justified`.
 //!
-//! # Not wired up as the `adpcm_g726`/`adpcm_g726le` codecs — and deliberately never was
-//!
-//! A caller pointing a decoder built from this module at a real G.726
-//! bitstream gets a value for every sample and no error — which is strictly
-//! worse than an absent decoder, because nothing tells them it failed. The
-//! repository owner's ruling (`planning/AGENT-CONSTRAINTS.md`, "byte-
-//! exactness is a check, not the bar") permits small, unstructured
-//! deviation, not a structurally different transform answering to the same
-//! name. So `AdpcmG726Decoder`/`AdpcmG726Encoder` in `crate::lib` always
-//! return `Error::Unsupported` and are **not** registered in
-//! `vaco-component.toml` — `-c:a g726`/`g726le` will not resolve to this
-//! code. The functions below stay, still exercised by their own round-trip
-//! tests, for whoever implements the real two-pole/six-zero predictor next.
+//! `AdpcmG726Decoder` and `AdpcmG726Encoder` always return `Error::Unsupported`
+//! and are absent from `vaco-component.toml`. Refusing by name prevents a
+//! structurally different transform from masquerading as the codec. These
+//! helpers remain only for replacing with the real predictor.
 
 #![allow(
     dead_code,
