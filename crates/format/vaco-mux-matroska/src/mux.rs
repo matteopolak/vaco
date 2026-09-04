@@ -2285,9 +2285,7 @@ mod tests {
         let demux =
             vaco_demux_matroska::MatroskaDemuxer::open(src, &NoParsers, &FormatOptions::default())
                 .unwrap();
-        let duration = demux
-            .duration()
-            .expect("Info.Duration must be present for a seekable output");
+        let duration = demux.duration().unwrap();
         assert_eq!(
             duration.as_micros(),
             200_000,
