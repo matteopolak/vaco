@@ -110,7 +110,10 @@ inherit the same values, so it cannot skew a comparison.
 Output is drained on dedicated threads while the main thread waits for exit. The
 obvious implementation (wait, then read) deadlocks the moment a child fills a
 pipe buffer, and finding that out from a hung nightly is expensive; `run.rs` has
-a regression test for it.
+a regression test for it. On Unix, timeout cleanup signals the child's entire
+process group through the external `kill` command. Keep the `--` separator
+before its negative process-group id: procps otherwise parses that id as an
+option and leaves grandchildren holding the output pipes open.
 
 ### The comparison modes
 

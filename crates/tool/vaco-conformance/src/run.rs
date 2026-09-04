@@ -309,7 +309,9 @@ fn kill_group(child: &mut Child) {
         // anything at all.
         let pid = child.id();
         let _ = Command::new("kill")
-            .args(["-KILL", &format!("-{pid}")])
+            // `--` is required by procps `kill` to keep a negative process
+            // group id from being parsed as another signal option.
+            .args(["-KILL", "--", &format!("-{pid}")])
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
