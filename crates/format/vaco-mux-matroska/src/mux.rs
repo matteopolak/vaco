@@ -1271,7 +1271,18 @@ impl MatroskaMuxer {
         };
         cluster.body.extend_from_slice(&block_bytes);
 
-        let end_ticks = ts.saturating_add(duration_ticks.unwrap_or(0)).max(0);
+        // `Info.Duration` must cover the *content* span, not merely "the
+        // timestamp of the last block" — a packet that states no duration
+        // (the ordinary `-c copy` case out of a demuxer that reports none)
+        // still occupies real time. `default_duration_ticks`, computed above
+        // from the track's own declared frame rate, is exactly the fallback
+        // this needs and was previously left unused here, so a duration-less
+        // last packet made `Info.Duration` one frame short. Measured:
+        // `ffmpeg -f lavfi -i testsrc=rate=25:duration=0.4 -c:v libx264
+        // out.mkv` reports `duration=0.400000` (ten 1/25s frames, including
+        // the last), never `0.360000`.
+        let end_delta = duration_ticks.unwrap_or_else(|| default_duration_ticks.unwrap_or(0));
+        let end_ticks = ts.saturating_add(end_delta).max(0);
         self.max_end_ticks = self
             .max_end_ticks
             .max(u64::try_from(end_ticks).unwrap_or(0));
@@ -2242,6 +2253,46 @@ mod tests {
             count += 1;
         }
         assert_eq!(count, 5);
+    }
+
+    /// `Info.Duration` must cover the *content* span, not merely "the
+    /// timestamp of the last block". `pkt()` never states a `duration` (the
+    /// ordinary `-c copy` case out of a demuxer that reports none), so
+    /// `max_end_ticks` used to stop at the last packet's own timestamp —
+    /// one whole frame short of the track's real length. `write_packet`'s
+    /// already-computed `default_duration_ticks` (from the 25fps
+    /// `h264_params` frame rate) is the fallback this needs.
+    ///
+    /// Measured: `ffmpeg -f lavfi -i testsrc=rate=25:duration=0.4 -c:v
+    /// libx264 out.mkv` (ten 1/25s frames) reports `duration=0.400000`
+    /// through `ffprobe`, including the last frame, never `0.360000`.
+    #[test]
+    fn info_duration_covers_the_last_frames_own_span_not_just_its_start() {
+        let s = MemorySink::new();
+        let buf: SharedBytes = s.shared();
+        let mut mux = MatroskaMuxer::new_matroska(Box::new(s), &FormatOptions::default()).unwrap();
+        let idx = mux.add_stream(&h264_params()).unwrap();
+        mux.write_header().unwrap();
+        // 25fps => 40ms/frame; five frames at 0/40/80/120/160ms, none
+        // carrying a stated `duration`.
+        for i in 0..5i64 {
+            mux.write_packet(&pkt(idx, i * 40, i == 0)).unwrap();
+        }
+        mux.write_trailer().unwrap();
+        let bytes = buf.snapshot();
+
+        let src: Box<dyn vaco_io::MediaSource> = Box::new(MemorySource::new(bytes));
+        let demux =
+            vaco_demux_matroska::MatroskaDemuxer::open(src, &NoParsers, &FormatOptions::default())
+                .unwrap();
+        let duration = demux
+            .duration()
+            .expect("Info.Duration must be present for a seekable output");
+        assert_eq!(
+            duration.as_micros(),
+            200_000,
+            "five 40ms frames must report 200ms total, not 160ms (one frame short): {duration:?}"
+        );
     }
 
     // ----------------------------------------- gap 1: set_metadata round trip
