@@ -28,7 +28,7 @@
 //! index metadata, the other over bytes actually read — which is why a
 //! well-formed file's packet timestamps agree with what its own index implies.
 
-use vaco_core::{Duration, Error, MediaType, Result, Rounding, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, MediaType, Result, Rounding, Timestamp};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::options::FormatOptions;
 use vaco_format_core::probe::{ProbeData, ProbeScore};
@@ -813,5 +813,13 @@ impl Demuxer for AviDemuxer {
 
     fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.streams
+            .iter()
+            .filter_map(Stream::duration_exact)
+            .max()
+            .or_else(|| self.duration.map(ExactDuration::from_duration))
     }
 }

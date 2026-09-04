@@ -42,6 +42,14 @@ sequentially; `index::build_from_idx1` runs the *identical* arithmetic while
 replaying `idx1` at open time, which is why a well-formed file's packet
 timestamps agree with what its own index implies.
 
+AVI's main header stores `dwMicroSecPerFrame` as an integer, so NTSC-family
+rates lose their fractional microsecond there. `duration()` keeps using that
+field for compatibility. `duration_exact()` instead takes the longest declared
+stream duration from `strh.dwLength` at its native `dwScale/dwRate`, falling
+back to the main-header value only when no stream states a duration. The
+committed one-frame 30000/1001 fixture therefore keeps `1001/30000` seconds
+exactly while its legacy aggregate remains 33,366 microseconds.
+
 ### The `idx1` offset ambiguity — measured, not assumed
 
 `idx1`'s `dwOffset` is documented as relative to the start of the `movi`
@@ -171,7 +179,9 @@ only decides *that* the bytes are extradata, not what they mean.
 - **Change the clock**: `hdrl::StreamHeader::sample_size` (renamed from
   `dwSampleSize` for clarity) drives both `demux::AviDemuxer::read_one` and
   `index::build_from_idx1` — they must stay in lock-step, or a file's `idx1`
-  will disagree with a linear read of the same file.
+  will disagree with a linear read of the same file. Aggregate exact duration
+  also depends on each stream's `dwLength` and native time base; keep its
+  longest-stream selection separate from the compatibility main-header value.
 - **Support `AVIX` continuation**: `demux::AviDemuxer::open_with_limits`'s
   top-level scan loop would need to recognise a second `RIFF...AVIX` chunk
   after the first `RIFF`'s declared end, extend `movi_end`/`movi_children`

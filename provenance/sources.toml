@@ -1533,3 +1533,10 @@ kind     = "blackbox"
 title    = "Observed ffmpeg/ffprobe 9.0.1 on a one-frame 44.1 kHz mono AIFF written by `ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -frames:a 1 -c:a pcm_s16be -f aiff`: ffprobe reports time_base=1/44100, duration_ts=1024, duration=0.023220, nb_frames=1024, and nb_read_packets=1. This establishes that AIFF's declared sample-frame count is an aggregate duration on the native sample clock, not an integer microsecond count."
 acquired = "2026-09-04"
 where    = "the reference binaries installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-avi-duration-probe"
+kind     = "blackbox"
+title    = "Observed ffmpeg/ffprobe 9.0.1 on a one-frame 30000/1001 MPEG-4 AVI written by `ffmpeg -f lavfi -i testsrc2=size=64x48:rate=30000/1001 -frames:v 1 -c:v mpeg4 -f avi`: ffprobe reports video time_base=1001/30000, duration_ts=1, duration=0.033367, nb_frames=1, nb_read_packets=1, and one 2,137-byte key packet with DTS 0 and duration 1 tick; the format duration is also 0.033367. Reading the generated file's own RIFF fields reports `avih.dwMicroSecPerFrame=33366` and `strh.dwScale/dwRate=1001/30000`. This establishes that AVI's stream header retains the native frame rate even though its main header stores a truncated integer microsecond period."
+acquired = "2026-09-04"
+where    = "the reference binaries installed on the development machine"
