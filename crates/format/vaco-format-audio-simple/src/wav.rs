@@ -291,6 +291,13 @@ impl Demuxer for WavDemuxer {
     fn duration(&self) -> Option<vaco_core::Duration> {
         self.inner.duration()
     }
+
+    fn duration_exact(&self) -> Option<vaco_core::ExactDuration> {
+        self.inner
+            .streams()
+            .first()
+            .and_then(Stream::duration_exact)
+    }
 }
 
 /// Writes plain `WAVEFORMATEX` PCM (16-bit-and-under integer, or the
@@ -648,6 +655,28 @@ mod tests {
         file
     }
 
+    fn pcm_wav(sample_rate: u32, frames: u32) -> Vec<u8> {
+        let data_len = frames * 2;
+        let mut body = Vec::new();
+        body.extend_from_slice(b"fmt ");
+        body.extend_from_slice(&16u32.to_le_bytes());
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&1u16.to_le_bytes());
+        body.extend_from_slice(&sample_rate.to_le_bytes());
+        body.extend_from_slice(&(sample_rate * 2).to_le_bytes());
+        body.extend_from_slice(&2u16.to_le_bytes());
+        body.extend_from_slice(&16u16.to_le_bytes());
+        body.extend_from_slice(b"data");
+        body.extend_from_slice(&data_len.to_le_bytes());
+        body.resize(body.len() + data_len as usize, 0);
+
+        let mut file = b"RIFF".to_vec();
+        file.extend_from_slice(&(4 + body.len() as u32).to_le_bytes());
+        file.extend_from_slice(b"WAVE");
+        file.extend_from_slice(&body);
+        file
+    }
+
     /// Finding 55's `format.tags.encoder` gap: the reference states it from
     /// `LIST/INFO/ISFT`, and this demuxer used to skip the whole chunk.
     #[test]
@@ -662,6 +691,26 @@ mod tests {
             demux.metadata(),
             &[("encoder".to_owned(), "Lavf62.12.100".to_owned())]
         );
+    }
+
+    #[test]
+    fn aggregate_duration_keeps_native_sample_clock_exact() {
+        let bytes = pcm_wav(44_100, 1_024);
+        let mut demux = WavDemuxer::open(
+            Box::new(MemorySource::new(bytes)),
+            &FormatOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(demux.streams().first().unwrap().duration_ts, Some(1_024));
+        assert_eq!(
+            demux
+                .duration_exact()
+                .map(vaco_core::ExactDuration::as_ratio),
+            Some((256, 11_025))
+        );
+        assert_eq!(demux.read_packet().unwrap().pts.ticks(), Some(0));
+        assert!(matches!(demux.read_packet(), Err(vaco_core::Error::Eof)));
     }
 
     /// A `LIST` chunk whose form is not `INFO` (e.g. `adtl`, cue labels) must

@@ -62,6 +62,11 @@ running frame count. Seeking converts a timestamp or byte target into a
 frame-aligned byte offset and seeks the source directly — audio PCM has no
 keyframe distinction, so `SeekFlags` has nothing else to say.
 
+For WAV with a declared `data` length, the parser records that length in
+native `1/sample_rate` ticks. `WavDemuxer::duration_exact()` exposes those
+sample ticks without first rounding to microseconds; the legacy
+`duration()` API remains its microsecond value for compatibility.
+
 VOC does **not** use `RawPcmDemuxer`: its audio is not one contiguous byte
 span (see below), so it has its own small state machine that shares only
 `pcm::params`/`pcm::new_stream` with the rest.
