@@ -181,10 +181,14 @@ fn media_presentation_duration_covers_the_last_frames_own_span() {
     // 10 fps for 6 seconds = 60 frames, declared frame rate matching the
     // real packet spacing exactly, so the frame-rate-derived fallback this
     // sweep added reconstructs the true content span exactly: 6.0s, not 5.9s
-    // (one 100ms frame short).
+    // (one 100ms frame short). Declaring `frame_rate = 10/1` also makes
+    // `vaco-mux-mp4`'s own track timescale 10 (see `MovMuxer::track_time_base`,
+    // which sets it from `frame_rate.num` whenever one is declared), so one
+    // tick here is exactly one frame -- unlike the sibling test above, which
+    // never states its own duration values and so never had to track this.
     const FPS: i64 = 10;
     const SECONDS: i64 = 6;
-    const STEP_TICKS: i64 = 9_000; // 1/10 s at a 90kHz clock.
+    const STEP_TICKS: i64 = 1; // one frame at this track's 10 Hz timescale.
     let dir = tempfile::tempdir().unwrap();
     let mpd_url = dir.path().join("stream.mpd").to_str().unwrap().to_owned();
 
