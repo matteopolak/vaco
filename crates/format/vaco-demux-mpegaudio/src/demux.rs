@@ -602,11 +602,9 @@ mod vbr_tag_tests {
     fn vbri_magic_inside_an_mp2_frame_does_not_discard_audio() {
         let (data, len) = two_frames_with_vbri(mpeg1_header(Layer::II));
 
-        let mut demux = MpegAudioDemuxer::open(
-            Box::new(MemorySource::new(data)),
-            &FormatOptions::default(),
-        )
-        .expect("MP2 stream opens");
+        let mut demux =
+            MpegAudioDemuxer::open(Box::new(MemorySource::new(data)), &FormatOptions::default())
+                .expect("MP2 stream opens");
         let first = demux.read_packet().expect("first MP2 frame is emitted");
         assert_eq!(first.pos, Some(0));
         assert_eq!(first.payload().len(), len);
@@ -619,11 +617,9 @@ mod vbr_tag_tests {
     #[test]
     fn vbri_magic_inside_a_layer1_frame_does_not_discard_audio() {
         let (data, _) = two_frames_with_vbri(mpeg1_header(Layer::I));
-        let mut demux = MpegAudioDemuxer::open(
-            Box::new(MemorySource::new(data)),
-            &FormatOptions::default(),
-        )
-        .expect("Layer I stream opens");
+        let mut demux =
+            MpegAudioDemuxer::open(Box::new(MemorySource::new(data)), &FormatOptions::default())
+                .expect("Layer I stream opens");
         let first = demux.read_packet().expect("first Layer I frame is emitted");
         assert_eq!(first.pos, Some(0));
     }
@@ -631,11 +627,9 @@ mod vbr_tag_tests {
     #[test]
     fn a_vbri_header_in_a_layer3_frame_is_still_skipped() {
         let (data, len) = two_frames_with_vbri(mpeg1_header(Layer::III));
-        let mut demux = MpegAudioDemuxer::open(
-            Box::new(MemorySource::new(data)),
-            &FormatOptions::default(),
-        )
-        .expect("Layer III stream opens");
+        let mut demux =
+            MpegAudioDemuxer::open(Box::new(MemorySource::new(data)), &FormatOptions::default())
+                .expect("Layer III stream opens");
         let first = demux.read_packet().expect("first audio frame is emitted");
         assert_eq!(first.pos, Some(len as u64));
         assert!(matches!(demux.read_packet(), Err(Error::Eof)));
