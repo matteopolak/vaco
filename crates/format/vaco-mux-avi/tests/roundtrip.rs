@@ -136,7 +136,7 @@ fn muxed_packets_demux_in_order_with_the_measured_clock() {
     // appends 23 empty video placeholder chunks after everything else once
     // `write_trailer` runs, extending the last real frame's own slot by a
     // full 25fps period (24 grid ticks) with no packet ever stating one.
-    expected.extend(std::iter::repeat((0, None, false, 0)).take(23));
+    expected.extend(std::iter::repeat_n((0, None, false, 0), 23));
     assert_eq!(got, expected);
 }
 
@@ -377,7 +377,7 @@ fn video_packets_land_on_the_grid_with_empty_slots_between() {
     // see `a_duration_less_video_stream_still_gets_its_trailing_frame_backfilled`
     // for the fallback this exercises: neither packet here states a
     // `duration`, so it comes entirely from the declared frame rate.
-    expected.extend(std::iter::repeat((None, 0)).take(23));
+    expected.extend(std::iter::repeat_n((None, 0), 23));
     assert_eq!(got, expected);
     assert_eq!(demux.streams()[0].duration_ts, Some(29));
 }
@@ -435,12 +435,12 @@ fn an_implausible_grid_gap_is_rejected_not_looped_forever() {
 }
 
 /// `backfill_trailing_video_slots` extends the grid past the last real frame
-/// by that frame's own duration, but was gated on `last_video_duration_ticks
-/// > 0` — a field only ever set *from* `packet.duration`. A source whose
-/// packets never state a duration at all (the ordinary `-c copy` case out of
-/// a demuxer that reports none) left that field at its `0` default forever,
-/// so the backfill silently never ran and `strh.dwLength` came up one whole
-/// frame short.
+/// by that frame's own duration, but was gated on
+/// `last_video_duration_ticks > 0` — a field only ever set *from*
+/// `packet.duration`. A source whose packets never state a duration at all
+/// (the ordinary `-c copy` case out of a demuxer that reports none) left
+/// that field at its `0` default forever, so the backfill silently never ran
+/// and `strh.dwLength` came up one whole frame short.
 #[test]
 fn a_duration_less_video_stream_still_gets_its_trailing_frame_backfilled() {
     let sink = MemorySink::new();
