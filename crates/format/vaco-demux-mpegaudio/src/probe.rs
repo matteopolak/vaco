@@ -43,21 +43,19 @@ pub(crate) fn probe(data: &ProbeData<'_>) -> ProbeScore {
 }
 
 /// How many consecutive frames starting at `at` share a version/layer/sample
-/// rate and sit at the exact offsets their own headers imply. Free-format
-/// frames (whose length cannot be computed from the header alone) end the
-/// chain at one, since confirming their length needs the next sync anyway
-/// and a single match proves nothing here.
+/// rate and sit at the exact offsets implied by either their fixed bit rate or
+/// a confirmed free-format stride.
 fn chained_run(data: &ProbeData<'_>, at: usize) -> u32 {
     let Some(first) = read_header(data, at) else {
         return 0;
     };
+    if first.frame_len().is_none() {
+        return free_format_chained_run(data, at, first);
+    }
     let mut pos = at;
     let mut run = 0u32;
     while let Some(h) = read_header(data, pos) {
-        if h.version != first.version
-            || h.layer != first.layer
-            || h.sample_rate_hz() != first.sample_rate_hz()
-        {
+        if !same_stream(first, h) {
             break;
         }
         run = run.saturating_add(1);
@@ -68,6 +66,70 @@ fn chained_run(data: &ProbeData<'_>, at: usize) -> u32 {
             break;
         }
         pos = pos.saturating_add(len as usize);
+    }
+    run
+}
+
+fn same_stream(first: MpegAudioHeader, candidate: MpegAudioHeader) -> bool {
+    candidate.version == first.version
+        && candidate.layer == first.layer
+        && candidate.sample_rate_hz() == first.sample_rate_hz()
+}
+
+/// Derive a free-format frame's padding-exclusive base length from a later
+/// matching header, then require that length to land on at least one further
+/// header. The third header is what distinguishes a stride from matching
+/// header-shaped bytes inside the first frame's compressed payload.
+fn free_format_chained_run(data: &ProbeData<'_>, at: usize, first: MpegAudioHeader) -> u32 {
+    let mut candidate_at = at.saturating_add(MpegAudioHeader::LEN);
+    let candidate_end = data.len().saturating_sub(MpegAudioHeader::LEN);
+    let mut best = 1u32;
+    while candidate_at <= candidate_end {
+        if let Some(candidate) = read_header(data, candidate_at)
+            && same_stream(first, candidate)
+            && candidate.bitrate_index == 0
+            && let Some(distance) = candidate_at.checked_sub(at)
+            && let Some(base_len) = distance.checked_sub(usize::from(first.padding))
+            && base_len >= MpegAudioHeader::LEN
+        {
+            let run = free_format_run_for_base(data, at, first, base_len);
+            best = best.max(run);
+            if best >= STRONG_RUN {
+                return best;
+            }
+        }
+        candidate_at = candidate_at.saturating_add(1);
+    }
+
+    if best >= 3 { best } else { 1 }
+}
+
+fn free_format_run_for_base(
+    data: &ProbeData<'_>,
+    at: usize,
+    first: MpegAudioHeader,
+    base_len: usize,
+) -> u32 {
+    let mut pos = at;
+    let mut run = 0u32;
+    while run < STRONG_RUN {
+        let Some(header) = read_header(data, pos) else {
+            break;
+        };
+        if !same_stream(first, header) || header.bitrate_index != 0 {
+            break;
+        }
+        run = run.saturating_add(1);
+        let Some(frame_len) = base_len.checked_add(usize::from(header.padding)) else {
+            break;
+        };
+        let Some(next_pos) = pos.checked_add(frame_len) else {
+            break;
+        };
+        if next_pos <= pos {
+            break;
+        }
+        pos = next_pos;
     }
     run
 }
@@ -96,6 +158,15 @@ mod tests {
         frame
     }
 
+    fn free_format_frame(base_len: usize, padding: bool) -> Vec<u8> {
+        let mut header = MpegAudioHeader::parse(0xFFFB_9000).expect("valid header");
+        header.bitrate_index = 0;
+        header.padding = padding;
+        let mut frame = vec![0u8; base_len + usize::from(padding)];
+        frame[..MpegAudioHeader::LEN].copy_from_slice(&header.to_bytes());
+        frame
+    }
+
     #[test]
     fn four_chained_frames_score_the_measured_reference_value() {
         let header = MpegAudioHeader::parse(0xFFFB_9000).expect("valid header");
@@ -105,6 +176,36 @@ mod tests {
             data.extend_from_slice(&cbr_frame(len));
         }
         assert_eq!(probe(&ProbeData::new(&data)), SCORE_STRONG);
+    }
+
+    #[test]
+    fn four_chained_free_format_frames_score_the_measured_reference_value() {
+        let mut data = Vec::new();
+        for padding in [false, true, false, true, false, false] {
+            data.extend_from_slice(&free_format_frame(417, padding));
+        }
+        assert_eq!(probe(&ProbeData::new(&data)), SCORE_STRONG);
+    }
+
+    #[test]
+    fn a_matching_free_format_header_inside_payload_does_not_set_the_stride() {
+        let mut first = free_format_frame(417, false);
+        let header = free_format_frame(417, false);
+        first[100..100 + MpegAudioHeader::LEN].copy_from_slice(&header[..MpegAudioHeader::LEN]);
+
+        let mut data = first;
+        for _ in 0..5 {
+            data.extend_from_slice(&free_format_frame(417, false));
+        }
+        assert_eq!(probe(&ProbeData::new(&data)), SCORE_STRONG);
+    }
+
+    #[test]
+    fn one_unconfirmed_free_format_stride_scores_nothing() {
+        let mut data = free_format_frame(417, false);
+        let next = free_format_frame(417, false);
+        data.extend_from_slice(&next);
+        assert_eq!(probe(&ProbeData::new(&data)), ProbeScore::NONE);
     }
 
     #[test]

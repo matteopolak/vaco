@@ -21,12 +21,17 @@ audio layer 2/3)`), with extensions `mp3`, `mp2`, `m2a`, `mpa`.
 
 MPEG audio's sync is eleven set bits, which an enormous amount of non-audio
 data matches by chance — a JPEG `APPn` marker (`0xFFEx`) passes on its own.
-`probe::probe` never scores a single header: it walks forward at the exact
-byte stride each header's own bit rate and sample rate imply, requires the
-next header to agree on version/layer/sample rate, and only reaches the
-reference's own measured score (`ffprobe -show_format` reports
-`probe_score=51` on a real `ffmpeg`-encoded file, with or without a leading
-`ID3v2` tag) after four such frames in a row. Fewer than two scores nothing.
+`probe::probe` never scores a single header. For fixed-rate audio it walks
+forward at the exact byte stride each header's own bit rate and sample rate
+imply. A free-format header has no declared stride, so the probe tries each
+later matching header as a candidate, derives the padding-exclusive base
+length, and accepts it only when that same stride reaches a continuing run.
+In both cases the headers must agree on version/layer/sample rate, and only
+four consecutive frames reach the reference's measured score (`ffprobe
+-show_format` reports `probe_score=51` on a real `ffmpeg`-encoded file, with
+or without a leading `ID3v2` tag). Two fixed-rate frames receive the weak
+score; free format needs a third header to confirm its first inferred stride
+before it receives any score.
 Unit tests exercise this against prose, a synthetic AC-3 sync, a synthetic
 MPEG-TS sync pattern, and a run of JPEG `APPn` markers — none of them chain.
 
@@ -72,15 +77,16 @@ length for the rest of the stream — later frames just add `padding_bit` rather
 than re-scanning, which also means a false sync later in the stream can no
 longer retroactively corrupt an already-derived length.
 
-Verified against a hand-built fixture (real `ffmpeg` CBR output with every
-frame's `bitrate_index` zeroed except the first, so the true frame length is
-known and constant): decoded output is sample-count-exact and
-correlation-identical (0.9921, matching the un-mutated CBR original) to
-decoding the same audio at its real bitrate. No real free-format encoder was
-available on this machine — `ffmpeg`/`lame` do not emit free-format MP3
-without a patched build — so this is the only fixture provenance for this
-path; see `docs/codec/vaco-codec-mpegaudio.md` for the full comparison table
-and its provenance column.
+The original check used a hand-built fixture: real `ffmpeg` CBR output with
+each audio frame's `bitrate_index` zeroed, leaving an independently known
+constant frame length. A later pass found that the installed LAME 4.0 binary
+does expose `--freeformat`. On a real 44.1 kHz mono stream encoded with
+`--freeformat -b 640`, this probe scores `51`, and the demuxer emits 11 packets
+or 12,672 coded samples. LAME decodes 12,143 samples, exactly 529 fewer — the
+same filterbank delay as this demuxer's `DECODER_DELAY` constant. `ffmpeg`
+9.0.1 does not recognise this valid free-format file even when forced to the
+`mp3` demuxer, so it cannot be the decode oracle for this case; that black-box
+divergence is recorded rather than hidden.
 
 ### The stream time base is a fixed constant, not `1/sample_rate`
 
@@ -101,6 +107,7 @@ compatibility.
 | Field | How confirmed |
 |---|---|
 | `probe_score` | Exact match (`51`) on a real VBR file with and without a leading `ID3v2` tag |
+| Free-format probing | A real LAME 4.0 `--freeformat` file scores `51`; an embedded matching header without a continuing stride does not establish the frame length |
 | Packet `pos`/`pts`/first-packet skip, second/third packet sizes | Byte-for-byte match against `ffprobe -show_packets` on a real VBR file |
 | `duration_ts`/`start_time` (from Xing frame count and LAME delay/padding) | Exact match against `ffprobe -show_streams` |
 | Packet `duration` (the raw tick count `-show_packets` prints) | Exact: the demuxer retains native ticks with `Packet::set_duration_ts`, while `Packet::duration` remains the microsecond convenience view |
