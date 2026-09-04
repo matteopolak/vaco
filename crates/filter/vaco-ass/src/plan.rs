@@ -23,8 +23,9 @@
 //! `\p<n>` (vector drawing) suppresses its own text run entirely rather
 //! than showing raw drawing-command syntax as literal text, since drawing
 //! it is out of scope this pass. `\frx`/`\fry`/`\fax`/`\fay` (3-D rotation/
-//! shear) are parsed and ignored; only `\frz`/`\fr` (2-D, Z-axis) rotation
-//! is applied. `\org` is stored but has no effect without `\frx`/`\fry`.
+//! shear) are parsed and ignored. `\frz`/`\fr` carries the 2-D Z-axis
+//! angle on each run, and `\org` carries its optional line origin for the
+//! downstream subtitle renderer.
 //!
 //! Every one of these is a real, named gap — not a silent guess.
 
@@ -98,6 +99,9 @@ pub struct EventPlan {
     /// point — `None` means "use the style's own alignment/margins", the
     /// reference's normal placement.
     pub pos: Option<(f64, f64)>,
+    /// Explicit rotation origin from `\org`, in script coordinates. When
+    /// absent, the renderer rotates around the line's aligned position.
+    pub origin: Option<(f64, f64)>,
     pub margin_l: i32,
     pub margin_r: i32,
     pub margin_v: i32,
@@ -113,6 +117,7 @@ struct Cursor<'a> {
     cur: ResolvedStyle,
     alignment: i32,
     pos: Option<(f64, f64)>,
+    origin: Option<(f64, f64)>,
     clip: Option<(f64, f64, f64, f64)>,
 }
 
@@ -125,6 +130,7 @@ pub fn plan_event(script: &Script, event: &Event) -> EventPlan {
         cur: ResolvedStyle::from_style(&base),
         alignment: base.alignment,
         pos: None,
+        origin: None,
         clip: None,
         base,
     };
@@ -160,6 +166,7 @@ pub fn plan_event(script: &Script, event: &Event) -> EventPlan {
     EventPlan {
         alignment: cursor.alignment,
         pos: cursor.pos,
+        origin: cursor.origin,
         margin_l: if event.margin_l != 0 {
             event.margin_l
         } else {
@@ -276,7 +283,11 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
                 cursor.pos = Some((x, y));
             }
         }
-        // `\org` is stored nowhere: it has no effect without 3-D rotation.
+        "org" => {
+            if let Some((x, y)) = parse_pair(a) {
+                cursor.origin = Some((x, y));
+            }
+        }
         "clip" => {
             let nums: Vec<f64> = a.split(',').filter_map(parse_num).collect();
             if let [x1, y1, x2, y2] = nums.as_slice() {
@@ -383,6 +394,13 @@ mod tests {
         let (script, event) = one_event(r"{\pos(100,200)}x");
         let plan = plan_event(&script, &event);
         assert_eq!(plan.pos, Some((100.0, 200.0)));
+    }
+
+    #[test]
+    fn org_tag_sets_an_explicit_rotation_origin() {
+        let (script, event) = one_event(r"{\org(120,210)}x");
+        let plan = plan_event(&script, &event);
+        assert_eq!(plan.origin, Some((120.0, 210.0)));
     }
 
     #[test]

@@ -5,9 +5,9 @@
 ASS/SSA subtitle script parsing and override-tag interpretation
 (GitHub #487/FT-5.2, #488/FT-5.3). It stops short of drawing anything:
 the crate's output is [`plan::EventPlan`], a renderer-agnostic
-description of styled text runs, position and clip, still in the
-script's own `PlayResX`/`PlayResY` coordinate space. `vaco-filter-subtitle`
-scales an `EventPlan` to real frame pixels and drives
+description of styled text runs, position, rotation origin and clip,
+still in the script's own `PlayResX`/`PlayResY` coordinate space.
+`vaco-filter-subtitle` scales an `EventPlan` to real frame pixels and drives
 `vaco_filter_text::TextRenderer`; nothing in this crate touches a pixel.
 
 Built from the informally-published ASS/SSA format documentation and by
@@ -38,15 +38,20 @@ ignored (full opacity for the whole event); `\k`/`\kf`/`\ko`/`\K`
 karaoke tags are parsed and ignored (no highlight sweep); `\p<n>`
 vector drawing suppresses its own text run rather than leaking raw
 drawing syntax; `\frx`/`\fry`/`\fax`/`\fay` (3-D rotation/shear) are
-parsed and ignored, only `\frz`/`\fr` (2-D) is applied; `\org` is
-stored but inert without `\frx`/`\fry`. See `plan.rs`'s own doc for the
-full, current list — it is the authority, not this file.
+parsed and ignored. `\frz`/`\fr` carries the 2-D counterclockwise angle
+on each run and `\org` carries the optional line rotation origin;
+`vaco-filter-subtitle` applies both when it rasterises the plan. See
+`plan.rs`'s own doc for the full, current list — it is the authority,
+not this file.
 
 ## How to change it
 
 - A new static tag: add a case in `plan::plan_event` and extend
   [`plan::ResolvedStyle`]/[`plan::TextRun`] if it needs a new field on
   the plan.
+- Rotation geometry belongs in `vaco-filter-subtitle`; this crate keeps
+  `\frz` and `\org` in script coordinates so the renderer can scale the
+  pivot exactly once.
 - Animating a tag currently applied statically (`\t`, `\move`, `\fad`):
   `EventPlan` would need a time-varying representation instead of a
   single resolved value — a renderer-shape change, not a one-line fix.
@@ -63,10 +68,12 @@ flags, env vars or constants gate its behaviour.
 ## Dependencies
 
 In actual use: only `vaco-core` (`Rgba` for colour, `Duration` for
-timing). `Cargo.toml` also declares `vaco-limits`, `vaco-color`,
-`vaco-pixfmt`, `vaco-frame`, `vaco-format-subtitle`, `vaco-filter-draw`
-and `vaco-filter-text`, but no current source file in this crate
-imports any of them — check with `cargo machete`-style dead-dependency
-tooling before assuming a given one is load-bearing. Driving
+timing). The `\frz` direction and `\org` semantics follow Aegisub's
+published ASS override-tag documentation and were cross-checked against
+ffmpeg-full 9.0.1 with libass 0.17.5 as a black box. `Cargo.toml` also
+declares `vaco-limits`, `vaco-color`, `vaco-pixfmt`, `vaco-frame`,
+`vaco-format-subtitle`, `vaco-filter-draw` and `vaco-filter-text`, but
+no current source file in this crate imports any of them — check with
+`cargo machete`-style dead-dependency tooling before assuming a given one is load-bearing. Driving
 `vaco-filter-text::TextRenderer` to actually rasterise an `EventPlan`
 is `vaco-filter-subtitle`'s job, one layer up, not this crate's.

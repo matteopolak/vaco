@@ -301,8 +301,8 @@ impl TextRenderer {
             );
             let content = image.content;
             let data = image.data.clone();
-            let base_x = g.x + left;
-            let base_y = g.y - top;
+            let base_x = origin.0.saturating_add(g.x).saturating_add(left);
+            let base_y = origin.1.saturating_add(g.y).saturating_sub(top);
             blit_glyph(&mut mask, &data, content, gw, gh, base_x, base_y);
         }
         Ok(mask)
@@ -397,6 +397,23 @@ mod tests {
         assert!(
             mask.coverage.iter().any(|&c| c > 0),
             "expected at least one covered pixel"
+        );
+    }
+
+    #[test]
+    fn rasterise_preserves_coverage_at_a_nonzero_frame_origin() {
+        let mut renderer = TextRenderer::new();
+        let layout = renderer.layout("Origin", &TextStyle::default(), Wrap::None);
+        if layout.is_empty() {
+            return;
+        }
+
+        let mask = renderer.rasterise(&layout, (100, 80)).unwrap();
+
+        assert_eq!((mask.x, mask.y), (100, 80));
+        assert!(
+            mask.coverage.iter().any(|&coverage| coverage != 0),
+            "frame-space placement must not discard layout-local glyph coordinates"
         );
     }
 

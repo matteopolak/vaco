@@ -4,10 +4,10 @@
 //! # Scope
 //!
 //! This crate ends at [`plan::EventPlan`]: a renderer-agnostic description
-//! of styled text runs, position and clip, still in the script's own
-//! `PlayResX`/`PlayResY` coordinate space. It renders no pixels — that is
-//! `vaco-filter-subtitle`'s job, which scales an `EventPlan` to a real
-//! frame and drives `vaco_filter_text::TextRenderer`.
+//! of styled text runs, position, rotation origin and clip, still in the
+//! script's own `PlayResX`/`PlayResY` coordinate space. It renders no
+//! pixels — that is `vaco-filter-subtitle`'s job, which scales an
+//! `EventPlan` to a real frame and drives `vaco_filter_text::TextRenderer`.
 //!
 //! [`script::parse`] covers stage (a)'s parsing half: `[Script Info]`,
 //! `[V4+ Styles]`/`[V4 Styles]`, `[Events]`. [`plan::plan_event`] covers its

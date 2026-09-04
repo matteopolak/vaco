@@ -20,7 +20,11 @@ construction, not a stream.
   text`) is unaffected. `\clip` is applied by zeroing mask coverage
   outside the rectangle after rasterisation; `BorderStyle=3` (opaque
   box) is not implemented, every event renders as outline+shadow
-  (`BorderStyle=1`) instead.
+  (`BorderStyle=1`) instead. `\frz`/`\fr` rotates the alpha mask
+  counterclockwise around `\org`, or around the line's aligned position
+  when `\org` is absent. The inverse-mapped mask is bounded to its
+  rotated corners before allocation, then clipped and composited through
+  the same path as unrotated text.
 - [`subtitles`](../../crates/filter/vaco-filter-subtitle/src/subtitles.rs) dispatches on file extension: `.ass`/`.ssa` gets the
   full `ass_filter` path; everything else falls back to a simpler
   "layout and draw" path — currently implemented for **SRT only**
@@ -47,6 +51,10 @@ construction, not a stream.
   format-agnostic once you have plain cue text and timing.
 - `BorderStyle=3`: `ass_filter.rs`'s composite step would need an
   opaque-box path alongside its current outline+shadow one.
+- 3-D `\frx`/`\fry`, animation interpolation, karaoke and `\p` drawings
+  remain separate #488 work. They need perspective/time/run/path data
+  that the current static `EventPlan` does not carry; do not approximate
+  them by extending the 2-D mask rotation helper.
 
 ## Configuration
 
@@ -60,4 +68,7 @@ flags.
 (`TextRenderer`, shaping and rasterisation), `vaco-filter-draw` (mask
 compositing primitives), `vaco-format-subtitle` (SRT/container timing
 parsers) and `vaco-filter-core`/`vaco-filter-graph` (the filter/graph
-traits every filter crate implements against).
+traits every filter crate implements against). Rotation semantics come
+from Aegisub's published ASS override-tag documentation; the checked
+fixtures use ffmpeg-full 9.0.1/libass 0.17.5 only as a black-box pixel
+oracle.

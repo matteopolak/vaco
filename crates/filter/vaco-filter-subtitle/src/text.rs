@@ -111,8 +111,19 @@ mod tests {
         let mut renderer = TextRenderer::new();
         let pool = FramePool::default();
         let mut f = pool.acquire_video(PixFmt::Yuv420p, 320, 240).unwrap();
+        vaco_filter_draw::fill::fill(
+            &mut f,
+            vaco_filter_draw::rect::Rect::full(320, 240),
+            vaco_core::Rgba::BLACK,
+        )
+        .unwrap();
         let style = SimpleTextStyle::for_frame_height(240);
         composite_simple_text(&mut renderer, &mut f, "Hello, world!", &style).unwrap();
+        let plane = f.plane(0).unwrap();
+        assert!(
+            (0..plane.rows()).any(|y| plane.row(y).is_some_and(|row| row.iter().any(|&v| v > 16))),
+            "simple subtitle text must change at least one black luma sample"
+        );
     }
 
     #[test]

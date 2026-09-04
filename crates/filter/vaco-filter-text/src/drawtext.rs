@@ -515,7 +515,7 @@ mod tests {
         let mut any_lit = false;
         for y in 0..plane.rows() {
             if let Some(row) = plane.row(y)
-                && row.iter().any(|&b| b > 0)
+                && row.iter().any(|&b| b > 16)
             {
                 any_lit = true;
                 break;

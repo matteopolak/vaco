@@ -25,7 +25,10 @@ arises here. What this crate adds on top:
   — a shaped-run LRU cache over `cosmic_text::Buffer`/`SwashCache`, needed
   because a `drawtext` with `%{pts}` reshapes an unchanged-looking
   string every frame otherwise, plus a bound on `SwashCache`'s own
-  unbounded growth.
+  unbounded growth. `rasterise(layout, origin)` keeps glyph placement in
+  layout-local coordinates internally, then adds the requested frame-space
+  origin while blitting into the positioned mask. Callers can therefore
+  composite the returned mask directly; they must not translate it again.
 - [`mask::AlphaMask`](../../crates/filter/vaco-filter-text/src/mask.rs) —
   a coverage buffer independent of any one colour, so a border or shadow
   is produced by *operating on the mask* (dilate/blur/offset) rather than
@@ -63,6 +66,10 @@ arises here. What this crate adds on top:
 - A new filter that needs to draw glyphs: depend on this crate for
   `TextRenderer`/`AlphaMask`, the same way `vaco-ass`/
   `vaco-filter-subtitle` do — do not re-implement shaping.
+- A raster placement change must test a nonzero origin. An origin of
+  `(0,0)` cannot distinguish layout-local glyph coordinates from
+  frame-space mask coordinates and previously let every positively
+  positioned subtitle render as an empty mask.
 
 ## Configuration
 
