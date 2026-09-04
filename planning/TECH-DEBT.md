@@ -7192,3 +7192,31 @@ remains exactly the separate, larger piece of work described above.
 
 `Vaco-Spec-Ref: vp9-bitstream-spec-v0.6` §7.2 (reference frame update),
 §8.4.1 (`decode_tiles`, tile independence), §8.8 (loop filter).
+
+## `vaco-demux-image2`: no demuxer reads an animated GIF's own multi-frame container
+
+`crates/tool/vaco-conformance/tests/probe_confusion.rs`'s format-probing sweep
+(added while root-causing the cdgraphics/ADTS probe bug, and swept for
+siblings per this file's own standing instruction) found that a multi-frame
+animated GIF reads back as one single frame through vaco, where the reference
+`ffmpeg`'s `gif` demuxer reads all of them.
+
+Not a probe-scoring bug: `vaco_demux_raw::obu`'s AV1 false-positive (fixed the
+same session, see the `demux-raw` git log) and the original cdgraphics/ADTS
+gap were both a *wrong* demuxer winning over a registered, correct one. Here
+there is only one `gif`-named registration at all —
+`vaco-demux-image2::pipe::DEMUXER_GIF` (registry name `gif_pipe`,
+`extensions = "gif"`) — and it is doing exactly what an image2-pipe demuxer is
+for: streaming a *sequence of separate image files* through one pipe (as
+`ffmpeg -f image2pipe` does), reading one image and stopping. It has no code
+path for GIF89a's own container structure (Graphic Control Extension frame
+delays, disposal methods, the NETSCAPE2.0 application extension for loop
+count), so a single `.gif` file with an internal animation loop is read as
+exactly one frame — correct behaviour for what the demuxer actually is, wrong
+answer for what a `.gif` file actually contains.
+
+Fixing this means a new, standalone demuxer (or extending `DEMUXER_GIF` with
+a real animated-GIF mode gated on how it is opened), clean-room from the
+GIF89a specification, not adapted from `gif_pipe`'s image2 framing. Recorded
+in `probe_confusion.rs`'s own `KNOWN_DIVERGENCES` as an adjudicated,
+not-attempted-here gap rather than left silently passing.
