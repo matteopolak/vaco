@@ -7,8 +7,6 @@
 //! `ppsrc`, `field`, `mchroma`, `y0`/`y1`, `scthresh`, `combmatch`,
 //! `combdbg`, `cthresh`, `chroma`, `blockx`/`blocky`, `combpel`.
 //!
-//! # Membership note: the only `N->V` filter in this row
-//!
 //! Checked directly (`ffmpeg -h filter=fieldmatch`): `Inputs: dynamic
 //! (depending on the options)`, `Outputs: #0: default (video)` — the one
 //! filter in this crate's row that is not plain `V->V`. This crate's
@@ -16,8 +14,6 @@
 //! nor `Fanout`; this filter is the exception, and it *does* reach for
 //! [`vaco_filter_core::adapt::Paired`] for its `ppsrc=true` shape (2
 //! inputs, matching `Paired`'s own `framepack`-style default input count).
-//!
-//! # An original matcher, not the reference's combing analysis
 //!
 //! Same situation as [`crate::pullup`]: the reference's field-matching
 //! decision (which of `p`/`c`/`n`/`u`/`b` combinations is least combed,
@@ -33,15 +29,11 @@
 //! at its own default and a non-default value now refuses instead of
 //! being silently ignored (`cargo xtask reachability-check`'s rule I).
 //!
-//! # `ppsrc=true`: not implemented
-//!
 //! The two-input "clean source" mode is accepted at the option level (so a
 //! filtergraph string naming it does not fail to *parse*) but `create`
 //! refuses it with a clear error rather than silently ignoring the second
-//! input — the second input would need to actually inform the match
-//! decision to be worth the `Paired` plumbing, and this pass's remaining
-//! budget went to the row's byte-exact round-trip family instead. This is
-//! a real, stated gap, not a silent approximation.
+//! input; that stream would need to inform the match decision before the mode
+//! could be supported honestly.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};

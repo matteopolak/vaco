@@ -1,75 +1,28 @@
-//! A shared motion-adaptive deinterlace core for `yadif`, `bwdif`,
-//! `w3fdif`, `estdif` and `kerndeint`.
+//! Original motion-adaptive deinterlace core for `yadif`, `bwdif`, `w3fdif`,
+//! `estdif`, and `kerndeint`.
 //!
-//! # Honesty about provenance
+//! The reference kernels are GPL and lack a sufficiently precise public
+//! description, so this is not a transcription. For each missing row it
+//! blends a temporal candidate—three readings of the kept field through
+//! [`kept_field_estimate`]—with a same-frame vertical-neighbor candidate,
+//! favoring temporal information when adjacent temporal readings agree.
 //!
-//! **This is not a transcription of any of the reference's published
-//! kernels.** Reproducing `yadif`'s exact per-pixel formula (its spatial
-//! edge-direction search, its multi-term motion-check, its output clamp)
-//! with confidence would need either the GPL source (D7 forbids reading
-//! it) or a public description precise enough to implement byte-exactly —
-//! and the sources this pass could reach (deinterlacing forums, `AviSynth`
-//! wiki pages, doxygen struct listings) describe the *shape* of the
-//! algorithm (spatial+temporal check, edge-directed interpolation) but not
-//! its exact coefficients, and several of those pages are themselves
-//! close paraphrases of the GPL source, which is a source this project
-//! will not read even indirectly. Rather than risk implementing a
-//! half-remembered version of someone else's formula and mislabelling it
-//! `Vaco-Provenance: spec`, this is an **original**, independently
-//! designed motion-adaptive interpolator: for each row that is not part of
-//! the frame's own kept field, blend a temporal candidate (three readings
-//! of the kept field's own instant, one per frame — see
-//! [`kept_field_estimate`]) with a spatial candidate (vertical neighbours,
-//! same frame), favouring the temporal one when the two temporal readings
-//! agree with each other.
+//! Reading `prev` and `next` at the missing row samples the discarded field
+//! at other times and can reproduce the artifact instead of estimating the
+//! kept field. On a zero-vertical-variation fixture, that earlier approach
+//! changed the comb score from 730112 at input to 746224 at output.
+//! [`kept_field_estimate`] instead asks the same kept-field interpolation
+//! question of every frame before temporal averaging.
 //!
-//! # A real bug found and fixed by measuring against real `ffmpeg`
+//! When `prev`, `cur`, and `next` are the same static image, every estimate
+//! agrees, the motion score is zero, and the progressive input is reproduced
+//! exactly wherever two spatial neighbors exist. A non-kept top or bottom
+//! edge has only one neighbor and therefore carries a bounded one-row
+//! limitation, covered explicitly by tests.
 //!
-//! An earlier version of [`blend`] read `prev`/`next` at the *same row* as
-//! the missing sample, on the reasoning that a stable pixel there implies
-//! low motion. That reasoning has a gap: at that row, `prev`/`cur`/`next`
-//! are all sampling the *other*, discarded field, at three different
-//! times — and on real (or realistically synthesised) interlaced content,
-//! averaging `prev`'s and `next`'s value at that row does not estimate
-//! anything about the kept field at all. It reconstructs `cur`'s **own**
-//! already-known, wrong-field-time value, arithmetically almost exactly,
-//! whenever motion is smooth — which is precisely when a viewer would most
-//! want temporal information to help. The measured effect: on a fixture
-//! built so a perfectly deinterlaced result has zero vertical variation
-//! (see the `oracle` test module below), the old code's own comb-score
-//! metric barely moved between the raw interlaced input and this crate's
-//! "deinterlaced" output (measured: input 730112, old output 746224 — no
-//! better, sometimes worse). [`kept_field_estimate`] is the fix: every
-//! candidate this blend touches estimates the *kept* field's value at its
-//! own frame's time, so temporal averaging combines three readings of one
-//! signal instead of silently reproducing the artefact it was meant to
-//! remove.
-//!
-//! # The invariant this design exists to satisfy
-//!
-//! The row's brief requires: *"yadif/bwdif on progressive input (both
-//! fields from one frame) must reproduce the input exactly."* This is true
-//! of this design **by construction** wherever a spatial estimate has two
-//! same-frame neighbours to average, not by a special case: when `prev`,
-//! `cur` and `next` are the same static image, [`kept_field_estimate`]
-//! gives the same answer from every one of the three frames, the motion
-//! score is `0`, and that shared answer is used unweighted. The one
-//! exception is the frame's own top/bottom edge row when it happens to be
-//! non-kept: there, only one neighbour exists, so a row whose true value
-//! genuinely differs from its single neighbour's is reproduced with that
-//! neighbour's value, not its own — a real, bounded, one-row edge
-//! limitation, not a general failure of the invariant. See this module's
-//! own test for exactly what is and is not claimed.
-//! `docs/filter/vaco-filter-deinterlace.md` states plainly that none of
-//! `yadif`/`bwdif`/`w3fdif`/`estdif`/`kerndeint` are checked byte-for-byte
-//! against the reference binary — only this structural property is.
-//!
-//! # Limitation: 8-bit planar samples only
-//!
-//! Like `vaco-filter-vdsp`'s own kernels, this operates on raw bytes and is
-//! only correct for one-byte-per-sample planar layouts. A 16-bit path is a
-//! mechanical extension (`u16` little-endian reads) left for whoever needs
-//! it first, per that crate's own such note.
+//! These filters are checked for that structural property, not byte equality
+//! with the reference; see `docs/filter/vaco-filter-deinterlace.md`.
+//! The implementation supports only one-byte-per-sample planar layouts.
 
 use vaco_core::{Error, Result};
 use vaco_filter_core::FilterContext;
@@ -352,60 +305,21 @@ mod tests {
     }
 }
 
-/// Measures this crate's one generic engine against `ffmpeg`'s own real
-/// `yadif`/`bwdif`/`w3fdif`/`estdif`, on genuinely interlaced, genuinely
-/// moving content — not the trivial static-sequence invariant the unit
-/// tests above check.
+/// Black-box comparison of the generic engine with `yadif`, `bwdif`,
+/// `w3fdif`, and `estdif` on moving interlaced content.
 ///
-/// # Why this exists and what it settles
+/// `testsrc2` could not isolate combing: after `tinterlace=4`, its progressive
+/// and interlaced comb scores were 332712 and 333132 because intrinsic spatial
+/// detail dominated the metric. The actual fixture is a flat-per-row,
+/// horizontally scrolling ramp (`geq=lum='mod(X*4+N*8,256)'`) passed through
+/// `tinterlace=4`. Its progressive comb score is exactly zero, so the raised
+/// score measures only alternating-row temporal splicing.
 ///
-/// This measures byte-level closeness (or an explicit scope-cut) for
-/// these four filters. Byte-exactness is not reachable (see this module's
-/// own doc: the reference kernels are GPL and undocumented, D7 forbids
-/// reading them), and per the repository owner's 2026-08-28 ruling,
-/// byte-exactness is not the bar anyway — a real quality measurement,
-/// checked per plane, with a stated residual, is. This is that
-/// measurement.
-///
-/// # Fixture, and why it is not `testsrc2`
-///
-/// The first attempt used `testsrc2` (the obvious choice) fed through
-/// `tinterlace=4`, and its comb score barely moved between the progressive
-/// and interlaced versions of the same content (measured: 332712 vs
-/// 333132 on this crate's own frame size) — `testsrc2`'s own spatial
-/// detail (colour bars, moving text) dominates the vertical-Laplacian comb
-/// metric so completely that real combing from real motion is noise by
-/// comparison. That is the "source that cannot separate two rules
-/// validates neither" trap: a passing or failing comb-score assertion on
-/// that fixture would have meant nothing either way.
-///
-/// The fixture actually used instead is a synthetic horizontally-scrolling
-/// ramp (`geq=lum='mod(X*4+N*8,256)'`, flat along every row) fed through
-/// the same `tinterlace=4`. A flat-per-row source has an exact **zero**
-/// progressive comb score by construction (checked directly:
-/// interlacing the same content raises it into the hundreds of thousands)
-/// — the interlaced comb score is now measuring only the alternating-row
-/// time-splice `tinterlace` introduces, not incidental spatial texture.
-/// `tinterlace=4` (`interleave_top`) combines two temporally distinct source
-/// frames per output frame and is top-field-first by construction.
-/// Generated fresh each run (tiny: 64x48, 8 frames), never checked in, so
-/// there is no fixture to clean up.
-///
-/// # Measured result (recorded here so a future change has something to
-/// compare against; see also `docs/filter/vaco-filter-deinterlace.md`)
-///
-/// On this fixture, this crate's own output collapses the comb score from
-/// the hundreds of thousands down to what a straight per-row byte
-/// comparison shows is pure rounding noise (single digits per frame) —
-/// real, structural deinterlacing, not a pass-through. Y/U/V PSNR against
-/// each of the four real filters' own output on the same fixture is very
-/// high (the content is a simple ramp with no ambiguous motion, so both a
-/// correct reference implementation and this crate's original algorithm
-/// converge on nearly the same answer); the assertions below use a floor
-/// far below what is actually measured; the real numbers are printed on
-/// every run via `--nocapture`, since a hard-coded exact figure would be
-/// exactly the "tolerance widened to launder a pass" pattern this project
-/// warns against.
+/// The 64x48, eight-frame fixture is generated for each run. This engine
+/// reduces comb scores from hundreds of thousands to single-digit per-frame
+/// byte residuals. Y/U/V PSNR is compared with each reference filter using a
+/// conservative floor, while measured values are printed for inspection.
+/// See `docs/filter/vaco-filter-deinterlace.md` for the recorded scope.
 #[cfg(test)]
 #[allow(
     clippy::unwrap_used,

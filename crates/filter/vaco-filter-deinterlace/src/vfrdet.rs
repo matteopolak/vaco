@@ -3,17 +3,12 @@
 //!
 //! `ffmpeg -h filter=vfrdet`: no options.
 //!
-//! # What this crate cannot reproduce: a log-line-only output
-//!
 //! Unlike [`crate::idet`], the reference's `vfrdet` publishes **no**
 //! per-frame metadata at all — measured directly (`ffprobe -show_frames -f
 //! lavfi -i testsrc2,vfrdet`, ffmpeg 8.1, 2026-08-23; the `tags` object is
 //! empty on every frame). Its only output is a final summary log line
-//! (`VFR:... (%u/%u)`) written at filter destruction. So `INTERFACE-GAPS.md`
-//! gap 11 closing (`vaco_frame::Frame` gained a per-frame metadata
-//! dictionary while this crate was in flight — see `idet`'s module doc)
-//! does not open a channel for this filter specifically: there is nothing
-//! to attach to a frame, because the reference does not either.
+//! (`VFR:... (%u/%u)`) written at filter destruction, leaving no equivalent
+//! frame-attached channel for this result.
 //! [`Filter::stats`] exposes the same running counts as a plain accessor,
 //! the way `vaco-filter-temporal::freezedetect` does for the same reason.
 //!

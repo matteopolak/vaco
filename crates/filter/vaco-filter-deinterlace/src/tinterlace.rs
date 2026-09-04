@@ -5,7 +5,7 @@
 //! `drop_odd`=2, `pad`=3, `interleave_top`=4, `interleave_bottom`=5,
 //! `interlacex2`=6, `mergex2`=7).
 //!
-//! # Measured geometry and frame counts (a `2x8` ramp, 50 input frames, `ffmpeg` 8.1, 2026-08-23)
+//! Measured with ffmpeg 8.1 on a 2x8 ramp with 50 input frames:
 //!
 //! | mode | output height | output frames (from 50 in) |
 //! |---|---|---|
@@ -16,31 +16,21 @@
 //! | `mergex2` | `2x` input | 49 (sliding pairs, `N-1`) |
 //! | `interlacex2` | unchanged | 98 (2 outputs per sliding pair, `2(N-1)`) |
 //!
-//! # Measured content: `merge`, `drop_even`/`drop_odd`, `interleave_top`
-//!
 //! With a frame-identifiable ramp (`geq=lum='(Y+1)*10+N'`): `drop_even`
 //! keeps input frames 0, 2, 4, ... **unmodified**; `drop_odd` keeps 1, 3,
 //! 5, .... `interleave_top` on a pair `(A, B)` gives even output rows =
 //! `A`'s own rows, odd output rows = `B`'s own rows, at unchanged height —
-//! the same row selection as [`crate::interlace`] with `scan=tff`,
-//! `lowpass=off`. `merge` on the same pair instead **doubles the height**
-//! and stacks (`out[2i]=A[i]`, `out[2i+1]=B[i]`) — [`crate::video::weave_fields`]
-//! treating each full frame as if it were already one field, which is what
-//! "merge fields" means and what the doubled-height measurement confirms.
+//! the same row selection as [`crate::interlace`] with `scan=tff` and
+//! `lowpass=off`. `merge` doubles height and stacks
+//! `out[2i]=A[i]`, `out[2i+1]=B[i]` via [`crate::video::weave_fields`].
 //!
-//! `mergex2` measures the same output size relationship to `merge` that
-//! `doubleweave` has to `weave` (`N-1` sliding pairs instead of `N/2`
-//! non-overlapping ones), so it is implemented as `merge`'s combine
-//! function run in sliding mode — the same generalisation this row already
-//! establishes for [`crate::weave`], not a separately guessed formula.
+//! `mergex2` uses `merge` over `N-1` sliding pairs rather than `N/2`
+//! non-overlapping pairs, matching the measured frame-count relationship.
 //! `interleave_bottom` is implemented as `interleave_top` with the two
-//! frames' roles swapped, by naming symmetry; only `interleave_top`'s
-//! content was independently measured.
-//!
-//! # What is not byte-exact: `pad` and `interlacex2`
+//! frames swapped; only `interleave_top` content was independently measured.
 //!
 //! Both modes' *frame counts* are measured exactly (above). Their
-//! per-sample content was not fully reverse-engineered in this pass: `pad`
+//! per-sample content is structural rather than byte-exact: `pad`
 //! is implemented as "each output frame takes its real content from one
 //! source frame, at rows matching that frame's position parity, black at
 //! the other rows" (matching the doubled height and the `N-1` sliding

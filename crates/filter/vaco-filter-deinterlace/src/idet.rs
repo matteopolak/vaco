@@ -6,54 +6,38 @@
 //! all five for option-table completeness; only a normalised-threshold
 //! classification is implemented (below).
 //!
-//! # Metadata export: interface gap 11, closed while this crate was in flight
-//!
 //! The reference reports its per-frame classification and cumulative
 //! counts as frame-attached dictionary entries — measured directly
-//! (`ffprobe -show_frames -f lavfi -i testsrc2,idet`, ffmpeg 8.1,
-//! 2026-08-23): `lavfi.idet.single.current_frame` (`tff`/`bff`/
+//! (`ffprobe -show_frames -f lavfi -i testsrc2,idet`, ffmpeg 8.1):
+//! `lavfi.idet.single.current_frame` (`tff`/`bff`/
 //! `progressive`/`undetermined`), `.multiple.current_frame`,
 //! `.repeated.current_frame` (`neither`/`top`/`bottom`), plus per-category
 //! running fractions (`.single.tff`, `.repeated.neither`, etc.).
-//! `vaco_frame::Frame` had no open-ended per-frame metadata dictionary when
-//! this crate started (`INTERFACE-GAPS.md` gap 11, reported by the
-//! `vaco-filter-color`/`-key`/`-lut` agent), but it closed additively
-//! (`Frame::set_metadata`/`metadata_get`, a new `FrameSideData::Metadata`
-//! variant) before this crate finished — checked again immediately before
-//! this module was written, per that gap's own note that `idet` was
-//! expected to need it. So this filter **does** write real
-//! `lavfi.idet.*` keys, under the real names, onto every output frame —
-//! [`Filter::classify`] calls `Frame::set_metadata` directly. What it does
-//! not reproduce is the reference's *vocabulary*: this classifier only
-//! distinguishes progressive from interlaced (no `tff`/`bff` parity split,
-//! no `undetermined`, no cumulative `.multiple.*`/per-category fractions),
+//! This filter writes the corresponding keys through `Frame::set_metadata`.
+//! Its classifier only distinguishes progressive from interlaced (no parity
+//! split, `undetermined`, or cumulative `.multiple.*`/category fractions),
 //! so `lavfi.idet.single.current_frame` here reads `progressive` or
 //! `interlaced` rather than one of the reference's four values — a
 //! narrower vocabulary under the correct key, not a missing channel.
 //! [`Filter::classification`] additionally exposes the same running tallies
 //! as a plain accessor, for this module's own tests.
 //!
-//! # Algorithm
-//!
 //! [`vaco_filter_vdsp::comb_score`] on the luma plane, normalised by pixel
 //! count, is this filter's per-frame combing metric — an **original**
 //! metric (see that crate's doc), not the reference's own detector, which
-//! this project cannot read (D7). A frame scores `Interlaced` when the
+//! this project cannot read. A frame scores `Interlaced` when the
 //! normalised score exceeds a fixed threshold, `Progressive` otherwise. A
 //! frame whose luma is byte-identical to the immediately preceding one
 //! (`vaco_filter_vdsp::plane_sad` is exactly `0`) is additionally counted
 //! `Repeated`, independent of its progressive/interlaced classification.
-//!
-//! # Independent oracle
 //!
 //! A synthetic stream built by feeding the *same* progressive frame
 //! repeatedly (zero vertical second difference, by the algebraic identity
 //! [`vaco_filter_vdsp::comb_score`]'s own doc names) must classify every
 //! frame `Progressive`; a synthetic stream of frames whose rows strictly
 //! alternate between two fixed values (the textbook combing pattern) must
-//! classify every frame `Interlaced` — both checked directly against
-//! [`Filter::classification`]'s tallies, not against this filter's own
-//! per-frame decision re-examined a second way.
+//! classify every frame `Interlaced`. Both cases are checked directly against
+//! [`Filter::classification`]'s tallies.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
