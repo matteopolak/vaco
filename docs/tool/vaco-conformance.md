@@ -107,6 +107,24 @@ loader variables are inherited — a shared-library reference build cannot start
 without them — and that is the one deliberate hole in hermeticity. Both sides
 inherit the same values, so it cannot skew a comparison.
 
+### Probe acceptance slices
+
+`tests/probe_confusion.rs` contains small black-box slices alongside the
+manifest-driven suites. Each creates its fixture with the reference `ffmpeg`
+binary, queries both `ffprobe` and `vaco-probe`, and discards the fixture when
+the test ends. The detector sweep checks the selected format and packet count
+across container and raw-format families; the raw-audio metadata slice checks
+`codec_name`, `sample_rate`, `channels`, and `time_base` for ADTS AAC, AC-3,
+E-AC-3, MP3, and FLAC at 48 kHz stereo.
+
+These tests intentionally compare the reported field values, not merely a zero
+exit code. They exclude container duration from this slice: duration precision
+has a separate acceptance path, so a metadata regression cannot be hidden by
+or attributed to timestamp rounding. Extend the case table with another
+independent format family when adding a probe field; keep a fixture's encoding
+arguments and the compared fields in the test so the oracle measurement stays
+reproducible.
+
 Output is drained on dedicated threads while the main thread waits for exit. The
 obvious implementation (wait, then read) deadlocks the moment a child fills a
 pipe buffer, and finding that out from a hung nightly is expensive; `run.rs` has

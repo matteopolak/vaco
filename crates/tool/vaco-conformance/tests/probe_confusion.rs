@@ -350,6 +350,55 @@ fn total_read_packets(bin: &Path, file: &Path) -> Result<u64, String> {
         .sum()
 }
 
+/// Read selected stream fields into one map per emitted stream.
+///
+/// `ffprobe` prints these audio facts independently of the container's
+/// duration estimate. Comparing the named values (rather than the whole
+/// section's bytes) keeps this probe focused on header-derived metadata and
+/// avoids conflating it with the separately-owned duration-precision work.
+fn stream_fields(
+    bin: &Path,
+    file: &Path,
+) -> Result<Vec<std::collections::BTreeMap<String, String>>, String> {
+    let argv: Vec<String> = [
+        "-v",
+        "error",
+        "-show_entries",
+        "stream=codec_name,sample_rate,channels,time_base",
+        "-of",
+        "default=nw=1",
+    ]
+    .into_iter()
+    .map(str::to_owned)
+    .chain(std::iter::once(file.to_string_lossy().into_owned()))
+    .collect();
+    let inv = Invocation::new(bin, argv).with_timeout(Duration::from_secs(20));
+    let obs = run::run(&inv).map_err(|e| e.to_string())?;
+    if !obs.succeeded() {
+        return Err(format!(
+            "{} exited {:?}: {}",
+            bin.display(),
+            obs.exit,
+            obs.stderr_text()
+        ));
+    }
+
+    let mut streams = Vec::new();
+    let mut current = std::collections::BTreeMap::new();
+    for line in obs.stdout_text().lines() {
+        match line {
+            "[STREAM]" => current.clear(),
+            "[/STREAM]" => streams.push(std::mem::take(&mut current)),
+            _ => {
+                if let Some((key, value)) = line.split_once('=') {
+                    current.insert(key.to_owned(), value.to_owned());
+                }
+            }
+        }
+    }
+    Ok(streams)
+}
+
 fn is_aliased(label: &str, ours: &str, theirs: &str) -> bool {
     ours == theirs
         || ALIASES
@@ -522,5 +571,70 @@ fn probe_choice_matches_the_reference_across_the_format_sweep() {
                 );
             }
         }
+    }
+}
+
+/// Raw-audio headers carry enough independent facts to catch a detector that
+/// selected the right name yet instantiated the wrong demuxer or parsed its
+/// first frame incorrectly. ADTS is intentionally included: its historical
+/// `cdgraphics` false positive was the motivating probe-gap defect, while the
+/// AC-3, E-AC-3, MP3 and FLAC rows sweep its close raw-audio siblings.
+#[test]
+fn raw_audio_stream_fields_match_the_reference() {
+    let Some(reference) = oracle() else { return };
+    let Some(probe) = probe_binary() else { return };
+
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let cases: &[(&str, &[&str])] = &[
+        ("aac", &["-c:a", "aac", "-f", "adts"]),
+        ("ac3", &["-c:a", "ac3", "-f", "ac3"]),
+        ("eac3", &["-c:a", "eac3", "-f", "eac3"]),
+        ("mp3", &["-c:a", "libmp3lame", "-f", "mp3"]),
+        ("flac", &["-c:a", "flac", "-f", "flac"]),
+    ];
+
+    for &(extension, encode_args) in cases {
+        let fixture = tmp.path().join(format!("audio.{extension}"));
+        let mut argv: Vec<String> = vec![
+            "-nostdin".into(),
+            "-y".into(),
+            "-hide_banner".into(),
+            "-loglevel".into(),
+            "error".into(),
+            "-f".into(),
+            "lavfi".into(),
+            "-i".into(),
+            "sine=frequency=440:sample_rate=48000:duration=1".into(),
+            "-ac".into(),
+            "2".into(),
+        ];
+        argv.extend(encode_args.iter().map(|arg| (*arg).to_owned()));
+        argv.push(fixture.to_string_lossy().into_owned());
+        let inv = Invocation::new(&reference.ffmpeg, argv).with_timeout(Duration::from_secs(60));
+        let made = run::run(&inv).expect("ffmpeg launches");
+        assert!(
+            made.succeeded() && fixture.exists(),
+            "{extension}: reference fixture generation failed: {}",
+            made.stderr_text()
+        );
+
+        let theirs = stream_fields(&reference.ffprobe, &fixture);
+        assert!(
+            theirs.is_ok(),
+            "{extension}: reference stream fields: {}",
+            theirs
+                .as_ref()
+                .err()
+                .map_or("unknown error", String::as_str)
+        );
+        let Ok(theirs) = theirs else { return };
+        let ours = stream_fields(&probe, &fixture);
+        assert!(
+            ours.is_ok(),
+            "{extension}: vaco-probe stream fields: {}",
+            ours.as_ref().err().map_or("unknown error", String::as_str)
+        );
+        let Ok(ours) = ours else { return };
+        assert_eq!(ours, theirs, "{extension}: stream metadata diverged");
     }
 }
