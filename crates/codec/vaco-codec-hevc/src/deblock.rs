@@ -84,26 +84,24 @@
 //!
 //! # The filtering grid
 //!
-//! HEVC never deblocks below an 8-luma-sample grid regardless of
-//! `MinCbSizeY` — `DEBLOCK_SMALLEST_BLOCK` in HM is a fixed `8`, not derived
-//! from `MinCbSizeY`, and any transform-tree split finer than
-//! `MinCbSizeY` collapses into its enclosing `MinCbSizeY`-sized cell's own
-//! edge rather than creating an independently-filtered one (confirmed by
-//! reading `xSetEdgefilterTU`'s own `uiWidthInBaseUnits == 0` fallback,
-//! which re-addresses the *whole* enclosing part rather than the leaf's own
-//! finer rectangle). Since `MinCbSizeY >= 8` always (a structural
-//! constraint HEVC itself imposes), using `1 << log2_min_cb_size` as the
-//! luma grid reproduces this exactly for both the common case
-//! (`MinCbSizeY == 8`, effectively every real encoder) and the rare
-//! larger-`MinCbSizeY` case, with no separate branch needed —
-//! [`framebuf::EdgeMarks`] already only ever marks edges on that grid.
+//! HEVC never deblocks below an 8-luma-sample grid, and never *above* one
+//! either: [`DEBLOCK_GRID`] is the constant `8` regardless of `MinCbSizeY`,
+//! matching `DEBLOCK_SMALLEST_BLOCK` in HM.
 //!
-//! Chroma (4:2:0 — this crate's only scope) filters at a coarser grid still:
-//! `DEBLOCK_SMALLEST_BLOCK` (8) *chroma* samples, i.e. 16 luma samples,
-//! confirmed by `xEdgeFilterChroma`'s own skip test
-//! (`uiEdgeNumInCtuVert % (DEBLOCK_SMALLEST_BLOCK/uiPelsInPartChromaH)`).
-//! `chroma_grid = luma_grid.max(16)` reproduces that for both the common
-//! (`luma_grid == 8`) and larger-`MinCbSizeY` cases.
+//! This was `1 << log2_min_cb_size` until it was measured. The reasoning
+//! behind that — that a transform split finer than `MinCbSizeY` collapses
+//! into its enclosing coding block's edge rather than creating an
+//! independently-filtered one — is wrong, and `MinCbSizeY == 8` (every
+//! stock encoder, so every fixture here) hid it, because there the
+//! derivation and the constant are the same number. A stream with
+//! `MinCbSizeY == 16` and a transform tree deeper than one level has real
+//! transform-unit edges at odd multiples of 8, and the derived grid skipped
+//! every one, leaving an unfiltered band four samples either side. See
+//! `tests/deblock_grid.rs` for the `libx265` encode that reaches it.
+//!
+//! Chroma (4:2:0 — this crate's only scope) filters at a coarser grid
+//! still: `DEBLOCK_SMALLEST_BLOCK` (8) *chroma* samples, i.e.
+//! [`DEBLOCK_GRID_CHROMA`] = 16 luma samples.
 
 use crate::ctu::Ctx;
 use crate::framebuf::Plane;
@@ -123,6 +121,24 @@ const BETA_TABLE: [i32; 52] = [
     0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
     20, 22, 24, 26, 28, 30, 32, 34, 36, 38, 40, 42, 44, 46, 48, 50, 52, 54, 56, 58, 60, 62, 64,
 ];
+
+/// §8.7.2's edge grid: **8 luma samples, always**, whatever `MinCbSizeY` is.
+///
+/// This used to be `1 << log2_min_cb_size`, reasoned from HM on the belief
+/// that a transform split finer than `MinCbSizeY` collapses into its
+/// enclosing coding block's edge. It does not. A stream with
+/// `log2_min_luma_coding_block_size_minus3 > 0` and a transform tree deeper
+/// than one level has real transform-unit edges at odd multiples of 8, and
+/// skipping them leaves an unfiltered stripe four samples either side of
+/// every one. Measured on a stock `libx265` encode with `min-cu-size=16` and
+/// `tu-intra-depth=3`, and on `AMP_A_SAMSUNG_7` (`MinCbSizeY == 16`), where
+/// the wrong samples formed exactly the 8-wide bands centred on x/y = 40,
+/// 120, ... that this constant now covers.
+pub(crate) const DEBLOCK_GRID: i32 = 8;
+
+/// The chroma edge grid in **luma** coordinates: 8 chroma samples, which for
+/// 4:2:0 (this crate's only scope) is 16 luma samples.
+const DEBLOCK_GRID_CHROMA: i32 = 16;
 
 /// `Clip3(-c, c, v)`, clause 8.7.2.3/8.7.2.4's own bound on a filter delta.
 fn clip3_sym(c: i32, v: i32) -> i32 {
@@ -470,8 +486,8 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
     if s.shared.deblocking_disabled {
         return;
     }
-    let grid = 1i32 << s.shared.log2_min_cb_size;
-    let chroma_grid = grid.max(16);
+    let grid = DEBLOCK_GRID;
+    let chroma_grid = DEBLOCK_GRID_CHROMA;
 
     let (width, height) = s.pic.y.dims();
     let (width, height) = (

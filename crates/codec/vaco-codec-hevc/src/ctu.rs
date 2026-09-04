@@ -1358,7 +1358,7 @@ fn decode_skip_cu(
     // `deblock::boundary_strength` still resolves correctly, since a skip
     // CU's own `cbf_luma_at` is never written and so already reads `false`
     // — the same "no residual" answer HM's own `getCbf` gives it.
-    let grid = 1i32 << s.shared.log2_min_cb_size;
+    let grid = crate::deblock::DEBLOCK_GRID;
     s.edges.mark_tu_vert(x0, y0, size, grid);
     s.edges.mark_tu_horiz(x0, y0, size, grid);
     let max_num_merge_cand = s.inter()?.max_num_merge_cand;
@@ -1932,7 +1932,7 @@ fn decode_inter_cu(
     // a transform-block edge (§8.7.2.4's non-zero-coefficient `bS`
     // condition must not fire here unless a transform-unit leaf also marked
     // it).
-    let deblock_grid = 1i32 << s.shared.log2_min_cb_size;
+    let deblock_grid = crate::deblock::DEBLOCK_GRID;
     for pu_idx in 0..num_pus {
         let pu = part_mode.pu_rect(x0, y0, size, pu_idx);
         s.edges.mark_vert(pu.x, pu.y, pu.h, deblock_grid);
@@ -2146,7 +2146,7 @@ fn decode_inter_cu(
         // left/top boundary as a (trivially residual-free) transform-block
         // edge — see that function's own comment for why HM marks it
         // unconditionally regardless of `rqt_root_cbf`.
-        let grid = 1i32 << s.shared.log2_min_cb_size;
+        let grid = crate::deblock::DEBLOCK_GRID;
         s.edges.mark_tu_vert(x0, y0, size, grid);
         s.edges.mark_tu_horiz(x0, y0, size, grid);
         write_inter_cu_no_residual(s, x0, y0, size, &pu_motion)?;
@@ -2284,7 +2284,7 @@ fn transform_unit_inter(
     cbf_cr: bool,
     pred: &CuPrediction,
 ) -> Result<()> {
-    let grid = 1i32 << s.shared.log2_min_cb_size;
+    let grid = crate::deblock::DEBLOCK_GRID;
     let size = 1i32 << log2_size;
     s.edges.mark_tu_vert(x0, y0, size, grid);
     s.edges.mark_tu_horiz(x0, y0, size, grid);
@@ -2660,7 +2660,7 @@ fn transform_unit(
     // leaf's own top-left corner here, before prediction/reconstruction, is
     // sufficient because `EdgeMarks::mark_vert`/`mark_horiz` themselves
     // reject anything off that grid.
-    let grid = 1i32 << s.shared.log2_min_cb_size;
+    let grid = crate::deblock::DEBLOCK_GRID;
     let size = 1i32 << log2_size;
     s.edges.mark_vert(x0, y0, size, grid);
     s.edges.mark_horiz(x0, y0, size, grid);
