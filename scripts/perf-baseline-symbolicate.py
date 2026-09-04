@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """Symbolicate a samply profile.json.gz against a dSYM using llvm-symbolizer,
-recovering full inline chains, and aggregate self time by each chain's
-OUTERMOST physically-emitted frame (the convention used throughout this
-project's own profiling rounds -- see planning/E2E-GAPS.md SS18-19 and
-docs/core/simd-adoption-measurements.md Group 10).
+recovering full inline chains, and aggregate self time by each chain's outermost
+physically-emitted frame or its innermost inlined frame.
 
-Usage: symbolicate.py <profile.json.gz> <dsym_path> <lib_name> [--vmaddr 0x100000000]
+Usage: symbolicate.py <profile.json.gz> <dsym_path> <lib_name>
+                      [--vmaddr 0x100000000] [--innermost]
 
 Prints:
   - fraction of samples whose leaf frame is inside <lib_name>
@@ -25,6 +24,23 @@ def load_profile(path):
         return json.load(f)
 
 
+def aggregate_counts(leaf_addrs, addr_to_chain, innermost=False):
+    """Aggregate address samples by one end of each inline chain."""
+    counts = Counter()
+    for addr, count in leaf_addrs.items():
+        chain = addr_to_chain.get(addr, [])
+        if not chain:
+            counts["<unresolved>"] += count
+            continue
+        frame = chain[0] if innermost else chain[-1]
+        name = frame.split(" at ")[0].strip()
+        prefix = "(inlined by)"
+        if name.startswith(prefix):
+            name = name[len(prefix):].strip()
+        counts[name] += count
+    return counts
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("profile")
@@ -32,6 +48,8 @@ def main():
     ap.add_argument("lib_name")
     ap.add_argument("--vmaddr", default="0x100000000")
     ap.add_argument("--top", type=int, default=20)
+    ap.add_argument("--innermost", action="store_true",
+                    help="attribute each sample to the first (most inlined) frame")
     args = ap.parse_args()
 
     d = load_profile(args.profile)
@@ -113,30 +131,12 @@ def main():
 
     print(f"resolved (non-'??') addresses: {resolved}/{len(unique_addrs)} ({100*resolved/len(unique_addrs) if unique_addrs else 0:.1f}%)", file=sys.stderr)
 
-    # Aggregate self time by OUTERMOST physically-emitted frame = LAST line of the inline chain
-    # (llvm-symbolizer with --inlines prints innermost first, outermost (physical) frame last).
-    outer_counts = Counter()
-    for addr, count in leaf_addrs.items():
-        chain = addr_to_chain.get(addr, [])
-        if not chain:
-            outer_counts["<unresolved>"] += count
-            continue
-        outer = chain[-1]
-        # strip " at file:line" suffix for readability, keep function name;
-        # llvm-symbolizer prefixes every line but the first with "(inlined by) "
-        # regardless of whether that frame is itself the physical (non-inlined)
-        # container -- strip it for a readable name, the *position* (last line)
-        # is what marks this as the outermost/physically-emitted frame.
-        name = outer.split(" at ")[0].strip()
-        prefix = "(inlined by)"
-        if name.startswith(prefix):
-            name = name[len(prefix):].strip()
-        outer_counts[name] += count
-
-    total_in_lib = sum(outer_counts.values())
-    print(f"\nTop {args.top} by self time (outermost physically-emitted frame), of {total_in_lib} in-lib samples:", file=sys.stderr)
+    counts = aggregate_counts(leaf_addrs, addr_to_chain, args.innermost)
+    total_in_lib = sum(counts.values())
+    mode = "innermost inlined frame" if args.innermost else "outermost physically-emitted frame"
+    print(f"\nTop {args.top} by self time ({mode}), of {total_in_lib} in-lib samples:", file=sys.stderr)
     results = []
-    for name, count in outer_counts.most_common(args.top):
+    for name, count in counts.most_common(args.top):
         pct = 100 * count / total_in_lib
         results.append({"function": name, "self_pct": round(pct, 2), "samples": count})
         print(f"{pct:6.2f}%  {count:6d}  {name}")
@@ -148,6 +148,7 @@ def main():
         "unique_addrs": len(unique_addrs),
         "resolved_addrs": resolved,
         "resolved_fraction": resolved / len(unique_addrs) if unique_addrs else 0,
+        "frame_mode": "innermost" if args.innermost else "outermost",
         "top": results,
     }, indent=2))
 

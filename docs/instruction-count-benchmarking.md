@@ -275,13 +275,19 @@ python3 scripts/perf-baseline-symbolicate.py \
   /private/tmp/h264-vaco.json.gz \
   /private/tmp/vaco-perf-target/vaco.dSYM/Contents/Resources/DWARF/vaco \
   vaco --top 30 > /private/tmp/h264-vaco-top.json
+python3 scripts/perf-baseline-symbolicate.py \
+  /private/tmp/h264-vaco.json.gz \
+  /private/tmp/vaco-perf-target/vaco.dSYM/Contents/Resources/DWARF/vaco \
+  vaco --top 30 --innermost > /private/tmp/h264-vaco-inline-top.json
 samply load /private/tmp/h264-vaco.json.gz
 ```
 
-The JSON aggregation is convenient for before/after accounting; `samply load`
-opens the interactive flame graph and thread timeline. Profile Vaco for code
-attribution. The reference binary is measured only as a black box; its source is
-never consulted.
+The outermost view identifies the physical function the compiler emitted. The
+`--innermost` view attributes an inlined sample to its most specific source
+function, which can reveal a shared helper hidden inside a codec-local body. The
+interactive `samply load` view provides the flame graph and thread timeline.
+Profile Vaco for code attribution. The reference binary is measured only as a
+black box; its source is never consulted.
 
 ## How to change it
 

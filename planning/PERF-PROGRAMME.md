@@ -194,9 +194,8 @@ encoder's bitstream is not a conformance target, its decoded output is.
 **Profiles.** `samply record --rate 4000 --save-only` on the `dist` binary,
 `llvm-symbolizer --obj=<dSYM> --inlines`, aggregate by outermost
 physically-emitted frame (`scripts/perf-baseline-symbolicate.py`) **and**, for
-any function you are about to optimise, by innermost frame (the variant used
-in §9.2 is eleven lines; add an `--innermost` flag to the committed script as
-part of the first item that needs it). `--unstable-presymbolicate` resolves
+any function you are about to optimise, by innermost frame using the script's
+`--innermost` flag. `--unstable-presymbolicate` resolves
 almost nothing on this toolchain; do not use it.
 
 **Concurrency between agents.** Builds may overlap freely. **Measurements may
