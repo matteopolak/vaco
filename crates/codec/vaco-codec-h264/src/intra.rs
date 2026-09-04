@@ -170,17 +170,51 @@ pub(crate) fn predict_intra16x16(mode: u8, n: Neighbours16) -> [[u8; 16]; 16] {
             // at size 16 (count 16 or 32, both powers of two), verified
             // bit-exact against this module's own pre-existing tests below
             // (which pin real expected bytes) before landing.
-            let top_u16: [u16; 16] =
-                core::array::from_fn(|i| u16::from(n.top.get(i).copied().unwrap_or(0)));
-            let left_u16: [u16; 16] =
-                core::array::from_fn(|i| u16::from(n.left.get(i).copied().unwrap_or(0)));
-            let top: &[u16] = if n.top_available { &top_u16 } else { &[] };
-            let left: &[u16] = if n.left_available { &left_u16 } else { &[] };
-            let dc = vaco_codec_dsp_intrapred::dc_predict(top, left, 16, 8);
-            let dc = u8::try_from(dc).unwrap_or(u8::MAX);
-            [[dc; 16]; 16]
+            predict_intra16x16_dc(n, |top, left| {
+                vaco_codec_dsp_intrapred::dc_predict(top, left, 16, 8)
+            })
         }
     }
+}
+
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    reason = "the predictor closure must disappear so the hot DC arm reaches the dispatched kernel without an adapter call"
+)]
+fn predict_intra16x16_dc(
+    n: Neighbours16,
+    predictor: impl FnOnce(&[u16], &[u16]) -> u16,
+) -> [[u8; 16]; 16] {
+    let top_u16: [u16; 16] =
+        core::array::from_fn(|i| u16::from(n.top.get(i).copied().unwrap_or(0)));
+    let left_u16: [u16; 16] =
+        core::array::from_fn(|i| u16::from(n.left.get(i).copied().unwrap_or(0)));
+    let top: &[u16] = if n.top_available { &top_u16 } else { &[] };
+    let left: &[u16] = if n.left_available { &left_u16 } else { &[] };
+    let dc = u8::try_from(predictor(top, left)).unwrap_or(u8::MAX);
+    [[dc; 16]; 16]
+}
+
+/// [`predict_intra16x16`] with the DC arm routed through the already-dispatched
+/// DSP kernel. Other modes retain the scalar implementation above.
+#[must_use]
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    reason = "the production macroblock loop must inline this mode gate around the dispatched DC kernel"
+)]
+pub(crate) fn predict_intra16x16_dispatched(
+    caps: vaco_simd::Caps,
+    mode: u8,
+    n: Neighbours16,
+) -> [[u8; 16]; 16] {
+    if matches!(mode, 0 | 1 | 3) {
+        return predict_intra16x16(mode, n);
+    }
+    predict_intra16x16_dc(n, |top, left| {
+        vaco_codec_dsp_intrapred::simd::dc_predict(caps, top, left, 16, 8)
+    })
 }
 
 /// One 8-long row/column of chroma neighbour samples for one chroma
@@ -1120,6 +1154,32 @@ mod tests {
         };
         let out = predict_intra16x16(2, n);
         assert!(out.iter().all(|row| row.iter().all(|&v| v == 4)));
+    }
+
+    #[test]
+    fn dispatched_intra16x16_dc_matches_scalar_oracle() {
+        let caps = vaco_simd::Caps::detect();
+        let top = core::array::from_fn(|i| (i * 13 + 17) as u8);
+        let left = core::array::from_fn(|i| (255 - i * 11) as u8);
+
+        for (top_available, left_available) in
+            [(true, true), (true, false), (false, true), (false, false)]
+        {
+            let neighbours = Neighbours16 {
+                top_available,
+                top,
+                left_available,
+                left,
+                corner: 91,
+            };
+            for mode in [2, u8::MAX] {
+                assert_eq!(
+                    predict_intra16x16_dispatched(caps, mode, neighbours),
+                    predict_intra16x16(mode, neighbours),
+                    "mode={mode}, top_available={top_available}, left_available={left_available}"
+                );
+            }
+        }
     }
 
     /// End-to-end reconstruction of `cabac_intra_oracle_flat.264`'s one

@@ -76,7 +76,7 @@ use crate::dequant::{
 };
 use crate::intra::{
     Neighbours4, Neighbours8, Neighbours16, NeighboursChroma, predict_intra_chroma,
-    predict_intra4x4, predict_intra8x8, predict_intra16x16,
+    predict_intra4x4, predict_intra8x8, predict_intra16x16, predict_intra16x16_dispatched,
 };
 use crate::mb::{MbResidual, MbSummary, MvInfo, blk_xy};
 use crate::scan::{
@@ -107,7 +107,40 @@ pub(crate) fn reconstruct_intra16x16_luma(
     residual: &MbResidual,
 ) -> [[u8; 16]; 16] {
     let pred = predict_intra16x16(mode, neighbours);
+    reconstruct_intra16x16_luma_from_prediction(pred, qpy, residual)
+}
 
+#[must_use]
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    reason = "the hot macroblock path must not add a reconstruction wrapper call around prediction"
+)]
+fn reconstruct_intra16x16_luma_dispatched(
+    caps: vaco_simd::Caps,
+    mode: u8,
+    neighbours: Neighbours16,
+    qpy: i32,
+    residual: &MbResidual,
+) -> [[u8; 16]; 16] {
+    let pred = predict_intra16x16_dispatched(caps, mode, neighbours);
+    reconstruct_intra16x16_luma_from_prediction(pred, qpy, residual)
+}
+
+#[allow(
+    clippy::indexing_slicing,
+    reason = "xO/yO are 4*blk_xy(0..16) in 0..12, i/j in 0..4, so every index into the fixed 16x16/16-element arrays below is provably in range -- not bitstream-derived"
+)]
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    reason = "scalar-oracle and dispatched entry points share this residual body without an extra hot-path call"
+)]
+fn reconstruct_intra16x16_luma_from_prediction(
+    pred: [[u8; 16]; 16],
+    qpy: i32,
+    residual: &MbResidual,
+) -> [[u8; 16]; 16] {
     // Clause 8.5.2 step 1: the macroblock-wide luma DC transform, shared
     // by all 16 AC blocks below.
     let dc_raw = inverse_scan_luma_dc(residual.luma_dc.as_ref());
@@ -2081,8 +2114,9 @@ pub(crate) fn reconstruct_picture(
     );
     let mut scratch = ReadScratch::new(budget)?;
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
+    let caps = vaco_simd::Caps::detect();
     for mb in macroblocks {
-        reconstruct_mb(&mut buf, mb, &ctx, &mut scratch)?;
+        reconstruct_mb(&mut buf, mb, &ctx, &mut scratch, caps)?;
     }
     scratch.check()?;
 
@@ -2159,6 +2193,7 @@ fn reconstruct_mb(
     mb: &MbSummary,
     ctx: &PictureCtx<'_>,
     scratch: &mut ReadScratch,
+    caps: vaco_simd::Caps,
 ) -> vaco_core::Result<()> {
     // Clause 6.4.8: every availability test and every write below is
     // relative to the slice this macroblock belongs to. `+ 1` keeps `0`
@@ -2193,8 +2228,13 @@ fn reconstruct_mb(
             left,
             corner: buf.pixel(coord(x) - 1, coord(y) - 1),
         };
-        let block =
-            reconstruct_intra16x16_luma(mb.intra16x16_pred_mode, neighbours, mb.qpy, &mb.residual);
+        let block = reconstruct_intra16x16_luma_dispatched(
+            caps,
+            mb.intra16x16_pred_mode,
+            neighbours,
+            mb.qpy,
+            &mb.residual,
+        );
         for (i, row) in block.iter().enumerate() {
             buf.write_row_luma(x, y + i as u32, row);
         }
@@ -2289,6 +2329,7 @@ fn reconstruct_mb(
 pub(crate) struct PictureReconstructor {
     buf: PictureBuffer,
     scratch: ReadScratch,
+    caps: vaco_simd::Caps,
     /// Index of the next macroblock to reconstruct, so a row can be found in
     /// one pass rather than by scanning `macroblocks` for `mb_y == my`.
     cursor: usize,
@@ -2364,6 +2405,7 @@ impl PictureReconstructor {
         Ok(Self {
             buf,
             scratch,
+            caps: vaco_simd::Caps::detect(),
             cursor: 0,
         })
     }
@@ -2385,7 +2427,13 @@ impl PictureReconstructor {
             if mb.mb_y != my {
                 break;
             }
-            reconstruct_mb(&mut self.buf, mb, ctx_for(slices, mb)?, &mut self.scratch)?;
+            reconstruct_mb(
+                &mut self.buf,
+                mb,
+                ctx_for(slices, mb)?,
+                &mut self.scratch,
+                self.caps,
+            )?;
             self.cursor += 1;
         }
         self.scratch.check()
@@ -2402,7 +2450,13 @@ impl PictureReconstructor {
         slices: &[PictureCtx<'_>],
     ) -> vaco_core::Result<()> {
         for mb in macroblocks {
-            reconstruct_mb(&mut self.buf, mb, ctx_for(slices, mb)?, &mut self.scratch)?;
+            reconstruct_mb(
+                &mut self.buf,
+                mb,
+                ctx_for(slices, mb)?,
+                &mut self.scratch,
+                self.caps,
+            )?;
         }
         self.cursor = macroblocks.len();
         self.scratch.check()

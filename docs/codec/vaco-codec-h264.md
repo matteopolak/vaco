@@ -1377,6 +1377,79 @@ at 1, 2, 4, and 8 threads (12/12 decodes byte-exact). This fast path has no
 option or environment-variable control and introduces no new dependency; it
 uses the existing `MbResidual`, dequantisation, and IDCT interfaces.
 
+## Dispatched Intra16x16 DC prediction
+
+The production Intra16x16 luma DC arm now uses
+`vaco_codec_dsp_intrapred::simd::dc_predict`. `PictureReconstructor` detects
+`vaco_simd::Caps` once when it is constructed and carries that token through
+macroblock reconstruction; it does not repeat feature detection in the hot
+loop. Vertical, horizontal, and plane prediction are unchanged. The original
+scalar `predict_intra16x16` remains the independent oracle, including its
+invalid-mode-to-DC fallback. The differential regression checks DC and that
+fallback with both, either, and neither neighbour edge available.
+
+If the neighbour representation or supported bit depth changes, update the
+single `predict_intra16x16_dc` adapter and extend the scalar-oracle matrix before
+changing the dispatched call. Do not add a second H.264-specific sum kernel:
+the DSP intrapred crate is the source of truth for dispatch and arithmetic.
+There is no configuration knob and no new dependency.
+
+The pre-edit 4 kHz Samply profile used a 375-frame 3840x2160 gray all-intra
+libx264 fixture (SHA-256
+`34a02df57866d827de473c6caa7959beed8fe3590bb0e48d458efe4283f6c851`).
+It recorded 46,207 samples. `reconstruct_mb` held 12,106 self samples (26.20%)
+and 16,172 inclusive samples (35.00%); RVA-to-line attribution placed 5,715
+self samples (12.37% of the whole profile) at the Intra16x16 reconstruction
+call where the scalar DC helper was inlined. This confirmed the callee path
+before the source change.
+
+The local A/B used non-git sibling snapshots of commit
+`5f61f13caba67334f21c1154a17421c670c31184` (tree
+`d23724b725a26444b69b777d35e06494459f4ab0`) and the measured two-source-file
+patch SHA-256
+`2661921e4ce64fed786407a1d43723e02c1cc3842e7bfad8c6717a57ef3d720a`.
+Baseline/candidate Apple-silicon binary hashes were respectively
+`07ccee0d8ee1e010aa516eb701ae8ff7d975262ff9383fda29d93d57e5b2c5da`
+and `e4e320e29788e97c2c6f573812490437142b5a19f302455fdd69c3e4107b48b0`.
+Across 12 rotating baseline/candidate/ffmpeg rounds, mean child CPU seconds
+were 9.7842/9.6467/0.6692 and mean wall seconds were 10.0808/9.8375/0.6850.
+The paired medians were noisier and did not show a time win:
+candidate/baseline was `1.00752` for CPU and `1.00409` for wall, with 5/12 CPU
+and 4/12 wall wins. Paired median CPU ratios against same-session ffmpeg 9.0.1
+moved from `14.9839` to `15.1573`; wall ratios moved from `15.2893` to
+`15.2670`. These load-sensitive times are context, not the acceptance metric.
+
+Deterministic instruction evidence came from [Actions run
+33928955216](https://github.com/matteopolak/vaco/actions/runs/33928955216),
+using temporary read-only evidence commit
+`caf292093bdd97510adf6e0a5a1f80c3e3bdfe67`, parented to the same baseline;
+the workflow and evidence-only lockfile were excluded from the landed change
+and the temporary ref was deleted. On the 100-frame 640x480 all-intra fixture
+(SHA-256
+`a25281945ef023df407aaa6db7ed2e3e20d623fff8361c20cd47b7b75a08cd56`),
+Cachegrind 3.22.0 reported `reconstruct_mb` instruction counts of
+645,173,700/645,173,700/645,173,700 for baseline and
+642,645,800/642,645,800/642,645,800 for candidate: zero spread and ratio
+`0.99608183`, or 0.391817% fewer instructions in the measured callee.
+Whole-process medians were 2,147,994,470 and 2,145,670,233 instructions
+(`0.99891795`, 0.108205% fewer). Same-session ffmpeg's median was 269,728,475,
+so the whole-process Vaco/ffmpeg ratio moved from `7.96354` to `7.95493`.
+Vaco whole-process spreads were at most `3.82e-8`; ffmpeg's dynamic-loader
+startup made its spread 0.5171%, which is reported rather than hidden.
+The x86-64 baseline/candidate binary hashes were
+`cb561e441ee71cdd2e6e29df6b09a28b6ad61567bbfe63a9499ff57081a85632`
+and `8534989dafb8003643a524ac6330603f231b43ec23465eef40fb57aff4b9ede6`.
+No hardware cycle result is claimed; elapsed or CPU time was not relabelled as
+cycles.
+
+Local baseline, candidate, and ffmpeg each emitted exactly 75 frames and
+933,120,000 rawvideo bytes with SHA-256
+`12f0bf451c2ac0d1cce1e94c15bcadfeec19989a28523b086d1a7e53e148a0ef`
+at 1, 2, 4, and 8 threads (12/12 exact). The Linux evidence fixture likewise
+emitted exactly 46,080,000 bytes with SHA-256
+`c8672756c7b0543cc88c0f1647b5457e23860a024e093dd6d07cb03589136606`
+for baseline, candidate, and ffmpeg.
+
 ## Configuration
 
 `vaco_limits::Limits`/`Budget` bound every allocation (`residual_block_cavlc`/
