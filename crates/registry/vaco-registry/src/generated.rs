@@ -5498,6 +5498,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "parse-image")]
+    crate::Component {
+        kind: crate::Kind::Parser,
+        name: "exr",
+        long_name: Some("OpenEXR image"),
+        krate: "vaco-parse-image",
+        feature: Some("parse-image"),
+        media: Some("video"),
+        codec: Some("exr"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "parse-ffv1")]
     crate::Component {
         kind: crate::Kind::Parser,
@@ -11393,6 +11405,8 @@ pub static PARSERS: &[&::vaco_codec_core::ParserDesc] = &[
     &::vaco_parse_image::PARSER_BMP,
     #[cfg(feature = "parse-mpegaudio")]
     &::vaco_parse_mpegaudio::PARSER_EAC3,
+    #[cfg(feature = "parse-image")]
+    &::vaco_parse_image::PARSER_EXR,
     #[cfg(feature = "parse-ffv1")]
     &::vaco_parse_ffv1::PARSER,
     #[cfg(feature = "parse-audio-misc")]

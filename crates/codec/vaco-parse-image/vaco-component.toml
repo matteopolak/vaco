@@ -175,3 +175,12 @@ feature   = "parse-image"
 ctor      = "vaco_parse_image::PARSER_JPEGLS"
 media     = "video"
 codec     = "jpegls"
+
+[[component]]
+kind      = "parser"
+name      = "exr"
+long_name = "OpenEXR image"
+feature   = "parse-image"
+ctor      = "vaco_parse_image::PARSER_EXR"
+media     = "video"
+codec     = "exr"

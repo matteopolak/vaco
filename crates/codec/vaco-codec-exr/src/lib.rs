@@ -33,7 +33,7 @@
 
 mod codec;
 
-pub use codec::{CompressionAlgo, EncodeOptions, decode, encode};
+pub use codec::{CompressionAlgo, EncodeOptions, decode, encode, parameters};
 
 use vaco_codec_core::{Accept, Caps, Machine, SendReceive};
 use vaco_core::{Error, Result};

@@ -450,7 +450,7 @@ pipe!(
     base = "exr",
     extensions = &["exr"],
     framing = ImageFraming::WholeRemaining,
-    codec = None,
+    codec = Some(CodecId::Exr),
     raw_name = "exr",
     magics = &[&[(0, &[0x76, 0x2f, 0x31, 0x01])]]
 );

@@ -85,6 +85,43 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Frame> {
     Ok(frame)
 }
 
+/// The stream description an `OpenEXR` header states, without decoding a
+/// pixel.
+///
+/// Reads only [`exr::meta::MetaData`] (the header table), never a scanline
+/// or tile — this crate's `vaco-parse-image` caller (`still::Exr`) is a
+/// "no decode" parser by contract. [`decode`] always produces
+/// [`native32`]`(Rgbaf32le, Rgbaf32be)` regardless of the source channel
+/// layout (missing channels are synthesised by the `exr` crate's
+/// `rgba_channels` reader), so that format is reported unconditionally
+/// here too — the two cannot drift apart because there is only the one
+/// pixel format [`decode`] ever emits.
+///
+/// Dimensions come from the first header's `layer_size`. A multi-part file
+/// whose first part is not the layer [`decode`]'s `first_valid_layer()`
+/// query would pick is a known, documented gap: probing would report that
+/// first part's size while decoding a different one. Ordinary (single-part)
+/// `OpenEXR` files, which is what every encoder this crate has been tested
+/// against produces, have only the one header, so the two always agree.
+#[must_use]
+pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
+    let meta = exr::meta::MetaData::read_from_buffered(Cursor::new(data), false).ok()?;
+    let header = meta.headers.first()?;
+    let width = u32::try_from(header.layer_size.width()).ok()?;
+    let height = u32::try_from(header.layer_size.height()).ok()?;
+
+    let mut params =
+        vaco_codec_core::CodecParameters::video().with_codec(vaco_codec_core::CodecId::Exr);
+    if let Some(v) = params.video.as_mut() {
+        v.width = width;
+        v.height = height;
+        v.coded_width = width;
+        v.coded_height = height;
+        v.format = Some(native32(PixFmt::Rgbaf32le, PixFmt::Rgbaf32be));
+    }
+    Some(params)
+}
+
 fn map_err(e: &exr::error::Error) -> Error {
     match e {
         exr::error::Error::Io(_) => Error::UnexpectedEof,

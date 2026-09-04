@@ -1,6 +1,6 @@
 //! Header-only stream description for the still-image formats whose header
 //! reader lives in their decoder crate: PCX, TGA, SGI, XWD, XBM, QOI,
-//! PBM/PGM/PPM/PAM/PFM/PHM and JPEG-LS.
+//! PBM/PGM/PPM/PAM/PFM/PHM, JPEG-LS and `OpenEXR`.
 //!
 //! # Why these delegate instead of parsing the header again
 //!
@@ -94,6 +94,10 @@ delegate!(
 delegate!(
     /// JPEG-LS (ITU-T T.87 `SOF55`), via `vaco-codec-jpegls`.
     JpegLs => vaco_codec_jpegls::parameters
+);
+delegate!(
+    /// `OpenEXR`, via `vaco-codec-exr`.
+    Exr => vaco_codec_exr::parameters
 );
 
 #[cfg(test)]

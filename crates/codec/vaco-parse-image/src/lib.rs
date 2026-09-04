@@ -12,7 +12,7 @@
 //! | [`bmp`] | `BITMAPFILEHEADER` + `BITMAPINFOHEADER`'s leading fields |
 //! | [`tiff`] | The byte-order header + IFD 0's baseline tags |
 //! | [`webp`] | RIFF/`WEBP`: `VP8 ` (lossy), `VP8L` (lossless), `VP8X` (extended) |
-//! | [`still`] | PCX, TGA, SGI, XWD, XBM, QOI, PBM/PGM/PPM/PAM/PFM/PHM and JPEG-LS, each forwarding to its own decoder crate's header reader |
+//! | [`still`] | PCX, TGA, SGI, XWD, XBM, QOI, PBM/PGM/PPM/PAM/PFM/PHM, JPEG-LS and `OpenEXR`, each forwarding to its own decoder crate's header reader |
 //! | [`parser`] | [`parser::ImageParser`], the shared "whole file is one image" `Parser` wrapper every format above plugs into |
 //!
 //! # Parsing is not decoding
@@ -239,4 +239,13 @@ pub const PARSER_JPEGLS: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::Pars
     codecs: &[::vaco_codec_core::CodecId::JpegLs],
     media_type: ::vaco_core::MediaType::Video,
     make: |limits| ::std::boxed::Box::new(ImageParser::<still::JpegLs>::new(limits)),
+};
+
+/// The registry descriptor for the `OpenEXR` parser. See [`PARSER_PNG`].
+pub const PARSER_EXR: ::vaco_codec_core::ParserDesc = ::vaco_codec_core::ParserDesc {
+    name: "exr",
+    long_name: "OpenEXR image",
+    codecs: &[::vaco_codec_core::CodecId::Exr],
+    media_type: ::vaco_core::MediaType::Video,
+    make: |limits| ::std::boxed::Box::new(ImageParser::<still::Exr>::new(limits)),
 };
