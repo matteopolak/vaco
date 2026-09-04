@@ -434,7 +434,9 @@ impl Muxer for HdsMuxer {
                         u64::try_from(video.frame_rate.num),
                         u64::try_from(video.frame_rate.den),
                     ) {
-                        (Ok(num), Ok(den)) if num > 0 => 1000u64.saturating_mul(den) / num,
+                        (Ok(num), Ok(den)) if num > 0 => {
+                            1000u64.saturating_mul(den).checked_div(num).unwrap_or(0)
+                        }
                         _ => 0,
                     }
                 } else {
