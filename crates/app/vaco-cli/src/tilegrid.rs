@@ -18,6 +18,7 @@
 //! selection runs at all. A non-primary grid stays reachable by mapping its
 //! tile streams by hand.
 
+use std::fmt::Write as _;
 use vaco_format_core::{Disposition, StreamGroup, StreamGroupKind};
 
 use crate::input::InputFile;
@@ -63,11 +64,13 @@ pub fn graph_text(file: u32, group: &StreamGroup) -> Option<String> {
     if group.stream_indices.is_empty() || cells != group.stream_indices.len() {
         return None;
     }
-    let inputs: String = group
+    let inputs = group
         .stream_indices
         .iter()
-        .map(|s| format!("[{file}:{s}]"))
-        .collect();
+        .fold(String::new(), |mut acc, s| {
+            let _ = write!(acc, "[{file}:{s}]");
+            acc
+        });
     let label = format!("[vaco_tilegrid_{file}_{}]", group.index.0);
     let crop = format!(
         "crop={}:{}:{}:{}",
