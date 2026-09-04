@@ -80,22 +80,48 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
     let mut out = Vec::new();
 
     loop {
-        let frame = match decoder.read_next_frame() {
-            Ok(Some(frame)) => frame,
+        // Read the frame's own header (Image Descriptor + Graphic Control
+        // Extension) separately from its pixel data. Measured against a
+        // real `ffmpeg`-decoded truncated file
+        // (`Vaco-Spec-Ref: ffprobe-gif-frame-count-probe`): the reference
+        // still counts a frame whose header parsed but whose LZW data ran
+        // out mid-stream, rather than dropping it, and GIF89a itself (§20
+        // Image Descriptor, §22 Table Based Image Data) says nothing about
+        // recovering from a truncated data-sub-block sequence — there is no
+        // spec answer to contradict, only the reference's own pragmatic
+        // choice, which this now matches. `gif::Decoder::read_next_frame`
+        // cannot do this: it discards the parsed header on any pixel-data
+        // error, which is what silently undercounted frames before this fix.
+        let (x, y, w, h, dispose, delay) = match decoder.next_frame_info() {
+            Ok(Some(frame)) => (
+                u32::from(frame.left),
+                u32::from(frame.top),
+                u32::from(frame.width),
+                u32::from(frame.height),
+                frame.dispose,
+                frame.delay,
+            ),
             Ok(None) => break,
             Err(_) if !out.is_empty() => break,
             Err(_) => return Err(Error::InvalidData("gif: frame data")),
         };
-        let (x, y, w, h) = (
-            u32::from(frame.left),
-            u32::from(frame.top),
-            u32::from(frame.width),
-            u32::from(frame.height),
-        );
-        if frame.dispose == gif::DisposalMethod::Previous {
+        // A frame's own declared width/height (Image Descriptor) is
+        // attacker-controlled independently of the logical screen size
+        // already checked above, so it gets the same budget check before
+        // the pixel buffer is sized from it.
+        budget.check_frame(w, h, 4)?;
+        let mut pixels = vec![0u8; decoder.buffer_size()];
+        // Ignored on purpose: a truncated/corrupt LZW stream leaves whatever
+        // was decoded before the error sitting in `pixels` (zero elsewhere),
+        // which is exactly the partial frame this header already promised —
+        // propagating the error here would be the same silent-undercount
+        // bug this comment opens with, just moved one call downward.
+        let _ = decoder.fill_buffer(&mut pixels);
+
+        if dispose == gif::DisposalMethod::Previous {
             previous = Some(canvas.clone());
         }
-        composite(&mut canvas, canvas_w, x, y, w, h, &frame.buffer);
+        composite(&mut canvas, canvas_w, x, y, w, h, &pixels);
 
         let mut out_frame = Frame::alloc_video(budget, PixFmt::Bgra, canvas_w, canvas_h)?;
         for mut plane in out_frame.planes_mut() {
@@ -114,11 +140,11 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         }
         // GIF delay is in hundredths of a second.
         out_frame.time_base = vaco_core::Rational::new(1, 100);
-        out_frame.duration = vaco_core::Duration(i64::from(frame.delay));
+        out_frame.duration = vaco_core::Duration(i64::from(delay));
         out_frame.flags = FrameFlags::KEY;
         out.push(out_frame);
 
-        match frame.dispose {
+        match dispose {
             gif::DisposalMethod::Background => {
                 for row in 0..h {
                     let start = ((y + row) as usize * canvas_w as usize + x as usize) * 4;

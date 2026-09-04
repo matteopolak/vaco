@@ -21,6 +21,29 @@
 //! decodes the real file and compares every byte, not just a sampled pixel,
 //! so a regression in row/column order or the swap itself would also fail
 //! it.
+//!
+//! # Frame count on a truncated file (`Vaco-Spec-Ref: ffprobe-gif-frame-count-probe`)
+//!
+//! `truncated_anim3_16x12.gif` is a real `ffmpeg`-encoded 3-frame animation
+//! with its last 5 bytes cut off, landing mid-LZW-data in the third frame.
+//! `ffprobe -count_frames` still reports 3 frames on this exact file (see
+//! the declared source for the full sweep); before this fix,
+//! `codec::decode` discarded the third frame outright the moment its pixel
+//! data errored, even though that frame's own header (Image Descriptor +
+//! Graphic Control Extension, including its delay) had already parsed
+//! cleanly, so it returned only 2. GIF89a does not define recovery from a
+//! truncated data-sub-block sequence, so there is no spec answer to match —
+//! only the reference's own choice, which this reproduces: a frame whose
+//! header is complete is counted even if its pixel data ran out, composited
+//! from whatever partial pixel data decoded before the error (zero, i.e.
+//! transparent, past that point) rather than dropped entirely. This test
+//! does not assert the third frame's exact bytes — GIF89a gives no
+//! reference point for what a truncated stream's pixels "should" be, and
+//! this crate's own partial-fill mechanics have no reason to match the
+//! reference's byte-for-byte — only that a third frame exists at all. The
+//! first two, undamaged frames are still checked byte-exact against the
+//! reference's own decode, so a regression that corrupted them too would
+//! also fail this test.
 
 #![allow(
     clippy::unwrap_used,
@@ -38,6 +61,10 @@ use vaco_limits::{Budget, Limits};
 
 const FIXTURE_GIF: &[u8] = include_bytes!("fixtures/testsrc_8x6.gif");
 const FIXTURE_BGRA: &[u8] = include_bytes!("fixtures/testsrc_8x6.bgra.raw");
+
+const TRUNCATED_GIF: &[u8] = include_bytes!("fixtures/truncated_anim3_16x12.gif");
+const TRUNCATED_FIRST_TWO_FRAMES_BGRA: &[u8] =
+    include_bytes!("fixtures/truncated_anim3_16x12.first_two_frames.bgra.raw");
 
 #[test]
 fn decodes_a_testsrc_frame_byte_exact_to_ffmpegs_own_bgra_decode() {
@@ -65,5 +92,42 @@ fn decodes_a_testsrc_frame_byte_exact_to_ffmpegs_own_bgra_decode() {
     assert_eq!(
         decoded, FIXTURE_BGRA,
         "decoded BGRA pixels must match ffmpeg's own bgra decode of the same file byte for byte"
+    );
+}
+
+#[test]
+fn a_frame_truncated_mid_lzw_is_still_counted_like_ffprobe_counts_it() {
+    let mut budget = Budget::new(Limits::permissive());
+    let frames = vaco_codec_gif::decode(TRUNCATED_GIF, &mut budget)
+        .expect("a header-complete frame with truncated pixel data must still decode");
+    assert_eq!(
+        frames.len(),
+        3,
+        "ffprobe -count_frames reports 3 frames on this exact file; a frame whose header \
+         parsed but whose LZW data ran out must still be counted, not dropped"
+    );
+
+    let mut first_two = Vec::new();
+    for frame in &frames[..2] {
+        let FrameData::Video {
+            width,
+            height,
+            planes,
+            ..
+        } = &frame.data
+        else {
+            panic!("gif always decodes to a video frame");
+        };
+        assert_eq!((*width, *height), (16, 12));
+        let plane = &planes[0];
+        let stride = plane.stride;
+        let raw = plane.data.as_slice();
+        for y in 0..*height as usize {
+            first_two.extend_from_slice(&raw[y * stride..y * stride + *width as usize * 4]);
+        }
+    }
+    assert_eq!(
+        first_two, TRUNCATED_FIRST_TWO_FRAMES_BGRA,
+        "the two undamaged frames before the truncation must still decode byte-exact"
     );
 }
