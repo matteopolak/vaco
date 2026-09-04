@@ -5,6 +5,29 @@
 #![forbid(unsafe_code)]
 #![doc = include_str!("../README.md")]
 
+/// Presentation helpers used by the installed command wrappers.
+pub mod command {
+    /// Rebrand exact, static presentation lines without changing user data.
+    #[must_use]
+    pub fn rebrand_static_lines(bytes: &[u8], replacements: &[(&[u8], &[u8])]) -> Vec<u8> {
+        let mut rendered = Vec::new();
+        for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+            let (body, newline) = line
+                .strip_suffix(b"\n")
+                .map_or((line, false), |body| (body, true));
+            if let Some((_, installed)) = replacements.iter().find(|(legacy, _)| body == *legacy) {
+                rendered.extend_from_slice(installed);
+                if newline {
+                    rendered.push(b'\n');
+                }
+            } else {
+                rendered.extend_from_slice(line);
+            }
+        }
+        rendered
+    }
+}
+
 pub use vaco_cli as cli;
 pub use vaco_probe as probe;
 pub use vaco_registry as registry;
@@ -16,7 +39,7 @@ pub mod application {
 }
 
 pub mod codec {
-    #[cfg(any(feature = "patent-encumbered-aac-decode"))]
+    #[cfg(feature = "patent-encumbered-aac-decode")]
     pub use vaco_codec_aac as aac;
     pub use vaco_codec_ac3 as ac3;
     pub use vaco_codec_adpcm as adpcm;
@@ -27,9 +50,9 @@ pub mod codec {
     pub use vaco_codec_flac as flac;
     pub use vaco_codec_gif as gif;
     pub use vaco_codec_h263 as h263;
-    #[cfg(any(feature = "patent-encumbered-h264-decode"))]
+    #[cfg(feature = "patent-encumbered-h264-decode")]
     pub use vaco_codec_h264 as h264;
-    #[cfg(any(feature = "patent-encumbered-hevc-decode"))]
+    #[cfg(feature = "patent-encumbered-hevc-decode")]
     pub use vaco_codec_hevc as hevc;
     pub use vaco_codec_image_simple as image_simple;
     pub use vaco_codec_jpeg as jpeg;
@@ -51,7 +74,7 @@ pub mod codec {
     pub use vaco_codec_subtitle_text as subtitle_text;
     pub use vaco_codec_theora as theora;
     pub use vaco_codec_tiff as tiff;
-    #[cfg(any(feature = "patent-encumbered-vc1-decode"))]
+    #[cfg(feature = "patent-encumbered-vc1-decode")]
     pub use vaco_codec_vc1 as vc1;
     pub use vaco_codec_vorbis as vorbis;
     pub use vaco_codec_vp8 as vp8;
@@ -198,7 +221,7 @@ pub mod format {
     pub use vaco_mux_smoothstreaming as mux_smoothstreaming;
     pub use vaco_mux_stream as mux_stream;
     pub use vaco_mux_utility as mux_utility;
-    #[cfg(any(feature = "mux-whip"))]
+    #[cfg(feature = "mux-whip")]
     pub use vaco_mux_whip as mux_whip;
     pub use vaco_subtitle_bitmap as subtitle_bitmap;
     pub use vaco_subtitle_text as subtitle_text;
@@ -208,31 +231,31 @@ pub mod io {
     pub use vaco_io as io;
     pub use vaco_protocol_core as core;
     pub use vaco_protocol_crypto as crypto;
-    #[cfg(any(feature = "api-dial"))]
+    #[cfg(feature = "api-dial")]
     pub use vaco_protocol_dial as dial;
-    #[cfg(any(feature = "protocol-dtls"))]
+    #[cfg(feature = "protocol-dtls")]
     pub use vaco_protocol_dtls as dtls;
     pub use vaco_protocol_file as file;
-    #[cfg(any(feature = "protocol-ftp"))]
+    #[cfg(feature = "protocol-ftp")]
     pub use vaco_protocol_ftp as ftp;
-    #[cfg(any(feature = "protocol-gopher"))]
+    #[cfg(feature = "protocol-gopher")]
     pub use vaco_protocol_gopher as gopher;
-    #[cfg(any(feature = "protocol-http"))]
+    #[cfg(feature = "protocol-http")]
     pub use vaco_protocol_http as http;
-    #[cfg(any(feature = "protocol-httpproxy"))]
+    #[cfg(feature = "protocol-httpproxy")]
     pub use vaco_protocol_httpproxy as httpproxy;
-    #[cfg(any(feature = "api-ice"))]
+    #[cfg(feature = "api-ice")]
     pub use vaco_protocol_ice as ice;
-    #[cfg(any(feature = "protocol-icecast"))]
+    #[cfg(feature = "protocol-icecast")]
     pub use vaco_protocol_icecast as icecast;
     pub use vaco_protocol_ipfs as ipfs;
     pub use vaco_protocol_local as local;
     pub use vaco_protocol_shared as shared;
-    #[cfg(any(feature = "protocol-socket"))]
+    #[cfg(feature = "protocol-socket")]
     pub use vaco_protocol_socket as socket;
-    #[cfg(any(feature = "api-srtp"))]
+    #[cfg(feature = "api-srtp")]
     pub use vaco_protocol_srtp as srtp;
-    #[cfg(any(feature = "protocol-tls"))]
+    #[cfg(feature = "protocol-tls")]
     pub use vaco_protocol_tls as tls;
     pub use vaco_protocol_wrap as wrap;
 }
@@ -249,11 +272,11 @@ pub mod media {
 }
 
 pub mod signal {
-    #[cfg(any(feature = "api-codec_cabac"))]
+    #[cfg(feature = "api-codec_cabac")]
     pub use vaco_codec_cabac as codec_cabac;
     pub use vaco_codec_cbs as codec_cbs;
     pub use vaco_codec_core as codec_core;
-    #[cfg(any(feature = "api-codec_dsp_deblock"))]
+    #[cfg(feature = "api-codec_dsp_deblock")]
     pub use vaco_codec_dsp_deblock as codec_dsp_deblock;
     pub use vaco_codec_dsp_idct as codec_dsp_idct;
     pub use vaco_codec_dsp_intrapred as codec_dsp_intrapred;
@@ -261,11 +284,11 @@ pub mod signal {
     pub use vaco_codec_dsp_me as codec_dsp_me;
     pub use vaco_codec_dsp_mecmp as codec_dsp_mecmp;
     pub use vaco_codec_dsp_ratecontrol as codec_dsp_ratecontrol;
-    #[cfg(any(feature = "api-codec_dsp_sinewin"))]
+    #[cfg(feature = "api-codec_dsp_sinewin")]
     pub use vaco_codec_dsp_sinewin as codec_dsp_sinewin;
     pub use vaco_codec_golomb as codec_golomb;
     pub use vaco_codec_msac as codec_msac;
-    #[cfg(any(feature = "api-codec_vlc"))]
+    #[cfg(feature = "api-codec_vlc")]
     pub use vaco_codec_vlc as codec_vlc;
     pub use vaco_resample as resample;
     pub use vaco_scale as scale;

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 from pathlib import Path
 import re
 from typing import Any
@@ -134,6 +135,29 @@ def render(
         "#![forbid(unsafe_code)]",
         "#![doc = include_str!(\"../README.md\")]",
         "",
+        "/// Presentation helpers used by the installed command wrappers.",
+        "pub mod command {",
+        "    /// Rebrand exact, static presentation lines without changing user data.",
+        "    #[must_use]",
+        "    pub fn rebrand_static_lines(bytes: &[u8], replacements: &[(&[u8], &[u8])]) -> Vec<u8> {",
+        "        let mut rendered = Vec::new();",
+        "        for line in bytes.split_inclusive(|byte| *byte == b'\\n') {",
+        "            let (body, newline) = line",
+        "                .strip_suffix(b\"\\n\")",
+        "                .map_or((line, false), |body| (body, true));",
+        "            if let Some((_, installed)) = replacements.iter().find(|(legacy, _)| body == *legacy) {",
+        "                rendered.extend_from_slice(installed);",
+        "                if newline {",
+        "                    rendered.push(b'\\n');",
+        "                }",
+        "            } else {",
+        "                rendered.extend_from_slice(line);",
+        "            }",
+        "        }",
+        "        rendered",
+        "    }",
+        "}",
+        "",
     ]
     groups: dict[str, list[tuple[dict[str, Any], list[str]]]] = {}
     for package in internal:
@@ -161,7 +185,12 @@ def render(
         root_export = descriptor["root_exports"].get(package["name"])
         if root_export:
             if features:
-                library.append(f'#[cfg(any({", ".join(f"feature = {json.dumps(feature)}" for feature in features)}))]')
+                conditions = ", ".join(f"feature = {json.dumps(feature)}" for feature in features)
+                library.append(
+                    f"#[cfg(feature = {json.dumps(features[0])})]"
+                    if len(features) == 1
+                    else f"#[cfg(any({conditions}))]"
+                )
             library.append(f"pub use {rust_name(package['name'])} as {root_export};")
         else:
             groups.setdefault(group, []).append((package, features))
@@ -177,7 +206,12 @@ def render(
             alias_counts[alias] = alias_counts.get(alias, 0) + 1
         for package, features in packages:
             if features:
-                library.append(f'    #[cfg(any({", ".join(f"feature = {json.dumps(feature)}" for feature in features)}))]')
+                conditions = ", ".join(f"feature = {json.dumps(feature)}" for feature in features)
+                library.append(
+                    f"    #[cfg(feature = {json.dumps(features[0])})]"
+                    if len(features) == 1
+                    else f"    #[cfg(any({conditions}))]"
+                )
             alias = public_name(package["name"], group)
             if alias_counts[alias] > 1:
                 alias = package["name"].removeprefix("vaco-").replace("-", "_")
@@ -261,32 +295,108 @@ def main() -> int:
     (output / "Cargo.toml").write_text(manifest, encoding="utf-8")
     (output / "src/lib.rs").write_text(library, encoding="utf-8")
     (output / "README.md").write_text(readme, encoding="utf-8")
+    (output / "tests").mkdir(parents=True, exist_ok=True)
+    (output / "tests/command_branding.rs").write_text(
+        "#![allow(\n"
+        "    clippy::expect_used,\n    clippy::panic,\n    clippy::unwrap_used,\n"
+        "    reason = \"a failing assertion in a test is a failing test\"\n)]\n\n"
+        "use std::process::{Command, Output};\n\n"
+        "fn command(name: &str) -> Command {\n"
+        "    match name {\n"
+        "        \"vvmpeg\" => Command::new(env!(\"CARGO_BIN_EXE_vvmpeg\")),\n"
+        "        \"vvprobe\" => Command::new(env!(\"CARGO_BIN_EXE_vvprobe\")),\n"
+        "        _ => panic!(\"unknown facade command: {name}\"),\n"
+        "    }\n}\n\n"
+        "fn output(name: &str, arguments: &[&str]) -> Output {\n"
+        "    command(name).args(arguments).output().expect(\"run facade command\")\n}\n\n"
+        "#[test]\nfn installed_commands_brand_their_help() {\n"
+        "    let vvmpeg = output(\"vvmpeg\", &[\"--help\"]);\n"
+        "    let vvprobe = output(\"vvprobe\", &[\"--help\"]);\n"
+        "    let vvmpeg_stderr = String::from_utf8_lossy(&vvmpeg.stderr);\n"
+        "    let vvprobe_stdout = String::from_utf8_lossy(&vvprobe.stdout);\n"
+        "    assert!(vvmpeg.status.success(), \"{vvmpeg:?}\");\n"
+        "    assert!(vvprobe.status.success(), \"{vvprobe:?}\");\n"
+        "    assert!(vvmpeg_stderr.contains(\"vvmpeg version\"), \"{vvmpeg_stderr}\");\n"
+        "    assert!(vvprobe_stdout.contains(\"usage: vvprobe \"), \"{vvprobe_stdout}\");\n}\n\n"
+        "#[test]\nfn vvmpeg_preserves_a_user_path_containing_legacy_name() {\n"
+        "    let output = output(\"vvmpeg\", &[\"-i\", \"vaco-user-path-does-not-exist.mp4\", \"-f\", \"null\", \"-\"]);\n"
+        "    let stderr = String::from_utf8_lossy(&output.stderr);\n"
+        "    assert!(!output.status.success(), \"{output:?}\");\n"
+        "    assert!(stderr.contains(\"vvmpeg version\"), \"{stderr}\");\n"
+        "    assert!(stderr.contains(\"vaco-user-path-does-not-exist.mp4\"), \"{stderr}\");\n}\n",
+        encoding="utf-8",
+    )
     (output / "src/bin/vvmpeg.rs").write_text(
-        "use std::io::Write;\n\nfn main() {\n"
+        "use std::io::Write;\n\n"
+        "const LEGACY_BANNER: &str = concat!(\"vaco version \", env!(\"CARGO_PKG_VERSION\"), \" Copyright (c) 2026 the Vaco authors\");\n"
+        "const INSTALLED_BANNER: &str = concat!(\"vvmpeg version \", env!(\"CARGO_PKG_VERSION\"), \" Copyright (c) 2026 the Vaco authors\");\n"
+        "const LEGACY_VERSION: &str = concat!(\"vaco version \", env!(\"CARGO_PKG_VERSION\"));\n"
+        "const INSTALLED_VERSION: &str = concat!(\"vvmpeg version \", env!(\"CARGO_PKG_VERSION\"));\n"
+        "const LEGACY_LICENSE: &str = \"vaco is licensed under MIT OR Apache-2.0.\";\n"
+        "const INSTALLED_LICENSE: &str = \"vvmpeg is licensed under MIT OR Apache-2.0.\";\n"
+        "const LEGACY_USAGE: &str = \"usage: vaco [options] -i <input> ... [options] <output> ...\";\n"
+        "const INSTALLED_USAGE: &str = \"usage: vvmpeg [options] -i <input> ... [options] <output> ...\";\n\n"
+        "fn branding() -> [(&'static [u8], &'static [u8]); 4] {\n"
+        "    [(LEGACY_BANNER.as_bytes(), INSTALLED_BANNER.as_bytes()), (LEGACY_VERSION.as_bytes(), INSTALLED_VERSION.as_bytes()), (LEGACY_LICENSE.as_bytes(), INSTALLED_LICENSE.as_bytes()), (LEGACY_USAGE.as_bytes(), INSTALLED_USAGE.as_bytes())]\n}\n\n"
+        "fn main() {\n"
         "    let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();\n"
-        "    let stdout = std::io::stdout();\n    let stderr = std::io::stderr();\n"
-        "    let mut out = std::io::BufWriter::new(stdout.lock());\n    let mut err = stderr.lock();\n"
+        "    let mut out = Vec::new();\n    let mut err = Vec::new();\n"
         "    let code = vaco::cli::run(&argv, &mut out, &mut err);\n"
-        "    let _ = out.flush();\n    std::process::exit(code.code());\n}\n",
+        "    let stdout = std::io::stdout();\n    let stderr = std::io::stderr();\n"
+        "    let mut stdout = std::io::BufWriter::new(stdout.lock());\n    let mut stderr = stderr.lock();\n"
+        "    let branding = branding();\n"
+        "    let _ = stdout.write_all(&vaco::command::rebrand_static_lines(&out, &branding));\n"
+        "    let _ = stderr.write_all(&vaco::command::rebrand_static_lines(&err, &branding));\n"
+        "    let _ = stdout.flush();\n    std::process::exit(code.code());\n}\n",
         encoding="utf-8",
     )
     (output / "src/bin/vvprobe.rs").write_text(
-        "use std::io::Write as _;\nuse std::process::ExitCode;\n\nfn main() -> ExitCode {\n"
+        "use std::io::Write as _;\nuse std::process::ExitCode;\n\n"
+        "const LEGACY_BANNER: &str = concat!(\"vaco-probe version \", env!(\"CARGO_PKG_VERSION\"), \" Copyright (c) 2026 the Vaco authors\");\n"
+        "const INSTALLED_BANNER: &str = concat!(\"vvprobe version \", env!(\"CARGO_PKG_VERSION\"), \" Copyright (c) 2026 the Vaco authors\");\n"
+        "const LEGACY_VERSION: &str = concat!(\"vaco-probe version \", env!(\"CARGO_PKG_VERSION\"));\n"
+        "const INSTALLED_VERSION: &str = concat!(\"vvprobe version \", env!(\"CARGO_PKG_VERSION\"));\n"
+        "const LEGACY_LICENSE: &str = \"vaco-probe is licensed under MIT OR Apache-2.0.\";\n"
+        "const INSTALLED_LICENSE: &str = \"vvprobe is licensed under MIT OR Apache-2.0.\";\n"
+        "const LEGACY_USAGE: &str = \"usage: vaco-probe [OPTIONS] INPUT_FILE\";\n"
+        "const INSTALLED_USAGE: &str = \"usage: vvprobe [OPTIONS] INPUT_FILE\";\n\n"
+        "fn branding() -> [(&'static [u8], &'static [u8]); 4] {\n"
+        "    [(LEGACY_BANNER.as_bytes(), INSTALLED_BANNER.as_bytes()), (LEGACY_VERSION.as_bytes(), INSTALLED_VERSION.as_bytes()), (LEGACY_LICENSE.as_bytes(), INSTALLED_LICENSE.as_bytes()), (LEGACY_USAGE.as_bytes(), INSTALLED_USAGE.as_bytes())]\n}\n\n"
+        "fn main() -> ExitCode {\n"
         "    let argv: Vec<std::ffi::OsString> = std::env::args_os().skip(1).collect();\n"
-        "    let stdout = std::io::stdout();\n    let stderr = std::io::stderr();\n"
-        "    let mut out = std::io::BufWriter::new(stdout.lock());\n    let mut err = stderr.lock();\n"
+        "    let mut out = Vec::new();\n    let mut err = Vec::new();\n"
         "    let exit = vaco::probe::run(&argv, &mut out, &mut err);\n"
-        "    if let Err(error) = out.flush() {\n"
-        "        if error.kind() != std::io::ErrorKind::BrokenPipe {\n"
-        "            let _ = writeln!(err, \"{error}\");\n"
-        "            return ExitCode::FAILURE;\n"
-        "        }\n"
+        "    let stdout = std::io::stdout();\n    let stderr = std::io::stderr();\n"
+        "    let mut stdout = std::io::BufWriter::new(stdout.lock());\n    let mut stderr = stderr.lock();\n"
+        "    let branding = branding();\n"
+        "    if let Err(error) = stdout.write_all(&vaco::command::rebrand_static_lines(&out, &branding))\n"
+        "        && error.kind() != std::io::ErrorKind::BrokenPipe\n"
+        "    {\n"
+        "        let _ = writeln!(stderr, \"{error}\");\n"
+        "        return ExitCode::FAILURE;\n"
+        "    }\n"
+        "    let _ = stderr.write_all(&vaco::command::rebrand_static_lines(&err, &branding));\n"
+        "    if let Err(error) = stdout.flush()\n"
+        "        && error.kind() != std::io::ErrorKind::BrokenPipe\n"
+        "    {\n"
+        "        let _ = writeln!(stderr, \"{error}\");\n"
+        "        return ExitCode::FAILURE;\n"
         "    }\n"
         "    match exit {\n"
         "        vaco::probe::Exit::Ok => ExitCode::SUCCESS,\n"
         "        vaco::probe::Exit::Failure => ExitCode::FAILURE,\n"
         "    }\n}\n",
         encoding="utf-8",
+    )
+    subprocess.run(
+        [
+            "rustfmt",
+            output / "src/lib.rs",
+            output / "src/bin/vvmpeg.rs",
+            output / "src/bin/vvprobe.rs",
+            output / "tests/command_branding.rs",
+        ],
+        check=True,
     )
     return 0
 
