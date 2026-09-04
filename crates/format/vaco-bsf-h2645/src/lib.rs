@@ -8,8 +8,6 @@
 //! are measured identity transforms except for `aud` (below).
 //! `h264_redundant_pps` and `dts2pts` are not implemented.
 //!
-//! # The CBS write path — scaffolded, not built
-//!
 //! `vaco_parse_hevc::cbs::HevcCbs` can only write a raw undecoded unit back
 //! out (every typed variant returns `Error::Unsupported`, since a
 //! non-bit-exact writer would corrupt a stream), and `vaco-parse-h264` has
@@ -22,8 +20,6 @@
 //! is deliberately not wired yet, rather than assuming its two-byte AUD
 //! header matches H.264's one-byte header without checking.
 //!
-//! # `h264_redundant_pps` — measured, not implemented
-//!
 //! On an x264 stream with `repeat-headers=1`, the reference's edit starts
 //! inside the surviving PPS's RBSP and continues through the next slice's
 //! CABAC data — a bit width changing mid-stream (likely
@@ -31,16 +27,12 @@
 //! CABAC-safe, bit-precise PPS rewrite and slice renumbering that H.264 has
 //! no bit-writer layer to do. Left out rather than landed wrong.
 //!
-//! # `dts2pts` — measured, not implemented
-//!
 //! The reference supports `h264 hevc`, not audio — "dts" is *decode
 //! timestamp*, touching only `Packet::pts`. Measured: it assigns `pts` by a
 //! real picture-order-count computation over a hierarchical B-frame
 //! structure (H.264 §8.2.1, HEVC §8.3.1), not a constant reorder-delay
 //! shift — which needs decoding slice-header POC fields and buffering a
 //! reorder window, decoder-adjacent work left unimplemented.
-//!
-//! # How to change it
 //!
 //! Add a module implementing [`vaco_bsf_core::PacketMap`], export a `DESC`,
 //! add it to `filters()`, and register it in `vaco-component.toml`.

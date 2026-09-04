@@ -1,109 +1,27 @@
-//! `h264_metadata`: rewrite SPS/VUI-level metadata (colour description, AUD
-//! insertion/removal, cropping, level, SEI) in an H.264 stream.
+//! H.264 metadata filtering, with byte-level AUD insertion and removal.
 //!
-//! # Why this was the identity transform, and no longer entirely is
+//! The reference's twenty options default to leaving the stream unchanged.
+//! With `aud=pass`, ffmpeg 8.1 reproduced five real libx264 streams byte for
+//! byte: plain video, existing AUDs, non-macroblock crop dimensions, explicit
+//! level and BT.709 VUI values, and a 60-frame B-picture stream.
 //!
-//! `ffmpeg -h bsf=h264_metadata` lists twenty options, and **every one of
-//! them defaults to "leave whatever the bitstream already says alone"**:
-//! `aud=pass` (0), the eleven `-1`-default VUI/crop fields (`overscan_appropriate_flag`,
-//! `video_format`, `video_full_range_flag`, `colour_primaries`,
-//! `transfer_characteristics`, `matrix_coefficients`, `chroma_sample_loc_type`,
-//! `fixed_frame_rate_flag`, `crop_left/right/top/bottom`), `sample_aspect_ratio`
-//! defaults to `0/1` (unset), `tick_rate` to `0/1`, `zero_new_constraint_set_flags`
-//! to `false`, `delete_filler` to `0` (off), `display_orientation=pass` (0),
-//! `rotate` to `nan` (unset), `flip` to no bits set, and `level` to `-2`
-//! ("unset" — not even `-1`'s "guess from stream").
+//! AUD is the only implemented mutation because it splices a complete unit
+//! without rewriting SPS/VUI fields. Measured reference behavior:
 //!
-//! Measured directly against `ffmpeg 8.1`: `-bsf:v h264_metadata` with no
-//! option string, run on real `libx264` elementary streams, reproduced the
-//! input **byte for byte** (`cmp`) across five inputs chosen to be adversarial
-//! about it, not just the easy case —
+//! - `remove` deletes every AUD including its start code and changes nothing
+//!   else; removing after insertion restores the original bytes.
+//! - `insert` unconditionally prepends an AUD to every access unit, even when
+//!   one is already present. The new unit uses a four-byte start code and the
+//!   former first unit remains byte-identical.
+//! - ITU-T H.264 Table 7-5 `primary_pic_type` is classified per access unit:
+//!   measured values were 0 for the first IDR, 1 for P/I access units, and 2
+//!   for access units containing B pictures. Classification peeks the first
+//!   two `ue(v)` slice-header fields and requires no SPS/PPS context.
 //!
-//! * a plain 176x144 stream (baseline case),
-//! * a stream with `access_unit_delimiter`s already present
-//!   (`x264-params aud=1`), which `aud=pass` must leave alone on *both* ends —
-//!   neither inserting nor removing,
-//! * a 178x146 stream, whose dimensions are not multiples of 16 and therefore
-//!   carries a non-trivial SPS conformance-window crop — the exact field
-//!   `crop_left/right/top/bottom=-1` claims not to touch,
-//! * a stream with an explicit `-level 5.1` and forced VUI colour description
-//!   (`bt709`/`bt709`/`bt709`) — the fields `level=-2` and the four `-1`-default
-//!   colour options claim not to touch, and
-//! * a 320x240, 60-frame, B-frame-bearing encode combining the above, to rule
-//!   out any per-frame or per-slice-type divergence a single short clip could
-//!   hide.
-//!
-//! All five reproduced the input exactly at `aud=pass` (the default).
-//!
-//! # `aud`, wired (interface gap 12 closed for this one option)
-//!
-//! [`vaco_codec_core::BitstreamFilter::set_option`] landed (gap 12), so
-//! `aud` — the one option `h264_metadata` (and `hevc_metadata`) exposes that
-//! is a structural bitstream edit rather than a value only a CBS SPS/PPS
-//! writer could apply — now has a caller. `insert`/`remove` are implemented
-//! by byte-level splicing, not by the CBS write path the rest of this
-//! module still lacks (see below): an access-unit delimiter is two bytes
-//! (`00 00 00 01 09 <payload>`) inserted whole in front of the access
-//! unit's first NAL, or removed whole, never a field rewritten inside an
-//! existing unit — exactly the operation that does not need a bit-exact
-//! SPS/PPS serialiser to get right.
-//!
-//! Measured against `ffmpeg 8.1`, `-bsf:v h264_metadata=aud=insert`/`=remove`
-//! on real `libx264` streams (`cmp`/hex diff, not guessed):
-//!
-//! * **`remove`** deletes every existing AUD unit (start code included) and
-//!   changes nothing else — round-tripping an `aud=insert` output back
-//!   through `aud=remove` reproduces the original AUD-less stream byte for
-//!   byte.
-//! * **`insert`** is unconditional: it prepends a new AUD to *every* access
-//!   unit regardless of whether one is already first, including a stream
-//!   that already has one (`insert` on an already-AUD'd stream produces
-//!   two adjacent AUD units, not a no-op) — there is no "already present"
-//!   check to reproduce, only the append.
-//! * The inserted unit always gets a **4-byte** start code, and every byte
-//!   after it (the unit that used to be first) is untouched, whatever start
-//!   code width it already had — confirmed by diffing the tail of an
-//!   `insert` output against the unmodified input past the six inserted
-//!   bytes.
-//! * **`primary_pic_type`** (the AUD payload's top 3 bits, ITU-T H.264
-//!   Table 7-5) is not a constant: probed with an I-only GOP (`keyint=1`),
-//!   an I/P-only GOP (`-bf 0`) and a GOP with real B pictures (`-bf 2`), the
-//!   value is `0` (I) for the very first (IDR) access unit of a file, `1`
-//!   (P, I) for every P-only access unit, and `2` (B, P, I) for the two
-//!   access units libx264 coded as B in the third probe — never a fixed
-//!   value across a whole file. That is exactly Table 7-5's "narrowest
-//!   category covering every slice type in this access unit" rule applied
-//!   per-AU, not per-file, so this filter classifies each AU's own slice
-//!   NALs (peeking `slice_type` the same first-two-`ue(v)`-fields way
-//!   `vaco_parse_h264::parser`'s `peek_pps_id` does, since `slice_type` needs
-//!   no SPS/PPS context) rather than assuming one type for the run.
-//!
-//! `pass` (the default, value `0`) is unchanged: still a byte-identical
-//! forward, verified above.
-//!
-//! The other nineteen options remain exactly where the previous measurement
-//! left them: every one of them would rewrite a field *inside* an existing
-//! SPS/VUI, which needs the CBS write path described below — `aud` is the
-//! one exception, structural rather than field-level, and that structural
-//! difference is what made it reachable without that path.
-//!
-//! # Why this crate still does not carry the CBS write path
-//!
-//! [`vaco_codec_cbs::CbsCodec`] already has the `read_unit`/`write_unit`/
-//! `assemble` shape a filter like this would use, but `vaco-parse-hevc`'s
-//! implementation of it (`cbs::HevcCbs`, the only `CbsCodec` for an H.26x
-//! codec in this tree) can `write_unit` a raw, undecoded unit back out but
-//! returns `Error::Unsupported` for a typed SPS — writing one back out
-//! bit-exactly (`profile_tier_level`, every VUI field, `rbsp_trailing_bits`
-//! padding) is real, unstarted work, and `vaco-parse-h264` has no `CbsCodec`
-//! implementation at all yet. Building an H.264 SPS writer now, with
-//! eighteen of nineteen remaining options and nothing to drive them but
-//! `set_option`'s new door, is still a separate, substantial piece of work —
-//! `aud` closing does not change that calculus for the rest of the option
-//! surface.
-//!
-//! No numeric option beyond `aud` is read here, so `CONFORMANCE-FINDINGS.md`
-//! finding 31 (unenforced option ranges) has nothing else to apply to.
+//! Every other option rewrites a field inside an SPS or VUI and requires a
+//! bit-exact CBS writer. `vaco-parse-h264` has no `CbsCodec`; the HEVC CBS can
+//! only write raw, undecoded units and refuses typed parameter sets. Those
+//! options remain pass-through rather than risking stream corruption.
 
 use std::collections::VecDeque;
 

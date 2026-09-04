@@ -24,10 +24,8 @@
 //! so it is not a general framing rule — [`splice_before_first_idr`] special-
 //! cases only its own insertion point, and every other NAL this filter
 //! converts (via `length_prefixed_to_annexb`) keeps the shared 4-byte
-//! convention. Originally left unreproduced as "not worth a knob" before a
-//! real byte-exact `-c copy` remux comparison made it a genuine, measured
-//! divergence (`planning/CONFORMANCE-FINDINGS.md` finding 57, cases 34/36/39)
-//! rather than a cosmetic one worth discounting.
+//! convention. A byte-exact `-c copy` remux comparison confirmed the 3-byte
+//! insertion-point prefix is required rather than a cosmetic difference.
 
 use std::collections::VecDeque;
 
