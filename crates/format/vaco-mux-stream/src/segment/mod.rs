@@ -116,9 +116,9 @@ pub struct SegmentOptions {
 impl Default for SegmentOptions {
     fn default() -> Self {
         Self {
-            segment_time: Duration(2_000_000),
-            segment_time_delta: Duration(0),
-            min_seg_duration: Duration(0),
+            segment_time: Duration::from_micros(2_000_000),
+            segment_time_delta: Duration::from_micros(0),
+            min_seg_duration: Duration::from_micros(0),
             segment_times: Vec::new(),
             segment_frames: Vec::new(),
             segment_wrap: 0,
@@ -128,7 +128,7 @@ impl Default for SegmentOptions {
             break_non_keyframes: false,
             individual_header_trailer: true,
             reset_timestamps: false,
-            initial_offset: Duration(0),
+            initial_offset: Duration::from_micros(0),
             write_empty_segments: false,
             segment_list_type: SegmentListType::Flat,
         }
@@ -354,7 +354,7 @@ impl SegmentMuxer {
     /// base on the first call for it in the current segment.
     fn adjust_timestamp(&mut self, stream_index: u32, ts: Timestamp) -> Timestamp {
         let Some(ticks) = ts.ticks() else { return ts };
-        let ticks = ticks.saturating_add(self.options.initial_offset.0);
+        let ticks = ticks.saturating_add(self.options.initial_offset.as_micros());
         if !self.options.reset_timestamps {
             return Timestamp::new(ticks);
         }
@@ -403,7 +403,8 @@ impl Muxer for SegmentMuxer {
         // `CodecParameters` does not carry one at all; only a `Stream`,
         // which this muxer never receives, does).
         if let Some(us) = packet.pts.ticks() {
-            let end_seconds = vaco_core::Duration(us).as_secs_f64() + packet.duration.as_secs_f64();
+            let end_seconds =
+                vaco_core::Duration::from_micros(us).as_secs_f64() + packet.duration.as_secs_f64();
             self.last_seen_end_seconds = self.last_seen_end_seconds.max(end_seconds);
         }
         let is_reference = Some(packet.stream_index) == self.reference_stream;
@@ -413,7 +414,7 @@ impl Muxer for SegmentMuxer {
                 .on_reference_packet(packet.pts, packet.is_key());
             if cut {
                 let now_seconds = packet.pts.ticks().map_or(self.current_start_seconds, |us| {
-                    vaco_core::Duration(us).as_secs_f64()
+                    vaco_core::Duration::from_micros(us).as_secs_f64()
                 });
                 let elapsed = (now_seconds - self.current_start_seconds).max(0.0);
                 self.close_current(elapsed)?;
@@ -638,7 +639,7 @@ mod tests {
         let mut seg = SegmentMuxer::new(
             "out%d.raw",
             SegmentOptions {
-                segment_time: Duration(2_000_000),
+                segment_time: Duration::from_micros(2_000_000),
                 ..SegmentOptions::default()
             },
             counting_factory(opened.clone()),
@@ -664,7 +665,7 @@ mod tests {
         let mut seg = SegmentMuxer::new(
             "out%d.raw",
             SegmentOptions {
-                segment_time: Duration(1_000_000),
+                segment_time: Duration::from_micros(1_000_000),
                 segment_start_number: 5,
                 segment_wrap: 2,
                 ..SegmentOptions::default()
@@ -698,7 +699,7 @@ mod tests {
         let mut seg = SegmentMuxer::new(
             "out%d.raw",
             SegmentOptions {
-                segment_time: Duration(2_000_000),
+                segment_time: Duration::from_micros(2_000_000),
                 reset_timestamps: true,
                 ..SegmentOptions::default()
             },
@@ -728,7 +729,7 @@ mod tests {
         let mut seg = SegmentMuxer::new(
             "out%d.raw",
             SegmentOptions {
-                segment_time: Duration(2_000_000),
+                segment_time: Duration::from_micros(2_000_000),
                 ..SegmentOptions::default()
             },
             counting_factory(opened.clone()),
@@ -825,7 +826,7 @@ mod tests {
         let mut seg = SegmentMuxer::new(
             "out%d.raw",
             SegmentOptions {
-                segment_time: Duration(1_000_000),
+                segment_time: Duration::from_micros(1_000_000),
                 ..SegmentOptions::default()
             },
             factory,
@@ -899,7 +900,7 @@ mod tests {
         let mut seg = SegmentMuxer::new(
             "out%d.raw",
             SegmentOptions {
-                segment_time: Duration(1_000_000),
+                segment_time: Duration::from_micros(1_000_000),
                 ..SegmentOptions::default()
             },
             factory,
@@ -929,7 +930,7 @@ mod tests {
     #[test]
     fn default_options_match_the_reference() {
         let d = SegmentOptions::default();
-        assert_eq!(d.segment_time, Duration(2_000_000));
+        assert_eq!(d.segment_time, Duration::from_micros(2_000_000));
         assert!(!d.break_non_keyframes);
         assert!(d.individual_header_trailer);
         assert!(!d.reset_timestamps);

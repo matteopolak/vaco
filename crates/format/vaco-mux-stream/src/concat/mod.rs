@@ -292,12 +292,12 @@ impl ConcatDemuxer {
             return true;
         };
         if let Some(inpoint) = entry.inpoint
-            && d.0 < inpoint.0
+            && d.as_micros() < inpoint.as_micros()
         {
             return false;
         }
         if let Some(outpoint) = entry.outpoint
-            && d.0 >= outpoint.0
+            && d.as_micros() >= outpoint.as_micros()
         {
             return false;
         }
@@ -310,7 +310,7 @@ impl ConcatDemuxer {
     /// one.
     fn entry_span(&self) -> Duration {
         let Some(entry) = self.entries.get(self.current) else {
-            return Duration(0);
+            return Duration::from_micros(0);
         };
         if let Some(d) = entry.duration {
             return d;
@@ -318,7 +318,7 @@ impl ConcatDemuxer {
         self.inners
             .get(self.current)
             .and_then(vaco_format_core::Demuxer::duration)
-            .unwrap_or(Duration(0))
+            .unwrap_or(Duration::from_micros(0))
     }
 
     /// Advance `offset_ticks` by the current file's span, then move to the
@@ -406,9 +406,9 @@ impl Demuxer for ConcatDemuxer {
                     .get(i)
                     .and_then(vaco_format_core::Demuxer::duration)
             })?;
-            total = total.checked_add(span.0)?;
+            total = total.checked_add(span.as_micros())?;
         }
-        Some(Duration(total))
+        Some(Duration::from_micros(total))
     }
 }
 
@@ -582,7 +582,7 @@ mod tests {
         let source = fixture(
             &[("a.ts", &[0, 1000, 2000]), ("b.ts", &[0, 1000])],
             Rational::new(1, 1000),
-            Some(Duration(3_000_000)),
+            Some(Duration::from_micros(3_000_000)),
         );
         let mut d = ConcatDemuxer::open_script(
             "file 'a.ts'\nfile 'b.ts'\n",
@@ -611,7 +611,7 @@ mod tests {
         let source = fixture(
             &[("a.ts", &[0, 1000]), ("b.ts", &[0])],
             Rational::new(1, 1000),
-            Some(Duration(999_999_999)), // would be wrong if used
+            Some(Duration::from_micros(999_999_999)), // would be wrong if used
         );
         let mut d = ConcatDemuxer::open_script(
             "file 'a.ts'\nduration 5\nfile 'b.ts'\n",

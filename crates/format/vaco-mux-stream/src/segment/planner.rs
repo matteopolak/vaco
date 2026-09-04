@@ -81,7 +81,7 @@ impl SegmentPlanner {
     /// reference stream's packets here and simply forwards everything else
     /// into whichever segment is currently open.
     pub fn on_reference_packet(&mut self, pts: Timestamp, is_key: bool) -> bool {
-        let now = pts.ticks().map(Duration);
+        let now = pts.ticks().map(Duration::from_micros);
         let Some(now) = now else {
             // No timestamp: cannot judge a boundary, stay in the current
             // segment.
@@ -89,21 +89,21 @@ impl SegmentPlanner {
             return false;
         };
         let start = *self.segment_start.get_or_insert(now);
-        let elapsed_us = now.0.saturating_sub(start.0);
+        let elapsed_us = now.as_micros().saturating_sub(start.as_micros());
 
         let wants_cut = match &self.trigger {
             SegmentTrigger::Interval(interval) => {
-                elapsed_us.saturating_add(self.time_delta.0) >= interval.0
+                elapsed_us.saturating_add(self.time_delta.as_micros()) >= interval.as_micros()
             }
-            SegmentTrigger::ExplicitTimes(points) => points
-                .get(self.next_point)
-                .is_some_and(|p| now.0.saturating_add(self.time_delta.0) >= p.0),
+            SegmentTrigger::ExplicitTimes(points) => points.get(self.next_point).is_some_and(|p| {
+                now.as_micros().saturating_add(self.time_delta.as_micros()) >= p.as_micros()
+            }),
             SegmentTrigger::ExplicitFrames(points) => points
                 .get(self.next_point)
                 .is_some_and(|&p| self.frames_in_segment >= p),
         };
 
-        let long_enough = elapsed_us >= self.min_seg_duration.0;
+        let long_enough = elapsed_us >= self.min_seg_duration.as_micros();
         let may_cut_here = is_key || self.break_non_keyframes;
 
         if wants_cut && long_enough && may_cut_here && self.frames_in_segment > 0 {
@@ -135,9 +135,9 @@ mod tests {
     use super::*;
     fn planner(seconds: i64) -> SegmentPlanner {
         SegmentPlanner::new(
-            SegmentTrigger::Interval(Duration(seconds * 1_000_000)),
-            Duration(0),
-            Duration(0),
+            SegmentTrigger::Interval(Duration::from_micros(seconds * 1_000_000)),
+            Duration::from_micros(0),
+            Duration::from_micros(0),
             false,
         )
     }
@@ -163,9 +163,9 @@ mod tests {
     #[test]
     fn break_non_keyframes_cuts_at_the_exact_interval() {
         let mut p = SegmentPlanner::new(
-            SegmentTrigger::Interval(Duration(2_000_000)),
-            Duration(0),
-            Duration(0),
+            SegmentTrigger::Interval(Duration::from_micros(2_000_000)),
+            Duration::from_micros(0),
+            Duration::from_micros(0),
             true,
         );
         let frames = [(0, true), (1000, false), (2000, false)];
@@ -179,9 +179,9 @@ mod tests {
     #[test]
     fn min_seg_duration_suppresses_an_early_keyframe_cut() {
         let mut p = SegmentPlanner::new(
-            SegmentTrigger::Interval(Duration(1_000_000)),
-            Duration(0),
-            Duration(3_000_000),
+            SegmentTrigger::Interval(Duration::from_micros(1_000_000)),
+            Duration::from_micros(0),
+            Duration::from_micros(3_000_000),
             false,
         );
         let frames = [(0, true), (1200, true), (3200, true)];
@@ -197,9 +197,12 @@ mod tests {
     #[test]
     fn explicit_times_cut_at_each_named_point_in_order() {
         let mut p = SegmentPlanner::new(
-            SegmentTrigger::ExplicitTimes(vec![Duration(1_500_000), Duration(4_000_000)]),
-            Duration(0),
-            Duration(0),
+            SegmentTrigger::ExplicitTimes(vec![
+                Duration::from_micros(1_500_000),
+                Duration::from_micros(4_000_000),
+            ]),
+            Duration::from_micros(0),
+            Duration::from_micros(0),
             false,
         );
         let frames = [(0, true), (1000, true), (1600, true), (4200, true)];

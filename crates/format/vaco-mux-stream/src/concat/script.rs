@@ -329,11 +329,11 @@ mod tests {
         let script = parse("file 'a.ts'\ninpoint 00:00:00.2\noutpoint 0.8\n", true).unwrap();
         assert_eq!(
             script.lines[1].directive,
-            Directive::Inpoint(Duration(200_000))
+            Directive::Inpoint(Duration::from_micros(200_000))
         );
         assert_eq!(
             script.lines[2].directive,
-            Directive::Outpoint(Duration(800_000))
+            Directive::Outpoint(Duration::from_micros(800_000))
         );
     }
 

@@ -92,7 +92,7 @@ impl Default for FifoOptions {
             queue_size: 60,
             attempt_recovery: false,
             max_recovery_attempts: 0,
-            recovery_wait_time: Duration(5_000_000),
+            recovery_wait_time: Duration::from_micros(5_000_000),
             drop_pkts_on_overflow: false,
         }
     }
@@ -104,7 +104,7 @@ impl Default for FifoOptions {
 /// conversion — a malformed `-recovery_wait_time` should slow this muxer
 /// down, not crash it.
 fn std_duration(d: Duration) -> vaco_time::Duration {
-    let micros = u64::try_from(d.0).unwrap_or(0);
+    let micros = u64::try_from(d.as_micros()).unwrap_or(0);
     vaco_time::Duration::from_micros(micros)
 }
 
@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(d.queue_size, 60);
         assert!(!d.attempt_recovery);
         assert_eq!(d.max_recovery_attempts, 0);
-        assert_eq!(d.recovery_wait_time, Duration(5_000_000));
+        assert_eq!(d.recovery_wait_time, Duration::from_micros(5_000_000));
         assert!(!d.drop_pkts_on_overflow);
     }
 
