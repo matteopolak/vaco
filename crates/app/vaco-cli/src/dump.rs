@@ -6,8 +6,8 @@
 //!
 //! `ffmpeg -hide_banner -i in.mp4` with no output prints the whole `Input #0`
 //! block and then the "no output" error; before this module `vaco` printed
-//! only the error. `planning/CONFORMANCE-FINDINGS.md` finding 41 has the
-//! measured reference transcript this was built against, on three fixtures:
+//! only the error. The measured reference transcript used to build this covers
+//! three fixtures:
 //! an MP4 with one video stream, an MP4 with video+audio, and an MPEG-TS file
 //! with a `Program` block. Every rule below cites which of those three (or a
 //! throwaway file built for the purpose) it was measured on.
