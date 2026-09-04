@@ -118,12 +118,17 @@ mod tests {
 
     #[test]
     fn a_two_by_two_grid_stacks_then_crops() {
-        let g = grid(&[0, 1, 2, 3], &[(0, 0), (64, 0), (0, 64), (64, 64)]);
+        let mut g = grid(&[0, 1, 2, 3], &[(0, 0), (64, 0), (0, 64), (64, 64)]);
+        let StreamGroupKind::TileGrid(grid) = &mut g.kind else {
+            unreachable!()
+        };
+        grid.output_width = 26;
+        grid.output_height = 6;
+        grid.horizontal_offset = 3;
+        grid.vertical_offset = 1;
         assert_eq!(
             graph_text(0, &g).as_deref(),
-            Some(
-                "[0:0][0:1][0:2][0:3]xstack=inputs=4:grid=2x2,crop=120:100:0:0[vaco_tilegrid_0_0]"
-            )
+            Some("[0:0][0:1][0:2][0:3]xstack=inputs=4:grid=2x2,crop=26:6:3:1[vaco_tilegrid_0_0]")
         );
     }
 

@@ -75,6 +75,7 @@ vaco-filter-video-format = { path = "../../filter/vaco-filter-video-format" }
 proptest.workspace = true
 tempfile.workspace = true
 vaco-format-fixtures = { path = "../../format/vaco-format-fixtures" }
+vaco-format-isom = { path = "../../format/vaco-format-isom" }
 # A fixture builder, not a muxer: `synth` writes exactly what it is told,
 # including a per-track `FlagDefault`, which is the field the whole
 # auto-selection rule turns on and which no real muxer will let a test control.

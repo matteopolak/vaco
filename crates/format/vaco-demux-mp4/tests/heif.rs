@@ -36,6 +36,16 @@ fn ispe(w: u32, h: u32) -> Vec<u8> {
     fullbx(b"ispe", 0, 0, &body)
 }
 
+fn clap(values: [u32; 8]) -> Vec<u8> {
+    bx(
+        b"clap",
+        &values
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect::<Vec<_>>(),
+    )
+}
+
 /// `iloc` version 1, 4-byte offsets and lengths, no base offset.
 fn iloc(entries: &[(u16, u16, &[(u32, u32)])]) -> Vec<u8> {
     let mut body = vec![0x44, 0x00];
@@ -55,7 +65,7 @@ fn iloc(entries: &[(u16, u16, &[(u32, u32)])]) -> Vec<u8> {
 
 /// Items: 1 = tile A, 2 = tile B (two extents), 3 = grid (primary, in
 /// `idat`), 4 = thumbnail. Returns the file bytes.
-fn heif() -> Vec<u8> {
+fn heif_with_grid_clap(clap_values: [u32; 8]) -> Vec<u8> {
     let ftyp = bx(
         b"ftyp",
         &[b"mif1".as_slice(), &0u32.to_be_bytes(), b"mif1", b"jpeg"].concat(),
@@ -88,8 +98,11 @@ fn heif() -> Vec<u8> {
     );
     let iref = fullbx(b"iref", 0, 0, &[dimg, thmb].concat());
     // ipco: 1 = tile ispe 16x8, 2 = grid ispe 30x8 (cropped from 32x8),
-    // 3 = thumb ispe 4x2.
-    let ipco = bx(b"ipco", &[ispe(16, 8), ispe(30, 8), ispe(4, 2)].concat());
+    // 3 = thumb ispe 4x2, 4 = the grid's clean aperture.
+    let ipco = bx(
+        b"ipco",
+        &[ispe(16, 8), ispe(30, 8), ispe(4, 2), clap(clap_values)].concat(),
+    );
     let ipma = fullbx(
         b"ipma",
         0,
@@ -98,7 +111,7 @@ fn heif() -> Vec<u8> {
             4u32.to_be_bytes().as_slice(),
             &[0, 1, 1, 1],
             &[0, 2, 1, 1],
-            &[0, 3, 1, 2],
+            &[0, 3, 2, 2, 4],
             &[0, 4, 1, 3],
         ]
         .concat(),
@@ -149,6 +162,12 @@ fn heif() -> Vec<u8> {
     let mdat_off = (ftyp.len() + meta_of(&probe).len() + 8) as u32;
     let meta = meta_of(&extents(mdat_off));
     [ftyp, meta, bx(b"mdat", &mdat_payload)].concat()
+}
+
+fn heif() -> Vec<u8> {
+    // Over the grid's reconstructed 30x8 image, 26x6 with centre offset
+    // (+1, 0) has top-left (3, 1).
+    heif_with_grid_clap([26, 1, 6, 1, 1, 1, 0, 1])
 }
 
 fn open(bytes: Vec<u8>) -> Mp4Demuxer {
@@ -204,10 +223,10 @@ fn items_become_one_packet_streams_and_the_grid_a_group() {
         tile_columns: 2,
         coded_width: 32,
         coded_height: 8,
-        output_width: 30,
-        output_height: 8,
-        horizontal_offset: 0,
-        vertical_offset: 0,
+        output_width: 26,
+        output_height: 6,
+        horizontal_offset: 3,
+        vertical_offset: 1,
         tile_offsets: vec![(0, 0), (16, 0)],
     };
     assert!(
@@ -245,6 +264,17 @@ fn items_become_one_packet_streams_and_the_grid_a_group() {
         .unwrap();
     let again = demux.read_packet().unwrap();
     assert_eq!(again.payload(), TILE_A);
+}
+
+#[test]
+fn a_grid_with_an_unrepresentable_or_out_of_bounds_clap_is_refused() {
+    // A 27/2-pixel output width cannot be represented by TileGrid's integer
+    // crop, and a 31-pixel output is wider than the grid's 30-pixel image.
+    for values in [[27, 2, 6, 1, 0, 1, 0, 1], [31, 1, 6, 1, 0, 1, 0, 1]] {
+        let demux = open(heif_with_grid_clap(values));
+        assert_eq!(demux.streams().len(), 3, "coded items remain reachable");
+        assert!(demux.stream_groups().is_empty(), "invalid grid is absent");
+    }
 }
 
 #[test]

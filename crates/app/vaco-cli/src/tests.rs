@@ -135,6 +135,178 @@ fn fixture_named(name: &str, bytes: &[u8]) -> Fixture {
     Fixture { _dir: dir, path }
 }
 
+fn heif_item_info(id: u16, kind: [u8; 4], hidden: bool) -> Vec<u8> {
+    use vaco_format_isom::build::fullbx;
+
+    let mut body = id.to_be_bytes().to_vec();
+    body.extend_from_slice(&0u16.to_be_bytes());
+    body.extend_from_slice(&kind);
+    body.push(0);
+    fullbx(b"infe", 2, u32::from(hidden), &body)
+}
+
+/// One real 64x48 JPEG tile wrapped in a primary 1x1 HEIF grid. With
+/// `with_clap`, the grid has a 32x24 clean aperture at (16, 12).
+fn jpeg_grid_heif(with_clap: bool) -> Vec<u8> {
+    use vaco_format_isom::build::{bx, fullbx};
+
+    const JPEG: &[u8] = include_bytes!("../../../codec/vaco-cbs-jpeg/tests/fixtures/baseline.jpg");
+    let ftyp = bx(
+        b"ftyp",
+        &[b"mif1".as_slice(), &0u32.to_be_bytes(), b"mif1", b"jpeg"].concat(),
+    );
+    let mut hdlr_body = 0u32.to_be_bytes().to_vec();
+    hdlr_body.extend_from_slice(b"pict");
+    hdlr_body.extend_from_slice(&[0; 12]);
+    hdlr_body.push(0);
+    let hdlr = fullbx(b"hdlr", 0, 0, &hdlr_body);
+    let pitm = fullbx(b"pitm", 0, 0, &2u16.to_be_bytes());
+    let iinf = fullbx(
+        b"iinf",
+        0,
+        0,
+        &[
+            2u16.to_be_bytes().as_slice(),
+            &heif_item_info(1, *b"jpeg", true),
+            &heif_item_info(2, *b"grid", false),
+        ]
+        .concat(),
+    );
+    let dimg = bx(
+        b"dimg",
+        &[2u16, 1, 1]
+            .iter()
+            .flat_map(|v| v.to_be_bytes())
+            .collect::<Vec<_>>(),
+    );
+    let iref = fullbx(b"iref", 0, 0, &dimg);
+    let ispe = |width: u32, height: u32| {
+        fullbx(
+            b"ispe",
+            0,
+            0,
+            &[width.to_be_bytes(), height.to_be_bytes()].concat(),
+        )
+    };
+    let clap = bx(
+        b"clap",
+        &[32u32, 1, 24, 1, 0, 1, 0, 1]
+            .iter()
+            .flat_map(|v| v.to_be_bytes())
+            .collect::<Vec<_>>(),
+    );
+    let ipco = bx(
+        b"ipco",
+        &if with_clap {
+            [ispe(64, 48), ispe(64, 48), clap].concat()
+        } else {
+            [ispe(64, 48), ispe(64, 48)].concat()
+        },
+    );
+    let grid_associations: &[u8] = if with_clap {
+        &[0, 2, 2, 2, 3]
+    } else {
+        &[0, 2, 1, 2]
+    };
+    let ipma = fullbx(
+        b"ipma",
+        0,
+        0,
+        &[
+            2u32.to_be_bytes().as_slice(),
+            &[0, 1, 1, 1],
+            grid_associations,
+        ]
+        .concat(),
+    );
+    let iprp = bx(b"iprp", &[ipco, ipma].concat());
+    let grid_desc = [0u8, 0, 0, 0, 0, 64, 0, 48];
+    let idat = bx(b"idat", &grid_desc);
+    let iloc = |jpeg_offset: u32| {
+        let mut body = vec![0x44, 0x00];
+        body.extend_from_slice(&2u16.to_be_bytes());
+        for (id, method, offset, length) in [
+            (1u16, 0u16, jpeg_offset, JPEG.len() as u32),
+            (2, 1, 0, grid_desc.len() as u32),
+        ] {
+            body.extend_from_slice(&id.to_be_bytes());
+            body.extend_from_slice(&method.to_be_bytes());
+            body.extend_from_slice(&0u16.to_be_bytes());
+            body.extend_from_slice(&1u16.to_be_bytes());
+            body.extend_from_slice(&offset.to_be_bytes());
+            body.extend_from_slice(&length.to_be_bytes());
+        }
+        fullbx(b"iloc", 1, 0, &body)
+    };
+    let meta = |locations: &[u8]| {
+        fullbx(
+            b"meta",
+            0,
+            0,
+            &[
+                hdlr.as_slice(),
+                pitm.as_slice(),
+                locations,
+                iinf.as_slice(),
+                iref.as_slice(),
+                iprp.as_slice(),
+                idat.as_slice(),
+            ]
+            .concat(),
+        )
+    };
+    let mdat_offset = (ftyp.len() + meta(&iloc(0)).len() + 8) as u32;
+    [ftyp, meta(&iloc(mdat_offset)), bx(b"mdat", JPEG)].concat()
+}
+
+fn crop_yuv420p(
+    frame: &[u8],
+    input_width: usize,
+    input_height: usize,
+    x: usize,
+    y: usize,
+    width: usize,
+    height: usize,
+) -> Vec<u8> {
+    let half = |value: usize| {
+        assert!(value.is_multiple_of(2), "4:2:0 geometry must be even");
+        value.checked_div(2).expect("non-zero divisor")
+    };
+    let mut out = Vec::new();
+    let mut copy_plane = |offset: usize,
+                          stride: usize,
+                          plane_x: usize,
+                          plane_y: usize,
+                          plane_width: usize,
+                          plane_height: usize| {
+        for row in plane_y..plane_y + plane_height {
+            let at = offset + row * stride + plane_x;
+            out.extend_from_slice(&frame[at..at + plane_width]);
+        }
+    };
+    copy_plane(0, input_width, x, y, width, height);
+    let chroma_width = half(input_width);
+    let chroma_height = half(input_height);
+    let chroma_len = chroma_width * chroma_height;
+    copy_plane(
+        input_width * input_height,
+        chroma_width,
+        half(x),
+        half(y),
+        half(width),
+        half(height),
+    );
+    copy_plane(
+        input_width * input_height + chroma_len,
+        chroma_width,
+        half(x),
+        half(y),
+        half(width),
+        half(height),
+    );
+    out
+}
+
 // ------------------------------------------------------------------- harness
 
 struct Outcome {
@@ -603,6 +775,35 @@ fn an_actual_muxer_writes_bytes_a_prober_can_read_back() {
         r2.message().contains("video:0KiB audio:0KiB"),
         "the round trip must carry the same payload back: {}",
         r2.message()
+    );
+}
+
+/// HEIF `clap` reaches the binary through the same `TileGrid` fields that
+/// probing reports: compare the real decoded output against an exact planar
+/// crop of the identical one-tile grid without the property.
+#[test]
+fn a_grid_clean_aperture_crops_real_cli_output() {
+    let full_input = fixture_named("full.heif", &jpeg_grid_heif(false));
+    let cropped_input = fixture_named("cropped.heif", &jpeg_grid_heif(true));
+    let dir = tempfile::tempdir().expect("tempdir");
+    let full_path = dir.path().join("full.yuv");
+    let cropped_path = dir.path().join("cropped.yuv");
+    let full_str = full_path.to_str().expect("utf8 tempdir path");
+    let cropped_str = cropped_path.to_str().expect("utf8 tempdir path");
+
+    let full = go(&["-i", &full_input.path, "-f", "rawvideo", full_str]);
+    assert_eq!(full.code, ExitCode::OK, "{}", full.message());
+    let cropped = go(&["-i", &cropped_input.path, "-f", "rawvideo", cropped_str]);
+    assert_eq!(cropped.code, ExitCode::OK, "{}", cropped.message());
+
+    let full_bytes = std::fs::read(full_path).expect("read full grid output");
+    let cropped_bytes = std::fs::read(cropped_path).expect("read cropped grid output");
+    assert_eq!(full_bytes.len(), 4_608);
+    assert_eq!(cropped_bytes.len(), 1_152);
+    assert_eq!(
+        cropped_bytes,
+        crop_yuv420p(&full_bytes, 64, 48, 16, 12, 32, 24),
+        "the property must crop the actual decoded frame at its exact aperture"
     );
 }
 

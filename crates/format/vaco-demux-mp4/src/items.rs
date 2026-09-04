@@ -191,6 +191,16 @@ impl<'a> Meta<'a> {
         self.locations.iter().find(|l| l.item_id == item_id)
     }
 
+    fn property(&self, item_id: u32, kind: FourCc) -> Option<&IsoBox<'a>> {
+        let assoc = self.ipma.iter().find(|a| a.item_id == item_id)?;
+        assoc.properties.iter().find_map(|&(_, index)| {
+            let bx = usize::from(index)
+                .checked_sub(1)
+                .and_then(|i| self.ipco.get(i))?;
+            (bx.kind() == kind).then_some(bx)
+        })
+    }
+
     /// An item's extents as absolute file ranges. `None` for an item this
     /// crate cannot place: `construction_method == 2` (offsets into another
     /// item's data), a `dref`-external item, or a range past the file.
@@ -245,15 +255,11 @@ impl<'a> Meta<'a> {
     }
 
     fn ispe(&self, item_id: u32) -> Option<(u32, u32)> {
-        let assoc = self.ipma.iter().find(|a| a.item_id == item_id)?;
-        assoc.properties.iter().find_map(|&(_, index)| {
-            let bx = usize::from(index)
-                .checked_sub(1)
-                .and_then(|i| self.ipco.get(i))?;
-            (bx.kind() == bt::ISPE)
-                .then(|| heif::parse_ispe(bx))
-                .flatten()
-        })
+        heif::parse_ispe(self.property(item_id, bt::ISPE)?)
+    }
+
+    fn clap(&self, item_id: u32) -> Option<heif::CleanAperture> {
+        heif::parse_clap(self.property(item_id, bt::CLAP)?)
     }
 
     /// One coded item as a stream. `None` when the item type names no codec
@@ -373,6 +379,11 @@ impl<'a> Meta<'a> {
         if grid.output_width > coded_width || grid.output_height > coded_height {
             return None;
         }
+        let (horizontal_offset, vertical_offset, output_width, output_height) =
+            self.clap(info.item_id).map_or(
+                Some((0, 0, grid.output_width, grid.output_height)),
+                |aperture| aperture.integer_crop(grid.output_width, grid.output_height),
+            )?;
         let tile_offsets = (0..grid.rows)
             .flat_map(|r| (0..grid.columns).map(move |c| (c * tile_w, r * tile_h)))
             .collect();
@@ -384,10 +395,10 @@ impl<'a> Meta<'a> {
                 tile_columns: grid.columns,
                 coded_width,
                 coded_height,
-                output_width: grid.output_width,
-                output_height: grid.output_height,
-                horizontal_offset: 0,
-                vertical_offset: 0,
+                output_width,
+                output_height,
+                horizontal_offset,
+                vertical_offset,
                 tile_offsets,
             }),
         );

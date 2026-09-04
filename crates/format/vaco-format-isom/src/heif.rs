@@ -327,6 +327,89 @@ pub fn parse_ispe(ispe: &IsoBox<'_>) -> Option<(u32, u32)> {
     Some((width, height))
 }
 
+/// `clap` (`CleanApertureBox`, HEIF §6.5.9 and ISOBMFF §12.1.4): an
+/// image crop expressed as exact rational dimensions and centre offsets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CleanAperture {
+    width_n: u32,
+    width_d: u32,
+    height_n: u32,
+    height_d: u32,
+    horizontal_offset_n: i32,
+    horizontal_offset_d: u32,
+    vertical_offset_n: i32,
+    vertical_offset_d: u32,
+}
+
+impl CleanAperture {
+    /// Convert the rational aperture to an integer-pixel crop of an input
+    /// image. Fractional *fields* are valid when their combined edge still
+    /// lands on a whole pixel; a fractional edge cannot be represented by
+    /// `TileGrid` and is refused by returning `None`.
+    #[must_use]
+    pub fn integer_crop(self, input_width: u32, input_height: u32) -> Option<(u32, u32, u32, u32)> {
+        let width = positive_integer(self.width_n, self.width_d)?;
+        let height = positive_integer(self.height_n, self.height_d)?;
+        let x = integer_aperture_origin(
+            input_width,
+            width,
+            self.horizontal_offset_n,
+            self.horizontal_offset_d,
+        )?;
+        let y = integer_aperture_origin(
+            input_height,
+            height,
+            self.vertical_offset_n,
+            self.vertical_offset_d,
+        )?;
+        (x.checked_add(width)? <= input_width && y.checked_add(height)? <= input_height)
+            .then_some((x, y, width, height))
+    }
+}
+
+fn positive_integer(numerator: u32, denominator: u32) -> Option<u32> {
+    if numerator > 0 && denominator > 0 && numerator.is_multiple_of(denominator) {
+        numerator.checked_div(denominator)
+    } else {
+        None
+    }
+}
+
+/// `origin = (input - aperture) / 2 + centre_offset`, kept rational until
+/// the final divisibility check so a half-pixel centre offset can cancel the
+/// half produced by dimensions with different parity.
+fn integer_aperture_origin(input: u32, aperture: u32, offset_n: i32, offset_d: u32) -> Option<u32> {
+    if offset_d == 0 {
+        return None;
+    }
+    let denominator = i128::from(offset_d).checked_mul(2)?;
+    let numerator = (i128::from(input) - i128::from(aperture))
+        .checked_mul(i128::from(offset_d))?
+        .checked_add(i128::from(offset_n).checked_mul(2)?)?;
+    if numerator < 0 || numerator.checked_rem(denominator)? != 0 {
+        return None;
+    }
+    u32::try_from(numerator.checked_div(denominator)?).ok()
+}
+
+/// Parse one HEIF/AVIF clean-aperture item property.
+#[must_use]
+pub fn parse_clap(clap: &IsoBox<'_>) -> Option<CleanAperture> {
+    let mut r = vaco_bitstream::ByteReader::new(clap.payload);
+    let aperture = CleanAperture {
+        width_n: r.be32(),
+        width_d: r.be32(),
+        height_n: r.be32(),
+        height_d: r.be32(),
+        horizontal_offset_n: i32::from_be_bytes(r.be32().to_be_bytes()),
+        horizontal_offset_d: r.be32(),
+        vertical_offset_n: i32::from_be_bytes(r.be32().to_be_bytes()),
+        vertical_offset_d: r.be32(),
+    };
+    r.check().ok()?;
+    Some(aperture)
+}
+
 /// `ImageGrid` (§6.6.2.3.2): a derived image's own bytes (located via
 /// `iloc` exactly like a coded item's, but holding this small descriptor
 /// instead of compressed data) — the grid's output size and how many tiles
@@ -412,6 +495,63 @@ mod tests {
         let body = [0, 0, 0, 0x40, 0, 0, 0, 0x30];
         let raw = fullbx(b"ispe", 0, 0, &body);
         assert_eq!(parse_ispe(&first_box(&raw)), Some((64, 48)));
+    }
+
+    #[test]
+    fn clap_resolves_exact_integer_edges() {
+        let values = [26u32, 1, 6, 1, 1, 1, 0, 1];
+        let body = values
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect::<Vec<_>>();
+        let raw = bx(b"clap", &body);
+        let aperture = parse_clap(&first_box(&raw)).unwrap();
+        assert_eq!(aperture.integer_crop(30, 8), Some((3, 1, 26, 6)));
+
+        let values = [26u32, 1, 6, 1, u32::MAX, 1, 0, 1];
+        let body = values
+            .iter()
+            .flat_map(|value| value.to_be_bytes())
+            .collect::<Vec<_>>();
+        let negative_offset = parse_clap(&first_box(&bx(b"clap", &body))).unwrap();
+        assert_eq!(negative_offset.integer_crop(30, 8), Some((1, 1, 26, 6)));
+
+        // A half-pixel centre offset is representable when it cancels the
+        // half-pixel introduced by an odd input/output size difference.
+        let half_offset = CleanAperture {
+            width_n: 4,
+            width_d: 1,
+            height_n: 4,
+            height_d: 1,
+            horizontal_offset_n: 1,
+            horizontal_offset_d: 2,
+            vertical_offset_n: 1,
+            vertical_offset_d: 2,
+        };
+        assert_eq!(half_offset.integer_crop(5, 5), Some((1, 1, 4, 4)));
+    }
+
+    #[test]
+    fn clap_refuses_fractional_or_out_of_bounds_edges() {
+        let aperture = CleanAperture {
+            width_n: 4,
+            width_d: 1,
+            height_n: 4,
+            height_d: 1,
+            horizontal_offset_n: 0,
+            horizontal_offset_d: 1,
+            vertical_offset_n: 0,
+            vertical_offset_d: 1,
+        };
+        assert_eq!(aperture.integer_crop(5, 5), None, "half-pixel edge");
+        assert_eq!(aperture.integer_crop(3, 3), None, "aperture exceeds input");
+
+        let fractional_width = CleanAperture {
+            width_n: 7,
+            width_d: 2,
+            ..aperture
+        };
+        assert_eq!(fractional_width.integer_crop(5, 5), None);
     }
 
     /// `ipma` bytes from the same file: one entry, item id 1, four

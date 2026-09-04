@@ -24,6 +24,7 @@ play next.
 | `frag` | `mvex`/`trex`, `moof ▸ traf ▸ tfhd/tfdt/trun`, `sidx`, `mfra ▸ tfra` |
 | `stsd` | sample entries, configuration boxes, the four-character-code tables |
 | `cenc` | Common Encryption (ISO/IEC 23001-7): `pssh`, `schm`/`tenc`, `saiz`/`saio`, `senc` — reports the scheme and key id, decrypts nothing |
+| `heif` | HEIF/AVIF item boxes and derived-image descriptors, including exact `clap` clean-aperture geometry |
 | `esds` | the MPEG-4 descriptor tree and the object type indications |
 | `fixed` | 16.16 / 8.8 / 2.30 fixed point and the 3×3 display matrix |
 | `lang` | the packed ISO-639-2/T language field |
@@ -34,8 +35,9 @@ play next.
 Written from **ISO/IEC 14496-12** (base file format), **14496-14** (MP4),
 **14496-15** (`avcC`/`hvcC` carriage), **14496-1** (`esds`), and Apple's
 published *QuickTime File Format Specification* for the MOV-only sample-entry
-versions. No FFmpeg source was consulted (D7/D15); behavioural facts came from
-running the binary, and each one is recorded below with its command.
+versions, plus **ISO/IEC 23008-12** for HEIF image items and their properties.
+No FFmpeg source was consulted (D7/D15); behavioural facts came from running
+the binary, and each one is recorded below with its command.
 
 ---
 
@@ -752,10 +754,13 @@ Named so the demuxer's author knows what is not here:
   item is a `TileGrid` stream group — see `docs/format/vaco-demux-mp4.md`'s
   *HEIF/AVIF* section for what was measured. `ItemInfo` gained the
   `item_name` (a stream's `title` tag) and `ItemLocation` its
-  `data_reference_index` for that. Still box-layer only here: `iovl`/`iden`
-  derived items, `auxl`/`thmb` reference semantics, `irot`/`imir`/`clap`
-  transformative properties (parsed as ordinary property boxes, not
-  applied).
+  `data_reference_index` for that. `CleanAperture::integer_crop` now parses
+  `clap`'s eight rational fields and resolves the exact integer crop consumed
+  by a tile-grid caller; half-pixel centre offsets are retained when the
+  resulting edges are integral, while zero denominators, fractional edges and
+  out-of-bounds apertures are refused. Still box-layer only here: `iovl`/`iden`
+  derived items, `auxl`/`thmb` reference semantics, and `irot`/`imir`
+  transformative properties.
 * **`cmov`.** zlib-compressed `moov`; plan 18 already tiers it as v0.2.
 * ~~**Box writing.**~~ Done: `writer` (below). `build` still exists separately
   for deliberately-invalid fixtures; `writer` is the validated production path

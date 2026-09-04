@@ -177,11 +177,18 @@ argv ─▶ [cli]      split, validate, bind          (vaco-cli-core, cli.rs)
 a 2×2 grid of 64×64 tiles, byte-identical to the tile decodes placed at the
 group's `tile_*_offset`s. `tilegrid::synthesize` appends the graph a user
 would otherwise write (`[0:0][0:1][0:2][0:3]xstack=inputs=4:grid=2x2,
-crop=W:H:0:0[vaco_tilegrid_0_0]`) to the invocation's `-filter_complex`
+crop=W:H:X:Y[vaco_tilegrid_0_0]`) to the invocation's `-filter_complex`
 list, after the user's own texts so their catalog indices stand, and
 `select::auto_pick` returns that labelled pad for video. Verified through
 the binary on a JPEG-tile HEIF: the output equals the composition of this
-project's own tile decodes byte for byte. Two limits, both the existing
+project's own tile decodes byte for byte. `X`/`Y` are normally zero; when the
+grid item carries a HEIF `clap` clean aperture, the demuxer's validated crop
+flows through the same `TileGrid` fields and this graph applies it after tile
+composition. Measured on a 64×48 one-tile JPEG grid: the property produced a
+1,152-byte 32×24 `yuv420p` frame exactly equal to the `(16,12)` planar crop of
+the 4,608-byte uncropped output. `ffmpeg 9.0.1` accepted that same fixture but
+wrote 4,608 bytes, ignoring the grid property; Vaco follows HEIF §6.5.9 rather
+than reproducing that omission. Two limits, both the existing
 complex-graph ones (CL-25), not new: a per-stream filter *after* the
 composite (`-pix_fmt`, `-vf`, and therefore the auto-conversion a PNG
 encoder needs from `yuvj420p`) is refused with "a further filtergraph on a

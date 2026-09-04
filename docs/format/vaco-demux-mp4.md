@@ -11,9 +11,10 @@ numbers they report, in what order packets come out, and where a seek lands.
 
 Written from **ISO/IEC 14496-12** (base file format), **14496-14** (MP4),
 **14496-15** (`avcC`/`hvcC` carriage), **14496-1** (`esds`), **3GPP TS 26.244**
-(the `udta` asset boxes) and Apple's published *QuickTime File Format
-Specification*. No FFmpeg source was consulted (D7/D15); every behavioural fact
-below was measured by running `ffprobe 8.1` and is recorded with its command.
+(the `udta` asset boxes), **ISO/IEC 23008-12** (HEIF image items), and Apple's
+published *QuickTime File Format Specification*. No FFmpeg source was consulted
+(D7/D15); every behavioural fact below was measured by running `ffprobe 8.1`
+and is recorded with its command.
 
 ---
 
@@ -755,7 +756,12 @@ crate decides what becomes a stream:
   and output size, and the tiles' own `ispe` gives the canvas (`coded_*`)
   and per-tile offsets. A grid whose tile count is not `rows × columns`,
   whose tiles are not streams, or whose output exceeds its canvas produces
-  **no group** rather than a wrong one.
+  **no group** rather than a wrong one. An associated `clap` property is
+  resolved over the grid's reconstructed output using HEIF §6.5.9 and
+  ISOBMFF §12.1.4 centre-offset semantics, then folded into the group's
+  integer `width`/`height` and `horizontal_offset`/`vertical_offset`. A
+  fractional edge or out-of-bounds aperture likewise produces no group, so
+  neither the probe nor the CLI can advertise a crop it cannot perform.
 * One packet per stream, `pts 0 dts 0 duration 1`, keyframe, `pos` at the
   first extent; several `iloc` extents are concatenated. A seek re-arms
   the single frame.
@@ -800,14 +806,23 @@ item path. AV1 items are reported but not decodable in the default build
 (no AV1 decoder is registered), and HEVC's decoder is feature-gated as
 patent-encumbered, so the pixel check uses `jpeg` items.
 
+**Clean aperture reachability (2026-09-04).** A real 64×48 JPEG wrapped in a
+primary 1×1 grid was decoded twice through `vaco`: without `clap` it wrote
+4,608 bytes of `yuv420p`; with a 32×24 centred aperture it wrote 1,152 bytes,
+byte-for-byte equal to the exact `(16,12)` planar crop of the first output.
+`ffmpeg 9.0.1` accepted the same cropped fixture but wrote 4,608 bytes, so that
+version ignores a grid-associated `clap`. Vaco deliberately follows ISO/IEC
+23008-12 §6.5.9 here; the black-box result is recorded as a reference
+divergence, not copied into the demux contract.
+
 ## Deferred
 
 Named so the next author knows what is absent rather than broken:
 
 * ~~**HEIF/AVIF.**~~ Done 2026-09-03 — see *HEIF/AVIF items* below. Still
   absent there, by name: `iovl`/`iden` derived items, `auxl` alpha/depth
-  planes as anything but ordinary streams, `irot`/`imir`/`clap` (parsed as
-  properties, not applied), `construction_method 2`, `dref`-external items,
+  planes as anything but ordinary streams, `irot`/`imir` (parsed as
+  properties, not applied), `clap` on coded items, `construction_method 2`, `dref`-external items,
   and a file that has *both* `moov` tracks and `meta` items (an image
   sequence with a primary still) — the `moov` wins and the items are ignored.
 * **`sidx` for seeking.** Collected (see *`sidx` and `mfra`* above) but not
