@@ -1,5 +1,5 @@
-//! Reconstruction (T3-03c / #445): turning #444's fully-parsed syntax into
-//! actual PCM. Inverse quantisation (§4.6.1), scalefactor application
+//! Reconstruction turns fully parsed AAC syntax into PCM. Inverse quantisation
+//! (§4.6.1), scalefactor application
 //! (§4.6.2.3.3), perceptual noise substitution (§4.6.13.3), TNS application
 //! (via [`crate::tns_apply`]), joint stereo — M/S (§4.6.8.1.3) and intensity
 //! (§4.6.8.2.3) — and finally the IMDCT/windowing/overlap-add filterbank

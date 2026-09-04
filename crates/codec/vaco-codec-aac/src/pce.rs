@@ -200,8 +200,8 @@ pub const ID_SYN_ELE_PCE: u32 = 5;
 /// that follows one or more channel elements (`SCE`/`CPE`/`CCE`/`LFE`) cannot
 /// be found this way, because those elements carry no length prefix of their
 /// own — skipping past one requires actually decoding it (window sequence,
-/// section data, spectral Huffman decode: #444), which this crate does not
-/// yet implement. Real encoders place a stream's PCE first in its very first
+/// section data, and spectral Huffman data), which this probe does not do.
+/// Real encoders place a stream's PCE first in its very first
 /// frame, which is the case this function serves; a nonconforming stream that
 /// puts its PCE later is a disclosed gap, not silently mishandled — the
 /// caller sees `Ok(None)` and can report "channel layout undetermined"

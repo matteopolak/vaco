@@ -3,8 +3,8 @@
 //!
 //! Pulses adjust already-Huffman-decoded quantized coefficients directly —
 //! "restore coefficients" the encoder replaced with smaller-magnitude ones —
-//! before inverse quantisation, so this belongs with spectral decode
-//! (#444's own issue title names "pulse data"), not with reconstruction.
+//! before inverse quantisation, so this belongs with spectral decode rather
+//! than reconstruction.
 //!
 //! "the pulse escape method is illegal for a block whose `window_sequence` is
 //! `EIGHT_SHORT_SEQUENCE`" (§4.6.3.3) — this crate does not enforce that as

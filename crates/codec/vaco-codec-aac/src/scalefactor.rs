@@ -33,8 +33,7 @@
 //! `0.5^(0.25*is_position)`, or a noise energy into an actual generated and
 //! scaled random vector is reconstruction (`4.6.2`'s own "Once the
 //! scalefactors are decoded, the actual values are found via a power
-//! function" — #445's "inverse quantisation"/"joint stereo", not this
-//! crate's "scalefactor decode").
+//! function"), not this module's scalefactor decode.
 
 use vaco_bitstream::BitReader;
 use vaco_core::Result;

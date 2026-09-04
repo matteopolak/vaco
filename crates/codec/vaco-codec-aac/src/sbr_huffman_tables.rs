@@ -20,8 +20,7 @@
 //! Verified, not just transcribed: every table below independently passes
 //! `vaco_codec_vlc::is_prefix_free` and a Kraft-sum completeness check
 //! (`kraft_numerator(entries, max_len) == 1 << max_len`) in this module's
-//! own tests -- the same net #444 held AAC's spectral codebooks to, and
-//! (worth recording) all ten of these passed on the first transcription,
+//! own tests. All ten passed on the first transcription,
 //! unlike the QMF window table in `qmf.rs` whose extraction needed a
 //! symmetry cross-check to catch two flipped signs.
 

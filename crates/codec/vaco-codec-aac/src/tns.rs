@@ -5,12 +5,11 @@
 //!
 //! TNS *application* (`tns_decode_coef`/`tns_ar_filter`, §4.6.9.3 — inverse
 //! quantisation of the filter coefficients into LPC coefficients, then an
-//! all-pole filter over the spectral coefficients) is reconstruction, #445's
-//! "TNS" — not this crate's. This module reads the syntax exactly (every
+//! all-pole filter over the spectral coefficients) belongs to reconstruction,
+//! not this parser. This module reads the syntax exactly (every
 //! field's bit width depends on `window_sequence` and on `coef_res`/
 //! `coef_compress`, so there is no way to *skip* `tns_data()` without
-//! parsing it) and keeps every field, so #445 has exactly what it needs
-//! without re-parsing.
+//! parsing it) and keeps every field for reconstruction without re-parsing.
 
 use vaco_bitstream::BitReader;
 use vaco_core::Result;

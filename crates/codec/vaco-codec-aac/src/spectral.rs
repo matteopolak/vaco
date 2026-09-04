@@ -1,7 +1,7 @@
 //! `spectral_data()` (ISO/IEC 14496-3 subpart 4 Table 4.56) and `pulse_data()`
 //! (Table 4.7) — decoding the actual quantized spectral coefficients
 //! (`x_quant`), and the pulse-escape adjustment §4.6.3.3 applies directly to
-//! them, before inverse quantisation (#445) ever sees them.
+//! them before inverse quantisation.
 //!
 //! # The index-to-n-tuple formula
 //!
@@ -205,8 +205,7 @@ fn runs_for_group(sfb_cb: &[u8], widths: &[u32]) -> Vec<Run> {
 /// zero codebook is not sent as this spectral information is zero." A full
 /// array (rather than only the transmitted, non-zero-codebook coefficients)
 /// is what [`crate::pulse::apply`] needs to index by absolute frequency
-/// line, and is the natural `x_quant[]` shape #445 will want as input
-/// regardless.
+/// line, and is the natural `x_quant[]` input for reconstruction.
 ///
 /// # Errors
 ///

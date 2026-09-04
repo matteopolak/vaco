@@ -1,4 +1,4 @@
-//! The decoder's own configuration layer (T3-03a / #443): unifying whatever
+//! The decoder's configuration layer unifies whatever
 //! `vaco-parse-aac` handed over — an `AdtsHeader` (raw ADTS, no out-of-band
 //! config at all) or an `AudioSpecificConfig` (MP4 `esds`, or LATM/LOAS) —
 //! into one [`DecoderConfig`], resolving the actual channel layout (a table
@@ -9,7 +9,7 @@
 //! # Object-type gating
 //!
 //! This crate implements AAC-LC only. Every other object type —
-//! Main/SSR/LTP, the ER family, HE-AAC/PS's SBR wrapper (#446/#447 territory)
+//! Main/SSR/LTP, the ER family, and HE-AAC/PS's SBR wrapper
 //! — is rejected here, at configuration time, with a specific
 //! [`Error::Unsupported`] rather than silently decoded as if it were LC. That
 //! is the same "gate rather than guess" call this workspace made for
@@ -164,8 +164,8 @@ impl DecoderConfig {
     ///
     /// As [`DecoderConfig::from_adts_header`]. Also rejects a configuration
     /// that signals SBR or Parametric Stereo (`cfg.has_sbr()`, or `cfg.ps`
-    /// anything but absent/unknown) with [`Error::Unsupported`] — that is
-    /// HE-AAC/HE-AACv2 territory, #446/#447, not this crate.
+    /// anything but absent/unknown) with [`Error::Unsupported`] because
+    /// HE-AAC/HE-AACv2 is outside this decoder's scope.
     pub fn from_audio_specific_config(cfg: &AudioSpecificConfig) -> Result<Self> {
         Self::gate_object_type(cfg.object_type)?;
         if cfg.has_sbr() {

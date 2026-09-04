@@ -9,8 +9,8 @@
 //! than parsing further: for `audioObjectType != 1` (AAC Main) — which
 //! includes LC — a `1` here is followed by `ltp_data_present` and possibly
 //! `ltp_data()` (Table 4.6/4.55), a syntax this crate has not transcribed
-//! and would not know what to do with even if it had (LTP/main prediction
-//! is #445's explicit scope, "LTP/main prediction"). Real AAC-LC encoders
+//! and would not know what to do with even if it had. LTP/Main prediction is
+//! outside this decoder's scope. Real AAC-LC encoders
 //! never set this bit — LC has no prediction tool in the first place — so
 //! this is not expected to reject real content; it is a "gate rather than
 //! guess" refusal for the syntactically-legal-but-unverified case, the same
@@ -61,9 +61,8 @@ impl WindowSequence {
 pub(crate) struct IcsInfo {
     pub(crate) window_sequence: WindowSequence,
     /// `window_shape`: `false` = sine (`vaco-codec-dsp-sinewin`'s scope),
-    /// `true` = KBD (unimplemented anywhere in this workspace yet — #445
-    /// must gate on this before applying a window, since this crate's own
-    /// syntax layer has no reason to reject it).
+    /// `true` = KBD. Reconstruction must reject KBD until that window is
+    /// implemented; the syntax layer retains the signal without interpreting it.
     pub(crate) window_shape: bool,
     /// Scalefactor bands transmitted per group (long: per frame; short: per
     /// window group).
