@@ -713,7 +713,8 @@ impl Muxer for AviMuxer {
                 let period_us = 1_000_000i64
                     .saturating_mul(i64::from(v.frame_rate.den))
                     .checked_div(i64::from(v.frame_rate.num));
-                if let Some(ticks) = period_us.and_then(|us| Duration::from_micros(us).to_ticks(GRID_RATE))
+                if let Some(ticks) =
+                    period_us.and_then(|us| Duration::from_micros(us).to_ticks(GRID_RATE))
                 {
                     out.last_video_duration_ticks = ticks;
                 }

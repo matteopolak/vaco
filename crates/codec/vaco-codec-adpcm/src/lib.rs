@@ -436,11 +436,8 @@ impl SendReceive for AdpcmImaQtDecoder {
             }
             Accept::Input => {
                 let Some(pkt) = input else { return Ok(()) };
-                let samples = ima::decode_qt_block(
-                    pkt.payload(),
-                    self.cfg.layout.channels,
-                    &mut self.state,
-                )?;
+                let samples =
+                    ima::decode_qt_block(pkt.payload(), self.cfg.layout.channels, &mut self.state)?;
                 let frame = frame_from_samples(
                     &self.limits,
                     &samples,

@@ -161,7 +161,10 @@ fn read_mov_mdat(bytes: &[u8]) -> Vec<u8> {
     while pos + 8 <= bytes.len() {
         let size = u32::from_be_bytes(bytes[pos..pos + 4].try_into().unwrap()) as usize;
         let typ = &bytes[pos + 4..pos + 8];
-        assert!(size >= 8, "unsupported 64-bit/streaming box size in fixture");
+        assert!(
+            size >= 8,
+            "unsupported 64-bit/streaming box size in fixture"
+        );
         if typ == b"mdat" {
             return bytes[pos + 8..pos + size].to_vec();
         }
@@ -204,10 +207,8 @@ fn ima_wav_decodes_a_real_ffmpeg_stream_bit_exact() {
     assert!(wav.block_align > 0 && wav.data.len().is_multiple_of(wav.block_align as usize));
 
     let layout = ChannelLayout::default_for(wav.channels).unwrap();
-    let mut dec = AdpcmImaWavDecoder::new(Limits::permissive()).with_audio_params(
-        wav.sample_rate,
-        layout,
-    );
+    let mut dec =
+        AdpcmImaWavDecoder::new(Limits::permissive()).with_audio_params(wav.sample_rate, layout);
 
     let mut budget = Budget::new(Limits::permissive());
     let mut decoded = Vec::new();
@@ -235,7 +236,11 @@ fn ima_qt_decodes_a_real_ffmpeg_stream_bit_exact() {
     let reference = s16le(&fixture("ima_qt_mono_ref.raw"));
     // One `ima4` chunk-set is 34 bytes/channel; a real ffmpeg mono `.mov`'s
     // `mdat` is a whole number of them with nothing else interleaved in.
-    assert_eq!(mdat.len() % 34, 0, "mdat is not a whole number of ima4 chunks");
+    assert_eq!(
+        mdat.len() % 34,
+        0,
+        "mdat is not a whole number of ima4 chunks"
+    );
 
     let mut dec = AdpcmImaQtDecoder::new(Limits::permissive());
     let mut budget = Budget::new(Limits::permissive());
@@ -331,8 +336,7 @@ fn swf_adpcm_decodes_a_real_ffmpeg_stream_bit_exact() {
     );
 
     let layout = ChannelLayout::MONO;
-    let mut dec = AdpcmSwfDecoder::new(Limits::permissive())
-        .with_audio_params(11_025, layout);
+    let mut dec = AdpcmSwfDecoder::new(Limits::permissive()).with_audio_params(11_025, layout);
     let mut budget = Budget::new(Limits::permissive());
     let packet = Packet::from_slice(&mut budget, &payload).unwrap();
     dec.send(Some(&packet)).unwrap();

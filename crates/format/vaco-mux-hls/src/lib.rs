@@ -562,8 +562,12 @@ impl HlsMuxer {
         };
         let duration_us = match (seg.time_base, seg.start_dts, self.last_ref_dts) {
             (Some(tb), Some(start), Some(last)) => {
-                let start_us = Timestamp::new(start).to_duration(tb).map_or(0, Duration::as_micros);
-                let last_us = Timestamp::new(last).to_duration(tb).map_or(0, Duration::as_micros);
+                let start_us = Timestamp::new(start)
+                    .to_duration(tb)
+                    .map_or(0, Duration::as_micros);
+                let last_us = Timestamp::new(last)
+                    .to_duration(tb)
+                    .map_or(0, Duration::as_micros);
                 let extra_us = i64::try_from(self.last_ref_duration_us).unwrap_or(i64::MAX);
                 last_us.saturating_add(extra_us).saturating_sub(start_us)
             }
@@ -669,7 +673,10 @@ impl Muxer for HlsMuxer {
             )
             && num > 0
         {
-            self.last_ref_duration_us = 1_000_000u64.saturating_mul(den).checked_div(num).unwrap_or(0);
+            self.last_ref_duration_us = 1_000_000u64
+                .saturating_mul(den)
+                .checked_div(num)
+                .unwrap_or(0);
         }
         if matches!(self.opts.hls_segment_type, HlsSegmentType::Fmp4)
             && let Some(write) = &self.write

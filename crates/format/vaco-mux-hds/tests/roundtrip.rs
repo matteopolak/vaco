@@ -268,8 +268,12 @@ fn a_duration_less_video_stream_still_advances_the_tag_clock() {
     let mut offset = 0usize;
     let mut timestamps = Vec::new();
     while offset < payload.len() {
-        let data_size = u32::from_be_bytes([0, payload[offset + 1], payload[offset + 2], payload[offset + 3]])
-            as usize;
+        let data_size = u32::from_be_bytes([
+            0,
+            payload[offset + 1],
+            payload[offset + 2],
+            payload[offset + 3],
+        ]) as usize;
         let ts_low = u32::from_be_bytes([
             0,
             payload[offset + 4],
