@@ -229,6 +229,25 @@ fn frame_pcm_duration(frame: &Frame, total_i16_samples: usize, channels: u32) ->
         .unwrap_or(Duration::ZERO)
 }
 
+/// Resolve an SWF ADPCM packet's per-channel sample count.
+///
+/// The SWF `ADPCMPACKET` record has a fixed size: one initial sample followed
+/// by 4095 codes. A non-zero packet duration is an explicit container-level
+/// count for a shorter final event-sound packet; zero duration means that no
+/// such count was supplied, so the fixed record size applies.
+fn swf_packet_sample_count(packet: &Packet, sample_rate: u32) -> u32 {
+    let default = swf::SAMPLES_PER_PACKET;
+    let Some(rate) = i32::try_from(sample_rate).ok().filter(|rate| *rate > 0) else {
+        return default;
+    };
+    packet
+        .duration
+        .to_ticks(Rational::new(1, rate))
+        .and_then(|count| u32::try_from(count).ok())
+        .filter(|count| *count > 0 && *count <= default)
+        .unwrap_or(default)
+}
+
 macro_rules! adpcm_config {
     ($name:ident, $default_rate:expr) => {
         #[derive(Debug, Clone)]
@@ -690,10 +709,6 @@ impl SendReceive for AdpcmSwfDecoder {
         }
         Ok(())
     }
-    #[allow(
-        clippy::integer_division,
-        reason = "estimating a sample count from a packed byte length is a deliberate floor division"
-    )]
     fn send(&mut self, input: Option<&Packet>) -> Result<()> {
         match self.machine.accept(input.is_none())? {
             Accept::Drain => {
@@ -703,24 +718,7 @@ impl SendReceive for AdpcmSwfDecoder {
             Accept::Input => {
                 let Some(pkt) = input else { return Ok(()) };
                 let channels = self.cfg.layout.channels.max(1);
-                // Estimate the sample count the block's own bits actually
-                // carry: 2 header bits + per-channel (16+6) header bits, then
-                // `bits` per subsequent sample per channel. The exact `bits`
-                // width lives in the first 2 bits of the block, which
-                // `swf::decode_block` re-reads itself; this estimate only
-                // needs to be an upper bound; `swf::decode_block` stops at
-                // whatever the caller asks for or the data allows.
-                let bits_guess = 4u32; // matches this crate's own encoder's choice
-                let header_bits = 2 + channels * (16 + 6);
-                let payload_bits = (pkt.payload().len() as u32 * 8).saturating_sub(header_bits);
-                // The final byte can carry up to 7 padding bits the encoder
-                // added to reach a byte boundary; subtracting the worst case
-                // before dividing means this estimate can only ever
-                // under-count by one real sample, never over-count one that
-                // was never encoded (over-counting would read padding as a
-                // phantom trailing code).
-                let extra = payload_bits.saturating_sub(7) / (channels * bits_guess).max(1);
-                let sample_count = extra.saturating_add(1);
+                let sample_count = swf_packet_sample_count(pkt, self.cfg.sample_rate);
                 let samples = swf::decode_block(pkt.payload(), channels, sample_count)?;
                 let frame = frame_from_samples(
                     &self.limits,
@@ -1270,22 +1268,51 @@ mod tests {
         let mut enc = AdpcmSwfEncoder::new(Limits::permissive());
         enc.send(Some(&frame_of(&samples, 1))).unwrap();
         let pkt = enc.receive().unwrap();
-        let mut dec = AdpcmSwfDecoder::new(Limits::permissive());
+        let mut dec =
+            AdpcmSwfDecoder::new(Limits::permissive()).with_audio_params(8000, ChannelLayout::MONO);
         dec.send(Some(&pkt)).unwrap();
         let frame = dec.receive().unwrap();
         let (decoded, _) = frame_samples_owned(&frame).unwrap();
-        // SWF's bit-packed block carries no explicit sample count of its own
-        // (see `AdpcmSwfDecoder::send`'s doc comment on this exact point) —
-        // the registry-path decoder estimates it from the packed byte
-        // length, which cannot always distinguish "one more real code" from
-        // "the encoder's own byte-alignment padding", so an off-by-one here
-        // is the documented, expected imprecision rather than a bug.
-        assert!(
-            (decoded.len() as i64 - samples.len() as i64).abs() <= 1,
-            "decoded {} vs encoded {}",
-            decoded.len(),
-            samples.len()
-        );
+        assert_eq!(decoded.len(), samples.len());
+    }
+
+    #[test]
+    fn swf_partial_packets_honor_duration_across_rates_and_channels() {
+        for &(sample_rate, channels, per_channel) in &[
+            (5512u32, 1u32, 1usize),
+            (11025, 1, 24),
+            (22050, 2, 37),
+            (44100, 2, 4095),
+        ] {
+            let mut samples = Vec::new();
+            for n in 0..per_channel {
+                let value = ((n as f64 * 0.31).sin() * 12_000.0) as i16;
+                for channel in 0..channels {
+                    samples.push(if channel == 0 {
+                        value
+                    } else {
+                        value.saturating_neg()
+                    });
+                }
+            }
+            let frame = frame_from_samples(
+                &Limits::permissive(),
+                &samples,
+                channels,
+                sample_rate,
+                vaco_core::Timestamp::new(0),
+            )
+            .unwrap();
+            let mut enc = AdpcmSwfEncoder::new(Limits::permissive())
+                .with_audio_params(ChannelLayout::default_for(channels).unwrap());
+            enc.send(Some(&frame)).unwrap();
+            let packet = enc.receive().unwrap();
+            let mut dec = AdpcmSwfDecoder::new(Limits::permissive())
+                .with_audio_params(sample_rate, ChannelLayout::default_for(channels).unwrap());
+            dec.send(Some(&packet)).unwrap();
+            let decoded = frame_samples_owned(&dec.receive().unwrap()).unwrap().0;
+            assert_eq!(decoded.len(), samples.len());
+        }
     }
 
     #[test]

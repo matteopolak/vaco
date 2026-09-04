@@ -16,6 +16,11 @@ use crate::tables::{
     SWF_INDEX_TABLE_5BIT,
 };
 
+/// Samples represented by one SWF `ADPCMPACKET`: the initial sample plus its
+/// 4095 fixed-width ADPCM codes (SWF File Format Specification v19,
+/// `ADPCMMONOPACKET`/`ADPCMSTEREOPACKET`).
+pub(crate) const SAMPLES_PER_PACKET: u32 = 4096;
+
 /// An MSB-first bit reader over a byte slice.
 struct BitReader<'a> {
     data: &'a [u8],

@@ -34,11 +34,12 @@ codes follow, packed two per byte, consumed round-robin across channels.
 `swf.rs` is an MSB-first bit-packed format (`BitReader`/`BitWriter`): a
 2-bit code-width selector (2/3/4/5-bit codes), then per channel a 16-bit
 initial sample and 6-bit initial step index, then the codes themselves.
-`AdpcmSwfDecoder::send` has to *estimate* how many samples a block holds
-from its byte length, because SWF states this at the container level
-(`SoundStreamHead`/`DefineSound`'s own sample-count field) which this
-codec-level function is never handed — see "Known gaps" below, this is not
-just imprecision, it is a bug with measured evidence.
+The published SWF `ADPCMPACKET` record has one initial sample plus exactly
+4095 codes (per channel), so a duration-less packet decodes to 4096 samples
+per channel. When a caller supplies a non-zero `Packet::duration`, the
+decoder converts it to an explicit count; this preserves a shorter final
+event-sound block whose container-level `SoundSampleCount` trims the encoded
+packet.
 
 ## Bugs found and fixed
 
@@ -46,7 +47,7 @@ just imprecision, it is a bug with measured evidence.
 first real-fixture regression test for these four codecs; before it, each
 had only a self-round-trip test — this crate's own encoder feeding this
 crate's own decoder, which cannot catch either side sharing the same wrong
-assumption. It found two real bugs, both now fixed:
+assumption. It found three real bugs, all now fixed:
 
 - **`adpcm_ima_qt` discarded 7 bits of predictor precision at every chunk
   boundary.** `decode_qt_block` re-derived the running predictor/step index
@@ -76,21 +77,22 @@ assumption. It found two real bugs, both now fixed:
   order, so the self-round-trip test could not catch this either. Fixed by
   reading/writing `iSamp1` first, `iSamp2` second.
 
+- **`adpcm_swf` under-counted full packets.** The byte-length estimator
+  subtracted seven possible padding bits before dividing, turning the
+  2,051-byte mono packet in the real ffmpeg fixture into 4,095 samples.
+  SWF v19 defines that packet as 4,095 codes after its initial sample, so
+  the decoder now emits the required 4,096 samples when no explicit packet
+  duration is present. A non-zero duration remains authoritative for a
+  caller-provided partial count.
+
 ## Known gaps
 
-- **`AdpcmSwfDecoder`'s sample-count estimate is provably ambiguous in the
-  general case**, not merely imprecise. A real fixture (mono, 4-bit codes,
-  2051-byte block) is bit-consistent with *both* 4096 and 4097 samples once
-  the trailing partial byte is accounted for; the byte length alone cannot
-  distinguish them. The current estimator resolves the tie to a third,
-  wrong answer (4095). Separately, black-box probing `ffmpeg`'s own
-  `adpcm_swf` encoder shows it always emits a *fixed* 4096-sample block
-  regardless of input duration/rate/channel count — useful evidence, but
-  not a general `adpcm_swf` rule (a conformant file may legally use any
-  block size, carried in a container field this codec-level API is never
-  given). The real fix is threading a container-supplied sample count
-  through to this decoder, not a magic constant; landed as an `#[ignore]`d
-  regression test with the measured evidence rather than guessed at.
+- **Container wiring for partial event sounds.** SWF's `DefineSound` tag
+  carries the total `SoundSampleCount` separately from its ADPCM packets.
+  The codec honors a non-zero `Packet::duration` when a container passes that
+  count through, but the SWF demuxer must perform that mapping before a
+  shorter final event-sound packet can be trimmed. A duration-less packet is
+  decoded according to the format-defined 4,096-sample packet size.
 
 ## How to change it
 

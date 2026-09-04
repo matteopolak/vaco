@@ -197,6 +197,23 @@ fn read_flv_audio_payload(bytes: &[u8]) -> Vec<u8> {
     panic!("no FLV audio tag found");
 }
 
+fn decode_swf_fixture(
+    container_name: &str,
+    reference_name: &str,
+    sample_rate: u32,
+    channels: u32,
+) -> (Vec<u8>, Vec<i16>, Vec<i16>) {
+    let payload = read_flv_audio_payload(&fixture(container_name));
+    let reference = s16le(&fixture(reference_name));
+    let layout = ChannelLayout::default_for(channels).unwrap();
+    let mut dec = AdpcmSwfDecoder::new(Limits::permissive()).with_audio_params(sample_rate, layout);
+    let mut budget = Budget::new(Limits::permissive());
+    let packet = Packet::from_slice(&mut budget, &payload).unwrap();
+    dec.send(Some(&packet)).unwrap();
+    let decoded = frame_i16(&dec.receive().unwrap());
+    (payload, decoded, reference)
+}
+
 // ------------------------------------------------------------------ IMA-WAV
 
 #[test]
@@ -279,69 +296,32 @@ fn ms_adpcm_decodes_a_real_ffmpeg_stream_bit_exact() {
 
 // ------------------------------------------------------------------- SWF
 
-// `AdpcmSwfDecoder::send`'s sample-count estimate (see its own doc comment)
-// derives a per-block sample count purely from the block's byte length,
-// because the real source of truth -- SWF's own `SoundStreamHead`/
-// `DefineSound` sample count, or an FLV per-tag duration -- is a
-// container-level fact this codec crate is never handed (confirmed: neither
-// `vaco-demux-flv` nor a bare FLV audio tag carries a per-packet sample
-// count or duration today).
-//
-// That estimate is not just imprecise, it is **provably ambiguous** for this
-// real fixture: a mono, 4-bit-code, 2051-byte `adpcm_swf` block is
-// bit-for-bit consistent with *two* different sample counts once the
-// trailing partial byte is accounted for --
-//   M=4096: header(24 bits) + 4095 codes * 4 bits = 16404 bits -> rounds up
-//           to 2051 bytes (4 bits of pure padding).
-//   M=4097: header(24 bits) + 4096 codes * 4 bits = 16408 bits -> exactly
-//           2051 bytes (0 bits of padding).
-// Both byte-length predictions are 2051; the byte length alone cannot tell
-// them apart. `AdpcmSwfDecoder::send`'s current formula (subtracting a
-// worst-case 7 bits of padding before dividing) resolves the tie toward the
-// smaller count *by one too many*, yielding 4095, not either valid
-// candidate: measured on `tests/fixtures/swf_mono.flv`, `ours.len()==4095`
-// vs `ffmpeg==4096` samples (`ffmpeg -c:a adpcm_swf -acodec pcm_s16le -f
-// s16le -fflags +bitexact`).
-//
-// Separately, black-box probing `ffmpeg 9.0.1`'s own `adpcm_swf` encoder
-// (varying input duration from 10 samples to 4097 samples, and varying
-// sample rate 11025/22050/44100 Hz and mono/stereo) shows it always emits a
-// **fixed** block of exactly 4096 samples per channel, zero-padding short
-// input up to that size and starting a second 4096-sample block once input
-// exceeds it -- i.e. ffmpeg's own SWF/FLV muxer does not vary block length
-// with content at all, which is presumably why a real decoder for its own
-// output does not need to derive sample count from the bitstream either.
-// Baking that ffmpeg-specific constant into `AdpcmSwfDecoder` would fix this
-// exact fixture but is not a general `adpcm_swf` decoding rule (a
-// conformant SWF file may legally use any block size, carried in
-// `SoundStreamHead`/`DefineSound`, that this codec-level API is never given
-// today) -- so it is not done here. See the filed issue for the real fix
-// (thread a container-supplied duration/sample-count through to this
-// decoder) and this comment for the measured evidence.
+// SWF v19's ADPCMMONOPACKET contains exactly 4095 codes after its initial
+// sample, and ADPCMSTEREOPACKET contains 4095 codes per channel. Therefore a
+// valid packet always represents 4096 samples per channel; the byte length's
+// trailing padding must not be used to infer a different count. DefineSound's
+// separate SoundSampleCount is the container-level trim for an event sound.
 #[test]
-#[ignore = "AdpcmSwfDecoder::send's byte-length sample-count estimate is \
-            off-by-one on this real ffmpeg fixture (4095 vs ffmpeg's 4096); \
-            see this test's doc comment for the root cause and filed issue"]
 fn swf_adpcm_decodes_a_real_ffmpeg_stream_bit_exact() {
-    let payload = read_flv_audio_payload(&fixture("swf_mono.flv"));
-    let reference = s16le(&fixture("swf_mono_ref.raw"));
+    let (payload, decoded, reference) =
+        decode_swf_fixture("swf_mono.flv", "swf_mono_ref.raw", 11_025, 1);
 
     let bits_field = (payload[0] >> 6) & 0b11;
     assert_eq!(
         bits_field + 2,
         4,
-        "fixture must use 4-bit codes for AdpcmSwfDecoder's sample-count \
-         estimate to be exact; regenerate the fixture if ffmpeg's encoder \
+        "fixture must use 4-bit codes; regenerate it if ffmpeg's encoder \
          choice ever changes"
     );
 
-    let layout = ChannelLayout::MONO;
-    let mut dec = AdpcmSwfDecoder::new(Limits::permissive()).with_audio_params(11_025, layout);
-    let mut budget = Budget::new(Limits::permissive());
-    let packet = Packet::from_slice(&mut budget, &payload).unwrap();
-    dec.send(Some(&packet)).unwrap();
-    let frame = dec.receive().unwrap();
-    let decoded = frame_i16(&frame);
-
     assert_pcm_eq(&decoded, &reference, "adpcm_swf");
+}
+
+#[test]
+fn swf_adpcm_decodes_a_real_ffmpeg_stereo_stream_bit_exact() {
+    let (payload, decoded, reference) =
+        decode_swf_fixture("swf_stereo.flv", "swf_stereo_ref.raw", 11_025, 2);
+    assert_eq!(payload.len(), 4_101, "unexpected stereo ADPCM packet size");
+    assert_eq!((payload[0] >> 6) & 0b11, 2, "fixture must use 4-bit codes");
+    assert_pcm_eq(&decoded, &reference, "adpcm_swf stereo");
 }
