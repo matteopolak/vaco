@@ -1,6 +1,6 @@
 [package]
 name = "vaco-filter-scope"
-description = "T3 measurement/visualisation video filters: histogram family, waveform, vectorscope, oscilloscope, datascope, pixscope (see the crate docs for graphmonitor/agraphmonitor/ciescope's disposition)."
+description = "T3 measurement and visualisation filters: histograms, scopes, and graph monitors."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -13,6 +13,8 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-opts = { path = "../../core/vaco-opts" }
 vaco-frame = { path = "../../model/vaco-frame" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
+vaco-color = { path = "../../model/vaco-color" }
+vaco-limits = { path = "../../core/vaco-limits" }
 vaco-filter-core = { path = "../../filter/vaco-filter-core" }
 vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 
@@ -20,7 +22,6 @@ vaco-filter-graph = { path = "../../filter/vaco-filter-graph" }
 proptest.workspace = true
 vaco-sampfmt = { path = "../../model/vaco-sampfmt" }
 vaco-chlayout = { path = "../../model/vaco-chlayout" }
-vaco-color = { path = "../../model/vaco-color" }
 
 [lints]
 workspace = true

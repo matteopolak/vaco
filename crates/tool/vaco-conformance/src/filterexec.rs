@@ -27,7 +27,7 @@
 //! [1] filter name, e.g. "histogram"
 //! [2] filter args string, e.g. "level_height=50:scale_height=0:components=1"
 //!     (empty string for no args)
-//! [3] input 0's pixel format: "gray8" | "yuv444p" | "gbrp"
+//! [3] input 0's pixel format: "gray8" | "yuv444p" | "gbrp" | "rgb24"
 //! [4] input 0's width
 //! [5] input 0's height
 //! [6] output pixel format
@@ -128,7 +128,7 @@
 //! send more than one frame per source, which is a genuine, separate
 //! extension, not attempted here.
 //!
-//! A *packed* pixel format (`rgba`, `argb` — multiple components
+//! A *packed* pixel format (`rgb24`, `rgba`, `argb`, `rgba64le` — multiple components
 //! interleaved in one plane, not one component per plane) is reachable:
 //! [`plane_size_sum`]/[`fill_planes`]/[`extract_output`] compute every
 //! plane's byte size and row stride through [`PixFmt::plane_layout`] and
@@ -136,8 +136,8 @@
 //! per plane. `PixFmt` already carries everything this needs —
 //! `Component::step`/`offset` per logical channel, `min_stride` deriving
 //! the real per-plane row byte count as `max(step * samples-in-plane)`
-//! over the components that live there — so `rgba`'s single plane with
-//! four `step = 4` components folds out of the same formula that already
+//! over the components that live there — so `rgba64le`'s single plane with
+//! four `step = 8` components folds out of the same formula that already
 //! handled `yuv444p`'s three separate `step = 1` planes; no new plane
 //! math was written; this module only stopped hand-rolling a narrower
 //! version of what the format crate already computed. The remaining
@@ -191,11 +191,13 @@ fn parse_pixfmt(token: &str) -> Result<PixFmt, String> {
         // describes: one plane, four interleaved components, correctly
         // sized by `plane_size_sum`'s `PixFmt::plane_layout` call below.
         "yuva444p" => Ok(PixFmt::Yuva444p),
+        "rgb24" => Ok(PixFmt::Rgb24),
         "rgba" => Ok(PixFmt::Rgba),
         "argb" => Ok(PixFmt::Argb),
+        "rgba64le" => Ok(PixFmt::Rgba64le),
         other => Err(format!(
             "filterexec: pixel format `{other}` is not one of gray8/yuv444p/gbrp/yuva444p/\
-             rgba/argb (see filterexec's own doc for why this list is short)"
+             rgb24/rgba/argb/rgba64le (see filterexec's own doc for why this list is short)"
         )),
     }
 }

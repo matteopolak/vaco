@@ -87,6 +87,20 @@ ctor = "vaco_filter_scope::vectorscope::DESC"
 media = "video"
 
 [[component]]
+kind = "filter"
+name = "oscilloscope"
+long_name = "2D Video Oscilloscope."
+ctor = "vaco_filter_scope::oscilloscope::DESC"
+media = "video"
+
+[[component]]
+kind = "filter"
+name = "ciescope"
+long_name = "Video CIE scope."
+ctor = "vaco_filter_scope::ciescope::DESC"
+media = "video"
+
+[[component]]
 kind = "filter_dispatch"
 name = "vaco-filter-scope"
 ctor = "vaco_filter_scope::ScopeRegistry"

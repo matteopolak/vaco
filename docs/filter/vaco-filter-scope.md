@@ -1,11 +1,10 @@
 # vaco-filter-scope
 
 T3 measurement/visualisation video filters — `planning/16-filters.md` §4.2's
-`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). Ten implemented:
-`histogram`, `waveform`, `datascope`, `thistogram`, `graphmonitor`,
-`agraphmonitor`, `pixscope`, `drawgraph`, `adrawgraph` (the last two via
-GitHub issue #473, FT-4.10 — see `vaco-filter-draw-vf`'s own doc for that
-issue's full scoping), `vectorscope`.
+`vaco-filter-scope` row, GitHub issue #480 ("FT-4.12g"). All twelve names are
+implemented: `histogram`, `waveform`, `datascope`, `thistogram`,
+`graphmonitor`, `agraphmonitor`, `pixscope`, `drawgraph`, `adrawgraph`,
+`vectorscope`, `oscilloscope`, and `ciescope`.
 
 ## Scope reconciliation
 
@@ -21,18 +20,30 @@ exist. Before writing any code, `planning/ASSIGNMENTS.md`, every sibling
 | `scale2ref`, `colorspace`, `colordetect`, `pixdesctest`, `zoompan` | The T1-tier remainder of `vaco-filter-scale`'s row, orphaned by #463 (FT-4.1a)'s narrower scope — a real gap, but not T3 and not ticketed under #480 |
 | `histogram`, `thistogram`, `waveform`, `vectorscope`, `oscilloscope`, `datascope`, `pixscope`, `ciescope`, `graphmonitor`, `agraphmonitor`, `drawgraph`, `adrawgraph` | `planning/16-filters.md`'s `vaco-filter-scope` row — the actual unclaimed T3 remainder, confirmed absent from every `vaco-component.toml` and the generated registry |
 
-This crate implements nine of those twelve (`graphmonitor`/`agraphmonitor`
-and `drawgraph`/`adrawgraph` each count as one pair). The rest are excluded
-or deferred, each for a distinct, specific reason (see below) rather than a
-blanket "out of time".
+This crate implements every name in that row. The rendering claims differ by
+filter: the framecrc table below distinguishes exact data paths from structural
+implementations with explicitly measured residuals.
+
+## Current completion status
+
+`oscilloscope` and `ciescope`, formerly the last two unimplemented names in
+this document's original measurement ledger, now ship. `oscilloscope` keeps
+the measured trace-rounding residual recorded in its module documentation.
+`ciescope` accepts the complete reference option surface, converts packed
+`rgb24` through the selected system's published primaries to XYZ, supports
+xyY/UCS/u'v' projections, renders an analytic CIE 1931 spectral locus and
+optional gamut/white overlays, and emits the reference's `rgba64le` square
+canvas. Its data-cell coordinate and intensity rules are pixel-exact against
+`ffmpeg 9.0.1`; its spectral-locus antialiasing and filled-diagram raster are
+structural, not framecrc-exact. The historical per-filter investigation table
+below predates those two implementations; the module docs and this section are
+the current status.
 
 ## What it is
 
-One module per filter
-(`src/{histogram,waveform,datascope,graphmonitor,pixscope}.rs` —
-`graphmonitor.rs` covers both `graphmonitor` and `agraphmonitor`, since
-the only difference is the input pad's media type), each exposing
-`pub const DESC: FilterDesc` and a crate-private `fn create`, aggregated by
+One module per filter family under `src/` (`graphmonitor.rs` covers both
+`graphmonitor` and `agraphmonitor`; `drawgraph.rs` covers the audio/video
+pair), each exposing `pub const DESC: FilterDesc` and a crate-private `create`, aggregated by
 [`registry::ScopeRegistry`](../../crates/filter/vaco-filter-scope/src/registry.rs)
 — the same shape every other T2/T3 filter crate in this project uses.
 `src/common.rs` carries the small 8-bit-plane helpers this whole filter
@@ -41,8 +52,8 @@ per-crate predicates) — including, as of this pass, the font-blit helpers
 (`draw_glyph`/`draw_text`) `datascope`, `graphmonitor` and `pixscope` all
 need, moved there from `datascope`'s own module when a second consumer
 showed up. `src/font8x8.rs` carries the embedded bitmap font `datascope`,
-`graphmonitor`/`agraphmonitor` and `pixscope` draw text with (and, if
-shipped, `oscilloscope` would too) — see its own doc comment and "The
+`graphmonitor`/`agraphmonitor`, `pixscope`, and `oscilloscope` draw text with
+— see its own doc comment and "The
 bitmap-font hypothesis" section below.
 
 `histogram` and `waveform` are **converters**, not passthrough filters:
@@ -532,23 +543,16 @@ neither carries a fitted-approximation residual any more.
   reference pixel columns, `o` (opacity), and colour-coding — none of
   which can buy back framecrc-exactness the font ceiling already rules
   out, so treat them as polish, not correctness.
-- If you add `oscilloscope`, start from `src/font8x8.rs` — it is already
-  sourced, registered and tested; do not re-derive or re-source a font.
-  Its `st` statistics text is found and read (`"{ch} avg:{avg:.1f}
-  min:{min} max:{max}"`, one line, no zero-padding), but a **larger
-  canvas and several accumulated frames were needed to see it** — a
-  single-frame, `800x600`-scale probe (the size that worked for
-  `pixscope`) showed nothing; `1600x1200` over `10` frames did. The
-  bigger open item is the `sc` scope outline: it is a **dashed, rotated
-  parallelogram**, not a box — `t` rotates it between two extremes
-  through a flat, full-width, single-dashed-line midpoint at the default
-  `t=0.5` (probed by comparing `t=0`/`0.25`/`0.75`/`1` against a flat
-  source with `st=0:g=0`). Reproducing it needs the corner-point formula
-  as a function of `x`/`y`/`s`/`t` and the reference's own dashed-line
-  rasteriser — budget this as a bigger task than `vectorscope`'s per-cell
-  histogram was, not a quick follow-on. The trace geometry itself
-  (`tx`/`ty`/`tw`/`th`, per-component colour, `c`'s bitmask) is still
-  unmeasured on top of that.
+- `ciescope` is implemented in `src/ciescope.rs`. Extend `System` for new
+  primary sets, `CieSpace` for coordinate transforms, and `build_base` for
+  background rendering. Keep input-cell placement in `project_rgb`: black is
+  deliberately projected to the selected system's white point. The cached
+  square canvas is allocated through `vaco-limits`; never replace that with an
+  option-sized `vec!`. Any new raster rule needs an independent reference
+  pixel that separates it from the existing coordinate/intensity formulas.
+- `oscilloscope` is implemented in `src/oscilloscope.rs`; its module docs name
+  the exact geometry and the small trace-rounding residual. Extend its current
+  scan-line sampler and reuse `src/font8x8.rs` for statistics text.
 - `graphmonitor`/`agraphmonitor` are done; `src/graphmonitor.rs` is the
   template for any future filter that needs `FilterContext::
   graph_nodes`/`graph_links` — the `render()` function is a pure,
@@ -573,14 +577,18 @@ neither carries a fitted-approximation residual any more.
 
 ## Configuration
 
-No crate-level configuration, environment variables, or feature flags.
-Runtime configuration is entirely per-filter-instance, via each filter's
-`Opts` (parsed from the filtergraph argument string).
+No crate-level environment variables or feature flags. Runtime configuration
+is entirely per filter instance, via each filter's `Opts` parsed from the
+filtergraph argument string. `ciescope` accepts `system`, `cie`, `gamuts`,
+`size`/`s`, `intensity`/`i`, `contrast`, `corrgamma`, `showwhite`, `gamma`, and
+`fill`; the output is always a square `rgba64le` frame.
 
 ## Dependencies
 
-`vaco-core`, `vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-filter-core`,
-`vaco-filter-graph`. Dev-only: `vaco-sampfmt`, `vaco-chlayout` (both
+`vaco-core`, `vaco-opts`, `vaco-frame`, `vaco-pixfmt`, `vaco-color`,
+`vaco-limits`, `vaco-filter-core`, `vaco-filter-graph`. `vaco-color` supplies
+published primary matrices and `vaco-limits` bounds the option-sized CIE
+canvas allocation. Dev-only: `vaco-sampfmt`, `vaco-chlayout` (both
 already workspace crates), needed by `tests/graphmonitor.rs` to build a
 real audio source node for the `agraphmonitor` end-to-end test. No
 external crate beyond what the workspace already declares; no new

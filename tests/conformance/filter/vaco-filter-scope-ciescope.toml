@@ -1,0 +1,33 @@
+# `ciescope` uses published colour science for its conversion and an analytic
+# CIE matching-function fit for the spectral locus. Black-box probes pin data
+# point coordinates and intensity exactly; the reference's own locus
+# antialiasing/fill raster is not specified and remains a disclosed residual.
+
+schema = 1
+suite  = "filter-vaco-filter-scope-ciescope"
+tool   = "filter"
+tier   = "core"
+owner  = "@filter-scope-owner"
+
+[[media]]
+id       = "rgb24-red-2"
+source   = "generated://rgb24-red-2.raw"
+tags     = ["video"]
+generate = ["-f", "lavfi", "-i", "nullsrc=s=2x2:d=0.04:r=25,geq=r=255:g=0:b=0,format=rgb24",
+            "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo"]
+
+[[axis]]
+name   = "filter"
+values = [
+  { id = "xyy-red", argv = ["{media}", "ciescope", "size=256:system=hdtv:cie=xyy:fill=0:gamuts=0:showwhite=0:intensity=0.001:corrgamma=0", "rgb24", "2", "2", "rgba64le", "256", "256"] },
+  { id = "ucs-red", argv = ["{media}", "ciescope", "s=256:system=rec709:cie=ucs:fill=0:gamuts=0:showwhite=1:i=0.001:corrgamma=0", "rgb24", "2", "2", "rgba64le", "256", "256"] },
+  { id = "luv-gamuts", argv = ["{media}", "ciescope", "s=256:system=uhdtv:cie=luv:fill=1:gamuts=rec709+dcip3:showwhite=1:i=0.01:contrast=0.5:gamma=2.2", "rgb24", "2", "2", "rgba64le", "256", "256"] },
+]
+
+[compare]
+mode             = "behavioural"
+downgrade_reason = "data-cell coordinates and intensity are independently pixel-oracled against ffmpeg 9.0.1, but the reference's spectral-locus antialiasing and interior fill raster are not specified; this suite asserts complete option-path reachability without laundering that known residual into a raw tolerance."
+timeout          = "10s"
+
+[normalise]
+invocation = ["bitexact", "hide-banner"]
