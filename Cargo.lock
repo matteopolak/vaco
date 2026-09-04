@@ -2024,6 +2024,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "vaco-bench"
+version = "0.1.0"
+dependencies = [
+ "divan",
+ "vaco-filter-graph",
+ "vaco-registry",
+]
+
+[[package]]
 name = "vaco-bitstream"
 version = "0.1.0"
 dependencies = [
@@ -3484,7 +3493,6 @@ dependencies = [
  "vaco-filter-core",
  "vaco-filter-graph",
  "vaco-frame",
- "vaco-limits",
  "vaco-opts",
  "vaco-pixfmt",
 ]
@@ -3794,6 +3802,7 @@ dependencies = [
  "vaco-filter-core",
  "vaco-filter-graph",
  "vaco-frame",
+ "vaco-limits",
  "vaco-opts",
  "vaco-pixfmt",
  "vaco-sampfmt",

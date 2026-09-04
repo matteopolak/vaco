@@ -1,0 +1,112 @@
+name: Filter benchmarks
+
+on:
+  pull_request:
+    paths:
+      - "crates/filter/**"
+      - "crates/registry/vaco-registry/**"
+      - "crates/tool/vaco-bench/**"
+      - ".github/workflows/filter-benchmarks.yml"
+      - "Justfile"
+  workflow_dispatch:
+  schedule:
+    - cron: "37 5 * * *"
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTC_WRAPPER: sccache
+  SCCACHE_GHA_ENABLED: "true"
+  VACO_BENCH_MACHINE: github-ubuntu-x64
+
+jobs:
+  pr-smoke:
+    name: registry-complete filter benchmark smoke (advisory)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Exercise every registry-derived Divan case once
+        run: >-
+          CARGO_INCREMENTAL=0 cargo bench -p vaco-bench --bench filters --locked -- --test
+      - run: >-
+          CARGO_INCREMENTAL=0 cargo run --release -p vaco-bench --locked --
+          filter --warmup 0 --samples 3 --target-sample-ns 1000
+          --max-iterations 1 --json filter-bench.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: filter-bench-${{ github.sha }}
+          path: filter-bench.jsonl
+          if-no-files-found: error
+          retention-days: 30
+
+  tracked:
+    name: tracked filter benchmarks (advisory)
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    concurrency:
+      group: filter-benchmark-results
+      cancel-in-progress: false
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { fetch-depth: 0 }
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Assemble prior results
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/vaco-filter-bench
+          if git fetch origin bench-results; then
+            git ls-tree -r --name-only origin/bench-results \
+              results/filter/github-ubuntu-x64 \
+              | sort \
+              | while read -r path; do git show "origin/bench-results:$path"; done \
+              > /tmp/vaco-filter-bench/baseline.jsonl
+          fi
+      - name: Measure and compare like-for-like rows
+        id: measure
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=(filter --warmup 8 --samples 11 --target-sample-ns 100000 --max-iterations 1048576 --json filter-bench.jsonl)
+          if [[ -s /tmp/vaco-filter-bench/baseline.jsonl ]]; then
+            args+=(--baseline /tmp/vaco-filter-bench/baseline.jsonl --fail-under 0.95)
+          fi
+          CARGO_INCREMENTAL=0 cargo run --release -p vaco-bench --locked -- "${args[@]}"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: filter-bench-${{ github.sha }}
+          path: filter-bench.jsonl
+          if-no-files-found: error
+          retention-days: 90
+      - name: Store result history
+        if: always() && steps.measure.outcome == 'success' && hashFiles('filter-bench.jsonl') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          scratch="$(mktemp -d)"
+          store="$scratch/results-tree"
+          if git show-ref --verify --quiet refs/remotes/origin/bench-results; then
+            git worktree add -B bench-results "$store" origin/bench-results
+          else
+            git worktree add --detach --no-checkout "$store"
+            git -C "$store" switch --orphan bench-results
+          fi
+          month="$(date -u +%Y-%m)"
+          destination="$store/results/filter/$VACO_BENCH_MACHINE/$month"
+          mkdir -p "$destination"
+          cp filter-bench.jsonl "$destination/${GITHUB_SHA}.jsonl"
+          git -C "$store" add "results/filter/$VACO_BENCH_MACHINE/$month/${GITHUB_SHA}.jsonl"
+          if git -C "$store" diff --cached --quiet; then
+            exit 0
+          fi
+          git -C "$store" commit -m "bench(filter): record ${GITHUB_SHA}"
+          git -C "$store" push origin HEAD:bench-results

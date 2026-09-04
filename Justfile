@@ -192,6 +192,18 @@ conformance-run case:
 bench filter="":
     cargo bench --workspace {{TD}} -- {{filter}}
 
+# Registry-complete, machine-readable filter construction measurements. The
+# per-crate algorithm microbenchmarks remain `just bench`; this suite supplies
+# one stable tracking row for every enabled filter.
+bench-filter *ARGS:
+    CARGO_INCREMENTAL=0 cargo run --release -p vaco-bench --locked {{TD}} -- filter {{ARGS}}
+
+# D8's recorded 5% policy threshold. Rows without a complete machine/toolchain
+# identity match are reported as incomparable and never fail this command.
+bench-filter-compare baseline *ARGS:
+    CARGO_INCREMENTAL=0 cargo run --release -p vaco-bench --locked {{TD}} -- filter \
+      --baseline "{{baseline}}" --fail-under 0.95 {{ARGS}}
+
 # Verify every SIMD kernel against its scalar reference (plan 12 §5).
 checkasm:
     cargo run --release -p vaco-checkasm {{TD}}
