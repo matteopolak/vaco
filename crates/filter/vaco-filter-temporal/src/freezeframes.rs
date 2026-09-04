@@ -1,8 +1,8 @@
 //! `freezeframes` — replace a run of `source` frames with one frame taken
 //! from a second `replace` input.
 //!
-//! `ffmpeg -h filter=freezeframes`: two video inputs, `#0: source`,
-//! `#1: replace` (measured pad names, not guessed); options `first`,
+//! `ffmpeg -h filter=freezeframes`: two video inputs named `source` and
+//! `replace` (measured pad names); options `first`,
 //! `last` (inclusive 0-based `source` frame index range to replace, both
 //! default `0`), `replace` (which frame of the `replace` input to use,
 //! default `0`).

@@ -1,56 +1,31 @@
-//! `tblend` — blend the current frame (`A`) with the immediately preceding
-//! one (`B`) using a named blend mode, a custom expression, or both, then mix
-//! the result toward `A` by `opacity`.
+//! `tblend` combines the current frame (`A`) with the previous frame (`B`)
+//! through a named mode or custom expression, then mixes toward `A` by
+//! `opacity`.
 //!
-//! # Measured against the reference (ffmpeg 8.1, 2026-08-23), not recalled
+//! The integer formulas were measured with ffmpeg 8.1 using known 1x1 gray
+//! sequences. `all_expr=A` reproduced the current frame and `all_expr=B` the
+//! previous frame. A ten-value probe grid pinned each formula. In particular,
+//! `A=224,B=96` produced `74` for dodge rather than the `73` predicted by a
+//! 255-denominator hypothesis; a 256 denominator fit every dodge and burn
+//! probe, with dodge using ceiling and burn using floor.
 //!
-//! `ffmpeg -h filter=tblend` lists 40 `cN_mode` values, `cN_expr` overrides,
-//! and `cN_opacity`/`all_opacity`. Rather than guess at the (undocumented)
-//! per-mode arithmetic, every formula below was pinned by feeding
-//! `ffmpeg -f rawvideo -pix_fmt gray -s 1x1` sequences of known byte values
-//! through `-vf tblend=all_mode=<mode>` and reading the exact output bytes
-//! back — D17 (measure, don't recall), and legitimately clean-room per D7:
-//! probing a shipped binary's black-box behaviour, never its source.
+//! Implemented modes are `normal`, `average`, `addition`,
+//! `addition128`/`grainmerge`, `subtract`, `multiply`, `multiply128`,
+//! `screen`, `darken`, `lighten`, `difference`,
+//! `difference128`/`grainextract`, `negation`, `exclusion`, `overlay`,
+//! `hardlight`, `dodge`, `burn`, `and`, `or`, `xor`, and `divide`. The two
+//! alias pairs produced identical reference output.
 //!
-//! That established, first, which operand is which: `tblend=all_expr=A`
-//! reproduces the *current* frame and `all_expr=B` the *previous* one, on a
-//! two-frame `[0x32, 0xc8]` stream (`A=0xc8`, `B=0x32`). Then, per mode, a
-//! 10-value probe sequence (`0,255,128,64,192,32,160,96,224,16`, each
-//! consecutive pair a fresh `(A, B)`) pinned the exact integer formula,
-//! including a case (`dodge`/`burn`) where the first hypothesis fit 8 of 9
-//! points and was wrong: `A=224,B=96` measured `74`, not the `73` a
-//! `255`-denominator/`ceil` formula predicts. Solving algebraically from
-//! that one disagreement (per `AGENT-CONSTRAINTS.md`'s "two probes that
-//! disagree are not noise") pointed at a `256` denominator instead, which
-//! then fit all nine points for both filters — `dodge` ceiling its `256`
-//! quotient, `burn` flooring its own.
+//! The remaining modes (`phoenix`, `pinlight`, `reflect`, `softlight`,
+//! `vividlight`, `hardmix`, `glow`, `heat`, `freeze`, `extremity`,
+//! `softdifference`, `geometric`, `harmonic`, `bleach`, `stain`,
+//! `interpolate`, and `hardoverlay`) return
+//! [`vaco_core::Error::Unsupported`] instead of using guessed formulas.
+//! `cN_expr` remains available for custom blends with `A` and `B` bound.
 //!
-//! # Modes implemented (22 of 40 option values)
-//!
-//! `normal`, `average`, `addition`, `addition128`/`grainmerge` (identical,
-//! confirmed same output), `subtract`, `multiply`, `multiply128`, `screen`,
-//! `darken`, `lighten`, `difference`, `difference128`/`grainextract`
-//! (identical), `negation`, `exclusion`, `overlay`, `hardlight`, `dodge`,
-//! `burn`, `and`, `or`, `xor`, `divide`. The remaining 17 (`phoenix`,
-//! `pinlight`, `reflect`, `softlight`, `vividlight`, `hardmix`, `glow`,
-//! `heat`, `freeze`, `extremity`, `softdifference`, `geometric`, `harmonic`,
-//! `bleach`, `stain`, `interpolate`, `hardoverlay`) are accepted as option
-//! values but return [`vaco_core::Error::Unsupported`] at creation — a
-//! documented gap rather than a guessed formula project-wide policy forbids
-//! (`AGENT-CONSTRAINTS.md`: "an oracle you wrote shares your misreading").
-//! `cN_expr` covers arbitrary custom blends in the meantime via `vaco-expr`
-//! with `A`/`B` bound.
-//!
-//! # Independent oracles
-//!
-//! `average(A,B) = (A+B)/2` (integer floor) and `multiply(A,B) =
-//! floor(A*B/255)` are hand-computable closed forms on two known constant
-//! frames — the two the brief calls out by name. Every other formula here is
-//! cross-checked against the probe grid in this module's tests, each
-//! assertion computed independently of this file's implementation (plain
-//! integer arithmetic in the test, not a call back into the function under
-//! test) — see `docs/filter/vaco-filter-temporal.md` for the full probe
-//! transcript.
+//! The tests use independently written integer formulas; they do not call
+//! back into [`Mode::apply`]. See `docs/filter/vaco-filter-temporal.md` for
+//! the full probe transcript.
 
 use vaco_core::{MediaType, Result};
 use vaco_expr::{Bindings, Expr};
@@ -403,9 +378,7 @@ mod tests {
     use super::*;
 
     // Independently derived closed forms, computed with plain integer
-    // arithmetic here rather than by calling `Mode::apply` — an oracle that
-    // shares the implementation under test proves nothing (see
-    // AGENT-CONSTRAINTS.md).
+    // arithmetic rather than by calling `Mode::apply`.
     fn ref_formula(mode: Mode, a: i32, b: i32) -> i32 {
         let clamp = |v: i32| v.clamp(0, 255);
         match mode {

@@ -5,18 +5,12 @@
 //! a fraction-of-full-scale mean-absolute-frame-difference tolerance) and
 //! `d`/`duration` (a time spec, default `2` seconds).
 //!
-//! # Metadata export
-//!
 //! The reference reports freeze events as frame-attached dictionary entries —
 //! `lavfi.freezedetect.freeze_start`, `.freeze_duration`, `.freeze_end` — and
-//! log lines. Now that `vaco_frame::Frame` carries a metadata dictionary
-//! (interface gap 11, closed), this filter writes the same three keys onto
-//! the frame that carries the corresponding event, in the same order the
-//! reference does (`freeze_start` alone on the confirming frame;
+//! log lines. This filter writes those keys onto the corresponding frame in
+//! reference order (`freeze_start` alone on the confirming frame;
 //! `freeze_duration` then `freeze_end`, together, on the frame that breaks
-//! the run). [`Filter::events`] still exists as a plain accessor for tests —
-//! it predates the metadata export and stayed because comparing a `Vec` is
-//! easier in a unit test than parsing tags back out of a `Frame`.
+//! the run). [`Filter::events`] remains as a direct test accessor.
 //!
 //! Value formatting is measured against `ffmpeg 8.1`, not guessed: each value
 //! is seconds since stream start, printed with [`format_lavfi_time`] — six
@@ -29,8 +23,6 @@
 //! to distinguish the two, since they agree whenever the frame spacing
 //! divides evenly into the confirmation point.
 //!
-//! # Algorithm
-//!
 //! [`vaco_filter_vdsp::normalised_sad`] on the luma plane, between each
 //! frame and its predecessor, is this filter's mean-absolute-frame-
 //! difference. A run of consecutive frames all scoring at or below `noise`
@@ -40,15 +32,12 @@
 //! span reaches `duration` seconds it becomes a confirmed freeze event; a
 //! later frame that breaks the run closes it.
 //!
-//! # Independent oracle
-//!
 //! A synthetic stream of `N` byte-identical frames (every `normalised_sad`
 //! along it is exactly `0.0`, at or below any non-negative `noise`) spanning
 //! more than `duration` seconds at the stream's frame rate must produce
 //! exactly one freeze event; a synthetic stream where every frame differs by
-//! more than `noise` (a moving ramp) must produce none — both checked
-//! against [`Filter::events`] directly, not against this filter's own
-//! per-frame decision re-examined a second way.
+//! more than `noise` must produce none. Both are checked through
+//! [`Filter::events`] rather than by reproducing the decision logic.
 
 use vaco_core::{MediaType, Rational, Result, Timestamp};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -383,9 +372,8 @@ mod tests {
     /// indistinguishable at a uniform frame rate, so this test uses an
     /// irregular one on purpose. A run of four frames at pts 0,1,2,3 (last
     /// similar frame at pts 3) is broken by a frame at pts 10: the reference
-    /// (measured on `ffmpeg 8.1`, `planning/AGENT-CONSTRAINTS.md`'s
-    /// `tblend`/256-vs-255 caution taken to heart) reports `end`/`duration`
-    /// from pts 10, not pts 3.
+    /// (measured on `ffmpeg 8.1`) reports `end`/`duration` from pts 10, not
+    /// pts 3.
     #[test]
     fn freeze_end_uses_the_breaking_frame_not_the_last_frozen_one() {
         let tb = Rational::new(1, 1);
@@ -423,9 +411,8 @@ mod tests {
         );
     }
 
-    /// A frame with nothing to report carries no metadata entry at all — not
-    /// an empty one (`AGENT-CONSTRAINTS.md`'s "empty collection at
-    /// construction" trap).
+    /// A frame with nothing to report carries no metadata entry at all, not
+    /// an empty entry.
     #[test]
     fn frames_outside_an_event_carry_no_metadata() {
         let tb = Rational::new(1, 10);

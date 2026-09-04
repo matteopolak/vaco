@@ -1,7 +1,5 @@
 //! `mpdecimate` — drop a frame that is a near-duplicate of the previous one,
-//! judged by 8x8-block SAD against `hi`/`lo`/`frac` thresholds (the shape
-//! `planning/16-filters.md`'s own accounting table documents this filter by:
-//! "8x8-block SAD against `hi`/`lo`/`frac` thresholds").
+//! judged by 8x8-block SAD against `hi`/`lo`/`frac` thresholds.
 //!
 //! `ffmpeg -h filter=mpdecimate`: `max` (run-length cap, positive =
 //! consecutive drops, negative = minimum gap between drops, default `0` =

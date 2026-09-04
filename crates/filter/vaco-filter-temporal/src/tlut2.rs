@@ -5,8 +5,8 @@
 //!
 //! `ffmpeg -h filter=tlut2` and `-h filter=lut2` look alike (`c0..c3`
 //! expressions, default `"x"`) but `lut2` is `srcx`/`srcy` two-*stream*
-//! (`ffmpeg -h filter=lut2`: "Inputs: #0: srcx, #1: srcy") while `tlut2`
-//! declares a single `#0: default` video pad. Feeding a two-frame
+//! (inputs named `srcx` and `srcy`) while `tlut2` declares one `default`
+//! video pad. Feeding a two-frame
 //! single-pixel `gray` stream `[0x32, 0xc8]` through
 //! `tlut2=c0_expr='x'`/`'y'` (ffmpeg 8.1, 2026-08-23) confirmed `x` is the
 //! *current* frame's sample and `y` the *immediately preceding* one — so

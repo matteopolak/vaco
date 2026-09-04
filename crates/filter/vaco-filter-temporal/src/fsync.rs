@@ -3,8 +3,6 @@
 //!
 //! `ffmpeg -h filter=fsync`: one option, `file`/`f` (a path, default `""`).
 //!
-//! # The file format: probed, not confirmed
-//!
 //! `ffmpeg -hide_banner -f lavfi -i testsrc2 -vf fsync=file=<missing>`
 //! fails with `No such file or directory` (ffmpeg 8.1, 2026-08-23) — so the
 //! option genuinely opens and reads the named file — but every line format
@@ -23,8 +21,6 @@
 //! reader. A file that fails to open is a clean [`vaco_core::Error`] at
 //! creation, not a silent passthrough.
 //!
-//! # Algorithm (zero-order hold against an explicit timestamp list)
-//!
 //! Exactly `fps`'s hold/duplicate/drop shape (see
 //! `vaco_filter_video_format::fps`'s module doc for the general pattern),
 //! except the output grid is the file's own timestamp list rather than a
@@ -32,8 +28,6 @@
 //! behind, and on the next arrival it is emitted once for every target
 //! timestamp from the last one produced up to (but not including) the new
 //! frame's own timestamp.
-//!
-//! # Independent oracle
 //!
 //! A target list `[0.0, 0.0, 0.1]` (three targets, the first two
 //! coinciding) against two input frames arriving at `0.0` and `0.1` must
