@@ -25,10 +25,18 @@ frame decodes independently of every other frame, and an over-long input
 specification only defines decode; the encoder's per-slice scale-factor
 search (try all 16, keep the one with lowest squared error) is this crate's
 own design and cannot affect interoperability, since it only ever emits
-spec-conformant slices. **Verified against `ffmpeg 8.1`'s own QOA decoder**:
+spec-conformant slices. **Verified against `ffmpeg`'s own QOA decoder**:
 encoding a tone with this crate and decoding the resulting file with both
 this crate's own decoder and `ffmpeg -i x.qoa` gives byte-identical PCM in
-both the stereo and multi-frame (>5120 samples/channel) cases.
+both the stereo and multi-frame (>5120 samples/channel) cases. That claim
+used to rest entirely on a one-off manual check with nothing committed to
+catch a regression; `tests/oracle_ffmpeg_qoa.rs` now makes it a real,
+committed test: this crate's own encoder produces the frame, real `ffmpeg`
+and this crate's own decoder both read the identical bytes, and the test
+asserts they agree bit-for-bit (QOA decode is fully-specified integer
+arithmetic — two correct decoders reading the same bytes cannot disagree)
+plus checks SNR against the original source so agreement alone can't mask
+both sides being wrong the same way.
 
 **Comfort noise**: RFC 3389 defines the SID payload wire format exactly (a
 noise-level byte plus quantised LPC reflection coefficients) but states

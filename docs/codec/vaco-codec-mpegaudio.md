@@ -28,6 +28,16 @@ numbers below come from calling [`MpegAudioDecoder`] directly (see
 `examples/decode_dump.rs`) against `vaco-demux-mpegaudio`'s packets, then
 diffing the resulting `s16le` PCM against `ffmpeg -f s16le -`.
 
+**`tests/oracle_ffmpeg.rs` is the first committed regression test against
+real audio.** Everything above and below this note was, until now, measured
+once by a scratch script against hand-generated fixtures that were never
+checked in — real bugs were found and fixed this way, but nothing was left
+behind to catch a regression. The committed test covers Layer II (a passing
+128 kbit/s fixture and an `#[ignore]`d 64 kbit/s one, see "Known gaps" for
+the real bug it caught) and Layer III (one passing multitone stereo
+fixture); Layer I still has no fixture (no MP1 encoder is available
+anywhere on this machine).
+
 ## Decode accuracy — measured, not claimed
 
 None of this is bit-exact: decode runs in `f32`, not the ISO reference
@@ -283,6 +293,23 @@ criteria:
   (up to 256), not a decode tree — correct, not fast. Acceptable for a
   first native implementation; flagged rather than silently accepted as
   "done."
+- **Layer II decodes wrong at 56/64/80 kbit/s per channel** (the
+  `LAYER2_TABLE_A` bit-allocation table's selection range at 32000/44100 Hz,
+  `bitalloc.rs::layer2_table`) — found writing `tests/oracle_ffmpeg.rs`: a
+  mono 64 kbit/s fixture correlates only 0.9223 with `ffmpeg`'s decode (RMS
+  error 4879.2 out of 32768, max single-sample diff 15013), uniformly
+  across the whole signal, while the sample *count* matches exactly
+  (16128/16128 — wrong values, not a framing bug). It reproduces identically
+  at 56/64/80 kbit/s and disappears at 96 kbit/s and above (`LAYER2_TABLE_B`)
+  at the same sample rates. The prior conformance pass's 6 Layer II fixtures never
+  varied bitrate independently of sample rate/channel count, so this
+  boundary was never exercised before. Ruled out: `LAYER2_TABLE_A`/`_B` row
+  content is byte-identical where they overlap; the bitrate table and frame-
+  length formula are correct by inspection; the SCFSI pattern table and the
+  granule-major sample loop (the previously-fixed bug, above) are unrelated.
+  Landed as `layer2_mono_64kbps_decodes_a_real_ffmpeg_stream_closely`,
+  `#[ignore]`d with the measured evidence, rather than guessed at from
+  memory of the exact table layout.
 
 ## How to change it
 
