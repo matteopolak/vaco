@@ -287,29 +287,39 @@ than one split, an 8x4/4x8 prediction unit, a scaling list, an I_PCM block or
 a lossless CU. The 46-stream JCT-VC subset in `vaco-corpus`'s
 `vaco-media.lock` (`jctvc` section) contains all of them.
 
-Measured 2026-09-03 on `ffmpeg 9.0.1`, feeding each stream's raw Annex-B
-access units straight to `HevcDecoder` and comparing every byte of every
-plane against `ffmpeg -i <stream>.bin -f rawvideo -pix_fmt yuv420p`:
+Measured 2026-09-03 on `ffmpeg 9.0.1`, partitioning each raw Annex-B stream
+with the production `HevcParser`/`ParserDriver`, feeding those access units to
+`HevcDecoder`, and comparing every byte of every plane against
+`ffmpeg -i <stream>.bin -f rawvideo -pix_fmt yuv420p`:
 
 | result | streams |
 | --- | ---: |
-| byte-exact on every frame | **30** |
+| byte-exact on every frame | **31** |
 | refused by name (`Unsupported`) | 13 |
-| CABAC desync mid-stream | 1 |
+| CABAC desync mid-stream | **0** |
 | wrong pixels at the right length | **0** |
 | wrong frame count | 2 |
 
 Byte-exact: `amp-a`, `amvp-a`, `amvp-b`, `cip-a`, `cip-b`, `confwin-a`,
-`entp-c`, `filler-a`, `ipred-c`, `merge-a`..`merge-e`, `mvclip-a`,
-`mvedge-a`, `picsize-d`, `pmerge-a`, `pmerge-b`, `poc-a`, `ps-b`,
+`entp-c`, `filler-a`, `initqp-a`, `ipred-c`, `merge-a`..`merge-e`,
+`mvclip-a`, `mvedge-a`, `picsize-d`, `pmerge-a`, `pmerge-b`, `poc-a`, `ps-b`,
 `rplm-a` (300 frames), `rps-a`, `rqt-a`, `sao-a`, `sao-g`, `slpplp-a`,
 `struct-a`, `tscl-a`, `vpsid-a`.
 
-The remaining non-refusal failures are:
+An earlier scratch-only raw harness reported that `initqp-a-sony-1`
+desynchronized after 47 of 60 frames. That harness waited for the next first
+VCL NAL before closing an access unit, so it attached the following picture's
+AUD, PPS and prefix SEI to the preceding picture. `HevcDecoder` discovers
+parameter sets across the supplied packet before decoding its slice, which
+made the next picture's varying PPS active one picture early. This harness was
+never committed and is not the raw demux path: the production parser applies
+the non-VCL access-unit boundaries in H.265 §7.4.2.4.4. Through that path,
+all 60 frames and all 8,985,600 output bytes are exact. A sibling scan found
+post-VCL PPS NALs in `cip-a`, `initqp-a`, `nooutprior-a`, `nut-a`, and
+`slist-c`; the corrected full sweep covers all five.
 
-- `initqp-a-sony-1` — desyncs after 47 of 60 frames. Carries 60 PPSs, one
-  per picture, with varying `init_qp_minus26`; every other stream in the
-  subset has exactly one.
+The remaining non-refusal failures are only the frame-count cases:
+
 - `nooutprior-a-qualcomm-1` (50 frames vs 40), `nut-a-ericsson-5` (36 vs
   34) — `no_output_of_prior_pics_flag` / NAL-type-driven DPB flushing.
 
@@ -334,6 +344,13 @@ frame 1. With the specified wrap, all five frames and all 748,800 bytes are
 exact. A crate-wide search found exactly two `mvp + mvd` construction sites,
 the L0 and L1 branches now routed through `Mv::add_mvd`; merge candidates and
 scaled temporal candidates do not perform that addition.
+
+The arithmetic regression is covered without external data by the focused
+`Mv::add_mvd` unit test. A durable end-to-end `MVCLIP_A_qualcomm_3` regression
+would require vendoring its 100,306-byte bitstream or making the crate test
+network-dependent; the corpus conformance case is `tier = "full"` and is not
+available to ordinary offline crate tests. A skip-when-missing test would not
+protect CI, so none is added.
 
 ### Why the `jctvc-conformance` suite measures less than this
 
@@ -360,11 +377,16 @@ VACO_BIN_VACO=<your build> VACO_CORPUS_NETWORK=1 \
 ```
 
 Of those 42, 13 are the honest `Unsupported` refusals above and 23 exit
-183: **21 of them never reach a pixel comparison at all**, dying in
+183. At least **21 of them never reach a pixel comparison at all**, dying in
 `vaco-format-core::time::check_monotonic` ("non-monotonic dts") because the
 pictures the wrap dropped leave `dpb`'s bumping emitting POCs out of order,
-and 2 are the real CABAC desyncs. Only 6 cases get as far as comparing
-bytes. What does hide the result is the tier: the suite is `tier = "full"`,
+while the previous text described the other two as real CABAC desyncs. The
+corrected raw sweep has zero CABAC desyncs, and the committed MP4 harness cannot
+validate that earlier classification: on the current build its lossy
+`initqp-a` wrap writes two frames (299,520 bytes) before failing the
+monotonic-DTS check, while the same raw stream is exact for all 60 frames
+through the production parser. Only 6 cases get as far as comparing bytes.
+What does hide the result is the tier: the suite is `tier = "full"`,
 so CI's `--tier core` job never selects it, and nothing in CI reports these
 42.
 
