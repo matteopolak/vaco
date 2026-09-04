@@ -1,6 +1,18 @@
-# Instruction-count benchmarking
+# Hardware-cycle and instruction-count benchmarking
 
 ## What it is
+
+Two complementary counter-based harnesses answer performance questions without
+mistaking one noisy wall-clock observation for program cost:
+
+- `scripts/perf-hwcycles.py` uses Linux `perf stat` to collect real
+  process-and-child hardware cycles and retired instructions, plus task clock,
+  context switches, CPU migrations, and user/sys/elapsed time. It is the
+  preferred same-session Vaco:ffmpeg comparison when a Linux host exposes its
+  PMU.
+- `scripts/perf-icount.py` uses cachegrind's deterministic simulated instruction
+  count. It remains useful for change A/B, attribution, and loaded machines, but
+  does not model real cycles or SIMD throughput.
 
 A load-immune way to answer *"did this change make the code do less work?"* on a
 machine where wall clock cannot answer it. `scripts/perf-icount.py` runs a
@@ -15,9 +27,47 @@ assigned deliberately:
 
 | # | instrument | answers | needs a quiet machine? |
 |---|---|---|---|
-| 1 | **instruction count** (`perf-icount.py`, cachegrind) | "does this code do less work than it did?" — A/B of a change, CI regression gate, per-function attribution | **no** |
-| 2 | **interleaved wall + CPU vs a same-session ffmpeg** (`perf-baseline-bench.py`) | "are we actually faster than ffmpeg?" — the ground truth, and the only one that can see a threading win | **yes**, and it now says so |
-| 3 | thread occupancy / stall accounting | "is the pipeline saturated?" | not built — see *What this cannot see* |
+| 1 | **hardware cycles** (`perf-hwcycles.py`, Linux perf) | "how many actual CPU cycles did each program consume?" — same-session Vaco:ffmpeg ratio, IPC, and threading-inclusive CPU work | **less than wall time**, but pin comparable cores and inspect migrations |
+| 2 | **instruction count** (`perf-icount.py`, cachegrind) | "does this code do less work than it did?" — A/B of a change, CI regression gate, per-function attribution | **no** |
+| 3 | **interleaved wall + CPU vs a same-session ffmpeg** (`perf-baseline-bench.py`) | "how long does the job take?" — latency/throughput, retained beside counters | **yes**, and it now says so |
+| 4 | **Samply** | "which functions and call paths consume the cycles?" — sampled flame graph and timeline | profiling perturbs the run; do not use it as the ratio |
+| 5 | thread occupancy / stall accounting | "is the pipeline saturated?" | not built — see *What this cannot see* |
+
+Hardware cycles are closer to CPU cost than wall time, but they are not a
+universal constant. Frequency, interrupts, migration, and heterogeneous core
+types can change the count. `perf-hwcycles.py` therefore uses the same
+interleaved/alternating order for Vaco and ffmpeg, requires at least 10 rounds,
+reports every paired ratio, records migrations, and rejects unavailable or
+meaningfully multiplexed counters. It does not convert seconds to cycles.
+
+## Real hardware cycles on Linux
+
+Generate the normal shared workload specification, then select a matched Vaco
+and reference command. Build Vaco before taking the measurement; compilation is
+never included in the counters.
+
+```sh
+VACO_BIN=/private/tmp/vaco-perf-target/dist/vaco \
+VACO_PROBE_BIN=/private/tmp/vaco-perf-target/dist/vaco-probe \
+E2E_DIR=/path/to/e2e \
+  python3 scripts/perf-baseline-gen-spec.py > /private/tmp/vaco-perf-spec.json
+
+python3 scripts/perf-hwcycles.py /private/tmp/vaco-perf-spec.json \
+  --jobs '^h264_decode_sd' --cmds '^(vaco|ffmpeg_t1)$' \
+  --rounds 10 --out /private/tmp/h264-cycles.json
+```
+
+The result stores raw per-round counters, medians/ranges, paired ratios, win
+counts, perf's percentage-running field, and the exact argv. On hybrid x86
+systems perf may emit separate `cpu_core/.../` and `cpu_atom/.../` rows; the
+harness sums them and retains the lowest running percentage. For tight A/B work,
+pin both commands to the same core class in the spec with `taskset` and reject a
+run whose migration counts differ materially.
+
+`perf stat` access is controlled by the host kernel. If it reports permission
+errors, configure `/proc/sys/kernel/perf_event_paranoid` according to local
+policy. Docker Desktop on Apple silicon does not expose a PMU to its Linux VM,
+so neither a privileged container nor a time-derived estimate is a substitute.
 
 ## Why not CPU-seconds
 
@@ -181,6 +231,11 @@ ffmpeg 0.002–0.07%.
   black box (D6/D7): the binary is run, its instruction count is recorded. Its
   source is never read, and its symbol names are not reproduced here.
 
+The cachegrind limitations above do not all apply to `perf-hwcycles.py`: its
+cycle and instruction totals include real SIMD execution, out-of-order effects,
+all child threads, and stalls. It still does not explain *where* those cycles
+went. Use Samply for attribution after the counter ratio identifies a workload.
+
 Two smaller traps, both observed:
 
 - **The count depends on argv and environment.** The same decode invoked with
@@ -195,8 +250,38 @@ Two smaller traps, both observed:
 |---|---|
 | In-process cycle counter (`cntvct_el0`) | Needs inline asm. `unsafe_code = "forbid"` (D2). Not available, and not worth an exception. |
 | `xctrace` / Instruments "CPU Counters" | **Works**, and is the only way to get real PMU data on this host. But the template records *sampled per-core* counters (`kdebug-counters-with-time-sample`), not a process total, so a total means differencing per-core counters across every migration; a record-and-save cycle took minutes of wall time for a 1.4 s workload, and one attempt did not return inside 300 s under load. Cycles are core-type-dependent anyway. Kept as a diagnostic, not as the A/B instrument. |
-| Linux `perf stat` | **Measured, unavailable.** Inside Docker Desktop on Apple silicon, `perf stat -e instructions,cycles` returns `<not supported>` even `--privileged` with `kernel.perf_event_paranoid=-1`: the VM exposes no PMU. Expected to be unavailable on GitHub-hosted runners too. |
+| Linux `perf stat` | **Adopted on real Linux hosts** through `scripts/perf-hwcycles.py`. Inside Docker Desktop on Apple silicon it still returns `<not supported>` even when privileged: that VM exposes no PMU. The harness refuses rather than silently falling back. |
 | `getrusage` / `/usr/bin/time` CPU-seconds | Kept, demoted. Still reported beside wall clock; see *Why not CPU-seconds* for why it is not the load-immune metric. |
+
+## Samply flamegraph workflow
+
+Use the exact command and fixture whose hardware-cycle or instruction ratio is
+bad. A profile is diagnostic, not a benchmark result. The dist binary needs
+debug information preserved in a dSYM on macOS:
+
+```sh
+CARGO_INCREMENTAL=0 cargo build -j 1 --profile dist -p vaco-cli \
+  --features vaco-registry/patent-encumbered-h264-decode \
+  --target-dir /private/tmp/vaco-perf-target
+dsymutil /private/tmp/vaco-perf-target/dist/vaco \
+  -o /private/tmp/vaco-perf-target/vaco.dSYM
+
+samply record --rate 4000 --save-only \
+  -o /private/tmp/h264-vaco.json.gz -- \
+  /private/tmp/vaco-perf-target/dist/vaco -threads 1 \
+  -i /path/to/e2e/h264_sd.mp4 -map 0:v:0 -c:v rawvideo -f null -
+
+python3 scripts/perf-baseline-symbolicate.py \
+  /private/tmp/h264-vaco.json.gz \
+  /private/tmp/vaco-perf-target/vaco.dSYM/Contents/Resources/DWARF/vaco \
+  vaco --top 30 > /private/tmp/h264-vaco-top.json
+samply load /private/tmp/h264-vaco.json.gz
+```
+
+The JSON aggregation is convenient for before/after accounting; `samply load`
+opens the interactive flame graph and thread timeline. Profile Vaco for code
+attribution. The reference binary is measured only as a black box; its source is
+never consulted.
 
 ## How to change it
 
@@ -224,10 +309,13 @@ Two smaller traps, both observed:
 | `ICOUNT_FIXTURES` | `perf-icount-fixtures.sh` | required |
 | `FFMPEG_BIN` | `perf-icount-fixtures.sh` | `ffmpeg` |
 | `VALGRIND_BIN` | `perf-icount.py` | `valgrind` |
+| `PERF_BIN` | `perf-hwcycles.py` | `perf` |
 | `VACO_BIN`, `VACO_PROBE_BIN`, `E2E_DIR` | `perf-baseline-gen-spec.py` | set by the driver |
 
 `perf-icount.py` flags: `--spec`, `--jobs`, `--cmds`, `--repeats`, `--top`,
 `--startup-floor`, `--cache-sim`, `--branch-sim`, `--out`.
+`perf-hwcycles.py` flags: `spec`, `--out`, `--jobs`, `--cmds`, `--rounds`,
+`--warmups`, `--minimum-running-pct`, `--perf`, `--lock-dir`.
 `perf-baseline-bench.py` gained `--max-load` (default: one per core) and
 `--refuse-under-load`; every result now carries a `_load` block recording the
 peak load average and an `unusable_wall_clock` flag, so a later reader cannot
@@ -255,6 +343,9 @@ dependency graph.
   natively on Apple silicon. On a Linux host, skip the driver and call
   `scripts/perf-icount.py` directly.
 - **Valgrind ≥ 3.24** (cachegrind). No macOS/Apple-silicon port exists.
+- **Linux perf** with access to hardware events for real cycle totals. Its
+  `perf-stat(1)` documentation defines the CSV fields the parser consumes.
+- **Samply** for sampling profiles and flame graphs on macOS or Linux.
 - **`ffmpeg` in the image**, as a black-box reference binary only (D6/D7).
 - **`scripts/perf-baseline-gen-spec.py`** for the workload definitions, and
   `scripts/perf-baseline-bench.py` for the wall-clock half of any comparison.

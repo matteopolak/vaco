@@ -152,18 +152,20 @@ vaco-registry/patent-encumbered-h264-decode,vaco-registry/patent-encumbered-hevc
 `target/`. `dsymutil` the binary before profiling. Check disk first
 (`df -h`); an agent has hit ENOSPC here.
 
-**A/B.** `scripts/perf-baseline-bench.py` with a spec naming baseline and
-candidate binaries as two commands of one job: interleaved, alternating start
-order, **≥10 rounds**, report the per-round ratio list, the median ratio, and
-the win count. Add the children's `user+sys` CPU-seconds (`/usr/bin/time -l`
-or `resource.getrusage` in the harness) and report its median ratio beside
-wall clock — it carries far less load noise (E2E-GAPS §21 Stage 1 measured
-wall at ±2% spread and CPU-seconds tighter still under the same load).
+**A/B.** On a Linux host with PMU access, use `scripts/perf-hwcycles.py` with a
+spec naming baseline and candidate binaries as two commands of one job:
+interleaved, alternating start order, **≥10 rounds**, report the per-round cycle
+ratio list, median ratio, instruction ratio, win count, percentage-running, and
+CPU migrations. Pin both commands to the same core class on heterogeneous
+machines. Retain `scripts/perf-baseline-bench.py` wall and `user+sys` figures as
+latency/context, not as substitutes for cycles. On a host without usable PMU
+counters, say so and use `scripts/perf-icount.py` for deterministic work counts;
+never calculate or label a time-derived estimate as cycles.
 
-**Same-session ffmpeg ratio.** Every report of an absolute time also reports
-`ffmpeg -threads 1` on the same fixture, interleaved in the same run. Absolute
-times from another session are not comparable and must not be quoted as a
-regression or an improvement.
+**Same-session ffmpeg ratio.** Every report of an absolute time or hardware
+counter also reports `ffmpeg -threads 1` on the same fixture, interleaved in the
+same run. Counts or times from another session are not comparable and must not
+be quoted as a regression or an improvement.
 
 **Fixtures.** The baseline's generated corpus (fixture table in
 `PERF-BASELINE.md`), regenerated from its recipe if the scratchpad is gone.

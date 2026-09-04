@@ -763,3 +763,20 @@ average around every run, records it in the results JSON with an
 `unusable_wall_clock` flag, and takes `--max-load` / `--refuse-under-load`. That
 guard would have flagged the HEVC SD/720p rows in §1, whose 11x within-job spread
 is called out there by hand.
+
+### Real cycle totals, added 2026-09-04
+
+`scripts/perf-hwcycles.py` adds the external hardware-counter path the first
+instruction-count pass intentionally left open. On a Linux host whose kernel
+exposes the PMU, it collects process-and-child cycles and instructions through
+`perf stat`, interleaved against the same-session ffmpeg command for at least 10
+rounds. It also records task clock, context switches, migrations, user/sys time,
+and perf's percentage-running value; unsupported or meaningfully multiplexed
+hardware events make the sample fail instead of turning into a synthetic number.
+
+This Mac still has no trustworthy process-total cycle interface available to the
+harness. Instruments' CPU Counters template samples per-core counters, and the
+Docker Desktop Linux VM exposes no PMU. Cycle measurements therefore run on real
+Linux hardware; macOS retains cachegrind instruction counts plus interleaved
+wall/CPU context. `docs/instruction-count-benchmarking.md` gives the exact cycle
+and Samply workflows and their limits.
