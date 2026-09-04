@@ -61,7 +61,7 @@
 )]
 
 use std::io::{Read as _, Write as _};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 use vaco_ass::parse as parse_ass;
@@ -91,17 +91,49 @@ Style: Default,Arial,36,&H00FFFFFF,&H00000000,&H00000000,0,1,2,1,2,20,20,20\n\
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n\
 Dialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,Hello ASS World\n";
 
+/// Spawn `cmd`, putting the child in a new process group on unix so a
+/// timeout can later signal every descendant it may have forked, not just
+/// itself. Mirrors `vaco_conformance::run`'s `spawn_grouped` — see
+/// [`kill_group`] for why this matters.
+fn spawn_grouped(cmd: &mut Command) -> std::io::Result<Child> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+    cmd.spawn()
+}
+
+/// Kill `child` and everything in its process group, not just the pid we
+/// spawned directly. A reference binary that forks a helper without
+/// exec-replacing itself (the exact hazard `vaco_conformance::run`'s module
+/// docs record for `dash -c`) would otherwise survive a plain `child.kill()`
+/// and keep the inherited stdout/stderr pipes open forever.
+fn kill_group(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        let pid = child.id();
+        let _ = Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+}
+
 /// Run `bin -filters`, bounded by `PROBE_TIMEOUT`, and report whether the
 /// output lists both `ass` and `subtitles`. Never blocks past the timeout:
 /// a wedged process is killed and treated as "not usable" rather than
 /// hanging the test suite.
 fn probe_ass_capable(bin: &str) -> bool {
-    let Ok(mut child) = Command::new(bin)
-        .arg("-filters")
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-    else {
+    let Ok(mut child) = spawn_grouped(
+        Command::new(bin)
+            .arg("-filters")
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    ) else {
         return false;
     };
     let start = Instant::now();
@@ -121,7 +153,7 @@ fn probe_ass_capable(bin: &str) -> bool {
             }
             Ok(None) => {
                 if start.elapsed() > PROBE_TIMEOUT {
-                    let _ = child.kill();
+                    kill_group(&mut child);
                     let _ = child.wait();
                     eprintln!(
                         "vaco-filter-subtitle ssim test: `{bin} -filters` did not return within {PROBE_TIMEOUT:?} — treating as unavailable"
@@ -157,30 +189,31 @@ fn find_ass_capable_ffmpeg() -> Option<String> {
 /// just this deadlock, not the process being slow). This bit the first
 /// version of this test.
 fn run_reference(bin: &str, script_path: &std::path::Path) -> Result<Vec<u8>, String> {
-    let mut child = Command::new(bin)
-        .args([
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-f",
-            "lavfi",
-            "-i",
-            &format!("color=c=0x404040:s={WIDTH}x{HEIGHT}:d=1"),
-            "-frames:v",
-            "1",
-            "-vf",
-            &format!("ass={}", script_path.display()),
-            "-pix_fmt",
-            "yuv420p",
-            "-f",
-            "rawvideo",
-            "-",
-        ])
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("spawn `{bin}` failed: {e}"))?;
+    let mut child = spawn_grouped(
+        Command::new(bin)
+            .args([
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-f",
+                "lavfi",
+                "-i",
+                &format!("color=c=0x404040:s={WIDTH}x{HEIGHT}:d=1"),
+                "-frames:v",
+                "1",
+                "-vf",
+                &format!("ass={}", script_path.display()),
+                "-pix_fmt",
+                "yuv420p",
+                "-f",
+                "rawvideo",
+                "-",
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .map_err(|e| format!("spawn `{bin}` failed: {e}"))?;
 
     let mut stdout = child.stdout.take().ok_or("no stdout pipe")?;
     let mut stderr = child.stderr.take().ok_or("no stderr pipe")?;
@@ -201,7 +234,7 @@ fn run_reference(bin: &str, script_path: &std::path::Path) -> Result<Vec<u8>, St
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if start.elapsed() > RUN_TIMEOUT {
-                    let _ = child.kill();
+                    kill_group(&mut child);
                     let _ = child.wait();
                     return Err(format!("`{bin}` did not finish within {RUN_TIMEOUT:?}"));
                 }

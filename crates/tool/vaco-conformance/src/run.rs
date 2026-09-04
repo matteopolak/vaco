@@ -33,6 +33,20 @@
 //! cannot fill the disk; the cap is recorded in the observation rather than
 //! silently truncating.
 //!
+//! On a timeout, the child is placed in its own process group (`unix` only;
+//! see [`spawn_grouped`]) and the *whole group* is signalled, not just the
+//! immediate pid. A plain `child.kill()` only reaches the process we spawned
+//! directly. On Linux, `/bin/sh` is `dash`, and `dash -c "sleep 30"` **forks**
+//! `sleep` as a separate process rather than exec-replacing itself with it —
+//! confirmed against an `ubuntu-latest`-equivalent container: killing the
+//! shell's pid left `sleep` running, reparented to init, still holding the
+//! inherited stdout/stderr pipe write-ends open. The reader threads above
+//! then block on those pipes until `sleep` finishes on its own, so `run()`
+//! reports `timed_out: true` but still blocks for the child's full natural
+//! lifetime — the timeout is detected but does not bound wall time. (macOS's
+//! `/bin/sh` exec-replaces a lone last command, which is why this was never
+//! visible there.) Killing the whole process group reaches `sleep` too.
+//!
 //! # How to change it
 //!
 //! Adding an inherited variable weakens hermeticity for every case at once —
@@ -42,7 +56,7 @@
 use std::ffi::OsString;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// How much stdout/stderr to retain per stream before truncating.
@@ -168,7 +182,7 @@ pub fn run(inv: &Invocation) -> io::Result<Observation> {
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
-    let mut child = cmd.spawn()?;
+    let mut child = spawn_grouped(&mut cmd)?;
 
     if !inv.stdin.is_empty()
         && let Some(mut sink) = child.stdin.take()
@@ -193,7 +207,7 @@ pub fn run(inv: &Invocation) -> io::Result<Observation> {
         }
         if started.elapsed() >= inv.timeout {
             timed_out = true;
-            let _ = child.kill();
+            kill_group(&mut child);
             break child.wait().ok();
         }
         std::thread::sleep(Duration::from_millis(2));
@@ -258,6 +272,52 @@ pub fn capture_stdout_bytes(inv: &Invocation) -> Result<Vec<u8>, String> {
         ));
     }
     Ok(obs.stdout)
+}
+
+/// Spawn `cmd`, putting the child in a new process group on unix so a timeout
+/// can later signal every descendant it may have forked, not just itself.
+///
+/// # Errors
+/// Whatever `Command::spawn` returns.
+fn spawn_grouped(cmd: &mut Command) -> io::Result<Child> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        // pgid 0 means "the same as the new child's own pid", i.e. it becomes
+        // the leader of a fresh group rather than joining ours.
+        cmd.process_group(0);
+    }
+    cmd.spawn()
+}
+
+/// Kill `child` and everything in its process group.
+///
+/// A plain `child.kill()` signals only the pid we spawned. On Linux, `dash`
+/// (`/bin/sh`) forks a non-exec'd command like `sleep 30` as a separate
+/// process rather than replacing itself — see the module docs — so the
+/// grandchild survives a `child.kill()` and keeps the inherited stdout/stderr
+/// pipes open, which is what actually caused the hang this exists to avoid:
+/// the timeout fired correctly, but `run()` still blocked until that
+/// grandchild finished on its own.
+fn kill_group(child: &mut Child) {
+    #[cfg(unix)]
+    {
+        // No safe std API sends a signal to an arbitrary (negative, for a
+        // process group) pid without `unsafe` FFI, which this workspace
+        // forbids. Shelling out to `kill` avoids that; it is exactly as
+        // available as the `/bin/sh` this module already depends on to run
+        // anything at all.
+        let pid = child.id();
+        let _ = Command::new("kill")
+            .args(["-KILL", &format!("-{pid}")])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    // Belt and suspenders: reaches the child even if the group-kill above did
+    // not (binary missing, not unix, group already gone).
+    let _ = child.kill();
 }
 
 fn apply_environment(cmd: &mut Command, cwd: Option<&Path>) {
