@@ -459,8 +459,14 @@ fn find_next_header(io: &mut IoContext) -> Result<MpegAudioHeader> {
 /// one byte later rather than accepting the first raw sync match.
 fn measure_free_format_len(io: &mut IoContext, this_header: MpegAudioHeader) -> Result<usize> {
     let mut len = MpegAudioHeader::LEN;
+    let mut terminal_candidate = None;
     loop {
         let peek = io.peek(len.saturating_add(4))?;
+        if peek.len() < len.saturating_add(4) {
+            return terminal_candidate.ok_or(Error::InvalidData(
+                "mpegaudio: free-format frame did not resynchronise",
+            ));
+        }
         let Some(candidate) = peek.get(len..) else {
             return Err(Error::Eof);
         };
@@ -475,7 +481,41 @@ fn measure_free_format_len(io: &mut IoContext, this_header: MpegAudioHeader) -> 
             && next.sample_rate_index == this_header.sample_rate_index
             && next.bitrate_index == this_header.bitrate_index
         {
-            return Ok(len);
+            let base_len = len.saturating_sub(usize::from(this_header.padding));
+            let following_at = len
+                .saturating_add(base_len)
+                .saturating_add(usize::from(next.padding));
+            let following = io.peek(following_at.saturating_add(4))?;
+            if following.len() < following_at.saturating_add(4) {
+                terminal_candidate = Some(len);
+            } else if let Some(following_header) = following
+                .get(following_at..)
+                .and_then(|bytes| bytes.first_chunk::<4>())
+                .and_then(|bytes| MpegAudioHeader::parse(u32::from_be_bytes(*bytes)))
+                && following_header.version == this_header.version
+                && following_header.layer == this_header.layer
+                && following_header.sample_rate_index == this_header.sample_rate_index
+                && following_header.bitrate_index == this_header.bitrate_index
+            {
+                let after_following_at = following_at
+                    .saturating_add(base_len)
+                    .saturating_add(usize::from(following_header.padding));
+                let after_following = io.peek(after_following_at.saturating_add(4))?;
+                if after_following.len() < after_following_at.saturating_add(4)
+                    || after_following
+                        .get(after_following_at..)
+                        .and_then(|bytes| bytes.first_chunk::<4>())
+                        .and_then(|bytes| MpegAudioHeader::parse(u32::from_be_bytes(*bytes)))
+                        .is_some_and(|header| {
+                            header.version == this_header.version
+                                && header.layer == this_header.layer
+                                && header.sample_rate_index == this_header.sample_rate_index
+                                && header.bitrate_index == this_header.bitrate_index
+                        })
+                {
+                    return Ok(len);
+                }
+            }
         }
         len = len.saturating_add(1);
         if len > MAX_RESYNC as usize {
@@ -536,6 +576,30 @@ mod free_format_tests {
             len, 30,
             "must skip the false sync and land on the real next frame"
         );
+    }
+
+    /// Matching the stream parameters alone is still insufficient: a payload
+    /// can contain a complete, matching free-format header by chance. The
+    /// claimed stride must also lead to the following frame boundary.
+    #[test]
+    fn a_matching_false_sync_without_a_continuing_stride_is_not_accepted() {
+        let this_header = free_format_header();
+        let mut data = this_header.to_bytes().to_vec();
+        // A fully matching false header appears before the actual frame
+        // boundary. Its presumed next frame would start at byte 40, where
+        // there is no header.
+        data.resize(20, 0);
+        data.extend_from_slice(&this_header.to_bytes());
+        // Real second and third frame headers establish the 30-byte stride.
+        data.resize(30, 0);
+        data.extend_from_slice(&this_header.to_bytes());
+        data.resize(60, 0);
+        data.extend_from_slice(&this_header.to_bytes());
+
+        let mut io =
+            IoContext::new(Box::new(MemorySource::new(data)), &IoOptions::default()).unwrap();
+        let len = measure_free_format_len(&mut io, this_header).unwrap();
+        assert_eq!(len, 30, "must use the true continuing frame stride");
     }
 
     /// A genuine same-parameters header at the very next 4 bytes is

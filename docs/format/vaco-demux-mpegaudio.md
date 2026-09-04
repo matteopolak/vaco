@@ -62,14 +62,15 @@ free-format stream's length is otherwise constant for its whole duration.
 `measure_free_format_len` fixes this by treating the first sync-looking match
 as a *candidate*, not an answer: it parses a full header at that offset and
 requires `version`/`layer`/`sample_rate_index`/`bitrate_index` to agree with
-the frame being measured before accepting the gap as the real length (a
-free-format stream's frame length can vary by exactly one byte, the padding
-byte, so `padding_bit` is intentionally excluded from the derived base length
-and re-added per frame). Once derived, `Demuxer::free_format_len` caches the
-padding-exclusive base length for the rest of the stream — later frames just
-add `padding_bit` rather than re-scanning, which also means a false sync
-later in the stream can no longer retroactively corrupt an already-derived
-length.
+the frame being measured **and** for the claimed stride to reach the next
+matching header. A final candidate may end at EOF, but a matching byte pattern
+inside payload cannot establish its own continuation. A free-format stream's
+frame length can vary by exactly one byte, the padding byte, so `padding_bit`
+is intentionally excluded from the derived base length and re-added per frame.
+Once derived, `Demuxer::free_format_len` caches the padding-exclusive base
+length for the rest of the stream — later frames just add `padding_bit` rather
+than re-scanning, which also means a false sync later in the stream can no
+longer retroactively corrupt an already-derived length.
 
 Verified against a hand-built fixture (real `ffmpeg` CBR output with every
 frame's `bitrate_index` zeroed except the first, so the true frame length is
