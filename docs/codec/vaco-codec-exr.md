@@ -45,9 +45,14 @@ feature is `codec-exr`.
 ## Verification and known gap
 
 The CLI now identifies and decodes a real ffmpeg-produced EXR after the
-missing codec-id and parser links were added. Crate tests cover safe failure,
-compression choices, protocol behavior, and RGBA-f32 round trips. A direct
-numeric comparison of decoded linear channel values against a reference EXR
-decode has not yet been recorded; do not interpret reachability alone as that
-pixel-level claim. The reported layout also intentionally follows Vaco's
+missing codec-id and parser links were added. On a same-session 12×6
+ffmpeg-produced EXR, both binaries emitted exactly one 1,152-byte RGBA-f32
+frame. Reordering ffmpeg's planar `gbrapf32le` result into packed RGBA and
+comparing all 288 floats gave a maximum absolute difference of
+`0.0004882887` and mean absolute difference of `0.0000732220`; every Vaco
+value was finite. This is bounded by one half-float quantisation step for the
+generated fixture, not a byte-exact result.
+
+Crate tests cover safe failure, compression choices, protocol behavior, and
+RGBA-f32 round trips. The reported layout intentionally follows Vaco's
 `rgbaf32le` output while the reference reports `gbrpf32le`.
