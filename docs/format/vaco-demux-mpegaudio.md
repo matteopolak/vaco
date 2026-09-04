@@ -37,7 +37,9 @@ Measured against a real `ffmpeg -c:a libmp3lame` VBR file: `ffprobe
 prints is the frame *after* it, at `pts=0`. This demuxer reproduces that:
 `read_first_frame_tag` recognises the tag by position (right after the
 Layer III side info, or at [`vaco_format_mpegaudio::vbri::FRAME_OFFSET`]) and
-skips the whole frame before packetising.
+skips the whole frame before packetising. VBRI recognition is explicitly
+limited to Layer III: its four-byte magic can occur in Layer I/II payload, but
+must not turn a real non-MP3 audio frame into metadata.
 
 ### Gapless trim is derived from the LAME tag plus a fixed decoder delay
 

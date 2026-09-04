@@ -310,7 +310,8 @@ fn read_first_frame_tag(
             }));
         }
     }
-    if let Some(region) = peek.get(vbri::FRAME_OFFSET..)
+    if header.layer == Layer::III
+        && let Some(region) = peek.get(vbri::FRAME_OFFSET..)
         && let Some(v) = VbriHeader::parse(region)
     {
         return Ok(Some(FirstFrameTag {
@@ -546,5 +547,97 @@ mod free_format_tests {
             IoContext::new(Box::new(MemorySource::new(data)), &IoOptions::default()).unwrap();
         let len = measure_free_format_len(&mut io, this_header).unwrap();
         assert_eq!(len, 21);
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    reason = "test code"
+)]
+mod vbr_tag_tests {
+    use super::*;
+    use vaco_format_mpegaudio::{ChannelMode, Emphasis, Layer, Version};
+    use vaco_io::MemorySource;
+
+    fn mpeg1_header(layer: Layer) -> MpegAudioHeader {
+        MpegAudioHeader {
+            version: Version::Mpeg1,
+            layer,
+            has_crc: false,
+            bitrate_index: 8,
+            sample_rate_index: 0,
+            padding: false,
+            private_bit: false,
+            channel_mode: ChannelMode::Mono,
+            mode_extension: 0,
+            copyright: false,
+            original: false,
+            emphasis: Emphasis::None,
+        }
+    }
+
+    fn two_frames_with_vbri(header: MpegAudioHeader) -> (Vec<u8>, usize) {
+        let len = header.frame_len().expect("fixed-rate frame length") as usize;
+        let mut data = vec![0; len.saturating_mul(2)];
+        data[..MpegAudioHeader::LEN].copy_from_slice(&header.to_bytes());
+        data[len..len + MpegAudioHeader::LEN].copy_from_slice(&header.to_bytes());
+
+        let vbri = data
+            .get_mut(vbri::FRAME_OFFSET..vbri::FRAME_OFFSET.saturating_add(26))
+            .expect("frame has room for the VBRI prefix");
+        vbri[..4].copy_from_slice(b"VBRI");
+        vbri[4..6].copy_from_slice(&1u16.to_be_bytes());
+        vbri[10..14].copy_from_slice(&(len as u32).to_be_bytes());
+        vbri[14..18].copy_from_slice(&2u32.to_be_bytes());
+        (data, len)
+    }
+
+    /// VBRI is Layer III metadata. An MP2 payload can contain its four-byte
+    /// magic by chance, so it must never make the demuxer discard an MP2
+    /// audio frame as a VBR header.
+    #[test]
+    fn vbri_magic_inside_an_mp2_frame_does_not_discard_audio() {
+        let (data, len) = two_frames_with_vbri(mpeg1_header(Layer::II));
+
+        let mut demux = MpegAudioDemuxer::open(
+            Box::new(MemorySource::new(data)),
+            &FormatOptions::default(),
+        )
+        .expect("MP2 stream opens");
+        let first = demux.read_packet().expect("first MP2 frame is emitted");
+        assert_eq!(first.pos, Some(0));
+        assert_eq!(first.payload().len(), len);
+        let second = demux.read_packet().expect("second MP2 frame is emitted");
+        assert_eq!(second.pos, Some(len as u64));
+        assert_eq!(second.payload().len(), len);
+        assert!(matches!(demux.read_packet(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn vbri_magic_inside_a_layer1_frame_does_not_discard_audio() {
+        let (data, _) = two_frames_with_vbri(mpeg1_header(Layer::I));
+        let mut demux = MpegAudioDemuxer::open(
+            Box::new(MemorySource::new(data)),
+            &FormatOptions::default(),
+        )
+        .expect("Layer I stream opens");
+        let first = demux.read_packet().expect("first Layer I frame is emitted");
+        assert_eq!(first.pos, Some(0));
+    }
+
+    #[test]
+    fn a_vbri_header_in_a_layer3_frame_is_still_skipped() {
+        let (data, len) = two_frames_with_vbri(mpeg1_header(Layer::III));
+        let mut demux = MpegAudioDemuxer::open(
+            Box::new(MemorySource::new(data)),
+            &FormatOptions::default(),
+        )
+        .expect("Layer III stream opens");
+        let first = demux.read_packet().expect("first audio frame is emitted");
+        assert_eq!(first.pos, Some(len as u64));
+        assert!(matches!(demux.read_packet(), Err(Error::Eof)));
     }
 }
