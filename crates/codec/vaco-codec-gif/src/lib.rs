@@ -43,7 +43,8 @@ use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
 /// A [`SendReceive`] decoder over [`Packet`]/[`Frame`]: one GIF packet in,
-/// one or more composited RGBA frames out.
+/// one or more composited BGRA frames out (matching the reference decoder's
+/// own reported `pix_fmt`; see [`codec::decode`]'s doc).
 #[derive(Debug)]
 pub struct GifDecoder {
     machine: Machine<Frame>,

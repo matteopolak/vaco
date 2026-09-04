@@ -1421,3 +1421,10 @@ kind     = "blackbox"
 title    = "Cross-container probe of how ffmpeg/ffprobe 9.0.1 states the duration of the *last* item in a sequence, run while sweeping issue #658's seven muxers for the same defect class `91c15a2b` fixed in MP4 (a final item written with a literal zero or omitted duration instead of its real content span). `ffmpeg -f lavfi -i testsrc=size=64x48:rate=10:duration=2.05 -c:v libx264 -g 10 -force_key_frames expr:gte(t,n_forced*1) -f segment -segment_time 1 -segment_list list.m3u8 out%d.mp4`: the final segment (one trailing 0.1s frame) is listed as `#EXTINF:0.100000,`, matching the segment file's own `ffprobe -show_entries format=duration`, never `0.000000`. Repeated with `ffmpeg -f lavfi -i sine=frequency=1000:duration=2.5 -c:a pcm_s16le -f segment -segment_time 1 -segment_list list.m3u8 out%d.wav`: every listed `#EXTINF`, including the last (`0.479864`), equals that segment's own exact sample-derived duration, confirming the rule is \"real content span\", not \"time to the next cut\". Boxes and lists read directly; no ffmpeg source consulted."
 acquired = "2026-09-03"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffprobe-gif-pixfmt-probe"
+kind     = "blackbox"
+title    = "Observed `ffprobe -show_streams` on a GIF produced by ffmpeg 9.0.1's own gif encoder (`ffmpeg -f lavfi -i testsrc=size=8x6:rate=1:duration=1 -frames:v 1 small.gif`): the stream reports `pix_fmt=bgra`, and `ffmpeg -i small.gif -fps_mode passthrough -pix_fmt bgra -f rawvideo` cross-checked byte-for-byte against the file's own composited canvas confirms the reference decoder's channel order is B,G,R,A, not R,G,B,A. Used to find `vaco-codec-gif`'s decoder emitting raw RGBA bytes onto a canvas its own crate already declared `PixFmt::Bgra` for stream negotiation, a silent red/blue channel swap. Never read: only the produced bytes and pixels, per D6/D17."
+acquired = "2026-09-03"
+where    = "the reference binary installed on the development machine"

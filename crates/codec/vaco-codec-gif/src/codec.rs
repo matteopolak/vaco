@@ -8,7 +8,10 @@ use vaco_frame::{Frame, FrameData, FrameFlags};
 use vaco_limits::Budget;
 use vaco_pixfmt::PixFmt;
 
-/// Composite one already-RGBA GIF subframe onto the canvas at `(x, y)`.
+/// Composite one already-resolved GIF subframe (`src`, in the `gif` crate's
+/// RGBA byte order) onto the canvas at `(x, y)`. The canvas itself is kept
+/// in **BGRA** order — see [`decode`]'s doc for why — so each copied pixel
+/// swaps the R and B bytes.
 ///
 /// GIF has no partial alpha: `gif::ColorOutput::Rgba` already resolved each
 /// pixel to either fully opaque or the transparent index (alpha 0), so
@@ -31,10 +34,10 @@ fn composite(canvas: &mut [u8], canvas_w: u32, x: u32, y: u32, w: u32, h: u32, s
             continue;
         };
         for (dp, sp) in dst_row.chunks_exact_mut(4).zip(src_row.chunks_exact(4)) {
-            if let &[.., a] = sp
+            if let &[r, g, b, a] = sp
                 && a != 0
             {
-                dp.copy_from_slice(sp);
+                dp.copy_from_slice(&[b, g, r, a]);
             }
         }
     }
@@ -42,11 +45,16 @@ fn composite(canvas: &mut [u8], canvas_w: u32, x: u32, y: u32, w: u32, h: u32, s
 
 /// Decode one GIF packet into every composited frame it carries.
 ///
-/// Each frame is decoded already resolved to RGBA (`gif::ColorOutput::Rgba`)
-/// and composited onto a shared canvas at its own declared position, per its
-/// own disposal method — the reference decoder's pipeline does this
-/// compositing itself rather than the `gif` crate, and this reproduces that
-/// (plan 15 §4A.2's GIF risk note).
+/// Each frame is decoded already resolved to RGBA (`gif::ColorOutput::Rgba`),
+/// byte-swapped to **BGRA** and composited onto a shared canvas at its own
+/// declared position, per its own disposal method — the reference decoder's
+/// pipeline does this compositing itself rather than the `gif` crate, and
+/// this reproduces that (plan 15 §4A.2's GIF risk note). BGRA, not RGBA, is
+/// the emitted [`PixFmt`]: measured on a `libavcodec`-encoded GIF,
+/// `ffprobe`/`-pix_fmt` reports `bgra` regardless of source transparency
+/// (`vaco-parse-image`'s `gif::Gif` parser states the same constant), and a
+/// decoder whose frames disagree with its own format probe fails stream
+/// negotiation before a single pixel reaches a filter or muxer.
 ///
 /// # Errors
 ///
@@ -89,7 +97,7 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         }
         composite(&mut canvas, canvas_w, x, y, w, h, &frame.buffer);
 
-        let mut out_frame = Frame::alloc_video(budget, PixFmt::Rgba, canvas_w, canvas_h)?;
+        let mut out_frame = Frame::alloc_video(budget, PixFmt::Bgra, canvas_w, canvas_h)?;
         for mut plane in out_frame.planes_mut() {
             for row in 0..plane.rows() {
                 let src_start = row * canvas_w as usize * 4;
