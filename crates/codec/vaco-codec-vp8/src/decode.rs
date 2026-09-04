@@ -2,48 +2,22 @@
 //! reconstruction and the loop filter, tied together into a
 //! [`vaco_codec_core::Decoder`].
 //!
-//! # Two "known-unverified" pieces, now checked (issue #301)
+//! # RFC-defined details
 //!
-//! Two details RFC 6386's narrative prose leaves to "the reference decoder"
-//! were previously implemented from a widely-documented convention rather
-//! than a primary-text citation. Both are now checked line-by-line against
-//! RFC 6386's own reference-decoder appendix (§20.6 `dixie_loopfilter.c` and
-//! §20.13's `calculate_chroma_splitmv`/the non-split chroma shortcut in
-//! §20.14's `predict_inter_emulated_edge` — Tier A, part of the RFC itself,
-//! not a third-party implementation) and confirmed correct:
+//! [`mode_delta_index`] follows RFC 6386 §20.6: `B_PRED`, `ZEROMV`, other
+//! inter modes, and `SPLITMV` use indices 0 through 3 respectively, while
+//! other intra modes have no mode delta. [`round_div8`] follows §20.13 and
+//! §20.14: sum four luma subblock components and divide by eight with
+//! symmetric rounding. Internal-edge filtering depends on decoded non-zero
+//! coefficients, not merely the coded `mb_skip_coeff` flag; [`MbInfo::any_coeff`]
+//! records that distinction as required by §20.6.
 //!
-//! 1. The loop-filter *mode* delta index (0 = `B_PRED`, 1 = `ZEROMV`, 2 =
-//!    other inter modes, 3 = `SPLITMV`, no delta for other intra modes) —
-//!    [`mode_delta_index`] — matches §20.6's `calculate_filter_parameters`
-//!    exactly.
-//! 2. Chroma motion-vector rounding — [`round_div8`] — summing four luma
-//!    subblock components and dividing by 8 with this crate's symmetric
-//!    round is algebraically identical to §20.14's whole-block shortcut
-//!    (divide the single luma MV by 2, same rounding), and matches
-//!    §20.13's `calculate_chroma_splitmv` exactly for the split case.
-//!
-//! A **real bug** turned up during the same check, in a third place the
-//! loop filter reads: whether to skip the four *internal* subblock edges.
-//! §20.6's own comment on the equivalent test warns "this conditional is
-//! actually dependent on the number of coefficients decoded, not the skip
-//! flag as coded in the bitstream" — this crate had used exactly that skip
-//! flag ([`MbInfo`]'s now-removed `skip_coeff` reuse in [`apply_loop_filter`]),
-//! which is wrong whenever `mb_skip_coeff` is clear but every decoded block
-//! still happens to carry zero coefficients. Fixed by tracking
-//! [`MbInfo::any_coeff`] from the actual decoded token results
-//! ([`any_nonzero_coeff`]) instead.
-//!
-//! # Conformance (issue #301)
+//! # Conformance
 //!
 //! `tests/conformance.rs` decodes real `webmproject/vp8-test-vectors` files
-//! and diffs Y, U and V **separately** against `ffmpeg`'s own decode of the
-//! same file. 58 of the 60 official vectors (a curated 10-vector subset is
-//! committed under `tests/fixtures/vp8/`) are **byte-exact** on every plane
-//! after the fix above. The remaining 2 use a non-zero RFC 6386 §9.1
-//! display-rescale code this crate does not implement — a real, scoped-out
-//! feature gap, not a reconstruction defect (see that test file's module
-//! doc for how the two were told apart from real bugs, including an
-//! `ffmpeg` default-vsync frame-duplication trap in the harness itself).
+//! and compares Y, U and V separately against the reference decoder. Of the
+//! 60 official vectors, 58 are byte-exact on every plane. The other two use
+//! the unsupported non-zero display-rescale code from RFC 6386 §9.1.
 
 use vaco_codec_core::CodecId;
 use vaco_codec_core::machine::{Accept, Machine};
@@ -131,10 +105,8 @@ pub(crate) fn gather_left<const N: usize>(plane: &Plane, x: i32, y: i32) -> [u8;
 /// Everything about one already-decoded macroblock that a later macroblock
 /// (mode context, motion-vector prediction, the loop filter) needs to know.
 ///
-/// `pub(crate)` (issue #301): [`crate::frame_task`] reads `filter_level`,
-/// `has_y2` and `any_coeff` to drive the loop filter on its own copy of this
-/// frame's macroblock grid, once reconstruction has moved off the serial
-/// parse stage and onto a worker thread.
+/// [`crate::frame_task`] reads `filter_level`, `has_y2` and `any_coeff` to
+/// filter its own copy of the frame's macroblock grid after serial parsing.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct MbInfo {
     pub(crate) ref_frame: u8,     // 0 = intra
@@ -142,17 +114,9 @@ pub(crate) struct MbInfo {
     pub(crate) sub_mvs: [Mv; 16], // eighth-pel per-subblock MV (all equal to `mv` unless SPLITMV)
     pub(crate) is_splitmv: bool,
     pub(crate) has_y2: bool,
-    /// Whether *any* Y1/Y2/U/V block actually decoded a non-zero
-    /// coefficient. RFC 6386 §15.1's own reference decoder (`dixie`,
-    /// §20.6) flags that its loop-filter skip test "is actually dependent
-    /// on the number of coefficients decoded, not the skip flag as coded
-    /// in the bitstream" — `eob_mask` there is set from each block's
-    /// decoded end-of-block count, not from `mb_skip_coeff`. The two agree
-    /// whenever `mb_skip_coeff` is set (no tokens are even read), but a
-    /// macroblock can have `mb_skip_coeff` clear and still decode every
-    /// block to all-zero, in which case the reference still skips the
-    /// internal-edge filter and this field is what lets [`crate::decode`]
-    /// match that.
+    /// Whether any Y1/Y2/U/V block decoded a non-zero coefficient.
+    /// RFC 6386 §20.6 bases internal-edge filtering on decoded coefficient
+    /// counts, which can be zero even when `mb_skip_coeff` is clear.
     pub(crate) any_coeff: bool,
     pub(crate) filter_level: i32,
 }
@@ -172,8 +136,8 @@ impl Default for MbInfo {
 }
 
 /// One already-token-decoded macroblock, ready for prediction and the
-/// inverse transform — the record that crosses the split/task boundary
-/// (issue #301). Everything in here comes from the bitstream and the
+/// inverse transform across the split/task boundary. Everything here comes
+/// from the bitstream and the
 /// bool-decoder-driven mode/motion-vector context of *this frame's own*
 /// earlier macroblocks; nothing in it depends on any macroblock's
 /// reconstructed pixels, which is what lets every macroblock's tokens be
@@ -247,11 +211,8 @@ struct FrameCtx<'a> {
     mb_cols: usize,
     mb_rows: usize,
     mbs: Vec<MbInfo>,
-    /// Every macroblock's decoded mode/motion/residual (issue #301),
-    /// populated in raster order alongside `mbs`. This struct carries no
-    /// pixel planes at all: parsing needs none (see [`split_frame`]'s doc),
-    /// and reconstruction reads this field instead, from
-    /// [`crate::frame_task::Vp8FrameTask`].
+    /// Decoded mode, motion and residual records, populated in raster order
+    /// for later reconstruction by [`crate::frame_task::Vp8FrameTask`].
     parsed: Vec<ParsedMb>,
     segment_map: &'a mut Vec<u8>,
     // Coefficient "has non-zero" context: above row (one slot per MB
@@ -296,7 +257,7 @@ impl FrameCtx<'_> {
 }
 
 /// Read one macroblock's segment id, skip flag, mode-and-motion record and
-/// residual tokens, storing the result into `ctx.parsed` (issue #301).
+/// residual tokens, storing the result into `ctx.parsed`.
 ///
 /// This is the *parse* half only: it decodes everything the bitstream and
 /// this frame's own already-parsed macroblocks can determine, and touches no
@@ -602,7 +563,6 @@ fn store_mb(
     }
 }
 
-/// Store one macroblock's parse result at its raster position (issue #301).
 fn store_parsed(ctx: &mut FrameCtx<'_>, col: usize, row: usize, parsed: ParsedMb) {
     let idx = row * ctx.mb_cols + col;
     if let Some(slot) = ctx.parsed.get_mut(idx) {
@@ -641,8 +601,8 @@ fn macroblock_filter_level(ctx: &FrameCtx<'_>, segment_id: u8, ref_frame: u8, mo
 }
 
 #[allow(clippy::too_many_arguments)]
-/// The parse half of an intra macroblock (issue #301): mode and residual
-/// tokens only, no pixels. See [`apply_intra`] for the reconstruction half.
+/// Parses an intra macroblock's mode and residual tokens without producing
+/// pixels. See [`apply_intra`] for reconstruction.
 fn parse_intra(
     ctx: &mut FrameCtx<'_>,
     entropy: &EntropyContext,
@@ -670,9 +630,7 @@ fn parse_intra(
     }
 }
 
-/// The reconstruction half of an intra macroblock (issue #301): everything
-/// [`parse_intra`] used to do after its own residual decode, driven by the
-/// already-parsed record instead. Runs on
+/// Reconstructs an intra macroblock from its parsed record on
 /// [`crate::frame_task::Vp8FrameTask`]'s own copy of this frame's planes.
 pub(crate) fn apply_intra(
     y: &mut Plane,
@@ -1123,9 +1081,8 @@ fn decode_residuals(
     (y_blocks, y2_block, u_blocks, v_blocks)
 }
 
-/// The parse half of an inter macroblock (issue #301): mode/motion and
-/// residual tokens only, no reference-picture reads. See [`apply_inter`] for
-/// the reconstruction half.
+/// Parses an inter macroblock's mode, motion and residual tokens without
+/// reading reference pictures. See [`apply_inter`] for reconstruction.
 #[allow(clippy::too_many_arguments, reason = "one macroblock's worth of state")]
 fn parse_inter(
     ctx: &mut FrameCtx<'_>,
@@ -1156,12 +1113,9 @@ fn parse_inter(
     }
 }
 
-/// The reconstruction half of an inter macroblock (issue #301): motion
-/// compensation and the inverse transform, driven by the already-parsed
-/// record instead of decoding it here. `refp` is `None` exactly when the
-/// original code's `refs.get(ref_frame)` would have been — a reference slot
-/// that was never populated — in which case this leaves the macroblock's
-/// pixels at their initial value, matching that behaviour exactly. Runs on
+/// Applies motion compensation and the inverse transform from a parsed inter
+/// record. An absent reference slot leaves the macroblock's pixels at their
+/// initial value. Reconstruction runs on
 /// [`crate::frame_task::Vp8FrameTask`]'s own copy of this frame's planes,
 /// against a reference already materialised by
 /// [`crate::framebuf::materialize`].
@@ -1311,11 +1265,8 @@ pub(crate) fn mc_block<const W: usize, const H: usize>(
 /// whole frame to [`loopfilter::apply_frame`] — the shared implementation
 /// [`crate::encode`] also drives, so a decoded reference frame and an
 /// encoded one that reconstructs the same macroblocks are filtered
-/// identically.
-/// The loop filter, driven by the `MbInfo` grid the serial parse stage
-/// already built rather than by `FrameCtx` (issue #301) — called from
-/// [`crate::frame_task::Vp8FrameTask::run`], on its own copy of this frame's
-/// planes, after every macroblock has been reconstructed.
+/// identically. [`crate::frame_task::Vp8FrameTask::run`] calls this with the
+/// serial parser's `MbInfo` grid after reconstructing every macroblock.
 pub(crate) fn apply_loop_filter_task(
     y: &mut Plane,
     u: &mut Plane,
@@ -1406,7 +1357,7 @@ fn split_token_partitions(residual: &[u8], num_partitions: usize) -> Vec<&[u8]> 
     out
 }
 
-/// The serial half of frame decode (issue #301).
+/// The serial half of frame decode.
 ///
 /// Parses the frame tag and header, decodes every macroblock's
 /// mode/motion/residual tokens, and resolves every reference-frame and
@@ -1618,7 +1569,7 @@ struct InFlight {
 
 /// VP8 decoder, RFC 6386.
 ///
-/// # Threading (issue #301)
+/// # Threading
 ///
 /// `-threads N` overlaps one frame's reconstruction and loop filter (RFC
 /// 6386 §14/§15 — everything after this frame's own tokens are known) with
@@ -1646,12 +1597,8 @@ impl Vp8Decoder {
     #[must_use]
     pub fn new(limits: Limits) -> Self {
         Self {
-            // `Caps::DELAY` (issue #301): `-threads N > 1` can hold up to
-            // `N` pictures in flight, so a picture accepted several packets
-            // ago may only become available during the end-of-stream drain
-            // — `Machine::emit`'s own debug assertion requires this flag be
-            // declared whenever that can happen, mirroring
-            // `vaco_codec_h264::H264Decoder`'s identical precedent.
+            // Multiple threads can retain pictures until end-of-stream drain;
+            // `Machine::emit` requires `DELAY` whenever that can happen.
             machine: Machine::new(vaco_codec_core::Caps::DELAY),
             budget: Budget::new(limits.clone()),
             limits,
