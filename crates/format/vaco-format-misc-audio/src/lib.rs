@@ -9,6 +9,7 @@
 
 pub mod adx;
 pub mod amr;
+pub mod bfstm;
 pub mod block;
 pub mod brstm;
 pub mod g723;

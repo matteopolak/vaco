@@ -1521,6 +1521,27 @@ acquired = "2026-09-04"
 where    = "the reference binaries installed on the development machine"
 
 [[source]]
+id       = "mk8-bfstm-format"
+kind     = "spec"
+title    = "Custom Mario Kart 8 Wiki, BFSTM (File Format): complete byte-level FSTM header, INFO stream/channel tables, SEEK histories, DATA blocks, reference bases, encoding ids, and the per-channel block-size formula"
+acquired = "2026-09-04"
+where    = "https://mk8.tockdom.com/wiki/BFSTM"
+
+[[source]]
+id       = "3dbrew-bcstm-format"
+kind     = "spec"
+title    = "3dbrew, BCSTM: independent CSTM header, endianness, INFO/SEEK/DATA, DSP-ADPCM and IMA channel records, and reference-type layout"
+acquired = "2026-09-04"
+where    = "https://www.3dbrew.org/wiki/BCSTM"
+
+[[source]]
+id       = "vaco-format-misc-audio-bfstm-fixtures-probe"
+kind     = "blackbox"
+title    = "ffmpeg/ffprobe 9.0.1 measured against public-layout hand-built BFSTM/BCSTM fixtures: FSTM and CSTM accepted in both byte orders; stereo DSP-ADPCM blocks of 16/32/64/96/256 bytes and full/half final blocks produce one packet per block with file-endian raw-byte/sample counts, 64 coefficient bytes, 8 SEEK-history bytes, and unpadded per-channel payload; the committed 512-byte fixture reports one 32000 Hz stereo stream, time_base 1/32000, duration_ts 84, and packets (pts,duration,size) (0,56,144) and (56,28,112)"
+acquired = "2026-09-04"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
 id       = "ffprobe-cdg-duration-probe"
 kind     = "blackbox"
 title    = "Observed forced-format ffprobe 9.0.1 on the committed 24-byte one-packet CD+Graphics fixture: video time_base=1/300, duration_ts=1, duration=0.003333, nb_frames=N/A, nb_read_packets=1, and format duration=0.003333. The reference has no CDG muxer, so the fixture uses the public 24-byte packet layout and a command byte whose low six bits equal 0x09, then treats the reference demuxer's reported native clock/count as the oracle."

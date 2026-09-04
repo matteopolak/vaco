@@ -1,6 +1,6 @@
 [package]
 name = "vaco-format-misc-audio"
-description = "legacy compressed-audio containers, including a measured stereo DSP-ADPCM BRSTM subset: demux only."
+description = "legacy compressed-audio containers, including measured stereo DSP-ADPCM BFSTM/BCSTM and BRSTM subsets: demux only."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

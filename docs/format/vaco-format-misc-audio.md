@@ -4,8 +4,8 @@ Layer 4. Demux-only: `wv`, `tta`, `amr`/`amrnb`/`amrwb`, `adx`,
 `nistsphere`, `pvf`, `g723_1`, `sbc`, the headerless ITU-T/3GPP2
 speech-codec tail (`gsm`, `sln`, `dfpwm`, `g722`, `g726`, `g726le`, `g728`,
 `g729`, `aptx`, `aptx_hd`), and — added across two later passes at #620's
-chiptune-adjacent game-audio containers — `vag`, `svag`, `xwma`, `xa`, and a
-bounded `brstm` subset. Twenty-five registered demuxers in one crate (FM-58).
+chiptune-adjacent game-audio containers — `vag`, `svag`, `xwma`, `xa`, and
+bounded `bfstm`/`brstm` subsets. Twenty-six registered demuxers in one crate (FM-58).
 These are
 containers: the job is finding frame/block boundaries and reporting stream
 parameters, not decoding audio.
@@ -27,6 +27,7 @@ parameters, not decoding audio.
 | `rawcodec` | `gsm`, `sln`, `dfpwm`, `g722`, `g726`, `g726le`, `g728`, `g729`, `aptx`, `aptx_hd` | headerless, constant bytes-per-block : frames-per-block ratio, fixed by the codec's own bitrate |
 | `vag` | `vag` | fixed 48-byte header (`VAGp` magic, big-endian `data_size`/`sample_rate`), then 16-byte PS-ADPCM blocks; a bespoke, non-`BlockDemuxer` loop — see below |
 | `svag` | `svag` | 20-byte consumed header (`VAGm` magic plus little-endian `data_size`/`sample_rate`/`channels`/`interleave`), then interleaved PS-ADPCM; reads physical EOF in `channels * interleave` byte packets while the declared size controls duration only — see below |
+| `bfstm` | `bfstm`, `bcstm` | Nintendo `FSTM`/`CSTM` with either byte order and `INFO`/`SEEK`/`DATA` sections, measured only for stereo DSP-ADPCM with 16/32/64/96/256-byte channel blocks and full/half final blocks; packets synthesize file-endian raw-byte/sample counts, two coefficient sets, and an 8-byte SEEK history entry before unpadded channel payload — see below |
 | `brstm` | `brstm` | Nintendo `RSTM`/`HEAD`/`ADPC`/`DATA`, measured only for stereo DSP-ADPCM with 32/64/96/256-byte channel blocks and full/half final blocks; packets synthesize `be32(raw bytes)`/`be32(samples)`, two 32-byte coefficient sets, and one 8-byte ADPC history entry before the unpadded channel payload — see below |
 | `xwma` | `xwma` | RIFF container (`fmt `/`dpds`/`data` chunks); packets are `nBlockAlign`-aligned reads of `data`, not the `dpds` table's declared split — see below |
 | `xa` | `xa` | fixed 24-byte header (2-byte `"XA"` magic, little-endian `WAVEFORMATEX` tail), then EA-ADPCM blocks (`15`/`30` bytes mono/stereo, `28` samples each); packet count is `ceil(dwOutSize / block_bytes)` clamped to the blocks on disk, but `duration`/`duration_ts` ignore `dwOutSize` and reflect the file's own full block count instead — a real, measured disagreement in the reference itself, reproduced rather than "corrected" — see `xa.rs`'s module doc |
@@ -62,7 +63,7 @@ S3M, MOD, and the rest of the family the reference reaches through
 `libopenmpt`) is recorded as a D10 exclusion — see
 `docs/why-some-formats-are-not-included.md`. Of the twelve chiptune-adjacent
 game-audio containers, `vag` and `xwma` landed in an earlier pass, followed by
-`xa`, `svag`, and a bounded `brstm` subset; seven remain, each for a specific, recorded
+`xa`, `svag`, and bounded `brstm`/`bfstm` subsets; six remain, each for a specific, recorded
 reason:
 
 - `binka` (raw Bink Audio) and `genh` (a generic fixed-struct header) — the
@@ -85,9 +86,34 @@ reason:
   the same "no independently reachable byte-level spec found yet" bar
   `binka`/`genh`/`hca` sit behind is the working assumption, not confirmed
   per-format.
-- `bfstm` — not attempted. `brstm` is the separately measured stereo
-  DSP-ADPCM subset described below; its result does not establish BFSTM's
-  endian/layout variants.
+
+### `bfstm` — measured stereo DSP-ADPCM packet synthesis
+
+The Custom Mario Kart 8 Wiki's BFSTM layout
+(`Vaco-Spec-Ref mk8-bfstm-format`) and 3dbrew's BCSTM layout
+(`Vaco-Spec-Ref 3dbrew-bcstm-format`) specify the 0x40-byte header,
+byte-order marker, sized references, `INFO` stream/channel tables, per-channel
+DSP coefficients, `SEEK` histories, and block-interleaved `DATA`. The BFSTM
+page explicitly gives one channel's stored size as
+`(block_count - 1) * block_size + final_block_padded_size`.
+
+Hand-built `FSTM` and `CSTM` fixtures in both byte orders establish the packet
+contract through `ffprobe` 9.0.1:
+
+- exactly two DSP-ADPCM channels and channel blocks of 16, 32, 64, 96, or 256
+  bytes, with a full or half-sized final block physically padded to the full
+  block size;
+- one packet per interleaved block. The 80-byte prefix is file-endian
+  `u32(raw payload bytes)`, file-endian `u32(sample count)`, 32 coefficient
+  bytes per channel, and the packet's 8-byte interleaved SEEK history;
+- each channel contributes only its unpadded bytes. The checked-in 512-byte
+  fixture therefore produces packet sizes 144 and 112, PTS 0 and 56,
+  durations 56 and 28, and aggregate duration 84 samples at 32 kHz.
+
+PCM, IMA ADPCM, non-stereo streams, region tables, and unmeasured geometry are
+named refusals. Vaco leaves codec identity absent because its shared `CodecId`
+does not contain the reference's endian-specific `adpcm_thp`/`adpcm_thp_le`
+names; inventing a nearby identity would be worse than reporting none.
 
 ### `brstm` — measured stereo DSP-ADPCM packet synthesis
 
@@ -162,6 +188,13 @@ the literal block size for `adx`). `nistsphere`/`pvf`'s raw-PCM tail still
 pass the old, **unmeasured** `4096` (`block::DEFAULT_TARGET_PACKET_BYTES`)
 — see "Deliberately not in this crate" below for why that one was not
 chased to ground.
+
+The two G.726 raw formats share rate, channel count, packet sizing, and the
+four-bit / 32 kbit/s algorithm, but not their decoder identity:
+`g726` routes to `CodecId::AdpcmG726` for high-nibble-first bytes and
+`g726le` routes to `CodecId::AdpcmG726le` for low-nibble-first bytes. Keep
+those IDs distinct when adding a container mapping; otherwise the stream is
+reachable but every byte's two codes are decoded in the wrong order.
 
 ### `vag`, `svag`, `xwma` and `xa` — hand-built fixtures, measured against `ffprobe`
 
@@ -350,18 +383,12 @@ and the fixture is `128 * 37` bytes exactly.
   primary specification (`monkeysaudio.com`'s own SDK docs are one
   candidate not yet tried); `codec2`/`codec2raw` need a decision about
   which mode a headerless file is assumed to be.
-- **Finishing `brstm`/`bfstm`**: the header parse is done and verified —
-  see "Deliberately not in this crate" above. What is missing is the
-  per-packet byte-size formula for the `DATA` chunk's interleaved blocks,
-  which the WiiBrew/GBATEK specs do not state and which measured as
-  `block_size` plus a channel-dependent, not-yet-explained constant. Sweep
-  more parameters (loop flag on/off, three-plus channels via a
-  multi-track file, an `ADPC` chunk with a genuinely different
-  entry/byte-per-entry count) before trying another formula guess — the
-  four data points gathered so far are not enough to fit one with
-  confidence.
-- **The eight still-unresearched game-audio containers** (`binka`, `genh`,
-  `hca`, `xvag`, `msf`, `fsb`, plus `brstm`/`bfstm` above): `fsb`
+- **Extending `brstm`/`bfstm`**: add new codec/channel/block geometries only
+  after an independent source establishes their layout and a real reference
+  accepts the fixture; both current paths intentionally refuse beyond their
+  measured stereo DSP-ADPCM subsets.
+- **The six still-unresearched game-audio containers** (`binka`, `genh`,
+  `hca`, `xvag`, `msf`, `fsb`): `fsb`
   has the most promising independent documentation trail found so far
   (`rewiki.miraheze.org`/Xentax's `FMOD Audio FSB` pages, plus two
   open-source *readers* — not decoders — of the format whose licence and

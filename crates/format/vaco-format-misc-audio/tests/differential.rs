@@ -57,7 +57,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 #[test]
 fn every_fixture_matches_the_measured_reference_row() {
     use vaco_format_misc_audio::{
-        adx, brstm, g723, rawcodec, sbc, svag, tta, vag, wavpack, xa, xwma,
+        adx, bfstm, brstm, g723, rawcodec, sbc, svag, tta, vag, wavpack, xa, xwma,
     };
 
     let rows = [
@@ -161,6 +161,14 @@ fn every_fixture_matches_the_measured_reference_row() {
             channels: 2,
             reference_duration_us: Some(6_349),
             reference_packet_sizes: Some(&[32; 10]),
+        },
+        Row {
+            file: "bfstm.bfstm",
+            desc: bfstm::DEMUXER,
+            sample_rate: 32_000,
+            channels: 2,
+            reference_duration_us: Some(2_625),
+            reference_packet_sizes: Some(&[144, 112]),
         },
         Row {
             file: "brstm.brstm",
@@ -279,12 +287,13 @@ fn every_fixture_matches_the_measured_reference_row() {
 #[test]
 fn no_probe_claims_prose() {
     use vaco_format_misc_audio::{
-        adx, amr, brstm, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xa, xwma,
+        adx, amr, bfstm, brstm, nistsphere, pvf, rawcodec, sbc, tta, vag, wavpack, xa, xwma,
     };
 
     let text = ProbeData::new(b"The quick brown fox jumps over the lazy dog. Not media.");
     let probes: &[fn(&ProbeData<'_>) -> vaco_format_core::probe::ProbeScore] = &[
         adx::probe,
+        bfstm::probe,
         brstm::probe,
         amr::probe_amr,
         nistsphere::probe,

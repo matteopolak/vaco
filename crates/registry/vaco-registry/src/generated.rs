@@ -232,6 +232,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["avs3"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-bfstm")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "bfstm",
+        long_name: Some("Nintendo BFSTM/BCSTM (stereo DSP-ADPCM)"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-bfstm"),
+        media: None,
+        codec: None,
+        extensions: &["bfstm", "bcstm"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-bink")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -10588,6 +10600,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::bitstream::DEMUXER_AVS2,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::bitstream::DEMUXER_AVS3,
+    #[cfg(feature = "demux-bfstm")]
+    &::vaco_format_misc_audio::bfstm::DEMUXER,
     #[cfg(feature = "demux-bink")]
     &::vaco_format_misc::bink::DEMUXER,
     #[cfg(feature = "demux-raw")]
