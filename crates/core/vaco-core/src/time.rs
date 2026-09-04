@@ -267,6 +267,111 @@ impl Duration {
     }
 }
 
+/// An exact media duration represented as a rational number of seconds.
+///
+/// Unlike [`Duration`], this type does not choose microseconds as an
+/// intermediate unit. It is intended for container-level values assembled
+/// from streams with different time bases; callers can defer rounding until
+/// they know whether they are displaying, comparing, or rescaling the value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExactDuration {
+    numerator: i128,
+    denominator: i128,
+}
+
+impl ExactDuration {
+    /// Build an exact duration from ticks in `time_base`.
+    #[must_use]
+    pub fn from_ticks(ticks: i64, time_base: TimeBase) -> Option<Self> {
+        let (num, den) = finite_base(time_base)?;
+        Some(Self::from_ratio(i128::from(ticks) * num, den))
+    }
+
+    /// Preserve a legacy microsecond duration without further loss.
+    #[must_use]
+    pub const fn from_duration(duration: Duration) -> Self {
+        Self {
+            numerator: duration.0 as i128,
+            denominator: 1_000_000,
+        }
+    }
+
+    /// Return the reduced seconds ratio as `(numerator, denominator)`.
+    #[must_use]
+    pub const fn as_ratio(self) -> (i128, i128) {
+        (self.numerator, self.denominator)
+    }
+
+    /// Seconds, for display only.
+    #[must_use]
+    pub fn as_secs_f64(self) -> f64 {
+        self.numerator as f64 / self.denominator as f64
+    }
+
+    /// Round this exact value into the legacy microsecond representation.
+    #[must_use]
+    pub fn to_duration(self, rounding: Rounding) -> Option<Duration> {
+        muldiv_rnd(
+            self.numerator,
+            i128::from(1_000_000),
+            self.denominator,
+            rounding,
+        )
+        .and_then(|micros| i64::try_from(micros).ok())
+        .map(Duration)
+    }
+
+    fn from_ratio(numerator: i128, denominator: i128) -> Self {
+        debug_assert!(denominator != 0);
+        let (mut numerator, mut denominator) = if denominator < 0 {
+            (-numerator, -denominator)
+        } else {
+            (numerator, denominator)
+        };
+        if numerator == 0 {
+            return Self {
+                numerator: 0,
+                denominator: 1,
+            };
+        }
+        let gcd = gcd_i128(numerator.abs(), denominator);
+        numerator /= gcd;
+        denominator /= gcd;
+        Self {
+            numerator,
+            denominator,
+        }
+    }
+}
+
+impl PartialOrd for ExactDuration {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for ExactDuration {
+    fn cmp(&self, other: &Self) -> Ordering {
+        match (self.numerator.signum(), other.numerator.signum()) {
+            (a, b) if a != b => a.cmp(&b),
+            (0, 0) => Ordering::Equal,
+            (1, 1) => cmp_nonnegative_ratios(
+                self.numerator.unsigned_abs(),
+                self.denominator as u128,
+                other.numerator.unsigned_abs(),
+                other.denominator as u128,
+            ),
+            (-1, -1) => cmp_nonnegative_ratios(
+                other.numerator.unsigned_abs(),
+                other.denominator as u128,
+                self.numerator.unsigned_abs(),
+                self.denominator as u128,
+            ),
+            _ => unreachable!("signs were checked above"),
+        }
+    }
+}
+
 /// The canonical rendering — signed seconds with exactly six decimals — the
 /// same text [`crate::parse::format_duration`] produces.
 impl fmt::Display for Duration {
@@ -287,6 +392,54 @@ fn finite_base(tb: TimeBase) -> Option<(i128, i128)> {
     }
     let (n, d) = (i128::from(tb.num), i128::from(tb.den));
     if d < 0 { Some((-n, -d)) } else { Some((n, d)) }
+}
+
+/// Compare non-negative fractions without cross-multiplication.
+///
+/// The continued-fraction form keeps every intermediate below `u128`, so an
+/// exact value remains orderable even if a future constructor permits wider
+/// numerators than the current tick-based constructors do.
+#[allow(
+    clippy::integer_division,
+    reason = "continued-fraction comparison intentionally divides integers without rounding"
+)]
+fn cmp_nonnegative_ratios(mut a: u128, mut b: u128, mut c: u128, mut d: u128) -> Ordering {
+    let mut reverse = false;
+    loop {
+        let left = a / b;
+        let right = c / d;
+        if left != right {
+            return if reverse {
+                right.cmp(&left)
+            } else {
+                left.cmp(&right)
+            };
+        }
+
+        let left_rem = a % b;
+        let right_rem = c % d;
+        match (left_rem == 0, right_rem == 0) {
+            (true, true) => return Ordering::Equal,
+            (true, false) => {
+                return if reverse {
+                    Ordering::Greater
+                } else {
+                    Ordering::Less
+                };
+            }
+            (false, true) => {
+                return if reverse {
+                    Ordering::Less
+                } else {
+                    Ordering::Greater
+                };
+            }
+            (false, false) => {
+                (a, b, c, d) = (b, left_rem, d, right_rem);
+                reverse = !reverse;
+            }
+        }
+    }
 }
 
 /// The `(b, c)` of `ticks × b ÷ c` that converts `from` ticks into `to` ticks.
@@ -339,4 +492,13 @@ fn muldiv_rnd(a: i128, b: i128, c: i128, rounding: Rounding) -> Option<i128> {
 /// Saturating narrowing to `i64`.
 fn clamp_i64(v: i128) -> i64 {
     v.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
+}
+
+fn gcd_i128(mut a: i128, mut b: i128) -> i128 {
+    while b != 0 {
+        let remainder = a % b;
+        a = b;
+        b = remainder;
+    }
+    a.max(1)
 }

@@ -722,6 +722,13 @@ change, verified each time with a full `cargo check --workspace
   negative length, so a negative value means the arithmetic that produced
   it was wrong, and `None` keeps that visible as `N/A`.
 
+- **`Stream::duration_exact()` and `Demuxer::duration_exact()`** retain a
+  duration as a rational number of seconds. The default demuxer implementation
+  preserves a demuxer's container-level duration when one is available, and
+  otherwise selects the longest stream's native duration. Probe uses this view
+  for format-level duration display and only reaches the microsecond view when
+  no native source exists.
+
 - **`r_frame_rate`/`avg_frame_rate`** are separate, plain `Rational` fields
   (not `Option`, since the reference prints `0/0` for a rateless stream
   rather than `N/A`) because they genuinely diverge — a 1/600-timescale

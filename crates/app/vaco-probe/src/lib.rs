@@ -614,8 +614,14 @@ impl<'a, O: Write> Writer<'a, O> {
             // case", since a redundant one hides the next regression.
             let duration = input
                 .demuxer
-                .duration()
-                .map(vaco_core::Duration::as_secs_f64);
+                .duration_exact()
+                .map(vaco_core::ExactDuration::as_secs_f64)
+                .or_else(|| {
+                    input
+                        .demuxer
+                        .duration()
+                        .map(vaco_core::Duration::as_secs_f64)
+                });
             show::format(
                 &mut emit,
                 &info,

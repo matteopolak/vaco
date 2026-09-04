@@ -25,7 +25,7 @@ value is `None`/`Err`, an unrepresentable result is `None` or a documented satur
 |---|---|
 | `error` | the closed `Error` enum every crate returns, and `Result<T, E = Error>` |
 | `rational` | exact `i32/i32` `Rational` — time bases, frame rates, aspect ratios |
-| `time` | `Timestamp`, `TimeBase`, `Duration`, `Rounding`, `rescale_rnd` |
+| `time` | `Timestamp`, `TimeBase`, `Duration`, `ExactDuration`, `Rounding`, `rescale_rnd` |
 | `dict` | insertion-ordered `Dict` for metadata and option maps |
 | `escape` | the shared quoting/escaping grammar of the option and filtergraph layers |
 | `parse` | the CLI value grammars, plus `Rgba` |
@@ -138,6 +138,9 @@ Notes:
   `0.1` is exactly 100 000 µs and never 99 999.
 - `i64::MIN` microseconds is the one `Duration` that does not round-trip: `format_duration` prints a
   magnitude with no positive counterpart. It still parses and formats without panicking.
+- `ExactDuration` carries a reduced rational number of seconds for media values
+  assembled from native ticks. Keep it until the consumer chooses a rounding
+  mode; convert to `Duration` only at a legacy microsecond boundary.
 - `color("random")` draws fresh RGB with alpha 255 on every call and is therefore the one input that
   does not round-trip. It uses a SplitMix64 counter seeded from the wall clock — decorative, with no
   cryptographic or statistical claim attached, and deliberately not exposed as a general RNG.

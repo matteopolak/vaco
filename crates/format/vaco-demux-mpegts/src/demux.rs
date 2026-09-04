@@ -7,7 +7,9 @@
 use std::collections::VecDeque;
 
 use vaco_codec_core::{AudioParameters, CodecId, CodecParameters, VideoParameters};
-use vaco_core::{Duration, Error, MediaType, Rational, Result, Rounding, Timestamp, rescale_rnd};
+use vaco_core::{
+    Duration, Error, ExactDuration, MediaType, Rational, Result, Rounding, Timestamp, rescale_rnd,
+};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::options::FormatOptions;
 use vaco_format_core::seek::{
@@ -228,6 +230,7 @@ pub struct MpegTsDemuxer {
     index: PacketIndex,
     scan: Vec<ScanState>,
     duration: Option<Duration>,
+    duration_exact: Option<ExactDuration>,
     stats: DemuxStats,
     /// End of stream is sticky: `read_packet` consumes bytes before it can
     /// tell whether a packet follows, so without this the second call after
@@ -302,6 +305,7 @@ impl MpegTsDemuxer {
             index: PacketIndex::with_options(opts),
             scan: Vec::new(),
             duration: None,
+            duration_exact: None,
             stats: DemuxStats::default(),
             eof: false,
             scanning: false,
@@ -1247,7 +1251,11 @@ impl MpegTsDemuxer {
             earliest = Some(earliest.map_or(first, |v: i64| v.min(first)));
         }
         if let (Some(end), Some(start)) = (latest, earliest) {
-            self.duration = Timestamp::new(end.saturating_sub(start).max(0)).to_duration(TIME_BASE);
+            let ticks = end.saturating_sub(start).max(0);
+            self.duration_exact = ExactDuration::from_ticks(ticks, TIME_BASE);
+            self.duration = self
+                .duration_exact
+                .and_then(|value| value.to_duration(Rounding::default()));
         }
         Ok(())
     }
@@ -1935,6 +1943,10 @@ impl Demuxer for MpegTsDemuxer {
 
     fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.duration_exact
     }
 }
 

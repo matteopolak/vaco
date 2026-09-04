@@ -38,7 +38,7 @@
 use std::collections::VecDeque;
 
 use vaco_codec_core::{CodecId, CodecProperties, Parser, ParserDriver};
-use vaco_core::{Duration, Error, MediaType, Rational, Result, TimeBase, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, MediaType, Rational, Result, TimeBase, Timestamp};
 use vaco_limits::{Limits, ProgressGuard};
 use vaco_packet::Packet;
 
@@ -973,6 +973,18 @@ impl<D: Demuxer> Demuxer for Discovery<D> {
 
     fn duration(&self) -> Option<Duration> {
         crate::time::estimate_duration(&self.report.duration_inputs, &self.opts).duration
+    }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.duration()
+            .map(ExactDuration::from_duration)
+            .or_else(|| {
+                self.streams()
+                    .iter()
+                    .filter_map(Stream::duration_exact)
+                    .max()
+            })
+            .or_else(|| self.inner.duration_exact())
     }
 
     /// Forwarded to the wrapped demuxer. `Discovery::run` already calls

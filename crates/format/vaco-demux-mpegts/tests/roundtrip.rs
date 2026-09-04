@@ -458,6 +458,12 @@ fn start_time_and_duration_are_estimated_because_nothing_declares_them() {
 }
 
 #[test]
+fn estimated_container_duration_retains_clock_fraction() {
+    let d = open(simple_file(7));
+    assert_eq!(d.duration_exact().unwrap().as_ratio(), (7, 25));
+}
+
+#[test]
 fn trailing_null_packets_do_not_shorten_the_duration() {
     // The tail-scan retry loop is what makes this work: the last real
     // timestamp is far from the end of the file.

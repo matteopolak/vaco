@@ -42,7 +42,7 @@
 #![forbid(unsafe_code)]
 
 use vaco_codec_core::{CodecId, CodecParameters, Parser};
-use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, MediaType, Rational, Result, Timestamp};
 use vaco_io::{MediaSink, MediaSource};
 use vaco_limits::Limits;
 use vaco_packet::Packet;
@@ -192,6 +192,12 @@ impl Stream {
     #[must_use]
     pub fn duration(&self) -> Option<Duration> {
         Timestamp::new(self.duration_ts?).to_duration(self.time_base)
+    }
+
+    /// Return the stream duration as an exact number of seconds.
+    #[must_use]
+    pub fn duration_exact(&self) -> Option<ExactDuration> {
+        ExactDuration::from_ticks(self.duration_ts?, self.time_base)
     }
 
     /// Record a duration stated in `time_base` ticks.
@@ -430,6 +436,22 @@ pub trait Demuxer: Send {
         None
     }
 
+    /// Exact duration derived from native stream ticks when available.
+    ///
+    /// This additive view lets callers defer microsecond rounding. A demuxer
+    /// with a container-level duration that is not reflected by its streams
+    /// can still override it; the default is the longest exact stream.
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.duration()
+            .map(ExactDuration::from_duration)
+            .or_else(|| {
+                self.streams()
+                    .iter()
+                    .filter_map(Stream::duration_exact)
+                    .max()
+            })
+    }
+
     /// Rebind this demuxer to a caller's [`Limits`] and [`FormatOptions`],
     /// after construction.
     ///
@@ -557,6 +579,9 @@ impl<D: Demuxer + ?Sized> Demuxer for Box<D> {
     }
     fn duration(&self) -> Option<Duration> {
         (**self).duration()
+    }
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        (**self).duration_exact()
     }
     fn reconfigure(&mut self, limits: &Limits, opts: &FormatOptions) -> Result<()> {
         (**self).reconfigure(limits, opts)
@@ -1289,6 +1314,36 @@ mod tests {
         fn seek(&mut self, _target: SeekTarget, _flags: SeekFlags) -> Result<()> {
             Err(Error::NotSeekable)
         }
+    }
+
+    #[derive(Debug)]
+    struct TimedDemuxer {
+        streams: Vec<Stream>,
+    }
+
+    impl Demuxer for TimedDemuxer {
+        fn streams(&self) -> &[Stream] {
+            &self.streams
+        }
+        fn read_packet(&mut self) -> Result<Packet> {
+            Err(Error::Eof)
+        }
+        fn seek(&mut self, _target: SeekTarget, _flags: SeekFlags) -> Result<()> {
+            Err(Error::NotSeekable)
+        }
+    }
+
+    #[test]
+    fn demuxer_duration_exact_uses_native_stream_ticks() {
+        let mut stream = Stream::new(0, MediaType::Audio, Rational::new(1, 44_100));
+        stream.set_duration_ts(1024);
+        let demuxer = TimedDemuxer {
+            streams: vec![stream],
+        };
+        assert_eq!(
+            demuxer.duration_exact().map(vaco_core::ExactDuration::as_ratio),
+            Some((256, 11_025))
+        );
     }
 
     #[test]

@@ -44,7 +44,7 @@ pub use error::{Error, Result};
 pub use escape::EscapeError;
 pub use parse::Rgba;
 pub use rational::Rational;
-pub use time::{Duration, Rounding, TimeBase, Timestamp, rescale_rnd};
+pub use time::{Duration, ExactDuration, Rounding, TimeBase, Timestamp, rescale_rnd};
 
 /// The kind of data a stream, codec or filter pad carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]

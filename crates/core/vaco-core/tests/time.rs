@@ -21,7 +21,7 @@
 use std::cmp::Ordering;
 
 use proptest::prelude::*;
-use vaco_core::{Rational, Rounding, TimeBase, Timestamp, rescale_rnd};
+use vaco_core::{Duration, ExactDuration, Rational, Rounding, TimeBase, Timestamp, rescale_rnd};
 
 // --------------------------------------------------------------- reference
 
@@ -77,6 +77,26 @@ fn reference(a: i64, b: i64, c: i64, mode: Rounding) -> Option<i64> {
 }
 
 // -------------------------------------------------------------- strategies
+
+#[test]
+fn exact_duration_keeps_fractional_microseconds() {
+    let duration = ExactDuration::from_ticks(1024, Rational::new(1, 44_100)).unwrap();
+    assert_eq!(duration.as_ratio(), (256, 11_025));
+    assert_eq!(
+        duration.to_duration(Rounding::NearestAwayFromZero),
+        Some(Duration::from_micros(23_220))
+    );
+}
+
+#[test]
+fn exact_duration_ordering_does_not_cross_multiply() {
+    let third = ExactDuration::from_ticks(1, Rational::new(1, 3)).unwrap();
+    let half = ExactDuration::from_ticks(1, Rational::new(1, 2)).unwrap();
+    let negative = ExactDuration::from_ticks(-1, Rational::new(1, 3)).unwrap();
+    assert!(third < half);
+    assert!(negative < third);
+    assert_eq!(negative.cmp(&negative), Ordering::Equal);
+}
 
 fn edge_i64() -> impl Strategy<Value = i64> {
     prop_oneof![
