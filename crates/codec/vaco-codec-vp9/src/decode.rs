@@ -109,8 +109,8 @@ pub(crate) struct FrameCtx {
     /// is already sitting right there in `pic` from an earlier tile.
     tile_mi_col_start: usize,
     tile_mi_col_end: usize,
-    /// Every block's parsed mode/motion/residual, in decode order (issue
-    /// #328) — populated by [`decode_block`], consumed by
+    /// Every block's parsed mode, motion and residual in decode order,
+    /// populated by [`decode_block`] and consumed by
     /// [`apply_residual`] on `crate::frame_task::Vp9FrameTask`'s own copy
     /// of this frame's planes. Empty and unused when this `FrameCtx` is
     /// only being used for reconstruction (`decode_frame_tiles`'s parse
@@ -407,9 +407,8 @@ struct DecodedBlock {
     interp_filter: i32,
 }
 
-/// One transform block's residue, captured at parse time (issue #328) so
-/// prediction and the actual sample addition can happen later, on a worker
-/// thread, once a reference frame's pixels (for an inter block) are ready.
+/// One transform block's residue, captured so prediction and sample addition
+/// can happen later on a worker thread once reference pixels are ready.
 /// `in_bounds` mirrors `residual`'s own `start_x < maxx && start_y < maxy`
 /// check: [`apply_residual`] only predicts/adds where this is true, exactly
 /// as `residual` only predicted/decoded tokens there. `residue` is `None`
@@ -422,8 +421,8 @@ struct StoredResidue {
     residue: Option<Vec<i64>>,
 }
 
-/// One block's complete parse result (issue #328): its mode/motion info,
-/// the tile it belongs to (`AvailL`/`have_left` are tile-relative, not
+/// One block's complete parse result: mode and motion information, the tile
+/// it belongs to (`AvailL`/`have_left` are tile-relative, not
 /// frame-relative — see `FrameCtx::tile_mi_col_start`'s doc), and every
 /// transform block's residue, in exactly the order [`apply_residual`] will
 /// walk them.
@@ -1650,11 +1649,10 @@ fn get_plane_block_size(
         .unwrap_or(tables::BLOCK_INVALID)
 }
 
-/// The parse half of one block's residual (issue #328): decodes every
-/// coefficient token and computes each transform block's spatial residue —
-/// both pixel-independent — but defers every pixel-touching step (the
+/// Decodes each coefficient token and computes each transform block's
+/// spatial residue without touching pixels. It defers the
 /// whole-plane inter motion compensation, each transform block's intra
-/// prediction, and the sample addition itself) to [`apply_residual`], which
+/// prediction, and the sample addition itself to [`apply_residual`], which
 /// runs later, on `crate::frame_task::Vp9FrameTask`'s own copy of this
 /// frame's planes. Still updates `ctx.above_nz`/`ctx.left_nz`: later blocks
 /// in this same tile need that context at parse time, which is exactly why
@@ -1793,8 +1791,7 @@ fn residual(
     (eob_total > 0, stored)
 }
 
-/// The reconstruction half of one block's residual (issue #328): replays
-/// exactly the geometry [`residual`] walked during parsing — itself fully
+/// Replays exactly the geometry [`residual`] walked during parsing, fully
 /// determined by `mi_size`, `block.tx_size`, plane and subsampling, so no
 /// pixel data is needed to reproduce it — performing the prediction reads
 /// and sample additions `residual` deferred. `residues` must be exactly
@@ -2270,8 +2267,8 @@ fn decode_tile(
     }
 }
 
-/// The serial half of frame decode (issue #328): walks every tile's
-/// mode-info and residual tokens, producing this frame's own per-MI grid
+/// Walks every tile's mode information and residual tokens, producing this
+/// frame's own per-MI grid
 /// (`prev_mv_grid`/`prev_segment_ids` for whichever frame reads them next —
 /// available the instant this returns, with no pixel dependency at all) and
 /// every block's parsed record for [`reconstruct_frame`] to replay later,
@@ -2372,9 +2369,9 @@ fn parse_frame_tiles(
     Ok((ctx.parsed, ctx.grid, ctx.segment_ids))
 }
 
-/// The parallel half of frame decode (issue #328): allocates this frame's
-/// real picture and replays every [`ParsedBlock`] [`parse_frame_tiles`]
-/// produced — prediction (intra, reading this same in-progress picture; and
+/// Allocates the frame's picture and replays every [`ParsedBlock`] produced
+/// by [`parse_frame_tiles`]
+/// — prediction (intra, reading this same in-progress picture; and
 /// inter, reading `ref_store`'s now-real pixels) plus the sample addition —
 /// then applies §8.8's loop filter. Runs on
 /// `vaco_codec_core::threading::FrameRunner`'s worker thread while the
@@ -2464,7 +2461,8 @@ struct State {
     loop_filter: LoopFilterParams,
     segmentation: Segmentation,
     frame_contexts: [EntropyContext; 4],
-    /// Handle-based (issue #328) — see `crate::refframe`'s module doc.
+    /// Handle-based so reconstruction can run without borrowing decoder state.
+    /// See `crate::refframe`'s module documentation.
     ref_store: refframe::PendingRefStore,
     prev_frame_info: Option<PrevFrameInfo>,
     prev_mv_grid: Vec<MiCell>,
@@ -2502,8 +2500,7 @@ impl Default for State {
     }
 }
 
-/// What one dispatched-but-not-yet-collected task needs stamped onto its
-/// eventual `Frame` (issue #328).
+/// Metadata stamped onto a dispatched task's eventual `Frame`.
 struct InFlight {
     show_frame: bool,
     pts: vaco_core::Timestamp,
@@ -2512,7 +2509,7 @@ struct InFlight {
 
 /// VP9 decoder, VP9 Bitstream & Decoding Process Specification v0.6.
 ///
-/// # Threading (issue #328, `C-32c`)
+/// # Threading
 ///
 /// `-threads N` overlaps one frame's reconstruction and loop filter
 /// ([`reconstruct_frame`] — everything after this frame's own tokens are
@@ -2526,10 +2523,9 @@ struct InFlight {
 /// dependency at all, which is what lets the *next* frame's parse begin
 /// before this one's reconstruction finishes.
 ///
-/// Tile-*column* parallelism (`vaco_codec_core::threading::
-/// SliceThreadedDecoder`) is not implemented — see this crate's own doc for
-/// what that would need on top of this. This is frame-level threading only,
-/// the same scope `vaco-codec-vp8`'s equivalent issue (#301) shipped.
+/// This implements frame-level threading only. Tile-column parallelism via
+/// `vaco_codec_core::threading::SliceThreadedDecoder` is not implemented;
+/// the crate documentation describes the additional requirements.
 pub struct Vp9Decoder {
     machine: vaco_codec_core::machine::Machine<Frame>,
     limits: Limits,
@@ -2607,9 +2603,9 @@ impl Vp9Decoder {
         Ok(())
     }
 
-    /// The serial half of one (sub)frame's decode (issue #328): parses the
-    /// header, decodes every tile's tokens ([`parse_frame_tiles`]),
-    /// resolves reference-frame-store and entropy persistence, and
+    /// Parses one subframe's header and every tile's tokens via
+    /// [`parse_frame_tiles`], resolves reference-frame-store and entropy
+    /// persistence, and
     /// dispatches the reconstruction half as a task. A frame that fails
     /// header parse, or a `show_existing_frame` naming an empty slot,
     /// dispatches nothing at all — matching the pre-threading code's own
@@ -2666,27 +2662,12 @@ impl Vp9Decoder {
             return Ok(());
         }
 
-        // The picture-sized allocation this frame will eventually need,
-        // charged against `self.budget` *before* any parse work below --
-        // `mi_cols`/`mi_rows` are attacker-controlled fields straight out
-        // of the uncompressed header (this module's doc, and the
-        // `vp9_decode` fuzz target's own doc, both call this out
-        // specifically), and `parse_frame_tiles` walks every mode-info
-        // cell they describe, accumulating a `ParsedBlock`/`StoredResidue`
-        // per block with no size cap of its own. Before this reordering
-        // (issue #328's parse/reconstruct split), the *first* thing a
-        // frame's decode did was allocate its `Picture` through
-        // `vaco_limits::Budget`, so an oversized frame was rejected here,
-        // for free, before a single mode-info cell was walked. Splitting
-        // parse from reconstruction moved the only budget-charged
-        // allocation on this path to `reconstruct_frame`, which now runs
-        // strictly after `parse_frame_tiles` -- silently reintroducing an
-        // unbounded allocation the fuzz target found in under a minute
-        // (`ParsedBlock`'s `residues: Vec<StoredResidue>` growing past
-        // 500MB before the process was OOM-killed). Charging the budget
-        // for the real output picture up front, and dispatching the
-        // `PictureWriter` half of it unchanged to the reconstruct task
-        // below, restores the original ordering exactly.
+        // Charge the output picture before parsing attacker-controlled
+        // `mi_cols`/`mi_rows`. `parse_frame_tiles` accumulates one
+        // `ParsedBlock`/`StoredResidue` record per described block without
+        // its own size cap, so deferring this budget check until reconstruction
+        // would permit unbounded growth. The writer is then transferred to the
+        // reconstruction task without another allocation.
         let luma_w = fh.mi_cols * 8;
         let luma_h = fh.mi_rows * 8;
         let chroma_w = luma_w >> u32::from(fh.color.subsampling_x);
@@ -2766,9 +2747,8 @@ impl Vp9Decoder {
 
         // §6.1.2's `refresh_probs()`: forward-updated probabilities are
         // saved back when `refresh_frame_context` is set. Backward
-        // adaptation (§8.4) — folding this frame's own coefficient/mode/MV
-        // symbol counts into the saved context before saving it — is not
-        // implemented; see the crate doc and `planning/TECH-DEBT.md`.
+        // adaptation (§8.4), which folds this frame's coefficient, mode and
+        // MV symbol counts into the saved context, is not implemented.
         if fh.refresh_frame_context
             && let Some(slot) = self
                 .state
@@ -2968,11 +2948,8 @@ impl Decoder for Vp9Decoder {
     }
 
     fn flush(&mut self) {
-        // Drains the pool before any state below is torn down, so no
-        // worker is still holding a `PictureWriter` into a picture this
-        // method is about to forget — mirrors
-        // `vaco_codec_h264::H264Decoder::flush`'s own precedent for the
-        // identical hazard.
+        // Drain the pool before tearing down state so no worker retains a
+        // `PictureWriter` into a picture this method is about to forget.
         self.runner.reset();
         self.in_flight.clear();
         self.machine.flush();
@@ -2980,10 +2957,8 @@ impl Decoder for Vp9Decoder {
         self.budget = Budget::new(self.limits.clone());
     }
 
-    /// `-threads N` (issue #328). **Off by default**: `N <= 1` builds a
-    /// runner that spawns nothing and runs every picture inline at
-    /// dispatch, the exact call sequence this decoder had before frame
-    /// threading existed.
+    /// Configures `-threads N`. `N <= 1` spawns nothing and runs every
+    /// picture inline at dispatch.
     ///
     /// Legal to call only before the first packet; the runner is rebuilt
     /// here, which would discard anything in flight and desynchronise its
@@ -3005,7 +2980,7 @@ impl Decoder for Vp9Decoder {
 }
 
 /// One frame's reconstruction and loop filter, or a `show_existing_frame`
-/// re-emission — the parallel half of frame threading (issue #328).
+/// re-emission: the parallel half of frame threading.
 /// `Send + 'static` by construction: every field is owned data, so there is
 /// nothing borrowed from decoder state to leak across the thread boundary.
 enum Vp9FrameTask {
@@ -3149,14 +3124,9 @@ mod tests {
     /// (`ffmpeg -f lavfi -i testsrc2=size=512x64:rate=5:duration=0.4
     /// -pix_fmt yuv420p -c:v libvpx-vp9 -tile-columns 1 -frame-parallel 1
     /// -error-resilient max -g 30 -b:v 500k`, first IVF frame payload, in
-    /// full) -- regression coverage for #328: `decode_tile` used to ignore
-    /// its own column range entirely (looping every call from mi-column 0
-    /// to `mi_cols`, regardless of which tile's bitstream it was actually
-    /// reading), and `AvailL`/motion-vector-candidate column bounds were
-    /// hardcoded to the whole frame rather than the current tile — both
-    /// invisible with the single tile column every fixture before this
-    /// had, and both catastrophic (roughly the whole frame wrong) the
-    /// moment a stream actually used more than one.
+    /// full). This exercises tile-relative decoding: `decode_tile` must honor
+    /// its column range, and `AvailL` plus motion-vector candidate bounds must
+    /// stop at the current tile rather than the frame boundary.
     fn two_tile_columns_key_frame() -> Vec<u8> {
         include_bytes!("../tests/fixtures/vp9_two_tile_columns_key_frame.bin").to_vec()
     }
