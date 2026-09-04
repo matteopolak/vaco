@@ -503,14 +503,12 @@ pub(crate) fn rebase_frame(frame: &mut Frame, target: TimeBase) {
     frame.pts = frame
         .pts
         .rescale(from, target, Rounding::NearestAwayFromZero);
-    if frame.duration.0 != 0 {
-        let ticks = Timestamp::new(frame.duration.0)
-            .rescale(from, target, Rounding::NearestAwayFromZero)
-            .ticks()
-            .unwrap_or(0);
-        frame.duration = vaco_core::Duration(ticks);
-    }
+    let ticks = Timestamp::new(frame.duration_ticks())
+        .rescale(from, target, Rounding::NearestAwayFromZero)
+        .ticks()
+        .unwrap_or(0);
     frame.time_base = target;
+    frame.set_duration_ticks(ticks);
 }
 
 /// Rescale one timestamp between two link time bases, exactly.
@@ -904,12 +902,12 @@ mod tests {
         let mut f = video_frame(16, 16, 0);
         f.time_base = Rational::new(1, 25);
         f.pts = Timestamp::new(3); // 0.12 s
-        f.duration = vaco_core::Duration(1);
+        f.set_duration_ticks(1);
         l.push(f).expect("room");
         let out = l.pop().expect("frame");
         assert_eq!(out.time_base, Rational::new(1, 1000));
         assert_eq!(out.pts, Timestamp::new(120));
-        assert_eq!(out.duration.0, 40);
+        assert_eq!(out.duration_ticks(), 40);
     }
 
     #[test]

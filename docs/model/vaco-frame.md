@@ -11,6 +11,15 @@ builds by hand from `AVBufferRef` is expressed here with `Arc` and
 
 ## How it works
 
+### Native frame timing
+
+Frame producers and filters use `set_duration_ticks` and `duration_ticks` for
+counts in `Frame::time_base`. Set the time base before setting the duration.
+These accessors isolate the current native-tick storage convention from the
+seconds-based `Duration` used by packet and option APIs. Do not construct or
+read the tuple field directly when changing frame timing; copy the duration
+unchanged only when copying the same timing convention.
+
 ### One `Arc` per plane (plan 11 F11)
 
 A `Frame` is metadata plus a list of `Plane`s, and **each plane owns its own

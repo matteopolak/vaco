@@ -252,6 +252,20 @@ pub struct MasteringDisplay {
 }
 
 impl Frame {
+    /// Read the native tick count used by frame producers and filters.
+    ///
+    /// Keep the frame's time base alongside this value; packet durations use
+    /// a seconds-based representation and must not be reinterpreted here.
+    #[must_use]
+    pub const fn duration_ticks(&self) -> i64 {
+        self.duration.0
+    }
+
+    /// Set a duration in the frame's native time base.
+    pub const fn set_duration_ticks(&mut self, ticks: i64) {
+        self.duration = Duration(ticks);
+    }
+
     /// Crop rectangle applied on presentation, if the codec signalled one.
     ///
     /// `None` when there is no crop, when the crop is empty, or for audio.

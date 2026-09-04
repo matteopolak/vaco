@@ -22,7 +22,7 @@
 use smallvec::SmallVec;
 use vaco_chlayout::ChannelLayout;
 use vaco_color::ColorInfo;
-use vaco_core::{Duration, MediaType, Rational, Result, Rounding, TimeBase, Timestamp};
+use vaco_core::{MediaType, Rational, Result, Rounding, TimeBase, Timestamp};
 use vaco_frame::{Frame, FrameData, FramePool};
 use vaco_pixfmt::PixFmt;
 use vaco_sampfmt::SampleFmt;
@@ -92,7 +92,7 @@ pub fn gray_frame(width: u32, height: u32, pts: i64, value: u8) -> Frame {
     }
     frame.pts = Timestamp::new(pts);
     frame.time_base = Rational::new(1, 25);
-    frame.duration = Duration(1);
+    frame.set_duration_ticks(1);
     frame
 }
 
@@ -113,7 +113,7 @@ pub fn audio_frame(rate: u32, samples: u32, pts: i64) -> Frame {
         });
     frame.pts = Timestamp::new(pts);
     frame.time_base = Rational::new(1, i32::try_from(rate).unwrap_or(1));
-    frame.duration = Duration(i64::from(samples));
+    frame.set_duration_ticks(i64::from(samples));
     frame
 }
 
@@ -413,7 +413,7 @@ impl Fps {
             let mut frame = source.clone();
             frame.time_base = self.out_base;
             frame.pts = Timestamp::new(self.next_out);
-            frame.duration = Duration(1);
+            frame.set_duration_ticks(1);
             out.push(frame);
             self.next_out = self.next_out.saturating_add(1);
         }
@@ -453,10 +453,10 @@ impl FrameFilter for Fps {
         self.seen_input = true;
         // How far this input reaches: its own end time, in output slots. A frame
         // with no duration covers exactly one slot.
-        let end = if input.duration.0 > 0 {
+        let end = if input.duration_ticks() > 0 {
             input
                 .pts
-                .offset(input.duration.0)
+                .offset(input.duration_ticks())
                 .rescale(self.in_base, self.out_base, Rounding::Down)
                 .ticks()
                 .unwrap_or(slot.saturating_add(1))

@@ -8,7 +8,7 @@
 
 use vaco_chlayout::ChannelLayout;
 use vaco_color::ColorInfo;
-use vaco_core::{Duration, Rational, Timestamp};
+use vaco_core::{Rational, Timestamp};
 use vaco_frame::{Frame, FramePool};
 use vaco_pixfmt::PixFmt;
 use vaco_sampfmt::SampleFmt;
@@ -36,7 +36,7 @@ pub(crate) fn video_frame(width: u32, height: u32, pts: i64) -> Frame {
         .expect("a small gray8 frame is within every default cap");
     frame.pts = Timestamp::new(pts);
     frame.time_base = Rational::new(1, 25);
-    frame.duration = Duration(1);
+    frame.set_duration_ticks(1);
     frame
 }
 
@@ -48,6 +48,6 @@ pub(crate) fn audio_frame(samples: u32, pts: i64) -> Frame {
         .expect("a small s16 frame is within every default cap");
     frame.pts = Timestamp::new(pts);
     frame.time_base = Rational::new(1, 48_000);
-    frame.duration = Duration(i64::from(samples));
+    frame.set_duration_ticks(i64::from(samples));
     frame
 }
