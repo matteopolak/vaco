@@ -2319,7 +2319,9 @@ fn ctx_for<'c, 'p>(
     mb: &MbSummary,
 ) -> vaco_core::Result<&'c PictureCtx<'p>> {
     slices.get(mb.slice_id as usize).ok_or({
-        vaco_core::Error::InvalidData("vaco-codec-h264: a macroblock named a slice not in this picture")
+        vaco_core::Error::InvalidData(
+            "vaco-codec-h264: a macroblock named a slice not in this picture",
+        )
     })
 }
 

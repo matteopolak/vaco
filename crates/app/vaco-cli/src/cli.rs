@@ -739,7 +739,9 @@ fn validate_bounds(
         let tag = if what == "input" { "in" } else { "out" };
         return Err(Diagnostic::opening(
             AvError::EINVAL,
-            vec![format!("[{tag}#{index}] -to value smaller than -ss; aborting.")],
+            vec![format!(
+                "[{tag}#{index}] -to value smaller than -ss; aborting."
+            )],
             what,
             url,
         ));

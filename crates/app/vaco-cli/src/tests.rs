@@ -1207,7 +1207,9 @@ fn output_side_t_wins_over_to() {
     .unwrap();
     assert_eq!(
         cli.outputs[0].end,
-        Some(crate::cli::EndBound::AfterSeek(vaco_core::Duration::from_micros(2_000)))
+        Some(crate::cli::EndBound::AfterSeek(
+            vaco_core::Duration::from_micros(2_000)
+        ))
     );
 }
 
@@ -1218,9 +1220,7 @@ fn output_side_t_wins_over_to() {
 #[test]
 fn output_side_to_at_or_below_zero_aborts() {
     let f = fixture(&timed_two_track_file(4));
-    let r = go(&[
-        "-i", &f.path, "-c", "copy", "-to", "0", "-f", "null", "-",
-    ]);
+    let r = go(&["-i", &f.path, "-c", "copy", "-to", "0", "-f", "null", "-"]);
     assert_eq!(r.code.code(), 234, "{}", r.message());
     assert!(
         r.message()
@@ -1256,12 +1256,11 @@ fn output_side_invalid_t_reports_output_wording() {
 #[test]
 fn output_side_ss_is_refused_not_silently_ignored() {
     let f = fixture(&timed_two_track_file(4));
-    let r = go(&[
-        "-i", &f.path, "-c", "copy", "-ss", "1", "-f", "null", "-",
-    ]);
+    let r = go(&["-i", &f.path, "-c", "copy", "-ss", "1", "-f", "null", "-"]);
     assert_eq!(r.code.code(), 218, "{}", r.message());
     assert!(
-        r.message().contains("-ss is accepted by this build's option table but not implemented yet"),
+        r.message()
+            .contains("-ss is accepted by this build's option table but not implemented yet"),
         "{}",
         r.message()
     );
@@ -1272,6 +1271,8 @@ fn output_side_ss_is_refused_not_silently_ignored() {
 #[test]
 fn input_side_ss_still_works_alongside_the_new_output_refusal() {
     let f = fixture(&timed_two_track_file(4));
-    let r = go(&["-ss", "0.001", "-i", &f.path, "-c", "copy", "-f", "null", "-"]);
+    let r = go(&[
+        "-ss", "0.001", "-i", &f.path, "-c", "copy", "-f", "null", "-",
+    ]);
     assert_eq!(r.code, ExitCode::OK, "{}", r.message());
 }

@@ -762,7 +762,10 @@ fn flat_scaling(lists: Option<&vaco_parse_h264::ScalingLists>) -> bool {
         let present = lists.present.get(i).copied().unwrap_or(false);
         let defaulted = lists.use_default.get(i).copied().unwrap_or(false);
         let flat = if i < 6 {
-            lists.list_4x4.get(i).is_some_and(|l| l.iter().all(|&v| v == 16))
+            lists
+                .list_4x4
+                .get(i)
+                .is_some_and(|l| l.iter().all(|&v| v == 16))
         } else {
             lists
                 .list_8x8
@@ -4153,7 +4156,7 @@ pub(crate) fn decode_slice_cabac_into(
                 qpy,
                 residual: MbResidual::default(),
                 mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
-            slice_id,
+                slice_id,
             });
             if is_first_mb_in_slice {
                 stats.first_slice_mb_cbp = Some((0, 0));
@@ -4241,7 +4244,7 @@ pub(crate) fn decode_slice_cabac_into(
                 qpy,
                 residual,
                 mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
-            slice_id,
+                slice_id,
             });
             budget.release(residual_bytes);
         }

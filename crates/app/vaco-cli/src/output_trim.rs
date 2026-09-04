@@ -367,7 +367,11 @@ impl Muxer for OutputTrim {
         self.inner.interleave(queue, packet, flush)
     }
 
-    fn check_bitstream(&mut self, params: &CodecParameters, packet: &Packet) -> Result<BitstreamAction> {
+    fn check_bitstream(
+        &mut self,
+        params: &CodecParameters,
+        packet: &Packet,
+    ) -> Result<BitstreamAction> {
         self.inner.check_bitstream(params, packet)
     }
 
@@ -426,7 +430,10 @@ mod tests {
         }
 
         fn write_packet(&mut self, packet: &Packet) -> Result<()> {
-            self.written.lock().unwrap().push(packet.pts.ticks().unwrap_or(0));
+            self.written
+                .lock()
+                .unwrap()
+                .push(packet.pts.ticks().unwrap_or(0));
             Ok(())
         }
 
@@ -547,8 +554,10 @@ mod tests {
         // No output-side `-ss` exists (see the module doc), so `Absolute`
         // (`-to`) and `AfterSeek` (`-t`) must behave identically here.
         let (inner, written) = fake();
-        let mut wrapped =
-            OutputTrim::wrap(inner, Some(EndBound::Absolute(Duration::from_micros(2_000_000))));
+        let mut wrapped = OutputTrim::wrap(
+            inner,
+            Some(EndBound::Absolute(Duration::from_micros(2_000_000))),
+        );
         for us in [0, 1_000_000, 2_000_000] {
             wrapped.write_packet(&packet(us)).unwrap();
         }
@@ -651,8 +660,7 @@ mod tests {
     #[test]
     fn notimestamps_is_masked_off_only_while_trimming_is_active() {
         let inner: Box<dyn Muxer> = Box::new(NotimestampsMuxer);
-        let wrapped =
-            OutputTrim::wrap(inner, Some(EndBound::AfterSeek(Duration::from_micros(1))));
+        let wrapped = OutputTrim::wrap(inner, Some(EndBound::AfterSeek(Duration::from_micros(1))));
         assert!(!wrapped.flags().contains(FormatFlags::NOTIMESTAMPS));
         // Every other flag the real muxer declared must survive the mask.
         assert!(wrapped.flags().contains(FormatFlags::NOFILE));

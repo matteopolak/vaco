@@ -145,15 +145,16 @@ fn ffmpegs_independent_qoa_decoder_agrees_with_ours_on_the_same_real_bytes() {
     // 3. Decode with ffmpeg (independent implementation).
     let ref_path = dir.join("ref.raw");
     let status = Command::new("ffmpeg")
-        .args([
-            "-y",
-            "-hide_banner",
-            "-loglevel",
-            "error",
-            "-i",
-        ])
+        .args(["-y", "-hide_banner", "-loglevel", "error", "-i"])
         .arg(&qoa_path)
-        .args(["-acodec", "pcm_s16le", "-f", "s16le", "-fflags", "+bitexact"])
+        .args([
+            "-acodec",
+            "pcm_s16le",
+            "-f",
+            "s16le",
+            "-fflags",
+            "+bitexact",
+        ])
         .arg(&ref_path)
         .status()
         .expect("run ffmpeg");

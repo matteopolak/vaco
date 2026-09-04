@@ -519,16 +519,13 @@ fn filter_enabled(slices: &[SliceDeblock], mb: &MbSummary) -> bool {
 /// filtered: `disable_deblocking_filter_idc == 2` keeps the filter inside
 /// each slice, so an edge between two different slices is left alone.
 fn filters_across(slices: &[SliceDeblock], mb: &MbSummary, other: &MbSummary) -> bool {
-    mb.slice_id == other.slice_id
-        || slice_of(slices, mb).is_none_or(|s| s.params.disable_idc != 2)
+    mb.slice_id == other.slice_id || slice_of(slices, mb).is_none_or(|s| s.params.disable_idc != 2)
 }
 
 /// The two reference-POC lists `mb`'s own slice resolves `ref_idx_lX`
 /// against.
 fn pocs_for<'s>(slices: &'s [SliceDeblock], mb: &MbSummary) -> (&'s [i32], &'s [i32]) {
-    slice_of(slices, mb).map_or((&[][..], &[][..]), |s| {
-        (&s.ref_list0_poc, &s.ref_list1_poc)
-    })
+    slice_of(slices, mb).map_or((&[][..], &[][..]), |s| (&s.ref_list0_poc, &s.ref_list1_poc))
 }
 
 impl<'a> DeblockCtx<'a> {
@@ -651,14 +648,7 @@ impl<'a> DeblockCtx<'a> {
                     } else {
                         blk_row * 4 + (local / 4 - 1) as usize
                     };
-                    *slot = boundary_strength(
-                        mb_edge,
-                        p_mb,
-                        p_blk,
-                        here,
-                        q_blk,
-                        slices,
-                    );
+                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, slices);
                 }
                 for row in 0..16u32 {
                     let y = my * 16 + row;
@@ -757,14 +747,7 @@ impl<'a> DeblockCtx<'a> {
                     } else {
                         (local / 4 - 1) as usize * 4 + blk_col
                     };
-                    *slot = boundary_strength(
-                        mb_edge,
-                        p_mb,
-                        p_blk,
-                        here,
-                        q_blk,
-                        slices,
-                    );
+                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, slices);
                 }
                 for col in 0..16u32 {
                     let x = mx * 16 + col;
@@ -903,14 +886,7 @@ impl<'a> DeblockCtx<'a> {
                     } else {
                         blk_row * 4 + (luma_local / 4 - 1) as usize
                     };
-                    *slot = boundary_strength(
-                        mb_edge,
-                        p_mb,
-                        p_blk,
-                        here,
-                        q_blk,
-                        slices,
-                    );
+                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, slices);
                 }
                 for row in 0..8u32 {
                     let y = my * 8 + row;
@@ -977,14 +953,7 @@ impl<'a> DeblockCtx<'a> {
                     } else {
                         (luma_local / 4 - 1) as usize * 4 + blk_col
                     };
-                    *slot = boundary_strength(
-                        mb_edge,
-                        p_mb,
-                        p_blk,
-                        here,
-                        q_blk,
-                        slices,
-                    );
+                    *slot = boundary_strength(mb_edge, p_mb, p_blk, here, q_blk, slices);
                 }
                 for col in 0..8u32 {
                     let x = mx * 8 + col;
