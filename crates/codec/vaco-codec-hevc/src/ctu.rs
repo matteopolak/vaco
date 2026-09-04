@@ -70,10 +70,12 @@ pub(crate) struct CtxShared<'p> {
     pub sign_data_hiding: bool,
     pub strong_intra_smoothing: bool,
     pub transform_skip_enabled: bool,
-    /// `pcm_enabled_flag` and its SPS parameters. I_PCM CUs are painted into
-    /// [`CuGrid`]'s PCM mask so `pcm_loop_filter_disabled_flag` can suppress
-    /// deblocking and SAO for their samples without changing their ordinary
-    /// intra-neighbour semantics.
+    /// `transquant_bypass_enabled_flag`, which makes every coding unit carry
+    /// `cu_transquant_bypass_flag` as its first CABAC syntax element.
+    pub transquant_bypass_enabled: bool,
+    /// `pcm_enabled_flag` and its SPS parameters. Protected I_PCM CUs share
+    /// [`CuGrid`]'s filter-bypass mask with transquant-bypass CUs so deblocking
+    /// and SAO preserve their samples without changing intra-neighbour semantics.
     pub pcm: Option<PcmParameters>,
     pub bit_depth_luma: u32,
     pub bit_depth_chroma: u32,
@@ -170,6 +172,9 @@ pub(crate) struct Ctx<'p> {
     /// The current quantisation group's own `CuQpDeltaVal` — `0` until (and
     /// unless) [`maybe_parse_cu_qp_delta`] reads a real one.
     cu_qp_delta_val: i32,
+    /// The current coding unit's `cu_transquant_bypass_flag`. Set before the
+    /// CU's prediction syntax and retained through all of its transform leaves.
+    cu_transquant_bypass: bool,
     /// Per-4x4-block transform/CU boundary flags, populated as
     /// [`transform_unit`] reconstructs each luma leaf — the input
     /// [`crate::deblock`]'s post-picture filtering pass reads.
@@ -358,6 +363,7 @@ impl<'p> CtxShared<'p> {
             sign_data_hiding: pps.sign_data_hiding_enabled,
             strong_intra_smoothing: sps.strong_intra_smoothing_enabled,
             transform_skip_enabled: pps.transform_skip_enabled,
+            transquant_bypass_enabled: pps.transquant_bypass_enabled,
             pcm: sps.pcm,
             bit_depth_luma: u32::from(sps.bit_depth_luma),
             bit_depth_chroma: u32::from(sps.bit_depth_chroma),
@@ -402,6 +408,7 @@ impl<'p> Ctx<'p> {
             qg_qp_pred: slice_qp,
             is_cu_qp_delta_coded: false,
             cu_qp_delta_val: 0,
+            cu_transquant_bypass: false,
             edges,
             sao_params,
             recon,
@@ -448,6 +455,7 @@ impl<'p> Ctx<'p> {
             qg_qp_pred: self.qg_qp_pred,
             is_cu_qp_delta_coded: self.is_cu_qp_delta_coded,
             cu_qp_delta_val: self.cu_qp_delta_val,
+            cu_transquant_bypass: self.cu_transquant_bypass,
             edges: self.edges.clone(),
             sao_params: self.sao_params.clone(),
         }
@@ -540,7 +548,7 @@ fn read_transform_skip_flag(
     log2_size: u32,
     ctx_offset: usize,
 ) -> Result<bool> {
-    if !s.shared.transform_skip_enabled || log2_size != 2 {
+    if s.cu_transquant_bypass || !s.shared.transform_skip_enabled || log2_size != 2 {
         return Ok(false);
     }
     let cm = ctx
@@ -751,6 +759,24 @@ fn coding_unit(
     log2_size: u32,
     depth: u32,
 ) -> Result<()> {
+    // §7.3.8.5: this is the first syntax element in every CU when the PPS
+    // enables it, before either an inter slice's skip flag or intra syntax.
+    s.cu_transquant_bypass = if s.shared.transquant_bypass_enabled {
+        let cm = ctx
+            .cu_transquant_bypass
+            .first_mut()
+            .ok_or(Error::InvalidData("cu_transquant_bypass ctx"))?;
+        cabac.decode_decision(cm) != 0
+    } else {
+        false
+    };
+    if s.cu_transquant_bypass {
+        let blocks = usize::try_from(((1i32 << log2_size) >> 2).max(1)).unwrap_or(1);
+        let bx0 = usize::try_from(x0 >> 2).unwrap_or(0);
+        let by0 = usize::try_from(y0 >> 2).unwrap_or(0);
+        s.cu_grid.fill_filter_bypass(bx0, by0, blocks, blocks);
+    }
+
     if s.shared.is_p_slice {
         coding_unit_p(cabac, ctx, s, x0, y0, log2_size, depth)
     } else {
@@ -881,7 +907,9 @@ fn decode_pcm_cu(
         u8::try_from(depth).unwrap_or(u8::MAX),
         DC_IDX,
     );
-    s.cu_grid.fill_pcm(bx0, by0, blocks, blocks);
+    if pcm.loop_filter_disabled {
+        s.cu_grid.fill_filter_bypass(bx0, by0, blocks, blocks);
+    }
     let grid = crate::deblock::DEBLOCK_GRID;
     s.edges.mark_vert(x0, y0, size_i32, grid);
     s.edges.mark_horiz(x0, y0, size_i32, grid);
@@ -2524,14 +2552,18 @@ fn reconstruct_luma_inter(
             log2_size,
             crate::scan::ScanOrder::Diag,
             false,
-            s.shared.sign_data_hiding,
+            s.shared.sign_data_hiding && !s.cu_transquant_bypass,
         );
-        // §8.6.4.1: DST-VII only for 4x4 *intra* luma.
-        let kind = transform_kind(skip, false);
-        let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-        let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
-        let residual =
-            transform::inverse_transform(&dequantised, size, kind, s.shared.bit_depth_luma);
+        let residual = if s.cu_transquant_bypass {
+            transform::transquant_bypass(&coeffs.values, size)
+        } else {
+            // §8.6.4.1: DST-VII only for 4x4 *intra* luma.
+            let kind = transform_kind(skip, false);
+            let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
+            let dequantised =
+                transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
+            transform::inverse_transform(&dequantised, size, kind, s.shared.bit_depth_luma)
+        };
         transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
     }
     write_block(&mut s.recon.y, x0, y0, size, &pred);
@@ -2578,15 +2610,19 @@ fn reconstruct_chroma_inter(
         log2_size,
         crate::scan::ScanOrder::Diag,
         true,
-        s.shared.sign_data_hiding,
+        s.shared.sign_data_hiding && !s.cu_transquant_bypass,
     );
-    let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
-    let residual = transform::inverse_transform(
-        &dequantised,
-        size,
-        transform_kind(skip, false),
-        s.shared.bit_depth_chroma,
-    );
+    let residual = if s.cu_transquant_bypass {
+        transform::transquant_bypass(&coeffs.values, size)
+    } else {
+        let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
+        transform::inverse_transform(
+            &dequantised,
+            size,
+            transform_kind(skip, false),
+            s.shared.bit_depth_chroma,
+        )
+    };
     transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_chroma);
 
     let plane = if is_cb {
@@ -2893,13 +2929,17 @@ fn reconstruct_luma(
             log2_size,
             order,
             false,
-            s.shared.sign_data_hiding,
+            s.shared.sign_data_hiding && !s.cu_transquant_bypass,
         );
-        let kind = transform_kind(skip, log2_size == 2);
-        let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-        let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
-        let residual =
-            transform::inverse_transform(&dequantised, size, kind, s.shared.bit_depth_luma);
+        let residual = if s.cu_transquant_bypass {
+            transform::transquant_bypass(&coeffs.values, size)
+        } else {
+            let kind = transform_kind(skip, log2_size == 2);
+            let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
+            let dequantised =
+                transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
+            transform::inverse_transform(&dequantised, size, kind, s.shared.bit_depth_luma)
+        };
         transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
     }
 
@@ -2960,15 +3000,19 @@ fn reconstruct_chroma(
         log2_size,
         order,
         true,
-        s.shared.sign_data_hiding,
+        s.shared.sign_data_hiding && !s.cu_transquant_bypass,
     );
-    let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
-    let residual = transform::inverse_transform(
-        &dequantised,
-        size,
-        transform_kind(skip, false),
-        s.shared.bit_depth_chroma,
-    );
+    let residual = if s.cu_transquant_bypass {
+        transform::transquant_bypass(&coeffs.values, size)
+    } else {
+        let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
+        transform::inverse_transform(
+            &dequantised,
+            size,
+            transform_kind(skip, false),
+            s.shared.bit_depth_chroma,
+        )
+    };
     transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_chroma);
 
     let plane_mut = if is_cb {

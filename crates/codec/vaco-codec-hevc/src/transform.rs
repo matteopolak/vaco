@@ -84,6 +84,25 @@ pub(crate) fn dequant(coeffs: &[(u8, u8, i32)], size: usize, qp: i32, bit_depth:
     out
 }
 
+/// §8.6.4.1 equation 8-297's transquant-bypass branch: transform coefficient
+/// levels are already residual samples, with no scaling or inverse transform.
+/// Rotation is unavailable because the SPS range-extension flag that enables
+/// it is refused by the decoder's scope check.
+#[must_use]
+pub(crate) fn transquant_bypass(coeffs: &[(u8, u8, i32)], size: usize) -> Vec<i32> {
+    let mut out = vec![0i32; size * size];
+    for &(x, y, level) in coeffs {
+        let (x, y) = (usize::from(x), usize::from(y));
+        if x >= size || y >= size {
+            continue;
+        }
+        if let Some(slot) = out.get_mut(y * size + x) {
+            *slot = level;
+        }
+    }
+    out
+}
+
 /// Which §8.6.4.2 branch turns this block's scaled coefficients into residual
 /// samples. One value rather than a `use_dst` flag beside a separate
 /// `transform_skip` flag, so "DST-VII *and* transform-skip" is not a state

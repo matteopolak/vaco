@@ -1,18 +1,24 @@
-//! I_PCM syntax and reconstruction against JCT-VC `ipcm_A_NEC_3` and
-//! `ipcm_C_NEC_3`.
+//! I_PCM syntax and reconstruction against JCT-VC `ipcm_A_NEC_3`,
+//! `ipcm_C_NEC_3`, and `ipcm_D_NEC_3`.
 //!
 //! The vector is the repository corpus entry
 //! `jctvc-hevc-ipcm-a-nec-3` (archive SHA-256
 //! `89a71f4b9b7e22c481378f83bacc5aac6c8f204999691d3fa21f2804337e84c9`) and
 //! `jctvc-hevc-ipcm-c-nec-3` (archive SHA-256
-//! `12da972f8fcf2d75825535022b7a437d95b1c8272af0b738dc651f34e94c2175`).
-//! Both accompanying conformance notes describe one 416x240 intra picture
+//! `12da972f8fcf2d75825535022b7a437d95b1c8272af0b738dc651f34e94c2175`),
+//! and `jctvc-hevc-ipcm-d-nec-3` (archive SHA-256
+//! `4ef6cdc8fd330d339e1e9e9e04487ba84a21e40a02d111b2ee10c28549bddc94`).
+//! Their accompanying conformance notes describe one 416x240 intra picture
 //! with 8-bit luma/chroma PCM samples and 8x8 through 32x32 PCM coding blocks.
 //! A leaves `pcm_loop_filter_disabled_flag` clear; C sets it and specifically
-//! tests skipping loop filtering on samples belonging to PCM CUs. The
+//! tests skipping loop filtering on samples belonging to PCM CUs. D enables
+//! transquant bypass and tests both direct residual reconstruction and loop
+//! filter suppression for lossless CUs while leaving the PCM-specific loop
+//! filter flag clear. The
 //! checked-in references are `ffmpeg 9.0.1`'s direct yuv420p decodes; their
 //! MD5 values `8049988c383486e076ea2494edda3831` and
-//! `c3e74c399b73a5ab2dbd20523f583464` match the archives' published MD5 files.
+//! `c3e74c399b73a5ab2dbd20523f583464`, and
+//! `aa64a16240064bc2a90fadf979a62a7b` match the archives' published MD5 files.
 
 #![allow(
     clippy::unwrap_used,
@@ -33,6 +39,8 @@ const A_HEVC: &[u8] = include_bytes!("fixtures/ipcm_a_416x240.hevc");
 const A_REF_YUV: &[u8] = include_bytes!("fixtures/ipcm_a_416x240.yuv");
 const C_HEVC: &[u8] = include_bytes!("fixtures/ipcm_c_416x240.hevc");
 const C_REF_YUV: &[u8] = include_bytes!("fixtures/ipcm_c_416x240.yuv");
+const D_HEVC: &[u8] = include_bytes!("fixtures/ipcm_d_416x240.hevc");
+const D_REF_YUV: &[u8] = include_bytes!("fixtures/ipcm_d_416x240.yuv");
 const WIDTH: usize = 416;
 const HEIGHT: usize = 240;
 const FRAME_SIZE: usize = WIDTH * HEIGHT * 3 / 2;
@@ -45,6 +53,11 @@ fn ipcm_a_is_byte_exact() {
 #[test]
 fn ipcm_c_filter_suppression_is_byte_exact() {
     assert_byte_exact(C_HEVC, C_REF_YUV);
+}
+
+#[test]
+fn ipcm_d_transquant_bypass_is_byte_exact() {
+    assert_byte_exact(D_HEVC, D_REF_YUV);
 }
 
 fn assert_byte_exact(hevc: &[u8], reference_yuv: &[u8]) {

@@ -559,7 +559,6 @@ fn offset_block(
     height: i32,
     bit_depth: u32,
     cu_grid: &crate::framebuf::CuGrid<'_>,
-    pcm_loop_filter_disabled: bool,
     component_scale_x: u32,
     component_scale_y: u32,
 ) {
@@ -593,9 +592,13 @@ fn offset_block(
                 {
                     for (x, (d, &sv)) in dst_row.iter_mut().zip(src_row).enumerate() {
                         let px = x0.saturating_add(i32::try_from(x).unwrap_or(0));
-                        if pcm_loop_filter_disabled
-                            && pcm_sample(cu_grid, px, y, component_scale_x, component_scale_y)
-                        {
+                        if filter_bypass_sample(
+                            cu_grid,
+                            px,
+                            y,
+                            component_scale_x,
+                            component_scale_y,
+                        ) {
                             continue;
                         }
                         let v = i32::from(sv);
@@ -632,9 +635,7 @@ fn offset_block(
                     continue;
                 };
                 for x in x0..x0 + width {
-                    if pcm_loop_filter_disabled
-                        && pcm_sample(cu_grid, x, y, component_scale_x, component_scale_y)
-                    {
+                    if filter_bypass_sample(cu_grid, x, y, component_scale_x, component_scale_y) {
                         continue;
                     }
                     let Ok(xu) = usize::try_from(x) else { continue };
@@ -659,20 +660,16 @@ fn offset_block(
     }
 }
 
-/// Map a component-plane coordinate back to luma coordinates before
-/// querying [`crate::framebuf::CuGrid`]'s single PCM mask. HM 18.0 applies
-/// SAO and then restores every I_PCM CU when
-/// `pcm_loop_filter_disabled_flag` is set; skipping that CU's writes here
-/// is equivalent because its transmitted samples are already reconstructed
-/// in place and deblocking independently preserves them.
-fn pcm_sample(
+/// Map a component-plane coordinate back to luma coordinates before querying
+/// the single mask shared by protected I_PCM and transquant-bypass CUs.
+fn filter_bypass_sample(
     cu_grid: &crate::framebuf::CuGrid<'_>,
     x: i32,
     y: i32,
     component_scale_x: u32,
     component_scale_y: u32,
 ) -> bool {
-    cu_grid.pcm_at(
+    cu_grid.filter_bypass_at(
         x.checked_shl(component_scale_x).unwrap_or(i32::MAX),
         y.checked_shl(component_scale_y).unwrap_or(i32::MAX),
     )
@@ -691,12 +688,6 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
     }
     let ctb_size = 1i32 << s.shared.log2_ctb_size;
     let ctbs_x = s.shared.ctbs_x;
-    let pcm_loop_filter_disabled = s
-        .shared
-        .pcm
-        .as_ref()
-        .is_some_and(|pcm| pcm.loop_filter_disabled);
-
     let snap_y = Snapshot::capture(budget, &s.pic.y)?;
     let snap_cb = Snapshot::capture(budget, &s.pic.cb)?;
     let snap_cr = Snapshot::capture(budget, &s.pic.cr)?;
@@ -723,7 +714,6 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
             height,
             s.shared.bit_depth_luma,
             &s.cu_grid,
-            pcm_loop_filter_disabled,
             0,
             0,
         );
@@ -739,7 +729,6 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
             ch,
             s.shared.bit_depth_chroma,
             &s.cu_grid,
-            pcm_loop_filter_disabled,
             1,
             1,
         );
@@ -753,7 +742,6 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
             ch,
             s.shared.bit_depth_chroma,
             &s.cu_grid,
-            pcm_loop_filter_disabled,
             1,
             1,
         );
@@ -782,11 +770,11 @@ mod tests {
     use vaco_limits::Limits;
 
     #[test]
-    fn sao_leaves_pcm_samples_unchanged() {
+    fn sao_leaves_filter_bypass_samples_unchanged() {
         let mut budget = Budget::new(Limits::default());
         let grid_shared = CuGridShared::new(8, 4, false, 4);
         let mut grid = CuGrid::new(&mut budget, &grid_shared).expect("test CU grid");
-        grid.fill_pcm(0, 0, 1, 1);
+        grid.fill_filter_bypass(0, 0, 1, 1);
         grid.finish().expect("publish test CU grid");
 
         let mut plane = Plane::new(&mut budget, 8, 4).expect("test plane");
@@ -806,7 +794,6 @@ mod tests {
             4,
             8,
             &grid,
-            true,
             0,
             0,
         );

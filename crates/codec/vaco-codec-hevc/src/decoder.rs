@@ -1092,9 +1092,6 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
     if pps.tiles.is_some() {
         return unsupported("vaco-codec-hevc: tiles are not supported");
     }
-    if pps.transquant_bypass_enabled {
-        return unsupported("vaco-codec-hevc: transquant_bypass is not supported");
-    }
     if pps.range_extension.is_some() {
         return unsupported("vaco-codec-hevc: PPS range-extension flags are not supported");
     }

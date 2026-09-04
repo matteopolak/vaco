@@ -429,24 +429,18 @@ fn qp_avg(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
     (qp_p + qp_q + 1) >> 1
 }
 
-/// HM 18.0 `xEdgeFilterLuma`/`xEdgeFilterChroma`'s independent
-/// `bPartPNoFilter`/`bPartQNoFilter` values for
-/// `pcm_loop_filter_disabled_flag`. The filter decision still reads both
-/// sides; only writes into the PCM side are suppressed.
-fn pcm_filter_sides(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> (bool, bool) {
-    if !s
-        .shared
-        .pcm
-        .as_ref()
-        .is_some_and(|pcm| pcm.loop_filter_disabled)
-    {
-        return (false, false);
-    }
+/// §8.7.2.5.7/.8's independent P/Q no-filter values. The filter decision
+/// still reads both sides; only writes into an I_PCM or transquant-bypass side
+/// represented by [`crate::framebuf::CuGrid`]'s shared mask are suppressed.
+fn filter_bypass_sides(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> (bool, bool) {
     let (xp, yp) = match dir {
         Dir::Vert => (xq - 1, yq),
         Dir::Horiz => (xq, yq - 1),
     };
-    (s.cu_grid.pcm_at(xp, yp), s.cu_grid.pcm_at(xq, yq))
+    (
+        s.cu_grid.filter_bypass_at(xp, yp),
+        s.cu_grid.filter_bypass_at(xq, yq),
+    )
 }
 
 /// Table 8-12's boundary-filtering-strength (`bS`) derivation:
@@ -563,7 +557,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     let qp = qp_avg(s, Dir::Vert, x, y);
                     let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
                     let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
-                    let (no_filter_p, no_filter_q) = pcm_filter_sides(s, Dir::Vert, x, y);
+                    let (no_filter_p, no_filter_q) = filter_bypass_sides(s, Dir::Vert, x, y);
                     filter_luma_group(
                         &mut s.pic.y,
                         Dir::Vert,
@@ -600,7 +594,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     2,
                     s.shared.tc_offset_div2,
                 );
-                let (no_filter_p, no_filter_q) = pcm_filter_sides(s, Dir::Vert, x, y);
+                let (no_filter_p, no_filter_q) = filter_bypass_sides(s, Dir::Vert, x, y);
                 let cx = x >> 1;
                 let cy0 = y >> 1;
                 let rows = (grid >> 1).max(1);
@@ -643,7 +637,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     let qp = qp_avg(s, Dir::Horiz, x, y);
                     let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
                     let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
-                    let (no_filter_p, no_filter_q) = pcm_filter_sides(s, Dir::Horiz, x, y);
+                    let (no_filter_p, no_filter_q) = filter_bypass_sides(s, Dir::Horiz, x, y);
                     filter_luma_group(
                         &mut s.pic.y,
                         Dir::Horiz,
@@ -677,7 +671,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     2,
                     s.shared.tc_offset_div2,
                 );
-                let (no_filter_p, no_filter_q) = pcm_filter_sides(s, Dir::Horiz, x, y);
+                let (no_filter_p, no_filter_q) = filter_bypass_sides(s, Dir::Horiz, x, y);
                 let cy = y >> 1;
                 let cx0 = x >> 1;
                 let cols = (grid >> 1).max(1);

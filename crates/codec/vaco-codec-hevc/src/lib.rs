@@ -108,10 +108,17 @@
 //!   (default CRF rate control, which implies this), at multiple
 //!   resolutions and CRFs, alongside deblocking/SAO/WPP all at their own
 //!   defaults too.
+//! - **`cu_transquant_bypass_flag` (§7.3.8.5 syntax, §8.6.4.1
+//!   reconstruction) is implemented.** CABAC parses the flag before the rest
+//!   of each CU, coefficient levels become residual samples directly, and
+//!   sign hiding and `transform_skip_flag` are suppressed as specified.
+//!   Deblocking and SAO consult the same per-CU filter-bypass mask already
+//!   used for protected I_PCM samples. Verified byte-exact against
+//!   `ffmpeg 9.0.1` on JCT-VC `ipcm_D_NEC_3` (`tests/ipcm.rs`).
 //! - **Refused by name today**, each with its own
 //!   [`vaco_core::Error::Unsupported`] string: bit depths other than 8,
 //!   chroma formats other than 4:2:0, `separate_colour_plane_flag`,
-//!   tiles, `transquant_bypass`, chroma QP offset lists, custom scaling
+//!   tiles, chroma QP offset lists, custom scaling
 //!   lists, every SPS/PPS range-extension and screen-content-coding flag,
 //!   long-term reference pictures, dependent slice segments, and more than
 //!   one slice segment per picture. The SPS/PPS ones are refused at
@@ -120,8 +127,8 @@
 //!
 //! `docs/codec/vaco-codec-hevc.md`'s "The JCT-VC `HEVC_v1` subset,
 //! measured" section is the standing record of what this list costs on real
-//! conformance bitstreams: 37 of 46 byte-exact against `ffmpeg`'s own
-//! decode and 9 refused by name, with no wrong-output or CABAC-desync cases.
+//! conformance bitstreams: 38 of 46 byte-exact against `ffmpeg`'s own decode
+//! and 8 refused by name, with no wrong-output or CABAC-desync cases.
 //!
 //! # Reuse, not reimplementation
 //!

@@ -14,10 +14,11 @@
 //! `AGENT-CONSTRAINTS.md` describes: two transcriptions of one sentence are
 //! not an independent check.
 //!
-//! Scope: no `transform_skip` residual (refused by the caller — see
-//! [`crate::ctu`]), no range-extension features (persistent Rice adaptation,
-//! extended precision, RDPCM, CABAC-bypass alignment, cross-component
-//! prediction) — all gated off at the SPS by [`crate::decoder`].
+//! Transform-skip and transquant-bypass presence gates and reconstruction are
+//! handled by [`crate::ctu`]; this module receives their resolved sign-hiding
+//! choice. Range-extension features (persistent Rice adaptation, extended
+//! precision, RDPCM, CABAC-bypass alignment, cross-component prediction) are
+//! gated off at the SPS by [`crate::decoder`].
 
 use vaco_codec_cabac::{CabacDecoder, ContextModel};
 

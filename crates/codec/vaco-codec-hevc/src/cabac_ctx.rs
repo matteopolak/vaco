@@ -31,6 +31,7 @@ use vaco_codec_cabac::{ContextModel, init_contexts_hevc};
 // only — see the module doc for why the B/P rows are absent.
 
 const INIT_SPLIT_CU_FLAG: [u8; 3] = [139, 141, 157];
+const INIT_CU_TRANSQUANT_BYPASS: [u8; 1] = [154];
 const INIT_PART_SIZE: [u8; 4] = [184, 154, 154, 154];
 const INIT_PREV_INTRA_LUMA_PRED: [u8; 1] = [184];
 const INIT_INTRA_CHROMA_PRED_MODE: [u8; 2] = [63, 139];
@@ -189,6 +190,7 @@ pub(crate) const MIN_IN_GROUP: [u32; 10] = [0, 1, 2, 3, 4, 6, 8, 12, 16, 24];
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ContextBank {
     pub split_cu_flag: [ContextModel; 3],
+    pub cu_transquant_bypass: [ContextModel; 1],
     pub part_size: [ContextModel; 4],
     pub prev_intra_luma_pred: [ContextModel; 1],
     pub intra_chroma_pred_mode: [ContextModel; 2],
@@ -236,6 +238,7 @@ impl ContextBank {
     pub(crate) fn new(slice_qp: i8) -> Self {
         Self {
             split_cu_flag: init(&INIT_SPLIT_CU_FLAG, slice_qp),
+            cu_transquant_bypass: init(&INIT_CU_TRANSQUANT_BYPASS, slice_qp),
             part_size: init(&INIT_PART_SIZE, slice_qp),
             prev_intra_luma_pred: init(&INIT_PREV_INTRA_LUMA_PRED, slice_qp),
             intra_chroma_pred_mode: init(&INIT_INTRA_CHROMA_PRED_MODE, slice_qp),
@@ -310,6 +313,9 @@ impl ContextBank {
         }
         Self {
             split_cu_flag: row_init!(INIT_SPLIT_CU_FLAG_P, 3),
+            // Table 9-8 uses 154 for every initType, so the I-slice table
+            // above is also the complete P/B table.
+            cu_transquant_bypass: init(&INIT_CU_TRANSQUANT_BYPASS, slice_qp),
             part_size: row_init!(INIT_PART_SIZE_P, 4),
             prev_intra_luma_pred: row_init!(INIT_PREV_INTRA_LUMA_PRED_P, 1),
             intra_chroma_pred_mode: row_init!(INIT_INTRA_CHROMA_PRED_MODE_P, 2),

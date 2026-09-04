@@ -296,10 +296,9 @@ struct CuGridBand {
     mv1_y: Vec<i16>,
     ref_poc1: Vec<i64>,
     cbf_luma: Vec<bool>,
-    /// Whether the block belongs to an I_PCM CU. I_PCM remains intra-coded
-    /// for every other neighbour query; only the loop filters need this
-    /// additional distinction.
-    pcm: Vec<bool>,
+    /// Whether the block belongs to a CU whose samples bypass both in-loop
+    /// filters. Prediction and entropy-neighbour queries do not consult it.
+    filter_bypass: Vec<bool>,
 }
 
 impl CuGridBand {
@@ -324,7 +323,7 @@ impl CuGridBand {
             mv1_y: budget.alloc(len_l1)?,
             ref_poc1: budget.alloc(len_l1)?,
             cbf_luma: vec![false; len],
-            pcm: vec![false; len],
+            filter_bypass: vec![false; len],
         })
     }
 
@@ -557,11 +556,16 @@ impl<'a> CuGrid<'a> {
         }
     }
 
-    /// Paint one I_PCM coding unit's whole footprint. The SPS-level
-    /// `pcm_loop_filter_disabled_flag` decides whether the loop filters
-    /// consult this mask; recording the syntax here keeps deblocking and SAO
-    /// on one source of truth.
-    pub(crate) fn fill_pcm(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize) {
+    /// Paint one coding unit whose reconstructed samples must bypass both
+    /// deblocking and SAO. This is the single mask for I_PCM CUs protected by
+    /// `pcm_loop_filter_disabled_flag` and transquant-bypass CUs.
+    pub(crate) fn fill_filter_bypass(
+        &mut self,
+        bx0: usize,
+        by0: usize,
+        blocks_w: usize,
+        blocks_h: usize,
+    ) {
         let cols = self.shared.cols;
         let band_rows = self.shared.band_rows;
         let local_by0 = self.local_of(by0);
@@ -571,7 +575,7 @@ impl<'a> CuGrid<'a> {
         for local_by in local_by0..local_by0.saturating_add(blocks_h) {
             for bx in bx0..bx0.saturating_add(blocks_w) {
                 if let Some(i) = cu_index_in(cols, band_rows, bx, local_by)
-                    && let Some(slot) = band.pcm.get_mut(i)
+                    && let Some(slot) = band.filter_bypass.get_mut(i)
                 {
                     *slot = true;
                 }
@@ -579,10 +583,11 @@ impl<'a> CuGrid<'a> {
         }
     }
 
-    /// Whether the luma sample at `(px, py)` belongs to an I_PCM coding
-    /// unit. Out-of-picture and not-yet-decoded positions are not PCM.
+    /// Whether the luma sample at `(px, py)` belongs to a coding unit whose
+    /// samples bypass both in-loop filters. Out-of-picture and not-yet-decoded
+    /// positions do not bypass filtering.
     #[must_use]
-    pub(crate) fn pcm_at(&self, px: i32, py: i32) -> bool {
+    pub(crate) fn filter_bypass_at(&self, px: i32, py: i32) -> bool {
         let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
             return false;
         };
@@ -598,7 +603,7 @@ impl<'a> CuGrid<'a> {
         ) else {
             return false;
         };
-        band.pcm.get(i).copied().unwrap_or(false)
+        band.filter_bypass.get(i).copied().unwrap_or(false)
     }
 
     /// The quadtree depth of the 4x4 block at luma pixel `(px, py)`, or
