@@ -65,16 +65,11 @@ fn fourcc_codec_name(id: ChunkId) -> Option<&'static str> {
 /// This table must name everything [`codec_name`] names *and* the shared enum
 /// can represent, because `vaco-probe` prints `codec_name` from the
 /// `CodecId`, not from this crate's string. A `FourCC` that has a spelling
-/// here but no id prints `unknown` — which is how `FMP4` came to probe as
-/// `codec_name=unknown` while this very file knew it was `mpeg4`
-/// (CONFORMANCE-FINDINGS 24).
+/// here but no id prints `unknown`; `FMP4` is one example of that mismatch.
 ///
-/// The doc comment that used to sit here said MPEG-4, MS-MPEG4, Huffyuv and
-/// raw video had no variant in the shared enum. That was true when it was
-/// written and had stopped being true by the time anyone read it — the
-/// hazard `AGENT-CONSTRAINTS.md` calls "never pin the absence of something
-/// the project is building". Only `msmpeg4v2`, `cinepak`, `msvideo1`, `wmv1`
-/// and `wmv2` are still genuinely unrepresentable.
+/// `MP42`, `cvid`, `MSVC`/`CRAM`, `WMV1`, and `WMV2` have a spelling in
+/// `codec_name` but no variant in the shared enum. They intentionally return
+/// `None` here; retaining the string in `codec_name` keeps the gap visible.
 #[must_use]
 pub fn codec_id(compression: Compression) -> Option<CodecId> {
     let Compression::FourCc(id) = compression else {
