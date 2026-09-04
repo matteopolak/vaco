@@ -1044,6 +1044,40 @@ old-value guard. **If `update-ref` fails, start again from `git rev-parse HEAD`
 `GIT_INDEX_FILE` does not survive between tool calls, so do the whole block in
 one invocation. An agent that split it landed an empty commit.
 
+**Never feed `git rev-parse "$REV:$PATH"` to `--cacheinfo`.** `update-index
+--cacheinfo` records the sha you hand it *with the mode you claim*, and checks
+neither. Give it a commit sha under `100644`/`100755` and you write a tree
+entry that says "blob" over a commit object — a malformed object. Nothing local
+complains: `git show`, `git log`, `git diff` and the working-tree checkout all
+look right, and later commits that fix the *content* do not remove the bad tree
+from history. It surfaces only at `git push`, where the remote's fsck rejects
+**the entire batch**:
+
+```
+error: object <sha> is a commit, not a blob
+fatal: entry '<path>' in tree <tree> has blob mode, but is not a blob
+remote: fatal: early EOF
+```
+
+This happened on 2026-09-03 and blocked every push to `main` for 28 commits
+across a dozen agents until the range was rebuilt. `rev-parse` is the trap:
+for some inputs it returns the *commit's* sha rather than the path's blob, and
+it does so silently. Two people hit it within an hour — the agent that caused
+it, and the orchestrator diagnosing it, whose first lookup reported a "blob"
+sha identical to the commit's own for every commit probed.
+
+So: get blobs from `git hash-object -w <file>` (which can only ever produce a
+blob) or from `git ls-tree`, which prints the type explicitly. If you must use
+`rev-parse`, verify before you commit — one line, and it would have cost
+nothing:
+
+```sh
+[ "$(git cat-file -t "$blob")" = blob ] || { echo "not a blob: $blob"; exit 1; }
+```
+
+`git ls-tree <rev> <path>` is the authoritative reading of what a tree actually
+holds. `git rev-parse <rev>:<path>` is not.
+
 **`/tmp/my-half-of-the-file.rs` is not decorative.** `git hash-object -w` takes
 a *path*, and if you give it the working-tree path you hash whatever is in the
 working tree — including the other agent's uncommitted edits. That defeats the
