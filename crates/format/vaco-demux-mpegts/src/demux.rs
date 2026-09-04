@@ -122,6 +122,11 @@ struct EsPid {
     key: bool,
     /// A `discontinuity_indicator` applies to the next packet emitted.
     discontinuity: bool,
+    /// Packets from this PID's most recently completed *unbounded*-length PES
+    /// (`PES_packet_length == 0`, ISO/IEC 13818-1 2.4.3.7 — video only by the
+    /// spec's own restriction), held back one PES generation before joining
+    /// `queue`. See `flush_pes`'s doc comment for why.
+    held: Vec<Packet>,
 }
 
 /// One program's clock. Wrap state is per program, never per stream (R7): a
@@ -621,6 +626,7 @@ impl MpegTsDemuxer {
             corrupt: false,
             key: false,
             discontinuity: false,
+            held: Vec::new(),
         });
         if let Some(p) = self.programs.get_mut(program) {
             p.stream_indices.push(index);
@@ -829,10 +835,35 @@ impl MpegTsDemuxer {
 
     /// Turn the accumulated PES packet into a [`Packet`] and queue it, split
     /// into one packet per AAC/ADTS frame where that framing applies.
+    ///
+    /// A PES with a declared `PES_packet_length` (every audio stream seen in
+    /// practice) is released the moment that many bytes have arrived — no
+    /// reason to wait for anything else, and the reference does not. A PES
+    /// with `PES_packet_length == 0` (video; ISO/IEC 13818-1 2.4.3.7 restricts
+    /// the zero value to a video elementary stream carried in a Transport
+    /// Stream) can only be known complete once the *next* `payload_unit_start`
+    /// for that PID arrives — but the reference does not hand it to the
+    /// caller at that point either. It holds it one PES generation longer,
+    /// releasing it only once the *following* unbounded PES on the same PID
+    /// has itself been shown complete (or end of stream is reached).
+    ///
+    /// Measured on a 25 fps H.264 + 44.1 kHz AAC `-f mpegts` fixture (av.ts):
+    /// walking the file's actual PES boundaries and simulating "release video
+    /// unit N only once unit N+1's own completion trigger has also fired"
+    /// reproduces the reference's emission order exactly — 6 video packets
+    /// before the first audio group, 9 between the first and second, and so
+    /// on — while "release each unit at its own trigger" (this crate's
+    /// previous behaviour) does not, by exactly one video packet at each
+    /// boundary. `held` is that one-generation buffer, per PID; unbounded
+    /// PES packets go there instead of `queue` and are released the next time
+    /// this function runs for the same PID (see the call to `release_held`
+    /// below and in `flush_all`).
     fn flush_pes(&mut self, slot: usize) -> Result<()> {
+        self.release_held(slot);
         let Some(es) = self.es.get_mut(slot) else {
             return Ok(());
         };
+        let unbounded = es.total.is_none();
         let charged = es.buf.len() as u64;
         let (stream_index, clock, pos, corrupt, key, discont) = (
             es.stream_index,
@@ -989,7 +1020,7 @@ impl MpegTsDemuxer {
             {
                 self.index.add(IndexEntry::keyframe(pos, Timestamp::new(v)));
             }
-            self.queue.push_back(pkt);
+            self.enqueue(slot, unbounded, pkt);
             return Ok(());
         }
 
@@ -1027,10 +1058,37 @@ impl MpegTsDemuxer {
             {
                 self.index.add(IndexEntry::keyframe(pos, Timestamp::new(v)));
             }
-            self.queue.push_back(pkt);
+            self.enqueue(slot, unbounded, pkt);
             samples_before = samples_before.saturating_add(i64::from(frame.samples));
         }
         Ok(())
+    }
+
+    /// Route one packet produced by `flush_pes` to `queue` (declared-length
+    /// PES) or to that PID's `held` buffer (unbounded PES — see `flush_pes`'s
+    /// doc comment), where it waits for the same PID's next flush to release
+    /// it ahead of whatever that flush itself produces.
+    fn enqueue(&mut self, slot: usize, unbounded: bool, pkt: Packet) {
+        if unbounded {
+            if let Some(es) = self.es.get_mut(slot) {
+                es.held.push(pkt);
+            }
+        } else {
+            self.queue.push_back(pkt);
+        }
+    }
+
+    /// Move a PID's one-generation-old held packets (see `flush_pes`) onto
+    /// `queue`, oldest first. A no-op when nothing is held.
+    fn release_held(&mut self, slot: usize) {
+        let Some(es) = self.es.get_mut(slot) else {
+            return;
+        };
+        if es.held.is_empty() {
+            return;
+        }
+        let held = core::mem::take(&mut es.held);
+        self.queue.extend(held);
     }
 
     fn note_scan(&mut self, stream_index: u32, pts: Timestamp) {
@@ -1196,7 +1254,11 @@ impl MpegTsDemuxer {
 
     /// Emit whatever every PID still holds. Used at end of input, where a
     /// video PES packet with no declared length is only complete because
-    /// nothing follows it.
+    /// nothing follows it. That same end-of-input point is also where the
+    /// *previous* unbounded PES's `held` packets run out of a "next flush"
+    /// to release them — nothing else will ever call `flush_pes` for this
+    /// PID again — so this releases them explicitly rather than leaving
+    /// them stranded.
     fn flush_all(&mut self) -> Result<()> {
         for slot in 0..self.es.len() {
             let pending = self
@@ -1206,6 +1268,7 @@ impl MpegTsDemuxer {
             if pending {
                 self.flush_pes(slot)?;
             }
+            self.release_held(slot);
         }
         Ok(())
     }
@@ -1220,6 +1283,7 @@ impl MpegTsDemuxer {
             es.cc = None;
             es.corrupt = false;
             es.discontinuity = false;
+            es.held.clear();
         }
         for p in &mut self.psi {
             p.asm.abandon();

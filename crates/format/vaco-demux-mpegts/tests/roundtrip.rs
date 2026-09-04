@@ -398,6 +398,53 @@ fn a_video_pes_with_no_declared_length_ends_at_the_next_one_and_at_eof() {
     );
 }
 
+/// Issue #632 part 2: cross-stream packet ordering.
+///
+/// `simple_file` writes `video[i]` then `audio[i]` for each `i`, so on the
+/// wire every audio PES's bytes complete (it declares its own
+/// `PES_packet_length`) before the *next* video PES's `payload_unit_start`
+/// ever arrives to make `video[i]` completable at all (`PES_packet_length ==
+/// 0`, unbounded — ISO/IEC 13818-1 2.4.3.7 restricts that value to a video
+/// elementary stream). A demuxer that hands a video packet to its caller the
+/// moment that trigger fires would already interleave one wire-order step
+/// later than the caller might expect; the reference goes one step further
+/// still; measured on a real 25 fps H.264 + 44.1 kHz AAC `-f mpegts` mux
+/// (`av.ts`) by walking its actual PES byte offsets, the reference does not
+/// release `video[i]` until `video[i+1]`'s own completion trigger has *also*
+/// fired — one whole PES generation later than this crate used to hand it
+/// off — reproducing the reference's emission order exactly across every
+/// audio/video interleave boundary in that file (0 mismatches over 85
+/// video+audio-group positions, two independently muxed fixtures).
+///
+/// `simple_file(4)` pins the same rule at crate level: `video[0]` only
+/// becomes known-complete when `video[1]`'s own `payload_unit_start`
+/// arrives, but is not released until `video[1]` is *itself* shown complete
+/// (by `video[2]`'s arrival) — one full frame later than the direct
+/// "complete and release with the completion trigger" measured against
+/// this exact fixture before that fix landed.
+#[test]
+fn video_release_is_deferred_one_pes_behind_its_own_completion_trigger() {
+    let mut d = open(simple_file(4));
+    let packets = drain(&mut d);
+    let order: Vec<u32> = packets.iter().map(|p| p.stream_index).collect();
+    // audio(0), audio(1), video(0), audio(2), video(1), audio(3), video(2),
+    // video(3) — the last two video packets both surface only at EOF, which
+    // is where `video[3]` (nothing follows it) and the held `video[2]` (held
+    // behind `video[3]`'s own completion) both drain.
+    assert_eq!(
+        order,
+        vec![1, 1, 0, 1, 0, 1, 0, 0],
+        "video must trail its own completion trigger by one PES, matching \
+         the reference's measured emission order"
+    );
+    let video_pts: Vec<i64> = packets
+        .iter()
+        .filter(|p| p.stream_index == 0)
+        .map(|p| p.pts.ticks().unwrap())
+        .collect();
+    assert_eq!(video_pts, vec![90_000, 93_600, 97_200, 100_800]);
+}
+
 #[test]
 fn start_time_and_duration_are_estimated_because_nothing_declares_them() {
     let d = open(simple_file(25));

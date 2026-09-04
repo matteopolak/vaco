@@ -522,10 +522,55 @@ started after that trigger point, however many there are." That rules out
 a fixed reorder-buffer depth (e.g. "delay by 1") as the mechanism. It does
 not, on its own, distinguish "delay until the next video PES's own
 completion" from "delay by one full PID switch, however long that switch
-lasts" — both produce this data — and reaching further than that without
-reading the reference's source (D7) was not attempted here; recorded so
-the next attempt does not re-spend the budget on the one-slot theory this
-correction rules out.
+lasts" — both produce this data.
+
+### Packet ordering — fixed 2026-09-03 (issue #632 part 2)
+
+"Delay until the next video PES's own completion" is what it was: walking a
+real fixture's actual byte offsets settles the ambiguity the previous entry
+left open, because the two candidate mechanisms it named are only
+indistinguishable when there is exactly one other-PID PES between two video
+units. A wider-spaced fixture is not: "one full PID switch, however long it
+lasts" predicts the delayed video packet rides along with whatever else is
+mid-switch, while "delay until the next video PES's own completion" predicts
+a delay that depends only on the video stream's own cadence. They give
+different answers once the gap holds more than one intervening PES, and
+measuring which one the reference actually produces — rather than picking
+the one that sounds more plausible — is what settled it.
+
+Method: parse `av.ts`'s actual transport packets in Python (PID, PUSI, PES
+header, declared `PES_packet_length`) to get every PES's true byte-exact
+completion trigger — next-PUSI position for a PES with
+`PES_packet_length == 0` (unbounded; ISO/IEC 13818-1 2.4.3.7 restricts that
+value to a video elementary stream carried in a Transport Stream), or
+`start + 6 + PES_packet_length` for a PES with a declared length (every
+audio PES observed). Simulating "release each unit at its own trigger,
+audio immediately, video one trigger later than its own" and merging by
+trigger position reproduces `ffprobe 9.0.1`'s emission order **exactly — 0
+mismatches across 85 video-and-audio-group positions** on the doc's 25 fps
+H.264 + 44.1 kHz AAC fixture, and **0 mismatches across 69** on a second,
+independently muxed 30 fps + 48 kHz fixture encoded with real B-frames
+(`-bf 2`, so decode order and presentation order genuinely differ) — the
+release rule keys on transport-stream arrival position, not PTS, so it does
+not care whether the stream reorders for B-frames.
+
+The fix: `EsPid` gets a `held: Vec<Packet>` buffer. `flush_pes` records
+whether the PES it is about to turn into packets was unbounded
+(`es.total.is_none()` at entry, before the field is reset for the next PES)
+and, on that path, calls `release_held` first — draining whatever the same
+PID's *previous* unbounded flush produced onto `queue` — before routing this
+flush's own packets into `held` instead of `queue` directly (`enqueue`,
+shared with the declared-length path, which always goes straight to
+`queue`). `flush_all` calls `release_held` for every PID after its normal
+end-of-input flush, so the last one or two held video packets are not
+stranded when nothing ever triggers another `flush_pes` call for that PID.
+`reset_stream_state` (seek) clears `held` along with the rest of the
+per-PID assembly state.
+
+Nothing about packet *contents* changed — pts, dts, duration and pos were
+already correct once matched to the right reference packet (see above);
+this only reorders when an already-correct packet is hidden this
+generation and next generation.
 
 ---
 
@@ -534,19 +579,14 @@ correction rules out.
 Interfaces are frozen (plan 19 §6), so these are **reported, not changed**,
 in descending order of cost.
 
-1. **Packet ordering across streams still disagrees with the reference by one
-   packet at a time, at every audio/video interleave boundary.** The
-   remaining piece of the former "no packet-reframing layer" gap — AAC
-   re-framing itself is fixed; see *Audio re-framing* above for the exact
-   reproduction and what is and is not understood about it.
-2. **`Discovery` snapshots the stream list at construction.** `Discovery::new`
+1. **`Discovery` snapshots the stream list at construction.** `Discovery::new`
    does `inner.streams().to_vec()` and never re-reads, so a stream the demuxer
    discovers *during* the pass never appears. That is the progressive-discovery
    case MPEG-TS makes ordinary — a PMT arriving after the first packets is
    normal, not pathological. Worked around by doing the PSI scan inside
    `open()`, which covers every stream the PAT names; a genuinely late stream
    still will not show.
-3. **`Discovery::duration` prefers its own forward-scan `from_pts` over the
+2. **`Discovery::duration` prefers its own forward-scan `from_pts` over the
    demuxer's answer.** `estimate_duration` takes `FromPts` before `FromStream`
    unless `authoritative` or `skip_estimate_duration_from_pts` is set, and
    `Discovery` fills `from_pts` from the *probe window*, not from a tail scan.
@@ -557,12 +597,12 @@ in descending order of cost.
    is exact; a caller that wraps it in `Discovery` gets the probe window
    instead. **This needs a `DurationInputs` field distinguishing "scanned the
    tail" from "scanned the prefix".**
-4. **`FormatFlags::TS_DISCONT` conflates two properties.** It correctly
+3. **`FormatFlags::TS_DISCONT` conflates two properties.** It correctly
    suppresses the monotonic-DTS repair and incorrectly disables bisection.
    Handled by calling `binary_search` directly; a separate `NOBINSEARCH`-style
    bit, or splitting the flag, would let `SeekStrategy::choose` be used as
    intended.
-5. **`Program` had no `pmt_pid`, `pcr_pid` or `pmt_version` fields — closed
+4. **`Program` had no `pmt_pid`, `pcr_pid` or `pmt_version` fields — closed
    2026-08-22.** All four (`program_num` too) are `Program` fields now and the
    demuxer sets them there; they used to travel as metadata entries, which is
    why the `[PROGRAM]` section printed them as `TAG:pmt_pid=…` — the right
@@ -575,15 +615,15 @@ in descending order of cost.
    `program_id`, `program_num`, `nb_streams`, `pmt_pid`, `pcr_pid` and the tags.
    Plan 18 §1.1 says otherwise and is wrong. The field is kept because this
    demuxer needs it to notice a PMT change, not because anything prints it.
-6. **`ProbeScore`'s convention table has no value for a self-synchronising
+5. **`ProbeScore`'s convention table has no value for a self-synchronising
    container.** `repeating(n)` steps over 50, which is what MPEG-TS actually
    scores, and there is no constant for the reference's low-confidence 2.
-7. **`DemuxerDesc::open` takes no options and no `Limits`**, so
+6. **`DemuxerDesc::open` takes no options and no `Limits`**, so
    `MpegTsDemuxer::open_with_limits` exists as a second, non-`dyn`
    constructor — the same workaround `vacoraw` needed.
-8. **`Stream` has no `pts_wrap_bits`**, so the demuxer holds the `WrapState`.
+7. **`Stream` has no `pts_wrap_bits`**, so the demuxer holds the `WrapState`.
    Correct here anyway, since the state is per *program*.
-9. **One teletext or subtitling descriptor can declare several logical subtitle
+8. **One teletext or subtitling descriptor can declare several logical subtitle
    streams on one PID**, and nothing in the model maps one PID to many streams.
    The count is recorded as `teletext_pages` / `subtitle_streams` metadata so
    the gap is visible rather than silent. This is why a single teletext PID
