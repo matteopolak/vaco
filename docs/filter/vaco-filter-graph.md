@@ -340,6 +340,12 @@ verdict. Measured 2026-09-03, one campaign each, `-timeout=10
 | `graph_build` | bytes → `parse_and_build`, mock registry; `render` on error | 1,610,888 | 300 s | 734 / 2621 | none |
 | `graph_hostile` | grammar-driven descriptions → parse, build, attach, `configure` | 427,289 over three runs | 8,371 execs, then 600 s, then 600 s | 4423 / 22910 | one parser bug, one harness bug |
 
+`graph_parse` also replays the durable source-level regression
+`fuzz/seeds/graph_parse/regression-sws-prefix-roundtrip-288b48fa`, which keeps a
+leading backslash from being mistaken for the `sws_flags=` graph prefix when a
+literal filter has that name. The matching `graph_hostile` seed stores the
+structure-aware generator input, not the rendered graph string.
+
 `graph_hostile` is the structure-aware one. It draws filter names, labels,
 option keys and values from small pools so that duplicate labels, forward
 references, cycles, `outputs=` counts past `usize`, unicode and empty names and
