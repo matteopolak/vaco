@@ -3803,6 +3803,7 @@ dependencies = [
  "vaco-filter-core",
  "vaco-filter-graph",
  "vaco-frame",
+ "vaco-limits",
  "vaco-opts",
  "vaco-pixfmt",
  "vaco-sampfmt",
