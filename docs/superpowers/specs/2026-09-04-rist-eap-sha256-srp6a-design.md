@@ -14,7 +14,7 @@ component, implement TLS-SRP, or add support for arbitrary SRP groups.
 ## Dependency decision
 
 The implementation adds `crypto-bigint` 0.7.5 with default features disabled
-and the `getrandom`, `subtle`, and `zeroize` features enabled. The crate is pure
+and the `subtle` and `zeroize` features enabled. The crate is pure
 Rust, MIT OR Apache-2.0, requires Rust 1.85 (the workspace requires 1.89), is
 actively maintained by RustCrypto, and provides fixed-width Montgomery
 arithmetic whose normal APIs are constant-time. Its published security notes
@@ -31,12 +31,15 @@ unsafe boundary for a task a suitable pure-Rust crate covers. Hand-written
 would fail silently.
 
 SHA-256 remains behind the existing `vaco-hash` ownership boundary. No second
-direct `sha2` dependency is added. The `crypto-bigint` `getrandom` feature backs
-a fallible native OS entropy source. The public RIST API exposes Vaco-owned
-types only, including an injectable `SecretSource`, so deterministic tests do
-not leak dependency types into the API. Passwords, private exponents, shared
-secrets, and session keys are zeroized when dropped. Validator comparisons use
-constant-time equality.
+direct `sha2` dependency is added. A non-wasm target-specific dependency enables
+`crypto-bigint`'s `getrandom` feature to back a fallible native OS entropy
+source; it stays disabled for `wasm32-unknown-unknown`, where getrandom otherwise
+emits a compile error. The public RIST API exposes Vaco-owned types only,
+including an injectable `SecretSource`, so deterministic tests and wasm callers
+can supply entropy without leaking dependency types into the API.
+`SystemSecretSource` is available only on non-wasm targets. Passwords, private
+exponents, shared secrets, and session keys are zeroized when dropped.
+Validator comparisons use constant-time equality.
 
 ## Group policy and arithmetic
 
