@@ -293,6 +293,9 @@ fn flac_round_trips_through_the_sibling_demuxer() {
 /// than through any codec-specific reconstruction.
 #[test]
 fn a_packet_with_no_stated_duration_still_advances_the_granule() {
+    const FRAME_SAMPLES: i64 = 4608;
+    const COUNT: i64 = 5;
+
     let sink = Box::new(MemorySink::new());
     let bytes_handle = sink.shared();
     let mut mux = OggMuxer::new(sink).unwrap();
@@ -312,8 +315,6 @@ fn a_packet_with_no_stated_duration_still_advances_the_granule() {
 
     let mut budget = Budget::new(vaco_limits::Limits::permissive());
     let payload = [0xFFu8, 0xF8, 0x69, 0x18, 0x00, 0x00];
-    const FRAME_SAMPLES: i64 = 4608;
-    const COUNT: i64 = 5;
     for i in 0..COUNT {
         let mut pkt = Packet::from_slice(&mut budget, &payload).unwrap();
         pkt.stream_index = idx;
@@ -332,7 +333,7 @@ fn a_packet_with_no_stated_duration_still_advances_the_granule() {
     mux.write_trailer().unwrap();
 
     let written = bytes_handle.snapshot();
-    let mut demux = OggDemuxer::open(
+    let demux = OggDemuxer::open(
         Box::new(MemorySource::new(written)),
         &NoParsers,
         &FormatOptions::default(),
