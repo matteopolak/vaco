@@ -1897,7 +1897,6 @@ fn sample_chroma_2x2(
     )]
     {
         let (mvx, mvy) = (i32::from(mv.0), i32::from(mv.1));
-        let mut out = [[0u8; 2]; 2];
         // Clause 8.4.2.2.2's bilinear reads `(xIntC, yIntC)` and its right/below
         // neighbour, so the four sub-positions between them span a 3x3 region at
         // `(cx0 + mv >> 3, cy0 + mv >> 3)`.
@@ -1907,25 +1906,14 @@ fn sample_chroma_2x2(
             RefPlane::Banded(view) => {
                 let Ok(b) = view.block(rx0, ry0, 3, 3, &mut scratch.block) else {
                     scratch.failed = true;
-                    return out;
+                    return [[0u8; 2]; 2];
                 };
                 let (data, stride) = (b.data, b.stride);
                 let fetch = |ax: i32, ay: i32| -> u8 {
                     let (rx, ry) = ((ax - rx0).max(0) as usize, (ay - ry0).max(0) as usize);
                     data.get(ry * stride + rx).copied().unwrap_or(0)
                 };
-                for (dy, row) in out.iter_mut().enumerate() {
-                    for (dx, v) in row.iter_mut().enumerate() {
-                        *v = crate::interp::chroma_mc_sample(
-                            fetch,
-                            cx0 + dx as i32,
-                            cy0 + dy as i32,
-                            mvx,
-                            mvy,
-                        );
-                    }
-                }
-                return out;
+                return crate::interp::chroma_mc_2x2(fetch, cx0, cy0, mvx, mvy);
             }
         };
         let fetch = |ax: i32, ay: i32| -> u8 {
@@ -1939,18 +1927,7 @@ fn sample_chroma_2x2(
                 .copied()
                 .unwrap_or(0)
         };
-        for (dy, row) in out.iter_mut().enumerate() {
-            for (dx, v) in row.iter_mut().enumerate() {
-                *v = crate::interp::chroma_mc_sample(
-                    fetch,
-                    cx0 + dx as i32,
-                    cy0 + dy as i32,
-                    mvx,
-                    mvy,
-                );
-            }
-        }
-        out
+        crate::interp::chroma_mc_2x2(fetch, cx0, cy0, mvx, mvy)
     }
 }
 

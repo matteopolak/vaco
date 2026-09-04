@@ -1,10 +1,9 @@
 //! Clause 8.4.2.2.1's luma quarter-sample interpolation: the six-tap FIR
 //! for half-sample positions, and simple averaging for quarter-sample
-//! ones. Plus [`chroma_mc_sample`], clause 8.4.2.2.2's bilinear chroma
-//! interpolation -- one-eighth-chroma-sample positions rather than
-//! luma's quarter, and a plain 2-tap-per-axis bilinear filter rather
-//! than the six-tap FIR, since chroma has no half-sample stage of its
-//! own to interpolate through.
+//! ones. Plus [`chroma_mc_2x2`], clause 8.4.2.2.2's bilinear chroma
+//! interpolation -- one-eighth-chroma-sample positions rather than luma's
+//! quarter, and a plain 2-tap-per-axis bilinear filter rather than the six-tap
+//! FIR, since chroma has no half-sample stage of its own to interpolate through.
 //!
 //! Both transcribed and cross-checked directly against a primary text
 //! (`provenance/sources.toml`'s `iso-iec-14496-10-2002-draft`) rather
@@ -490,6 +489,7 @@ pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
 /// ...)`/`Clip3(0, PicHeightInSamplesC - 1, ...)` edge clamping is what
 /// that wrapping applies.
 #[must_use]
+#[cfg(test)]
 pub(crate) fn chroma_mc_sample<F: Fn(i32, i32) -> u8>(
     fetch: F,
     x: i32,
@@ -518,6 +518,54 @@ pub(crate) fn chroma_mc_sample<F: Fn(i32, i32) -> u8>(
         + (8 - frac_x) * frac_y * c
         + frac_x * frac_y * d;
     clip_u8((sum + 32) >> 6)
+}
+
+/// Predicts the four chroma samples covered by one luma 4x4 block. Their
+/// bilinear neighbourhoods overlap into one 3x3 source window, so this fetches
+/// those nine samples once and reuses the four interpolation weights rather
+/// than issuing sixteen overlapping fetches. The test-only
+/// `chroma_mc_sample` is the independent per-sample oracle.
+#[must_use]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "array::from_fn bounds dy/dx to 0..2, so dy+1/dx+1 stay within the fixed 3x3 window"
+)]
+pub(crate) fn chroma_mc_2x2<F: Fn(i32, i32) -> u8>(
+    fetch: F,
+    x: i32,
+    y: i32,
+    mv_x: i32,
+    mv_y: i32,
+) -> [[u8; 2]; 2] {
+    let int_x = mv_x >> 3;
+    let frac_x = mv_x & 7;
+    let int_y = mv_y >> 3;
+    let frac_y = mv_y & 7;
+    let ax = x + int_x;
+    let ay = y + int_y;
+    let window: [[u8; 3]; 3] = core::array::from_fn(|dy| {
+        core::array::from_fn(|dx| {
+            fetch(
+                ax + i32::try_from(dx).unwrap_or(0),
+                ay + i32::try_from(dy).unwrap_or(0),
+            )
+        })
+    });
+    let weights = [
+        (8 - frac_x) * (8 - frac_y),
+        frac_x * (8 - frac_y),
+        (8 - frac_x) * frac_y,
+        frac_x * frac_y,
+    ];
+    core::array::from_fn(|dy| {
+        core::array::from_fn(|dx| {
+            let sum = weights[0] * i32::from(window[dy][dx])
+                + weights[1] * i32::from(window[dy][dx + 1])
+                + weights[2] * i32::from(window[dy + 1][dx])
+                + weights[3] * i32::from(window[dy + 1][dx + 1]);
+            clip_u8((sum + 32) >> 6)
+        })
+    })
 }
 
 #[cfg(test)]
@@ -679,6 +727,55 @@ mod tests {
             got > 200,
             "got={got}, expected close to the x=0 sample (255)"
         );
+    }
+
+    #[test]
+    fn chroma_2x2_matches_four_scalar_samples_with_one_shared_window() {
+        use core::cell::Cell;
+
+        let sample = |x: i32, y: i32| -> u8 {
+            let v = (x.rem_euclid(37) * 29 + y.rem_euclid(41) * 47 + (x * y).rem_euclid(31))
+                .rem_euclid(256);
+            u8::try_from(v).unwrap_or(0)
+        };
+        for &(x, y, integer_mv_x, integer_mv_y) in
+            &[(11, 13, 0, 0), (0, 0, -16, -8), (-5, 7, 24, -24)]
+        {
+            for frac_y in 0..8 {
+                for frac_x in 0..8 {
+                    let mv_x = integer_mv_x + frac_x;
+                    let mv_y = integer_mv_y + frac_y;
+                    let fetches = Cell::new(0usize);
+                    let got = chroma_mc_2x2(
+                        |ax, ay| {
+                            fetches.set(fetches.get() + 1);
+                            sample(ax, ay)
+                        },
+                        x,
+                        y,
+                        mv_x,
+                        mv_y,
+                    );
+                    assert_eq!(
+                        fetches.get(),
+                        9,
+                        "mv=({mv_x},{mv_y}) must fetch the shared 3x3 window once"
+                    );
+                    let expected = core::array::from_fn(|dy| {
+                        core::array::from_fn(|dx| {
+                            chroma_mc_sample(
+                                sample,
+                                x + i32::try_from(dx).unwrap_or(0),
+                                y + i32::try_from(dy).unwrap_or(0),
+                                mv_x,
+                                mv_y,
+                            )
+                        })
+                    });
+                    assert_eq!(got, expected, "mv=({mv_x},{mv_y})");
+                }
+            }
+        }
     }
 
     /// The whole point of batching: predicting a partition in one

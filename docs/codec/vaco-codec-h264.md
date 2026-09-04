@@ -1186,9 +1186,65 @@ recorded in full in `planning/E2E-GAPS.md` §28 because neither was
 visible from reading the code: computing every half-pel plane
 unconditionally cost more than the fetch-count reduction it was meant to
 win, and a `Copy` `Option<[[u8; 16]; 16]>`'s own `.map()` copied the
-whole array per pixel. Chroma (`sample_chroma_2x2`) was left untouched:
-the item's own stop condition gates chroma work on the luma kernel
+whole array per pixel. Chroma (`sample_chroma_2x2`) was left untouched in that
+round: the item's own stop condition gates chroma work on the luma kernel
 clearing the ratio bar, which it did not.
+
+### Batched chroma prediction
+
+`sample_chroma_2x2` predicts the four chroma samples covered by one luma 4x4
+block. Those four bilinear filters overlap: together they read one 3x3 source
+window. `interp::chroma_mc_2x2` therefore decomposes the motion vector and
+derives the four weights once, fetches the nine source samples once, and emits
+the 2x2 result as a group. The previous per-sample `chroma_mc_sample` remains
+the scalar oracle; the exhaustive differential test covers every one of the 64
+fractional motion positions, positive and negative integer displacements, and
+asserts the nine-fetch window contract.
+
+The helper has no configuration or new dependency. If the chroma block shape
+or supported chroma format changes, change the fetched window and the grouped
+output together, then extend the oracle comparison before changing the decoder
+call site. The current 3x3-to-2x2 shape is specific to 4:2:0 chroma and clause
+8.4.2.2.2's two-tap bilinear interpolation.
+
+Measured on 2026-09-04 from clean sibling snapshots of commit
+`45f969fc9b569d339718890f2d11e92fe3de0d04` (Git tree
+`ef52995df0350304533d89c10fbf6985c45ac5e7`). The source manifests were
+`b0baaf71d1e106e123ee1602f9ca139306162d69d934eda40e89491b2242b0b5`
+for baseline and
+`d4a5a293c0d604673748316efda43b88e4477292b89c31e4c6f4f1df5746e9a7`
+for candidate; `diff -qr` reported only `interp.rs`, `reconstruct.rs`, and this
+document. The measured three-file patch had SHA-256
+`885602a9c3f6db70c1781f355b4727be53f5f0d3fc6d31ffbcde199535822132`;
+the baseline/candidate binary hashes were respectively
+`b6312cc478733bc518f00b4f1e5c178749e7577a3208c2e20b946f23ec95ac51`
+and `dd0cf2fe47d64e31e50707417e3e60df79cd1721394eeba8bd9ed696a9838e38`.
+The workload was the 75-frame 3840x2160 High-profile fixture with SHA-256
+`eb9ace2e0eed0a65dfe96dff3eaf45eca82095db3c6e95aee2bc406fd3480dc8`.
+Across 12 baseline/candidate/ffmpeg rounds, rotating every command through each
+position four times, the paired candidate/baseline median was `0.99038` for
+wall time and `0.99050` for child CPU time. Median wall/CPU seconds were
+7.427833/7.291755 for baseline, 7.278514/7.162277 for candidate, and
+0.795534/0.814037 for same-session ffmpeg 9.0.1. The candidate won 7/12 wall
+pairs and 8/12 CPU pairs, so this is a modest, noisy roughly 1% result rather
+than a large speedup. Paired median wall/CPU ratios against ffmpeg moved from
+9.1987/8.8518 to 9.0980/8.7315.
+
+The pre-edit 4 kHz Samply discovery profile contained 42,500 samples, with
+40,338 Vaco leaves and 3,277/3,284 unique addresses resolved (99.8%). The
+post-change profile contained 30,711 samples, with 28,965 Vaco leaves and
+2,543/2,551 addresses resolved (99.7%). Outer `sample_chroma_2x2` moved from
+11.07% to 10.37%; innermost `copied<u8>` fell from 15.56% to 3.35%, while
+`predict_chroma_inter` stayed stable at 2.13% to 2.02%. The grouped helper was
+inlined, so it has no separate symbol. No cycle result is claimed: macOS did
+not expose a trustworthy process-total counter, and wall time was not
+relabelled as cycles.
+
+Correctness was checked by streaming rawvideo into an independent byte counter
+and SHA-256. Baseline, candidate, and ffmpeg each emitted exactly 75 frames and
+933,120,000 bytes with SHA-256
+`b00b7d2206af9a8775ee569e2c06626fa325d160c0b2798386ecd2f3f87e7220`
+at 1, 2, 4, and 8 threads (12/12 decodes byte-exact).
 
 ## Uncoded inter-luma residual fast path
 
