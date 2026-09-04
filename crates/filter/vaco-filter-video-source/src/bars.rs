@@ -54,7 +54,7 @@ const OUTPUT_PAD: &[Pad] = &[Pad {
     media_type: MediaType::Video,
 }];
 
-const UNLIMITED: VDuration = VDuration(-1);
+const UNLIMITED: VDuration = VDuration::from_micros(-1);
 
 /// The eight EBU/PAL bar colours at full (100%) amplitude, in display order.
 const FULL: [[u8; 3]; 8] = [
@@ -180,7 +180,7 @@ impl SourceFilter for Source {
         self.paint(&mut frame);
         frame.pts = Timestamp::new(self.next);
         frame.time_base = self.frame_rate.inverse();
-        frame.duration = vaco_core::Duration(1);
+        frame.set_duration_ticks(1);
         frame.sample_aspect_ratio = self.sar;
         self.next = self.next.saturating_add(1);
         Ok(Some(frame))
@@ -209,7 +209,7 @@ fn build(
         ));
     }
     let rate = opts.rate.0;
-    let total_frames = if opts.duration.0 < 0 {
+    let total_frames = if opts.duration.as_micros() < 0 {
         None
     } else {
         Some(

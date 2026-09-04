@@ -397,7 +397,7 @@ impl PairedFilter for Framepack {
             for mut view in [left, right] {
                 view.pts = vaco_core::Timestamp::new(self.seq);
                 view.time_base = out_tb;
-                view.duration = vaco_core::Duration(1);
+                view.set_duration_ticks(1);
                 self.seq = self.seq.saturating_add(1);
                 views.push(view);
             }

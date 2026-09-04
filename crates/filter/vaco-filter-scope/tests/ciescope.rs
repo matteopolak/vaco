@@ -10,7 +10,7 @@
 )]
 
 use vaco_color::ColorInfo;
-use vaco_core::{Duration, MediaType, Rational, Result, Timestamp};
+use vaco_core::{MediaType, Rational, Result, Timestamp};
 use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
 use vaco_filter_core::{Graph, GraphStatus, LinkFormat};
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
@@ -83,7 +83,7 @@ fn ciescope_maps_bt709_red_to_the_measured_xyy_pixel() -> Result<()> {
     }
     frame.pts = Timestamp::new(0);
     frame.time_base = time_base;
-    frame.duration = Duration(1);
+    frame.set_duration_ticks(1);
 
     graph.send(src, frame)?;
     graph.close_source(src, Timestamp::new(1))?;

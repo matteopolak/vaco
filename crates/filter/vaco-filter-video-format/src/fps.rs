@@ -52,7 +52,7 @@
 //! conservative reading — emit the held frame exactly once more.
 
 use smallvec::SmallVec;
-use vaco_core::{Duration, MediaType, Rational, Result, Rounding, Timestamp};
+use vaco_core::{MediaType, Rational, Result, Rounding, Timestamp};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_filter_core::negotiate::NodeFormats;
 use vaco_filter_core::{FilterContext, FilterDesc, FilterFlags, LinkFormat, Pad};
@@ -229,7 +229,7 @@ impl Filter {
         let mut out = frame.clone();
         out.pts = Timestamp::new(slot);
         out.time_base = self.out_tb;
-        out.duration = Duration(1);
+        out.set_duration_ticks(1);
         out
     }
 }

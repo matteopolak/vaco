@@ -138,7 +138,7 @@
 //! the plotted value would need the expression's own bound-variable set
 //! measured separately, not assumed from `drawbox`'s.
 
-use vaco_core::{Duration, MediaType, Rational, Result, Rounding, Timestamp};
+use vaco_core::{MediaType, Rational, Result, Rounding, Timestamp};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
 use vaco_filter_core::{FilterContext, FilterDesc, FilterFlags, LinkFormat, Pad};
@@ -462,7 +462,7 @@ impl FrameFilter for Filter {
 
         out.pts = Timestamp::new(slot);
         out.time_base = self.out_base;
-        out.duration = Duration(1);
+        out.set_duration_ticks(1);
         Ok(FrameOut::One(out))
     }
 

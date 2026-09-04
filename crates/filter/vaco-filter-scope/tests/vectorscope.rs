@@ -105,7 +105,7 @@ fn vectorscope_builds_its_histogram_from_real_frame_pixels() -> Result<()> {
     }
     frame.pts = Timestamp::new(0);
     frame.time_base = time_base;
-    frame.duration = vaco_core::Duration(1);
+    frame.set_duration_ticks(1);
 
     graph.send(src, frame)?;
     graph.close_source(src, Timestamp::new(1))?;
