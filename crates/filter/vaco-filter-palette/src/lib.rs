@@ -1,52 +1,23 @@
-//! T2/T3 palette video filters — `planning/16-filters.md` §4.2's
-//! `vaco-filter-palette` row: `palettegen`, `paletteuse`, `latticepal`,
-//! `elbg`. Crate did not exist (`crates/filter/` and
-//! `planning/ASSIGNMENTS.md` both checked directly).
+//! Palette video filters: [`palettegen`], [`paletteuse`], and [`elbg`].
+//! `latticepal` is unavailable because the installed reference has no such
+//! filter to measure against.
 //!
-//! # Real unclaimed remainder of #111 (FT-4.11)
+//! All filters use the original Heckbert (1982) median-cut quantizer in
+//! [`quantize`], not a transcription of the reference implementation.
 //!
-//! `vaco-filter-stack`'s own crate doc (built for the same GitHub issue,
-//! #111/FT-4.11) already scoped this: `hstack`/`vstack`/`xstack` (that
-//! crate) and `palettegen`/`paletteuse`/`elbg` (this crate) are the real,
-//! unclaimed remainder of #111. `latticepal` is not in this pass either —
-//! per that same scoping comment, it is not present in the installed
-//! `ffmpeg 8.1` reference at all (`ffmpeg -hide_banner -filters | grep
-//! lattice` finds nothing), so there is no oracle to measure it against and
-//! no reference behaviour to reproduce.
+//! - [`palettegen`] accumulates an 8-bit RGB histogram (ignoring alpha) for a
+//!   whole stream and emits one `16x16` RGBA palette. Its `stats_mode=diff` and
+//!   `single` options currently use full-stream accumulation.
+//! - [`paletteuse`] chooses the nearest palette color by Euclidean RGB distance
+//!   with no dithering. This is deliberately simpler than `sierra2_4a` error
+//!   diffusion.
+//! - [`elbg`] posterizes one frame with median cut, not iterative ELBG. Its
+//!   `nb_steps` and `seed` options are accepted but do not affect deterministic
+//!   median-cut output.
 //!
-//! # What is implemented
-//!
-//! All three use a shared, original median-cut colour quantiser
-//! ([`quantize`]) — not a transcription of the reference's own quantiser,
-//! which is a different, well-documented public algorithm (Heckbert 1982),
-//! also implemented from general algorithmic knowledge rather than the
-//! reference's source (D6/D7).
-//!
-//! - [`palettegen`] — accumulates a full-stream colour histogram (8-bit RGB,
-//!   alpha ignored) and emits one `16x16` RGBA palette image at end of
-//!   stream. `stats_mode=diff`/`single` are parsed but not distinguished
-//!   from `full` (this pass always accumulates the whole stream) —
-//!   documented, not silently ignored.
-//! - [`paletteuse`] — maps each pixel of the main video input to its
-//!   nearest colour (plain Euclidean RGB distance, no dithering) in the
-//!   palette read from the second input. The reference's default dithering
-//!   is `sierra2_4a` (error diffusion); this ships the undithered baseline
-//!   only — a real, named simplification, not every `dither=` mode.
-//! - [`elbg`] — posterizes a **single frame** to `codebook_length` colours
-//!   using the same median-cut quantiser. This is **not** the reference's
-//!   actual ELBG (Enhanced Linde–Buzo–Gray) algorithm, which iteratively
-//!   refines a codebook via generalized-Lloyd relaxation plus
-//!   utility-driven cell splitting over `nb_steps` iterations — median-cut
-//!   is a different, simpler, one-shot member of the same "vector
-//!   quantisation for posterization" family. `nb_steps`/`seed` are parsed
-//!   for option compatibility but do not affect output (median-cut is
-//!   deterministic and does not iterate).
-//!
-//! All three require an addressable, non-hardware, non-palette RGBA input
-//! — enforced by requesting an exact `Rgba` pixel format on every relevant
-//! pad (see each filter's own `NodeFormats`), so the negotiator inserts a
-//! conversion upstream rather than this crate silently misreading another
-//! format's byte layout.
+//! Inputs must be addressable, non-hardware, non-palette RGBA. Each relevant
+//! pad requests exact `Rgba`, so negotiation inserts conversion instead of
+//! misreading another byte layout.
 
 #![forbid(unsafe_code)]
 
