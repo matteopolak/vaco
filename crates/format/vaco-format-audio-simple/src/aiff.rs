@@ -299,6 +299,13 @@ impl Demuxer for AiffDemuxer {
     fn duration(&self) -> Option<vaco_core::Duration> {
         self.inner.duration()
     }
+
+    fn duration_exact(&self) -> Option<vaco_core::ExactDuration> {
+        self.inner
+            .streams()
+            .first()
+            .and_then(Stream::duration_exact)
+    }
 }
 
 /// Writes plain big-endian signed integer PCM in a plain `AIFF` form (16-bit

@@ -1519,3 +1519,10 @@ kind     = "blackbox"
 title    = "Observed forced-format ffprobe 9.0.1 on the committed 24-byte one-packet CD+Graphics fixture: video time_base=1/300, duration_ts=1, duration=0.003333, nb_frames=N/A, nb_read_packets=1, and format duration=0.003333. The reference has no CDG muxer, so the fixture uses the public 24-byte packet layout and a command byte whose low six bits equal 0x09, then treats the reference demuxer's reported native clock/count as the oracle."
 acquired = "2026-09-04"
 where    = "the reference binary installed on the development machine"
+
+[[source]]
+id       = "ffmpeg-aiff-duration-probe"
+kind     = "blackbox"
+title    = "Observed ffmpeg/ffprobe 9.0.1 on a one-frame 44.1 kHz mono AIFF written by `ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -frames:a 1 -c:a pcm_s16be -f aiff`: ffprobe reports time_base=1/44100, duration_ts=1024, duration=0.023220, nb_frames=1024, and nb_read_packets=1. This establishes that AIFF's declared sample-frame count is an aggregate duration on the native sample clock, not an integer microsecond count."
+acquired = "2026-09-04"
+where    = "the reference binaries installed on the development machine"
