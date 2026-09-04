@@ -1098,6 +1098,60 @@ fn partition_rects(mv_blocks: &[MvInfo; 16]) -> ([PartitionRect; 16], usize) {
     (rects, n)
 }
 
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    clippy::indexing_slicing,
+    reason = "this measured per-block hot path must fold the uncoded branch into reconstruct_inter_mb; row0/col0 are 0, 4, 8 or 12 and i/j are 0..4, so every fixed-array index is in range"
+)]
+fn add_inter_luma_residual_4x4(
+    pred_mb: &[[u8; 16]; 16],
+    row0: usize,
+    col0: usize,
+    ac: Option<&crate::cabac_residual::CabacResidual>,
+    qpy: i32,
+) -> [[u8; 4]; 4] {
+    let Some(ac) = ac else {
+        return core::array::from_fn(|i| core::array::from_fn(|j| pred_mb[row0 + i][col0 + j]));
+    };
+    let c = inverse_scan_luma_dc(Some(ac));
+    let d = dequant_4x4(&c, qpy, false);
+    let r = idct4x4(&d);
+    core::array::from_fn(|i| {
+        core::array::from_fn(|j| {
+            let sum = i32::from(pred_mb[row0 + i][col0 + j]) + r[i * 4 + j];
+            sum.clamp(0, 255) as u8
+        })
+    })
+}
+
+#[inline(always)]
+#[allow(
+    clippy::inline_always,
+    clippy::indexing_slicing,
+    reason = "this measured per-block hot path must fold the uncoded branch into reconstruct_inter_mb; row0/col0 are 0 or 8 and i/j are 0..8, so every fixed-array index is in range"
+)]
+fn add_inter_luma_residual_8x8(
+    pred_mb: &[[u8; 16]; 16],
+    row0: usize,
+    col0: usize,
+    ac: Option<&crate::cabac_residual::CabacResidual>,
+    qpy: i32,
+) -> [[u8; 8]; 8] {
+    let Some(ac) = ac else {
+        return core::array::from_fn(|i| core::array::from_fn(|j| pred_mb[row0 + i][col0 + j]));
+    };
+    let c = inverse_scan_luma_8x8(Some(ac));
+    let d = dequant_8x8(&c, qpy);
+    let r = idct8x8(&d);
+    core::array::from_fn(|i| {
+        core::array::from_fn(|j| {
+            let sum = i32::from(pred_mb[row0 + i][col0 + j]) + r[i * 8 + j];
+            sum.clamp(0, 255) as u8
+        })
+    })
+}
+
 #[allow(
     clippy::indexing_slicing,
     clippy::cast_possible_wrap,
@@ -1209,17 +1263,7 @@ fn reconstruct_inter_mb(
                 .luma8x8
                 .get(i8x8 as usize)
                 .and_then(Option::as_ref);
-            let c = inverse_scan_luma_8x8(ac);
-            let d = dequant_8x8(&c, mb.qpy);
-            let r = idct8x8(&d);
-            let mut block = [[0u8; 8]; 8];
-            for (i, row) in block.iter_mut().enumerate() {
-                for (j, v) in row.iter_mut().enumerate() {
-                    let sum = i32::from(pred_mb[row0 + i][col0 + j])
-                        + r.get(i * 8 + j).copied().unwrap_or(0);
-                    *v = sum.clamp(0, 255) as u8;
-                }
-            }
+            let block = add_inter_luma_residual_8x8(&pred_mb, row0, col0, ac, mb.qpy);
             buf.write_block8(x, y, block);
         }
         return;
@@ -1236,18 +1280,7 @@ fn reconstruct_inter_mb(
             .luma_ac
             .get(blk as usize)
             .and_then(Option::as_ref);
-        let c = inverse_scan_luma_dc(ac);
-        let d = dequant_4x4(&c, mb.qpy, false);
-        let r = idct4x4(&d);
-
-        let mut block = [[0u8; 4]; 4];
-        for (i, row) in block.iter_mut().enumerate() {
-            for (j, v) in row.iter_mut().enumerate() {
-                let sum =
-                    i32::from(pred_mb[row0 + i][col0 + j]) + r.get(i * 4 + j).copied().unwrap_or(0);
-                *v = sum.clamp(0, 255) as u8;
-            }
-        }
+        let block = add_inter_luma_residual_4x4(&pred_mb, row0, col0, ac, mb.qpy);
         buf.write_block4(x, y, block);
     }
 }
@@ -2588,6 +2621,26 @@ mod tests {
     fn zero_residual_is_pure_prediction() {
         let out = reconstruct_intra16x16_luma(2, unavailable(), 26, &MbResidual::default());
         assert!(out.iter().all(|row| row.iter().all(|&v| v == 128)));
+    }
+
+    #[test]
+    fn uncoded_inter_luma_4x4_is_pure_prediction() {
+        let pred = core::array::from_fn(|y| {
+            core::array::from_fn(|x| u8::try_from(y * 16 + x).unwrap_or(0))
+        });
+        let got = add_inter_luma_residual_4x4(&pred, 8, 4, None, 26);
+        let want = core::array::from_fn(|y| core::array::from_fn(|x| pred[8 + y][4 + x]));
+        assert_eq!(got, want);
+    }
+
+    #[test]
+    fn uncoded_inter_luma_8x8_is_pure_prediction() {
+        let pred = core::array::from_fn(|y| {
+            core::array::from_fn(|x| u8::try_from((y * 29 + x * 17) % 256).unwrap_or(0))
+        });
+        let got = add_inter_luma_residual_8x8(&pred, 0, 8, None, 26);
+        let want = core::array::from_fn(|y| core::array::from_fn(|x| pred[y][8 + x]));
+        assert_eq!(got, want);
     }
 
     /// A single luma DC coefficient, no AC at all, must shift every

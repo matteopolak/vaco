@@ -1190,6 +1190,46 @@ whole array per pixel. Chroma (`sample_chroma_2x2`) was left untouched:
 the item's own stop condition gates chroma work on the luma kernel
 clearing the ratio bar, which it did not.
 
+## Uncoded inter-luma residual fast path
+
+An inter-predicted luma block whose residual entry is `None` is already final
+after motion compensation: `MbResidual` defines that state as an implicitly
+all-zero transform block. `reconstruct_inter_mb` therefore copies the predicted
+4x4 or 8x8 samples directly instead of inverse-scanning a zero block,
+dequantising it, running IDCT, adding zero, and clipping every sample. Coded
+blocks still take the previous arithmetic path unchanged.
+
+The branch lives in `add_inter_luma_residual_4x4` and
+`add_inter_luma_residual_8x8` in `reconstruct.rs`. If residual storage changes,
+keep their fast-path predicate tied to the representation's authoritative
+"uncoded" state; do not infer it from coefficient values after scanning. The
+two unit tests pin that an uncoded block returns the selected prediction region
+exactly, while the end-to-end oracle below covers both coded and uncoded blocks.
+
+Measured on 2026-09-04 with a fresh 75-frame 3840x2160 High-profile
+`testsrc2`/libx264 fixture (SHA-256
+`eb9ace2e0eed0a65dfe96dff3eaf45eca82095db3c6e95aee2bc406fd3480dc8`),
+12 baseline/candidate/ffmpeg rounds rotated each command through every run
+position four times. Load average stayed 2.40-3.88. Median wall time moved from
+7.007173 s to 6.782464 s (candidate/baseline `0.96793`); median child CPU time
+moved from 6.980129 s to 6.760583 s (`0.96855`). The candidate won all 12 wall
+and all 12 CPU pairs. Relative to same-session ffmpeg 9.0.1 `-threads 1`, the
+wall ratio moved from 9.528x to 9.223x and the CPU ratio from 9.497x to 9.198x.
+
+The corresponding 4 kHz Samply profiles resolved 2470/2475 baseline addresses
+(99.8%) and 2405/2412 candidate addresses (99.7%). `idct4x4` self time fell
+from 1.36% to 0.08%, innermost `reconstruct_inter_mb` from 4.31% to 3.51%, and
+innermost `clamp` from 3.43% to 2.47%; outer `reconstruct_mb` moved from 30.16%
+to 29.43%. No cycle result is claimed: macOS did not expose a suitable
+process-total counter, and wall time was not relabelled as cycles.
+
+Correctness was checked by streaming rawvideo directly into SHA-256. The saved
+baseline, candidate, and ffmpeg each emitted exactly 933,120,000 bytes with
+SHA-256 `b00b7d2206af9a8775ee569e2c06626fa325d160c0b2798386ecd2f3f87e7220`
+at 1, 2, 4, and 8 threads (12/12 decodes byte-exact). This fast path has no
+option or environment-variable control and introduces no new dependency; it
+uses the existing `MbResidual`, dequantisation, and IDCT interfaces.
+
 ## Configuration
 
 `vaco_limits::Limits`/`Budget` bound every allocation (`residual_block_cavlc`/
