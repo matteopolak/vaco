@@ -1488,9 +1488,20 @@ fn resolve_merge_candidate(
         temporal_l1,
         inter.is_b,
     );
-    cands.get(merge_idx).copied().ok_or(Error::InvalidData(
+    let mut chosen = cands.get(merge_idx).copied().ok_or(Error::InvalidData(
         "vaco-codec-hevc: merge_idx out of range",
-    ))
+    ))?;
+    // §8.5.3.2.1's own last step: a *bi-predictive* merge candidate for an
+    // 8x4 or 4x8 PU (`nOrigPbW + nOrigPbH == 12`) is forced to uni-prediction
+    // from L0 -- `refIdxL1 = -1`, `predFlagL1 = 0`. The clause's condition is
+    // `predFlagL0 == 1 && predFlagL1 == 1`, so an L1-only candidate is left
+    // alone rather than emptied. `nOrigPb*` is the PU's own size *before* the
+    // merge-parallelism override above replaces it with the whole CU, so this
+    // reads `pu`, not `eff_pu`.
+    if pu.w + pu.h == 12 && chosen.l0.is_some() && chosen.l1.is_some() {
+        chosen.l1 = None;
+    }
+    Ok(chosen)
 }
 
 /// Motion-compensate one PU (luma + both chroma planes) directly into a
@@ -2108,7 +2119,11 @@ fn decode_inter_cu(
     if rqt_root_cbf {
         let pred = build_cu_prediction(s, x0, y0, size, &pu_motion)?;
         let max_depth = s.shared.max_transform_hierarchy_depth_inter;
-        let inter_split_flag = u32::from(max_depth == 1 && part_mode != PartMode::TwoNx2N);
+        // §7.4.9.8's `interSplitFlag`, whose gate is
+        // `max_transform_hierarchy_depth_inter == 0` — the SPS syntax element
+        // itself, not HM's `QuadtreeTUMaxDepthInter`, which is that value plus
+        // one and which HM therefore tests against `1`.
+        let inter_split_flag = u32::from(max_depth == 0 && part_mode != PartMode::TwoNx2N);
         let quadtree_tu_log2_min =
             quadtree_tu_log2_min_in_cu(s, log2_size, max_depth, inter_split_flag);
         transform_tree_inter(
@@ -2481,22 +2496,30 @@ fn cu_origin_of(x: i32, y: i32, cu_size: i32) -> (i32, i32) {
     (x & mask, y & mask)
 }
 
-/// `getQuadtreeTULog2MinSizeInCU`: `max_depth` is `QuadtreeTUMaxDepthIntra`
-/// or `QuadtreeTUMaxDepthInter` depending on the CU's own `CuPredMode`
-/// (chosen by the caller); `extra_split_flag` is `intraSplitFlag` (intra,
-/// `PartMode == PART_NxN`) or `interSplitFlag` (inter,
-/// `QuadtreeTUMaxDepthInter == 1 && PartMode != PART_2Nx2N` — confirmed
-/// against HM's `TComDataCU::getQuadtreeTULog2MinSizeInCU`, whose own
-/// `interSplitFlag` gate is on the *max-depth* value being exactly `1`, not
-/// on `max_transform_hierarchy_depth_inter == 0`, a distinction this
-/// function's caller must get right since the two differ by one).
+/// The smallest transform-block `log2` size this CU may reach: `log2CbSize`
+/// minus however many splits §7.3.8.8 permits below it, clamped into
+/// `[MinTbLog2SizeY, MaxTbLog2SizeY]`. `max_depth` is
+/// `max_transform_hierarchy_depth_intra` or `..._inter` per the CU's own
+/// `CuPredMode` (the caller chooses); `extra_split_flag` is §7.4.9.8's
+/// `IntraSplitFlag` (`PartMode == PART_NxN`) or its `interSplitFlag`, each of
+/// which buys exactly one more level on top of `max_depth`.
+///
+/// `max_depth` is the SPS syntax element, **not** HM's
+/// `QuadtreeTUMaxDepth{Intra,Inter}`, which is that element plus one. HM's
+/// own `getQuadtreeTULog2MinSizeInCU` therefore subtracts the one back off
+/// and gates `interSplitFlag` on its stored value being `1`; transcribing
+/// that shape while feeding it the spec's value made every CU with
+/// `max_transform_hierarchy_depth > 0`, and every non-`PART_2Nx2N` inter CU,
+/// stop splitting one transform level early — a CABAC desync, not a
+/// reconstruction error, since the `split_transform_flag` bins the stream
+/// spent then go unread.
 fn quadtree_tu_log2_min_in_cu(
     s: &Ctx<'_>,
     log2_cb_size: u32,
     max_depth: u32,
     extra_split_flag: u32,
 ) -> u32 {
-    let denom = max_depth.saturating_sub(1) + extra_split_flag;
+    let denom = max_depth + extra_split_flag;
     if log2_cb_size < s.shared.log2_min_tb_size + denom {
         s.shared.log2_min_tb_size
     } else {
