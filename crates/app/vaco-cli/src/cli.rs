@@ -61,7 +61,7 @@ impl AvOptionOracle for Oracle {
 }
 
 /// Demuxer-private option names with a complete path through this binary.
-const PRIVATE_DEMUXER_OPTIONS: &[&str] = &["decryption_key"];
+const PRIVATE_DEMUXER_OPTIONS: &[&str] = &["decryption_key", "decryption_keys"];
 
 /// One `-i` group, bound.
 #[derive(Debug, Clone, Default)]
@@ -82,6 +82,8 @@ pub struct InputSpec {
     pub format_opts: FormatOptions,
     /// MP4 `-decryption_key`, decoded from exactly 32 hexadecimal digits.
     pub decryption_key: Option<[u8; 16]>,
+    /// MP4 `-decryption_keys`, decoded from `KID=KEY` dictionary entries.
+    pub decryption_keys: Vec<vaco_demux_mp4::DecryptionKey>,
     /// `-ss` on this input: seek this far into the file before demuxing
     /// anything. See [`crate::seek_trim`].
     pub seek: Option<vaco_core::Duration>,
@@ -358,6 +360,7 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
             blacklist: last_value(g, "protocol_blacklist")?.map(|v| split_list(&v)),
             format_opts: format_options_of(g)?,
             decryption_key: decryption_key_of(g)?,
+            decryption_keys: decryption_keys_of(g)?,
             seek,
             end,
         });
@@ -366,6 +369,9 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
     for g in line.of_kind(GroupKind::Output) {
         if g.last("decryption_key").is_some() {
             return Err(unimplemented_option("decryption_key"));
+        }
+        if g.last("decryption_keys").is_some() {
+            return Err(unimplemented_option("decryption_keys"));
         }
         let url = url_of(g)?;
         let end = end_bound_of(g, "output")?;
@@ -831,16 +837,9 @@ fn decryption_key_of(g: &OptionGroup) -> Result<Option<[u8; 16]>, Diagnostic> {
     let Some(value) = last_value(g, "decryption_key")? else {
         return Ok(None);
     };
-    if value.len() != 32 {
-        return Err(invalid_decryption_key(&value));
-    }
-
-    let mut key = [0; 16];
-    for (dst, pair) in key.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
-        let text = core::str::from_utf8(pair).map_err(|_| invalid_decryption_key(&value))?;
-        *dst = u8::from_str_radix(text, 16).map_err(|_| invalid_decryption_key(&value))?;
-    }
-    Ok(Some(key))
+    parse_hex_16(&value)
+        .map(Some)
+        .ok_or_else(|| invalid_decryption_key(&value))
 }
 
 fn invalid_decryption_key(value: &str) -> Diagnostic {
@@ -848,6 +847,50 @@ fn invalid_decryption_key(value: &str) -> Diagnostic {
         AvError::EINVAL,
         vec![format!(
             "Invalid decryption key '{value}': expected 32 hexadecimal digits."
+        )],
+    )
+}
+
+fn decryption_keys_of(g: &OptionGroup) -> Result<Vec<vaco_demux_mp4::DecryptionKey>, Diagnostic> {
+    let Some(value) = last_value(g, "decryption_keys")? else {
+        return Ok(Vec::new());
+    };
+    let mut keys = Vec::new();
+    for entry in value.split(':') {
+        let Some((kid, key)) = entry.split_once('=') else {
+            return Err(invalid_decryption_keys(&value));
+        };
+        let Some(kid) = parse_hex_16(kid) else {
+            return Err(invalid_decryption_keys(&value));
+        };
+        let Some(key) = parse_hex_16(key) else {
+            return Err(invalid_decryption_keys(&value));
+        };
+        keys.push(vaco_demux_mp4::DecryptionKey { kid, key });
+    }
+    if keys.is_empty() {
+        return Err(invalid_decryption_keys(&value));
+    }
+    Ok(keys)
+}
+
+fn parse_hex_16(value: &str) -> Option<[u8; 16]> {
+    if value.len() != 32 {
+        return None;
+    }
+    let mut bytes = [0; 16];
+    for (dst, pair) in bytes.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
+        let text = core::str::from_utf8(pair).ok()?;
+        *dst = u8::from_str_radix(text, 16).ok()?;
+    }
+    Some(bytes)
+}
+
+fn invalid_decryption_keys(value: &str) -> Diagnostic {
+    Diagnostic::new(
+        AvError::EINVAL,
+        vec![format!(
+            "Invalid decryption keys '{value}': expected KID=KEY entries of 32 hexadecimal digits separated by ':'."
         )],
     )
 }
@@ -993,6 +1036,7 @@ mod tests {
         assert!(Oracle.knows("probesize"));
         assert!(Oracle.knows("protocol_whitelist"));
         assert!(Oracle.knows("decryption_key"));
+        assert!(Oracle.knows("decryption_keys"));
         // No encoder in this build implements `crf`. Divergence, documented.
         assert!(!Oracle.knows("crf"));
         assert!(!Oracle.knows("qwerty"));
@@ -1042,12 +1086,85 @@ mod tests {
     }
 
     #[test]
+    fn decryption_keys_are_decoded_on_their_input_group() {
+        let cli = parse(&[
+            "-decryption_keys",
+            "0f1e2d3c4b5a69788796a5b4c3d2e1f0=00112233445566778899aabbccddeeff:\
+             ffeeddccbbaa99887766554433221100=102132435465768798a9bacbdcedfe0f",
+            "-i",
+            "encrypted.mp4",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap();
+        let keys = &cli.inputs.first().unwrap().decryption_keys;
+        assert_eq!(keys.len(), 2);
+        assert_eq!(
+            *keys.first().unwrap(),
+            vaco_demux_mp4::DecryptionKey {
+                kid: [
+                    0x0f, 0x1e, 0x2d, 0x3c, 0x4b, 0x5a, 0x69, 0x78, 0x87, 0x96, 0xa5, 0xb4, 0xc3,
+                    0xd2, 0xe1, 0xf0,
+                ],
+                key: [
+                    0x00, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa, 0xbb, 0xcc,
+                    0xdd, 0xee, 0xff,
+                ],
+            }
+        );
+        assert_eq!(
+            keys.get(1).unwrap().kid,
+            [
+                0xff, 0xee, 0xdd, 0xcc, 0xbb, 0xaa, 0x99, 0x88, 0x77, 0x66, 0x55, 0x44, 0x33, 0x22,
+                0x11, 0x00,
+            ]
+        );
+    }
+
+    #[test]
+    fn malformed_decryption_keys_are_rejected_before_open() {
+        let error = parse(&[
+            "-decryption_keys",
+            "0f1e2d3c4b5a69788796a5b4c3d2e1f0=not-a-key",
+            "-i",
+            "encrypted.mp4",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap_err();
+        assert_eq!(error.exit.code(), 234);
+        assert!(
+            error.render().contains("expected KID=KEY entries"),
+            "{}",
+            error.render()
+        );
+    }
+
+    #[test]
     fn output_scoped_decryption_key_is_refused() {
         let error = parse(&[
             "-i",
             "clear.mp4",
             "-decryption_key",
             "00112233445566778899aabbccddeeff",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap_err();
+        assert_eq!(error.exit.code(), 218);
+        assert!(error.render().contains("not implemented yet"));
+    }
+
+    #[test]
+    fn output_scoped_decryption_keys_are_refused() {
+        let error = parse(&[
+            "-i",
+            "clear.mp4",
+            "-decryption_keys",
+            "0f1e2d3c4b5a69788796a5b4c3d2e1f0=00112233445566778899aabbccddeeff",
             "-f",
             "null",
             "-",

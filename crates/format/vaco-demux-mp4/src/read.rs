@@ -125,7 +125,7 @@ const MAX_SUBSAMPLES: u16 = 4096;
 
 /// Owned per-track state for decrypting a `cenc`-protected track, built once a
 /// usable key and a real `senc` are both in hand — see
-/// `Mp4Options::decryption_key` and the crate doc's *Common Encryption*
+/// `Mp4Options::decryption_keys` and the crate doc's *Common Encryption*
 /// section. Fragmented tracks replace [`Self::samples`] from each `traf` before
 /// that fragment's queue is filled.
 ///

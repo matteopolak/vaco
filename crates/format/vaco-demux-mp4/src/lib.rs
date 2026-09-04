@@ -55,7 +55,7 @@ mod options;
 mod read;
 mod track;
 
-pub use options::Mp4Options;
+pub use options::{DecryptionKey, Mp4Options};
 
 use std::collections::VecDeque;
 
@@ -844,7 +844,7 @@ impl Mp4Demuxer {
             }
         }
         // Decrypt literal `cenc`, given a caller-supplied key and a real
-        // `senc` — see `Mp4Options::decryption_key`'s doc comment. The other
+        // `senc` — see `Mp4Options::decryption_keys`'s doc comment. The other
         // scheme types use CBC or patterned protection and must not enter
         // this AES-CTR path. A fragmented track keeps only the validated key
         // and IV size here; refill replaces its records from each `traf`.
@@ -855,8 +855,8 @@ impl Mp4Demuxer {
                     .is_some_and(|s| s.scheme_type == FourCc::new(b"cenc"))
             })
             .and_then(|c| {
-                let key = self.mp4.decryption_key?;
                 let te = c.track_encryption?;
+                let key = self.mp4.key_for(&te.default_kid)?;
                 if te.per_sample_iv_size == 0 {
                     // `constant_iv` (every sample shares one IV): not
                     // implemented, named in the crate doc's *Deferred* section.

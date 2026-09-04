@@ -121,7 +121,7 @@ fuzz_target!(|input: Input<'_>| {
 
     if input.seekable {
         // The invariant: a seekable source's chunk size is invisible.
-        let whole = read_all(input.data, usize::MAX, true, opts);
+        let whole = read_all(input.data, usize::MAX, true, opts.clone());
         let fed = read_all(input.data, chunk, true, opts);
         assert_eq!(
             whole.is_some(),

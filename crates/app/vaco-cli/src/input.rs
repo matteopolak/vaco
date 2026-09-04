@@ -81,6 +81,8 @@ pub struct OpenRequest<'a> {
     pub format_opts: Option<&'a FormatOptions>,
     /// MP4 Common Encryption key supplied by input-scoped `-decryption_key`.
     pub decryption_key: Option<[u8; 16]>,
+    /// MP4 Common Encryption keys supplied by input-scoped `-decryption_keys`.
+    pub decryption_keys: &'a [vaco_demux_mp4::DecryptionKey],
 }
 
 /// Open, probe and wrap one input.
@@ -120,9 +122,16 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
         *probe.detect(&mut io, Some(url), None)?.desc
     };
 
-    if req.decryption_key.is_some() && desc.name != vaco_demux_mp4::DEMUXER.name {
+    if (req.decryption_key.is_some() || !req.decryption_keys.is_empty())
+        && desc.name != vaco_demux_mp4::DEMUXER.name
+    {
         return Err(Error::Option {
-            name: "decryption_key".to_owned(),
+            name: if req.decryption_keys.is_empty() {
+                "decryption_key"
+            } else {
+                "decryption_keys"
+            }
+            .to_owned(),
             detail: format!("not supported by the {} demuxer", desc.name),
         });
     }
@@ -142,19 +151,21 @@ pub fn open(index: u32, url: &str, req: &OpenRequest<'_>) -> Result<InputFile> {
         inner.bind_url(url)?;
         inner
     } else {
-        let mut inner: Box<dyn Demuxer> = if let Some(key) = req.decryption_key {
-            Box::new(vaco_demux_mp4::Mp4Demuxer::open(
-                opener(url)?,
-                &vaco_registry::Parsers,
-                format_opts,
-                vaco_demux_mp4::Mp4Options {
-                    decryption_key: Some(key),
-                    ..vaco_demux_mp4::Mp4Options::default()
-                },
-            )?)
-        } else {
-            (desc.open)(opener(url)?, &vaco_registry::Parsers)?
-        };
+        let mut inner: Box<dyn Demuxer> =
+            if req.decryption_key.is_some() || !req.decryption_keys.is_empty() {
+                Box::new(vaco_demux_mp4::Mp4Demuxer::open(
+                    opener(url)?,
+                    &vaco_registry::Parsers,
+                    format_opts,
+                    vaco_demux_mp4::Mp4Options {
+                        decryption_key: req.decryption_key,
+                        decryption_keys: req.decryption_keys.to_vec(),
+                        ..vaco_demux_mp4::Mp4Options::default()
+                    },
+                )?)
+            } else {
+                (desc.open)(opener(url)?, &vaco_registry::Parsers)?
+            };
         // Best-effort for a format whose primary source opened fine but that
         // still wants its own URL for something extra (a `.sub` sidecar next
         // to a normally-opened `.idx`, say): `Unsupported` just means this
@@ -286,6 +297,27 @@ mod tests {
         match error {
             Error::Option { name, detail } => {
                 assert_eq!(name, "decryption_key");
+                assert!(detail.contains("matroska"), "{detail}");
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+
+    #[test]
+    fn decryption_keys_are_refused_for_a_non_mp4_demuxer() {
+        let keys = [vaco_demux_mp4::DecryptionKey {
+            kid: [0x22; 16],
+            key: [0x11; 16],
+        }];
+        let req = OpenRequest {
+            force_format: Some("matroska"),
+            decryption_keys: &keys,
+            ..OpenRequest::default()
+        };
+        let error = open(0, "/etc/hosts", &req).unwrap_err();
+        match error {
+            Error::Option { name, detail } => {
+                assert_eq!(name, "decryption_keys");
                 assert!(detail.contains("matroska"), "{detail}");
             }
             other => panic!("{other:?}"),

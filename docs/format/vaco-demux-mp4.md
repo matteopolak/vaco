@@ -515,11 +515,13 @@ reference exposes 21 options; these are the ones this crate acts on.
 | `interleaved_read` | `true` | emit one DTS/position-ordered stream rather than draining track by track |
 | `seek_streams_individually` | `true` | after a seek, place every track at its own nearest sync sample |
 | `max_stts_delta` | `4294487295` | accepted and recorded; no `stts` delta is currently rejected |
+| `decryption_key` | none | fallback AES-128 key for literal `cenc` tracks |
+| `decryption_keys` | empty | AES-128 keys selected by each track's `tenc.default_KID` |
 
 Not implemented, and named so their absence is a decision rather than an
 oversight: `use_absolute_path`, `advanced_editlist`, `use_mfra_for`,
 `export_all`, `export_xmp`, `activation_bytes`, `audible_key`, `audible_iv`,
-`audible_fixed_key`, `decryption_key`, `decryption_keys`.
+`audible_fixed_key`.
 
 `use_mfra_for` is a different feature than it sounds like next to this crate's
 own `mfra` reading (below): the reference uses it to *correct a fragment's
@@ -725,10 +727,25 @@ invokes the public CLI entry point and names real output files, so the key must
 traverse argument grouping, probing, MP4 open, packet decryption, stream copy,
 and the hash muxer.
 
-**Not implemented, named explicitly**: the reference's `-decryption_keys`
-(per-`KID` dictionary — one key for every protected track is what
-`decryption_key` alone already means), `cbcs`/`cens`/`cbc1` (pattern and
-CBC schemes: `schm` is reported, the track refused), their constant-IV mode
+**2026-09-04: keys selected by track KID.** Input-scoped
+`-decryption_keys KID=KEY[:KID=KEY...]` decodes each identifier and AES-128
+key from exactly 32 hexadecimal digits. The demuxer selects the last matching
+entry for the protected track's `tenc.default_KID`, with `decryption_key` as a
+fallback when no entry matches. The lookup occurs once at the shared track
+decryptor construction point, so progressive and fragmented `senc` paths use
+the same selected key.
+
+The CLI integration test asks `ffmpeg 9.0.1` to write two 20-packet AAC files
+with distinct KID/key pairs, one progressive and one fragmented at every
+sample. Both ffmpeg and Vaco receive the same two-entry dictionary; for each
+file, all 20 decrypted `(duration, size, MD5)` tuples match the clear reference.
+This proves the identifier value selects the key in both container layouts,
+not merely that a dictionary-shaped string reached an existing single-key
+path.
+
+**Not implemented, named explicitly**: `seig` sample-group key rotation;
+`cbcs`/`cens`/`cbc1` (pattern and CBC schemes: `schm` is reported, the track
+refused); and their constant-IV mode
 (`per_sample_iv_size == 0`; ISO/IEC 23001-7 prohibits constant IVs with
 counter mode). Top-level fragmented-file `pssh` is collected. Reporting is
 deliberately *more* than

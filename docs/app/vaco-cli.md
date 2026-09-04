@@ -831,23 +831,29 @@ writes a couple of packets at `-t 0` rather than zero, an edge-case
 quirk left as an accepted divergence following this project's own
 precedent for such cases.
 
-### MP4 `-decryption_key`
+### MP4 `-decryption_key` and `-decryption_keys`
 
 An input-scoped `-decryption_key` accepts exactly 32 hexadecimal digits and
 passes the resulting AES-128 key to the already-selected MP4/MOV demuxer. The
-format registry remains the source of truth for selection: the CLI compares
+input-scoped `-decryption_keys` form accepts a colon-separated dictionary of
+`KID=KEY` pairs, where each side is exactly 32 hexadecimal digits. MP4 selects
+the last matching entry for each protected track's `tenc.default_KID`; the
+single `-decryption_key` remains a fallback for an identifier absent from the
+dictionary. The format registry remains the source of truth for selection: the CLI compares
 the selected descriptor with `vaco_demux_mp4::DEMUXER` and uses MP4's typed
 constructor only when non-default options are required. A key on another
 format or on an output is an error, as is a fractional byte or non-hex digit.
 
-This is one deliberately narrow private demuxer option, not a second generic
+These are deliberately narrow private demuxer options, not a second generic
 option system. Adding another still requires either another typed, fully tested
 route or the general descriptor option-schema work described below. The CENC
-integration test uses `ffmpeg` as a black-box writer/oracle, streams both the
-clear file and the keyed encrypted file through the real CLI to `framemd5`, and
-compares all 20 packet `(duration, size, MD5)` values exactly. Full line parity
-is outside this slice because the existing MP4 edit-list convention shifts the
-first AAC DTS by 1024 ticks relative to the reference.
+integration tests use `ffmpeg` as a black-box writer/oracle. The dictionary
+case writes progressive and per-sample-fragmented files with different
+`tenc.default_KID` and AES keys, supplies the same two-entry dictionary for
+each, then compares all 20 packet `(duration, size, MD5)` values exactly against
+the clear reference. Full line parity is outside this slice because the
+existing MP4 edit-list convention shifts the first AAC DTS by 1024 ticks
+relative to the reference.
 
 ## How to change it
 
@@ -954,7 +960,8 @@ reads), `vaco-limits`, `vaco-core`. `vaco-pixfmt`, `vaco-sampfmt` and
 `-layouts` respectively — all three are layer-1 model crates, so this is a
 downward dependency like every other one above, not a new kind of edge.
 `vaco-demux-mp4` supplies the typed constructor for the input-scoped
-`-decryption_key` exception described above. `vaco-expr` (CL-22) backs
+`-decryption_key` and `-decryption_keys` exceptions described above. `vaco-expr`
+(CL-22) backs
 `-force_key_frames expr:…`, sharing the same
 `AVExpr`-shaped grammar every other expression option in the workspace uses
 rather than a second implementation.
