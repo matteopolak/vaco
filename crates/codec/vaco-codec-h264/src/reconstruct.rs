@@ -1737,6 +1737,16 @@ fn chroma_neighbours(buf: &PictureBuffer, comp: usize, mb_x: u32, mb_y: u32) -> 
 /// the identical construction one level down), then added onto `pred`
 /// (either an intra prediction or a motion-compensated one -- this step
 /// does not care which).
+fn chroma_residual_is_zero(residual: &MbResidual, comp: usize) -> bool {
+    let Some(dc) = residual.chroma_dc.get(comp) else {
+        return false;
+    };
+    let Some(ac) = residual.chroma_ac.get(comp) else {
+        return false;
+    };
+    dc.is_none() && ac.iter().all(Option::is_none)
+}
+
 #[allow(
     clippy::indexing_slicing,
     reason = "bx/by are 0/1 from blk_xy(0..4), x_o/y_o in {0,4}, i/j in 0..4 -- every index below is provably in range, not bitstream-derived"
@@ -1747,6 +1757,9 @@ fn add_chroma_residual(
     mb: &MbSummary,
     qpc: i32,
 ) -> [[u8; 8]; 8] {
+    if chroma_residual_is_zero(&mb.residual, comp) {
+        return pred;
+    }
     let dc_raw = inverse_scan_chroma_dc(mb.residual.chroma_dc.get(comp).and_then(Option::as_ref));
     let dc = dequant_chroma_dc_2x2(&dc_raw, qpc);
     for blk in 0..4u32 {
@@ -2618,6 +2631,30 @@ mod tests {
         let got = add_inter_luma_residual_8x8(&pred, 0, 8, None, 26);
         let want = core::array::from_fn(|y| core::array::from_fn(|x| pred[y][8 + x]));
         assert_eq!(got, want);
+    }
+
+    #[test]
+    fn zero_chroma_residual_is_component_local() {
+        let one = CabacResidual {
+            levels: vec![1],
+            positions: vec![0],
+        };
+        let mut residual = MbResidual::default();
+        assert!(chroma_residual_is_zero(&residual, 0));
+        assert!(chroma_residual_is_zero(&residual, 1));
+        assert!(!chroma_residual_is_zero(&residual, 2));
+
+        residual.chroma_dc[0] = Some(one.clone());
+        assert!(!chroma_residual_is_zero(&residual, 0));
+        assert!(chroma_residual_is_zero(&residual, 1));
+        residual.chroma_dc[0] = None;
+
+        for block in 0..4 {
+            residual.chroma_ac[1][block] = Some(one.clone());
+            assert!(chroma_residual_is_zero(&residual, 0));
+            assert!(!chroma_residual_is_zero(&residual, 1), "block={block}");
+            residual.chroma_ac[1][block] = None;
+        }
     }
 
     /// A single luma DC coefficient, no AC at all, must shift every
