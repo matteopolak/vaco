@@ -711,6 +711,10 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "test setup uses fixed, budget-bounded allocations"
+)]
 mod tests {
     use super::*;
     use vaco_limits::{Budget, Limits};

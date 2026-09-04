@@ -772,6 +772,10 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    reason = "test setup uses fixed, budget-bounded allocations"
+)]
 mod tests {
     use super::*;
     use crate::framebuf::{CuGrid, CuGridShared, Plane};
