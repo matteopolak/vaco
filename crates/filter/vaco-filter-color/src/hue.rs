@@ -5,35 +5,18 @@
 //! exclusive with `h`), `s` (saturation, `-10..10`, default `"1"`), `b`
 //! (brightness, `-10..10`, default `"0"`).
 //!
-//! # Scope: `h`/`s` as constants, not per-frame expressions
-//!
 //! The reference accepts `h`/`H`/`s`/`b` as full `vaco-expr`-style
-//! expressions (frame number, pts, time base) so they can vary over the
-//! course of a stream (the man page's own worked examples are fades). This
-//! module implements `h`/`s` as constant `f64` options, parsed once at
-//! `create` time — the overwhelmingly common case (a single fixed rotation)
-//! and the same simplification this crate already made for `pseudocolor`'s
-//! per-channel expressions. Time-varying `h`/`s` are not evaluated; passing
-//! an expression that is not a bare number falls back to the default via
-//! [`crate::common::parse`]'s usual `Options::default()`-then-overlay
-//! behaviour, the same failure mode every other option in this crate has
-//! for a value it cannot parse.
-//!
-//! # Not implemented: `b` (brightness)
+//! expressions. This module implements `h` and `s` as constant `f64` options
+//! parsed at creation time. Time-varying expressions are not evaluated; a
+//! value that is not a bare number falls back through
+//! [`crate::common::parse`]'s default-then-overlay behavior.
 //!
 //! Measured (`ffmpeg 8.1`, `color=red` under `yuv420p`, `Y=81` baseline):
 //! `hue=b=1.0` measures `Y=106` (`+25`), `hue=b=-1.0` measures `Y=55`
 //! (`-26`, not `-25`) and `hue=b=2.0` measures `Y=132` (`+51`, not `+50`).
 //! The asymmetry around `b=0` (`+25` at `b=1` but `-26` at `b=-1`) rules out
-//! a single linear `Y' = Y + k*b` term — the reference's brightness
-//! adjustment interacts with `Y` in a way this pass did not pin down in the
-//! time available (a gamma-like term is the leading hypothesis, not
-//! confirmed). Left parsed but inert, the same shape `colorlevels`'
-//! `preserve` and `colorchannelmixer`'s `pc`/`pa` already use in this crate
-//! for a reference behaviour that does not decompose the way its name
-//! suggests.
-//!
-//! # Measured: the chroma rotation formula
+//! a single linear term. Brightness remains parsed but inert because the
+//! measured behavior has not been determined.
 //!
 //! ```text
 //! u_dev = U - 128; v_dev = V - 128            (input chroma, centred)
@@ -44,26 +27,11 @@
 //! V' = round(128 + v_dev').clamp(0, 255)
 //! ```
 //!
-//! Confirmed step by step on `color=red` (`yuv420p`, `Y=81,U=90,V=240`,
-//! `u_dev=-38,v_dev=112`):
-//!
-//! * `h=90,s=1`: predicted `u_dev'=-112,v_dev'=-38` &#8594; `U'=16,V'=90`,
-//!   matching the measured output exactly — this pins the rotation
-//!   direction and the `(u_dev, v_dev)` argument order (the opposite
-//!   `(v_dev, u_dev)` order was checked and does not fit).
-//! * `s=2.0,h=0`: predicted `u_dev'=-76,v_dev'=224.clamp=127` &#8594;
-//!   `U'=52,V'=255` (`V'` clamps past 255), matching the measured output
-//!   and confirming scaling is a hard clamp, not a modulo/wraparound.
-//! * `h=45,s=1`: predicted `u_dev'=-106.066,v_dev'=52.33` &#8594;
-//!   `U'=round(21.934)=22,V'=round(180.33)=180` — the `U'` value is what
-//!   pins **round**, not floor/truncate (`floor(21.934)=21` would have
-//!   matched a wrong hypothesis; the reference measures `22`).
-//!
-//! Distinguishing input: the flat-field, single-hue-angle probe above
-//! cannot, on its own, separate "rotate by `h`" from "just scale U/V
-//! independently by some `h`-derived constant" — a 45° rotation is what
-//! forces a genuinely fractional, non-axis-aligned answer that only the
-//! two-dimensional rotation formula reproduces.
+//! On `color=red` (`U=90,V=240`), `h=90,s=1` produced `U=16,V=90`, pinning
+//! rotation direction and argument order. `s=2,h=0` produced `U=52,V=255`,
+//! pinning hard clamping. The distinguishing `h=45,s=1` probe produced
+//! `U=22,V=180`: the fractional result requires a two-dimensional rotation
+//! and pins rounding rather than floor or truncation.
 
 use vaco_core::{MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};

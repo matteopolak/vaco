@@ -80,7 +80,7 @@ pub(crate) const fn max_for_depth(depth: u8) -> u16 {
 }
 
 /// Whether this crate's float accessors ([`read_float`]/[`write_float`]) can
-/// address `fmt` (interface gap 15, `planning/INTERFACE-GAPS.md`).
+/// address `fmt`.
 ///
 /// The complement of [`is_addressable`], not a superset of it: a format
 /// passes here only if every component is a 32-bit IEEE-754 float

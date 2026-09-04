@@ -19,8 +19,6 @@
 //! only in the alias table on `c0`/`c1`/`c2` (`c3`/`a` is shared by all
 //! three, since alpha has no YUV/RGB-specific name).
 //!
-//! # Measured variables
-//!
 //! Probed by giving each candidate name to `c0` and checking whether the
 //! reference errors "Invalid argument" (unbound) or accepts it: `val`,
 //! `clipval`, `maxval`, `minval`, `negval`, `w`, `h` are all bound; `n`
@@ -32,8 +30,6 @@
 //! `negval = minval + maxval - val`, confirmed by `lut=c0=negval` on a
 //! constant `0x80` (128) gray frame producing `0x7f` (127) —
 //! `255 + 0 - 128 = 127`.
-//!
-//! # Independent oracle
 //!
 //! The identity table (`c0=val` on every channel, or the default
 //! `"clipval"` since `minval<=val<=maxval` always) must be a no-op — this

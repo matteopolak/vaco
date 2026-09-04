@@ -5,10 +5,8 @@
 //! `0.00392157 = 1/255`), `elasticity` (`0..10`, default `2`), `reference`
 //! (bool, default `false`, adds a third input) and `planes` (bitmask,
 //! default `15`). No `eof_action`/`shortest`/`ts_sync_mode` in `-h` output,
-//! so (`planning/AGENT-CONSTRAINTS.md`'s "two inputs does not mean
-//! framesync") this is a lockstep [`vaco_filter_core::adapt::PairedFilter`],
-//! the same shape as [`crate::lut2`]'s sibling `maskedclamp` in
-//! `vaco-filter-key`.
+//! so this uses a lockstep [`vaco_filter_core::adapt::PairedFilter`] rather
+//! than a timeline-synchronizing adapter.
 //!
 //! # Measured: the two hard edges, and an honestly-approximated middle
 //!
@@ -31,8 +29,6 @@
 //!   the transition band only) rather than a bit-exact curve. Left as an
 //!   honest approximation rather than a fabricated exact fit — the true
 //!   curve was not pinned down in the time available.
-//!
-//! # Scope cuts
 //!
 //! `reference=true`'s third input is accepted (so the graph negotiates
 //! three pads) but **not incorporated into the formula** — this filter

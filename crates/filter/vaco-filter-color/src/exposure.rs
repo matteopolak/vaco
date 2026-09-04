@@ -2,21 +2,14 @@
 //!
 //! `ffmpeg -h filter=exposure` documents two options: `exposure` (stops,
 //! `-3..3`, default `0`) and `black` (black-point correction, `-1..1`,
-//! default `0`). This is the first filter in this crate to use
-//! [`sample::read_float`]/[`sample::write_float`] (interface gap 15,
-//! `planning/INTERFACE-GAPS.md`): both options force `gbrpf32le`, the same
-//! wall that stopped this filter and [`grayworld`](crate) from shipping
-//! before that gap closed.
+//! default `0`). Both options force `gbrpf32le`, so the implementation uses
+//! [`sample::read_float`] and [`sample::write_float`].
 //!
 //! # Measured: the formula
 //!
-//! Bit-exact against `ffmpeg 8.1`, computed as `f32` in exactly this order —
-//! reordering the arithmetic (dividing instead of multiplying by a
-//! precomputed reciprocal, or computing `(v - black) * scale` before
-//! dividing) changes the last bit on some inputs, found by testing every
-//! reordering against reference output and keeping the one that matched
-//! every case tried, including `black` values that make the naive
-//! `1 - black * scale` denominator negative:
+//! Bit-exact against `ffmpeg 8.1` for integer exposures when computed as
+//! `f32` in this order. Dividing instead of multiplying by a precomputed
+//! reciprocal, or regrouping `(v - black) * scale`, changed the last bit:
 //!
 //! ```text
 //! scale = 2^exposure
@@ -24,19 +17,11 @@
 //! out   = (v * scale - bs) / abs(1 - bs)
 //! ```
 //!
-//! Derived from raw `gbrpf32le` round-trips (`-f rawvideo -pix_fmt
-//! gbrpf32le`), not guessed: `exposure=0:black=0` is the identity
-//! (confirms no hidden clamping — an out-of-range negative input passes
-//! through unclipped), `exposure=-1:black=0` halves every sample exactly,
-//! and solving two points at `exposure=1:black=0.1` for an affine `out =
-//! A*v + B` gives `A=2.5`, `B=-0.25`, which only `scale/(1-bs)` accounts
-//! for (`8/(1-7.2)` — required for the `abs`, since `black*scale > 1` is
-//! reachable inside the documented range and the naive division flips the
-//! sign there). Fractional `exposure` (a genuine `2^x` with `x` not an
-//! integer) can differ from the reference by one or two ULP — a
-//! `powf`/`exp2` libm difference between this binary and the reference's,
-//! not a wrong formula; every integer-`exposure` case tried, including
-//! negative and fractional `black`, matched exactly.
+//! Raw `gbrpf32le` probes found identity at `exposure=0:black=0`, exact
+//! halving at `exposure=-1:black=0`, and `A=2.5`, `B=-0.25` for the affine
+//! response at `exposure=1:black=0.1`. Cases with `black*scale > 1` require
+//! the absolute denominator. Fractional exposure can differ by one or two
+//! ULP because the two binaries use different libm implementations.
 //!
 //! No clamping is applied anywhere: the format is float, and the reference
 //! does not clip either (measured: a negative `black`-shifted value comes

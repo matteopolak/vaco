@@ -7,8 +7,6 @@
 //! `0..1`, default `0`/`1`) per channel, plus `preserve` (colour-
 //! preservation mode, default `none`).
 //!
-//! # Measured: the formula, and the truncation rule
-//!
 //! Four probes on `rgb24` (`romin=0.2:romax=0.8` and `rimin=0.2:
 //! rimax=0.8`, varied R):
 //!
@@ -27,14 +25,10 @@
 //! `R=128`, landed on an exact integer so it does not disambiguate on its
 //! own, but nothing contradicts it either).
 //!
-//! # Measured: RGB only
-//!
 //! ```text
 //! ffmpeg -f lavfi -i "color=red:s=2x2,format=yuv420p" -vf colorlevels=romin=0.2 -f null -
 //! # -> forces an rgb24 conversion, same restriction as colorkey/lut3d.
 //! ```
-//!
-//! # Not implemented: `preserve`
 //!
 //! The seven colour-preservation modes need the same reverse-engineering
 //! this crate already declined for `colorchannelmixer`'s `pc`/`pa` — the
