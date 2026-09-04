@@ -57,8 +57,8 @@ python3 scripts/perf-hwcycles.py /private/tmp/vaco-perf-spec.json \
   --rounds 10 --out /private/tmp/h264-cycles.json
 ```
 
-The result stores raw per-round counters, medians/ranges, paired ratios, win
-counts, perf's percentage-running field, and the exact argv. On hybrid x86
+The result stores raw per-round counters and timings, medians/ranges, paired
+ratios, win counts, perf's percentage-running field, and the exact argv. On hybrid x86
 systems perf may emit separate `cpu_core/.../` and `cpu_atom/.../` rows; the
 harness sums them and retains the lowest running percentage. For tight A/B work,
 pin both commands to the same core class in the spec with `taskset` and reject a

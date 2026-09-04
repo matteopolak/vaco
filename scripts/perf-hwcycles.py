@@ -184,9 +184,15 @@ def summarize_runs(runs_by_label):
     output = {}
     for label, runs in runs_by_label.items():
         metrics = {}
-        names = sorted({name for run in runs for name in run.get("counters", {})})
+        series = {}
+        for run in runs:
+            for name, value in run.get("counters", {}).items():
+                series.setdefault(name, []).append(value)
+            for name, value in run.get("timings_seconds", {}).items():
+                series.setdefault(f"{name}_seconds", []).append(value)
+        names = sorted(series)
         for name in names:
-            values = [run["counters"][name] for run in runs if name in run.get("counters", {})]
+            values = series[name]
             metrics[name] = {
                 "n": len(values),
                 "median": median(values),
@@ -222,17 +228,23 @@ def paired_ratios(runs_by_label):
                 ]
             else:
                 paired = list(zip(runs_by_label[vaco], runs_by_label[ref]))
+            def metrics(run):
+                values = dict(run.get("counters", {}))
+                values.update({
+                    f"{name}_seconds": value
+                    for name, value in run.get("timings_seconds", {}).items()
+                })
+                return values
+
             metric_names = sorted({
-                name
-                for left, right in paired
-                for name in left.get("counters", {})
-                if name in right.get("counters", {})
+                name for left, right in paired
+                for name in metrics(left) if name in metrics(right)
             })
             for name in metric_names:
                 values = []
                 for left, right in paired:
-                    denominator = right["counters"].get(name)
-                    numerator = left["counters"].get(name)
+                    denominator = metrics(right).get(name)
+                    numerator = metrics(left).get(name)
                     if numerator is not None and denominator:
                         values.append(numerator / denominator)
                 if values:

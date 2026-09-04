@@ -84,14 +84,14 @@ class SummaryTests(unittest.TestCase):
     def test_summarizes_medians_and_paired_ratios(self):
         runs = {
             "vaco": [
-                {"counters": {"cycles": 220, "instructions": 500}},
-                {"counters": {"cycles": 200, "instructions": 480}},
-                {"counters": {"cycles": 210, "instructions": 490}},
+                {"counters": {"cycles": 220, "instructions": 500}, "timings_seconds": {"user": 0.22}},
+                {"counters": {"cycles": 200, "instructions": 480}, "timings_seconds": {"user": 0.20}},
+                {"counters": {"cycles": 210, "instructions": 490}, "timings_seconds": {"user": 0.21}},
             ],
             "ffmpeg_t1": [
-                {"counters": {"cycles": 100, "instructions": 250}},
-                {"counters": {"cycles": 100, "instructions": 240}},
-                {"counters": {"cycles": 100, "instructions": 245}},
+                {"counters": {"cycles": 100, "instructions": 250}, "timings_seconds": {"user": 0.10}},
+                {"counters": {"cycles": 100, "instructions": 240}, "timings_seconds": {"user": 0.10}},
+                {"counters": {"cycles": 100, "instructions": 245}, "timings_seconds": {"user": 0.10}},
             ],
         }
 
@@ -101,9 +101,11 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(summary["vaco"]["cycles"]["median"], 210)
         self.assertEqual(summary["vaco"]["cycles"]["min"], 200)
         self.assertEqual(summary["vaco"]["cycles"]["max"], 220)
+        self.assertEqual(summary["vaco"]["user_seconds"]["median"], 0.21)
         self.assertEqual(ratios["vaco/ffmpeg_t1"]["cycles"]["all"], [2.2, 2.0, 2.1])
         self.assertEqual(ratios["vaco/ffmpeg_t1"]["cycles"]["median"], 2.1)
         self.assertEqual(ratios["vaco/ffmpeg_t1"]["cycles"]["wins"], 0)
+        self.assertAlmostEqual(ratios["vaco/ffmpeg_t1"]["user_seconds"]["median"], 2.1)
 
     def test_pairs_only_samples_from_the_same_round_after_a_failure(self):
         runs = {
