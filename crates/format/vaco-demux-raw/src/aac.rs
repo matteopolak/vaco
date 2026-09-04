@@ -50,13 +50,23 @@
 //! directly: a 44100 Hz frame measured `duration=655360`, and
 //! `1024 * (28224000 / 44100) == 655360` exactly.
 //!
-//! One divergence, disclosed rather than chased: the reference leaves the
-//! *first* packet's `pts`/`dts`/`duration` as `N/A` and starts numbering from
-//! the second packet's `pts=0`. Reproducing that would mean this demuxer
-//! remembering "was the previous frame the very first one", purely to leave
-//! a hole in an otherwise-complete timeline — internally simpler to stamp
-//! every packet from `pts=0`, including the first, at the cost of one
-//! timestamp field on one packet per file.
+//! One divergence, disclosed rather than chased: `packet=pts`, `packet=dts`
+//! and `packet=size` are byte-identical to `ffprobe` on every one of a
+//! 44.1kHz fixture's 88 packets (verified through the built `vaco-probe`
+//! binary, not just this crate's own tests), but `packet=duration` reads
+//! **655361** from us against the reference's **655360** on every single
+//! packet. The tick math above is exact — `1024 * 640 == 655360` — the loss
+//! happens one layer up: [`vaco_packet::Packet::duration`] is a
+//! [`vaco_core::Duration`], which is fixed at whole-microsecond resolution,
+//! and 655360 ticks of a `1/28224000` base is `23219.9546…` µs — not an
+//! integer, so no microsecond value round-trips back to exactly 655360
+//! (the nearest, 23220 µs, rescales back to 655361). `ac3`'s own
+//! already-inexact duration (`floor(1536 × 90000 / 44100)`) happens to
+//! survive the same round-trip by coincidence of rounding direction, which
+//! is why this was not caught there first. Fixing it means changing what
+//! `Packet::duration` *is* — an exact-ticks representation, or a
+//! finer-grained one — which is a workspace-wide change, not a local one,
+//! so it is disclosed here rather than attempted in this module.
 
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
@@ -169,6 +179,10 @@ impl AacDemuxer {
         let samples = u32::from(header.raw_data_blocks).saturating_mul(SAMPLES_PER_BLOCK);
         // Exact for every valid ADTS sampling_frequency_index — see the
         // module docs' divisibility note.
+        #[allow(
+            clippy::integer_division,
+            reason = "TIME_BASE_DEN divides every ADTS sampling frequency exactly (module docs' divisibility note); the divisor is forced non-zero by max(1)"
+        )]
         let ticks_per_sample = TIME_BASE_DEN / u64::from(header.sampling_frequency.max(1));
         let pts_ticks = self.sample_pos.saturating_mul(ticks_per_sample);
         let duration_ticks = u64::from(samples).saturating_mul(ticks_per_sample);
