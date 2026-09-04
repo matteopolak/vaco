@@ -3342,6 +3342,7 @@ dependencies = [
  "vaco-io",
  "vaco-limits",
  "vaco-packet",
+ "vaco-parse-aac",
  "vaco-pixfmt",
  "vaco-sampfmt",
 ]
