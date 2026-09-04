@@ -717,7 +717,7 @@ impl SendReceive for AdpcmSwfDecoder {
             }
             Accept::Input => {
                 let Some(pkt) = input else { return Ok(()) };
-                let channels = self.cfg.layout.channels.max(1);
+                let channels = swf::validate_channels(self.cfg.layout.channels)?;
                 let sample_count = swf_packet_sample_count(pkt, self.cfg.sample_rate);
                 let samples = swf::decode_block(pkt.payload(), channels, sample_count)?;
                 let frame = frame_from_samples(
@@ -782,6 +782,7 @@ impl SendReceive for AdpcmSwfEncoder {
             Accept::Input => {
                 let Some(frame) = input else { return Ok(()) };
                 let (samples, channels) = frame_samples_owned(frame)?;
+                let channels = swf::validate_channels(channels)?;
                 let wire = swf::encode_block(&samples, channels)?;
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &wire)?;
@@ -1326,6 +1327,40 @@ mod tests {
             dec.send(Some(&packet)).unwrap();
             let decoded = frame_samples_owned(&dec.receive().unwrap()).unwrap().0;
             assert_eq!(decoded.len(), samples.len());
+        }
+    }
+
+    #[test]
+    fn swf_public_paths_reject_unsupported_channel_counts() {
+        let wire = swf::encode_block(&[0], 1).unwrap();
+        for channels in [0, 3] {
+            let mut budget = Budget::new(Limits::permissive());
+            let packet = Packet::from_slice(&mut budget, &wire).unwrap();
+            let mut dec = AdpcmSwfDecoder::new(Limits::permissive())
+                .with_audio_params(8000, ChannelLayout::unspecified(channels));
+            assert!(matches!(
+                dec.send(Some(&packet)),
+                Err(Error::InvalidData(
+                    "adpcm_swf: channel count must be mono or stereo"
+                ))
+            ));
+
+            let mut frame_budget = Budget::new(Limits::permissive());
+            let frame = Frame::alloc_audio(
+                &mut frame_budget,
+                vaco_sampfmt::SampleFmt::S16,
+                ChannelLayout::unspecified(channels),
+                1,
+                8000,
+            )
+            .unwrap();
+            let mut enc = AdpcmSwfEncoder::new(Limits::permissive());
+            assert!(matches!(
+                enc.send(Some(&frame)),
+                Err(Error::InvalidData(
+                    "adpcm_swf: channel count must be mono or stereo"
+                ))
+            ));
         }
     }
 

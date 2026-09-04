@@ -43,6 +43,10 @@ packet. The encoder emits that same fixed-size packet for every input up to
 4096 samples per channel, repeating each channel's final sample as deterministic
 padding while retaining the real count in `Packet::duration`; larger frames
 are rejected because this one-frame/one-packet API does not split them.
+Only mono and stereo layouts are valid for SWF ADPCM. An explicit zero-channel
+or multichannel layout is rejected instead of being silently normalized to
+mono; the generic decoder configuration path's zero-channel “not yet known”
+value remains untouched and therefore keeps its normal mono default.
 
 ## Bugs found and fixed
 

@@ -21,6 +21,16 @@ use crate::tables::{
 /// `ADPCMMONOPACKET`/`ADPCMSTEREOPACKET`).
 pub(crate) const SAMPLES_PER_PACKET: u32 = 4096;
 
+pub(crate) fn validate_channels(channels: u32) -> Result<u32> {
+    if (1..=2).contains(&channels) {
+        Ok(channels)
+    } else {
+        Err(Error::InvalidData(
+            "adpcm_swf: channel count must be mono or stereo",
+        ))
+    }
+}
+
 /// An MSB-first bit reader over a byte slice.
 struct BitReader<'a> {
     data: &'a [u8],
@@ -159,10 +169,10 @@ impl SwfState {
 /// caller supplies it, the same way it supplies `channels`).
 ///
 /// # Errors
-/// [`Error::InvalidData`] for a header naming zero channels;
+/// [`Error::InvalidData`] when `channels` is not mono or stereo;
 /// [`Error::UnexpectedEof`] for a block shorter than `sample_count` implies.
 pub(crate) fn decode_block(data: &[u8], channels: u32, sample_count: u32) -> Result<Vec<i16>> {
-    let channels = channels.max(1);
+    let channels = validate_channels(channels)?;
     let mut r = BitReader::new(data);
     let bits = r.read(2)? + 2;
     let mut states = Vec::new();
@@ -202,7 +212,7 @@ pub(crate) fn decode_block(data: &[u8], channels: u32, sample_count: u32) -> Res
 /// [`Error::InvalidData`] if there are no samples or if the input exceeds one
 /// fixed-size packet.
 pub(crate) fn encode_block(samples: &[i16], channels: u32) -> Result<Vec<u8>> {
-    let channels = channels.max(1);
+    let channels = validate_channels(channels)?;
     let mut per_channel = crate::ima::deinterleave(samples, channels as usize)?;
     let Some(input_len) = per_channel.first().map(Vec::len) else {
         return Err(Error::InvalidData("adpcm_swf: no samples"));
@@ -325,5 +335,23 @@ mod tests {
                 "adpcm_swf: more samples than one packet can represent"
             ))
         ));
+    }
+
+    #[test]
+    fn unsupported_channel_counts_are_rejected() {
+        for channels in [0, 3, u32::MAX] {
+            assert!(matches!(
+                decode_block(&[0; 3], channels, 1),
+                Err(Error::InvalidData(
+                    "adpcm_swf: channel count must be mono or stereo"
+                ))
+            ));
+            assert!(matches!(
+                encode_block(&[0], channels),
+                Err(Error::InvalidData(
+                    "adpcm_swf: channel count must be mono or stereo"
+                ))
+            ));
+        }
     }
 }
