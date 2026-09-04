@@ -846,16 +846,14 @@ impl Mp4Demuxer {
         // Decrypt literal `cenc`, given a caller-supplied key and a real
         // `senc` — see `Mp4Options::decryption_key`'s doc comment. The other
         // scheme types use CBC or patterned protection and must not enter
-        // this AES-CTR path. Fragmented sources are excluded: this crate's
-        // own `senc`/`saiz`/`saio` placement (and this decoder's) is
-        // `stbl`-only, matching `vaco-mux-mp4`'s own write-side scope cut.
+        // this AES-CTR path. A fragmented track keeps only the validated key
+        // and IV size here; refill replaces its records from each `traf`.
         let decryptor = cenc
             .as_ref()
             .filter(|c| {
                 c.scheme
                     .is_some_and(|s| s.scheme_type == FourCc::new(b"cenc"))
             })
-            .filter(|_| !self.fragmented)
             .and_then(|c| {
                 let key = self.mp4.decryption_key?;
                 let te = c.track_encryption?;
@@ -863,6 +861,9 @@ impl Mp4Demuxer {
                     // `constant_iv` (every sample shares one IV): not
                     // implemented, named in the crate doc's *Deferred* section.
                     return None;
+                }
+                if self.fragmented {
+                    return read::Decryptor::fragmented(key, te.per_sample_iv_size);
                 }
                 let senc = vaco_format_isom::cenc::SampleEncryption::parse(
                     table.sample_encryption.as_ref()?,
@@ -1667,6 +1668,11 @@ impl Mp4Demuxer {
             let Some(reader) = self.readers.get_mut(slot) else {
                 return Ok(false);
             };
+            if let Some(decryptor) = reader.decrypt.as_mut() {
+                decryptor
+                    .replace_fragment(traf, e.samples)
+                    .map_err(Error::Unsupported)?;
+            }
             return Ok(
                 read::refill_fragment(reader, traf, base, &defaults, size) || reader.finished
             );

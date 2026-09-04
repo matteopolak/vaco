@@ -12,9 +12,11 @@
 
 use std::process::{Command, Stdio};
 
+use vaco_core::{Error, Timestamp};
 use vaco_demux_mp4::{Mp4Demuxer, Mp4Options};
 use vaco_format_core::discovery::NoParsers;
-use vaco_format_core::{Demuxer, FormatOptions};
+use vaco_format_core::{Demuxer, FormatOptions, SeekFlags, SeekTarget};
+use vaco_format_isom::{BoxIter, fourcc::boxes};
 use vaco_io::{MediaSource, MemorySource};
 
 const KEY_HEX: &str = "00112233445566778899aabbccddeeff";
@@ -49,6 +51,207 @@ fn packets(bytes: Vec<u8>, key: Option<[u8; 16]>) -> Vec<(u32, Vec<u8>)> {
         out.push((pkt.stream_index, pkt.payload().to_vec()));
     }
     out
+}
+
+type ExactPacket = (u32, Option<i64>, Option<i64>, usize, Vec<u8>);
+
+fn open(bytes: Vec<u8>, key: Option<[u8; 16]>) -> Mp4Demuxer {
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    Mp4Demuxer::open(
+        src,
+        &NoParsers,
+        &FormatOptions::default(),
+        Mp4Options {
+            decryption_key: key,
+            ..Mp4Options::default()
+        },
+    )
+    .unwrap()
+}
+
+fn exact_packets(demux: &mut Mp4Demuxer) -> Result<Vec<ExactPacket>, Error> {
+    let mut out = Vec::new();
+    loop {
+        match demux.read_packet() {
+            Ok(packet) => out.push((
+                packet.stream_index,
+                packet.pts.ticks(),
+                packet.dts.ticks(),
+                packet.payload().len(),
+                packet.payload().to_vec(),
+            )),
+            Err(Error::Eof) => return Ok(out),
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn nested_senc_boxes(bytes: &[u8]) -> Vec<(usize, u32)> {
+    BoxIter::new(bytes, 0)
+        .filter_map(Result::ok)
+        .filter(|b| b.kind() == boxes::MOOF)
+        .flat_map(|moof| moof.children().filter_map(Result::ok))
+        .filter(|b| b.kind() == boxes::TRAF)
+        .flat_map(|traf| traf.children().filter_map(Result::ok))
+        .filter(|b| b.kind() == boxes::SENC)
+        .filter_map(|b| {
+            Some((
+                usize::try_from(b.offset).ok()?,
+                u32::try_from(b.header.size).ok()?,
+            ))
+        })
+        .collect()
+}
+
+#[test]
+fn fragmented_cenc_aac_decrypts_to_clear_packets_across_fragments_and_seek() {
+    if Command::new("ffmpeg").arg("-version").output().is_err() {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("vaco-fragmented-cenc-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let source = dir.join("source.m4a");
+    let clear = dir.join("clear.mp4");
+    let encrypted = dir.join("encrypted.mp4");
+    let (source_s, clear_s, encrypted_s) = (
+        source.to_str().unwrap(),
+        clear.to_str().unwrap(),
+        encrypted.to_str().unwrap(),
+    );
+
+    // Encode AAC once, then make clear and encrypted fragmented stream copies
+    // so the expected packet bytes come from the same encoded samples.
+    let encoded = ffmpeg(&[
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=660:sample_rate=48000",
+        "-t",
+        "0.4",
+        "-c:a",
+        "aac",
+        source_s,
+    ])
+    .and_then(|()| {
+        ffmpeg(&[
+            "-i",
+            source_s,
+            "-map",
+            "0:a:0",
+            "-c",
+            "copy",
+            "-movflags",
+            "+empty_moov+frag_every_frame",
+            clear_s,
+        ])
+    })
+    .and_then(|()| {
+        ffmpeg(&[
+            "-i",
+            source_s,
+            "-map",
+            "0:a:0",
+            "-c",
+            "copy",
+            "-movflags",
+            "+empty_moov+frag_every_frame",
+            "-encryption_scheme",
+            "cenc-aes-ctr",
+            "-encryption_key",
+            KEY_HEX,
+            "-encryption_kid",
+            KID_HEX,
+            encrypted_s,
+        ])
+    });
+    if encoded.is_none() {
+        eprintln!("skipping: this ffmpeg cannot write fragmented cenc AAC");
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let clear_bytes = std::fs::read(&clear).unwrap();
+    let encrypted_bytes = std::fs::read(&encrypted).unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+
+    let moof_count = BoxIter::new(&encrypted_bytes, 0)
+        .filter_map(Result::ok)
+        .filter(|b| b.kind() == boxes::MOOF)
+        .count();
+    assert!(moof_count > 2, "fixture has only {moof_count} fragments");
+    let senc_boxes = nested_senc_boxes(&encrypted_bytes);
+    assert_eq!(senc_boxes.len(), moof_count, "one senc per audio traf");
+
+    let mut key = [0u8; 16];
+    for (i, byte) in key.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&KEY_HEX[2 * i..2 * i + 2], 16).unwrap();
+    }
+    let mut clear_demux = open(clear_bytes, None);
+    let mut encrypted_demux = open(encrypted_bytes.clone(), Some(key));
+    assert!(
+        encrypted_demux.streams()[0]
+            .metadata
+            .iter()
+            .any(|(name, value)| name == "encryption_scheme" && value == "cenc")
+    );
+    assert!(
+        encrypted_demux.streams()[0]
+            .metadata
+            .iter()
+            .any(|(name, value)| name == "encryption_key_id" && value == KID_HEX)
+    );
+    let expected = exact_packets(&mut clear_demux).unwrap();
+    let got =
+        exact_packets(&mut encrypted_demux).expect("fragment-local senc must decrypt every packet");
+    assert!(
+        expected.len() > 8,
+        "fixture has only {} packets",
+        expected.len()
+    );
+    assert_eq!(got, expected, "packet fields and payloads");
+
+    let target = expected[expected.len() >> 1]
+        .2
+        .expect("AAC packet has a decode timestamp");
+    for demux in [&mut clear_demux, &mut encrypted_demux] {
+        demux
+            .seek(
+                SeekTarget::Timestamp {
+                    stream_index: 0,
+                    ts: Timestamp::new(target),
+                },
+                SeekFlags::BACKWARD,
+            )
+            .unwrap();
+    }
+    let expected_after_seek = clear_demux.read_packet().unwrap();
+    let got_after_seek = encrypted_demux.read_packet().unwrap();
+    assert_eq!(
+        got_after_seek.stream_index,
+        expected_after_seek.stream_index
+    );
+    assert_eq!(got_after_seek.pts, expected_after_seek.pts);
+    assert_eq!(got_after_seek.dts, expected_after_seek.dts);
+    assert_eq!(got_after_seek.payload(), expected_after_seek.payload());
+
+    let (first_senc, first_senc_size) = senc_boxes[0];
+    let mut missing_senc = encrypted_bytes.clone();
+    missing_senc[first_senc + 4..first_senc + 8].copy_from_slice(b"free");
+    let missing_err = open(missing_senc, Some(key))
+        .read_packet()
+        .expect_err("a protected fragment without senc must be refused");
+    assert!(missing_err.to_string().contains("senc"), "{missing_err}");
+
+    let mut truncated_senc = encrypted_bytes;
+    truncated_senc[first_senc..first_senc + 4]
+        .copy_from_slice(&first_senc_size.saturating_sub(1).to_be_bytes());
+    let truncated_err = open(truncated_senc, Some(key))
+        .read_packet()
+        .expect_err("a protected fragment with a truncated senc must be refused");
+    assert!(
+        truncated_err.to_string().contains("senc"),
+        "{truncated_err}"
+    );
 }
 
 #[test]

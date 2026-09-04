@@ -1,5 +1,5 @@
-//! Movie fragments: `mvex`/`trex`, `moof ▸ traf ▸ tfhd/tfdt/trun`, `sidx` and
-//! `mfra ▸ tfra`.
+//! Movie fragments: `mvex`/`trex`, `moof ▸ traf ▸ tfhd/tfdt/trun/senc`, `sidx`
+//! and `mfra ▸ tfra`.
 //!
 //! ISO/IEC 14496-12 §8.8. A fragmented file replaces the sample tables with a
 //! chain of per-fragment run tables, so everything [`crate::stbl`] answers has
@@ -84,6 +84,12 @@ pub const TR_SAMPLE_CTS_OFFSET: u32 = 0x00_0800;
 pub const MAX_RUNS_PER_TRAF: usize = 4096;
 /// Largest number of track fragments kept per movie fragment.
 pub const MAX_TRAF_PER_MOOF: usize = 1024;
+/// Largest number of samples resolved from one track fragment.
+///
+/// A `trun` whose fields all come from `tfhd`/`trex` carries no per-sample
+/// bytes to clamp its declared count against. This cap keeps that valid shape
+/// reachable without letting a four-byte count drive an unbounded walk.
+pub const MAX_SAMPLES_PER_TRAF: u32 = 1 << 20;
 /// Largest number of `tfra` entries kept.
 pub const MAX_TFRA_ENTRIES: u32 = 1 << 20;
 
@@ -260,6 +266,7 @@ pub struct TrackRun<'a> {
     pub first_sample_flags: Option<u32>,
     /// `version`; version 1 makes composition offsets signed.
     pub version: u8,
+    sample_count: u32,
     entries: EntryTable<'a>,
     layout: TrunLayout,
 }
@@ -280,18 +287,25 @@ impl<'a> TrackRun<'a> {
             .map_err(|_| Error::InvalidData("isom: truncated trun header"))?;
         let layout = TrunLayout::from_flags(f);
         let rest = full.body.get(r.pos()..).unwrap_or(&[]);
-        // A `trun` with no per-sample fields at all still declares a count; the
-        // entry table would then be unbounded, so it is capped at the declared
-        // value with no bytes behind it and every field falls back to defaults.
+        // A zero-stride run has no entry bytes to clamp against: every field
+        // comes from `tfhd`/`trex`, but `sample_count` still states how many
+        // samples use those defaults. The enclosing-traf cap supplies the
+        // bound that bytes cannot in this one valid shape.
         let entries = if layout.stride == 0 {
             EntryTable::new(&[], 1, 0)
         } else {
             EntryTable::new(rest, layout.stride, declared)
         };
+        let sample_count = if layout.stride == 0 {
+            declared.min(MAX_SAMPLES_PER_TRAF)
+        } else {
+            entries.len()
+        };
         Ok(Self {
             data_offset,
             first_sample_flags,
             version: full.version,
+            sample_count,
             entries,
             layout,
         })
@@ -299,13 +313,11 @@ impl<'a> TrackRun<'a> {
 
     /// Samples in the run.
     ///
-    /// A `trun` with no per-sample fields carries no bytes, so this reports the
-    /// declared count only when the file backed it with data. That is
-    /// deliberate: the alternative is trusting a count field, which is the
-    /// amplification this crate refuses everywhere else.
+    /// For a zero-stride run, the bounded declared count whose fields all fall
+    /// back to `tfhd`/`trex`; otherwise the count its entry bytes can hold.
     #[must_use]
     pub const fn sample_count(&self) -> u32 {
-        self.entries.len()
+        self.sample_count
     }
 
     fn field(&self, i: u32, at: Option<usize>) -> Option<u32> {
@@ -326,6 +338,8 @@ pub struct TrackFragment<'a> {
     pub base_media_decode_time: Option<u64>,
     /// The runs, in file order.
     pub runs: Vec<TrackRun<'a>>,
+    /// Fragment-local Common Encryption records, when a `senc` child exists.
+    pub sample_encryption: Option<IsoBox<'a>>,
 }
 
 impl<'a> TrackFragment<'a> {
@@ -338,6 +352,7 @@ impl<'a> TrackFragment<'a> {
         let mut header = None;
         let mut base_media_decode_time = None;
         let mut runs = Vec::new();
+        let mut sample_encryption = None;
         for child in traf.children() {
             let child = child?;
             match child.kind() {
@@ -357,6 +372,7 @@ impl<'a> TrackFragment<'a> {
                 boxes::TRUN if runs.len() < MAX_RUNS_PER_TRAF => {
                     runs.push(TrackRun::parse(&child.full()?)?);
                 }
+                boxes::SENC if sample_encryption.is_none() => sample_encryption = Some(child),
                 _ => {}
             }
         }
@@ -364,6 +380,7 @@ impl<'a> TrackFragment<'a> {
             header: header.ok_or(Error::InvalidData("isom: traf without a tfhd"))?,
             base_media_decode_time,
             runs,
+            sample_encryption,
         })
     }
 
@@ -373,6 +390,7 @@ impl<'a> TrackFragment<'a> {
         self.runs
             .iter()
             .fold(0u64, |a, r| a.saturating_add(u64::from(r.sample_count())))
+            .min(u64::from(MAX_SAMPLES_PER_TRAF))
     }
 
     /// Resolve every sample in the fragment.
@@ -400,6 +418,7 @@ impl<'a> TrackFragment<'a> {
                 .base_media_decode_time
                 .map_or(decode_time, |t| i64::try_from(t).unwrap_or(i64::MAX)),
             started_run: false,
+            remaining: MAX_SAMPLES_PER_TRAF,
         }
     }
 
@@ -457,12 +476,16 @@ pub struct FragmentSamples<'t, 'a> {
     base: u64,
     dts: i64,
     started_run: bool,
+    remaining: u32,
 }
 
 impl Iterator for FragmentSamples<'_, '_> {
     type Item = FragmentSample;
 
     fn next(&mut self) -> Option<FragmentSample> {
+        if self.remaining == 0 {
+            return None;
+        }
         loop {
             let run = self.traf.runs.get(self.run)?;
             if !self.started_run {
@@ -519,6 +542,7 @@ impl Iterator for FragmentSamples<'_, '_> {
             self.index_in_run = i.saturating_add(1);
             self.cursor = self.cursor.saturating_add(u64::from(size));
             self.dts = self.dts.saturating_add(i64::from(duration));
+            self.remaining = self.remaining.saturating_sub(1);
             return Some(out);
         }
     }
@@ -1029,24 +1053,26 @@ mod tests {
         ));
         let raw = bx(b"traf", &traf_body);
         let traf = TrackFragment::parse(&first_box(&raw)).unwrap();
-        // With no per-sample fields the run carries no bytes, so a size-only
-        // default plus a declared count yields nothing; give it a stride.
-        assert_eq!(traf.sample_count(), 0);
+        let samples: Vec<_> = traf.samples(0, 0, &TrackExtends::default()).collect();
+        assert_eq!(samples.len(), 3);
+        assert_eq!(samples[0].flags.0, 0x0200_0000);
+        assert_eq!(samples[1].flags.0, 0x0001_0000);
+        assert_eq!(samples[2].flags.0, 0x0001_0000);
     }
 
     #[test]
-    fn a_run_without_per_sample_fields_reports_no_samples() {
-        // The count field alone is not evidence: a `trun` claiming four
-        // billion samples with no bytes behind them must not become four
-        // billion iterations.
+    fn a_run_without_per_sample_fields_honours_its_bounded_count() {
+        // A default-only run has no per-sample bytes to prove its count, so a
+        // four-billion declaration is honoured only up to the traf-wide cap.
         let mut traf_body = tfhd(TF_DEFAULT_SAMPLE_SIZE, 1, &[8]);
         let mut b = u32::MAX.to_be_bytes().to_vec();
         b.extend_from_slice(&0i32.to_be_bytes());
         traf_body.extend_from_slice(&fullbx(b"trun", 0, TR_DATA_OFFSET, &b));
         let raw = bx(b"traf", &traf_body);
         let traf = TrackFragment::parse(&first_box(&raw)).unwrap();
-        assert_eq!(traf.sample_count(), 0);
-        assert_eq!(traf.samples(0, 0, &TrackExtends::default()).count(), 0);
+        assert_eq!(traf.sample_count(), u64::from(MAX_SAMPLES_PER_TRAF));
+        let samples = traf.samples(0, 0, &TrackExtends::default());
+        assert_eq!(samples.remaining, MAX_SAMPLES_PER_TRAF);
     }
 
     #[test]

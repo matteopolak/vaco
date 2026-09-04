@@ -298,6 +298,14 @@ first decode time, and how many samples it declares. Resolving samples from a
 `traf` is cheap (borrowed tables, no summaries), so fragments are re-parsed per
 refill without the geometric-batch machinery the sample table needs.
 
+A `trun` may declare samples while carrying no per-sample entry bytes at all:
+every duration, size and flag then comes from `tfhd`/`trex`. ffmpeg 9.0.1 uses
+that legal zero-stride shape for `+frag_every_frame` AAC. The box layer honors
+the declared count while capping the whole `traf` at
+`MAX_SAMPLES_PER_TRAF` (1,048,576); this keeps default-only runs reachable
+without letting a four-byte count drive an unbounded walk. The demuxer reuses
+that same cap rather than maintaining another value.
+
 `tfdt` supplies the decode time when present (`-use_tfdt`, default on);
 otherwise the running total carries over. A source that cannot seek pulls one
 `moof` at a time and **buffers the `mdat` that follows it**, because a
@@ -637,14 +645,12 @@ relative to the reference, not a reproduction of it.
 
 **2026-08-28: decryption, given a caller-supplied key.** `Mp4Options::decryption_key`
 (one AES-128 key, matching the reference's own `-decryption_key`) turns on
-real decryption for a protected, **non-fragmented** track: `SampleEntry::tenc`'s
-`per_sample_iv_size` plus the track's `senc` (now parsed for its per-sample
-IV records, not only its shape — `vaco_format_isom::cenc::SampleEncryption::iv`)
-give every sample's real IV, and `read::Decryptor::decrypt` applies
-full-sample AES-128-CTR (`vaco-crypto`) in place before the packet is handed
-back. Without a key — or for a fragmented track, or
-`per_sample_iv_size == 0` (`constant_iv`, not implemented) — the old refusal
-still applies:
+real decryption for a protected track: `SampleEntry::tenc`'s
+`per_sample_iv_size` plus `senc`'s per-sample IV records give every sample's
+real IV, and `read::Decryptor::decrypt` applies full-sample AES-128-CTR
+(`vaco-crypto`) in place before the packet is handed back. Without a key, or
+with `per_sample_iv_size == 0` (`constant_iv`, not implemented), refusal still
+applies:
 `reader.encrypted` and `reader.decrypt` are mutually exclusive, and
 `ensure_head` refuses with `Error::Unsupported` exactly when the latter is
 `None`.
@@ -682,6 +688,22 @@ the wrong cipher. `tests/cenc_ffmpeg.rs` now makes that single-box change and
 checks both the `cbcs` metadata value and the named `Error::Unsupported`
 refusal.
 
+**2026-09-04: fragmented `senc`.** ISO/IEC 23001-7 §7.2 places each
+sample-encryption table inside its `moof ▸ traf`. `TrackFragment` retains that
+box, and every fragment refill replaces the track's active `Decryptor` records
+before it queues samples. Packet indices are zero-based within the whole
+`traf` (including refills larger than one batch), so a seek clears the queue
+and the same refill path selects both the destination fragment's `senc` and
+the matching record. A missing box, a `sample_count` mismatch, truncated IV
+records, or a subsample range outside its packet is refused before ciphertext
+can be returned.
+
+Measured against `ffmpeg 9.0.1`: an AAC stream encoded once and stream-copied
+into clear and `cenc-aes-ctr` files with
+`+empty_moov+frag_every_frame` produced one nested `traf ▸ senc` per fragment.
+All packet stream indices, PTS, DTS, sizes and payload bytes matched after
+decryption, both through EOF and after a backward seek into the middle.
+
 **Reachability, measured and not yet fixed:** `vaco -decryption_key <hex>
 -i enc.mp4` answers `Unrecognized option 'decryption_key'`. There is no
 demuxer private-option plumbing at all — `DemuxerDesc::open` takes no
@@ -697,8 +719,8 @@ tables) that belongs to all ~90 demuxers, not to this crate.
 `decryption_key` alone already means), `cbcs`/`cens`/`cbc1` (pattern and
 CBC schemes: `schm` is reported, the track refused), their constant-IV mode
 (`per_sample_iv_size == 0`; ISO/IEC 23001-7 prohibits constant IVs with
-counter mode), and a fragmented file's `senc` beside `moof`. Top-level
-fragmented-file `pssh` is collected. Reporting is deliberately *more* than
+counter mode). Top-level fragmented-file `pssh` is collected. Reporting is
+deliberately *more* than
 the reference:
 `ffprobe 9.0.1` prints no encryption field at all for a `cenc` file, and
 `ffmpeg -i` without a key decodes the ciphertext into garbage without

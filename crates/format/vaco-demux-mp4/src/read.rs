@@ -61,7 +61,7 @@ pub(crate) const PCM_GROUP_SAMPLES: u32 = 1024;
 pub(crate) const MAX_SAMPLES_PER_TRACK: u32 = 1 << 24;
 
 /// Hard ceiling on the samples one `traf` will ever be walked for.
-pub(crate) const MAX_SAMPLES_PER_FRAGMENT: u32 = 1 << 20;
+pub(crate) const MAX_SAMPLES_PER_FRAGMENT: u32 = vaco_format_isom::frag::MAX_SAMPLES_PER_TRAF;
 
 /// How many samples of a track are worth walking.
 ///
@@ -103,10 +103,9 @@ pub(crate) struct Pending {
     /// 48/32/44.1/22.05 kHz, and it lands on the final sample only. See
     /// [`Reader::push`] for the two container statements it comes from.
     pub skip_end: u32,
-    /// This sample's 0-based index within its track's `stbl` — what
-    /// [`Decryptor::iv`] indexes `senc`'s per-sample IV records by. Not the
-    /// same number as a decode order under a `ctts`; it is a table position,
-    /// which is exactly what `senc`'s records are keyed by too.
+    /// This sample's 0-based index within its track's `stbl`, or within its
+    /// current `traf` for a fragmented track — what [`Decryptor::decrypt`]
+    /// uses to select `senc`'s per-sample record.
     pub index: u32,
 }
 
@@ -124,10 +123,11 @@ pub(crate) struct SencSample {
 /// corrupt `subsample_count` from turning into a large allocation.
 const MAX_SUBSAMPLES: u16 = 4096;
 
-/// Owned per-track state for decrypting a `cenc`-protected, non-fragmented
-/// track, built once a usable key and a real `senc` are both in hand — see
+/// Owned per-track state for decrypting a `cenc`-protected track, built once a
+/// usable key and a real `senc` are both in hand — see
 /// `Mp4Options::decryption_key` and the crate doc's *Common Encryption*
-/// section.
+/// section. Fragmented tracks replace [`Self::samples`] from each `traf` before
+/// that fragment's queue is filled.
 ///
 /// Holds an **owned** copy of `senc`'s records rather than a borrow: a
 /// `Reader` outlives any one `Movie::parse` borrow of `self.moov` (the same
@@ -138,10 +138,24 @@ const MAX_SUBSAMPLES: u16 = 4096;
 #[derive(Debug, Clone)]
 pub(crate) struct Decryptor {
     pub key: [u8; 16],
+    iv_size: u8,
     pub samples: Vec<SencSample>,
 }
 
 impl Decryptor {
+    /// Retain the validated track key and IV size until the first fragment's
+    /// `senc` is available during refill.
+    pub(crate) const fn fragmented(key: [u8; 16], iv_size: u8) -> Option<Self> {
+        if !matches!(iv_size, 8 | 16) {
+            return None;
+        }
+        Some(Self {
+            key,
+            iv_size,
+            samples: Vec::new(),
+        })
+    }
+
     /// Resolve `senc`'s per-sample records (ISO/IEC 23001-7 §7.2): `iv_size`
     /// bytes of IV, then — when the box's flags say so — a 16-bit
     /// `subsample_count` and that many `(u16 clear, u32 protected)` pairs.
@@ -187,7 +201,42 @@ impl Decryptor {
                 subsamples,
             });
         }
-        Some(Self { key, samples })
+        Some(Self {
+            key,
+            iv_size,
+            samples,
+        })
+    }
+
+    /// Replace the active records with this `traf`'s `senc` table.
+    ///
+    /// The named error covers a missing box, a count that disagrees with the
+    /// fragment, or records that end early. The caller refuses the fragment
+    /// before any queued ciphertext can be returned.
+    pub(crate) fn replace_fragment(
+        &mut self,
+        traf: &TrackFragment<'_>,
+        sample_count: u32,
+    ) -> Result<(), &'static str> {
+        let senc_box = traf
+            .sample_encryption
+            .as_ref()
+            .ok_or("mp4: cenc: fragmented traf is missing its senc sample-encryption box")?;
+        let senc = vaco_format_isom::cenc::SampleEncryption::parse(senc_box)
+            .ok_or("mp4: cenc: fragmented traf has a truncated senc header")?;
+        if senc.sample_count != sample_count {
+            return Err("mp4: cenc: fragmented traf senc sample count does not match trun");
+        }
+        let next = Self::parse(
+            self.key,
+            senc.records,
+            sample_count,
+            self.iv_size,
+            senc.has_subsamples,
+        )
+        .ok_or("mp4: cenc: fragmented traf has truncated senc sample records")?;
+        *self = next;
+        Ok(())
     }
 
     /// Decrypt `payload` in place for sample `index`. `false` when `senc`
@@ -344,8 +393,7 @@ pub(crate) struct Reader {
     pub blocked: bool,
     /// `sinf ▸ schm`/`sinf ▸ schi ▸ tenc` named a Common Encryption scheme
     /// **and** [`Reader::decrypt`] could not be built for it — no usable key,
-    /// no `senc`, or a fragmented source (decryption is `Source::Table`
-    /// only; see the crate doc's *Common Encryption* section).
+    /// an unsupported scheme, or an unsupported IV form.
     ///
     /// Deliberately **not** folded into `blocked`: a blocked track silently
     /// produces no packets forever, which is right for an unreachable `dref`
@@ -357,9 +405,9 @@ pub(crate) struct Reader {
     /// fails predictably rather than only once the encrypted track's turn in
     /// the interleave happens to come up.
     pub encrypted: bool,
-    /// Set instead of [`Reader::encrypted`] when a usable key and a real
-    /// `senc` were both found at track-build time: every sample read from
-    /// this track is decrypted in place before being handed back.
+    /// Set instead of [`Reader::encrypted`] when a usable key exists. For a
+    /// progressive track this holds its sample-table `senc`; for a fragmented
+    /// track refill replaces it from the current `traf` before queuing samples.
     pub decrypt: Option<Decryptor>,
     /// This track's codec name starts with `pcm_` and it is not
     /// `Common Encryption`-protected (grouping would break
@@ -609,10 +657,6 @@ pub(crate) fn refill_fragment(
     for (i, s) in resolved.into_iter().enumerate() {
         let fits = source_size.is_none_or(|n| s.offset.saturating_add(u64::from(s.size)) <= n);
         if fits {
-            // `index` is unused for a fragmented track — decryption is
-            // `Source::Table` only (see `Reader::decrypt`'s doc comment) — so
-            // the within-batch position is a harmless placeholder rather
-            // than a real `senc` index.
             reader.push(
                 s.offset,
                 s.size,
@@ -620,7 +664,7 @@ pub(crate) fn refill_fragment(
                 s.cts_offset,
                 s.duration,
                 s.is_sync(),
-                u32::try_from(i).unwrap_or(u32::MAX),
+                next_in_entry.saturating_add(u32::try_from(i).unwrap_or(u32::MAX)),
             );
         }
     }
