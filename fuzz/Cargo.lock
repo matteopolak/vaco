@@ -187,6 +187,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4bfbf56724aa9eca8afa4fcfadeb479e722935bb2a0900c2d37e0cc477af0688"
 
 [[package]]
+name = "cmov"
+version = "0.5.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
+
+[[package]]
 name = "color_quant"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -295,6 +301,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
+name = "crypto-bigint"
+version = "0.7.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a52aa3fcda4e6302a9f48734f234d35d4721b96f8fe07d073f07ce9df4f0271"
+dependencies = [
+ "cpubits",
+ "ctutils",
+ "getrandom 0.4.3",
+ "hybrid-array",
+ "num-traits",
+ "rand_core",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "crypto-common"
 version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -320,6 +342,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baaca1c4b237092596f64d571e9db6ce4109c4ef9742e27590f1709594461f21"
 dependencies = [
  "cipher",
+]
+
+[[package]]
+name = "ctutils"
+version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d5515a3834141de9eafb9717ad39eea8247b5674e6066c404e8c4b365d2a29e"
+dependencies = [
+ "cmov",
+ "subtle",
 ]
 
 [[package]]
@@ -498,6 +530,7 @@ dependencies = [
  "cfg-if",
  "libc",
  "r-efi",
+ "rand_core",
 ]
 
 [[package]]
@@ -552,6 +585,7 @@ version = "0.4.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "707114b52a152fa7bdb290cd7cd5912d9467273b6d74e21b8d81aca1f8533f6b"
 dependencies = [
+ "subtle",
  "typenum",
 ]
 
@@ -1066,6 +1100,12 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
+
+[[package]]
+name = "rand_core"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "63b8176103e19a2643978565ca18b50549f6101881c443590420e4dc998a3c69"
 
 [[package]]
 name = "rangemap"
@@ -1703,6 +1743,7 @@ dependencies = [
  "vaco-cli-core",
  "vaco-codec-core",
  "vaco-core",
+ "vaco-demux-mp4",
  "vaco-expr",
  "vaco-filter-core",
  "vaco-filter-graph",
@@ -3119,10 +3160,12 @@ dependencies = [
 name = "vaco-filter-scope"
 version = "0.1.0"
 dependencies = [
+ "vaco-color",
  "vaco-core",
  "vaco-filter-core",
  "vaco-filter-graph",
  "vaco-frame",
+ "vaco-limits",
  "vaco-opts",
  "vaco-pixfmt",
 ]
@@ -4506,8 +4549,10 @@ dependencies = [
 name = "vaco-protocol-rist"
 version = "0.1.0"
 dependencies = [
+ "crypto-bigint",
  "vaco-core",
  "vaco-crypto",
+ "vaco-hash",
  "vaco-limits",
  "vaco-protocol-core",
  "vaco-protocol-dtls",
@@ -4829,6 +4874,7 @@ version = "0.1.0"
 dependencies = [
  "fearless_simd",
  "vaco-core",
+ "vaco-vecheck-macros",
 ]
 
 [[package]]
@@ -4878,6 +4924,15 @@ dependencies = [
  "bitflags",
  "vaco-core",
  "vaco-simd",
+]
+
+[[package]]
+name = "vaco-vecheck-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
