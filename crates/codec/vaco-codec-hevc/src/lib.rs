@@ -76,6 +76,16 @@
 //!   band and edge offset) and the filtering process. Verified byte-exact
 //!   against plain `ffmpeg` on real `libx265` output with SAO left at its
 //!   own (on) default, at multiple resolutions and QPs.
+//! - **`transform_skip_flag` (§7.3.8.11 syntax, §8.6.4.2 residual) is
+//!   implemented and no longer refused.** The flag was already parsed —
+//!   correctly, in all four residual call sites — and then refused by name
+//!   whenever it decoded to `1`, which is 26 of the 46 JCT-VC `HEVC_v1`
+//!   conformance streams this repo registers in `vaco-media.lock`, the
+//!   single largest refusal in that corpus by a wide margin.
+//!   [`transform::TransformKind`] now carries the §8.6.4.2 branch choice as
+//!   one value rather than a `use_dst` flag beside a separate skip flag.
+//!   Verified byte-exact against `ffmpeg` on real `libx265 --tskip` output
+//!   (`tests/tskip.rs`, plus an I/P/B encode measured out of tree).
 //! - **Tiles.** Refused; only a plain single-tile, independent-slice-segment
 //!   picture is decoded.
 //! - **Wavefront (`entropy_coding_sync_enabled_flag`) is implemented** — see

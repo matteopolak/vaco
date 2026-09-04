@@ -385,6 +385,36 @@ CTUs) and 640x480, at multiple QPs. The pre-existing
 `deblock::filter_picture` returns immediately when
 `slice_deblocking_filter_disabled_flag` is set.
 
+## `transform_skip_flag` (§7.3.8.11 / §8.6.4.2), landed
+
+The flag was already parsed at all four residual call sites and then refused
+by name whenever it decoded to `1`. Measured against the 46-stream JCT-VC
+`HEVC_v1` subset `vaco-corpus`'s `vaco-media.lock` registers, that one
+refusal was what **26 of 46** streams hit first — more than every other
+refusal in that corpus put together.
+
+`transform::inverse_transform` now takes a `TransformKind`
+(`Dct`/`Dst4`/`Skip`) instead of a `use_dst: bool`, so "DST-VII *and*
+transform-skip" is not a state a caller can construct. The `Skip` arm is
+§8.6.4.2's `r[x][y] = d[x][y] << tsShift` with `tsShift = 5 + Log2(nTbS)`,
+falling into the same §8.6.5 `bdShift` tail every other branch uses. At
+8-bit 4x4 the pair collapses to `(d + 16) >> 5`, which is HM 18.0's own
+`TComTrQuant::xITransformSkip` shift (`MAX_TR_DYNAMIC_RANGE - bitDepth -
+log2TrSize`) — that identity is how the arithmetic was checked before it was
+measured. The `extended_precision_processing_flag`-dependent
+`Min(5, bdShift - 2)` alternative is unreachable: that flag is an SPS range
+extension `check_scope` refuses.
+
+Verified byte-exact against plain `ffmpeg` on real `libx265 --tskip=1`
+output: `tests/tskip.rs` (64x64, 2 IDR frames, in-loop filters off at the
+encoder so a residual regression cannot hide behind a filtering one) and,
+out of tree, a 192x128 all-intra encode and a 192x128 I/P/B encode with
+`bframes=3`, both byte-identical on every sample of every plane of every
+frame. That the fixture genuinely reaches the path was itself measured, not
+assumed: making `read_transform_skip_flag` refuse on a decoded `1` and
+re-running makes `tests/tskip.rs` refuse on its first access unit while
+every other fixture in the crate decodes unchanged.
+
 ## SAO (§7.3.8.3 / §8.7.3), landed
 
 `no-sao=1` above was also the interim posture, not the final one:

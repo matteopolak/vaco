@@ -517,6 +517,43 @@ fn derive_qp_y(qp_y_pred: i32, cu_qp_delta_val: i32) -> i32 {
     (qp_y_pred + cu_qp_delta_val).rem_euclid(52)
 }
 
+/// §7.3.8.11's `transform_skip_flag[x0][y0][cIdx]`, present only when
+/// `transform_skip_enabled_flag` is set and the transform block is 4x4.
+///
+/// `log2_max_transform_skip_block_size_minus2` — the PPS range extension that
+/// would widen that size condition past 4x4 — is refused by
+/// `decoder::check_scope`, so `log2_size == 2` is the whole condition here.
+/// `ctx_offset` selects §9.3.4.2.1's per-component context: `0` for luma,
+/// `1` shared by both chroma components.
+fn read_transform_skip_flag(
+    cabac: &mut CabacDecoder<'_>,
+    ctx: &mut ContextBank,
+    s: &Ctx<'_>,
+    log2_size: u32,
+    ctx_offset: usize,
+) -> Result<bool> {
+    if !s.shared.transform_skip_enabled || log2_size != 2 {
+        return Ok(false);
+    }
+    let cm = ctx
+        .transform_skip
+        .get_mut(ctx_offset)
+        .ok_or(Error::InvalidData("transform_skip ctx"))?;
+    Ok(cabac.decode_decision(cm) != 0)
+}
+
+/// §8.6.4.2's branch selection: `transform_skip_flag` wins over `trType`,
+/// which the spec's own ordering makes explicit (the skip branch is tested
+/// first and the DST-VII/DCT-II choice is only reached when it does not
+/// apply).
+const fn transform_kind(skip: bool, use_dst: bool) -> transform::TransformKind {
+    match (skip, use_dst) {
+        (true, _) => transform::TransformKind::Skip,
+        (false, true) => transform::TransformKind::Dst4,
+        (false, false) => transform::TransformKind::Dct,
+    }
+}
+
 /// `cu_qp_delta_abs`'s truncated-unary prefix (§9.3.3.10's binarisation,
 /// context assignment per its own table): the first bin uses `ctx0`, every
 /// further bin (up to `max_symbol - 1` of them) shares `ctx1`. A literal port
@@ -2328,17 +2365,7 @@ fn reconstruct_luma_inter(
     let mut pred = pred_slice(&pred_cu.y, pred_cu.size, x0 - cu_x0, y0 - cu_y0, size);
 
     if cbf {
-        if s.shared.transform_skip_enabled && log2_size == 2 {
-            let cm = ctx
-                .transform_skip
-                .first_mut()
-                .ok_or(Error::InvalidData("transform_skip ctx"))?;
-            if cabac.decode_decision(cm) != 0 {
-                return Err(Error::Unsupported(
-                    "vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)",
-                ));
-            }
-        }
+        let skip = read_transform_skip_flag(cabac, ctx, s, log2_size, 0)?;
         // §7.4.9.11's mode-dependent scan order is an intra-only rule — an
         // inter TU's `scanIdx` is always `0` (diagonal), HM's own
         // `getCoefScanIdx` returning `SCAN_DIAG` whenever `CuPredMode !=
@@ -2351,11 +2378,12 @@ fn reconstruct_luma_inter(
             false,
             s.shared.sign_data_hiding,
         );
-        let use_dst = false; // §8.6.4.1: DST-VII only for 4x4 *intra* luma.
+        // §8.6.4.1: DST-VII only for 4x4 *intra* luma.
+        let kind = transform_kind(skip, false);
         let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
         let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
         let residual =
-            transform::inverse_transform(&dequantised, size, use_dst, s.shared.bit_depth_luma);
+            transform::inverse_transform(&dequantised, size, kind, s.shared.bit_depth_luma);
         transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
     }
     write_block(&mut s.recon.y, x0, y0, size, &pred);
@@ -2386,17 +2414,7 @@ fn reconstruct_chroma_inter(
     let csize = (pred_cu.size >> 1).max(1);
     let mut pred = pred_slice(src, csize, cx0 - ccu_x0, cy0 - ccu_y0, size);
 
-    if s.shared.transform_skip_enabled && log2_size == 2 {
-        let cm = ctx
-            .transform_skip
-            .get_mut(1)
-            .ok_or(Error::InvalidData("transform_skip ctx"))?;
-        if cabac.decode_decision(cm) != 0 {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)",
-            ));
-        }
-    }
+    let skip = read_transform_skip_flag(cabac, ctx, s, log2_size, 1)?;
     let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
     let qp = transform::chroma_qp(
         qp_y,
@@ -2415,8 +2433,12 @@ fn reconstruct_chroma_inter(
         s.shared.sign_data_hiding,
     );
     let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
-    let residual =
-        transform::inverse_transform(&dequantised, size, false, s.shared.bit_depth_chroma);
+    let residual = transform::inverse_transform(
+        &dequantised,
+        size,
+        transform_kind(skip, false),
+        s.shared.bit_depth_chroma,
+    );
     transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_chroma);
 
     let plane = if is_cb {
@@ -2707,17 +2729,7 @@ fn reconstruct_luma(
     );
 
     if cbf {
-        if s.shared.transform_skip_enabled && log2_size == 2 {
-            let cm = ctx
-                .transform_skip
-                .first_mut()
-                .ok_or(Error::InvalidData("transform_skip ctx"))?;
-            if cabac.decode_decision(cm) != 0 {
-                return Err(Error::Unsupported(
-                    "vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)",
-                ));
-            }
-        }
+        let skip = read_transform_skip_flag(cabac, ctx, s, log2_size, 0)?;
         let order = intra_mode::scan_order_for_mode(mode, log2_size, false);
         let coeffs: Coeffs = residual::residual_coding(
             cabac,
@@ -2727,11 +2739,11 @@ fn reconstruct_luma(
             false,
             s.shared.sign_data_hiding,
         );
-        let use_dst = log2_size == 2;
+        let kind = transform_kind(skip, log2_size == 2);
         let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
         let dequantised = transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
         let residual =
-            transform::inverse_transform(&dequantised, size, use_dst, s.shared.bit_depth_luma);
+            transform::inverse_transform(&dequantised, size, kind, s.shared.bit_depth_luma);
         transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
     }
 
@@ -2775,17 +2787,7 @@ fn reconstruct_chroma(
         &mut pred,
     );
 
-    if s.shared.transform_skip_enabled && log2_size == 2 {
-        let cm = ctx
-            .transform_skip
-            .get_mut(1)
-            .ok_or(Error::InvalidData("transform_skip ctx"))?;
-        if cabac.decode_decision(cm) != 0 {
-            return Err(Error::Unsupported(
-                "vaco-codec-hevc: transform_skip_flag set (transform-skip residual not implemented)",
-            ));
-        }
-    }
+    let skip = read_transform_skip_flag(cabac, ctx, s, log2_size, 1)?;
     let order = intra_mode::scan_order_for_mode(mode, log2_size, true);
     let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
     let qp = transform::chroma_qp(
@@ -2805,8 +2807,12 @@ fn reconstruct_chroma(
         s.shared.sign_data_hiding,
     );
     let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
-    let residual =
-        transform::inverse_transform(&dequantised, size, false, s.shared.bit_depth_chroma);
+    let residual = transform::inverse_transform(
+        &dequantised,
+        size,
+        transform_kind(skip, false),
+        s.shared.bit_depth_chroma,
+    );
     transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_chroma);
 
     let plane_mut = if is_cb {

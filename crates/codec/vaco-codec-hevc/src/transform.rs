@@ -84,31 +84,61 @@ pub(crate) fn dequant(coeffs: &[(u8, u8, i32)], size: usize, qp: i32, bit_depth:
     out
 }
 
-/// Run the inverse transform (DST-VII for 4x4 intra luma per §8.6.4.2,
-/// `trType == 1`; DCT-II otherwise), then §8.6.5's final residual-modification
-/// shift — `vaco_codec_dsp_idct::hevc`'s own module doc is explicit that its
-/// two-pass engine stops at the transform clause's own last step and applies
-/// no further shift, because that final `bdShift` is a *residual
-/// reconstruction* concern (clause 8.6.5), one level up from "the inverse
-/// transform" itself. `bdShift = 20 - BitDepth` in this crate's non-extended,
-/// 8-bit-only scope (`extended_precision_processing_flag` is refused at the
-/// SPS), i.e. `12` always here — kept as an explicit function of `bit_depth`
-/// anyway so the one non-obvious constant in this file has a name.
+/// Which §8.6.4.2 branch turns this block's scaled coefficients into residual
+/// samples. One value rather than a `use_dst` flag beside a separate
+/// `transform_skip` flag, so "DST-VII *and* transform-skip" is not a state
+/// this crate's callers can construct.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransformKind {
+    /// `trType == 0`.
+    Dct,
+    /// `trType == 1` — 4x4 intra luma only.
+    Dst4,
+    /// `transform_skip_flag == 1`: no transform, only the `tsShift` scaling.
+    Skip,
+}
+
+/// Run the inverse transform (or §8.6.4.2's `transform_skip_flag` branch),
+/// then §8.6.5's final residual-modification shift —
+/// `vaco_codec_dsp_idct::hevc`'s own module doc is explicit that its two-pass
+/// engine stops at the transform clause's own last step and applies no
+/// further shift, because that final `bdShift` is a *residual reconstruction*
+/// concern (clause 8.6.5), one level up from "the inverse transform" itself.
+/// `bdShift = 20 - BitDepth` in this crate's non-extended, 8-bit-only scope
+/// (`extended_precision_processing_flag` is refused at the SPS), i.e. `12`
+/// always here — kept as an explicit function of `bit_depth` anyway so the
+/// one non-obvious constant in this file has a name.
+///
+/// [`TransformKind::Skip`] shares that same `bdShift` tail deliberately: the
+/// spec reaches it by the same route, and at 8-bit 4x4 the pair collapses to
+/// HM's own `xITransformSkip` shift of `(d + 16) >> 5` (`<< 7` then
+/// `+ 2048 >> 12`), which is how this was checked before it was measured.
 #[must_use]
 pub(crate) fn inverse_transform(
     dequantised: &[i32],
     size: usize,
-    use_dst: bool,
+    kind: TransformKind,
     bit_depth: u32,
 ) -> Vec<i32> {
     let mut out = vec![0i32; size * size];
     let clip = ClipRange::non_extended();
-    match size {
-        4 if use_dst => idct2d_dst4(dequantised, &mut out, clip),
-        4 => idct2d_dct::<4>(dequantised, &mut out, clip),
-        8 => idct2d_dct::<8>(dequantised, &mut out, clip),
-        16 => idct2d_dct::<16>(dequantised, &mut out, clip),
-        32 => idct2d_dct::<32>(dequantised, &mut out, clip),
+    match (kind, size) {
+        (TransformKind::Skip, _) => {
+            // §8.6.4.2: `r[x][y] = d[x][y] << tsShift`, with
+            // `tsShift = 5 + Log2(nTbS)`. The
+            // `extended_precision_processing_flag`-dependent
+            // `Min(5, bdShift - 2)` alternative never applies — that flag is
+            // an SPS range extension, refused by `decoder::check_scope`.
+            let ts_shift = 5 + size.trailing_zeros();
+            for (o, &d) in out.iter_mut().zip(dequantised.iter()) {
+                *o = i32::try_from(i64::from(d) << ts_shift).unwrap_or(0);
+            }
+        }
+        (TransformKind::Dst4, 4) => idct2d_dst4(dequantised, &mut out, clip),
+        (_, 4) => idct2d_dct::<4>(dequantised, &mut out, clip),
+        (_, 8) => idct2d_dct::<8>(dequantised, &mut out, clip),
+        (_, 16) => idct2d_dct::<16>(dequantised, &mut out, clip),
+        (_, 32) => idct2d_dct::<32>(dequantised, &mut out, clip),
         _ => {}
     }
     let bd_shift = 20i32
