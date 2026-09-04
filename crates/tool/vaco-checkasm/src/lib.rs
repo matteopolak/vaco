@@ -66,6 +66,7 @@
 //! See [`kernels`] for a real kernel wired through this crate as a worked
 //! example and as the `verify` CLI's own self-check.
 
+pub mod bench;
 pub mod differential;
 pub mod edge;
 pub mod kernels;

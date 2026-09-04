@@ -13,8 +13,10 @@ checking something structurally identical and just as easy to get wrong: a
 optimised from.
 
 It ships as both a library (`vaco_checkasm`, for a crate's own tests) and a
-binary (`vaco-checkasm`, a standalone `verify`/`list` CLI over a small
-built-in kernel table).
+binary (`vaco-checkasm`, a standalone `verify`/`list`/`bench` CLI over a small
+built-in kernel table). Benchmark mode measures real kernel adapters with an
+explicitly named counter unit, so elapsed nanoseconds are never presented as
+CPU cycles.
 
 ## How it works
 
@@ -43,6 +45,57 @@ tiers expressed in whatever element size the kernel uses), `boundaries_u8`/
 Random input finds average-case bugs; a kernel that only gets tested at
 mid-range values will pass while its tail and saturation handling are broken
 — these generators exist to make that impossible.
+
+### Benchmark mode
+
+`vaco-checkasm bench` measures the scalar and runtime-dispatched adapters for
+each selected kernel. On platforms without a PMU backend, including macOS, it
+uses `std::time::Instant` and emits `backend = "instant"`, `unit = "ns"`.
+There is deliberately no conversion from time to synthetic cycles.
+
+Each variant is warmed up, then calibrated so one timed batch lasts at least
+20 microseconds. The no-op has the same `fn(&Case) -> Vec<Lane>` signature and
+is calibrated independently; its per-call median is subtracted from the raw
+samples. Sampling continues for at least 30 independently timed batches and
+then stops when median absolute deviation is within 1%, the configured budget
+is exhausted, or the 512-sample guard is reached. Results include raw and
+corrected median, MAD, minimum and p95.
+
+Hot measurements reuse the input. Cold measurements sweep a 64 MiB eviction
+buffer immediately before each timed batch; the sweep itself is outside the
+measurement. A production-sized case normally calibrates to one call, making
+that call cold. If a tiny kernel requires batching, only the first call in the
+batch is cold, so add a production-sized `Kernel::benchmark_case` override
+before interpreting its cold result.
+
+The current `Kernel` contract returns an owned `Vec`, so timings include
+adapter dispatch, output allocation and output destruction. JSONL records this
+as `scope = "adapter-inclusive"`; they are not claims about one isolated SIMD
+instruction. `vaco-simd::ops::select_u8` uses a deterministic 1 MiB benchmark
+case specifically to prevent timer overhead from dominating the real work.
+
+```sh
+CARGO_INCREMENTAL=0 cargo run -p vaco-checkasm --release -- bench \
+  --test 'vaco-simd::ops::select_u8' --bench-cache both \
+  --json /private/tmp/checkasm.jsonl
+
+CARGO_INCREMENTAL=0 cargo run -p vaco-checkasm --release -- bench \
+  --test 'vaco-simd::ops::select_u8' --bench-cache both \
+  --baseline /private/tmp/checkasm.jsonl --fail-under 0.95
+```
+
+JSONL identity is kernel, variant, cache state, backend and unit. Baselines
+only match the complete identity, preventing an `ns` row from being compared
+with a future `cycles` row. `baseline_ratio` is stored median divided by current
+median: values above one are faster and `--fail-under 0.95` allows at most a 5%
+slowdown. `reference_ratio` is scalar median divided by the current variant's
+median for the same cache state.
+
+Linux's in-process `perf_event_open` backend remains unimplemented. The
+external [`scripts/perf-hwcycles.py`](../instruction-count-benchmarking.md)
+collects real hardware cycles for whole Vaco and ffmpeg processes, but cannot
+attribute a count to one checkasm adapter. Do not relabel its process totals or
+the portable nanosecond fallback as per-kernel cycles.
 
 ### Why cross-tier coverage is per-machine, not per-run
 
@@ -74,7 +127,9 @@ green "verified" that verified nothing.
 ## How to change it
 
 - **Add a kernel to the CLI**: implement `Kernel` for a new marker type under
-  `src/kernels/`, then add one `Entry` to `ENTRIES` in `src/main.rs`.
+  `src/kernels/`, provide a production-sized `benchmark_case` when the
+  correctness corpus is tiny, then add one `Entry` to `ENTRIES` in
+  `src/main.rs`.
 - **Add a kernel to your own crate's tests without touching this binary**:
   depend on `vaco_checkasm` (the library) and call
   `Differential::<YourKernel>::run().assert_clean()` from a `#[test]`. This is
@@ -93,10 +148,14 @@ green "verified" that verified nothing.
 
 ## Configuration
 
-None — no env vars or feature flags. `vaco-checkasm verify` and
-`vaco-checkasm list` are the only CLI surface.
+`bench` accepts `--test` and `--function` glob filters, `--bench-cache
+hot|cold|both`, `--min-samples`, a per-variant `--budget` in milliseconds,
+`--json`, and `--baseline`. `--fail-under R` gates stored-baseline ratios;
+`--fail-slower-than-reference` gates vector rows slower than their scalar row.
+There are no environment variables or feature flags.
 
 ## Dependencies
 
-`vaco-core`, `vaco-simd` (the `KernelSet`/`Caps`/`Tier` vocabulary), and,
+The benchmark backend uses only the Rust standard library. The harness also
+depends on `vaco-core`, `vaco-simd` (the `KernelSet`/`Caps`/`Tier` vocabulary), and,
 for the wired-in example only, `vaco-scale`, `vaco-color`, `vaco-pixfmt`.

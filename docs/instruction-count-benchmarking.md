@@ -14,6 +14,11 @@ mistaking one noisy wall-clock observation for program cost:
   count. It remains useful for change A/B, attribution, and loaded machines, but
   does not model real cycles or SIMD throughput.
 
+For individual SIMD adapters, `vaco-checkasm bench` provides hot/cold samples,
+no-op correction, JSONL baselines and regression gates. Its portable backend is
+honestly labelled `instant`/`ns`; the Linux per-kernel PMU backend is still
+pending. See [`vaco-checkasm`](tool/vaco-checkasm.md#benchmark-mode).
+
 A load-immune way to answer *"did this change make the code do less work?"* on a
 machine where wall clock cannot answer it. `scripts/perf-icount.py` runs a
 workload under Valgrind's **cachegrind**, which *simulates* execution rather than

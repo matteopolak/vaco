@@ -64,6 +64,16 @@ impl Kernel for MaskedSelectKernel {
         cases
     }
 
+    fn benchmark_case() -> Option<Self::Case> {
+        let len = 1024 * 1024;
+        let a: Vec<u8> = (0..len).map(|index| (index & 0xff) as u8).collect();
+        let b: Vec<u8> = a.iter().rev().copied().collect();
+        let mask = (0..len)
+            .map(|index| if index % 2 == 0 { 0 } else { 255 })
+            .collect();
+        Some(Self::Case { mask, a, b })
+    }
+
     fn scalar(case: &Self::Case) -> Vec<Self::Lane> {
         case.mask
             .iter()
@@ -90,5 +100,17 @@ mod tests {
         let report = Differential::<MaskedSelectKernel>::run();
         assert!(report.cases_run() > 0, "the corpus must not be empty");
         report.assert_clean();
+    }
+
+    #[test]
+    fn benchmark_case_is_large_enough_to_measure_the_kernel_not_dispatch() {
+        let Some(case) = MaskedSelectKernel::benchmark_case() else {
+            unreachable!("masked select has a benchmark case");
+        };
+        assert!(case.mask.len() >= 1024 * 1024);
+        assert_eq!(
+            MaskedSelectKernel::scalar(&case),
+            MaskedSelectKernel::vector(&case)
+        );
     }
 }

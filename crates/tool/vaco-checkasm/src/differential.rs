@@ -49,6 +49,16 @@ pub trait Kernel {
     #[must_use]
     fn cases() -> Vec<Self::Case>;
 
+    /// Representative input used by benchmark mode.
+    ///
+    /// The default takes the final deterministic corpus case. Kernels whose
+    /// correctness cases are deliberately tiny should override this with a
+    /// production-sized input so timer and dispatch overhead do not dominate.
+    #[must_use]
+    fn benchmark_case() -> Option<Self::Case> {
+        Self::cases().into_iter().next_back()
+    }
+
     /// Run the scalar reference on one case.
     #[must_use]
     fn scalar(case: &Self::Case) -> Vec<Self::Lane>;
