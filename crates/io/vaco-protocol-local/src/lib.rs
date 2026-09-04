@@ -1,39 +1,19 @@
 //! `data:` and `md5:`, plus the base64 codec `data:` needs.
 //!
-//! # What it is
+//! [`data`] implements RFC 2397 with measured strictness: no percent-decoding,
+//! a case-sensitive `base64` flag, and a stricter content-type rule. [`md5`]
+//! discards written bytes and emits a digest; it is a protocol, not the `-f md5`
+//! muxer.
 //!
-//! Layer 2. Two small, unrelated local protocols that share this crate because
-//! neither is large enough to be its own and neither wraps another URL — see
-//! `vaco-protocol-wrap` for the ones that do.
-//!
-//! * [`data`] — RFC 2397 data URLs, with the reference's own measured
-//!   divergences from the RFC (no percent-decoding, a case-sensitive `base64`
-//!   flag, a stricter content-type rule). Read-only.
-//! * [`md5`] — an output protocol that discards every byte written to it and
-//!   emits an MD5 digest of the whole stream when writing finishes.
-//!   Write-only, and **not** the same thing as the `-f md5` muxer — see the
-//!   module docs for the measured difference.
-//!
-//! # `fd:` is not here, deliberately
-//!
-//! Plan 18 §2.4 originally scoped an `fd:` protocol into this PR. **D16**
-//! (`planning/00-decisions.md`) later found that estimate assumed an `unsafe`
-//! escape hatch D2 does not grant: turning an integer into an owned file
-//! descriptor needs `FromRawFd::from_raw_fd`, and nothing proves the integer
-//! names a descriptor this process actually owns. D16's decision is `fd:` is
-//! not implemented at all, full stop — not even restricted to a small safe
-//! subset the way `pipe:` is restricted to descriptors 0/1/2 in
-//! `vaco-protocol-file`. This crate implements exactly what D16 leaves in
-//! scope: `data:` and `md5:`.
+//! The `fd:` protocol is intentionally absent. Turning an integer into an
+//! owned descriptor would require an unsafe ownership assumption; unlike
+//! `pipe:`, there is no safe restricted subset to expose here.
 //!
 //! # Security
 //!
-//! Neither protocol opens a further URL on its own initiative from untrusted
-//! input: `data:`'s entire content is the URL string itself, and `md5:`'s one
-//! nested open (its destination) is a path the *caller* wrote, not something
-//! read out of a document `md5:` parsed. Both still route through
-//! [`ProtocolEnv`] rather than the OS directly, so a caller that *does* want
-//! to confine them (rule U2) or gate them (the whitelist) can.
+//! Neither protocol opens a URL from untrusted document content. `md5:`'s
+//! caller-supplied destination still goes through [`ProtocolEnv`], so its
+//! confinement and whitelist checks apply.
 //!
 //! # Example
 //!
