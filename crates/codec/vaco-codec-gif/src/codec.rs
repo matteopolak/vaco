@@ -111,12 +111,14 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         // the pixel buffer is sized from it.
         budget.check_frame(w, h, 4)?;
         let mut pixels = vec![0u8; decoder.buffer_size()];
-        // Ignored on purpose: a truncated/corrupt LZW stream leaves whatever
-        // was decoded before the error sitting in `pixels` (zero elsewhere),
-        // which is exactly the partial frame this header already promised —
-        // propagating the error here would be the same silent-undercount
-        // bug this comment opens with, just moved one call downward.
-        let _ = decoder.fill_buffer(&mut pixels);
+        // The measured reference-compatible recovery is narrowly for input
+        // exhaustion. Other decoder failures mean the parsed frame is
+        // malformed, not merely incomplete, and must not become a blank
+        // frame.
+        match decoder.fill_buffer(&mut pixels) {
+            Ok(_) | Err(gif::DecodingError::UnexpectedEof) => {}
+            Err(_) => return Err(Error::InvalidData("gif: pixel data")),
+        }
 
         if dispose == gif::DisposalMethod::Previous {
             previous = Some(canvas.clone());

@@ -56,6 +56,7 @@
               reasserting the arithmetic two lines up"
 )]
 
+use vaco_core::Error;
 use vaco_frame::FrameData;
 use vaco_limits::{Budget, Limits};
 
@@ -65,6 +66,14 @@ const FIXTURE_BGRA: &[u8] = include_bytes!("fixtures/testsrc_8x6.bgra.raw");
 const TRUNCATED_GIF: &[u8] = include_bytes!("fixtures/truncated_anim3_16x12.gif");
 const TRUNCATED_FIRST_TWO_FRAMES_BGRA: &[u8] =
     include_bytes!("fixtures/truncated_anim3_16x12.first_two_frames.bgra.raw");
+
+// The first LZW code is 7 even though a GIF image with a two-bit minimum
+// code size must begin with its clear code (4). The image descriptor itself
+// is complete, so this reaches `fill_buffer`, not header parsing.
+const INVALID_LZW_GIF: &[u8] = &[
+    b'G', b'I', b'F', b'8', b'9', b'a', 1, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 255, 255, 255, 0x2c, 0, 0,
+    0, 0, 1, 0, 1, 0, 0, 2, 1, 7, 0, 0x3b,
+];
 
 #[test]
 fn decodes_a_testsrc_frame_byte_exact_to_ffmpegs_own_bgra_decode() {
@@ -129,5 +138,16 @@ fn a_frame_truncated_mid_lzw_is_still_counted_like_ffprobe_counts_it() {
     assert_eq!(
         first_two, TRUNCATED_FIRST_TWO_FRAMES_BGRA,
         "the two undamaged frames before the truncation must still decode byte-exact"
+    );
+}
+
+#[test]
+fn invalid_lzw_data_after_a_complete_frame_header_is_rejected() {
+    let mut budget = Budget::new(Limits::permissive());
+    let err = vaco_codec_gif::decode(INVALID_LZW_GIF, &mut budget)
+        .expect_err("an invalid LZW code must not become a zero-filled frame");
+    assert!(
+        matches!(err, Error::InvalidData(_)),
+        "invalid LZW data must surface as malformed input, got {err:?}"
     );
 }

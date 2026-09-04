@@ -16,11 +16,14 @@ The dependency resolves palettes and transparency to RGBA subframes.
 disposal method, and swaps red/blue while writing Vaco's declared BGRA layout.
 
 Frame header parsing and pixel decompression are separate. Once an image
-descriptor and graphic-control header parse, Vaco counts the frame even when
-its LZW data is truncated, matching `ffprobe -count_frames`; any successfully
-decoded prefix is composited and the undecoded remainder stays initialized.
-Per-frame declared dimensions are checked against the allocation budget before
-the decode buffer is allocated.
+descriptor and graphic-control header parse, Vaco counts the frame when pixel
+decompression reports the exact `gif::DecodingError::UnexpectedEof` seen in
+the truncated reference fixture, matching `ffprobe -count_frames`; any
+successfully decoded prefix is composited and the undecoded remainder stays
+initialized. Invalid LZW codes and every other decompression failure instead
+return malformed-input errors, so corruption cannot become a zero-filled
+frame. Per-frame declared dimensions are checked against the allocation budget
+before the decode buffer is allocated.
 
 ## How to change it
 
@@ -46,6 +49,7 @@ quantization. Vaco integration uses `vaco-codec-core`, `vaco-frame`,
 `tests/regression.rs` compares a real ffmpeg-produced frame byte-for-byte with
 ffmpeg's BGRA decode. A second real fixture is truncated during the third
 frame's LZW payload; it proves the two intact frames remain byte-exact and that
-the header-complete third frame is counted. The latter is a pragmatic
-reference-compatibility rule: GIF89a does not specify recovery from a truncated
-data-sub-block sequence.
+the header-complete third frame is counted. A header-complete one-pixel input
+with an invalid LZW code proves this exception does not swallow malformed data.
+The EOF exception is a pragmatic reference-compatibility rule: GIF89a does not
+specify recovery from a truncated data-sub-block sequence.
