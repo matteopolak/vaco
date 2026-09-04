@@ -712,6 +712,14 @@ crate.
 - **Ceiling.** ~1.3–1.5x on post-C1 AAC. Diminishing; do after C1 only if
   the post-C1 profile confirms the shares.
 - **Size.** S. **Stop.** Post-C1 profile shows these under 5% combined.
+- **Measured f32 candidate (2026-09-04).** The Linux Cachegrind C1 baseline
+  measured 212,444,621 Ir; `kbd_window::<2048>` + `::<256>` accounted for
+  13.3% and allocation/free for 12.9%, so the candidate gate passed. A
+  `Tx<f32>` reconstruction candidate passed all 76 focused AAC tests but was
+  rejected before timing because native `f32le` PCM differed from the f64
+  parent on sine, noise, and stereo fixtures (first byte differed in each;
+  outputs had equal lengths). No candidate Ir or speedup is claimed. Do not
+  re-propose the f32 plan without a new, byte-exact design.
 
 #### C3 — MP3 (6.5x, 0.24 s for 30 s)
 
