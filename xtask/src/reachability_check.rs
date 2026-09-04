@@ -1341,18 +1341,9 @@ const ALLOW_UNDECODABLE_PRODUCED: &[(&str, &str)] = &[
     (
         "adpcm_g722",
         "vaco-codec-adpcm's own fragment comment: 'the standardised ADPCM \
-         subset (issue #280, C-02): 4 of the 7 codecs named' are \
-         implemented (ima_wav/ima_qt/ms/swf). G.722/G.726/G.726LE are \
-         different, incompatible ADPCM algorithms, not a variant this \
-         crate's existing decoders could be pointed at instead.",
-    ),
-    (
-        "adpcm_g726",
-        "Same issue #280/C-02 scope as `adpcm_g722` above.",
-    ),
-    (
-        "adpcm_g726le",
-        "Same issue #280/C-02 scope as `adpcm_g722` above.",
+         subset (issue #280, C-02)' still does not implement G.722's \
+         incompatible QMF/predictor algorithm; no existing ADPCM decoder \
+         can be pointed at it instead.",
     ),
     (
         "aac_latm",

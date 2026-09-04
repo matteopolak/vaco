@@ -4,7 +4,7 @@
 
 Replace the non-conforming IMA-like G.726 stand-in with a clean-room,
 decoder-only implementation of ITU-T G.726 at 32 kbit/s. The registered
-`adpcm_g726` and `adpcm_g726le` decoders accept the repository's existing
+`g726` and `g726le` decoders accept the repository's existing
 headerless, mono, 8 kHz raw streams and produce signed 16-bit PCM. The encoder
 continues to refuse by name and remains unregistered.
 
@@ -47,8 +47,8 @@ count. Limits are checked before allocating the interleaved PCM buffer.
 
 ## Bit packing and registration
 
-At 32 kbit/s each byte carries two four-bit codes. `adpcm_g726` consumes the
-first code from the high nibble; `adpcm_g726le` consumes it from the low
+At 32 kbit/s each byte carries two four-bit codes. `g726` consumes the
+first code from the high nibble; `g726le` consumes it from the low
 nibble. Tests will establish those public-name mappings with ffmpeg-generated
 fixtures rather than relying on the misleading old helper names.
 
@@ -69,13 +69,18 @@ valid packet. The implemented decoder is then checked at three layers:
 - the official ITU-T G.726 Appendix II 32 kbit/s ADPCM sequences provide reset,
   normal, overload, and algorithm-stressing inputs. Appendix II's published
   output words target A-law or mu-law decoding with synchronous coding
-  adjustment, not Annex A linear output, so the inputs are decoded by both
-  Vaco and the ffmpeg binary and compared sample-for-sample in linear PCM;
+  adjustment, not Annex A linear output. The original unrestricted-use Sun
+  G.72x decoder reproduces all 16,384 published reset-vector outputs exactly,
+  validating the fixed-point state machine; Annex A's corrected uniform-PCM
+  limiter is then applied to that reconstruction to produce the linear oracle;
 - ffmpeg-generated `g726` and `g726le` fixtures are decoded end to end through
   the real `vaco` CLI. Exact input bytes, output samples, output bytes, PTS,
-  duration, and reference PCM are compared. The emitted WAV is independently
-  read by ffmpeg to verify the output direction available for this decoder-only
-  slice.
+  duration, and Sun/Annex-A reference PCM are compared. The emitted WAV is
+  independently read by ffmpeg to verify the output direction available for
+  this decoder-only slice. ffmpeg 9.0.1 is retained as a black-box packing and
+  interop reference, not the arithmetic oracle: its linear decode differs from
+  the standard/Sun result on 1,760/2,400 short-fixture samples and
+  9,027/16,384 Appendix-II samples while producing the correct sample counts.
 
 Registry generation, registry reachability, documentation generation,
 provenance, crate tests, strict all-target Clippy, and CLI help/listing are
@@ -88,8 +93,11 @@ and other explicitly deferred codecs remain outside this slice.
 packing names, persistent state, and decoder-only boundary. The generated docs
 index and registry are refreshed through `xtask`. `provenance/sources.toml`
 declares the base recommendation, Annex A, Corrigendum 1, and Appendix II
-archive; `provenance/vaco-codec-adpcm.toml` maps any large transcribed tables.
+archive, plus the original unrestricted-use Sun implementation used as a
+secondary conformance reference; `provenance/vaco-codec-adpcm.toml` maps any
+large transcribed tables.
 
 There are no environment variables or runtime switches. The implementation
 depends only on `vaco-core` and the existing registry/raw-demuxer plumbing.
-ffmpeg is a test oracle, not a build or runtime dependency.
+The Sun source and ffmpeg binary are verification inputs only, not build or
+runtime dependencies.

@@ -13,10 +13,10 @@ shared IMA/DVI step-table codec, framed two different ways for
 `adpcm_ima_wav` and `adpcm_ima_qt`). `lib.rs` wraps each pure codec module in
 the `vaco_codec_core::SendReceive` shape every codec in this tree uses.
 
-`AdpcmG722Decoder`/`Encoder` and both `AdpcmG726*` pairs deliberately
-`Error::Unsupported` rather than guess at a bitstream this crate does not
-implement correctly — see their own `_refuse_rather_than_produce_wrong_output`
-tests. Everything below is about the four codecs that do decode/encode.
+`g726` and `g726le` provide decoder-only support for the
+four-bit, 32 kbit/s ITU-T mode. `AdpcmG722Decoder`/`Encoder` and both G.726
+encoders deliberately return `Error::Unsupported` rather than guess at an
+algorithm or rate that is not implemented.
 
 ## How it works
 
@@ -50,6 +50,29 @@ value remains untouched and therefore keeps its normal mono default.
 An encoder layout supplied through `with_audio_params` or extradata is also
 validated and must match the input frame; an encoder with no explicit layout
 continues to derive mono or stereo directly from each frame.
+
+`g726.rs` implements the integer two-pole/six-zero predictor, inverse
+quantizer, fast/slow scale-factor adaptation and tone/transition reset defined
+by ITU-T G.726 clauses 3-4. Its output uses Annex A's uniform 14-bit PCM path,
+including the corrected `SR = 57344` limiter boundary, scaled to signed 16-bit
+PCM. The state is continuous across packets and `flush` restores the Table 6
+reset values. At 32 kbit/s every byte decodes to exactly two mono 8 kHz
+samples: `g726` consumes the high nibble first, while `g726le`
+consumes the low nibble first.
+
+The fixed-point path is checked against the original unrestricted-use Sun
+G.72x implementation. That implementation reproduced all 16,384 published
+mu-law outputs for Appendix II's reset-state `I32` vector; applying Annex A's
+uniform-output limiter to the same reconstructed samples supplies the linear
+PCM oracle used here. The short encoded fixtures come from ffmpeg 9.0.1 and
+therefore independently exercise both raw nibble packings. ffmpeg's own
+linear decoder is not the arithmetic oracle: in this measurement it diverged
+from the standard/Sun result on 1,760 of 2,400 samples (first at sample 6,
+maximum absolute difference 1,024), while retaining the exact sample count.
+On the full Appendix-II input, it differed on 9,027 of 16,384 samples (first
+at sample 4,567, maximum absolute difference 65,532 where the decoders chose
+opposite saturation endpoints). These figures describe ffmpeg 9.0.1 on the
+fixtures committed here; they are not a compatibility tolerance.
 
 ## Bugs found and fixed
 
@@ -104,6 +127,14 @@ assumption. It found four real bugs, all now fixed:
 
 ## Known gaps
 
+- **G.726 encoding and rates other than 32 kbit/s.** The public codec IDs and
+  existing raw demuxers do not carry a bitrate parameter, so the decoder
+  accepts only the unambiguous four-bit mode. Both encoder descriptors remain
+  unregistered and direct construction returns a named unsupported error.
+
+- **G.722.** The current module is a structurally different stand-in rather
+  than the ITU-T QMF/predictor, so neither direction is registered.
+
 - **Container wiring for partial event sounds.** SWF's `DefineSound` tag
   carries the total `SoundSampleCount` separately from its ADPCM packets.
   The codec honors a non-zero `Packet::duration` when a container passes that
@@ -113,23 +144,32 @@ assumption. It found four real bugs, all now fixed:
 
 ## How to change it
 
-The four working codecs (`ima_wav`, `ima_qt`, `ms`, `swf`) each own their
-pure encode/decode functions in their own module; `lib.rs` only adapts them
-to `SendReceive`. Any change to wire-format assumptions in `ima.rs`/`ms.rs`/
-`swf.rs` should be re-verified against `tests/oracle_ffmpeg.rs`'s real
-fixtures, not just the internal `mod tests` self-round-trips beside each
-codec — those catch a change in encode/decode agreement with each other,
-not agreement with the real format.
+Each codec owns its pure algorithm and framing functions in its own module;
+`lib.rs` adapts them to `SendReceive`. Changes to G.726 arithmetic must retain
+the fixed-width masks in the named clause-4 blocks and be tested against both
+the full Appendix-II `I32` input and ffmpeg-generated encoded fixtures, using
+the Sun/Annex-A PCM goldens rather than ffmpeg's divergent PCM. Changes to
+wire-format assumptions in `ima.rs`/`ms.rs`/`swf.rs` likewise need the real
+fixtures in `tests/oracle_ffmpeg.rs`, not only self-round-trips.
 
 ## Configuration
 
-None — no feature flags, no options.
+There are no runtime options. The `g726` and `g726le` identities
+always mean mono 8 kHz, four-bit / 32 kbit/s G.726; their suffix distinguishes
+nibble packing, not arithmetic.
 
 ## Dependencies
 
 `vaco-chlayout`/`vaco-frame`/`vaco-packet`/`vaco-sampfmt`/`vaco-limits` (the
-`SendReceive` data model). `tests/oracle_ffmpeg.rs` has no crate
-dependency beyond the workspace's own types; its fixtures were produced by
-real `ffmpeg 9.0.1` and are read with this file's own minimal RIFF/ISO-BMFF/
-FLV tag walkers (deliberately not a real container-parsing dependency — see
-that file's own comments).
+`SendReceive` data model). `tests/oracle_ffmpeg.rs` has no crate dependency
+beyond the workspace's own types. Its container and short G.726 payload
+fixtures were produced by real ffmpeg 9.0.1 and are read with this file's own
+minimal RIFF/ISO-BMFF/FLV tag walkers (deliberately not a real
+container-parsing dependency — see that file's own comments).
+
+The G.726 implementation is derived from ITU-T G.726 (12/1990), Annex A
+(11/1994), and Corrigendum 1 (05/2005). Appendix II's official `I32` sequence
+is used as input evidence. The original Sun G.72x implementation is a
+secondary, unrestricted-use conformance reference; its exact match to
+Appendix II validates its state machine before Annex A's published output
+limiter is applied for the committed linear PCM goldens.

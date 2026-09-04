@@ -126,7 +126,7 @@ pub const G726LE: RawCodecSpec = RawCodecSpec {
     channels: 1,
     bytes_per_block: 1,
     frames_per_block: 2,
-    codec_id: Some(CodecId::AdpcmG726),
+    codec_id: Some(CodecId::AdpcmG726le),
     target_packet_bytes: 1020,
 };
 
@@ -322,5 +322,11 @@ mod tests {
     fn probe_scores_are_from_the_published_table() {
         let named = ProbeData::new(b"whatever").with_filename("clip.gsm");
         assert_eq!(probe_gsm(&named), ProbeScore::EXTENSION);
+    }
+
+    #[test]
+    fn g726_packings_select_distinct_decoder_ids() {
+        assert_eq!(G726.codec_id, Some(CodecId::AdpcmG726));
+        assert_eq!(G726LE.codec_id, Some(CodecId::AdpcmG726le));
     }
 }

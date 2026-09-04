@@ -1521,6 +1521,41 @@ acquired = "2026-09-04"
 where    = "the reference binaries installed on the development machine"
 
 [[source]]
+id       = "itu-g726-1990"
+kind     = "spec"
+title    = "ITU-T Recommendation G.726 (12/1990), 40, 32, 24, 16 kbit/s Adaptive Differential Pulse Code Modulation; acquired PDF SHA-256 0b2900da45a774526a5a4ff9aad5f277b5727ab1d9831a038e3d66fef07e86f1"
+acquired = "2026-09-04"
+where    = "https://www.itu.int/rec/T-REC-G.726-199012-I/en"
+
+[[source]]
+id       = "itu-g726-annex-a-1994"
+kind     = "spec"
+title    = "ITU-T Recommendation G.726 Annex A (11/1994), Extensions for use with uniform-quantized input and output; acquired PDF SHA-256 ef960edd2793f3cc419584c8dc8e532017831ef3937d296015acdde130af5b59"
+acquired = "2026-09-04"
+where    = "https://www.itu.int/rec/T-REC-G.726-199411-I!AnnA/en"
+
+[[source]]
+id       = "itu-g726-cor1-2005"
+kind     = "spec"
+title    = "ITU-T Recommendation G.726 (1990) Corrigendum 1 (05/2005), correction to Annex A LIMO; acquired PDF SHA-256 76ee7e934a2f848afe1bb1e354608aa6da97d8c33a83ca1a7cbd518f00883381"
+acquired = "2026-09-04"
+where    = "https://www.itu.int/rec/T-REC-G.726-200505-I!Cor1/en"
+
+[[source]]
+id       = "itu-g726-appii-1991"
+kind     = "spec"
+title    = "ITU-T Recommendation G.726 Appendix II (03/1991), digital test sequences; acquired software archive SHA-256 2af43f18c4a95e57ef137721d85988627973e8d5c0ee325cf30f755b70c46688"
+acquired = "2026-09-04"
+where    = "https://www.itu.int/rec/T-REC-G.726-199103-I!AppII/en"
+
+[[source]]
+id       = "sun-g72x-1988"
+kind     = "original"
+title    = "Original Sun Microsystems unrestricted-use G.72x implementation: g72x.c SHA-256 5f42c37e4ea112fde547eadf7a108d83f6608161592af17efef328e80ea4fb27 and g721.c SHA-256 cddf29df40588f15119e1b57113d48278c72bb5715ab248589c7084a2028c7a8; its license expressly permits copying or modification without charge"
+acquired = "2026-09-04"
+where    = "verbatim Sun files archived at https://sources.debian.org/data/main/r/rplay/3.3.2-16/adpcm/g72x.c and https://sources.debian.org/data/main/r/rplay/3.3.2-16/adpcm/g721.c"
+
+[[source]]
 id       = "mk8-bfstm-format"
 kind     = "spec"
 title    = "Custom Mario Kart 8 Wiki, BFSTM (File Format): complete byte-level FSTM header, INFO stream/channel tables, SEEK histories, DATA blocks, reference bases, encoding ids, and the per-channel block-size formula"

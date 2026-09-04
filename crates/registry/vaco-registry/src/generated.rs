@@ -3816,6 +3816,30 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "g726",
+        long_name: Some("G.726 ADPCM 32 kbit/s"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_g726"),
+        extensions: &[],
+        mime_types: &[],
+    },
+    #[cfg(feature = "codec-adpcm")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "g726le",
+        long_name: Some("G.726 ADPCM 32 kbit/s little-endian packing"),
+        krate: "vaco-codec-adpcm",
+        feature: Some("codec-adpcm"),
+        media: Some("audio"),
+        codec: Some("adpcm_g726le"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-gif")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -11189,6 +11213,10 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_ffv1::FFV1_DECODER,
     #[cfg(feature = "codec-flac")]
     &::vaco_codec_flac::DECODER_FLAC,
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_G726_DECODER,
+    #[cfg(feature = "codec-adpcm")]
+    &::vaco_codec_adpcm::ADPCM_G726LE_DECODER,
     #[cfg(feature = "codec-gif")]
     &::vaco_codec_gif::GIF_DECODER,
     #[cfg(feature = "codec-h263")]
