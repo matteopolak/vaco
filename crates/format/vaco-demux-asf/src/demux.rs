@@ -30,7 +30,7 @@
 
 use std::collections::VecDeque;
 
-use vaco_core::{Duration, Error, MediaType, Rational, Result, Rounding, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, MediaType, Rational, Result, Rounding, Timestamp};
 use vaco_format_asf::object::HEADER_LEN as OBJECT_HEADER_LEN;
 use vaco_format_asf::well_known;
 use vaco_format_core::flags::FormatFlags;
@@ -50,6 +50,9 @@ use crate::packet::{ParsedPayload, parse_packet};
 /// are stated in, and (see this module's own doc comment) every stream's
 /// `time_base`, regardless of media type.
 pub(crate) const TIME_BASE_MS: Rational = Rational::new(1, 1000);
+
+/// File Properties' Play Duration unit ([\[ASF\] section 3.2](vaco_format_asf)).
+const TIME_BASE_100NS: Rational = Rational::new(1, 10_000_000);
 
 /// This container's declared capabilities.
 ///
@@ -165,6 +168,7 @@ pub struct AsfDemuxer {
     metadata: Vec<(String, String)>,
     encryption: Option<Encryption>,
     duration: Option<Duration>,
+    duration_exact: Option<ExactDuration>,
     /// File Properties' Preroll (ms): every Data Packet's Send Time is
     /// measured from the start of buffering, not from the first presented
     /// sample, so a packet's real presentation time is `send_time -
@@ -362,6 +366,14 @@ impl AsfDemuxer {
         let duration = (effective_100ns > 0).then(|| {
             Duration::from_micros(i64::try_from(effective_100ns / 10).unwrap_or(i64::MAX))
         });
+        let duration_exact = if effective_100ns > 0 {
+            ExactDuration::from_ticks(
+                i64::try_from(effective_100ns).unwrap_or(i64::MAX),
+                TIME_BASE_100NS,
+            )
+        } else {
+            None
+        };
 
         Ok(Self {
             io,
@@ -373,6 +385,7 @@ impl AsfDemuxer {
             metadata: info.metadata,
             encryption: info.encryption,
             duration,
+            duration_exact,
             preroll_ms: file_properties.preroll_ms,
             index,
             pending: std::collections::BTreeMap::new(),
@@ -763,6 +776,10 @@ impl Demuxer for AsfDemuxer {
     fn duration(&self) -> Option<Duration> {
         self.duration
     }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.duration_exact
+    }
 }
 
 impl AsfDemuxer {
@@ -801,12 +818,12 @@ mod tests {
         out
     }
 
-    fn file_properties_with_preroll(min_max_packet: u32, preroll_ms: u64) -> Vec<u8> {
+    fn file_properties(min_max_packet: u32, play_duration_100ns: u64, preroll_ms: u64) -> Vec<u8> {
         let mut p = vec![0u8; 16]; // file id
         p.extend_from_slice(&0u64.to_le_bytes()); // file size
         p.extend_from_slice(&0u64.to_le_bytes()); // creation date
         p.extend_from_slice(&2u64.to_le_bytes()); // data packets count
-        p.extend_from_slice(&0u64.to_le_bytes()); // play duration
+        p.extend_from_slice(&play_duration_100ns.to_le_bytes());
         p.extend_from_slice(&0u64.to_le_bytes()); // send duration
         p.extend_from_slice(&preroll_ms.to_le_bytes()); // preroll
         p.extend_from_slice(&0x02u32.to_le_bytes()); // flags: seekable
@@ -881,9 +898,18 @@ mod tests {
         preroll_ms: u64,
         packets: &[Vec<u8>],
     ) -> Vec<u8> {
+        build_minimal_asf_with_duration(packet_size, 0, preroll_ms, packets)
+    }
+
+    fn build_minimal_asf_with_duration(
+        packet_size: usize,
+        play_duration_100ns: u64,
+        preroll_ms: u64,
+        packets: &[Vec<u8>],
+    ) -> Vec<u8> {
         let fp = object(
             well_known::FILE_PROPERTIES_OBJECT,
-            &file_properties_with_preroll(packet_size as u32, preroll_ms),
+            &file_properties(packet_size as u32, play_duration_100ns, preroll_ms),
         );
         let sp = object(
             well_known::STREAM_PROPERTIES_OBJECT,
@@ -996,6 +1022,31 @@ mod tests {
         // test above, confirming the subtraction and not just a lucky zero.
         let p1 = demux.read_packet().unwrap();
         assert_eq!(p1.pts.ticks(), Some(500));
+    }
+
+    #[test]
+    fn aggregate_duration_keeps_native_100ns_ticks_exact() {
+        let packet_size = 64usize;
+        let preroll_ms = 3_100u64;
+        let effective_100ns = 1_234_567u64;
+        let play_duration_100ns = preroll_ms * 10_000 + effective_100ns;
+        let packets = vec![simple_packet(packet_size, 1, 0, 3_100, b"AAAA")];
+        let bytes =
+            build_minimal_asf_with_duration(packet_size, play_duration_100ns, preroll_ms, &packets);
+        let demux = AsfDemuxer::open(
+            Box::new(MemorySource::new(bytes)),
+            &vaco_format_core::discovery::NoParsers,
+            &FormatOptions::default(),
+        )
+        .unwrap();
+
+        assert_eq!(demux.duration().map(Duration::as_micros), Some(123_456));
+        assert_eq!(
+            demux
+                .duration_exact()
+                .map(vaco_core::ExactDuration::as_ratio),
+            Some((1_234_567, 10_000_000))
+        );
     }
 
     #[test]
