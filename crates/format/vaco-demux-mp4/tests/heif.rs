@@ -12,7 +12,7 @@ use vaco_codec_core::CodecId;
 use vaco_core::{Disposition, Rational, Timestamp};
 use vaco_demux_mp4::{Mp4Demuxer, Mp4Options};
 use vaco_format_core::discovery::NoParsers;
-use vaco_format_core::{Demuxer, FormatOptions, SeekFlags, SeekTarget, StreamGroupKind};
+use vaco_format_core::{Demuxer, FormatOptions, SeekFlags, SeekTarget, StreamGroupKind, TileGrid};
 use vaco_format_isom::build::{bx, fullbx};
 use vaco_io::{MediaSource, MemorySource};
 
@@ -21,10 +21,10 @@ const TILE_B_HEAD: &[u8] = b"tile-b-";
 const TILE_B_TAIL: &[u8] = b"second-extent";
 const THUMB: &[u8] = b"thumb";
 
-fn infe(id: u16, kind: &[u8; 4], name: &str, hidden: bool) -> Vec<u8> {
+fn infe(id: u16, kind: [u8; 4], name: &str, hidden: bool) -> Vec<u8> {
     let mut body = id.to_be_bytes().to_vec();
     body.extend_from_slice(&0u16.to_be_bytes());
-    body.extend_from_slice(kind);
+    body.extend_from_slice(&kind);
     body.extend_from_slice(name.as_bytes());
     body.push(0);
     fullbx(b"infe", 2, u32::from(hidden), &body)
@@ -67,10 +67,10 @@ fn heif() -> Vec<u8> {
     let hdlr = fullbx(b"hdlr", 0, 0, &hdlr_body);
     let pitm = fullbx(b"pitm", 0, 0, &3u16.to_be_bytes());
     let mut iinf_body = 4u16.to_be_bytes().to_vec();
-    iinf_body.extend_from_slice(&infe(1, b"jpeg", "", true));
-    iinf_body.extend_from_slice(&infe(2, b"jpeg", "", true));
-    iinf_body.extend_from_slice(&infe(3, b"grid", "Grid", false));
-    iinf_body.extend_from_slice(&infe(4, b"jpeg", "Thumb", false));
+    iinf_body.extend_from_slice(&infe(1, *b"jpeg", "", true));
+    iinf_body.extend_from_slice(&infe(2, *b"jpeg", "", true));
+    iinf_body.extend_from_slice(&infe(3, *b"grid", "Grid", false));
+    iinf_body.extend_from_slice(&infe(4, *b"jpeg", "Thumb", false));
     let iinf = fullbx(b"iinf", 0, 0, &iinf_body);
     let dimg = bx(
         b"dimg",
@@ -199,13 +199,22 @@ fn items_become_one_packet_streams_and_the_grid_a_group() {
     assert_eq!(g.stream_indices, vec![0, 1]);
     assert_eq!(g.disposition, Disposition::DEFAULT);
     assert_eq!(g.metadata, vec![("title".to_owned(), "Grid".to_owned())]);
-    let StreamGroupKind::TileGrid(grid) = &g.kind else {
-        panic!("not a tile grid");
+    let expected = TileGrid {
+        tile_rows: 1,
+        tile_columns: 2,
+        coded_width: 32,
+        coded_height: 8,
+        output_width: 30,
+        output_height: 8,
+        horizontal_offset: 0,
+        vertical_offset: 0,
+        tile_offsets: vec![(0, 0), (16, 0)],
     };
-    assert_eq!((grid.tile_rows, grid.tile_columns), (1, 2));
-    assert_eq!((grid.coded_width, grid.coded_height), (32, 8));
-    assert_eq!((grid.output_width, grid.output_height), (30, 8));
-    assert_eq!(grid.tile_offsets, vec![(0, 0), (16, 0)]);
+    assert!(
+        matches!(&g.kind, StreamGroupKind::TileGrid(grid) if *grid == expected),
+        "{:?}",
+        g.kind
+    );
 
     let mut got = Vec::new();
     while let Ok(p) = demux.read_packet() {

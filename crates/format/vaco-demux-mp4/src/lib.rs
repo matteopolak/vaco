@@ -237,6 +237,17 @@ struct Fragment {
     data: Vec<u8>,
 }
 
+/// Where a file's streams come from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Layout {
+    /// A `moov` with tracks and sample tables.
+    Movie,
+    /// A HEIF/AVIF file: no `moov` at all, and the streams came from a
+    /// top-level `meta` box's items (`items::build`). Nothing that reads
+    /// `self.moov` runs for such a file.
+    ImageItems,
+}
+
 /// The MP4 demuxer.
 #[derive(Debug)]
 pub struct Mp4Demuxer {
@@ -254,10 +265,7 @@ pub struct Mp4Demuxer {
     moov_header_len: u64,
     movie_timescale: u32,
     fragmented: bool,
-    /// A HEIF/AVIF file: no `moov` at all, and the streams came from a
-    /// top-level `meta` box's items (`items::build`). Nothing that reads
-    /// `self.moov` runs for such a file.
-    item_file: bool,
+    layout: Layout,
     groups: Vec<StreamGroup>,
     /// `Movie::tracks` slot for each stream, or `None` for a cover image.
     slots: Vec<Option<usize>>,
@@ -376,7 +384,11 @@ impl Mp4Demuxer {
                 _ => {}
             }
         }
-        let item_file = moov_span.is_none() && meta.is_some();
+        let layout = if moov_span.is_none() && meta.is_some() {
+            Layout::ImageItems
+        } else {
+            Layout::Movie
+        };
         let (moov_span, moov) = match (moov_span, meta) {
             (Some(span), _) => (span, moov),
             (None, Some((span, payload))) => (span, payload),
@@ -399,7 +411,7 @@ impl Mp4Demuxer {
             moov_header_len: moov_span.header_len,
             movie_timescale: 0,
             fragmented: false,
-            item_file,
+            layout,
             groups: Vec::new(),
             slots: Vec::new(),
             extends: Vec::new(),
@@ -470,7 +482,7 @@ impl Mp4Demuxer {
     // ------------------------------------------------------------------ open
 
     fn build(&mut self, seekable: bool) -> Result<()> {
-        if self.item_file {
+        if self.layout == Layout::ImageItems {
             return self.build_items();
         }
         // Two parses of the same bytes, deliberately. The first settles whether

@@ -212,7 +212,7 @@ impl Decryptor {
             vaco_crypto::ctr_apply_aes128(&self.key, &sample.counter, payload);
             return true;
         }
-        let mut ranges = Vec::with_capacity(sample.subsamples.len());
+        let mut ranges = Vec::new();
         let mut at = 0usize;
         for &(clear, protected) in &sample.subsamples {
             let start = at.checked_add(usize::from(clear));
@@ -226,7 +226,7 @@ impl Decryptor {
             ranges.push(start..end);
             at = end;
         }
-        let mut protected = Vec::with_capacity(ranges.iter().map(ExactSizeIterator::len).sum());
+        let mut protected = Vec::new();
         for r in &ranges {
             if let Some(part) = payload.get(r.clone()) {
                 protected.extend_from_slice(part);

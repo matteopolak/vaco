@@ -203,7 +203,7 @@ impl<'a> Meta<'a> {
             ConstructionMethod::IdatOffset => self.idat?.1,
             ConstructionMethod::ItemOffset => return None,
         };
-        let mut out = Vec::with_capacity(location.extents.len());
+        let mut out = Vec::new();
         for &(offset, length) in &location.extents {
             let start = base.checked_add(offset)?;
             let end = start.checked_add(length)?;
@@ -355,7 +355,7 @@ impl<'a> Meta<'a> {
         if tiles.to_item_ids.len() != expected {
             return None;
         }
-        let mut members = Vec::with_capacity(expected);
+        let mut members = Vec::new();
         for id in &tiles.to_item_ids {
             let (_, index) = stream_of_item.iter().find(|(item, _)| item == id)?;
             members.push(*index);
