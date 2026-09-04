@@ -1135,7 +1135,14 @@ fn pic_to_frame(
         .map_err(|_| Error::InvalidData("vaco-codec-hevc: yuv420p pixel format missing"))?;
     let before = budget.committed();
     let mut frame = vaco_frame::Frame::alloc_video(budget, pix_fmt, width, height)?;
-    blit(&pic.y, &mut frame, 0, width as usize, height as usize, origin);
+    blit(
+        &pic.y,
+        &mut frame,
+        0,
+        width as usize,
+        height as usize,
+        origin,
+    );
     let (cw, ch) = (width.div_ceil(2) as usize, height.div_ceil(2) as usize);
     blit(&pic.cb, &mut frame, 1, cw, ch, chroma_origin);
     blit(&pic.cr, &mut frame, 2, cw, ch, chroma_origin);

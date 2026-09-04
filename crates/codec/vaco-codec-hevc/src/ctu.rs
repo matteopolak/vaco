@@ -2011,10 +2011,7 @@ fn decode_inter_cu(
                     );
                     let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
                     Some(UniMotion {
-                        mv: Mv {
-                            x: predictor.x + mvd.x,
-                            y: predictor.y + mvd.y,
-                        },
+                        mv: predictor.add_mvd(mvd),
                         ref_poc: target_ref_poc,
                     })
                 };
@@ -2075,10 +2072,7 @@ fn decode_inter_cu(
                     );
                     let predictor = cands.get(mvp_idx).copied().unwrap_or(Mv::ZERO);
                     Some(UniMotion {
-                        mv: Mv {
-                            x: predictor.x + mvd.x,
-                            y: predictor.y + mvd.y,
-                        },
+                        mv: predictor.add_mvd(mvd),
                         ref_poc: target_ref_poc,
                     })
                 };

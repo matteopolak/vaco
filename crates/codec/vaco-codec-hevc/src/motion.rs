@@ -57,6 +57,18 @@ pub(crate) struct Mv {
 
 impl Mv {
     pub(crate) const ZERO: Self = Self { x: 0, y: 0 };
+
+    /// Adds an AMVP motion-vector difference using §8.5.3.2.1's required
+    /// 16-bit two's-complement wrap, spelled in equations 8-94–8-97 as
+    /// `uLX = (mvpLX + mvdLX + 2^16) % 2^16` followed by
+    /// `mvLX = uLX >= 2^15 ? uLX - 2^16 : uLX`. Not a clamp: a sum that
+    /// overshoots `32767` comes back at the *negative* end.
+    pub(crate) const fn add_mvd(self, mvd: Self) -> Self {
+        Self {
+            x: self.x.wrapping_add(mvd.x) as i16 as i32,
+            y: self.y.wrapping_add(mvd.y) as i16 as i32,
+        }
+    }
 }
 
 /// One reference-list's own resolved motion: a motion vector and the POC of
@@ -770,6 +782,23 @@ mod tests {
         // (200*1 + 127) >> 8 = 327 >> 8 = 1 ; (200*-1 + 127 + 1) >> 8 = (-72)>>8 = -1 (arithmetic shift)
         assert_eq!(mv.x, 1);
         assert_eq!(mv.y, -1);
+    }
+
+    #[test]
+    fn amvp_plus_mvd_wraps_at_the_signed_16_bit_boundary() {
+        let predictor = Mv {
+            x: 32_760,
+            y: -32_760,
+        };
+        let mvd = Mv { x: 16, y: -16 };
+
+        assert_eq!(
+            predictor.add_mvd(mvd),
+            Mv {
+                x: -32_760,
+                y: 32_760,
+            }
+        );
     }
 
     #[test]

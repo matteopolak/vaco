@@ -291,35 +291,49 @@ Measured 2026-09-03 on `ffmpeg 9.0.1`, feeding each stream's raw Annex-B
 access units straight to `HevcDecoder` and comparing every byte of every
 plane against `ffmpeg -i <stream>.bin -f rawvideo -pix_fmt yuv420p`:
 
-| result | streams | before the RQT/merge fixes |
-| --- | ---: | ---: |
-| byte-exact on every frame | **25** | 2 |
-| refused by name (`Unsupported`) | 13 | 13 |
-| CABAC desync mid-stream | 3 | 24 |
-| wrong pixels | 3 | 6 |
-| wrong frame count | 2 | 1 |
+| result | streams |
+| --- | ---: |
+| byte-exact on every frame | **30** |
+| refused by name (`Unsupported`) | 13 |
+| CABAC desync mid-stream | 1 |
+| wrong pixels at the right length | **0** |
+| wrong frame count | 2 |
 
-Byte-exact: `amvp-a`, `amvp-b`, `cip-a`, `cip-b`, `entp-c`, `filler-a`,
-`ipred-c`, `merge-a`..`merge-e`, `mvedge-a`, `picsize-d`, `pmerge-a`,
-`pmerge-b`, `poc-a`, `ps-b`, `rplm-a` (300 frames), `rps-a`, `rqt-a`,
-`sao-a`, `sao-g`, `struct-a`, `tscl-a`.
+Byte-exact: `amp-a`, `amvp-a`, `amvp-b`, `cip-a`, `cip-b`, `confwin-a`,
+`entp-c`, `filler-a`, `ipred-c`, `merge-a`..`merge-e`, `mvclip-a`,
+`mvedge-a`, `picsize-d`, `pmerge-a`, `pmerge-b`, `poc-a`, `ps-b`,
+`rplm-a` (300 frames), `rps-a`, `rqt-a`, `sao-a`, `sao-g`, `slpplp-a`,
+`struct-a`, `tscl-a`, `vpsid-a`.
 
-Still wrong, and what is known about each:
+The remaining non-refusal failures are:
 
 - `initqp-a-sony-1` — desyncs after 47 of 60 frames. Carries 60 PPSs, one
   per picture, with varying `init_qp_minus26`; every other stream in the
   subset has exactly one.
-- `slpplp-a-vidyo-2`, `vpsid-a-vidyo-2` — the same 33-picture P-only
-  content, both desyncing after 7 frames. One VPS/SPS/PPS each, so not a
-  parameter-set-switching problem; not yet root-caused.
-- `amp-a-samsung-7` (2560x1600), `confwin-a-sony-1` (conformance-window
-  crop), `mvclip-a-qualcomm-3` — right frame count, wrong pixels.
 - `nooutprior-a-qualcomm-1` (50 frames vs 40), `nut-a-ericsson-5` (36 vs
   34) — `no_output_of_prior_pics_flag` / NAL-type-driven DPB flushing.
 
 Refused by name, not mis-decoded: `I_PCM` (`ipcm-a`..`ipcm-e`), more than
 one slice segment per picture (`dblk-d`..`dblk-g`, `hrd-a`, `slices-a`),
 custom scaling lists (`slist-c`, `vpsspspps-a`).
+
+### AMVP motion-vector sum wrapping
+
+ITU-T H.265 (08/2021) §8.5.3.2.1 equations 8-94–8-97 do not clamp
+`mvpLX + mvdLX`: each component is reduced modulo `2^16`, then interpreted
+in the signed range `-32768..=32767`. `Mv::add_mvd` is the single source of
+that operation, and both list branches in `ctu::decode_inter_cu` use it.
+The focused unit test crosses both signed boundaries; replacing the reduction
+with plain addition makes it fail with `(32776, -32776)` instead of
+`(-32760, 32760)`.
+
+The discriminating real stream is JCT-VC `MVCLIP_A_qualcomm_3`. Without the
+wrap it still decodes five 416x240 4:2:0 frames and exits normally, but
+443,454 of 748,800 output samples differ from `ffmpeg 9.0.1`, beginning at
+frame 1. With the specified wrap, all five frames and all 748,800 bytes are
+exact. A crate-wide search found exactly two `mvp + mvd` construction sites,
+the L0 and L1 branches now routed through `Mv::add_mvd`; merge candidates and
+scaled temporal candidates do not perform that addition.
 
 ### Why the `jctvc-conformance` suite measures less than this
 
