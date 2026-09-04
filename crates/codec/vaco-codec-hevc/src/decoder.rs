@@ -621,10 +621,21 @@ impl HevcDecoder {
             mastering_display,
             content_light,
         };
-        // `used_as_reference`: every NAL unit type except the
-        // "sub-layer-non-reference" ones (`*_N`, §7.4.2.2) can be
-        // referenced by a later picture.
-        let is_reference = !header.nal_unit_type.is_sub_layer_non_reference();
+        // §C.3.4 stores the current decoded picture marked "used for
+        // short-term reference" whatever its NAL unit type; §8.3.2's
+        // reference-picture-set marking, one picture later, is the only
+        // thing that makes a picture unused. §7.4.2.2's `*_N` types are not
+        // an instruction to the DPB: a sub-layer non-reference picture is
+        // barred only from the RPS of pictures with the **same**
+        // `TemporalId`, and a higher-`TemporalId` picture may reference it.
+        // This used to store them `Unused`, which dropped exactly those --
+        // and because `RefPicList0` is assembled below with a `filter_map`,
+        // the missing entry did not fail, it *shifted every later index*,
+        // so the prediction read a different picture. Invisible to any
+        // `libx265` fixture: measured across `--temporal-layers 1` to `4`,
+        // it only ever emits `*_N` pictures in the top sub-layer, where by
+        // construction nothing references them.
+        let is_reference = true;
 
         // `walk` owns two `Budget`-tracked working buffers — `cu_grid` and
         // `sao_params` — that nothing outside this one slice's decode ever
