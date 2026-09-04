@@ -15,10 +15,10 @@ provenance. A blank note means we match the reference for that format.
 
 | | Demux | Mux |
 |---|---|---|
-| Vaco | 177 | 118 |
+| Vaco | 178 | 118 |
 | Reference | 359 | 183 |
 
-Of the 413 format names either side registers, **213** are still to be
+Of the 413 format names either side registers, **212** are still to be
 written and **1** is excluded by a decision record. The
 ratio between those two numbers is the point of the other document —
 nearly everything Vaco lacks, it lacks because nobody has written it yet.
@@ -370,7 +370,7 @@ playback devices are not in `-demuxers`/`-muxers` output, they are in
 | `subviewer1` | `vaco-subtitle-text` |  |  |
 | `sunrast_pipe` | `vaco-demux-image2` |  |  |
 | `sup` | `vaco-subtitle-bitmap` | `vaco-subtitle-bitmap` |  |
-| `svag` | — |  | not yet |
+| `svag` | `vaco-format-misc-audio` |  |  |
 | `svcd` |  | `vaco-mux-mpegps` |  |
 | `svg_pipe` | `vaco-demux-image2` |  |  |
 | `svs` | — |  | not yet |
