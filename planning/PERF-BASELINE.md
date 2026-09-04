@@ -715,3 +715,51 @@ win; the surrounding scalar cost, not the arithmetic, is what mattered and is al
 or any interpolation-loop restructuring resembling round 2's three washes. All six have measured,
 recorded, negative or negligible results and none of them changed in this pass's profile in a way
 that would predict a different outcome today.
+
+---
+
+## 8. Load-immune measurement, added 2026-09-03
+
+Nothing above this line was re-measured or changed. This section records a
+second instrument that answers a narrower question than §1 does, and corrects
+one sentence in the *Machine, toolchain, and load* table.
+
+**The correction.** That table says *"No cycle counter is available — `unsafe` is
+forbidden workspace-wide and a cycle-counter read needs it."* True for an
+**in-process** counter read, and it is not the end of the analysis: an
+*external* tool needs no `unsafe` in this tree. Valgrind's cachegrind
+**simulates** execution and reports an exact instruction count, which is
+deterministic rather than sampled and therefore does not move with machine load
+at all. It has no macOS/Apple-silicon port, so it runs in an arm64 Linux
+container, natively, on this same Mac.
+
+`docs/instruction-count-benchmarking.md` has the whole design, the measurements
+and the caveats. The three things worth knowing from here:
+
+1. **CPU-seconds is not the load-immune metric this document assumed it was.**
+   Measured on this machine, identical work costs **1.56x more CPU-seconds** on
+   an efficiency core than on a performance core (0.28 s vs 0.17–0.20 s,
+   8 interleaved rounds), and a single-threaded run migrates across both core
+   types within 1.4 s. Instruction count under the same conditions moved by
+   **25 instructions in 11.9 billion** while wall clock moved **4.55x**.
+2. **Instruction count is not time, and must never be optimised alone.**
+   Measured here: H.264 SD decode is **11.78x** ffmpeg's instruction count but
+   only **4.34x** its wall clock, and MP3 decode is **20.07x** the instructions
+   for **3.50x** the time. The reference's hand-written vector code retires far
+   fewer instructions per unit of work. A change that lowers the instruction
+   count by de-vectorising would read as a win and be a loss. §1's interleaved
+   wall-clock protocol stays the ground truth, and it is the only one of the two
+   that can see a threading result at all — valgrind serialises threads.
+3. **§7 candidate 1 has landed, and it has a sibling that has not.** Commit
+   `273d60fb` (2026-09-01) moved AAC's IMDCT off `vaco_tx::reference::imdct`.
+   The instruction profile's first run found the same defect still present in
+   MP3: `crates/codec/vaco-codec-mpegaudio/src/layer3.rs:442` calls that same
+   O(n²) reference transform from `windowed_imdct` in the production path, and
+   **74.38% of MP3 decode's instructions are inside libm `cos`**
+   (5,720,068,487 of 7,690,615,486). A sweep found no other production caller.
+
+`scripts/perf-baseline-bench.py` — the §1 harness — now samples the 1-minute load
+average around every run, records it in the results JSON with an
+`unusable_wall_clock` flag, and takes `--max-load` / `--refuse-under-load`. That
+guard would have flagged the HEVC SD/720p rows in §1, whose 11x within-job spread
+is called out there by hand.
