@@ -19,6 +19,7 @@ vaco-chlayout = { path = "../../model/vaco-chlayout" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 vaco-format-core = { path = "../../format/vaco-format-core" }
 vaco-codec-core = { path = "../../signal/vaco-codec-core" }
+vaco-parse-aac = { path = "../../codec/vaco-parse-aac" }
 
 [dev-dependencies]
 proptest.workspace = true

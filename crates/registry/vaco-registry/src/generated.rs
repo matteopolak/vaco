@@ -19,6 +19,18 @@ pub static COMPONENTS: &[crate::Component] = &[
     #[cfg(feature = "demux-raw")]
     crate::Component {
         kind: crate::Kind::Demuxer,
+        name: "aac",
+        long_name: Some("raw ADTS AAC (Advanced Audio Coding)"),
+        krate: "vaco-demux-raw",
+        feature: Some("demux-raw"),
+        media: None,
+        codec: None,
+        extensions: &["aac"],
+        mime_types: &[],
+    },
+    #[cfg(feature = "demux-raw")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
         name: "ac3",
         long_name: Some("raw AC-3"),
         krate: "vaco-demux-raw",
@@ -10470,6 +10482,8 @@ pub static ENCUMBERED_ALL: &[&str] = &["aac", "h264", "hevc", "vc1"];
 
 /// Descriptors of every enabled `demuxer` implementation.
 pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
+    #[cfg(feature = "demux-raw")]
+    &::vaco_demux_raw::aac::DEMUXER,
     #[cfg(feature = "demux-raw")]
     &::vaco_demux_raw::ac3::DEMUXER_AC3,
     #[cfg(feature = "demux-adx")]

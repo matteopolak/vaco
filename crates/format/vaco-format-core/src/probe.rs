@@ -249,8 +249,21 @@ impl ProbeScore {
 
     /// `n` consecutive well-formed frames or packets: `min(100, 25 + 8n)`.
     ///
-    /// The shape a self-synchronising format uses — MPEG-TS, MP3, ADTS. One
-    /// frame is inside the retry band, two escape it, ten are conclusive.
+    /// The shape a self-synchronising format uses — the fifteen text/bitmap
+    /// subtitle probes in `vaco-subtitle-text`/`vaco-subtitle-bitmap` all
+    /// count matching lines or sync patterns this way. One frame is inside
+    /// the retry band, two escape it, ten are conclusive.
+    ///
+    /// **Not** what `vaco-demux-mpegaudio`, `vaco-demux-raw::ac3` or
+    /// `vaco-demux-raw::aac` use, despite being exactly the "consecutive
+    /// syncframe" shape this doc once claimed them as examples of: measured
+    /// against `ffprobe`, MP3/AC-3/E-AC-3/ADTS all cap at a flat **51** once
+    /// four frames chain (`SCORE_STRONG` in each of those modules), and
+    /// MPEG-TS caps at **50** (this file's own calibration table above) —
+    /// neither number `repeating` can produce (its outputs are `25 + 8n`:
+    /// 25, 33, 41, 49, 57, …). Reproducing the reference's *exact* number is
+    /// the point (D5), so those four formats hardcode their own measured
+    /// constants instead of calling this.
     #[must_use]
     pub const fn repeating(n: u32) -> Self {
         let raw = 25u32.saturating_add(n.saturating_mul(8));

@@ -1,10 +1,13 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
 #
-# 47 demuxers (48 minus `s337m`, moved to `vaco-format-spdif` — see
-# `planning/TECH-DEBT.md`), one shared feature: `--features demux-raw` brings the whole
-# crate or none of it, the same convention `vaco-parse-aac` uses for its two
-# components. Names, long names and extensions are captured under `LC_ALL=C`
-# against ffmpeg 8.1 (`ffmpeg -demuxers`, `ffmpeg -h demuxer=<name>`) — see
+# 48 demuxers (47 from the original mechanical sweep, minus `s337m` — moved to
+# `vaco-format-spdif`, see `planning/TECH-DEBT.md` — plus `aac`, added to close
+# a probe-detection gap where a bare ADTS file had no demuxer of its own; see
+# `vaco_demux_raw::aac`'s module docs), one shared feature: `--features
+# demux-raw` brings the whole crate or none of it, the same convention
+# `vaco-parse-aac` uses for its two components. Names, long names and
+# extensions are captured under `LC_ALL=C` against ffmpeg 8.1/9.0
+# (`ffmpeg -demuxers`, `ffmpeg -h demuxer=<name>`) — see
 # `docs/format/vaco-demux-raw.md` for the exact commands and what was
 # measured versus assumed per format.
 
@@ -386,3 +389,11 @@ feature    = "demux-raw"
 ctor       = "vaco_demux_raw::ac3::DEMUXER_EAC3"
 extensions = "eac3,ec3"
 mime_types = "audio/x-eac3"
+
+[[component]]
+kind       = "demuxer"
+name       = "aac"
+long_name  = "raw ADTS AAC (Advanced Audio Coding)"
+feature    = "demux-raw"
+ctor       = "vaco_demux_raw::aac::DEMUXER"
+extensions = "aac"

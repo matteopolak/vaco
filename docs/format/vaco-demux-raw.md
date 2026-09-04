@@ -1,10 +1,17 @@
 # `vaco-demux-raw`
 
-Layer 4. Raw / headerless elementary-stream demuxers: 47 registrations across
-three families (PCM, raw video, bitstream-with-sync-pattern). `s337m` moved
-to `vaco-format-spdif::S337M_DEMUXER`; the `S337M`/`DEMUXER_S337M`
-consts stay in `bitstream.rs`, unregistered. Companion crate:
-`vaco-mux-raw` (the write side, FM-26b).
+Layer 4. Raw / headerless elementary-stream demuxers: 50 registrations across
+five families (PCM, raw video, bitstream-with-sync-pattern, and two
+syncframe-driven streaming demuxers: `ac3`/`eac3` and `aac`). `s337m` moved to
+`vaco-format-spdif::S337M_DEMUXER`; the `S337M`/`DEMUXER_S337M` consts stay in
+`bitstream.rs`, unregistered. Companion crate: `vaco-mux-raw` (the write
+side, FM-26b).
+
+This page's family table and counts had drifted (it still said 47/48 and
+omitted `ac3`/`eac3` after those landed); both are corrected here, alongside
+adding `aac`. If you find another stale number in this file, fix it in the
+same commit rather than treating it as this file's steady state — it is
+reference material, not a diary, per `CLAUDE.md`.
 
 ---
 
@@ -20,12 +27,29 @@ the file — except `yuv4mpegpipe`, which carries its own text header.
 | `pcm` | Linear PCM: `alaw` … `vidc` | 21 |
 | `rawvideo` | `rawvideo`, `bitpacked`, `v210`, `v210x` | 4 |
 | `y4m` | `yuv4mpegpipe` (self-describing) | 1 |
-| `bitstream` | `h264`, `hevc`, `av1`/`obu`, and 18 more | 22 |
+| `bitstream` | `h264`, `hevc`, `av1`/`obu`, and 17 more (`s337m` unregistered — see above) | 21 |
+| `ac3` | `ac3`, `eac3`: own streaming demuxer, syncframe length read from the header | 2 |
+| `aac` | `aac`: bare ADTS, same shape as `ac3` but parsed through `vaco-parse-aac::adts::AdtsHeader` rather than a second copy of its tables | 1 |
 | `obu` | AV1 OBU leb128 framing, used by `bitstream` | helper |
 | `startcode` | Annex-B/MPEG `00 00 01` scanning, used by `bitstream` | helper |
 
-21 + 4 + 1 + 22 = 48, matching FM-26a and `ffmpeg -demuxers`' count for this
-family.
+21 + 4 + 1 + 21 + 2 + 1 = 50. The first 48 (PCM/raw-video/`yuv4mpegpipe`/
+bitstream, `s337m` still registered) matched FM-26a and `ffmpeg -demuxers`'
+count for this family; `s337m` moving to `vaco-format-spdif` dropped it to 47,
+`ac3`/`eac3` brought it to 49, and `aac` — added to close a probe-detection
+gap, see below — brings it to 50.
+
+**Why `aac` was added.** Before it existed, a bare ADTS `.aac` file had no
+demuxer claiming it at all. `cdgraphics`'s probe (`vaco-format-misc::cdg`)
+counts 24-byte-aligned chunks whose command byte's low six bits happen to
+equal `0x09`; on compressed AAC data that fires by chance roughly one byte in
+64, often enough over a multi-kilobyte prefix to clear its own threshold while
+every genuinely-registered candidate scored zero — so a real `.aac` file was
+reported as `format_name=cdgraphics`. Not a case of `cdgraphics` scoring too
+high or ADTS scoring too low: ADTS was never tried. `aac.rs` closes the gap
+the same way `ac3.rs` does for its formats — see that module's own doc comment
+for the full measurement (probe score convention, the `time_base=1/28224000`
+constant measured off `ffprobe`, and the one disclosed timestamp divergence).
 
 **Measurement method.** All names, long names, extensions and default option
 values in this crate were captured directly, not transcribed from a plan or
@@ -152,6 +176,16 @@ once, bounded by the caller's `Limits` — see "How to change it" for why.
   `tests/probe_matrix.rs` asserts exactly that split, plus that no
   `StartCode3` sibling ever outscores a real sample's true owner.
 * `yuv4mpegpipe` scores **100** on its full magic.
+* `ac3`/`eac3`/`aac` score **51** once four consecutive syncframes chain
+  (each frame's declared length lands exactly on the next frame's sync word),
+  **24** at two or three, and **0** below that — measured against `ffprobe`
+  on all three formats (see each module's own doc comment). This is
+  deliberately not `ProbeScore::repeating`'s `min(100, 25 + 8n)` formula the
+  crate-level convention table in `vaco-format-core::probe` documents: the
+  reference's own score for these three formats caps at 51 regardless of how
+  many further frames chain, and reproducing that exact number is what makes
+  `probe_score` byte-identical (D5), which matters more here than following
+  the general formula.
 
 ---
 

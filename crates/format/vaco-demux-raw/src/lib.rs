@@ -1,5 +1,5 @@
-//! Raw / headerless elementary-stream demuxers: 49 registrations across
-//! four families.
+//! Raw / headerless elementary-stream demuxers: 50 registrations across
+//! five families.
 //!
 //! A raw format has no container: the file *is* the elementary stream.
 //! `-f h264 in.h264`, `-f s16le in.pcm`, `-f rawvideo -s 1920x1080
@@ -16,10 +16,14 @@
 //! | [`y4m`] | `yuv4mpegpipe` (self-describing) | 1 |
 //! | [`bitstream`] | Bitstream-with-sync-pattern: `h264`, `hevc`, `av1`/`obu`, and 17 more | 21 |
 //! | [`ac3`] | `ac3`, `eac3`: syncframe-driven, own streaming demuxer (not the whole-buffer `bitstream` shape — frame length and sample count come from the header, so per-packet timestamps are exact) | 2 |
+//! | [`aac`] | `aac`: bare ADTS, one more syncframe-driven streaming demuxer sharing `ac3`'s shape but parsed through `vaco-parse-aac` instead of duplicating its header tables | 1 |
 //!
-//! 21 + 4 + 1 + 21 + 2 = 49. `s337m` moved to `vaco-format-spdif` (see
-//! `planning/TECH-DEBT.md`), dropping this family from 22 to 21. The first
-//! 48 (before that move) matched FM-26a and
+//! 21 + 4 + 1 + 21 + 2 + 1 = 50. `s337m` moved to `vaco-format-spdif` (see
+//! `planning/TECH-DEBT.md`), dropping the bitstream family from 22 to 21;
+//! `aac` was added afterward to close a probe-detection gap (a bare `.aac`
+//! file had no demuxer of its own and lost to whatever registered format
+//! scored highest by accident — see `aac`'s module docs). The first
+//! 48 (before either change) matched FM-26a and
 //! `ffmpeg -demuxers`' own count for this family (captured under `LC_ALL=C`
 //! against ffmpeg 8.1 — see `docs/format/vaco-demux-raw.md` for the exact
 //! commands); `ac3`/`eac3` are FM-26a's one deferred pair (#653).
@@ -71,6 +75,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod aac;
 pub mod ac3;
 pub mod bitstream;
 pub mod obu;
@@ -98,6 +103,7 @@ pub fn all_demuxers() -> Vec<&'static DemuxerDesc> {
     out.extend(bitstream::BITSTREAM_DEMUXERS.iter().copied());
     out.push(&ac3::DEMUXER_AC3);
     out.push(&ac3::DEMUXER_EAC3);
+    out.push(&aac::DEMUXER);
     out
 }
 
@@ -106,8 +112,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn there_are_exactly_forty_nine_registrations() {
-        assert_eq!(all_demuxers().len(), 49);
+    fn there_are_exactly_fifty_registrations() {
+        assert_eq!(all_demuxers().len(), 50);
     }
 
     #[test]
