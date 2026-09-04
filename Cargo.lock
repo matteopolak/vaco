@@ -2170,6 +2170,7 @@ dependencies = [
  "vaco-codec-dsp-mecmp",
  "vaco-color",
  "vaco-core",
+ "vaco-hw-perf-event",
  "vaco-pixfmt",
  "vaco-scale",
  "vaco-simd",
@@ -4374,6 +4375,10 @@ dependencies = [
  "vaco-limits",
  "vaco-pixfmt",
 ]
+
+[[package]]
+name = "vaco-hw-perf-event"
+version = "0.1.0"
 
 [[package]]
 name = "vaco-hw-videotoolbox"
