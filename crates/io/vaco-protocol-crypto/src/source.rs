@@ -11,10 +11,8 @@
 //! arrives (release the held one *unpadded* — it was not last) or the inner
 //! source reports EOF (release the held one *with* [`crate::cipher::unpad`]
 //! applied — it was). Memory use is therefore two blocks (32 bytes) plus
-//! whatever the caller's own buffer is, never the whole file — see
-//! `planning/AGENT-CONSTRAINTS.md`'s "allocate after the limits, not before
-//! them", which this is a direct instance of even though nothing here is
-//! attacker-sized: the bound is a `const`, not an option.
+//! whatever the caller's own buffer is, never the whole file. The bound is a
+//! `const`, not an option, even though nothing here is attacker-sized.
 //!
 //! # What is NOT implemented, and why that is an honest line to draw
 //!
@@ -235,8 +233,7 @@ impl MediaSource for CryptoSource {
     /// peeking ahead at open time) is **not measured** — every measurement
     /// in this crate's docs used sequential reads to true EOF, which do not
     /// depend on `size()` at all. `None` is the honest answer for "not
-    /// established", per `planning/AGENT-CONSTRAINTS.md`'s point about not
-    /// letting an unpopulated field be read as a result.
+    /// established"; callers must not treat an unpopulated field as a result.
     fn size(&self) -> Option<u64> {
         None
     }

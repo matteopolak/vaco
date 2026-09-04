@@ -10,8 +10,7 @@
 //! AES input is `plaintext[i] XOR ciphertext[i-1]` (`ciphertext[-1] = iv`),
 //! which is the textbook definition of **CBC**, not a counter. A name in the
 //! reference's own vocabulary is evidence about what it calls the thing, not
-//! about what it does (`planning/AGENT-CONSTRAINTS.md`, "A name in the
-//! reference is not a specification").
+//! about what it does; names are not specifications.
 //!
 //! Two more measured, load-bearing facts that follow from this:
 //!
@@ -30,8 +29,8 @@
 //!    block scrambles the *entire* block (AES's avalanche effect), not just
 //!    the targeted byte — so every trial happened to land outside `0..=16`
 //!    and hit the fallback, which is consistent with either explanation and
-//!    proves neither (`planning/AGENT-CONSTRAINTS.md`: "one matching sample
-//!    is not a passing test"). The correct technique is a CBC bit-flip — XOR
+//!    proves neither. A matching sample is not sufficient evidence. The
+//!    correct technique is a CBC bit-flip — XOR
 //!    a byte of the *second-to-last* ciphertext block to change exactly one
 //!    byte of the *last* plaintext block, leaving the rest of that block
 //!    (including its other padding bytes) untouched — and under that

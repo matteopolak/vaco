@@ -133,8 +133,8 @@ pub fn decrypt_all(key: &[u8; BLOCK], iv: &[u8; BLOCK], ciphertext: &[u8]) -> Op
 /// avalanche effect, not just the targeted byte — so every one of those five
 /// trials happened to land outside `0..=16` and hit the fallback,
 /// coincidentally consistent with a validation rule that was never actually
-/// being exercised (`planning/AGENT-CONSTRAINTS.md`: "one matching sample is
-/// not a passing test"). The correct technique is a **CBC bit-flip**: XOR a
+/// being exercised. A matching sample is not sufficient evidence. The
+/// correct technique is a **CBC bit-flip**: XOR a
 /// byte of the *second-to-last* ciphertext block, which XORs the
 /// corresponding byte of the *last plaintext block* directly and leaves
 /// every other byte of that block — including the other 15 padding bytes —
