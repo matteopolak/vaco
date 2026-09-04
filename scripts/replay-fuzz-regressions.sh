@@ -20,9 +20,25 @@
 # `fuzz/seeds/diff/` is a different namespace (real media for the
 # differential fuzzer to mutate, not crash regressions) and is skipped.
 #
-# Exit code: nonzero the moment any seed makes its target crash, so this can
-# be a normal blocking CI step. Prints which target/seed as it goes so a
-# failure is immediately actionable.
+# A failure to BUILD is reported as exactly that, never as a regression.
+# Run 33820528109 printed "27 seed(s) replayed, 27 failure(s)" when every
+# one of the 27 was the same dependency failing to compile: `cargo fuzz run`
+# returns nonzero for a build error and for a crash alike, and this script
+# used to attribute both to the seed. Two things stop that now:
+#
+#   1. `cargo metadata --locked` on the fuzz manifest, before anything is
+#      built. `cargo fuzz` has no `--locked` flag, so a crate missing from
+#      `fuzz/Cargo.lock` resolves to the newest release at build time; that
+#      is how an unpinned `tinyvec` picked up a 1.13.0 that does not compile
+#      without `std`. The lock has to be complete and committed, and this is
+#      the one place that can enforce it.
+#   2. Each target is built once, up front, with `cargo fuzz build`. Only a
+#      target that built gets its seeds replayed, so a nonzero `fuzz run`
+#      afterwards means the seed, not the toolchain.
+#
+# Exit code: nonzero if the lock is stale, if any target fails to build, or
+# the moment any seed makes its target crash -- each reported in its own
+# words, so a failure is immediately actionable.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -34,26 +50,55 @@ if [ ! -d "$seeds_dir" ]; then
     exit 0
 fi
 
-failures=0
-replayed=0
+log_dir="${TMPDIR:-/tmp}/replay-fuzz"
+mkdir -p "$log_dir"
 
+if ! cargo +nightly metadata --manifest-path fuzz/Cargo.toml --format-version 1 --locked \
+        >/dev/null 2>"$log_dir/metadata.log"; then
+    echo "replay-fuzz-regressions: BUILD PROBLEM, not a regression -- fuzz/Cargo.lock is" \
+         "incomplete or stale for the current manifests. Regenerate it (any" \
+         "\`cargo +nightly fuzz build\` rewrites it) and commit fuzz/Cargo.lock."
+    tail -n 20 "$log_dir/metadata.log"
+    exit 1
+fi
+
+targets=()
 for target_dir in "$seeds_dir"/*/; do
     target="$(basename "$target_dir")"
     [ "$target" = "diff" ] && continue
     [ "$target" = "README.md" ] && continue
+    targets+=("$target")
+done
 
-    for seed in "$target_dir"*; do
+build_failures=0
+built=()
+for target in "${targets[@]}"; do
+    echo "replay-fuzz-regressions: building $target"
+    if cargo +nightly fuzz build "$target" >"$log_dir/build-$target.log" 2>&1; then
+        built+=("$target")
+    else
+        echo "replay-fuzz-regressions: BUILD FAILED, not a regression -- $target did not compile"
+        tail -n 40 "$log_dir/build-$target.log"
+        build_failures=$((build_failures + 1))
+    fi
+done
+
+failures=0
+replayed=0
+for target in "${built[@]}"; do
+    for seed in "$seeds_dir/$target"/*; do
         [ -f "$seed" ] || continue
         [ "$(basename "$seed")" = "README.md" ] && continue
         replayed=$((replayed + 1))
         echo "replay-fuzz-regressions: $target <- $(basename "$seed")"
-        if ! cargo +nightly fuzz run "$target" "$seed" -- -runs=1 >/tmp/replay-fuzz-"$target".log 2>&1; then
+        if ! cargo +nightly fuzz run "$target" "$seed" -- -runs=1 >"$log_dir/run-$target.log" 2>&1; then
             echo "replay-fuzz-regressions: FAILED -- $target/$(basename "$seed") crashes again"
-            tail -n 40 /tmp/replay-fuzz-"$target".log
+            tail -n 40 "$log_dir/run-$target.log"
             failures=$((failures + 1))
         fi
     done
 done
 
-echo "replay-fuzz-regressions: $replayed seed(s) replayed, $failures failure(s)"
-[ "$failures" -eq 0 ]
+echo "replay-fuzz-regressions: ${#targets[@]} target(s), $build_failures build failure(s)," \
+     "$replayed seed(s) replayed, $failures regression(s)"
+[ "$build_failures" -eq 0 ] && [ "$failures" -eq 0 ]
