@@ -90,6 +90,21 @@ pub(crate) fn codec_parameters(
     media_type: Option<MediaType>,
     track: &Track<'_>,
 ) -> CodecParameters {
+    codec_parameters_with_display(
+        entry,
+        media_type,
+        Some((track.header.width, track.header.height)),
+    )
+}
+
+/// [`codec_parameters`] for a sample entry that has no `trak` around it — a
+/// HEIF item's synthesized entry — where `display` is the `tkhd` size a
+/// track would have contributed to the sample aspect ratio, if any.
+pub(crate) fn codec_parameters_with_display(
+    entry: &SampleEntry<'_>,
+    media_type: Option<MediaType>,
+    display: Option<(Rational, Rational)>,
+) -> CodecParameters {
     let mut params = CodecParameters {
         media_type,
         codec_id: entry.codec(),
@@ -205,7 +220,8 @@ pub(crate) fn codec_parameters(
             nal_length_size: hevc_length_size,
             ..VideoParameters::default()
         };
-        video.sample_aspect_ratio = sample_aspect_ratio(entry, track, &v).unwrap_or(Rational::ZERO);
+        video.sample_aspect_ratio =
+            sample_aspect_ratio(entry, display, &v).unwrap_or(Rational::ZERO);
         video.field_order = field_order(entry);
         if let Some(colour) = entry.colour() {
             video.color.primaries = colour
@@ -363,7 +379,7 @@ fn field_order(entry: &SampleEntry<'_>) -> FieldOrder {
 /// stream — which is why an unmodified file still prints `1:1`.
 fn sample_aspect_ratio(
     entry: &SampleEntry<'_>,
-    track: &Track<'_>,
+    display: Option<(Rational, Rational)>,
     visual: &stsd::VisualSampleEntry,
 ) -> Option<Rational> {
     if let Some(pasp) = entry
@@ -379,7 +395,7 @@ fn sample_aspect_ratio(
             ));
         }
     }
-    let (dw, dh) = (track.header.width, track.header.height);
+    let (dw, dh) = display?;
     let (cw, ch) = (i32::from(visual.width), i32::from(visual.height));
     if cw <= 0 || ch <= 0 || dw.num <= 0 || dh.num <= 0 {
         return None;

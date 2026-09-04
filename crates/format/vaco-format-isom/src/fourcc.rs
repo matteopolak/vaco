@@ -195,6 +195,8 @@ pub mod boxes {
         PITM = b"pitm", ILOC = b"iloc", IINF = b"iinf", INFE = b"infe",
         IPRP = b"iprp", IPCO = b"ipco", IPMA = b"ipma", IREF = b"iref",
         IDAT = b"idat", ISPE = b"ispe", PIXI = b"pixi", PICT = b"pict",
+        // Derived-image item types (§6.6.2).
+        GRID = b"grid", IOVL = b"iovl", IDEN = b"iden",
         // `iref` reference types. `cdsc` ("content describes") is the same
         // four bytes as the `tref` reference type above (`boxes::CDSC`) —
         // reused rather than redeclared.

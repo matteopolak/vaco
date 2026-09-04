@@ -49,6 +49,7 @@
 
 #![forbid(unsafe_code)]
 
+mod items;
 mod meta;
 mod options;
 mod read;
@@ -63,7 +64,7 @@ use vaco_core::{Duration, Error, MediaType, Rational, Result, Rounding, Timestam
 use vaco_format_core::seek::{IndexEntry, PacketIndex, SeekFlags, SeekStrategy, SeekTarget};
 use vaco_format_core::{
     Chapter, Demuxer, DemuxerDesc, Disposition, FormatFlags, FormatOptions, ParserProvider,
-    ProbeData, ProbeScore, Stream,
+    ProbeData, ProbeScore, Stream, StreamGroup,
 };
 use vaco_format_isom::boxes::{BoxHeader, IsoBox};
 use vaco_format_isom::fourcc::boxes as bt;
@@ -91,6 +92,12 @@ pub const FORMAT_LONG_NAME: &str = vaco_format_isom::FORMAT_LONG_NAME;
 /// table borrows from it. Sixteen mebibytes is a `stbl` of about four million
 /// samples, i.e. a thirty-hour recording.
 pub const MAX_MOOV_BYTES: u64 = 16 << 20;
+
+/// Largest top-level `meta` this demuxer will hold, for a HEIF/AVIF file
+/// whose pictures are items rather than tracks. The same bound as `moov`:
+/// `iloc`/`ipma` entries are a few bytes each, and `idat` holds only small
+/// derived-item descriptors in every file this crate has seen.
+pub const MAX_META_BYTES: u64 = MAX_MOOV_BYTES;
 
 /// Largest `ftyp` this demuxer will hold.
 ///
@@ -247,6 +254,11 @@ pub struct Mp4Demuxer {
     moov_header_len: u64,
     movie_timescale: u32,
     fragmented: bool,
+    /// A HEIF/AVIF file: no `moov` at all, and the streams came from a
+    /// top-level `meta` box's items (`items::build`). Nothing that reads
+    /// `self.moov` runs for such a file.
+    item_file: bool,
+    groups: Vec<StreamGroup>,
     /// `Movie::tracks` slot for each stream, or `None` for a cover image.
     slots: Vec<Option<usize>>,
     extends: Vec<TrackExtends>,
@@ -307,6 +319,7 @@ impl Mp4Demuxer {
         let mut file_type: Option<FileType> = None;
         let mut moov_span: Option<BoxSpan> = None;
         let mut moov = Vec::new();
+        let mut meta: Option<(BoxSpan, Vec<u8>)> = None;
         let mut saw_mdat = false;
         // One scanner per box rather than one for the walk, so that a payload
         // can be read as it is passed. On a source that cannot seek there is no
@@ -346,15 +359,34 @@ impl Mp4Demuxer {
                     break;
                 }
                 bt::MDAT => saw_mdat = true,
+                // A HEIF/AVIF file has no `moov`; its pictures are items in a
+                // top-level `meta`. Kept only until `moov` settles the
+                // question — a `moov` file with a stray top-level `meta` is
+                // read as tracks, exactly as before.
+                bt::META if meta.is_none() && span.payload_len() <= MAX_META_BYTES => {
+                    if saw_mdat && !seekable {
+                        return Err(Error::Unsupported(
+                            "mp4: meta follows mdat and the source cannot seek",
+                        ));
+                    }
+                    let payload =
+                        read_payload_incremental(&mut io, &mut budget, span, MAX_META_BYTES)?;
+                    meta = Some((span, payload));
+                }
                 _ => {}
             }
         }
-        let Some(moov_span) = moov_span else {
-            return Err(Error::InvalidData(if saw_mdat {
-                ScanError::MoovAfterMediaData.message()
-            } else {
-                ScanError::NoMovie.message()
-            }));
+        let item_file = moov_span.is_none() && meta.is_some();
+        let (moov_span, moov) = match (moov_span, meta) {
+            (Some(span), _) => (span, moov),
+            (None, Some((span, payload))) => (span, payload),
+            (None, None) => {
+                return Err(Error::InvalidData(if saw_mdat {
+                    ScanError::MoovAfterMediaData.message()
+                } else {
+                    ScanError::NoMovie.message()
+                }));
+            }
         };
 
         let mut me = Self {
@@ -367,6 +399,8 @@ impl Mp4Demuxer {
             moov_header_len: moov_span.header_len,
             movie_timescale: 0,
             fragmented: false,
+            item_file,
+            groups: Vec::new(),
             slots: Vec::new(),
             extends: Vec::new(),
             fragments: Vec::new(),
@@ -436,6 +470,9 @@ impl Mp4Demuxer {
     // ------------------------------------------------------------------ open
 
     fn build(&mut self, seekable: bool) -> Result<()> {
+        if self.item_file {
+            return self.build_items();
+        }
         // Two parses of the same bytes, deliberately. The first settles whether
         // the file is fragmented, which decides whether the `moof` chain has to
         // be walked; the second happens once that walk is done, because the
@@ -635,6 +672,38 @@ impl Mp4Demuxer {
     /// Container duration: the largest `start_time + duration` over the
     /// streams. **Measured** — patching `mvhd.duration` to 5 s left
     /// `format.duration` at 2 s, so `mvhd` is not the source.
+    /// The HEIF/AVIF path: `self.moov` holds the top-level `meta` box.
+    fn build_items(&mut self) -> Result<()> {
+        let size = self.io.size();
+        let built = {
+            let bx = reassemble_at(bt::META, self.moov_offset, self.moov_header_len, &self.moov);
+            let (io, packet_budget) = (&mut self.io, &mut self.packet_budget);
+            let mut read = |extents: &[(u64, u64)]| -> Option<Vec<u8>> {
+                let mut out = Vec::new();
+                for &(offset, len) in extents {
+                    let n = usize::try_from(len).ok()?;
+                    let mut pkt = Packet::alloc(packet_budget, n).ok()?;
+                    packet_budget.release(len);
+                    io.seek(offset).ok()?;
+                    io.read_exact(pkt.payload_mut()).ok()?;
+                    out.extend_from_slice(pkt.payload());
+                }
+                Some(out)
+            };
+            items::build(&bx, &self.budget, size, &mut read)
+        };
+        if built.streams.is_empty() {
+            return Err(Error::InvalidData(
+                "mp4: meta box holds no image item this demuxer can read",
+            ));
+        }
+        self.slots = built.streams.iter().map(|_| None).collect();
+        self.streams = built.streams;
+        self.readers = built.readers;
+        self.groups = built.groups;
+        Ok(())
+    }
+
     fn finish_durations(&mut self) {
         let mut best: Option<i64> = None;
         for s in &self.streams {
@@ -783,12 +852,13 @@ impl Mp4Demuxer {
             }
             let senc =
                 vaco_format_isom::cenc::SampleEncryption::parse(table.sample_encryption.as_ref()?)?;
-            Some(read::Decryptor {
+            read::Decryptor::parse(
                 key,
-                iv_size: te.per_sample_iv_size,
-                has_subsamples: senc.has_subsamples,
-                records: senc.records.to_vec(),
-            })
+                senc.records,
+                senc.sample_count,
+                te.per_sample_iv_size,
+                senc.has_subsamples,
+            )
         });
 
         let (r_rate, avg_rate) = self.frame_rate_estimate(trak, table, &totals, limit);
@@ -1478,6 +1548,39 @@ impl Mp4Demuxer {
                 }
                 return Ok(true);
             }
+            Some(Source::Item { extents, emitted }) => {
+                let (emitted, offset, total) = (
+                    *emitted,
+                    extents.first().map_or(0, |e| e.0),
+                    extents.iter().map(|e| e.1).sum::<u64>(),
+                );
+                let Some(reader) = self.readers.get_mut(slot) else {
+                    return Ok(false);
+                };
+                if emitted {
+                    reader.finished = true;
+                    return Ok(true);
+                }
+                // **Measured**: `ffprobe -show_packets` on an AVIF prints one
+                // packet per item stream, `pts=0 dts=0 duration=1 flags=K`,
+                // `pos` at the first extent.
+                reader.queue.push_back(Pending {
+                    offset,
+                    size: u32::try_from(total).unwrap_or(u32::MAX),
+                    dts: 0,
+                    pts: 0,
+                    duration: 1,
+                    key: true,
+                    discard: false,
+                    skip: 0,
+                    skip_end: 0,
+                    index: 0,
+                });
+                if let Source::Item { emitted, .. } = &mut reader.source {
+                    *emitted = true;
+                }
+                return Ok(true);
+            }
             Some(Source::Table { .. }) => {
                 // Disjoint field borrows: the tables read `self.moov`, the
                 // queue lives in `self.readers`.
@@ -1669,6 +1772,29 @@ impl Mp4Demuxer {
     }
 
     /// Read a sample's bytes into a packet.
+    /// Several byte ranges, concatenated into one packet.
+    fn payload_extents(&mut self, extents: &[(u64, u64)]) -> Result<Packet> {
+        let total = extents.iter().map(|e| e.1).sum::<u64>();
+        let len = usize::try_from(total).map_err(|_| Error::LimitExceeded {
+            limit: "mp4_item_bytes",
+            requested: total,
+            cap: u64::from(u32::MAX),
+        })?;
+        let mut pkt = Packet::alloc(&mut self.packet_budget, len)?;
+        self.packet_budget.release(total);
+        let mut at = 0usize;
+        for &(offset, size) in extents {
+            let n = usize::try_from(size).unwrap_or(usize::MAX);
+            let part = self.payload(offset, u32::try_from(size).unwrap_or(u32::MAX))?;
+            let end = at.saturating_add(n);
+            if let Some(dst) = pkt.payload_mut().get_mut(at..end) {
+                dst.copy_from_slice(part.payload());
+            }
+            at = end;
+        }
+        Ok(pkt)
+    }
+
     fn payload(&mut self, offset: u64, size: u32) -> Result<Packet> {
         let len = usize::try_from(size).unwrap_or(usize::MAX);
         if let Some(total) = self.io.size()
@@ -1753,13 +1879,22 @@ impl Mp4Demuxer {
             if subtitle && sample.duration == 0 {
                 continue;
             }
-            let mut pkt = self.payload(sample.offset, sample.size)?;
+            // An item split across several `iloc` extents is one packet:
+            // `sample.size` is their sum, `sample.offset` only the first.
+            let split = self.readers.get(slot).and_then(|r| match &r.source {
+                Source::Item { extents, .. } if extents.len() > 1 => Some(extents.clone()),
+                _ => None,
+            });
+            let mut pkt = match split {
+                Some(extents) => self.payload_extents(&extents)?,
+                None => self.payload(sample.offset, sample.size)?,
+            };
             if let Some(dec) = &decrypt
                 && !dec.decrypt(sample.index, pkt.payload_mut())
             {
                 return Err(Error::Unsupported(
-                    "mp4: cenc: no per-sample IV available for this sample (senc lacks a record, \
-                 or carries a subsample table this crate does not decrypt)",
+                    "mp4: cenc: senc has no usable record for this sample (none declared, or \
+                     a subsample table that does not fit the sample)",
                 ));
             }
             pkt.stream_index = stream_index;
@@ -1862,6 +1997,11 @@ impl Mp4Demuxer {
         let Some(track_slot) = track_slot else {
             if let Some(r) = self.readers.get_mut(slot) {
                 r.queue.clear();
+                // A still image has one frame at 0: any seek lands on it.
+                if let Source::Item { emitted, .. } = &mut r.source {
+                    *emitted = false;
+                    r.finished = false;
+                }
             }
             return Ok(ticks);
         };
@@ -2045,6 +2185,10 @@ impl Demuxer for Mp4Demuxer {
 
     fn duration(&self) -> Option<Duration> {
         self.duration
+    }
+
+    fn stream_groups(&self) -> &[StreamGroup] {
+        &self.groups
     }
 }
 

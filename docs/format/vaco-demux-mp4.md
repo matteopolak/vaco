@@ -652,22 +652,128 @@ both this crate (byte-identical to the plaintext muxed in) *and* a real
 `ffmpeg 8.1 -decryption_key <hex>` — see `vaco-mux-mp4`'s doc file's
 *Common Encryption* section for that cross-check.
 
+**2026-09-03: subsample encryption, against ffmpeg's own encryptor.**
+`ffmpeg -encryption_scheme cenc-aes-ctr` writes *subsample* encryption for
+H.264 (`senc` flags `0x2`, one `(BytesOfClearData, BytesOfProtectedData)`
+pair per NAL unit, 8-byte IVs) and full-sample encryption for AAC, so the
+"full-sample only" decryptor above could decrypt ffmpeg's audio and not
+its video. `read::Decryptor::parse` now pre-resolves every `senc` record
+(IV plus subsample table) once at track build, and `decrypt` treats a
+sample's protected ranges as **one** continuous AES-CTR stream (ISO/IEC
+23001-7 §9.5 — the block counter is not reset between subsamples and a
+partial block carries over), gathering, decrypting once and scattering back.
+Measured, `tests/cenc_ffmpeg.rs`: a clear H.264+AAC file stream-copied by
+ffmpeg into a `cenc` file decrypts back to the clear file's packets byte
+for byte, all 10 video and 20 audio packets; the same key through
+`ffmpeg -decryption_key` decodes that file to pixels and samples identical
+to the clear file's, which is the cross-check that the *file* is what the
+test says it is.
+
+**Reachability, measured and not yet fixed:** `vaco -decryption_key <hex>
+-i enc.mp4` answers `Unrecognized option 'decryption_key'`. There is no
+demuxer private-option plumbing at all — `DemuxerDesc::open` takes no
+options and `open_boxed` passes `Mp4Options::default()`, so *every*
+`Mp4Options` field (`-ignore_editlist`, `-use_tfdt`, …) is library-only
+today. Decryption is therefore complete at the library boundary and
+unreachable from the binary; making demuxer options reachable is one
+cross-cutting change (`vaco-format-core` descriptor, registry, CLI option
+tables) that belongs to all ~90 demuxers, not to this crate.
+
 **Not implemented, named explicitly**: the reference's `-decryption_keys`
 (per-`KID` dictionary — one key for every protected track is what
-`decryption_key` alone already means), `cbcs`/pattern encryption, and a
-fragmented file's `senc`/`pssh` (both live beside `moof`, a location this
-crate's fragment scan does not currently collect).
+`decryption_key` alone already means), `cbcs`/`cens`/`cbc1` (pattern and
+CBC schemes: `schm` is reported, the track refused), `constant_iv`
+(`per_sample_iv_size == 0`), and a fragmented file's `senc`/`pssh` (both
+live beside `moof`, a location this crate's fragment scan does not
+currently collect). Reporting is deliberately *more* than the reference:
+`ffprobe 9.0.1` prints no encryption field at all for a `cenc` file, and
+`ffmpeg -i` without a key decodes the ciphertext into garbage without
+complaint; this crate tags the stream (`encryption_scheme`,
+`encryption_key_id`, container-level `encryption_system_id`) and refuses to
+read it.
+
+## HEIF/AVIF items — a `meta` box instead of a `moov`
+
+**2026-09-03.** A still-image file (`ftyp` brand `avif`/`heic`/`mif1`) has
+no `moov`: its pictures are *items* in a top-level `meta` box. `open` now
+keeps that `meta` (bounded by `MAX_META_BYTES`) and, when no `moov` follows,
+`items::build` reads it (`hdlr` must say `pict`; a QuickTime `mdta` `meta`
+still means "no movie"). The box grammar is `vaco-format-isom::heif`'s; this
+crate decides what becomes a stream:
+
+* **Every coded item becomes one video stream** — hidden tiles included,
+  because a grid's tiles are what actually has to be read — in `iinf`
+  order, with `time_base 1/1`, `r_frame_rate`/`avg_frame_rate 1/1`,
+  `nb_frames 1`, no duration, `id` = `item_ID`, `title` = `item_name` when
+  non-empty, `default` on the `pitm` item, `dependent` on every
+  `dimg`-referenced tile. Codec parameters come through the *same*
+  sample-entry reader tracks use (`track::codec_parameters_with_display`):
+  the item's `ipco` properties are re-serialised as the entry's extension
+  boxes, because `av1C`/`hvcC`/`colr`/`pasp`/`pixi` are literally the same
+  boxes in both worlds. `ispe` supplies the size; an item with no `pasp`
+  reports `sample_aspect_ratio 1:1` (measured — the reference prints `1:1`
+  for an AVIF item where the same codec in a track prints nothing).
+* **Every `grid` item becomes a `TileGrid` stream group**, not a stream:
+  `dimg` names the tiles in raster order, the descriptor (read from `idat`
+  for `construction_method 1`, from the file for 0) gives rows, columns
+  and output size, and the tiles' own `ispe` gives the canvas (`coded_*`)
+  and per-tile offsets. A grid whose tile count is not `rows × columns`,
+  whose tiles are not streams, or whose output exceeds its canvas produces
+  **no group** rather than a wrong one.
+* One packet per stream, `pts 0 dts 0 duration 1`, keyframe, `pos` at the
+  first extent; several `iloc` extents are concatenated. A seek re-arms
+  the single frame.
+
+**Measured against `ffprobe 9.0.1`**, `-show_streams -show_stream_groups
+-show_format -of json` flattened and compared key by key:
+
+| fixture | how made | fields ref / ours | agree |
+|---|---|---|---|
+| `single.avif` | `ffmpeg -c:v libsvtav1 -f avif`, 128×96 | 58 / 59 | 58 |
+| `grid.avif` | 2×2 of 64×64 AV1 tiles, `grid` in `idat` (self-built, see below) | 415 / 423 | 415 |
+| `grid_thumb.avif` | the same plus a non-hidden `thmb` item | 461 / 470 | 461 |
+| `grid_jpeg.heif` | 2×2 of 64×64 JPEG items (`jpeg`/`mif1`) | 423 / 423 | **423** |
+
+Every field the reference prints, this crate prints with the same value —
+stream count and order, `id`, sizes, `pix_fmt`, `r_frame_rate`,
+`time_base`, `nb_frames`, `extradata_size`, `disposition.default/dependent`,
+`title`, the group's `id`/`nb_streams`/`type`/`coded_*`/`width`/`height`,
+every tile's `stream_index`/`tile_horizontal_offset`/`tile_vertical_offset`,
+`nb_stream_groups`. The one extra field on the AV1 files is `field_order`
+(`progressive`), which the AV1 parser sets through `Discovery` for a track
+and an item alike; the reference prints it for the track and not the item.
+Left as is — it is a parser fact, not a container one.
+
+**The grid fixtures are self-constructed** (`ffmpeg` cannot write a grid),
+which is weaker evidence than a reference-written file *until* the
+reference reads them: `ffprobe` reports the expected four tiles and one
+`Tile Grid` group, and `ffmpeg -i grid.avif -f rawvideo` decodes each to a
+128×128 frame that is **byte-identical** to the four tile decodes laid out
+at the group's own offsets — so the files are what they claim, and
+ffmpeg's composite is the oracle for ours.
+
+**End to end through the binary** (`vaco -i grid_jpeg.heif -f rawvideo`,
+the CLI composing the primary grid — see `docs/app/vaco-cli.md`): the
+128×128 output equals the composition of this project's own decodes of
+the four JPEG tiles byte for byte (tile placement exact; a transposed or
+offset tile would show as whole blocks differing), and differs from
+ffmpeg's composite by ±1 on 172 of 24 576 bytes — the same 6-of-6144
+±1 difference `vaco -i tile.jpg -f rawvideo` shows against ffmpeg on each
+tile alone, i.e. `vaco-codec-jpeg`'s IDCT rounding, not anything in the
+item path. AV1 items are reported but not decodable in the default build
+(no AV1 decoder is registered), and HEVC's decoder is feature-gated as
+patent-encumbered, so the pixel check uses `jpeg` items.
 
 ## Deferred
 
 Named so the next author knows what is absent rather than broken:
 
-* **HEIF/AVIF.** The extension list claims `.avif`/`.heic` because the reference
-  does, but `meta ▸ iloc/iinf/iprp/iref` is not read and there is no
-  `TileGrid` stream group. Not attempted this pass — it is a genuinely
-  different structure (items, not tracks) and the larger half of the issue it
-  belongs to; `vaco-format-isom` has zero existing support to build on, unlike
-  every other box family this crate reads.
+* ~~**HEIF/AVIF.**~~ Done 2026-09-03 — see *HEIF/AVIF items* below. Still
+  absent there, by name: `iovl`/`iden` derived items, `auxl` alpha/depth
+  planes as anything but ordinary streams, `irot`/`imir`/`clap` (parsed as
+  properties, not applied), `construction_method 2`, `dref`-external items,
+  and a file that has *both* `moov` tracks and `meta` items (an image
+  sequence with a primary still) — the `moov` wins and the items are ignored.
 * **`sidx` for seeking.** Collected (see *`sidx` and `mfra`* above) but not
   consulted by `place_fragment` — `mfra`, when present, already answers the
   same question more precisely (per-sample, not per-subsegment). A source

@@ -32,9 +32,13 @@ pub const MAX_EXTENTS_PER_ITEM: usize = 256;
 pub const MAX_REFS_PER_ENTRY: usize = 4096;
 
 /// One `infe` entry: what an item *is*.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ItemInfo {
     pub item_id: u32,
+    /// `item_name`, the null-terminated UTF-8 string after `item_type` in
+    /// `infe` version 2+ (`"Color"`, `"Alpha"`, a grid's `"Grid"`). Empty
+    /// when absent, which is what a writer that has nothing to say emits.
+    pub name: String,
     /// The coding format (`av01`, `hvc1`, ...) or a derived-image type
     /// (`grid`, `iovl`). All-zero for `infe` versions before 2, which name
     /// the type in a field this crate does not read (unmeasured — every
@@ -67,8 +71,16 @@ impl ItemInfo {
         } else {
             FourCc::new(b"\0\0\0\0")
         };
+        let name = if full.version >= 2 {
+            let rest = full.body.get(r.pos()..).unwrap_or(&[]);
+            let end = rest.iter().position(|&b| b == 0).unwrap_or(rest.len());
+            String::from_utf8_lossy(rest.get(..end).unwrap_or(&[])).into_owned()
+        } else {
+            String::new()
+        };
         Some(Self {
             item_id,
+            name,
             item_type,
             hidden: full.flags & 1 != 0,
         })
@@ -120,6 +132,9 @@ pub enum ConstructionMethod {
 pub struct ItemLocation {
     pub item_id: u32,
     pub construction_method: ConstructionMethod,
+    /// `data_reference_index`: 0 for this file, otherwise a 1-based `dref`
+    /// entry naming another file — which no caller here follows.
+    pub data_reference_index: u16,
     /// `(offset, length)` pairs, `base_offset` already folded in.
     pub extents: Vec<(u64, u64)>,
 }
@@ -175,7 +190,7 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
         } else {
             ConstructionMethod::FileOffset
         };
-        let _data_reference_index = r.be16();
+        let data_reference_index = r.be16();
         let base_offset = read_sized(&mut r, base_offset_size);
         let extent_count = r.be16();
         let mut extents = Vec::new();
@@ -192,6 +207,7 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
         out.push(ItemLocation {
             item_id,
             construction_method,
+            data_reference_index,
             extents,
         });
         if r.overrun() {
@@ -374,6 +390,7 @@ mod tests {
         let info = ItemInfo::parse(&first_box(&raw)).unwrap();
         assert_eq!(info.item_id, 1);
         assert_eq!(info.item_type, FourCc::new(b"av01"));
+        assert_eq!(info.name, "Color");
         assert!(!info.hidden);
     }
 

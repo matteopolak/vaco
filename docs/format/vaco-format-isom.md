@@ -746,22 +746,16 @@ Named so the demuxer's author knows what is not here:
   the CICP codes onto `vaco_color`'s enums and reading the `tmcd` track's
   actual sample is `vaco-demux-mp4`'s job.
 * **Sample groups.** `sbgp`/`sgpd` are skipped.
-* ~~**HEIF/AVIF item model.**~~ Box-layer parsing done 2026-08-28 — `heif`
-  (below); **not wired into any demuxer**, which is the larger half of the
-  work: `vaco-demux-mp4::Mp4Demuxer::open` refuses outright with "no movie"
-  for a file that has `meta`+`mdat` and no `moov` at all — every real
-  single-image AVIF/HEIC file this crate was tested against is exactly
-  that. `moov`/`moov_offset`/etc. are non-optional fields threaded through
-  essentially the whole demuxer, so making a `moov`-less open path work is
-  a real structural change to a heavily-tested, actively-shared file, not
-  an additive one. See `heif`'s own module doc for exactly what was
-  measured against a real `ffmpeg 8.1 -f avif` file (`iloc`, `infe`, `ipma`
-  all byte-pinned) and what was transcribed from the specification instead
-  (`iref`, multi-extent/`idat` `iloc`, and `ImageGrid`/`TileGrid` — the
-  last of which also wants the stream-group model another agent is
-  building in `vaco-format-core`, not a `vaco-demux-mp4`-local side-data
-  field, so grid *composition* reporting should wait for that rather than
-  inventing a parallel shape here).
+* ~~**HEIF/AVIF item model.**~~ Box-layer parsing done 2026-08-28 (`heif`),
+  and wired into `vaco-demux-mp4` on 2026-09-03: a `meta`+`mdat` file with
+  no `moov` now opens, every coded item is a one-packet stream and a `grid`
+  item is a `TileGrid` stream group — see `docs/format/vaco-demux-mp4.md`'s
+  *HEIF/AVIF* section for what was measured. `ItemInfo` gained the
+  `item_name` (a stream's `title` tag) and `ItemLocation` its
+  `data_reference_index` for that. Still box-layer only here: `iovl`/`iden`
+  derived items, `auxl`/`thmb` reference semantics, `irot`/`imir`/`clap`
+  transformative properties (parsed as ordinary property boxes, not
+  applied).
 * **`cmov`.** zlib-compressed `moov`; plan 18 already tiers it as v0.2.
 * ~~**Box writing.**~~ Done: `writer` (below). `build` still exists separately
   for deliberately-invalid fixtures; `writer` is the validated production path

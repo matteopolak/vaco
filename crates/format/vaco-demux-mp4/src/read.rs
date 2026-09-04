@@ -110,12 +110,26 @@ pub(crate) struct Pending {
     pub index: u32,
 }
 
+/// One `senc` record, pre-resolved: the sample's IV widened to a counter
+/// block, and its subsample table (empty for full-sample encryption).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SencSample {
+    pub counter: [u8; 16],
+    /// `(BytesOfClearData, BytesOfProtectedData)` pairs, in order.
+    pub subsamples: Vec<(u16, u32)>,
+}
+
+/// Largest subsample table read for one sample. A NAL-structured sample has
+/// one entry per NAL unit; 4096 is far past any real slice count and stops a
+/// corrupt `subsample_count` from turning into a large allocation.
+const MAX_SUBSAMPLES: u16 = 4096;
+
 /// Owned per-track state for decrypting a `cenc`-protected, non-fragmented
 /// track, built once a usable key and a real `senc` are both in hand — see
 /// `Mp4Options::decryption_key` and the crate doc's *Common Encryption*
 /// section.
 ///
-/// Holds an **owned** copy of `senc`'s IV records rather than a borrow: a
+/// Holds an **owned** copy of `senc`'s records rather than a borrow: a
 /// `Reader` outlives any one `Movie::parse` borrow of `self.moov` (the same
 /// reason `SampleTable` itself is re-parsed per refill instead of held
 /// across calls — see this module's own doc comment). The copy is bounded by
@@ -124,36 +138,112 @@ pub(crate) struct Pending {
 #[derive(Debug, Clone)]
 pub(crate) struct Decryptor {
     pub key: [u8; 16],
-    pub iv_size: u8,
-    pub has_subsamples: bool,
-    pub records: Vec<u8>,
+    pub samples: Vec<SencSample>,
 }
 
 impl Decryptor {
-    /// Decrypt `payload` in place for sample `index`. `false` when no IV is
-    /// available for this sample (a subsample table, or `index` past what
-    /// `senc` declared) — the caller turns that into a reported error rather
-    /// than silently handing back ciphertext.
+    /// Resolve `senc`'s per-sample records (ISO/IEC 23001-7 §7.2): `iv_size`
+    /// bytes of IV, then — when the box's flags say so — a 16-bit
+    /// `subsample_count` and that many `(u16 clear, u32 protected)` pairs.
+    /// `None` when the records run out before `sample_count` samples have
+    /// been read, so a truncated table refuses rather than decrypting the
+    /// samples it does cover and handing back ciphertext for the rest.
+    pub(crate) fn parse(
+        key: [u8; 16],
+        records: &[u8],
+        sample_count: u32,
+        iv_size: u8,
+        has_subsamples: bool,
+    ) -> Option<Self> {
+        if !matches!(iv_size, 8 | 16) {
+            return None;
+        }
+        let mut r = vaco_bitstream::ByteReader::new(records);
+        let mut samples = Vec::new();
+        for _ in 0..sample_count {
+            let iv = r.bytes(usize::from(iv_size));
+            let mut counter = [0u8; 16];
+            let n = iv.len().min(16);
+            if let (Some(dst), Some(src)) = (counter.get_mut(..n), iv.get(..n)) {
+                dst.copy_from_slice(src);
+            }
+            let mut subsamples = Vec::new();
+            if has_subsamples {
+                let count = r.be16();
+                if count > MAX_SUBSAMPLES {
+                    return None;
+                }
+                for _ in 0..count {
+                    let clear = r.be16();
+                    let protected = r.be32();
+                    subsamples.push((clear, protected));
+                }
+            }
+            if r.overrun() {
+                return None;
+            }
+            samples.push(SencSample {
+                counter,
+                subsamples,
+            });
+        }
+        Some(Self { key, samples })
+    }
+
+    /// Decrypt `payload` in place for sample `index`. `false` when `senc`
+    /// declared no record for this sample or the record's subsample table
+    /// does not fit the payload — the caller turns that into a reported
+    /// error rather than silently handing back ciphertext.
+    ///
+    /// For a subsample-encrypted sample the protected ranges form **one**
+    /// continuous AES-CTR stream (§9.5: the block counter is not reset and a
+    /// partial block carries over into the next range), so they are gathered,
+    /// decrypted once and scattered back. **Measured** against
+    /// `ffmpeg 9.0.1 -decryption_key` on ffmpeg's own `cenc-aes-ctr` output:
+    /// every decrypted H.264 and AAC packet matched the clear encode.
     pub(crate) fn decrypt(&self, index: u32, payload: &mut [u8]) -> bool {
-        if self.has_subsamples || self.iv_size == 0 {
+        let Some(sample) = usize::try_from(index)
+            .ok()
+            .and_then(|i| self.samples.get(i))
+        else {
             return false;
+        };
+        if sample.subsamples.is_empty() {
+            vaco_crypto::ctr_apply_aes128(&self.key, &sample.counter, payload);
+            return true;
         }
-        let stride = usize::from(self.iv_size);
-        let Ok(index) = usize::try_from(index) else {
-            return false;
-        };
-        let Some(start) = stride.checked_mul(index) else {
-            return false;
-        };
-        let Some(iv) = self.records.get(start..start.saturating_add(stride)) else {
-            return false;
-        };
-        let mut counter = [0u8; 16];
-        let n = iv.len().min(16);
-        if let (Some(dst), Some(src)) = (counter.get_mut(..n), iv.get(..n)) {
-            dst.copy_from_slice(src);
+        let mut ranges = Vec::with_capacity(sample.subsamples.len());
+        let mut at = 0usize;
+        for &(clear, protected) in &sample.subsamples {
+            let start = at.checked_add(usize::from(clear));
+            let end = start.and_then(|s| s.checked_add(usize::try_from(protected).ok()?));
+            let (Some(start), Some(end)) = (start, end) else {
+                return false;
+            };
+            if end > payload.len() {
+                return false;
+            }
+            ranges.push(start..end);
+            at = end;
         }
-        vaco_crypto::ctr_apply_aes128(&self.key, &counter, payload);
+        let mut protected = Vec::with_capacity(ranges.iter().map(ExactSizeIterator::len).sum());
+        for r in &ranges {
+            if let Some(part) = payload.get(r.clone()) {
+                protected.extend_from_slice(part);
+            }
+        }
+        vaco_crypto::ctr_apply_aes128(&self.key, &sample.counter, &mut protected);
+        let mut taken = 0usize;
+        for r in &ranges {
+            let n = r.len();
+            if let (Some(dst), Some(src)) = (
+                payload.get_mut(r.clone()),
+                protected.get(taken..taken.saturating_add(n)),
+            ) {
+                dst.copy_from_slice(src);
+            }
+            taken = taken.saturating_add(n);
+        }
         true
     }
 }
@@ -190,6 +280,12 @@ pub(crate) enum Source {
     AttachedPic {
         offset: u64,
         size: u32,
+        emitted: bool,
+    },
+    /// One HEIF/AVIF item (ISO/IEC 23008-12): a single coded picture whose
+    /// bytes `iloc` places as one or more extents, concatenated in order.
+    Item {
+        extents: Vec<(u64, u64)>,
         emitted: bool,
     },
 }
