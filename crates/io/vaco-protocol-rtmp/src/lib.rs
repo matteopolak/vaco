@@ -3,10 +3,8 @@
 //!
 //! # What this crate is (so far)
 //!
-//! PR-09a (#552, chunk stream), PR-09b (#553, AMF0 + command flow) and
-//! PR-09c (#554, tunnelled variants + `rtmps`) all land in this one crate
-//! — epic #61's own split is "single-writer ownership" across issues, not
-//! across crates. It is still a transport-framing library, not yet a
+//! The chunk stream, AMF0/command flow, and tunnelled variants all land in
+//! this one crate. It is still a transport-framing library, not yet a
 //! `vaco_protocol_core::Protocol` — there is no `rtmp:`/`rtmps:` registry
 //! entry, because that needs socket ownership this crate does not have.
 //!
@@ -25,20 +23,20 @@
 //! encodes and decodes the six message-type-1..6 payloads every RTMP
 //! session exchanges regardless of what is layered on top.
 //!
-//! [`amf0`] (#553) encodes/decodes the marker-byte-tagged AMF0 value
+//! [`amf0`] encodes/decodes the marker-byte-tagged AMF0 value
 //! format `adobe-amf0-spec` defines — Number, Boolean, String/Long
 //! String, Object, Null, Undefined, ECMA Array, Strict Array, Date; see
 //! that module's own docs for the six deliberately-unsupported types.
-//! [`command`] (#553) builds and parses NetConnection/NetStream command
+//! [`command`] builds and parses NetConnection/NetStream command
 //! messages on top: `connect`/`createStream`/`publish`/`play` and their
 //! named `_result`/`onStatus` responses (§7.2's own status codes,
 //! `NetConnection.Connect.Success`/`NetStream.Publish.Start`/
 //! `NetStream.Play.Start`).
 //!
-//! # No reference server on this machine (#553/#554)
+//! # No reference server on this machine
 //!
 //! No live `nginx-rtmp`/`srs`/Wowza-class RTMP server was reachable to
-//! interoperate against, so #553's own Acceptance Criterion ("publish and
+//! interoperate against, so the reference-server acceptance criterion ("publish and
 //! play round-trip against a reference server with the same command
 //! sequence the reference emits") is named unreachable in the reference-
 //! peer sense, matching `vaco-protocol-srt`/`vaco-protocol-rist`'s own
@@ -50,7 +48,7 @@
 //! codes §7.2 itself names. Self-consistency evidence, not interop
 //! evidence — stated as such, not as a substitute for the real thing.
 //!
-//! # `rtmps` and the tunnelled variants (#554)
+//! # `rtmps` and the tunnelled variants
 //!
 //! **`rtmps` needs no code here.** Every public entry point in this crate
 //! (`Dechunker::feed`, `chunk_message`, `handshake::build_*`) takes or
