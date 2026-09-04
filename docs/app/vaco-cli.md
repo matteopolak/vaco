@@ -563,7 +563,9 @@ part of that exactly.
 
 ### CL-21: `-fps_mode`, `-enc_time_base`, and `-frame_drop_threshold`
 
-All three options this work package names are implemented. Read
+All three options this work package names are implemented. The issue remains
+open for its separate multi-frame timestamp differential; this build still
+lacks an end-to-end multi-frame video fixture it can decode. Read
 `crate::fps_mode`'s and `crate::enc_time_base`'s own module docs for the full
 account — this is the summary.
 
@@ -1099,7 +1101,7 @@ down is a decision and one that is not is a surprise.
 | `-report`/`-progress` implemented (final block only for `-progress`, see above); `-stats` implemented separately; exit codes 69/255 not implemented (named, see above) — CLOSED | CL-17 |
 | Decoder and encoder nodes, `-frames`, `-pass` | CL-19 |
 | Simple filtergraph binding, `-s`/`-aspect`/`-pix_fmt` | CL-20 |
-| `-fps_mode`, `-enc_time_base`, and `-frame_drop_threshold` implemented (see above) — CLOSED | CL-21 |
+| `-fps_mode`, `-enc_time_base`, and `-frame_drop_threshold` implemented; the real multi-frame CLI differential remains open (see above) — OPEN | CL-21 |
 | Parsing and per-frame evaluation implemented; no live-encode wiring exists in this build (see above) — CLOSED | CL-22 |
 | `-shortest`, `-apad`, `-isync` | CL-23 |
 | The ~600-case timestamp differential matrix | CL-24 |
