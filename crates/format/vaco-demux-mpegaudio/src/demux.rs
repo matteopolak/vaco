@@ -254,6 +254,10 @@ impl Demuxer for MpegAudioDemuxer {
     fn duration(&self) -> Option<vaco_core::Duration> {
         self.stream.duration()
     }
+
+    fn duration_exact(&self) -> Option<vaco_core::ExactDuration> {
+        self.stream.duration_exact()
+    }
 }
 
 fn attach_skip(packet: &mut Packet, start: u32, end: u32) {
@@ -632,6 +636,27 @@ mod vbr_tag_tests {
                 .expect("Layer III stream opens");
         let first = demux.read_packet().expect("first audio frame is emitted");
         assert_eq!(first.pos, Some(len as u64));
+        assert!(matches!(demux.read_packet(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn vbri_aggregate_duration_keeps_native_clock_exact() {
+        let (data, _) = two_frames_with_vbri(mpeg1_header(Layer::III));
+        let mut demux =
+            MpegAudioDemuxer::open(Box::new(MemorySource::new(data)), &FormatOptions::default())
+                .expect("Layer III stream opens");
+
+        assert_eq!(demux.streams()[0].duration_ts, Some(737_280));
+        assert_eq!(
+            demux
+                .duration_exact()
+                .map(vaco_core::ExactDuration::as_ratio),
+            Some((64, 1_225))
+        );
+        assert_eq!(
+            demux.read_packet().expect("one audio packet").pts.ticks(),
+            Some(0)
+        );
         assert!(matches!(demux.read_packet(), Err(Error::Eof)));
     }
 }

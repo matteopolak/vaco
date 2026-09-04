@@ -88,6 +88,11 @@ reported `time_base=1/14112000`. `14112000` is the least common multiple of
 the nine valid MPEG sample rates, so every one converts to a whole number of
 ticks; `TIME_BASE` is hard-coded to it rather than derived per stream.
 
+When a Xing or VBRI tag supplies a total frame count, the aggregate duration
+is retained on that native clock through `duration_exact()`. The legacy
+`duration()` API continues to expose its rounded microsecond value for
+compatibility.
+
 ---
 
 ## Fidelity: what was measured against `ffprobe` 8.1, and what was not
