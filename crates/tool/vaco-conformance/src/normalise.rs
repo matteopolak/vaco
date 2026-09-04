@@ -45,17 +45,12 @@ pub enum Invocation {
     /// `probe` and supplies it positionally through
     /// [`Chain::positional_suffix`] instead — see that method.
     ///
-    /// OBSERVED (`ffmpeg` 8.1): a `vaco` build as of this writing does not
-    /// parse a bare `-flags` option at all (`Unrecognized option 'flags'.
-    /// Error splitting the argument list`, exit 8) — every transcode case
-    /// declaring plain `bitexact` fails to launch until that CLI gap closes.
-    /// Recorded in `planning/CONFORMANCE-FINDINGS.md`, not silently patched
-    /// around here: this normaliser keeps emitting both flags because a case
-    /// that *encodes* (not just copies) needs `-flags +bitexact` too, and
-    /// papering over a real gap in the tool under test by quietly weakening
-    /// what the harness asks it to do is exactly the failure mode §1.4.2
-    /// exists to prevent. [`Invocation::BitExactCopy`] is the narrower,
-    /// already-usable alternative for `-c copy` cases.
+    /// OBSERVED (`ffmpeg` 8.1): the tested `vaco` build rejected bare `-flags`
+    /// with `Unrecognized option 'flags'. Error splitting the argument list`
+    /// and exit 8. This normaliser still emits both flags because encoding
+    /// cases need `-flags +bitexact`; silently dropping it would weaken the
+    /// requested deterministic mode. [`Invocation::BitExactCopy`] is the
+    /// narrower alternative for `-c copy` cases.
     BitExact,
     /// Adds `-fflags +bitexact` alone — never `-flags` — positioned the same
     /// way as [`Invocation::BitExact`].

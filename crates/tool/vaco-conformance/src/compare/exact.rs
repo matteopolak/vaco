@@ -1,4 +1,4 @@
-//! C0 / C1 — byte equality (plan 13 §1.2).
+//! C0 / C1 byte equality.
 //!
 //! # What it is
 //!
@@ -96,9 +96,8 @@ pub fn compare(case: &Case, pair: &Pair<'_>, captures: &[Capture]) -> Verdict {
 /// presence as well as content: a case can declare `output-file` without
 /// either side having written one (nothing to compare — not this
 /// comparator's business, `exit-code` already covers "did it run"), but a
-/// case where **one** side wrote a file and the other did not is exactly the
-/// silent-success failure mode §6 of `planning/CONFORMANCE-FINDINGS.md`
-/// records: exit 0, a plausible summary, and no file.
+/// case where **one** side wrote a file and the other did not is a
+/// silent-success failure: exit 0, a plausible summary, and no file.
 fn compare_output_file(mode: &'static str, pair: &Pair<'_>) -> Option<DiffReport> {
     match (pair.ours_output_file, pair.theirs_output_file) {
         (None, None) => None,
@@ -509,7 +508,7 @@ mod tests {
         let b = obs("", Some(0));
         let mut pair = Pair::new(&a, &b);
         pair.theirs_output_file = Some(b"reference wrote this");
-        // ours_output_file stays None: exit 0, no file — exactly finding #6.
+        // `ours_output_file` stays `None`: exit 0 with no output file.
         match super::compare(&c, &pair, &[Capture::OutputFile]) {
             Verdict::Divergence(report) => {
                 assert!(

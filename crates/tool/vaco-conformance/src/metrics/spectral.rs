@@ -1,7 +1,4 @@
-//! A spectral distance metric for audio: log-spectral distance (LSD), a
-//! standard signal-processing quantity (not `FFmpeg`- or codec-specific — see
-//! e.g. Rabiner & Juang's speech-processing texts for the same formula
-//! under the same name), computed block-by-block via
+//! Log-spectral distance (LSD) for audio, computed block-by-block with
 //! `vaco_tx::reference::rdft`.
 //!
 //! ```text
@@ -11,42 +8,27 @@
 //! LSD = mean over blocks
 //! ```
 //!
-//! LSD is naturally "lower is better" (`0` at identity), which inverts
-//! [`crate::compare::quality::Metric`]'s "higher is better" convention — so
-//! [`SpectralDistance::score`] returns `-LSD`, exactly as that trait's own
-//! docs say a naturally-inverted metric should.
+//! LSD is naturally lower-is-better and zero at identity, so
+//! [`SpectralDistance::score`] returns its negation to satisfy [`Metric`]'s
+//! higher-is-better contract.
 //!
 //! # Why `vaco_tx::reference::rdft` and not `rustfft`
 //!
-//! `rustfft` is a **dev-dependency only** in this workspace (see the root
-//! `Cargo.toml`'s own comment on it): it exists as a fast oracle for
-//! `vaco-tx`'s own tests above the size where the O(n²) direct definitions
-//! get slow, not as a general-purpose transform for other crates to build
-//! features on. `vaco-tx`'s `reference` module, by contrast, is explicitly
-//! documented as existing so that "downstream conformance work" has a
-//! transform "correct by inspection" to depend on — which is exactly this
-//! use. The direct O(n²) cost is a real, accepted trade at the block sizes
-//! below; see "Performance" further down.
+//! `rustfft` is a dev-only test oracle, while `vaco_tx::reference` is the
+//! workspace's inspection-friendly transform for conformance work. Its O(n²)
+//! cost is accepted at the block sizes below.
 //!
 //! # Scope
 //!
-//! Treats `Signal::planes[0]` as one interleaved-or-planar-doesn't-matter
-//! channel of `f64`-convertible samples read via [`crate::metrics::sample`]
-//! — i.e. it scores one channel at a time, the same way [`super::psnr::Psnr`]
-//! scores one plane at a time. A caller comparing multi-channel audio should
-//! call this once per channel (packed into `Signal` as separate "planes",
-//! matching how this project's `Signal` already generalises video planes)
-//! and combine the results the way it combines `Psnr::average`, rather than
-//! this metric averaging channels internally and hiding a per-channel
-//! divergence the way AGENT-CONSTRAINTS.md's AAC 5.1 story warns about.
+//! `Signal::planes[0]` is one channel of samples read through
+//! [`crate::metrics::sample`]. Multi-channel callers must score each channel
+//! separately so averaging cannot hide a channel-specific divergence.
 //!
 //! # Performance
 //!
-//! `BLOCK = 512` gives an O(512²) ≈ 262k-operation DFT per block per signal
-//! via the O(n²) reference transform — fine for conformance-scale clips (a
-//! few hundred blocks), too slow for scoring a full-length file in a PR
-//! gate. That is an accepted, documented trade for correctness-first
-//! conformance work, not a claim this is production-speed.
+//! `BLOCK = 512` costs roughly 262k operations per block per signal. That is
+//! suitable for conformance clips of a few hundred blocks, not full-length
+//! per-frame scoring.
 
 use crate::compare::quality::{Metric, Signal};
 use crate::metrics::sample::{geometry_matches, sample_at};

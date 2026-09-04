@@ -1,12 +1,9 @@
-//! C10 — quality-band comparison (plan 13 §1.11.2; work package X-04, `#253`).
+//! Quality-band comparison for lossy encoders.
 //!
-//! # What it is
-//!
-//! Encoder conformance: instead of comparing bitstream bytes (meaningless
-//! for a lossy encoder's own rate–distortion search — see plan 13 §1.11),
-//! both sides' *reconstructed* output is scored against the common source
-//! with a [`Metric`], and the comparison is a band around the reference's
-//! own score plus bounds on bitstream size and encode time.
+//! Bitstream equality is not meaningful when encoders perform independent
+//! rate–distortion searches. Instead, a [`Metric`] scores both reconstructed
+//! outputs against the same source, with additional limits on bitstream size
+//! and encode time.
 //!
 //! ```text
 //! source ──┬─▶ reference encode ──▶ ref bitstream ──▶ decode ──▶ ref recon
@@ -17,28 +14,16 @@
 //!          time(our encode)           ≤ time(ref encode)           × Δt
 //! ```
 //!
-//! (`reference decoder accepts our bitstream` / `our decoder accepts the
-//! reference bitstream` are C8/X4 and C8/X3 respectively — a different mode,
-//! not this one.)
+//! Decoder acceptance is a separate comparison mode.
 //!
-//! # What is implemented, and what is still a seam
+//! [`default_registry`] supplies PSNR, SSIM, and audio spectral distance.
+//! When a [`Pair`] carries [`QualitySignals`] through
+//! [`crate::compare::Pair::with_signals`], [`compare`] computes both scores,
+//! checks the size and wall-time bounds, and reports the failed measurements.
 //!
-//! [`Metric`] is the extension point; [`default_registry`] wires up the real
-//! implementations in `vaco_conformance::metrics` (PSNR, SSIM, a spectral
-//! distance for audio — see that module's own docs, including why VMAF is a
-//! named cut rather than a silent one). [`compare`] uses that registry and,
-//! when a [`Pair`] carries [`QualitySignals`] (via
-//! [`crate::compare::Pair::with_signals`]), measures for real: it computes
-//! both sides' score against the shared source, checks the bitstream-size
-//! and encode-time bounds from `pair`'s own [`crate::run::Observation::wall`]
-//! and output-file lengths, and returns [`Verdict::Agree`] or a
-//! [`Verdict::Divergence`] carrying the numbers that failed.
-//!
-//! **What is still a seam**: nothing in this crate decodes a bitstream back
-//! to raw samples yet, so a case whose [`Pair`] has no attached
-//! [`QualitySignals`] still skips honestly — see
-//! [`crate::compare::Pair::signals`]'s own docs for exactly what a caller
-//! needs to supply to turn that skip into a real measurement.
+//! This crate does not decode bitstreams back to raw samples. A pair without
+//! attached signals therefore skips explicitly; callers must provide the
+//! source and both reconstructions to enable measurement.
 
 use std::collections::BTreeMap;
 
