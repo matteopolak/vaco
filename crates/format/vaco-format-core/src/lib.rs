@@ -1341,7 +1341,9 @@ mod tests {
             streams: vec![stream],
         };
         assert_eq!(
-            demuxer.duration_exact().map(vaco_core::ExactDuration::as_ratio),
+            demuxer
+                .duration_exact()
+                .map(vaco_core::ExactDuration::as_ratio),
             Some((256, 11_025))
         );
     }
