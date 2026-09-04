@@ -83,7 +83,7 @@ impl Filter {
         self.next_pts = self
             .next_pts
             .saturating_add(i64::try_from(samples).unwrap_or(0));
-        f.duration = vaco_core::Duration(i64::try_from(samples).unwrap_or(0));
+        f.set_duration_ticks(i64::try_from(samples).unwrap_or(0));
         Ok(f)
     }
 }

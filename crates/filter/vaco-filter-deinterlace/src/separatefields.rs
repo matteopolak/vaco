@@ -61,14 +61,14 @@ impl FrameFilter for Filter {
         // Halve the duration between the two fields when known; a real
         // per-field PTS offset would need the output link's time base
         // (not verified against the reference here — see the crate docs).
-        if input.duration.0 > 0 {
+        if input.duration_ticks() > 0 {
             #[allow(
                 clippy::integer_division,
                 reason = "an approximate half-duration split for display, not an exact-count computation"
             )]
-            let half = input.duration.0 / 2;
-            first.duration = vaco_core::Duration(half);
-            second.duration = vaco_core::Duration(input.duration.0.saturating_sub(half));
+            let half = input.duration_ticks() / 2;
+            first.set_duration_ticks(half);
+            second.set_duration_ticks(input.duration_ticks().saturating_sub(half));
             if let Some(p) = input.pts.ticks() {
                 second.pts = vaco_core::Timestamp::new(p.saturating_add(half));
             }

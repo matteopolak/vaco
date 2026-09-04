@@ -91,8 +91,8 @@ impl ShowInfo {
         let pts_str =
             pts_ticks.map_or_else(|| "-9223372036854775808".to_owned(), |t| t.to_string());
         let pts_time = pts_ticks.map_or_else(|| "N/A".to_owned(), seconds);
-        let duration_str = frame.duration.0.to_string();
-        let duration_time = seconds(frame.duration.0);
+        let duration_str = frame.duration_ticks().to_string();
+        let duration_time = seconds(frame.duration_ticks());
 
         let interlaced = frame.flags.contains(FrameFlags::INTERLACED);
         let i_field = if !interlaced {
@@ -238,7 +238,7 @@ mod tests {
         }
         frame.pts = vaco_core::Timestamp::new(0);
         frame.time_base = Rational::new(1, 1);
-        frame.duration = vaco_core::Duration(1);
+        frame.set_duration_ticks(1);
 
         let mut f = ShowInfo::default();
         let out = f.step(frame);

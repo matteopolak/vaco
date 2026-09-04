@@ -412,7 +412,7 @@ impl FrameFilter for Filter {
         out_frame.pts = resampler_pts(resampler, &input);
         out_frame.time_base =
             vaco_core::Rational::new(1, i32::try_from(output_spec.sample_rate).unwrap_or(1));
-        out_frame.duration = vaco_core::Duration(i64::try_from(written).unwrap_or(0));
+        out_frame.set_duration_ticks(i64::try_from(written).unwrap_or(0));
         self.advance_next_pts(out_frame.pts, written);
         Ok(FrameOut::One(out_frame))
     }
@@ -536,7 +536,7 @@ impl FrameFilter for Filter {
         };
         out_frame.time_base =
             vaco_core::Rational::new(1, i32::try_from(output_spec.sample_rate).unwrap_or(1));
-        out_frame.duration = vaco_core::Duration(i64::try_from(written).unwrap_or(0));
+        out_frame.set_duration_ticks(i64::try_from(written).unwrap_or(0));
         self.advance_next_pts(out_frame.pts, written);
         Ok(FrameOut::One(out_frame))
     }
