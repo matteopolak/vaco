@@ -1,87 +1,42 @@
-//! Suite manifests and matrix expansion (plan 13 §1.5.1).
-//!
-//! # What it is
+//! Suite manifests and matrix expansion.
 //!
 //! Cases are **data, not code**. A suite is one TOML file declaring its media,
 //! its argument axes, and one `[compare]` block; the loader takes the cartesian
 //! product of the axes, subtracts the declared exclusions, and yields one
-//! [`Case`] per combination. A twenty-line file becomes thousands of cases,
-//! which is the only way the case count in §1.8 is reachable — and a generator
-//! written in code would not be reviewable.
-//!
-//! # How it works
+//! [`Case`] per combination.
 //!
 //! ```toml
 //! schema = 1
 //! suite  = "probe-isobmff"
 //! tool   = "probe"
-//! tier   = "core"
-//! owner  = "@isobmff-owner"
-//!
 //! [[media]]
-//! id       = "mpeg4-30f"
-//! source   = "generated://mpeg4-30f.mp4"
-//! tags     = ["video"]
-//! generate = ["-f", "lavfi", "-i", "testsrc=size=320x240:rate=25:d=1.2",
-//!             "-c:v", "mpeg4", "-f", "mp4"]
-//!
+//! id = "sample"
+//! source = "generated://sample.mp4"
 //! [[axis]]
-//! name   = "writer"
-//! values = [
-//!   { id = "json", argv = ["-of", "json"] },
-//!   { id = "xml",  argv = ["-of", "xml"] },
-//! ]
-//!
-//! [[exclude]]
-//! when   = { writer = ["xml"] }
-//! reason = "documented as incompatible with -sexagesimal"
-//!
+//! name = "writer"
+//! values = [{ id = "json", argv = ["-of", "json"] }]
 //! [compare]
-//! mode    = "exact-bytes"
+//! mode = "exact-bytes"
 //! capture = ["stdout", "exit-code"]
-//! timeout = "20s"
-//!
-//! [normalise]
-//! invocation = ["bitexact", "hide-banner"]
-//! output     = ["line-endings"]
 //! ```
 //!
 //! `generate` synthesises the media with the reference binary at run time
-//! rather than fetching it, and the runner appends the output path. That is
-//! what makes the harness usable before the corpus machinery of QA-04/X-05
-//! exists, and it stays inside D6: expected values are generated fresh at test
-//! time and discarded, so nothing FFmpeg-derived enters the repository. A case
-//! refers to its media as `{media}`, or `{media:<id>}` when a suite declares
-//! several. An axis value that needs *more* than the one media its case
-//! iterates to (a multi-input `filter`-tool case, most often) names the
-//! rest with `extra_media = ["id", ...]`, resolved by id against the
-//! suite's full `[[media]]` list rather than iterated — declaring three
-//! extra inputs does not multiply the case count into three. A
-//! `[[media]]` entry that exists only to be named this way, never as the
-//! per-case iterated one, marks itself `fixed = true` so `Suite::expand`'s
-//! iteration skips it. See [`AxisValue::extra_media`] and
-//! [`MediaRef::fixed`](crate::case::MediaRef::fixed).
+//! and discards it, so reference-derived expected files do not enter the
+//! repository. `{media}` names the iterated input. Multi-input cases declare
+//! fixed `extra_media` and reference them as `{media:<id>}` without multiplying
+//! the matrix; see [`AxisValue::extra_media`] and [`MediaRef::fixed`].
 //!
 //! Case ids come out as `suite/media/axis=value,axis=value`, in axis
-//! declaration order, which is what makes them stable enough to paste into a
-//! bug report (§1.5.2).
-//!
-//! # Two rules the loader enforces
+//! declaration order, making them stable across runs.
 //!
 //! 1. **A non-empty normalisation chain requires mode `exact-bytes-normalised`,
-//!    not `exact-bytes`.** §1.2 C1 keeps the two modes distinct precisely so a
-//!    reviewer sees the blindness named in the manifest; a loader that let C0
-//!    quietly carry normalisers would defeat that.
+//!    not `exact-bytes`,** so the permitted blindness is explicit.
 //! 2. **`structured-diff` requires a reason.** C6 is weaker than C0 by
-//!    construction and §1.2 forbids using it to launder a failing C0 case, so a
-//!    suite that picks it must say why in `downgrade_reason`.
-//!
-//! # How to change it
+//!    construction, so `downgrade_reason` is mandatory.
 //!
 //! New axes and new comparison parameters are manifest-only changes. Adding a
 //! *structural* key means a field here, a check in [`Suite::parse`], and a
-//! sentence in the crate doc — the manifest is a contract with case authors and
-//! changing it silently breaks every suite at once.
+//! documentation update because the schema is a contract with case authors.
 
 use std::collections::BTreeMap;
 use std::path::Path;

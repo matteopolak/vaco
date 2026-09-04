@@ -1,61 +1,20 @@
-//! C5 support: measuring a deviation's **shape**, not just its size.
+//! Measure a deviation's spatial shape as well as its magnitude.
 //!
-//! # Why this exists
+//! A maximum-error bound cannot distinguish isolated rounding noise from the
+//! same error concentrated in one macroblock or every row but the first.
+//! [`measure`] therefore reports `max_abs`, `mean_abs`, and RMS together with a
+//! [`Shape`] describing where differences occur.
 //!
-//! `planning/AGENT-CONSTRAINTS.md`'s "Byte-exactness is a check, not the bar"
-//! (owner ruling, 2026-08-28) supersedes every bit-exact acceptance criterion
-//! in this project: the reference binary is a sanity check, not a pass/fail
-//! oracle, and a small deviation from it is expected and fine. What still
-//! matters — the thing worth building machinery for — is the distinction the
-//! ruling draws:
+//! [`largest_connected_component`] finds a dominant contiguous region and its
+//! bounding box. [`ClusterStats::clustered_fraction`] also catches repeated
+//! multi-pixel regions when no single component dominates; independent noise
+//! is expected to consist mostly of isolated pixels.
 //!
-//! > Small and unstructured is fine. Structured is a bug. [...] max deviation
-//! > 1-2 spread across a frame → rounding, ship it. [...] error concentrated
-//! > in specific blocks, or on every row but the first [...] → a real defect,
-//! > however small the average.
-//!
-//! A comparator that only asserts `max_abs <= tolerance` cannot see that
-//! distinction: a deviation of 1 on every pixel of one macroblock and a
-//! deviation of 1 scattered independently across the whole frame have the
-//! same `max_abs`, and only one of them is a bug. This module is the missing
-//! half — [`measure`] reports magnitude (`max_abs`/`mean_abs`/`rms`, for
-//! [`crate::case::Tolerance`] to judge) **and** [`Shape`], a plain-language
-//! description of where the deviation sits, so a human reading a case's
-//! output sees "structured, concentrated in rows 4-4 of 8" rather than a
-//! bare number that already looked fine on average.
-//!
-//! # The two examples this project has on record
-//!
-//! Both are named directly in the constraints file, and both are what
-//! [`Shape::Structured`] is built to catch, via one mechanism
-//! ([`largest_connected_component`]) rather than two bespoke heuristics:
-//!
-//! * **"Every row but the first"**: the differing pixels form one contiguous
-//!   region spanning nearly the whole frame minus a clean strip. A connected-
-//!   component pass over the "did this pixel differ" mask finds this as one
-//!   dominant component and reports its bounding box.
-//! * **"Concentrated in specific blocks" / "every macroblock of one type"**:
-//!   either a single dominant region (same case as above, different shape)
-//!   or several same-sized regions scattered around the frame — caught by
-//!   the companion signal, "what fraction of differing pixels sit in a
-//!   multi-pixel component at all" (see [`ClusterStats::clustered_fraction`]):
-//!   independent rounding noise is almost all isolated singletons, so a high
-//!   clustered fraction is itself evidence of structure even before any one
-//!   component dominates.
-//!
-//! # What this module does not do
-//!
-//! It does not decide pass/fail — that stays [`crate::case::Tolerance`]'s
-//! job (magnitude) plus a human or a future C5 policy reading [`Shape`]
-//! (structure). It does not know about codecs, planes, or containers; it
-//! takes two equal-length byte buffers and an optional 2-D [`Geometry`], the
-//! same shape [`crate::compare::raw`]'s C4 already works with. And it works
-//! byte-for-byte, not sample-for-sample: a 16-bit sample's high byte
-//! differing by one looks like a much larger jump than the underlying sample
-//! actually moved. Correct for 8-bit planes and byte streams; a caller
-//! comparing wider samples should reinterpret before calling this, which is
-//! not done here to keep this module's contract to "two byte buffers plus
-//! optional geometry", matching C4's own.
+//! This module does not decide pass/fail. [`crate::case::Tolerance`] judges
+//! magnitude, while callers may separately reject [`Shape::Structured`]. It
+//! has no codec, plane, or container knowledge and compares bytes, not wider
+//! samples. Callers handling samples above 8 bits must reinterpret them before
+//! measurement or byte-level magnitude will be misleading.
 
 /// The 2-D shape a byte buffer represents, when it has one. Audio and other
 /// data with no useful spatial structure passes `None` and still gets

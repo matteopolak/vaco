@@ -1,11 +1,9 @@
-//! `suites.toml` — codec conformance-suite integration beyond `vaco-corpus`'s
-//! own fetcher (work package QA-09, `#181`).
+//! `suites.toml` integration above `vaco-corpus` asset storage.
 //!
 //! # What it is
 //!
-//! `vaco-corpus` (X-05/QA-04, `#180`/`#175`) owns *fetching and storing*
-//! conformance assets, addressed by content hash, in its own
-//! `vaco-media.lock`. This module is the layer above that: which named
+//! `vaco-corpus` owns fetching and storing content-addressed conformance
+//! assets in `vaco-media.lock`. This module records which named
 //! *suite* (a codec's Argon streams, the VP8/VP9 test vectors, `PngSuite`,
 //! flac-test-files, JVT/JCT-VC) a codec's conformance run should draw from,
 //! and what comparison mode (§1.2) that suite's cases should use.

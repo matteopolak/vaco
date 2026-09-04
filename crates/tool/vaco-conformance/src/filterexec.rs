@@ -1,150 +1,32 @@
-//! In-process filter execution for [`crate::case::Tool::Filter`] — "ours"
-//! without a subprocess.
+//! In-process execution for [`crate::case::Tool::Filter`].
 //!
-//! # What it is
+//! There is no `vaco -vf` CLI, so the harness instantiates a filter registry
+//! directly and runs it through a real [`vaco_filter_core::Graph`].
 //!
-//! Every other [`crate::case::Tool`] compares two subprocesses given the
-//! same argv. That shape does not exist for filters yet: there is no `vaco
-//! -vf` CLI (a separate, larger piece of work than this harness), so "what
-//! `vaco` does with this filter" can only be observed by calling the filter
-//! crate's own `FilterRegistry` directly, through a real
-//! `vaco_filter_core::Graph` — the same thing every filter crate's own
-//! `tests/*.rs` integration test already does by hand. This module
-//! generalises that by-hand pattern into something the runner can drive
-//! from a manifest instead of from bespoke Rust per filter.
+//! After media substitution, a single-input case has nine positional tokens:
+//! input path, filter name and arguments, input pixel format/width/height, and
+//! output pixel format/width/height. Each additional pad adds a four-token
+//! group containing its path, format, width, and height. [`FilterArgs::parse`]
+//! accepts those groups, and [`run`] checks their count against the filter's
+//! declared inputs so missing or surplus pads fail explicitly.
 //!
-//! # The argv convention
+//! Output geometry is declared by the case rather than duplicating each
+//! filter's configuration logic in the harness. A byte-size mismatch fails
+//! before comparison. Only one video output pad is supported.
 //!
-//! A `filter`-tool case's `argv`, after `{media}`/`{media:<id>}`
-//! substitution, is nine positional tokens for the (still by far the most
-//! common) single-input case, plus a group of four more tokens per extra
-//! input pad beyond the first (not CLI flags — there is no CLI to hand
-//! them to):
+//! The iterated `{media}` is pad zero. Fixed additional inputs are named by an
+//! axis value's `extra_media` and referenced as `{media:<id>}`, so adding them
+//! does not multiply the case matrix.
 //!
-//! ```text
-//! [0] path to input 0's generated raw file (from a `[[media]]` `generate`
-//!     that ends in `-f rawvideo`, so the bytes need no container parsing)
-//! [1] filter name, e.g. "histogram"
-//! [2] filter args string, e.g. "level_height=50:scale_height=0:components=1"
-//!     (empty string for no args)
-//! [3] input 0's pixel format: "gray8" | "yuv444p" | "gbrp" | "rgb24"
-//! [4] input 0's width
-//! [5] input 0's height
-//! [6] output pixel format
-//! [7] output width
-//! [8] output height
-//! [9..]  zero or more groups of four, one per *additional* input pad, in
-//!        the filter's own pad-declaration order (pad 0 is tokens
-//!        `[0]`/`[3..6)` above; pad 1 is the first group here, pad 2 the
-//!        next, and so on):
-//!          media_path, pixel format, width, height
-//! ```
+//! [`REGISTRIES`] is the explicit list of reachable filter registries. Adding a
+//! filter crate requires adding its registry here; there is no aggregate
+//! workspace registry to imply broader coverage.
 //!
-//! A single-input case's argv is untouched by this — it is still exactly
-//! nine tokens, so every case written before multi-input support existed
-//! keeps working with no suite-file edits. [`FilterArgs::parse`] accepts
-//! any number of trailing four-token groups (zero included); [`run`]
-//! separately checks the count it got against the filter's own declared
-//! `FilterDesc::inputs` length once the filter is instantiated, so a case
-//! that names too few or too many inputs for that specific filter fails
-//! loudly with both numbers in the message, rather than silently
-//! connecting the wrong pad or leaving one unconnected.
-//!
-//! Output geometry is declared rather than derived because every filter in
-//! the first corpus already has a fixed, filter-specific output shape (a
-//! `histogram` case knows its own `level_height`; `vectorscope` is always
-//! `256x256`) — deriving it generically would mean re-implementing each
-//! filter's own `configure` logic a second time in the harness, which is
-//! exactly the kind of "looks measured, is not" risk this project has
-//! already hit. A case that gets the declared geometry wrong fails loudly
-//! (a size mismatch is caught before any byte comparison runs), not
-//! silently. Only one output is supported (every filter this corpus
-//! reaches has exactly one video output pad) — a filter with more would
-//! need its own extension, not attempted here.
-//!
-//! # Multi-input cases in a suite file
-//!
-//! A suite's per-case media iteration (`[[media]]`, `{media}`) still names
-//! exactly one input — the natural one to keep varying case-by-case. Extra,
-//! fixed inputs are declared with `extra_media` on the `[[axis]].values[]`
-//! entry that needs them (see `manifest`'s crate doc), and referenced from
-//! `argv` by the explicit `{media:<id>}` form, never bare `{media}` (bare
-//! `{media}` always means "the one the case iterated to," which for a
-//! multi-input case is pad 0 only). This makes a suite file
-//! self-describing about how many inputs a case has and which is which:
-//! the number of `{media:...}` tokens in `argv` *is* the input count, and
-//! each one names its own pad's media by id rather than relying on
-//! position alone to say what it is.
-//!
-//! ```toml
-//! [[media]]
-//! id = "base"
-//! ...
-//! [[media]]
-//! id = "overlay"
-//! ...
-//! [[media]]
-//! id = "mask"
-//! ...
-//!
-//! [[axis]]
-//! name = "filter"
-//! values = [
-//!   { id = "maskedmerge-default",
-//!     extra_media = ["overlay", "mask"],
-//!     argv = ["{media:base}", "maskedmerge", "", "gray8", "20", "20",
-//!             "gray8", "20", "20",
-//!             "{media:overlay}", "gray8", "20", "20",
-//!             "{media:mask}", "gray8", "20", "20"] },
-//! ]
-//! ```
-//!
-//! # Which filters are reachable
-//!
-//! [`REGISTRIES`] is the explicit, short list of `FilterRegistry`s this
-//! module tries, in order, for a case's filter name. Adding a new filter
-//! crate to the corpus means adding its registry here — a genuine,
-//! reviewable code change, the same shape `vaco-registry`'s own generated
-//! table requires a `vaco-component.toml` entry for. There is no aggregate
-//! registry combining every filter crate in the tree yet (a real, separate
-//! gap — see `planning/INTERFACE-GAPS.md`), so this list is deliberately
-//! short rather than papering over that with something that looks complete
-//! and is not.
-//!
-//! # How to change it
-//!
-//! A filter whose inputs need frame-by-frame resynchronisation instead of
-//! one-frame-per-input lockstep (a real `framesync` timeline: `eof_action`,
-//! `shortest`, `ts_sync_mode`) is still out of scope — [`run`] sends
-//! exactly one frame per input, then closes every source immediately, the
-//! same single-frame shape this module always used. That covers every
-//! lockstep multi-input filter this corpus has reached so far
-//! (`maskedmerge`'s plain 3-pad consumption, `Paired`-wrapped filters like
-//! `threshold`/`framepack`), because a lockstep filter's whole point is
-//! that it does not need more than "one frame per input, present at once"
-//! to produce one output frame. A filter whose own tests need to see *more
-//! than one frame* per input before producing output (an actual multi-frame
-//! `framesync` timeline test, not just a multi-input one) needs `run` to
-//! send more than one frame per source, which is a genuine, separate
-//! extension, not attempted here.
-//!
-//! A *packed* pixel format (`rgb24`, `rgba`, `argb`, `rgba64le` — multiple components
-//! interleaved in one plane, not one component per plane) is reachable:
-//! [`plane_size_sum`]/[`fill_planes`]/[`extract_output`] compute every
-//! plane's byte size and row stride through [`PixFmt::plane_layout`] and
-//! [`PixFmt::plane_height`] rather than assuming `width * height` bytes
-//! per plane. `PixFmt` already carries everything this needs —
-//! `Component::step`/`offset` per logical channel, `min_stride` deriving
-//! the real per-plane row byte count as `max(step * samples-in-plane)`
-//! over the components that live there — so `rgba64le`'s single plane with
-//! four `step = 8` components folds out of the same formula that already
-//! handled `yuv444p`'s three separate `step = 1` planes; no new plane
-//! math was written; this module only stopped hand-rolling a narrower
-//! version of what the format crate already computed. The remaining
-//! limitation is chroma subsampling (`yuv420p` and friends): reachable
-//! through the same primitives (`plane_height`/`plane_layout` already
-//! decimate chroma planes correctly), just not exercised by any case yet,
-//! so treat a subsampled-format case as untested rather than unsupported.
+//! [`run`] sends one frame per input and then closes all sources. This covers
+//! lockstep multi-input filters but not multi-frame `framesync` timelines.
+//! Packed formats use [`PixFmt::plane_layout`] and [`PixFmt::plane_height`] for
+//! byte sizes and strides. Subsampled formats use the same primitives but have
+//! not yet been exercised by a case.
 
 use vaco_color::ColorInfo;
 use vaco_core::{Duration, MediaType, Rational, Timestamp};

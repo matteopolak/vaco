@@ -1,15 +1,11 @@
 //! Table extractors — differential checks on our static tables.
 //!
-//! # What it is
-//!
 //! The part of the harness that is useful before a single decoder exists.
 //! `vaco-pixfmt`'s 268-format table and `vaco-core`'s colour, frame-size and
 //! frame-rate tables are internally consistent but, until something compares
 //! them to the reference, entirely unvalidated. These extractors do that
 //! comparison, and they are the first thing in the project to hold a table to
 //! an external standard.
-//!
-//! # How it works
 //!
 //! Each extractor asks the oracle a question whose answer is a *fact about
 //! observable behaviour* — a listing it prints, or the geometry of a frame it
@@ -33,8 +29,6 @@
 //! which is the one thing §1.7.2 forbids. The `SUSPECTED` list in each module is
 //! probed on every deep run instead, so "we might be missing something" is at
 //! least a machine check.
-//!
-//! # How to change it
 //!
 //! Add a module, give it a `check(&Reference) -> TableReport`, and add it to
 //! [`run_all`]. The rule every extractor follows: **report precisely, decide

@@ -1,14 +1,8 @@
-//! Hermetic process execution (plan 13 §1.1).
-//!
-//! # What it is
+//! Hermetic process execution for differential cases.
 //!
 //! One function, [`run`], that executes a binary under a fixed environment and
 //! returns everything observable about the result. Both sides of every
-//! comparison go through it, so neither side can accidentally get a different
-//! environment from the other — which is the only way a differential harness
-//! can be trusted.
-//!
-//! # How it works
+//! comparison go through it so their environments cannot drift.
 //!
 //! The child's environment is **cleared** and rebuilt from a short allowlist:
 //!
@@ -21,33 +15,19 @@
 //! | `HOME` | a scratch dir | so nothing reads the developer's config |
 //! | `DYLD_*` / `LD_LIBRARY_PATH` | inherited when set | shared-library reference builds |
 //!
-//! `PATH` and the loader variables are inherited rather than fabricated because
-//! a shared-library `FFmpeg` (every distribution build) cannot start without
-//! them. They are the deliberate hole in hermeticity, and it is a small one:
-//! both sides inherit the same values.
+//! `PATH` and loader variables are the deliberate hole in hermeticity because a
+//! shared-library reference build cannot start without them; both sides inherit
+//! identical values.
 //!
 //! Output is read on dedicated threads while the main thread polls for exit,
-//! so a child that fills the pipe buffer cannot deadlock the harness — the
-//! obvious implementation (wait, then read) does deadlock, and finding that out
-//! from a hung nightly is expensive. Output is capped so a runaway reference
-//! cannot fill the disk; the cap is recorded in the observation rather than
-//! silently truncating.
+//! preventing pipe-buffer deadlock. Output is capped so a runaway process
+//! cannot fill the disk, and truncation is recorded in the observation.
 //!
 //! On a timeout, the child is placed in its own process group (`unix` only;
-//! see [`spawn_grouped`]) and the *whole group* is signalled, not just the
-//! immediate pid. A plain `child.kill()` only reaches the process we spawned
-//! directly. On Linux, `/bin/sh` is `dash`, and `dash -c "sleep 30"` **forks**
-//! `sleep` as a separate process rather than exec-replacing itself with it —
-//! confirmed against an `ubuntu-latest`-equivalent container: killing the
-//! shell's pid left `sleep` running, reparented to init, still holding the
-//! inherited stdout/stderr pipe write-ends open. The reader threads above
-//! then block on those pipes until `sleep` finishes on its own, so `run()`
-//! reports `timed_out: true` but still blocks for the child's full natural
-//! lifetime — the timeout is detected but does not bound wall time. (macOS's
-//! `/bin/sh` exec-replaces a lone last command, which is why this was never
-//! visible there.) Killing the whole process group reaches `sleep` too.
-//!
-//! # How to change it
+//! see [`spawn_grouped`]) and the whole group is signalled. Measured on an
+//! Ubuntu-equivalent container, `dash -c "sleep 30"` forks `sleep`; killing
+//! only the shell left the child holding stdout/stderr open for the full 30
+//! seconds. Group signalling makes the timeout bound wall time.
 //!
 //! Adding an inherited variable weakens hermeticity for every case at once —
 //! justify it in the table above. Changing the default timeout is a manifest

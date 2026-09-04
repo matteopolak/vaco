@@ -2,10 +2,7 @@
 //! Simoncelli, *IEEE Transactions on Image Processing* 13(4), 2004,
 //! "Image Quality Assessment: From Error Visibility to Structural
 //! Similarity" (equations 12–14 in that paper, cited by that reference —
-//! **never** transcribed from `tests/tiny_ssim.c`, which is GPL and on the
-//! project's hard do-not-reuse list per plan 13 §0.1/§1.11.2).
-//!
-//! # The definition implemented here
+//! implemented independently of the GPL `tests/tiny_ssim.c` fixture).
 //!
 //! An 11×11 circularly-symmetric Gaussian weighting window (σ = 1.5,
 //! normalised to sum to 1 — the paper's own choice, §III.A) slides over both
@@ -26,15 +23,11 @@
 //! position (the paper's "Mean SSIM", §IV). Higher is better; the range is
 //! `(-1, 1]`, with `1` only at identity.
 //!
-//! # Scope
-//!
 //! Operates on plane 0 only (luma, for the video formats this harness
 //! handles). Chroma SSIM and any multi-scale variant (MS-SSIM) are not
 //! implemented — a documented cut, not an oversight; extending
 //! [`Ssim::score`] to another plane index is the same shape as
 //! [`super::psnr::Psnr::plane`] if that is ever needed.
-//!
-//! # Performance, honestly
 //!
 //! This is the direct `O(window_area)` per pixel definition with no separable-
 //! filter optimisation, which is the right trade for conformance-scale
