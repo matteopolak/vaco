@@ -14,8 +14,8 @@
     reason = "test code"
 )]
 
-use vaco_codec_core::{CodecId, CodecParameters};
-use vaco_core::{Error, MediaType, Result, Timestamp};
+use vaco_codec_core::{CodecId, CodecParameters, VideoParameters};
+use vaco_core::{Error, MediaType, Rational, Result, Timestamp};
 use vaco_demux_hls::{HlsDemuxer, HlsOptions, RemoteAccess as ReadAccess};
 use vaco_demux_mpegts::MpegTsDemuxer;
 use vaco_format_adaptive::{
@@ -174,6 +174,79 @@ fn ten_seconds_of_video_produces_five_two_second_segments_and_reads_back_whole()
         }
     }
     assert_eq!(count, FPS * SECONDS, "every frame written must come back");
+}
+
+/// `#EXTINF` must cover each segment's real content span — the last
+/// packet's own duration included, not merely "the timestamp gap to that
+/// packet's start". No packet here states a `duration` (the ordinary
+/// `-c copy` case out of a demuxer that reports none), so before this fix
+/// every segment's `finish_current_segment` computed only
+/// `last_dts - start_dts`, one whole frame (200ms at 5fps) short of the
+/// true 2.0s span — not only on the last segment, but on all five.
+#[test]
+fn extinf_covers_the_last_frames_own_span_not_just_its_start() {
+    const FPS: i64 = 5;
+    const SECONDS: i64 = 10;
+    #[allow(
+        clippy::integer_division,
+        reason = "90_000 (the MPEG-TS clock) is exactly divisible by every realistic fps"
+    )]
+    const STEP_90K: i64 = 90_000 / FPS;
+
+    let dir = tempfile::tempdir().unwrap();
+    let playlist_url = dir.path().join("out.m3u8").to_str().unwrap().to_owned();
+
+    let mut mux = HlsMuxer::new(
+        playlist_url.clone(),
+        Some(WriteAccess::unrestricted(registry())),
+        Box::new(TestSegmentMuxers),
+        HlsMuxOptions {
+            hls_time: 2.0,
+            hls_list_size: 0,
+            hls_playlist_type: HlsPlaylistType::Vod,
+            ..HlsMuxOptions::default()
+        },
+    );
+    let video = mux
+        .add_stream(&CodecParameters {
+            media_type: Some(MediaType::Video),
+            codec_id: Some(CodecId::Mpeg2video),
+            video: Some(VideoParameters {
+                frame_rate: Rational::new(FPS as i32, 1),
+                ..VideoParameters::default()
+            }),
+            ..CodecParameters::new(MediaType::Video)
+        })
+        .expect("add_stream");
+    mux.init().expect("init");
+    mux.write_header().expect("write_header");
+
+    let mut budget = Budget::new(Limits::permissive());
+    for i in 0..(FPS * SECONDS) {
+        let mut pkt = Packet::from_slice(&mut budget, &[0xAB; 64]).expect("alloc");
+        pkt.stream_index = video;
+        pkt.pts = Timestamp::new(i * STEP_90K);
+        pkt.dts = pkt.pts;
+        // Deliberately left at its default (no stated duration) — this is
+        // the case the fallback exists for.
+        if i % 10 == 0 {
+            pkt.flags |= PacketFlags::KEY;
+        }
+        mux.write_packet(&pkt).expect("write_packet");
+    }
+    mux.write_trailer().expect("write_trailer");
+    drop(mux);
+
+    let text = std::fs::read_to_string(&playlist_url).unwrap();
+    let extinf_lines: Vec<&str> = text.lines().filter(|l| l.starts_with("#EXTINF:")).collect();
+    assert_eq!(extinf_lines.len(), 5, "playlist:\n{text}");
+    for line in &extinf_lines {
+        assert_eq!(
+            *line, "#EXTINF:2.000,",
+            "every 10-frame segment at 5fps spans a full 2.0s, including its \
+             last frame's own 200ms — not the 1.8s a start-to-start span gives:\n{text}"
+        );
+    }
 }
 
 /// `hls_flags single_file`: every segment lands in one physical file,

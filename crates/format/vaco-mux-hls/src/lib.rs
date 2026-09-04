@@ -194,6 +194,7 @@ fn open_muxer(sink: Box<dyn MediaSink>) -> Result<Box<dyn Muxer>> {
         single_file_handle: None,
         single_file_url: None,
         last_ref_dts: None,
+        last_ref_duration_us: 0,
     }))
 }
 
@@ -251,6 +252,21 @@ pub struct HlsMuxer {
     single_file_handle: Option<counting::SharedPosition>,
     single_file_url: Option<String>,
     last_ref_dts: Option<i64>,
+    /// The most recent *non-zero* reference-stream packet duration, in
+    /// microseconds (`Packet::duration`'s own unit, independent of any
+    /// stream time base — see `vaco_core::Duration`'s doc). `EXTINF` used to
+    /// be derived from `last_ref_dts - start_dts` alone — the span *to* the
+    /// last packet's own timestamp rather than *through* it — so every
+    /// segment (not only the last) came up one packet short, worst on a
+    /// segment holding a single packet, where that made the listed duration
+    /// zero before the `.max(1)` floor. `finish_current_segment` now adds
+    /// this to the last packet's own timestamp before computing the span.
+    /// Seeded from the reference stream's declared frame rate at
+    /// [`Muxer::write_header`] so a source whose packets never state a
+    /// duration at all still gets a real value, then kept current from the
+    /// last packet that did — mirrors `vaco-mux-avi`'s
+    /// `last_video_duration_ticks`.
+    last_ref_duration_us: u64,
 }
 
 impl core::fmt::Debug for HlsMuxer {
@@ -298,6 +314,7 @@ impl HlsMuxer {
             single_file_handle: None,
             single_file_url: None,
             last_ref_dts: None,
+            last_ref_duration_us: 0,
         }
     }
 
@@ -544,9 +561,12 @@ impl HlsMuxer {
             return Ok(());
         };
         let duration_us = match (seg.time_base, seg.start_dts, self.last_ref_dts) {
-            (Some(tb), Some(start), Some(last)) => Timestamp::new(last.saturating_sub(start))
-                .to_duration(tb)
-                .map_or(0, Duration::as_micros),
+            (Some(tb), Some(start), Some(last)) => {
+                let start_us = Timestamp::new(start).to_duration(tb).map_or(0, Duration::as_micros);
+                let last_us = Timestamp::new(last).to_duration(tb).map_or(0, Duration::as_micros);
+                let extra_us = i64::try_from(self.last_ref_duration_us).unwrap_or(i64::MAX);
+                last_us.saturating_add(extra_us).saturating_sub(start_us)
+            }
             _ => 0,
         };
         let byte_range = if self.single_file() {
@@ -635,6 +655,22 @@ impl Muxer for HlsMuxer {
             return Err(Error::InvalidData("HLS output needs at least one stream"));
         }
         self.header_written = true;
+        // Seed the fallback from the reference stream's own declared frame
+        // rate, not an invented constant — `0` (its default) only when the
+        // stream states no frame rate either, in which case there is
+        // nothing to derive from until a real packet duration arrives.
+        // Audio has no samples-per-frame field to derive one from.
+        if let Some(video) = self.stream_params.first().and_then(|p| p.video.as_ref())
+            && video.frame_rate.num > 0
+            && video.frame_rate.den > 0
+            && let (Ok(num), Ok(den)) = (
+                u64::try_from(video.frame_rate.num),
+                u64::try_from(video.frame_rate.den),
+            )
+            && num > 0
+        {
+            self.last_ref_duration_us = 1_000_000u64.saturating_mul(den) / num;
+        }
         if matches!(self.opts.hls_segment_type, HlsSegmentType::Fmp4)
             && let Some(write) = &self.write
         {
@@ -693,6 +729,12 @@ impl Muxer for HlsMuxer {
                 seg.start_dts = Some(ts);
             }
             self.last_ref_dts = Some(ts);
+            // A packet that states no duration leaves the running hint at
+            // its last real value — see the field's own doc.
+            let stated_us = packet.duration.as_micros().max(0);
+            if stated_us > 0 {
+                self.last_ref_duration_us = stated_us as u64;
+            }
         }
         Ok(())
     }
