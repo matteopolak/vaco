@@ -278,3 +278,73 @@ fn flac_round_trips_through_the_sibling_demuxer() {
     }
     assert_eq!(count, 5);
 }
+
+/// A packet with no stated duration (the ordinary `-c copy` case out of a
+/// demuxer that reports none) must not contribute zero to `granule_cursor`
+/// — the file's only seekable timeline. `write_packet` used to accumulate
+/// `packet.duration.to_ticks(...).unwrap_or(0)` verbatim, so a duration-less
+/// packet's own span vanished from every page granule after it, worst on
+/// the very last packet, where it left the whole file one frame short.
+///
+/// FLAC's granule is a plain, unscaled sample count (measured, see
+/// `vaco-demux-ogg::granule`'s module docs) with no bitstream-derived
+/// self-correction the way Opus has, so this is checked directly against
+/// `Stream::duration_ts` — the final page's own raw granule value — rather
+/// than through any codec-specific reconstruction.
+#[test]
+fn a_packet_with_no_stated_duration_still_advances_the_granule() {
+    let sink = Box::new(MemorySink::new());
+    let bytes_handle = sink.shared();
+    let mut mux = OggMuxer::new(sink).unwrap();
+
+    let mut streaminfo = vec![0u8; 34];
+    let packed: u64 = (44_100u64 << 44) | (15u64 << 36);
+    streaminfo[10..18].copy_from_slice(&packed.to_be_bytes());
+
+    let mut params = CodecParameters::new(vaco_core::MediaType::Audio).with_codec(CodecId::Flac);
+    params.extradata = Some(streaminfo);
+    params.audio = Some(AudioParameters {
+        sample_rate: 44_100,
+        ..AudioParameters::default()
+    });
+    let idx = mux.add_stream(&params).unwrap();
+    mux.write_header().unwrap();
+
+    let mut budget = Budget::new(vaco_limits::Limits::permissive());
+    let payload = [0xFFu8, 0xF8, 0x69, 0x18, 0x00, 0x00];
+    const FRAME_SAMPLES: i64 = 4608;
+    const COUNT: i64 = 5;
+    for i in 0..COUNT {
+        let mut pkt = Packet::from_slice(&mut budget, &payload).unwrap();
+        pkt.stream_index = idx;
+        pkt.pts = Timestamp::new(i * FRAME_SAMPLES);
+        pkt.dts = pkt.pts;
+        // Every packet but the last states a real duration; the last one
+        // (the shape `91c15a2b` fixed in vaco-mux-mp4) states none.
+        pkt.duration = if i < COUNT - 1 {
+            Duration::from_micros(FRAME_SAMPLES * 1_000_000 / 44_100)
+        } else {
+            Duration::ZERO
+        };
+        pkt.flags = PacketFlags::KEY;
+        mux.write_packet(&pkt).unwrap();
+    }
+    mux.write_trailer().unwrap();
+
+    let written = bytes_handle.snapshot();
+    let mut demux = OggDemuxer::open(
+        Box::new(MemorySource::new(written)),
+        &NoParsers,
+        &FormatOptions::default(),
+    )
+    .expect("the sibling demuxer must accept what this crate wrote");
+
+    // Five real frames' worth of samples, including the unstated last one
+    // (falling back to the previous frame's own duration), not four.
+    assert_eq!(
+        demux.streams()[0].duration_ts,
+        Some(COUNT * FRAME_SAMPLES),
+        "the unstated last packet's duration must fall back to the previous \
+         frame's, not drop out of the granule entirely"
+    );
+}

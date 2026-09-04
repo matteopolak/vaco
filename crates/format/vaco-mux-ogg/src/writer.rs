@@ -120,6 +120,15 @@ struct StreamState {
     /// `29112` against an expected `28800` for 30 packets of 960 samples,
     /// exactly one `pre_skip` (312) too many.
     granule_cursor: i64,
+    /// Fallback duration (in `time_base` ticks) for a packet that states
+    /// none — `Packet::duration == 0` is the ordinary `-c copy` case out of
+    /// a demuxer that reports none, and `granule_cursor` has no "unknown"
+    /// encoding of its own: a zero contribution here is indistinguishable
+    /// from a genuinely zero-length packet, so a duration-less stream's
+    /// granule position — the file's only seekable timeline — would never
+    /// advance. Kept current from the last packet that *did* state a
+    /// duration, mirroring `vaco-mux-avi`'s `last_video_duration_ticks`.
+    last_duration_ticks_hint: i64,
     /// Whether a packet has terminated in the *current, unflushed* page.
     /// Distinguishes "nothing finished here, stamp `-1`" from "the running
     /// total legitimately did not move".
@@ -311,6 +320,7 @@ impl Muxer for OggMuxer {
             sequence: 0,
             builder: PageBuilder::default(),
             granule_cursor: 0,
+            last_duration_ticks_hint: 0,
             terminated_this_page: false,
             pending_continued: false,
             header_written: false,
@@ -359,7 +369,7 @@ impl Muxer for OggMuxer {
         let index = usize::try_from(packet.stream_index)
             .map_err(|_| Error::InvalidData("stream index does not fit"))?;
         let time_base = self.stream_mut(packet.stream_index)?.time_base;
-        let duration_ticks = packet.duration.to_ticks(time_base).unwrap_or(0).max(0);
+        let stated_ticks = packet.duration.to_ticks(time_base).unwrap_or(0).max(0);
 
         let mut payload = packet.payload();
         loop {
@@ -368,6 +378,15 @@ impl Muxer for OggMuxer {
             };
             let (consumed, terminated) = st.builder.push_packet(payload);
             if terminated {
+                // See `StreamState::last_duration_ticks_hint`'s own doc: a
+                // packet with no stated duration falls back to the last one
+                // that had one, rather than contributing a real zero.
+                let duration_ticks = if stated_ticks > 0 {
+                    st.last_duration_ticks_hint = stated_ticks;
+                    stated_ticks
+                } else {
+                    st.last_duration_ticks_hint
+                };
                 st.granule_cursor = st.granule_cursor.saturating_add(duration_ticks);
                 st.terminated_this_page = true;
             }
