@@ -1,29 +1,17 @@
-//! The bitstream family: 22 registrations sharing one timestamp convention
+//! The bitstream family: 21 registrations sharing one timestamp convention
 //! and one of five framing strategies.
 //!
-//! # Measured against ffprobe 8.1
-//!
-//! ```text
-//! $ ffmpeg -f lavfi -i testsrc=size=64x64:rate=5:duration=1 -c:v libx264 -f h264 t.h264
-//! $ ffprobe -show_streams -show_packets t.h264
-//! ```
-//!
 //! * `time_base` is **always `1/1_200_000`**, independent of the declared
-//!   `-framerate` — measured identically on `h264` and, with `-f mjpeg`
-//!   forced, on `mjpeg` too. `duration_ts = round(1_200_000 * framerate.den /
-//!   framerate.num)` (240000 was measured directly for a 5 fps declaration,
-//!   i.e. `1_200_000 / 5`). Since a packet's *absolute* duration is
+//!   `-framerate`, measured with ffprobe 8.1 on H.264 and MJPEG.
+//!   `duration_ts = round(1_200_000 * framerate.den / framerate.num)`; 5 fps
+//!   produced 240,000 ticks. Since a packet's absolute duration is
 //!   `duration_ts * time_base`, this collapses to plain `1 / framerate`
-//!   seconds regardless of which internal tick base is used, so
-//!   [`vaco_format_core::time::duration_from_rate`] is what this module
-//!   actually stamps on each [`vaco_packet::Packet`].
+//!   seconds, which [`vaco_format_core::time::duration_from_rate`] stamps on
+//!   each [`vaco_packet::Packet`].
 //! * **Every packet has `pts = N/A` and `dts = N/A`** — a raw bitstream
-//!   carries no timestamps and none are synthesised, only a per-packet
-//!   `duration`. This is true even on the reference's own h264 demuxer with
-//!   its real parser attached, so [`BitstreamDemuxer`] never invents one
-//!   either.
+//!   carries no timestamps, so [`BitstreamDemuxer`] synthesises only duration.
 //! * `data` (and, by extension, every format with no `-framerate` option:
-//!   `bit`, `loas`, `s337m`) has **no duration at all** — measured directly:
+//!   `bit` and `loas`) has **no duration at all** — measured directly:
 //!   `duration=N/A` on every packet, packets are flat 1024-byte reads.
 //!
 //! # Framing, and what is measured versus assumed
@@ -260,10 +248,8 @@ pub const MPEGVIDEO: BitstreamSpec = spec!(
 /// this crate's mechanical sweep of ffmpeg's raw-demuxer names before
 /// `vaco-format-spdif` existed. No longer registered under `s337m`: that
 /// name now resolves to `vaco_format_spdif::S337M_DEMUXER`, a real burst
-/// parser measured byte-identical against `ffmpeg -f spdif` (see
-/// `planning/TECH-DEBT.md`'s now-resolved "`s337m` is registered twice"
-/// entry). Left defined and unregistered rather than deleted, in case a
-/// genuinely distinct bare-bitstream use ever turns up.
+/// parser measured byte-identical against `ffmpeg -f spdif`. Left defined and
+/// unregistered in case a distinct bare-bitstream use is needed.
 pub const S337M: BitstreamSpec =
     spec!("s337m", "SMPTE 337M", &[], Framing::FixedBlock, None, false);
 pub const VC1: BitstreamSpec = spec!("vc1", "raw VC-1", &["vc1"], Framing::StartCode3, None, true);
@@ -667,7 +653,7 @@ fn probe_for(spec: &BitstreamSpec, data: &ProbeData<'_>) -> ProbeScore {
 /// Whether the byte(s) at `at` (immediately after a `00 00 01` start code)
 /// are what `name`'s format is required to open with.
 ///
-/// # Measured, per finding 3 of `planning/CONFORMANCE-FINDINGS.md`
+/// # Measured identifiers
 ///
 /// Generated with `ffmpeg -f lavfi -i testsrc=d=0.5 -c:v <codec> -f
 /// <rawformat> out.bin` for every `StartCode3` member that this build's
@@ -696,12 +682,9 @@ fn probe_for(spec: &BitstreamSpec, data: &ProbeData<'_>) -> ProbeScore {
 /// with neither the `D` nor the `E` flag set (known to the codec table,
 /// nothing compiled in for either direction), `cavs`/`vc1`/`vvc` with `D`
 /// but no `E` (decode-only). There is no reference sample to read an
-/// identifier back from, so per the brief they make no structural claim
-/// here and fall back to [`ProbeScore::from_extension`]. Recording a value
-/// recalled rather than measured is the exact mistake this finding exists
-/// to prevent; the probe-matrix test below asserts these six lose to
-/// extension-scored siblings rather than pretending to detect them
-/// structurally.
+/// identifier back from, so they make no structural claim and fall back to
+/// [`ProbeScore::from_extension`]. The probe-matrix test asserts these six
+/// lose to extension-scored siblings rather than pretending to detect them.
 fn start_code_identifier(name: &str, data: &ProbeData<'_>, at: usize) -> bool {
     match name {
         "h264" => data

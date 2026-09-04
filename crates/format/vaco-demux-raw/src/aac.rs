@@ -1,62 +1,33 @@
 //! The `aac` raw elementary-stream demuxer: bare ADTS framing with no file
 //! header at all — one syncframe after another, same shape as [`crate::ac3`].
 //!
-//! # Why this exists
-//!
-//! Before this module, nothing in the registry recognised a bare `.aac`
-//! (ADTS) file at all: there was no demuxer named `aac`, so the highest-
-//! scoring registered demuxer won by default regardless of how weak its
-//! score was. On a real ADTS file that was `cdgraphics` — its probe counts
-//! 24-byte-aligned chunks whose command byte's low six bits happen to equal
-//! `0x09`, which happens on compressed audio data by chance roughly one
-//! byte in 64, often enough over a multi-kilobyte prefix to clear
-//! `cdgraphics`'s own threshold while every other candidate scored zero.
-//! That is category (b) from the brief: the correct format was never tried,
-//! not that it scored too low.
-//!
-//! # Header parsing is not duplicated here
+//! A dedicated ADTS probe is required because unrelated structural probes can
+//! score compressed audio by chance. In the observed failure, `cdgraphics`
+//! counted 24-byte-aligned command bytes whose low six bits were `0x09` and
+//! won while no AAC candidate existed.
 //!
 //! [`vaco_parse_aac::adts::AdtsHeader`] already parses `adts_fixed_header()`
 //! plus `adts_variable_header()` (ISO/IEC 14496-3 subpart 4 §4.4.1.1) and
-//! derives sample rate, channel layout and codec parameters from it. That
-//! parser is a plain, stateless function of a byte slice, so both this
-//! demuxer's probe (which gets no [`vaco_format_core::ParserProvider`] — see
-//! `probe`'s signature) and its streaming reader call it directly rather
-//! than re-deriving the ISO/IEC 13818-7 sampling-frequency and
-//! channel-configuration tables a second time. `vaco-demux-raw` and
-//! `vaco-parse-aac` are both layer 4 (`layers.toml`), so this is a same-layer
-//! edge, not a violation of the crate's downward-dependency rule — the
-//! `ParserProvider` seam `h264`/`hevc`/`av1`/`obu` use exists to let a
-//! *stateful* per-container parser vary by caller, which a raw file's own
-//! demuxer does not need.
-//!
-//! # Framing
+//! derives sample rate, channel layout, and codec parameters. The probe and
+//! reader call this stateless parser directly rather than duplicating the
+//! ISO/IEC 13818-7 frequency and channel tables.
 //!
 //! Each ADTS frame states its own total length (`aac_frame_length`, header
 //! included) in its 13-bit field, so — like [`crate::ac3`]'s classic-AC-3 and
-//! E-AC-3 syncframes, and unlike the whole-buffer `Framing::StartCode3`
-//! family in [`crate::bitstream`] — this is a genuine streaming demuxer: read
-//! a header, trust its declared length, read that many bytes, repeat.
-//!
-//! # Time base — measured, not chosen
+//! E-AC-3 syncframes — this is a streaming demuxer rather than a whole-buffer
+//! start-code splitter.
 //!
 //! `ffprobe -show_streams` on `ffmpeg -c:a aac -f adts` output reports
 //! `time_base=1/28224000` for every sample rate ADTS can carry (measured at
-//! 8000, 11025 was not directly encoded, 16000, 22050, 32000, 44100, 48000
-//! and 96000 Hz — same denominator every time, `ffmpeg` 9.0.1). `28224000`
-//! is exactly divisible by all thirteen valid ADTS sample rates (`2^9 · 3^2 ·
-//! 5^3 · 7^2`), so `28224000 / sample_rate` is always an exact integer and
-//! one 1024-sample frame is always a whole number of ticks — confirmed
-//! directly: a 44100 Hz frame measured `duration=655360`, and
-//! `1024 * (28224000 / 44100) == 655360` exactly.
+//! 8,000, 16,000, 22,050, 32,000, 44,100, 48,000, and 96,000 Hz with ffmpeg
+//! 9.0.1). The denominator is divisible by all thirteen valid rates, so each
+//! 1,024-sample frame has an integral tick count. At 44.1 kHz the measured
+//! duration was exactly 655,360 ticks.
 //!
 //! Packet durations retain the exact tick count through
 //! [`vaco_packet::Packet::set_duration_ts`] as well as exposing the legacy
-//! microsecond view. This matters at 44.1 kHz: `1024 * 640 == 655360`, while
-//! the equivalent duration is `23219.9546…` µs and cannot be represented by a
-//! whole-microsecond value. The probe therefore emits the exact `655360`
-//! ticks rather than rounding to `655361` after converting through
-//! [`vaco_core::Duration`].
+//! microsecond view. At 44.1 kHz, 655,360 ticks equal 23,219.9546… µs, so the
+//! exact field avoids a one-tick round-trip error through whole microseconds.
 
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};

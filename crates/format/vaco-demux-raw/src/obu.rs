@@ -79,52 +79,32 @@ fn parse_one(data: &[u8], at: usize) -> Option<Obu> {
     })
 }
 
-/// Whether `data` plausibly *is* an OBU stream — the detection question, which
-/// is not the same as the demux question.
+/// Whether `data` plausibly is an OBU stream.
 ///
 /// [`temporal_units`] is deliberately lenient: when nothing parses it reports
 /// the whole buffer as one span, so a caller demuxing a slightly damaged file
-/// still sees a packet instead of silence. That is right for demuxing and
-/// catastrophic for probing, because `!temporal_units(buf).is_empty()` is then
-/// true for **any** non-empty input. It was, and `vaco -i notmedia` claimed a
-/// plain text file as `av1` where the reference exits 183.
+/// still sees a packet. A probe cannot use that fallback because it makes every
+/// non-empty input look like AV1.
 ///
-/// So detection gets its own, strict test:
+/// Detection therefore requires:
 ///
 /// - the first OBU must actually parse, not fall back;
 /// - its `obu_forbidden_bit` must be zero;
-/// - its type must be one the specification assigns — types 9–14 are reserved,
-///   and a byte with one of those is far more likely to be prose than video;
+/// - its type must be assigned by the specification;
 /// - unless it consumes the entire buffer on its own, a second OBU must also
 ///   parse right after it.
 ///
-/// A real AV1 elementary stream opens with a temporal delimiter or a sequence
-/// header, so this is not a tight filter — it only has to reject text.
-///
 /// # The second-OBU requirement, measured
 ///
-/// One syntactically-plausible header byte is not rare enough on its own: an
-/// `ffmpeg -f mpegts ... out.m2ts` fixture — real H.264/AAC content, BD-style
-/// M2TS striping (`vaco_demux_raw::bitstream`'s own module docs record the
-/// analogous `StartCode3`-vs-`mpegts` collision this format shares the root
-/// cause with) — has `0x0e` as the byte immediately before its first
-/// `0x47` transport-stream sync byte. `0x0e` passes every single-header
+/// An `ffmpeg -f mpegts` M2TS fixture with real H.264/AAC content has `0x0e`
+/// immediately before its first `0x47` transport-stream sync byte. `0x0e`
+/// passes every single-header
 /// check above (`obu_forbidden_bit=0`, `kind=OBU_SEQUENCE_HEADER`,
 /// `obu_reserved_1bit=0`, `obu_has_size_field=1`) and `parse_one` reads a
-/// self-consistent 73-byte span from it, so the probe scored this file `av1`
-/// at 51 against `mpegts`'s own honestly-earned, correctly-detected 50 —
-/// beating the right answer by one point on real, common content, not a
-/// crafted adversarial input. Requiring a second OBU to also parse
-/// immediately after the first is cheap (one more `parse_one` call) and
-/// mirrors the `MIN_RUN`-style chaining every other self-synchronising probe
-/// in this workspace already uses (`ac3`, `aac`, `mp3`, `mpegts`'s own
-/// sync-byte run): on this fixture the region right after the coincidental
-/// first OBU is unrelated PSI stuffing (`0xff` bytes), whose `leb128` size
-/// field never terminates within 8 bytes, so the second `parse_one` fails and
-/// the file no longer misdetects. A genuine minimal AV1 stream that is
-/// *only* one OBU (a bare temporal delimiter, nothing after it) is accepted
-/// by the first clause instead, so this does not regress the degenerate but
-/// legitimate single-OBU case.
+/// self-consistent 73-byte span, making AV1 score 51 against MPEG-TS's 50.
+/// The following PSI stuffing cannot parse as a second OBU, eliminating that
+/// false positive. A genuine one-OBU stream is still accepted when its first
+/// OBU consumes the entire buffer.
 #[must_use]
 pub fn looks_like_obu_stream(data: &[u8]) -> bool {
     let Some(&header) = data.first() else {
