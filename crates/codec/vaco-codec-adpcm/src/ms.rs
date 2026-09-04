@@ -13,10 +13,12 @@
 //! For `channels` channels: one byte per channel (a predictor-coefficient
 //! index, `0..=6`, selecting a row of [`crate::tables::MS_ADAPT_COEFF1`]/
 //! [`crate::tables::MS_ADAPT_COEFF2`]), then one `i16` LE "delta" (initial
-//! step) per channel, then one `i16` LE "sample 2" (older) per channel, then
-//! one `i16` LE "sample 1" (newer) per channel. The two seed samples are
-//! themselves the first two decoded output samples (oldest first). After the
-//! header, 4-bit codes follow packed two per byte (high nibble first),
+//! step) per channel, then one `i16` LE "sample 1" (newer) per channel, then
+//! one `i16` LE "sample 2" (older) per channel -- the real
+//! `ADPCMBLOCKHEADER` field order is `bPredictor, iDelta, iSamp1, iSamp2`.
+//! The two seed samples are themselves the first two decoded output samples,
+//! oldest (`sample2`) first. After the header, 4-bit codes follow packed two
+//! per byte (high nibble first),
 //! consumed in round-robin channel order one output sample at a time — which
 //! is why a stereo block's nibble stream is naturally byte-aligned (2
 //! channels x 1 nibble each = 1 byte per output-sample step).
@@ -109,17 +111,20 @@ pub(crate) fn decode_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
         deltas.push(i32::from(i16::from_le_bytes([lo, hi])));
         cursor += 2;
     }
-    let mut sample2s = Vec::new();
-    for _ in 0..channels {
-        let b = data
-            .get(cursor..cursor + 2)
-            .ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
-        let &[lo, hi] = b else {
-            return Err(Error::InvalidData("adpcm_ms: truncated header"));
-        };
-        sample2s.push(i32::from(i16::from_le_bytes([lo, hi])));
-        cursor += 2;
-    }
+    // The on-disk `ADPCMBLOCKHEADER` field order is
+    // `bPredictor, iDelta, iSamp1, iSamp2` -- `iSamp1` (the newer of the two
+    // seed samples) comes first on the wire, `iSamp2` (older) second. An
+    // earlier version of this function read them in the opposite order
+    // (`sample2s` first, `sample1s` second), which swapped the crate's own
+    // "sample1 = newer" convention throughout: the predictor's `sample1`/
+    // `sample2` fields ended up holding the wrong sample, and the first two
+    // *output* samples of every block came out reversed relative to a real
+    // decoder. Measured against a real `ffmpeg -c:a adpcm_ms` mono fixture:
+    // `ours[0..2] == ffmpeg_ref[1], ffmpeg_ref[0]` exactly -- i.e. the first
+    // two decoded samples were transposed, with everything after them
+    // (produced by `decode_nibble`, not by this header at all) already
+    // correct. See `tests/oracle_ffmpeg.rs`'s
+    // `ms_adpcm_decodes_a_real_ffmpeg_stream_bit_exact`.
     let mut sample1s = Vec::new();
     for _ in 0..channels {
         let b = data
@@ -129,6 +134,17 @@ pub(crate) fn decode_block(data: &[u8], channels: u32) -> Result<Vec<i16>> {
             return Err(Error::InvalidData("adpcm_ms: truncated header"));
         };
         sample1s.push(i32::from(i16::from_le_bytes([lo, hi])));
+        cursor += 2;
+    }
+    let mut sample2s = Vec::new();
+    for _ in 0..channels {
+        let b = data
+            .get(cursor..cursor + 2)
+            .ok_or(Error::InvalidData("adpcm_ms: truncated header"))?;
+        let &[lo, hi] = b else {
+            return Err(Error::InvalidData("adpcm_ms: truncated header"));
+        };
+        sample2s.push(i32::from(i16::from_le_bytes([lo, hi])));
         cursor += 2;
     }
     let mut per_channel: Vec<Vec<i16>> = Vec::new();
@@ -204,11 +220,13 @@ pub(crate) fn encode_block(samples: &[i16], channels: u32) -> Result<Vec<u8>> {
             (s2, s1)
         })
         .collect();
-    for &(s2, _) in &seeds {
-        out.extend_from_slice(&s2.to_le_bytes());
-    }
+    // Wire order is `iSamp1` (newer) then `iSamp2` (older) -- see
+    // `decode_block`'s comment on the real `ADPCMBLOCKHEADER` field order.
     for &(_, s1) in &seeds {
         out.extend_from_slice(&s1.to_le_bytes());
+    }
+    for &(s2, _) in &seeds {
+        out.extend_from_slice(&s2.to_le_bytes());
     }
 
     let mut states: Vec<MsState> = seeds
