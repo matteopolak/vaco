@@ -75,11 +75,11 @@ pub struct AllocParams {
     /// channel, or `0`/`7` for LFE.
     pub start_bin: usize,
     pub end_bin: usize,
-    /// Delta bit allocation, applied in §7.2.2.6: `(band_offset, run_length,
-    /// deltba)` triples, already expanded from `deltoffst`/`deltlen`/
-    /// `deltba` segments into absolute band positions by the caller. Empty
-    /// when `deltbaie == 0` or this channel's `deltbae` says reuse/none.
-    pub delta: &'static [(u8, u8, u8)],
+    /// §7.2.2.4's coupling-channel leak seeds, `(fastleak, slowleak)` =
+    /// `((cplfleak << 8) + 768, (cplsleak << 8) + 768)`. `None` for full-
+    /// bandwidth and LFE channels, whose leaks are seeded from `bndpsd`
+    /// inside the `bndstrt == 0` branch instead.
+    pub cpl_leaks: Option<(i32, i32)>,
 }
 
 impl Default for AllocParams {
@@ -95,7 +95,7 @@ impl Default for AllocParams {
             snroffset: 0,
             start_bin: 0,
             end_bin: 0,
-            delta: &[],
+            cpl_leaks: None,
         }
     }
 }
@@ -128,13 +128,20 @@ const fn calc_lowcomp(a: i32, b0: i32, b1: i32, bin: usize) -> i32 {
 /// Run the model over one channel's exponents (§7.2.2.1 through §7.2.2.7),
 /// returning one `bap` per bin in `0..params.end_bin`. `exps` must be at
 /// least `end_bin` long; shorter is treated as silence past its end.
+///
+/// `delta` carries §7.2.2.6's already-accumulated delta bit allocation as
+/// `(band, run_length, deltba)` triples — the caller resolves `deltoffst`'s
+/// running `band +=` and holds them across blocks, since `deltbae == 0`
+/// ("reuse") re-applies the previous block's segments. Empty means no
+/// adjustment, which is what `deltbae == 2` and a never-sent `deltbaie`
+/// both require.
 #[must_use]
 #[allow(
     clippy::too_many_lines,
     clippy::many_single_char_names,
     reason = "one seven-step spec procedure, §7.2.2.1-7.2.2.7 — variable names (i, j, m, p) match the pseudocode's own so the correspondence stays checkable"
 )]
-pub fn compute_bap(exps: &[u8], params: &AllocParams) -> Vec<u8> {
+pub fn compute_bap(exps: &[u8], params: &AllocParams, delta: &[(u8, u8, u8)]) -> Vec<u8> {
     let start = params.start_bin;
     let end = params.end_bin.max(start);
     let n = end.max(exps.len());
@@ -239,12 +246,11 @@ pub fn compute_bap(exps: &[u8], params: &AllocParams) -> Vec<u8> {
         }
         begin = 22;
     } else {
-        // Coupling channel: no lowcomp, leak state seeded by the caller's
-        // `cplfleak`/`cplsleak` in the general case — approximated here at
-        // the same starting psd the fbw path would use, since this crate
-        // does not reconstruct coupling and the value is otherwise unused.
-        fastleak = bndpsd.get(bndstrt).copied().unwrap_or(0) - fgain;
-        slowleak = bndpsd.get(bndstrt).copied().unwrap_or(0) - sgain;
+        // §7.2.2.1, coupling channel: no lowcomp, and the leaks start from
+        // the transmitted `cplfleak`/`cplsleak` rather than from `bndpsd`.
+        let (f, sl) = params.cpl_leaks.unwrap_or((0, 0));
+        fastleak = f;
+        slowleak = sl;
         begin = bndstrt;
     }
     let mut bin = begin;
@@ -279,7 +285,7 @@ pub fn compute_bap(exps: &[u8], params: &AllocParams) -> Vec<u8> {
 
     // §7.2.2.6: delta bit allocation, adjustments of ±6 dB multiples applied
     // directly to `mask[band]`.
-    for &(band_off, run, deltba) in params.delta {
+    for &(band_off, run, deltba) in delta {
         let delta = if deltba >= 4 {
             i32::from(deltba) - 3
         } else {
@@ -353,7 +359,7 @@ mod tests {
             end_bin: 256,
             ..AllocParams::default()
         };
-        let bap = compute_bap(&exps, &params);
+        let bap = compute_bap(&exps, &params, &[]);
         let quiet = bap.get(28).copied().unwrap_or(0);
         let loud = bap.get(29).copied().unwrap_or(0);
         assert!(loud >= quiet, "loud={loud} quiet={quiet}");
@@ -366,7 +372,7 @@ mod tests {
             end_bin: 64,
             ..AllocParams::default()
         };
-        let bap = compute_bap(&exps, &params);
+        let bap = compute_bap(&exps, &params, &[]);
         assert!(bap.iter().all(|&b| b <= 5));
     }
 
@@ -376,7 +382,7 @@ mod tests {
             end_bin: 40,
             ..AllocParams::default()
         };
-        let _ = compute_bap(&[1, 2, 3], &params);
+        let _ = compute_bap(&[1, 2, 3], &params, &[]);
     }
 
     #[test]
@@ -386,7 +392,7 @@ mod tests {
             end_bin: 253,
             ..AllocParams::default()
         };
-        let bap = compute_bap(&exps, &params);
+        let bap = compute_bap(&exps, &params, &[]);
         assert_eq!(bap.len(), 253);
     }
 
@@ -397,7 +403,7 @@ mod tests {
             end_bin: 7,
             ..AllocParams::default()
         };
-        let bap = compute_bap(&exps, &params);
+        let bap = compute_bap(&exps, &params, &[]);
         assert_eq!(bap.len(), 7);
     }
 }

@@ -37,14 +37,38 @@
 //!
 //! # Verification
 //!
-//! See this crate's `docs/codec/vaco-codec-ac3.md` and
-//! this crate's own conformance test for the measured accuracy matrix. In
-//! summary: the bitstream syntax (sync frame, BSI, exponent grouping) is
-//! high-confidence and independently checkable (a wrong field width desyncs
-//! the frame, which is directly observable). The parametric bit-allocation
-//! model's masking-curve constants could not be verified against the
-//! primary specification text in this environment and are the dominant
-//! source of measured error — see `crate::tables_bitalloc`'s module docs.
+//! `tests/conformance.rs` decodes ffmpeg-produced files and compares PCM
+//! against `ffmpeg`'s own decode of the same files, and asserts — it does
+//! not merely report. Measured 2026-09-03 against ffmpeg 9.0.1:
+//!
+//! | fixture                     | SNR vs ffmpeg |
+//! |-----------------------------|---------------|
+//! | noise mono 192k             | 108.0 dB      |
+//! | chirp mono 192k             | 109.7 dB      |
+//! | noise stereo 192k           |  22.6 dB      |
+//! | noise 5.1 448k              |  26.7 dB      |
+//! | sine fixtures (mono to 5.1) |  78-89 dB     |
+//!
+//! The mono figures are float-pipeline rounding — `ffmpeg` decodes those
+//! files bit-identically to itself across dither settings, and this decoder
+//! matches to 1e-6 absolute. The multichannel figures are bounded by A/52
+//! §7.3.4's explicit decoder latitude for dithered `bap == 0` mantissas
+//! ("Any reasonably random sequence may be used"): `ffmpeg` disagrees with
+//! *itself* by 20.8 dB (stereo) and 22.8 dB (5.1) on those same files when
+//! its noise generation changes, so this decoder agrees with `ffmpeg` more
+//! closely than `ffmpeg` agrees with itself. See the test's module docs.
+//!
+//! A second test asserts a bitstream-only oracle needing no reference
+//! decoder: every frame's six `audblk()`s plus `auxdata()`/`errorcheck()`
+//! must fit inside the syncframe. That is what catches a bit-allocation
+//! desync, which PCM error alone can mask.
+//!
+//! Outstanding: this crate emits a true zero rather than a random value for
+//! dithered `bap == 0` mantissas (§7.3.4), which is inside the latitude
+//! above but is not what the clause asks for. Channels are returned in
+//! `acmod`'s own order, matching what `acmod_layout` declares; `ffmpeg`
+//! reorders to its canonical layout on output, so a positional comparison
+//! needs a channel map.
 
 #![forbid(unsafe_code)]
 
