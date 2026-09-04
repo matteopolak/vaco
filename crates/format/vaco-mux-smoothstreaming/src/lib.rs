@@ -184,6 +184,22 @@ struct Track {
     frag_start_hns: u64,
     sequence_number: u32,
     manifest_chunks: Vec<u64>,
+    /// Fallback duration (in HNS) for a packet that states none —
+    /// `Packet::duration == 0` is the ordinary `-c copy` case out of a
+    /// demuxer that reports none, and neither `trun.sample_duration` nor
+    /// `tfxd.fragment_duration_hns` has an "unknown" encoding: a zero here
+    /// makes the sample, the fragment, and `Manifest`'s `<c d="…">` all read
+    /// zero, and a zero-duration fragment for a live-style muxer means
+    /// `accumulated_hns` never reaches [`SmoothStreamingMuxOptions`]'s
+    /// threshold either.
+    ///
+    /// Seeded from the stream's own declared frame rate at [`Muxer::add_stream`]
+    /// (video only — [`vaco_codec_core::AudioParameters`] carries no
+    /// samples-per-frame field to derive an audio one from), then kept
+    /// current from the last packet that *did* state a duration — the same
+    /// "repeat the previous delta" fallback `vaco-mux-mp4`'s `stts_runs` uses
+    /// for its own trailing sample.
+    duration_hint_hns: u64,
 }
 
 /// The Smooth Streaming muxer.
@@ -356,6 +372,19 @@ impl Muxer for SmoothStreamingMuxer {
                 let video = params.video.as_ref().ok_or(Error::InvalidData(
                     "smoothstreaming needs VideoParameters for an H.264 stream",
                 ))?;
+                // Seed the fallback from the declared frame rate, not an
+                // invented constant — `0` only when the container states no
+                // frame rate either, in which case there is nothing to
+                // derive from until a real packet duration arrives.
+                let duration_hint_hns = match (
+                    u64::try_from(video.frame_rate.num),
+                    u64::try_from(video.frame_rate.den),
+                ) {
+                    (Ok(num), Ok(den)) if num > 0 => {
+                        TICKS_PER_SECOND.saturating_mul(den) / num
+                    }
+                    _ => 0,
+                };
                 Track {
                     stream_index,
                     id: track_id,
@@ -371,6 +400,7 @@ impl Muxer for SmoothStreamingMuxer {
                     frag_start_hns: 0,
                     sequence_number: 1,
                     manifest_chunks: Vec::new(),
+                    duration_hint_hns,
                 }
             }
             Some(CodecId::Aac) => {
@@ -396,6 +426,10 @@ impl Muxer for SmoothStreamingMuxer {
                     frag_start_hns: 0,
                     sequence_number: 1,
                     manifest_chunks: Vec::new(),
+                    // No samples-per-frame field to derive one from; the
+                    // fallback starts at 0 and picks up the first packet
+                    // that states a real duration.
+                    duration_hint_hns: 0,
                 }
             }
             _ => {
@@ -434,7 +468,17 @@ impl Muxer for SmoothStreamingMuxer {
         let threshold = self.opts.min_frag_duration_hns();
 
         let duration_us = packet.duration.as_micros().max(0);
-        let duration_hns = (duration_us as u64).saturating_mul(10);
+        let stated_hns = (duration_us as u64).saturating_mul(10);
+        // `Packet::duration == 0` is the ordinary case for a `-c copy` remux
+        // out of a demuxer that reports none; neither `trun.sample_duration`
+        // nor `tfxd.fragment_duration_hns` has an "unknown" encoding, so a
+        // literal zero here is not "no information", it is "zero-length" —
+        // see `Track::duration_hint_hns`'s own doc.
+        let duration_hns = if stated_hns == 0 {
+            track.duration_hint_hns
+        } else {
+            stated_hns
+        };
         let duration_hns_u32 = u32::try_from(duration_hns).unwrap_or(u32::MAX);
 
         // Video: flush *before* appending this sample, once it is a
@@ -465,6 +509,9 @@ impl Muxer for SmoothStreamingMuxer {
         };
         track.pending.push(sample);
         track.accumulated_hns = track.accumulated_hns.saturating_add(duration_hns);
+        if stated_hns > 0 {
+            track.duration_hint_hns = stated_hns;
+        }
         let accumulated_hns = track.accumulated_hns;
 
         // Audio: no keyframe concept, so flush as soon as the threshold is

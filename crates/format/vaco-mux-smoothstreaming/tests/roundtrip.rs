@@ -220,6 +220,72 @@ fn twelve_seconds_produces_three_fragments_per_track_with_matching_fragment_info
     );
 }
 
+/// A packet with no stated duration (the ordinary `-c copy` case out of a
+/// demuxer that reports none) must not zero out its sample, its fragment, or
+/// the manifest's `<c d="…">` for it. `write_packet` used to copy
+/// `Packet::duration` into `trun`/`tfxd`/the manifest chunk list verbatim,
+/// with no fallback at all — every duration-less sample became a real
+/// zero, not "unknown", since neither `trun.sample_duration` nor
+/// `tfxd.fragment_duration_hns` has an "unknown" encoding.
+#[test]
+fn a_packet_with_no_stated_duration_repeats_the_previous_one_not_zero() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest_path = dir.path().join("Manifest");
+    let manifest_url = manifest_path.to_str().unwrap().to_owned();
+    let video_bitrate = 59793;
+    fs::create_dir_all(dir.path().join(format!("QualityLevels({video_bitrate})"))).unwrap();
+
+    let write = WriteAccess::unrestricted(registry());
+    let mut mux = SmoothStreamingMuxer::new(
+        manifest_url.clone(),
+        Some(write),
+        SmoothStreamingMuxOptions::new(),
+    );
+    let video_idx = mux.add_stream(&h264_params(video_bitrate)).unwrap();
+    mux.write_header().unwrap();
+
+    let mut budget = Budget::new(Limits::permissive());
+    const VIDEO_FRAME_US: i64 = 40_000; // 1/25 s, matching h264_params' frame_rate
+    // Three ordinary frames with a stated duration, then a fourth (the
+    // last packet before write_trailer, exactly the shape `91c15a2b`
+    // fixed in vaco-mux-mp4) whose duration is unstated.
+    for i in 0..4i64 {
+        let mut pkt = Packet::from_slice(&mut budget, &[0xAB, 0xCD, 0xEF, 0x01]).unwrap();
+        pkt.stream_index = video_idx;
+        pkt.duration = if i < 3 {
+            Duration::from_micros(VIDEO_FRAME_US)
+        } else {
+            Duration::ZERO
+        };
+        pkt.flags = if i == 0 {
+            PacketFlags::KEY
+        } else {
+            PacketFlags::empty()
+        };
+        mux.write_packet(&pkt).unwrap();
+    }
+    mux.write_trailer().unwrap();
+
+    let manifest_xml = fs::read_to_string(&manifest_path).unwrap();
+    // Four frames, each worth 40_000us = 400_000 HNS: the previous stated
+    // duration must be repeated for the fourth, giving 1_600_000 total, not
+    // 1_200_000 (three real frames plus a dropped/zeroed fourth).
+    assert!(
+        manifest_xml.contains("<c n=\"0\" d=\"1600000\" />"),
+        "the unstated fourth frame's duration must fall back to the previous \
+         one (400_000 HNS), not zero: {manifest_xml}"
+    );
+
+    let frag_path = dir
+        .path()
+        .join(format!("QualityLevels({video_bitrate})"))
+        .join("Fragments(video=0)");
+    let frag = fs::read(&frag_path).unwrap();
+    let boxes = walk_boxes(&frag);
+    assert_eq!(boxes[0].0, "moof");
+    assert_eq!(boxes[1].0, "mdat");
+}
+
 #[test]
 fn a_stream_with_no_declared_bit_rate_is_rejected_before_any_file_is_created() {
     let dir = tempfile::tempdir().unwrap();
