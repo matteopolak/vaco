@@ -93,7 +93,7 @@ fn parse_boundaries_seconds(spec: &str) -> std::result::Result<Vec<Boundary>, St
             clippy::cast_precision_loss,
             reason = "display-scale duration conversion"
         )]
-        let secs = d.0 as f64 / 1_000_000.0;
+        let secs = d.as_secs_f64();
         running = if relative { running + secs } else { secs };
         out.push(Boundary::Seconds(running));
     }

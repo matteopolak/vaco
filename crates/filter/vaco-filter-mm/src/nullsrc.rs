@@ -26,7 +26,7 @@ use vaco_filter_graph::registry::{Instance, Instantiate};
 /// The reference's own "unlimited" sentinel for `duration`/`d`: a single tick
 /// under zero. Reproduced rather than translated to `None` because it is
 /// what `-h filter=nullsrc` actually prints as the default.
-const UNLIMITED: VDuration = VDuration(-1);
+const UNLIMITED: VDuration = VDuration::from_micros(-1);
 
 // -------------------------------------------------------------- nullsrc
 
@@ -97,7 +97,7 @@ impl SourceFilter for VideoSource {
             .acquire_video(PixFmt::Yuv420p, self.width, self.height)?;
         frame.pts = Timestamp::new(self.next);
         frame.time_base = self.frame_rate.inverse();
-        frame.duration = vaco_core::Duration(1);
+        frame.set_duration_ticks(1);
         frame.sample_aspect_ratio = self.sar;
         self.next = self.next.saturating_add(1);
         Ok(Some(frame))
@@ -133,7 +133,7 @@ pub mod video {
         let opts = VideoOpts::parse(req.args)?;
         let (width, height) = opts.size;
         let rate = opts.rate.0;
-        let total_frames = if opts.duration.0 < 0 {
+        let total_frames = if opts.duration.as_micros() < 0 {
             None
         } else {
             let secs = opts.duration.as_secs_f64();
@@ -234,7 +234,7 @@ impl SourceFilter for AudioSource {
         )?;
         frame.pts = Timestamp::new(i64::try_from(self.produced).unwrap_or(0));
         frame.time_base = Rational::new(1, i32::try_from(self.sample_rate.max(1)).unwrap_or(1));
-        frame.duration = vaco_core::Duration(i64::from(want));
+        frame.set_duration_ticks(i64::from(want));
         self.produced = self.produced.saturating_add(u64::from(want));
         Ok(Some(frame))
     }
@@ -270,7 +270,7 @@ pub mod audio {
         let layout = vaco_chlayout::ChannelLayout::from_name(&opts.channel_layout)
             .ok_or_else(|| format!("anullsrc: bad channel_layout `{}`", opts.channel_layout))?;
         let sample_rate = u32::try_from(opts.sample_rate.max(1)).unwrap_or(44100);
-        let total_samples = if opts.duration.0 < 0 {
+        let total_samples = if opts.duration.as_micros() < 0 {
             None
         } else {
             Some(

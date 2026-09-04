@@ -125,7 +125,7 @@ impl FilterTrait for Concat {
             let pad = self.input_pad(stream, segment);
 
             if let Some(mut frame) = ctx.take_input(pad) {
-                let duration = frame.duration.0.max(0);
+                let duration = frame.duration_ticks().max(0);
                 let base = frame.pts.ticks().unwrap_or(0);
                 frame.pts = Timestamp::new(base.saturating_add(offset));
                 if let Some(s) = self.state.get_mut(stream) {

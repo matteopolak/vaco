@@ -159,7 +159,7 @@ impl FrameFilter for Filter {
         }
         self.seen_units = self.seen_units.saturating_add(u.max(1));
         let pts = frame.pts.ticks();
-        let step = frame.duration.0.max(1);
+        let step = frame.duration_ticks().max(1);
         if let Some(p) = pts {
             self.next_pts = Some(p.saturating_add(step));
         }
@@ -176,7 +176,7 @@ impl FrameFilter for Filter {
         let Some(mut frame) = self.window.get(self.replay_index).cloned() else {
             return Ok(FrameOut::None);
         };
-        let step = frame.duration.0.max(1);
+        let step = frame.duration_ticks().max(1);
         let pts = self.next_pts.unwrap_or(0);
         frame.pts = Timestamp::new(pts);
         self.next_pts = Some(pts.saturating_add(step));
@@ -260,9 +260,7 @@ pub mod video {
             loop_count: i64::from(raw.loop_count),
             size: raw.size,
             start: raw.start,
-            // `VDuration` is microseconds; frame timestamps are compared in
-            // seconds via `Timestamp::to_seconds`.
-            time_secs: raw.time.map(|d| d.0 as f64 / 1_000_000.0),
+            time_secs: raw.time.map(VDuration::as_secs_f64),
         };
         Ok(build(MediaType::Video, DESC, &opts, req))
     }
@@ -319,7 +317,7 @@ pub mod audio {
             loop_count: i64::from(raw.loop_count),
             size: raw.size,
             start: raw.start,
-            time_secs: raw.time.map(|d| d.0 as f64 / 1_000_000.0),
+            time_secs: raw.time.map(VDuration::as_secs_f64),
         };
         Ok(build(MediaType::Audio, DESC, &opts, req))
     }

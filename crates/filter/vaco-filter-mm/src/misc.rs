@@ -130,7 +130,7 @@ impl FrameFilter for CueFilter {
             return Ok(out.into_iter().collect());
         }
         if self.passed_secs < self.preroll_secs {
-            self.passed_secs += frame.duration.0.max(0) as f64 * frame.time_base.to_f64();
+            self.passed_secs += frame.duration_ticks().max(0) as f64 * frame.time_base.to_f64();
             return Ok(FrameOut::One(frame));
         }
         if self.budget.charge(frame_bytes(&frame)).is_ok() {
@@ -160,7 +160,7 @@ fn cue_build(
         clippy::cast_precision_loss,
         reason = "display-scale duration conversion"
     )]
-    let secs = |d: Option<VDuration>| d.map_or(0.0, |d| d.0 as f64 / 1_000_000.0);
+    let secs = |d: Option<VDuration>| d.map_or(0.0, VDuration::as_secs_f64);
     let filter = CueFilter {
         cue_micros: opts.cue,
         preroll_secs: secs(opts.preroll),
@@ -249,7 +249,7 @@ fn realtime_build(
         clippy::cast_precision_loss,
         reason = "display-scale duration conversion"
     )]
-    let limit_secs = opts.limit.map_or(2.0, |d| d.0 as f64 / 1_000_000.0);
+    let limit_secs = opts.limit.map_or(2.0, VDuration::as_secs_f64);
     let filter = RealtimeFilter {
         limit_secs,
         speed: if opts.speed > 0.0 { opts.speed } else { 1.0 },

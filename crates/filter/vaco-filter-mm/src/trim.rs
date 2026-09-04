@@ -310,7 +310,7 @@ fn slice_audio(frame: &Frame, skip: usize, keep: usize, new_pts: i64) -> Result<
     }
     out.pts = vaco_core::Timestamp::new(new_pts);
     out.time_base = frame.time_base;
-    out.duration = vaco_core::Duration(i64::try_from(keep).unwrap_or(0));
+    out.set_duration_ticks(i64::try_from(keep).unwrap_or(0));
     Ok(out)
 }
 
