@@ -274,3 +274,18 @@ fn parsing_is_iterative_so_depth_costs_bytes_not_stack() {
         .join(";");
     assert_eq!(parse(&chains).map(|a| a.chains.len()), Ok(50_000));
 }
+
+#[test]
+fn a_filter_literally_named_sws_flags_survives_printing() {
+    // Found by `graph_hostile`: the leading backslash keeps this from being the
+    // prefix, so it parses as one filter named `sws_flags`. Printing it without
+    // the backslash turned it back into the prefix and an empty graph.
+    let src = r"\sws_flags=x|y;";
+    let ast = ok(src);
+    assert_eq!(names(&ast), ["sws_flags"]);
+    assert!(ast.sws_flags.is_none());
+    let printed = ast.to_string();
+    let again = ok(&printed);
+    assert_eq!(again.without_spans(), ast.without_spans(), "{printed:?}");
+    assert_eq!(again.to_string(), printed);
+}

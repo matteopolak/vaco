@@ -427,6 +427,20 @@ impl core::fmt::Display for Ast {
                 for label in &filter.inputs {
                     write!(f, "[{}]", lex::escape(&label.name, StopSet::LABEL))?;
                 }
+                // A filter literally named `sws_flags`, written first with
+                // arguments and no labels, would print as the prefix and parse
+                // back as an empty graph. Found by `graph_hostile` on
+                // `\sws_flags=x|y;`. One escaped byte keeps it a name.
+                let collides_with_prefix = i == 0
+                    && j == 0
+                    && self.sws_flags.is_none()
+                    && filter.inputs.is_empty()
+                    && filter.instance.is_none()
+                    && filter.args.is_some()
+                    && SWS_PREFIX.strip_suffix('=') == Some(filter.name.as_str());
+                if collides_with_prefix {
+                    f.write_str("\\")?;
+                }
                 f.write_str(&lex::escape(&filter.name, StopSet::NAME))?;
                 if let Some(id) = &filter.instance {
                     write!(f, "@{}", lex::escape(id, StopSet::NAME))?;
