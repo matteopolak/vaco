@@ -38,7 +38,7 @@
 use std::collections::VecDeque;
 
 use vaco_codec_core::{CodecId, CodecParameters, Parser};
-use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, MediaType, Rational, Result, Rounding, Timestamp};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::options::FormatOptions;
 use vaco_format_core::seek::{SeekFlags, SeekTarget, binary_search};
@@ -101,7 +101,7 @@ pub struct MpegPsDemuxer {
     scr_wrap: WrapState,
     first_scr: Option<i64>,
     last_scr: Option<i64>,
-    duration: Option<Duration>,
+    duration_exact: Option<ExactDuration>,
     eof: bool,
     program_ended: bool,
     first_pack_pos: u64,
@@ -156,7 +156,7 @@ impl MpegPsDemuxer {
             scr_wrap: WrapState::new(SCR_WRAP_BITS).with_options(opts),
             first_scr: None,
             last_scr: None,
-            duration: None,
+            duration_exact: None,
             eof: false,
             program_ended: false,
             first_pack_pos: 0,
@@ -192,10 +192,13 @@ impl MpegPsDemuxer {
         if let (Some(first), Some(last)) = (self.first_scr, self.last_scr)
             && last > first
         {
-            self.duration = Timestamp::new(last - first).to_duration(Rational {
-                num: 1,
-                den: 90_000,
-            });
+            self.duration_exact = ExactDuration::from_ticks(
+                last - first,
+                Rational {
+                    num: 1,
+                    den: 90_000,
+                },
+            );
         }
     }
 
@@ -610,7 +613,12 @@ impl Demuxer for MpegPsDemuxer {
     }
 
     fn duration(&self) -> Option<Duration> {
-        self.duration
+        self.duration_exact?
+            .to_duration(Rounding::NearestAwayFromZero)
+    }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.duration_exact
     }
 }
 

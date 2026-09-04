@@ -98,6 +98,13 @@ uses `vaco_format_core::seek::binary_search` with a probe closure that
 scans forward from a byte position for the next pack header and reports its
 SCR — a direct analogue of MPEG-TS's PCR-based bisection seek.
 
+The aggregate duration is the observed first-to-last SCR span on that native
+90 kHz clock. `duration_exact()` retains the tick ratio without an intermediate
+microsecond conversion; the legacy `duration()` view is derived from the exact
+value with round-to-nearest for compatibility. The committed MPEG-1 reference
+fixture spans 59,374 ticks (`29,687/45,000` seconds), which cannot be represented
+as a whole number of microseconds.
+
 ## How to change it
 
 * **New `private_stream_1` sub-id range**: add a variant and range to
@@ -108,10 +115,10 @@ SCR — a direct analogue of MPEG-TS's PCR-based bisection seek.
   `finish_pes` already calls `self.es[..].parser.parse()` when a parser
   exists. Growing `vaco-codec-core`'s `CodecId` and wiring `parser_for` in
   the registry is what activates it.
-* **Byte-exact seek/duration parity with the reference** has not been
-  measured (see "What was and was not measured" below); the seek and
-  duration paths are structurally present, exercised by unit tests, but not
-  checked against `ffprobe`/`ffmpeg -ss` field-for-field.
+* **Byte-exact seek parity with the reference** has not been measured (see
+  "What was and was not measured" below). Duration's native SCR span is
+  exercised against the committed reference-produced MPEG-1 fixture, but the
+  reference's higher-level duration-estimation policy is not reproduced.
 * **Do not add a `vaco-format-mpeg-common` dependency here without reading
   the note below first** — that crate does not exist, and creating it is
   out of this crate's scope.

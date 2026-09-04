@@ -21,7 +21,7 @@
     reason = "test code"
 )]
 
-use vaco_core::MediaType;
+use vaco_core::{Duration, MediaType};
 use vaco_demux_mpegps::MpegPsDemuxer;
 use vaco_format_core::discovery::NoParsers;
 use vaco_format_core::{Demuxer, FormatOptions};
@@ -124,5 +124,22 @@ fn a_real_mpeg1_systems_sample_uses_the_mpeg1_pes_envelope_throughout() {
     assert!(
         total > 5,
         "expected several packets from a 64 KiB sample, got {total}"
+    );
+}
+
+#[test]
+fn a_real_mpeg1_systems_sample_keeps_the_scr_duration_exact() {
+    let bytes: &'static [u8] = include_bytes!("fixtures/mpeg1_sample.mpg");
+    let demux = open(bytes);
+
+    // The seven pack headers span 59,374 ticks of MPEG-PS's 90 kHz SCR
+    // clock. That is 659,711 1/9 microseconds, so the legacy view rounds
+    // while the exact view must retain the source clock's fraction.
+    assert_eq!(demux.duration(), Some(Duration::from_micros(659_711)));
+    assert_eq!(
+        demux
+            .duration_exact()
+            .map(vaco_core::ExactDuration::as_ratio),
+        Some((29_687, 45_000))
     );
 }
