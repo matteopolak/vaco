@@ -38,7 +38,7 @@
 //!   and (for its video stream) `roq` show, not a property of the packet's
 //!   command/instruction bytes.
 //!
-use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::probe::{ProbeData, ProbeScore};
 use vaco_format_core::seek::{SeekFlags, SeekTarget};
@@ -194,6 +194,10 @@ impl Demuxer for CdgDemuxer {
     fn duration(&self) -> Option<Duration> {
         self.stream.duration()
     }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.stream.duration_exact()
+    }
 }
 
 #[cfg(test)]
@@ -237,6 +241,23 @@ mod tests {
         assert!(d.read_packet().unwrap().is_key());
         assert!(!d.read_packet().unwrap().is_key());
         assert!(!d.read_packet().unwrap().is_key());
+        assert!(matches!(d.read_packet(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn one_packet_fixture_preserves_the_native_300_hz_duration() {
+        let bytes = include_bytes!("../tests/fixtures/cdg_one_packet.cdg");
+        let mut d = CdgDemuxer::open(Box::new(MemorySource::new(bytes.to_vec()))).unwrap();
+
+        // Forced-format ffprobe 9.0.1 reports time_base=1/300,
+        // duration_ts=1, duration=0.003333, and nb_read_packets=1.
+        assert_eq!(d.stream.duration_ts, Some(1));
+        assert_eq!(d.duration(), Some(Duration::from_micros(3_333)));
+        assert_eq!(
+            d.duration_exact().map(vaco_core::ExactDuration::as_ratio),
+            Some((1, 300))
+        );
+        assert_eq!(d.read_packet().unwrap().pts, Timestamp::ZERO);
         assert!(matches!(d.read_packet(), Err(Error::Eof)));
     }
 

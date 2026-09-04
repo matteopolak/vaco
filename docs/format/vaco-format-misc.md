@@ -145,6 +145,15 @@ stays there through 1000. A file of all-zero bytes loses to an unrelated
 format's probe outright — this is a genuinely weak content test, which
 fits a format with no magic number at all.
 
+CDG's aggregate duration is the complete 24-byte packet count at the format's
+fixed 300-packet/s clock. `duration_exact()` exposes the stream's native
+`duration_ts/300` ratio without converting through integer microseconds; the
+legacy `duration()` remains the rounded compatibility view. The committed
+one-packet fixture is deliberately the smallest inexact case: forced-format
+`ffprobe 9.0.1` reports `time_base=1/300`, `duration_ts=1`,
+`duration=0.003333`, and one packet, while Vaco retains the exact `1/300`
+second value.
+
 ### `bink`: per-frame table, seek instead of drift
 
 The header's frame index table gives each frame's own absolute byte
