@@ -223,7 +223,7 @@ impl SourceFilter for Source {
         }
         frame.pts = Timestamp::new(self.next);
         frame.time_base = self.frame_rate.inverse();
-        frame.duration = vaco_core::Duration(1);
+        frame.set_duration_ticks(1);
         self.next = self.next.saturating_add(1);
         Ok(Some(frame))
     }

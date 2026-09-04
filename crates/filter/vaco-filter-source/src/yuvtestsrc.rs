@@ -35,7 +35,7 @@ use vaco_pixfmt::PixFmt;
 
 use vaco_filter_graph::registry::{Instance, Instantiate};
 
-const UNLIMITED: VDuration = VDuration(-1);
+const UNLIMITED: VDuration = VDuration::from_micros(-1);
 const NEUTRAL: u8 = 128;
 
 #[derive(Debug, Clone, vaco_opts::Options)]
@@ -180,7 +180,7 @@ impl SourceFilter for Source {
         }
         frame.pts = Timestamp::new(self.next);
         frame.time_base = self.frame_rate.inverse();
-        frame.duration = vaco_core::Duration(1);
+        frame.set_duration_ticks(1);
         frame.sample_aspect_ratio = self.sar;
         self.next = self.next.saturating_add(1);
         Ok(Some(frame))
@@ -199,7 +199,7 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let opts = Opts::parse(req.args)?;
     let (width, height) = opts.size;
     let rate = opts.rate.0;
-    let total_frames = if opts.duration.0 < 0 {
+    let total_frames = if opts.duration.as_micros() < 0 {
         None
     } else {
         Some(
