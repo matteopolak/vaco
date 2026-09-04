@@ -115,11 +115,17 @@
 //!   Deblocking and SAO consult the same per-CU filter-bypass mask already
 //!   used for protected I_PCM samples. Verified byte-exact against
 //!   `ffmpeg 9.0.1` on JCT-VC `ipcm_D_NEC_3` (`tests/ipcm.rs`).
+//! - **Custom scaling lists (§7.4.5/§8.6.3) are implemented.** One resolved
+//!   [`transform::ScalingMatrices`] value applies PPS-over-SPS precedence,
+//!   default/copy inference and diagonal-scan placement once per active
+//!   parameter-set pair; all four luma/chroma, intra/inter dequantisation
+//!   paths consume it. JCT-VC `SLIST_C_Sony_4` checks the switch from default
+//!   to explicitly signalled matrices byte-for-byte (`tests/scaling_list.rs`).
 //! - **Refused by name today**, each with its own
 //!   [`vaco_core::Error::Unsupported`] string: bit depths other than 8,
 //!   chroma formats other than 4:2:0, `separate_colour_plane_flag`,
-//!   tiles, chroma QP offset lists, custom scaling
-//!   lists, every SPS/PPS range-extension and screen-content-coding flag,
+//!   tiles, chroma QP offset lists, every SPS/PPS range-extension and
+//!   screen-content-coding flag,
 //!   long-term reference pictures, dependent slice segments, and more than
 //!   one slice segment per picture. The SPS/PPS ones are refused at
 //!   `check_scope`; the rest the moment the bitstream actually uses the
@@ -127,8 +133,9 @@
 //!
 //! `docs/codec/vaco-codec-hevc.md`'s "The JCT-VC `HEVC_v1` subset,
 //! measured" section is the standing record of what this list costs on real
-//! conformance bitstreams: 38 of 46 byte-exact against `ffmpeg`'s own decode
-//! and 8 refused by name, with no wrong-output or CABAC-desync cases.
+//! conformance bitstreams: 39 of 46 byte-exact against `ffmpeg`'s own decode,
+//! one exact against its archive-published checksum, and 6 refused by name,
+//! with no wrong-output or CABAC-desync cases.
 //!
 //! # Reuse, not reimplementation
 //!

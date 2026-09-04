@@ -531,7 +531,7 @@ impl HevcDecoder {
             hdr.sao_luma,
             hdr.sao_chroma,
             inter,
-        );
+        )?;
         let mut walk = Ctx::new(
             &ctx_shared,
             &mut pic,
@@ -1077,11 +1077,6 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
     }
     if sps.separate_colour_plane {
         return unsupported("vaco-codec-hevc: separate_colour_plane_flag is not supported");
-    }
-    if sps.scaling_list_enabled {
-        return unsupported(
-            "vaco-codec-hevc: custom scaling lists are not supported (flat scaling only)",
-        );
     }
     if sps.range_extension.is_some() {
         return unsupported("vaco-codec-hevc: SPS range-extension flags are not supported");

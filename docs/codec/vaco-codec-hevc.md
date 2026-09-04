@@ -15,10 +15,10 @@ parallel processing (§9.3.2.3, see "WPP (`entropy_coding_sync_enabled_flag`),
 landed" below), per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see
 "Per-CU QP delta (`cu_qp_delta`), landed" below) and uni- and bi-predictive
 weighted prediction (§8.5.3.3.4.3, see "Weighted prediction
-(§8.5.3.3.4.3), landed" and "B-slices (...), landed" below). Tiles, filter
+(§8.5.3.3.4.3), landed" and "B-slices (...), landed" below). Filter
 suppression for protected I_PCM and transquant-bypass CUs shares one per-CU
-mask. Tiles, custom scaling lists and every range-extension feature are
-explicitly out of scope — see "What was cut" below. I_PCM is implemented both
+mask. Tiles and every range-extension feature are explicitly out of scope —
+see "What was cut" below. I_PCM is implemented both
 with and without per-CU loop-filter suppression.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
@@ -53,7 +53,7 @@ residual-coding's context derivations, and intra prediction.
 | `dpb.rs` | `Dpb`/`ReferencePicSets`/`CollocatedMotionField` — reference-picture-set derivation (§8.3.2), reference-picture-list construction (§8.3.4), DPB output-reordering "bumping" (Annex C.3.2/C.5.2), and the compressed 16x16 motion field TMVP reads (§8.5.3.2.8/.9) |
 | `intra_mode.rs` | MPM derivation (§8.4.2), `rem_intra_luma_pred_mode` resolution, chroma derived-mode (Table 8-2/8-3), mode-dependent scan-order selection |
 | `intra_pred.rs` | Reference-sample line construction/substitution/smoothing, planar/DC/angular prediction (hand-rolled — see the module doc for why `vaco-codec-dsp-intrapred`'s `angular_project` does not fit HEVC's negative-angle extension) |
-| `transform.rs` | Flat-scaling-list dequantisation (§8.6.3), the inverse-transform hand-off to `vaco-codec-dsp-idct::hevc` plus §8.6.5's caller-side `bdShift` |
+| `transform.rs` | Scaling-list resolution (§7.4.5), scaling/dequantisation (§8.6.3), the inverse-transform hand-off to `vaco-codec-dsp-idct::hevc` plus §8.6.5's caller-side `bdShift` |
 | `framebuf.rs` | `Picture`/`Plane` (`ready: Vec<bool>` substitutes for z-scan availability — see its module doc for why that is exact, not approximate, given this crate's single-slice-segment/no-tiles scope) |
 
 ## How it works
@@ -171,7 +171,7 @@ own decode of the same file byte-for-byte, per plane, end to end.
 
 `check_scope` in `decoder.rs` refuses (`Error::Unsupported`, by name, at
 the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
-`separate_colour_plane`, custom scaling lists, SPS/PPS range extensions, SCC
+`separate_colour_plane`, SPS/PPS range extensions, SCC
 extensions and tiles. Neither I_PCM (including
 `pcm_loop_filter_disabled_flag`), transform skip, deblocking, SAO,
 `entropy_coding_sync` (WPP), `cu_qp_delta_enabled`, P-slices, B-slices, nor
@@ -300,8 +300,9 @@ with the production `HevcParser`/`ParserDriver`, feeding those access units to
 
 | result | streams |
 | --- | ---: |
-| byte-exact on every frame | **38** |
-| refused by name (`Unsupported`) | 8 |
+| byte-exact against `ffmpeg` on every frame | **39** |
+| exact against the archive-published checksum | **1** |
+| refused by name (`Unsupported`) | 6 |
 | CABAC desync mid-stream | **0** |
 | wrong pixels at the right length | **0** |
 | wrong frame count | 0 |
@@ -310,8 +311,12 @@ Byte-exact: `amp-a`, `amvp-a`, `amvp-b`, `cip-a`, `cip-b`, `confwin-a`,
 `entp-c`, `filler-a`, `initqp-a`, `ipred-c`, `merge-a`..`merge-e`,
 `mvclip-a`, `mvedge-a`, `picsize-d`, `pmerge-a`, `pmerge-b`, `poc-a`, `ps-b`,
 `rplm-a` (300 frames), `rps-a`, `rqt-a`, `sao-a`, `sao-g`, `slpplp-a`,
-`struct-a`, `tscl-a`, `vpsid-a`, `nut-a`, `nooutprior-a`, `ipcm-a`,
+`struct-a`, `tscl-a`, `vpsid-a`, `nut-a`, `nooutprior-a`, `slist-c`, `ipcm-a`,
 `ipcm-b`, `ipcm-c`, `ipcm-d`, `ipcm-e`.
+
+Archive-exact: `vpsspspps-a`, whose six-picture published checksum is the
+authoritative oracle because this session's `ffmpeg 9.0.1` emits only two of
+its six independently parameterised pictures, as detailed below.
 
 An earlier scratch-only raw harness reported that `initqp-a-sony-1`
 desynchronized after 47 of 60 frames. That harness waited for the next first
@@ -363,8 +368,8 @@ the lockfile's SHA-256-verified `NUT_A_ericsson_5.bit`: this decoder and
 every byte matches.
 
 Refused by name, not mis-decoded: more than one slice segment per picture
-(`dblk-d`..`dblk-g`, `hrd-a`, `slices-a`) and custom scaling lists (`slist-c`,
-`vpsspspps-a`).
+(`dblk-d`..`dblk-g`, `hrd-a`, `slices-a`). Before the scaling-list pass below,
+`slist-c` and `vpsspspps-a` also refused by name; both now decode exactly.
 
 ### I_PCM and transquant-bypass decoding
 
@@ -415,6 +420,52 @@ Measured 2026-09-04 against the SHA-256-verified JCT-VC archives and
   produce one 416x240 yuv420p frame (149,760 bytes), byte-exact in every plane;
   MD5 `aa64a16240064bc2a90fadf979a62a7b` matches the archive's published value.
   `tests/ipcm.rs` vendors the bitstream and reference as the durable oracle.
+
+### Scaling-list resolution and dequantisation
+
+`ScalingMatrices::from_parameter_sets` in `transform.rs` is the single source
+of truth for an active SPS/PPS pair. It applies §7.4.3.3.1's precedence (PPS
+data, otherwise SPS data, otherwise defaults), resolves §7.4.5's default and
+copy modes in matrix-id order, and maps `ScalingList` entries into raster
+factors with the existing up-right diagonal scan generator. The 16x16 and
+32x32 forms retain one 8x8 base plus their separately signalled DC value;
+`factor` performs the 2x2 or 4x4 replication from equations 7-46 through 7-49
+at lookup time. Because this value is built once with `CtxShared`, the four
+intra/inter and luma/chroma residual paths cannot disagree about list
+precedence, scan orientation, or defaults.
+
+The implementation deliberately stores Table 7-6 in `ScalingList` order,
+then uses the same `scan::generate(8, ScanOrder::Diag)` mapping used for
+explicit lists. Do not replace those arrays with visually row-major matrices
+without also removing that mapping. To add a supported chroma format, extend
+the matrix selection for that format before lifting its scope check: 4:4:4
+32x32 chroma uses §7.4.5 equations 7-50 and 7-51, which differ from this
+crate's current 4:2:0-only path. Every new constant table of 32 or more values
+also needs an entry in `provenance/vaco-codec-hevc.toml`.
+
+`tests/scaling_list.rs` vendors JCT-VC `SLIST_C_Sony_4` as the durable
+black-box regression. The SPS enables scaling lists but carries no list data;
+picture 0's PPS also has no data and therefore selects the defaults, while
+the next coded picture replaces the same PPS id with explicit custom
+matrices. Their POCs are 0 and 8 in this hierarchical-B stream. The direct
+`ffmpeg 9.0.1` yuv420p output frames 0 and 8 are 1,198,080 bytes with SHA-256
+`bef0aacb39148117f740fa53af9714c32092196dfef6bb126e7b45dea827f535`.
+The complete reference decode has 65 832x480 frames (38,937,600 bytes),
+SHA-256 `9056adddfacd0fa6fb14014ea4a8dc4920650144c04888005804b35ab2c7fa8e`,
+and the archive-published MD5 `61024c25cbd60e9bf86dbe3bc5b9b48b`.
+
+The second scaling-list vector, `VPSSPSPPS_A_MainConcept_1`, needs a split
+oracle recorded rather than false ffmpeg-byte-exactness. Its archive declares
+six I pictures with distinct VPS/SPS/PPS ids and luma geometries 176x144,
+320x240, 352x288, 640x480, 704x576, and 1280x720; their concatenated yuv420p
+reference is 2,756,736 bytes with published MD5
+`1ddf74263cb4953cfdfcf99c563d88ea`. On this stream `ffmpeg 9.0.1` reports
+missing parameter sets and emits only two 352x288 frames (304,128 bytes),
+SHA-256 `db4c4554fdd3eb11325d9c6de6db4a508da666c739e3c59bf7b37fa3bde3d4a1`,
+not the six-picture reference. That is an oracle limitation, not a target
+behaviour: the decoder is checked against the archive geometry/checksum and
+permitted HM reference behaviour,
+while `SLIST_C` remains the ffmpeg byte-for-byte scaling-list oracle.
 
 ### AMVP motion-vector sum wrapping
 
@@ -1318,8 +1369,8 @@ per plane, per frame**, reusing `verify_hevc_deblock.sh`:
 `check_scope` itself never refused B-slices (it is an SPS/PPS-level check;
 slice type is not known that early) and is unchanged. What `check_scope`
 still refuses is unrelated to this pass: non-4:2:0 chroma, non-8-bit
-samples, `separate_colour_plane_flag`, custom scaling lists, SPS/PPS range
-extensions, screen-content-coding extensions, and tiles. Long-term
+samples, `separate_colour_plane_flag`, SPS/PPS range extensions,
+screen-content-coding extensions, and tiles. Long-term
 reference pictures (refused by `derive_reference_pic_sets`, not
 `check_scope`) and dependent/multi-segment slices (refused inline in
 `decode_packet`, same as before) are also unaffected.

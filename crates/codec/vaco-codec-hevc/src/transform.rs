@@ -1,18 +1,283 @@
-//! Dequantisation (§8.6.3, flat scaling list only — see the crate doc) and
-//! the inverse-transform hand-off to [`vaco_codec_dsp_idct::hevc`].
+//! Scaling-list resolution (§7.4.5), dequantisation (§8.6.3), and the
+//! inverse-transform hand-off to [`vaco_codec_dsp_idct::hevc`].
 //!
 //! Derived from the ITU-T H.265 specification, cross-checked against the HM
 //! reference decoder's `TComTrQuant::xDeQuant`/`QpParam` (BSD-3-Clause, Tier
-//! A — see `cabac_ctx`'s module doc). Scope: `extended_precision_processing`
-//! and custom scaling lists are refused at the SPS (both range-extension /
-//! optional features this crate does not implement), so
-//! `maxLog2TrDynamicRange` is always 15 and every scaling matrix is flat.
+//! A — see `cabac_ctx`'s module doc). `extended_precision_processing` remains
+//! refused at the SPS, so `maxLog2TrDynamicRange` is always 15.
 
 use vaco_codec_dsp_idct::hevc::{ClipRange, idct2d_dct, idct2d_dst4};
+use vaco_core::{Error, Result};
+use vaco_parse_hevc::{Pps, ScalingListData, Sps};
 
-/// `g_invQuantScales`, HM `TComRom.cpp` — the flat dequantisation scale per
-/// `QP % 6`.
+use crate::scan::{self, ScanOrder};
+
+/// Equation 8-309's `levelScale[QP % 6]`, cross-checked against HM's
+/// `g_invQuantScales` in `TComRom.cpp`.
 const INV_QUANT_SCALES: [i32; 6] = [40, 45, 51, 57, 64, 72];
+
+/// Table 7-6's default list for intra matrices at sizes 8x8 through 32x32,
+/// in the specification's up-right diagonal scan order.
+const DEFAULT_SCALING_LIST_INTRA: [u8; 64] = [
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 17, 16, 17, 16, 17, 18, 17, 18, 18, 17, 18, 21, 19, 20,
+    21, 20, 19, 21, 24, 22, 22, 24, 24, 22, 22, 24, 25, 25, 27, 30, 27, 25, 25, 29, 31, 35, 35, 31,
+    29, 36, 41, 44, 41, 36, 47, 54, 54, 47, 65, 70, 65, 88, 88, 115,
+];
+
+/// Table 7-6's default list for inter matrices at sizes 8x8 through 32x32,
+/// in the specification's up-right diagonal scan order.
+const DEFAULT_SCALING_LIST_INTER: [u8; 64] = [
+    16, 16, 16, 16, 16, 16, 16, 16, 16, 16, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 20, 20, 20,
+    20, 20, 20, 20, 24, 24, 24, 24, 24, 24, 24, 24, 25, 25, 25, 25, 25, 25, 25, 28, 28, 28, 28, 28,
+    28, 33, 33, 33, 33, 33, 41, 41, 41, 41, 54, 54, 54, 71, 71, 91,
+];
+
+/// Table 7-4's six choices. Keeping mode and component together makes an
+/// impossible combination unrepresentable at the four reconstruction sites.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ScalingListKind {
+    IntraY,
+    IntraCb,
+    IntraCr,
+    InterY,
+    InterCb,
+    InterCr,
+}
+
+impl ScalingListKind {
+    const fn matrix_id(self) -> usize {
+        match self {
+            Self::IntraY => 0,
+            Self::IntraCb => 1,
+            Self::IntraCr => 2,
+            Self::InterY => 3,
+            Self::InterCb => 4,
+            Self::InterCr => 5,
+        }
+    }
+}
+
+/// Effective scaling factors for one active SPS/PPS pair.
+///
+/// PPS data overrides SPS data; if neither carries `scaling_list_data()`, the
+/// Table 7-5/7-6 defaults apply. Copy-mode references and scan-to-raster
+/// placement are resolved once here, rather than independently at every
+/// transform leaf. Sizes 16 and 32 retain an 8x8 raster base plus the separate
+/// DC coefficient; [`Self::factor`] applies equations 7-46 through 7-49.
+#[derive(Debug)]
+pub(crate) struct ScalingMatrices {
+    enabled: bool,
+    /// `[sizeId][matrixId][8 * y + x]`; sizeId 0 uses only x/y below 4.
+    factors: [[[u8; 64]; 6]; 4],
+    /// `[sizeId - 2][matrixId]` for 16x16 and 32x32.
+    dc: [[u8; 6]; 2],
+}
+
+impl ScalingMatrices {
+    /// Resolve §7.4.3.3.1's PPS/SPS/default precedence and §7.4.5's copy
+    /// references for the active parameter-set pair.
+    pub(crate) fn from_parameter_sets(sps: &Sps, pps: &Pps) -> Result<Self> {
+        let mut out = Self {
+            enabled: sps.scaling_list_enabled,
+            factors: [[[16; 64]; 6]; 4],
+            dc: [[16; 6]; 2],
+        };
+        if !out.enabled {
+            return Ok(out);
+        }
+
+        let data = pps.scaling_list.as_deref().or(sps.scaling_list.as_deref());
+        for size_id in 0usize..4 {
+            let step = if size_id == 3 { 3 } else { 1 };
+            let mut matrix_id = 0usize;
+            while matrix_id < 6 {
+                out.resolve_matrix(data, size_id, matrix_id, step)?;
+                matrix_id += step;
+            }
+        }
+        Ok(out)
+    }
+
+    fn resolve_matrix(
+        &mut self,
+        data: Option<&ScalingListData>,
+        size_id: usize,
+        matrix_id: usize,
+        reference_step: usize,
+    ) -> Result<()> {
+        let Some(data) = data else {
+            self.write_default(size_id, matrix_id);
+            return Ok(());
+        };
+        let pred_mode = data
+            .pred_mode
+            .get(size_id)
+            .and_then(|row| row.get(matrix_id))
+            .copied()
+            .ok_or(Error::InvalidData("scaling-list index out of range"))?;
+        if pred_mode {
+            self.write_explicit(data, size_id, matrix_id)?;
+            return Ok(());
+        }
+
+        let delta = data
+            .pred_matrix_id_delta
+            .get(size_id)
+            .and_then(|row| row.get(matrix_id))
+            .copied()
+            .and_then(|value| usize::try_from(value).ok())
+            .ok_or(Error::InvalidData("scaling-list index out of range"))?;
+        if delta == 0 {
+            self.write_default(size_id, matrix_id);
+            return Ok(());
+        }
+        let distance = delta.checked_mul(reference_step).ok_or(Error::InvalidData(
+            "scaling-list reference distance overflow",
+        ))?;
+        let reference = matrix_id
+            .checked_sub(distance)
+            .ok_or(Error::InvalidData("invalid scaling-list reference"))?;
+        let referenced_factors = self
+            .factors
+            .get(size_id)
+            .and_then(|row| row.get(reference))
+            .copied()
+            .ok_or(Error::InvalidData("invalid scaling-list reference"))?;
+        let target_factors = self
+            .factors
+            .get_mut(size_id)
+            .and_then(|row| row.get_mut(matrix_id))
+            .ok_or(Error::InvalidData("scaling-list index out of range"))?;
+        *target_factors = referenced_factors;
+        if size_id >= 2 {
+            let dc_size_id = size_id - 2;
+            let referenced_dc = self
+                .dc
+                .get(dc_size_id)
+                .and_then(|row| row.get(reference))
+                .copied()
+                .ok_or(Error::InvalidData("invalid scaling-list DC reference"))?;
+            let target_dc = self
+                .dc
+                .get_mut(dc_size_id)
+                .and_then(|row| row.get_mut(matrix_id))
+                .ok_or(Error::InvalidData("scaling-list DC index out of range"))?;
+            *target_dc = referenced_dc;
+        }
+        Ok(())
+    }
+
+    fn write_explicit(
+        &mut self,
+        data: &ScalingListData,
+        size_id: usize,
+        matrix_id: usize,
+    ) -> Result<()> {
+        let count = if size_id == 0 { 16 } else { 64 };
+        let coefficients = data
+            .coef
+            .get(size_id)
+            .and_then(|row| row.get(matrix_id))
+            .and_then(|values| values.get(..count))
+            .ok_or(Error::InvalidData(
+                "scaling-list coefficient index out of range",
+            ))?;
+        if coefficients.contains(&0) {
+            return Err(Error::InvalidData("zero scaling-list coefficient"));
+        }
+        self.write_scanned(size_id, matrix_id, coefficients);
+        if size_id >= 2 {
+            let dc = data
+                .dc_coef
+                .get(size_id - 2)
+                .and_then(|row| row.get(matrix_id))
+                .copied()
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or(Error::InvalidData("invalid scaling-list DC coefficient"))?;
+            if dc == 0 {
+                return Err(Error::InvalidData("zero scaling-list DC coefficient"));
+            }
+            let slot = self
+                .dc
+                .get_mut(size_id - 2)
+                .and_then(|row| row.get_mut(matrix_id))
+                .ok_or(Error::InvalidData("scaling-list DC index out of range"))?;
+            *slot = dc;
+        }
+        Ok(())
+    }
+
+    fn write_default(&mut self, size_id: usize, matrix_id: usize) {
+        if size_id == 0 {
+            self.write_scanned(size_id, matrix_id, &[16; 16]);
+        } else {
+            let values = if matrix_id < 3 {
+                &DEFAULT_SCALING_LIST_INTRA
+            } else {
+                &DEFAULT_SCALING_LIST_INTER
+            };
+            self.write_scanned(size_id, matrix_id, values);
+        }
+        if size_id >= 2
+            && let Some(slot) = self
+                .dc
+                .get_mut(size_id - 2)
+                .and_then(|row| row.get_mut(matrix_id))
+        {
+            *slot = 16;
+        }
+    }
+
+    fn write_scanned(&mut self, size_id: usize, matrix_id: usize, values: &[u8]) {
+        let base_size = if size_id == 0 { 4 } else { 8 };
+        for ((x, y), &value) in scan::generate(base_size, ScanOrder::Diag)
+            .into_iter()
+            .zip(values)
+        {
+            let index = usize::from(y) * 8 + usize::from(x);
+            if let Some(slot) = self
+                .factors
+                .get_mut(size_id)
+                .and_then(|row| row.get_mut(matrix_id))
+                .and_then(|matrix| matrix.get_mut(index))
+            {
+                *slot = value;
+            }
+        }
+    }
+
+    fn factor(&self, size: usize, kind: ScalingListKind, x: usize, y: usize) -> i32 {
+        if !self.enabled {
+            return 16;
+        }
+        let Some(size_id) = size
+            .checked_ilog2()
+            .and_then(|log2| log2.checked_sub(2))
+            .and_then(|id| usize::try_from(id).ok())
+            .filter(|&id| id < 4)
+        else {
+            return 16;
+        };
+        let matrix_id = kind.matrix_id();
+        if size_id >= 2 && x == 0 && y == 0 {
+            return self
+                .dc
+                .get(size_id - 2)
+                .and_then(|row| row.get(matrix_id))
+                .copied()
+                .map_or(16, i32::from);
+        }
+        let replication_shift = size_id.saturating_sub(1);
+        let base_x = x >> replication_shift;
+        let base_y = y >> replication_shift;
+        self.factors
+            .get(size_id)
+            .and_then(|row| row.get(matrix_id))
+            .and_then(|matrix| matrix.get(base_y * 8 + base_x))
+            .copied()
+            .map_or(16, i32::from)
+    }
+}
 
 /// Table 8-10 (4:2:0 chroma QP mapping), HM's `g_aucChromaScale[CHROMA_420]`.
 /// Index is the (already-offset, clamped 0..=57) luma-derived chroma QP;
@@ -38,14 +303,22 @@ pub(crate) fn chroma_qp(luma_qp: i32, chroma_qp_offset: i32) -> i32 {
     )
 }
 
-/// §8.6.3's scaling process for one `size x size` block with a flat scaling
-/// list, `qp` already resolved for this block's component (luma QP directly,
-/// or [`chroma_qp`]'s result for chroma).
+/// §8.6.3's scaling process for one `size x size` block. `qp` is already
+/// resolved for this block's component (luma QP directly, or [`chroma_qp`]'s
+/// result for chroma); `matrices` is the active SPS/PPS pair's single resolved
+/// scaling-list value.
 #[allow(
     clippy::integer_division,
     reason = "QP % 6 / QP / 6 is eq. (8-283)'s own decomposition, not a truncation bug"
 )]
-pub(crate) fn dequant(coeffs: &[(u8, u8, i32)], size: usize, qp: i32, bit_depth: u32) -> Vec<i32> {
+pub(crate) fn dequant(
+    coeffs: &[(u8, u8, i32)],
+    size: usize,
+    qp: i32,
+    bit_depth: u32,
+    matrices: &ScalingMatrices,
+    kind: ScalingListKind,
+) -> Vec<i32> {
     let mut out = vec![0i32; size * size];
     let log2_size = i32::try_from(size.trailing_zeros()).unwrap_or(0);
     let max_log2_tr_dynamic_range = 15i32;
@@ -58,7 +331,7 @@ pub(crate) fn dequant(coeffs: &[(u8, u8, i32)], size: usize, qp: i32, bit_depth:
         .get(usize::try_from(rem).unwrap_or(0))
         .copied()
         .unwrap_or(64);
-    let right_shift = 6 - (transform_shift + per);
+    let right_shift = 10 - (transform_shift + per);
     let (min, max) = (
         -(1i64 << max_log2_tr_dynamic_range),
         (1i64 << max_log2_tr_dynamic_range) - 1,
@@ -69,7 +342,8 @@ pub(crate) fn dequant(coeffs: &[(u8, u8, i32)], size: usize, qp: i32, bit_depth:
         if x >= size || y >= size {
             continue;
         }
-        let product = i64::from(level) * i64::from(scale);
+        let factor = matrices.factor(size, kind, x, y);
+        let product = i64::from(level) * i64::from(factor) * i64::from(scale);
         let value = if right_shift > 0 {
             let add = 1i64 << (right_shift - 1);
             (product + add) >> right_shift

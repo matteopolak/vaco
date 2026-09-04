@@ -70,6 +70,9 @@ pub(crate) struct CtxShared<'p> {
     pub sign_data_hiding: bool,
     pub strong_intra_smoothing: bool,
     pub transform_skip_enabled: bool,
+    /// §7.4.3.3.1/§7.4.5's effective matrices for this active SPS/PPS pair,
+    /// including PPS-over-SPS precedence, copy references and defaults.
+    pub scaling_matrices: crate::transform::ScalingMatrices,
     /// `transquant_bypass_enabled_flag`, which makes every coding unit carry
     /// `cu_transquant_bypass_flag` as its first CABAC syntax element.
     pub transquant_bypass_enabled: bool,
@@ -343,14 +346,14 @@ impl<'p> CtxShared<'p> {
         sao_luma: bool,
         sao_chroma: bool,
         inter: Option<InterSliceParams<'p>>,
-    ) -> Self {
+    ) -> Result<Self> {
         let is_p_slice = inter.is_some();
         let log2_ctb_size =
             u32::from(sps.log2_min_cb_size) + u32::from(sps.log2_diff_max_min_cb_size);
         let width = usize::try_from(sps.pic_width_in_luma_samples).unwrap_or(0);
         let ctb_size = 1u32 << log2_ctb_size;
         let ctbs_x = u32::try_from(width).unwrap_or(0).div_ceil(ctb_size).max(1);
-        Self {
+        Ok(Self {
             pic_width: i32::try_from(sps.pic_width_in_luma_samples).unwrap_or(0),
             pic_height: i32::try_from(sps.pic_height_in_luma_samples).unwrap_or(0),
             log2_ctb_size,
@@ -363,6 +366,7 @@ impl<'p> CtxShared<'p> {
             sign_data_hiding: pps.sign_data_hiding_enabled,
             strong_intra_smoothing: sps.strong_intra_smoothing_enabled,
             transform_skip_enabled: pps.transform_skip_enabled,
+            scaling_matrices: crate::transform::ScalingMatrices::from_parameter_sets(sps, pps)?,
             transquant_bypass_enabled: pps.transquant_bypass_enabled,
             pcm: sps.pcm,
             bit_depth_luma: u32::from(sps.bit_depth_luma),
@@ -381,7 +385,7 @@ impl<'p> CtxShared<'p> {
             is_p_slice,
             inter,
             max_transform_hierarchy_depth_inter: sps.max_transform_hierarchy_depth_inter,
-        }
+        })
     }
 }
 
@@ -2560,8 +2564,14 @@ fn reconstruct_luma_inter(
             // §8.6.4.1: DST-VII only for 4x4 *intra* luma.
             let kind = transform_kind(skip, false);
             let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-            let dequantised =
-                transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
+            let dequantised = transform::dequant(
+                &coeffs.values,
+                size,
+                qp_y,
+                s.shared.bit_depth_luma,
+                &s.shared.scaling_matrices,
+                transform::ScalingListKind::InterY,
+            );
             transform::inverse_transform(&dequantised, size, kind, s.shared.bit_depth_luma)
         };
         transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
@@ -2615,7 +2625,19 @@ fn reconstruct_chroma_inter(
     let residual = if s.cu_transquant_bypass {
         transform::transquant_bypass(&coeffs.values, size)
     } else {
-        let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
+        let kind = if is_cb {
+            transform::ScalingListKind::InterCb
+        } else {
+            transform::ScalingListKind::InterCr
+        };
+        let dequantised = transform::dequant(
+            &coeffs.values,
+            size,
+            qp,
+            s.shared.bit_depth_chroma,
+            &s.shared.scaling_matrices,
+            kind,
+        );
         transform::inverse_transform(
             &dequantised,
             size,
@@ -2936,8 +2958,14 @@ fn reconstruct_luma(
         } else {
             let kind = transform_kind(skip, log2_size == 2);
             let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
-            let dequantised =
-                transform::dequant(&coeffs.values, size, qp_y, s.shared.bit_depth_luma);
+            let dequantised = transform::dequant(
+                &coeffs.values,
+                size,
+                qp_y,
+                s.shared.bit_depth_luma,
+                &s.shared.scaling_matrices,
+                transform::ScalingListKind::IntraY,
+            );
             transform::inverse_transform(&dequantised, size, kind, s.shared.bit_depth_luma)
         };
         transform::add_residual_clip(&mut pred, &residual, size, s.shared.bit_depth_luma);
@@ -3005,7 +3033,19 @@ fn reconstruct_chroma(
     let residual = if s.cu_transquant_bypass {
         transform::transquant_bypass(&coeffs.values, size)
     } else {
-        let dequantised = transform::dequant(&coeffs.values, size, qp, s.shared.bit_depth_chroma);
+        let kind = if is_cb {
+            transform::ScalingListKind::IntraCb
+        } else {
+            transform::ScalingListKind::IntraCr
+        };
+        let dequantised = transform::dequant(
+            &coeffs.values,
+            size,
+            qp,
+            s.shared.bit_depth_chroma,
+            &s.shared.scaling_matrices,
+            kind,
+        );
         transform::inverse_transform(
             &dequantised,
             size,
