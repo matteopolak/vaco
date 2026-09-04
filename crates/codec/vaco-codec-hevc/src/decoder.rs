@@ -1083,9 +1083,6 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
             "vaco-codec-hevc: custom scaling lists are not supported (flat scaling only)",
         );
     }
-    if sps.pcm.is_some_and(|pcm| pcm.loop_filter_disabled) {
-        return unsupported("vaco-codec-hevc: pcm_loop_filter_disabled_flag is not supported");
-    }
     if sps.range_extension.is_some() {
         return unsupported("vaco-codec-hevc: SPS range-extension flags are not supported");
     }

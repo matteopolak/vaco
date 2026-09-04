@@ -558,6 +558,10 @@ fn offset_block(
     width: i32,
     height: i32,
     bit_depth: u32,
+    cu_grid: &crate::framebuf::CuGrid<'_>,
+    pcm_loop_filter_disabled: bool,
+    component_scale_x: u32,
+    component_scale_y: u32,
 ) {
     let max_value = (1i32 << bit_depth) - 1;
     let (Ok(x0u), Ok(width_u)) = (usize::try_from(x0), usize::try_from(width)) else {
@@ -587,7 +591,13 @@ fn offset_block(
                     .row_mut(yu)
                     .and_then(|r| r.get_mut(x0u..x0u.saturating_add(width_u)))
                 {
-                    for (d, &sv) in dst_row.iter_mut().zip(src_row) {
+                    for (x, (d, &sv)) in dst_row.iter_mut().zip(src_row).enumerate() {
+                        let px = x0.saturating_add(i32::try_from(x).unwrap_or(0));
+                        if pcm_loop_filter_disabled
+                            && pcm_sample(cu_grid, px, y, component_scale_x, component_scale_y)
+                        {
+                            continue;
+                        }
                         let v = i32::from(sv);
                         let band = usize::try_from(v >> shift).unwrap_or(0);
                         let off = offsets.get(band).copied().unwrap_or(0);
@@ -622,6 +632,11 @@ fn offset_block(
                     continue;
                 };
                 for x in x0..x0 + width {
+                    if pcm_loop_filter_disabled
+                        && pcm_sample(cu_grid, x, y, component_scale_x, component_scale_y)
+                    {
+                        continue;
+                    }
                     let Ok(xu) = usize::try_from(x) else { continue };
                     let Some(&sv) = cur_row.get(xu) else { continue };
                     let (Some(&av), Some(&bv)) = (
@@ -644,6 +659,25 @@ fn offset_block(
     }
 }
 
+/// Map a component-plane coordinate back to luma coordinates before
+/// querying [`crate::framebuf::CuGrid`]'s single PCM mask. HM 18.0 applies
+/// SAO and then restores every I_PCM CU when
+/// `pcm_loop_filter_disabled_flag` is set; skipping that CU's writes here
+/// is equivalent because its transmitted samples are already reconstructed
+/// in place and deblocking independently preserves them.
+fn pcm_sample(
+    cu_grid: &crate::framebuf::CuGrid<'_>,
+    x: i32,
+    y: i32,
+    component_scale_x: u32,
+    component_scale_y: u32,
+) -> bool {
+    cu_grid.pcm_at(
+        x.checked_shl(component_scale_x).unwrap_or(i32::MAX),
+        y.checked_shl(component_scale_y).unwrap_or(i32::MAX),
+    )
+}
+
 /// Run SAO over the whole (already deblocked) picture, one CTU at a time in
 /// raster order, using `s.sao_params.get(addr)` — the same [`SaoParamsGrid`]
 /// [`parse_ctu_sao`] filled in during entropy decode, by now fully
@@ -657,6 +691,11 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
     }
     let ctb_size = 1i32 << s.shared.log2_ctb_size;
     let ctbs_x = s.shared.ctbs_x;
+    let pcm_loop_filter_disabled = s
+        .shared
+        .pcm
+        .as_ref()
+        .is_some_and(|pcm| pcm.loop_filter_disabled);
 
     let snap_y = Snapshot::capture(budget, &s.pic.y)?;
     let snap_cb = Snapshot::capture(budget, &s.pic.cb)?;
@@ -683,6 +722,10 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
             width,
             height,
             s.shared.bit_depth_luma,
+            &s.cu_grid,
+            pcm_loop_filter_disabled,
+            0,
+            0,
         );
 
         let (cx0, cy0, cw, ch) = (x0 >> 1, y0 >> 1, (width + 1) >> 1, (height + 1) >> 1);
@@ -695,6 +738,10 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
             cw,
             ch,
             s.shared.bit_depth_chroma,
+            &s.cu_grid,
+            pcm_loop_filter_disabled,
+            1,
+            1,
         );
         offset_block(
             &mut s.pic.cr,
@@ -705,6 +752,10 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
             cw,
             ch,
             s.shared.bit_depth_chroma,
+            &s.cu_grid,
+            pcm_loop_filter_disabled,
+            1,
+            1,
         );
     }
     // The three snapshots are pure working state for the loop just above —
@@ -718,4 +769,51 @@ pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()>
             .saturating_add(snap_cr.byte_len()),
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::framebuf::{CuGrid, CuGridShared, Plane};
+    use vaco_limits::Limits;
+
+    #[test]
+    fn sao_leaves_pcm_samples_unchanged() {
+        let mut budget = Budget::new(Limits::default());
+        let grid_shared = CuGridShared::new(8, 4, false, 4);
+        let mut grid = CuGrid::new(&mut budget, &grid_shared).expect("test CU grid");
+        grid.fill_pcm(0, 0, 1, 1);
+        grid.finish().expect("publish test CU grid");
+
+        let mut plane = Plane::new(&mut budget, 8, 4).expect("test plane");
+        for y in 0..4 {
+            for x in 0..8 {
+                plane.set(x, y, 64);
+            }
+        }
+        let snapshot = Snapshot::capture(&mut budget, &plane).expect("test snapshot");
+        offset_block(
+            &mut plane,
+            &snapshot,
+            SaoMode::Bo { offsets: [1; 32] },
+            0,
+            0,
+            8,
+            4,
+            8,
+            &grid,
+            true,
+            0,
+            0,
+        );
+
+        for y in 0..4 {
+            for x in 0..4 {
+                assert_eq!(plane.get(x, y), 64, "PCM sample ({x},{y})");
+            }
+            for x in 4..8 {
+                assert_eq!(plane.get(x, y), 65, "non-PCM sample ({x},{y})");
+            }
+        }
+    }
 }

@@ -296,6 +296,10 @@ struct CuGridBand {
     mv1_y: Vec<i16>,
     ref_poc1: Vec<i64>,
     cbf_luma: Vec<bool>,
+    /// Whether the block belongs to an I_PCM CU. I_PCM remains intra-coded
+    /// for every other neighbour query; only the loop filters need this
+    /// additional distinction.
+    pcm: Vec<bool>,
 }
 
 impl CuGridBand {
@@ -320,6 +324,7 @@ impl CuGridBand {
             mv1_y: budget.alloc(len_l1)?,
             ref_poc1: budget.alloc(len_l1)?,
             cbf_luma: vec![false; len],
+            pcm: vec![false; len],
         })
     }
 
@@ -550,6 +555,50 @@ impl<'a> CuGrid<'a> {
                 }
             }
         }
+    }
+
+    /// Paint one I_PCM coding unit's whole footprint. The SPS-level
+    /// `pcm_loop_filter_disabled_flag` decides whether the loop filters
+    /// consult this mask; recording the syntax here keeps deblocking and SAO
+    /// on one source of truth.
+    pub(crate) fn fill_pcm(&mut self, bx0: usize, by0: usize, blocks_w: usize, blocks_h: usize) {
+        let cols = self.shared.cols;
+        let band_rows = self.shared.band_rows;
+        let local_by0 = self.local_of(by0);
+        let Some(band) = self.current_band_mut(by0) else {
+            return;
+        };
+        for local_by in local_by0..local_by0.saturating_add(blocks_h) {
+            for bx in bx0..bx0.saturating_add(blocks_w) {
+                if let Some(i) = cu_index_in(cols, band_rows, bx, local_by)
+                    && let Some(slot) = band.pcm.get_mut(i)
+                {
+                    *slot = true;
+                }
+            }
+        }
+    }
+
+    /// Whether the luma sample at `(px, py)` belongs to an I_PCM coding
+    /// unit. Out-of-picture and not-yet-decoded positions are not PCM.
+    #[must_use]
+    pub(crate) fn pcm_at(&self, px: i32, py: i32) -> bool {
+        let (Ok(px), Ok(py)) = (usize::try_from(px), usize::try_from(py)) else {
+            return false;
+        };
+        let (bx, by) = (block_of(px), block_of(py));
+        let Some(band) = self.band_for(by) else {
+            return false;
+        };
+        let Some(i) = cu_index_in(
+            self.shared.cols,
+            self.shared.band_rows,
+            bx,
+            self.local_of(by),
+        ) else {
+            return false;
+        };
+        band.pcm.get(i).copied().unwrap_or(false)
     }
 
     /// The quadtree depth of the 4x4 block at luma pixel `(px, py)`, or

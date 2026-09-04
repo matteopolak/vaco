@@ -16,9 +16,10 @@ landed" below), per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see
 "Per-CU QP delta (`cu_qp_delta`), landed" below) and uni- and bi-predictive
 weighted prediction (§8.5.3.3.4.3, see "Weighted prediction
 (§8.5.3.3.4.3), landed" and "B-slices (...), landed" below). Tiles, filter
-suppression for PCM CUs, custom scaling lists and every range-extension
-feature are explicitly out of scope — see "What was cut" below. I_PCM whose
-samples participate in the ordinary loop filters is implemented.
+suppression for transform-bypass CUs, custom scaling lists and every
+range-extension feature are explicitly out of scope — see "What was cut"
+below. I_PCM is implemented both with and without per-CU loop-filter
+suppression.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
 this decoder with `encumbered = true` / `default = false` behind the
@@ -170,12 +171,12 @@ own decode of the same file byte-for-byte, per plane, end to end.
 
 `check_scope` in `decoder.rs` refuses (`Error::Unsupported`, by name, at
 the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
-`separate_colour_plane`, custom scaling lists, PCM CU filter suppression
-(`pcm_loop_filter_disabled_flag`), SPS/PPS range extensions, SCC extensions,
-tiles, `transquant_bypass_enabled`. Neither ordinary I_PCM, transform skip,
-deblocking, SAO, `entropy_coding_sync` (WPP), `cu_qp_delta_enabled`,
-P-slices, B-slices, nor weighted (uni- or bi-predictive) prediction are on
-this list any more — see their own "landed" sections below.
+`separate_colour_plane`, custom scaling lists, SPS/PPS range extensions, SCC
+extensions, tiles, `transquant_bypass_enabled`. Neither I_PCM (including
+`pcm_loop_filter_disabled_flag`), transform skip, deblocking, SAO,
+`entropy_coding_sync` (WPP), `cu_qp_delta_enabled`, P-slices, B-slices, nor
+weighted (uni- or bi-predictive) prediction are on this list any more — see
+their own "landed" sections below.
 `decode_packet`'s own former `SliceKind::B` refusal (it had no footprint
 visible before the slice header is parsed, so it could not live in
 `check_scope` either way — the same was once true of weighted prediction's
@@ -291,15 +292,15 @@ than one split, an 8x4/4x8 prediction unit, a scaling list, an I_PCM block or
 a lossless CU. The 46-stream JCT-VC subset in `vaco-corpus`'s
 `vaco-media.lock` (`jctvc` section) contains all of them.
 
-Measured 2026-09-03 on `ffmpeg 9.0.1`, partitioning each raw Annex-B stream
+Measured 2026-09-04 on `ffmpeg 9.0.1`, partitioning each raw Annex-B stream
 with the production `HevcParser`/`ParserDriver`, feeding those access units to
 `HevcDecoder`, and comparing every byte of every plane against
 `ffmpeg -i <stream>.bin -f rawvideo -pix_fmt yuv420p`:
 
 | result | streams |
 | --- | ---: |
-| byte-exact on every frame | **36** |
-| refused by name (`Unsupported`) | 10 |
+| byte-exact on every frame | **37** |
+| refused by name (`Unsupported`) | 9 |
 | CABAC desync mid-stream | **0** |
 | wrong pixels at the right length | **0** |
 | wrong frame count | 0 |
@@ -309,7 +310,7 @@ Byte-exact: `amp-a`, `amvp-a`, `amvp-b`, `cip-a`, `cip-b`, `confwin-a`,
 `mvclip-a`, `mvedge-a`, `picsize-d`, `pmerge-a`, `pmerge-b`, `poc-a`, `ps-b`,
 `rplm-a` (300 frames), `rps-a`, `rqt-a`, `sao-a`, `sao-g`, `slpplp-a`,
 `struct-a`, `tscl-a`, `vpsid-a`, `nut-a`, `nooutprior-a`, `ipcm-a`,
-`ipcm-b`, `ipcm-e`.
+`ipcm-b`, `ipcm-c`, `ipcm-e`.
 
 An earlier scratch-only raw harness reported that `initqp-a-sony-1`
 desynchronized after 47 of 60 frames. That harness waited for the next first
@@ -362,8 +363,7 @@ every byte matches.
 
 Refused by name, not mis-decoded: more than one slice segment per picture
 (`dblk-d`..`dblk-g`, `hrd-a`, `slices-a`), custom scaling lists (`slist-c`,
-`vpsspspps-a`), PCM CU filter suppression (`ipcm-c`) and
-`transquant_bypass_enabled` (`ipcm-d`).
+`vpsspspps-a`) and `transquant_bypass_enabled` (`ipcm-d`).
 
 ### I_PCM sample decoding
 
@@ -379,19 +379,31 @@ distinct entropy path. `pcm_flag` uses the termination process
 Measured 2026-09-04 against the SHA-256-verified JCT-VC archives and
 `ffmpeg 9.0.1` direct Annex-B decode:
 
-- `ipcm_A_NEC_3` (8-bit Y/C), `ipcm_B_NEC_3` (6-bit Y/C), and
+- `ipcm_A_NEC_3` (8-bit Y/C), `ipcm_B_NEC_3` (6-bit Y/C),
+  `ipcm_C_NEC_3` (8-bit Y/C with per-PCM-CU loop-filter suppression), and
   `ipcm_E_NEC_2` (6-bit Y, 8-bit C) each produce exactly one 416x240 yuv420p
   frame, 149,760 bytes, byte-exact in every plane. The oracle MD5 values
   `8049988c383486e076ea2494edda3831`,
-  `23a3b7024fd9bc64b946b9961ab0f51e`, and
+  `23a3b7024fd9bc64b946b9961ab0f51e`,
+  `c3e74c399b73a5ab2dbd20523f583464`, and
   `e1cd7a16d3f6a342855044ccba3e41f5` respectively match the checksums shipped
-  in the three JCT-VC archives.
-- Before the change, all three stopped at the SPS scope check and emitted no
-  frame. `tests/ipcm.rs` keeps A's 5,153-byte bitstream and 149,760-byte
-  published-checksum reference output as the durable regression.
-- `ipcm_C_NEC_3` remains a named refusal because it requires suppressing
-  deblocking and SAO per PCM CU. `ipcm_D_NEC_3` remains a named refusal at
-  `transquant_bypass_enabled_flag`. Neither is approximated.
+  in the four JCT-VC archives.
+- Before I_PCM decode landed, A/B/E stopped at the blanket SPS scope check and
+  emitted no frame. Before per-CU filter suppression landed, C alone stopped at
+  `pcm_loop_filter_disabled_flag` and emitted no frame. `tests/ipcm.rs` keeps A
+  and C's bitstreams plus their 149,760-byte published-checksum references as
+  durable regressions.
+- C's decoded `pcm_flag` footprints are painted once into `CuGrid` at 4x4 luma
+  granularity. Deblocking applies §8.7.2.5.7/.8's P- and Q-side substitutions
+  independently, so a PCM side stays transmitted-value exact while its
+  non-PCM neighbour may still be filtered. SAO consults the same mask and
+  leaves PCM samples unchanged, equivalent to HM 18.0's post-SAO PCM
+  restoration without retaining a second copy of the transmitted samples.
+  Narrow unit tests discriminate PCM-P, PCM-Q, both/neither sides and masked
+  versus unmasked SAO samples.
+- `ipcm_D_NEC_3` remains a named refusal at
+  `transquant_bypass_enabled_flag`; its lossless-CU loop-filter suppression is
+  a separate feature and is not approximated by the PCM-only mask.
 
 ### AMVP motion-vector sum wrapping
 
@@ -1295,9 +1307,8 @@ per plane, per frame**, reusing `verify_hevc_deblock.sh`:
 `check_scope` itself never refused B-slices (it is an SPS/PPS-level check;
 slice type is not known that early) and is unchanged. What `check_scope`
 still refuses is unrelated to this pass: non-4:2:0 chroma, non-8-bit
-samples, `separate_colour_plane_flag`, custom scaling lists, PCM CU filter
-suppression, SPS/PPS range extensions, screen-content-coding extensions, and
-tiles. Long-term
+samples, `separate_colour_plane_flag`, custom scaling lists, SPS/PPS range
+extensions, screen-content-coding extensions, and tiles. Long-term
 reference pictures (refused by `derive_reference_pic_sets`, not
 `check_scope`) and dependent/multi-segment slices (refused inline in
 `decode_packet`, same as before) are also unaffected.

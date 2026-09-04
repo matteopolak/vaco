@@ -246,6 +246,7 @@ fn use_strong_filtering(
 /// against a precomputed `tc`/strong-or-weak decision.
 #[allow(
     clippy::too_many_arguments,
+    clippy::fn_params_excessive_bools,
     reason = "mirrors HM's own xPelFilterLuma signature"
 )]
 fn filter_luma_line(
@@ -258,6 +259,8 @@ fn filter_luma_line(
     thr_cut: i32,
     filter_p: bool,
     filter_q: bool,
+    no_filter_p: bool,
+    no_filter_q: bool,
     bit_depth: u32,
 ) {
     let p3 = sample(plane, dir, bx, by, -4);
@@ -281,12 +284,16 @@ fn filter_luma_line(
         let q1n = q1 + clip3_sym(two_tc, ((p0 + q0 + q1 + q2 + 2) >> 2) - q1);
         let p2n = p2 + clip3_sym(two_tc, ((2 * p3 + 3 * p2 + p1 + p0 + q0 + 4) >> 3) - p2);
         let q2n = q2 + clip3_sym(two_tc, ((p0 + q0 + q1 + 3 * q2 + 2 * q3 + 4) >> 3) - q2);
-        set_sample(plane, dir, bx, by, -1, clip_bd(p0n, bit_depth));
-        set_sample(plane, dir, bx, by, 0, clip_bd(q0n, bit_depth));
-        set_sample(plane, dir, bx, by, -2, clip_bd(p1n, bit_depth));
-        set_sample(plane, dir, bx, by, 1, clip_bd(q1n, bit_depth));
-        set_sample(plane, dir, bx, by, -3, clip_bd(p2n, bit_depth));
-        set_sample(plane, dir, bx, by, 2, clip_bd(q2n, bit_depth));
+        if !no_filter_p {
+            set_sample(plane, dir, bx, by, -1, clip_bd(p0n, bit_depth));
+            set_sample(plane, dir, bx, by, -2, clip_bd(p1n, bit_depth));
+            set_sample(plane, dir, bx, by, -3, clip_bd(p2n, bit_depth));
+        }
+        if !no_filter_q {
+            set_sample(plane, dir, bx, by, 0, clip_bd(q0n, bit_depth));
+            set_sample(plane, dir, bx, by, 1, clip_bd(q1n, bit_depth));
+            set_sample(plane, dir, bx, by, 2, clip_bd(q2n, bit_depth));
+        }
         return;
     }
 
@@ -295,14 +302,18 @@ fn filter_luma_line(
         return;
     }
     let delta = clip3_sym(tc, delta);
-    set_sample(plane, dir, bx, by, -1, clip_bd(p0 + delta, bit_depth));
-    set_sample(plane, dir, bx, by, 0, clip_bd(q0 - delta, bit_depth));
+    if !no_filter_p {
+        set_sample(plane, dir, bx, by, -1, clip_bd(p0 + delta, bit_depth));
+    }
+    if !no_filter_q {
+        set_sample(plane, dir, bx, by, 0, clip_bd(q0 - delta, bit_depth));
+    }
     let tc2 = tc >> 1;
-    if filter_p {
+    if filter_p && !no_filter_p {
         let delta1 = clip3_sym(tc2, (((p2 + p0 + 1) >> 1) - p1 + delta) >> 1);
         set_sample(plane, dir, bx, by, -2, clip_bd(p1 + delta1, bit_depth));
     }
-    if filter_q {
+    if filter_q && !no_filter_q {
         let delta2 = clip3_sym(tc2, (((q2 + q0 + 1) >> 1) - q1 - delta) >> 1);
         set_sample(plane, dir, bx, by, 1, clip_bd(q1 + delta2, bit_depth));
     }
@@ -310,19 +321,40 @@ fn filter_luma_line(
 
 /// `xPelFilterChroma`: unconditional (no activity gate — see the module
 /// doc), single-formula filter of one chroma line.
-fn filter_chroma_line(plane: &mut Plane, dir: Dir, bx: i32, by: i32, tc: i32, bit_depth: u32) {
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the P/Q suppression flags mirror H.265's two independent outputs"
+)]
+fn filter_chroma_line(
+    plane: &mut Plane,
+    dir: Dir,
+    bx: i32,
+    by: i32,
+    tc: i32,
+    no_filter_p: bool,
+    no_filter_q: bool,
+    bit_depth: u32,
+) {
     let p1 = sample(plane, dir, bx, by, -2);
     let p0 = sample(plane, dir, bx, by, -1);
     let q0 = sample(plane, dir, bx, by, 0);
     let q1 = sample(plane, dir, bx, by, 1);
     let delta = clip3_sym(tc, (((q0 - p0) << 2) + p1 - q1 + 4) >> 3);
-    set_sample(plane, dir, bx, by, -1, clip_bd(p0 + delta, bit_depth));
-    set_sample(plane, dir, bx, by, 0, clip_bd(q0 - delta, bit_depth));
+    if !no_filter_p {
+        set_sample(plane, dir, bx, by, -1, clip_bd(p0 + delta, bit_depth));
+    }
+    if !no_filter_q {
+        set_sample(plane, dir, bx, by, 0, clip_bd(q0 - delta, bit_depth));
+    }
 }
 
 /// `xCalcDP`/`xCalcDQ` combined with the per-4-line-group decision from
 /// `xEdgeFilterLuma`'s own `iBlkIdx` loop: filter one 4-line group crossing
 /// one luma edge, or do nothing if the group's own `d < beta` gate fails.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the P/Q suppression flags are independent per edge side"
+)]
 fn filter_luma_group(
     plane: &mut Plane,
     dir: Dir,
@@ -330,6 +362,8 @@ fn filter_luma_group(
     by0: i32,
     tc: i32,
     beta: i32,
+    no_filter_p: bool,
+    no_filter_q: bool,
     bit_depth: u32,
 ) {
     let dp = |at: i32| {
@@ -368,6 +402,8 @@ fn filter_luma_group(
             thr_cut,
             filter_p,
             filter_q,
+            no_filter_p,
+            no_filter_q,
             bit_depth,
         );
     }
@@ -391,6 +427,26 @@ fn qp_avg(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
     let qp_q = s.cu_grid.qp_at(xq, yq).map_or(s.shared.slice_qp, i32::from);
     let qp_p = s.cu_grid.qp_at(xp, yp).map_or(s.shared.slice_qp, i32::from);
     (qp_p + qp_q + 1) >> 1
+}
+
+/// HM 18.0 `xEdgeFilterLuma`/`xEdgeFilterChroma`'s independent
+/// `bPartPNoFilter`/`bPartQNoFilter` values for
+/// `pcm_loop_filter_disabled_flag`. The filter decision still reads both
+/// sides; only writes into the PCM side are suppressed.
+fn pcm_filter_sides(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> (bool, bool) {
+    if !s
+        .shared
+        .pcm
+        .as_ref()
+        .is_some_and(|pcm| pcm.loop_filter_disabled)
+    {
+        return (false, false);
+    }
+    let (xp, yp) = match dir {
+        Dir::Vert => (xq - 1, yq),
+        Dir::Horiz => (xq, yq - 1),
+    };
+    (s.cu_grid.pcm_at(xp, yp), s.cu_grid.pcm_at(xq, yq))
 }
 
 /// Table 8-12's boundary-filtering-strength (`bS`) derivation:
@@ -507,6 +563,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     let qp = qp_avg(s, Dir::Vert, x, y);
                     let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
                     let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
+                    let (no_filter_p, no_filter_q) = pcm_filter_sides(s, Dir::Vert, x, y);
                     filter_luma_group(
                         &mut s.pic.y,
                         Dir::Vert,
@@ -514,6 +571,8 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                         y,
                         tc,
                         beta,
+                        no_filter_p,
+                        no_filter_q,
                         s.shared.bit_depth_luma,
                     );
                 }
@@ -541,6 +600,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     2,
                     s.shared.tc_offset_div2,
                 );
+                let (no_filter_p, no_filter_q) = pcm_filter_sides(s, Dir::Vert, x, y);
                 let cx = x >> 1;
                 let cy0 = y >> 1;
                 let rows = (grid >> 1).max(1);
@@ -551,6 +611,8 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                         cx,
                         cy0 + i,
                         cb_tc,
+                        no_filter_p,
+                        no_filter_q,
                         s.shared.bit_depth_chroma,
                     );
                     filter_chroma_line(
@@ -559,6 +621,8 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                         cx,
                         cy0 + i,
                         cr_tc,
+                        no_filter_p,
+                        no_filter_q,
                         s.shared.bit_depth_chroma,
                     );
                 }
@@ -579,6 +643,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     let qp = qp_avg(s, Dir::Horiz, x, y);
                     let tc = tc_for_qp(qp, bs, s.shared.tc_offset_div2);
                     let beta = beta_for_qp(qp, s.shared.beta_offset_div2);
+                    let (no_filter_p, no_filter_q) = pcm_filter_sides(s, Dir::Horiz, x, y);
                     filter_luma_group(
                         &mut s.pic.y,
                         Dir::Horiz,
@@ -586,6 +651,8 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                         x,
                         tc,
                         beta,
+                        no_filter_p,
+                        no_filter_q,
                         s.shared.bit_depth_luma,
                     );
                 }
@@ -610,6 +677,7 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                     2,
                     s.shared.tc_offset_div2,
                 );
+                let (no_filter_p, no_filter_q) = pcm_filter_sides(s, Dir::Horiz, x, y);
                 let cy = y >> 1;
                 let cx0 = x >> 1;
                 let cols = (grid >> 1).max(1);
@@ -620,6 +688,8 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                         cy,
                         cx0 + i,
                         cb_tc,
+                        no_filter_p,
+                        no_filter_q,
                         s.shared.bit_depth_chroma,
                     );
                     filter_chroma_line(
@@ -628,6 +698,8 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
                         cy,
                         cx0 + i,
                         cr_tc,
+                        no_filter_p,
+                        no_filter_q,
                         s.shared.bit_depth_chroma,
                     );
                 }
@@ -635,5 +707,113 @@ pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
             x += grid;
         }
         y += chroma_grid;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use vaco_limits::{Budget, Limits};
+
+    fn edge_plane() -> Plane {
+        let mut budget = Budget::new(Limits::default());
+        let mut plane = Plane::new(&mut budget, 8, 1).expect("test plane");
+        for (x, value) in [10, 20, 30, 40, 200, 210, 220, 230].into_iter().enumerate() {
+            plane.set(x, 0, value);
+        }
+        plane
+    }
+
+    fn samples(plane: &Plane) -> [u16; 8] {
+        core::array::from_fn(|x| plane.get(x, 0))
+    }
+
+    #[test]
+    fn luma_pcm_suppression_is_independent_per_edge_side() {
+        let original = samples(&edge_plane());
+
+        let mut neither_pcm = edge_plane();
+        filter_luma_line(
+            &mut neither_pcm,
+            Dir::Vert,
+            4,
+            0,
+            100,
+            true,
+            1_000,
+            true,
+            true,
+            false,
+            false,
+            8,
+        );
+        let got = samples(&neither_pcm);
+        assert_ne!(&got[1..4], &original[1..4], "non-PCM P samples filtered");
+        assert_ne!(&got[4..7], &original[4..7], "non-PCM Q samples filtered");
+
+        let mut pcm_p = edge_plane();
+        filter_luma_line(
+            &mut pcm_p,
+            Dir::Vert,
+            4,
+            0,
+            100,
+            true,
+            1_000,
+            true,
+            true,
+            true,
+            false,
+            8,
+        );
+        let got = samples(&pcm_p);
+        assert_eq!(&got[1..4], &original[1..4], "PCM P samples restored");
+        assert_ne!(&got[4..7], &original[4..7], "non-PCM Q samples filtered");
+
+        let mut pcm_q = edge_plane();
+        filter_luma_line(
+            &mut pcm_q,
+            Dir::Vert,
+            4,
+            0,
+            100,
+            true,
+            1_000,
+            true,
+            true,
+            false,
+            true,
+            8,
+        );
+        let got = samples(&pcm_q);
+        assert_ne!(&got[1..4], &original[1..4], "non-PCM P samples filtered");
+        assert_eq!(&got[4..7], &original[4..7], "PCM Q samples restored");
+
+        let mut both_pcm = edge_plane();
+        filter_luma_line(
+            &mut both_pcm,
+            Dir::Vert,
+            4,
+            0,
+            100,
+            true,
+            1_000,
+            true,
+            true,
+            true,
+            true,
+            8,
+        );
+        assert_eq!(samples(&both_pcm), original, "both PCM sides restored");
+    }
+
+    #[test]
+    fn chroma_pcm_suppression_is_independent_per_edge_side() {
+        let original = samples(&edge_plane());
+        let mut plane = edge_plane();
+        filter_chroma_line(&mut plane, Dir::Vert, 4, 0, 100, true, false, 8);
+        let got = samples(&plane);
+        assert_eq!(got[3], original[3], "PCM P sample restored");
+        assert_ne!(got[4], original[4], "non-PCM Q sample filtered");
     }
 }

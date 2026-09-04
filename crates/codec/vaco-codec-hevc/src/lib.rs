@@ -111,18 +111,17 @@
 //! - **Refused by name today**, each with its own
 //!   [`vaco_core::Error::Unsupported`] string: bit depths other than 8,
 //!   chroma formats other than 4:2:0, `separate_colour_plane_flag`,
-//!   `pcm_loop_filter_disabled_flag`, tiles, `transquant_bypass`, chroma QP
-//!   offset lists, custom scaling lists, every SPS/PPS range-extension and
-//!   screen-content-coding flag, long-term reference pictures, dependent
-//!   slice segments, and more than one slice segment per picture. The
-//!   SPS/PPS ones are refused at `check_scope`; the rest the moment the
-//!   bitstream actually uses the feature, so a PPS that declares a flag it
-//!   never exercises decodes fine.
+//!   tiles, `transquant_bypass`, chroma QP offset lists, custom scaling
+//!   lists, every SPS/PPS range-extension and screen-content-coding flag,
+//!   long-term reference pictures, dependent slice segments, and more than
+//!   one slice segment per picture. The SPS/PPS ones are refused at
+//!   `check_scope`; the rest the moment the bitstream actually uses the
+//!   feature, so a PPS that declares a flag it never exercises decodes fine.
 //!
 //! `docs/codec/vaco-codec-hevc.md`'s "The JCT-VC `HEVC_v1` subset,
 //! measured" section is the standing record of what this list costs on real
-//! conformance bitstreams: 36 of 46 byte-exact against `ffmpeg`'s own
-//! decode and 10 refused by name, with no wrong-output or CABAC-desync cases.
+//! conformance bitstreams: 37 of 46 byte-exact against `ffmpeg`'s own
+//! decode and 9 refused by name, with no wrong-output or CABAC-desync cases.
 //!
 //! # Reuse, not reimplementation
 //!

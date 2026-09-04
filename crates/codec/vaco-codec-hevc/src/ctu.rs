@@ -70,11 +70,11 @@ pub(crate) struct CtxShared<'p> {
     pub sign_data_hiding: bool,
     pub strong_intra_smoothing: bool,
     pub transform_skip_enabled: bool,
-    /// `pcm_enabled_flag` and its SPS parameters. The decoder's scope gate
-    /// admits only the form whose samples participate in the ordinary loop
-    /// filters; per-CU filter suppression needs grid state this pass does not
-    /// add and remains a named refusal.
-    pcm: Option<PcmParameters>,
+    /// `pcm_enabled_flag` and its SPS parameters. I_PCM CUs are painted into
+    /// [`CuGrid`]'s PCM mask so `pcm_loop_filter_disabled_flag` can suppress
+    /// deblocking and SAO for their samples without changing their ordinary
+    /// intra-neighbour semantics.
+    pub pcm: Option<PcmParameters>,
     pub bit_depth_luma: u32,
     pub bit_depth_chroma: u32,
     pub cb_qp_offset: i32,
@@ -881,6 +881,7 @@ fn decode_pcm_cu(
         u8::try_from(depth).unwrap_or(u8::MAX),
         DC_IDX,
     );
+    s.cu_grid.fill_pcm(bx0, by0, blocks, blocks);
     let grid = crate::deblock::DEBLOCK_GRID;
     s.edges.mark_vert(x0, y0, size_i32, grid);
     s.edges.mark_horiz(x0, y0, size_i32, grid);
