@@ -669,7 +669,7 @@ impl Muxer for HlsMuxer {
             )
             && num > 0
         {
-            self.last_ref_duration_us = 1_000_000u64.saturating_mul(den) / num;
+            self.last_ref_duration_us = 1_000_000u64.saturating_mul(den).checked_div(num).unwrap_or(0);
         }
         if matches!(self.opts.hls_segment_type, HlsSegmentType::Fmp4)
             && let Some(write) = &self.write
