@@ -177,6 +177,14 @@ extensions = "aptx_hd"
 
 [[component]]
 kind       = "demuxer"
+name       = "brstm"
+long_name  = "Nintendo BRSTM (stereo DSP-ADPCM)"
+feature    = "demux-brstm"
+ctor       = "vaco_format_misc_audio::brstm::DEMUXER"
+extensions = "brstm"
+
+[[component]]
+kind       = "demuxer"
 name       = "svag"
 long_name  = "Konami PS2 SVAG"
 feature    = "demux-svag"

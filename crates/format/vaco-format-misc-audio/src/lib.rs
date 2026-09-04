@@ -10,6 +10,7 @@
 pub mod adx;
 pub mod amr;
 pub mod block;
+pub mod brstm;
 pub mod g723;
 pub mod nistsphere;
 pub mod pvf;

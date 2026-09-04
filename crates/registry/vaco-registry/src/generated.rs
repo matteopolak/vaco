@@ -280,6 +280,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["bmp"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-brstm")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "brstm",
+        long_name: Some("Nintendo BRSTM (stereo DSP-ADPCM)"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-brstm"),
+        media: None,
+        codec: None,
+        extensions: &["brstm"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-caf")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -10550,6 +10562,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_raw::rawvideo::DEMUXER_BITPACKED,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_BMP,
+    #[cfg(feature = "demux-brstm")]
+    &::vaco_format_misc_audio::brstm::DEMUXER,
     #[cfg(feature = "demux-caf")]
     &::vaco_format_audio_simple::caf::DEMUXER,
     #[cfg(feature = "demux-raw")]

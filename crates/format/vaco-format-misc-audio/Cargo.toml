@@ -1,6 +1,6 @@
 [package]
 name = "vaco-format-misc-audio"
-description = "wv, tta, amr, adx, nistsphere, pvf and the headerless ITU/3GPP speech codecs: demux only."
+description = "legacy compressed-audio containers, including a measured stereo DSP-ADPCM BRSTM subset: demux only."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
