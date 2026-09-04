@@ -81,6 +81,11 @@ impl AuthenticationFrame {
     }
 
     /// Parses a GRE frame only when it is Annex D's unencrypted `0x888E` form.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthenticationFrameError`] for malformed GRE/EAP, another
+    /// Protocol Type, or authentication incorrectly marked as encrypted.
     pub fn parse(
         data: &[u8],
         limits: AuthenticationLimits,
@@ -101,6 +106,11 @@ impl AuthenticationFrame {
     }
 
     /// Serializes the GRE header followed by the untouched cleartext EAPOL bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`AuthenticationFrameError`] for an invalid authentication
+    /// header or EAPOL message.
     pub fn serialize(&self) -> core::result::Result<Vec<u8>, AuthenticationFrameError> {
         if self.header.protocol_type != PROTOCOL_TYPE_EAPOL {
             return Err(AuthenticationFrameError::WrongProtocolType);

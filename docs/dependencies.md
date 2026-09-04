@@ -27,6 +27,46 @@ each, with the assessment, the date, and who signed off.
 
 ---
 
+## `crypto-bigint` 0.7.5 — fixed-width arithmetic for RIST Annex D
+
+**Adopted** 2026-09-04. **Used by** `vaco-protocol-rist` alone, with workspace
+default features disabled and only `subtle`/`zeroize` enabled. Native RIST
+builds additionally enable `getrandom`; wasm keeps the entropy interface
+injected and does not enable that feature.
+
+**What for.** `TR-06-2:2024` Annex D requires 2048-bit modular
+exponentiation for SHA256-SRP6a. The standard library has no fixed-width
+constant-time big integer. `crypto-bigint` supplies constant-time comparisons,
+Montgomery multiplication, and exponentiation for the single allowlisted
+Annex D group; `zeroize` clears private values and `subtle` supplies proof
+comparison. The crate does not expose arbitrary modulus selection.
+
+**Gate 1.** Pure Rust with no build script, FFI, or native library. The selected
+feature graph adds `cmov`, `ctutils`, `hybrid-array`, `num-traits`, `subtle`,
+and `zeroize`; native entropy also adds `getrandom`/`rand_core`. The dependency
+and its `cmov` substrate contain reviewed Rust `unsafe` internally for integer
+representations, slice casts, and architecture-specific conditional moves.
+That is dependency-internal and does not weaken this workspace's own
+`unsafe_code = "forbid"`, but it is an explicit Gate 3 cost rather than being
+described as an unsafe-free graph.
+
+**Gate 2.** `crypto-bigint` declares `Apache-2.0 OR MIT`, both on the allowlist.
+
+**Gate 3.** This is the RustCrypto project's maintained big-integer primitive,
+not an ad-hoc SRP implementation. Version 0.7.5 requires Rust 1.85, has no build
+script, and keeps the production surface at compile-time `U2048` arithmetic.
+The implementation never calls a `_vartime` operation. Public values are
+validated as canonical members of `1..N`, private scalars use bounded rejection
+sampling, and official Annex D.9 intermediates are checked independently of a
+self-round-trip. The exact version and checksums are locked so a later upgrade
+requires a fresh vector, feature-tree, advisory, and internal-unsafe review.
+
+**Exit.** All big-integer usage is isolated in
+`crates/io/vaco-protocol-rist/src/srp.rs`. Replacing the dependency changes that
+adapter and its vector tests, not the EAP codec or session state machines.
+
+---
+
 ## `ring` 0.17 — TLS crypto provider for `vaco-protocol-tls`
 
 **Adopted** 2026-08-28, in response to the Gate 1 amendment. **Replaces**

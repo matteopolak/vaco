@@ -20,15 +20,10 @@
 //! establishment, §6.2's mandatory cipher-suite check, and §6.3's
 //! certificate configuration (already fully covered by
 //! `vaco_protocol_dtls::options::DtlsOptions`, no gap). §7.5's PSK
-//! authentication points to Annex D, a **Normative, full
-//! EAP-SHA256-SRP6a implementation** (2048-bit safe-prime modular
-//! exponentiation, its own multi-message challenge/response, its own
-//! session-key derivation) — genuinely comparable in size to the
-//! AES-ownership question, not a wiring detail, so it is **filed
-//! separately** rather than built here. This is a legitimate
-//! split, not a shortcut: §7 itself states PSK's intrinsic
-//! authentication (knowledge of the passphrase) "may be sufficient for
-//! some applications", naming Annex D as an *additional* level on top.
+//! authentication points to Annex D's mutually authenticated
+//! EAP-SHA256-SRP6a exchange. [`eap`] provides its bounded wire format,
+//! [`srp`] provides fixed-group constant-time arithmetic, and [`auth`]
+//! provides client/server sans-I/O state machines and explicit data gates.
 //!
 //! Like `vaco-protocol-srt`'s PR-10a, this is a framing/state library,
 //! not yet a [`vaco_protocol_core::Protocol`] — no `rist:` registry
@@ -160,17 +155,19 @@
 //! is now built — see [`dtls`] — with one specific, filed gap: §6.2's
 //! per-suite disable requirement needs an OpenSSL cipher-list knob
 //! `vaco-protocol-dtls` does not expose yet (that crate is not owned by
-//! this package; flagged as a follow-up rather than reached into). Annex D
-//! (EAP-SHA256-SRP6a) remains unimplemented in this package.
+//! this package; flagged as a follow-up rather than reached into).
 //!
 //! # Configuration
 //!
-//! None yet — no `Protocol`, no `-h protocol=rist` options.
+//! [`auth::AuthenticationConfig`] controls per-packet and credential limits,
+//! retry timing, unknown-identity privacy behavior, and session-key/PSK
+//! negotiation. Deployment-level peer limits remain the caller's concern.
 //!
 //! # Dependencies
 //!
 //! `vaco-core`, `vaco-crypto` (layer 0 — AES-CTR and PBKDF2-HMAC-SHA256,
-//! not duplicated), `vaco-limits` (bounded parsing), `vaco-protocol-core`
+//! not duplicated), `vaco-hash` (SHA-256), `crypto-bigint` (fixed-width
+//! constant-time SRP arithmetic), `vaco-limits` (bounded parsing), `vaco-protocol-core`
 //! (`ProtocolError`/`Result`, reused ahead of any `Protocol` impl exactly
 //! as `vaco-protocol-srt` does), `vaco-protocol-dtls` (layer 2, same-layer
 //! edge — [`dtls`]'s §6 integration, not duplicated), `vaco-rtp` (layer 1
@@ -178,8 +175,10 @@
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod bonding;
 pub mod buffer;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dtls;
 pub mod eap;
 pub mod gre;

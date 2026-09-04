@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, reason = "test code")]
+
 use vaco_protocol_rist::{
     eap::{AuthenticationLimits, EapolPacket},
     gre::{AuthenticationFrame, GreHeader, PROTOCOL_TYPE_EAPOL, RistVersion},

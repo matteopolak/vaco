@@ -39,9 +39,15 @@ pub enum EapError {
     /// The EAP code is reserved and must be silently discarded.
     ReservedEapCode,
     /// A Request type is unsupported and should receive Nak.
-    UnsupportedType,
+    UnsupportedType {
+        /// Identifier copied into the required Nak response.
+        identifier: u8,
+    },
     /// An SRP Request subtype is unsupported and should receive Nak.
-    UnsupportedSubtype,
+    UnsupportedSubtype {
+        /// Identifier copied into the required Nak response.
+        identifier: u8,
+    },
     /// Fields contradict the selected packet kind.
     InvalidMessage,
 }
@@ -55,8 +61,8 @@ impl fmt::Display for EapError {
             Self::InvalidLength => "invalid authentication packet length",
             Self::ReservedEapolType => "reserved EAPOL packet type",
             Self::ReservedEapCode => "reserved EAP code",
-            Self::UnsupportedType => "unsupported EAP request type",
-            Self::UnsupportedSubtype => "unsupported EAP SRP subtype",
+            Self::UnsupportedType { .. } => "unsupported EAP request type",
+            Self::UnsupportedSubtype { .. } => "unsupported EAP SRP subtype",
             Self::InvalidMessage => "invalid EAP message fields",
         })
     }
@@ -77,6 +83,11 @@ pub enum EapolPacket {
 
 impl EapolPacket {
     /// Parses one bounded EAPOL packet, ignoring trailing transport bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EapError`] for malformed fields, unsupported/reserved values,
+    /// or a configured resource limit violation.
     pub fn parse(data: &[u8], limits: AuthenticationLimits) -> Result<Self, EapError> {
         if data.len() > limits.max_packet_bytes {
             return Err(EapError::LimitExceeded);
@@ -100,6 +111,11 @@ impl EapolPacket {
     }
 
     /// Serializes with EAPOL version 3 and checked 16-bit lengths.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EapError`] when a typed message has an invalid field
+    /// combination or cannot fit the wire length fields.
     pub fn serialize(&self) -> Result<Vec<u8>, EapError> {
         let (packet_type, payload) = match self {
             Self::Eap(packet) => (0u8, packet.serialize()?),
@@ -107,7 +123,7 @@ impl EapolPacket {
             Self::Logoff => (2, Vec::new()),
         };
         let payload_len = u16::try_from(payload.len()).map_err(|_| EapError::InvalidLength)?;
-        let mut out = Vec::with_capacity(4usize.saturating_add(payload.len()));
+        let mut out = Vec::new();
         out.extend_from_slice(&[3, packet_type]);
         out.extend_from_slice(&payload_len.to_be_bytes());
         out.extend_from_slice(&payload);
@@ -255,7 +271,7 @@ impl EapPacket {
             });
         }
         let body = packet.get(4..).ok_or(EapError::Truncated)?;
-        let message = parse_message(code, body, limits)?;
+        let message = parse_message(code, identifier, body, limits)?;
         Ok(Self {
             code,
             identifier,
@@ -275,7 +291,7 @@ impl EapPacket {
             .checked_add(data.len())
             .ok_or(EapError::InvalidLength)?;
         let wire_len = u16::try_from(len).map_err(|_| EapError::InvalidLength)?;
-        let mut out = Vec::with_capacity(len);
+        let mut out = Vec::new();
         out.extend_from_slice(&[self.code.wire(), self.identifier]);
         out.extend_from_slice(&wire_len.to_be_bytes());
         out.extend_from_slice(&data);
@@ -285,6 +301,7 @@ impl EapPacket {
 
 fn parse_message(
     code: EapCode,
+    identifier: u8,
     data: &[u8],
     limits: AuthenticationLimits,
 ) -> Result<EapMessage, EapError> {
@@ -299,12 +316,13 @@ fn parse_message(
         }
         3 if code == EapCode::Response && body == [0x13] => Ok(EapMessage::Nak),
         3 => Err(EapError::InvalidMessage),
-        0x13 => Ok(EapMessage::Srp(parse_srp(code, body)?)),
-        _ => Err(EapError::UnsupportedType),
+        0x13 => Ok(EapMessage::Srp(parse_srp(code, identifier, body)?)),
+        _ if code == EapCode::Request => Err(EapError::UnsupportedType { identifier }),
+        _ => Err(EapError::InvalidMessage),
     }
 }
 
-fn parse_srp(code: EapCode, data: &[u8]) -> Result<SrpMessage, EapError> {
+fn parse_srp(code: EapCode, identifier: u8, data: &[u8]) -> Result<SrpMessage, EapError> {
     let subtype = byte(data, 0)?;
     let body = data.get(1..).ok_or(EapError::Truncated)?;
     match (code, subtype) {
@@ -316,7 +334,8 @@ fn parse_srp(code: EapCode, data: &[u8]) -> Result<SrpMessage, EapError> {
         (EapCode::Request, 0x10) if body.is_empty() => Ok(SrpMessage::PassphraseRequest),
         (EapCode::Response, 0x10) => parse_passphrase_response(body),
         (_, 1 | 2 | 3 | 0x10) => Err(EapError::InvalidMessage),
-        _ => Err(EapError::UnsupportedSubtype),
+        _ if code == EapCode::Request => Err(EapError::UnsupportedSubtype { identifier }),
+        _ => Err(EapError::InvalidMessage),
     }
 }
 
@@ -414,7 +433,7 @@ fn parse_passphrase_response(data: &[u8]) -> Result<SrpMessage, EapError> {
 fn serialize_message(code: EapCode, message: &EapMessage) -> Result<Vec<u8>, EapError> {
     match message {
         EapMessage::Identity(bytes) => {
-            let mut out = Vec::with_capacity(bytes.len().saturating_add(1));
+            let mut out = Vec::new();
             out.push(1);
             out.extend_from_slice(bytes);
             Ok(out)
@@ -467,14 +486,14 @@ fn serialize_srp(code: EapCode, message: &SrpMessage) -> Result<Vec<u8>, EapErro
             if *use_session_key && !encrypted.is_empty() {
                 return Err(EapError::InvalidMessage);
             }
-            let mut data = Vec::with_capacity(encrypted.len().saturating_add(1));
+            let mut data = Vec::new();
             data.push((u8::from(*use_session_key) << 7) | (u8::from(*aes_256) << 6));
             data.extend_from_slice(encrypted);
             (0x10, data)
         }
         _ => return Err(EapError::InvalidMessage),
     };
-    let mut out = Vec::with_capacity(body.len().saturating_add(2));
+    let mut out = Vec::new();
     out.extend_from_slice(&[0x13, subtype]);
     out.append(&mut body);
     Ok(out)
@@ -514,7 +533,7 @@ fn serialize_public(value: &[u8]) -> Result<Vec<u8>, EapError> {
 }
 
 fn serialize_validator(use_session_key: bool, proof: &[u8; 32]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(36);
+    let mut out = Vec::new();
     out.extend_from_slice(&[0, 0, 0, u8::from(use_session_key)]);
     out.extend_from_slice(proof);
     out
@@ -538,6 +557,7 @@ fn be_u16(data: &[u8], at: usize) -> Result<u16, EapError> {
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn literal_eapol_layouts_match_annex_d_figures() {
@@ -640,6 +660,32 @@ mod tests {
                 EapolPacket::parse(&bytes, AuthenticationLimits::default()).unwrap(),
                 packet
             );
+        }
+    }
+
+    proptest! {
+        #[test]
+        fn bounded_identity_packets_round_trip(
+            identifier in any::<u8>(),
+            identity in prop::collection::vec(any::<u8>(), 0..=255),
+        ) {
+            let packet = EapolPacket::Eap(EapPacket::identity_response(identifier, identity));
+            let bytes = packet.serialize().unwrap();
+            prop_assert_eq!(
+                EapolPacket::parse(&bytes, AuthenticationLimits::default()).unwrap(),
+                packet,
+            );
+        }
+
+        #[test]
+        fn arbitrary_bounded_input_never_panics_and_canonicalizes(
+            data in prop::collection::vec(any::<u8>(), 0..=8192),
+        ) {
+            let limits = AuthenticationLimits::default();
+            if let Ok(packet) = EapolPacket::parse(&data, limits) {
+                let canonical = packet.serialize().unwrap();
+                prop_assert_eq!(EapolPacket::parse(&canonical, limits).unwrap(), packet);
+            }
         }
     }
 }

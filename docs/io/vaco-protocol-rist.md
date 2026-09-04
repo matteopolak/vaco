@@ -6,27 +6,19 @@ RIST (Reliable Internet Stream Transport) Simple and Main Profile:
 RTP/RTCP framing (reused from `vaco-rtp`, layer 1), the RIST-specific
 RTCP messages Simple Profile adds (bitmask/range retransmission requests,
 the optional RTT-echo message), retransmitted-packet matching, the
-receiver's two-section reorder/retransmission-reassembly buffer (#558,
-`TR-06-1`), GRE tunnelling, and Pre-Shared Key encryption (#559,
-`TR-06-2`), plus bonding/multi-link support and a statistics surface
-(#560, both profiles). This is PR-11a/PR-11b/PR-11c of epic PR-11/#63 —
-all three packages now land here. Like `vaco-protocol-srt`'s PR-10a,
-there is no `rist:` `Protocol` implementation and no registry entry
-here: no socket, no clock. §6's DTLS is named blocked/deferred to PR-12
-(the same T4-tiered gap already blocking WHIP/#619); §7.5's Annex D
-(EAP-SHA256-SRP6a authentication) is filed separately as #657, not built
-here — see that issue and this crate's own `lib.rs` docs for why the
-split is legitimate rather than a shortcut. #560's interop-matrix clause
-is named unreachable up front (no `librist` on this machine, same as the
-other reference-peer requirements below) — the replacement bar built and
-tested instead is #560's own Acceptance Criterion: a bonded two-link
-session survives the loss of either link with no delivered-packet loss.
+receiver's two-section reorder/retransmission-reassembly buffer, GRE
+tunnelling, DTLS integration, Pre-Shared Key encryption, Annex D
+EAP-SHA256-SRP6a authentication, bonding/multi-link support, and a
+statistics surface. Like `vaco-protocol-srt`, there is no `rist:`
+`Protocol` implementation and no registry entry here: the crate owns no
+socket and reads no clock.
 
 ## No reference implementation on this machine
 
 No `ffmpeg` build available here carries `librist` (`ffmpeg -protocols` /
 `ffmpeg -buildconf` list no `rist` entry). Every fact in this crate comes
-from `VSF TR-06-1:2020`/`TR-06-2:2022` (freely published Technical
+from `VSF TR-06-1:2020`, `TR-06-2:2022`, and the corrected
+`TR-06-2:2024` Annex D (freely published Technical
 Recommendations, CC BY-ND 4.0 — D7/D15-clean the same way SRT's IETF
 draft was) rather than a differential check. Tests carry three
 evidence-class labels:
@@ -41,7 +33,10 @@ evidence-class labels:
   request scenario (#558), Appendix B's PBKDF2 key-derivation example
   (#559, independently re-derived via Python's stdlib
   `hashlib.pbkdf2_hmac` before being trusted, not merely read off the
-  page — see `vaco-crypto`'s own docs).
+  page — see `vaco-crypto`'s own docs). Annex D authentication checks
+  every intermediate in the corrected 2024 D.9 example. The 2023
+  revision corrected the 2022 D.2 `M1` formula and incorrectly calculated
+  D.9 values; do not restore the obsolete 2022 outputs.
 - **self-consistency** — this crate's own two sides agreeing (a fake
   sender/receiver pair completing a session, in both directions for
   #559's PSK work; #560's bonded-receiver tests feeding the same
@@ -121,6 +116,15 @@ behind `patent-encumbered-rist`, `default = false`.**
   directly on `vaco-crypto`. §7.4's on-the-fly passphrase rotation and
   §7.6's Future Nonce Announcement message are not built — the rotation
   *policy* is a session concern above this crate's framing layer.
+- `eap`, `srp`, and `auth` — `TR-06-2:2024` Annex D's bounded EAPOL wire
+  codec, fixed-group SHA256-SRP6a calculations, and client/server sans-I/O
+  state machines. Authentication travels as cleartext GRE Protocol Type
+  `0x888E`; it is never passed through PSK encryption. The server stores a
+  salt and verifier rather than a password, requests use four consecutive
+  wrapping identifiers, and retransmissions reuse the exact encoded request
+  and ephemeral values. Both peers expose a data gate and a borrowed
+  32-byte session key only after mutual proof validation. A failed
+  re-authentication closes the existing gate and clears the old key.
 - `bonding` (#560) — §5.4 (Simple Profile bonding across raw network
   connections) and §5.5 (Main Profile tunnel-level multi-path over GRE
   paths) are one mechanism at this crate's level of abstraction:
@@ -159,8 +163,9 @@ left to the discretion of the implementer") and are not built as a
 result. Appendix B's suggested buffer sizes (1000 ms total, 70 ms reorder
 section) are informative defaults this crate carries forward as its own
 defaults (`buffer::DEFAULT_TOTAL_MS`/`DEFAULT_REORDER_MS`), not values
-the spec requires. §6 (DTLS) and Annex D (EAP-SHA256-SRP6a) are named
-blocked/deferred, not attempted — see #619 and #657.
+the spec requires. Annex D has spec-vector, wire-layout, and internal
+client/server evidence, but no external RIST peer is installed, so network
+interoperability remains unmeasured.
 
 ## How to change it
 
@@ -178,20 +183,40 @@ blocked/deferred, not attempted — see #619 and #657.
   specifically to test the give-up path deterministically, separate from
   the random-loss recovery path — keep that separation when extending the
   simulation rather than relying on a lucky PRNG seed.
+- Extend authentication messages in `eap.rs`, arithmetic in `srp.rs`, and
+  transitions in `auth.rs`. Production arithmetic deliberately accepts
+  only Annex D's default 2048-bit group; the weaker D.9 group exists only
+  inside the numeric-vector test. Keep retries byte-stable and keep private
+  exponents, passwords, and session keys zeroized when adding states.
 
 ## Configuration
 
-None yet — no `Protocol`, no `-h protocol=rist` options.
+`AuthenticationConfig` sets packet/identity/password limits, the server
+display name, initial wrapping identifier, retry timeout and count,
+unknown-identity policy, and whether this peer advertises the derived key for
+its outbound PSK passphrase. The client's and server's `U` bits are directional
+and are exposed separately for inbound/outbound traffic. Defaults
+are 4,096-byte packets, 1,024-byte identities/passwords, 3,000 ms, three
+retries, privacy-preserving fake-record work, and no PSK-key request.
+Re-authentication has a fixed 60,000 ms minimum interval. One state-machine
+value represents one peer; the embedding application must bound its global
+peer map.
 
 ## Dependencies
 
 `vaco-core`, `vaco-crypto` (layer 0 — AES-CTR and PBKDF2-HMAC-SHA256, not
-duplicated), `vaco-limits` (bounded parsing), `vaco-protocol-core`
+duplicated), `vaco-hash` (SHA-256), `crypto-bigint 0.7.5` (constant-time
+fixed-width Montgomery arithmetic, with only `subtle` and `zeroize`
+workspace features), `vaco-limits` (bounded parsing), `vaco-protocol-core`
 (`ProtocolError`/`Result`, reused ahead of any `Protocol` impl exactly as
 `vaco-protocol-srt` does), `vaco-rtp` (layer 1 — RFC 3550 RTP/RTCP
 framing, not duplicated), `vaco-time`.
 
 ## wasm
 
-Builds cleanly for `wasm32-unknown-unknown` — no socket, no wall clock, no
-external crate with a native dependency.
+The state machines own no socket or wall clock. Native builds expose
+`SystemSecretSource` through `crypto-bigint`'s target-specific `getrandom`
+feature; wasm callers inject `SecretSource`, so the common library does not
+gain a platform entropy dependency. The OpenSSL-backed `dtls` module is native
+only; it was already unusable on `wasm32-unknown-unknown` because its socket and
+OpenSSL dependencies do not support that target.

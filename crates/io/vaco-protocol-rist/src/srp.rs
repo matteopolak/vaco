@@ -52,6 +52,10 @@ impl std::error::Error for SrpError {}
 /// A fallible source of secret bytes, injectable for wasm and deterministic tests.
 pub trait SecretSource {
     /// Fills every output byte or returns without yielding partial entropy as usable state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SrpError::EntropyFailure`] when the requested bytes cannot be supplied.
     fn fill_secret(&mut self, output: &mut [u8]) -> Result<(), SrpError>;
 }
 
@@ -75,7 +79,7 @@ impl SecretSource for SystemSecretSource {
 }
 
 /// A password database record containing only a salt and SRP verifier.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct VerifierRecord {
     salt: Vec<u8>,
     verifier: U2048,
@@ -83,30 +87,47 @@ pub struct VerifierRecord {
 
 impl VerifierRecord {
     /// Derives a verifier while taking ownership of, then zeroizing, the password bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SrpError::InvalidSalt`] unless `salt` contains 4 through 255 bytes.
     pub fn from_password(
         identity: &[u8],
         mut password: Vec<u8>,
         salt: Vec<u8>,
     ) -> Result<Self, SrpError> {
-        validate_salt(&salt)?;
-        let x = derive_x(identity, &password, &salt);
+        if let Err(error) = validate_salt(&salt) {
+            password.as_mut_slice().zeroize();
+            return Err(error);
+        }
+        let mut x = derive_x(identity, &password, &salt);
         password.as_mut_slice().zeroize();
         let verifier = AnnexDElement::new(&U2048::from(2u8)).pow(&x).retrieve();
+        x.zeroize();
         Ok(Self { salt, verifier })
     }
 
     /// Generates a salt through the injected source before deriving the verifier.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SrpError::InvalidSalt`] for an invalid length or propagates an
+    /// entropy-source failure.
     pub fn generate(
         identity: &[u8],
-        password: Vec<u8>,
+        mut password: Vec<u8>,
         salt_len: usize,
         source: &mut impl SecretSource,
     ) -> Result<Self, SrpError> {
         if !(4..=255).contains(&salt_len) {
+            password.as_mut_slice().zeroize();
             return Err(SrpError::InvalidSalt);
         }
         let mut salt = vec![0u8; salt_len];
-        source.fill_secret(&mut salt)?;
+        if let Err(error) = source.fill_secret(&mut salt) {
+            password.as_mut_slice().zeroize();
+            return Err(error);
+        }
         Self::from_password(identity, password, salt)
     }
 
@@ -123,6 +144,10 @@ impl VerifierRecord {
     }
 
     /// Restores a validated record from persistent canonical bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SrpError`] when the salt or canonical verifier is invalid.
     pub fn from_verifier_bytes(salt: Vec<u8>, verifier: &[u8]) -> Result<Self, SrpError> {
         validate_salt(&salt)?;
         let verifier = parse_public::<AnnexDModulus>(verifier)?;
@@ -134,6 +159,21 @@ impl VerifierRecord {
         source.fill_secret(&mut salt)?;
         let verifier = sample_scalar::<AnnexDModulus>(source)?;
         Ok(Self { salt, verifier })
+    }
+}
+
+impl fmt::Debug for VerifierRecord {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("VerifierRecord")
+            .field("salt", &self.salt)
+            .field("verifier", &"[REDACTED]")
+            .finish()
+    }
+}
+
+impl Drop for VerifierRecord {
+    fn drop(&mut self) {
+        self.verifier.zeroize();
     }
 }
 
@@ -205,6 +245,7 @@ pub(crate) struct ServerEphemeral {
 impl Drop for ServerEphemeral {
     fn drop(&mut self) {
         self.private.zeroize();
+        self.verifier.zeroize();
     }
 }
 
@@ -226,36 +267,49 @@ pub(crate) fn require_default_group(
 
 pub(crate) fn begin_client(
     source: &mut impl SecretSource,
-) -> Result<(ClientEphemeral, Vec<u8>), SrpError> {
+) -> Result<(Box<ClientEphemeral>, Vec<u8>), SrpError> {
     let private = sample_scalar::<AnnexDModulus>(source)?;
     let public = pow_g::<AnnexDModulus>(&private);
     let bytes = canonical(&public);
-    Ok((ClientEphemeral { private, public }, bytes))
+    Ok((Box::new(ClientEphemeral { private, public }), bytes))
 }
 
 pub(crate) fn finish_client(
-    ephemeral: ClientEphemeral,
+    ephemeral: Box<ClientEphemeral>,
     identity: &[u8],
     mut password: Vec<u8>,
     salt: &[u8],
     server_public: &[u8],
 ) -> Result<ClientEvidence, SrpError> {
-    validate_salt(salt)?;
-    let server_public = parse_public::<AnnexDModulus>(server_public)?;
-    let x = derive_x(identity, &password, salt);
+    let ephemeral = *ephemeral;
+    if let Err(error) = validate_salt(salt) {
+        password.as_mut_slice().zeroize();
+        return Err(error);
+    }
+    let server_public = match parse_public::<AnnexDModulus>(server_public) {
+        Ok(value) => value,
+        Err(error) => {
+            password.as_mut_slice().zeroize();
+            return Err(error);
+        }
+    };
+    let mut x = derive_x(identity, &password, salt);
     password.as_mut_slice().zeroize();
     let k = multiplier::<AnnexDModulus>();
     let u = scrambling(&ephemeral.public, &server_public);
     let gx = ConstMontyForm::<AnnexDModulus, { U2048::LIMBS }>::new(&U2048::from(2u8)).pow(&x);
     let base = AnnexDElement::new(&server_public) - AnnexDElement::new(&k) * gx;
-    let ux = u
+    let mut ux = u
         .resize::<{ U4096::LIMBS }>()
         .wrapping_mul(&x.resize::<{ U4096::LIMBS }>());
-    let exponent = ephemeral
+    let mut exponent = ephemeral
         .private
         .resize::<{ U4096::LIMBS }>()
         .wrapping_add(&ux);
     let mut shared = base.pow(&exponent).retrieve();
+    x.zeroize();
+    ux.zeroize();
+    exponent.zeroize();
     let key_bytes = hash(&[&canonical(&shared)]);
     shared.zeroize();
     let m1 = proof_m1::<AnnexDModulus>(
@@ -274,10 +328,11 @@ pub(crate) fn finish_client(
 }
 
 pub(crate) fn begin_server(
-    record: VerifierRecord,
+    record: Box<VerifierRecord>,
     client_public: &[u8],
     source: &mut impl SecretSource,
-) -> Result<(ServerEphemeral, Vec<u8>), SrpError> {
+) -> Result<(Box<ServerEphemeral>, Vec<u8>), SrpError> {
+    let record = *record;
     let client_public = parse_public::<AnnexDModulus>(client_public)?;
     let private = sample_scalar::<AnnexDModulus>(source)?;
     let k = multiplier::<AnnexDModulus>();
@@ -289,22 +344,23 @@ pub(crate) fn begin_server(
     }
     let bytes = canonical(&server_public);
     Ok((
-        ServerEphemeral {
+        Box::new(ServerEphemeral {
             private,
             client_public,
             server_public,
             verifier: record.verifier,
-        },
+        }),
         bytes,
     ))
 }
 
 pub(crate) fn finish_server(
-    ephemeral: ServerEphemeral,
+    ephemeral: Box<ServerEphemeral>,
     identity: &[u8],
     salt: &[u8],
     received_m1: &[u8; 32],
 ) -> Result<ServerEvidence, SrpError> {
+    let ephemeral = *ephemeral;
     let u = scrambling(&ephemeral.client_public, &ephemeral.server_public);
     let base = AnnexDElement::new(&ephemeral.client_public)
         * AnnexDElement::new(&ephemeral.verifier).pow(&u);
@@ -455,6 +511,10 @@ fn proof_m1<M: ConstMontyParams<{ U2048::LIMBS }>>(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "hex test helper indexes a 16-byte table with a masked nibble"
+)]
 mod tests {
     use super::*;
 
