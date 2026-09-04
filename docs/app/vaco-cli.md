@@ -561,11 +561,11 @@ stderr (observed twice per run, an artifact of the reference's own internal
 structure; this prints it once). `print_graphs.rs` matches the non-fatal
 part of that exactly.
 
-### CL-21: `-fps_mode`, `-enc_time_base`, and (still refused) `-frame_drop_threshold`
+### CL-21: `-fps_mode`, `-enc_time_base`, and `-frame_drop_threshold`
 
-Two of the three options this work package names are implemented; the third
-is still refused. Read `crate::fps_mode`'s and `crate::enc_time_base`'s own
-module docs for the full account — this is the summary.
+All three options this work package names are implemented. Read
+`crate::fps_mode`'s and `crate::enc_time_base`'s own module docs for the full
+account — this is the summary.
 
 **`-fps_mode`** (`fps_mode.rs`) is real, four-way (not five-way — see below),
 video-only. `passthrough` needs no pipeline change (nothing in this build
@@ -604,13 +604,13 @@ per-stream leg here tracks a filtergraph's own output time base separately
 from the demuxed stream's, so there is nothing distinct for `filter` to name
 yet.
 
-**`-frame_drop_threshold`** is still refused (`cli.rs`'s
-`refuse_unimplemented_options`, `GLOBAL`). It tunes exactly the reference's
-own `do_video_out` drop decision — how far *behind* schedule a frame may be
-before `cfr`/`vfr` drops it rather than duplicating/emitting it — a
-parameter neither `vaco_filter_video_format::fps::Filter` nor `VfrDedup`
-takes. Accepting the option without a real consumer would repeat exactly the
-defect `-ar` had before `refuse_unimplemented_options` existed.
+**`-frame_drop_threshold`** is global and applies before the `cfr`/`vfr`
+stage. A negative value leaves the late-frame stage disabled. A non-negative
+value is a count of output-frame intervals: if an arriving frame's timestamp
+is more than that count behind the largest timestamp already seen, it is
+dropped. This is deliberately scheduler-time rather than wall-clock policy;
+the pipeline has no wall-clock output clock to reproduce the reference's
+realtime decision. `passthrough` remains unchanged.
 
 **What was verified**: `cargo test`/`cargo clippy --no-deps -- -D warnings`
 clean on `vaco-cli` and `vaco-filter-video-format` (a workspace-wide
@@ -1099,7 +1099,7 @@ down is a decision and one that is not is a surprise.
 | `-report`/`-progress` implemented (final block only for `-progress`, see above); `-stats` implemented separately; exit codes 69/255 not implemented (named, see above) — CLOSED | CL-17 |
 | Decoder and encoder nodes, `-frames`, `-pass` | CL-19 |
 | Simple filtergraph binding, `-s`/`-aspect`/`-pix_fmt` | CL-20 |
-| `-fps_mode` and `-enc_time_base` implemented; `-frame_drop_threshold` still refused (see above) — OPEN | CL-21 |
+| `-fps_mode`, `-enc_time_base`, and `-frame_drop_threshold` implemented (see above) — CLOSED | CL-21 |
 | Parsing and per-frame evaluation implemented; no live-encode wiring exists in this build (see above) — CLOSED | CL-22 |
 | `-shortest`, `-apad`, `-isync` | CL-23 |
 | The ~600-case timestamp differential matrix | CL-24 |

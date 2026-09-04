@@ -53,21 +53,18 @@
 //! * `auto` resolves to `cfr` or `vfr` per [`muxer_wants_cfr`] and then
 //!   defers to one of the two cases above.
 //!
-//! # What is not implemented
+//! # `-frame_drop_threshold`
 //!
-//! `-frame_drop_threshold` remains refused (`cli.rs`'s
-//! `refuse_unimplemented_options`): it tunes exactly the reference's own
-//! `do_video_out` drop decision — "how far *behind* schedule a frame may be
-//! before `cfr`/`vfr` drops it rather than duplicating/emitting it" — which
-//! is not a parameter either [`vaco_filter_video_format::fps::Filter`] or
-//! [`VfrDedup`] takes. Accepting the option and silently not consuming it
-//! would repeat exactly the defect `-ar` had before this codebase's own
-//! `refuse_unimplemented_options` existed — silently wrong is worse than
-//! refusing, so this keeps refusing it rather than accepting a number that
-//! changes nothing.
+//! The global threshold is consumed before the `cfr`/`vfr` node. A negative
+//! value disables its late-frame stage. A non-negative value is measured in
+//! output-frame intervals: once a presentation timestamp is more than that
+//! many intervals behind the greatest timestamp already seen, the frame is
+//! dropped. This gives the CLI a real, deterministic late-frame policy without
+//! pretending that the scheduler has access to the reference's wall-clock
+//! output clock. `passthrough` remains untouched.
 
 use vaco_codec_core::VideoParameters;
-use vaco_core::{MediaType, Rational, Result, Timestamp};
+use vaco_core::{MediaType, Rational, Result, Rounding, Timestamp};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
 use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
 use vaco_filter_core::sched::Graph;
@@ -132,6 +129,7 @@ pub fn insert(
     time_base: Rational,
     video: &VideoParameters,
     mode: FpsMode,
+    frame_drop_threshold: Option<f64>,
 ) -> Result<FrameTap, Diagnostic> {
     let effective = match mode {
         FpsMode::Passthrough => return Ok(frames),
@@ -144,11 +142,39 @@ pub fn insert(
         }
         other => other,
     };
+    let frames = match frame_drop_threshold {
+        Some(threshold) if threshold >= 0.0 => {
+            insert_late_drop(spec, frames, time_base, video, threshold)?
+        }
+        _ => frames,
+    };
     match effective {
         FpsMode::Cfr => insert_cfr(spec, frames, time_base, video),
         FpsMode::Vfr => insert_vfr(spec, frames, time_base, video),
         FpsMode::Passthrough | FpsMode::Auto => unreachable!("resolved above"),
     }
+}
+
+fn insert_late_drop(
+    spec: &mut PipelineSpec,
+    frames: FrameTap,
+    time_base: Rational,
+    video: &VideoParameters,
+    threshold: f64,
+) -> Result<FrameTap, Diagnostic> {
+    let rate = if video.frame_rate.num > 0 {
+        video.frame_rate
+    } else {
+        Rational::new(25, 1)
+    };
+    attach_one_node(
+        spec,
+        frames,
+        time_base,
+        video,
+        Box::new(Simple::new(LateFrameDrop::new(rate, time_base, threshold))),
+        "vaco_frame_drop_threshold",
+    )
 }
 
 fn video_format(video: &VideoParameters, time_base: Rational) -> vaco_filter_core::LinkFormat {
@@ -307,6 +333,60 @@ impl FrameFilter for VfrDedup {
     }
 }
 
+/// Drops timestamp regressions that exceed the configured frame-interval
+/// tolerance. The counter is in the output cadence, so differing input time
+/// bases cannot change the threshold's meaning.
+#[derive(Debug)]
+struct LateFrameDrop {
+    output_time_base: Rational,
+    input_time_base: Rational,
+    threshold: f64,
+    greatest_slot: Option<i64>,
+}
+
+impl LateFrameDrop {
+    fn new(rate: Rational, input_time_base: Rational, threshold: f64) -> Self {
+        Self {
+            output_time_base: rate.inverse(),
+            input_time_base,
+            threshold,
+            greatest_slot: None,
+        }
+    }
+
+    fn step(&mut self, frame: Frame) -> FrameOut {
+        let Some(slot) = frame
+            .pts
+            .rescale(
+                self.input_time_base,
+                self.output_time_base,
+                Rounding::NearestAwayFromZero,
+            )
+            .ticks()
+        else {
+            return FrameOut::One(frame);
+        };
+        if let Some(greatest) = self.greatest_slot {
+            let lag = greatest.saturating_sub(slot);
+            if lag > 0 && (lag as f64) > self.threshold {
+                return FrameOut::None;
+            }
+        }
+        self.greatest_slot = Some(self.greatest_slot.map_or(slot, |old| old.max(slot)));
+        FrameOut::One(frame)
+    }
+}
+
+impl FrameFilter for LateFrameDrop {
+    fn filter_frame(&mut self, _ctx: &mut FilterContext<'_>, frame: Frame) -> Result<FrameOut> {
+        Ok(self.step(frame))
+    }
+
+    fn flush_state(&mut self) {
+        self.greatest_slot = None;
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used, reason = "test code")]
 mod tests {
@@ -345,5 +425,16 @@ mod tests {
         assert!(emitted(1));
         assert!(emitted(2));
         assert!(!emitted(2));
+    }
+
+    #[test]
+    fn frame_drop_threshold_drops_only_frames_later_than_its_tolerance() {
+        let mut dropper = LateFrameDrop::new(Rational::new(1, 1), Rational::new(1, 1), 1.0);
+        let mut emitted =
+            |pts: i64| -> bool { matches!(dropper.step(frame_at(pts)), FrameOut::One(_)) };
+        assert!(emitted(3));
+        assert!(emitted(2), "one frame of lag is within the threshold");
+        assert!(!emitted(1), "two frames of lag exceeds the threshold");
+        assert!(emitted(4));
     }
 }

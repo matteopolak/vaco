@@ -365,6 +365,7 @@ where
         auto_conversion_filters,
         cli.thread_count(),
         cli.filter_thread_count(),
+        cli.frame_drop_threshold,
         overwrite::resolve_policy(&cli.line),
     )?;
 

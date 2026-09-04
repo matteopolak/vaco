@@ -1710,6 +1710,7 @@ pub fn run_pipeline(
     auto_conversion_filters: bool,
     threads: usize,
     filter_threads: usize,
+    frame_drop_threshold: Option<f64>,
     overwrite: crate::overwrite::OverwritePolicy,
 ) -> Result<RunSpec, Diagnostic> {
     if outputs.iter().all(|o| o.dropped) {
@@ -2235,7 +2236,12 @@ pub fn run_pipeline(
                                         video.format = Some(fmt);
                                     }
                                     crate::fps_mode::insert(
-                                        &mut spec, frames, time_base, &video, mode,
+                                        &mut spec,
+                                        frames,
+                                        time_base,
+                                        &video,
+                                        mode,
+                                        frame_drop_threshold,
                                     )?
                                 }
                             } else {

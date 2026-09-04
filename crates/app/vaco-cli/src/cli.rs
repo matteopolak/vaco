@@ -180,6 +180,9 @@ pub struct Cli {
     /// option table (matching the reference's own declaration for it), so
     /// this is parsed with [`leading_int`] rather than [`ParsedOption::number`].
     pub filter_threads: Option<usize>,
+    /// `-frame_drop_threshold`, in output-frame intervals. A negative value
+    /// disables late-frame dropping; `None` keeps the reference default.
+    pub frame_drop_threshold: Option<f64>,
 }
 
 impl Cli {
@@ -328,6 +331,11 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
             .map(value_str)
             .transpose()?
             .map(|s| leading_int(&s).max(0) as usize),
+        frame_drop_threshold: line
+            .last_global("frame_drop_threshold")
+            .map(|o| o.number().map_err(|e| split_error(&e)))
+            .transpose()?
+            .flatten(),
         ..Cli::default()
     };
 
@@ -384,15 +392,15 @@ pub fn parse<S: AsRef<OsStr>>(argv: &[S]) -> Result<Cli, Diagnostic> {
 /// refusing, which applies just as much to an option that does nothing as
 /// to one that resamples nothing.
 /// Each of these is tracked as deferred work in `docs/app/vaco-cli.md`
-/// (`-hwaccel`: CL-34a; `-frame_drop_threshold`: CL-21) — refusing does not
+/// (`-hwaccel`: CL-34a) — refusing does not
 /// close any of those issues, it only stops the gap between "accepted" and
 /// "implemented" from reading as "works".
 /// `-print_graphs` (CL-27) is no longer in this list: `crate::print_graphs`
 /// implements it, gated by [`crate::print_graphs::PrintGraphsSpec::resolve`]
 /// rather than a blanket refusal. `-fps_mode`/`-enc_time_base` (CL-21) are
-/// also gone: `crate::fps_mode`/`crate::enc_time_base` implement them; only
-/// `-frame_drop_threshold` in that work package is still refused — see
-/// `crate::fps_mode`'s module doc for exactly why.
+/// also gone: `crate::fps_mode`/`crate::enc_time_base` implement them, and
+/// `-frame_drop_threshold` is consumed by `crate::fps_mode`'s late-frame
+/// stage.
 ///
 /// Deliberately narrow: this names exactly the options measured to have no
 /// consuming code anywhere in `vaco-cli`/`vaco-cli-core`, not a general
@@ -438,7 +446,6 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
     // triage, priority 1) -- as opposed to the third batch (below), which
     // only loses diagnostics.
     const GLOBAL: &[&str] = &[
-        "frame_drop_threshold",
         "copyts",
         "start_at_zero",
         "copytb",
@@ -1192,5 +1199,22 @@ mod tests {
                 .unwrap()
                 .hide_banner
         );
+    }
+
+    #[test]
+    fn frame_drop_threshold_binds_its_last_global_value() {
+        let cli = parse(&[
+            "-frame_drop_threshold",
+            "0.25",
+            "-i",
+            "a.mkv",
+            "-frame_drop_threshold",
+            "1.5",
+            "-f",
+            "null",
+            "-",
+        ])
+        .unwrap();
+        assert_eq!(cli.frame_drop_threshold, Some(1.5));
     }
 }

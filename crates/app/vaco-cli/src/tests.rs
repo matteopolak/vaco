@@ -448,6 +448,7 @@ fn packets_reach_the_sink_and_are_counted() {
         true,
         1,
         1,
+        None,
         crate::overwrite::OverwritePolicy::Always,
     )
     .unwrap();
@@ -1175,6 +1176,7 @@ fn output_side_t_stops_writing_early() {
         true,
         1,
         1,
+        None,
         crate::overwrite::OverwritePolicy::Always,
     )
     .unwrap();
