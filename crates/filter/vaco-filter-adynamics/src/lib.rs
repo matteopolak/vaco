@@ -1,33 +1,27 @@
 //! T2 audio dynamics filters: compressor/limiter/gate/expander/sidechain
 //! family plus loudness normalisation and measurement.
 //!
-//! FT-4.8b (GitHub #472), the other of two children FT-4.8 (#56) split into
-//! for single-writer ownership — the sibling is `vaco-filter-aeq`
-//! (#471).
+//! The audio-dynamics family, alongside the sibling `vaco-filter-aeq` crate.
 //!
-//! # Scope versus the brief that requested this crate
+//! # Scope
 //!
-//! GitHub #472's own text — checked directly rather than trusted from the
-//! brief's restatement, per this project's practice after an earlier agent
-//! found its epic named a different grouping than its brief claimed — reads
-//! "Dynamics: compressor/limiter/gate/expander/sidechain family plus
+//! The documented family is "compressor/limiter/gate/expander/sidechain plus
 //! `loudnorm` and `dynaudnorm`." That maps to nine filters counted against
 //! `ffmpeg -filters` (2026-08-23): `acompressor`, `alimiter`, `agate`,
 //! `compand` and `mcompand` (the "expander" family — `compand`'s own
 //! description is literally "Compress or expand audio dynamic range"),
 //! `sidechaincompress`, `sidechaingate`, `loudnorm`, `dynaudnorm`. The
-//! brief that requested this crate additionally named `speechnorm`,
+//! The inventory also includes `speechnorm`,
 //! `volumedetect`, `astats`, `silencedetect`, `silenceremove` — five
-//! measurement/silence filters #472's own text does not mention. All
+//! measurement/silence filters the family description does not mention. All
 //! fourteen are implemented here; see
 //! `docs/filter/vaco-filter-adynamics.md` for which are numerically
 //! verified against a real property and which are structural.
 //!
-//! Plus six more (FT-4.13e, GitHub #485, closing epic #58): `acrusher`,
+//! Six more from the adjacent dynamics family are `acrusher`,
 //! `asoftclip`, `apsyclip`, `adynamicequalizer`, `adynamicsmooth`, `adrc` —
-//! the remaining `vaco-filter-adynamics`-row filters plan 16 §4.3 lists that
-//! had not been registered yet. `acrusher` and `asoftclip` are measured
-//! against the reference (see each module's own doc for exactly what);
+//! all measured or structurally scoped below. `acrusher` and `asoftclip` are
+//! measured against the reference (see each module's own doc for exactly what);
 //! `apsyclip`, `adynamicequalizer` and `adrc`'s non-default path are
 //! structural substitutes for algorithms (a psychoacoustic masking model, an
 //! undocumented per-bin spectral expression grammar) that black-box probing
