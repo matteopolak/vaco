@@ -47,6 +47,9 @@ Only mono and stereo layouts are valid for SWF ADPCM. An explicit zero-channel
 or multichannel layout is rejected instead of being silently normalized to
 mono; the generic decoder configuration path's zero-channel “not yet known”
 value remains untouched and therefore keeps its normal mono default.
+An encoder layout supplied through `with_audio_params` or extradata is also
+validated and must match the input frame; an encoder with no explicit layout
+continues to derive mono or stereo directly from each frame.
 
 ## Bugs found and fixed
 

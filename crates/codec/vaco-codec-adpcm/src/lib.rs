@@ -745,6 +745,7 @@ pub struct AdpcmSwfEncoder {
     machine: Machine<Packet>,
     limits: Limits,
     cfg: SwfConfig,
+    layout_explicit: bool,
 }
 impl AdpcmSwfEncoder {
     #[must_use]
@@ -753,11 +754,13 @@ impl AdpcmSwfEncoder {
             machine: Machine::new(Caps::empty()),
             limits,
             cfg: SwfConfig::default(),
+            layout_explicit: false,
         }
     }
     #[must_use]
     pub fn with_audio_params(mut self, layout: ChannelLayout) -> Self {
         self.cfg.layout = layout;
+        self.layout_explicit = true;
         self
     }
 }
@@ -769,7 +772,11 @@ impl SendReceive for AdpcmSwfEncoder {
     }
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
         if let Some((_, layout)) = parse_audio_extradata(extradata) {
+            swf::validate_channels(layout.channels)?;
             self.cfg.layout = layout;
+            self.layout_explicit = true;
+        } else if extradata.len() == 5 {
+            return Err(Error::InvalidData("adpcm_swf: invalid audio extradata"));
         }
         Ok(())
     }
@@ -783,6 +790,14 @@ impl SendReceive for AdpcmSwfEncoder {
                 let Some(frame) = input else { return Ok(()) };
                 let (samples, channels) = frame_samples_owned(frame)?;
                 let channels = swf::validate_channels(channels)?;
+                if self.layout_explicit {
+                    let configured = swf::validate_channels(self.cfg.layout.channels)?;
+                    if configured != channels {
+                        return Err(Error::InvalidData(
+                            "adpcm_swf: configured channel count does not match frame",
+                        ));
+                    }
+                }
                 let wire = swf::encode_block(&samples, channels)?;
                 let mut budget = Budget::new(self.limits.clone());
                 let mut packet = Packet::from_slice(&mut budget, &wire)?;
@@ -1361,7 +1376,36 @@ mod tests {
                     "adpcm_swf: channel count must be mono or stereo"
                 ))
             ));
+
+            let mono_frame = frame_of(&[0], 1);
+            let mut configured = AdpcmSwfEncoder::new(Limits::permissive())
+                .with_audio_params(ChannelLayout::unspecified(channels));
+            assert!(matches!(
+                configured.send(Some(&mono_frame)),
+                Err(Error::InvalidData(
+                    "adpcm_swf: channel count must be mono or stereo"
+                ))
+            ));
+
+            let mut from_extradata = AdpcmSwfEncoder::new(Limits::permissive());
+            assert!(matches!(
+                from_extradata.set_extradata(&audio_extradata(8000, channels as u8)),
+                Err(Error::InvalidData(_))
+            ));
         }
+    }
+
+    #[test]
+    fn swf_encoder_rejects_a_configured_layout_that_disagrees_with_the_frame() {
+        let mono_frame = frame_of(&[0], 1);
+        let mut encoder = AdpcmSwfEncoder::new(Limits::permissive())
+            .with_audio_params(ChannelLayout::default_for(2).unwrap());
+        assert!(matches!(
+            encoder.send(Some(&mono_frame)),
+            Err(Error::InvalidData(
+                "adpcm_swf: configured channel count does not match frame"
+            ))
+        ));
     }
 
     #[test]
