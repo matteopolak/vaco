@@ -249,9 +249,11 @@ impl RoqDemuxer {
             pkt.pts = Timestamp::new(self.audio_sample);
             pkt.dts = pkt.pts;
             pkt.pos = Some(payload_pos);
+            let time_base = Rational::new(1, AUDIO_SAMPLE_RATE.cast_signed());
             pkt.duration = Timestamp::new(samples)
-                .to_duration(Rational::new(1, AUDIO_SAMPLE_RATE.cast_signed()))
+                .to_duration(time_base)
                 .unwrap_or(vaco_core::Duration::ZERO);
+            pkt.set_duration_ts(samples);
             pkt.flags = PacketFlags::KEY;
             self.audio_sample = self.audio_sample.saturating_add(samples);
             self.pending.push_back(pkt);

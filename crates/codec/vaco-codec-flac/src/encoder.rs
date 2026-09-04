@@ -280,6 +280,7 @@ impl FlacEncoder {
         packet.duration = Timestamp::new(i64::try_from(block_size).unwrap_or(0))
             .to_duration(time_base)
             .unwrap_or(Duration::ZERO);
+        packet.set_duration_ts(i64::try_from(block_size).unwrap_or(0));
         packet.flags = PacketFlags::KEY;
         self.machine.emit(packet);
         Ok(())

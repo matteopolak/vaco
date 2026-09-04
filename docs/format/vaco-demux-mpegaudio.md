@@ -95,7 +95,7 @@ ticks; `TIME_BASE` is hard-coded to it rather than derived per stream.
 | `probe_score` | Exact match (`51`) on a real VBR file with and without a leading `ID3v2` tag |
 | Packet `pos`/`pts`/first-packet skip, second/third packet sizes | Byte-for-byte match against `ffprobe -show_packets` on a real VBR file |
 | `duration_ts`/`start_time` (from Xing frame count and LAME delay/padding) | Exact match against `ffprobe -show_streams` |
-| Packet `duration` (the raw tick count `-show_packets` prints) | **Off by a handful of ticks** (measured `368634` vs the reference's `368640`) — traced to `vaco_packet::Packet::duration` being typed as microseconds rather than native ticks; the tick→µs→tick round trip is lossy at this crate's unusual `1/14112000` time base. Not fixable inside a format-layer crate; see `TECH-DEBT.md` |
+| Packet `duration` (the raw tick count `-show_packets` prints) | Exact: the demuxer retains native ticks with `Packet::set_duration_ts`, while `Packet::duration` remains the microsecond convenience view |
 | `ID3v2`/`ID3v1` metadata merge | Structural; not fully cross-checked key-by-key against `ffprobe`'s `TAG:` output |
 | Seeking | Byte-offset estimate from the average byte rate, then resync — **not** sample-accurate, and does not yet consult the Xing TOC |
 

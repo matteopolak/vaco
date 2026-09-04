@@ -254,7 +254,10 @@ impl Muxer for FrameHashMuxer {
         // `N/A`, which is deliberately not used here.
         let dts = packet.dts.ticks().unwrap_or(i64::MIN);
         let pts = packet.pts.ticks().unwrap_or(i64::MIN);
-        let duration = packet.duration.to_ticks(time_base).unwrap_or(0);
+        let duration = packet
+            .duration_ts()
+            .or_else(|| packet.duration.to_ticks(time_base))
+            .unwrap_or(0);
         let size = u64::try_from(packet.len).unwrap_or(u64::MAX);
 
         let mut line = String::new();

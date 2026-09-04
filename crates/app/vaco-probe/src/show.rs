@@ -864,7 +864,10 @@ pub fn packet<W: Write>(
     // pts of 0 prints 0. The reference's duration printer treats 0 as "no
     // value" where its timestamp printer only treats `AV_NOPTS_VALUE` that
     // way. Observed on both, in the same section, three fields apart.
-    let ticks = pkt.duration.to_ticks(tb).filter(|t| *t != 0);
+    let ticks = pkt
+        .duration_ts()
+        .or_else(|| pkt.duration.to_ticks(tb))
+        .filter(|t| *t != 0);
     e.field(t, "duration", &Val::opt_i(ticks))?;
     // Derived from the *ticks*, not from the microsecond `Duration`, so that
     // `duration_time` is `duration × time_base` exactly as the reference
@@ -924,15 +927,20 @@ pub fn packet<W: Write>(
 /// written here regardless of what the packet says, so a producer that ever
 /// learns a reason still prints correctly.
 ///
-/// The other three kinds print their type name and nothing else. Their names
-/// are **not** measured — no demuxer in this build emits one — so they are
-/// marked as such rather than presented as observed.
+/// The exact `DurationTicks` entry is internal timing metadata and is never a
+/// user-visible side-data block. The other three kinds print their type name
+/// and nothing else. Their names are **not** measured — no demuxer in this
+/// build emits one — so they are marked as such rather than presented as
+/// observed.
 fn packet_side_data<W: Write>(e: &mut Emit<'_, W>, pkt: &Packet) -> Result<()> {
     if pkt.side_data.is_empty() {
         return Ok(());
     }
     e.tf().open(SectionId::PACKET_SIDE_DATA_LIST)?;
     for datum in &pkt.side_data {
+        if matches!(datum, PacketSideData::DurationTicks(_)) {
+            continue;
+        }
         let name = packet_side_data_name(datum);
         e.tf().open_typed(SectionId::PACKET_SIDE_DATA, name)?;
         e.str("side_data_type", name)?;
@@ -967,6 +975,7 @@ const fn packet_side_data_name(d: &PacketSideData) -> &'static str {
         PacketSideData::DisplayMatrix(_) => "Display Matrix",
         PacketSideData::SkipSamples { .. } => "Skip Samples",
         PacketSideData::MpegtsStreamId(_) => "MPEGTS Stream ID",
+        PacketSideData::DurationTicks(_) => "Duration Ticks",
         _ => "Unknown",
     }
 }

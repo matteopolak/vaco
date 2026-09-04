@@ -1194,17 +1194,20 @@ impl MatroskaMuxer {
         };
         let rel_ts = ts.saturating_sub(cluster.start_ticks);
 
-        // `Packet::duration` is always microseconds (see `vaco_core::Duration`),
-        // independent of the stream's time base, so it is converted to
-        // `TimestampScale` ticks (1 tick == 1 ms, fixed in `info_bytes`)
-        // directly rather than through the packet-timestamp rescale chain.
+        // Prefer exact packet duration ticks; packets without source ticks use
+        // the legacy microsecond value converted to `TimestampScale` ticks
+        // (1 tick == 1 ms, fixed in `info_bytes`).
         // `ZERO` is also the field's default for "not stated", so it is
         // treated as absent rather than as a real zero-length block.
-        let duration_ticks: Option<i64> = if packet.duration == vaco_core::Duration::ZERO {
-            None
-        } else {
-            packet.duration.to_ticks(Rational::new(1, 1000))
-        };
+        let duration_ticks: Option<i64> =
+            packet
+                .duration_ts()
+                .filter(|ticks| *ticks != 0)
+                .or_else(|| {
+                    (packet.duration != vaco_core::Duration::ZERO)
+                        .then(|| packet.duration.to_ticks(Rational::new(1, 1000)))
+                        .flatten()
+                });
         let track = self.tracks.get_mut(idx).ok_or(Error::InvalidData(
             "matroska: packet names an unknown stream",
         ))?;

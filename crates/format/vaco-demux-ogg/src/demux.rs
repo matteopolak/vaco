@@ -601,6 +601,7 @@ impl OggDemuxer {
             pkt.duration = Timestamp::new(dur)
                 .to_duration(time_base)
                 .unwrap_or(Duration::ZERO);
+            pkt.set_duration_ts(dur);
             let key = if is_video {
                 i == last
                     && page_granule != page::GRANULE_UNSET

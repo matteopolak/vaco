@@ -339,6 +339,7 @@ impl SendReceive for QoaEncoder {
                     packet.duration = Timestamp::new(i64::try_from(take).unwrap_or(0))
                         .to_duration(time_base)
                         .unwrap_or(Duration::ZERO);
+                    packet.set_duration_ts(i64::try_from(take).unwrap_or(0));
                     self.machine.emit(packet);
                     start += take.max(1);
                 }
@@ -506,6 +507,7 @@ impl SendReceive for ComfortNoiseEncoder {
                 packet.duration = Timestamp::new(i64::try_from(samples.len()).unwrap_or(0))
                     .to_duration(time_base)
                     .unwrap_or(Duration::ZERO);
+                packet.set_duration_ts(i64::try_from(samples.len()).unwrap_or(0));
                 self.machine.emit(packet);
                 Ok(())
             }

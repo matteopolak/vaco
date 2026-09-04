@@ -372,9 +372,11 @@ impl FlacDemuxer {
         packet.stream_index = 0;
         packet.pts = Timestamp::new(self.sample_pos.min(i64::MAX as u64).cast_signed());
         packet.dts = packet.pts;
+        let time_base = Rational::new(1, self.sample_rate.cast_signed());
         packet.duration = Timestamp::new(i64::from(blocksize))
-            .to_duration(Rational::new(1, self.sample_rate.cast_signed()))
+            .to_duration(time_base)
             .unwrap_or(Duration::ZERO);
+        packet.set_duration_ts(i64::from(blocksize));
         packet.flags |= PacketFlags::KEY;
         self.sample_pos = self.sample_pos.saturating_add(u64::from(blocksize));
         Ok(Some(packet))

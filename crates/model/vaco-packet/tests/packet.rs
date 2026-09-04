@@ -179,6 +179,7 @@ fn rescale_moves_pts_and_dts_together() {
     pkt.pts = Timestamp::new(90_000);
     pkt.dts = Timestamp::new(87_000);
     pkt.duration = Duration::from_micros(40_000);
+    pkt.set_duration_ts(3_600);
 
     pkt.rescale_ts(
         Rational::new(1, 90_000),
@@ -189,6 +190,21 @@ fn rescale_moves_pts_and_dts_together() {
     assert_eq!(pkt.dts.ticks(), Some(967));
     // Duration is microseconds, so it is base-independent and untouched.
     assert_eq!(pkt.duration, Duration::from_micros(40_000));
+    assert_eq!(pkt.duration_ts(), Some(40));
+}
+
+#[test]
+fn exact_duration_ticks_survive_the_microsecond_view() {
+    let mut pkt = Packet::empty();
+    pkt.duration = Duration::from_micros(23_220);
+    pkt.set_duration_ts(655_360);
+
+    assert_eq!(pkt.duration_ts(), Some(655_360));
+    assert_eq!(pkt.duration, Duration::from_micros(23_220));
+    assert!(matches!(
+        pkt.side_data(PacketSideDataKind::DurationTicks),
+        Some(PacketSideData::DurationTicks(655_360))
+    ));
 }
 
 #[test]

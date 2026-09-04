@@ -990,7 +990,9 @@ impl Muxer for AviMuxer {
             // Remembered so `write_trailer` can extend the grid past the
             // very last frame by its own duration — there is no next packet
             // to trigger that backfill the ordinary way.
-            if let Some(ticks) = packet.duration.to_ticks(GRID_RATE)
+            if let Some(ticks) = packet
+                .duration_ts()
+                .or_else(|| packet.duration.to_ticks(GRID_RATE))
                 && ticks > 0
             {
                 stream.last_video_duration_ticks = ticks;

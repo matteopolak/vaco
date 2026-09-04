@@ -385,9 +385,11 @@ impl Ac3Demuxer {
         packet.stream_index = 0;
         packet.pts = Timestamp::new(pts_ticks.min(i64::MAX as u64).cast_signed());
         packet.dts = packet.pts;
-        packet.duration = Timestamp::new(duration_ticks.min(i64::MAX as u64).cast_signed())
+        let duration_ticks = duration_ticks.min(i64::MAX as u64).cast_signed();
+        packet.duration = Timestamp::new(duration_ticks)
             .to_duration(TIME_BASE)
             .unwrap_or(Duration::ZERO);
+        packet.set_duration_ts(duration_ticks);
         packet.pos = Some(pos);
         packet.flags |= PacketFlags::KEY;
         Ok(Some(packet))

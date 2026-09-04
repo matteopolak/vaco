@@ -396,7 +396,7 @@ and needs a different argument.
 * **`ChunkOffsets::offset` and `stsc`'s `first_chunk` are one-based.**
   `vaco-format-isom::stbl` reads them that way; `TrackState::stsc_runs`
   produces one-based chunk numbers to match.
-* **`Packet::duration` is microseconds, not ticks in the packet's own time
+* **`Packet::duration` is a microsecond fallback, not ticks in the packet's own time
   base** — unlike `pts`/`dts`, which arrive already rescaled to
   `stream_time_base()`. Any new code path that reads `packet.duration`
   directly (rather than through `Duration::to_ticks`) will reproduce finding

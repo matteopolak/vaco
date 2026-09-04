@@ -164,6 +164,7 @@ impl MpegAudioDemuxer {
         packet.pts = pts;
         packet.dts = pts;
         packet.duration = duration;
+        packet.set_duration_ts(ticks_i64(duration_ticks));
         packet.pos = Some(pos);
         packet.flags |= vaco_packet::PacketFlags::KEY;
         self.frame_index = self.frame_index.saturating_add(1);

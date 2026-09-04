@@ -138,6 +138,7 @@ impl Encoder for AlacEncoder {
         packet.duration = Timestamp::new(i64::from(*samples))
             .to_duration(time_base)
             .unwrap_or(Duration::ZERO);
+        packet.set_duration_ts(i64::from(*samples));
         // Every packet is independently decodable: the adaptive Golomb-Rice
         // state (`rice.rs`) and the predictor's transmitted coefficients
         // both reset per packet — there is no cross-packet state — matching

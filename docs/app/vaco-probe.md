@@ -625,8 +625,9 @@ The two added files, and why a corpus without them cannot grade this work:
   `avg_frame_rate=300/29`. Every file in the old corpus is constant-rate, where
   the two fields are equal and one field answering both is indistinguishable
   from two fields answering correctly.
-* **`odd.mp4`** — a duration that is not a whole number of seconds, so
-  `duration_ts` cannot be recovered from a microsecond `Duration`.
+* **`odd.mp4`** — a duration that is not a whole number of seconds, which
+  verifies that stream `duration_ts` is retained as native ticks rather than
+  recovered from the lossy microsecond `Duration` view.
 
 The fourteen field values the widening closed on the thirteen-file corpus:
 

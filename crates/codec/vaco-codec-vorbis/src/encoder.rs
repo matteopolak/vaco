@@ -323,6 +323,7 @@ impl VorbisEncoder {
         packet.duration = Timestamp::new(i64::try_from(HOP).unwrap_or(0))
             .to_duration(time_base)
             .unwrap_or(Duration::ZERO);
+        packet.set_duration_ts(i64::try_from(HOP).unwrap_or(0));
         self.windows_emitted = self.windows_emitted.wrapping_add(1);
         self.machine.emit(packet);
         Ok(())

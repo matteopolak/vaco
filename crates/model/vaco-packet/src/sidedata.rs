@@ -11,6 +11,7 @@ pub enum PacketSideDataKind {
     DisplayMatrix,
     SkipSamples,
     MpegtsStreamId,
+    DurationTicks,
 }
 
 impl PacketSideData {
@@ -23,14 +24,39 @@ impl PacketSideData {
             Self::DisplayMatrix(_) => PacketSideDataKind::DisplayMatrix,
             Self::SkipSamples { .. } => PacketSideDataKind::SkipSamples,
             Self::MpegtsStreamId(_) => PacketSideDataKind::MpegtsStreamId,
+            Self::DurationTicks(_) => PacketSideDataKind::DurationTicks,
         }
     }
 }
 
 impl Packet {
+    /// Return the exact duration in the packet's owning stream time base.
+    ///
+    /// This is the lossless counterpart to [`Packet::duration`], which is
+    /// retained as a microsecond view for existing callers.
+    #[must_use]
+    pub fn duration_ts(&self) -> Option<i64> {
+        match self.side_data(PacketSideDataKind::DurationTicks) {
+            Some(PacketSideData::DurationTicks(ticks)) => Some(*ticks),
+            _ => None,
+        }
+    }
+
+    /// Store an exact duration in the packet's owning stream time base.
+    ///
+    /// Negative durations are not valid media lengths and clear the value.
+    pub fn set_duration_ts(&mut self, ticks: i64) {
+        if ticks >= 0 {
+            self.set_side_data(PacketSideData::DurationTicks(ticks));
+        } else {
+            let _ = self.remove_side_data(PacketSideDataKind::DurationTicks);
+        }
+    }
+
     /// The entry of `kind`, if the packet carries one.
     ///
-    /// Linear scan: packets carry 0-2 entries.
+    /// Linear scan: packets usually carry 0-2 visible entries plus optional
+    /// exact timing metadata.
     #[must_use]
     pub fn side_data(&self, kind: PacketSideDataKind) -> Option<&PacketSideData> {
         self.side_data.iter().find(|d| d.kind() == kind)

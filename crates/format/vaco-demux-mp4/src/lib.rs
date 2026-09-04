@@ -1925,6 +1925,7 @@ impl Mp4Demuxer {
             pkt.duration = Timestamp::new(i64::from(sample.duration))
                 .to_duration(time_base)
                 .unwrap_or(Duration::ZERO);
+            pkt.set_duration_ts(i64::from(sample.duration));
             pkt.flags = PacketFlags::empty();
             if sample.key {
                 pkt.flags |= PacketFlags::KEY;

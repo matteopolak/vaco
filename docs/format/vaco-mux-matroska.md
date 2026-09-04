@@ -299,12 +299,11 @@ into the real files without this crate growing one. The registry's own
   Nothing else depends on where a `Cluster` boundary falls except `Cues`
   (one entry per video-keyframe-opened cluster) and `webm_chunk`'s chunk
   boundaries, both already keyed off the same decision point.
-- **Gotcha: `Packet::duration` is always microseconds**, independent of the
-  stream's own time base (`vaco_core::Duration`'s own docs) — unlike `pts`/
-  `dts`, it does not go through the `MuxWriter` rescale chain. `write_packet`
-  converts it to `TimestampScale` ticks itself via `Duration::to_ticks`, and
-  treats `Duration::ZERO` (the field's own default) as "not stated" rather
-  than a real zero-length block.
+- **Gotcha: `Packet::duration` is the microsecond fallback**, independent of
+  the stream's own time base (`vaco_core::Duration`'s own docs). When native
+  packet ticks are available, `Packet::duration_ts()` is used directly;
+  otherwise `write_packet` converts the fallback via `Duration::to_ticks` and
+  treats `Duration::ZERO` (the field's own default) as "not stated".
 - **Gotcha: `ReferenceBlock`'s sign.** RFC 9559 §10.3.1's convention is a
   signed delta from *this* block's timestamp to the frame referenced,
   negative for a past reference — `prev_dts - dts`, not `dts - prev_dts`.

@@ -493,6 +493,7 @@ impl AviDemuxer {
             pkt.duration = Timestamp::new(dur_ticks)
                 .to_duration(time_base)
                 .unwrap_or(Duration::ZERO);
+            pkt.set_duration_ts(dur_ticks);
             pkt.flags = if is_key {
                 PacketFlags::KEY
             } else {

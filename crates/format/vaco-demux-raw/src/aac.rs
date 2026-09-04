@@ -50,23 +50,13 @@
 //! directly: a 44100 Hz frame measured `duration=655360`, and
 //! `1024 * (28224000 / 44100) == 655360` exactly.
 //!
-//! One divergence, disclosed rather than chased: `packet=pts`, `packet=dts`
-//! and `packet=size` are byte-identical to `ffprobe` on every one of a
-//! 44.1kHz fixture's 88 packets (verified through the built `vaco-probe`
-//! binary, not just this crate's own tests), but `packet=duration` reads
-//! **655361** from us against the reference's **655360** on every single
-//! packet. The tick math above is exact — `1024 * 640 == 655360` — the loss
-//! happens one layer up: [`vaco_packet::Packet::duration`] is a
-//! [`vaco_core::Duration`], which is fixed at whole-microsecond resolution,
-//! and 655360 ticks of a `1/28224000` base is `23219.9546…` µs — not an
-//! integer, so no microsecond value round-trips back to exactly 655360
-//! (the nearest, 23220 µs, rescales back to 655361). `ac3`'s own
-//! already-inexact duration (`floor(1536 × 90000 / 44100)`) happens to
-//! survive the same round-trip by coincidence of rounding direction, which
-//! is why this was not caught there first. Fixing it means changing what
-//! `Packet::duration` *is* — an exact-ticks representation, or a
-//! finer-grained one — which is a workspace-wide change, not a local one,
-//! so it is disclosed here rather than attempted in this module.
+//! Packet durations retain the exact tick count through
+//! [`vaco_packet::Packet::set_duration_ts`] as well as exposing the legacy
+//! microsecond view. This matters at 44.1 kHz: `1024 * 640 == 655360`, while
+//! the equivalent duration is `23219.9546…` µs and cannot be represented by a
+//! whole-microsecond value. The probe therefore emits the exact `655360`
+//! ticks rather than rounding to `655361` after converting through
+//! [`vaco_core::Duration`].
 
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
@@ -192,9 +182,11 @@ impl AacDemuxer {
         packet.stream_index = 0;
         packet.pts = Timestamp::new(pts_ticks.min(i64::MAX as u64).cast_signed());
         packet.dts = packet.pts;
-        packet.duration = Timestamp::new(duration_ticks.min(i64::MAX as u64).cast_signed())
+        let duration_ticks = duration_ticks.min(i64::MAX as u64).cast_signed();
+        packet.duration = Timestamp::new(duration_ticks)
             .to_duration(TIME_BASE)
             .unwrap_or(Duration::ZERO);
+        packet.set_duration_ts(duration_ticks);
         packet.pos = Some(pos);
         packet.flags |= PacketFlags::KEY;
         Ok(Some(packet))

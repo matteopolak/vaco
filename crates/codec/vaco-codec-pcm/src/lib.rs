@@ -408,6 +408,7 @@ impl SendReceive for PcmEncoder {
                 packet.duration = Timestamp::new(i64::from(*samples))
                     .to_duration(time_base)
                     .unwrap_or(Duration::ZERO);
+                packet.set_duration_ts(i64::from(*samples));
                 self.machine.emit(packet);
                 Ok(())
             }

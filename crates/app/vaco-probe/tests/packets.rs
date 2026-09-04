@@ -353,6 +353,31 @@ fn a_packet_with_no_timestamps_prints_the_placeholders() {
 }
 
 #[test]
+fn exact_packet_duration_ticks_are_reported_without_microsecond_round_trip() {
+    let stream = Stream::new(0, MediaType::Audio, Rational::new(1, 28_224_000));
+    let mut packet = Packet::empty();
+    packet.pts = Timestamp::ZERO;
+    packet.dts = Timestamp::ZERO;
+    packet.duration = Duration::from_micros(23_220);
+    packet.set_duration_ts(655_360);
+
+    let w = writers::make("default").expect("writer");
+    let mut sink = Vec::new();
+    let mut tf = TextFormat::new(w, &mut sink, FormatOpts::default());
+    tf.open(SectionId::ROOT).expect("root");
+    {
+        let mut e = Emit::new(&mut tf, OptionalFields::Auto);
+        show::packet(&mut e, &packet, Some(&stream), PayloadOpts::default()).expect("packet");
+    }
+    tf.close().expect("close");
+    let _ = tf.finish().expect("finish");
+
+    let output = String::from_utf8(sink).expect("utf8");
+    assert!(output.contains("duration=655360\n"), "{output}");
+    assert!(output.contains("duration_time=0.023220\n"), "{output}");
+}
+
+#[test]
 fn the_three_flag_characters_are_key_discard_corrupt_in_that_order() {
     // Measured on three files: MP4's first AAC packet is `KD_` (discard, from
     // the encoder delay), an MPEG-TS file with one 188-byte packet removed

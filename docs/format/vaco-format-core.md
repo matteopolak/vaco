@@ -370,18 +370,14 @@ which is most of the time for a 1024-sample frame against a 1 ms base. That is
 the entire argument for `Parser::packet_duration` returning a `Rational` rather
 than a `Duration`.
 
-**Where the packet model still loses.** `Packet::duration` is microseconds, so
-the tick count is stored as its microsecond equivalent and recovered by the
-printer's round-to-nearest. That round trip is exact for **every time base whose
-tick is longer than 2 µs** — 1/1000, 1/44100, 1/48000, 1/90000, 1/1000000, which
-is every container base in the corpus. It is not exact for a finer one: 655360
-ticks of 1/28224000, which is what a raw ADTS stream reports, stores as 23220 µs
-and reads back as 655361. No demuxer in the tree produces such a base, and
-`the_microsecond_round_trip_is_exact_above_two_microseconds` pins both halves so
-a future tick-valued `Packet::duration` deletes an assertion rather than
-discovering a problem. `quantise_duration` also refuses a positive tick count
-that rounds to *zero* microseconds, because `Duration::ZERO` means absent and
-returning it would be a duration that silently vanished — found by the
+**The packet model keeps both views.** `Packet::duration` remains a
+microsecond convenience value, while demuxers and encoders that know native
+ticks attach `Packet::set_duration_ts`. Probe and mux paths prefer those exact
+ticks, so 655360 ticks of 1/28224000 (1024 samples at 44.1 kHz) no longer store
+as 23220 µs and read back as 655361. Packets without native timing continue to
+use the microsecond fallback. `quantise_duration` also refuses a positive tick
+count that rounds to *zero* microseconds, because `Duration::ZERO` means absent
+and returning it would be a duration that silently vanished — found by the
 `format_timestamps` fuzz target, not by review.
 
 **Measured, on an eleven-file corpus** (`-of json -show_packets

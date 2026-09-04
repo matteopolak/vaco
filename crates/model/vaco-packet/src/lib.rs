@@ -93,6 +93,13 @@ pub enum PacketSideData {
     /// own `MPEGTS Stream ID` side-data block, one per packet — measured
     /// against `ffmpeg 8.1`, see `vaco-demux-mpegts`'s docs.
     MpegtsStreamId(u8),
+    /// Exact packet duration in the owning stream's time base.
+    ///
+    /// `Packet::duration` remains a microsecond convenience view, but it cannot
+    /// represent values such as 1024 AAC samples at 44.1 kHz exactly. Demuxers
+    /// that know the source tick count attach it here so probes and muxers do
+    /// not have to round through microseconds and back.
+    DurationTicks(i64),
     // ... generated from the side-data table
 }
 
@@ -259,13 +266,18 @@ impl Packet {
     /// Rescale every timestamp field with one rounding mode.
     ///
     /// `pts` and `dts` must be rescaled together or the stream drifts, which is
-    /// why this is one method rather than two call sites. `duration` is not
-    /// touched: [`Duration`] is microseconds, not ticks, so it is already
-    /// independent of the time base — a deviation from plan 11 §14.1, which
-    /// assumed a tick count and a `time_base` field on the packet.
+    /// why this is one method rather than two call sites. When present, the
+    /// exact duration tick metadata is rescaled with them; the microsecond
+    /// [`Duration`] view remains unchanged.
     pub fn rescale_ts(&mut self, from: TimeBase, to: TimeBase, rounding: Rounding) {
         self.pts = self.pts.rescale(from, to, rounding);
         self.dts = self.dts.rescale(from, to, rounding);
+        if let Some(ticks) = self.duration_ts() {
+            let scaled = Timestamp::new(ticks).rescale(from, to, rounding);
+            if let Some(scaled_ticks) = scaled.ticks() {
+                self.set_duration_ts(scaled_ticks);
+            }
+        }
     }
 
     /// Whether this packet is a keyframe.

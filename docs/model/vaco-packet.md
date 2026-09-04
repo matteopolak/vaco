@@ -47,11 +47,12 @@ lives in `vaco-pool` and needs nothing here.
 at separate call sites with possibly different rounding is how a stream drifts,
 and making it one operation removes the whole bug class.
 
-`duration` is **not** rescaled, because `vaco_core::Duration` is microseconds
-rather than a tick count in the packet's own base — it is already
-base-independent. That is a deviation from plan 11 §14.1, which assumed a tick
-count plus a `time_base` field on the packet; the frozen struct has neither, and
-the microsecond form is the better model.
+`duration` remains a microsecond convenience view, but demuxers that know the
+stream's exact duration ticks call `Packet::set_duration_ts`. The corresponding
+`Packet::duration_ts()` value is retained in typed packet timing metadata and
+is what probe/mux paths should prefer. This avoids a second rounding step for
+values such as 1024 AAC samples at 44.1 kHz (`655360` ticks at `1/28224000`).
+Packets created without exact source ticks continue to use `Duration` alone.
 
 ## How to change it
 

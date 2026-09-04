@@ -369,7 +369,11 @@ impl Muxer for OggMuxer {
         let index = usize::try_from(packet.stream_index)
             .map_err(|_| Error::InvalidData("stream index does not fit"))?;
         let time_base = self.stream_mut(packet.stream_index)?.time_base;
-        let stated_ticks = packet.duration.to_ticks(time_base).unwrap_or(0).max(0);
+        let stated_ticks = packet
+            .duration_ts()
+            .or_else(|| packet.duration.to_ticks(time_base))
+            .unwrap_or(0)
+            .max(0);
 
         let mut payload = packet.payload();
         loop {
