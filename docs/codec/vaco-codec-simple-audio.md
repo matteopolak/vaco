@@ -1,19 +1,32 @@
 # `vaco-codec-simple-audio`
 
-Layer 4. Three small, open-spec audio codecs that share no algorithm with
-each other: QOA (Quite OK Audio), RFC 3389 comfort noise, and `DFPWM1a`.
-**Two of three are real, registered codecs; DFPWM is not** — see below
-before assuming otherwise.
+Layer 4. Four small, open-spec audio codecs that share no algorithm with
+each other: Bluetooth SBC, QOA (Quite OK Audio), RFC 3389 comfort noise,
+and `DFPWM1a`. **Three of four are real, registered codecs; DFPWM is not** —
+see below before assuming otherwise.
 
 ## What it is
 
 Grouped in one crate the way `vaco-codec-image-simple` groups unrelated
 trivial image formats: each codec here is too small to earn its own crate,
-and none is a variant of another. [`qoa`]/[`comfortnoise`]/[`dfpwm`] each
-own their pure encode/decode functions; `src/lib.rs` wraps them in the
+and none is a variant of another. [`sbc`]/[`qoa`]/[`comfortnoise`]/[`dfpwm`]
+each own their pure encode/decode functions; `src/lib.rs` wraps them in the
 `vaco_codec_core::SendReceive` shape every codec in this tree uses.
 
 ## How it works
+
+**SBC**: one packet is one `0x9c` Bluetooth Low Complexity Subband Codec
+frame. The decoder validates the Appendix B CRC-8, reproduces the specified
+mono/dual/stereo bit allocation, reconstructs APCM subband samples, reverses
+joint stereo, and applies the 4- or 8-subband polyphase synthesis filter.
+Only the bounded synthesis history persists across packets. The implementation
+comes from Bluetooth A2DP 1.3.2 Appendix B, sections 12.4-12.8; its 40- and
+80-coefficient prototype filters were transcribed mechanically from Tables
+12.23 and 12.24. Official Bluetooth conformance frames cover all four channel
+modes and both subband widths. The mono/4-subband and joint-stereo/8-subband
+fixtures both produce exactly 64 samples per channel, with maximum differences
+of 1 and 2 `i16` LSB respectively from an independent `ffmpeg 9.0.1` black-box
+decode; the dual-channel and plain-stereo fixtures use the same two-LSB ceiling.
 
 **QOA**: a sign-sign LMS (least mean squares) predictor coded in fixed
 20-sample/8-byte slices, transcribed clause-for-clause from "The Quite OK
@@ -65,7 +78,7 @@ doc for the full measurement. `DfpwmDecoder`/`DfpwmEncoder` always return
 
 ## How to change it
 
-A new codec this small belongs here as its own module plus a pair of
+A new codec this small belongs here as its own module plus decoder/encoder
 `SendReceive` wrappers in `src/lib.rs`. Whoever finds the real `DFPWM1a`
 recursion next has a real fixture to work from: `src/dfpwm.rs`'s
 `own_decode_does_not_match_the_measured_ffmpeg_trace` test records the
@@ -75,8 +88,12 @@ actual `ffmpeg`-observed charge sequence for a constant-bit-run input.
 
 `vaco_limits::Limits` bounds every allocation. `comfortnoise::MAX_MODEL_ORDER`
 (20) bounds the LPC order a SID payload's attacker-controlled byte length can
-drive analysis/synthesis to. QOA needs no external configuration — its frame
-header supplies sample rate and channel count directly.
+drive analysis/synthesis to. QOA and SBC need no external configuration —
+their frame headers supply sample rate and channel count directly. SBC accepts
+the four Appendix B rates (16, 32, 44.1, and 48 kHz), both subband widths, all
+four channel modes, and all four block counts; CRC mismatches and truncated
+payloads are rejected before output, as are bitpools outside the profile's
+2-to-mode-dependent maximum range.
 
 ## Dependencies
 
@@ -88,19 +105,31 @@ rather than re-derived).
 ## Registration
 
 `vaco-component.toml` registers `QOA_DECODER`/`QOA_ENCODER` under
-`CodecId::Qoa` and `COMFORTNOISE_DECODER`/`COMFORTNOISE_ENCODER` under
-`CodecId::ComfortNoise`, feature `codec-simple-audio` (on by default).
+`CodecId::Qoa`, `COMFORTNOISE_DECODER`/`COMFORTNOISE_ENCODER` under
+`CodecId::ComfortNoise`, and `SBC_DECODER` under `CodecId::Sbc`, feature
+`codec-simple-audio` (on by default).
 `DFPWM_DECODER`/`DFPWM_ENCODER` exist as compilable identities but are not
 listed in `vaco-component.toml`. Verified through the real `vaco` binary:
 `vaco -h decoder=qoa`/`-h decoder=comfortnoise` resolve; `vaco -h
-decoder=dfpwm` correctly reports "not recognized".
+decoder=sbc` resolve; `vaco -h decoder=dfpwm` correctly reports "not
+recognized".
 
 ## Testing
 
-Unit tests cover each codec's own round trip, channel-separated correctness
+Unit tests cover each codec's own round trip, SBC CRC/truncation handling,
+the two official SBC conformance frames described above, channel-separated
+correctness
 (a stereo test asserts a silent channel stays silent — the shape of bug that
 hides behind an aggregate metric), the `SendReceive` protocol shape, and
 `decode` never panicking on arbitrary bytes. `qoa_decode` and
 `comfortnoise_parse` fuzz targets exercise both codecs' untrusted-input
 surface, the latter also asserting the parser enforces its own documented
 model-order bound.
+
+An end-to-end check decodes all 28 official Bluetooth conformance streams
+through `vaco` to WAV, asks `ffmpeg 9.0.1` to read those WAV files, and compares
+their PCM with `ffmpeg`'s independent SBC decode. Every stream has the exact
+same sample and byte count; across the set the largest sample difference is 9
+signed 16-bit LSBs (the per-stream RMS difference is at most 2.372 LSBs). The
+set covers every sample rate, block count, channel mode, allocation method, and
+subband width.

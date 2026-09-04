@@ -1,24 +1,25 @@
 //! Small, open-spec audio codecs that share no algorithm with each other:
-//! `DFPWM1a`, QOA (Quite OK Audio) and RFC 3389 comfort noise. Grouped in one
+//! SBC, `DFPWM1a`, QOA (Quite OK Audio) and RFC 3389 comfort noise. Grouped in one
 //! crate the way `vaco-codec-image-simple` groups unrelated trivial image
 //! formats — each is too small to earn its own crate, and none is a
-//! variant of another. **Two of three are real, registered codecs; DFPWM is
+//! variant of another. **Three of four are real, registered codecs; DFPWM is
 //! not** — see [`dfpwm`]'s module doc before assuming otherwise.
 //!
 //! # How it works
 //!
-//! [`dfpwm`], [`qoa`] and [`comfortnoise`] each own their pure encode/decode
+//! [`sbc`], [`dfpwm`], [`qoa`] and [`comfortnoise`] each own their decode/encode
 //! functions; this file only wraps them in the `Machine`-backed
 //! `SendReceive` shape every codec in this tree uses (see
 //! `vaco-codec-adpcm`/`vaco-codec-pcm` for the same pattern) and registers
-//! [`CodecId::Qoa`] and [`CodecId::ComfortNoise`] — not [`CodecId::Dfpwm`],
-//! whose wrappers always return [`vaco_core::Error::Unsupported`].
+//! [`CodecId::Sbc`], [`CodecId::Qoa`] and [`CodecId::ComfortNoise`] — not
+//! [`CodecId::Dfpwm`], whose wrappers always return
+//! [`vaco_core::Error::Unsupported`].
 //!
 //! # How to change it
 //!
 //! A new codec this small belongs here as its own module plus a pair of
 //! `SendReceive` wrappers below, following whichever existing codec's
-//! packetisation is closest: [`dfpwm`] for "state persists across an
+//! packetisation is closest: [`sbc`]/[`dfpwm`] for "state persists across an
 //! unbounded byte stream", [`qoa`]/[`comfortnoise`] for "one packet is one
 //! self-contained unit".
 //!
@@ -28,13 +29,14 @@
 //! have no self-describing sample rate/channel layout (comfort noise has no
 //! *duration* either — see [`comfortnoise`]'s module doc); QOA's frame
 //! header supplies both directly, so it needs no external configuration at
-//! all.
+//! all. SBC also carries both in every frame header.
 
 #![forbid(unsafe_code)]
 
 pub mod comfortnoise;
 pub mod dfpwm;
 pub mod qoa;
+pub mod sbc;
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{
@@ -521,6 +523,70 @@ impl SendReceive for ComfortNoiseEncoder {
     }
 }
 
+// -------------------------------------------------------------------- SBC
+
+#[derive(Debug)]
+pub struct SbcDecoder {
+    machine: Machine<Frame>,
+    limits: Limits,
+    state: sbc::DecoderState,
+}
+
+impl SbcDecoder {
+    #[must_use]
+    pub fn new(limits: Limits) -> Self {
+        Self {
+            machine: Machine::new(Caps::empty()),
+            limits,
+            state: sbc::DecoderState::default(),
+        }
+    }
+}
+
+impl SendReceive for SbcDecoder {
+    type Input = Packet;
+    type Output = Frame;
+
+    fn caps(&self) -> Caps {
+        self.machine.caps()
+    }
+
+    fn send(&mut self, input: Option<&Packet>) -> Result<()> {
+        match self.machine.accept(input.is_none())? {
+            Accept::Drain => {
+                self.machine.finish();
+                Ok(())
+            }
+            Accept::Input => {
+                let Some(packet) = input else { return Ok(()) };
+                let decoded = sbc::decode(
+                    &mut Budget::new(self.limits.clone()),
+                    &mut self.state,
+                    packet.payload(),
+                )?;
+                let frame = frame_from_interleaved(
+                    &self.limits,
+                    &decoded.interleaved,
+                    decoded.channels,
+                    decoded.sample_rate,
+                    packet.pts,
+                )?;
+                self.machine.emit(frame);
+                Ok(())
+            }
+        }
+    }
+
+    fn receive(&mut self) -> Result<Frame> {
+        self.machine.receive()
+    }
+
+    fn flush(&mut self) {
+        self.machine.flush();
+        self.state = sbc::DecoderState::default();
+    }
+}
+
 // ------------------------------------------------------------- registration
 
 fn make_dfpwm_decoder(limits: Limits) -> Box<dyn Decoder> {
@@ -540,6 +606,9 @@ fn make_comfortnoise_decoder(limits: Limits) -> Box<dyn Decoder> {
 }
 fn make_comfortnoise_encoder(limits: Limits) -> Box<dyn Encoder> {
     Box::new(AsEncoder(Validated::new(ComfortNoiseEncoder::new(limits))))
+}
+fn make_sbc_decoder(limits: Limits) -> Box<dyn Decoder> {
+    Box::new(AsDecoder(Validated::new(SbcDecoder::new(limits))))
 }
 
 /// **Not listed in `vaco-component.toml`** — always returns
@@ -599,6 +668,15 @@ pub static COMFORTNOISE_ENCODER: EncoderDesc = EncoderDesc {
     caps: Caps::empty(),
     supported_rates: &[],
     make: make_comfortnoise_encoder,
+};
+pub static SBC_DECODER: DecoderDesc = DecoderDesc {
+    name: "sbc",
+    long_name: "Bluetooth Low Complexity Subband Codec",
+    id: CodecId::Sbc,
+    media_type: MediaType::Audio,
+    caps: Caps::empty(),
+    supported_rates: &[],
+    make: make_sbc_decoder,
 };
 
 #[cfg(test)]
@@ -788,15 +866,20 @@ mod tests {
     }
 
     #[test]
-    fn all_six_descriptors_compile_but_only_four_are_registered() {
-        // All six static descriptors exist (dfpwm kept as a compilable
-        // identity per its own doc), but only the four backing real
-        // implementations (qoa, comfortnoise) are listed in
+    fn all_seven_descriptors_compile_but_only_five_are_registered() {
+        // All seven static descriptors exist (dfpwm kept as a compilable
+        // identity per its own doc), but only the five backing real
+        // implementations (qoa, comfortnoise, sbc) are listed in
         // vaco-component.toml — checked structurally here since the toml
         // file itself isn't parsed by this test.
-        let decoders: &[&DecoderDesc] = &[&DFPWM_DECODER, &QOA_DECODER, &COMFORTNOISE_DECODER];
+        let decoders: &[&DecoderDesc] = &[
+            &DFPWM_DECODER,
+            &QOA_DECODER,
+            &COMFORTNOISE_DECODER,
+            &SBC_DECODER,
+        ];
         let encoders: &[&EncoderDesc] = &[&DFPWM_ENCODER, &QOA_ENCODER, &COMFORTNOISE_ENCODER];
-        assert_eq!(decoders.len(), 3);
+        assert_eq!(decoders.len(), 4);
         assert_eq!(encoders.len(), 3);
         for d in decoders {
             assert_eq!(d.media_type, MediaType::Audio);

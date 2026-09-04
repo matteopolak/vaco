@@ -1,6 +1,6 @@
 [package]
 name = "vaco-codec-simple-audio"
-description = "Small open-spec audio codecs: DFPWM1a, QOA (Quite OK Audio) and RFC 3389 comfort noise."
+description = "Small open-spec audio codecs: SBC, DFPWM1a, QOA and RFC 3389 comfort noise."
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

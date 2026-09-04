@@ -1,5 +1,5 @@
 # Registry fragment (plan 19 §3.4). Consumed by `cargo xtask gen-registry`.
-# Two of this crate's three codecs are real, registered implementations.
+# Three of this crate's four codecs are real, registered implementations.
 # `dfpwm` is deliberately NOT listed here: src/dfpwm.rs's module doc and
 # src/lib.rs's crate doc explain why (measured against ffmpeg 8.1's real
 # decode, the transcribed wiki-spec predictor does not reproduce it —
@@ -40,3 +40,12 @@ feature   = "codec-simple-audio"
 ctor      = "vaco_codec_simple_audio::COMFORTNOISE_ENCODER"
 media     = "audio"
 codec     = "comfortnoise"
+
+[[component]]
+kind      = "decoder"
+name      = "sbc"
+long_name = "Bluetooth Low Complexity Subband Codec"
+feature   = "codec-simple-audio"
+ctor      = "vaco_codec_simple_audio::SBC_DECODER"
+media     = "audio"
+codec     = "sbc"

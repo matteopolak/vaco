@@ -4408,6 +4408,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &[],
         mime_types: &[],
     },
+    #[cfg(feature = "codec-simple-audio")]
+    crate::Component {
+        kind: crate::Kind::Decoder,
+        name: "sbc",
+        long_name: Some("Bluetooth Low Complexity Subband Codec"),
+        krate: "vaco-codec-simple-audio",
+        feature: Some("codec-simple-audio"),
+        media: Some("audio"),
+        codec: Some("sbc"),
+        extensions: &[],
+        mime_types: &[],
+    },
     #[cfg(feature = "codec-image-simple")]
     crate::Component {
         kind: crate::Kind::Decoder,
@@ -11263,6 +11275,8 @@ pub static DECODERS: &[&::vaco_codec_core::DecoderDesc] = &[
     &::vaco_codec_rawvideo::R210_DECODER,
     #[cfg(feature = "codec-rawvideo")]
     &::vaco_codec_rawvideo::RAWVIDEO_DECODER,
+    #[cfg(feature = "codec-simple-audio")]
+    &::vaco_codec_simple_audio::SBC_DECODER,
     #[cfg(feature = "codec-image-simple")]
     &::vaco_codec_image_simple::SGI_DECODER,
     #[cfg(feature = "codec-subtitle-text")]
