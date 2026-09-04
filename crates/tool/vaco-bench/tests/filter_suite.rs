@@ -9,8 +9,8 @@ use std::collections::BTreeSet;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use vaco_bench::{
-    BenchResult, FilterBenchConfig, MachineFingerprint, Statistics, apply_baseline, regressions,
-    run_filter_suite, summarize, write_jsonl,
+    BenchResult, FilterBenchConfig, MachineFingerprint, MeasurementBackend, Statistics,
+    apply_baseline, regressions, run_filter_suite, summarize, write_jsonl,
 };
 
 #[test]
@@ -27,6 +27,7 @@ fn every_registered_filter_has_one_successful_benchmark_row() {
         samples: 1,
         target_sample_ns: 1,
         max_iterations: 1,
+        backend: MeasurementBackend::Instant,
     };
     let rows = run_filter_suite(&config).expect("measure the registry");
     let expected: BTreeSet<_> = vaco_registry::filters()
@@ -65,6 +66,8 @@ fn result(benchmark: &str, median_ns: f64, machine: &str) -> BenchResult {
         samples: 11,
         iterations: 2,
         stats,
+        raw_stats: stats,
+        control_stats: None,
         fingerprint: MachineFingerprint {
             machine: machine.to_owned(),
             os: "linux".to_owned(),

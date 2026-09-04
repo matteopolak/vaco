@@ -31,10 +31,41 @@ library callers because changing the working directory affects every thread.
 
 Each filter is warmed up, calibrated to a minimum batch duration, and sampled
 independently. JSONL rows contain median, median absolute deviation, minimum,
-and p95 nanoseconds per construction. They also carry the machine label, OS,
-architecture, CPU model, `rustc` version, build profile, and git commit.
-The one-minute load average is recorded as run context but is deliberately not
-part of comparison identity.
+and p95 in the row's declared physical unit. They also carry the machine label,
+OS, architecture, CPU model, `rustc` version, build profile, git commit,
+measurement backend, and unit. The one-minute load average is recorded as run
+context but is deliberately not part of comparison identity.
+
+The default `instant` backend measures in-process construction and reports
+`scope = "instantiate"`, `backend = "instant"`, and `unit = "ns"`. This is the
+portable path used by CI and the only automatic path on macOS. It does not
+estimate CPU cycles from elapsed time.
+
+On Linux, `--backend perf-stat` runs calibrated single-filter child batches
+under the external `perf stat` command and reports
+`scope = "subprocess-instantiate-batch"`, `backend = "perf-stat"`, and `unit =
+"cycles"`. Each child repeats one filter for at least 20 ms, subject to
+`--max-iterations`, to amortize process startup. Every work sample is paired
+with a matched empty-control child using the same filter lookup and iteration
+count; pair order alternates. JSONL records raw, control, and
+`max(raw - control, 0)` corrected cycles per iteration, so executable startup,
+CLI parsing, registry lookup, and loop overhead are quantified rather than
+silently presented as filter work.
+
+`perf stat` must expose a direct user-space CPU-cycle event. Missing,
+`<not counted>`, `<not supported>`, malformed, or less-than-99%-running events
+are rejected; counts are never multiplexing-scaled. `--backend auto` tries that
+path on Linux and, after one warning, discards any partial cycle rows and reruns
+the complete suite as `instant/ns` when it is unavailable. A forced
+`--backend perf-stat` returns the backend error instead of changing units.
+
+The subprocess scope includes dynamic process and filter initialization that a
+matched empty child cannot remove perfectly. It is useful for registry-wide
+tracking, not a claim about an isolated filter kernel. Focused algorithm work
+belongs in the owning crate's Divan suite. `vaco-checkasm bench` has a different
+Linux counter path: its permitted `vaco-hw-perf-event` dependency wraps an
+in-process adapter batch and reports `perf-event/cycles`; those rows cannot be
+compared with `vaco-bench` process batches.
 
 A baseline matches only when filter, scope, backend, unit, and the complete
 machine/toolchain fingerprint agree. An absent baseline, a new filter, a CPU
@@ -55,6 +86,11 @@ VACO_TARGET_DIR=/private/tmp/vaco-bench-target VACO_JOBS=2 \
 VACO_TARGET_DIR=/private/tmp/vaco-bench-target VACO_JOBS=2 \
   just bench-filter-compare /private/tmp/filter-bench.jsonl \
   --json /private/tmp/filter-bench-next.jsonl
+
+# Linux with a permitted PMU and perf installed; substantially slower.
+VACO_TARGET_DIR=/private/tmp/vaco-bench-target VACO_JOBS=2 \
+  just bench-filter --backend perf-stat \
+  --json /private/tmp/filter-bench-cycles.jsonl
 ```
 
 `vaco-bench list` prints the registry-derived benchmark ids without measuring.
@@ -93,16 +129,21 @@ JSONL schema and retain the old parser until stored history has aged out.
 
 ## Configuration
 
-`filter` accepts `--warmup`, `--samples`, `--target-sample-ns`,
-`--max-iterations`, `--json`, `--baseline`, and `--fail-under`. Defaults are 8
-warmups, 11 samples, a 100 microsecond target batch, and at most 1,048,576 calls
-per sample. `VACO_BENCH_MACHINE` overrides the machine label used by CI; the CPU
-and toolchain still have to match independently.
+`filter` accepts `--backend instant|auto|perf-stat`, `--warmup`, `--samples`,
+`--target-sample-ns`, `--max-iterations`, `--json`, `--baseline`, and
+`--fail-under`. Defaults are the `instant` backend, 8 warmups, 11 samples, a
+100 microsecond target batch, and at most 1,048,576 calls per sample. Perf-stat
+batches raise the calibration target to at least 20 ms. `VACO_BENCH_MACHINE`
+overrides the machine label used by CI; the CPU and toolchain still have to
+match independently. `VACO_BENCH_PERF` overrides the `perf` executable on
+Linux, for example when the matching kernel-tools binary is not on `PATH`.
 
 ## Dependencies
 
-The tracker uses the Rust standard library for timing, statistics, JSONL, and
-host fingerprinting, including the temporary-directory containment. The crate depends on `vaco-registry` and
+The tracker uses the Rust standard library for timing, process execution,
+statistics, JSONL, host fingerprinting, and temporary-directory containment.
+Linux cycle mode additionally requires an installed `perf` whose kernel policy
+allows user-space hardware counters. The crate depends on `vaco-registry` and
 `vaco-filter-graph` to exercise the real generated filter registry; its
 development-only benchmark dependency is the workspace's chosen `divan`
-version. It adds no serialization or statistics dependency.
+version. It adds no serialization, statistics, or unsafe counter dependency.

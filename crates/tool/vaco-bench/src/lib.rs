@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 //! Registry-complete benchmark measurement and comparison.
 
+mod perf_stat;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 use std::fs::File;
@@ -14,7 +16,10 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use vaco_filter_graph::registry::{FilterRegistry, Instantiate};
 
+use perf_stat::BatchCommand;
+
 const TRAILING_BASELINES: usize = 7;
+const PERF_STAT_MIN_BATCH_NS: u64 = 20_000_000;
 static SANDBOX_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static SANDBOX_LOCK: Mutex<()> = Mutex::new(());
 
@@ -83,6 +88,8 @@ pub struct FilterBenchConfig {
     pub target_sample_ns: u64,
     /// Hard cap on constructions in one batch.
     pub max_iterations: usize,
+    /// Measurement source selected for the suite.
+    pub backend: MeasurementBackend,
 }
 
 impl Default for FilterBenchConfig {
@@ -92,8 +99,21 @@ impl Default for FilterBenchConfig {
             samples: 11,
             target_sample_ns: 100_000,
             max_iterations: 1 << 20,
+            backend: MeasurementBackend::Instant,
         }
     }
+}
+
+/// Measurement source requested for one complete filter suite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MeasurementBackend {
+    /// Try Linux `perf stat`, then rerun the complete suite with [`Self::Instant`].
+    Auto,
+    /// Measure elapsed nanoseconds with [`Instant`].
+    #[default]
+    Instant,
+    /// Require direct CPU-cycle counts from Linux `perf stat`.
+    PerfStat,
 }
 
 impl FilterBenchConfig {
@@ -160,6 +180,70 @@ pub fn instantiate_filter(case: &FilterCase) -> &'static str {
             "rejected"
         }
     }
+}
+
+/// Work performed by the hidden subprocess batch entrypoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChildBatchMode {
+    /// Repeatedly construct the selected filter.
+    Work,
+    /// Run the matched loop without constructing the filter.
+    Control,
+}
+
+/// Execute one hidden child batch for the external counter backend.
+///
+/// # Errors
+///
+/// Returns an error for an unknown filter, zero iterations, an invalid expected
+/// outcome, or a construction outcome that changes within the batch.
+pub fn run_filter_child_batch(
+    mode: ChildBatchMode,
+    name: &str,
+    iterations: usize,
+    expected: &str,
+) -> Result<(), BenchError> {
+    validate_child_batch(iterations, expected)?;
+    let case = filter_cases()
+        .find(|case| case.name == name)
+        .ok_or_else(|| BenchError::UnknownFilter(name.to_owned()))?;
+    execute_child_batch(mode, iterations, expected, || instantiate_filter(&case))
+}
+
+fn execute_child_batch(
+    mode: ChildBatchMode,
+    iterations: usize,
+    expected: &str,
+    mut construct: impl FnMut() -> &'static str,
+) -> Result<(), BenchError> {
+    validate_child_batch(iterations, expected)?;
+    for iteration in 0..iterations {
+        match mode {
+            ChildBatchMode::Control => {
+                black_box(iteration);
+            }
+            ChildBatchMode::Work => {
+                let observed = construct();
+                if observed != expected {
+                    return Err(BenchError::InconsistentOutcome("child batch"));
+                }
+                black_box(observed);
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_child_batch(iterations: usize, expected: &str) -> Result<(), BenchError> {
+    if iterations == 0 {
+        return Err(BenchError::InvalidConfig(
+            "child batch iterations must be positive",
+        ));
+    }
+    if !matches!(expected, "created" | "rejected") {
+        return Err(BenchError::InvalidOutcome(expected.to_owned()));
+    }
+    Ok(())
 }
 
 /// Distribution summary in nanoseconds per construction.
@@ -240,6 +324,10 @@ pub struct BenchResult {
     pub iterations: usize,
     /// Per-construction timing distribution.
     pub stats: Statistics,
+    /// Work-batch distribution before matched control subtraction.
+    pub raw_stats: Statistics,
+    /// Matched subprocess/control distribution when the backend has one.
+    pub control_stats: Option<Statistics>,
     /// Host and compiler identity.
     pub fingerprint: MachineFingerprint,
     /// Commit measured, or `unknown` outside a Git checkout.
@@ -298,6 +386,18 @@ fn sample_median(ordered: &[f64]) -> Option<f64> {
 /// names, a changing construction outcome, or an unavailable system clock.
 pub fn run_filter_suite(config: &FilterBenchConfig) -> Result<Vec<BenchResult>, BenchError> {
     let config = config.validate()?;
+    select_backend(
+        config.backend,
+        cfg!(target_os = "linux"),
+        || run_filter_suite_backend(config, MeasurementBackend::PerfStat),
+        || run_filter_suite_backend(config, MeasurementBackend::Instant),
+    )
+}
+
+fn run_filter_suite_backend(
+    config: FilterBenchConfig,
+    backend: MeasurementBackend,
+) -> Result<Vec<BenchResult>, BenchError> {
     let cases: Vec<_> = filter_cases().collect();
     if cases.is_empty() {
         return Err(BenchError::EmptyRegistry);
@@ -322,16 +422,26 @@ pub fn run_filter_suite(config: &FilterBenchConfig) -> Result<Vec<BenchResult>, 
     let _sandbox = BenchmarkSandbox::enter()?;
     let mut results = Vec::new();
     for case in &cases {
-        let (iterations, outcome, stats) = benchmark_case(case, config)?;
+        let measurement = match backend {
+            MeasurementBackend::Instant => benchmark_case(case, config)?,
+            MeasurementBackend::PerfStat => benchmark_case_perf_stat(case, config)?,
+            MeasurementBackend::Auto => {
+                return Err(BenchError::BackendUnavailable(
+                    "auto must resolve before suite measurement".to_owned(),
+                ));
+            }
+        };
         results.push(BenchResult {
             benchmark: case.name.to_owned(),
-            scope: "instantiate",
-            outcome,
-            backend: "instant",
-            unit: "ns",
+            scope: measurement.scope,
+            outcome: measurement.outcome,
+            backend: measurement.backend,
+            unit: measurement.unit,
             samples: config.samples,
-            iterations,
-            stats,
+            iterations: measurement.iterations,
+            stats: measurement.corrected,
+            raw_stats: measurement.raw,
+            control_stats: measurement.control,
             fingerprint: fingerprint.clone(),
             git_sha: git_sha.clone(),
             measured_unix_ms,
@@ -342,15 +452,81 @@ pub fn run_filter_suite(config: &FilterBenchConfig) -> Result<Vec<BenchResult>, 
     Ok(results)
 }
 
+struct CaseMeasurement {
+    scope: &'static str,
+    outcome: &'static str,
+    backend: &'static str,
+    unit: &'static str,
+    iterations: usize,
+    corrected: Statistics,
+    raw: Statistics,
+    control: Option<Statistics>,
+}
+
 fn benchmark_case(
     case: &FilterCase,
     config: FilterBenchConfig,
-) -> Result<(usize, &'static str, Statistics), BenchError> {
+) -> Result<CaseMeasurement, BenchError> {
+    let (iterations, outcome) = calibrate_case(case, config, config.target_sample_ns)?;
+
+    let mut samples = Vec::new();
+    for _ in 0..config.samples {
+        let (elapsed, _) = measure_batch(case, iterations, Some(outcome))?;
+        samples.push(duration_ns(elapsed) / iterations as f64);
+    }
+    let stats = summarize(&samples).ok_or(BenchError::NoSamples)?;
+    Ok(CaseMeasurement {
+        scope: "instantiate",
+        outcome,
+        backend: "instant",
+        unit: "ns",
+        iterations,
+        corrected: stats,
+        raw: stats,
+        control: None,
+    })
+}
+
+fn benchmark_case_perf_stat(
+    case: &FilterCase,
+    config: FilterBenchConfig,
+) -> Result<CaseMeasurement, BenchError> {
+    let target = config.target_sample_ns.max(PERF_STAT_MIN_BATCH_NS);
+    let (iterations, outcome) = calibrate_case(case, config, target)?;
+    let samples = collect_cycle_samples(config.samples, iterations, |mode| {
+        perf_stat::measure_cycles(&BatchCommand {
+            mode,
+            name: case.name,
+            iterations,
+            outcome,
+        })
+        .map_err(|error| BenchError::BackendUnavailable(format!("filter {}: {error}", case.name)))
+    })?;
+    let corrected = summarize(&samples.corrected).ok_or(BenchError::NoSamples)?;
+    let raw = summarize(&samples.raw).ok_or(BenchError::NoSamples)?;
+    let control = summarize(&samples.control).ok_or(BenchError::NoSamples)?;
+    Ok(CaseMeasurement {
+        scope: "subprocess-instantiate-batch",
+        outcome,
+        backend: "perf-stat",
+        unit: "cycles",
+        iterations,
+        corrected,
+        raw,
+        control: Some(control),
+    })
+}
+
+fn calibrate_case(
+    case: &FilterCase,
+    config: FilterBenchConfig,
+    target_sample_ns: u64,
+) -> Result<(usize, &'static str), BenchError> {
     for _ in 0..config.warmup_calls {
         black_box(instantiate_filter(case));
     }
 
-    let target = Duration::from_nanos(config.target_sample_ns);
+    let target = Duration::from_nanos(target_sample_ns);
     let mut iterations = 1usize;
     let outcome = loop {
         let (elapsed, observed) = measure_batch(case, iterations, None)?;
@@ -360,13 +536,7 @@ fn benchmark_case(
         iterations = iterations.saturating_mul(2).min(config.max_iterations);
     };
 
-    let mut samples = Vec::new();
-    for _ in 0..config.samples {
-        let (elapsed, _) = measure_batch(case, iterations, Some(outcome))?;
-        samples.push(duration_ns(elapsed) / iterations as f64);
-    }
-    let stats = summarize(&samples).ok_or(BenchError::NoSamples)?;
-    Ok((iterations, outcome, stats))
+    Ok((iterations, outcome))
 }
 
 fn measure_batch(
@@ -396,6 +566,74 @@ fn duration_ns(duration: Duration) -> f64 {
     duration.as_secs_f64() * 1_000_000_000.0
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct CycleSamples {
+    raw: Vec<f64>,
+    control: Vec<f64>,
+    corrected: Vec<f64>,
+}
+
+fn collect_cycle_samples(
+    sample_count: usize,
+    iterations: usize,
+    mut measure: impl FnMut(ChildBatchMode) -> Result<u64, BenchError>,
+) -> Result<CycleSamples, BenchError> {
+    if sample_count == 0 || iterations == 0 {
+        return Err(BenchError::InvalidConfig(
+            "cycle samples and iterations must be positive",
+        ));
+    }
+    let mut raw = Vec::new();
+    let mut control = Vec::new();
+    let mut corrected = Vec::new();
+    for sample in 0..sample_count {
+        let (work_cycles, control_cycles) = if sample % 2 == 0 {
+            (
+                measure(ChildBatchMode::Work)?,
+                measure(ChildBatchMode::Control)?,
+            )
+        } else {
+            let control_cycles = measure(ChildBatchMode::Control)?;
+            let work_cycles = measure(ChildBatchMode::Work)?;
+            (work_cycles, control_cycles)
+        };
+        let divisor = iterations as f64;
+        raw.push(work_cycles as f64 / divisor);
+        control.push(control_cycles as f64 / divisor);
+        corrected.push(work_cycles.saturating_sub(control_cycles) as f64 / divisor);
+    }
+    Ok(CycleSamples {
+        raw,
+        control,
+        corrected,
+    })
+}
+
+fn select_backend<T>(
+    requested: MeasurementBackend,
+    perf_supported: bool,
+    perf: impl FnOnce() -> Result<T, BenchError>,
+    instant: impl FnOnce() -> Result<T, BenchError>,
+) -> Result<T, BenchError> {
+    match requested {
+        MeasurementBackend::Instant => instant(),
+        MeasurementBackend::PerfStat if perf_supported => perf(),
+        MeasurementBackend::PerfStat => Err(BenchError::BackendUnavailable(
+            "perf-stat CPU cycles require Linux".to_owned(),
+        )),
+        MeasurementBackend::Auto if perf_supported => match perf() {
+            Ok(result) => Ok(result),
+            Err(error) => {
+                eprintln!(
+                    "vaco-bench: perf-stat unavailable ({error}); rerunning complete suite as instant/ns"
+                );
+                instant()
+            }
+        },
+        MeasurementBackend::Auto => instant(),
+    }
+}
+
 /// Write one valid JSON object per result line.
 ///
 /// # Errors
@@ -411,12 +649,20 @@ pub fn write_jsonl(path: &Path, results: &[BenchResult]) -> Result<(), BenchErro
 }
 
 fn json_line(row: &BenchResult) -> String {
+    let control_median = row.control_stats.map(|stats| stats.median);
+    let control_mad = row.control_stats.map(|stats| stats.mad);
+    let control_min = row.control_stats.map(|stats| stats.min);
+    let control_p95 = row.control_stats.map(|stats| stats.p95);
     format!(
         concat!(
             "{{\"schema\":1,\"suite\":\"filter\",\"benchmark\":{},",
             "\"scope\":{},\"outcome\":{},\"backend\":{},\"unit\":{},",
-            "\"samples\":{},\"iterations\":{},\"median\":{},\"mad\":{},",
-            "\"min\":{},\"p95\":{},\"baseline_ratio\":{},",
+            "\"samples\":{},\"iterations\":{},",
+            "\"raw_median\":{},\"raw_mad\":{},\"raw_min\":{},\"raw_p95\":{},",
+            "\"control_median\":{},\"control_mad\":{},",
+            "\"control_min\":{},\"control_p95\":{},",
+            "\"median\":{},\"mad\":{},\"min\":{},\"p95\":{},",
+            "\"baseline_ratio\":{},",
             "\"machine\":{},\"os\":{},\"arch\":{},\"cpu\":{},",
             "\"rustc\":{},\"profile\":{},\"git_sha\":{},",
             "\"measured_unix_ms\":{},\"load_average_1m\":{}}}"
@@ -428,6 +674,14 @@ fn json_line(row: &BenchResult) -> String {
         json_string(row.unit),
         row.samples,
         row.iterations,
+        row.raw_stats.median,
+        row.raw_stats.mad,
+        row.raw_stats.min,
+        row.raw_stats.p95,
+        option_number(control_median),
+        option_number(control_mad),
+        option_number(control_min),
+        option_number(control_p95),
         row.stats.median,
         row.stats.mad,
         row.stats.min,
@@ -710,6 +964,10 @@ pub enum BenchError {
     EmptyRegistry,
     /// The generated registry exposed the same filter name twice.
     DuplicateFilter(&'static str),
+    /// A hidden child batch requested a name absent from the registry.
+    UnknownFilter(String),
+    /// A hidden child batch received an outcome outside the stable schema.
+    InvalidOutcome(String),
     /// An operation changed between calibration and sampling.
     InconsistentOutcome(&'static str),
     /// A timing path unexpectedly produced no sample.
@@ -722,6 +980,8 @@ pub enum BenchError {
     Io(std::io::Error),
     /// A baseline row lacked the complete schema identity.
     InvalidBaseline(String),
+    /// The requested physical counter could not produce a usable measurement.
+    BackendUnavailable(String),
 }
 
 impl fmt::Display for BenchError {
@@ -731,6 +991,10 @@ impl fmt::Display for BenchError {
             Self::EmptyRegistry => formatter.write_str("the enabled filter registry is empty"),
             Self::DuplicateFilter(name) => {
                 write!(formatter, "filter benchmark id is duplicated: {name}")
+            }
+            Self::UnknownFilter(name) => write!(formatter, "unknown filter benchmark id: {name}"),
+            Self::InvalidOutcome(outcome) => {
+                write!(formatter, "invalid filter construction outcome: {outcome}")
             }
             Self::InconsistentOutcome(name) => {
                 write!(
@@ -747,6 +1011,9 @@ impl fmt::Display for BenchError {
             Self::InvalidBaseline(line) => {
                 write!(formatter, "invalid benchmark JSONL line: {line}")
             }
+            Self::BackendUnavailable(detail) => {
+                write!(formatter, "measurement backend unavailable: {detail}")
+            }
         }
     }
 }
@@ -755,7 +1022,13 @@ impl std::error::Error for BenchError {}
 
 #[cfg(test)]
 mod tests {
-    use super::parse_uptime_load_average;
+    use std::cell::Cell;
+
+    use super::{
+        BenchError, BenchResult, ChildBatchMode, MachineFingerprint, MeasurementBackend,
+        Statistics, collect_cycle_samples, execute_child_batch, json_line,
+        parse_uptime_load_average, run_filter_child_batch, select_backend,
+    };
 
     #[test]
     fn uptime_load_average_accepts_darwin_and_linux_labels() {
@@ -770,5 +1043,182 @@ mod tests {
             Some(0.42)
         );
         assert_eq!(parse_uptime_load_average("unexpected output"), None);
+    }
+
+    #[test]
+    fn child_control_batch_does_not_construct_the_filter() {
+        let calls = Cell::new(0_usize);
+        let result = execute_child_batch(ChildBatchMode::Control, 3, "created", || {
+            calls.set(calls.get().saturating_add(1));
+            "created"
+        });
+
+        assert!(result.is_ok());
+        assert_eq!(calls.get(), 0);
+    }
+
+    #[test]
+    fn child_work_batch_checks_every_construction_outcome() {
+        let calls = Cell::new(0_usize);
+        let result = execute_child_batch(ChildBatchMode::Work, 3, "created", || {
+            let call = calls.get().saturating_add(1);
+            calls.set(call);
+            if call == 3 { "rejected" } else { "created" }
+        });
+
+        assert!(matches!(result, Err(BenchError::InconsistentOutcome(_))));
+        assert_eq!(calls.get(), 3);
+    }
+
+    #[test]
+    fn child_batch_rejects_unknown_filter_zero_iterations_and_bad_outcome() {
+        assert!(matches!(
+            run_filter_child_batch(ChildBatchMode::Control, "not-a-filter", 1, "created"),
+            Err(BenchError::UnknownFilter(_))
+        ));
+        assert!(matches!(
+            run_filter_child_batch(ChildBatchMode::Control, "null", 0, "created"),
+            Err(BenchError::InvalidConfig(_))
+        ));
+        assert!(matches!(
+            run_filter_child_batch(ChildBatchMode::Control, "null", 1, "maybe"),
+            Err(BenchError::InvalidOutcome(_))
+        ));
+    }
+
+    #[test]
+    fn cycle_samples_alternate_pairs_and_subtract_control_per_iteration() {
+        let mut order = Vec::new();
+        let samples = collect_cycle_samples(2, 10, |mode| {
+            order.push(mode);
+            Ok(match mode {
+                ChildBatchMode::Work => 1_000,
+                ChildBatchMode::Control => 200,
+            })
+        });
+
+        assert_eq!(
+            order,
+            [
+                ChildBatchMode::Work,
+                ChildBatchMode::Control,
+                ChildBatchMode::Control,
+                ChildBatchMode::Work,
+            ]
+        );
+        assert!(samples.is_ok());
+        let Some(samples) = samples.ok() else {
+            return;
+        };
+        assert_eq!(samples.raw, [100.0, 100.0]);
+        assert_eq!(samples.control, [20.0, 20.0]);
+        assert_eq!(samples.corrected, [80.0, 80.0]);
+    }
+
+    #[test]
+    fn cycle_control_subtraction_saturates_at_zero() {
+        let samples = collect_cycle_samples(1, 10, |mode| {
+            Ok(match mode {
+                ChildBatchMode::Work => 100,
+                ChildBatchMode::Control => 200,
+            })
+        });
+
+        assert!(samples.is_ok());
+        let Some(samples) = samples.ok() else {
+            return;
+        };
+        assert_eq!(samples.corrected, [0.0]);
+    }
+
+    #[test]
+    fn auto_discards_failed_perf_rows_and_runs_the_complete_instant_suite() {
+        let perf_calls = Cell::new(0_usize);
+        let instant_calls = Cell::new(0_usize);
+        let selected = select_backend(
+            MeasurementBackend::Auto,
+            true,
+            || {
+                perf_calls.set(perf_calls.get().saturating_add(1));
+                Err(BenchError::BackendUnavailable("counter denied".to_owned()))
+            },
+            || {
+                instant_calls.set(instant_calls.get().saturating_add(1));
+                Ok(vec!["instant-row"])
+            },
+        );
+
+        assert_eq!(selected.ok(), Some(vec!["instant-row"]));
+        assert_eq!(perf_calls.get(), 1);
+        assert_eq!(instant_calls.get(), 1);
+    }
+
+    #[test]
+    fn forced_perf_stat_returns_the_backend_error_without_fallback() {
+        let instant_calls = Cell::new(0_usize);
+        let selected: Result<Vec<&str>, BenchError> = select_backend(
+            MeasurementBackend::PerfStat,
+            true,
+            || Err(BenchError::BackendUnavailable("counter denied".to_owned())),
+            || {
+                instant_calls.set(instant_calls.get().saturating_add(1));
+                Ok(Vec::new())
+            },
+        );
+
+        assert!(matches!(selected, Err(BenchError::BackendUnavailable(_))));
+        assert_eq!(instant_calls.get(), 0);
+    }
+
+    #[test]
+    fn perf_json_quantifies_raw_control_and_corrected_cycles() {
+        let corrected = Statistics {
+            median: 80.0,
+            mad: 2.0,
+            min: 75.0,
+            p95: 85.0,
+        };
+        let raw = Statistics {
+            median: 100.0,
+            mad: 3.0,
+            min: 94.0,
+            p95: 106.0,
+        };
+        let control = Statistics {
+            median: 20.0,
+            mad: 1.0,
+            min: 19.0,
+            p95: 22.0,
+        };
+        let row = BenchResult {
+            benchmark: "null".to_owned(),
+            scope: "subprocess-instantiate-batch",
+            outcome: "created",
+            backend: "perf-stat",
+            unit: "cycles",
+            samples: 3,
+            iterations: 10,
+            stats: corrected,
+            raw_stats: raw,
+            control_stats: Some(control),
+            fingerprint: MachineFingerprint {
+                machine: "linux-runner".to_owned(),
+                os: "linux".to_owned(),
+                arch: "x86_64".to_owned(),
+                cpu: "test-cpu".to_owned(),
+                rustc: "rustc test".to_owned(),
+                profile: "release".to_owned(),
+            },
+            git_sha: "test".to_owned(),
+            measured_unix_ms: 1,
+            load_average_1m: Some(0.5),
+            baseline_ratio: None,
+        };
+
+        let json = json_line(&row);
+        assert!(json.contains("\"backend\":\"perf-stat\",\"unit\":\"cycles\""));
+        assert!(json.contains("\"raw_median\":100"));
+        assert!(json.contains("\"control_median\":20"));
+        assert!(json.contains("\"median\":80"));
     }
 }

@@ -116,9 +116,9 @@ host actually exposes a usable PMU.
 - `crates/tool/vaco-bench/src/main.rs` parses `--backend` and dispatches the
   hidden child batch.
 - `crates/tool/vaco-bench/tests/cli.rs` pins user-visible selection and labels.
-- `docs/tool/vaco-bench.md` explains operation, scope, configuration, and
-  dependencies; `docs/tool/vaco-checkasm.md` records the backend audit and the
-  distinction between the two counter paths.
+- `docs/tool/vaco-bench.md` explains operation, scope, configuration,
+  dependencies, the checkasm backend audit, and the distinction between the
+  two counter paths.
 
 To add another truthful counter source later, give it a new backend and scope,
 return values in its physical unit, and extend baseline identity before making

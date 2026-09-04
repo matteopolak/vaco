@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use vaco_bench::{
-    BenchError, FilterBenchConfig, apply_baseline, filter_cases, regressions, run_filter_suite,
-    write_jsonl,
+    BenchError, ChildBatchMode, FilterBenchConfig, MeasurementBackend, apply_baseline,
+    filter_cases, regressions, run_filter_child_batch, run_filter_suite, write_jsonl,
 };
 
 fn main() -> ExitCode {
@@ -30,6 +30,7 @@ fn run(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
             }
             Ok(ExitCode::SUCCESS)
         }
+        Some(command) if command == "__filter-batch" => run_filter_child(args),
         Some(command) if command == "filter" => run_filter(args),
         Some(command) if command == "--help" || command == "-h" => {
             reject_extra(args)?;
@@ -43,6 +44,24 @@ fn run(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
         ))),
         None => Err(CliError::Usage(usage().to_owned())),
     }
+}
+
+fn run_filter_child(mut args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError> {
+    let mode = match text_value(&mut args, "child batch mode")?.as_str() {
+        "work" => ChildBatchMode::Work,
+        "control" => ChildBatchMode::Control,
+        value => {
+            return Err(CliError::Usage(format!(
+                "child batch mode must be work or control, got {value}"
+            )));
+        }
+    };
+    let name = text_value(&mut args, "child filter name")?;
+    let iterations = usize_value(&mut args, "child iterations")?;
+    let outcome = text_value(&mut args, "child expected outcome")?;
+    reject_extra(args)?;
+    run_filter_child_batch(mode, &name, iterations, &outcome)?;
+    Ok(ExitCode::SUCCESS)
 }
 
 #[derive(Debug, Default)]
@@ -77,13 +96,17 @@ fn run_filter(args: impl Iterator<Item = OsString>) -> Result<ExitCode, CliError
             |ratio| format!("baseline/current={ratio:.4}"),
         );
         println!(
-            "{} outcome={} median={:.3}ns mad={:.3}ns min={:.3}ns p95={:.3}ns iterations={} samples={} backend={}/{} {}",
+            "{} outcome={} median={:.3}{} mad={:.3}{} min={:.3}{} p95={:.3}{} iterations={} samples={} backend={}/{} {}",
             row.benchmark,
             row.outcome,
             row.stats.median,
+            row.unit,
             row.stats.mad,
+            row.unit,
             row.stats.min,
+            row.unit,
             row.stats.p95,
+            row.unit,
             row.iterations,
             row.samples,
             row.backend,
@@ -123,6 +146,7 @@ fn parse_filter_args(args: impl Iterator<Item = OsString>) -> Result<FilterArgs,
     let mut args = args;
     while let Some(flag) = args.next() {
         match flag.to_str() {
+            Some("--backend") => parsed.config.backend = backend_value(&mut args)?,
             Some("--warmup") => parsed.config.warmup_calls = usize_value(&mut args, "--warmup")?,
             Some("--samples") => parsed.config.samples = usize_value(&mut args, "--samples")?,
             Some("--target-sample-ns") => {
@@ -176,6 +200,15 @@ fn next_value(
         .ok_or_else(|| CliError::Usage(format!("{flag} requires a value")))
 }
 
+fn text_value(
+    args: &mut impl Iterator<Item = OsString>,
+    label: &'static str,
+) -> Result<String, CliError> {
+    next_value(args, label)?
+        .into_string()
+        .map_err(|_| CliError::Usage(format!("{label} must be valid UTF-8")))
+}
+
 fn usize_value(
     args: &mut impl Iterator<Item = OsString>,
     flag: &'static str,
@@ -209,6 +242,19 @@ fn f64_value(
         .ok_or_else(|| CliError::Usage(format!("{flag} requires a number")))
 }
 
+fn backend_value(
+    args: &mut impl Iterator<Item = OsString>,
+) -> Result<MeasurementBackend, CliError> {
+    match next_value(args, "--backend")?.to_str() {
+        Some("instant") => Ok(MeasurementBackend::Instant),
+        Some("auto") => Ok(MeasurementBackend::Auto),
+        Some("perf-stat") => Ok(MeasurementBackend::PerfStat),
+        _ => Err(CliError::Usage(
+            "--backend requires instant, auto, or perf-stat".to_owned(),
+        )),
+    }
+}
+
 fn path_value(
     args: &mut impl Iterator<Item = OsString>,
     flag: &'static str,
@@ -225,7 +271,7 @@ fn usage() -> &'static str {
 }
 
 fn filter_usage() -> &'static str {
-    "usage: vaco-bench filter [--warmup N] [--samples N] [--target-sample-ns N] [--max-iterations N] [--json PATH] [--baseline PATH] [--fail-under R]"
+    "usage: vaco-bench filter [--backend instant|auto|perf-stat] [--warmup N] [--samples N] [--target-sample-ns N] [--max-iterations N] [--json PATH] [--baseline PATH] [--fail-under R]"
 }
 
 #[derive(Debug)]
