@@ -36,6 +36,23 @@ use crate::tns_apply;
 
 const LONG_LEN: usize = 2048;
 const SHORT_LEN: usize = 256;
+/// The eight short transforms of an `EIGHT_SHORT_SEQUENCE`.
+const NUM_SHORT: usize = 8;
+/// Where the eight short windows' overlapped span begins inside the
+/// 2048-sample block (§4.6.11.3.2). Hopping by `SHORT_LEN / 2`, the eight
+/// 256-sample windows together span `(8 + 1) * 128 = 1152` samples, centred
+/// in the block: 448 zeros before, 448 after.
+///
+/// One constant rather than three literals because all three uses have to
+/// agree or time-domain alias cancellation fails across a window-sequence
+/// transition — `LongStop`'s ascending short segment starts here,
+/// `LongStart`'s descending one ends at `LONG_LEN - SHORT_START`, and
+/// `overlap_add_eight_short` lays window `j` down at
+/// `SHORT_START + j * SHORT_LEN / 2`. They did not agree before: the
+/// overlap-add used `(LONG_LEN - SHORT_LEN) / 2 - SHORT_LEN / 2` = 768,
+/// putting every short block 320 samples late (measured against
+/// `ffmpeg -bitexact` on a burst fixture: every burst onset +320).
+const SHORT_START: usize = (LONG_LEN - (NUM_SHORT + 1) * (SHORT_LEN / 2)) / 2;
 /// Final output normalisation: §4.6.1's inverse-quantisation formula
 /// produces samples on a 16-bit-PCM scale (matching FAAD2 and other
 /// reference decoders' convention), not the `[-1, 1]` range this crate's
@@ -407,7 +424,9 @@ fn build_window(sequence: WindowSequence, this_shape: bool, prev_shape: bool) ->
         WindowSequence::LongStart => {
             // [0, 1024): long left half, previous block's shape.
             // [1024, 1472): 1.0. [1472, 1600): current short window's own
-            // right half (samples 128..256), current block's shape.
+            // right half (samples 128..256), current block's shape —
+            // 1600 is `LONG_LEN - SHORT_START`, the sample the eight-short
+            // sequence's last window also stops contributing at.
             // [1600, 2048): 0.0. The standard, universally-implemented
             // construction for this transition — the boundary arithmetic
             // could not be independently confirmed from this crate's own
@@ -415,11 +434,18 @@ fn build_window(sequence: WindowSequence, this_shape: bool, prev_shape: bool) ->
             // so this is disclosed as an assumption to verify, checked
             // empirically against a real transition fixture instead (see
             // docs/codec/vaco-codec-aac.md).
-            copy_range(&mut w, &long_left_full, 0);
+            // Only the left half: copying the whole `long_left_full` here
+            // left its descending tail sitting in `w[1600..]`, where the
+            // sequence is defined to be zero, and nothing later overwrote it.
+            copy_range(&mut w[..1024], &long_left_full[..1024], 0);
             fill_range(&mut w[1024..1472], 1.0);
             copy_range(&mut w[1472..1600], &short_right_full[128..], 0);
         }
         WindowSequence::LongStop => {
+            // The literal window boundaries in this `match` are pinned to
+            // `SHORT_START` by the `const` assertions below `build_window`;
+            // they are spelled out here because a `const`-expression range
+            // would not read as a window shape.
             // Mirror of LongStart: the short-derived segment sits before
             // the block's temporal centre, so it takes the previous
             // block's shape; the long right half takes the current one.
@@ -436,6 +462,16 @@ fn build_window(sequence: WindowSequence, this_shape: bool, prev_shape: bool) ->
     }
     w
 }
+
+// `build_window`'s transition shapes and `overlap_add_eight_short`'s window
+// placement have to meet at the same two samples, or the transitions stop
+// cancelling their time-domain alias. These fail the build if an edit moves
+// one without the other.
+const _: () = assert!(SHORT_START == 448, "LongStop's short segment is w[448..576]");
+const _: () = assert!(
+    LONG_LEN - SHORT_START == 1600,
+    "LongStart's short segment is w[1472..1600]"
+);
 
 /// Copy `src` into `dst` starting at `dst_start`, one iterator pass — used
 /// instead of index-by-loop-variable so neither side ever risks a
@@ -678,17 +714,15 @@ pub(crate) fn finalize_channel(
 /// overlap-add code handles both cases identically.
 fn overlap_add_eight_short(windowed: &[Vec<f32>]) -> Vec<f32> {
     let mut z = vec![0.0f32; LONG_LEN];
-    let lead = (LONG_LEN - SHORT_LEN) / 2; // 896: leading zeros before window 0 starts contributing
     let half_short = SHORT_LEN / 2; // 128: each short window overlaps the previous by half
     for (j, win) in windowed.iter().enumerate() {
-        // Window j starts at `lead - half_short + j*half_short`. `lead >
-        // half_short` for AAC's real block sizes (896 > 128), so this never
-        // underflows in practice; `checked_sub`/`checked_add` keep that a
-        // checked fact rather than an assumed one, skipping the window
-        // entirely (rather than panicking) if it ever did not hold.
-        let Some(base) = lead
-            .checked_sub(half_short)
-            .and_then(|b| b.checked_add(j * half_short))
+        // `checked_*` rather than plain arithmetic because `windowed` comes
+        // from a bitstream-derived window count: a longer-than-expected list
+        // walks off the end of `z` and is dropped by the `get_mut` below
+        // rather than panicking.
+        let Some(base) = j
+            .checked_mul(half_short)
+            .and_then(|off| off.checked_add(SHORT_START))
         else {
             continue;
         };
@@ -709,7 +743,45 @@ mod tests {
         clippy::panic,
         reason = "test code"
     )]
-    use super::inverse_quantize_and_rescale;
+    use super::{
+        LONG_LEN, NUM_SHORT, SHORT_LEN, WindowSequence, build_window, inverse_quantize_and_rescale,
+        overlap_add_eight_short,
+    };
+
+    /// The eight short windows must occupy exactly the span the neighbouring
+    /// `LongStart`/`LongStop` windows leave for them, or the transition stops
+    /// cancelling its time-domain alias — which showed up as every transient
+    /// arriving 320 samples late against `ffmpeg`. Derived from the *other*
+    /// two window shapes rather than from a literal, so it fails if the
+    /// eight-short placement and the transition shapes ever disagree again.
+    #[test]
+    fn eight_short_fills_exactly_the_span_the_transition_windows_leave() {
+        let all_ones = vec![vec![1.0f32; SHORT_LEN]; NUM_SHORT];
+        let z = overlap_add_eight_short(&all_ones);
+        let touched: Vec<usize> = z
+            .iter()
+            .enumerate()
+            .filter(|&(_, &v)| v != 0.0)
+            .map(|(i, _)| i)
+            .collect();
+        let first = *touched.first().unwrap();
+        let last = *touched.last().unwrap();
+
+        let stop = build_window(WindowSequence::LongStop, false, false);
+        let start = build_window(WindowSequence::LongStart, false, false);
+        let stop_first = stop.iter().position(|&v| v != 0.0).unwrap();
+        let start_last = LONG_LEN - 1 - start.iter().rev().position(|&v| v != 0.0).unwrap();
+
+        assert_eq!(
+            first, stop_first,
+            "eight-short starts at {first}, LongStop's ramp at {stop_first}"
+        );
+        assert_eq!(
+            last, start_last,
+            "eight-short ends at {last}, LongStart's ramp at {start_last}"
+        );
+        assert_eq!(touched.len(), last - first + 1, "gap inside the span");
+    }
 
     #[test]
     fn inverse_quantize_matches_the_formula_for_a_simple_case() {

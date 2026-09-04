@@ -621,6 +621,49 @@ plausible-looking implementation that a real bitstream falsifies.
   which forces exactly this transition) is the empirical check in place of
   that citation; it reads no worse than the other fixtures, but "no worse"
   is not the same confidence as a verified formula.
+
+  **That check turned out to be blind to the failure it was standing in
+  for.** `overlap_add_eight_short` placed short window `j` at `768 + 128j`
+  where the same file's `LongStop` (`w[448..576]`) and `LongStart`
+  (`w[1472..1600]`) arms require `448 + 128j` — every `EIGHT_SHORT` block
+  reconstructed 320 samples late, and the transition's time-domain alias
+  never cancelled. A 440→6000 Hz cut cannot see that: correlation of a
+  lagged sinusoid against itself is periodic in the lag, the same
+  false-negative shape `AGENT-CONSTRAINTS.md` already records for this
+  crate's QMF work. Measured against `ffmpeg -bitexact` on a fixture of
+  20 ms noise bursts at exact 0.5 s boundaries, every burst onset was +320
+  before the fix and exactly on ffmpeg's after it. The three boundaries now
+  come from one `SHORT_START` constant with `const` assertions pinning the
+  two literals to it, and
+  `eight_short_fills_exactly_the_span_the_transition_windows_leave` derives
+  the expected span from `build_window`'s own output.
+
+  The test that pinned that span then failed on a *second* defect in the
+  same function: `LongStart` built its window with
+  `copy_range(&mut w, &long_left_full, 0)`, which writes all 2048 samples,
+  so the long window's descending tail stayed in `w[1600..]` where the
+  sequence is defined to be zero and nothing later overwrote it. Only the
+  left half is copied now.
+
+  Both fixed together, measured against `ffmpeg -bitexact` 9.0.1 on raw
+  ADTS (no container trim on either side), `examples/decode_dump` vs
+  `-f f32le`, correlation at lag 0 and RMS of the difference:
+
+  | fixture (5 s) | before | + overlap-add | + `LongStart` tail |
+  |---|---|---|---|
+  | 20 ms noise bursts, 48 kHz mono | 0.037 (best lag −320) | 0.947 | **0.949** |
+  | white noise, 48 kHz mono | 0.991 | 0.9989 | **0.9990** |
+  | 20 Hz→20 kHz chirp, 44.1 kHz mono | 0.977 | 0.9856 | **0.9859** |
+  | RMS, bursts | 0.143 | 0.0335 | **0.0327** |
+  | RMS, white noise | 0.0376 | 0.0131 | **0.0123** |
+  | RMS, chirp | 0.107 | 0.0846 | **0.0837** |
+
+  Both long-block-only fixtures improve too, because `ffmpeg`'s encoder
+  still emits occasional short blocks in noise and chirp content.
+
+  **Any fixture in the correlation table below is still blind to a constant
+  time shift.** Use aperiodic content with sharp attacks when checking the
+  filterbank.
 - **`coupling_channel_element()` (`CCE`) is not implemented** —
   `Error::Unsupported`. It carries its own `individual_channel_stream()`
   plus a per-coupled-element gain list this crate has not transcribed.
