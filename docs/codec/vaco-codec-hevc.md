@@ -294,17 +294,17 @@ with the production `HevcParser`/`ParserDriver`, feeding those access units to
 
 | result | streams |
 | --- | ---: |
-| byte-exact on every frame | **32** |
+| byte-exact on every frame | **33** |
 | refused by name (`Unsupported`) | 13 |
 | CABAC desync mid-stream | **0** |
 | wrong pixels at the right length | **0** |
-| wrong frame count | 1 |
+| wrong frame count | 0 |
 
 Byte-exact: `amp-a`, `amvp-a`, `amvp-b`, `cip-a`, `cip-b`, `confwin-a`,
 `entp-c`, `filler-a`, `initqp-a`, `ipred-c`, `merge-a`..`merge-e`,
 `mvclip-a`, `mvedge-a`, `picsize-d`, `pmerge-a`, `pmerge-b`, `poc-a`, `ps-b`,
 `rplm-a` (300 frames), `rps-a`, `rqt-a`, `sao-a`, `sao-g`, `slpplp-a`,
-`struct-a`, `tscl-a`, `vpsid-a`, `nut-a`.
+`struct-a`, `tscl-a`, `vpsid-a`, `nut-a`, `nooutprior-a`.
 
 An earlier scratch-only raw harness reported that `initqp-a-sony-1`
 desynchronized after 47 of 60 frames. That harness waited for the next first
@@ -318,10 +318,24 @@ all 60 frames and all 8,985,600 output bytes are exact. A sibling scan found
 post-VCL PPS NALs in `cip-a`, `initqp-a`, `nooutprior-a`, `nut-a`, and
 `slist-c`; the corrected full sweep covers all five.
 
-The remaining non-refusal frame-count failure is:
+There are no remaining non-refusal frame-count failures in this subset.
 
-- `nooutprior-a-qualcomm-1` (50 frames vs 40) —
-  `no_output_of_prior_pics_flag` / NAL-type-driven DPB flushing.
+### EOS-triggered CRA output discard
+
+`NoOutPrior_A_Qualcomm_1` puts an end-of-sequence NAL unit immediately before
+a CRA. Although this CRA's coded `no_output_of_prior_pics_flag` is `0`, the
+EOS makes it a `NoRaslOutputFlag` random-access point. Its stored decoded
+pictures are removed without output, and its seven associated RASL pictures
+may be ignored because they can reference pictures no longer present.
+
+The decoder previously did neither: its independent POC state never saw the
+non-VCL EOS access unit, so the CRA was treated as ordinary, then all 50
+input pictures were emitted. It now records EOS/EOB after parser processing,
+resets the decoder-side POC/output state, discards the pre-CRA DPB output on
+the next no-RASL IRAP, and skips its RASLs before reference lookup. Measured
+2026-09-04 with the lockfile's SHA-256-verified vector: this decoder and
+`ffmpeg 9.0.1` both output 40 832x480 yuv420p frames (23,961,600 bytes), with
+every byte exact.
 
 ### BLA RASL output suppression
 

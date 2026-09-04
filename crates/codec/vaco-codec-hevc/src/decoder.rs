@@ -101,6 +101,9 @@ pub struct HevcDecoder {
     /// POC of the active IRAP whose `NoRaslOutputFlag` suppresses leading
     /// RASL pictures from output while retaining them for decoding.
     rasl_output_suppression_poc: Option<i64>,
+    /// An EOS/EOB NAL unit makes the next CRA an independent random-access
+    /// point, whose old DPB pictures are discarded without output.
+    sequence_ended: bool,
     /// Test-only: when set, `decode_packet` runs [`run_deblock_lag_probe`]
     /// against the just-reconstructed (pre-deblock) picture right before
     /// its own real `deblock::filter_picture` call, then clears this back
@@ -132,6 +135,7 @@ impl HevcDecoder {
             dpb: None,
             poc_state: PocState::new(),
             rasl_output_suppression_poc: None,
+            sequence_ended: false,
             limits,
             #[cfg(test)]
             deblock_lag_probe: None,
@@ -156,7 +160,17 @@ impl HevcDecoder {
         // slice at all (or its parameter sets are not yet known, which is
         // legal for a stream joined mid-flight).
         let info = self.parser.push_access_unit(payload, framing)?;
+        let ends_sequence = units(payload, framing).any(|nal| {
+            HevcNalHeader::parse(nal.data).is_some_and(|header| {
+                header.is_base_layer()
+                    && (header.nal_unit_type == vaco_parse_hevc::NalUnitType::EOS_NUT
+                        || header.nal_unit_type == vaco_parse_hevc::NalUnitType::EOB_NUT)
+            })
+        });
         if info.picture_type.is_none() {
+            if ends_sequence {
+                self.note_sequence_end();
+            }
             return Ok(());
         }
 
@@ -234,6 +248,9 @@ impl HevcDecoder {
         let Some(ebsp) = slice_nal else { return Ok(()) };
         let header = HevcNalHeader::parse(ebsp)
             .ok_or(Error::InvalidData("vaco-codec-hevc: empty NAL unit"))?;
+        if rasl_can_be_ignored(header.nal_unit_type, self.rasl_output_suppression_poc) {
+            return Ok(());
+        }
 
         self.rbsp.fill(ebsp, &mut self.budget)?;
         let rbsp = self.rbsp.as_slice();
@@ -372,7 +389,8 @@ impl HevcDecoder {
         // picture's own reference-picture-set marking (which would be
         // meaningless against an empty DPB anyway) runs.
         if header.nal_unit_type.is_irap() && no_rasl_output {
-            let pocs = dpb.clear_for_irap(hdr.no_output_of_prior_pics);
+            let discard_prior_output = hdr.no_output_of_prior_pics || self.sequence_ended;
+            let pocs = dpb.clear_for_irap(discard_prior_output);
             Self::emit_pocs(
                 self.dpb.as_ref(),
                 &mut self.budget,
@@ -382,6 +400,7 @@ impl HevcDecoder {
             if let Some(dpb) = self.dpb.as_mut() {
                 dpb.clear_all(&mut self.budget);
             }
+            self.sequence_ended = false;
         } else if let Some(dpb) = self.dpb.as_mut() {
             // §8.3.2's marking (`remove_unused`'s own trailing call inside
             // `apply_reference_picture_set` is §C.5.2.2's unconditional
@@ -704,7 +723,16 @@ impl HevcDecoder {
         if let Some(dpb) = self.dpb.as_mut() {
             dpb.reap_unused(&mut self.budget);
         }
+        if ends_sequence {
+            self.note_sequence_end();
+        }
         Ok(())
+    }
+
+    fn note_sequence_end(&mut self) {
+        self.poc_state.reset();
+        self.rasl_output_suppression_poc = None;
+        self.sequence_ended = true;
     }
 
     /// Read `pocs` (already POC-ordered by every [`Dpb`] method that
@@ -1229,6 +1257,7 @@ impl Decoder for HevcDecoder {
         self.dpb = None;
         self.poc_state.reset();
         self.rasl_output_suppression_poc = None;
+        self.sequence_ended = false;
         // Release every byte charged to the budget along with the state
         // that held them, mirroring `H264Decoder::flush`'s own precedent.
         self.budget = Budget::new(self.limits.clone());
@@ -1253,6 +1282,17 @@ fn output_is_needed(
     pic_output
         && !(nal_unit_type.is_rasl()
             && rasl_output_suppression_poc.is_some_and(|irap_poc| poc < irap_poc))
+}
+
+/// §8.3.3 permits dropping RASL pictures associated with an IRAP whose
+/// `NoRaslOutputFlag` is set: they are neither output nor referenced by any
+/// picture that is output.
+#[must_use]
+fn rasl_can_be_ignored(
+    nal_unit_type: vaco_parse_hevc::NalUnitType,
+    rasl_output_suppression_poc: Option<i64>,
+) -> bool {
+    nal_unit_type.is_rasl() && rasl_output_suppression_poc.is_some()
 }
 
 // ------------------------------------------------------------- deblock lag
@@ -1644,7 +1684,8 @@ mod deblock_lag_tests {
     reason = "the test exercises a pure output-eligibility rule over fixed NAL types"
 )]
 mod irap_output_tests {
-    use super::output_is_needed;
+    use super::{HevcDecoder, output_is_needed, rasl_can_be_ignored};
+    use vaco_limits::Limits;
     use vaco_parse_hevc::NalUnitType;
 
     /// §8.1 makes a RASL picture that precedes a BLA's decoding-order
@@ -1684,5 +1725,24 @@ mod irap_output_tests {
             220,
             Some(bla_poc)
         ));
+    }
+
+    #[test]
+    fn rasl_after_a_no_rasl_irap_can_be_ignored_but_radl_cannot() {
+        assert!(rasl_can_be_ignored(NalUnitType::RASL_R, Some(0)));
+        assert!(rasl_can_be_ignored(NalUnitType::RASL_N, Some(0)));
+        assert!(!rasl_can_be_ignored(NalUnitType::RADL_R, Some(0)));
+        assert!(!rasl_can_be_ignored(NalUnitType::RASL_R, None));
+    }
+
+    #[test]
+    fn end_of_sequence_marks_the_next_irap_to_discard_prior_output() {
+        let mut decoder = HevcDecoder::new(Limits::default());
+        decoder.rasl_output_suppression_poc = Some(8);
+
+        decoder.note_sequence_end();
+
+        assert!(decoder.sequence_ended);
+        assert_eq!(decoder.rasl_output_suppression_poc, None);
     }
 }
