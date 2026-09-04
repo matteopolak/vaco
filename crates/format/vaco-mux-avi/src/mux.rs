@@ -28,7 +28,7 @@
 //! that crate's `index` module docs for the measurement.
 
 use vaco_codec_core::{CodecId, CodecParameters};
-use vaco_core::{Error, MediaType, Rational, Result};
+use vaco_core::{Duration, Error, MediaType, Rational, Result};
 use vaco_format_core::{FormatOptions, Muxer, MuxerDesc, StreamSpec};
 use vaco_io::{IoOptions, IoWriter, MediaSink};
 use vaco_limits::{Budget, Limits};
@@ -700,6 +700,24 @@ impl Muxer for AviMuxer {
             out.time_base = GRID_RATE;
             out.strh_time_base = GRID_RATE;
             out.has_b_frames = v.has_b_frames;
+            // Seeds `backfill_trailing_video_slots`'s fallback from the
+            // stream's own declared frame rate, not an invented constant, so
+            // a source whose packets never state a duration at all (an
+            // ordinary `-c copy` remux out of a demuxer that reports none)
+            // still gets the trailing grid extension — see
+            // `last_video_duration_ticks`'s own doc for why the field being
+            // `0` made that backfill silently never run. Overwritten by a
+            // real per-packet duration in `write_packet` the moment one
+            // arrives, exactly as it already was.
+            if v.frame_rate.num > 0 && v.frame_rate.den > 0 {
+                let period_us = 1_000_000i64
+                    .saturating_mul(i64::from(v.frame_rate.den))
+                    .checked_div(i64::from(v.frame_rate.num));
+                if let Some(ticks) = period_us.and_then(|us| Duration::from_micros(us).to_ticks(GRID_RATE))
+                {
+                    out.last_video_duration_ticks = ticks;
+                }
+            }
             let has_config_record_tag = matches!(
                 params.codec_tag.as_ref(),
                 Some(b"avc1" | b"AVC1" | b"hvc1" | b"hev1")

@@ -63,7 +63,12 @@ fn mux_sample() -> (Vec<u8>, u32, u32) {
     let shared: SharedBytes = sink.shared();
     let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
 
-    let v = mux.add_stream(&video_params(64, 48, (1, 10))).unwrap();
+    // 25fps: realistic enough that the trailing-frame backfill this stream
+    // now picks up (see `a_duration_less_video_stream_still_gets_its_trailing_frame_backfilled`)
+    // adds a manageable 23 slots rather than the several thousand a
+    // fractional fps like `(1, 10)` used to leave harmless only because
+    // nothing consulted it.
+    let v = mux.add_stream(&video_params(64, 48, (25, 1))).unwrap();
     let a = mux.add_stream(&audio_params(8000)).unwrap();
     mux.write_header().unwrap();
 
@@ -120,16 +125,19 @@ fn muxed_packets_demux_in_order_with_the_measured_clock() {
     // Video's pts stays unset on the way back out, same as on the way in
     // (see `vaco-demux-avi`'s own test of this): AVI carries no explicit
     // presentation order for video, so nothing round-trips one.
-    assert_eq!(
-        got,
-        vec![
-            (0, None, true, 10),
-            (1, Some(0), true, 4000),
-            (0, None, false, 8),
-            (1, Some(2000), true, 2000),
-            (0, None, false, 6),
-        ]
-    );
+    let mut expected = vec![
+        (0, None, true, 10),
+        (1, Some(0), true, 4000),
+        (0, None, false, 8),
+        (1, Some(2000), true, 2000),
+        (0, None, false, 6),
+    ];
+    // The trailing-frame backfill (see `a_duration_less_video_stream_still_gets_its_trailing_frame_backfilled`)
+    // appends 23 empty video placeholder chunks after everything else once
+    // `write_trailer` runs, extending the last real frame's own slot by a
+    // full 25fps period (24 grid ticks) with no packet ever stating one.
+    expected.extend(std::iter::repeat((0, None, false, 0)).take(23));
+    assert_eq!(got, expected);
 }
 
 #[test]
@@ -356,18 +364,22 @@ fn video_packets_land_on_the_grid_with_empty_slots_between() {
     // These are video packets, so pts stays unset on read-back (see the
     // clock test above) — only `len` (real payload vs. an empty grid slot)
     // is being checked here.
-    assert_eq!(
-        got,
-        vec![
-            (None, 1),
-            (None, 0),
-            (None, 0),
-            (None, 0),
-            (None, 0),
-            (None, 1),
-        ]
-    );
-    assert_eq!(demux.streams()[0].duration_ts, Some(6));
+    let mut expected = vec![
+        (None, 1),
+        (None, 0),
+        (None, 0),
+        (None, 0),
+        (None, 0),
+        (None, 1),
+    ];
+    // Plus this 25fps stream's own 24-tick-per-frame trailing extension past
+    // the last real frame (slot 5 -> 29), appended as 23 more empty slots —
+    // see `a_duration_less_video_stream_still_gets_its_trailing_frame_backfilled`
+    // for the fallback this exercises: neither packet here states a
+    // `duration`, so it comes entirely from the declared frame rate.
+    expected.extend(std::iter::repeat((None, 0)).take(23));
+    assert_eq!(got, expected);
+    assert_eq!(demux.streams()[0].duration_ts, Some(29));
 }
 
 /// AVI has no absolute-time field, so a source clock that does not start at
@@ -394,8 +406,11 @@ fn the_grid_rebases_to_the_streams_own_first_frame() {
     mux.write_trailer().unwrap();
 
     let demux = open(shared.snapshot());
-    // Two slots apart, not 90 002 apart.
-    assert_eq!(demux.streams()[0].duration_ts, Some(3));
+    // Two slots apart, not 90 002 apart, plus this 25fps stream's own
+    // 24-tick trailing extension past the last real frame (slot 2 -> 26) —
+    // neither packet states a `duration`, so it comes from the declared
+    // frame rate (see `a_duration_less_video_stream_still_gets_its_trailing_frame_backfilled`).
+    assert_eq!(demux.streams()[0].duration_ts, Some(26));
 }
 
 /// The gap between two video timestamps is attacker-controlled input, not a
@@ -417,6 +432,48 @@ fn an_implausible_grid_gap_is_rejected_not_looped_forever() {
     second.pts = vaco_core::Timestamp::new(i64::MAX);
     second.dts = second.pts;
     assert!(mux.write_packet(&second).is_err());
+}
+
+/// `backfill_trailing_video_slots` extends the grid past the last real frame
+/// by that frame's own duration, but was gated on `last_video_duration_ticks
+/// > 0` — a field only ever set *from* `packet.duration`. A source whose
+/// packets never state a duration at all (the ordinary `-c copy` case out of
+/// a demuxer that reports none) left that field at its `0` default forever,
+/// so the backfill silently never ran and `strh.dwLength` came up one whole
+/// frame short.
+#[test]
+fn a_duration_less_video_stream_still_gets_its_trailing_frame_backfilled() {
+    let sink = MemorySink::new();
+    let shared: SharedBytes = sink.shared();
+    let mut mux = vaco_mux_avi::AviMuxer::new(Box::new(sink), &FormatOptions::default()).unwrap();
+    // 25 fps => 600 / 25 = 24 grid ticks per frame.
+    let v = mux.add_stream(&video_params(64, 48, (25, 1))).unwrap();
+    mux.write_header().unwrap();
+
+    // Two frames, one grid tick apart in real time (pts 0 and 24), with no
+    // packet ever stating a `duration` — exactly the shape
+    // `last_video_duration_ticks` could not recover from before this fix.
+    let mut first = packet(v, &[0xAA], true);
+    first.pts = vaco_core::Timestamp::new(0);
+    first.dts = first.pts;
+    mux.write_packet(&first).unwrap();
+
+    let mut second = packet(v, &[0xBB], false);
+    second.pts = vaco_core::Timestamp::new(24);
+    second.dts = second.pts;
+    mux.write_packet(&second).unwrap();
+    mux.write_trailer().unwrap();
+
+    let demux = open(shared.snapshot());
+    // Slot 24 (the second frame) plus its own 24-tick duration = 48, not 25
+    // (one past the second frame's own slot with no trailing extension at
+    // all).
+    assert_eq!(
+        demux.streams()[0].duration_ts,
+        Some(48),
+        "the trailing frame's own duration must be backfilled from the \
+         declared 25fps frame rate even when no packet states one"
+    );
 }
 
 #[test]
