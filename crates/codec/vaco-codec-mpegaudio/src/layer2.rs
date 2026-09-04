@@ -156,7 +156,9 @@ pub(crate) fn decode(
                     .unwrap_or(0.0);
                 if grouped {
                     let combined = r.get(bits);
-                    let triple = layer2_dequant_grouped(combined, nlevels);
+                    let triple = layer2_dequant_grouped(combined, nlevels).ok_or(
+                        Error::InvalidData("mpegaudio: reserved Layer II grouped codeword"),
+                    )?;
                     for (offset, &v) in triple.iter().enumerate() {
                         if let Some(slot) = sample
                             .get_mut(base + offset)

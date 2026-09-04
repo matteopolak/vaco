@@ -154,6 +154,26 @@ fn frame_sample_count(frame: &Frame) -> u32 {
 mod duration_tests {
     use super::*;
 
+    fn append_bits(bits: &mut Vec<bool>, value: u32, width: u32) {
+        for bit in (0..width).rev() {
+            bits.push((value & (1 << bit)) != 0);
+        }
+    }
+
+    fn append_zero_bits(bits: &mut Vec<bool>, count: usize) {
+        bits.extend(std::iter::repeat_n(false, count));
+    }
+
+    fn pack_bits(bits: &[bool]) -> Vec<u8> {
+        bits.chunks(8)
+            .map(|chunk| {
+                chunk.iter().enumerate().fold(0u8, |byte, (offset, bit)| {
+                    byte | (u8::from(*bit) << (7 - offset))
+                })
+            })
+            .collect()
+    }
+
     /// Same bit layout `layer1`'s own tests use to build a synthetic
     /// MPEG-1 Layer I header: an all-zero-allocation body decodes to
     /// silence, but it is still a real, structurally valid frame this
@@ -185,6 +205,29 @@ mod duration_tests {
         dec.send_packet(Some(&packet)).expect("send_packet");
         let frame = dec.receive_frame().expect("receive_frame");
         assert_ne!(frame.duration, Duration::ZERO);
+    }
+
+    #[test]
+    fn send_packet_rejects_a_reserved_layer2_grouped_codeword() {
+        let mut body_bits = Vec::new();
+        append_bits(&mut body_bits, 1, 4); // subband 0: 3-level grouped class
+        append_zero_bits(&mut body_bits, 84); // remaining Table B.2a allocations
+        append_bits(&mut body_bits, 2, 2); // one scalefactor for subband 0
+        append_bits(&mut body_bits, 0, 6);
+        append_bits(&mut body_bits, 27, 5); // 3^3 is the first reserved grouped value
+        append_zero_bits(&mut body_bits, 55);
+
+        let header = header_word(0b11, 0b10, 4, 0, 0b11); // MPEG-1 Layer II, 64 kb/s mono
+        let mut bytes = header.to_be_bytes().to_vec();
+        bytes.extend(pack_bits(&body_bits));
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, &bytes).expect("packet");
+        let mut dec = MpegAudioDecoder::new(Limits::permissive());
+
+        assert!(matches!(
+            dec.send_packet(Some(&packet)),
+            Err(Error::InvalidData(_))
+        ));
     }
 }
 

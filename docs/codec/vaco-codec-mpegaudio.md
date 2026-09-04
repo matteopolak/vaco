@@ -55,7 +55,7 @@ before scoring (`mp3_compare.py`, scratch script, not committed).
 | Layer | Fixtures tested | Result |
 |---|---|---|
 | I | none (no MP1 encoder available: neither `ffmpeg`'s build here nor any other tool on this machine can produce one) | Not verified against real audio. Header parsing, bit allocation (4-bit index, direct `nb = bal+1` dequant) and the synthesis filterbank are exercised by unit tests only (`layer1.rs`, `synthesis.rs`), plus the shared filterbank's correctness is established transitively by Layer II's real-file results below (same `Synthesis::synth_block` code, unmodified). |
-| II | 32000/44100/48000 Hz × mono/stereo: original 6 fixtures plus a 30-case bitrate-boundary sweep | **Matches closely.** The post-fix sweep covered both modes and every MPEG-1 allocation-table boundary: 32/48, 56/64/80, and 96 kbit/s per channel (with 48 kHz's 96 kbit/s still in B.2a). All 30 outputs had exact sample counts, 0.999999993 minimum correlation, 0.871 maximum RMS error, and maximum sample difference 2 versus `ffmpeg 9.0.1`. Not bit-exact (float vs. fixed-point, plus the four MPEG-1 bit-allocation tables are used but the low-sample-rate table and intensity stereo are not — see gaps below), but the remaining scatter is rounding, not a structural mistake. |
+| II | 32000/44100/48000 Hz × mono/stereo: original 6 fixtures plus a one-off, same-session 30-case bitrate-boundary sweep | **Matches closely.** The sweep covered both modes and every MPEG-1 allocation-table boundary: 32/48, 56/64/80, and 96 kbit/s per channel (with 48 kHz's 96 kbit/s still in B.2a). All 30 outputs had exact sample counts, 0.999999993 minimum correlation, 0.871 maximum RMS error, and maximum sample difference 2 versus `ffmpeg 9.0.1`. This measurement is not yet a committed reproducible harness. Not bit-exact (float vs. fixed-point, plus the four MPEG-1 bit-allocation tables are used but the low-sample-rate table and intensity stereo are not — see gaps below), but the remaining scatter is rounding, not a structural mistake. |
 | III | 12 fixtures: mono/stereo/independent-stereo/VBR, 32000/44100/48000 Hz, 64k–320k and VBR q2, 220 Hz–15000 Hz tones and a two-tone mix | **Matches closely, one real bug found and fixed this pass.** Correlation 0.975–0.997 across every fixture, RMS 113–441. Before this pass a 440 Hz tone reached only ~0.94–0.98 correlation depending on rate/bitrate and a 6000 Hz tone or a 64 kbit/s 32000 Hz fixture reached ~0.01–0.18 (near-zero — the two failed for genuinely different reasons, exactly as a "positive-but-poor" vs. "near-zero" correlation split predicts: block-type distribution across every fixture was checked first and ruled out short blocks as the cause, since it's ~1.3% short in every fixture regardless of content or bitrate). Root cause: `region0_end`/`region1_end` (the Huffman-table-selection boundaries within a granule's "big values") were computed as `sfb[region_count[0]]`/`sfb[region_count[0]+region_count[1]]` directly, when `region_count[0]`/`[1]` each hold *one less than* the actual scalefactor-band count for that region (`Vaco-Spec-Ref: iso-11172-3`, corroborated independently against a technical description of the format) — the correct index is `sfb[region_count[0]+1]`/`sfb[region_count[0]+region_count[1]+2]`. A signal concentrated in the first couple of bands (a low tone) barely reaches the misclassified boundary; content occupying more of the spectrum (a higher tone, or anything past the first two regions) gets Huffman-decoded there with the wrong table, which looks like plausible garbage rather than a bitstream desync. Still not bit-exact, and short blocks / intensity stereo remain unimplemented (see "Known gaps") — closed on correlation, not on completeness. **A second real bug was found and fixed in a later pass**: the MPEG-1 long scalefactor-band tables were one boundary short, silently zeroing every spectral line above 16.03 kHz at 44100/48000 Hz — see the dedicated section below for the measurement. |
 
 ### The MPEG-1 long scalefactor-band tables were one boundary short
@@ -167,7 +167,8 @@ work; per-issue disposition is in the "Known gaps" section below.
   than 0. The committed 64 kbit/s mono oracle test failed at correlation
   0.922275 and RMS 4879.2 before the correction; it now runs normally, and
   the 30-case sweep above checks every related bitrate/sample-rate/mode
-  boundary against `ffmpeg`.
+  boundary against `ffmpeg`. Grouped codewords at or above `nlevels³` are
+  reserved and now return `InvalidData` rather than aliasing a valid triplet.
 - **Layer III Huffman-region boundary off-by-one.** See the accuracy table
   above — this is the fix that took real-file correlation from ~0.01–0.98
   (content-dependent) to a consistent 0.975–0.997.
@@ -227,7 +228,7 @@ work; per-issue disposition is in the "Known gaps" section below.
 - `bitalloc.rs`: the shared "invert the MSB, read as fractional two's
   complement" dequantisation (`code_to_fraction`), Layer I's closed-form
   `C = 2^nb/(2^nb-1)`, `D = 2^(1-nb)`, Layer II's table-driven `(C, D)`
-  lookup and its bit-allocation table selection
+  lookup, reserved-grouped-codeword rejection, and bit-allocation table selection
   ((sample rate, bitrate/channel) → one of `LAYER2_TABLE_A/B/C/D/LSF`).
 - `layer1.rs`: 4-bit allocation index directly, no table; 12 granules ×
   32 subbands.

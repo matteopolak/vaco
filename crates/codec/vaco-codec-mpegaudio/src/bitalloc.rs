@@ -61,7 +61,10 @@ pub(crate) fn layer2_dequant_ungrouped(code: u32, bits: u32, nlevels: u32) -> f3
     clippy::integer_division,
     reason = "degrouping a base-`nlevels` codeword is defined by repeated div/mod, not a rounding shortcut"
 )]
-pub(crate) fn layer2_dequant_grouped(mut combined: u32, nlevels: u32) -> [f32; 3] {
+pub(crate) fn layer2_dequant_grouped(mut combined: u32, nlevels: u32) -> Option<[f32; 3]> {
+    if combined >= nlevels.checked_pow(3)? {
+        return None;
+    }
     let (c, d) = quant_constants(nlevels);
     let sample_bits = nlevels.ilog2() + 1;
     let mut digits = [0u32; 3];
@@ -74,7 +77,7 @@ pub(crate) fn layer2_dequant_grouped(mut combined: u32, nlevels: u32) -> [f32; 3
         let frac = code_to_fraction(v, sample_bits);
         *slot = c * (frac + d);
     }
-    out
+    Some(out)
 }
 
 fn quant_constants(nlevels: u32) -> (f32, f32) {
@@ -150,15 +153,34 @@ mod tests {
     }
 
     #[test]
-    fn grouped_three_level_codes_keep_the_middle_value_at_zero() {
-        let decoded = layer2_dequant_grouped(21, 3);
-        let expected = [-2.0 / 3.0, 0.0, 2.0 / 3.0];
-        assert!(
-            decoded
-                .iter()
-                .zip(expected)
-                .all(|(&actual, expected)| (actual - expected).abs() < f32::EPSILON),
-            "decoded={decoded:?}"
-        );
+    fn grouped_codes_cover_each_class_endpoint_and_midpoint() {
+        let cases = [
+            (3, 0, [-2.0 / 3.0; 3]),
+            (3, 13, [0.0; 3]),
+            (3, 26, [2.0 / 3.0; 3]),
+            (5, 0, [-0.8; 3]),
+            (5, 62, [0.0; 3]),
+            (5, 124, [0.8; 3]),
+            (9, 0, [-8.0 / 9.0; 3]),
+            (9, 364, [0.0; 3]),
+            (9, 728, [8.0 / 9.0; 3]),
+        ];
+        for (nlevels, codeword, expected) in cases {
+            let decoded = layer2_dequant_grouped(codeword, nlevels);
+            assert!(decoded.is_some(), "nlevels={nlevels}, codeword={codeword}");
+            assert!(decoded.is_some_and(|actual| {
+                actual
+                    .iter()
+                    .zip(expected)
+                    .all(|(&actual, expected)| (actual - expected).abs() < f32::EPSILON)
+            }));
+        }
+    }
+
+    #[test]
+    fn grouped_reserved_codewords_are_rejected() {
+        for (nlevels, reserved) in [(3, 27), (5, 125), (9, 729)] {
+            assert!(layer2_dequant_grouped(reserved, nlevels).is_none());
+        }
     }
 }
