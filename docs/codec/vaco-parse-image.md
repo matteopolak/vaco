@@ -13,9 +13,9 @@ reader. A demuxer never names this crate: it asks `ParserProvider` for a
 parser by `CodecId`, and `vaco-registry`'s generated `PARSERS` table answers
 (D14.1).
 
-Nineteen formats: PNG, JPEG, GIF, BMP, TIFF and WebP read their own headers
-here; PCX, TGA, SGI, XWD, XBM, QOI, PBM, PGM, PPM, PAM, PFM, PHM and JPEG-LS
-forward to their decoder crate's reader through `src/still.rs`.
+Twenty formats: PNG, JPEG, GIF, BMP, TIFF and WebP read their own headers
+here; PCX, TGA, SGI, XWD, XBM, QOI, PBM, PGM, PPM, PAM, PFM, PHM, JPEG-LS
+and EXR forward to their decoder crate's reader through `src/still.rs`.
 
 ## Why it matters more than "probe output"
 
@@ -72,10 +72,12 @@ completely broken FFV1 stayed green in this tree.
   `UnexpectedEof` on some of the reference encoder's own output (12x8 and 20x8
   decode; 16x8 and 32x8 do not), so `still::JpegLs` is covered by a parameter
   assertion and no pixel assertion.
-* **EXR** has no parser here and `exr_pipe` carries no `CodecId`, so an EXR
-  stream reaches the CLI undescribed. `vaco-codec-exr` also decodes to
-  `rgbaf32le` where the reference reports `gbrpf32le`, so a parser would have
-  to state one or the other and diverge from something.
+* **EXR pixel layout.** EXR now reaches the CLI with `CodecId::Exr`, and the
+  parser delegates to the decoder crate's header reader so negotiation sees
+  the real dimensions and `rgbaf32le` output. The reference reports
+  `gbrpf32le`; the parser deliberately describes the layout this decoder
+  actually emits. Reachability and negotiation are tested, but a numerical
+  channel-value comparison against the reference remains to be added.
 
 ## Configuration
 
@@ -85,5 +87,6 @@ None. The crate-wide `parse-image` registry feature gates every component.
 
 `vaco-bitstream`, `vaco-codec-core`, `vaco-core`, `vaco-limits`,
 `vaco-packet`, `vaco-pixfmt`, `vaco-color`; `vaco-parse-vpx` for WebP's lossy
-sub-format; and `vaco-codec-image-simple`, `-pnm`, `-qoi`, `-jpegls` for the
-header readers `still.rs` forwards to. No external runtime dependencies.
+sub-format; and `vaco-codec-image-simple`, `-pnm`, `-qoi`, `-jpegls`, `-exr`
+for the header readers `still.rs` forwards to. No external runtime
+dependencies.
