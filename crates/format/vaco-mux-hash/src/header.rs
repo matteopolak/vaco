@@ -47,10 +47,8 @@ use vaco_io::IoWriter;
 ///
 /// The reference prints `#software: Lavf<version>` — a *version*, not a bare
 /// name — and only **without** `-bitexact` (measured, `ffmpeg 8.1`: the line
-/// is absent entirely under `-bitexact`). That is the same family as the
-/// `*_long_name` suppression `AGENT-CONSTRAINTS.md` already records for
-/// `ffprobe`: a value that encodes a library build is exactly what
-/// `-bitexact` exists to strip from otherwise-reproducible output. This
+/// is absent entirely under `-bitexact`). A value that encodes a library
+/// build is exactly what `-bitexact` strips from reproducible output. This
 /// crate cannot and should not print `ffmpeg`'s own version string — claiming
 /// to be a build of the reference would make the line actively misleading —
 /// so it prints its own version instead, in the same `name<version>` shape,
@@ -72,15 +70,13 @@ pub const SOFTWARE_LINE: &str = concat!("vaco", env!("CARGO_PKG_VERSION"));
 /// `Packet::duration` (stored in real microseconds, not stream ticks) back
 /// into ticks for display, so it needs a definite answer, not a shrug.
 ///
-/// [`vaco_format_core::Muxer::add_stream_with`] (gap 9,
-/// `planning/INTERFACE-GAPS.md`) closes that channel: [`StreamHeader::new`]
-/// prefers whatever [`vaco_format_core::StreamSpec::time_base`] supplies —
+/// [`vaco_format_core::Muxer::add_stream_with`] supplies that channel:
+/// [`StreamHeader::new`] prefers
+/// [`vaco_format_core::StreamSpec::time_base`] when provided —
 /// for stream copy, `vaco_format_core::mux::MuxBuilder::add_stream` passes
 /// the *input* stream's own base, which is what the reference actually
-/// prints (measured: `1/12800` for one MP4, `1/90000` for one MPEG-TS —
-/// neither derivable from `CodecParameters`, see `CONFORMANCE-FINDINGS.md`
-/// 32) — and falls back to this function only when no spec was supplied at
-/// all (a bare `add_stream`, or one whose `spec.time_base` is `None`).
+/// prints (measured: `1/12800` for one MP4 and `1/90000` for one MPEG-TS).
+/// This function is only the fallback when no usable spec is supplied.
 ///
 /// The reference's own rawvideo/PCM *encoders* set `time_base` to `1/fps` or
 /// `1/sample_rate` before any muxer sees the stream, which is what that
@@ -162,8 +158,7 @@ impl StreamHeader {
 /// caller — [`crate::frame`] knows the active hash scheme and this function
 /// does not), then `#software` (present only when `bitexact` is `false`:
 /// the reference suppresses it under `-bitexact` because the value carries a
-/// library version — see [`SOFTWARE_LINE`]'s doc comment and
-/// `CONFORMANCE-FINDINGS.md` 32), then the per-stream `#tb`/… block.
+/// library version — see [`SOFTWARE_LINE`]), then the per-stream `#tb` block.
 ///
 /// # Errors
 ///

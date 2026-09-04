@@ -1,67 +1,28 @@
 //! `framecrc`, `framemd5` and `framehash`: one header block, then one line per
 //! packet.
 //!
-//! # Issue #634 / `CONFORMANCE-FINDINGS.md` 32: `#tb`, `#software`, `#extradata`
+//! # Header
 //!
-//! Three header divergences closed together because they share one cause —
-//! this file had no channel to anything beyond [`CodecParameters`]:
+//! `#tb` uses [`Muxer::add_stream_with`]'s supplied stream time base and falls
+//! back to [`crate::header::resolve_time_base`] only when none is supplied.
+//! `#software` carries a version and is suppressed under `-bitexact`.
+//! `#extradata` appears once per stream that has it, hashed with the active
+//! frame checksum scheme; [`FrameHashMuxer::extradata_lines`] records the two
+//! measured layouts.
 //!
-//! - `#tb` now follows [`Muxer::add_stream_with`]'s supplied
-//!   [`vaco_format_core::StreamSpec::time_base`] (gap 9) — the input
-//!   stream's own base for stream copy — falling back to
-//!   [`crate::header::resolve_time_base`]'s `1/fps` guess only when none was
-//!   supplied.
-//! - `#software` is now suppressed under `-bitexact`
-//!   ([`Muxer::set_bitexact`]), matching the reference (which suppresses it
-//!   for the same reason: the value is a library version), and prints a
-//!   version rather than a bare name when it does appear.
-//! - `#extradata <n>: <len>, 0x<hash>` (`framecrc`) / `#extradata <n>,
-//!   <len>, <hash>` (`framemd5`/`framehash`) is now printed, one line per
-//!   stream with any `extradata` — see [`FrameHashMuxer::extradata_lines`]
-//!   for the two measured formats and why the hash is *not* a fixed
-//!   CRC-32 despite `framecrc`'s looking like one.
-//!
-//! # The two header shapes, measured on ffmpeg 8.1
-//!
-//! `framecrc` (`-f framecrc`) prints only the plain `#software`/`#tb`/…
-//! block ([`crate::header::write_common_header`] with no extra lines) and no
-//! column header. `framemd5`/`framehash` (`-f framemd5`, `-f framehash -hash
-//! <algo>`) print three lines *before* `#software` —
-//! `#format: frame checksums`, `#version: 2`, `#hash: <ALGO>` — and one
-//! column-header comment line after the per-stream block:
+//! Measured on ffmpeg 8.1, `framecrc` prints the common header only.
+//! `framemd5` and `framehash` prepend `#format`, `#version`, and `#hash`, then
+//! append this exact column header:
 //!
 //! ```text
 //! #stream#, dts,        pts, duration,     size, hash
 //! ```
 //!
-//! (that exact spacing — captured with `od -c`, not retyped from a terminal).
-//!
-//! # The data line
-//!
 //! `framecrc`: `<stream>,<dts>,<pts>,<duration>,<size>, 0x<crc>[, F=0x<flags>]`
-//! with the four numeric fields right-justified to widths 11, 11, 9, 9 (they
-//! widen, never truncate, past that — printf `%Nd` behaviour, which is also
-//! Rust's default integer padding). `framemd5`/`framehash` use the same four
-//! fields and widths but print `, <hex>` in place of `, 0x<crc>` — plain hex,
-//! no `0x`, no trailing `F=` field ever (measured: a `test.mp4` with real
-//! B-frames shows `F=0x0` on every non-key packet under `framecrc` and *no*
-//! such field anywhere under `framemd5` on the identical file).
-//!
-//! A missing `pts` (`AV_NOPTS_VALUE` in the reference) prints as the literal
-//! decimal `-9223372036854775808` — `i64::MIN` — **not** the string `N/A`
-//! that `ffprobe` would show for the same packet. This is the one place this
-//! crate deliberately does not use [`vaco_core::Timestamp`]'s own `Display`,
-//! which prints `N/A`; see `docs/format/vaco-mux-hash.md`.
-//!
-//! # The `F=` flag field is `framecrc`-only, and conditional
-//!
-//! Measured: a keyframe packet (`PacketFlags::KEY` and nothing else) never
-//! gets an `F=` field; every other packet does, `F=0x0` included when no flag
-//! bit at all is set. The rule that fits every packet observed is "omit `F=`
-//! exactly when `flags == KEY`", not "omit when flags are the default for this
-//! packet's keyframe-ness" — the second reading is indistinguishable from the
-//! first until you check an all-keyframe stream (MJPEG, AAC), which never
-//! shows `F=` on any line even though every packet's `flags == KEY`.
+//! right-justifies its numeric fields to widths 11, 11, 9, and 9.
+//! `framemd5`/`framehash` use plain hex and never print `F=`. Missing PTS is
+//! the decimal `i64::MIN`, not `N/A`. For `framecrc`, `F=` is omitted exactly
+//! when `flags == KEY`; otherwise it appears even when the bits are zero.
 
 use core::fmt::Write as _;
 
@@ -96,7 +57,7 @@ pub struct FrameHashMuxer {
     out: IoWriter,
     mode: FrameMode,
     streams: Vec<StreamHeader>,
-    /// [`Muxer::set_bitexact`] — gates `#software` (fault 2, issue #634).
+    /// [`Muxer::set_bitexact`] gates the version-bearing `#software` line.
     bitexact: bool,
 }
 
@@ -138,8 +99,8 @@ impl FrameHashMuxer {
     }
 
     /// Shared body of [`Muxer::add_stream`]/[`Muxer::add_stream_with`]:
-    /// declare a stream, `time_base` overriding [`StreamHeader`]'s own
-    /// `CodecParameters`-only guess when supplied and usable (gap 9).
+    /// declare a stream, with a supplied usable `time_base` overriding
+    /// [`StreamHeader`]'s `CodecParameters`-only fallback.
     fn push_stream(
         &mut self,
         params: &CodecParameters,
@@ -482,18 +443,16 @@ mod tests {
             .collect()
     }
 
-    /// Issue #634 / gap 9: [`Muxer::add_stream_with`] hands down a real time
-    /// base and this crate uses it — the `CodecParameters`-only guess
-    /// ([`crate::header::resolve_time_base`]'s `1/frame_rate`) is only the
-    /// fallback for `add_stream` now, not the only answer.
+    /// [`Muxer::add_stream_with`] supplies the real stream time base; the
+    /// `CodecParameters`-only `1/frame_rate` guess from
+    /// [`crate::header::resolve_time_base`] is only the `add_stream` fallback.
     #[test]
     fn add_stream_with_overrides_the_frame_rate_guess() {
         let sink = MemorySink::new();
         let shared = sink.shared();
         let mut m = FrameHashMuxer::framecrc(Box::new(sink)).unwrap();
         // `video_params()` carries `frame_rate = 5/1`, which would resolve to
-        // `1/5` — measured on real `long.mp4` (`CONFORMANCE-FINDINGS.md` 32),
-        // the reference instead keeps the input's own base, `1/12800` here.
+        // `1/5`; the measured reference keeps the input's `1/12800` base.
         let spec = StreamSpec {
             time_base: Some(Rational::new(1, 12_800)),
             ..StreamSpec::default()
@@ -579,10 +538,8 @@ mod tests {
         assert!(!dumped.contains("#extradata"), "{dumped}");
     }
 
-    /// Fault 2 (issue #634): `#software` is suppressed under `-bitexact`
-    /// ([`Muxer::set_bitexact`]) — the reference's own rule, inverted in this
-    /// crate before the fix — and otherwise prints a version, not a bare
-    /// name (`vaco0.1.0`-shaped, never the literal `vaco`).
+    /// `#software` is suppressed under `-bitexact` and otherwise prints a
+    /// version-bearing name rather than the bare `vaco` label.
     #[test]
     fn software_line_is_suppressed_only_under_bitexact() {
         let sink = MemorySink::new();

@@ -1,30 +1,19 @@
 //! Utility checksum muxers: `crc`, `md5`, `hash`, `framecrc`, `framemd5`,
 //! `framehash`, `streamhash` — the differential-testing oracle the rest of
-//! this project's format and codec crates are checked against (FM-20, issue
-//! #572).
+//! this project's format and codec crates are checked against.
 //!
-//! # Why exact text layout matters more here than anywhere else
+//! # Exact text is part of the contract
 //!
-//! Every other container in this workspace is checked against the reference
-//! by running both through *these* muxers and diffing the text. If a field is
-//! reordered, a separator is off by one space, or a checksum uses the wrong
-//! variant, every downstream comparison becomes noise rather than signal —
-//! there is no way to tell "the demuxer under test is wrong" from "the oracle
-//! is wrong" once that happens. Every line format and algorithm choice in
-//! this crate was therefore captured by probing the installed reference
-//! (ffmpeg 8.1, `LC_ALL=C`) rather than recalled, and the probe transcripts
-//! are kept in each module's docs and in `docs/format/vaco-mux-hash.md` so the
-//! next person does not have to re-derive them.
-//!
-//! # The one non-obvious finding
+//! Differential tests compare these muxers' text directly with the reference.
+//! Field order, padding, separators, and checksum variants therefore come
+//! from `ffmpeg 8.1` probes under `LC_ALL=C`; transcripts are retained in the
+//! module documentation and `docs/format/vaco-mux-hash.md`.
 //!
 //! `crc` and `framecrc` are **not** CRC-32 despite the name — they compute
 //! Adler-32 (RFC 1950), and `framecrc`'s per-packet variant seeds it
 //! `(a=0, b=0)` rather than the standard `(a=1, b=0)`. Real CRC-32 is what
 //! `-hash crc32` selects on the generic `hash`/`framehash`/`streamhash`
-//! family. See `crate::algo`'s module docs for how this was established (two
-//! probes disagreeing by a small, structured amount, not a coin flip) and
-//! `docs/format/vaco-mux-hash.md` for the full transcript.
+//! family. See `crate::algo` and the format documentation for the probe.
 //!
 //! # Layout
 //!
@@ -41,29 +30,17 @@
 //! audio) that in the reference comes from the `AVFrame` itself, not the
 //! stream. [`vaco_format_core::Muxer::write_packet`] receives a
 //! [`vaco_packet::Packet`] and the [`vaco_codec_core::CodecParameters`] frozen
-//! at [`vaco_format_core::Muxer::add_stream`] — no per-call frame geometry,
-//! and no guarantee a packet's bytes are a stride-free, tightly packed plane
-//! the way an `AVFrame` filled a raw encoder's packet in the reference. Doing
-//! this properly needs either a frame-level hook this trait does not have, or
-//! a documented assumption ("payloads are always tightly packed, geometry
-//! never changes mid-stream") this crate is not positioned to make on the
-//! trait's behalf. Per the brief for issue #572: implement the seven packet
-//! muxers, report the gap precisely, leave `uncodedframecrc` open. It is not
-//! registered in `vaco-component.toml` and there is no module for it.
+//! at [`vaco_format_core::Muxer::add_stream`], with no per-call geometry or
+//! tightly-packed-plane guarantee. Implementing `uncodedframecrc` requires a
+//! frame-level muxer hook; it remains unregistered rather than hashing an
+//! unverified packet-layout assumption.
 
 #![forbid(unsafe_code)]
 
 /// The checksum algorithms, re-exported from their single owner.
 ///
-/// This used to be a module in this crate. `vaco-probe` had a near-identical
-/// one — same fifteen names, same labels, its own enum spelled `HashAlg` — and
-/// both crates declared `crc`, `md-5`, `sha1` and `sha2` directly, which
-/// `cargo xtask owner-gate` reported as a D11 violation. The merge is
-/// `crates/core/vaco-hash`.
-///
-/// It matters more than duplication usually does: here the checksum **is** the
-/// printed output, and `framemd5` is one of the differential harness's own
-/// oracles (D6). An oracle with a private copy of the algorithm is not one.
+/// Checksum bytes are the observable output and a differential oracle, so the
+/// muxers and probe must share this implementation rather than duplicate it.
 pub use vaco_hash as algo;
 pub mod frame;
 pub mod header;
