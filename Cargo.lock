@@ -4913,6 +4913,7 @@ dependencies = [
  "proptest",
  "vaco-bitstream",
  "vaco-codec-core",
+ "vaco-codec-exr",
  "vaco-codec-image-simple",
  "vaco-codec-jpegls",
  "vaco-codec-pnm",
