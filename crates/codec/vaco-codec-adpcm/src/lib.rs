@@ -1,4 +1,4 @@
-//! The standardised ADPCM subset (issue #280, C-02): G.722, G.726/le, MS,
+//! The standardised ADPCM subset (C-02): G.722, G.726/le, MS,
 //! SWF, IMA-WAV and IMA-QT — 7 codec identities. **5 of 7 are real,
 //! registered decoders and encoders; G.722 and G.726/G.726le are not** — see
 //! "What is not covered" below before assuming otherwise.
@@ -55,7 +55,7 @@
 //! own encoder, but neither can decode a real G.722/G.726 bitstream from
 //! another encoder, and would hand back plausible-looking wrong samples with
 //! no error if wired up as if they worked. The repository owner's ruling
-//! (`planning/AGENT-CONSTRAINTS.md`, "byte-exactness is a check, not the
+//! (the repository's byte-exactness ruling, "byte-exactness is a check, not the
 //! bar") permits small, unstructured deviation from a reference implementation
 //! — not a different transform answering to the same codec name — so
 //! `AdpcmG722Decoder`/`AdpcmG722Encoder`/`AdpcmG726Decoder`/`AdpcmG726Encoder`

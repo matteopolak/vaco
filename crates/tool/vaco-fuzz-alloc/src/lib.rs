@@ -1,5 +1,5 @@
 //! TEST-ONLY. A counting `GlobalAlloc` that aborts above a ceiling. Never in
-//! a shipped artifact. See `planning/13-correctness.md` §2.2.3.
+//! a shipped artifact. The allocation ceiling follows the correctness policy.
 //!
 //! # What it is
 //!
@@ -26,10 +26,10 @@
 //!
 //! `GlobalAlloc` cannot be implemented in safe Rust — the trait itself is
 //! `unsafe fn alloc`/`unsafe fn dealloc`. D2
-//! (`planning/00-decisions.md`) forbids `unsafe` everywhere except a closed
+//! (the workspace safety policy) forbids `unsafe` everywhere except a closed
 //! allowlist (`vaco-hwaccel-*`, `vaco-io-mmap`, `vaco-play-backend-*`,
 //! optional `-sys` wrapper crates), and this crate is not on it — the D2
-//! text predates this crate. Work package QA-05 (`#176`) names exactly this
+//! text predates this crate. Work package QA-05 names exactly this
 //! as part of its own scope: "`vaco-fuzz-alloc` (counting `GlobalAlloc`, D2
 //! allowlist entry + the CI assertion it never reaches a shipped artifact)".
 //!
@@ -43,11 +43,11 @@
 //! (`xtask/src/unsafe_audit.rs`) currently recognises exactly one exemption —
 //! the literal prefix `vaco-hw-` — so it will flag this crate until that
 //! list also names `vaco-fuzz-alloc`. `xtask` was under another agent's
-//! active ownership (`agent:codec-path`, `#652`, per `planning/ASSIGNMENTS.md`)
+//! active ownership (per the active ownership register)
 //! for the whole of this session, and this batch's own constraints are
 //! explicit: "If you need a change in a crate you do not own, stop and
 //! report — do not work around it." So that one-line addition is reported
-//! here rather than made. Plan 13 §2.2.3's other half — a
+//! here rather than made. The policy's other half — a
 //! `tools/unsafe-allowlist.toml` entry recording the review — is new
 //! infrastructure this crate does not invent unilaterally either; the
 //! module-doc table below stands in for it until that file exists.
@@ -56,14 +56,14 @@
 //! |---|---|
 //! | `name` | `vaco-fuzz-alloc` |
 //! | `reason` | `GlobalAlloc` cannot be implemented in safe Rust; needed as the fuzzing allocation backstop |
-//! | `justification_doc` | `planning/13-correctness.md` §2.2.3 |
+//! | `justification_doc` | workspace allocation-safety policy |
 //! | `in_default_build` | `false` (also recorded in this crate's own `Cargo.toml` under `[package.metadata.vaco]`) |
 //! | `test_only` | `true` — CI should assert it appears in no binary's dependency graph, per the same metadata key |
 //!
 //! # Configuration
 //!
-//! [`Counting::set_ceiling`] — the default is 256 MiB, matching plan
-//! 13 §2.2.3's own number.
+//! [`Counting::set_ceiling`] — the default is 256 MiB, matching the
+//! project's allocation-safety budget.
 
 #![allow(
     unsafe_code,

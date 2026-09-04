@@ -1,4 +1,4 @@
-//! SCTP (RFC 4960) — issue #561, PR-12a.
+//! SCTP (RFC 4960) — framing and association state.
 //!
 //! # What this package is
 //!
@@ -30,12 +30,12 @@
 //!
 //! # No reference peer, and no 24-hour fuzz run, from here
 //!
-//! #561's own Acceptance Criterion ("a session round-trips against a
+//! The acceptance criterion ("a session round-trips against a
 //! reference peer and the fuzz target is green for 24 h") names two
 //! things unreachable from this environment: no SCTP-speaking reference
 //! peer is installed here, and this batch has no 24-hour window to run a
 //! fuzz target in. Both are named rather than silently skipped, per the
-//! owner's own ruling on replacement bars (`planning/AGENT-CONSTRAINTS.md`,
+//! owner's ruling on replacement bars (the repository policy,
 //! `705779d`): demonstrably-not-broken, structurally-correct,
 //! deviation-named is the bar, not byte-exact agreement with an
 //! unavailable oracle. The substitute actually built:

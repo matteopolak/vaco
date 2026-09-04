@@ -14,8 +14,8 @@
 //! # Count
 //!
 //! `ffmpeg -demuxers | awk '{print $2}' | grep -E '_pipe$'` on ffmpeg 8.1
-//! lists **37**, not the 42 `planning/20-roadmap.md` names — a roadmap count
-//! that was wrong, per `planning/AGENT-CONSTRAINTS.md`'s own warning that
+//! lists **37**, not the 42 names in the original roadmap — a roadmap count
+//! that was wrong, consistent with the repository's warning that
 //! this has happened before. `image2pipe` and `yuv4mpegpipe` also match
 //! `*pipe` but are not per-codec splitters (`yuv4mpegpipe` lives in
 //! `vaco-demux-raw`, matching the reference's own module boundary; this

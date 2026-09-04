@@ -1,4 +1,4 @@
-//! SRTP (RFC 3711) — issue #551, PR-08 (`rtp`, `srtp`, `prompeg`).
+//! SRTP (RFC 3711) — RTP payload encryption and authentication.
 //!
 //! # What this package is
 //!

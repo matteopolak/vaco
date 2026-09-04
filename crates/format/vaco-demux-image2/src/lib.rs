@@ -1,4 +1,4 @@
-//! `image2` and its 37 `*_pipe` splitters: FM-35a (issue #592).
+//! `image2` and its 37 `*_pipe` splitters: filesystem patterns and byte framing.
 //!
 //! # What this crate is
 //!
@@ -17,7 +17,7 @@
 //!
 //! Not registered: `image2pipe` (a 38th name in `ffmpeg -demuxers`, but a
 //! content-sniffing dispatcher over the 37 splitters rather than a splitter
-//! of its own — issue #592 asks for "all 42 [sic; actually 37] pipe
+//! of its own — this crate's scope covers "all 42 [sic; actually 37] pipe
 //! splitters," not this dispatcher, and it was left out rather than rushed;
 //! see the crate's issue-closing comment for the honest accounting) and
 //! `yuv4mpegpipe` (registered by `vaco-demux-raw`, matching the reference's

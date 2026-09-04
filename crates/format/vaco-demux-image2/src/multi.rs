@@ -71,7 +71,7 @@ pub(crate) fn time_base_for(framerate: Rational) -> Rational {
 /// `-pattern_type 0` (the historical `glob_sequence`) is rejected outright
 /// (`Unknown value '0' for pattern_type option`, measured), so a build of
 /// this vintage genuinely has no way to select it by name or number.
-/// `planning/20-roadmap.md`'s `sequence, glob, glob_sequence, none` list is
+/// The roadmap's `sequence, glob, glob_sequence, none` list is
 /// wrong for this reference build; [`PatternType::Auto`] reproduces the
 /// unnamed default's *observed* behaviour (try sequence-style number
 /// matching; a pattern with no `%d` falls through to a literal file) rather

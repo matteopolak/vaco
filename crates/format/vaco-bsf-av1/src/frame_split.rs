@@ -6,7 +6,7 @@
 //! `ffmpeg -h bsf=av1_frame_split` says only `Supported codecs: av1` — no
 //! options, no prose. Its actual grouping rule was measured against
 //! `ffmpeg 8.1` on an SVT-AV1-encoded `testsrc` clip read back through the
-//! `obu` demuxer (`planning/CONFORMANCE-FINDINGS.md`-style black-box probing,
+//! `obu` demuxer (black-box probing recorded in the conformance notes,
 //! D17), by dumping every OBU's type and size per packet with a `framecrc`
 //! comparison before and after the filter:
 //!
@@ -59,7 +59,7 @@
 //! dual-codec, unlike everything else in `-bsfs` with `av1` in its supported
 //! list. It does not fit `vaco-bsf-av1` (AV1-only) or `vaco-bsf-h2645`
 //! (H.264/HEVC's *_mp4toannexb shape) cleanly, Dolby Vision RPU parsing is
-//! substantial on its own, and issue #351 names only `vaco-bsf-av1`/`-vpx` as
+//! substantial on its own, and the current scope names only `vaco-bsf-av1`/`-vpx` as
 //! its crates — so this is a deliberate omission, not an oversight, left for
 //! a `vaco-bsf-dovi` (or similar) crate of its own.
 //!
