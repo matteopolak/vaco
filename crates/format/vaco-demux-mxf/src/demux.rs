@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 
 use vaco_core::MediaType;
-use vaco_core::{Duration, Error, Rational, Result, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, Rational, Result, Rounding, Timestamp};
 use vaco_format_core::seek::{
     IndexEntry as FcIndexEntry, IndexFlags, PacketIndex, SeekFlags, SeekTarget,
 };
@@ -67,7 +67,7 @@ pub struct MxfDemuxer {
     packet_budget: Budget,
     streams: Vec<Stream>,
     format_metadata: Vec<(String, String)>,
-    duration: Option<Duration>,
+    duration_exact: Option<ExactDuration>,
     bindings: Vec<TrackBinding>,
     /// Per-stream seek index, built from a measured file's Index Table
     /// Segment(s) — see `index` and `essence` module docs for how a
@@ -177,16 +177,16 @@ impl MxfDemuxer {
             .map(|e| build_indices(&bindings, &index_segments, e, &duration_of))
             .unwrap_or_default();
 
-        let duration = bindings
+        let duration_exact = bindings
             .iter()
             .zip(streams.iter())
             .filter_map(|(b, s)| {
                 let seg = index_segments
                     .iter()
                     .find(|seg| seg.index_edit_rate == Some(b.edit_rate))?;
-                Timestamp::new(duration_of(seg)).to_duration(s.time_base)
+                ExactDuration::from_ticks(duration_of(seg), s.time_base)
             })
-            .max_by_key(|d: &Duration| d.as_micros());
+            .max();
 
         Ok(Self {
             io,
@@ -194,7 +194,7 @@ impl MxfDemuxer {
             packet_budget: Budget::new(Limits::permissive()),
             streams,
             format_metadata,
-            duration,
+            duration_exact,
             bindings,
             indices,
             eof: false,
@@ -670,7 +670,12 @@ impl Demuxer for MxfDemuxer {
     }
 
     fn duration(&self) -> Option<Duration> {
-        self.duration
+        self.duration_exact?
+            .to_duration(Rounding::NearestAwayFromZero)
+    }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.duration_exact
     }
 
     fn read_packet(&mut self) -> Result<Packet> {
@@ -821,6 +826,25 @@ mod tests {
             s.params.codec_id,
             Some(vaco_codec_core::CodecId::Mpeg2video)
         );
+    }
+
+    #[test]
+    fn ntsc_op1a_fixture_preserves_one_edit_unit_at_the_native_rate() {
+        let mut demux = open_fixture(include_bytes!("../tests/fixtures/op1a_ntsc_one_frame.mxf"));
+
+        // Black-box reference: ffprobe 9.0.1 reports time_base=1001/30000,
+        // duration_ts=1, duration=0.033367, and nb_read_packets=1. The legacy
+        // view remains rounded to microseconds, while the exact view must
+        // retain the MXF edit unit and edit rate without that conversion.
+        assert_eq!(demux.duration(), Some(Duration::from_micros(33_367)));
+        assert_eq!(
+            demux
+                .duration_exact()
+                .map(vaco_core::ExactDuration::as_ratio),
+            Some((1001, 30_000))
+        );
+        assert_eq!(demux.read_packet().unwrap().pts, Timestamp::ZERO);
+        assert!(matches!(demux.read_packet(), Err(Error::Eof)));
     }
 
     #[test]
