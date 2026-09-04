@@ -46,8 +46,22 @@ def rust_name(package: str) -> str:
     return package.replace("-", "_")
 
 
-def public_name(package: str) -> str:
+def public_name(package: str, group: str = "") -> str:
     """Make a collision-resistant module name beneath a curated namespace."""
+    prefixes = {
+        "codec": (("vaco-codec-", ""), ("vaco-parse-", "parse_")),
+        "filter": (("vaco-filter-", ""),),
+        "format": (
+            ("vaco-format-", ""),
+            ("vaco-demux-", "demux_"),
+            ("vaco-mux-", "mux_"),
+            ("vaco-bsf-", "bsf_"),
+        ),
+        "io": (("vaco-protocol-", ""),),
+    }
+    for prefix, replacement in prefixes.get(group, ()):
+        if package.startswith(prefix):
+            return f"{replacement}{package.removeprefix(prefix).replace('-', '_')}"
     return package.removeprefix("vaco-").replace("-", "_")
 
 
@@ -124,10 +138,11 @@ def render(
     for package in internal:
         if package["name"] == "vaco":
             continue
+        group = namespace(package, descriptor)
         is_default = package["name"] in default_names
         features = [] if is_default else sorted(feature_for_package.get(package["name"], []))
         if not is_default and not features:
-            features = [f"api-{public_name(package['name'])}"]
+            features = [f"api-{public_name(package['name'], group)}"]
         for feature in features:
             entries = [f"dep:{package['name']}"]
             if feature in registry_features:
@@ -148,16 +163,23 @@ def render(
                 library.append(f'#[cfg(any({", ".join(f"feature = {json.dumps(feature)}" for feature in features)}))]')
             library.append(f"pub use {rust_name(package['name'])} as {root_export};")
         else:
-            groups.setdefault(namespace(package, descriptor), []).append((package, features))
+            groups.setdefault(group, []).append((package, features))
     manifest.extend(["", "[dependencies]", *dependencies, ""])
     manifest.append("[lints]")
     manifest.append("workspace = true")
     for group, packages in sorted(groups.items()):
         library.extend(["", f"pub mod {group} {{"])
+        alias_counts: dict[str, int] = {}
+        for package, _ in packages:
+            alias = public_name(package["name"], group)
+            alias_counts[alias] = alias_counts.get(alias, 0) + 1
         for package, features in packages:
             if features:
                 library.append(f'    #[cfg(any({", ".join(f"feature = {json.dumps(feature)}" for feature in features)}))]')
-            library.append(f"    pub use {rust_name(package['name'])} as {public_name(package['name'])};")
+            alias = public_name(package["name"], group)
+            if alias_counts[alias] > 1:
+                alias = package["name"].removeprefix("vaco-").replace("-", "_")
+            library.append(f"    pub use {rust_name(package['name'])} as {alias};")
         library.append("}")
     readme = """# vaco
 

@@ -33,7 +33,7 @@ editing them.
    synchronized workspace release version and path dependency requirements, but
    never grant it a crates.io token or publish command.
 6. Add a manually dispatched publish workflow. It checks the full paginated
-   open-issue list, checks exact crates.io name availability/ownership for the
+open-issue list while allowing only the release-tracking issue #665, checks exact crates.io name availability/ownership for the
    generated closure, runs `scripts/audit-publish-closure.py`, packages the
    closure, installs the staged `vaco` package to a private root, confirms the
    two expected executable names, and publishes in dependency order only after

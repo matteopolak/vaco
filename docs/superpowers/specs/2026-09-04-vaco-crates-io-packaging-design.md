@@ -79,7 +79,8 @@ work, not hard-coded release policy: the generated migration plan and
 
 Release-plz creates synchronized version PRs and release PRs for the published
 closure. It must not publish on merge. A distinct manually dispatched publish
-workflow first fetches GitHub's open issue list with pagination and separately
+workflow first fetches GitHub's open issue list with pagination (excluding its
+own release-tracking issue #665) and separately
 calls `scripts/check-crates-io-names.py` for every exact closure package name.
 The name preflight fails closed on a conflicting owner, an unexpected registry
 response, or a transport failure; it happens before any `cargo publish`, so a

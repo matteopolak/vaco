@@ -20,7 +20,8 @@ release versions, allowing the same manifest to work in the workspace and on
 crates.io.
 
 Release-plz prepares version PRs only. Publishing is a manual workflow that
-refuses to run while GitHub has an open issue, checks every exact closure name
+refuses to run while GitHub has an open issue other than release-tracking issue
+`#665`, checks every exact closure name
 against crates.io and its expected owner, then audits and packages the closure
 before publishing it in dependency order.
 
