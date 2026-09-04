@@ -525,7 +525,7 @@ filter-text = ["dep:vaco-expr", "dep:vaco-filter-graph", "dep:vaco-filter-text"]
 filter-v360 = ["dep:vaco-filter-graph", "dep:vaco-filter-v360"]
 filter-video-composite = ["dep:vaco-expr", "dep:vaco-filter-graph", "dep:vaco-filter-video-composite"]
 filter-video-format = ["dep:vaco-color", "dep:vaco-core", "dep:vaco-filter-graph", "dep:vaco-filter-video-format", "dep:vaco-pixfmt"]
-filter-video-geometry = ["dep:vaco-expr", "dep:vaco-filter-graph", "dep:vaco-filter-video-geometry"]
+filter-video-geometry = ["dep:vaco-color", "dep:vaco-core", "dep:vaco-expr", "dep:vaco-filter-core", "dep:vaco-filter-graph", "dep:vaco-filter-video-geometry", "dep:vaco-frame", "dep:vaco-pixfmt"]
 filter-video-source = ["dep:vaco-filter-graph", "dep:vaco-filter-video-source", "dep:vaco-opts"]
 format-ac3 = ["dep:vaco-format-ac3"]
 format-apetag = ["dep:vaco-format-apetag", "dep:vaco-limits"]
@@ -1358,6 +1358,14 @@ test = false
 doc = false
 bench = false
 required-features = ["filter-video-format"]
+
+[[bin]]
+name = "filter_video_geometry_frames"
+path = "fuzz_targets/filter_video_geometry_frames.rs"
+test = false
+doc = false
+bench = false
+required-features = ["filter-video-geometry"]
 
 [[bin]]
 name = "filter_video_geometry_options"

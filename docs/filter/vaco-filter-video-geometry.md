@@ -117,6 +117,29 @@ doc for the measurement; the summary is in the table below.
   in `geom.rs`; every filter here depends on `plane_unit_bytes` reading the
   format table correctly.
 
+### Frame-data fuzzing
+
+`fuzz/fuzz_targets/filter_video_geometry_frames.rs` is the frame-data
+companion to the crate's option-parser fuzzer. It chooses one of all six
+registered filters and only renders valid, bounded options, so the actual
+work is always reached instead of being dominated by parser rejections. It
+then runs the public filtergraph path: `parse_and_build`, endpoint attachment,
+format negotiation, scheduler activation, and a Gray8 frame whose pixels come
+from the fuzz input.
+
+The target caps input dimensions at 64×64 and `pad` growth at 32 pixels per
+axis. It drives the graph with a 128-step bound, requiring normal EOF, no
+`vaco-filter-core` contract violations, exactly one output, Gray8's negotiated
+format, each operation's expected output shape and timestamp, and addressable
+rows of the negotiated width. It also checks the backing storage for the input
+and output luma planes: every declared row must fit, and the aligned stride and
+total allocation must stay within the derived 96×96 bound. Scale cases rotate
+through the four implemented kernels (`neighbor`, `bilinear`, `bicubic`, and
+`lanczos`). Every case runs again in a fresh graph and the complete visible
+output plus row geometry must be byte-identical. When a campaign finds a bug,
+move its minimized input to `fuzz/seeds/filter_video_geometry_frames/`; do not
+leave it in `fuzz/artifacts/`.
+
 ## Configuration
 
 Options are declared with `#[derive(vaco_opts::Options)]` and parsed via
