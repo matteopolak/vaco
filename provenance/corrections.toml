@@ -38,3 +38,9 @@ commit = "4892996dc29741b88c2e5341eecf60fc2caafff2"
 cited  = "none -- measured directly against real ffmpeg 9.0.1: ffprobe -show_packets skip_samples/discard_padding on libmp3lame files at 16/22.05/24/32/44.1/48 kHz and on -c:a aac MP4 files at 22.05/32/44.1/48 kHz mono and stereo, and full-decode PCM sample counts for AAC, MP3, FLAC and ALAC against the same builds. ISO/IEC 14496-12 §8.6.6 (elst) and §8.6.1.2 (stts) name the boxes read; the trim values are the reference's, measured."
 id     = "ffprobe-gapless-trim-probe"
 reason = "The author described the measurement longhand behind a literal `none`, following other commits in the log that do the same, instead of naming a registered id. The measurement is real and is now declared as ffprobe-gapless-trim-probe in provenance/sources.toml, added in the same change; only the citation's form was wrong. HEAD had already moved on before provenance-check was run, so the commit could not be amended."
+
+[[correction]]
+commit = "b10a9d27d49ed4e9e87249cc83f0a4fda57a0fc7"
+cited  = "rfc3533 (Ogg granule position semantics)"
+id     = "rfc-3533"
+reason = "The author wrote the RFC number as `rfc3533` where every registered RFC id in provenance/sources.toml is hyphenated (`rfc-3533`, `rfc-8794`, `rfc-6716`, ...). RFC 3533 -- The Ogg Encapsulation Format Version 0 -- is declared at provenance/sources.toml:150 and is exactly the right document for a fix to Ogg's granule position, which is the field this commit unfroze. Only the citation's spelling was wrong, as in the 3f927f9d and 9a35fcc5 rows above. Recorded here rather than by rewriting history, which this shared tree cannot do."
