@@ -158,6 +158,19 @@ once, bounded by the caller's `Limits` — see "How to change it" for why.
   found (an OBU temporal unit, a JPEG/JP2 marker pair, a `BBCD` magic),
   regardless of extension — measured directly on `obu` (scored 51 with a
   `.bin` extension).
+* `Obu`'s structural check (`obu::looks_like_obu_stream`) requires a *second*
+  OBU to parse immediately after the first, unless the first already
+  consumes the whole probe buffer. One syntactically-plausible header byte
+  was not rare enough on its own: an `ffmpeg -f mpegts ... out.m2ts` fixture
+  (real H.264/AAC content, BD-style M2TS striping) has `0x0e` immediately
+  before its first `0x47` transport-stream sync byte, and `0x0e` passes
+  every single-header check with a self-consistent 73-byte span — so `av1`
+  scored 51 against `mpegts`'s own correctly-earned 50, the same collision
+  shape as the `StartCode3`/`avs2` finding above, found by
+  `tests/probe_confusion.rs`'s differential sweep against `ffprobe` rather
+  than by inspection. The degenerate-but-legitimate case of a stream that is
+  *only* one OBU (a bare temporal delimiter and nothing else) is still
+  accepted, since it exhausts the buffer.
 * `StartCode3` formats also score **51**, but only when the byte(s)
   immediately after the first `00 00 01` — the start-code *identifier* —
   match what that specific format requires. This is the finding-3 fix: the
