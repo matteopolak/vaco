@@ -114,10 +114,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+        include:
+          - os: ubuntu-latest
+            sccache_version: v0.17.0
+          - os: macos-latest
+            sccache_version: v0.17.0
+          - os: windows-latest
+            # sccache v0.17.0 expands Rust argfiles before spawning rustc;
+            # on Windows this can exceed CreateProcess's command-line limit
+            # (mozilla/sccache#2787). v0.16.0 preserves the argfile.
+            sccache_version: v0.16.0
     steps:
       - uses: actions/checkout@v4
       - uses: mozilla-actions/sccache-action@v0.0.9
+        with:
+          version: ${{ matrix.sccache_version }}
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked --no-fail-fast
 

@@ -7,6 +7,19 @@ builds, the SBOM, the third-party attribution file, checksums, and the
 signing/notarization runbook. Closes QA-10 (#182), the last child of epic
 #9.
 
+### CI compiler cache
+
+The GitHub Actions build matrix keeps sccache enabled on every platform, but
+pins the Windows leg to sccache `v0.16.0`. sccache `v0.17.0` expands Rust
+argument files before spawning `rustc`; the resulting command can exceed
+Windows' process command-line limit and fail with `failed to spawn` before any
+test runs. This exact failure is tracked upstream in
+[`mozilla/sccache#2787`](https://github.com/mozilla/sccache/issues/2787), and
+the issue's follow-up reports that `v0.16.0` fixes it while retaining the
+wrapper. Linux and macOS remain on `v0.17.0`; the test and clippy commands are
+unchanged. Update the Windows pin when an upstream fix for the argfile path is
+available.
+
 ## How it works
 
 ### Attribution (the actual legal obligation)
