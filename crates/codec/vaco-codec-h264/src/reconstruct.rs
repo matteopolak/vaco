@@ -50,6 +50,7 @@
 //!   exercises it, and [`reconstruct_picture_luma`] returns luma only.
 //! - **`I_PCM`.** Refused with an error rather than attempted -- not
 //!   exercised by any fixture on hand.
+//!
 //! Clause 6.4.8's "a macroblock in a different slice is not available"
 //! rule *is* implemented, for pictures coded as any number of slices:
 //! [`PictureBuffer::decoded_4x4`]/`chroma_decoded` record which slice wrote

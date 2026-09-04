@@ -729,7 +729,48 @@ fn check_scope(sps: &Sps, pps: &Pps, header: &SliceHeader) -> Result<()> {
             "vaco-codec-h264: SI slices are out of scope for #419",
         ));
     }
+    if !flat_scaling(sps.scaling_lists.as_deref()) || !flat_scaling(pps.scaling_lists.as_deref()) {
+        return Err(Error::Unsupported(
+            "vaco-codec-h264: non-flat scaling lists are out of scope -- \
+             crate::dequant implements flat scaling only",
+        ));
+    }
     Ok(())
+}
+
+/// Whether a parameter set's scaling lists leave clause 8.5.9's scaling
+/// matrices flat (every entry 16), which is what [`crate::dequant`] assumes.
+///
+/// `None` -- no `seq_scaling_matrix_present_flag`/`pic_scaling_matrix_present_flag`
+/// -- is flat by clause 7.4.2.1.1, and is the ordinary case.
+///
+/// When the flag *is* set, an individual `scaling_list_present_flag[i]` of 0
+/// does **not** mean flat: Table 7-2's fall-back rule A substitutes
+/// `Default_4x4_Intra`/`Default_4x4_Inter`/`Default_8x8_*`, which are not
+/// flat, or the previous list. `read_scaling_lists` leaves an absent list
+/// zeroed rather than applying that rule, so an absent list cannot be
+/// distinguished from a flat one here -- anything but an explicitly coded,
+/// explicitly flat set is refused rather than silently dequantised with the
+/// wrong matrix. Measured on `HCAFR1_HHI` (High profile, every
+/// `scaling_list_present_flag` 0 under a set matrix flag, so every list is a
+/// non-flat default): decoding it as flat diverged from the JVT suite's own
+/// reference decode on 98.0% of the first frame's bytes and every frame
+/// after it.
+fn flat_scaling(lists: Option<&vaco_parse_h264::ScalingLists>) -> bool {
+    let Some(lists) = lists else { return true };
+    (0..lists.count as usize).all(|i| {
+        let present = lists.present.get(i).copied().unwrap_or(false);
+        let defaulted = lists.use_default.get(i).copied().unwrap_or(false);
+        let flat = if i < 6 {
+            lists.list_4x4.get(i).is_some_and(|l| l.iter().all(|&v| v == 16))
+        } else {
+            lists
+                .list_8x8
+                .get(i - 6)
+                .is_some_and(|l| l.iter().all(|&v| v == 16))
+        };
+        present && !defaulted && flat
+    })
 }
 
 /// Drive one CAVLC slice's `slice_data()` (clause 7.3.4) from a reader
