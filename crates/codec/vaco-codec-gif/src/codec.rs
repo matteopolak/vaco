@@ -116,7 +116,8 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Vec<Frame>> {
         // malformed, not merely incomplete, and must not become a blank
         // frame.
         match decoder.fill_buffer(&mut pixels) {
-            Ok(_) | Err(gif::DecodingError::UnexpectedEof) => {}
+            Ok(true) | Err(gif::DecodingError::UnexpectedEof) => {}
+            Ok(false) => return Err(Error::InvalidData("gif: incomplete pixel data")),
             Err(_) => return Err(Error::InvalidData("gif: pixel data")),
         }
 

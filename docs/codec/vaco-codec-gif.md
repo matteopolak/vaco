@@ -20,10 +20,11 @@ descriptor and graphic-control header parse, Vaco counts the frame when pixel
 decompression reports the exact `gif::DecodingError::UnexpectedEof` seen in
 the truncated reference fixture, matching `ffprobe -count_frames`; any
 successfully decoded prefix is composited and the undecoded remainder stays
-initialized. Invalid LZW codes and every other decompression failure instead
-return malformed-input errors, so corruption cannot become a zero-filled
-frame. Per-frame declared dimensions are checked against the allocation budget
-before the decode buffer is allocated.
+initialized. Invalid LZW codes, a valid end code reached before the declared
+frame is full, and every other decompression failure instead return
+malformed-input errors, so corruption cannot become a zero-filled frame.
+Per-frame declared dimensions are checked against the allocation budget before
+the decode buffer is allocated.
 
 ## How to change it
 
@@ -51,5 +52,7 @@ ffmpeg's BGRA decode. A second real fixture is truncated during the third
 frame's LZW payload; it proves the two intact frames remain byte-exact and that
 the header-complete third frame is counted. A header-complete one-pixel input
 with an invalid LZW code proves this exception does not swallow malformed data.
+Another header-complete fixture ends its valid LZW stream after only one of two
+declared pixels and proves that a short, terminated image is rejected too.
 The EOF exception is a pragmatic reference-compatibility rule: GIF89a does not
 specify recovery from a truncated data-sub-block sequence.

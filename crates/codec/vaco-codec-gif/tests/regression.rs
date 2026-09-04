@@ -75,6 +75,14 @@ const INVALID_LZW_GIF: &[u8] = &[
     0, 0, 1, 0, 1, 0, 0, 2, 1, 7, 0, 0x3b,
 ];
 
+// The LZW stream is valid and reaches its end code after producing only one
+// pixel, although the image descriptor declares a two-pixel row. The decoder
+// reports this as `Ok(false)`, distinct from both success and an input EOF.
+const SHORT_LZW_GIF: &[u8] = &[
+    b'G', b'I', b'F', b'8', b'9', b'a', 2, 0, 1, 0, 0x80, 0, 0, 0, 0, 0, 255, 255, 255, 0x2c, 0, 0,
+    0, 0, 2, 0, 1, 0, 0, 2, 2, 0x44, 0x01, 0, 0x3b,
+];
+
 #[test]
 fn decodes_a_testsrc_frame_byte_exact_to_ffmpegs_own_bgra_decode() {
     let mut budget = Budget::new(Limits::permissive());
@@ -149,5 +157,16 @@ fn invalid_lzw_data_after_a_complete_frame_header_is_rejected() {
     assert!(
         matches!(err, Error::InvalidData(_)),
         "invalid LZW data must surface as malformed input, got {err:?}"
+    );
+}
+
+#[test]
+fn early_lzw_end_code_before_the_declared_frame_is_full_is_rejected() {
+    let mut budget = Budget::new(Limits::permissive());
+    let err = vaco_codec_gif::decode(SHORT_LZW_GIF, &mut budget)
+        .expect_err("a short but terminated LZW stream must not become a partial frame");
+    assert!(
+        matches!(err, Error::InvalidData(_)),
+        "short LZW data must surface as malformed input, got {err:?}"
     );
 }
