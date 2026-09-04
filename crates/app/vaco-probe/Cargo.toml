@@ -22,10 +22,6 @@ authors.workspace = true
 name = "vaco_probe"
 path = "src/lib.rs"
 
-[[bin]]
-name = "vaco-probe"
-path = "src/main.rs"
-
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-opts = { path = "../../core/vaco-opts" }

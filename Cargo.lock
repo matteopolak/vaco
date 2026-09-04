@@ -10,9 +10,9 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "aes"
-version = "0.9.2"
+version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8eb277bec05f56a0e0591f155a484cbd0f4f07ff2905051a48c72f004f7ed58"
+checksum = "35f0f96ce78e38c3dc6d8948aa8163d06385be74000f3c7a95bf1eef35d3ea32"
 dependencies = [
  "cipher",
  "cpubits",
@@ -172,7 +172,7 @@ checksum = "fc0e56a716f1e132ff6bf4bdac1c944a3fcdc1cae65f70a4a2a1ac3b401d2d1f"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -995,9 +995,9 @@ dependencies = [
 
 [[package]]
 name = "log"
-version = "0.4.33"
+version = "0.4.34"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
+checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "md-5"
@@ -1755,9 +1755,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.15.2"
+version = "1.16.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+checksum = "b9be42f50aa861c555654aa3a37f52f4b1074bacf4e48fe0ef7fa584e80f1f0f"
 
 [[package]]
 name = "socket2"
@@ -1805,9 +1805,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.3"
+version = "3.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "53e9bae58849f64dfa4f5d5ae372c8341f7305f82a3868709269343628b659a3"
+checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1863,7 +1863,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.3",
+ "syn 3.0.4",
 ]
 
 [[package]]
@@ -2047,6 +2047,233 @@ name = "utf8-zero"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8c0a043c9540bae7c578c88f91dda8bd82e59ae27c21baca69c8b191aaf5a6e"
+
+[[package]]
+name = "vaco"
+version = "0.1.0"
+dependencies = [
+ "vaco-ass",
+ "vaco-bitstream",
+ "vaco-bsf-audio",
+ "vaco-bsf-av1",
+ "vaco-bsf-core",
+ "vaco-bsf-generic",
+ "vaco-bsf-h2645",
+ "vaco-bsf-legacy",
+ "vaco-bsf-subtitle",
+ "vaco-bsf-vpx",
+ "vaco-chlayout",
+ "vaco-cli",
+ "vaco-cli-core",
+ "vaco-codec-aac",
+ "vaco-codec-ac3",
+ "vaco-codec-adpcm",
+ "vaco-codec-alac",
+ "vaco-codec-cabac",
+ "vaco-codec-cbs",
+ "vaco-codec-core",
+ "vaco-codec-dsp-deblock",
+ "vaco-codec-dsp-idct",
+ "vaco-codec-dsp-intrapred",
+ "vaco-codec-dsp-lpc",
+ "vaco-codec-dsp-me",
+ "vaco-codec-dsp-mecmp",
+ "vaco-codec-dsp-ratecontrol",
+ "vaco-codec-dsp-sinewin",
+ "vaco-codec-exec",
+ "vaco-codec-exr",
+ "vaco-codec-ffv1",
+ "vaco-codec-flac",
+ "vaco-codec-gif",
+ "vaco-codec-golomb",
+ "vaco-codec-h263",
+ "vaco-codec-h264",
+ "vaco-codec-hevc",
+ "vaco-codec-image-simple",
+ "vaco-codec-jpeg",
+ "vaco-codec-jpegls",
+ "vaco-codec-jpegxl",
+ "vaco-codec-mpeg12",
+ "vaco-codec-mpegaudio",
+ "vaco-codec-msac",
+ "vaco-codec-null",
+ "vaco-codec-pcm",
+ "vaco-codec-png",
+ "vaco-codec-pnm",
+ "vaco-codec-prores",
+ "vaco-codec-qoi",
+ "vaco-codec-rawvideo",
+ "vaco-codec-simple-audio",
+ "vaco-codec-subtitle-bitmap",
+ "vaco-codec-subtitle-cc",
+ "vaco-codec-subtitle-teletext",
+ "vaco-codec-subtitle-text",
+ "vaco-codec-theora",
+ "vaco-codec-tiff",
+ "vaco-codec-vc1",
+ "vaco-codec-vlc",
+ "vaco-codec-vorbis",
+ "vaco-codec-vp8",
+ "vaco-codec-vp9",
+ "vaco-codec-webp",
+ "vaco-color",
+ "vaco-core",
+ "vaco-crypto",
+ "vaco-demux-asf",
+ "vaco-demux-avi",
+ "vaco-demux-dash",
+ "vaco-demux-flv",
+ "vaco-demux-hls",
+ "vaco-demux-image2",
+ "vaco-demux-matroska",
+ "vaco-demux-mp4",
+ "vaco-demux-mpegaudio",
+ "vaco-demux-mpegps",
+ "vaco-demux-mpegts",
+ "vaco-demux-mxf",
+ "vaco-demux-ogg",
+ "vaco-demux-raw",
+ "vaco-demux-rtsp",
+ "vaco-expr",
+ "vaco-filter-aanalysis",
+ "vaco-filter-adsp",
+ "vaco-filter-adynamics",
+ "vaco-filter-aeffects",
+ "vaco-filter-aeq",
+ "vaco-filter-analysis",
+ "vaco-filter-artistic",
+ "vaco-filter-asource",
+ "vaco-filter-audio",
+ "vaco-filter-blur",
+ "vaco-filter-color",
+ "vaco-filter-convolve",
+ "vaco-filter-core",
+ "vaco-filter-deinterlace",
+ "vaco-filter-denoise",
+ "vaco-filter-draw",
+ "vaco-filter-draw-vf",
+ "vaco-filter-framesync",
+ "vaco-filter-geometry",
+ "vaco-filter-graph",
+ "vaco-filter-key",
+ "vaco-filter-lut",
+ "vaco-filter-mm",
+ "vaco-filter-motion",
+ "vaco-filter-overlay",
+ "vaco-filter-palette",
+ "vaco-filter-scope",
+ "vaco-filter-source",
+ "vaco-filter-stack",
+ "vaco-filter-subtitle",
+ "vaco-filter-temporal",
+ "vaco-filter-text",
+ "vaco-filter-v360",
+ "vaco-filter-vdsp",
+ "vaco-filter-video-composite",
+ "vaco-filter-video-format",
+ "vaco-filter-video-geometry",
+ "vaco-filter-video-source",
+ "vaco-format-ac3",
+ "vaco-format-adaptive",
+ "vaco-format-asf",
+ "vaco-format-audio-simple",
+ "vaco-format-core",
+ "vaco-format-dv",
+ "vaco-format-ebml",
+ "vaco-format-gxf",
+ "vaco-format-id3",
+ "vaco-format-imf",
+ "vaco-format-isom",
+ "vaco-format-metadata",
+ "vaco-format-misc",
+ "vaco-format-misc-audio",
+ "vaco-format-mpegaudio",
+ "vaco-format-mpegts-tables",
+ "vaco-format-mpjpeg",
+ "vaco-format-nalu",
+ "vaco-format-nut",
+ "vaco-format-riff",
+ "vaco-format-rtp",
+ "vaco-format-spdif",
+ "vaco-format-subtitle",
+ "vaco-format-subtitle-bitmap",
+ "vaco-format-swf",
+ "vaco-format-vorbiscomment",
+ "vaco-frame",
+ "vaco-hash",
+ "vaco-io",
+ "vaco-limits",
+ "vaco-mux-asf",
+ "vaco-mux-avi",
+ "vaco-mux-dash",
+ "vaco-mux-flv",
+ "vaco-mux-hash",
+ "vaco-mux-hds",
+ "vaco-mux-hls",
+ "vaco-mux-image2",
+ "vaco-mux-matroska",
+ "vaco-mux-mp4",
+ "vaco-mux-mpegaudio",
+ "vaco-mux-mpegps",
+ "vaco-mux-mpegts",
+ "vaco-mux-mxf",
+ "vaco-mux-ogg",
+ "vaco-mux-raw",
+ "vaco-mux-rtp",
+ "vaco-mux-smoothstreaming",
+ "vaco-mux-stream",
+ "vaco-mux-utility",
+ "vaco-mux-whip",
+ "vaco-opts",
+ "vaco-opts-derive",
+ "vaco-packet",
+ "vaco-parse-aac",
+ "vaco-parse-audio-misc",
+ "vaco-parse-av1",
+ "vaco-parse-ffv1",
+ "vaco-parse-h264",
+ "vaco-parse-hevc",
+ "vaco-parse-image",
+ "vaco-parse-mpegaudio",
+ "vaco-parse-mpegvideo",
+ "vaco-parse-opus",
+ "vaco-parse-prores",
+ "vaco-parse-vpx",
+ "vaco-pixfmt",
+ "vaco-pool",
+ "vaco-probe",
+ "vaco-protocol-core",
+ "vaco-protocol-crypto",
+ "vaco-protocol-dial",
+ "vaco-protocol-dtls",
+ "vaco-protocol-file",
+ "vaco-protocol-ftp",
+ "vaco-protocol-gopher",
+ "vaco-protocol-http",
+ "vaco-protocol-httpproxy",
+ "vaco-protocol-ice",
+ "vaco-protocol-icecast",
+ "vaco-protocol-ipfs",
+ "vaco-protocol-local",
+ "vaco-protocol-shared",
+ "vaco-protocol-socket",
+ "vaco-protocol-srtp",
+ "vaco-protocol-tls",
+ "vaco-protocol-wrap",
+ "vaco-registry",
+ "vaco-resample",
+ "vaco-rtp",
+ "vaco-sampfmt",
+ "vaco-scale",
+ "vaco-sched",
+ "vaco-simd",
+ "vaco-subtitle-bitmap",
+ "vaco-subtitle-text",
+ "vaco-textformat",
+ "vaco-time",
+ "vaco-tx",
+ "vaco-vecheck-macros",
+]
 
 [[package]]
 name = "vaco-ass"
@@ -2638,6 +2865,7 @@ dependencies = [
  "vaco-core",
  "vaco-format-nalu",
  "vaco-frame",
+ "vaco-hash",
  "vaco-limits",
  "vaco-packet",
  "vaco-parse-hevc",
@@ -5636,6 +5864,7 @@ dependencies = [
  "fearless_simd",
  "proptest",
  "vaco-core",
+ "vaco-vecheck-macros",
 ]
 
 [[package]]
@@ -5691,6 +5920,19 @@ dependencies = [
  "proptest",
  "vaco-core",
  "vaco-simd",
+]
+
+[[package]]
+name = "vaco-vecheck"
+version = "0.1.0"
+
+[[package]]
+name = "vaco-vecheck-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
 ]
 
 [[package]]
