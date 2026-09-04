@@ -196,6 +196,18 @@ struct TrackState {
     width: u32,
     height: u32,
     sample_rate: u32,
+    /// Fallback duration (ms) for a packet that states none —
+    /// `Packet::duration == 0` is the ordinary `-c copy` case out of a
+    /// demuxer that reports none, and the FLV tag timestamp this track
+    /// writes is `running_ms` *before* adding the current packet's own
+    /// duration, so a zero here does not just leave one tag's timestamp
+    /// wrong: it freezes every later tag on this track at whatever
+    /// timestamp `running_ms` last reached, since it never advances again.
+    /// Seeded from the declared frame rate for video (audio has no
+    /// samples-per-frame field to derive one from —
+    /// [`vaco_codec_core::AudioParameters`] carries none), then kept
+    /// current from the last packet that *did* state a duration.
+    duration_hint_ms: u64,
 }
 
 struct Level {
@@ -414,6 +426,20 @@ impl Muxer for HdsMuxer {
                 let sequence_header = params.extradata.clone().ok_or(Error::InvalidData(
                     "hds needs avcC extradata for an H.264 stream",
                 ))?;
+                // Not an invented constant: derived from this stream's own
+                // declared frame rate, `0` only when the container states no
+                // frame rate either.
+                let duration_hint_ms = if video.frame_rate.num > 0 && video.frame_rate.den > 0 {
+                    match (
+                        u64::try_from(video.frame_rate.num),
+                        u64::try_from(video.frame_rate.den),
+                    ) {
+                        (Ok(num), Ok(den)) if num > 0 => 1000u64.saturating_mul(den) / num,
+                        _ => 0,
+                    }
+                } else {
+                    0
+                };
                 (
                     TrackKind::Video,
                     TrackState {
@@ -424,6 +450,7 @@ impl Muxer for HdsMuxer {
                         width: video.width,
                         height: video.height,
                         sample_rate: 0,
+                        duration_hint_ms,
                     },
                 )
             }
@@ -444,6 +471,10 @@ impl Muxer for HdsMuxer {
                         width: 0,
                         height: 0,
                         sample_rate: audio.sample_rate,
+                        // No samples-per-frame field to derive one from; the
+                        // fallback starts at 0 and picks up the first packet
+                        // that states a real duration.
+                        duration_hint_ms: 0,
                     },
                 )
             }
@@ -493,7 +524,7 @@ impl Muxer for HdsMuxer {
         }
         let (level_idx, is_video) = self.locate(packet.stream_index)?;
         let threshold = self.opts.min_frag_duration_ms();
-        let dur_ms = micros_to_ms(packet.duration.as_micros());
+        let stated_ms = micros_to_ms(packet.duration.as_micros());
 
         if is_video {
             let should_flush = {
@@ -530,6 +561,15 @@ impl Muxer for HdsMuxer {
                 packet.payload(),
             );
             flv::write_tag(&mut level.pending_tags, flv::TAG_TYPE_VIDEO, ts, &payload);
+            // See `TrackState::duration_hint_ms`'s own doc: a zero here does
+            // not merely mislabel this tag, it freezes every later one too,
+            // since `running_ms` never advances again.
+            let dur_ms = if stated_ms == 0 {
+                video.duration_hint_ms
+            } else {
+                video.duration_hint_ms = stated_ms;
+                stated_ms
+            };
             video.running_ms = video.running_ms.saturating_add(dur_ms);
         } else {
             let Some(audio) = level.audio.as_mut() else {
@@ -538,6 +578,12 @@ impl Muxer for HdsMuxer {
             let ts = u32::try_from(audio.running_ms).unwrap_or(u32::MAX);
             let payload = flv::audio_payload(flv::AAC_PACKET_TYPE_RAW, packet.payload());
             flv::write_tag(&mut level.pending_tags, flv::TAG_TYPE_AUDIO, ts, &payload);
+            let dur_ms = if stated_ms == 0 {
+                audio.duration_hint_ms
+            } else {
+                audio.duration_hint_ms = stated_ms;
+                stated_ms
+            };
             audio.running_ms = audio.running_ms.saturating_add(dur_ms);
 
             let audio_only_should_flush = level.video.is_none()

@@ -227,3 +227,64 @@ fn two_quality_levels_pair_video_then_audio_into_separate_streams() {
     assert!(dir.path().join("stream0.abst").exists());
     assert!(dir.path().join("stream1.abst").exists());
 }
+
+/// Every FLV tag's timestamp is the running total of prior packet
+/// durations. A packet that states no `duration` at all (the ordinary
+/// `-c copy` case out of a demuxer that reports none) used to leave
+/// `running_ms` frozen forever after, so every tag past the first carried
+/// the same timestamp as the one before it. `TrackState::duration_hint_ms`
+/// fixes that by falling back to the last stated duration -- seeded here
+/// from the stream's own declared 25fps frame rate, since no packet in this
+/// test ever states one.
+#[test]
+fn a_duration_less_video_stream_still_advances_the_tag_clock() {
+    let dir = tempfile::tempdir().unwrap();
+    let manifest_url = dir.path().join("index.f4m").to_str().unwrap().to_owned();
+    let write = WriteAccess::unrestricted(registry());
+    let mut mux = HdsMuxer::new(manifest_url, Some(write), HdsMuxOptions::new());
+    let video_idx = mux.add_stream(&h264_params(400_000)).unwrap();
+    mux.write_header().unwrap();
+
+    let mut budget = Budget::new(Limits::permissive());
+    for i in 0..3i64 {
+        let mut pkt = Packet::from_slice(&mut budget, &[0xAB, 0xCD, 0xEF, 0x01]).unwrap();
+        pkt.stream_index = video_idx;
+        pkt.flags = if i == 0 {
+            PacketFlags::KEY
+        } else {
+            PacketFlags::empty()
+        };
+        // Deliberately left at its default (no stated duration).
+        mux.write_packet(&pkt).unwrap();
+    }
+    mux.write_trailer().unwrap();
+
+    let frag = fs::read(dir.path().join("stream0Seg1-Frag1")).unwrap();
+    let boxes = walk_boxes(&frag);
+    assert_eq!(boxes, vec![("mdat".to_owned(), frag.len() as u64)]);
+    let payload = &frag[8..];
+
+    // Walk the FLV tags: a sequence-header tag followed by three data tags.
+    let mut offset = 0usize;
+    let mut timestamps = Vec::new();
+    while offset < payload.len() {
+        let data_size = u32::from_be_bytes([0, payload[offset + 1], payload[offset + 2], payload[offset + 3]])
+            as usize;
+        let ts_low = u32::from_be_bytes([
+            0,
+            payload[offset + 4],
+            payload[offset + 5],
+            payload[offset + 6],
+        ]);
+        let ts_ext = u32::from(payload[offset + 7]);
+        timestamps.push((ts_ext << 24) | ts_low);
+        offset += 11 + data_size + 4; // header + body + PreviousTagSize
+    }
+
+    assert_eq!(
+        timestamps,
+        vec![0, 0, 40, 80],
+        "sequence header at 0, then three data tags 40ms apart (the \
+         declared 25fps period), not frozen at 0 forever: {timestamps:?}"
+    );
+}
