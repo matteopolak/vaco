@@ -214,7 +214,7 @@ impl RepresentationState {
             .and_then(|v| {
                 let num = u64::try_from(v.frame_rate.num).ok()?;
                 let den = u64::try_from(v.frame_rate.den).ok()?;
-                (num > 0).then(|| 1_000_000u64.saturating_mul(den) / num)
+                (num > 0).then(|| 1_000_000u64.saturating_mul(den).checked_div(num).unwrap_or(0))
             })
             .unwrap_or(0);
         Self {
