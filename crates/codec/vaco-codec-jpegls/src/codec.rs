@@ -230,7 +230,6 @@ fn decode_ri_sample(
     } else {
         unmap_regular(y)
     };
-    ctx.update(shifted);
     let eps = if same {
         if shifted >= 0 { shifted + 1 } else { shifted }
     } else if k == 0 {
@@ -238,6 +237,21 @@ fn decode_ri_sample(
     } else {
         shifted
     };
+    // The context accumulates the *actual* reconstructed error magnitude
+    // (`eps`), not the entropy-mapping's gap-compressed `shifted` value:
+    // `RegularCtx::update` accumulates the real prediction residual it
+    // encodes, and the run-interruption context must track the same
+    // quantity for `select_k` to derive the encoder's own `k`. `shifted`
+    // and `eps` differ by exactly 1 whenever `eps > 0` in the `same`
+    // (`a == b`) branch (the "skip zero" gap-closing shift), so updating
+    // on `shifted` silently undercounts `A` by one per positive sample —
+    // invisible until enough of them accumulate to move `select_k` past a
+    // power-of-two boundary, at which point every following run-mode
+    // Golomb code in the scan is read with the wrong `k` and the bit
+    // stream desyncs. Measured against `ffmpeg -c:v jpegls`: a `same`-branch
+    // run of four positive-`eps` interruptions is enough to shift `k` by
+    // one and corrupt every sample decoded afterward.
+    ctx.update(eps);
     Ok(wrap_to_sample(b_val + eps))
 }
 
@@ -270,7 +284,9 @@ fn encode_ri_sample(
         map_regular(shifted)
     };
     golomb::encode_limited(writer, mapped, k, golomb::ri_qmax(run_g));
-    ctx.update(shifted);
+    // See `decode_ri_sample`'s matching comment: the context tracks the
+    // real error magnitude (`eps`), not the entropy-mapping's `shifted`.
+    ctx.update(eps);
     Ok(())
 }
 

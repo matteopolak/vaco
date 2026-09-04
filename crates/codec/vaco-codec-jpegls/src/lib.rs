@@ -30,27 +30,40 @@
 //!
 //! # A known gap, honestly
 //!
-//! Round-tripped bit-exact against `ffmpeg -c:v jpegls`'s own decode on a
-//! wide range of synthetic content: solid fields, sharp two-tone
-//! transitions (both `a == b` and `a != b` run-interruption cases, every
-//! Golomb parameter from 0 up through several escape codes), vertical and
-//! diagonal gradients, uniform noise, and three-component RGB. Against
-//! `ffmpeg`'s own `testsrc`/`gradients` patterns — busier, multi-directional
-//! photographic-like content — small (1-2 count), non-cascading pixel
-//! differences remain in rare spots, and one longer run eventually desyncs
-//! outright partway through the last row. Each fix so far has come from
-//! measuring a real disagreement against `ffmpeg`, not from guessing; the
-//! remaining gap is real and not yet isolated, most likely one more
-//! rarely-hit formula detail in the same family (context reset, run
-//! interruption's sign convention, or the escape length limit) that this
-//! crate's synthetic corpus does not exercise. Filed rather than hidden:
-//! this is a real, open defect, not a rounding tolerance — on the one
-//! `ffmpeg`-encoded fixture it was measured on, most divergences ran out
-//! the input entirely into a clean [`vaco_core::Error`] rather than a
-//! panic, but a handful of individual pixels differed by 1-2 with no error
-//! at all, which is the "confidently wrong" failure this crate's own
-//! shipping bar warns against — do not treat a clean decode as proof of a
-//! byte-exact one without comparing against an independent decode.
+//! One real bug in this family has been found and fixed: `decode_ri_sample`/
+//! `encode_ri_sample` updated the run-interruption context's `A`
+//! accumulator with the entropy mapping's gap-compressed `shifted` value
+//! instead of the real reconstructed error magnitude `eps`. The two agree
+//! whenever `eps <= 0`, so it stayed invisible until enough positive-`eps`
+//! same-context interruptions built up to move the derived Golomb parameter
+//! `k` across a power-of-two boundary, at which point the *next*
+//! same-context sample was read with the wrong `k` — a wrong pixel with no
+//! error raised at all. `tests/regression.rs`'s `ramp_17x17` fixture
+//! reproduces exactly this: five repeated `a == b`, `eps == 1`
+//! interruptions, byte-exact against `ffmpeg -c:v jpegls` before and after.
+//!
+//! A size sweep of `ffmpeg`-encoded ramps (`tests/regression.rs`'s doc
+//! comment has the fixture; the sweep itself was run by hand, not
+//! committed) narrowed a **second**, still-open bug in the same
+//! accumulator: on a busier ramp large enough to run the same
+//! run-interruption context through many interruptions (measured on a
+//! 255x255 `ffmpeg`-encoded fixture), the accumulated `A` this crate
+//! computes is provably 2 too high by the tenth same-context event — each
+//! of the nine preceding events was individually confirmed correct (right
+//! reconstructed pixel *and* right bit-stream position, checked directly
+//! against the file's own bytes), yet the aggregate produces `k = 3` where
+//! the file's literal bits require `k = 2`. Every accumulation rule tried
+//! (`eps`, `shifted`, and a speculative early reset) either reproduces this
+//! exact contradiction or breaks one of the smaller fixtures that already
+//! passes, so the true rule is evidently not a uniform per-event scalar.
+//! Filed rather than hidden: this is a real, open defect, not a rounding
+//! tolerance. Affected sizes decode either to a clean
+//! [`vaco_core::Error::UnexpectedEof`] once the drift is large enough to run
+//! off the end of the entropy segment, or — more dangerously — to a handful
+//! of individual wrong pixels with no error at all, which is the
+//! "confidently wrong" failure this crate's own shipping bar warns against.
+//! Do not treat a clean decode as proof of a byte-exact one without
+//! comparing against an independent decode.
 //!
 //! # How to change it
 //!
