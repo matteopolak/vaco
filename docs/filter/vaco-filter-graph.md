@@ -330,15 +330,45 @@ quadratic in it.
 
 ### Fuzzing
 
-Two targets (D6). Per plan 19 §13, the exit code and the exec count, not a
-verdict:
+Three targets (D6). Per plan 19 §13, the exec count and what was found, not a
+verdict. Measured 2026-09-03, one campaign each, `-timeout=10
+-rss_limit_mb=2048`, corpora carried over from earlier runs:
 
-| Target | Exit | Execs |
-|---|---|---|
-| `graph_parse` | 0 | `#1827425` (90 s) |
-| `graph_build` | 0 | `#1630718` (90 s) |
+| Target | Input | Execs | Time | cov / ft | Findings |
+|---|---|---|---|---|---|
+| `graph_parse` | bytes → `parse`, print, reparse; `render` on error | 971,406 | 300 s | 939 / 4816 | none |
+| `graph_build` | bytes → `parse_and_build`, mock registry; `render` on error | 1,610,888 | 300 s | 734 / 2621 | none |
+| `graph_hostile` | grammar-driven descriptions → parse, build, attach, `configure` | 427,289 over three runs | 8,371 execs, then 600 s, then 600 s | 4423 / 22910 | one parser bug, one harness bug |
 
-`find fuzz/artifacts/graph_parse fuzz/artifacts/graph_build -type f` is empty.
+`graph_hostile` is the structure-aware one. It draws filter names, labels,
+option keys and values from small pools so that duplicate labels, forward
+references, cycles, `outputs=` counts past `usize`, unicode and empty names and
+a filter called `sws_flags` are the common case, then splices raw
+metacharacters into the rendered string. It reaches five times the coverage of
+the byte-level targets because it also attaches sources and sinks to the open
+pads and negotiates, with and without auto-conversion. It runs at ~400 exec/s
+against ~3,000–5,000 for the byte targets, for the same reason. The artifact it
+writes is the `arbitrary` byte stream, not the graph string; run the binary
+with `GRAPH_HOSTILE_DUMP=1` to see what a crashing input said.
+
+`find fuzz/artifacts -type f` was empty after the last campaign of each.
+
+**Recursion.** The parser is `parse` → `parse_chain` → `parse_filter` →
+`parse_labels`, each a loop over `&str` and none of them re-entrant, so nesting
+in the input costs bytes, never stack, and there is no depth limit to tune.
+
+**`graph_hostile` found a round-trip bug at exec 8371**, on `\sws_flags=x|y;`:
+the backslash keeps the parser from reading it as the `sws_flags=` prefix, so
+it parses as one filter named `sws_flags` — but `Display` printed it back as
+`sws_flags=x|y`, which re-parses as the prefix followed by an empty graph. The
+printer now escapes the one position where a name can collide with the prefix.
+`fuzz/seeds/graph_hostile/regression-sws-prefix-roundtrip-288b48fa` replays it
+in CI and `a_filter_literally_named_sws_flags_survives_printing` pins it.
+
+The second run's only artifact was a timeout in the generator itself — nested
+`Escaped` text doubled per level, and a 129-byte input took more than ten
+seconds before the parser ever saw it. That is a harness bug, now bounded, and
+it is recorded here rather than as a seed because the parser was not involved.
 
 **`graph_parse` found a real bug at exec 667**, on the input `"\t\t\t@"`: an
 instance tag with nothing before it produced a filter whose *name* was the
