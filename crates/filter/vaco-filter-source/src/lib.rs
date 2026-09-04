@@ -1,14 +1,10 @@
-//! Video test-pattern and procedural generator sources: plan 16 §4.3's
-//! `vaco-filter-source` row.
+//! Video test-pattern and procedural generator sources.
 //!
-//! FT-4.12a (GitHub #474). `nullsrc`, `color` and `nullsink` in that row are
-//! **not** registered here — they already ship from `vaco-filter-plumbing`
-//! (FT-4.3 / GitHub #467), and `pal100bars`/`pal75bars` already ship from
-//! `vaco-filter-video-source` (FT-4.4 / GitHub epic #54). Re-registering any
-//! of those five names would be a second, competing `[[component]]` row for
-//! the same `ctor`, which `cargo xtask dup-check` exists to catch. See this
-//! crate's closing report (GitHub #474) for exactly which names were already
-//! taken and why the brief undercounted them.
+//! `nullsrc`, `color`, and `nullsink` are **not** registered here because they
+//! already ship from `vaco-filter-plumbing`; `pal100bars`/`pal75bars` already
+//! ship from `vaco-filter-video-source`. Re-registering any of those five
+//! names would be a second, competing `[[component]]` row for the same `ctor`,
+//! which `cargo xtask dup-check` exists to catch.
 //!
 //! `testsrc` is left out for the same reason `vaco-filter-video-source`
 //! left it out: the reference overlays a rendered timestamp using its own
@@ -24,8 +20,7 @@
 //! fitting the animation's period and the header gradient bands' exact
 //! boundaries left unexplained residuals. Shipping a guessed pixel pattern
 //! under a name the project explicitly calls out as an oracle for other
-//! filters' conformance tests (see this crate's closing report, GitHub
-//! #474) is worse than not shipping it — the same call
+//! filters' conformance tests is worse than not shipping it — the same call
 //! `vaco-filter-video-source` made for `testsrc`/`smptebars` in its own
 //! row. See `docs/filter/vaco-filter-source.md` for the full list of what
 //! is and is not implemented, and the per-generator exactness table.
