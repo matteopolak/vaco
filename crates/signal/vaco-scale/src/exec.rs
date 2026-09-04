@@ -677,12 +677,36 @@ fn filter_h_fixed<const N: usize>(
     }
 }
 
-/// Vertical filter: a window of input rows to one output row.
-///
-/// `acc` is the caller's scratch so the per-row allocation happens once per
-/// band rather than once per row.
+/// Vertical filter: a window of input rows to one output row. Common tap
+/// counts use an output-major fixed-width dot product; unusual widths and
+/// incomplete source windows retain [`filter_v_generic`]'s exact behaviour.
 #[inline]
 pub(crate) fn filter_v(
+    bank: &FilterBank,
+    src: &Grid,
+    d: usize,
+    dst: &mut [i32],
+    acc: &mut Vec<i64>,
+    shift: u8,
+) {
+    if !bank.gather {
+        let complete = match bank.taps {
+            2 => filter_v_fixed::<2>(bank, src, d, dst, shift),
+            4 => filter_v_fixed::<4>(bank, src, d, dst, shift),
+            6 => filter_v_fixed::<6>(bank, src, d, dst, shift),
+            8 => filter_v_fixed::<8>(bank, src, d, dst, shift),
+            _ => false,
+        };
+        if complete {
+            return;
+        }
+    }
+    filter_v_generic(bank, src, d, dst, acc, shift);
+}
+
+/// Tap-major scalar reference. `acc` is the caller's scratch so this fallback
+/// allocates at most once per band even when its tap count is not specialised.
+fn filter_v_generic(
     bank: &FilterBank,
     src: &Grid,
     d: usize,
@@ -722,6 +746,54 @@ pub(crate) fn filter_v(
     for (o, a) in dst.iter_mut().zip(acc.iter()) {
         *o = (*a >> shift) as i32;
     }
+}
+
+/// Output-major vertical dot product. All row bounds are proved before the
+/// output loop, so the hot path reads each destination accumulator only in a
+/// register instead of round-tripping an `i64` scratch row once per tap.
+#[inline(always)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::inline_always,
+    reason = "every row is sliced to n before x iterates over 0..n; N must reach codegen so the dot product unrolls"
+)]
+fn filter_v_fixed<const N: usize>(
+    bank: &FilterBank,
+    src: &Grid,
+    d: usize,
+    dst: &mut [i32],
+    shift: u8,
+) -> bool {
+    let (Some(&off), Some(base)) = (bank.offsets.get(d), d.checked_mul(N)) else {
+        return false;
+    };
+    let Some(coeffs) = bank.coeffs.get(base..base.saturating_add(N)) else {
+        return false;
+    };
+    let Ok(coeffs): Result<&[i32; N], _> = coeffs.try_into() else {
+        return false;
+    };
+    let n = dst.len().min(src.w);
+    let mut rows = [&[][..]; N];
+    for (t, slot) in rows.iter_mut().enumerate() {
+        let Some(row) = src
+            .row((off as usize).saturating_add(t))
+            .and_then(|row| row.get(..n))
+        else {
+            return false;
+        };
+        *slot = row;
+    }
+
+    let round = 1i64 << (shift - 1);
+    for (x, out) in dst.iter_mut().take(n).enumerate() {
+        let mut sum = round;
+        for (&coefficient, row) in coeffs.iter().zip(rows.iter()) {
+            sum += i64::from(coefficient) * i64::from(row[x]);
+        }
+        *out = (sum >> shift) as i32;
+    }
+    true
 }
 
 #[cfg(test)]
@@ -814,6 +886,131 @@ mod filter_h_fixed_tests {
                         generic_out, via_filter_h,
                         "filter_h taps={taps} src_len={src_len} dst_len={dst_len}"
                     );
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::cast_possible_wrap,
+    clippy::cast_possible_truncation,
+    reason = "test code over bounded synthetic grids"
+)]
+mod filter_v_fixed_tests {
+    use super::*;
+    use crate::filter::{FilterBank, FilterSpec, Kernel};
+
+    fn synthetic_bank(taps: usize, dst_len: usize, y0: usize, rows: usize) -> FilterBank {
+        let max_offset = rows.saturating_sub(taps);
+        let offsets = (0..dst_len)
+            .map(|d| y0.saturating_add(d.min(max_offset)) as u32)
+            .collect();
+        let coeffs = (0..dst_len.saturating_mul(taps))
+            .map(|i| ((i as i32).wrapping_mul(977) & 4095) - 2048)
+            .collect();
+        FilterBank {
+            src_len: rows,
+            dst_len,
+            taps,
+            offsets,
+            coeffs,
+            gather: false,
+            abs_sum: i64::from(i32::MAX),
+            spec: FilterSpec {
+                kernel: Kernel::Point,
+                src_len: rows,
+                dst_len,
+                phase_src: 0.0,
+                phase_dst: 0.0,
+                max_taps: taps,
+            },
+        }
+    }
+
+    fn synthetic_grid(w: usize, y0: usize, rows: usize) -> Grid {
+        Grid {
+            w,
+            y0,
+            rows,
+            data: (0..w.saturating_mul(rows))
+                .map(|i| (i as i32).wrapping_mul(31).wrapping_sub(4000))
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn fixed_and_generic_vertical_filters_agree_across_shapes_and_missing_rows() {
+        let shift = COEFF_SHIFT;
+        for &taps in &[1usize, 2, 3, 4, 5, 6, 7, 8, 9] {
+            for width in [0usize, 1, 3, 16, 17, 63] {
+                for rows in [taps.saturating_sub(1), taps, taps + 3] {
+                    let y0 = 5;
+                    let dst_rows = 3;
+                    let bank = synthetic_bank(taps, dst_rows, y0, rows);
+                    let grid = synthetic_grid(width, y0, rows);
+                    for d in 0..dst_rows {
+                        for dst_len in [0usize, width.saturating_sub(1), width, width + 3] {
+                            let mut generic_out = vec![17; dst_len];
+                            let mut generic_acc = Vec::new();
+                            filter_v_generic(
+                                &bank,
+                                &grid,
+                                d,
+                                &mut generic_out,
+                                &mut generic_acc,
+                                shift,
+                            );
+
+                            let mut dispatched_out = vec![17; dst_len];
+                            let mut dispatched_acc = Vec::new();
+                            filter_v(
+                                &bank,
+                                &grid,
+                                d,
+                                &mut dispatched_out,
+                                &mut dispatched_acc,
+                                shift,
+                            );
+                            assert_eq!(
+                                generic_out, dispatched_out,
+                                "taps={taps} width={width} rows={rows} d={d} dst_len={dst_len}"
+                            );
+
+                            if matches!(taps, 2 | 4 | 6 | 8) {
+                                let mut fixed_out = vec![17; dst_len];
+                                let complete = match taps {
+                                    2 => {
+                                        filter_v_fixed::<2>(&bank, &grid, d, &mut fixed_out, shift)
+                                    }
+                                    4 => {
+                                        filter_v_fixed::<4>(&bank, &grid, d, &mut fixed_out, shift)
+                                    }
+                                    6 => {
+                                        filter_v_fixed::<6>(&bank, &grid, d, &mut fixed_out, shift)
+                                    }
+                                    8 => {
+                                        filter_v_fixed::<8>(&bank, &grid, d, &mut fixed_out, shift)
+                                    }
+                                    _ => unreachable!(),
+                                };
+                                assert_eq!(
+                                    complete,
+                                    rows >= taps,
+                                    "taps={taps} width={width} rows={rows} d={d} dst_len={dst_len}"
+                                );
+                                if complete {
+                                    assert_eq!(
+                                        generic_out, fixed_out,
+                                        "direct fixed path: taps={taps} width={width} rows={rows} d={d} dst_len={dst_len}"
+                                    );
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }

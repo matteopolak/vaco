@@ -569,6 +569,72 @@ several `src_len`/`dst_len` combinations including truncated and empty
 outputs, so a future change to either body that disagrees fails a test rather
 than shipping quietly.
 
+### Fixed-width vertical filtering (measured 2026-09-04)
+
+The same 3840×2160 to 1920×1080 bicubic benchmark was profiled again before
+changing the remaining vertical pass. A 12-second, 4 kHz Samply capture of the
+unchanged bench resolved 224 of 226 sampled addresses. By outermost emitted
+function, `filter_h` accounted for 72.36% of self samples, `filter_v` for
+14.41%, and `run_band` for 12.88%. By innermost inline frame, `filter_v` itself
+still accounted for 12.17%. That made the vertical filter material but bounded:
+even removing it entirely could improve this isolated workload by only about
+17%.
+
+`filter_v` now dispatches non-gather banks with 2, 4, 6, or 8 taps to an
+output-major fixed-width dot product. It validates the coefficient slice and
+collects the input-row references into a stack array before touching the
+output. Each output accumulator then stays in a register for all taps instead
+of being loaded from and stored to the scratch row once per tap. The original
+tap-major implementation remains `filter_v_generic`, both as the independent
+test oracle and as the fallback for gather banks, unusual tap counts, or an
+incomplete row window. To extend the specialization, add a dispatcher arm and
+include that width in the direct differential test; do not remove the fallback
+or allocate row references per output row.
+
+The performance comparison used separately preserved before/after bench and
+CLI binaries from the same working tree. Every Cargo invocation used the bench
+or `dist` profile, a private target directory, `CARGO_INCREMENTAL=0`, an empty
+`RUSTC_WRAPPER`, and at most two build jobs. Timings are 12 rotating,
+interleaved process launches after one warm-up per binary. Wall time is
+`time.perf_counter()` and child CPU seconds are the delta of
+`getrusage(RUSAGE_CHILDREN)` user plus system time. These are seconds, not CPU
+cycles; raw cycle measurement was unavailable on this macOS host.
+
+| 12-round median | before | after | after/before |
+|---|---:|---:|---:|
+| isolated bench, wall | 1.665353 s | 1.541039 s | **0.9253** |
+| isolated bench, child CPU | 1.656141 s | 1.522984 s | **0.9196** |
+| H.264 decode + scale, wall | 8.330905 s | 8.263187 s | **0.9919** |
+| H.264 decode + scale, child CPU | 8.281395 s | 8.203405 s | **0.9906** |
+
+The isolated commands ran `yuv420p_2160p_to_1080p_bicubic --min-time 1.5`.
+The end-to-end fixture was generated fresh from `testsrc2` with libx264: 75
+frames at 3840×2160, 25 fps, High-profile `yuv420p`. The three rotating
+end-to-end commands used the before and after `vaco` binaries and `ffmpeg
+-threads 1 -filter_threads 1`, all decoding the same fixture and scaling to
+1920×1080 into a null output. The ffmpeg medians were 0.781361 s wall and
+0.953031 s child CPU, making the after/ffmpeg ratios 10.58× wall and 8.61× CPU.
+Load rose from about 5 to 15 during the earliest end-to-end rounds, so the
+interleaved ratio and child CPU result carry the claim, not any individual wall
+sample.
+
+Correctness was checked independently at `-filter_threads 1`, 2, 4, and 8 with
+decode fixed at `-threads 1`. Every before and after invocation emitted exactly
+233,280,000 rawvideo bytes; all eight files had SHA-256
+`48a301e83b07b9a6d03b7c9b2350973182b2cbbf0e58eaa8ebd248c4e75351b6`,
+and every pair passed `cmp`. The differential unit test also exercises taps
+1 through 9, empty and truncated output widths, and incomplete source windows;
+for 2/4/6/8 taps it calls the fixed function directly so an accidental fallback
+cannot make the test vacuous.
+
+A post-change Samply capture could not be collected. Three invocations of the
+same 4 kHz, 12-second command failed immediately, before creating an output
+file, with macOS reporting `Unknown(1100)`. A privileged process check found no
+other Samply, xctrace, Cargo, or rustc process, and the third attempt ran after
+load returned to about 5.7. The before profile therefore establishes the hot
+callee, while the post-change hotspot movement is explicitly unverified. No
+Linux checkasm cycle adapter is claimed by this change.
+
 ---
 
 ## 9. Testing
