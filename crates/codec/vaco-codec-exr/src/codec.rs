@@ -3,9 +3,10 @@
 //! [`decode`] and [`encode`] are pure functions over bytes and [`Frame`]s;
 //! the `SendReceive` wrappers in `lib.rs` never touch an `exr::` type.
 
-use std::io::Cursor;
+use std::{cell::RefCell, io::Cursor};
 
 use exr::prelude::*;
+use exr::{meta::header::Header, prelude::MetaData};
 use vaco_core::{Error, Result};
 use vaco_frame::{Frame, FrameData, FrameFlags};
 use vaco_limits::Budget;
@@ -24,29 +25,95 @@ struct RgbaBuf {
     data: Vec<f32>,
 }
 
-/// Decode the first RGB(A) layer of an `OpenEXR` image into one [`Frame`].
+fn check_scope(meta: &MetaData) -> Result<&Header> {
+    if meta.requirements.has_multiple_layers || meta.headers.len() != 1 {
+        return Err(Error::Unsupported("exr: multipart image"));
+    }
+    let header = meta
+        .headers
+        .first()
+        .ok_or(Error::InvalidData("exr: missing header"))?;
+    if meta.requirements.has_deep_data || header.deep {
+        return Err(Error::Unsupported("exr: deep data"));
+    }
+
+    let channels = &header.channels.list;
+    let has = |name: &str| channels.iter().any(|channel| channel.name.eq(name));
+    let rgba_shape = matches!(channels.len(), 3 | 4)
+        && has("R")
+        && has("G")
+        && has("B")
+        && (channels.len() == 3 || has("A"));
+    if !rgba_shape {
+        return Err(Error::Unsupported("exr: non-RGB channel layout"));
+    }
+    if channels
+        .iter()
+        .any(|channel| channel.sampling != Vec2(1, 1))
+    {
+        return Err(Error::Unsupported("exr: subsampled channels"));
+    }
+    if matches!(
+        header.compression,
+        Compression::HTJ2K32 | Compression::HTJ2K256
+    ) {
+        return Err(Error::Unsupported("exr: HTJ2K compression"));
+    }
+    Ok(header)
+}
+
+/// Decode a single RGB(A) layer of an `OpenEXR` image into one [`Frame`].
 ///
-/// Only the RGB(A) channel shape is supported — deep data, multi-part
-/// files and arbitrary/multi-channel (non-colour) layouts are a documented
-/// coverage gap (plan 15 §4A.2's `OpenEXR` risk note), reported as
-/// [`Error::Unsupported`] rather than guessed at. Compression (PIZ/ZIP/RLE/
-/// PXR24/B44/DWA) is transparent: the `exr` crate decodes whichever method
-/// the file declares.
+/// The supported shape is exactly `R`, `G`, `B`, and optional `A`, with no
+/// channel subsampling. Scan-line and tiled images are accepted; for a tiled
+/// image with multiple resolution levels, only the largest level is decoded.
+/// Deep data, multipart files, and arbitrary channel layouts are reported as
+/// [`Error::Unsupported`] rather than guessed at. Compression
+/// (PIZ/ZIP/RLE/PXR24/B44/DWA) is transparent: the `exr` crate decodes
+/// whichever method the file declares.
 ///
 /// # Errors
 ///
 /// [`Error::InvalidData`] for a malformed header or corrupt block.
-/// [`Error::Unsupported`] for a layer with no RGB(A) channels, deep data, or
-/// dimensions the `exr` crate itself refuses. [`Error::LimitExceeded`] when
-/// the image exceeds `budget`.
+/// [`Error::Unsupported`] for a channel/layout feature outside that scope.
+/// [`Error::LimitExceeded`] when the image or its RGBA staging buffer exceeds
+/// `budget`, including when their size arithmetic overflows.
 pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Frame> {
+    let chunks = exr::block::read(Cursor::new(bytes), false).map_err(|e| map_err(&e))?;
+    let header = check_scope(chunks.meta_data())?;
+    let width = u32::try_from(header.layer_size.width()).map_err(|_| Error::LimitExceeded {
+        limit: "max_dimension (width)",
+        requested: u64::MAX,
+        cap: u64::from(budget.limits().max_dimension),
+    })?;
+    let height = u32::try_from(header.layer_size.height()).map_err(|_| Error::LimitExceeded {
+        limit: "max_dimension (height)",
+        requested: u64::MAX,
+        cap: u64::from(budget.limits().max_dimension),
+    })?;
+    budget.check_frame(width, height, 16)?;
+    let rgba_len = usize::try_from(width)
+        .ok()
+        .and_then(|width| {
+            usize::try_from(height)
+                .ok()
+                .and_then(|height| width.checked_mul(height))
+        })
+        .and_then(|area| area.checked_mul(4))
+        .ok_or(Error::LimitExceeded {
+            limit: "size_computation",
+            requested: u64::MAX,
+            cap: u64::MAX,
+        })?;
+    let rgba = RefCell::new(Some(budget.alloc::<f32>(rgba_len)?));
+
     let image = read()
         .no_deep_data()
         .largest_resolution_level()
         .rgba_channels(
             |size: Vec2<usize>, _channels: &RgbaChannels| RgbaBuf {
                 width: size.width(),
-                data: vec![0.0f32; size.area() * 4],
+                data: rgba.borrow_mut().take().unwrap_or_default(),
             },
             |buf: &mut RgbaBuf, pos: Vec2<usize>, (r, g, b, a): (f32, f32, f32, f32)| {
                 let idx = (pos.y() * buf.width + pos.x()) * 4;
@@ -57,16 +124,15 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Frame> {
         )
         .first_valid_layer()
         .all_attributes()
-        .from_buffered(Cursor::new(bytes))
+        .from_chunks(chunks)
         .map_err(|e| map_err(&e))?;
 
-    let width = image.layer_data.size.width() as u32;
-    let height = image.layer_data.size.height() as u32;
-    budget.check_frame(width, height, 16)?;
-
     let format = native32(PixFmt::Rgbaf32le, PixFmt::Rgbaf32be);
-    let mut frame = Frame::alloc_video(budget, format, width, height)?;
     let src = &image.layer_data.channel_data.pixels.data;
+    if src.len() != rgba_len {
+        return Err(Error::InvalidData("exr: decoded pixel count"));
+    }
+    let mut frame = Frame::alloc_video(budget, format, width, height)?;
     for mut plane in frame.planes_mut() {
         for row in 0..plane.rows() {
             let row_floats = width as usize * 4;
@@ -88,25 +154,18 @@ pub fn decode(bytes: &[u8], budget: &mut Budget) -> Result<Frame> {
 /// The stream description an `OpenEXR` header states, without decoding a
 /// pixel.
 ///
-/// Reads only [`exr::meta::MetaData`] (the header table), never a scanline
-/// or tile — this crate's `vaco-parse-image` caller (`still::Exr`) is a
-/// "no decode" parser by contract. [`decode`] always produces
-/// [`native32`]`(Rgbaf32le, Rgbaf32be)` regardless of the source channel
-/// layout (missing channels are synthesised by the `exr` crate's
-/// `rgba_channels` reader), so that format is reported unconditionally
-/// here too — the two cannot drift apart because there is only the one
-/// pixel format [`decode`] ever emits.
-///
-/// Dimensions come from the first header's `layer_size`. A multi-part file
-/// whose first part is not the layer [`decode`]'s `first_valid_layer()`
-/// query would pick is a known, documented gap: probing would report that
-/// first part's size while decoding a different one. Ordinary (single-part)
-/// `OpenEXR` files, which is what every encoder this crate has been tested
-/// against produces, have only the one header, so the two always agree.
+/// Reads and validates only the header table, never a scanline or tile — this
+/// crate's `vaco-parse-image` caller (`still::Exr`) is a "no decode" parser by
+/// contract. The same [`check_scope`] gate used by [`decode`] rejects deep,
+/// multipart, non-RGB(A), subsampled, and unsupported-compression inputs, so
+/// parameters are never advertised for a stream this codec will refuse.
+/// [`decode`] always produces [`native32`]`(Rgbaf32le, Rgbaf32be)` regardless
+/// of the source channel sample type, so that format is reported
+/// unconditionally here too.
 #[must_use]
 pub fn parameters(data: &[u8]) -> Option<vaco_codec_core::CodecParameters> {
-    let meta = exr::meta::MetaData::read_from_buffered(Cursor::new(data), false).ok()?;
-    let header = meta.headers.first()?;
+    let reader = exr::block::read(Cursor::new(data), false).ok()?;
+    let header = check_scope(reader.meta_data()).ok()?;
     let width = u32::try_from(header.layer_size.width()).ok()?;
     let height = u32::try_from(header.layer_size.height()).ok()?;
 
