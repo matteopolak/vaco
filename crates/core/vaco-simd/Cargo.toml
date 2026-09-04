@@ -10,6 +10,7 @@ authors.workspace = true
 
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
+vaco-vecheck-macros = { path = "../vaco-vecheck-macros" }
 fearless_simd.workspace = true
 
 [dev-dependencies]

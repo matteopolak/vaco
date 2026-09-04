@@ -1,0 +1,33 @@
+# The configuration is the single source for every checked kernel id, variant,
+# and compiler symbol. `#[vaco::must_vectorize]` marks the source function; it
+# intentionally carries no duplicated string data.
+max_live_waiver_cost_pct = 3.0
+
+[[kernel]]
+id = "scale/yuv2rgb/yuv420p_to_rgb24"
+variant = "x16"
+symbol = "vaco_simd::example::yuv420p_to_rgb24_row_simd"
+asm_symbol = "vectorize_avx2::<vaco_simd::example::yuv420p_to_rgb24_row_dispatched::{closure#1}"
+package = "vaco-simd"
+cargo_target = "x86_64-unknown-linux-gnu"
+# The shipped x86 floor keeps the runtime AVX2 body as a distinct target-feature
+# closure. Building ambiently at v3 would inline that body into the dispatcher
+# and leave only the AVX-512 closure independently selectable.
+cargo_target_cpu = "x86-64-v2"
+cargo_artifact = "--lib"
+
+[kernel.expect.x86_64-v3]
+# LLVM may use either a pack or a narrower move after the shifted/clamped
+# intermediate; both are the required narrowing stage for this tier.
+require = ["vpmulld ymm|vpmaddwd ymm", "vpackssdw", "vpacksswb", "vpmovzxbw|vpmovzxbd", "vpshufb"]
+forbid = ["vpgatherdd", "call", "\\bud2\\b"]
+# Measured at 108 instructions on nightly-2026-08-07/cargo-show-asm 0.2.62.
+# 112 leaves four instructions for compiler drift without admitting the 120+
+# instruction non-native and wide-narrowing regressions rejected while setting
+# this bound.
+max_insns = 112
+
+[kernel.expect.aarch64-v82]
+require = ["smull|smlal", "sqxtun", "zip1", "tbl"]
+forbid = ["\\bbl\\b", "brk"]
+max_insns = 88

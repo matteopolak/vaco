@@ -121,6 +121,14 @@ pub use fearless_simd as __substrate;
 /// not to kernel bodies.
 pub use fearless_simd::Simd as Lanes;
 
+/// Attributes for declaring vectorization contracts.
+///
+/// `#[vaco::must_vectorize]` marks a free SIMD kernel whose stable id and
+/// compiler symbol are declared once in the repository `vecheck.toml`.
+pub mod vaco {
+    pub use vaco_vecheck_macros::must_vectorize;
+}
+
 pub mod example;
 pub mod ops;
 pub mod testing;

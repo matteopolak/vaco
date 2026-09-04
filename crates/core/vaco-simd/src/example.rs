@@ -20,24 +20,28 @@
 //!
 //! # Two things this example deliberately shows
 //!
-//! **The pack that is not there.** Every pixel-producing kernel ends by clamping
-//! a signed intermediate to `0..=255` and packing it into bytes — `packuswb` on
-//! x86, `sqxtun` on NEON, one instruction. The substrate has no such operation:
-//! `SimdNarrow` takes `i16` to `i8` and only `u16` to `u8`. So the last step of
-//! the kernel goes through [`ops::simd::pack_u8_from_i16x8`], which costs a
-//! `max(0)` and a bitcast on top. See the measurement report.
+//! **The signed-to-unsigned pack that is not there.** Every pixel-producing
+//! kernel ends by clamping a signed intermediate to `0..=255` and packing it
+//! into bytes — `packuswb` on x86, `sqxtun` on NEON. The substrate has no direct
+//! signed-to-unsigned narrow. On x86 this example subtracts 128 before the
+//! fixed-point shift, uses signed saturation, then flips the output sign bit;
+//! other targets use `max(0)`, a safe bitcast and unsigned saturation so NEON
+//! retains its native `sqxtun` lowering.
 //!
 //! **Why this runs at 128-bit block granularity.** The rgb24 store is a 3-way
 //! byte interleave: 16 pixels produce 48 bytes, and the shuffle pattern is
 //! inherently 16-byte-block-shaped. `swizzle_dyn_within_blocks` and the fixed
 //! `u8x16` type are the right tools, and plan 11 §5.6 already says
-//! cost-sensitive shuffles should work at block granularity. A production
-//! `vaco-scale` should do the *arithmetic* at native width and drop to blocks
-//! only for the store; that is a real optimisation this example skips in favour
-//! of being readable. On aarch64 it costs nothing, because 128 bits is native.
+//! cost-sensitive shuffles should work at block granularity. The matrix combines
+//! those lanes into native-width `i32x8` groups on AVX2, then splits only for
+//! narrowing and the fixed 16-pixel store. On aarch64, 128 bits is native and
+//! the same portable source stays at that width.
 
 use crate::{KernelSet, Lanes, Tier, ops};
-use fearless_simd::{Bytes, SimdBase, SimdNarrow, SimdWiden, i16x8, i32x4, u8x16};
+use fearless_simd::{
+    Bytes, SimdBase, SimdCombine, SimdNarrow, SimdSplit, SimdWiden, i16x8, i32x4, i32x8, u8x16,
+    u8x32,
+};
 
 /// BT.601 limited-range coefficients, 8-bit fixed point.
 ///
@@ -54,6 +58,14 @@ mod bt601 {
     pub(super) const SHIFT: u32 = 8;
     pub(super) const Y_OFF: i32 = 16;
     pub(super) const C_OFF: i32 = 128;
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    const OUTPUT_BIAS: i32 = 128 << SHIFT;
+    #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+    const OUTPUT_BIAS: i32 = 0;
+    pub(super) const R_OFFSET: i32 = ROUND - Y_SCALE * Y_OFF - R_V * C_OFF - OUTPUT_BIAS;
+    pub(super) const G_OFFSET: i32 =
+        ROUND - Y_SCALE * Y_OFF + G_U * C_OFF + G_V * C_OFF - OUTPUT_BIAS;
+    pub(super) const B_OFFSET: i32 = ROUND - Y_SCALE * Y_OFF - B_U * C_OFF - OUTPUT_BIAS;
 }
 
 /// The signature stored in the kernel table.
@@ -102,10 +114,21 @@ pub fn yuv420p_to_rgb24_row_scalar(y: &[u8], u: &[u8], v: &[u8], rgb: &mut [u8])
     }
 }
 
-/// How many luma pixels one iteration of the vector body consumes.
+/// How many luma pixels one RGB interleave block consumes.
 const BLOCK: usize = 16;
 /// Output bytes produced per [`BLOCK`] pixels.
 const RGB_BLOCK: usize = BLOCK * 3;
+/// Chroma samples consumed per [`BLOCK`] luma pixels.
+const CHROMA_BLOCK: usize = BLOCK >> 1;
+
+const CHROMA_LO_DUPLICATE: [u8; 32] = [
+    0, 1, 2, 3, 0, 1, 2, 3, 4, 5, 6, 7, 4, 5, 6, 7, 8, 9, 10, 11, 8, 9, 10, 11, 12, 13, 14, 15, 12,
+    13, 14, 15,
+];
+const CHROMA_HI_DUPLICATE: [u8; 32] = [
+    16, 17, 18, 19, 16, 17, 18, 19, 20, 21, 22, 23, 20, 21, 22, 23, 24, 25, 26, 27, 24, 25, 26, 27,
+    28, 29, 30, 31, 28, 29, 30, 31,
+];
 
 /// One generic body, monomorphised once per CPU level by `dispatch_kernel!`.
 ///
@@ -114,6 +137,7 @@ const RGB_BLOCK: usize = BLOCK * 3;
 /// kernel that fails to inline is compiled at the baseline and silently loses
 /// its dispatch.
 #[inline(always)]
+#[crate::vaco::must_vectorize]
 #[expect(
     clippy::integer_division,
     reason = "every divisor here is a compile-time constant; there is no untrusted denominator"
@@ -128,12 +152,23 @@ pub fn yuv420p_to_rgb24_row_simd<S: Lanes>(simd: S, y: &[u8], u: &[u8], v: &[u8]
     let usable = pixels.min(u.len() * 2).min(v.len() * 2);
     let head_px = (usable / BLOCK) * BLOCK;
 
-    let (y_head, y_tail) = y.split_at(head_px);
-    let (rgb_head, rgb_tail) = rgb.split_at_mut(head_px * 3);
+    // The `min` chain above proves every boundary is in range. The checked
+    // splits keep a future violation on a non-panicking error path instead of
+    // emitting `split_at`'s panic calls into the dispatched kernel.
+    let Some((y_head, y_tail)) = y.split_at_checked(head_px) else {
+        return;
+    };
+    let Some((rgb_head, rgb_tail)) = rgb.split_at_mut_checked(head_px * 3) else {
+        return;
+    };
     // `head_px` is a multiple of 16, so the chroma split is exact and the tail's
     // `x >> 1` indexing lines up without an offset.
-    let (u_head, u_tail) = u.split_at(head_px >> 1);
-    let (v_head, v_tail) = v.split_at(head_px >> 1);
+    let Some((u_head, u_tail)) = u.split_at_checked(head_px >> 1) else {
+        return;
+    };
+    let Some((v_head, v_tail)) = v.split_at_checked(head_px >> 1) else {
+        return;
+    };
 
     let chroma = u_head
         .as_chunks::<CHROMA_BLOCK>()
@@ -153,41 +188,35 @@ pub fn yuv420p_to_rgb24_row_simd<S: Lanes>(simd: S, y: &[u8], u: &[u8], v: &[u8]
     yuv420p_to_rgb24_row_scalar(y_tail, u_tail, v_tail, rgb_tail);
 }
 
-/// Chroma samples consumed per [`BLOCK`] luma pixels.
-const CHROMA_BLOCK: usize = BLOCK >> 1;
-
-/// 16 luma pixels, 8 chroma pairs, 48 output bytes.
+/// One 16-pixel block with its matrix arithmetic combined at AVX2 width.
 #[inline(always)]
 fn block16<S: Lanes>(simd: S, yc: &[u8], uc: &[u8], vc: &[u8], oc: &mut [u8]) {
     // --- load -------------------------------------------------------------
     let yv = u8x16::from_slice(simd, yc);
-    // Nearest-neighbour chroma upsample. `zip_low(a, a)` is [a0,a0,a1,a1,…]:
-    // one instruction for what a scalar loop spends an index shift on.
-    let uh = load_half(simd, uc);
-    let vh = load_half(simd, vc);
-    let uv = uh.zip_low(uh);
-    let vv = vh.zip_low(vh);
 
     // --- widen u8 -> i32 --------------------------------------------------
-    // Four i32x4 groups cover one u8x16. This chain is the substrate's whole
-    // widening story: u8 -> u16 -> u32, then a free bitcast to signed.
-    let (y0, y1, y2, y3) = widen_u8_i32(yv);
-    let (u0, u1, u2, u3) = widen_u8_i32(uv);
-    let (v0, v1, v2, v3) = widen_u8_i32(vv);
+    // Two i32x8 groups cover one u8x16. Combining the four 128-bit widening
+    // results before the matrix is what makes AVX2 execute the arithmetic at
+    // its native 256-bit width while preserving the 16-pixel store shape.
+    let (y0, y1) = widen_u8_i32x8(yv);
+    let (u0, u1) = widen_and_upsample_chroma(simd, uc);
+    let (v0, v1) = widen_and_upsample_chroma(simd, vc);
 
     // --- the colour matrix ------------------------------------------------
-    let (r0, g0, b0) = matrix(y0, u0, v0);
-    let (r1, g1, b1) = matrix(y1, u1, v1);
-    let (r2, g2, b2) = matrix(y2, u2, v2);
-    let (r3, g3, b3) = matrix(y3, u3, v3);
+    // Finish and pack one channel before starting the next. This keeps the
+    // live-vector set small enough that AVX2 constants remain in registers.
+    let yy0 = y0 * bt601::Y_SCALE;
+    let yy1 = y1 * bt601::Y_SCALE;
+    let rp = pack2(red(yy0, v0), red(yy1, v1));
+    let gp = pack2(green(yy0, u0, v0), green(yy1, u1, v1));
+    let bp = pack2(blue(yy0, u0), blue(yy1, u1));
 
-    // --- clip and pack ----------------------------------------------------
-    // `relaxed_narrow` is safe here: the post-shift range is about -290..=550,
-    // comfortably inside i16. The clip to 0..=255 happens in `pack_u8_from_i16x8`.
-    let rp = pack4(r0, r1, r2, r3);
-    let gp = pack4(g0, g1, g2, g3);
-    let bp = pack4(b0, b1, b2, b3);
+    store_rgb_block(rp, gp, bp, oc);
+}
 
+/// Interleave one fixed 16-pixel planar block.
+#[inline(always)]
+fn store_rgb_block<S: Lanes>(rp: u8x16<S>, gp: u8x16<S>, bp: u8x16<S>, oc: &mut [u8]) {
     // --- 3-way interleaved store ------------------------------------------
     // 48 output bytes as three 16-byte blocks. For each block, one
     // `swizzle_dyn_precise` per channel — out-of-range indices produce zero, so
@@ -200,57 +229,88 @@ fn block16<S: Lanes>(simd: S, yc: &[u8], uc: &[u8], vc: &[u8], oc: &mut [u8]) {
     }
 }
 
-/// The BT.601 colour matrix on one group of four pixels, returning `(r, g, b)`
-/// as post-shift `i32` lanes still to be clipped.
+/// The red row of the BT.601 matrix on one native i32 group.
 #[inline(always)]
-fn matrix<S: Lanes>(yg: i32x4<S>, ug: i32x4<S>, vg: i32x4<S>) -> (i32x4<S>, i32x4<S>, i32x4<S>) {
-    let yy = (yg - bt601::Y_OFF) * bt601::Y_SCALE;
-    let du = ug - bt601::C_OFF;
-    let dv = vg - bt601::C_OFF;
+fn red<S: Lanes>(yy: i32x8<S>, vg: i32x8<S>) -> i32x8<S> {
+    (yy + vg * bt601::R_V + bt601::R_OFFSET) >> bt601::SHIFT
+}
+
+/// The green row of the BT.601 matrix on one native i32 group.
+#[inline(always)]
+fn green<S: Lanes>(yy: i32x8<S>, ug: i32x8<S>, vg: i32x8<S>) -> i32x8<S> {
+    (yy - ug * bt601::G_U - vg * bt601::G_V + bt601::G_OFFSET) >> bt601::SHIFT
+}
+
+/// The blue row of the BT.601 matrix on one native i32 group.
+#[inline(always)]
+fn blue<S: Lanes>(yy: i32x8<S>, ug: i32x8<S>) -> i32x8<S> {
+    (yy + ug * bt601::B_U + bt601::B_OFFSET) >> bt601::SHIFT
+}
+
+/// Load 8 chroma bytes, widen once, then duplicate the i32 lanes.
+#[inline(always)]
+fn widen_and_upsample_chroma<S: Lanes>(simd: S, half: &[u8]) -> (i32x8<S>, i32x8<S>) {
+    let mut tmp = [128u8; BLOCK];
+    let (lo, _) = tmp.split_at_mut(CHROMA_BLOCK);
+    lo.copy_from_slice(half);
+    let source = u8x16::from_slice(simd, &tmp);
+    let (source, _) = source.widen();
+    let (lo, hi) = source.widen();
+    let source = lo.combine(hi).bitcast::<u8x32<S>>();
+    let lo_indices = u8x32::from_slice(simd, &CHROMA_LO_DUPLICATE);
+    let hi_indices = u8x32::from_slice(simd, &CHROMA_HI_DUPLICATE);
     (
-        (yy + dv * bt601::R_V + bt601::ROUND) >> bt601::SHIFT,
-        (yy - du * bt601::G_U - dv * bt601::G_V + bt601::ROUND) >> bt601::SHIFT,
-        (yy + du * bt601::B_U + bt601::ROUND) >> bt601::SHIFT,
+        source.swizzle_dyn_precise(lo_indices).bitcast::<i32x8<S>>(),
+        source.swizzle_dyn_precise(hi_indices).bitcast::<i32x8<S>>(),
     )
 }
 
-/// Load 8 chroma bytes into the low half of a `u8x16`.
-///
-/// `from_slice` demands exactly `N` elements, and a chroma chunk is `N / 2`, so
-/// this goes through a stack array. The high half is never read. A narrower
-/// load (`u8x8`) does not exist in the substrate — 128 bits is its floor.
-#[inline(always)]
-fn load_half<S: Lanes>(simd: S, half: &[u8]) -> u8x16<S> {
-    let mut tmp = [128u8; 16];
-    let (lo, _) = tmp.split_at_mut(CHROMA_BLOCK);
-    lo.copy_from_slice(half);
-    u8x16::from_slice(simd, &tmp)
-}
-
-/// `u8x16` → four `i32x4`, in lane order.
+/// One `u8x16` to two AVX2-width `i32x8` vectors, in lane order.
 #[inline(always)]
 #[allow(
     clippy::many_single_char_names,
     reason = "four anonymous quarter-vectors; names would add nothing"
 )]
-fn widen_u8_i32<S: Lanes>(v: u8x16<S>) -> (i32x4<S>, i32x4<S>, i32x4<S>, i32x4<S>) {
+fn widen_u8_i32x8<S: Lanes>(v: u8x16<S>) -> (i32x8<S>, i32x8<S>) {
     let (lo, hi) = v.widen();
     let (a, b) = lo.widen();
     let (c, d) = hi.widen();
     (
-        a.bitcast::<i32x4<S>>(),
-        b.bitcast::<i32x4<S>>(),
-        c.bitcast::<i32x4<S>>(),
-        d.bitcast::<i32x4<S>>(),
+        a.bitcast::<i32x4<S>>().combine(b.bitcast::<i32x4<S>>()),
+        c.bitcast::<i32x4<S>>().combine(d.bitcast::<i32x4<S>>()),
     )
 }
 
-/// Four `i32x4` → one `u8x16`, clipped to `0..=255`.
+/// Two sequential `i32x8` groups to one clipped 16-pixel channel.
 #[inline(always)]
-fn pack4<S: Lanes>(a: i32x4<S>, b: i32x4<S>, c: i32x4<S>, d: i32x4<S>) -> u8x16<S> {
+fn pack2<S: Lanes>(a: i32x8<S>, b: i32x8<S>) -> u8x16<S> {
+    let (a0, a1) = a.split();
+    let (b0, b1) = b.split();
+    pack4_128(a0, a1, b0, b1)
+}
+
+/// Four sequential `i32x4` groups to one clipped 16-pixel channel.
+#[inline(always)]
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn pack4_128<S: Lanes>(a: i32x4<S>, b: i32x4<S>, c: i32x4<S>, d: i32x4<S>) -> u8x16<S> {
+    // Matrix outputs are biased by -128 on x86. Signed saturation therefore
+    // clamps to -128..=127; flipping the sign bit maps that exactly to 0..=255.
     let lo: i16x8<S> = a.relaxed_narrow(b);
     let hi: i16x8<S> = c.relaxed_narrow(d);
-    ops::simd::pack_u8_from_i16x8(lo, hi)
+    let packed: fearless_simd::i8x16<S> = lo.saturating_narrow(hi);
+    packed.bitcast::<u8x16<S>>() ^ 0x80u8
+}
+
+/// Non-x86 fallback preserving the native signed-to-unsigned narrow on NEON.
+#[inline(always)]
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn pack4_128<S: Lanes>(a: i32x4<S>, b: i32x4<S>, c: i32x4<S>, d: i32x4<S>) -> u8x16<S> {
+    let lo: i16x8<S> = a.relaxed_narrow(b);
+    let hi: i16x8<S> = c.relaxed_narrow(d);
+    let zero = i16x8::splat(a.witness(), 0);
+    let lo = lo.max(zero).bitcast::<fearless_simd::u16x8<S>>();
+    let hi = hi.max(zero).bitcast::<fearless_simd::u16x8<S>>();
+    lo.saturating_narrow(hi)
 }
 
 /// `INTERLEAVE[block][channel]` selects the bytes of one channel that land in
