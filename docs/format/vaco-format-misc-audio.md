@@ -109,6 +109,12 @@ reason:
 
 ## How it works
 
+`wavpack` preserves a declared total-sample count as an exact aggregate
+duration at the stream's native `1/sample_rate` clock. Its legacy
+microsecond `duration()` remains available for callers that need it, but
+duration-aware tools should consume the demuxer's exact view so a 44.1 kHz
+sample count is not rounded before display or rescaling.
+
 ### `block::BlockDemuxer` — the shared engine
 
 Once a format's header (if it has one) is parsed down to `(sample_rate,

@@ -23,7 +23,7 @@
 
 use vaco_chlayout::ChannelLayout;
 use vaco_codec_core::{CodecId, CodecParameters};
-use vaco_core::{Error, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Error, ExactDuration, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
 use vaco_format_core::{
     Demuxer, DemuxerDesc, FormatFlags, ParserProvider, SeekFlags, SeekTarget, Stream,
@@ -246,6 +246,10 @@ impl Demuxer for WavpackDemuxer {
             i64::try_from(micros).unwrap_or(i64::MAX),
         ))
     }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.stream.duration_exact()
+    }
 }
 
 #[cfg(test)]
@@ -292,6 +296,17 @@ mod tests {
         let p1 = d.read_packet().unwrap();
         assert_eq!(p1.payload()[HEADER_LEN as usize], 2);
         assert!(matches!(d.read_packet(), Err(Error::Eof)));
+    }
+
+    #[test]
+    fn aggregate_duration_keeps_the_native_sample_clock_exact() {
+        let data = one_block(1024, 1024, &[0xAAu8; 50]);
+        let d = WavpackDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
+
+        assert_eq!(
+            d.duration_exact().map(vaco_core::ExactDuration::as_ratio),
+            Some((256, 11_025))
+        );
     }
 
     #[test]
