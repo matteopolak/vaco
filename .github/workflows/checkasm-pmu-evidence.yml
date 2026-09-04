@@ -1,0 +1,64 @@
+name: Checkasm PMU evidence
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: direct checkasm cycles (evidence only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CARGO_INCREMENTAL: "0"
+      RUSTC_WRAPPER: ""
+      VACO_CHECKASM_MACHINE: github-ubuntu-x64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Record runner PMU context
+        shell: bash
+        run: |
+          set -euo pipefail
+          {
+            uname -a
+            printf 'perf_event_paranoid before: '
+            sysctl -n kernel.perf_event_paranoid
+            lscpu
+          } > checkasm-pmu-environment.txt
+      - name: Enable direct user-space PMU events on this ephemeral runner
+        shell: bash
+        run: sudo sysctl -w kernel.perf_event_paranoid=-1
+      - name: Measure a production SIMD adapter with the direct PMU counter
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo run --locked --release -j2 -p vaco-checkasm -- bench \
+            --test 'vaco-simd::ops::select_u8' --bench-cache hot \
+            --min-samples 30 --budget 250 --json checkasm-pmu.jsonl \
+            | tee checkasm-pmu.stdout
+      - name: Reject fallback or mixed metrics
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c '
+          import json
+          import sys
+          rows = [json.loads(line) for line in open(sys.argv[1], encoding="utf-8") if line.strip()]
+          assert len(rows) == 2, rows
+          assert all(row["machine"] == "github-ubuntu-x64" for row in rows), rows
+          assert all(row["os"] == "linux" and row["arch"] == "x86_64" for row in rows), rows
+          assert all(row["backend"] == "perf-event" and row["unit"] == "cycles" for row in rows), rows
+          assert all(row["samples"] >= 30 and row["median"] > 0 for row in rows), rows
+          ' checkasm-pmu.jsonl
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: checkasm-pmu-evidence-${{ github.sha }}
+          path: |
+            checkasm-pmu.jsonl
+            checkasm-pmu.stdout
+            checkasm-pmu-environment.txt
+          if-no-files-found: error
+          retention-days: 90

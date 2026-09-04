@@ -305,10 +305,13 @@ fn run_bench(options: &BenchOptions) -> i32 {
     let mut failed = false;
     for row in &results {
         println!(
-            "{} {} {} backend={} unit={} min={:.3} median={:.3} mad={:.3} p95={:.3} nop={:.3} iterations={} nop_iterations={} samples={} reference_ratio={} baseline_ratio={}",
+            "{} {} {} machine={} os={} arch={} backend={} unit={} min={:.3} median={:.3} mad={:.3} p95={:.3} nop={:.3} iterations={} nop_iterations={} samples={} reference_ratio={} baseline_ratio={}",
             row.kernel,
             row.variant,
             row.cache_state.as_str(),
+            row.machine,
+            row.os,
+            row.arch,
             row.backend,
             row.unit,
             row.corrected.min,

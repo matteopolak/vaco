@@ -149,6 +149,26 @@ pub struct Statistics {
     pub p95: f64,
 }
 
+/// Host fields that must agree before benchmark rows are comparable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct MachineFingerprint {
+    machine: String,
+    os: String,
+    arch: String,
+}
+
+impl MachineFingerprint {
+    fn detect() -> Self {
+        let os = std::env::consts::OS.to_owned();
+        let arch = std::env::consts::ARCH.to_owned();
+        let machine = std::env::var("VACO_CHECKASM_MACHINE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| format!("{os}-{arch}"));
+        Self { machine, os, arch }
+    }
+}
+
 /// One variant and cache-state measurement.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BenchResult {
@@ -158,6 +178,12 @@ pub struct BenchResult {
     pub variant: &'static str,
     /// Cache state for this row.
     pub cache_state: CacheState,
+    /// Stable host class, optionally set with `VACO_CHECKASM_MACHINE`.
+    pub machine: String,
+    /// Target operating system.
+    pub os: String,
+    /// Target architecture.
+    pub arch: String,
     /// Counter implementation. Currently `instant` on the portable path.
     pub backend: &'static str,
     /// `ns` for [`Instant`], reserved as `cycles` for a real PMU backend.
@@ -180,10 +206,22 @@ pub struct BenchResult {
     pub baseline_ratio: Option<f64>,
 }
 
-/// Stored benchmark rows keyed by kernel, variant, cache state, backend and unit.
+/// Stored benchmark rows keyed by kernel, variant, cache state, host and metric.
 #[derive(Debug, Clone, Default)]
 pub struct Baseline {
-    medians: BTreeMap<(String, String, String, String, String), f64>,
+    medians: BTreeMap<
+        (
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+            String,
+        ),
+        f64,
+    >,
 }
 
 /// Summarize a non-empty sample set.
@@ -275,6 +313,7 @@ where
     K: Kernel,
 {
     let case = K::benchmark_case().ok_or(BenchError::EmptyCorpus(K::NAME))?;
+    let machine = MachineFingerprint::detect();
     let mut results = Vec::new();
     for &cache_state in &config.cache_states {
         results.push(measure_variant::<K>(
@@ -283,6 +322,7 @@ where
             cache_state,
             "scalar",
             K::scalar,
+            &machine,
             measurement,
         )?);
         results.push(measure_variant::<K>(
@@ -291,6 +331,7 @@ where
             cache_state,
             "vector",
             K::vector,
+            &machine,
             measurement,
         )?);
     }
@@ -304,6 +345,7 @@ fn measure_variant<K>(
     cache_state: CacheState,
     variant: &'static str,
     call: fn(&K::Case) -> Vec<K::Lane>,
+    machine: &MachineFingerprint,
     measurement: &mut dyn Measurement,
 ) -> Result<BenchResult, BenchError>
 where
@@ -353,6 +395,9 @@ where
         kernel: K::NAME,
         variant,
         cache_state,
+        machine: machine.machine.clone(),
+        os: machine.os.clone(),
+        arch: machine.arch.clone(),
         backend: measurement.metric().backend,
         unit: measurement.metric().unit,
         iterations,
@@ -538,8 +583,9 @@ fn json_line(row: &BenchResult) -> String {
     let baseline = option_number(row.baseline_ratio);
     format!(
         concat!(
-            "{{\"schema\":1,\"scope\":\"adapter-inclusive\",",
+            "{{\"schema\":2,\"scope\":\"adapter-inclusive\",",
             "\"kernel\":{},\"variant\":{},\"cache\":{},",
+            "\"machine\":{},\"os\":{},\"arch\":{},",
             "\"backend\":{},\"unit\":{},\"iterations\":{},\"nop_iterations\":{},",
             "\"samples\":{},",
             "\"nop_median\":{},\"raw_median\":{},\"median\":{},",
@@ -549,6 +595,9 @@ fn json_line(row: &BenchResult) -> String {
         json_string(row.kernel),
         json_string(row.variant),
         json_string(row.cache_state.as_str()),
+        json_string(&row.machine),
+        json_string(&row.os),
+        json_string(&row.arch),
         json_string(row.backend),
         json_string(row.unit),
         row.iterations,
@@ -600,14 +649,30 @@ pub fn load_baseline(path: &Path) -> Result<Baseline, BenchError> {
         let kernel = string_field(&line, "kernel");
         let variant = string_field(&line, "variant");
         let cache = string_field(&line, "cache");
+        let machine = string_field(&line, "machine");
+        let os = string_field(&line, "os");
+        let arch = string_field(&line, "arch");
         let backend = string_field(&line, "backend");
         let unit = string_field(&line, "unit");
         let median = number_field(&line, "median");
-        match (kernel, variant, cache, backend, unit, median) {
-            (Some(kernel), Some(variant), Some(cache), Some(backend), Some(unit), Some(median)) => {
-                baseline
-                    .medians
-                    .insert((kernel, variant, cache, backend, unit), median);
+        match (
+            kernel, variant, cache, machine, os, arch, backend, unit, median,
+        ) {
+            (
+                Some(kernel),
+                Some(variant),
+                Some(cache),
+                Some(machine),
+                Some(os),
+                Some(arch),
+                Some(backend),
+                Some(unit),
+                Some(median),
+            ) => {
+                baseline.medians.insert(
+                    (kernel, variant, cache, machine, os, arch, backend, unit),
+                    median,
+                );
             }
             _ => return Err(BenchError::InvalidBaseline(line)),
         }
@@ -622,6 +687,9 @@ pub fn apply_baseline(results: &mut [BenchResult], baseline: &Baseline) {
             row.kernel.to_owned(),
             row.variant.to_owned(),
             row.cache_state.as_str().to_owned(),
+            row.machine.clone(),
+            row.os.clone(),
+            row.arch.clone(),
             row.backend.to_owned(),
             row.unit.to_owned(),
         );

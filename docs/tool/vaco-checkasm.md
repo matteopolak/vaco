@@ -93,12 +93,21 @@ CARGO_INCREMENTAL=0 cargo run -p vaco-checkasm --release -- bench \
   --baseline /private/tmp/checkasm.jsonl --fail-under 0.95
 ```
 
-JSONL identity is kernel, variant, cache state, backend and unit. Baselines
-only match the complete identity, preventing an `ns` row from being compared
-with a future `cycles` row. `baseline_ratio` is stored median divided by current
-median: values above one are faster and `--fail-under 0.95` allows at most a 5%
-slowdown. `reference_ratio` is scalar median divided by the current variant's
-median for the same cache state.
+Schema-2 JSONL rows record a machine class, target OS and architecture alongside
+the kernel, variant, cache state, backend and unit. Baselines only match the
+complete identity, preventing cross-host comparisons or an `ns` row from being
+compared with a `cycles` row. `VACO_CHECKASM_MACHINE` sets a stable runner class
+for controlled CI; otherwise it defaults to `<os>-<arch>`. `baseline_ratio` is
+stored median divided by current median: values above one are faster and
+`--fail-under 0.95` allows at most a 5% slowdown. `reference_ratio` is scalar
+median divided by the current variant's median for the same cache state.
+
+`.github/workflows/checkasm-pmu-evidence.yml` is manually dispatched only. It
+records the GitHub runner's PMU policy and CPU information, enables unprivileged
+hardware events for its ephemeral runner, and fails unless every JSONL row from
+the selected production kernel is honestly labelled `perf-event`/`cycles`.
+Its artifact is evidence that the Linux backend ran; it is not a CI performance
+regression gate on a shared runner.
 
 The external [`scripts/perf-hwcycles.py`](../instruction-count-benchmarking.md)
 still collects whole-process counts for Vaco and ffmpeg. It measures a
@@ -189,9 +198,10 @@ but it is not Linux PMU runtime evidence and makes no raw-cycle claim.
 hot|cold|both`, `--min-samples`, a per-variant `--budget` in milliseconds,
 `--json`, and `--baseline`. `--fail-under R` gates stored-baseline ratios;
 `--fail-slower-than-reference` gates vector rows slower than their scalar row.
-There are no environment variables or end-user feature flags. The tool enables
-the default-off `vaco-scale/checkasm` dependency feature solely to reach the
-opaque vertical-filter adapter described above.
+`VACO_CHECKASM_MACHINE` optionally names a stable machine class in JSONL; it
+does not override the separately recorded target OS or architecture. The tool
+enables the default-off `vaco-scale/checkasm` dependency feature solely to
+reach the opaque vertical-filter adapter described above.
 
 ## Dependencies
 

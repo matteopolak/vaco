@@ -66,6 +66,11 @@ fn benchmark_reports_one_honest_metric_nop_and_both_cache_states() {
         (result.backend == "instant" && result.unit == "ns")
             || (result.backend == "perf-event" && result.unit == "cycles")
     }));
+    assert!(results.iter().all(|result| {
+        !result.machine.is_empty()
+            && result.os == std::env::consts::OS
+            && result.arch == std::env::consts::ARCH
+    }));
     assert!(results.iter().all(|result| result.samples >= 3));
     assert!(results.iter().all(|result| result.iterations > 0));
     assert!(results.iter().all(|result| result.nop_iterations > 0));
@@ -107,9 +112,11 @@ fn jsonl_baseline_comparison_is_unit_and_identity_matched() {
             .all(|result| result.baseline_ratio == Some(1.0))
     );
 
-    let mismatched = std::fs::read_to_string(&path)
-        .expect("read JSONL")
-        .replace("\"unit\":\"ns\"", "\"unit\":\"cycles\"");
+    let machine = results[0].machine.clone();
+    let mismatched = std::fs::read_to_string(&path).expect("read JSONL").replace(
+        &format!("\"machine\":\"{machine}\""),
+        "\"machine\":\"different-machine\"",
+    );
     std::fs::write(&path, mismatched).expect("write mismatched baseline");
     let baseline = load_baseline(&path).expect("parse mismatched baseline");
     for result in &mut results {

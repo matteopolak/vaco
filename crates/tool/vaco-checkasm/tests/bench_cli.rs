@@ -54,6 +54,9 @@ fn bench_cli_measures_a_real_kernel_and_writes_jsonl() {
     assert!(jsonl.contains("\"nop_median\":"));
     assert!(jsonl.contains("\"nop_iterations\":"));
     assert!(jsonl.contains("\"cache\":\"hot\""));
+    assert!(jsonl.contains("\"machine\":"));
+    assert!(jsonl.contains(&format!("\"os\":\"{}\"", std::env::consts::OS)));
+    assert!(jsonl.contains(&format!("\"arch\":\"{}\"", std::env::consts::ARCH)));
     assert!(
         jsonl.contains("\"backend\":\"instant\",\"unit\":\"ns\"")
             || jsonl.contains("\"backend\":\"perf-event\",\"unit\":\"cycles\"")
