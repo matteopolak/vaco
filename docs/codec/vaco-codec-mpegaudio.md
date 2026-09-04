@@ -55,7 +55,7 @@ before scoring (`mp3_compare.py`, scratch script, not committed).
 | Layer | Fixtures tested | Result |
 |---|---|---|
 | I | none (no MP1 encoder available: neither `ffmpeg`'s build here nor any other tool on this machine can produce one) | Not verified against real audio. Header parsing, bit allocation (4-bit index, direct `nb = bal+1` dequant) and the synthesis filterbank are exercised by unit tests only (`layer1.rs`, `synthesis.rs`), plus the shared filterbank's correctness is established transitively by Layer II's real-file results below (same `Synthesis::synth_block` code, unmodified). |
-| II | 32000/44100/48000 Hz × mono/stereo (6 fixtures) | **Matches closely.** RMS error 1.2–10.7, cross-correlation 1.0000 at zero sample shift once a real bug (below) was fixed. Not bit-exact (float vs. fixed-point, plus the four MPEG-1 bit-allocation tables are used but the low-sample-rate table and intensity stereo are not — see gaps below), but close enough that the remaining error is plausibly rounding, not a structural mistake. |
+| II | 32000/44100/48000 Hz × mono/stereo: original 6 fixtures plus a 30-case bitrate-boundary sweep | **Matches closely.** The post-fix sweep covered both modes and every MPEG-1 allocation-table boundary: 32/48, 56/64/80, and 96 kbit/s per channel (with 48 kHz's 96 kbit/s still in B.2a). All 30 outputs had exact sample counts, 0.999999993 minimum correlation, 0.871 maximum RMS error, and maximum sample difference 2 versus `ffmpeg 9.0.1`. Not bit-exact (float vs. fixed-point, plus the four MPEG-1 bit-allocation tables are used but the low-sample-rate table and intensity stereo are not — see gaps below), but the remaining scatter is rounding, not a structural mistake. |
 | III | 12 fixtures: mono/stereo/independent-stereo/VBR, 32000/44100/48000 Hz, 64k–320k and VBR q2, 220 Hz–15000 Hz tones and a two-tone mix | **Matches closely, one real bug found and fixed this pass.** Correlation 0.975–0.997 across every fixture, RMS 113–441. Before this pass a 440 Hz tone reached only ~0.94–0.98 correlation depending on rate/bitrate and a 6000 Hz tone or a 64 kbit/s 32000 Hz fixture reached ~0.01–0.18 (near-zero — the two failed for genuinely different reasons, exactly as a "positive-but-poor" vs. "near-zero" correlation split predicts: block-type distribution across every fixture was checked first and ruled out short blocks as the cause, since it's ~1.3% short in every fixture regardless of content or bitrate). Root cause: `region0_end`/`region1_end` (the Huffman-table-selection boundaries within a granule's "big values") were computed as `sfb[region_count[0]]`/`sfb[region_count[0]+region_count[1]]` directly, when `region_count[0]`/`[1]` each hold *one less than* the actual scalefactor-band count for that region (`Vaco-Spec-Ref: iso-11172-3`, corroborated independently against a technical description of the format) — the correct index is `sfb[region_count[0]+1]`/`sfb[region_count[0]+region_count[1]+2]`. A signal concentrated in the first couple of bands (a low tone) barely reaches the misclassified boundary; content occupying more of the spectrum (a higher tone, or anything past the first two regions) gets Huffman-decoded there with the wrong table, which looks like plausible garbage rather than a bitstream desync. Still not bit-exact, and short blocks / intensity stereo remain unimplemented (see "Known gaps") — closed on correlation, not on completeness. **A second real bug was found and fixed in a later pass**: the MPEG-1 long scalefactor-band tables were one boundary short, silently zeroing every spectral line above 16.03 kHz at 44100/48000 Hz — see the dedicated section below for the measurement. |
 
 ### The MPEG-1 long scalefactor-band tables were one boundary short
@@ -157,6 +157,17 @@ work; per-issue disposition is in the "Known gaps" section below.
 
 ### Bugs found and fixed (for the record, not just interest)
 
+- **Layer II grouped quantisation.** Annex B.2a is already the correct
+  allocation table for 56/64/80 kbit/s per channel at 32/44.1 kHz; its header
+  was checked directly against ISO/IEC 11172-3 Annex B. The actual failure
+  was in `layer2_dequant_grouped`: it mapped each base-3/base-5/base-9 digit
+  evenly across `[-1, 1]`, instead of treating it as an implied 2/3/4-bit
+  Layer II sample code before applying its quantisation class's `C`/`D`.
+  The middle value of a 3-level class consequently decoded as 2/3 rather
+  than 0. The committed 64 kbit/s mono oracle test failed at correlation
+  0.922275 and RMS 4879.2 before the correction; it now runs normally, and
+  the 30-case sweep above checks every related bitrate/sample-rate/mode
+  boundary against `ffmpeg`.
 - **Layer III Huffman-region boundary off-by-one.** See the accuracy table
   above — this is the fix that took real-file correlation from ~0.01–0.98
   (content-dependent) to a consistent 0.975–0.997.
@@ -293,23 +304,6 @@ criteria:
   (up to 256), not a decode tree — correct, not fast. Acceptable for a
   first native implementation; flagged rather than silently accepted as
   "done."
-- **Layer II decodes wrong at 56/64/80 kbit/s per channel** (the
-  `LAYER2_TABLE_A` bit-allocation table's selection range at 32000/44100 Hz,
-  `bitalloc.rs::layer2_table`) — found writing `tests/oracle_ffmpeg.rs`: a
-  mono 64 kbit/s fixture correlates only 0.9223 with `ffmpeg`'s decode (RMS
-  error 4879.2 out of 32768, max single-sample diff 15013), uniformly
-  across the whole signal, while the sample *count* matches exactly
-  (16128/16128 — wrong values, not a framing bug). It reproduces identically
-  at 56/64/80 kbit/s and disappears at 96 kbit/s and above (`LAYER2_TABLE_B`)
-  at the same sample rates. The prior conformance pass's 6 Layer II fixtures never
-  varied bitrate independently of sample rate/channel count, so this
-  boundary was never exercised before. Ruled out: `LAYER2_TABLE_A`/`_B` row
-  content is byte-identical where they overlap; the bitrate table and frame-
-  length formula are correct by inspection; the SCFSI pattern table and the
-  granule-major sample loop (the previously-fixed bug, above) are unrelated.
-  Landed as `layer2_mono_64kbps_decodes_a_real_ffmpeg_stream_closely`,
-  `#[ignore]`d with the measured evidence, rather than guessed at from
-  memory of the exact table layout.
 
 ## How to change it
 

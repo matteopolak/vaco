@@ -83,8 +83,14 @@ const IMDCT_LEN: usize = 36;
 
 impl Layer3State {
     pub(crate) fn new(channels: usize) -> Result<Self> {
-        let plan = Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, IMDCT_LEN, 1.0, TxFlags::FULL_IMDCT)
-            .map_err(|_| Error::Unsupported("mpegaudio: failed to build the Layer III IMDCT plan"))?;
+        let plan = Plan::<f64>::new(
+            TxKind::Mdct,
+            Direction::Inverse,
+            IMDCT_LEN,
+            1.0,
+            TxFlags::FULL_IMDCT,
+        )
+        .map_err(|_| Error::Unsupported("mpegaudio: failed to build the Layer III IMDCT plan"))?;
         Ok(Self {
             overlap: vec![[[0.0; LINES_PER_SUBBAND]; SUBBANDS]; channels.max(1)],
             reservoir: Vec::new(),
@@ -763,8 +769,14 @@ mod imdct_tests {
 
     fn test_imdct() -> Tx<f64> {
         Tx::new(
-            Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, IMDCT_LEN, 1.0, TxFlags::FULL_IMDCT)
-                .unwrap(),
+            Plan::<f64>::new(
+                TxKind::Mdct,
+                Direction::Inverse,
+                IMDCT_LEN,
+                1.0,
+                TxFlags::FULL_IMDCT,
+            )
+            .unwrap(),
         )
     }
 
@@ -872,8 +884,14 @@ mod frequency_placement_tests {
         let mut overlap = [[0.0f32; LINES_PER_SUBBAND]; SUBBANDS];
         let mut pcm = Vec::new();
         let mut imdct = Tx::new(
-            Plan::<f64>::new(TxKind::Mdct, Direction::Inverse, IMDCT_LEN, 1.0, TxFlags::FULL_IMDCT)
-                .unwrap(),
+            Plan::<f64>::new(
+                TxKind::Mdct,
+                Direction::Inverse,
+                IMDCT_LEN,
+                1.0,
+                TxFlags::FULL_IMDCT,
+            )
+            .unwrap(),
         );
         for _ in 0..40 {
             let mut xr = [0.0f32; LINES];

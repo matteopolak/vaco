@@ -100,7 +100,10 @@ fn decode_file(path: &std::path::Path) -> (Vec<i16>, u32) {
         loop {
             match decoder.receive_frame() {
                 Ok(frame) => {
-                    let FrameData::Audio { samples, layout, .. } = &frame.data else {
+                    let FrameData::Audio {
+                        samples, layout, ..
+                    } = &frame.data
+                    else {
                         panic!("expected an audio frame");
                     };
                     channels = layout.channels.max(1);
@@ -135,7 +138,11 @@ fn decode_file(path: &std::path::Path) -> (Vec<i16>, u32) {
 /// Pearson correlation and RMS error between two equal-length interleaved
 /// `i16` buffers.
 fn correlation_and_rms(ours: &[i16], reference: &[i16]) -> (f64, f64) {
-    assert_eq!(ours.len(), reference.len(), "length mismatch inside comparison helper");
+    assert_eq!(
+        ours.len(),
+        reference.len(),
+        "length mismatch inside comparison helper"
+    );
     let n = ours.len() as f64;
     let (mut sum_a, mut sum_b) = (0.0, 0.0);
     for (&a, &b) in ours.iter().zip(reference.iter()) {
@@ -181,40 +188,13 @@ fn layer2_mono_128kbps_decodes_a_real_ffmpeg_stream_closely() {
     );
     let (corr, rms) = correlation_and_rms(&decoded, &reference);
     assert!(corr > 0.999, "correlation too low: {corr}");
-    assert!(rms < 50.0, "RMS error too high (out of 32768 full scale): {rms}");
+    assert!(
+        rms < 50.0,
+        "RMS error too high (out of 32768 full scale): {rms}"
+    );
 }
 
-// This fixture is bit-identical in content and duration to
-// `mp2_mono_128k.mp2` above (same source signal, same sample rate, same
-// duration), encoded at a lower per-channel bitrate that lands in a
-// different Layer II bit-allocation table (`LAYER2_TABLE_A`'s
-// 56/64/80 kbit/s-per-channel range, `bitalloc.rs::layer2_table`, vs
-// `LAYER2_TABLE_B` above 96). That table-selection boundary was never
-// exercised by this crate's prior conformance pass (its 6 Layer II
-// fixtures, per `docs/codec/vaco-codec-mpegaudio.md`, did not vary bitrate
-// independently of sample rate/channel count) and is a real, reproducible
-// bug: measured on this fixture, correlation 0.9223, RMS error 4879.2 (out
-// of 32768 full scale), max single-sample diff 15013 -- and the sample
-// *count* matches ffmpeg's exactly (16128/16128), so this is wrong values,
-// not a framing/count bug. The error is uniform across the whole signal
-// (not concentrated at frame edges or a particular frequency), reproducing
-// identically at 56/64/80 kbit/s and disappearing at 96 kbit/s and above,
-// at both 32000 and 44100 Hz.
-//
-// Ruled out while investigating: `LAYER2_TABLE_A`/`_B`'s row *content* is
-// byte-identical where they overlap (only the trailing row count differs);
-// the bitrate table (`BITRATE_MPEG1_II`) and Layer II frame-length formula
-// are both correct by direct inspection; the SCFSI transmission-pattern
-// table and the granule-major/subband-minor sample loop (a previously fixed
-// bug, see `layer2.rs`'s own comment on it) are unaffected. The defect is
-// real and isolated to this exact table-selection range, but the precise
-// mechanism was not pinned down within this pass's budget -- filed rather
-// than guessed at, per CLAUDE.md's own instruction not to "get the correct
-// answer wrong from memory" on an exact table layout.
 #[test]
-#[ignore = "Layer II mid-bitrate (56/64/80 kbit/s per channel) bit-allocation \
-            table selection produces uniformly wrong PCM (correlation 0.9223, \
-            RMS 4879.2/32768); see this test's doc comment for measured evidence"]
 fn layer2_mono_64kbps_decodes_a_real_ffmpeg_stream_closely() {
     let (decoded, channels) = decode_file(&fixture_path("mp2_mono_64k.mp2"));
     let reference = s16le(&std::fs::read(fixture_path("mp2_mono_64k_ref.raw")).unwrap());
@@ -222,7 +202,10 @@ fn layer2_mono_64kbps_decodes_a_real_ffmpeg_stream_closely() {
     assert_eq!(decoded.len(), reference.len(), "sample count mismatch");
     let (corr, rms) = correlation_and_rms(&decoded, &reference);
     assert!(corr > 0.999, "correlation too low: {corr}");
-    assert!(rms < 50.0, "RMS error too high (out of 32768 full scale): {rms}");
+    assert!(
+        rms < 50.0,
+        "RMS error too high (out of 32768 full scale): {rms}"
+    );
 }
 
 // ----------------------------------------------------------------- Layer III
@@ -257,14 +240,23 @@ fn layer3_stereo_decodes_a_real_ffmpeg_stream_closely() {
     // a real full-file regression) and checks the middle frames -- entirely
     // unaffected by that gap -- tightly.
     let (whole_corr, _) = correlation_and_rms(&decoded, &reference);
-    assert!(whole_corr > 0.9, "whole-file correlation too low: {whole_corr}");
+    assert!(
+        whole_corr > 0.9,
+        "whole-file correlation too low: {whole_corr}"
+    );
 
     let nframes = reference.len().div_euclid(MP3_FRAME_INTERLEAVED);
-    assert!(nframes > 4, "fixture too short to exclude 2 edge frames on each side");
+    assert!(
+        nframes > 4,
+        "fixture too short to exclude 2 edge frames on each side"
+    );
     let lo = 2 * MP3_FRAME_INTERLEAVED;
     let hi = (nframes - 2) * MP3_FRAME_INTERLEAVED;
     let (mid_corr, mid_rms) = correlation_and_rms(&decoded[lo..hi], &reference[lo..hi]);
-    assert!(mid_corr > 0.9999, "middle-frame correlation too low: {mid_corr}");
+    assert!(
+        mid_corr > 0.9999,
+        "middle-frame correlation too low: {mid_corr}"
+    );
     assert!(
         mid_rms < 10.0,
         "middle-frame RMS error too high (out of 32768 full scale): {mid_rms}"
@@ -296,7 +288,10 @@ fn layer3_stereo_decodes_a_real_ffmpeg_stream_closely() {
 fn layer3_transient_bursts_decode_a_real_ffmpeg_stream_without_new_divergence() {
     let (decoded, channels) = decode_file(&fixture_path("mp3_transient_bursts.mp3"));
     let reference = s16le(&std::fs::read(fixture_path("mp3_transient_bursts_ref.raw")).unwrap());
-    assert_eq!(channels, 1, "fixture is mono (aevalsrc defaults to one channel)");
+    assert_eq!(
+        channels, 1,
+        "fixture is mono (aevalsrc defaults to one channel)"
+    );
     assert_eq!(
         decoded.len(),
         reference.len(),

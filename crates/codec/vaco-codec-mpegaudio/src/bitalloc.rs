@@ -55,16 +55,15 @@ pub(crate) fn layer2_dequant_ungrouped(code: u32, bits: u32, nlevels: u32) -> f3
 
 /// Layer II grouped triplet: degroup by repeated `% nlevels` / `/ nlevels`
 /// (least-significant sample first, `Vaco-Spec-Ref: iso-11172-3` §2.4.3.3's
-/// own pseudocode), then map each of the three values onto `[-1, 1]`
-/// symmetrically before applying the same `C`/`D` formula — `nlevels` here
-/// is not a power of two, so the bit-inversion form Layer I uses does not
-/// apply directly.
+/// own pseudocode), then requantise each digit with the class's implied
+/// sample width before applying the same `C`/`D` formula.
 #[allow(
     clippy::integer_division,
     reason = "degrouping a base-`nlevels` codeword is defined by repeated div/mod, not a rounding shortcut"
 )]
 pub(crate) fn layer2_dequant_grouped(mut combined: u32, nlevels: u32) -> [f32; 3] {
     let (c, d) = quant_constants(nlevels);
+    let sample_bits = nlevels.ilog2() + 1;
     let mut digits = [0u32; 3];
     for slot in &mut digits {
         *slot = combined % nlevels;
@@ -72,7 +71,7 @@ pub(crate) fn layer2_dequant_grouped(mut combined: u32, nlevels: u32) -> [f32; 3
     }
     let mut out = [0.0f32; 3];
     for (slot, &v) in out.iter_mut().zip(digits.iter()) {
-        let frac = (2.0 * v as f32 / (nlevels - 1) as f32) - 1.0;
+        let frac = code_to_fraction(v, sample_bits);
         *slot = c * (frac + d);
     }
     out
@@ -148,5 +147,18 @@ mod tests {
         // should sit at exactly `C * D`, near zero for a wide `nb`.
         let v = layer1_dequant(1 << 15, 16);
         assert!(v.abs() < 0.01, "{v}");
+    }
+
+    #[test]
+    fn grouped_three_level_codes_keep_the_middle_value_at_zero() {
+        let decoded = layer2_dequant_grouped(21, 3);
+        let expected = [-2.0 / 3.0, 0.0, 2.0 / 3.0];
+        assert!(
+            decoded
+                .iter()
+                .zip(expected)
+                .all(|(&actual, expected)| (actual - expected).abs() < f32::EPSILON),
+            "decoded={decoded:?}"
+        );
     }
 }
