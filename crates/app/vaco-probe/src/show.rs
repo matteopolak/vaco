@@ -933,7 +933,11 @@ pub fn packet<W: Write>(
 /// build emits one — so they are marked as such rather than presented as
 /// observed.
 fn packet_side_data<W: Write>(e: &mut Emit<'_, W>, pkt: &Packet) -> Result<()> {
-    if pkt.side_data.is_empty() {
+    if !pkt
+        .side_data
+        .iter()
+        .any(|datum| !matches!(datum, PacketSideData::DurationTicks(_)))
+    {
         return Ok(());
     }
     e.tf().open(SectionId::PACKET_SIDE_DATA_LIST)?;

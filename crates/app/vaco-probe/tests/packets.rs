@@ -375,6 +375,7 @@ fn exact_packet_duration_ticks_are_reported_without_microsecond_round_trip() {
     let output = String::from_utf8(sink).expect("utf8");
     assert!(output.contains("duration=655360\n"), "{output}");
     assert!(output.contains("duration_time=0.023220\n"), "{output}");
+    assert!(!output.contains("[SIDE_DATA]"), "{output}");
 }
 
 #[test]
