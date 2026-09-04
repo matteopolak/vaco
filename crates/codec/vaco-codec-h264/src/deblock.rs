@@ -216,8 +216,7 @@ fn boundary_strength(
     p_blk: usize,
     q_mb: &MbSummary,
     q_blk: usize,
-    ref_list0_poc: &[i32],
-    ref_list1_poc: &[i32],
+    slices: &[SliceDeblock],
 ) -> u8 {
     if is_intra(p_mb) || is_intra(q_mb) {
         return if mb_edge { 4 } else { 3 };
@@ -228,10 +227,12 @@ fn boundary_strength(
     let p_mv = p_mb.mv_blocks.get(p_blk).copied().unwrap_or_default();
     let q_mv = q_mb.mv_blocks.get(q_blk).copied().unwrap_or_default();
 
-    let p0 = ref_poc(ref_list0_poc, p_mv.ref_idx_l0());
-    let p1 = ref_poc(ref_list1_poc, p_mv.ref_idx_l1());
-    let q0 = ref_poc(ref_list0_poc, q_mv.ref_idx_l0());
-    let q1 = ref_poc(ref_list1_poc, q_mv.ref_idx_l1());
+    let (p_l0, p_l1) = pocs_for(slices, p_mb);
+    let (q_l0, q_l1) = pocs_for(slices, q_mb);
+    let p0 = ref_poc(p_l0, p_mv.ref_idx_l0());
+    let p1 = ref_poc(p_l1, p_mv.ref_idx_l1());
+    let q0 = ref_poc(q_l0, q_mv.ref_idx_l0());
+    let q1 = ref_poc(q_l1, q_mv.ref_idx_l1());
 
     // JM's own `(ref_p0==ref_q0 && ref_p1==ref_q1) || (ref_p0==ref_q1 &&
     // ref_p1==ref_q0)`: the two sides use the same *set* of reference
@@ -370,15 +371,16 @@ pub(crate) fn deblock_picture_luma(
         return Ok(());
     }
 
-    let ctx = DeblockCtx::new(
-        macroblocks,
-        mbs_wide,
-        mbs_high,
-        slice_alpha_c0_offset_div2,
-        slice_beta_offset_div2,
-        ref_list0_poc,
-        ref_list1_poc,
-    );
+    let slices = [SliceDeblock {
+        params: DeblockParams {
+            disable_idc: disable_deblocking_filter_idc,
+            alpha_c0_offset_div2: slice_alpha_c0_offset_div2,
+            beta_offset_div2: slice_beta_offset_div2,
+        },
+        ref_list0_poc: ref_list0_poc.to_vec(),
+        ref_list1_poc: ref_list1_poc.to_vec(),
+    }];
+    let ctx = DeblockCtx::new(macroblocks, mbs_wide, mbs_high, &slices);
     for my in 0..mbs_high {
         ctx.luma_mb_row(luma, my);
     }
@@ -423,15 +425,16 @@ pub(crate) fn deblock_picture_chroma(
         return;
     }
 
-    let ctx = DeblockCtx::new(
-        macroblocks,
-        mbs_wide,
-        mbs_high,
-        slice_alpha_c0_offset_div2,
-        slice_beta_offset_div2,
-        ref_list0_poc,
-        ref_list1_poc,
-    );
+    let slices = [SliceDeblock {
+        params: DeblockParams {
+            disable_idc: disable_deblocking_filter_idc,
+            alpha_c0_offset_div2: slice_alpha_c0_offset_div2,
+            beta_offset_div2: slice_beta_offset_div2,
+        },
+        ref_list0_poc: ref_list0_poc.to_vec(),
+        ref_list1_poc: ref_list1_poc.to_vec(),
+    }];
+    let ctx = DeblockCtx::new(macroblocks, mbs_wide, mbs_high, &slices);
     for my in 0..mbs_high {
         ctx.chroma_mb_row(chroma, chroma_qp_offset, my);
     }
@@ -450,10 +453,82 @@ pub(crate) struct DeblockCtx<'a> {
     caps: Caps,
     grid: MbGrid<'a>,
     mbs_wide: u32,
-    filter_offset_a: i32,
-    filter_offset_b: i32,
-    ref_list0_poc: &'a [i32],
-    ref_list1_poc: &'a [i32],
+    /// One entry per slice of this picture, indexed by `MbSummary::slice_id`.
+    ///
+    /// Clause 8.7 reads `disable_deblocking_filter_idc` and the two offsets
+    /// from the slice header of the macroblock containing `q0` -- the
+    /// macroblock being filtered -- so with more than one slice per picture
+    /// these are not picture constants, and a single pair of offsets would
+    /// silently apply one slice's thresholds to another's edges.
+    slices: &'a [SliceDeblock],
+}
+
+/// The slice-header knobs clause 8.7's filter reads, carried whole rather than
+/// as loose arguments. One per slice of a picture.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct DeblockParams {
+    /// `disable_deblocking_filter_idc`: `0` filters everything, `1` disables
+    /// the filter for this slice, `2` filters this slice's internal edges but
+    /// leaves its boundaries with *other* slices alone.
+    pub(crate) disable_idc: u32,
+    pub(crate) alpha_c0_offset_div2: i32,
+    pub(crate) beta_offset_div2: i32,
+}
+
+/// Everything clause 8.7 reads that belongs to one slice rather than to the
+/// whole picture, indexed by [`MbSummary::slice_id`].
+///
+/// The two reference lists are here, not on [`DeblockCtx`], because
+/// `ref_idx_lX` is an index into *that slice's* own list: with more than one
+/// slice per picture the two sides of a macroblock edge can resolve the same
+/// `ref_idx` to different pictures, so clause 8.7.2.1's "do both sides use
+/// the same reference pictures" test has to go through each side's own list.
+/// POC is a picture-global identity, so the comparison across slices is still
+/// meaningful once each side has been resolved.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct SliceDeblock {
+    pub(crate) params: DeblockParams,
+    pub(crate) ref_list0_poc: Vec<i32>,
+    pub(crate) ref_list1_poc: Vec<i32>,
+}
+
+/// The per-slice record that owns `mb`, or a default one if the picture
+/// carried no entry for it.
+fn slice_of<'s>(slices: &'s [SliceDeblock], mb: &MbSummary) -> Option<&'s SliceDeblock> {
+    slices.get(mb.slice_id as usize)
+}
+
+/// `(filter_offset_a, filter_offset_b)` for the slice that owns `mb`, with
+/// clause 8.7.2.2's own `* 2` applied.
+fn offsets_for(slices: &[SliceDeblock], mb: &MbSummary) -> (i32, i32) {
+    let p = slice_of(slices, mb).map(|s| s.params).unwrap_or_default();
+    (
+        p.alpha_c0_offset_div2.saturating_mul(2),
+        p.beta_offset_div2.saturating_mul(2),
+    )
+}
+
+/// Whether clause 8.7's filter runs at all for the macroblock `mb`
+/// (`disable_deblocking_filter_idc == 1` switches it off for that slice
+/// alone, not for the picture).
+fn filter_enabled(slices: &[SliceDeblock], mb: &MbSummary) -> bool {
+    slice_of(slices, mb).is_none_or(|s| s.params.disable_idc != 1)
+}
+
+/// Whether the edge `mb` shares with the neighbouring macroblock `other` is
+/// filtered: `disable_deblocking_filter_idc == 2` keeps the filter inside
+/// each slice, so an edge between two different slices is left alone.
+fn filters_across(slices: &[SliceDeblock], mb: &MbSummary, other: &MbSummary) -> bool {
+    mb.slice_id == other.slice_id
+        || slice_of(slices, mb).is_none_or(|s| s.params.disable_idc != 2)
+}
+
+/// The two reference-POC lists `mb`'s own slice resolves `ref_idx_lX`
+/// against.
+fn pocs_for<'s>(slices: &'s [SliceDeblock], mb: &MbSummary) -> (&'s [i32], &'s [i32]) {
+    slice_of(slices, mb).map_or((&[][..], &[][..]), |s| {
+        (&s.ref_list0_poc, &s.ref_list1_poc)
+    })
 }
 
 impl<'a> DeblockCtx<'a> {
@@ -464,19 +539,13 @@ impl<'a> DeblockCtx<'a> {
         macroblocks: &'a [MbSummary],
         mbs_wide: u32,
         mbs_high: u32,
-        slice_alpha_c0_offset_div2: i32,
-        slice_beta_offset_div2: i32,
-        ref_list0_poc: &'a [i32],
-        ref_list1_poc: &'a [i32],
+        slices: &'a [SliceDeblock],
     ) -> Self {
         Self {
             caps: Caps::detect(),
             grid: MbGrid::new(macroblocks, mbs_wide, mbs_high),
             mbs_wide,
-            filter_offset_a: slice_alpha_c0_offset_div2.saturating_mul(2),
-            filter_offset_b: slice_beta_offset_div2.saturating_mul(2),
-            ref_list0_poc,
-            ref_list1_poc,
+            slices,
         }
     }
 
@@ -497,10 +566,7 @@ impl<'a> DeblockCtx<'a> {
     pub(crate) fn luma_mb_row(&self, luma: &mut [u8], my: u32) {
         let caps = self.caps;
         let grid = &self.grid;
-        let filter_offset_a = self.filter_offset_a;
-        let filter_offset_b = self.filter_offset_b;
-        let ref_list0_poc = self.ref_list0_poc;
-        let ref_list1_poc = self.ref_list1_poc;
+        let slices = self.slices;
         let mbs_wide = self.mbs_wide;
         let width = mbs_wide.saturating_mul(16);
 
@@ -517,6 +583,10 @@ impl<'a> DeblockCtx<'a> {
             let Some(here) = grid.at(mx, my) else {
                 continue;
             };
+            if !filter_enabled(slices, here) {
+                continue;
+            }
+            let (filter_offset_a, filter_offset_b) = offsets_for(slices, here);
             let qp_here = grid.qpy(mx, my);
 
             // Vertical edges first, left to right (clause 8.7's own
@@ -525,6 +595,13 @@ impl<'a> DeblockCtx<'a> {
             // internal to this macroblock alone.
             for local in [0u32, 4, 8, 12] {
                 if local == 0 && mx == 0 {
+                    continue;
+                }
+                if local == 0
+                    && grid
+                        .at(mx - 1, my)
+                        .is_some_and(|left| !filters_across(slices, here, left))
+                {
                     continue;
                 }
                 if !filters_luma_edge(here, local) {
@@ -580,8 +657,7 @@ impl<'a> DeblockCtx<'a> {
                         p_blk,
                         here,
                         q_blk,
-                        ref_list0_poc,
-                        ref_list1_poc,
+                        slices,
                     );
                 }
                 for row in 0..16u32 {
@@ -639,6 +715,13 @@ impl<'a> DeblockCtx<'a> {
                 if local == 0 && my == 0 {
                     continue;
                 }
+                if local == 0
+                    && grid
+                        .at(mx, my - 1)
+                        .is_some_and(|above| !filters_across(slices, here, above))
+                {
+                    continue;
+                }
                 if !filters_luma_edge(here, local) {
                     continue;
                 }
@@ -680,8 +763,7 @@ impl<'a> DeblockCtx<'a> {
                         p_blk,
                         here,
                         q_blk,
-                        ref_list0_poc,
-                        ref_list1_poc,
+                        slices,
                     );
                 }
                 for col in 0..16u32 {
@@ -747,10 +829,7 @@ impl<'a> DeblockCtx<'a> {
     pub(crate) fn chroma_mb_row(&self, chroma: &mut [u8], chroma_qp_offset: i32, my: u32) {
         let caps = self.caps;
         let grid = &self.grid;
-        let filter_offset_a = self.filter_offset_a;
-        let filter_offset_b = self.filter_offset_b;
-        let ref_list0_poc = self.ref_list0_poc;
-        let ref_list1_poc = self.ref_list1_poc;
+        let slices = self.slices;
         let mbs_wide = self.mbs_wide;
         let width = mbs_wide.saturating_mul(8);
         let qpc = |mx: u32, my: u32| -> u8 {
@@ -771,6 +850,10 @@ impl<'a> DeblockCtx<'a> {
             let Some(here) = grid.at(mx, my) else {
                 continue;
             };
+            if !filter_enabled(slices, here) {
+                continue;
+            }
+            let (filter_offset_a, filter_offset_b) = offsets_for(slices, here);
             let qp_here = qpc(mx, my);
 
             // Vertical: chroma-local x == 0 (macroblock boundary, luma
@@ -778,6 +861,13 @@ impl<'a> DeblockCtx<'a> {
             // position with a real chroma column at 4:2:0).
             for (c_local, luma_local) in [(0u32, 0u32), (4, 8)] {
                 if c_local == 0 && mx == 0 {
+                    continue;
+                }
+                if c_local == 0
+                    && grid
+                        .at(mx - 1, my)
+                        .is_some_and(|left| !filters_across(slices, here, left))
+                {
                     continue;
                 }
                 let mb_edge = c_local == 0;
@@ -819,8 +909,7 @@ impl<'a> DeblockCtx<'a> {
                         p_blk,
                         here,
                         q_blk,
-                        ref_list0_poc,
-                        ref_list1_poc,
+                        slices,
                     );
                 }
                 for row in 0..8u32 {
@@ -856,6 +945,13 @@ impl<'a> DeblockCtx<'a> {
                 if c_local == 0 && my == 0 {
                     continue;
                 }
+                if c_local == 0
+                    && grid
+                        .at(mx, my - 1)
+                        .is_some_and(|above| !filters_across(slices, here, above))
+                {
+                    continue;
+                }
                 let mb_edge = c_local == 0;
                 let (p_mb, qp_p) = if mb_edge {
                     #[allow(clippy::unwrap_used, reason = "my > 0 here, checked above")]
@@ -887,8 +983,7 @@ impl<'a> DeblockCtx<'a> {
                         p_blk,
                         here,
                         q_blk,
-                        ref_list0_poc,
-                        ref_list1_poc,
+                        slices,
                     );
                 }
                 for col in 0..8u32 {
@@ -954,6 +1049,7 @@ mod tests {
             qpy: 40,
             residual: MbResidual::default(),
             mv_blocks: [MvInfo::default(); 16],
+            slice_id: 0,
         }
     }
 
@@ -992,7 +1088,8 @@ mod tests {
         let (mbs_wide, mbs_high) = (3u32, 3u32);
         let (w, h) = ((mbs_wide * 16) as usize, (mbs_high * 16) as usize);
         let mbs = grid(mbs_wide, mbs_high);
-        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, 0, 0, &[], &[]);
+        let slices = [SliceDeblock::default()];
+        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, &slices);
         let before = plane(w, h);
         let mut after = before.clone();
         ctx.luma_mb_row(&mut after, 1);
@@ -1022,7 +1119,8 @@ mod tests {
         let (mbs_wide, mbs_high) = (3u32, 3u32);
         let (w, h) = ((mbs_wide * 8) as usize, (mbs_high * 8) as usize);
         let mbs = grid(mbs_wide, mbs_high);
-        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, 0, 0, &[], &[]);
+        let slices = [SliceDeblock::default()];
+        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, &slices);
         let before = plane(w, h);
         let mut after = before.clone();
         ctx.chroma_mb_row(&mut after, 0, 1);
@@ -1054,7 +1152,8 @@ mod tests {
         let mut whole = plane(w, h);
         deblock_picture_luma(&mut whole, &mbs, mbs_wide, mbs_high, 0, 0, 0, &[], &[]).unwrap();
         let mut rows = plane(w, h);
-        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, 0, 0, &[], &[]);
+        let slices = [SliceDeblock::default()];
+        let ctx = DeblockCtx::new(&mbs, mbs_wide, mbs_high, &slices);
         for my in 0..mbs_high {
             ctx.luma_mb_row(&mut rows, my);
         }

@@ -50,11 +50,16 @@
 //!   exercises it, and [`reconstruct_picture_luma`] returns luma only.
 //! - **`I_PCM`.** Refused with an error rather than attempted -- not
 //!   exercised by any fixture on hand.
-//! - **Anything beyond one slice == one whole picture.** Every fixture
-//!   this module has been run against has exactly this shape (confirmed
-//!   structurally, `first_mb_in_slice == 0` on every slice); real
-//!   multi-slice-per-picture neighbour-availability handling (clause
-//!   6.4.8's "different slice" rule) is not implemented.
+//! Clause 6.4.8's "a macroblock in a different slice is not available"
+//! rule *is* implemented, for pictures coded as any number of slices:
+//! [`PictureBuffer::decoded_4x4`]/`chroma_decoded` record which slice wrote
+//! each block rather than merely that one did, so an intra neighbour
+//! lookup from another slice reads as unavailable. `PictureReconstructor`
+//! takes one [`PictureCtx`] per slice for the same reason -- reference
+//! lists and the weighted-prediction tables come from the slice header.
+//! Verified byte-exact against `ffmpeg` and against the JVT suite's own
+//! published reference decode on `BASQP1_Sony_C` (20 slices per picture)
+//! and `SVA_CL1_E` (3), and by `tests/multi_slice_matches_ffmpeg.rs`.
 
 #![allow(
     dead_code,
@@ -159,9 +164,18 @@ struct PictureBuffer {
     mbs_high: u32,
     /// Row-major, `mbs_wide * 16` wide.
     luma: Vec<u8>,
-    /// One per global 4x4 luma block position, row-major,
-    /// `mbs_wide * 4` wide.
-    decoded_4x4: Vec<bool>,
+    /// One per global 4x4 luma block position, row-major, `mbs_wide * 4`
+    /// wide: `0` for a block nothing has written yet, otherwise
+    /// `slice_id + 1` of the slice that wrote it.
+    ///
+    /// Clause 6.4.8 makes a neighbouring macroblock "not available" when it
+    /// belongs to a *different* slice, so intra prediction must not read a
+    /// sample another slice reconstructed even though that sample is
+    /// already in the plane. Storing the writer's slice here rather than a
+    /// bare "written" flag beside a separate slice map means the two facts
+    /// cannot disagree -- availability is one equality test against the
+    /// reading macroblock's own slice.
+    decoded_4x4: Vec<u16>,
     /// Row-major, `mbs_wide * 8` wide -- `ChromaArrayType == 1` (4:2:0),
     /// this crate's only supported chroma format, halves each dimension.
     cb: Vec<u8>,
@@ -173,8 +187,15 @@ struct PictureBuffer {
     /// always predicted and reconstructed together (clause 8.3.3's
     /// `intra_chroma_pred_mode` is one value per macroblock, not per
     /// 4x4 block the way `Intra_4x4` luma is), so one bitmap serves both
-    /// Cb and Cr.
-    chroma_decoded: Vec<bool>,
+    /// Cb and Cr. Same `0`/`slice_id + 1` encoding as
+    /// [`PictureBuffer::decoded_4x4`], for the same clause 6.4.8 reason.
+    chroma_decoded: Vec<u16>,
+    /// The slice whose macroblock is being reconstructed right now, as
+    /// `slice_id + 1` -- what every write below stamps and every
+    /// availability test above compares against. Set once per macroblock by
+    /// [`reconstruct_mb`], so no individual write or neighbour lookup has to
+    /// carry it.
+    current_slice: u16,
 }
 
 impl PictureBuffer {
@@ -206,10 +227,11 @@ impl PictureBuffer {
             mbs_wide,
             mbs_high,
             luma,
-            decoded_4x4: vec![false; bw.saturating_mul(bh)],
+            decoded_4x4: vec![0; bw.saturating_mul(bh)],
             cb,
             cr,
-            chroma_decoded: vec![false; cbw.saturating_mul(cbh)],
+            chroma_decoded: vec![0; cbw.saturating_mul(cbh)],
+            current_slice: 1,
         })
     }
 
@@ -241,7 +263,8 @@ impl PictureBuffer {
         self.decoded_4x4
             .get((by * bw + bx) as usize)
             .copied()
-            .unwrap_or(false)
+            .unwrap_or(0)
+            == self.current_slice
     }
 
     fn pixel(&self, x: i32, y: i32) -> u8 {
@@ -294,9 +317,10 @@ impl PictureBuffer {
     )]
     fn mark_block_decoded(&mut self, x: u32, y: u32) {
         let bw = self.mbs_wide * 4;
+        let cur = self.current_slice;
         let (bx, by) = (x / 4, y / 4);
         if let Some(slot) = self.decoded_4x4.get_mut((by * bw + bx) as usize) {
-            *slot = true;
+            *slot = cur;
         }
     }
 
@@ -349,7 +373,8 @@ impl PictureBuffer {
         self.chroma_decoded
             .get((by * bw + bx) as usize)
             .copied()
-            .unwrap_or(false)
+            .unwrap_or(0)
+            == self.current_slice
     }
 
     /// `comp == 0` is Cb, `comp == 1` is Cr -- matching
@@ -402,11 +427,12 @@ impl PictureBuffer {
     /// reconstructed.
     fn mark_chroma_mb_decoded(&mut self, mb_x: u32, mb_y: u32) {
         let bw = self.mbs_wide * 2;
+        let cur = self.current_slice;
         for dy in 0..2u32 {
             for dx in 0..2u32 {
                 let (bx, by) = (mb_x * 2 + dx, mb_y * 2 + dy);
                 if let Some(slot) = self.chroma_decoded.get_mut((by * bw + bx) as usize) {
-                    *slot = true;
+                    *slot = cur;
                 }
             }
         }
@@ -2110,6 +2136,10 @@ fn reconstruct_mb(
     ctx: &PictureCtx<'_>,
     scratch: &mut ReadScratch,
 ) -> vaco_core::Result<()> {
+    // Clause 6.4.8: every availability test and every write below is
+    // relative to the slice this macroblock belongs to. `+ 1` keeps `0`
+    // meaning "nothing has written this block yet".
+    buf.current_slice = mb.slice_id.saturating_add(1);
     let (ref_width, ref_height) = (ctx.ref_width, ctx.ref_height);
     let (chroma_width, chroma_height) = (ctx.chroma_width, ctx.chroma_height);
     let (chroma_qp_offset_cb, chroma_qp_offset_cr) =
@@ -2271,6 +2301,27 @@ pub(crate) fn macroblocks_in_raster_order(
             .all(|(i, mb)| (mb.mb_y.saturating_mul(mbs_wide).saturating_add(mb.mb_x) as usize) == i)
 }
 
+/// The reconstruction context of the slice that decoded `mb`.
+///
+/// Reference lists, the weighted-prediction tables and the bi-prediction
+/// mode all come from the slice header, so with more than one slice per
+/// picture they are per-slice inputs -- a picture-wide context would predict
+/// one slice's macroblocks from another slice's reference list.
+///
+/// # Errors
+///
+/// [`vaco_core::Error::InvalidData`] if a macroblock names a slice the
+/// picture does not have, which would otherwise silently reconstruct against
+/// the wrong references.
+fn ctx_for<'c, 'p>(
+    slices: &'c [PictureCtx<'p>],
+    mb: &MbSummary,
+) -> vaco_core::Result<&'c PictureCtx<'p>> {
+    slices.get(mb.slice_id as usize).ok_or({
+        vaco_core::Error::InvalidData("vaco-codec-h264: a macroblock named a slice not in this picture")
+    })
+}
+
 impl PictureReconstructor {
     /// Allocate the working picture.
     ///
@@ -2302,13 +2353,13 @@ impl PictureReconstructor {
         &mut self,
         macroblocks: &[MbSummary],
         my: u32,
-        ctx: &PictureCtx<'_>,
+        slices: &[PictureCtx<'_>],
     ) -> vaco_core::Result<()> {
         while let Some(mb) = macroblocks.get(self.cursor) {
             if mb.mb_y != my {
                 break;
             }
-            reconstruct_mb(&mut self.buf, mb, ctx, &mut self.scratch)?;
+            reconstruct_mb(&mut self.buf, mb, ctx_for(slices, mb)?, &mut self.scratch)?;
             self.cursor += 1;
         }
         self.scratch.check()
@@ -2322,10 +2373,10 @@ impl PictureReconstructor {
     pub(crate) fn reconstruct_all(
         &mut self,
         macroblocks: &[MbSummary],
-        ctx: &PictureCtx<'_>,
+        slices: &[PictureCtx<'_>],
     ) -> vaco_core::Result<()> {
         for mb in macroblocks {
-            reconstruct_mb(&mut self.buf, mb, ctx, &mut self.scratch)?;
+            reconstruct_mb(&mut self.buf, mb, ctx_for(slices, mb)?, &mut self.scratch)?;
         }
         self.cursor = macroblocks.len();
         self.scratch.check()
@@ -2393,10 +2444,11 @@ impl PictureReconstructor {
     /// nothing here to resize.
     pub(crate) fn reset(&mut self) {
         self.buf.luma.fill(128);
-        self.buf.decoded_4x4.fill(false);
+        self.buf.decoded_4x4.fill(0);
         self.buf.cb.fill(128);
         self.buf.cr.fill(128);
-        self.buf.chroma_decoded.fill(false);
+        self.buf.chroma_decoded.fill(0);
+        self.buf.current_slice = 1;
         self.scratch.reset();
         self.cursor = 0;
     }

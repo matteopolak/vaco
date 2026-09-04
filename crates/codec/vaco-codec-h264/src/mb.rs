@@ -679,6 +679,18 @@ pub(crate) struct MbSummary {
     /// branches, rather than reading this field's own `is_inter()` to
     /// decide.
     pub(crate) mv_blocks: [MvInfo; 16],
+    /// Which slice of this picture decoded this macroblock, numbered from 0
+    /// in the order the slices appear in the access unit.
+    ///
+    /// Clause 6.4.8's availability rule is stated in terms of slice
+    /// membership, not raster position: a neighbouring macroblock is
+    /// "not available" whenever it belongs to a *different* slice, which
+    /// is what stops intra prediction and the deblocking filter from
+    /// reaching across a slice boundary. Carrying it per macroblock rather
+    /// than as a per-slice range keeps the rule expressible with a single
+    /// equality test at every point that needs it, so the reconstruction
+    /// and deblocking paths cannot disagree about where a boundary is.
+    pub(crate) slice_id: u16,
 }
 
 /// Reads back one just-finished macroblock's own 16 4x4 luma blocks from
@@ -759,7 +771,7 @@ pub fn decode_slice_cavlc(
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
 ) -> Result<SliceStats> {
-    decode_slice_cavlc_into(r, budget, sps, pps, header, colocated, Vec::new())
+    decode_slice_cavlc_into(r, budget, sps, pps, header, colocated, Vec::new(), 0)
 }
 
 /// [`decode_slice_cavlc`], but appending into an already-allocated
@@ -786,6 +798,7 @@ pub(crate) fn decode_slice_cavlc_into(
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
     macroblocks: Vec<MbSummary>,
+    slice_id: u16,
 ) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
     if pps.transform_8x8_mode {
@@ -918,6 +931,7 @@ pub(crate) fn decode_slice_cavlc_into(
                     qpy,
                     residual: MbResidual::default(),
                     mv_blocks: collect_mv_blocks(&grids, sx, sy),
+                    slice_id,
                 });
                 if addr == header.first_mb_in_slice {
                     stats.first_slice_mb_cbp = Some((0, 0));
@@ -1012,6 +1026,7 @@ pub(crate) fn decode_slice_cavlc_into(
             qpy,
             residual,
             mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
+            slice_id,
         });
         budget.release(residual_bytes);
         curr_mb_addr += 1;
@@ -3863,7 +3878,7 @@ pub fn decode_slice_cabac(
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
 ) -> Result<SliceStats> {
-    decode_slice_cabac_into(cabac, budget, sps, pps, header, colocated, Vec::new())
+    decode_slice_cabac_into(cabac, budget, sps, pps, header, colocated, Vec::new(), 0)
 }
 
 /// [`decode_slice_cabac`], but appending into an already-allocated
@@ -3882,6 +3897,7 @@ pub(crate) fn decode_slice_cabac_into(
     header: &SliceHeader,
     colocated: Option<&ColocatedField>,
     macroblocks: Vec<MbSummary>,
+    slice_id: u16,
 ) -> Result<SliceStats> {
     check_scope(sps, pps, header)?;
     let is_b_slice = matches!(header.kind, SliceKind::B);
@@ -4096,6 +4112,7 @@ pub(crate) fn decode_slice_cabac_into(
                 qpy,
                 residual: MbResidual::default(),
                 mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
+            slice_id,
             });
             if is_first_mb_in_slice {
                 stats.first_slice_mb_cbp = Some((0, 0));
@@ -4183,6 +4200,7 @@ pub(crate) fn decode_slice_cabac_into(
                 qpy,
                 residual,
                 mv_blocks: collect_mv_blocks(&grids, mb_x, mb_y),
+            slice_id,
             });
             budget.release(residual_bytes);
         }

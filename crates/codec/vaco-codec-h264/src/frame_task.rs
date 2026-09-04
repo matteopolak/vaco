@@ -54,13 +54,30 @@ use crate::reconstruct::{
 };
 use crate::task_pool::TaskBufferPools;
 
-/// The slice-header knobs clause 8.7's filter reads, carried whole rather than
-/// as four loose arguments.
-#[derive(Debug, Clone, Copy)]
-pub(crate) struct DeblockParams {
-    pub(crate) disable_idc: u32,
-    pub(crate) alpha_c0_offset_div2: i32,
-    pub(crate) beta_offset_div2: i32,
+pub(crate) use crate::deblock::DeblockParams;
+
+/// Everything about one slice of a picture that reconstruction and the
+/// deblocking filter read out of its own slice header, rather than out of the
+/// SPS/PPS the whole picture shares.
+///
+/// A picture may be coded as several slices (clause 7.4.3), each with its own
+/// reference lists, weighted-prediction tables and filter knobs, so these
+/// cannot be picture constants. [`crate::mb::MbSummary::slice_id`] indexes
+/// this array.
+#[derive(Debug)]
+pub(crate) struct SliceContext {
+    /// Clause 8.2.4's final `RefPicList0`/`RefPicList1` for this slice, as
+    /// handles to pictures that may still be decoding.
+    pub(crate) ref_list0: Vec<PictureRef>,
+    pub(crate) ref_list1: Vec<PictureRef>,
+    /// The same two lists as POCs, which is all `crate::deblock` needs to
+    /// tell two references apart (it never touches a sample of them).
+    pub(crate) ref_list0_poc: Vec<i32>,
+    pub(crate) ref_list1_poc: Vec<i32>,
+    pub(crate) weights: SliceWeightTables,
+    pub(crate) bipred_mode: BiPredMode,
+    pub(crate) implicit_weights: Option<ImplicitWeights>,
+    pub(crate) deblock: DeblockParams,
 }
 
 /// What [`crate::decoder::build_frame`] needs to crop the coded picture down to
@@ -115,18 +132,9 @@ pub(crate) struct H264FrameTask {
     pub(crate) mbs_high: u32,
     pub(crate) chroma_qp_offset_cb: i32,
     pub(crate) chroma_qp_offset_cr: i32,
-    /// Clause 8.2.4's final `RefPicList0`/`RefPicList1`, as handles to
-    /// pictures that may still be decoding.
-    pub(crate) ref_list0: Vec<PictureRef>,
-    pub(crate) ref_list1: Vec<PictureRef>,
-    /// The same two lists as POCs, which is all `crate::deblock` needs to tell
-    /// two references apart (it never touches a sample of them).
-    pub(crate) ref_list0_poc: Vec<i32>,
-    pub(crate) ref_list1_poc: Vec<i32>,
-    pub(crate) weights: SliceWeightTables,
-    pub(crate) bipred_mode: BiPredMode,
-    pub(crate) implicit_weights: Option<ImplicitWeights>,
-    pub(crate) deblock: DeblockParams,
+    /// One entry per slice of this picture, in the order the slices appeared
+    /// in the access unit -- what [`crate::mb::MbSummary::slice_id`] indexes.
+    pub(crate) slices: Vec<SliceContext>,
     /// Whether to publish this picture band by band as its rows become final,
     /// and to wait on references a macroblock row at a time.
     ///
@@ -310,14 +318,7 @@ impl FrameTask for H264FrameTask {
             mbs_high,
             chroma_qp_offset_cb,
             chroma_qp_offset_cr,
-            ref_list0,
-            ref_list1,
-            ref_list0_poc,
-            ref_list1_poc,
-            weights,
-            bipred_mode,
-            implicit_weights,
-            deblock,
+            slices,
             row_progress,
             mut store,
             geometry,
@@ -326,18 +327,21 @@ impl FrameTask for H264FrameTask {
         } = *self;
         let mut budget = Budget::new(limits);
 
-        // Clause 8.7's filter is `None` exactly when the slice header switched
-        // it off, in which case a row is final the moment it is reconstructed.
-        let deblock_ctx = (deblock.disable_idc != 1).then(|| {
-            crate::deblock::DeblockCtx::new(
-                &macroblocks,
-                mbs_wide,
-                mbs_high,
-                deblock.alpha_c0_offset_div2,
-                deblock.beta_offset_div2,
-                &ref_list0_poc,
-                &ref_list1_poc,
-            )
+        // Clause 8.7's filter is skipped entirely only when *every* slice of
+        // this picture switched it off; `disable_deblocking_filter_idc == 1`
+        // on one slice of several leaves the others still filtering, which
+        // `DeblockCtx` handles per macroblock.
+        let deblock_slices: Vec<crate::deblock::SliceDeblock> = slices
+            .iter()
+            .map(|sl| crate::deblock::SliceDeblock {
+                params: sl.deblock,
+                ref_list0_poc: sl.ref_list0_poc.clone(),
+                ref_list1_poc: sl.ref_list1_poc.clone(),
+            })
+            .collect();
+        let any_filtering = deblock_slices.iter().any(|s| s.params.disable_idc != 1);
+        let deblock_ctx = any_filtering.then(|| {
+            crate::deblock::DeblockCtx::new(&macroblocks, mbs_wide, mbs_high, &deblock_slices)
         });
         let strides = (
             (mbs_wide as usize).saturating_mul(16),
@@ -347,16 +351,29 @@ impl FrameTask for H264FrameTask {
         let mut publisher = RowPublisher::new();
         let mut recon = pools.acquire_reconstructor(mbs_wide, mbs_high, &mut budget)?;
 
-        let row_wise =
-            row_progress && macroblocks_in_raster_order(&macroblocks, mbs_wide, mbs_high);
+        // Row-level threading stays on the one-slice fast path. A multi-slice
+        // picture still decodes; it just takes the whole-picture path below,
+        // which waits for its references once rather than a row at a time.
+        // Reference lists are per slice, so the row schedule's single
+        // `planes0`/`planes1` pair (and `wait_row_planes`'s single reach
+        // derivation) would have to be replicated per slice to keep the
+        // per-row waits correct -- not done, rather than done approximately.
+        let row_wise = row_progress
+            && slices.len() == 1
+            && macroblocks_in_raster_order(&macroblocks, mbs_wide, mbs_high);
         if row_wise {
             let empty = RefPicturePlanes {
                 luma: RefPlane::Flat(&[]),
                 cb: RefPlane::Flat(&[]),
                 cr: RefPlane::Flat(&[]),
             };
-            let mut planes0: Vec<RefPicturePlanes<'_>> = vec![empty; ref_list0.len()];
-            let mut planes1: Vec<RefPicturePlanes<'_>> = vec![empty; ref_list1.len()];
+            #[allow(
+                clippy::indexing_slicing,
+                reason = "`row_wise` above is only true for a one-slice picture"
+            )]
+            let only = &slices[0];
+            let mut planes0: Vec<RefPicturePlanes<'_>> = vec![empty; only.ref_list0.len()];
+            let mut planes1: Vec<RefPicturePlanes<'_>> = vec![empty; only.ref_list1.len()];
             let mbw = mbs_wide as usize;
             for my in 0..mbs_high {
                 let start = (my as usize).saturating_mul(mbw);
@@ -364,20 +381,20 @@ impl FrameTask for H264FrameTask {
                     .get(start..start.saturating_add(mbw))
                     .unwrap_or(&[]);
                 let reach = row_reference_reach(row);
-                wait_row_planes(ctx, &ref_list0, &reach, 0, &mut planes0)?;
-                wait_row_planes(ctx, &ref_list1, &reach, 1, &mut planes1)?;
+                wait_row_planes(ctx, &only.ref_list0, &reach, 0, &mut planes0)?;
+                wait_row_planes(ctx, &only.ref_list1, &reach, 1, &mut planes1)?;
                 {
-                    let pctx = PictureCtx::new(
+                    let pctx = [PictureCtx::new(
                         mbs_wide,
                         mbs_high,
                         chroma_qp_offset_cb,
                         chroma_qp_offset_cr,
                         &planes0,
                         &planes1,
-                        &weights,
-                        bipred_mode,
-                        implicit_weights.as_ref(),
-                    );
+                        &only.weights,
+                        only.bipred_mode,
+                        only.implicit_weights.as_ref(),
+                    )];
                     recon.reconstruct_row(&macroblocks, my, &pctx)?;
                 }
                 let final_rows = match &deblock_ctx {
@@ -408,25 +425,38 @@ impl FrameTask for H264FrameTask {
             // Block here, and only here, on the pictures this one predicts
             // from. This is the whole-picture path: `-threads 1`, and any
             // macroblock order the row schedule cannot assume.
-            let planes0: Vec<RefPicturePlanes<'_>> = ref_list0
+            let planes: Vec<(Vec<RefPicturePlanes<'_>>, Vec<RefPicturePlanes<'_>>)> = slices
                 .iter()
-                .map(|r| whole_planes_of(ctx, r))
+                .map(|sl| {
+                    Ok((
+                        sl.ref_list0
+                            .iter()
+                            .map(|r| whole_planes_of(ctx, r))
+                            .collect::<Result<Vec<_>>>()?,
+                        sl.ref_list1
+                            .iter()
+                            .map(|r| whole_planes_of(ctx, r))
+                            .collect::<Result<Vec<_>>>()?,
+                    ))
+                })
                 .collect::<Result<Vec<_>>>()?;
-            let planes1: Vec<RefPicturePlanes<'_>> = ref_list1
+            let pctx: Vec<PictureCtx<'_>> = slices
                 .iter()
-                .map(|r| whole_planes_of(ctx, r))
-                .collect::<Result<Vec<_>>>()?;
-            let pctx = PictureCtx::new(
-                mbs_wide,
-                mbs_high,
-                chroma_qp_offset_cb,
-                chroma_qp_offset_cr,
-                &planes0,
-                &planes1,
-                &weights,
-                bipred_mode,
-                implicit_weights.as_ref(),
-            );
+                .zip(planes.iter())
+                .map(|(sl, (planes0, planes1))| {
+                    PictureCtx::new(
+                        mbs_wide,
+                        mbs_high,
+                        chroma_qp_offset_cb,
+                        chroma_qp_offset_cr,
+                        planes0,
+                        planes1,
+                        &sl.weights,
+                        sl.bipred_mode,
+                        sl.implicit_weights.as_ref(),
+                    )
+                })
+                .collect();
             recon.reconstruct_all(&macroblocks, &pctx)?;
             if let Some(d) = &deblock_ctx {
                 for my in 0..mbs_high {

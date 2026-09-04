@@ -12,7 +12,7 @@
 //! [`crate::reconstruct::reconstruct_picture`] — see both modules' own docs
 //! for what is refused one level down (`I_PCM`, MBAFF, the 8x8 transform,
 //! `constrained_intra_pred_flag`'s substitution rule, temporal direct
-//! prediction, long-term references, multiple slices per picture; CAVLC
+//! prediction, long-term references; CAVLC
 //! additionally refuses `I_PCM` and the 8x8 transform since its tables
 //! were never checked against either).
 //!
@@ -58,7 +58,7 @@ use vaco_parse_h264::{
 use vaco_pixfmt::PixFmt;
 use vaco_pool::ALIGN;
 
-use crate::frame_task::{DeblockParams, FrameGeometry, H264FrameTask};
+use crate::frame_task::{DeblockParams, FrameGeometry, H264FrameTask, SliceContext};
 use crate::mb::{ColocatedField, MvInfo};
 use crate::reconstruct::{BiPredMode, ImplicitWeight, ImplicitWeights, SliceWeightTables};
 use crate::task_pool::TaskBufferPools;
@@ -528,8 +528,7 @@ impl H264Decoder {
         // extension types are out of scope and skipped, same as
         // `push_access_unit`'s own picture-boundary derivation already
         // treats them.
-        let mut slice_nal: Option<&[u8]> = None;
-        let mut slice_count = 0u32;
+        let mut slice_nals: Vec<&[u8]> = Vec::new();
         // ATSC A/53 closed captions (interface gap 18's attachment half —
         // extraction itself is `vaco_parse_h264::a53`, already landed).
         // Concatenated across every SEI NAL in this access unit, in NAL
@@ -553,10 +552,7 @@ impl H264Decoder {
             };
             match header.nal_unit_type {
                 NalUnitType::IdrSlice | NalUnitType::NonIdrSlice => {
-                    slice_count += 1;
-                    if slice_nal.is_none() {
-                        slice_nal = Some(nal.data);
-                    }
+                    slice_nals.push(nal.data);
                 }
                 NalUnitType::Sei => {
                     self.rbsp.fill(nal.data, &mut self.budget)?;
@@ -596,13 +592,13 @@ impl H264Decoder {
                 _ => {}
             }
         }
-        if slice_count > 1 {
-            return Err(Error::Unsupported(
-                "vaco-codec-h264: more than one slice per picture is not supported \
-                 (crate::reconstruct's own scope line)",
-            ));
-        }
-        let Some(nal_bytes) = slice_nal else {
+        // Clause 7.4.3: a picture is one *or more* slices, each covering a
+        // disjoint run of macroblock addresses from its own
+        // `first_mb_in_slice`. The first one carries the picture-level
+        // decisions below (they are derived from the SPS and from the
+        // access unit, not from any one slice); the rest are decoded in the
+        // per-slice loop further down.
+        let Some(&nal_bytes) = slice_nals.first() else {
             return Ok(());
         };
         let nal = H264NalHeader::parse(nal_bytes).ok_or(Error::InvalidData("empty NAL unit"))?;
@@ -635,13 +631,6 @@ impl H264Decoder {
         let mut reader = BitReader::new(rbsp);
         reader.skip(8);
         let slice_header = SliceHeader::parse_data(&mut reader, nal, sps, pps, &mut self.budget)?;
-        if slice_header.first_mb_in_slice != 0 {
-            return Err(Error::Unsupported(
-                "vaco-codec-h264: a slice that does not start at the first macroblock \
-                 implies more than one slice per picture, which is not supported",
-            ));
-        }
-
         if info.is_idr {
             // clause 8.2.5.1: an IDR access unit empties the DPB before
             // anything in it decodes, so a P/B slice can never reach
@@ -683,7 +672,6 @@ impl H264Decoder {
             .unwrap_or(max_num_ref_frames)
             .max(1) as usize;
         let curr_poc = info.poc.value();
-        let is_b_slice = matches!(slice_header.kind, SliceKind::B);
         // Extracted now, not read from `sps`/`pps` again later: both
         // borrow `self.parser`, which `build_frame` below needs `&mut
         // self` to allocate through.
@@ -698,131 +686,263 @@ impl H264Decoder {
         // than skipping the assignment.
         let color = sps.color_info();
 
-        // Clause 8.2.4.2's default reference-picture list construction,
-        // then clause 8.2.4.3's `ref_pic_list_modification()` -- both as
-        // DPB indices, materialised into real plane/motion references only
-        // once the final order is known.
-        let curr_frame_num = slice_header.frame_num;
-        let list0_default: Vec<usize> = if is_b_slice {
-            let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
-            idx.sort_by_key(|&i| {
-                let poc = i64::from(self.dpb.get(i).map_or(0, |p| p.poc));
-                if poc < i64::from(curr_poc) {
-                    (0i8, -poc)
-                } else {
-                    (1i8, poc)
-                }
-            });
-            idx
-        } else {
-            let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
-            idx.sort_by_key(|&i| {
-                core::cmp::Reverse(frame_num_wrap(
-                    self.dpb.get(i).map_or(0, |p| p.frame_num),
-                    curr_frame_num,
-                    max_frame_num,
-                ))
-            });
-            idx
-        };
-        let mut list1_default: Vec<usize> = Vec::new();
-        if is_b_slice {
-            let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
-            idx.sort_by_key(|&i| {
-                let poc = i64::from(self.dpb.get(i).map_or(0, |p| p.poc));
-                if poc > i64::from(curr_poc) {
-                    (0i8, poc)
-                } else {
-                    (1i8, -poc)
-                }
-            });
-            // Clause 8.2.4.2.3's own swap: if list 1 has more than one
-            // entry and is identical to list 0, its first two entries
-            // swap.
-            if idx.len() > 1 && idx == list0_default {
-                idx.swap(0, 1);
-            }
-            list1_default = idx;
-        }
-        let n0 = usize::try_from(slice_header.num_ref_idx_l0_active_minus1).unwrap_or(0) + 1;
-        let n1 = usize::try_from(slice_header.num_ref_idx_l1_active_minus1).unwrap_or(0) + 1;
-        let list0_idx = apply_ref_list_modification(
-            &self.dpb,
-            &list0_default,
-            n0,
-            &slice_header.ref_pic_list_modification_l0,
-            curr_frame_num,
-            max_frame_num,
-        )?;
-        let list1_idx = if is_b_slice {
-            apply_ref_list_modification(
-                &self.dpb,
-                &list1_default,
-                n1,
-                &slice_header.ref_pic_list_modification_l1,
-                curr_frame_num,
-                max_frame_num,
-            )?
-        } else {
-            Vec::new()
-        };
-
-        // Clause 8.4.1.2.1's own colocated picture, always `RefPicList1[0]`
-        // -- built once here (borrowing `self.dpb`) so it can be handed
-        // into `decode_slice_cabac` before the borrow of `self.dpb` this
-        // function needs later (pushing this picture's own copy) begins.
-        let colocated: Option<ColocatedField> = if is_b_slice {
-            list1_idx
-                .first()
-                .and_then(|&i| self.dpb.get(i))
-                .map(|p| ColocatedField::new(luma4_width, mbs_high * 4, Arc::clone(&p.motion)))
-        } else {
-            None
-        };
-
-        // The two entropy modes share every downstream stage from here on
-        // -- `crate::mb::SliceStats`/`MbSummary` is the entropy-independent
-        // shape both `decode_slice_cabac` and `decode_slice_cavlc` produce
-        // (real `mb_type`, motion vectors, and residual, not merely bit
-        // consumption), and `reconstruct_picture` never learns which coder
-        // was used at all.
+        // Clause 7.4.3: this picture is every slice in the access unit, each
+        // covering its own run of macroblock addresses. They share one
+        // reconstruction buffer but not their slice headers -- reference
+        // lists, weighted-prediction tables and the deblocking knobs are all
+        // per slice -- so each contributes one `SliceContext`, and
+        // `MbSummary::slice_id` is what ties a macroblock back to its own.
+        //
         // A recycled `Vec<MbSummary>` when this resolution has decoded one
         // before, cleared but still holding its capacity -- see
-        // `crate::task_pool`'s own doc (item A0). `_into` appends onto it
-        // exactly as the plain `decode_slice_cabac`/`decode_slice_cavlc`
-        // append onto the empty one they build themselves.
-        let recycled_macroblocks = self
+        // `crate::task_pool`'s own doc (item A0). Every slice appends onto
+        // the same one, so the picture ends up with a single array in
+        // macroblock-address order.
+        // Every slice of a picture repeats the same `frame_num` (clause
+        // 7.4.3), so the picture-level marking below reads the first one's.
+        let curr_frame_num = slice_header.frame_num;
+        let mut macroblocks = self
             .pools
             .acquire_macroblocks((mbs_wide as usize).saturating_mul(mbs_high as usize));
-        let stats = if pps.entropy_coding_mode {
-            let mut cabac = CabacDecoder::from_reader(reader);
-            let stats = crate::mb::decode_slice_cabac_into(
-                &mut cabac,
-                &mut self.budget,
-                sps,
-                pps,
-                &slice_header,
-                colocated.as_ref(),
-                recycled_macroblocks,
-            )?;
-            if cabac.malformed() {
-                return Err(Error::InvalidData(
-                    "vaco-codec-h264: CABAC engine reported malformed input",
-                ));
+        let mut slice_ctxs: Vec<SliceContext> = Vec::new();
+        let mut decoded_mbs = 0u32;
+
+        for (slice_id, &slice_bytes) in slice_nals.iter().enumerate() {
+            let slice_id = u16::try_from(slice_id).map_err(|_| {
+                Error::Unsupported(
+                    "vaco-codec-h264: more slices in one picture than a u16 can number",
+                )
+            })?;
+            let nal =
+                H264NalHeader::parse(slice_bytes).ok_or(Error::InvalidData("empty NAL unit"))?;
+            self.rbsp.fill(slice_bytes, &mut self.budget)?;
+            let rbsp = self.rbsp.as_slice();
+            let mut peek = BitReader::new(rbsp);
+            peek.skip(8);
+            let pps_id = {
+                let mut g = BoundedGolomb::new(&mut peek, &mut self.budget);
+                let _first_mb_in_slice = g.ue_v(u32::MAX)?;
+                let _slice_type = g.ue_v(9)?;
+                g.ue_v(255)? as u8
+            };
+            // Each slice names its own PPS (clause 7.3.3), so this is not
+            // hoistable out of the loop even though a stream almost always
+            // uses one for the whole picture.
+            let (pps, sps) =
+                self.parser
+                    .parameter_sets()
+                    .sps_for_pps(pps_id)
+                    .ok_or(Error::Unsupported(
+                        "vaco-codec-h264: referenced PPS/SPS not seen yet",
+                    ))?;
+            let mut reader = BitReader::new(rbsp);
+            reader.skip(8);
+            let header = SliceHeader::parse_data(&mut reader, nal, sps, pps, &mut self.budget)?;
+            let is_b_slice = matches!(header.kind, SliceKind::B);
+            // Clause 8.2.4.2's default reference-picture list construction,
+            // then clause 8.2.4.3's `ref_pic_list_modification()` -- both as
+            // DPB indices, materialised into real plane/motion references only
+            // once the final order is known.
+            let curr_frame_num = header.frame_num;
+            let list0_default: Vec<usize> = if is_b_slice {
+                let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
+                idx.sort_by_key(|&i| {
+                    let poc = i64::from(self.dpb.get(i).map_or(0, |p| p.poc));
+                    if poc < i64::from(curr_poc) {
+                        (0i8, -poc)
+                    } else {
+                        (1i8, poc)
+                    }
+                });
+                idx
+            } else {
+                let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
+                idx.sort_by_key(|&i| {
+                    core::cmp::Reverse(frame_num_wrap(
+                        self.dpb.get(i).map_or(0, |p| p.frame_num),
+                        curr_frame_num,
+                        max_frame_num,
+                    ))
+                });
+                idx
+            };
+            let mut list1_default: Vec<usize> = Vec::new();
+            if is_b_slice {
+                let mut idx: Vec<usize> = (0..self.dpb.len()).collect();
+                idx.sort_by_key(|&i| {
+                    let poc = i64::from(self.dpb.get(i).map_or(0, |p| p.poc));
+                    if poc > i64::from(curr_poc) {
+                        (0i8, poc)
+                    } else {
+                        (1i8, -poc)
+                    }
+                });
+                // Clause 8.2.4.2.3's own swap: if list 1 has more than one
+                // entry and is identical to list 0, its first two entries
+                // swap.
+                if idx.len() > 1 && idx == list0_default {
+                    idx.swap(0, 1);
+                }
+                list1_default = idx;
             }
-            stats
-        } else {
-            crate::mb::decode_slice_cavlc_into(
-                &mut reader,
-                &mut self.budget,
-                sps,
-                pps,
-                &slice_header,
-                colocated.as_ref(),
-                recycled_macroblocks,
-            )?
-        };
-        drop(colocated);
+            let n0 = usize::try_from(header.num_ref_idx_l0_active_minus1).unwrap_or(0) + 1;
+            let n1 = usize::try_from(header.num_ref_idx_l1_active_minus1).unwrap_or(0) + 1;
+            let list0_idx = apply_ref_list_modification(
+                &self.dpb,
+                &list0_default,
+                n0,
+                &header.ref_pic_list_modification_l0,
+                curr_frame_num,
+                max_frame_num,
+            )?;
+            let list1_idx = if is_b_slice {
+                apply_ref_list_modification(
+                    &self.dpb,
+                    &list1_default,
+                    n1,
+                    &header.ref_pic_list_modification_l1,
+                    curr_frame_num,
+                    max_frame_num,
+                )?
+            } else {
+                Vec::new()
+            };
+
+            // Clause 8.4.1.2.1's own colocated picture, always `RefPicList1[0]`
+            // -- built once here (borrowing `self.dpb`) so it can be handed
+            // into `decode_slice_cabac` before the borrow of `self.dpb` this
+            // function needs later (pushing this picture's own copy) begins.
+            let colocated: Option<ColocatedField> = if is_b_slice {
+                list1_idx
+                    .first()
+                    .and_then(|&i| self.dpb.get(i))
+                    .map(|p| ColocatedField::new(luma4_width, mbs_high * 4, Arc::clone(&p.motion)))
+            } else {
+                None
+            };
+
+            // The two entropy modes share every downstream stage from here on
+            // -- `crate::mb::SliceStats`/`MbSummary` is the entropy-independent
+            // shape both `decode_slice_cabac` and `decode_slice_cavlc` produce
+            // (real `mb_type`, motion vectors, and residual, not merely bit
+            // consumption), and `reconstruct_picture` never learns which coder
+            // was used at all.
+            let stats = if pps.entropy_coding_mode {
+                let mut cabac = CabacDecoder::from_reader(reader);
+                let stats = crate::mb::decode_slice_cabac_into(
+                    &mut cabac,
+                    &mut self.budget,
+                    sps,
+                    pps,
+                    &header,
+                    colocated.as_ref(),
+                    macroblocks,
+                    slice_id,
+                )?;
+                if cabac.malformed() {
+                    return Err(Error::InvalidData(
+                        "vaco-codec-h264: CABAC engine reported malformed input",
+                    ));
+                }
+                stats
+            } else {
+                crate::mb::decode_slice_cavlc_into(
+                    &mut reader,
+                    &mut self.budget,
+                    sps,
+                    pps,
+                    &header,
+                    colocated.as_ref(),
+                    macroblocks,
+                    slice_id,
+                )?
+            };
+            drop(colocated);
+
+            // Clause 8.2.4's final lists, as handles rather than as sample
+            // slices: the pictures they name may still be reconstructing on a
+            // worker, and only the frame task -- the half that actually reads a
+            // sample -- ever waits for them.
+            let ref_list0: Vec<PictureRef> = list0_idx
+                .iter()
+                .filter_map(|&i| self.dpb.get(i))
+                .map(|r| r.planes.clone())
+                .collect();
+            let ref_list1: Vec<PictureRef> = list1_idx
+                .iter()
+                .filter_map(|&i| self.dpb.get(i))
+                .map(|r| r.planes.clone())
+                .collect();
+            // `crate::deblock::boundary_strength`'s own reference-picture-identity
+            // lookup (its own doc): the same DPB positions as `ref_list0`/
+            // `ref_list1` above, as POCs rather than sample planes -- deblocking
+            // never touches pixels, only needs to tell two references apart.
+            let ref_list0_poc: Vec<i32> = list0_idx
+                .iter()
+                .filter_map(|&i| self.dpb.get(i))
+                .map(|r| r.poc)
+                .collect();
+            let ref_list1_poc: Vec<i32> = list1_idx
+                .iter()
+                .filter_map(|&i| self.dpb.get(i))
+                .map(|r| r.poc)
+                .collect();
+
+            // Clause 8.4.2.3's `pred_weight_table()`, already parsed by
+            // `vaco-parse-h264` (it has to be, the bits are in the slice
+            // header) -- `weighted_pred_flag` is x264's own default for P
+            // slices, and `weighted_bipred_idc == 1` (explicit) makes it real
+            // for B slices too.
+            let weights = SliceWeightTables::from_table(header.pred_weight_table.as_ref());
+            let bipred_mode = if is_b_slice {
+                match pps.weighted_bipred_idc {
+                    1 => BiPredMode::Explicit,
+                    2 => BiPredMode::Implicit,
+                    _ => BiPredMode::Default,
+                }
+            } else {
+                BiPredMode::Default
+            };
+            // Clause 8.4.2.3.2's implicit weights (`weighted_bipred_idc == 2`,
+            // **x264's own default for B slices**): one `(w0, w1)` pair per
+            // `(ref_idx_l0, ref_idx_l1)` combination, derived from every
+            // candidate's own POC -- `crate::reconstruct` never sees a POC at
+            // all, so this table is built here and handed in as a plain
+            // lookup, transcribed from JM 19.1's `image.c::fill_wp_params`
+            // (Tier A per `provenance/sources.toml`) rather than re-derived
+            // from the specification prose a second time.
+            let implicit_weights = (is_b_slice && pps.weighted_bipred_idc == 2).then(|| {
+                let table: Vec<Vec<ImplicitWeight>> = list0_idx
+                    .iter()
+                    .filter_map(|&i0| self.dpb.get(i0))
+                    .map(|r0| {
+                        list1_idx
+                            .iter()
+                            .filter_map(|&i1| self.dpb.get(i1))
+                            .map(|r1| implicit_weight(curr_poc, r0.poc, r1.poc))
+                            .collect()
+                    })
+                    .collect();
+                ImplicitWeights::new(table)
+            });
+            decoded_mbs = decoded_mbs.saturating_add(stats.macroblock_count);
+            macroblocks = stats.macroblocks;
+            slice_ctxs.push(SliceContext {
+                ref_list0,
+                ref_list1,
+                ref_list0_poc,
+                ref_list1_poc,
+                weights,
+                bipred_mode,
+                implicit_weights,
+                deblock: DeblockParams {
+                    disable_idc: header.disable_deblocking_filter_idc,
+                    alpha_c0_offset_div2: header.slice_alpha_c0_offset_div2,
+                    beta_offset_div2: header.slice_beta_offset_div2,
+                },
+            });
+        }
+
         // Neither entropy mode's own "did it actually finish" signal
         // (CABAC's `end_of_slice_flag`, CAVLC's `more_rbsp_data()`) is
         // proof the slice decoded *correctly* on its own -- both can fire
@@ -836,86 +956,18 @@ impl H264Decoder {
         // before a premature end, and `reconstruct_picture` leaves the
         // rest of the picture at its own default fill.
         let total_mbs = mbs_wide.saturating_mul(mbs_high);
-        if stats.macroblock_count != total_mbs {
+        if decoded_mbs != total_mbs {
             return Err(Error::InvalidData(
-                "vaco-codec-h264: a slice ended before every macroblock in the picture was \
+                "vaco-codec-h264: this picture's slices between them left a macroblock undecoded, or one ran past its own \
                  decoded -- a real decode desync, refused rather than emitting a \
                  partially-reconstructed frame",
             ));
         }
 
-        // Clause 8.2.4's final lists, as handles rather than as sample
-        // slices: the pictures they name may still be reconstructing on a
-        // worker, and only the frame task -- the half that actually reads a
-        // sample -- ever waits for them.
-        let ref_list0: Vec<PictureRef> = list0_idx
-            .iter()
-            .filter_map(|&i| self.dpb.get(i))
-            .map(|r| r.planes.clone())
-            .collect();
-        let ref_list1: Vec<PictureRef> = list1_idx
-            .iter()
-            .filter_map(|&i| self.dpb.get(i))
-            .map(|r| r.planes.clone())
-            .collect();
-        // `crate::deblock::boundary_strength`'s own reference-picture-identity
-        // lookup (its own doc): the same DPB positions as `ref_list0`/
-        // `ref_list1` above, as POCs rather than sample planes -- deblocking
-        // never touches pixels, only needs to tell two references apart.
-        let ref_list0_poc: Vec<i32> = list0_idx
-            .iter()
-            .filter_map(|&i| self.dpb.get(i))
-            .map(|r| r.poc)
-            .collect();
-        let ref_list1_poc: Vec<i32> = list1_idx
-            .iter()
-            .filter_map(|&i| self.dpb.get(i))
-            .map(|r| r.poc)
-            .collect();
-
-        // Clause 8.4.2.3's `pred_weight_table()`, already parsed by
-        // `vaco-parse-h264` (it has to be, the bits are in the slice
-        // header) -- `weighted_pred_flag` is x264's own default for P
-        // slices, and `weighted_bipred_idc == 1` (explicit) makes it real
-        // for B slices too.
-        let weights = SliceWeightTables::from_table(slice_header.pred_weight_table.as_ref());
-        let bipred_mode = if is_b_slice {
-            match pps.weighted_bipred_idc {
-                1 => BiPredMode::Explicit,
-                2 => BiPredMode::Implicit,
-                _ => BiPredMode::Default,
-            }
-        } else {
-            BiPredMode::Default
-        };
-        // Clause 8.4.2.3.2's implicit weights (`weighted_bipred_idc == 2`,
-        // **x264's own default for B slices**): one `(w0, w1)` pair per
-        // `(ref_idx_l0, ref_idx_l1)` combination, derived from every
-        // candidate's own POC -- `crate::reconstruct` never sees a POC at
-        // all, so this table is built here and handed in as a plain
-        // lookup, transcribed from JM 19.1's `image.c::fill_wp_params`
-        // (Tier A per `provenance/sources.toml`) rather than re-derived
-        // from the specification prose a second time.
-        let implicit_weights = (is_b_slice && pps.weighted_bipred_idc == 2).then(|| {
-            let table: Vec<Vec<ImplicitWeight>> = list0_idx
-                .iter()
-                .filter_map(|&i0| self.dpb.get(i0))
-                .map(|r0| {
-                    list1_idx
-                        .iter()
-                        .filter_map(|&i1| self.dpb.get(i1))
-                        .map(|r1| implicit_weight(curr_poc, r0.poc, r1.poc))
-                        .collect()
-                })
-                .collect();
-            ImplicitWeights::new(table)
-        });
-
         // What this picture will cost the budget: the task's own working set
         // (see the note at the reservation below) plus, if it is a reference,
         // one more coded picture for its DPB entry.
-        let mb_bytes = (stats
-            .macroblocks
+        let mb_bytes = (macroblocks
             .len()
             .saturating_mul(core::mem::size_of::<crate::mb::MbSummary>()))
             as u64;
@@ -1034,7 +1086,7 @@ impl H264Decoder {
             // no z-scan conversion needed.
             let n_luma4 = usize::try_from(luma4_width.saturating_mul(mbs_high * 4)).unwrap_or(0);
             let mut motion: Vec<MvInfo> = self.budget.alloc(n_luma4)?;
-            for mb in &stats.macroblocks {
+            for mb in &macroblocks {
                 for (i, &block) in mb.mv_blocks.iter().enumerate() {
                     // `i % 4` / `i / 4`, spelled as bit ops so this isn't an
                     // `integer_division` lint hit: 4 is a compile-time
@@ -1109,23 +1161,12 @@ impl H264Decoder {
         self.budget.reserve(task_charge)?.commit();
 
         self.runner.dispatch(H264FrameTask {
-            macroblocks: stats.macroblocks,
+            macroblocks,
             mbs_wide,
             mbs_high,
             chroma_qp_offset_cb,
             chroma_qp_offset_cr,
-            ref_list0,
-            ref_list1,
-            ref_list0_poc,
-            ref_list1_poc,
-            weights,
-            bipred_mode,
-            implicit_weights,
-            deblock: DeblockParams {
-                disable_idc: slice_header.disable_deblocking_filter_idc,
-                alpha_c0_offset_div2: slice_header.slice_alpha_c0_offset_div2,
-                beta_offset_div2: slice_header.slice_beta_offset_div2,
-            },
+            slices: slice_ctxs,
             row_progress: self.threads > 1,
             store,
             geometry: FrameGeometry {
