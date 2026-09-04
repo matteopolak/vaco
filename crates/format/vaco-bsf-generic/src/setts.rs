@@ -9,9 +9,7 @@
 //!
 //! [`BsfProvider::open`](vaco_format_core::mux::BsfProvider::open) carries no
 //! option string, so a non-default expression is not reachable through the
-//! registry seam today (`planning/INTERFACE-GAPS.md` records this once for
-//! every filter it affects, not per filter). What is implemented here is
-//! exactly what that leaves reachable: the identity transform, faithfully.
+//! registry. The implemented behavior is therefore the identity transform.
 
 use std::collections::VecDeque;
 

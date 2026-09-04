@@ -4,10 +4,8 @@
 //! and `discard` to `none` — measured directly, `-bsf:v filter_units` with no
 //! assignments produces byte-identical output to no filter at all.
 //! [`BsfProvider::open`](vaco_format_core::mux::BsfProvider::open) carries no
-//! option string (`planning/INTERFACE-GAPS.md`), so the type lists and
-//! discard policy that make this filter useful are not reachable through the
-//! registry seam today; what is implemented is the identity transform every
-//! caller through that seam actually gets.
+//! option string, so type lists and discard policy are unreachable through the
+//! registry. The implemented behavior is therefore the identity transform.
 //!
 //! `ffmpeg` lists eight supported codecs (`apv av1 h264 hevc vvc lcevc
 //! mpeg2video vp8 vp9`); construction is restricted to H.264 and HEVC, the

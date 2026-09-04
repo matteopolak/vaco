@@ -12,9 +12,9 @@
 //! pin down; there is no "the reference's answer" to converge on.
 //!
 //! Given that, and that [`BsfProvider::open`](vaco_format_core::mux::BsfProvider::open)
-//! carries no option string to opt into corruption explicitly
-//! (`planning/INTERFACE-GAPS.md`), this implementation deliberately diverges
-//! from the reference's bare-name behaviour: **default `amount = 0`,
+//! carries no option string to opt into corruption explicitly, this
+//! implementation deliberately diverges from the reference's bare-name
+//! behaviour: **default `amount = 0`,
 //! `dropamount = 0` is the identity transform**, not silent corruption. A
 //! filter nobody asked to corrupt data should not corrupt data just because
 //! it was constructed; a caller that reaches this through the (currently

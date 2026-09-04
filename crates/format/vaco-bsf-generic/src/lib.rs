@@ -1,33 +1,23 @@
 //! Codec-agnostic bitstream filters.
 //!
-//! # What this is
+//! This crate contains filters that do not need per-codec NAL vocabulary:
+//! `null`, `extract_extradata`, `noise`, `remove_extra`, `setts`, `chomp`,
+//! `dump_extra`, `filter_units`, and `showinfo`. The reference restricts
+//! `showinfo` to no codec, and its only effect is a stderr diagnostic.
 //!
-//! Every filter `ffmpeg -bsfs` lists that does not need per-codec NAL
-//! vocabulary: `null`, `extract_extradata`, `noise`, `remove_extra`, `setts`,
-//! `chomp`, `dump_extra`, `filter_units`, and — added for issue #354 (B-06),
-//! measured rather than assumed from that issue's "legacy" framing —
-//! `showinfo`, which `ffmpeg -h bsf=showinfo` restricts to no codec at all
-//! and whose only effect is a `stderr` diagnostic (see its own module docs).
 //! The H.264/HEVC-specific family
 //! (`h264_mp4toannexb`, `hevc_mp4toannexb`, `h264_redundant_pps`, ...) is
-//! `vaco-bsf-h2645`, one layer up from this one for exactly the reason
-//! `extract_extradata` is *here* rather than there: it dispatches on codec but
-//! its own logic — scan for parameter sets, compare, attach side data — is the
-//! same shape for every codec it supports, unlike `*_mp4toannexb`'s splicing
-//! rules, which are genuinely per-codec.
+//! in `vaco-bsf-h2645`. `extract_extradata` remains here because its operation
+//! is generic across supported codecs: scan parameter sets, compare them, and
+//! attach side data. Annex-B conversion has codec-specific splicing rules.
 //!
 //! # How it works
 //!
 //! Every filter here is a [`vaco_bsf_core::PacketMap`] wrapped in
 //! [`vaco_bsf_core::MappedFilter`], which is what actually implements
 //! [`vaco_codec_core::BitstreamFilter`]'s push/pull protocol. Each module
-//! exports one `pub const DESC: vaco_bsf_core::BsfDesc`, which is what a
-//! `vaco-component.toml` fragment's `ctor` names and what
-//! `vaco-registry`'s `BsfProvider` implementation matches on by name — see
-//! that crate's docs for why matching by name rather than a generated typed
-//! table is this wave's deliberate, scoped answer to
-//! `vaco_registry::Kind::has_table`'s "no descriptor type yet" gap for
-//! `bitstream_filter`.
+//! exports a [`vaco_bsf_core::BsfDesc`] named by `vaco-component.toml` and
+//! matched by the registry provider.
 //!
 //! # How to change it
 //!
@@ -36,20 +26,10 @@
 //! `vaco-component.toml` (`kind = "bitstream_filter"`). `cargo xtask
 //! gen-registry` picks it up from there.
 //!
-//! # Configuration
-//!
-//! None of these filters take options today: [`vaco_format_core::mux::BsfProvider::open`]
-//! has no options-string parameter, so every filter here implements the
-//! reference's *bare-name* (all-default-options) behaviour only. Recorded as
-//! a gap in `planning/INTERFACE-GAPS.md` rather than worked around by
-//! widening a frozen trait.
-//!
-//! # Dependencies
-//!
-//! `vaco-bsf-core` for the driver; `vaco-format-nalu` for NAL framing and
-//! header layout; `vaco-parse-h264`/`vaco-parse-hevc` for the *meaning* of a
-//! NAL type number (`extract_extradata` only); `vaco-pool` for the
-//! [`vaco_packet::PacketSideData::NewExtradata`] payload type.
+//! [`vaco_format_core::mux::BsfProvider::open`] has no option-string parameter,
+//! so filters implement only their bare-name, default-option behavior. The
+//! driver comes from `vaco-bsf-core`; NAL framing and parameter-set vocabulary
+//! come from `vaco-format-nalu`, `vaco-parse-h264`, and `vaco-parse-hevc`.
 
 #![forbid(unsafe_code)]
 

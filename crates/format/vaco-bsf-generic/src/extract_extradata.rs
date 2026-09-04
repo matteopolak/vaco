@@ -1,9 +1,7 @@
 //! `extract_extradata`: synthesise extradata from in-band parameter sets.
 //!
-//! Motivated by `planning/CONFORMANCE-FINDINGS.md` finding 26 and
-//! `vaco-mux-mp4`'s `check_bitstream` (M16,
-//! [`vaco_format_core::mux::global_header_action`]): a container with no
-//! out-of-band configuration record — AVI, MPEG-TS, raw Annex B — carries an
+//! A container with no out-of-band configuration record — AVI, MPEG-TS, raw
+//! Annex B — carries an
 //! H.264/HEVC stream's SPS/PPS/VPS *inside* the access units, and anything
 //! that wants them as a stream-level `extradata` field (a probe reporting
 //! `extradata_size`, or a muxer that needs `avcC`/`hvcC` up front) has to pull
@@ -11,55 +9,33 @@
 //!
 //! The assembly rule itself — which units count as parameter sets, and how
 //! their bytes are laid out — lives in [`vaco_format_nalu::extradata`], not
-//! here. `vaco-format-core`'s stream discovery needs the exact same rule to
-//! close finding 26's read half, and D19 allows it exactly one definition;
-//! see that module's docs for the measurement and the rejected alternatives.
-//! This crate is the *write*-side caller: a [`BitstreamFilter`] that a muxer
-//! or `-bsf:v extract_extradata` can insert into a packet stream.
+//! here, because stream discovery needs the same definition. This crate is the
+//! write-side caller: a [`BitstreamFilter`] that a muxer or explicit filter
+//! request can insert into a packet stream.
 //!
-//! # What is measured, not assumed
-//!
-//! Checked against `ffmpeg 8.1`, not read from its source (D7): a synthetic
-//! `testsrc` clip encoded with `libx264`, muxed to AVI (finding 26's own
-//! recipe), and separately run straight through
+//! Measured against `ffmpeg 8.1`: a synthetic `testsrc` clip encoded with
+//! `libx264`, muxed to AVI, and separately run through
 //! `-bsf:v extract_extradata,dump_extra=freq=keyframe` on the raw Annex B
-//! elementary stream to isolate exactly the bytes the filter adds. Both
-//! routes produced the same 37-byte buffer, reproduced in
+//! stream. Both routes produced the same 37-byte buffer, reproduced in
 //! [`vaco_format_nalu::extradata`]'s own doc comment and tests.
 //!
-//! One thing worth calling out here specifically, because it is a fact about
-//! *this filter's construction* rather than about the assembly rule:
 //! `extract_extradata` does not remove the units from the packet by default.
 //! `-bsf:v extract_extradata=remove=1` does; the bare name does not.
 //! [`BsfProvider::open`](vaco_format_core::mux::BsfProvider::open) carries no
-//! per-instance option string (see `planning/INTERFACE-GAPS.md` for that
-//! gap), so this crate can only ever construct the bare-name behaviour —
-//! `remove` is simply never reachable through the seam today.
+//! per-instance option string, so this crate constructs only bare-name
+//! behavior and cannot request `remove`.
 //!
-//! # How the result is reported
-//!
-//! Matches the reference's own mechanism: a
-//! [`vaco_packet::PacketSideData::NewExtradata`] attached to the packet whose
-//! parameter sets produced it, not a mutation of [`CodecParameters`] (which
-//! this filter never sees again after construction). A caller — a muxer's
-//! `write_packet`, or a demuxer's discovery pass — reads it back off the
-//! packet and decides what a "new extradata" means for it.
+//! The result is [`vaco_packet::PacketSideData::NewExtradata`] on the packet
+//! whose parameter sets produced it, rather than a [`CodecParameters`]
+//! mutation. The caller decides how to apply the new stream configuration.
 //!
 //! Emitted once per *change*: the first packet carrying a parameter set
 //! attaches the initial buffer; a later packet only attaches a new one if the
-//! collected set's bytes actually differ from what was last emitted. A file
-//! whose SPS/PPS never change (the overwhelming majority) reports it exactly
-//! once, on the first keyframe.
-//!
-//! # Codec coverage
-//!
+//! collected bytes differ from the last emitted value.
 //! `ffmpeg -h bsf=extract_extradata` lists `av1 avs2 avs3 cavs h264 hevc lcevc
-//! mpeg1video mpeg2video vc1 vvc` — eleven codecs. This crate implements H.264
-//! and HEVC, the two this workspace has NAL-level parameter-set vocabulary
-//! for ([`vaco_parse_h264`], [`vaco_parse_hevc`]); [`build`] returns
-//! [`Error::Unsupported`] for the other nine rather than silently doing
-//! nothing, so a caller finds out at construction time, not by an absent
-//! side-data block three packets later.
+//! mpeg1video mpeg2video vc1 vvc`. This crate implements H.264 and HEVC, the
+//! two with NAL parameter-set vocabulary here; [`build`] returns
+//! [`Error::Unsupported`] for the other nine at construction time.
 
 use std::collections::VecDeque;
 
