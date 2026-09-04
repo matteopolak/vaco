@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "package": "vaco",
+  "source_roots": ["vaco-cli", "vaco-probe"],
+  "registry_package": "vaco-registry",
+  "namespaces": {
+    "crates/app/": "application",
+    "crates/codec/": "codec",
+    "crates/core/": "core",
+    "crates/filter/": "filter",
+    "crates/format/": "format",
+    "crates/io/": "io",
+    "crates/model/": "media",
+    "crates/registry/": "registry",
+    "crates/signal/": "signal"
+  },
+  "root_exports": {
+    "vaco-cli": "cli",
+    "vaco-probe": "probe",
+    "vaco-registry": "registry"
+  }
+}

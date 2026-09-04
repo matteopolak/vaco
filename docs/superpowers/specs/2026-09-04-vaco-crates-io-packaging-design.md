@@ -8,13 +8,21 @@ executables: `vvmpeg` and `vvprobe`. It installs neither `vaco` nor
 outside this decision; adding it requires an explicit new `[[bin]]` target and
 release audit.
 
-The public package is a small application wrapper at `crates/app/vaco`. It owns
-both bin targets and delegates to separately testable implementation libraries:
-`vaco-cli` for `vvmpeg` and `vaco-probe` for `vvprobe`. This avoids moving their
-existing parser and end-to-end test code while making the install surface a
-single package. The old application packages cease to declare binary targets;
-they remain libraries in the normal dependency closure and are published only
-because `vaco` needs them.
+The public package lives at `crates/app/vaco`. It owns both bin targets and a
+library facade. The binaries call the facade's process-entry functions; they do
+not assemble separate dependency graphs. The facade re-exports Vaco's public
+API under stable namespaces: `media` for core media types, `codec`, `format`,
+`filter`, `io`, `registry`, `cli`, and `probe`. It delegates to the separately
+testable implementation libraries `vaco-cli` and `vaco-probe` rather than
+moving their parser and end-to-end test code. The old application packages
+cease to declare binary targets and remain published implementation libraries.
+
+The facade never flattens exports: `vaco::codec::h264` and
+`vaco::format::mp4`, for example, are distinct module paths even when their
+underlying crates expose common type names. Encumbered component exports are
+behind facade features that forward the corresponding registry/component
+feature; those features default off. An unencumbered `vaco` install and library
+dependency therefore cannot expose patent-gated codec APIs accidentally.
 
 ## Alternatives considered
 
@@ -24,19 +32,20 @@ because `vaco` needs them.
 2. Keep both existing binary packages and add `vaco` as a meta-package. Cargo
    does not install binaries of dependencies, so `cargo install vaco` would not
    provide either command.
-3. Add a thin `vaco` wrapper package owning both bins. This is the selected
-   design: Cargo's package-to-binary relationship is correct, the existing
+3. Add a `vaco` facade package owning both bins and the namespaced library API.
+   This is the selected design: Cargo's package-to-binary relationship is
+   correct, users receive a coherent Rust API, existing implementation
    libraries stay independently testable, and the migration is additive until
    the final removal of the old bin declarations.
 
 ## Dependency and publication boundary
 
-The release boundary is the transitive Cargo dependency graph reachable from
-the two `vaco` bin targets through `normal` and `build` edges. Dev-only edges
-are excluded. Every internal package in that graph is published; every other
-workspace package is marked `publish = false`. A dependency that has both a
-local path and an internal target must also use an exact version requirement,
-for example:
+The release boundary is the union of transitive Cargo graphs reachable from the
+two `vaco` bin targets and the facade's supported component features, through
+`normal` and `build` edges. Dev-only edges are excluded. Every internal package
+in that union is published; every other workspace package is marked
+`publish = false`. A dependency that has both a local path and an internal
+target must also use an exact version requirement, for example:
 
 ```toml
 vaco-cli = { path = "../vaco-cli", version = "=0.1.0" }
@@ -47,30 +56,55 @@ an incompatible released crate after publication. Versions stay workspace-owned
 and are advanced together by the release automation, so every internal edge
 continues to name the version being released.
 
-On the current `vaco-cli` + `vaco-probe` graph, the audit finds 200 distinct
-internal packages and 142 external packages over 342 normal/build nodes. The
-new wrapper increases the internal count to 201. One currently reachable
-package (`vaco-vecheck-macros`) is incorrectly `publish = false`; it must become
-publishable or be removed from the graph. Of 249 workspace members, 49 are
-outside the current closure and 46 of those are presently publishable; the
-migration makes all 49 non-publishable. The numbers are recorded to size the
-work, not hard-coded release policy: `scripts/audit-publish-closure.py` is the
-release gate of record.
+`release/vaco-public-api.json` is the one source of truth for the facade
+namespace, its dependency package names, and its feature forwarding. A generator
+reads it plus Cargo metadata to emit both `crates/app/vaco/Cargo.toml` direct
+path-plus-exact-version dependencies and `crates/app/vaco/src/lib.rs`
+re-exports. The generated manifest and library are never edited by hand. The
+same metadata-driven plan supplies the publish audit, so no separate list can
+drift between public API, dependency edges, and crates.io publication.
+
+On the current `vaco-cli` + `vaco-probe` graph, the default feature audit finds
+200 distinct internal packages and 142 external packages over 342 normal/build
+nodes. The all-supported-features audit finds 221 internal and 182 external
+packages over 403 nodes. The facade adds one internal package, so the planned
+publish union is 222 internal packages; 28 workspace members remain outside it
+and must be non-publishable. One currently reachable package
+(`vaco-vecheck-macros`) is incorrectly `publish = false`; it must become
+publishable or be removed from the graph. The numbers are recorded to size the
+work, not hard-coded release policy: the generated migration plan and
+`scripts/audit-publish-closure.py` are the release gates of record.
 
 ## Release automation and safety gate
 
 Release-plz creates synchronized version PRs and release PRs for the published
 closure. It must not publish on merge. A distinct manually dispatched publish
-workflow first fetches GitHub's open issue list with pagination, refuses when
-any issue is open, runs the closure audit, packages every release crate, and
-only then publishes in dependency order. The credentials remain in the manual
-environment; no automated push or release-plz job receives crates.io publish
-authority.
+workflow first fetches GitHub's open issue list with pagination and separately
+calls `scripts/check-crates-io-names.py` for every exact closure package name.
+The name preflight fails closed on a conflicting owner, an unexpected registry
+response, or a transport failure; it happens before any `cargo publish`, so a
+conflict can never leave a partial release. The workflow then runs the closure
+audit, packages every release crate, and only then publishes in dependency
+order. The credentials remain in the manual environment; no automated push or
+release-plz job receives crates.io publish authority.
 
 The manual workflow is an operational gate, not a substitute for review. It
 also verifies that `cargo install --path crates/app/vaco` exposes precisely
-`vvmpeg` and `vvprobe`, and that `cargo package --list` contains both bin
-sources and no unexpected generated artifacts.
+`vvmpeg` and `vvprobe`, that the facade can compile with default and supported
+component feature sets, and that `cargo package --list` contains both bin
+sources, the generated public library, the package README, and no unexpected
+generated artifacts.
+
+## Package README
+
+The generated `crates/app/vaco/README.md` is the crates.io landing page. It
+contains one library import example checked by the facade's documentation test,
+one command example per installed binary, and a short factual comparison with
+FFmpeg: Vaco's clean-room safe-Rust core, the mature and broader C ecosystem it
+is compared against, incomplete compatibility, mixed measured performance with
+codec paths still behind, MIT OR Apache-2.0 versus FFmpeg's configuration-
+dependent LGPL/GPL licensing, and experimental status. It makes no performance
+or compatibility promise beyond those bounds.
 
 ## Migration compatibility
 

@@ -11,25 +11,30 @@ editing them.
 
 ## Steps
 
-1. Add the package `crates/app/vaco` with a library containing the two shared
-   process-entry functions and explicit `[[bin]]` targets `vvmpeg` and
-   `vvprobe`. Depend on `vaco-cli` and `vaco-probe` using path-plus-exact-version
-   dependencies. Test the wrappers with process invocation tests.
+1. Add `release/vaco-public-api.json`, the single descriptor of the public
+   namespace, underlying package names, and feature forwarding. Add its
+   generator and tests; it emits the facade manifest's direct path-plus-exact-
+   version dependencies and `crates/app/vaco/src/lib.rs` namespaced re-exports.
+   Generate `crates/app/vaco` with the public package README, two shared
+   process-entry functions, and explicit `[[bin]]` targets `vvmpeg` and
+   `vvprobe`. Test both wrapper processes and namespaced library imports.
 2. After the CENC owner releases its manifest, remove the legacy bin targets
    from `vaco-cli` and `vaco-probe`; keep their existing library APIs. Update
    command names in their user-facing docs and all checked-in command fixtures.
-3. Update every internal normal/build path dependency in the calculated closure
-   to carry `version = "=<workspace release version>"`. Do this in small,
-   non-overlapping batches, using the audit script after each batch. Do not add
-   version constraints to dev-only edges.
-4. Mark all workspace packages outside the calculated closure `publish = false`.
-   Resolve the one current contradiction: `vaco-vecheck-macros` is in the
-   closure, so publish it or remove the production edge before this step.
+3. Generate and review the metadata-derived migration plan twice: once at
+   default features and once with every supported facade feature. Apply exact
+   `version = "=<workspace release version>"` rewrites only to internal
+   normal/build path edges from that union. Do not add versions to dev-only
+   edges.
+4. Mark all workspace packages outside the union `publish = false`. Resolve the
+   one current contradiction: `vaco-vecheck-macros` is in the closure, so
+   publish it or remove the production edge before this step.
 5. Add `release-plz.toml` and a version-PR workflow. Configure it to update the
    synchronized workspace release version and path dependency requirements, but
    never grant it a crates.io token or publish command.
 6. Add a manually dispatched publish workflow. It checks the full paginated
-   open-issue list, runs `scripts/audit-publish-closure.py`, packages the
+   open-issue list, checks exact crates.io name availability/ownership for the
+   generated closure, runs `scripts/audit-publish-closure.py`, packages the
    closure, installs the staged `vaco` package to a private root, confirms the
    two expected executable names, and publishes in dependency order only after
    all gates pass.
@@ -44,8 +49,12 @@ editing them.
 ## Completion criteria
 
 - `cargo install vaco` installs `vvmpeg` and `vvprobe`, and not the old names.
-- The audit reports no closure or path-version violations.
+- The audit reports no closure or path-version violations at default or
+  all-supported component features.
 - All out-of-closure workspace packages are `publish = false`.
+- The facade exposes the documented namespaced API and keeps every encumbered
+  component feature opt-in/default-off.
 - Release-plz can open a version PR without publishing.
-- The manual publish workflow refuses a non-empty open-issues result.
+- The manual publish workflow refuses a non-empty open-issues result and any
+  conflicting or indeterminate exact crates.io package name.
 - Packaging and local-install smoke tests pass; crates.io remains unchanged.

@@ -102,6 +102,11 @@ def main() -> int:
     failures: list[str] = []
     for package_id in sorted(internal, key=lambda item: packages[item]["name"]):
         package = packages[package_id]
+        active_targets = {
+            dependency["pkg"]
+            for dependency in nodes[package_id].get("deps", [])
+            if normal_or_build(dependency)
+        }
         if not package_publishable(package):
             failures.append(f"reachable package is publish = false: {package['name']}")
 
@@ -116,7 +121,9 @@ def main() -> int:
                 ),
                 None,
             )
-            if target is None or target["id"] not in internal:
+            if target is None or target["id"] not in active_targets:
+                continue
+            if target["id"] not in internal:
                 failures.append(
                     f"{package['name']} has a shipped path dependency outside the closure: "
                     f"{dependency['name']}"
