@@ -1749,6 +1749,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["sup"],
         mime_types: &["application/x-pgs"],
     },
+    #[cfg(feature = "demux-svag")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "svag",
+        long_name: Some("Konami PS2 SVAG"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-svag"),
+        media: None,
+        codec: None,
+        extensions: &["svag"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -10779,6 +10791,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_demux_image2::pipe::DEMUXER_SUNRAST,
     #[cfg(feature = "subtitle-bitmap")]
     &::vaco_subtitle_bitmap::sup::DEMUXER,
+    #[cfg(feature = "demux-svag")]
+    &::vaco_format_misc_audio::svag::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_SVG,
     #[cfg(feature = "demux-swf")]

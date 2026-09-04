@@ -1346,6 +1346,20 @@ acquired = "2026-08-31"
 where    = "formally published specification PDF (BBC Research & Development)"
 
 [[source]]
+id       = "svag-format-note"
+kind     = "spec"
+title    = "HCS Forum, vgmstream thread page 8, posts dated 2016-09-09 through 2016-10-27 -- independent community observations of Konami PS2 SVAG files from World Heroes Anthology: VAGm magic, 32-byte physical header in those files, channel count 2 in the observed set, sample rate at offset 0x08, and 16-byte channel interleave. The reference demuxer's distinct 20-byte consumed header and all field semantics used by vaco were confirmed independently by black-box sweeps, not copied from an implementation; see vaco-format-misc-audio-svag-fixtures-probe."
+acquired = "2026-09-04"
+where    = "https://www.hcs64.com/mboard/forumlong.php?showpage=8&showthread=8687"
+
+[[source]]
+id       = "vaco-format-misc-audio-svag-fixtures-probe"
+kind     = "blackbox"
+title    = "ffmpeg/ffprobe 9.0.1, measured against hand-built SVAG fixtures (no reference encoder exists): confirmed a little-endian 20-byte consumed header VAGm/data_size/sample_rate/channels/interleave; codec_name adpcm_psx; one stream at time_base 1/sample_rate; packet bytes channels*interleave from physical offset 20 through true EOF; packet duration 28*(interleave/16) samples; duration_ts floor(data_size/(16*channels))*28 independent of physical size and interleave grouping; mono/stereo/3-channel geometry; 16/32/48-byte interleave sweeps; and a short physical tail emitted as a corrupt packet with no pts/dts/duration."
+acquired = "2026-09-04"
+where    = "the reference binary installed on the development machine"
+
+[[source]]
 id       = "maxis-xa-format-doc"
 kind     = "spec"
 title    = "Maxis XA (.xa) container and EA-ADPCM codec description, corroborated across two independent community references: MultimediaWiki's \"Maxis XA\" page (header struct XAHeader -- szID/dwOutSize/wTag/wChannels/dwSampleRate/dwAvgByteRate/wAlign/wBits -- and the full EA-ADPCM decompression algorithm and coefficient table) and the Niotso Wiki / SC4Devotion Encyclopaedia's corroborating field descriptions for the same header. Neither page states byte order explicitly; little-endian was confirmed empirically, not assumed -- see vaco-format-misc-audio-xa-fixtures-probe."

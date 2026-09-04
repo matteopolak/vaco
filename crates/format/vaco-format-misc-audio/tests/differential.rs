@@ -56,7 +56,7 @@ fn fixture(name: &str) -> std::path::PathBuf {
 
 #[test]
 fn every_fixture_matches_the_measured_reference_row() {
-    use vaco_format_misc_audio::{adx, g723, rawcodec, sbc, tta, vag, wavpack, xa, xwma};
+    use vaco_format_misc_audio::{adx, g723, rawcodec, sbc, svag, tta, vag, wavpack, xa, xwma};
 
     let rows = [
         Row {
@@ -151,6 +151,14 @@ fn every_fixture_matches_the_measured_reference_row() {
             channels: 1,
             reference_duration_us: Some(12_698),
             reference_packet_sizes: Some(&[16; 10]),
+        },
+        Row {
+            file: "svag.svag",
+            desc: svag::DEMUXER,
+            sample_rate: 44_100,
+            channels: 2,
+            reference_duration_us: Some(6_349),
+            reference_packet_sizes: Some(&[32; 10]),
         },
         Row {
             file: "xa.xa",

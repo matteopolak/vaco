@@ -177,6 +177,14 @@ extensions = "aptx_hd"
 
 [[component]]
 kind       = "demuxer"
+name       = "svag"
+long_name  = "Konami PS2 SVAG"
+feature    = "demux-svag"
+ctor       = "vaco_format_misc_audio::svag::DEMUXER"
+extensions = "svag"
+
+[[component]]
+kind       = "demuxer"
 name       = "vag"
 long_name  = "Sony PS2 VAG"
 feature    = "demux-vag"
