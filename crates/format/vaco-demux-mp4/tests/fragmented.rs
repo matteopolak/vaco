@@ -127,28 +127,45 @@ mod tests {
         assert_eq!(boxes[0].references[0].subsegment_duration, 3000);
     }
 
-    /// A top-level `pssh` beside `moof` — ISO/IEC 23001-7 §8.1's fragmented-
-    /// file location, distinct from a `moov`-level `pssh` — becomes an
-    /// `encryption_system_id` container tag, the same shape
-    /// `find_qt_chapter_track`'s sibling `pssh_tags` already gives a
+    /// A version-1 top-level `pssh` beside `moof` — ISO/IEC 23001-7 §8.1's
+    /// fragmented-file location — reports both its DRM system and every KID
+    /// in declaration order. The same metadata shape is used for a
     /// progressive file's `moov`-level copy.
     #[test]
-    fn a_top_level_pssh_beside_moof_becomes_a_container_tag() {
+    fn a_top_level_pssh_beside_moof_reports_its_system_and_kids() {
         let moov = frag_moov(1000, &[(TRACK_ID, HANDLER)]);
         let mut pssh_body = Vec::new();
         pssh_body.extend_from_slice(&[0x42; 16]); // system_id
+        pssh_body.extend_from_slice(&2u32.to_be_bytes()); // KID_count
+        pssh_body.extend_from_slice(&[0xAA; 16]);
+        pssh_body.extend_from_slice(&[0xBB; 16]);
         pssh_body.extend_from_slice(&0u32.to_be_bytes()); // data_size = 0
-        let pssh = vaco_format_isom::build::fullbx(b"pssh", 0, 0, &pssh_body);
+        let pssh = vaco_format_isom::build::fullbx(b"pssh", 1, 0, &pssh_body);
         let unit = frag_unit(1, TRACK_ID, 0, &[100, 100, 100]);
         let data = frag_file(&moov, &[pssh, unit], None);
         let demux = open(data);
+        let encryption: Vec<_> = demux
+            .metadata()
+            .iter()
+            .filter(|(key, _)| key.starts_with("encryption_"))
+            .cloned()
+            .collect();
         assert_eq!(
-            demux
-                .metadata()
-                .iter()
-                .find(|(k, _)| k == "encryption_system_id")
-                .map(|(_, v)| v.as_str()),
-            Some("42424242424242424242424242424242")
+            encryption,
+            vec![
+                (
+                    "encryption_system_id".to_owned(),
+                    "42424242424242424242424242424242".to_owned(),
+                ),
+                (
+                    "encryption_key_id".to_owned(),
+                    "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+                ),
+                (
+                    "encryption_key_id".to_owned(),
+                    "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+                ),
+            ]
         );
     }
 

@@ -624,8 +624,11 @@ deltas are unsigned and monotonicity is guaranteed by construction.
 [`vaco_format_isom::cenc::CencInfo`]. When a track is protected, its `Stream`
 gets `encryption_scheme` (e.g. `cenc`) and `encryption_key_id` (the
 `default_KID`, lower-case hex) tags — `codec_name` already reads as the
-*original* codec via `effective_format` — and `udta`-adjacent `pssh` boxes
-under `moov` become container-level `encryption_system_id` tags.
+*original* codec via `effective_format` — and `pssh` boxes become
+container-level `encryption_system_id` tags. A version-1 `pssh` additionally
+emits one `encryption_key_id` tag for every declared KID, in declaration order;
+the same helper handles `pssh` under `moov` and top-level `pssh` beside `moof`.
+The opaque DRM-system `Data` stays uninterpreted.
 
 Measured: `ffprobe 8.1` on such a file surfaces **no** encryption tag at all,
 and `ffmpeg -i` decodes the still-encrypted bytes into visibly corrupt frames

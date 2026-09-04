@@ -548,14 +548,9 @@ impl Mp4Demuxer {
             // cannot be borrowed while `movie` still is.
             let timecode_tracks = find_timecode_tracks(&movie);
             // `pssh` under `moov` is the progressive-file location (§8.1). A
-            // fragmented file's copy is a top-level box next to `moof`
-            // instead, which `collect_fragments`'s scan does not currently
-            // collect — see the crate's doc file's *Deferred* section.
-            let pssh_tags: Vec<(String, String)> = movie
-                .pssh
-                .iter()
-                .map(|p| ("encryption_system_id".to_owned(), hex16(&p.system_id)))
-                .collect();
+            // fragmented file's copy is a top-level box next to `moof`, which
+            // `collect_fragments` scans through the same `pssh_tags` helper.
+            let pssh_tags: Vec<(String, String)> = movie.pssh.iter().flat_map(pssh_tags).collect();
             (
                 streams,
                 readers,
@@ -1346,8 +1341,7 @@ impl Mp4Demuxer {
                     self.budget.release(data.len() as u64);
                     if let Ok(pssh) = vaco_format_isom::cenc::Pssh::parse(&reassemble(span, &data))
                     {
-                        self.metadata
-                            .push(("encryption_system_id".to_owned(), hex16(&pssh.system_id)));
+                        self.metadata.extend(pssh_tags(&pssh));
                     }
                 }
                 continue;
@@ -2431,6 +2425,16 @@ fn hex16(bytes: &[u8; 16]) -> String {
         let _ = write!(out, "{b:02x}");
     }
     out
+}
+
+/// Container metadata carried by one `pssh`, preserving its version-1 KID
+/// declaration order after the DRM system id.
+fn pssh_tags(pssh: &vaco_format_isom::cenc::Pssh) -> impl Iterator<Item = (String, String)> + '_ {
+    std::iter::once(("encryption_system_id".to_owned(), hex16(&pssh.system_id))).chain(
+        pssh.kids
+            .iter()
+            .map(|kid| ("encryption_key_id".to_owned(), hex16(kid))),
+    )
 }
 
 /// Sample-table totals: what every derived field divides by.
