@@ -92,6 +92,11 @@ codec's own bitstream header directly rather than guessing:
   (`Vaco-Spec-Ref aom-av1-spec` §5.3.1) — a documented heuristic, not a full
   `frame_type` parse, since that needs the sequence header's own state.
 
+The header-declared frame count remains an exact aggregate duration at the
+native `scale/rate` stream clock. The legacy microsecond `duration()` view is
+still available, but duration-aware callers should use the demuxer's exact
+view to avoid rounding a non-integral frame period before display or rescaling.
+
 ### `ffmetadata`: demuxer only, on purpose
 
 `vaco_mux_stream::MUXER_FFMETADATA` already exists and is registered under

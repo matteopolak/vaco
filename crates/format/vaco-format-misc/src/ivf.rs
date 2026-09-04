@@ -40,7 +40,7 @@
 //! reference names one.
 
 use vaco_codec_core::{CodecId, CodecParameters};
-use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
+use vaco_core::{Duration, Error, ExactDuration, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::Stream;
 use vaco_format_core::flags::FormatFlags;
 use vaco_format_core::probe::{ProbeData, ProbeScore};
@@ -388,6 +388,10 @@ impl Demuxer for IvfDemuxer {
     fn duration(&self) -> Option<Duration> {
         self.stream.duration()
     }
+
+    fn duration_exact(&self) -> Option<ExactDuration> {
+        self.stream.duration_exact()
+    }
 }
 
 #[derive(Debug)]
@@ -520,6 +524,10 @@ mod tests {
     }
 
     fn header(fourcc: [u8; 4], frames: &[(bool, &[u8])]) -> Vec<u8> {
+        header_at_rate(fourcc, 25, 1, frames)
+    }
+
+    fn header_at_rate(fourcc: [u8; 4], rate: u32, scale: u32, frames: &[(bool, &[u8])]) -> Vec<u8> {
         let mut buf = Vec::new();
         buf.extend_from_slice(b"DKIF");
         buf.extend_from_slice(&0u16.to_le_bytes());
@@ -527,8 +535,8 @@ mod tests {
         buf.extend_from_slice(&fourcc);
         buf.extend_from_slice(&64u16.to_le_bytes());
         buf.extend_from_slice(&48u16.to_le_bytes());
-        buf.extend_from_slice(&25u32.to_le_bytes());
-        buf.extend_from_slice(&1u32.to_le_bytes());
+        buf.extend_from_slice(&rate.to_le_bytes());
+        buf.extend_from_slice(&scale.to_le_bytes());
         buf.extend_from_slice(&(frames.len() as u32).to_le_bytes());
         buf.extend_from_slice(&0u32.to_le_bytes());
         for (i, (_key, payload)) in frames.iter().enumerate() {
@@ -537,6 +545,21 @@ mod tests {
             buf.extend_from_slice(payload);
         }
         buf
+    }
+
+    #[test]
+    fn aggregate_duration_keeps_native_frame_ticks_exact() {
+        let key = vp8_frame(true);
+        let data = header_at_rate(*b"VP80", 30_000, 1_001, &[(true, &key)]);
+        let mut d = IvfDemuxer::open(Box::new(MemorySource::new(data))).unwrap();
+
+        assert_eq!(d.streams().first().unwrap().duration_ts, Some(1));
+        assert_eq!(
+            d.duration_exact().map(vaco_core::ExactDuration::as_ratio),
+            Some((1_001, 30_000))
+        );
+        assert_eq!(d.read_packet().unwrap().pts.ticks(), Some(0));
+        assert!(matches!(d.read_packet(), Err(Error::Eof)));
     }
 
     #[test]
