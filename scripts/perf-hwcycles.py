@@ -209,8 +209,19 @@ def paired_ratios(runs_by_label):
     for vaco in vacos:
         for ref in refs:
             metric_output = {}
-            pairs = zip(runs_by_label[vaco], runs_by_label[ref])
-            paired = list(pairs)
+            vaco_by_round = {
+                run["round"]: run for run in runs_by_label[vaco] if "round" in run
+            }
+            ref_by_round = {
+                run["round"]: run for run in runs_by_label[ref] if "round" in run
+            }
+            if vaco_by_round or ref_by_round:
+                paired = [
+                    (vaco_by_round[round_number], ref_by_round[round_number])
+                    for round_number in sorted(vaco_by_round.keys() & ref_by_round.keys())
+                ]
+            else:
+                paired = list(zip(runs_by_label[vaco], runs_by_label[ref]))
             metric_names = sorted({
                 name
                 for left, right in paired
@@ -346,6 +357,7 @@ def main():
                             print(f"  FAILED {label}: {exc}", file=sys.stderr)
                             continue
                         if measured:
+                            record["round"] = round_number - args.warmups
                             runs[label].append(record)
                             counters = record["counters"]
                             print(

@@ -105,6 +105,21 @@ class SummaryTests(unittest.TestCase):
         self.assertEqual(ratios["vaco/ffmpeg_t1"]["cycles"]["median"], 2.1)
         self.assertEqual(ratios["vaco/ffmpeg_t1"]["cycles"]["wins"], 0)
 
+    def test_pairs_only_samples_from_the_same_round_after_a_failure(self):
+        runs = {
+            "vaco": [
+                {"round": 0, "counters": {"cycles": 900}},
+                {"round": 1, "counters": {"cycles": 220}},
+            ],
+            "ffmpeg_t1": [
+                {"round": 1, "counters": {"cycles": 100}},
+            ],
+        }
+
+        ratios = MODULE.paired_ratios(runs)
+
+        self.assertEqual(ratios["vaco/ffmpeg_t1"]["cycles"]["all"], [2.2])
+
 
 if __name__ == "__main__":
     unittest.main()

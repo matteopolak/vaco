@@ -179,6 +179,31 @@ which is the cross-check that matters: a share of *instructions* and a share of
 *time* are different quantities, and where they disagree the disagreement is the
 finding.
 
+### 2026-09-04 current-main validation
+
+The first end-to-end check after adding the hardware-cycle driver used committed
+Vaco `a914a3a0`, ffmpeg 7.1.5, and the Linux 640x480 H.264 fixture (125 frames).
+Cachegrind reported 12,024,663,344 Vaco instructions and 1,012,342,414 ffmpeg
+instructions: **11.88x raw** and **14.54x after subtracting process startup**.
+Both decoders emitted exactly 57,600,000 bytes with SHA-256
+`c73d8bfd0ccadf277051834356ff455633e3cdbd85ada2ad2ba58364cdc242c2`.
+
+A same-session macOS Samply run collected 3,262 samples, with 93.8% of leaf
+samples in Vaco and 99.6% of Vaco addresses resolved. The outermost physical
+hotspots were H.264 `reconstruct_mb` (28.94%), `boundary_strength` (13.10%),
+`deblock_row` (11.40%), chroma motion compensation (9.54%), and luma motion
+compensation (7.91%). The innermost view exposed `copied<u8>` iterator work as
+8.59%, but its callers remain codec-local. The shared DSP deblock kernel was
+3.59% and is already on the measured do-not-re-propose list. There was no
+evidence for a safe cross-cutting core optimisation in this profile, so none was
+attempted.
+
+No real cycle number was produced on this Mac: it has no process-total PMU
+interface suitable for the harness, and the Docker Desktop VM does not expose
+one. This is a recorded platform limitation, not a zero or a time-derived cycle
+estimate. The Linux hardware-cycle workflow above remains to be executed on a
+host with PMU access.
+
 ### A defect this instrument found on its first run
 
 MP3 decode's profile is **74.38% `cos`** (5,720,068,487 instructions), plus 3.24%
