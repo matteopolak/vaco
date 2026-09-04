@@ -15,10 +15,10 @@ parallel processing (§9.3.2.3, see "WPP (`entropy_coding_sync_enabled_flag`),
 landed" below), per-CU adaptive QP (`cu_qp_delta`, §7.3.8.11/§8.6.1, see
 "Per-CU QP delta (`cu_qp_delta`), landed" below) and uni- and bi-predictive
 weighted prediction (§8.5.3.3.4.3, see "Weighted prediction
-(§8.5.3.3.4.3), landed" and "B-slices (...), landed" below). Tiles, I_PCM,
-transform-skip residual coding, custom scaling lists and every
-range-extension feature are explicitly out of scope — see "What was cut"
-below.
+(§8.5.3.3.4.3), landed" and "B-slices (...), landed" below). Tiles, filter
+suppression for PCM CUs, custom scaling lists and every range-extension
+feature are explicitly out of scope — see "What was cut" below. I_PCM whose
+samples participate in the ordinary loop filters is implemented.
 
 **Registered, patent-encumbered-gated.** `vaco-component.toml` declares
 this decoder with `encumbered = true` / `default = false` behind the
@@ -42,7 +42,7 @@ residual-coding's context derivations, and intra prediction.
 | Module | Contents |
 |---|---|
 | `decoder.rs` | `HevcDecoder`, the `Decoder` trait impl, `check_scope` (out-of-scope SPS/PPS features refused by name); embeds `vaco_parse_hevc::HevcParser` for parameter-set bookkeeping and `hvcC`-vs-Annex-B framing, mirroring `vaco-codec-h264` |
-| `ctu.rs` | `coding_quadtree`/`coding_unit`/`transform_tree`/`transform_unit` (§7.3.8.4/.5/.8/.10) for I-slices; `coding_unit_p`/`decode_skip_cu`/`decode_inter_cu`/`transform_tree_inter` and `prediction_unit()` parsing (§7.3.8.5/.6/.9) for P-slices — see "Stage 2: P-slices, byte-exact — landed" below |
+| `ctu.rs` | `coding_quadtree`/`coding_unit`/`transform_tree`/`transform_unit` (§7.3.8.4/.5/.8/.10), including §7.3.8.7 I_PCM sample decode/reconstruction, for I-slices; `coding_unit_p`/`decode_skip_cu`/`decode_inter_cu`/`transform_tree_inter` and `prediction_unit()` parsing (§7.3.8.5/.6/.9) for P-slices — see "Stage 2: P-slices, byte-exact — landed" below |
 | `motion.rs` | Merge candidate derivation (§8.5.3.2.2/.3, spatial + temporal + zero-fill) and AMVP candidate derivation (§8.5.3.2.6/.7), plus the shared motion-vector scaling arithmetic (`dist_scale_factor`/`scale_mv`, §8.5.3.2.8) both use |
 | `mc.rs` | Motion compensation: 8-tap luma / 4-tap chroma separable interpolation filters at quarter/eighth-sample precision (§8.5.3.3), exact HM fixed-point arithmetic; also `predict_block_intermediate` (the unweighted intermediate `predSampleLX`) and `apply_weight` (§8.5.3.3.4.3's explicit weighted formula), which `weight.rs` resolves weights for |
 | `weight.rs` | Explicit weighted sample prediction (§8.5.3.3.4.3): resolves a slice's `pred_weight_table()` into a per-`ref_idx` `LumaWeightL0`/`ChromaWeightL0`/offset table — see "Weighted prediction (§8.5.3.3.4.3), landed" below |
@@ -71,7 +71,10 @@ raster order via `ctu::decode_ctu` — `coding_quadtree` down to
 rem/`intra_chroma_pred_mode` and then `transform_tree` (recursive,
 carrying inherited `cbf_cb`/`cbf_cr` and the luma cbf context's
 `trafoDepth == 0` special case) down to `transform_unit`, which predicts,
-decodes residual coefficients, dequantises, inverse-transforms and adds.
+decodes residual coefficients, dequantises, inverse-transforms and adds. An
+eligible `pcm_flag` takes the alternate §7.3.8.5 branch: byte-align, read raw
+luma/Cb/Cr samples at the SPS-declared precision, scale them to picture bit
+depth, and initialize only the arithmetic engine again before the next CU.
 
 Decode and reconstruction are interleaved leaf by leaf (unlike HM's own
 two-pass `decodeCtu`/`decompressCtu` split) because no CABAC context in
@@ -167,8 +170,9 @@ own decode of the same file byte-for-byte, per plane, end to end.
 
 `check_scope` in `decoder.rs` refuses (`Error::Unsupported`, by name, at
 the SPS/PPS) rather than approximates: non-4:2:0 chroma, non-8-bit depth,
-`separate_colour_plane`, custom scaling lists, I_PCM, SPS/PPS range
-extensions, SCC extensions, tiles, `transquant_bypass_enabled`. Neither
+`separate_colour_plane`, custom scaling lists, PCM CU filter suppression
+(`pcm_loop_filter_disabled_flag`), SPS/PPS range extensions, SCC extensions,
+tiles, `transquant_bypass_enabled`. Neither ordinary I_PCM, transform skip,
 deblocking, SAO, `entropy_coding_sync` (WPP), `cu_qp_delta_enabled`,
 P-slices, B-slices, nor weighted (uni- or bi-predictive) prediction are on
 this list any more — see their own "landed" sections below.
@@ -294,8 +298,8 @@ with the production `HevcParser`/`ParserDriver`, feeding those access units to
 
 | result | streams |
 | --- | ---: |
-| byte-exact on every frame | **33** |
-| refused by name (`Unsupported`) | 13 |
+| byte-exact on every frame | **36** |
+| refused by name (`Unsupported`) | 10 |
 | CABAC desync mid-stream | **0** |
 | wrong pixels at the right length | **0** |
 | wrong frame count | 0 |
@@ -304,7 +308,8 @@ Byte-exact: `amp-a`, `amvp-a`, `amvp-b`, `cip-a`, `cip-b`, `confwin-a`,
 `entp-c`, `filler-a`, `initqp-a`, `ipred-c`, `merge-a`..`merge-e`,
 `mvclip-a`, `mvedge-a`, `picsize-d`, `pmerge-a`, `pmerge-b`, `poc-a`, `ps-b`,
 `rplm-a` (300 frames), `rps-a`, `rqt-a`, `sao-a`, `sao-g`, `slpplp-a`,
-`struct-a`, `tscl-a`, `vpsid-a`, `nut-a`, `nooutprior-a`.
+`struct-a`, `tscl-a`, `vpsid-a`, `nut-a`, `nooutprior-a`, `ipcm-a`,
+`ipcm-b`, `ipcm-e`.
 
 An earlier scratch-only raw harness reported that `initqp-a-sony-1`
 desynchronized after 47 of 60 frames. That harness waited for the next first
@@ -355,9 +360,38 @@ the lockfile's SHA-256-verified `NUT_A_ericsson_5.bit`: this decoder and
 `ffmpeg 9.0.1` both output 34 416x240 yuv420p frames (5,091,840 bytes), and
 every byte matches.
 
-Refused by name, not mis-decoded: `I_PCM` (`ipcm-a`..`ipcm-e`), more than
-one slice segment per picture (`dblk-d`..`dblk-g`, `hrd-a`, `slices-a`),
-custom scaling lists (`slist-c`, `vpsspspps-a`).
+Refused by name, not mis-decoded: more than one slice segment per picture
+(`dblk-d`..`dblk-g`, `hrd-a`, `slices-a`), custom scaling lists (`slist-c`,
+`vpsspspps-a`), PCM CU filter suppression (`ipcm-c`) and
+`transquant_bypass_enabled` (`ipcm-d`).
+
+### I_PCM sample decoding
+
+`ipcm_A_NEC_3` isolated a scope refusal rather than a pixel bug: the decoder
+rejected any SPS with `pcm_enabled_flag`, before §7.3.8.5 could decode a
+single `pcm_flag`. The accepted subset now follows the specification's
+distinct entropy path. `pcm_flag` uses the termination process
+(§9.3.4.3.5); on `1`, the decoder verifies `pcm_alignment_zero_bit`, reads
+§7.3.8.7's raster-order luma then Cb/Cr samples at `PcmBitDepthY/C`, applies
+§8.4.1 equations 8-12/8-15/8-16, and initializes the arithmetic engine per
+§9.3.2.6 without resetting the context models.
+
+Measured 2026-09-04 against the SHA-256-verified JCT-VC archives and
+`ffmpeg 9.0.1` direct Annex-B decode:
+
+- `ipcm_A_NEC_3` (8-bit Y/C), `ipcm_B_NEC_3` (6-bit Y/C), and
+  `ipcm_E_NEC_2` (6-bit Y, 8-bit C) each produce exactly one 416x240 yuv420p
+  frame, 149,760 bytes, byte-exact in every plane. The oracle MD5 values
+  `8049988c383486e076ea2494edda3831`,
+  `23a3b7024fd9bc64b946b9961ab0f51e`, and
+  `e1cd7a16d3f6a342855044ccba3e41f5` respectively match the checksums shipped
+  in the three JCT-VC archives.
+- Before the change, all three stopped at the SPS scope check and emitted no
+  frame. `tests/ipcm.rs` keeps A's 5,153-byte bitstream and 149,760-byte
+  published-checksum reference output as the durable regression.
+- `ipcm_C_NEC_3` remains a named refusal because it requires suppressing
+  deblocking and SAO per PCM CU. `ipcm_D_NEC_3` remains a named refusal at
+  `transquant_bypass_enabled_flag`. Neither is approximated.
 
 ### AMVP motion-vector sum wrapping
 
@@ -1261,8 +1295,9 @@ per plane, per frame**, reusing `verify_hevc_deblock.sh`:
 `check_scope` itself never refused B-slices (it is an SPS/PPS-level check;
 slice type is not known that early) and is unchanged. What `check_scope`
 still refuses is unrelated to this pass: non-4:2:0 chroma, non-8-bit
-samples, `separate_colour_plane_flag`, custom scaling lists, I_PCM, SPS/PPS
-range extensions, screen-content-coding extensions, and tiles. Long-term
+samples, `separate_colour_plane_flag`, custom scaling lists, PCM CU filter
+suppression, SPS/PPS range extensions, screen-content-coding extensions, and
+tiles. Long-term
 reference pictures (refused by `derive_reference_pic_sets`, not
 `check_scope`) and dependent/multi-segment slices (refused inline in
 `decode_packet`, same as before) are also unaffected.

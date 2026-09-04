@@ -16,8 +16,10 @@
 //! syntax (depth, `cbf`, mode) — see [`crate::framebuf`]'s module doc for the
 //! same reasoning applied to neighbour availability.
 
+use vaco_bitstream::BitReader;
 use vaco_codec_cabac::{CabacDecoder, ContextModel};
 use vaco_core::{Error, Result};
+use vaco_parse_hevc::sps::PcmParameters;
 use vaco_parse_hevc::{Pps, Sps};
 
 use crate::cabac_ctx::ContextBank;
@@ -68,6 +70,11 @@ pub(crate) struct CtxShared<'p> {
     pub sign_data_hiding: bool,
     pub strong_intra_smoothing: bool,
     pub transform_skip_enabled: bool,
+    /// `pcm_enabled_flag` and its SPS parameters. The decoder's scope gate
+    /// admits only the form whose samples participate in the ordinary loop
+    /// filters; per-CU filter suppression needs grid state this pass does not
+    /// add and remains a named refusal.
+    pcm: Option<PcmParameters>,
     pub bit_depth_luma: u32,
     pub bit_depth_chroma: u32,
     pub cb_qp_offset: i32,
@@ -351,6 +358,7 @@ impl<'p> CtxShared<'p> {
             sign_data_hiding: pps.sign_data_hiding_enabled,
             strong_intra_smoothing: sps.strong_intra_smoothing_enabled,
             transform_skip_enabled: pps.transform_skip_enabled,
+            pcm: sps.pcm,
             bit_depth_luma: u32::from(sps.bit_depth_luma),
             bit_depth_chroma: u32::from(sps.bit_depth_chroma),
             cb_qp_offset: pps.cb_qp_offset,
@@ -764,6 +772,122 @@ fn finalize_cu_qp(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32) {
     s.qp_y_prev = qp_y;
 }
 
+/// §7.3.8.7's `pcm_sample()` and §8.4.1 equations 8-12/8-15/8-16 for one
+/// component plane. Samples are in raster order and scaled to the picture's
+/// bit depth before being written to the reconstruction buffer.
+fn read_pcm_plane(
+    reader: &mut BitReader<'_>,
+    plane: &mut crate::framebuf::ReconPlane<'_>,
+    x0: i32,
+    y0: i32,
+    size: usize,
+    pcm_bit_depth: u32,
+    output_bit_depth: u32,
+) {
+    let Ok(x0u) = usize::try_from(x0) else { return };
+    let shift = output_bit_depth.saturating_sub(pcm_bit_depth);
+    let mut row = [0u8; MAX_CTB];
+    let size = size.min(MAX_CTB);
+    for y in 0..size {
+        for sample in row.iter_mut().take(size) {
+            let value = reader.get(pcm_bit_depth) << shift;
+            *sample = u8::try_from(value).unwrap_or(0);
+        }
+        let Ok(py) = usize::try_from(y0.saturating_add(i32::try_from(y).unwrap_or(0))) else {
+            continue;
+        };
+        let Some(samples) = row.get(..size) else {
+            continue;
+        };
+        plane.write_row(x0u, py, samples);
+        plane.mark_row_ready(py, x0u, size);
+    }
+}
+
+/// Decode and reconstruct the `pcm_flag == 1` branch of §7.3.8.5.
+///
+/// `pcm_flag` uses the termination process, so no arithmetic read-ahead lies
+/// between it and the raw aligned samples. Context models survive unchanged;
+/// only the arithmetic engine is initialized again after the samples (§9.3.1,
+/// §9.3.2.6).
+fn decode_pcm_cu(
+    cabac: &mut CabacDecoder<'_>,
+    s: &mut Ctx<'_>,
+    x0: i32,
+    y0: i32,
+    log2_size: u32,
+    depth: u32,
+    pcm: PcmParameters,
+) -> Result<()> {
+    if cabac.malformed() {
+        return Err(Error::InvalidData(
+            "vaco-codec-hevc: malformed CABAC before I_PCM samples",
+        ));
+    }
+    let mut reader = core::mem::replace(cabac, CabacDecoder::new(&[])).into_reader();
+    while reader.bit_pos() & 7 != 0 {
+        if reader.get_bit() != 0 {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: non-zero pcm_alignment_zero_bit",
+            ));
+        }
+    }
+
+    let size = 1usize << log2_size;
+    read_pcm_plane(
+        &mut reader,
+        &mut s.recon.y,
+        x0,
+        y0,
+        size,
+        u32::from(pcm.sample_bit_depth_luma),
+        s.shared.bit_depth_luma,
+    );
+    let chroma_size = size >> 1;
+    read_pcm_plane(
+        &mut reader,
+        &mut s.recon.cb,
+        x0 >> 1,
+        y0 >> 1,
+        chroma_size,
+        u32::from(pcm.sample_bit_depth_chroma),
+        s.shared.bit_depth_chroma,
+    );
+    read_pcm_plane(
+        &mut reader,
+        &mut s.recon.cr,
+        x0 >> 1,
+        y0 >> 1,
+        chroma_size,
+        u32::from(pcm.sample_bit_depth_chroma),
+        s.shared.bit_depth_chroma,
+    );
+    if reader.overrun() {
+        return Err(Error::InvalidData(
+            "vaco-codec-hevc: I_PCM samples truncated",
+        ));
+    }
+    *cabac = CabacDecoder::from_reader(reader);
+
+    let size_i32 = 1i32 << log2_size;
+    let blocks = usize::try_from((size_i32 >> 2).max(1)).unwrap_or(1);
+    let bx0 = usize::try_from(x0 >> 2).unwrap_or(0);
+    let by0 = usize::try_from(y0 >> 2).unwrap_or(0);
+    s.cu_grid.fill(
+        bx0,
+        by0,
+        blocks,
+        blocks,
+        u8::try_from(depth).unwrap_or(u8::MAX),
+        DC_IDX,
+    );
+    let grid = crate::deblock::DEBLOCK_GRID;
+    s.edges.mark_vert(x0, y0, size_i32, grid);
+    s.edges.mark_horiz(x0, y0, size_i32, grid);
+    finalize_cu_qp(s, x0, y0, size_i32);
+    Ok(())
+}
+
 fn decode_intra_cu(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
@@ -787,6 +911,20 @@ fn decode_intra_cu(
     } else {
         false
     };
+
+    // §7.3.8.5: `pcm_flag` is present only for an intra PART_2Nx2N CU whose
+    // size lies in the SPS-declared PCM range. Its bin uses the termination
+    // process (§9.3.4.3.5), not a context model.
+    if !is_nxn
+        && let Some(pcm) = s.shared.pcm
+        && log2_size >= u32::from(pcm.log2_min_cb_size)
+        && log2_size
+            <= u32::from(pcm.log2_min_cb_size)
+                .saturating_add(u32::from(pcm.log2_diff_max_min_cb_size))
+        && cabac.decode_terminate() != 0
+    {
+        return decode_pcm_cu(cabac, s, x0, y0, log2_size, depth, pcm);
+    }
 
     let pus: Vec<Pu> = if is_nxn {
         let half = size >> 1;
