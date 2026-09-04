@@ -149,7 +149,7 @@ fn copy_planes(plan: &Plan, src: &[SrcPlane<'_>], dst: &mut [DstPlane<'_>]) -> R
 }
 
 /// A rectangular block of `i32` samples covering absolute rows `y0..y0 + rows`.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct Grid {
     w: usize,
     y0: usize,
@@ -794,6 +794,174 @@ fn filter_v_fixed<const N: usize>(
         *out = (sum >> shift) as i32;
     }
     true
+}
+
+/// Tooling-only access to the private vertical-filter implementations.
+#[cfg(feature = "checkasm")]
+#[doc(hidden)]
+pub mod checkasm {
+    use super::{Grid, filter_v_fixed, filter_v_generic};
+    use crate::filter::{COEFF_ONE, COEFF_SHIFT, FilterBank, FilterSpec, Kernel};
+    use vaco_limits::{Budget, Limits};
+
+    /// Opaque, deterministic input for comparing the generic and fixed
+    /// vertical-filter implementations.
+    #[derive(Debug, Clone)]
+    pub struct FilterVCase {
+        bank: FilterBank,
+        src: Grid,
+        shift: u8,
+        output_len: usize,
+    }
+
+    impl FilterVCase {
+        /// Build a valid non-gather bank and matching source grid.
+        ///
+        /// Returns `None` for unsupported tap counts or dimensions whose
+        /// storage arithmetic does not fit.
+        #[must_use]
+        pub fn synthetic(taps: usize, width: usize, dst_rows: usize) -> Option<Self> {
+            let kernel = match taps {
+                2 => Kernel::Bilinear,
+                4 => Kernel::Bicubic { b: 0.0, c: 0.6 },
+                6 => Kernel::Lanczos { a: 3.0 },
+                8 => Kernel::Lanczos { a: 4.0 },
+                _ => return None,
+            };
+            let src_rows = dst_rows.checked_add(taps.checked_sub(1)?)?;
+            let sample_count = width.checked_mul(src_rows)?;
+            let output_len = width.checked_mul(dst_rows)?.checked_add(1)?;
+            let coefficient_count = dst_rows.checked_mul(taps)?;
+
+            let mut budget = Budget::new(Limits::strict());
+            let mut offsets = budget.alloc::<u32>(dst_rows).ok()?;
+            for (d, offset) in offsets.iter_mut().enumerate() {
+                *offset = u32::try_from(d).ok()?;
+            }
+            let mut coeffs = budget.alloc::<i32>(coefficient_count).ok()?;
+            let base = COEFF_ONE.div_euclid(i32::try_from(taps).ok()?);
+            for (d, row) in coeffs.chunks_exact_mut(taps).enumerate() {
+                let (last, prefix) = row.split_last_mut()?;
+                let mut sum = 0i32;
+                for (t, coefficient) in prefix.iter_mut().enumerate() {
+                    let phase = d.wrapping_mul(11).wrapping_add(t.wrapping_mul(7)) % 9;
+                    let jitter = i32::try_from(phase).ok()?.checked_sub(4)?;
+                    *coefficient = base.checked_add(jitter)?;
+                    sum = sum.checked_add(*coefficient)?;
+                }
+                *last = COEFF_ONE.checked_sub(sum)?;
+            }
+            let abs_sum = coeffs
+                .chunks(taps)
+                .map(|row| row.iter().map(|&c| i64::from(c).abs()).sum::<i64>())
+                .max()
+                .unwrap_or(0);
+            let mut data = budget.alloc::<i32>(sample_count).ok()?;
+            if width > 0 {
+                for (y, row) in data.chunks_exact_mut(width).enumerate() {
+                    for (x, sample) in row.iter_mut().enumerate() {
+                        let patterned = x.wrapping_mul(131).wrapping_add(y.wrapping_mul(17)) % 4096;
+                        *sample = i32::try_from(patterned).ok()?.checked_sub(2048)?;
+                    }
+                }
+            }
+
+            Some(Self {
+                bank: FilterBank {
+                    src_len: src_rows,
+                    dst_len: dst_rows,
+                    taps,
+                    offsets,
+                    coeffs,
+                    gather: false,
+                    abs_sum,
+                    spec: FilterSpec {
+                        kernel,
+                        src_len: src_rows,
+                        dst_len: dst_rows,
+                        phase_src: 0.0,
+                        phase_dst: 0.0,
+                        max_taps: taps,
+                    },
+                },
+                src: Grid {
+                    w: width,
+                    y0: 0,
+                    rows: src_rows,
+                    data,
+                },
+                shift: COEFF_SHIFT,
+                output_len,
+            })
+        }
+
+        /// Fixed tap count carried by this case.
+        #[must_use]
+        pub fn taps(&self) -> usize {
+            self.bank.taps
+        }
+
+        /// Number of comparable lanes returned by either runner.
+        #[must_use]
+        pub fn output_len(&self) -> usize {
+            self.output_len
+        }
+    }
+
+    /// Run the private generic production callee over every destination row.
+    #[must_use]
+    pub fn run_generic(case: &FilterVCase) -> Vec<i32> {
+        let Some((mut output, mut scratch)) = runner_buffers(case) else {
+            return Vec::new();
+        };
+        if let Some(completion) = output.first_mut() {
+            *completion = 1;
+        }
+        for d in 0..case.bank.dst_len {
+            let start = 1usize.saturating_add(d.saturating_mul(case.src.w));
+            let end = start.saturating_add(case.src.w);
+            if let Some(dst) = output.get_mut(start..end) {
+                filter_v_generic(&case.bank, &case.src, d, dst, &mut scratch, case.shift);
+            }
+        }
+        output
+    }
+
+    /// Run the matching private fixed-width production callee directly over
+    /// every destination row.
+    #[must_use]
+    pub fn run_fixed(case: &FilterVCase) -> Vec<i32> {
+        let Some((mut output, scratch)) = runner_buffers(case) else {
+            return Vec::new();
+        };
+        std::hint::black_box(&scratch);
+        let mut complete = true;
+        for d in 0..case.bank.dst_len {
+            let start = 1usize.saturating_add(d.saturating_mul(case.src.w));
+            let end = start.saturating_add(case.src.w);
+            let row_complete = output
+                .get_mut(start..end)
+                .is_some_and(|dst| match case.bank.taps {
+                    2 => filter_v_fixed::<2>(&case.bank, &case.src, d, dst, case.shift),
+                    4 => filter_v_fixed::<4>(&case.bank, &case.src, d, dst, case.shift),
+                    6 => filter_v_fixed::<6>(&case.bank, &case.src, d, dst, case.shift),
+                    8 => filter_v_fixed::<8>(&case.bank, &case.src, d, dst, case.shift),
+                    _ => false,
+                });
+            complete &= row_complete;
+        }
+        if let Some(completion) = output.first_mut() {
+            *completion = i32::from(complete);
+        }
+        output
+    }
+
+    fn runner_buffers(case: &FilterVCase) -> Option<(Vec<i32>, Vec<i64>)> {
+        let mut budget = Budget::new(Limits::strict());
+        let output = budget.alloc::<i32>(case.output_len).ok()?;
+        let scratch = budget.alloc::<i64>(case.src.w).ok()?;
+        Some((output, scratch))
+    }
 }
 
 #[cfg(test)]

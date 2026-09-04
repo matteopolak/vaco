@@ -31,6 +31,7 @@ use vaco_checkasm::kernels::lpc::AutocorrelateKernel;
 use vaco_checkasm::kernels::masked_select::MaskedSelectKernel;
 use vaco_checkasm::kernels::mecmp::{SadKernel, SatdKernel, SsdKernel, VarianceKernel};
 use vaco_checkasm::kernels::scale_affine::AffineRowKernel;
+use vaco_checkasm::kernels::scale_filter_v::ScaleFilterVKernel;
 use vaco_checkasm::{Differential, Kernel, Report};
 
 const USAGE: &str = "usage: vaco-checkasm [verify|list|bench] [OPTIONS]\n\
@@ -99,6 +100,11 @@ fn bench_kernel<K: Kernel>(config: &BenchConfig) -> Result<Vec<BenchResult>, Ben
 }
 
 const ENTRIES: &[Entry] = &[
+    Entry {
+        name: ScaleFilterVKernel::NAME,
+        verify: verify_report::<ScaleFilterVKernel>,
+        bench: bench_kernel::<ScaleFilterVKernel>,
+    },
     Entry {
         name: AffineRowKernel::NAME,
         verify: verify_report::<AffineRowKernel>,

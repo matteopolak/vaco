@@ -59,3 +59,48 @@ fn bench_cli_measures_a_real_kernel_and_writes_jsonl() {
             || jsonl.contains("\"backend\":\"perf-event\",\"unit\":\"cycles\"")
     );
 }
+
+#[test]
+fn bench_cli_labels_scale_filter_v_measurements_truthfully() {
+    let path = std::env::temp_dir().join(format!(
+        "vaco-checkasm-scale-filter-v-{}.jsonl",
+        std::process::id()
+    ));
+    let output = Command::new(env!("CARGO_BIN_EXE_vaco-checkasm"))
+        .args([
+            "bench",
+            "--test",
+            "vaco-scale::filter_v_generic_vs_fixed",
+            "--bench-cache",
+            "hot",
+            "--min-samples",
+            "30",
+            "--budget",
+            "50",
+            "--json",
+            path.to_str().expect("temporary path is UTF-8"),
+        ])
+        .output()
+        .expect("run scale vertical-filter benchmark");
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains("vaco-scale::filter_v_generic_vs_fixed"));
+    assert!(
+        stdout.contains("backend=instant unit=ns")
+            || stdout.contains("backend=perf-event unit=cycles")
+    );
+
+    let jsonl = std::fs::read_to_string(&path).expect("read benchmark JSONL");
+    std::fs::remove_file(path).expect("remove benchmark JSONL");
+    assert_eq!(jsonl.lines().count(), 2);
+    assert!(jsonl.lines().all(|line| {
+        line.contains("\"kernel\":\"vaco-scale::filter_v_generic_vs_fixed\"")
+            && (line.contains("\"backend\":\"instant\",\"unit\":\"ns\"")
+                || line.contains("\"backend\":\"perf-event\",\"unit\":\"cycles\""))
+    }));
+}

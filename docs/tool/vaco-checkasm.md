@@ -132,6 +132,35 @@ actually satisfies `fits_i32`, so a future change that silently pushed every
 case onto the scalar fallback path would fail loudly instead of reporting a
 green "verified" that verified nothing.
 
+### The vertical-filter specialization (`src/kernels/scale_filter_v.rs`)
+
+`vaco-scale::filter_v_generic_vs_fixed` compares the shipped generic
+tap-major vertical filter with the fixed-width output-major implementation for
+2, 4, 6, and 8 taps. This is not a SIMD dispatch pair: the existing result
+labels retain their schema meanings, so `scalar` denotes generic and `vector`
+denotes fixed-width for this adapter. The correctness corpus crosses all four
+tap counts, i32-lane tail widths, and one to three output rows; the benchmark
+case is an 8-tap 1920×1080 pass.
+
+Both sides allocate an equal-sized output and scratch vector before their row
+loops. Allocation and destruction therefore remain part of the existing
+`adapter-inclusive` scope, but neither side receives an adapter-allocation
+advantage. The fixed side calls `filter_v_fixed::<N>` directly rather than the
+production dispatcher, so a fallback cannot turn the comparison into generic
+versus generic.
+
+The production functions and grid remain private. `vaco-checkasm` alone enables
+`vaco-scale`'s default-off, documentation-hidden `checkasm` adapter feature,
+whose opaque case type is the narrow cross-crate bridge to those private
+callees.
+
+A 2026-09-04 macOS smoke used the 1920×1080 case, hot cache, at least 30
+samples and a 250 ms per-variant budget. The generic (`scalar`) median was
+1,745,790.266 ns over 136 samples; the fixed (`vector`) median was 762,873.767
+ns over 315 samples, a 2.288× reference ratio. Both JSONL rows were explicitly
+`backend=instant unit=ns`. This confirms the fallback and adapter are useful,
+but it is not Linux PMU runtime evidence and makes no raw-cycle claim.
+
 ## How to change it
 
 - **Add a kernel to the CLI**: implement `Kernel` for a new marker type under
@@ -160,7 +189,9 @@ green "verified" that verified nothing.
 hot|cold|both`, `--min-samples`, a per-variant `--budget` in milliseconds,
 `--json`, and `--baseline`. `--fail-under R` gates stored-baseline ratios;
 `--fail-slower-than-reference` gates vector rows slower than their scalar row.
-There are no environment variables or feature flags.
+There are no environment variables or end-user feature flags. The tool enables
+the default-off `vaco-scale/checkasm` dependency feature solely to reach the
+opaque vertical-filter adapter described above.
 
 ## Dependencies
 
@@ -168,4 +199,4 @@ The portable backend uses the Rust standard library. Linux direct-cycle support
 uses the internal `vaco-hw-perf-event` OS-binding crate; its only unsafe surface
 is the audited Linux UAPI boundary. The harness also depends on `vaco-core`,
 `vaco-simd` (the `KernelSet`/`Caps`/`Tier` vocabulary), and,
-for the wired-in example only, `vaco-scale`, `vaco-color`, `vaco-pixfmt`.
+for the wired-in examples only, `vaco-scale`, `vaco-color`, `vaco-pixfmt`.

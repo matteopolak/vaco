@@ -633,7 +633,27 @@ file, with macOS reporting `Unknown(1100)`. A privileged process check found no
 other Samply, xctrace, Cargo, or rustc process, and the third attempt ran after
 load returned to about 5.7. The before profile therefore establishes the hot
 callee, while the post-change hotspot movement is explicitly unverified. No
-Linux checkasm cycle adapter is claimed by this change.
+Linux checkasm cycle adapter was part of that optimization commit.
+
+#### Isolated vertical-filter cycle adapter
+
+The default-off, documentation-hidden `checkasm` feature exposes an opaque
+synthetic vertical-filter case plus two runners to the downward-dependent
+`vaco-checkasm` tool. `Grid`, `filter_v_generic`, and `filter_v_fixed` remain
+private production details: the adapter is a child of `exec`, so it can invoke
+both shipped callees directly without making them part of the normal public
+API. The feature adds no codec or format path and is not enabled by default.
+
+The adapter covers fixed tap counts 2, 4, 6, and 8 across tail-sensitive widths
+and short one-, two-, and three-row shapes. Its production benchmark is an 8-tap 1920×1080
+vertical pass. Both generic and fixed runners allocate equal output and scratch
+storage before entering their row loops, keeping the checkasm
+`adapter-inclusive` scope symmetric while leaving the per-row comparison free
+of adapter allocation. On a permitted Linux x86_64/aarch64 host, checkasm
+reports direct unmultiplexed PMU readings as `backend=perf-event unit=cycles`;
+macOS, unsupported targets, and restricted or multiplexed Linux counters report
+the existing `backend=instant unit=ns` fallback instead. Nanoseconds are never
+reported as CPU cycles.
 
 ---
 

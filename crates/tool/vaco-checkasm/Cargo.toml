@@ -21,7 +21,7 @@ vaco-core = { path = "../../core/vaco-core" }
 vaco-simd = { path = "../../core/vaco-simd" }
 # The wired-in demonstration kernel (`src/kernels`): a real, shipped SIMD
 # family, not a toy. See that module's doc for why `vaco-scale` was picked.
-vaco-scale = { path = "../../signal/vaco-scale" }
+vaco-scale = { path = "../../signal/vaco-scale", features = ["checkasm"] }
 vaco-color = { path = "../../model/vaco-color" }
 vaco-pixfmt = { path = "../../model/vaco-pixfmt" }
 # The separable-FIR motion-compensation kernel (D-08a, #23): wired here for

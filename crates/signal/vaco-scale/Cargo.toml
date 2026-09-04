@@ -8,6 +8,9 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 
+[features]
+checkasm = []
+
 [dependencies]
 vaco-core = { path = "../../core/vaco-core" }
 vaco-simd = { path = "../../core/vaco-simd" }

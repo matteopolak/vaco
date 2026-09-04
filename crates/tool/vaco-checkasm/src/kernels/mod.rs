@@ -12,3 +12,4 @@ pub mod lpc;
 pub mod masked_select;
 pub mod mecmp;
 pub mod scale_affine;
+pub mod scale_filter_v;
