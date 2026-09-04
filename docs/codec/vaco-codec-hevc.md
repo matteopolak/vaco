@@ -294,17 +294,17 @@ with the production `HevcParser`/`ParserDriver`, feeding those access units to
 
 | result | streams |
 | --- | ---: |
-| byte-exact on every frame | **31** |
+| byte-exact on every frame | **32** |
 | refused by name (`Unsupported`) | 13 |
 | CABAC desync mid-stream | **0** |
 | wrong pixels at the right length | **0** |
-| wrong frame count | 2 |
+| wrong frame count | 1 |
 
 Byte-exact: `amp-a`, `amvp-a`, `amvp-b`, `cip-a`, `cip-b`, `confwin-a`,
 `entp-c`, `filler-a`, `initqp-a`, `ipred-c`, `merge-a`..`merge-e`,
 `mvclip-a`, `mvedge-a`, `picsize-d`, `pmerge-a`, `pmerge-b`, `poc-a`, `ps-b`,
 `rplm-a` (300 frames), `rps-a`, `rqt-a`, `sao-a`, `sao-g`, `slpplp-a`,
-`struct-a`, `tscl-a`, `vpsid-a`.
+`struct-a`, `tscl-a`, `vpsid-a`, `nut-a`.
 
 An earlier scratch-only raw harness reported that `initqp-a-sony-1`
 desynchronized after 47 of 60 frames. That harness waited for the next first
@@ -318,10 +318,28 @@ all 60 frames and all 8,985,600 output bytes are exact. A sibling scan found
 post-VCL PPS NALs in `cip-a`, `initqp-a`, `nooutprior-a`, `nut-a`, and
 `slist-c`; the corrected full sweep covers all five.
 
-The remaining non-refusal failures are only the frame-count cases:
+The remaining non-refusal frame-count failure is:
 
-- `nooutprior-a-qualcomm-1` (50 frames vs 40), `nut-a-ericsson-5` (36 vs
-  34) — `no_output_of_prior_pics_flag` / NAL-type-driven DPB flushing.
+- `nooutprior-a-qualcomm-1` (50 frames vs 40) —
+  `no_output_of_prior_pics_flag` / NAL-type-driven DPB flushing.
+
+### BLA RASL output suppression
+
+`NUT_A_ericsson_5` exercises the Table 7-1 access-point and leading-picture
+NAL types in one stream. Before the §8.1/Annex C fix, the decoder stored every
+`pic_output_flag` picture as displayable. That emitted two extra pictures: the
+`RASL_R` and `RASL_N` pictures following `BLA_W_LP`. They must still be
+decoded, and may remain usable as references, but a RASL whose POC precedes
+the current IRAP with `NoRaslOutputFlag` set is not output.
+
+`HevcDecoder` therefore remembers that IRAP POC and passes the derived output
+eligibility, rather than raw `pic_output_flag`, to `Dpb::store`. The narrow
+unit regression keeps the type/POC boundary explicit: RASL below the BLA POC
+is suppressed; RADL and later trailing pictures remain output. The full vector
+is corpus-owned rather than vendored into the crate. Measured 2026-09-04 with
+the lockfile's SHA-256-verified `NUT_A_ericsson_5.bit`: this decoder and
+`ffmpeg 9.0.1` both output 34 416x240 yuv420p frames (5,091,840 bytes), and
+every byte matches.
 
 Refused by name, not mis-decoded: `I_PCM` (`ipcm-a`..`ipcm-e`), more than
 one slice segment per picture (`dblk-d`..`dblk-g`, `hrd-a`, `slices-a`),

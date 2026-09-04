@@ -98,6 +98,9 @@ pub struct HevcDecoder {
     /// 8) — this decoder only calls it once per slice and resets it on
     /// [`Decoder::flush`].
     poc_state: PocState,
+    /// POC of the active IRAP whose `NoRaslOutputFlag` suppresses leading
+    /// RASL pictures from output while retaining them for decoding.
+    rasl_output_suppression_poc: Option<i64>,
     /// Test-only: when set, `decode_packet` runs [`run_deblock_lag_probe`]
     /// against the just-reconstructed (pre-deblock) picture right before
     /// its own real `deblock::filter_picture` call, then clears this back
@@ -128,6 +131,7 @@ impl HevcDecoder {
             machine: vaco_codec_core::machine::Machine::new(Caps::DELAY | Caps::SUBFRAMES),
             dpb: None,
             poc_state: PocState::new(),
+            rasl_output_suppression_poc: None,
             limits,
             #[cfg(test)]
             deblock_lag_probe: None,
@@ -339,6 +343,9 @@ impl HevcDecoder {
         let poc = self
             .poc_state
             .advance_with(&sps, &hdr, header.temporal_id, no_rasl_output);
+        if header.nal_unit_type.is_irap() {
+            self.rasl_output_suppression_poc = no_rasl_output.then_some(poc.value);
+        }
 
         let max_dec_pic_buffering = usize::try_from(sps.max_dec_pic_buffering())
             .unwrap_or(1)
@@ -669,11 +676,17 @@ impl HevcDecoder {
         let dpb = self.dpb.as_mut().ok_or(Error::InvalidData(
             "vaco-codec-hevc: DPB missing after its own first use",
         ))?;
+        let needed_for_output = output_is_needed(
+            hdr.pic_output,
+            header.nal_unit_type,
+            poc.value,
+            self.rasl_output_suppression_poc,
+        );
         dpb.store(
             pic,
             meta,
             poc.value,
-            hdr.pic_output,
+            needed_for_output,
             is_reference,
             collocated_out,
         );
@@ -1215,6 +1228,7 @@ impl Decoder for HevcDecoder {
         self.parser.flush();
         self.dpb = None;
         self.poc_state.reset();
+        self.rasl_output_suppression_poc = None;
         // Release every byte charged to the budget along with the state
         // that held them, mirroring `H264Decoder::flush`'s own precedent.
         self.budget = Budget::new(self.limits.clone());
@@ -1224,6 +1238,21 @@ impl Decoder for HevcDecoder {
         self.parser.set_extradata(extradata)?;
         Ok(())
     }
+}
+
+/// Annex C output eligibility after the slice header's own `pic_output_flag`.
+/// A RASL associated with an IRAP whose `NoRaslOutputFlag` is set has a lower
+/// POC than that IRAP and remains decodable/referenceable but is not displayed.
+#[must_use]
+fn output_is_needed(
+    pic_output: bool,
+    nal_unit_type: vaco_parse_hevc::NalUnitType,
+    poc: i64,
+    rasl_output_suppression_poc: Option<i64>,
+) -> bool {
+    pic_output
+        && !(nal_unit_type.is_rasl()
+            && rasl_output_suppression_poc.is_some_and(|irap_poc| poc < irap_poc))
 }
 
 // ------------------------------------------------------------- deblock lag
@@ -1605,5 +1634,55 @@ mod deblock_lag_tests {
                 "row {target_ctu_row}: nothing two rows above should matter: {results:?}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "the test exercises a pure output-eligibility rule over fixed NAL types"
+)]
+mod irap_output_tests {
+    use super::output_is_needed;
+    use vaco_parse_hevc::NalUnitType;
+
+    /// §8.1 makes a RASL picture that precedes a BLA's decoding-order
+    /// point unavailable for output. NUT_A_ericsson_5 carries this exact
+    /// BLA_W_LP → RASL_R/RASL_N sequence; the RASLs are decoded for syntax
+    /// coverage but must not add display frames.
+    #[test]
+    fn bla_suppresses_only_its_preceding_rasl_pictures() {
+        let bla_poc = 220;
+        assert!(!output_is_needed(
+            true,
+            NalUnitType::RASL_R,
+            210,
+            Some(bla_poc)
+        ));
+        assert!(!output_is_needed(
+            true,
+            NalUnitType::RASL_N,
+            200,
+            Some(bla_poc)
+        ));
+        assert!(output_is_needed(
+            true,
+            NalUnitType::RADL_R,
+            210,
+            Some(bla_poc)
+        ));
+        assert!(output_is_needed(
+            true,
+            NalUnitType::TRAIL_R,
+            230,
+            Some(bla_poc)
+        ));
+        assert!(output_is_needed(
+            true,
+            NalUnitType::RASL_R,
+            220,
+            Some(bla_poc)
+        ));
     }
 }
