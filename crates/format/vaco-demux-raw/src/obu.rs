@@ -94,10 +94,37 @@ fn parse_one(data: &[u8], at: usize) -> Option<Obu> {
 /// - the first OBU must actually parse, not fall back;
 /// - its `obu_forbidden_bit` must be zero;
 /// - its type must be one the specification assigns — types 9–14 are reserved,
-///   and a byte with one of those is far more likely to be prose than video.
+///   and a byte with one of those is far more likely to be prose than video;
+/// - unless it consumes the entire buffer on its own, a second OBU must also
+///   parse right after it.
 ///
 /// A real AV1 elementary stream opens with a temporal delimiter or a sequence
 /// header, so this is not a tight filter — it only has to reject text.
+///
+/// # The second-OBU requirement, measured
+///
+/// One syntactically-plausible header byte is not rare enough on its own: an
+/// `ffmpeg -f mpegts ... out.m2ts` fixture — real H.264/AAC content, BD-style
+/// M2TS striping (`vaco_demux_raw::bitstream`'s own module docs record the
+/// analogous `StartCode3`-vs-`mpegts` collision this format shares the root
+/// cause with) — has `0x0e` as the byte immediately before its first
+/// `0x47` transport-stream sync byte. `0x0e` passes every single-header
+/// check above (`obu_forbidden_bit=0`, `kind=OBU_SEQUENCE_HEADER`,
+/// `obu_reserved_1bit=0`, `obu_has_size_field=1`) and `parse_one` reads a
+/// self-consistent 73-byte span from it, so the probe scored this file `av1`
+/// at 51 against `mpegts`'s own honestly-earned, correctly-detected 50 —
+/// beating the right answer by one point on real, common content, not a
+/// crafted adversarial input. Requiring a second OBU to also parse
+/// immediately after the first is cheap (one more `parse_one` call) and
+/// mirrors the `MIN_RUN`-style chaining every other self-synchronising probe
+/// in this workspace already uses (`ac3`, `aac`, `mp3`, `mpegts`'s own
+/// sync-byte run): on this fixture the region right after the coincidental
+/// first OBU is unrelated PSI stuffing (`0xff` bytes), whose `leb128` size
+/// field never terminates within 8 bytes, so the second `parse_one` fails and
+/// the file no longer misdetects. A genuine minimal AV1 stream that is
+/// *only* one OBU (a bare temporal delimiter, nothing after it) is accepted
+/// by the first clause instead, so this does not regress the degenerate but
+/// legitimate single-OBU case.
 #[must_use]
 pub fn looks_like_obu_stream(data: &[u8]) -> bool {
     let Some(&header) = data.first() else {
@@ -122,7 +149,17 @@ pub fn looks_like_obu_stream(data: &[u8]) -> bool {
     if header & 0x01 != 0 || header & 0x02 == 0 {
         return false;
     }
-    parse_one(data, 0).is_some_and(|obu| obu.end > obu.start)
+    let Some(first) = parse_one(data, 0) else {
+        return false;
+    };
+    if first.end <= first.start {
+        return false;
+    }
+    // A lone OBU that exhausts the whole buffer is the legitimate minimal
+    // case (see `a_temporal_delimiter_is_an_obu_stream`); anything shorter
+    // than the buffer must chain into a second OBU to count as evidence —
+    // see the measured false positive above.
+    first.end == data.len() || parse_one(data, first.end).is_some()
 }
 
 /// Split `data` into temporal-unit spans `(start, end)`.

@@ -340,15 +340,14 @@ mod tests {
         assert_eq!(d.streams()[0].media_type(), Some(MediaType::Audio));
         let mut count = 0;
         loop {
-            match d.read_packet() {
-                Ok(pkt) => {
-                    assert_eq!(pkt.payload().len(), 100);
-                    assert!(pkt.is_key());
-                    count += 1;
-                }
-                Err(Error::Eof) => break,
-                Err(e) => panic!("unexpected error: {e:?}"),
+            let result = d.read_packet();
+            if matches!(result, Err(Error::Eof)) {
+                break;
             }
+            let pkt = result.unwrap();
+            assert_eq!(pkt.payload().len(), 100);
+            assert!(pkt.is_key());
+            count += 1;
         }
         assert_eq!(count, 5);
     }

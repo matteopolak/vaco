@@ -33,7 +33,6 @@
 
 #![expect(
     clippy::expect_used,
-    clippy::panic,
     reason = "a failing expectation in a test is a failing test"
 )]
 
@@ -243,12 +242,28 @@ const ALIASES: &[(&str, &str, &str)] = &[
 /// exactly one `(case label, with/without extension)` pair so a *new*,
 /// different divergence on the same case still fails loudly.
 ///
-/// Empty right now: every case this sweep runs agrees or aliases cleanly (see
-/// the module docs for what was fixed to get there). Kept as a named, always-
-/// compiled list rather than deleted so the next divergence this sweep finds
-/// has an obvious place to go without inventing the mechanism under time
-/// pressure.
-const KNOWN_DIVERGENCES: &[(&str, bool)] = &[];
+/// One real gap recorded here, found by this sweep's first run:
+///
+/// `gif` (both variants): the reference's `gif` demuxer reads all 5 frames of
+/// an animated GIF; `vaco-demux-image2::pipe::DEMUXER_GIF` (registered as
+/// `gif_pipe`, `extensions = "gif"`) is an image2-pipe demuxer built for a
+/// *sequence of separate image files* fed through one pipe, and reads exactly
+/// one frame from a single animated `.gif`'s own multi-frame container
+/// structure. This is not a probe-scoring bug — `gif_pipe` is the only `gif`
+/// demuxer registered, so there is nothing to mis-rank it against — it is a
+/// missing demuxer: nothing here parses GIF89a's own frame sequencing
+/// (Graphic Control Extension delays, disposal methods, the NETSCAPE2.0 loop
+/// extension). That is a standalone clean-room implementation task, not a
+/// scoring fix, so it is recorded here rather than attempted in this pass —
+/// see `planning/TECH-DEBT.md` for the follow-up.
+///
+/// `mpegts-m2ts-ext` is deliberately **not** here even though this sweep
+/// found it failing on the same run: that one *was* a probe-scoring bug
+/// (`vaco_demux_raw::obu::looks_like_obu_stream` false-positiving on a BD-style
+/// M2TS timecode prefix, beating `mpegts`'s correctly-earned 50 with an
+/// accidental 51) and got fixed in the same commit as this comment, not
+/// adjudicated as acceptable.
+const KNOWN_DIVERGENCES: &[(&str, bool)] = &[("gif", false), ("gif", true)];
 
 fn oracle() -> Option<vaco_conformance::refbin::Reference> {
     let spec = RefSpec::load().expect("refspec.toml loads");
@@ -263,15 +278,12 @@ fn oracle() -> Option<vaco_conformance::refbin::Reference> {
 
 fn probe_binary() -> Option<PathBuf> {
     let under_test = UnderTest::discover();
-    match under_test.probe {
-        Some(p) => Some(p),
-        None => {
-            println!(
-                "SKIPPED (vaco-probe not built): set VACO_BIN_PROBE or `cargo build -p vaco-probe`"
-            );
-            None
-        }
+    if under_test.probe.is_none() {
+        println!(
+            "SKIPPED (vaco-probe not built): set VACO_BIN_PROBE or `cargo build -p vaco-probe`"
+        );
     }
+    under_test.probe
 }
 
 /// `-show_entries format=format_name -of default=nk=1:nw=1`, trimmed.
