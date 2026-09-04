@@ -426,15 +426,15 @@ component with no production caller):
   row to exist at all. Fixed in `ctu.rs`'s per-PU mode loop: `above` is
   forced to `DC_IDX` whenever `pu.y % ctb_size == 0`, which subsumes the
   old top-edge-only check.
-- **SAO is now refused, not merely unapplied.** `sample_adaptive_offset_enabled_flag`
-  was not checked in `check_scope`, so a stream that turns SAO on (the
-  common case — most encoders leave it on) hit exactly the same
-  full-decode CABAC desync as the bug above, from the first CTU that
-  merges or sets an offset, since this crate parses none of §7.3.8.3's
-  per-CTU `sao()` syntax. Now refused by name (`Error::Unsupported`) at
-  the SPS, the same posture every other cut in `check_scope` already has
-  — turning a confusing internal error into an honest one, not adding new
-  scope.
+- **At registration, SAO was refused instead of merely left unapplied.**
+  `sample_adaptive_offset_enabled_flag` was not checked in `check_scope`, so
+  a stream that turned SAO on (the common case — most encoders leave it on)
+  hit exactly the same full-decode CABAC desync as the bug above, from the
+  first CTU that merged or set an offset, because the crate then parsed none
+  of §7.3.8.3's per-CTU `sao()` syntax. The registration-time fix refused it
+  by name (`Error::Unsupported`) at the SPS. That interim refusal was removed
+  when SAO parsing and filtering landed; current behavior is documented in
+  "SAO (§7.3.8.3 / §8.7.3), landed" below.
 
 With all three fixed:
 
@@ -452,16 +452,13 @@ compared separately per frame, per `AGENT-CONSTRAINTS.md`): full-length
 multi-coefficient-group residual fix and the CTB-row-boundary MPM fix are
 exercised for real, not just in a single-CTU fixture.
 
-`wpp=0`/`no-sao=1`/`no-deblock=1`/constant `qp=` (CQP, not CRF) are not new
-restrictions this registration invented — they are this crate's
-already-documented, pre-existing scope ("What was cut" above), made to
-apply consistently: WPP and `cu_qp_delta` (which CRF rate control implies)
-were already refused cleanly before this pass; SAO now is too. The
-task-setter's own unmodified example command (no `-x265-params` at all)
-encodes with WPP and adaptive per-CU QP by default on a typical `libx265`
-build at this resolution, and gets a clean, named refusal rather than
-either of those — not a silent misdecode, and not the internal-error crash
-SAO used to cause.
+`wpp=0`/`no-sao=1`/`no-deblock=1`/constant `qp=` (CQP, not CRF) were the
+registration-time fixture's isolation settings, not the decoder's current
+restrictions. At that checkpoint WPP, SAO and `cu_qp_delta` (which CRF rate
+control implies) were refused cleanly, while deblocking was disabled at the
+encoder because it has no bitstream footprint that the decoder could refuse.
+All four subsequently landed; their sections below record the current scope
+and measurements.
 
 Registered as `encumbered = true` / `default = false` behind
 `patent-encumbered-hevc-decode` — see `vaco-component.toml` and
