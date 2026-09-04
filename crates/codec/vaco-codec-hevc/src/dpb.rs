@@ -2,42 +2,15 @@
 //! §8.3.4's reference-picture-list construction, and Annex C's informal
 //! "bumping" output-reordering process.
 //!
-//! # Why this module has no caller yet
-//!
-//! Everything here is pure bookkeeping over picture-order-count values and
-//! already-decoded pictures — it needs no CABAC, no coding-tree walk, no
-//! sample. It is landed on its own, ahead of `prediction_unit()`/merge/AMVP/
-//! motion compensation, because a decoded picture buffer is infrastructure
-//! every later inter-prediction stage needs and none of them can be tested
-//! meaningfully without it existing first. But nothing in `decoder.rs` calls
-//! it yet: `check_scope`'s `only I-slices are decoded` refusal is unchanged,
-//! and an all-I-slice stream never has more than one candidate reference
-//! picture at a time, which is not enough surface to exercise §8.3.4's list
-//! construction for real. Wiring this into the decode path is the first
-//! third of the P-slice stage (`prediction_unit`/merge/AMVP/motion
-//! compensation are the rest), not a change this pass makes on its own.
-//!
 //! # Scope: short-term reference pictures only
 //!
 //! Long-term reference pictures (`long_term_ref_pics_present_flag`) are
-//! **not** resolved here — [`derive_reference_pic_sets`] refuses a slice
-//! header naming any. Two independent reasons, not one:
-//!
-//! - §7.4.7.1's `DeltaPocMsbCycleLt[i]` is a *cumulative* sum that resets not
-//!   only at `i == 0` but also at `i == num_long_term_sps` — the boundary
-//!   between the SPS-predefined long-term entries and the ones a slice codes
-//!   inline. `vaco_parse_hevc::SliceHeader::long_term_refs` merges both
-//!   sources into one `Vec` (by design — see that crate's own module doc)
-//!   without recording where that boundary falls, so this crate cannot
-//!   re-derive the second reset point from what it is handed. Getting this
-//!   silently wrong would reproduce exactly the class of bug
-//!   `AGENT-CONSTRAINTS.md`'s clean-room lessons warn about — a formula that
-//!   is right in the common case (one source of long-term entries, where the
-//!   missing second reset point is never reached) and silently wrong the
-//!   moment a stream mixes both.
-//! - Long-term references are also the rarer feature in practice — ordinary
-//!   `libx265` output, including every fixture this crate's own history is
-//!   built on, uses short-term references exclusively.
+//! refused by [`derive_reference_pic_sets`]. §7.4.7.1 resets the cumulative
+//! `DeltaPocMsbCycleLt[i]` both at zero and at `num_long_term_sps`, the boundary
+//! between SPS and slice entries. `SliceHeader::long_term_refs` deliberately
+//! merges those sources without retaining that boundary, so this crate cannot
+//! recover the second reset point reliably. Ordinary measured `libx265`
+//! fixtures use short-term references exclusively.
 //!
 //! Refusing by name here, the same posture `decoder.rs::check_scope` already
 //! takes for every other cut corner, is the honest choice over a plausible
@@ -45,13 +18,9 @@
 //!
 //! # Specification
 //!
-//! ITU-T H.265 (08/2021) §8.3.2 (reference picture set), §8.3.3 (marking
-//! unavailable reference pictures — degenerates to a no-op in this crate's
-//! single-slice-segment, no-tile, no-loss scope), §8.3.4 (reference picture
-//! list construction) and Annex C.5.2 (the informal "bumping" process; C.5.2
-//! is described in normative terms but the process itself — pick the
-//! smallest-POC picture still needing output — is the one every mainstream
-//! decoder implements, HM's `TDecTop::xGetNewPicBuffer` included).
+//! ITU-T H.265 (08/2021) §8.3.2–§8.3.4 define reference-picture derivation,
+//! marking, and list construction. Annex C.5.2 defines the bumping process:
+//! output the smallest-POC picture still needing output.
 
 // Every item here is exercised by this module's own tests, directly against
 // the specification's derivation and Annex C's bumping process (see the
@@ -278,20 +247,14 @@ pub(crate) struct PictureMeta {
     /// and reordering must not separate the caption bytes from their own
     /// picture (see `vaco_parse_hevc::a53`'s module doc).
     pub closed_captions: Vec<u8>,
-    /// `Sps::color_info()` *as it was when this picture was decoded* --
-    /// carried here for the identical reordering reason as `out_width`/
-    /// `out_height` above, not re-read from whatever `Sps` is active at
-    /// output time. Finding 22a (`planning/INTERFACE-GAPS.md`):
-    /// `CodecParameters::color` already reached `vaco-probe -show_streams`
-    /// from the VUI, but nothing wrote `Frame::color`, so a decoded HEVC
-    /// frame carried `Frame::alloc_video`'s `ColorInfo::default()` instead
-    /// of the stream's real one.
+    /// `Sps::color_info()` as it was when this picture was decoded. Reordering
+    /// must not replace it with data from whatever SPS is active at output
+    /// time; the value becomes the emitted frame's color description.
     pub color: vaco_color::ColorInfo,
     /// SS D.2.29's mastering-display-colour-volume SEI, converted and
     /// permuted into `vaco_frame::MasteringDisplay`'s shared shape, if this
-    /// picture's own access unit carried one — finding 22b
-    /// (`planning/INTERFACE-GAPS.md`), carried here for the identical
-    /// reordering reason as `closed_captions` above.
+    /// picture's own access unit carried one. It follows the picture through
+    /// reordering just like `closed_captions`.
     pub mastering_display: Option<vaco_frame::MasteringDisplay>,
     /// SS D.2.35's content-light-level SEI as `(max_cll, max_fall)`, same
     /// finding as `mastering_display` above.

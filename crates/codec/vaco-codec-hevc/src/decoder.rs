@@ -1,65 +1,26 @@
 //! [`HevcDecoder`] — the [`Decoder`] this crate registers.
 //!
-//! # AVCC-equivalent (`hvcC`) vs Annex B
+//! # Input framing
 //!
 //! MP4/Matroska store length-prefixed samples (`hvcC`); a raw `.hevc`
-//! elementary stream or an MPEG-TS PES payload is Annex B. This decoder
-//! embeds [`HevcParser`] exactly the way `vaco-codec-h264` embeds
-//! `H264Parser` — [`HevcParser::set_extradata`] tells the two framings
-//! apart from the `hvcC`/Annex-B extradata shape and remembers which one
-//! applies ([`HevcParser::framing`]); [`vaco_format_nalu::units`] (the
-//! same low-level, `Framing`-aware NAL-unit iterator both this module and
-//! [`HevcParser`] itself are built on) then walks either framing
-//! identically. **No `hevc_mp4toannexb` bitstream filter is applied or
-//! needed in this path** — that filter's job is muxer-side re-framing on
-//! *output*, not decode input; see `vaco-bsf-h2645`'s own module doc.
-//!
-//! This used to walk every packet as a hardcoded Annex-B byte stream
-//! (`vaco_bitstream::annexb::nal_units`) with its own ad-hoc VPS/SPS/PPS
-//! `HashMap`s, so `vaco -i real.mp4 -c:v hevc` decoded nothing: MP4 never
-//! carries in-band parameter sets, and the decoder never called
-//! [`Decoder::set_extradata`]'s actual implementation because it didn't
-//! have one — the trait's no-op default swallowed the `hvcC` box
-//! silently. That is exactly `vaco-codec-h264`'s own "AVCC vs Annex B"
-//! history repeating; the fix is the identical pattern, reusing
-//! [`HevcParser`]'s parameter-set bookkeeping rather than duplicating it
-//! a second time (D14: this crate must not re-derive what
-//! `vaco-parse-hevc` already owns).
+//! elementary stream or MPEG-TS payload uses Annex B. [`HevcParser`] detects
+//! the framing from extradata and owns VPS/SPS/PPS state;
+//! [`vaco_format_nalu::units`] walks either representation. Decode input does
+//! not use `hevc_mp4toannexb`, whose job is output-side muxer reframing.
 //!
 //! # Access-unit assembly
 //!
-//! [`HevcParser::push_access_unit`] is called on every packet
-//! ([`send_packet`](Decoder::send_packet)), reusing its own parameter-set
-//! bookkeeping and slice-header parse rather than re-deriving either —
-//! this decoder only re-scans the same access unit's NAL units afterward
-//! (again via [`vaco_format_nalu::units`], not a second parser) to reach
-//! the one primary-coded-picture slice's raw bits `push_access_unit`
-//! itself does not hand back.
+//! [`HevcParser::push_access_unit`] handles parameter sets and slice headers.
+//! The decoder then re-scans the same NAL units only to reach the primary
+//! coded-picture slice bits that the parser does not return.
 //!
 //! # Output reordering (`Caps::DELAY` / `Caps::SUBFRAMES`)
 //!
-//! An I-slice-only decoder could emit its one frame per packet
-//! synchronously (Stage 1's own `decode_packet -> Result<Option<Frame>>`
-//! shape). Once P-slices exist at all, decode order and output order can
-//! differ (Annex C.5.2's own bumping process), so a decoded picture's
-//! frame is not necessarily ready the moment its packet is decoded, and one
-//! packet's decode can flush zero, one, or several pending pictures at
-//! once. `self.machine` (the shared send/receive protocol every codec in
-//! this project uses) is declared with both flags for exactly that reason
-//! — `Caps::DELAY` because a `None` (drain) send is required to flush
-//! whatever the DPB is still holding, `Caps::SUBFRAMES` because one input
-//! packet may legitimately `emit` more than one frame (an IRAP that bumps
-//! several pending pictures before clearing) or none at all (a picture
-//! decoded but not yet due for output).
-//!
-//! P-slices are implemented and no longer refused (see `ctu::coding_unit_p`
-//! and everything under it, plus [`crate::motion`]/[`crate::mc`]) — the
-//! TMVP-for-AMVP defect that used to block this is fixed; see
-//! `docs/codec/vaco-codec-hevc.md`'s "Stage 2: P-slices" section for the
-//! root cause. Weighted prediction (`weighted_pred_flag`, §8.5.3.3.4.3) is
-//! implemented too — see [`crate::weight`]'s own module doc. B-slices
-//! remain refused unconditionally by [`decode_packet`]'s own slice-kind
-//! check, below.
+//! P-slices can decode and display in different orders under Annex C.5.2's
+//! bumping process. `Caps::DELAY` permits a drain send to flush the DPB;
+//! `Caps::SUBFRAMES` permits one packet to emit zero or several pictures.
+//! Weighted prediction is implemented (§8.5.3.3.4.3), while B-slices are
+//! refused by [`decode_packet`]'s slice-kind check.
 
 use vaco_codec_cabac::CabacDecoder;
 use vaco_codec_core::Caps;
@@ -185,11 +146,9 @@ impl HevcDecoder {
         // `vaco-codec-h264::decoder`'s identical comment for why this
         // concatenates across every SEI NAL rather than assuming one.
         let mut cc_data = Vec::new();
-        // Finding 22b (planning/INTERFACE-GAPS.md): SS D.2.29/D.2.35's
-        // mastering-display and content-light-level SEI messages parse
-        // correctly (`vaco_parse_hevc::sei`, tested) and then reached
-        // nothing at all -- see `vaco-codec-h264::decoder`'s identical
-        // comment; the last one of each type in the access unit wins.
+        // Mastering-display and content-light-level SEI messages attach to
+        // the decoded picture; the last one of each type in the access unit
+        // wins.
         let mut mastering_display = None;
         let mut content_light = None;
         for nal in units(payload, framing) {
@@ -1096,36 +1055,11 @@ fn check_scope(sps: &Sps, pps: &Pps) -> Result<()> {
     Ok(())
 }
 
-/// Builds the output `Frame` `emit_pocs` hands to `machine.emit` — a copy of
-/// `pic`'s three planes into `vaco_frame`'s own (differently-shaped, 8-bit
-/// `u8`-sample) layout, charged to `budget` by `Frame::alloc_video` itself.
-///
-/// That charge is released again before this returns, mirroring
-/// `vaco-codec-h264`'s own `build_frame`/`frame_bytes`/`release` sequence
-/// exactly (see that crate's `decoder.rs`, `#421`): once a frame is handed
-/// to `machine.emit`, it is the caller's memory to account for, not this
-/// decoder's own working set, and nothing about a `Frame`'s `Drop` ever
-/// calls `Budget::release` on its own. Measuring the real charge via the
-/// `committed()` delta (rather than recomputing `PixFmt::plane_layout` by
-/// hand a second time) is what stays correct through this format's own
-/// row-stride/alignment padding without duplicating it. Left unreleased,
-/// every single *emitted* frame — I, P or B alike, one per output picture
-/// for the lifetime of the decoder — added `O(picture size)` to `committed`
-/// and never gave it back: the single largest contributor to this crate's
-/// `max_alloc_total` failures past 640x480, since it fires on every frame
-/// rather than being bounded by `Dpb` occupancy the way a leaked `Picture`
-/// or `CuGrid` charge at least eventually would be.
-/// §D.2.29's raw `mastering_display_colour_volume()` fields into
-/// `vaco_frame::MasteringDisplay`'s shared shape (finding 22b,
-/// `planning/INTERFACE-GAPS.md`). Identical units and bitstream ordering to
-/// H.264's own SEI message (both specs' Annex D define this syntax and
-/// semantics text identically) -- see `vaco-codec-h264::decoder`'s own
-/// `mastering_display_from_sei` doc for the real-`ffprobe` measurement that
-/// confirms both the `/50000`/`/10000` denominators and the green/blue/red
-/// -> red/green/blue permutation. Duplicated rather than shared (D14.1:
-/// this crate must not depend on `vaco-codec-h264`) -- the function itself
-/// is four lines, and the two crates' `SeiPayload::MasteringDisplay`
-/// variants are distinct types even though their fields agree.
+/// Convert §D.2.29 mastering-display fields into the shared frame shape.
+/// Real `ffprobe` measurements confirm the 50000/10000 denominators and the
+/// green/blue/red to red/green/blue permutation. This remains local because
+/// the H.264 and HEVC SEI payloads are distinct types and neither codec crate
+/// may depend on the other.
 fn mastering_display_from_sei(
     primaries_gbr: [(u16, u16); 3],
     white_point: (u16, u16),
@@ -1153,6 +1087,13 @@ fn mastering_display_from_sei(
     }
 }
 
+/// Copy a decoded picture into the frame layout emitted to the caller.
+///
+/// `Frame::alloc_video` charges the decoder budget, but emitted frames belong
+/// to the caller rather than the decoder's working set. Releasing the measured
+/// `committed()` delta here accounts for row-stride and alignment padding
+/// without duplicating `PixFmt::plane_layout`; otherwise every emitted frame
+/// permanently adds `O(picture size)` to the decoder budget.
 fn pic_to_frame(
     budget: &mut Budget,
     width: u32,
