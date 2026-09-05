@@ -5,7 +5,7 @@
 //!
 //! An earlier version of this module defined its own packet framing
 //! (`channels-1`/`bit_depth_code`/`num_samples`/`escape` fields, sample-
-//! interleaved adaptive-Rice residuals) because issue #285's brief read as a
+//! interleaved adaptive-Rice residuals) because an earlier brief read as a
 //! blanket prohibition on consulting any ALAC reference — self-consistent,
 //! round-trip-clean against itself, and unable to decode a single real ALAC
 //! file. Apple's ALAC reference (<https://github.com/macosforge/alac>) is
