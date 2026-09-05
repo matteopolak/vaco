@@ -33,6 +33,17 @@ later stage.
   pinned-dav1d decode in `superres-96x64_ref.yuv`; this checks full-frame
   pipeline geometry, plane layout, and frame count. The non-flat arithmetic
   coverage is deliberately supplied by the 18-record scalar oracle above.
+- `ACTIVE_SUPERRES_INTER` is the 19-byte P-frame temporal unit immediately
+  following that active-superres key frame in a real two-frame OBU stream. The
+  48-byte elementary stream decodes to exactly two 96x64 YUV420 frames
+  (18,432 bytes) with both `dav1d 1.5.4` and `ffmpeg 9.0.1 -c:v libdav1d`;
+  their raw output matches byte-for-byte (SHA-256
+  `a2df5c15872ce52d4f0638660171a199c265c19e08da27e481e117b38378f0cf`).
+  The OBU SHA-256 is
+  `66e7ca5b991ed6511075fcf23b1dcd8901429cacdbd315161e75b81b421c1b90`.
+  Vaco compares all 9,216 bytes of the key/reference frame to dav1d before
+  feeding the P frame, then requires the named `frame_size_with_refs` refusal.
+  It must not fabricate a resolution or emit a partial second frame.
 
 The oracle generator is `scripts/gen-av1-superres-oracle.py`; it only
 extracts the permitted pinned dav1d scalar oracle into a throwaway C build.
@@ -65,13 +76,15 @@ Mi-padded source bound until resampling finishes. Update the `[[table]]`
 entry in `provenance/vaco-codec-av1-superres.toml` whenever the 64x8 table is
 renamed or moved.
 
-`frame_size_with_refs()` is intentionally not implemented here. The decoder
-rejects all inter frames before reference lookup, and its parser's partial
-inter path also stops before that syntax. AV1 §5.9.7/§6.8.6 says a referenced
-frame supplies `UpscaledWidth`, then `superres_params()` runs; that remains an
-explicit unreachable remainder until inter references and their frame store
-are implemented. Do not treat the intra-only superres result as completing
-that interaction.
+`frame_size_with_refs()` is intentionally not implemented here. The real P
+fixture now proves the decoder produces the exact active-superres reference
+frame before refusing the dependent inter frame as
+`frame_size_with_refs; reference-store/inter prediction is not decoded`.
+AV1 §5.9.5/§5.9.7/§6.8.6 requires a decoder-owned store for each referenced
+frame's dimensions and reconstruction, then runs `superres_params()` from the
+selected `UpscaledWidth`. That remains an explicit remainder until inter
+references and prediction are implemented; do not treat the intra-only result
+as completing that interaction.
 
 The issue's Argon profiles are not available in the checked-in media lock, so
 they are not a conformance claim or a reason to close the broader issue.

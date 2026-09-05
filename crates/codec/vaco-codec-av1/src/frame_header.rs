@@ -310,7 +310,7 @@ fn parse_inner(
     }
     if !frame_type.is_intra() {
         return Err(Error::Unsupported(
-            "vaco-codec-av1: inter frames are not decoded",
+            "vaco-codec-av1: inter frame uses frame_size_with_refs; reference-store/inter prediction is not decoded",
         ));
     }
 

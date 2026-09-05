@@ -141,3 +141,62 @@ fn flat_superres_keyframe_matches_dav1d_on_every_output_plane() {
         "exactly one output frame"
     );
 }
+
+/// The real P frame following `superres-96x64.obu`. Its §5.9.5 inter syntax
+/// reaches `frame_size_with_refs()`, which needs the prior frame's retained
+/// dimensions; this bounded intra-only decoder names that missing
+/// reference-store/inter-prediction boundary rather than inventing a size.
+const ACTIVE_SUPERRES_INTER: &[u8] = &[
+    0x12, 0x00, 0x32, 0x0f, 0x30, 0x02, 0x00, 0x00, 0x00, 0x00, 0x1d, 0x48, 0x00, 0x00, 0x00, 0x00,
+    0x00, 0x9c, 0x4e,
+];
+
+#[test]
+fn active_superres_reference_frame_is_exact_before_inter_refusal() {
+    const WIDTH: usize = 96;
+    const HEIGHT: usize = 64;
+    let key: &[u8] = include_bytes!("fixtures/superres-96x64.obu");
+    let reference: &[u8] = include_bytes!("fixtures/superres-96x64_ref.yuv");
+    let mut decoder = Av1Decoder::new(Limits::default());
+    let mut budget = Budget::new(Limits::default());
+    let key_packet = Packet::from_slice(&mut budget, key).expect("key fixture packet allocation");
+    decoder
+        .send_packet(Some(&key_packet))
+        .expect("active superres reference frame must decode");
+    let frame = decoder
+        .receive_frame()
+        .expect("one active superres reference frame");
+
+    let mut actual = Vec::new();
+    for plane_index in 0..3 {
+        let (plane_width, plane_height) = if plane_index == 0 {
+            (WIDTH, HEIGHT)
+        } else {
+            (WIDTH.div_ceil(2), HEIGHT.div_ceil(2))
+        };
+        let plane = frame.plane(plane_index).expect("YUV420 reference plane");
+        for y in 0..plane_height {
+            actual.extend_from_slice(
+                plane
+                    .row(y)
+                    .expect("reference output row")
+                    .get(..plane_width)
+                    .expect("reference output width"),
+            );
+        }
+    }
+    assert_eq!(actual.len(), 9_216, "one full Y/U/V reference frame");
+    assert_eq!(actual, reference, "all reference-frame bytes match dav1d");
+
+    let inter_packet = Packet::from_slice(&mut budget, ACTIVE_SUPERRES_INTER)
+        .expect("inter fixture packet allocation");
+    let error = decoder
+        .send_packet(Some(&inter_packet))
+        .expect_err("inter frame requires a reference store and inter prediction");
+    assert!(matches!(
+        error,
+        Error::Unsupported(
+            "vaco-codec-av1: inter frame uses frame_size_with_refs; reference-store/inter prediction is not decoded"
+        )
+    ));
+}

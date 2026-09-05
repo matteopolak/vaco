@@ -5,7 +5,7 @@ kind = "blackbox"
 acquired = "2026-09-04"
 where = "https://github.com/videolan/dav1d/tree/aa09a630ef57ee7d9482ffb7ef355a903dbb5302"
 license = "BSD-2-Clause"
-notes = "Independent test oracle only: src/mc_tmpl.c resize_c and src/tables.c dav1d_resize_filter are extracted unchanged by scripts/gen-av1-superres-oracle.py. Production arithmetic and table derive from aom-av1-spec section 7.16."
+notes = "Independent test oracle only: src/mc_tmpl.c resize_c and src/tables.c dav1d_resize_filter are extracted unchanged by scripts/gen-av1-superres-oracle.py. The bounded real I-to-P fixture was observed with dav1d 1.5.4 and ffmpeg 9.0.1 -c:v libdav1d: both emit the same two 96x64 YUV420 frames (18432 bytes, SHA-256 a2df5c15872ce52d4f0638660171a199c265c19e08da27e481e117b38378f0cf) from the 48-byte OBU (SHA-256 66e7ca5b991ed6511075fcf23b1dcd8901429cacdbd315161e75b81b421c1b90). Production arithmetic and table derive from aom-av1-spec section 7.16."
 
 [[table]]
 name = "UPSCALE_FILTER"
