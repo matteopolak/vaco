@@ -998,8 +998,9 @@ reconstruction syntax is consumed. For tile 0, the first bypass-coded
 selecting MPM index 1. With both top-left neighbours unavailable,
 §8.4.2's `[PLANAR, DC, VER]` list resolves that index to `INTRA_DC` (mode 1).
 The next 4x4 PU's context-0 `prev_intra_luma_pred_flag` is measured as 1; its
-MPM/rem-mode syntax and all later mode-dependent syntax remain unconsumed.
-Finally it sends the same access unit to `HevcDecoder` and
+first bypass-coded `mpm_idx` prefix bin is also measured as 1; its second
+prefix bin, mode resolution, and all later mode-dependent syntax remain
+unconsumed. Finally it sends the same access unit to `HevcDecoder` and
 requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before the
 decoder consumes tile CABAC for reconstruction. This keeps the parser's
