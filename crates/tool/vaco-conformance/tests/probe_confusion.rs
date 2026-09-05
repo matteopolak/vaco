@@ -319,8 +319,9 @@ fn format_name(bin: &Path, file: &Path) -> Result<String, String> {
     Ok(obs.stdout_text().trim().to_owned())
 }
 
-/// `-count_packets -show_entries stream=nb_read_packets`, summed across every
-/// stream — a demuxer that mis-detects the format almost always also
+/// `-count_packets -show_entries stream=nb_read_packets`, summed across the
+/// top-level streams, excluding repeated program stream listings. A demuxer
+/// that mis-detects the format almost always also
 /// mis-counts packets (a lucky format-name match with a nonsense packet count
 /// would still be a real bug), so this is the measurement half of "verify by
 /// measuring", not just a nicety.
@@ -332,7 +333,7 @@ fn total_read_packets(bin: &Path, file: &Path) -> Result<u64, String> {
         "-show_entries",
         "stream=nb_read_packets",
         "-of",
-        "default=nk=1:nw=1",
+        "json",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -348,11 +349,21 @@ fn total_read_packets(bin: &Path, file: &Path) -> Result<u64, String> {
             obs.stderr_text()
         ));
     }
-    obs.stdout_text()
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .map(|l| l.parse::<u64>().map_err(|e| e.to_string()))
+    let document: serde_json::Value =
+        serde_json::from_str(&obs.stdout_text()).map_err(|e| e.to_string())?;
+    document
+        .get("streams")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "probe output has no top-level streams".to_owned())?
+        .iter()
+        .map(|stream| {
+            stream
+                .get("nb_read_packets")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "stream has no packet count".to_owned())?
+                .parse::<u64>()
+                .map_err(|e| e.to_string())
+        })
         .sum()
 }
 
@@ -372,7 +383,7 @@ fn stream_fields(
         "-show_entries",
         "stream=codec_name,sample_rate,channels,time_base",
         "-of",
-        "default=nw=1",
+        "default",
     ]
     .into_iter()
     .map(str::to_owned)
@@ -505,6 +516,14 @@ fn probe_choice_matches_the_reference_across_the_format_sweep() {
             };
             let theirs_packets = total_read_packets(&reference.ffprobe, &path).ok();
             let ours_packets = total_read_packets(&probe, &path).ok();
+            if case.label == "mpegts-m2ts-ext" {
+                assert_eq!(
+                    theirs_packets,
+                    Some(5),
+                    "one second at five fps contains five packets, even when ffprobe also lists program streams"
+                );
+                assert_eq!(ours_packets, theirs_packets, "M2TS packet count diverged");
+            }
 
             let agrees = is_aliased(case.label, &ours, &theirs);
             let allowed = !agrees && is_known_divergence(case.label, no_ext);
@@ -634,6 +653,11 @@ fn raw_audio_stream_fields_match_the_reference() {
                 .map_or("unknown error", String::as_str)
         );
         let Ok(theirs) = theirs else { return };
+        assert_eq!(
+            theirs.len(),
+            1,
+            "{extension}: reference audio stream missing"
+        );
         let ours = stream_fields(&probe, &fixture);
         assert!(
             ours.is_ok(),
@@ -641,6 +665,7 @@ fn raw_audio_stream_fields_match_the_reference() {
             ours.as_ref().err().map_or("unknown error", String::as_str)
         );
         let Ok(ours) = ours else { return };
+        assert_eq!(ours.len(), 1, "{extension}: vvprobe audio stream missing");
         assert_eq!(ours, theirs, "{extension}: stream metadata diverged");
     }
 }

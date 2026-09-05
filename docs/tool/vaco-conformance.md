@@ -117,6 +117,12 @@ across container and raw-format families; the raw-audio metadata slice checks
 `codec_name`, `sample_rate`, `channels`, and `time_base` for ADTS AAC, AC-3,
 E-AC-3, MP3, and FLAC at 48 kHz stereo.
 
+Packet totals come from the JSON document's top-level `streams` array:
+MPEG-TS also lists streams inside `programs`, which must not be counted twice.
+The metadata slice preserves `[STREAM]` section markers and requires one
+stream per generated audio fixture, so two empty parser results cannot pass
+as matching metadata.
+
 These tests intentionally compare the reported field values, not merely a zero
 exit code. They exclude container duration from this slice: duration precision
 has a separate acceptance path, so a metadata regression cannot be hidden by
