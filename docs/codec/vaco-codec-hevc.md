@@ -381,7 +381,11 @@ a new unavailable-neighbour range.
 
 The supported shape requires matching picture-wide decoding fields for every
 independent segment and `slice_loop_filter_across_slices_enabled_flag` when
-there is more than one independent non-WPP slice. Independent WPP segments are
+there is more than one independent non-WPP slice. Segment-local slice type,
+QP, and motion-list state are refreshed at each independent boundary; filter
+state remains picture-invariant because filtering is applied after the
+complete walk. This is what permits the mixed I/P slices in the real fixture without
+reusing an I-slice CABAC context for a P-slice. Independent WPP segments are
 also supported when every segment begins and ends on a complete CTU-row
 boundary and both SAO and deblocking are disabled. WPP segments that inherit a
 dependent header, split a CTU row, or need in-loop filtering across their
@@ -398,6 +402,14 @@ stream (SHA-256
 decodes to 155,520,000 visible bytes with MD5
 `c7caf3164b0a316549ac7244f66f1294`, identical to both the package's `.md5`
 and a local black-box `ffmpeg 9.0.1` decode measured on 2026-09-05.
+
+`SLICES_A_Rovi_3` is the regression for per-segment state: each 640x480
+picture has twenty independent four-CTB segments, alternating I and P slice
+types. Its vendored stream is 65,943 bytes (SHA-256
+`7440908beaa68768ee66b7af5823a28ce0716d90aa1b49de630d2c5aa555d955`) and
+produces exactly nine frames / 4,147,200 visible bytes. The published and
+black-box `ffmpeg` MD5 is `c2d63a4d145a5713afecd822032ec271`, and Vaco matches
+the complete Y, U, and V byte stream.
 
 ### Picture-level short-term RPS across independent segments
 

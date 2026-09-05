@@ -419,7 +419,7 @@ fn filter_luma_group(
 /// unavailable: every in-bounds, fully-decoded position always has a real
 /// value by the time this whole-picture pass runs, so the fallback only
 /// matters, defensively, for a position outside the picture.
-fn qp_avg(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
+fn qp_avg(s: &Ctx<'_, '_, '_, '_>, dir: Dir, xq: i32, yq: i32) -> i32 {
     let (xp, yp) = match dir {
         Dir::Vert => (xq - 1, yq),
         Dir::Horiz => (xq, yq - 1),
@@ -432,7 +432,7 @@ fn qp_avg(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
 /// §8.7.2.5.7/.8's independent P/Q no-filter values. The filter decision
 /// still reads both sides; only writes into an I_PCM or transquant-bypass side
 /// represented by [`crate::framebuf::CuGrid`]'s shared mask are suppressed.
-fn filter_bypass_sides(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> (bool, bool) {
+fn filter_bypass_sides(s: &Ctx<'_, '_, '_, '_>, dir: Dir, xq: i32, yq: i32) -> (bool, bool) {
     let (xp, yp) = match dir {
         Dir::Vert => (xq - 1, yq),
         Dir::Horiz => (xq, yq - 1),
@@ -479,7 +479,7 @@ fn filter_bypass_sides(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> (bool, bool) 
 /// vector, whose difference is always `< 4` — leaving only the original
 /// `ref_p0 == ref_q0` and `mv_q0` vs `mv_p0` comparison, unchanged from the
 /// P-slice-only version this replaced.
-fn boundary_strength(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
+fn boundary_strength(s: &Ctx<'_, '_, '_, '_>, dir: Dir, xq: i32, yq: i32) -> i32 {
     let (xp, yp) = match dir {
         Dir::Vert => (xq - 1, yq),
         Dir::Horiz => (xq, yq - 1),
@@ -532,7 +532,7 @@ fn boundary_strength(s: &Ctx<'_>, dir: Dir, xq: i32, yq: i32) -> i32 {
 /// planes), then every horizontal edge (both planes) — matching
 /// `TComLoopFilter::loopFilterPic`'s own two full, separate passes, since
 /// horizontal filtering must see vertical filtering's own output.
-pub(crate) fn filter_picture(s: &mut Ctx<'_>) {
+pub(crate) fn filter_picture(s: &mut Ctx<'_, '_, '_, '_>) {
     if s.shared.deblocking_disabled {
         return;
     }

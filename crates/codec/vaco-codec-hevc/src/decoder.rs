@@ -254,6 +254,7 @@ impl HevcDecoder {
         }
         let mut slice_starts: Vec<u32> = self.budget.alloc(slice_nals.len())?;
         let mut slice_is_dependent: Vec<bool> = self.budget.alloc(slice_nals.len())?;
+        let mut has_b_slice = hdr.kind == SliceKind::B;
         let Some(first_start) = slice_starts.first_mut() else {
             return Err(Error::InvalidData(
                 "vaco-codec-hevc: picture has no slice segments",
@@ -301,6 +302,7 @@ impl HevcDecoder {
                     &hdr,
                     &segment_hdr,
                     pps.entropy_coding_sync_enabled,
+                    !pps.entropy_coding_sync_enabled,
                 ) {
                     return Err(Error::Unsupported(
                         "vaco-codec-hevc: independent slice segments with differing headers are not supported",
@@ -319,6 +321,7 @@ impl HevcDecoder {
                 ));
             };
             *is_dependent = segment_hdr.dependent;
+            has_b_slice |= segment_hdr.kind == SliceKind::B;
         }
 
         let slice_qp = 26 + pps.init_qp_minus26 + hdr.qp_delta;
@@ -425,7 +428,7 @@ impl HevcDecoder {
             crate::framebuf::ReconPictureShared::new(&mut self.budget, width, height, ctb_size)?;
         let mut recon = crate::framebuf::ReconPicture::new(&recon_shared);
         let cu_grid_shared =
-            crate::framebuf::CuGridShared::new(width, height, hdr.kind == SliceKind::B, ctb_size);
+            crate::framebuf::CuGridShared::new(width, height, has_b_slice, ctb_size);
         let cu_grid = CuGrid::new(&mut self.budget, &cu_grid_shared)?;
         let edges_shared = crate::framebuf::EdgeMarksShared::new(width, height, ctb_size);
         let edges = crate::framebuf::EdgeMarks::new(&edges_shared);
@@ -504,105 +507,107 @@ impl HevcDecoder {
             }
         }
 
-        let is_b = hdr.kind == SliceKind::B;
-        let (list0, list1) = crate::dpb::build_ref_pic_lists(
-            &sets,
-            hdr.num_ref_idx_l0_active_minus1,
-            hdr.num_ref_idx_l1_active_minus1,
-            hdr.ref_pic_list_modification.as_ref(),
-            is_b,
-        );
-
-        let inter = if hdr.kind == SliceKind::I {
-            None
-        } else {
-            let dpb_ref = self.dpb.as_ref();
-            let ref_pics_l0: Vec<RefPic<'_>> = list0
-                .iter()
-                .filter_map(|&p| {
-                    dpb_ref
-                        .and_then(|d| d.reference_picture(p))
-                        .map(|pic| RefPic { poc: p, pic })
-                })
-                .collect();
-            let ref_pics_l1: Vec<RefPic<'_>> = list1
-                .iter()
-                .filter_map(|&p| {
-                    dpb_ref
-                        .and_then(|d| d.reference_picture(p))
-                        .map(|pic| RefPic { poc: p, pic })
-                })
-                .collect();
-            // §8.5.3.2.9: `ColPic` is named from `RefPicList0` or
-            // `RefPicList1` depending on `collocated_from_l0_flag` — a P
-            // slice's own parser default (`collocated_from_l0 == true`)
-            // makes this collapse to the pre-existing `list0`-only lookup.
-            let collocated = if hdr.temporal_mvp_enabled {
-                let col_list = if hdr.collocated_from_l0 {
-                    &list0
-                } else {
-                    &list1
-                };
-                col_list
-                    .get(usize::try_from(hdr.collocated_ref_idx).unwrap_or(0))
-                    .and_then(|&p| dpb_ref.and_then(|d| d.collocated_for(p)))
-            } else {
+        let build_inter = |segment: &SliceHeader| {
+            let is_b = segment.kind == SliceKind::B;
+            let (list0, list1) = crate::dpb::build_ref_pic_lists(
+                &sets,
+                segment.num_ref_idx_l0_active_minus1,
+                segment.num_ref_idx_l1_active_minus1,
+                segment.ref_pic_list_modification.as_ref(),
+                is_b,
+            );
+            if segment.kind == SliceKind::I {
                 None
-            };
-            // §8.5.3.2.9's `NoBackwardPredFlag`: every picture in *both*
-            // lists has a POC no greater than the current picture's. Always
-            // `true` trivially for a P slice (list1 is empty).
-            let is_low_delay = list0.iter().chain(list1.iter()).all(|&p| p <= poc.value);
-            let max_num_merge_cand =
-                usize::try_from(5u32.saturating_sub(hdr.five_minus_max_num_merge_cand))
-                    .unwrap_or(1)
-                    .max(1);
-            // §8.5.3.3.4.1's `weightedPredFlag`: `weighted_pred_flag` for a P
-            // slice, `weighted_bipred_flag` for a B slice — resolved once per
-            // slice rather than per PU. `pred_weight_table()`'s own presence
-            // condition in `vaco-parse-hevc` already gates on exactly this,
-            // so `hdr.pred_weight_table.is_some()` alone is enough; no
-            // separate flag check is needed here.
-            let weights_l0 = hdr.pred_weight_table.as_ref().map(|t| {
-                crate::weight::resolve_list(
-                    t,
-                    0,
-                    ref_pics_l0.len(),
-                    u32::from(sps.bit_depth_luma),
-                    u32::from(sps.bit_depth_chroma),
-                )
-            });
-            let weights_l1 = if is_b {
-                hdr.pred_weight_table.as_ref().map(|t| {
+            } else {
+                let dpb_ref = self.dpb.as_ref();
+                let ref_pics_l0: Vec<RefPic<'_>> = list0
+                    .iter()
+                    .filter_map(|&p| {
+                        dpb_ref
+                            .and_then(|d| d.reference_picture(p))
+                            .map(|pic| RefPic { poc: p, pic })
+                    })
+                    .collect();
+                let ref_pics_l1: Vec<RefPic<'_>> = list1
+                    .iter()
+                    .filter_map(|&p| {
+                        dpb_ref
+                            .and_then(|d| d.reference_picture(p))
+                            .map(|pic| RefPic { poc: p, pic })
+                    })
+                    .collect();
+                // §8.5.3.2.9: `ColPic` is named from `RefPicList0` or
+                // `RefPicList1` depending on `collocated_from_l0_flag` — a P
+                // slice's own parser default (`collocated_from_l0 == true`)
+                // makes this collapse to the pre-existing `list0`-only lookup.
+                let collocated = if segment.temporal_mvp_enabled {
+                    let col_list = if segment.collocated_from_l0 {
+                        &list0
+                    } else {
+                        &list1
+                    };
+                    col_list
+                        .get(usize::try_from(segment.collocated_ref_idx).unwrap_or(0))
+                        .and_then(|&p| dpb_ref.and_then(|d| d.collocated_for(p)))
+                } else {
+                    None
+                };
+                // §8.5.3.2.9's `NoBackwardPredFlag`: every picture in *both*
+                // lists has a POC no greater than the current picture's. Always
+                // `true` trivially for a P slice (list1 is empty).
+                let is_low_delay = list0.iter().chain(list1.iter()).all(|&p| p <= poc.value);
+                let max_num_merge_cand =
+                    usize::try_from(5u32.saturating_sub(segment.five_minus_max_num_merge_cand))
+                        .unwrap_or(1)
+                        .max(1);
+                // §8.5.3.3.4.1's `weightedPredFlag`: `weighted_pred_flag` for a P
+                // slice, `weighted_bipred_flag` for a B slice — resolved once per
+                // slice rather than per PU. `pred_weight_table()`'s own presence
+                // condition in `vaco-parse-hevc` already gates on exactly this,
+                // so `hdr.pred_weight_table.is_some()` alone is enough; no
+                // separate flag check is needed here.
+                let weights_l0 = segment.pred_weight_table.as_ref().map(|t| {
                     crate::weight::resolve_list(
                         t,
-                        1,
-                        ref_pics_l1.len(),
+                        0,
+                        ref_pics_l0.len(),
                         u32::from(sps.bit_depth_luma),
                         u32::from(sps.bit_depth_chroma),
                     )
+                });
+                let weights_l1 = if is_b {
+                    segment.pred_weight_table.as_ref().map(|t| {
+                        crate::weight::resolve_list(
+                            t,
+                            1,
+                            ref_pics_l1.len(),
+                            u32::from(sps.bit_depth_luma),
+                            u32::from(sps.bit_depth_chroma),
+                        )
+                    })
+                } else {
+                    None
+                };
+                Some(InterSliceParams {
+                    max_num_merge_cand,
+                    log2_parallel_merge_level: pps.log2_parallel_merge_level,
+                    amp_enabled: sps.amp_enabled,
+                    cur_poc: poc.value,
+                    ref_pics_l0,
+                    ref_pics_l1,
+                    is_b,
+                    collocated_from_l0: segment.collocated_from_l0,
+                    is_low_delay,
+                    mvd_l1_zero: segment.mvd_l1_zero,
+                    collocated,
+                    weights_l0,
+                    weights_l1,
                 })
-            } else {
-                None
-            };
-            Some(InterSliceParams {
-                max_num_merge_cand,
-                log2_parallel_merge_level: pps.log2_parallel_merge_level,
-                amp_enabled: sps.amp_enabled,
-                cur_poc: poc.value,
-                ref_pics_l0,
-                ref_pics_l1,
-                is_b,
-                collocated_from_l0: hdr.collocated_from_l0,
-                is_low_delay,
-                mvd_l1_zero: hdr.mvd_l1_zero,
-                collocated,
-                weights_l0,
-                weights_l1,
-            })
+            }
         };
 
-        let ctx_shared = crate::ctu::CtxShared::new(
+        let inter = build_inter(&hdr);
+        let mut ctx_shared = crate::ctu::CtxShared::new(
             &sps,
             &pps,
             slice_qp,
@@ -614,7 +619,7 @@ impl HevcDecoder {
             inter,
         )?;
         let mut walk = Ctx::new(
-            &ctx_shared,
+            &mut ctx_shared,
             &mut pic,
             &mut recon,
             cu_grid,
@@ -622,7 +627,6 @@ impl HevcDecoder {
             sao_params,
         );
 
-        let qp_i8 = i8::try_from(slice_qp.clamp(0, 51)).unwrap_or(0);
         let ctb_size_i = i32::try_from(ctb_size_u32).unwrap_or(0);
 
         if pps.entropy_coding_sync_enabled {
@@ -672,7 +676,22 @@ impl HevcDecoder {
                         "vaco-codec-hevc: dependent WPP slice segments are not supported",
                     ));
                 }
-                walk.begin_slice_segment(start_ctb, end_ctb, slice_qp);
+                let segment_qp = 26 + pps.init_qp_minus26 + parsed.qp_delta;
+                if index != 0 {
+                    let segment_inter = build_inter(&parsed);
+                    walk.shared.set_slice_segment(
+                        segment_qp,
+                        pps.cb_qp_offset + parsed.cb_qp_offset,
+                        pps.cr_qp_offset + parsed.cr_qp_offset,
+                        parsed.deblocking_filter_disabled,
+                        parsed.beta_offset_div2,
+                        parsed.tc_offset_div2,
+                        parsed.sao_luma,
+                        parsed.sao_chroma,
+                        segment_inter,
+                    );
+                }
+                walk.begin_slice_segment(start_ctb, end_ctb, segment_qp);
                 decode_wpp_rows(
                     &mut self.budget,
                     ebsp,
@@ -683,7 +702,7 @@ impl HevcDecoder {
                     row_start,
                     row_count,
                     ctb_size_i,
-                    qp_i8,
+                    i8::try_from(segment_qp.clamp(0, 51)).unwrap_or(0),
                     parsed.kind,
                     parsed.cabac_init,
                 )?;
@@ -724,8 +743,29 @@ impl HevcDecoder {
                         slice_ends.get(index).copied().ok_or(Error::InvalidData(
                             "vaco-codec-hevc: logical slice end missing while decoding",
                         ))?;
-                    walk.begin_slice_segment(start_ctb, slice_end_ctb, slice_qp);
-                    cabac_context = Some(new_context_bank(parsed.kind, parsed.cabac_init, qp_i8));
+                    let segment_qp = 26 + pps.init_qp_minus26 + parsed.qp_delta;
+                    if index != 0 {
+                        let segment_inter = build_inter(&parsed);
+                        walk.shared.set_slice_segment(
+                            segment_qp,
+                            pps.cb_qp_offset + parsed.cb_qp_offset,
+                            pps.cr_qp_offset + parsed.cr_qp_offset,
+                            parsed.deblocking_filter_disabled,
+                            parsed.beta_offset_div2,
+                            parsed.tc_offset_div2,
+                            parsed.sao_luma,
+                            parsed.sao_chroma,
+                            segment_inter,
+                        );
+                    }
+                    walk.begin_slice_segment(start_ctb, slice_end_ctb, segment_qp);
+                    // Each independent segment has its own CABAC init state
+                    // and quantisation predictor (§9.3.2.1, §8.6.1).
+                    cabac_context = Some(new_context_bank(
+                        parsed.kind,
+                        parsed.cabac_init,
+                        i8::try_from(segment_qp.clamp(0, 51)).unwrap_or(0),
+                    ));
                 }
                 let mut cabac = CabacDecoder::new(cabac_data);
                 let ctx = cabac_context.as_mut().ok_or(Error::InvalidData(
@@ -784,7 +824,7 @@ impl HevcDecoder {
 
         #[cfg(test)]
         if let Some(probe) = self.deblock_lag_probe.take() {
-            let results = run_deblock_lag_probe(&walk, &probe, &mut self.budget);
+            let results = run_deblock_lag_probe(&mut walk, &probe, &mut self.budget);
             self.deblock_lag_probe_result = Some(results);
         }
         deblock::filter_picture(&mut walk);
@@ -985,18 +1025,42 @@ fn new_context_bank(kind: SliceKind, cabac_init: bool, qp: i8) -> ContextBank {
 /// address. `cabac_init_flag` is likewise per-segment: the caller constructs
 /// each segment's fresh CABAC context bank from its own value. WPP entry-point
 /// offsets are also per-segment, so they may differ when the caller explicitly
-/// permits that shape. Every remaining field that affects the picture-wide CTU
-/// context must agree.
+/// permits that shape. For non-WPP pictures, the caller may additionally
+/// permit segment-local slice state (type, QP and prediction), while
+/// picture-wide identity and RPS fields still have to agree.
 fn matching_independent_slice_header(
     first: &SliceHeader,
     candidate: &SliceHeader,
     allow_distinct_entry_points: bool,
+    allow_distinct_slice_state: bool,
 ) -> bool {
     if !same_short_term_rps(
         first.short_term_rps.as_ref(),
         candidate.short_term_rps.as_ref(),
     ) {
         return false;
+    }
+    if allow_distinct_slice_state {
+        // §7.4.7.1 permits independent segments to choose their own
+        // prediction, QP and filtering state. These values still describe
+        // one picture and therefore remain invariant across its segments.
+        return first.nal_unit_type == candidate.nal_unit_type
+            && first.no_output_of_prior_pics == candidate.no_output_of_prior_pics
+            && first.pic_output == candidate.pic_output
+            && first.colour_plane_id == candidate.colour_plane_id
+            && first.pic_order_cnt_lsb == candidate.pic_order_cnt_lsb
+            && first.long_term_refs == candidate.long_term_refs
+            // Filtering is applied once after the whole picture walk. Keep
+            // these fields invariant until the edge metadata carries a
+            // segment owner, rather than silently applying the last segment's
+            // filter state to earlier CTUs.
+            && first.sao_luma == candidate.sao_luma
+            && first.sao_chroma == candidate.sao_chroma
+            && first.deblocking_filter_disabled == candidate.deblocking_filter_disabled
+            && first.beta_offset_div2 == candidate.beta_offset_div2
+            && first.tc_offset_div2 == candidate.tc_offset_div2
+            && first.loop_filter_across_slices_enabled
+                == candidate.loop_filter_across_slices_enabled;
     }
     let mut normalized = candidate.clone();
     normalized.first_slice_segment_in_pic = true;
@@ -1075,7 +1139,9 @@ mod slice_rps_tests {
             ..SliceHeader::default()
         };
 
-        assert!(matching_independent_slice_header(&first, &candidate, false));
+        assert!(matching_independent_slice_header(
+            &first, &candidate, false, false
+        ));
     }
 
     #[test]
@@ -1100,7 +1166,7 @@ mod slice_rps_tests {
         };
 
         assert!(!matching_independent_slice_header(
-            &first, &candidate, false
+            &first, &candidate, false, false
         ));
     }
 
@@ -1118,9 +1184,33 @@ mod slice_rps_tests {
         };
 
         assert!(!matching_independent_slice_header(
-            &first, &candidate, false
+            &first, &candidate, false, false
         ));
-        assert!(matching_independent_slice_header(&first, &candidate, true));
+        assert!(matching_independent_slice_header(
+            &first, &candidate, true, false
+        ));
+    }
+
+    #[test]
+    fn mixed_slice_state_is_allowed_only_for_non_wpp_segments() {
+        let first = SliceHeader {
+            first_slice_segment_in_pic: true,
+            kind: vaco_parse_hevc::SliceKind::I,
+            ..SliceHeader::default()
+        };
+        let candidate = SliceHeader {
+            slice_segment_address: 4,
+            kind: vaco_parse_hevc::SliceKind::P,
+            qp_delta: 7,
+            ..SliceHeader::default()
+        };
+
+        assert!(!matching_independent_slice_header(
+            &first, &candidate, false, false
+        ));
+        assert!(matching_independent_slice_header(
+            &first, &candidate, false, true
+        ));
     }
 }
 
@@ -1234,7 +1324,7 @@ fn decode_wpp_rows(
     ebsp: &[u8],
     header_rbsp_len: usize,
     entry_point_offsets: &[u32],
-    walk: &mut Ctx<'_>,
+    walk: &mut Ctx<'_, '_, '_, '_>,
     ctbs_x: u32,
     row_start: u32,
     row_count: u32,
@@ -1293,7 +1383,7 @@ fn decode_wpp_row_ranges(
     budget: &mut Budget,
     row_ranges: &[(usize, usize)],
     ebsp_slice_data: &[u8],
-    walk: &mut Ctx<'_>,
+    walk: &mut Ctx<'_, '_, '_, '_>,
     ctbs_x: u32,
     row_start: u32,
     ctb_size_i: i32,
@@ -1652,7 +1742,7 @@ pub(crate) struct DeblockLagResult {
 /// for this exact content's own boundary-strength/threshold decisions.
 #[cfg(test)]
 fn run_deblock_lag_probe(
-    walk: &Ctx<'_>,
+    walk: &mut Ctx<'_, '_, '_, '_>,
     probe: &DeblockLagProbe,
     budget: &mut Budget,
 ) -> Vec<DeblockLagResult> {

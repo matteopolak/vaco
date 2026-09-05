@@ -129,7 +129,8 @@ pub(crate) struct CtxShared<'p> {
 /// recursive functions below stay free functions taking `&mut Ctx` rather
 /// than a method on a growing `impl` block.
 ///
-/// `shared` ([`CtxShared`]) holds every field constant for the whole slice;
+/// `shared` ([`CtxShared`]) holds the current segment's syntax state plus
+/// picture-wide geometry and reference state;
 /// what remains here directly is either genuinely per-row-exclusive
 /// (`qp_y_prev`/`qg_qp_pred`/`is_cu_qp_delta_coded`/`cu_qp_delta_val`, reset
 /// at row or quantisation-group granularity, never read across a row
@@ -143,19 +144,19 @@ pub(crate) struct CtxShared<'p> {
 /// per this document's own repeated preference for deferring a design
 /// decision until the thing that needs it exists, rather than guessing its
 /// shape ahead of time.
-pub(crate) struct Ctx<'p> {
-    pub shared: &'p CtxShared<'p>,
+pub(crate) struct Ctx<'p, 'c, 's, 'r> {
+    pub shared: &'s mut CtxShared<'p>,
     /// The finished-picture buffer deblocking/SAO/emission (and every
     /// future picture's own reference reads) use — mutated in place by
     /// both, so it stays a direct field here rather than inside `shared`;
     /// see that type's own doc for why. Set once at construction, like
     /// every field of `Ctx`, but never behind the `Arc`.
-    pub pic: &'p mut Picture,
+    pub pic: &'c mut Picture,
     /// The CTU walk's own in-progress reconstruction buffer — see
     /// `crate::framebuf`'s "Stage 1" section doc for why this is a
     /// separate type from `pic` (which stays the finished-picture shape
     /// deblocking/SAO/emission already know).
-    pub recon: &'p mut ReconPicture<'p>,
+    pub recon: &'r mut ReconPicture<'r>,
     pub cu_grid: CuGrid<'p>,
     /// §8.6.1's `qPY_PREV`: the last coding unit's finalised `QpY` in
     /// decoding order, or `SliceQpY` at the very start of the slice and (via
@@ -393,9 +394,36 @@ impl<'p> CtxShared<'p> {
             max_transform_hierarchy_depth_inter: sps.max_transform_hierarchy_depth_inter,
         })
     }
+
+    /// Apply the syntax state that is allowed to differ at an independent
+    /// segment boundary (§7.4.7.1). The picture boards stay shared, while
+    /// prediction mode, QP, filtering and motion-list state are segment-local.
+    pub(crate) fn set_slice_segment(
+        &mut self,
+        slice_qp: i32,
+        cb_qp_offset: i32,
+        cr_qp_offset: i32,
+        deblocking_disabled: bool,
+        beta_offset_div2: i32,
+        tc_offset_div2: i32,
+        sao_luma: bool,
+        sao_chroma: bool,
+        inter: Option<InterSliceParams<'p>>,
+    ) {
+        self.slice_qp = slice_qp;
+        self.cb_qp_offset = cb_qp_offset;
+        self.cr_qp_offset = cr_qp_offset;
+        self.deblocking_disabled = deblocking_disabled;
+        self.beta_offset_div2 = beta_offset_div2;
+        self.tc_offset_div2 = tc_offset_div2;
+        self.sao_luma = sao_luma;
+        self.sao_chroma = sao_chroma;
+        self.is_p_slice = inter.is_some();
+        self.inter = inter;
+    }
 }
 
-impl<'p> Ctx<'p> {
+impl<'p, 'c, 's, 'r> Ctx<'p, 'c, 's, 'r> {
     /// Assembles the walk's own per-row-exclusive state (`pic`, `recon`,
     /// `cu_grid`, `edges`, `sao_params`, all already constructed by the
     /// caller against their own `*Shared` boards) together with `shared`,
@@ -403,9 +431,9 @@ impl<'p> Ctx<'p> {
     /// more -- every one of `recon`/`cu_grid`/`edges`/`sao_params` is
     /// already built by the time this runs.
     pub(crate) fn new(
-        shared: &'p CtxShared<'p>,
-        pic: &'p mut Picture,
-        recon: &'p mut ReconPicture<'p>,
+        shared: &'s mut CtxShared<'p>,
+        pic: &'c mut Picture,
+        recon: &'r mut ReconPicture<'r>,
         cu_grid: CuGrid<'p>,
         edges: EdgeMarks<'p>,
         sao_params: crate::sao::SaoParamsGrid<'p>,
@@ -441,12 +469,13 @@ impl<'p> Ctx<'p> {
     /// `Ctx`'s fields are private to `ctu`, by design).
     #[cfg(test)]
     pub(crate) fn retarget_pic_for_test<'q>(
-        &self,
+        &'q mut self,
         pic: &'q mut Picture,
         recon: &'q mut ReconPicture<'q>,
-    ) -> Ctx<'q>
+    ) -> Ctx<'p, 'q, 'q, 'q>
     where
         'p: 'q,
+        's: 'q,
     {
         // `shared` is reborrowed rather than rebuilt: every field of
         // `CtxShared` is either `Copy` or, for `inter`, unread by
@@ -456,7 +485,7 @@ impl<'p> Ctx<'p> {
         // reference itself (covariant in its lifetime, since it holds no
         // `&'p mut` fields) simply narrow from `'p` to `'q`.
         Ctx {
-            shared: self.shared,
+            shared: &mut *self.shared,
             pic,
             // `deblock::filter_picture`, the only thing this retargeted
             // copy ever runs, never reads `Ctx::recon` -- the caller passes
@@ -552,7 +581,7 @@ impl<'p> Ctx<'p> {
 /// a CTB boundary regardless of whether the neighbour has already been
 /// decoded. This subsumes the picture-edge case for free: a QG at `x == 0`
 /// or `y == 0` is trivially CTB-aligned too.
-fn qp_y_pred(s: &Ctx<'_>, xqg: i32, yqg: i32) -> i32 {
+fn qp_y_pred(s: &Ctx<'_, '_, '_, '_>, xqg: i32, yqg: i32) -> i32 {
     let ctb = 1i32 << s.shared.log2_ctb_size;
     let qp_a = if xqg % ctb == 0 {
         s.qp_y_prev
@@ -590,7 +619,7 @@ fn derive_qp_y(qp_y_pred: i32, cu_qp_delta_val: i32) -> i32 {
 fn read_transform_skip_flag(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &Ctx<'_>,
+    s: &Ctx<'_, '_, '_, '_>,
     log2_size: u32,
     ctx_offset: usize,
 ) -> Result<bool> {
@@ -668,7 +697,7 @@ fn read_unary_max(
 fn maybe_parse_cu_qp_delta(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     has_residual: bool,
 ) -> Result<()> {
     if !s.shared.cu_qp_delta_enabled || s.is_cu_qp_delta_coded || !has_residual {
@@ -704,7 +733,7 @@ fn maybe_parse_cu_qp_delta(
 pub(crate) fn decode_ctu(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     addr: u32,
@@ -729,7 +758,7 @@ pub(crate) fn decode_ctu(
 fn coding_quadtree(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -801,7 +830,7 @@ struct Pu {
 fn coding_unit(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -836,7 +865,7 @@ fn coding_unit(
 /// shared by every CU shape (intra, skip, inter): every coding unit gets its
 /// own finalised `QpY` written to [`CuGrid`], whether or not it coded its
 /// own `cu_qp_delta`.
-fn finalize_cu_qp(s: &mut Ctx<'_>, x0: i32, y0: i32, size: i32) {
+fn finalize_cu_qp(s: &mut Ctx<'_, '_, '_, '_>, x0: i32, y0: i32, size: i32) {
     let qp_y = derive_qp_y(s.qg_qp_pred, s.cu_qp_delta_val);
     let blocks = usize::try_from((size >> 2).max(1)).unwrap_or(1);
     let bx0 = usize::try_from(x0 >> 2).unwrap_or(0);
@@ -886,7 +915,7 @@ fn read_pcm_plane(
 /// §9.3.2.6).
 fn decode_pcm_cu(
     cabac: &mut CabacDecoder<'_>,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -968,7 +997,7 @@ fn decode_pcm_cu(
 fn decode_intra_cu(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -1156,7 +1185,7 @@ fn decode_intra_cu(
 
 /// `getCtxSkipFlag`: `(left is skip) + (above is skip)`, both `0` when
 /// unavailable — the CU's own top-left corner, not each PU's.
-fn ctx_skip_flag(s: &Ctx<'_>, x0: i32, y0: i32) -> usize {
+fn ctx_skip_flag(s: &Ctx<'_, '_, '_, '_>, x0: i32, y0: i32) -> usize {
     usize::from(s.in_current_slice(x0 - 1, y0) && s.cu_grid.is_skip_at(x0 - 1, y0))
         + usize::from(s.in_current_slice(x0, y0 - 1) && s.cu_grid.is_skip_at(x0, y0 - 1))
 }
@@ -1415,7 +1444,7 @@ fn parse_inter_pred_idc(
 /// separate branch: [`RefList::pick`] already returns `None` for an unused
 /// list, and `.or_else(pick(other))` is exactly HM's fallback).
 fn col_mvp(
-    s: &Ctx<'_>,
+    s: &Ctx<'_, '_, '_, '_>,
     pos: (i32, i32),
     target_list: motion::RefList,
     curr_poc: i64,
@@ -1478,7 +1507,7 @@ fn col_mvp(
 /// genuinely intra in the collocated picture (`xGetColMVP_fail
 /// reason=notInter`) — exactly the case this fix now falls back for.
 fn temporal_candidate(
-    s: &Ctx<'_>,
+    s: &Ctx<'_, '_, '_, '_>,
     pu_x: i32,
     pu_y: i32,
     pu_w: i32,
@@ -1524,7 +1553,7 @@ fn temporal_candidate(
 fn coding_unit_p(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -1558,7 +1587,7 @@ fn coding_unit_p(
 fn decode_skip_cu(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -1628,7 +1657,7 @@ fn decode_skip_cu(
     reason = "every argument is a distinct merge-derivation input; a sub-struct would not aid clarity at one internal call site"
 )]
 fn resolve_merge_candidate(
-    s: &Ctx<'_>,
+    s: &Ctx<'_, '_, '_, '_>,
     cu_x0: i32,
     cu_y0: i32,
     cu_size: i32,
@@ -1737,7 +1766,7 @@ struct CuPrediction {
 }
 
 fn build_cu_prediction(
-    s: &Ctx<'_>,
+    s: &Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     size: i32,
@@ -2045,7 +2074,7 @@ fn blit(dst: &mut [i32], dst_stride: usize, x0: usize, y0: usize, w: usize, h: u
 /// §7.3.8.5's own presence condition — never actually parsed) writes its MC
 /// prediction straight to the picture, unmodified.
 fn write_inter_cu_no_residual(
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     size: i32,
@@ -2121,7 +2150,7 @@ fn write_pred_block(
 fn decode_inter_cu(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -2389,7 +2418,7 @@ fn decode_inter_cu(
 fn transform_tree_inter(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -2492,7 +2521,7 @@ fn transform_tree_inter(
 fn transform_unit_inter(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -2574,7 +2603,7 @@ fn pred_slice(buf: &[i32], buf_size: i32, x0: i32, y0: i32, size: usize) -> Vec<
 fn reconstruct_luma_inter(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -2642,7 +2671,7 @@ fn reconstruct_luma_inter(
 fn reconstruct_chroma_inter(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     cx0: i32,
     cy0: i32,
     log2_size: u32,
@@ -2709,7 +2738,7 @@ fn reconstruct_chroma_inter(
 }
 
 fn write_pred_chroma_only(
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     cx0: i32,
     cy0: i32,
     log2_size: u32,
@@ -2757,7 +2786,7 @@ fn cu_origin_of(x: i32, y: i32, cu_size: i32) -> (i32, i32) {
 /// reconstruction error, since the `split_transform_flag` bins the stream
 /// spent then go unread.
 fn quadtree_tu_log2_min_in_cu(
-    s: &Ctx<'_>,
+    s: &Ctx<'_, '_, '_, '_>,
     log2_cb_size: u32,
     max_depth: u32,
     extra_split_flag: u32,
@@ -2774,7 +2803,7 @@ fn quadtree_tu_log2_min_in_cu(
 fn transform_tree(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -2886,7 +2915,7 @@ fn transform_tree(
 fn transform_unit(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -2956,7 +2985,7 @@ fn pu_mode_at(pus: &[Pu], luma_modes: [u8; 4], x: i32, y: i32) -> u8 {
 fn reconstruct_luma(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     x0: i32,
     y0: i32,
     log2_size: u32,
@@ -3034,7 +3063,7 @@ fn reconstruct_luma(
 fn reconstruct_chroma(
     cabac: &mut CabacDecoder<'_>,
     ctx: &mut ContextBank,
-    s: &mut Ctx<'_>,
+    s: &mut Ctx<'_, '_, '_, '_>,
     cx0: i32,
     cy0: i32,
     log2_size: u32,
@@ -3123,7 +3152,14 @@ fn reconstruct_chroma(
     Ok(())
 }
 
-fn predict_chroma_only(s: &mut Ctx<'_>, cx0: i32, cy0: i32, log2_size: u32, mode: u8, is_cb: bool) {
+fn predict_chroma_only(
+    s: &mut Ctx<'_, '_, '_, '_>,
+    cx0: i32,
+    cy0: i32,
+    log2_size: u32,
+    mode: u8,
+    is_cb: bool,
+) {
     let size = 1usize << log2_size;
     let plane = if is_cb { &s.recon.cb } else { &s.recon.cr };
     let line = intra_pred::build_reference_line(

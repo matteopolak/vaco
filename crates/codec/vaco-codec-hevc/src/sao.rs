@@ -686,7 +686,7 @@ fn filter_bypass_sample(
 ///
 /// # Errors
 /// [`vaco_core::Error`] if the read-only snapshot copies exceed `budget`.
-pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_>) -> Result<()> {
+pub(crate) fn filter_picture(budget: &mut Budget, s: &mut Ctx<'_, '_, '_, '_>) -> Result<()> {
     if !s.shared.sao_luma && !s.shared.sao_chroma {
         return Ok(());
     }
