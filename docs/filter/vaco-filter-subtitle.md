@@ -60,6 +60,11 @@ construction, not a stream.
 - Motion/fade/animated-clip line state, karaoke and `\p` drawings remain
   separate #488 work. Keep them outside the projective mask helper;
   transform interpolation belongs in `vaco-ass`'s point-in-time planner.
+  Karaoke text is laid out syllable-by-syllable so `\k` can switch a fill,
+  `\K`/`\kf` can sweep it left-to-right, and `\ko` can withhold its outline
+  before highlight. `\p` drawings use bounded even-odd mask rasterisation
+  for `m`, `n`, `l`, and cubic `b` paths, plus the uniform B-spline
+  `s`/`p`/`c` sequence.
 
 ## Configuration
 

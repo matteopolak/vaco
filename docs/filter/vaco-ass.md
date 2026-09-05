@@ -31,7 +31,11 @@ Four stages, one module each:
 `plan::plan_event_at` implements the static tag set in full: `\b \i \u
 \s \fn \fs \fscx \fscy \fsp \frx \fry \frz \fr \bord \xbord \ybord \shad \xshad
 \yshad \blur \be \c \1c \2c \3c \4c \alpha \1a \2a \3a \4a \an \a \pos
-\org \clip \r`. It also evaluates the four legal `\t` forms at the
+\org \clip \r`. It resolves `\k`/`\K`/`\kf`/`\ko` into event-relative
+centisecond intervals on text runs, carrying secondary-fill and instant,
+sweep, or delayed-outline state to the renderer. `\p<n>` payloads are kept
+as drawing runs with their coordinate divisor and `\pbo` baseline offset. It
+also evaluates the four legal `\t` forms at the
 requested frame time: `\t(tags)`, `\t(accel,tags)`,
 `\t(t1,t2,tags)`, and `\t(t1,t2,accel,tags)`. Times are milliseconds
 relative to the event start; progress is clamped and raised to the
@@ -44,10 +48,8 @@ placement unchanged.
 
 A second group is recognised but not animated: `\move` uses
 its start point as a static `\pos`; `\fad`/`\fade` are parsed and
-ignored (full opacity for the whole event); `\k`/`\kf`/`\ko`/`\K`
-karaoke tags are parsed and ignored (no highlight sweep); `\p<n>`
-vector drawing suppresses its own text run rather than leaking raw
-drawing syntax; `\fax`/`\fay` shear is parsed and ignored. `\frx`/`\fry`/
+ignored (full opacity for the whole event); `\fax`/`\fay` shear is parsed
+and ignored. `\frx`/`\fry`/
 `\frz`/`\fr` carry static X/Y/Z angles on each run and `\org` carries the
 optional line rotation origin; `vaco-filter-subtitle` projects them when
 it rasterises the plan. See

@@ -79,7 +79,15 @@ fn tokenize_tags(inner: &str) -> Vec<Item> {
             .char_indices()
             .find(|(index, c)| !(c.is_ascii_alphabetic() || *index == 0 && c.is_ascii_digit()))
             .map_or(rest.len(), |(index, _)| index);
-        let name: String = rest[..name_len].to_ascii_lowercase();
+        let raw_name = &rest[..name_len];
+        // ASS distinguishes uppercase `\\K` (a progressive karaoke sweep)
+        // from lowercase `\\k` (an instant syllable highlight). Every other
+        // tag name is case-insensitive in the planner.
+        let name = if raw_name == "K" {
+            "K".to_owned()
+        } else {
+            raw_name.to_ascii_lowercase()
+        };
         rest = &rest[name_len..];
         if name.is_empty() {
             continue;

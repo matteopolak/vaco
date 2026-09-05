@@ -21,10 +21,9 @@
 //! `\move(x1,y1,x2,y2[,t1,t2])` uses `(x1, y1)` as a static `\pos`,
 //! ignoring the motion. `\fad`/`\fade` are parsed and ignored — the event
 //! renders at full opacity for its whole span rather than fading. `\k`/
-//! `\kf`/`\ko`/`\K` (karaoke) are parsed and ignored — no highlight sweep.
-//! `\p<n>` (vector drawing) suppresses its own text run entirely rather
-//! than showing raw drawing-command syntax as literal text, since drawing
-//! it is out of scope this pass. `\fax`/`\fay` (shear) are parsed and
+//! `\kf`/`\ko`/`\K` retain centisecond syllable intervals and `\p<n>`
+//! retains drawing-command text, its scale, and `\pbo` baseline offset.
+//! `\fax`/`\fay` (shear) are parsed and
 //! ignored. `\frx`/`\fry`/`\frz`/`\fr` carry static 3-D Euler angles on
 //! each run, and `\org` carries their optional line origin for the
 //! downstream subtitle renderer.
@@ -50,6 +49,8 @@ pub struct ResolvedStyle {
     pub underline: bool,
     pub strikeout: bool,
     pub primary: Rgba,
+    /// The pre-highlight fill colour used by ASS karaoke syllables.
+    pub secondary: Rgba,
     pub outline_colour: Rgba,
     pub back_colour: Rgba,
     pub scale_x: f64,
@@ -78,6 +79,7 @@ impl ResolvedStyle {
             underline: s.underline,
             strikeout: s.strikeout,
             primary: s.primary_colour,
+            secondary: s.secondary_colour,
             outline_colour: s.outline_colour,
             back_colour: s.back_colour,
             scale_x: s.scale_x,
@@ -94,10 +96,48 @@ impl ResolvedStyle {
     }
 }
 
+/// How a karaoke syllable changes from its secondary to primary appearance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KaraokeMode {
+    /// Change the complete fill as soon as the syllable starts (`\\k`).
+    Instant,
+    /// Reveal the primary fill from left to right over the syllable (`\\K`/`\\kf`).
+    Sweep,
+    /// Like [`Self::Instant`], but suppress the pre-highlight outline (`\\ko`).
+    Outline,
+}
+
+/// One event-relative karaoke interval, expressed in milliseconds.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KaraokeTiming {
+    /// The event-relative start time of this syllable.
+    pub start_ms: f64,
+    /// The duration declared by the tag, converted from centiseconds.
+    pub duration_ms: f64,
+    /// The visible transition selected by the tag.
+    pub mode: KaraokeMode,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct TextRun {
     pub style: ResolvedStyle,
     pub text: String,
+    /// Karaoke timing for this run, if its preceding override tag declared one.
+    pub karaoke: Option<KaraokeTiming>,
+}
+
+/// One `\\p` drawing payload and the style state that was active when it began.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DrawingRun {
+    /// The raw ASS drawing-command sequence; rasterisers interpret its `m`,
+    /// `n`, `l`, and `b` commands in script coordinates.
+    pub commands: String,
+    /// `\\p`'s power-of-two coordinate divisor.
+    pub scale: u32,
+    /// The style used for fill, outline, shadow, scaling, and rotation.
+    pub style: ResolvedStyle,
+    /// `\\pbo`'s script-space Y offset.
+    pub baseline_offset: f64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -117,6 +157,8 @@ pub struct EventPlan {
     /// (`\clip`'s 4-argument form only — vector clips are not implemented).
     pub clip: Option<(f64, f64, f64, f64)>,
     pub runs: Vec<TextRun>,
+    /// Vector drawings embedded between `\\p<n>` and `\\p0` overrides.
+    pub drawings: Vec<DrawingRun>,
 }
 
 struct Cursor<'a> {
@@ -129,6 +171,9 @@ struct Cursor<'a> {
     clip: Option<(f64, f64, f64, f64)>,
     elapsed_ms: f64,
     duration_ms: f64,
+    karaoke: Option<KaraokeTiming>,
+    karaoke_clock_ms: f64,
+    drawing_baseline_offset: f64,
 }
 
 /// Interpret `event` at its start time against `script`'s styles.
@@ -161,17 +206,25 @@ pub fn plan_event_at(script: &Script, event: &Event, now: Duration) -> EventPlan
         clip: None,
         elapsed_ms: elapsed_micros as f64 / 1_000.0,
         duration_ms: duration_micros.max(0) as f64 / 1_000.0,
+        karaoke: None,
+        karaoke_clock_ms: 0.0,
+        drawing_baseline_offset: 0.0,
         base,
     };
     let mut runs = Vec::new();
     let mut buf = String::new();
     let mut drawing_depth = 0u32;
+    let mut drawings = Vec::new();
+    let mut drawing_text = String::new();
+    let mut drawing_style: Option<(ResolvedStyle, u32, f64)> = None;
 
     for item in tokenize(&event.text) {
         match item {
             Item::Text(t) => {
                 if drawing_depth == 0 {
                     buf.push_str(&t);
+                } else {
+                    drawing_text.push_str(&t);
                 }
             }
             Item::Tag { name, arg } => {
@@ -179,9 +232,37 @@ pub fn plan_event_at(script: &Script, event: &Event, now: Duration) -> EventPlan
                     runs.push(TextRun {
                         style: cursor.cur.clone(),
                         text: std::mem::take(&mut buf),
+                        karaoke: cursor.karaoke,
+                    });
+                }
+                let was_drawing = drawing_depth != 0;
+                let next_drawing = if name == "p" {
+                    arg.as_deref()
+                        .and_then(|value| value.trim().parse::<u32>().ok())
+                        .unwrap_or(0)
+                } else {
+                    drawing_depth
+                };
+                if was_drawing
+                    && next_drawing == 0
+                    && !drawing_text.is_empty()
+                    && let Some((style, scale, baseline_offset)) = drawing_style.take()
+                {
+                    drawings.push(DrawingRun {
+                        commands: std::mem::take(&mut drawing_text),
+                        scale,
+                        style,
+                        baseline_offset,
                     });
                 }
                 apply_tag(&mut cursor, &name, arg.as_deref(), &mut drawing_depth);
+                if !was_drawing && drawing_depth != 0 {
+                    drawing_style = Some((
+                        cursor.cur.clone(),
+                        drawing_depth,
+                        cursor.drawing_baseline_offset,
+                    ));
+                }
             }
         }
     }
@@ -189,6 +270,18 @@ pub fn plan_event_at(script: &Script, event: &Event, now: Duration) -> EventPlan
         runs.push(TextRun {
             style: cursor.cur.clone(),
             text: buf,
+            karaoke: cursor.karaoke,
+        });
+    }
+    if drawing_depth != 0
+        && !drawing_text.is_empty()
+        && let Some((style, scale, baseline_offset)) = drawing_style
+    {
+        drawings.push(DrawingRun {
+            commands: drawing_text,
+            scale,
+            style,
+            baseline_offset,
         });
     }
 
@@ -213,6 +306,7 @@ pub fn plan_event_at(script: &Script, event: &Event, now: Duration) -> EventPlan
         },
         clip: cursor.clip,
         runs,
+        drawings,
     }
 }
 
@@ -263,7 +357,9 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
         "c" | "1c" => {
             cursor.cur.primary = crate::color::parse_color(a).unwrap_or(cursor.cur.primary);
         }
-        // Secondary colour affects karaoke's unsung portion only, not implemented.
+        "2c" => {
+            cursor.cur.secondary = crate::color::parse_color(a).unwrap_or(cursor.cur.secondary);
+        }
         "3c" => {
             cursor.cur.outline_colour =
                 crate::color::parse_color(a).unwrap_or(cursor.cur.outline_colour);
@@ -281,6 +377,11 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
         "1a" => {
             if let Some(av) = crate::color::parse_alpha_only(a) {
                 cursor.cur.primary.a = av;
+            }
+        }
+        "2a" => {
+            if let Some(av) = crate::color::parse_alpha_only(a) {
+                cursor.cur.secondary.a = av;
             }
         }
         "3a" => {
@@ -330,6 +431,25 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
         "p" => {
             let level: u32 = a.trim().parse().unwrap_or(0);
             *drawing_depth = level;
+        }
+        "pbo" => {
+            cursor.drawing_baseline_offset = parse_num(a).unwrap_or(cursor.drawing_baseline_offset);
+        }
+        "k" | "K" | "kf" | "ko" => {
+            let mode = match name {
+                "K" | "kf" => KaraokeMode::Sweep,
+                "ko" => KaraokeMode::Outline,
+                _ => KaraokeMode::Instant,
+            };
+            let duration_ms = parse_num(a)
+                .filter(|value| value.is_finite() && *value >= 0.0)
+                .map_or(0.0, |centiseconds| centiseconds * 10.0);
+            cursor.karaoke = Some(KaraokeTiming {
+                start_ms: cursor.karaoke_clock_ms,
+                duration_ms,
+                mode,
+            });
+            cursor.karaoke_clock_ms += duration_ms;
         }
         "t" => {
             apply_transform(cursor, a);
@@ -460,6 +580,7 @@ fn apply_transform_style_tag(style: &mut ResolvedStyle, name: &str, arg: Option<
         }
         "blur" | "be" => style.blur = parse_num(a).unwrap_or(style.blur),
         "c" | "1c" => style.primary = crate::color::parse_color(a).unwrap_or(style.primary),
+        "2c" => style.secondary = crate::color::parse_color(a).unwrap_or(style.secondary),
         "3c" => {
             style.outline_colour = crate::color::parse_color(a).unwrap_or(style.outline_colour);
         }
@@ -474,6 +595,11 @@ fn apply_transform_style_tag(style: &mut ResolvedStyle, name: &str, arg: Option<
         "1a" => {
             if let Some(alpha) = crate::color::parse_alpha_only(a) {
                 style.primary.a = alpha;
+            }
+        }
+        "2a" => {
+            if let Some(alpha) = crate::color::parse_alpha_only(a) {
+                style.secondary.a = alpha;
             }
         }
         "3a" => {
@@ -509,6 +635,7 @@ fn interpolate_style(
     result.shadow = interpolate_number(start.shadow, target.shadow, progress);
     result.blur = interpolate_number(start.blur, target.blur, progress);
     result.primary = interpolate_colour(start.primary, target.primary, progress);
+    result.secondary = interpolate_colour(start.secondary, target.secondary, progress);
     result.outline_colour =
         interpolate_colour(start.outline_colour, target.outline_colour, progress);
     result.back_colour = interpolate_colour(start.back_colour, target.back_colour, progress);
@@ -781,6 +908,30 @@ mod tests {
         let plan = plan_event(&script, &event);
         let joined: String = plan.runs.iter().map(|r| r.text.as_str()).collect();
         assert_eq!(joined, "beforeafter");
+    }
+
+    #[test]
+    fn drawing_mode_preserves_commands_scale_and_baseline_offset() {
+        let (script, event) = one_event(r"{\pbo-12\p2}m 0 0 l 200 0 200 200{\p0}");
+        let plan = plan_event(&script, &event);
+        assert_eq!(plan.drawings.len(), 1);
+        assert_eq!(plan.drawings[0].scale, 2);
+        assert_eq!(plan.drawings[0].baseline_offset, -12.0);
+        assert_eq!(plan.drawings[0].commands, "m 0 0 l 200 0 200 200");
+    }
+
+    #[test]
+    fn karaoke_tags_assign_cumulative_centisecond_intervals_to_syllables() {
+        let (script, event) = one_event(r"{\k50}one{\kf25}two{\ko75}three");
+        let plan = plan_event(&script, &event);
+
+        assert_eq!(plan.runs.len(), 3);
+        assert_eq!(plan.runs[0].karaoke.unwrap().start_ms, 0.0);
+        assert_eq!(plan.runs[0].karaoke.unwrap().duration_ms, 500.0);
+        assert_eq!(plan.runs[1].karaoke.unwrap().start_ms, 500.0);
+        assert_eq!(plan.runs[1].karaoke.unwrap().duration_ms, 250.0);
+        assert_eq!(plan.runs[2].karaoke.unwrap().start_ms, 750.0);
+        assert_eq!(plan.runs[2].karaoke.unwrap().duration_ms, 750.0);
     }
 
     #[test]

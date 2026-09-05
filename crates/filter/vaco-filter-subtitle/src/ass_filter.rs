@@ -129,6 +129,26 @@ pub fn render_at(
 
     for event in &events {
         let plan = vaco_ass::plan_event_at(script, event, t);
+        if !plan.drawings.is_empty() {
+            render_drawings(
+                &plan, renderer, frame, scale_x, scale_y, width, height, color_info,
+            )?;
+        }
+        if plan.runs.iter().any(|run| run.karaoke.is_some()) {
+            render_karaoke_runs(
+                &plan,
+                renderer,
+                frame,
+                event.start,
+                t,
+                scale_x,
+                scale_y,
+                width,
+                height,
+                color_info,
+            )?;
+            continue;
+        }
         let Some(first) = plan.runs.first() else {
             continue;
         };
@@ -217,6 +237,395 @@ pub fn render_at(
             mask::composite(frame, &dilated, style.outline_colour, color_info)?;
         }
         mask::composite(frame, &base_mask, style.primary, color_info)?;
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "drawing placement needs the same script/frame context as text"
+)]
+fn render_drawings(
+    plan: &vaco_ass::EventPlan,
+    renderer: &mut TextRenderer,
+    frame: &mut Frame,
+    scale_x: f64,
+    scale_y: f64,
+    width: u32,
+    height: u32,
+    color_info: vaco_color::ColorInfo,
+) -> Result<()> {
+    for drawing in &plan.drawings {
+        let contours = drawing_contours(&drawing.commands, drawing.scale);
+        let Some((min_x, min_y, max_x, max_y)) = drawing_bounds(&contours) else {
+            continue;
+        };
+        let (target_x, target_y) = if let Some((x, y)) = plan.pos {
+            (x * scale_x, y * scale_y)
+        } else {
+            edge_position(
+                plan.alignment,
+                width,
+                height,
+                plan.margin_l,
+                plan.margin_r,
+                plan.margin_v,
+                scale_x,
+                scale_y,
+            )
+        };
+        let draw_width = (max_x - min_x) * scale_x;
+        let draw_height = (max_y - min_y) * scale_y;
+        let anchor = Anchor::from_ass_code(plan.alignment);
+        let (origin_x, origin_y) = anchor.place(
+            target_x as f32,
+            target_y as f32,
+            draw_width as f32,
+            draw_height as f32,
+        );
+        let translated: Vec<Vec<(f64, f64)>> = contours
+            .iter()
+            .map(|contour| {
+                contour
+                    .iter()
+                    .map(|(x, y)| {
+                        (
+                            f64::from(origin_x) + (x - min_x) * scale_x,
+                            f64::from(origin_y) + (y - min_y + drawing.baseline_offset) * scale_y,
+                        )
+                    })
+                    .collect()
+            })
+            .collect();
+        let mut mask = rasterise_drawing(&translated, renderer.budget_mut())?;
+        if let Some(clip) = plan.clip {
+            apply_clip(&mut mask, clip, scale_x, scale_y);
+        }
+        let style = &drawing.style;
+        if style.shadow > 0.0 {
+            let (dx, dy) = shadow_px(style.shadow, scale_x, scale_y);
+            mask::composite(
+                frame,
+                &mask.translated(dx, dy),
+                style.back_colour,
+                color_info,
+            )?;
+        }
+        if style.outline > 0.0 {
+            let outline = mask.dilate(
+                renderer.budget_mut(),
+                outline_px(style.outline, scale_x, scale_y),
+            )?;
+            mask::composite(frame, &outline, style.outline_colour, color_info)?;
+        }
+        mask::composite(frame, &mask, style.primary, color_info)?;
+    }
+    Ok(())
+}
+
+fn drawing_contours(commands: &str, scale: u32) -> Vec<Vec<(f64, f64)>> {
+    let divisor = 2f64.powi(i32::try_from(scale.saturating_sub(1)).unwrap_or(30).min(30));
+    let tokens: Vec<_> = commands.split_whitespace().collect();
+    let mut contours = Vec::new();
+    let mut current = Vec::new();
+    let mut spline = Vec::new();
+    let mut index = 0usize;
+    while let Some(&command) = tokens.get(index) {
+        index += 1;
+        let read_pair = |at: &mut usize| -> Option<(f64, f64)> {
+            let x = tokens.get(*at)?.parse::<f64>().ok()?;
+            let y = tokens.get(at.saturating_add(1))?.parse::<f64>().ok()?;
+            *at = at.saturating_add(2);
+            Some((x / divisor, y / divisor))
+        };
+        match command {
+            "m" | "n" => {
+                finish_spline(&mut current, &mut spline, false);
+                if current.len() >= 3 {
+                    contours.push(std::mem::take(&mut current));
+                }
+                if let Some(point) = read_pair(&mut index) {
+                    current.push(point);
+                }
+            }
+            "l" => {
+                finish_spline(&mut current, &mut spline, false);
+                while tokens
+                    .get(index)
+                    .is_some_and(|token| token.parse::<f64>().is_ok())
+                {
+                    let Some(point) = read_pair(&mut index) else {
+                        break;
+                    };
+                    current.push(point);
+                }
+            }
+            "b" => {
+                finish_spline(&mut current, &mut spline, false);
+                let Some(start) = current.last().copied() else {
+                    continue;
+                };
+                let (Some(a), Some(b), Some(end)) = (
+                    read_pair(&mut index),
+                    read_pair(&mut index),
+                    read_pair(&mut index),
+                ) else {
+                    continue;
+                };
+                for step in 1..=12 {
+                    let t = f64::from(step) / 12.0;
+                    let mt = 1.0 - t;
+                    current.push((
+                        mt.powi(3) * start.0
+                            + 3.0 * mt.powi(2) * t * a.0
+                            + 3.0 * mt * t.powi(2) * b.0
+                            + t.powi(3) * end.0,
+                        mt.powi(3) * start.1
+                            + 3.0 * mt.powi(2) * t * a.1
+                            + 3.0 * mt * t.powi(2) * b.1
+                            + t.powi(3) * end.1,
+                    ));
+                }
+            }
+            "s" => {
+                finish_spline(&mut current, &mut spline, false);
+                while tokens
+                    .get(index)
+                    .is_some_and(|token| token.parse::<f64>().is_ok())
+                {
+                    let Some(point) = read_pair(&mut index) else {
+                        break;
+                    };
+                    spline.push(point);
+                }
+            }
+            "p" => {
+                if let Some(point) = read_pair(&mut index) {
+                    spline.push(point);
+                }
+            }
+            "c" => finish_spline(&mut current, &mut spline, true),
+            _ => {}
+        }
+    }
+    finish_spline(&mut current, &mut spline, false);
+    if current.len() >= 3 {
+        contours.push(current);
+    }
+    contours
+}
+
+fn finish_spline(current: &mut Vec<(f64, f64)>, spline: &mut Vec<(f64, f64)>, closed: bool) {
+    if spline.len() < 3 {
+        spline.clear();
+        return;
+    }
+    let mut control = spline.clone();
+    if closed {
+        control.extend(spline.iter().take(3).copied());
+    } else {
+        let first = spline.first().copied().unwrap_or((0.0, 0.0));
+        let last = spline.last().copied().unwrap_or((0.0, 0.0));
+        control.insert(0, first);
+        control.push(last);
+    }
+    for points in control.windows(4) {
+        let [a, b, c, d] = points else {
+            continue;
+        };
+        for step in 0..=12 {
+            let t = f64::from(step) / 12.0;
+            let mt = 1.0 - t;
+            current.push((
+                (mt.powi(3) * a.0
+                    + (3.0 * t.powi(3) - 6.0 * t.powi(2) + 4.0) * b.0
+                    + (-3.0 * t.powi(3) + 3.0 * t.powi(2) + 3.0 * t + 1.0) * c.0
+                    + t.powi(3) * d.0)
+                    / 6.0,
+                (mt.powi(3) * a.1
+                    + (3.0 * t.powi(3) - 6.0 * t.powi(2) + 4.0) * b.1
+                    + (-3.0 * t.powi(3) + 3.0 * t.powi(2) + 3.0 * t + 1.0) * c.1
+                    + t.powi(3) * d.1)
+                    / 6.0,
+            ));
+        }
+    }
+    spline.clear();
+}
+
+fn drawing_bounds(contours: &[Vec<(f64, f64)>]) -> Option<(f64, f64, f64, f64)> {
+    let mut points = contours.iter().flatten().copied();
+    let first = points.next()?;
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (first.0, first.1, first.0, first.1);
+    for (x, y) in points.filter(|(x, y)| x.is_finite() && y.is_finite()) {
+        min_x = min_x.min(x);
+        min_y = min_y.min(y);
+        max_x = max_x.max(x);
+        max_y = max_y.max(y);
+    }
+    (max_x > min_x && max_y > min_y).then_some((min_x, min_y, max_x, max_y))
+}
+
+fn rasterise_drawing(
+    contours: &[Vec<(f64, f64)>],
+    budget: &mut vaco_limits::Budget,
+) -> Result<vaco_filter_text::AlphaMask> {
+    let Some((min_x, min_y, max_x, max_y)) = drawing_bounds(contours) else {
+        return vaco_filter_text::AlphaMask::blank(budget, 0, 0, 0, 0);
+    };
+    let x = min_x
+        .floor()
+        .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+    let y = min_y
+        .floor()
+        .clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+    let w = (max_x.ceil() - f64::from(x)).clamp(0.0, f64::from(u32::MAX)) as u32;
+    let h = (max_y.ceil() - f64::from(y)).clamp(0.0, f64::from(u32::MAX)) as u32;
+    let mut mask = vaco_filter_text::AlphaMask::blank(budget, x, y, w, h)?;
+    for row in 0..h {
+        for col in 0..w {
+            let point = (
+                f64::from(x) + f64::from(col) + 0.5,
+                f64::from(y) + f64::from(row) + 0.5,
+            );
+            if contours.iter().fold(false, |inside, contour| {
+                inside ^ point_in_polygon(point, contour)
+            }) && let Some(coverage) = mask.coverage.get_mut((row * w + col) as usize)
+            {
+                *coverage = 255;
+            }
+        }
+    }
+    Ok(mask)
+}
+
+fn point_in_polygon(point: (f64, f64), contour: &[(f64, f64)]) -> bool {
+    let mut inside = false;
+    for index in 0..contour.len() {
+        let Some(&a) = contour.get(index) else {
+            continue;
+        };
+        let Some(&b) = contour.get((index + 1) % contour.len()) else {
+            continue;
+        };
+        if (a.1 > point.1) != (b.1 > point.1)
+            && point.0 < (b.0 - a.0) * (point.1 - a.1) / (b.1 - a.1) + a.0
+        {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "event layout needs its frame and script-space context"
+)]
+fn render_karaoke_runs(
+    plan: &vaco_ass::EventPlan,
+    renderer: &mut TextRenderer,
+    frame: &mut Frame,
+    event_start: Duration,
+    now: Duration,
+    scale_x: f64,
+    scale_y: f64,
+    width: u32,
+    height: u32,
+    color_info: vaco_color::ColorInfo,
+) -> Result<()> {
+    let mut layouts = Vec::new();
+    let mut total_width = 0u32;
+    let mut total_height = 0u32;
+    for run in &plan.runs {
+        let style = &run.style;
+        let text_style = TextStyle {
+            family: style.fontname.clone(),
+            size_px: (style.fontsize * scale_y).max(1.0) as f32,
+            bold: style.bold,
+            italic: style.italic,
+            color: style.primary,
+            ..TextStyle::default()
+        };
+        let layout = renderer.layout(&run.text, &text_style, vaco_filter_text::Wrap::None);
+        total_width = total_width.saturating_add(layout.width);
+        total_height = total_height.max(layout.height);
+        layouts.push((run, layout));
+    }
+    let anchor = Anchor::from_ass_code(plan.alignment);
+    let (target_x, target_y) = if let Some((px, py)) = plan.pos {
+        (px * scale_x, py * scale_y)
+    } else {
+        edge_position(
+            plan.alignment,
+            width,
+            height,
+            plan.margin_l,
+            plan.margin_r,
+            plan.margin_v,
+            scale_x,
+            scale_y,
+        )
+    };
+    let (line_x, line_y) = anchor.place(
+        target_x as f32,
+        target_y as f32,
+        total_width as f32,
+        total_height as f32,
+    );
+    let elapsed_ms = now.as_micros().saturating_sub(event_start.as_micros()) as f64 / 1_000.0;
+    let mut cursor_x = line_x.round() as i32;
+    for (run, layout) in layouts {
+        let style = &run.style;
+        let mut mask = renderer.rasterise(&layout, (cursor_x, line_y.round() as i32))?;
+        if let Some(clip) = plan.clip {
+            apply_clip(&mut mask, clip, scale_x, scale_y);
+        }
+        if style.shadow > 0.0 {
+            let (dx, dy) = shadow_px(style.shadow, scale_x, scale_y);
+            mask::composite(
+                frame,
+                &mask.translated(dx, dy),
+                style.back_colour,
+                color_info,
+            )?;
+        }
+        let timing = run.karaoke;
+        let pre_highlight = timing.is_some_and(|k| elapsed_ms < k.start_ms);
+        let hide_outline = timing
+            .is_some_and(|k| k.mode == vaco_ass::KaraokeMode::Outline && elapsed_ms < k.start_ms);
+        if style.outline > 0.0 && !hide_outline {
+            let outline = mask.dilate(
+                renderer.budget_mut(),
+                outline_px(style.outline, scale_x, scale_y),
+            )?;
+            mask::composite(frame, &outline, style.outline_colour, color_info)?;
+        }
+        match timing {
+            Some(k) if k.mode == vaco_ass::KaraokeMode::Sweep && !pre_highlight => {
+                mask::composite(frame, &mask, style.secondary, color_info)?;
+                let progress = if k.duration_ms <= 0.0 {
+                    1.0
+                } else {
+                    ((elapsed_ms - k.start_ms) / k.duration_ms).clamp(0.0, 1.0)
+                };
+                let mut primary = mask.clone();
+                let stop = f64::from(primary.x) + f64::from(primary.w) * progress;
+                for row in 0..primary.h {
+                    for col in 0..primary.w {
+                        if f64::from(primary.x) + f64::from(col) >= stop
+                            && let Some(coverage) =
+                                primary.coverage.get_mut((row * primary.w + col) as usize)
+                        {
+                            *coverage = 0;
+                        }
+                    }
+                }
+                mask::composite(frame, &primary, style.primary, color_info)?;
+            }
+            Some(_) if pre_highlight => mask::composite(frame, &mask, style.secondary, color_info)?,
+            _ => mask::composite(frame, &mask, style.primary, color_info)?,
+        }
+        cursor_x = cursor_x.saturating_add(i32::try_from(layout.width).unwrap_or(i32::MAX));
     }
     Ok(())
 }
@@ -570,6 +979,34 @@ mod tests {
         render_bounds_at(script, Duration::ZERO)
     }
 
+    fn render_luma_sum_at(script: &str, time: Duration) -> u64 {
+        use vaco_frame::FramePool;
+        use vaco_pixfmt::PixFmt;
+
+        let script = vaco_ass::parse(script);
+        let pool = FramePool::default();
+        let mut frame = pool.acquire_video(PixFmt::Gray8, 320, 240).unwrap();
+        vaco_filter_draw::fill::fill(
+            &mut frame,
+            vaco_filter_draw::rect::Rect::full(320, 240),
+            vaco_core::Rgba::BLACK,
+        )
+        .unwrap();
+        let mut renderer = TextRenderer::new();
+        render_at(&script, &mut renderer, &mut frame, time).unwrap();
+        let Some(plane) = frame.plane(0) else {
+            return 0;
+        };
+        let mut sum = 0u64;
+        for row in 0..240 {
+            let Some(bytes) = plane.row(row) else {
+                continue;
+            };
+            sum += bytes.iter().map(|value| u64::from(*value)).sum::<u64>();
+        }
+        sum
+    }
+
     #[test]
     fn missing_filename_is_a_clean_error() {
         let req = Instantiate {
@@ -761,6 +1198,30 @@ mod tests {
         assert!(after.3 > after.2.saturating_mul(2), "after={after:?}");
         assert!((2 * midpoint.0 + midpoint.2).abs_diff(320) <= 24);
         assert!((2 * midpoint.1 + midpoint.3).abs_diff(240) <= 24);
+    }
+
+    #[test]
+    fn p_drawing_rasterises_a_scaled_square_at_the_position_anchor() {
+        let script = "[Script Info]\nPlayResX: 320\nPlayResY: 240\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\nStyle: Default,Arial,20,&H00FFFFFF,&H00000000,&H00000000,0,1,0,0,7,0,0,0\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,{\\pos(40,30)\\p2}m 0 0 l 200 0 200 200 0 200{\\p0}\n";
+        let bounds = render_bounds(script);
+        assert_eq!(bounds, (40, 30, 100, 100));
+    }
+
+    #[test]
+    fn spline_drawing_commands_produce_a_closed_visible_contour() {
+        let contours = drawing_contours("s 0 0 100 0 100 100 0 100 c", 1);
+        let mut budget = vaco_limits::Budget::new(vaco_limits::Limits::default());
+        let mask = rasterise_drawing(&contours, &mut budget).unwrap();
+        assert!(mask.w > 50 && mask.h > 50, "mask={mask:?}");
+        assert!(mask.coverage.contains(&255));
+    }
+
+    #[test]
+    fn karaoke_switches_secondary_fill_to_primary_at_its_time_point() {
+        let script = "[Script Info]\nPlayResX: 320\nPlayResY: 240\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\nStyle: Default,Arial,48,&H00FFFFFF,&H00000000,&H00000000,&H00000000,0,1,0,0,5,0,0,0\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\nDialogue: 0,0:00:00.00,0:00:05.00,Default,,0,0,0,,{\\k100}A{\\k100}B\n";
+        let before = render_luma_sum_at(script, Duration::from_micros(500_000));
+        let after = render_luma_sum_at(script, Duration::from_micros(1_000_000));
+        assert!(after > before, "before={before}, after={after}");
     }
 
     #[test]

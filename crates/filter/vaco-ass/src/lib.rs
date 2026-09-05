@@ -28,6 +28,9 @@ pub mod script;
 pub mod style;
 pub mod tags;
 
-pub use plan::{EventPlan, ResolvedStyle, TextRun, plan_event, plan_event_at};
+pub use plan::{
+    DrawingRun, EventPlan, KaraokeMode, KaraokeTiming, ResolvedStyle, TextRun, plan_event,
+    plan_event_at,
+};
 pub use script::{Event, Script, ScriptInfo, parse};
 pub use style::Style;
