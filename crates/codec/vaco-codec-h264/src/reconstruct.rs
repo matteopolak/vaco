@@ -69,6 +69,7 @@
 
 use vaco_codec_core::picture::{BlockScratch, PlaneView};
 use vaco_codec_dsp_idct::h264::{idct4x4, idct8x8};
+use vaco_codec_dsp_mc::h264::{BiWeight, H264McKernels, UniWeight};
 use vaco_limits::Budget;
 
 use crate::dequant::{
@@ -779,6 +780,7 @@ pub(crate) fn reconstruct_picture_with_inter(
     ref_list0: &[RefPicturePlanes<'_>],
     budget: &mut Budget,
 ) -> vaco_core::Result<Vec<u8>> {
+    let mc = H264McKernels::default();
     let mut scratch = ReadScratch::new(budget)?;
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
     let ref_width = mbs_wide * 16;
@@ -830,6 +832,7 @@ pub(crate) fn reconstruct_picture_with_inter(
                 ref_height,
                 InterWeights::none(),
                 &mut scratch,
+                &mc,
             );
         }
     }
@@ -964,6 +967,7 @@ fn sample_luma_partition(
     h: usize,
     mv: (i16, i16),
     scratch: &mut ReadScratch,
+    mc: &H264McKernels,
 ) -> [[u8; 16]; 16] {
     let (mvx, mvy) = (i32::from(mv.0), i32::from(mv.1));
     let (int_dx, frac_x) = (mvx >> 2, (mvx & 3) as u32);
@@ -992,7 +996,9 @@ fn sample_luma_partition(
                 let (rx, ry) = ((ax - rx0).max(0) as usize, (ay - ry0).max(0) as usize);
                 data.get(ry * stride + rx).copied().unwrap_or(0)
             };
-            crate::interp::luma_qpel_partition(fetch, x0, y0, w, h, frac_x, frac_y, &mut out);
+            crate::interp::luma_qpel_partition_with(
+                mc, fetch, x0, y0, w, h, frac_x, frac_y, &mut out,
+            );
             return out;
         }
     };
@@ -1021,9 +1027,21 @@ fn sample_luma_partition(
             .unwrap_or(0)
     };
     if safe {
-        crate::interp::luma_qpel_partition(fetch_fast, x0, y0, w, h, frac_x, frac_y, &mut out);
+        crate::interp::luma_qpel_partition_with(
+            mc, fetch_fast, x0, y0, w, h, frac_x, frac_y, &mut out,
+        );
     } else {
-        crate::interp::luma_qpel_partition(fetch_clamped, x0, y0, w, h, frac_x, frac_y, &mut out);
+        crate::interp::luma_qpel_partition_with(
+            mc,
+            fetch_clamped,
+            x0,
+            y0,
+            w,
+            h,
+            frac_x,
+            frac_y,
+            &mut out,
+        );
     }
     out
 }
@@ -1202,6 +1220,7 @@ fn reconstruct_inter_mb(
     ref_height: u32,
     weights: InterWeights<'_>,
     scratch: &mut ReadScratch,
+    mc: &H264McKernels,
 ) {
     let empty = RefPlane::Flat(&[]);
     // Motion compensation is unaffected by `transform_size_8x8_flag` --
@@ -1241,6 +1260,7 @@ fn reconstruct_inter_mb(
                 h,
                 info.mv_l0(),
                 scratch,
+                mc,
             )
         });
         let p1 = info.reads_l1().then(|| {
@@ -1254,34 +1274,35 @@ fn reconstruct_inter_mb(
                 h,
                 info.mv_l1(),
                 scratch,
+                mc,
             )
         });
         let (row0, col0) = (usize::from(rect.by) * 4, usize::from(rect.bx) * 4);
-        for oy in 0..h {
-            for ox in 0..w {
-                // `.as_ref()` first: `p0`/`p1` are `Option<[[u8; 16]; 16]>`
-                // (`Copy`, since `[u8; 16]` is), so `.map()` called directly
-                // on them by value copies the whole 256-byte array into the
-                // closure on *every* one of this loop's `w * h` iterations
-                // (up to 256 per merged partition) just to read one byte out
-                // of it -- measured as the dominant cost of an earlier
-                // version of this function, large enough on its own to
-                // erase this item's entire fetch-count win.
-                let a = p0.as_ref().map(|b| b[oy][ox]);
-                let b = p1.as_ref().map(|b| b[oy][ox]);
-                let v = match (a, b) {
-                    (Some(a), Some(b)) => weights.combine(ref_idx0, ref_idx1, a, b),
-                    (Some(a), None) => weights.single(0, ref_idx0, a),
-                    (None, Some(b)) => weights.single(1, ref_idx1, b),
-                    (None, None) => 0,
-                };
-                if let Some(dst) = pred_mb
-                    .get_mut(row0 + oy)
-                    .and_then(|r| r.get_mut(col0 + ox))
-                {
-                    *dst = v;
+        match (p0.as_ref(), p1.as_ref()) {
+            (Some(a), Some(b)) => {
+                let params = weights.bi_params(ref_idx0, ref_idx1);
+                for oy in 0..h {
+                    (mc.weight_bi)(
+                        &a[oy][..w],
+                        &b[oy][..w],
+                        &mut pred_mb[row0 + oy][col0..col0 + w],
+                        params,
+                    );
                 }
             }
+            (Some(a), None) => {
+                let params = weights.uni_params(0, ref_idx0);
+                for oy in 0..h {
+                    (mc.weight_uni)(&a[oy][..w], &mut pred_mb[row0 + oy][col0..col0 + w], params);
+                }
+            }
+            (None, Some(b)) => {
+                let params = weights.uni_params(1, ref_idx1);
+                for oy in 0..h {
+                    (mc.weight_uni)(&b[oy][..w], &mut pred_mb[row0 + oy][col0..col0 + w], params);
+                }
+            }
+            (None, None) => {}
         }
     }
 
@@ -1479,6 +1500,52 @@ impl InterWeights<'_> {
     fn single(self, list: usize, ref_idx: usize, sample: u8) -> u8 {
         let table = if list == 0 { self.l0 } else { self.l1 };
         weight_for(table, ref_idx).map_or(sample, |w| w.apply(sample))
+    }
+
+    fn uni_params(self, list: usize, ref_idx: usize) -> UniWeight {
+        let table = if list == 0 { self.l0 } else { self.l1 };
+        weight_for(table, ref_idx).map_or(UniWeight::IDENTITY, |weight| UniWeight {
+            weight: weight.weight,
+            offset: weight.offset,
+            log2_denom: weight.log2_denom,
+        })
+    }
+
+    fn bi_params(self, ref_idx0: usize, ref_idx1: usize) -> BiWeight {
+        match self.mode {
+            BiPredMode::Default => BiWeight::AVERAGE,
+            BiPredMode::Explicit => {
+                let w0 = weight_for(self.l0, ref_idx0).unwrap_or(PredWeight {
+                    log2_denom: 0,
+                    weight: 1,
+                    offset: 0,
+                });
+                let w1 = weight_for(self.l1, ref_idx1).unwrap_or(PredWeight {
+                    log2_denom: 0,
+                    weight: 1,
+                    offset: 0,
+                });
+                BiWeight {
+                    weight0: w0.weight,
+                    weight1: w1.weight,
+                    offset: (w0.offset + w1.offset + 1) >> 1,
+                    log2_denom: w0.log2_denom,
+                }
+            }
+            BiPredMode::Implicit => {
+                let weight = self
+                    .implicit
+                    .map_or(ImplicitWeight { w0: 32, w1: 32 }, |table| {
+                        table.get(ref_idx0, ref_idx1)
+                    });
+                BiWeight {
+                    weight0: weight.w0,
+                    weight1: weight.w1,
+                    offset: 0,
+                    log2_denom: 5,
+                }
+            }
+        }
     }
 
     /// Clause 8.4.2.3's own bi-prediction combination -- the three
@@ -1934,6 +2001,7 @@ fn sample_chroma_2x2(
     cy0: i32,
     mv: (i16, i16),
     scratch: &mut ReadScratch,
+    mc: &H264McKernels,
 ) -> [[u8; 2]; 2] {
     #[allow(
         clippy::cast_possible_wrap,
@@ -1959,7 +2027,7 @@ fn sample_chroma_2x2(
                     let (rx, ry) = ((ax - rx0).max(0) as usize, (ay - ry0).max(0) as usize);
                     data.get(ry * stride + rx).copied().unwrap_or(0)
                 };
-                return crate::interp::chroma_mc_2x2(fetch, cx0, cy0, mvx, mvy);
+                return crate::interp::chroma_mc_2x2_with(mc, fetch, cx0, cy0, mvx, mvy);
             }
         };
         let fetch = |ax: i32, ay: i32| -> u8 {
@@ -1973,7 +2041,7 @@ fn sample_chroma_2x2(
                 .copied()
                 .unwrap_or(0)
         };
-        crate::interp::chroma_mc_2x2(fetch, cx0, cy0, mvx, mvy)
+        crate::interp::chroma_mc_2x2_with(mc, fetch, cx0, cy0, mvx, mvy)
     }
 }
 
@@ -1997,6 +2065,7 @@ fn predict_chroma_inter(
     chroma_height: u32,
     weights: InterWeights<'_>,
     scratch: &mut ReadScratch,
+    mc: &H264McKernels,
 ) -> [[u8; 8]; 8] {
     let empty = RefPlane::Flat(&[]);
     let mut out = [[0u8; 8]; 8];
@@ -2022,6 +2091,7 @@ fn predict_chroma_inter(
                 cy0,
                 info.mv_l0(),
                 scratch,
+                mc,
             )
         });
         let p1 = info.reads_l1().then(|| {
@@ -2033,27 +2103,31 @@ fn predict_chroma_inter(
                 cy0,
                 info.mv_l1(),
                 scratch,
+                mc,
             )
         });
 
-        for dy in 0..2i32 {
-            for dx in 0..2i32 {
-                let a = p0.map(|m| m[dy as usize][dx as usize]);
-                let b = p1.map(|m| m[dy as usize][dx as usize]);
-                let v = match (a, b) {
-                    (Some(a), Some(b)) => weights.combine(ref_idx0, ref_idx1, a, b),
-                    (Some(a), None) => weights.single(0, ref_idx0, a),
-                    (None, Some(b)) => weights.single(1, ref_idx1, b),
-                    (None, None) => 0,
-                };
-                let oy = (by * 2) as usize + dy as usize;
-                let ox = (bx * 2) as usize + dx as usize;
-                if let Some(row) = out.get_mut(oy)
-                    && let Some(cell) = row.get_mut(ox)
-                {
-                    *cell = v;
+        let (row0, col0) = ((by * 2) as usize, (bx * 2) as usize);
+        match (p0.as_ref(), p1.as_ref()) {
+            (Some(a), Some(b)) => {
+                let params = weights.bi_params(ref_idx0, ref_idx1);
+                for dy in 0..2usize {
+                    (mc.weight_bi)(&a[dy], &b[dy], &mut out[row0 + dy][col0..col0 + 2], params);
                 }
             }
+            (Some(a), None) => {
+                let params = weights.uni_params(0, ref_idx0);
+                for dy in 0..2usize {
+                    (mc.weight_uni)(&a[dy], &mut out[row0 + dy][col0..col0 + 2], params);
+                }
+            }
+            (None, Some(b)) => {
+                let params = weights.uni_params(1, ref_idx1);
+                for dy in 0..2usize {
+                    (mc.weight_uni)(&b[dy], &mut out[row0 + dy][col0..col0 + 2], params);
+                }
+            }
+            (None, None) => {}
         }
     }
     out
@@ -2115,8 +2189,9 @@ pub(crate) fn reconstruct_picture(
     let mut scratch = ReadScratch::new(budget)?;
     let mut buf = PictureBuffer::new(mbs_wide, mbs_high, budget)?;
     let caps = vaco_simd::Caps::detect();
+    let mc = H264McKernels::default();
     for mb in macroblocks {
-        reconstruct_mb(&mut buf, mb, &ctx, &mut scratch, caps)?;
+        reconstruct_mb(&mut buf, mb, &ctx, &mut scratch, caps, &mc)?;
     }
     scratch.check()?;
 
@@ -2194,6 +2269,7 @@ fn reconstruct_mb(
     ctx: &PictureCtx<'_>,
     scratch: &mut ReadScratch,
     caps: vaco_simd::Caps,
+    mc: &H264McKernels,
 ) -> vaco_core::Result<()> {
     // Clause 6.4.8: every availability test and every write below is
     // relative to the slice this macroblock belongs to. `+ 1` keeps `0`
@@ -2262,6 +2338,7 @@ fn reconstruct_mb(
             ref_height,
             luma_weights,
             scratch,
+            mc,
         );
     }
 
@@ -2284,6 +2361,7 @@ fn reconstruct_mb(
                 chroma_height,
                 chroma_weights,
                 scratch,
+                mc,
             )
         } else {
             let neighbours = chroma_neighbours(buf, comp, mb.mb_x, mb.mb_y);
@@ -2330,6 +2408,7 @@ pub(crate) struct PictureReconstructor {
     buf: PictureBuffer,
     scratch: ReadScratch,
     caps: vaco_simd::Caps,
+    mc: H264McKernels,
     /// Index of the next macroblock to reconstruct, so a row can be found in
     /// one pass rather than by scanning `macroblocks` for `mb_y == my`.
     cursor: usize,
@@ -2406,6 +2485,7 @@ impl PictureReconstructor {
             buf,
             scratch,
             caps: vaco_simd::Caps::detect(),
+            mc: H264McKernels::default(),
             cursor: 0,
         })
     }
@@ -2433,6 +2513,7 @@ impl PictureReconstructor {
                 ctx_for(slices, mb)?,
                 &mut self.scratch,
                 self.caps,
+                &self.mc,
             )?;
             self.cursor += 1;
         }
@@ -2456,6 +2537,7 @@ impl PictureReconstructor {
                 ctx_for(slices, mb)?,
                 &mut self.scratch,
                 self.caps,
+                &self.mc,
             )?;
         }
         self.cursor = macroblocks.len();
@@ -4092,6 +4174,7 @@ mod tests {
                         h,
                         mv,
                         &mut scratch,
+                        &H264McKernels::default(),
                     );
                     for oy in 0..h {
                         for ox in 0..w {

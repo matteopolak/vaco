@@ -26,3 +26,4 @@
 
 pub mod edge;
 pub mod fir;
+pub mod h264;

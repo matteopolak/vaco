@@ -28,6 +28,8 @@
     reason = "clause 8.4.2.2.1's own a..s naming for quarter-pel positions"
 )]
 
+use vaco_codec_dsp_mc::h264::H264McKernels;
+
 const fn clip_u8(v: i32) -> u8 {
     if v < 0 {
         0
@@ -175,18 +177,15 @@ pub(crate) fn luma_qpel_sample<F: Fn(i32, i32) -> u8>(
     clippy::needless_range_loop,
     reason = "r/ox are loop variables over 0..h+5/0..w, both bounded by the fixed 21/16-wide arrays this module declares them against"
 )]
-fn fill_raw_h(window: &[[u8; 21]; 21], w: usize, h: usize, raw_h: &mut [[i32; 16]; 21]) {
+fn fill_raw_h(
+    kernels: &H264McKernels,
+    window: &[[u8; 21]; 21],
+    w: usize,
+    h: usize,
+    raw_h: &mut [[i32; 16]; 21],
+) {
     for r in 0..h + 5 {
-        for ox in 0..w {
-            raw_h[r][ox] = tap6(
-                i32::from(window[r][ox]),
-                i32::from(window[r][ox + 1]),
-                i32::from(window[r][ox + 2]),
-                i32::from(window[r][ox + 3]),
-                i32::from(window[r][ox + 4]),
-                i32::from(window[r][ox + 5]),
-            );
-        }
+        (kernels.luma_half_raw)(&window[r][..w + 5], &mut raw_h[r][..w]);
     }
 }
 
@@ -298,7 +297,8 @@ fn fill_j_plane(raw_h: &[[i32; 16]; 21], w: usize, h: usize, j_plane: &mut [[u8;
     clippy::too_many_lines,
     reason = "every index below is a loop variable bounded by `w`/`h` (<= 16, clamped at entry) or a small constant offset from one -- provably in range for the fixed-size 21/17/16-wide arrays declared in this function, not bitstream-derived; `w`/`h` are both bounded by 16 well inside i32's range. Length: one branch per (need_h, need_v, need_j) combination (see this function's own doc), each self-contained so a branch that does not need a plane never declares -- and never zero-initialises -- it; splitting further would just re-hide the six combinations this match already makes explicit"
 )]
-pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
+pub(crate) fn luma_qpel_partition_with<F: Fn(i32, i32) -> u8>(
+    kernels: &H264McKernels,
     fetch: F,
     x: i32,
     y: i32,
@@ -356,7 +356,7 @@ pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
         (true, false, false) => {
             // b, a, c.
             let mut raw_h = [[0i32; 16]; 21];
-            fill_raw_h(&window, w, h, &mut raw_h);
+            fill_raw_h(kernels, &window, w, h, &mut raw_h);
             let mut h_plane = [[0u8; 16]; 17];
             fill_h_plane(&raw_h, w, h, &mut h_plane);
             for oy in 0..h {
@@ -388,7 +388,7 @@ pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
         (false, false, true) => {
             // j (frac_x == 2 && frac_y == 2 is the only member).
             let mut raw_h = [[0i32; 16]; 21];
-            fill_raw_h(&window, w, h, &mut raw_h);
+            fill_raw_h(kernels, &window, w, h, &mut raw_h);
             let mut j_plane = [[0u8; 16]; 16];
             fill_j_plane(&raw_h, w, h, &mut j_plane);
             for oy in 0..h {
@@ -400,7 +400,7 @@ pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
         (true, true, false) => {
             // e, g, p, r.
             let mut raw_h = [[0i32; 16]; 21];
-            fill_raw_h(&window, w, h, &mut raw_h);
+            fill_raw_h(kernels, &window, w, h, &mut raw_h);
             let mut h_plane = [[0u8; 16]; 17];
             fill_h_plane(&raw_h, w, h, &mut h_plane);
             let mut v_plane = [[0u8; 17]; 16];
@@ -423,7 +423,7 @@ pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
         (true, false, true) => {
             // f, q.
             let mut raw_h = [[0i32; 16]; 21];
-            fill_raw_h(&window, w, h, &mut raw_h);
+            fill_raw_h(kernels, &window, w, h, &mut raw_h);
             let mut h_plane = [[0u8; 16]; 17];
             fill_h_plane(&raw_h, w, h, &mut h_plane);
             let mut j_plane = [[0u8; 16]; 16];
@@ -442,7 +442,7 @@ pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
         (false, true, true) => {
             // i, k.
             let mut raw_h = [[0i32; 16]; 21];
-            fill_raw_h(&window, w, h, &mut raw_h);
+            fill_raw_h(kernels, &window, w, h, &mut raw_h);
             let mut v_plane = [[0u8; 17]; 16];
             fill_v_plane(&window, w, h, &mut v_plane);
             let mut j_plane = [[0u8; 16]; 16];
@@ -475,6 +475,32 @@ pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
             }
         }
     }
+}
+
+/// Convenience entry for tests and non-decoder callers. The decoder uses
+/// [`luma_qpel_partition_with`] with a table resolved once per picture.
+#[cfg(test)]
+pub(crate) fn luma_qpel_partition<F: Fn(i32, i32) -> u8>(
+    fetch: F,
+    x: i32,
+    y: i32,
+    w: usize,
+    h: usize,
+    frac_x: u32,
+    frac_y: u32,
+    out: &mut [[u8; 16]; 16],
+) {
+    luma_qpel_partition_with(
+        &H264McKernels::default(),
+        fetch,
+        x,
+        y,
+        w,
+        h,
+        frac_x,
+        frac_y,
+        out,
+    );
 }
 
 /// Clause 8.4.2.2.2, eq. (8-206)..(8-214): one interpolated chroma sample
@@ -530,7 +556,8 @@ pub(crate) fn chroma_mc_sample<F: Fn(i32, i32) -> u8>(
     clippy::indexing_slicing,
     reason = "array::from_fn bounds dy/dx to 0..2, so dy+1/dx+1 stay within the fixed 3x3 window"
 )]
-pub(crate) fn chroma_mc_2x2<F: Fn(i32, i32) -> u8>(
+pub(crate) fn chroma_mc_2x2_with<F: Fn(i32, i32) -> u8>(
+    kernels: &H264McKernels,
     fetch: F,
     x: i32,
     y: i32,
@@ -551,21 +578,24 @@ pub(crate) fn chroma_mc_2x2<F: Fn(i32, i32) -> u8>(
             )
         })
     });
-    let weights = [
-        (8 - frac_x) * (8 - frac_y),
-        frac_x * (8 - frac_y),
-        (8 - frac_x) * frac_y,
-        frac_x * frac_y,
-    ];
-    core::array::from_fn(|dy| {
-        core::array::from_fn(|dx| {
-            let sum = weights[0] * i32::from(window[dy][dx])
-                + weights[1] * i32::from(window[dy][dx + 1])
-                + weights[2] * i32::from(window[dy + 1][dx])
-                + weights[3] * i32::from(window[dy + 1][dx + 1]);
-            clip_u8((sum + 32) >> 6)
-        })
-    })
+    (kernels.chroma_2x2)(
+        &window,
+        u8::try_from(frac_x).unwrap_or(0),
+        u8::try_from(frac_y).unwrap_or(0),
+    )
+}
+
+/// Convenience entry for tests; production retains one selected table.
+#[must_use]
+#[cfg(test)]
+pub(crate) fn chroma_mc_2x2<F: Fn(i32, i32) -> u8>(
+    fetch: F,
+    x: i32,
+    y: i32,
+    mv_x: i32,
+    mv_y: i32,
+) -> [[u8; 2]; 2] {
+    chroma_mc_2x2_with(&H264McKernels::default(), fetch, x, y, mv_x, mv_y)
 }
 
 #[cfg(test)]

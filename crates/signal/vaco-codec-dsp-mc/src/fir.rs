@@ -213,6 +213,20 @@ pub fn fir_pass_i32<const N: usize>(src: &[u8], coeffs: &[i16; N], dst_len: usiz
         .collect()
 }
 
+/// Allocation-free form of [`fir_pass_i32`] for codec hot paths.
+///
+/// Writes `min(dst.len(), src.len() - (N - 1))` raw sums and leaves the
+/// remaining destination untouched. Keeping the destination caller-owned is
+/// what lets a decoder batch several motion-compensation rows behind one
+/// resolved kernel-table call without allocating per row.
+pub fn fir_pass_i32_into<const N: usize>(src: &[u8], coeffs: &[i16; N], dst: &mut [i32]) {
+    let available = src.len().saturating_sub(N.saturating_sub(1));
+    let len = dst.len().min(available);
+    for (i, out) in dst.iter_mut().take(len).enumerate() {
+        *out = tap_sum(src.get(i..i + N).unwrap_or(&[]), coeffs);
+    }
+}
+
 /// A two-pass separable FIR over a `src_w x src_h` block, producing a
 /// `dst_w x dst_h` output.
 ///
