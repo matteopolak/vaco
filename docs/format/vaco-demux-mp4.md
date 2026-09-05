@@ -822,7 +822,9 @@ crate decides what becomes a stream:
   boxes, because `av1C`/`hvcC`/`colr`/`pasp`/`pixi` are literally the same
   boxes in both worlds. A malformed present `ipma` table, including an index
   beyond its `ipco` property list, a duplicate ID, or a descending ID refuses
-  the item file rather than applying a partial property configuration. An
+  the item file rather than applying a partial property configuration. A
+  duplicate `iloc` item ID likewise refuses the item file rather than letting
+  first-match range resolution select arbitrary item bytes. An
   ordered association may still name an entity group rather than an `iinf`
   item. An essential property the resolver cannot
   apply discards only its associated item. Exactly one `ispe` supplies each

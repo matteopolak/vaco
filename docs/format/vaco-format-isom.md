@@ -789,7 +789,9 @@ Named so the demuxer's author knows what is not here:
   out-of-bounds apertures are refused. `iloc` accepts only its defined `0`,
   `4`, and `8` byte field widths and versions `0` through `2`; its v1/v2
   `construction_method` is exactly `0`, `1`, or `2` (including zero reserved
-  bits). `ipma` accepts only its version `0`/`1` item-ID layouts, requires
+  bits). It permits at most one location record per item ID, so later range
+  resolution cannot choose the first of two conflicting locations. `ipma`
+  accepts only its version `0`/`1` item-ID layouts, requires
   strictly increasing association IDs, and refuses its invalid zero property
   index. Association IDs may still name ordered entity groups, not only
   `iinf` items. The item resolver also checks each association

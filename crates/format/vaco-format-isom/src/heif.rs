@@ -214,6 +214,12 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
         } else {
             r.be32()
         };
+        if out
+            .iter()
+            .any(|location: &ItemLocation| location.item_id == item_id)
+        {
+            return Vec::new();
+        }
         let construction_method = if full.version >= 1 {
             match r.be16() {
                 0 => ConstructionMethod::FileOffset,
@@ -581,6 +587,16 @@ mod tests {
         assert_eq!(items[0].item_id, 1);
         assert_eq!(items[0].construction_method, ConstructionMethod::FileOffset);
         assert_eq!(items[0].extents, vec![(0x121, 0x2f9)]);
+    }
+
+    #[test]
+    fn iloc_refuses_duplicate_item_ids() {
+        // Duplicate the one location record in the real FFmpeg AVIF shape.
+        // The resolver otherwise chooses whichever location happens to appear
+        // first for the item's ID.
+        let body = hex_bytes("4400000200010000000100000121000002f900010000000100000121000002f9");
+        let raw = fullbx(b"iloc", 0, 0, &body);
+        assert!(parse_iloc(&first_box(&raw)).is_empty());
     }
 
     #[test]
