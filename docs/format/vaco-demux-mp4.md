@@ -643,10 +643,11 @@ deltas are unsigned and monotonicity is guaranteed by construction.
 **2026-08-23.** `sinf ▸ schm` and `sinf ▸ schi ▸ tenc` are read through
 [`vaco_format_isom::stsd::SampleEntry::cenc`], which returns
 [`vaco_format_isom::cenc::CencInfo`]. When a track is protected, its `Stream`
-gets `encryption_scheme` (e.g. `cenc`), `encryption_key_id` (the
-`default_KID`, lower-case hex), and `encryption_iv_size` (the decimal
-`default_Per_Sample_IV_Size`) tags — `codec_name` already reads as the
-*original* codec via `effective_format` — and `pssh` boxes become
+gets `encryption_scheme` (e.g. `cenc`), `encryption_scheme_version` (the raw
+decimal 16.16 `schm` version — `65536` for the measured `1.0`),
+`encryption_key_id` (the `default_KID`, lower-case hex), and
+`encryption_iv_size` (the decimal `default_Per_Sample_IV_Size`) tags —
+`codec_name` already reads as the *original* codec via `effective_format` — and `pssh` boxes become
 container-level `encryption_system_id` tags. A version-1 `pssh` additionally
 emits one `encryption_key_id` tag for every declared KID, in declaration order;
 the same helper handles `pssh` under `moov` and top-level `pssh` beside `moof`.

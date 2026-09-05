@@ -826,6 +826,10 @@ impl Mp4Demuxer {
                     "encryption_scheme".to_owned(),
                     String::from_utf8_lossy(&scheme.scheme_type.as_bytes()).into_owned(),
                 ));
+                stream.metadata.push((
+                    "encryption_scheme_version".to_owned(),
+                    scheme.scheme_version.to_string(),
+                ));
             }
             if let Some(te) = cenc.track_encryption {
                 stream

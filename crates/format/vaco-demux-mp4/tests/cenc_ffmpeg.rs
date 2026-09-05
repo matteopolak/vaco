@@ -895,6 +895,13 @@ fn ffmpeg_cenc_aes_ctr_subsample_and_full_sample_decrypt_to_the_clear_packets() 
         assert!(
             s.metadata
                 .iter()
+                .any(|(k, v)| k == "encryption_scheme_version" && v == "65536"),
+            "stream {} must report the measured schm scheme version",
+            s.index
+        );
+        assert!(
+            s.metadata
+                .iter()
                 .any(|(k, v)| k == "encryption_key_id" && v == KID_HEX),
             "stream {} must report its key id",
             s.index
