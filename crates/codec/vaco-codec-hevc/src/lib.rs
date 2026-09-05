@@ -86,8 +86,7 @@
 //!   one value rather than a `use_dst` flag beside a separate skip flag.
 //!   Verified byte-exact against `ffmpeg` on real `libx265 --tskip` output
 //!   (`tests/tskip.rs`, plus an I/P/B encode measured out of tree).
-//! - **Tiles.** Refused; only a plain single-tile, independent-slice-segment
-//!   picture is decoded.
+//! - **Tiles.** Refused; only a plain single-tile picture is decoded.
 //! - **Wavefront (`entropy_coding_sync_enabled_flag`) is implemented** — see
 //!   `decoder::decode_wpp_rows`'s own doc for the per-row CABAC-substream
 //!   split, the §9.3.2.3 context save/restore, and why entry-point offsets
@@ -126,11 +125,13 @@
 //!   chroma formats other than 4:2:0, `separate_colour_plane_flag`,
 //!   tiles, chroma QP offset lists, every SPS/PPS range-extension and
 //!   screen-content-coding flag,
-//!   long-term reference pictures and dependent slice segments. Multiple
-//!   independent segments are decoded when they share their slice context,
-//!   enable filtering across their boundaries, and do not use WPP; other
-//!   multi-segment combinations are refused by name rather than decoded with
-//!   the wrong neighbour availability. The SPS/PPS ones are refused at
+//!   long-term reference pictures. Dependent slice segments inherit their
+//!   preceding independent header and CABAC context, while independent
+//!   segments restart both. Multiple independent segments are decoded when
+//!   they share their picture-wide context, enable filtering across their
+//!   boundaries, and do not use WPP; WPP multi-segment combinations are
+//!   refused by name rather than decoded with the wrong neighbour
+//!   availability. The SPS/PPS ones are refused at
 //!   `check_scope`; the rest the moment the bitstream actually uses the
 //!   feature, so a PPS that declares a flag it never exercises decodes fine.
 //!

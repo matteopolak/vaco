@@ -253,6 +253,7 @@ impl HevcDecoder {
             ));
         }
         let mut slice_starts: Vec<u32> = self.budget.alloc(slice_nals.len())?;
+        let mut slice_is_dependent: Vec<bool> = self.budget.alloc(slice_nals.len())?;
         let Some(first_start) = slice_starts.first_mut() else {
             return Err(Error::InvalidData(
                 "vaco-codec-hevc: picture has no slice segments",
@@ -282,17 +283,12 @@ impl HevcDecoder {
                 &mut self.budget,
             )?;
             segment_reader.check()?;
-            if segment_hdr.dependent {
-                return Err(Error::Unsupported(
-                    "vaco-codec-hevc: dependent slice segments are not supported",
-                ));
-            }
             if segment_hdr.first_slice_segment_in_pic {
                 return Err(Error::InvalidData(
                     "vaco-codec-hevc: second first-slice segment in one access unit",
                 ));
             }
-            if !matching_independent_slice_header(&hdr, &segment_hdr) {
+            if !segment_hdr.dependent && !matching_independent_slice_header(&hdr, &segment_hdr) {
                 return Err(Error::Unsupported(
                     "vaco-codec-hevc: independent slice segments with differing headers are not supported",
                 ));
@@ -303,6 +299,12 @@ impl HevcDecoder {
                 ));
             };
             *start = segment_hdr.slice_segment_address;
+            let Some(is_dependent) = slice_is_dependent.get_mut(index) else {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: slice segment count changed while parsing",
+                ));
+            };
+            *is_dependent = segment_hdr.dependent;
         }
 
         let slice_qp = 26 + pps.init_qp_minus26 + hdr.qp_delta;
@@ -348,12 +350,30 @@ impl HevcDecoder {
                 ));
             }
         }
+        // A slice consists of its independent segment and every following
+        // dependent segment up to the next independent one (§6.3.1). Its
+        // spatial-neighbour boundary therefore ends at the next independent
+        // segment, rather than at this segment's coded-data boundary.
+        let mut slice_ends: Vec<u32> = self.budget.alloc(slice_starts.len())?;
+        let mut next_independent_start = total_ctbs;
+        for index in (0..slice_starts.len()).rev() {
+            if !slice_is_dependent.get(index).copied().unwrap_or(true) {
+                let Some(end) = slice_ends.get_mut(index) else {
+                    return Err(Error::InvalidData(
+                        "vaco-codec-hevc: slice segment count changed while deriving slice ends",
+                    ));
+                };
+                *end = next_independent_start;
+                next_independent_start = slice_starts.get(index).copied().unwrap_or(0);
+            }
+        }
         if slice_starts.len() > 1 && pps.entropy_coding_sync_enabled {
             return Err(Error::Unsupported(
                 "vaco-codec-hevc: multiple WPP slice segments are not supported",
             ));
         }
-        if slice_starts.len() > 1 && !hdr.loop_filter_across_slices_enabled {
+        let multiple_independent_slices = slice_is_dependent.iter().skip(1).any(|&v| !v);
+        if multiple_independent_slices && !hdr.loop_filter_across_slices_enabled {
             return Err(Error::Unsupported(
                 "vaco-codec-hevc: slice boundaries with loop filtering disabled are not supported",
             ));
@@ -600,6 +620,12 @@ impl HevcDecoder {
                 hdr.cabac_init,
             )?;
         } else {
+            // §9.3.2.1 starts a fresh arithmetic decoding engine for every
+            // segment, but §9.3.2.5 synchronizes a dependent segment's CABAC
+            // context variables from its predecessor. Keep the context bank
+            // across dependent boundaries and replace it at each independent
+            // slice boundary only.
+            let mut cabac_context: Option<ContextBank> = None;
             for (index, &ebsp) in slice_nals.iter().enumerate() {
                 let start_ctb = slice_starts.get(index).copied().ok_or(Error::InvalidData(
                     "vaco-codec-hevc: slice segment address missing while decoding",
@@ -624,9 +650,18 @@ impl HevcDecoder {
                 reader.check()?;
                 reader.align();
                 let cabac_data = reader.remaining_bytes();
-                walk.begin_slice_segment(start_ctb, end_ctb, slice_qp);
+                if !parsed.dependent {
+                    let slice_end_ctb =
+                        slice_ends.get(index).copied().ok_or(Error::InvalidData(
+                            "vaco-codec-hevc: logical slice end missing while decoding",
+                        ))?;
+                    walk.begin_slice_segment(start_ctb, slice_end_ctb, slice_qp);
+                    cabac_context = Some(new_context_bank(parsed.kind, parsed.cabac_init, qp_i8));
+                }
                 let mut cabac = CabacDecoder::new(cabac_data);
-                let mut ctx = new_context_bank(parsed.kind, parsed.cabac_init, qp_i8);
+                let ctx = cabac_context.as_mut().ok_or(Error::InvalidData(
+                    "vaco-codec-hevc: dependent slice segment has no preceding independent segment",
+                ))?;
                 let mut terminated = false;
                 for addr in start_ctb..end_ctb {
                     let col = addr.checked_rem(ctbs_x).unwrap_or(0);
@@ -641,7 +676,7 @@ impl HevcDecoder {
                     walk.recon.begin_ctu(row_us, col_us)?;
                     let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
                     let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
-                    ctu::decode_ctu(&mut cabac, &mut ctx, &mut walk, cx, cy, addr)?;
+                    ctu::decode_ctu(&mut cabac, &mut *ctx, &mut walk, cx, cy, addr)?;
                     walk.recon.publish_ctu(row_us, col_us)?;
                     let end = cabac.decode_terminate();
                     if cabac.malformed() {

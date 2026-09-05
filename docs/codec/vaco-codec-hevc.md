@@ -367,24 +367,35 @@ the lockfile's SHA-256-verified `NUT_A_ericsson_5.bit`: this decoder and
 `ffmpeg 9.0.1` both output 34 416x240 yuv420p frames (5,091,840 bytes), and
 every byte matches.
 
-### Independent slice-segment assembly
+### Independent and dependent slice-segment assembly
 
-An access unit may contain several independent slice segments. The decoder
-parses every header before reconstructing, validates strictly increasing CTB
-ranges, restarts CABAC and QP state at each range, and gates spatial syntax,
-intra references, motion candidates, and SAO merges to the current range.
-This is required because a previously reconstructed CTB in another slice is
-not an available neighbour under §6.4.1.
+An access unit may contain independent slice segments and the dependent
+segments belonging to them. The decoder parses every header before
+reconstructing and validates strictly increasing CTB ranges. Each independent
+segment starts a fresh CABAC context/QP state and defines a logical slice range;
+a dependent segment inherits that active header, creates a new arithmetic
+decoder for its own coded data, and carries the CABAC context, QP predictor,
+and neighbour availability across its boundary. This follows §6.3.1,
+§7.4.7.1, and §9.3.2.1/.5: a dependent segment is part of the same slice, not
+a new unavailable-neighbour range.
 
-The supported shape currently requires matching picture-wide decoding fields,
-`slice_loop_filter_across_slices_enabled_flag`, and no WPP. Each segment may
-select its own fresh CABAC initialisation; dependent segments, WPP
-multi-segment pictures, loop-filter-disabled boundaries, and segments whose
-headers require distinct picture-wide context remain named refusals. JCT-VC
-`HRD_A_Fujitsu_3` exercises four raster-contiguous,
-independent row segments per 416x240 picture; the vendored stream has 96
-yuv420p frames and the conformance package's published visible-byte MD5
-`f6d04dba2ef09bcadbea7b8ab5c8c917`.
+The supported shape requires matching picture-wide decoding fields for every
+independent segment, `slice_loop_filter_across_slices_enabled_flag` when there
+is more than one independent slice, and no WPP or tiles. WPP multi-segment
+pictures, tile pictures, loop-filter-disabled independent-slice boundaries,
+and independent headers requiring distinct picture-wide context remain named
+refusals.
+
+JCT-VC `HRD_A_Fujitsu_3` exercises four raster-contiguous independent row
+segments per 416x240 picture; its vendored stream has 96 yuv420p frames and
+the package's published visible-byte MD5
+`f6d04dba2ef09bcadbea7b8ab5c8c917`. `DSLICE_A_HHI_5` exercises both kinds of
+segment over 50 1920x1080 yuv420p frames. The checked-in 373,328-byte Annex-B
+stream (SHA-256
+`8398fb23c814a197bba497ad2c6103f81ca8003434fa40ec347d4d0a07c9468a`)
+decodes to 155,520,000 visible bytes with MD5
+`c7caf3164b0a316549ac7244f66f1294`, identical to both the package's `.md5`
+and a local black-box `ffmpeg 9.0.1` decode measured on 2026-09-05.
 
 ### I_PCM and transquant-bypass decoding
 
