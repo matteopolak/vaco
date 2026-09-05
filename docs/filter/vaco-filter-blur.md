@@ -211,6 +211,41 @@ otherwise order-dependent construction, the same class of finding as
 well-defined directional blur, but not the reference's exact algorithm.
 See `src/dblur.rs`'s doc.
 
+### Performance slice: precomputed dblur bilinear samples
+
+`dblur::blur_plane` now precomputes the clamped left/right coordinates and
+fractions for every horizontal and vertical tap before walking the pixels.
+The hot loop reuses those values while retaining the original tap order and
+floating-point interpolation order, so the directional output is unchanged.
+
+The callee-first Samply profile of the prior binary found `clamp` (21.89%),
+`is_empty` (16.42%), `get<u8>` (15.92%), and `sample_bilinear` (14.18%) as
+the leading in-process leaves; `blur_plane` was only 3.23% because of those
+inlined helpers. The candidate profile resolves 96.5% of all samples inside
+the binary, with `blur_plane` at 47.75% and `bilinear_sample` at 3.60%.
+
+Measured end to end through `vvmpeg` on this machine (Apple silicon, 10
+cores), with a 30-frame 640x360 yuv420p Y4M fixture and
+`dblur=angle=45:radius=8:planes=15`, release `dist` builds in
+`/private/tmp/vaco-blur-perf-target`, `-threads 1`, and ten rotated
+before/after/ffmpeg rounds:
+
+| implementation | median wall | median child CPU | output |
+|---|---:|---:|---:|
+| before (per-tap coordinate and interpolation setup) | 0.4095 s | 0.3942 s | 10,368,000 bytes |
+| after (precomputed bilinear samples) | 0.3162 s | 0.3091 s | 10,368,000 bytes |
+| ffmpeg 9.0.1 | 0.0494 s | 0.0437 s | 10,368,000 bytes |
+
+The candidate is 1.30x faster by wall time and 1.27x by child CPU time than
+the prior implementation, and is 6.40x the same-session ffmpeg wall time.
+The named xctrace `CPU Counters` Cycles component fell from 4,031,327 to
+3,273,063 (0.812x). Before and after SHA-256 are identical
+(`870facccad87b3d41b623902cc968c31336922e7f43ba7a0f0efe12ec4f0e6ad`), and
+the candidate produced that same 10,368,000-byte hash at `-threads 1/2/4/8`.
+Against ffmpeg, 42.69% of bytes are equal, with mean absolute byte
+difference 3.216, maximum 102, and signed mean -0.0249; this is the known
+directional-kernel scope difference above, not a candidate output drift.
+
 ### `yaepblur`: variance-gated blend, sigma trend confirmed, formula not solved
 
 Measured (`radius=1`, an interior step edge): larger `sigma` visibly blurs
@@ -245,6 +280,42 @@ per-pixel radius is actually computed, and exercised end-to-end through
 the real `Graph`/`Synced` scheduler in `tests_graph.rs` (not just its pure
 helper functions). See `src/varblur.rs`'s doc.
 
+### Performance slice: precomputed varblur coordinate windows
+
+`varblur::blur_plane` now precomputes clamped horizontal and vertical
+coordinates through the maximum configured radius. Each pixel reuses those
+indices for its control-derived window, retaining the original dy/dx order,
+integer accumulation, and truncation semantics while avoiding repeated
+clamping and row lookup.
+
+The baseline Samply profile resolved 97.1% of samples inside `vvmpeg`; its
+leading leaves were the inner closure (35.59%), `overflowing_add` (26.46%),
+`get<u8>` (17.01%), and `copied<u8>` (8.19%). The candidate profile resolves
+97.4% in-process, with indexed reads (`get<usize>`) at 47.51% and the inner
+loop's `copied<u8>` at 19.91%.
+
+Measured through the real two-input CLI graph
+`[0:v][1:v]varblur=min_r=0:max_r=8:planes=1[out]` on this machine (Apple
+silicon, 10 cores), using 30-frame 640x360 yuv420p main and radius-map Y4M
+fixtures, release `dist` binaries in `/private/tmp/vaco-blur-perf-target`,
+and ten rotated before/after/ffmpeg rounds:
+
+| implementation | median wall | median child CPU | payload |
+|---|---:|---:|---:|
+| before (per-tap clamping and row lookup) | 0.3990 s | 0.3897 s | 10,368,180 bytes |
+| after (precomputed coordinate windows) | 0.2262 s | 0.2140 s | 10,368,180 bytes |
+| ffmpeg 9.0.1 | 0.0283 s | 0.0598 s | 10,368,180 bytes |
+
+The candidate is 1.76x faster by wall time and 1.82x by child CPU time than
+the prior implementation, and is 8.00x the same-session ffmpeg wall time.
+Named xctrace `CPU Counters` Cycles fell from 2,488,204 to 1,822,218
+(0.732x). Before and after Y4M SHA-256 are identical
+(`bb949855c028756950a29205562925dc4f3ec59a3fcae65957d75901e147482a`), and
+the candidate produced that same 10,368,180-byte payload hash at `-threads
+1/2/4/8`. Against ffmpeg, 69.22% of payload bytes are equal, with mean
+absolute difference 4.165, maximum 89, and signed mean +0.149; this is the
+documented structural/reference gap, not candidate drift.
+
 ### `guided`: the He et al. (2010) formula, self-guided mode only
 
 `guidance=off` (self-guided, the default) is implemented directly from the
@@ -256,6 +327,39 @@ Verified via a flat-field identity invariant that is a property of the
 published formula's own algebra (`var_I = 0` forces `a = 0`, `b = I`,
 regardless of `radius`/`eps`) — not probed against the reference in this
 pass. See `src/guided.rs`'s doc.
+
+### Performance slice: precomputed guided-filter window indices
+
+`guided::box_avg` now precomputes the clamped horizontal and vertical index
+for each window tap, then reuses those indices across the four box averages
+in `guided_plane`. The original vertical-then-horizontal summation order and
+floating-point arithmetic remain unchanged, preserving byte output.
+
+The baseline Samply profile resolved 99.3% of samples inside `vvmpeg`; its
+leading leaves were `get<f64>` (55.96%), `box_avg` (28.49%), and `clamp`
+(7.89%). The candidate profile resolves 99.0% in-process, with `box_avg` at
+70.12% after the indexing overhead was removed.
+
+Measured through `vvmpeg` on this machine (Apple silicon, 10 cores), using an
+8-frame 640x360 yuv420p Y4M fixture and
+`guided=radius=8:eps=0.01:planes=1`, release `dist` binaries in
+`/private/tmp/vaco-blur-perf-target`, and ten rotated before/after/ffmpeg
+rounds:
+
+| implementation | median wall | median child CPU | output |
+|---|---:|---:|---:|
+| before (per-tap clamp and nested lookup) | 1.2982 s | 1.2796 s | 2,764,800 bytes |
+| after (precomputed window indices) | 1.1754 s | 1.1578 s | 2,764,800 bytes |
+| ffmpeg 9.0.1 | 0.3244 s | 1.9798 s | 2,764,800 bytes |
+
+The candidate is 1.10x faster by both wall and child CPU time. Named xctrace
+`CPU Counters` Cycles fell from 6,496,545 to 3,477,417 (0.535x). Before and
+after output SHA-256 are identical
+(`245ce8a01dbc22da87472f28e57e9cf5a9935c786621928ae69b2869e78c7a0d`), and
+the candidate produced that same 2,764,800-byte hash at `-threads 1/2/4/8`.
+Against ffmpeg, 81.25% of bytes are equal, with mean absolute difference
+0.187, maximum 1, and signed mean +0.187; this is a one-count rounding
+difference from the structural implementation, not candidate drift.
 
 ## What is verified versus structural
 
