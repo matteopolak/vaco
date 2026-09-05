@@ -33,6 +33,10 @@ analogue in `lut1d.rs`.
 
 ## How it works
 
+`haldclutsrc` converts its finite `duration` option directly to inverse-rate
+ticks with nearest rounding, preserving large `30000/1001` frame budgets
+without an `f64` seconds intermediate.
+
 ### `.cube`: a documented format, not reference behaviour
 
 `LUT_3D_SIZE N` followed by `N^3` `"r g b"` rows (red fastest-varying), or

@@ -126,6 +126,13 @@ struct Source {
     next: i64,
 }
 
+fn frame_budget(duration: VDuration, rate: Rational) -> u64 {
+    duration
+        .to_ticks_rounding(rate.inverse(), vaco_core::Rounding::NearestAwayFromZero)
+        .and_then(|frames| u64::try_from(frames.max(0)).ok())
+        .unwrap_or(0)
+}
+
 impl SourceFilter for Source {
     fn configure(&mut self, ctx: &mut FilterContext<'_>) -> Result<()> {
         if let Some(mut out) = ctx.output_link(0).cloned() {
@@ -195,14 +202,10 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
     let n = level.saturating_mul(level);
     let side = level.saturating_pow(3);
     let rate = opts.rate.0;
-    let total_frames = if opts.duration.as_micros() < 0 {
+    let total_frames = if opts.duration < VDuration::ZERO {
         None
     } else {
-        Some(
-            (opts.duration.as_secs_f64() * rate.to_f64())
-                .round()
-                .max(0.0) as u64,
-        )
+        Some(frame_budget(opts.duration, rate))
     };
     let source = Source {
         side,
@@ -231,6 +234,14 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_budget_retains_a_large_awkward_clock_duration() {
+        let frames = 9_007_199_254_740_993_i64;
+        let duration = VDuration::from_ticks(frames, Rational::new(1_001, 30_000))
+            .unwrap_or(VDuration::ZERO);
+        assert_eq!(frame_budget(duration, Rational::new(30_000, 1_001)), frames as u64);
+    }
 
     fn frame_rows(level: u32) -> Vec<Vec<u8>> {
         let n = level * level;
