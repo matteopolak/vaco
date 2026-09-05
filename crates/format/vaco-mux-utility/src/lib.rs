@@ -1,27 +1,11 @@
-//! Utility sink muxers: `null` and `mkvtimestamp_v2` (FM-20, issue #572).
+//! Utility sink muxers: `null` and `mkvtimestamp_v2`.
 //!
-//! # What this crate is
+//! [`null`] discards every packet. [`mkvtimestamp_v2`] writes a header followed
+//! by one PTS-in-ms line per video frame.
 //!
-//! The two registrations issue #572 asks for that
-//! [`vaco-mux-hash`](../vaco_mux_hash/index.html) did not implement: terminal
-//! sinks that either discard every byte ([`null`]) or dump one plain-text
-//! line per frame ([`mkvtimestamp_v2`]). Neither owns another muxer and
-//! neither reads untrusted input, which is what separates this crate from
-//! `vaco-mux-stream`'s meta-muxers (`segment`, `tee`, `fifo`, …) — see that
-//! crate's docs for why the two were split rather than merged.
-//!
-//! `uncodedframecrc`, the third registration issue #572 names, is **not**
-//! implemented here. It hashes decoded frames and needs per-frame geometry
-//! that [`vaco_format_core::Muxer::write_packet`] has no channel for — see
-//! `docs/format/vaco-mux-utility.md` for the full accounting, which matches
-//! `vaco-mux-hash`'s documented reasoning for the same gap.
-//!
-//! # Layout
-//!
-//! | Module | Registration | Shape |
-//! |---|---|---|
-//! | [`null`] | `null` | discards every packet |
-//! | [`mkvtimestamp`] | `mkvtimestamp_v2` | header + one PTS-in-ms line per video frame |
+//! `uncodedframecrc` is not included because hashing decoded frames requires
+//! per-frame geometry that [`vaco_format_core::Muxer::write_packet`] does not
+//! carry.
 
 #![forbid(unsafe_code)]
 
