@@ -490,6 +490,57 @@ impl TileLayout {
         Ok(ranges)
     }
 
+    /// Convert tiles-plus-WPP entry-point lengths into substream byte ranges.
+    ///
+    /// The ranges are ordered by tile scan, with one range for each CTB row
+    /// within a tile. This differs from [`Self::tile_substream_byte_ranges`],
+    /// where one range spans a complete tile.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::InvalidData`] when the count is not one
+    /// less than the tiles-plus-WPP substream count, or an offset is invalid.
+    pub fn wpp_tile_substream_byte_ranges(
+        &self,
+        data_len: usize,
+        entry_point_offsets: &[u32],
+    ) -> Result<Vec<(usize, usize)>> {
+        let expected = self
+            .entry_point_offset_count(true)
+            .ok_or(Error::InvalidData(
+                "vaco-codec-hevc: tile WPP substream count overflow",
+            ))?;
+        if entry_point_offsets.len() != usize::try_from(expected).unwrap_or(usize::MAX) {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: tile WPP entry point count does not match substreams",
+            ));
+        }
+        let mut ranges = Vec::new();
+        let mut start = 0usize;
+        for &offset in entry_point_offsets {
+            let length = usize::try_from(offset).map_err(|_| {
+                Error::InvalidData("vaco-codec-hevc: tile WPP entry point offset too large")
+            })?;
+            if length == 0 {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: tile WPP entry point offset is zero",
+                ));
+            }
+            let end = start.checked_add(length).ok_or(Error::InvalidData(
+                "vaco-codec-hevc: tile WPP entry point offset overflow",
+            ))?;
+            if end > data_len {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: tile WPP entry point exceeds slice data",
+                ));
+            }
+            ranges.push((start, end));
+            start = end;
+        }
+        ranges.push((start, data_len));
+        Ok(ranges)
+    }
+
     /// Borrow the first tile's coded substream for CABAC initialization.
     ///
     /// The returned bytes begin immediately after the aligned slice header;

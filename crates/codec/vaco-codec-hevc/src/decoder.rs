@@ -692,11 +692,6 @@ impl HevcDecoder {
             .transpose()?;
 
         if pps.entropy_coding_sync_enabled {
-            if tile_layout.is_some() {
-                return Err(Error::Unsupported(
-                    "vaco-codec-hevc: tiles combined with entropy coding sync are not supported",
-                ));
-            }
             // §7.4.7.1's entry-point offsets are byte counts over the *coded*
             // (still-escaped) slice segment data, emulation-prevention bytes
             // included by the specification's own words — not over the
@@ -778,6 +773,48 @@ impl HevcDecoder {
                     );
                     (segment_qp, parsed.kind, parsed.cabac_init)
                 };
+                if let Some(layout) = tile_layout.as_ref() {
+                    let slice_end_ctb = slice_ends.get(index).copied().ok_or(
+                        Error::InvalidData(
+                            "vaco-codec-hevc: logical WPP tile slice end missing while decoding",
+                        ),
+                    )?;
+                    if slice_nals.len() != 1
+                        || parsed.dependent
+                        || start_ctb != 0
+                        || end_ctb != total_ctbs
+                        || slice_end_ctb != total_ctbs
+                    {
+                        return Err(Error::Unsupported(
+                            "vaco-codec-hevc: only one independent full-picture WPP tile slice is supported",
+                        ));
+                    }
+                    if pps.cu_qp_delta_enabled {
+                        return Err(Error::Unsupported(
+                            "vaco-codec-hevc: WPP tile pictures with cu_qp_delta are not supported",
+                        ));
+                    }
+                    if parsed.sao_luma || parsed.sao_chroma {
+                        return Err(Error::Unsupported(
+                            "vaco-codec-hevc: WPP tile SAO filtering is not supported",
+                        ));
+                    }
+                    walk.begin_slice_segment(0, total_ctbs, segment_qp);
+                    decode_wpp_tile_substreams(
+                        &mut self.budget,
+                        ebsp,
+                        header_rbsp_len,
+                        &parsed.entry_point_offsets,
+                        layout,
+                        &mut walk,
+                        ctbs_y,
+                        ctb_size_i,
+                        i8::try_from(segment_qp.clamp(0, 51)).unwrap_or(0),
+                        segment_kind,
+                        segment_cabac_init,
+                    )?;
+                    continue;
+                }
                 if !parsed.dependent {
                     dependent_context = None;
                     wpp_context = None;
@@ -1542,6 +1579,155 @@ fn decode_tile_substreams(
                 if !final_ctb && end != 0 {
                     return Err(Error::InvalidData(
                         "vaco-codec-hevc: tile substream terminated before its final CTB",
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Decode a full-picture tiles-plus-WPP slice. Each CABAC range covers one
+/// CTB row within one tile, in tile-scan order; the outer loop remains picture
+/// raster order so the shared reconstruction boards publish each row once.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one decoder call site keeps the tile and WPP state explicit"
+)]
+fn decode_wpp_tile_substreams(
+    budget: &mut Budget,
+    ebsp: &[u8],
+    header_rbsp_len: usize,
+    entry_point_offsets: &[u32],
+    layout: &TileLayout,
+    walk: &mut Ctx<'_, '_, '_, '_>,
+    ctbs_y: u32,
+    ctb_size_i: i32,
+    qp: i8,
+    kind: SliceKind,
+    cabac_init: bool,
+) -> Result<()> {
+    let data_start = ebsp_offset_for_rbsp_len(ebsp, header_rbsp_len);
+    let ebsp_slice_data = ebsp.get(data_start..).unwrap_or(&[]);
+    let ranges =
+        layout.wpp_tile_substream_byte_ranges(ebsp_slice_data.len(), entry_point_offsets)?;
+    let tile_count = layout.tile_substream_count().ok_or(Error::InvalidData(
+        "vaco-codec-hevc: tile WPP tile count overflow",
+    ))?;
+    let count = usize::try_from(tile_count)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(usize::try_from(ctbs_y).unwrap_or(usize::MAX));
+    let mut rectangles = Vec::new();
+    let mut row_substreams = vec![usize::MAX; count];
+    let mut tile_data = Vec::new();
+    let mut range_index = 0usize;
+    for tile_id in 0..tile_count {
+        let rect = layout.tile_rect(tile_id).ok_or(Error::InvalidData(
+            "vaco-codec-hevc: WPP tile rectangle is missing",
+        ))?;
+        rectangles.push(rect);
+        let (_, _, y0, y1) = rect;
+        for row in y0..y1 {
+            let (start, end) = ranges.get(range_index).copied().ok_or(Error::InvalidData(
+                "vaco-codec-hevc: WPP tile substream range is missing",
+            ))?;
+            let bytes = ebsp_slice_data.get(start..end).ok_or(Error::InvalidData(
+                "vaco-codec-hevc: WPP tile substream range is invalid",
+            ))?;
+            let mut rbsp = Vec::new();
+            vaco_bitstream::annexb::to_rbsp(bytes, &mut rbsp);
+            if CabacDecoder::new(&rbsp).malformed() {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: WPP tile CABAC initialization is malformed",
+                ));
+            }
+            let slot = usize::try_from(tile_id)
+                .unwrap_or(usize::MAX)
+                .saturating_mul(usize::try_from(ctbs_y).unwrap_or(usize::MAX))
+                .saturating_add(usize::try_from(row).unwrap_or(usize::MAX));
+            if let Some(entry) = row_substreams.get_mut(slot) {
+                *entry = range_index;
+            }
+            tile_data.push(rbsp);
+            range_index = range_index.saturating_add(1);
+        }
+    }
+    if range_index != ranges.len() {
+        return Err(Error::InvalidData(
+            "vaco-codec-hevc: WPP tile substream count is inconsistent",
+        ));
+    }
+
+    let mut saved_contexts = vec![None; usize::try_from(tile_count).unwrap_or(usize::MAX)];
+    for row in 0..ctbs_y {
+        let row_us = usize::try_from(row).unwrap_or(usize::MAX);
+        walk.qp_y_prev = walk.shared.slice_qp;
+        walk.edges.begin_row(row_us)?;
+        walk.cu_grid.begin_row(budget, row_us)?;
+        walk.sao_params.begin_row(budget, row_us)?;
+        for (tile_index, &(x0, x1, y0, y1)) in rectangles.iter().enumerate() {
+            if row < y0 || row >= y1 {
+                continue;
+            }
+            let slot = tile_index
+                .saturating_mul(usize::try_from(ctbs_y).unwrap_or(usize::MAX))
+                .saturating_add(usize::try_from(row).unwrap_or(usize::MAX));
+            let data_index = row_substreams.get(slot).copied().ok_or(Error::InvalidData(
+                "vaco-codec-hevc: WPP tile substream index is missing",
+            ))?;
+            let bytes = tile_data.get(data_index).ok_or(Error::InvalidData(
+                "vaco-codec-hevc: WPP tile substream data is missing",
+            ))?;
+            let mut cabac = CabacDecoder::new(bytes);
+            let mut context = if x1.saturating_sub(x0) >= 2 {
+                saved_contexts
+                    .get(tile_index)
+                    .copied()
+                    .flatten()
+                    .unwrap_or_else(|| new_context_bank(kind, cabac_init, qp))
+            } else {
+                new_context_bank(kind, cabac_init, qp)
+            };
+            walk.begin_tile_substream(x0, x1, y0, y1);
+            for col in x0..x1 {
+                let col_us = usize::try_from(col).unwrap_or(usize::MAX);
+                walk.recon.begin_ctu(row_us, col_us)?;
+                let addr = row
+                    .checked_mul(walk.shared.ctbs_x)
+                    .and_then(|value| value.checked_add(col))
+                    .ok_or(Error::InvalidData(
+                        "vaco-codec-hevc: WPP tile CTB address overflow",
+                    ))?;
+                let cx = i32::try_from(col).unwrap_or(0) * ctb_size_i;
+                let cy = i32::try_from(row).unwrap_or(0) * ctb_size_i;
+                ctu::decode_ctu(&mut cabac, &mut context, walk, cx, cy, addr)?;
+                walk.recon.publish_ctu(row_us, col_us)?;
+                if col == x0.saturating_add(1)
+                    && let Some(saved) = saved_contexts.get_mut(tile_index)
+                {
+                    *saved = Some(context);
+                }
+                let end = cabac.decode_terminate();
+                if cabac.malformed() {
+                    return Err(Error::InvalidData(
+                        "vaco-codec-hevc: CABAC decode ran past the WPP tile substream data",
+                    ));
+                }
+                let final_ctb = col.saturating_add(1) == x1;
+                let final_substream = data_index.saturating_add(1) == tile_data.len();
+                if final_ctb && !final_substream && end != 0 {
+                    return Err(Error::InvalidData(
+                        "vaco-codec-hevc: WPP tile substream terminated before slice end",
+                    ));
+                }
+                if final_ctb && final_substream && end == 0 {
+                    return Err(Error::InvalidData(
+                        "vaco-codec-hevc: final WPP tile substream did not terminate",
+                    ));
+                }
+                if !final_ctb && end != 0 {
+                    return Err(Error::InvalidData(
+                        "vaco-codec-hevc: WPP tile substream terminated before its final CTB",
                     ));
                 }
             }

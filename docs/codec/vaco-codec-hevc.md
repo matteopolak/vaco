@@ -981,9 +981,13 @@ cross-tile edges when it is set keep the ordinary filtering path. Tile SAO is
 still a named refusal because its snapshot/filter neighbourhood rules have not
 yet been made tile-aware.
 
-Multiple or dependent tile slices, tiles combined with WPP, tile pictures with
-`cu_qp_delta`, and tile pictures requiring SAO remain named refusals. Their
-slice-state and filtering rules must be integrated before extending this scope.
+With WPP, the decoder accepts the same one independent full-picture tile slice.
+It derives one escaped substream per picture-row/tile-column, de-escapes every
+range separately, restarts arithmetic decoding for each, and carries a tile's
+CABAC context from its local second CTU to its next row. The outer loop still
+publishes the reconstruction state once per picture row. Multiple or dependent
+tile slices, tile pictures with `cu_qp_delta`, and tile pictures requiring SAO
+remain named refusals.
 
 ## Per-CU QP delta (`cu_qp_delta`), landed
 

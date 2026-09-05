@@ -161,6 +161,33 @@ fn tile_loop_filter_flag_permits_cross_tile_edges_only_when_set() {
 }
 
 #[test]
+fn wpp_tile_entry_points_cover_one_range_per_picture_row_and_tile_column() {
+    let tiles = Tiles {
+        num_columns: 2,
+        num_rows: 2,
+        uniform_spacing: true,
+        column_widths: Vec::new(),
+        row_heights: Vec::new(),
+        loop_filter_across_tiles: false,
+    };
+    let layout = TileLayout::from_pps(&tiles, 4, 6).expect("valid two-column layout");
+    assert_eq!(layout.entry_point_offset_count(true), Some(11));
+    let ranges = layout
+        .wpp_tile_substream_byte_ranges(24, &[2; 11])
+        .expect("twelve positive substreams");
+    assert_eq!(ranges.len(), 12);
+    assert_eq!(ranges.first(), Some(&(0, 2)));
+    assert_eq!(ranges.last(), Some(&(22, 24)));
+    let error = layout
+        .wpp_tile_substream_byte_ranges(24, &[2; 10])
+        .expect_err("missing one substream offset is invalid");
+    assert!(matches!(
+        error,
+        Error::InvalidData("vaco-codec-hevc: tile WPP entry point count does not match substreams")
+    ));
+}
+
+#[test]
 fn nonuniform_tile_widths_and_heights_leave_edges_unavailable() {
     let tiles = Tiles {
         num_columns: 3,
