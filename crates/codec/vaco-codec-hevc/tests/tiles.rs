@@ -417,6 +417,27 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         )
         .expect("first tile third PU carries a prev-intra flag");
     assert!(!first_third_prev_intra_flag);
+    let first_third_rem_mode = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_leaf_third_rem_intra_luma_pred_mode(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect("first tile third PU carries rem-mode syntax");
+    assert_eq!(first_third_rem_mode, 22);
+    let second_third_rem_error = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .decode_first_ctb_leaf_third_rem_intra_luma_pred_mode(
+            u32::from(sps.log2_min_cb_size),
+            u32::from(sps.log2_min_cb_size),
+        )
+        .expect_err("second tile has no third PU rem-mode syntax");
+    assert!(matches!(
+        second_third_rem_error,
+        Error::Unsupported("vaco-codec-hevc: first tile third PU has no rem-mode syntax")
+    ));
     let second_third_prev_error = tile_states
         .get_mut(1)
         .expect("second tile state exists")

@@ -46,6 +46,7 @@ pub struct TileCabacState<'a> {
     first_ctb_leaf_second_mpm_suffix: Option<bool>,
     first_ctb_leaf_second_luma_mode: Option<u8>,
     first_ctb_leaf_third_prev_intra: Option<bool>,
+    first_ctb_leaf_third_rem_mode: Option<u8>,
 }
 
 impl TileCabacState<'_> {
@@ -556,6 +557,40 @@ impl TileCabacState<'_> {
         self.first_ctb_leaf_third_prev_intra = Some(prev);
         Ok(prev)
     }
+
+    /// Decode the third 4x4 PU's bypass-coded `rem_intra_luma_pred_mode`.
+    ///
+    /// A zero third-PU `prev_intra_luma_pred_flag` selects the five-bit form
+    /// in §7.3.8.5. This consumes those five bypass bins as one value; luma
+    /// mode resolution and the following PU remain unconsumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] unless the third PU selected
+    /// the rem-mode form, and [`vaco_core::Error::InvalidData`] for
+    /// inconsistent leaf dimensions.
+    pub fn decode_first_ctb_leaf_third_rem_intra_luma_pred_mode(
+        &mut self,
+        leaf_log2_size: u32,
+        min_cb_log2_size: u32,
+    ) -> Result<u8> {
+        if self.first_ctb_leaf_third_prev_intra != Some(false) {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile third PU has no rem-mode syntax",
+            ));
+        }
+        if leaf_log2_size != min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile leaf dimensions are invalid",
+            ));
+        }
+        let mut rem_mode = 0_u8;
+        for _ in 0..5 {
+            rem_mode = (rem_mode << 1) | u8::from(self.cabac.decode_bypass() != 0);
+        }
+        self.first_ctb_leaf_third_rem_mode = Some(rem_mode);
+        Ok(rem_mode)
+    }
 }
 
 impl TileLayout {
@@ -832,6 +867,7 @@ impl TileLayout {
                 first_ctb_leaf_second_mpm_suffix: None,
                 first_ctb_leaf_second_luma_mode: None,
                 first_ctb_leaf_third_prev_intra: None,
+                first_ctb_leaf_third_rem_mode: None,
             });
         }
         Ok(states)

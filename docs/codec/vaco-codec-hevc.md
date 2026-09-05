@@ -1003,8 +1003,9 @@ prefix bin is measured as 1, selecting MPM index 2. Its left neighbour is the
 first PU's `INTRA_DC` and its above neighbour is unavailable, so §8.4.2's
 `[PLANAR, DC, VER]` list resolves the index to `INTRA_VER` (mode 26). The next
 PU's context-0 `prev_intra_luma_pred_flag` is measured as 0, so its
-`rem_intra_luma_pred_mode` and all later mode-dependent syntax remain
-unconsumed. Finally it sends the same access unit to `HevcDecoder` and
+five bypass-coded `rem_intra_luma_pred_mode` bits are measured as 22. Its luma
+mode resolution and all later mode-dependent syntax remain unconsumed. Finally
+it sends the same access unit to `HevcDecoder` and
 requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before the
 decoder consumes tile CABAC for reconstruction. This keeps the parser's
