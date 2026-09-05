@@ -338,7 +338,11 @@ impl Muxer for MovMuxer {
                 }
             }
             Mode::Fragmented(state) => {
-                if fragmented::should_flush(state, &self.opts, idx, dts, is_sync) {
+                let time_base = self
+                    .tracks
+                    .get(idx)
+                    .map_or(Rational::UNDEFINED, TrackState::time_base);
+                if fragmented::should_flush(state, &self.opts, idx, dts, time_base, is_sync) {
                     fragmented::flush_fragment(&mut self.out, state, &self.tracks, &self.opts)?;
                 }
                 fragmented::buffer_sample(

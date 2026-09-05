@@ -245,6 +245,7 @@ pub fn should_flush(
     opts: &MuxOptions,
     track_index: usize,
     dts: i64,
+    time_base: vaco_core::TimeBase,
     is_sync: bool,
 ) -> bool {
     if !has_pending(state) {
@@ -260,7 +261,8 @@ pub fn should_flush(
     if let Some(threshold) = opts.frag_duration
         && let Some(start) = state.frag_start_dts0
         && track_index == 0
-        && dts.saturating_sub(start) >= threshold.0
+        && vaco_core::Duration::from_ticks(dts.saturating_sub(start), time_base)
+            .is_some_and(|elapsed| elapsed >= threshold)
     {
         return true;
     }

@@ -90,9 +90,14 @@ immediately (`tests/roundtrip.rs`'s
 
 A fragment boundary is checked on every packet (`fragmented::should_flush`),
 in this order: `frag_every_frame` (always), `frag_keyframe` (a sync sample on
-the first-added track), `frag_duration` (elapsed DTS on the first track past
-the threshold), `frag_size` (accumulated bytes past the threshold). A file
+the first-added track), `frag_duration` (elapsed DTS on the first track at
+or past the exact duration threshold), `frag_size` (accumulated bytes past the threshold). A file
 with none of these set still produces one giant final fragment at `finish`.
+
+The external `frag_duration` option accepts integer microseconds. The muxer
+converts elapsed DTS ticks using the track time base before comparing durations;
+a one-second threshold therefore means 25 ticks at 25 Hz or 90,000 ticks at
+90 kHz. Keep this conversion at the fragment boundary when changing the policy.
 
 `default_base_moof` (and `dash`/`cmaf`, which imply it) sets
 `tfhd.default-base-is-moof` and gives `trun.data_offset` relative to the

@@ -366,19 +366,16 @@ third is an ordinary `-f mpegts` file, so truncation is not a Matroska rule.
 half a Matroska tick. From `120/48000` the truncation gives 2, which is what the
 reference prints. From a microsecond-rounded 2500 it gives 3. Half a tick of
 error changes the answer whenever the exact value lands just below an integer,
-which is most of the time for a 1024-sample frame against a 1 ms base. That is
-the entire argument for `Parser::packet_duration` returning a `Rational` rather
-than a `Duration`.
+which is most of the time for a 1024-sample frame against a 1 ms base. Parsers
+return exact rational seconds; the output clock quantizes this value once.
 
-**The packet model keeps both views.** `Packet::duration` remains a
-microsecond convenience value, while demuxers and encoders that know native
-ticks attach `Packet::set_duration_ts`. Probe and mux paths prefer those exact
-ticks, so 655360 ticks of 1/28224000 (1024 samples at 44.1 kHz) no longer store
-as 23220 µs and read back as 655361. Packets without native timing continue to
-use the microsecond fallback. `quantise_duration` also refuses a positive tick
-count that rounds to *zero* microseconds, because `Duration::ZERO` means absent
-and returning it would be a duration that silently vanished — found by the
-`format_timestamps` fuzz target, not by review.
+**The packet model retains exact seconds.** `Packet::duration` uses the rational
+`Duration` representation. Native `Packet::set_duration_ts` side data remains
+available for callers that report the original integer count, but rescaling the
+seconds value no longer needs a microsecond fallback. A duration of 655360 ticks
+at 1/28224000 recovers as 655360, and a single positive tick below one microsecond
+remains present. `quantise_duration` refuses only values that quantize to zero
+native ticks, invalid clocks, or unrepresentable conversions.
 
 **Measured, on an eleven-file corpus** (`-of json -show_packets
 -read_intervals '%+#40'`, all eleven `[PACKET]` field values compared packet by

@@ -9,6 +9,11 @@ A packet contains one complete GIF file. Decode emits one composited BGRA
 frame for every image descriptor; encode buffers input frames and emits one
 GIF packet when drained.
 
+Durations are exact seconds internally. Encoding truncates each delay at GIF's
+hundredth-second boundary and clamps it to the unsigned 16-bit field. The packet
+duration sums those serialized delays, not native frame counts or unrounded
+input durations. This follows [GIF89a section 23(c)](https://www.w3.org/Graphics/GIF/spec-gif89a.txt).
+
 ## How it works
 
 The dependency resolves palettes and transparency to RGBA subframes.
@@ -56,3 +61,7 @@ Another header-complete fixture ends its valid LZW stream after only one of two
 declared pixels and proves that a short, terminated image is rejected too.
 The EOF exception is a pragmatic reference-compatibility rule: GIF89a does not
 specify recovery from a truncated data-sub-block sequence.
+
+The mixed-clock timing regression checks GCE delay bytes directly: frames of
+1/25, 20/100, and 1001/30000 seconds serialize as 4, 20, and 3 hundredths,
+with an aggregate packet duration of 27/100 seconds.

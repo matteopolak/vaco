@@ -503,12 +503,7 @@ pub(crate) fn rebase_frame(frame: &mut Frame, target: TimeBase) {
     frame.pts = frame
         .pts
         .rescale(from, target, Rounding::NearestAwayFromZero);
-    let ticks = Timestamp::new(frame.duration_ticks())
-        .rescale(from, target, Rounding::NearestAwayFromZero)
-        .ticks()
-        .unwrap_or(0);
     frame.time_base = target;
-    frame.set_duration_ticks(ticks);
 }
 
 /// Rescale one timestamp between two link time bases, exactly.
@@ -908,6 +903,19 @@ mod tests {
         assert_eq!(out.time_base, Rational::new(1, 1000));
         assert_eq!(out.pts, Timestamp::new(120));
         assert_eq!(out.duration_ticks(), 40);
+    }
+
+    #[test]
+    fn rebasing_keeps_duration_exact_when_the_target_clock_is_coarser() {
+        let mut frame = video_frame(16, 16, 0);
+        frame.time_base = Rational::new(1, 30_000);
+        frame.set_duration_ticks(1001);
+        let exact = frame.duration;
+        rebase_frame(&mut frame, Rational::new(1, 1000));
+        assert_eq!(frame.duration, exact);
+        assert_eq!(frame.duration_ticks(), 33);
+        rebase_frame(&mut frame, Rational::new(1, 30_000));
+        assert_eq!(frame.duration_ticks(), 1001);
     }
 
     #[test]

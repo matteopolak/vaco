@@ -13,12 +13,15 @@ builds by hand from `AVBufferRef` is expressed here with `Arc` and
 
 ### Native frame timing
 
-Frame producers and filters use `set_duration_ticks` and `duration_ticks` for
-counts in `Frame::time_base`. Set the time base before setting the duration.
-These accessors isolate the current native-tick storage convention from the
-seconds-based `Duration` used by packet and option APIs. Do not construct or
-read the tuple field directly when changing frame timing; copy the duration
-unchanged only when copying the same timing convention.
+`Frame::duration` stores exact seconds, just like packet durations. Producers use
+`set_duration_ticks` for counts in `Frame::time_base`; set the time base first.
+`duration_ticks` rounds to nearest in the current frame clock when an integer
+count is required. Invalid bases or unrepresentable counts yield zero (unknown).
+
+Copy durations unchanged between frames and packets. Changing a frame's time
+base changes how its PTS is counted, not its physical duration. Filter-link
+rebasing therefore rescales PTS but preserves duration, even when the new clock
+cannot express that span as an integral number of ticks.
 
 ### One `Arc` per plane (plan 11 F11)
 

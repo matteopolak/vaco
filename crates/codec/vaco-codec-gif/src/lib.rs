@@ -159,16 +159,20 @@ impl SendReceive for GifEncoder {
                     .pending
                     .first()
                     .map_or(vaco_core::Timestamp::NONE, |f| f.pts);
-                // Same bug class as `vaco-codec-vp8`/`vaco-codec-vp9`/
-                // `vaco-codec-webp`'s encoders, shaped differently here:
-                // this encoder emits the *whole* animated GIF as one
-                // packet at drain (see the struct doc above), so its real
-                // duration is not any single frame's `duration` but the
-                // sum of every pending frame's own per-frame delay -- the
-                // same field this crate's own decoder populates from each
-                // GIF frame's Graphic Control Extension delay time.
+                // Sum the delays actually serialized at GIF's hundredth-second
+                // boundary, not native counts from potentially different clocks.
+                let ticks = self
+                    .pending
+                    .iter()
+                    .try_fold(0_i64, |sum, frame| {
+                        sum.checked_add(i64::from(codec::delay_hundredths(frame)))
+                    })
+                    .ok_or(vaco_core::Error::InvalidData(
+                        "gif: animation duration overflow",
+                    ))?;
                 packet.duration =
-                    vaco_core::Duration(self.pending.iter().map(|f| f.duration.0).sum());
+                    vaco_core::Duration::from_ticks(ticks, vaco_core::Rational::new(1, 100))
+                        .ok_or(vaco_core::Error::InvalidData("gif: animation duration"))?;
                 self.pending.clear();
                 self.machine.emit(packet);
                 self.machine.finish();
@@ -326,19 +330,55 @@ mod tests {
     /// specifically so a constant-delay implementation could not pass by
     /// accident.
     #[test]
+    fn packet_duration_matches_serialized_delays_across_frame_time_bases() {
+        let mut enc = GifEncoder::new(Limits::permissive());
+        for (ticks, time_base) in [
+            (1, vaco_core::Rational::new(1, 25)),
+            (20, vaco_core::Rational::new(1, 100)),
+            (1, vaco_core::Rational::new(1001, 30_000)),
+        ] {
+            let mut frame = checker_frame(4, 4);
+            frame.time_base = time_base;
+            frame.set_duration_ticks(ticks);
+            enc.send(Some(&frame)).expect("send frame");
+        }
+        enc.send(None).expect("drain");
+        let packet = enc.receive().expect("packet");
+        // GIF89a 23(c): the GCE's little-endian delay is in hundredths.
+        let delays: Vec<_> = packet
+            .payload()
+            .windows(8)
+            .filter(|block| block[..3] == [0x21, 0xf9, 4] && block[7] == 0)
+            .map(|block| u16::from_le_bytes([block[4], block[5]]))
+            .collect();
+        assert_eq!(delays, [4, 20, 3]);
+        assert_eq!(packet.duration, vaco_core::Duration::from_micros(270_000));
+    }
+
+    #[test]
+    fn unrepresentably_large_delay_clamps_at_the_serialized_field_boundary() {
+        let mut frame = checker_frame(4, 4);
+        frame.time_base = vaco_core::Rational::new(i32::MAX, 1);
+        frame.set_duration_ticks(i64::MAX);
+        assert_eq!(codec::delay_hundredths(&frame), u16::MAX);
+        frame.set_duration_ticks(i64::MIN);
+        assert_eq!(codec::delay_hundredths(&frame), 0);
+    }
+
+    #[test]
     fn drain_packet_duration_is_the_sum_of_every_pending_frames_delay() {
         let delays_micros = [100_000i64, 200_000, 40_000];
         let mut enc = GifEncoder::new(Limits::permissive());
         for &d in &delays_micros {
             let mut frame = checker_frame(4, 4);
-            frame.duration = vaco_core::Duration(d);
+            frame.duration = vaco_core::Duration::from_micros(d);
             enc.send(Some(&frame)).expect("send frame");
         }
         enc.send(None).expect("begin drain");
         let packet = enc.receive().expect("receive packet");
         assert_eq!(
             packet.duration,
-            vaco_core::Duration(delays_micros.iter().sum())
+            vaco_core::Duration::from_micros(delays_micros.iter().sum())
         );
         assert_ne!(packet.duration, vaco_core::Duration::ZERO);
     }

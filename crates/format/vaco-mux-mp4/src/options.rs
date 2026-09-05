@@ -131,9 +131,9 @@ pub struct CoverArt {
 pub struct MuxOptions {
     pub brand: Brand,
     pub movflags: MovFlags,
-    /// Fragment boundary: elapsed time since the fragment started, in the
-    /// *primary* track's time base (its first `add_stream` video track, or
-    /// its first track if none is video). `None` disables the trigger.
+    /// Fragment boundary: exact elapsed time since the fragment started,
+    /// evaluated on the first-added track's clock. The external option accepts
+    /// integer microseconds. `None` disables the trigger.
     pub frag_duration: Option<vaco_core::Duration>,
     /// Fragment boundary: accumulated fragment payload bytes. `None` disables
     /// the trigger.

@@ -92,11 +92,22 @@ in `i128`. It does not convert either side, so no rounding decision is hidden in
 
 ### Duration units at API boundaries
 
-Use `Duration::from_micros` and `as_micros` when a parser, option, or external
-interface explicitly uses microseconds. Avoid the tuple constructor and raw
-field access: they hide the unit and tie callers to the storage representation.
-Native stream counts belong with their `TimeBase`; `ExactDuration::from_ticks`
-retains their rational seconds value without a microsecond intermediate.
+`Duration` stores reduced rational seconds, and `ExactDuration` is a compatibility
+alias for that same type. `Duration::from_ticks` and `Timestamp::to_duration`
+retain native values such as 1024/44100 and 1001/30000 exactly. Comparisons and
+checked addition/subtraction do not choose an intermediate clock.
+
+Use `from_micros` for interfaces that explicitly use microseconds. Integer output
+boundaries choose rounding through `checked_micros` or `to_ticks_rounding`;
+`to_ticks` defaults to nearest, ties away from zero. The legacy `as_micros`
+display accessor rounds the same way and saturates at the `i64` limits. The
+compatibility `to_duration(rounding)` explicitly returns a microsecond-rounded
+value; it is not needed when passing durations between media components.
+
+Keep rational fields private and normalize every constructor: canonical zero is
+0/1 and the denominator is positive. Exact arithmetic refuses an intermediate or
+result outside `i128`. Widened rescaling can divide products that exceed `u128`
+without wrapping. No configuration or new dependency is required.
 
 ### `Dict`
 
@@ -146,9 +157,9 @@ Notes:
   `0.1` is exactly 100 000 µs and never 99 999.
 - `i64::MIN` microseconds is the one `Duration` that does not round-trip: `format_duration` prints a
   magnitude with no positive counterpart. It still parses and formats without panicking.
-- `ExactDuration` carries a reduced rational number of seconds for media values
-  assembled from native ticks. Keep it until the consumer chooses a rounding
-  mode; convert to `Duration` only at a legacy microsecond boundary.
+- Six-decimal duration text is a rounded display boundary. It is not an exact
+  serialization of arbitrary native media clocks; preserve the rational value
+  or native ticks when the value must round-trip.
 - `color("random")` draws fresh RGB with alpha 255 on every call and is therefore the one input that
   does not round-trip. It uses a SplitMix64 counter seeded from the wall clock — decorative, with no
   cryptographic or statistical claim attached, and deliberately not exposed as a general RNG.

@@ -79,6 +79,76 @@ fn reference(a: i64, b: i64, c: i64, mode: Rounding) -> Option<i64> {
 // -------------------------------------------------------------- strategies
 
 #[test]
+fn duration_preserves_native_ticks_without_a_microsecond_intermediate() {
+    for (ticks, base) in [
+        (655_360, Rational::new(1, 28_224_000)),
+        (1, Rational::new(1, 90_000)),
+        (1, Rational::new(1001, 30_000)),
+        (1024, Rational::new(1, 44_100)),
+        (-655_360, Rational::new(1, 28_224_000)),
+    ] {
+        let duration = Timestamp::new(ticks).to_duration(base).unwrap();
+        assert_eq!(duration.to_ticks(base), Some(ticks), "{ticks} at {base}");
+        assert_eq!(
+            ExactDuration::from_duration(duration).as_ratio(),
+            ExactDuration::from_ticks(ticks, base).unwrap().as_ratio()
+        );
+    }
+}
+
+#[test]
+fn duration_distinguishes_values_that_share_a_rounded_microsecond() {
+    let base = Rational::new(1, 28_224_000);
+    let first = Timestamp::new(1).to_duration(base).unwrap();
+    let second = Timestamp::new(2).to_duration(base).unwrap();
+    assert!(Duration::ZERO < first);
+    assert!(first < second);
+}
+
+#[test]
+fn exact_duration_arithmetic_and_integer_boundaries() {
+    let third = Duration::from_ticks(1, Rational::new(1, 3)).unwrap();
+    let half = Duration::from_ticks(1, Rational::new(1, 2)).unwrap();
+    assert_eq!(third.checked_add(half).unwrap().as_ratio(), (5, 6));
+    assert_eq!(third.checked_sub(half).unwrap().as_ratio(), (-1, 6));
+    assert_eq!(third.checked_sub(third), Some(Duration::ZERO));
+    assert_eq!(Duration::from_micros(500_000), half);
+    assert_eq!(Duration::default().as_ratio(), (0, 1));
+
+    for micros in [i64::MIN, -1, 0, 1, i64::MAX] {
+        assert_eq!(Duration::from_micros(micros).as_micros(), micros);
+    }
+    let huge = Duration::from_ticks(i64::MAX, Rational::new(i32::MAX, 1)).unwrap();
+    assert_eq!(huge.checked_micros(Rounding::default()), None);
+    assert_eq!(huge.as_micros(), i64::MAX);
+    assert_eq!(huge.to_ticks(Rational::new(i32::MAX, 1)), Some(i64::MAX));
+    let negative = Duration::ZERO.checked_sub(huge).unwrap();
+    assert_eq!(negative.as_micros(), i64::MIN);
+}
+
+#[test]
+fn rounded_duration_conversion_handles_products_wider_than_u128() {
+    let mut duration = Duration::from_micros(1_000_000_000_000_000);
+    for denominator in [2_147_483_647, 2_147_483_629, 2_147_483_587] {
+        duration = duration
+            .checked_add(Duration::from_ticks(1, Rational::new(1, denominator)).unwrap())
+            .unwrap();
+    }
+    // The three added fractions total under two nanoseconds. They must not
+    // change nearest-microsecond output, even though direct multiplication overflows.
+    assert!(duration.as_ratio().0.checked_mul(1_000_000).is_none());
+    assert_eq!(
+        duration.checked_micros(Rounding::default()),
+        Some(1_000_000_000_000_000)
+    );
+    assert_eq!(duration.as_micros(), 1_000_000_000_000_000);
+    assert_eq!(
+        Duration::ZERO.checked_sub(duration).unwrap().as_micros(),
+        -1_000_000_000_000_000
+    );
+}
+
+#[test]
 fn exact_duration_keeps_fractional_microseconds() {
     let duration = ExactDuration::from_ticks(1024, Rational::new(1, 44_100)).unwrap();
     assert_eq!(duration.as_ratio(), (256, 11_025));

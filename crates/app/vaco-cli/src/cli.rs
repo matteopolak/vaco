@@ -770,7 +770,7 @@ fn validate_bounds(
     let Some(EndBound::Absolute(to)) = end else {
         return Ok(());
     };
-    let start = seek.unwrap_or(vaco_core::Duration(0));
+    let start = seek.unwrap_or(vaco_core::Duration::ZERO);
     if to <= start {
         let tag = if what == "input" { "in" } else { "out" };
         return Err(Diagnostic::opening(

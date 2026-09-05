@@ -130,12 +130,8 @@ pub struct Stream {
     pub start_time_absence: StartTimeAbsence,
     /// Duration **in `time_base` ticks**, exactly as the container states it.
     ///
-    /// Deliberately not a [`Duration`]. A `Duration` counts microseconds and
-    /// cannot round-trip a media timescale: 25 500 ticks at 1/12800 is
-    /// 1 992 187.5 µs, and `ffprobe` prints `duration_ts=25500`. Every demuxer
-    /// in the workspace had to keep the tick count in a private side table to
-    /// work around that, and none of them could hand it back through
-    /// `dyn Demuxer`. Use [`Stream::duration`] for the microsecond view.
+    /// Retains the container's native count for fields such as `duration_ts`.
+    /// Use [`Stream::duration`] for the equivalent exact seconds value.
     pub duration_ts: Option<i64>,
     pub frame_count: Option<u64>,
     /// The lowest frame rate that represents every timestamp in the stream
@@ -187,8 +183,7 @@ impl Stream {
     /// [`Stream::duration_ts`] as an absolute duration, for cross-stream
     /// comparison and for the `duration` field `vaco-probe` prints in seconds.
     ///
-    /// Lossy by construction — that is the whole reason `duration_ts` is
-    /// stored and this is derived, rather than the other way round.
+    /// The native count is converted without a microsecond intermediate.
     #[must_use]
     pub fn duration(&self) -> Option<Duration> {
         Timestamp::new(self.duration_ts?).to_duration(self.time_base)
@@ -197,7 +192,7 @@ impl Stream {
     /// Return the stream duration as an exact number of seconds.
     #[must_use]
     pub fn duration_exact(&self) -> Option<ExactDuration> {
-        ExactDuration::from_ticks(self.duration_ts?, self.time_base)
+        self.duration()
     }
 
     /// Record a duration stated in `time_base` ticks.
@@ -369,9 +364,7 @@ impl Chapter {
             self.start.to_duration(self.time_base)?,
             self.end.to_duration(self.time_base)?,
         );
-        Some(Duration::from_micros(
-            end.as_micros().saturating_sub(start.as_micros()),
-        ))
+        end.checked_sub(start)
     }
 }
 
@@ -438,18 +431,15 @@ pub trait Demuxer: Send {
 
     /// Exact duration derived from native stream ticks when available.
     ///
-    /// This additive view lets callers defer microsecond rounding. A demuxer
-    /// with a container-level duration that is not reflected by its streams
-    /// can still override it; the default is the longest exact stream.
+    /// Compatibility accessor with a native-stream fallback when `duration`
+    /// is absent. Container-level values may override this fallback.
     fn duration_exact(&self) -> Option<ExactDuration> {
-        self.duration()
-            .map(ExactDuration::from_duration)
-            .or_else(|| {
-                self.streams()
-                    .iter()
-                    .filter_map(Stream::duration_exact)
-                    .max()
-            })
+        self.duration().or_else(|| {
+            self.streams()
+                .iter()
+                .filter_map(Stream::duration_exact)
+                .max()
+        })
     }
 
     /// Rebind this demuxer to a caller's [`Limits`] and [`FormatOptions`],

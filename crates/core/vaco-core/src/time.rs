@@ -146,12 +146,10 @@ impl Timestamp {
         Some(ticks as f64 * base.to_f64())
     }
 
-    /// Convert to a microsecond [`Duration`], with round-to-nearest.
+    /// Convert native ticks to an exact seconds duration without rounding.
     #[must_use]
     pub fn to_duration(self, base: TimeBase) -> Option<Duration> {
-        self.checked_rescale(base, TimeBase::MICROSECONDS, Rounding::default())
-            .and_then(Timestamp::ticks)
-            .map(Duration)
+        Duration::from_ticks(self.0?, base)
     }
 }
 
@@ -228,58 +226,32 @@ pub fn rescale_rnd(a: i64, b: i64, c: i64, rounding: Rounding) -> Option<i64> {
     i64::try_from(v).ok()
 }
 
-/// A span of time in ticks of a [`TimeBase`].
+/// An exact span of time, stored as reduced rational seconds.
 ///
-/// The `parse::duration` grammar and the `duration` option type both produce
-/// **microseconds**, which is the unit this carries wherever a base is not
-/// stated alongside it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Default)]
-pub struct Duration(pub i64);
-
-impl Duration {
-    /// Zero length.
-    pub const ZERO: Self = Self(0);
-
-    /// From a microsecond count.
-    #[must_use]
-    pub const fn from_micros(micros: i64) -> Self {
-        Self(micros)
-    }
-
-    /// The microsecond count.
-    #[must_use]
-    pub const fn as_micros(self) -> i64 {
-        self.0
-    }
-
-    /// Seconds, for display and heuristics only.
-    #[must_use]
-    pub fn as_secs_f64(self) -> f64 {
-        self.0 as f64 / 1e6
-    }
-
-    /// Reinterpret as a tick count in `base`, rounding to nearest.
-    #[must_use]
-    pub fn to_ticks(self, base: TimeBase) -> Option<i64> {
-        Timestamp::new(self.0)
-            .checked_rescale(TimeBase::MICROSECONDS, base, Rounding::default())
-            .and_then(Timestamp::ticks)
-    }
-}
-
-/// An exact media duration represented as a rational number of seconds.
-///
-/// Unlike [`Duration`], this type does not choose microseconds as an
-/// intermediate unit. It is intended for container-level values assembled
-/// from streams with different time bases; callers can defer rounding until
-/// they know whether they are displaying, comparing, or rescaling the value.
+/// Native ticks retain their time base through `from_ticks`. Rounding happens
+/// only at explicit integer-tick or microsecond conversion boundaries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ExactDuration {
+pub struct Duration {
     numerator: i128,
     denominator: i128,
 }
 
-impl ExactDuration {
+/// Compatibility name for the exact representation now used by `Duration`.
+pub type ExactDuration = Duration;
+
+impl Duration {
+    /// Zero length.
+    pub const ZERO: Self = Self {
+        numerator: 0,
+        denominator: 1,
+    };
+
+    /// From a microsecond count, without loss.
+    #[must_use]
+    pub const fn from_micros(micros: i64) -> Self {
+        Self::from_ratio(micros as i128, 1_000_000)
+    }
+
     /// Build an exact duration from ticks in `time_base`.
     #[must_use]
     pub fn from_ticks(ticks: i64, time_base: TimeBase) -> Option<Self> {
@@ -287,13 +259,10 @@ impl ExactDuration {
         Some(Self::from_ratio(i128::from(ticks) * num, den))
     }
 
-    /// Preserve a legacy microsecond duration without further loss.
+    /// Preserve a duration. Kept for callers of the former `ExactDuration` type.
     #[must_use]
-    pub const fn from_duration(duration: Duration) -> Self {
-        Self {
-            numerator: duration.0 as i128,
-            denominator: 1_000_000,
-        }
+    pub const fn from_duration(duration: Self) -> Self {
+        duration
     }
 
     /// Return the reduced seconds ratio as `(numerator, denominator)`.
@@ -302,55 +271,135 @@ impl ExactDuration {
         (self.numerator, self.denominator)
     }
 
-    /// Seconds, for display only.
+    /// Microseconds, rounded to nearest and saturating at the `i64` bounds.
+    ///
+    /// This is a legacy/display boundary, not an intermediate representation.
+    /// Use `checked_micros` when overflow or the rounding direction matters.
+    #[must_use]
+    pub fn as_micros(self) -> i64 {
+        muldiv_rnd(
+            self.numerator,
+            1_000_000,
+            self.denominator,
+            Rounding::default(),
+        )
+        .map_or_else(
+            || {
+                if self.numerator < 0 {
+                    i64::MIN
+                } else {
+                    i64::MAX
+                }
+            },
+            clamp_i64,
+        )
+    }
+
+    /// Convert to microseconds with explicit rounding, refusing overflow.
+    #[must_use]
+    pub fn checked_micros(self, rounding: Rounding) -> Option<i64> {
+        muldiv_rnd(self.numerator, 1_000_000, self.denominator, rounding)
+            .and_then(|micros| i64::try_from(micros).ok())
+    }
+
+    /// Seconds, for display and heuristics only.
     #[must_use]
     pub fn as_secs_f64(self) -> f64 {
         self.numerator as f64 / self.denominator as f64
     }
 
-    /// Round this exact value into the legacy microsecond representation.
+    /// Convert to ticks in `base`, rounding to nearest and refusing overflow.
     #[must_use]
-    pub fn to_duration(self, rounding: Rounding) -> Option<Duration> {
-        muldiv_rnd(
-            self.numerator,
-            i128::from(1_000_000),
-            self.denominator,
-            rounding,
-        )
-        .and_then(|micros| i64::try_from(micros).ok())
-        .map(Duration)
+    pub fn to_ticks(self, base: TimeBase) -> Option<i64> {
+        self.to_ticks_rounding(base, Rounding::default())
     }
 
-    fn from_ratio(numerator: i128, denominator: i128) -> Self {
-        debug_assert!(denominator != 0);
-        let (mut numerator, mut denominator) = if denominator < 0 {
-            (-numerator, -denominator)
+    /// Convert to ticks with explicit rounding, refusing invalid bases or overflow.
+    #[must_use]
+    pub fn to_ticks_rounding(self, base: TimeBase, rounding: Rounding) -> Option<i64> {
+        let (num, den) = finite_base(base)?;
+        muldiv_rnd(
+            self.numerator,
+            den,
+            self.denominator.checked_mul(num)?,
+            rounding,
+        )
+        .and_then(|ticks| i64::try_from(ticks).ok())
+    }
+
+    /// Round to a microsecond-valued duration.
+    ///
+    /// Compatibility with the former `ExactDuration` conversion; new callers
+    /// should retain this exact value or request `checked_micros` at their sink.
+    #[must_use]
+    pub fn to_duration(self, rounding: Rounding) -> Option<Self> {
+        self.checked_micros(rounding).map(Self::from_micros)
+    }
+
+    /// Add exact seconds, refusing an intermediate or result outside `i128`.
+    #[must_use]
+    pub fn checked_add(self, other: Self) -> Option<Self> {
+        self.checked_combine(other, false)
+    }
+
+    /// Subtract exact seconds, refusing an intermediate or result outside `i128`.
+    #[must_use]
+    pub fn checked_sub(self, other: Self) -> Option<Self> {
+        self.checked_combine(other, true)
+    }
+
+    #[allow(
+        clippy::integer_division,
+        reason = "gcd factors divide canonical denominators and numerators exactly"
+    )]
+    fn checked_combine(self, other: Self, subtract: bool) -> Option<Self> {
+        let gcd = gcd_i128(self.denominator, other.denominator);
+        let lhs = self.numerator.checked_mul(other.denominator / gcd)?;
+        let rhs = other.numerator.checked_mul(self.denominator / gcd)?;
+        let numerator = if subtract {
+            lhs.checked_sub(rhs)?
         } else {
-            (numerator, denominator)
+            lhs.checked_add(rhs)?
         };
         if numerator == 0 {
-            return Self {
-                numerator: 0,
-                denominator: 1,
-            };
+            return Some(Self::ZERO);
         }
-        let gcd = gcd_i128(numerator.abs(), denominator);
-        numerator /= gcd;
-        denominator /= gcd;
+        let reduction = gcd_i128((numerator % gcd).abs(), gcd);
+        let denominator = (self.denominator / gcd).checked_mul(other.denominator / reduction)?;
+        Some(Self::from_ratio(numerator / reduction, denominator))
+    }
+
+    #[allow(
+        clippy::integer_division,
+        reason = "canonical rational reduction divides both terms by their gcd"
+    )]
+    const fn from_ratio(numerator: i128, denominator: i128) -> Self {
+        debug_assert!(denominator > 0);
+        if numerator == 0 {
+            return Self::ZERO;
+        }
+        // Reducing the remainder avoids taking abs(i128::MIN).
+        let gcd = gcd_i128((numerator % denominator).abs(), denominator);
         Self {
-            numerator,
-            denominator,
+            numerator: numerator / gcd,
+            denominator: denominator / gcd,
         }
     }
 }
 
-impl PartialOrd for ExactDuration {
+impl Default for Duration {
+    fn default() -> Self {
+        Self::ZERO
+    }
+}
+
+impl PartialOrd for Duration {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for ExactDuration {
+impl Ord for Duration {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self.numerator.signum(), other.numerator.signum()) {
             (a, b) if a != b => a.cmp(&b),
@@ -449,13 +498,13 @@ fn rescale_factors(from: TimeBase, to: TimeBase) -> Option<(i128, i128)> {
     Some((fnum * tden, fden * tnum))
 }
 
-/// `a × b ÷ c`, rounded. `None` when `c == 0`.
+/// `a × b ÷ c`, rounded. `None` for zero divisors or unrepresentable results.
 ///
-/// Callers pass values derived from an `i64` and two `i32`s, so `a * b` is at
-/// most 2^125 and stays inside `i128`.
+/// Rational aggregates can have products wider than the result's storage;
+/// modular multiplication retains their quotient and remainder without overflow.
 #[allow(
     clippy::integer_division,
-    reason = "c is checked non-zero on the line above; this is the one division the module makes"
+    reason = "nonzero divisors are checked before quotient/remainder arithmetic"
 )]
 #[allow(
     clippy::many_single_char_names,
@@ -465,28 +514,63 @@ fn muldiv_rnd(a: i128, b: i128, c: i128, rounding: Rounding) -> Option<i128> {
     if c == 0 {
         return None;
     }
-    let n = a.checked_mul(b)?;
-    // Normalise the divisor positive so the rounding cases only have to reason
-    // about the sign of the dividend.
-    let (n, d) = if c < 0 { (-n, -c) } else { (n, c) };
-    let q = n / d;
-    let r = n % d;
-    if r == 0 {
-        return Some(q);
+    let negative = (a < 0) ^ (b < 0) ^ (c < 0);
+    let denominator = c.unsigned_abs();
+    let (mut quotient, remainder) =
+        unsigned_muldiv(a.unsigned_abs(), b.unsigned_abs(), denominator)?;
+    if remainder != 0 {
+        let away = match rounding {
+            Rounding::Zero => false,
+            Rounding::Infinity => true,
+            Rounding::Down => negative,
+            Rounding::Up => !negative,
+            Rounding::NearestAwayFromZero => remainder >= denominator - remainder,
+        };
+        if away {
+            quotient = quotient.checked_add(1)?;
+        }
     }
-    let up = match rounding {
-        Rounding::Zero => false,
-        Rounding::Infinity => true,
-        Rounding::Down => n < 0,
-        Rounding::Up => n > 0,
-        // `2 * |r| < d` cannot overflow: |r| < d <= 2^62 by construction.
-        Rounding::NearestAwayFromZero => 2 * r.abs() >= d,
-    };
-    if up {
-        Some(q + if n < 0 { -1 } else { 1 })
+    if negative && quotient == i128::MIN.unsigned_abs() {
+        Some(i128::MIN)
     } else {
-        Some(q)
+        let result = i128::try_from(quotient).ok()?;
+        Some(if negative { -result } else { result })
     }
+}
+
+/// Divide a product without requiring that the product itself fit in u128.
+#[allow(
+    clippy::integer_division,
+    reason = "quotient and remainder are retained separately for explicit rounding"
+)]
+fn unsigned_muldiv(a: u128, b: u128, denominator: u128) -> Option<(u128, u128)> {
+    if let Some(product) = a.checked_mul(b) {
+        return Some((product / denominator, product % denominator));
+    }
+    let whole = (a / denominator).checked_mul(b)?;
+    let addend = a % denominator;
+    let mut quotient = 0_u128;
+    let mut remainder = 0_u128;
+    for bit in (0..u128::BITS).rev() {
+        quotient = quotient.checked_mul(2)?;
+        // Each modular addition stays below denominator, even when doubling
+        // a remainder would overflow the storage type.
+        if remainder >= denominator - remainder {
+            remainder -= denominator - remainder;
+            quotient = quotient.checked_add(1)?;
+        } else {
+            remainder += remainder;
+        }
+        if (b >> bit) & 1 != 0 {
+            if remainder >= denominator - addend {
+                remainder -= denominator - addend;
+                quotient = quotient.checked_add(1)?;
+            } else {
+                remainder += addend;
+            }
+        }
+    }
+    Some((whole.checked_add(quotient)?, remainder))
 }
 
 /// Saturating narrowing to `i64`.
@@ -494,11 +578,11 @@ fn clamp_i64(v: i128) -> i64 {
     v.clamp(i128::from(i64::MIN), i128::from(i64::MAX)) as i64
 }
 
-fn gcd_i128(mut a: i128, mut b: i128) -> i128 {
+const fn gcd_i128(mut a: i128, mut b: i128) -> i128 {
     while b != 0 {
         let remainder = a % b;
         a = b;
         b = remainder;
     }
-    a.max(1)
+    if a > 1 { a } else { 1 }
 }

@@ -95,7 +95,16 @@ impl_range_scalar!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, usize, isize)
 impl RangeCheckable for Duration {
     type Bound = i64;
     fn check(&self, lo: i64, hi: i64, name: &str) -> Result<(), OptError> {
-        self.0.check(lo, hi, name)
+        if *self < Duration::from_micros(lo) || *self > Duration::from_micros(hi) {
+            Err(OptError::OutOfRange {
+                name: name.to_owned(),
+                value: self.as_secs_f64() * 1_000_000.0,
+                min: lo.bound_f64(),
+                max: hi.bound_f64(),
+            })
+        } else {
+            Ok(())
+        }
     }
 }
 

@@ -60,16 +60,11 @@ fuzz_target!(|input: Input| {
     let base = Rational::new(input.tb_num, input.tb_den);
     if let Some(d) = quantise_duration(seconds, base) {
         // A filled-in duration is a duration: positive, and never longer than
-        // the exact value it came from. Truncation towards zero guarantees the
-        // second half; the `+ 1` is the half-microsecond the packet model's
-        // storage may add back.
-        assert!(d.as_micros() > 0, "not a duration: {d:?}");
+        // the exact value it came from. Native-tick truncation guarantees both.
+        assert!(d > vaco_core::Duration::ZERO, "not a duration: {d:?}");
         assert!(seconds.num > 0 && seconds.den > 0);
-        let exact_micros = i128::from(seconds.num) * 1_000_000 / i128::from(seconds.den);
-        assert!(
-            i128::from(d.as_micros()) <= exact_micros + 1,
-            "{d:?} exceeds {seconds:?} in {base:?}"
-        );
+        let exact = vaco_core::Duration::from_ticks(1, seconds).unwrap();
+        assert!(d <= exact, "{d:?} exceeds {seconds:?} in {base:?}");
     }
 
     // ---------------------------------------------------------- wraparound
@@ -147,7 +142,10 @@ fuzz_target!(|input: Input| {
                 if report.dts_overflow {
                     assert!(cur >= prev, "a saturated repair still moved backwards");
                 } else {
-                    assert!(cur > prev, "dts went backwards after repair: {prev} -> {cur}");
+                    assert!(
+                        cur > prev,
+                        "dts went backwards after repair: {prev} -> {cur}"
+                    );
                 }
             }
             last_dts = pkt.dts.ticks().or(last_dts);

@@ -92,7 +92,7 @@ impl vaco_format_core::Demuxer for Canned {
         p.stream_index = u32::try_from(self.next & 1).unwrap_or(0);
         p.pts = vaco_core::Timestamp::new(self.next);
         p.dts = vaco_core::Timestamp::new(self.next);
-        p.duration = vaco_core::Duration(1000);
+        p.duration = vaco_core::Duration::from_micros(1000);
         p.pos = Some(u64::try_from(self.next).unwrap_or(0));
         self.next = self.next.saturating_add(1);
         Ok(p)

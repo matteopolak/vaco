@@ -295,6 +295,17 @@ fn aliases_resolve() {
 // ----------------------------------------------------------------- ranges
 
 #[test]
+fn duration_ranges_do_not_round_before_comparison() {
+    use vaco_opts::rt::RangeCheckable;
+
+    let half_micro = Duration::from_ticks(1, Rational::new(1, 2_000_000)).unwrap();
+    assert_eq!(half_micro.as_f64(), Some(0.5));
+    assert!(half_micro.check(0, 0, "duration").is_err());
+    let huge = Duration::from_ticks(i64::MAX, Rational::ONE).unwrap();
+    assert!(huge.check(i64::MIN, i64::MAX, "duration").is_err());
+}
+
+#[test]
 fn typed_range_is_enforced_and_rolls_back() {
     let mut o = subject();
     o.set_str("i", "1000").unwrap();

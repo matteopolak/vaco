@@ -452,8 +452,8 @@ mod tests {
             }
         }
         frame.pts = Timestamp::from(i64::from(n));
-        frame.duration = Duration(1);
         frame.time_base = vaco_core::Rational { num: 1, den: 25 };
+        frame.set_duration_ticks(1);
         frame
     }
 

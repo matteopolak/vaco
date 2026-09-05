@@ -228,11 +228,17 @@ pub fn encode(frames: &[Frame]) -> Result<Vec<u8>> {
     reason = "den is checked non-zero on the line above; converting a duration to hundredths \
               of a second is inherently a ratio"
 )]
-fn delay_hundredths(frame: &Frame) -> u16 {
-    if frame.time_base.den <= 0 {
-        return 0;
-    }
-    let hundredths = frame.duration_ticks() * 100 / i64::from(frame.time_base.den);
+pub(crate) fn delay_hundredths(frame: &Frame) -> u16 {
+    let hundredths = frame
+        .duration
+        .to_ticks_rounding(vaco_core::Rational::new(1, 100), vaco_core::Rounding::Zero)
+        .unwrap_or_else(|| {
+            if frame.duration < vaco_core::Duration::ZERO {
+                i64::MIN
+            } else {
+                i64::MAX
+            }
+        });
     hundredths.clamp(0, i64::from(u16::MAX)) as u16
 }
 
