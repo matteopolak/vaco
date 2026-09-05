@@ -397,6 +397,24 @@ decodes to 155,520,000 visible bytes with MD5
 `c7caf3164b0a316549ac7244f66f1294`, identical to both the package's `.md5`
 and a local black-box `ffmpeg 9.0.1` decode measured on 2026-09-05.
 
+### Picture-level short-term RPS across independent segments
+
+Section 8.3.2 derives one RPS for a picture before any slice's reference-list
+construction. Independent headers may select an SPS candidate or carry an
+inline `st_ref_pic_set()` spelling; the decoder compares the resulting negative
+and positive POC deltas and used-by-current flags, rather than rejecting an
+equivalent syntax spelling. A different derived RPS remains a named refusal:
+one `Ctx` and DPB-marking pass cannot safely represent per-slice reference
+state yet. Long-term references remain separately refused.
+
+JCT-VC `RPS_A_docomo_5` exercises short-term slice-header RPS
+inter-prediction in the final three pictures of its 44-picture 416x240 stream.
+The checked-in 64,948-byte Annex-B input has SHA-256
+`e7a90335952dc5718d931adb461d90049eb558b4d08c90ff1706612f8bca4439`.
+On 2026-09-05, this decoder and black-box `ffmpeg 9.0.1` each produced
+6,589,440 visible yuv420p bytes with the archive-published MD5
+`7f4ad6c6b3de54558b0db59629b87db9`.
+
 ### I_PCM and transquant-bypass decoding
 
 `ipcm_A_NEC_3` isolated a scope refusal rather than a pixel bug: the decoder
@@ -1396,10 +1414,12 @@ per plane, per frame**, reusing `verify_hevc_deblock.sh`:
 slice type is not known that early) and is unchanged. What `check_scope`
 still refuses is unrelated to this pass: non-4:2:0 chroma, non-8-bit
 samples, `separate_colour_plane_flag`, SPS/PPS range extensions,
-screen-content-coding extensions, and tiles. Long-term
-reference pictures (refused by `derive_reference_pic_sets`, not
-`check_scope`) and dependent/multi-segment slices (refused inline in
-`decode_packet`, same as before) are also unaffected.
+screen-content-coding extensions, and tiles. Long-term reference pictures
+(refused by `derive_reference_pic_sets`, not `check_scope`) remain refused.
+Dependent and independent multi-segment pictures are assembled by the
+constraints described above; only multi-segment WPP, tile pictures, and
+independent segments with a genuinely different picture-level RPS or other
+unsupported decoding state remain named refusals.
 
 ## The `Budget::release` leak past 640x480, found and fixed
 

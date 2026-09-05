@@ -288,10 +288,20 @@ impl HevcDecoder {
                     "vaco-codec-hevc: second first-slice segment in one access unit",
                 ));
             }
-            if !segment_hdr.dependent && !matching_independent_slice_header(&hdr, &segment_hdr) {
-                return Err(Error::Unsupported(
-                    "vaco-codec-hevc: independent slice segments with differing headers are not supported",
-                ));
+            if !segment_hdr.dependent {
+                if !same_short_term_rps(
+                    hdr.short_term_rps.as_ref(),
+                    segment_hdr.short_term_rps.as_ref(),
+                ) {
+                    return Err(Error::Unsupported(
+                        "vaco-codec-hevc: independent slice segments with different reference picture sets are not supported",
+                    ));
+                }
+                if !matching_independent_slice_header(&hdr, &segment_hdr) {
+                    return Err(Error::Unsupported(
+                        "vaco-codec-hevc: independent slice segments with differing headers are not supported",
+                    ));
+                }
             }
             let Some(start) = slice_starts.get_mut(index) else {
                 return Err(Error::InvalidData(
@@ -917,12 +927,106 @@ fn new_context_bank(kind: SliceKind, cabac_init: bool, qp: i8) -> ContextBank {
 /// each segment's fresh CABAC context bank from its own value. Every remaining
 /// field that affects the picture-wide CTU context must agree.
 fn matching_independent_slice_header(first: &SliceHeader, candidate: &SliceHeader) -> bool {
+    if !same_short_term_rps(
+        first.short_term_rps.as_ref(),
+        candidate.short_term_rps.as_ref(),
+    ) {
+        return false;
+    }
     let mut normalized = candidate.clone();
     normalized.first_slice_segment_in_pic = true;
     normalized.dependent = false;
     normalized.slice_segment_address = 0;
     normalized.cabac_init = first.cabac_init;
+    // §8.3.2 derives one RPS for the whole picture. The two selector fields
+    // choose a coded spelling; they do not describe distinct picture state.
+    normalized.short_term_ref_pic_set_sps = first.short_term_ref_pic_set_sps;
+    normalized.short_term_ref_pic_set_idx = first.short_term_ref_pic_set_idx;
+    normalized.short_term_rps.clone_from(&first.short_term_rps);
     first == &normalized
+}
+
+/// Whether two headers derive the same picture-level short-term RPS.
+/// `inter_predicted` records syntax provenance rather than a derived picture,
+/// and does not participate in §8.3.2's reference-picture-set values.
+fn same_short_term_rps(
+    first: Option<&vaco_parse_hevc::ShortTermRps>,
+    candidate: Option<&vaco_parse_hevc::ShortTermRps>,
+) -> bool {
+    match (first, candidate) {
+        (None, None) => true,
+        (Some(first), Some(candidate)) => {
+            first.delta_poc_s0 == candidate.delta_poc_s0
+                && first.used_by_curr_pic_s0 == candidate.used_by_curr_pic_s0
+                && first.delta_poc_s1 == candidate.delta_poc_s1
+                && first.used_by_curr_pic_s1 == candidate.used_by_curr_pic_s1
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    reason = "test code constructs fixed, valid slice-header states"
+)]
+mod slice_rps_tests {
+    use super::matching_independent_slice_header;
+    use vaco_parse_hevc::{ShortTermRps, SliceHeader};
+
+    #[test]
+    fn equivalent_short_term_rps_spellings_share_one_picture_state() {
+        let rps = ShortTermRps {
+            delta_poc_s0: vec![-1, -3],
+            used_by_curr_pic_s0: vec![true, false],
+            delta_poc_s1: vec![2],
+            used_by_curr_pic_s1: vec![true],
+            ..ShortTermRps::default()
+        };
+        let first = SliceHeader {
+            first_slice_segment_in_pic: true,
+            short_term_ref_pic_set_sps: true,
+            short_term_ref_pic_set_idx: 1,
+            short_term_rps: Some(rps.clone()),
+            ..SliceHeader::default()
+        };
+        let candidate = SliceHeader {
+            slice_segment_address: 4,
+            short_term_ref_pic_set_sps: false,
+            short_term_rps: Some(ShortTermRps {
+                inter_predicted: true,
+                ..rps
+            }),
+            ..SliceHeader::default()
+        };
+
+        assert!(matching_independent_slice_header(&first, &candidate));
+    }
+
+    #[test]
+    fn different_short_term_rps_do_not_share_one_picture_state() {
+        let first = SliceHeader {
+            first_slice_segment_in_pic: true,
+            short_term_rps: Some(ShortTermRps {
+                delta_poc_s0: vec![-1],
+                used_by_curr_pic_s0: vec![true],
+                ..ShortTermRps::default()
+            }),
+            ..SliceHeader::default()
+        };
+        let candidate = SliceHeader {
+            slice_segment_address: 4,
+            short_term_rps: Some(ShortTermRps {
+                delta_poc_s0: vec![-2],
+                used_by_curr_pic_s0: vec![true],
+                ..ShortTermRps::default()
+            }),
+            ..SliceHeader::default()
+        };
+
+        assert!(!matching_independent_slice_header(&first, &candidate));
+    }
 }
 
 /// Split `cabac_data` into one byte range per CTU row, from
