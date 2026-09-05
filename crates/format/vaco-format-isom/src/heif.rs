@@ -163,6 +163,9 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
     let Ok(full) = iloc.full() else {
         return Vec::new();
     };
+    if full.version > 2 {
+        return Vec::new();
+    }
     let mut r = full.reader();
     let sizes_a = r.u8();
     let (offset_size, length_size) = (sizes_a >> 4, sizes_a & 0x0F);
@@ -512,6 +515,22 @@ mod tests {
             0, 0, 0, 1, // extent_offset
         ];
         let raw = fullbx(b"iloc", 0, 0, &body);
+        assert!(parse_iloc(&first_box(&raw)).is_empty());
+    }
+
+    #[test]
+    fn iloc_rejects_an_unknown_version() {
+        let body = [
+            0x44, 0, // offset_size=4, length_size=4, base_offset_size=0
+            0, 0, 0, 1, // item_count (the version 2 layout)
+            0, 0, 0, 1, // item_id
+            0, 0, // construction_method
+            0, 0, // data_reference_index
+            0, 1, // extent_count
+            0, 0, 0, 1, // extent_offset
+            0, 0, 0, 1, // extent_length
+        ];
+        let raw = fullbx(b"iloc", 3, 0, &body);
         assert!(parse_iloc(&first_box(&raw)).is_empty());
     }
 
