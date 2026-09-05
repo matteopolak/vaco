@@ -112,6 +112,14 @@ declared length. [`ProgramConfigElement::channel_count`] and
 decoder actually needs: how many channels, and in what order to expect their
 `SCE`/`CPE`/`LFE` bitstream headers.
 
+For a PCE-derived configuration, the decoder retains that exact sequence,
+including each element's four-bit tag. `raw_data_block()` retains the same
+identity for every audio-bearing element and compares it before any PCM is
+reconstructed. A different type, tag, count, or order is rejected as a PCE
+channel-element-sequence mismatch rather than being decoded under a layout it
+did not declare. Direct configurations do not use this check because their
+element sequence is implied by `channelConfiguration`, not a PCE.
+
 **[`find_leading_program_config_element`] only ever looks at the very first
 syntax element of a `raw_data_block`.** A PCE that follows one or more
 channel elements cannot be found this way: `SCE`/`CPE`/`CCE`/`LFE` carry no
@@ -620,6 +628,15 @@ Its raw centre/front-pair/back-pair/LFE planes now map to native
 −0.000003 dB from unity; the full cross-plane matrix kept every nonmatching
 pair at or below −20.107762 dB, so the distinct tones prove the permutation
 rather than merely its channel count.
+
+The same PCE route was regenerated with a distinct six-tone fixture after
+channel-element binding was added. It again reported 48 packets and both
+decoders emitted **1,179,648 bytes**. The binding accepted the encoder's
+declared `SCE`/`CPE`/`CPE`/`LFE` tags and order; diagonal plane correlations
+were −0.049902 to −0.000101 dB from unity, while every off-diagonal pair was
+at or below −20.310847 dB. A synthetic tag mismatch is rejected before PCM is
+emitted, so this acceptance evidence cannot be mistaken for a count-only
+check.
 
 An eight-non-silent-tone `7.1(wide)` AAC-LC ADTS fixture exercises a leading
 PCE shape that ordinary ADTS `channelConfiguration` cannot label directly.

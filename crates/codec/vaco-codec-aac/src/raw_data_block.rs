@@ -29,7 +29,7 @@ use vaco_core::{Error, Result};
 
 use crate::ics::IcsInfo;
 use crate::ics_stream::{self, IcsStream};
-use crate::pce::ProgramConfigElement;
+use crate::pce::{ChannelElementRef, ProgramConfigElement};
 
 const ID_SCE: u32 = 0;
 const ID_CPE: u32 = 1;
@@ -50,13 +50,43 @@ const ID_END: u32 = 7;
               a future PCE-mid-stream config update will read ProgramConfig"
 )]
 pub(crate) enum Element {
-    Single(IcsStream),
+    Single {
+        tag: u8,
+        stream: IcsStream,
+    },
     /// `(ms_mask, ch0, ch1)`. `common_window` is implied: `ms_mask` is
     /// `None` exactly when `common_window` was `0` (M/S is never legal
     /// without a shared `ics_info()` for AAC-LC — §4.6.8.1.1).
-    Pair(Option<MsMask>, IcsStream, IcsStream),
-    Lfe(IcsStream),
+    Pair {
+        tag: u8,
+        ms_mask: Option<MsMask>,
+        ch0: IcsStream,
+        ch1: IcsStream,
+    },
+    Lfe {
+        tag: u8,
+        stream: IcsStream,
+    },
     ProgramConfig(ProgramConfigElement),
+}
+
+impl Element {
+    /// The PCE-visible identity of an audio-bearing element, if this element
+    /// carries PCM. PCE and non-audio elements have no corresponding entry.
+    #[must_use]
+    pub(crate) const fn channel_element_ref(&self) -> Option<ChannelElementRef> {
+        match self {
+            Self::Single { tag, .. } | Self::Lfe { tag, .. } => Some(ChannelElementRef {
+                is_cpe: false,
+                tag: *tag,
+            }),
+            Self::Pair { tag, .. } => Some(ChannelElementRef {
+                is_cpe: true,
+                tag: *tag,
+            }),
+            Self::ProgramConfig(_) => None,
+        }
+    }
 }
 
 /// A `channel_pair_element()`'s M/S signalling (Table 4.5, §4.6.8.1.2):
@@ -146,17 +176,17 @@ pub(crate) fn read(r: &mut BitReader<'_>, sfi: u8) -> Result<Vec<Element>> {
         let id = r.try_get(3)?;
         match id {
             ID_SCE => {
-                let _tag = r.get(4);
+                let tag = r.get(4) as u8;
                 let stream = ics_stream::read(r, false, None, sfi)?;
-                elements.push(Element::Single(stream));
+                elements.push(Element::Single { tag, stream });
             }
             ID_LFE => {
-                let _tag = r.get(4);
+                let tag = r.get(4) as u8;
                 let stream = ics_stream::read(r, false, None, sfi)?;
-                elements.push(Element::Lfe(stream));
+                elements.push(Element::Lfe { tag, stream });
             }
             ID_CPE => {
-                let _tag = r.get(4);
+                let tag = r.get(4) as u8;
                 let common_window = r.get_bit() != 0;
                 let (shared_ics, ms_mask) = if common_window {
                     let ics = IcsInfo::read(r)?;
@@ -167,7 +197,12 @@ pub(crate) fn read(r: &mut BitReader<'_>, sfi: u8) -> Result<Vec<Element>> {
                 };
                 let ch0 = ics_stream::read(r, common_window, shared_ics.as_ref(), sfi)?;
                 let ch1 = ics_stream::read(r, common_window, shared_ics.as_ref(), sfi)?;
-                elements.push(Element::Pair(ms_mask, ch0, ch1));
+                elements.push(Element::Pair {
+                    tag,
+                    ms_mask,
+                    ch0,
+                    ch1,
+                });
             }
             ID_CCE => {
                 return Err(Error::Unsupported(
@@ -225,7 +260,7 @@ mod tests {
         let mut r = BitReader::new(&bytes);
         let elements = read(&mut r, 4).unwrap();
         assert_eq!(elements.len(), 1);
-        assert!(matches!(elements[0], Element::Single(_)));
+        assert!(matches!(elements[0], Element::Single { .. }));
     }
 
     #[test]

@@ -265,14 +265,25 @@ impl Decoder for AacDecoder {
                  refusing to decode with a stale channel configuration",
             ));
         }
+        if let Some(expected) = cfg.pce_element_order() {
+            let actual: Vec<_> = elements
+                .iter()
+                .filter_map(Element::channel_element_ref)
+                .collect();
+            if actual.as_slice() != expected {
+                return Err(Error::InvalidData(
+                    "vaco-codec-aac: PCE channel-element sequence does not match raw_data_block",
+                ));
+            }
+        }
 
         // Count output channels first, so `self.overlap` can be sized
         // before any element needs it.
         let total_channels: usize = elements
             .iter()
             .map(|e| match e {
-                Element::Single(_) | Element::Lfe(_) => 1,
-                Element::Pair(..) => 2,
+                Element::Single { .. } | Element::Lfe { .. } => 1,
+                Element::Pair { .. } => 2,
                 Element::ProgramConfig(_) => 0,
             })
             .sum();
@@ -293,7 +304,7 @@ impl Decoder for AacDecoder {
         let mut overlap_iter = 0usize;
         for element in &elements {
             match element {
-                Element::Single(stream) | Element::Lfe(stream) => {
+                Element::Single { stream, .. } | Element::Lfe { stream, .. } => {
                     let seed = self.next_prng_seed();
                     let spec = reconstruct::deinterleave_channel(stream, swb_long, swb_short, seed);
                     let Some(overlap) = self.overlap.get_mut(overlap_iter) else {
@@ -312,7 +323,9 @@ impl Decoder for AacDecoder {
                     channels.push(out);
                     overlap_iter += 1;
                 }
-                Element::Pair(ms_mask, ch0, ch1) => {
+                Element::Pair {
+                    ms_mask, ch0, ch1, ..
+                } => {
                     let seed0 = self.next_prng_seed();
                     let seed1 = self.next_prng_seed();
                     let mut spec0 =
@@ -506,7 +519,7 @@ mod tests {
 
     /// The first raw data block supplies a mono PCE before its SCE. Later
     /// ADTS blocks carry only the SCE and rely on that in-band configuration.
-    fn adts_frame_with_leading_mono_pce() -> Vec<u8> {
+    fn adts_frame_with_leading_mono_pce_with_sce_tag(sce_tag: u32) -> Vec<u8> {
         use vaco_bitstream::BitWriter;
         let mut body = BitWriter::new();
         body.put(3, 5); // ID_PCE
@@ -527,7 +540,7 @@ mod tests {
         body.align_zero();
         body.put(8, 0); // empty PCE comment field
         body.put(3, 0); // ID_SCE
-        body.put(4, 0); // element_instance_tag
+        body.put(4, sce_tag); // element_instance_tag
         body.put(8, 100); // global_gain
         body.put(1, 0); // ics_reserved_bit
         body.put(2, 0); // ONLY_LONG
@@ -561,6 +574,10 @@ mod tests {
         let mut bytes = w.finish();
         bytes.extend_from_slice(&body_bytes);
         bytes
+    }
+
+    fn adts_frame_with_leading_mono_pce() -> Vec<u8> {
+        adts_frame_with_leading_mono_pce_with_sce_tag(0)
     }
 
     fn adts_frame_with_mono_sce_and_pce_configuration() -> Vec<u8> {
@@ -752,5 +769,19 @@ mod tests {
                 .to_string()
                 .contains("mid-stream program_config_element")
         );
+    }
+
+    #[test]
+    fn a_pce_and_its_channel_element_tags_must_match() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(
+            &mut budget,
+            &adts_frame_with_leading_mono_pce_with_sce_tag(1),
+        )
+        .unwrap();
+
+        let error = dec.send_packet(Some(&packet)).unwrap_err();
+        assert!(error.to_string().contains("PCE channel-element sequence"));
     }
 }

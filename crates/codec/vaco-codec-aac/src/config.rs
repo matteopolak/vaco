@@ -38,7 +38,7 @@ use vaco_chlayout::ChannelLayout;
 use vaco_core::{Error, Result};
 use vaco_parse_aac::{AdtsHeader, AudioObjectType, AudioSpecificConfig, tables};
 
-use crate::pce::{ProgramConfigElement, find_leading_program_config_element};
+use crate::pce::{ChannelElementRef, ProgramConfigElement, find_leading_program_config_element};
 
 /// The channel layout a [`DecoderConfig`] has resolved, or is still waiting
 /// on.
@@ -59,6 +59,9 @@ pub enum ChannelResolution {
         /// `output_index -> raw_data_block source_index`, when this PCE's
         /// raw element order differs from its native output layout.
         permutation: Option<&'static [usize]>,
+        /// Required `SCE`/`CPE`/`LFE` elements and tags in the corresponding
+        /// `raw_data_block()`.
+        element_order: Vec<ChannelElementRef>,
     },
     /// `channelConfiguration == 0` and no program config element has been
     /// found yet. [`DecoderConfig::try_resolve_pending`] attempts to clear
@@ -235,6 +238,7 @@ impl DecoderConfig {
                 count: pce.channel_count(),
                 layout: pce.known_output_layout(),
                 permutation: pce.output_permutation(),
+                element_order: pce.element_order(),
             };
         }
         Ok(())
@@ -261,6 +265,16 @@ impl DecoderConfig {
     pub const fn pce_output_permutation(&self) -> Option<&'static [usize]> {
         match &self.channels {
             ChannelResolution::FromPce { permutation, .. } => *permutation,
+            ChannelResolution::Known { .. } | ChannelResolution::Pending => None,
+        }
+    }
+
+    /// The `raw_data_block()` channel elements required by a PCE-derived
+    /// configuration, in syntax order.
+    #[must_use]
+    pub fn pce_element_order(&self) -> Option<&[ChannelElementRef]> {
+        match &self.channels {
+            ChannelResolution::FromPce { element_order, .. } => Some(element_order),
             ChannelResolution::Known { .. } | ChannelResolution::Pending => None,
         }
     }
