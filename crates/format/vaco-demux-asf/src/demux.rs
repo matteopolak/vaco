@@ -359,13 +359,14 @@ impl AsfDemuxer {
         let effective_100ns = file_properties
             .play_duration_100ns
             .saturating_sub(file_properties.preroll_ms.saturating_mul(10_000));
-        #[allow(
-            clippy::integer_division,
-            reason = "100-nanosecond units convert to microseconds by an exact factor of 10"
-        )]
-        let duration = (effective_100ns > 0).then(|| {
-            Duration::from_micros(i64::try_from(effective_100ns / 10).unwrap_or(i64::MAX))
-        });
+        let duration = (effective_100ns > 0)
+            .then(|| {
+                Duration::from_ticks(
+                    i64::try_from(effective_100ns).unwrap_or(i64::MAX),
+                    TIME_BASE_100NS,
+                )
+            })
+            .flatten();
         let duration_exact = if effective_100ns > 0 {
             ExactDuration::from_ticks(
                 i64::try_from(effective_100ns).unwrap_or(i64::MAX),
@@ -1040,7 +1041,11 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(demux.duration().map(Duration::as_micros), Some(123_456));
+        assert_eq!(demux.duration().map(Duration::as_micros), Some(123_457));
+        assert_eq!(
+            demux.duration().map(Duration::as_ratio),
+            Some((1_234_567, 10_000_000))
+        );
         assert_eq!(
             demux
                 .duration_exact()
