@@ -19,8 +19,8 @@
 //! **where the sample rate and channel count come from**: unlike every
 //! self-describing bitstream codec in this tree, a raw PCM packet carries no
 //! header at all — the container states these facts, not the codec. See
-//! [`parse_audio_extradata`] for the (documented, provisional) mechanism this
-//! crate uses until #652 lands a shared convention.
+//! [`parse_audio_extradata`] for the provisional record this crate uses until
+//! the registry-to-CLI codec path can pass those parameters.
 //!
 //! # How to change it
 //!
@@ -47,17 +47,13 @@
 //!
 //! # What is not covered, and why
 //!
-//! The roadmap's "38 dec / 20 enc" figure (plan 20 §1.9, issue #279) includes
-//! container-specific oddities `vaco-codec-core::CodecId` has no variant for
-//! today: Blu-ray/DVD LPCM's variable 16/20/24-bit-per-block framing,
-//! `pcm_s24daud`, `pcm_lxf`'s planar 20-bit layout, `pcm_sga`, the five
-//! `_planar` variants, `s64le`/`s64be`, and `f16le`/`f24le`. Adding those
-//! needs new `CodecId` variants in `vaco-codec-core`, which this batch already
-//! touched once (for the ADPCM/rawvideo/null identities #280/#281 needed —
-//! see that crate's commit) but chose not to extend further here: 21 decode /
-//! 20 encode is every `Pcm*` identity the enum declares, fully implemented
-//! and tested, and is the honest stopping point for this pass. Noted in the
-//! closing comment on #279 rather than silently claiming the larger number.
+//! Some container-specific PCM variants are outside the current
+//! `vaco-codec-core::CodecId` surface: Blu-ray/DVD LPCM's variable
+//! 16/20/24-bit-per-block framing, `pcm_s24daud`, `pcm_lxf`'s planar 20-bit
+//! layout, `pcm_sga`, the five `_planar` variants, `s64le`/`s64be`, and
+//! `f16le`/`f24le`. Supporting them requires new codec IDs and corresponding
+//! table rows. The current implementation covers every `Pcm*` identity the
+//! enum declares: 21 decoders and 20 encoders.
 
 #![forbid(unsafe_code)]
 
