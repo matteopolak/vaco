@@ -1,5 +1,4 @@
-//! VP9 coded bitstream syntax (D-21a): the uncompressed header and the
-//! superframe index, read and write.
+//! VP9 coded bitstream syntax (D-21a): the uncompressed header and superframe index, read and write.
 //!
 //! # What this is, and how it differs from `vaco-parse-vpx`
 //!
@@ -11,15 +10,9 @@
 //! everything past it (the compressed header and tile data, opaque
 //! boolean-arithmetic-coded bytes) can be carried through unedited.
 //!
-//! This crate depends on nothing from `vaco-parse-vpx` or `vaco-codec-vp9`
-//! deliberately — both were under active ownership elsewhere in the tree
-//! while this was written, and [`crate::header`] needs a strictly larger
-//! parse than either already has (see that module's own doc). The
-//! superframe-index algorithm in [`crate::superframe`] is consequently a
-//! second, small implementation of the same ~20-line algorithm
-//! `vaco-parse-vpx::superframe::last_subframe` already has — a known,
-//! documented duplicate to resolve in a future consolidation pass once both
-//! crates are free, not a discovery made and ignored.
+//! This crate deliberately depends on neither `vaco-parse-vpx` nor
+//! `vaco-codec-vp9`: CBS needs the full header boundary and carries opaque
+//! payload bytes, while [`superframe`] owns the coded-frame framing.
 //!
 //! # How it works
 //!
