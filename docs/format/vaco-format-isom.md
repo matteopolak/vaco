@@ -789,7 +789,8 @@ Named so the demuxer's author knows what is not here:
   `construction_method` is exactly `0`, `1`, or `2` (including zero reserved
   bits). `ipma` accepts only its version `0`/`1` item-ID layouts, and `infe`
   only versions `0` through `3`. `iinf`'s declared entry count also bounds
-  the `infe` children it exposes. An unsupported width or version refuses the
+  the `infe` children it exposes, and a truncated `iref` record contributes
+  no partial item graph edge. An unsupported width or version refuses the
   entire location/property/item table before it can invent a zero-length or
   wrapped extent, surface a trailing item, or apply the wrong layout. Still
   box-layer

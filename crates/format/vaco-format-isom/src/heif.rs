@@ -335,13 +335,20 @@ pub fn parse_iref(iref: &IsoBox<'_>) -> Vec<ItemReference> {
         let mut r = vaco_bitstream::ByteReader::new(child.payload);
         let from_item_id = if wide { r.be32() } else { u32::from(r.be16()) };
         let ref_count = r.be16();
+        if r.overrun() {
+            continue;
+        }
         let mut to_item_ids = Vec::new();
         for _ in 0..u32::from(ref_count).min(u32::try_from(MAX_REFS_PER_ENTRY).unwrap_or(u32::MAX))
         {
-            to_item_ids.push(if wide { r.be32() } else { u32::from(r.be16()) });
+            let to_item_id = if wide { r.be32() } else { u32::from(r.be16()) };
             if r.overrun() {
                 break;
             }
+            to_item_ids.push(to_item_id);
+        }
+        if r.overrun() {
+            continue;
         }
         out.push(ItemReference {
             kind: child.kind(),
@@ -741,6 +748,19 @@ mod tests {
         assert_eq!(refs[0].kind, FourCc::new(b"dimg"));
         assert_eq!(refs[0].from_item_id, 1);
         assert_eq!(refs[0].to_item_ids, vec![2, 3]);
+    }
+
+    #[test]
+    fn iref_refuses_a_truncated_reference_list() {
+        // A `dimg` record promises two targets but supplies only one. It
+        // must not expose a partial graph edge (or a fabricated zero id).
+        let mut record = 1u16.to_be_bytes().to_vec(); // from_item_id
+        record.extend_from_slice(&2u16.to_be_bytes()); // reference_count
+        record.extend_from_slice(&2u16.to_be_bytes());
+        let mut body = 0u32.to_be_bytes().to_vec(); // version/flags
+        body.extend_from_slice(&bx(b"dimg", &record));
+        let raw = bx(b"iref", &body);
+        assert!(parse_iref(&first_box(&raw)).is_empty());
     }
 
     #[test]
