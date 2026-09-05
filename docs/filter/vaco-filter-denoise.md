@@ -89,7 +89,11 @@ second transcription of the same formula:
   the last `min(s, N+1)` input frames including itself) rather than the
   reference's **centred** window, trading frame-alignment fidelity for zero
   added latency and no special-cased stream edges. The `a` (parallel/serial)
-  algorithm-variant option is parsed but not distinguished.
+  algorithm-variant option is parsed but not distinguished. Its history walk
+  reads the buffered planes directly rather than allocating a temporary sample
+  vector for every output pixel; an exact reference comparison over all output
+  samples protects the unchanged summation order. Ten alternating 1920x1080,
+  nine-frame rounds measured 2.4053 s to 316.95 ms (0.132x wall time).
 * **`removegrain`**: modes `1..=7` are a rank-order clip to
   `[sorted[mode-1], sorted[8-mode]]` of the 8 neighbours — inspired by, but
   not a transcription of, AviSynth's `RemoveGrain` per-mode formulas (several
@@ -98,6 +102,11 @@ second transcription of the same formula:
   transcribed; `create` rejects them with a named error rather than
   silently running mode `7`'s clip (a real accepted-value substitution
   until this pass — see `removegrain.rs`'s own doc).
+* **`nlmeans`**: patch distances are evaluated through one summed-area table
+  per candidate offset, exactly matching the retained brute-force reference
+  at borders while removing the patch-area factor. Fresh 48x48 median timings
+  were 338.7 us versus 1.187 ms for patch/search radii 1/2, and 3.2 ms versus
+  54.15 ms for 3/7 (0.285x and 0.059x respectively).
 * **`dctdnoiz`**/**`fftdnoiz`**: non-overlapping block tiling, no
   overlap-add (`overlap` is parsed, has no effect — visible as mild
   blockiness at high `sigma`, harmless to the stated oracles).
