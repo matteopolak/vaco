@@ -462,11 +462,11 @@ mod tests {
     #[test]
     fn a_hand_built_two_scan_file_splits_and_reassembles() {
         let mut data = vec![0xFF, SOI];
-        // SOS #1: header length 8, then scan bytes including a stuffed 0xFF00
+        // First SOS: header length 8, then scan bytes including a stuffed 0xFF00
         // and a restart marker, both of which must NOT end the span.
         data.extend_from_slice(&[0xFF, SOS, 0x00, 0x08, 1, 2, 3, 4, 5, 6]);
         data.extend_from_slice(&[0xAA, 0xFF, 0x00, 0xBB, 0xFF, RST0, 0xCC]);
-        // SOS #2: a fresh header, ending the file at EOI.
+        // Second SOS: a fresh header, ending the file at EOI.
         data.extend_from_slice(&[0xFF, SOS, 0x00, 0x08, 7, 8, 9, 10, 11, 12]);
         data.extend_from_slice(&[0xDD, 0xEE]);
         data.extend_from_slice(&[0xFF, EOI]);
