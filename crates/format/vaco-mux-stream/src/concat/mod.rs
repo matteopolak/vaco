@@ -292,12 +292,12 @@ impl ConcatDemuxer {
             return true;
         };
         if let Some(inpoint) = entry.inpoint
-            && d.as_micros() < inpoint.as_micros()
+            && d < inpoint
         {
             return false;
         }
         if let Some(outpoint) = entry.outpoint
-            && d.as_micros() >= outpoint.as_micros()
+            && d >= outpoint
         {
             return false;
         }
@@ -399,16 +399,17 @@ impl Demuxer for ConcatDemuxer {
     }
 
     fn duration(&self) -> Option<Duration> {
-        let mut total = 0i64;
-        for (i, entry) in self.entries.iter().enumerate() {
-            let span = entry.duration.or_else(|| {
-                self.inners
-                    .get(i)
-                    .and_then(vaco_format_core::Demuxer::duration)
-            })?;
-            total = total.checked_add(span.as_micros())?;
-        }
-        Some(Duration::from_micros(total))
+        self.entries
+            .iter()
+            .enumerate()
+            .try_fold(Duration::ZERO, |total, (i, entry)| {
+                let span = entry.duration.or_else(|| {
+                    self.inners
+                        .get(i)
+                        .and_then(vaco_format_core::Demuxer::duration)
+                })?;
+                total.checked_add(span)
+            })
     }
 }
 
@@ -627,6 +628,28 @@ mod tests {
             pts.push(p.pts.ticks().unwrap());
         }
         assert_eq!(pts, vec![0, 1000, 5000]);
+    }
+
+    #[test]
+    fn aggregate_duration_retains_submicrosecond_inner_spans() {
+        let source = fixture(
+            &[("a.ts", &[0]), ("b.ts", &[0])],
+            Rational::new(1, 1000),
+            Duration::from_fraction(1, 10_000_000),
+        );
+        let demux = ConcatDemuxer::open_script(
+            "file 'a.ts'\nfile 'b.ts'\n",
+            ConcatOptions {
+                safe: false,
+                ..Default::default()
+            },
+            &source,
+        )
+        .unwrap();
+        assert_eq!(
+            demux.duration().map(Duration::as_ratio),
+            Some((1, 5_000_000))
+        );
     }
 
     #[test]
