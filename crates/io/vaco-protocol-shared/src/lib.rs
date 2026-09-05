@@ -1,28 +1,25 @@
-//! `shared:` — a local, multi-process fan-out ring (PR-12c, issue #563).
+//! `shared:` — a local, multi-process fan-out ring.
 //!
 //! # What it is
 //!
-//! Layer 2. Plan 18 §8.7 (P3) describes this as "a shared-memory ring for
-//! multi-process UDP fan-out": one producer process writes a stream once, an
+//! Layer 2. One producer process writes a stream once, an
 //! arbitrary number of consumer processes on the same host each get their own
 //! copy, and a slow consumer drops data rather than blocking the producer.
 //!
 //! # Why this is not `mmap`
 //!
-//! The plan's own text already flags the problem: real POSIX/`mmap` shared
-//! memory "uses `unsafe` internally". That is not an implementation detail
-//! that a wrapper crate can hide — reading bytes that another process may be
+//! Real POSIX/`mmap` shared memory uses `unsafe` internally. That is not an
+//! implementation detail that a wrapper crate can hide — reading bytes that
+//! another process may be
 //! concurrently mutating is exactly the case Rust's aliasing model cannot
 //! check, so *every* crate on crates.io that exposes it puts `unsafe` on the
 //! read side (`memmap2`'s `Mmap`, `shared_memory`'s `Shmem::as_slice`,
-//! `mmap-sync`'s `Synchronizer::read` — checked directly, not assumed). `D2`
-//! forbids `unsafe` in this crate with no carve-out beyond `vaco-hw-*`, and
-//! this is not `vaco-hw-*`. D16 already ruled the identical way for `fd:` in
-//! `vaco-protocol-local`: a protocol that can only be built with `unsafe` is
-//! not built that way, full stop.
+//! `mmap-sync`'s `Synchronizer::read` — checked directly, not assumed). This
+//! crate forbids `unsafe`, so a protocol that can only be built with it is not
+//! implemented that way.
 //!
-//! So this crate delivers the *behaviour* PR-12c asks for — a local,
-//! multi-process, fan-out, drop-when-full ring — on top of `AF_UNIX`
+//! The protocol delivers a local, multi-process, fan-out, drop-when-full ring
+//! on top of `AF_UNIX`
 //! `SOCK_DGRAM` sockets instead of a memory-mapped region. Every property the
 //! acceptance test cares about still holds:
 //!
@@ -36,9 +33,8 @@
 //!
 //! The cost is a per-message copy through the kernel that `mmap` would avoid.
 //! Given the constraints, that is the deliberate divergence, and it is
-//! documented here per `planning/AGENT-CONSTRAINTS.md`'s "measure both sides
-//! and say so" rule: no throughput claim is made either way, since the design
-//! forbids the comparison from being close.
+//! and makes no throughput claim, since the designs are not close enough for a
+//! meaningful comparison.
 //!
 //! # Protocol
 //!
@@ -52,10 +48,8 @@
 //! * `sub-<pid>-<n>` — one per subscriber ([`Protocol::open`]), created before
 //!   it sends its registration so the address above is never empty.
 //!
-//! `<name>` must not contain a path separator — it names one segment under the
-//! shared directory, not an arbitrary path (rule U1's own domain, same
-//! reasoning `vaco-protocol-socket::unix` gives for treating `rest` as a raw
-//! path rather than routing it through the query-string URL grammar).
+//! `<name>` must not contain a path separator: it names one segment under the
+//! shared directory, not an arbitrary path.
 //!
 //! # Frame size
 //!
@@ -80,7 +74,7 @@
 //! # Example
 //!
 //! See `tests/shared_ipc.rs` for a genuine two-**process** round trip (not two
-//! threads sharing one address space) — the acceptance test in issue #563.
+//! threads sharing one address space).
 
 #![forbid(unsafe_code)]
 
