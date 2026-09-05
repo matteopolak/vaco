@@ -85,14 +85,25 @@ pub mod taps {
 pub fn fir_row_scalar<const N: usize>(src: &[u8], taps: &TapSet<N>, dst_len: usize) -> Vec<u8> {
     let available = src.len().saturating_sub(N.saturating_sub(1));
     let len = dst_len.min(available);
+    let mut dst = vec![0u8; len];
+    fir_row_scalar_into(src, taps, &mut dst);
+    dst
+}
+
+/// Allocation-free scalar reference for [`fir_row`].
+///
+/// This has the same caller-owned destination contract as the dispatched
+/// path, which makes scalar-versus-tier criterion measurements comparable
+/// without charging either side for an allocator call.
+pub fn fir_row_scalar_into<const N: usize>(src: &[u8], taps: &TapSet<N>, dst: &mut [u8]) {
+    let available = src.len().saturating_sub(N.saturating_sub(1));
+    let len = dst.len().min(available);
     let bias = taps.round_bias();
-    (0..len)
-        .map(|i| {
-            let window = src.get(i..i + N).unwrap_or(&[]);
-            let acc = tap_sum(window, &taps.coeffs);
-            clip_from_i32(acc, i32::from(bias), taps.shift)
-        })
-        .collect()
+    for (i, out) in dst.iter_mut().take(len).enumerate() {
+        let window = src.get(i..i + N).unwrap_or(&[]);
+        let acc = tap_sum(window, &taps.coeffs);
+        *out = clip_from_i32(acc, i32::from(bias), taps.shift);
+    }
 }
 
 /// Dispatched vector implementation of [`fir_row_scalar`], writing into a

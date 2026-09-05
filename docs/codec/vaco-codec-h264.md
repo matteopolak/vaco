@@ -167,8 +167,10 @@ Within #419's own scope, explicitly out rather than merely unimplemented
   below, which is also where the reasoning that used to live in this bullet
   (Table 9-27's bin string does not decompose into a clean arithmetic
   formula, so it was transcribed from JM 19.1 and bit-traced rather than
-  hand-derived) is now recorded. What is still refused on the B path is
-  **temporal direct** (`direct_spatial_mv_pred_flag == 0`).
+  hand-derived) is now recorded. Frame-coded, short-term **temporal direct**
+  (`direct_spatial_mv_pred_flag == 0`) is now implemented for CABAC with an
+  unreordered current reference list; field/MBAFF, CAVLC temporal direct,
+  and an unresolvable colocated reference identity remain named refusals.
 - **CABAC's 8x8 residual category** (`ctxBlockCat` 5, `transform_size_8x8_flag`)
   — same Main-profile-corpus reason as CAVLC's; chroma DC (`ctxBlockCat` 3)
   *is* implemented on both the residual (`cabac_residual.rs`) and
@@ -881,8 +883,7 @@ a suspect, not just the code under it.
 
 CAVLC reconstruction (`decode_slice_cavlc` verifies bit consumption only;
 `decoder.rs` never reconstructs from it, so Baseline-profile files are
-refused), **temporal direct** (`direct_spatial_mv_pred_flag == 0` — a
-materially different derivation, and not x264's default), long-term
+refused), CAVLC temporal direct, long-term
 reference pictures (MMCO 2/3/4/6 and `ref_pic_list_modification`'s
 `idc == 2`), MBAFF and field pictures, `constrained_intra_pred_flag`'s
 neighbour substitution, 4:2:2/4:4:4, `SI` slices, more than one slice per
@@ -1034,6 +1035,23 @@ pictures, `constrained_intra_pred_flag`'s neighbour substitution, 4:2:2/
 every one was already refused before this round; CAVLC reconstruction did
 not lift any of them, it only stopped refusing the *combination* of
 CAVLC with everything else already in scope.
+
+## Temporal direct prediction — frame-coded CABAC
+
+`mb.rs` implements clause 8.4.1.2.3 for CABAC B slices when the current
+reference lists are not reordered. For each co-located 4x4 block, the decoder
+retains the resolved reference-picture POC alongside its motion field, maps it
+into the current `RefPicList0`, and applies equations 8-195 through 8-202.
+This prevents treating a reference-list index from a different slice as an
+identity. Field/MBAFF cases, CAVLC temporal direct, list reordering, and a
+co-located reference absent from the current list still return `Unsupported`.
+
+The checked-in JVT `CABA3_SVA_B` fixture is 33 QCIF CABAC IPB pictures with
+temporal direct and no reference-list reordering. Its published 1,254,528-byte
+reconstruction matches both this decoder and a direct `ffmpeg` raw-stream
+decode byte-for-byte. The fixture is intentionally driven through
+`H264Decoder`'s public send/receive API so B-picture output ordering is part of
+the assertion.
 
 ## Neighbouring-partition availability (clauses 6.4.11.7 and 8.4.1.3)
 

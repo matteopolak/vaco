@@ -132,6 +132,24 @@ ordinary explicit, implicit, and unweighted-average cases use the vector
 body. On platforms without a trustworthy PMU counter, report that limitation
 instead of synthesising cycles or instruction counts.
 
+For the ARM publication gate, build the dedicated worker into one private
+release target, then run the protocol harness:
+
+```sh
+CARGO_INCREMENTAL=0 RUSTC_WRAPPER= cargo build -p vaco-codec-dsp-mc \
+  --example h264_mc_criterion --release --target-dir <private-target> --jobs 1
+python3 scripts/perf-h264-mc.py \
+  --binary <private-target>/release/examples/h264_mc_criterion \
+  --rounds 12 --min-run-ms 100 --max-load 2 --out <result.json>
+```
+
+The worker refuses a CPU without NEON and checks each selected output against
+the scalar reference before timing. The harness calibrates both sides, runs
+Scalar and NEON in alternating order for every MC table entry and both FIR tap
+sets, rejects a load spike before or after any subprocess, and records both
+inner-loop wall time and whole-child CPU seconds. Keep its JSON as issue
+evidence; do not commit machine-specific raw results.
+
 ## 4. Configuration
 
 None. Every function is a pure transform over caller-owned buffers — no
@@ -153,7 +171,8 @@ back to bitstream-signalled values.
   SIMD type/trait comes through `vaco_simd::prelude`.
 - **`proptest`, `divan`** (dev-only) — the tail-length sweep and
   `benches/fir.rs`'s scalar-vs-dispatched measurements (16px block width and
-  a 1920px row; the dispatched path measurably wins at the row width — see
-  the bench's own output — and is roughly break-even at one 16px block,
-  which is overhead rather than a defect: a real caller processes whole rows
-  or whole planes, not one block at a time).
+  a 1920px row). The short case exposes dispatch crossover; the criterion
+  case uses the complete row shape consumed by row/plane-oriented callers.
+- **Python 3 standard library** (measurement-only) — launches the
+  `h264_mc_criterion` example in alternating order and records load, wall, and
+  child CPU time. It invokes no external codec or network service.
