@@ -30,8 +30,7 @@
 //!
 //! - [`aes`] — re-exported whole, so a downstream crate can name concrete
 //!   types (`aes::Aes128`, `aes::Aes256`) the way `vaco-protocol-crypto`'s
-//!   own CBC code (measured against `ffmpeg 8.1`, unchanged by this move)
-//!   already did before this crate existed.
+//!   own CBC code (measured against `ffmpeg 8.1`) does.
 //! - [`ctr_apply_aes128`]/[`ctr_apply_aes192`]/[`ctr_apply_aes256`] — AES-CTR keystream generation/application
 //!   (XOR, so encrypt and decrypt are the same operation). This module owns
 //!   only the generic primitive: a 128-bit initial counter block, a key,
@@ -42,7 +41,7 @@
 //! - [`pbkdf2_hmac_sha256`] — PBKDF2-HMAC-SHA256 key derivation (RFC 8018
 //!   §5.2's algorithm, RFC 2898's PRF choice), the mechanism
 //!   `VSF TR-06-2` §7.3 names for its PSK passphrase-to-key derivation.
-//! - [`hmac_sha1`] (added 2026-08-28 for `vaco-protocol-srtp`, #551) —
+//! - [`hmac_sha1`] —
 //!   the raw 20-byte HMAC-SHA1 tag, over [`vaco_hash::sha1::Sha1`]
 //!   (re-exported by `vaco-hash` for the same reason as `sha2` above),
 //!   the primitive RFC 3711 §4.2 truncates for SRTP's default
@@ -57,8 +56,8 @@
 //! AES key sizes — genuinely independent evidence, not this crate's own
 //! encoder checked against its own decoder. [`pbkdf2_hmac_sha256`]'s tests
 //! are two-layered: RFC 7914 §11's algorithm-level vectors (RFC 8018 itself
-//! contains none — checked directly, not assumed; see this crate's own
-//! commit message) confirm the generic PBKDF2-HMAC-SHA256 implementation,
+//! contains none — checked directly, not assumed) confirm the generic
+//! PBKDF2-HMAC-SHA256 implementation,
 //! and `VSF TR-06-2` Annex B's own worked passphrase/nonce example
 //! (independently re-derived via Python's stdlib `hashlib.pbkdf2_hmac`
 //! with the same inputs before being trusted as a test's expected value,

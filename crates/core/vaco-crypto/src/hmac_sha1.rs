@@ -49,7 +49,7 @@ mod tests {
     // --- RFC-vector-derived: RFC 2202's own HMAC-SHA1 test cases 1-3,
     // cross-checked against Python's stdlib hmac+hashlib before being
     // trusted as this test's expected values (not merely recalled from
-    // the RFC's rendered page — see this crate's own commit message).
+    // the RFC's rendered page).
 
     #[test]
     fn rfc2202_case_1() {
