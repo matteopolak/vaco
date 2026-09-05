@@ -204,6 +204,9 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
     } else {
         r.be32()
     };
+    if r.overrun() {
+        return Vec::new();
+    }
     let mut out = Vec::new();
     for _ in 0..item_count.min(u32::try_from(MAX_ITEMS).unwrap_or(u32::MAX)) {
         let item_id = if full.version < 2 {
@@ -224,6 +227,9 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
         let data_reference_index = r.be16();
         let base_offset = read_sized(&mut r, base_offset_size);
         let extent_count = r.be16();
+        if r.overrun() {
+            return Vec::new();
+        }
         let mut extents = Vec::new();
         for _ in
             0..u32::from(extent_count).min(u32::try_from(MAX_EXTENTS_PER_ITEM).unwrap_or(u32::MAX))
@@ -233,6 +239,9 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
             }
             let extent_offset = read_sized(&mut r, offset_size);
             let extent_length = read_sized(&mut r, length_size);
+            if r.overrun() {
+                return Vec::new();
+            }
             let Some(offset) = base_offset.checked_add(extent_offset) else {
                 return Vec::new();
             };
@@ -244,9 +253,6 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
             data_reference_index,
             extents,
         });
-        if r.overrun() {
-            break;
-        }
     }
     out
 }
@@ -586,6 +592,23 @@ mod tests {
         body.extend_from_slice(&1u64.to_be_bytes()); // extent_offset
         body.extend_from_slice(&1u64.to_be_bytes()); // extent_length
         let raw = fullbx(b"iloc", 1, 0, &body);
+        assert!(parse_iloc(&first_box(&raw)).is_empty());
+    }
+
+    #[test]
+    fn iloc_refuses_a_truncated_extent_list() {
+        // An item that declares two extents but carries one must not expose a
+        // second zero-filled range that can alter downstream item resolution.
+        let body = [
+            0x44, 0, // offset_size=4, length_size=4, base_offset_size=0
+            0, 1, // item_count
+            0, 1, // item_id
+            0, 0, // data_reference_index
+            0, 2, // extent_count
+            0, 0, 0, 1, // first extent_offset
+            0, 0, 0, 1, // first extent_length
+        ];
+        let raw = fullbx(b"iloc", 0, 0, &body);
         assert!(parse_iloc(&first_box(&raw)).is_empty());
     }
 
