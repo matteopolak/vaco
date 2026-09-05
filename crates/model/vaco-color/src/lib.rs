@@ -1,54 +1,29 @@
 #![forbid(unsafe_code)]
 //! Colour signalling per ITU-T H.273, and the conversion maths it implies.
 //!
-//! These four properties travel together everywhere — a pixel format alone does
-//! not say how to interpret the values — so they are one struct rather than four
-//! fields repeated on every frame, stream and filter link.
+//! These values travel together everywhere: a pixel format alone does not say
+//! how to interpret its samples, so [`ColorInfo`] carries the H.273 vocabulary
+//! and the associated conversion parameters as one value.
 //!
-//! # What is here
+//! The enums use H.273 code points directly. [`Chromaticity`] supplies primary
+//! coordinates; matrix coefficients, transfer functions, inverses, and narrow
+//! or full-range levels provide the numbers consumed by `vaco-scale`.
+//! Nothing here allocates, and well-formed inputs do not fail.
 //!
-//! Two things that are usually kept apart and should not be:
+//! Y'`CbCr` matrices are derived from the specification's `Kr`/`Kb` constants at
+//! the point of use. For coefficients 12 and 13, `Kr`/`Kb` come from the primary
+//! chromaticities (see [`Chromaticity::luma_coefficients`]); values stay `f64`
+//! until a fixed-point consumer rounds at its chosen precision.
 //!
-//! 1. **The vocabulary.** [`ColorPrimaries`], [`TransferCharacteristic`],
-//!    [`MatrixCoefficients`], [`ColorRange`] and [`ChromaLocation`], with the
-//!    specification's own code points as discriminants and both name tables the
-//!    reference tool uses (see "Two name tables" below).
-//! 2. **The numbers those names stand for.** Primary chromaticities, the
-//!    RGB↔XYZ derivation, the R'G'B'↔Y'`CbCr` matrices, the transfer functions
-//!    and their inverses, and the quantisation levels for narrow and full range.
-//!    This is what `vaco-scale` needs and it belongs next to the enum that names
-//!    it, not copied into every consumer.
+//! The reference has separate input and output name tables: for example,
+//! `-color_trc gamma22` prints as `bt470m`, and `-colorspace rgb` as `gbr`.
+//! [`TransferCharacteristic::name`] and `from_name` (and the corresponding
+//! matrix methods) are therefore not inverses. These D17 mappings are observable
+//! in `-show_streams` and retain byte-identical output as the contract.
 //!
-//! Nothing here allocates and nothing here fails on well-formed input. Every
-//! query is either a table index or a handful of floating-point operations.
-//!
-//! # Coefficients are derived, not tabulated
-//!
-//! The Y'`CbCr` matrices are computed from the specification's `Kr`/`Kb` constants
-//! at the point of use rather than stored pre-multiplied, and the primaries'
-//! `Kr`/`Kb` are computed from the chromaticity coordinates when H.273 says to
-//! (matrix coefficients 12 and 13). See [`Chromaticity::luma_coefficients`] for
-//! the derivation. Values are `f64` throughout and are never pre-rounded — a
-//! fixed-point kernel rounds once, at the end, where it knows its own precision.
-//!
-//! # Two name tables (D17)
-//!
-//! The reference tool spells several of these values one way on the command line
-//! and a different way in `ffprobe` output. `-color_trc gamma22` is accepted and
-//! prints back as `bt470m`; `-colorspace rgb` prints back as `gbr`. So
-//! [`TransferCharacteristic::name`] (output) and
-//! [`TransferCharacteristic::from_name`] (input) are deliberately *not* inverses
-//! for every value, and the same holds for [`MatrixCoefficients`]. Each divergence
-//! carries a `// D17:` comment where it is defined. Do not "fix" them into one
-//! table: D6 makes byte-identical output the contract, and these strings are
-//! observable in `-show_streams`.
-//!
-//! # Unassigned code points
-//!
-//! H.273 reserves values for future use, and a bitstream may legally carry one.
-//! [`ColorPrimaries::from_u8`] and friends return `None` for those rather than
-//! inventing a variant. A demuxer that must round-trip the raw byte should keep
-//! the byte; this crate models the values the specification has assigned.
+//! H.273-reserved code points are not invented as enum variants:
+//! [`ColorPrimaries::from_u8`] and friends return `None`. A demuxer that must
+//! round-trip an unassigned byte should retain it separately.
 
 mod chroma;
 mod matrix;
