@@ -45,6 +45,7 @@ pub struct TileCabacState<'a> {
     first_ctb_leaf_second_mpm_prefix: Option<bool>,
     first_ctb_leaf_second_mpm_suffix: Option<bool>,
     first_ctb_leaf_second_luma_mode: Option<u8>,
+    first_ctb_leaf_third_prev_intra: Option<bool>,
 }
 
 impl TileCabacState<'_> {
@@ -516,6 +517,45 @@ impl TileCabacState<'_> {
         self.first_ctb_leaf_second_luma_mode = Some(mode);
         Ok(mode)
     }
+
+    /// Decode the third 4x4 PU's `prev_intra_luma_pred_flag`.
+    ///
+    /// This is the next PU in the first minimum-size `PART_NxN` leaf after
+    /// the second PU's established `INTRA_VER` mode. It consumes only the
+    /// next context-0 flag; the third PU's MPM/rem-mode syntax remains
+    /// unconsumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] unless the second PU mode
+    /// was resolved as `INTRA_VER`, and [`vaco_core::Error::InvalidData`] for
+    /// inconsistent leaf dimensions.
+    pub fn decode_first_ctb_leaf_third_prev_intra_luma_pred_flag(
+        &mut self,
+        leaf_log2_size: u32,
+        min_cb_log2_size: u32,
+    ) -> Result<bool> {
+        if self.first_ctb_leaf_second_luma_mode != Some(crate::intra_mode::VER_IDX) {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile second PU mode is not resolved",
+            ));
+        }
+        if leaf_log2_size != min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile leaf dimensions are invalid",
+            ));
+        }
+        let context = self
+            .contexts
+            .prev_intra_luma_pred
+            .first_mut()
+            .ok_or(Error::InvalidData(
+                "vaco-codec-hevc: prev_intra_luma_pred context is missing",
+            ))?;
+        let prev = self.cabac.decode_decision(context) != 0;
+        self.first_ctb_leaf_third_prev_intra = Some(prev);
+        Ok(prev)
+    }
 }
 
 impl TileLayout {
@@ -791,6 +831,7 @@ impl TileLayout {
                 first_ctb_leaf_second_mpm_prefix: None,
                 first_ctb_leaf_second_mpm_suffix: None,
                 first_ctb_leaf_second_luma_mode: None,
+                first_ctb_leaf_third_prev_intra: None,
             });
         }
         Ok(states)
