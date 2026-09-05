@@ -1,6 +1,6 @@
 # `vaco-codec-aac`
 
-Layer 4. AAC-LC decode (epic #53, T3-03), patent-encumbered per D4. **Never
+Layer 4. AAC-LC decode and narrow ADTS silence encode (epic #53, T3-03/T3-04), patent-encumbered per D4. **Never
 shipped**: gated behind the `patent-encumbered-aac-decode` feature, off by
 default, and this doc will keep saying so until D4's legal posture changes.
 
@@ -30,6 +30,30 @@ decode is complete end to end** — see "Decode accuracy" for what that is
 measured against and "Known gaps" for what is still approximated or
 unsupported.
 
+### AAC-LC ADTS silence encode (#449)
+
+`AacLcSilenceEncoder` is the first encoding slice, deliberately kept smaller
+than a general AAC encoder: it accepts exactly one packed `S16`, mono, 48 kHz
+frame containing exactly 1024 zero samples. It emits one self-contained ADTS
+AAC-LC access unit with a single long-window `SCE`, one `ZERO_HCB` section, and
+`ID_END`. Non-silent PCM, another sample format, another layout/rate, or a
+short/long frame is refused by name instead of being encoded as silence.
+
+The ADTS header uses AAC-LC profile, sampling-frequency index 3 (48 kHz), mono
+channel configuration, no CRC, and its exact access-unit length. Three emitted
+packets concatenated as an `.aac` elementary stream were read by `ffprobe
+9.0.1` as `codec_name=aac`, `sample_rate=48000`, and `channels=1`; `ffmpeg
+9.0.1` decoded exactly 3,072 samples / 12,288 `f32le` bytes. The crate's own
+decoder also reads each packet as one 1,024-sample mono frame. Silence has no
+lossy-quality claim to compare — these checks establish framing and stream
+shape, not general quantisation quality.
+
+This is a direct API only, intentionally not a registered generic encoder and
+not a container-ready raw AAC access-unit writer: its packets include ADTS
+headers so they can form a playable elementary stream on concatenation. Full
+AAC-LC encoding still needs transform, quantisation, rate control,
+psychoacoustics, channel tools, and container integration.
+
 **#446 (SBR/HE-AAC) is in progress, not landed.** This pass built and
 verified the QMF analysis/synthesis filterbanks (`qmf.rs`) and all ten
 SBR envelope/noise Huffman tables (`sbr_huffman_tables.rs`). An initial
@@ -50,7 +74,7 @@ the Via LA AAC pool is active and licenses per **decoder or encoder unit**,
 not per bitstream. AAC *remuxing* —
 reading a container's AAC track without ever instantiating a decoder — stays
 in the default build and is what `vaco-parse-aac` already delivers; only
-decode (this crate) and encode (unstarted) are gated.
+decode and the narrow encoder in this crate are gated.
 
 **This is the first `encumbered = true` component in the tree.** Every
 `cargo xtask patent-gate` run before this one reported "no component in the
@@ -871,6 +895,13 @@ plausible-looking implementation that a real bitstream falsifies.
 
 ## How to change it
 
+- **Extending AAC-LC encode beyond silence:** start by separating the ADTS
+  transport wrapper in `encoder.rs` from raw access-unit production, then add
+  a real transform/quantisation path before accepting nonzero PCM. Keep the
+  ffmpeg elementary-stream oracle and add an independently generated,
+  non-silent reference for every new channel/rate/frame shape. Do not register
+  the encoder or feed its ADTS-bearing packets to a container muxer until the
+  raw-access-unit/extradata contract is implemented.
 - **Fixing intensity stereo's phase:** thread `sfb_cb`'s actual value (14
   vs 15) from `section.rs`/`scalefactor.rs` through to `IcsStream`, then
   have `reconstruct::apply_intensity_stereo` branch on it instead of always
@@ -928,15 +959,16 @@ plausible-looking implementation that a real bitstream falsifies.
 
 ## Configuration
 
-None inside this crate. The gating feature, `patent-encumbered-aac-decode`,
-is set in `vaco-component.toml` and consumed entirely by
+`AacLcSilenceEncoder` has no runtime options: its fixed input contract is
+packed `S16`, mono, 48 kHz, 1024 all-zero samples. The gating feature,
+`patent-encumbered-aac-decode`, is set in `vaco-component.toml` and consumed entirely by
 `vaco-registry`/`cargo xtask gen-registry`/`cargo xtask patent-gate` — see
 "Why this is gated" above.
 
 ## Dependencies
 
 `vaco-core`, `vaco-bitstream`, `vaco-limits`, `vaco-codec-core` (the
-`Decoder` trait, `DecoderDesc`, `Caps`), `vaco-codec-vlc` (`VlcTable`,
+`Decoder`/`SendReceive` traits, `DecoderDesc`, `Caps`), `vaco-codec-vlc` (`VlcTable`,
 `VlcEntry` — every Huffman table in `spectral_tables.rs`), `vaco-frame`,
 `vaco-packet`, `vaco-parse-aac` (`AdtsHeader`, `AudioSpecificConfig`,
 `AudioObjectType`, `tables::is_reserved_config`, `tables::layout_for_config`
@@ -961,6 +993,11 @@ window sequences, codebook parameters, TNS field widths), Tables
 `swb_tables.rs`'s own doc), Tables 4.A.1-4.A.12 (Huffman codebooks — see
 `spectral_tables.rs`'s own doc). ISO/IEC 13818-7 (`iso-13818-7`) backs the
 ADTS transport syntax, also in `vaco-parse-aac`.
+
+Added by #449 (narrow ADTS silence encode): ISO/IEC 14496-3 subpart 1 Table
+1.A.5 (ADTS fixed/variable header fields) and subpart 4 Table 4.3
+(`raw_data_block()` element sequence) — `encoder.rs` writes only the
+single-SCE `ZERO_HCB` form documented above.
 
 Added by #445 (reconstruction): §4.6.1.3 (inverse quantisation),
 §4.6.2.3.3 (scalefactor gain), §4.5.2.3.5 (`quant_to_spec()`), §4.6.8.1.3

@@ -1,4 +1,4 @@
-//! AAC-LC decoding and its patent-gating policy.
+//! AAC-LC decoding, narrow silence encoding, and patent-gating policy.
 //!
 //! # Patent gating
 //!
@@ -18,6 +18,9 @@
 //! quantisation, stereo tools, TNS, IMDCT, windowing, and overlap-add.
 //! Unsupported channel configurations and coupling elements are refused by
 //! name rather than approximated.
+//! [`AacLcSilenceEncoder`] additionally writes a deliberately constrained
+//! self-contained ADTS stream for exact silent mono 48 kHz frames; it is not
+//! registered as a general AAC encoder.
 //!
 //! See `docs/codec/vaco-codec-aac.md` for supported configurations, measured
 //! reconstruction quality, and remaining refusal boundaries.
@@ -26,6 +29,7 @@
 
 pub mod config;
 pub mod decoder;
+mod encoder;
 mod ics;
 mod ics_stream;
 pub mod pce;
@@ -44,6 +48,7 @@ mod tns_apply;
 
 pub use config::{ChannelResolution, DecoderConfig};
 pub use decoder::AacDecoder;
+pub use encoder::AacLcSilenceEncoder;
 pub use pce::{ChannelElementRef, ProgramConfigElement, find_leading_program_config_element};
 
 /// The registry descriptor for this crate's decoder.
