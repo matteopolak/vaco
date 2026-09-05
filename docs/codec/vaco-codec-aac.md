@@ -536,6 +536,12 @@ needed no changes. Decoded by hand from a real `afconvert`-produced HE-AAC
 with `Error::Unsupported` as of this pass — accepting it usefully needs
 the QMF/HF pipeline this pass could not verify, so the gate stays in
 place rather than accepting a configuration this crate cannot yet act on.
+Replacing decoder extradata clears the prior extradata configuration, cached
+in-band configuration, and overlap state before parsing the replacement. That
+also applies when the replacement is rejected: a caller cannot submit a
+headerless HE-AAC access unit after its explicit-SBR error and have it decoded
+under the preceding AAC-LC configuration; it fails packet configuration and
+queues no frame.
 
 A real `afconvert`-produced ADTS HE-AAC file confirmed the **implicit**
 case directly: its raw ADTS header declares plain `profile=1` (AAC-LC),

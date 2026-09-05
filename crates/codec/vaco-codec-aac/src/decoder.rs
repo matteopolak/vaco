@@ -453,6 +453,9 @@ impl Decoder for AacDecoder {
     }
 
     fn set_extradata(&mut self, extradata: &[u8]) -> Result<()> {
+        self.extradata_config = None;
+        self.config = None;
+        self.overlap.clear();
         let asc = AudioSpecificConfig::parse(extradata)?;
         self.extradata_config = Some(DecoderConfig::from_audio_specific_config(&asc)?);
         Ok(())
@@ -793,6 +796,26 @@ mod tests {
             dec.send_packet(Some(&packet)),
             Err(Error::UnexpectedEof)
         ));
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    #[test]
+    fn rejected_explicit_sbr_extradata_cannot_leave_an_old_lc_config_live() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        dec.set_extradata(&[0x11, 0x88]).unwrap(); // AAC-LC, 48000 Hz mono
+
+        let error = dec
+            .set_extradata(&[0x13, 0x90, 0x56, 0xe5, 0xa0])
+            .unwrap_err(); // HE-AAC's recorded explicit-SBR configuration
+        assert!(error.to_string().contains("SBR (HE-AAC)"));
+
+        let adts = adts_frame_with_minimal_raw_data_block();
+        let raw_body = adts.get(7..).unwrap();
+        let mut budget = Budget::new(Limits::permissive());
+        let packet = Packet::from_slice(&mut budget, raw_body).unwrap();
+
+        let error = dec.send_packet(Some(&packet)).unwrap_err();
+        assert!(matches!(error, Error::UnexpectedEof), "{error}");
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
     }
 
