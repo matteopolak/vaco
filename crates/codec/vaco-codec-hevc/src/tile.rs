@@ -1,12 +1,13 @@
 //! Tile CTB geometry from the PPS, ITU-T H.265 §§6.5 and 7.3.2.3.
 //!
-//! This is the decoder's first tile prerequisite, not tile decoding: it maps
-//! the raster CTB coordinates to the rectangular tile that owns them and
-//! exposes the neighbour availability change at a tile edge. The decoder
-//! still refuses tile pictures before CABAC reconstruction or filtering, so a
-//! caller cannot accidentally turn this geometry into cross-tile pixels.
+//! These are the decoder's tile prerequisites, not tile decoding: they map
+//! raster CTB coordinates to their rectangular tile, expose neighbour
+//! availability at tile edges, and initialize independent CABAC state. The
+//! decoder still refuses tile pictures before CTB reconstruction or filtering,
+//! so a caller cannot accidentally turn this state into cross-tile pixels.
 
-use vaco_codec_cabac::CabacDecoder;
+use crate::cabac_ctx::ContextBank;
+use vaco_codec_cabac::{CabacDecoder, ContextModel};
 use vaco_core::{Error, Result};
 use vaco_parse_hevc::pps::Tiles;
 
@@ -22,6 +23,40 @@ pub struct TileLayout {
     num_rows: u32,
     ctbs_y: u32,
     loop_filter_across_tiles: bool,
+}
+
+/// CABAC arithmetic and context state initialized at one tile boundary.
+///
+/// This is an opaque state holder: CTB syntax consumption remains in the
+/// decoder's refused tile path until tile-local reconstruction is proven.
+#[derive(Debug)]
+pub struct TileCabacState<'a> {
+    cabac: CabacDecoder<'a>,
+    contexts: ContextBank,
+}
+
+impl TileCabacState<'_> {
+    /// Return the §9.3.1.2 arithmetic interval after initialization.
+    #[must_use]
+    pub const fn range(&self) -> u32 {
+        self.cabac.range()
+    }
+
+    /// Whether the arithmetic initializer or its nine-bit read was malformed.
+    #[must_use]
+    pub const fn malformed(&self) -> bool {
+        self.cabac.malformed()
+    }
+
+    /// Return the first `split_cu_flag` context after §9.3.2.2 initialization.
+    #[must_use]
+    #[allow(
+        clippy::indexing_slicing,
+        reason = "the context bank's split_cu_flag table has a fixed first entry"
+    )]
+    pub const fn first_split_cu_context(&self) -> ContextModel {
+        self.contexts.split_cu_flag[0]
+    }
 }
 
 impl TileLayout {
@@ -241,6 +276,53 @@ impl TileLayout {
             decoders.push(decoder);
         }
         Ok(decoders)
+    }
+
+    /// Initialize arithmetic and syntax contexts for every tile substream.
+    ///
+    /// `slice_qp` is `SliceQPY` from §7.4.7.1. Every tile receives a fresh
+    /// §9.3.2.2 context bank alongside its independent §9.3.1.2 arithmetic
+    /// state. This consumes no CTB syntax bins.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::InvalidData`] for a QP outside 0..=51,
+    /// propagates tile range validation, and rejects an empty or malformed
+    /// substream before returning any tile state.
+    pub fn initialize_tile_cabac_states<'a>(
+        &self,
+        data: &'a [u8],
+        entry_point_offsets: &[u32],
+        slice_qp: i8,
+    ) -> Result<Vec<TileCabacState<'a>>> {
+        if !(0..=51).contains(&slice_qp) {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: tile slice QP is out of range",
+            ));
+        }
+        let ranges = self.tile_substream_byte_ranges(data.len(), entry_point_offsets)?;
+        let mut states = Vec::new();
+        for (start, end) in ranges {
+            if start == end {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: tile substream is empty",
+                ));
+            }
+            let bytes = data.get(start..end).ok_or(Error::InvalidData(
+                "vaco-codec-hevc: tile substream range is invalid",
+            ))?;
+            let cabac = CabacDecoder::new(bytes);
+            if cabac.malformed() {
+                return Err(Error::InvalidData(
+                    "vaco-codec-hevc: tile CABAC initialization is malformed",
+                ));
+            }
+            states.push(TileCabacState {
+                cabac,
+                contexts: ContextBank::new(slice_qp),
+            });
+        }
+        Ok(states)
     }
 
     /// Return `(tile_id, tile-local raster CTB address)` for a CTB.

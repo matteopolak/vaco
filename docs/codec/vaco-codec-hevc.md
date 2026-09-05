@@ -979,8 +979,10 @@ ranges, then calls `TileLayout::initialize_first_tile_cabac` to validate the
 first tile's §9.3.1.2 arithmetic initializer without consuming a CTB bin. The
 same check is also applied to every tile range by
 `TileLayout::initialize_tile_cabac_substreams`, proving both independent
-arithmetic state boundaries in this stream. Finally it sends the same access
-unit to `HevcDecoder` and
+arithmetic state boundaries in this stream. The follow-on
+`TileLayout::initialize_tile_cabac_states` step derives one fresh §9.3.2.2
+context bank from the parsed `SliceQPY` for each range; it still consumes no
+CTB syntax. Finally it sends the same access unit to `HevcDecoder` and
 requires exactly
 `Error::Unsupported("vaco-codec-hevc: tiles are not supported")` before any
 CABAC data is decoded. This keeps the parser's §7.3.2.3 tile syntax and the

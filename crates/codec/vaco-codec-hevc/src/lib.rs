@@ -226,7 +226,7 @@ mod wavefront;
 mod weight;
 
 pub use decoder::HevcDecoder;
-pub use tile::TileLayout;
+pub use tile::{TileCabacState, TileLayout};
 
 /// The registry descriptor for this crate's decoder.
 ///

@@ -17,6 +17,7 @@
 )]
 
 use vaco_bitstream::BitReader;
+use vaco_codec_cabac::ContextModel;
 use vaco_codec_core::Decoder;
 use vaco_codec_hevc::{HevcDecoder, TileLayout};
 use vaco_core::Error;
@@ -217,6 +218,20 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
     for cabac in &tile_cabac {
         assert_eq!(cabac.range(), 510);
         assert!(!cabac.malformed());
+    }
+    let slice_qp = i8::try_from(26 + pps.init_qp_minus26 + header.qp_delta)
+        .expect("fixture slice QP fits the signed context API");
+    let tile_states = layout
+        .initialize_tile_cabac_states(slice_data, &header.entry_point_offsets, slice_qp)
+        .expect("each tile syntax context bank initializes");
+    assert_eq!(tile_states.len(), 2);
+    for state in &tile_states {
+        assert_eq!(state.range(), 510);
+        assert!(!state.malformed());
+        assert_eq!(
+            state.first_split_cu_context(),
+            ContextModel::init_hevc(139, slice_qp)
+        );
     }
     let cabac = layout
         .initialize_first_tile_cabac(slice_data, &header.entry_point_offsets)
