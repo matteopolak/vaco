@@ -382,6 +382,34 @@ impl FrameSyncFilter for Filter {
                     dst.copy_from_slice(src);
                     continue;
                 }
+                if (opacity - 1.0).abs() < f64::EPSILON {
+                    let (Some(a), Some(b), Some(dst)) =
+                        (a_row.get(..n), b_row.get(..n), dst_row.get_mut(..n))
+                    else {
+                        continue;
+                    };
+                    match mode {
+                        Mode::And => {
+                            for ((out, &a), &b) in dst.iter_mut().zip(a).zip(b) {
+                                *out = a & b;
+                            }
+                            continue;
+                        }
+                        Mode::Or => {
+                            for ((out, &a), &b) in dst.iter_mut().zip(a).zip(b) {
+                                *out = a | b;
+                            }
+                            continue;
+                        }
+                        Mode::Xor => {
+                            for ((out, &a), &b) in dst.iter_mut().zip(a).zip(b) {
+                                *out = a ^ b;
+                            }
+                            continue;
+                        }
+                        _ => {}
+                    }
+                }
                 for x in 0..n {
                     let (Some(&a), Some(&b)) = (a_row.get(x), b_row.get(x)) else {
                         continue;

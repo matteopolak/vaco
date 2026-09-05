@@ -90,6 +90,8 @@ directly against `multiply` at `opacity=0.5`.
 `normal` is the exact identity on the first input for every opacity value, so
 its frame walk copies each valid source-row span rather than evaluating a
 per-sample mode branch. Other modes retain the measured arithmetic path.
+At full opacity, the bitwise `and`/`or`/`xor` modes likewise use their direct
+row operations; fractional opacity keeps the shared measured mixing formula.
 
 **Not implemented**: `hardlight`, `overlay`, `softlight`, `hardmix`,
 `linearlight`, `vividlight`, `pinlight`, `reflect`, `phoenix`,
