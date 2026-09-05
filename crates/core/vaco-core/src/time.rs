@@ -252,6 +252,45 @@ impl Duration {
         Self::from_ratio(micros as i128, 1_000_000)
     }
 
+    /// Parse a base-10 seconds value without passing through binary floating point.
+    ///
+    /// Playlist syntaxes use decimal seconds; preserving their written digits
+    /// avoids silently collapsing sub-microsecond segment boundaries.
+    #[must_use]
+    pub fn from_decimal_seconds(value: &str) -> Option<Self> {
+        let (negative, value) = value
+            .strip_prefix('-')
+            .map_or((false, value), |rest| (true, rest));
+        let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
+        if whole.is_empty() && fraction.is_empty()
+            || !whole.bytes().all(|byte| byte.is_ascii_digit())
+            || !fraction.bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return None;
+        }
+        let whole = if whole.is_empty() {
+            0
+        } else {
+            whole.parse::<i128>().ok()?
+        };
+        let fraction_digits = fraction.len();
+        let fraction = if fraction.is_empty() {
+            0
+        } else {
+            fraction.parse::<i128>().ok()?
+        };
+        let scale = (0..fraction_digits).try_fold(1_i128, |scale, _| scale.checked_mul(10))?;
+        let numerator = whole.checked_mul(scale)?.checked_add(fraction)?;
+        Some(Self::from_ratio(
+            if negative {
+                numerator.checked_neg()?
+            } else {
+                numerator
+            },
+            scale,
+        ))
+    }
+
     /// Build an exact duration from ticks in `time_base`.
     #[must_use]
     pub fn from_ticks(ticks: i64, time_base: TimeBase) -> Option<Self> {

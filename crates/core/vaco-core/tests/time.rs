@@ -106,6 +106,19 @@ fn duration_distinguishes_values_that_share_a_rounded_microsecond() {
 }
 
 #[test]
+fn decimal_seconds_retain_digits_beyond_microseconds() {
+    assert_eq!(
+        Duration::from_decimal_seconds("0.0000001").map(Duration::as_ratio),
+        Some((1, 10_000_000))
+    );
+    assert_eq!(
+        Duration::from_decimal_seconds("12.3456789").map(Duration::as_ratio),
+        Some((123_456_789, 10_000_000))
+    );
+    assert_eq!(Duration::from_decimal_seconds("1e-3"), None);
+}
+
+#[test]
 fn exact_duration_arithmetic_and_integer_boundaries() {
     let third = Duration::from_ticks(1, Rational::new(1, 3)).unwrap();
     let half = Duration::from_ticks(1, Rational::new(1, 2)).unwrap();

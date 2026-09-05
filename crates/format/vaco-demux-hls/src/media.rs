@@ -160,9 +160,8 @@ pub fn parse(text: &str, base_url: &str) -> Result<MediaPlaylist> {
             }
         } else if let Some(rest) = line.strip_prefix("#EXTINF:") {
             let (dur_str, title) = rest.split_once(',').unwrap_or((rest, ""));
-            let secs: f64 = dur_str.trim().parse().unwrap_or(0.0);
-            let micros = (secs * 1_000_000.0) as i64;
-            pending_duration = Some((Duration::from_micros(micros), title.to_owned()));
+            let duration = Duration::from_decimal_seconds(dur_str.trim()).unwrap_or(Duration::ZERO);
+            pending_duration = Some((duration, title.to_owned()));
         } else if line.starts_with('#') {
             // Unrecognised tag or comment: RFC 8216 §4.1 tolerance.
         } else {
@@ -234,6 +233,12 @@ seg6.ts\n\
         let text = "#EXTM3U\n#EXT-X-TARGETDURATION:6\n#EXTINF:6.0,\nseg0.ts\n";
         let p = parse(text, "x").unwrap();
         assert!(p.is_live());
+    }
+
+    #[test]
+    fn extinf_retains_submicrosecond_decimal_digits() {
+        let playlist = parse("#EXTM3U\n#EXTINF:0.0000001,\nseg.ts\n", "x").unwrap();
+        assert_eq!(playlist.segments[0].duration.as_ratio(), (1, 10_000_000));
     }
 
     #[test]

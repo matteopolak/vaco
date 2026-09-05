@@ -49,6 +49,11 @@ discontinuity boundary — caught by `tests/demux.rs`'s
 `discontinuity_produces_a_continuous_timeline_not_a_backwards_jump`, which is
 why the interval is estimated from observed deltas instead.
 
+`#EXTINF` decimal seconds are parsed as exact base-10 rationals. Playlist
+duration and timestamp seeking add and compare those values directly, so a
+seven-decimal segment such as `0.0000001` is not rounded away through a
+microsecond intermediate.
+
 **Known gap**: if a discontinuity genuinely changes the stream count or
 order (a real encoding-profile change, which is exactly what
 `#EXT-X-DISCONTINUITY` is *for*), this crate keeps the stream list from the
