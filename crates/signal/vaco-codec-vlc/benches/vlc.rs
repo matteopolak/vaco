@@ -104,3 +104,24 @@ fn lut(bencher: Bencher<'_, '_>) {
             black_box(count)
         });
 }
+
+#[divan::bench(args = [8, 12, 16])]
+fn bounded_lookup(bencher: Bencher<'_, '_>, width: u8) {
+    let entries = synthetic_table();
+    let table = VlcTable::new(&entries);
+    let lookup = table.build_lookup(width).expect("width is <= max_len");
+    let bytes = stream_of(&entries, REPS);
+    let n = REPS * entries.len();
+    bencher
+        .counter(divan::counter::ItemsCount::new(n))
+        .bench_local(|| {
+            let mut r = BitReader::new(black_box(&bytes));
+            let mut count = 0u32;
+            for _ in 0..n {
+                if let Some(sym) = lookup.decode(&mut r) {
+                    count = count.wrapping_add(black_box(sym));
+                }
+            }
+            black_box(count)
+        });
+}

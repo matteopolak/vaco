@@ -9,6 +9,8 @@ built as a prerequisite of AAC-LC decode (#152, T3-03).
 specification's own codeword/length columns) and `VlcTable` (a borrowed slice
 of entries plus a linear-scan `decode` against a `BitReader`), together with
 two transcription-error checks, `is_prefix_free` and `kraft_numerator`.
+`VlcTable::build_lookup` also provides a bounded-width direct lookup for hot
+tables without requiring a `2^max_len` allocation.
 
 ### Why this exists
 
@@ -48,6 +50,28 @@ slice" needs indexing, which `clippy::indexing_slicing` denies even inside a
 runtime. Constructing a table (one pass over a handful to a few hundred
 entries) is cheap enough to do at each decode call site.
 
+### Width-bounded lookup
+
+`VlcTable::build_lut` is useful when `max_len` is small, but its storage grows
+as `2^max_len`: a 16-bit table is 65,536 `(symbol, len)` slots (512 KiB with
+the current representation), and a 32-bit table is not a reasonable eager
+allocation. `build_lookup(width)` limits storage to `2^width` slots. Entries
+whose codeword fits in the selected prefix are direct hits; a slot that could
+contain a longer codeword is marked for the original bounded scan. This keeps
+the exact first-match behaviour even for malformed tables while making the
+width/cache tradeoff explicit at the call site:
+
+```rust
+let table = VlcTable::new(&TABLE);
+let lookup = table.build_lookup(12).expect("lookup width fits this table");
+let symbol = lookup.decode(&mut reader);
+```
+
+Choose `width` from a same-session benchmark of the real table and workload.
+Increasing it reduces fallback scans but grows the lookup's resident memory;
+width zero is a valid correctness-only lookup that delegates all reads to the
+linear scan.
+
 ### The two checks a transcribed table should pass
 
 - `is_prefix_free` — structural: no codeword may be a prefix of another,
@@ -74,9 +98,10 @@ this crate existed (`huffman.rs`'s
   `kraft_numerator` checks as unit tests — this is the pattern to copy, not
   something to reinvent per codec.
 - If a decode hot loop's profiling ever points at `VlcTable::decode`'s linear
-  scan, the fix belongs inside `decode` (a real prefix tree, or a lookup table
-  keyed by the peeked bits) — every table stays exactly as declared; only the
-  search changes.
+  scan, benchmark `build_lookup(width)` against the existing full `build_lut`
+  path on the real table. Keep the smallest width that meets the measured
+  throughput target; every table stays exactly as declared and longer entries
+  retain the scan fallback.
 - This crate does not include a canonical-code *builder* (turning a bare list
   of lengths into codewords). Every codec that has driven this crate's design
   so far (MP3, AC-3's exponents, AAC's Huffman tables) states codewords
@@ -98,7 +123,18 @@ Unit tests in `src/lib.rs`: a toy complete code cross-checked by both
 `is_prefix_free` and `kraft_numerator`, a deliberately-broken prefix collision
 caught, an incomplete code's smaller Kraft sum, full decode of every symbol in
 the toy code, a failed decode consuming nothing, an empty table never
-panicking, and a round trip through a real `BitWriter`. No fixtures needed —
+panicking, a round trip through a real `BitWriter`, and exhaustive agreement
+between width-bounded lookups and the scan (including malformed ordering). No
+fixtures needed —
 this crate has no format-specific behaviour to compare against a reference
 decoder; its correctness properties (prefix-freedom, Kraft completeness,
 consume-nothing-on-failure) are checked directly.
+
+The width choice is a measured tradeoff, not a fixed constant. In ten
+interleaved A/B rounds on this Apple M5 (20 samples per round, synthetic
+30-entry 2--16-bit table, 60,000 codewords per sample), median decode time was
+345.0 us for the linear scan, 290.45 us with an 8-bit bounded lookup, 224.45
+us with 12 bits, and 123.7 us with the full 16-bit lookup. The 12-bit table
+uses 4,096 slots (32 KiB for the current representation) versus 65,536 slots
+(512 KiB) for the full table, so it is the measured cache-sized choice for
+this workload; callers must repeat the comparison for their own table shape.

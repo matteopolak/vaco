@@ -92,6 +92,62 @@ pub struct VlcTable<'a> {
     max_len: u8,
 }
 
+/// A bounded-width lookup table for a [`VlcTable`].
+///
+/// A full [`VlcTable::build_lut`] has `2^max_len` slots. That is cheap for a
+/// short table, but a 16-bit table already costs 512 KiB with the current
+/// `(symbol, len)` layout, and a malformed or future 32-bit table must not
+/// force an enormous allocation. [`VlcTable::build_lookup`] lets a caller
+/// choose a cache-sized prefix width; codewords that need more bits fall back
+/// to the bounded linear scan.
+#[derive(Debug)]
+pub struct VlcLookup<'a> {
+    table: VlcTable<'a>,
+    width: u8,
+    slots: Vec<(u32, u8)>,
+}
+
+/// A slot whose prefix is shared with a codeword longer than the lookup
+/// width. The decoder must use the original table to preserve first-match
+/// ordering and exact malformed-table behaviour.
+const LOOKUP_FALLBACK: u8 = u8::MAX;
+
+impl VlcLookup<'_> {
+    /// Number of prefix bits used by this lookup.
+    #[must_use]
+    pub const fn width(&self) -> u8 {
+        self.width
+    }
+
+    /// Number of slots in the lookup table (`2^width`).
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.slots.len()
+    }
+
+    /// Whether this lookup has no slots. A valid lookup always has at least
+    /// one slot, including the zero-width lookup for an empty table.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.slots.is_empty()
+    }
+
+    /// Decode using the bounded lookup, falling back to the original scan for
+    /// prefixes whose codeword is longer than `width`.
+    #[must_use]
+    pub fn decode(&self, r: &mut BitReader<'_>) -> Option<u32> {
+        let &(symbol, len) = self.slots.get(r.peek(u32::from(self.width)) as usize)?;
+        match len {
+            0 => None,
+            LOOKUP_FALLBACK => self.table.decode(r),
+            _ => {
+                r.skip(u32::from(len));
+                Some(symbol)
+            }
+        }
+    }
+}
+
 impl<'a> VlcTable<'a> {
     /// Build a table from its entries, computing the longest codeword's
     /// length once so [`decode`](Self::decode) knows how much to peek.
@@ -197,6 +253,52 @@ impl<'a> VlcTable<'a> {
             }
         }
         lut
+    }
+
+    /// Build a cache-sized lookup using `width` prefix bits.
+    ///
+    /// Entries at most `width` bits long are direct hits. Longer entries mark
+    /// their prefix as a fallback slot, so [`VlcLookup::decode`] scans the
+    /// original table only for those codewords. The slot state is populated in
+    /// table order: a malformed table therefore keeps the same first-match
+    /// rule as [`decode`](Self::decode), even when a long entry precedes a
+    /// short entry sharing its prefix.
+    ///
+    /// Returns `None` when `width` exceeds this table's `max_len` or cannot be
+    /// represented by the host `usize`. Width zero is valid and gives a
+    /// one-slot lookup that delegates every non-empty table to the scan.
+    #[must_use]
+    pub fn build_lookup(&self, width: u8) -> Option<VlcLookup<'a>> {
+        if width > self.max_len || u32::from(width) >= usize::BITS {
+            return None;
+        }
+        let mut slots = vec![(0u32, 0u8); 1usize << u32::from(width)];
+        for entry in self.entries {
+            if entry.len == 0 || entry.len > self.max_len {
+                continue;
+            }
+            if entry.len > width {
+                let prefix = (entry.code >> (entry.len - width)) as usize;
+                if let Some(slot) = slots.get_mut(prefix) {
+                    if slot.1 == 0 {
+                        *slot = (0, LOOKUP_FALLBACK);
+                    }
+                }
+                continue;
+            }
+            let span = 1usize << u32::from(width - entry.len);
+            let base = (entry.code as usize) << u32::from(width - entry.len);
+            for slot in slots.iter_mut().skip(base).take(span) {
+                if slot.1 == 0 {
+                    *slot = (entry.symbol, entry.len);
+                }
+            }
+        }
+        Some(VlcLookup {
+            table: *self,
+            width,
+            slots,
+        })
     }
 
     /// Decode one symbol via a [`build_lut`](Self::build_lut) table: one
@@ -454,5 +556,40 @@ mod tests {
                 width = table.max_len() as usize
             );
         }
+    }
+
+    #[test]
+    fn bounded_lookup_agrees_with_decode_at_every_width() {
+        let table = VlcTable::new(&REALISTIC);
+        for width in 0..=table.max_len() {
+            let lookup = table.build_lookup(width).unwrap();
+            assert_eq!(lookup.width(), width);
+            assert_eq!(lookup.len(), 1usize << u32::from(width));
+            for prefix in 0u32..(1 << u32::from(table.max_len())) {
+                let bytes = (prefix << (32 - table.max_len())).to_be_bytes();
+                let mut r_scan = BitReader::new(&bytes);
+                let mut r_lookup = BitReader::new(&bytes);
+                assert_eq!(
+                    table.decode(&mut r_scan),
+                    lookup.decode(&mut r_lookup),
+                    "width {width}, prefix {prefix:0width$b}",
+                    width = table.max_len() as usize
+                );
+                assert_eq!(r_scan.bit_pos(), r_lookup.bit_pos());
+            }
+        }
+    }
+
+    #[test]
+    fn bounded_lookup_preserves_long_before_short_malformed_order() {
+        let entries = [VlcEntry::new(0b00, 2, 10), VlcEntry::new(0b0, 1, 11)];
+        let table = VlcTable::new(&entries);
+        let lookup = table.build_lookup(1).unwrap();
+        let bytes = [0b0000_0000];
+        let mut r_scan = BitReader::new(&bytes);
+        let mut r_lookup = BitReader::new(&bytes);
+        assert_eq!(table.decode(&mut r_scan), Some(10));
+        assert_eq!(lookup.decode(&mut r_lookup), Some(10));
+        assert_eq!(r_scan.bit_pos(), r_lookup.bit_pos());
     }
 }
