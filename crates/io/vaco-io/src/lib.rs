@@ -1,50 +1,33 @@
-//! Byte sources and sinks.
+//! Byte sources and sinks, deliberately separate from `std::io::Read + Seek`:
+//! media demuxers need seekability, size, and non-consuming prefix reads.
 //!
-//! Deliberately not `std::io::Read + Seek`. A media source must answer questions
-//! std's traits cannot express — is seeking cheap or does it cost a network round
-//! trip; is the total size known; can we read a prefix without consuming it — and
-//! demuxers make very different choices depending on the answers.
+//! # The layers
 //!
-//! # The three layers
-//!
-//! | Layer | Type | Job |
-//! |---|---|---|
-//! | transport | [`RawSource`] | one thin call per syscall: read, seek, size |
-//! | source | [`MediaSource`] / [`MediaSink`] | the frozen object-safe interface every protocol produces |
-//! | context | [`IoContext`] / [`IoWriter`] | buffering, byte-order readers, short seeks, checksums |
-//!
-//! A protocol crate implements [`RawSource`] and wraps it in [`PeekSource`],
-//! which supplies the peek buffer that [`MediaSource::peek`] requires. Demuxers
-//! never see a bare source: they get an [`IoContext`], which owns the real
-//! 32 KiB buffer and all the typed readers.
+//! [`RawSource`] is one thin call per transport syscall. [`PeekSource`] adds the
+//! prefix window, and [`MediaSource`] / [`MediaSink`] are the object-safe
+//! protocol interfaces. [`IoContext`] / [`IoWriter`] own buffering, typed
+//! readers, short seeks, and checksums; demuxers never receive a bare source.
 //!
 //! # Why `peek` is a trait method
 //!
-//! Format probing has to look at a prefix without consuming it, **and it has to
-//! work on a pipe**. Seek-read-seek cannot do that, so peeking is a capability
-//! of the source rather than a pattern callers implement. Both [`MediaSource`]
-//! and [`IoContext`] guarantee that a `peek` leaves the position untouched, and
-//! that guarantee is checked by a property test against a forward-only source.
+//! Probing must inspect a prefix without consuming it, including on a pipe.
+//! Seek-read-seek cannot do that, so [`MediaSource::peek`] is a capability. Both
+//! [`MediaSource`] and [`IoContext`] preserve position across peeks, verified by
+//! a property test against a forward-only source.
 //!
 //! # Allocation
 //!
-//! Every buffer in this crate is sized through a [`vaco_limits::Budget`]. That
-//! includes the read buffer (whose size can come from a URL option), the peek
-//! window (whose size comes from `probesize`) and [`DynBuf`] (which a muxer
-//! grows from packet payloads). `clippy.toml` bans raw `Vec::with_capacity` to
-//! force exactly this.
+//! Every buffer uses [`vaco_limits::Budget`], including the read buffer, peek
+//! window, and [`DynBuf`]; `clippy.toml` bans raw `Vec::with_capacity`.
 //!
 //! # Example
 //!
 //! ```
 //! use vaco_io::{IoContext, IoOptions, MemorySource};
-//!
 //! let src = MemorySource::forward_only(b"RIFF\x24\x00\x00\x00WAVE".to_vec());
 //! let mut io = IoContext::new(Box::new(src), &IoOptions::default())?;
-//!
-//! // Probing a non-seekable source: look, then decide.
 //! assert_eq!(&io.peek(4)?[..4], b"RIFF");
-//! assert_eq!(io.pos(), 0);              // peek consumed nothing
+//! assert_eq!(io.pos(), 0);
 //! assert_eq!(&io.tag()?, b"RIFF");
 //! assert_eq!(io.rl32()?, 0x24);
 //! # Ok::<(), vaco_core::Error>(())
