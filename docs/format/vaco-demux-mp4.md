@@ -645,8 +645,10 @@ deltas are unsigned and monotonicity is guaranteed by construction.
 [`vaco_format_isom::cenc::CencInfo`]. When a track is protected, its `Stream`
 gets `encryption_scheme` (e.g. `cenc`), `encryption_scheme_version` (the raw
 decimal 16.16 `schm` version — `65536` for the measured `1.0`),
-`encryption_key_id` (the `default_KID`, lower-case hex), and
-`encryption_iv_size` (the decimal `default_Per_Sample_IV_Size`) tags —
+`encryption_key_id` (the `default_KID`, lower-case hex),
+`encryption_is_protected` (the decimal `default_isProtected`, `1` for the
+measured CENC fixture), and `encryption_iv_size` (the decimal
+`default_Per_Sample_IV_Size`) tags —
 `codec_name` already reads as the *original* codec via `effective_format` — and `pssh` boxes become
 container-level `encryption_system_id` tags. A version-1 `pssh` additionally
 emits one `encryption_key_id` tag for every declared KID, in declaration order;

@@ -836,6 +836,10 @@ impl Mp4Demuxer {
                     .metadata
                     .push(("encryption_key_id".to_owned(), hex16(&te.default_kid)));
                 stream.metadata.push((
+                    "encryption_is_protected".to_owned(),
+                    u8::from(te.is_protected).to_string(),
+                ));
+                stream.metadata.push((
                     "encryption_iv_size".to_owned(),
                     te.per_sample_iv_size.to_string(),
                 ));

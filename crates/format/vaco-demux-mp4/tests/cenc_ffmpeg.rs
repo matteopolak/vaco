@@ -913,6 +913,13 @@ fn ffmpeg_cenc_aes_ctr_subsample_and_full_sample_decrypt_to_the_clear_packets() 
             "stream {} must report the measured tenc per-sample IV size",
             s.index
         );
+        assert!(
+            s.metadata
+                .iter()
+                .any(|(k, v)| k == "encryption_is_protected" && v == "1"),
+            "stream {} must report the measured tenc default_isProtected value",
+            s.index
+        );
     }
     assert!(refused.read_packet().is_err());
 
