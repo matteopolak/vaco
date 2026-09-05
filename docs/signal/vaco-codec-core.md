@@ -30,6 +30,29 @@ once, and enforced once.
 
 ## How it works
 
+### Typed video configuration
+
+Offer container parameters through `Decoder::prime_video_params` before the
+first packet. Its default uses `VideoParameters::coded_dimensions()` and calls
+the existing `prime_video` hook, preserving dimension-only decoders. Raw video
+overrides it to receive the declared pixel format too. `Box<Decoder>`,
+`AsDecoder`, `DecoderProtocol`, and `Validated` forward the complete parameters;
+container properties never need a codec-private extradata envelope.
+
+### Two-pass encoder contract
+
+Before feeding frames, call `Encoder::set_pass` with `EncoderPass::Single`,
+`First`, or `Second(stats)`. The second-pass statistics are opaque bytes from
+the same encoder's completed first pass. `pass_stats()` returns them only after
+successful drain. File names and persistence belong to the caller, not the
+codec interface.
+
+The default accepts only `Single`; unsupported multipass requests fail
+explicitly. An encoder adding two-pass rate control implements both methods.
+`SendReceive`, `AsEncoder`, and `Validated` forward the same contract so a
+protocol wrapper cannot silently discard it. The interface adds no dependencies
+or global configuration.
+
 ### The send/receive protocol
 
 ```text

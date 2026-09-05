@@ -361,6 +361,18 @@ pub fn build_and_attach(
         // see the matching decision in `exec.rs`.
         let limits = vaco_limits::Limits::permissive();
         let mut decoder = decoder_desc.build(limits);
+        if let Some(video) = &p.video {
+            decoder.prime_video_params(video);
+        }
+        if let Some(audio) = &p.audio {
+            decoder.prime_audio(
+                audio.sample_rate,
+                audio
+                    .layout
+                    .clone()
+                    .unwrap_or_else(|| vaco_chlayout::ChannelLayout::unspecified(0)),
+            );
+        }
         if let Some(extradata) = p.extradata.as_deref() {
             let _ = decoder.set_extradata(extradata);
         }

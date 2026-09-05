@@ -154,6 +154,8 @@ impl Job {
 /// The component a node owns.
 #[derive(Debug)]
 pub(crate) enum Work {
+    Abandoned,
+    Limit(LimitWork),
     Demux(DemuxWork),
     Decode(CodecWork<DecoderSide>),
     Encode(CodecWork<EncoderSide>),
@@ -171,6 +173,8 @@ impl Work {
     /// truncated one.
     pub(crate) fn is_done(&self) -> bool {
         match self {
+            Self::Abandoned => true,
+            Self::Limit(l) => l.finished,
             Self::Demux(d) => d.finished,
             Self::Decode(c) => c.stage == Stage::Drained,
             Self::Encode(c) => c.stage == Stage::Drained,
@@ -188,6 +192,12 @@ impl Work {
     /// simply stops being scheduled. Nothing blocks and nothing buffers.
     pub(crate) fn ready(&self, ports: Ports<'_>) -> bool {
         match self {
+            Self::Abandoned => false,
+            Self::Limit(l) => {
+                !l.finished
+                    && ports.all_out_room()
+                    && (l.remaining == 0 || ports.any_input() || ports.all_eof())
+            }
             Self::Demux(d) => !ports.stop_reading && !d.finished && ports.all_out_room(),
             Self::Decode(c) => c.ready(ports),
             Self::Encode(c) => c.ready(ports),
@@ -205,6 +215,11 @@ impl Work {
     /// exceed one per input port.
     pub(crate) fn accepts_input(&self) -> bool {
         match self {
+            Self::Limit(l) => l.remaining != 0,
+            Self::Decode(c) => c.stashed.is_none() && c.stage == Stage::Feeding,
+            Self::Encode(c) => c.stashed.is_none() && c.stage == Stage::Feeding,
+            Self::Convert(c) => c.stashed.is_none() && c.stage == Stage::Feeding,
+            Self::ConvertAudio(c) => c.stashed.is_none() && c.stage == Stage::Feeding,
             Self::Filter(f) => f.stashed.is_empty(),
             _ => true,
         }
@@ -218,6 +233,8 @@ impl Work {
     /// consumes.
     pub(crate) const fn batch(&self) -> usize {
         match self {
+            Self::Abandoned => 0,
+            Self::Limit(_) => 1,
             Self::Demux(_) => 0,
             Self::Decode(_)
             | Self::Encode(_)
@@ -237,6 +254,8 @@ impl Work {
         close: &mut Vec<(usize, Timestamp)>,
     ) -> Result<bool> {
         match self {
+            Self::Abandoned => Ok(false),
+            Self::Limit(l) => Ok(l.advance(inputs, all_ended, out, close)),
             Self::Demux(d) => d.advance(out, close),
             Self::Decode(c) => c.advance(inputs, ended, out, close),
             Self::Encode(c) => c.advance(inputs, ended, out, close),
@@ -245,6 +264,39 @@ impl Work {
             Self::Filter(f) => f.advance(inputs, ended, out, close),
             Self::Mux(m) => m.advance(inputs, ended, all_ended),
         }
+    }
+}
+
+/// A limit closes downstream before abandoning upstream, preserving the tail
+/// of components that have already accepted useful input.
+#[derive(Debug)]
+pub(crate) struct LimitWork {
+    pub remaining: u64,
+    pub finished: bool,
+    pub last_pts: Timestamp,
+}
+
+impl LimitWork {
+    fn advance(
+        &mut self,
+        inputs: Vec<(usize, Payload)>,
+        all_ended: bool,
+        out: &mut Vec<(usize, Payload)>,
+        close: &mut Vec<(usize, Timestamp)>,
+    ) -> bool {
+        for (_, item) in inputs {
+            if self.remaining == 0 {
+                break;
+            }
+            self.remaining -= 1;
+            self.last_pts = item.pts();
+            out.push((0, item));
+        }
+        if self.remaining == 0 || all_ended {
+            self.finished = true;
+            close.push((0, self.last_pts));
+        }
+        !out.is_empty() || self.finished
     }
 }
 
@@ -712,7 +764,12 @@ impl<S: Side> CodecWork<S> {
                     out.push((0, item));
                 }
                 Err(Error::NeedMoreInput) => return Ok(false),
-                Err(Error::Eof) => return Ok(true),
+                Err(Error::Eof) if self.stage == Stage::Draining => return Ok(true),
+                Err(Error::Eof) => {
+                    return Err(Error::InvalidData(
+                        "a codec reported EOF before accepting drain",
+                    ));
+                }
                 Err(e) => return Err(e),
             }
         }
@@ -753,7 +810,13 @@ impl<S: Side> CodecWork<S> {
                         // with the *same* item. Never drop it, never substitute
                         // the next one.
                         Err(Error::OutputPending) => {
+                            let before = out.len();
                             self.drain(out)?;
+                            if out.len() == before {
+                                return Err(Error::InvalidData(
+                                    "a codec refused input without making output available",
+                                ));
+                            }
                             progressed = true;
                         }
                         Err(e) => return Err(e),
@@ -768,11 +831,25 @@ impl<S: Side> CodecWork<S> {
             }
             // Only once the component has taken everything we hold may we tell
             // it the stream is over. Draining first is what keeps its tail.
-            if let Some(end) = self.pending_eof.take() {
+            if let Some(end) = self.pending_eof {
                 if self.end_pts.is_none() {
                     self.end_pts = end;
                 }
-                self.side.send(None)?;
+                match self.side.send(None) {
+                    Ok(()) => {}
+                    Err(Error::OutputPending) => {
+                        let before = out.len();
+                        self.drain(out)?;
+                        if out.len() == before {
+                            return Err(Error::InvalidData(
+                                "a codec refused drain without making output available",
+                            ));
+                        }
+                        return Ok(true);
+                    }
+                    Err(e) => return Err(e),
+                }
+                self.pending_eof = None;
                 self.stage = Stage::Draining;
                 progressed = true;
             }
@@ -789,32 +866,10 @@ impl<S: Side> CodecWork<S> {
                 };
                 close.push((0, end));
             }
-            // Real progress here is "produced at least one item" or "reached
-            // Drained" — not merely "we asked and were told NeedMoreInput
-            // again". `drain` returning `Ok(false)` with nothing pushed to
-            // `out` means the component is still draining with nothing ready
-            // *yet*, which is legitimate for one call (a codec's own reorder
-            // delay can need several steps to empty) but is indistinguishable
-            // from a broken component that announced draining and then never
-            // produces `Eof` at all — `vaco-codec-alac`'s and
-            // `vaco-codec-vorbis`'s decoders both do exactly this today,
-            // `send_packet(None)` a no-op that never moves them out of
-            // "always `NeedMoreInput`".
-            //
-            // Before this fix, `progressed` was unconditionally `true` here,
-            // which fed a false "yes, something happened" into
-            // `Pipeline::end_step`'s `ProgressGuard` on *every* step for as
-            // long as the stuck node was the only thing left runnable — the
-            // guard exists precisely to convert a livelock into
-            // `LimitError::NoProgress` after enough consecutive do-nothing
-            // steps, and a decoder that never drains defeated it by lying
-            // about whether the step actually did anything, hanging the
-            // whole CLI instead of failing with a diagnosis. Measured against
-            // a real `ffmpeg`-encoded ALAC file decoded end to end: before
-            // this change, `vaco -i in.m4a -c:a pcm_s16le -f null -` hangs
-            // indefinitely; after it, the pipeline reports `NoProgress` and
-            // the run ends with a diagnosis instead of a wedged process.
-            progressed = out.len() > before || finished;
+            // Preserve earlier send progress, but do not count an empty
+            // NeedMoreInput response: the no-progress guard must catch a
+            // component that acknowledges drain and never finishes.
+            progressed |= out.len() > before || finished;
         }
         Ok(progressed)
     }
@@ -1051,5 +1106,94 @@ impl MuxWork {
             progressed = true;
         }
         Ok(progressed)
+    }
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::unwrap_used,
+    clippy::panic,
+    reason = "protocol regression tests"
+)]
+mod protocol_tests {
+    use super::*;
+    use std::collections::VecDeque;
+
+    #[derive(Debug)]
+    struct Scripted {
+        sends: VecDeque<Result<()>>,
+        receives: VecDeque<Result<Payload>>,
+    }
+    impl Side for Scripted {
+        fn send(&mut self, _: Option<&Payload>) -> Result<()> {
+            self.sends.pop_front().unwrap()
+        }
+        fn recv(&mut self) -> Result<Payload> {
+            self.receives.pop_front().unwrap()
+        }
+    }
+    fn work(side: Scripted) -> CodecWork<Scripted> {
+        CodecWork {
+            side,
+            stage: Stage::Feeding,
+            last_pts: Timestamp::NONE,
+            stashed: None,
+            pending_eof: None,
+            end_pts: Timestamp::NONE,
+        }
+    }
+
+    #[test]
+    fn drain_backpressure_retries_eof_after_preserving_output() {
+        let mut codec = work(Scripted {
+            sends: [Err(Error::OutputPending), Ok(())].into(),
+            receives: [
+                Ok(Payload::Packet(vaco_packet::Packet::empty())),
+                Err(Error::NeedMoreInput),
+                Err(Error::Eof),
+            ]
+            .into(),
+        });
+        let mut out = Vec::new();
+        let mut close = Vec::new();
+        assert!(
+            codec
+                .advance(Vec::new(), &[(0, Timestamp::new(7))], &mut out, &mut close)
+                .unwrap()
+        );
+        assert_eq!(out.len(), 1);
+        assert!(close.is_empty());
+        assert_eq!(codec.stage, Stage::Feeding);
+        assert!(
+            codec
+                .advance(Vec::new(), &[], &mut out, &mut close)
+                .unwrap()
+        );
+        assert_eq!(close, vec![(0, Timestamp::new(7))]);
+        assert_eq!(codec.stage, Stage::Drained);
+    }
+
+    #[test]
+    fn backpressure_without_output_is_an_error_for_input_and_eof() {
+        for input in [true, false] {
+            let mut codec = work(Scripted {
+                sends: [Err(Error::OutputPending)].into(),
+                receives: [Err(Error::NeedMoreInput)].into(),
+            });
+            let inputs = if input {
+                vec![(0, Payload::Packet(vaco_packet::Packet::empty()))]
+            } else {
+                Vec::new()
+            };
+            let ended = if input {
+                Vec::new()
+            } else {
+                vec![(0, Timestamp::NONE)]
+            };
+            assert!(matches!(
+                codec.advance(inputs, &ended, &mut Vec::new(), &mut Vec::new()),
+                Err(Error::InvalidData(_))
+            ));
+        }
     }
 }

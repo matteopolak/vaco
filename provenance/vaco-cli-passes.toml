@@ -1,0 +1,6 @@
+[[source]]
+id = "cli-encoder-pass-tools"
+kind = "blackbox"
+title = "Installed x264 and x265 command-line help and multipass binary behavior; ffmpeg 9.0.1 frame-limit and decoded-output oracle"
+acquired = "2026-09-04"
+where = "x264 --fullhelp; x265 --fullhelp; ffmpeg and ffprobe binaries on the development machine"

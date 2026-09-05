@@ -18,6 +18,25 @@ depends on the four framework crates and on no concrete component.
 
 ## How it works
 
+### Per-stream limits
+
+`PipelineSpec::limit_frames(tap, count)` belongs after filters and immediately
+before encoding. The limit forwards at most `count` frames and closes its
+output; the encoder then drains all packets for those accepted frames.
+`limit_packets` applies the same contract to streamcopy packets. Zero closes
+without accepting an item. Limits count items, not timestamps or audio samples.
+
+When a node finishes it abandons its input wires and releases queued memory.
+The driver retires an upstream node only when every consumer has abandoned it,
+so a short output cannot truncate another output sharing the same input.
+This also stops infinite sources once all their consumers reach their limits.
+
+Codec backpressure applies to `send(None)` as well as ordinary input. The
+scheduler drains output and retries the same request. A component reporting
+`OutputPending` without producing output, or EOF before accepting drain, fails
+with a protocol error. Extend the shared `CodecWork` pump when changing this
+contract; decoder, encoder and conversion nodes all use it.
+
 ### The API in five calls
 
 ```rust

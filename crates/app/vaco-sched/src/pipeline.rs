@@ -38,7 +38,7 @@ use vaco_limits::{Budget, ProgressGuard};
 
 use crate::node::{
     AudioConverterSide, CodecWork, ConverterSide, DecoderSide, DemuxWork, Done, EncoderSide,
-    FilterWork, Job, MuxWork, PortIn, Ports, Work,
+    FilterWork, Job, LimitWork, MuxWork, PortIn, Ports, Work,
 };
 use crate::spec::{KindSpec, PipelineSpec};
 use crate::timing;
@@ -300,10 +300,11 @@ impl Pipeline {
     /// Open a step: apply a graceful stop to every demuxer that has not already
     /// finished. Returns whether that itself was progress.
     pub(crate) fn begin_step(&mut self) -> bool {
+        let retired = self.retire_unneeded();
         if !self.stop_reading {
-            return false;
+            return retired;
         }
-        let mut any = false;
+        let mut any = retired;
         for i in 0..self.nodes.len() {
             let mut close = Vec::new();
             {
@@ -319,6 +320,52 @@ impl Pipeline {
             self.close_ports(i, &close);
         }
         any
+    }
+
+    fn abandon_inputs(&mut self, node: usize) {
+        if let Some(meta) = self.nodes.get(node) {
+            for input in &meta.inputs {
+                if let Some(wire) = self.wires.get_mut(input.wire) {
+                    wire.abandon(&mut self.budget);
+                }
+            }
+        }
+    }
+
+    fn retire_unneeded(&mut self) -> bool {
+        let mut any = false;
+        loop {
+            let mut retired = false;
+            for i in (0..self.nodes.len()).rev() {
+                let Some(Some(work)) = self.work.get(i) else {
+                    continue;
+                };
+                if work.is_done() {
+                    continue;
+                }
+                let Some(meta) = self.nodes.get(i) else {
+                    continue;
+                };
+                if meta.outputs.is_empty()
+                    || !meta
+                        .outputs
+                        .iter()
+                        .flatten()
+                        .all(|id| self.wires.get(*id).is_some_and(Wire::is_abandoned))
+                {
+                    continue;
+                }
+                if let Some(slot) = self.work.get_mut(i) {
+                    *slot = Some(Work::Abandoned);
+                }
+                self.abandon_inputs(i);
+                retired = true;
+            }
+            any |= retired;
+            if !retired {
+                return any;
+            }
+        }
     }
 
     /// Close a step: account for it and check the no-progress guard.
@@ -499,6 +546,14 @@ impl Pipeline {
             self.emit(node, port, item)?;
         }
         self.close_ports(node, &close);
+        if self
+            .work
+            .get(node)
+            .and_then(Option::as_ref)
+            .is_some_and(Work::is_done)
+        {
+            self.abandon_inputs(node);
+        }
         Ok(())
     }
 
@@ -576,6 +631,7 @@ impl PipelineSpec {
                 priority: match s.kind {
                     KindSpec::Mux { .. } => 4,
                     KindSpec::Encode(_) => 3,
+                    KindSpec::Limit(_) => 3,
                     KindSpec::Filter { .. }
                     | KindSpec::Convert { .. }
                     | KindSpec::ConvertAudio { .. } => 2,
@@ -680,6 +736,11 @@ fn build_work(
             stashed: None,
             pending_eof: None,
             end_pts: vaco_core::Timestamp::NONE,
+        }),
+        KindSpec::Limit(remaining) => Work::Limit(LimitWork {
+            remaining,
+            finished: false,
+            last_pts: vaco_core::Timestamp::NONE,
         }),
         KindSpec::Convert {
             dst_format,

@@ -35,7 +35,7 @@
 //! `Cgray` colorspace tags are mapped to a [`PixFmt`]; an unrecognised or
 //! absent `C` tag falls back to the spec's own default, 4:2:0.
 
-use vaco_codec_core::{CodecParameters, FieldOrder, VideoParameters};
+use vaco_codec_core::{CodecId, CodecParameters, FieldOrder, VideoParameters};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
 use vaco_format_core::time::duration_from_rate;
@@ -203,10 +203,10 @@ impl Yuv4MpegDemuxer {
             ..VideoParameters::default()
         };
         let mut params = CodecParameters::new(MediaType::Video);
+        params.codec_id = Some(CodecId::Rawvideo);
         params.video = Some(video);
         let mut stream = Stream::new(0, MediaType::Video, time_base);
         stream.params = params;
-        stream.metadata_set("raw_codec_name", "rawvideo");
         Ok(Self {
             io,
             streams: [stream],
@@ -332,6 +332,11 @@ mod tests {
         let bytes = sample(4, 4, 3);
         let src = Box::new(MemorySource::new(bytes));
         let mut d = Yuv4MpegDemuxer::open(src, &NoParsers).unwrap();
+        assert_eq!(
+            d.streams()[0].params.codec_id,
+            Some(vaco_codec_core::CodecId::Rawvideo)
+        );
+        assert_eq!(d.streams()[0].metadata_get("raw_codec_name"), None);
         assert_eq!(d.streams()[0].params.video.as_ref().unwrap().width, 4);
         let p0 = d.read_packet().unwrap();
         assert_eq!(p0.len, 24); // 4*4*1.5

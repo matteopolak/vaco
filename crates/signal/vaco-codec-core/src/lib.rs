@@ -28,7 +28,7 @@
 
 #![forbid(unsafe_code)]
 
-use vaco_core::{MediaType, Rational, Result};
+use vaco_core::{Error, MediaType, Rational, Result};
 use vaco_frame::Frame;
 use vaco_limits::Limits;
 use vaco_packet::Packet;
@@ -1801,6 +1801,14 @@ pub trait Decoder: Send {
         let _ = (width, height);
     }
 
+    /// Offer typed container video parameters before decoding. Raw codecs
+    /// need the pixel format as well as geometry; the default preserves
+    /// dimension-only decoders through [`Decoder::prime_video`].
+    fn prime_video_params(&mut self, params: &VideoParameters) {
+        let (width, height) = params.coded_dimensions();
+        self.prime_video(width, height);
+    }
+
     /// Tell an audio decoder the sample rate and channel layout a container
     /// reports for the track, before the first
     /// [`send_packet`](Decoder::send_packet) — the decoder mirror of
@@ -1879,6 +1887,10 @@ impl<D: Decoder + ?Sized> Decoder for Box<D> {
         (**self).prime_video(width, height);
     }
 
+    fn prime_video_params(&mut self, params: &VideoParameters) {
+        (**self).prime_video_params(params);
+    }
+
     fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
         (**self).prime_audio(sample_rate, layout);
     }
@@ -1888,8 +1900,44 @@ impl<D: Decoder + ?Sized> Decoder for Box<D> {
     }
 }
 
+/// The rate-control pass requested before an encoder receives any frames.
+/// Statistics are opaque to callers and belong to the encoder that wrote them.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum EncoderPass {
+    /// Encode without a statistics dependency.
+    #[default]
+    Single,
+    /// Collect statistics retrievable after the encoder has drained.
+    First,
+    /// Encode using a completed first pass over the same input and settings.
+    Second(Vec<u8>),
+}
+
 /// Encode: frames in, compressed packets out. Mirrors [`Decoder`].
 pub trait Encoder: Send {
+    /// Configure two-pass rate control before the first frame. The default
+    /// rejects multipass explicitly so an unsupported request is never ignored.
+    ///
+    /// # Errors
+    /// [`Error::Unsupported`] if the encoder cannot honor the requested pass.
+    fn set_pass(&mut self, pass: EncoderPass) -> Result<()> {
+        match pass {
+            EncoderPass::Single => Ok(()),
+            _ => Err(Error::Unsupported(
+                "this encoder does not support two-pass encoding",
+            )),
+        }
+    }
+
+    /// First-pass statistics, available only after successful drain. The CLI
+    /// persists these bytes and returns them unchanged for the second pass.
+    ///
+    /// # Errors
+    /// Propagates a failure reading the encoder's completed statistics.
+    fn pass_stats(&self) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
     /// # Errors
     /// [`vaco_core::Error::OutputPending`] means drain before sending more.
     fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()>;

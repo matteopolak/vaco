@@ -46,16 +46,10 @@
 //!
 //! # Where width/height/pixel-format come from
 //!
-//! A raw-video packet carries no header — the container states the geometry,
-//! not the codec — the identical problem `vaco-codec-pcm` has for sample
-//! rate/channel count. This crate follows that crate's precedent exactly:
-//! [`RawVideoDecoder::with_video_params`] for a caller that already knows the
-//! geometry, and (documented as provisional, same status as
-//! `vaco_codec_pcm::parse_audio_extradata`, pending the shared registry-to-CLI
-//! codec-parameter convention #652 is expected to bring) [`parse_video_extradata`]
-//! for a decoder reached only through [`vaco_codec_core::DecoderDesc::make`]'s
-//! fixed `fn(Limits) -> Box<dyn Decoder>` signature, via
-//! [`vaco_codec_core::Decoder::set_extradata`]. `v210`/`v210x`/`r10k`/`r210`/
+//! A raw-video packet carries no header. Registry callers offer the container's
+//! geometry and pixel format through [`Decoder::prime_video_params`]; concrete
+//! callers may use [`RawVideoDecoder::with_video_params`]. The legacy
+//! [`parse_video_extradata`] record remains supported. `v210`/`v210x`/`r10k`/`r210`/
 //! `y41p` need only width/height (their pixel format is fixed by the codec
 //! identity); `rawvideo`/`bitpacked`/`wrapped_avframe` need a pixel format
 //! too, defaulting to [`DEFAULT_PIXEL_FORMAT`] (matching
@@ -68,7 +62,7 @@
 //! [`vaco_core::Error::InvalidData`] ("picture size 0x0 is invalid"), since
 //! there is no meaningful default frame size. A registry-built decoder that
 //! is never configured will therefore refuse every packet until
-//! [`RawVideoDecoder::with_video_params`] or `set_extradata` gives it real
+//! typed priming, [`RawVideoDecoder::with_video_params`] or `set_extradata` gives it real
 //! dimensions.
 //!
 //! An encoder never needs any of this configuration: every
@@ -190,18 +184,9 @@ fn accepted_pix_fmts_for(packing: Packing) -> &'static [PixFmt] {
 /// Reads the `(width: u32 LE, height: u32 LE, pixel_format_name: UTF-8)`
 /// record this crate accepts through [`Decoder::set_extradata`].
 ///
-/// **Provisional**, for the identical reason
-/// `vaco_codec_pcm::parse_audio_extradata` is: `Decoder::set_extradata`'s own
-/// doc names exactly this situation — "any codec whose configuration is the
-/// container's to state... has the identical shape" as an
-/// `AudioSpecificConfig` — but no shared wire format for "the container's raw
-/// video parameters" exists in this workspace yet (`planning/ASSIGNMENTS.md`'s
-/// `agent:codec-path` row, #652, is building the registry-to-CLI codec path
-/// this would plug into). Until that lands, this crate defines its own
-/// minimal record. A caller that already knows the geometry should prefer
-/// [`RawVideoDecoder::with_video_params`] directly; this exists for the
-/// `DecoderDesc::make` path, whose signature has no room for parameters at
-/// all.
+/// Retained for callers using the legacy byte record. Registry callers should
+/// use [`Decoder::prime_video_params`]; concrete callers may use
+/// [`RawVideoDecoder::with_video_params`] without serializing parameters.
 ///
 /// The pixel-format name is only meaningful for [`Packing::Configurable`]
 /// decoders; a fixed-packing decoder (`v210`, `r10k`, ...) ignores it. It may
@@ -268,7 +253,7 @@ pub struct RawVideoDecoder {
 impl RawVideoDecoder {
     /// A decoder for `id`/`packing`, bounded by `limits`. Geometry defaults
     /// to `0x0` (invalid — see the crate docs) until configured via
-    /// [`RawVideoDecoder::with_video_params`] or `set_extradata`.
+    /// [`RawVideoDecoder::with_video_params`], typed priming, or `set_extradata`.
     #[must_use]
     pub fn new(limits: Limits, id: CodecId, packing: Packing) -> Self {
         Self {
@@ -303,6 +288,21 @@ impl RawVideoDecoder {
 impl SendReceive for RawVideoDecoder {
     type Input = Packet;
     type Output = Frame;
+
+    fn prime_video(&mut self, width: u32, height: u32) {
+        if width > 0 && height > 0 {
+            self.width = width;
+            self.height = height;
+        }
+    }
+
+    fn prime_video_params(&mut self, params: &vaco_codec_core::VideoParameters) {
+        let (width, height) = params.coded_dimensions();
+        self.prime_video(width, height);
+        if let Some(format) = params.format {
+            self.pixel_format = format;
+        }
+    }
 
     fn caps(&self) -> Caps {
         self.machine.caps()
@@ -339,6 +339,7 @@ impl SendReceive for RawVideoDecoder {
                     &mut budget,
                 )?;
                 frame.pts = pkt.pts;
+                frame.duration = pkt.duration;
                 // Every identity in this family is `CodecProperties::INTRA_ONLY`:
                 // there is no inter-frame prediction, so every decoded frame is
                 // a keyframe by construction.
@@ -628,6 +629,49 @@ mod tests {
         assert_eq!(dec.width, 4);
         assert_eq!(dec.height, 4);
         assert_eq!(dec.pixel_format, PixFmt::Gray8);
+    }
+
+    #[test]
+    fn registry_decoder_receives_typed_video_parameters_and_timing() {
+        let gapless = vaco_codec_core::gapless::GaplessDecoder::new(
+            RAWVIDEO_DECODER.build(Limits::permissive()),
+            Limits::permissive(),
+        );
+        let mut decoder: Box<dyn Decoder> = Box::new(AsDecoder(Validated::new(
+            vaco_codec_core::protocol::DecoderProtocol::new(gapless, Caps::empty()),
+        )));
+        let video = vaco_codec_core::VideoParameters {
+            width: 4,
+            height: 4,
+            coded_width: 6,
+            coded_height: 4,
+            format: Some(PixFmt::Gray8),
+            ..Default::default()
+        };
+        Decoder::prime_video_params(&mut decoder, &video);
+        let mut budget = Budget::new(Limits::permissive());
+        let mut packet = Packet::from_slice(&mut budget, &[7; 24]).expect("packet");
+        packet.pts = vaco_core::Timestamp::new(3);
+        packet.duration =
+            vaco_core::Duration::from_ticks(1, vaco_core::Rational::new(1, 25)).expect("duration");
+        decoder.send_packet(Some(&packet)).expect("send");
+        let frame = decoder.receive_frame().expect("frame");
+        assert!(matches!(
+            frame.data,
+            FrameData::Video {
+                format: PixFmt::Gray8,
+                width: 6,
+                height: 4,
+                ..
+            }
+        ));
+        assert_eq!(frame.pts, packet.pts);
+        assert_eq!(frame.duration, packet.duration);
+        decoder.send_packet(None).expect("drain");
+        assert!(matches!(
+            decoder.receive_frame(),
+            Err(vaco_core::Error::Eof)
+        ));
     }
 
     #[test]

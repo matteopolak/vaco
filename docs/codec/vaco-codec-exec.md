@@ -18,6 +18,20 @@ legal argument for this design (§4.4 of the legal register).
 
 ## How it works
 
+### Two-pass rate control
+
+Both backends implement `EncoderPass` using their tool's `--pass` and `--stats`
+options. Set a positive bitrate before feeding frames. Pass one returns the
+completed statistics file; pass two writes those opaque bytes to a private file
+before starting the tool. Invalid statistics are surfaced as encoder failures.
+
+Multipass disables x264 MB-tree and x265 CU-tree so all required statistics fit
+the single-file codec API; this differs from their usual two-pass defaults.
+Each encoder owns a unique temporary directory, including its Y4M input and
+statistics, which is removed on drop. To extend the backend, update `build_args`,
+`set_pass`, and `pass_stats` together. This depends on the user-installed x264 or
+x265 binary and adds no library dependency.
+
 | Module | Job |
 |---|---|
 | `y4m` | Serialise a `vaco_frame::Frame` (`yuv420p` only) as a YUV4MPEG2 stream: one header line, then a `FRAME\n` marker plus trimmed plane bytes per frame |

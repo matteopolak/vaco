@@ -6,7 +6,7 @@
 //! open every input      (input.rs)      -> demuxers + stream metadata
 //! resolve every output  (this module)   -> a muxer, or a diagnosis
 //! select streams        (select.rs)     -> which input stream goes where
-//! resolve codecs        (this module)   -> `copy`, or a diagnosis
+//! resolve codecs        (this module)   -> copy or a decode/filter/encode leg
 //! build a PipelineSpec  (vaco-sched)    -> map(tap, output, params) per stream
 //! drive it              (vaco-sched)    -> Finish
 //! open the real sink    (this module)   -> bytes on disk, or a diagnosis
@@ -40,14 +40,11 @@
 //! the code that names "this build demuxes it and cannot mux it", and it exits
 //! 8 like every other four-character tag.
 //!
-//! # There are still no encoders
-//!
-//! So an output stream must be `-c copy`. Without one, the run takes the
-//! reference's *own* path for a build missing an encoder — "Default encoder for
-//! format null (codec none) is probably disabled" — which is a message it
-//! already emits for exactly this situation and which is therefore the right
-//! one to reproduce rather than invent. Stream copy is enough to remux,
-//! though, which is the one thing this module is now actually for.
+//! Encoded streams use registered decoder and encoder descriptors, inserting
+//! filters and format conversion where required. Frame limits sit immediately
+//! before encoding; streamcopy limits count packets. Pass configuration reaches
+//! the encoder before any frame is sent, and EOF drains every useful stage
+//! before the muxer writes its trailer.
 //!
 //! # CL-16: `-metadata`, `-map_metadata`, `-map_chapters`, and FW-11
 //!
@@ -185,6 +182,10 @@ pub enum StreamCodec {
 /// What one output file resolved to.
 #[derive(Debug)]
 pub struct ResolvedOutput {
+    /// Per output stream frame/packet limits, in `streams` order.
+    pub frame_limits: Vec<Option<u64>>,
+    /// Per output stream encoder pass configuration, in `streams` order.
+    pub passes: Vec<crate::pass::PassConfig>,
     pub index: u32,
     pub url: String,
     pub format: &'static str,
@@ -510,6 +511,8 @@ pub fn resolve_output(
         // Not an error and not an empty file: the reference creates nothing at
         // all and exits 0.
         return Ok(ResolvedOutput {
+            frame_limits: Vec::new(),
+            passes: Vec::new(),
             index: out.index,
             url: out.url.clone(),
             format,
@@ -596,8 +599,12 @@ pub fn resolve_output(
     }
 
     let metadata = metadata_of(cli, out, &streams)?;
+    let frame_limits = frame_limits_of(cli, out, &streams)?;
+    let passes = passes_of(cli, out, &streams)?;
 
     Ok(ResolvedOutput {
+        frame_limits,
+        passes,
         index: out.index,
         url: out.url.clone(),
         format,
@@ -610,6 +617,101 @@ pub fn resolve_output(
         format_opts: out.format_opts.clone(),
         end: out.end,
     })
+}
+
+fn passes_of(
+    cli: &Cli,
+    out: &OutputSpec,
+    streams: &[OutStream],
+) -> Result<Vec<crate::pass::PassConfig>, Diagnostic> {
+    let view: Vec<StreamInfo> = streams
+        .iter()
+        .enumerate()
+        .map(|(i, s)| StreamInfo {
+            index: i as u32,
+            media_type: s.media,
+            codec_known: true,
+            ..StreamInfo::default()
+        })
+        .collect();
+    let ctx = MatchCtx::streams(&view);
+    let Some(group) = cli.output_group(out.index) else {
+        return Ok(vec![crate::pass::PassConfig::default(); streams.len()]);
+    };
+    streams
+        .iter()
+        .enumerate()
+        .map(|(i, stream)| {
+            if stream.media != Some(MediaType::Video) {
+                return Ok(crate::pass::PassConfig::default());
+            }
+            let option = group
+                .stream_option("pass", &ctx, i as u32)
+                .map_err(|e| internal(&format!("invalid pass stream specifier: {e}")))?;
+            let number = match option {
+                None => 0,
+                Some(opt) => value_str(opt)?
+                    .parse::<u8>()
+                    .ok()
+                    .filter(|n| *n <= 2)
+                    .ok_or_else(|| internal("-pass must be 0, 1, or 2"))?,
+            };
+            if number != 0 && stream.codec == StreamCodec::Copy {
+                return Err(internal(
+                    "-pass requires an encoder; it cannot be used with streamcopy",
+                ));
+            }
+            let prefix = group
+                .stream_option("passlogfile", &ctx, i as u32)
+                .map_err(|e| internal(&format!("invalid pass-log stream specifier: {e}")))?
+                .map(value_str)
+                .transpose()?
+                .unwrap_or_else(|| "ffmpeg2pass".to_owned());
+            Ok(crate::pass::PassConfig { number, prefix })
+        })
+        .collect()
+}
+
+fn frame_limits_of(
+    cli: &Cli,
+    out: &OutputSpec,
+    streams: &[OutStream],
+) -> Result<Vec<Option<u64>>, Diagnostic> {
+    let view: Vec<StreamInfo> = streams
+        .iter()
+        .enumerate()
+        .map(|(i, s)| StreamInfo {
+            index: i as u32,
+            media_type: s.media,
+            codec_known: true,
+            ..StreamInfo::default()
+        })
+        .collect();
+    let ctx = MatchCtx::streams(&view);
+    let Some(group) = cli.output_group(out.index) else {
+        return Ok(vec![None; streams.len()]);
+    };
+    streams
+        .iter()
+        .enumerate()
+        .map(|(i, _)| {
+            let option = group
+                .stream_option("frames", &ctx, i as u32)
+                .map_err(|e| internal(&format!("invalid frame-limit stream specifier: {e}")))?;
+            option
+                .map(|opt| {
+                    let raw = value_str(opt)?;
+                    let number = vaco_cli_core::value::parse_number(
+                        "frames",
+                        &raw,
+                        vaco_cli_core::value::NumberLimits::int64(),
+                    )
+                    .map_err(|e| internal(&format!("invalid frame limit: {e}")))?;
+                    Ok((number as i64).max(0) as u64)
+                })
+                .transpose()
+        })
+        .collect()
 }
 
 /// Build the `MuxMetadata` this output's `-metadata`/`-metadata:s:…` options
@@ -1808,6 +1910,7 @@ pub fn run_pipeline(
     // tally and, unless the container is `NOFILE`, a handle to the real bytes
     // written — `open_output`'s docs say why the two are not the same thing.
     let mut sinks: Vec<(Sink, Option<Arc<AtomicU64>>)> = Vec::new();
+    let mut global_stream_index = 0;
     for out in outputs.iter().filter(|o| !o.dropped) {
         let (inner, high_water) = open_output(out, overwrite)?;
         // `-t`/`-to`, output-positioned (`OutputSpec::end`): wrapped
@@ -1870,6 +1973,8 @@ pub fn run_pipeline(
             .map_err(|e| internal_from("the muxer refused a bitstream filter", &e))?;
         sinks.push((out.sink.clone(), high_water));
         for (i, s) in out.streams.iter().enumerate() {
+            let pass_stream_index = global_stream_index;
+            global_stream_index += 1;
             let (packet_tap, out_params, label, mapping_source) = match &s.source {
                 StreamPick::Demuxed { file, stream } => {
                     let Some(input) = refs.get(*file as usize).copied() else {
@@ -1898,7 +2003,15 @@ pub fn run_pipeline(
                     // `add_decoder`/`add_encoder` (already exercised by its mocks;
                     // nothing there needed to change for this).
                     let (packet_tap, out_params, label) = match s.codec {
-                        StreamCodec::Copy => (tap, p, "copy".to_owned()),
+                        StreamCodec::Copy => {
+                            let tap = match out.frame_limits.get(i).copied().flatten() {
+                                Some(limit) => spec
+                                    .limit_packets(tap, limit)
+                                    .map_err(|e| internal_from("could not limit streamcopy", &e))?,
+                                None => tap,
+                            };
+                            (tap, p, "copy".to_owned())
+                        }
                         StreamCodec::Encode(name) => {
                             let codec_id = p.codec_id.ok_or_else(|| {
                                 internal("a stream being transcoded has no known input codec")
@@ -1927,24 +2040,7 @@ pub fn run_pipeline(
                             // takes the same path it always did.
                             let _granted = decoder.set_thread_count(threads);
                             if let Some(v) = p.video.as_ref() {
-                                // `Decoder::prime_video`'s own default is a
-                                // no-op, so this costs every decoder except
-                                // the one that actually needs it (FFV1)
-                                // nothing. Coded size, not display size —
-                                // RFC 9043's
-                                // `frame_pixel_width`/`frame_pixel_height`
-                                // describe the decoded picture, matching the
-                                // "coded" half of the display/coded split
-                                // this build already carries per-codec,
-                                // measured directly rather than assumed.
-                                let (width, height) = if v.coded_width > 0 && v.coded_height > 0 {
-                                    (v.coded_width, v.coded_height)
-                                } else {
-                                    (v.width, v.height)
-                                };
-                                if width > 0 && height > 0 {
-                                    decoder.prime_video(width, height);
-                                }
+                                decoder.prime_video_params(v);
                             }
                             if let Some(a) = p.audio.as_ref() {
                                 // `Decoder::prime_audio`'s own default is a
@@ -2258,6 +2354,18 @@ pub fn run_pipeline(
                             // below — see `prime_audio`'s call above for why
                             // this can already be `Some` with no frame sent.
                             let encoder_extradata = encoder.extradata();
+                            let encoder = crate::pass::configure(
+                                encoder,
+                                out.passes.get(i),
+                                pass_stream_index,
+                            )
+                            .map_err(|e| internal_from("could not configure encoding pass", &e))?;
+                            let frames = match out.frame_limits.get(i).copied().flatten() {
+                                Some(limit) => spec.limit_frames(frames, limit).map_err(|e| {
+                                    internal_from("could not limit encoded frames", &e)
+                                })?,
+                                None => frames,
+                            };
                             let packets = spec
                                 .add_encoder(frames, encoder, time_base)
                                 .map_err(|e| internal_from("could not attach an encoder", &e))?;
@@ -2329,6 +2437,15 @@ pub fn run_pipeline(
                             .set_option(key, value)
                             .map_err(|e| internal_from("the encoder refused an option", &e))?;
                     }
+                    let frames = match out.frame_limits.get(i).copied().flatten() {
+                        Some(limit) => spec
+                            .limit_frames(frames, limit)
+                            .map_err(|e| internal_from("could not limit graph output", &e))?,
+                        None => frames,
+                    };
+                    let encoder =
+                        crate::pass::configure(encoder, out.passes.get(i), pass_stream_index)
+                            .map_err(|e| internal_from("could not configure encoding pass", &e))?;
                     let packets = spec
                         .add_encoder(frames, encoder, time_base)
                         .map_err(|e| internal_from("could not attach an encoder", &e))?;
@@ -2393,22 +2510,14 @@ pub fn run_pipeline(
 
     for (out, (sink, high_water)) in outputs.iter().filter(|o| !o.dropped).zip(sinks) {
         let t = sink.tally();
-        // A stream this run actually decoded (not copied) that reached
-        // `Finish::Complete` — no node errored — with zero packets muxed is
-        // not a quiet no-op. This build has no `-frames` (the one remaining
-        // way to legitimately trim a stream to empty now that `-ss`/`-t`
-        // exist), so the only way a real decode-then-encode leg produces
-        // nothing is that the decode itself silently failed: an SPS-parse
-        // failure once did exactly this, completing the whole pipeline and
-        // reporting `frame= 0` at exit 0. `t.streams` is built by one
-        // `add_stream`/`add_stream_with` call per `out.streams` entry, in
-        // that same order (`TallyingMuxer`'s own impl), so the two line up
-        // index for index without needing the tally to carry its own
-        // `StreamCodec` copy.
-        for (spec_stream, stream_tally) in out.streams.iter().zip(&t.streams) {
+        // Empty video is intentional only when this stream has a zero limit.
+        for (i, (spec_stream, stream_tally)) in out.streams.iter().zip(&t.streams).enumerate() {
             let expected_video = matches!(spec_stream.codec, StreamCodec::Encode(_))
                 && spec_stream.media == Some(MediaType::Video);
-            if expected_video && stream_tally.packets == 0 {
+            if expected_video
+                && stream_tally.packets == 0
+                && out.frame_limits.get(i).copied().flatten() != Some(0)
+            {
                 return Err(Diagnostic::conversion_failed());
             }
         }
@@ -2670,6 +2779,83 @@ mod tests {
         (c, o)
     }
 
+    #[test]
+    fn frame_limits_resolve_last_matching_output_stream_option() {
+        let streams: Vec<_> = [MediaType::Video, MediaType::Audio, MediaType::Video]
+            .into_iter()
+            .enumerate()
+            .map(|(i, media)| OutStream {
+                source: StreamPick::demuxed(0, i as u32),
+                media: Some(media),
+                codec: StreamCodec::Copy,
+                graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+                force_key_frames: None,
+                codec_options: Vec::new(),
+                output_matrix: None,
+                bsf: Vec::new(),
+            })
+            .collect();
+        let (cli, out) = out_of(&[
+            "-i",
+            "in.mkv",
+            "-frames",
+            "12",
+            "-vframes",
+            "3",
+            "-frames:v:1",
+            "0",
+            "-aframes",
+            "2",
+            "-f",
+            "null",
+            "-",
+        ]);
+        assert_eq!(
+            frame_limits_of(&cli, &out, &streams).unwrap(),
+            vec![Some(3), Some(2), Some(0)]
+        );
+        let (cli, out) = out_of(&["-i", "in.mkv", "-frames:v", "-2", "-f", "null", "-"]);
+        assert_eq!(
+            frame_limits_of(&cli, &out, &streams).unwrap(),
+            vec![Some(0), None, Some(0)]
+        );
+    }
+
+    #[test]
+    fn encoding_pass_applies_only_to_video_and_rejects_streamcopy() {
+        let video = OutStream {
+            source: StreamPick::demuxed(0, 0),
+            media: Some(MediaType::Video),
+            codec: StreamCodec::Encode("libx264"),
+            graph_opts: crate::filtergraph::SimpleGraphOptions::default(),
+            force_key_frames: None,
+            codec_options: Vec::new(),
+            output_matrix: None,
+            bsf: Vec::new(),
+        };
+        let mut audio = video.clone();
+        audio.media = Some(MediaType::Audio);
+        audio.codec = StreamCodec::Encode("pcm_s16le");
+        let (cli, out) = out_of(&[
+            "-i",
+            "in.mkv",
+            "-pass",
+            "1",
+            "-passlogfile",
+            "custom",
+            "-f",
+            "null",
+            "-",
+        ]);
+        let passes = passes_of(&cli, &out, &[video.clone(), audio]).unwrap();
+        assert_eq!(passes.first().unwrap().number, 1);
+        assert_eq!(passes.first().unwrap().prefix, "custom");
+        assert_eq!(passes.get(1).unwrap().number, 0);
+        let mut copied = video;
+        copied.codec = StreamCodec::Copy;
+        assert!(passes_of(&cli, &out, &[copied]).is_err());
+    }
+
     fn input_with_matrix(matrix: Option<[i32; 9]>) -> select::InputStreams {
         let mut files = select::InputStreams::default();
         files.push_described(0, 16, 12, 0, 0); // one video stream, index 0
@@ -2872,6 +3058,8 @@ mod tests {
         let pattern = pattern.to_str().unwrap();
 
         let out = ResolvedOutput {
+            frame_limits: Vec::new(),
+            passes: Vec::new(),
             index: 0,
             url: pattern.to_owned(),
             format: "image2",
@@ -3346,6 +3534,8 @@ mod tests {
     #[test]
     fn the_summary_line_rounds_to_whole_kibibytes() {
         let out = ResolvedOutput {
+            frame_limits: Vec::new(),
+            passes: Vec::new(),
             index: 0,
             url: "-".to_owned(),
             format: "null",
@@ -3393,6 +3583,8 @@ mod tests {
         // `11.551155%`. See `summary_line`'s docs for the other two rows this
         // was cross-checked against.
         let out = ResolvedOutput {
+            frame_limits: Vec::new(),
+            passes: Vec::new(),
             index: 0,
             url: "out.mkv".to_owned(),
             format: "matroska",

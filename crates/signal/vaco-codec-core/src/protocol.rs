@@ -15,7 +15,7 @@ use vaco_frame::Frame;
 use vaco_packet::Packet;
 
 use crate::machine::Stage;
-use crate::{BitstreamFilter, Caps, Decoder, Encoder};
+use crate::{BitstreamFilter, Caps, Decoder, Encoder, EncoderPass, VideoParameters};
 
 /// The send/receive protocol, independent of what is flowing through it.
 ///
@@ -23,6 +23,27 @@ use crate::{BitstreamFilter, Caps, Decoder, Encoder};
 /// wrapper and the adapters below. Implementing [`Decoder`] directly is also
 /// fine — [`DecoderProtocol`] adapts in the other direction.
 pub trait SendReceive {
+    /// Configure encoder multipass state through the protocol adapters.
+    ///
+    /// # Errors
+    /// Multipass is unsupported unless the component implements it.
+    fn set_pass(&mut self, pass: EncoderPass) -> Result<()> {
+        match pass {
+            EncoderPass::Single => Ok(()),
+            _ => Err(Error::Unsupported(
+                "this component does not support two-pass encoding",
+            )),
+        }
+    }
+
+    /// Return completed first-pass statistics through the protocol adapters.
+    ///
+    /// # Errors
+    /// Propagates a component's statistics retrieval failure.
+    fn pass_stats(&self) -> Result<Option<Vec<u8>>> {
+        Ok(None)
+    }
+
     /// What is fed in: `Packet` for a decoder, `Frame` for an encoder.
     type Input;
     /// What comes out: `Frame` for a decoder, `Packet` for an encoder.
@@ -82,6 +103,12 @@ pub trait SendReceive {
     /// costs those implementors nothing.
     fn prime_video(&mut self, width: u32, height: u32) {
         let _ = (width, height);
+    }
+
+    /// Forwarded to [`Decoder::prime_video_params`].
+    fn prime_video_params(&mut self, params: &VideoParameters) {
+        let (width, height) = params.coded_dimensions();
+        self.prime_video(width, height);
     }
 
     /// Forwarded to [`Decoder::prime_audio`] by [`AsDecoder`]; meaningless for
@@ -147,6 +174,10 @@ where
         self.0.prime_video(width, height);
     }
 
+    fn prime_video_params(&mut self, params: &VideoParameters) {
+        self.0.prime_video_params(params);
+    }
+
     fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
         self.0.prime_audio(sample_rate, layout);
     }
@@ -160,6 +191,14 @@ impl<T> Encoder for AsEncoder<T>
 where
     T: SendReceive<Input = Frame, Output = Packet> + Send,
 {
+    fn set_pass(&mut self, pass: EncoderPass) -> Result<()> {
+        self.0.set_pass(pass)
+    }
+
+    fn pass_stats(&self) -> Result<Option<Vec<u8>>> {
+        self.0.pass_stats()
+    }
+
     fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
         self.0.send(frame)
     }
@@ -252,6 +291,10 @@ impl<D: Decoder> SendReceive for DecoderProtocol<D> {
 
     fn prime_video(&mut self, width: u32, height: u32) {
         self.inner.prime_video(width, height);
+    }
+
+    fn prime_video_params(&mut self, params: &VideoParameters) {
+        self.inner.prime_video_params(params);
     }
 
     fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
@@ -447,6 +490,14 @@ impl<T: SendReceive> Validated<T> {
 }
 
 impl<T: SendReceive> SendReceive for Validated<T> {
+    fn set_pass(&mut self, pass: EncoderPass) -> Result<()> {
+        self.inner.set_pass(pass)
+    }
+
+    fn pass_stats(&self) -> Result<Option<Vec<u8>>> {
+        self.inner.pass_stats()
+    }
+
     type Input = T::Input;
     type Output = T::Output;
 
@@ -468,6 +519,10 @@ impl<T: SendReceive> SendReceive for Validated<T> {
 
     fn prime_video(&mut self, width: u32, height: u32) {
         self.inner.prime_video(width, height);
+    }
+
+    fn prime_video_params(&mut self, params: &VideoParameters) {
+        self.inner.prime_video_params(params);
     }
 
     fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
@@ -583,4 +638,43 @@ pub fn validate_decoder<D: Decoder>(
     caps: Caps,
 ) -> AsDecoder<Validated<DecoderProtocol<D>>> {
     AsDecoder(Validated::new(DecoderProtocol::new(decoder, caps)))
+}
+
+#[cfg(test)]
+mod pass_tests {
+    use super::*;
+
+    #[derive(Default)]
+    struct Statistics(Vec<u8>);
+    impl SendReceive for Statistics {
+        type Input = Frame;
+        type Output = Packet;
+        fn caps(&self) -> Caps {
+            Caps::empty()
+        }
+        fn send(&mut self, _: Option<&Frame>) -> Result<()> {
+            Ok(())
+        }
+        fn receive(&mut self) -> Result<Packet> {
+            Err(Error::NeedMoreInput)
+        }
+        fn flush(&mut self) {}
+        fn set_pass(&mut self, pass: EncoderPass) -> Result<()> {
+            if let EncoderPass::Second(bytes) = pass {
+                self.0 = bytes;
+            }
+            Ok(())
+        }
+        fn pass_stats(&self) -> Result<Option<Vec<u8>>> {
+            Ok(Some(self.0.clone()))
+        }
+    }
+
+    #[test]
+    fn encoder_adapter_and_validator_preserve_opaque_statistics() -> Result<()> {
+        let mut encoder = AsEncoder(Validated::new(Statistics::default()));
+        encoder.set_pass(EncoderPass::Second(vec![0, 255, 13, 10]))?;
+        assert_eq!(encoder.pass_stats()?, Some(vec![0, 255, 13, 10]));
+        Ok(())
+    }
 }

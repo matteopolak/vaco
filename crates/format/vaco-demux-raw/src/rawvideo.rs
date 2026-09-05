@@ -25,7 +25,7 @@
 //! independently measured** — see each type's docs for exactly what was
 //! assumed and why.
 
-use vaco_codec_core::{CodecParameters, VideoParameters};
+use vaco_codec_core::{CodecId, CodecParameters, VideoParameters};
 use vaco_core::{Duration, Error, MediaType, Rational, Result, Timestamp};
 use vaco_format_core::probe::{ProbeData, ProbeScore};
 use vaco_format_core::time::duration_from_rate;
@@ -205,13 +205,13 @@ impl RawVideoDemuxer {
             ..VideoParameters::default()
         };
         let mut params = CodecParameters::new(MediaType::Video);
+        params.codec_id = CodecId::from_name(spec.name);
         params.video = Some(video);
         let mut stream = Stream::new(0, MediaType::Video, time_base);
         stream.params = params;
-        // `CodecId` has no `Rawvideo`/`V210`/`Bitpacked` variant yet (see the
-        // crate docs), so the reference's `codec_name` is recorded here
-        // rather than silently lost.
-        stream.metadata_set("raw_codec_name", spec.name);
+        if stream.params.codec_id.is_none() {
+            stream.metadata_set("raw_codec_name", spec.name);
+        }
         Ok(Self {
             spec,
             io,
@@ -378,6 +378,32 @@ mod tests {
         let opts = RawVideoOptions::default();
         let src = Box::new(MemorySource::new(vec![0u8; 16]));
         assert!(RawVideoDemuxer::open(&RAWVIDEO, src, &NoParsers, &opts).is_err());
+    }
+
+    #[test]
+    fn raw_video_streams_carry_decoder_dispatch_identity() {
+        use vaco_codec_core::CodecId;
+        let opts = RawVideoOptions {
+            width: 48,
+            height: 2,
+            ..RawVideoOptions::default()
+        };
+        for (spec, codec) in [
+            (&RAWVIDEO, CodecId::Rawvideo),
+            (&BITPACKED, CodecId::Bitpacked),
+            (&V210, CodecId::V210),
+            (&V210X, CodecId::V210x),
+        ] {
+            let source = Box::new(MemorySource::new(vec![0; frame_size(spec, &opts).unwrap()]));
+            let mut demux = RawVideoDemuxer::open(spec, source, &NoParsers, &opts).unwrap();
+            assert_eq!(demux.streams()[0].params.codec_id, Some(codec));
+            assert_eq!(demux.streams()[0].metadata_get("raw_codec_name"), None);
+            assert_eq!(
+                demux.read_packet().unwrap().len,
+                frame_size(spec, &opts).unwrap()
+            );
+            assert!(matches!(demux.read_packet(), Err(Error::Eof)));
+        }
     }
 
     #[test]

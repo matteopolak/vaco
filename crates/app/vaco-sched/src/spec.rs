@@ -150,6 +150,7 @@ pub(crate) enum KindSpec {
     },
     Decode(Box<dyn Decoder>),
     Encode(Box<dyn Encoder>),
+    Limit(u64),
     Convert {
         dst_format: PixFmt,
         limits: Limits,
@@ -189,6 +190,7 @@ impl std::fmt::Debug for KindSpec {
             Self::Demux { .. } => "Demux",
             Self::Decode(_) => "Decode",
             Self::Encode(_) => "Encode",
+            Self::Limit(_) => "Limit",
             Self::Convert { .. } => "Convert",
             Self::ConvertAudio { .. } => "ConvertAudio",
             Self::Filter { .. } => "Filter",
@@ -510,6 +512,36 @@ impl PipelineSpec {
             outputs: vec![(Flow::Packets, time_base)],
         });
         Ok(PacketTap { node: id, port: 0 })
+    }
+
+    /// End one encoded stream after at most `count` input frames. Place this
+    /// after filters and before the encoder so its delayed packets still drain.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidData`] if the producer tap does not exist.
+    pub fn limit_frames(&mut self, from: FrameTap, count: u64) -> Result<FrameTap> {
+        let node = self.limit(from.into(), count)?;
+        Ok(FrameTap { node, port: 0 })
+    }
+
+    /// End one streamcopy leg after at most `count` compressed packets.
+    /// Other consumers of the same producer keep their independent limits.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidData`] if the producer tap does not exist.
+    pub fn limit_packets(&mut self, from: PacketTap, count: u64) -> Result<PacketTap> {
+        let node = self.limit(from.into(), count)?;
+        Ok(PacketTap { node, port: 0 })
+    }
+
+    fn limit(&mut self, from: Tap, count: u64) -> Result<u32> {
+        let (flow, tb) = self.out_of(from)?;
+        Ok(self.push(NodeSpec {
+            label: format!("limit {}:{} to {count}", from.node, from.port),
+            kind: KindSpec::Limit(count),
+            inputs: vec![(from, tb)],
+            outputs: vec![(flow, tb)],
+        }))
     }
 
     /// Insert a pixel-format converter between a frame producer and whatever

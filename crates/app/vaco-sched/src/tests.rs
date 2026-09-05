@@ -465,6 +465,96 @@ fn minimal_capacity_still_completes() {
 }
 
 #[test]
+fn frame_limits_preserve_encoder_tail_and_independent_fanout() {
+    for threads in [1, 2, 4, 8] {
+        for limit in [0, 1, 7, 20, 30] {
+            let mut spec = PipelineSpec::new().with_capacity(Capacity::MINIMAL);
+            let input = spec.add_input(Box::new(ScriptedDemuxer::new(
+                vec![video_stream(0, TB)],
+                packets(0, 20, 4),
+            )));
+            let tap = spec.input_stream(input, 0).unwrap();
+            let frames = spec.add_decoder(tap, decoder(3)).unwrap();
+            let limited = spec.limit_frames(frames, limit).unwrap();
+            let encoded = spec
+                .add_encoder(limited, Box::new(MockEncoder::new(5)), TB)
+                .unwrap();
+            let (mux, log) = RecordingMuxer::pair(TB);
+            let output = spec.add_output(Box::new(mux));
+            spec.map(encoded, output, &CodecParameters::new(MediaType::Video))
+                .unwrap();
+            let (copy_mux, copy_log) = RecordingMuxer::pair(TB);
+            let copy_output = spec.add_output(Box::new(copy_mux));
+            spec.map(tap, copy_output, &CodecParameters::new(MediaType::Video))
+                .unwrap();
+            let mut pipeline = spec.build().unwrap();
+            assert_eq!(
+                Driver::with_threads(threads).run(&mut pipeline).unwrap(),
+                Finish::Complete
+            );
+            let log = log.lock().unwrap();
+            assert!(log.trailer);
+            assert_eq!(log.packets.len() as u64, limit.min(20));
+            assert_eq!(
+                log.packets.iter().filter_map(|p| p.1).collect::<Vec<_>>(),
+                (1..=limit.min(20) as i64).collect::<Vec<_>>()
+            );
+            let copy_log = copy_log.lock().unwrap();
+            assert!(copy_log.trailer);
+            assert_eq!(copy_log.packets.len(), 20);
+        }
+    }
+}
+
+#[test]
+fn a_packet_limit_stops_an_infinite_source() {
+    #[derive(Debug)]
+    struct Infinite {
+        streams: Vec<Stream>,
+        read: u64,
+    }
+    impl Demuxer for Infinite {
+        fn streams(&self) -> &[Stream] {
+            &self.streams
+        }
+        fn read_packet(&mut self) -> Result<Packet> {
+            self.read += 1;
+            assert!(self.read < 100, "the abandoned source kept reading");
+            let mut packet = Packet::default();
+            packet.pts = Timestamp::new(self.read as i64);
+            packet.dts = packet.pts;
+            Ok(packet)
+        }
+        fn seek(&mut self, _: SeekTarget, _: SeekFlags) -> Result<()> {
+            Err(Error::NotSeekable)
+        }
+    }
+    for threads in [1, 2, 4, 8] {
+        for limit in [0, 3] {
+            let mut spec = PipelineSpec::new().with_capacity(Capacity::MINIMAL);
+            let input = spec.add_input(Box::new(Infinite {
+                streams: vec![video_stream(0, TB)],
+                read: 0,
+            }));
+            let tap = spec.input_stream(input, 0).unwrap();
+            let limited = spec.limit_packets(tap, limit).unwrap();
+            let (mux, log) = RecordingMuxer::pair(TB);
+            let output = spec.add_output(Box::new(mux));
+            spec.map(limited, output, &CodecParameters::new(MediaType::Video))
+                .unwrap();
+            let mut pipeline = spec.build().unwrap();
+            assert_eq!(
+                Driver::with_threads(threads).run(&mut pipeline).unwrap(),
+                Finish::Complete
+            );
+            let log = log.lock().unwrap();
+            assert_eq!(log.packets.len() as u64, limit);
+            assert!(log.trailer);
+        }
+    }
+}
+
+#[test]
 fn queues_stay_shallow_because_the_muxer_runs_first() {
     // Priority is the memory policy: the demuxer only reads when nothing
     // downstream can move. With a 64-item bound and 200 packets, the peak
@@ -1135,10 +1225,11 @@ fn a_filter_graph_feeds_two_outputs() {
 /// Records the pixel format of every frame it is handed, standing in for an
 /// encoder that declared [`Encoder::accepted_pix_fmts`] and is now downstream
 /// of a converter.
-struct RecordingSink(Arc<Mutex<Vec<vaco_pixfmt::PixFmt>>>);
+struct RecordingSink(Arc<Mutex<Vec<vaco_pixfmt::PixFmt>>>, bool);
 
 impl Encoder for RecordingSink {
     fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
+        self.1 |= frame.is_none();
         if let Some(f) = frame
             && let vaco_frame::FrameData::Video { format, .. } = f.data
         {
@@ -1148,10 +1239,16 @@ impl Encoder for RecordingSink {
     }
 
     fn receive_packet(&mut self) -> Result<Packet> {
-        Err(Error::Eof)
+        Err(if self.1 {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
-    fn flush(&mut self) {}
+    fn flush(&mut self) {
+        self.1 = false;
+    }
 }
 
 #[test]
@@ -1176,7 +1273,7 @@ fn a_converter_turns_gray8_into_the_encoders_declared_format() {
         .unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let encoded = spec
-        .add_encoder(converted, Box::new(RecordingSink(seen.clone())), TB)
+        .add_encoder(converted, Box::new(RecordingSink(seen.clone(), false)), TB)
         .unwrap();
     let (mux, _log) = RecordingMuxer::pair(TB);
     let out = spec.add_output(Box::new(mux));
@@ -1252,10 +1349,11 @@ impl Decoder for PlanarFloatDecoder {
 
 /// Records the [`vaco_sampfmt::SampleFmt`] of every audio frame it is handed,
 /// the audio twin of [`RecordingSink`].
-struct RecordingAudioSink(Arc<Mutex<Vec<vaco_sampfmt::SampleFmt>>>);
+struct RecordingAudioSink(Arc<Mutex<Vec<vaco_sampfmt::SampleFmt>>>, bool);
 
 impl Encoder for RecordingAudioSink {
     fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
+        self.1 |= frame.is_none();
         if let Some(f) = frame
             && let vaco_frame::FrameData::Audio { format, .. } = f.data
         {
@@ -1265,10 +1363,16 @@ impl Encoder for RecordingAudioSink {
     }
 
     fn receive_packet(&mut self) -> Result<Packet> {
-        Err(Error::Eof)
+        Err(if self.1 {
+            Error::Eof
+        } else {
+            Error::NeedMoreInput
+        })
     }
 
-    fn flush(&mut self) {}
+    fn flush(&mut self) {
+        self.1 = false;
+    }
 }
 
 /// E2E-GAPS 3: a decoder's real output format (planar float, here) and an
@@ -1298,7 +1402,11 @@ fn a_sample_converter_turns_planar_float_into_the_encoders_declared_format() {
         .unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let encoded = spec
-        .add_encoder(converted, Box::new(RecordingAudioSink(seen.clone())), TB)
+        .add_encoder(
+            converted,
+            Box::new(RecordingAudioSink(seen.clone(), false)),
+            TB,
+        )
         .unwrap();
     let (mux, _log) = RecordingMuxer::pair(TB);
     let out = spec.add_output(Box::new(mux));

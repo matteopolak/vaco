@@ -135,6 +135,10 @@ impl Decoder for GaplessDecoder {
         self.inner.prime_video(width, height);
     }
 
+    fn prime_video_params(&mut self, params: &crate::VideoParameters) {
+        self.inner.prime_video_params(params);
+    }
+
     fn prime_audio(&mut self, sample_rate: u32, layout: vaco_chlayout::ChannelLayout) {
         self.inner.prime_audio(sample_rate, layout);
     }

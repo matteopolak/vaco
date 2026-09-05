@@ -103,10 +103,14 @@ impl ParsedOption {
     /// `-vf x` resolves to `("filter", Some("v"))`. When an alias bakes in a
     /// specifier, the user's own suffix is discarded — which is what the
     /// reference does, since an alias is never itself a per-stream option.
+    /// A self-alias such as `b` instead supplies a default for a missing suffix.
     #[must_use]
     pub fn resolved(&self) -> (&str, Option<&str>) {
         match self.desc.and_then(|d| d.alias_of) {
             Some((target, "")) => (target, self.spec.as_deref()),
+            Some((target, spec)) if target == self.name => {
+                (target, self.spec.as_deref().or(Some(spec)))
+            }
             Some((target, spec)) => (target, Some(spec)),
             None => (self.name.as_str(), self.spec.as_deref()),
         }
@@ -130,6 +134,9 @@ impl ParsedOption {
             };
         };
         let (_, spec) = self.resolved();
+        if desc.alias_of.is_some_and(|(_, baked)| !baked.is_empty()) {
+            return Ok(spec.map(StreamSpecifier::parse).transpose()?);
+        }
         match (desc.spec_kind(), spec) {
             (SpecKind::Stream, Some(s)) => Ok(Some(StreamSpecifier::parse(s)?)),
             _ => Ok(None),
@@ -707,6 +714,52 @@ mod tests {
         let cl = ff(&["-i", "a", "-vcodec", "copy", "out.mkv"]);
         let o = cl.groups.get(1).unwrap().opts.first().unwrap();
         assert_eq!(o.resolved(), ("c", Some("v")));
+    }
+
+    #[test]
+    fn baked_media_aliases_match_only_their_media_type() {
+        let streams: Vec<_> = [
+            MediaType::Video,
+            MediaType::Audio,
+            MediaType::Subtitle,
+            MediaType::Data,
+        ]
+        .into_iter()
+        .enumerate()
+        .map(|(index, media_type)| StreamInfo {
+            index: index as u32,
+            media_type: Some(media_type),
+            ..StreamInfo::default()
+        })
+        .collect();
+        let ctx = MatchCtx::streams(&streams);
+        for (alias, target, index) in [
+            ("-vframes", "frames", 0),
+            ("-aframes", "frames", 1),
+            ("-dframes", "frames", 3),
+            ("-vcodec", "c", 0),
+            ("-acodec", "c", 1),
+            ("-scodec", "c", 2),
+            ("-dcodec", "c", 3),
+            ("-vf", "filter", 0),
+            ("-af", "filter", 1),
+            ("-b", "b", 0),
+            ("-b:v", "b", 0),
+            ("-b:a", "b", 1),
+        ] {
+            let cl = ff(&["-i", "in", alias, "1", "out"]);
+            let output = cl.groups.get(1).unwrap();
+            for stream in 0..4 {
+                assert_eq!(
+                    output
+                        .stream_option(target, &ctx, stream)
+                        .unwrap()
+                        .is_some(),
+                    stream == index,
+                    "{alias}: stream {stream}"
+                );
+            }
+        }
     }
 
     #[test]

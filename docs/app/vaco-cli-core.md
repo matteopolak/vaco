@@ -58,6 +58,10 @@ of file they may bind to. Three consequences:
   list of (specifier, value) pairs, resolved once the file's streams are known.
   **The last matching occurrence wins**, regardless of how specific it is:
   `-c:a:1 flac -c:a copy` gives stream `a:1` `copy`.
+  Media aliases such as `-vframes`, `-aframes`, `-vf`, and `-acodec` retain
+  their built-in stream selector even though the alias itself is per-file.
+  The self-alias `-b` defaults to video but preserves an explicit `-b:a`
+  selector. Alias resolution and matching live together in `split.rs`.
 * **Trailing per-file options are dropped, silently.** `ffmpeg -i a -f null -
   -c:v libx264` exits 0 and ignores the `-c:v`. We keep them in
   `CommandLine::orphaned` so a caller *may* warn, but nothing here treats them

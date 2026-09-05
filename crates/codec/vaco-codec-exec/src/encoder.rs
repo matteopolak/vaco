@@ -29,9 +29,10 @@ use std::collections::VecDeque;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use vaco_codec_core::machine::{Accept, Machine};
-use vaco_codec_core::{Caps, CodecId, Encoder, EncoderDesc};
+use vaco_codec_core::{Caps, CodecId, Encoder, EncoderDesc, EncoderPass};
 use vaco_core::{Duration, Error, MediaType, Result, Timestamp};
 use vaco_frame::Frame;
 use vaco_limits::{Budget, Limits};
@@ -112,6 +113,8 @@ pub struct ExecEncoder {
     /// to, and the path to spawn the tool against and delete afterwards.
     temp_file: Option<File>,
     temp_path: Option<PathBuf>,
+    scratch: Option<PathBuf>,
+    pass: EncoderPass,
 }
 
 impl std::fmt::Debug for ExecEncoder {
@@ -135,11 +138,40 @@ impl ExecEncoder {
             timings: VecDeque::new(),
             temp_file: None,
             temp_path: None,
+            scratch: None,
+            pass: EncoderPass::Single,
         }
     }
 
     fn build_args(&self) -> Vec<String> {
         let mut args: Vec<String> = self.tool.fixed_args.iter().map(|&s| s.to_owned()).collect();
+        if !matches!(self.pass, EncoderPass::Single) {
+            args.extend([
+                "--pass".to_owned(),
+                if matches!(self.pass, EncoderPass::First) {
+                    "1"
+                } else {
+                    "2"
+                }
+                .to_owned(),
+            ]);
+            if let Some(scratch) = &self.scratch {
+                args.extend([
+                    "--stats".to_owned(),
+                    scratch.join("pass.log").display().to_string(),
+                ]);
+            }
+            // Keep the opaque statistics in one file rather than requiring
+            // codec-specific sidecar files in the caller's pass-log API.
+            args.push(
+                if self.tool.program == "x264" {
+                    "--no-mbtree"
+                } else {
+                    "--no-cutree"
+                }
+                .to_owned(),
+            );
+        }
         if let Some(kbps) = self.rate.bitrate_kbps {
             args.push(self.tool.bitrate_flag.to_owned());
             args.push(kbps.to_string());
@@ -169,6 +201,16 @@ impl ExecEncoder {
                 _ => "vaco-codec-exec: 'x265' is not installed (libx265 needs it on PATH)",
             }));
         }
+        if !matches!(self.pass, EncoderPass::Single) && self.rate.bitrate_kbps.is_none() {
+            return Err(Error::Option {
+                name: "pass".to_owned(),
+                detail: "two-pass encoding requires a positive target bitrate (-b:v)".to_owned(),
+            });
+        }
+        let scratch = self.scratch_dir()?;
+        if let EncoderPass::Second(stats) = &self.pass {
+            std::fs::write(scratch.join("pass.log"), stats).map_err(Error::Io)?;
+        }
         self.geometry = Some(geometry);
         match self.tool.input_mode {
             InputMode::Stdin => {
@@ -180,10 +222,7 @@ impl ExecEncoder {
                 self.proc = Some(proc);
             }
             InputMode::TempY4mFile => {
-                let mut path = std::env::temp_dir();
-                let unique =
-                    u64::from(std::process::id()) * 0x1000 + (self.timings.len() as u64 & 0xfff);
-                path.push(format!("vaco-codec-exec-{unique}.y4m"));
+                let path = scratch.join("input.y4m");
                 let mut file = File::create(&path).map_err(Error::Io)?;
                 y4m::write_header(&mut file, &geometry).map_err(Error::Io)?;
                 self.temp_path = Some(path);
@@ -314,9 +353,61 @@ impl ExecEncoder {
             let _ = std::fs::remove_file(path);
         }
     }
+
+    fn scratch_dir(&mut self) -> Result<PathBuf> {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        if let Some(path) = &self.scratch {
+            return Ok(path.clone());
+        }
+        loop {
+            let path = std::env::temp_dir().join(format!(
+                "vaco-codec-exec-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            match std::fs::create_dir(&path) {
+                Ok(()) => {
+                    self.scratch = Some(path.clone());
+                    return Ok(path);
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(Error::Io(e)),
+            }
+        }
+    }
 }
 
 impl Encoder for ExecEncoder {
+    fn set_pass(&mut self, pass: EncoderPass) -> Result<()> {
+        if self.geometry.is_some() {
+            return Err(Error::InvalidData(
+                "cannot change encoding pass after the first frame",
+            ));
+        }
+        if matches!(&pass, EncoderPass::Second(stats) if stats.is_empty()) {
+            return Err(Error::InvalidData("second-pass statistics are empty"));
+        }
+        self.pass = pass;
+        Ok(())
+    }
+
+    fn pass_stats(&self) -> Result<Option<Vec<u8>>> {
+        if !matches!(self.pass, EncoderPass::First) {
+            return Ok(None);
+        }
+        if self.machine.stage() != vaco_codec_core::Stage::Drained {
+            return Err(Error::InvalidData(
+                "first-pass statistics requested before drain completed",
+            ));
+        }
+        let Some(scratch) = &self.scratch else {
+            return Ok(Some(Vec::new()));
+        };
+        std::fs::read(scratch.join("pass.log"))
+            .map(Some)
+            .map_err(Error::Io)
+    }
+
     fn send_frame(&mut self, frame: Option<&Frame>) -> Result<()> {
         self.poll()?;
         match self.machine.accept(frame.is_none())? {
@@ -390,6 +481,16 @@ impl Encoder for ExecEncoder {
                 Ok(())
             }
             _ => Ok(()),
+        }
+    }
+}
+
+impl Drop for ExecEncoder {
+    fn drop(&mut self) {
+        self.proc = None;
+        self.temp_file = None;
+        if let Some(path) = self.scratch.take() {
+            let _ = std::fs::remove_dir_all(path);
         }
     }
 }

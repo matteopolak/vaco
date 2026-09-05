@@ -569,8 +569,6 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
         "fix_sub_duration",
         "canvas_size",
         "fs",
-        "pass",
-        "passlogfile",
         "rc_override",
         // Third batch (group 2, diagnostics-only).
         "stats_enc_pre",
@@ -607,18 +605,10 @@ fn refuse_unimplemented_options(line: &CommandLine) -> Result<(), Diagnostic> {
         "max_muxing_queue_size",
         "muxing_queue_data_threshold",
         // Eighth batch (see the GLOBAL half's comment above for why).
-        // `-frames`/its aliases `-aframes`/`-dframes`/`-vframes` and
-        // `-shortest` are the two urgent ones: hand-verified byte-identical
-        // output with and without `-frames:v 2` (2794 bytes, frame=25
-        // either way) and with and without `-shortest` on two
-        // different-length WAV inputs (64568 bytes, time=00:00:03.00
-        // either way) -- both silently produce output of the wrong length,
-        // not a missing convenience.
         "thread_queue_size",
         "timestamp",
         "shortest",
         "shortest_buf_duration",
-        "frames",
     ];
 
     for &name in GLOBAL {
@@ -1243,7 +1233,11 @@ mod tests {
             "-",
         ])
         .unwrap();
-        assert!(cli.inputs[0].format_opts.merge_pmt_versions);
+        assert!(
+            cli.inputs
+                .first()
+                .is_some_and(|input| input.format_opts.merge_pmt_versions)
+        );
     }
 
     #[test]

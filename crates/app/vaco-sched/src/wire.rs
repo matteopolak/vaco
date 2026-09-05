@@ -198,6 +198,7 @@ pub struct Wire {
     bytes: u64,
     /// The producer has finished. Sticky: never cleared except by `reset`.
     closed: bool,
+    abandoned: bool,
     /// The timestamp the producer's stream ended at, in `time_base`.
     end_pts: Timestamp,
     /// The unit every timestamp on this wire is counted in.
@@ -216,6 +217,7 @@ impl Wire {
             cap,
             bytes: 0,
             closed: false,
+            abandoned: false,
             end_pts: Timestamp::NONE,
             time_base,
             stats: WireStats::default(),
@@ -293,6 +295,9 @@ impl Wire {
     /// progress rather than merely making it likely.
     #[must_use]
     pub fn has_room(&self) -> bool {
+        if self.abandoned {
+            return true;
+        }
         if self.closed {
             return false;
         }
@@ -317,6 +322,9 @@ impl Wire {
     /// wire, which the builder's type-level separation of packet and frame taps
     /// already makes unreachable from safe caller code.
     pub fn push(&mut self, item: Payload, budget: &mut Budget) -> Result<()> {
+        if self.abandoned {
+            return Ok(());
+        }
         if item.flow() != self.flow {
             return Err(vaco_core::Error::InvalidData(
                 "an item of the wrong kind was pushed onto a wire",
@@ -362,6 +370,19 @@ impl Wire {
         self.bytes = 0;
         self.queue.clear();
         self.closed = false;
+        self.abandoned = false;
         self.end_pts = Timestamp::NONE;
+    }
+
+    pub(crate) const fn is_abandoned(&self) -> bool {
+        self.abandoned
+    }
+
+    pub(crate) fn abandon(&mut self, budget: &mut Budget) {
+        budget.release(self.bytes);
+        self.bytes = 0;
+        self.queue.clear();
+        self.closed = true;
+        self.abandoned = true;
     }
 }
