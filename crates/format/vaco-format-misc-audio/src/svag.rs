@@ -183,19 +183,8 @@ impl Demuxer for SvagDemuxer {
         packet.dts = packet.pts;
         let ticks = i64::try_from(self.packet_samples).unwrap_or(i64::MAX);
         packet.side_data.push(PacketSideData::DurationTicks(ticks));
-        let sample_rate = i64::from(
-            self.stream
-                .params
-                .audio
-                .as_ref()
-                .map_or(1, |audio| audio.sample_rate.max(1)),
-        );
-        #[allow(
-            clippy::integer_division,
-            reason = "packet duration is converted to the microsecond convenience view"
-        )]
-        let duration_us = ticks.saturating_mul(1_000_000) / sample_rate;
-        packet.duration = vaco_core::Duration::from_micros(duration_us);
+        packet.duration = vaco_core::Duration::from_ticks(ticks, self.stream.time_base)
+            .unwrap_or(vaco_core::Duration::ZERO);
         self.frames_emitted = self.frames_emitted.saturating_add(self.packet_samples);
         Ok(packet)
     }
@@ -226,13 +215,9 @@ impl Demuxer for SvagDemuxer {
     }
 
     fn duration(&self) -> Option<vaco_core::Duration> {
-        let sample_rate = u64::from(self.stream.params.audio.as_ref()?.sample_rate);
-        let micros = self
-            .declared_frames
-            .checked_mul(1_000_000)?
-            .checked_div(sample_rate)?;
-        Some(vaco_core::Duration::from_micros(
-            i64::try_from(micros).unwrap_or(i64::MAX),
-        ))
+        vaco_core::Duration::from_ticks(
+            i64::try_from(self.declared_frames).ok()?,
+            self.stream.time_base,
+        )
     }
 }

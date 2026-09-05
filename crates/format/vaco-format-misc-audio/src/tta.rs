@@ -188,17 +188,10 @@ impl Demuxer for TtaDemuxer {
             self.total_samples
                 .saturating_sub(self.frames_emitted_samples),
         );
-        let micros = this_frame_samples
-            .saturating_mul(1_000_000)
-            .checked_div(u64::from(
-                self.stream
-                    .params
-                    .audio
-                    .as_ref()
-                    .map_or(1, |a| a.sample_rate.max(1)),
-            ))
-            .unwrap_or(0);
-        pkt.duration = vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX));
+        pkt.duration = i64::try_from(this_frame_samples)
+            .ok()
+            .and_then(|ticks| vaco_core::Duration::from_ticks(ticks, self.stream.time_base))
+            .unwrap_or(vaco_core::Duration::ZERO);
 
         self.frames_emitted_samples = self
             .frames_emitted_samples
@@ -215,14 +208,10 @@ impl Demuxer for TtaDemuxer {
     }
 
     fn duration(&self) -> Option<vaco_core::Duration> {
-        let rate = self.stream.params.audio.as_ref()?.sample_rate.max(1);
-        let micros = self
-            .total_samples
-            .checked_mul(1_000_000)?
-            .checked_div(u64::from(rate))?;
-        Some(vaco_core::Duration::from_micros(
-            i64::try_from(micros).unwrap_or(i64::MAX),
-        ))
+        vaco_core::Duration::from_ticks(
+            i64::try_from(self.total_samples).ok()?,
+            self.stream.time_base,
+        )
     }
 
     fn duration_exact(&self) -> Option<ExactDuration> {

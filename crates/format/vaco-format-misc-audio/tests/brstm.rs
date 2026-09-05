@@ -38,6 +38,10 @@ struct Fixture {
 /// A patterned, source-derived stereo DSP-ADPCM BRSTM. It makes both the
 /// per-channel coefficient prefix and each ADPC history-table entry visible.
 fn stereo_fixture(final_bytes: usize) -> Fixture {
+    stereo_fixture_at_rate(final_bytes, 32_000)
+}
+
+fn stereo_fixture_at_rate(final_bytes: usize, rate: u16) -> Fixture {
     const HEAD: usize = 0x40;
     const HEAD_SIZE: usize = 0x100;
     const ADPC: usize = HEAD + HEAD_SIZE;
@@ -77,7 +81,7 @@ fn stereo_fixture(final_bytes: usize) -> Fixture {
     let part1 = HEAD + 0x20;
     bytes[part1] = 2;
     bytes[part1 + 2] = CHANNELS as u8;
-    be16(&mut bytes, part1 + 4, 32_000);
+    be16(&mut bytes, part1 + 4, rate);
     be32(
         &mut bytes,
         part1 + 0x0c,
@@ -154,6 +158,21 @@ fn stereo_fixture(final_bytes: usize) -> Fixture {
         packets,
         samples,
     }
+}
+
+#[test]
+fn nonintegral_clock_preserves_packet_sample_counts() {
+    let fixture = stereo_fixture_at_rate(16, 44_100);
+    let mut demux = BrstmDemuxer::open(Box::new(MemorySource::new(fixture.bytes))).unwrap();
+    for (expected, samples) in fixture.packets.iter().zip(&fixture.samples) {
+        let packet = demux.read_packet().unwrap();
+        assert_eq!(packet.payload(), expected);
+        assert_eq!(
+            Some(packet.duration),
+            vaco_core::Duration::from_ticks(*samples, vaco_core::Rational::new(1, 44_100))
+        );
+    }
+    assert!(matches!(demux.read_packet(), Err(Error::Eof)));
 }
 
 #[test]

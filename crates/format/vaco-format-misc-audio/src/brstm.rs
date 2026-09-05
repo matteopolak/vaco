@@ -365,18 +365,8 @@ impl Demuxer for BrstmDemuxer {
         packet
             .side_data
             .push(PacketSideData::DurationTicks(i64::from(samples)));
-        let sample_rate = i64::from(
-            self.stream
-                .params
-                .audio
-                .as_ref()
-                .map_or(1, |audio| audio.sample_rate.max(1)),
-        );
-        packet.duration = vaco_core::Duration::from_micros(
-            i64::from(samples)
-                .saturating_mul(1_000_000)
-                .div_euclid(sample_rate),
-        );
+        packet.duration = vaco_core::Duration::from_ticks(i64::from(samples), self.stream.time_base)
+            .unwrap_or(vaco_core::Duration::ZERO);
         self.blocks_emitted = self.blocks_emitted.saturating_add(1);
         Ok(packet)
     }

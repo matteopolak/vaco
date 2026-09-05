@@ -52,6 +52,10 @@ struct Fixture {
 }
 
 fn stereo_fixture(order: Order, magic: [u8; 4], final_bytes: usize) -> Fixture {
+    stereo_fixture_at_rate(order, magic, final_bytes, 32_000)
+}
+
+fn stereo_fixture_at_rate(order: Order, magic: [u8; 4], final_bytes: usize, rate: u32) -> Fixture {
     const INFO: usize = 0x40;
     const INFO_SIZE: usize = 0x100;
     const SEEK: usize = 0x140;
@@ -99,7 +103,7 @@ fn stereo_fixture(order: Order, magic: [u8; 4], final_bytes: usize) -> Fixture {
     let stream = INFO + 0x20;
     bytes[stream] = 2;
     bytes[stream + 2] = CHANNELS as u8;
-    order.put32(&mut bytes, stream + 4, 32_000);
+    order.put32(&mut bytes, stream + 4, rate);
     order.put32(&mut bytes, stream + 0x0c, (SAMPLES + final_samples) as u32);
     order.put32(&mut bytes, stream + 0x10, BLOCKS as u32);
     order.put32(&mut bytes, stream + 0x14, BLOCK as u32);
@@ -195,6 +199,23 @@ fn stereo_fixture(order: Order, magic: [u8; 4], final_bytes: usize) -> Fixture {
         bytes,
         packets,
         samples,
+    }
+}
+
+#[test]
+fn nonintegral_clock_preserves_packet_sample_counts() {
+    for order in [Order::Big, Order::Little] {
+        let fixture = stereo_fixture_at_rate(order, *b"FSTM", 16, 44_100);
+        let mut demux = BfstmDemuxer::open(Box::new(MemorySource::new(fixture.bytes))).unwrap();
+        for (expected, samples) in fixture.packets.iter().zip(&fixture.samples) {
+            let packet = demux.read_packet().unwrap();
+            assert_eq!(packet.payload(), expected);
+            assert_eq!(
+                Some(packet.duration),
+                vaco_core::Duration::from_ticks(*samples, vaco_core::Rational::new(1, 44_100))
+            );
+        }
+        assert!(matches!(demux.read_packet(), Err(Error::Eof)));
     }
 }
 

@@ -71,6 +71,12 @@ sample frames: their aggregate and one 2,048-byte packet both last exactly
 not just the header count. Changing shared packet sizing must preserve this
 sample-count basis, including a short final packet.
 
+The same fixtures were copy-remuxed through `vvmpeg` into CAF and AIFF, then
+read by `ffprobe 9.0.1`: each output retains one 2,048-byte packet at PTS 0,
+duration 1,024 ticks at `1/44100`, and a 1,024-tick stream duration. Decoding
+either output with `ffmpeg` produces the original 2,048 zero bytes (SHA-256
+`e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad`).
+
 VOC does **not** use `RawPcmDemuxer`: its audio is not one contiguous byte
 span (see below), so it has its own small state machine that shares only
 `pcm::params`/`pcm::new_stream` with the rest.

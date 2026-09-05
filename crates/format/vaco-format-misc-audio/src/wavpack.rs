@@ -212,17 +212,11 @@ impl Demuxer for WavpackDemuxer {
         pkt.flags = PacketFlags::KEY;
         pkt.pos = Some(start);
 
-        let rate = self
-            .stream
-            .params
-            .audio
-            .as_ref()
-            .map_or(1, |a| a.sample_rate.max(1));
-        let micros = u64::from(hdr.block_samples)
-            .saturating_mul(1_000_000)
-            .checked_div(u64::from(rate))
-            .unwrap_or(0);
-        pkt.duration = vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX));
+        pkt.duration = vaco_core::Duration::from_ticks(
+            i64::from(hdr.block_samples),
+            self.stream.time_base,
+        )
+        .unwrap_or(vaco_core::Duration::ZERO);
 
         self.frames_emitted = self
             .frames_emitted
@@ -239,12 +233,7 @@ impl Demuxer for WavpackDemuxer {
     }
 
     fn duration(&self) -> Option<vaco_core::Duration> {
-        let rate = self.stream.params.audio.as_ref()?.sample_rate.max(1);
-        let ts = u64::try_from(self.stream.duration_ts?).ok()?;
-        let micros = ts.checked_mul(1_000_000)?.checked_div(u64::from(rate))?;
-        Some(vaco_core::Duration::from_micros(
-            i64::try_from(micros).unwrap_or(i64::MAX),
-        ))
+        self.stream.duration()
     }
 
     fn duration_exact(&self) -> Option<ExactDuration> {

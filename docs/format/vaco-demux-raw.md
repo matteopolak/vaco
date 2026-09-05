@@ -80,6 +80,13 @@ sample_rate`, every packet flagged `KEY`. A 100000-byte file at 8000 Hz mono
 produced 97 full 1024-byte packets and one 672-byte trailer — `PcmDemuxer`
 reproduces exactly that split.
 
+Packet durations retain each group's exact sample count, including a short
+final packet. At 44.1 kHz a 512-sample packet lasts `128/11025` seconds and a
+one-sample tail lasts `1/44100`; neither passes through integer microseconds.
+Grouping remains Vaco's fixed 1,024-byte policy: `ffprobe 9.0.1` groups the
+1,025-sample mono test input into one 2,050-byte packet, while Vaco emits
+1,024/1,024/2 bytes. The payload and summed sample-clock duration agree.
+
 Only six of the 21 formats have a declared extension (`al`, `ul`, `sb`, `sw`,
 `ub`, `uw`); the other fifteen can only be opened with `-f <name>` — measured
 by probing a headerless file with no matching extension and observing the

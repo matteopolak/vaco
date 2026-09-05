@@ -310,11 +310,7 @@ impl Demuxer for XwmaDemuxer {
         pkt.pts = Timestamp::new(sample_pos);
         pkt.dts = pkt.pts;
         let dur = self.samples_for(n);
-        pkt.duration = Duration::from_micros(
-            dur.saturating_mul(1_000_000)
-                .checked_div(i64::from(self.sample_rate))
-                .unwrap_or(0),
-        );
+        pkt.duration = Duration::from_ticks(dur, self.stream.time_base).unwrap_or(Duration::ZERO);
         pkt.flags = PacketFlags::KEY;
         pkt.pos = Some(pos);
         self.bytes_read = self.bytes_read.saturating_add(n as u64);
@@ -370,12 +366,7 @@ impl Demuxer for XwmaDemuxer {
             self.data_len.saturating_mul(u64::from(self.sample_rate))
                 / u64::from(self.avg_bytes_per_sec)
         };
-        let micros = frames
-            .checked_mul(1_000_000)?
-            .checked_div(u64::from(self.sample_rate))?;
-        Some(Duration::from_micros(
-            i64::try_from(micros).unwrap_or(i64::MAX),
-        ))
+        Duration::from_ticks(i64::try_from(frames).ok()?, self.stream.time_base)
     }
 }
 
@@ -480,11 +471,17 @@ mod tests {
         .unwrap();
         assert_eq!(mono.streams().first().unwrap().duration_ts, Some(1000)); // 2000 / (1*2)
 
-        let stereo = XwmaDemuxer::open(Box::new(MemorySource::new(build_file(
+        let mut stereo = XwmaDemuxer::open(Box::new(MemorySource::new(build_file(
             0x0161, 2, 44_100, 8000, 2230, &data,
         ))))
         .unwrap();
         assert_eq!(stereo.streams().first().unwrap().duration_ts, Some(500)); // 2000 / (2*2)
+        assert_eq!(stereo.duration().unwrap().as_ratio(), (5, 441));
+        let packet = stereo.read_packet().unwrap();
+        assert_eq!(packet.pts.ticks(), Some(0));
+        assert_eq!(packet.duration.as_ratio(), (1, 4));
+        assert_eq!(packet.payload(), data.as_slice());
+        assert!(matches!(stereo.read_packet(), Err(Error::Eof)));
     }
 
     #[test]

@@ -197,18 +197,11 @@ impl Demuxer for VagDemuxer {
             .saturating_mul(u64::from(SAMPLES_PER_BLOCK));
         pkt.pts = vaco_core::Timestamp::new(i64::try_from(frame_index).unwrap_or(i64::MAX));
         pkt.dts = pkt.pts;
-        pkt.duration = vaco_core::Duration::from_micros(
-            i64::from(SAMPLES_PER_BLOCK)
-                .saturating_mul(1_000_000)
-                .checked_div(i64::from(
-                    self.stream
-                        .params
-                        .audio
-                        .as_ref()
-                        .map_or(1, |a| a.sample_rate.max(1)),
-                ))
-                .unwrap_or(0),
-        );
+        pkt.duration = vaco_core::Duration::from_ticks(
+            i64::from(SAMPLES_PER_BLOCK),
+            self.stream.time_base,
+        )
+        .unwrap_or(vaco_core::Duration::ZERO);
         pkt.flags = PacketFlags::KEY;
         pkt.pos = Some(pos);
         self.blocks_emitted = self.blocks_emitted.saturating_add(1);
@@ -244,11 +237,7 @@ impl Demuxer for VagDemuxer {
     fn duration(&self) -> Option<vaco_core::Duration> {
         let blocks = self.block_count?;
         let frames = blocks.saturating_mul(u64::from(SAMPLES_PER_BLOCK));
-        let rate = u64::from(self.stream.params.audio.as_ref()?.sample_rate.max(1));
-        let micros = frames.checked_mul(1_000_000)?.checked_div(rate)?;
-        Some(vaco_core::Duration::from_micros(
-            i64::try_from(micros).unwrap_or(i64::MAX),
-        ))
+        vaco_core::Duration::from_ticks(i64::try_from(frames).ok()?, self.stream.time_base)
     }
 }
 

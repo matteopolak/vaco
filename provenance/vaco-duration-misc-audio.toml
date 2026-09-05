@@ -1,0 +1,29 @@
+[[source]]
+id = "misc-audio-duration-oracle"
+kind = "blackbox"
+title = "ffmpeg/ffprobe 9.0.1 sample-clock timing and byte counts for short audio containers"
+acquired = "2026-09-04"
+where = "Installed ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -af atrim=end_sample=1024 -c:a CODEC -f FORMAT; ffprobe -show_packets -show_entries stream=time_base,duration_ts,sample_rate"
+
+# Generated wavpack-44100-1024.wv: 146 bytes, SHA256
+# ae734a1b5e56b9dd1ba5687fef5d1aaa74a4f41da503ce8033e7bdbda3ce640f.
+# One 54-byte packet, duration 1024 at 1/44100, stream duration 1024.
+# Generated tta-44100-1024.tta: 316 bytes, SHA256
+# 0c7e0e62a392e97ab83d26432d0039a775d5185c91a041ced85b94058ebbb22e.
+# One 194-byte packet at byte 30, duration 1024 at 1/44100, stream duration 1024.
+# Both decode to 2048 zero bytes, SHA256
+# e5a00aa9991ac8a5ee3109844d84a55583bd20572ad3ffcd42792f3c36b183ad.
+# Generated sbc-44100-1024.sbc: 368 bytes, SHA256
+# 9aee7c52c240da9b0bdc01030c07878414d3369ff248ee00a0f1fe1a68fc9ad6.
+# Eight 46-byte packets decode to 1024 mono samples (2048 bytes). ffprobe's
+# generic 1/90000 clock reports 261 ticks per packet; Vaco uses 128 ticks at 1/44100.
+# Existing VAG: 10 x 16-byte packets, 28 ticks each at 1/22050, total 280.
+# Existing SVAG: 10 x 32-byte packets, 28 ticks each at 1/44100, total 280.
+# Existing XA: 5 x 30-byte packets, 28 ticks each at 1/22050, total 140.
+# BRSTM/BFSTM packet bytes and framing are independently covered by their
+# ffprobe timing-wrapper integration tests. The 56-sample 44100 Hz regression
+# case also verifies the native duration ratio `2/1575`, rather than the old
+# microsecond-rounded `1269/1000000` value.
+# The xWMA regression preserves its measured integer frame estimate at the
+# stream clock when a `dpds` chunk selects PCM-frame arithmetic, instead of
+# converting that count through microseconds.

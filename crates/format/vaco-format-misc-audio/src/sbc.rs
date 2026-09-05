@@ -173,17 +173,11 @@ impl Demuxer for SbcDemuxer {
         pkt.pts = Timestamp::new(i64::try_from(self.frames_emitted).unwrap_or(i64::MAX));
         pkt.dts = pkt.pts;
         pkt.flags = PacketFlags::KEY;
-        let rate = self
-            .stream
-            .params
-            .audio
-            .as_ref()
-            .map_or(1, |a| a.sample_rate.max(1));
-        let micros = u64::from(hdr.samples_per_frame)
-            .saturating_mul(1_000_000)
-            .checked_div(u64::from(rate))
-            .unwrap_or(0);
-        pkt.duration = vaco_core::Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX));
+        pkt.duration = vaco_core::Duration::from_ticks(
+            i64::from(hdr.samples_per_frame),
+            self.stream.time_base,
+        )
+        .unwrap_or(vaco_core::Duration::ZERO);
         self.frames_emitted = self
             .frames_emitted
             .saturating_add(u64::from(hdr.samples_per_frame));

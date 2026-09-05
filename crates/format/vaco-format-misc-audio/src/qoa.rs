@@ -79,7 +79,6 @@ pub struct QoaDemuxer {
     stream: Stream,
     /// From the file header; 0 means "streaming", total length unknown.
     total_samples: u64,
-    sample_rate: u32,
     samples_emitted: u64,
     budget: Budget,
     eof: bool,
@@ -139,7 +138,6 @@ impl QoaDemuxer {
             io,
             stream,
             total_samples,
-            sample_rate,
             samples_emitted: 0,
             budget: Budget::new(Limits::permissive()),
             eof: false,
@@ -179,11 +177,8 @@ impl Demuxer for QoaDemuxer {
         pkt.pts = Timestamp::new(i64::try_from(self.samples_emitted).unwrap_or(i64::MAX));
         pkt.dts = pkt.pts;
         pkt.flags = PacketFlags::KEY;
-        let micros = u64::from(fsamples)
-            .saturating_mul(1_000_000)
-            .checked_div(u64::from(self.sample_rate.max(1)))
-            .unwrap_or(0);
-        pkt.duration = Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX));
+        pkt.duration = Duration::from_ticks(i64::from(fsamples), self.stream.time_base)
+            .unwrap_or(Duration::ZERO);
 
         self.samples_emitted = self.samples_emitted.saturating_add(u64::from(fsamples));
         Ok(pkt)
@@ -197,13 +192,7 @@ impl Demuxer for QoaDemuxer {
         if self.total_samples == 0 {
             return None;
         }
-        let micros = self
-            .total_samples
-            .checked_mul(1_000_000)?
-            .checked_div(u64::from(self.sample_rate.max(1)))?;
-        Some(Duration::from_micros(
-            i64::try_from(micros).unwrap_or(i64::MAX),
-        ))
+        Duration::from_ticks(i64::try_from(self.total_samples).ok()?, self.stream.time_base)
     }
 }
 
@@ -251,14 +240,17 @@ mod tests {
         let audio = d.streams()[0].params.audio.clone().unwrap();
         assert_eq!(audio.sample_rate, 44_100);
         assert_eq!(audio.layout, ChannelLayout::default_for(2));
+        assert_eq!(d.duration().map(Duration::as_ratio), Some((2, 2205)));
 
         let p0 = d.read_packet().unwrap();
         assert_eq!(p0.payload(), frame0.as_slice());
         assert_eq!(p0.pts.ticks(), Some(0));
+        assert_eq!(p0.duration.as_ratio(), (1, 2205));
 
         let p1 = d.read_packet().unwrap();
         assert_eq!(p1.payload(), frame1.as_slice());
         assert_eq!(p1.pts.ticks(), Some(20));
+        assert_eq!(p1.duration.as_ratio(), (1, 2205));
 
         assert!(matches!(d.read_packet(), Err(Error::Eof)));
     }

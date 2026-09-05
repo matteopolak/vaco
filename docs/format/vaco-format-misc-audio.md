@@ -182,11 +182,18 @@ metadata divergence from the reference for the measured subset.
 
 ## How it works
 
-`wavpack` and `tta` preserve their declared total-sample counts as exact
-aggregate durations at the stream's native `1/sample_rate` clock. Their
-legacy microsecond `duration()` views remain available for callers that need
-them, but duration-aware tools should consume the demuxers' exact views so a
-44.1 kHz sample count is not rounded before display or rescaling.
+Sample-count durations use the stream's native `1/sample_rate` clock for
+both packets and aggregate lengths. `duration()` and `duration_exact()`
+retain the same rational seconds; only display formatting rounds. WavPack
+and TTA fixtures with 1,024 samples at 44.1 kHz both retain `256/11025`
+seconds, with their complete 54-byte and 194-byte packets checked against
+the reference file bytes. Their decoded reference payloads each contain 2,048
+zero bytes.
+
+The differential fixture loop also checks that every packet duration lies
+exactly on its declared native sample clock. This catches fractional-sample
+artifacts from microsecond conversion without weakening existing packet-size
+checks. Keep sample counts and stream clocks together when adding a format.
 
 ### `block::BlockDemuxer` — the shared engine
 

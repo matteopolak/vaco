@@ -256,10 +256,20 @@ fn every_fixture_matches_the_measured_reference_row() {
         // just the total byte count -- this is the check that would have
         // caught BlockDemuxer's old batching-versus-one-per-block
         // divergence, which the total/duration checks above did not.
+        let time_base = demux.streams()[0].time_base;
         let mut sizes = Vec::new();
         loop {
             match demux.read_packet() {
-                Ok(pkt) => sizes.push(pkt.len),
+                Ok(pkt) => {
+                    let ticks = pkt.duration.to_ticks(time_base).unwrap();
+                    if Some(pkt.duration) != vaco_core::Duration::from_ticks(ticks, time_base) {
+                        failures.push(format!(
+                            "{}: packet {} duration {:?} lost its native sample clock",
+                            row.file, sizes.len(), pkt.duration.as_ratio()
+                        ));
+                    }
+                    sizes.push(pkt.len);
+                }
                 Err(vaco_core::Error::Eof) => break,
                 Err(e) => {
                     failures.push(format!("{}: read_packet failed: {e:?}", row.file));
