@@ -2,75 +2,33 @@
 //!
 //! # What it is
 //!
-//! A lossless predictive audio codec for mono and stereo PCM, registered
-//! under [`vaco_codec_core::CodecId::Alac`] as `DECODER_ALAC`/`ENCODER_ALAC`.
+//! A lossless predictive codec for mono and stereo PCM, registered under
+//! [`vaco_codec_core::CodecId::Alac`] as `DECODER_ALAC`/`ENCODER_ALAC`.
 //!
 //! # How it works
 //!
-//! Two layers, split deliberately so their provenance can be told apart:
+//! [`cookie`] parses Apple's `ALACSpecificConfig` and
+//! `ALACChannelLayoutInfo`, using the published magic-cookie description and a
+//! cookie extracted from real `ffmpeg -c:a alac` output.
+//! [`frame_codec`] implements the adaptive predictor, Rice coding, and
+//! reversible mid/side stereo transform; [`decoder::AlacDecoder`] validates
+//! packet metadata before allocating audio.
 //!
-//! - [`cookie`] parses the real Apple **magic cookie**
-//!   (`ALACSpecificConfig`/`ALACChannelLayoutInfo`) that a `.m4a`/`.caf`
-//!   container carries as extradata — field order and widths taken from
-//!   Apple's own `ALACMagicCookieDescription.txt` and cross-checked against a
-//!   cookie extracted from a real `ffmpeg -c:a alac` output file (see
-//!   `provenance/vaco-codec-alac.toml` and `cookie.rs`'s pinned regression
-//!   test). [`decoder::AlacDecoder::set_extradata`] uses this to learn a
-//!   real stream's sample rate and channel layout.
-//! - [`frame_codec`] is the actual packet bitstream: Apple's real adaptive
-//!   linear predictor ([`predictor`]) plus adaptive Rice-style entropy
-//!   coding ([`rice`]), with a reversible mid/side stereo transform. An
-//!   earlier version of this module was a self-invented sign-sign LMS
-//!   design that could only decode its own encoder's output; `predictor.rs`'s
-//!   doc comment has the full history and the from-scratch translation of
-//!   Apple's reference source (`codec/dp_dec.c`'s `unpc_block`, Apache
-//!   License 2.0, confirmed outside this project's D7/D15 FFmpeg/libav
-//!   clean-room rule) that replaced it.
+//! The interop contract is two-way and byte-measured: the decoder reads real
+//! ffmpeg ALAC packets, and the encoder's output is accepted by the `alac`
+//! dev-dependency oracle. `tests/oracle_alac_crate.rs` pins both directions;
+//! preserve those checks rather than relying on a self-round-trip alone.
 //!
-//! **Consequence, stated plainly**: this decoder reads both the container
-//! metadata *and* the compressed audio payload of a real Apple/
-//! `ffmpeg`-produced ALAC file correctly, and a real ALAC decoder (the
-//! `alac` crate, used here only as a dev-dependency oracle — never read as
-//! source) reads this crate's own encoder output correctly in turn.
-//! `tests/oracle_alac_crate.rs` checks both directions bit-for-bit against
-//! real `ffmpeg`-produced cookie/packet bytes:
-//! `this_crates_own_decoder_reads_a_real_ffmpeg_alac_packet_bit_for_bit` and
-//! `this_crates_own_encoder_output_is_accepted_by_the_oracle_decoder`.
+//! Escape-mode framing remains the implementation's choice where the reference
+//! permits multiple legal encodings; `frame_codec.rs` documents that boundary.
+//! [`vaco_limits::Limits`] bounds attacker-controlled sample/channel allocation.
 //!
-//! # How to change it
+//! Dependencies are `vaco-codec-core`, `vaco-frame`, `vaco-sampfmt`,
+//! `vaco-chlayout`, `vaco-packet`, `vaco-bitstream`, and `vaco-limits`. The
+//! `alac` crate is dev-only and is never used as a source dependency.
 //!
-//! [`frame_codec`]'s escape-mode (verbatim) framing predates the real
-//! predictor and is still this crate's own choice where the reference
-//! offers more than one legal encoding (e.g. exact escape-mode trigger
-//! thresholds) — `frame_codec.rs`'s own doc says which parts are which.
-//! Real interop is the invariant to preserve: any change here should keep
-//! `tests/oracle_alac_crate.rs` passing against the `alac` crate, not just
-//! this crate's own round-trip tests.
-//!
-//! # Configuration
-//!
-//! [`vaco_limits::Limits`] bounds every allocation, exactly as every other
-//! decoder in this tree: the packet header's own `num_samples`/`channels`
-//! fields are attacker-controlled and are validated by
-//! [`vaco_frame::Frame::alloc_audio`] before a sample is decoded.
-//!
-//! # Dependencies
-//!
-//! `vaco-codec-core` (the protocol), `vaco-frame`/`vaco-sampfmt`/
-//! `vaco-chlayout` (the decoded audio), `vaco-packet` (the encoded bytes),
-//! `vaco-bitstream` (bit-level I/O), `vaco-limits` (allocation bounds). The
-//! `alac` crate is a **dev-dependency only** — see `Cargo.toml`, and
-//! `Cargo.toml`'s own dev-dependency section is the only place it is
-//! permitted to appear.
-//!
-//! # What did not land
-//!
-//! - More than 2 channels: the packet header caps at [`MAX_CHANNELS`]
-//!   (stereo), and the cookie's `ALACChannelLayoutInfo` tags for 3.0B/4.0B/
-//!   5.0D/5.1D/6.1/7.1B are recognised structurally (`cookie.rs`) but have no
-//!   [`vaco_chlayout::ChannelLayout`] mapping wired up.
-//! - Bit depths other than 16 and 32 (20/24-bit PCM, which real ALAC
-//!   supports, are not implemented).
+//! Only 16/32-bit mono/stereo PCM is wired up; wider channel layouts are
+//! recognised structurally but have no [`vaco_chlayout::ChannelLayout`] mapping.
 //!
 //! [`MAX_CHANNELS`]: frame_codec (see its module doc)
 
