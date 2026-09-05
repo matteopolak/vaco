@@ -1,0 +1,37 @@
+name: PGO profile refresh
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    name: Generate and validate profile
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - name: Install the black-box fixture generator
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - name: Generate disposable T0/T1 fixtures
+        env:
+          VACO_PROFILE_FIXTURES: ${{ runner.temp }}/vaco-profile-fixtures
+        run: ./scripts/pgo-fixtures.sh
+      - name: Build and exercise the instrumented binary
+        env:
+          VACO_PROFILE_FIXTURES: ${{ runner.temp }}/vaco-profile-fixtures
+          VACO_PGO_TARGET_DIR: ${{ runner.temp }}/vaco-pgo-target
+          VACO_PGO_RAW_DIR: ${{ runner.temp }}/vaco-pgo-raw
+          VACO_PGO_PROFDATA: ${{ runner.temp }}/vaco.profdata
+        run: ./scripts/pgo-build.sh
+      - name: Publish the content-addressed profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: vaco-pgo-profile-${{ github.sha }}
+          path: ${{ runner.temp }}/vaco.profdata
+          if-no-files-found: error

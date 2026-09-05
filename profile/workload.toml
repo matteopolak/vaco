@@ -1,0 +1,110 @@
+# Vaco's release PGO training set.  Inputs are T0/T1 fixtures supplied by the
+# caller through VACO_PROFILE_FIXTURES; no media is committed to this repo.
+version = 1
+max_runtime_minutes = 25
+max_component_share = 0.15
+required_components = ["vaco-cli", "vaco-probe", "vaco-sched", "vaco-codec-vp8", "vaco-codec-vp9", "vaco-codec-flac", "vaco-codec-ffv1", "vaco-demux-matroska", "vaco-mux-matroska", "vaco-filter-video-geometry", "vaco-filter-audio"]
+
+[[workload]]
+name = "decode-vp9"
+group = "decode"
+component = "vaco-codec-vp9"
+binary = "vvmpeg"
+args = ["-hide_banner", "-i", "${VACO_PROFILE_FIXTURES}/vp9.webm", "-f", "null", "-"]
+weight = 2
+
+[[workload]]
+name = "decode-vp8"
+group = "decode"
+component = "vaco-codec-vp8"
+binary = "vvmpeg"
+args = ["-hide_banner", "-i", "${VACO_PROFILE_FIXTURES}/vp8.ivf", "-f", "null", "-"]
+weight = 1
+
+[[workload]]
+name = "decode-flac"
+group = "decode"
+component = "vaco-codec-flac"
+binary = "vvmpeg"
+args = ["-hide_banner", "-i", "${VACO_PROFILE_FIXTURES}/flac.ogg", "-f", "null", "-"]
+weight = 1
+
+[[workload]]
+name = "probe-matroska"
+group = "demux"
+component = "vaco-demux-matroska"
+binary = "vvprobe"
+args = ["-hide_banner", "-show_format", "-show_streams", "${VACO_PROFILE_FIXTURES}/sample.mkv"]
+weight = 1
+
+[[workload]]
+name = "probe-truncated"
+group = "demux"
+component = "vaco-probe"
+binary = "vvprobe"
+args = ["-hide_banner", "-show_format", "${VACO_PROFILE_FIXTURES}/truncated.mkv"]
+weight = 1
+
+[[workload]]
+name = "remux-matroska"
+group = "transcode"
+component = "vaco-mux-matroska"
+binary = "vvmpeg"
+args = ["-hide_banner", "-i", "${VACO_PROFILE_FIXTURES}/sample.mkv", "-c", "copy", "-f", "matroska", "-"]
+weight = 1
+
+[[workload]]
+name = "scale-geometry"
+group = "scale"
+component = "vaco-filter-video-geometry"
+binary = "vvmpeg"
+args = ["-hide_banner", "-i", "${VACO_PROFILE_FIXTURES}/vp9.webm", "-vf", "scale=320:240", "-f", "null", "-"]
+weight = 1
+
+[[workload]]
+name = "resample-flac"
+group = "resample"
+component = "vaco-filter-audio"
+binary = "vvmpeg"
+args = ["-hide_banner", "-i", "${VACO_PROFILE_FIXTURES}/pcm.wav", "-af", "aresample=sample_rate=44100", "-f", "null", "-"]
+weight = 1
+
+[[workload]]
+name = "encode-ffv1"
+group = "encode"
+component = "vaco-codec-ffv1"
+binary = "vvmpeg"
+args = ["-hide_banner", "-i", "${VACO_PROFILE_FIXTURES}/sample.mkv", "-c:v", "ffv1", "-f", "null", "-"]
+weight = 1
+
+[[workload]]
+name = "seek-vp9"
+group = "seek"
+component = "vaco-demux-matroska"
+binary = "vvmpeg"
+args = ["-hide_banner", "-ss", "0.001", "-i", "${VACO_PROFILE_FIXTURES}/vp9.webm", "-frames:v", "1", "-f", "null", "-"]
+weight = 1
+
+[[workload]]
+name = "cli-version"
+group = "cli"
+component = "vaco-cli"
+binary = "vvmpeg"
+args = ["-version"]
+weight = 1
+
+[[workload]]
+name = "cli-listings"
+group = "cli"
+component = "vaco-cli"
+binary = "vvmpeg"
+args = ["-hide_banner", "-formats"]
+weight = 1
+
+[[workload]]
+name = "probe-listings"
+group = "cli"
+component = "vaco-probe"
+binary = "vvprobe"
+args = ["-formats"]
+weight = 1

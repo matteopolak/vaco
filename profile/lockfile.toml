@@ -1,0 +1,9 @@
+# Profile metadata is committed; the binary profile is a release-channel
+# artifact because a merged workspace profile is tens of megabytes.
+schema = 1
+manifest = "profile/workload.toml"
+manifest_sha256 = "d9e69012235ccfd52ed2531098fb0a00cb80762fdf8d9da7c107fa276fae26b7"
+target = "host"
+artifact = "vaco-pgo-profile-host.profdata"
+profile_sha256 = ""
+status = "generated-locally-until-release-artifact-is-published"

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Exercise an instrumented Vaco binary with the checked-in workload manifest.
+# Keep this wrapper tiny so local and CI runs have exactly the same runner.
+set -eu
+ROOT="$(cd -- "$(dirname -- "$0")/.." && pwd)"
+MANIFEST=${VACO_PROFILE_MANIFEST:-"$ROOT/profile/workload.toml"}
+BIN_DIR=${VACO_PROFILE_BIN_DIR:-"${VACO_PGO_TARGET_DIR:-$ROOT/target/pgo}/release"}
+
+set -- --binary-dir "$BIN_DIR" "$@"
+if [ -n "${VACO_PROFILE_FIXTURES:-}" ]; then
+    set -- --fixtures "$VACO_PROFILE_FIXTURES" "$@"
+fi
+exec python3 "$ROOT/scripts/pgo.py" run "$MANIFEST" "$@"

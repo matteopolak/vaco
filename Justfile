@@ -217,12 +217,24 @@ checkasm:
 checkasm-bench:
     cargo run --release -p vaco-checkasm {{TD}} -- --bench
 
-# Two-pass PGO build (plan 12 §7). NOT IMPLEMENTED — PF-0.8 (#98) has not been
-# built. This recipe called `cargo xtask pgo`, which is not a subcommand, so it
-# failed with an unhelpful clap error that read like a broken install.
-build-pgo:
-    @echo "build-pgo is not implemented yet — see PF-0.8 (#98)." >&2
-    @exit 1
+# Two-pass PGO build (plan 12 §7). The profile workload and lock metadata live
+# under profile/; all generated raw/profile files stay under the ignored
+# pgo-data/ directory. Set VACO_PROFILE_FIXTURES to the T0/T1 fixture root.
+pgo-build:
+    ./scripts/pgo-build.sh
+
+# Compatibility spelling retained for scripts written before PF-0.8 landed.
+build-pgo: pgo-build
+
+# Check an existing profile without rebuilding anything. This is useful in CI
+# after downloading the content-addressed release-channel artifact.
+pgo-coverage profile:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    dump="$$(mktemp "$${TMPDIR:-/tmp}/vaco-pgo-profdata.XXXXXX")"
+    trap 'rm -f "$$dump"' EXIT INT TERM
+    llvm-profdata show --all-functions --counts "{{profile}}" > "$$dump"
+    python3 scripts/pgo.py check-profile profile/workload.toml "$$dump"
 
 # Reclaim build scratch. Safe to run mid-wave: it never touches a target dir a
 # running agent owns, only the orchestrator's own and stale ones.

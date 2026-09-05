@@ -22,6 +22,7 @@ mod layers;
 mod option_consumption;
 mod owner_gate;
 mod patent_gate;
+mod pgo;
 mod provenance;
 mod reachability_check;
 mod registry;
@@ -47,6 +48,7 @@ fn main() {
         "wasm-check" => wasm::run(check),
         "time-gate" => time_gate::run(check),
         "patent-gate" => patent_gate::run(check),
+        "profile-coverage" | "pgo-coverage" => pgo::run(&args[1..]),
         "provenance-check" => provenance::run(check),
         "vlc-scan" => vlc_scan::run(check),
         "fuzz-check" => fuzz_check::run(check),
@@ -70,6 +72,7 @@ fn main() {
             eprintln!("  wasm-check      every library still builds for wasm32 (D18)");
             eprintln!("  time-gate       the OS clock is reached only through vaco-time (D18)");
             eprintln!("  patent-gate     no encumbered component is in the default build (D4)");
+            eprintln!("  profile-coverage  validate an LLVM PGO profile's coverage and weighting");
             eprintln!("  owner-gate      each third-party media crate has exactly one owner (D11)");
             eprintln!("  dup-check       one definition per concept (D19)");
             eprintln!(
