@@ -1535,6 +1535,13 @@ acquired = "2026-09-04"
 where    = "the reference binaries installed on the development machine"
 
 [[source]]
+id       = "kaitai-fasttracker-xm"
+kind     = "spec"
+title    = "Kaitai Struct FastTracker 2 Extended Module (XM) declarative format description; published under the Unlicense; pinned repository commit f6a82f70fa9ca8cbd3f7f4b39b2cc215668f0fb4; captured KSY SHA-256 3997da4f6aab2d3d7e8458569ee0361f42c40b37296f797eb803d5a0ced8f837"
+acquired = "2026-09-04"
+where    = "https://raw.githubusercontent.com/kaitai-io/kaitai_struct_formats/f6a82f70fa9ca8cbd3f7f4b39b2cc215668f0fb4/media/tracker_modules/fasttracker_xm_module.ksy (rendered: https://formats.kaitai.io/fasttracker_xm_module/; page states License: Unlicense)"
+
+[[source]]
 id       = "itu-g726-1990"
 kind     = "spec"
 title    = "ITU-T Recommendation G.726 (12/1990), 40, 32, 24, 16 kbit/s Adaptive Differential Pulse Code Modulation; acquired PDF SHA-256 0b2900da45a774526a5a4ff9aad5f277b5727ab1d9831a038e3d66fef07e86f1"

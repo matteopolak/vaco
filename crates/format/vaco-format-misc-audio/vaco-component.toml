@@ -222,3 +222,11 @@ long_name  = "Microsoft xWMA"
 feature    = "demux-xwma"
 ctor       = "vaco_format_misc_audio::xwma::DEMUXER"
 extensions = "xwma"
+
+[[component]]
+kind       = "demuxer"
+name       = "xm"
+long_name  = "FastTracker 2 Extended Module"
+feature    = "demux-xm"
+ctor       = "vaco_format_misc_audio::xm::DEMUXER"
+extensions = "xm"

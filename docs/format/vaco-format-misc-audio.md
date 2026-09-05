@@ -5,7 +5,8 @@ Layer 4. Demux-only: `wv`, `tta`, `amr`/`amrnb`/`amrwb`, `adx`,
 speech-codec tail (`gsm`, `sln`, `dfpwm`, `g722`, `g726`, `g726le`, `g728`,
 `g729`, `aptx`, `aptx_hd`), and — added across two later passes at #620's
 chiptune-adjacent game-audio containers — `vag`, `svag`, `xwma`, `xa`, and
-bounded `bfstm`/`brstm` subsets. Twenty-six registered demuxers in one crate (FM-58).
+bounded `bfstm`/`brstm` subsets, plus the bounded XM structural reader.
+Twenty-eight registered demuxers in one crate (FM-58).
 These are
 containers: the job is finding frame/block boundaries and reporting stream
 parameters, not decoding audio.
@@ -30,6 +31,7 @@ parameters, not decoding audio.
 | `bfstm` | `bfstm`, `bcstm` | Nintendo `FSTM`/`CSTM` with either byte order and `INFO`/`SEEK`/`DATA` sections, measured only for stereo DSP-ADPCM with 16/32/64/96/256-byte channel blocks and full/half final blocks; packets synthesize file-endian raw-byte/sample counts, two coefficient sets, and an 8-byte SEEK history entry before unpadded channel payload — see below |
 | `brstm` | `brstm` | Nintendo `RSTM`/`HEAD`/`ADPC`/`DATA`, measured only for stereo DSP-ADPCM with 32/64/96/256-byte channel blocks and full/half final blocks; packets synthesize `be32(raw bytes)`/`be32(samples)`, two 32-byte coefficient sets, and one 8-byte ADPC history entry before the unpadded channel payload — see below |
 | `xwma` | `xwma` | RIFF container (`fmt `/`dpds`/`data` chunks); packets are `nBlockAlign`-aligned reads of `data`, not the `dpds` table's declared split — see below |
+| `xm` | `xm` | FastTracker 2 v1.04 little-endian module header, pattern blocks, instrument/sample headers, and one packet per non-empty sample payload; structural only — no tracker playback or sample decoding |
 | `xa` | `xa` | fixed 24-byte header (2-byte `"XA"` magic, little-endian `WAVEFORMATEX` tail), then EA-ADPCM blocks (`15`/`30` bytes mono/stereo, `28` samples each); packet count is `ceil(dwOutSize / block_bytes)` clamped to the blocks on disk, but `duration`/`duration_ts` ignore `dwOutSize` and reflect the file's own full block count instead — a real, measured disagreement in the reference itself, reproduced rather than "corrected" — see `xa.rs`'s module doc |
 | `block` | shared | `BlockDemuxer` — the fixed-ratio block engine `adx`, `nistsphere`, `pvf` and every `rawcodec` entry reduce to |
 
@@ -58,9 +60,12 @@ past what this pass's time budget covered.
 is not an unattempted format — it is a real, partially-measured divergence
 left unresolved on purpose. See "The `BlockDemuxer` batching bug" below.
 
-**#620 (tracker/module and chiptune-adjacent):** the tracker half (IT, XM,
-S3M, MOD, and the rest of the family the reference reaches through
-`libopenmpt`) is recorded as a D10 exclusion — see
+**#620 (tracker/module and chiptune-adjacent):** XM now has a bounded
+structural demux path. It accepts only the published v1.04 layout, reports
+sample payload boundaries, and deliberately does not render patterns or
+decode tracker sample data. Tracker playback and the remaining tracker formats
+(IT, S3M, MOD, and the rest of the family the reference reaches through
+`libopenmpt`) remain excluded — see
 `docs/why-some-formats-are-not-included.md`. Of the twelve chiptune-adjacent
 game-audio containers, `vag` and `xwma` landed in an earlier pass, followed by
 `xa`, `svag`, and bounded `brstm`/`bfstm` subsets; six remain, each for a specific, recorded
@@ -86,6 +91,29 @@ reason:
   the same "no independently reachable byte-level spec found yet" bar
   `binka`/`genh`/`hca` sit behind is the working assumption, not confirmed
   per-format.
+
+### `xm` — bounded FastTracker 2 structural demux
+
+The reader follows the pinned [Kaitai FastTracker XM declarative format
+description](https://formats.kaitai.io/fasttracker_xm_module/), whose page
+identifies the KSY as Unlicense. The acquired KSY is pinned at commit
+`f6a82f70fa9ca8cbd3f7f4b39b2cc215668f0fb4` with SHA-256
+`3997da4f6aab2d3d7e8458569ee0361f42c40b37296f797eb803d5a0ced8f837`; the
+acquisition record is `kaitai-fasttracker-xm` in `provenance/sources.toml`.
+
+The bounded implementation accepts version `0x0104`, the 276-byte main
+header, 2–32 even channels, pattern headers of size 9 with packing type zero,
+instrument headers up to 1 MiB, and 40-byte sample headers. It checks
+all declared ranges before seeking, caps cumulative pattern bytes at 64 MiB,
+sample payloads at 1 GiB, and exposes each non-empty sample payload as one
+packet on a mono structural stream. Pattern events and delta-coded sample bytes
+are not interpreted; no audio sample format or tracker codec identity is claimed.
+Because payload packets are emitted after the complete structural scan, the
+reader requires a seekable input source.
+Older revisions, non-standard variable header sizes, nonzero pattern packing,
+reserved sample flag bits, malformed counts, and truncated ranges are explicit
+refusals. This is container framing, not playback or a claim of ffmpeg
+interoperability.
 
 ### `bfstm` — measured stereo DSP-ADPCM packet synthesis
 

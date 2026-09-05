@@ -2133,6 +2133,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["xbm"],
         mime_types: &[],
     },
+    #[cfg(feature = "demux-xm")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "xm",
+        long_name: Some("FastTracker 2 Extended Module"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-xm"),
+        media: None,
+        codec: None,
+        extensions: &["xm"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-image2")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -10937,6 +10949,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_format_misc_audio::xa::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_XBM,
+    #[cfg(feature = "demux-xm")]
+    &::vaco_format_misc_audio::xm::DEMUXER,
     #[cfg(feature = "demux-image2")]
     &::vaco_demux_image2::pipe::DEMUXER_XPM,
     #[cfg(feature = "demux-image2")]
