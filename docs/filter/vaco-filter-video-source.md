@@ -12,6 +12,10 @@ extending this crate needs before adding to it.
 
 ## How it works
 
+Finite `duration` options are converted directly from exact `Duration` values
+to inverse-frame-rate ticks with nearest rounding. This keeps a `30000/1001`
+source budget exact beyond the integer range of `f64`.
+
 `bars.rs` holds a shared `Source` (the `SourceFilter` impl), one `Opts`
 struct (mirroring `vaco-filter-plumbing::color`'s `size`/`rate`/`duration`/
 `sar` shape exactly), and a `build` function parameterised on an
