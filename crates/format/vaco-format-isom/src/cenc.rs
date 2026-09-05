@@ -104,6 +104,9 @@ impl TrackEncryption {
             _ => return None,
         };
         let per_sample_iv_size = r.u8();
+        if !matches!(per_sample_iv_size, 0 | 8 | 16) {
+            return None;
+        }
         let default_kid: [u8; 16] = r.bytes(16).try_into().ok()?;
         let constant_iv = if is_protected && per_sample_iv_size == 0 {
             let size = r.u8();
@@ -649,6 +652,14 @@ mod tests {
     #[test]
     fn tenc_rejects_a_reserved_is_protected_value() {
         let mut body = vec![0, 0, 0, 0, 0, 0, 2, 8];
+        // version/flags, two reserved bytes, is_protected, IV size
+        body.extend_from_slice(&[0xAB; 16]);
+        assert!(TrackEncryption::parse(&bx(*b"tenc", &body)).is_none());
+    }
+
+    #[test]
+    fn tenc_rejects_an_unsupported_per_sample_iv_size() {
+        let mut body = vec![0, 0, 0, 0, 0, 0, 1, 4];
         // version/flags, two reserved bytes, is_protected, IV size
         body.extend_from_slice(&[0xAB; 16]);
         assert!(TrackEncryption::parse(&bx(*b"tenc", &body)).is_none());
