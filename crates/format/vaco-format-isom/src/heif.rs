@@ -297,6 +297,7 @@ pub fn parse_ipma(iprp: &IsoBox<'_>) -> Option<Vec<ItemPropertyAssociation>> {
     }
     let large_index = full.flags & 1 != 0;
     let mut out = Vec::new();
+    let mut previous_item_id = None;
     for _ in 0..entry_count.min(u32::try_from(MAX_ITEMS).unwrap_or(u32::MAX)) {
         let item_id = if full.version < 1 {
             u32::from(r.be16())
@@ -307,6 +308,10 @@ pub fn parse_ipma(iprp: &IsoBox<'_>) -> Option<Vec<ItemPropertyAssociation>> {
         if r.overrun() {
             return None;
         }
+        if previous_item_id.is_some_and(|previous| item_id <= previous) {
+            return None;
+        }
+        previous_item_id = Some(item_id);
         let mut properties = Vec::new();
         for _ in 0..association_count {
             let (essential, index) = if large_index {
@@ -802,6 +807,28 @@ mod tests {
         let ipma = fullbx(b"ipma", 0, 0, &body);
         let raw = bx(b"iprp", &ipma);
         assert!(parse_ipma(&first_box(&raw)).is_none());
+    }
+
+    #[test]
+    fn ipma_accepts_an_ordered_entity_group_association() {
+        // `ipma` IDs are allowed to name entity groups, not only `iinf`
+        // items. The ordering rule must not turn that valid association into
+        // an unknown-item rejection.
+        let body = [
+            0, 0, 0, 1, // entry_count
+            0, 9, // entity-group ID
+            1, // association_count
+            1, // non-essential property_index
+        ];
+        let ipma = fullbx(b"ipma", 0, 0, &body);
+        let raw = bx(b"iprp", &ipma);
+        assert_eq!(
+            parse_ipma(&first_box(&raw)),
+            Some(vec![ItemPropertyAssociation {
+                item_id: 9,
+                properties: vec![(false, 1)],
+            }])
+        );
     }
 
     #[test]

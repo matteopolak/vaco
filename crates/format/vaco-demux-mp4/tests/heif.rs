@@ -360,6 +360,28 @@ fn duplicate_item_info_ids_refuse_the_item_file() {
 }
 
 #[test]
+fn unordered_or_duplicate_property_association_ids_refuse_the_item_file() {
+    for item_id in [0u16, 1] {
+        let mut bytes = heif();
+        let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();
+        // The second entry follows item 1. A lower ID violates ordering and
+        // ID 1 duplicates an association whose first-match lookup is ambiguous.
+        bytes[ipma + 16..ipma + 18].copy_from_slice(&item_id.to_be_bytes());
+        let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+        assert!(
+            Mp4Demuxer::open(
+                src,
+                &NoParsers,
+                &FormatOptions::default(),
+                Mp4Options::default()
+            )
+            .is_err(),
+            "item ID {item_id} must not follow item ID 1"
+        );
+    }
+}
+
+#[test]
 fn a_truncated_property_association_table_refuses_the_item_file() {
     let mut bytes = heif();
     let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();
