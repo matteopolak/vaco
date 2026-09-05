@@ -133,6 +133,13 @@ this crate could state the exact `SCE`/`CPE`/`LFE` element ordering for with
 confidence. `channelConfiguration == 0` resolves exactly, from a real PCE,
 via [`DecoderConfig::try_resolve_pending`].
 
+For raw ADTS, that PCE is normally present only in the first packet. Once a
+leading PCE resolves a configuration, the decoder retains it for later ADTS
+packets that repeat `channelConfiguration == 0` without repeating the PCE. A
+later leading PCE still takes precedence, so an in-band configuration change
+is not hidden by the cache; a cached PCE is reused only when object type,
+sample rate, and frame length still match the current ADTS header.
+
 **Configurations 3, 4, 5, 7, 11, 12 and 14 are rejected with
 `Error::Unsupported` rather than resolved from a recalled element ordering.**
 ISO/IEC 14496-3's Table 42 states the exact `SCE`/`CPE`/`LFE` sequence each of
@@ -513,6 +520,21 @@ This invariant was re-checked (still 677/677) after #445's M/S-mask-storage
 refactor changed how `raw_data_block.rs` represents `Element::Pair`,
 confirming that change did not silently desync the parse.
 
+### PCE persistence: exact output count against `ffmpeg`
+
+`ffmpeg` 9.0.1 generated a 1.024-second, 48 kHz, three-channel AAC-LC ADTS
+fixture from three distinct sine channels. Its ADTS header declares
+`channelConfiguration == 0`; the first packet supplies the PCE and the other
+47 packets rely on it. `ffprobe` reported 48 AAC packets and a `2.1` layout.
+
+`ffmpeg -bitexact -i three.adts -f f32le -acodec pcm_f32le ref.f32` and this
+crate's `decode_dump three.adts` each emitted **589,824 bytes**: 48 packets ×
+1024 samples × 3 channels × 4 bytes/sample. Before retaining the PCE, the
+decoder emitted only the first packet's 12,288 bytes and rejected all later
+packets as layout-undetermined. This is an exact reachability/count check;
+the general AAC correlation table above remains the reconstruction-quality
+evidence.
+
 ### Reconstruction: correlation/max_abs/rms against `ffmpeg -bitexact`
 
 Same 9 fixtures. `decode_dump` (`examples/decode_dump.rs`) decodes each one
@@ -681,9 +703,10 @@ plausible-looking implementation that a real bitstream falsifies.
   `raw_data_block`'s own `ID_PCE` case, as opposed to the leading one
   `DecoderConfig::try_resolve_pending` looks for) is parsed but not yet
   threaded back into an in-flight `DecoderConfig` to update the channel
-  layout. Rare — a real stream's PCE almost always leads its very first
-  frame — but a real gap, not yet exercised by any fixture in this pass's
-  corpus.
+  layout. A leading PCE is retained for later ADTS packets; this gap concerns
+  only PCEs that follow audio elements in a raw data block. Rare — a real
+  stream's PCE almost always leads its first frame — but a real gap, not yet
+  exercised by any fixture in this pass's corpus.
 - **ISO/IEC 14496-26's conformance vector set was not accessible in this
   session** (as already disclosed for #443/#444) — the "Decode accuracy"
   table above is a real measurement against a real decoder's output, not a

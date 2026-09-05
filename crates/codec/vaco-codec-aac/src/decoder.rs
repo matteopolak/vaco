@@ -109,9 +109,20 @@ impl AacDecoder {
             let body = payload.get(header.header_len()..).unwrap_or(&[]);
             (cfg, body)
         };
+        let cached_pce_config = self.config.as_ref().filter(|cached| {
+            cached.channel_configuration == 0
+                && !cached.is_pending()
+                && cached.object_type == cfg.object_type
+                && cached.sample_rate == cfg.sample_rate
+                && cached.frame_length == cfg.frame_length
+        });
         if cfg.is_pending() {
             let mut r = BitReader::new(body);
-            let _ = cfg.try_resolve_pending(&mut r)?;
+            if !cfg.try_resolve_pending(&mut r)?
+                && let Some(cached) = cached_pce_config
+            {
+                cfg = cached.clone();
+            }
         }
         Ok((cfg, body))
     }
@@ -422,6 +433,75 @@ mod tests {
         bytes
     }
 
+    /// The first raw data block supplies a mono PCE before its SCE. Later
+    /// ADTS blocks carry only the SCE and rely on that in-band configuration.
+    fn adts_frame_with_leading_mono_pce() -> Vec<u8> {
+        use vaco_bitstream::BitWriter;
+        let mut body = BitWriter::new();
+        body.put(3, 5); // ID_PCE
+        body.put(4, 0); // PCE element_instance_tag
+        body.put(2, 1); // PCE object_type = AAC-LC
+        body.put(4, 3); // PCE sampling_frequency_index = 48000 Hz
+        body.put(4, 1); // one front channel element
+        body.put(4, 0); // no side channel elements
+        body.put(4, 0); // no back channel elements
+        body.put(2, 0); // no LFE channel elements
+        body.put(3, 0); // no associated-data elements
+        body.put(4, 0); // no valid CC elements
+        body.put(1, 0); // no mono mixdown
+        body.put(1, 0); // no stereo mixdown
+        body.put(1, 0); // no matrix mixdown
+        body.put(1, 0); // front[0] is an SCE
+        body.put(4, 0); // front[0] tag
+        body.align_zero();
+        body.put(8, 0); // empty PCE comment field
+        body.put(3, 0); // ID_SCE
+        body.put(4, 0); // element_instance_tag
+        body.put(8, 100); // global_gain
+        body.put(1, 0); // ics_reserved_bit
+        body.put(2, 0); // ONLY_LONG
+        body.put(1, 0); // sine window
+        body.put(6, 1); // max_sfb = 1
+        body.put(1, 0); // predictor_data_present
+        body.put(4, 0); // sect_cb = ZERO_HCB
+        body.put(5, 1); // sect_len = 1
+        body.put(1, 0); // pulse_data_present
+        body.put(1, 0); // tns_data_present
+        body.put(1, 0); // gain_control_data_present
+        body.put(3, 7); // ID_END
+        let body_bytes = body.finish();
+
+        let mut w = BitWriter::new();
+        w.put(12, 0xfff);
+        w.put(1, 0);
+        w.put(2, 0);
+        w.put(1, 1); // protection_absent
+        w.put(2, 1); // profile: LC
+        w.put(4, 3); // 48000
+        w.put(1, 0);
+        w.put(3, 0); // channelConfiguration: PCE supplies it
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(1, 0);
+        w.put(13, 7 + body_bytes.len() as u32); // aac_frame_length
+        w.put(11, 0x7ff);
+        w.put(2, 0);
+        let mut bytes = w.finish();
+        bytes.extend_from_slice(&body_bytes);
+        bytes
+    }
+
+    fn adts_frame_with_mono_sce_and_pce_configuration() -> Vec<u8> {
+        let mut bytes = adts_frame_with_minimal_raw_data_block();
+        // The three channel-configuration bits straddle byte 2's low bit
+        // and byte 3's two high bits. The base helper emitted config 1;
+        // clear all three to defer the layout to the preceding PCE.
+        bytes[2] &= !1;
+        bytes[3] &= 0x3f;
+        bytes
+    }
+
     #[test]
     fn an_all_zero_frame_produces_1024_silent_samples() {
         let mut dec = AacDecoder::new(Limits::permissive());
@@ -495,5 +575,31 @@ mod tests {
         let _ = dec.receive_frame().unwrap();
         dec.flush();
         assert!(dec.overlap.is_empty());
+    }
+
+    #[test]
+    fn leading_pce_configuration_persists_for_following_adts_packets() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let mut budget = Budget::new(Limits::permissive());
+        let first = Packet::from_slice(&mut budget, &adts_frame_with_leading_mono_pce()).unwrap();
+        dec.send_packet(Some(&first)).unwrap();
+        let _ = dec.receive_frame().unwrap();
+
+        let mut budget = Budget::new(Limits::permissive());
+        let following = Packet::from_slice(
+            &mut budget,
+            &adts_frame_with_mono_sce_and_pce_configuration(),
+        )
+        .unwrap();
+        dec.send_packet(Some(&following)).unwrap();
+        let frame = dec.receive_frame().unwrap();
+        let FrameData::Audio {
+            samples, planes, ..
+        } = &frame.data
+        else {
+            panic!("expected an audio frame");
+        };
+        assert_eq!(*samples, 1024);
+        assert_eq!(planes.len(), 1);
     }
 }
