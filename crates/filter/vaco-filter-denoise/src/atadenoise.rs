@@ -141,6 +141,7 @@ fn weight(diff: f32, t: Thresholds) -> f32 {
 
 /// Weighted trailing average of `history` (oldest first, last == current)
 /// against thresholds scaled by `max_val`.
+#[cfg(test)]
 fn average_pixel(history: &[f32], t: Thresholds, max_val: f32) -> f32 {
     let Some(&current) = history.last() else {
         return 0.0;
@@ -154,6 +155,36 @@ fn average_pixel(history: &[f32], t: Thresholds, max_val: f32) -> f32 {
         let diff = (h - current).abs() / max_val;
         let w = weight(diff, t);
         num += w * h;
+        den += w;
+    }
+    if den > 0.0 { num / den } else { current }
+}
+
+/// The same trailing weighted average as [`average_pixel`], read directly
+/// from the buffered planes to avoid allocating one temporary sample vector
+/// per output pixel.
+fn average_history_pixel(
+    history: &VecDeque<PlaneBuf>,
+    x: usize,
+    y: usize,
+    t: Thresholds,
+    max_val: f32,
+) -> f32 {
+    let Some(current) = history.back().and_then(|plane| plane.get(x, y)) else {
+        return 0.0;
+    };
+    if max_val <= 0.0 {
+        return current;
+    }
+    let mut num = 0.0f32;
+    let mut den = 0.0f32;
+    for plane in history {
+        let Some(sample) = plane.get(x, y) else {
+            continue;
+        };
+        let diff = (sample - current).abs() / max_val;
+        let w = weight(diff, t);
+        num += w * sample;
         den += w;
     }
     if den > 0.0 { num / den } else { current }
@@ -219,11 +250,9 @@ impl FrameFilter for Atadenoise {
             }
             let t = self.opts.thresholds_for(p);
             let mut result = PlaneBuf::zeroed(pw, ph, max_val);
-            let samples: Vec<&PlaneBuf> = hist.iter().collect();
             for y in 0..ph {
                 for x in 0..pw {
-                    let values: Vec<f32> = samples.iter().filter_map(|b| b.get(x, y)).collect();
-                    result.set(x, y, average_pixel(&values, t, max_val));
+                    result.set(x, y, average_history_pixel(hist, x, y, t, max_val));
                 }
             }
             if let Some(mut dst) = out.plane_mut(p) {
@@ -294,6 +323,30 @@ mod tests {
             (out - plain_mean).abs() < 1e-4,
             "out = {out}, plain mean = {plain_mean}"
         );
+    }
+
+    #[test]
+    fn direct_history_walk_matches_the_allocating_reference() {
+        let mut history = VecDeque::new();
+        for frame in 0..5 {
+            let mut plane = PlaneBuf::zeroed(3, 2, 255.0);
+            for y in 0..2 {
+                for x in 0..3 {
+                    plane.set(x, y, (frame * 40 + y * 7 + x * 3) as f32);
+                }
+            }
+            history.push_back(plane);
+        }
+        let t = Thresholds { a: 0.02, b: 0.04 };
+        for y in 0..2 {
+            for x in 0..3 {
+                let values: Vec<f32> = history.iter().filter_map(|plane| plane.get(x, y)).collect();
+                assert_eq!(
+                    average_history_pixel(&history, x, y, t, 255.0),
+                    average_pixel(&values, t, 255.0)
+                );
+            }
+        }
     }
 
     #[test]
