@@ -70,6 +70,10 @@ fn v_and_u_row(n: usize, k: usize) -> Vec<u32> {
 
 /// `V(n, k)`: the size of the codebook of `n`-dimensional pulse vectors with
 /// `k` pulses (including sign). Used to size the range-coded index.
+///
+/// [`decode_pulses`] keeps the `U(n, *)` row it needs for both range decoding
+/// and `cwrsi`, avoiding a second allocation. This helper exposes only the
+/// codebook size for callers that do not need to recover the pulse vector.
 #[must_use]
 pub fn ncwrs(n: usize, k: usize) -> u32 {
     if k == 0 {
