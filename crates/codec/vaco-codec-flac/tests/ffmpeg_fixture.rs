@@ -1,7 +1,7 @@
-//! Cross-check the `claxon`-backed decode boundary against a real,
-//! ffmpeg-produced FLAC stream, comparing decoded samples to ffmpeg's own
-//! `-f s16le` ground truth at zero tolerance (FLAC is lossless, so nothing
-//! less than exact equality is a pass).
+//! Cross-check both directions of the FLAC boundary against the real ffmpeg
+//! binary. ffmpeg-produced FLAC must decode to identical samples here, and
+//! our encoded FLAC must decode to identical samples in ffmpeg. FLAC is
+//! lossless, so nothing less than exact equality is a pass.
 //!
 //! Skipped rather than failed when `ffmpeg` is absent, matching the
 //! convention `vaco-codec-core`'s own `params.rs` test uses: CI has it, a
@@ -17,8 +17,14 @@
 
 use std::process::{Command, Stdio};
 
+use vaco_chlayout::ChannelLayout;
+use vaco_codec_core::Encoder;
+use vaco_codec_flac::FlacEncoder;
 use vaco_codec_flac::claxon_boundary::decode_packet;
 use vaco_codec_flac::streaminfo::find_streaminfo_block;
+use vaco_frame::Frame;
+use vaco_limits::{Budget, Limits};
+use vaco_sampfmt::SampleFmt;
 
 /// Walk past every metadata block after the `"fLaC"` marker (STREAMINFO,
 /// and whatever else ffmpeg wrote — a Vorbis comment block, typically) and
@@ -59,6 +65,39 @@ fn run_ffmpeg(args: &[&str], stdin_bytes: Option<&[u8]>) -> Option<Vec<u8>> {
     } else {
         None
     }
+}
+
+fn mono_s16p_frame(samples: &[i16]) -> Frame {
+    let mut budget = Budget::new(Limits::permissive());
+    let mut frame = Frame::alloc_audio(
+        &mut budget,
+        SampleFmt::S16P,
+        ChannelLayout::MONO,
+        u32::try_from(samples.len()).unwrap_or(0),
+        8_000,
+    )
+    .expect("allocate trusted test frame");
+    {
+        let mut planes = frame.planes_mut();
+        if let Some(row) = planes.first_mut().and_then(|plane| plane.row_mut(0)) {
+            for (dst, sample) in row.chunks_exact_mut(2).zip(samples) {
+                dst.copy_from_slice(&sample.to_ne_bytes());
+            }
+        }
+    }
+    frame
+}
+
+fn encode_our_flac(samples: &[i16]) -> Vec<u8> {
+    let frame = mono_s16p_frame(samples);
+    let mut enc = FlacEncoder::new(Limits::permissive());
+    enc.send_frame(Some(&frame)).expect("encode test frame");
+    enc.send_frame(None).expect("drain encoder");
+    let mut bytes = enc.extradata();
+    while let Ok(packet) = enc.receive_packet() {
+        bytes.extend_from_slice(packet.payload());
+    }
+    bytes
 }
 
 #[test]
@@ -130,4 +169,49 @@ fn decodes_a_real_ffmpeg_flac_stream_exactly() {
         decoded.interleaved, want,
         "decoded samples must match ffmpeg's own `-f s16le` dump at zero tolerance"
     );
+}
+
+#[test]
+fn ffmpeg_decodes_our_dispatched_lpc_flac_exactly() {
+    if Command::new("ffmpeg").arg("-version").output().is_err() {
+        eprintln!("skipping: ffmpeg not on PATH");
+        return;
+    }
+
+    // One FLAC-sized block forces every LPC candidate order through the
+    // runtime-dispatched autocorrelation path before the encoder chooses its
+    // smallest valid subframe.
+    let samples: Vec<i16> = (0..4096)
+        .map(|i| {
+            let t = f64::from(i) / 8_000.0;
+            (12_000.0 * (2.0 * std::f64::consts::PI * 439.0 * t).sin()) as i16
+        })
+        .collect();
+    let flac_bytes = encode_our_flac(&samples);
+    assert!(
+        flac_bytes.starts_with(b"fLaC"),
+        "encoder produced FLAC header"
+    );
+
+    let decoded = run_ffmpeg(
+        &[
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "flac",
+            "-i",
+            "-",
+            "-f",
+            "s16le",
+            "-",
+        ],
+        Some(&flac_bytes),
+    )
+    .expect("ffmpeg decodes this crate's FLAC stream");
+    let expected: Vec<u8> = samples
+        .iter()
+        .flat_map(|sample| sample.to_le_bytes())
+        .collect();
+    assert_eq!(decoded, expected, "ffmpeg must reproduce every PCM sample");
 }

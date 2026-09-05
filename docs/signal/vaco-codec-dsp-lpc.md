@@ -11,15 +11,10 @@ turn a windowed sample block into predictor coefficients, quantise them to
 the small-integer-plus-shift form a bitstream actually stores, and
 reconstruct samples from residual + quantised coefficients + history.
 
-FLAC (`vaco-codec-flac`), ALAC (`vaco-codec-alac`) and Opus SILK
-(`vaco-codec-opus`) all code audio this way in spirit, but each already
-ships its own working, format-specific implementation (FLAC's encoder only
-does fixed predictors so far; ALAC's is a proprietary adaptive filter with
-no analysis step; SILK's LPC comes from NLSF-quantised coefficients via a
-step-up recursion, not autocorrelation). None of them currently call this
-crate — see the crate root doc for exactly why each is a genuinely
-different algorithm rather than a case of one shared function serving
-three formats.
+FLAC's encoder and RFC 3389 comfort-noise analysis call this crate's LPC
+analysis directly. ALAC and Opus SILK use different, format-specific
+predictors: ALAC is an adaptive filter with no analysis step, while SILK
+starts from NLSF-quantised coefficients and applies a step-up recursion.
 
 ## How it works
 
@@ -28,6 +23,10 @@ three formats.
   keeping coefficients, reflection coefficients and residual error *at
   every intermediate order* in one pass, so an encoder can pick the
   cheapest order from the error curve without re-running the recursion.
+- `autocorrelate_dispatched` selects the portable vector dot product for
+  encoder analysis. Its lane reduction may differ in the last floating-point
+  bits from the scalar reference, so the scalar API remains available for a
+  caller that needs that exact reduction order.
 - `quantize.rs`: turns `f64` coefficients into `i32` + a shared shift,
   choosing the shift that maximises precision usage without overflow and
   carrying each coefficient's rounding error into the next (error-feedback
@@ -60,8 +59,9 @@ None — pure functions and a `MAX_ORDER` constant, no state.
 
 ## Dependencies
 
-None beyond the standard library. IETF RFC 9639 (FLAC), fetched directly
-and registered in `provenance/sources.toml` as `rfc-9639`, backs the
-synthesis arithmetic. Autocorrelation and Levinson-Durbin are textbook
-signal processing (Levinson 1947 / Durbin 1960) with no single
-implementation to derive from.
+`vaco-simd` supplies the runtime-selected vector lanes used by
+`autocorrelate_dispatched`; the scalar reference remains the checkasm
+oracle. IETF RFC 9639 (FLAC), fetched directly and registered in
+`provenance/sources.toml` as `rfc-9639`, backs the synthesis arithmetic.
+Autocorrelation and Levinson-Durbin are textbook signal processing
+(Levinson 1947 / Durbin 1960) with no single implementation to derive from.

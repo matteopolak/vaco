@@ -14,7 +14,7 @@
 //!
 //! Vaco-Spec-Ref: rfc-9639-flac Section 9.2.6, "Linear Predictor Subframe"
 
-use vaco_codec_dsp_lpc::{MAX_ORDER, autocorrelate, levinson_durbin, predict, quantize};
+use vaco_codec_dsp_lpc::{MAX_ORDER, autocorrelate_dispatched, levinson_durbin, predict, quantize};
 
 /// Coefficient precision this encoder always requests. RFC 9639 §9.2.6
 /// stores `precision - 1` in a 4-bit field (`0b1111` forbidden), so 15 is
@@ -54,7 +54,7 @@ pub fn candidate(samples: &[i32], order: usize) -> Option<Candidate> {
     }
     let samples_f64: Vec<f64> = samples.iter().map(|&s| f64::from(s)).collect();
     let mut autoc = vec![0.0; order + 1];
-    autocorrelate(&samples_f64, &mut autoc);
+    autocorrelate_dispatched(&samples_f64, &mut autoc);
     if autoc.first().copied().unwrap_or(0.0) <= 0.0 {
         return None;
     }

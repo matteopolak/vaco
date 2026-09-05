@@ -40,7 +40,7 @@
 //! per-channel-of-a-voice-call concept with no standard multi-channel
 //! form, so only mono is implemented.
 
-use vaco_codec_dsp_lpc::{autocorrelate, levinson_durbin};
+use vaco_codec_dsp_lpc::{autocorrelate_dispatched, levinson_durbin};
 use vaco_core::{Error, Result};
 use vaco_limits::Budget;
 
@@ -280,7 +280,7 @@ pub fn analyze(samples: &[i16], order: usize) -> Result<SidFrame> {
 
     let windowed: Vec<f64> = samples.iter().map(|&s| f64::from(s)).collect();
     let mut autoc = vec![0.0f64; order + 1];
-    autocorrelate(&windowed, &mut autoc);
+    autocorrelate_dispatched(&windowed, &mut autoc);
     let ld = levinson_durbin(&autoc, order);
     let computed = ld.order_computed();
     let mut reflection = Vec::new();

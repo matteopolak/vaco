@@ -34,12 +34,10 @@
 //! `nlsf_to_lpc` performs (a different derivation from the same "reflection
 //! coefficients determine an LPC filter" fact, not sharable without forcing
 //! SILK's already-working decoder onto a new dependency it does not need),
-//! and coefficient stabilisation. None of `vaco-codec-flac`,
-//! `vaco-codec-alac` or `vaco-codec-opus` currently call this crate — FLAC's
-//! encoder only implements the fixed-predictor family so far, and ALAC/SILK
-//! each already ship a complete, working, locally-implemented predictor.
-//! This crate exists so the next format that needs classic LPC (or a future
-//! FLAC LPC encoder) has one correct place to get it from, per D19, rather
+//! and coefficient stabilisation. `vaco-codec-flac`'s encoder and
+//! `vaco-codec-simple-audio`'s comfort-noise analysis call this crate;
+//! ALAC/SILK each already ship a complete, working, locally-implemented
+//! predictor. This crate keeps classic LPC in one place, per D19, rather
 //! than a fourth local copy.
 //!
 //! # Provenance
@@ -87,3 +85,13 @@ pub use synthesis::{predict, synthesize};
 /// caps `LPC order` at 32 (a 5-bit field storing `order - 1`), which is also
 /// the largest order any codec in this tree's roadmap uses.
 pub const MAX_ORDER: usize = 32;
+
+/// Runtime-dispatched autocorrelation for encoder analysis.
+///
+/// Unlike [`autocorrelate`], this may reassociate floating-point additions
+/// within a lag's dot product. It is appropriate where LPC analysis chooses
+/// an encoder candidate but does not define decoded sample arithmetic; use
+/// [`autocorrelate`] when a strict scalar reduction order is required.
+pub fn autocorrelate_dispatched(samples: &[f64], out: &mut [f64]) {
+    simd::autocorrelate(vaco_simd::Caps::detect(), samples, out);
+}
