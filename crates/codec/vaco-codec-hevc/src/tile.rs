@@ -33,6 +33,7 @@ pub struct TileLayout {
 pub struct TileCabacState<'a> {
     cabac: CabacDecoder<'a>,
     contexts: ContextBank,
+    first_ctb_split: Option<bool>,
 }
 
 impl TileCabacState<'_> {
@@ -83,6 +84,51 @@ impl TileCabacState<'_> {
         if !ctb_in_bounds || ctb_log2_size == min_cb_log2_size {
             return Err(Error::Unsupported(
                 "vaco-codec-hevc: first tile CTB split flag is inferred",
+            ));
+        }
+        let context = self
+            .contexts
+            .split_cu_flag
+            .first_mut()
+            .ok_or(Error::InvalidData(
+                "vaco-codec-hevc: split_cu_flag context is missing",
+            ))?;
+        let split = self.cabac.decode_decision(context) != 0;
+        self.first_ctb_split = Some(split);
+        Ok(split)
+    }
+
+    /// Decode the top-left child `split_cu_flag` after the CTB split.
+    ///
+    /// The child is the first coding-quadtree node inside the tile's first
+    /// CTB, so its left and above neighbours are still unavailable and its
+    /// context index is 0. The parent result must have been decoded by
+    /// [`Self::decode_first_ctb_split_flag`] and be 1 before this read.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] when the parent split was not
+    /// established or the child flag is inferred, and
+    /// [`vaco_core::Error::InvalidData`] for inconsistent dimensions.
+    pub fn decode_first_ctb_child_split_flag(
+        &mut self,
+        child_log2_size: u32,
+        min_cb_log2_size: u32,
+        child_in_bounds: bool,
+    ) -> Result<bool> {
+        if self.first_ctb_split != Some(true) {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile CTB child split parent is not set",
+            ));
+        }
+        if child_log2_size < min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile CTB child dimensions are invalid",
+            ));
+        }
+        if !child_in_bounds || child_log2_size == min_cb_log2_size {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile CTB child split flag is inferred",
             ));
         }
         let context = self
@@ -357,6 +403,7 @@ impl TileLayout {
             states.push(TileCabacState {
                 cabac,
                 contexts: ContextBank::new(slice_qp),
+                first_ctb_split: None,
             });
         }
         Ok(states)

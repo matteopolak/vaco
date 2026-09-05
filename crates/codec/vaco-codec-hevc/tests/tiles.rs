@@ -270,6 +270,17 @@ fn real_tile_slice_header_has_one_tile_entry_point_offset() {
         .decode_first_ctb_split_flag(ctb_log2_size, u32::from(sps.log2_min_cb_size), true)
         .expect("second tile CTB carries an explicit split flag");
     assert_eq!((first_split, second_split), (true, true));
+    let first_child_split = tile_states
+        .get_mut(0)
+        .expect("first tile state exists")
+        .decode_first_ctb_child_split_flag(ctb_log2_size - 1, u32::from(sps.log2_min_cb_size), true)
+        .expect("first tile child carries an explicit split flag");
+    let second_child_split = tile_states
+        .get_mut(1)
+        .expect("second tile state exists")
+        .decode_first_ctb_child_split_flag(ctb_log2_size - 1, u32::from(sps.log2_min_cb_size), true)
+        .expect("second tile child carries an explicit split flag");
+    assert_eq!((first_child_split, second_child_split), (true, true));
     let cabac = layout
         .initialize_first_tile_cabac(slice_data, &header.entry_point_offsets)
         .expect("first tile CABAC state initializes");
