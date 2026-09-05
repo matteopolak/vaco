@@ -787,8 +787,9 @@ Named so the demuxer's author knows what is not here:
   out-of-bounds apertures are refused. `iloc` accepts only its defined `0`,
   `4`, and `8` byte field widths and versions `0` through `2`; its v1/v2
   `construction_method` is exactly `0`, `1`, or `2` (including zero reserved
-  bits). `ipma` accepts only its version `0`/`1` item-ID layouts, and `infe`
-  only versions `0` through `3`. `iinf`'s declared entry count also bounds
+  bits). `ipma` accepts only its version `0`/`1` item-ID layouts and reports
+  a malformed present table distinctly from an absent one; `infe` only
+  versions `0` through `3`. `iinf`'s declared entry count also bounds
   the `infe` children it exposes, and a truncated `iref` record contributes
   no partial item graph edge. A truncated `iloc` header or declared extent
   list, or an item exceeding the bounded extent count, also refuses the

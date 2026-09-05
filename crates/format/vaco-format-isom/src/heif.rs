@@ -277,20 +277,24 @@ pub struct ItemPropertyAssociation {
     pub properties: Vec<(bool, u16)>,
 }
 
-/// `iprp ▸ ipma`.
+/// `iprp ▸ ipma`. `None` means a present table was malformed; no `ipma`
+/// means a valid empty association set.
 #[must_use]
-pub fn parse_ipma(iprp: &IsoBox<'_>) -> Vec<ItemPropertyAssociation> {
+pub fn parse_ipma(iprp: &IsoBox<'_>) -> Option<Vec<ItemPropertyAssociation>> {
     let Some(ipma) = iprp.children().find(boxes::IPMA) else {
-        return Vec::new();
+        return Some(Vec::new());
     };
     let Ok(full) = ipma.full() else {
-        return Vec::new();
+        return None;
     };
     if full.version > 1 {
-        return Vec::new();
+        return None;
     }
     let mut r = full.reader();
     let entry_count = r.be32();
+    if r.overrun() {
+        return None;
+    }
     let large_index = full.flags & 1 != 0;
     let mut out = Vec::new();
     for _ in 0..entry_count.min(u32::try_from(MAX_ITEMS).unwrap_or(u32::MAX)) {
@@ -300,6 +304,9 @@ pub fn parse_ipma(iprp: &IsoBox<'_>) -> Vec<ItemPropertyAssociation> {
             r.be32()
         };
         let association_count = r.u8();
+        if r.overrun() {
+            return None;
+        }
         let mut properties = Vec::new();
         for _ in 0..association_count {
             if large_index {
@@ -310,15 +317,15 @@ pub fn parse_ipma(iprp: &IsoBox<'_>) -> Vec<ItemPropertyAssociation> {
                 properties.push((v & 0x80 != 0, u16::from(v & 0x7F)));
             }
         }
+        if r.overrun() {
+            return None;
+        }
         out.push(ItemPropertyAssociation {
             item_id,
             properties,
         });
-        if r.overrun() {
-            break;
-        }
     }
-    out
+    Some(out)
 }
 
 /// One `iref` entry: a reference type and the item ids it names, from one
@@ -756,7 +763,7 @@ mod tests {
         let iprp = bx(b"iprp", &iprp_body);
         let entry = first_box(&iprp);
         assert_eq!(parse_ipco(&entry).len(), 4);
-        let assocs = parse_ipma(&entry);
+        let assocs = parse_ipma(&entry).unwrap();
         assert_eq!(assocs.len(), 1);
         assert_eq!(assocs[0].item_id, 1);
         assert_eq!(
@@ -775,7 +782,7 @@ mod tests {
         ];
         let ipma = fullbx(b"ipma", 2, 0, &body);
         let raw = bx(b"iprp", &ipma);
-        assert!(parse_ipma(&first_box(&raw)).is_empty());
+        assert!(parse_ipma(&first_box(&raw)).is_none());
     }
 
     #[test]

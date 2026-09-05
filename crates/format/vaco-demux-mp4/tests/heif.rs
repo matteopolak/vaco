@@ -299,6 +299,25 @@ fn a_grid_with_mismatched_tile_geometry_is_refused() {
 }
 
 #[test]
+fn a_truncated_property_association_table_refuses_the_item_file() {
+    let mut bytes = heif();
+    let ipma = bytes.windows(4).position(|w| w == b"ipma").unwrap();
+    // The box contains four entries. A fifth header is outside its payload;
+    // it must not be zero-filled into a bogus association.
+    bytes[ipma + 8..ipma + 12].copy_from_slice(&5u32.to_be_bytes());
+    let src: Box<dyn MediaSource> = Box::new(MemorySource::new(bytes));
+    assert!(
+        Mp4Demuxer::open(
+            src,
+            &NoParsers,
+            &FormatOptions::default(),
+            Mp4Options::default()
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn a_meta_box_that_is_not_pict_is_still_no_movie() {
     let mut bytes = heif();
     // Flip the handler to `mdta`: a QuickTime metadata `meta`, not items.
