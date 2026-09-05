@@ -11,16 +11,8 @@
 //! splits a file into exactly that structure ([`cbs::JpegCbs::split`]) and
 //! reassembles it byte for byte ([`cbs::JpegCbs::assemble`]).
 //!
-//! Unlike H.264/HEVC/AV1/VP9, almost nothing here is bit-packed: a marker
-//! segment's payload is self-delimiting by its own length field, so there is
-//! no analogue of "parse far enough to find the byte where the next thing
-//! starts" — the split is already exact before any payload is interpreted at
-//! all. What [`header`] adds on top is *typed* access to the three segments
-//! worth editing directly: `SOF0`/`SOF2` (frame dimensions and component
-//! sampling), `DQT` (quantisation tables) and `DHT` (Huffman tables) — each
-//! a direct, unambiguous byte-for-byte read/write pair, unlike the several
-//! genuinely-lossy corners the bit-packed codecs' CBS layers have to
-//! document.
+//! JPEG's length-delimited segments make the split exact before payload parsing;
+//! [`header`] adds typed, byte-for-byte access to `SOF0`/`SOF2`, `DQT`, and `DHT`.
 //!
 //! This crate depends on neither `vaco-codec-jpeg` nor its marker table
 //! (`pub(crate)`, not reachable from outside that crate) — the handful of

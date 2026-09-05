@@ -59,7 +59,7 @@ const CROSS_REFS: &[&str] = &[
 /// same commit — subtracting how many you fixed is wrong whenever the count
 /// was already above the baseline, which is when anyone is looking. Never
 /// raise it to make a new violation disappear — see the module doc above.
-const BASELINE: usize = 670;
+const BASELINE: usize = 669;
 
 pub fn run(_check: bool) -> Task {
     let root = repo_root();
