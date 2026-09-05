@@ -2,7 +2,7 @@
 
 Colour and LUT-driven video filters: `colorchannelmixer`, `lut`, `lutrgb`,
 `lutyuv`, `lut2`, `pseudocolor`, `colorlevels`, `hue`, `exposure`,
-`colormatrix`, `limitdiff`, and `tonemap` (12/29).
+`colormatrix`, `limitdiff`, `tonemap`, and `normalize` (13/29).
 
 **2026-08-23 continuation pass**: added `hue` (chroma-vector rotation and
 saturation scale; `h`/`s` implemented as constants, `b`/brightness parsed
@@ -26,7 +26,7 @@ into this row mid-flight — see the issue for the full story.
 continuation); the six before those carried over from before the
 correction.
 
-**Left for follow-up, stated honestly** (17 filters): each is a real
+**Left for follow-up, stated honestly** (16 filters): each is a real
 GitHub-issue-sized unit of work, but three deserve a specific note
 because probing them found real walls rather than just "not attempted":
 
@@ -39,6 +39,13 @@ because probing them found real walls rather than just "not attempted":
   whole-frame colour statistic rather than the existing local sample loop.
 - `geq` remains an expression-evaluated generator, a distinct architecture
   from the precomputed per-channel LUT filters.
+
+`normalize` is a frame-global RGB range remap. It uses observed component
+extrema, blends the component and linked RGB ranges through `independence`,
+maps to `blackpt`/`whitept`, then blends with the source using `strength`.
+Its default, linked-range, strength, and custom-endpoint arithmetic are
+checked against raw `ffmpeg 9.0.1` output in the module tests. A nonzero
+`smoothing` is refused until its temporal history is independently measured.
 
 ## Float-plane support: established, not assumed
 

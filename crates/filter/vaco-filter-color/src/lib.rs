@@ -2,7 +2,7 @@
 //!
 //! Implemented names are `colorchannelmixer`, `colorlevels`, `colormatrix`,
 //! `exposure`, `hue`, `limitdiff`, `lut`, `lutrgb`, `lutyuv`, `lut2`, and
-//! `pseudocolor`, and `tonemap`. Each module exposes a descriptor and constructor through
+//! `pseudocolor`, `tonemap`, and `normalize`. Each module exposes a descriptor and constructor through
 //! [`registry::ColorRegistry`]; unsupported names are not silently stubbed.
 //!
 //! [`sample`] provides shared integer access up to 16 bits and separate
@@ -37,6 +37,7 @@ pub mod hue;
 pub mod limitdiff;
 pub mod lut;
 pub mod lut2;
+pub mod normalize;
 pub mod pseudocolor;
 pub mod tonemap;
 
