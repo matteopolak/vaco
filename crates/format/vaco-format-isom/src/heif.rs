@@ -230,6 +230,9 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
         if r.overrun() {
             return Vec::new();
         }
+        if usize::from(extent_count) > MAX_EXTENTS_PER_ITEM {
+            return Vec::new();
+        }
         let mut extents = Vec::new();
         for _ in
             0..u32::from(extent_count).min(u32::try_from(MAX_EXTENTS_PER_ITEM).unwrap_or(u32::MAX))
@@ -608,6 +611,25 @@ mod tests {
             0, 0, 0, 1, // first extent_offset
             0, 0, 0, 1, // first extent_length
         ];
+        let raw = fullbx(b"iloc", 0, 0, &body);
+        assert!(parse_iloc(&first_box(&raw)).is_empty());
+    }
+
+    #[test]
+    fn iloc_refuses_an_item_with_more_extents_than_it_can_preserve() {
+        // Silently keeping only the first 256 extents would make downstream
+        // item reading omit a suffix of the item's declared bytes.
+        let mut body = vec![
+            0x44, 0, // offset_size=4, length_size=4, base_offset_size=0
+            0, 1, // item_count
+            0, 1, // item_id
+            0, 0, // data_reference_index
+            1, 1, // extent_count = MAX_EXTENTS_PER_ITEM + 1
+        ];
+        for _ in 0..=MAX_EXTENTS_PER_ITEM {
+            body.extend_from_slice(&1u32.to_be_bytes());
+            body.extend_from_slice(&1u32.to_be_bytes());
+        }
         let raw = fullbx(b"iloc", 0, 0, &body);
         assert!(parse_iloc(&first_box(&raw)).is_empty());
     }
