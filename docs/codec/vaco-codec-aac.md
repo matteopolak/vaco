@@ -939,8 +939,12 @@ plausible-looking implementation that a real bitstream falsifies.
   Rare in real 1/2/3/4/5/6/7/11/12/14-channel content (this crate's resolved
   configurations); gated rather than guessed at. Its production routing is
   covered by an ADTS fixture with a complete `SCE` followed by `ID_CCE`: the
-  named refusal occurs before a partial frame is queued. This is a refusal
-  guard, not a claim of CCE decoding or an independent CCE control.
+  named refusal occurs before a partial frame is queued. A rejected raw block
+  also drops its cached in-band PCE configuration and overlap history before
+  the next ADTS packet: a following `channelConfiguration == 0` packet must
+  lead with a new PCE instead of inheriting state across an unknown CCE. This
+  is a refusal guard, not a claim of CCE decoding or an independent CCE
+  control.
 - **HE-AAC/HE-AACv2 (SBR, Parametric Stereo)** are explicitly rejected at
   the configuration layer — #446/#447, a different (and each individually
   substantial) package, per this issue's own dispatch.

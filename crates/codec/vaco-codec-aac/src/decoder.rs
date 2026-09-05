@@ -141,6 +141,16 @@ impl AacDecoder {
         self.prng_counter = self.prng_counter.wrapping_add(0x9e37_79b9);
         self.prng_counter | 1 // never zero: an all-zero LCG state stays zero
     }
+
+    /// A rejected raw data block may have contained a configuration-changing
+    /// element after the point at which parsing stopped. Keep container
+    /// extradata, but require an ADTS/PCE stream to establish its in-band
+    /// state again rather than carrying channel order or overlap history over
+    /// the missing access unit.
+    fn abandon_raw_data_block(&mut self) {
+        self.config = None;
+        self.overlap.clear();
+    }
 }
 
 /// Permute `channels` from `raw_data_block`'s syntactic element order into
@@ -379,7 +389,13 @@ impl Decoder for AacDecoder {
         let max_bands_short = tns_max_bands(sfi, true);
 
         let mut r = BitReader::new(body);
-        let elements = raw_data_block::read(&mut r, sfi)?;
+        let elements = match raw_data_block::read(&mut r, sfi) {
+            Ok(elements) => elements,
+            Err(error) => {
+                self.abandon_raw_data_block();
+                return Err(error);
+            }
+        };
         if elements
             .iter()
             .any(|element| matches!(element, Element::ProgramConfig(_)))
@@ -687,6 +703,16 @@ mod tests {
         bytes
     }
 
+    fn adts_frame_with_cce_and_pce_configuration() -> Vec<u8> {
+        let mut bytes = adts_frame_with_cce_after_minimal_sce();
+        // The three channel-configuration bits straddle byte 2's low bit
+        // and byte 3's two high bits. PCE configuration deliberately needs
+        // a previously cached leading PCE to resolve this packet.
+        bytes[2] &= !1;
+        bytes[3] &= 0x3f;
+        bytes
+    }
+
     fn adts_frame_with_sbr_fill_payload() -> Vec<u8> {
         use vaco_bitstream::BitWriter;
         let mut body = BitWriter::new();
@@ -979,6 +1005,39 @@ mod tests {
 
         let error = dec.send_packet(Some(&packet)).unwrap_err();
         assert!(error.to_string().contains("coupling_channel_element"));
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
+    }
+
+    #[test]
+    fn rejected_cce_drops_cached_pce_and_overlap_before_the_next_packet() {
+        let mut dec = AacDecoder::new(Limits::permissive());
+        let mut budget = Budget::new(Limits::permissive());
+        let first = Packet::from_slice(&mut budget, &adts_frame_with_leading_mono_pce()).unwrap();
+        dec.send_packet(Some(&first)).unwrap();
+        let _ = dec.receive_frame().unwrap();
+        assert!(dec.config.is_some());
+        assert!(!dec.overlap.is_empty());
+
+        let mut budget = Budget::new(Limits::permissive());
+        let cce =
+            Packet::from_slice(&mut budget, &adts_frame_with_cce_and_pce_configuration()).unwrap();
+        let error = dec.send_packet(Some(&cce)).unwrap_err();
+        assert!(error.to_string().contains("coupling_channel_element"));
+        assert!(dec.config.is_none());
+        assert!(dec.overlap.is_empty());
+
+        let mut budget = Budget::new(Limits::permissive());
+        let following = Packet::from_slice(
+            &mut budget,
+            &adts_frame_with_mono_sce_and_pce_configuration(),
+        )
+        .unwrap();
+        let error = dec.send_packet(Some(&following)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("channelConfiguration == 0 and no leading program config element")
+        );
         assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
     }
 
