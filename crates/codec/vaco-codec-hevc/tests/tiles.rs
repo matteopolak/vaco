@@ -1,4 +1,4 @@
-//! Tile-picture scope boundary against a real `libx265` Annex-B stream.
+//! Tile-picture scope boundary against a real HM 18.0 Annex-B stream.
 //!
 //! The fixture is one 512x64 IDR picture with two uniform tile columns. Its
 //! PPS must carry `tiles_enabled_flag = 1`; the decoder must then refuse the
