@@ -5,6 +5,7 @@ mod machine_control;
 mod macro_runner;
 mod perf_stat;
 mod report;
+mod resource;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -25,6 +26,7 @@ pub use machine_control::{MachineCheck, MachineControlReport, verify_machine_con
 pub use macro_runner::{
     CommandTemplate, Implementation, MacroSample, MacroScenario, run_macro_scenario,
 };
+pub use resource::{ResourceObservation, parse_macos_time_l};
 
 const TRAILING_BASELINES: usize = 7;
 const PERF_STAT_MIN_BATCH_NS: u64 = 20_000_000;
