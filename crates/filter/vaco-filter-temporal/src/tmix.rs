@@ -86,6 +86,12 @@ impl Filter {
 
     fn mix(&self) -> Option<Frame> {
         let newest = self.history.back()?;
+        if self.opts.frames == 1
+            && self.opts.scale <= 0.0
+            && self.opts.weights.first().copied() == Some(1.0)
+        {
+            return Some(newest.clone());
+        }
         let mut out = newest.clone();
         out.make_writable();
         let n = self.history.len();

@@ -125,6 +125,20 @@ reference, which has no later frame to attach one to either.
 | `random` | Output is a **permutation** of the input multiset (every shuffle, correct or not, preserves this) — checked via a sorted-multiset comparison of a tagged synthetic stream; a stream shorter than the cache never shuffles at all, so it must equal the input in order. |
 | `tpad` | `start=0, stop=0` is the identity; `start_mode=clone`/`stop_mode=clone` reproduce the edge frame byte-for-byte; `add` mode fills black (sample `0`) on `gray8`. |
 
+## `tmix=frames=1`: measured identity fast path
+
+The exact default-weight, auto-scale `frames=1` case returns the newest frame
+directly. This preserves the existing copy-on-write ownership and avoids
+decoding and re-encoding every plane through `PlaneBuf`; weighted windows and
+explicit scales still use the general mixing path. On a 640×360 `yuv420p`
+stream (120 frames), ten rotated A/B/ffmpeg rounds measured median named
+`CPU Counters` Cycles of 0.067× and CPU-seconds of 0.962× versus the
+unoptimised path; wall time was 0.993×. The candidate was 0.559× ffmpeg's
+Cycles in the same session. Output was byte-exact against both the
+unoptimised binary and ffmpeg, with identical output at `-threads 1`, `2`,
+`4`, and `8`. The weighted `frames=3:weights=1 2 1` path was also unchanged
+byte-for-byte by the candidate.
+
 ## `tblend`: measured, not guessed, and only where measurement succeeded
 
 `ffmpeg -h filter=tblend` lists 40 named blend modes with no documented
