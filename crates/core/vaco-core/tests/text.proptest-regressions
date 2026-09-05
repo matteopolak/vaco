@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 96a5e91ad4136c385e2d970e91aa4fcdb8b31616886a49cf33785f02f10e0a49 # shrinks to w = 2147483648, h = 0, us = 0, rgba = (0, 0, 0, 0), num = 0, den = 0, bytes = [], b = false
+cc c5403552e70d397d343422b6bd9db8c4c8faf008c1d648e8d8db9eadb32c873a # shrinks to w = 1, h = 1, us = 0, rgba = (0, 0, 0, 0), num = -1, den = 1001012, bytes = [], b = false
