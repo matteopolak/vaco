@@ -127,13 +127,17 @@ fn skip_fill_element(r: &mut BitReader<'_>) -> Result<()> {
     if cnt == 0 {
         return Ok(r.check()?);
     }
+    let payload_bits = cnt.saturating_mul(8);
+    if r.bits_left() < u64::from(payload_bits) {
+        return Err(Error::UnexpectedEof);
+    }
     let extension_type = r.get(4);
     if matches!(extension_type, EXT_SBR_DATA | EXT_SBR_DATA_CRC) {
         return Err(Error::Unsupported(
             "vaco-codec-aac: SBR fill payload is not implemented — refusing implicit HE-AAC",
         ));
     }
-    r.skip(cnt.saturating_mul(8).saturating_sub(4));
+    r.skip(payload_bits.saturating_sub(4));
     Ok(r.check()?)
 }
 
@@ -300,6 +304,22 @@ mod tests {
             let error = read(&mut r, 4).unwrap_err();
             assert!(error.to_string().contains("SBR fill payload"));
         }
+    }
+
+    #[test]
+    fn a_truncated_sbr_fill_is_not_misclassified_as_implicit_he_aac() {
+        let mut w = BitWriter::new();
+        w.put(3, super::ID_FIL);
+        w.put(4, 2); // declares two payload bytes
+        w.put(4, super::EXT_SBR_DATA);
+        w.put(4, 0); // deliberately truncated payload
+        let bytes = w.finish();
+        let mut r = BitReader::new(&bytes);
+
+        assert!(matches!(
+            read(&mut r, 4),
+            Err(vaco_core::Error::UnexpectedEof)
+        ));
     }
 
     #[test]

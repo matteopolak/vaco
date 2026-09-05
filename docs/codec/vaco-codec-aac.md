@@ -549,8 +549,11 @@ happen, and that cannot be resolved at the configuration layer alone for a
 raw-ADTS stream. It now reads the first `extension_type` nibble: Table 4.121's
 `EXT_SBR_DATA`/`EXT_SBR_DATA_CRC` values 13/14 return a named
 `Error::Unsupported` before any AAC-LC frame is reconstructed. Other fill
-payloads retain their exact declared-length skip. This is deliberately a
-refusal boundary, not SBR parsing or HE-AAC PCM support.
+payloads retain their exact declared-length skip. The declared payload length
+is checked before that nibble is classified, so a truncated `FIL` cannot be
+misreported as implicit SBR: it returns `Error::UnexpectedEof` and queues no
+frame. This is deliberately a refusal boundary, not SBR parsing or HE-AAC PCM
+support.
 
 ## Decode accuracy — measured, not claimed
 
