@@ -6430,3 +6430,35 @@ CI reports any of this.
 
 The standing table is in `docs/codec/vaco-codec-hevc.md`, "The JCT-VC
 `HEVC_v1` subset, measured".
+
+## 70. The last four XF-01 format calibrations: `cslg` ignored, QuickTime chapters win, mixed sample descriptions fail closed, and unlengthed Vorbis laces advance by 1 ms
+
+Measured 2026-09-05 against `ffmpeg`/`ffprobe` 9.0.1 by
+`scripts/verify-format-calibrations.sh M2|M4|M6|K1`. The fixture helper changes
+container bytes only; every reported behavior comes from `ffprobe`.
+
+- **M2:** MPEG-4 B-frame files with version-0 and version-1 `ctts` both report
+  the first five PTS/DTS pairs as `0/-512`, `1536/0`, `512/512`, `1024/1024`,
+  `3072/1536`. Adding a version-1 `cslg` whose signed
+  `compositionToDTSShift` is either -2048 or +2048 changes none of those
+  values. The executable check validates the box versions and the exact signed
+  payload before querying packets.
+- **M4:** the MOV muxer writes both a `tref/chap` text track and Nero `chpl`
+  from the same input chapters. After changing only the `chpl` strings from
+  `Alpha`/`Beta` to `NeroA`/`Nero`, `ffprobe -show_chapters` still reports
+  `Alpha`/`Beta`. QuickTime chapter-track data wins this conflict.
+- **M6:** an `stsd` containing `avc1` followed by `hvc1` produces the warning
+  `multiple fourcc not supported` and reports the stream as H.264/`avc1`
+  regardless of the `stsc` description index. Index 1 yields all five AVC
+  packets; selecting incompatible entry 2 yields `nb_read_packets=N/A`. The
+  helper rejects any fixture whose entry types or selected index differ from
+  that requested shape.
+- **K1:** replacing two real Vorbis BlockGroups with one EBML-laced BlockGroup,
+  omitting `BlockDuration`, makes both packets share byte position 3844. The
+  reference nevertheless gives them one-millisecond durations and advances
+  PTS/DTS from `-23/-23` to `-22/-22`. This disproves the plan's assumption
+  that both packets inherit exactly the same timestamp.
+
+With these four assertions, all 26 reference-oracle rows execute and L1 remains
+the separately recorded public-document classification: 27 of 27 catalogue
+rows are accounted for.

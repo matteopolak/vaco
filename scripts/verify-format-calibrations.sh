@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Black-box calibration checks for container behaviours the specifications leave open.
 #
-# Usage: scripts/verify-format-calibrations.sh [all|P1|P2|P3|P4|P5|P6|P7|T1|T2|T3|T4|T5|S1|M1|M3|M5|M7|K2|K3|K4|A1|N1]
+# Usage: scripts/verify-format-calibrations.sh [all|P1|P2|P3|P4|P5|P6|P7|T1|T2|T3|T4|T5|S1|M1|M2|M3|M4|M5|M6|M7|K1|K2|K3|K4|A1|N1]
 #
 # Every case creates its own media in a private temporary directory and invokes
 # only ffmpeg/ffprobe binaries. A missing binary or rejected command is a
@@ -402,6 +402,123 @@ run_m7() {
         "13" "M7 readable packets after half mdat"
 }
 
+run_m2() {
+    local v0="$case_dir/m2-ctts-v0.mp4"
+    local v1="$case_dir/m2-ctts-v1.mp4"
+    local negative="$case_dir/m2-cslg-negative.mp4"
+    local positive="$case_dir/m2-cslg-positive.mp4"
+    local offset
+    local expected=$'0,-512\n1536,0\n512,512\n1024,1024\n3072,1536'
+
+    ffmpeg -hide_banner -loglevel error \
+        -f lavfi -i testsrc2=size=64x48:rate=25:duration=0.4 \
+        -c:v mpeg4 -bf 2 "$v0"
+    ffmpeg -hide_banner -loglevel error \
+        -f lavfi -i testsrc2=size=64x48:rate=25:duration=0.4 \
+        -c:v mpeg4 -bf 2 -movflags +negative_cts_offsets "$v1"
+
+    offset=$(grep -abo ctts "$v0" | head -n 1 | cut -d: -f1)
+    assert_equal "$(xxd -p -s "$((offset + 4))" -l 1 "$v0")" "00" "M2 ctts v0"
+    offset=$(grep -abo ctts "$v1" | head -n 1 | cut -d: -f1)
+    assert_equal "$(xxd -p -s "$((offset + 4))" -l 1 "$v1")" "01" "M2 ctts v1"
+
+    python3 scripts/format-calibration-fixtures.py m2-cslg "$v1" "$negative" -2048
+    python3 scripts/format-calibration-fixtures.py m2-cslg "$v1" "$positive" 2048
+    for media in "$v0" "$v1" "$negative" "$positive"; do
+        assert_equal "$(ffprobe -v error -show_entries packet=pts,dts -of csv=p=0 "$media" | head -n 5)" \
+            "$expected" "M2 $(basename "$media") packet timestamps"
+    done
+    for media in "$negative" "$positive"; do
+        offset=$(grep -abo cslg "$media" | head -n 1 | cut -d: -f1)
+        assert_equal "$(xxd -p -s "$((offset + 4))" -l 1 "$media")" "01" \
+            "M2 $(basename "$media") cslg version"
+    done
+    offset=$(grep -abo cslg "$negative" | head -n 1 | cut -d: -f1)
+    assert_equal "$(xxd -p -s "$((offset + 8))" -l 8 "$negative")" \
+        "fffffffffffff800" "M2 negative cslg shift"
+    offset=$(grep -abo cslg "$positive" | head -n 1 | cut -d: -f1)
+    assert_equal "$(xxd -p -s "$((offset + 8))" -l 8 "$positive")" \
+        "0000000000000800" "M2 positive cslg shift"
+}
+
+run_m4() {
+    local metadata="$case_dir/m4.ffmetadata"
+    local source="$case_dir/m4-both.mp4"
+    local conflict="$case_dir/m4-conflict.mp4"
+    local chapters=$'0.000000,0.500000,Alpha\n0.500000,1.000000,Beta'
+
+    printf '%s\n' ';FFMETADATA1' \
+        '[CHAPTER]' 'TIMEBASE=1/1000' 'START=0' 'END=500' 'title=Alpha' \
+        '[CHAPTER]' 'TIMEBASE=1/1000' 'START=500' 'END=1000' 'title=Beta' > "$metadata"
+    ffmpeg -hide_banner -loglevel error \
+        -f lavfi -i testsrc2=size=64x48:rate=25:duration=1 \
+        -f ffmetadata -i "$metadata" -map 0:v -map_metadata 1 -map_chapters 1 \
+        -c:v mpeg4 "$source"
+    grep -Faq chpl "$source"
+    grep -Faq chap "$source"
+    python3 scripts/format-calibration-fixtures.py m4 "$source" "$conflict"
+    grep -Faq NeroA "$conflict"
+    grep -Faq Nero "$conflict"
+    assert_equal "$(ffprobe -v error -show_chapters \
+        -show_entries chapter=start_time,end_time:chapter_tags=title \
+        -of csv=p=0 "$conflict")" "$chapters" "M4 QuickTime chapter precedence"
+}
+
+run_m6() {
+    local avc="$case_dir/m6-avc.mp4"
+    local hevc="$case_dir/m6-hevc.mp4"
+    local index1="$case_dir/m6-index-1.mp4"
+    local index2="$case_dir/m6-index-2.mp4"
+    local warning="$case_dir/m6-warning.log"
+
+    ffmpeg -hide_banner -loglevel error \
+        -f lavfi -i testsrc2=size=64x48:rate=25:duration=0.2 \
+        -c:v libx264 -preset ultrafast -g 5 -pix_fmt yuv420p "$avc"
+    ffmpeg -hide_banner -loglevel error \
+        -f lavfi -i testsrc2=size=64x48:rate=25:duration=0.2 \
+        -c:v libx265 -preset ultrafast -x265-params log-level=error \
+        -tag:v hvc1 -pix_fmt yuv420p "$hevc"
+    python3 scripts/format-calibration-fixtures.py m6 "$avc" "$hevc" "$index1" 1
+    python3 scripts/format-calibration-fixtures.py m6 "$avc" "$hevc" "$index2" 2
+    for media in "$index1" "$index2"; do
+        grep -Faq avc1 "$media"
+        grep -Faq hvc1 "$media"
+        assert_equal "$(probe_value "$media" stream=codec_name v:0)" "h264" \
+            "M6 $(basename "$media") first codec identity"
+        assert_equal "$(probe_value "$media" stream=codec_tag_string v:0)" "avc1" \
+            "M6 $(basename "$media") first codec tag"
+    done
+    assert_equal "$(ffprobe -v error -count_packets -select_streams v:0 \
+        -show_entries stream=nb_read_packets -of default=nw=1:nk=1 "$index1")" \
+        "5" "M6 first-description packet count"
+    assert_equal "$(ffprobe -v error -count_packets -select_streams v:0 \
+        -show_entries stream=nb_read_packets -of default=nw=1:nk=1 "$index2")" \
+        "N/A" "M6 incompatible-description packet refusal"
+    ffprobe -v warning -show_entries stream=codec_name -of default=nw=1:nk=1 \
+        "$index1" > /dev/null 2> "$warning"
+    grep -Fq 'multiple fourcc not supported' "$warning"
+}
+
+run_k1() {
+    local source="$case_dir/k1-source.mkv"
+    local laced="$case_dir/k1-laced.mkv"
+    local packets="$case_dir/k1-packets.csv"
+
+    ffmpeg -hide_banner -loglevel error \
+        -f lavfi -i sine=frequency=440:duration=0.12 -ac 2 \
+        -c:a vorbis -strict experimental -f matroska "$source"
+    python3 scripts/format-calibration-fixtures.py k1 "$source" "$laced"
+    ffprobe -v error -show_packets -select_streams a:0 \
+        -show_entries packet=pts,dts,duration,size,pos:packet_side_data= \
+        -of csv=p=0 "$laced" > "$packets"
+    assert_equal "$(sed -n '1p' "$packets" | cut -d, -f1-4)" \
+        "-23,-23,1,182" "K1 first laced Vorbis packet"
+    assert_equal "$(sed -n '2p' "$packets" | cut -d, -f1-4)" \
+        "-22,-22,1,76" "K1 second laced Vorbis packet"
+    assert_equal "$(sed -n '1p' "$packets" | cut -d, -f5)" \
+        "$(sed -n '2p' "$packets" | cut -d, -f5)" "K1 shared block position"
+}
+
 run_m3() {
     local original="$case_dir/m3-original.mp4"
     local patched="$case_dir/m3-rate-two.mp4"
@@ -609,9 +726,13 @@ case "$case_id" in
     T5) run_t5 ;;
     S1) run_s1 ;;
     M1) run_m1 ;;
+    M2) run_m2 ;;
     M3) run_m3 ;;
+    M4) run_m4 ;;
     M5) run_m5 ;;
+    M6) run_m6 ;;
     M7) run_m7 ;;
+    K1) run_k1 ;;
     K2) run_k2 ;;
     K3) run_k3 ;;
     K4) run_k4 ;;
@@ -632,9 +753,13 @@ case "$case_id" in
         run_t5
         run_s1
         run_m1
+        run_m2
         run_m3
+        run_m4
         run_m5
+        run_m6
         run_m7
+        run_k1
         run_k2
         run_k3
         run_k4
@@ -642,7 +767,7 @@ case "$case_id" in
         run_n1
         ;;
     *)
-        printf 'usage: %s [all|P1|P2|P3|P4|P5|P6|P7|T1|T2|T3|T4|T5|S1|M1|M3|M5|M7|K2|K3|K4|A1|N1]\n' "$0" >&2
+        printf 'usage: %s [all|P1|P2|P3|P4|P5|P6|P7|T1|T2|T3|T4|T5|S1|M1|M2|M3|M4|M5|M6|M7|K1|K2|K3|K4|A1|N1]\n' "$0" >&2
         exit 2
         ;;
 esac

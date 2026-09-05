@@ -32,23 +32,14 @@ handle and its procedure; `vaco-conformance experiments --id P3` selects one.
 
 ## Completion status
 
-The catalogue is intentionally ahead of its implementation. As of the
-measurements on this page, 22 of the 26 runnable rows have an executable
-assertion: `P1`, `P2`, `P3`, `P4`, `P5`, `P6`, `P7`, `T1`, `T2`, `T3`, `T4`,
-`T5`, `S1`, `M1`, `M3`, `M5`, `M7`, `K2`, `K3`, `K4`, `A1`, and `N1`. The
-remaining runnable rows — `M2`, `M4`, `M6`, and `K1` — are open. `L1` is
-complete as a documentary classification, not an executable reference observation.
-
-The remaining rows require genuinely distinct inputs, not a nearby smoke test:
-M2 needs ctts v0/v1 plus cslg variants, M4 needs conflicting `chpl` and
-`tref/chap` chapter sources, M6 needs incompatible `avc1` and `hvc1` entries in
-one `stsd`, and K1 needs an EBML-laced Vorbis Block without `BlockDuration`.
-The local native Vorbis muxer can encode stereo Vorbis but emitted un-laced
-BlockGroups in this session, so it is not an admissible K1 substitute.
-
-Do not close the format-calibration acceptance work from the partial script
-result. Completion requires an assertion and recorded observation for all 26
-runnable rows, the L1 source review, and the configured corpus/probe matrix.
+All 26 runnable rows have executable assertions. `L1` is complete as a
+documentary classification, not an executable reference observation. The four
+inputs that the reference muxers do not emit directly are constructed by
+`scripts/format-calibration-fixtures.py`: it adds controlled `cslg` boxes,
+creates conflicting chapter sources, combines `avc1` and `hvc1` sample entries,
+and changes two real Vorbis BlockGroups into one EBML lace without
+`BlockDuration`. The reference oracle remains `ffprobe`; the helper only changes
+container bytes and validates the requested shape before writing it.
 
 The existing probe manifests remain the shared generated-media baseline:
 
@@ -86,9 +77,10 @@ quiet rather than editing it alongside concurrent documentation work.
 The conformance runner discovers an installed reference through its normal
 reference configuration. Corpus media is cache-first and may fetch only when
 `VACO_CORPUS_NETWORK=1`; the calibration recipes should prefer locally
-generated media and use a temporary directory. P1, T1, and K3 additionally use
-the `python3` standard library for controlled fixture plumbing; P1's helper is
-a loopback-only, one-request HTTP response with a controlled MIME type.
+generated media and use a temporary directory. P1, T1, M2, M4, M6, K1, and K3
+additionally use the `python3` standard library for controlled fixture plumbing;
+P1's helper is a loopback-only, one-request HTTP response with a controlled MIME
+type.
 
 ## Dependencies
 
@@ -99,7 +91,8 @@ measurements is the installed `ffmpeg`/`ffprobe` binary.
 
 ## Current measurements
 
-These observations were made on ffmpeg/ffprobe 9.0.1 on 2026-09-04. They are
+These observations were made on ffmpeg/ffprobe 9.0.1 on 2026-09-04 and
+2026-09-05. They are
 not substitutes for the executable calibration cases; they establish the first
 values the cases must preserve or deliberately version-gate.
 
@@ -119,9 +112,13 @@ values the cases must preserve or deliberately version-gate.
 | T5 | For a B-frame MPEG-4 MP4 remuxed to MPEG-TS, `auto`, `make_zero`, and `make_non_negative` are byte-identical. `disabled` differs and leaves the first packet 40 ms earlier: `1.400000,1.360000` rather than `1.440000,1.400000` PTS,DTS. | Four `-c copy` MPEG-TS muxes from the same 25 fps two-B-frame source; bytes were compared with `cmp` and first packets queried with `-show_entries packet=pts_time,dts_time`. |
 | S1 | A seekable TS at one-hour timestamps returns packet `3600.040000,3600.000000` for a 3600-second interval. The same TS through `pipe:0` consumes all 33,464 bytes, then refuses: it does not forward-discard an unseekable input. | A counted 188-byte producer fed ffprobe’s interval request; the script asserts complete consumption and both refusal diagnostics. |
 | M1 | An MP4 whose video chunk precedes a delayed audio chunk emits all 25 video packets before all 45 audio packets, with one stream-index transition across 70 packets. | A one-second MPEG-4 video input and one-second AAC input offset by one second were muxed to MP4; complete packet stream-index output was counted. |
+| M2 | Version-0 and version-1 `ctts` files report the same first five PTS/DTS pairs: `0/-512`, `1536/0`, `512/512`, `1024/1024`, `3072/1536`. Adding version-1 `cslg` boxes with `compositionToDTSShift` of either -2048 or +2048 does not change them. | The script checks the actual `ctts`/`cslg` version bytes and signed 64-bit shift payloads before comparing five packet timestamps for all four files. |
 | M3 | A version-0 `elst` changed from media rate 1.0 to 2.0 (`00010000` to `00020000`) has no observed effect: all 50 packet PTS/DTS/durations and the `2.000000` format duration match the original. | A two-second 25 fps MP4 was patched only in the media-rate field; complete packet CSV output was compared byte-for-byte. |
+| M4 | When the same MP4 carries a QuickTime `tref/chap` text track titled `Alpha`/`Beta` and a conflicting Nero `chpl` list titled `NeroA`/`Nero`, the QuickTime titles win. | The reference muxer generated both chapter representations. Only the `chpl` title bytes were changed, then the complete chapter time/title rows were asserted. |
 | M5 | With a fixed test key/KID and `-fflags +bitexact`, two CENC AES-CTR MP4 muxes are byte-identical. The generated file contains `schm`, `cenc`, `tenc`, and `senc` and keeps a table-level `nb_frames=25`. | Two independently muxed 25-frame MPEG-4 MP4s were compared with `cmp`; CENC box identifiers and the resulting frame count were asserted. |
+| M6 | A track whose `stsd` contains `avc1` then `hvc1` is always reported as H.264/`avc1`, with `multiple fourcc not supported`. Samples using description 1 remain five readable packets; selecting incompatible description 2 leaves `nb_read_packets=N/A`. | Real AVC and HEVC sample entries were combined and the single `stsc` entry was tested once with each description index. The helper validates both entry types and the selected index. |
 | M7 | Halving a faststart MP4's `mdat` leaves its table-level `nb_frames=25` and `duration=1.000000`, while only 13 packets remain readable. | A 64x48 25-frame MPEG-4 MP4 was truncated to half its byte length; `-count_packets` distinguished table count from readable packet count. |
+| K1 | Two Vorbis packets in one EBML lace without `BlockDuration` share their block byte position, but the reference derives 1 ms durations and reports PTS/DTS `-23/-23` then `-22/-22`; they do not retain identical timestamps. | Two real un-laced Vorbis BlockGroups were replaced byte-for-byte by one laced BlockGroup plus equal-size Void padding, preserving every enclosing EBML size. |
 | K2 | An Info `Duration` payload set to the exact eight-byte IEEE-754 representation of `12345.6789` Matroska ticks (`40c81cd6e631f8a1`) reports `12.345678` seconds. The final fractional microsecond is truncated. | A generated eight-byte Duration element was patched in place and its payload bytes plus ffprobe format duration were asserted. |
 | K3 | A nested `SimpleTag` named `CHILD` inside parent tag `PARENT` is flattened as `PARENT/CHILD=VALUE`. | A generated Tags master was extended by a 34-byte standards-shaped nested Tag; both finite EBML sizes and the inserted bytes were checked before querying ffprobe format tags. |
 | K4 | Two identical Matroska muxes with output-side `-fflags +bitexact` were byte-identical: 9,148 bytes and SHA-256 `95497f31bbe6e5082dda2c22e1b786c38f44a05658f82c4fa4d779fff00eec90`. | Two independent locally generated MPEG-4 Matroska files were compared with `cmp` and SHA-256. |
@@ -129,7 +126,6 @@ values the cases must preserve or deliberately version-gate.
 | N1 | With two 25 fps video streams whose DTS values are equal at every 40 ms tick, both Matroska and MP4 emit stream 0 before stream 1. The first four packet pairs are `0@0`, `1@0`, `0@0.04`, `1@0.04`. | Two locally generated MPEG-4 tracks were remuxed without re-encoding to each container, then queried with `-show_entries packet=stream_index,dts_time`. |
 | L1 | WavPack and TTA each publish a format description, so neither is source-only by the evidence required for this classification. | The [WavPack binary format](https://www.wavpack.com/WavPack5FileFormat.pdf) and [TTA format description](https://tta.sourceforge.net/en/tta-format-description/) describe their on-disk structures. |
 
-The remaining black-box rows remain open until their listed procedure has an
-automated assertion and a recorded result. In particular, do not infer P3 from
-an auto-detection probe or A1 from successful decoding; both measurements show
-that those superficially similar paths answer different questions.
+All 26 black-box rows are executable. Do not infer P3 from an auto-detection
+probe or A1 from successful decoding; both measurements show that those
+superficially similar paths answer different questions.
