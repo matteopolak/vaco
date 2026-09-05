@@ -10,6 +10,11 @@ construction, not a stream.
 
 ## How it works
 
+The SRT path converts each input timestamp straight to exact `Duration` using
+its frame time base, then compares cue boundaries as rationals. This timing
+path must not use display-oriented seconds or microseconds conversions: they
+can select the wrong cue at an awkward-clock boundary.
+
 - [`ass_filter`](../../crates/filter/vaco-filter-subtitle/src/ass_filter.rs) drives `vaco-ass` (script parsing + tag interpretation)
   and rasterises the result through `vaco-filter-text::TextRenderer`.
   One real, stated simplification: `vaco-ass::plan_event` correctly

@@ -60,6 +60,10 @@ struct SrtCue {
     text: String,
 }
 
+fn frame_time(pts: vaco_core::Timestamp, time_base: vaco_core::Rational) -> Duration {
+    pts.to_duration(time_base).unwrap_or(Duration::ZERO)
+}
+
 fn parse_srt(text: &str) -> Vec<SrtCue> {
     let mut cues = Vec::new();
     for block in text.split("\r\n\r\n").flat_map(|b| b.split("\n\n")) {
@@ -131,12 +135,7 @@ impl FrameFilter for Filter {
         let FrameData::Video { height, .. } = input.data else {
             return Ok(FrameOut::One(input));
         };
-        let t = input.pts.to_seconds(input.time_base).unwrap_or(0.0);
-        #[allow(
-            clippy::cast_possible_truncation,
-            reason = "microsecond precision from a real playback timestamp fits i64 for any real duration"
-        )]
-        let dur = Duration::from_micros((t * 1_000_000.0).round() as i64);
+        let dur = frame_time(input.pts, input.time_base);
         let mut out = input;
         match &self.source {
             Source::Ass(script) => {
@@ -145,9 +144,7 @@ impl FrameFilter for Filter {
             Source::Srt(cues) => {
                 let style = SimpleTextStyle::for_frame_height(height);
                 for cue in cues {
-                    if cue.start.as_micros() <= dur.as_micros()
-                        && dur.as_micros() < cue.end.as_micros()
-                    {
+                    if cue.start <= dur && dur < cue.end {
                         composite_simple_text(&mut self.renderer, &mut out, &cue.text, &style)?;
                     }
                 }
@@ -171,6 +168,16 @@ pub(crate) fn create(req: &Instantiate<'_>) -> std::result::Result<Instance, Str
 #[allow(clippy::unwrap_used, clippy::indexing_slicing, reason = "test code")]
 mod tests {
     use super::*;
+
+    #[test]
+    fn frame_time_retains_an_awkward_input_clock() {
+        let ticks = 9_007_199_254_740_993_i64;
+        let base = vaco_core::Rational::new(1_001, 30_000);
+        assert_eq!(
+            frame_time(vaco_core::Timestamp::new(ticks), base),
+            Duration::from_ticks(ticks, base).unwrap_or(Duration::ZERO)
+        );
+    }
 
     #[test]
     fn missing_filename_is_a_clean_error() {
