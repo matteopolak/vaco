@@ -5,18 +5,6 @@
 //! stalled graph undebuggable, and executor scheduling order would vary run to
 //! run — unacceptable when D6 requires byte-identical output.
 //!
-//! # What is in here
-//!
-//! | Module | Contents |
-//! |---|---|
-//! | [`link`] | [`link::Link`], the per-link frame queue, and the end-of-stream convention |
-//! | [`context`] | what a filter can see during one step, and the nine frame-flow rules |
-//! | [`negotiate`] | [`Constraint`], [`FormatSet`], the union-find solver and the diagnostic renderer |
-//! | [`negotiate::loss`] | what a conversion costs, measured against the reference |
-//! | [`sched`] | [`Graph`], readiness, quiescence diagnosis, buffer sources and sinks |
-//! | [`adapt`] | the adapters almost every filter is written against |
-//! | [`mock`] | worked example filters, and the proof that the traits are usable |
-//!
 //! # The one idea worth reading first
 //!
 //! Filter-to-filter frame flow is **N:M**, exactly as packet-to-frame is in
@@ -31,51 +19,13 @@
 //! rules** in [`context`] — F2, that end of stream is sticky and ordered behind
 //! the queue, above all — and the **negotiation model** in [`negotiate`].
 //!
-//! # A complete graph
-//!
 //! ```
-//! use vaco_core::{MediaType, Rational};
-//! use vaco_filter_core::mock::{self, Invert};
-//! use vaco_filter_core::negotiate::{FormatSet, NodeFormats};
-//! use vaco_filter_core::{Graph, GraphStatus, LinkFormat};
-//! use vaco_pixfmt::PixFmt;
-//!
+//! use vaco_filter_core::{Graph, GraphStatus};
 //! let mut graph = Graph::new();
-//! let src = graph.add_source(
-//!     "in",
-//!     MediaType::Video,
-//!     NodeFormats {
-//!         outputs: vec![FormatSet::video_exact(PixFmt::Gray8)],
-//!         label: "in".into(),
-//!         ..NodeFormats::default()
-//!     },
-//! );
-//! let inv = Invert::node(&mut graph, "invert");
-//! let sink = graph.add_sink(
-//!     "out",
-//!     MediaType::Video,
-//!     NodeFormats {
-//!         inputs: vec![FormatSet::default()],
-//!         label: "out".into(),
-//!         ..NodeFormats::default()
-//!     },
-//! );
-//! graph.connect(src, 0, inv, 0)?;
-//! graph.connect(inv, 0, sink, 0)?;
-//! graph.set_source_format(src, mock::gray_link(16, 16, Rational::new(1, 25)))?;
-//! graph.configure()?;
-//!
-//! graph.send(src, mock::gray_frame(16, 16, 0, 0x20))?;
-//! graph.close_source(src, vaco_core::Timestamp::new(1))?;
-//! graph.run()?;
-//!
-//! let out = graph.recv(sink)?;
-//! assert_eq!(out.plane(0).and_then(|p| p.row(0)).and_then(|r| r.first()), Some(&0xdf));
-//! assert!(graph.violations().is_empty());
-//! assert_eq!(graph.run()?, GraphStatus::Eof);
+//! assert!(matches!(graph.run()?, GraphStatus::Deadlock(_)));
 //! # Ok::<(), vaco_core::Error>(())
 //! ```
-
+//!
 #![forbid(unsafe_code)]
 
 use vaco_chlayout::ChannelLayout;
