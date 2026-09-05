@@ -146,9 +146,14 @@ fn blur_plane(
     min_r: i32,
     max_r: i32,
 ) -> Vec<Vec<u8>> {
+    let max_window_radius = min_r.max(max_r).max(0);
+    let span = usize::try_from(max_window_radius.saturating_mul(2).saturating_add(1)).unwrap_or(0);
+    let x_indices = axis_indices(w, max_window_radius);
+    let y_indices = axis_indices(h, max_window_radius);
     let mut out = Vec::new();
     for y in 0..h {
         let mut row = Vec::new();
+        let y_base = usize::try_from(y).unwrap_or(0) * span;
         for x in 0..w {
             // The control plane may be a different size; sample it at the
             // same relative position, clamped.
@@ -171,15 +176,37 @@ fn blur_plane(
                 },
             );
             let r = radius_at(ctrl_rows, cx, cy, ctrl_w, ctrl_h, min_r, max_r).max(0);
+            let x_base = usize::try_from(x).unwrap_or(0) * span;
             if r == 0 {
-                row.push(common::sample_clamped(rows, x, y, w, h));
+                let value = y_indices
+                    .get(y_base + usize::try_from(max_window_radius).unwrap_or(0))
+                    .and_then(|&index| rows.get(index))
+                    .and_then(|sampled_row| {
+                        x_indices
+                            .get(x_base + usize::try_from(max_window_radius).unwrap_or(0))
+                            .and_then(|&index| sampled_row.get(index))
+                    })
+                    .copied()
+                    .unwrap_or(0);
+                row.push(value);
                 continue;
             }
             let count = i64::from(2 * r + 1) * i64::from(2 * r + 1);
             let mut sum: i64 = 0;
-            for dy in -r..=r {
-                for dx in -r..=r {
-                    sum += i64::from(common::sample_clamped(rows, x + dx, y + dy, w, h));
+            let radius_offset = usize::try_from(max_window_radius - r).unwrap_or(0);
+            let window = usize::try_from(2 * r + 1).unwrap_or(0);
+            for dy in 0..window {
+                let sampled_row = y_indices
+                    .get(y_base + radius_offset + dy)
+                    .and_then(|&index| rows.get(index))
+                    .map_or(&[][..], |r| *r);
+                for dx in 0..window {
+                    let value = x_indices
+                        .get(x_base + radius_offset + dx)
+                        .and_then(|&index| sampled_row.get(index))
+                        .copied()
+                        .unwrap_or(0);
+                    sum += i64::from(value);
                 }
             }
             let avg = if count > 0 {
@@ -195,6 +222,19 @@ fn blur_plane(
         out.push(row);
     }
     out
+}
+
+fn axis_indices(length: i32, radius: i32) -> Vec<usize> {
+    let max = length.saturating_sub(1).max(0);
+    let mut indices = Vec::new();
+    for coordinate in 0..length {
+        for offset in -radius..=radius {
+            indices.push(
+                usize::try_from(coordinate.saturating_add(offset).clamp(0, max)).unwrap_or(0),
+            );
+        }
+    }
+    indices
 }
 
 #[derive(Debug)]
