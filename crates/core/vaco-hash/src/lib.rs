@@ -4,13 +4,9 @@
 //! # What it is
 //!
 //! The single owner of `crc`, `md-5`, `sha1` and `sha2` (**D11**: one third-party
-//! media crate, one Vaco crate that reaches it). Two components need the same
-//! primitives — `vaco-probe`'s `-show_data_hash` and `vaco-mux-hash`'s eight
-//! checksum muxers — and before this crate existed they each declared the four
-//! dependencies and each defined their own algorithm enum, one spelled
-//! `HashAlg` and the other `HashAlgo`, with the same fifteen names and the same
-//! labels. `cargo xtask owner-gate` caught the dependency half and
-//! `cargo xtask dup-check` would have caught the rest.
+//! media crate, one Vaco crate that reaches it). `vaco-probe`'s
+//! `-show_data_hash` and `vaco-mux-hash`'s eight checksum muxers share these
+//! primitives and the [`HashAlgo`] name table.
 //!
 //! That mattered more here than duplication usually does. In both places **the
 //! checksum IS the printed output**, so two implementations that disagree by a
@@ -75,15 +71,15 @@
 use md5::Digest as _;
 use vaco_core::{Error, Result};
 
-/// Re-exported so `vaco-crypto` (layer 0, added 2026-08-28) can build
+/// Re-exported so `vaco-crypto` (layer 0) can build
 /// `Hmac<Sha256>` for PBKDF2-HMAC-SHA256 without a second direct `sha2`
 /// dependency — this crate stays `sha2`'s one D11 owner, `vaco-crypto`
 /// composes on top of the concrete type rather than re-declaring it.
 pub use sha2;
 
 /// Re-exported for the same reason as [`sha2`] above: `vaco-crypto` builds
-/// `Hmac<Sha1>` for SRTP's RFC 3711 §4.2 authentication tag (added
-/// alongside `vaco-protocol-srtp`, #551) without a second direct `sha1`
+/// `Hmac<Sha1>` for SRTP's RFC 3711 §4.2 authentication tag without a second
+/// direct `sha1`
 /// dependency.
 pub use sha1;
 
@@ -277,8 +273,7 @@ pub const ADLER32_STANDARD_SEED: (u32, u32) = (1, 0);
 /// A small hand-written enum rather than `Box<dyn Update>`: every algorithm
 /// this crate supports has a fixed-size state (a `u32` pair or a stack-sized
 /// hasher struct), so boxing would trade a known-size value for an allocation
-/// and a vtable for no benefit — `#![forbid(unsafe_code)]` does not need the
-/// indirection either.
+/// and a vtable for no benefit.
 pub enum RunningHash {
     Md5(md5::Md5),
     Sha160(sha1::Sha1),
