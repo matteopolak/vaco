@@ -41,6 +41,7 @@ pub mod link;
 pub mod mock;
 pub mod negotiate;
 pub mod sched;
+pub mod slice;
 #[cfg(test)]
 mod test_support;
 pub mod timeline;
@@ -57,6 +58,7 @@ pub use negotiate::{
     negotiate,
 };
 pub use sched::{Graph, GraphStatus, Priority, Progress, Stall, Violation};
+pub use slice::{PlaneBandMut, Scratch, Slice, SliceFilter, SliceJob};
 pub use timeline::{Timeline, TimelineSupport};
 
 /// What one `activate` call accomplished.

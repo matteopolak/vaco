@@ -23,6 +23,7 @@ it departs from them the departure is called out.
 | `negotiate::loss` | what a conversion costs, measured against the reference |
 | `sched` | `Graph`, readiness, quiescence diagnosis, buffer sources and sinks |
 | `adapt` | `Simple`, `Sourced`, `Blocked` — `activate` written once per filter *shape* |
+| `slice` | `SliceFilter`, `SliceJob`, disjoint `PlaneBandMut` output bands, and deterministic scratch reduction |
 | `timeline` | the universal `enable=` expression, over `vaco-expr` |
 | `mock` | five worked filters, and the proof that the traits are usable |
 
@@ -323,15 +324,17 @@ design is a single driver making one bounded call at a time, which is what makes
 the schedule deterministic and therefore what makes `framecrc`-style differential
 testing meaningful for filtergraphs at all (D6).
 
-Parallelism was always meant to come from elsewhere: pipeline parallelism in
-`vaco-sched` (one component per task, bounded channels), and data parallelism
-*within* one `activate` call via the `SliceFilter` adapter. Neither is in this
-crate today, and **that turns out to suit D18**: `wasm32-unknown-unknown` has no
-threads, so a framework whose correctness does not depend on any is portable by
-construction. When `SliceFilter` lands it should be an adapter that degrades to a
-sequential fan-out when no pool is available, not a load-bearing assumption in
-the trait layer. `cargo xtask wasm-check` passes; this crate touches no clock and
-spawns nothing.
+Parallelism comes from pipeline execution in `vaco-sched` (one component per
+task, bounded channels) and, for row-independent video filters, from `Slice`
+inside one `activate` call. `Slice` gives each job immutable full-frame input and
+owned output bands; jobs cannot write to a neighbour's rows. It reduces scratch
+values after the join in slice-index order, so scheduling cannot perturb a
+floating-point or integer accumulation.
+
+`Slice::with_threads(inner, 0)` is intentionally serial and does not create a
+worker pool. On `wasm32-unknown-unknown`, every configuration selects that same
+serial path. This makes a worker pool an optimization rather than a load-bearing
+part of the filter contract. This crate has no direct clock access.
 
 ---
 
@@ -902,12 +905,10 @@ descending order of what they cost.
 
 ## Deliberately deferred
 
-* **`SliceFilter` and slice threading.** It needs a thread pool; `rayon` is
-  listed as a dependency for this crate in plan 16 §4.1 but is not in the
-  crate's manifest, and adding one is a decision, not an edit. The design should
-  be an adapter that fans out to a pool when one exists and runs sequentially
-  when it does not — see *Threading* above for why D18 makes that the right shape
-  anyway.
+* **A graph-owned shared slice pool.** `Slice` currently owns a bounded Rayon
+  pool per adapter. Wiring a graph-level `-filter_threads` policy into adapter
+  construction belongs with graph configuration, so the core adapter remains
+  usable on its own.
 * **`Synced` / framesync.** It lives in `vaco-filter-framesync` by plan 16 §4.1,
   and it is that crate's to write against `FilterContext::peek_input`, which
   exists for it. `Paired`/`Fanout` (this crate) are a different, simpler

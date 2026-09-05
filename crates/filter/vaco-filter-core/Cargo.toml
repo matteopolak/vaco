@@ -19,6 +19,9 @@ vaco-chlayout = { path = "../../model/vaco-chlayout" }
 vaco-color = { path = "../../model/vaco-color" }
 smallvec.workspace = true
 
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+rayon.workspace = true
+
 [dev-dependencies]
 proptest.workspace = true
 divan.workspace = true
