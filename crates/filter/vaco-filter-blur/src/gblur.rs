@@ -132,19 +132,15 @@ fn convolve_1d(rows: &[&[u8]], w: i32, h: i32, kernel: &[f64], horizontal: bool)
             let x_index = usize::try_from(x).unwrap_or(0);
             for (i, &weight) in kernel.iter().enumerate() {
                 let v = if horizontal {
-                    source
-                        .and_then(|source| {
-                            indices.get(base + i).and_then(|&index| source.get(index))
-                        })
-                        .copied()
-                        .unwrap_or(0)
+                    match (source, indices.get(base + i)) {
+                        (Some(source), Some(&index)) => source.get(index).copied().unwrap_or(0),
+                        _ => 0,
+                    }
                 } else {
-                    indices
-                        .get(base + i)
-                        .and_then(|&index| rows.get(index))
-                        .and_then(|source| source.get(x_index))
-                        .copied()
-                        .unwrap_or(0)
+                    match indices.get(base + i).and_then(|&index| rows.get(index)) {
+                        Some(source) => source.get(x_index).copied().unwrap_or(0),
+                        None => 0,
+                    }
                 };
                 acc += weight * f64::from(v);
             }

@@ -146,12 +146,14 @@ have (normalises to `1`; blurring a constant field is the identity) — but
 it is **not** framecrc-equal to the reference. `steps` is parsed but does
 not change behaviour.
 
-### Performance slice: precomputed gblur tap coordinates
+### Performance slice: precomputed gblur tap coordinates and explicit reads
 
 `gblur::convolve_1d` now precomputes the clamped coordinate for every tap on
-the active axis, then reuses those indices for each row/column. The floating
-point weights, accumulation order, rounding, and replicate-edge semantics are
-unchanged; the before/after output hash is identical.
+the active axis, then reuses those indices for each row/column. The hot sample
+reads use explicit matches to keep the valid and fallback cases visible to
+the optimizer. The floating-point weights, accumulation order, rounding, and
+replicate-edge semantics are unchanged; the before/after output hash is
+identical.
 
 Measured end to end through `vvmpeg` on this machine (Apple silicon, 10
 cores), with the same 90-frame 1920x1080 yuv420p Y4M fixture and
@@ -161,15 +163,15 @@ before/after/ffmpeg rounds:
 
 | implementation | median wall | median child CPU | output |
 |---|---:|---:|---|
-| before | 8.718 s | 8.603 s | 279,936,000 bytes |
-| after | 7.179 s | 7.080 s | 279,936,000 bytes |
-| ffmpeg 9.0.1 | 0.423 s | 1.446 s | 279,936,000 bytes |
+| before (committed coordinate-reuse version) | 7.741 s | 7.695 s | 279,936,000 bytes |
+| after (explicit-match version) | 7.491 s | 7.437 s | 279,936,000 bytes |
+| ffmpeg 9.0.1 | 0.500 s | 1.646 s | 279,936,000 bytes |
 
-The candidate is 1.21x faster by wall time and 1.22x by child CPU time than
+The candidate is 1.03x faster by wall time and 1.03x by child CPU time than
 the prior implementation. The exported xctrace `CPU Counters` Cycles
-component summed to 85,219,954 before and 70,136,964 after (0.823x).
-Samply resolves `gblur::convolve_1d` as 99.75% of in-process samples after
-the change (99.74% before). At `-threads 1/2/4/8`, every output had the same
+component summed to 70,136,964 before and 67,555,201 after (0.963x).
+Samply resolves `gblur::convolve_1d` as 99.8% of in-process samples after
+the change. At `-threads 1/2/4/8`, every output had the same
 byte count and SHA-256 (`59e26808a90030f58fc250751c92e5f9ee2dd076ce1687f03225d9ec575cc73a`),
 and the before/after files compare byte-for-byte. Against ffmpeg, 87.18% of
 bytes are equal, with mean absolute byte difference 0.326 and maximum 26;
