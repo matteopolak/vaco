@@ -380,6 +380,11 @@ file (`ffmpeg`'s encoder does not emit a `pssh` on its own) and are transcribed
 directly from ISO/IEC 23001-7 instead — noted as such in the module doc
 comment, not presented as measured.
 
+`default_isProtected` is a two-value field: `tenc` accepts only `0` and `1`,
+matching the `seig` parser, rather than normalizing a reserved nonzero value to
+the reported protected state. This prevents malformed input from acquiring the
+same `encryption_is_protected=1` meaning as the measured fixture.
+
 For a `tenc` or `seig` entry with `per_sample_IV_size = 0`, `ConstantIv`
 retains both the declared 8- or 16-byte `constant_IV_size` and the bytes. A
 short tail is rejected rather than zero-padded: the missing length information
