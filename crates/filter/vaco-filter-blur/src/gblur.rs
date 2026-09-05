@@ -107,17 +107,44 @@ fn gaussian_kernel(sigma: f64) -> Vec<f64> {
 
 fn convolve_1d(rows: &[&[u8]], w: i32, h: i32, kernel: &[f64], horizontal: bool) -> Vec<Vec<u8>> {
     let r = common::to_i32(kernel.len() >> 1);
+    let span = kernel.len();
+    let mut indices = Vec::new();
+    for coordinate in 0..if horizontal { w } else { h } {
+        for i in 0..span {
+            let offset = common::to_i32(i) - r;
+            indices.push(
+                usize::try_from(
+                    (coordinate + offset)
+                        .clamp(0, (if horizontal { w } else { h }).saturating_sub(1).max(0)),
+                )
+                .unwrap_or(0),
+            );
+        }
+    }
     let mut out = Vec::new();
     for y in 0..h {
         let mut row = Vec::new();
+        let source = rows.get(usize::try_from(y).unwrap_or(0)).copied();
         for x in 0..w {
             let mut acc = 0.0f64;
+            let coordinate = if horizontal { x } else { y };
+            let base = usize::try_from(coordinate).unwrap_or(0) * span;
+            let x_index = usize::try_from(x).unwrap_or(0);
             for (i, &weight) in kernel.iter().enumerate() {
-                let offset = common::to_i32(i) - r;
                 let v = if horizontal {
-                    common::sample_clamped(rows, x + offset, y, w, h)
+                    source
+                        .and_then(|source| {
+                            indices.get(base + i).and_then(|&index| source.get(index))
+                        })
+                        .copied()
+                        .unwrap_or(0)
                 } else {
-                    common::sample_clamped(rows, x, y + offset, w, h)
+                    indices
+                        .get(base + i)
+                        .and_then(|&index| rows.get(index))
+                        .and_then(|source| source.get(x_index))
+                        .copied()
+                        .unwrap_or(0)
                 };
                 acc += weight * f64::from(v);
             }
