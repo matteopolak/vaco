@@ -44,6 +44,11 @@ its synthesised config the same way `vaco-bsf-generic::extract_extradata`
 does — `PacketSideData::NewExtradata`, emitted once per change, not on
 every packet.
 
+`pcm_rechunk` records each output packet's duration as exactly 1,024 samples
+in its sample clock, including a zero-padded final packet. At 44.1 kHz this is
+`256/11025` seconds, not a truncated microsecond count. Changing chunk sizing
+must keep duration and padding based on the same output sample count.
+
 ### What is measured, not assumed (`aac_adtstoasc`)
 
 A real `libavcodec` `aac` ADTS encode: `profile=1` (AAC-LC),

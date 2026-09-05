@@ -1,0 +1,12 @@
+[[source]]
+id = "raw-pcm-duration-oracle"
+kind = "blackbox"
+title = "ffmpeg/ffprobe9.0.1 raw PCM sample timing and pcm_rechunk default packet duration"
+acquired = "2026-09-04"
+where = "Installed ffmpeg -f lavfi -i anullsrc=r=44100:cl=mono -af atrim=end_sample=2205 -c:a pcm_s16le -bsf:a pcm_rechunk -f nut; ffprobe -show_packets"
+
+# Rechunk emits three 2048-byte packets at PTS0/1024/2048, duration1024 each
+# on1/44100; decoding all output produces6144 bytes (3072 mono s16 samples).
+# A1025-sample headerless s16 input is one2050-byte packet in ffprobe9.0.1
+# (-f s16le -ar44100 -ch_layout mono); Vaco keeps its fixed1024-byte grouping.
+# Packet grouping differs, but every group's duration is its exact sample count.

@@ -455,17 +455,11 @@ impl PcmDemuxer {
 /// `frames` samples at `sample_rate`, as a [`Duration`]. `0` when the rate is
 /// somehow zero (never true after `open`'s own validation, but total anyway).
 fn frame_duration(frames: u64, sample_rate: u32) -> Duration {
-    if sample_rate == 0 {
-        return Duration::ZERO;
-    }
-    #[allow(
-        clippy::integer_division,
-        reason = "microsecond duration deliberately truncates rather than rounds, \
-                  matching how the reference quantises packet durations elsewhere \
-                  in this workspace"
-    )]
-    let micros = (frames.saturating_mul(1_000_000)) / u64::from(sample_rate);
-    Duration::from_micros(i64::try_from(micros).unwrap_or(i64::MAX))
+    i64::try_from(frames)
+        .ok()
+        .zip(i32::try_from(sample_rate).ok())
+        .and_then(|(ticks, rate)| Duration::from_ticks(ticks, Rational::new(1, rate)))
+        .unwrap_or(Duration::ZERO)
 }
 
 /// Build one [`DemuxerDesc`] plus its `open`/`probe` glue.
@@ -661,6 +655,35 @@ mod tests {
         let mut sorted = with_ext.clone();
         sorted.sort_unstable();
         assert_eq!(sorted, vec!["al", "sb", "sw", "ub", "ul", "uw"]);
+    }
+
+    #[test]
+    fn nonintegral_sample_clock_preserves_full_and_short_packet_durations() {
+        let bytes: Vec<u8> = (0..2050).map(|i| i as u8).collect();
+        let opts = PcmOptions {
+            sample_rate: 44_100,
+            layout: ChannelLayout::MONO,
+        };
+        let mut demux = PcmDemuxer::open(
+            "s16le",
+            Box::new(MemorySource::new(bytes.clone())),
+            &NoParsers,
+            &opts,
+        )
+        .unwrap();
+        let mut payload = Vec::new();
+        for (pts, ticks, size) in [(0, 512, 1024), (512, 512, 1024), (1024, 1, 2)] {
+            let packet = demux.read_packet().unwrap();
+            assert_eq!(packet.pts.ticks(), Some(pts));
+            assert_eq!(packet.len, size);
+            assert_eq!(
+                Some(packet.duration),
+                Duration::from_ticks(ticks, Rational::new(1, 44_100))
+            );
+            payload.extend_from_slice(packet.payload());
+        }
+        assert_eq!(payload, bytes);
+        assert!(matches!(demux.read_packet(), Err(Error::Eof)));
     }
 
     #[test]

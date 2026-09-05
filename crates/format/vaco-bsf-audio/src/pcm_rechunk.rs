@@ -42,7 +42,7 @@ use std::collections::VecDeque;
 
 use vaco_bsf_core::{BsfDesc, MappedFilter, PacketMap};
 use vaco_codec_core::{BitstreamFilter, CodecId, CodecParameters};
-use vaco_core::{Duration, Error, Result, Timestamp};
+use vaco_core::{Duration, Error, Rational, Result, Timestamp};
 use vaco_limits::{Budget, Limits};
 use vaco_packet::Packet;
 
@@ -135,17 +135,11 @@ impl PcmRechunk {
             Timestamp::new(t.saturating_add_unsigned(offset_ticks))
         });
         np.dts = np.pts;
-        if self.sample_rate > 0 {
-            #[allow(
-                clippy::integer_division,
-                reason = "truncating microsecond duration, matching quantise_duration's own convention elsewhere in this workspace"
-            )]
-            let micros = i64::try_from(NB_OUT_SAMPLES)
-                .unwrap_or(i64::MAX)
-                .saturating_mul(1_000_000)
-                / i64::from(self.sample_rate);
-            np.duration = Duration::from_micros(micros);
-        }
+        np.duration = i64::try_from(NB_OUT_SAMPLES)
+            .ok()
+            .zip(i32::try_from(self.sample_rate).ok())
+            .and_then(|(ticks, rate)| Duration::from_ticks(ticks, Rational::new(1, rate)))
+            .unwrap_or(Duration::ZERO);
         out.push_back(np);
         self.chunks_emitted = self.chunks_emitted.saturating_add(1);
         Ok(())
@@ -225,6 +219,7 @@ mod tests {
         let mut collected = Vec::new();
         let mut pts_seen = Vec::new();
         while let Ok(p) = f.receive_packet() {
+            assert_eq!(p.duration.as_ratio(), (256, 11_025));
             pts_seen.push(p.pts.ticks());
             collected.extend_from_slice(p.payload());
         }
