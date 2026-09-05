@@ -15,6 +15,7 @@ use vaco_pixfmt::PixFmt;
 
 const SCRIPT_PREFIX: &str = "[Script Info]\nPlayResX: 320\nPlayResY: 240\n\n[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV\nStyle: Default,Arial,32,&H00FFFFFF,&H00000000,&H00000000,0,1,0,0,7,10,10,10\n\n[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n";
 const MOVE_SCRIPT: &str = include_str!("data/ass-animation-move.ass");
+const CLIP_SCRIPT: &str = include_str!("data/ass-animation-clip.ass");
 
 fn frame_with_script(script: &str, time: Duration) -> Frame {
     let pool = FramePool::default();
@@ -94,4 +95,22 @@ fn fad_changes_real_frame_luma_over_event_lifetime() {
     assert_eq!(start, 0);
     assert!(middle > 0);
     assert_eq!(end, 0);
+}
+
+#[test]
+fn animated_clip_reduces_real_frame_coverage_at_the_target_bound() {
+    let start = luma_sum(&frame_with_script(CLIP_SCRIPT, Duration::ZERO));
+    let middle = luma_sum(&frame_with_script(
+        CLIP_SCRIPT,
+        Duration::from_micros(2_000_000),
+    ));
+    let after = luma_sum(&frame_with_script(
+        CLIP_SCRIPT,
+        Duration::from_micros(3_500_000),
+    ));
+    assert!(
+        start > middle,
+        "clip should reduce coverage: {start} -> {middle}"
+    );
+    assert_eq!(after, 0);
 }

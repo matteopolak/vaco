@@ -32,7 +32,8 @@ construction, not a stream.
   plan holds only the resolved state for that instant rather than an
   unbounded animation list. `\move` therefore changes the layout anchor at
   each frame, while `\fad`/`\fade` adjust the resolved fill, outline, shadow,
-  and secondary-fill alpha before compositing.
+  and secondary-fill alpha before compositing. Rectangular `\clip` bounds
+  nested in `\t(...)` are likewise resolved before mask clipping.
 - [`subtitles`](../../crates/filter/vaco-filter-subtitle/src/subtitles.rs) dispatches on file extension: `.ass`/`.ssa` gets the
   full `ass_filter` path; everything else falls back to a simpler
   "layout and draw" path — currently implemented for **SRT only**
@@ -59,9 +60,8 @@ construction, not a stream.
   format-agnostic once you have plain cue text and timing.
 - `BorderStyle=3`: `ass_filter.rs`'s composite step would need an
   opaque-box path alongside its current outline+shadow one.
-- Animated clipping remains separate #488 work. Keep it outside the
-  projective mask helper;
-  transform interpolation belongs in `vaco-ass`'s point-in-time planner.
+- Transform interpolation belongs in `vaco-ass`'s point-in-time planner;
+  only vector clips remain outside the projective mask helper.
   Karaoke text is laid out syllable-by-syllable so `\k` can switch a fill,
   `\K`/`\kf` can sweep it left-to-right, and `\ko` can withhold its outline
   before highlight. `\p` drawings use bounded even-odd mask rasterisation

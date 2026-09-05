@@ -14,7 +14,8 @@
 //! `\t(...)` evaluates its supported numeric and colour style tags at a
 //! requested event-relative time. The four standard timing/acceleration forms
 //! are supported; nested transforms and line-level tags inside a transform are
-//! ignored so evaluation remains non-recursive and cannot change placement.
+//! ignored so evaluation remains non-recursive. Rectangular `\clip` inside a
+//! transform interpolates all four bounds; vector clips remain unsupported.
 //!
 //! # Bounded point-in-time animation and remaining gaps (stage (b), GitHub #488 / FT-5.3)
 //!
@@ -475,10 +476,7 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
             }
         }
         "clip" => {
-            let nums: Vec<f64> = a.split(',').filter_map(parse_num).collect();
-            if let [x1, y1, x2, y2] = nums.as_slice() {
-                cursor.clip = Some((*x1, *y1, *x2, *y2));
-            }
+            cursor.clip = parse_clip_rect(a).or(cursor.clip);
             // The vector-clip form (a scale plus drawing commands) is not
             // implemented, same reasoning as `\p`.
         }
@@ -628,12 +626,39 @@ fn apply_transform(cursor: &mut Cursor<'_>, argument: &str) {
 
     let start = cursor.cur.clone();
     let mut target = start.clone();
+    let start_clip = cursor.clip;
+    let mut target_clip = start_clip;
     for item in tokenize(&format!("{{{modifiers}}}")) {
         if let Item::Tag { name, arg } = item {
-            apply_transform_style_tag(&mut target, &name, arg.as_deref());
+            if name == "clip" {
+                if let Some(clip) = arg.as_deref().and_then(parse_clip_rect) {
+                    target_clip = Some(clip);
+                }
+            } else {
+                apply_transform_style_tag(&mut target, &name, arg.as_deref());
+            }
         }
     }
     cursor.cur = interpolate_style(&start, &target, progress);
+    cursor.clip = interpolate_clip(start_clip, target_clip, progress);
+}
+
+fn interpolate_clip(
+    start: Option<(f64, f64, f64, f64)>,
+    target: Option<(f64, f64, f64, f64)>,
+    progress: f64,
+) -> Option<(f64, f64, f64, f64)> {
+    match (start, target) {
+        (Some(start), Some(target)) => Some((
+            interpolate_number(start.0, target.0, progress),
+            interpolate_number(start.1, target.1, progress),
+            interpolate_number(start.2, target.2, progress),
+            interpolate_number(start.3, target.3, progress),
+        )),
+        (None, Some(target)) if progress >= 1.0 => Some(target),
+        (Some(_), None) if progress >= 1.0 => None,
+        (start, _) => start,
+    }
 }
 
 fn parse_transform_timing(text: &str, duration_ms: f64) -> Option<TransformTiming> {
@@ -808,6 +833,14 @@ fn parse_pair(a: &str) -> Option<(f64, f64)> {
     let x = parse_num(it.next()?)?;
     let y = parse_num(it.next()?)?;
     Some((x, y))
+}
+
+fn parse_clip_rect(a: &str) -> Option<(f64, f64, f64, f64)> {
+    let values: Vec<f64> = a.split(',').filter_map(parse_finite_num).collect();
+    let [x1, y1, x2, y2] = values.as_slice() else {
+        return None;
+    };
+    Some((*x1, *y1, *x2, *y2))
 }
 
 /// SSA's legacy 11-value `\a` alignment, mapped to the numpad `\an` code
@@ -1133,6 +1166,17 @@ mod tests {
         let (script, event) = one_event(r"{\clip(0,0,100,50)}x");
         let plan = plan_event(&script, &event);
         assert_eq!(plan.clip, Some((0.0, 0.0, 100.0, 50.0)));
+    }
+
+    #[test]
+    fn transform_interpolates_rectangular_clip_bounds() {
+        let (script, event) = one_event(r"{\clip(0,0,100,100)\t(1000,3000,\clip(50,25,150,125))}x");
+        let before = plan_event_at(&script, &event, Duration::from_micros(500_000));
+        let middle = plan_event_at(&script, &event, Duration::from_micros(2_000_000));
+        let after = plan_event_at(&script, &event, Duration::from_micros(3_500_000));
+        assert_eq!(before.clip, Some((0.0, 0.0, 100.0, 100.0)));
+        assert_eq!(middle.clip, Some((25.0, 12.5, 125.0, 112.5)));
+        assert_eq!(after.clip, Some((50.0, 25.0, 150.0, 125.0)));
     }
 
     #[test]

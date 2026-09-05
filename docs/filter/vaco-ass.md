@@ -41,10 +41,11 @@ requested frame time: `\t(tags)`, `\t(accel,tags)`,
 relative to the event start; progress is clamped and raised to the
 positive finite acceleration exponent. Numeric style fields, colours,
 alpha, and X/Y/Z rotation interpolate without retaining an animation
-list. A zero-length interval steps at its end, while invalid acceleration
+list. Rectangular `\clip` bounds interpolate through the same bounded state.
+A zero-length interval steps at its end, while invalid acceleration
 leaves the current style unchanged. Nested `\t` and line-level tags inside
-a transform are ignored deliberately, keeping evaluation non-recursive and
-placement unchanged.
+a transform are ignored deliberately, keeping evaluation non-recursive;
+rectangular clipping is the one line-state exception.
 
 A second group is now resolved at the requested event time: `\move` linearly
 interpolates between its endpoints (with optional event-relative `t1,t2` and
@@ -62,7 +63,7 @@ not this file.
 - A new static tag: add a case in `plan::plan_event_at` and extend
   [`plan::ResolvedStyle`]/[`plan::TextRun`] if it needs a new field on
   the plan.
-- Movement and fades belong in `plan_event_at`, where the event-relative
+- Movement, fades, and rectangular clip animation belong in `plan_event_at`, where the event-relative
   timestamp and duration are available. Keep their state bounded to one
   motion/fade value; do not retain a per-frame animation list.
 - Rotation geometry belongs in `vaco-filter-subtitle`; this crate keeps
@@ -89,7 +90,10 @@ timing). The transform timing formula, three rotation directions, and
 and were cross-checked against ffmpeg-full 9.0.1 with libass 0.17.5 as a
 black box. For the exact 320x240 Arial 48 `TILT` transform fixture, the
 black-box visible bounds change from `88x31` before the interval to `76x76`
-at its midpoint and `31x88` after it. `Cargo.toml` also
+at its midpoint and `31x88` after it. A 320x240 clip fixture measured with
+the same oracle keeps a `62x22` text box at 0/1 seconds, narrows it to
+`51x22` at the 2-second midpoint, and clips it away after 3 seconds.
+`Cargo.toml` also
 declares `vaco-limits`, `vaco-color`, `vaco-pixfmt`, `vaco-frame`,
 `vaco-format-subtitle`, `vaco-filter-draw` and `vaco-filter-text`, but
 no current source file in this crate imports any of them — check with
