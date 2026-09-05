@@ -952,9 +952,11 @@ plausible-looking implementation that a real bitstream falsifies.
   `raw_data_block`'s own `ID_PCE` case, as opposed to the leading one
   `DecoderConfig::try_resolve_pending` looks for) is not a live configuration
   update yet. It is explicitly refused, so the decoder cannot silently apply
-  a stale layout/order/overlap state. A leading PCE is retained for later ADTS
-  packets; this limitation concerns only PCEs that follow audio elements in a
-  raw data block.
+  a stale layout/order/overlap state. Refusal also discards the cached in-band
+  PCE configuration and overlap history, so a following ADTS packet with
+  `channelConfiguration == 0` must introduce a new leading PCE. A leading PCE
+  is retained for later ADTS packets; this limitation concerns only PCEs that
+  follow audio elements in a raw data block.
 - **PCE layouts whose element order differs from native output order** retain
   their channel count but are layout-unspecified unless they match the one
   verified `7.1(wide)` structure above. In particular, a centre `SCE` before

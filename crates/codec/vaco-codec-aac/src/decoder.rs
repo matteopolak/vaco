@@ -400,6 +400,7 @@ impl Decoder for AacDecoder {
             .iter()
             .any(|element| matches!(element, Element::ProgramConfig(_)))
         {
+            self.abandon_raw_data_block();
             return Err(Error::Unsupported(
                 "vaco-codec-aac: mid-stream program_config_element() is not implemented — \
                  refusing to decode with a stale channel configuration",
@@ -1146,6 +1147,8 @@ mod tests {
         let first = Packet::from_slice(&mut budget, &adts_frame_with_leading_mono_pce()).unwrap();
         dec.send_packet(Some(&first)).unwrap();
         let _ = dec.receive_frame().unwrap();
+        assert!(dec.config.is_some());
+        assert!(!dec.overlap.is_empty());
 
         let mut budget = Budget::new(Limits::permissive());
         let following =
@@ -1156,6 +1159,22 @@ mod tests {
                 .to_string()
                 .contains("mid-stream program_config_element")
         );
+        assert!(dec.config.is_none());
+        assert!(dec.overlap.is_empty());
+
+        let mut budget = Budget::new(Limits::permissive());
+        let after_rejection = Packet::from_slice(
+            &mut budget,
+            &adts_frame_with_mono_sce_and_pce_configuration(),
+        )
+        .unwrap();
+        let error = dec.send_packet(Some(&after_rejection)).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("channelConfiguration == 0 and no leading program config element")
+        );
+        assert!(matches!(dec.receive_frame(), Err(Error::NeedMoreInput)));
     }
 
     #[test]
