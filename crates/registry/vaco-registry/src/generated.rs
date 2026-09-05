@@ -615,6 +615,18 @@ pub static COMPONENTS: &[crate::Component] = &[
         extensions: &["flv"],
         mime_types: &["video/x-flv"],
     },
+    #[cfg(feature = "demux-fsb")]
+    crate::Component {
+        kind: crate::Kind::Demuxer,
+        name: "fsb",
+        long_name: Some("FMOD Sample Bank"),
+        krate: "vaco-format-misc-audio",
+        feature: Some("demux-fsb"),
+        media: None,
+        codec: None,
+        extensions: &["fsb"],
+        mime_types: &[],
+    },
     #[cfg(feature = "demux-g722")]
     crate::Component {
         kind: crate::Kind::Demuxer,
@@ -10711,6 +10723,8 @@ pub static DEMUXERS: &[&::vaco_format_core::DemuxerDesc] = &[
     &::vaco_format_misc::flic::DEMUXER,
     #[cfg(feature = "demux-flv")]
     &::vaco_demux_flv::DEMUXER,
+    #[cfg(feature = "demux-fsb")]
+    &::vaco_format_misc_audio::fsb::DEMUXER,
     #[cfg(feature = "demux-g722")]
     &::vaco_format_misc_audio::rawcodec::DEMUXER_G722,
     #[cfg(feature = "demux-g723-1")]
