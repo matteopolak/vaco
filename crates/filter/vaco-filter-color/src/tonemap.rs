@@ -66,10 +66,10 @@ fn hdr_peaks(frame: &Frame) -> (Option<u32>, Option<u32>) {
                     mastering = Some(peak.round() as u32);
                 }
             }
-            FrameSideData::ContentLightLevel { max_cll, .. } if content_light.is_none() => {
-                if *max_cll > 0 {
-                    content_light = Some(*max_cll);
-                }
+            FrameSideData::ContentLightLevel { max_cll, .. }
+                if content_light.is_none() && *max_cll > 0 =>
+            {
+                content_light = Some(*max_cll);
             }
             _ => {}
         }
@@ -87,16 +87,18 @@ impl Filter {
     fn new(opts: &Opts) -> std::result::Result<Self, String> {
         let intent = parse_intent(&opts.intent)?;
         let peak = u32::try_from(opts.peak).map_err(|_| "tonemap: invalid `peak`".to_owned())?;
-        let mut scale_options = ScaleOptions::default();
-        scale_options.intent = intent;
-        scale_options.lut3d_size = opts.lut3d_size;
+        let scale_options = ScaleOptions {
+            intent,
+            lut3d_size: opts.lut3d_size,
+            ..ScaleOptions::default()
+        };
         Ok(Self {
             peak,
             scale_options,
         })
     }
 
-    fn output_color(&self, format: PixFmt, input: vaco_color::ColorInfo) -> vaco_color::ColorInfo {
+    fn output_color(format: PixFmt, input: vaco_color::ColorInfo) -> vaco_color::ColorInfo {
         vaco_color::ColorInfo {
             primaries: ColorPrimaries::Bt709,
             transfer: TransferCharacteristic::Bt709,
@@ -129,7 +131,7 @@ impl Filter {
         let src = ImageSpec::new(format, width, height)
             .with_color(input.color)
             .with_hdr_peaks(mastering_peak, content_light_peak);
-        let output_color = self.output_color(format, input.color);
+        let output_color = Self::output_color(format, input.color);
         let dst = ImageSpec::new(format, width, height)
             .with_color(output_color)
             .with_hdr_peaks(Some(self.peak), None);
@@ -230,7 +232,14 @@ mod tests {
         frame.color.primaries = ColorPrimaries::Bt2020;
         frame.color.transfer = TransferCharacteristic::Smpte2084;
         frame.color.matrix = MatrixCoefficients::Identity;
-        frame.plane_mut(0).unwrap().row_mut(0).unwrap()[..3].copy_from_slice(&[220, 180, 140]);
+        frame
+            .plane_mut(0)
+            .unwrap()
+            .row_mut(0)
+            .unwrap()
+            .get_mut(..3)
+            .unwrap()
+            .copy_from_slice(&[220, 180, 140]);
         frame.side_data.push(FrameSideData::ContentLightLevel {
             max_cll: 1_000,
             max_fall: 400,

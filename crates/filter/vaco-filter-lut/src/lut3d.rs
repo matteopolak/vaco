@@ -241,7 +241,13 @@ impl Cube3d {
         let scale = (self.size.saturating_sub(1)) as f64;
         let p = [r, g, b].map(|value| value.clamp(0.0, 1.0) * scale);
         let base = p.map(|value| value.floor() as usize);
-        let fractions = core::array::from_fn(|index| p[index] - base[index] as f64);
+        let [r_coord, g_coord, b_coord] = p;
+        let [r_base, g_base, b_base] = base;
+        let fractions = [
+            r_coord - r_base as f64,
+            g_coord - g_base as f64,
+            b_coord - b_base as f64,
+        ];
         tetrahedral_interpolate(
             [
                 self.at(base[0], base[1], base[2]),
@@ -561,6 +567,10 @@ mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "the hand-worked tetrahedral coefficients are exact for this binary test point"
+    )]
     fn tetrahedral_uses_the_ordered_simplex_not_trilinear_blending() {
         let cube = Cube3d::parse(
             "LUT_3D_SIZE 2\n\
