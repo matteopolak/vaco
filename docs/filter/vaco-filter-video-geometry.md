@@ -89,6 +89,16 @@ frames), ten rotated A/B/ffmpeg rounds measured a median 0.376× named
 unoptimised path. The output remained byte-exact against both the unoptimised
 binary and ffmpeg, including `-threads 1`, `2`, `4`, and `8`.
 
+For the same one-byte plane case, `hflip` now uses direct byte indexing rather
+than constructing one-byte slices for each pixel. The multi-byte path is
+unchanged. On the same 640×360 `yuv420p` stream (120 frames), ten rotated
+A/B/ffmpeg rounds measured a median 0.086× named `CPU Counters` Cycles and
+0.927× CPU-seconds versus the unoptimised path (wall time was 1.020×, within
+the run's startup noise). The candidate was 0.505× ffmpeg's Cycles in the same
+session. Output was byte-exact against both the unoptimised binary and ffmpeg;
+`hflip` stayed byte-exact at `-threads 1`, `2`, `4`, and `8`, and `vflip` was
+also unchanged and byte-exact in the comparison.
+
 ## The measured edge-case table
 
 | Filter | Case | Measured behaviour (ffmpeg 8.1) |

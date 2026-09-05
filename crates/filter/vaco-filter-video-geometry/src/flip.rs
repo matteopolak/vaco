@@ -104,8 +104,18 @@ impl FrameFilter for Filter {
 }
 
 /// Copy `src` into `dst`, one `unit`-byte chunk at a time, right to left.
+#[allow(
+    clippy::indexing_slicing,
+    reason = "the one-byte fast path proves dst is at least src.len()"
+)]
 fn reverse_units_into(src: &[u8], dst: &mut [u8], unit: usize) {
     if unit == 0 {
+        return;
+    }
+    if unit == 1 && dst.len() >= src.len() {
+        for (i, &byte) in src.iter().enumerate() {
+            dst[src.len() - 1 - i] = byte;
+        }
         return;
     }
     #[allow(
