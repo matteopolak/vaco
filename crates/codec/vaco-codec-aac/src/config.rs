@@ -34,6 +34,7 @@
 //! guess at all.
 
 use vaco_bitstream::BitReader;
+use vaco_chlayout::ChannelLayout;
 use vaco_core::{Error, Result};
 use vaco_parse_aac::{AdtsHeader, AudioObjectType, AudioSpecificConfig, tables};
 
@@ -52,6 +53,9 @@ pub enum ChannelResolution {
     FromPce {
         /// Total channel count, from [`ProgramConfigElement::channel_count`].
         count: u32,
+        /// The known native output layout, when this PCE's element ordering
+        /// does not require the decoder to permute planes first.
+        layout: Option<ChannelLayout>,
     },
     /// `channelConfiguration == 0` and no program config element has been
     /// found yet. [`DecoderConfig::try_resolve_pending`] attempts to clear
@@ -64,7 +68,7 @@ impl ChannelResolution {
     #[must_use]
     pub const fn count(&self) -> Option<u32> {
         match self {
-            Self::Known { count } | Self::FromPce { count } => Some(*count),
+            Self::Known { count } | Self::FromPce { count, .. } => Some(*count),
             Self::Pending => None,
         }
     }
@@ -223,9 +227,26 @@ impl DecoderConfig {
         if self.is_pending() {
             self.channels = ChannelResolution::FromPce {
                 count: pce.channel_count(),
+                layout: pce.known_output_layout(),
             };
         }
         Ok(())
+    }
+
+    /// The native output layout this configuration establishes, when known.
+    ///
+    /// Direct channel configurations use AAC's fixed mapping. A PCE carries
+    /// its own element ordering, so it can name a native layout only when the
+    /// decoder has established that its emitted plane order already matches.
+    #[must_use]
+    pub fn output_layout(&self) -> Option<ChannelLayout> {
+        if self.channel_configuration != 0 {
+            return tables::layout_for_config(self.channel_configuration);
+        }
+        match &self.channels {
+            ChannelResolution::FromPce { layout, .. } => layout.clone(),
+            ChannelResolution::Known { .. } | ChannelResolution::Pending => None,
+        }
     }
 
     /// If this configuration is [`ChannelResolution::Pending`], try to
@@ -262,8 +283,9 @@ mod tests {
         reason = "test code"
     )]
     use super::{ChannelResolution, DecoderConfig};
+    use crate::pce::{ChannelElementRef, ProgramConfigElement};
     use vaco_bitstream::BitWriter;
-    use vaco_parse_aac::AdtsHeader;
+    use vaco_parse_aac::{AdtsHeader, AudioObjectType};
 
     /// Encode a minimal, valid ADTS header (`protection_absent = 1`, so no
     /// CRC), matching `AdtsHeader::parse`'s own bit layout exactly.
@@ -322,6 +344,28 @@ mod tests {
     fn channel_configuration_zero_is_pending() {
         let cfg = parse(2, 0).unwrap();
         assert!(cfg.is_pending());
+    }
+
+    #[test]
+    fn pce_21_layout_is_retained_after_resolution() {
+        let mut cfg = parse(2, 0).unwrap();
+        let pce = ProgramConfigElement {
+            element_instance_tag: 0,
+            object_type: AudioObjectType::AAC_LC,
+            sampling_frequency_index: 3,
+            front: vec![ChannelElementRef {
+                is_cpe: true,
+                tag: 0,
+            }],
+            side: Vec::new(),
+            back: Vec::new(),
+            lfe: vec![1],
+            mono_mixdown_element_number: None,
+            stereo_mixdown_element_number: None,
+            matrix_mixdown: None,
+        };
+        cfg.resolve_with_pce(&pce).unwrap();
+        assert_eq!(cfg.output_layout().map(|layout| layout.mask()), Some(0xb));
     }
 
     #[test]

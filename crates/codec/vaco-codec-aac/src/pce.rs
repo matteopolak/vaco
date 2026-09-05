@@ -14,6 +14,7 @@
 //! decoder, which does read the `raw_data_block`, can and must.
 
 use vaco_bitstream::BitReader;
+use vaco_chlayout::{Channel, ChannelLayout};
 #[cfg(doc)]
 use vaco_core::Error;
 use vaco_core::Result;
@@ -80,6 +81,30 @@ impl ProgramConfigElement {
             v.iter().map(|e| if e.is_cpe { 2 } else { 1 }).sum()
         };
         pairs(&self.front) + pairs(&self.side) + pairs(&self.back) + self.lfe.len() as u32
+    }
+
+    /// The output layout when this PCE's element lists describe one of the
+    /// layouts whose syntactic order already matches native plane order.
+    ///
+    /// More complex PCEs can describe a centre `SCE` before a front `CPE`,
+    /// which requires a plane permutation before assigning a native layout.
+    /// Returning `None` for those preserves the channel count without naming
+    /// a layout whose ordering the decoder has not established.
+    #[must_use]
+    pub fn known_output_layout(&self) -> Option<ChannelLayout> {
+        if !self.side.is_empty() || !self.back.is_empty() {
+            return None;
+        }
+        match (self.front.as_slice(), self.lfe.as_slice()) {
+            ([ChannelElementRef { is_cpe: false, .. }], []) => Some(ChannelLayout::MONO),
+            ([ChannelElementRef { is_cpe: true, .. }], []) => Some(ChannelLayout::STEREO),
+            ([ChannelElementRef { is_cpe: true, .. }], [_]) => ChannelLayout::custom([
+                Channel::FrontLeft,
+                Channel::FrontRight,
+                Channel::LowFrequency,
+            ]),
+            _ => None,
+        }
     }
 
     /// Every channel element this PCE describes, in the order a decoder
@@ -242,6 +267,7 @@ mod tests {
     )]
     use super::{ChannelElementRef, ProgramConfigElement, find_leading_program_config_element};
     use vaco_bitstream::{BitReader, BitWriter};
+    use vaco_parse_aac::AudioObjectType;
 
     /// Hand-build a minimal PCE bitstream: 5.1 laid out as one SCE (centre)
     /// front, one CPE front, one CPE back... no, simpler: mirror
@@ -310,6 +336,29 @@ mod tests {
                     tag: 3
                 },
             ]
+        );
+    }
+
+    #[test]
+    fn a_front_pair_with_one_lfe_has_the_21_output_layout() {
+        let pce = ProgramConfigElement {
+            element_instance_tag: 0,
+            object_type: AudioObjectType::AAC_LC,
+            sampling_frequency_index: 3,
+            front: vec![ChannelElementRef {
+                is_cpe: true,
+                tag: 0,
+            }],
+            side: Vec::new(),
+            back: Vec::new(),
+            lfe: vec![1],
+            mono_mixdown_element_number: None,
+            stereo_mixdown_element_number: None,
+            matrix_mixdown: None,
+        };
+        assert_eq!(
+            pce.known_output_layout().map(|layout| layout.mask()),
+            Some(0xb)
         );
     }
 

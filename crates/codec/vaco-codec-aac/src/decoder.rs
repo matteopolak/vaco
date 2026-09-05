@@ -315,7 +315,8 @@ impl Decoder for AacDecoder {
         reorder_to_output_channel_order(&mut channels, cfg.channel_configuration);
 
         let samples = channels.first().map_or(0, Vec::len) as u32;
-        let layout = vaco_parse_aac::tables::layout_for_config(cfg.channel_configuration)
+        let layout = cfg
+            .output_layout()
             .unwrap_or_else(|| ChannelLayout::unspecified(channels.len() as u32));
         let sample_rate = cfg.sample_rate;
         let mut frame = Frame::alloc_audio(
@@ -594,12 +595,16 @@ mod tests {
         dec.send_packet(Some(&following)).unwrap();
         let frame = dec.receive_frame().unwrap();
         let FrameData::Audio {
-            samples, planes, ..
+            samples,
+            planes,
+            layout,
+            ..
         } = &frame.data
         else {
             panic!("expected an audio frame");
         };
         assert_eq!(*samples, 1024);
         assert_eq!(planes.len(), 1);
+        assert_eq!(layout.mask(), 0x4);
     }
 }

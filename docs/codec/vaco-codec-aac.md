@@ -133,6 +133,12 @@ this crate could state the exact `SCE`/`CPE`/`LFE` element ordering for with
 confidence. `channelConfiguration == 0` resolves exactly, from a real PCE,
 via [`DecoderConfig::try_resolve_pending`].
 
+The decoder also keeps a PCE's native output layout when its element order
+already matches output plane order: front-centre mono, front stereo, and a
+front `CPE` plus one `LFE` (`2.1`). More complex PCEs retain their exact
+channel count but remain layout-unspecified until their required plane
+permutation is implemented and verified.
+
 For raw ADTS, that PCE is normally present only in the first packet. Once a
 leading PCE resolves a configuration, the decoder retains it for later ADTS
 packets that repeat `channelConfiguration == 0` without repeating the PCE. A
@@ -535,6 +541,11 @@ packets as layout-undetermined. This is an exact reachability/count check;
 the general AAC correlation table above remains the reconstruction-quality
 evidence.
 
+For that PCE's front-`CPE` plus `LFE` shape, Vaco now emits a native `2.1`
+frame layout (mask `0x0b`) as well as the exact three-plane/sample count. This
+matches `ffprobe`'s layout label without pretending that every PCE can use the
+same plane order.
+
 ### Reconstruction: correlation/max_abs/rms against `ffmpeg -bitexact`
 
 Same 9 fixtures. `decode_dump` (`examples/decode_dump.rs`) decodes each one
@@ -707,6 +718,11 @@ plausible-looking implementation that a real bitstream falsifies.
   only PCEs that follow audio elements in a raw data block. Rare — a real
   stream's PCE almost always leads its first frame — but a real gap, not yet
   exercised by any fixture in this pass's corpus.
+- **PCE layouts whose element order differs from native output order** retain
+  their channel count but are layout-unspecified. In particular, a centre
+  `SCE` before a front `CPE` needs an explicit plane permutation before it can
+  safely be named as `3.0` or `5.1`; assigning a native layout first would
+  label the decoder's planes incorrectly.
 - **ISO/IEC 14496-26's conformance vector set was not accessible in this
   session** (as already disclosed for #443/#444) — the "Decode accuracy"
   table above is a real measurement against a real decoder's output, not a
