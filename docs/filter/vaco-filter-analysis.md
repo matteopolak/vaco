@@ -1,10 +1,11 @@
 # vaco-filter-analysis
 
-T2/T3 video analysis and detection filters (FT-4.12d, GitHub issue #477):
-`psnr`, `ssim`, `identity`, `msad`, `signalstats`, `blackdetect`,
-`blackframe`, `bbox`, `entropy`, `cropdetect` — ten of `planning/16-filters.md`
-§4.2's twenty-three-filter row (the row is video, checked against the
-plan directly rather than via the earlier, wrongly-cited §4.3).
+T2/T3 video analysis and detection filters (FT-4.9): `psnr`, `ssim`,
+`identity`, `msad`, `vmafmotion`, `signalstats`, `blackdetect`,
+`blackframe`, `bbox`, `entropy`, `cropdetect`, `showinfo`, and `scdet`.
+They are the reachable part of `planning/16-filters.md` §4.2's video metrics
+row (checked against the plan directly rather than the earlier, wrongly-cited
+§4.3).
 
 **2026-08-23 continuation pass**: added `entropy` and `cropdetect` (this
 wave's own two best-value picks), extended `signalstats` from 15 to 25 of
@@ -16,25 +17,26 @@ per-filter sections below for the specifics.
 
 ## Row membership, checked against the reference
 
-All twenty-three names in the plan's row (`psnr, ssim, ssim360, xpsnr, vif,
+All twenty-four names in the plan's row (`psnr, ssim, ssim360, xpsnr, vif,
 vmafmotion, msad, identity, blackdetect, blockdetect, bitplanenoise,
 entropy, siti, signalstats, readeia608, readvitc, showinfo,
 photosensitivity, scdet, bbox, codecview, blackframe, cropdetect,
 signature`) were checked against `ffmpeg -hide_banner -filters` and
-`ffmpeg -h filter=<name>` (ffmpeg 8.1, 2026-08-23). **All twenty-three exist
+`ffmpeg -h filter=<name>` (ffmpeg 8.1, 2026-08-23). **All twenty-four exist
 in the reference with that exact name.** The row matches the reference in
 both directions — nothing to add, nothing to drop.
 
-## What landed, and why the other thirteen did not
+## What landed, and why the other eleven did not
 
-**Landed** (ten): `psnr`, `ssim`, `identity`, `msad`, `signalstats`,
-`blackdetect`, `blackframe`, `bbox`, `entropy`, `cropdetect`.
+**Landed** (thirteen): `psnr`, `ssim`, `identity`, `msad`, `vmafmotion`,
+`signalstats`, `blackdetect`, `blackframe`, `bbox`, `entropy`, `cropdetect`,
+`showinfo`, `scdet`.
 
-**Explicitly named as likely-to-leave, left**: `vmafmotion`, `ssim360`,
-`vif`, `signature`. `vif` needs a wavelet natural-scene-statistics model
+**Explicitly named as likely-to-leave, left**: `ssim360`, `vif`, `signature`.
+`vif` needs a wavelet natural-scene-statistics model
 from a separate paper (Sheikh & Bovik 2006) not implemented in this wave;
-`vmafmotion`/`ssim360` build on machinery this crate did not extend to
-them; `signature` (MPEG-7 video signature) is a standalone algorithm
+`ssim360` builds on projection machinery this crate does not provide;
+`signature` (MPEG-7 video signature) is a standalone algorithm
 (region partitioning, per-region feature vectors, a matching layer) out of
 proportion to this wave.
 
@@ -109,6 +111,28 @@ other filters are verified against was judged worse than leaving it out.
   — the opposite of the other four. Still left unimplemented for the
   reason already on record: the per-block perceptual weighting itself,
   not the adapter choice, is the unmeasured part.
+
+### `vmafmotion` — adjacent-luma mean absolute difference
+
+`vmafmotion` retains the preceding frame, compares its luma plane with the
+next frame, and exports `lavfi.vmafmotion.score` with two fractional digits.
+It measures mean absolute sample difference directly, rather than the `0..1`
+normalized score used by `msad`: uniform transitions of `6`, `14`, `84`, and
+`184` report exactly `6.00`, `14.00`, `84.00`, and `184.00`. A 64x64 frame
+whose left half alone changes by 84 reports `42.00`, proving pixel-count
+weighting.
+
+The first frame is `0.00`; `16 -> 100 -> 40 -> 16` reports `0.00, 84.00,
+60.00, 24.00`, establishing immediate-predecessor state. `flush_state` drops
+that predecessor, so a new segment starts at `0.00`. The public VMAF feature
+description independently calls Motion2 the average absolute luma-pixel
+difference; direct `ffprobe -show_frames` probes establish this filter's
+metadata key, precision, and state behavior.
+
+`stats_file`/`f` are accepted because the reference advertises them, but this
+filter graph has no filter-owned file-output channel. Per-frame metadata is
+the reachable output channel; adding side-effecting file I/O here would be an
+architectural change, not a metric implementation detail.
 
 ## The interface this crate depends on: `Frame::metadata()` (gap 11)
 

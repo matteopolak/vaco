@@ -51,6 +51,7 @@ const KNOWN_OPTIONS: &[(&str, &[&str])] = &[
     ("showinfo", &["checksum", "udu_sei_as_ascii"]),
     ("signalstats", &["stat", "out", "c", "color"]),
     ("ssim", &["stats_file", "f"]),
+    ("vmafmotion", &["stats_file", "f"]),
 ];
 
 /// Rejects any `key=value` argument whose key is not one of the
@@ -95,6 +96,7 @@ const NAMES: &[&str] = &[
     "showinfo",
     "signalstats",
     "ssim",
+    "vmafmotion",
 ];
 
 /// Implements [`FilterRegistry`] for every filter in this crate.
@@ -124,6 +126,7 @@ impl FilterRegistry for AnalysisRegistry {
             "showinfo" => crate::showinfo::create(req),
             "signalstats" => crate::signalstats::create(req),
             "ssim" => crate::ssim::create(req),
+            "vmafmotion" => crate::vmafmotion::create(req),
             other => return Err(format!("vaco-filter-analysis: no filter named `{other}`")),
         })
     }
