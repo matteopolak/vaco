@@ -139,9 +139,13 @@ pub struct ItemLocation {
     pub extents: Vec<(u64, u64)>,
 }
 
-/// Read a big-endian value `size` bytes wide. `iloc`'s size nibbles are
-/// specified to be `0`, `4` or `8`; anything else reports `0` rather than
-/// misreading a width this format does not define.
+/// Whether an `iloc` field width is one of the grammar's defined values.
+const fn valid_iloc_size(size: u8) -> bool {
+    matches!(size, 0 | 4 | 8)
+}
+
+/// Read a big-endian value `size` bytes wide after [`valid_iloc_size`] has
+/// accepted the containing header.
 fn read_sized(r: &mut vaco_bitstream::ByteReader<'_>, size: u8) -> u64 {
     match size {
         4 => u64::from(r.be32()),
@@ -169,6 +173,13 @@ pub fn parse_iloc(iloc: &IsoBox<'_>) -> Vec<ItemLocation> {
     } else {
         0
     };
+    if !valid_iloc_size(offset_size)
+        || !valid_iloc_size(length_size)
+        || !valid_iloc_size(base_offset_size)
+        || !valid_iloc_size(index_size)
+    {
+        return Vec::new();
+    }
     let item_count = if full.version < 2 {
         u32::from(r.be16())
     } else {
@@ -488,6 +499,20 @@ mod tests {
         assert_eq!(items[0].item_id, 1);
         assert_eq!(items[0].construction_method, ConstructionMethod::FileOffset);
         assert_eq!(items[0].extents, vec![(0x121, 0x2f9)]);
+    }
+
+    #[test]
+    fn iloc_rejects_an_unsupported_field_width() {
+        let body = [
+            0x43, 0, // offset_size=4, unsupported length_size=3, base_offset_size=0
+            0, 1, // item_count
+            0, 1, // item_id
+            0, 0, // data_reference_index
+            0, 1, // extent_count
+            0, 0, 0, 1, // extent_offset
+        ];
+        let raw = fullbx(b"iloc", 0, 0, &body);
+        assert!(parse_iloc(&first_box(&raw)).is_empty());
     }
 
     #[test]

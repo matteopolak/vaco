@@ -784,7 +784,10 @@ Named so the demuxer's author knows what is not here:
   `clap`'s eight rational fields and resolves the exact integer crop consumed
   by a tile-grid caller; half-pixel centre offsets are retained when the
   resulting edges are integral, while zero denominators, fractional edges and
-  out-of-bounds apertures are refused. Still box-layer only here: `iovl`/`iden`
+  out-of-bounds apertures are refused. `iloc` accepts only its defined `0`,
+  `4`, and `8` byte field widths; an unsupported width refuses the entire
+  location table before it can invent a zero-length extent. Still box-layer
+  only here: `iovl`/`iden`
   derived items, `auxl`/`thmb` reference semantics, and `irot`/`imir`
   transformative properties.
 * **`cmov`.** zlib-compressed `moov`; plan 18 already tiers it as v0.2.
