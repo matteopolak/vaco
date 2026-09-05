@@ -34,7 +34,7 @@ unsupported.
 
 `AacLcSilenceEncoder` is the first encoding slice, deliberately kept smaller
 than a general AAC encoder: it accepts exactly one packed `S16`, mono or
-stereo, 32, 44.1, or 48 kHz frame containing exactly 1024 zero samples per
+stereo, 24, 32, 44.1, or 48 kHz frame containing exactly 1024 zero samples per
 channel. Mono uses a single long-window `SCE`; stereo uses one `CPE` with
 `common_window = 0` and two such channel streams. Both use one `ZERO_HCB`
 section per channel and end with `ID_END`. Non-silent PCM, another sample
@@ -42,32 +42,33 @@ format, another layout/rate, or a short/long frame is refused by name instead
 of being encoded as silence.
 
 The ADTS header uses AAC-LC profile, sampling-frequency index 3 (48 kHz) or 4
-(44.1 kHz) or 5 (32 kHz), the matching mono/stereo channel configuration, no
-CRC, and its exact access-unit length. Three emitted mono 48 kHz packets
-concatenated as an `.aac` elementary stream were read by `ffprobe 9.0.1` as
-`codec_name=aac`, `sample_rate=48000`, and `channels=1`; `ffmpeg 9.0.1`
-decoded exactly 3,072 samples / 12,288 `f32le` bytes. The independently emitted
-48 kHz, 44.1 kHz, and 32 kHz stereo streams each report their matching rate and
-`channels=2`, then decode to exactly 3,072 samples per channel (6,144
-interleaved samples) / 24,576 `f32le` bytes. Matching 44.1 kHz and 32 kHz mono
-streams likewise decode to exactly 3,072 samples / 12,288 `f32le` bytes. The
-crate's own decoder also reads each packet as one 1,024-sample frame with the
-matching rate and channel count. Silence has no lossy-quality claim to compare
-— these checks establish framing and stream shape, not general quantisation
-quality.
+(44.1 kHz), 5 (32 kHz), or 6 (24 kHz), the matching mono/stereo channel
+configuration, no CRC, and its exact access-unit length. Three emitted mono 48
+kHz packets concatenated as an `.aac` elementary stream were read by `ffprobe
+9.0.1` as `codec_name=aac`, `sample_rate=48000`, and `channels=1`; `ffmpeg
+9.0.1` decoded exactly 3,072 samples / 12,288 `f32le` bytes. The independently
+emitted 48 kHz, 44.1 kHz, 32 kHz, and 24 kHz stereo streams each report their
+matching rate and `channels=2`, then decode to exactly 3,072 samples per
+channel (6,144 interleaved samples) / 24,576 `f32le` bytes. Matching 44.1 kHz,
+32 kHz, and 24 kHz mono streams likewise decode to exactly 3,072 samples /
+12,288 `f32le` bytes. The crate's own decoder also reads each packet as one
+1,024-sample frame with the matching rate and channel count. Silence has no
+lossy-quality claim to compare — these checks establish framing and stream
+shape, not general quantisation quality.
 
 `AacLcSilenceAccessUnit::from_frame` is the separate mux-facing boundary. It
 returns the unframed `raw_data_block()` bytes and the exact two-byte AAC-LC
 `AudioSpecificConfig`: `11 88`/`11 90` for 48 kHz mono/stereo and
 `12 08`/`12 10` for 44.1 kHz mono/stereo, and `12 88`/`12 90` for 32 kHz
-mono/stereo. A container writer must attach that config as AAC extradata and
-use the raw payload as its packet body; it must not place ADTS bytes in such a
-container. The existing `AacLcSilenceEncoder` delegates to this raw builder and
-only adds ADTS, so it remains useful for playable elementary streams. The
-stereo raw API tests wrap three returned raw payloads only for the independent
-ADTS oracle: `ffprobe` reports AAC, the matching 32/44.1/48 kHz rate, and two
-channels; `ffmpeg` emits exactly 24,576 zero `f32le` bytes; Vaco also decodes
-each raw payload directly after its matching ASC is set as extradata.
+mono/stereo, and `13 08`/`13 10` for 24 kHz mono/stereo. A container writer
+must attach that config as AAC extradata and use the raw payload as its packet
+body; it must not place ADTS bytes in such a container. The existing
+`AacLcSilenceEncoder` delegates to this raw builder and only adds ADTS, so it
+remains useful for playable elementary streams. The stereo raw API tests wrap
+three returned raw payloads only for the independent ADTS oracle: `ffprobe`
+reports AAC, the matching 24/32/44.1/48 kHz rate, and two channels; `ffmpeg`
+emits exactly 24,576 zero `f32le` bytes; Vaco also decodes each raw payload
+directly after its matching ASC is set as extradata.
 
 Both are direct APIs only, intentionally not registered generic encoders or
 container integrations. Full AAC-LC encoding still needs transform,
@@ -979,7 +980,7 @@ plausible-looking implementation that a real bitstream falsifies.
 ## Configuration
 
 `AacLcSilenceEncoder` has no runtime options: its fixed input contract is
-packed `S16`, mono or stereo, 32, 44.1, or 48 kHz, 1024 all-zero samples per
+packed `S16`, mono or stereo, 24, 32, 44.1, or 48 kHz, 1024 all-zero samples per
 channel. The gating feature,
 `patent-encumbered-aac-decode`, is set in `vaco-component.toml` and consumed entirely by
 `vaco-registry`/`cargo xtask gen-registry`/`cargo xtask patent-gate` — see
