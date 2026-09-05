@@ -38,6 +38,7 @@ pub struct TileCabacState<'a> {
     first_ctb_grandchild_split: Option<bool>,
     first_ctb_leaf_nxn: Option<bool>,
     first_ctb_leaf_prev_intra: Option<bool>,
+    first_ctb_leaf_mpm_prefix: Option<bool>,
 }
 
 impl TileCabacState<'_> {
@@ -288,6 +289,37 @@ impl TileCabacState<'_> {
         if self.first_ctb_leaf_prev_intra != Some(true) {
             return Err(Error::Unsupported(
                 "vaco-codec-hevc: first tile leaf has no explicit mpm_idx",
+            ));
+        }
+        if leaf_log2_size != min_cb_log2_size {
+            return Err(Error::InvalidData(
+                "vaco-codec-hevc: first tile leaf dimensions are invalid",
+            ));
+        }
+        let prefix = self.cabac.decode_bypass() != 0;
+        self.first_ctb_leaf_mpm_prefix = Some(prefix);
+        Ok(prefix)
+    }
+
+    /// Decode the second bypass-coded prefix bin of the first PU's `mpm_idx`.
+    ///
+    /// The first prefix bin must be 1 before this bin exists. A zero selects
+    /// MPM index 1 and a one selects index 2; the resolved mode itself remains
+    /// unconsumed.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`vaco_core::Error::Unsupported`] when the first prefix bin was
+    /// not established as 1, and [`vaco_core::Error::InvalidData`] for
+    /// inconsistent leaf dimensions.
+    pub fn decode_first_ctb_leaf_mpm_idx_suffix(
+        &mut self,
+        leaf_log2_size: u32,
+        min_cb_log2_size: u32,
+    ) -> Result<bool> {
+        if self.first_ctb_leaf_mpm_prefix != Some(true) {
+            return Err(Error::Unsupported(
+                "vaco-codec-hevc: first tile leaf has no mpm_idx suffix bin",
             ));
         }
         if leaf_log2_size != min_cb_log2_size {
@@ -565,6 +597,7 @@ impl TileLayout {
                 first_ctb_grandchild_split: None,
                 first_ctb_leaf_nxn: None,
                 first_ctb_leaf_prev_intra: None,
+                first_ctb_leaf_mpm_prefix: None,
             });
         }
         Ok(states)
