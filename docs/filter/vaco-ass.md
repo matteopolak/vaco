@@ -50,11 +50,11 @@ rectangular clipping is the one line-state exception.
 A second group is now resolved at the requested event time: `\move` linearly
 interpolates between its endpoints (with optional event-relative `t1,t2` and
 clamping outside that interval), while `\fad` and the two-segment `\fade`
-forms adjust all four rendered colour alphas. `\fax`/`\fay` shear is parsed
-and ignored. `\frx`/`\fry`/
-`\frz`/`\fr` carry static X/Y/Z angles on each run and `\org` carries the
-optional line rotation origin; `vaco-filter-subtitle` projects them when
-it rasterises the plan. See
+forms adjust all four rendered colour alphas. `\fax`/`\fay` resolve horizontal
+and vertical shear factors, including interpolation inside `\t(...)`.
+`\frx`/`\fry`/`\frz`/`\fr` carry static X/Y/Z angles on each run and `\org`
+carries the optional line rotation origin; `vaco-filter-subtitle` projects
+both rotations and shears when rasterising the plan. See
 `plan.rs`'s own doc for the full, current list — it is the authority,
 not this file.
 
@@ -69,6 +69,9 @@ not this file.
 - Rotation geometry belongs in `vaco-filter-subtitle`; this crate keeps
   `\frx`/`\fry`/`\frz` and `\org` in script coordinates so the renderer
   can scale the pivot and camera distance exactly once.
+- Shear geometry belongs in `vaco-filter-subtitle`; this crate keeps
+  `\fax`/`\fay` as bounded style factors so the frame renderer can compose
+  them with projective rotation.
 - Add a `\t`-animatable run-style field in `plan.rs`'s bounded
   `apply_transform_style_tag` and `interpolate_style` pair. Placement and
   animated clipping need their own point-in-time line state; do not make

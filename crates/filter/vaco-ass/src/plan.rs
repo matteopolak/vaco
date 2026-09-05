@@ -7,7 +7,7 @@
 //!
 //! # Static tags and style transforms (GitHub #487 / #488)
 //!
-//! Implemented: `\b \i \u \s \fn \fs \fscx \fscy \fsp \frx \fry \frz \fr \bord
+//! Implemented: `\b \i \u \s \fn \fs \fscx \fscy \fsp \fax \fay \frx \fry \frz \fr \bord
 //! \xbord \ybord \shad \xshad \yshad \blur \be \c \1c \2c \3c \4c \alpha
 //! \1a \2a \3a \4a \an \a \pos \org \clip \r`.
 //!
@@ -25,13 +25,11 @@
 //! `\k`/
 //! `\kf`/`\ko`/`\K` retain centisecond syllable intervals and `\p<n>`
 //! retains drawing-command text, its scale, and `\pbo` baseline offset.
-//! `\fax`/`\fay` (shear) are parsed and
-//! ignored. `\frx`/`\fry`/`\frz`/`\fr` carry static 3-D Euler angles on
-//! each run, and `\org` carries their optional line origin for the
-//! downstream subtitle renderer.
+//! `\fax`/`\fay` carry horizontal/vertical shear factors. `\frx`/`\fry`/
+//! `\frz`/`\fr` carry static 3-D Euler angles on each run, and `\org` carries
+//! their optional line origin for the downstream subtitle renderer.
 //!
-//! The remaining shear and vector-clip gaps are real, named limitations — not
-//! silent guesses.
+//! Vector clips remain a real, named limitation — not a silent guess.
 
 use vaco_core::{Duration, Rgba};
 
@@ -65,6 +63,10 @@ pub struct ResolvedStyle {
     pub angle_y: f64,
     /// Z-axis rotation in degrees (`\frz`/`\fr`).
     pub angle_z: f64,
+    /// Horizontal shear factor (`\fax`).
+    pub shear_x: f64,
+    /// Vertical shear factor (`\fay`).
+    pub shear_y: f64,
     pub border_style: i32,
     pub outline: f64,
     pub shadow: f64,
@@ -91,6 +93,8 @@ impl ResolvedStyle {
             angle_x: 0.0,
             angle_y: 0.0,
             angle_z: s.angle,
+            shear_x: 0.0,
+            shear_y: 0.0,
             border_style: s.border_style,
             outline: s.outline,
             shadow: s.shadow,
@@ -390,6 +394,8 @@ fn apply_tag(cursor: &mut Cursor<'_>, name: &str, arg: Option<&str>, drawing_dep
         "frx" => cursor.cur.angle_x = parse_num(a).unwrap_or(cursor.cur.angle_x),
         "fry" => cursor.cur.angle_y = parse_num(a).unwrap_or(cursor.cur.angle_y),
         "frz" | "fr" => cursor.cur.angle_z = parse_num(a).unwrap_or(cursor.cur.angle_z),
+        "fax" => cursor.cur.shear_x = parse_num(a).unwrap_or(cursor.cur.shear_x),
+        "fay" => cursor.cur.shear_y = parse_num(a).unwrap_or(cursor.cur.shear_y),
         "bord" => {
             let v = parse_num(a).unwrap_or(cursor.cur.outline);
             cursor.cur.outline = v;
@@ -736,6 +742,8 @@ fn apply_transform_style_tag(style: &mut ResolvedStyle, name: &str, arg: Option<
         "frx" => style.angle_x = parse_num(a).unwrap_or(style.angle_x),
         "fry" => style.angle_y = parse_num(a).unwrap_or(style.angle_y),
         "frz" | "fr" => style.angle_z = parse_num(a).unwrap_or(style.angle_z),
+        "fax" => style.shear_x = parse_num(a).unwrap_or(style.shear_x),
+        "fay" => style.shear_y = parse_num(a).unwrap_or(style.shear_y),
         "bord" | "xbord" | "ybord" => {
             style.outline = parse_num(a).unwrap_or(style.outline);
         }
@@ -795,6 +803,8 @@ fn interpolate_style(
     result.angle_x = interpolate_number(start.angle_x, target.angle_x, progress);
     result.angle_y = interpolate_number(start.angle_y, target.angle_y, progress);
     result.angle_z = interpolate_number(start.angle_z, target.angle_z, progress);
+    result.shear_x = interpolate_number(start.shear_x, target.shear_x, progress);
+    result.shear_y = interpolate_number(start.shear_y, target.shear_y, progress);
     result.outline = interpolate_number(start.outline, target.outline, progress);
     result.shadow = interpolate_number(start.shadow, target.shadow, progress);
     result.blur = interpolate_number(start.blur, target.blur, progress);
@@ -926,6 +936,20 @@ mod tests {
         assert_eq!(plan.runs[1].style.angle_x, 0.0);
         assert_eq!(plan.runs[1].style.angle_y, 0.0);
         assert_eq!(plan.runs[1].style.angle_z, 0.0);
+    }
+
+    #[test]
+    fn shear_tags_are_resolved_and_interpolated() {
+        let (script, event) = one_event(r"{\fax.25\fay-.5\t(1000,3000,\fax1\fay.5)}x");
+        let before = plan_event_at(&script, &event, Duration::from_micros(500_000));
+        let middle = plan_event_at(&script, &event, Duration::from_micros(2_000_000));
+        let after = plan_event_at(&script, &event, Duration::from_micros(3_500_000));
+        assert_eq!(before.runs[0].style.shear_x, 0.25);
+        assert_eq!(before.runs[0].style.shear_y, -0.5);
+        assert_eq!(middle.runs[0].style.shear_x, 0.625);
+        assert_eq!(middle.runs[0].style.shear_y, 0.0);
+        assert_eq!(after.runs[0].style.shear_x, 1.0);
+        assert_eq!(after.runs[0].style.shear_y, 0.5);
     }
 
     #[test]

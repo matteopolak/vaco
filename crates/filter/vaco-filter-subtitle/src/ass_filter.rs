@@ -26,6 +26,8 @@
 //! every event renders as outline+shadow (`BorderStyle=1`) regardless.
 //! `\frx`/`\fry`/`\frz`/`\fr` project that mask around `\org`, or the
 //! line's aligned position when no explicit rotation origin is present.
+//! `\fax`/`\fay` compose horizontal/vertical shear with that projection;
+//! their coordinate origin is independent of `\org`.
 
 use vaco_core::{Duration, Error, MediaType, Result};
 use vaco_filter_core::adapt::{FrameFilter, FrameOut, Simple};
@@ -195,12 +197,17 @@ pub fn render_at(
 
         let mut base_mask = renderer.rasterise(&layout, origin)?;
         let angles = (style.angle_x, style.angle_y, style.angle_z);
+        let shear = (style.shear_x, style.shear_y);
         if [angles.0, angles.1, angles.2]
             .iter()
             .all(|angle| angle.is_finite())
             && [angles.0, angles.1, angles.2]
                 .iter()
                 .any(|angle| angle.rem_euclid(360.0).abs() > f64::EPSILON)
+            || [shear.0, shear.1].iter().all(|factor| factor.is_finite())
+                && [shear.0, shear.1]
+                    .iter()
+                    .any(|factor| factor.abs() > f64::EPSILON)
         {
             let rotation_origin = plan
                 .origin
@@ -212,6 +219,7 @@ pub fn render_at(
                 renderer.budget_mut(),
                 rotation_origin,
                 angles,
+                shear,
                 ASS_CAMERA_DISTANCE * scale_y,
                 (width, height),
             )?;
@@ -706,6 +714,9 @@ struct ProjectiveTransform {
     map_yy: f64,
     depth_x: f64,
     depth_y: f64,
+    shear_origin: Option<(f64, f64)>,
+    shear_x: f64,
+    shear_y: f64,
 }
 
 impl ProjectiveTransform {
@@ -732,7 +743,17 @@ impl ProjectiveTransform {
             map_yy: -sin_z * sin_y * sin_x + cos_z * cos_x,
             depth_x: sin_y,
             depth_y: -cos_y * sin_x,
+            shear_origin: None,
+            shear_x: 0.0,
+            shear_y: 0.0,
         })
+    }
+
+    fn with_shear(mut self, origin: (f64, f64), shear: (f64, f64)) -> Self {
+        self.shear_origin = Some(origin);
+        self.shear_x = shear.0;
+        self.shear_y = shear.1;
+        self
     }
 
     fn denominator(self, x: f64, y: f64) -> f64 {
@@ -742,6 +763,11 @@ impl ProjectiveTransform {
     }
 
     fn project(self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let (x, y) = self.apply_source_shear((x, y))?;
+        self.project_rotated(x, y)
+    }
+
+    fn project_rotated(self, x: f64, y: f64) -> Option<(f64, f64)> {
         let relative_x = x - self.pivot.0;
         let relative_y = y - self.pivot.1;
         let denominator = self.denominator(x, y);
@@ -756,7 +782,25 @@ impl ProjectiveTransform {
         (projected_x.is_finite() && projected_y.is_finite()).then_some((projected_x, projected_y))
     }
 
+    fn apply_source_shear(self, point: (f64, f64)) -> Option<(f64, f64)> {
+        let Some(origin) = self.shear_origin else {
+            return Some(point);
+        };
+        let relative_x = point.0 - origin.0;
+        let relative_y = point.1 - origin.1;
+        let sheared = (
+            origin.0 + relative_x + self.shear_x * relative_y,
+            origin.1 + relative_y + self.shear_y * relative_x,
+        );
+        (sheared.0.is_finite() && sheared.1.is_finite()).then_some(sheared)
+    }
+
     fn unproject(self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let (x, y) = self.unproject_rotated(x, y)?;
+        self.remove_source_shear(x, y)
+    }
+
+    fn unproject_rotated(self, x: f64, y: f64) -> Option<(f64, f64)> {
         let projected_x = x - self.pivot.0;
         let projected_y = y - self.pivot.1;
         let row_1_x = projected_x * self.depth_x - self.focal * self.map_xx;
@@ -777,6 +821,23 @@ impl ProjectiveTransform {
             && self.denominator(source.0, source.1) > NEAR_PLANE_EPSILON)
             .then_some(source)
     }
+
+    fn remove_source_shear(self, x: f64, y: f64) -> Option<(f64, f64)> {
+        let Some(origin) = self.shear_origin else {
+            return Some((x, y));
+        };
+        let relative_x = x - origin.0;
+        let relative_y = y - origin.1;
+        let determinant = 1.0 - self.shear_x * self.shear_y;
+        if !determinant.is_finite() || determinant.abs() <= NEAR_PLANE_EPSILON {
+            return None;
+        }
+        let restored = (
+            origin.0 + (relative_x - self.shear_x * relative_y) / determinant,
+            origin.1 + (relative_y - self.shear_y * relative_x) / determinant,
+        );
+        (restored.0.is_finite() && restored.1.is_finite()).then_some(restored)
+    }
 }
 
 /// Project coverage around a frame-space pivot. Ordinary output bounds
@@ -793,27 +854,36 @@ fn project_mask(
     budget: &mut vaco_limits::Budget,
     pivot: (f64, f64),
     angles: (f64, f64, f64),
+    shear: (f64, f64),
     focal: f64,
     frame_size: (u32, u32),
 ) -> Result<vaco_filter_text::AlphaMask> {
     if source.w == 0 || source.h == 0 {
         return Ok(source.clone());
     }
-    if [angles.0, angles.1, angles.2]
+    let no_rotation = [angles.0, angles.1, angles.2]
         .iter()
-        .all(|angle| angle.rem_euclid(360.0).abs() <= f64::EPSILON)
-    {
+        .all(|angle| angle.rem_euclid(360.0).abs() <= f64::EPSILON);
+    let no_shear = [shear.0, shear.1]
+        .iter()
+        .all(|factor| factor.abs() <= f64::EPSILON);
+    if no_rotation && no_shear {
         return Ok(source.clone());
     }
     let Some(transform) = ProjectiveTransform::new(pivot, angles, focal) else {
         return Ok(source.clone());
     };
+    let transform = transform.with_shear((f64::from(source.x), f64::from(source.y)), shear);
     let left = f64::from(source.x);
     let top = f64::from(source.y);
     let right = left + f64::from(source.w);
     let bottom = top + f64::from(source.h);
     let corners = [(left, top), (right, top), (left, bottom), (right, bottom)];
-    let denominators = corners.map(|(x, y)| transform.denominator(x, y));
+    let denominators = corners.map(|(x, y)| {
+        transform
+            .apply_source_shear((x, y))
+            .map_or(f64::NEG_INFINITY, |(x, y)| transform.denominator(x, y))
+    });
     let has_front = denominators.iter().any(|&value| value > NEAR_PLANE_EPSILON);
     let has_back = denominators
         .iter()
@@ -1076,6 +1146,7 @@ mod tests {
             &mut budget,
             (6.5, 6.5),
             (0.0, 0.0, 90.0),
+            (0.0, 0.0),
             ASS_CAMERA_DISTANCE,
             (20, 20),
         )
@@ -1122,6 +1193,19 @@ mod tests {
     }
 
     #[test]
+    fn shear_and_projection_inverse_recovers_the_source_point() {
+        let transform = ProjectiveTransform::new((23.0, 17.0), (31.0, -22.0, 47.0), 312.5)
+            .expect("finite rotation")
+            .with_shear((0.0, 0.0), (0.25, -0.4));
+        let projected = transform.project(41.0, 29.0).expect("visible point");
+        let restored = transform
+            .unproject(projected.0, projected.1)
+            .expect("inverse point");
+        assert!((restored.0 - 41.0).abs() < 1e-9);
+        assert!((restored.1 - 29.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn z_only_projection_preserves_counterclockwise_rotation() {
         let transform =
             ProjectiveTransform::new((6.0, 6.0), (0.0, 0.0, 90.0), 312.5).expect("finite rotation");
@@ -1142,6 +1226,7 @@ mod tests {
             &mut budget,
             (20.0, 10.0),
             (0.0, 90.0, 0.0),
+            (0.0, 0.0),
             10.0,
             (320, 240),
         )
@@ -1158,6 +1243,7 @@ mod tests {
             &mut tiny_budget,
             (20.0, 10.0),
             (0.0, 90.0, 0.0),
+            (0.0, 0.0),
             10.0,
             (320, 240),
         )
@@ -1261,6 +1347,61 @@ mod tests {
             "base={base:?}, tilted={tilted:?}"
         );
         assert!((2 * tilted.0 + tilted.2).abs_diff(316) <= 8);
+    }
+
+    #[test]
+    fn fax_and_fay_shear_real_rendered_text() {
+        let base = render_bounds(include_str!("../tests/data/fr3d-base.ass"));
+        let fax = render_bounds(include_str!("../tests/data/fax1.ass"));
+        let fay = render_bounds(include_str!("../tests/data/fay1.ass"));
+
+        assert!(fax.2 > base.2 + 10, "base={base:?}, fax={fax:?}");
+        assert!(fax.3.abs_diff(base.3) <= 4, "base={base:?}, fax={fax:?}");
+        assert!(fay.3 > base.3 + 50, "base={base:?}, fay={fay:?}");
+        assert!(fay.2.abs_diff(base.2) <= 4, "base={base:?}, fay={fay:?}");
+    }
+
+    #[test]
+    fn shear_composes_with_z_rotation() {
+        let rotated = render_bounds(include_str!("../tests/data/frz90.ass"));
+        let rotated_and_sheared = render_bounds(include_str!("../tests/data/frz90-fax1.ass"));
+
+        // ffmpeg-full 9.0.1 + libass 0.17.5 reports 33x169 and 31x107 for
+        // these fixtures; shear changes the rotated line's height while its
+        // narrow width remains stable.
+        assert!(
+            rotated_and_sheared.2.abs_diff(rotated.2) <= 8,
+            "rotated={rotated:?}, rotated_and_sheared={rotated_and_sheared:?}"
+        );
+        assert!(
+            rotated_and_sheared.3 + 30 < rotated.3,
+            "rotated={rotated:?}, rotated_and_sheared={rotated_and_sheared:?}"
+        );
+    }
+
+    #[test]
+    fn animated_shear_changes_at_reference_time_points() {
+        let script = include_str!("../tests/data/t-fax-fay.ass");
+        let before = render_bounds_at(script, Duration::from_micros(500_000));
+        let midpoint = render_bounds_at(script, Duration::from_micros(2_000_000));
+        let after = render_bounds_at(script, Duration::from_micros(3_500_000));
+
+        assert!(
+            midpoint.2 > before.2 + 5,
+            "before={before:?}, midpoint={midpoint:?}"
+        );
+        assert!(
+            midpoint.3 > before.3 + 20,
+            "before={before:?}, midpoint={midpoint:?}"
+        );
+        assert!(
+            after.2 > midpoint.2 + 5,
+            "midpoint={midpoint:?}, after={after:?}"
+        );
+        assert!(
+            after.3 > midpoint.3 + 15,
+            "midpoint={midpoint:?}, after={after:?}"
+        );
     }
 
     #[test]

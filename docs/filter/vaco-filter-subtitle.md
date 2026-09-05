@@ -27,9 +27,9 @@ construction, not a stream.
   the projected corners before allocation; a camera-plane crossing uses
   the frame as its finite sampling bound. It is then clipped and
   composited through the same path as unrotated text. `render_at` supplies
-  its frame timestamp to `vaco-ass`, so supported style and X/Y/Z rotation
-  tags nested in `\t(...)` interpolate before layout and projection. The
-  plan holds only the resolved state for that instant rather than an
+  its frame timestamp to `vaco-ass`, so supported style, X/Y/Z rotation, and
+  `\fax`/`\fay` shear tags nested in `\t(...)` interpolate before layout and
+  projection. The plan holds only the resolved state for that instant rather than an
   unbounded animation list. `\move` therefore changes the layout anchor at
   each frame, while `\fad`/`\fade` adjust the resolved fill, outline, shadow,
   and secondary-fill alpha before compositing. Rectangular `\clip` bounds
@@ -89,4 +89,6 @@ distance and checked crops were calibrated with ffmpeg-full 9.0.1/libass
 changes the X-rotated crop to `56:10:132:150`.
 The exact transform-animation fixture changes its visible bounds from
 `88x31` at 0.5 seconds to `76x76` at the 2.0-second midpoint and `31x88`
-at 3.5 seconds.
+at 3.5 seconds. Shear-only fixtures report `86x31` without shear,
+`107x31` with `\fax1`, and `86x107` with `\fay1`; combining `\frz90\fax1`
+reports `33x169` versus `31x107` for the rotation-only and combined fixtures.
