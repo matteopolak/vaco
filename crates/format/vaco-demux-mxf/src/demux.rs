@@ -833,7 +833,10 @@ mod tests {
 
         // Black-box reference: ffprobe 9.0.1 reports time_base=1001/30000,
         // duration_ts=1, duration=0.033367, and nb_read_packets=1.
-        assert_eq!(demux.duration().map(Duration::as_ratio), Some((1001, 30_000)));
+        assert_eq!(
+            demux.duration().map(Duration::as_ratio),
+            Some((1001, 30_000))
+        );
         assert_eq!(
             demux
                 .duration_exact()

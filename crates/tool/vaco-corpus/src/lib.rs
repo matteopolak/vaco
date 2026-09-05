@@ -41,9 +41,10 @@
 //!   drop-in extension of the same content-addressed shape (same
 //!   [`store::ObjectId`], same verified-write discipline) but is out of
 //!   scope for this pass — nothing here assumes a bucket exists.
-//! - **Argon and JVT/JCT-VC have no fetchable entries yet.** `vaco-media.lock`'s
-//!   header explains why (no stable public single-file source was found) and
-//!   records them as an explicit gap rather than omitting them silently.
+//! - **Argon has no fetchable entries yet.** `vaco-media.lock`'s header explains
+//!   why no stable public single-file source was found and records it as an
+//!   explicit gap rather than omitting it silently. The curated JVT/JCT-VC
+//!   entries are fetchable but are intentionally not a full mirror.
 
 #![forbid(unsafe_code)]
 
@@ -120,17 +121,8 @@ mod tests {
         }
     }
 
-    /// `jctvc` (HEVC) and the newer `jvt-h264` suite were a documented gap
-    /// (no stable anonymous mirror found) until 2026-09-01, when the ITU
-    /// wftp3 archive turned out to be reachable anonymously after all — see
-    /// `vaco-media.lock`'s header CORRECTION. This is the inverse of the
-    /// gap check above: assert the resolved state directly, rather than
-    /// leaving a passing test that would go on passing the day the *next*
-    /// suite's gap is closed and say nothing about *this* one specifically
-    /// (AGENT-CONSTRAINTS's "never pin the absence of something the project
-    /// is building" — this is that lesson applied in the other direction:
-    /// pin the *presence* of what was actually built, not a vague "some
-    /// suite has fetchable entries").
+    /// Pin these resolved suites so changes to unrelated gaps cannot make the
+    /// check pass without verifying their entries.
     #[test]
     fn jvt_h264_and_jctvc_are_no_longer_documented_gaps() {
         let lock = embedded_catalogue();
