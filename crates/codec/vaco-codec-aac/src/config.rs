@@ -20,10 +20,10 @@
 //! # Channel-configuration coverage
 //!
 //! `channelConfiguration` 1 (mono), 2 (stereo), 3 (3.0), 4 (4.0), 5 (5.0),
-//! 6 (5.1), and 7 (7.1) are resolved directly. The standard's Table 42
-//! establishes configuration 7's `SCE`/`CPE`/`LFE` order; its direct
-//! 7.1-side mapping is distinct from the PCE-only 7.1(wide) control.
-//! The remaining rarer configurations (11, 12, and 14) are rejected with
+//! 6 (5.1), 7 (7.1), and 12 (7.1) are resolved directly. The standard's
+//! Table 42 establishes configurations 7 and 12's `SCE`/`CPE`/`LFE` order;
+//! their direct 7.1-side mapping is distinct from the PCE-only 7.1(wide)
+//! control. The remaining rarer configurations (11 and 14) are rejected with
 //! [`Error::Unsupported`] rather than guessed at — a wrong element-count
 //! assumption there would desync every channel element's decode after the
 //! first, the same class of bug this workspace has now found and fixed
@@ -91,8 +91,30 @@ fn known_channel_count(channel_configuration: u8) -> Option<u32> {
         5 => Some(5),
         6 => Some(6),
         7 => Some(8),
+        12 => Some(8),
         _ => None,
     }
+}
+
+fn unresolved_channel_configuration_error(channel_configuration: u8) -> Error {
+    let reason = match channel_configuration {
+        11 => {
+            "vaco-codec-aac: channel_configuration 11 is not resolved without \
+             ISO/IEC 14496-3 Table 42's exact element ordering on hand to verify \
+             against — gated rather than guessed (see docs/codec/vaco-codec-aac.md)"
+        }
+        14 => {
+            "vaco-codec-aac: channel_configuration 14 is not resolved without \
+             ISO/IEC 14496-3 Table 42's exact element ordering on hand to verify \
+             against — gated rather than guessed (see docs/codec/vaco-codec-aac.md)"
+        }
+        _ => {
+            "vaco-codec-aac: channel_configuration is not resolved without \
+             ISO/IEC 14496-3 Table 42's exact element ordering on hand to verify \
+             against — gated rather than guessed (see docs/codec/vaco-codec-aac.md)"
+        }
+    };
+    Error::Unsupported(reason)
 }
 
 /// A decoder's resolved configuration: the object type (gated to AAC-LC),
@@ -152,11 +174,8 @@ impl DecoderConfig {
             Some(count) => ChannelResolution::Known { count },
             None if header.channel_configuration == 0 => ChannelResolution::Pending,
             None => {
-                return Err(Error::Unsupported(
-                    "vaco-codec-aac: channel_configuration 11/12/14 are not \
-                     resolved without ISO/IEC 14496-3 Table 42's exact element \
-                     ordering on hand to verify against — gated rather than guessed \
-                     (see docs/codec/vaco-codec-aac.md)",
+                return Err(unresolved_channel_configuration_error(
+                    header.channel_configuration,
                 ));
             }
         };
@@ -201,11 +220,8 @@ impl DecoderConfig {
             Some(count) => ChannelResolution::Known { count },
             None if cfg.channel_configuration == 0 => ChannelResolution::Pending,
             None => {
-                return Err(Error::Unsupported(
-                    "vaco-codec-aac: channel_configuration 11/12/14 are not \
-                     resolved without ISO/IEC 14496-3 Table 42's exact element \
-                     ordering on hand to verify against — gated rather than guessed \
-                     (see docs/codec/vaco-codec-aac.md)",
+                return Err(unresolved_channel_configuration_error(
+                    cfg.channel_configuration,
                 ));
             }
         };
@@ -487,6 +503,32 @@ mod tests {
             cfg.output_layout().and_then(|layout| layout.name()),
             Some("7.1")
         );
+    }
+
+    #[test]
+    fn aac_lc_71_from_real_mp4_asc_resolves_directly() {
+        // ffmpeg's 48 kHz 7.1 AAC-LC MP4 emits this ASC.
+        let asc =
+            vaco_parse_aac::AudioSpecificConfig::parse(&[0x11, 0xe0, 0x56, 0xe5, 0x00]).unwrap();
+        let cfg = DecoderConfig::from_audio_specific_config(&asc).unwrap();
+        assert_eq!(cfg.channels, ChannelResolution::Known { count: 8 });
+        assert_eq!(
+            cfg.output_layout().and_then(|layout| layout.name()),
+            Some("7.1")
+        );
+    }
+
+    #[test]
+    fn configurations_eleven_and_fourteen_remain_named_refusals() {
+        for (configuration, asc_bytes) in [(11, [0x11, 0xd8]), (14, [0x11, 0xf0])] {
+            let asc = vaco_parse_aac::AudioSpecificConfig::parse(&asc_bytes).unwrap();
+            let error = DecoderConfig::from_audio_specific_config(&asc).unwrap_err();
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("channel_configuration {configuration}"))
+            );
+        }
     }
 
     #[test]
