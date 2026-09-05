@@ -257,6 +257,9 @@ pub fn parse_ipma(iprp: &IsoBox<'_>) -> Vec<ItemPropertyAssociation> {
     let Ok(full) = ipma.full() else {
         return Vec::new();
     };
+    if full.version > 1 {
+        return Vec::new();
+    }
     let mut r = full.reader();
     let entry_count = r.be32();
     let large_index = full.flags & 1 != 0;
@@ -627,6 +630,19 @@ mod tests {
             assocs[0].properties,
             vec![(false, 1), (false, 2), (true, 3), (false, 4)]
         );
+    }
+
+    #[test]
+    fn ipma_rejects_an_unknown_version() {
+        let body = [
+            0, 0, 0, 1, // entry_count
+            0, 0, 0, 1, // item_id (the version 1 layout)
+            1, // association_count
+            1, // non-essential property_index
+        ];
+        let ipma = fullbx(b"ipma", 2, 0, &body);
+        let raw = bx(b"iprp", &ipma);
+        assert!(parse_ipma(&first_box(&raw)).is_empty());
     }
 
     #[test]
