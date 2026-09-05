@@ -31,6 +31,7 @@ pub mod case;
 pub mod compare;
 pub mod deviation;
 pub mod divergence;
+pub mod experiments;
 pub mod extract;
 pub mod filterexec;
 pub mod manifest;

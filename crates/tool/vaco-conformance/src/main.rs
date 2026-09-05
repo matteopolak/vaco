@@ -5,6 +5,7 @@
 //! vaco-conformance tables [--deep] [--strict]   differential checks on our static tables
 //! vaco-conformance refbin                       what reference is installed, and does it gate
 //! vaco-conformance run [--suite S] [--tier T] [--case ID]   run declared suites
+//! vaco-conformance experiments [--id ID]                    list format calibration recipes
 //! vaco-conformance divergences                  the allowlist and its health
 //! vaco-conformance explore -- <argv…>           run both binaries and diff, writing nothing
 //! ```
@@ -30,6 +31,7 @@ USAGE:
     vaco-conformance tables [--deep] [--strict]
     vaco-conformance refbin
     vaco-conformance run [--suite <name>] [--tier <tier>] [--case <id>]
+    vaco-conformance experiments [--id <identifier>]
     vaco-conformance divergences
     vaco-conformance explore -- <argv…>
 
@@ -87,6 +89,7 @@ fn main() -> ExitCode {
             value("--tier").as_deref(),
             value("--case").as_deref(),
         ),
+        "experiments" => cmd_experiments(value("--id").as_deref()),
         "divergences" => cmd_divergences(&allow),
         "explore" => cmd_explore(&discovery, &args),
         "-h" | "--help" | "help" => {
@@ -98,6 +101,32 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// Print the stable, reference-only calibration recipe(s) format agents use.
+fn cmd_experiments(id: Option<&str>) -> ExitCode {
+    let experiments: Vec<_> = match id {
+        Some(id) => {
+            if let Some(experiment) = vaco_conformance::experiments::by_id(id) {
+                vec![experiment]
+            } else {
+                eprintln!("unknown format-calibration experiment `{id}`");
+                return ExitCode::from(2);
+            }
+        }
+        None => vaco_conformance::experiments::catalogue().iter().collect(),
+    };
+    for experiment in experiments {
+        let kind = match experiment.kind {
+            vaco_conformance::experiments::ExperimentKind::ReferenceOracle => "oracle",
+            vaco_conformance::experiments::ExperimentKind::DocumentReview => "document-review",
+        };
+        println!(
+            "{} [{kind}] {}\n  {}",
+            experiment.id, experiment.question, experiment.recipe
+        );
+    }
+    ExitCode::SUCCESS
 }
 
 /// Print a loud, impossible-to-miss warning when a binary under test
