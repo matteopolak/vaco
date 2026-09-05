@@ -2867,7 +2867,6 @@ dependencies = [
  "vaco-core",
  "vaco-format-nalu",
  "vaco-frame",
- "vaco-hash",
  "vaco-limits",
  "vaco-packet",
  "vaco-parse-hevc",
@@ -3869,6 +3868,7 @@ dependencies = [
 name = "vaco-filter-deinterlace"
 version = "0.1.0"
 dependencies = [
+ "divan",
  "proptest",
  "smallvec",
  "vaco-core",
