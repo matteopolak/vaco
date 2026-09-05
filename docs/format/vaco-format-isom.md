@@ -797,7 +797,9 @@ Named so the demuxer's author knows what is not here:
   through `3`. `iinf`'s
   declared entry count also bounds
   the `infe` children it exposes, and a truncated `iref` record contributes
-  no partial item graph edge. A truncated `iloc` header or declared extent
+  no partial item graph edge. A demuxer marks an item `dependent` only after
+  its complete TileGrid graph validates. A truncated `iloc` header or
+  declared extent
   list, or an item exceeding the bounded extent count, also refuses the
   entire location table before it can invent a zero-length or wrapped extent,
   silently omit item bytes, surface a trailing item, or apply the wrong

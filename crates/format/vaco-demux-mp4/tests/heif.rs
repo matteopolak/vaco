@@ -296,6 +296,13 @@ fn a_grid_with_mismatched_tile_geometry_is_refused() {
     ));
     assert_eq!(demux.streams().len(), 3, "coded items remain reachable");
     assert!(demux.stream_groups().is_empty(), "invalid grid is absent");
+    assert!(
+        demux
+            .streams()
+            .iter()
+            .all(|stream| !stream.disposition.contains(Disposition::DEPENDENT)),
+        "no TileGrid means no dependent tile membership"
+    );
 }
 
 #[test]

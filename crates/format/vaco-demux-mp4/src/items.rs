@@ -70,14 +70,6 @@ pub(crate) fn build(
     // Coded items become streams in `iinf` order — hidden ones included,
     // because a grid's tiles are hidden and they are exactly what has to be
     // read. Non-coded items (`grid`, `iovl`, `Exif`, `mime`) do not.
-    // A grid's tiles carry `dependent` — **measured**: `ffprobe` prints
-    // `dependent=1` on every `dimg`-referenced tile stream and on nothing else.
-    let tiles: Vec<u32> = parsed
-        .irefs
-        .iter()
-        .filter(|r| r.kind == bt::DIMG)
-        .flat_map(|r| r.to_item_ids.iter().copied())
-        .collect();
     let mut stream_of_item: Vec<(u32, u32)> = Vec::new();
     for info in &parsed.infos {
         if u64::from(out.streams.len() as u32) >= u64::from(budget.limits().max_streams) {
@@ -90,12 +82,9 @@ pub(crate) fn build(
             continue;
         };
         let index = out.streams.len() as u32;
-        let Some(mut stream) = parsed.coded_stream(info, index, budget) else {
+        let Some(stream) = parsed.coded_stream(info, index, budget) else {
             continue;
         };
-        if tiles.contains(&info.item_id) {
-            stream.disposition |= Disposition::DEPENDENT;
-        }
         out.streams.push(stream);
         out.readers.push(item_reader(index, extents));
         stream_of_item.push((info.item_id, index));
@@ -115,6 +104,14 @@ pub(crate) fn build(
         ) else {
             continue;
         };
+        // **Measured**: `ffprobe` prints `dependent=1` on each member of a
+        // tile grid and on nothing else. Do this only after every group
+        // invariant holds, so a refused grid cannot leave stale membership.
+        for stream in &mut out.streams {
+            if group.stream_indices.contains(&stream.index) {
+                stream.disposition |= Disposition::DEPENDENT;
+            }
+        }
         out.groups.push(group);
     }
     out

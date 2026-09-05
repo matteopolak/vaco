@@ -815,8 +815,8 @@ crate decides what becomes a stream:
   because a grid's tiles are what actually has to be read — in `iinf`
   order, with `time_base 1/1`, `r_frame_rate`/`avg_frame_rate 1/1`,
   `nb_frames 1`, no duration, `id` = `item_ID`, `title` = `item_name` when
-  non-empty, `default` on the `pitm` item, `dependent` on every
-  `dimg`-referenced tile. Codec parameters come through the *same*
+  non-empty, `default` on the `pitm` item, `dependent` on each member of an
+  accepted `TileGrid`. Codec parameters come through the *same*
   sample-entry reader tracks use (`track::codec_parameters_with_display`):
   the item's `ipco` properties are re-serialised as the entry's extension
   boxes, because `av1C`/`hvcC`/`colr`/`pasp`/`pixi` are literally the same
@@ -834,7 +834,8 @@ crate decides what becomes a stream:
   tiles' `ispe` gives the canvas (`coded_*`) and per-tile offsets. A grid whose
   tile count is not `rows × columns`, whose tiles are not streams or do not
   share one `ispe` size, whose `ispe` disagrees with its descriptor, or whose
-  output exceeds its canvas produces **no group** rather than a wrong one. An
+  output exceeds its canvas produces **no group** rather than a wrong one, and
+  its coded items retain no stale `dependent` membership. An
   associated `clap` property is
   resolved over the grid's reconstructed output using HEIF §6.5.9 and
   ISOBMFF §12.1.4 centre-offset semantics, then folded into the group's
