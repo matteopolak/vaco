@@ -5,7 +5,8 @@
 //! operate on whole rows or blocks, so dispatch is never paid per pixel and
 //! narrow 4x4/2x2 work can be gathered by the decoder before a call.
 
-use vaco_simd::{KernelSet, Tier};
+use vaco_simd::prelude::*;
+use vaco_simd::{Caps, KernelSet, Tier, dispatch_kernel, ops};
 
 #[cfg(test)]
 use crate::fir::{self, taps};
@@ -90,16 +91,28 @@ pub struct H264McKernels {
 }
 
 impl KernelSet for H264McKernels {
-    fn for_tier(_tier: Tier) -> Self {
-        // The row/block shapes are deliberately identical at every tier for
-        // now. LLVM specialises their straight-line fixed-size loops for the
-        // selected build target, while this stable table is the seam for a
-        // future explicit SIMD body without another decoder API change.
-        Self {
-            luma_half_raw,
-            chroma_batch,
-            weight_uni,
-            weight_bi,
+    fn for_tier(tier: Tier) -> Self {
+        if tier.is_scalar() {
+            return Self {
+                luma_half_raw,
+                chroma_batch,
+                weight_uni,
+                weight_bi,
+            };
+        }
+        match tier {
+            Tier::Scalar => unreachable!("handled above"),
+            Tier::Sse2 => tier_kernels::<1>(),
+            Tier::Sse42 => tier_kernels::<2>(),
+            Tier::Avx2 => tier_kernels::<3>(),
+            Tier::Avx512 => tier_kernels::<4>(),
+            Tier::Neon => tier_kernels::<5>(),
+            _ => Self {
+                luma_half_raw,
+                chroma_batch,
+                weight_uni,
+                weight_bi,
+            },
         }
     }
 
@@ -111,6 +124,30 @@ impl KernelSet for H264McKernels {
             "h264_weight_bi",
         ]
     }
+}
+
+fn tier_kernels<const TIER: u8>() -> H264McKernels {
+    H264McKernels {
+        luma_half_raw: luma_half_raw_tier::<TIER>,
+        chroma_batch: chroma_batch_tier::<TIER>,
+        weight_uni: weight_uni_tier::<TIER>,
+        weight_bi: weight_bi_tier::<TIER>,
+    }
+}
+
+const fn tier_from_code<const TIER: u8>() -> Tier {
+    match TIER {
+        1 => Tier::Sse2,
+        2 => Tier::Sse42,
+        3 => Tier::Avx2,
+        4 => Tier::Avx512,
+        5 => Tier::Neon,
+        _ => Tier::Scalar,
+    }
+}
+
+fn capped_tier<const TIER: u8>() -> Option<Caps> {
+    Caps::detect().capped_at(tier_from_code::<TIER>())
 }
 
 impl Default for H264McKernels {
@@ -137,10 +174,71 @@ fn luma_half_raw(src: &[[u8; 21]; 21], width: usize, height: usize, dst: &mut [[
     }
 }
 
+fn luma_half_raw_tier<const TIER: u8>(
+    src: &[[u8; 21]; 21],
+    width: usize,
+    height: usize,
+    dst: &mut [[i32; 16]; 21],
+) {
+    let Some(caps) = capped_tier::<TIER>() else {
+        return luma_half_raw(src, width, height, dst);
+    };
+    dispatch_kernel!(caps, s => luma_half_raw_simd(s, src, width, height, dst));
+}
+
+#[inline(always)]
+#[allow(
+    clippy::indexing_slicing,
+    reason = "the fixed 21-sample source row covers all six taps for sixteen outputs"
+)]
+fn luma_half_raw_simd<S: Lanes>(
+    simd: S,
+    src: &[[u8; 21]; 21],
+    width: usize,
+    height: usize,
+    dst: &mut [[i32; 16]; 21],
+) {
+    let width = width.min(16);
+    let height = height.min(21);
+    if width != 16 {
+        return luma_half_raw(src, width, height, dst);
+    }
+
+    for (source, dest) in src.iter().zip(dst.iter_mut()).take(height) {
+        let zero = i16x8::splat(simd, 0);
+        let mut lo = zero;
+        let mut hi = zero;
+        for (tap, coefficient) in [1i16, -5, 20, 20, -5, 1].into_iter().enumerate() {
+            let samples = u8x16::from_slice(simd, &source[tap..tap + 16]);
+            let (samples_lo, samples_hi) = samples.widen();
+            lo = ops::simd::wmla_i16::<S, i16x8<S>>(
+                lo,
+                samples_lo.bitcast::<i16x8<S>>(),
+                coefficient,
+            );
+            hi = ops::simd::wmla_i16::<S, i16x8<S>>(
+                hi,
+                samples_hi.bitcast::<i16x8<S>>(),
+                coefficient,
+            );
+        }
+        let (a, b) = lo.widen();
+        let (c, d) = hi.widen();
+        let [d0, d1, d2, d3] = dest.as_chunks_mut::<4>().0 else {
+            continue;
+        };
+        a.store_slice(d0);
+        b.store_slice(d1);
+        c.store_slice(d2);
+        d.store_slice(d3);
+    }
+}
+
 #[allow(
     clippy::indexing_slicing,
     reason = "dy/dx are fixed 0..2 output coordinates and therefore address only the fixed 3x3 input"
 )]
+#[inline(always)]
 fn chroma_2x2(job: &ChromaJob) -> [[u8; 2]; 2] {
     let fx = i32::from(job.frac_x.min(7));
     let fy = i32::from(job.frac_y.min(7));
@@ -160,6 +258,85 @@ fn chroma_batch(jobs: &[ChromaJob], out: &mut [[[u8; 2]; 2]]) {
     for (job, block) in jobs.iter().zip(out) {
         *block = chroma_2x2(job);
     }
+}
+
+fn chroma_batch_tier<const TIER: u8>(jobs: &[ChromaJob], out: &mut [[[u8; 2]; 2]]) {
+    let Some(caps) = capped_tier::<TIER>() else {
+        return chroma_batch(jobs, out);
+    };
+    dispatch_kernel!(caps, s => chroma_batch_simd(s, jobs, out));
+}
+
+#[inline(always)]
+#[allow(
+    clippy::indexing_slicing,
+    clippy::integer_division,
+    reason = "four fixed 2x2 jobs map exactly to sixteen lanes; division rounds down to complete groups"
+)]
+fn chroma_batch_simd<S: Lanes>(simd: S, jobs: &[ChromaJob], out: &mut [[[u8; 2]; 2]]) {
+    let count = jobs.len().min(out.len());
+    let full = (count / 4) * 4;
+    let (Some(job_head), Some(out_head)) = (jobs.get(..full), out.get_mut(..full)) else {
+        return chroma_batch(jobs, out);
+    };
+
+    for (job_group, out_group) in job_head.chunks_exact(4).zip(out_head.chunks_exact_mut(4)) {
+        let mut a = [0u8; 16];
+        let mut b = [0u8; 16];
+        let mut c = [0u8; 16];
+        let mut d = [0u8; 16];
+        let mut fx = [0i16; 16];
+        let mut fy = [0i16; 16];
+        for (job_index, job) in job_group.iter().enumerate() {
+            for dy in 0..2usize {
+                for dx in 0..2usize {
+                    let lane = job_index * 4 + dy * 2 + dx;
+                    a[lane] = job.src[dy][dx];
+                    b[lane] = job.src[dy][dx + 1];
+                    c[lane] = job.src[dy + 1][dx];
+                    d[lane] = job.src[dy + 1][dx + 1];
+                    fx[lane] = i16::from(job.frac_x.min(7));
+                    fy[lane] = i16::from(job.frac_y.min(7));
+                }
+            }
+        }
+
+        let (a0, a1) = u8x16::from_slice(simd, &a).widen();
+        let (b0, b1) = u8x16::from_slice(simd, &b).widen();
+        let (c0, c1) = u8x16::from_slice(simd, &c).widen();
+        let (d0, d1) = u8x16::from_slice(simd, &d).widen();
+        let [fx0, fx1] = fx.as_chunks::<8>().0 else {
+            continue;
+        };
+        let [fy0, fy1] = fy.as_chunks::<8>().0 else {
+            continue;
+        };
+        let fx0 = i16x8::from_slice(simd, fx0);
+        let fx1 = i16x8::from_slice(simd, fx1);
+        let fy0 = i16x8::from_slice(simd, fy0);
+        let fy1 = i16x8::from_slice(simd, fy1);
+        let eight = i16x8::splat(simd, 8);
+        let round = i16x8::splat(simd, 32);
+        let interpolate =
+            |a: u16x8<S>, b: u16x8<S>, c: u16x8<S>, d: u16x8<S>, wx: i16x8<S>, wy: i16x8<S>| {
+                let a = a.bitcast::<i16x8<S>>();
+                let b = b.bitcast::<i16x8<S>>();
+                let c = c.bitcast::<i16x8<S>>();
+                let d = d.bitcast::<i16x8<S>>();
+                let top = a * (eight - wx) + b * wx;
+                let bottom = c * (eight - wx) + d * wx;
+                (top * (eight - wy) + bottom * wy + round) >> 6u32
+            };
+        let lo = interpolate(a0, b0, c0, d0, fx0, fy0);
+        let hi = interpolate(a1, b1, c1, d1, fx1, fy1);
+        ops::simd::pack_u8_from_i16x8::<S>(lo, hi)
+            .store_slice(out_group.as_flattened_mut().as_flattened_mut());
+    }
+
+    chroma_batch(
+        jobs.get(full..count).unwrap_or(&[]),
+        out.get_mut(full..count).unwrap_or(&mut []),
+    );
 }
 
 fn weight_uni(
@@ -191,6 +368,89 @@ fn weight_uni(
                 (value + (1i32 << (log2_denom - 1))) >> log2_denom
             };
             *out = clip_u8(value + offset);
+        }
+    }
+}
+
+fn weight_uni_tier<const TIER: u8>(
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+    params: UniWeight,
+) {
+    let Some(caps) = capped_tier::<TIER>() else {
+        return weight_uni(src, src_stride, dst, dst_stride, width, height, params);
+    };
+    dispatch_kernel!(caps, s => weight_uni_simd(s, src, src_stride, dst, dst_stride, width, height, params));
+}
+
+#[inline(always)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::integer_division,
+    reason = "the public kernel contract is strided; division rounds down to complete sixteen-sample groups"
+)]
+fn weight_uni_simd<S: Lanes>(
+    simd: S,
+    src: &[u8],
+    src_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+    params: UniWeight,
+) {
+    let weight = i16::try_from(params.weight.clamp(-128, 128)).unwrap_or(0);
+    let offset = i16::try_from(params.offset.clamp(-128, 127)).unwrap_or(0);
+    let log2_denom = params.log2_denom.min(7);
+    let round = if log2_denom == 0 {
+        0
+    } else {
+        1i16 << (log2_denom - 1)
+    };
+    let weight_v = i16x8::splat(simd, weight);
+    let offset_v = i16x8::splat(simd, offset);
+    let round_v = i16x8::splat(simd, round);
+
+    for y in 0..height {
+        let src_row = src
+            .get(y.saturating_mul(src_stride)..)
+            .and_then(|row| row.get(..width))
+            .unwrap_or(&[]);
+        let dst_row = dst
+            .get_mut(y.saturating_mul(dst_stride)..)
+            .and_then(|row| row.get_mut(..width))
+            .unwrap_or(&mut []);
+        let len = src_row.len().min(dst_row.len());
+        let full = (len / 16) * 16;
+        let (Some(src_head), Some(dst_head)) = (src_row.get(..full), dst_row.get_mut(..full))
+        else {
+            continue;
+        };
+        for (source, dest) in src_head.chunks_exact(16).zip(dst_head.chunks_exact_mut(16)) {
+            let (lo, hi) = u8x16::from_slice(simd, source).widen();
+            let lo = ((lo.bitcast::<i16x8<S>>() * weight_v + round_v) >> u32::from(log2_denom))
+                + offset_v;
+            let hi = ((hi.bitcast::<i16x8<S>>() * weight_v + round_v) >> u32::from(log2_denom))
+                + offset_v;
+            ops::simd::pack_u8_from_i16x8::<S>(lo, hi).store_slice(dest);
+        }
+        for (&sample, out) in src_row
+            .get(full..len)
+            .unwrap_or(&[])
+            .iter()
+            .zip(dst_row.get_mut(full..len).unwrap_or(&mut []).iter_mut())
+        {
+            let value = i32::from(sample) * i32::from(weight);
+            let value = if log2_denom == 0 {
+                value
+            } else {
+                (value + i32::from(round)) >> log2_denom
+            };
+            *out = clip_u8(value + i32::from(offset));
         }
     }
 }
@@ -229,6 +489,144 @@ fn weight_bi(
         for ((&sample0, &sample1), out) in row0.iter().zip(row1).zip(dst_row) {
             let sum = i32::from(sample0) * weight0 + i32::from(sample1) * weight1 + round;
             *out = clip_u8((sum >> shift) + offset);
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn weight_bi_tier<const TIER: u8>(
+    src0: &[u8],
+    src0_stride: usize,
+    src1: &[u8],
+    src1_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+    params: BiWeight,
+) {
+    if !bi_weights_fit_i16(params) {
+        return weight_bi(
+            src0,
+            src0_stride,
+            src1,
+            src1_stride,
+            dst,
+            dst_stride,
+            width,
+            height,
+            params,
+        );
+    }
+    let Some(caps) = capped_tier::<TIER>() else {
+        return weight_bi(
+            src0,
+            src0_stride,
+            src1,
+            src1_stride,
+            dst,
+            dst_stride,
+            width,
+            height,
+            params,
+        );
+    };
+    dispatch_kernel!(caps, s => weight_bi_simd(s, src0, src0_stride, src1, src1_stride, dst, dst_stride, width, height, params));
+}
+
+fn bi_weights_fit_i16(params: BiWeight) -> bool {
+    let weight0 = i64::from(params.weight0.clamp(-128, 128)).abs();
+    let weight1 = i64::from(params.weight1.clamp(-128, 128)).abs();
+    let round = 1i64 << params.log2_denom.min(7);
+    255 * (weight0 + weight1) + round <= i64::from(i16::MAX)
+}
+
+#[inline(always)]
+#[allow(
+    clippy::too_many_arguments,
+    clippy::integer_division,
+    reason = "the public kernel contract is strided; division rounds down to complete sixteen-sample groups"
+)]
+fn weight_bi_simd<S: Lanes>(
+    simd: S,
+    src0: &[u8],
+    src0_stride: usize,
+    src1: &[u8],
+    src1_stride: usize,
+    dst: &mut [u8],
+    dst_stride: usize,
+    width: usize,
+    height: usize,
+    params: BiWeight,
+) {
+    let weight0 = i16::try_from(params.weight0.clamp(-128, 128)).unwrap_or(0);
+    let weight1 = i16::try_from(params.weight1.clamp(-128, 128)).unwrap_or(0);
+    let offset = i16::try_from(params.offset.clamp(-128, 127)).unwrap_or(0);
+    let log2_denom = params.log2_denom.min(7);
+    let round = 1i16 << log2_denom;
+    let shift = u32::from(log2_denom) + 1;
+    let is_average = weight0 == 1 && weight1 == 1 && offset == 0 && log2_denom == 0;
+    let weight0_v = i16x8::splat(simd, weight0);
+    let weight1_v = i16x8::splat(simd, weight1);
+    let offset_v = i16x8::splat(simd, offset);
+    let round_v = i16x8::splat(simd, round);
+
+    for y in 0..height {
+        let row0 = src0
+            .get(y.saturating_mul(src0_stride)..)
+            .and_then(|row| row.get(..width))
+            .unwrap_or(&[]);
+        let row1 = src1
+            .get(y.saturating_mul(src1_stride)..)
+            .and_then(|row| row.get(..width))
+            .unwrap_or(&[]);
+        let dst_row = dst
+            .get_mut(y.saturating_mul(dst_stride)..)
+            .and_then(|row| row.get_mut(..width))
+            .unwrap_or(&mut []);
+        let len = row0.len().min(row1.len()).min(dst_row.len());
+        let full = (len / 16) * 16;
+        let (Some(head0), Some(head1), Some(dst_head)) =
+            (row0.get(..full), row1.get(..full), dst_row.get_mut(..full))
+        else {
+            continue;
+        };
+        for ((a, b), dest) in head0
+            .chunks_exact(16)
+            .zip(head1.chunks_exact(16))
+            .zip(dst_head.chunks_exact_mut(16))
+        {
+            let av = u8x16::from_slice(simd, a);
+            let bv = u8x16::from_slice(simd, b);
+            if is_average {
+                ops::simd::rounded_avg_u8::<S, u8x16<S>>(av, bv).store_slice(dest);
+                continue;
+            }
+            let (a0, a1) = av.widen();
+            let (b0, b1) = bv.widen();
+            let lo = ((a0.bitcast::<i16x8<S>>() * weight0_v
+                + b0.bitcast::<i16x8<S>>() * weight1_v
+                + round_v)
+                >> shift)
+                + offset_v;
+            let hi = ((a1.bitcast::<i16x8<S>>() * weight0_v
+                + b1.bitcast::<i16x8<S>>() * weight1_v
+                + round_v)
+                >> shift)
+                + offset_v;
+            ops::simd::pack_u8_from_i16x8::<S>(lo, hi).store_slice(dest);
+        }
+        for ((&sample0, &sample1), out) in row0
+            .get(full..len)
+            .unwrap_or(&[])
+            .iter()
+            .zip(row1.get(full..len).unwrap_or(&[]))
+            .zip(dst_row.get_mut(full..len).unwrap_or(&mut []))
+        {
+            let sum = i32::from(sample0) * i32::from(weight0)
+                + i32::from(sample1) * i32::from(weight1)
+                + i32::from(round);
+            *out = clip_u8((sum >> shift) + i32::from(offset));
         }
     }
 }

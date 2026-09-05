@@ -106,13 +106,13 @@ payoff is entirely in the FIR taps.
   the same way §2.2 does before trusting it — the DC/impulse checks are
   cheap and this project has shipped a wrong-but-plausible table before
   (H.264 CAVLC, a different crate, same lesson).
-- **D-08b (#259) is explicitly not done here**: a full `vaco-checkasm`
-  differential matrix across every tap count and every SIMD tier
-  (SSE2/SSE4.2/AVX2/AVX-512/NEON), and tier-specific hand-tuned
-  specialisations beyond the one generic dispatched body. One tap set
-  (H.264's six-tap) is wired into `vaco-checkasm::kernels::fir_mc` as the
-  worked example; extending that table to every tap count a consumer adds is
-  the natural next step, following that module's own pattern.
+- **Tier specialisations and their gate**: `fir_row` covers every shipped tap
+  set, while `h264::H264McKernels` has fixed-width luma/chroma/weight bodies
+  monomorphised for every supported tier. `vaco-checkasm` crosses both tap
+  sets, every native vector tail, every chroma eighth-pel position, and every
+  tier the current CPU genuinely supports. `Caps::capped_at` can select a
+  weaker supported tier without fabricating a capability token. Keep new tap
+  sets and new H.264 table entries in that matrix.
 - **H.264's settled decoder contract** is `h264::H264McKernels`. The decoder
   resolves it once per picture. Luma submits a complete partition window,
   chroma gathers a macroblock's sixteen 2x2 jobs and submits one batch per
@@ -121,22 +121,23 @@ payoff is entirely in the FIR taps.
   over caller-owned buffers here. This boundary prevents per-pixel dispatch
   and leaves one stable place for D-08b's tier-specific kernels.
 
-`benches/h264.rs` compares those call shapes with the former scalar shapes.
-On an Apple M5 in the 2026-09-05 session (300 samples), the batched raw luma
-pass measured 64.86 ns median versus 120.8 ns (1.86x faster). Whole-block
-single- and bi-weighting measured 27.75 ns versus 25.97 ns and 34.26 ns versus
-30.04 ns; the chroma batch measured 59.33 ns versus 31.99 ns. These latter
-numbers are deliberately retained: the contract amortises dispatch and makes
-wide-lane work possible, but its current scalar bodies are not a speed claim.
-Do not replace them with explicit SIMD until a same-session benchmark and the
-full byte-exact decoder gate both pass.
+`benches/h264.rs` measures the resolved scalar and selected tables with the
+same function-pointer boundary; `benches/fir.rs` covers both tap sets at block
+and full-row sizes. Treat their wall-timer output as a local diagnostic, not a
+portable cycle count. Publication measurements must follow
+`planning/PERF-BASELINE.md`: interleaved A/B order, at least ten rounds, CPU
+seconds beside wall time, and a same-session reference run. General bi-weights
+whose proven intermediate bound exceeds `i16` retain the scalar fallback;
+ordinary explicit, implicit, and unweighted-average cases use the vector
+body. On platforms without a trustworthy PMU counter, report that limitation
+instead of synthesising cycles or instruction counts.
 
 ## 4. Configuration
 
 None. Every function is a pure transform over caller-owned buffers — no
 env vars or feature flags. `H264McKernels::select()` uses `vaco-simd`'s runtime
-tier selection, while every current H.264 table entry has the same safe scalar
-body at all tiers. Length mismatches (a `dst` shorter than `src`
+tier selection. Tests and controlled benchmarks may use `Caps::capped_at` to
+exercise any weaker tier the CPU actually supports. Length mismatches (a `dst` shorter than `src`
 implies, an `extend_edges` block smaller than declared) degrade to writing a
 shorter prefix rather than panicking, matching `vaco-codec-dsp-idct`'s own
 truncate-don't-panic convention for buffers whose sizes ultimately trace

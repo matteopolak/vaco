@@ -341,7 +341,14 @@ impl Caps {
     /// A cap can only lower a proof derived from this CPU; it never constructs
     /// a capability token from configuration. `None` therefore means the
     /// requested tier is not a dispatchable tier for this target or CPU.
-    fn capped_at(self, max: Tier) -> Option<Self> {
+    /// Return a capability token capped at `max`, or `None` when `max` belongs
+    /// to another architecture's tier family.
+    ///
+    /// This is primarily for differential testing and reproducible tier
+    /// benchmarks: the returned token still proves real CPU support, but lets
+    /// a caller exercise every weaker available implementation explicitly.
+    #[must_use]
+    pub fn capped_at(self, max: Tier) -> Option<Self> {
         #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
         {
             let level = match max {

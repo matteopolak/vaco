@@ -102,13 +102,29 @@ pub fn fir_row_scalar<const N: usize>(src: &[u8], taps: &TapSet<N>, dst_len: usi
 /// src.len().saturating_sub(N-1))` samples and leaves the rest of `dst`
 /// untouched, so a mismatched pair of buffer sizes degrades rather than
 /// panics.
+#[inline(always)]
 pub fn fir_row<const N: usize>(caps: Caps, src: &[u8], taps: &TapSet<N>, dst: &mut [u8]) {
     let available = src.len().saturating_sub(N.saturating_sub(1));
     let len = dst.len().min(available);
     let Some(dst) = dst.get_mut(..len) else {
         return;
     };
+    if is_bilinear(taps) && len <= 16 {
+        for (out, pair) in dst.iter_mut().zip(src.windows(2)) {
+            let [a, b] = pair else { continue };
+            *out = rounded_avg_scalar(*a, *b);
+        }
+        return;
+    }
     dispatch_kernel!(caps, s => fir_row_body(s, src, taps, dst));
+}
+
+#[inline(always)]
+fn is_bilinear<const N: usize>(taps: &TapSet<N>) -> bool {
+    N == 2
+        && taps.shift == 1
+        && taps.coeffs.first().copied() == Some(1)
+        && taps.coeffs.get(1).copied() == Some(1)
 }
 
 /// The level-generic body behind [`fir_row`].
@@ -126,6 +142,10 @@ pub fn fir_row<const N: usize>(caps: Caps, src: &[u8], taps: &TapSet<N>, dst: &m
     reason = "computing the largest multiple-of-native-width prefix length; truncation is the point"
 )]
 fn fir_row_body<S: Lanes, const N: usize>(simd: S, src: &[u8], taps: &TapSet<N>, dst: &mut [u8]) {
+    if is_bilinear(taps) {
+        return bilinear_row_body(simd, src, dst);
+    }
+
     let n = <S::u8s as SimdBase<S>>::N;
     let round = <S::i16s as SimdBase<S>>::splat(simd, taps.round_bias());
     let full = (dst.len() / n) * n;
@@ -152,6 +172,43 @@ fn fir_row_body<S: Lanes, const N: usize>(simd: S, src: &[u8], taps: &TapSet<N>,
         let acc = tap_sum(window, &taps.coeffs);
         *o = clip_from_i32(acc, i32::from(taps.round_bias()), taps.shift);
     }
+}
+
+#[inline(always)]
+#[allow(
+    clippy::integer_division,
+    reason = "computing the largest multiple-of-native-width prefix length; truncation is the point"
+)]
+fn bilinear_row_body<S: Lanes>(simd: S, src: &[u8], dst: &mut [u8]) {
+    let n = <S::u8s as SimdBase<S>>::N;
+    let full = (dst.len() / n) * n;
+    let Some((dst_full, dst_tail)) = split_mut_at(dst, full) else {
+        return;
+    };
+    for (i, out) in dst_full.chunks_exact_mut(n).enumerate() {
+        let base = i * n;
+        let Some(a) = src.get(base..base + n) else {
+            continue;
+        };
+        let Some(b) = src.get(base + 1..base + n + 1) else {
+            continue;
+        };
+        let a = <S::u8s as SimdBase<S>>::from_slice(simd, a);
+        let b = <S::u8s as SimdBase<S>>::from_slice(simd, b);
+        ops::simd::rounded_avg_u8::<S, S::u8s>(a, b).store_slice(out);
+    }
+    for (i, out) in dst_tail.iter_mut().enumerate() {
+        let base = full + i;
+        let a = src.get(base).copied().unwrap_or(0);
+        let b = src.get(base + 1).copied().unwrap_or(0);
+        *out = rounded_avg_scalar(a, b);
+    }
+}
+
+#[inline(always)]
+fn rounded_avg_scalar(a: u8, b: u8) -> u8 {
+    let sum = u16::from(a) + u16::from(b) + 1;
+    u8::try_from(sum >> 1).unwrap_or(u8::MAX)
 }
 
 /// Split a mutable slice at `mid`, safely: `None` when `mid > slice.len()`.

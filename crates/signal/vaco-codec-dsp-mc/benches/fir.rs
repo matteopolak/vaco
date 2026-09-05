@@ -58,6 +58,23 @@ fn bilinear_dispatched_16px(bencher: divan::Bencher<'_, '_>) {
     });
 }
 
+#[divan::bench]
+fn bilinear_scalar_1920px(bencher: divan::Bencher<'_, '_>) {
+    let src: Vec<u8> = (0..=1920).map(|i| ((i * 53) & 0xFF) as u8).collect();
+    bencher.bench(|| fir::fir_row_scalar(divan::black_box(&src), &taps::BILINEAR, 1920));
+}
+
+#[divan::bench]
+fn bilinear_dispatched_1920px(bencher: divan::Bencher<'_, '_>) {
+    let src: Vec<u8> = (0..=1920).map(|i| ((i * 53) & 0xFF) as u8).collect();
+    let caps = Caps::detect();
+    bencher.bench(|| {
+        let mut dst = vec![0u8; 1920];
+        fir::fir_row(caps, divan::black_box(&src), &taps::BILINEAR, &mut dst);
+        divan::black_box(dst);
+    });
+}
+
 /// A full 1920px row, the throughput case rather than the one-block case
 /// above — closer to how a row-at-a-time MC kernel is actually called.
 #[divan::bench]

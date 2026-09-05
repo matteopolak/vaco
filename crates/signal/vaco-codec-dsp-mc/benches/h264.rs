@@ -8,7 +8,7 @@
 
 use vaco_codec_dsp_mc::fir::{self, taps};
 use vaco_codec_dsp_mc::h264::{BiWeight, ChromaJob, H264McKernels, UniWeight};
-use vaco_simd::KernelSet;
+use vaco_simd::{KernelSet, Tier};
 
 fn main() {
     divan::main();
@@ -44,6 +44,17 @@ fn luma_raw_scalar_21_rows(bencher: divan::Bencher<'_, '_>) {
 fn luma_raw_kernel_21_rows(bencher: divan::Bencher<'_, '_>) {
     let src = luma_source();
     let kernels = H264McKernels::select();
+    bencher.bench(|| {
+        let mut out = [[0i32; 16]; 21];
+        (kernels.luma_half_raw)(divan::black_box(&src), 16, 21, &mut out);
+        divan::black_box(out)
+    });
+}
+
+#[divan::bench]
+fn luma_raw_scalar_tier_21_rows(bencher: divan::Bencher<'_, '_>) {
+    let src = luma_source();
+    let kernels = H264McKernels::for_tier(Tier::Scalar);
     bencher.bench(|| {
         let mut out = [[0i32; 16]; 21];
         (kernels.luma_half_raw)(divan::black_box(&src), 16, 21, &mut out);
@@ -100,6 +111,22 @@ fn chroma_kernel_16_blocks(bencher: divan::Bencher<'_, '_>) {
     });
 }
 
+#[divan::bench]
+fn chroma_scalar_tier_16_blocks(bencher: divan::Bencher<'_, '_>) {
+    let src: [_; 16] = core::array::from_fn(chroma_source);
+    let jobs: [_; 16] = core::array::from_fn(|index| ChromaJob {
+        src: src[index],
+        frac_x: (index & 7) as u8,
+        frac_y: ((index * 3) & 7) as u8,
+    });
+    let kernels = H264McKernels::for_tier(Tier::Scalar);
+    bencher.bench(|| {
+        let mut out = [[[0u8; 2]; 2]; 16];
+        (kernels.chroma_batch)(divan::black_box(&jobs), &mut out);
+        divan::black_box(out)
+    });
+}
+
 fn pred_row(seed: usize) -> [u8; 256] {
     core::array::from_fn(|i| ((i * 67 + seed * 101 + i * seed * 3) & 255) as u8)
 }
@@ -144,6 +171,29 @@ fn weighted_uni_kernel_256(bencher: divan::Bencher<'_, '_>) {
 }
 
 #[divan::bench]
+fn weighted_uni_scalar_tier_256(bencher: divan::Bencher<'_, '_>) {
+    let src = pred_row(3);
+    let kernels = H264McKernels::for_tier(Tier::Scalar);
+    bencher.bench(|| {
+        let mut out = [0u8; 256];
+        (kernels.weight_uni)(
+            divan::black_box(&src),
+            256,
+            &mut out,
+            256,
+            256,
+            1,
+            divan::black_box(UniWeight {
+                weight: 15,
+                offset: -3,
+                log2_denom: 4,
+            }),
+        );
+        divan::black_box(out)
+    });
+}
+
+#[divan::bench]
 fn weighted_bi_scalar_256(bencher: divan::Bencher<'_, '_>) {
     let src0 = pred_row(3);
     let src1 = pred_row(11);
@@ -168,6 +218,33 @@ fn weighted_bi_kernel_256(bencher: divan::Bencher<'_, '_>) {
     let src0 = pred_row(3);
     let src1 = pred_row(11);
     let kernels = H264McKernels::select();
+    bencher.bench(|| {
+        let mut out = [0u8; 256];
+        (kernels.weight_bi)(
+            divan::black_box(&src0),
+            256,
+            divan::black_box(&src1),
+            256,
+            &mut out,
+            256,
+            256,
+            1,
+            divan::black_box(BiWeight {
+                weight0: 48,
+                weight1: 16,
+                offset: 0,
+                log2_denom: 5,
+            }),
+        );
+        divan::black_box(out)
+    });
+}
+
+#[divan::bench]
+fn weighted_bi_scalar_tier_256(bencher: divan::Bencher<'_, '_>) {
+    let src0 = pred_row(3);
+    let src1 = pred_row(11);
+    let kernels = H264McKernels::for_tier(Tier::Scalar);
     bencher.bench(|| {
         let mut out = [0u8; 256];
         (kernels.weight_bi)(
